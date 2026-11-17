@@ -20,8 +20,10 @@ import { toast } from "sonner"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { loggers } from "@cognia/logging"
 
-import { messagesToMarkdown } from "@/components/ai-elements/conversation"
+import { useSingleExport } from "@/hooks/data/use-single-export"
 import { jumpToSessionMessage } from "@/lib/chat/cross-session-jump"
+import { getSession } from "@/lib/db/sessions"
+import { notifyExportOutcome } from "@/lib/files/export-feedback"
 import { revealSideChat } from "@/lib/slash-commands/actions/side-chat"
 import { guildFromSession } from "@/lib/chat/session-guild"
 import { revealActiveWorkbenchPanel } from "@/lib/context-workbench/active-context"
@@ -101,6 +103,8 @@ export function useGlobalSearchActions({
   close,
 }: UseGlobalSearchActionsOptions) {
   const t = useTranslations("globalSearch")
+  const tExport = useTranslations("export")
+  const { run: runSingleExport } = useSingleExport()
   // Page labels are full keys: a module's live in its own namespace.
   const labelT = useTranslations()
   const router = useRouter()
@@ -234,22 +238,15 @@ export function useGlobalSearchActions({
           return
         }
         case "export-markdown": {
-          const messages = useChatStore.getState().messages
-          if (messages.length === 0) {
+          // The same Markdown export the conversation's Export dialog writes.
+          const { messages, activeSessionId } = useChatStore.getState()
+          const session = activeSessionId ? await getSession(activeSessionId) : undefined
+          if (!session || messages.length === 0) {
             toast.info(t("toasts.nothingToExport"))
             return
           }
-          const md = messagesToMarkdown(messages)
-          const blob = new Blob([md], { type: "text/markdown" })
-          const url = URL.createObjectURL(blob)
-          const link = document.createElement("a")
-          const ts = new Date().toISOString().replaceAll(/[:.]/g, "-")
-          link.href = url
-          link.download = `cognia-chat-${ts}.md`
-          document.body.append(link)
-          link.click()
-          link.remove()
-          URL.revokeObjectURL(url)
+          const outcome = await runSingleExport({ format: "markdown", session })
+          notifyExportOutcome(outcome, { t: tExport, shareTitle: session.title })
           return
         }
         case "clear-conversation": {
@@ -409,6 +406,8 @@ export function useGlobalSearchActions({
       create,
       router,
       t,
+      tExport,
+      runSingleExport,
       theme,
       setTheme,
       runPageLayoutCommand,

@@ -5,7 +5,9 @@
 
 import { getRuntimeTargetScopeKey } from "@/lib/runtime/runtime-target-context"
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
+import { useLocale, useTranslations } from "next-intl"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import { renderSingleExport } from "@/lib/export/single"
 import type { SingleExportFormat } from "@/lib/export/single"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
@@ -43,6 +45,9 @@ export function useSingleExport() {
   const [busy, setBusy] = useState(false)
   const scope = getRuntimeTargetScopeKey()
   const database = typeof window === "undefined" ? null : getDb()
+  const t = useTranslations("export.document")
+  const locale = useLocale()
+  const labels = useMemo(() => exportLabelsFrom(t, locale), [t, locale])
 
   const run = useCallback(
     async (args: RunArgs): Promise<SingleExportResult> => {
@@ -71,6 +76,7 @@ export function useSingleExport() {
           format: args.format,
           session: args.session,
           messages,
+          labels,
           theme: args.theme,
           customTheme: args.customTheme,
           includeMetadata: args.includeMetadata,
@@ -106,7 +112,7 @@ export function useSingleExport() {
         hooks.dispatchExportComplete(args.session.id, args.format, saved)
       }
     },
-    [scope, database]
+    [scope, database, labels]
   )
 
   return { run, busy }

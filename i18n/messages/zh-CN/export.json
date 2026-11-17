@@ -13,6 +13,66 @@
   },
   "batchDescription": "选择要打包到一个 ZIP 中的会话。",
   "batchTitle": "批量导出",
+  "document": {
+    "attachedContext": "附加上下文",
+    "attachedContextOmitted": "[已省略附加上下文]",
+    "footer": "由 Cognia 导出于 {date}",
+    "meta": {
+      "conversation": "对话",
+      "conversationInfo": "对话信息",
+      "date": "日期",
+      "exported": "导出时间",
+      "kind": "类型",
+      "messages": "消息数",
+      "model": "模型",
+      "property": "属性",
+      "systemPrompt": "系统提示词",
+      "tokenUsage": "Token 用量",
+      "value": "值",
+      "workingDir": "工作目录"
+    },
+    "parts": {
+      "artifact": "产物（{kind}）：{title}",
+      "canvas": "画布：{title}",
+      "compacted": "此处之前的上下文已压缩",
+      "file": "文件",
+      "gateDecision": {
+        "approved": "已批准",
+        "dismissed": "已忽略",
+        "rejected": "已拒绝"
+      },
+      "grounding": "{total} 条论断中有 {supported} 条有来源支持",
+      "interactiveSurface": "交互界面——未导出",
+      "notExported": "{type} 部分——未导出",
+      "privateSources": "{count} 条来自你自己资料的来源未导出",
+      "source": "来源",
+      "sources": "来源",
+      "squadGate": "{title}：{decision}",
+      "squadRun": "小队 {name}",
+      "subagent": "子代理 {name}（{status}）",
+      "teamDispatch": "已交给 {name}",
+      "thinking": "思考",
+      "tool": "工具：{name}",
+      "toolError": "错误",
+      "toolInput": "参数",
+      "toolOutput": "结果",
+      "toolSummary": "工具摘要",
+      "verdict": {
+        "fail": "未通过",
+        "pass": "通过",
+        "unsure": "不确定"
+      },
+      "verification": "验证：{verdict}",
+      "verificationFailed": "验证无法运行：{error}",
+      "verificationRunning": "验证仍在进行",
+      "withheld": "已从共享视图中隐去"
+    },
+    "roles": {
+      "assistant": "助手",
+      "system": "系统",
+      "user": "你"
+    }
+  },
   "downloadPng": "下载图片（PNG）",
   "downloadingPng": "渲染中…",
   "exportButton": "导出",

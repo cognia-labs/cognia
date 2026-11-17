@@ -224,6 +224,29 @@ const videoDescription = {
   },
 }
 
+describe("buildMessageShareContent and block Markdown (D11)", () => {
+  it("copies a reply's lists and headings as HTML blocks, and its raw HTML as text", () => {
+    const content = buildMessageShareContent({
+      id: "md",
+      role: "assistant",
+      parts: [{ type: "text", text: "## Plan\n\n1. Read\n2. Write\n\n<b>raw</b>" }],
+    } as UIMessage)
+    expect(content.html).toContain("<h2>Plan</h2>")
+    expect(content.html).toContain("<li>Read</li>")
+    expect(content.html).toContain("&lt;b&gt;raw&lt;/b&gt;")
+    expect(content.plainText).toBe("## Plan\n\n1. Read\n2. Write\n\n<b>raw</b>")
+  })
+
+  it("has nothing to copy for a reply made only of cards", () => {
+    const content = buildMessageShareContent({
+      id: "cards",
+      role: "assistant",
+      parts: [{ type: "artifact", artifactId: "a", title: "Plan", kind: "document" }],
+    } as unknown as UIMessage)
+    expect(content.hasContent).toBe(false)
+  })
+})
+
 describe("messageTypedText", () => {
   it("is the typed text only: no reasoning, envelope or video description", () => {
     const { text } = composeTurnText("typed words", [{ kind: "references", text: "SNAPSHOT" }], {

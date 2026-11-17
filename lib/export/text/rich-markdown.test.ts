@@ -3,6 +3,8 @@
 //   • the JSON exporter emits a stable shape
 //   • plain-text strips formatting and includes role labels
 
+import { useTranslations as englishTranslator } from "next-intl"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import {
   exportToRichMarkdown,
   exportToRichJSON,
@@ -11,6 +13,9 @@ import {
 } from "./rich-markdown"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
+
+// The global next-intl mock resolves keys against the generated en.json.
+const labels = exportLabelsFrom(englishTranslator("export.document"), "en")
 
 const session: ChatSession = {
   id: "s1",
@@ -62,6 +67,7 @@ const messages: StoredMessage[] = [
 const data: RichExportData = {
   session,
   messages,
+  labels,
   exportedAt: new Date("2024-01-01T12:00:00Z"),
 }
 
@@ -69,8 +75,8 @@ describe("exportToRichMarkdown", () => {
   it("renders the title, metadata, and conversation sections", () => {
     const md = exportToRichMarkdown(data)
     expect(md).toContain("# Test Conversation")
-    expect(md).toContain("## Conversation Info")
-    expect(md).toContain("## System Prompt")
+    expect(md).toContain("## Conversation info")
+    expect(md).toContain("## System prompt")
     expect(md).toContain("```\nBe helpful\n```")
     expect(md).toContain("👤 **You**")
     expect(md).toContain("🤖 **Assistant**")
@@ -88,12 +94,12 @@ describe("exportToRichMarkdown", () => {
 
   it("hides metadata when includeMetadata is false", () => {
     const md = exportToRichMarkdown({ ...data, includeMetadata: false })
-    expect(md).not.toContain("## Conversation Info")
+    expect(md).not.toContain("## Conversation info")
   })
 
   it("can include token usage details", () => {
     const md = exportToRichMarkdown({ ...data, includeTokens: true })
-    expect(md).toContain("Token Usage")
+    expect(md).toContain("Token usage")
     expect(md).toContain("input_tokens")
   })
 })
@@ -130,8 +136,8 @@ describe("exportToPlainText", () => {
   it("includes role labels and strips formatting", () => {
     const text = exportToPlainText(data)
     expect(text).toContain("Test Conversation")
-    expect(text).toContain("[user]")
-    expect(text).toContain("[assistant]")
+    expect(text).toContain("[You]")
+    expect(text).toContain("[Assistant]")
     expect(text).toContain("What's 1+1?")
     expect(text).toContain("It's 2.")
     expect(text).not.toContain("```")
@@ -156,6 +162,7 @@ describe("the composer's context envelope", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     }
 
@@ -198,6 +205,7 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     expect(md).toContain("⚙️ **System**")
@@ -215,6 +223,7 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     expect(md).toContain("**tool**")
@@ -239,6 +248,7 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     expect(md).toContain("**Error:**")
@@ -265,6 +275,7 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     // Output should be rendered without the `safeJSON` wrap because it's a string.
@@ -288,6 +299,7 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     expect(md).toContain("![a.png](https://files/a.png)")
@@ -313,13 +325,14 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     expect(md).toContain("🔗 [X](https://docs/x)")
     expect(md).toContain("🔗 [https://docs/y](https://docs/y)")
     expect(md).toContain("📄 Spec")
     expect(md).toContain("📄 application/pdf")
-    expect(md).toContain("📄 source")
+    expect(md).toContain("📄 Source")
   })
 
   it("step-start and unknown parts produce no output", () => {
@@ -334,6 +347,7 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     // Section is rendered but is empty between role label and the next message.
@@ -361,6 +375,7 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
           createdAt: 1_700_000_000_000,
         },
       ],
+      labels,
       exportedAt: data.exportedAt,
     })
     expect(md).toContain("[object Object]")
@@ -398,4 +413,46 @@ it("re-parses provenance in rich JSON, which already carries citation metadata",
   )
   expect(exported.messages[0].parts[0].remoteDocument).toEqual(cloudProvenance)
   expect(JSON.stringify(exported)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+})
+
+it("writes a representation or a note for every part instead of dropping it (D11)", () => {
+  const cards: StoredMessage = {
+    id: "m-cards",
+    sessionId: "s1",
+    role: "assistant",
+    parts: [
+      { type: "a2ui", surfaceId: "s", content: "{}", source: "codeblock" },
+      { type: "artifact", artifactId: "a", title: "Plan", kind: "document" },
+      { type: "canvas", canvasId: "c", title: "Notes" },
+      { type: "subagent", name: "Scout", status: "completed", summary: "Mapped the repo." },
+      {
+        type: "sources",
+        sources: [{ id: "1", title: "Spec", url: "https://spec.test", origin: "cognia-web" }],
+      },
+      { type: "data-widget" },
+      { type: "step-start" },
+    ] as never,
+    createdAt: 1_700_000_003_000,
+  }
+  const md = exportToRichMarkdown({ ...data, messages: [cards] })
+  expect(md).toContain("Interactive surface — not exported")
+  expect(md).toContain("Artifact (document): Plan")
+  expect(md).toContain("Canvas: Notes")
+  expect(md).toContain("Subagent Scout (completed)")
+  expect(md).toContain("> Mapped the repo.")
+  expect(md).toContain("- [Spec](https://spec.test)")
+  expect(md).toContain("data-widget part — not exported")
+
+  const text = exportToPlainText({ ...data, messages: [cards] })
+  expect(text).toContain("[Artifact (document): Plan]")
+  expect(text).toContain("[data-widget part — not exported]")
+})
+
+it("writes every heading and role from the labels it is given", () => {
+  const md = exportToRichMarkdown({
+    ...data,
+    labels: { ...labels, conversation: "对话", role: (role) => `«${role}»` },
+  })
+  expect(md).toContain("## 对话")
+  expect(md).toContain("👤 **«user»**")
 })

@@ -1,8 +1,5 @@
-import {
-  PROJECTED_TEXT_MAX_CHARS,
-  TOOL_INPUT_FIELD_MAX_CHARS,
-  projectSearchText,
-} from "./project-text"
+import { PROJECTED_TEXT_MAX_CHARS, projectSearchText } from "./project-text"
+import { TOOL_INPUT_FIELD_MAX_CHARS } from "@/lib/chat/parts/descriptors"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
 
 describe("projectSearchText", () => {

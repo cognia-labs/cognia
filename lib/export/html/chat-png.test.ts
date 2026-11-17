@@ -1,7 +1,12 @@
 /** @jest-environment jsdom */
+import { useTranslations as englishTranslator } from "next-intl"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import { renderChatToPng, pngBackground, ChatPngTooLongError, MAX_PNG_HEIGHT_PX } from "./chat-png"
 import { THEMES } from "./syntax-themes"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
+
+// The global next-intl mock resolves keys against the generated en.json.
+const labels = exportLabelsFrom(englishTranslator("export.document"), "en")
 
 const mockHtml2canvas = jest.fn()
 jest.mock("html2canvas-pro", () => ({
@@ -68,13 +73,14 @@ function fakeCanvas(blob: Blob | null = new Blob(["png"], { type: "image/png" })
 
 describe("pngBackground", () => {
   it("uses the theme bg by default and the custom theme override when present", () => {
-    expect(pngBackground({ session, messages, exportedAt: new Date(), theme: "dracula" })).toBe(
-      THEMES.dracula.bg
-    )
+    expect(
+      pngBackground({ session, messages, labels, exportedAt: new Date(), theme: "dracula" })
+    ).toBe(THEMES.dracula.bg)
     expect(
       pngBackground({
         session,
         messages,
+        labels,
         exportedAt: new Date(),
         customTheme: { ...THEMES.light, bg: "#abcdef" },
       })
@@ -89,6 +95,7 @@ describe("renderChatToPng", () => {
     const blob = await renderChatToPng({
       session,
       messages,
+      labels,
       exportedAt: new Date(),
       theme: "arknights",
     })
@@ -100,7 +107,7 @@ describe("renderChatToPng", () => {
   it("throws ChatPngTooLongError when the render exceeds the height cap", async () => {
     capturedHeight = MAX_PNG_HEIGHT_PX + 1
     await expect(
-      renderChatToPng({ session, messages, exportedAt: new Date(), theme: "light" })
+      renderChatToPng({ session, messages, labels, exportedAt: new Date(), theme: "light" })
     ).rejects.toBeInstanceOf(ChatPngTooLongError)
     // Still cleaned up.
     expect(document.querySelectorAll("iframe").length).toBe(0)
@@ -110,14 +117,14 @@ describe("renderChatToPng", () => {
   it("rejects when toBlob yields null", async () => {
     mockHtml2canvas.mockResolvedValue(fakeCanvas(null))
     await expect(
-      renderChatToPng({ session, messages, exportedAt: new Date(), theme: "light" })
+      renderChatToPng({ session, messages, labels, exportedAt: new Date(), theme: "light" })
     ).rejects.toThrow("toBlob failed")
   })
 
   it("rejects when the iframe fails to load", async () => {
     iframeMode = "error"
     await expect(
-      renderChatToPng({ session, messages, exportedAt: new Date(), theme: "light" })
+      renderChatToPng({ session, messages, labels, exportedAt: new Date(), theme: "light" })
     ).rejects.toThrow("iframe load failed")
     expect(document.querySelectorAll("iframe").length).toBe(0)
   })
@@ -125,7 +132,7 @@ describe("renderChatToPng", () => {
   it("rejects when the capture document is unavailable", async () => {
     iframeMode = "no-doc"
     await expect(
-      renderChatToPng({ session, messages, exportedAt: new Date(), theme: "light" })
+      renderChatToPng({ session, messages, labels, exportedAt: new Date(), theme: "light" })
     ).rejects.toThrow("capture document unavailable")
     expect(document.querySelectorAll("iframe").length).toBe(0)
   })

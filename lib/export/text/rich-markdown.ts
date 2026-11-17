@@ -1,70 +1,89 @@
-// Markdown export for a single chat session. Walks the AI SDK UIMessage parts
-// and renders text / reasoning / tool-call blocks as fenced markdown that
-// round-trips through any standard renderer (GitHub, Obsidian, etc).
+// Markdown, JSON and plain-text export for a single chat session. Each part is
+// written by its descriptor (`lib/chat/parts/descriptors.ts`), so a part type
+// renders the same way in every exporter and none is dropped silently; every
+// label comes from the caller's resolved `ExportLabels`.
 
 import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type { UIMessage } from "ai"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 
-import { isImageFile } from "../file-utils"
+import {
+  markdownFence,
+  renderPartMarkdown,
+  renderPartText,
+  type PartRenderContext,
+} from "@/lib/chat/parts/descriptors"
+import { escapeHtml } from "@/lib/chat/parts/markdown-html"
 import {
   promptPreambleInnerText,
   promptPreambleOfParts,
   stripPromptPreambleFromParts,
 } from "@/lib/chat/prompt-preamble"
-import { fenceFor } from "@/lib/artifacts/format-selection-context"
+import type { ExportLabels } from "@/lib/export/labels"
 
 export interface RichExportData {
   session: ChatSession
   messages: StoredMessage[]
   exportedAt: Date
+  labels: ExportLabels
   includeMetadata?: boolean
   includeTokens?: boolean
 }
 
 /** Convert a session + its messages to a portable Markdown string. */
 export function exportToRichMarkdown(data: RichExportData): string {
-  const { session, messages, exportedAt, includeMetadata = true, includeTokens = false } = data
+  const {
+    session,
+    messages,
+    exportedAt,
+    labels,
+    includeMetadata = true,
+    includeTokens = false,
+  } = data
   const lines: string[] = []
+  const ctx: PartRenderContext = { labels: labels.parts }
 
   lines.push(`# ${session.title}`)
   lines.push("")
 
   if (includeMetadata) {
-    lines.push("## Conversation Info")
+    lines.push(`## ${labels.conversationInfo}`)
     lines.push("")
-    lines.push("| Property | Value |")
+    lines.push(`| ${labels.property} | ${labels.value} |`)
     lines.push("|----------|-------|")
-    lines.push(`| **Date** | ${new Date(session.createdAt).toLocaleDateString()} |`)
-    lines.push(`| **Kind** | ${session.kind ?? "direct"} |`)
-    if (session.model) lines.push(`| **Model** | ${session.model} |`)
-    if (session.workingDir) lines.push(`| **Working dir** | \`${session.workingDir}\` |`)
-    lines.push(`| **Messages** | ${messages.length} |`)
-    lines.push(`| **Exported** | ${exportedAt.toLocaleString()} |`)
+    lines.push(`| **${labels.date}** | ${new Date(session.createdAt).toLocaleDateString()} |`)
+    lines.push(`| **${labels.kind}** | ${session.kind ?? "direct"} |`)
+    if (session.model) lines.push(`| **${labels.model}** | ${session.model} |`)
+    if (session.workingDir) {
+      lines.push(`| **${labels.workingDir}** | \`${session.workingDir}\` |`)
+    }
+    lines.push(`| **${labels.messages}** | ${messages.length} |`)
+    lines.push(`| **${labels.exported}** | ${exportedAt.toLocaleString()} |`)
     lines.push("")
   }
 
   if (session.systemPrompt) {
-    lines.push("## System Prompt")
+    const fence = markdownFence(session.systemPrompt)
+    lines.push(`## ${labels.systemPrompt}`)
     lines.push("")
-    lines.push("```")
+    lines.push(fence)
     lines.push(session.systemPrompt)
-    lines.push("```")
+    lines.push(fence)
     lines.push("")
   }
 
-  lines.push("## Conversation")
+  lines.push(`## ${labels.conversation}`)
   lines.push("")
   lines.push("---")
   lines.push("")
 
   for (const message of messages) {
-    lines.push(`### ${roleLabel(message.role)}`)
+    lines.push(`### ${roleHeading(message.role, labels)}`)
     lines.push(`<sub>${new Date(message.createdAt).toLocaleString()}</sub>`)
     lines.push("")
 
     if (includeTokens && message.metadata?.usage) {
-      lines.push("<details><summary>Token Usage</summary>")
+      lines.push(`<details><summary>${escapeHtml(labels.tokenUsage)}</summary>`)
       lines.push("")
       lines.push("```json")
       lines.push(JSON.stringify(message.metadata.usage, null, 2))
@@ -74,19 +93,21 @@ export function exportToRichMarkdown(data: RichExportData): string {
       lines.push("")
     }
 
-    lines.push(renderMessageParts(message.parts))
+    lines.push(renderMessageParts(message.parts, labels, ctx))
     lines.push("")
     lines.push("---")
     lines.push("")
   }
 
   lines.push("")
-  lines.push(`*Exported from Cognia on ${exportedAt.toLocaleString()}*`)
+  lines.push(`*${labels.footer(exportedAt.toLocaleString())}*`)
   return lines.join("\n")
 }
 
 /** A pretty-printed JSON snapshot — full lossless dump of session + messages. */
-export function exportToRichJSON(data: RichExportData): string {
+export function exportToRichJSON(
+  data: Pick<RichExportData, "session" | "messages" | "exportedAt">
+): string {
   const { session: fullSession, messages, exportedAt } = data
   // The Host binding names this device's Host registry; it never leaves it.
   const { hostBinding: _hostBinding, ...session } = fullSession
@@ -110,15 +131,16 @@ export function exportToRichJSON(data: RichExportData): string {
   )
 }
 
-/** Pure plain-text fallback — strips formatting. Useful for diffing. */
+/** Plain-text export: every part's plain representation, no formatting. */
 export function exportToPlainText(data: RichExportData): string {
-  const { session, messages } = data
+  const { session, messages, labels } = data
+  const ctx: PartRenderContext = { labels: labels.parts }
   const lines: string[] = [session.title, ""]
   for (const message of messages) {
-    lines.push(`[${message.role}] ${new Date(message.createdAt).toLocaleString()}`)
-    if (promptPreambleOfParts(message.parts)) lines.push("[attached context omitted]")
+    lines.push(`[${labels.role(message.role)}] ${new Date(message.createdAt).toLocaleString()}`)
+    if (promptPreambleOfParts(message.parts)) lines.push(labels.attachedContextOmitted)
     for (const part of stripPromptPreambleFromParts(message.parts)) {
-      const text = textOfPart(part)
+      const text = renderPartText(part, ctx)
       if (text) lines.push(text)
     }
     lines.push("")
@@ -128,30 +150,28 @@ export function exportToPlainText(data: RichExportData): string {
 
 // ---------------------------------------------------------------------------
 
-function roleLabel(role: string): string {
-  switch (role) {
-    case "user":
-      return "👤 **You**"
-    case "assistant":
-      return "🤖 **Assistant**"
-    case "system":
-      return "⚙️ **System**"
-    default:
-      return `**${role}**`
-  }
+const ROLE_ICONS: Record<string, string> = { user: "👤", assistant: "🤖", system: "⚙️" }
+
+function roleHeading(role: string, labels: ExportLabels): string {
+  const icon = ROLE_ICONS[role]
+  return icon ? `${icon} **${labels.role(role)}**` : `**${labels.role(role)}**`
 }
 
-function renderMessageParts(parts: UIMessage["parts"]): string {
+function renderMessageParts(
+  parts: UIMessage["parts"],
+  labels: ExportLabels,
+  ctx: PartRenderContext
+): string {
   const out: string[] = []
   // What the composer attached to a turn is kept, folded, rather than printed
   // as though the user had typed it.
   const preamble = promptPreambleOfParts(parts)
   if (preamble) {
     const inner = promptPreambleInnerText(preamble)
-    const fence = fenceFor(inner)
+    const fence = markdownFence(inner)
     out.push(
       [
-        "<details><summary>📎 Attached context</summary>",
+        `<details><summary>📎 ${escapeHtml(labels.attachedContext)}</summary>`,
         "",
         fence,
         inner,
@@ -162,103 +182,7 @@ function renderMessageParts(parts: UIMessage["parts"]): string {
     )
   }
   for (const part of stripPromptPreambleFromParts(parts)) {
-    out.push(renderPart(part))
+    out.push(renderPartMarkdown(part, ctx))
   }
   return out.filter(Boolean).join("\n\n")
-}
-
-function renderPart(part: UIMessage["parts"][number]): string {
-  // Text & reasoning are the common cases — render verbatim. Tool calls and
-  // file parts collapse into <details> blocks so the markdown stays readable.
-  if (part.type === "text") {
-    return (part as { text: string }).text
-  }
-  if (part.type === "reasoning") {
-    const text = (part as { text: string }).text ?? ""
-    const quoted = text.split("\n").join("\n> ")
-    return [
-      "<details>",
-      "<summary>💭 Thinking</summary>",
-      "",
-      "> " + quoted,
-      "",
-      "</details>",
-    ].join("\n")
-  }
-  if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
-    const tp = part as {
-      type: string
-      toolCallId?: string
-      state?: string
-      input?: unknown
-      output?: unknown
-      errorText?: string
-    }
-    const name = tp.type === "dynamic-tool" ? "tool" : tp.type.slice("tool-".length)
-    const lines: string[] = ["<details>"]
-    lines.push(`<summary>🔧 Tool: ${formatToolName(name)} [${tp.state ?? "unknown"}]</summary>`)
-    lines.push("")
-    if (tp.input !== undefined) {
-      lines.push("**Parameters:**")
-      lines.push("```json")
-      lines.push(safeJSON(tp.input))
-      lines.push("```")
-    }
-    if (tp.output !== undefined) {
-      lines.push("")
-      lines.push("**Result:**")
-      lines.push("```json")
-      lines.push(typeof tp.output === "string" ? tp.output : safeJSON(tp.output))
-      lines.push("```")
-    }
-    if (tp.errorText) {
-      lines.push("")
-      lines.push("**Error:**")
-      lines.push(`> ❌ ${tp.errorText}`)
-    }
-    lines.push("")
-    lines.push("</details>")
-    return lines.join("\n")
-  }
-  if (part.type === "file") {
-    const fp = part as { url?: string; mediaType?: string; filename?: string }
-    const name = fp.filename ?? fp.mediaType ?? "file"
-    if (!fp.url) return `📎 ${name}`
-    return isImageFile(fp) ? `![${name}](${fp.url})` : `📎 [${name}](${fp.url})`
-  }
-  if (part.type === "source-url") {
-    const sp = part as { url: string; title?: string }
-    return `🔗 [${sp.title ?? sp.url}](${sp.url})`
-  }
-  if (part.type === "source-document") {
-    const sp = part as { title?: string; mediaType?: string }
-    return `📄 ${sp.title ?? sp.mediaType ?? "source"}`
-  }
-  if (part.type === "step-start") {
-    return ""
-  }
-  // Fallback for unknown / data-* parts.
-  return ""
-}
-
-function textOfPart(part: UIMessage["parts"][number]): string {
-  if (part.type === "text" || part.type === "reasoning") {
-    return (part as { text?: string }).text ?? ""
-  }
-  return ""
-}
-
-function formatToolName(name: string): string {
-  return name
-    .split(/[-_]/)
-    .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1) : ""))
-    .join(" ")
-}
-
-function safeJSON(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }

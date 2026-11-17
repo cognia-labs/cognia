@@ -8,6 +8,7 @@ import * as personalSinkHost from "@/lib/execution/personal-sink"
 // the share's encrypted files (ADR-0222). A downloaded export keeps them as
 // they are — it stays on this device, where they resolve.
 
+import { loadExportLabels } from "@/lib/export/labels"
 import { renderSingleExport, type SingleExportFormat } from "@/lib/export/single"
 import { getDb } from "@/lib/db/schema"
 import { resolveThemeWallpaper } from "@/lib/export/html/theme-wallpaper"
@@ -192,15 +193,17 @@ export async function buildChatShare(args: BuildChatShareArgs): Promise<ShareBui
     .equals(args.session.id)
     .sortBy("createdAt")
   const snapshot = await anonymousChatSnapshot(args.session, stored)
-  const [wallpaperDataUrl, provenance, media] = await Promise.all([
+  const [wallpaperDataUrl, provenance, media, labels] = await Promise.all([
     resolveThemeWallpaper(args.theme, args.withWallpaper ?? false),
     resolveSessionTwinProvenance(snapshot.session, snapshot.messages),
     materializeChatShareMedia(snapshot.messages),
+    loadExportLabels(),
   ])
   const rendered = renderSingleExport({
     format: args.format,
     session: snapshot.session,
     messages: media.messages,
+    labels,
     theme: args.theme,
     customTheme: args.customTheme,
     includeMetadata: args.includeMetadata,
@@ -263,17 +266,21 @@ export async function buildMultiChatShare(args: BuildMultiChatShareArgs): Promis
     else messagesBySession.set(row.sessionId, [row])
   }
   const exportedAt = new Date()
-  const provenanceBySession = await Promise.all(
-    snapshots.map(({ session }) =>
-      resolveSessionTwinProvenance(session, messagesBySession.get(session.id) ?? [])
-    )
-  )
+  const [provenanceBySession, labels] = await Promise.all([
+    Promise.all(
+      snapshots.map(({ session }) =>
+        resolveSessionTwinProvenance(session, messagesBySession.get(session.id) ?? [])
+      )
+    ),
+    loadExportLabels(),
+  ])
   const conversations = snapshots.map(({ session }, index) => ({
     title: session.title || args.copy.frameTitle,
     html: renderSingleExport({
       format: "html",
       session,
       messages: messagesBySession.get(session.id) ?? [],
+      labels,
       exportedAt,
       theme: args.theme,
       customTheme: args.customTheme,

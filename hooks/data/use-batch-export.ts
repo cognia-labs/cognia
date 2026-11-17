@@ -4,8 +4,10 @@
 // handles the save/download path. JSZip stays lazy-loaded inside the lib
 // module — no eager bundling.
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
+import { useLocale, useTranslations } from "next-intl"
 import { exportBatch } from "@/lib/export/batch/batch-export"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { SingleExportFormat } from "@/lib/export/single"
 import type { ThemeId, ThemeTokens } from "@/lib/export/html/syntax-themes"
@@ -36,41 +38,48 @@ export interface BatchExportResult {
 export function useBatchExport() {
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<BatchProgress | null>(null)
+  const t = useTranslations("export.document")
+  const locale = useLocale()
+  const labels = useMemo(() => exportLabelsFrom(t, locale), [t, locale])
 
-  const run = useCallback(async (args: RunArgs): Promise<BatchExportResult> => {
-    setBusy(true)
-    setProgress({ completed: 0, total: args.sessions.length, currentTitle: "" })
-    try {
-      const result = await exportBatch({
-        sessions: args.sessions,
-        format: args.format,
-        theme: args.theme,
-        customTheme: args.customTheme,
-        includeMetadata: args.includeMetadata,
-        includeTimestamps: args.includeTimestamps,
-        onProgress: setProgress,
-      })
+  const run = useCallback(
+    async (args: RunArgs): Promise<BatchExportResult> => {
+      setBusy(true)
+      setProgress({ completed: 0, total: args.sessions.length, currentTitle: "" })
+      try {
+        const result = await exportBatch({
+          sessions: args.sessions,
+          format: args.format,
+          labels,
+          theme: args.theme,
+          customTheme: args.customTheme,
+          includeMetadata: args.includeMetadata,
+          includeTimestamps: args.includeTimestamps,
+          onProgress: setProgress,
+        })
 
-      const outcome = await saveExport({
-        filename: result.filename,
-        data: result.blob,
-        mimeType: "application/zip",
-        filters: [{ name: "ZIP", extensions: ["zip"] }],
-      })
-      return {
-        outcome,
-        exportedCount: outcome.kind === "saved" ? result.exportedCount : 0,
+        const outcome = await saveExport({
+          filename: result.filename,
+          data: result.blob,
+          mimeType: "application/zip",
+          filters: [{ name: "ZIP", extensions: ["zip"] }],
+        })
+        return {
+          outcome,
+          exportedCount: outcome.kind === "saved" ? result.exportedCount : 0,
+        }
+      } catch (err) {
+        return {
+          outcome: { kind: "error", message: err instanceof Error ? err.message : String(err) },
+          exportedCount: 0,
+        }
+      } finally {
+        setBusy(false)
+        setProgress(null)
       }
-    } catch (err) {
-      return {
-        outcome: { kind: "error", message: err instanceof Error ? err.message : String(err) },
-        exportedCount: 0,
-      }
-    } finally {
-      setBusy(false)
-      setProgress(null)
-    }
-  }, [])
+    },
+    [labels]
+  )
 
   return { run, busy, progress }
 }

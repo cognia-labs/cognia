@@ -4,7 +4,7 @@
 // HTML & Animated formats expose the theme + custom-theme editor inline.
 
 import { useState } from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -35,6 +35,7 @@ import { getDb } from "@/lib/db/schema"
 import { Link2Icon, LayoutDashboardIcon, ImageDownIcon } from "lucide-react"
 import { CustomThemeEditor } from "./custom-theme-editor"
 import { type ThemeId } from "@/lib/export/html/syntax-themes"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import { themeHasWallpaper, resolveThemeWallpaper } from "@/lib/export/html/theme-wallpaper"
 import { useCustomThemeStore } from "@/stores/theme"
 import type { ChatSession } from "@cognia/agent-config-types"
@@ -60,6 +61,8 @@ export function SingleExportDialog({
   onOpenChange,
 }: Props) {
   const t = useTranslations("export")
+  const tDocument = useTranslations("export.document")
+  const locale = useLocale()
   const tShare = useTranslations("share")
   const tPage = useTranslations("a2ui.interactivePage")
   const [format, setFormat] = useState<SingleExportFormat>(defaultFormat)
@@ -124,6 +127,7 @@ export function SingleExportDialog({
           session,
           messages,
           exportedAt: new Date(),
+          labels: exportLabelsFrom(tDocument, locale),
           theme,
           customTheme,
           includeMetadata,

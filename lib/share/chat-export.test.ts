@@ -13,6 +13,17 @@ const testDb = {
   sessions: { get: getSession },
   executionRuns: { where: () => ({ equals: (id: string) => ({ toArray: () => runRows(id) }) }) },
 }
+// Exporters are written in the reader's locale; the global next-intl mock
+// resolves keys against the generated en.json.
+jest.mock("@/lib/export/labels", () => {
+  const actual = jest.requireActual("@/lib/export/labels")
+  const { useTranslations: englishTranslator } = jest.requireMock("next-intl")
+  return {
+    ...actual,
+    loadExportLabels: async () =>
+      actual.exportLabelsFrom(englishTranslator("export.document"), "en"),
+  }
+})
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => testDb,
 }))

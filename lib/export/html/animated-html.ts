@@ -35,18 +35,32 @@ export function exportToAnimatedHtml(options: AnimatedHtmlOptions): string {
     });
   }
 
+  // Text blocks are formatted HTML: type the characters out, then put the
+  // formatting back. A click skips to the end and restores every block.
+  let skipped = false;
+  const originals = new Map();
+  function restore(block) {
+    if (originals.has(block)) {
+      block.innerHTML = originals.get(block);
+      originals.delete(block);
+    }
+    block.classList.remove('text-typing');
+  }
+
   async function typeAssistantText(message) {
     if (!message.classList.contains('message-assistant')) return;
     const blocks = message.querySelectorAll('.text');
     for (const block of blocks) {
+      if (skipped) return;
       const full = block.textContent;
+      originals.set(block, block.innerHTML);
       block.textContent = '';
       block.classList.add('text-typing');
-      for (let i = 0; i < full.length; i++) {
+      for (let i = 0; i < full.length && !skipped; i++) {
         block.textContent += full[i];
         await new Promise(r => setTimeout(r, ${speed}));
       }
-      block.classList.remove('text-typing');
+      restore(block);
     }
   }
 
@@ -61,10 +75,9 @@ export function exportToAnimatedHtml(options: AnimatedHtmlOptions): string {
 
   // Skip-to-end on click anywhere
   document.addEventListener('click', () => {
+    skipped = true;
     document.querySelectorAll('.message').forEach(m => m.classList.add('show'));
-    document.querySelectorAll('.text-typing').forEach(b => {
-      b.classList.remove('text-typing');
-    });
+    Array.from(originals.keys()).forEach(restore);
   });
 
   // Kick off after first paint.

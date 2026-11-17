@@ -15,6 +15,7 @@ import { exportToJsonlPerMessage, exportToJsonlChat } from "@/lib/export/jsonl"
 import type { ThemeId, ThemeTokens } from "@/lib/export/html/syntax-themes"
 import type { ShareProvenance } from "@/lib/share/types"
 import { enforceExportDisclosure } from "@/lib/export/disclosure"
+import type { ExportLabels } from "@/lib/export/labels"
 
 export type SingleExportFormat =
   "markdown" | "json" | "text" | "html" | "animated" | "jsonl" | "jsonl-chat"
@@ -23,6 +24,8 @@ export interface SingleExportOptions {
   format: SingleExportFormat
   session: ChatSession
   messages: StoredMessage[]
+  /** Every word the document is written with, in the reader's locale. */
+  labels: ExportLabels
   exportedAt?: Date
   /** HTML / animated formats only. */
   theme?: ThemeId
@@ -63,6 +66,7 @@ export function renderSingleExport(opts: SingleExportOptions): SingleExportResul
         session: opts.session,
         messages: opts.messages,
         exportedAt,
+        labels: opts.labels,
         includeMetadata: opts.includeMetadata,
         includeTokens: opts.includeTokens,
       } satisfies RichExportData)
@@ -81,6 +85,7 @@ export function renderSingleExport(opts: SingleExportOptions): SingleExportResul
         session: opts.session,
         messages: opts.messages,
         exportedAt,
+        labels: opts.labels,
       })
       return finalize({ content, filename: `${slug}.txt`, mimeType: "text/plain" })
     }
@@ -89,6 +94,7 @@ export function renderSingleExport(opts: SingleExportOptions): SingleExportResul
         session: opts.session,
         messages: opts.messages,
         exportedAt,
+        labels: opts.labels,
         theme: opts.theme,
         customTheme: opts.customTheme,
         includeMetadata: opts.includeMetadata,
@@ -102,6 +108,7 @@ export function renderSingleExport(opts: SingleExportOptions): SingleExportResul
         session: opts.session,
         messages: opts.messages,
         exportedAt,
+        labels: opts.labels,
         theme: opts.theme,
         customTheme: opts.customTheme,
         includeMetadata: opts.includeMetadata,

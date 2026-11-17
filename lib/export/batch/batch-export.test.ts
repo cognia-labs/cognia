@@ -41,7 +41,11 @@ import { exportBatch } from "./batch-export"
 import { listMessages } from "@/lib/db/messages"
 import { renderSingleExport } from "@/lib/export/single"
 import type { ChatSession } from "@cognia/agent-config-types"
+import type { ExportLabels } from "@/lib/export/labels"
 import * as schema from "@/lib/db/schema"
+
+// `renderSingleExport` is mocked; the labels only have to reach it.
+const labels = { locale: "en" } as ExportLabels
 
 const mockedList = listMessages as unknown as jest.Mock
 const mockedRender = renderSingleExport as unknown as jest.Mock
@@ -67,6 +71,7 @@ describe("exportBatch", () => {
     const result = await exportBatch({
       sessions: [session("a", "A"), session("b", "B")],
       format: "markdown",
+      labels,
       onProgress,
     })
     expect(result.exportedCount).toBe(1)
@@ -90,8 +95,10 @@ describe("exportBatch", () => {
     await exportBatch({
       sessions: [session("a", "A"), session("b", "B")],
       format: "markdown",
+      labels,
     })
     expect(mockZipFile).toHaveBeenCalledTimes(2)
+    expect(mockedRender).toHaveBeenCalledWith(expect.objectContaining({ labels }))
     expect(mockZipFile).toHaveBeenNthCalledWith(1, "same.md", "C")
     // Second hit: " (2)" suffix inserted before ".md"
     expect(mockZipFile).toHaveBeenNthCalledWith(2, "same (2).md", "C")
@@ -108,6 +115,7 @@ describe("exportBatch", () => {
     await exportBatch({
       sessions: [session("a", "A"), session("b", "B")],
       format: "text",
+      labels,
     })
     expect(mockZipFile).toHaveBeenNthCalledWith(2, "noext (2)", "C")
   })
@@ -125,6 +133,7 @@ describe("exportBatch", () => {
     const out = await exportBatch({
       sessions: [session("a", "A")],
       format: "markdown",
+      labels,
     })
     expect(out.exportedCount).toBe(1)
   })

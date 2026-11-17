@@ -1,6 +1,11 @@
 /** @jest-environment jsdom */
+import { useTranslations as englishTranslator } from "next-intl"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import { exportToAnimatedHtml } from "./animated-html"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
+
+// The global next-intl mock resolves keys against the generated en.json.
+const labels = exportLabelsFrom(englishTranslator("export.document"), "en")
 
 const session: ChatSession = {
   id: "s1",
@@ -32,6 +37,7 @@ describe("exportToAnimatedHtml", () => {
     const html = exportToAnimatedHtml({
       session,
       messages,
+      labels,
       exportedAt: new Date("2024-06-01T00:00:00Z"),
     })
     expect(html).toContain("<style>")
@@ -46,6 +52,7 @@ describe("exportToAnimatedHtml", () => {
     const html = exportToAnimatedHtml({
       session,
       messages,
+      labels,
       exportedAt: new Date(),
     })
     expect(html).toContain("setTimeout(r, 12)")
@@ -55,10 +62,17 @@ describe("exportToAnimatedHtml", () => {
     const html = exportToAnimatedHtml({
       session,
       messages,
+      labels,
       exportedAt: new Date(),
       typingSpeedMs: 30,
     })
     expect(html).toContain("setTimeout(r, 30)")
     expect(html).not.toContain("setTimeout(r, 12)")
+  })
+
+  it("puts each block's formatting back once it has typed out, and on skip", () => {
+    const html = exportToAnimatedHtml({ session, messages, exportedAt: new Date(), labels })
+    expect(html).toContain("originals.set(block, block.innerHTML)")
+    expect(html).toContain("Array.from(originals.keys()).forEach(restore)")
   })
 })

@@ -1,7 +1,7 @@
 import type { UIMessage } from "ai"
 
 import { decodeDataUrl } from "@/lib/utils/image-bytes"
-import { renderSafeInlineMarkdown } from "@/lib/export/html/safe-inline-markdown"
+import { isShareablePart, partShare } from "@/lib/chat/parts/descriptors"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
 import { videoAttachmentInfoOfPart } from "@/lib/chat/attachments/video/attachment-info"
 import { shareContent, type ShareOutcome } from "@/lib/capacitor/share"
@@ -104,36 +104,15 @@ export async function shareMessageContent(
   return (await writeMessageToClipboard(content)) ? { kind: "copied" } : { kind: "failed" }
 }
 
-interface FilePart {
-  type: "file"
-  url?: string
-  mediaType?: string
-  filename?: string
-}
-
-interface SourceUrlPart {
-  type: "source-url"
-  url: string
-  title?: string
-}
-
-interface SourceDocumentPart {
-  type: "source-document"
-  title?: string
-  mediaType?: string
-}
-
 /** Build one ordered, portable projection for message copy and native sharing. */
 export function buildMessageShareContent(message: UIMessage): MessageShareContent {
   // Rows only need availability until the user invokes an action. Preparing
   // HTML and decoding every screenshot into Files during a streaming render
   // duplicates megabytes of data even when nothing is ever copied or shared.
+  // Copy and share hand over what the user wrote, not the context envelope the
+  // composer put in front of it (`lib/chat/prompt-preamble.ts`).
   const parts = stripPromptPreambleFromParts(message.parts)
-  const hasContent = parts.some((part) =>
-    part.type === "text"
-      ? Boolean((part as { text?: string }).text) && videoAttachmentInfoOfPart(part) === null
-      : part.type === "file" || part.type === "source-url" || part.type === "source-document"
-  )
+  const hasContent = parts.some(isShareablePart)
   let prepared: MessageShareContent | undefined
   const prepare = () => (prepared ??= materializeMessageShareContent(parts))
   return {
@@ -162,91 +141,30 @@ function materializeMessageShareContent(
   const shareFiles: File[] = []
   let imageIndex = 0
 
-  // Copy and share hand over what the user wrote, not the context envelope the
-  // composer put in front of it (`lib/chat/prompt-preamble.ts`).
+  // What each part hands over is its descriptor's (`lib/chat/parts/descriptors.ts`).
   for (const part of parts) {
-    if (part.type === "text") {
-      // A video's description is the model's reading of it, not message text.
-      if (videoAttachmentInfoOfPart(part) !== null) continue
-      const text = (part as { text?: string }).text ?? ""
-      if (text) {
-        plainParts.push(text)
-        nativeShareParts.push(text)
-        htmlParts.push(
-          `<div>${renderSafeInlineMarkdown(escapeHtml(text)).replace(/\n/g, "<br>")}</div>`
+    const share = partShare(part)
+    if (!share) continue
+    plainParts.push(share.plain)
+    nativeShareParts.push(share.native)
+    htmlParts.push(share.html)
+    if (share.image && typeof File !== "undefined") {
+      const decoded = tryDecodeDataUrl(share.image.url)
+      if (decoded) {
+        imageIndex += 1
+        shareFiles.push(
+          new File(
+            [decoded.bytes as BlobPart],
+            imageFilename(share.image.filename, decoded.mimeType, imageIndex),
+            { type: decoded.mimeType }
+          )
         )
       }
-      continue
-    }
-
-    if (part.type === "file") {
-      const file = part as FilePart
-      const label = file.filename || file.mediaType || "file"
-      const isImage = Boolean(file.mediaType?.startsWith("image/"))
-      if (file.url) {
-        const markdownPart = isImage
-          ? `![${escapeMarkdownLabel(label)}](${file.url})`
-          : `[${escapeMarkdownLabel(label)}](${file.url})`
-        plainParts.push(markdownPart)
-        nativeShareParts.push(isImage && file.url.startsWith("data:image/") ? label : markdownPart)
-        if (isSafeShareUrl(file.url, isImage)) {
-          htmlParts.push(
-            isImage
-              ? `<figure><img src="${escapeHtml(file.url)}" alt="${escapeHtml(label)}"><figcaption>${escapeHtml(label)}</figcaption></figure>`
-              : `<p><a href="${escapeHtml(file.url)}">${escapeHtml(label)}</a></p>`
-          )
-        } else {
-          htmlParts.push(`<p>${escapeHtml(label)}</p>`)
-        }
-
-        if (isImage) {
-          const decoded = tryDecodeDataUrl(file.url)
-          if (decoded && typeof File !== "undefined") {
-            imageIndex += 1
-            shareFiles.push(
-              new File(
-                [decoded.bytes as BlobPart],
-                imageFilename(file.filename, decoded.mimeType, imageIndex),
-                {
-                  type: decoded.mimeType,
-                }
-              )
-            )
-          }
-        }
-      } else {
-        plainParts.push(label)
-        nativeShareParts.push(label)
-        htmlParts.push(`<p>${escapeHtml(label)}</p>`)
-      }
-      continue
-    }
-
-    if (part.type === "source-url") {
-      const source = part as SourceUrlPart
-      const label = source.title || source.url
-      plainParts.push(`[${escapeMarkdownLabel(label)}](${source.url})`)
-      nativeShareParts.push(`[${escapeMarkdownLabel(label)}](${source.url})`)
-      htmlParts.push(
-        isSafeShareUrl(source.url, false)
-          ? `<p><a href="${escapeHtml(source.url)}">${escapeHtml(label)}</a></p>`
-          : `<p>${escapeHtml(label)}</p>`
-      )
-      continue
-    }
-
-    if (part.type === "source-document") {
-      const source = part as SourceDocumentPart
-      const label = source.title || source.mediaType || "source"
-      plainParts.push(label)
-      nativeShareParts.push(label)
-      htmlParts.push(`<p>${escapeHtml(label)}</p>`)
     }
   }
 
-  const plainText = plainParts.join("\n\n")
   return {
-    plainText,
+    plainText: plainParts.join("\n\n"),
     nativeShareText: nativeShareParts.join("\n\n"),
     html: htmlParts.join("\n"),
     shareFiles,
@@ -266,25 +184,4 @@ function imageFilename(filename: string | undefined, mediaType: string, index: n
   if (filename?.trim()) return filename
   const extension = mediaType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "img"
   return `image-${index}.${extension}`
-}
-
-function isSafeShareUrl(url: string, image: boolean): boolean {
-  const lower = url.trim().toLowerCase()
-  if (/^(https?:|mailto:|blob:)/.test(lower) || lower.startsWith("/") || lower.startsWith("#")) {
-    return true
-  }
-  return image && lower.startsWith("data:image/")
-}
-
-function escapeMarkdownLabel(value: string): string {
-  return value.replace(/([\\\[\]])/g, "\\$1")
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
 }

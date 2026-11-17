@@ -13,6 +13,7 @@ import {
   exportToAnimatedHTML,
   generateFilename as generateExportFilename,
 } from "@/lib/export"
+import { loadExportLabels } from "@/lib/export/labels"
 import { createPluginSystemLogger, loggers } from "../core/logger"
 import { createApiGuardedAPI } from "./api-permission-gate"
 import type {
@@ -324,6 +325,7 @@ async function performExport(
         session: writerSession,
         messages: writerMessages,
         exportedAt: data.exportedAt,
+        labels: await loadExportLabels(),
         includeMetadata: restOptions.includeMetadata,
       })
       mimeType = "text/markdown"
@@ -351,6 +353,7 @@ async function performExport(
         session: writerSession,
         messages: writerMessages,
         exportedAt: data.exportedAt,
+        labels: await loadExportLabels(),
       })
       mimeType = "text/html"
       extension = "html"
@@ -364,6 +367,7 @@ async function performExport(
         session: writerSession,
         messages: writerMessages,
         exportedAt: data.exportedAt,
+        labels: await loadExportLabels(),
       })
       mimeType = "text/html"
       extension = "html"
@@ -377,6 +381,7 @@ async function performExport(
         session: writerSession,
         messages: writerMessages,
         exportedAt: data.exportedAt,
+        labels: await loadExportLabels(),
       })
       mimeType = "text/plain"
       extension = "txt"

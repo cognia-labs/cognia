@@ -342,9 +342,8 @@ registerNodeExecutor({
     })
     const format = p.format === "json" ? "json" : "markdown"
 
-    // Serialized here rather than through `messagesToMarkdown`, which lives
-    // inside a React component module (`components/ai-elements/conversation`)
-    // and would drag the component graph into a headless executor.
+    // Typed text only, for the nodes downstream: they read what was said. The
+    // user-facing document export (`lib/export/`) renders every part instead.
     const content =
       format === "json"
         ? JSON.stringify(

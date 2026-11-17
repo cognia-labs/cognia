@@ -3,11 +3,16 @@
 // valid-ish, theme tokens land in the inline stylesheet, and the conversation
 // renders text + tool blocks.
 
+import { useTranslations as englishTranslator } from "next-intl"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import { exportToBeautifulHtml } from "./beautiful-html"
 import { exportToAnimatedHtml } from "./animated-html"
 import { THEMES } from "./syntax-themes"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
+
+// The global next-intl mock resolves keys against the generated en.json.
+const labels = exportLabelsFrom(englishTranslator("export.document"), "en")
 
 const session: ChatSession = {
   id: "s1",
@@ -47,13 +52,13 @@ const exportedAt = new Date("2024-01-02T10:00:00Z")
 
 describe("exportToBeautifulHtml", () => {
   it("escapes hostile characters in the title", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt })
+    const html = exportToBeautifulHtml({ session, messages, exportedAt, labels })
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
     expect(html).not.toContain("<script>alert(1)</script>")
   })
 
   it("inlines the chosen theme's tokens", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt, theme: "dracula" })
+    const html = exportToBeautifulHtml({ session, messages, exportedAt, labels, theme: "dracula" })
     expect(html).toContain(THEMES.dracula.bg)
     expect(html).toContain(THEMES.dracula.accent)
   })
@@ -63,21 +68,21 @@ describe("exportToBeautifulHtml", () => {
       session,
       messages,
       exportedAt,
+      labels,
       customTheme: { ...THEMES.light, accent: "#ff00ff" },
     })
     expect(html).toContain("#ff00ff")
   })
 
   it("linkifies plain http URLs in text parts", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt })
+    const html = exportToBeautifulHtml({ session, messages, exportedAt, labels })
     expect(html).toContain('<a href="https://example.com"')
   })
 
   it("renders tool calls into a <details> block", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt })
+    const html = exportToBeautifulHtml({ session, messages, exportedAt, labels })
     expect(html).toContain("<details")
-    expect(html).toContain("🔧")
-    expect(html).toContain("test")
+    expect(html).toContain("🔧 Tool: Test")
   })
 
   it("respects includeTimestamps=false", () => {
@@ -85,6 +90,7 @@ describe("exportToBeautifulHtml", () => {
       session,
       messages,
       exportedAt,
+      labels,
       includeTimestamps: false,
     })
     expect(html).not.toContain("<time>")
@@ -93,7 +99,13 @@ describe("exportToBeautifulHtml", () => {
 
 describe("exportToBeautifulHtml — style presets", () => {
   it("injects the arknights banner, footer tag, and preset CSS", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt, theme: "arknights" })
+    const html = exportToBeautifulHtml({
+      session,
+      messages,
+      exportedAt,
+      labels,
+      theme: "arknights",
+    })
     expect(html).toContain('class="preset-banner">TACTICAL COMMUNICATION LOG')
     expect(html).toContain("PRTS // RECORD SEALED")
     expect(html).toContain(".preset-banner")
@@ -101,15 +113,15 @@ describe("exportToBeautifulHtml — style presets", () => {
   })
 
   it("every theme now ships preset chrome (light renders its banner)", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt, theme: "light" })
+    const html = exportToBeautifulHtml({ session, messages, exportedAt, labels, theme: "light" })
     expect(html).toContain('class="preset-banner">CONVERSATION')
     expect(html).toContain("Exported with Cognia")
   })
 
   it("renders the new immersive theme banners", () => {
-    const gen = exportToBeautifulHtml({ session, messages, exportedAt, theme: "genshin" })
+    const gen = exportToBeautifulHtml({ session, messages, exportedAt, labels, theme: "genshin" })
     expect(gen).toContain("TEYVAT ADVENTURE LOG")
-    const hk = exportToBeautifulHtml({ session, messages, exportedAt, theme: "honkai" })
+    const hk = exportToBeautifulHtml({ session, messages, exportedAt, labels, theme: "honkai" })
     expect(hk).toContain("ASTRAL EXPRESS LOG")
   })
 
@@ -118,6 +130,7 @@ describe("exportToBeautifulHtml — style presets", () => {
       session,
       messages,
       exportedAt,
+      labels,
       theme: "arknights",
       customTheme: { ...THEMES.arknights, accent: "#123456" },
     })
@@ -126,9 +139,9 @@ describe("exportToBeautifulHtml — style presets", () => {
   })
 
   it("sakura preset has a banner but no footer tagline", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt, theme: "sakura" })
+    const html = exportToBeautifulHtml({ session, messages, exportedAt, labels, theme: "sakura" })
     expect(html).toContain("HANAMI LOG")
-    expect(html).toMatch(/Exported from Cognia · [^·]*<\/footer>/)
+    expect(html).toMatch(/Exported from Cognia on [^·]*<\/footer>/)
   })
 })
 
@@ -140,6 +153,7 @@ describe("exportToBeautifulHtml — theme wallpaper backdrop", () => {
       session,
       messages,
       exportedAt,
+      labels,
       theme: "arknights",
       wallpaperDataUrl: dataUrl,
     })
@@ -149,7 +163,13 @@ describe("exportToBeautifulHtml — theme wallpaper backdrop", () => {
   })
 
   it("renders no backdrop when no wallpaper is provided", () => {
-    const html = exportToBeautifulHtml({ session, messages, exportedAt, theme: "arknights" })
+    const html = exportToBeautifulHtml({
+      session,
+      messages,
+      exportedAt,
+      labels,
+      theme: "arknights",
+    })
     expect(html).not.toContain("data:image/webp")
     expect(html).not.toContain("background-color: transparent")
   })
@@ -161,6 +181,7 @@ describe("exportToAnimatedHtml", () => {
       session,
       messages,
       exportedAt,
+      labels,
       theme: "aurora",
       wallpaperDataUrl: "data:image/webp;base64,WFla",
     })
@@ -169,19 +190,19 @@ describe("exportToAnimatedHtml", () => {
   })
 
   it("keeps the preset chrome from the base export", () => {
-    const html = exportToAnimatedHtml({ session, messages, exportedAt, theme: "arknights" })
+    const html = exportToAnimatedHtml({ session, messages, exportedAt, labels, theme: "arknights" })
     expect(html).toContain("preset-banner")
     expect(html).toContain("classList.add('show')")
   })
 
   it("includes the animation script", () => {
-    const html = exportToAnimatedHtml({ session, messages, exportedAt })
+    const html = exportToAnimatedHtml({ session, messages, exportedAt, labels })
     expect(html).toContain("<script>")
     expect(html).toContain("classList.add('show')")
   })
 
   it("uses a custom typingSpeedMs value", () => {
-    const html = exportToAnimatedHtml({ session, messages, exportedAt, typingSpeedMs: 33 })
+    const html = exportToAnimatedHtml({ session, messages, exportedAt, labels, typingSpeedMs: 33 })
     expect(html).toContain("setTimeout(r, 33)")
   })
 })
@@ -192,6 +213,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
       session,
       messages,
       exportedAt,
+      labels,
       includeMetadata: false,
     })
     expect(html).toContain("<header><h1>")
@@ -212,6 +234,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
     expect(html).toContain("💭 Thinking")
     expect(html).toContain("let me think...")
@@ -236,6 +259,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
       expandDetails: expand,
     })
     expect(html.includes('<details open class="reasoning">')).toBe(open)
@@ -263,6 +287,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
 
     const folded = /<details [^>]*class="attached-context">([\s\S]*?)<\/details>/.exec(html)
@@ -272,7 +297,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
     expect(html).not.toContain("<b>bold</b>")
 
     const textDivs = [...html.matchAll(/<div class="text">([\s\S]*?)<\/div>/g)].map((m) => m[1])
-    expect(textDivs).toEqual(["typed words"])
+    expect(textDivs).toEqual(["<p>typed words</p>"])
     expect(html).not.toContain("cognia_context_")
   })
 
@@ -292,6 +317,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
     expect(html).toContain('<img src="https://files/x.png" alt="x.png"')
     expect(html).toContain("noLink.txt")
@@ -315,6 +341,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
 
     expect(html).toContain('<a href="https://example.com/a_(b)"')
@@ -339,6 +366,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
     expect(html).toContain('href="https://docs/example"')
     expect(html).toContain("Example")
@@ -358,6 +386,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
     // No tool blocks / no text divs from this part.
     expect(html).toContain('class="parts">')
@@ -383,6 +412,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
     expect(html).toContain("⚙️ System")
     expect(html).toContain(">tool<")
@@ -408,6 +438,7 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
     expect(html).toContain("boom")
     expect(html).toContain("❌")
@@ -434,8 +465,9 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
-    expect(html).toContain("🔧 tool")
+    expect(html).toContain("🔧 Tool: Tool")
     expect(html).toContain("raw string output")
   })
 
@@ -461,8 +493,31 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
         },
       ],
       exportedAt,
+      labels,
     })
     // safeJson catch returns String(value) → "[object Object]".
     expect(html).toContain("[object Object]")
   })
+})
+
+it("renders a reply's block Markdown as blocks, with raw HTML shown as text (D11)", () => {
+  const html = exportToBeautifulHtml({
+    session,
+    exportedAt,
+    labels,
+    messages: [
+      {
+        id: "md",
+        sessionId: "s1",
+        role: "assistant",
+        parts: [{ type: "text", text: "## Steps\n\n- one\n- two\n\n<iframe src=x></iframe>" }],
+        createdAt: 1_700_000_000_000,
+      },
+    ],
+  })
+  expect(html).toContain("<h2>Steps</h2>")
+  expect(html).toContain("<li>one</li>")
+  expect(html).toContain("&lt;iframe src=x&gt;&lt;/iframe&gt;")
+  expect(html).not.toContain("<iframe")
+  expect(html).toContain('<html lang="en">')
 })

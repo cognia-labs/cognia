@@ -6,8 +6,9 @@ import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 import { THEMES, type ThemeId, type ThemeTokens } from "./syntax-themes"
 import { getStylePreset } from "./style-presets"
 import { buildWallpaperBackdropCss } from "./theme-wallpaper"
-import { renderSafeInlineMarkdown } from "./safe-inline-markdown"
-import { isImageFile } from "../file-utils"
+import { renderPartHtml, type PartRenderContext } from "@/lib/chat/parts/descriptors"
+import { escapeHtml } from "@/lib/chat/parts/markdown-html"
+import type { ExportLabels } from "@/lib/export/labels"
 import {
   promptPreambleInnerText,
   promptPreambleOfParts,
@@ -18,6 +19,7 @@ export interface BeautifulHtmlOptions {
   session: ChatSession
   messages: StoredMessage[]
   exportedAt: Date
+  labels: ExportLabels
   theme?: ThemeId
   /** Inline custom theme tokens — overrides `theme` when provided. */
   customTheme?: ThemeTokens
@@ -38,6 +40,7 @@ export function exportToBeautifulHtml(options: BeautifulHtmlOptions): string {
     session,
     messages,
     exportedAt,
+    labels,
     theme = "light",
     customTheme,
     includeMetadata = true,
@@ -56,7 +59,7 @@ export function exportToBeautifulHtml(options: BeautifulHtmlOptions): string {
   const wallpaperCss = wallpaperDataUrl ? buildWallpaperBackdropCss(wallpaperDataUrl, tokens) : ""
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${escapeHtml(labels.locale)}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -65,11 +68,11 @@ export function exportToBeautifulHtml(options: BeautifulHtmlOptions): string {
 </head>
 <body>
 <main class="container">
-${banner}${renderHeader(session, exportedAt, includeMetadata)}
+${banner}${renderHeader(session, exportedAt, includeMetadata, labels)}
 <section class="conversation">
-${messages.map((m) => renderMessage(m, { includeTimestamps, expandDetails })).join("\n")}
+${messages.map((m) => renderMessage(m, { includeTimestamps, expandDetails, labels })).join("\n")}
 </section>
-<footer class="exported">Exported from Cognia · ${escapeHtml(exportedAt.toLocaleString())}${footerTag}</footer>
+<footer class="exported">${escapeHtml(labels.footer(exportedAt.toLocaleString()))}${footerTag}</footer>
 </main>
 </body>
 </html>`
@@ -77,127 +80,68 @@ ${messages.map((m) => renderMessage(m, { includeTimestamps, expandDetails })).jo
 
 // ---------------------------------------------------------------------------
 
-function renderHeader(session: ChatSession, exportedAt: Date, includeMetadata: boolean): string {
+function renderHeader(
+  session: ChatSession,
+  exportedAt: Date,
+  includeMetadata: boolean,
+  labels: ExportLabels
+): string {
   if (!includeMetadata) {
     return `<header><h1>${escapeHtml(session.title)}</h1></header>`
   }
   return `<header>
   <h1>${escapeHtml(session.title)}</h1>
   <dl class="meta">
-    <dt>Date</dt><dd>${escapeHtml(new Date(session.createdAt).toLocaleDateString())}</dd>
-    ${session.model ? `<dt>Model</dt><dd>${escapeHtml(session.model)}</dd>` : ""}
-    ${session.kind ? `<dt>Kind</dt><dd>${escapeHtml(session.kind)}</dd>` : ""}
-    <dt>Exported</dt><dd>${escapeHtml(exportedAt.toLocaleString())}</dd>
+    <dt>${escapeHtml(labels.date)}</dt><dd>${escapeHtml(new Date(session.createdAt).toLocaleDateString())}</dd>
+    ${session.model ? `<dt>${escapeHtml(labels.model)}</dt><dd>${escapeHtml(session.model)}</dd>` : ""}
+    ${session.kind ? `<dt>${escapeHtml(labels.kind)}</dt><dd>${escapeHtml(session.kind)}</dd>` : ""}
+    <dt>${escapeHtml(labels.exported)}</dt><dd>${escapeHtml(exportedAt.toLocaleString())}</dd>
   </dl>
-  ${session.systemPrompt ? `<details><summary>System prompt</summary><pre>${escapeHtml(session.systemPrompt)}</pre></details>` : ""}
+  ${session.systemPrompt ? `<details><summary>${escapeHtml(labels.systemPrompt)}</summary><pre>${escapeHtml(session.systemPrompt)}</pre></details>` : ""}
 </header>`
 }
 
+const ROLE_ICONS: Record<string, string> = { user: "👤", assistant: "🤖", system: "⚙️" }
+
 function renderMessage(
   message: StoredMessage,
-  opts: { includeTimestamps: boolean; expandDetails: boolean }
+  opts: { includeTimestamps: boolean; expandDetails: boolean; labels: ExportLabels }
 ): string {
   const role = message.role
   const ts = opts.includeTimestamps
     ? `<time>${escapeHtml(new Date(message.createdAt).toLocaleString())}</time>`
     : ""
-  return `<article class="message message-${role}">
+  const icon = ROLE_ICONS[role]
+  const roleText = icon ? `${icon} ${opts.labels.role(role)}` : opts.labels.role(role)
+  const ctx: PartRenderContext = { labels: opts.labels.parts, expandDetails: opts.expandDetails }
+  return `<article class="message message-${escapeHtml(role)}">
   <header>
-    <span class="role">${escapeHtml(roleLabel(role))}</span>
+    <span class="role">${escapeHtml(roleText)}</span>
     ${ts}
   </header>
   <div class="parts">
-    ${renderAttachedContext(message.parts, opts.expandDetails)}${stripPromptPreambleFromParts(
+    ${renderAttachedContext(message.parts, opts.expandDetails, opts.labels)}${stripPromptPreambleFromParts(
       message.parts
     )
-      .map((p) => renderPart(p, opts.expandDetails))
+      .map((p) => renderPartHtml(p, ctx))
+      .filter(Boolean)
       .join("\n")}
   </div>
 </article>`
 }
 
-function renderPart(part: UIMessage["parts"][number], expandDetails: boolean): string {
-  if (part.type === "text") {
-    return `<div class="text">${renderSafeInlineMarkdown(escapeHtml((part as { text: string }).text))}</div>`
-  }
-  if (part.type === "reasoning") {
-    const text = (part as { text: string }).text ?? ""
-    return `<details ${expandDetails ? "open" : ""} class="reasoning">
-  <summary>💭 Thinking</summary>
-  <pre>${escapeHtml(text)}</pre>
-</details>`
-  }
-  if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
-    const tp = part as {
-      type: string
-      state?: string
-      input?: unknown
-      output?: unknown
-      errorText?: string
-    }
-    const name = tp.type === "dynamic-tool" ? "tool" : tp.type.slice("tool-".length)
-    return `<details ${expandDetails ? "open" : ""} class="tool">
-  <summary>🔧 ${escapeHtml(name)} <span class="state">[${escapeHtml(tp.state ?? "?")}]</span></summary>
-  ${tp.input !== undefined ? `<h4>Input</h4><pre>${escapeHtml(safeJson(tp.input))}</pre>` : ""}
-  ${tp.output !== undefined ? `<h4>Output</h4><pre>${escapeHtml(typeof tp.output === "string" ? tp.output : safeJson(tp.output))}</pre>` : ""}
-  ${tp.errorText ? `<p class="error">❌ ${escapeHtml(tp.errorText)}</p>` : ""}
-</details>`
-  }
-  if (part.type === "file") {
-    const fp = part as { url?: string; mediaType?: string; filename?: string }
-    const label = fp.filename ?? fp.mediaType ?? "file"
-    if (fp.url && isImageFile(fp)) {
-      return `<figure class="image"><img src="${escapeHtml(fp.url)}" alt="${escapeHtml(label)}" loading="lazy"><figcaption>${escapeHtml(label)}</figcaption></figure>`
-    }
-    return fp.url
-      ? `<p class="file">📎 <a href="${escapeHtml(fp.url)}">${escapeHtml(label)}</a></p>`
-      : `<p class="file">📎 ${escapeHtml(label)}</p>`
-  }
-  if (part.type === "source-url") {
-    const sp = part as { url: string; title?: string }
-    return `<p class="source">🔗 <a href="${escapeHtml(sp.url)}">${escapeHtml(sp.title ?? sp.url)}</a></p>`
-  }
-  return ""
-}
-
-function roleLabel(role: string): string {
-  switch (role) {
-    case "user":
-      return "👤 You"
-    case "assistant":
-      return "🤖 Assistant"
-    case "system":
-      return "⚙️ System"
-    default:
-      return role
-  }
-}
-
 /** What the composer attached to a turn, folded — not printed as the user's words. */
-function renderAttachedContext(parts: UIMessage["parts"], expandDetails: boolean): string {
+function renderAttachedContext(
+  parts: UIMessage["parts"],
+  expandDetails: boolean,
+  labels: ExportLabels
+): string {
   const preamble = promptPreambleOfParts(parts)
   if (!preamble) return ""
   return `<details ${expandDetails ? "open" : ""} class="attached-context">
-      <summary>📎 Attached context</summary>
+      <summary>📎 ${escapeHtml(labels.attachedContext)}</summary>
       <pre>${escapeHtml(promptPreambleInnerText(preamble))}</pre>
     </details>\n`
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-}
-
-function safeJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }
 
 function stylesheet(t: ThemeTokens): string {
@@ -219,8 +163,20 @@ header details pre { background: ${t.codeBg}; color: ${t.codeText}; padding: 12p
 .message .role { font-weight: 600; color: ${t.accent}; }
 .message time { color: ${t.muted}; }
 .parts > * { margin: 6px 0; }
-.text { white-space: pre-wrap; word-wrap: break-word; }
-.text a { color: ${t.accent}; }
+.text, .commentary, .part-card { overflow-wrap: anywhere; }
+.text > :first-child, .part-card > :first-child, .commentary > :first-child { margin-top: 0; }
+.text > :last-child, .part-card > :last-child, .commentary > :last-child { margin-bottom: 0; }
+.text a, .part-card a, .sources a, .commentary a { color: ${t.accent}; }
+.text table { border-collapse: collapse; margin: 8px 0; }
+.text th, .text td { border: 1px solid ${t.border}; padding: 4px 8px; text-align: left; }
+.text blockquote, .commentary { margin: 8px 0; padding-left: 12px; border-left: 3px solid ${t.border}; color: ${t.muted}; }
+.text :not(pre) > code { background: ${t.codeBg}; color: ${t.codeText}; padding: 1px 4px; border-radius: 4px; font-size: 0.9em; }
+.text img { max-width: 100%; }
+.part-card, .sources { background: ${t.detailBg}; border: 1px solid ${t.border}; border-radius: 6px; padding: 8px 12px; }
+.part-card-title { margin: 0; font-weight: 500; }
+.part-card-title + * { margin-top: 6px; }
+.part-not-exported .part-card-title, .part-a2ui .part-card-title, .part-withheld .part-card-title, .sources .note { color: ${t.muted}; font-style: italic; }
+.sources ul { margin: 6px 0 0; padding-left: 20px; }
 .image { margin: 10px 0; }
 .image img { display: block; max-width: 100%; max-height: 720px; border-radius: 8px; object-fit: contain; }
 .image figcaption { margin-top: 4px; color: ${t.muted}; font-size: 12px; }

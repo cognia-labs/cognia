@@ -10,11 +10,14 @@ import { getDb } from "@/lib/db/schema"
 import type { UIMessage } from "ai"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { resolveSessionTwinProvenance } from "@/lib/twin/export-provenance"
+import type { ExportLabels } from "@/lib/export/labels"
 
 export interface BatchExportOptions {
   /** Sessions to export. */
   sessions: ChatSession[]
   format: SingleExportFormat
+  /** Every word each document is written with, in the reader's locale. */
+  labels: ExportLabels
   theme?: ThemeId
   customTheme?: ThemeTokens
   includeMetadata?: boolean
@@ -58,6 +61,7 @@ export async function exportBatch(opts: BatchExportOptions): Promise<BatchExport
       format: opts.format,
       session,
       messages,
+      labels: opts.labels,
       exportedAt,
       theme: opts.theme,
       customTheme: opts.customTheme,

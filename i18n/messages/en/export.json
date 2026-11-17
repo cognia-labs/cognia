@@ -13,6 +13,66 @@
   },
   "batchDescription": "Pick the sessions to bundle into a single ZIP archive.",
   "batchTitle": "Bulk export",
+  "document": {
+    "attachedContext": "Attached context",
+    "attachedContextOmitted": "[attached context omitted]",
+    "footer": "Exported from Cognia on {date}",
+    "meta": {
+      "conversation": "Conversation",
+      "conversationInfo": "Conversation info",
+      "date": "Date",
+      "exported": "Exported",
+      "kind": "Kind",
+      "messages": "Messages",
+      "model": "Model",
+      "property": "Property",
+      "systemPrompt": "System prompt",
+      "tokenUsage": "Token usage",
+      "value": "Value",
+      "workingDir": "Working directory"
+    },
+    "parts": {
+      "artifact": "Artifact ({kind}): {title}",
+      "canvas": "Canvas: {title}",
+      "compacted": "Earlier context was compacted here",
+      "file": "File",
+      "gateDecision": {
+        "approved": "approved",
+        "dismissed": "dismissed",
+        "rejected": "rejected"
+      },
+      "grounding": "{supported} of {total} claims supported by sources",
+      "interactiveSurface": "Interactive surface — not exported",
+      "notExported": "{type} part — not exported",
+      "privateSources": "{count, plural, =1 {# source from your own material} other {# sources from your own material}} not exported",
+      "source": "Source",
+      "sources": "Sources",
+      "squadGate": "{title}: {decision}",
+      "squadRun": "Squad {name}",
+      "subagent": "Subagent {name} ({status})",
+      "teamDispatch": "Handed to {name}",
+      "thinking": "Thinking",
+      "tool": "Tool: {name}",
+      "toolError": "Error",
+      "toolInput": "Parameters",
+      "toolOutput": "Result",
+      "toolSummary": "Tool summary",
+      "verdict": {
+        "fail": "failed",
+        "pass": "passed",
+        "unsure": "unsure"
+      },
+      "verification": "Verification: {verdict}",
+      "verificationFailed": "Verification could not run: {error}",
+      "verificationRunning": "Verification still running",
+      "withheld": "Withheld from the shared view"
+    },
+    "roles": {
+      "assistant": "Assistant",
+      "system": "System",
+      "user": "You"
+    }
+  },
   "downloadPng": "Download image (PNG)",
   "downloadingPng": "Rendering…",
   "exportButton": "Export",

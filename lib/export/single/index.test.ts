@@ -10,11 +10,16 @@ jest.mock("@/lib/export/html/animated-html", () => ({
   exportToAnimatedHtml: jest.fn(() => "<html>ANIMATED</html>"),
 }))
 
+import { useTranslations as englishTranslator } from "next-intl"
+import { exportLabelsFrom } from "@/lib/export/labels"
 import { renderSingleExport } from "./index"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 import * as md from "@/lib/export/text/rich-markdown"
 import * as bh from "@/lib/export/html/beautiful-html"
 import * as ah from "@/lib/export/html/animated-html"
+
+// The global next-intl mock resolves keys against the generated en.json.
+const labels = exportLabelsFrom(englishTranslator("export.document"), "en")
 
 const session: ChatSession = {
   id: "s",
@@ -29,6 +34,7 @@ describe("renderSingleExport", () => {
       format: "text",
       session,
       messages,
+      labels,
       exportedAt: date,
       provenance: [{ source: "digital-twin", sourceId: "twin-1", disclosure: "ai-generated" }],
     })
@@ -40,6 +46,7 @@ describe("renderSingleExport", () => {
       format: "markdown",
       session,
       messages,
+      labels,
       exportedAt: date,
     })
     expect(out.content).toBe("MD")
@@ -53,6 +60,7 @@ describe("renderSingleExport", () => {
       format: "json",
       session,
       messages,
+      labels,
       exportedAt: date,
     })
     expect(out.content).toBe("JSON")
@@ -65,6 +73,7 @@ describe("renderSingleExport", () => {
       format: "text",
       session,
       messages,
+      labels,
       exportedAt: date,
     })
     expect(out.content).toBe("TXT")
@@ -77,6 +86,7 @@ describe("renderSingleExport", () => {
       format: "html",
       session,
       messages,
+      labels,
       exportedAt: date,
       theme: "dark",
       includeMetadata: true,
@@ -100,6 +110,7 @@ describe("renderSingleExport", () => {
       format: "animated",
       session,
       messages,
+      labels,
       exportedAt: date,
     })
     expect(out.content).toBe("<html>ANIMATED</html>")
@@ -113,6 +124,7 @@ describe("renderSingleExport", () => {
       format: "markdown",
       session: { id: "x", title: "..." } as unknown as ChatSession,
       messages,
+      labels,
       exportedAt: date,
     })
     expect(out.filename).toBe("conversation.md")
@@ -123,6 +135,7 @@ describe("renderSingleExport", () => {
       format: "markdown",
       session,
       messages,
+      labels,
     })
     expect(out.content).toBe("MD")
   })
@@ -137,7 +150,13 @@ describe("renderSingleExport", () => {
         createdAt: 1,
       },
     ]
-    const out = renderSingleExport({ format: "jsonl", session, messages: msgs, exportedAt: date })
+    const out = renderSingleExport({
+      format: "jsonl",
+      session,
+      messages: msgs,
+      labels,
+      exportedAt: date,
+    })
     expect(out.filename.endsWith(".jsonl")).toBe(true)
     expect(out.mimeType).toBe("application/x-ndjson")
     expect(JSON.parse(out.content).role).toBe("user")
@@ -157,6 +176,7 @@ describe("renderSingleExport", () => {
       format: "jsonl-chat",
       session,
       messages: msgs,
+      labels,
       exportedAt: date,
       includeAllBranches: true,
     })
@@ -171,6 +191,7 @@ describe("renderSingleExport", () => {
       format: "json",
       session: { id: "x", title: long } as unknown as ChatSession,
       messages,
+      labels,
     })
     // .slice(0, 60) yields 60 'x' chars
     expect(out.filename).toBe(`${"x".repeat(60)}.json`)

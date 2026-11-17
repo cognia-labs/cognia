@@ -92,8 +92,15 @@ jest.mock("sonner", () => ({
 jest.mock("@cognia/logging", () => ({
   loggers: { ui: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } },
 }))
-jest.mock("@/components/ai-elements/conversation", () => ({
-  messagesToMarkdown: () => "# md",
+const runSingleExport = jest.fn(async (_args: unknown) => ({ kind: "cancelled" }))
+jest.mock("@/hooks/data/use-single-export", () => ({
+  useSingleExport: () => ({ run: (args: unknown) => runSingleExport(args) }),
+}))
+const getSession = jest.fn(async (id: string) => ({ id, title: "Active chat" }))
+jest.mock("@/lib/db/sessions", () => ({ getSession: (id: string) => getSession(id) }))
+const notifyExportOutcome = jest.fn()
+jest.mock("@/lib/files/export-feedback", () => ({
+  notifyExportOutcome: (...a: unknown[]) => notifyExportOutcome(...a),
 }))
 jest.mock("@/lib/chat/cross-session-jump", () => ({
   jumpToSessionMessage: (...a: unknown[]) => jump(...a),
@@ -301,15 +308,16 @@ describe("useGlobalSearchActions", () => {
     await run("export-markdown")
     expect(toast.info).toHaveBeenCalledWith("toasts.nothingToExport")
     chatState.messages = [{ id: "m" }]
-    const createObjectURL = jest.fn(() => "blob:x")
-    const revokeObjectURL = jest.fn()
-    Object.assign(URL, { createObjectURL, revokeObjectURL })
-    const click = jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
     await run("export-markdown")
-    expect(createObjectURL).toHaveBeenCalled()
-    expect(click).toHaveBeenCalled()
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:x")
-    click.mockRestore()
+    // The palette writes the conversation's own Markdown export, not a copy.
+    expect(runSingleExport).toHaveBeenCalledWith({
+      format: "markdown",
+      session: { id: "s1", title: "Active chat" },
+    })
+    expect(notifyExportOutcome).toHaveBeenCalledWith(
+      { kind: "cancelled" },
+      expect.objectContaining({ shareTitle: "Active chat" })
+    )
 
     await run("clear-conversation")
     expect(clearMessages).toHaveBeenCalledWith("s1")
