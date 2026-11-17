@@ -27,52 +27,21 @@ import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import {
   selectComposerCitedRefs,
-  selectComposerContextSelections,
-  selectComposerCarriedPreambles,
-  selectComposerPermissionMode,
   selectComposerReplyTo,
-  selectComposerWebSearchOn,
   useChatStore,
   useComposerEphemeralSkillIds,
   useComposerPermissionMode,
   type ChatStatus as StoreChatStatus,
 } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
-import { useProjectStore } from "@/stores/project/project-store"
-import { resolveSessionWorkspace } from "@/lib/workspace/session-workspace"
-import { allRootPaths } from "@/lib/workspace/roots"
-import { formatSearchResultsForLLM } from "@/lib/search/search-service"
-import { searchWithAppSettings } from "@/lib/search/configured-search"
-import { resolveWebAccess } from "@/lib/chat/web-access"
-import { wrapUntrustedContent } from "@/lib/web/untrusted-content"
-import { formatContextSelectionsForLLM } from "@/lib/artifacts/format-selection-context"
-import { refreshSelectionFreshness } from "@/lib/chat/mentions/selection-freshness"
-import { citationsForSelections } from "@/lib/chat/mentions/selection-citations"
-import { mergeContextRefs } from "@/lib/chat/mentions/merge-refs"
 import type { ContextRef } from "@/lib/chat/mentions/types"
-import {
-  carriedPreambleSections,
-  composeTurnText,
-  mergeCarriedPreambleSummary,
-  summarizeSelectionForPreamble,
-} from "@/lib/chat/prompt-preamble"
 import {
   COMPOSER_APPEND_EVENT,
   composerAppendHasContent,
   type ComposerAppendDetail,
 } from "@/lib/chat/composer-append"
-import { estimateFallbackTokens } from "@/lib/ai/tokens/fallback-estimator"
-import { formatReviewReceiptsForLLM } from "@/lib/artifacts/format-review-receipt"
-import { useArtifactStore } from "@/stores/artifact/artifact-store"
-import type {
-  SendContent,
-  SendOptions,
-  ChatSession,
-  MessageReplyTo,
-} from "@cognia/agent-config-types"
+import type { SendContent, ChatSession, MessageReplyTo } from "@cognia/agent-config-types"
 import {
-  buildSendContent,
-  INLINE_TOKEN_CEILING,
   type AttachmentManifestEntry,
   type ExtractedAttachment,
   type SubmittedFile,
@@ -96,7 +65,6 @@ import {
   type ResolvedComposerSkin,
 } from "@/lib/chat/composer-skin"
 import { resolveStylePack } from "@/types/appearance/style-pack"
-import { buildLinkContextBlocks, mergeContextBlocks } from "@/lib/chat/link-context"
 import { requestBrowserUrl } from "@/lib/browser/open-url-request"
 import { openExternal } from "@/lib/tauri/opener"
 import {
@@ -131,12 +99,7 @@ import { ComposerPopover, type ComposerPopoverHandle } from "./composer-popover"
 import { usePluginSlashCommandExecution } from "@/hooks/chat/use-plugin-slash-commands"
 import { useEffectiveCwd } from "@/hooks/chat/use-effective-cwd"
 import { parseLeadingRoute } from "@/lib/chat/turn-route/parse"
-import { resolveRouteLane } from "@/lib/chat/turn-route/resolve"
-import { snapshotRouteContext } from "@/lib/chat/turn-route/snapshot"
 import { type TurnRoute } from "@/lib/chat/turn-route/types"
-import { isChatTurnQueued } from "@/lib/execution/chat-lease"
-import { sessionStatusOf } from "@/lib/chat/steer-runtime"
-import { routeFailureText } from "@/components/squads/agent-mention-picker"
 import { ContextChipBar } from "./composer/context-chip-bar"
 import { CommandHintBar } from "./composer/command-hint-bar"
 import { ScheduleSuggestion } from "./composer/schedule-suggestion"
@@ -147,10 +110,6 @@ import { readTurnRoute } from "@/lib/chat/turn-route/types"
 import { useOpenGoal } from "@/components/goal/use-active-goal"
 import { ComposerCheatsheet } from "./composer/composer-cheatsheet"
 import { canEnqueueInboxWrite, useInboxWriteReadiness } from "@/lib/connectors/inbox-writes"
-import {
-  sendManualMessageToConversation,
-  UnsupportedPlatformAttachmentsError,
-} from "@/lib/inbox/manual-send"
 import { listPendingForConversation as listPendingDrafts } from "@/lib/db/connector-drafts"
 import { DraftEditor } from "@/components/inbox/draft-editor"
 import { PlatformReplyAssistance } from "./composer/platform-reply-assistance"
@@ -159,7 +118,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   type SettingsTab,
   type SlashCommand,
-  type SlashContext,
   type SlashStagedFiles,
 } from "@/lib/slash-commands/builtin"
 import {
@@ -173,7 +131,7 @@ import { SaveAsTemplateDialog } from "./composer/save-as-template-dialog"
 import { TemplateLaunchDiffBar } from "./template-launch-diff-bar"
 import { pillDeleteRange } from "./composer-pill-delete"
 import { type CommandError } from "@/lib/slash-commands/run-segments"
-import { memoryTargetKey, type ComposerMemoryTarget } from "@/lib/chat/memory-target"
+import { type ComposerMemoryTarget } from "@/lib/chat/memory-target"
 import { useComposerCommandStore } from "@/stores/chat/composer-command-store"
 import { useComposerGhostText } from "@/hooks/chat/use-composer-ghost-text"
 import { useFollowUpSuggestions } from "@/hooks/chat/use-follow-up-suggestions"
@@ -182,17 +140,8 @@ import type { InlineCommandInfo } from "@/lib/chat/completion/inline/types"
 import { useLatestTextInput } from "./composer/hooks/use-latest-text-input"
 import { useInputHistory } from "./composer/hooks/use-input-history"
 import { CommandParamForm } from "./composer/command-param-form"
-import { trackEvent } from "@/lib/telemetry/events/track-event"
-import { formatShellResult } from "@/lib/shell/exec"
 import { useShellContext } from "@/hooks/chat/use-shell-intelligence"
-import { runShellLine } from "@/lib/shell-intelligence/execute"
-import { startShellJob } from "@/lib/shell-intelligence/shell-job"
-import { buildShellJobCardMessage, startShellJobRun } from "@/lib/shell-intelligence/shell-job-run"
-import { shellJobTranscript } from "@/lib/chat/shell-job-transcript"
 import { useShellJobCopy } from "./shell-job/use-shell-job-copy"
-import { runInTerminalDock } from "@/lib/terminal/run-in-dock"
-import { terminalAvailable } from "@/lib/terminal/pick-transport"
-import { detectInteractiveCommand } from "@/lib/ai/agent/execution/permissions/interactive-command"
 // `rememberFact` is imported lazily at its call site, not here: it pulls in the
 // Dexie session schema and the redaction package, which every composer test
 // otherwise has to mock just to render the box.
@@ -225,8 +174,7 @@ import { CannedResponsePicker } from "@/components/inbox/canned-response-picker"
 import { EnhanceButton } from "./composer/enhance-button"
 import { WebSearchToggle } from "./composer/web-search-toggle"
 import { RoomTargetPicker } from "./composer/room-target-picker"
-import { clearComposerTyping, noteComposerTyping } from "@/stores/chat/composer-typing-store"
-import { roomTargetsOf } from "@/stores/chat/room-target-store"
+import { noteComposerTyping } from "@/stores/chat/composer-typing-store"
 import { SkillsMenuEntry } from "./composer/skills-menu-entry"
 import { ComposerSessionProvider } from "./composer/composer-session-context"
 
@@ -330,7 +278,6 @@ interface Props {
  */
 export type { ComposerTurnMetadata } from "@/lib/chat/turn-metadata"
 import type { ComposerTurnMetadata } from "@/lib/chat/turn-metadata"
-import { SideChatDispatchError } from "@/lib/slash-commands/actions/side-chat"
 import { useComposerOcr } from "./composer/hooks/use-composer-ocr"
 import { useComposerMentionSources } from "./composer/hooks/use-composer-mention-sources"
 import { useComposerCustomCommands } from "./composer/hooks/use-composer-custom-commands"
@@ -343,6 +290,12 @@ import { useComposerPopoverActions } from "./composer/hooks/use-composer-popover
 import { runComposerSubmit } from "./composer/composer-submit"
 import { handleComposerKeyDown } from "./composer/composer-keydown"
 import { useComposerDraftLifecycle } from "./composer/hooks/use-composer-draft-lifecycle"
+import {
+  runComposerSlashCommand,
+  runComposerShellSubmit,
+  runComposerMemorySubmit,
+  runComposerTurn,
+} from "./composer/composer-turn-handlers"
 
 /**
  * Imperative handle exposed by `<Composer>`. The desktop shell uses it to
@@ -2313,79 +2266,25 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   )
 
   const handleSlashCommand = useCallback(
-    async (cmd: SlashCommand, args: string, staged?: SlashStagedFiles): Promise<boolean> => {
-      if (cmd.handler) {
-        if (cmd.name === "best-of-n" && staged?.files.length) {
-          toast.error(tBestOfN("textOnly"))
-          return false
-        }
-        let bestOfNAccepted = true
-        const ctx: SlashContext = {
-          args,
-          startBestOfN: async (prompt, n, agents) => {
-            bestOfNAccepted = await requestBestOfN(prompt, n, agents)
-            return bestOfNAccepted
-          },
-          isAside: session?.kind === "resource-workbench",
-          // The compact shell has no dock, so `/btw` reports desktop-only there too.
-          isMobile: isMobileShell,
-          activeSessionId: session?.id ?? null,
-          chatStatus: status,
-          // Read AND written against this composer's conversation. The mode
-          // cycle (`lib/slash-commands/builtin.ts`) reads this value and hands
-          // it straight back, so a focused-projection read here made an
-          // unfocused pane silently cycle the pane beside it — and that mode
-          // reaches the model through `resolveSendOptions`.
-          currentPermissionMode: selectComposerPermissionMode(
-            useChatStore.getState(),
-            session?.id ?? null
-          ),
-          startNewSession: onStartNewSession,
-          openSettings: onOpenSettings,
-          setPermissionMode: (mode) => setPermissionMode(mode, session?.id ?? null),
+    async (cmd: SlashCommand, args: string, staged?: SlashStagedFiles): Promise<boolean> =>
+      runComposerSlashCommand(
+        {
+          session,
+          onStartNewSession,
+          onOpenSettings,
+          tCommands,
+          isMobileShell,
+          status,
+          setPermissionMode,
           pushSystemMessage,
-          ...(staged ? { stagedFiles: staged.files, consumeStagedFiles: staged.consume } : {}),
-        }
-        try {
-          if (cmd.scope === "plugin") {
-            if (!(await runPluginCommand(cmd, ctx))) return false
-          } else {
-            await cmd.handler(ctx)
-            if (!bestOfNAccepted) return false
-          }
-          // Registered command names only — never the argument string, which
-          // is free user text.
-          void trackEvent("app.command.executed", {
-            command: cmd.name,
-            kind: "action",
-            outcome: "succeeded",
-          })
-        } catch (err) {
-          loggers.chat.error("slash command failed", err, {
-            command: cmd.name,
-            sessionId: session?.id,
-          })
-          void trackEvent("app.command.executed", {
-            command: cmd.name,
-            kind: "action",
-            outcome: "failed",
-          })
-          // The action already explained the refusal. Retain its question.
-          if (err instanceof SideChatDispatchError) return false
-          toast.error(err instanceof Error ? err.message : tCommands("failed"))
-        }
-        return true
-      }
-      if (cmd.template) {
-        void trackEvent("app.command.executed", {
-          command: cmd.name,
-          kind: "template",
-          outcome: "succeeded",
-        })
-        return true
-      }
-      return false
-    },
+          runPluginCommand,
+          tBestOfN,
+          requestBestOfN,
+        },
+        cmd,
+        args,
+        staged
+      ),
     [
       session,
       status,
@@ -2402,194 +2301,24 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   )
 
   const handleBashSubmit = useCallback(
-    async (rawCmd: string): Promise<boolean> => {
-      const cmd = rawCmd.trim()
-      if (!cmd) return false
-      if (!cwd) {
-        toast.error(tShell("needsCwd"))
-        return false
-      }
-      // An interactive command (ssh, a REPL, a login flow, `git rebase -i`, …)
-      // needs a TTY the capture path lacks — it would hang or read EOF. Route it
-      // to the real integrated terminal instead.
-      //
-      // Gated on the DOCK being reachable, not on `isTauri()`. The old gate was
-      // safe only because `executeShell` threw "desktop app only" underneath it;
-      // `runShellLine` runs anywhere a Host is, so an `isTauri()` gate would
-      // send `!ssh host` from a paired browser down the capture path to block
-      // until the capture timeout.
-      //
-      // …and gated on a Host being reachable as well, because `terminalAvailable()`
-      // alone is NOT the predicate `useShellContext` answers with. It reports
-      // whether a terminal transport could be picked — true for any Capacitor
-      // shell and any browser with a companion target configured, paired or
-      // not — while `availability` is the negotiated verdict, which additionally
-      // requires the Host to advertise `terminal_exec` and grant it. An
-      // unpaired phone satisfies the first and fails the second, so `!ssh host`
-      // used to be handed to a dock with nothing behind it instead of getting
-      // the one message that names the fix. Reading the run verdict here is what
-      // actually makes the two branches unable to disagree: below, anything
-      // short of `full` refuses immediately and by name, and now so does this
-      // one. `full`, and not merely "not static-only", because
-      // `shell-unavailable` is a reachable Host too, one that does not have the
-      // configured shell. Routing that to the dock hands it a shell it cannot
-      // spawn, which is the same silent nothing this gate exists to stop, while
-      // the capture path refuses with `shell-unavailable` and names the shell.
-      const hostReachable = shell.availability === "full"
-      if (hostReachable && terminalAvailable() && detectInteractiveCommand(cmd).interactive) {
-        try {
-          await runInTerminalDock(cmd, cwd, session?.id ?? "")
-          pushSystemMessage(tShell("interactiveRoutedToTerminal", { cmd }))
-        } catch (err) {
-          loggers.chat.error("interactive shell routing failed", err, { cmd, cwd })
-          pushSystemMessage(
-            tShell("failed", {
-              cmd,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          )
-        }
-        return true
-      }
-      const reportRefusal = (refusal: { reason: string; detail: string }) => {
-        loggers.chat.error("shell command failed", refusal.detail, {
-          cmd,
+    async (rawCmd: string): Promise<boolean> =>
+      runComposerShellSubmit(
+        {
+          session,
+          tShell,
+          shellJobCopy,
+          shell: { availability: shell.availability, shell: shell.shell },
           cwd,
-          reason: refusal.reason,
-          shell: shell.shell.path,
-        })
-        if (refusal.reason === "no-host") {
-          pushSystemMessage(tShell("noHost", { cmd }))
-        } else if (refusal.reason === "consent-required") {
-          // The host wants a human to approve remote execution. Telling the user
-          // that names an action; the generic "failed" sentence names none.
-          pushSystemMessage(tShell("consentRequired", { cmd }))
-        } else if (refusal.reason === "shell-unavailable") {
-          pushSystemMessage(tShell("shellUnavailable", { cmd, shell: shell.shell.path }))
-        } else if (refusal.reason === "unsupported-shell") {
-          pushSystemMessage(tShell("unsupportedShell", { cmd, shell: shell.shell.path }))
-        } else {
-          pushSystemMessage(tShell("failed", { cmd, error: refusal.detail }))
-        }
-      }
-
-      // As a supervised job owned by this conversation: output streams into a
-      // live card, nothing kills it at a timeout, and it can be moved to the
-      // Job Center or stopped. See `lib/shell-intelligence/shell-job.ts`.
-      // Needs a conversation to own the job; the home composer has none yet.
-      const sessionId = session?.id
-      if (sessionId) {
-        const started = await startShellJob({
-          sessionId,
-          line: cmd,
-          cwd,
-          shell: shell.shell,
-          availability: shell.availability,
-          label: tShell("job.label"),
-        })
-        if (started.ok) {
-          const block = {
-            kind: "shell-job" as const,
-            jobId: started.job.id,
-            sessionId,
-            command: cmd,
-            cwd,
-          }
-          // The card goes in before the run starts: every later write from
-          // the run rewrites this row, and a fast `ls` must not settle first.
-          try {
-            await shellJobTranscript.upsert(sessionId, buildShellJobCardMessage(block))
-          } catch (err) {
-            loggers.chat.error("posting a shell job card failed", err, { jobId: block.jobId })
-          }
-          startShellJobRun(block, { transcript: shellJobTranscript, copy: shellJobCopy })
-          return true
-        }
-        // A Host without the job command still runs the line, the old way.
-        if (started.reason !== "job-unavailable") {
-          reportRefusal(started)
-          return true
-        }
-      }
-
-      pushSystemMessage(tShell("runningHint", { cmd, cwd }))
-      // Through the routed `terminal_exec`, under the user's configured shell —
-      // so a `!` line works from a paired browser or phone, and `fish` users
-      // stop silently getting `sh`. See `lib/shell-intelligence/execute.ts`.
-      const outcome = await runShellLine({
-        line: cmd,
-        cwd,
-        shell: shell.shell,
-        availability: shell.availability,
-      })
-      if (outcome.ok) {
-        pushSystemMessage(formatShellResult(cmd, outcome))
-        return true
-      }
-      reportRefusal(outcome)
-      return true
-    },
+          pushSystemMessage,
+        },
+        rawCmd
+      ),
     [cwd, pushSystemMessage, tShell, shellJobCopy, session, shell.shell, shell.availability]
   )
 
   const handleMemorySubmit = useCallback(
-    async (target: ComposerMemoryTarget, text: string): Promise<boolean> => {
-      const noteUsed = () =>
-        useComposerCommandStore.getState().noteMemoryTargetUsed(memoryTargetKey(target))
-      if (target.target === "store") {
-        // ADR-0069 long-term memory — the SAME write path `/remember` uses, so
-        // the PII gate and the consolidator can't be bypassed here.
-        const { rememberFact } = await import("@/lib/memory/write/remember-fact")
-        const result = await rememberFact({
-          text,
-          scope: target.scope,
-          sessionId: session?.id ?? null,
-        })
-        if (result.ok) {
-          noteUsed()
-          toast.success(tMemory("storedInMemory", { scope: tMemory(`scope.${target.scope}`) }))
-          return true
-        }
-        loggers.chat.warn("memory store write refused", { reason: result.reason })
-        toast.error(tMemory(`storeError.${result.reason}`))
-        return false
-      }
-      try {
-        // The instruction file this conversation's next turn loads, found by
-        // the send path's own discovery over the same roots and settings.
-        const [{ appendInstructionMemory }, { resolveCharacterById }] = await Promise.all([
-          import("@/lib/agents/instructions/append-memory"),
-          import("@/lib/db/characters"),
-        ])
-        const { projects, activeProjectId } = useProjectStore.getState()
-        const workspace = resolveSessionWorkspace(session, projects, activeProjectId)
-        const character = session?.characterId
-          ? await resolveCharacterById(session.characterId)
-          : undefined
-        const path = await appendInstructionMemory({
-          scope: target.scope,
-          text,
-          cwd,
-          roots: workspace ? allRootPaths(workspace) : cwd ? [cwd] : [],
-          config:
-            character?.instructionsOverride ?? useSettingsStore.getState().settings?.instructions,
-        })
-        noteUsed()
-        toast.success(tMemory("appended", { path }))
-        return true
-      } catch (err) {
-        loggers.chat.error("memory append failed", err, { scope: target.scope, cwd })
-        const { InstructionMemoryError } = await import("@/lib/agents/instructions/append-memory")
-        toast.error(
-          err instanceof InstructionMemoryError
-            ? tMemory(`fileError.${err.reason}`)
-            : err instanceof Error
-              ? err.message
-              : tMemory("failed")
-        )
-        return false
-      }
-    },
+    async (target: ComposerMemoryTarget, text: string): Promise<boolean> =>
+      runComposerMemorySubmit({ session, tMemory, cwd }, target, text),
     [cwd, tMemory, session]
   )
 
@@ -2601,343 +2330,37 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
       templateRun?: ChatTemplateRun | null,
       submission?: { replyTo: MessageReplyTo | null },
       route?: TurnRoute | null
-    ) => {
-      const trimmed = text.trim()
-      if (bestOfNCount) {
-        if (files.length || route) {
-          toast.error(tBestOfN("textOnly"))
-          return false
-        }
-        const started = await requestBestOfN(trimmed, bestOfNCount)
-        if (started) setBestOfNChoice(null)
-        return started
-      }
-      // NOTE: `!shell` / `#memory` are NOT detected here any more. They are
-      // first-line modes decided from the ORIGINAL input inside `ComposerInner`
-      // (see `onSubmitShell` / `onSubmitMemory`); sniffing the prefix off this
-      // post-command text meant `/clear\n!ls` executed a shell command.
-
-      if (session?.platformBinding) {
-        if (!trimmed && files.length === 0) return false
-        const replyTo = submission?.replyTo ?? null
-        try {
-          await sendManualMessageToConversation({
-            session,
-            text: trimmed,
-            files,
-            replyTo,
-            templateRun,
-          })
-          const chatState = useChatStore.getState()
-          if (replyTo && selectComposerReplyTo(chatState, session.id) === replyTo) {
-            chatState.setReplyTo(null, session.id)
-          }
-          return true
-        } catch (error) {
-          toast.error(
-            error instanceof UnsupportedPlatformAttachmentsError
-              ? tPlatform("attachmentsUnsupported", {
-                  platform: tPlatformName.has(error.platform)
-                    ? tPlatformName(error.platform)
-                    : error.platform,
-                })
-              : tPlatform("sendFailed")
-          )
-          return false
-        }
-      }
-
-      // ── Addressed turn: `@claude` / `@codex` / `@<Squad member>` ─────
-      // Checked before anything below consumes a toggle, a chip or a receipt,
-      // so a refused route leaves the draft AND everything staged with it in
-      // place. The controller re-checks at commit (a lane can change between
-      // here and there); this is the check that can still say why, offer the
-      // way to fix it, and keep the text in the box.
-      if (route) {
-        // A live follow-up can only reach the runtime already answering, and
-        // queued follow-ups merge into one payload — neither can move a turn.
-        // Same verdict the controller's steer gate reaches.
-        if (session?.id) {
-          const current = sessionStatusOf(session.id)
-          if (
-            current === "streaming" ||
-            current === "awaiting_approval" ||
-            isChatTurnQueued(session.id)
-          ) {
-            toast.error(tRoute("busy", { handle: route.handle }))
-            return false
-          }
-        }
-        // `@codex` alone addresses a runtime with nothing to ask it. The token
-        // is stripped before the runtime sees the turn, so this would send an
-        // empty prompt — or, since stripping refuses to empty a message, the
-        // bare handle as the question.
-        const afterHandle = trimmed.slice(route.handle.length + 1).trim()
-        if (!afterHandle && files.length === 0) {
-          toast.error(tRoute("emptyPrompt", { handle: route.handle }))
-          return false
-        }
-        const snapshot = await snapshotRouteContext(session?.id ?? null, {
-          providerId:
-            session?.providerOverride ??
-            useSettingsStore.getState().settings?.defaultProvider ??
-            "anthropic",
-          session: session ?? null,
-        })
-        const lane = resolveRouteLane(route.target, snapshot)
-        if (!lane.ok) {
-          toast.error(tRoute("unavailable", { handle: route.handle }), {
-            description: routeFailureText(
-              lane,
-              { handle: route.handle, name: route.label },
-              tRoute,
-              tRouteRuntime
-            ),
-            action: {
-              label: tRoute("openSettings"),
-              // A missing member is fixed in the Squad; everything else is an
-              // external agent to add, enable or repair.
-              onClick: () => onOpenSettings(lane.reason === "member-missing" ? "squads" : "agents"),
-            },
-          })
-          return false
-        }
-      }
-
-      // ── Web search prefetch ─────────────────────────────────────────
-      // If the user toggled web search for this turn, run the query through
-      // the configured provider before forwarding to the SDK and prepend the
-      // formatted results as a system block. We don't fail the send on
-      // search errors — fall back to the original message instead.
-      // The three things that can ride in front of the typed text. Each is built
-      // as its own section and assembled once by `composeTurnText`, which wraps
-      // them in the envelope every "what did the user type" reader strips.
-      let webSearchSection = ""
-      let webSearchContext: SendOptions["webSearchContext"]
-      // THIS composer's conversation, matching where `WebSearchToggle` writes
-      // it. The bare projection is the focused pane, so an unfocused pane's
-      // armed toggle was never consumed (and never cleared, so it stayed lit)
-      // while a send from the focused pane ran the search it had armed.
-      const webOn = selectComposerWebSearchOn(useChatStore.getState(), session?.id ?? null)
-      // The SAME verdict `WebSearchToggle` disables itself on — not a private
-      // re-derivation of half of it. `preSearch` also covers the `webTools`
-      // kill switch and "is a provider actually configured", so a toggle armed
-      // before the user turned web tools off cannot still reach the network.
-      const searchSettings = useSettingsStore.getState().settings
-      const proactiveSearchEnabled = resolveWebAccess({
-        ...(searchSettings?.webTools ? { webTools: searchSettings.webTools } : {}),
-        nativeAvailable: false,
-        ...(searchSettings?.searchProviders
-          ? { searchProviders: searchSettings.searchProviders }
-          : {}),
-        ...(searchSettings?.defaultSearchProvider
-          ? { defaultSearchProvider: searchSettings.defaultSearchProvider }
-          : {}),
-        ...(searchSettings?.searchEnabled !== undefined
-          ? { searchEnabled: searchSettings.searchEnabled }
-          : {}),
-      }).preSearch
-      if (webOn && proactiveSearchEnabled && trimmed) {
-        try {
-          const resp = await searchWithAppSettings(trimmed)
-          webSearchSection = wrapUntrustedContent(formatSearchResultsForLLM(resp))
-          webSearchContext = {
-            provider: resp.provider,
-            results: resp.results.map(({ title, url, content, score }) => ({
-              title,
-              url,
-              content,
-              score,
-            })),
-          }
-          pushSystemMessage(
-            `🔎 ${tWebSearch("searchedVia", {
-              provider: resp.provider,
-              count: resp.results.length,
-            })}`
-          )
-        } catch (err) {
-          loggers.chat.error("web search failed", err, { query: trimmed })
-          toast.error(
-            tWebSearch("searchFailed", {
-              message: err instanceof Error ? err.message : String(err),
-            })
-          )
-        }
-      }
-      if (webOn) useChatStore.getState().setWebSearchOnForNextSend(false, session?.id ?? null)
-
-      // ── Context selections ──────────────────────────────────────────
-      // Prepend the selected material + comment as context, and record the
-      // edit target so the assistant reply routes into a per-hunk review
-      // proposal against the targeted artifact. The first selection wins; the
-      // rest contribute context only. That is now stated in the UI — the lead
-      // chip carries an "edit target" badge and the others promote on click
-      // (`artifact-selection-chips.tsx`) — where it used to be a `debug` log
-      // nobody would ever see.
-      // This pane's staged material, matching the chips that display it and the
-      // `clearContextSelections(session?.id)` below. Reading the focused
-      // projection here sent the OTHER conversation's file and artifact
-      // excerpts in this turn — and cleared selections that were never used.
-      const stagedSelections = selectComposerContextSelections(
-        useChatStore.getState(),
-        session?.id ?? null
-      )
-      // Last look before the snapshots leave. The chip bar re-checks on focus,
-      // but a record edited in the seconds between that and Enter would
-      // otherwise be sent as current. The bodies are NOT refreshed — the user
-      // approved these — only the divergence is recorded, so
-      // `formatContextSelectionsForLLM` can say the copy is behind.
-      const contextSelections = (await refreshSelectionFreshness(stagedSelections)).selections
-      // Formatted whether or not a conversation exists yet. The block used to be
-      // gated on `session?.id`, and the new-chat composer has none — so the chips
-      // of a first message were silently dropped and then cleared, which is the
-      // main way a conversation gets started FROM a reference.
-      const referencesSection = formatContextSelectionsForLLM(contextSelections, {
-        sessionId: session?.id ?? null,
-      })
-      if (contextSelections.length > 0 && session?.id) {
-        // The first *artifact*, not the first selection. A file, comment or web
-        // reference has nothing for a revision proposal to diff against, so
-        // reading index 0 blindly would let a staged workspace file silently
-        // disarm the whole review round trip — the AI's reply would then
-        // auto-create a duplicate artifact instead of proposing hunks against
-        // the one the user was actually working on.
-        const primary = contextSelections.find((sel) => sel.kind === "artifact")
-        if (primary) {
-          useChatStore.getState().setPendingArtifactEditTarget(session.id, {
-            artifactId: primary.artifactId,
-            requestId: crypto.randomUUID(),
-          })
-        }
-      }
-
-      // ── Review outcomes ─────────────────────────────────────────────
-      // Close the revision round trip the block above opens. Rejecting a
-      // proposal (or keeping 2 of its 5 hunks) used to be invisible to the
-      // assistant, which could then re-propose exactly what the user had just
-      // turned down. Read here but consumed only once the send commits, below —
-      // the same lifetime as a staged selection — so a receipt rides exactly
-      // one message and survives a send that bails before `onSend`.
-      const sentReceipts = session?.id
-        ? useArtifactStore.getState().peekReviewReceipts(session.id)
-        : []
-      // Envelopes carried over from a put-back message: what it referenced
-      // when it was first sent, re-sent verbatim beside this turn's own.
-      const carriedPreambles = selectComposerCarriedPreambles(
-        useChatStore.getState(),
-        session?.id ?? null
-      )
-      const turn = composeTurnText(text, [
+    ) =>
+      runComposerTurn(
         {
-          kind: "reviewReceipts",
-          text: sentReceipts.length > 0 ? formatReviewReceiptsForLLM(sentReceipts) : "",
+          session,
+          onOpenSettings,
+          onSend,
+          tAttach,
+          tPlatform,
+          tPlatformName,
+          tWebSearch,
+          tRoute,
+          tRouteRuntime,
+          videoRoute: { available: videoRoute.available },
+          attachmentCitations,
+          clearReferencedPaths,
+          clearCitedRefs,
+          clearContextSelections,
+          setOversizeConfirm,
+          pushSystemMessage,
+          tBestOfN,
+          setBestOfNChoice,
+          bestOfNCount,
+          requestBestOfN,
         },
-        { kind: "references", text: referencesSection },
-        ...carriedPreambleSections(carriedPreambles),
-        { kind: "webSearch", text: webSearchSection },
-      ])
-      const preambleSummary = turn.preamble
-        ? mergeCarriedPreambleSummary(
-            {
-              sections: turn.sections,
-              references: contextSelections.map(summarizeSelectionForPreamble),
-            },
-            carriedPreambles
-          )
-        : null
-      const augmented = turn.text
-
-      const linkContext = await buildLinkContextBlocks(text)
-      // `precomputed` makes this a map lookup for anything already extracted at
-      // staging time; files it doesn't cover still extract inline here.
-      const attachmentResult = await buildSendContent(augmented, files, {
+        text,
+        files,
         precomputed,
-        allowNativeVideo: videoRoute.available,
-      })
-      const content = mergeContextBlocks(attachmentResult.content, linkContext.blocks)
-      const rejected = attachmentResult.rejected
-      // The envelope counts too. The ceiling used to see attachments and links
-      // only, so twenty staged references went out with no confirmation at all.
-      const tokens =
-        attachmentResult.tokens + linkContext.tokens + estimateFallbackTokens(turn.preamble)
-      const isEmpty =
-        (typeof content === "string" && !content.trim()) ||
-        (Array.isArray(content) && content.length === 0)
-      if (rejected.length > 0) {
-        toast.error(tAttach("processing.rejected", { count: rejected.length }))
-        return false
-      }
-      if (isEmpty) return true
-      if (linkContext.rejected.length > 0) {
-        toast.warning(tAttach("linkSkipped", { count: linkContext.rejected.length }))
-      }
-      // Oversize guard: above the inline-token ceiling we ask the user to
-      // confirm before sending — never silently truncate. The promise resolves
-      // when they pick an option in the dialog rendered below.
-      if (tokens > INLINE_TOKEN_CEILING) {
-        const ok = await new Promise<boolean>((resolve) => {
-          setOversizeConfirm({ tokens, resolve })
-        })
-        setOversizeConfirm(null)
-        if (!ok) return false
-      }
-      // The reply target rides this exact turn (ADR-0177 batch 2). Read from
-      // THIS pane's conversation and cleared after the send, like the cited
-      // refs, so the chip is gone the moment the quoted turn is in the list.
-      const replyTo = selectComposerReplyTo(useChatStore.getState(), session?.id ?? null)
-      // The standing member pick (ADR-0177 batch 3) rides every send in a
-      // team room until the user clears it, so it is read, not consumed.
-      const targetMemberIds =
-        session?.kind === "team" && session.teamId ? roomTargetsOf(session.id) : []
-      // Read from THIS composer's slice, like the chips, and handed over with
-      // the turn: the destination conversation of a first message does not
-      // exist yet, so the send path cannot find these by looking it up.
-      // A picked remote document leaves no token and no chip-bar selection: its
-      // citation is bound to the attachment it staged, so it is read off the
-      // files this turn actually submits. A chip removed before sending, or an
-      // extraction that was rejected, therefore cites nothing.
-      const citations = mergeContextRefs(
-        [
-          ...citationsForSelections(contextSelections),
-          ...attachmentCitations.citationsFor(files, precomputed),
-        ],
-        selectComposerCitedRefs(useChatStore.getState(), session?.id ?? null)
-      )
-      const turnMetadata: ComposerTurnMetadata = {
-        ...(webSearchContext ? { webSearchContext } : {}),
-        ...(replyTo ? { replyTo } : {}),
-        ...(targetMemberIds.length > 0 ? { targetMemberIds } : {}),
-        ...(preambleSummary ? { promptPreamble: preambleSummary } : {}),
-        ...(citations.length > 0 ? { citations } : {}),
-        ...(route ? { route } : {}),
-      }
-      const outcome =
-        Object.keys(turnMetadata).length > 0
-          ? await onSend(content, attachmentResult.manifest, templateRun, turnMetadata)
-          : await onSend(content, attachmentResult.manifest, templateRun)
-      if (outcome === false) return false
-      if (citations.length > 0) {
-        // `kinds` is a sorted set joined with `+` — an enum-shaped string like
-        // `entity+file`, never a title or anything the user typed.
-        const kinds = [...new Set(citations.map((ref) => ref.kind))].sort().join("+")
-        void trackEvent("chat.reference.sent", {
-          kinds,
-          staleCount: contextSelections.filter((sel) => sel.kind === "entity" && sel.stale).length,
-        })
-      }
-      if (replyTo) useChatStore.getState().setReplyTo(null, session?.id ?? null)
-      if (session?.kind === "team" && session.teamId) clearComposerTyping(session.id)
-      clearReferencedPaths(session?.id ?? null)
-      clearContextSelections(session?.id ?? null)
-      useChatStore.getState().clearCarriedPreambles(session?.id ?? null)
-      // Same lifetime as the chips they describe: the citations rode exactly
-      // this message. Cleared AFTER `onSend` so the controller has already read
-      // them into `metadata.mentions`.
-      clearCitedRefs(session?.id ?? null)
-      useArtifactStore.getState().consumeReviewReceipts(sentReceipts)
-      return true
-    },
+        templateRun,
+        submission,
+        route
+      ),
     [
       onSend,
       bestOfNCount,
