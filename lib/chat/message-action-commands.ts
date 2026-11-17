@@ -111,6 +111,45 @@ export function messageActionCommandsAt(
 }
 
 /**
+ * What a thumb reaches for first on the touch sheet, in this order. The sheet
+ * draws the first {@link MESSAGE_SHEET_PRIMARY_MAX} of these that the message
+ * offers as one strip above the list, so the common actions never sit below
+ * the fold of a long list (D15).
+ */
+const SHEET_PRIMARY_ORDER: readonly MessageActionCommandId[] = [
+  "copy",
+  "edit",
+  "regenerate",
+  "reply",
+  "share",
+  "readAloud",
+  "quote",
+]
+
+/** How many commands the touch sheet's primary strip holds. */
+export const MESSAGE_SHEET_PRIMARY_MAX = 4
+
+/**
+ * Split the resolved commands for the touch sheet: the primary strip, in
+ * {@link SHEET_PRIMARY_ORDER}, and every other command in its resolved order.
+ * A destructive command is never primary.
+ */
+export function splitSheetCommands(
+  commands: readonly MessageActionCommand[],
+  max: number = MESSAGE_SHEET_PRIMARY_MAX
+): { primary: MessageActionCommand[]; rest: MessageActionCommand[] } {
+  const byId = new Map(commands.map((command) => [command.id, command]))
+  const primary: MessageActionCommand[] = []
+  for (const id of SHEET_PRIMARY_ORDER) {
+    if (primary.length >= max) break
+    const command = byId.get(id)
+    if (command && !command.destructive) primary.push(command)
+  }
+  const taken = new Set(primary.map((command) => command.id))
+  return { primary, rest: commands.filter((command) => !taken.has(command.id)) }
+}
+
+/**
  * Host-owned command availability shared by pointer, keyboard, overflow, and
  * mobile long-press surfaces. Each surface supplies presentation and handlers;
  * this pure model supplies the same command set, its order, where each command

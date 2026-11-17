@@ -10,6 +10,7 @@ import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { InlineCopyButton } from "@/components/chat/message-parts/tool-row"
 import { HOVER_REVEAL_GROUP_BASE_CLASS } from "@/lib/ui/hover-reveal"
 import { cn } from "@/lib/utils"
+import { useTouchShell } from "@/hooks/ui/use-pointer"
 import { unwrapUntrustedContent } from "@/lib/web/untrusted-content"
 
 interface WebFetchInput {
@@ -55,6 +56,9 @@ function looksLikeJsonPayload(s: string): boolean {
  * Returns `null` (→ generic ToolBody) when no URL is present.
  */
 export function WebFetchCard({ part }: { part: ToolUIPart }) {
+  // On touch the copy button would sit over the page text for good (no hover
+  // to hide it again), so it takes its own line above the text (D2).
+  const touchShell = useTouchShell()
   const t = useTranslations("chat.toolCards.webFetch")
   const tRow = useTranslations("chat.toolRow")
   const input = (part.input ?? {}) as WebFetchInput
@@ -147,10 +151,16 @@ export function WebFetchCard({ part }: { part: ToolUIPart }) {
           <div className="group/wf relative border-l-2 border-border pl-2.5">
             <span
               className={cn(
-                "absolute right-0 top-0 z-10",
-                HOVER_REVEAL_GROUP_BASE_CLASS,
-                "group-hover/wf:opacity-100"
+                touchShell
+                  ? "touch-hit-each flex justify-end"
+                  : cn(
+                      "absolute right-0 top-0 z-10",
+                      HOVER_REVEAL_GROUP_BASE_CLASS,
+                      "group-hover/wf:opacity-100"
+                    )
               )}
+              data-testid="mcp-webfetch-copy-slot"
+              data-placement={touchShell ? "inline" : "overlay"}
             >
               <InlineCopyButton
                 value={content}

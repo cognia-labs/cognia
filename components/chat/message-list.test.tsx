@@ -748,6 +748,22 @@ describe("MessageList", () => {
     ;(usePlatform as jest.Mock).mockReturnValue("desktop")
   })
 
+  it("draws the long-press hint as an overlay that takes no layout (D15)", () => {
+    ;(usePlatform as jest.Mock).mockReturnValue("mobile")
+    const Wrapper = withAdapter(makeAdapter())
+    render(
+      <Wrapper>
+        <MessageList messages={[userMsg("m1", "hello")]} status="idle" />
+      </Wrapper>
+    )
+    const hint = screen.getByTestId("long-press-hint")
+    // Inside the scroll surface, positioned over it, and it lets taps through.
+    expect(hint.closest("[data-chat-scroll-surface]")).not.toBeNull()
+    expect(hint.className).toContain("absolute")
+    expect(hint.className).toContain("pointer-events-none")
+    ;(usePlatform as jest.Mock).mockReturnValue("desktop")
+  })
+
   it("retires the long-press hint once the conversation grows past two messages", () => {
     ;(usePlatform as jest.Mock).mockReturnValue("mobile")
     const Wrapper = withAdapter(makeAdapter())

@@ -2,11 +2,26 @@ jest.mock("@/hooks/use-platform", () => ({ usePlatform: jest.fn(() => "web") }))
 
 import { fireEvent, render, screen } from "@testing-library/react"
 import { GlobeIcon } from "lucide-react"
+import type { ReactNode } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { CapabilityRow } from "./capability-row"
+import { ComposerMenuPanelsProvider, type ComposerMenuPanels } from "./composer-menu-context"
 import { usePlatform } from "@/hooks/use-platform"
 
 const platformMock = usePlatform as jest.Mock
+
+/** The "+" sheet: the host that offers in-place panels. */
+const SHEET_PANELS: ComposerMenuPanels = {
+  activePanelId: null,
+  slot: null,
+  openPanel: () => {},
+  closePanel: () => {},
+  registerPanel: () => () => {},
+}
+
+function inSheet(node: ReactNode) {
+  return <ComposerMenuPanelsProvider value={SHEET_PANELS}>{node}</ComposerMenuPanelsProvider>
+}
 
 beforeEach(() => {
   platformMock.mockReturnValue("web")
@@ -31,9 +46,8 @@ describe("CapabilityRow", () => {
     expect(screen.getByRole("button").querySelector(".bg-primary")).not.toBeNull()
   })
 
-  it("uses the touch-sized row and shows the hint line on mobile", () => {
-    platformMock.mockReturnValue("mobile")
-    render(<CapabilityRow icon={<i />} label="Web" hint="Configure a provider first" />)
+  it("uses the touch-sized row and shows the hint line in the sheet", () => {
+    render(inSheet(<CapabilityRow icon={<i />} label="Web" hint="Configure a provider first" />))
 
     const row = screen.getByRole("menuitem")
     expect(row.className).toContain("touch-target")
@@ -53,8 +67,7 @@ describe("CapabilityRow", () => {
   })
 
   it("is a menuitemcheckbox with aria-checked in the mobile sheet", () => {
-    platformMock.mockReturnValue("mobile")
-    render(<CapabilityRow icon={<i />} label="Web" checkable active />)
+    render(inSheet(<CapabilityRow icon={<i />} label="Web" checkable active />))
     const row = screen.getByRole("menuitemcheckbox")
     expect(row).toHaveAttribute("aria-checked", "true")
     expect(row).not.toHaveAttribute("aria-pressed")
@@ -74,11 +87,22 @@ describe("CapabilityRow", () => {
   })
 
   it("carries aria-disabled on a disabled mobile row like PlusRow", () => {
-    platformMock.mockReturnValue("mobile")
-    render(<CapabilityRow icon={<i />} label="Web" disabled />)
+    render(inSheet(<CapabilityRow icon={<i />} label="Web" disabled />))
     const row = screen.getByRole("menuitem")
     expect(row).toBeDisabled()
     expect(row).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("takes its host's shape, not the platform's (D2)", () => {
+    // The native shell's desktop-style popover host draws the desktop row…
+    platformMock.mockReturnValue("mobile")
+    const { unmount } = render(<CapabilityRow icon={<i />} label="Web" />)
+    expect(screen.getByRole("button", { name: "Web" }).className).toContain("hover:bg-accent")
+    unmount()
+    // …and a phone browser's "+" sheet the touch row.
+    platformMock.mockReturnValue("web")
+    render(inSheet(<CapabilityRow icon={<i />} label="Web" />))
+    expect(screen.getByRole("menuitem").className).toContain("touch-target")
   })
 
   it("does not set aria-disabled on desktop, matching PanelItem", () => {

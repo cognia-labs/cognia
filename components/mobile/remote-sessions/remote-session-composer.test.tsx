@@ -291,6 +291,11 @@ describe("RemoteSessionComposer", () => {
     await screen.findByTestId("remote-attachment-progress")
     gate.release?.()
     await waitFor(() => expect(screen.queryByTestId("remote-attachment-remove")).toBeInTheDocument())
+    // A phone has no hover to reveal the inline chip's ×: touch shows it.
+    expect(screen.getByTestId("remote-attachment-remove")).toHaveClass(
+      "pointer-coarse:opacity-100",
+      "touch-hit"
+    )
 
     await user.click(screen.getByTestId("remote-attachment-remove"))
     // The slot is bounded per (session, device); a removed file that kept it

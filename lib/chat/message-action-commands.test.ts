@@ -1,6 +1,8 @@
 import {
   messageActionCommandsAt,
   resolveMessageActionCommands,
+  splitSheetCommands,
+  type MessageActionCommand,
   type MessageActionCommandContext,
 } from "./message-action-commands"
 
@@ -334,5 +336,56 @@ describe("placement (D10)", () => {
       allowed: new Set(["copy", "bookmark", "branch"]),
     })
     expect(commands.map(({ id }) => id)).toEqual(["copy", "bookmark", "branch"])
+  })
+})
+
+describe("splitSheetCommands (D15)", () => {
+  const ids = (commands: MessageActionCommand[]) => commands.map(({ id }) => id)
+
+  it("puts the commands a thumb reaches for first in the strip, in that order", () => {
+    const commands = resolveMessageActionCommands({
+      role: "assistant",
+      hasContent: true,
+      hasSession: true,
+      canRegenerate: true,
+      canReadAloud: true,
+    })
+    const { primary, rest } = splitSheetCommands(commands)
+    expect(ids(primary)).toEqual(["copy", "regenerate", "reply", "share"])
+    expect(rest.map(({ id }) => id)).not.toContain("copy")
+    // Everything else keeps its resolved order, the bar's first.
+    expect(ids(rest)).toEqual(
+      ids(commands).filter((id) => !["copy", "regenerate", "reply", "share"].includes(id))
+    )
+  })
+
+  it("leads with edit on the user's own turn", () => {
+    const commands = resolveMessageActionCommands({
+      role: "user",
+      hasContent: true,
+      hasSession: true,
+      canEdit: true,
+    })
+    expect(ids(splitSheetCommands(commands).primary)).toEqual(["copy", "edit", "reply", "share"])
+  })
+
+  it("never makes a destructive command primary, and keeps every command once", () => {
+    const commands: MessageActionCommand[] = [
+      { id: "delete", placement: "menu", destructive: true },
+      { id: "copy", placement: "bar" },
+    ]
+    const { primary, rest } = splitSheetCommands(commands)
+    expect(ids(primary)).toEqual(["copy"])
+    expect(ids(rest)).toEqual(["delete"])
+  })
+
+  it("draws no more than the strip holds", () => {
+    const commands = resolveMessageActionCommands({
+      role: "assistant",
+      hasContent: true,
+      hasSession: true,
+      canRegenerate: true,
+    })
+    expect(splitSheetCommands(commands, 2).primary).toHaveLength(2)
   })
 })

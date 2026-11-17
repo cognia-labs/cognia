@@ -16,6 +16,7 @@ import type { ToolUIPart } from "ai"
 import { Button } from "@/components/ui/button"
 import { ReadingCollapse } from "@/components/chat/motion/motion-reveal"
 import { useCopy } from "@/hooks/ui"
+import { useTouchShell } from "@/hooks/ui/use-pointer"
 import { HOVER_REVEAL_GROUP_BASE_CLASS } from "@/lib/ui/hover-reveal"
 import { cn } from "@/lib/utils"
 
@@ -182,6 +183,13 @@ export function ToolRowShell({
   children?: ReactNode
 }) {
   const isReasoning = dataKind === "reasoning"
+  // A finger has no hover to reveal the actions with, and drawn over the row
+  // they would hide its result text for good. On touch they sit in the open:
+  // at the top of the expanded body, or after the meta on a row with no body
+  // (D2).
+  const touchShell = useTouchShell()
+  const actionsInBody = touchShell && actions != null && children != null
+  const actionsInFlow = touchShell && actions != null && children == null
   return (
     <div
       className={cn("group/trow not-prose", className)}
@@ -191,7 +199,9 @@ export function ToolRowShell({
     >
       <div
         className={cn(
-          "relative flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors",
+          // Rows stack, so a touch floor grows the row rather than reaching
+          // into its neighbours with an invisible hit area.
+          "relative flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors pointer-coarse:min-h-11",
           isReasoning ? "text-muted-foreground hover:text-foreground" : "hover:bg-muted/50"
         )}
       >
@@ -226,7 +236,7 @@ export function ToolRowShell({
               aria-label={ariaLabel}
               title={title}
               data-testid={toggleTestId ?? `${testId}-toggle`}
-              className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none"
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               {inner}
             </button>
@@ -241,7 +251,15 @@ export function ToolRowShell({
             </div>
           )
         })()}
-        {actions ? (
+        {actionsInFlow ? (
+          <div
+            className="touch-hit-each flex shrink-0 items-center gap-0.5"
+            data-testid="tool-row-actions"
+            data-placement="inline"
+          >
+            {actions}
+          </div>
+        ) : actions && !actionsInBody ? (
           // Absolutely anchored left of the chevron so every row's ▸ keeps the
           // same right edge — in-flow actions used to push the chevron ~24px
           // left on rows that had them. Tool rows use a muted chip to cover
@@ -253,6 +271,8 @@ export function ToolRowShell({
               HOVER_REVEAL_GROUP_BASE_CLASS,
               "group-hover/trow:opacity-100"
             )}
+            data-testid="tool-row-actions"
+            data-placement="overlay"
           >
             {actions}
           </div>
@@ -260,7 +280,18 @@ export function ToolRowShell({
       </div>
       {children != null ? (
         <ReadingCollapse open={open}>
-          <div className="ml-[15px]">{children}</div>
+          <div className="ml-[15px]">
+            {actionsInBody ? (
+              <div
+                className="touch-hit-each flex items-center justify-end gap-0.5 pb-1"
+                data-testid="tool-row-actions"
+                data-placement="body"
+              >
+                {actions}
+              </div>
+            ) : null}
+            {children}
+          </div>
         </ReadingCollapse>
       ) : null}
     </div>

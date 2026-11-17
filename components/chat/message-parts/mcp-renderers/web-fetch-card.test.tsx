@@ -28,6 +28,8 @@ jest.mock("@/components/chat/renderers/code-block", () => ({
       code
     ),
 }))
+let mockTouchShell = false
+jest.mock("@/hooks/ui/use-pointer", () => ({ useTouchShell: () => mockTouchShell }))
 const mockCopy = jest.fn(async () => true)
 jest.mock("@/hooks/ui", () => ({
   useCopy: () => ({ copied: false, copy: mockCopy }),
@@ -64,6 +66,24 @@ describe("WebFetchCard", () => {
     expect(screen.getByTestId("mcp-webfetch-content")).toHaveTextContent("TAIL")
     expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument()
     expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it("gives the copy button its own line on touch instead of covering the text (D2)", () => {
+    const body = { ok: true, content: "hello body" }
+    const { unmount } = render(<WebFetchCard part={part({ url: "https://example.com" }, body)} />)
+    expect(screen.getByTestId("mcp-webfetch-copy-slot").dataset.placement).toBe("overlay")
+    expect(screen.getByTestId("mcp-webfetch-copy-slot")).toHaveClass("absolute")
+    unmount()
+    mockTouchShell = true
+    try {
+      render(<WebFetchCard part={part({ url: "https://example.com" }, body)} />)
+      const slot = screen.getByTestId("mcp-webfetch-copy-slot")
+      expect(slot.dataset.placement).toBe("inline")
+      expect(slot).not.toHaveClass("absolute")
+      expect(slot).toHaveClass("touch-hit-each")
+    } finally {
+      mockTouchShell = false
+    }
   })
 
   it("renders the page title and prose body without repeating the row's URL", () => {

@@ -131,7 +131,9 @@ export const RichBlockFrame = forwardRef<HTMLDivElement, RichBlockFrameProps>(
                   data-rich-block-actions
                   data-message-rich-control
                   className={cn(
-                    "ms-auto flex items-center gap-0.5",
+                    // A horizontal toolbar of caller-passed controls: each
+                    // answers a thumb at the 44px floor (D2).
+                    "touch-hit-each ms-auto flex items-center gap-0.5",
                     HOVER_REVEAL_GROUP_BASE_CLASS,
                     RICH_BLOCK_ACTIONS_HOVER_CLASS
                   )}
@@ -145,7 +147,7 @@ export const RichBlockFrame = forwardRef<HTMLDivElement, RichBlockFrameProps>(
             <div
               data-message-rich-control
               className={cn(
-                "absolute end-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border bg-background/85 p-0.5 shadow-xs backdrop-blur-sm",
+                "touch-hit-each absolute end-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border bg-background/85 p-0.5 shadow-xs backdrop-blur-sm",
                 HOVER_REVEAL_GROUP_BASE_CLASS,
                 RICH_BLOCK_ACTIONS_HOVER_CLASS
               )}

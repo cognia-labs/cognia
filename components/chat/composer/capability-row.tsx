@@ -22,7 +22,7 @@
 
 import { forwardRef, type ReactNode } from "react"
 import { ChevronRightIcon } from "lucide-react"
-import { usePlatform } from "@/hooks/use-platform"
+import { useComposerMenuPanels } from "./composer-menu-context"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
@@ -55,7 +55,10 @@ export const CapabilityRow = forwardRef<HTMLButtonElement, CapabilityRowProps>(
     { icon, label, active, checkable, disabled, hint, chevron, tooltip, className, ...rest },
     ref
   ) {
-    const isMobile = usePlatform() === "mobile"
+    // The row takes its host's shape: the "+" sheet offers in-place panels,
+    // the desktop popover does not. Asking the platform instead drew a desktop
+    // row in a phone browser's sheet (D2).
+    const isMobile = useComposerMenuPanels() !== null
     const row = (
       <button
         ref={ref}

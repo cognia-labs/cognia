@@ -3302,11 +3302,22 @@ html[data-shell-view-transition-shrink~="cognia-terminal-outlet-end"]::view-tran
      Vertical only: the gap between chips on a row is 2-4px, and a horizontal
      slop would hand a neighbour's taps to whichever chip paints last. A fine
      pointer (mouse, trackpad) gets nothing. */
+  /* A control already taken out of flow (a corner button) is a containing
+     block for its `::after` as it is, and forcing `relative` on it would drop
+     it from its corner into the flow.
+
+     `.touch-hit-each` gives every control inside a container the same slop,
+     for a toolbar whose buttons a caller passes in (a rich block's actions, a
+     card header): the container is the one place that knows the row is
+     horizontal. Never on a container whose controls stack vertically — there
+     the row itself should grow to the floor instead (`pointer-coarse:min-h-11`). */
   @media (pointer: coarse) {
-    .touch-hit {
+    .touch-hit:not(.absolute, .fixed, .sticky),
+    .touch-hit-each :is(button, a[href], [role="button"]):not(.absolute, .fixed, .sticky) {
       position: relative;
     }
-    .touch-hit::after {
+    .touch-hit::after,
+    .touch-hit-each :is(button, a[href], [role="button"])::after {
       content: "";
       position: absolute;
       inset-inline: 0;

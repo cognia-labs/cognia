@@ -278,7 +278,7 @@ export const ArtifactPart = memo(function ArtifactPart({ part, className }: Arti
             </p>
           </div>
         </div>
-        <ArtifactActions className="shrink-0 gap-0.5">
+        <ArtifactActions className="touch-hit-each shrink-0 gap-0.5">
           {open && canViewSource ? (
             <ArtifactAction
               tooltip={view === "source" ? t("viewPreview") : t("viewSource")}

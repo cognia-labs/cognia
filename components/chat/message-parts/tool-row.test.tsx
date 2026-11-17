@@ -22,6 +22,11 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
+let mockTouchShell = false
+jest.mock("@/hooks/ui/use-pointer", () => ({
+  useTouchShell: () => mockTouchShell,
+}))
+
 const copyMock = jest.fn(async () => true)
 jest.mock("@/hooks/ui", () => ({
   useCopy: () => ({ copied: false, copy: copyMock }),
@@ -105,6 +110,75 @@ describe("ToolRowShell", () => {
     expect(toggle).not.toContainElement(button)
     fireEvent.click(toggle)
     expect(onToggle).toHaveBeenCalledTimes(1)
+  })
+
+  describe("on touch (D2)", () => {
+    beforeEach(() => {
+      mockTouchShell = true
+    })
+    afterEach(() => {
+      mockTouchShell = false
+    })
+
+    it("draws the actions at the top of the open body, not over the row", () => {
+      render(
+        <ToolRowShell
+          status="output-available"
+          ariaLabel="row"
+          testId="row"
+          open
+          meta={<span>12 lines</span>}
+          actions={<InlineCopyButton value="ls" label="copy command" testId="row-copy" />}
+        >
+          <div data-testid="row-body">Command output</div>
+        </ToolRowShell>
+      )
+      const actions = screen.getByTestId("tool-row-actions")
+      expect(actions.dataset.placement).toBe("body")
+      expect(actions).toHaveClass("touch-hit-each")
+      expect(actions.nextElementSibling).toBe(screen.getByTestId("row-body"))
+      // The row's meta text is no longer covered.
+      expect(screen.getAllByTestId("tool-row-actions")).toHaveLength(1)
+    })
+
+    it("draws them after the meta on a row with no body", () => {
+      render(
+        <ToolRowShell
+          status="output-available"
+          ariaLabel="row"
+          testId="row"
+          meta={<span>done</span>}
+          actions={<InlineCopyButton value="ls" label="copy command" testId="row-copy" />}
+        />
+      )
+      expect(screen.getByTestId("tool-row-actions").dataset.placement).toBe("inline")
+    })
+  })
+
+  it("keeps the pointer overlay off touch", () => {
+    render(
+      <ToolRowShell
+        status="output-available"
+        ariaLabel="row"
+        testId="row"
+        actions={<InlineCopyButton value="ls" label="copy command" testId="row-copy" />}
+      >
+        <div>Command output</div>
+      </ToolRowShell>
+    )
+    expect(screen.getByTestId("tool-row-actions").dataset.placement).toBe("overlay")
+  })
+
+  it("rings the toggle on keyboard focus and grows the row to the touch floor", () => {
+    render(
+      <ToolRowShell status="output-available" ariaLabel="row" testId="row" onToggle={() => {}}>
+        <div>Command output</div>
+      </ToolRowShell>
+    )
+    const toggle = screen.getByRole("button", { name: "row" })
+    expect(toggle).toHaveClass("focus-visible:ring-[3px]", "focus-visible:ring-ring/50")
+    expect(toggle).not.toHaveClass("focus-visible:outline-none")
+    expect(toggle.parentElement).toHaveClass("pointer-coarse:min-h-11")
   })
 
   it("leads with the status dot and the verb label by default", () => {

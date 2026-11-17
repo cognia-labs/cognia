@@ -46,7 +46,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Textarea } from "@/components/ui/textarea"
 import { useLearnedMemories, useRecalledMemories } from "@/hooks/memory/use-message-memories"
-import { usePlatform } from "@/hooks/use-platform"
+import { useTouchShell } from "@/hooks/ui/use-pointer"
 import type { SourcesPart } from "@/lib/chat/parts-extensions"
 import type { ManageMemoryResult } from "@/lib/memory/control-plane/manage"
 import { runMemoryCommand, type RoutedMemoryResult } from "@/lib/memory/control-plane/routed-manage"
@@ -72,8 +72,9 @@ function ChipSurface({
   title: string
   children: React.ReactNode
 }) {
-  const isMobile = usePlatform() === "mobile"
-  if (isMobile) {
+  // A finger gets the sheet, a pointer the popover (D2), whatever the runtime.
+  const touchShell = useTouchShell()
+  if (touchShell) {
     return (
       <Drawer>
         <DrawerTrigger asChild>{trigger}</DrawerTrigger>

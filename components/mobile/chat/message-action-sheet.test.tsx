@@ -763,6 +763,28 @@ describe("MessageActionSheet", () => {
       expect(onOpenChange).toHaveBeenCalledWith(false)
     })
 
+    it("draws the primary actions as a strip above a list that scrolls (D15)", () => {
+      renderSheet(makeMessage("hello"), jest.fn())
+      const strip = screen.getByTestId("message-action-primary")
+      const list = screen.getByTestId("message-action-list")
+      expect(
+        Array.from(strip.querySelectorAll("[data-testid]")).map((el) => el.getAttribute("data-testid"))
+      ).toEqual([
+        "message-action-copy",
+        "message-action-reply",
+        "message-action-share",
+        "message-action-read-aloud",
+      ])
+      expect(strip.contains(screen.getByTestId("message-action-branch"))).toBe(false)
+      expect(list.contains(screen.getByTestId("message-action-branch"))).toBe(true)
+      // The list scrolls inside the capped sheet and clears the home indicator.
+      expect(list.className).toContain("min-h-0")
+      expect(list.className).toContain("overflow-y-auto")
+      expect(list.className).toContain("env(safe-area-inset-bottom)")
+      expect(screen.getByTestId("message-action-copy").dataset.layout).toBe("tile")
+      expect(screen.getByTestId("message-action-branch").dataset.layout).toBe("row")
+    })
+
     it("keeps only the commands the surface allows", () => {
       renderSheet(makeMessage("hello"), jest.fn(), {
         allowedCommands: new Set(["copy", "readAloud"]),

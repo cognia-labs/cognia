@@ -2,6 +2,7 @@
 
 import { useCallback, useSyncExternalStore } from "react"
 
+import { usePlatform } from "@/hooks/use-platform"
 import { getQuerySnapshot, subscribeToQuery } from "@/lib/platform/viewport-store"
 
 /**
@@ -61,4 +62,21 @@ export function useShowKeyboardHints(): boolean {
   const hasHover = useHasHover()
   const coarsePointer = useCoarsePointer()
   return hasHover && !coarsePointer
+}
+
+/**
+ * Whether the chat surfaces use their **touch shell**: long-press opens a
+ * message's action sheet, the composer's "+" is a bottom sheet, and actions a
+ * pointer reveals on hover are drawn in the open (D2).
+ *
+ * The answer is the input hardware, not the runtime: a phone browser and a
+ * touch tablet take the touch shell like the Capacitor app does, and a narrow
+ * desktop window with a mouse keeps the pointer shell (it still hovers). Width
+ * decides the layout separately, through `useCompactLayout`. The native shell
+ * always takes it, whatever its pointer reports.
+ */
+export function useTouchShell(): boolean {
+  const nativeShell = usePlatform() === "mobile"
+  const coarsePointer = useCoarsePointer()
+  return nativeShell || coarsePointer
 }

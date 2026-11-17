@@ -52,6 +52,7 @@ import {
 import { selectedInTranscriptOrder } from "@/lib/chat/selection/transcript-selection"
 import { useAppShortcut } from "@/hooks/shortcuts/use-app-shortcut"
 import { usePlatform } from "@/hooks/use-platform"
+import { useTouchShell } from "@/hooks/ui/use-pointer"
 import { useElementWidth } from "@/hooks/use-element-width"
 import { useTranslations } from "next-intl"
 import { InfoIcon, Loader2Icon } from "lucide-react"
@@ -178,6 +179,9 @@ export function MessageList({
   const ownsShortcuts = paneSessionId == null || paneSessionId === sessionId
   const platform = usePlatform()
   const isMobile = platform === "mobile"
+  // Touch interactions follow the input, not the runtime (D2): a phone browser
+  // long-presses into the same sheet the app does; a mouse keeps hover actions.
+  const touchShell = useTouchShell()
   // Pane width, not viewport width: this list is hosted at 56% of the window in
   // the Inbox detail pane and at ~50% in split view, and the timeline is
   // positioned against the pane. See `timeline-visibility.ts`.
@@ -194,7 +198,7 @@ export function MessageList({
   // advertise it. Surface a one-line nudge early in the conversation; it
   // self-retires once the thread grows past a couple of messages, so it never
   // becomes persistent chrome and needs no dismissal state.
-  const showLongPressHint = isMobile && messages.length > 0 && messages.length <= 2
+  const showLongPressHint = touchShell && messages.length > 0 && messages.length <= 2
   const [actionMessage, setActionMessage] = useState<UIMessage | null>(null)
   const messageDisplay = useMessageDisplay(messageDisplayOverride)
   // ADR-0127: the message list is the `chat` density surface (see
@@ -503,7 +507,7 @@ export function MessageList({
   )
   const { active: selecting, isSelectable, toggle: toggleSelected } = selection
   // A phone's back gesture leaves the mode before it leaves the conversation.
-  useBackDismiss(isMobile && selecting, selection.exit)
+  useBackDismiss(touchShell && selecting, selection.exit)
   // In the mode, a click on a message ticks it — unless it landed on something
   // that has its own job (a link, a button, a field) or ended a text selection,
   // which the transcript's selection capsule is there to act on.
@@ -914,7 +918,7 @@ export function MessageList({
       <SessionNoticeMarker message={m} />
     ) : isHookNoticeMessage(m) ? (
       <HookNoticeMarker message={m} />
-    ) : isMobile ? (
+    ) : touchShell ? (
       <LongPress
         // A long press opens the message's sheet, so it must not also select a
         // word and raise the system's copy menu over it: part of a message is
@@ -964,16 +968,21 @@ export function MessageList({
             />
           </div>
         ) : null}
-        {showLongPressHint ? (
-          <div
-            className="flex items-center justify-center gap-1.5 px-4 py-1.5 text-[11px] text-muted-foreground"
-            data-testid="long-press-hint"
-          >
-            <InfoIcon className="size-3 shrink-0" aria-hidden />
-            <span>{tActions("longPressHint")}</span>
-          </div>
-        ) : null}
         <div className="relative flex flex-1 overflow-hidden" data-chat-scroll-surface>
+          {showLongPressHint ? (
+            // An overlay, not a row: it takes no layout, so the transcript does
+            // not jump when it retires at the third message (D15). It ignores
+            // the pointer, so a tap or long-press under it reaches the message.
+            <div
+              className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-4"
+              data-testid="long-press-hint"
+            >
+              <span className="flex items-center gap-1.5 rounded-pill border border-border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+                <InfoIcon className="size-3 shrink-0" aria-hidden />
+                <span>{tActions("longPressHint")}</span>
+              </span>
+            </div>
+          ) : null}
           {/* The message lane. The timeline rail is a sibling of THIS, not of
               the scroller, so the jump pill centres over the reading column
               rather than over the column plus a 256px expanded panel. */}
@@ -1175,7 +1184,7 @@ export function MessageList({
           )}
         </div>
 
-        {isMobile ? (
+        {touchShell ? (
           <MessageActionSheet
             message={actionMessage}
             messageMotion={messageDisplay.motion}

@@ -3,7 +3,11 @@
  */
 import { act, renderHook } from "@testing-library/react"
 
-import { useCoarsePointer, useHasHover, useShowKeyboardHints } from "./use-pointer"
+import { usePlatform } from "@/hooks/use-platform"
+
+import { useCoarsePointer, useHasHover, useShowKeyboardHints, useTouchShell } from "./use-pointer"
+
+jest.mock("@/hooks/use-platform", () => ({ usePlatform: jest.fn(() => "web") }))
 
 interface FakeMql {
   matches: boolean
@@ -107,6 +111,29 @@ describe("useShowKeyboardHints", () => {
 
   it("renders hints without matchMedia (the SSR default)", () => {
     const { result } = renderHook(() => useShowKeyboardHints())
+    expect(result.current).toBe(true)
+  })
+})
+
+describe("useTouchShell (D2)", () => {
+  afterEach(() => (usePlatform as jest.Mock).mockReturnValue("web"))
+
+  it("is on for a touch browser, whatever the runtime", () => {
+    installMatchMedia(new Set(["(pointer: coarse)"]))
+    const { result } = renderHook(() => useTouchShell())
+    expect(result.current).toBe(true)
+  })
+
+  it("is off for a mouse, even in a narrow window", () => {
+    installMatchMedia(new Set(["(hover: hover)", "(max-width: 767.98px)"]))
+    const { result } = renderHook(() => useTouchShell())
+    expect(result.current).toBe(false)
+  })
+
+  it("is always on in the native shell", () => {
+    ;(usePlatform as jest.Mock).mockReturnValue("mobile")
+    installMatchMedia(new Set(["(hover: hover)"]))
+    const { result } = renderHook(() => useTouchShell())
     expect(result.current).toBe(true)
   })
 })

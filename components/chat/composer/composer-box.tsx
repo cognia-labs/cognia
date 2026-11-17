@@ -35,6 +35,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import { useIsomorphicLayoutEffect } from "@/hooks/use-isomorphic-layout-effect"
+import { useTouchShell } from "@/hooks/ui/use-pointer"
 import { cn } from "@/lib/utils"
 import type { PermissionMode } from "@/stores/chat/chat-store"
 
@@ -388,6 +389,8 @@ export function ComposerBox({
   t,
   tAttach,
 }: ComposerBoxProps) {
+  // The "+" bottom sheet follows the input, not the runtime (D2).
+  const touchShell = useTouchShell()
   // Shape of the send / stop button and of the follow-up button beside it
   // during a live turn, so the pair reads as one cluster. Classic keeps its
   // literals; every other skin sizes and shapes the button from its own
@@ -560,15 +563,15 @@ export function ComposerBox({
           !isMobile && !compactLayout && "@sm/composer:order-none"
         )}
       >
-        {nativeShell ? (
-          // Mobile: one WeChat-style "+" menu (camera / album multi-pick /
+        {nativeShell || touchShell ? (
+          // Touch (D2): one WeChat-style "+" menu (camera / album multi-pick /
           // files) replaces the paperclip + camera button pair — fewer
           // 44px targets competing for composer width. Voice stays with
           // the transcription bridge below (speech → text), so the menu's
-          // record-as-attachment branch is hidden. Desktop compact keeps the
-          // paperclip: the "+" menu's camera/album branches both degrade to
-          // the same file picker off-mobile, so three entries would be
-          // redundant there.
+          // record-as-attachment branch is hidden. A phone browser gets it
+          // too: off the native shell the camera row opens a
+          // `capture="environment"` picker, which a phone answers with its
+          // camera. A mouse keeps the paperclip, narrow window or not.
           <ComposerPlusMenu
             showVoice={false}
             fileAccept={attachmentAccept}

@@ -50,6 +50,8 @@ describe("RichBlockFrame", () => {
     const actions = header.querySelector("[data-rich-block-actions]")!
     expect(actions).toContainElement(screen.getByRole("button", { name: "copy" }))
     expect(actions).toHaveAttribute("data-message-rich-control")
+    // Caller-passed controls get the touch floor from their toolbar (D2).
+    expect(actions).toHaveClass("touch-hit-each")
 
     const css = readFileSync(join(process.cwd(), "app/globals.css"), "utf8")
     for (const selector of [

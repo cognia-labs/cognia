@@ -315,7 +315,8 @@ describe("WebSearchToggle inside the mobile sheet", () => {
     settingsState = { searchEnabled: false, searchProviders: configuredProvider }
     const user = userEvent.setup()
     renderInSheet()
-    await user.click(screen.getByRole("button", { name: "ariaToggleWebSearch" }))
+    // In the sheet the row is a menu item, whatever the platform (D2).
+    await user.click(screen.getByRole("menuitem", { name: "ariaToggleWebSearch" }))
     expect(screen.queryByTestId("web-search-setup-flyout")).toBeNull()
     const slot = screen.getByTestId("sheet-slot")
     expect(within(slot).getByTestId("web-search-setup-panel")).toHaveTextContent("setupSwitchOff")
@@ -329,7 +330,7 @@ describe("WebSearchToggle inside the mobile sheet", () => {
     settingsState = { searchEnabled: true, searchProviders: configuredProvider }
     const registerPanel = jest.fn(() => () => {})
     renderInSheet(registerPanel)
-    fireEvent.click(screen.getByRole("button", { name: "ariaToggleWebSearch" }))
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "ariaToggleWebSearch" }))
     expect(setOnMock).toHaveBeenCalledWith(true, undefined)
     expect(registerPanel).not.toHaveBeenCalled()
     expect(WEB_SEARCH_SETUP_MENU_PANEL_ID).toBe("web-search-setup")

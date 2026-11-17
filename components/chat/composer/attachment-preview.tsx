@@ -549,7 +549,7 @@ function SortableChip({
             label={t("removeAria", { filename: displayName })}
             // Visible without hover, like the old chips: touch devices have no
             // hover to reveal an opacity-0 button with.
-            className="top-1 right-1 size-5 bg-background/90 opacity-80 shadow-xs ring-1 ring-border/60 transition-opacity hover:opacity-100 [&>svg]:size-2.5"
+            className="touch-hit top-1 right-1 size-5 bg-background/90 opacity-80 shadow-xs ring-1 ring-border/60 transition-opacity hover:opacity-100 [&>svg]:size-2.5"
           />
         </Attachment>
         <KeptCopySourceBadge status={source.status} />

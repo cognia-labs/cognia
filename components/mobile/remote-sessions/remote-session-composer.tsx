@@ -430,6 +430,10 @@ export function RemoteSessionComposer({
                 {sending ? null : (
                   <AttachmentRemove
                     aria-label={t("attachmentRemoveAria")}
+                    // The inline chip's × only appears on hover, which a phone
+                    // has none of: shown on touch and on focus, with a 44px
+                    // hit area on a 20px glyph.
+                    className="touch-hit focus-visible:opacity-100 pointer-coarse:opacity-100"
                     data-testid="remote-attachment-remove"
                   />
                 )}

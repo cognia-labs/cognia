@@ -71,6 +71,8 @@ it("renders each reaction as a pill with its count and marks the local user's ow
   expect(thumbs).toHaveTextContent("2")
   expect(thumbs).toHaveAttribute("aria-pressed", "true")
   expect(screen.getByTestId("message-reaction-❤️")).toHaveAttribute("aria-pressed", "false")
+  // A 24px pill answers a thumb at the 44px floor (D2).
+  expect(thumbs).toHaveClass("touch-hit")
 })
 
 it("renders no pill row without reactions, so the action line keeps its shape", () => {

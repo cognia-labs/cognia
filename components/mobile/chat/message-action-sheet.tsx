@@ -13,7 +13,7 @@
  * mirror fan-out).
  */
 
-import { Fragment, useMemo, useState } from "react"
+import { createContext, Fragment, useContext, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   BrainIcon,
@@ -82,6 +82,7 @@ import { useSpeechSettingsView } from "@/lib/speech/settings"
 import type { CharacterVoiceSource } from "@/lib/plugin/character-pack/character-voice"
 import {
   resolveMessageActionCommands,
+  splitSheetCommands,
   type MessageActionCommand,
   type MessageActionCommandId,
 } from "@/lib/chat/message-action-commands"
@@ -89,6 +90,7 @@ import { useMessagePluginItems } from "@/components/chat/message-plugin-menu"
 import { useMessageCommands } from "@/components/chat/use-message-commands"
 import { useTranscriptSessionId } from "@/components/chat/transcript-session-context"
 import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
+import { cn } from "@/lib/utils"
 import type { MessageMotion } from "@/types/appearance"
 import { QuoteCardDialog } from "@/components/share/quote-card-dialog"
 import { TruncateFromDialog } from "@/components/chat/truncate-from-dialog"
@@ -267,6 +269,12 @@ export function MessageActionSheet({
       shared.templateRun,
       ttsEnabled,
     ]
+  )
+
+  // The strip a thumb reaches first, then the rest in a list that scrolls.
+  const { primary: primaryCommands, rest: restCommands } = useMemo(
+    () => splitSheetCommands(commands),
+    [commands]
   )
 
   /** Run a command and close the sheet; the command reports its own outcome. */
@@ -710,12 +718,17 @@ export function MessageActionSheet({
       }}
     >
       <DrawerContent data-testid="message-action-sheet">
-        <DrawerHeader>
+        {/* The sheet names itself to assistive tech; on screen the actions are
+            the header, so the list starts right under the handle (D15). */}
+        <DrawerHeader className="sr-only">
           <DrawerTitle>{t("title")}</DrawerTitle>
           <DrawerDescription>{t("description")}</DrawerDescription>
         </DrawerHeader>
         {editText !== null ? (
-          <div className="flex flex-col gap-3 p-4 pb-8" data-testid="message-action-edit-pane">
+          <div
+            className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pt-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+            data-testid="message-action-edit-pane"
+          >
             <Textarea
               aria-label={t("editInputAria")}
               value={editText}
@@ -747,42 +760,62 @@ export function MessageActionSheet({
             </div>
           </div>
         ) : (
-        <StaggeredRows disabled={messageMotion === "off"}>
-          {/* Every command the surface allows, the bar's first (D10). */}
-          {commands.map((command) => (
-            <Fragment key={command.id}>{renderRow(command)}</Fragment>
-          ))}
-          {message?.role === "assistant" && (
-            // BranchNavigator renders null when the message has <2 regeneration
-            // siblings; `has-[...]` keeps the labeled row hidden with it.
-            <div
-              className="hidden items-center justify-between px-3 py-2 has-[[data-testid=branch-navigator]]:flex"
-              data-testid="message-action-branch-variants"
-            >
-              <span className="text-sm text-muted-foreground">{t("branchVariants")}</span>
-              <BranchNavigator message={message} />
-            </div>
-          )}
-          {/* What plugins contributed, as on the desktop "…" menu. */}
-          {pluginItems.map((item) => (
-            <Row
-              key={item.id}
-              icon={<PuzzleIcon className="size-4" />}
-              label={item.label}
-              onClick={() => runAndClose(item.run)}
-              disabled={busy || item.disabled}
-              testid="message-action-plugin"
-            />
-          ))}
-          {message?.role === "assistant" && usage && (
-            <div
-              className="mt-1 border-t border-border px-3 pt-2 text-xs text-muted-foreground"
-              data-testid="message-action-usage"
-            >
-              <UsageBreakdown usage={usage} />
-            </div>
-          )}
-        </StaggeredRows>
+          <>
+            {primaryCommands.length > 0 ? (
+              // Outside the scroll area: the common actions never scroll away.
+              <RowLayoutContext.Provider value="tile">
+                <div
+                  className="grid shrink-0 grid-cols-4 gap-1 border-b border-border px-3 pt-3 pb-2"
+                  data-testid="message-action-primary"
+                >
+                  {primaryCommands.map((command) => (
+                    <Fragment key={command.id}>{renderRow(command)}</Fragment>
+                  ))}
+                </div>
+              </RowLayoutContext.Provider>
+            ) : null}
+            {/* `min-h-0` is load-bearing: `DrawerContent` is a flex column capped
+                at 80vh, and a flex child defaults to `min-height:auto`, which
+                refuses to shrink below its content — the last rows were clipped
+                off the screen instead of scrolling. The bottom gutter sits above
+                the home indicator / gesture bar. */}
+            <StaggeredRows disabled={messageMotion === "off"}>
+              {/* Every other command the surface allows, the bar's first (D10). */}
+              {restCommands.map((command) => (
+                <Fragment key={command.id}>{renderRow(command)}</Fragment>
+              ))}
+              {message?.role === "assistant" && (
+                // BranchNavigator renders null when the message has <2 regeneration
+                // siblings; `has-[...]` keeps the labeled row hidden with it.
+                <div
+                  className="hidden items-center justify-between px-3 py-2 has-[[data-testid=branch-navigator]]:flex"
+                  data-testid="message-action-branch-variants"
+                >
+                  <span className="text-sm text-muted-foreground">{t("branchVariants")}</span>
+                  <BranchNavigator message={message} />
+                </div>
+              )}
+              {/* What plugins contributed, as on the desktop "…" menu. */}
+              {pluginItems.map((item) => (
+                <Row
+                  key={item.id}
+                  icon={<PuzzleIcon className="size-4" />}
+                  label={item.label}
+                  onClick={() => runAndClose(item.run)}
+                  disabled={busy || item.disabled}
+                  testid="message-action-plugin"
+                />
+              ))}
+              {message?.role === "assistant" && usage && (
+                <div
+                  className="mt-1 border-t border-border px-3 pt-2 text-xs text-muted-foreground"
+                  data-testid="message-action-usage"
+                >
+                  <UsageBreakdown usage={usage} />
+                </div>
+              )}
+            </StaggeredRows>
+          </>
         )}
       </DrawerContent>
     </Drawer>
@@ -868,7 +901,8 @@ function StaggeredRows({
   const { reduce } = useFlowMotion()
   return (
     <motion.div
-      className="flex flex-col gap-1 p-4 pb-8"
+      className="flex min-h-0 flex-col gap-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+      data-testid="message-action-list"
       initial={reduce || disabled ? false : "initial"}
       animate="animate"
       variants={STAGGER_CONTAINER}
@@ -887,6 +921,10 @@ function StaggeredRows({
   )
 }
 
+/** How a {@link Row} draws: a list row, or a tile in the primary strip. */
+type RowLayout = "row" | "tile"
+const RowLayoutContext = createContext<RowLayout>("row")
+
 interface RowProps {
   icon: React.ReactNode
   label: string
@@ -896,6 +934,7 @@ interface RowProps {
 }
 
 function Row({ icon, label, onClick, disabled, testid }: RowProps) {
+  const layout = useContext(RowLayoutContext)
   return (
     <Button
       type="button"
@@ -903,10 +942,20 @@ function Row({ icon, label, onClick, disabled, testid }: RowProps) {
       onClick={onClick}
       disabled={disabled}
       data-testid={testid}
-      className="touch-target h-auto w-full justify-start gap-3 px-3 py-2 text-left text-sm font-normal"
+      data-layout={layout}
+      className={cn(
+        "touch-target h-auto font-normal",
+        layout === "tile"
+          ? "flex-col gap-1 px-1 py-2 text-xs"
+          : "w-full justify-start gap-3 px-3 py-2 text-left text-sm"
+      )}
     >
       <span aria-hidden="true">{icon}</span>
-      <span className="flex-1">{label}</span>
+      <span
+        className={cn(layout === "tile" ? "line-clamp-2 text-center break-words whitespace-normal" : "flex-1")}
+      >
+        {label}
+      </span>
     </Button>
   )
 }

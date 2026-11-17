@@ -99,7 +99,7 @@ export function MessageReactionPills({ message, sessionId, className }: MessageR
             type="button"
             size="xs"
             variant={mine ? "secondary" : "outline"}
-            className="h-6 gap-1 rounded-pill px-2 text-xs tabular-nums"
+            className="touch-hit h-6 gap-1 rounded-pill px-2 text-xs tabular-nums"
             aria-pressed={mine}
             aria-label={t("toggle", { emoji: reaction.emoji, count: reaction.actorIds.length })}
             title={disabledReason}
@@ -131,7 +131,7 @@ export function MessageReactionAdd({ message, sessionId, className }: MessageRea
         <MessageAction
           tooltip={disabledReason ?? t("add")}
           label={t("add")}
-          className={className}
+          className={cn("touch-hit", className)}
           disabled={!canWrite || busy}
           data-testid="message-reaction-add"
           data-ability={ability}
@@ -140,7 +140,11 @@ export function MessageReactionAdd({ message, sessionId, className }: MessageRea
         </MessageAction>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto p-1">
-        <div className="flex items-center gap-0.5" role="group" aria-label={t("palette")}>
+        <div
+          className="touch-hit-each flex items-center gap-0.5"
+          role="group"
+          aria-label={t("palette")}
+        >
           {MESSAGE_REACTION_EMOJIS.map((emoji) => (
             <Button
               key={emoji}

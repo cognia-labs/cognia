@@ -56,7 +56,7 @@ export function ReferenceChips({ bare = false }: ReferenceChipsProps = {}) {
             size="icon-sm"
             aria-label={t("removeAria", { path: r.relative })}
             onClick={() => remove(r.absolute, composerSessionId)}
-            className="absolute top-1 right-1 size-5 rounded-full bg-background/90 p-0 opacity-80 shadow-xs ring-1 ring-border/60 transition-opacity hover:opacity-100 [&>svg]:size-2.5"
+            className="touch-hit absolute top-1 right-1 size-5 rounded-full bg-background/90 p-0 opacity-80 shadow-xs ring-1 ring-border/60 transition-opacity hover:opacity-100 [&>svg]:size-2.5"
           >
             <XIcon className="size-3" />
           </Button>
