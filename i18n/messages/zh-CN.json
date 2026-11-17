@@ -8992,6 +8992,7 @@
       },
       "toolbar": {
         "breakdownAgents": "子智能体",
+        "breakdownAssistantMessages": "助手回复",
         "breakdownClaudeMd": "CLAUDE.md / 系统提示词",
         "breakdownCommands": "斜杠命令",
         "breakdownDeferred": "{label}（按需加载）",

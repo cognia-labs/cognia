@@ -4,10 +4,18 @@
 // (types/system/compression.ts). Large tool outputs (bash/grep/read) that survive
 // verbatim in the kept slices bloat the post-compaction window; this caps each
 // tool-result body to ~`maxToolResultTokens` tokens (≈4 chars/token), keeping the
-// tool name/status header when `preserveToolCallMetadata` is on. Reuses the
-// sidecar's own `headTruncate` (sidecar→sidecar import is allowed).
+// tool name/status header when `preserveToolCallMetadata` is on.
+//
+// The rail keeps tool results as AI SDK `tool-result` parts in `role:"tool"`
+// messages, with a typed `output` (what `builtinToModelOutput` and the AI SDK
+// produce): `text` / `error-text` carry a string, `json` / `error-json` a
+// value, `content` a list of text and media parts. A cap that only read
+// string bodies let every one of these through untouched. Media parts are not
+// text and are never cut. A cut keeps the recoverable-output reference the body
+// states on its first line (a bash spill path), the way back to the rest.
 
 import { headTruncate } from "../shared/text/truncate.ts"
+import { keepRecoverableRefs } from "../shared/text/recoverable-ref.ts"
 import type { ConversationMessage } from "./compaction.ts"
 
 type Part = Record<string, unknown>
@@ -15,93 +23,86 @@ type Part = Record<string, unknown>
 const APPROX_CHARS_PER_TOKEN = 4
 const MARKER = "\n... (tool result truncated)"
 
-function toolHeader(name: unknown, status: unknown): string {
-  return `[tool: ${name || "tool"} | status: ${status || "ok"}]`
-}
-
 /** Cap a string body; prepend a metadata header only when it was truncated. */
-function capBody(
+function capText(
   text: string,
   maxChars: number,
   header: string
 ): { text: string; truncated: boolean } {
   const { text: capped, truncated } = headTruncate(text, maxChars, { marker: MARKER })
   if (!truncated) return { text, truncated: false }
-  return {
-    text: header ? `${header}${capped.startsWith("\n") ? "" : "\n"}${capped}` : capped,
-    truncated: true,
+  const kept = keepRecoverableRefs(text, capped)
+  return { text: header ? `${header}\n${kept}` : kept, truncated: true }
+}
+
+function serialize(value: unknown): string {
+  if (typeof value === "string") return value
+  try {
+    return JSON.stringify(value) ?? ""
+  } catch {
+    return String(value)
   }
 }
 
-function statusOf(part: Part | null, message: ConversationMessage): unknown {
-  if (part?.isError || message?.isError) return "error"
-  return part?.status || message?.status || "ok"
+/** A typed tool output capped to `maxChars`, or the same object when it fits. */
+function capOutput(output: unknown, maxChars: number, header: (isError: boolean) => string) {
+  if (!output || typeof output !== "object") return output
+  const typed = output as { type?: unknown; value?: unknown }
+  switch (typed.type) {
+    case "text":
+    case "error-text": {
+      if (typeof typed.value !== "string") return output
+      const { text, truncated } = capText(
+        typed.value,
+        maxChars,
+        header(typed.type === "error-text")
+      )
+      return truncated ? { ...typed, value: text } : output
+    }
+    case "json":
+    case "error-json": {
+      // A cut JSON value is no longer JSON; it becomes the matching text output.
+      const isError = typed.type === "error-json"
+      const { text, truncated } = capText(serialize(typed.value), maxChars, header(isError))
+      return truncated ? { type: isError ? "error-text" : "text", value: text } : output
+    }
+    case "content": {
+      if (!Array.isArray(typed.value)) return output
+      let changed = false
+      const value = (typed.value as (Part | null | undefined)[]).map((item) => {
+        if (item?.type !== "text" || typeof item.text !== "string") return item
+        const { text, truncated } = capText(item.text, maxChars, header(false))
+        if (!truncated) return item
+        changed = true
+        return { ...item, text }
+      })
+      return changed ? { ...typed, value } : output
+    }
+    default:
+      return output
+  }
 }
 
-function nameOf(part: Part | null, message: ConversationMessage): unknown {
-  return part?.toolName || part?.tool_name || message?.name || message?.toolName || "tool"
-}
-
-/** Cap one message's tool-result body, returning the same ref when unchanged. */
+/** Cap one message's tool-result bodies, returning the same ref when unchanged. */
 function capMessage<M extends ConversationMessage | null | undefined>(
   message: M,
   maxChars: number,
   preserveMeta: boolean
 ): M {
-  if (!message) return message
-
-  // role:"tool" with a string body — the dominant large-output shape.
-  if (message.role === "tool" && typeof message.content === "string") {
-    const header = preserveMeta ? toolHeader(nameOf(null, message), statusOf(null, message)) : ""
-    const { text, truncated } = capBody(message.content, maxChars, header)
-    return truncated ? { ...message, content: text } : message
-  }
-
-  // Block content — cap any tool-result part whose body is a string.
-  if (Array.isArray(message.content)) {
-    let changed = false
-    const content = (message.content as unknown[]).map((item) => {
-      if (!item || typeof item !== "object") return item
-      const part = item as Part
-      const isToolResult = part.type === "tool-result" || part.type === "tool_result"
-      if (!isToolResult) return part
-      const header = preserveMeta ? toolHeader(nameOf(part, message), statusOf(part, message)) : ""
-      for (const field of ["output", "result", "text", "content"]) {
-        const body = part[field]
-        if (typeof body === "string") {
-          const { text, truncated } = capBody(body, maxChars, header)
-          if (truncated) {
-            changed = true
-            return { ...part, [field]: text }
-          }
-          return part
-        }
-        // Anthropic-shaped nested body: `content: [{ type:"text", text }, …]`
-        // (exactly what buildToolResultMessage emits). Cap each text block —
-        // previously the LARGEST results escaped the cap entirely.
-        const nested = part[field]
-        if (Array.isArray(nested)) {
-          let blockChanged = false
-          const blocks = (nested as (Part | null | undefined)[]).map((b) => {
-            if (!b || b.type !== "text" || typeof b.text !== "string") return b
-            const { text, truncated } = capBody(b.text, maxChars, header)
-            if (!truncated) return b
-            blockChanged = true
-            return { ...b, text }
-          })
-          if (blockChanged) {
-            changed = true
-            return { ...part, [field]: blocks }
-          }
-          return part
-        }
-      }
-      return part
-    })
-    return changed ? { ...message, content } : message
-  }
-
-  return message
+  if (!message || message.role !== "tool" || !Array.isArray(message.content)) return message
+  let changed = false
+  const content = (message.content as unknown[]).map((item) => {
+    const part = item as Part | null | undefined
+    if (part?.type !== "tool-result") return item
+    const name = typeof part.toolName === "string" && part.toolName ? part.toolName : "tool"
+    const header = (isError: boolean) =>
+      preserveMeta ? `[tool: ${name} | status: ${isError ? "error" : "ok"}]` : ""
+    const output = capOutput(part.output, maxChars, header)
+    if (output === part.output) return item
+    changed = true
+    return { ...part, output }
+  })
+  return changed ? { ...message, content } : message
 }
 
 /**

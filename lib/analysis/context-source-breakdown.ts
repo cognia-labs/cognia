@@ -13,7 +13,12 @@
 import type { UIMessage } from "ai"
 
 export type ContextSourceId =
-  "userMessages" | "mentionedFiles" | "toolOutputs" | "thinking" | "taskCoordination"
+  | "userMessages"
+  | "assistantMessages"
+  | "mentionedFiles"
+  | "toolOutputs"
+  | "thinking"
+  | "taskCoordination"
 
 /** Tools that are team/task coordination rather than real work. */
 const COORDINATION_TOOLS = new Set(["SendMessage", "TaskCreate", "TaskUpdate", "TeamCreate"])
@@ -31,8 +36,11 @@ export interface ContextSourceBreakdown {
 type AnyPart = {
   type?: string
   text?: string
-  input?: Record<string, unknown>
-  output?: string
+  /** Set on `dynamic-tool` parts, whose `type` does not carry the name. */
+  toolName?: string
+  input?: unknown
+  /** A tool's result: a string, or any structured value it returned. */
+  output?: unknown
   errorText?: string
 }
 
@@ -45,9 +53,62 @@ function partsOf(message: UIMessage): AnyPart[] {
   return (message.parts ?? []) as unknown as AnyPart[]
 }
 
+/** The tool a part records: a static `tool-<name>` part or a `dynamic-tool` part. */
 function toolNameOf(part: AnyPart): string | null {
+  if (part.type === "dynamic-tool") return typeof part.toolName === "string" ? part.toolName : ""
   if (!part.type || !part.type.startsWith("tool-")) return null
   return part.type.slice("tool-".length)
+}
+
+/**
+ * Characters one media block stands for: one image's ≈1,600 tokens. Providers
+ * bill an image by its pixels, not by its base64, and counting the base64 put
+ * a screenshot at hundreds of thousands of "tokens".
+ */
+const MEDIA_BLOCK_CHARS = 1_600 * 4
+
+/**
+ * A block a tool result hands the model as media rather than as text: an MCP
+ * image, audio or blob resource block, or an AI SDK image or file part. A
+ * base64 string anywhere else (a JSON field) does reach the model as text.
+ */
+function isMediaBlock(value: Record<string, unknown>): boolean {
+  switch (value.type) {
+    case "image":
+      return typeof value.data === "string" || value.image != null
+    case "audio":
+      return typeof value.data === "string"
+    case "file":
+      return value.data != null
+    case "resource": {
+      const resource = value.resource as Record<string, unknown> | null | undefined
+      return typeof resource?.blob === "string"
+    }
+    default:
+      return false
+  }
+}
+
+/**
+ * Characters a value occupies as the model receives it: strings as-is, the
+ * rest as JSON, each media block it holds at {@link MEDIA_BLOCK_CHARS}.
+ */
+function serializedChars(value: unknown): number {
+  if (value == null) return 0
+  if (typeof value === "string") return value.length
+  let mediaBlocks = 0
+  try {
+    const json = JSON.stringify(value, (_key, item: unknown) => {
+      if (item && typeof item === "object" && isMediaBlock(item as Record<string, unknown>)) {
+        mediaBlocks++
+        return null
+      }
+      return item
+    })
+    return (json?.length ?? 0) + mediaBlocks * MEDIA_BLOCK_CHARS
+  } catch {
+    return 0
+  }
 }
 
 /**
@@ -57,6 +118,7 @@ function toolNameOf(part: AnyPart): string | null {
  */
 export function buildContextSourceBreakdown(messages: UIMessage[]): ContextSourceBreakdown {
   let userMessages = 0
+  let assistantMessages = 0
   let mentionedFiles = 0
   let toolOutputs = 0
   let thinking = 0
@@ -70,6 +132,9 @@ export function buildContextSourceBreakdown(messages: UIMessage[]): ContextSourc
           // @-mentioned paths inflate context with file contents the SDK injects;
           // approximate their weight from the mention tokens in the message.
           for (const m of part.text.match(/@\S+/g) ?? []) mentionedFiles += m.length
+        } else if (message.role === "assistant") {
+          // The model's own replies are resent every turn like any other history.
+          assistantMessages += part.text.length
         }
         continue
       }
@@ -79,8 +144,8 @@ export function buildContextSourceBreakdown(messages: UIMessage[]): ContextSourc
       }
       const tool = toolNameOf(part)
       if (!tool) continue
-      const inputChars = part.input ? JSON.stringify(part.input).length : 0
-      const outputChars = (part.output?.length ?? 0) + (part.errorText?.length ?? 0)
+      const inputChars = serializedChars(part.input)
+      const outputChars = serializedChars(part.output) + serializedChars(part.errorText)
       if (COORDINATION_TOOLS.has(tool)) {
         taskCoordination += inputChars + outputChars
       } else {
@@ -91,6 +156,7 @@ export function buildContextSourceBreakdown(messages: UIMessage[]): ContextSourc
 
   const raw: Record<ContextSourceId, number> = {
     userMessages: estTokens(userMessages),
+    assistantMessages: estTokens(assistantMessages),
     mentionedFiles: estTokens(mentionedFiles),
     toolOutputs: estTokens(toolOutputs),
     thinking: estTokens(thinking),

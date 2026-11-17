@@ -1016,6 +1016,7 @@
       "unfilled": "{count, plural, =1 {1 parameter still needs a value} other {# parameters still need values}}"
     },
     "toolbar": {
+      "breakdownAssistantMessages": "Assistant replies",
       "breakdownAgents": "Subagents",
       "breakdownClaudeMd": "CLAUDE.md / system prompt",
       "breakdownCommands": "Slash commands",

@@ -12,7 +12,12 @@ import { defineConfig } from "tsup"
 // when the sidecar starts importing another runtime module. Keep it current
 // with `node scripts/build/build-sidecar-linked-packages.mjs`.
 export default defineConfig({
-  entry: ["src/claude-agent-sdk-options.ts", "src/plugin-interception.ts"],
+  entry: [
+    "src/agent-capability-grant.ts",
+    "src/agent-composition.ts",
+    "src/claude-agent-sdk-options.ts",
+    "src/plugin-interception.ts",
+  ],
   format: ["esm"],
   dts: false,
   sourcemap: true,
@@ -20,6 +25,6 @@ export default defineConfig({
   target: "es2022",
   platform: "neutral",
   // The staged Sidecar contains this package without its workspace node_modules.
-  // Keep these two portable runtime entries self-contained after moving their owner.
+  // Keep these portable runtime entries self-contained after moving their owner.
   noExternal: [/^@cognia\/plugin-contract\//],
 })

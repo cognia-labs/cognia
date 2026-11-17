@@ -7,6 +7,7 @@ import type { TestFrame, TestStreamArgs, TestMessage } from "../../../test-suppo
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { dispatchAiSdk, __testing__ } from "./index.ts"
+import { builtinToModelOutput } from "../../tools/adapters/ai-sdk-output.ts"
 
 function makeFakeStream(
   events: unknown[],
@@ -4456,26 +4457,36 @@ test("toolOutputHasImage detects both the raw MCP and toModelOutput shapes", () 
   const { toolOutputHasImage } = __testing__
   // Raw MCP CallToolResult (what the built-in read tool's execute returns).
   assert.equal(toolOutputHasImage({ content: [{ type: "image", data: "x" }] }), true)
-  // Already-mapped toModelOutput content form.
+  // What the production mapper turns that result into.
+  assert.equal(
+    toolOutputHasImage(
+      builtinToModelOutput({
+        output: { content: [{ type: "image", data: "x", mimeType: "image/png" }] },
+      })
+    ),
+    true
+  )
+  // A bare top-level media type and a URL-tagged image are images too.
   assert.equal(
     toolOutputHasImage({
       type: "content",
-      value: [{ type: "image-data", mediaType: "image/png", data: "x" }],
+      value: [{ type: "file", mediaType: "image", data: { type: "url", url: "https://x/a.png" } }],
     }),
     true
+  )
+  // Non-image media (audio) and a provider reference are not projectable images.
+  assert.equal(
+    toolOutputHasImage(
+      builtinToModelOutput({
+        output: { content: [{ type: "audio", data: "x", mimeType: "audio/wav" }] },
+      })
+    ),
+    false
   )
   assert.equal(
     toolOutputHasImage({
       type: "content",
-      value: [{ type: "media", mediaType: "image/jpeg", data: "x" }],
-    }),
-    true
-  )
-  // Non-image media (audio file-data) is not an image.
-  assert.equal(
-    toolOutputHasImage({
-      type: "content",
-      value: [{ type: "file-data", mediaType: "audio/wav", data: "x" }],
+      value: [{ type: "file", mediaType: "image/png", data: { type: "reference", reference: {} } }],
     }),
     false
   )
@@ -4483,38 +4494,34 @@ test("toolOutputHasImage detects both the raw MCP and toModelOutput shapes", () 
   assert.equal(toolOutputHasImage(null), false)
 })
 
-test("projectToolResultImages pulls tool-result images out into user image parts", () => {
+test("projectToolResultImages pulls the mapper's tool-result images out into user file parts", () => {
   const { projectToolResultImages } = __testing__
+  const output = builtinToModelOutput({
+    output: {
+      content: [
+        { type: "text", text: "shot.png" },
+        { type: "image", data: "QUJD", mimeType: "image/png" },
+      ],
+    },
+  })
   const messages = [
     { role: "assistant", content: [{ type: "tool-call", toolCallId: "t1", toolName: "read" }] },
     {
       role: "tool",
-      content: [
-        {
-          type: "tool-result",
-          toolCallId: "t1",
-          toolName: "read",
-          output: {
-            type: "content",
-            value: [
-              { type: "text", text: "shot.png" },
-              { type: "image-data", mediaType: "image/png", data: "QUJD" },
-            ],
-          },
-        },
-      ],
+      content: [{ type: "tool-result", toolCallId: "t1", toolName: "read", output }],
     },
   ]
   const { images, sanitized } = projectToolResultImages(messages)
-  // One image extracted, as an AI SDK user-content image part (data URL).
+  // One image extracted, as a user-content file part carrying the same data.
   assert.deepEqual(images, [
-    { type: "image", image: "data:image/png;base64,QUJD", mediaType: "image/png" },
+    { type: "file", mediaType: "image/png", data: { type: "data", data: "QUJD" } },
   ])
   // The tool result no longer carries the base64 image; only a text marker.
   const out = (sanitized[1]!.content as { output: { type: string; value: string } }[])[0]!.output
   assert.equal(out.type, "text")
   assert.match(out.value, /shot\.png/)
   assert.match(out.value, /image returned by read/)
+  assert.doesNotMatch(JSON.stringify(sanitized), /QUJD/)
   // The assistant message is untouched (same object identity).
   assert.equal(sanitized[0], messages[0])
 })
@@ -4542,34 +4549,31 @@ test("projectToolResultImages is a no-op for image-free tool results", () => {
 
 test("projectToolResultImages keeps surviving non-image parts as a content output", () => {
   const { projectToolResultImages } = __testing__
+  const output = builtinToModelOutput({
+    output: {
+      content: [
+        { type: "image", data: "AA", mimeType: "image/png" },
+        { type: "audio", data: "BB", mimeType: "audio/wav" },
+      ],
+    },
+  })
   const messages = [
     {
       role: "tool",
-      content: [
-        {
-          type: "tool-result",
-          toolCallId: "t1",
-          toolName: "read",
-          output: {
-            type: "content",
-            value: [
-              { type: "image-data", mediaType: "image/png", data: "AA" },
-              { type: "file-data", mediaType: "audio/wav", data: "BB" },
-            ],
-          },
-        },
-      ],
+      content: [{ type: "tool-result", toolCallId: "t1", toolName: "read", output }],
     },
   ]
   const { images, sanitized } = projectToolResultImages(messages)
   assert.equal(images.length, 1)
   const out = (
-    sanitized[0]!.content as { output: { type: string; value: { type: string }[] } }[]
+    sanitized[0]!.content as {
+      output: { type: string; value: { type: string; mediaType?: string }[] }
+    }[]
   )[0]!.output
   // A non-text part survived → output stays a content array (not collapsed).
   assert.equal(out.type, "content")
   assert.equal(
-    out.value.some((v) => v.type === "file-data"),
+    out.value.some((v) => v.type === "file" && v.mediaType === "audio/wav"),
     true
   )
   assert.equal(

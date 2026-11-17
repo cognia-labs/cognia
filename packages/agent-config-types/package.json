@@ -23,6 +23,18 @@
       "node": "./dist/plugin-interception.js",
       "default": "./src/plugin-interception.ts"
     },
+    "./agent-capability-grant": {
+      "cognia-source": "./src/agent-capability-grant.ts",
+      "types": "./src/agent-capability-grant.ts",
+      "node": "./dist/agent-capability-grant.js",
+      "default": "./src/agent-capability-grant.ts"
+    },
+    "./agent-composition": {
+      "cognia-source": "./src/agent-composition.ts",
+      "types": "./src/agent-composition.ts",
+      "node": "./dist/agent-composition.js",
+      "default": "./src/agent-composition.ts"
+    },
     "./*": {
       "cognia-source": "./src/*.ts",
       "default": "./src/*.ts"

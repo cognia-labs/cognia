@@ -1926,24 +1926,47 @@ describe("mergeProjectKnowledgeSourcesIntoLastAssistant", () => {
       },
     ]
 
+    const excerpt = (fileId: string, chunkId: string, charStart: number) => ({
+      projectId: "p",
+      fileId,
+      fileName: "ARCHITECTURE.md",
+      chunkId,
+      generationId: `${fileId}-g`,
+      contentHash: `${fileId}-h`,
+      charStart,
+      charEnd: charStart + 14,
+      content: "Workspace fact",
+      score: 0.8,
+    })
+    // Three excerpts: two from one file, one from another file of the same name.
     const next = mergeProjectKnowledgeSourcesIntoLastAssistant(messages, {
       retrievedChunks: [
-        { fileId: "file-1", fileName: "ARCHITECTURE.md", content: "Workspace fact", score: 0.8 },
+        excerpt("file-1", "c1", 0),
+        excerpt("file-1", "c2", 400),
+        excerpt("file-2", "c3", 0),
       ],
     })
 
-    expect(next[0].parts).toContainEqual(
-      expect.objectContaining({
-        type: "sources",
-        sources: [
-          expect.objectContaining({
-            id: "project-knowledge-file-1",
-            origin: "project-knowledge",
-            title: "ARCHITECTURE.md",
-          }),
-        ],
-      })
-    )
+    const part = next[0].parts.find(
+      (p) => (p as { type: string }).type === "sources"
+    ) as unknown as {
+      sources: { id: string; title: string; projectKnowledgeRef?: Record<string, unknown> }[]
+    }
+    expect(part.sources.map((source) => source.id)).toEqual([
+      "project-knowledge-c1",
+      "project-knowledge-c2",
+      "project-knowledge-c3",
+    ])
+    expect(part.sources.every((source) => source.title === "ARCHITECTURE.md")).toBe(true)
+    expect(part.sources[1]!.projectKnowledgeRef).toEqual({
+      projectId: "p",
+      fileId: "file-1",
+      chunkId: "c2",
+      generationId: "file-1-g",
+      contentHash: "file-1-h",
+      charStart: 400,
+      charEnd: 414,
+    })
   })
 })
 

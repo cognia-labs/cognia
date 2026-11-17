@@ -1,15 +1,24 @@
 /**
- * Tauri-backed orchestrator for project instruction loading. Composes the pure
- * discovery / import-expansion / render layers behind a small per-key memo cache
- * (because `resolveSendOptions` runs every turn and must not re-walk the tree on
- * each send). Off-Tauri (web / mobile) there is no project filesystem, so it
- * returns an empty result — mirroring `lib/lsp/project-file-reader.ts`.
+ * Orchestrator for project instruction loading. Composes the pure discovery /
+ * import-expansion / render layers behind a small per-key memo cache (because
+ * `resolveSendOptions` runs every turn and must not re-walk the tree on each
+ * send).
  *
- * The `fs`, `isTauriEnv`, `homeDir` and `now` inputs are injectable so the whole
- * orchestration is unit-testable without a real desktop shell.
+ * Which filesystem it reads depends on the host:
+ *   - a caller-supplied `fs` (the CLI passes a Node adapter and its home dir);
+ *   - the desktop: the Tauri fs plugin;
+ *   - an always-on headless Host: its root-confined workspace reads, so only
+ *     files under the workspace roots are visible;
+ *   - web / mobile: no project filesystem. The result is empty AND says so in
+ *     `warnings` — a host that silently loaded nothing was indistinguishable
+ *     from a project without instruction files.
+ *
+ * The `fs`, `isTauriEnv`, `isHeadlessEnv`, `homeDir` and `now` inputs are
+ * injectable so the whole orchestration is unit-testable without a real shell.
  */
 
 import { isTauri } from "@/lib/tauri"
+import { isHeadlessHost } from "@/lib/platform/detect"
 import { discoverInstructionPaths, type DiscoveredPath } from "./discover"
 import {
   discoverMarkdownAgentFiles,
@@ -18,7 +27,7 @@ import {
 } from "./discover-agents"
 import { expandImports } from "./imports"
 import { renderInstructions } from "./render"
-import { dirname, joinPath, pathKey } from "./paths"
+import { dirname, isDescendant, joinPath, pathKey } from "./paths"
 import {
   resolveInstructionsConfig,
   type InstructionFile,
@@ -35,6 +44,8 @@ export interface LoadInstructionsInput {
   fs?: InstructionFs
   /** Override Tauri detection (tests). */
   isTauriEnv?: boolean
+  /** Override headless-Host detection (tests). */
+  isHeadlessEnv?: boolean
   /** Override the resolved home dir (tests); skips the `@tauri-apps/api/path` call. */
   homeDir?: string | null
   /** Injectable clock for the cache TTL (tests). */
@@ -42,6 +53,13 @@ export interface LoadInstructionsInput {
 }
 
 const EMPTY: ResolvedInstructions = { section: "", files: [], markdownAgentFiles: [], warnings: [] }
+
+/** Why a host without a project filesystem loaded no instruction files. */
+export const NO_INSTRUCTION_FS_WARNING =
+  "project instruction files were not loaded: this host has no project filesystem"
+
+/** Largest instruction file a headless Host reads through its workspace reads. */
+const HEADLESS_MAX_FILE_BYTES = 512 * 1024
 
 const CACHE_TTL_MS = 3000
 const cache = new Map<string, { at: number; value: ResolvedInstructions }>()
@@ -67,6 +85,60 @@ function realFs(): InstructionFs {
       return readTextFile(path)
     },
   }
+}
+
+/**
+ * An adapter over a headless Host's root-confined workspace reads: a path
+ * under one of `roots` resolves against the most specific root containing it;
+ * anything else does not exist (the Host refuses reads outside its roots).
+ */
+function workspaceFs(roots: readonly string[]): InstructionFs {
+  const slash = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "")
+  const locate = (path: string): { root: string; relPath: string } | null => {
+    const root = roots
+      .filter((r) => r && isDescendant(r, path))
+      .sort((x, y) => y.length - x.length)[0]
+    if (!root) return null
+    return { root, relPath: slash(path).slice(slash(root).length).replace(/^\/+/, "") }
+  }
+  return {
+    async exists(path) {
+      const at = locate(path)
+      if (!at) return false
+      const { statWorkspaceFile } = await import("@/lib/files/workspace-fs")
+      try {
+        return (await statWorkspaceFile(at.root, at.relPath)).exists
+      } catch {
+        return false
+      }
+    },
+    async readDir(path) {
+      const at = locate(path)
+      if (!at) return []
+      const { listWorkspaceDir } = await import("@/lib/files/workspace-fs")
+      try {
+        return (await listWorkspaceDir(at.root, at.relPath || undefined, true)).map(
+          (entry) => entry.relPath.split("/").pop() ?? entry.relPath
+        )
+      } catch {
+        return []
+      }
+    },
+    async readText(path) {
+      const at = locate(path)
+      if (!at) throw new Error(`instruction file outside the workspace roots: ${path}`)
+      const { readWorkspaceFile } = await import("@/lib/files/workspace-fs")
+      return readWorkspaceFile(at.root, at.relPath, HEADLESS_MAX_FILE_BYTES)
+    },
+  }
+}
+
+/** The filesystem this host reads instruction files through, or null when it has none. */
+function hostFs(input: Omit<LoadInstructionsInput, "now">): InstructionFs | null {
+  if (input.fs) return input.fs
+  if (input.isTauriEnv ?? isTauri()) return realFs()
+  if (input.isHeadlessEnv ?? isHeadlessHost()) return workspaceFs(input.roots)
+  return null
 }
 
 async function resolveHome(input: LoadInstructionsInput): Promise<string | undefined> {
@@ -129,9 +201,9 @@ export async function discoverProjectInstructionFiles(
 ): Promise<DiscoveredPath[]> {
   const config = resolveInstructionsConfig(input.config)
   if (!config.enabled) return []
-  const tauri = input.isTauriEnv ?? isTauri()
-  if (!tauri && !input.fs) return []
-  return discoverWithHome(input, config, input.fs ?? realFs(), await resolveHome(input))
+  const fs = hostFs(input)
+  if (!fs) return []
+  return discoverWithHome(input, config, fs, await resolveHome(input))
 }
 
 /**
@@ -144,13 +216,13 @@ export async function discoverProjectAgentFiles(
 ): Promise<MarkdownAgentPath[]> {
   const config = resolveInstructionsConfig(input.config)
   if (!config.enabled || !config.loadProjectAgents) return []
-  const tauri = input.isTauriEnv ?? isTauri()
-  if (!tauri && !input.fs) return []
+  const fs = hostFs(input)
+  if (!fs) return []
   const home = await resolveHome(input)
   return discoverMarkdownAgentPaths({
     roots: input.roots,
     globalAgentsDir: home ? joinPath(home, joinPath(".cognia", "agents")) : undefined,
-    fs: input.fs ?? realFs(),
+    fs,
   })
 }
 
@@ -160,9 +232,12 @@ export async function loadProjectInstructions(
   const config = resolveInstructionsConfig(input.config)
   if (!config.enabled) return EMPTY
 
-  const tauri = input.isTauriEnv ?? isTauri()
-  if (!tauri && !input.fs) return EMPTY
-  const fs = input.fs ?? realFs()
+  const fs = hostFs(input)
+  // Only worth saying when the turn had somewhere to look.
+  if (!fs)
+    return input.cwd || input.roots.length > 0
+      ? { ...EMPTY, warnings: [NO_INSTRUCTION_FS_WARNING] }
+      : EMPTY
   const now = input.now ?? Date.now
 
   const key = JSON.stringify({ cwd: input.cwd ?? null, roots: input.roots, config })

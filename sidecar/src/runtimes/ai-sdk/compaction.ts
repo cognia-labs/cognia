@@ -17,10 +17,16 @@ import {
   shouldCompact,
   estimateTokens,
   makeSummaryMessage,
+  makeRetainedMediaMessage,
+  collectImages,
+  selectRetainedImages,
+  isImageMediaType,
   isSummaryMessage,
+  isRetainedMediaMessage,
   summaryVersion,
   AUTO_COMPACT_FRACTION,
 } from "../../context/compaction.ts"
+import { keepRecoverableRefs } from "../../shared/text/recoverable-ref.ts"
 import { planStrategy } from "../../context/strategies.ts"
 import { queryPreCompactDecision } from "../../hooks/pre-compact.ts"
 import { runPluginHookHandler, PLUGIN_HOOK_BROADCAST } from "../../hooks/handlers/plugin.ts"
@@ -49,6 +55,14 @@ import {
 } from "../../context/progress-checkpoint.ts"
 const COMPACT_KEEP_RECENT_MESSAGES = 6
 const MAX_FROZEN_SUMMARIES = 4
+/**
+ * Images a compaction keeps verbatim after its summary. The summary model reads
+ * text only, so without this every image older than the tail left the
+ * conversation as a bare "[image]". Bounded per compaction by count and by
+ * the retained-input room left, newest first; a regeneration gathers every
+ * frozen retention message back into one under the same bound.
+ */
+const MAX_RETAINED_IMAGES = 4
 function toolResultIds(messages: readonly ConversationMessage[]): string[] {
   return messages.flatMap((message) =>
     Array.isArray(message.content)
@@ -132,11 +146,19 @@ export function manualCompactOutcomeEvent(
   }
 }
 
-/** Keep the head and tail of a long payload, eliding the middle. */
+/**
+ * Keep the head and tail of a long payload, eliding the middle. The
+ * recoverable-output reference the payload states on its first line (a bash
+ * spill path) is put back in front when the clip cut it: it is how the agent
+ * reads the rest after the summary replaced it.
+ */
 function clipPayload(text: string, max: number): string {
   if (text.length <= max) return text
   const half = Math.floor(max / 2)
-  return `${text.slice(0, half)}\n… (${text.length - 2 * half} chars elided) …\n${text.slice(-half)}`
+  return keepRecoverableRefs(
+    text,
+    `${text.slice(0, half)}\n… (${text.length - 2 * half} chars elided) …\n${text.slice(-half)}`
+  )
 }
 
 function stringifyPayload(value: unknown): string {
@@ -149,54 +171,70 @@ function stringifyPayload(value: unknown): string {
   }
 }
 
-/** A tool result body: AI SDK `output: { type, value }`, or a legacy field. */
+/** A media part named for the transcript; its bytes never enter the summary input. */
+function mediaPlaceholder(part: Record<string, unknown>): string {
+  const name = typeof part.filename === "string" ? ` ${part.filename}` : ""
+  return part.type === "image" || isImageMediaType(part.mediaType)
+    ? `[image${name}]`
+    : `[file${name}]`
+}
+
+/** A tool result's body as transcript text, by its AI SDK `output` type. */
 function toolResultBody(part: Record<string, unknown>): string {
-  const output = part.output ?? part.result ?? part.content
-  if (Array.isArray(output)) {
-    return output
-      .map((b) =>
-        b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string"
-          ? (b as { text: string }).text
-          : stringifyPayload(b)
-      )
-      .join("\n")
+  const output = part.output as { type?: unknown; value?: unknown; reason?: unknown } | undefined
+  if (!output || typeof output !== "object") return stringifyPayload(output)
+  switch (output.type) {
+    case "text":
+    case "error-text":
+    case "json":
+    case "error-json":
+      return stringifyPayload(output.value)
+    case "execution-denied":
+      return `[execution denied${typeof output.reason === "string" ? `: ${output.reason}` : ""}]`
+    case "content":
+      return Array.isArray(output.value)
+        ? (output.value as (Record<string, unknown> | null | undefined)[])
+            .map((item) =>
+              !item
+                ? ""
+                : item.type === "text" && typeof item.text === "string"
+                  ? item.text
+                  : item.type === "file" || item.type === "image"
+                    ? mediaPlaceholder(item)
+                    : stringifyPayload(item)
+            )
+            .filter(Boolean)
+            .join("\n")
+        : ""
+    default:
+      return stringifyPayload(output)
   }
-  if (output && typeof output === "object" && "value" in output) {
-    const value = (output as { value: unknown }).value
-    if (Array.isArray(value)) return toolResultBody({ output: value })
-    return stringifyPayload(value)
-  }
-  return stringifyPayload(output)
 }
 
 /**
  * One content part of the summary transcript. Text is kept verbatim; tool
  * calls and results follow the configured cap, since in a coding session they carry
  * most of what happened (paths, commands, outcomes). Reasoning is private to
- * the turn that produced it and is left out; media is named, not inlined.
+ * the turn that produced it and is left out. Media is named, not inlined: the
+ * compaction keeps the newest images themselves after the summary.
  */
 function renderPartForSummary(part: unknown, maxPayloadChars: number): string {
   if (typeof part === "string") return part
   if (!part || typeof part !== "object") return ""
   const p = part as Record<string, unknown>
-  const toolName =
-    typeof (p.toolName ?? p.name) === "string" ? String(p.toolName ?? p.name) : "tool"
+  const toolName = typeof p.toolName === "string" ? p.toolName : "tool"
   switch (p.type) {
     case "text":
       return typeof p.text === "string" ? p.text : ""
     case "reasoning":
-    case "redacted-reasoning":
       return ""
     case "tool-call":
-    case "tool_use":
-      return `[tool call ${toolName}] ${clipPayload(stringifyPayload(p.input ?? p.args), maxPayloadChars)}`
+      return `[tool call ${toolName}] ${clipPayload(stringifyPayload(p.input), maxPayloadChars)}`
     case "tool-result":
-    case "tool_result":
       return `[tool result ${toolName}] ${clipPayload(toolResultBody(p), maxPayloadChars)}`
     case "image":
-      return "[image]"
     case "file":
-      return `[file${typeof p.filename === "string" ? ` ${p.filename}` : ""}]`
+      return mediaPlaceholder(p)
     default:
       return typeof p.text === "string" ? p.text : ""
   }
@@ -1163,7 +1201,12 @@ export function createCompactor({
             material.push({ role: "user", content: text.slice(followUpAt).trimStart() })
             return material
           })
-    const regenerate = progressFormat || frozen.length >= MAX_FROZEN_SUMMARIES
+    // Counted in summaries: the images kept after each are not one, and
+    // counting them regenerated (a prefix-cache break and a re-summary) every
+    // second compaction of a session that shares screenshots.
+    const regenerate =
+      progressFormat ||
+      frozen.filter((m) => !isRetainedMediaMessage(m)).length >= MAX_FROZEN_SUMMARIES
     const nextVersion =
       (frozen.length > 0
         ? Math.max(state.frozenSummaryVersion, ...frozen.map(summaryVersion))
@@ -1173,6 +1216,47 @@ export function createCompactor({
     let decision = "reused"
     let summaryProduced = false
     let opticalMeta
+
+    // The images the replaced messages carried, kept whole right after their
+    // replacement while the retained-input room allows: the summary model
+    // reads text, so an image left only in the summarized part was gone. They
+    // take at most half the room left: a soft compaction is prepared while the
+    // next leg runs, and `publish` refuses a candidate that the messages that
+    // leg appended (another screenshot) push past the target.
+    const withRetainedImages = (
+      assembled: ConversationMessage[],
+      replacement: ConversationMessage,
+      replaced: readonly ConversationMessage[]
+    ): ConversationMessage[] => {
+      const images = collectImages(replaced)
+      if (images.length === 0) return assembled
+      const ceiling =
+        totalTarget ??
+        (typeof comp.contextWindow === "number"
+          ? comp.contextWindow * (comp.fraction ?? AUTO_COMPACT_FRACTION) * 0.9
+          : Infinity)
+      const room =
+        (ceiling -
+          framingTokens -
+          estimateTokens([
+            ...assembled,
+            makeRetainedMediaMessage([], nextVersion, images.length),
+          ])) /
+        2
+      const kept = selectRetainedImages(images, { maxImages: MAX_RETAINED_IMAGES, maxTokens: room })
+      if (kept.length < images.length)
+        log(
+          "info",
+          `compaction keeps ${kept.length} of ${images.length} image(s) from the summarized history`
+        )
+      if (kept.length === 0) return assembled
+      const at = assembled.indexOf(replacement) + 1
+      return [
+        ...assembled.slice(0, at),
+        makeRetainedMediaMessage(kept, nextVersion, images.length - kept.length),
+        ...assembled.slice(at),
+      ]
+    }
 
     // Optical strategy (ADR-0063): render the `middle` to image frame(s) the
     // vision state.model reads back. `buildOpticalCompaction` gates on coverage,
@@ -1266,7 +1350,11 @@ export function createCompactor({
         log,
       })
       if (optical) {
-        next = [...plan.systemHead, ...frozen, ...(plan.keep ?? []), optical.message, ...plan.tail]
+        next = withRetainedImages(
+          [...plan.systemHead, ...frozen, ...(plan.keep ?? []), optical.message, ...plan.tail],
+          optical.message,
+          plan.middle
+        )
         opticalMeta = optical.meta
         summaryProduced = true
       }
@@ -1399,9 +1487,21 @@ export function createCompactor({
       decision = regenerate ? "regenerated" : "reused"
       const summaryMsg = makeSummaryMessage(summaryText, nextVersion)
       const keep = plan.keep ?? []
-      next = regenerate
-        ? [...plan.systemHead, ...keep, summaryMsg, ...plan.tail]
-        : [...plan.systemHead, ...frozen, ...keep, summaryMsg, ...plan.tail]
+      const summarized =
+        plan.kind === "chunked"
+          ? plan.chunks.flat()
+          : plan.kind === "selective"
+            ? plan.summarizeSet
+            : plan.middle
+      // A regeneration replaces the frozen messages too, images kept by an
+      // earlier compaction included.
+      next = withRetainedImages(
+        regenerate
+          ? [...plan.systemHead, ...keep, summaryMsg, ...plan.tail]
+          : [...plan.systemHead, ...frozen, ...keep, summaryMsg, ...plan.tail],
+        summaryMsg,
+        regenerate ? [...frozen, ...summarized] : summarized
+      )
     }
 
     // Per-tool-result cap (independent of the summary strategy).

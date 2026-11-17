@@ -237,6 +237,20 @@ describe("runPluginAgent", () => {
     expect(mockExecute).toHaveBeenCalled()
   })
 
+  it("settles a run whose context provider never answers once the caller aborts", async () => {
+    registerContextProvider(
+      "hung",
+      { id: "hung", provide: () => new Promise<string>(() => {}) },
+      { pluginId: "acme" }
+    )
+    const controller = new AbortController()
+    const run = runPluginAgent("hi", { abortSignal: controller.signal }, { pluginId: "acme" })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort(new Error("caller stopped the run"))
+    await expect(run).rejects.toThrow("caller stopped the run")
+    expect(mockExecute).not.toHaveBeenCalled()
+  })
+
   it("fails closed before execution when the prompt or system input contains PII", async () => {
     await expect(
       runPluginAgent("Email alice@example.com", { system: "Use local context" })

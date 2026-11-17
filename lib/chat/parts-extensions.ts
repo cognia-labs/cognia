@@ -342,6 +342,22 @@ export interface SourcesPartItem {
     lineEnd?: number
   }
   /**
+   * The exact workspace excerpt a `project-knowledge` source cites: its chunk,
+   * the generation it was read from, the file's content hash at ingest and the
+   * character range. Provenance only — it grants no read; comparing
+   * `contentHash` with the file's current hash tells whether the excerpt is
+   * still what the file says.
+   */
+  projectKnowledgeRef?: {
+    projectId: string
+    fileId: string
+    chunkId: string
+    generationId?: string
+    contentHash: string
+    charStart: number
+    charEnd: number
+  }
+  /**
    * The message this source came from, for `project-claim` / `project-history`.
    *
    * Without it a project source can only NAME the conversation it was learned

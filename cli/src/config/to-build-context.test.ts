@@ -820,6 +820,37 @@ describe("CLI LSP host", () => {
   })
 })
 
+describe("CLI instruction host", () => {
+  it("loads AGENTS.md up the tree from the cwd through the real Node filesystem", async () => {
+    const fs = await import("node:fs/promises")
+    const os = await import("node:os")
+    const path = await import("node:path")
+    const { clearInstructionCache, loadProjectInstructions } =
+      await import("@/lib/agents/instructions/load")
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cognia-instructions-test-"))
+    try {
+      await fs.mkdir(path.join(dir, "pkg"))
+      await fs.writeFile(path.join(dir, "AGENTS.md"), "repo rule")
+      await fs.writeFile(path.join(dir, "pkg", "AGENTS.md"), "package rule")
+      const ctx = toBuildContext({ sessionId: "ins", config: cfg({ cwd: path.join(dir, "pkg") }) })
+      expect(ctx.instructionsHost?.homeDir).toBe(os.homedir())
+      clearInstructionCache()
+      const resolved = await loadProjectInstructions({
+        cwd: path.join(dir, "pkg"),
+        roots: [],
+        config: { includeGlobal: false },
+        isTauriEnv: false,
+        fs: ctx.instructionsHost!.fs,
+        homeDir: ctx.instructionsHost!.homeDir,
+      })
+      expect(resolved.files.map((file) => file.content)).toEqual(["repo rule", "package rule"])
+      expect(await ctx.instructionsHost!.fs.readDir(path.join(dir, "missing"))).toEqual([])
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 it("projects Plan as read-only with the default CLI editing policy", () => {
   const ctx = toBuildContext({
     sessionId: "plan",

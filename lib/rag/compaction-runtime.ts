@@ -70,7 +70,11 @@ function reinjectionRefs(
   }
   for (const item of contextSourcesOf(options?.contextSources, "project-knowledge.retrieval")
     ?.retrievedChunks ?? []) {
-    refs.push({ kind: "rag", id: `project:${item.fileId}`, version: "active-generation" })
+    refs.push({
+      kind: "rag",
+      id: `project:${item.chunkId}`,
+      version: item.generationId ?? item.contentHash,
+    })
   }
   for (const item of contextSourcesOf(options?.contextSources, "knowledge-base.retrieval")
     ?.retrievedChunks ?? []) {

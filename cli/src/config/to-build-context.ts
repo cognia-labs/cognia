@@ -353,6 +353,26 @@ export function buildCliSession(
   } as ChatSession
 }
 
+/** The instruction loader's filesystem, over Node's. */
+const nodeInstructionFs: NonNullable<BuildOptionsContext["instructionsHost"]>["fs"] = {
+  async exists(p) {
+    try {
+      await nodeFs.access(p)
+      return true
+    } catch {
+      return false
+    }
+  },
+  async readDir(p) {
+    try {
+      return await nodeFs.readdir(p)
+    } catch {
+      return []
+    }
+  },
+  readText: (p) => nodeFs.readFile(p, "utf8"),
+}
+
 export function toBuildContext(params: ToBuildContextParams): BuildOptionsContext {
   const { sessionId, config } = params
   const now = params.now ?? Date.now()
@@ -460,6 +480,10 @@ export function toBuildContext(params: ToBuildContextParams): BuildOptionsContex
   return {
     session,
     builtinProcessSandbox: resolveBuiltinProcessSandbox(config),
+    // Project instructions (AGENTS.md / CLAUDE.md up the tree from the cwd,
+    // `~/.cognia/<file>`, `.cognia/agents`): the shared loader has no
+    // filesystem of its own off the desktop.
+    instructionsHost: { fs: nodeInstructionFs, homeDir: os.homedir() },
     lspHost: {
       readProjectFile: (rootDir) =>
         readProjectLspFile(rootDir, (root, relativePath) =>

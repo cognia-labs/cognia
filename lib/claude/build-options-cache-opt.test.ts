@@ -37,6 +37,7 @@ async function resolveSendOptions(context: BuildOptionsContext) {
 }
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import type { AppSettings, Character, ChatSession } from "@cognia/agent-config-types"
+import { buildMemoryContextSnapshot } from "@cognia/memory"
 
 const MEMORY_SECTION = "## Memory\n\nRECALLED_FACT_FOR_THIS_TURN"
 // The resident routing section `buildVisualOutputSection` appends every turn.
@@ -48,12 +49,24 @@ beforeAll(dbFixture.initialize)
 beforeEach(async () => {
   jest.clearAllMocks()
   await dbFixture.restore()
+  // The producer's whole result: every outcome carries its snapshot receipt,
+  // built by the same builder the real runtime uses.
+  const budget = { limit: 1000, used: 0, truncated: false }
   mApplyMemoryContext.mockResolvedValue({
     systemPromptSection: MEMORY_SECTION,
     retrievedMemories: [],
     proceduralCount: 0,
-    budget: { limit: 1000, used: 0 },
+    withheldCount: 0,
+    budget,
     degraded: false,
+    snapshot: buildMemoryContextSnapshot({
+      reader: {},
+      memoryRefs: [],
+      sectionText: MEMORY_SECTION,
+      budget,
+      degraded: false,
+      now: Date.now(),
+    }),
   })
 })
 

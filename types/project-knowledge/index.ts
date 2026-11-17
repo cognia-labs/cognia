@@ -103,11 +103,32 @@ export function resolveProjectKnowledgeSettings(
 }
 
 /**
+ * One workspace excerpt a turn's prompt held, with what locates it exactly:
+ * the chunk, the generation it belongs to, the source file's content hash at
+ * ingest, and the character range within that file. A citation built from the
+ * file alone could not tell two chunks, two same-named files, or an excerpt
+ * from a file that has since changed apart.
+ */
+export interface ProjectKnowledgeExcerpt {
+  projectId: string
+  fileId: string
+  fileName?: string
+  chunkId: string
+  /** Absent only on chunks ingested before generations existed. */
+  generationId?: string
+  contentHash: string
+  charStart: number
+  charEnd: number
+  content: string
+  score: number
+}
+
+/**
  * What the project-knowledge module's `retrieval` context contribution
  * reports for the UI (`SendOptions.contextSources["project-knowledge.retrieval"]`):
  * the workspace excerpts the turn's prompt holds.
  */
 export interface ProjectKnowledgeRetrievalSources {
-  retrievedChunks: Array<{ fileId: string; fileName?: string; content: string; score: number }>
+  retrievedChunks: ProjectKnowledgeExcerpt[]
   degraded: boolean
 }

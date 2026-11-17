@@ -13,6 +13,7 @@
  * live in `context.ts`. Heavy deps are lazy-imported.
  */
 
+import { loggers } from "@cognia/logging"
 import { listContextProviderEntries } from "@/lib/plugin/registries/context-provider-registry"
 import {
   preparePersonalHistory,
@@ -27,6 +28,52 @@ import type {
   PluginTwinMemoryQueryOptions,
 } from "@/types/plugin/plugin-context-provider"
 
+/** How long one context provider may take before the run goes on without it. */
+export const PLUGIN_CONTEXT_PROVIDER_DEADLINE_MS = 5_000
+/** The longest contribution one provider may make, in characters (≈4k tokens). */
+export const PLUGIN_CONTEXT_PROVIDER_MAX_CHARS = 16_000
+/** The most all of a plugin's providers may add to one run, in characters. */
+export const PLUGIN_CONTEXT_MAX_CHARS = 32_000
+
+export interface ContextContributionLimits {
+  /** The run's signal: once it aborts, preparation stops waiting and rejects with its reason. */
+  signal?: AbortSignal
+  deadlineMs?: number
+  maxProviderChars?: number
+  maxTotalChars?: number
+}
+
+/** Why one provider contributed nothing to this run. */
+type Outcome = { text: string } | { skipped: "empty" | "failed" | "timed-out" | "too-large" }
+
+function settleWithin(work: () => unknown, ms: number): Promise<Outcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<Outcome>((resolve) => {
+    timer = setTimeout(() => resolve({ skipped: "timed-out" }), ms)
+  })
+  const produced = Promise.resolve()
+    .then(work)
+    .then(
+      (out): Outcome =>
+        typeof out === "string" && out.trim().length > 0
+          ? { text: out.trim() }
+          : { skipped: "empty" },
+      (): Outcome => ({ skipped: "failed" })
+    )
+  return Promise.race([produced, deadline]).finally(() => clearTimeout(timer))
+}
+
+/** `work`, unless `signal` aborts first; then its reason. */
+function unlessAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    if (signal.aborted) return abort()
+    signal.addEventListener("abort", abort, { once: true })
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
+  })
+}
+
 /**
  * Run the context providers the RUNNING plugin registered and join their
  * contributions. A provider feeds its own plugin's agent runs: this used to
@@ -34,32 +81,62 @@ import type {
  * (its notes, its shared-memory projection, its twin chunks) was appended to
  * the system prompt of another plugin's model call. A run with no owning
  * plugin gets no provider context. Returns an empty string when nothing is
- * contributed. A throwing provider is skipped (best-effort — one bad provider
- * never breaks the run).
+ * contributed.
  *
- * Providers run concurrently (each turn, independent reads). `Promise.all`
- * resolves to results in registration order regardless of which provider
- * finishes first, so the joined output order is stable; per-provider try/catch
- * keeps a failing provider from rejecting the whole batch.
+ * Providers run concurrently and the joined output keeps registration order.
+ * Each one is bounded, because the run cannot start until this returns:
+ *   - a provider that throws, or has not answered within
+ *     {@link PLUGIN_CONTEXT_PROVIDER_DEADLINE_MS}, is left out (one bad
+ *     provider never breaks or stalls the run; the contract passes it no
+ *     signal, so a late answer is simply discarded);
+ *   - a contribution longer than {@link PLUGIN_CONTEXT_PROVIDER_MAX_CHARS}, or
+ *     one that no longer fits the run's {@link PLUGIN_CONTEXT_MAX_CHARS}, is
+ *     left out whole: cut context reads as complete and misleads the model;
+ *   - an aborted run signal (the caller's cancel, the run timeout, a Job
+ *     Center stop) ends the wait at once and rejects with its reason, so the
+ *     run settles instead of waiting on a provider that never answers.
+ * Every omission is logged with the provider and the reason.
  */
 export async function resolveContextContributions(
   input: PluginContextProviderInput,
-  pluginId: string | undefined
+  pluginId: string | undefined,
+  {
+    signal,
+    deadlineMs = PLUGIN_CONTEXT_PROVIDER_DEADLINE_MS,
+    maxProviderChars = PLUGIN_CONTEXT_PROVIDER_MAX_CHARS,
+    maxTotalChars = PLUGIN_CONTEXT_MAX_CHARS,
+  }: ContextContributionLimits = {}
 ): Promise<string> {
   if (!pluginId) return ""
+  signal?.throwIfAborted()
   const entries = listContextProviderEntries().filter((entry) => entry.pluginId === pluginId)
   if (entries.length === 0) return ""
-  const results = await Promise.all(
-    entries.map(async ({ entry }) => {
-      try {
-        const out = await entry.provide(input)
-        return typeof out === "string" && out.trim().length > 0 ? out.trim() : null
-      } catch {
-        return null // skip a failing provider — one bad provider never breaks the run
-      }
-    })
+  const outcomes = await unlessAborted(
+    Promise.all(entries.map(({ entry }) => settleWithin(() => entry.provide(input), deadlineMs))),
+    signal
   )
-  return results.filter((part): part is string => part !== null).join("\n\n")
+  const parts: string[] = []
+  let used = 0
+  outcomes.forEach((outcome, index) => {
+    let skipped = "skipped" in outcome ? outcome.skipped : undefined
+    if ("text" in outcome) {
+      const cost = outcome.text.length + (parts.length > 0 ? 2 : 0)
+      if (outcome.text.length > maxProviderChars || used + cost > maxTotalChars)
+        skipped = "too-large"
+      else {
+        parts.push(outcome.text)
+        used += cost
+      }
+    }
+    if (skipped && skipped !== "empty")
+      loggers.plugin.warn("plugin context provider left out of the run", {
+        pluginId,
+        provider: entries[index]!.id,
+        reason: skipped,
+        ...(skipped === "too-large" && "text" in outcome ? { chars: outcome.text.length } : {}),
+      })
+  })
+  return parts.join("\n\n")
 }
 
 /** Project a team's ACL-readable shared-memory entries (operator view). */

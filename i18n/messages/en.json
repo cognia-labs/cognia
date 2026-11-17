@@ -8992,6 +8992,7 @@
       },
       "toolbar": {
         "breakdownAgents": "Subagents",
+        "breakdownAssistantMessages": "Assistant replies",
         "breakdownClaudeMd": "CLAUDE.md / system prompt",
         "breakdownCommands": "Slash commands",
         "breakdownDeferred": "{label} (deferred)",

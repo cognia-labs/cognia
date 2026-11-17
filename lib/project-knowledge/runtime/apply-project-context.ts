@@ -8,6 +8,7 @@
  * a persona, so it never replaces the base system prompt.
  */
 
+import type { ProjectKnowledgeExcerpt } from "@/types/project-knowledge"
 import {
   retrieveProjectChunks,
   type ProjectKnowledgeRuntimeDeps,
@@ -28,12 +29,8 @@ export interface ApplyProjectKnowledgeContextInput {
   deps?: ProjectKnowledgeRuntimeDeps
 }
 
-export interface AppliedProjectChunk {
-  fileId: string
-  fileName?: string
-  content: string
-  score: number
-}
+/** A retrieved excerpt as the prompt and the turn's citations carry it. */
+export type AppliedProjectChunk = ProjectKnowledgeExcerpt
 
 export interface ApplyProjectKnowledgeContextResult {
   /** Section to append to the system prompt, or null when nothing to inject. */
@@ -45,7 +42,8 @@ export interface ApplyProjectKnowledgeContextResult {
 const HEADING = "## Project knowledge base"
 const PREAMBLE =
   "The following excerpts are retrieved from this workspace's knowledge files. " +
-  "Use them when they are relevant to the user's request, and cite the source file by name."
+  "Use them when they are relevant to the user's request, and cite the source file by name " +
+  "and character range."
 
 const EMPTY: ApplyProjectKnowledgeContextResult = {
   systemPromptSection: null,
@@ -71,9 +69,15 @@ export async function applyProjectKnowledgeContext(
     })
 
     const retrievedChunks: AppliedProjectChunk[] = result.chunks
-      .map((rc: RetrievedProjectChunk) => ({
+      .map((rc: RetrievedProjectChunk): AppliedProjectChunk => ({
+        projectId: rc.chunk.projectId,
         fileId: rc.chunk.fileId,
         fileName: input.fileNames?.[rc.chunk.fileId],
+        chunkId: rc.chunk.id,
+        ...(rc.chunk.generationId ? { generationId: rc.chunk.generationId } : {}),
+        contentHash: rc.chunk.contentHash,
+        charStart: rc.chunk.charStart,
+        charEnd: rc.chunk.charEnd,
         content: rc.chunk.content,
         score: rc.score,
       }))
@@ -83,10 +87,19 @@ export async function applyProjectKnowledgeContext(
       return { systemPromptSection: null, retrievedChunks: [], degraded: result.degraded }
     }
 
+    // Two files may share a name; their excerpts must still read as distinct.
+    const fileIdsByName = new Map<string, Set<string>>()
+    for (const c of retrievedChunks)
+      if (c.fileName)
+        fileIdsByName.set(c.fileName, (fileIdsByName.get(c.fileName) ?? new Set()).add(c.fileId))
     const body = retrievedChunks
       .map((c) => {
-        const label = c.fileName ? `[${c.fileName}]` : `[file ${c.fileId}]`
-        return `${label}\n${c.content}`
+        const name = c.fileName
+          ? (fileIdsByName.get(c.fileName)?.size ?? 0) > 1
+            ? `${c.fileName} (file ${c.fileId})`
+            : c.fileName
+          : `file ${c.fileId}`
+        return `[${name}, characters ${c.charStart}–${c.charEnd}]\n${c.content}`
       })
       .join("\n\n")
 

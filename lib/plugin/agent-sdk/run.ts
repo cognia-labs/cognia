@@ -219,9 +219,10 @@ async function executeThroughAuthority(
 async function withContextContributions(
   prompt: string,
   options: PluginAgentRunOptions,
-  pluginId: string | undefined
+  pluginId: string | undefined,
+  signal: AbortSignal
 ): Promise<PluginAgentRunOptions> {
-  const contribution = await resolveContextContributions({ prompt }, pluginId)
+  const contribution = await resolveContextContributions({ prompt }, pluginId, { signal })
   if (!contribution) return options
   const appendSystem = [options.appendSystem, contribution].filter(Boolean).join("\n\n")
   if (!hasNoLeakingPii(appendSystem)) {
@@ -380,7 +381,7 @@ export async function runPluginAgent(
       signal,
       async (runSignal, executionIdentity) => {
         await runInputGuardrails(prompt, options.guardrails, runSignal)
-        const opts = await withContextContributions(prompt, options, meta.pluginId)
+        const opts = await withContextContributions(prompt, options, meta.pluginId, runSignal)
         const result = await executeWithRobustness(
           prompt,
           opts,
@@ -459,7 +460,7 @@ export function runPluginAgentStreamed(
         signal,
         async (runSignal, executionIdentity) => {
           await runInputGuardrails(prompt, options.guardrails, runSignal)
-          const opts = await withContextContributions(prompt, options, meta.pluginId)
+          const opts = await withContextContributions(prompt, options, meta.pluginId, runSignal)
           const result = await executeWithRobustness(
             prompt,
             opts,

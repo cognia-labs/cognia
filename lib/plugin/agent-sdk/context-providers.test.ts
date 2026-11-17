@@ -139,6 +139,70 @@ describe("resolveContextContributions", () => {
   })
 })
 
+describe("resolveContextContributions bounds", () => {
+  it("leaves out a provider that never answers once its deadline passes", async () => {
+    registerContextProvider("ok", { id: "ok", provide: () => "kept" }, { pluginId: "p" })
+    registerContextProvider(
+      "hung",
+      { id: "hung", provide: () => new Promise<string>(() => {}) },
+      { pluginId: "p" }
+    )
+    expect(await resolveContextContributions({ prompt: "hi" }, "p", { deadlineMs: 20 })).toBe(
+      "kept"
+    )
+  })
+
+  it("stops waiting and rejects with the reason when the run signal aborts", async () => {
+    registerContextProvider(
+      "hung",
+      { id: "hung", provide: () => new Promise<string>(() => {}) },
+      { pluginId: "p" }
+    )
+    const controller = new AbortController()
+    const pending = resolveContextContributions({ prompt: "hi" }, "p", {
+      signal: controller.signal,
+      deadlineMs: 60_000,
+    })
+    const reason = new Error("run cancelled")
+    controller.abort(reason)
+    await expect(pending).rejects.toBe(reason)
+    // An already-aborted signal never starts the providers.
+    const provide = jest.fn(() => "x")
+    registerContextProvider("spy", { id: "spy", provide }, { pluginId: "p" })
+    await expect(
+      resolveContextContributions({ prompt: "hi" }, "p", { signal: controller.signal })
+    ).rejects.toBe(reason)
+    expect(provide).not.toHaveBeenCalled()
+  })
+
+  it("leaves out an oversized contribution whole and keeps the run within its total", async () => {
+    registerContextProvider(
+      "huge",
+      { id: "huge", provide: () => "x".repeat(1_048_576) },
+      { pluginId: "p" }
+    )
+    registerContextProvider("a", { id: "a", provide: () => "a".repeat(60) }, { pluginId: "p" })
+    registerContextProvider("b", { id: "b", provide: () => "b".repeat(60) }, { pluginId: "p" })
+    registerContextProvider("c", { id: "c", provide: () => "c".repeat(10) }, { pluginId: "p" })
+    const joined = await resolveContextContributions({ prompt: "hi" }, "p", {
+      maxProviderChars: 100,
+      maxTotalChars: 80,
+    })
+    // `huge` exceeds the per-provider cap; `b` no longer fits after `a`; `c` still does.
+    expect(joined).toBe(`${"a".repeat(60)}\n\n${"c".repeat(10)}`)
+    expect(joined.length).toBeLessThanOrEqual(80)
+  })
+
+  it("applies the default caps", async () => {
+    registerContextProvider(
+      "huge",
+      { id: "huge", provide: () => "x".repeat(1_048_576) },
+      { pluginId: "p" }
+    )
+    expect(await resolveContextContributions({ prompt: "hi" }, "p")).toBe("")
+  })
+})
+
 describe("readSharedMemory", () => {
   it("withholds migrated ACL-readable entries after filtering by tag", async () => {
     getStateMock.mockReturnValue({ sharedMemory: {} })

@@ -38,6 +38,7 @@ export type ContextGroupId =
   | "commands"
   | "skills"
   | "userMessages"
+  | "assistantMessages"
   | "mentionedFiles"
   | "toolOutputs"
   | "thinking"

@@ -154,7 +154,7 @@ describe("extractFootnoteSources", () => {
 })
 
 describe("mergeSources", () => {
-  it("preserves order across lists and dedups by url/title", () => {
+  it("preserves order across lists and dedups by url", () => {
     const a = [{ id: "a1", title: "T1", origin: "anthropic" as const, url: "https://x" }]
     const b = [
       { id: "b1", title: "T2", origin: "twin-rag" as const },
@@ -162,5 +162,19 @@ describe("mergeSources", () => {
     ]
     const merged = mergeSources(a, b)
     expect(merged.map((s) => s.id)).toEqual(["a1", "b1"])
+  })
+
+  it("keeps distinct sources that only share a title, and dedups a repeated id", () => {
+    const first = [
+      { id: "project-knowledge-c1", title: "notes.md", origin: "project-knowledge" as const },
+      { id: "project-knowledge-c2", title: "notes.md", origin: "project-knowledge" as const },
+    ]
+    const again = [
+      { id: "project-knowledge-c1", title: "notes.md", origin: "project-knowledge" as const },
+    ]
+    expect(mergeSources(first, again).map((s) => s.id)).toEqual([
+      "project-knowledge-c1",
+      "project-knowledge-c2",
+    ])
   })
 })

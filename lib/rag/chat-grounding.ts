@@ -92,7 +92,7 @@ function optionHits(options: SendOptions): RetrievalHit[] {
       options.contextSources,
       "project-knowledge.retrieval"
     )?.retrievedChunks.map((chunk) => ({
-      id: `project-${chunk.fileId}`,
+      id: `project-${chunk.chunkId}`,
       title: chunk.fileName ?? chunk.fileId,
       snippet: chunk.content,
       origin: "project-knowledge" as const,

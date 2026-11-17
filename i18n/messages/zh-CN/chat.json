@@ -1016,6 +1016,7 @@
       "unfilled": "{count, plural, =1 {还有 1 个参数没填} other {还有 # 个参数没填}}"
     },
     "toolbar": {
+      "breakdownAssistantMessages": "助手回复",
       "breakdownAgents": "子智能体",
       "breakdownClaudeMd": "CLAUDE.md / 系统提示词",
       "breakdownCommands": "斜杠命令",

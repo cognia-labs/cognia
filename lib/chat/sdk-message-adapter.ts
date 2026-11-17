@@ -32,6 +32,7 @@ import type {
   ToolUseSummaryPart,
 } from "@/lib/chat/parts-extensions"
 import type { ProjectHistoryEvidence } from "@/lib/chat/history-evidence-registry"
+import type { ProjectKnowledgeRetrievalSources } from "@/types/project-knowledge"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { usageInfoFromUsageBlock } from "@/lib/usage/usage-info"
 import { VIDEO_ATTACHMENT_PART_KEY } from "@/lib/chat/attachments/video/attachment-info"
@@ -1932,29 +1933,31 @@ export interface AgentKnowledgeSourcesContext {
   }>
 }
 
-export interface ProjectKnowledgeSourcesContext {
-  retrievedChunks: Array<{
-    fileId: string
-    fileName?: string
-    content: string
-    score: number
-  }>
-  degraded?: boolean
-}
-
-/** Merge workspace-scoped knowledge excerpts into the same persisted SourcesPart. */
+/**
+ * Merge workspace-scoped knowledge excerpts into the same persisted
+ * SourcesPart: one source per chunk, carrying the excerpt's exact location.
+ */
 export function mergeProjectKnowledgeSourcesIntoLastAssistant(
   messages: UIMessage[],
-  context: ProjectKnowledgeSourcesContext | undefined | null
+  context: Pick<ProjectKnowledgeRetrievalSources, "retrievedChunks"> | undefined | null
 ): UIMessage[] {
   if (!context || context.retrievedChunks.length === 0) return messages
   const sources: SourcesPartItem[] = context.retrievedChunks.map((chunk) => ({
-    id: `project-knowledge-${chunk.fileId}`,
+    id: `project-knowledge-${chunk.chunkId}`,
     title: chunk.fileName?.trim() || chunk.fileId,
     snippet:
       chunk.content.length > 200 ? `${chunk.content.slice(0, 199).trimEnd()}…` : chunk.content,
     origin: "project-knowledge",
     score: chunk.score,
+    projectKnowledgeRef: {
+      projectId: chunk.projectId,
+      fileId: chunk.fileId,
+      chunkId: chunk.chunkId,
+      ...(chunk.generationId ? { generationId: chunk.generationId } : {}),
+      contentHash: chunk.contentHash,
+      charStart: chunk.charStart,
+      charEnd: chunk.charEnd,
+    },
   }))
   return appendSourcesToLastAssistant(messages, sources)
 }

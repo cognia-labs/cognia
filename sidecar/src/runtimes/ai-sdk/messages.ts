@@ -1,5 +1,5 @@
 import { extractHttpErrorMeta } from "../../providers/http-error-meta.ts"
-import type { ConversationMessage } from "../../context/compaction.ts"
+import { isImageMediaType, type ConversationMessage } from "../../context/compaction.ts"
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
@@ -109,14 +109,26 @@ export function toAiSdkUserContent<T>(blocks: T): T extends unknown[] ? unknown[
 }
 
 /**
+ * An image part of a mapped tool output that can be shown to the model as a
+ * user image: the canonical AI SDK 7 `file` part (what `builtinToModelOutput`
+ * emits) with an image media type and inline bytes or a URL. A provider
+ * reference names an upload on one provider and cannot be re-projected.
+ */
+function projectableImage(part: unknown): { mediaType: string; data: unknown } | null {
+  if (!part || typeof part !== "object") return null
+  const p = part as { type?: unknown; mediaType?: unknown; data?: unknown }
+  const data = p.data as { type?: unknown } | null | undefined
+  if (p.type !== "file" || !isImageMediaType(p.mediaType)) return null
+  if (data?.type !== "data" && data?.type !== "url") return null
+  return { mediaType: p.mediaType as string, data: p.data }
+}
+
+/**
  * Does a tool's execute output carry an image? Tolerant of both shapes a step's
  * `toolResults[i].output` can take: the raw MCP `CallToolResult`
  * (`{ content:[{ type:'image', data, mimeType }] }`, what our built-in `read`
- * returns) and the already-mapped `toModelOutput` content form
- * (`{ type:'content', value:[{ type:'image-data'|'file-data'|'media', mediaType }] }`).
- *
- * @param {unknown} output
- * @returns {boolean}
+ * returns) and the mapped `toModelOutput` content form
+ * (`{ type:'content', value:[{ type:'file', mediaType:'image/…', data:{ type:'data', data } }] }`).
  */
 export function toolOutputHasImage(output: unknown) {
   if (!output || typeof output !== "object") return false
@@ -125,13 +137,7 @@ export function toolOutputHasImage(output: unknown) {
     if (o.content.some((b) => b && b.type === "image" && typeof b.data === "string")) return true
   }
   if (o.type === "content" && Array.isArray(o.value)) {
-    return o.value.some(
-      (v) =>
-        v &&
-        (v.type === "image-data" || v.type === "file-data" || v.type === "media") &&
-        typeof v.mediaType === "string" &&
-        v.mediaType.startsWith("image/")
-    )
+    return o.value.some((v) => projectableImage(v) !== null)
   }
   return false
 }
@@ -139,22 +145,20 @@ export function toolOutputHasImage(output: unknown) {
 /**
  * Most non-Anthropic provider APIs cannot carry an image INSIDE a tool-result
  * message (OpenAI Chat Completions, Mistral, Cohere, and older Gemini have no
- * slot for it; the AI SDK then serializes the image to a base64 JSON string the
- * model can't read). The portable fix: pull every image out of the model's
- * tool-result messages and re-project it as a normal USER-message image part —
- * which every vision model accepts — leaving a short text marker behind.
+ * slot for it; the OpenAI Chat converter serializes the whole content output
+ * to a JSON string the model can't read). The portable fix: pull every image
+ * out of the model's tool-result messages and re-project it as a normal
+ * USER-message file part — which every vision model accepts — leaving a short
+ * text marker behind.
  *
- * Returns the AI SDK user-content image parts found, plus a sanitized copy of
+ * Returns the user-content image parts found, plus a sanitized copy of
  * `messages` with the image payloads replaced by text. Non-tool messages and
  * image-free tool results pass through untouched (object identity preserved when
  * nothing changed, so a no-image turn is a true no-op).
- *
- * @param {Array<any>} messages  AI SDK ModelMessages (from `result.response.messages`).
- * @returns {{ images: Array<{ type: "image", image: string, mediaType: string }>, sanitized: Array<any> }}
  */
 export function projectToolResultImages(messages: ConversationMessage[]) {
   if (!Array.isArray(messages)) return { images: [], sanitized: messages }
-  const images: { type: "image"; image: string; mediaType: string }[] = []
+  const images: { type: "file"; mediaType: string; data: unknown }[] = []
   const sanitized = messages.map((msg) => {
     if (!msg || msg.role !== "tool" || !Array.isArray(msg.content)) return msg
     let msgChanged = false
@@ -164,19 +168,10 @@ export function projectToolResultImages(messages: ConversationMessage[]) {
       if (!out || out.type !== "content" || !Array.isArray(out.value)) return part
       let partChanged = false
       const value = out.value.map((v: Record<string, unknown>) => {
-        const isImage =
-          v &&
-          (v.type === "image-data" || v.type === "file-data" || v.type === "media") &&
-          typeof v.data === "string" &&
-          typeof v.mediaType === "string" &&
-          v.mediaType.startsWith("image/")
-        if (!isImage) return v
+        const image = projectableImage(v)
+        if (!image) return v
         partChanged = true
-        images.push({
-          type: "image",
-          image: `data:${v.mediaType};base64,${v.data}`,
-          mediaType: v.mediaType as string,
-        })
+        images.push({ type: "file", mediaType: image.mediaType, data: image.data })
         return {
           type: "text",
           text: `[image returned by ${part.toolName ?? "tool"} — shown in the next message]`,

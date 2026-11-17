@@ -23,6 +23,10 @@ import {
   MAX_TIMEOUT_MS,
 } from "./bash.ts"
 import { findDangerousShellFragment } from "../../../policy/shell/ast-scan.ts"
+import {
+  formatRecoverableRef,
+  leadingRecoverableRef,
+} from "../../../shared/text/recoverable-ref.ts"
 import { createBgShellRegistry as rawCreateBgShellRegistry } from "../../state/background-shells.ts"
 import { createHostBgShellRegistry } from "../../state/host-background-shells.ts"
 import { resolveShellDescriptor, activeShellDescriptor } from "../../../platform/process/shell.ts"
@@ -247,9 +251,11 @@ test("composeBashBody inlines small output and previews large spilled output", (
   const tail = "T".repeat(18_000)
   const big = composeBashBody({ head, tail, total: 50_000, fullPath: "/tmp/x.log" })
   assert.equal(big.truncated, true)
-  assert.match(big.body, /full output saved to \/tmp\/x\.log/)
+  // The reference is the first line, in the shared shape every later cut keeps.
+  assert.equal(big.body.split("\n")[0], formatRecoverableRef("/tmp/x.log", 50_000))
+  assert.equal(leadingRecoverableRef(big.body), formatRecoverableRef("/tmp/x.log", 50_000))
   assert.match(big.body, /characters omitted/)
-  assert.ok(big.body.startsWith(head))
+  assert.ok(big.body.includes(`\n${head}\n`))
   assert.ok(big.body.endsWith(tail))
 })
 
@@ -261,9 +267,9 @@ test("bash spills oversized output to a temp file and previews it", async () => 
   const res = await tool.handler({ command: cmd }, {})
   assert.ok(!res.isError, textOf(res))
   const text = textOf(res)
-  assert.match(text, /full output saved to .+cognia-bash-.+\.log/)
+  assert.match(text, /\[full output: .+cognia-bash-.+\.log/)
   // The named spill file exists and holds the complete output.
-  const m = text.match(/full output saved to (\S+\.log)/)
+  const m = text.match(/\[full output: (\S+\.log)/)
   assert.ok(m, "expected a spill path")
   const full = await fsp.readFile(m[1]!, "utf-8")
   assert.equal(full.length, n)
@@ -275,7 +281,7 @@ test("bash inlines output under the limit without leaving a spill file", async (
   const res = await tool.handler({ command: "echo small-inline" }, {})
   assert.ok(!res.isError, textOf(res))
   assert.match(textOf(res), /small-inline/)
-  assert.doesNotMatch(textOf(res), /full output saved/)
+  assert.doesNotMatch(textOf(res), /\[full output: /)
 })
 
 test("bash never creates a temp spill file for small output", async () => {

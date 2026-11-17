@@ -25,6 +25,7 @@ import {
   shouldCompact,
   AUTO_COMPACT_FRACTION,
   estimateTokens,
+  TOOL_IMAGES_LEAD_TEXT,
 } from "../../context/compaction.ts"
 import { planDeliveryReady } from "../../context/progress-checkpoint.ts"
 import { partitionPrompt } from "../../providers/prompt-partition.ts"
@@ -1689,10 +1690,7 @@ export function dispatchAiSdk({
               injectedToolImages = true
               conversation.push({
                 role: "user",
-                content: [
-                  { type: "text", text: "Image(s) returned by the tool call(s) above:" },
-                  ...images,
-                ],
+                content: [{ type: "text", text: TOOL_IMAGES_LEAD_TEXT }, ...images],
               })
             }
           } else {

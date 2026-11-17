@@ -61,7 +61,18 @@ describe("attachInteractiveGrounding", () => {
       {
         contextSources: {
           "project-knowledge.retrieval": {
-            retrievedChunks: [{ fileId: "package", content: "The workspace uses pnpm.", score: 1 }],
+            retrievedChunks: [
+              {
+                projectId: "p",
+                fileId: "package",
+                chunkId: "package-c0",
+                contentHash: "h",
+                charStart: 0,
+                charEnd: 24,
+                content: "The workspace uses pnpm.",
+                score: 1,
+              },
+            ],
             degraded: false,
           },
         },

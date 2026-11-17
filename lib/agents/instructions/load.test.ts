@@ -3,8 +3,20 @@ import {
   discoverProjectAgentFiles,
   discoverProjectInstructionFiles,
   loadProjectInstructions,
+  NO_INSTRUCTION_FS_WARNING,
 } from "./load"
 import type { InstructionFs } from "./types"
+
+const workspaceFsMock = {
+  statWorkspaceFile: jest.fn(),
+  listWorkspaceDir: jest.fn(),
+  readWorkspaceFile: jest.fn(),
+}
+jest.mock("@/lib/files/workspace-fs", () => ({
+  statWorkspaceFile: (...a: unknown[]) => workspaceFsMock.statWorkspaceFile(...a),
+  listWorkspaceDir: (...a: unknown[]) => workspaceFsMock.listWorkspaceDir(...a),
+  readWorkspaceFile: (...a: unknown[]) => workspaceFsMock.readWorkspaceFile(...a),
+}))
 
 function fakeFs(files: Record<string, string>): InstructionFs {
   const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "")
@@ -50,9 +62,77 @@ describe("loadProjectInstructions", () => {
     expect(r).toEqual({ section: "", files: [], markdownAgentFiles: [], warnings: [] })
   })
 
-  it("returns empty off-Tauri with no injected fs", async () => {
-    const r = await loadProjectInstructions({ roots: ["/proj"], isTauriEnv: false })
+  it("returns empty off-Tauri with no injected fs, and says why", async () => {
+    const r = await loadProjectInstructions({
+      roots: ["/proj"],
+      isTauriEnv: false,
+      isHeadlessEnv: false,
+    })
     expect(r.section).toBe("")
+    expect(r.warnings).toEqual([NO_INSTRUCTION_FS_WARNING])
+    // With nowhere to look there is nothing to report.
+    const idle = await loadProjectInstructions({
+      roots: [],
+      isTauriEnv: false,
+      isHeadlessEnv: false,
+    })
+    expect(idle.warnings).toEqual([])
+  })
+
+  it("reads through an injected fs off-Tauri (the CLI's Node adapter)", async () => {
+    const r = await loadProjectInstructions({
+      roots: [],
+      cwd: "/repo/pkg",
+      isTauriEnv: false,
+      isHeadlessEnv: false,
+      homeDir: "/home",
+      now: () => 1000,
+      fs: fakeFs({
+        "/home/.cognia/AGENTS.md": "global rules",
+        "/repo/AGENTS.md": "repo rules",
+        "/repo/pkg/AGENTS.md": "package rules",
+      }),
+    })
+    expect(r.files.map((f) => f.content)).toEqual(["global rules", "repo rules", "package rules"])
+    expect(r.warnings).toEqual([])
+  })
+
+  it("reads a headless Host's workspace through its root-confined reads", async () => {
+    const files: Record<string, string> = {
+      "AGENTS.md": "root rules",
+      "sub/AGENTS.md": "sub rules",
+      ".cognia/instructions/style.md": "style rules",
+    }
+    workspaceFsMock.statWorkspaceFile.mockImplementation(async (_root: string, rel: string) => ({
+      exists: rel in files || rel === ".cognia/instructions",
+    }))
+    workspaceFsMock.listWorkspaceDir.mockImplementation(async (_root: string, rel?: string) =>
+      rel === ".cognia/instructions" ? [{ relPath: ".cognia/instructions/style.md" }] : []
+    )
+    workspaceFsMock.readWorkspaceFile.mockImplementation(async (_root: string, rel: string) => {
+      if (!(rel in files)) throw new Error(`ENOENT ${rel}`)
+      return files[rel]!
+    })
+    const r = await loadProjectInstructions({
+      roots: ["/srv/ws"],
+      cwd: "/srv/ws/sub",
+      isTauriEnv: false,
+      isHeadlessEnv: true,
+      homeDir: null,
+      now: () => 1000,
+    })
+    expect(r.files.map((f) => f.label)).toEqual([
+      "AGENTS.md",
+      "sub/AGENTS.md",
+      ".cognia/instructions/style.md",
+    ])
+    // Every read stays inside the root; nothing above it is probed.
+    for (const [root] of workspaceFsMock.statWorkspaceFile.mock.calls) expect(root).toBe("/srv/ws")
+    expect(workspaceFsMock.readWorkspaceFile).toHaveBeenCalledWith(
+      "/srv/ws",
+      "sub/AGENTS.md",
+      524288
+    )
   })
 
   it("loads, expands imports, and renders a section", async () => {
@@ -307,9 +387,13 @@ describe("discoverProjectInstructionFiles", () => {
         fs,
       })
     ).toEqual([])
-    expect(await discoverProjectInstructionFiles({ roots: ["/proj"], isTauriEnv: false })).toEqual(
-      []
-    )
+    expect(
+      await discoverProjectInstructionFiles({
+        roots: ["/proj"],
+        isTauriEnv: false,
+        isHeadlessEnv: false,
+      })
+    ).toEqual([])
   })
 })
 
@@ -344,6 +428,8 @@ describe("discoverProjectAgentFiles", () => {
         fs,
       })
     ).toEqual([])
-    expect(await discoverProjectAgentFiles({ roots: ["/proj"], isTauriEnv: false })).toEqual([])
+    expect(
+      await discoverProjectAgentFiles({ roots: ["/proj"], isTauriEnv: false, isHeadlessEnv: false })
+    ).toEqual([])
   })
 })

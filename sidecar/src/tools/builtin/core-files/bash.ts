@@ -21,6 +21,7 @@ import { toolError, toolText } from "../../kernel/result.ts"
 import { DANGEROUS_PATTERNS } from "../../../policy/shell/rules.ts"
 import { findDangerousShellFragment } from "../../../policy/shell/ast-scan.ts"
 import { tailTruncate } from "../../../shared/text/truncate.ts"
+import { formatRecoverableRef } from "../../../shared/text/recoverable-ref.ts"
 import { pickStreamDecoder } from "../../../platform/process/console-decode.ts"
 import {
   sandboxedProcessTarget,
@@ -307,9 +308,11 @@ export function resolveShellInvocation(
 
 /**
  * Build the tool body from a captured run. When the full output was spilled to
- * a file and exceeds the inline budget, return a head + tail preview pointing at
- * the file (Claude Code parity — the model can `read` the file for the rest);
- * otherwise return the (possibly tail-truncated) output inline.
+ * a file and exceeds the inline budget, return a head + tail preview led by a
+ * reference line naming the file (Claude Code parity — the model can `read` the
+ * file for the rest); otherwise return the (possibly tail-truncated) output
+ * inline. The reference is its own first line, in the shared recoverable-ref
+ * shape, so the later cuts of a retained or summarized result keep it.
  */
 export function composeBashBody({
   head,
@@ -329,8 +332,8 @@ export function composeBashBody({
   }
   const omitted = Math.max(0, total - head.length - tail.length)
   const body =
-    `${head}\n… (${omitted} characters omitted — full output saved to ${fullPath}; ` +
-    `read it with the read tool for the complete log) …\n${tail}`
+    `${formatRecoverableRef(fullPath, total)}\n${head}\n` +
+    `… (${omitted} characters omitted here; the file above holds them) …\n${tail}`
   return { body, truncated: true }
 }
 

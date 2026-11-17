@@ -507,6 +507,16 @@ export interface BuildOptionsContext {
   interactiveChat?: boolean
   /** Host-owned OS launcher for built-in coding processes (CLI). */
   builtinProcessSandbox?: SendOptions["builtinProcessSandbox"]
+  /**
+   * Host filesystem for project instruction discovery (CLAUDE.md / AGENTS.md,
+   * `.cognia/instructions`, `.cognia/agents`) on a host the desktop's Tauri fs
+   * and the headless Host's workspace reads do not cover: the CLI passes a Node
+   * adapter and its home directory (for `~/.cognia/<file>`).
+   */
+  instructionsHost?: {
+    fs: import("@/lib/agents/instructions/types").InstructionFs
+    homeDir: string | null
+  }
   /** Host filesystem and managed installation policy for agent LSP. */
   lspHost?: {
     readProjectFile: typeof readProjectLspFile
@@ -1823,11 +1833,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // catalog and the tool whitelist. An ephemeral attachment remains explicit.
   skills = [...implicitSkills, ...explicitSkills]
   // Bump usage counters for the skills that actually made it into the prompt.
-  // Fire-and-forget: a failed write here shouldn't block the send.
-  const immediatelyInjectedSkills =
-    ctx.skillRenderMode === "hybrid" ? explicitSkills : ctx.skillRenderMode === "name" ? [] : skills
-  if (immediatelyInjectedSkills.length > 0) {
-    void recordSkillUsage(immediatelyInjectedSkills.map((s) => s.id)).catch(() => undefined)
+  // Fire-and-forget: a failed write here shouldn't block the send. Full mode
+  // records after rendering, once the budget has decided which bodies fit.
+  if (ctx.skillRenderMode === "hybrid" && explicitSkills.length > 0) {
+    void recordSkillUsage(explicitSkills.map((s) => s.id)).catch(() => undefined)
   }
 
   // --- Agent Mode (built-in / custom / plugin) ----------------------------
@@ -2556,9 +2565,19 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         cwd,
         roots: ctx.activeProject ? allRootPaths(ctx.activeProject) : [],
         config: instructionsConfig,
+        ...(ctx.instructionsHost
+          ? { fs: ctx.instructionsHost.fs, homeDir: ctx.instructionsHost.homeDir }
+          : {}),
       })
       instructionSection = resolved.section
       projectMarkdownAgentFiles = resolved.markdownAgentFiles
+      // Dropped, truncated, unreadable or unloadable instruction files: never a
+      // silent cap.
+      if (resolved.warnings.length > 0)
+        loggers.agent.warn("project instructions incomplete", {
+          sessionId: session?.id,
+          warnings: resolved.warnings,
+        })
     } catch (err) {
       console.warn("project instruction load failed:", err)
     }
@@ -2612,7 +2631,31 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     const catalogSection = renderSkillsCatalog(implicitSkills, skillBudget)
     skillSection = [explicitSection, catalogSection].filter(Boolean).join("\n\n")
   } else {
-    skillSection = renderSkillsSection(skills, skillBudget)
+    // Full bodies. A skill named for this turn (a composer attachment, the
+    // skill a scheduled task runs) is delivered whole outside the ceiling, as
+    // in hybrid: under one shared ceiling a long one was omitted entirely, or
+    // crowded out by the agent's own skills, while the turn ran on as if it
+    // had it. The ceiling decides which of the agent's own skills also fit;
+    // one that does not is not offered at all — with no body and no loader,
+    // its tools are withdrawn too.
+    let omittedIds: readonly string[] = []
+    const implicitSection = renderSkillsSection(implicitSkills, {
+      ...skillBudget,
+      onDegrade: (report) => {
+        omittedIds = report.omitted
+        skillBudget.onDegrade(report)
+      },
+    })
+    skillSection = [renderSkillsSection(explicitSkills), implicitSection]
+      .filter(Boolean)
+      .join("\n\n")
+    if (omittedIds.length > 0) {
+      const omitted = new Set(omittedIds)
+      skills = skills.filter((skill) => !omitted.has(skill.id))
+    }
+    if (skills.length > 0) {
+      void recordSkillUsage(skills.map((s) => s.id)).catch(() => undefined)
+    }
   }
   // Substitute agent-mode prompt template variables ({{date}} / {{tools_list}} /
   // {{mode_name}} / …) the custom-mode editor advertises — without this the

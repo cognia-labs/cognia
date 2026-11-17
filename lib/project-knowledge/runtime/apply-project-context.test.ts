@@ -10,8 +10,21 @@ const retrieveMock = retrieveProjectChunks as jest.Mock
 
 const deps = {} as ProjectKnowledgeRuntimeDeps
 
-function hit(fileId: string, content: string, score = 1) {
-  return { chunk: { fileId, content, vectorDocId: `${fileId}-0` }, score }
+function hit(fileId: string, content: string, score = 1, n = 0) {
+  return {
+    chunk: {
+      id: `${fileId}-c${n}`,
+      projectId: "p",
+      fileId,
+      content,
+      vectorDocId: `${fileId}-${n}`,
+      generationId: `${fileId}-g1`,
+      contentHash: `${fileId}-h`,
+      charStart: n * 100,
+      charEnd: n * 100 + content.length,
+    },
+    score,
+  }
 }
 
 beforeEach(() => retrieveMock.mockReset())
@@ -61,11 +74,35 @@ describe("applyProjectKnowledgeContext", () => {
       deps,
     })
     expect(res.systemPromptSection).toContain("## Project knowledge base")
-    expect(res.systemPromptSection).toContain("[guide.md]")
+    expect(res.systemPromptSection).toContain("[guide.md, characters 0–10]")
     expect(res.systemPromptSection).toContain("alpha body")
-    expect(res.systemPromptSection).toContain("[spec.md]")
+    expect(res.systemPromptSection).toContain("[spec.md, characters 0–9]")
     expect(res.retrievedChunks).toHaveLength(2)
     expect(res.retrievedChunks[0].fileName).toBe("guide.md")
+  })
+
+  it("reports each excerpt's chunk, generation, hash and range, and tells same-named files apart", async () => {
+    retrieveMock.mockResolvedValue({
+      chunks: [hit("f1", "first", 0.9, 0), hit("f1", "second", 0.8, 1), hit("f2", "other", 0.7)],
+      degraded: false,
+    })
+    const res = await applyProjectKnowledgeContext({
+      projectId: "p",
+      userMessage: "q",
+      topK: 5,
+      fileNames: { f1: "notes.md", f2: "notes.md" },
+      deps,
+    })
+    expect(
+      res.retrievedChunks.map((c) => [c.chunkId, c.generationId, c.charStart, c.charEnd])
+    ).toEqual([
+      ["f1-c0", "f1-g1", 0, 5],
+      ["f1-c1", "f1-g1", 100, 106],
+      ["f2-c0", "f2-g1", 0, 5],
+    ])
+    expect(res.retrievedChunks[0]).toMatchObject({ projectId: "p", contentHash: "f1-h" })
+    expect(res.systemPromptSection).toContain("[notes.md (file f1), characters 100–106]")
+    expect(res.systemPromptSection).toContain("[notes.md (file f2), characters 0–5]")
   })
 
   it("leaves out the chunks keepChunk rejects, from the section and the reported chunks", async () => {
@@ -94,7 +131,7 @@ describe("applyProjectKnowledgeContext", () => {
       topK: 5,
       deps,
     })
-    expect(res.systemPromptSection).toContain("[file f9]")
+    expect(res.systemPromptSection).toContain("[file f9, characters 0–1]")
   })
 
   it("returns null section but passes degraded through when nothing retrieved", async () => {

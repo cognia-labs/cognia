@@ -2,12 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import { buildOpticalCompaction } from "./compact.ts"
-import {
-  isSummaryMessage,
-  isOpticalMessage,
-  summaryVersion,
-  makeOpticalMessage,
-} from "../compaction.ts"
+import { isSummaryMessage, summaryVersion, makeOpticalMessage } from "../compaction.ts"
 import type { ConversationMessage } from "../compaction.ts"
 
 // A middle of substantial ASCII dialogue so optical is worthwhile.
@@ -29,7 +24,6 @@ test("makeOpticalMessage is recognized as a frozen optical artifact", () => {
   ]
   const msg = makeOpticalMessage(parts, { messageCount: 5, frameCount: 1 }, 3)
   assert.ok(isSummaryMessage(msg), "optical message is frozen like a summary")
-  assert.ok(isOpticalMessage(msg), "and flagged as optical (image-bearing)")
   assert.equal(summaryVersion(msg), 3)
   const content = msg.content as { type: string }[]
   assert.equal(content[0]?.type, "text")
@@ -45,7 +39,11 @@ test("renders an optical archive when worthwhile (verify off)", async () => {
     options: { size: 512, verify: false },
   })
   assert.ok(result, "produces an archive")
-  assert.ok(isOpticalMessage(result.message))
+  assert.ok(isSummaryMessage(result.message))
+  assert.ok(
+    (result.message.content as { type: string }[]).some((part) => part.type === "image"),
+    "the archive carries its frames as images"
+  )
   assert.ok(result.meta.frameCount >= 1)
   assert.ok(result.meta.frames.length === result.meta.frameCount)
   assert.ok((result.meta.frames[0]?.base64.length ?? 0) > 0)

@@ -2,8 +2,9 @@
  * Render expanded instruction files into a single system-prompt section.
  * Each file becomes a labelled block; blocks are separated by `\n\n---\n\n`
  * (matching the rest of `build-options.ts`'s prompt assembly). Enforces the
- * `maxFiles` / `maxFileBytes` caps and reports anything dropped or truncated —
- * never a silent cap (repo convention).
+ * `maxFiles` / `maxFileBytes` caps, dropping the lowest-precedence files first,
+ * and reports anything dropped or truncated — never a silent cap (repo
+ * convention; the send path logs the warnings).
  */
 
 import type { InstructionFile, ResolvedInstructionsConfig } from "./types"
@@ -25,12 +26,16 @@ export function renderInstructions(
 ): RenderResult {
   const warnings: string[] = []
 
+  // `files` is lowest-precedence first (global → ancestors → instructions dir
+  // → extras), so the cap keeps the TAIL: the files nearest the working
+  // directory and the explicit extras are the ones that override the rest.
+  // Keeping the head dropped exactly those overrides.
   let kept = files
   if (files.length > config.maxFiles) {
-    kept = files.slice(0, config.maxFiles)
+    const dropped = files.slice(0, files.length - config.maxFiles)
+    kept = files.slice(files.length - config.maxFiles)
     warnings.push(
-      `instruction files capped at ${config.maxFiles}; dropped ${files.length - config.maxFiles} (${files
-        .slice(config.maxFiles)
+      `instruction files capped at ${config.maxFiles}; dropped the ${dropped.length} lowest-precedence (${dropped
         .map((f) => f.label)
         .join(", ")})`
     )

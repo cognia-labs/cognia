@@ -23,13 +23,22 @@ describe("renderInstructions", () => {
     expect(r.section).toBe("")
   })
 
-  it("caps the file count and warns about dropped files", () => {
-    const files = [file("a.md", "a"), file("b.md", "b"), file("c.md", "c")]
+  it("caps the file count by dropping the lowest-precedence files and warns", () => {
+    // Load order is lowest precedence first: the global file, the root, then
+    // the directory nearest the cwd, whose rules override both.
+    const files = [
+      { ...file("global.md", "global rule"), source: "global" as const },
+      file("CLAUDE.md", "root rule"),
+      file("sub/AGENTS.md", "sub overrides root"),
+    ]
     const r = renderInstructions(files, resolveInstructionsConfig({ maxFiles: 2 }))
-    expect(r.files).toHaveLength(2)
-    expect(r.section).not.toContain("## c.md")
+    expect(r.files.map((f) => f.label)).toEqual(["CLAUDE.md", "sub/AGENTS.md"])
+    expect(r.section).toContain("## sub/AGENTS.md\n\nsub overrides root")
+    expect(r.section).not.toContain("## global.md")
+    // The kept files stay in precedence order, nearest last.
+    expect(r.section.indexOf("## CLAUDE.md")).toBeLessThan(r.section.indexOf("## sub/AGENTS.md"))
     expect(r.warnings[0]).toMatch(/capped at 2/)
-    expect(r.warnings[0]).toMatch(/c\.md/)
+    expect(r.warnings[0]).toMatch(/global\.md/)
   })
 
   it("truncates oversized files and warns", () => {

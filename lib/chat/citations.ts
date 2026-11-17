@@ -113,9 +113,11 @@ export function extractFootnoteSources(text: string | undefined | null): Sources
 }
 
 /**
- * Merge sources from all three channels into a single deduplicated list.
- * Order: anthropic → twin-rag → footnote (so user-emphasized citations win
- * when titles collide). Dedup key is `url || title`.
+ * Merge sources from every channel into a single deduplicated list, earlier
+ * lists winning. Dedup key is `url`, else the origin plus the item's stable id
+ * (chunk id, citation slot, footnote ref). A title is a label, not an
+ * identity: deduping on it merged two same-named files, and every excerpt of
+ * one document, into a single citation.
  */
 export function mergeSources(
   ...lists: ReadonlyArray<readonly SourcesPartItem[]>
@@ -124,7 +126,7 @@ export function mergeSources(
   const out: SourcesPartItem[] = []
   for (const list of lists) {
     for (const s of list) {
-      const key = s.url || s.title
+      const key = s.url || `${s.origin}:${s.id}`
       if (seen.has(key)) continue
       seen.add(key)
       out.push(s)

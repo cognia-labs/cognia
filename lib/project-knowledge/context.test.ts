@@ -30,9 +30,22 @@ function turn(fields: Partial<ContextTurnContext> = {}): ContextTurnContext {
   }
 }
 
+const excerpt = {
+  projectId: "p",
+  fileId: "f1",
+  fileName: "guide.md",
+  chunkId: "f1-c0",
+  generationId: "g1",
+  contentHash: "h1",
+  charStart: 0,
+  charEnd: 7,
+  content: "excerpt",
+  score: 0.8,
+}
+
 const result = {
   systemPromptSection: "## Project knowledge base\nexcerpt",
-  retrievedChunks: [{ fileId: "f1", fileName: "guide.md", content: "excerpt", score: 0.8 }],
+  retrievedChunks: [excerpt],
   degraded: false,
 }
 
@@ -110,18 +123,9 @@ it("keeps a chunk only when neither its text nor its file name leaks PII", async
   mockApply.mockResolvedValue(result)
   await retrieval.produce(turn())
   const { keepChunk } = mockApply.mock.calls[0][0]
+  expect(keepChunk({ ...excerpt, content: "Tag then push.", score: 1 })).toBe(true)
+  expect(keepChunk({ ...excerpt, content: "Ask jane.doe@example.com", score: 1 })).toBe(false)
   expect(
-    keepChunk({ fileId: "f1", fileName: "guide.md", content: "Tag then push.", score: 1 })
-  ).toBe(true)
-  expect(
-    keepChunk({ fileId: "f1", fileName: "guide.md", content: "Ask jane.doe@example.com", score: 1 })
-  ).toBe(false)
-  expect(
-    keepChunk({
-      fileId: "f1",
-      fileName: "jane.doe@example.com",
-      content: "Tag then push.",
-      score: 1,
-    })
+    keepChunk({ ...excerpt, fileName: "jane.doe@example.com", content: "Tag then push.", score: 1 })
   ).toBe(false)
 })

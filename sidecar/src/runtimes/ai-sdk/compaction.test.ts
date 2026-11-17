@@ -1,7 +1,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createCompactor, type CompactionState } from "./compaction.ts"
-import { makeSummaryMessage, type ConversationMessage } from "../../context/compaction.ts"
+import {
+  isSummaryMessage,
+  makeRetainedMediaMessage,
+  makeSummaryMessage,
+  type ConversationMessage,
+} from "../../context/compaction.ts"
+import { builtinToModelOutput } from "../../tools/adapters/ai-sdk-output.ts"
+import { composeBashBody } from "../../tools/builtin/core-files/bash.ts"
 import type { PendingPluginHooks } from "../../hooks/kernel/types.ts"
 import type { SendOptions } from "../../shared/wire/inbound.ts"
 import { createCallLedgerGate } from "../common/call-ledger-gate.ts"
@@ -2839,4 +2846,120 @@ test("resume batching removes only its restored checkpoint and preserves surroun
     new Set(saved.items[0]!.facts!.map((fact) => fact.id)),
     new Set(["latest", "earlier"])
   )
+})
+
+test("the published history caps the canonical tool result the mapper emits", async () => {
+  const f = fixture({ compaction: { maxToolResultTokens: 100 } })
+  f.conversation.push(
+    {
+      role: "assistant",
+      content: [
+        { type: "tool-call", toolCallId: "big", toolName: "bash", input: { command: "x" } },
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "big",
+          toolName: "bash",
+          output: builtinToModelOutput({ output: "y".repeat(4000) }),
+        },
+      ],
+    }
+  )
+  await forceCompact(f)
+  assert.equal(boundaries(f.events).length, 1)
+  const result = f.conversation
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+    .find((part) => part?.type === "tool-result" && part.toolCallId === "big")
+  const value = String((result?.output as { value?: unknown }).value)
+  assert.ok(value.length < 500, `retained ${value.length} characters at a 100-token cap`)
+})
+
+test("an image in the summarized history is kept after the summary, across a regeneration", async () => {
+  const image = {
+    type: "file" as const,
+    mediaType: "image/png",
+    data: "data:image/png;base64,SU1H",
+  }
+  const f = fixture({ compaction: { contextWindow: 200_000 } })
+  f.conversation[0] = { role: "user", content: [{ type: "text", text: "see this" }, image] }
+  await forceCompact(f)
+  const summaryAt = f.conversation.findIndex(
+    (m) => typeof m.content === "string" && m.content.startsWith("<conversation-summary")
+  )
+  assert.ok(summaryAt >= 0)
+  const retained = f.conversation[summaryAt + 1]
+  assert.match(JSON.stringify(retained?.content), /media=\\"1\\"/)
+  assert.deepEqual((retained?.content as unknown[]).at(-1), image)
+  // The summary model reads the image's name, never its bytes.
+  assert.doesNotMatch(JSON.stringify(f.starts[0]?.messages), /SU1H/)
+
+  // Four frozen summaries force a regeneration: the image is carried again.
+  const g = fixture({ compaction: { contextWindow: 200_000 } })
+  g.conversation.splice(
+    0,
+    0,
+    makeSummaryMessage("S1", 1),
+    makeSummaryMessage("S2", 2),
+    makeSummaryMessage("S3", 3),
+    makeRetainedMediaMessage([{ part: image, origin: "image from a user message" }], 3),
+    makeSummaryMessage("S4", 4)
+  )
+  await forceCompact(g)
+  const kept = g.conversation.filter((m) => JSON.stringify(m.content).includes("SU1H"))
+  assert.equal(kept.length, 1)
+  assert.equal(g.conversation.filter(isSummaryMessage).length, 2, "one summary plus its images")
+})
+
+test("a retention message is not counted as a summary toward regeneration", async () => {
+  const image = {
+    type: "file" as const,
+    mediaType: "image/png",
+    data: "data:image/png;base64,SU1H",
+  }
+  const f = fixture({ compaction: { contextWindow: 200_000 } })
+  const frozen = [
+    makeSummaryMessage("S1", 1),
+    makeRetainedMediaMessage([{ part: image, origin: "image from a user message" }], 1),
+    makeSummaryMessage("S2", 2),
+    makeSummaryMessage("S3", 3),
+  ]
+  f.conversation.splice(0, 0, ...frozen)
+  await forceCompact(f)
+  // Three summaries: the frozen ones are reused verbatim (prefix-cache stable).
+  assert.deepEqual(f.conversation.slice(0, frozen.length), frozen)
+})
+
+test("the summary input keeps a bash spill reference its clip would cut", async () => {
+  const f = fixture({ compaction: { maxToolResultTokens: 10 } })
+  const { body } = composeBashBody({
+    head: "h".repeat(12_000),
+    tail: "t".repeat(18_000),
+    total: 90_000,
+    fullPath: "/tmp/synthetic-audit-output.log",
+  })
+  f.conversation.splice(
+    0,
+    2,
+    {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: "b", toolName: "bash", input: { command: "x" } }],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "b",
+          toolName: "bash",
+          output: builtinToModelOutput({ output: body }),
+        },
+      ],
+    }
+  )
+  await forceCompact(f)
+  assert.match(JSON.stringify(f.starts[0]?.messages), /synthetic-audit-output\.log/)
 })
