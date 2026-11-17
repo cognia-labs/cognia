@@ -12,6 +12,8 @@ import { SessionNoticeMarker, isSessionNoticeMessage } from "./message-parts/ses
 import { HookNoticeMarker, isHookNoticeMessage } from "./message-parts/hook-notice-part"
 import { LongPress } from "@/components/interactions/long-press"
 import { MessageActionSheet } from "@/components/mobile/chat/message-action-sheet"
+import { MessageRenderProvider } from "@/components/chat/message-render-context"
+import type { MessageRenderContextValue } from "@/lib/chat/message-render-context"
 import { selectionFeedback } from "@/lib/capacitor/haptics"
 import { deleteMessage as deleteMessageOnDesktop } from "@/lib/ai/agent/execution/sidecar-client"
 import { isHostUnavailableError } from "@/lib/companion/host-unavailable"
@@ -878,6 +880,30 @@ export function MessageList({
     }
   }, [ownsShortcuts])
 
+  // D10: what every row reads the same way, supplied once.
+  const renderContext = useMemo<MessageRenderContextValue>(
+    () => ({
+      characterById,
+      directCharacter,
+      onCopy,
+      onRegenerate,
+      onEditResend,
+      onRewindFiles,
+      projectRoot,
+      messageDisplay,
+    }),
+    [
+      characterById,
+      directCharacter,
+      onCopy,
+      onRegenerate,
+      onEditResend,
+      onRewindFiles,
+      projectRoot,
+      messageDisplay,
+    ]
+  )
+
   // Shared row body for both the virtualized and the document-flow branch so
   // the MessageRenderer props (and the mobile LongPress wrapper) stay
   // identical regardless of which path renders the row.
@@ -904,32 +930,16 @@ export function MessageList({
       >
         <MessageRenderer
           message={m}
-          characterById={characterById}
-          directCharacter={directCharacter}
           isStreaming={isStreaming}
           isLastAssistant={m.id === lastAssistantId}
           actionSheetHost
-          onCopy={onCopy}
-          onRegenerate={onRegenerate}
-          onEditResend={onEditResend}
-          onRewindFiles={onRewindFiles}
-          projectRoot={projectRoot}
-          messageDisplay={messageDisplay}
         />
       </LongPress>
     ) : (
       <MessageRenderer
         message={m}
-        characterById={characterById}
-        directCharacter={directCharacter}
         isStreaming={isStreaming}
         isLastAssistant={m.id === lastAssistantId}
-        onCopy={onCopy}
-        onRegenerate={onRegenerate}
-        onEditResend={onEditResend}
-        onRewindFiles={onRewindFiles}
-        projectRoot={projectRoot}
-        messageDisplay={messageDisplay}
       />
     )
 
@@ -1214,7 +1224,7 @@ export function MessageList({
     <TranscriptSelectionHostContext.Provider value={selectionHost}>
       <TranscriptAgentsProvider multiAgent={multiAgent}>
         <TranscriptSessionProvider sessionId={paneSessionId ?? sessionId}>
-          {view}
+          <MessageRenderProvider value={renderContext}>{view}</MessageRenderProvider>
         </TranscriptSessionProvider>
       </TranscriptAgentsProvider>
     </TranscriptSelectionHostContext.Provider>

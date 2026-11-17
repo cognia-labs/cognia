@@ -6,35 +6,81 @@ import {
   type TranscriptTimelineSurfaceProps,
 } from "./transcript-timeline-surface"
 import { resolveMessageDisplayOptions } from "@/lib/chat/message-display"
+import type { MessageRenderContextValue } from "@/lib/chat/message-render-context"
+import { MessageRenderProvider } from "./message-render-context"
+
+function providing(value: MessageRenderContextValue) {
+  return function Providing({ children }: { children: React.ReactNode }) {
+    return <MessageRenderProvider value={value}>{children}</MessageRenderProvider>
+  }
+}
 
 const messageRenderMock = jest.fn()
 
 jest.mock("./message-renderer", () => ({
-  MessageRenderer: jest
-    .requireActual("react")
-    .memo(
-      ({
-        message,
-        onEditResend,
-        messageDisplay,
-      }: {
-        message: UIMessage
-        onEditResend?: unknown
-        messageDisplay?: { preset?: string }
-      }) => {
-        messageRenderMock(message)
-        return (
-          <div
-            data-testid={`message-${message.id}`}
-            data-editable={Boolean(onEditResend)}
-            data-preset={messageDisplay?.preset}
-          >
-            {message.parts.map((part) => (part.type === "text" ? part.text : part.type))}
-          </div>
-        )
-      }
-    ),
+  MessageRenderer: jest.requireActual("react").memo(function MessageRenderer(supplied: {
+    message: UIMessage
+    isLastAssistant?: boolean
+  }) {
+    // What the real renderer draws with: its props over the context (D10).
+    const { useMessageRenderContext } = jest.requireActual(
+      "./message-render-context"
+    ) as typeof import("./message-render-context")
+    const { resolveMessageRenderProps } = jest.requireActual(
+      "@/lib/chat/message-render-context"
+    ) as typeof import("@/lib/chat/message-render-context")
+    const { message, onEditResend, onRegenerate, messageDisplay } = resolveMessageRenderProps(
+      supplied,
+      useMessageRenderContext()
+    )
+    messageRenderMock(message)
+    return (
+      <div
+        data-testid={`message-${message.id}`}
+        data-editable={Boolean(onEditResend)}
+        data-regenerable={Boolean(onRegenerate)}
+        data-preset={messageDisplay?.preset}
+      >
+        {message.parts.map((part) => (part.type === "text" ? part.text : part.type))}
+      </div>
+    )
+  }),
 }))
+
+jest.mock("@/components/interactions/long-press", () => ({
+  LongPress: ({
+    children,
+    onLongPress,
+  }: {
+    children: React.ReactNode
+    onLongPress: () => void
+  }) => (
+    <div>
+      <button type="button" data-testid="long-press" onClick={onLongPress} />
+      {children}
+    </div>
+  ),
+}))
+jest.mock("@/lib/capacitor/haptics", () => ({ selectionFeedback: jest.fn() }))
+const sheetMock = jest.fn()
+// The shell's sheet, handed to the surface through the context (D10).
+function SheetStandIn(props: {
+  message: UIMessage | null
+  onRegenerate?: unknown
+  onEditResend?: unknown
+  character?: { name?: string } | null
+}) {
+  sheetMock(props)
+  return props.message ? (
+    <div
+      data-testid="action-sheet"
+      data-message={props.message.id}
+      data-regenerate={Boolean(props.onRegenerate)}
+      data-edit={Boolean(props.onEditResend)}
+      data-character={props.character?.name}
+    />
+  ) : null
+}
 
 const virtualizerMeasureMock = jest.fn()
 let latestItemKey: ((index: number) => string | number) | undefined
@@ -302,13 +348,14 @@ describe("<TranscriptTimelineSurface />", () => {
       hasMore: false,
     }
     rerender(
-      <TranscriptTimelineSurface
-        {...props}
-        expandedTurnKeys={new Set([item.turnKey])}
-        getDetail={() => detail}
-        loadingOlder
-        renderAdapters={{ onEditResend: jest.fn() }}
-      />
+      <MessageRenderProvider value={{ onEditResend: jest.fn() }}>
+        <TranscriptTimelineSurface
+          {...props}
+          expandedTurnKeys={new Set([item.turnKey])}
+          getDetail={() => detail}
+          loadingOlder
+        />
+      </MessageRenderProvider>
     )
     expect(screen.getByTestId("message-a1")).toHaveTextContent("Full answer")
     expect(screen.getByTestId("message-a1")).toHaveAttribute("data-editable", "true")
@@ -484,10 +531,12 @@ describe("<TranscriptTimelineSurface />", () => {
         ]}
         liveStatus="streaming"
         labels={labels}
-        renderAdapters={{
+      />,
+      {
+        wrapper: providing({
           messageDisplay: resolveMessageDisplayOptions({ preset: "inspector" }),
-        }}
-      />
+        }),
+      }
     )
 
     expect(screen.getByTestId("message-live")).toHaveTextContent("stream")
@@ -527,14 +576,118 @@ describe("<TranscriptTimelineSurface />", () => {
         liveMessages={[]}
         liveStatus="idle"
         labels={labels}
-        renderAdapters={{
-          onEditResend: jest.fn(),
-          mutableMessageIds: new Set(),
-        }}
-      />
+      />,
+      { wrapper: providing({ onEditResend: jest.fn(), canMutate: () => false }) }
     )
 
     expect(screen.getByTestId("message-u1")).toHaveAttribute("data-editable", "false")
+  })
+
+  describe("the message render context (D10)", () => {
+    const turn = (n: number) => ({
+      kind: "completed-turn" as const,
+      itemKey: `turn:${n}`,
+      turnKey: `turn:${n}`,
+      revision: 1,
+      detailRevision: 1,
+      status: "completed" as const,
+      userMessages: [{ id: `u${n}`, role: "user" as const, text: `ask ${n}`, createdAt: n }],
+      finalResponse: { id: `a${n}`, role: "assistant" as const, text: `answer ${n}`, createdAt: n },
+      collapsed: { exists: false, messageCount: 2, trailingCount: 0, mediaCount: 0 },
+      startedAt: n,
+      completedAt: n,
+    })
+    const surface = (
+      overrides: Partial<TranscriptTimelineSurfaceProps> = {}
+    ): TranscriptTimelineSurfaceProps => ({
+      sessionId: "s1",
+      items: [turn(1), turn(2)],
+      expandedTurnKeys: new Set(),
+      getDetail: () => undefined,
+      onExpand: jest.fn(),
+      onCollapse: jest.fn(),
+      onLoadOlder: jest.fn(),
+      onRetry: jest.fn(),
+      hasMore: false,
+      loading: false,
+      loadingOlder: false,
+      error: null,
+      liveMessages: [],
+      liveStatus: "idle",
+      labels,
+      ...overrides,
+    })
+
+    it("offers regenerate on the newest turn only, edit on every writable row", () => {
+      render(<TranscriptTimelineSurface {...surface()} />, {
+        wrapper: providing({ onRegenerate: jest.fn(), onEditResend: jest.fn() }),
+      })
+      expect(screen.getByTestId("message-a1")).toHaveAttribute("data-regenerable", "false")
+      expect(screen.getByTestId("message-a2")).toHaveAttribute("data-regenerable", "true")
+      expect(screen.getByTestId("message-u1")).toHaveAttribute("data-editable", "true")
+    })
+
+    it("narrows regenerate inside the caller's own canMutate", () => {
+      render(<TranscriptTimelineSurface {...surface()} />, {
+        wrapper: providing({
+          onRegenerate: jest.fn(),
+          canMutate: (messageId) => messageId !== "a2",
+        }),
+      })
+      expect(screen.getByTestId("message-a2")).toHaveAttribute("data-regenerable", "false")
+    })
+
+    it("draws no long-press affordance unless the host opens a sheet", () => {
+      render(<TranscriptTimelineSurface {...surface()} />)
+      expect(screen.queryByTestId("long-press")).toBeNull()
+      expect(sheetMock).not.toHaveBeenCalled()
+    })
+
+    it("opens the row's sheet on a long press, with the actions that row allows", () => {
+      const host = { id: "char_host", name: "Host agent", systemPrompt: "" }
+      render(<TranscriptTimelineSurface {...surface()} />, {
+        wrapper: providing({
+          actionSheet: SheetStandIn,
+          directCharacter: host as never,
+          onRegenerate: jest.fn(),
+          onEditResend: jest.fn(),
+        }),
+      })
+      const presses = screen.getAllByTestId("long-press")
+      // u1, a1, u2, a2
+      fireEvent.click(presses[3])
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-message", "a2")
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-regenerate", "true")
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-character", "Host agent")
+
+      fireEvent.click(presses[1])
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-message", "a1")
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-regenerate", "false")
+
+      fireEvent.click(presses[0])
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-edit", "true")
+    })
+
+    it("offers neither edit nor regenerate from the sheet while a turn is live", () => {
+      render(
+        <TranscriptTimelineSurface
+          {...surface({
+            liveMessages: [{ id: "live", role: "assistant", parts: [{ type: "text", text: "…" }] }],
+            liveStatus: "streaming",
+          })}
+        />,
+        {
+          wrapper: providing({
+            actionSheet: SheetStandIn,
+            onRegenerate: jest.fn(),
+            onEditResend: jest.fn(),
+          }),
+        }
+      )
+      fireEvent.click(screen.getAllByTestId("long-press")[0])
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-edit", "false")
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-regenerate", "false")
+    })
   })
 
   describe("loading earlier turns", () => {

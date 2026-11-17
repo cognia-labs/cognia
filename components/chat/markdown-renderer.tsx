@@ -29,6 +29,7 @@ import {
   MarkdownInlineCode,
 } from "@/components/chat/markdown/shared-components"
 import { resolveChatMarkdownConfig } from "@/components/chat/markdown/chat-markdown-config"
+import { useMessageRenderContext } from "@/components/chat/message-render-context"
 import {
   rehypeMarkdownMentions,
   type HeadingIdRegistry,
@@ -225,7 +226,17 @@ function withMentions(
   return combined
 }
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({
+/**
+ * Chat Markdown. Without `markdown`, a renderer inside a message (a tool card,
+ * a subagent transcript, a file preview) takes the knobs of the transcript it
+ * sits in (D10); outside one, the chat defaults.
+ */
+export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
+  const inherited = useMessageRenderContext().messageDisplay?.markdown
+  return <MarkdownRendererBody {...props} markdown={props.markdown ?? inherited} />
+})
+
+function MarkdownRendererBody({
   content,
   className,
   markdown,
@@ -341,7 +352,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       </ReactMarkdown>
     </div>
   )
-})
+}
 
 MarkdownRenderer.displayName = "MarkdownRenderer"
 

@@ -16,9 +16,10 @@
  * — an approval blocks the session, not the tab.
  */
 
-import { useEffect, useRef } from "react"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
+import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -38,6 +39,14 @@ import { transport } from "@/lib/tauri"
 import { onTransportChange } from "@/lib/tauri/transport-instance"
 import { useMessageDisplay } from "@/hooks/chat/use-message-display"
 import { getSession } from "@/lib/db/sessions"
+import { MessageRenderProvider } from "@/components/chat/message-render-context"
+import { MessageActionSheet } from "@/components/mobile/chat/message-action-sheet"
+import { RefusedHostMessages } from "@/components/chat/refused-host-messages"
+import { useRefusedHostMessages } from "@/hooks/chat/use-refused-host-messages"
+import { useStableCharacterById } from "@/hooks/data/use-stable-character-by-id"
+import { useCharacter, useCharacters } from "@/lib/data-hooks/context"
+import type { MessageRenderContextValue } from "@/lib/chat/message-render-context"
+import { withoutRefusedHostMessages } from "@/lib/chat/refused-host-message"
 import { useCompanionFusionRuns } from "@/components/router-fusion/companion/use-companion-fusion-runs"
 import { CompanionFusionRunList } from "@/components/router-fusion/companion/companion-fusion-run-view"
 
@@ -57,8 +66,34 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
   // host's own answer: its companion switch, and this device's grant.
   const fusion = useCompanionFusionRuns(sessionId)
   const session = useLiveQuery(() => getSession(sessionId), [sessionId])
+  const tCopy = useTranslations("chat.copy")
   const messageDisplay = useMessageDisplay(session?.messageDisplayOverride)
   const transcript = useTranscriptController(sessionId, remoteTranscriptSource)
+  // D10: the rows read the same characters, copy feedback and display
+  // settings as the chat, and a long press opens the message's sheet. Edit
+  // and regenerate need Host actions this view does not have yet, so they
+  // are not supplied.
+  const characterById = useStableCharacterById(useCharacters())
+  const directCharacter = useCharacter(session?.characterId) ?? null
+  const onCopy = useCallback(() => {
+    toast.success(tCopy("success"))
+  }, [tCopy])
+  const renderContext = useMemo<MessageRenderContextValue>(
+    () => ({
+      characterById,
+      directCharacter,
+      onCopy,
+      messageDisplay,
+      actionSheet: MessageActionSheet,
+    }),
+    [characterById, directCharacter, onCopy, messageDisplay]
+  )
+  // Sends the Host refused stay on this device, beside the transcript.
+  const refused = useRefusedHostMessages(sessionId)
+  const timelineItems = useMemo(
+    () => withoutRefusedHostMessages(transcript.snapshot.items, refused.hiddenIds),
+    [transcript.snapshot.items, refused.hiddenIds]
+  )
   const {
     messages,
     status,
@@ -163,9 +198,10 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
             <p className="flex-1 p-4 text-xs text-muted-foreground">{t("empty")}</p>
           ) : (
             <SessionMediaProvider sessionId={sessionId} transport={transport}>
+              <MessageRenderProvider value={renderContext}>
               <TranscriptTimelineSurface
                 sessionId={sessionId}
-                items={transcript.snapshot.items}
+                items={timelineItems}
                 expandedTurnKeys={transcript.snapshot.expandedTurnKeys}
                 getDetail={transcript.getDetail}
                 onPageTurn={(turnKey, direction) => void transcript.pageTurn(turnKey, direction)}
@@ -189,8 +225,9 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
                   loading: t("loadingTranscript"),
                   retry: t("retryTranscript"),
                 }}
-                renderAdapters={{ messageDisplay }}
               />
+              <RefusedHostMessages messages={refused.messages} />
+              </MessageRenderProvider>
             </SessionMediaProvider>
           )
               ) : (

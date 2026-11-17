@@ -172,6 +172,11 @@ jest.mock("./markdown-renderer", () => ({
         "data-test": "markdown",
         "data-project-root": projectRoot,
         "data-mentions": mentions?.map((mention) => mention.name).join(","),
+        "data-inherited-preset": (
+          jest.requireActual(
+            "./message-render-context"
+          ) as typeof import("./message-render-context")
+        ).useMessageRenderContext().messageDisplay?.preset,
         "data-document-session": ReactForMocks.useContext(
           jest.requireActual("./markdown/chat-link-options").ChatDocumentSessionContext
         ),
@@ -2278,6 +2283,54 @@ describe("mentions inside Markdown (D7)", () => {
     expect(container.querySelector('[data-test="markdown"]')?.hasAttribute("data-mentions")).toBe(
       false
     )
+  })
+})
+
+describe("the message render context (D10)", () => {
+  const { MessageRenderProvider } = jest.requireActual(
+    "./message-render-context"
+  ) as typeof import("./message-render-context")
+  const { resolveMessageDisplayOptions } = jest.requireActual(
+    "@/lib/chat/message-display"
+  ) as typeof import("@/lib/chat/message-display")
+  const characterById = new Map([
+    ["char_alice", { id: "char_alice", name: "Alice", systemPrompt: "" }],
+  ]) as unknown as Map<string, import("@cognia/agent-config-types").Character>
+  const user: UIMessage = {
+    id: "u-context",
+    role: "user",
+    parts: [{ type: "text", text: "hi @Alice" }],
+  }
+
+  it("draws a row with the characters and display settings the list supplies", () => {
+    const messageDisplay = resolveMessageDisplayOptions({ preset: "inspector" })
+    const { container } = render(
+      <MessageRenderProvider value={{ characterById, messageDisplay }}>
+        <MessageRenderer message={user} />
+      </MessageRenderProvider>
+    )
+    const markdown = container.querySelector('[data-test="markdown"]')
+    expect(markdown?.getAttribute("data-mentions")).toBe("Alice")
+    // Renderers nested in the message inherit the transcript's settings.
+    expect(markdown?.getAttribute("data-inherited-preset")).toBe("inspector")
+  })
+
+  it("lets a prop on the row win over the context", () => {
+    const { container } = render(
+      <MessageRenderProvider value={{ characterById }}>
+        <MessageRenderer message={user} characterById={new Map()} />
+      </MessageRenderProvider>
+    )
+    expect(container.querySelector('[data-test="markdown"]')?.hasAttribute("data-mentions")).toBe(
+      false
+    )
+  })
+
+  it("re-provides the resolved display settings even outside a list", () => {
+    const { container } = render(<MessageRenderer message={user} />)
+    expect(
+      container.querySelector('[data-test="markdown"]')?.getAttribute("data-inherited-preset")
+    ).toBeTruthy()
   })
 })
 

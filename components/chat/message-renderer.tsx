@@ -17,6 +17,11 @@ import { UserMessageBody } from "@/components/chat/user-message-body"
 import { entityCitation } from "@/lib/chat/mentions/selection-citations"
 import { messageRefId } from "@/lib/chat/mentions/message-reference"
 import type { MarkdownMention } from "@/components/chat/markdown/markdown-plugins"
+import { resolveMessageRenderProps } from "@/lib/chat/message-render-context"
+import {
+  MessageRenderProvider,
+  useMessageRenderContext,
+} from "@/components/chat/message-render-context"
 import { ReasoningToolRow } from "@/components/chat/message-parts/reasoning-part"
 import { resolveChatStreamdownConfig } from "@/components/chat/markdown/chat-streamdown-config"
 import {
@@ -339,7 +344,7 @@ function MessageRendererInner({
   onRewindFiles,
   projectRoot,
   messageDisplay,
-}: Props) {
+}: Props & { messageDisplay: ResolvedMessageDisplayOptions }) {
   const tActivity = useTranslations("inbox.activity.kind")
   const isWithdrawn =
     (suppliedMessage as { metadata?: Record<string, unknown> }).metadata?.deletedAt !== undefined
@@ -363,8 +368,7 @@ function MessageRendererInner({
   const showKeyboardHints = useShowKeyboardHints()
   const router = useRouter()
   // Agent invocation-flow display mode (simplified / standard / detailed).
-  const fallbackMessageDisplay = useMessageDisplay()
-  const display = messageDisplay ?? fallbackMessageDisplay
+  const display = messageDisplay
   // `all` is an explicit choice to see every bar, so a sheet does not thin it.
   const inlineActionBar =
     !actionSheetHost ||
@@ -1971,7 +1975,16 @@ export function messageAgentCatalogId(
   return (speaker ?? directCharacter ?? undefined)?.a2uiCatalogId
 }
 
-function MessageRendererWithAgentCatalog(props: Props) {
+function MessageRendererWithAgentCatalog(suppliedProps: Props) {
+  // D10: what the list shell supplies once; a prop on this row still wins.
+  const context = useMessageRenderContext()
+  const fallbackMessageDisplay = useMessageDisplay()
+  const messageDisplay =
+    suppliedProps.messageDisplay ?? context.messageDisplay ?? fallbackMessageDisplay
+  const props = { ...resolveMessageRenderProps(suppliedProps, context), messageDisplay }
+  // Renderers nested in this message (tool cards, subagent transcripts, file
+  // previews) draw with the same display settings.
+  const nested = useMemo(() => ({ messageDisplay }), [messageDisplay])
   return (
     <A2UIAgentCatalogProvider
       catalogId={messageAgentCatalogId(props.message, props.characterById, props.directCharacter)}
@@ -1981,7 +1994,9 @@ function MessageRendererWithAgentCatalog(props: Props) {
           remounts it), and replaying entrances there was a burst of fades on
           every switch and a replay on every scroll. */}
       <EntranceMotionProvider arriving={Boolean(props.isStreaming)}>
-        <MessageRendererInner {...props} />
+        <MessageRenderProvider value={nested}>
+          <MessageRendererInner {...props} />
+        </MessageRenderProvider>
       </EntranceMotionProvider>
     </A2UIAgentCatalogProvider>
   )

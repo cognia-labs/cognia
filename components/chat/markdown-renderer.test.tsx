@@ -836,3 +836,30 @@ describe("mentions", () => {
     expect(mock.lastRehypePlugins).toBe(first)
   })
 })
+
+describe("knobs inherited from the transcript (D10)", () => {
+  it("takes the context's Markdown knobs when none are passed, and a prop wins", () => {
+    const { MessageRenderProvider } = jest.requireActual(
+      "./message-render-context"
+    ) as typeof import("./message-render-context")
+    const { resolveMessageDisplayOptions } = jest.requireActual(
+      "@/lib/chat/message-display"
+    ) as typeof import("@/lib/chat/message-display")
+    const base = resolveMessageDisplayOptions()
+    const messageDisplay = { ...base, markdown: { ...base.markdown, math: false } }
+    const order = () =>
+      screen.getAllByTestId("react-markdown-config").at(-1)!.dataset.remarkOrder?.split(",")
+    const { rerender } = render(
+      <MessageRenderProvider value={{ messageDisplay }}>
+        <MarkdownRenderer content="x" />
+      </MessageRenderProvider>
+    )
+    expect(order()).toHaveLength(3)
+    rerender(
+      <MessageRenderProvider value={{ messageDisplay }}>
+        <MarkdownRenderer content="x" markdown={base.markdown} />
+      </MessageRenderProvider>
+    )
+    expect(order()).toHaveLength(4)
+  })
+})

@@ -9,6 +9,7 @@ import { PerfBoundary } from "@/lib/perf"
 import { estimateMessageHeight } from "@/lib/chat/row-height-estimate"
 import { shouldVirtualizeMessages } from "@/lib/chat/virtualization-threshold"
 import { MessageRenderer } from "./message-renderer"
+import { MessageRenderProvider } from "./message-render-context"
 import { TranscriptSessionProvider } from "./transcript-session-context"
 import { useMessageDisplay } from "@/hooks/chat/use-message-display"
 import { useStickToBottom } from "@/hooks/chat/use-stick-to-bottom"
@@ -45,6 +46,8 @@ export function TranscriptMessageList({
   const tTimeline = useTranslations("chat.timeline")
   const fallbackMessageDisplay = useMessageDisplay()
   const messageDisplay = providedMessageDisplay ?? fallbackMessageDisplay
+  // Read-only: the rows get the display settings and no actions (D10).
+  const renderContext = useMemo(() => ({ messageDisplay }), [messageDisplay])
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   // ADR-0127 §3: count OR total-text trigger, shared with the live list.
@@ -107,7 +110,6 @@ export function TranscriptMessageList({
         message={message}
         isStreaming={index === streamingRowIndex}
         isLastAssistant={message.id === lastAssistantId}
-        messageDisplay={messageDisplay}
       />
     </TranscriptSessionProvider>
   )
@@ -121,60 +123,62 @@ export function TranscriptMessageList({
   if (virtualize && liveTail) rows.push({ index: streamingRowIndex, start: 0, live: true })
 
   return (
-    <TranscriptAgentsProvider multiAgent={multiAgent}>
-      <PerfBoundary id="chat:read-only-transcript">
-        <div
-          ref={scrollRef}
-          role="log"
-          aria-label={tTimeline("scrollConversation")}
-          tabIndex={0}
-          aria-busy={status === "streaming"}
-          data-session-id={sessionId}
-          className="conversation-scroll relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
-          onScroll={handleScroll}
-        >
+    <MessageRenderProvider value={renderContext}>
+      <TranscriptAgentsProvider multiAgent={multiAgent}>
+        <PerfBoundary id="chat:read-only-transcript">
           <div
-            ref={contentRef}
-            onClickCapture={handleContentClick}
-            className="mx-auto w-full max-w-[52rem] py-5 sm:py-7"
-            data-slot="conversation-reading-column"
+            ref={scrollRef}
+            role="log"
+            aria-label={tTimeline("scrollConversation")}
+            tabIndex={0}
+            aria-busy={status === "streaming"}
+            data-session-id={sessionId}
+            className="conversation-scroll relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
+            onScroll={handleScroll}
           >
             <div
-              style={{
-                paddingTop: virtualize ? rowVirtualizer.getTotalSize() : undefined,
-                position: "relative",
-              }}
+              ref={contentRef}
+              onClickCapture={handleContentClick}
+              className="mx-auto w-full max-w-[52rem] py-5 sm:py-7"
+              data-slot="conversation-reading-column"
             >
-              {rows.map((row) => {
-                const message = messages[row.index]
-                if (!message) return null
-                return (
-                  <div
-                    key={message.id}
-                    ref={row.live ? undefined : rowVirtualizer.measureElement}
-                    data-index={row.live ? -1 : row.index}
-                    data-msg-id={message.id}
-                    className="px-3 sm:px-5"
-                    style={
-                      row.live
-                        ? undefined
-                        : {
-                            position: "absolute",
-                            top: 0,
-                            left: 0,
-                            width: "100%",
-                            transform: `translateY(${row.start}px)`,
-                          }
-                    }
-                  >
-                    {renderMessage(message, row.index)}
-                  </div>
-                )
-              })}
+              <div
+                style={{
+                  paddingTop: virtualize ? rowVirtualizer.getTotalSize() : undefined,
+                  position: "relative",
+                }}
+              >
+                {rows.map((row) => {
+                  const message = messages[row.index]
+                  if (!message) return null
+                  return (
+                    <div
+                      key={message.id}
+                      ref={row.live ? undefined : rowVirtualizer.measureElement}
+                      data-index={row.live ? -1 : row.index}
+                      data-msg-id={message.id}
+                      className="px-3 sm:px-5"
+                      style={
+                        row.live
+                          ? undefined
+                          : {
+                              position: "absolute",
+                              top: 0,
+                              left: 0,
+                              width: "100%",
+                              transform: `translateY(${row.start}px)`,
+                            }
+                      }
+                    >
+                      {renderMessage(message, row.index)}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </div>
-        </div>
-      </PerfBoundary>
-    </TranscriptAgentsProvider>
+        </PerfBoundary>
+      </TranscriptAgentsProvider>
+    </MessageRenderProvider>
   )
 }

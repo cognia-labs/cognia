@@ -13,10 +13,16 @@ const mockRefusedMessages: Array<{ id: string }> = []
 jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => mockRefusedMessages }))
 
 const surfaceProps: Array<Record<string, unknown>> = []
+// The message render context each surface render sees (D10).
+const surfaceContexts: Array<Record<string, unknown>> = []
 
 jest.mock("./transcript-timeline-surface", () => ({
-  TranscriptTimelineSurface: (props: Record<string, unknown>) => {
+  TranscriptTimelineSurface: function TranscriptTimelineSurface(props: Record<string, unknown>) {
+    const { useMessageRenderContext } = jest.requireActual(
+      "./message-render-context"
+    ) as typeof import("./message-render-context")
     surfaceProps.push(props)
+    surfaceContexts.push(useMessageRenderContext() as Record<string, unknown>)
     return <div data-testid="timeline-surface" />
   },
 }))
@@ -92,6 +98,7 @@ describe("<CompanionTranscriptMessages />", () => {
   })
   beforeEach(() => {
     surfaceProps.splice(0)
+    surfaceContexts.splice(0)
     mockTimeline.items = []
     mockTimeline.revision = null
     mockLiveReply.current = null
@@ -178,6 +185,7 @@ describe("<CompanionTranscriptMessages />", () => {
       "assistant-x",
     ])
     surfaceProps.splice(0)
+    surfaceContexts.splice(0)
     // A reply still marked streaming once the Host says the turn ended is stale.
     mockLiveReply.current = liveReply("streaming")
     render(
@@ -201,10 +209,8 @@ describe("<CompanionTranscriptMessages />", () => {
       />
     )
 
-    expect(surfaceProps[0]?.renderAdapters).toMatchObject({
-      onRegenerate: undefined,
-      onEditResend: undefined,
-    })
+    expect(surfaceContexts[0]?.onRegenerate).toBeUndefined()
+    expect(surfaceContexts[0]?.onEditResend).toBeUndefined()
   })
 
   it("wires the bounded transcript surface with active-turn messages and local actions", () => {
@@ -232,11 +238,16 @@ describe("<CompanionTranscriptMessages />", () => {
       "u2",
       "a2",
     ])
-    expect(surfaceProps[0]?.renderAdapters).toMatchObject({
+    const context = surfaceContexts[0]!
+    expect(context).toMatchObject({
       onCopy,
       onRegenerate,
       onEditResend,
       messageDisplay: { preset: "focused" },
     })
+    // Only rows in the synced tail may change.
+    const canMutate = context.canMutate as (id: string, kind: string) => boolean
+    expect(canMutate("a2", "edit")).toBe(true)
+    expect(canMutate("not-synced", "edit")).toBe(false)
   })
 })

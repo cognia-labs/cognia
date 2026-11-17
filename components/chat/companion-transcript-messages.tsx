@@ -1,7 +1,6 @@
 "use client"
 
 import { useMemo } from "react"
-import { useLiveQuery } from "dexie-react-hooks"
 import { useTranslations } from "next-intl"
 import type { UIMessage } from "ai"
 import type { Character } from "@cognia/agent-config-types"
@@ -10,16 +9,14 @@ import { SessionMediaProvider } from "@/hooks/chat/session-media-provider"
 import { useTranscriptController } from "@/hooks/chat/use-transcript-controller"
 import { useTranscriptLiveTurn } from "@/hooks/chat/use-transcript-live-turn"
 import { withLiveTurn } from "@/lib/chat/transcript/live-turn-view"
-import { getDb } from "@/lib/db/schema"
-import {
-  refusedHostMessageOf,
-  withoutRefusedHostMessages,
-  isHostEnqueuePlaceholder,
-} from "@/lib/chat/refused-host-message"
+import { useRefusedHostMessages } from "@/hooks/chat/use-refused-host-messages"
+import { withoutRefusedHostMessages } from "@/lib/chat/refused-host-message"
 import { useStableCharacterById } from "@/hooks/data/use-stable-character-by-id"
 import { createRemoteTranscriptSource } from "@/lib/chat/transcript/source"
 import { useCharacters } from "@/lib/data-hooks/context"
 import { onTransportChange, transport } from "@/lib/tauri/transport-instance"
+import { MessageRenderProvider } from "@/components/chat/message-render-context"
+import type { MessageRenderContextValue } from "@/lib/chat/message-render-context"
 import { TranscriptTimelineSurface } from "./transcript-timeline-surface"
 import { RefusedHostMessages } from "./refused-host-messages"
 import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
@@ -80,30 +77,8 @@ export function CompanionTranscriptMessages({
 }: CompanionTranscriptMessagesProps) {
   const t = useTranslations("chat.transcript")
   const transcript = useTranscriptController(sessionId, companionTranscriptSource)
-  const refusedMessages = useLiveQuery(
-    async () => {
-      const db = getDb()
-      const retained = await db.messages
-        .where("sessionId")
-        .equals(sessionId)
-        .filter((message) => refusedHostMessageOf(message) !== null)
-        .sortBy("createdAt")
-      const originals = await db.messages.bulkGet(
-        retained.map((message) => refusedHostMessageOf(message)?.messageId ?? message.id)
-      )
-      return retained.filter(
-        (message, index) =>
-          !originals[index] ||
-          originals[index]?.id === message.id ||
-          isHostEnqueuePlaceholder(
-            originals[index],
-            (message.metadata?.hostState as { actionId?: unknown } | undefined)?.actionId
-          )
-      )
-    },
-    [sessionId],
-    []
-  )
+  const refused = useRefusedHostMessages(sessionId)
+  const refusedMessages = refused.messages
   const characterById = useStableCharacterById(useCharacters())
   const messageDisplay = useMessageDisplay(messageDisplayOverride)
   // A member agent's reply arrives live from the person brain (P6e), never
@@ -121,64 +96,75 @@ export function CompanionTranscriptMessages({
   const view = useMemo(
     () =>
       withLiveTurn({
-        items: withoutRefusedHostMessages(
-          transcript.snapshot.items,
-          new Set(
-            refusedMessages.map((message) => refusedHostMessageOf(message)?.messageId ?? message.id)
-          )
-        ),
+        items: withoutRefusedHostMessages(transcript.snapshot.items, refused.hiddenIds),
         tail: selectActiveTurnMessages(messages, drawnReply ? "streaming" : status),
         live: drawnReply,
       }),
-    [transcript.snapshot.items, messages, status, drawnReply, refusedMessages]
+    [transcript.snapshot.items, messages, status, drawnReply, refused.hiddenIds]
   )
   const liveMessages = view.liveMessages
   const mutableMessageIds = useMemo(
     () => new Set(messages.map((message) => message.id)),
     [messages]
   )
+  // Only rows in this device's writable window (the synced tail) may change.
+  const renderContext = useMemo<MessageRenderContextValue>(
+    () => ({
+      characterById,
+      directCharacter,
+      onCopy,
+      onRegenerate,
+      onEditResend,
+      onRewindFiles,
+      projectRoot,
+      messageDisplay,
+      canMutate: (messageId) => mutableMessageIds.has(messageId),
+    }),
+    [
+      characterById,
+      directCharacter,
+      onCopy,
+      onRegenerate,
+      onEditResend,
+      onRewindFiles,
+      projectRoot,
+      messageDisplay,
+      mutableMessageIds,
+    ]
+  )
 
   return (
     <SessionMediaProvider sessionId={sessionId} transport={transport}>
-      <TranscriptTimelineSurface
-        sessionId={sessionId}
-        items={view.items}
-        expandedTurnKeys={transcript.snapshot.expandedTurnKeys}
-        getDetail={transcript.getDetail}
-        onPageTurn={(turnKey, direction) => void transcript.pageTurn(turnKey, direction)}
-        loadingTurnKeys={transcript.snapshot.loadingTurnKeys}
-        onExpand={(turnKey, revision, detailRevision) => {
-          void transcript.expandTurn(turnKey, revision, detailRevision)
-        }}
-        onCollapse={transcript.collapseTurn}
-        onLoadOlder={() => void transcript.loadOlder()}
-        onRetry={() => void transcript.retry()}
-        hasMore={transcript.snapshot.hasMore}
-        loading={transcript.snapshot.loading}
-        loadingOlder={transcript.snapshot.loadingOlder}
-        error={transcript.snapshot.error}
-        liveMessages={liveMessages}
-        liveStatus={status}
-        labels={{
-          expand: t("expandTurn"),
-          collapse: t("collapseTurn"),
-          loadingOlder: t("loadingOlder"),
-          loading: t("loading"),
-          retry: t("retry"),
-        }}
-        renderAdapters={{
-          characterById,
-          directCharacter,
-          onCopy,
-          onRegenerate,
-          onEditResend,
-          onRewindFiles,
-          projectRoot,
-          mutableMessageIds,
-          messageDisplay,
-        }}
-      />
-      <RefusedHostMessages messages={refusedMessages} />
+      <MessageRenderProvider value={renderContext}>
+        <TranscriptTimelineSurface
+          sessionId={sessionId}
+          items={view.items}
+          expandedTurnKeys={transcript.snapshot.expandedTurnKeys}
+          getDetail={transcript.getDetail}
+          onPageTurn={(turnKey, direction) => void transcript.pageTurn(turnKey, direction)}
+          loadingTurnKeys={transcript.snapshot.loadingTurnKeys}
+          onExpand={(turnKey, revision, detailRevision) => {
+            void transcript.expandTurn(turnKey, revision, detailRevision)
+          }}
+          onCollapse={transcript.collapseTurn}
+          onLoadOlder={() => void transcript.loadOlder()}
+          onRetry={() => void transcript.retry()}
+          hasMore={transcript.snapshot.hasMore}
+          loading={transcript.snapshot.loading}
+          loadingOlder={transcript.snapshot.loadingOlder}
+          error={transcript.snapshot.error}
+          liveMessages={liveMessages}
+          liveStatus={status}
+          labels={{
+            expand: t("expandTurn"),
+            collapse: t("collapseTurn"),
+            loadingOlder: t("loadingOlder"),
+            loading: t("loading"),
+            retry: t("retry"),
+          }}
+        />
+        <RefusedHostMessages messages={refusedMessages} />
+      </MessageRenderProvider>
     </SessionMediaProvider>
   )
 }

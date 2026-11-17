@@ -4,6 +4,7 @@ import { memo, useMemo } from "react"
 
 import { MessageResponse } from "@/components/ai-elements/message"
 import { createStreamingComponents } from "@/components/chat/streaming-text-part"
+import { useMessageRenderContext } from "@/components/chat/message-render-context"
 import { useMessageDisplay } from "@/hooks/chat/use-message-display"
 import { cn } from "@/lib/utils"
 
@@ -26,8 +27,10 @@ export const ChatMarkdownResponse = memo(function ChatMarkdownResponse({
   /** True while the text is still arriving. */
   isAnimating?: boolean
 }) {
+  // Inside a message it draws with that transcript's knobs (D10).
+  const inherited = useMessageRenderContext().messageDisplay?.markdown
   const display = useMessageDisplay()
-  const streamdown = resolveChatStreamdownConfig(display.markdown)
+  const streamdown = resolveChatStreamdownConfig(inherited ?? display.markdown)
   const { config } = streamdown
   const components = useMemo(
     () => createStreamingComponents(null, isAnimating, undefined, true),

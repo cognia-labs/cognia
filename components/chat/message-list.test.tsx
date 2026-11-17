@@ -122,11 +122,22 @@ jest.mock("@/hooks/shortcuts/use-app-shortcut", () => ({
 
 jest.mock("./message-renderer", () => {
   return {
-    MessageRenderer: (props: {
+    MessageRenderer: (supplied: {
       message: { id: string; parts: { text?: string }[] }
       projectRoot?: string
       messageDisplay?: unknown
     }) => {
+      // What the real renderer draws with: its props over the list's context (D10).
+      const { useMessageRenderContext } = jest.requireActual(
+        "./message-render-context"
+      ) as typeof import("./message-render-context")
+      const { resolveMessageRenderProps } = jest.requireActual(
+        "@/lib/chat/message-render-context"
+      ) as typeof import("@/lib/chat/message-render-context")
+      const props = resolveMessageRenderProps(
+        supplied as Parameters<typeof resolveMessageRenderProps>[0],
+        useMessageRenderContext()
+      ) as typeof supplied
       messageRendererProps.push(props)
       selectionHosts.push(
         // eslint-disable-next-line @typescript-eslint/no-require-imports

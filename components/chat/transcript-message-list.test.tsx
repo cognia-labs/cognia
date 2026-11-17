@@ -20,7 +20,15 @@ jest.mock("./message-renderer", () => ({
     messageDisplay?: unknown
   }) => {
     renderedMessageIds.push(message.id)
-    renderedMessageDisplays.push(messageDisplay)
+    // The list supplies display settings through the context (D10).
+    renderedMessageDisplays.push(
+      messageDisplay ??
+        (
+          jest.requireActual(
+            "./message-render-context"
+          ) as typeof import("./message-render-context")
+        ).useMessageRenderContext().messageDisplay
+    )
     return (
       <div
         tabIndex={0}

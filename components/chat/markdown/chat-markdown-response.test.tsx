@@ -66,3 +66,20 @@ it("streams while the text is still arriving", () => {
     isAnimating: true,
   })
 })
+
+it("draws with the knobs of the transcript it sits in (D10)", () => {
+  const { MessageRenderProvider } = jest.requireActual(
+    "@/components/chat/message-render-context"
+  ) as typeof import("@/components/chat/message-render-context")
+  const transcript = { markdown: { math: false } }
+  render(
+    <MessageRenderProvider value={{ messageDisplay: transcript as never }}>
+      <ChatMarkdownResponse>{"see \\[x\\]"}</ChatMarkdownResponse>
+    </MessageRenderProvider>
+  )
+  expect(mockMessageResponse.mock.calls.at(-1)?.[0].plugins).toBe(
+    resolveChatStreamdownConfig(transcript.markdown as never).plugins
+  )
+  // Math is off in this transcript, so the delimiters are left alone.
+  expect(screen.getByTestId("response")).toHaveTextContent("see \\[x\\]")
+})

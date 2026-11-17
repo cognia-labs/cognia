@@ -1,12 +1,20 @@
 "use client"
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { UIMessage } from "ai"
 import { useTranslations } from "next-intl"
 import type { TranscriptTurnDetail } from "@/lib/chat/transcript/controller"
 import type {
-  Character,
   TranscriptMessage,
   TranscriptMessagePreview,
   TranscriptTimelineItem,
@@ -20,8 +28,13 @@ import { useSettingsStore } from "@/stores/settings"
 import { PerfBoundary } from "@/lib/perf"
 import type { TranscriptRenderStatus } from "./transcript-message-list"
 import { MessageRenderer } from "./message-renderer"
-import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
-import type { ResolvedMessageDisplayOptions } from "@/lib/chat/message-display"
+import { MessageRenderProvider, useMessageRenderContext } from "./message-render-context"
+import type {
+  MessageMutationKind,
+  MessageRenderContextValue,
+} from "@/lib/chat/message-render-context"
+import { LongPress } from "@/components/interactions/long-press"
+import { selectionFeedback } from "@/lib/capacitor/haptics"
 import { assistantAgentKey, hasMultipleAgentKeys } from "@/lib/chat/transcript-agents"
 import { TranscriptAgentsProvider } from "@/components/chat/transcript-agents-context"
 import { chatColumnClass } from "./chat-column"
@@ -55,22 +68,6 @@ export interface TranscriptTimelineSurfaceProps {
   liveMessages: UIMessage[]
   liveStatus: TranscriptRenderStatus
   labels: TranscriptTimelineLabels
-  renderAdapters?: {
-    characterById?: Map<string, Character>
-    directCharacter?: Character | null
-    onCopy?: () => void
-    onRegenerate?: () => void | Promise<void>
-    onEditResend?: (messageId: string, newText: string) => void | Promise<void>
-    onRewindFiles?: (
-      sessionId: string,
-      checkpointId: string,
-      dryRun: boolean
-    ) => Promise<RewindFilesResult>
-    projectRoot?: string | null
-    /** Mutations are exposed only for rows present in the caller's writable window. */
-    mutableMessageIds?: ReadonlySet<string>
-    messageDisplay?: ResolvedMessageDisplayOptions
-  }
 }
 
 function previewMessage(preview: TranscriptMessagePreview, sessionId: string): UIMessage {
@@ -114,38 +111,66 @@ function fullMessage(message: TranscriptMessage): UIMessage {
   }
 }
 
+/** Rows that may be edited but not regenerated: history before the newest turn. */
+const NO_REGENERATE: MessageRenderContextValue = {
+  canMutate: (_messageId, kind) => kind !== "regenerate",
+}
+const UNCHANGED: MessageRenderContextValue = {}
+
+/**
+ * Where regenerate is allowed for a group of rows. Always the same provider,
+ * so a group losing the permission (a live turn started below it) re-renders
+ * its rows instead of remounting them, and only when there was a regenerate
+ * to take away.
+ */
+function RegenerateScope({ allow, children }: { allow: boolean; children: ReactNode }) {
+  const { onRegenerate } = useMessageRenderContext()
+  return (
+    <MessageRenderProvider value={!allow && onRegenerate ? NO_REGENERATE : UNCHANGED}>
+      {children}
+    </MessageRenderProvider>
+  )
+}
+
+/** A long press on a row, and whether that row may be regenerated from the sheet. */
+type RowLongPress = (message: UIMessage, options: { regenerate: boolean }) => void
+
 function renderMessages(
   messages: UIMessage[],
   streaming = false,
-  adapters?: TranscriptTimelineSurfaceProps["renderAdapters"],
-  allowRegenerate = false
+  allowRegenerate = false,
+  onLongPress?: RowLongPress
 ) {
   const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant")?.id
-  return messages.map((message, index) => (
-    <MessageRenderer
-      key={message.id}
-      message={message}
-      isStreaming={streaming && index === messages.length - 1 && message.role === "assistant"}
-      isLastAssistant={message.id === lastAssistant}
-      characterById={adapters?.characterById}
-      directCharacter={adapters?.directCharacter}
-      onCopy={adapters?.onCopy}
-      onRegenerate={
-        allowRegenerate &&
-        (!adapters?.mutableMessageIds || adapters.mutableMessageIds.has(message.id))
-          ? adapters?.onRegenerate
-          : undefined
-      }
-      onEditResend={
-        !adapters?.mutableMessageIds || adapters.mutableMessageIds.has(message.id)
-          ? adapters?.onEditResend
-          : undefined
-      }
-      onRewindFiles={adapters?.onRewindFiles}
-      projectRoot={adapters?.projectRoot}
-      messageDisplay={adapters?.messageDisplay}
-    />
-  ))
+  const rows = messages.map((message, index) => {
+    const isStreaming = streaming && index === messages.length - 1 && message.role === "assistant"
+    const row = (
+      <MessageRenderer
+        key={message.id}
+        message={message}
+        isStreaming={isStreaming}
+        isLastAssistant={message.id === lastAssistant}
+      />
+    )
+    if (!onLongPress) return row
+    return (
+      <LongPress
+        key={message.id}
+        // A long press opens the message's sheet, so it must not also select a
+        // word and raise the system's copy menu over it.
+        className="select-none [-webkit-touch-callout:none]"
+        onLongPress={() => {
+          void selectionFeedback()
+          onLongPress(message, {
+            regenerate: allowRegenerate && !isStreaming && message.id === lastAssistant,
+          })
+        }}
+      >
+        {row}
+      </LongPress>
+    )
+  })
+  return <RegenerateScope allow={allowRegenerate}>{rows}</RegenerateScope>
 }
 
 function collapsedMessages(item: Extract<TranscriptTimelineItem, { kind: "completed-turn" }>) {
@@ -159,6 +184,14 @@ function collapsedMessages(item: Extract<TranscriptTimelineItem, { kind: "comple
 
 export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps) {
   const tTimeline = useTranslations("chat.timeline")
+  const render = useMessageRenderContext()
+  // The long-press sheet (phone shells, D10): which row it is open for, and
+  // whether that row may be regenerated.
+  const [sheet, setSheet] = useState<{ message: UIMessage; regenerate: boolean } | null>(null)
+  const onLongPress = useCallback<RowLongPress>(
+    (message, { regenerate }) => setSheet({ message, regenerate }),
+    []
+  )
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -288,6 +321,7 @@ export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps)
                 props={props}
                 scrollRef={scrollRef}
                 newestCompletedItemKey={newestCompletedItemKey}
+                onLongPress={render.actionSheet ? onLongPress : undefined}
               />
             </div>
           </div>
@@ -309,8 +343,59 @@ export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps)
             </div>
           ) : null}
         </div>
+        {render.actionSheet ? (
+          <TimelineActionSheet sheet={sheet} idle={!live} onClose={() => setSheet(null)} />
+        ) : null}
       </PerfBoundary>
     </TranscriptAgentsProvider>
+  )
+}
+
+/**
+ * The phone's long-press sheet for a timeline row: copy, select and read
+ * aloud always; edit and regenerate where the transcript's `canMutate` allows
+ * and no turn is in flight.
+ */
+function TimelineActionSheet({
+  sheet,
+  idle,
+  onClose,
+}: {
+  sheet: { message: UIMessage; regenerate: boolean } | null
+  idle: boolean
+  onClose: () => void
+}) {
+  const render = useMessageRenderContext()
+  const Sheet = render.actionSheet
+  const message = sheet?.message ?? null
+  const allows = (kind: MessageMutationKind) =>
+    message !== null && (render.canMutate ? render.canMutate(message.id, kind) : true)
+  const senderId = (message as { metadata?: { senderId?: string } } | null)?.metadata?.senderId
+  const onEditResend = render.onEditResend
+  if (!Sheet) return null
+  return (
+    <Sheet
+      message={message}
+      messageMotion={render.messageDisplay?.motion}
+      // Same speaker resolution as the renderer: team sender first, then the
+      // session's 1:1 character (the read-aloud voice).
+      character={
+        (senderId ? render.characterById?.get(senderId) : null) ?? render.directCharacter ?? null
+      }
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+      onRegenerate={
+        render.onRegenerate && sheet?.regenerate && idle && allows("regenerate")
+          ? render.onRegenerate
+          : undefined
+      }
+      onEditResend={
+        onEditResend && message?.role === "user" && idle && allows("edit")
+          ? (target, text) => onEditResend(target.id, text)
+          : undefined
+      }
+    />
   )
 }
 
@@ -324,10 +409,12 @@ function TimelineRows({
   props,
   scrollRef,
   newestCompletedItemKey,
+  onLongPress,
 }: {
   props: TranscriptTimelineSurfaceProps
   scrollRef: RefObject<HTMLDivElement | null>
   newestCompletedItemKey: string | undefined
+  onLongPress?: RowLongPress
 }) {
   const rowCount = props.items.length + (props.liveMessages.length > 0 ? 1 : 0)
   const getItemKey = useCallback(
@@ -347,9 +434,10 @@ function TimelineRows({
     // reading, corrected in the same render that adds the rows.
     anchorTo: "end",
   })
+  const { messageDisplay } = useMessageRenderContext()
   useEffect(() => {
     if (typeof virtualizer.measure === "function") virtualizer.measure()
-  }, [props.renderAdapters?.messageDisplay, virtualizer])
+  }, [messageDisplay, virtualizer])
 
   return (
     <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
@@ -368,8 +456,8 @@ function TimelineRows({
               renderMessages(
                 props.liveMessages,
                 props.liveStatus === "streaming",
-                props.renderAdapters,
-                true
+                true,
+                onLongPress
               )
             ) : item ? (
               <TranscriptTimelineRow
@@ -383,7 +471,7 @@ function TimelineRows({
                     ? props.getDetail(item.turnKey)
                     : undefined
                 }
-                adapters={props.renderAdapters}
+                onLongPress={onLongPress}
                 allowRegenerate={
                   item.itemKey === newestCompletedItemKey && props.liveMessages.length === 0
                 }
@@ -410,7 +498,7 @@ function TranscriptTimelineRow({
   sessionId,
   expanded,
   detail,
-  adapters,
+  onLongPress,
   allowRegenerate,
   labels,
   onExpand,
@@ -422,7 +510,7 @@ function TranscriptTimelineRow({
   sessionId: string
   expanded: boolean
   detail?: TranscriptTurnDetail
-  adapters: TranscriptTimelineSurfaceProps["renderAdapters"]
+  onLongPress?: RowLongPress
   allowRegenerate: boolean
   labels: TranscriptTimelineLabels
   onExpand: TranscriptTimelineSurfaceProps["onExpand"]
@@ -441,11 +529,11 @@ function TranscriptTimelineRow({
   }, [item, detail, sessionId])
 
   if (item.kind !== "completed-turn") {
-    return renderMessages(messages, item.kind === "active-turn", adapters)
+    return renderMessages(messages, item.kind === "active-turn", false, onLongPress)
   }
   return (
     <div data-turn-key={item.turnKey}>
-      {renderMessages(messages, false, adapters, allowRegenerate)}
+      {renderMessages(messages, false, allowRegenerate, onLongPress)}
       {expanded && !detail ? (
         <p className="py-2 text-xs text-muted-foreground">{labels.loading}</p>
       ) : null}

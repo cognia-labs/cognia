@@ -26,8 +26,43 @@ jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 const timelineSurfaceMock = jest.fn((..._args: unknown[]) => (
   <div data-testid="remote-timeline-surface" />
 ))
+// The context each surface render sees, as its rows would read it.
+const renderContexts: Array<Record<string, unknown>> = []
 jest.mock("@/components/chat/transcript-timeline-surface", () => ({
-  TranscriptTimelineSurface: (props: unknown) => timelineSurfaceMock(props),
+  TranscriptTimelineSurface: function TranscriptTimelineSurface(props: unknown) {
+    const { useMessageRenderContext } = jest.requireActual(
+      "@/components/chat/message-render-context"
+    ) as typeof import("@/components/chat/message-render-context")
+    renderContexts.push(useMessageRenderContext() as Record<string, unknown>)
+    return timelineSurfaceMock(props)
+  },
+}))
+
+const alice = { id: "char_alice", name: "Alice", systemPrompt: "" }
+const host = { id: "char_host", name: "Host agent", systemPrompt: "" }
+jest.mock("@/lib/data-hooks/context", () => ({
+  useCharacters: () => [alice],
+  useCharacter: (id: string | null | undefined) => (id === "char_host" ? host : undefined),
+}))
+
+const refusedMock = jest.fn(() => ({ messages: [] as unknown[], hiddenIds: new Set<string>() }))
+jest.mock("@/hooks/chat/use-refused-host-messages", () => ({
+  useRefusedHostMessages: () => refusedMock(),
+}))
+jest.mock("@/components/chat/refused-host-messages", () => ({
+  RefusedHostMessages: ({ messages }: { messages: Array<{ id: string }> }) => (
+    <div data-testid="refused-host-messages">{messages.map((message) => message.id).join(",")}</div>
+  ),
+}))
+
+const toastSuccess = jest.fn()
+jest.mock("sonner", () => ({
+  toast: Object.assign(jest.fn(), {
+    success: (...args: unknown[]) => toastSuccess(...args),
+    error: jest.fn(),
+    warning: jest.fn(),
+    info: jest.fn(),
+  }),
 }))
 
 const transcriptControllerMock = jest.fn()
@@ -250,7 +285,9 @@ describe("<RemoteSessionDetail />", () => {
     expect(timelineSurfaceMock.mock.calls.at(-1)?.[0]).toMatchObject({
       liveMessages: messages,
       liveStatus: "streaming",
-      renderAdapters: { messageDisplay: { preset: "balanced", motion: "restrained" } },
+    })
+    expect(renderContexts.at(-1)).toMatchObject({
+      messageDisplay: { preset: "balanced", motion: "restrained" },
     })
   })
 
@@ -567,6 +604,54 @@ describe("<RemoteSessionDetail />", () => {
         label: "Router + Fusion Panel run",
       })
       expect(stream.send).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("message render context (D10)", () => {
+    const timeline = (items: unknown[] = []) => ({
+      ...transcriptControllerMock(),
+      snapshot: { ...transcriptControllerMock().snapshot, mode: "timeline", items },
+    })
+
+    it("gives the rows the chat's characters, copy feedback and long-press sheet", async () => {
+      liveQueryMock.mockReturnValue({ characterId: "char_host" })
+      transcriptControllerMock.mockReturnValue(timeline([{ itemKey: "a" }]))
+      streamMock.mockReturnValue(baseStream({ status: "idle" }))
+      renderContexts.length = 0
+      render(<RemoteSessionDetail sessionId="s1" />)
+
+      const context = renderContexts.at(-1)!
+      expect((context.characterById as Map<string, unknown>).get("char_alice")).toBe(alice)
+      expect(context.directCharacter).toBe(host)
+      const { MessageActionSheet } = jest.requireActual(
+        "@/components/mobile/chat/message-action-sheet"
+      ) as typeof import("@/components/mobile/chat/message-action-sheet")
+      expect(context.actionSheet).toBe(MessageActionSheet)
+      ;(context.onCopy as () => void)()
+      expect(toastSuccess).toHaveBeenCalled()
+      // No Host action backs these on this view yet: not offered, not inert.
+      expect(context.onRegenerate).toBeUndefined()
+      expect(context.onEditResend).toBeUndefined()
+    })
+
+    it("keeps refused sends beside the timeline and out of it", () => {
+      const turn = (id: string) => ({
+        kind: "completed-turn",
+        itemKey: id,
+        turnKey: id,
+        userMessages: [{ id: `m-${id}`, role: "user", text: id, createdAt: 1 }],
+      })
+      transcriptControllerMock.mockReturnValue(timeline([turn("kept"), turn("refused")]))
+      streamMock.mockReturnValue(baseStream({ status: "idle" }))
+      refusedMock.mockReturnValue({
+        messages: [{ id: "host-state-refused:x" }],
+        hiddenIds: new Set(["m-refused"]),
+      })
+      render(<RemoteSessionDetail sessionId="s1" />)
+      expect(screen.getByTestId("refused-host-messages")).toHaveTextContent("host-state-refused:x")
+      const props = timelineSurfaceMock.mock.calls.at(-1)?.[0] as { items: Array<{ itemKey: string }> }
+      expect(props.items.map((item) => item.itemKey)).toEqual(["kept"])
+      refusedMock.mockReturnValue({ messages: [], hiddenIds: new Set() })
     })
   })
 })
