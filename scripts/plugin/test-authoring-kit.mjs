@@ -194,12 +194,29 @@ try {
       ])
       .filter(([name]) => !dependencies[name])
   )
+  // The proof type-checks published declarations (`skipLibCheck: false`), so a
+  // type-only transitive that ships a newer release can break a dependency's
+  // own .d.ts: csstype 3.2.4 made framer-motion 13.5.1's MotionStyle extend two
+  // incompatible types. Pin those to the one version the Host lock resolves, as
+  // the patched transitives above are, so the proof checks the kit rather than
+  // whatever the registry published since.
+  const hostPackages = Object.keys(
+    yaml.parse(fs.readFileSync(path.join(ROOT, "pnpm-lock.yaml"), "utf8")).packages ?? {}
+  )
+  const lockedTypeTransitives = Object.fromEntries(
+    ["csstype"].flatMap((name) => {
+      const versions = hostPackages
+        .filter((key) => key.startsWith(`${name}@`))
+        .map((key) => key.slice(name.length + 1))
+      return versions.length === 1 && !dependencies[name] ? [[name, versions[0]]] : []
+    })
+  )
   write(
     "pnpm-workspace.yaml",
     yaml.stringify({
       packages: ["."],
       patchedDependencies,
-      overrides: { ...workspace.overrides, ...patchedTransitives },
+      overrides: { ...workspace.overrides, ...patchedTransitives, ...lockedTypeTransitives },
       catalog: workspace.catalog,
     })
   )
