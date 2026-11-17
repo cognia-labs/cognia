@@ -78,6 +78,14 @@ export const TOOL_STATE_STATUS_KEY: Record<ToolUIPart["state"], string> = {
   "output-error": "error",
 }
 
+/**
+ * The result meta at a row's end ("3 lines", "+2 −1", an error's first line).
+ * It may shrink, and never past 45% of the row: a long error used to keep its
+ * whole width and squeeze the call's target down to a few letters, worst in a
+ * subagent's narrower nested list. The target is what names the call.
+ */
+export const TOOL_ROW_META_CLASS = "min-w-0 max-w-[45%] truncate text-[11px]"
+
 /** The breathing status dot every tool row leads with. */
 export const ToolStatusDot = memo(function ToolStatusDot({
   status,

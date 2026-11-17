@@ -1,6 +1,5 @@
 import {
   coerceResultText,
-  describeRunningProgress,
   describeToolResult,
   diffCounts,
   resultErrorPreview,
@@ -214,37 +213,12 @@ describe("describeToolResult", () => {
   })
 })
 
-describe("describeRunningProgress", () => {
-  it("reports live line/byte size while a tool streams output", () => {
-    expect(
-      describeRunningProgress(tool("tool-Bash", { state: "input-available", output: "a\nb\nc" }))
-    ).toEqual({ lines: 3, bytes: 5 })
-  })
-
-  it("coerces object stdout/stderr shapes via coerceResultText", () => {
-    const progress = describeRunningProgress(
-      tool("tool-Bash", { state: "input-available", output: { stdout: "x", stderr: "y" } as never })
-    )
-    // JSON-stringified object is one line of text.
-    expect(progress?.lines).toBe(1)
-  })
-
-  it("returns null when not running or with no streamed output yet", () => {
-    expect(
-      describeRunningProgress(tool("tool-Bash", { state: "output-available", output: "x" }))
-    ).toBeNull()
-    expect(describeRunningProgress(tool("tool-Bash", { state: "input-available" }))).toBeNull()
-    expect(
-      describeRunningProgress(tool("tool-Bash", { state: "input-available", output: "" }))
-    ).toBeNull()
-  })
-})
-
 describe("large-result summary semantics", () => {
   it.each(["", "\n", "a\n", "a\r\n\r\nb", " \t\n\u00a0\n\ufeff\n", "a\u2028b\n\u200b\n"])(
-    "retains raw and nonblank line counts for %p",
+    "counts editor lines and nonblank lines for %p",
     (output) => {
-      const rawCount = output ? output.split("\n").length : 0
+      // An editor's count: a trailing newline ends the last line.
+      const rawCount = output ? output.split("\n").length - (output.endsWith("\n") ? 1 : 0) : 0
       const nonblankCount = output.split("\n").filter((line) => line.trim().length > 0).length
       expect(
         (describeToolResult(tool("tool-Read", { output })) as { count?: number } | null)?.count ?? 0
@@ -252,9 +226,6 @@ describe("large-result summary semantics", () => {
       expect(
         (describeToolResult(tool("tool-Grep", { output })) as { count?: number } | null)?.count ?? 0
       ).toBe(nonblankCount)
-      expect(
-        describeRunningProgress(tool("tool-Bash", { state: "input-available", output }))?.lines ?? 0
-      ).toBe(rawCount)
     }
   )
   it("keeps the first nonblank error line and ignores a large hidden trace", () => {
@@ -263,7 +234,7 @@ describe("large-result summary semantics", () => {
     expect(resultErrorPreview([{ text: " \n" }, { text: "failure\n" + tail }])).toBe("failure")
     expect(resultErrorPreview("\u00a0\n\ufeff")).toBe("")
   })
-  it("retains MCP text joining, fallback JSON, and UTF-16 progress length", () => {
+  it("retains MCP text joining and fallback JSON", () => {
     const output = [
       { text: "a\n" },
       { text: "" },
@@ -272,9 +243,6 @@ describe("large-result summary semantics", () => {
     ]
     expect(describeToolResult(tool("tool-Read", { output }))).toMatchObject({ count: 4 })
     expect(describeToolResult(tool("tool-Grep", { output }))).toMatchObject({ count: 2 })
-    expect(
-      describeRunningProgress(tool("tool-Bash", { state: "input-available", output }))
-    ).toEqual({ lines: 4, bytes: 6 })
     expect(describeToolResult(tool("tool-Read", { output: { stdout: "a\nb" } }))).toMatchObject({
       count: 1,
     })

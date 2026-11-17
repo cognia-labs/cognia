@@ -5,9 +5,8 @@
  * with no card chrome of its own.
  *
  * This is the single place that decides how a tool's input/output is rendered,
- * shared by both display shapes so they can never drift:
- *  - standard / detailed — `message-renderer` wraps it in `<Tool>` + `<ToolHeader>`
- *  - simplified          — `ToolCallRow` nests it under the collapsed row
+ * shared by every row so they can never drift: the structured row nests it
+ * under itself, and the Bash and file rows fall back to it.
  *
  * Before this existed the row re-implemented a *subset* of the card's routing
  * (structured MCP card → generic body), which silently dropped the terminal
@@ -19,7 +18,7 @@
  *  1. failed call    → parameters + parsed error trace
  *  2. Bash           → live terminal / structured stdout + "run in dock"
  *  3. file tools     → bare Read/Write/Edit/Grep/Glob/LS/NotebookEdit bodies
- *                     (the row chrome lives in `FileToolPart` / `ToolCallRow`)
+ *                     (the row chrome lives in `FileToolPart`)
  *  4. dedicated card → built-in or plugin-contributed `MCPToolCard`
  *  5. A2UI payload   → interactive surface
  *  6. anything else  → MCP content blocks, or the stringified `ToolBody`

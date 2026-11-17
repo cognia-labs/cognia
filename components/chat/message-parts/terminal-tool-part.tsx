@@ -15,8 +15,8 @@
  * falling back to the generic card for `output-error`.
  *
  * The body is exported separately as {@link TerminalToolBody} for the body
- * slots that already provide their own collapse (`ToolCallRow` in simplified
- * mode, the generic card in `ToolDetailBody`) — there it renders the command
+ * slots that already provide their own collapse (the generic card in
+ * `ToolDetailBody`) — there it renders the command
  * echo + output + run-in-dock affordance with no second collapse.
  */
 
@@ -33,6 +33,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Button } from "@/components/ui/button"
 import { ToolSemanticBadges } from "@/components/chat/message-parts/tool-semantic-badges"
 import {
+  TOOL_ROW_META_CLASS,
   TOOL_STATE_STATUS_KEY,
   InlineCopyButton,
   TOOL_ROW_SCROLL_TEXT_CLASS,
@@ -390,9 +391,10 @@ export const TerminalToolPart = memo(function TerminalToolPart({
             {meta ? (
               <span
                 className={cn(
-                  "shrink-0 truncate text-[11px]",
+                  TOOL_ROW_META_CLASS,
                   meta.isError ? "text-destructive" : "text-muted-foreground"
                 )}
+                title={meta.text}
               >
                 {meta.text}
               </span>

@@ -36,14 +36,19 @@ const DIFF_TOOLS = new Set([
   "apply_patch",
 ])
 
-/** Count lines in a block of text; an empty string is zero lines (not one). */
-function countLines(text: string): number {
+/**
+ * Count the lines of a block of text the way an editor numbers them: an empty
+ * string is zero lines, blank lines count, and a trailing newline ends the last
+ * line rather than starting another (`"a\n\nb\n"` is 3). Every tool row's
+ * "N lines" reads this, so the same file never says two different numbers.
+ */
+export function countLines(text: string): number {
   if (text.length === 0) return 0
   let lines = 1
   for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
     lines++
   }
-  return lines
+  return text.endsWith("\n") ? lines - 1 : lines
 }
 
 /** Count non-blank lines — the natural "how many results" measure. */
@@ -189,19 +194,4 @@ export function describeToolResult(part: ToolPartLike): ToolResultDescriptor | n
   // a raw line count — so *every* collapsed row shows some result体量, matching
   // the TUI's "N lines" hint rather than leaving generic/MCP tools blank.
   return { kind: "lines", count: countLines(text), tone: "neutral" }
-}
-
-/**
- * Live size of a still-running tool's streamed output (stdout/stderr), for the
- * simplified row's progress chip. Only tools whose output streams while
- * `input-available` (e.g. Bash via the sidecar) yield a value; everything else
- * returns null and the row keeps just its pulsing status glyph. Never throws.
- */
-export function describeRunningProgress(
-  part: ToolPartLike
-): { lines: number; bytes: number } | null {
-  if (part.state !== "input-available") return null
-  const text = coerceResultText((part as { output?: unknown }).output)
-  if (!text) return null
-  return { lines: countLines(text), bytes: text.length }
 }

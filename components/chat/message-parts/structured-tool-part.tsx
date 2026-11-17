@@ -42,6 +42,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { ToolSemanticBadges } from "@/components/chat/message-parts/tool-semantic-badges"
 import {
+  TOOL_ROW_META_CLASS,
   TOOL_STATE_STATUS_KEY,
   InlineCopyButton,
   TOOL_ROW_SCROLL_TEXT_CLASS,
@@ -420,9 +421,10 @@ export const StructuredToolPart = memo(function StructuredToolPart({
         meta ? (
           <span
             className={cn(
-              "shrink-0 truncate text-[11px]",
+              TOOL_ROW_META_CLASS,
               meta.isError ? "text-destructive" : "text-muted-foreground"
             )}
+            title={meta.text}
             data-testid="structured-tool-meta"
           >
             {meta.text}

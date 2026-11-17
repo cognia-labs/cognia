@@ -119,7 +119,7 @@ import { TaskProgressChip, useSessionTaskChip } from "@/components/tasks/task-pr
 import { useConversationActivity } from "@/hooks/connectors/use-conversation-activity"
 import { useConversationAssignmentEvents } from "@/hooks/connectors/use-conversation-assignment-events"
 import { ConversationActivityNotice } from "@/components/inbox/conversation-activity-log"
-import { ToolCallRow } from "./message-parts/tool-call-row"
+import { ToolCallView } from "./message-parts/tool-call-view"
 import { SubagentTree } from "./message-parts/subagent-tree"
 
 const PANEL_BODY_ID = "run-panel-body"
@@ -871,7 +871,7 @@ function RunPanelImpl({
                   return (
                     <div key={entry.id} className="flex items-center gap-2">
                       <div className="min-w-0 flex-1">
-                        <ToolCallRow part={entry.part} />
+                        <ToolCallView part={entry.part} defaultOpen={false} />
                       </div>
                       {toolElapsed && (
                         <span className="shrink-0 tabular-nums text-2xs text-muted-foreground/70">

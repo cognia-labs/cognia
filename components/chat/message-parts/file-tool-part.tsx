@@ -11,9 +11,8 @@
  *
  * Before this, every one of these tools stacked three bordered layers (Tool
  * card → McpCardShell → inner block). The row IS the call now; the expansion
- * renders the same bodies (`FileToolBody`, shared with `ToolDetailBody` so
- * simplified-mode `ToolCallRow` expansions stay identical) with no card of
- * their own.
+ * renders the same bodies (`FileToolBody`, shared with `ToolDetailBody`) with
+ * no card of their own.
  *
  * A failed call keeps the same row and shows the parsed error trace in the
  * expanded area, so `message-renderer` routes every state here.
@@ -33,6 +32,7 @@ import { FileTypeIcon } from "@/components/shared/file-type-icon"
 import { Button } from "@/components/ui/button"
 import { ToolSemanticBadges } from "@/components/chat/message-parts/tool-semantic-badges"
 import {
+  TOOL_ROW_META_CLASS,
   TOOL_STATE_STATUS_KEY,
   InlineCopyButton,
   TOOL_ROW_SCROLL_TEXT_CLASS,
@@ -40,7 +40,7 @@ import {
   ToolRowShell,
 } from "@/components/chat/message-parts/tool-row"
 import { ErrorParsedView } from "@/components/error/error-parsed-view"
-import { resultErrorPreview } from "@/lib/chat/tool-result-summary"
+import { countLines, diffCounts, resultErrorPreview } from "@/lib/chat/tool-result-summary"
 import { copyConversationFileLink } from "@/lib/filespace/copy-link"
 import { asString, resolveToolPartName } from "@/lib/chat/tool-summary"
 import {
@@ -198,8 +198,7 @@ function fileToolResultMeta(
   const input = (part.input ?? {}) as Record<string, unknown>
   const output = part.output
   const parsed = parseOutputJson(output) as Record<string, unknown> | null
-  const outputLines = (text: unknown): number =>
-    typeof text === "string" && text ? text.split(/\r?\n/).filter(Boolean).length : 0
+  const outputLines = (text: unknown): number => (typeof text === "string" ? countLines(text) : 0)
 
   const shared = sharedDiffStats(input)
   if (shared && (kind === "edit" || kind === "patch" || kind === "write")) {
@@ -217,7 +216,7 @@ function fileToolResultMeta(
       const n = Array.isArray(parsed?.lines)
         ? parsed.lines.length
         : listing
-          ? listing.code.split("\n").filter(Boolean).length
+          ? countLines(listing.code)
           : outputLines(content)
       return n > 0 ? t("result.lines", { count: n }) : null
     }
@@ -226,8 +225,13 @@ function fileToolResultMeta(
       return n > 0 ? t("result.lines", { count: n }) : null
     }
     case "edit": {
-      const n = Array.isArray(input.edits) ? input.edits.length : input.old_string ? 1 : 0
-      return n > 0 ? t("result.edits", { count: n }) : null
+      // What changed, as every other diff summary says it (+added −removed),
+      // rather than how many replacements the call carried.
+      const { added, removed } = diffCounts(
+        Array.isArray(input.edits) ? "multiedit" : "edit",
+        input
+      )
+      return added > 0 || removed > 0 ? t("result.diff", { added, removed }) : null
     }
     case "patch": {
       const files = applyPatchFiles(input)
@@ -378,8 +382,8 @@ export interface FileToolBodyProps {
 }
 
 /**
- * The payload view under the row — shared by `FileToolPart` (standard /
- * detailed modes) and `ToolDetailBody` (simplified `ToolCallRow` expansions).
+ * The payload view under the row — shared by `FileToolPart` and
+ * `ToolDetailBody`.
  * Errors render the parsed trace; a payload the per-kind body rejects falls
  * back to the generic input/output body so the expansion never goes blank.
  */
@@ -517,9 +521,10 @@ export const FileToolPart = memo(function FileToolPart({
         meta ? (
           <span
             className={cn(
-              "shrink-0 truncate text-[11px]",
+              TOOL_ROW_META_CLASS,
               meta.isError ? "text-destructive" : "text-muted-foreground"
             )}
+            title={meta.text}
             data-testid="file-tool-meta"
           >
             {meta.text}

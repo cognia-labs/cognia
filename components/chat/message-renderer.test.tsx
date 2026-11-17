@@ -291,8 +291,21 @@ jest.mock("@/components/chat/message-parts/file-tool-part", () => {
       const name = resolveToolPartName(p)
       return name ? FILE_TOOLS.has(name.toLowerCase()) : false
     },
-    FileToolPart: ({ part }: { part: { type: string } }) =>
-      ReactForMocks.createElement("div", { "data-test": "file-tool-part", "data-type": part.type }),
+    FileToolPart: ({
+      part,
+      expanded,
+      defaultOpen,
+    }: {
+      part: { type: string }
+      expanded?: boolean
+      defaultOpen?: boolean
+    }) =>
+      ReactForMocks.createElement("div", {
+        "data-test": "file-tool-part",
+        "data-type": part.type,
+        "data-expanded": String(expanded),
+        "data-default-open": String(defaultOpen),
+      }),
   }
 })
 
@@ -539,14 +552,6 @@ jest.mock("@/components/chat/message-parts/tool-activity-group", () => ({
         })
       )
     ),
-}))
-jest.mock("@/components/chat/message-parts/tool-call-row", () => ({
-  ToolCallRow: ({ part, expanded }: { part: { type: string }; expanded?: boolean }) =>
-    ReactForMocks.createElement("div", {
-      "data-test": "tool-call-row",
-      "data-type": part.type,
-      "data-expanded": String(expanded),
-    }),
 }))
 
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react"
@@ -2840,11 +2845,10 @@ describe("agent-flow grouping + mode", () => {
     render(<MessageRenderer message={toolMsg("g1s", "tool-Read", "tool-Grep")} />)
     const group = document.querySelector("[data-test='activity-group']")
     expect(group?.getAttribute("data-mode")).toBe("simplified")
-    const rows = group?.querySelectorAll("[data-test='tool-call-row']")
+    // The same file rows standard mode draws: one grammar in every mode.
+    const rows = group?.querySelectorAll("[data-test='file-tool-part']")
     expect(rows).toHaveLength(2)
     expect(rows?.[0].getAttribute("data-type")).toBe("tool-Read")
-    // …and no standard row leaked in alongside the compact rows.
-    expect(document.querySelector("[data-testid='structured-tool-part']")).toBeNull()
   })
 
   it("renders a lone tool call as a standard row (no group)", () => {
@@ -2853,13 +2857,31 @@ describe("agent-flow grouping + mode", () => {
     expect(document.querySelector("[data-testid='structured-tool-part']")).toBeTruthy()
   })
 
-  it("renders a lone tool call as a compact row in simplified mode", () => {
+  it("draws a lone tool call with the standard row in simplified mode, closed", () => {
     mockFlowMode = "simplified"
-    render(<MessageRenderer message={toolMsg("g3", "tool-SomeTool")} />)
-    const row = document.querySelector("[data-test='tool-call-row']")
-    expect(row).toBeTruthy()
-    expect(row?.getAttribute("data-type")).toBe("tool-SomeTool")
-    expect(document.querySelector("[data-testid='structured-tool-part']")).toBeNull()
+    render(<MessageRenderer message={toolMsg("g3", "tool-Read")} />)
+    const row = document.querySelector("[data-test='file-tool-part']")
+    expect(row?.getAttribute("data-type")).toBe("tool-Read")
+    // Simplified keeps rows collapsed even where standard would open them.
+    expect(row?.getAttribute("data-default-open")).toBe("false")
+  })
+
+  it("opens a failed call by default in standard mode and keeps it closed in simplified", () => {
+    const failed = {
+      id: "g-fail",
+      role: "assistant",
+      parts: [{ type: "tool-Read", state: "output-error", input: {}, errorText: "nope" }],
+    } as unknown as UIMessage
+    const { unmount } = render(<MessageRenderer message={failed} />)
+    expect(
+      document.querySelector("[data-test='file-tool-part']")?.getAttribute("data-default-open")
+    ).toBe("true")
+    unmount()
+    mockFlowMode = "simplified"
+    render(<MessageRenderer message={failed} />)
+    expect(
+      document.querySelector("[data-test='file-tool-part']")?.getAttribute("data-default-open")
+    ).toBe("false")
   })
 
   it("forwards expanded visibility to simplified groups and their children", () => {
@@ -2870,7 +2892,7 @@ describe("agent-flow grouping + mode", () => {
       expect(
         document.querySelector("[data-test='activity-group']")?.getAttribute("data-open")
       ).toBe("true")
-      for (const row of document.querySelectorAll("[data-test='tool-call-row']")) {
+      for (const row of document.querySelectorAll("[data-test='file-tool-part']")) {
         expect(row.getAttribute("data-expanded")).toBe("true")
       }
     } finally {

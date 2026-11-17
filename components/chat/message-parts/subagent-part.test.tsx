@@ -51,8 +51,8 @@ jest.mock("@/components/chat/message-parts/tool-activity-group", () => ({
     </div>
   ),
 }))
-jest.mock("@/components/chat/message-parts/tool-call-row", () => ({
-  ToolCallRow: ({
+jest.mock("@/components/chat/message-parts/tool-call-view", () => ({
+  ToolCallView: ({
     expanded,
     onToggle,
     defaultOpen,

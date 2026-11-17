@@ -32,7 +32,7 @@ interface ReadOutput {
 
 /**
  * Body content for a `read` tool call — path link + content (code or image).
- * Rendered bare: the surrounding row (`FileToolPart` / `ToolCallRow`) owns the
+ * Rendered bare: the surrounding row (`FileToolPart`) owns the
  * chrome now, so this is just the payload view. Kept in `mcp-renderers/` next
  * to the other per-tool bodies; the `mcp-read-card` testid stays for
  * compatibility with existing tests and automation.

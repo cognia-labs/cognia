@@ -32,8 +32,8 @@ jest.mock("next-intl", () => ({
 }))
 
 // Stub the heavy reused renderers — they have their own suites.
-jest.mock("./message-parts/tool-call-row", () => ({
-  ToolCallRow: ({ part }: { part: { type: string } }) => (
+jest.mock("./message-parts/tool-call-view", () => ({
+  ToolCallView: ({ part }: { part: { type: string } }) => (
     <div data-testid="tool-row" data-tool={part.type} />
   ),
 }))

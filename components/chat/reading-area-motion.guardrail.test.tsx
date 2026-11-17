@@ -44,7 +44,7 @@ const READING_AREA_FILES = [
   "components/chat/thinking-tips.tsx",
   "components/chat/message-parts/artifact-part.tsx",
   "components/chat/message-parts/canvas-inline-part.tsx",
-  "components/chat/message-parts/tool-call-row.tsx",
+  "components/chat/message-parts/tool-call-view.tsx",
   "components/chat/message-parts/tool-activity-group.tsx",
   "components/chat/message-parts/subagent-part.tsx",
   "components/chat/message-parts/subagent-tree.tsx",

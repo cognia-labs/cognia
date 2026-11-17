@@ -15,9 +15,6 @@
       "summary": "{count, plural, =1 {1 次工具调用} other {# 次工具调用}}",
       "tally": "{name} ×{count}"
     },
-    "progress": {
-      "streaming": "{count} 行…"
-    },
     "result": {
       "diff": "+{added} −{removed}",
       "edits": "{count} 处编辑",
@@ -26,7 +23,6 @@
       "lines": "{count} 行",
       "matches": "{count} 处匹配"
     },
-    "rowAria": "{name} 工具调用 — {status}",
     "semantic": {
       "readOnly": "只读",
       "writeCapable": "可修改"

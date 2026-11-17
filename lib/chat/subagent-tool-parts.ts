@@ -1,6 +1,6 @@
 /**
  * Pure mapper turning a sub-agent's live {@link SubAgentToolCall}s into the
- * `ToolUIPart` entries consumed by `ToolActivityGroup` / `ToolCallRow`, so the
+ * `ToolUIPart` entries consumed by `ToolActivityGroup` / `ToolCallView`, so the
  * inline tool list under an expanded `SubagentPart` reuses the exact same
  * rendering as the main chat's tool flow.
  *

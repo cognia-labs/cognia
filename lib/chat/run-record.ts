@@ -15,13 +15,13 @@ import { RUNNING_TOOL_STATES, type RunStatus, type RunTiming } from "@/lib/chat/
 /** TodoWrite renders as the Plan section, never as a generic tool row. */
 const TODO_TOOL_TYPES = new Set(["tool-TodoWrite", "tool-mcp__cognia-tools__TodoWrite"])
 
-/** One tool call in the turn — carries the live `part` so the panel can feed it to `<ToolCallRow>`. */
+/** One tool call in the turn — carries the live `part` so the panel can feed it to `<ToolCallView>`. */
 export interface RunToolEntry {
   /** `toolCallId` (or a positional fallback). */
   id: string
   /** Raw tool name, e.g. `Bash` / `mcp__x__y`. */
   toolName: string
-  /** The live AI-SDK part — rendered directly by `<ToolCallRow>`. */
+  /** The live AI-SDK part — rendered directly by `<ToolCallView>`. */
   part: ToolUIPart
   status: ToolUIPart["state"]
   /** Epoch ms — from the store's transient timestamp map; undefined until stamped. */

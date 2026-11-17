@@ -15,9 +15,6 @@
       "summary": "{count, plural, =1 {1 tool call} other {# tool calls}}",
       "tally": "{name} ×{count}"
     },
-    "progress": {
-      "streaming": "{count, plural, =1 {1 line…} other {# lines…}}"
-    },
     "result": {
       "diff": "+{added} −{removed}",
       "edits": "{count, plural, =1 {1 edit} other {# edits}}",
@@ -26,7 +23,6 @@
       "lines": "{count, plural, =1 {1 line} other {# lines}}",
       "matches": "{count, plural, =1 {1 match} other {# matches}}"
     },
-    "rowAria": "{name} tool call — {status}",
     "semantic": {
       "readOnly": "Read only",
       "writeCapable": "Can modify"

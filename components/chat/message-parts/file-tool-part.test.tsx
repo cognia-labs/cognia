@@ -196,7 +196,25 @@ describe("FileToolPart row", () => {
     expect(screen.getByTestId("file-tool-meta").className).toContain("text-destructive")
   })
 
-  it("shows an edit-count meta and a workbench review action for Edit", () => {
+  it("lets a long result give way before the target that names the call", () => {
+    const error = "ripgrep exited with code 2: regex parse error: unclosed group"
+    render(
+      <FileToolPart
+        part={part("tool-Grep", {
+          state: "output-error",
+          input: { pattern: "x" },
+          errorText: error,
+        })}
+      />
+    )
+    const meta = screen.getByTestId("file-tool-meta")
+    // Shrinkable, capped at under half the row, and whole on hover.
+    expect(meta).toHaveClass("min-w-0", "max-w-[45%]", "truncate")
+    expect(meta).not.toHaveClass("shrink-0")
+    expect(meta).toHaveAttribute("title", meta.textContent)
+  })
+
+  it("shows the change as +added −removed and a workbench review action for Edit", () => {
     render(
       <FileToolPart
         sessionId="s1"
@@ -206,7 +224,9 @@ describe("FileToolPart row", () => {
         })}
       />
     )
-    expect(screen.getByTestId("file-tool-meta").textContent).toContain('result.edits:{"count":1}')
+    expect(screen.getByTestId("file-tool-meta").textContent).toContain(
+      'result.diff:{"added":1,"removed":1}'
+    )
     expect(screen.getByTestId("workbench-review").getAttribute("data-path")).toBe("a.ts")
   })
 

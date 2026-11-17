@@ -42,7 +42,7 @@ import {
   ToolActivityGroup,
   type ToolActivityChildOptions,
 } from "@/components/chat/message-parts/tool-activity-group"
-import { ToolCallRow } from "@/components/chat/message-parts/tool-call-row"
+import { ToolCallView } from "@/components/chat/message-parts/tool-call-view"
 import { toToolActivityEntries } from "@/lib/chat/subagent-tool-parts"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
@@ -142,13 +142,14 @@ const SubagentLogBody = memo(function SubagentLogBody({
   // workspace, so its Edit / Write cards offer the same "review" and "open"
   // actions as the parent's own calls — they read the session to do that.
   const sessionId = useTranscriptSessionId() ?? undefined
-  // Shared group controls each compact row in every mode.
+  // The same rows the main transcript draws for the same calls; the group
+  // controls each one's disclosure.
   const renderToolRow = (
     part: (typeof entries)[number]["part"],
     key: string,
     opts: ToolActivityChildOptions
   ) => (
-    <ToolCallRow
+    <ToolCallView
       key={key}
       part={part}
       sessionId={sessionId}
@@ -167,7 +168,7 @@ const SubagentLogBody = memo(function SubagentLogBody({
         </div>
       ) : entries.length === 1 ? (
         <div data-testid="subagent-tool-activity">
-          <ToolCallRow
+          <ToolCallView
             key={entries[0].key}
             part={entries[0].part}
             sessionId={sessionId}

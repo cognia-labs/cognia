@@ -47,10 +47,6 @@ import { VerificationVerdictPart } from "@/components/chat/message-parts/verific
 import { ArtifactPart } from "@/components/chat/message-parts/artifact-part"
 import { SourcesPart } from "@/components/chat/message-parts/sources-part"
 import { GroundingPart } from "@/components/chat/message-parts/grounding-part"
-import { TerminalToolPart } from "@/components/chat/message-parts/terminal-tool-part"
-import { FileToolPart, isFileToolPart } from "@/components/chat/message-parts/file-tool-part"
-import { StructuredToolPart } from "@/components/chat/message-parts/structured-tool-part"
-import { isBashToolPart } from "@/components/chat/message-parts/tool-detail-body"
 import { CanvasInlinePart } from "@/components/chat/message-parts/canvas-inline-part"
 import { FilePartCard } from "@/components/chat/message-parts/file-part-preview"
 import { AttachmentTextCard } from "@/components/chat/message-parts/attachment-text-card"
@@ -86,7 +82,7 @@ import {
   isVideoJobBlock,
   type SystemMessageBlock,
 } from "@/lib/slash-commands/system-blocks"
-import { ToolCallRow } from "@/components/chat/message-parts/tool-call-row"
+import { ToolCallView } from "@/components/chat/message-parts/tool-call-view"
 import { ToolUseSummaryPart } from "@/components/chat/message-parts/tool-use-summary-part"
 import {
   ToolActivityGroup,
@@ -2169,62 +2165,27 @@ function renderToolPart(
   // one is controlled by its group, which remembers it under the same key.
   const memoryKey = toolDisclosureKey(messageId, tp, key)
 
-  // Simplified mode: every tool collapses to a one-line, expandable row.
-  if (mode === "simplified") {
-    return (
-      <React.Fragment key={key}>
-        <ToolCallRow
-          part={tp}
-          sessionId={sessionId}
-          expanded={opts.expanded}
-          onToggle={opts.onToggle}
-          defaultOpen={preferenceOpen}
-          memoryKey={memoryKey}
-        />
-        {slot}
-      </React.Fragment>
-    )
-  }
-
   // A failed call and a still-running one open by default (the user needs the
   // trace / the live output); a settled success stays collapsed — except a
   // generated video, whose row IS the result the user asked for (its job card,
-  // then the video), not a trace of how the answer was reached, and a card
-  // registered as the call's purpose (a proposal a person answers).
+  // then the video), and a card registered as the call's purpose (a proposal a
+  // person answers). Simplified mode keeps every row collapsed unless the
+  // reader's tool preference says otherwise.
   const toolName = toolNameOf(tp)
   const defaultOpen =
     preferenceOpen ??
-    (mode === "detailed" ||
-      tp.state === "output-error" ||
-      tp.state === "input-available" ||
-      toolName === VIDEO_GENERATE_TOOL_NAME ||
-      (toolName !== null && getToolResultRenderer(toolName)?.opensRow === true))
+    (mode !== "simplified" &&
+      (mode === "detailed" ||
+        tp.state === "output-error" ||
+        tp.state === "input-available" ||
+        toolName === VIDEO_GENERATE_TOOL_NAME ||
+        (toolName !== null && getToolResultRenderer(toolName)?.opensRow === true)))
 
-  // Every tool renders as an inline row (status dot + lead + target + meta +
-  // chevron) through the shared `ToolRowShell` chrome: Bash gets the `$`
-  // prompt row, file tools the verb row, and everything else — built-ins,
-  // plugin tools, unknown MCP tools — the generic structured row. The
-  // expanded body is `ToolDetailBody` in every case, so a row never decides
-  // how a payload renders.
-  const toolEl = isBashToolPart(tp) ? (
-    <TerminalToolPart
-      part={tp}
-      defaultOpen={defaultOpen}
-      expanded={opts.expanded}
-      onToggle={opts.onToggle}
-      memoryKey={memoryKey}
-    />
-  ) : isFileToolPart(tp) ? (
-    <FileToolPart
-      part={tp}
-      sessionId={sessionId}
-      defaultOpen={defaultOpen}
-      expanded={opts.expanded}
-      onToggle={opts.onToggle}
-      memoryKey={memoryKey}
-    />
-  ) : (
-    <StructuredToolPart
+  // Every mode draws the same row for the same call (`ToolCallView`): Bash the
+  // `$` prompt row, file tools the verb row, everything else the structured
+  // row. The modes differ only in what opens by default.
+  const toolEl = (
+    <ToolCallView
       part={tp}
       sessionId={sessionId}
       defaultOpen={defaultOpen}
