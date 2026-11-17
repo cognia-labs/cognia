@@ -33,11 +33,17 @@ const builtinAssetFetcher: typeof fetch = async (input) => {
 }
 
 import { invoke } from "@tauri-apps/api/core"
-import { updateWasmPluginConfig } from "./wasm-loader"
+import { getWasmRuntimeGeneration, updateWasmPluginConfig } from "./wasm-loader"
+import {
+  __resetWasmLogBufferForTesting,
+  getWasmLogs,
+  ingestWasmLogRecord,
+} from "@/lib/plugin/wasm-bridge/log-buffer"
 
 jest.mock("./wasm-loader", () => ({
   ...jest.requireActual("./wasm-loader"),
   updateWasmPluginConfig: jest.fn().mockResolvedValue(undefined),
+  getWasmRuntimeGeneration: jest.fn(jest.requireActual("./wasm-loader").getWasmRuntimeGeneration),
 }))
 import {
   PluginManager,
@@ -7463,6 +7469,44 @@ describe("PluginManager", () => {
 
       expect(mockInvoke).not.toHaveBeenCalledWith("plugin_python_load", expect.anything())
       expect(mockInvoke).not.toHaveBeenCalledWith("plugin_python_get_tools", expect.anything())
+    })
+
+    it("binds a wasm load's host generation to its lifecycle generation for the Dev Session", async () => {
+      // The WASM host tags guest log lines with its own load token; the Dev
+      // Session filters by the lifecycle generation an activation proof names.
+      __resetWasmLogBufferForTesting()
+      const plugin = createTypedPlugin("wasm-logs", "wasm")
+      const store = createLoadStore(plugin)
+      mockGetState.mockReturnValue(store)
+      jest.mocked(getWasmRuntimeGeneration).mockReturnValue("host-gen-1")
+
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      stubLoader(manager)
+      try {
+        await manager.loadPlugin("wasm-logs")
+        const lifecycle = manager
+          .getPluginLifecycleSnapshots()
+          .find((snapshot) => snapshot.pluginId === "wasm-logs")
+        expect(lifecycle?.generation).toBeGreaterThan(0)
+        ingestWasmLogRecord({
+          pluginId: "wasm-logs",
+          generation: "host-gen-1",
+          sequence: 1,
+          level: "info",
+          scope: "",
+          message: "init done",
+          timestampMs: 1,
+        })
+        expect(getWasmLogs("wasm-logs")).toEqual([
+          expect.objectContaining({ generation: String(lifecycle?.generation) }),
+        ])
+      } finally {
+        jest.mocked(getWasmRuntimeGeneration).mockReset()
+        jest
+          .mocked(getWasmRuntimeGeneration)
+          .mockImplementation(jest.requireActual("./wasm-loader").getWasmRuntimeGeneration)
+        __resetWasmLogBufferForTesting()
+      }
     })
 
     it("hydrates executable contribution functions from the verified module before activation", async () => {

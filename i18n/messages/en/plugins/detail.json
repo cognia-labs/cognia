@@ -91,10 +91,7 @@
     "openInPanel": "Open this plugin's output in the log panel",
     "runtimeStrip": "Python {version} · {plugins} loaded ({lazy} idle) · {calls} calls",
     "streamEnd": "— stream ended —",
-    "openInPanelShort": "Open logs",
-    "missing": {
-      "wasm-no-channel": "WASM plugins have no output channel of their own."
-    }
+    "openInPanelShort": "Open logs"
   },
   "metaAuthor": "Author",
   "metaCreatedAt": "Installed at",

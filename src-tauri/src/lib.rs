@@ -1664,6 +1664,7 @@ pub fn run() {
             plugin_api::wasm::commands::plugin_wasm_call,
             plugin_api::wasm::commands::plugin_wasm_unload,
             plugin_api::wasm::commands::plugin_wasm_list,
+            plugin_api::wasm::commands::plugin_wasm_logs,
             plugin_api::wasm::commands::plugin_wasm_renderer_response,
             plugin_api::wasm::installer::plugin_wasm_install_from_url,
             plugin_api::wasm::installer::plugin_wasm_install_from_git,

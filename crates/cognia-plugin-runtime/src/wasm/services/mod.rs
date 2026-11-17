@@ -31,7 +31,7 @@
 
 use std::sync::Arc;
 
-use super::bridge::WasmRendererBridge;
+use super::bridge::{WasmBridgeTransport, WasmRendererBridge};
 use super::capabilities::notification::PendingNotification;
 use super::errors::WasmErrorCode;
 
@@ -86,6 +86,13 @@ pub trait WasmHostServices: Send + Sync + 'static {
     fn renderer_bridge(&self) -> Option<Arc<WasmRendererBridge>> {
         None
     }
+    /// Where guest log lines are pushed as they are written
+    /// (`capabilities::logger::LOG_EVENT`). `None` keeps them in the host's
+    /// history for `plugin_wasm_logs` to drain, which is all a host without a
+    /// renderer needs.
+    fn log_events(&self) -> Option<Arc<dyn WasmBridgeTransport>> {
+        None
+    }
     /// `"tauri"` | `"recording"`. Diagnostics only — never user data.
     fn kind(&self) -> &'static str;
 }
@@ -119,6 +126,7 @@ mod tests {
         assert!(bare.clipboard().is_none());
         assert!(bare.notifications().is_none());
         assert!(bare.renderer_bridge().is_none());
+        assert!(bare.log_events().is_none());
         assert_eq!(bare.kind(), "bare");
     }
 

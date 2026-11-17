@@ -22,7 +22,7 @@ description: 渲染端 Dev Session 工作台、CLI/bridge 状态、终端启动�
 
 工作台不会根据安装或发现事件推断 reload 成功。只有 renderer bridge 记录的 `activationProof` 同时证明 lifecycle 为 active、generation 已递增且 artifact revision 对应 Rust 实际安装的 artifact 时，才展示成功。Activity 与 attempt diagnostics 共用同一 session/attempt 身份。
 
-运行时日志不再需要它。有证明时按该 generation 过滤，没有证明时显示全部 generation 并明说这一点：因为一直失败的重载永远产不出证明，而那恰恰是作者最需要看输出的时候。日志来自 `lib/plugin/devtools/runtime-log-stream.ts`，它把前端 `ctx.logger` 环与 Python 宿主缓冲合并，并为每一行标出产生它的宿主。`wasm` 与 `vscode-extension` 根本没有 per-plugin 输出通道，卡片会点名是哪个、为什么，而不是渲染一个空列表。
+运行时日志不再需要它。有证明时按该 generation 过滤，没有证明时显示全部 generation 并明说这一点：因为一直失败的重载永远产不出证明，而那恰恰是作者最需要看输出的时候。日志来自 `lib/plugin/devtools/runtime-log-stream.ts`，它把前端 `ctx.logger` 环、Python 宿主缓冲、VS Code 扩展宿主的输出和 WASM guest 的 `log` 调用合并，并为每一行标出产生它的运行时。WASM 日志行带的是宿主自己的加载令牌，manager 会把它绑定到生命周期 generation，所以按证明过滤时，上一次加载的日志不会出现在下一次里。
 
 Advanced diagnostics 里放着插件 API 调用检查器（每次 `ctx.*` 调用及其权限判定，不采样地读审计环）、lifecycle 表、trigger audit 与 extension-point 诊断。曾经占据这里的九标签页面板，连同它的 Hook、Profiler、Bus 标签，已随其背后的模块一起删除：它们没有任何一个有生产挂载点。
 

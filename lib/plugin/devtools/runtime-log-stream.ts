@@ -1,22 +1,18 @@
 /**
  * One log stream per plugin, whatever runtime it happens to be.
  *
- * Before this, a plugin author's output lived in two unrelated places with
- * different gates, and two runtimes had none at all:
+ * A plugin author's output used to live in unrelated places with different
+ * gates, and some runtimes had none at all. Each runtime now has a source:
  *
- *   frontend / hybrid  `debugger.ts` ring, shown only in the Dev Session
- *                      workbench, and only once an activation had been
- *                      verified.
- *   python / hybrid    `lib/plugin/python/log-buffer.ts`, shown only on the
- *                      plugin detail page, a different screen.
- *   wasm               nothing.
- *   vscode-extension   nothing.
+ *   frontend / hybrid  `debugger.ts` ring.
+ *   python / hybrid    `lib/plugin/python/log-buffer.ts`.
+ *   wasm               `lib/plugin/wasm-bridge/log-buffer.ts`, the guest's
+ *                      `log` calls as the host bounded and recorded them.
+ *   vscode-extension   `lib/plugin/vscode-shim/vscode-log-buffer.ts`, its
+ *                      host's stderr and its output channels.
  *
- * A Python plugin author watching the workbench saw an empty Runtime Logs
- * card while their real output sat one page away. This module merges the real
- * sources into one time-ordered stream (VS Code extensions now have one too:
- * their host's stderr and their output channels) and names the remaining gap
- * rather than leaving it as silence.
+ * This module merges them into one time-ordered stream, so the Dev Session
+ * workbench shows a plugin's output wherever it was written.
  */
 
 import type { PluginType } from "@/types/plugin"
@@ -33,6 +29,8 @@ import {
   getVscodeLogs,
   subscribeVscodeLogs,
 } from "@/lib/plugin/vscode-shim/vscode-log-buffer"
+import { clearWasmLogs, getWasmLogs, subscribeWasmLogs } from "@/lib/plugin/wasm-bridge/log-buffer"
+import { drainWasmLogs } from "@/lib/plugin/wasm-bridge/log-source"
 
 export type PluginLogRuntime = "frontend" | "python" | "wasm" | "vscode"
 export type PluginLogLevel = "debug" | "info" | "warn" | "error"
@@ -42,35 +40,22 @@ export interface PluginRuntimeLogEntry {
   pluginId: string
   runtime: PluginLogRuntime
   /**
-   * Lifecycle generation as a string, because the two sources disagree: the
-   * frontend ring counts, the python host sends an opaque token. `null` means
-   * the source did not say.
+   * Lifecycle generation as a string, because the sources disagree: the
+   * frontend ring counts, the python host sends an opaque token, the WASM
+   * buffer maps its host token to the manager's count. `null` means the source
+   * did not say.
    */
   generation: string | null
   level: PluginLogLevel
   message: string
   timestamp: number
-  /** The python host's frame kind (`progress`, `chunk`, `exit`, …). */
+  /** The python host's frame kind (`progress`, `chunk`, `exit`, …), or a WASM guest's scope. */
   kind?: string
   /** Extra values logged after the message, JSON-safe and bounded. */
   args?: JsonSafeValue[]
   /** Stack of the logged Error (or of the error-level call site). */
   stack?: string
 }
-
-/**
- * Why a runtime contributes nothing, so the UI can say so instead of
- * rendering an empty list that looks like a bug.
- *
- * A real gap, not an oversight in this module: the WASM host reports
- * failures by throwing, and has no per-plugin output channel to drain.
- */
-export const RUNTIMES_WITHOUT_LOG_CHANNEL = {
-  wasm: "wasm-no-channel",
-} as const
-
-export type MissingLogChannelReason =
-  (typeof RUNTIMES_WITHOUT_LOG_CHANNEL)[keyof typeof RUNTIMES_WITHOUT_LOG_CHANNEL]
 
 /** Every member of `PluginType`, so the switch below cannot silently miss one. */
 const PLUGIN_TYPES: PluginType[] = ["frontend", "python", "hybrid", "wasm", "vscode-extension"]
@@ -86,11 +71,8 @@ export function isPluginType(value: string): value is PluginType {
   return (PLUGIN_TYPES as string[]).includes(value)
 }
 
-/** Which sources a plugin type can produce, and why it produces none. Pure. */
-export function logSourcesFor(type: PluginType): {
-  runtimes: PluginLogRuntime[]
-  missingReason?: MissingLogChannelReason
-} {
+/** Which sources a plugin type can produce. Pure. */
+export function logSourcesFor(type: PluginType): { runtimes: PluginLogRuntime[] } {
   switch (type) {
     case "frontend":
       return { runtimes: ["frontend"] }
@@ -99,7 +81,7 @@ export function logSourcesFor(type: PluginType): {
     case "hybrid":
       return { runtimes: ["frontend", "python"] }
     case "wasm":
-      return { runtimes: [], missingReason: RUNTIMES_WITHOUT_LOG_CHANNEL.wasm }
+      return { runtimes: ["wasm"] }
     case "vscode-extension":
       return { runtimes: ["vscode"] }
   }
@@ -194,7 +176,7 @@ export interface RuntimeLogQuery {
   limit?: number
 }
 
-/** Merge both sources for one plugin, oldest first. */
+/** Merge every source for one plugin, oldest first. */
 export function getPluginRuntimeLogs(
   pluginId: string,
   query: RuntimeLogQuery = {}
@@ -203,6 +185,7 @@ export function getPluginRuntimeLogs(
     ...getPluginDebugger().getLogs(pluginId).map(normalizeFrontendEntry),
     ...getPythonLogs(pluginId).map(normalizePythonEntry),
     ...getVscodeLogs(pluginId),
+    ...getWasmLogs(pluginId),
   ]
   const wanted = query.generation == null ? null : String(query.generation)
   const filtered =
@@ -213,7 +196,11 @@ export function getPluginRuntimeLogs(
   return query.limit != null ? filtered.slice(-query.limit) : filtered
 }
 
-/** Fires whenever either source writes for this plugin. */
+/**
+ * Fires whenever a source writes for this plugin. Subscribing also reads what
+ * the WASM host recorded before this renderer was listening (a no-op for any
+ * other runtime, and before any WASM plugin loaded).
+ */
 export function subscribePluginRuntimeLogs(pluginId: string, onChange: () => void): () => void {
   const offFrontend = getPluginDebugger().onLog((entry) => {
     if (entry.pluginId === pluginId) onChange()
@@ -224,10 +211,15 @@ export function subscribePluginRuntimeLogs(pluginId: string, onChange: () => voi
   const offVscode = subscribeVscodeLogs((changedId) => {
     if (changedId === pluginId) onChange()
   })
+  const offWasm = subscribeWasmLogs((changedId) => {
+    if (changedId === pluginId) onChange()
+  })
+  void drainWasmLogs(pluginId)
   return () => {
     offFrontend()
     offPython()
     offVscode()
+    offWasm()
   }
 }
 
@@ -235,4 +227,5 @@ export function clearPluginRuntimeLogs(pluginId: string): void {
   getPluginDebugger().clearLogs(pluginId)
   clearPythonLogs(pluginId)
   clearVscodeLogs(pluginId)
+  clearWasmLogs(pluginId)
 }

@@ -91,10 +91,7 @@
     "openInPanel": "在日志面板中查看该插件的输出",
     "runtimeStrip": "Python {version} · 已加载 {plugins}（{lazy} 空闲）· {calls} 次调用",
     "streamEnd": "— 流结束 —",
-    "openInPanelShort": "查看日志",
-    "missing": {
-      "wasm-no-channel": "WASM 插件没有独立的输出通道。"
-    }
+    "openInPanelShort": "查看日志"
   },
   "metaAuthor": "作者",
   "metaCreatedAt": "安装时间",

@@ -971,6 +971,7 @@
         "vscode_rpc": {},
         "wasm": {
           "children": {
+            "logs": {},
             "renderer": {}
           }
         },

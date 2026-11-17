@@ -217,12 +217,19 @@ describe("PluginDetailHeader", () => {
     expect(item.getAttribute("href")).toContain("q=alpha")
   })
 
-  it("keeps the logs item for wasm, disabled, with the reason", async () => {
+  it("links a wasm plugin to the log panel too, now that its guest logs reach it", async () => {
     render(<PluginDetailHeader plugin={makePlugin({ type: "wasm" })} />)
     await openMenu()
     const item = await screen.findByTestId("plugin-detail-open-logs")
-    expect(item).toHaveAttribute("data-disabled")
-    expect(item).toHaveTextContent("logs.missing.wasm-no-channel")
+    expect(item.tagName).toBe("A")
+    expect(item).not.toHaveAttribute("data-disabled")
+  })
+
+  it("offers no logs item for a type it does not recognise", async () => {
+    render(<PluginDetailHeader plugin={makePlugin({ type: "something-new" })} />)
+    await openMenu()
+    await screen.findByTestId("plugin-detail-view-manifest")
+    expect(screen.queryByTestId("plugin-detail-open-logs")).toBeNull()
   })
 
   it("shows Update only when the marketplace has a newer version, scoped to this plugin", () => {

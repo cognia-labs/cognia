@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use wasmtime::component::{Component, Linker};
 
 use super::bridge::{CancelReason, WasmRendererBridge};
+use super::capabilities::logger::WasmLogBuffer;
 use super::engine::{api_version_compatible, engine, parse_plugin_api_version};
 use super::errors::upgrade_required;
 use super::services::WasmHostServices;
@@ -122,6 +123,9 @@ pub struct WasmPluginState {
     /// never install one, and every capability needing a backend then answers
     /// `HOST_UNAVAILABLE` while the rest keep working.
     pub services: Arc<RwLock<Option<Arc<dyn WasmHostServices>>>>,
+    /// Bounded per-plugin history of guest log lines, one generation at a
+    /// time, drained by `plugin_wasm_logs` (see `capabilities::logger`).
+    pub logs: Arc<WasmLogBuffer>,
 }
 
 /// The cognia API surface for WASM plugins. `load` stashes a typed
@@ -216,6 +220,9 @@ impl WasmPluginHost {
             }
         }
         activated.remove(&id);
+        // The new load's log history starts empty; the previous generation's
+        // lines must not be read as this one's.
+        state.logs.begin_generation(&id, &entry.generation);
         loaded.insert(id.clone(), entry);
         pres.insert(id, Arc::new(plugin_pre));
         Ok(plugin_api_version)
@@ -308,6 +315,7 @@ impl WasmPluginHost {
     /// Called once from the Tauri `setup()` hook. Headless hosts never call it,
     /// which is exactly how they end up with `services: None`.
     pub fn install_host_services(state: &WasmPluginState, services: Arc<dyn WasmHostServices>) {
+        state.logs.set_emitter(services.log_events());
         *state.services.write() = Some(services);
     }
 

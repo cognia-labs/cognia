@@ -25,10 +25,10 @@ import { useCogniaCliStatus } from "@/hooks/plugins/use-cognia-cli-status"
 import {
   clearPluginRuntimeLogs,
   getPluginRuntimeLogs,
-  logSourcesFor,
   subscribePluginRuntimeLogs,
   type PluginRuntimeLogEntry,
 } from "@/lib/plugin/devtools/runtime-log-stream"
+import { WASM_LOG_DRAIN_FAILURE_KIND } from "@/lib/plugin/wasm-bridge/log-buffer"
 import { getLiveSession } from "@/lib/terminal/session-registry"
 import { launchCognia } from "@/lib/terminal/run-cognia"
 import { useDevProjectStore } from "@/stores/plugins/dev-project-store"
@@ -364,15 +364,12 @@ function RuntimeLogs() {
   const t = useTranslations("plugins.devSession")
   const session = usePluginDevSessionStore((state) => state.sessions[0])
   const pluginId = session?.pluginId
-  const pluginType = session?.pluginType
   const proof = session?.attempts[0]?.activationProof
   const generation = proof?.generation ?? null
   const [entries, setEntries] = useState<PluginRuntimeLogEntry[]>([])
 
-  const missingReason = pluginType ? logSourcesFor(pluginType).missingReason : undefined
-
   useEffect(() => {
-    if (!pluginId || missingReason) {
+    if (!pluginId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setEntries([])
       return
@@ -381,7 +378,7 @@ function RuntimeLogs() {
       setEntries(getPluginRuntimeLogs(pluginId, { generation, limit: RUNTIME_LOG_LIMIT }))
     read()
     return subscribePluginRuntimeLogs(pluginId, read)
-  }, [pluginId, generation, missingReason])
+  }, [pluginId, generation])
 
   return (
     <Card className="p-4" data-testid="dev-session-runtime-logs">
@@ -391,17 +388,15 @@ function RuntimeLogs() {
           <p className="mt-1 text-xs text-muted-foreground" data-testid="runtime-logs-scope">
             {!pluginId
               ? t("runtimeLogs.waiting")
-              : missingReason
-                ? t(`runtimeLogs.missing.${missingReason}` as never)
-                : proof
-                  ? t("runtimeLogs.filter", { pluginId, generation: proof.generation })
-                  : // Before this, no verified activation meant no logs at all, so a
-                    // Python plugin author watched an empty card while their output
-                    // sat on the plugin detail page. Show everything and say so.
-                    t("runtimeLogs.unverified", { pluginId })}
+              : proof
+                ? t("runtimeLogs.filter", { pluginId, generation: proof.generation })
+                : // Before this, no verified activation meant no logs at all, so a
+                  // Python plugin author watched an empty card while their output
+                  // sat on the plugin detail page. Show everything and say so.
+                  t("runtimeLogs.unverified", { pluginId })}
           </p>
         </div>
-        {pluginId && !missingReason && (
+        {pluginId && (
           <Button
             size="sm"
             variant="ghost"
@@ -416,7 +411,7 @@ function RuntimeLogs() {
         )}
       </div>
 
-      {pluginId && !missingReason && entries.length === 0 && (
+      {pluginId && entries.length === 0 && (
         <p className="mt-3 text-sm text-muted-foreground" data-testid="runtime-logs-empty">
           {t("runtimeLogs.empty")}
         </p>
@@ -443,7 +438,10 @@ function RuntimeLogs() {
               </span>
               <div className="min-w-0 flex-1 break-words">
                 <span>
-                  {entry.kind ?? ""} {entry.message}
+                  {entry.kind === WASM_LOG_DRAIN_FAILURE_KIND
+                    ? t("runtimeLogs.wasmDrainFailed")
+                    : (entry.kind ?? "")}{" "}
+                  {entry.message}
                 </span>
                 {(entry.stack || entry.args) && (
                   <details className="mt-1" data-testid="runtime-log-details">

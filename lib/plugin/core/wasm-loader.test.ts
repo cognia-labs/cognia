@@ -25,6 +25,11 @@ jest.mock("@/lib/tauri/transport-instance", () => ({
   transport: { call: (...args: unknown[]) => transportCallMock(...args) },
 }))
 
+const installWasmLogSourceMock = jest.fn((): Promise<() => void> => Promise.resolve(() => {}))
+jest.mock("@/lib/plugin/wasm-bridge/log-source", () => ({
+  installWasmLogSource: () => installWasmLogSourceMock(),
+}))
+
 import {
   isWasmHostAvailable,
   loadWasmDefinition,
@@ -65,6 +70,7 @@ function setTauri(present: boolean) {
 beforeEach(() => {
   invokeMock.mockReset()
   transportCallMock.mockReset()
+  installWasmLogSourceMock.mockClear()
   delete (globalThis as Record<string, unknown>).__COGNIA_HEADLESS__
 })
 
@@ -294,6 +300,26 @@ describe("loadWasmDefinition", () => {
     expect(def.manifest.id).toBe("demo.wasm")
   })
 
+  it("listens for guest log lines before the first load, so init cannot log unheard", async () => {
+    const order: string[] = []
+    installWasmLogSourceMock.mockImplementationOnce(async () => {
+      order.push("listen")
+      return () => {}
+    })
+    invokeMock.mockImplementationOnce(async (command: string) => {
+      order.push(command)
+      return { pluginApiVersion: "0.1.0", generation: "wasm-gen-1" }
+    })
+    await loadWasmDefinition(baseManifest, "/plugins/demo")
+    expect(order).toEqual(["listen", "plugin_wasm_load"])
+  })
+
+  it("still loads when the log listener cannot be installed", async () => {
+    installWasmLogSourceMock.mockRejectedValueOnce(new Error("no event bridge"))
+    invokeMock.mockResolvedValueOnce({ pluginApiVersion: "0.1.0", generation: "wasm-gen-1" })
+    await expect(loadWasmDefinition(baseManifest, "/plugins/demo")).resolves.toBeDefined()
+  })
+
   it("routes a headless load through the installed service transport", async () => {
     setTauri(false)
     ;(globalThis as Record<string, unknown>).__COGNIA_HEADLESS__ = true
@@ -309,6 +335,8 @@ describe("loadWasmDefinition", () => {
       expect.objectContaining({ pluginId: "demo.wasm", pluginPath: "/plugins/demo" })
     )
     expect(invokeMock).not.toHaveBeenCalled()
+    // A headless host keeps guest lines in its own tracing; no WebView listens.
+    expect(installWasmLogSourceMock).not.toHaveBeenCalled()
   })
 
   it("propagates plugin_wasm_load errors with the plugin id", async () => {

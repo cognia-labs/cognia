@@ -32,6 +32,10 @@ const { debug, info, warn, error, child } = logger
 
 import { appendPythonEvent } from "@/lib/plugin/python/log-buffer"
 import { __resetPythonEventBusForTesting } from "@/lib/plugin/python/event-bus"
+import {
+  __resetWasmLogBufferForTesting,
+  ingestWasmLogRecord,
+} from "@/lib/plugin/wasm-bridge/log-buffer"
 import { getPluginDebugger } from "./debugger"
 import {
   __resetPluginLogBridgeForTests,
@@ -43,6 +47,7 @@ beforeEach(() => {
   jest.clearAllMocks()
   __resetPluginLogBridgeForTests()
   __resetPythonEventBusForTesting()
+  __resetWasmLogBufferForTesting()
 })
 
 afterEach(() => {
@@ -137,6 +142,28 @@ describe("installPluginRuntimeLogBridge", () => {
       "model missing",
       undefined,
       expect.objectContaining({ origin: "plugin", pluginId: "ocr", pluginRuntime: "python" })
+    )
+  })
+
+  it("forwards each WASM guest line once, tagged with the wasm runtime", () => {
+    installPluginRuntimeLogBridge()
+    const record = {
+      pluginId: "calc",
+      generation: "host-1",
+      sequence: 1,
+      level: "warn" as const,
+      scope: "math",
+      message: "division by zero",
+      timestampMs: 5,
+    }
+    ingestWasmLogRecord(record)
+    // A drain that returns a line the event already delivered is not a new line.
+    ingestWasmLogRecord(record)
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      "division by zero",
+      expect.objectContaining({ pluginId: "calc", pluginRuntime: "wasm", kind: "math" })
     )
   })
 

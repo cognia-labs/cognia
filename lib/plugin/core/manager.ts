@@ -260,8 +260,10 @@ import {
   buildWasmNodeDefs,
   buildWasmToolDefinitions,
   callWasmExport,
+  getWasmRuntimeGeneration,
   updateWasmPluginConfig,
 } from "./wasm-loader"
+import { bindWasmLogGeneration } from "@/lib/plugin/wasm-bridge/log-buffer"
 // PR-D — overlay-registry capabilities (skills / mcp-server-preset /
 // native-anthropic-tool / external-agent-preset) now flow through the
 // codified `CAPABILITY_BRIDGE_MAP`. Bespoke capabilities (modes,
@@ -4293,6 +4295,14 @@ export class PluginManager {
         },
       })
       recordLoadSuccess(pluginId, Date.now())
+      if (plugin.manifest.type === "wasm") {
+        // The WASM host tags each guest log line with its own load token; the
+        // Dev Session filters by this lifecycle generation. Bind the two
+        // before activate() runs the guest's init, which is the first code
+        // that can log.
+        const hostGeneration = getWasmRuntimeGeneration(pluginId)
+        if (hostGeneration) bindWasmLogGeneration(pluginId, hostGeneration, lease.generation)
+      }
       assertPluginManifestParity(plugin.manifest, definition.manifest)
       // JSON packages carry contribution metadata; executable adapters belong
       // to the verified module. Hydrate only catalogued fields after parity,

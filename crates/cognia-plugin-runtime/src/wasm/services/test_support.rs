@@ -167,6 +167,7 @@ pub struct RecordingWasmHostServices {
     pub clipboard: Option<Arc<RecordingClipboard>>,
     pub notifications: Option<Arc<RecordingNotifications>>,
     pub bridge: Option<Arc<WasmRendererBridge>>,
+    pub log_events: Option<Arc<RecordingWasmBridgeTransport>>,
 }
 
 impl RecordingWasmHostServices {
@@ -183,6 +184,7 @@ impl RecordingWasmHostServices {
             bridge: Some(WasmRendererBridge::new(Arc::new(
                 RecordingWasmBridgeTransport::new(),
             ))),
+            log_events: Some(Arc::new(RecordingWasmBridgeTransport::new())),
         }
     }
 
@@ -198,6 +200,11 @@ impl RecordingWasmHostServices {
 
     pub fn with_bridge(mut self, bridge: Arc<WasmRendererBridge>) -> Self {
         self.bridge = Some(bridge);
+        self
+    }
+
+    pub fn with_log_events(mut self, transport: Arc<RecordingWasmBridgeTransport>) -> Self {
+        self.log_events = Some(transport);
         self
     }
 }
@@ -217,6 +224,12 @@ impl WasmHostServices for RecordingWasmHostServices {
 
     fn renderer_bridge(&self) -> Option<Arc<WasmRendererBridge>> {
         self.bridge.clone()
+    }
+
+    fn log_events(&self) -> Option<Arc<dyn WasmBridgeTransport>> {
+        self.log_events
+            .clone()
+            .map(|t| t as Arc<dyn WasmBridgeTransport>)
     }
 
     fn kind(&self) -> &'static str {

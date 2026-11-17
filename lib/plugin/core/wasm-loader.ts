@@ -89,6 +89,25 @@ async function invokeWasmHost<T>(command: string, args?: Record<string, unknown>
 }
 
 /**
+ * Listen for the guest's log lines before its first load, so a line `init`
+ * writes cannot be emitted before anyone listens. Desktop only: the events and
+ * the drain command are the WebView's. The reference is kept for the life of
+ * the page. A failed listen costs the Dev Session its live lines (the host
+ * still records them for a drain, and tracing has them), never the load.
+ */
+async function ensureWasmLogSource(): Promise<void> {
+  if (!isTauri()) return
+  try {
+    const { installWasmLogSource } = await import("@/lib/plugin/wasm-bridge/log-source")
+    await installWasmLogSource()
+  } catch (error) {
+    wasmLoaderLogger.warn("WASM log listener unavailable", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
  * True when the current runtime can reach a native WASM host. Desktop owns it
  * in-process; the headless brain reaches cognia-server over its service
  * transport. Browser/mobile clients do not execute plugin guests themselves.
@@ -139,6 +158,8 @@ export async function loadWasmDefinition(
     manifestJson: JSON.stringify(manifest),
     pluginPath,
   }
+
+  await ensureWasmLogSource()
 
   try {
     const loaded = await invokeWasmHost<WasmLoadResult>("plugin_wasm_load", { ...args })

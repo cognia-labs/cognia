@@ -89,6 +89,10 @@ pub struct HostState {
     /// logger / secrets / process / WASI keep working. Installed by
     /// `build_activation_store` from `WasmPluginState::services`.
     pub services: Option<Arc<dyn WasmHostServices>>,
+    /// Where guest `log` calls are kept for the renderer to drain, tagged with
+    /// the generation this instance belongs to. `None` keeps them in tracing
+    /// only. Installed by the activation and call paths in `commands.rs`.
+    pub log_sink: Option<super::capabilities::logger::WasmLogSink>,
     pub limits: StoreLimits,
     pub table: ResourceTable,
     pub wasi: WasiCtx,
@@ -162,6 +166,7 @@ pub fn build_store(
             // Headless-safe default; `build_activation_store` installs the real
             // set when the host has one.
             services: None,
+            log_sink: None,
             limits,
             table: ResourceTable::new(),
             wasi: wasi_builder.build(),
@@ -218,6 +223,7 @@ pub(crate) fn test_host_state_with(
         shell_allowlist: Vec::new(),
         call_timeout_ms,
         services,
+        log_sink: None,
         limits: StoreLimitsBuilder::new().build(),
         table: ResourceTable::new(),
         wasi: WasiCtxBuilder::new().build(),

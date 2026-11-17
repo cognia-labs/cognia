@@ -36005,9 +36005,6 @@
         "clear": "Clear",
         "empty": "No output yet. Lines appear here once the plugin logs through the host, and for a Python plugin once its host runs.",
         "exited": "Host process exited",
-        "missing": {
-          "wasm-no-channel": "WASM plugins have no output channel of their own."
-        },
         "openInPanel": "Open this plugin's output in the log panel",
         "openInPanelShort": "Open logs",
         "runtimeStrip": "Python {version} · {plugins} loaded ({lazy} idle) · {calls} calls",
@@ -36242,12 +36239,10 @@
         "details": "Details",
         "empty": "Nothing logged yet.",
         "filter": "Structured logs for {pluginId}, generation {generation}",
-        "missing": {
-          "wasm-no-channel": "WASM plugins have no per-plugin output channel. The host reports failures by throwing, which surfaces in attempt diagnostics above rather than here."
-        },
         "title": "Runtime logs",
         "unverified": "Showing every generation for {pluginId}. No activation has been verified yet, so these lines may come from an earlier load.",
-        "waiting": "Start a development session to see this plugin's output."
+        "waiting": "Start a development session to see this plugin's output.",
+        "wasmDrainFailed": "Couldn't read the WASM host's log history:"
       },
       "sessionState": {
         "idle": "Idle",

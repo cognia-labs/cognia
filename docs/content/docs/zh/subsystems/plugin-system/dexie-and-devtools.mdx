@@ -145,7 +145,7 @@ flowchart LR
 - **开发者模式**（`developer-mode.ts`）是唯一的门。构建模式与遗留的 `localStorage` 标记在启动时被折叠成一个持久化值，所以 devtools 区块和 Creator 不可能对「开发者界面是否存在」给出不同答案。
 - **文件监听**（`file-watch.ts`）监听作者实际编辑的目录（“加载本地目录”选的源目录、Dev Mode 文件夹，都没有时才是安装副本），300 ms 防抖后走与 CLI 相同的已验证重载路径。源目录在每次重载前先重新安装一次。
 - **日志环**（`debugger.ts`）保留插件经 `ctx.logger` 写出的每一行，并打上它来自哪个生命周期 generation。
-- **运行时日志流**（`runtime-log-stream.ts`）把这个环与 Python 宿主的缓冲合成一条按时间排序的视图，并点名那些根本没有输出通道的运行时。
+- **运行时日志流**（`runtime-log-stream.ts`）把这个环、Python 宿主的缓冲、VS Code 扩展宿主的输出和 WASM guest 的 `log` 调用（`lib/plugin/wasm-bridge/log-buffer.ts`，由 `plugin-wasm://log` 事件和 `plugin_wasm_logs` 补读填充）合成一条按时间排序的视图。
 
 ### 逐文件映射
 
@@ -155,7 +155,7 @@ flowchart LR
 | `debugger.ts` | 每插件、每 generation 的日志环，上限 1000 条。`createDebugContext` 包住 `ctx.logger`，让插件的每条日志都镜像进来 | `getPluginDebugger`、`startSession`、`log` / `getLogs` / `onLog`、`createDebugContext` |
 | `file-watch.ts` | 应用内监听器：按运行时判定资格、决定监听哪个目录、精确路径归属、防抖、同一插件同时只重载一次、走已验证路径重载 | `startPluginFileWatch`、`watchEligibility`、`resolveWatchedPluginId`、`isInstallSwap` |
 | `lib/plugin/local/unpacked-sources.ts` | 记住每个“加载本地目录”插件的源目录；只有插件 id 和权限面都没变时才从它重新安装 | `recordUnpackedSource`、`listWatchableUnpackedSources`、`resyncUnpackedSource` |
-| `runtime-log-stream.ts` | 合并前端日志环与 Python 缓冲的读取面，按运行时打标 | `getPluginRuntimeLogs`、`subscribePluginRuntimeLogs`、`logSourcesFor` |
+| `runtime-log-stream.ts` | 合并前端日志环与 Python、VS Code、WASM 缓冲的读取面，按运行时打标 | `getPluginRuntimeLogs`、`subscribePluginRuntimeLogs`、`logSourcesFor` |
 
 ### 重载的权威在哪里
 

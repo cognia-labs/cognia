@@ -8,6 +8,7 @@ import enMessages from "@/i18n/messages/en.json"
 import type { PluginRuntimeLogEntry } from "@/lib/plugin/devtools/runtime-log-stream"
 import { useDevProjectStore } from "@/stores/plugins/dev-project-store"
 import { usePluginDevSessionStore } from "@/stores/plugins/plugin-dev-session-store"
+import { WASM_LOG_DRAIN_FAILURE_KIND } from "@/lib/plugin/wasm-bridge/log-buffer"
 
 const mockStatus = jest.fn()
 jest.mock("@/hooks/plugins/use-cognia-cli-status", () => ({
@@ -266,16 +267,49 @@ describe("PluginDevSessionWorkbench", () => {
       expect(line.closest("li")).toHaveAttribute("data-runtime", "python")
     })
 
-    // VS Code extensions gained a log channel (host stderr + output channels),
-    // so WASM is the only runtime left without one.
-    it("explains why wasm produces no logs instead of showing an empty list", async () => {
+    it("shows a wasm guest's log lines with their scope", async () => {
       seedFailedReload("wasm")
+      mockGetLogs.mockReturnValue([
+        {
+          id: "wasm-demo.plugin-host-a-1",
+          pluginId: "demo.plugin",
+          runtime: "wasm",
+          generation: "3",
+          level: "warn",
+          message: "cache miss",
+          timestamp: 1,
+          kind: "storage",
+        },
+      ])
       renderWorkbench()
       await userEvent.click(screen.getByRole("tab", { name: "Diagnostics" }))
-      expect(screen.getByTestId("runtime-logs-scope")).toHaveTextContent(
-        /no per-plugin output channel/i
-      )
-      expect(mockGetLogs).not.toHaveBeenCalled()
+      const line = await screen.findByText(/storage\s+cache miss/)
+      expect(line.closest("li")).toHaveAttribute("data-runtime", "wasm")
+      expect(mockGetLogs).toHaveBeenCalledWith("demo.plugin", { generation: null, limit: 200 })
+    })
+
+    it("names a failed read of the wasm host's history in the user's language", async () => {
+      seedFailedReload("wasm")
+      mockGetLogs.mockReturnValue([
+        {
+          id: "wasm-demo.plugin-drain-1",
+          pluginId: "demo.plugin",
+          runtime: "wasm",
+          generation: null,
+          level: "error",
+          message: "command plugin_wasm_logs not found",
+          timestamp: 1,
+          kind: WASM_LOG_DRAIN_FAILURE_KIND,
+        },
+      ])
+      renderWorkbench()
+      await userEvent.click(screen.getByRole("tab", { name: "Diagnostics" }))
+      expect(
+        await screen.findByText(
+          /Couldn't read the WASM host's log history: command plugin_wasm_logs/
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByText(new RegExp(WASM_LOG_DRAIN_FAILURE_KIND))).not.toBeInTheDocument()
     })
 
     it("lets the author expand a logged Error's stack and extra args", async () => {

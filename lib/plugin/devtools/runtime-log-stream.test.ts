@@ -6,7 +6,13 @@ import { appendVscodeLog } from "@/lib/plugin/vscode-shim/vscode-log-buffer"
 import { getPluginDebugger, resetPluginDebugger } from "./debugger"
 import { __resetPythonLogBufferForTesting, appendPythonEvent } from "@/lib/plugin/python/log-buffer"
 import {
-  RUNTIMES_WITHOUT_LOG_CHANNEL,
+  __resetWasmLogBufferForTesting,
+  bindWasmLogGeneration,
+  ingestWasmLogRecord,
+  type WasmLogRecord,
+} from "@/lib/plugin/wasm-bridge/log-buffer"
+import { drainWasmLogs } from "@/lib/plugin/wasm-bridge/log-source"
+import {
   isPluginType,
   clearPluginRuntimeLogs,
   getPluginRuntimeLogs,
@@ -15,10 +21,29 @@ import {
   subscribePluginRuntimeLogs,
 } from "./runtime-log-stream"
 
+jest.mock("@/lib/plugin/wasm-bridge/log-source", () => ({
+  drainWasmLogs: jest.fn(() => Promise.resolve()),
+}))
+
 beforeEach(() => {
   resetPluginDebugger()
   __resetPythonLogBufferForTesting()
+  __resetWasmLogBufferForTesting()
+  jest.mocked(drainWasmLogs).mockClear()
 })
+
+function wasmRecord(overrides: Partial<WasmLogRecord> = {}): WasmLogRecord {
+  return {
+    pluginId: "w",
+    generation: "host-a",
+    sequence: 1,
+    level: "info",
+    scope: "",
+    message: "from wasm",
+    timestampMs: 100,
+    ...overrides,
+  }
+}
 
 describe("logSourcesFor", () => {
   it("gives hybrid both sources", () => {
@@ -29,13 +54,8 @@ describe("logSourcesFor", () => {
     expect(logSourcesFor(type).runtimes).toHaveLength(1)
   })
 
-  it("names why wasm produces nothing", () => {
-    // Rule 7: an intentionally empty runtime has to be labelled, or an empty
-    // list is indistinguishable from a broken reader.
-    expect(logSourcesFor("wasm")).toEqual({
-      runtimes: [],
-      missingReason: RUNTIMES_WITHOUT_LOG_CHANNEL.wasm,
-    })
+  it("streams a wasm guest's log calls", () => {
+    expect(logSourcesFor("wasm")).toEqual({ runtimes: ["wasm"] })
   })
 
   it("streams a vscode extension's host output and output channels", () => {
@@ -52,6 +72,54 @@ describe("VS Code extension logs", () => {
     ])
     clearPluginRuntimeLogs("vs")
     expect(getPluginRuntimeLogs("vs")).toEqual([])
+  })
+})
+
+describe("WASM guest logs", () => {
+  it("merge into the stream in time order with the other runtimes", () => {
+    const dbg = getPluginDebugger()
+    dbg.startSession("w", 1)
+    const now = Date.now()
+    ingestWasmLogRecord(wasmRecord({ timestampMs: now - 1000, message: "early" }))
+    dbg.log("w", "info", "frontend")
+    ingestWasmLogRecord(wasmRecord({ sequence: 2, timestampMs: now + 1000, message: "late" }))
+    expect(getPluginRuntimeLogs("w").map((e) => [e.runtime, e.message])).toEqual([
+      ["wasm", "early"],
+      ["frontend", "frontend"],
+      ["wasm", "late"],
+    ])
+  })
+
+  it("filter by the lifecycle generation their host generation is bound to", () => {
+    bindWasmLogGeneration("w", "host-a", 4)
+    bindWasmLogGeneration("w", "host-b", 5)
+    ingestWasmLogRecord(wasmRecord({ generation: "host-a", message: "load 4" }))
+    ingestWasmLogRecord(wasmRecord({ generation: "host-b", message: "load 5", timestampMs: 200 }))
+    expect(getPluginRuntimeLogs("w", { generation: 5 }).map((e) => e.message)).toEqual(["load 5"])
+    expect(getPluginRuntimeLogs("w", { generation: 4 }).map((e) => e.message)).toEqual(["load 4"])
+  })
+
+  it("never show an unbound host generation under a lifecycle generation", () => {
+    ingestWasmLogRecord(wasmRecord({ generation: "host-unbound" }))
+    expect(getPluginRuntimeLogs("w", { generation: 1 })).toEqual([])
+    expect(getPluginRuntimeLogs("w")).toHaveLength(1)
+  })
+
+  it("clear with the rest of the plugin's runtimes", () => {
+    ingestWasmLogRecord(wasmRecord())
+    clearPluginRuntimeLogs("w")
+    expect(getPluginRuntimeLogs("w")).toEqual([])
+  })
+
+  it("notify subscribers, and subscribing backfills from the host", () => {
+    const onChange = jest.fn()
+    const off = subscribePluginRuntimeLogs("w", onChange)
+    expect(drainWasmLogs).toHaveBeenCalledWith("w")
+    ingestWasmLogRecord(wasmRecord())
+    expect(onChange).toHaveBeenCalledTimes(1)
+    off()
+    ingestWasmLogRecord(wasmRecord({ sequence: 2 }))
+    expect(onChange).toHaveBeenCalledTimes(1)
   })
 })
 

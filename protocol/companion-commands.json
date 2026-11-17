@@ -20267,6 +20267,23 @@
       "outputSchema": "#/components/schemas/RpcResult"
     },
     {
+      "name": "plugin_wasm_logs",
+      "resource": "plugin.wasm.logs",
+      "verb": "read",
+      "arm": "plugin_wasm_logs",
+      "target": "client",
+      "operation": "read",
+      "capability": "client.local",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "transports": ["internal"],
+      "pagination": "none",
+      "longRunning": false,
+      "inputSchema": "#/components/schemas/RpcArgs",
+      "outputSchema": "#/components/schemas/RpcResult"
+    },
+    {
       "name": "plugin_wasm_renderer_response",
       "resource": "plugin.wasm.renderer",
       "verb": "respond",

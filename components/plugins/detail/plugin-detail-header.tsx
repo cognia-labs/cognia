@@ -68,7 +68,7 @@ import { PluginActivationProgress } from "../plugin-activation-progress"
 import { PluginRuntimeWarnings, PluginStatusPill } from "../plugin-status-badge"
 import { PluginAvatar } from "../plugin-avatar"
 import { PluginHint } from "../_shared/plugin-hint"
-import { MenuItemLabel, PluginRowActionsMenu } from "../plugin-row-actions-menu"
+import { PluginRowActionsMenu } from "../plugin-row-actions-menu"
 
 interface Props {
   plugin: PluginRow
@@ -122,9 +122,8 @@ export function PluginDetailHeader({ plugin, onClose, reserveCloseCorner }: Prop
   // Name and description in the user's language (manifest nameKey / descriptionKey).
   const { name: displayName, description } = useLocalizedPluginText(plugin)
   const lifecycleActual = plugin.lifecycle?.actual
-  // Logs belong to the log panel. A runtime whose host serves no log channel
-  // (wasm) still gets the menu item, disabled, with the reason in it: an item
-  // that silently disappears for some plugins reads as a missing feature.
+  // Logs belong to the log panel. Every runtime has a channel now, so an
+  // unrecognised stored type is the only reason the item is missing.
   const logSources = isPluginType(plugin.type) ? logSourcesFor(plugin.type) : null
   const hasLogChannel = !!logSources && logSources.runtimes.length > 0
 
@@ -318,18 +317,6 @@ export function PluginDetailHeader({ plugin, onClose, reserveCloseCorner }: Prop
                       <ScrollTextIcon className="mr-2 size-3.5" />
                       {t("logs.openInPanelShort")}
                     </Link>
-                  </DropdownMenuItem>
-                ) : logSources?.missingReason ? (
-                  <DropdownMenuItem
-                    disabled
-                    className="items-start"
-                    data-testid="plugin-detail-open-logs"
-                  >
-                    <ScrollTextIcon className="mt-0.5 mr-2 size-3.5 shrink-0" />
-                    <MenuItemLabel
-                      label={t("logs.openInPanelShort")}
-                      detail={t(`logs.missing.${logSources.missingReason}` as never)}
-                    />
                   </DropdownMenuItem>
                 ) : null}
                 <DropdownMenuItem

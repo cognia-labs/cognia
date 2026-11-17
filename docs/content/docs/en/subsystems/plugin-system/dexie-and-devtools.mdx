@@ -156,8 +156,10 @@ purpose: the authority for building, installing and reloading is the
 - **the log ring** (`debugger.ts`) keeps every line a plugin writes through
   `ctx.logger`, tagged with the lifecycle generation it came from.
 - **the runtime log stream** (`runtime-log-stream.ts`) merges that ring with the
-  Python host's buffer into one time-ordered view, and names the runtimes that
-  have no output channel at all.
+  Python host's buffer, a VS Code extension's host output and a WASM guest's
+  `log` calls (`lib/plugin/wasm-bridge/log-buffer.ts`, fed by the
+  `plugin-wasm://log` event and the `plugin_wasm_logs` drain) into one
+  time-ordered view.
 
 ### Per-file map
 
@@ -167,7 +169,7 @@ purpose: the authority for building, installing and reloading is the
 | `debugger.ts` | Per-plugin, per-generation log ring capped at 1000 entries. `createDebugContext` wraps `ctx.logger` so every plugin log mirrors into it | `getPluginDebugger`, `startSession`, `log` / `getLogs` / `onLog`, `createDebugContext` |
 | `file-watch.ts` | In-app watcher: eligibility per runtime, which folder to watch, exact path attribution, debounce, one reload per plugin at a time, reload through the verified path | `startPluginFileWatch`, `watchEligibility`, `resolveWatchedPluginId`, `isInstallSwap` |
 | `lib/plugin/local/unpacked-sources.ts` | Remembers each "Load unpacked" plugin's source folder, and reinstalls from it only when the id and permission surface are unchanged | `recordUnpackedSource`, `listWatchableUnpackedSources`, `resyncUnpackedSource` |
-| `runtime-log-stream.ts` | Merged reader over the frontend ring and the Python buffer, tagged by runtime | `getPluginRuntimeLogs`, `subscribePluginRuntimeLogs`, `logSourcesFor` |
+| `runtime-log-stream.ts` | Merged reader over the frontend ring and the Python, VS Code and WASM buffers, tagged by runtime | `getPluginRuntimeLogs`, `subscribePluginRuntimeLogs`, `logSourcesFor` |
 
 ### Where the reload authority lives
 

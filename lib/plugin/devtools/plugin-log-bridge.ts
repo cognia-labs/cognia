@@ -28,18 +28,16 @@
  *
  * VS Code extensions are bridged the same way, from their own buffer
  * (`lib/plugin/vscode-shim/vscode-log-buffer.ts`: the host's stderr and the
- * extension's output channels).
- *
- * `wasm` contributes nothing here. That is not an omission: it has no
- * per-plugin output channel at all, which is why `RUNTIMES_WITHOUT_LOG_CHANNEL`
- * names it and the detail pane hides the link for it instead of pointing at a
- * list that can only ever be empty.
+ * extension's output channels), and so are WASM guests, from theirs
+ * (`lib/plugin/wasm-bridge/log-buffer.ts`: the lines the host recorded for the
+ * guest's `log` calls, already redacted there).
  */
 
 import { loggers } from "@cognia/logging"
 
 import { subscribePythonPluginEvents } from "@/lib/plugin/python/event-bus"
 import { subscribeVscodeLogEntries } from "@/lib/plugin/vscode-shim/vscode-log-buffer"
+import { subscribeWasmLogEntries } from "@/lib/plugin/wasm-bridge/log-buffer"
 import { normalizePythonEntry, type PluginRuntimeLogEntry } from "./runtime-log-stream"
 
 /**
@@ -130,12 +128,14 @@ export function installPluginRuntimeLogBridge(): () => void {
   })
 
   const offVscode = subscribeVscodeLogEntries(forwardPluginRuntimeLog)
+  const offWasm = subscribeWasmLogEntries(forwardPluginRuntimeLog)
 
   const teardown = () => {
     if (active !== teardown) return
     active = null
     offPython()
     offVscode()
+    offWasm()
   }
   active = teardown
   return teardown

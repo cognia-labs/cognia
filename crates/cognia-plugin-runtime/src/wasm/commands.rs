@@ -7,6 +7,7 @@
 //! - `plugin_wasm_call`        — invoke a guest export on the retained instance
 //! - `plugin_wasm_unload`      — remove the compiled component (+ instance)
 //! - `plugin_wasm_list`        — enumerate loaded plugins (debug UI)
+//! - `plugin_wasm_logs`        — drain one plugin's guest log lines (Dev Session)
 //!
 //! `activate` stashes the live post-`init` `Store` + `Instance` in
 //! `WasmPluginState::activated`; `call` reuses it (behind a per-plugin async
@@ -23,6 +24,7 @@ use tauri::State;
 
 use super::super::PluginRuntimeState;
 use super::bridge::{CancelReason, WasmRendererResponse};
+use super::capabilities::logger::{WasmLogDrain, WasmLogSink};
 use super::host::{
     ActivateOutcome, ActivatedPlugin, WasmManifestSlice, WasmPluginHost, WasmPluginSnapshot,
 };
@@ -282,6 +284,7 @@ pub async fn plugin_wasm_activate_generation_for_state(
     store.data_mut().process_grants = Some(super::capabilities::process::LiveProcessGrants::new(
         runtime, &plugin_id,
     ));
+    store.data_mut().log_sink = Some(WasmLogSink::new(state.logs.clone(), generation.clone()));
     prepare_async_store(&mut store);
     let timeout_ms = store.data().call_timeout_ms;
     let initialize = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
@@ -631,6 +634,7 @@ pub async fn plugin_wasm_call_generation_for_state(
     store.data_mut().process_grants = Some(super::capabilities::process::LiveProcessGrants::new(
         runtime, &plugin_id,
     ));
+    store.data_mut().log_sink = Some(WasmLogSink::new(state.logs.clone(), generation.clone()));
     prepare_async_store(&mut store);
     let timeout_ms = store.data().call_timeout_ms;
     tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
@@ -731,6 +735,38 @@ pub async fn plugin_wasm_list_for_state(
     state: &WasmPluginState,
 ) -> Result<Vec<WasmPluginSnapshot>, String> {
     Ok(WasmPluginHost::snapshot(state))
+}
+
+/// Drain one plugin's guest log lines for the plugin Dev Session.
+///
+/// Desktop-local (a `local-only` command in the companion contract): the
+/// renderer that reads it is the one that also receives each line as a
+/// `plugin-wasm://log` event, and calls this to backfill what it has not seen,
+/// so `afterSequence` is the highest sequence it holds of `generation`.
+#[cfg(feature = "tauri-host")]
+#[tauri::command]
+pub async fn plugin_wasm_logs(
+    state: State<'_, WasmPluginState>,
+    plugin_id: String,
+    generation: Option<String>,
+    after_sequence: Option<u64>,
+) -> Result<WasmLogDrain, String> {
+    plugin_wasm_logs_for_state(state.inner(), plugin_id, generation, after_sequence)
+}
+
+/// Host-neutral twin of [`plugin_wasm_logs`].
+pub fn plugin_wasm_logs_for_state(
+    state: &WasmPluginState,
+    plugin_id: String,
+    generation: Option<String>,
+    after_sequence: Option<u64>,
+) -> Result<WasmLogDrain, String> {
+    if plugin_id.trim().is_empty() {
+        return Err("plugin_id is empty".into());
+    }
+    Ok(state
+        .logs
+        .drain(&plugin_id, generation.as_deref(), after_sequence))
 }
 
 #[cfg(test)]
@@ -853,6 +889,65 @@ mod tests {
     fn extract_kind_returns_empty_when_missing() {
         assert_eq!(extract_kind(b"{}"), "");
         assert_eq!(extract_kind(b"not json"), "");
+    }
+
+    #[test]
+    fn logs_drain_returns_the_current_generation_only() {
+        let state = WasmPluginState::default();
+        state.logs.begin_generation("demo", "g1");
+        state.logs.record(
+            "demo",
+            "g1",
+            super::super::capabilities::logger::WasmLogLevel::Info,
+            "",
+            "from g1",
+        );
+        state.logs.begin_generation("demo", "g2");
+        state.logs.record(
+            "demo",
+            "g2",
+            super::super::capabilities::logger::WasmLogLevel::Info,
+            "",
+            "from g2",
+        );
+        let drain = plugin_wasm_logs_for_state(&state, "demo".into(), None, None).unwrap();
+        assert_eq!(drain.generation.as_deref(), Some("g2"));
+        assert_eq!(drain.entries.len(), 1);
+        assert_eq!(drain.entries[0].message, "from g2");
+        let json = serde_json::to_value(&drain).unwrap();
+        assert_eq!(json["entries"][0]["sequence"], 1);
+        assert_eq!(json["entries"][0]["timestampMs"].is_i64(), true);
+    }
+
+    #[test]
+    fn logs_drain_rejects_an_empty_plugin_id() {
+        let state = WasmPluginState::default();
+        assert!(plugin_wasm_logs_for_state(&state, " ".into(), None, None).is_err());
+    }
+
+    #[test]
+    fn installed_host_services_receive_each_log_line_as_an_event() {
+        use super::super::services::test_support::{
+            RecordingWasmBridgeTransport, RecordingWasmHostServices,
+        };
+        let state = WasmPluginState::default();
+        let transport = Arc::new(RecordingWasmBridgeTransport::new());
+        WasmPluginHost::install_host_services(
+            &state,
+            Arc::new(RecordingWasmHostServices::empty().with_log_events(transport.clone())),
+        );
+        state.logs.begin_generation("demo", "g1");
+        state.logs.record(
+            "demo",
+            "g1",
+            super::super::capabilities::logger::WasmLogLevel::Warn,
+            "",
+            "pushed",
+        );
+        let frames =
+            transport.frames_for(super::super::capabilities::logger::LOG_EVENT);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["message"], "pushed");
     }
 
     #[tokio::test]

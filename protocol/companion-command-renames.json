@@ -2768,6 +2768,9 @@
     "plugin_wasm_load": {
       "to": "plugin.wasm.load"
     },
+    "plugin_wasm_logs": {
+      "to": "plugin.wasm.logs.read"
+    },
     "plugin_wasm_renderer_response": {
       "to": "plugin.wasm.renderer.respond"
     },

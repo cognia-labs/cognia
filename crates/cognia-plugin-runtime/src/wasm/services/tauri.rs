@@ -97,6 +97,7 @@ pub struct TauriWasmHostServices {
     clipboard: TauriClipboard,
     notifications: TauriNotifications,
     bridge: Arc<WasmRendererBridge>,
+    log_events: Arc<TauriWasmBridgeTransport>,
 }
 
 impl TauriWasmHostServices {
@@ -104,8 +105,9 @@ impl TauriWasmHostServices {
         let bridge = WasmRendererBridge::new(Arc::new(TauriWasmBridgeTransport::new(app.clone())));
         Self {
             clipboard: TauriClipboard(app.clone()),
-            notifications: TauriNotifications(app),
+            notifications: TauriNotifications(app.clone()),
             bridge,
+            log_events: Arc::new(TauriWasmBridgeTransport::new(app)),
         }
     }
 
@@ -127,6 +129,10 @@ impl WasmHostServices for TauriWasmHostServices {
 
     fn renderer_bridge(&self) -> Option<Arc<WasmRendererBridge>> {
         Some(self.bridge.clone())
+    }
+
+    fn log_events(&self) -> Option<Arc<dyn WasmBridgeTransport>> {
+        Some(self.log_events.clone())
     }
 
     fn kind(&self) -> &'static str {
