@@ -14,12 +14,8 @@ import {
 } from "react"
 import { useTranslations } from "next-intl"
 import { AlertTriangle, MessageCircleMore } from "lucide-react"
-import {
-  Composer,
-  type ComposerHandle,
-  type ComposerTurnMetadata,
-  type ComposerWorkflowMention,
-} from "./composer"
+import { Composer, type ComposerHandle, type ComposerTurnMetadata } from "./composer"
+import type { ComposerWorkflowMention } from "./composer-trigger"
 import { usePlatform } from "@/hooks/use-platform"
 import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"

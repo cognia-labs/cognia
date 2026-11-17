@@ -61,6 +61,17 @@ export interface MentionableWorkflowElement {
   searchText: string
 }
 
+/** Copilot ⇄ workflow-editor wiring passed down from the workflow chat tab. */
+export interface ComposerWorkflowMention {
+  /** The workflow's `@`-mentionable nodes + edges (from the editor store). */
+  elements: readonly MentionableWorkflowElement[]
+  /**
+   * Transiently highlight these node ids on the canvas — driven by the picker's
+   * active row. Called with `[]` when the highlight clears.
+   */
+  onHighlight?: (ids: string[]) => void
+}
+
 export interface ComposerTrigger {
   kind: TriggerKind
   /**
