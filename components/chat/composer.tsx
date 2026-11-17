@@ -53,16 +53,6 @@ import {
   type ResolvedComposerSkin,
 } from "@/lib/chat/composer-skin"
 import { resolveStylePack } from "@/types/appearance/style-pack"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { getDocumentAcceptExtensions } from "@cognia/document/support-matrix"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -71,8 +61,6 @@ import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { useSoftKeyboardDevice } from "@/hooks/ui/use-keyboard-insets"
 import { useComposerKeyboardAvoidance } from "./composer/use-composer-keyboard-avoidance"
 import { useCoarsePointer } from "@/hooks/ui/use-pointer"
-import { Button } from "@/components/ui/button"
-import { Progress } from "@/components/ui/progress"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { type ComposerWorkflowMention } from "./composer-trigger"
 import {
@@ -87,17 +75,9 @@ import { type TurnRoute } from "@/lib/chat/turn-route/types"
 import { ContextChipBar } from "./composer/context-chip-bar"
 import { CommandHintBar } from "./composer/command-hint-bar"
 import { ScheduleSuggestion } from "./composer/schedule-suggestion"
-import { canContinueChat, lastUserMessage } from "@/lib/chat/continuation"
-import { selectVisibleMessages } from "@/stores/chat"
-import { readTurnRoute } from "@/lib/chat/turn-route/types"
-import { useOpenGoal } from "@/components/goal/use-active-goal"
 import { ComposerCheatsheet } from "./composer/composer-cheatsheet"
 import { canEnqueueInboxWrite, useInboxWriteReadiness } from "@/lib/connectors/inbox-writes"
 import { listPendingForConversation as listPendingDrafts } from "@/lib/db/connector-drafts"
-import { DraftEditor } from "@/components/inbox/draft-editor"
-import { PlatformReplyAssistance } from "./composer/platform-reply-assistance"
-import { PlatformBadge } from "@/components/inbox/platform-badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   type SettingsTab,
   type SlashCommand,
@@ -142,8 +122,6 @@ import { Collapse } from "./composer/collapse"
 import { SkillChipRow } from "./composer/skill-chip-row"
 import { HelperHints } from "./composer/helper-hints"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
-import { InboxComposerActionsHost } from "@/components/inbox/inbox-composer-actions-host"
-import { CannedResponsePicker } from "@/components/inbox/canned-response-picker"
 import { EnhanceButton } from "./composer/enhance-button"
 import { ComposerSessionProvider } from "./composer/composer-session-context"
 import { ComposerAppendBridge } from "./composer/composer-append-bridge"
@@ -152,6 +130,13 @@ import { ComposerStatusBands } from "./composer/composer-status-bands"
 import { ComposerPasteReminder, ComposerPastedChips } from "./composer/composer-pasted-chips"
 import { ComposerRunStatusStrip } from "./composer/composer-run-status-strip"
 import { VoiceTranscriptionBridge } from "./composer/voice-transcription-bridge"
+import { DraftReviewDialog } from "./composer/draft-review-dialog"
+import {
+  OversizeAttachmentDialog,
+  type OversizeConfirmRequest,
+} from "./composer/oversize-attachment-dialog"
+import { PlatformComposerHeader } from "./composer/platform-composer-header"
+import { PluginCommandProgress } from "./composer/plugin-command-progress"
 
 interface Props {
   session?: ChatSession | null
@@ -283,6 +268,7 @@ import {
 import { useComposerSkillChips } from "./composer/hooks/use-composer-skill-chips"
 import { useComposerGhostFeed } from "./composer/hooks/use-composer-ghost-feed"
 import { useComposerSendButton } from "./composer/hooks/use-composer-send-button"
+import { useComposerResume } from "./composer/hooks/use-composer-resume"
 
 /**
  * Imperative handle exposed by `<Composer>`. The desktop shell uses it to
@@ -1462,7 +1448,6 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   const tPlatform = useTranslations("chatPlatformComposer")
   const tPlatformName = useTranslations("inbox.platformBadge.names")
   const tWebSearch = useTranslations("webSearchToggle")
-  const tDraftReview = useTranslations("chat.composer.draftReview")
   const tRoute = useTranslations("chat.composer.route")
   const tRouteRuntime = useTranslations("agentTeamsWorkspace.chat.runtime")
   // One prediction for the panel and the send: the controller still re-checks
@@ -1506,52 +1491,7 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   const toolbarInBox = toolbarSitsInBox(skin.toolbarLayout) || compactLayout
   const focusedStatus = useChatStore((s) => s.status)
   const status = paneStatus ?? focusedStatus
-  const tContinuation = useTranslations("chat.composer")
-  const openGoal = useOpenGoal(session?.id)
-  const canResume = useChatStore((state) => {
-    if (!session || session.platformBinding || session.kind === "subagent" || openGoal) return false
-    const slice =
-      state.sessions[session.id] ?? (state.activeSessionId === session.id ? state : undefined)
-    return (
-      !!slice &&
-      !slice.messagesLoading &&
-      canContinueChat({
-        status: paneStatus ?? slice.status,
-        messages: selectVisibleMessages(slice.messages, slice.activeBranchByGroup),
-        diagnostic: slice.errorDiagnostic,
-        errorMessage: slice.errorMessage,
-        queued: !!("queuedTurnMessageId" in slice && slice.queuedTurnMessageId),
-      })
-    )
-  })
-  const handleResume = useCallback(async () => {
-    if (!session || disabled || !canResume) return
-    const state = useChatStore.getState()
-    const slice =
-      state.sessions[session.id] ?? (state.activeSessionId === session.id ? state : undefined)
-    if (
-      !slice ||
-      !canContinueChat({
-        status: slice.status,
-        messages: selectVisibleMessages(slice.messages, slice.activeBranchByGroup),
-        diagnostic: slice.errorDiagnostic,
-        errorMessage: slice.errorMessage,
-        queued: !!("queuedTurnMessageId" in slice && slice.queuedTurnMessageId),
-      })
-    )
-      return
-    const user = lastUserMessage(selectVisibleMessages(slice.messages, slice.activeBranchByGroup))
-    if (!user) return
-    const route = readTurnRoute(user.metadata)
-    const memberIds = (user.metadata as { targetMemberIds?: unknown } | undefined)?.targetMemberIds
-    await onSend(tContinuation("resumePrompt"), [], null, {
-      continuationOf: user.id,
-      ...(route ? { route } : {}),
-      ...(Array.isArray(memberIds) && memberIds.every((id) => typeof id === "string")
-        ? { targetMemberIds: memberIds }
-        : {}),
-    })
-  }, [canResume, disabled, onSend, session, tContinuation])
+  const { canResume, handleResume } = useComposerResume({ session, paneStatus, onSend, disabled })
   const setPermissionMode = useChatStore((s) => s.setPermissionMode)
   // Keyed by THIS composer's session, not by focus: in split view the
   // unfocused pane echoed its slash-command results into the other pane's
@@ -1576,10 +1516,7 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   const openDraftReview = useCallback(() => setDraftDialogOpen(true), [])
   // Oversize attachment confirmation: handleSubmit parks a resolver here while
   // the dialog below collects the user's choice (send anyway / cancel).
-  const [oversizeConfirm, setOversizeConfirm] = useState<{
-    tokens: number
-    resolve: (ok: boolean) => void
-  } | null>(null)
+  const [oversizeConfirm, setOversizeConfirm] = useState<OversizeConfirmRequest | null>(null)
   // Shortcut cheatsheet. Owned here (not in `ComposerInner`) because the
   // onboarding chip row that links to it lives at this level, while the `?`
   // shortcut that opens it lives in the inner key handler.
@@ -1808,63 +1745,16 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
               originalFiles={supportsQQOriginalFiles(session)}
             >
               {session?.platformBinding && (
-                <div className="mb-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-                  <PlatformBadge platform={session.platformBinding.platform} />
-                  <span className="min-w-0 flex-1 truncate">
-                    {tPlatform("destination", {
-                      platform: tPlatformName.has(session.platformBinding.platform)
-                        ? tPlatformName(session.platformBinding.platform)
-                        : session.platformBinding.platform,
-                      destination: session.title ?? session.platformBinding.conversationKey,
-                    })}
-                  </span>
-                  <PlatformReplyAssistance key={session.id} session={session} disabled={disabled} />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDraftDialogOpen(true)}
-                  >
-                    {tPlatform("reviewDrafts", { count: pendingDrafts.length })}
-                  </Button>
-                  <CannedResponsePicker
-                    conversationKey={session.platformBinding.conversationKey}
-                    context={{
-                      conversation: {
-                        title: session.title,
-                        platform: session.platformBinding.platform,
-                      },
-                      contact: { platform: session.platformBinding.platform },
-                    }}
-                  />
-                  <InboxComposerActionsHost
-                    conversationKey={session.platformBinding.conversationKey}
-                    adapterId={session.platformBinding.adapterId}
-                    platform={session.platformBinding.platform}
-                    sessionId={session.id}
-                    className="flex shrink-0 items-center gap-1 empty:hidden"
-                  />
-                </div>
+                <PlatformComposerHeader
+                  session={session}
+                  binding={session.platformBinding}
+                  disabled={disabled}
+                  pendingDraftCount={pendingDrafts.length}
+                  onReviewDrafts={openDraftReview}
+                />
               )}
               {commandProgress && (
-                <div className="flex items-center gap-3 px-3 py-2 text-sm">
-                  <div role="status" className="min-w-0 flex-1" aria-live="polite">
-                    <span className="block truncate">
-                      {commandProgress.message ||
-                        tCommands("running", { command: commandProgress.command })}
-                    </span>
-                    {commandProgress.value !== undefined && (
-                      <Progress
-                        className="h-1 w-full"
-                        aria-label={tCommands("progress", { command: commandProgress.command })}
-                        value={commandProgress.value * 100}
-                      />
-                    )}
-                  </div>
-                  <Button type="button" size="sm" variant="ghost" onClick={cancelPluginCommand}>
-                    {tCommands("cancel")}
-                  </Button>
-                </div>
+                <PluginCommandProgress progress={commandProgress} onCancel={cancelPluginCommand} />
               )}
               <ExternalAgentExtensionUi chatSessionId={session?.id} link={externalSessionLink}>
                 <ComposerInner
@@ -1964,54 +1854,13 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
       <ComposerCheatsheet open={cheatsheetOpen} onOpenChange={setCheatsheetOpen} />
 
       {/* Draft review dialog — shown when the session has pending connector drafts */}
-      <Dialog open={draftDialogOpen} onOpenChange={setDraftDialogOpen}>
-        <DialogContent className="max-w-lg sm:max-w-lg max-w-[calc(100vw-2rem)]">
-          <DialogHeader>
-            <DialogTitle>{tDraftReview("title")}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            {pendingDrafts.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{tDraftReview("noPendingDrafts")}</p>
-            ) : (
-              pendingDrafts.map((draft) => (
-                <DraftEditor
-                  key={draft.id}
-                  draft={draft}
-                  onClose={() => setDraftDialogOpen(false)}
-                />
-              ))
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <DraftReviewDialog
+        open={draftDialogOpen}
+        onOpenChange={setDraftDialogOpen}
+        drafts={pendingDrafts}
+      />
 
-      {/* Oversize attachment confirmation — large inlined documents (decision:
-          warn + confirm, never silently truncate). */}
-      <AlertDialog
-        open={oversizeConfirm !== null}
-        onOpenChange={(next) => {
-          if (!next) oversizeConfirm?.resolve(false)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{tAttach("oversizeTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {tAttach("oversizeBody", {
-                tokens: Math.round((oversizeConfirm?.tokens ?? 0) / 1000),
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => oversizeConfirm?.resolve(false)}>
-              {tAttach("oversizeCancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction onClick={() => oversizeConfirm?.resolve(true)}>
-              {tAttach("oversizeConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <OversizeAttachmentDialog request={oversizeConfirm} />
     </div>
   )
 })
