@@ -33,7 +33,7 @@ Six read-only audits and one benchmark (2026-11-16). Line numbers are as of `dev
 - Remote collapsed turns carry text and media only (`lib/chat/transcript/projection.ts:63-114`); tools, reasoning and sources appear only after expanding.
 - The in-flight turn is likely drawn twice on remote surfaces: no caller passes `activeTurnKey`, so the unfinished turn returns as `completed-turn` beside the live tail (`desktop-message-source.ts:875,901`, `transcript-timeline-surface.tsx:356-395`). Not covered by a test.
 - Expanded remote turns drop `senderId` / `senderKind` (`transcript-timeline-surface.tsx:95-107`), which `MessageRenderer` reads for room/team attribution.
-- The phone's live tail runs a bare `applySdkEvent` (`hooks/data/use-remote-session-stream.ts`) without desktop post-processing; the phone never subscribes to `transcript://live`. Three live reducers exist.
+- The phone's live tail runs a bare `applySdkEvent` (`hooks/data/use-remote-session-stream.ts`) without desktop post-processing; the phone never subscribes to `transcript://live`. Three live reducers exist. (Corrected 2026-11-17: the desktop's steps after `applySdkEvent` are enrichment from the sending device's own send state, which a watcher does not have and does not need, because the phone drops its live tail at completion and the Host timeline takes over. The three folds take three different inputs, see step 5.)
 - The Host ignores the selected branch for the final response (`projection.ts:193`); its `branchSummary` is never read; the `active-turn` timeline kind is never produced.
 
 **Performance.**
@@ -73,7 +73,7 @@ Markdown benchmark (CPU, renderToString / jsdom, Node 26): finished render is at
 | D9  | Ink animation runs on the trailing block only; settled blocks render plain text. Off for long replies and under reduced motion.                                                                                                                                                                                                                                                                  |
 | D10 | One `MessageRenderContext` supplies characters, actions, `canMutate(id)`, project root, resolved display settings and action-sheet capability to `MessageRenderer` and nested renderers; explicit props still override. List shells keep owning scroll, virtualization and data source.                                                                                                          |
 | D11 | Export, share and text extraction: fix defects first, then one part-descriptor registry (`plainText(part, purpose)`, `markdown`, `html`, `shareable`) that exporters, extractors, share and copy derive from; purposes (clipboard, search, model context, redaction) are parameters.                                                                                                             |
-| D12 | Remote timeline: collapsed turns gain an activity summary under 1 KiB (tool names and states, reasoning present, source count), with a `TRANSCRIPT_PROTOCOL_VERSION` bump; the in-flight turn is deduplicated; expanded turns keep `senderId` / `senderKind`; the phone's live tail reuses the desktop post-processing (three live reducers become one).                                         |
+| D12 | Remote timeline: collapsed turns gain an activity summary under 1 KiB (tool names and states, reasoning present, source count), with a `TRANSCRIPT_PROTOCOL_VERSION` bump; the in-flight turn is deduplicated; expanded turns keep `senderId` / `senderKind`; the phone subscribes to `transcript://live` for member-agent replies; the three live folds stay separate (step 5).                 |
 | D13 | Composer is split by responsibility into hooks and subcomponents; `ComposerInner` only assembles. Behaviour unchanged; existing tests keep passing.                                                                                                                                                                                                                                              |
 | D14 | Turn fold: each tool/reasoning segment folds into the process row as it settles; only the running segment is open; the turn's final structure exists before it ends. Post-turn cards, chips and badges merge into one footer row with reserved space.                                                                                                                                            |
 | D15 | Mobile text: long-press opens the sheet, "Select text" lives in it (current model). Fix clipping and missing actions; the hint becomes an overlay that takes no layout.                                                                                                                                                                                                                          |
@@ -133,11 +133,32 @@ Re-run the benches after this step; record the numbers.
 Pure structure, no behaviour change. Mechanical moves first (one commit), splits after (one commit per extracted responsibility).
 
 - Rename: `hooks/chat/use-claude-chat.ts`, `use-claude-chat-controller.ts`, `claude-chat-events.ts`, `claude-chat-send-options.ts`, `claude-chat-turn-tasks.ts`, `claude-chat-tool-hooks.ts` and their tests to `use-agent-chat*` / `agent-chat-*` (exact names fixed in the first commit); exported hook names follow (`useClaudeChat` → `useAgentChat`). Move the `lib/claude` P4 cohort to the destinations the migration plan lists (`adapter.ts` → `lib/chat/sdk-message-adapter.ts`, `citations.ts`, `compaction-undo.ts`, `dropped-capability-toast.ts`, `guild.ts`, `optical-archive-persist.ts`, `over-budget-toast.ts`, `run-record.ts`, `run-status.ts`, `sdk-subagent-bridge.ts`, `sidecar-info.ts`, `steer.ts`, `subagent-bridge.ts`, `subagent-tool-parts.ts`, `subagent-tree.ts`). Update every import, `jest.mock` path, gate JSON (`module-ownership.json`, baselines) and the migration plan's register (mark these rows done). `pnpm audit:modules` must pass; no forwarding exports.
-- Split `use-agent-chat-controller.ts` (8,539 lines) by responsibility: send pipeline, steer/queue, external-agent rail, approvals, stream subscription, session lifecycle. The live reducer becomes one module that the desktop controller, the phone's remote stream and the paired-browser tail all call (D12 groundwork).
+- Split `use-agent-chat-controller.ts` (8,539 lines) by responsibility: send pipeline, steer/queue, external-agent rail, approvals, stream subscription, session lifecycle.
 - Split `composer.tsx` (5,246 lines; `ComposerInner` ~3,300): trigger detection and popover, slash/`!`/`#` modes, templates, link and paste folding, attachments/OCR/video intake, draft and history, ghost text, `@` routing, IM platform mode, best-of-N, keyboard. Existing composer tests stay green; new hooks get co-located tests.
 - No changeset (internal).
 
-Progress (2026-11-17): the `lib/claude` cohort moved in `e9902c9108` (migration plan §13.2). The `hooks/chat` renames, the controller split and the Composer split wait until other sessions commit their uncommitted work in `claude-chat-events.ts`, `use-claude-chat-controller.ts`, their tests and `composer.tsx` (the user's call).
+Done (2026-11-17):
+
+- The `lib/claude` cohort moved in `e9902c9108` (migration plan §13.2). The `hooks/chat` renames landed in `d290c3ee7e`.
+- Controller: `use-agent-chat-controller.ts` went from 8,544 to 1,278 lines in `319121a429`..`d6497e0bf7`. These moved out:
+  - turn helpers
+  - the external-agent lane
+  - approvals
+  - session and steer controls
+  - turn leases
+  - the send pipeline (`agent-chat-send.ts`)
+  - the silence watchdog
+  - external out-of-band subscriptions
+  - the event queue
+  - the shared-queue drain
+  - edit and regenerate
+- Composer: `composer.tsx` went from 5,325 to 1,874 lines in `22ecd639e1`..`714fab8891`. `ComposerInner` now only calls hooks and assembles subcomponents (D13).
+- Not done, on purpose: one live reducer for the desktop, the phone and the paired-browser tail. The phone already folds SDK events with the same `applySdkEvent`. The desktop's later steps in `handleEvent` are enrichment from the sending device's own send state: context sources, run metadata, branch tags, compaction checkpoints and plan capture. The phone has none of that, and it hands its live tail back to the enriched Host timeline when the turn completes (`reconcileTranscript`). The three folds also take different inputs:
+  - SDK events, through `applySdkEvent`.
+  - External-agent events, through `applyExternalAgentEventToParts`, which the desktop external turn, the member brain and remote execution already share.
+  - `transcript://live` patches, through `applyTranscriptLiveFrame`.
+
+  Merging them would change the protocol, not the structure. The remote gaps that remain belong to step 6: the in-flight turn drawn twice (no caller passes `activeTurnKey`), the phone not subscribing to `transcript://live`, and the phone missing per-tool elapsed times.
 
 ### 6. Convergence (D7, D10, D11, D12)
 
