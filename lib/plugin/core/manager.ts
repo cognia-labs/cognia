@@ -174,7 +174,11 @@ import {
   type PythonHostRequestFrame,
 } from "@/lib/plugin/python/host-request-router"
 import { startPluginApiSpanBridge } from "@/lib/plugin/observability/plugin-api-spans"
-import { appendPythonEvent, type PythonPluginEvent } from "@/lib/plugin/python/log-buffer"
+import {
+  appendPythonEvent,
+  bindPythonLogGeneration,
+  type PythonPluginEvent,
+} from "@/lib/plugin/python/log-buffer"
 import {
   bindPythonRuntimeGeneration,
   unbindPythonRuntimeGeneration,
@@ -1188,6 +1192,13 @@ export class PluginManager {
   private bindPythonGeneration(pluginId: string, generation: string): void {
     this.pythonRuntimeGenerations.set(pluginId, generation)
     bindPythonRuntimeGeneration(pluginId, generation)
+    // The Dev Session filters by the lifecycle generation an activation proof
+    // names; frames carry this runtime token. Bind them before the pending
+    // frames below are published.
+    const lifecycleGeneration = this.activationLeases.get(pluginId)?.generation
+    if (lifecycleGeneration !== undefined) {
+      bindPythonLogGeneration(pluginId, generation, lifecycleGeneration)
+    }
     const pending = this.pendingPythonEvents.get(pluginId) ?? []
     this.pendingPythonEvents.delete(pluginId)
     for (const event of pending) {

@@ -1,6 +1,8 @@
 import {
   appendPythonEvent,
+  bindPythonLogGeneration,
   clearPythonLogs,
+  pythonLogGenerationOf,
   getPythonLogs,
   subscribePythonLogs,
   PYTHON_LOG_BUFFER_CAP,
@@ -59,6 +61,34 @@ describe("python log-buffer", () => {
     clearPythonLogs("a")
     expect(getPythonLogs("a")).toHaveLength(0)
     expect(getPythonLogs("b")).toHaveLength(1)
+  })
+
+  it("reads a runtime token under the lifecycle generation it is bound to", () => {
+    expect(pythonLogGenerationOf("a", "py-token-1")).toBe("py-token-1")
+    bindPythonLogGeneration("a", "py-token-1", 4)
+    expect(pythonLogGenerationOf("a", "py-token-1")).toBe("4")
+    // Another plugin's binding does not apply, and a frame without a token
+    // names no generation.
+    expect(pythonLogGenerationOf("b", "py-token-1")).toBe("py-token-1")
+    expect(pythonLogGenerationOf("a", undefined)).toBeNull()
+  })
+
+  it("tells subscribers when a binding re-labels frames they already hold", () => {
+    appendPythonEvent({ pluginId: "a", generation: "py-token-1", kind: "log", data: {} }, 1)
+    const listener = jest.fn()
+    subscribePythonLogs(listener)
+    bindPythonLogGeneration("a", "py-token-2", 1)
+    expect(listener).not.toHaveBeenCalled()
+    bindPythonLogGeneration("a", "py-token-1", 2)
+    expect(listener).toHaveBeenCalledWith("a")
+  })
+
+  it("remembers a bounded number of loads per plugin, oldest forgotten first", () => {
+    for (let generation = 1; generation <= 9; generation += 1) {
+      bindPythonLogGeneration("a", `py-token-${generation}`, generation)
+    }
+    expect(pythonLogGenerationOf("a", "py-token-1")).toBe("py-token-1")
+    expect(pythonLogGenerationOf("a", "py-token-9")).toBe("9")
   })
 
   it("ignores malformed events and survives throwing subscribers", () => {

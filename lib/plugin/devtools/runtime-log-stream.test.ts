@@ -4,7 +4,11 @@
 
 import { appendVscodeLog } from "@/lib/plugin/vscode-shim/vscode-log-buffer"
 import { getPluginDebugger, resetPluginDebugger } from "./debugger"
-import { __resetPythonLogBufferForTesting, appendPythonEvent } from "@/lib/plugin/python/log-buffer"
+import {
+  __resetPythonLogBufferForTesting,
+  appendPythonEvent,
+  bindPythonLogGeneration,
+} from "@/lib/plugin/python/log-buffer"
 import {
   __resetWasmLogBufferForTesting,
   bindWasmLogGeneration,
@@ -209,21 +213,33 @@ describe("getPluginRuntimeLogs", () => {
   })
 
   it("filters by generation across both id shapes", () => {
-    // The frontend ring counts generations, the python host sends a token.
+    // The frontend ring counts generations; the python host sends its own
+    // runtime token, which the manager binds to the lifecycle generation.
     const dbg = getPluginDebugger()
     dbg.startSession("p", 7)
     dbg.log("p", "info", "gen 7")
+    bindPythonLogGeneration("p", "py-runtime-b", 7)
+    bindPythonLogGeneration("p", "py-runtime-a", 6)
     appendPythonEvent(
-      { pluginId: "p", generation: "7", kind: "log", data: { line: "py gen 7" } },
+      { pluginId: "p", generation: "py-runtime-b", kind: "log", data: { line: "py gen 7" } },
       50
     )
     appendPythonEvent(
-      { pluginId: "p", generation: "6", kind: "log", data: { line: "py gen 6" } },
+      { pluginId: "p", generation: "py-runtime-a", kind: "log", data: { line: "py gen 6" } },
       60
     )
 
     const entries = getPluginRuntimeLogs("p", { generation: 7 })
     expect(entries.map((e) => e.message)).toEqual(["py gen 7", "gen 7"])
+  })
+
+  it("never shows an unbound python runtime token under a lifecycle generation", () => {
+    appendPythonEvent(
+      { pluginId: "p", generation: "py-runtime-unbound", kind: "log", data: { line: "x" } },
+      5
+    )
+    expect(getPluginRuntimeLogs("p", { generation: 1 })).toEqual([])
+    expect(getPluginRuntimeLogs("p")).toHaveLength(1)
   })
 
   it("keeps entries whose source reported no generation", () => {

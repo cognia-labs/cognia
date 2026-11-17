@@ -21,6 +21,7 @@ import { getPluginDebugger, type LogEntry } from "./debugger"
 import {
   clearPythonLogs,
   getPythonLogs,
+  pythonLogGenerationOf,
   subscribePythonLogs,
   type PythonLogEntry,
 } from "@/lib/plugin/python/log-buffer"
@@ -40,10 +41,10 @@ export interface PluginRuntimeLogEntry {
   pluginId: string
   runtime: PluginLogRuntime
   /**
-   * Lifecycle generation as a string, because the sources disagree: the
-   * frontend ring counts, the python host sends an opaque token, the WASM
-   * buffer maps its host token to the manager's count. `null` means the source
-   * did not say.
+   * Lifecycle generation as a string. The frontend ring counts; the python
+   * and WASM buffers map their host tokens to the manager's count, and fall
+   * back to the raw token for a load that was never bound. `null` means the
+   * source did not say.
    */
   generation: string | null
   level: PluginLogLevel
@@ -105,8 +106,10 @@ export function normalizeFrontendEntry(entry: LogEntry): PluginRuntimeLogEntry {
 const PYTHON_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"])
 
 /**
- * Pure. Mirrors how the plugin detail Logs tab already reads these frames, so
- * the same event does not read differently on two screens.
+ * Mirrors how the plugin detail Logs tab already reads these frames, so the
+ * same event does not read differently on two screens. The generation is the
+ * lifecycle generation the frame's runtime token is bound to
+ * (`pythonLogGenerationOf`), so the Dev Session's proof filter matches it.
  */
 export function normalizePythonEntry(entry: PythonLogEntry, index: number): PluginRuntimeLogEntry {
   const data = (entry.data ?? {}) as Record<string, unknown>
@@ -149,7 +152,7 @@ export function normalizePythonEntry(entry: PythonLogEntry, index: number): Plug
     id: `py-${entry.pluginId}-${entry.ts}-${index}`,
     pluginId: entry.pluginId,
     runtime: "python",
-    generation: entry.generation ?? null,
+    generation: pythonLogGenerationOf(entry.pluginId, entry.generation),
     level,
     message,
     timestamp: entry.ts,
@@ -167,8 +170,9 @@ function safeJson(value: unknown): string {
 
 export interface RuntimeLogQuery {
   /**
-   * Keep only entries from this lifecycle generation. Compared as a string,
-   * so the frontend ring's number and the python host's token both work.
+   * Keep only entries from this lifecycle generation. Compared as a string:
+   * every source reports the lifecycle generation it is bound to (python and
+   * WASM map their host tokens to it), and an unbound token never matches.
    * Entries whose source reported no generation are kept either way: dropping
    * them would hide a whole runtime rather than filter it.
    */

@@ -99,7 +99,12 @@ import { __resetSkillsForTesting, registerSkill } from "@/lib/plugin/registries/
 import { __resetPluginActivationProgressStoreForTesting } from "@/stores/plugin-runtime/plugin-activation-progress-store"
 import { PluginActivationConflictError, PluginLifecycleCoordinator } from "./lifecycle-coordinator"
 import { InMemoryPluginLifecycleStateAdapter, type PluginDirtyDiagnostic } from "./lifecycle-state"
-import { clearPythonLogs, getPythonLogs } from "@/lib/plugin/python/log-buffer"
+import {
+  __resetPythonLogBufferForTesting,
+  clearPythonLogs,
+  getPythonLogs,
+  pythonLogGenerationOf,
+} from "@/lib/plugin/python/log-buffer"
 import { loggers } from "@/lib/plugin/core/logger"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import {
@@ -7396,6 +7401,36 @@ describe("PluginManager", () => {
       // Success path clears the error slot with null — only a string
       // (an actual failure message) would indicate a load error.
       expect(store.setPluginError).not.toHaveBeenCalledWith("py-plugin", expect.any(String))
+    })
+
+    it("binds a python load's runtime token to its lifecycle generation for the Dev Session", async () => {
+      // The Dev Session filters by the lifecycle generation an activation proof
+      // names; python frames carry the host's runtime token instead.
+      __resetPythonLogBufferForTesting()
+      const plugin = createTypedPlugin("py-logs", "python")
+      const store = createLoadStore(plugin)
+      mockGetState.mockReturnValue(store)
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "plugin_python_load") {
+          return { tool_count: 0, hook_count: 0, generation: "py-logs-gen-1", hooks: [] }
+        }
+        return cmd === "plugin_python_get_tools" ? [] : undefined
+      })
+
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      stubLoader(manager)
+      try {
+        await manager.loadPlugin("py-logs")
+        const lifecycle = manager
+          .getPluginLifecycleSnapshots()
+          .find((snapshot) => snapshot.pluginId === "py-logs")
+        expect(lifecycle?.generation).toBeGreaterThan(0)
+        expect(pythonLogGenerationOf("py-logs", "py-logs-gen-1")).toBe(
+          String(lifecycle?.generation)
+        )
+      } finally {
+        __resetPythonLogBufferForTesting()
+      }
     })
 
     it.each([undefined, [], ["double"]])(

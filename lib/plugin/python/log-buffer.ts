@@ -31,6 +31,18 @@ const listeners = new Set<(pluginId: string) => void>()
  *  (required by useSyncExternalStore). */
 const snapshots = new Map<string, readonly PythonLogEntry[]>()
 
+/**
+ * pluginId → python runtime token → plugin manager lifecycle generation.
+ *
+ * Frames carry the python host's opaque runtime token, while the Dev Session
+ * filters by the lifecycle generation an activation proof names (a counter).
+ * Without this map a verified activation hid every python line, because no
+ * token ever equals a counter.
+ */
+const lifecycleBindings = new Map<string, Map<string, number>>()
+/** Tokens remembered per plugin; older loads fall back to their raw token. */
+const LIFECYCLE_BINDINGS_KEPT = 8
+
 function notify(pluginId: string): void {
   snapshots.delete(pluginId)
   for (const listener of listeners) {
@@ -75,6 +87,42 @@ export function getPythonLogs(pluginId: string): readonly PythonLogEntry[] {
   return snapshot
 }
 
+/**
+ * Bind a python runtime token to the lifecycle generation that loaded it.
+ * Called by the plugin manager when `plugin_python_load` returns, before the
+ * plugin's frames are published for that token.
+ */
+export function bindPythonLogGeneration(
+  pluginId: string,
+  runtimeGeneration: string,
+  lifecycleGeneration: number
+): void {
+  const map = lifecycleBindings.get(pluginId) ?? new Map<string, number>()
+  map.delete(runtimeGeneration)
+  map.set(runtimeGeneration, lifecycleGeneration)
+  while (map.size > LIFECYCLE_BINDINGS_KEPT) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
+  lifecycleBindings.set(pluginId, map)
+  if (buffers.get(pluginId)?.some((entry) => entry.generation === runtimeGeneration)) {
+    notify(pluginId)
+  }
+}
+
+/**
+ * The generation a frame is read under: the lifecycle generation its runtime
+ * token is bound to, else the raw token (which no lifecycle generation
+ * equals, so the frame shows only when every generation is shown), else
+ * `null` when the frame named none.
+ */
+export function pythonLogGenerationOf(pluginId: string, runtimeGeneration?: string): string | null {
+  if (!runtimeGeneration) return null
+  const bound = lifecycleBindings.get(pluginId)?.get(runtimeGeneration)
+  return bound === undefined ? runtimeGeneration : String(bound)
+}
+
 /** Drop everything buffered for one plugin. */
 export function clearPythonLogs(pluginId: string): void {
   buffers.delete(pluginId)
@@ -97,5 +145,6 @@ export function __resetPythonLogBufferForTesting(): void {
   }
   buffers.clear()
   snapshots.clear()
+  lifecycleBindings.clear()
   listeners.clear()
 }
