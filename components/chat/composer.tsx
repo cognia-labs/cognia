@@ -7,7 +7,6 @@ import {
 import type { ChatStatus as PromptStatus, UIMessage } from "ai"
 import { chatDockColumnClass } from "./chat-column"
 import {
-  ChangeEvent,
   type CSSProperties,
   forwardRef,
   KeyboardEvent as ReactKeyboardEvent,
@@ -16,7 +15,6 @@ import {
   type Ref,
   useCallback,
   useEffect,
-  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -26,7 +24,6 @@ import { useLiveQuery } from "dexie-react-hooks"
 import {
   selectComposerCitedRefs,
   useChatStore,
-  useComposerEphemeralSkillIds,
   useComposerPermissionMode,
   type ChatStatus as StoreChatStatus,
 } from "@/stores/chat"
@@ -41,7 +38,6 @@ import {
 import type { NativeVideoVerdict } from "@/lib/chat/attachments/video/delivery-gate"
 import { StagedAttachmentsProvider, useStagedAttachments } from "./composer/staged-attachment-store"
 import { useBrowserDownloadAttachIntake } from "@/hooks/browser/use-browser-download-attach-intake"
-import { useCameraRecovery } from "@/hooks/use-camera-recovery"
 import { attachmentToFiles } from "@/components/mobile/chat/composer-attachment"
 import { useAttachmentIntake } from "./composer/hooks/use-attachment-intake"
 import { useComposerVideoRoute } from "./composer/hooks/use-composer-video-route"
@@ -57,8 +53,6 @@ import {
   type ResolvedComposerSkin,
 } from "@/lib/chat/composer-skin"
 import { resolveStylePack } from "@/types/appearance/style-pack"
-import { requestBrowserUrl } from "@/lib/browser/open-url-request"
-import { openExternal } from "@/lib/tauri/opener"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -93,7 +87,6 @@ import { type TurnRoute } from "@/lib/chat/turn-route/types"
 import { ContextChipBar } from "./composer/context-chip-bar"
 import { CommandHintBar } from "./composer/command-hint-bar"
 import { ScheduleSuggestion } from "./composer/schedule-suggestion"
-import { resolveSendButton } from "./composer/send-button-mode"
 import { canContinueChat, lastUserMessage } from "@/lib/chat/continuation"
 import { selectVisibleMessages } from "@/stores/chat"
 import { readTurnRoute } from "@/lib/chat/turn-route/types"
@@ -134,7 +127,6 @@ import { useShellJobCopy } from "./shell-job/use-shell-job-copy"
 // Dexie session schema and the redaction package, which every composer test
 // otherwise has to mock just to render the box.
 import { useUpdateSession } from "@/lib/data-hooks/context"
-import { loggers } from "@cognia/logging"
 import { type DraftAttachmentMeta } from "@/lib/db/chat-drafts"
 import {
   useExternalSessionLinkForSession,
@@ -144,8 +136,6 @@ import { ExternalAgentExtensionUi } from "@/components/agent/external/extension-
 import { useSidechatShortcut } from "@/hooks/chat/use-sidechat-shortcut"
 import { DraftRestoredAttachments } from "./composer/draft-restored-attachments"
 import { OcrResultBubble } from "./composer/ocr-result-bubble"
-
-import { mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { BestOfNStartDialog } from "./composer/best-of-n-start-dialog"
 import { BottomToolbar } from "./composer/bottom-toolbar"
 import { Collapse } from "./composer/collapse"
@@ -155,7 +145,6 @@ import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { InboxComposerActionsHost } from "@/components/inbox/inbox-composer-actions-host"
 import { CannedResponsePicker } from "@/components/inbox/canned-response-picker"
 import { EnhanceButton } from "./composer/enhance-button"
-import { noteComposerTyping } from "@/stores/chat/composer-typing-store"
 import { ComposerSessionProvider } from "./composer/composer-session-context"
 import { ComposerAppendBridge } from "./composer/composer-append-bridge"
 import { ComposerCapabilityMenu } from "./composer/composer-capability-menu"
@@ -285,6 +274,15 @@ import {
 import { useComposerBestOfN } from "./composer/hooks/use-composer-best-of-n"
 import { useComposerSuggestions } from "./composer/hooks/use-composer-suggestions"
 import { useComposerPillEditing } from "./composer/hooks/use-composer-pill-editing"
+import { useComposerCameraRecovery } from "./composer/hooks/use-composer-camera-recovery"
+import { useComposerPermissionModeSync } from "./composer/hooks/use-composer-permission-mode-sync"
+import {
+  COMPOSER_MAX_HEIGHT_REM,
+  useComposerTextarea,
+} from "./composer/hooks/use-composer-textarea"
+import { useComposerSkillChips } from "./composer/hooks/use-composer-skill-chips"
+import { useComposerGhostFeed } from "./composer/hooks/use-composer-ghost-feed"
+import { useComposerSendButton } from "./composer/hooks/use-composer-send-button"
 
 /**
  * Imperative handle exposed by `<Composer>`. The desktop shell uses it to
@@ -297,13 +295,6 @@ export interface ComposerHandle {
    *  empty→chat layout swap remounts the composer so focus isn't dropped. */
   focus: () => void
 }
-
-// Max composer textarea height before it scrolls. Single source of truth so the
-// CSS cap (`maxHeight`) and the JS auto-resize fallback can't drift apart. The
-// px form assumes the app's default 16px root (the JS path only runs on old
-// WebViews lacking `field-sizing`).
-const COMPOSER_MAX_HEIGHT_REM = 12
-const COMPOSER_MAX_HEIGHT_PX = COMPOSER_MAX_HEIGHT_REM * 16
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -672,61 +663,7 @@ function ComposerInner(props: ComposerInnerProps) {
     entityContext,
   } = useComposerMentionSources({ cwd, defaultProvider, props })
   const { customCommands, memoryFilesAccess } = useComposerCustomCommands({ isDesktop, cwd, props })
-
-  // --- Hydrate chat-store from session row on first session change -------
-  // `hydratedFor` flips to the session id once the hydration write has
-  // *committed*, not just been scheduled. The persist effect below reads
-  // this ref to skip the first post-hydration render, where the store value
-  // hasn't yet caught up with the session row and would otherwise look
-  // divergent and trigger a redundant write.
-  const hydratedFor = useRef<string | null>(null)
-  const pendingHydrationFor = useRef<string | null>(null)
-  useEffect(() => {
-    if (!props.session) return
-    if (
-      hydratedFor.current === props.session.id ||
-      pendingHydrationFor.current === props.session.id
-    ) {
-      return
-    }
-    pendingHydrationFor.current = props.session.id
-    setPermissionMode(props.session.permissionMode ?? null, props.session.id)
-  }, [props.session, setPermissionMode])
-
-  // --- Persist active permission mode back to session row ---------------
-  useEffect(() => {
-    if (!props.session) return
-    // Hydration two-phase commit: when permissionMode catches up with the
-    // session row's value (the value we hydrated *to*), flip the
-    // hydratedFor ref. Until that point the persist branch is a no-op so
-    // the very first render after a session swap doesn't write the stale
-    // store value back to the row.
-    if (
-      pendingHydrationFor.current === props.session.id &&
-      hydratedFor.current !== props.session.id &&
-      permissionMode === (props.session.permissionMode ?? null)
-    ) {
-      hydratedFor.current = props.session.id
-      pendingHydrationFor.current = null
-      return
-    }
-    if (hydratedFor.current !== props.session.id) return
-    // Same normalization as the hydration check above: the row stores
-    // `permissionMode` as optional (absent → `undefined`) while the store
-    // uses `null` for "unset". Comparing raw values makes `undefined !== null`
-    // diverge forever — each write bumps `updatedAt`, the live query re-emits
-    // a fresh session object, this effect re-runs and writes again. That is a
-    // self-sustaining IDB write loop that re-renders the whole sidebar tree.
-    if ((props.session.permissionMode ?? null) === permissionMode) return
-    void updateSession(props.session.id, {
-      permissionMode: permissionMode ?? undefined,
-    }).catch((err) => {
-      loggers.chat.warn("updateSession permissionMode failed", {
-        sessionId: props.session?.id,
-        err: err instanceof Error ? err.message : String(err),
-      })
-    })
-  }, [permissionMode, props.session, updateSession])
+  useComposerPermissionModeSync({ setPermissionMode, permissionMode, updateSession, props })
 
   const tBestOfN = useTranslations("bestOfNEntry")
   const { commandMap, slashCommands, commandScope } = useComposerSlashCommands({
@@ -1059,114 +996,14 @@ function ComposerInner(props: ComposerInnerProps) {
     ]
   )
 
-  const onChange = useCallback(
-    (e: ChangeEvent<HTMLTextAreaElement>) => {
-      acceptedPredictionRef.current = null
-      textInput.setInput(e.target.value)
-      setCaret(e.target.selectionStart ?? e.target.value.length)
-      // A team room's members wait for the human to finish a sentence before
-      // an auto round (ADR-0177 batch 3). The runner polls this at round
-      // boundaries, so a keystroke here is the whole signal.
-      if (props.session?.kind === "team" && props.session.teamId) {
-        noteComposerTyping(props.session.id)
-      }
-      // Re-mirror the scroll onto the chip + ghost overlays. Shrinking the text
-      // (or clearing it) can reset the textarea's scrollTop WITHOUT firing a
-      // scroll event, which would otherwise strand the overlays at a stale
-      // translateY from the last scroll.
-      const offset = `translateY(${-e.target.scrollTop}px)`
-      if (chipOverlayRef.current) chipOverlayRef.current.style.transform = offset
-      if (ghostOverlayRef.current) ghostOverlayRef.current.style.transform = offset
-      // Typing exits history-recall mode so the next ↑ starts from the newest.
-      history.noteEdit()
-      // Last submit's per-command failures describe text the user has now
-      // changed — drop them rather than leave stale red pills on the queue bar.
-      setCommandErrors((current) => (current.length > 0 ? [] : current))
-      // Fold any URL the caret has moved past. Never the one being typed — the
-      // caret rule inside `foldLinks` sees to that — and never mid-composition,
-      // where rewriting the value would drop the IME's in-flight text.
-      if (!isComposing) {
-        linkFolding.fold(e.target.value, e.target.selectionStart ?? e.target.value.length)
-      }
-    },
-    [textInput, history, isComposing, linkFolding, props.session]
-  )
-
-  // Leaving the box settles every remaining URL, including one just pasted with
-  // the caret still sitting at its end.
-  const onBlur = useCallback(() => {
-    linkFolding.fold(textInput.value, -1)
-  }, [linkFolding, textInput])
-
-  const onSelect = useCallback(
-    (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-      const ta = e.currentTarget
-      const caretAt = ta.selectionStart ?? ta.value.length
-      setCaret(caretAt)
-      // Close the parameter editor once the caret leaves the token it belongs
-      // to — including when the user breaks the token, which stops it being a
-      // parameter at all. It never OPENS from here: `onSelect` also fires for
-      // arrow keys, and a panel that appeared every time the caret drifted
-      // through `{{module}}` would flash at someone reading back their own
-      // sentence.
-      if (activeParamId && paramTokenAt(caretAt)?.paramId !== activeParamId) {
-        setActiveParamId(null)
-      }
-    },
-    [activeParamId, paramTokenAt, setActiveParamId]
-  )
-
-  /**
-   * Open the editor for the parameter the user just clicked in.
-   *
-   * Pointer release, not `onSelect`: clicking a chip is a deliberate "edit
-   * this", where arrowing past one is not.
-   */
-  const onTextareaMouseUp = useCallback(
-    (e: React.MouseEvent<HTMLTextAreaElement>) => {
-      const ta = e.currentTarget
-      const caretAt = ta.selectionStart ?? 0
-      if (caretAt !== (ta.selectionEnd ?? caretAt)) return // a drag-selection, not a click
-      // ⌘/Ctrl-click follows a link, the way it does everywhere else. The
-      // overlay that paints the label captures no pointer events, so the click
-      // lands in the textarea and the caret tells us which token it hit.
-      if (e.metaKey || e.ctrlKey) {
-        const link = linkFolding.spans.find((span) => caretAt >= span.start && caretAt <= span.end)
-        if (link) {
-          e.preventDefault()
-          // The embedded browser pane takes it when one is open; otherwise the
-          // OS browser does, which is what every other link in the app does.
-          if (!requestBrowserUrl(link.url)) void openExternal(link.url)
-          return
-        }
-      }
-      setActiveParamId(paramTokenAt(caretAt)?.paramId ?? null)
-    },
-    [setActiveParamId, paramTokenAt, linkFolding.spans]
-  )
-
   // ── Per-session draft persistence (Phase 3.2) ─────────────────────────
-  useCameraRecovery(
-    sessionId && (!persistDrafts || draftHydratedFor === sessionId)
-      ? { kind: "chat", id: sessionId }
-      : null,
-    async (result, isCurrent) => {
-      const files = await attachmentToFiles(
-        result.kind === "photo"
-          ? { kind: "photo", ...result.photo, mime: `image/${result.photo.format}` }
-          : {
-              kind: "photos",
-              items: result.photos.map((photo) => ({
-                uri: photo.uri,
-                mime: `image/${photo.format}`,
-              })),
-            }
-      )
-      if (!isCurrent() || files.length === 0) return false
-      const accepted = await acceptFiles(files, { isCurrent })
-      return isCurrent() && accepted.length > 0
-    }
-  )
+  useComposerCameraRecovery({
+    attachmentToFiles,
+    sessionId,
+    persistDrafts,
+    draftHydratedFor,
+    acceptFiles,
+  })
   useComposerDraftLifecycle({
     attachmentToFiles,
     tCommands,
@@ -1196,107 +1033,34 @@ function ComposerInner(props: ComposerInnerProps) {
     submit,
     props,
   })
-
-  // Auto-resize textarea (JS fallback for browsers without field-sizing:content
-  // support, e.g. older iOS/Android WebViews). field-sizing-content in the
-  // className is the progressive-enhancement path; this effect only runs when
-  // the CSS property is absent.
-  //
-  // Crucially, it must NOT touch the textarea mid-composition: mutating
-  // `style.height` forces a synchronous reflow that aborts the active IME
-  // composition buffer on Android/iOS WebViews, so on-device typing (esp. CJK
-  // / predictive keyboards) appears to "swallow" characters. We defer the
-  // resize until composition ends, where this effect re-runs (isComposing flips
-  // back to false) and adjusts the height once for the committed text.
-  useEffect(() => {
-    const ta = textareaRef.current
-    if (!ta) return
-    if (typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content")) return
-    if (isComposing) return
-    ta.style.height = "auto"
-    ta.style.height = `${Math.min(ta.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`
-  }, [textValue, isComposing])
-
-  // Imperative handle: insert `@name ` at the caret. Used by the desktop
-  // shell's member list to mention a teammate without going through any
-  // intermediate draft store.
-  useImperativeHandle(
-    props.handleRef,
-    () => ({
-      insertMention: (name: string) => {
-        const ta = textareaRef.current
-        const cur = textInput.value
-        const pos = ta?.selectionStart ?? cur.length
-        const needsLeadSpace = pos > 0 && !/\s$/.test(cur.slice(0, pos))
-        const insertion = `${needsLeadSpace ? " " : ""}@${name} `
-        const next = cur.slice(0, pos) + insertion + cur.slice(pos)
-        textInput.setInput(next)
-        const caret = pos + insertion.length
-        requestAnimationFrame(() => {
-          const ta2 = textareaRef.current
-          if (ta2) {
-            ta2.setSelectionRange(caret, caret)
-            ta2.focus()
-          }
-        })
-        setCaret(caret)
-      },
-      focus: () => {
-        textareaRef.current?.focus()
-      },
-    }),
-    [textInput]
-  )
-
-  const isStreaming = props.status === "streaming"
-  // The primary button's whole state (send / stop / spinner / draft) in one
-  // decision — see `send-button-mode.ts` for the combination table. While a
-  // turn runs the button is Stop; a typed follow-up gets its own control
-  // beside it rather than taking Stop away.
-  //
-  // A fresh turn's dispatch counts as "sending" only until the turn is live:
-  // past that point the run's own state (Stop) is the truth, however long the
-  // runtime keeps `onSubmit` pending.
-  const isSending = followUpInFlight || (turnInFlight && !isStreaming)
-  const sendButton = resolveSendButton({
-    status: props.commandRunning
-      ? "streaming"
-      : props.session?.platformBinding
-        ? "ready"
-        : props.status,
-    isSending: props.commandRunning ? false : isSending,
-    isPreparingAttachments,
-    hasContent:
-      !props.commandRunning && (textValue.trim().length > 0 || attachments.files.length > 0),
-    canResume: props.canResume,
-    hasPendingDrafts: (props.pendingDraftCount ?? 0) > 0,
-    composerDisabled: !!props.disabled,
-    outboundBlocked,
+  const { onChange, onSelect, onTextareaMouseUp, onBlur } = useComposerTextarea({
+    textValue,
+    textInput,
+    textareaRef,
+    chipOverlayRef,
+    ghostOverlayRef,
+    setCaret,
+    isComposing,
+    setCommandErrors,
+    linkFolding,
+    setActiveParamId,
+    activeParamId,
+    paramTokenAt,
+    history,
+    acceptedPredictionRef,
+    props,
   })
-  // Cross-fade transition for the send/stop button icon swap (reduced-motion aware).
-  const sendIconTransition = useReducedMotionTransition(mobileTransition("fast"))
-
-  // Drive the inline ghost-text engine off the current draft. Suppress while a
-  // `/@!#` trigger popover is open, the caret isn't at the end of the text, or
-  // a turn is streaming / the composer is disabled — the controller debounces
-  // and only the most recent feed is queried, so this always reflects state.
-  const ghostFeed = ghost.feed
-  useEffect(() => {
-    const value = textValue
-    const suppress = !!trigger || isStreaming || !!props.disabled || caret !== value.length
-    ghostFeed(value, { suppress })
-  }, [textValue, caret, trigger, isStreaming, props.disabled, ghostFeed])
-
-  const ephemeralSkillIds = useComposerEphemeralSkillIds(props.session?.id ?? null)
-  const toggleEphemeralSkill = useChatStore((s) => s.toggleEphemeralSkill)
-  // Keyed by THIS pane's conversation, matching where `ephemeralSkillIds` are read
-  // from — the bare action defaults to the focused pane, so × detached a skill
-  // from the conversation beside it and left this chip standing.
-  const composerSessionIdForSkills = props.session?.id ?? null
-  const removeEphemeralSkill = useCallback(
-    (skillId: string) => toggleEphemeralSkill(skillId, composerSessionIdForSkills),
-    [toggleEphemeralSkill, composerSessionIdForSkills]
-  )
+  const { isStreaming, sendButton, sendIconTransition } = useComposerSendButton({
+    outboundBlocked,
+    textValue,
+    attachments,
+    turnInFlight,
+    followUpInFlight,
+    isPreparingAttachments,
+    props,
+  })
+  useComposerGhostFeed({ textValue, caret, ghost, trigger, isStreaming, props })
+  const { ephemeralSkillIds, removeEphemeralSkill } = useComposerSkillChips({ props })
   const dismissRestoredAttachments = useCallback(() => setRestoredAttachments([]), [])
 
   return (
