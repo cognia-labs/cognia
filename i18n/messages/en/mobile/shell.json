@@ -13,6 +13,7 @@
   "navSheetTitle": "Navigation",
   "roomSheetTitle": "Room settings",
   "newChat": "New chat",
+  "findInConversation": "Find in conversation",
   "noApiKey": "No API key",
   "noApiKeyHint": "No API key — open session settings to add one",
   "openMembers": "Open team members",

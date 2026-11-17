@@ -30740,6 +30740,7 @@
       "deleteSession": "删除此会话",
       "directSessionTitle": "与 {name} 的聊天",
       "exportConversation": "导出 / 分享",
+      "findInConversation": "在对话中查找",
       "homeLayout": "自定义首页",
       "inbox": "收件箱",
       "jobCenter": "后台任务",

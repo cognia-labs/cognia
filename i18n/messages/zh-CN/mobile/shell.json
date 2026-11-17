@@ -13,6 +13,7 @@
   "navSheetTitle": "导航",
   "roomSheetTitle": "房间设置",
   "newChat": "新建聊天",
+  "findInConversation": "在对话中查找",
   "noApiKey": "未配置密钥",
   "noApiKeyHint": "未配置密钥——打开会话设置进行添加",
   "openMembers": "打开成员列表",

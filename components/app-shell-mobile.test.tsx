@@ -855,6 +855,41 @@ describe("<AppShellMobile />", () => {
     expect(screen.queryByTestId("mobile-workspace-chip-fallback")).toBeNull()
   })
 
+  it("opens the conversation's find bar from the overflow menu, where a phone has no Ctrl+F", async () => {
+    const { registerAppShortcut } = jest.requireActual<
+      typeof import("@/lib/shortcuts/app-runtime")
+    >("@/lib/shortcuts/app-runtime")
+    const toggle = jest.fn()
+    const unregister = registerAppShortcut({ id: "chat.search.toggle", handler: toggle })
+    try {
+      sessionsRef.current = [
+        {
+          id: "s-1",
+          title: "Greetings",
+          kind: "direct",
+          createdAt: 0,
+          updatedAt: 0,
+        } as ChatSession,
+      ]
+      activeSessionId = "s-1"
+      const user = userEvent.setup()
+      render(<AppShellMobile />)
+      await user.click(screen.getByTestId("mobile-actions-trigger"))
+      await user.click(await screen.findByTestId("mobile-action-find-in-conversation"))
+      expect(toggle).toHaveBeenCalledTimes(1)
+    } finally {
+      unregister()
+    }
+  })
+
+  it("offers no find bar on the home screen, where there is no conversation", async () => {
+    const user = userEvent.setup()
+    render(<AppShellMobile />)
+    await user.click(screen.getByTestId("mobile-actions-trigger"))
+    await waitFor(() => expect(screen.getByTestId("mobile-action-new-chat")).toBeInTheDocument())
+    expect(screen.queryByTestId("mobile-action-find-in-conversation")).toBeNull()
+  })
+
   it("opens an idle Job Center from the overflow menu, and drops the row once it has work", async () => {
     const user = userEvent.setup()
     render(<AppShellMobile />)

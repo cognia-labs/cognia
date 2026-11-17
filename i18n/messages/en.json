@@ -30740,6 +30740,7 @@
       "deleteSession": "Delete this session",
       "directSessionTitle": "Chat with {name}",
       "exportConversation": "Export / share",
+      "findInConversation": "Find in conversation",
       "homeLayout": "Customize home",
       "inbox": "Inbox",
       "jobCenter": "Background jobs",

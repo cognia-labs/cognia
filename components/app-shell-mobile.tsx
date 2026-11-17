@@ -36,6 +36,7 @@ import {
   MoreVerticalIcon,
   PanelRightOpenIcon,
   SearchIcon,
+  TextSearchIcon,
   SettingsIcon,
   Settings2Icon,
   Share2Icon,
@@ -137,6 +138,7 @@ import { impact, notify } from "@/lib/capacitor/haptics"
 import { SETTINGS_ROUTE, settingsHref } from "@/lib/settings/deep-link"
 import type { SettingsSectionId } from "@/components/settings/settings-nav-config"
 import { PerfCaptureShellStatus } from "@/components/performance/perf-capture-shell-status"
+import { getAppRegistration } from "@/lib/shortcuts/app-runtime"
 
 const log = loggers.shell
 
@@ -896,6 +898,23 @@ export function AppShellMobile() {
                   <UserPlusIcon className="size-4" />
                   <span>{tShell("newChat")}</span>
                 </DropdownMenuItem>
+                {/* The conversation's find bar opens on Ctrl/⌘F everywhere
+                  else, and a phone has no keyboard to press it with. The bar
+                  above searches every chat; this one searches this one. The
+                  list registers the toggle while it is the pane on screen. */}
+                {activeSession && !canvasGuild ? (
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      getAppRegistration("chat.search.toggle")?.handler(
+                        new KeyboardEvent("keydown")
+                      )
+                    }
+                    data-testid="mobile-action-find-in-conversation"
+                  >
+                    <TextSearchIcon className="size-4" />
+                    <span>{tShell("findInConversation")}</span>
+                  </DropdownMenuItem>
+                ) : null}
                 {/* The width-folded halves of the app bar. Rendered here ONLY when
                   the bar could not hold them, so neither control is ever
                   reachable twice on the same screen. */}
