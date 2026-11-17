@@ -159,7 +159,6 @@ import { OcrResultBubble } from "./composer/ocr-result-bubble"
 
 import { mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { BestOfNStartDialog } from "./composer/best-of-n-start-dialog"
-import type { PreparedBestOfN } from "@/lib/best-of-n/entry"
 import { BottomToolbar } from "./composer/bottom-toolbar"
 import { Collapse } from "./composer/collapse"
 import { SkillChipRow } from "./composer/skill-chip-row"
@@ -296,6 +295,7 @@ import {
   runComposerMemorySubmit,
   runComposerTurn,
 } from "./composer/composer-turn-handlers"
+import { useComposerBestOfN } from "./composer/hooks/use-composer-best-of-n"
 
 /**
  * Imperative handle exposed by `<Composer>`. The desktop shell uses it to
@@ -2208,62 +2208,15 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   useSidechatShortcut(session?.id, session?.kind === "resource-workbench")
 
   const tBestOfN = useTranslations("bestOfNEntry")
-  const [bestOfNChoice, setBestOfNChoice] = useState<{ sessionId: string; n: 2 | 3 | 4 } | null>(
-    null
-  )
-  const bestOfNCount =
-    bestOfNChoice && bestOfNChoice.sessionId === session?.id ? bestOfNChoice.n : null
-  // A stable object and callback, so the memoized toolbar is not re-rendered
-  // by a Composer render that changed neither.
-  const bestOfNSessionId =
-    session?.kind === "direct" && !session.platformBinding ? session.id : null
-  const bestOfNControl = useMemo(
-    () =>
-      bestOfNSessionId
-        ? {
-            value: bestOfNCount,
-            disabled,
-            onChange: (n: 2 | 3 | 4 | null) =>
-              setBestOfNChoice(n ? { sessionId: bestOfNSessionId, n } : null),
-          }
-        : undefined,
-    [bestOfNSessionId, bestOfNCount, disabled]
-  )
+  const {
+    requestBestOfN,
+    setBestOfNChoice,
+    bestOfNCount,
+    bestOfNControl,
+    bestOfNStart,
+    setBestOfNStart,
+  } = useComposerBestOfN({ session, disabled, status, tBestOfN })
   const openProviderSettings = useCallback(() => onOpenSettings("api-key"), [onOpenSettings])
-  const [bestOfNStart, setBestOfNStart] = useState<{
-    prepared: PreparedBestOfN
-    resolve(value: boolean): void
-  } | null>(null)
-  const bestOfNStartRef = useRef(false)
-  const requestBestOfN = useCallback(
-    async (prompt: string, n: 2 | 3 | 4, agents?: string[]): Promise<boolean> => {
-      if (!session?.id || bestOfNStartRef.current) return false
-      if (["streaming", "awaiting_approval"].includes(status)) {
-        toast.error(tBestOfN("busy"))
-        return false
-      }
-      bestOfNStartRef.current = true
-      try {
-        const { prepareBestOfNChat } = await import("@/lib/best-of-n/entry")
-        const prepared = await prepareBestOfNChat(session.id, prompt, n, agents)
-        return await new Promise<boolean>((resolve) => setBestOfNStart({ prepared, resolve }))
-      } catch (error) {
-        toast.error(
-          tBestOfN("failed", { error: error instanceof Error ? error.message : String(error) })
-        )
-        return false
-      } finally {
-        bestOfNStartRef.current = false
-      }
-    },
-    [session, status, tBestOfN]
-  )
-  useEffect(
-    () => () => {
-      bestOfNStart?.resolve(false)
-    },
-    [bestOfNStart]
-  )
 
   const handleSlashCommand = useCallback(
     async (cmd: SlashCommand, args: string, staged?: SlashStagedFiles): Promise<boolean> =>
@@ -2380,6 +2333,7 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
       tRoute,
       tRouteRuntime,
       onOpenSettings,
+      setBestOfNChoice,
     ]
   )
 
