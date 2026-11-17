@@ -79,7 +79,7 @@ const seams: Record<string, string[]> = {
   "lib/execution/launch-child-run.ts": ["resolveRunAuthority"],
   "lib/execution/acting-authority.ts": ["resolveRunAuthority", "persistRunAuthority"],
   "lib/db/execution-runs.ts": ["resolveRunAuthority"],
-  "hooks/chat/use-agent-chat-controller.ts": [
+  "hooks/chat/agent-chat-send.ts": [
     "ensureDirectChatExecutionRun",
     "enforceRunAuthorityOnSendOptions",
   ],

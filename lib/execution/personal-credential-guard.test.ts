@@ -121,7 +121,7 @@ const HOST_DISPATCH_BINDINGS: Record<string, string[]> = {
     "dispatchOnMessageReceive",
     "dispatchPostChatReceive",
   ],
-  "hooks/chat/use-agent-chat-controller.ts": ["chatHookCredentialContext", "hookExecution"],
+  "hooks/chat/agent-chat-send.ts": ["chatHookCredentialContext", "hookExecution"],
   "hooks/chat/agent-chat-events.ts": ["toolCallExecutionRunId", "hookCredentialContext"],
   "lib/identity/forget-profile-identity.ts": ["credentialContext", "forgetProfileAuthSecrets"],
   "stores/account/account-store.ts": ["options.credentialContext", "credentialContext"],

@@ -39,6 +39,7 @@ test("runtime, companion crates, contracts and harness inputs select the lane", 
 test("an ordinary incremental PR that edits the sample's chat or ledger path selects the lane", () => {
   for (const path of [
     "hooks/chat/use-agent-chat-controller.ts",
+    "hooks/chat/agent-chat-send.ts",
     "hooks/chat/agent-chat-events.ts",
     "lib/execution/direct-chat-run.ts",
     "lib/execution/sources/agent-turn.ts",

@@ -120,13 +120,13 @@
     "count": 3
   },
   {
-    "file": "hooks/chat/agent-chat-turn-helpers.ts",
-    "call": "execute",
+    "file": "hooks/chat/agent-chat-send.ts",
+    "call": "startSquadRun",
     "count": 1
   },
   {
-    "file": "hooks/chat/use-agent-chat-controller.ts",
-    "call": "startSquadRun",
+    "file": "hooks/chat/agent-chat-turn-helpers.ts",
+    "call": "execute",
     "count": 1
   },
   {

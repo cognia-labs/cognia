@@ -74,12 +74,14 @@ const REVIEWED_SITES: Record<string, string> = {
   "hooks/chat/agent-chat-external-turn.ts":
     "listMessages:2;preparePersonalHistory:2;renderTranscript:2;resume:externalSessionId:3",
   "hooks/chat/agent-chat-session-controls.ts": "compactSession:1;resume:externalSessionId:1",
+  "hooks/chat/agent-chat-send.ts":
+    "buildHandoffContext:1;listMessages:2;prepareHandoffContext:1;preparePersonalDerivedHistory:2;preparePersonalHistory:7;resume:externalSessionId:1;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:2;resume:initialConversation:1;resume:resumeSessionId:4;resume:sdkSessionId:1;steerSession:1",
   "hooks/chat/agent-chat-send-options.ts":
     "convertToModelMessages:1;listMessages:2;preparePersonalHistory:4;renderBranchSeed:1;resume:expectedRuntimeSessionId:3;resume:forkFromSessionId:5;resume:forkedFromSdkSessionId:1;resume:initialConversation:4;resume:resumeSessionId:5;resume:sdkSessionId:9",
   "hooks/chat/agent-chat-turn-helpers.ts": "preparePersonalHistory:1",
   "hooks/chat/agent-chat-turn-tasks.ts": "prepareOwnerHistory:2",
   "hooks/chat/use-agent-chat-controller.ts":
-    "buildHandoffContext:1;listMessages:3;prepareHandoffContext:1;preparePersonalDerivedHistory:3;preparePersonalHistory:7;resume:externalSessionId:2;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:2;resume:initialConversation:1;resume:resumeSessionId:4;resume:sdkSessionId:2;steerSession:1;stored-message-read:1",
+    "listMessages:1;preparePersonalDerivedHistory:1;resume:externalSessionId:1;resume:sdkSessionId:1;stored-message-read:1",
   "hooks/chat/use-composer-ghost-text.ts": "complete:2;prepareOwnerHistory:1",
   "hooks/chat/use-conversation-summary-draft.ts":
     "preparePersonalHistory:1;renderConversationSegments:1",
@@ -715,11 +717,12 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "invalidate",
     "personalHistory.withheldMessageIds.length > 0 && visibilityChanged",
   ],
-  "hooks/chat/use-agent-chat-controller.ts": [
+  "hooks/chat/agent-chat-send.ts": [
     "preparePersonalHistory",
     "preparePersonalDerivedHistory",
     "buildPersonalAsideContext",
   ],
+  "hooks/chat/use-agent-chat-controller.ts": ["preparePersonalDerivedHistory"],
   "hooks/chat/agent-chat-external-turn.ts": [
     "preparePersonalHistory",
     "buildPersonalAsideContext",

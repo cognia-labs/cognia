@@ -35,6 +35,7 @@ const exact = new Set([
   "tests/e2e/mocks/anthropic/server.ts",
   "lib/dev/expose-test-globals.tsx",
   "hooks/chat/use-agent-chat-controller.ts",
+  "hooks/chat/agent-chat-send.ts",
   "hooks/chat/agent-chat-events.ts",
   "lib/db/execution-runs.ts",
   "lib/tauri/transport-companion.ts",
