@@ -121,9 +121,17 @@ describe("a refusal that never owned a working copy", () => {
    * gesture, so agreeing with it is the check that matters.
    */
   it("reads the ending turn's id the way the proven cancel path does", () => {
-    const reads = SOURCE.match(/const endingRunId = [\w.()]*\.sessions\[sessionId\]\?\.runId/g)
-    expect(reads).toHaveLength(2)
-    expect(SOURCE.match(/typeof endingRunId === "number"/g)).toHaveLength(2)
+    // The refusal lives in the controller, the cancel path (Stop) in the
+    // session controls; each reads the turn id the same way, once.
+    const cancel = readFileSync(
+      join(process.cwd(), "hooks/chat/agent-chat-session-controls.ts"),
+      "utf8"
+    )
+    for (const source of [SOURCE, cancel]) {
+      const reads = source.match(/const endingRunId = [\w.()]*\.sessions\[sessionId\]\?\.runId/g)
+      expect(reads).toHaveLength(1)
+      expect(source.match(/typeof endingRunId === "number"/g)).toHaveLength(1)
+    }
   })
 
   function leaseFailureBody(): string {
