@@ -29,7 +29,14 @@ export const TIMELINE_MIN_PANE_PX = 896
 export interface TimelineVisibilityInput {
   /** Measured pane width. `0` means "not yet measured" and never mounts. */
   paneWidth: number
-  /** Touch viewports get the action sheet instead; the minimap is pointer-only. */
+  /**
+   * The native phone shell. The minimap is a pointer surface, and on a phone
+   * the conversation is navigated with the find bar (⋮ → Find in
+   * conversation), the jump pill and the long-press sheet. Decided in the
+   * chat-surface overhaul (step 7): it stays off on phones unless step 8's
+   * benchmark of a 2,000-message conversation shows room for it. A narrow
+   * browser is already excluded by `paneWidth`.
+   */
   isMobile: boolean
   /** `settings.conversationTimeline.enabled`; `undefined` means opted in. */
   enabled: boolean | undefined

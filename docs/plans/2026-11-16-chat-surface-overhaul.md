@@ -190,10 +190,21 @@ Done (2026-11-17):
 - Desktop: focus ring on tool-row toggles; action bar wraps or folds into "…" by width; one "…" menu.
 - Status in aria labels; `--success` / `--warning` / `--info` tokens instead of raw palette colours, dark variants; composer chip overlay palette on tokens.
 - Mobile: search entry in the chat header; timeline decision documented (stays off on phones unless the benchmark shows room).
-- Text sizes normalized to the type scale (the 58 `text-[10px]` / `text-[9px]` uses); `message-bubble.ts` radius class made scannable (no template-built class).
+- Text sizes normalized to the type scale (the 58 `text-[10px]` / `text-[9px]` uses; 186 by the time step 7 ran); `message-bubble.ts` radius class made scannable (no template-built class).
 - Tool-call visuals: where they diverge (the main renderer's terminal/file/structured rows vs `ToolCallRow` inside subagents, `TurnChangesCard`), prepare 2–3 options as screenshots and let the user pick before implementing.
 
 `minor` changeset. i18n keys for any new label in both locales.
+
+Done (2026-11-18):
+
+- **Fold as steps settle (D14)** (`461fa1cbe4`): `foldStreamingTurnParts` folds each settled step while the reply streams and equals `foldTurnParts` once everything has settled, so nothing moves when the turn ends. The trigger badge and memory chips sit in the footer line, which keeps one button row while a turn is live. Deferred sections reserve the height their source estimates.
+- **Touch shell and message sheet (D2, D15)** (`b50c5c9501`): `useTouchShell` (native shell or a coarse pointer) decides long-press, the action sheet, the memory-chip sheet and the composer's "+" sheet; `CapabilityRow` takes its host's shape. The sheet draws up to four primary commands as a strip (`splitSheetCommands`) and scrolls the rest above the safe-area inset; the long-press hint is an overlay. On touch, tool-row actions sit in the open body and the row grows to 44 px; `touch-hit` no longer forces `relative` on an absolutely placed control, and `touch-hit-each` covers caller-passed toolbars. Tool-row toggles have a focus ring.
+- **Action bar, status tokens, names** (`e40b523108`): a narrow message row folds the least used bar commands into "…" (container queries on `@container/msgrow`, literal thresholds in `BAR_FOLD_HIDE_CLASS`, the menu reads the row's width when it opens); `actions: "all"` wraps. `--success-ink` / `--warning-ink` / `--info-ink` mix each status fill 40% toward the foreground, so status text holds 4.5:1 and follows a theme; the chat surfaces use the status tokens instead of raw palette colours (categorical palettes, the bookmark's yellow and text over media keep theirs). The Bash row names its state.
+- **Type scale** (`74399eea31`): `text-2xs` (0.625rem) replaces every `text-[10px]` / `text-[9px]` in the chat, mobile chat and remote-session surfaces. `message-bubble.ts` spells its classes whole: the user bubble's radius rendered only because a test spelled the same string.
+- **Find on the phone** (`2e6da23843`): the ⋮ menu offers "Find in conversation" while a conversation is open.
+- **Tool-call visuals** (`95cccb62a9`): the user picked option A from Storybook screenshots, the transcript's rows everywhere. `ToolCallView` is the one dispatch for the renderer in every flow mode, `SubagentPart` and the run panel; `ToolCallRow` is deleted. Lines are counted the way an editor numbers them (the same Read had said 2 and 4 lines of a 3-line file), an Edit's meta is +added −removed, and a row's meta is capped at 45% so a long error cannot squeeze out the target. `TurnChangesCard` was left as it is: it summarises a turn's files rather than drawing a call.
+- **Timeline on phones**: stays off unless step 8's benchmark shows room; the reasoning is on `shouldMountTimeline`'s `isMobile`.
+- Not done here: Tauri and Android device checks of all of the above belong to step 8.
 
 ### 8. Dead code, final measurement, smoke
 
