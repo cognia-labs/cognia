@@ -140,6 +140,73 @@ describe("NativeTransport in Tauri runtime", () => {
     await t.close()
   })
 
+  it("keeps every entry across overlapping failed flushes and resends them in order", async () => {
+    let failNext = true
+    mockForward.mockImplementation(async () => {
+      await Promise.resolve()
+      return !failNext
+    })
+    const t = new NativeTransport({ batchSize: 2, flushInterval: 60_000 })
+    t.log(makeEntry({ id: "a", message: "a" }))
+    t.log(makeEntry({ id: "b", message: "b" })) // auto flush #1 starts
+    t.log(makeEntry({ id: "c", message: "c" }))
+    t.log(makeEntry({ id: "d", message: "d" })) // joins the flush in flight
+    await t.flush()
+    expect(t.getPendingCount()).toBe(4)
+    // A second failure keeps all four (the old code kept one batch: 4 -> 2).
+    await t.flush()
+    expect(t.getPendingCount()).toBe(4)
+    expect(t.getHealth().droppedEntries).toBe(0)
+
+    failNext = false
+    mockForward.mockClear()
+    await t.flush()
+    expect(t.getPendingCount()).toBe(0)
+    const sent = mockForward.mock.calls.map((call) =>
+      (call[0] as Array<{ message: string }>).map((entry) => entry.message)
+    )
+    expect(sent).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+    ])
+    await t.close()
+  })
+
+  it("drops the oldest entries past maxQueueSize and counts them", async () => {
+    mockForward.mockResolvedValue(false)
+    const t = new NativeTransport({ batchSize: 100, maxQueueSize: 3, flushInterval: 60_000 })
+    for (const id of ["a", "b", "c", "d", "e"]) t.log(makeEntry({ id, message: id }))
+    expect(t.getPendingCount()).toBe(3)
+    expect(t.getHealth().droppedEntries).toBe(2)
+    await t.close()
+  })
+
+  it("forwards span, execution and request identity to the native log", async () => {
+    const t = new NativeTransport({ batchSize: 1, flushInterval: 60_000 })
+    t.log(
+      makeEntry({
+        traceId: "trace-1",
+        spanId: "span-1",
+        parentSpanId: "span-0",
+        executionId: "exec-1",
+        requestId: "req-1",
+        sessionId: "session-1",
+      })
+    )
+    await t.flush()
+    expect(mockForward.mock.calls[0][0]).toEqual([
+      expect.objectContaining({
+        traceId: "trace-1",
+        spanId: "span-1",
+        parentSpanId: "span-0",
+        executionId: "exec-1",
+        requestId: "req-1",
+        sessionId: "session-1",
+      }),
+    ])
+    await t.close()
+  })
+
   it("flush timer fires periodically and drains the buffer", async () => {
     // NativeTransport imported statically
     const t = new NativeTransport({ batchSize: 99, flushInterval: 500 })

@@ -111,6 +111,26 @@ describe("buildSupportReport", () => {
     expect(report.title).not.toContain("jane.doe@example.com")
   })
 
+  it("redacts sensitive values in header lines and section headings", async () => {
+    const report = await buildSupportReport({
+      context: {
+        surface: "chat",
+        route: "/probe/jane.doe@example.com",
+        error: {
+          name: "Error",
+          message: "boom",
+          digest: "Bearer synthetic-only-test-token-0123456789",
+        },
+      },
+      sections: [spec("x", "body", { heading: "Owner jane.doe@example.com" })],
+      generatedAt: "2026-08-16T10:00:00.000Z",
+    })
+    expect(report.markdown).not.toContain("jane.doe@example.com")
+    expect(report.markdown).not.toContain("synthetic-only-test-token-0123456789")
+    expect(report.markdown).toContain("- Route: ")
+    expect(report.markdown).toContain("- Error ID: ")
+  })
+
   it("caps each section body", async () => {
     const report = await buildSupportReport({
       context: { surface: "chat" },

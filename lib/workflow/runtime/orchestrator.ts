@@ -57,7 +57,7 @@ import {
 } from "./capability-preflight"
 import { IdempotencyCache } from "./idempotency"
 import { createWorkflowGraphIndex, topoSort, type WorkflowGraphIndex } from "./topo-sort"
-import { runStep } from "./step-executor"
+import { runStep, stepExecutionMetaOf } from "./step-executor"
 import { applyNodeRiskGate } from "./risk-gate"
 import { runLoopContainer } from "./loop-container"
 import { buildErrorOutput, resolveNodeFailure } from "./node-failure"
@@ -970,6 +970,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
         // the event-log cache hydration, and the run summary derives the
         // "succeeded with handled failure" warning state from the pair.
         const nodeFailure = resolveNodeFailure(node)
+        // The handled output belongs to the execution instance that failed.
+        const failedExecution = stepExecutionMetaOf(errorObj)
         if (nodeFailure.mode === "continue") {
           // n8n semantics: downstream RUNS with an error-shaped output —
           // NOT the legacy workflow-level "continue" (which skips downstream).
@@ -977,14 +979,14 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           stepOutputs.set(stepId, output)
           cache.set(stepId, output)
           completed.add(stepId)
-          await logger.stepCompleted(stepId, output)
+          await logger.stepCompleted(stepId, output, failedExecution)
           return
         }
         if (nodeFailure.mode === "defaultValue") {
           stepOutputs.set(stepId, nodeFailure.defaultValue)
           cache.set(stepId, nodeFailure.defaultValue)
           completed.add(stepId)
-          await logger.stepCompleted(stepId, nodeFailure.defaultValue)
+          await logger.stepCompleted(stepId, nodeFailure.defaultValue, failedExecution)
           return
         }
         if (nodeFailure.mode === "errorBranch") {
@@ -994,7 +996,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
             stepOutputs.set(stepId, output)
             cache.set(stepId, output)
             completed.add(stepId)
-            await logger.stepCompleted(stepId, output)
+            await logger.stepCompleted(stepId, output, failedExecution)
             for (const edge of outgoing) {
               if (!isErrorEdge(edge)) {
                 propagateSkip(workflowGraph, edge.target, skipped, markSkipped)

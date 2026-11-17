@@ -1120,6 +1120,7 @@
         "network_unavailable": "无法连接到诊断服务。",
         "not_configured": "当前账户尚未配置诊断服务。",
         "package_invalid": "该报告无法打包提交。",
+        "privacy_rejected": "该报告在脱敏后仍含敏感内容，因此未发送，报告仍保留在本机。",
         "report_not_found": "本地报告已不在磁盘上。",
         "submission_failed": "提交未完成。",
         "submission_not_found": "该报告没有提交记录。",

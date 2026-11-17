@@ -156,6 +156,22 @@ describe("trace debug session", () => {
     expect(getTraceDebugSession()).toBeNull()
   })
 
+  it("says so when the device refuses to save the session", async () => {
+    const setItem = jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError")
+    })
+    try {
+      render(<UsageCostSection />)
+      fireEvent.click(screen.getByText("15 min"))
+      expect(await screen.findByTestId("debug-arm-failed")).toHaveTextContent(
+        /Nothing is being captured/
+      )
+      expect(screen.queryByTestId("debug-session-active")).not.toBeInTheDocument()
+    } finally {
+      setItem.mockRestore()
+    }
+  })
+
   it("disables the stop button while nothing is armed", () => {
     render(<UsageCostSection />)
     expect(screen.getByText("Stop now").closest("button")).toBeDisabled()

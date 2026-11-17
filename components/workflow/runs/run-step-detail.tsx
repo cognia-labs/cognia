@@ -1,10 +1,12 @@
 "use client"
 
 /**
- * Right-rail step inspector for a run. Surfaces input params, output value,
- * any logs, and final status for a selected step. Reads only from the
- * durable event log so the data is identical to what the orchestrator
- * actually produced.
+ * Right-rail step inspector for a run. A step can execute several times in
+ * one run (retry attempts, loop iterations); the inspector splits its events
+ * into those executions (`groupStepExecutions`) and shows one execution's
+ * inputs, error, output, status, usage and logs at a time, with an aggregate
+ * summary kept separate. Reads only from the durable event log so the data is
+ * identical to what the orchestrator actually produced.
  */
 
 import { useMemo, useState } from "react"
@@ -14,12 +16,16 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
-
-type LogLevel = "debug" | "info" | "warn" | "error"
-const LOG_LEVELS: LogLevel[] = ["debug", "info", "warn", "error"]
 import {
   workflowNodeCategory,
   type VisualWorkflow,
@@ -29,8 +35,16 @@ import { nodeCatalogEntry } from "@/lib/workflow/nodes/catalog"
 import { tNode } from "@/lib/workflow/i18n/node-translate"
 import { reduceStepStream } from "@/hooks/workflow/use-step-stream"
 import { formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
+import {
+  groupStepExecutions,
+  summarizeStepExecutions,
+  type StepExecutionView,
+} from "@/lib/workflow/runs/step-executions"
 import { formatTokens } from "@/types/system/usage"
 import { formatDurationMs } from "./format"
+
+type LogLevel = "debug" | "info" | "warn" | "error"
+const LOG_LEVELS: LogLevel[] = ["debug", "info", "warn", "error"]
 
 const CATEGORY_BADGE = {
   trigger: "bg-wf-trigger/15 text-wf-trigger border-wf-trigger/30",
@@ -41,6 +55,41 @@ const CATEGORY_BADGE = {
   io: "bg-wf-io/15 text-wf-io border-wf-io/30",
   annotation: "bg-wf-annotation/15 text-wf-annotation border-wf-annotation/30",
 } as const
+
+interface StartedPayload {
+  inputs?: unknown
+  inputsTruncatedBytes?: number
+  pinned?: boolean
+}
+
+interface ErrorCauseView {
+  name?: string
+  message?: string
+  stack?: string
+  cause?: unknown
+}
+
+interface FailedPayload extends ErrorCauseView {
+  retryable?: boolean
+  truncated?: boolean
+}
+
+/** Flatten a recorded `cause` chain (bounded at write time) for display. */
+function causeChain(cause: unknown): ErrorCauseView[] {
+  const chain: ErrorCauseView[] = []
+  let current = cause
+  while (current !== undefined && current !== null && chain.length < 8) {
+    if (typeof current === "object" && "message" in current) {
+      const view = current as ErrorCauseView
+      chain.push(view)
+      current = view.cause
+    } else {
+      chain.push({ message: typeof current === "string" ? current : safeStringify(current) })
+      break
+    }
+  }
+  return chain
+}
 
 export function RunStepDetail({
   workflow,
@@ -57,59 +106,53 @@ export function RunStepDetail({
   const [logQuery, setLogQuery] = useState("")
   const [logLevels, setLogLevels] = useState<string[]>(LOG_LEVELS)
   const [stackOpen, setStackOpen] = useState(false)
-  const { node, stepEvents, summary } = useMemo(() => {
-    if (!stepId) return { node: null, stepEvents: [], summary: null }
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+
+  const { node, stepEvents, executions, stepLevelEvents, aggregate } = useMemo(() => {
+    if (!stepId) {
+      return {
+        node: null,
+        stepEvents: [],
+        executions: [] as StepExecutionView[],
+        stepLevelEvents: [] as WorkflowRunEventRow[],
+        aggregate: null,
+      }
+    }
     const node = workflow.nodes.find((n) => n.id === stepId) ?? null
     const stepEvents = events.filter((e) => e.stepId === stepId)
-    const started = stepEvents.find((e) => e.type === "step_started")
-    const terminal = [...stepEvents]
-      .reverse()
-      .find(
-        (e) => e.type === "step_completed" || e.type === "step_failed" || e.type === "step_skipped"
-      )
-    // For a running step we estimate elapsed time from the most recent event
-    // in the run rather than `Date.now()` so the render stays pure.
-    const latestTs = events.reduce((m, e) => (e.ts > m ? e.ts : m), started?.ts ?? 0)
-    const summary =
-      started && terminal
-        ? {
-            durationMs: terminal.ts - started.ts,
-            terminalType: terminal.type,
-          }
-        : started
-          ? {
-              durationMs: Math.max(0, latestTs - started.ts),
-              terminalType: "running" as const,
-            }
-          : null
-    return { node, stepEvents, summary }
+    const grouped = groupStepExecutions(stepEvents)
+    return {
+      node,
+      stepEvents,
+      executions: grouped.executions,
+      stepLevelEvents: grouped.stepLevelEvents,
+      aggregate: summarizeStepExecutions(grouped.executions),
+    }
   }, [stepId, workflow.nodes, events])
 
-  const logEvents = useMemo(() => stepEvents.filter((e) => e.type === "run_log"), [stepEvents])
+  // The chosen execution, or the latest one. A selection that does not exist
+  // for this step (another step was picked) falls back to the latest.
+  const current = executions.find((e) => e.key === selectedKey) ?? executions.at(-1) ?? null
 
-  // Retry history (step_retrying events — one per backoff wait).
+  // For a running execution, elapsed time comes from the most recent event in
+  // the run rather than `Date.now()` so the render stays pure.
+  const latestTs = useMemo(() => events.reduce((m, e) => (e.ts > m ? e.ts : m), 0), [events])
+
+  const logEvents = useMemo(
+    () =>
+      [...(current?.events ?? []), ...stepLevelEvents]
+        .filter((e) => e.type === "run_log")
+        .sort((a, b) => a.ts - b.ts),
+    [current, stepLevelEvents]
+  )
+
+  // Retry history across every execution (step_retrying — one per backoff wait).
   const retryEvents = useMemo(
     () => stepEvents.filter((e) => e.type === "step_retrying"),
     [stepEvents]
   )
 
-  // Live streaming output (step_stream events) + the step's token/cost usage.
-  const stream = useMemo(() => reduceStepStream(stepEvents, stepId), [stepEvents, stepId])
-  const usage = useMemo(() => {
-    const usageEv = [...stepEvents].reverse().find((e) => e.type === "step_usage")
-    return (
-      (usageEv?.payload as
-        | {
-            inputTokens?: number
-            outputTokens?: number
-            totalTokens?: number
-            costUsd?: number
-            providerId?: string
-            modelId?: string
-          }
-        | undefined) ?? null
-    )
-  }, [stepEvents])
+  const stream = useMemo(() => reduceStepStream(current?.events ?? [], stepId), [current, stepId])
 
   const filteredLogs = useMemo(() => {
     const q = logQuery.trim().toLowerCase()
@@ -141,17 +184,30 @@ export function RunStepDetail({
 
   const entry = nodeCatalogEntry(node.type)
   const category = workflowNodeCategory(node.type)
-  const startedEv = stepEvents.find((e) => e.type === "step_started")
-  const completedEv = stepEvents.find((e) => e.type === "step_completed")
-  const failedEv = stepEvents.find((e) => e.type === "step_failed")
-  const skippedEv = stepEvents.find((e) => e.type === "step_skipped")
+  const startedEv = current?.started
+  const endedEv = current?.terminal
+  const started = (startedEv?.payload as StartedPayload | undefined) ?? undefined
+  const pinned = started?.pinned === true
+  const completedOutput = (current?.completed?.payload as { output?: unknown } | undefined)?.output
+  const failedError = (current?.failed?.payload as FailedPayload | undefined) ?? null
+  const causes = failedError ? causeChain(failedError.cause) : []
+  const skippedReason = (current?.skipped?.payload as { reason?: string } | undefined)?.reason
+  const usage = current?.usage
+  const durationMs = startedEv
+    ? Math.max(0, (endedEv?.ts ?? Math.max(latestTs, startedEv.ts)) - startedEv.ts)
+    : null
 
-  const startParams = (startedEv?.payload as { params?: unknown } | undefined)?.params
-  const completedOutput = (completedEv?.payload as { output?: unknown } | undefined)?.output
-  const failedError =
-    (failedEv?.payload as { message?: string; retryable?: boolean; stack?: string } | undefined) ??
-    null
-  const skippedReason = (skippedEv?.payload as { reason?: string } | undefined)?.reason
+  const executionLabel = (execution: StepExecutionView, index: number) =>
+    [
+      t("executionNumber", { n: index + 1 }),
+      typeof execution.attempt === "number" ? t("attemptN", { attempt: execution.attempt }) : null,
+      typeof execution.iterationIndex === "number"
+        ? t("iterationN", { index: execution.iterationIndex + 1 })
+        : null,
+      t(`status.${execution.status}`),
+    ]
+      .filter(Boolean)
+      .join(" · ")
 
   return (
     <ScrollArea className="h-full">
@@ -171,18 +227,58 @@ export function RunStepDetail({
           </p>
         </div>
 
-        {summary ? (
+        {aggregate && executions.length > 1 ? (
+          <Section title={t("allExecutions")}>
+            <div
+              className="grid grid-cols-1 gap-2 rounded-md border border-transparent bg-muted/60 p-3 text-xs @xs/run-step:grid-cols-2"
+              data-testid="step-executions-summary"
+            >
+              <Stat label={t("executionCount")} value={String(aggregate.executionCount)} />
+              <Stat label={t("statusLabel")} value={t(`status.${aggregate.status}`)} />
+              <Stat label={t("totalDuration")} value={formatDurationMs(aggregate.durationMs)} />
+              {aggregate.totalTokens > 0 ? (
+                <Stat
+                  label={t("tokens")}
+                  value={`${formatTokens(aggregate.totalTokens)} (${formatTokens(aggregate.inputTokens)} / ${formatTokens(aggregate.outputTokens)})`}
+                />
+              ) : null}
+              {aggregate.costUsd !== undefined ? (
+                <Stat
+                  label={t("cost")}
+                  value={`${formatCostUsd(aggregate.costUsd)} ${t("costEstimateSuffix")}`}
+                />
+              ) : null}
+            </div>
+            <Select value={current?.key} onValueChange={setSelectedKey}>
+              <SelectTrigger
+                className="h-8 w-full text-xs"
+                aria-label={t("executionPicker")}
+                data-testid="step-execution-picker"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {executions.map((execution, index) => (
+                  <SelectItem key={execution.key} value={execution.key} className="text-xs">
+                    {executionLabel(execution, index)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Section>
+        ) : null}
+
+        {current ? (
           <div className="grid grid-cols-1 gap-2 rounded-md border border-transparent bg-muted/60 p-3 text-xs @xs/run-step:grid-cols-2">
-            <Stat label={t("duration")} value={formatDurationMs(summary.durationMs)} />
-            <Stat label={t("statusLabel")} value={summary.terminalType.replace("step_", "")} />
+            {durationMs !== null ? (
+              <Stat label={t("duration")} value={formatDurationMs(durationMs)} />
+            ) : null}
+            <Stat label={t("statusLabel")} value={t(`status.${current.status}`)} />
             {startedEv ? (
               <Stat label={t("started")} value={new Date(startedEv.ts).toLocaleTimeString()} />
             ) : null}
-            {(completedEv ?? failedEv ?? skippedEv) ? (
-              <Stat
-                label={t("ended")}
-                value={new Date((completedEv ?? failedEv ?? skippedEv)!.ts).toLocaleTimeString()}
-              />
+            {endedEv ? (
+              <Stat label={t("ended")} value={new Date(endedEv.ts).toLocaleTimeString()} />
             ) : null}
             {usage ? (
               <>
@@ -257,17 +353,43 @@ export function RunStepDetail({
         {failedError ? (
           <Section title={t("error")}>
             <pre className="whitespace-pre-wrap rounded-md border border-wf-status-failed/40 bg-wf-status-failed/5 p-3 text-xs">
-              {failedError.message ?? t("error")}
+              {failedError.name && failedError.name !== "Error"
+                ? `${failedError.name}: ${failedError.message ?? ""}`
+                : (failedError.message ?? t("error"))}
             </pre>
-            {failedError.stack ? (
+            {failedError.stack || causes.length > 0 ? (
               <Collapsible open={stackOpen} onOpenChange={setStackOpen} className="mt-1.5">
                 <CollapsibleTrigger className="text-[11px] text-muted-foreground underline-offset-2 hover:underline">
                   {stackOpen ? tLogs("stackToggleHide") : tLogs("stackToggleShow")}
                 </CollapsibleTrigger>
                 <CollapsibleContent>
-                  <pre className="mt-1 whitespace-pre overflow-x-auto rounded-md border border-transparent bg-muted/60 p-2 text-[11px] font-mono leading-relaxed">
-                    {failedError.stack}
-                  </pre>
+                  {failedError.stack ? (
+                    <pre
+                      className="mt-1 whitespace-pre overflow-x-auto rounded-md border border-transparent bg-muted/60 p-2 text-[11px] font-mono leading-relaxed"
+                      data-testid="step-error-stack"
+                    >
+                      {failedError.stack}
+                    </pre>
+                  ) : null}
+                  {causes.map((cause, index) => (
+                    <div key={index} className="mt-1.5">
+                      <p className="text-[11px] font-medium text-muted-foreground">
+                        {t("causedBy")}{" "}
+                        <span className="font-mono">
+                          {cause.name ? `${cause.name}: ` : ""}
+                          {cause.message ?? ""}
+                        </span>
+                      </p>
+                      {cause.stack ? (
+                        <pre className="mt-1 whitespace-pre overflow-x-auto rounded-md border border-transparent bg-muted/60 p-2 text-[11px] font-mono leading-relaxed">
+                          {cause.stack}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ))}
+                  {failedError.truncated ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">{t("errorTruncated")}</p>
+                  ) : null}
                 </CollapsibleContent>
               </Collapsible>
             ) : null}
@@ -283,12 +405,30 @@ export function RunStepDetail({
           </Section>
         ) : null}
 
-        <Section title={t("resolvedParams")}>
-          <JsonView value={startParams ?? node.data.params} emptyText={t("noValue")} />
-        </Section>
+        {pinned ? (
+          <Section title={t("pinnedTitle")}>
+            <p className="text-xs text-muted-foreground" data-testid="step-pinned-note">
+              {t("pinnedNote")}
+            </p>
+          </Section>
+        ) : started && "inputs" in started ? (
+          <Section title={t("resolvedInputs")}>
+            {typeof started.inputsTruncatedBytes === "number" ? (
+              <p className="text-[11px] text-muted-foreground">
+                {t("inputsTruncated", { kb: Math.ceil(started.inputsTruncatedBytes / 1024) })}
+              </p>
+            ) : null}
+            <JsonView value={started.inputs} emptyText={t("noValue")} />
+          </Section>
+        ) : (
+          <Section title={t("configuredParams")}>
+            <p className="text-[11px] text-muted-foreground">{t("configuredParamsNote")}</p>
+            <JsonView value={node.data.params} emptyText={t("noValue")} />
+          </Section>
+        )}
 
         {completedOutput !== undefined ? (
-          <Section title={t("output")}>
+          <Section title={pinned ? t("pinnedOutput") : t("output")}>
             <JsonView value={completedOutput} emptyText={t("noValue")} />
           </Section>
         ) : null}

@@ -129,7 +129,10 @@ static PATH: LazyLock<Regex> = LazyLock::new(|| {
 /// Apply the free-text rules in the same order as the TypeScript gate. Order is
 /// load-bearing: `Bearer <token>` must collapse before the email rule can chew
 /// on a token that happens to contain an `@`.
-fn redact_text(value: &str) -> String {
+///
+/// Public so other native artifacts that are not V1 events (the crash
+/// report, its user description) redact on exactly the same terms.
+pub fn redact_text(value: &str) -> String {
     let stage = BEARER.replace_all(value, "[REDACTED]");
     let stage = EMAIL.replace_all(&stage, "[REDACTED_EMAIL]");
     PATH.replace_all(&stage, "[REDACTED_PATH]").into_owned()
@@ -296,6 +299,31 @@ static PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
 });
 static PROVIDER_SECRET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(?:sk|rk)-[A-Za-z0-9_\-]{24,}\b").expect("provider pattern"));
+
+static PRIVATE_KEY_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----(?s:.*?)(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\z)",
+    )
+    .expect("pem block pattern")
+});
+
+/// Replace every high-confidence credential the scan below would reject with
+/// the manifest's replacement token.
+///
+/// A producer that must not drop an artifact because a panic message happened
+/// to quote a key (a crash report) redacts first and then runs the scan as a
+/// fail-closed check; one that finds anything after this has a pattern bug,
+/// not a credential to send. A PEM key is replaced through its END marker (or
+/// the end of the text), never just its header.
+pub fn redact_high_confidence_credentials(input: &str) -> String {
+    let replacement = CLIENT_PRIVACY_MANIFEST_V1.replacement;
+    let stage = PRIVATE_KEY_BLOCK.replace_all(input, replacement);
+    let stage = AWS_KEY.replace_all(&stage, replacement);
+    let stage = JWT.replace_all(&stage, replacement);
+    PROVIDER_SECRET
+        .replace_all(&stage, replacement)
+        .into_owned()
+}
 
 /// Streaming-friendly scan for credentials in an untrusted attachment. Mirrors
 /// `scanHighConfidenceCredentials` so a client-side rejection and a server-side
@@ -569,6 +597,30 @@ mod tests {
         bytes.extend_from_slice(b"AKIAIOSFODNN7EXAMPLE");
         let result = scan_high_confidence_credentials(&bytes);
         assert!(result.reject);
+    }
+
+    #[test]
+    fn high_confidence_credentials_are_redacted_until_the_scan_passes() {
+        let text = concat!(
+            "key AKIAABCDEFGHIJKLMNOP and sk-abcdefghijklmnopqrstuvwxyz0123 ",
+            "jwt eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4 ",
+            "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY----- tail",
+        );
+        assert!(scan_high_confidence_credentials(text.as_bytes()).reject);
+        let redacted = redact_high_confidence_credentials(text);
+        assert!(!scan_high_confidence_credentials(redacted.as_bytes()).reject);
+        assert!(!redacted.contains("MIIEvQIBADANBg"), "key body must go too");
+        assert!(redacted.ends_with(" tail"));
+        // Idempotent: a second pass changes nothing.
+        assert_eq!(redact_high_confidence_credentials(&redacted), redacted);
+    }
+
+    #[test]
+    fn an_unterminated_private_key_is_redacted_to_the_end_of_the_text() {
+        let redacted = redact_high_confidence_credentials(
+            "before -----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBg truncated",
+        );
+        assert_eq!(redacted, "before [REDACTED]");
     }
 
     #[test]

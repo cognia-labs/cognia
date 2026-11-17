@@ -69,19 +69,15 @@ pub async fn crash_list_reports() -> Result<Vec<CrashReportSummary>, String> {
     Ok(collect_reports())
 }
 
+/// The submission preview: the report normalized through the same scrubber
+/// packaging uses, so what the user reviews is what would be sent.
 #[tauri::command]
 pub async fn crash_read_report(stem: String) -> Result<String, String> {
     validate_stem(&stem)?;
     let dir = crate::crash::crash_reports_dir().ok_or("crash_dir_unavailable")?;
-    let txt = dir.join(format!("{stem}.txt"));
-    if txt.exists() {
-        return std::fs::read_to_string(&txt).map_err(|e| format!("read_failed:{e}"));
-    }
-    let json = dir.join(format!("{stem}.json"));
-    if json.exists() {
-        return std::fs::read_to_string(&json).map_err(|e| format!("read_failed:{e}"));
-    }
-    Err("report_not_found".to_string())
+    crate::crash::report::read_normalized(&dir, &stem)?
+        .preview()
+        .ok_or_else(|| "report_not_found".to_string())
 }
 
 #[tauri::command]
@@ -102,6 +98,8 @@ pub async fn crash_delete_report(stem: String) -> Result<(), String> {
             std::fs::remove_file(&path).map_err(|e| format!("delete_failed:{e}"))?;
         }
     }
+    // A package staged for a retry holds a copy of the report.
+    crate::crash::submit::discard_staged(&dir, &stem).map_err(|e| format!("delete_failed:{e}"))?;
     Ok(())
 }
 
@@ -179,7 +177,11 @@ fn collect_reports() -> Vec<CrashReportSummary> {
     let Some(dir) = crate::crash::crash_reports_dir() else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    collect_reports_in(&dir)
+}
+
+fn collect_reports_in(dir: &std::path::Path) -> Vec<CrashReportSummary> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
 
@@ -197,6 +199,11 @@ fn collect_reports() -> Vec<CrashReportSummary> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
             continue;
         };
+        // `submissions.json` (the receipt store) shares this directory; it is
+        // not a report and used to list as one.
+        if !crate::crash::report::is_report_stem(&stem) {
+            continue;
+        }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
         let summary = by_stem
             .entry(stem.clone())
@@ -250,6 +257,22 @@ mod tests {
         assert!(validate_stem("a/b").is_err());
         assert!(validate_stem("a\\b").is_err());
         assert!(validate_stem("C:evil").is_err());
+    }
+
+    #[test]
+    fn only_report_stems_are_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("submissions.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.path()
+                .join("crash-2026-05-25_00-00-00-000-abcd1234-panic.json"),
+            br#"{"kind":"panic","capturedAt":"2026-05-25T00:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("staged")).unwrap();
+        let reports = collect_reports_in(dir.path());
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].kind.as_deref(), Some("panic"));
     }
 
     #[test]

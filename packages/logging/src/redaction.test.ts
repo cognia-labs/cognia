@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 
-import { redactStructuredLogEntry } from "./redaction"
+import { redactLogText, redactLogValue, redactStructuredLogEntry } from "./redaction"
 import { DEFAULT_UNIFIED_CONFIG } from "./types"
 import type { LoggerRedactionConfig, StructuredLogEntry } from "./types"
 
@@ -184,5 +184,27 @@ describe("redactStructuredLogEntry", () => {
     const snapshot = JSON.stringify(entry)
     redactStructuredLogEntry(entry, REDACTION)
     expect(JSON.stringify(entry)).toBe(snapshot)
+  })
+})
+
+describe("redactLogValue / redactLogText", () => {
+  it("redacts sensitive keys and token patterns in a bare value", () => {
+    const out = redactLogValue(
+      { apiKey: "abc", nested: { note: "Bearer abc.def.ghi" }, keep: 3 },
+      REDACTION
+    ) as Record<string, unknown>
+    expect(out.apiKey).toBe(REPLACEMENT)
+    expect((out.nested as Record<string, unknown>).note).toBe(REPLACEMENT)
+    expect(out.keep).toBe(3)
+  })
+
+  it("returns the input untouched when redaction is disabled", () => {
+    const value = { token: "t" }
+    expect(redactLogValue(value, { ...REDACTION, enabled: false })).toBe(value)
+    expect(redactLogText("Bearer xyz", { ...REDACTION, enabled: false })).toBe("Bearer xyz")
+  })
+
+  it("applies text patterns to a string", () => {
+    expect(redactLogText("failed with Bearer abc123", REDACTION)).toBe(`failed with ${REPLACEMENT}`)
   })
 })

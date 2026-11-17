@@ -266,19 +266,40 @@ describe("PluginDevSessionWorkbench", () => {
       expect(line.closest("li")).toHaveAttribute("data-runtime", "python")
     })
 
-    it.each([
-      ["wasm", /no per-plugin output channel/i],
-      ["vscode-extension", /explicitly-unavailable list/i],
-    ] as const)(
-      "explains why %s produces no logs instead of showing an empty list",
-      async (type, expected) => {
-        seedFailedReload(type)
-        renderWorkbench()
-        await userEvent.click(screen.getByRole("tab", { name: "Diagnostics" }))
-        expect(screen.getByTestId("runtime-logs-scope")).toHaveTextContent(expected)
-        expect(mockGetLogs).not.toHaveBeenCalled()
-      }
-    )
+    // VS Code extensions gained a log channel (host stderr + output channels),
+    // so WASM is the only runtime left without one.
+    it("explains why wasm produces no logs instead of showing an empty list", async () => {
+      seedFailedReload("wasm")
+      renderWorkbench()
+      await userEvent.click(screen.getByRole("tab", { name: "Diagnostics" }))
+      expect(screen.getByTestId("runtime-logs-scope")).toHaveTextContent(
+        /no per-plugin output channel/i
+      )
+      expect(mockGetLogs).not.toHaveBeenCalled()
+    })
+
+    it("lets the author expand a logged Error's stack and extra args", async () => {
+      seedFailedReload("frontend")
+      mockGetLogs.mockReturnValue([
+        {
+          id: "log-1",
+          pluginId: "demo.plugin",
+          runtime: "frontend",
+          generation: "2",
+          level: "error",
+          message: "sync failed",
+          timestamp: 1,
+          args: [{ name: "Error", message: "fetch failed" }, { attempt: 2 }],
+          stack: "Error: fetch failed\n    at sync (plugin.js:10:5)",
+        },
+      ])
+      renderWorkbench()
+      await userEvent.click(screen.getByRole("tab", { name: "Diagnostics" }))
+      const details = await screen.findByTestId("runtime-log-details")
+      await userEvent.click(screen.getByText("Details"))
+      expect(details).toHaveTextContent("at sync (plugin.js:10:5)")
+      expect(details).toHaveTextContent('"attempt": 2')
+    })
 
     it("says nothing was logged rather than leaving the card blank", async () => {
       seedFailedReload("frontend")

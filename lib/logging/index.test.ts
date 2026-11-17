@@ -61,7 +61,6 @@ describe("logger index exports", () => {
     const m = await import("./index")
     expect(typeof m.logContext).toBe("object")
     expect(typeof m.generateTraceId).toBe("function")
-    expect(typeof m.traced).toBe("function")
     expect(typeof m.createLogRuntimeContext).toBe("function")
     expect(typeof m.normalizeLogOrigin).toBe("function")
     expect(typeof m.normalizeLogRuntime).toBe("function")

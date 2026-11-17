@@ -5,9 +5,10 @@
  * LLM deep integration). The pre-existing sections (params/output/logs) get
  * baseline assertions so regressions there surface too.
  */
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import enMessages from "@/i18n/messages/en.json"
+import enAggregate from "@/i18n/messages/en.json"
+import enRuns from "@/i18n/messages/en/workflows/runs.json"
 import type { VisualWorkflow, WorkflowRunEventRow } from "@/types/workflow/visual"
 import { RunStepDetail } from "./run-step-detail"
 
@@ -34,6 +35,13 @@ const workflow: VisualWorkflow = {
     retryDefaults: { attempts: 1, backoff: "fixed", baseMs: 0 },
   },
 }
+
+// The split source is the truth for this namespace. The jest `next-intl` mock
+// reads the generated aggregate, which lags the split source until
+// `pnpm i18n:build` runs; overlay this namespace so both agree (a no-op once
+// the aggregate is rebuilt).
+Object.assign(enAggregate.workflows.runs, enRuns)
+const enMessages = enAggregate
 
 function ev(partial: Partial<WorkflowRunEventRow> & Pick<WorkflowRunEventRow, "ts" | "type">) {
   return {
@@ -156,5 +164,106 @@ describe("RunStepDetail", () => {
     expect(
       screen.getByText("This error is marked non-retryable; retries were skipped.")
     ).toBeInTheDocument()
+  })
+
+  it("shows the resolved inputs the execution actually ran with", () => {
+    wrap([
+      ev({
+        ts: 10,
+        type: "step_started",
+        payload: { inputs: { userPrompt: "resolved hi" }, stepExecutionId: "a", attempt: 1 },
+      }),
+      ev({ ts: 20, type: "step_completed", payload: { output: {}, stepExecutionId: "a" } }),
+    ])
+    expect(screen.getByText("Resolved inputs")).toBeInTheDocument()
+    expect(screen.getByText(/resolved hi/)).toBeInTheDocument()
+    expect(screen.queryByText("Configured params")).toBeNull()
+  })
+
+  it("labels a pinned execution as pinned data, never as resolved inputs", () => {
+    wrap([
+      ev({ ts: 10, type: "step_started", payload: { pinned: true, stepExecutionId: "p" } }),
+      ev({
+        ts: 11,
+        type: "step_completed",
+        payload: { output: { fixture: 1 }, stepExecutionId: "p" },
+      }),
+    ])
+    expect(screen.getByTestId("step-pinned-note")).toBeInTheDocument()
+    expect(screen.getByText("Pinned output")).toBeInTheDocument()
+    expect(screen.queryByText("Resolved inputs")).toBeNull()
+  })
+
+  it("falls back to the configured params, labelled as such, for rows without inputs", () => {
+    wrap([
+      ev({ ts: 10, type: "step_started", payload: { params: { attempt: 1 } } }),
+      ev({ ts: 20, type: "step_completed", payload: { output: {} } }),
+    ])
+    expect(screen.getByText("Configured params")).toBeInTheDocument()
+    expect(screen.getByText(/"userPrompt": "hi"/)).toBeInTheDocument()
+  })
+
+  it("shows the recorded stack and cause of a failed execution", () => {
+    wrap([
+      ev({ ts: 10, type: "step_started", payload: { inputs: {}, stepExecutionId: "a" } }),
+      ev({
+        ts: 12,
+        type: "step_failed",
+        payload: {
+          name: "TypeError",
+          message: "bad input",
+          stack: "TypeError: bad input\n    at execute (node.ts:4:11)",
+          cause: { name: "Error", message: "root cause" },
+          stepExecutionId: "a",
+        },
+      }),
+    ])
+    expect(screen.getByText("TypeError: bad input")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("Show stack trace"))
+    expect(screen.getByTestId("step-error-stack").textContent).toContain("node.ts:4:11")
+    expect(screen.getByText(/root cause/)).toBeInTheDocument()
+  })
+
+  it("does not mix a failed first attempt with the successful retry", () => {
+    wrap([
+      ev({
+        ts: 10,
+        type: "step_started",
+        payload: { inputs: { try: "one" }, stepExecutionId: "a", attempt: 1 },
+      }),
+      ev({
+        ts: 12,
+        type: "step_usage",
+        payload: { totalTokens: 100, inputTokens: 60, outputTokens: 40, stepExecutionId: "a" },
+      }),
+      ev({ ts: 14, type: "step_failed", payload: { message: "first boom", stepExecutionId: "a" } }),
+      ev({
+        ts: 20,
+        type: "step_started",
+        payload: { inputs: { try: "two" }, stepExecutionId: "b", attempt: 2 },
+      }),
+      ev({
+        ts: 22,
+        type: "step_usage",
+        payload: { totalTokens: 30, inputTokens: 20, outputTokens: 10, stepExecutionId: "b" },
+      }),
+      ev({
+        ts: 30,
+        type: "step_completed",
+        payload: { output: { answer: "second ok" }, stepExecutionId: "b" },
+      }),
+    ])
+    // Default: the latest execution, with only its own evidence.
+    expect(screen.getByText(/second ok/)).toBeInTheDocument()
+    expect(screen.getByText(/"try": "two"/)).toBeInTheDocument()
+    expect(screen.queryByText("first boom")).toBeNull()
+    expect(screen.getByText("30 (20 / 10)")).toBeInTheDocument()
+    // The aggregate sums both executions, separately from the details.
+    const summary = screen.getByTestId("step-executions-summary")
+    expect(within(summary).getByText("2")).toBeInTheDocument()
+    expect(within(summary).getByText("130 (80 / 50)")).toBeInTheDocument()
+    expect(screen.getByTestId("step-execution-picker").textContent).toContain(
+      "Run 2 · attempt 2 · completed"
+    )
   })
 })

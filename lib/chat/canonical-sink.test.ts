@@ -243,9 +243,32 @@ describe("closeChatCanonicalLog", () => {
     appendMock.mockRejectedValue(new Error("dexie is gone"))
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
     openChatCanonicalLog({ sessionId: "s1", runId: "run-1" })
-    // Sealing a turn must not fail because telemetry could not be written.
-    await expect(closeChatCanonicalLog("s1")).resolves.toBeUndefined()
+    // Sealing a turn must not fail because telemetry could not be written,
+    // but it must say the log is incomplete.
+    await expect(closeChatCanonicalLog("s1")).resolves.toEqual({
+      complete: false,
+      unwrittenEnvelopes: 2,
+      droppedEnvelopes: 0,
+      lastError: "dexie is gone",
+    })
     expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it("keeps a failed batch and writes it with the next flush", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+    appendMock.mockRejectedValueOnce(new Error("QuotaExceededError"))
+    openChatCanonicalLog({ sessionId: "s1", runId: "run-1" })
+    recordChatCanonicalEvents("s1", [{ kind: "warning", code: "a", message: "m" }])
+    await __flushChatCanonicalLogForTesting("s1")
+    expect(appendMock).toHaveBeenCalledTimes(1)
+
+    await expect(closeChatCanonicalLog("s1")).resolves.toEqual({ complete: true })
+    // The retry resends the failed envelopes first, then the sealing lifecycle.
+    const retried = appendMock.mock.calls[1][1].map(
+      (envelope) => (envelope.event as { kind: string; code?: string }).code ?? envelope.event.kind
+    )
+    expect(retried).toEqual(["lifecycle", "a", "lifecycle"])
     warn.mockRestore()
   })
 

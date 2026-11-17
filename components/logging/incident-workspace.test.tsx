@@ -34,10 +34,13 @@ import {
   INCIDENT_STATES,
   IncidentDetail,
   IncidentWorkspace,
+  SUBMISSION_ERROR_CODES,
   displayPreview,
   formatByteSize,
   type IncidentSubmissionControls,
 } from "./incident-workspace"
+import enLogging from "@/i18n/messages/en/logging.json"
+import zhLogging from "@/i18n/messages/zh-CN/logging.json"
 
 function render(ui: React.ReactElement) {
   return rtlRender(<TooltipProvider>{ui}</TooltipProvider>)
@@ -594,6 +597,15 @@ describe("IncidentDetail submission", () => {
     expect(screen.getByTestId("incident-submit-error")).toHaveTextContent(
       "logging.workspace.submission.errors.submission_failed"
     )
+  })
+
+  it("has a translation in both locales for every failure code it admits", () => {
+    for (const messages of [enLogging, zhLogging]) {
+      const errors = messages.workspace.submission.errors as Record<string, string>
+      for (const code of SUBMISSION_ERROR_CODES) {
+        expect(errors[code]).toEqual(expect.any(String))
+      }
+    }
   })
 
   it("admits when a requested screenshot could not be captured", () => {

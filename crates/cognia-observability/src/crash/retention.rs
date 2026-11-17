@@ -115,6 +115,10 @@ fn group_report_files(dir: &Path) -> BTreeMap<String, Vec<PathBuf>> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
             continue;
         };
+        // Never prune (or count) the receipt store as if it were a report.
+        if !crate::crash::report::is_report_stem(&stem) {
+            continue;
+        }
         by_stem.entry(stem).or_default().push(path);
     }
     by_stem
@@ -165,6 +169,10 @@ pub fn prune_crash_reports(
             }
         }
     }
+
+    // A package staged for a retry is a copy of its report; it goes with it.
+    let live: std::collections::BTreeSet<String> = groups.keys().cloned().collect();
+    crate::crash::submit::discard_orphan_staged(dir, &live);
 
     let outcome = PruneOutcome {
         pruned,
@@ -307,6 +315,47 @@ mod tests {
             .path()
             .join("crash-2026-06-10_00-00-00-panic.txt")
             .exists());
+    }
+
+    #[test]
+    fn the_receipt_store_is_never_counted_or_pruned_as_a_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = stem_timestamp("crash-2026-06-11_00-00-00-panic").unwrap();
+        let policy = RetentionPolicy {
+            max_age_days: 3650,
+            max_reports: 1,
+        };
+        write(&dir.path().join("submissions.json"), "{}");
+        report(dir.path(), "crash-2026-06-10_00-00-00-panic", &["txt"]);
+
+        let outcome = prune_crash_reports(dir.path(), &policy, now);
+
+        assert_eq!(
+            outcome,
+            PruneOutcome {
+                pruned: 0,
+                remaining: 1
+            }
+        );
+        assert!(dir.path().join("submissions.json").exists());
+    }
+
+    #[test]
+    fn a_staged_package_goes_with_its_pruned_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = stem_timestamp("crash-2026-06-11_00-00-00-panic").unwrap();
+        let old = "crash-2026-01-01_00-00-00-panic";
+        let kept = "crash-2026-06-10_00-00-00-panic";
+        report(dir.path(), old, &["json"]);
+        report(dir.path(), kept, &["json"]);
+        for stem in [old, kept] {
+            fs::create_dir_all(dir.path().join("staged").join(stem)).unwrap();
+        }
+
+        prune_crash_reports(dir.path(), &RetentionPolicy::default(), now);
+
+        assert!(!dir.path().join("staged").join(old).exists());
+        assert!(dir.path().join("staged").join(kept).exists());
     }
 
     #[test]

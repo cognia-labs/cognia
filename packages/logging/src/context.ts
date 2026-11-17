@@ -136,25 +136,17 @@ class LoggerContext {
    * Run a function inside a new span. Logs emitted within `fn` carry the new
    * `spanId` (and `parentSpanId` when nested). The span is always popped,
    * even if `fn` throws. The generated span ID is passed to `fn`.
+   *
+   * Synchronous only. This stack is shared by everything in the realm, so a
+   * span held open across an `await` would be read (and popped) by whatever
+   * else runs meanwhile. Async work carries its span explicitly through the
+   * scoped logger `Logger.spanAsync` hands it.
    */
   withSpan<T>(fn: (spanId: string) => T): T {
     const spanId = generateSpanId()
     this._spanStack.push(spanId)
     try {
       return fn(spanId)
-    } finally {
-      this._spanStack.pop()
-    }
-  }
-
-  /**
-   * Async variant of {@link withSpan}.
-   */
-  async withSpanAsync<T>(fn: (spanId: string) => Promise<T>): Promise<T> {
-    const spanId = generateSpanId()
-    this._spanStack.push(spanId)
-    try {
-      return await fn(spanId)
     } finally {
       this._spanStack.pop()
     }
@@ -172,19 +164,6 @@ class LoggerContext {
       this._traceId = prevTrace
     }
   }
-
-  /**
-   * Run an async function with a specific trace ID
-   */
-  async withTraceAsync<T>(fn: () => Promise<T>): Promise<T> {
-    const prevTrace = this._traceId
-    this._traceId = generateId()
-    try {
-      return await fn()
-    } finally {
-      this._traceId = prevTrace
-    }
-  }
 }
 
 /**
@@ -197,17 +176,6 @@ export const logContext = new LoggerContext()
  */
 export function generateTraceId(): string {
   return generateId()
-}
-
-/**
- * Trace ID decorator for async functions
- */
-export function traced<TArgs extends unknown[], TResult>(
-  fn: (...args: TArgs) => Promise<TResult>
-): (...args: TArgs) => Promise<TResult> {
-  return async (...args: TArgs) => {
-    return logContext.withTraceAsync(() => fn(...args)) as Promise<TResult>
-  }
 }
 
 /** Host-stamped producer references survive durable retry; public log data is never authority. */

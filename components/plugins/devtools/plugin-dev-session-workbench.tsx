@@ -441,9 +441,28 @@ function RuntimeLogs() {
               <span className="shrink-0 text-[10px] uppercase text-muted-foreground">
                 {entry.runtime}
               </span>
-              <span className="min-w-0 flex-1 break-words">
-                {entry.kind ?? ""} {entry.message}
-              </span>
+              <div className="min-w-0 flex-1 break-words">
+                <span>
+                  {entry.kind ?? ""} {entry.message}
+                </span>
+                {(entry.stack || entry.args) && (
+                  <details className="mt-1" data-testid="runtime-log-details">
+                    <summary className="cursor-pointer text-[10px] text-muted-foreground">
+                      {t("runtimeLogs.details")}
+                    </summary>
+                    {entry.args && (
+                      <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">
+                        {JSON.stringify(entry.args, null, 2)}
+                      </pre>
+                    )}
+                    {entry.stack && (
+                      <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">
+                        {entry.stack}
+                      </pre>
+                    )}
+                  </details>
+                )}
+              </div>
             </li>
           ))}
         </ul>

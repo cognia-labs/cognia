@@ -104,6 +104,13 @@ export function UsageCostSection() {
   const settings = useSettingsStore((s) => s.settings)
   const save = useSettingsStore((s) => s.save)
   const debugSession = useTraceDebugSession()
+  // Arming writes to localStorage; a refused write means nothing is captured,
+  // so say so instead of leaving the buttons looking like they did nothing.
+  const [armFailure, setArmFailure] = useState<{ previousStillArmed: boolean } | null>(null)
+  const armDebugSession = useCallback((minutes: number) => {
+    const result = armTraceDebugSession({ durationMs: minutes * 60_000 })
+    setArmFailure(result.ok ? null : { previousStillArmed: result.previousStillArmed })
+  }, [])
 
   const budget = useMemo<BudgetPolicy>(() => settings?.costBudget ?? {}, [settings?.costBudget])
 
@@ -225,7 +232,7 @@ export function UsageCostSection() {
                 key={minutes}
                 size="sm"
                 variant="outline"
-                onClick={() => armTraceDebugSession({ durationMs: minutes * 60_000 })}
+                onClick={() => armDebugSession(minutes)}
               >
                 {t("debug.armFor", { minutes })}
               </Button>
@@ -239,6 +246,13 @@ export function UsageCostSection() {
               {t("debug.disarm")}
             </Button>
           </div>
+          {armFailure ? (
+            <p role="alert" className="text-xs text-destructive" data-testid="debug-arm-failed">
+              {armFailure.previousStillArmed
+                ? t("debug.armFailedPreviousActive")
+                : t("debug.armFailed")}
+            </p>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             {t("debug.privacyHint", {
               minutes: Math.round(DEFAULT_TRACE_DEBUG_DURATION_MS / 60_000),

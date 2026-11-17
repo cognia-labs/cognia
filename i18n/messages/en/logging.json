@@ -1120,6 +1120,7 @@
         "network_unavailable": "The diagnostic service could not be reached.",
         "not_configured": "No diagnostic service is configured for this account.",
         "package_invalid": "This report could not be packaged for submission.",
+        "privacy_rejected": "This report still contained sensitive text after scrubbing, so it was not sent. It stays on your machine.",
         "report_not_found": "The local report is no longer on disk.",
         "submission_failed": "The submission did not complete.",
         "submission_not_found": "There is no submission recorded for this report.",

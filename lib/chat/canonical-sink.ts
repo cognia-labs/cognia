@@ -24,6 +24,7 @@ import {
   createEnvelopeSequencer,
   redactAgentEventEnvelope,
 } from "@/lib/ai/agent/execution/event-envelope"
+import { loggers } from "@cognia/logging"
 import { isTraceDebugArmed } from "@/lib/observability/debug-session"
 import {
   canonicalEventsFromSdkMessage,
@@ -63,11 +64,39 @@ interface ActiveChatLog {
   envelope: (event: CanonicalAgentEvent) => AgentEventEnvelope
   toolNamesByCallId: Map<string, string>
   pending: AgentEventEnvelope[]
+  /**
+   * Envelopes whose append failed, kept (oldest first) for the next flush.
+   * `appendCanonicalEnvelopes` dedupes by envelope identity, so resending a
+   * batch that partly landed cannot duplicate anything.
+   */
+  unwritten: AgentEventEnvelope[]
+  /** Envelopes evicted from `unwritten` past its bound: lost for good. */
+  dropped: number
+  lastError: string | null
   timer: ReturnType<typeof setTimeout> | null
   /** Chained so two flushes can never interleave their appends for one run. */
   flushing: Promise<unknown>
   closed: boolean
 }
+
+/**
+ * Whether a sealed turn's canonical log holds everything it recorded. Telemetry
+ * failure never fails the turn, so this is how a caller (and the debug view)
+ * learns the reproduction material is incomplete instead of assuming it.
+ */
+export type ChatCanonicalLogIntegrity =
+  | { complete: true }
+  | {
+      complete: false
+      /** Envelopes still not durable after the final retry. */
+      unwrittenEnvelopes: number
+      /** Envelopes discarded earlier because the retry buffer was full. */
+      droppedEnvelopes: number
+      lastError: string | null
+    }
+
+/** Retry buffer bound per turn; a stuck store must not grow memory without limit. */
+const MAX_UNWRITTEN_ENVELOPES = 1_000
 
 const activeLogs = new Map<string, ActiveChatLog>()
 
@@ -108,6 +137,9 @@ export function openChatCanonicalLog(input: OpenChatCanonicalLogInput): void {
     }),
     toolNamesByCallId: new Map(),
     pending: [],
+    unwritten: [],
+    dropped: 0,
+    lastError: null,
     timer: null,
     flushing: Promise.resolve(),
     closed: false,
@@ -152,21 +184,36 @@ export function recordChatCanonicalEvents(
 }
 
 /**
- * Seal the turn: emit `lifecycle` and flush everything still buffered.
+ * Seal the turn: emit `lifecycle` and flush everything still buffered,
+ * including batches an earlier flush failed to write.
  *
  * Awaited by callers that need the log durable before they report the turn
- * finished; safe to fire-and-forget otherwise.
+ * finished; safe to fire-and-forget otherwise. Never rejects: the result says
+ * whether the log is complete.
  */
 export async function closeChatCanonicalLog(
   sessionId: string,
   outcome: "ended" | "interrupted" = "ended"
-): Promise<void> {
+): Promise<ChatCanonicalLogIntegrity> {
   const log = activeLogs.get(sessionId)
-  if (!log || log.closed) return
+  if (!log || log.closed) return { complete: true }
   log.closed = true
   activeLogs.delete(sessionId)
   enqueue(log, [{ kind: "lifecycle", phase: outcome }])
   await flush(log)
+  if (log.unwritten.length === 0 && log.dropped === 0) return { complete: true }
+  const integrity: ChatCanonicalLogIntegrity = {
+    complete: false,
+    unwrittenEnvelopes: log.unwritten.length,
+    droppedEnvelopes: log.dropped,
+    lastError: log.lastError,
+  }
+  loggers.chat.warn("chat canonical log is incomplete", {
+    runId: log.runId,
+    sessionId,
+    ...integrity,
+  })
+  return integrity
 }
 
 /** The run id the session is currently logging to, if any. */
@@ -222,18 +269,29 @@ function flush(log: ActiveChatLog): Promise<unknown> {
     log.timer = null
   }
   const batch = log.pending
-  if (batch.length === 0) return log.flushing
+  if (batch.length === 0 && log.unwritten.length === 0) return log.flushing
   log.pending = []
   // Chain rather than race: `appendCanonicalEnvelopes` serializes per run
   // internally, but chaining here also preserves the order two flushes were
-  // enqueued in, which the sequence numbers assume.
+  // enqueued in, which the sequence numbers assume. Whatever an earlier link
+  // failed to write goes out ahead of this link's batch.
   log.flushing = log.flushing
     .catch(() => undefined)
-    .then(() =>
-      appendCanonicalEnvelopes(log.runId, batch).catch((error) => {
+    .then(async () => {
+      const toWrite = [...log.unwritten, ...batch]
+      log.unwritten = []
+      if (toWrite.length === 0) return
+      try {
+        await appendCanonicalEnvelopes(log.runId, toWrite)
+        log.lastError = null
+      } catch (error) {
+        log.lastError = error instanceof Error ? error.message : String(error)
+        const overflow = toWrite.length - MAX_UNWRITTEN_ENVELOPES
+        if (overflow > 0) log.dropped += overflow
+        log.unwritten = overflow > 0 ? toWrite.slice(overflow) : toWrite
         console.warn("chat canonical journal append failed", error)
-      })
-    )
+      }
+    })
   return log.flushing
 }
 

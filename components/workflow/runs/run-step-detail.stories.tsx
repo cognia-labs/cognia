@@ -43,7 +43,7 @@ const events: WorkflowRunEventRow[] = [
     ts: startedAt + 200,
     type: "step_started",
     stepId: "n_ai",
-    payload: { params: { prompt: "Summarize the thread" } },
+    payload: { inputs: { prompt: "Summarize the thread" }, attempt: 1 },
   },
   {
     id: "ev5",
@@ -85,7 +85,7 @@ const failedEvents: WorkflowRunEventRow[] = [
     ts: startedAt + 200,
     type: "step_started",
     stepId: "n_ai",
-    payload: { params: { prompt: "Summarize the thread" } },
+    payload: { inputs: { prompt: "Summarize the thread" }, attempt: 1 },
   },
   {
     id: "evf2",

@@ -98,6 +98,22 @@ function redactValue(
   return value
 }
 
+/** Apply the logger's text patterns to one string (no-op when redaction is off). */
+export function redactLogText(text: string, config: LoggerRedactionConfig): string {
+  if (!config.enabled) return text
+  return redactText(text, config, buildPatterns(config))
+}
+
+/**
+ * Apply the logger's key and text rules to one structured value outside a log
+ * entry, for evidence stores (workflow step inputs) that must follow the same
+ * policy as the log pipeline.
+ */
+export function redactLogValue(value: unknown, config: LoggerRedactionConfig): unknown {
+  if (!config.enabled) return value
+  return redactValue(value, config, buildPatterns(config), 0, new WeakSet<object>())
+}
+
 export function redactStructuredLogEntry(
   entry: StructuredLogEntry,
   config: LoggerRedactionConfig

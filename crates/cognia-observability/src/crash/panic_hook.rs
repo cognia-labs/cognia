@@ -57,7 +57,7 @@ fn write_report(info: &PanicHookInfo<'_>) {
         kind: CrashKind::Panic,
         captured_at: chrono::Utc::now().to_rfc3339(),
         thread,
-        message: message.clone(),
+        message,
         location,
         backtrace: Some(backtrace),
         dump_path: None,
@@ -67,12 +67,14 @@ fn write_report(info: &PanicHookInfo<'_>) {
     };
 
     let stem = report::timestamped_stem(CrashKind::Panic);
+    // The log line is a durable artifact too; it gets the report's scrubbing.
+    let logged_message = crash.local_scrubber().scrub_text(&crash.message);
     match crash.write_to(&dir, &stem) {
         Ok(written) => {
             log::error!(
                 "crash: panic captured — {} ({})",
-                message,
-                written.txt_path.display()
+                logged_message,
+                written.stem
             );
             if let Some(handle) = crate::crash::app_handle() {
                 use tauri::Emitter;

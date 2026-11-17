@@ -14,9 +14,16 @@ import {
   MIN_TRACE_DEBUG_DURATION_MS,
   TRACE_DEBUG_STORAGE_KEY,
   TRACE_DEBUG_TIERS,
+  type ArmTraceDebugSessionResult,
+  type TraceDebugSession,
 } from "./debug-session"
 
 const NOW = 1_700_000_000_000
+
+function armed(result: ArmTraceDebugSessionResult): TraceDebugSession {
+  if (!result.ok) throw new Error(`expected the session to arm, got ${result.reason}`)
+  return result.session
+}
 
 beforeEach(() => {
   localStorage.clear()
@@ -24,7 +31,7 @@ beforeEach(() => {
 
 describe("armTraceDebugSession", () => {
   it("arms every tier for the default window when nothing is specified", () => {
-    const session = armTraceDebugSession({}, NOW)
+    const session = armed(armTraceDebugSession({}, NOW))
     expect(session.startedAt).toBe(NOW)
     expect(session.expiresAt).toBe(NOW + DEFAULT_TRACE_DEBUG_DURATION_MS)
     expect(session.tiers).toEqual([...TRACE_DEBUG_TIERS])
@@ -33,20 +40,20 @@ describe("armTraceDebugSession", () => {
 
   it("clamps the duration instead of rejecting it", () => {
     // An "always on" debug session is the state this module exists to prevent.
-    expect(armTraceDebugSession({ durationMs: 24 * 60 * 60_000 }, NOW).expiresAt).toBe(
+    expect(armed(armTraceDebugSession({ durationMs: 24 * 60 * 60_000 }, NOW)).expiresAt).toBe(
       NOW + MAX_TRACE_DEBUG_DURATION_MS
     )
-    expect(armTraceDebugSession({ durationMs: 5 }, NOW).expiresAt).toBe(
+    expect(armed(armTraceDebugSession({ durationMs: 5 }, NOW)).expiresAt).toBe(
       NOW + MIN_TRACE_DEBUG_DURATION_MS
     )
-    expect(armTraceDebugSession({ durationMs: Number.NaN }, NOW).expiresAt).toBe(
+    expect(armed(armTraceDebugSession({ durationMs: Number.NaN }, NOW)).expiresAt).toBe(
       NOW + DEFAULT_TRACE_DEBUG_DURATION_MS
     )
   })
 
   it("keeps only the requested tiers, in canonical order", () => {
-    const session = armTraceDebugSession({ tiers: ["rawBodies", "deltas"] }, NOW)
-    expect(session.tiers).toEqual(["deltas", "rawBodies"])
+    const session = armed(armTraceDebugSession({ tiers: ["toolDetails", "deltas"] }, NOW))
+    expect(session.tiers).toEqual(["deltas", "toolDetails"])
   })
 
   it("replaces a session that is already armed", () => {
@@ -55,6 +62,34 @@ describe("armTraceDebugSession", () => {
     const session = getTraceDebugSession(NOW)
     expect(session?.tiers).toEqual(["prompts"])
     expect(session?.expiresAt).toBe(NOW + 20 * 60_000)
+  })
+})
+
+describe("armTraceDebugSession when storage refuses the write", () => {
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  function failWrites() {
+    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError")
+    })
+  }
+
+  it("reports that nothing was armed", () => {
+    failWrites()
+    const result = armTraceDebugSession({ tiers: ["prompts"] }, NOW)
+    expect(result).toEqual({ ok: false, reason: "write-failed", previousStillArmed: false })
+    expect(getTraceDebugSession(NOW)).toBeNull()
+  })
+
+  it("does not leave an older, broader session capturing after a failed replacement", () => {
+    armed(armTraceDebugSession({ durationMs: 59 * 60_000 }, NOW))
+    failWrites()
+    const result = armTraceDebugSession({ tiers: ["deltas"], sessionId: "narrow" }, NOW)
+    expect(result).toMatchObject({ ok: false, previousStillArmed: false })
+    expect(getTraceDebugSession(NOW)).toBeNull()
+    expect(isTraceDebugArmed("prompts", "any-session", NOW)).toBe(false)
   })
 })
 
@@ -100,7 +135,7 @@ describe("isTraceDebugArmed", () => {
   it("is true only for armed tiers", () => {
     armTraceDebugSession({ tiers: ["deltas"] }, NOW)
     expect(isTraceDebugArmed("deltas", "session-1", NOW)).toBe(true)
-    expect(isTraceDebugArmed("rawBodies", "session-1", NOW)).toBe(false)
+    expect(isTraceDebugArmed("toolDetails", "session-1", NOW)).toBe(false)
   })
 
   it("does not capture other conversations when scoped to one session", () => {

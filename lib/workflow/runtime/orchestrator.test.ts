@@ -1795,7 +1795,14 @@ describe("runWorkflow — per-node errorHandling", () => {
     // …and could read the failed node's error through the expression engine.
     expect((success?.payload as { output?: { value?: unknown } })?.output?.value).toBe("boom")
     // The failure itself is still on record.
-    expect(events.find((e) => e.type === "step_failed" && e.stepId === "n_fail")).toBeDefined()
+    const failed = events.find((e) => e.type === "step_failed" && e.stepId === "n_fail")
+    expect(failed).toBeDefined()
+    // The handled output belongs to the execution that failed, so the step
+    // inspector shows them as one execution instead of an unattributed one.
+    const handled = events.find((e) => e.type === "step_completed" && e.stepId === "n_fail")
+    const idOf = (payload: unknown) => (payload as { stepExecutionId?: string }).stepExecutionId
+    expect(idOf(failed?.payload)).toBeTruthy()
+    expect(idOf(handled?.payload)).toBe(idOf(failed?.payload))
   })
 
   it('"defaultValue" substitutes the static output and runs downstream', async () => {

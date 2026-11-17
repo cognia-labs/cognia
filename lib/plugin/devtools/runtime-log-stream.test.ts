@@ -104,6 +104,24 @@ describe("normalizePythonEntry", () => {
 })
 
 describe("getPluginRuntimeLogs", () => {
+  it("keeps a logged Error's details and extra args in the merged stream", () => {
+    const dbg = getPluginDebugger()
+    dbg.startSession("err-plugin", 1)
+    const failure = new Error("fetch failed", { cause: new TypeError("socket closed") })
+    dbg.log("err-plugin", "error", "sync failed", failure, { attempt: 2 })
+
+    const [entry] = getPluginRuntimeLogs("err-plugin")
+    expect(entry.stack).toBe(failure.stack)
+    expect(entry.args).toEqual([
+      expect.objectContaining({
+        name: "Error",
+        message: "fetch failed",
+        cause: expect.objectContaining({ name: "TypeError", message: "socket closed" }),
+      }),
+      { attempt: 2 },
+    ])
+  })
+
   it("merges both runtimes into one time-ordered stream", () => {
     const dbg = getPluginDebugger()
     dbg.startSession("p", 2)

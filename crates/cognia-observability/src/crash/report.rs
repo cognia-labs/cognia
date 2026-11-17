@@ -4,9 +4,10 @@
 
 use crate::crash::context::ContextSnapshot;
 use crate::crash::system_info::{self, SystemDetails};
+use crate::crash_privacy::CrashScrubber;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// Envelope the app process ships to the out-of-process monitor via
@@ -99,10 +100,43 @@ impl WrittenReport {
     }
 }
 
-/// A filename-safe, timestamped stem like `crash-2026-05-25_14-30-00-panic`.
+/// Every report stem starts with this; anything else in the crash directory
+/// (the `submissions.json` receipt store, staged packages) is not a report.
+pub const REPORT_STEM_PREFIX: &str = "crash-";
+
+/// Whether a file stem names a crash report rather than a sidecar that shares
+/// the directory.
+pub fn is_report_stem(stem: &str) -> bool {
+    stem.starts_with(REPORT_STEM_PREFIX)
+}
+
+/// A filename-safe, timestamped, collision-safe stem like
+/// `crash-2026-05-25_14-30-00-123-9f3a1c2e-panic`.
+///
+/// The leading 19 timestamp characters stay fixed-width (retention parses
+/// them and listings sort on them); milliseconds plus a random suffix keep two
+/// reports captured in the same second from sharing a stem. Second-resolution
+/// stems used to let a second caught panic overwrite the first one's files.
 pub fn timestamped_stem(kind: CrashKind) -> String {
-    let ts = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
-    format!("crash-{ts}-{}", kind.label())
+    let now = chrono::Local::now();
+    let ts = now.format("%Y-%m-%d_%H-%M-%S-%3f");
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    format!("{REPORT_STEM_PREFIX}{ts}-{}-{}", &nonce[..8], kind.label())
+}
+
+/// Create a file that must not exist yet. A report is evidence: a name clash
+/// is an error to surface, never a reason to replace an earlier report.
+pub fn create_new_file(path: &Path) -> io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = create_new_file(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// Deterministic-but-varied banner line (MC flavour) — keyed off the timestamp
@@ -177,10 +211,9 @@ impl CrashReport {
             s.kernel_version.as_deref().unwrap_or("unknown")
         ));
         out.push_str(&format!("Family: {}\n", s.family));
-        out.push_str(&format!(
-            "Host: {}\n",
-            s.hostname.as_deref().unwrap_or("unknown")
-        ));
+        if let Some(host) = &s.hostname {
+            out.push_str(&format!("Host: {host}\n"));
+        }
         out.push_str(&format!(
             "CPU: {} ({} cores)\n",
             s.cpu.as_deref().unwrap_or("unknown"),
@@ -221,19 +254,123 @@ impl CrashReport {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Write `<stem>.txt` and `<stem>.json` into `dir`. Returns the paths.
+    /// The report with every free-text field scrubbed and the hostname
+    /// dropped (see [`crate::crash_privacy`]).
+    pub fn scrubbed(&self, scrubber: &CrashScrubber) -> CrashReport {
+        let text = |value: &Option<String>| value.as_deref().map(|v| scrubber.scrub_text(v));
+        let mut report = self.clone();
+        report.thread = text(&self.thread);
+        report.message = scrubber.scrub_text(&self.message);
+        report.location = text(&self.location);
+        report.backtrace = text(&self.backtrace);
+        report.dump_path = text(&self.dump_path);
+        report.system.hostname = None;
+        report.context.config = scrubber.scrub_value(&self.context.config);
+        for crumb in &mut report.context.breadcrumbs {
+            crumb.message = scrubber.scrub_text(&crumb.message);
+        }
+        report.extra = scrubber.scrub_value(&self.extra);
+        report
+    }
+
+    /// The scrubber for a report captured on this machine.
+    pub fn local_scrubber(&self) -> CrashScrubber {
+        CrashScrubber::new(dirs::home_dir().as_deref(), self.system.hostname.clone())
+    }
+
+    /// Write `<stem>.json` and `<stem>.txt` into `dir`, scrubbed.
+    ///
+    /// The privacy gate is not optional here for the same reason it is not
+    /// optional for the event spool: the report is a durable artifact, and the
+    /// preview and the upload both start from it. Both files are created with
+    /// create-new semantics, so an existing report is never overwritten.
+    ///
+    /// The JSON (the structured half submission reads) is written first. If
+    /// the text half then fails, the error names it and the JSON stays on disk
+    /// as evidence; listings already report each half separately.
     pub fn write_to(&self, dir: &Path, stem: &str) -> io::Result<WrittenReport> {
+        self.write_scrubbed_to(dir, stem, &self.local_scrubber())
+    }
+
+    fn write_scrubbed_to(
+        &self,
+        dir: &Path,
+        stem: &str,
+        scrubber: &CrashScrubber,
+    ) -> io::Result<WrittenReport> {
         fs::create_dir_all(dir)?;
+        let clean = self.scrubbed(scrubber);
         let txt_path = dir.join(format!("{stem}.txt"));
         let json_path = dir.join(format!("{stem}.json"));
-        fs::write(&txt_path, self.render_txt())?;
-        fs::write(&json_path, pretty(&self.to_json()))?;
+        write_new(&json_path, pretty(&clean.to_json()).as_bytes()).map_err(|error| {
+            io::Error::new(error.kind(), format!("{}: {error}", json_path.display()))
+        })?;
+        write_new(&txt_path, clean.render_txt().as_bytes()).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "{}: {error} (the JSON half was written; the report is incomplete)",
+                    txt_path.display()
+                ),
+            )
+        })?;
         Ok(WrittenReport {
             stem: stem.to_string(),
             txt_path,
             json_path,
         })
     }
+}
+
+/// A report as it may be shown or sent: read from disk and normalized through
+/// the scrubber, so the preview and the package are the same bytes even for a
+/// report written before write-time scrubbing existed.
+#[derive(Debug, Clone)]
+pub struct NormalizedReport {
+    pub json: Option<serde_json::Value>,
+    pub txt: Option<String>,
+    pub scrubber: CrashScrubber,
+}
+
+impl NormalizedReport {
+    /// What the preview renders: the text report, or the JSON when there is
+    /// no text half.
+    pub fn preview(&self) -> Option<String> {
+        self.txt.clone().or_else(|| self.json.as_ref().map(pretty))
+    }
+}
+
+/// Read and normalize one report. `Err("report_not_found")` when neither half
+/// exists; a half that exists but cannot be read is an error, not an absence.
+pub fn read_normalized(dir: &Path, stem: &str) -> Result<NormalizedReport, String> {
+    let json_path = dir.join(format!("{stem}.json"));
+    let txt_path = dir.join(format!("{stem}.txt"));
+    let raw_json = if json_path.exists() {
+        let bytes = fs::read(&json_path).map_err(|error| format!("read_failed:{error}"))?;
+        Some(
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| "report_unreadable".to_owned())?,
+        )
+    } else {
+        None
+    };
+    let raw_txt = if txt_path.exists() {
+        Some(fs::read_to_string(&txt_path).map_err(|error| format!("read_failed:{error}"))?)
+    } else {
+        None
+    };
+    if raw_json.is_none() && raw_txt.is_none() {
+        return Err("report_not_found".to_owned());
+    }
+    let scrubber = raw_json
+        .as_ref()
+        .map(CrashScrubber::for_report)
+        .unwrap_or_else(|| CrashScrubber::new(dirs::home_dir().as_deref(), None));
+    Ok(NormalizedReport {
+        json: raw_json.as_ref().map(|json| scrubber.scrub_report(json)),
+        txt: raw_txt.as_deref().map(|txt| scrubber.scrub_text(txt)),
+        scrubber,
+    })
 }
 
 #[cfg(test)]
@@ -320,26 +457,134 @@ mod tests {
         assert_eq!(json["context"]["config"]["theme"], "dark");
     }
 
+    fn jane() -> CrashScrubber {
+        CrashScrubber::new(Some(Path::new("/Users/jane")), ["test-host".to_string()])
+    }
+
+    fn sensitive_report() -> CrashReport {
+        let mut report = sample_report();
+        report.message = "failed to open /Users/jane/secret.md for jane@example.com".to_string();
+        report.location = Some("/Users/jane/.cargo/registry/src/x/lib.rs:1:1".to_string());
+        report.backtrace =
+            Some("0: x\n   at /Users/jane/src/main.rs:3\nhost test-host".to_string());
+        report.context.breadcrumbs[0].message = "token Bearer abc.def".to_string();
+        report.extra = serde_json::json!({ "logDir": "/Users/jane/Library/Logs" });
+        report
+    }
+
     #[test]
     fn write_to_produces_both_files() {
-        let dir = std::env::temp_dir().join(format!("cognia-crash-test-{}", std::process::id()));
-        let written = sample_report().write_to(&dir, "crash-test-panic").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let written = sample_report()
+            .write_scrubbed_to(dir.path(), "crash-test-panic", &jane())
+            .unwrap();
         assert!(written.txt_path.exists());
         assert!(written.json_path.exists());
         let txt = std::fs::read_to_string(&written.txt_path).unwrap();
         assert!(txt.contains("Description: boom"));
-        // Cleanup.
-        let _ = std::fs::remove_file(&written.txt_path);
-        let _ = std::fs::remove_file(&written.json_path);
-        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn written_reports_are_scrubbed_and_carry_no_hostname() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = sensitive_report()
+            .write_scrubbed_to(dir.path(), "crash-scrub-panic", &jane())
+            .unwrap();
+        for path in [&written.txt_path, &written.json_path] {
+            let text = std::fs::read_to_string(path).unwrap();
+            assert!(!text.contains("jane"), "{}: {text}", path.display());
+            assert!(!text.contains("test-host"), "{}: {text}", path.display());
+            assert!(!text.contains("abc.def"), "{}: {text}", path.display());
+            assert!(jane().is_clean(&text), "{}", path.display());
+        }
+        let txt = std::fs::read_to_string(&written.txt_path).unwrap();
+        assert!(txt.contains("~/.cargo/registry/src/x/lib.rs:1:1"), "{txt}");
+        assert!(!txt.contains("Host:"), "{txt}");
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&written.json_path).unwrap()).unwrap();
+        assert_eq!(json["system"]["hostname"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn an_existing_report_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        sample_report()
+            .write_scrubbed_to(dir.path(), "crash-same-panic", &jane())
+            .unwrap();
+        let mut second = sample_report();
+        second.message = "second".to_string();
+        let error = second
+            .write_scrubbed_to(dir.path(), "crash-same-panic", &jane())
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        let txt = std::fs::read_to_string(dir.path().join("crash-same-panic.txt")).unwrap();
+        assert!(txt.contains("Description: boom"), "first report survives");
+    }
+
+    #[test]
+    fn a_failed_text_half_is_reported_rather_than_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory squatting on the text path makes only that half fail.
+        std::fs::create_dir(dir.path().join("crash-half-panic.txt")).unwrap();
+        let error = sample_report()
+            .write_scrubbed_to(dir.path(), "crash-half-panic", &jane())
+            .unwrap_err();
+        assert!(error.to_string().contains("incomplete"), "{error}");
+        assert!(dir.path().join("crash-half-panic.json").is_file());
     }
 
     #[test]
     fn timestamped_stem_is_filename_safe() {
         let stem = timestamped_stem(CrashKind::Panic);
         assert!(stem.starts_with("crash-"));
+        assert!(is_report_stem(&stem));
         assert!(stem.ends_with("-panic"));
         assert!(!stem.contains(':'));
         assert!(!stem.contains(' '));
+        // Retention and listings read the fixed-width second timestamp.
+        assert!(chrono::NaiveDateTime::parse_from_str(&stem[6..25], "%Y-%m-%d_%H-%M-%S").is_ok());
+    }
+
+    #[test]
+    fn stems_captured_in_the_same_second_differ() {
+        let stems: std::collections::BTreeSet<String> = (0..64)
+            .map(|_| timestamped_stem(CrashKind::Panic))
+            .collect();
+        assert_eq!(stems.len(), 64);
+    }
+
+    #[test]
+    fn sidecars_in_the_crash_directory_are_not_report_stems() {
+        assert!(!is_report_stem("submissions"));
+        assert!(is_report_stem("crash-2026-05-25_00-00-00-panic"));
+    }
+
+    #[test]
+    fn a_report_written_before_scrubbing_is_normalized_on_read() {
+        let dir = tempfile::tempdir().unwrap();
+        // Simulate an older, unscrubbed report on disk.
+        let raw = sensitive_report();
+        std::fs::write(dir.path().join("crash-old-panic.txt"), raw.render_txt()).unwrap();
+        std::fs::write(
+            dir.path().join("crash-old-panic.json"),
+            serde_json::to_vec(&raw.to_json()).unwrap(),
+        )
+        .unwrap();
+        let normalized = read_normalized(dir.path(), "crash-old-panic").unwrap();
+        let preview = normalized.preview().unwrap();
+        assert!(!preview.contains("test-host"), "{preview}");
+        assert!(!preview.contains("jane@example.com"), "{preview}");
+        let json = normalized.json.unwrap();
+        assert_eq!(json["system"]["hostname"], serde_json::Value::Null);
+        assert!(!json.to_string().contains("test-host"));
+    }
+
+    #[test]
+    fn reading_a_missing_report_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read_normalized(dir.path(), "crash-none-panic").unwrap_err(),
+            "report_not_found"
+        );
     }
 }

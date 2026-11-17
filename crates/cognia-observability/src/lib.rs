@@ -20,6 +20,7 @@ pub mod telemetry;
 #[cfg(feature = "tracing-host")]
 pub mod trace_context;
 
+pub mod crash_privacy;
 pub mod diagnostic_package;
 pub mod diagnostic_submit;
 pub mod event;
@@ -58,7 +59,8 @@ pub use log_query::{
 };
 pub use privacy::{
     apply_observability_privacy, create_local_debug_capture_session,
-    scan_high_confidence_credentials, ClientPrivacyManifest, CredentialScanResult,
+    redact_high_confidence_credentials, redact_text, scan_high_confidence_credentials,
+    ClientPrivacyManifest, CredentialScanResult,
     HighConfidenceCredentialFinding, HighConfidenceCredentialKind, LocalDebugCaptureSession,
     PrivacyApplicationOptions, CLIENT_PRIVACY_MANIFEST_V1,
 };

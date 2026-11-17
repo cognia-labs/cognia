@@ -820,6 +820,26 @@ describe("console + network capture", () => {
     expect(last.text).toContain("boom")
     expect(JSON.parse(win().__cogniaDrainConsole())).toHaveLength(0)
   })
+  it("keeps an Error's name, message, stack and cause instead of {}", () => {
+    const err = new Error("outer failure", { cause: new TypeError("inner failure") })
+    console.error("request failed", err)
+    const last = JSON.parse(win().__cogniaDrainConsole()).pop()
+    expect(last.text).toContain("request failed")
+    expect(last.text).toContain("Error: outer failure")
+    expect(last.text).toContain("Caused by: TypeError: inner failure")
+    expect(last.text).not.toContain("{}")
+  })
+
+  it("marks values it cannot serialize instead of dropping them", () => {
+    const loop: Record<string, unknown> = { a: 1 }
+    loop.self = loop
+    console.warn(loop, BigInt(7), { nested: new Error("deep") })
+    const last = JSON.parse(win().__cogniaDrainConsole()).pop()
+    expect(last.text).toContain("[unserializable [object Object]]")
+    expect(last.text).toContain("7n")
+    expect(last.text).toContain("Error: deep")
+  })
+
   it("detects visible page text via __cogniaHasText", () => {
     document.body.innerHTML = `<p>Loading complete</p>`
     install()
@@ -842,6 +862,37 @@ describe("console + network capture", () => {
       status: 200,
       ok: true,
     })
+  })
+})
+
+describe("network timing", () => {
+  beforeEach(() => {
+    document.body.innerHTML = ""
+    install()
+  })
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it("times a request with the clock, not the event counter", async () => {
+    let now = 1_000
+    jest.spyOn(performance, "now").mockImplementation(() => now)
+    let resolve: (value: unknown) => void = () => undefined
+    ;(window as unknown as { fetch: unknown }).fetch = () =>
+      new Promise((r) => {
+        resolve = r
+      })
+    win().__cogniaOverlay.installNetworkHook()
+    const pending = (window as unknown as { fetch: (u: string) => Promise<unknown> }).fetch(
+      "https://x.test/slow"
+    )
+    // Unrelated console activity while the request is open must not count.
+    for (let i = 0; i < 10; i++) console.log("noise", i)
+    now += 121
+    resolve({ status: 200, ok: true })
+    await pending
+    const net = JSON.parse(win().__cogniaDrainNetwork())
+    expect(net[net.length - 1]).toMatchObject({ url: "https://x.test/slow", durationMs: 121 })
   })
 })
 

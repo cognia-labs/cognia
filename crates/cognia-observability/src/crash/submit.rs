@@ -26,9 +26,12 @@ use crate::{
     SubmitError,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::crash::receipts::{self, SubmissionRecord};
+use crate::crash::report::{self, NormalizedReport};
+use crate::crash_privacy::CrashScrubber;
 
 /// Frames a panic backtrace contributes to grouping, before the service's own
 /// cap. Matches `MAX_GROUPING_FRAMES` on the service so neither side silently
@@ -239,38 +242,192 @@ fn capture_screenshot_with(capture: Option<ScreenshotCapture>, dir: &Path) -> Op
     Some(path)
 }
 
-#[derive(Debug)]
-struct BuiltPackage {
-    path: PathBuf,
-    /// Kept alive for the lifetime of the package: dropping it removes the
-    /// staging directory, and with it the package the caller is uploading.
-    _staging: tempfile::TempDir,
+/// Staged packages live beside the reports, one directory per report stem.
+///
+/// A retry must send the *same* package: incident creation is idempotent on
+/// the package hash and parts resume by checksum, but only if the bytes do not
+/// change. Rebuilding on every attempt minted a fresh incident id, timestamp
+/// and hash, so a retry after a create that had already landed opened a
+/// second, partial incident instead of resuming the first.
+const STAGED_DIR: &str = "staged";
+const STAGED_PACKAGE: &str = "incident.cognia-diagnostic";
+const STAGED_STATE: &str = "staged.json";
+
+fn staged_dir(crash_dir: &Path, stem: &str) -> PathBuf {
+    crash_dir.join(STAGED_DIR).join(stem)
+}
+
+/// Forget one report's staged package (after its receipt is stored, when the
+/// report is deleted, or when the package proved unusable).
+pub(crate) fn discard_staged(crash_dir: &Path, stem: &str) -> std::io::Result<()> {
+    let dir = staged_dir(crash_dir, stem);
+    match std::fs::remove_dir_all(&dir) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// Drop staged packages whose report no longer exists. Returns how many went.
+pub(crate) fn discard_orphan_staged(
+    crash_dir: &Path,
+    live_stems: &std::collections::BTreeSet<String>,
+) -> usize {
+    let Ok(entries) = std::fs::read_dir(crash_dir.join(STAGED_DIR)) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !live_stems.contains(name.as_ref())
+        })
+        .filter(|entry| std::fs::remove_dir_all(entry.path()).is_ok())
+        .count()
+}
+
+/// What a staged package was built from, and what it holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StagedState {
+    /// Hash of the consent decisions and the signing identity. A retry with
+    /// different choices (or after a reinstall) is a different package.
+    consent_key: String,
     screenshot_unavailable: bool,
     included_minidump: bool,
     included_screenshot: bool,
 }
 
-/// Assemble a signed package for one local report.
-fn build_package(
+fn trimmed_description(consent: &SubmissionConsentInput) -> Option<&str> {
+    consent
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+fn consent_key(consent: &SubmissionConsentInput, identity: &InstallationIdentity) -> String {
+    let canonical = serde_json::json!({
+        "includeMinidump": consent.include_minidump,
+        "includeScreenshot": consent.include_screenshot,
+        "description": trimmed_description(consent),
+        "identity": identity.public_key_base64(),
+    });
+    hex::encode(Sha256::digest(canonical.to_string().as_bytes()))
+}
+
+#[derive(Debug)]
+struct BuiltPackage {
+    path: PathBuf,
+    screenshot_unavailable: bool,
+    included_minidump: bool,
+    included_screenshot: bool,
+}
+
+fn read_staged(dir: &Path, key: &str) -> Option<BuiltPackage> {
+    let state: StagedState =
+        serde_json::from_slice(&std::fs::read(dir.join(STAGED_STATE)).ok()?).ok()?;
+    let path = dir.join(STAGED_PACKAGE);
+    (state.consent_key == key && path.is_file()).then_some(BuiltPackage {
+        path,
+        screenshot_unavailable: state.screenshot_unavailable,
+        included_minidump: state.included_minidump,
+        included_screenshot: state.included_screenshot,
+    })
+}
+
+/// The package to send for one report: the staged one when it was built from
+/// the same consent and identity, otherwise a fresh one, staged for retries.
+///
+/// The package is renamed into place and its state written only after it is
+/// complete, so an interrupted build is rebuilt rather than half-reused.
+fn stage_package(
     crash_dir: &Path,
     stem: &str,
     consent: &SubmissionConsentInput,
     identity: &InstallationIdentity,
 ) -> Result<BuiltPackage, String> {
-    let json_path = crash_dir.join(format!("{stem}.json"));
-    let report: serde_json::Value = std::fs::read(&json_path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .ok_or_else(|| "report_not_found".to_owned())?;
+    let dir = staged_dir(crash_dir, stem);
+    let key = consent_key(consent, identity);
+    if let Some(staged) = read_staged(&dir, &key) {
+        return Ok(staged);
+    }
+    discard_staged(crash_dir, stem).map_err(|error| format!("staging:{error}"))?;
+    std::fs::create_dir_all(&dir).map_err(|error| format!("staging:{error}"))?;
+    let built = build_package(crash_dir, stem, consent, identity, &dir)?;
+    let state = StagedState {
+        consent_key: key,
+        screenshot_unavailable: built.screenshot_unavailable,
+        included_minidump: built.included_minidump,
+        included_screenshot: built.included_screenshot,
+    };
+    let state_tmp = dir.join(format!("{STAGED_STATE}.tmp"));
+    std::fs::write(
+        &state_tmp,
+        serde_json::to_vec(&state).map_err(|error| format!("staging:{error}"))?,
+    )
+    .and_then(|()| std::fs::rename(&state_tmp, dir.join(STAGED_STATE)))
+    .map_err(|error| format!("staging:{error}"))?;
+    Ok(built)
+}
 
-    let staging = tempfile::tempdir().map_err(|error| format!("staging:{error}"))?;
+/// Every string in `value` passes the scrubber's fail-closed check.
+fn value_is_clean(scrubber: &CrashScrubber, value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => scrubber.is_clean(text),
+        serde_json::Value::Array(items) => items.iter().all(|item| value_is_clean(scrubber, item)),
+        serde_json::Value::Object(entries) => {
+            entries.values().all(|item| value_is_clean(scrubber, item))
+        }
+        _ => true,
+    }
+}
+
+/// Assemble a signed package for one local report inside `out_dir`.
+///
+/// Every text part starts from [`report::read_normalized`] — the same scrubbed
+/// view the preview renders — and is checked again before packaging. The
+/// events part is zstd-compressed, so the service cannot scan it before it is
+/// decompressed; the client is the only place it can be made safe.
+fn build_package(
+    crash_dir: &Path,
+    stem: &str,
+    consent: &SubmissionConsentInput,
+    identity: &InstallationIdentity,
+    out_dir: &Path,
+) -> Result<BuiltPackage, String> {
+    let NormalizedReport {
+        json,
+        txt,
+        scrubber,
+        ..
+    } = report::read_normalized(crash_dir, stem)?;
+    let report = json.ok_or_else(|| "report_not_found".to_owned())?;
+    let events = events_for(&report);
+    let description = trimmed_description(consent).map(|text| scrubber.scrub_text(text));
+
+    // Fail closed: nothing the scrubber would still change, and no
+    // high-confidence credential, leaves the machine.
+    let clean = events.iter().all(|event| value_is_clean(&scrubber, event))
+        && txt.as_deref().is_none_or(|text| scrubber.is_clean(text))
+        && description
+            .as_deref()
+            .is_none_or(|text| scrubber.is_clean(text));
+    if !clean {
+        return Err("privacy_rejected".to_owned());
+    }
+
     let mut attachments = Vec::new();
+    // Loose copies are deleted once the package holds them.
+    let mut loose = Vec::new();
 
-    let text_path = crash_dir.join(format!("{stem}.txt"));
-    if text_path.exists() {
+    if let Some(text) = &txt {
+        let path = out_dir.join("report.txt");
+        std::fs::write(&path, text).map_err(|error| format!("staging:{error}"))?;
+        loose.push(path.clone());
         attachments.push(AttachmentInput {
             name: "report.txt".to_owned(),
-            path: text_path,
+            path,
             media_type: "text/plain; charset=utf-8".to_owned(),
             kind: AttachmentKind::Metadata,
         });
@@ -293,9 +450,10 @@ fn build_package(
     let mut screenshot_unavailable = false;
     let mut included_screenshot = false;
     if consent.include_screenshot {
-        match capture_screenshot(staging.path()) {
+        match capture_screenshot(out_dir) {
             Some(path) => {
                 included_screenshot = true;
+                loose.push(path.clone());
                 attachments.push(AttachmentInput {
                     name: "screenshot.png".to_owned(),
                     path,
@@ -307,14 +465,10 @@ fn build_package(
         }
     }
 
-    if let Some(description) = consent
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-    {
-        let path = staging.path().join("description.txt");
+    if let Some(description) = &description {
+        let path = out_dir.join("description.txt");
         std::fs::write(&path, description).map_err(|error| format!("description:{error}"))?;
+        loose.push(path.clone());
         attachments.push(AttachmentInput {
             name: "description.txt".to_owned(),
             path,
@@ -323,28 +477,36 @@ fn build_package(
         });
     }
 
-    let package = staging.path().join("incident.cognia-diagnostic");
-    create_diagnostic_package(
-        &package,
+    // Same extension (the builder requires it), different name until complete.
+    let partial = out_dir.join("incident.partial.cognia-diagnostic");
+    let package = out_dir.join(STAGED_PACKAGE);
+    let created = create_diagnostic_package(
+        &partial,
         DiagnosticPackageInput {
             incident_id: Uuid::new_v4(),
             created_at: chrono::Utc::now(),
             build_id: build_id(&report),
             app_version: app_version(&report),
             platform: platform_label(&report),
-            events: events_for(&report),
+            events,
             attachments,
             source_watermarks: Default::default(),
             missing_sources: Default::default(),
             redaction_version: "client-v1".to_owned(),
         },
         identity.signing_key(),
-    )
-    .map_err(|error| format!("package:{error}"))?;
+    );
+    for path in loose {
+        let _ = std::fs::remove_file(path);
+    }
+    created.map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        format!("package:{error}")
+    })?;
+    std::fs::rename(&partial, &package).map_err(|error| format!("staging:{error}"))?;
 
     Ok(BuiltPackage {
         path: package,
-        _staging: staging,
         screenshot_unavailable,
         included_minidump,
         included_screenshot,
@@ -456,13 +618,14 @@ fn submit_blocking(
     validate_stem(&stem)?;
     let crash_dir = crate::crash::crash_reports_dir().ok_or("crash_dir_unavailable")?;
     let identity = identity()?;
-    let built = build_package(&crash_dir, &stem, &consent, &identity)?;
+    let built = stage_package(&crash_dir, &stem, &consent, &identity)?;
     let grant = uploader_grant(&connection, &identity)?;
 
-    let report: serde_json::Value = std::fs::read(crash_dir.join(format!("{stem}.json")))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or(serde_json::Value::Null);
+    let exception = report::read_normalized(&crash_dir, &stem)?
+        .json
+        .as_ref()
+        .map(exception_for)
+        .unwrap_or_else(|| "unknown".to_owned());
 
     let receipt = submit_package(
         &NativeTransport,
@@ -471,10 +634,18 @@ fn submit_blocking(
         SubmissionRequest {
             package: &built.path,
             module: "cognia-desktop",
-            exception: &exception_for(&report),
+            exception: &exception,
         },
     )
-    .map_err(|error| submit_error_code(&error))?;
+    .map_err(|error| {
+        // A package the submitter cannot read will not get better on retry;
+        // drop it so the next attempt rebuilds. Every other failure keeps it,
+        // which is what lets the retry resume the same incident.
+        if matches!(error, SubmitError::Package(_) | SubmitError::Zip(_)) {
+            let _ = discard_staged(&crash_dir, &stem);
+        }
+        submit_error_code(&error)
+    })?;
 
     // A resumed submission keeps the credential stored the first time: the
     // service withholds it precisely because a second one could never verify.
@@ -496,6 +667,11 @@ fn submit_blocking(
         included_screenshot: built.included_screenshot,
     };
     receipts::save(&crash_dir, &stem, &record).map_err(|error| format!("receipt:{error}"))?;
+    // Only now is the staged package redundant: the receipt is what a later
+    // refresh, withdrawal or deletion addresses.
+    if let Err(error) = discard_staged(&crash_dir, &stem) {
+        log::warn!("crash: submitted package for {stem} could not be removed: {error}");
+    }
 
     Ok(SubmissionOutcome {
         record,
@@ -977,11 +1153,13 @@ mod tests {
         let identity = InstallationIdentity::from_seed(&[3_u8; 32]);
 
         // Minidump withheld by default.
+        let out = tempfile::tempdir().unwrap();
         let without = build_package(
             crash_dir.path(),
             stem,
             &SubmissionConsentInput::default(),
             &identity,
+            out.path(),
         )
         .unwrap();
         assert!(!without.included_minidump);
@@ -990,6 +1168,7 @@ mod tests {
         assert_eq!(kinds, vec!["manifest", "events", "attachment"]);
 
         // …and included only when the user says so.
+        let out = tempfile::tempdir().unwrap();
         let with = build_package(
             crash_dir.path(),
             stem,
@@ -999,6 +1178,7 @@ mod tests {
                 description: Some("  ".to_owned()),
             },
             &identity,
+            out.path(),
         )
         .unwrap();
         assert!(with.included_minidump);
@@ -1019,6 +1199,7 @@ mod tests {
         )
         .unwrap();
         let identity = InstallationIdentity::from_seed(&[4_u8; 32]);
+        let out = tempfile::tempdir().unwrap();
         let built = build_package(
             crash_dir.path(),
             stem,
@@ -1028,6 +1209,7 @@ mod tests {
                 description: Some("I was exporting a workflow".to_owned()),
             },
             &identity,
+            out.path(),
         )
         .unwrap();
         let (manifest, _) = crate::read_package_parts(&built.path).unwrap();
@@ -1041,13 +1223,218 @@ mod tests {
     fn packaging_refuses_a_report_that_is_not_there() {
         let crash_dir = tempfile::tempdir().unwrap();
         let identity = InstallationIdentity::from_seed(&[5_u8; 32]);
+        let out = tempfile::tempdir().unwrap();
         let error = build_package(
             crash_dir.path(),
             "crash-missing",
             &SubmissionConsentInput::default(),
             &identity,
+            out.path(),
         )
         .unwrap_err();
         assert_eq!(error, "report_not_found");
+    }
+
+    /// An unscrubbed report, as an older build would have left it on disk.
+    fn write_sensitive_report(crash_dir: &Path, stem: &str) {
+        std::fs::write(
+            crash_dir.join(format!("{stem}.json")),
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "panic",
+                "message": "failed for jane.doe@example.com on jane-workstation",
+                "backtrace": "  0: alpha\n      at /Users/someone-else/src/a.rs:1\n  1: key AKIAABCDEFGHIJKLMNOP",
+                "system": {"arch": "x86_64", "family": "macos", "hostname": "jane-workstation"},
+                "extra": {"appVersion": "9.9.9"},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            crash_dir.join(format!("{stem}.txt")),
+            "Host: jane-workstation\nDescription: failed for jane.doe@example.com",
+        )
+        .unwrap();
+    }
+
+    fn decoded_events(package: &Path) -> String {
+        let (_, parts) = crate::read_package_parts(package).unwrap();
+        let events = parts
+            .iter()
+            .find(|part| part.artifact_kind == "events")
+            .unwrap();
+        String::from_utf8(zstd::stream::decode_all(events.bytes.as_slice()).unwrap()).unwrap()
+    }
+
+    fn all_text_parts(package: &Path) -> Vec<String> {
+        let (_, parts) = crate::read_package_parts(package).unwrap();
+        let mut texts = vec![decoded_events(package)];
+        texts.extend(
+            parts
+                .iter()
+                .filter(|part| part.artifact_kind == "attachment")
+                .map(|part| String::from_utf8_lossy(&part.bytes).into_owned()),
+        );
+        texts
+    }
+
+    #[test]
+    fn the_compressed_events_and_every_text_part_are_scrubbed_before_packaging() {
+        let crash_dir = tempfile::tempdir().unwrap();
+        let stem = "crash-2026-08-20_00-00-00-panic";
+        write_sensitive_report(crash_dir.path(), stem);
+        let identity = InstallationIdentity::from_seed(&[6_u8; 32]);
+        let out = tempfile::tempdir().unwrap();
+        let built = build_package(
+            crash_dir.path(),
+            stem,
+            &SubmissionConsentInput {
+                include_minidump: false,
+                include_screenshot: false,
+                description: Some(
+                    "mail me at jane.doe@example.com, token Bearer abc.def".to_owned(),
+                ),
+            },
+            &identity,
+            out.path(),
+        )
+        .unwrap();
+        for text in all_text_parts(&built.path) {
+            for leaked in [
+                "jane.doe@example.com",
+                "jane-workstation",
+                "someone-else",
+                "AKIAABCDEFGHIJKLMNOP",
+                "abc.def",
+            ] {
+                assert!(!text.contains(leaked), "{leaked} leaked into {text}");
+            }
+        }
+        // Loose copies do not outlive the package.
+        let leftovers: Vec<_> = std::fs::read_dir(out.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, vec![STAGED_PACKAGE.to_owned()]);
+    }
+
+    #[test]
+    fn the_preview_and_the_package_carry_the_same_report_text() {
+        let crash_dir = tempfile::tempdir().unwrap();
+        let stem = "crash-2026-08-20_00-00-01-panic";
+        write_sensitive_report(crash_dir.path(), stem);
+        let preview = report::read_normalized(crash_dir.path(), stem)
+            .unwrap()
+            .preview()
+            .unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let built = build_package(
+            crash_dir.path(),
+            stem,
+            &SubmissionConsentInput::default(),
+            &InstallationIdentity::from_seed(&[7_u8; 32]),
+            out.path(),
+        )
+        .unwrap();
+        let (_, parts) = crate::read_package_parts(&built.path).unwrap();
+        let attached = parts
+            .iter()
+            .find(|part| part.artifact_kind == "attachment")
+            .map(|part| String::from_utf8(part.bytes.clone()).unwrap())
+            .unwrap();
+        assert_eq!(attached, preview);
+    }
+
+    #[test]
+    fn a_text_the_scrubber_cannot_make_clean_is_refused() {
+        // A scrubber is a fixed point on its own output, so the only way to
+        // reach the refusal is a value it does not touch: the check walks every
+        // event string, so prove the walk sees nested values.
+        let scrubber = CrashScrubber::new(None, Vec::<String>::new());
+        assert!(!value_is_clean(
+            &scrubber,
+            &serde_json::json!({"a": [{"b": "jane.doe@example.com"}]})
+        ));
+        assert!(value_is_clean(
+            &scrubber,
+            &serde_json::json!({"a": [1, "ok"]})
+        ));
+    }
+
+    #[test]
+    fn a_retry_reuses_the_staged_package_so_the_incident_resumes() {
+        let crash_dir = tempfile::tempdir().unwrap();
+        let stem = "crash-2026-08-20_00-00-02-panic";
+        write_sensitive_report(crash_dir.path(), stem);
+        let identity = InstallationIdentity::from_seed(&[8_u8; 32]);
+        let consent = SubmissionConsentInput {
+            include_minidump: false,
+            include_screenshot: false,
+            description: Some("same words".to_owned()),
+        };
+
+        let first = stage_package(crash_dir.path(), stem, &consent, &identity).unwrap();
+        let first_bytes = std::fs::read(&first.path).unwrap();
+        let second = stage_package(crash_dir.path(), stem, &consent, &identity).unwrap();
+        assert_eq!(std::fs::read(&second.path).unwrap(), first_bytes);
+        let (manifest_a, _) = crate::read_package_parts(&first.path).unwrap();
+        let (manifest_b, _) = crate::read_package_parts(&second.path).unwrap();
+        assert_eq!(manifest_a.incident_id(), manifest_b.incident_id());
+
+        // Different consent is a different package.
+        let changed = SubmissionConsentInput {
+            description: Some("other words".to_owned()),
+            ..consent.clone()
+        };
+        let third = stage_package(crash_dir.path(), stem, &changed, &identity).unwrap();
+        assert_ne!(std::fs::read(&third.path).unwrap(), first_bytes);
+
+        // So is another installation identity.
+        let other = InstallationIdentity::from_seed(&[9_u8; 32]);
+        let fourth = stage_package(crash_dir.path(), stem, &changed, &other).unwrap();
+        let (manifest_d, _) = crate::read_package_parts(&fourth.path).unwrap();
+        assert_ne!(manifest_d.incident_id(), manifest_a.incident_id());
+    }
+
+    #[test]
+    fn an_interrupted_build_is_rebuilt_not_reused() {
+        let crash_dir = tempfile::tempdir().unwrap();
+        let stem = "crash-2026-08-20_00-00-03-panic";
+        write_sensitive_report(crash_dir.path(), stem);
+        let identity = InstallationIdentity::from_seed(&[10_u8; 32]);
+        let consent = SubmissionConsentInput::default();
+        let first = stage_package(crash_dir.path(), stem, &consent, &identity).unwrap();
+        // A package without its state file is what a crash mid-build leaves.
+        std::fs::remove_file(staged_dir(crash_dir.path(), stem).join(STAGED_STATE)).unwrap();
+        let (before, _) = crate::read_package_parts(&first.path).unwrap();
+        let rebuilt = stage_package(crash_dir.path(), stem, &consent, &identity).unwrap();
+        let (after, _) = crate::read_package_parts(&rebuilt.path).unwrap();
+        assert_ne!(before.incident_id(), after.incident_id());
+    }
+
+    #[test]
+    fn staged_packages_are_discarded_with_their_report() {
+        let crash_dir = tempfile::tempdir().unwrap();
+        let stem = "crash-2026-08-20_00-00-04-panic";
+        write_sensitive_report(crash_dir.path(), stem);
+        let identity = InstallationIdentity::from_seed(&[11_u8; 32]);
+        stage_package(
+            crash_dir.path(),
+            stem,
+            &SubmissionConsentInput::default(),
+            &identity,
+        )
+        .unwrap();
+        assert!(staged_dir(crash_dir.path(), stem).is_dir());
+
+        let live = std::collections::BTreeSet::from([stem.to_owned()]);
+        assert_eq!(discard_orphan_staged(crash_dir.path(), &live), 0);
+        assert_eq!(
+            discard_orphan_staged(crash_dir.path(), &Default::default()),
+            1
+        );
+        assert!(!staged_dir(crash_dir.path(), stem).exists());
+        // Discarding what is already gone is not an error.
+        discard_staged(crash_dir.path(), stem).unwrap();
     }
 }

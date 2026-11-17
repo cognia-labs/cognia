@@ -7,6 +7,7 @@ import {
   resolveStepRetryPolicy,
   runStep,
   executeWorkflowEgress,
+  stepExecutionMetaOf,
   type RunStepInput,
 } from "./step-executor"
 import "@/lib/workflow/nodes/data/flow"
@@ -275,7 +276,12 @@ describe("runStep pin short-circuit", () => {
 
     await runStep(input)
 
-    expect(commentarySpy).toHaveBeenCalledWith("n1", "Checking the repository", 0)
+    expect(commentarySpy).toHaveBeenCalledWith(
+      "n1",
+      "Checking the repository",
+      0,
+      expect.objectContaining({ attempt: 1, stepExecutionId: expect.any(String) })
+    )
   })
 })
 
@@ -786,4 +792,149 @@ it("S2 workflow URL attempt gate uses the canonical live run and preserves clear
     code: "personal-egress-denied",
   })
   expect(execute).toHaveBeenCalledTimes(1)
+})
+
+describe("step event evidence (resolved inputs, execution identity, error detail)", () => {
+  it("records the resolved inputs the executor received, not the scheduling metadata", async () => {
+    const templNode: WorkflowNode = {
+      id: "n_tmpl",
+      type: "data.code",
+      typeVersion: 1,
+      position: { x: 0, y: 0 },
+      data: { label: "tmpl", params: { code: "{{ $node['up'].value }}" } },
+    }
+    let received: Record<string, unknown> | undefined
+    execSpy.mockImplementationOnce(async (ctx) => {
+      received = ctx.params
+      return { output: { real: true } }
+    })
+    const input = await buildInput({})
+    input.node = templNode
+    input.workflow = { ...input.workflow, nodes: [templNode] }
+    input.upstream = { up: { value: "resolved-code" } }
+    await runStep(input)
+    const started = (await listRunEvents("run_1")).find((e) => e.type === "step_started")
+    const payload = started?.payload as { inputs?: unknown; attempt?: number; params?: unknown }
+    expect(received).toEqual({ code: "resolved-code" })
+    expect(payload.inputs).toEqual(received)
+    expect(payload.attempt).toBe(1)
+    expect(payload.params).toBeUndefined()
+  })
+
+  it("labels a pinned short-circuit as pinned, with no inputs", async () => {
+    await runStep(await buildInput({ honorPinData: true, pinData: { n1: { pinned: 1 } } }))
+    const events = await listRunEvents("run_1")
+    const started = events.find((e) => e.type === "step_started")?.payload as Record<
+      string,
+      unknown
+    >
+    const completed = events.find((e) => e.type === "step_completed")?.payload as Record<
+      string,
+      unknown
+    >
+    expect(started.pinned).toBe(true)
+    expect(started).not.toHaveProperty("inputs")
+    expect(typeof started.stepExecutionId).toBe("string")
+    expect(completed.stepExecutionId).toBe(started.stepExecutionId)
+  })
+
+  it("stamps every event of an attempt with that attempt's identity across a retry", async () => {
+    const flaky = jest
+      .fn()
+      .mockImplementationOnce(async (ctx: StepExecutionContext) => {
+        ctx.log("info", "first try")
+        ctx.emitStream?.("partial")
+        throw new Error("transient")
+      })
+      .mockResolvedValueOnce({ output: { ok: true } })
+    registerNodeExecutor({ kind: "data.template", typeVersion: 1, execute: flaky })
+    const retryNode: WorkflowNode = {
+      id: "n_retry_id",
+      type: "data.template",
+      typeVersion: 1,
+      position: { x: 0, y: 0 },
+      data: {
+        label: "flaky",
+        params: { template: "t" },
+        errorHandling: { retry: { maxRetries: 1, retryIntervalMs: 0, backoff: "fixed" } },
+      },
+    }
+    const runId = "run_retry_id"
+    await runStep({
+      workflow: { ...makeWorkflow(), nodes: [retryNode] },
+      node: retryNode,
+      trigger,
+      upstream: {},
+      runId,
+      signal: new AbortController().signal,
+      cache: await IdempotencyCache.hydrate(runId),
+      retryPolicy: { attempts: 1, backoff: "fixed", baseMs: 0 },
+      secretResolver: NoopSecretResolver,
+      logger: createRunLogger(runId),
+      iterationMeta: { loopId: "L", iterationIndex: 2 },
+    })
+    const events = (await listRunEvents(runId)).filter((e) => e.stepId === "n_retry_id")
+    const idOf = (e: (typeof events)[number]) =>
+      (e.payload as { stepExecutionId?: string }).stepExecutionId
+    const [firstStart, secondStart] = events.filter((e) => e.type === "step_started")
+    const first = idOf(firstStart)
+    const second = idOf(secondStart)
+    expect(first).toBeTruthy()
+    expect(second).toBeTruthy()
+    expect(first).not.toBe(second)
+    const byType = (type: string) => events.filter((e) => e.type === type).map(idOf)
+    expect(byType("step_failed")).toEqual([first])
+    expect(byType("step_retrying")).toEqual([first])
+    expect(byType("step_stream")).toEqual([first])
+    expect(byType("step_completed")).toEqual([second])
+    const firstTryLog = events.find(
+      (e) => e.type === "run_log" && (e.payload as { message?: string }).message === "first try"
+    )
+    expect(firstTryLog && idOf(firstTryLog)).toBe(first)
+    expect(firstStart.payload).toEqual(
+      expect.objectContaining({ attempt: 1, loopId: "L", iterationIndex: 2 })
+    )
+    expect(secondStart.payload).toEqual(expect.objectContaining({ attempt: 2 }))
+  })
+
+  it("keeps the thrown error's name, stack and cause on step_failed and tags the error", async () => {
+    const root = new RangeError("index 9 out of range")
+    const thrown = new TypeError("cannot read rows", { cause: root })
+    ;(thrown as Error & { retryable?: boolean }).retryable = false
+    execSpy.mockImplementationOnce(async () => {
+      throw thrown
+    })
+    const caught = await runStep(await buildInput({})).catch((err: unknown) => err)
+    expect(caught).toBe(thrown)
+    const failed = (await listRunEvents("run_1")).find((e) => e.type === "step_failed")
+    const payload = failed?.payload as {
+      name?: string
+      message?: string
+      stack?: string
+      cause?: { name?: string; message?: string }
+      retryable?: boolean
+      stepExecutionId?: string
+    }
+    expect(payload.name).toBe("TypeError")
+    expect(payload.message).toBe("cannot read rows")
+    expect(payload.stack).toContain("cannot read rows")
+    expect(payload.stack).toMatch(/step-executor\.test\.ts/)
+    expect(payload.cause).toEqual(
+      expect.objectContaining({ name: "RangeError", message: "index 9 out of range" })
+    )
+    expect(payload.retryable).toBe(false)
+    expect(stepExecutionMetaOf(caught)?.stepExecutionId).toBe(payload.stepExecutionId)
+  })
+
+  it("gives a failure before any attempt its own execution identity", async () => {
+    const missing: WorkflowNode = { ...node, id: "n_missing", type: "data.missing" as never }
+    const input = await buildInput({})
+    input.node = missing
+    const caught = await runStep(input).catch((err: unknown) => err)
+    const failed = (await listRunEvents("run_1")).find((e) => e.type === "step_failed")
+    const payload = failed?.payload as { stepExecutionId?: string; retryable?: boolean }
+    expect(payload.retryable).toBe(false)
+    expect(payload.stepExecutionId).toBeTruthy()
+    expect(stepExecutionMetaOf(caught)?.stepExecutionId).toBe(payload.stepExecutionId)
+  })
 })

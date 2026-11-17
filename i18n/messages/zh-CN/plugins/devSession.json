@@ -43,6 +43,7 @@
   },
   "runtimeLogs": {
     "clear": "清空",
+    "details": "详情",
     "empty": "还没有日志。",
     "filter": "{pluginId} 的结构化日志，generation {generation}",
     "missing": {

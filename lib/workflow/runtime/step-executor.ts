@@ -14,13 +14,15 @@ import type {
   WorkflowRunLineage,
   WorkflowRunSecurityContext,
 } from "@/types/workflow/visual"
+import { nanoid } from "nanoid"
 import type { WorkflowExecutionBinding } from "@/types/workflow/deployment"
 import { getExecutor } from "@/lib/workflow/nodes/registry"
 import { loadModuleWorkflowNodes } from "@/lib/workflow/nodes/module-nodes"
 import { retiredNodeKind } from "@/lib/workflow/nodes/retired-kinds"
 import { resolveDeep } from "./expression"
 import { IdempotencyCache } from "./idempotency"
-import type { RunLogger } from "./event-log"
+import type { RunLogger, StepEventMeta } from "./event-log"
+import { describeStepError, recordStepInputs } from "./step-event-payload"
 import type { SecretResolver } from "./secret-resolver"
 import { createStreamSink } from "./stream-sink"
 import { assertCircuitClosed, recordCircuitFailure, recordCircuitSuccess } from "./circuit-breaker"
@@ -161,8 +163,34 @@ export async function executeWorkflowEgress<T>(
   )
 }
 
+/**
+ * Execution identity of the attempt a thrown step error came from, so a caller
+ * that turns the failure into a handled output (`step_completed` after
+ * `step_failed`) can attribute it to that same execution instance.
+ */
+const failedExecutionMeta = new WeakMap<object, StepEventMeta>()
+
+export function stepExecutionMetaOf(err: unknown): StepEventMeta | undefined {
+  return err !== null && typeof err === "object" ? failedExecutionMeta.get(err) : undefined
+}
+
+function newStepExecutionId(): string {
+  return `wf-step_${nanoid()}`
+}
+
 export async function runStep(input: RunStepInput): Promise<StepExecution> {
   const { node, runId, cache, signal, logger } = input
+  /**
+   * Record a failure that happened before any attempt started (no executor,
+   * invalid params, open breaker, aborted). It is still its own execution
+   * instance, so the inspector can show it without mixing it into an attempt.
+   */
+  const failBeforeExecution = async (err: Error): Promise<Error> => {
+    const meta: StepEventMeta = { ...input.iterationMeta, stepExecutionId: newStepExecutionId() }
+    await logger.stepFailed(node.id, { ...describeStepError(err), retryable: false }, meta)
+    failedExecutionMeta.set(err, meta)
+    return err
+  }
   const retryPolicy = resolveStepRetryPolicy(node, input.retryPolicy)
   const cacheKey = input.cacheKey ?? node.id
 
@@ -179,9 +207,10 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     Object.prototype.hasOwnProperty.call(input.workflow.pinData, node.id)
   ) {
     const pinned = input.workflow.pinData[node.id]
-    await logger.stepStarted(node.id, { pinned: true }, input.iterationMeta)
+    const meta: StepEventMeta = { ...input.iterationMeta, stepExecutionId: newStepExecutionId() }
+    await logger.stepStarted(node.id, { pinned: true }, meta)
     cache.set(cacheKey, pinned)
-    await logger.stepCompleted(node.id, pinned, input.iterationMeta)
+    await logger.stepCompleted(node.id, pinned, meta)
     return { output: pinned, fromCache: false }
   }
 
@@ -203,8 +232,7 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
         : `No executor registered for ${node.type}@${node.typeVersion}. ` +
             `Install the plugin that provides it, or change the node type.`
     )
-    await logger.stepFailed(node.id, { message: err.message, retryable: false })
-    throw err
+    throw await failBeforeExecution(err)
   }
 
   // Resolve params with expression substitution before passing to the executor.
@@ -237,10 +265,9 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     if (!pluginValidation.ok) paramErrors.push(...pluginValidation.errors)
   }
   if (paramErrors.length > 0) {
-    const err = new InvalidNodeParamsError(node, paramErrors)
-    await logger.stepFailed(node.id, { message: err.message, retryable: false })
-    throw err
+    throw await failBeforeExecution(new InvalidNodeParamsError(node, paramErrors))
   }
+  const recordedInputs = recordStepInputs(resolvedParamRecord)
 
   const ctx: StepExecutionContext = {
     runId,
@@ -288,9 +315,7 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     try {
       assertCircuitClosed(input.workflow.id, node.id)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      await logger.stepFailed(node.id, { message, retryable: false })
-      throw err instanceof Error ? err : new Error(message)
+      throw await failBeforeExecution(err instanceof Error ? err : new Error(String(err)))
     }
   }
 
@@ -299,24 +324,32 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
   while (true) {
     attempt += 1
     if (signal.aborted) {
-      const err = new Error("Workflow run aborted")
-      await logger.stepFailed(node.id, { message: err.message, retryable: false })
-      throw err
+      throw await failBeforeExecution(new Error("Workflow run aborted"))
     }
 
-    await logger.stepStarted(node.id, { attempt }, input.iterationMeta)
+    const stepExecutionId = newStepExecutionId()
+    const executionMeta: StepEventMeta = { ...input.iterationMeta, stepExecutionId, attempt }
+    await logger.stepStarted(node.id, recordedInputs, executionMeta)
     // Fresh sink per attempt so a failed attempt's partial stream never
     // interleaves with the retry's output. The sink throttles `step_stream`
     // writes; commentary uses an independent channel so it cannot be folded
     // into final output. Usage lands as one `step_usage` event.
-    const sink = createStreamSink({ stepId: node.id, logger })
+    const sink = createStreamSink({
+      stepId: node.id,
+      logger: {
+        stepStream: (stepId, delta, seq) => logger.stepStream(stepId, delta, seq, executionMeta),
+      },
+    })
     const commentarySink = createStreamSink({
       stepId: node.id,
-      logger: { stepStream: logger.stepCommentary },
+      logger: {
+        stepStream: (stepId, delta, seq) =>
+          logger.stepCommentary(stepId, delta, seq, executionMeta),
+      },
     })
     ctx.emitStream = (delta) => sink.push(delta)
     ctx.emitCommentary = (delta) => commentarySink.push(delta)
-    ctx.reportUsage = (usage) => void logger.stepUsage(node.id, usage)
+    ctx.reportUsage = (usage) => void logger.stepUsage(node.id, usage, executionMeta)
     let executionSettled = false
     try {
       const result = await runWithTimeout(
@@ -324,7 +357,12 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
         signal,
         async (attemptSignal) => {
           try {
-            const attemptContext = { ...ctx, signal: attemptSignal }
+            const attemptContext: StepExecutionContext = {
+              ...ctx,
+              signal: attemptSignal,
+              log: (level, message, payload) =>
+                void logger.log(level, message, payload, node.id, executionMeta),
+            }
             return OPAQUE_WORKFLOW_NODES.has(node.type)
               ? await executeWorkflowEgress(
                   attemptContext,
@@ -349,12 +387,12 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
       // BEFORE the step_completed marker so timeline order is correct.
       if (result.logs?.length) {
         for (const l of result.logs) {
-          await logger.log(l.level, l.message, l.payload, node.id)
+          await logger.log(l.level, l.message, l.payload, node.id, executionMeta)
         }
       }
       cache.set(cacheKey, result.output)
       if (breaker) recordCircuitSuccess(input.workflow.id, node.id)
-      await logger.stepCompleted(node.id, result.output, input.iterationMeta)
+      await logger.stepCompleted(node.id, result.output, executionMeta)
       return exec
     } catch (caught) {
       let err = caught
@@ -379,27 +417,37 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
       const message = err instanceof Error ? err.message : String(err)
       const retryable = reg.retryable !== false && isRetryableError(err)
       const lastAttempt = attempt >= retryPolicy.attempts
-      await logger.stepFailed(node.id, { message, retryable })
+      // The durable log gets the redacted, bounded detail; the thrown error
+      // keeps its original message for the caller.
+      const detail = describeStepError(err)
+      await logger.stepFailed(node.id, { ...detail, retryable }, executionMeta)
 
       if (!retryable || lastAttempt) {
         // Terminal failure for this node — feed the breaker so a repeatedly
         // failing node eventually trips and fail-fasts on the next run.
         if (breaker) recordCircuitFailure(input.workflow.id, node.id, breaker)
-        throw err instanceof Error ? err : new Error(message)
+        const thrown = err instanceof Error ? err : new Error(message)
+        failedExecutionMeta.set(thrown, executionMeta)
+        throw thrown
       }
 
       const delay = computeBackoffMs(retryPolicy, attempt)
-      await logger.stepRetrying(node.id, {
-        attempt,
-        maxAttempts: retryPolicy.attempts,
-        delayMs: delay,
-        error: message,
-      })
+      await logger.stepRetrying(
+        node.id,
+        {
+          attempt,
+          maxAttempts: retryPolicy.attempts,
+          delayMs: delay,
+          error: detail.message,
+        },
+        executionMeta
+      )
       await logger.log(
         "warn",
         `step ${node.id} failed (attempt ${attempt}/${retryPolicy.attempts}); retrying in ${delay}ms`,
-        { error: message },
-        node.id
+        { error: detail.message },
+        node.id,
+        executionMeta
       )
       await wait(delay, signal)
     }

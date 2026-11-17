@@ -431,6 +431,31 @@ describe("span / call-context fields", () => {
     expect(firstStep.parentSpanId).toBeUndefined()
     expect(secondStep.parentSpanId).toBeUndefined()
   })
+
+  it("never leaks an open async span into the ambient context", async () => {
+    const core = await import("./core")
+    const { logContext } = await import("./context")
+    const mem = makeMemoryTransport()
+    core.initLogger({ minLevel: "trace", enableConsole: false }, [mem])
+    const logger = core.createLogger("svc")
+    const other = core.createLogger("other")
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    const pending = logger.spanAsync("held-open", async () => {
+      await gate
+    })
+    // Unrelated work running while the span is open must not inherit it.
+    expect(logContext.spanId).toBeUndefined()
+    other.info("unrelated")
+    release()
+    await pending
+
+    expect(mem.entries.find((entry) => entry.message === "unrelated")!.spanId).toBeUndefined()
+    expect(logContext.spanId).toBeUndefined()
+  })
 })
 
 describe("per-module level overrides", () => {

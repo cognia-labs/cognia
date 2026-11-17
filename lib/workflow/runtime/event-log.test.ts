@@ -120,7 +120,7 @@ describe("event-log ts monotonicity", () => {
 
   it("createRunLogger writes are durable after await", async () => {
     const logger = createRunLogger("run_d")
-    await logger.stepStarted("n1", { foo: 1 })
+    await logger.stepStarted("n1", { inputs: { foo: 1 } })
     await logger.stepCompleted("n1", { ok: true })
     const events = await listRunEvents("run_d")
     expect(events.map((e) => e.type)).toEqual(["step_started", "step_completed"])

@@ -1,11 +1,13 @@
 /**
  * Assemble a support report from the chosen sections.
  *
- * Every section body — including the user's own words — goes through
- * `redactText` and is then re-checked with `hasNoLeakingPii` before it is
- * allowed into the report. A section that still leaks after redaction fails
- * the whole build rather than shipping a partially-scrubbed document: the
- * caller shows an error, nothing leaves the device.
+ * Every piece of text that reaches the report — header values, section
+ * headings, section bodies (including the user's own words) and the title —
+ * goes through `redactText` and is then re-checked with `hasNoLeakingPii`.
+ * The finished Markdown is scanned once more as a whole. Anything that still
+ * leaks after redaction fails the whole build rather than shipping a
+ * partially-scrubbed document: the caller shows an error, nothing leaves the
+ * device.
  */
 
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
@@ -17,6 +19,8 @@ import type { SupportReport, SupportReportContext, SupportReportSectionSpec } fr
 /** Per-section cap so one runaway dump (a 200k stack) cannot crowd out the rest. */
 export const MAX_SECTION_CHARS = 8_000
 const MAX_TITLE_CHARS = 100
+/** Header values are short identifiers (route, locale, error digest). */
+const MAX_HEADER_VALUE_CHARS = 300
 
 export interface BuildSupportReportOptions {
   context: SupportReportContext
@@ -62,16 +66,18 @@ export async function buildSupportReport({
       section.isAvailable(context) && (section.pinned || !wanted || wanted.has(section.id))
   )
 
+  const headerLine = (label: string, value: string | null | undefined) =>
+    value ? [`- ${label}: ${scrub(value, MAX_HEADER_VALUE_CHARS)}`] : []
   const header = [
     "## Cognia support report",
     "",
     `- App version: ${APP_VERSION}`,
     `- Generated: ${generatedAt}`,
-    `- Surface: ${context.surface}`,
-    ...(context.category ? [`- Category: ${context.category}`] : []),
-    ...(context.route ? [`- Route: ${context.route}`] : []),
-    ...(context.locale ? [`- Locale: ${context.locale}`] : []),
-    ...(context.error?.digest ? [`- Error ID: ${context.error.digest}`] : []),
+    ...headerLine("Surface", context.surface),
+    ...headerLine("Category", context.category),
+    ...headerLine("Route", context.route),
+    ...headerLine("Locale", context.locale),
+    ...headerLine("Error ID", context.error?.digest),
   ]
 
   const bodies: string[] = []
@@ -79,11 +85,21 @@ export async function buildSupportReport({
   for (const section of chosen) {
     const raw = await section.collect(context)
     if (!raw || raw.trim().length === 0) continue
-    bodies.push(`### ${section.heading}`, "", scrub(raw, MAX_SECTION_CHARS), "")
+    bodies.push(
+      `### ${scrub(section.heading, MAX_HEADER_VALUE_CHARS)}`,
+      "",
+      scrub(raw, MAX_SECTION_CHARS),
+      ""
+    )
     sectionIdsOut.push(section.id)
   }
 
   const markdown = [...header, "", ...bodies].join("\n").trimEnd() + "\n"
+  // Fail closed on the assembled document too: joining fragments must not
+  // recombine into something the per-fragment checks missed.
+  if (!hasNoLeakingPii(markdown)) {
+    throw new Error("Support report still contains sensitive data after redaction.")
+  }
   return {
     title: scrub(deriveSupportReportTitle(context), MAX_TITLE_CHARS),
     markdown,

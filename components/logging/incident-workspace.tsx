@@ -109,6 +109,7 @@ export const SUBMISSION_ERROR_CODES = [
   "unauthorized",
   "network_unavailable",
   "package_invalid",
+  "privacy_rejected",
   "malformed_response",
   "report_not_found",
   "submission_not_found",

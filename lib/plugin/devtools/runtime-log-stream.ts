@@ -20,6 +20,7 @@
  */
 
 import type { PluginType } from "@/types/plugin"
+import type { JsonSafeValue } from "@/lib/error/serialize-error"
 import { getPluginDebugger, type LogEntry } from "./debugger"
 import {
   clearPythonLogs,
@@ -51,6 +52,10 @@ export interface PluginRuntimeLogEntry {
   timestamp: number
   /** The python host's frame kind (`progress`, `chunk`, `exit`, …). */
   kind?: string
+  /** Extra values logged after the message, JSON-safe and bounded. */
+  args?: JsonSafeValue[]
+  /** Stack of the logged Error (or of the error-level call site). */
+  stack?: string
 }
 
 /**
@@ -110,6 +115,8 @@ export function normalizeFrontendEntry(entry: LogEntry): PluginRuntimeLogEntry {
     level: entry.level,
     message: entry.message,
     timestamp: entry.timestamp,
+    ...(entry.args.length > 0 ? { args: entry.args } : {}),
+    ...(entry.stack ? { stack: entry.stack } : {}),
   }
 }
 

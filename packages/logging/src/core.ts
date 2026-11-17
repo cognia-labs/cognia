@@ -18,6 +18,7 @@ import { DEFAULT_UNIFIED_CONFIG, LEVEL_PRIORITY } from "./types"
 import { clearLevelRuleCache, resolveMinLevel } from "./level-rules"
 import {
   logContext,
+  generateSpanId,
   captureLogEgressSource,
   captureLogFailureSource,
   mergeLogEgressSources,
@@ -453,16 +454,16 @@ class CoreLogger implements Logger {
 
   async spanAsync<T>(name: string, fn: (logger: Logger) => Promise<T>): Promise<T> {
     const start = nowMs()
-    return logContext.withSpanAsync(async (spanId) => {
-      const scoped = new CoreLogger(this.module, this.additionalContext, {
-        traceId: this.operationContext.traceId ?? this.currentTraceId ?? logContext.traceId,
-        spanId,
-        parentSpanId: this.operationContext.spanId,
-      })
-      const result = await fn(scoped)
-      scoped.debug(name, { phase: "end", durationMs: nowMs() - start })
-      return result
+    // The span lives only on the scoped logger. Pushing it onto the shared
+    // ambient stack would leak it into any concurrent work across the await.
+    const scoped = new CoreLogger(this.module, this.additionalContext, {
+      traceId: this.operationContext.traceId ?? this.currentTraceId ?? logContext.traceId,
+      spanId: generateSpanId(),
+      parentSpanId: this.operationContext.spanId,
     })
+    const result = await fn(scoped)
+    scoped.debug(name, { phase: "end", durationMs: nowMs() - start })
+    return result
   }
 
   withContext(context: Record<string, unknown>): Logger {

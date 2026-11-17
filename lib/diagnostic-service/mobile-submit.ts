@@ -11,12 +11,16 @@
  * Mobile has no native packager: the Capacitor crash plugin hands back a
  * redacted report object, which goes up as a single `events` part (the kind
  * whose frames the service extracts for grouping), plus the user's typed
- * description as a second, scannable `attachment` part when there is one. The
+ * description as a second `attachment` part when there is one. The description
+ * is redacted here, before it leaves the device: the plugin only redacts the
+ * report it captured, and a scan on the service is not a privacy boundary. The
  * grant comes from the installation identity rather than an identity-provider
  * session, so an ordinary user can submit their own crash without a token.
  * The receipt is written back through the plugin's `markReceipt`, which is
  * what makes the incident stop reading `detected` on the next launch.
  */
+
+import { redactText } from "@cognia/redact"
 
 import { readMobileCrashReport, recordMobileCrashReceipt } from "@/lib/capacitor/crash-diagnostics"
 
@@ -65,7 +69,7 @@ export interface MobileSubmitInput {
   incidentId: string
   /** The incident's capture source, sent as the exception label. */
   exception: string
-  /** Free text the user typed; trimmed, and omitted entirely when blank. */
+  /** Free text the user typed; trimmed, redacted, and omitted entirely when blank. */
   description: string
   fetchImpl: DiagnosticFetch
 }
@@ -111,7 +115,7 @@ export async function submitMobileCrashReport(
   const parts: Array<{ bytes: Uint8Array; kind: "events" | "attachment" }> = [
     { bytes: encoder.encode(JSON.stringify(report)), kind: "events" },
   ]
-  const description = input.description.trim()
+  const description = redactText(input.description.trim()).redacted
   if (description) {
     parts.push({ bytes: encoder.encode(description), kind: "attachment" })
   }

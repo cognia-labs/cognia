@@ -31,6 +31,10 @@ export interface PlatformLogEntryPayload {
   message: string
   timestamp?: string
   traceId?: string
+  spanId?: string
+  parentSpanId?: string
+  executionId?: string
+  requestId?: string
   sessionId?: string
   data?: Record<string, unknown>
 }

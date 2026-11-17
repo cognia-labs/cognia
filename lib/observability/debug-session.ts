@@ -7,10 +7,11 @@
  * someone remembered to turn it off — so in practice it stayed off and nobody
  * could reproduce anything.
  *
- * This replaces the single boolean with what Claude Code's own OTel surface
- * models as three independent env vars (`OTEL_LOG_USER_PROMPTS`,
- * `..._TOOL_DETAILS`, `..._RAW_API_BODIES`), plus our own `deltas` tier, and
- * makes the whole thing expire on a clock. Arming is a deliberate, bounded act:
+ * This replaces the single boolean with independent tiers modelled on Claude
+ * Code's own OTel surface (`OTEL_LOG_USER_PROMPTS`, `..._TOOL_DETAILS`), plus
+ * our own `deltas` tier, and makes the whole thing expire on a clock. (There
+ * is no raw-API-body tier: nothing here captures provider request/response
+ * bodies, and a tier with no producer would arm nothing while claiming to.) Arming is a deliberate, bounded act:
  * "capture everything for the next 15 minutes while I reproduce this".
  *
  * Three properties are load-bearing:
@@ -31,9 +32,10 @@
 
 /**
  * What a session arms. Each tier is independent — reproducing a tool bug needs
- * `toolDetails` and nothing else.
+ * `toolDetails` and nothing else. Every tier has a producer that checks it
+ * (`lib/chat/canonical-sink.ts`, `lib/chat/canonical-projection.ts`).
  */
-export const TRACE_DEBUG_TIERS = ["deltas", "prompts", "toolDetails", "rawBodies"] as const
+export const TRACE_DEBUG_TIERS = ["deltas", "prompts", "toolDetails"] as const
 
 export type TraceDebugTier = (typeof TRACE_DEBUG_TIERS)[number]
 
@@ -57,6 +59,25 @@ export interface ArmTraceDebugSessionInput {
   tiers?: readonly TraceDebugTier[]
   sessionId?: string
 }
+
+/**
+ * Outcome of arming. Storage is the only state, so a session that could not be
+ * written is not armed — callers must not treat the requested session as live.
+ */
+export type ArmTraceDebugSessionResult =
+  | { ok: true; session: TraceDebugSession }
+  | {
+      ok: false
+      /** `storage-unavailable`: no `localStorage` at all; `write-failed`: quota / blocked. */
+      reason: "storage-unavailable" | "write-failed"
+      /**
+       * Whether a session armed earlier is still live. A failed replacement
+       * clears the old one when it can: keeping a broader, older capture
+       * running after the user asked for a different one would capture more
+       * than they agreed to.
+       */
+      previousStillArmed: boolean
+    }
 
 export const TRACE_DEBUG_STORAGE_KEY = "cognia.observability.trace-debug-session"
 
@@ -140,7 +161,7 @@ function parse(raw: string | null): TraceDebugSession | null {
 export function armTraceDebugSession(
   input: ArmTraceDebugSessionInput = {},
   now: number = Date.now()
-): TraceDebugSession {
+): ArmTraceDebugSessionResult {
   const requested = Number.isFinite(input.durationMs)
     ? (input.durationMs as number)
     : DEFAULT_TRACE_DEBUG_DURATION_MS
@@ -154,14 +175,27 @@ export function armTraceDebugSession(
     tiers: normalizeTiers(input.tiers),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
   }
+  const store = storage()
+  if (!store) {
+    notify()
+    return { ok: false, reason: "storage-unavailable", previousStillArmed: false }
+  }
   try {
-    storage()?.setItem(TRACE_DEBUG_STORAGE_KEY, JSON.stringify(session))
+    store.setItem(TRACE_DEBUG_STORAGE_KEY, JSON.stringify(session))
   } catch {
-    // Storage full / blocked — the session simply does not arm. Reporting
-    // success here would leave the caller believing it captured a repro.
+    // Storage full / blocked. Fail closed: drop whatever was armed before
+    // (removal frees space, so it usually succeeds even when the write did not).
+    let previousStillArmed = false
+    try {
+      store.removeItem(TRACE_DEBUG_STORAGE_KEY)
+    } catch {
+      previousStillArmed = getTraceDebugSession(now) !== null
+    }
+    notify()
+    return { ok: false, reason: "write-failed", previousStillArmed }
   }
   notify()
-  return session
+  return { ok: true, session }
 }
 
 /** Disarm immediately. Idempotent. */

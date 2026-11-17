@@ -92,6 +92,10 @@ pub struct PlatformLogEntry {
     pub message: String,
     pub timestamp: Option<String>,
     pub trace_id: Option<String>,
+    pub span_id: Option<String>,
+    pub parent_span_id: Option<String>,
+    pub execution_id: Option<String>,
+    pub request_id: Option<String>,
     pub session_id: Option<String>,
     pub data: Option<serde_json::Value>,
 }
@@ -270,17 +274,17 @@ fn serialize_entry_context(entry: &PlatformLogEntry) -> Option<String> {
             serde_json::Value::String(timestamp.clone()),
         );
     }
-    if let Some(trace_id) = entry.trace_id.as_ref() {
-        map.insert(
-            "traceId".to_string(),
-            serde_json::Value::String(trace_id.clone()),
-        );
-    }
-    if let Some(session_id) = entry.session_id.as_ref() {
-        map.insert(
-            "sessionId".to_string(),
-            serde_json::Value::String(session_id.clone()),
-        );
+    for (key, value) in [
+        ("traceId", &entry.trace_id),
+        ("spanId", &entry.span_id),
+        ("parentSpanId", &entry.parent_span_id),
+        ("executionId", &entry.execution_id),
+        ("requestId", &entry.request_id),
+        ("sessionId", &entry.session_id),
+    ] {
+        if let Some(value) = value.as_ref() {
+            map.insert(key.to_string(), serde_json::Value::String(value.clone()));
+        }
     }
     if let Some(data) = entry.data.as_ref() {
         map.insert("data".to_string(), data.clone());
@@ -554,6 +558,10 @@ mod tests {
             message: "startup failed".to_string(),
             timestamp: Some("2026-04-06T12:00:00Z".to_string()),
             trace_id: Some("trace-1".to_string()),
+            span_id: Some("span-1".to_string()),
+            parent_span_id: Some("span-0".to_string()),
+            execution_id: Some("exec-1".to_string()),
+            request_id: Some("req-1".to_string()),
             session_id: Some("session-1".to_string()),
             data: Some(json!({
                 "reason": "io_error",
@@ -576,6 +584,10 @@ mod tests {
             serde_json::from_str(payload).expect("payload should be valid json");
         assert_eq!(payload["timestamp"], "2026-04-06T12:00:00Z");
         assert_eq!(payload["traceId"], "trace-1");
+        assert_eq!(payload["spanId"], "span-1");
+        assert_eq!(payload["parentSpanId"], "span-0");
+        assert_eq!(payload["executionId"], "exec-1");
+        assert_eq!(payload["requestId"], "req-1");
         assert_eq!(payload["sessionId"], "session-1");
         assert_eq!(payload["data"]["reason"], "io_error");
         assert_eq!(payload["data"]["retryable"], false);

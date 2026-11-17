@@ -102,6 +102,18 @@ describe("submitMobileCrashReport", () => {
     expect(new Headers(second![1]!.headers).get("x-artifact-kind")).toBe("attachment")
   })
 
+  it("redacts the typed description before it leaves the device", async () => {
+    const { fetchImpl, deps } = harness()
+    await submitMobileCrashReport(
+      input(fetchImpl, "crashed while mailing jane.doe@example.com"),
+      deps
+    )
+    const second = fetchImpl.mock.calls.find(([url]) => String(url).includes("/parts/2"))
+    const sent = new TextDecoder().decode(second![1]!.body as Uint8Array)
+    expect(sent).not.toContain("jane.doe@example.com")
+    expect(sent).toContain("crashed while mailing")
+  })
+
   it("refuses with a translatable code when the WebView cannot sign", async () => {
     const { fetchImpl, deps } = harness({ loadIdentity: jest.fn(async () => null) })
     await expect(submitMobileCrashReport(input(fetchImpl), deps)).rejects.toMatchObject({

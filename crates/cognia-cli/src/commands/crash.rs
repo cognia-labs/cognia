@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
+use cognia_observability::crash_privacy::CrashScrubber;
 use cognia_observability::{
     create_diagnostic_package, delete_incident, delete_incident_with_credential,
     exchange_installation_grant, fetch_receipt, submit_package, validate_diagnostic_package,
@@ -151,6 +152,10 @@ fn collect_reports(dir: &std::path::Path) -> Vec<CrashSummary> {
         let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
             continue;
         };
+        // The desktop's `submissions.json` receipt store shares the directory.
+        if !stem.starts_with("crash-") {
+            continue;
+        }
         let report = reports.entry(stem.to_owned()).or_insert(CrashSummary {
             stem: stem.to_owned(),
             captured_at: None,
@@ -232,26 +237,84 @@ struct PackageArgs {
 
 fn package(args: PackageArgs, format: OutputFormat) -> Result<()> {
     validate_stem(&args.stem)?;
-    let mut attachments = Vec::new();
-    let mut metadata = Value::Null;
-    for extension in ["json", "txt"] {
-        let path = args.dir.join(format!("{}.{}", args.stem, extension));
-        if path.exists() {
-            if extension == "json" {
-                metadata = serde_json::from_slice(&std::fs::read(&path)?).unwrap_or(Value::Null);
-            }
-            attachments.push(AttachmentInput {
-                name: format!("{}.{}", args.stem, extension),
-                path,
-                media_type: if extension == "json" {
-                    "application/json"
-                } else {
-                    "text/plain"
-                }
+    // Scrubbed copies of every text part live beside the output until the
+    // package holds them; the raw report never goes into the package.
+    let staging = args.out.with_extension("staging");
+    std::fs::create_dir_all(&staging)
+        .with_context(|| format!("create staging directory {}", staging.display()))?;
+    let result = package_from(&args, &staging);
+    let _ = std::fs::remove_dir_all(&staging);
+    let manifest = result?;
+    emit(
+        format,
+        &manifest,
+        &[
+            format!("Packaged {}", args.out.display()),
+            "Report text is scrubbed of home paths, hostnames, emails and credentials before packaging."
                 .to_owned(),
-                kind: cognia_observability::diagnostic_package::AttachmentKind::Metadata,
-            });
+            "Minidumps, screenshots, and descriptions are included only when explicitly selected."
+                .to_owned(),
+        ],
+    )
+}
+
+/// Write one scrubbed text part into `staging`, refusing it if the scrubber's
+/// fail-closed check still finds something.
+fn stage_text(
+    scrubber: &CrashScrubber,
+    staging: &std::path::Path,
+    name: &str,
+    text: &str,
+) -> Result<PathBuf> {
+    let clean = scrubber.scrub_text(text);
+    if !scrubber.is_clean(&clean) {
+        bail!("{name} still contains sensitive text after scrubbing; refusing to package it");
+    }
+    let path = staging.join(name);
+    std::fs::write(&path, clean).with_context(|| format!("stage {}", path.display()))?;
+    Ok(path)
+}
+
+fn package_from(
+    args: &PackageArgs,
+    staging: &std::path::Path,
+) -> Result<cognia_observability::DiagnosticManifestV1> {
+    let json_path = args.dir.join(format!("{}.json", args.stem));
+    let txt_path = args.dir.join(format!("{}.txt", args.stem));
+    let metadata = if json_path.exists() {
+        serde_json::from_slice::<Value>(&std::fs::read(&json_path)?).unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    let scrubber = CrashScrubber::for_report(&metadata);
+
+    let mut attachments = Vec::new();
+    if json_path.exists() {
+        let scrubbed = scrubber.scrub_report(&metadata);
+        let name = format!("{}.json", args.stem);
+        let path = staging.join(&name);
+        let text = serde_json::to_string_pretty(&scrubbed)?;
+        if !scrubbed_strings_are_clean(&scrubber, &scrubbed) {
+            bail!("{name} still contains sensitive text after scrubbing; refusing to package it");
         }
+        std::fs::write(&path, text).with_context(|| format!("stage {}", path.display()))?;
+        attachments.push(AttachmentInput {
+            name,
+            path,
+            media_type: "application/json".to_owned(),
+            kind: cognia_observability::diagnostic_package::AttachmentKind::Metadata,
+        });
+    }
+    if txt_path.exists() {
+        let name = format!("{}.txt", args.stem);
+        let raw = std::fs::read_to_string(&txt_path)
+            .with_context(|| format!("read crash report {}", txt_path.display()))?;
+        attachments.push(AttachmentInput {
+            path: stage_text(&scrubber, staging, &name, &raw)?,
+            name,
+            media_type: "text/plain".to_owned(),
+            kind: cognia_observability::diagnostic_package::AttachmentKind::Metadata,
+        });
     }
     if attachments.is_empty() {
         bail!("crash report not found: {}", args.stem);
@@ -268,23 +331,26 @@ fn package(args: PackageArgs, format: OutputFormat) -> Result<()> {
             kind: cognia_observability::diagnostic_package::AttachmentKind::Minidump,
         });
     }
-    if let Some(path) = args.screenshot {
+    if let Some(path) = &args.screenshot {
         attachments.push(AttachmentInput {
-            name: selected_name(&path, "screenshot.png")?,
-            path,
+            name: selected_name(path, "screenshot.png")?,
+            path: path.clone(),
             media_type: "image/png".to_owned(),
             kind: cognia_observability::diagnostic_package::AttachmentKind::Screenshot,
         });
     }
-    if let Some(path) = args.description {
+    if let Some(path) = &args.description {
+        let name = selected_name(path, "description.txt")?;
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read description {}", path.display()))?;
         attachments.push(AttachmentInput {
-            name: selected_name(&path, "description.txt")?,
-            path,
+            path: stage_text(&scrubber, staging, &name, &raw)?,
+            name,
             media_type: "text/plain".to_owned(),
             kind: cognia_observability::diagnostic_package::AttachmentKind::UserDescription,
         });
     }
-    let manifest = create_diagnostic_package(
+    Ok(create_diagnostic_package(
         &args.out,
         DiagnosticPackageInput {
             incident_id: Uuid::new_v4(),
@@ -306,17 +372,21 @@ fn package(args: PackageArgs, format: OutputFormat) -> Result<()> {
             missing_sources: Default::default(),
             redaction_version: "client-v1".to_owned(),
         },
-        &load_or_create_signing_key(args.signing_key)?,
-    )?;
-    emit(
-        format,
-        &manifest,
-        &[
-            format!("Packaged {}", args.out.display()),
-            "Minidumps, screenshots, and descriptions are included only when explicitly selected."
-                .to_owned(),
-        ],
-    )
+        &load_or_create_signing_key(args.signing_key.clone())?,
+    )?)
+}
+
+fn scrubbed_strings_are_clean(scrubber: &CrashScrubber, value: &Value) -> bool {
+    match value {
+        Value::String(text) => scrubber.is_clean(text),
+        Value::Array(items) => items
+            .iter()
+            .all(|item| scrubbed_strings_are_clean(scrubber, item)),
+        Value::Object(entries) => entries
+            .values()
+            .all(|item| scrubbed_strings_are_clean(scrubber, item)),
+        _ => true,
+    }
 }
 
 fn selected_name(path: &std::path::Path, fallback: &str) -> Result<String> {
@@ -585,6 +655,59 @@ mod tests {
         delete_local(dir.path().to_owned(), "crash-a", OutputFormat::Json).unwrap();
         assert!(dir.path().join("crash-a.keep").exists());
         assert!(!dir.path().join("crash-a.json").exists());
+    }
+
+    #[test]
+    fn the_receipt_store_is_not_listed_as_a_report() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("submissions.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("crash-a.txt"), "x").unwrap();
+        let reports = collect_reports(dir.path());
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].stem, "crash-a");
+    }
+
+    #[test]
+    fn packaging_sends_scrubbed_copies_and_leaves_no_staging_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("crash-a.json"),
+            r#"{"kind":"panic","message":"boom for jane.doe@example.com","system":{"hostname":"jane-box"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("crash-a.txt"),
+            "Host: jane-box\nkey AKIAABCDEFGHIJKLMNOP",
+        )
+        .unwrap();
+        let description = dir.path().join("notes.txt");
+        std::fs::write(&description, "reach me at jane.doe@example.com").unwrap();
+        let out = dir.path().join("out.cognia-diagnostic");
+        let key = dir.path().join("key");
+        package(
+            PackageArgs {
+                dir: dir.path().to_owned(),
+                stem: "crash-a".to_owned(),
+                out: out.clone(),
+                include_minidump: false,
+                screenshot: None,
+                description: Some(description),
+                signing_key: Some(key),
+            },
+            OutputFormat::Json,
+        )
+        .unwrap();
+        assert!(!dir.path().join("out.staging").exists());
+        let (_, parts) = cognia_observability::read_package_parts(&out).unwrap();
+        for part in parts
+            .iter()
+            .filter(|part| part.artifact_kind == "attachment")
+        {
+            let text = String::from_utf8_lossy(&part.bytes);
+            for leaked in ["jane.doe@example.com", "jane-box", "AKIAABCDEFGHIJKLMNOP"] {
+                assert!(!text.contains(leaked), "{leaked} leaked into {text}");
+            }
+        }
     }
 
     #[test]

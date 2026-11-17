@@ -9,6 +9,7 @@ import { nanoid } from "nanoid"
 import { getDb } from "@/lib/db/schema"
 import { recordWorkflowStepUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import { trackEvent } from "@/lib/telemetry/events/track-event"
+import type { StepErrorDetail } from "./step-event-payload"
 import type {
   RunEventLogLevel,
   RunEventType,
@@ -216,6 +217,34 @@ export interface StepIterationMeta {
 }
 
 /**
+ * Identity of one execution instance of a step, carried in the payload of
+ * every event that instance emits (started, stream, commentary, log, usage,
+ * retrying, failed, completed). One `stepExecutionId` per attempt; loop
+ * iterations add their `loopId` / `iterationIndex`. The inspector groups a
+ * step's events by it so retries and iterations are never mixed.
+ */
+export type StepEventMeta = Partial<StepIterationMeta> & {
+  stepExecutionId?: string
+  attempt?: number
+}
+
+/** What a `step_started` records besides the execution identity. */
+export interface StepStartDetail {
+  /** The resolved inputs the executor received (redacted, bounded). */
+  inputs?: unknown
+  /** Set when `inputs` is a preview of a larger serialized value. */
+  inputsTruncatedBytes?: number
+  /** The node did not run: its pinned data stands in for the output. */
+  pinned?: boolean
+}
+
+/** What a `step_failed` records besides the execution identity. */
+export interface StepFailureDetail extends Partial<StepErrorDetail> {
+  message: string
+  retryable?: boolean
+}
+
+/**
  * Convenience scoped logger — captures runId once so nodes don't re-pass it.
  * Emits through the coalescing writer (`enqueueRunEvent`), so events emitted in
  * the same microtask land in a single `bulkPut` instead of N transactions.
@@ -255,17 +284,17 @@ export function createRunLogger(runId: string) {
         payload: error,
       })
     },
-    stepStarted: (stepId: string, params?: unknown, meta?: StepIterationMeta) =>
-      enqueueRunEvent({ runId, type: "step_started", stepId, payload: { params, ...meta } }),
-    stepCompleted: (stepId: string, output: unknown, meta?: StepIterationMeta) =>
+    stepStarted: (stepId: string, detail?: StepStartDetail, meta?: StepEventMeta) =>
+      enqueueRunEvent({ runId, type: "step_started", stepId, payload: { ...detail, ...meta } }),
+    stepCompleted: (stepId: string, output: unknown, meta?: StepEventMeta) =>
       enqueueRunEvent({ runId, type: "step_completed", stepId, payload: { output, ...meta } }),
-    stepFailed: (stepId: string, error: { message: string; retryable?: boolean }) =>
+    stepFailed: (stepId: string, error: StepFailureDetail, meta?: StepEventMeta) =>
       enqueueRunEvent({
         runId,
         type: "step_failed",
         level: "error",
         stepId,
-        payload: error,
+        payload: { ...error, ...meta },
       }),
     stepSkipped: (stepId: string, reason: string) =>
       enqueueRunEvent({
@@ -279,22 +308,22 @@ export function createRunLogger(runId: string) {
      * monotonic flush counter so the UI can order chunks deterministically
      * even when several land in the same millisecond.
      */
-    stepStream: (stepId: string, delta: string, seq: number) =>
+    stepStream: (stepId: string, delta: string, seq: number, meta?: StepEventMeta) =>
       enqueueRunEvent({
         runId,
         type: "step_stream",
         stepId,
-        payload: { delta, seq },
+        payload: { delta, seq, ...meta },
       }),
-    stepCommentary: (stepId: string, delta: string, seq: number) =>
+    stepCommentary: (stepId: string, delta: string, seq: number, meta?: StepEventMeta) =>
       enqueueRunEvent({
         runId,
         type: "step_commentary",
         stepId,
-        payload: { delta, seq },
+        payload: { delta, seq, ...meta },
       }),
     /** Token/cost usage snapshot for one step (payload = StepUsage). */
-    stepUsage: (stepId: string, usage: StepUsage) => {
+    stepUsage: (stepId: string, usage: StepUsage, meta?: StepEventMeta) => {
       // Shadow-write into the unified billing table so workflow spend reaches
       // the Subscription → Usage tab. Fire-and-forget: never block or fail the
       // durable event append on the billing mirror.
@@ -317,28 +346,36 @@ export function createRunLogger(runId: string) {
         runId,
         type: "step_usage",
         stepId,
-        payload: usage,
+        // The runtime's identity wins over anything the executor reported.
+        payload: { ...usage, ...meta },
       })
     },
     /** Emitted before each retry backoff wait (attempt = the one that failed). */
     stepRetrying: (
       stepId: string,
-      payload: { attempt: number; maxAttempts: number; delayMs: number; error: string }
+      payload: { attempt: number; maxAttempts: number; delayMs: number; error: string },
+      meta?: StepEventMeta
     ) =>
       enqueueRunEvent({
         runId,
         type: "step_retrying",
         level: "warn",
         stepId,
-        payload,
+        payload: { ...payload, ...meta },
       }),
-    log: (level: RunEventLogLevel, message: string, payload?: unknown, stepId?: string) =>
+    log: (
+      level: RunEventLogLevel,
+      message: string,
+      payload?: unknown,
+      stepId?: string,
+      meta?: StepEventMeta
+    ) =>
       enqueueRunEvent({
         runId,
         type: "run_log",
         level,
         stepId,
-        payload: { message, data: payload },
+        payload: { message, data: payload, ...meta },
       }),
   }
 }

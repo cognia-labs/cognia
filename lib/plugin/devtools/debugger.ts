@@ -17,6 +17,7 @@
  */
 
 import type { PluginBaseContext } from "@/types/plugin"
+import { isErrorLike, toJsonSafe, type JsonSafeValue } from "@/lib/error/serialize-error"
 import { loggers } from "../core/logger"
 
 // =============================================================================
@@ -37,7 +38,8 @@ export interface LogEntry {
   generation: number
   level: "debug" | "info" | "warn" | "error"
   message: string
-  args: unknown[]
+  /** JSON-safe copies: Errors keep name/message/stack/cause (`toJsonSafe`). */
+  args: JsonSafeValue[]
   timestamp: number
   source?: string
   stack?: string
@@ -108,12 +110,16 @@ export class PluginDebugger {
       generation: this.sessions.get(pluginId)?.generation ?? 0,
       level,
       message,
-      args: this.safeClone(args) as unknown[],
+      args: args.map((arg) => toJsonSafe(arg)),
       timestamp: Date.now(),
     }
 
-    // Capture stack for errors
-    if (level === "error") {
+    // A logged Error's own stack locates the failure; the call site of this
+    // logger only says who reported it, so it is the fallback.
+    const loggedError = args.find(isErrorLike)
+    if (loggedError?.stack) {
+      entry.stack = loggedError.stack
+    } else if (level === "error") {
       entry.stack = new Error().stack
     }
 
@@ -216,14 +222,6 @@ export class PluginDebugger {
 
   private generateId(): string {
     return `dbg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  }
-
-  private safeClone(obj: unknown): unknown {
-    try {
-      return JSON.parse(JSON.stringify(obj))
-    } catch {
-      return String(obj)
-    }
   }
 
   setEnabled(enabled: boolean): void {

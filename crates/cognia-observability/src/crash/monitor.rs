@@ -230,7 +230,10 @@ mod desktop_impl {
             if let Ok(mut slot) = self.stem.lock() {
                 *slot = Some(stem);
             }
-            let file = File::create(&dmp_path)?;
+            // Never replace an earlier dump: the stem is collision-safe, and
+            // create-new turns a clash (a second monitor, a fast restart)
+            // into a visible error instead of a silently lost crash.
+            let file = report::create_new_file(&dmp_path)?;
             Ok((file, dmp_path))
         }
 

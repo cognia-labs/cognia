@@ -47,8 +47,10 @@ import type { LoopItemError, LoopNodeParams } from "@/types/workflow/visual"
 import type { WorkflowExecutionBinding } from "@/types/workflow/deployment"
 import { resolveDeep, resolveExpression } from "./expression"
 import { IdempotencyCache, iterationCacheKey } from "./idempotency"
-import type { RunLogger } from "./event-log"
+import type { RunLogger, StepEventMeta } from "./event-log"
+import { recordStepInputs } from "./step-event-payload"
 import type { SecretResolver } from "./secret-resolver"
+import { nanoid } from "nanoid"
 import { runStep } from "./step-executor"
 import { getGlobalRunGate } from "./run-concurrency-gate"
 import { buildErrorOutput, resolveNodeFailure } from "./node-failure"
@@ -162,7 +164,21 @@ export async function runLoopContainer(
   const onItemError = rawParams.onItemError ?? "fail"
   const errorsByIndex = new Map<number, LoopItemError>()
 
-  await logger.stepStarted(loopId, { mode, iterationConcurrency })
+  // The container's own execution instance; its effective settings are what
+  // the inspector shows as this step's inputs.
+  const containerExecution: StepEventMeta = { stepExecutionId: `wf-step_${nanoid()}`, attempt: 1 }
+  await logger.stepStarted(
+    loopId,
+    recordStepInputs({
+      mode,
+      iterationConcurrency,
+      maxIterations,
+      ...(mode === "while" ? { conditionTiming } : {}),
+      ...(mode === "forEach" ? { batchSize } : {}),
+      onItemError,
+    }),
+    containerExecution
+  )
 
   /** Batch coordinates injected into `$loop` (single implicit batch unless batching). */
   interface BatchMeta {
@@ -383,7 +399,7 @@ export async function runLoopContainer(
     ...(errors.length > 0 ? { errors } : {}),
   }
   cache.set(loopId, output)
-  await logger.stepCompleted(loopId, output)
+  await logger.stepCompleted(loopId, output, containerExecution)
   return { output, fromCache: false }
 }
 

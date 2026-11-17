@@ -170,7 +170,7 @@ export {
 } from "./incident"
 
 // Context exports
-export { logContext, generateTraceId, traced } from "./context"
+export { logContext, generateTraceId } from "./context"
 
 export {
   createLogRuntimeContext,

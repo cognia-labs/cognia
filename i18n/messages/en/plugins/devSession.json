@@ -43,6 +43,7 @@
   },
   "runtimeLogs": {
     "clear": "Clear",
+    "details": "Details",
     "empty": "Nothing logged yet.",
     "filter": "Structured logs for {pluginId}, generation {generation}",
     "missing": {
