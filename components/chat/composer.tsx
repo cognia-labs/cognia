@@ -5,7 +5,6 @@ import {
   usePromptInputController,
 } from "@/components/ai-elements/prompt-input"
 import type { ChatStatus as PromptStatus, UIMessage } from "ai"
-import { FileTextIcon, XIcon } from "lucide-react"
 import { chatDockColumnClass } from "./chat-column"
 import {
   ChangeEvent,
@@ -50,7 +49,7 @@ import {
   useComposerImageInput,
   type ComposerImageInput,
 } from "./composer/hooks/use-composer-image-input"
-import { ComposerBox, composerCardRadiusPx, composerNoticeVars } from "./composer/composer-box"
+import { ComposerBox, composerNoticeVars } from "./composer/composer-box"
 import {
   resolveComposerSkin,
   toolbarSitsInBox,
@@ -73,7 +72,6 @@ import {
 import { getDocumentAcceptExtensions } from "@cognia/document/support-matrix"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { findPastePlaceholders } from "@/lib/paste-collapse"
 import { usePlatform } from "@/hooks/use-platform"
 import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { useSoftKeyboardDevice } from "@/hooks/ui/use-keyboard-insets"
@@ -162,6 +160,8 @@ import { ComposerSessionProvider } from "./composer/composer-session-context"
 import { ComposerAppendBridge } from "./composer/composer-append-bridge"
 import { ComposerCapabilityMenu } from "./composer/composer-capability-menu"
 import { ComposerStatusBands } from "./composer/composer-status-bands"
+import { ComposerPasteReminder, ComposerPastedChips } from "./composer/composer-pasted-chips"
+import { ComposerRunStatusStrip } from "./composer/composer-run-status-strip"
 import { VoiceTranscriptionBridge } from "./composer/voice-transcription-bridge"
 
 interface Props {
@@ -1298,16 +1298,6 @@ function ComposerInner(props: ComposerInnerProps) {
     [toggleEphemeralSkill, composerSessionIdForSkills]
   )
   const dismissRestoredAttachments = useCallback(() => setRestoredAttachments([]), [])
-  // A folded paste is large by definition — that is why it folded — and its
-  // chip only shows a line count. Counted once per paste, not by splitting
-  // every body again on every keystroke.
-  const pastedLineCounts = useMemo(
-    () =>
-      Object.entries(pastedBlocks).map(
-        ([placeholder, body]) => [placeholder, countLines(body)] as const
-      ),
-    [pastedBlocks]
-  )
 
   return (
     // Every composer control below writes its draft state through actions that
@@ -1372,53 +1362,15 @@ function ComposerInner(props: ComposerInnerProps) {
               disabledIds={props.session?.disabledSkillIds}
             />
           </Collapse>
-          {/* Folded large-paste chips — only those whose placeholder is still in the
-          text (manual deletion drops the chip too). */}
           <Collapse>
-            {(() => {
-              const chips = pastedLineCounts.filter(([ph]) => textValue.includes(ph))
-              if (chips.length === 0) return null
-              return (
-                <div className="flex flex-wrap gap-1 px-1 pb-1" data-testid="composer-pasted-chips">
-                  {chips.map(([ph, lineCount]) => (
-                    <span
-                      key={ph}
-                      className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                    >
-                      <FileTextIcon className="size-3 shrink-0" aria-hidden />
-                      {t("pastedChip", { count: lineCount })}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => removePastedBlock(ph)}
-                        aria-label={t("removePastedChip")}
-                        className="-mr-1 size-4 rounded-sm text-muted-foreground/60 hover:bg-transparent hover:text-foreground"
-                      >
-                        <XIcon className="size-3" aria-hidden />
-                      </Button>
-                    </span>
-                  ))}
-                </div>
-              )
-            })()}
+            <ComposerPastedChips
+              text={textValue}
+              pastedBlocks={pastedBlocks}
+              onRemove={removePastedBlock}
+            />
           </Collapse>
-          {/* Re-paste reminder: a restored draft can carry `[Pasted …]` placeholders
-          whose bodies weren't persisted. Nudge the user to re-paste (the
-          placeholder text stays visible so they see exactly where). */}
           <Collapse>
-            {(() => {
-              const orphans = findPastePlaceholders(textValue).filter((ph) => !(ph in pastedBlocks))
-              if (orphans.length === 0) return null
-              return (
-                <div
-                  className="px-1 pb-1 text-[11px] text-amber-600 dark:text-amber-500"
-                  data-testid="composer-paste-reminder"
-                >
-                  {t("pasteReminder", { count: orphans.length })}
-                </div>
-              )
-            })()}
+            <ComposerPasteReminder text={textValue} pastedBlocks={pastedBlocks} />
           </Collapse>
           <ComposerStatusBands sessionId={sessionId} />
           {predictionEligible && (
@@ -1434,25 +1386,9 @@ function ComposerInner(props: ComposerInnerProps) {
           )}
         </div>
         {props.runStatus ? (
-          // Docked onto the card's top edge. The inset follows the corner the
-          // card actually draws (`composerCardRadiusPx` — the phone card rounds
-          // further than the classic skin's own radius) so the strip's sides
-          // land where the card's top edge has turned straight; a pill skin
-          // insets more, the square skin not at all. Its own top corners echo
-          // the card's inner curve.
-          <div
-            data-slot="composer-run-status"
-            className="empty:hidden"
-            style={(() => {
-              const radius = composerCardRadiusPx(props.skin, compactLayout)
-              return {
-                paddingInline: `${radius}px`,
-                "--run-strip-radius": `${Math.round(radius * 0.6)}px`,
-              } as CSSProperties
-            })()}
-          >
+          <ComposerRunStatusStrip skin={props.skin} compactLayout={compactLayout}>
             {props.runStatus}
-          </div>
+          </ComposerRunStatusStrip>
         ) : null}
         <ComposerBox
           skin={props.skin}
@@ -1702,13 +1638,6 @@ const MemoContextChipBar = memo(ContextChipBar)
 const MemoSkillChipRow = memo(SkillChipRow)
 const MemoDraftRestoredAttachments = memo(DraftRestoredAttachments)
 const MemoOcrResultBubble = memo(OcrResultBubble)
-
-/** Line count of a text block, without allocating the lines. */
-function countLines(text: string): number {
-  let lines = 1
-  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) lines++
-  return lines
-}
 
 /** The OCR sheet's copy actions. Module-level so they keep one identity. */
 function copyToClipboard(text: string): void {
