@@ -1,12 +1,12 @@
 "use client"
 
+import type { ComposerInnerProps } from "../../composer"
 import { detectTrigger, type ComposerTrigger, type MentionMode } from "../../composer-trigger"
 import { hasSlashCompletion } from "../slash-completion"
 import { type RouteTargetsState } from "@/hooks/chat/use-route-targets"
 import { isLeadingTokenPosition } from "@/lib/chat/turn-route/parse"
 import { requestRouteStores } from "@/lib/chat/turn-route/snapshot"
 import { type SlashCommand } from "@/lib/slash-commands/builtin"
-import { type ChatSession } from "@cognia/agent-config-types"
 import { useCallback, useEffect, useMemo } from "react"
 
 export interface ComposerTriggerInput {
@@ -17,9 +17,7 @@ export interface ComposerTriggerInput {
   resolvedMentionMode: MentionMode
   slashCommands: SlashCommand[]
   isLinkToken: (token: string) => boolean
-  props: {
-    session?: ChatSession | null
-  }
+  props: Pick<ComposerInnerProps, "session">
 }
 
 /**

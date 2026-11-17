@@ -1,5 +1,6 @@
 "use client"
 
+import type { ComposerInnerProps } from "../../composer"
 import { resolveMemoryFilesAccess } from "@/lib/chat/memory-target"
 import { type SlashCommand } from "@/lib/slash-commands/builtin"
 import { loadCustomSlashCommands } from "@/lib/slash-commands/custom"
@@ -7,7 +8,6 @@ import {
   getActiveRemoteTransport,
   subscribeActiveRemoteTransport,
 } from "@/lib/tauri/transport-routing"
-import { type ChatSession } from "@cognia/agent-config-types"
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 
 /** Stable empty list, so a pending custom-command scan does not re-derive the picker. */
@@ -16,9 +16,7 @@ const NO_CUSTOM_COMMANDS: SlashCommand[] = []
 export interface ComposerCustomCommandsInput {
   isDesktop: boolean
   cwd: string | null
-  props: {
-    session?: ChatSession | null
-  }
+  props: Pick<ComposerInnerProps, "session">
 }
 
 /**

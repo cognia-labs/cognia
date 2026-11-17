@@ -1,6 +1,7 @@
 "use client"
 
-import { type ComposerWorkflowMention, type MentionMode } from "../../composer-trigger"
+import type { ComposerInnerProps } from "../../composer"
+import { type MentionMode } from "../../composer-trigger"
 import { useApplyPreset } from "@/hooks/chat/use-apply-preset"
 import { useMarkdownChatAgents } from "@/hooks/chat/use-markdown-chat-agents"
 import { useMentionablePresets } from "@/hooks/chat/use-mentionable-presets"
@@ -9,17 +10,12 @@ import { useMentionableSubagents } from "@/hooks/chat/use-mentionable-subagents"
 import { useRouteTargets } from "@/hooks/chat/use-route-targets"
 import { useTeamMemberRoles, useTeamMembers } from "@/hooks/use-team-members"
 import { isRoutableSession } from "@/lib/chat/turn-route/types"
-import { type ChatSession } from "@cognia/agent-config-types"
 import { useMemo } from "react"
 
 export interface ComposerMentionSourcesInput {
   cwd: string | null
   defaultProvider: string | undefined
-  props: {
-    routing?: boolean
-    session?: ChatSession | null
-    workflowMention?: ComposerWorkflowMention
-  }
+  props: Pick<ComposerInnerProps, "routing" | "session" | "workflowMention">
 }
 
 /**

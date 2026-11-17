@@ -1,18 +1,16 @@
 "use client"
 
+import type { ComposerInnerProps } from "../../composer"
 import { usePluginSlashCommands } from "@/hooks/chat/use-plugin-slash-commands"
 import { BUILTIN_SLASH_COMMANDS, type SlashCommand } from "@/lib/slash-commands/builtin"
 import { mergeSlashCommands } from "@/lib/slash-commands/merge"
-import { type ChatSession } from "@cognia/agent-config-types"
 import { type useTranslations } from "next-intl"
 import { useCallback, useMemo } from "react"
 
 export interface ComposerSlashCommandsInput {
   customCommands: SlashCommand[]
   tBestOfN: ReturnType<typeof useTranslations<"bestOfNEntry">>
-  props: {
-    session?: ChatSession | null
-  }
+  props: Pick<ComposerInnerProps, "session">
 }
 
 /**

@@ -1,5 +1,6 @@
 "use client"
 
+import type { ComposerInnerProps } from "../../composer"
 import type React from "react"
 import { type TextInputContext } from "@/components/ai-elements/prompt-input"
 import { useRepoChatTemplates } from "@/hooks/chat/use-repo-chat-templates"
@@ -33,7 +34,7 @@ import {
   type ChatTemplateRow,
 } from "@/lib/db/chat-templates"
 import { type ParamSegment, type RichSegment } from "@/lib/slash-commands/parse-segments"
-import { type Character, type ChatSession } from "@cognia/agent-config-types"
+import { type Character } from "@cognia/agent-config-types"
 import { loggers } from "@cognia/logging"
 import { useTranslations } from "next-intl"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -51,9 +52,7 @@ export interface ComposerTemplatesInput {
   chatAgents: SubagentMentionTarget[] | undefined
   teamMembers: readonly Character[]
   overlaySegments: RichSegment[]
-  props: {
-    session?: ChatSession | null
-  }
+  props: Pick<ComposerInnerProps, "session">
 }
 
 /**

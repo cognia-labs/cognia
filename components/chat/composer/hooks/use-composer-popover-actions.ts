@@ -1,12 +1,12 @@
 "use client"
 
+import type { ComposerInnerProps } from "../../composer"
 import type React from "react"
 import { type PopoverItem } from "../../composer-popover"
 import {
   detectTrigger,
   spliceToken,
   type ComposerTrigger,
-  type ComposerWorkflowMention,
   type MentionMode,
   type MentionableWorkflowElement,
 } from "../../composer-trigger"
@@ -17,7 +17,6 @@ import { type RemoteDocStagingItem } from "@/hooks/chat/use-remote-doc-staging"
 import {
   isMemoryTargetAvailable,
   memoryFilesUnavailableKey,
-  type ComposerMemoryTarget,
   type MemoryFilesAccess,
 } from "@/lib/chat/memory-target"
 import { getMentionPickHandler } from "@/lib/chat/mentions/pick-registry"
@@ -29,7 +28,6 @@ import { type ChatTemplateBinding } from "@/lib/chat/template/binding"
 import { type ChatTemplateLaunchSpec } from "@/lib/chat/template/launch-spec"
 import { useChatStore } from "@/stores/chat"
 import { type FileReference } from "@/stores/chat/chat-store"
-import { type ChatSession } from "@cognia/agent-config-types"
 import { type useTranslations } from "next-intl"
 import { useCallback, useEffect, useRef } from "react"
 import { toast } from "sonner"
@@ -70,11 +68,7 @@ export interface ComposerPopoverActionsInput {
   trigger: ComposerTrigger | null
   hasCommandPrefix: (query: string) => boolean
   dismissShell: () => void
-  props: {
-    onSubmitMemory: (target: ComposerMemoryTarget, text: string) => Promise<boolean>
-    session?: ChatSession | null
-    workflowMention?: ComposerWorkflowMention
-  }
+  props: Pick<ComposerInnerProps, "onSubmitMemory" | "session" | "workflowMention">
 }
 
 /**
