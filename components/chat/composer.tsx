@@ -39,7 +39,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
@@ -164,10 +163,7 @@ import { isContextRef } from "@/lib/chat/mentions/read"
 import { useEntityMentionStaging } from "@/hooks/chat/use-entity-mention-staging"
 import { ComposerPopover, type ComposerPopoverHandle, type PopoverItem } from "./composer-popover"
 import { getMentionPickHandler } from "@/lib/chat/mentions/pick-registry"
-import {
-  usePluginSlashCommands,
-  usePluginSlashCommandExecution,
-} from "@/hooks/chat/use-plugin-slash-commands"
+import { usePluginSlashCommandExecution } from "@/hooks/chat/use-plugin-slash-commands"
 import { useEffectiveCwd } from "@/hooks/chat/use-effective-cwd"
 import { isLeadingTokenPosition, parseLeadingRoute } from "@/lib/chat/turn-route/parse"
 import { resolveRouteLane } from "@/lib/chat/turn-route/resolve"
@@ -201,19 +197,12 @@ import { PlatformReplyAssistance } from "./composer/platform-reply-assistance"
 import { PlatformBadge } from "@/components/inbox/platform-badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
-  BUILTIN_SLASH_COMMANDS,
   applyTemplate,
   type SettingsTab,
   type SlashCommand,
   type SlashContext,
   type SlashStagedFiles,
 } from "@/lib/slash-commands/builtin"
-import { loadCustomSlashCommands } from "@/lib/slash-commands/custom"
-import {
-  getActiveRemoteTransport,
-  subscribeActiveRemoteTransport,
-} from "@/lib/tauri/transport-routing"
-import { mergeSlashCommands } from "@/lib/slash-commands/merge"
 import {
   DIAGNOSTICS_PART_TYPE,
   type SystemMessageBlock,
@@ -273,7 +262,6 @@ import {
   memoryFilesUnavailableKey,
   memoryTargetKey,
   parseMemoryTargetKey,
-  resolveMemoryFilesAccess,
   type ComposerMemoryTarget,
 } from "@/lib/chat/memory-target"
 import { useComposerCommandStore } from "@/stores/chat/composer-command-store"
@@ -446,6 +434,8 @@ import type { ComposerTurnMetadata } from "@/lib/chat/turn-metadata"
 import { SideChatDispatchError } from "@/lib/slash-commands/actions/side-chat"
 import { useComposerOcr } from "./composer/hooks/use-composer-ocr"
 import { useComposerMentionSources } from "./composer/hooks/use-composer-mention-sources"
+import { useComposerCustomCommands } from "./composer/hooks/use-composer-custom-commands"
+import { useComposerSlashCommands } from "./composer/hooks/use-composer-slash-commands"
 
 /**
  * Imperative handle exposed by `<Composer>`. The desktop shell uses it to
@@ -464,8 +454,6 @@ export interface ComposerHandle {
 // px form assumes the app's default 16px root (the JS path only runs on old
 // WebViews lacking `field-sizing`).
 const COMPOSER_MAX_HEIGHT_REM = 12
-/** Stable empty list, so a pending custom-command scan does not re-derive the picker. */
-const NO_CUSTOM_COMMANDS: SlashCommand[] = []
 const COMPOSER_MAX_HEIGHT_PX = COMPOSER_MAX_HEIGHT_REM * 16
 
 // --- Helpers ---------------------------------------------------------------
@@ -732,13 +720,6 @@ function ComposerInner(props: InnerProps) {
     tokenStart: number
     kind: string
   } | null>(null)
-  // Keyed by the scan they answer (workspace + Host), so a list never outlives
-  // the workspace it was read from: until the next scan lands the picker shows
-  // no custom commands rather than the previous project's.
-  const [customCommandScan, setCustomCommandScan] = useState<{
-    key: unknown
-    list: SlashCommand[]
-  } | null>(null)
   // When a picked command declares `params`, we open a guided form instead of
   // inserting raw text. The captured token range tells us where to splice the
   // built `/command <args>` chip back in.
@@ -852,63 +833,7 @@ function ComposerInner(props: InnerProps) {
     chatPresets,
     entityContext,
   } = useComposerMentionSources({ cwd, defaultProvider, props })
-
-  // --- Per-cwd custom slash commands ------------------------------------
-  // A conversation bound to a Host reads that Host's commands, whichever one
-  // the desktop drives now. An unbound one follows the active route, so it is
-  // re-read when the desktop switches Hosts, not only when the path changes:
-  // two Hosts can share a path and hold different commands.
-  const activeRemoteHost = useSyncExternalStore(
-    subscribeActiveRemoteTransport,
-    getActiveRemoteTransport,
-    () => null
-  )
-  const hostBinding = props.session?.hostBinding
-  const boundOrigin = hostBinding?.origin
-  const boundHostId = boundOrigin?.kind === "remote" ? boundOrigin.hostId : null
-  const boundAccountId = boundOrigin?.kind === "remote" ? boundOrigin.accountId : undefined
-  const boundRoot = hostBinding?.workspaceRoot
-  const hasBinding = boundOrigin !== undefined
-  const customCommandKey = useMemo(
-    () => ({
-      cwd,
-      host: hasBinding ? null : activeRemoteHost,
-      binding: !hasBinding
-        ? null
-        : {
-            origin: boundHostId
-              ? {
-                  kind: "remote" as const,
-                  hostId: boundHostId,
-                  ...(boundAccountId ? { accountId: boundAccountId } : {}),
-                }
-              : { kind: "local" as const },
-            ...(boundRoot ? { workspaceRoot: boundRoot } : {}),
-          },
-    }),
-    [cwd, activeRemoteHost, hasBinding, boundHostId, boundAccountId, boundRoot]
-  )
-  // `#` file memory writes the instruction files this conversation's turns
-  // load, which this window reaches only when those turns run here.
-  const memoryFilesAccess = resolveMemoryFilesAccess({
-    isDesktop,
-    boundOrigin: customCommandKey.binding?.origin,
-    drivingRemoteHost: activeRemoteHost !== null,
-  })
-  useEffect(() => {
-    let cancelled = false
-    void loadCustomSlashCommands(customCommandKey.cwd, customCommandKey.binding).then((list) => {
-      if (!cancelled) setCustomCommandScan({ key: customCommandKey, list })
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [customCommandKey])
-  const customCommands = useMemo(
-    () =>
-      customCommandScan?.key === customCommandKey ? customCommandScan.list : NO_CUSTOM_COMMANDS,
-    [customCommandScan, customCommandKey]
-  )
+  const { customCommands, memoryFilesAccess } = useComposerCustomCommands({ isDesktop, cwd, props })
 
   // --- Hydrate chat-store from session row on first session change -------
   // `hydratedFor` flips to the session id once the hydration write has
@@ -965,44 +890,12 @@ function ComposerInner(props: InnerProps) {
     })
   }, [permissionMode, props.session, updateSession])
 
-  // Plugin-contributed slash commands (registered in the unified registry but
-  // historically never surfaced in the chat `/` picker). Reactive: a plugin
-  // enabling/disabling adds/removes its commands live.
-  const pluginCommands = usePluginSlashCommands()
-
   const tBestOfN = useTranslations("bestOfNEntry")
-  const isAside = props.session?.kind === "resource-workbench"
-  const slashCommands = useMemo(
-    // Deduped by name — `record-skill` is declared by both the builtin table
-    // and the skill-recorder plugin; the picker keys rows `slash-${name}`, so
-    // an undeduped merge rendered duplicate React keys (and two identical
-    // rows). Last-wins matches `commandMap`'s submit-time precedence below.
-    () =>
-      mergeSlashCommands(BUILTIN_SLASH_COMMANDS, customCommands, pluginCommands)
-        .map((command) =>
-          command.name === "best-of-n"
-            ? { ...command, description: tBestOfN("description") }
-            : command
-        )
-        .filter((command) => !isAside || !["btw", "side"].includes(command.name)),
-    [customCommands, pluginCommands, isAside, tBestOfN]
-  )
-
-  // Name → command map for submit-time multi-command dispatch. Built from the
-  // UNFILTERED list (includes `hiddenFromPicker` commands) so a typed command
-  // still resolves even when it's not shown in the picker.
-  const commandMap = useMemo(
-    () =>
-      new Map(
-        [...BUILTIN_SLASH_COMMANDS, ...customCommands, ...pluginCommands]
-          .filter((command) => !isAside || !["btw", "side"].includes(command.name))
-          .map((c) => [c.name, c])
-      ),
-    [customCommands, pluginCommands, isAside]
-  )
-  // Name → provenance for the chip overlay's pill tint. A callback (not the
-  // map) so the overlay never holds the command objects, only the answer.
-  const commandScope = useCallback((name: string) => commandMap.get(name)?.scope, [commandMap])
+  const { commandMap, slashCommands, commandScope } = useComposerSlashCommands({
+    customCommands,
+    tBestOfN,
+    props,
+  })
 
   // A pasted URL is FOLDED to its short label in the text, with the full URL
   // held aside (`lib/chat/link-fold.ts`). Every consumer below therefore has to

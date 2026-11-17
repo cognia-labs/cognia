@@ -16,7 +16,10 @@ export interface ComposerOcrInput {
   staged: StagedAttachmentsValue
 }
 
-/** Composer attachment OCR: runs the engine on a staged attachment and holds the result bubble's state. */
+/**
+ * Composer attachment OCR: runs the engine on a staged attachment and holds
+ * the result bubble's state.
+ */
 export function useComposerOcr(input: ComposerOcrInput) {
   const { textInput, attachments, staged } = input
 

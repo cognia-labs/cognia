@@ -22,7 +22,10 @@ export interface ComposerMentionSourcesInput {
   }
 }
 
-/** The composer's `@` sources: mention mode, room members, agents, turn routes, entity scope, skills and presets. */
+/**
+ * The composer's `@` sources: mention mode, room members, agents, turn
+ * routes, entity scope, skills and presets.
+ */
 export function useComposerMentionSources(input: ComposerMentionSourcesInput) {
   const { cwd, defaultProvider, props } = input
 
