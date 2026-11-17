@@ -15,7 +15,10 @@ jest.mock("@/lib/twin/export-provenance", () => ({ resolveSessionTwinProvenance:
 jest.mock("@/lib/export/disclosure", () => ({ enforceExportDisclosure: jest.fn() }))
 
 jest.mock("next/dynamic", () => () => () => null)
-jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
+jest.mock("next-intl", () => ({
+  useTranslations: () => (key: string) => key,
+  useLocale: () => "en",
+}))
 jest.mock("sonner", () => ({ toast: { error: jest.fn() } }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 
