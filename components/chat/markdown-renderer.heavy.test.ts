@@ -67,6 +67,118 @@ describe("MarkdownRenderer integration", () => {
     expect(result.nativeImages).toEqual({ paragraphs: 2, mediaParagraphs: 0 })
   })
 
+  it("draws the D7 feature matrix the same on the finished, sectioned and streaming paths", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "cognia-markdown-matrix-"))
+    const bundle = path.join(tempDir, "fixture.cjs")
+    const leaves = path.join(tempDir, "leaves.tsx")
+    // Each lazy renderer becomes a chunk that names itself, so the fixture
+    // counts which renderer a fence or expression reached.
+    writeFileSync(
+      leaves,
+      `
+      import React from ${JSON.stringify(require.resolve("react"))}
+      const NAMES = ["MathInline", "MathBlock", "MermaidBlock", "DiffBlock", "ChartBlock", "A2UIBlock"]
+      export default function dynamic(loader) {
+        const source = loader.toString()
+        const name = NAMES.find((candidate) => source.includes(candidate)) ?? "unknown"
+        return function Chunk(props) {
+          return React.createElement(name === "MathInline" ? "span" : "div", { "data-chunk": name }, props.content ?? props.code ?? null)
+        }
+      }
+      export function CodeBlock({ code }) { return <pre>{code}</pre> }
+      export function ArtifactCreateButton() { return null }
+      export function ChatLink({ href, children }) { return <a href={href}>{children}</a> }
+    `
+    )
+    let output = ""
+    try {
+      execFileSync(
+        require.resolve("esbuild/bin/esbuild"),
+        [
+          "tests/integration/fixtures/markdown-renderer-matrix.tsx",
+          "--bundle",
+          "--platform=node",
+          "--format=cjs",
+          "--log-level=error",
+          "--external:jest-environment-jsdom",
+          ...[
+            "math-inline",
+            "math-block",
+            "mermaid-block",
+            "diff-block",
+            "chart-block",
+            "a2ui-block",
+          ].map((name) => `--external:@/components/chat/renderers/${name}`),
+          ...[
+            "next/dynamic",
+            "@/components/chat/renderers/code-block",
+            "@/components/artifacts/artifact-create-button",
+            "@/components/chat/markdown/chat-link",
+          ].map((name) => `--alias:${name}=${leaves}`),
+          "--outfile=" + bundle,
+        ],
+        { encoding: "utf8" }
+      )
+      output = execFileSync(process.execPath, [bundle], {
+        encoding: "utf8",
+        timeout: 20000,
+        env: { ...process.env, NODE_PATH: path.join(process.cwd(), "node_modules") },
+      })
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true })
+    }
+    type Summary = Record<string, unknown> & { headingIds: string[]; sections: number }
+    const result = JSON.parse(output.split("\nMARKDOWN_MATRIX_RESULT=").at(-1)!) as {
+      features: { finalized: Summary; streaming: Summary }
+      long: { finalized: Summary; sections: Summary; streaming: Summary }
+      definitions: { finalized: Summary; sections: Summary; streaming: Summary }
+      mentions: { strong: number; chips: string[][] }
+      errors: string[]
+    }
+    const withoutSections = ({ sections: _sections, ...rest }: Summary) => rest
+
+    expect(result.errors).toEqual([])
+    expect(withoutSections(result.features.streaming)).toEqual(
+      withoutSections(result.features.finalized)
+    )
+    expect(result.features.finalized).toMatchObject({
+      headingIds: ["setup", "setup-1", "setup-2"],
+      math: 2,
+      rawLatex: false,
+      diff: 1,
+      mermaid: 1,
+      file: 1,
+      web: 1,
+      unsafe: 0,
+    })
+
+    const ids = Array.from({ length: 12 }, (_, index) => (index ? `setup-${index}` : "setup"))
+    expect(result.long.sections.sections).toBe(3)
+    for (const drawn of [result.long.finalized, result.long.sections, result.long.streaming]) {
+      expect(drawn.headingIds).toEqual(ids)
+    }
+
+    // A mention keeps the Markdown around it; links and code stay literal.
+    expect(result.mentions).toEqual({
+      strong: 1,
+      chips: [["@Alice", "Alice", "rgb(1, 2, 3)"]],
+    })
+
+    expect(result.definitions.sections.sections).toBe(0)
+    for (const drawn of [
+      result.definitions.finalized,
+      result.definitions.sections,
+      result.definitions.streaming,
+    ]) {
+      // GFM adds its own (screen-reader) "Footnotes" heading with a fixed id.
+      expect(drawn).toMatchObject({
+        headingIds: [...ids, "user-content-footnote-label"],
+        reference: 1,
+        footnotes: 1,
+      })
+    }
+  }, 30000)
+
   it("keeps real Markdown loading, success and error states valid through SSR and hydration", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "cognia-markdown-states-"))
     const bundle = path.join(tempDir, "fixture.cjs")

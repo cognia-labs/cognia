@@ -9,7 +9,8 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation"
-import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
+import { Message, MessageContent } from "@/components/ai-elements/message"
+import { ChatMarkdownResponse } from "@/components/chat/markdown/chat-markdown-response"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { cn } from "@/lib/utils"
 import type { PetChatDegradeReason } from "@/lib/pet/chat/respond"
@@ -37,7 +38,7 @@ function PetMessage({
     <Message from={from}>
       <span className="px-1 text-[10px] uppercase tracking-wide text-muted-foreground">{who}</span>
       <MessageContent>
-        <MessageResponse>{text}</MessageResponse>
+        <ChatMarkdownResponse>{text}</ChatMarkdownResponse>
       </MessageContent>
     </Message>
   )

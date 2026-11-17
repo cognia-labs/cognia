@@ -14,35 +14,30 @@ import { createContext, memo, useContext, useMemo } from "react"
 import dynamic from "next/dynamic"
 import { Skeleton } from "@/components/ui/skeleton"
 import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
-import remarkMath from "remark-math"
-import rehypeRaw from "rehype-raw"
-import rehypeSanitize from "rehype-sanitize"
-import { cjk } from "@streamdown/cjk"
 import { cn } from "@/lib/utils"
 import { CodeBlock } from "@/components/chat/renderers/code-block"
-import type { ChatCodeThemeId, MessageMarkdownOptions } from "@/types/appearance"
-import { resolveChatCodeTheme, type ChatCodeThemePair } from "@/lib/chat/code-theme"
+import type {
+  ChatCodeThemeId,
+  MessageMarkdownOptions,
+  MessageMathFontScale,
+} from "@/types/appearance"
+import type { ChatCodeThemePair } from "@/lib/chat/code-theme"
 import { withRendererErrorBoundary } from "@/components/chat/renderers/renderer-error-boundary"
 import { InlineMathLinkContext } from "@/components/chat/renderers/math-error-boundary"
 import {
   createSharedMarkdownComponents,
   MarkdownInlineCode,
 } from "@/components/chat/markdown/shared-components"
+import { resolveChatMarkdownConfig } from "@/components/chat/markdown/chat-markdown-config"
 import {
-  chatMarkdownSanitizeSchema,
-  chatMarkdownUrlTransform,
-  untrustedMarkdownUrlTransform,
-} from "@/components/chat/markdown/rendering-policy"
+  rehypeMarkdownMentions,
+  type HeadingIdRegistry,
+  type MarkdownMention,
+  type MarkdownPluggable,
+} from "@/components/chat/markdown/markdown-plugins"
 import { ArtifactCreateButton } from "@/components/artifacts/artifact-create-button"
 import { ChatLink } from "@/components/chat/markdown/chat-link"
-import { rehypeInlineLinks } from "@/components/chat/markdown/rehype-inline-links"
 import type { ProjectFileReference } from "@/lib/files/project-file-reference"
-
-// `parseTaskListItem` moved to the shared factory alongside the `li` override
-// that consumes it; re-exported here because it was part of this module's
-// public surface (and its unit tests) before the extraction.
-export { parseTaskListItem } from "@/components/chat/markdown/shared-components"
 
 // Heavy block renderers are code-split via next/dynamic so the initial
 // chat-tab bundle drops their parse cost. Mermaid is ~200KB minified,
@@ -122,133 +117,6 @@ const SafeDiffBlock = withRendererErrorBoundary(DiffBlock, "Diff")
 const SafeChartBlock = withRendererErrorBoundary(ChartBlock, "Chart")
 const SafeA2UIBlock = withRendererErrorBoundary(A2UIBlock, "A2UI")
 
-type RemarkPlugins = NonNullable<Parameters<typeof ReactMarkdown>[0]["remarkPlugins"]>
-type RehypePlugins = NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]>
-
-// These plugin lists are immutable application configuration. Keeping them at
-// module scope avoids rebuilding equivalent arrays for every rendered message.
-// CJK's before/after ordering is load-bearing: emphasis parsing runs before GFM,
-// while autolink punctuation and CJK strikethrough fixes run after it.
-const baseRemarkPlugins: RemarkPlugins = [
-  ...cjk.remarkPluginsBefore,
-  remarkGfm,
-  ...cjk.remarkPluginsAfter,
-]
-const mathRemarkPlugins: RemarkPlugins = [...baseRemarkPlugins, remarkMath]
-const untrustedRemarkPlugins: RemarkPlugins = [...baseRemarkPlugins, remarkLimitUntrustedDepth]
-const untrustedMathRemarkPlugins: RemarkPlugins = [...untrustedRemarkPlugins, remarkMath]
-// In-app references are linked after sanitization, so their marks survive it.
-const rehypePlugins: RehypePlugins = [
-  rehypeRaw,
-  [rehypeSanitize, chatMarkdownSanitizeSchema],
-  rehypeInlineLinks,
-  rehypeMarkdownHeadingIds,
-]
-// Without rehype-raw, react-markdown drops HTML in the source: no element
-// (and no allow-listed `style`) from a third party reaches the DOM.
-const rehypePluginsWithoutRawHtml: RehypePlugins = [
-  [rehypeSanitize, chatMarkdownSanitizeSchema],
-  rehypeInlineLinks,
-  rehypeMarkdownHeadingIds,
-]
-
-interface MarkdownAstNode {
-  type?: string
-  tagName?: string
-  value?: string
-  lang?: string
-  properties?: Record<string, unknown>
-  children?: MarkdownAstNode[]
-}
-
-/** Flatten external nesting before recursive Markdown-to-HTML conversion and React commit. */
-export function limitUntrustedMarkdownDepth(tree: unknown, source: string): void {
-  if (!tree || typeof tree !== "object") return
-  const root = tree as MarkdownAstNode
-  const pending = [{ node: root, depth: 0 }]
-  while (pending.length) {
-    const { node, depth } = pending.pop()!
-    if (depth > 64) {
-      // Preserve the complete source as literal text, rather than truncating
-      // a quote or leaving a deeply nested DOM that cannot be safely unmounted.
-      root.children = [{ type: "code", lang: "text", value: source }]
-      return
-    }
-    for (const child of node.children ?? []) pending.push({ node: child, depth: depth + 1 })
-  }
-}
-
-function remarkLimitUntrustedDepth() {
-  return (tree: unknown, file: { toString(): string }) =>
-    limitUntrustedMarkdownDepth(tree, file.toString())
-}
-
-function markdownNodeText(node: MarkdownAstNode): string {
-  if (node.type === "text") return node.value ?? ""
-  return node.children?.map(markdownNodeText).join("") ?? ""
-}
-
-function markdownHeadingSlug(value: string): string {
-  return value
-    .toLocaleLowerCase()
-    .trim()
-    .replace(/[^\p{Letter}\p{Number}\s_-]/gu, "")
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-}
-
-/**
- * Add GitHub-style ids to Markdown headings so fragment links work without a
- * runtime dependency. This transformer runs after sanitization and only for
- * completed messages, keeping it out of the per-token streaming path.
- */
-export function addMarkdownHeadingIds(tree: unknown): void {
-  if (!tree || typeof tree !== "object") return
-  const seen = new Map<string, number>()
-
-  const visit = (node: MarkdownAstNode) => {
-    if (/^h[1-6]$/.test(node.tagName ?? "")) {
-      const existingId = typeof node.properties?.id === "string" ? node.properties.id : undefined
-      if (existingId) {
-        seen.set(existingId, Math.max(seen.get(existingId) ?? 0, 1))
-      } else {
-        const base = markdownHeadingSlug(markdownNodeText(node))
-        if (base) {
-          const duplicateIndex = seen.get(base) ?? 0
-          node.properties = {
-            ...node.properties,
-            id: duplicateIndex === 0 ? base : `${base}-${duplicateIndex}`,
-          }
-          seen.set(base, duplicateIndex + 1)
-        }
-      }
-    }
-    node.children?.forEach(visit)
-  }
-
-  visit(tree as MarkdownAstNode)
-}
-
-function rehypeMarkdownHeadingIds() {
-  return addMarkdownHeadingIds
-}
-
-/**
- * Convert `\[...\]` → `$$...$$` and `\(...\)` → `$...$` so remark-math accepts
- * the wider variety of LaTeX delimiters Claude tends to emit.
- */
-function preprocessLatex(content: string): string {
-  let processed = content
-  if (processed.includes("\\[")) {
-    processed = processed.replace(/\\\[([\s\S]*?)\\\]/g, (_match, eq) => `$$${eq}$$`)
-  }
-  if (processed.includes("\\(")) {
-    processed = processed.replace(/\\\(([\s\S]*?)\\\)/g, (_match, eq) => `$${eq}$`)
-  }
-  return processed
-}
-
 export interface MarkdownRendererProps {
   content: string
   className?: string
@@ -323,6 +191,38 @@ export interface MarkdownRendererProps {
    * without `untrusted`.
    */
   untrustedMath?: boolean
+  /**
+   * This tree is one section of a message drawn as several (a long finished
+   * reply mounted lazily): its headings are numbered after the sections
+   * before it, through the message's registry, so their ids match one tree's.
+   */
+  headingIds?: { registry: HeadingIdRegistry; index: number }
+  /**
+   * Names `@Name` may refer to (a user's message naming characters): each is
+   * drawn as a mention inside the Markdown. Keep the array stable.
+   */
+  mentions?: readonly MarkdownMention[]
+}
+
+const mentionLists = new WeakMap<object, WeakMap<readonly MarkdownMention[], MarkdownPluggable[]>>()
+
+/** `plugins` plus the mention step for `mentions`; stable per pair. */
+function withMentions(
+  plugins: MarkdownPluggable[],
+  mentions: readonly MarkdownMention[] | undefined
+): MarkdownPluggable[] {
+  if (!mentions?.length) return plugins
+  let byMentions = mentionLists.get(plugins)
+  if (!byMentions) {
+    byMentions = new WeakMap()
+    mentionLists.set(plugins, byMentions)
+  }
+  let combined = byMentions.get(mentions)
+  if (!combined) {
+    combined = [...plugins, [rehypeMarkdownMentions, { mentions }]]
+    byMentions.set(mentions, combined)
+  }
+  return combined
 }
 
 export const MarkdownRenderer = memo(function MarkdownRenderer({
@@ -350,21 +250,35 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   onOpenProjectFile,
   untrusted = false,
   untrustedMath = false,
+  headingIds,
+  mentions,
 }: MarkdownRendererProps) {
-  // A third party's `$5 and $10` or escaped `\[x\]` is not LaTeX, unless the
-  // caller says the text is a document.
-  const enableMath = untrusted && !untrustedMath ? false : requestedMath
-  const remarkPlugins = untrusted
-    ? enableMath
-      ? untrustedMathRemarkPlugins
-      : untrustedRemarkPlugins
-    : enableMath
-      ? mathRemarkPlugins
-      : baseRemarkPlugins
-
-  const processedContent = useMemo(() => {
-    return enableMath ? preprocessLatex(content) : content
-  }, [content, enableMath])
+  // One configuration for both chat engines (D7). Each explicit prop overrides
+  // its `markdown` knob, so non-chat callers keep their own choices.
+  const config = resolveChatMarkdownConfig(
+    {
+      ...markdown,
+      math: requestedMath,
+      mermaid: enableMermaid,
+      diff: enableDiff,
+      charts: enableCharts,
+      codeLineNumbers: showLineNumbers,
+      codeWrap: wrapLines,
+      mathFontScale: mathFontScale as MessageMathFontScale,
+      mathAlign: mathDisplayAlignment,
+      mathCopy: mathShowCopyButton,
+      ...(codeThemeId ? { codeTheme: codeThemeId } : {}),
+    },
+    { untrusted, untrustedMath }
+  )
+  const enableMath = config.math
+  const processedContent = useMemo(() => config.preprocess(content), [config, content])
+  const rehypePlugins = withMentions(
+    headingIds
+      ? headingIds.registry.withPlugins(config.rehypePluginsForSections, headingIds.index)
+      : config.rehypePlugins,
+    mentions
+  )
 
   const components = useMemo(
     () =>
@@ -382,7 +296,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         mathFontScale,
         mathDisplayAlignment,
         mathShowCopyButton,
-        codeTheme: resolveChatCodeTheme(codeThemeId),
+        codeTheme: config.codeTheme,
         messageId,
         isStreaming,
         // A third party must not open files in the user's project.
@@ -404,7 +318,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       mathFontScale,
       mathDisplayAlignment,
       mathShowCopyButton,
-      codeThemeId,
+      config,
       messageId,
       isStreaming,
       projectRoot,
@@ -418,10 +332,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       className={cn("markdown-renderer typeset", rhythm === "chat" && "typeset-chat", className)}
     >
       <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={untrusted ? rehypePluginsWithoutRawHtml : rehypePlugins}
+        remarkPlugins={config.remarkPlugins}
+        rehypePlugins={rehypePlugins}
         components={components}
-        urlTransform={untrusted ? untrustedMarkdownUrlTransform : chatMarkdownUrlTransform}
+        urlTransform={config.urlTransform}
       >
         {processedContent}
       </ReactMarkdown>

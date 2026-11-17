@@ -3,16 +3,10 @@ import { NextIntlClientProvider } from "next-intl"
 import { load } from "cheerio"
 import { Streamdown } from "streamdown"
 import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
-import rehypeRaw from "rehype-raw"
-import rehypeSanitize from "rehype-sanitize"
 
 import messages from "@/i18n/messages/en.json"
-import {
-  chatMarkdownSanitizeSchema,
-  chatMarkdownUrlTransform,
-  chatStreamdownRehypePlugins,
-} from "@/components/chat/markdown/rendering-policy"
+import { resolveChatMarkdownConfig } from "@/components/chat/markdown/chat-markdown-config"
+import { resolveChatStreamdownConfig } from "@/components/chat/markdown/chat-streamdown-config"
 import { createSharedMarkdownComponents } from "@/components/chat/markdown/shared-components"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
@@ -57,14 +51,18 @@ function summarize(html: string) {
   }
 }
 
+// Both branches read the one chat configuration (D7).
+const config = resolveChatMarkdownConfig()
+const streamdown = resolveChatStreamdownConfig()
+
 const sharedComponents = createSharedMarkdownComponents({ enableEnhancedImages: false })
 const finalized = renderToStaticMarkup(
   withMessages(
     <ReactMarkdown
       components={sharedComponents}
-      rehypePlugins={[rehypeRaw, [rehypeSanitize, chatMarkdownSanitizeSchema]]}
-      remarkPlugins={[remarkGfm]}
-      urlTransform={chatMarkdownUrlTransform}
+      rehypePlugins={config.rehypePlugins}
+      remarkPlugins={config.remarkPlugins}
+      urlTransform={config.urlTransform}
     >
       {markdown}
     </ReactMarkdown>
@@ -77,8 +75,8 @@ const streaming = renderToStaticMarkup(
       controls={{ table: false }}
       linkSafety={{ enabled: false }}
       mode="static"
-      rehypePlugins={chatStreamdownRehypePlugins}
-      urlTransform={chatMarkdownUrlTransform}
+      rehypePlugins={streamdown.rehypePlugins}
+      urlTransform={streamdown.urlTransform}
     >
       {markdown}
     </Streamdown>
@@ -98,17 +96,17 @@ function renderMedia(markdown: string, streaming: boolean, enableEnhancedImages 
           controls={{ table: false }}
           linkSafety={{ enabled: false }}
           mode="static"
-          rehypePlugins={chatStreamdownRehypePlugins}
-          urlTransform={chatMarkdownUrlTransform}
+          rehypePlugins={streamdown.rehypePlugins}
+          urlTransform={streamdown.urlTransform}
         >
           {markdown}
         </Streamdown>
       ) : (
         <ReactMarkdown
           components={components}
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, chatMarkdownSanitizeSchema]]}
-          remarkPlugins={[remarkGfm]}
-          urlTransform={chatMarkdownUrlTransform}
+          rehypePlugins={config.rehypePlugins}
+          remarkPlugins={config.remarkPlugins}
+          urlTransform={config.urlTransform}
         >
           {markdown}
         </ReactMarkdown>

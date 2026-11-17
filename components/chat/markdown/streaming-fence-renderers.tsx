@@ -42,6 +42,12 @@ const SafeChartBlock = withRendererErrorBoundary(ChartBlock, "Chart")
 
 // The A2UI renderer and its catalog are a large chunk; the pending frame
 // covers the load the same way the preview covers a fence with no component yet.
+const DiffBlock = dynamic(
+  () => import("@/components/chat/renderers/diff-block").then((m) => ({ default: m.DiffBlock })),
+  { ssr: false, loading: () => <Skeleton className="my-3 h-16" /> }
+)
+const SafeDiffBlock = withRendererErrorBoundary(DiffBlock, "Diff")
+
 const StreamingA2UIPreview = dynamic(
   () =>
     import("@/components/chat/renderers/a2ui-streaming-fence").then((m) => ({
@@ -109,6 +115,14 @@ export function StreamingChartFence({ code, isIncomplete }: CustomRendererProps)
   return <SafeChartBlock content={code} />
 }
 
+/**
+ * A ```diff fence renders as the diff viewer while it streams, as it does once
+ * the turn settles: a partial diff is still a diff, read line by line.
+ */
+export function StreamingDiffFence({ code }: CustomRendererProps) {
+  return <SafeDiffBlock content={code} />
+}
+
 export function StreamingA2UIFence(props: CustomRendererProps) {
   return <SafeStreamingA2UIPreview {...props} />
 }
@@ -116,6 +130,8 @@ export function StreamingA2UIFence(props: CustomRendererProps) {
 export interface StreamingFenceOptions {
   mermaid: boolean
   charts: boolean
+  /** Off means a ```diff fence stays a highlighted code block, as when settled. */
+  diff?: boolean
 }
 
 const withRenderers = new WeakMap<PluginConfig, Map<string, PluginConfig>>()
@@ -129,7 +145,7 @@ export function withStreamingFenceRenderers(
   plugins: PluginConfig,
   options: StreamingFenceOptions
 ): PluginConfig {
-  const key = `${options.mermaid ? "m" : "-"}${options.charts ? "c" : "-"}`
+  const key = `${options.mermaid ? "m" : "-"}${options.charts ? "c" : "-"}${options.diff ? "d" : "-"}`
   let byFlags = withRenderers.get(plugins)
   if (!byFlags) {
     byFlags = new Map()
@@ -141,6 +157,7 @@ export function withStreamingFenceRenderers(
   const renderers = [
     ...(options.mermaid ? [{ language: "mermaid", component: StreamingMermaidFence }] : []),
     ...(options.charts ? [{ language: "chart", component: StreamingChartFence }] : []),
+    ...(options.diff ? [{ language: "diff", component: StreamingDiffFence }] : []),
     { language: "a2ui", component: StreamingA2UIFence },
   ]
   const next = { ...plugins, renderers }

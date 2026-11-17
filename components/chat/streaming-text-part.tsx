@@ -19,7 +19,7 @@
  * routes through `<MarkdownRenderer>` for the finalised message.
  */
 
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { Block, parseMarkdownIntoBlocks, type AnimateOptions, type BlockProps } from "streamdown"
 import { MessageResponse, type MessageResponseProps } from "@/components/ai-elements/message"
 import {
@@ -30,14 +30,14 @@ import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
 import { ChatLink } from "@/components/chat/markdown/chat-link"
 import { cn } from "@/lib/utils"
 import { MarkdownRenderer } from "./markdown-renderer"
-import { chatMarkdownUrlTransform, chatStreamdownRehypePlugins } from "./markdown/rendering-policy"
-import type {
-  MessageMarkdownOptions,
-  MessageMathFontScale,
-  MessageRichControls,
-} from "@/types/appearance"
-import { selectStreamdownPlugins } from "@/components/ai-elements/streamdown-plugins"
-import { withStreamingFenceRenderers } from "@/components/chat/markdown/streaming-fence-renderers"
+import type { MessageMarkdownOptions, MessageRichControls } from "@/types/appearance"
+import type { ProjectFileReference } from "@/lib/files/project-file-reference"
+import { resolveChatStreamdownConfig } from "@/components/chat/markdown/chat-streamdown-config"
+import {
+  createHeadingIdRegistry,
+  type HeadingIdRegistry,
+  type MarkdownMention,
+} from "@/components/chat/markdown/markdown-plugins"
 import {
   createIncrementalMarkdownBlockParser,
   type MarkdownBlockParser,
@@ -57,6 +57,8 @@ interface Props {
   text: string
   isStreaming: boolean
   projectRoot?: string | null
+  /** Opens a project file a link or code span names, as the finished branch does. */
+  onOpenProjectFile?: (target: ProjectFileReference) => void
   richControls?: MessageRichControls
   /** ADR-0127 — resolved `messageDisplay.markdown` knobs (both renderers read them). */
   markdown?: MessageMarkdownOptions
@@ -66,8 +68,18 @@ interface FinalizedProps {
   text: string
   messageId?: string
   projectRoot?: string | null
+  onOpenProjectFile?: (target: ProjectFileReference) => void
   markdown?: MessageMarkdownOptions
+  /** Names drawn as `@mentions` (a user's message); see `MarkdownRenderer`. */
+  mentions?: readonly MarkdownMention[]
 }
+
+/**
+ * The message's heading-id registry, read by each streaming block: Streamdown
+ * renders every block as its own tree, so a block numbers its headings after
+ * the blocks before it (`setup`, `setup-1`), matching the finished renderer.
+ */
+const StreamingHeadingIdsContext = createContext<HeadingIdRegistry | null>(null)
 
 export const FINALIZED_MARKDOWN_LAZY_THRESHOLD = 64 * 1024
 const FINALIZED_BLOCKS_PER_SECTION = 8
@@ -155,18 +167,23 @@ export const StreamingBlock = memo(function StreamingBlock({
   [TAIL_BLOCK_ATTR]: tailIndex,
   ...props
 }: BlockProps & { [TAIL_BLOCK_ATTR]?: number }) {
+  const headingIds = useContext(StreamingHeadingIdsContext)
   const settled = props.animatePlugin != null && isSettledBlock(props.index, tailIndex)
   const throttle = isLargeOpenFence(props.content, props.isIncomplete)
   const content = useThrottledText(props.content, throttle, FENCE_THROTTLE_MS)
+  const ownPlugins = settled
+    ? settledRehypePlugins(props.rehypePlugins, props.animatePlugin!)
+    : props.rehypePlugins
+  // Seeded from the blocks before this one, which rendered first and
+  // registered their sources. Stable per (list, seed), so a settled block keeps
+  // its props and skips re-rendering while the tail streams.
+  headingIds?.setSource(props.index, props.content)
+  const rehypePlugins =
+    headingIds && ownPlugins ? headingIds.withPlugins(ownPlugins, props.index) : ownPlugins
   const block = settled ? (
-    <Block
-      {...props}
-      animatePlugin={null}
-      content={content}
-      rehypePlugins={settledRehypePlugins(props.rehypePlugins, props.animatePlugin!)}
-    />
+    <Block {...props} animatePlugin={null} content={content} rehypePlugins={rehypePlugins} />
   ) : (
-    <Block {...props} content={content} />
+    <Block {...props} content={content} rehypePlugins={rehypePlugins} />
   )
   if (!blockRendersCode(props.content)) return block
   return <div className="not-typeset">{block}</div>
@@ -177,13 +194,19 @@ function FinalizedMarkdownSection({
   eager,
   messageId,
   projectRoot,
+  onOpenProjectFile,
   markdown,
+  headingIds,
+  mentions,
 }: {
   content: string
   eager: boolean
   messageId?: string
   projectRoot?: string | null
+  onOpenProjectFile?: (target: ProjectFileReference) => void
   markdown?: MessageMarkdownOptions
+  mentions?: readonly MarkdownMention[]
+  headingIds: { registry: HeadingIdRegistry; index: number }
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(eager)
@@ -219,7 +242,10 @@ function FinalizedMarkdownSection({
           content={content}
           messageId={messageId}
           projectRoot={projectRoot}
+          onOpenProjectFile={onOpenProjectFile}
           markdown={markdown}
+          headingIds={headingIds}
+          mentions={mentions}
           className="size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
         />
       ) : null}
@@ -227,33 +253,82 @@ function FinalizedMarkdownSection({
   )
 }
 
+/** A link reference or footnote definition (`[label]: url`, `[^label]: text`). */
+const DEFINITION = /^ {0,3}\[[^\]\n]+\]:/m
+
+/**
+ * The sections a long finished reply mounts lazily (each its own Markdown
+ * tree), or `null` when it must render as one tree.
+ *
+ * A tree resolves link references and footnotes only against definitions in
+ * itself, so a reply with any definition renders whole. Streamdown's block
+ * parser makes the same call (it returns such a text as one block); this does
+ * not rely on it. Heading ids are numbered across sections through one
+ * registry.
+ *
+ * Exported for tests.
+ */
+export function layoutLongText(text: string): string[] | null {
+  const blocks = parseMarkdownIntoBlocks(text)
+  if (blocks.some((block) => !blockRendersCode(block) && DEFINITION.test(block))) return null
+  const sections: string[] = []
+  for (let index = 0; index < blocks.length; index += FINALIZED_BLOCKS_PER_SECTION) {
+    sections.push(blocks.slice(index, index + FINALIZED_BLOCKS_PER_SECTION).join(""))
+  }
+  return sections
+}
+
 /**
  * Finalized long-form Markdown keeps the authoritative sanitized renderer, but
- * mounts parsed block groups only as they approach the viewport.
+ * mounts parsed block groups only as they approach the viewport. Heading ids
+ * resolve across the whole reply (see {@link layoutLongText}).
  */
 export const FinalizedLongTextPart = memo(function FinalizedLongTextPart({
   text,
   messageId,
   projectRoot,
+  onOpenProjectFile,
   markdown,
+  mentions,
 }: FinalizedProps) {
-  const sections = useMemo(() => {
-    const blocks = parseMarkdownIntoBlocks(text)
-    const grouped: string[] = []
-    for (let index = 0; index < blocks.length; index += FINALIZED_BLOCKS_PER_SECTION) {
-      grouped.push(blocks.slice(index, index + FINALIZED_BLOCKS_PER_SECTION).join(""))
-    }
-    return grouped
-  }, [text])
+  const layout = useMemo(() => layoutLongText(text), [text])
+  // One registry per reply text: each section's headings continue from the
+  // sections before it, whichever mounted first.
+  const registry = useMemo(() => {
+    const created = createHeadingIdRegistry()
+    if (layout) created.setSources(layout)
+    return created
+  }, [layout])
+  const slots = useMemo(
+    () => layout?.map((_, index) => ({ registry, index })) ?? [],
+    [layout, registry]
+  )
 
-  return sections.map((content, index) => (
+  if (!layout) {
+    return (
+      <MarkdownRenderer
+        content={text}
+        messageId={messageId}
+        projectRoot={projectRoot}
+        onOpenProjectFile={onOpenProjectFile}
+        markdown={markdown}
+        mentions={mentions}
+        className="size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+      />
+    )
+  }
+
+  return layout.map((content, index) => (
     <FinalizedMarkdownSection
       key={`${index}:${content.length}`}
       content={content}
       eager={index < FINALIZED_EAGER_SECTIONS}
       messageId={messageId}
       projectRoot={projectRoot}
+      onOpenProjectFile={onOpenProjectFile}
       markdown={markdown}
+      headingIds={slots[index]}
+      mentions={mentions}
     />
   ))
 })
@@ -264,7 +339,8 @@ export function createStreamingComponents(
   projectRoot?: string | null,
   isStreaming = false,
   messageId?: string,
-  allowPlugins = true
+  allowPlugins = true,
+  onOpenProjectFile?: (target: ProjectFileReference) => void
 ): StreamdownComponents {
   return {
     // Shared with `MarkdownRenderer` so images, tables, GitHub alerts,
@@ -281,13 +357,18 @@ export function createStreamingComponents(
     // Streamdown routes inline code through `inlineCode`, not `code`, so the
     // shared span can be swapped in without touching the highlighted fences.
     inlineCode({ children }) {
-      return <MarkdownInlineCode projectRoot={projectRoot}>{children}</MarkdownInlineCode>
+      return (
+        <MarkdownInlineCode projectRoot={projectRoot} onOpenProjectFile={onOpenProjectFile}>
+          {children}
+        </MarkdownInlineCode>
+      )
     },
     a({ href, children, node: _node, ...props }) {
       return (
         <ChatLink
           href={href}
           projectRoot={projectRoot}
+          onOpenProjectFile={onOpenProjectFile}
           messageId={messageId}
           isStreaming={isStreaming}
           allowPlugins={allowPlugins}
@@ -300,27 +381,12 @@ export function createStreamingComponents(
   }
 }
 
-/**
- * Scale class for the streaming branch's KaTeX output. Keyed by the closed
- * {@link MESSAGE_MATH_FONT_SCALES} set because a class is the only thing that
- * reaches the DOM here (see the note in `StreamingTextPartInner`); the default
- * scale needs no rule, so it maps to `undefined`.
- *
- * Exported for the test that pins every declared scale to a class, so adding a
- * scale without a `app/globals.css` rule fails instead of silently rendering at
- * 1x while the finalized branch scales.
- */
-export function mathScaleClass(scale: MessageMathFontScale | number): string | undefined {
-  if (scale === 0.8) return "chat-math-sm"
-  if (scale === 1.2) return "chat-math-lg"
-  return undefined
-}
-
 function StreamingTextPartInner({
   messageId,
   text,
   isStreaming,
   projectRoot,
+  onOpenProjectFile,
   richControls = "hover",
   markdown,
 }: Props) {
@@ -333,43 +399,23 @@ function StreamingTextPartInner({
     createIncrementalMarkdownBlockParser(parseMarkdownIntoBlocks)
   )
   const components = useMemo(
-    () => createStreamingComponents(projectRoot, isStreaming, messageId),
-    [isStreaming, projectRoot, messageId]
+    () => createStreamingComponents(projectRoot, isStreaming, messageId, true, onOpenProjectFile),
+    [isStreaming, projectRoot, messageId, onOpenProjectFile]
   )
-  // ADR-0127: the same resolved knobs the finalized branch reads. Plugin
-  // variants are prebuilt (stable identity); `lineNumbers` is a Streamdown
-  // prop; soft-wrap has no Streamdown prop, so it is applied to the fenced
-  // `<pre>` through the wrapper class the code plugin renders into.
-  // ADR-0218: fences the finalised branch draws with its own blocks (mermaid,
-  // inline charts) render through the same components while streaming.
-  const plugins = withStreamingFenceRenderers(selectStreamdownPlugins(markdown), {
-    mermaid: markdown?.mermaid ?? true,
-    charts: markdown?.charts ?? true,
-  })
-  const lineNumbers = markdown?.codeLineNumbers ?? true
-  const codeWrap = markdown?.codeWrap ?? false
-  // ADR-0127 requires BOTH branches to honour the same resolved knobs. The
-  // finalized branch hangs `mathFontScale` / `mathAlign` on its own
-  // `<MathBlock>` / `<MathInline>` wrappers; `@streamdown/math` writes KaTeX
-  // straight into the block, so there is no wrapper here to style and the two
-  // knobs have to ride down as classes `app/globals.css` resolves against
-  // KaTeX's own elements. Until this they applied only once a turn sealed, and
-  // math visibly jumped size/alignment at that moment for anyone who had moved
-  // either knob off its default.
-  //
-  // Classes, not a style/`data-*` attribute: `className` is the only prop
-  // Streamdown forwards to a DOM node in block mode — everything else it does
-  // not declare is spread onto the inner react-markdown, which drops it. That
-  // is also why the scale is a closed set of classes rather than a CSS
-  // variable; `mathScaleClass` is pinned against `MESSAGE_MATH_FONT_SCALES` so
-  // a new scale cannot land without its rule.
-  //
-  // `mathCopy` deliberately does NOT cross over: it is the click-to-copy
-  // affordance on `<MathInline>`, a React element this branch never mounts.
-  // Neither does `diff` — Streamdown has no diff plugin, so a ```diff fence
-  // streams as a code block and becomes the diff viewer when the turn seals.
-  const mathScale = markdown?.mathFontScale ?? 1
-  const mathAlign = markdown?.mathAlign ?? "center"
+  // One heading-id registry per reply: blocks number their headings in order.
+  const [headingIds] = useState<HeadingIdRegistry>(createHeadingIdRegistry)
+  // ADR-0127 / D7: the same configuration the finished branch reads — plugin
+  // sets with the app's fence renderers (mermaid, inline charts, diffs,
+  // A2UI), the sanitize and URL policy, line numbers, and the knobs that reach
+  // Streamdown only as classes (soft-wrap, math scale and alignment).
+  // `mathCopy` does not cross over: it is the click-to-copy affordance on
+  // `<MathInline>`, a React element this branch never mounts.
+  const streamdown = resolveChatStreamdownConfig(markdown)
+  const { config } = streamdown
+  // LaTeX delimiters are normalised before Streamdown sees the text, as the
+  // finished branch does; only complete pairs change, so the stable prefix the
+  // block parser reuses stays stable.
+  const source = useMemo(() => config.preprocess(text), [config, text])
   // ADR-0138 — the caret is Streamdown's own (`caret="block"`), not a hand-rolled
   // element. Ours was a sibling of `<MessageResponse>` inside `MessageContent`'s
   // flex column, so it held a permanent 16px row plus an 8px gap under the reply
@@ -385,40 +431,36 @@ function StreamingTextPartInner({
   //
   // Ink runs on the trailing block only, and not at all past `INK_REPLY_LIMIT`
   // (D9). The tail index rides to every block as `data-tail-block`; it comes
-  // from the raw text, which splits into the same blocks as the remended text
-  // Streamdown renders. Were they ever to differ, a block would only lose (or
+  // from the preprocessed text before remend, which splits into the same blocks
+  // as the remended text Streamdown renders. Were they ever to differ, a block would only lose (or
   // keep) the reveal, never its text.
   const { reduce } = useFlowMotion()
   const ink = inkActive({ text, isStreaming, reduceMotion: reduce })
-  const tailIndex = ink ? tailParser(text).length - 1 : undefined
+  const tailIndex = ink ? tailParser(source).length - 1 : undefined
   return (
-    <MessageResponse
-      animated={ink ? STREAMING_INK_ANIMATION : false}
-      {...{ [TAIL_BLOCK_ATTR]: tailIndex }}
-      BlockComponent={StreamingBlock}
-      caret="block"
-      className={cn(
-        "typeset typeset-chat",
-        codeWrap && "[&_pre]:whitespace-pre-wrap",
-        mathScaleClass(mathScale),
-        mathAlign === "left" && "chat-math-left",
-        !reduce && "[&>*:last-child]:after:animate-pulse"
-      )}
-      components={components}
-      controls={richControls === "hidden" ? false : { table: false }}
-      data-rich-controls={richControls}
-      isAnimating={isStreaming}
-      lineNumbers={lineNumbers}
-      // ADR-0218: the same `codeMaxHeight` cap the finalised block reads.
-      codeBlockMaxHeight="var(--rich-code-max-h)"
-      mode="streaming"
-      parseMarkdownIntoBlocksFn={parser}
-      plugins={plugins}
-      rehypePlugins={chatStreamdownRehypePlugins}
-      urlTransform={chatMarkdownUrlTransform}
-    >
-      {text}
-    </MessageResponse>
+    <StreamingHeadingIdsContext.Provider value={headingIds}>
+      <MessageResponse
+        animated={ink ? STREAMING_INK_ANIMATION : false}
+        {...{ [TAIL_BLOCK_ATTR]: tailIndex }}
+        BlockComponent={StreamingBlock}
+        caret="block"
+        className={cn(config.className, !reduce && "[&>*:last-child]:after:animate-pulse")}
+        components={components}
+        controls={richControls === "hidden" ? false : { table: false }}
+        data-rich-controls={richControls}
+        isAnimating={isStreaming}
+        lineNumbers={streamdown.lineNumbers}
+        // ADR-0218: the same `codeMaxHeight` cap the finalised block reads.
+        codeBlockMaxHeight="var(--rich-code-max-h)"
+        mode="streaming"
+        parseMarkdownIntoBlocksFn={parser}
+        plugins={streamdown.plugins}
+        rehypePlugins={streamdown.rehypePlugins}
+        urlTransform={streamdown.urlTransform}
+      >
+        {source}
+      </MessageResponse>
+    </StreamingHeadingIdsContext.Provider>
   )
 }
 
@@ -429,6 +471,7 @@ export const StreamingTextPart = memo(
     prev.text === next.text &&
     prev.isStreaming === next.isStreaming &&
     prev.projectRoot === next.projectRoot &&
+    prev.onOpenProjectFile === next.onOpenProjectFile &&
     prev.richControls === next.richControls &&
     prev.markdown === next.markdown
 )

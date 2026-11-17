@@ -199,6 +199,7 @@
         "components/chat/composer/model-picker.tsx",
         "components/chat/empty-state.tsx",
         "components/chat/markdown-renderer.tsx",
+        "components/chat/markdown/chat-markdown-response.tsx",
         "components/chat/mention-backlinks-chip.tsx",
         "components/chat/message-parts/file-part-preview.tsx",
         "components/chat/message-parts/handler-badge.tsx",

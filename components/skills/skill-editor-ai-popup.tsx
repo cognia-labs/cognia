@@ -2,7 +2,8 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
+import { Message, MessageContent } from "@/components/ai-elements/message"
+import { ChatMarkdownResponse } from "@/components/chat/markdown/chat-markdown-response"
 import {
   Dialog,
   DialogContent,
@@ -110,7 +111,7 @@ export function SkillEditorAiPopup({
             </p>
             <Message from="assistant">
               <MessageContent>
-                <MessageResponse>{suggested}</MessageResponse>
+                <ChatMarkdownResponse>{suggested}</ChatMarkdownResponse>
               </MessageContent>
             </Message>
           </div>

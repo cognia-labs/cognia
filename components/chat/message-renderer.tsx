@@ -11,23 +11,19 @@ import {
   MessageContent,
 } from "@/components/ai-elements/message"
 import { Reasoning } from "@/components/ai-elements/reasoning"
-import { selectStreamdownPlugins } from "@/components/ai-elements/streamdown-plugins"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { MessageMetaLine, MessageShell } from "@/components/chat/message-shell"
 import { UserMessageBody } from "@/components/chat/user-message-body"
 import { entityCitation } from "@/lib/chat/mentions/selection-citations"
 import { messageRefId } from "@/lib/chat/mentions/message-reference"
+import type { MarkdownMention } from "@/components/chat/markdown/markdown-plugins"
 import { ReasoningToolRow } from "@/components/chat/message-parts/reasoning-part"
-import {
-  chatMarkdownUrlTransform,
-  chatStreamdownRehypePlugins,
-} from "@/components/chat/markdown/rendering-policy"
+import { resolveChatStreamdownConfig } from "@/components/chat/markdown/chat-streamdown-config"
 import {
   FINALIZED_MARKDOWN_LAZY_THRESHOLD,
   FinalizedLongTextPart,
   StreamingTextPart,
   createStreamingComponents,
-  mathScaleClass,
 } from "@/components/chat/streaming-text-part"
 import { A2UIPart } from "@/components/chat/message-parts/a2ui-part"
 import { AsyncQuestionsCard } from "@/components/chat/message-parts/async-questions-card"
@@ -691,17 +687,14 @@ function MessageRendererInner({
     [inboundA2UI, message.role, message.parts, replyTo]
   )
 
-  // Mention highlighting pattern over known character names. Honor longest
-  // match first so e.g. `@Alice Smith` wins over `@Alice`.
-  const mentionPattern = useMemo(() => {
+  // Known character names a user's `@Name` may refer to, drawn as mentions
+  // inside the message's Markdown (D7).
+  const mentions = useMemo<readonly MarkdownMention[] | null>(() => {
     if (!characterById || characterById.size === 0) return null
-    const names = [...characterById.values()]
-      .map((c) => c.name)
-      .filter(Boolean)
-      .sort((a, b) => b.length - a.length)
-      .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    if (names.length === 0) return null
-    return new RegExp(`@(${names.join("|")})\\b`, "gi")
+    const list = [...characterById.values()]
+      .filter((character) => character.name)
+      .map((character) => ({ name: character.name, color: avatarColor(character) }))
+    return list.length ? list : null
   }, [characterById])
 
   const startEdit = () => {
@@ -1066,7 +1059,7 @@ function MessageRendererInner({
         part={part}
         partKey={partKey}
         isStreaming={isStreaming}
-        mentionPattern={message.role === "user" ? mentionPattern : null}
+        mentions={message.role === "user" ? mentions : null}
         characterById={characterById}
         messageId={message.id}
         sessionId={documentSessionId ?? undefined}
@@ -2013,47 +2006,6 @@ export const MessageRenderer = memo(
 
 MessageRenderer.displayName = "MessageRenderer"
 
-function containsMention(text: string, pattern: RegExp): boolean {
-  pattern.lastIndex = 0
-  const found = pattern.test(text)
-  pattern.lastIndex = 0
-  return found
-}
-
-function highlightMentions(
-  text: string,
-  pattern: RegExp,
-  characterById: Map<string, Character>
-): React.ReactNode[] {
-  pattern.lastIndex = 0
-  const out: React.ReactNode[] = []
-  let last = 0
-  const charByLowerName = new Map<string, Character>()
-  for (const c of characterById.values()) {
-    charByLowerName.set(c.name.toLowerCase(), c)
-  }
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > last) {
-      out.push(text.slice(last, match.index))
-    }
-    const name = match[1]
-    const c = charByLowerName.get(name.toLowerCase())
-    out.push(
-      <span
-        key={`m-${match.index}`}
-        className="rounded bg-muted px-1 font-medium"
-        style={c ? { color: avatarColor(c) } : undefined}
-      >
-        {match[0]}
-      </span>
-    )
-    last = match.index + match[0].length
-  }
-  if (last < text.length) out.push(text.slice(last))
-  return out.length > 0 ? out : [text]
-}
-
 function shouldHideMessagePart(
   part: UIMessage["parts"][number],
   display: ResolvedMessageDisplayOptions
@@ -2084,14 +2036,14 @@ function shouldHideMessagePart(
  * the expensive ones being `<Tool>` cards and `<MarkdownRenderer>`. Without
  * this, each re-render rebuilt the whole part tree (the ~11ms/row cost the
  * PerfHud surfaced). The default shallow prop compare is exactly right here:
- * `part` / `mentionPattern` / `characterById` / `t` are all reference-stable
+ * `part` / `mentions` / `characterById` / `t` are all reference-stable
  * while the message is unchanged.
  */
 const MessagePart = memo(function MessagePart({
   part,
   partKey,
   isStreaming,
-  mentionPattern,
+  mentions,
   characterById,
   messageId,
   sessionId,
@@ -2104,7 +2056,7 @@ const MessagePart = memo(function MessagePart({
   part: UIMessage["parts"][number]
   partKey: string
   isStreaming: boolean
-  mentionPattern: RegExp | null
+  mentions: readonly MarkdownMention[] | null
   characterById: Map<string, Character> | undefined
   messageId: string | undefined
   sessionId: string | undefined
@@ -2120,7 +2072,7 @@ const MessagePart = memo(function MessagePart({
         part,
         partKey,
         isStreaming,
-        mentionPattern,
+        mentions,
         characterById,
         messageId,
         sessionId,
@@ -2268,7 +2220,7 @@ function renderPart(
   part: UIMessage["parts"][number],
   key: string,
   isStreaming: boolean,
-  mentionPattern: RegExp | null,
+  mentions: readonly MarkdownMention[] | null,
   characterById: Map<string, Character> | undefined,
   messageId: string | undefined,
   sessionId: string | undefined,
@@ -2379,17 +2331,6 @@ function renderPart(
     // tool calls. Rendering it would add a zero-height box that still eats a
     // `gap-2` from `MessageContent`'s flex column.
     if (!text.trim()) return null
-    // Only text that actually names a character loses Markdown for the
-    // highlighted spans; everything else renders as Markdown below.
-    if (mentionPattern && characterById && containsMention(text, mentionPattern)) {
-      const segments = highlightMentions(text, mentionPattern, characterById)
-      return (
-        <span key={key} className="whitespace-pre-wrap">
-          {segments}
-        </span>
-      )
-    }
-
     // Text a third party sent through an IM platform: no raw HTML, no live
     // A2UI fences, no project links, and the sender's line breaks kept
     // (every IM dialect treats a newline as a break).
@@ -2399,6 +2340,7 @@ function renderPart(
           key={key}
           content={preserveLineBreaks(text)}
           untrusted
+          mentions={mentions ?? undefined}
           messageId={messageId}
           markdown={display.markdown}
           className="size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
@@ -2428,6 +2370,7 @@ function renderPart(
           messageId={messageId}
           projectRoot={projectRoot}
           markdown={display.markdown}
+          mentions={mentions ?? undefined}
         />
       )
     }
@@ -2440,6 +2383,7 @@ function renderPart(
         isStreaming={isStreaming}
         projectRoot={projectRoot}
         markdown={display.markdown}
+        mentions={mentions ?? undefined}
         className="size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
       />
     )
@@ -2447,6 +2391,7 @@ function renderPart(
 
   if (type === "reasoning") {
     const text = (part as { text?: string }).text ?? ""
+    const reasoningMarkdown = resolveChatStreamdownConfig(display.markdown)
     const stillStreaming = isStreaming && (part as { state?: string }).state !== "done"
     // Detailed mode keeps the reasoning expanded; simplified keeps it collapsed;
     // standard defers to the component's stream-aware auto open/close.
@@ -2473,27 +2418,20 @@ function renderPart(
         className="mb-0"
       >
         <ReasoningToolRow
-          text={text}
+          text={reasoningMarkdown.config.preprocess(text)}
           streamdownProps={{
-            className: cn(
-              "typeset typeset-chat",
-              display.markdown.codeWrap && "[&_pre]:whitespace-pre-wrap",
-              // Same seam as the answer body: Streamdown forwards `className`
-              // and drops anything it does not declare, so the math knobs have
-              // to be classes here too (see `mathScaleClass`).
-              mathScaleClass(display.markdown.mathFontScale),
-              display.markdown.mathAlign === "left" && "chat-math-left"
-            ),
+            // D7: the answer body's configuration — fence renderers, sanitize
+            // and URL policy, line numbers, and the class-borne knobs.
+            className: reasoningMarkdown.config.className,
             // Reasoning uses the same typography, but stays outside plugin URL matching.
             components: createStreamingComponents(projectRoot, stillStreaming, undefined, false),
             controls: { table: false },
             isAnimating: stillStreaming,
-            // ADR-0127: reasoning bodies honour the same markdown knobs.
-            lineNumbers: display.markdown.codeLineNumbers,
+            lineNumbers: reasoningMarkdown.lineNumbers,
             mode: stillStreaming ? "streaming" : "static",
-            plugins: selectStreamdownPlugins(display.markdown),
-            rehypePlugins: chatStreamdownRehypePlugins,
-            urlTransform: chatMarkdownUrlTransform,
+            plugins: reasoningMarkdown.plugins,
+            rehypePlugins: reasoningMarkdown.rehypePlugins,
+            urlTransform: reasoningMarkdown.urlTransform,
           }}
         />
       </Reasoning>

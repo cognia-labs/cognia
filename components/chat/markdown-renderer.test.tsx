@@ -148,12 +148,8 @@ jest.mock("@/lib/tauri/opener", () => ({
 
 import { act, render, screen, fireEvent } from "@testing-library/react"
 import React from "react"
-import {
-  MarkdownRenderer,
-  addMarkdownHeadingIds,
-  parseTaskListItem,
-  limitUntrustedMarkdownDepth,
-} from "./markdown-renderer"
+import { MarkdownRenderer } from "./markdown-renderer"
+import { parseTaskListItem } from "./markdown/shared-components"
 import { openExternal } from "@/lib/tauri/opener"
 import { clearAllLinkMatchers, registerLinkMatcher } from "@/lib/plugin/api/link-matchers"
 
@@ -699,109 +695,6 @@ describe("MarkdownRenderer", () => {
   })
 })
 
-describe("addMarkdownHeadingIds", () => {
-  it("preserves ordinary nesting and flattens excessive external nesting to complete literal source", () => {
-    const shallow = {
-      type: "root",
-      children: [
-        { type: "element", tagName: "blockquote", children: [{ type: "text", value: "quote" }] },
-      ],
-    }
-    const previous = JSON.stringify(shallow)
-    limitUntrustedMarkdownDepth(shallow, "> quote")
-    expect(JSON.stringify(shallow)).toBe(previous)
-    type Node = { type: string; tagName?: string; value?: string; children?: Node[] }
-    let child: Node = { type: "text", value: "deep marker" }
-    for (let index = 0; index < 1500; index++) child = { type: "blockquote", children: [child] }
-    const tree = { type: "root", children: [child] }
-    const source = `${"> ".repeat(1500)}deep marker`
-    limitUntrustedMarkdownDepth(tree, source)
-    expect(tree.children).toEqual([{ type: "code", lang: "text", value: source }])
-  })
-  it("adds stable slugs and disambiguates duplicate headings", () => {
-    const tree = {
-      type: "root",
-      children: [
-        {
-          type: "element",
-          tagName: "h2",
-          properties: {},
-          children: [{ type: "text", value: "Quick Start" }],
-        },
-        {
-          type: "element",
-          tagName: "h2",
-          properties: {},
-          children: [{ type: "text", value: "Quick Start" }],
-        },
-        {
-          type: "element",
-          tagName: "h3",
-          properties: {},
-          children: [{ type: "text", value: "中文渲染" }],
-        },
-      ],
-    }
-
-    addMarkdownHeadingIds(tree)
-
-    expect(tree.children[0].properties).toMatchObject({ id: "quick-start" })
-    expect(tree.children[1].properties).toMatchObject({ id: "quick-start-1" })
-    expect(tree.children[2].properties).toMatchObject({ id: "中文渲染" })
-  })
-
-  it("preserves an explicit heading id and ignores empty headings", () => {
-    const tree = {
-      type: "root",
-      children: [
-        {
-          type: "element",
-          tagName: "h2",
-          properties: { id: "custom" },
-          children: [{ type: "text", value: "Custom" }],
-        },
-        {
-          type: "element",
-          tagName: "h2",
-          properties: {},
-          children: [{ type: "text", value: "!!!" }],
-        },
-      ],
-    }
-
-    addMarkdownHeadingIds(tree)
-
-    expect(tree.children[0].properties).toMatchObject({ id: "custom" })
-    expect(tree.children[1].properties).toEqual({})
-  })
-
-  it("collects nested heading text and safely ignores non-tree input", () => {
-    const tree = {
-      type: "root",
-      children: [
-        {
-          type: "element",
-          tagName: "h2",
-          properties: {},
-          children: [
-            { type: "text", value: "Rich " },
-            {
-              type: "element",
-              tagName: "code",
-              children: [{ type: "text", value: "Text" }],
-            },
-          ],
-        },
-      ],
-    }
-
-    addMarkdownHeadingIds(null)
-    addMarkdownHeadingIds(tree)
-
-    expect(tree.children[0].properties).toMatchObject({ id: "rich-text" })
-  })
-})
-
 // parseTaskListItem is unit-tested directly: remark-gfm / rehype-raw are stubbed
 // in jest, so the checkbox <input> a GFM task item produces can't reach the `li`
 // handler through the full pipeline. The helper is the routing decision; we feed
@@ -888,5 +781,58 @@ describe("parseTaskListItem", () => {
       expect(block).toHaveAttribute("data-line-numbers", "true")
       expect(block).toHaveAttribute("data-wrap", "true")
     })
+  })
+})
+
+describe("headingIds (one message drawn as several trees)", () => {
+  // The Jest react-markdown stand-in ignores plugins, so this pins the wiring;
+  // the numbering itself is covered by `markdown/markdown-plugins.test.ts` and
+  // the real-engine parity fixture.
+  function renderedRehypePlugins(element: React.ReactElement): unknown[] {
+    render(element)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mock = require("react-markdown") as { lastRehypePlugins?: unknown[] }
+    return mock.lastRehypePlugins ?? []
+  }
+
+  it("numbers a section's headings through the message's registry", () => {
+    const { createHeadingIdRegistry, rehypeMarkdownHeadingIds } = jest.requireActual(
+      "./markdown/markdown-plugins"
+    ) as typeof import("./markdown/markdown-plugins")
+    const registry = createHeadingIdRegistry()
+    registry.setSources(["## Setup\n", "## Setup\n"])
+    const plugins = renderedRehypePlugins(
+      <MarkdownRenderer content={"## Setup"} headingIds={{ registry, index: 1 }} />
+    )
+    const isHeadingStep = (plugin: unknown) =>
+      plugin === rehypeMarkdownHeadingIds ||
+      (Array.isArray(plugin) && plugin[0] === rehypeMarkdownHeadingIds)
+    expect(plugins.at(-1)).toEqual([rehypeMarkdownHeadingIds, { seed: [["setup", 1]] }])
+    expect(plugins.filter(isHeadingStep)).toHaveLength(1)
+  })
+
+  it("numbers headings on its own without a registry", () => {
+    const { rehypeMarkdownHeadingIds } = jest.requireActual(
+      "./markdown/markdown-plugins"
+    ) as typeof import("./markdown/markdown-plugins")
+    expect(renderedRehypePlugins(<MarkdownRenderer content={"## Setup"} />).at(-1)).toBe(
+      rehypeMarkdownHeadingIds
+    )
+  })
+})
+
+describe("mentions", () => {
+  it("adds one mention step after the configuration's plugins, stable per list", () => {
+    const { rehypeMarkdownMentions } = jest.requireActual(
+      "./markdown/markdown-plugins"
+    ) as typeof import("./markdown/markdown-plugins")
+    const mentions = [{ name: "Alice" }]
+    render(<MarkdownRenderer content="hi @Alice" mentions={mentions} />)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mock = require("react-markdown") as { lastRehypePlugins?: unknown[] }
+    const first = mock.lastRehypePlugins!
+    expect(first.at(-1)).toEqual([rehypeMarkdownMentions, { mentions }])
+    render(<MarkdownRenderer content="again @Alice" mentions={mentions} />)
+    expect(mock.lastRehypePlugins).toBe(first)
   })
 })

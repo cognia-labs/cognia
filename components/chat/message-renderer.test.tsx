@@ -152,28 +152,34 @@ jest.mock("@/components/error/error-trace-details", () => ({
     ),
 }))
 
+const mockMentionLists: unknown[] = []
 jest.mock("./markdown-renderer", () => ({
   MarkdownRenderer: ({
     content,
     projectRoot,
     untrusted,
+    mentions,
   }: {
     content: string
     projectRoot?: string
     untrusted?: boolean
-  }) =>
-    ReactForMocks.createElement(
+    mentions?: ReadonlyArray<{ name: string; color?: string }>
+  }) => {
+    mockMentionLists.push(mentions)
+    return ReactForMocks.createElement(
       "div",
       {
         "data-test": "markdown",
         "data-project-root": projectRoot,
+        "data-mentions": mentions?.map((mention) => mention.name).join(","),
         "data-document-session": ReactForMocks.useContext(
           jest.requireActual("./markdown/chat-link-options").ChatDocumentSessionContext
         ),
         "data-untrusted": untrusted ? "true" : undefined,
       },
       content
-    ),
+    )
+  },
 }))
 jest.mock("@/components/chat/markdown/rendering-policy", () => ({
   chatMarkdownUrlTransform: (url: string) => url,
@@ -2229,66 +2235,49 @@ describe("team speaker display", () => {
 
 // ── mention highlighting (user messages) ─────────────────────────────────────
 
-describe("mention highlighting", () => {
-  it("renders one styled mention chip per known character match", () => {
-    const characterById = new Map([
-      ["char_alice", { id: "char_alice", name: "Alice", systemPrompt: "" }],
-      ["char_bob", { id: "char_bob", name: "Bob", systemPrompt: "" }],
-    ]) as unknown as Map<string, import("@cognia/agent-config-types").Character>
+describe("mentions inside Markdown (D7)", () => {
+  const characterById = new Map([
+    ["char_alice", { id: "char_alice", name: "Alice", systemPrompt: "" }],
+    ["char_bob", { id: "char_bob", name: "Bob", systemPrompt: "" }],
+  ]) as unknown as Map<string, import("@cognia/agent-config-types").Character>
 
+  it("keeps a user's Markdown and hands the known names to the renderer", () => {
     const msg: UIMessage = {
       id: "u-mentions",
       role: "user",
-      parts: [{ type: "text", text: "hey @Alice and @Bob, look here" }],
+      parts: [{ type: "text", text: "**hey** @Alice and @Bob, look here" }],
     }
-
     const { container } = render(<MessageRenderer message={msg} characterById={characterById} />)
-
-    const chips = container.querySelectorAll("span.rounded.bg-muted")
-    expect(chips.length).toBe(2)
-    expect(chips[0].textContent).toBe("@Alice")
-    expect(chips[1].textContent).toBe("@Bob")
+    const markdown = container.querySelector('[data-test="markdown"]')
+    expect(markdown?.textContent).toBe("**hey** @Alice and @Bob, look here")
+    expect(markdown?.getAttribute("data-mentions")).toBe("Alice,Bob")
+    const mentions = mockMentionLists.at(-1) as Array<{ name: string; color?: string }>
+    expect(mentions.every((mention) => typeof mention.color === "string")).toBe(true)
   })
 
-  it("preserves mention chips when the same message re-renders with identical text", () => {
-    const characterById = new Map([
-      ["char_alice", { id: "char_alice", name: "Alice", systemPrompt: "" }],
-    ]) as unknown as Map<string, import("@cognia/agent-config-types").Character>
-
+  it("keeps the same names list across re-renders", () => {
     const msg: UIMessage = {
       id: "u-mention-stable",
       role: "user",
       parts: [{ type: "text", text: "ping @Alice" }],
     }
-
-    const { container, rerender } = render(
-      <MessageRenderer message={msg} characterById={characterById} />
-    )
-    const firstChip = container.querySelector("span.rounded.bg-muted")
-    expect(firstChip?.textContent).toBe("@Alice")
-
-    rerender(<MessageRenderer message={msg} characterById={characterById} />)
-    const secondChip = container.querySelector("span.rounded.bg-muted")
-    // React reconciliation reuses the same DOM node when keys are stable.
-    expect(secondChip).toBe(firstChip)
+    mockMentionLists.length = 0
+    const { rerender } = render(<MessageRenderer message={msg} characterById={characterById} />)
+    rerender(<MessageRenderer message={{ ...msg }} characterById={characterById} />)
+    expect(mockMentionLists.length).toBeGreaterThan(1)
+    expect(new Set(mockMentionLists).size).toBe(1)
   })
-})
 
-describe("mention highlighting leaves other text as Markdown", () => {
-  it("renders a user part without a mention through MarkdownRenderer", () => {
-    const characterById = new Map([
-      ["char_alice", { id: "char_alice", name: "Alice", systemPrompt: "" }],
-    ]) as unknown as Map<string, import("@cognia/agent-config-types").Character>
+  it("draws no mentions in an assistant's reply", () => {
     const msg: UIMessage = {
-      id: "u-no-mention",
-      role: "user",
-      parts: [{ type: "text", text: "**bold** with no names" }],
+      id: "a-mention",
+      role: "assistant",
+      parts: [{ type: "text", text: "@Alice said hi" }],
     }
     const { container } = render(<MessageRenderer message={msg} characterById={characterById} />)
-    expect(container.querySelector('[data-test="markdown"]')?.textContent).toBe(
-      "**bold** with no names"
+    expect(container.querySelector('[data-test="markdown"]')?.hasAttribute("data-mentions")).toBe(
+      false
     )
-    expect(container.querySelector("span.rounded.bg-muted")).toBeNull()
   })
 })
 

@@ -3,6 +3,7 @@ import type { PluginConfig } from "streamdown"
 import {
   StreamingA2UIFence,
   StreamingChartFence,
+  StreamingDiffFence,
   StreamingMermaidFence,
   withStreamingFenceRenderers,
 } from "./streaming-fence-renderers"
@@ -12,9 +13,11 @@ jest.mock("next/dynamic", () => (loader: () => Promise<unknown>) => {
   const source = String(loader)
   const kind = source.includes("chart-block")
     ? "chart-block"
-    : source.includes("a2ui-streaming-fence")
-      ? "a2ui-streaming-fence"
-      : "mermaid-block"
+    : source.includes("diff-block")
+      ? "diff-block"
+      : source.includes("a2ui-streaming-fence")
+        ? "a2ui-streaming-fence"
+        : "mermaid-block"
   const Block = ({ content, code }: { content?: string; code?: string }) => (
     <div data-testid={kind}>{content ?? code}</div>
   )
@@ -59,6 +62,13 @@ describe("StreamingA2UIFence", () => {
   })
 })
 
+describe("StreamingDiffFence", () => {
+  it("draws the diff viewer while the fence streams, not a code block", () => {
+    render(<StreamingDiffFence code={"-old\n+new"} isIncomplete language="diff" />)
+    expect(screen.getByTestId("diff-block")).toHaveTextContent("-old +new")
+  })
+})
+
 describe("withStreamingFenceRenderers", () => {
   const plugins = { cjk: {} } as unknown as PluginConfig
   const a2ui = { language: "a2ui", component: StreamingA2UIFence }
@@ -77,6 +87,18 @@ describe("withStreamingFenceRenderers", () => {
         { language: "chart", component: StreamingChartFence },
         a2ui,
       ]
+    )
+  })
+
+  it("adds the diff renderer only when diffs are on", () => {
+    const withDiff = withStreamingFenceRenderers(plugins, {
+      mermaid: false,
+      charts: false,
+      diff: true,
+    })
+    expect(withDiff.renderers).toEqual([{ language: "diff", component: StreamingDiffFence }, a2ui])
+    expect(withStreamingFenceRenderers(plugins, { mermaid: false, charts: false })).not.toBe(
+      withDiff
     )
   })
 

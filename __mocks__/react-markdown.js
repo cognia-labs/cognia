@@ -305,6 +305,9 @@ function ReactMarkdown({
   rehypePlugins = [],
   ..._rest
 }) {
+  // The plugin lists by identity, for tests that pin which steps a caller
+  // hands react-markdown.
+  ReactMarkdown.lastRehypePlugins = rehypePlugins
   const els = parseMarkdown(children, components)
   const remarkOrder = remarkPlugins
     .map((plugin) => {

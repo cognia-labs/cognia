@@ -19,10 +19,22 @@ jest.mock(
 
 // Stub MessageResponse so we can inspect what gets passed in.
 const mockMessageResponse = jest.fn()
+// Set to draw these blocks through the `BlockComponent` the part hands in,
+// inside the part's own tree (so its context reaches them).
+let mockRenderBlocks: Array<Record<string, unknown>> | null = null
 jest.mock("@/components/ai-elements/message", () => ({
-  MessageResponse: (props: { children: ReactNode }) => {
+  MessageResponse: (props: {
+    children: ReactNode
+    BlockComponent?: (props: Record<string, unknown>) => ReactNode
+  }) => {
     mockMessageResponse(props)
-    return <div data-testid="msg-response">{props.children}</div>
+    const Block = props.BlockComponent
+    return (
+      <div data-testid="msg-response">
+        {props.children}
+        {Block && mockRenderBlocks?.map((block, index) => <Block key={index} {...block} />)}
+      </div>
+    )
   },
 }))
 
@@ -46,17 +58,17 @@ jest.mock("./markdown/rendering-policy", () => ({
 
 import {
   FinalizedLongTextPart,
+  layoutLongText,
   STREAMING_INK_ANIMATION,
   StreamingTextPart,
   blockRendersCode,
-  mathScaleClass,
   createStreamingComponents,
 } from "./streaming-text-part"
 import {
   selectStreamdownPlugins,
   streamdownPlugins,
 } from "@/components/ai-elements/streamdown-plugins"
-import { MESSAGE_MATH_FONT_SCALES, type MessageMarkdownOptions } from "@/types/appearance"
+import type { MessageMarkdownOptions } from "@/types/appearance"
 import { clearAllLinkMatchers, registerLinkMatcher } from "@/lib/plugin/api/link-matchers"
 
 const MARKDOWN_DEFAULTS: MessageMarkdownOptions = {
@@ -400,7 +412,112 @@ describe("StreamingTextPart", () => {
   })
 })
 
+describe("StreamingTextPart and the shared configuration (D7)", () => {
+  afterEach(() => {
+    mockRenderBlocks = null
+  })
+
+  it("normalises LaTeX delimiters before Streamdown parses, as the finished branch does", () => {
+    render(<StreamingTextPart text={"area \\[x^2\\] and \\(y\\)"} isStreaming />)
+    const props = mockMessageResponse.mock.calls.at(-1)?.[0] as { children: string }
+    expect(props.children).toBe("area $$x^2$$ and $y$")
+  })
+
+  it("leaves LaTeX alone when math is off", () => {
+    render(
+      <StreamingTextPart
+        text={"\\[x\\]"}
+        isStreaming
+        markdown={{ ...MARKDOWN_DEFAULTS, math: false }}
+      />
+    )
+    const props = mockMessageResponse.mock.calls.at(-1)?.[0] as { children: string }
+    expect(props.children).toBe("\\[x\\]")
+  })
+
+  it("gives each block a heading-id step that continues from the blocks before it", () => {
+    const seen: unknown[][] = []
+    mockRenderBlocks = [
+      { index: 0, content: "## Setup", rehypePlugins: ["shared-rehype"] },
+      { index: 1, content: "## Setup", rehypePlugins: ["shared-rehype"] },
+    ]
+    const blocks = jest.requireMock("streamdown") as { Block: unknown }
+    const original = blocks.Block
+    blocks.Block = function RecordingBlock(props: { rehypePlugins: unknown[] }) {
+      seen.push(props.rehypePlugins)
+      return null
+    }
+    try {
+      render(<StreamingTextPart text={"## Setup\n\n## Setup"} isStreaming />)
+    } finally {
+      blocks.Block = original
+    }
+    expect(seen).toHaveLength(2)
+    for (const list of seen) {
+      expect(list[0]).toBe("shared-rehype")
+      expect(list).toHaveLength(2)
+    }
+    const { rehypeMarkdownHeadingIds } = jest.requireActual(
+      "./markdown/markdown-plugins"
+    ) as typeof import("./markdown/markdown-plugins")
+    // The seed rides as a JSON option on the one named step: Streamdown caches
+    // a processor per plugin name and options, so a closure would be shared.
+    expect(seen[0][1]).toBe(rehypeMarkdownHeadingIds)
+    expect(seen[1][1]).toEqual([rehypeMarkdownHeadingIds, { seed: [["setup", 1]] }])
+  })
+
+  it("hands onOpenProjectFile to links and code spans", () => {
+    const onOpenProjectFile = jest.fn()
+    const components = createStreamingComponents("/repo", false, "m1", true, onOpenProjectFile)
+    const InlineCode = components.inlineCode as (props: { children: ReactNode }) => ReactNode
+    const element = InlineCode({ children: "src/a.ts" }) as { props: Record<string, unknown> }
+    expect(element.props.onOpenProjectFile).toBe(onOpenProjectFile)
+    const Link = components.a as (props: { href: string; children: ReactNode }) => ReactNode
+    const link = Link({ href: "src/a.ts", children: "a" }) as { props: Record<string, unknown> }
+    expect(link.props.onOpenProjectFile).toBe(onOpenProjectFile)
+  })
+})
+
+describe("layoutLongText", () => {
+  it("splits a long reply into sections of blocks", () => {
+    const text = Array.from({ length: 20 }, (_, index) => `paragraph ${index}`).join("\n\n")
+    const sections = layoutLongText(text)!
+    expect(sections.length).toBeGreaterThan(1)
+    expect(sections.join("")).toBe(text)
+  })
+
+  it("keeps a reply with link or footnote definitions whole", () => {
+    expect(layoutLongText("see [doc][ref]\n\nmore\n\n[ref]: https://example.com")).toBeNull()
+    expect(layoutLongText("a claim[^1]\n\nmore\n\n[^1]: the source")).toBeNull()
+  })
+
+  it("does not read definitions inside a code fence", () => {
+    expect(layoutLongText("```\n[^1]: not a footnote\n[x]: not a link\n```\n\ntext")).not.toBeNull()
+  })
+})
+
 describe("FinalizedLongTextPart", () => {
+  it("numbers every section's headings through one registry", () => {
+    const text = Array.from({ length: 20 }, (_, index) => `## Setup ${index % 2}`).join("\n\n")
+    mockMarkdownRenderer.mockClear()
+    render(<FinalizedLongTextPart text={text} messageId="m1" />)
+
+    const slots = mockMarkdownRenderer.mock.calls.map(
+      ([props]) => (props as { headingIds?: { registry: unknown; index: number } }).headingIds
+    )
+    expect(slots.map((slot) => slot?.index)).toEqual([0, 1, 2])
+    expect(new Set(slots.map((slot) => slot?.registry)).size).toBe(1)
+  })
+
+  it("renders a reply with footnotes as one tree", () => {
+    mockMarkdownRenderer.mockClear()
+    const text = `${"x\n\n".repeat(30)}claim[^1]\n\n[^1]: source`
+    render(<FinalizedLongTextPart text={text} />)
+    expect(mockMarkdownRenderer).toHaveBeenCalledTimes(1)
+    expect(mockMarkdownRenderer.mock.calls[0][0]).toMatchObject({ content: text })
+    expect(mockMarkdownRenderer.mock.calls[0][0]).not.toHaveProperty("headingIds")
+  })
+
   it("mounts initial sections and defers distant Markdown until it approaches the viewport", () => {
     const callbacks: IntersectionObserverCallback[] = []
     const OriginalObserver = global.IntersectionObserver
@@ -497,6 +614,7 @@ describe("markdown knobs (ADR-0127)", () => {
     // as code; the chart renderer stays, and A2UI always streams (ADR-0240).
     expect(props.plugins.renderers).toEqual([
       expect.objectContaining({ language: "chart" }),
+      expect.objectContaining({ language: "diff" }),
       expect.objectContaining({ language: "a2ui" }),
     ])
     expect(props.plugins).toHaveProperty("math")
@@ -528,27 +646,6 @@ describe("markdown knobs (ADR-0127)", () => {
     expect(props.className).not.toContain("chat-math-")
   })
 
-  it("gives every declared math scale a class backed by a globals.css rule", () => {
-    // The scale cannot ride down as a style/`data-*` attribute — Streamdown
-    // spreads anything it does not declare onto the inner react-markdown, which
-    // drops it — so the closed scale set and the stylesheet have to stay in
-    // step. Without this a new scale renders at 1x while the finalized branch
-    // scales, which is exactly the silent divergence ADR-0127 forbids.
-    const css = readFileSync(path.join(process.cwd(), "app/globals.css"), "utf8")
-    for (const scale of MESSAGE_MATH_FONT_SCALES) {
-      const className = mathScaleClass(scale)
-      if (scale === 1) {
-        expect(className).toBeUndefined()
-        continue
-      }
-      expect(className).toBeDefined()
-      expect(css).toContain(`.${className} .katex-display {`)
-      expect(css).toContain(`.${className} .katex {`)
-    }
-    expect(css).toContain(".chat-math-left .katex-display,")
-    expect(css).toContain(".chat-math-left .katex-display > .katex {")
-  })
-
   it("defaults to the full plugin set with line numbers and no wrap when no knobs are given", () => {
     render(<StreamingTextPart text="x" isStreaming />)
     const props = mockMessageResponse.mock.calls.at(-1)?.[0] as {
@@ -561,6 +658,7 @@ describe("markdown knobs (ADR-0127)", () => {
     expect(props.plugins.renderers).toEqual([
       expect.objectContaining({ language: "mermaid" }),
       expect.objectContaining({ language: "chart" }),
+      expect.objectContaining({ language: "diff" }),
       expect.objectContaining({ language: "a2ui" }),
     ])
     expect(props.lineNumbers).toBe(true)

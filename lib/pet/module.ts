@@ -35,6 +35,7 @@ export default defineHostModule({
     "attention",
     "background-tasks",
     "capture",
+    "chat",
     "git",
     "memory",
     "plugin",
