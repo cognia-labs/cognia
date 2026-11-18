@@ -102,7 +102,10 @@ describe("internalTransport", () => {
   })
 
   it("reports a 202 as accepted and carries the operation id", async () => {
-    const fetchImpl = stubFetch(() => ({ status: 202, body: { operationId: "op_1" } }))
+    const fetchImpl = stubFetch(() => ({
+      status: 202,
+      body: { id: "op_1", done: false, status: "running" },
+    }))
     const outcome = await internalTransport({
       endpoint: ENDPOINT,
       serviceToken: "s",

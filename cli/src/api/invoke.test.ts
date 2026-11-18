@@ -1,5 +1,11 @@
 import { findCommand } from "./catalog"
-import { LEASE_ISSUING_COMMAND, invokeCommand, pollOperation, preflight } from "./invoke"
+import {
+  LEASE_ISSUING_COMMAND,
+  invokeCommand,
+  paginationPlan,
+  pollOperation,
+  preflight,
+} from "./invoke"
 import type { CommandOutcome, HostTransport, RequestOptions } from "./transport"
 import type { ApiCommandEntry } from "./types"
 
@@ -220,8 +226,8 @@ describe("invokeCommand", () => {
   it("polls the receipt to completion under --wait", async () => {
     const host = transport("internal", [
       { ok: true, accepted: true, result: {}, operationId: "op_1" },
-      { ok: true, result: { status: "running" } },
-      { ok: true, result: { status: "completed", result: { done: true } } },
+      { ok: true, result: { id: "op_1", done: false, status: "running" } },
+      { ok: true, result: { id: "op_1", done: true, status: "succeeded", result: { done: true } } },
     ])
     const result = await invokeCommand({
       entry: entry(),
@@ -252,7 +258,9 @@ describe("invokeCommand", () => {
 
 describe("pollOperation", () => {
   it("uses the device receipt route on the device wire", async () => {
-    const host = transport("http", [{ ok: true, result: { status: "completed", result: 1 } }])
+    const host = transport("http", [
+      { ok: true, result: { id: "op", done: true, status: "succeeded", result: 1 } },
+    ])
     await pollOperation({
       transport: host,
       operationId: "op_2",
@@ -263,7 +271,9 @@ describe("pollOperation", () => {
   })
 
   it("reports a failed operation with the host's reason", async () => {
-    const host = transport("internal", [{ ok: true, result: { status: "failed", error: "boom" } }])
+    const host = transport("internal", [
+      { ok: true, result: { id: "op", done: true, status: "failed", error: "boom" } },
+    ])
     const outcome = await pollOperation({
       transport: host,
       operationId: "op_3",
@@ -287,7 +297,10 @@ describe("pollOperation", () => {
 
   it("gives up at the timeout instead of polling forever", async () => {
     let clock = 0
-    const host = transport("internal", () => ({ ok: true, result: { status: "running" } }))
+    const host = transport("internal", () => ({
+      ok: true,
+      result: { id: "op_5", done: false, status: "running" },
+    }))
     const outcome = await pollOperation({
       transport: host,
       operationId: "op_5",
@@ -328,5 +341,114 @@ describe("canonical Operation values", () => {
       sleep: async () => {},
     })
     expect(result).toEqual({ ok: true, result: null })
+  })
+})
+
+describe("--all pagination", () => {
+  const paged = entry({
+    name: "session_list",
+    idempotency: "structural",
+    inputSchema: { type: "object", properties: { pageToken: { type: "string" } } },
+    outputSchema: {
+      type: "object",
+      properties: { items: { type: "array" }, nextPageToken: { type: "string" } },
+    },
+  })
+  const timeline = entry({
+    name: "session_timeline",
+    idempotency: "structural",
+    inputSchema: { type: "object", properties: { cursor: { type: "string" } } },
+    outputSchema: {
+      type: "object",
+      required: ["items", "revision", "hasMore"],
+      properties: {
+        items: { type: "array" },
+        revision: { type: "integer" },
+        nextCursor: { type: "string" },
+        hasMore: { type: "boolean" },
+      },
+    },
+  })
+
+  it("derives the convention from the contract, like the Rust wrapper", () => {
+    expect(paginationPlan(paged)).toEqual({
+      request: "pageToken",
+      continuation: "nextPageToken",
+      list: "items",
+    })
+    expect(paginationPlan(timeline)).toEqual({
+      request: "cursor",
+      continuation: "nextCursor",
+      list: "items",
+    })
+    expect(paginationPlan(entry())).toBeNull()
+  })
+
+  it("follows nextCursor to the last page instead of stopping after the first", async () => {
+    const host = transport("internal", [
+      { ok: true, result: { items: [1], revision: 3, nextCursor: "c2", hasMore: true } },
+      { ok: true, result: { items: [2], revision: 3, nextCursor: "c3", hasMore: true } },
+      { ok: true, result: { items: [3], revision: 3, hasMore: false } },
+    ])
+    const result = await invokeCommand({
+      entry: timeline,
+      body: { sessionId: "s" },
+      transport: host,
+      timeoutMs: 1000,
+      all: true,
+    })
+    expect(result.outcome).toEqual({
+      ok: true,
+      result: { items: [1, 2, 3], revision: 3, hasMore: false },
+    })
+    expect(host.calls.map((call) => (call.body as { cursor?: string }).cursor)).toEqual([
+      undefined,
+      "c2",
+      "c3",
+    ])
+  })
+
+  it("fails when a page says more follow but names no continuation", async () => {
+    const host = transport("internal", [
+      { ok: true, result: { items: [1], revision: 3, hasMore: true } },
+    ])
+    const result = await invokeCommand({
+      entry: timeline,
+      body: {},
+      transport: host,
+      timeoutMs: 1000,
+      all: true,
+    })
+    expect(result.outcome).toMatchObject({ ok: false, code: "pagination_truncated" })
+  })
+
+  it("refuses a command with no page convention before sending anything", async () => {
+    const host = transport("internal", [{ ok: true, result: { items: [] } }])
+    const result = await invokeCommand({
+      entry: entry({ name: "plugin_install" }),
+      body: {},
+      transport: host,
+      timeoutMs: 1000,
+      all: true,
+    })
+    expect(result.outcome).toMatchObject({
+      ok: false,
+      cause: "invalid-request",
+      code: "pagination_unsupported",
+    })
+    expect(host.calls).toHaveLength(0)
+  })
+})
+
+describe("Operation documents", () => {
+  it("treats a receipt without the boolean done as an invalid answer, not a settled one", async () => {
+    const host = transport("internal", [{ ok: true, result: { status: "completed", result: 1 } }])
+    const outcome = await pollOperation({
+      transport: host,
+      operationId: "11111111-1111-4111-8111-111111111111",
+      timeoutMs: 1000,
+      sleep: async () => undefined,
+    })
+    expect(outcome).toMatchObject({ ok: false, message: "host returned an invalid operation" })
   })
 })

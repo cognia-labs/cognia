@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { apiCommand, API_HELP, type ApiCommandDeps } from "./api-command"
 import { parseArgv } from "./args"
-import { API_COMMANDS } from "../api/generated/command-index"
+import { API_COMMANDS, API_CONTRACT_VERSION } from "../api/generated/command-index"
 import { EXIT_OK, EXIT_FAILURE, EXIT_USAGE } from "./errors"
 import type { OutputSink } from "./output"
 import type { CommandOutcome, HostTransport, RequestOptions } from "../api/transport"
@@ -330,10 +330,44 @@ describe("api call", () => {
     expect(d.out.stderr.join(" ")).toContain("--wait")
   })
 
+  it("--strict-output checks a pending Operation as an Operation, not as the result", async () => {
+    const pending = transport("internal", [
+      {
+        ok: true,
+        accepted: true,
+        operationId: "op_9",
+        result: {
+          id: "op_9",
+          done: false,
+          status: "running",
+          metadata: { createdAt: 1, updatedAt: 1 },
+        },
+      },
+    ])
+    const d = deps(pending)
+    expect(
+      await run(
+        ["api", "call", "adapter_update_policy", "--id", "b", "--strict-output", "--json"],
+        d
+      )
+    ).toBe(EXIT_OK)
+    const bogus = deps(
+      transport("internal", [
+        { ok: true, accepted: true, operationId: "op_9", result: { nope: 1 } },
+      ])
+    )
+    expect(
+      await run(
+        ["api", "call", "adapter_update_policy", "--id", "b", "--strict-output", "--json"],
+        bogus
+      )
+    ).not.toBe(EXIT_OK)
+  })
+
   it("follows an accepted call under --wait", async () => {
     const host = transport("internal", [
       { ok: true, accepted: true, result: {}, operationId: "op_8" },
-      { ok: true, result: { status: "completed", result: { done: true } } },
+      { ok: true, result: { id: "op_8", done: true, status: "succeeded", result: { done: true } } },
     ])
     const d = deps(host, { sleep: async () => undefined })
     expect(
@@ -575,13 +609,23 @@ describe("complete API workflows", () => {
   })
 })
 
+describe("host selection flags", () => {
+  it("refuses --host given without a value instead of using the default host", async () => {
+    const host = transport("internal", [{ ok: true, result: {} }])
+    const d = deps(host)
+    expect(await run(["api", "call", "session_list", "--host"], d)).toBe(EXIT_USAGE)
+    expect(d.out.stderr.join(" ")).toContain("--host needs a value")
+    expect(host.calls).toHaveLength(0)
+  })
+})
+
 describe("live authenticated discovery", () => {
   it("calls an admitted newer command using the Host schema", async () => {
     const host = transport("internal", [
       {
         ok: true,
         result: {
-          contractVersion: 3,
+          contractVersion: API_CONTRACT_VERSION,
           commands: [
             {
               name: "new_command",

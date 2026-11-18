@@ -75,10 +75,16 @@ cognia-agent plugin list --help   # describes that command's own fields
 
 The Host admits exactly two authority modes, and the CLI speaks both.
 
-| Wire       | Route                        | Credential             | Reach                                | Capability check   | Approval check               |
-| ---------- | ---------------------------- | ---------------------- | ------------------------------------ | ------------------ | ---------------------------- |
-| `internal` | `POST /internal/_rpc/{name}` | loopback service token | **656** commands                     | bypassed by design | bypassed by design           |
-| `http`     | `POST /api/_rpc/{name}`      | DPoP device session    | **527** (`execution` / `host-admin`) | per-device grant   | admin lease or signed policy |
+| Wire       | Route                        | Credential             | Reach                                                      | Capability check   | Approval check               |
+| ---------- | ---------------------------- | ---------------------- | ---------------------------------------------------------- | ------------------ | ---------------------------- |
+| `internal` | `POST /internal/_rpc/{name}` | loopback service token | every Headless command                                     | bypassed by design | bypassed by design           |
+| `http`     | `POST /api/_rpc/{name}`      | DPoP device session    | the `execution` / `host-admin` subset paired devices reach | per-device grant   | admin lease or signed policy |
+
+`pnpm cli:api:check` prints how many commands the generated index carries on
+each wire (991 and 809 at contract version 4). A paired host's own catalog
+(`api list --live`) is the authority for what it admits: it narrows that list
+by the device's grants and its deployment mode, and the payload, approval and
+partition checks at dispatch can still refuse a listed command.
 
 A loopback service principal is the policy authority for the Brain plane, which
 is why the internal wire carries everything unchecked. On the device wire the

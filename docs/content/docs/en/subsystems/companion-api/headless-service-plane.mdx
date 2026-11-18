@@ -225,7 +225,7 @@ frames are generated into `docs/api/headless-service-api.asyncapi.yaml`. They ar
 separate from the paired-device specification so a service-only command can never be mistaken for a
 public mobile endpoint.
 
-The current catalog contains **661** Headless commands (the generated `docs/api/headless-service-api.openapi.yaml` carries one `/internal/_rpc/{name}` operation per command). The server compiles the embedded Draft
+The catalog contains every Headless command in the contract (the generated `docs/api/headless-service-api.openapi.yaml` carries one `/internal/_rpc/{name}` operation per command; `pnpm companion-api:check` prints the current count, 991 at contract version 4). The server compiles the embedded Draft
 2020-12 input and output schemas at startup, validates input before dispatch, and validates output
 before recording a successful receipt. A request violation returns `422 contract_input_violation`;
 an implementation/schema mismatch returns `500 contract_output_violation`. Violation details contain
@@ -233,8 +233,9 @@ instance and schema paths, never the rejected value. `COGNIA_HEADLESS_CONTRACT_E
 emergency rollback switch, not a compatibility mode.
 
 Mutating commands return `202` when their durable operation is still active. `cognia host call`
-polls the operation route until the receipt is terminal; it only replays the identical `POST` against
-an older server that returns `404` for the operation route. On process restart, interrupted
+polls the operation route until the receipt is terminal and never sends the `POST` again;
+`cognia host call --no-wait` prints the operation id, and `cognia host operation <id> [--wait]`
+reads it later. On process restart, interrupted
 `queued`, `running`, or recovery states become terminal `operation_interrupted` failures instead of
 remaining permanently pending.
 
@@ -262,7 +263,7 @@ cognia host skills list
 cognia host skills list --kind workflow
 cognia host skills install --scope project
 cognia host skills read cognia-host-development
-cognia host commands --query session
+cognia host commands --search session
 cognia host commands --resource git --operation read
 cognia host schema session_list
 cognia host call session_list --data '{"limit":20,"offset":0}'

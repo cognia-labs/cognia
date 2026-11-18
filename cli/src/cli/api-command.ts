@@ -16,7 +16,13 @@ import { StringDecoder } from "node:string_decoder"
 
 import os from "node:os"
 
-import { parseArgv, stringFlag, type ParsedArgs } from "./args"
+import {
+  flagsMissingValues,
+  HOST_SELECTION_FLAGS,
+  parseArgv,
+  stringFlag,
+  type ParsedArgs,
+} from "./args"
 import { EXIT_OK, EXIT_USAGE, emitFailure, usageFailure, type CliFailure } from "./errors"
 import { emitResult, parseDuration, resolveOutputOptions, type OutputOptions } from "./format"
 import { realOutput, type OutputSink } from "./output"
@@ -369,7 +375,13 @@ async function runCall(
         )
       }
       if (reparsed.flags["strict-output"] === true) {
-        const invalid = validateContract(entry, result.outcome.result, "output")
+        // An accepted call that was not waited on answers with the running
+        // Operation, not the command's result: its result schema does not
+        // apply until the operation settles (`--wait`).
+        const pending = result.outcome.accepted === true && !result.waited
+        const invalid = pending
+          ? operationShapeRefusal(entry.name, result.outcome.result)
+          : validateContract(entry, result.outcome.result, "output")
         if (invalid)
           return emitFailure(out, {
             error: invalid.error,
@@ -384,6 +396,27 @@ async function runCall(
     return await runOpenedCommand(opened.transport)
   } finally {
     opened.transport.close?.()
+  }
+}
+
+/** A pending ADR-0175 Operation names itself and is not done yet. */
+function operationShapeRefusal(
+  name: string,
+  value: unknown
+): { error: string; details: string[]; fix: string[] } | undefined {
+  const operation = value as { id?: unknown; done?: unknown } | null
+  if (
+    operation &&
+    typeof operation === "object" &&
+    typeof operation.id === "string" &&
+    operation.id.length > 0 &&
+    operation.done === false
+  )
+    return undefined
+  return {
+    error: `${name} was accepted but its answer is not a running Operation`,
+    details: ["expected an object with a string id and done: false"],
+    fix: [`cognia-agent api call ${name} --wait --strict-output`],
   }
 }
 
@@ -781,6 +814,12 @@ export async function apiCommand(args: ParsedArgs, deps: ApiCommandDeps = {}): P
     : base
   const output = resolveOutputOptions(args, deps.env ?? process.env)
   if ("error" in output) return usageFailure(out, output.error, [output.fix])
+  const missing = flagsMissingValues(args, HOST_SELECTION_FLAGS)
+  if (missing.length > 0)
+    return usageFailure(out, `${missing.map((name) => `--${name}`).join(", ")} needs a value`, [
+      "cognia-agent host list",
+      "cognia-agent api call <command> --host <name>",
+    ])
   const total = stringFlag(args, "total-timeout")
   const budget = total ? parseDuration(total) : output.timeoutMs
   if (budget === undefined)

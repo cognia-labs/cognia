@@ -127,6 +127,45 @@ export interface InvokeInput {
 
 export const WAIT_POLL_INTERVAL_MS = 500
 
+/** How `--all` follows one command's pages. */
+export interface PaginationPlan {
+  /** The request field the continuation goes back in. */
+  request: "pageToken" | "cursor"
+  /** The result field carrying the next continuation. */
+  continuation: "nextPageToken" | "nextCursor"
+  /** The array each page adds to. */
+  list: string
+}
+
+function schemaProperties(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  const properties = schema?.properties
+  return properties && typeof properties === "object" ? (properties as Record<string, unknown>) : {}
+}
+
+/**
+ * The page convention a command's own schemas declare, or null when it has
+ * none `--all` can follow: `pageToken` → `nextPageToken` (the Page shape) or
+ * `cursor` → `nextCursor` (with `hasMore`), the two the Rust wrapper follows
+ * too. Decided from the contract before anything is sent, so a command that
+ * cannot be paged is refused instead of run once and then refused.
+ */
+export function paginationPlan(entry: ApiCommandEntry): PaginationPlan | null {
+  const input = schemaProperties(entry.inputSchema)
+  const output = schemaProperties(entry.outputSchema)
+  const convention =
+    "pageToken" in input && "nextPageToken" in output
+      ? ({ request: "pageToken", continuation: "nextPageToken" } as const)
+      : "cursor" in input && "nextCursor" in output
+        ? ({ request: "cursor", continuation: "nextCursor" } as const)
+        : null
+  if (!convention) return null
+  const arrays = Object.entries(output)
+    .filter(([, schema]) => (schema as { type?: unknown } | undefined)?.type === "array")
+    .map(([name]) => name)
+  const list = arrays.includes("items") ? "items" : arrays.length === 1 ? arrays[0] : undefined
+  return list ? { ...convention, list } : null
+}
+
 export interface InvokeResult {
   outcome: CommandOutcome
   /** Present when the call was accepted rather than completed. */
@@ -170,6 +209,18 @@ export async function invokeCommand(input: InvokeInput): Promise<InvokeResult> {
         message: "--max-pages must be between 1 and 10000",
       },
     }
+  const plan = input.all ? paginationPlan(input.entry) : null
+  if (input.all && !plan)
+    return {
+      outcome: {
+        ok: false,
+        cause: "invalid-request",
+        code: "pagination_unsupported",
+        message:
+          `${input.entry.name} declares no page token --all can follow ` +
+          "(pageToken→nextPageToken or cursor→nextCursor); drop --all or page through it by hand",
+      },
+    }
   const execute = (body: Record<string, unknown>) =>
     input.transport.execute(input.entry.name, body, {
       ...options,
@@ -201,28 +252,47 @@ export async function invokeCommand(input: InvokeInput): Promise<InvokeResult> {
       waited = true
     }
   }
-  if (input.all && outcome.ok && !outcome.accepted) {
-    const result = outcome.result
-    if (
-      !result ||
-      typeof result !== "object" ||
-      !Array.isArray((result as { items?: unknown }).items)
-    )
+  if (plan && outcome.ok && !outcome.accepted) {
+    const { request, continuation, list } = plan
+    const pageOf = (
+      result: unknown
+    ): (Record<string, unknown> & Record<string, unknown[]>) | null =>
+      result &&
+      typeof result === "object" &&
+      Array.isArray((result as Record<string, unknown>)[list])
+        ? (result as Record<string, unknown> & Record<string, unknown[]>)
+        : null
+    const first = pageOf(outcome.result)
+    if (!first)
       return {
         outcome: {
           ok: false,
           cause: "failed",
-          message: "--all requires a Page with items and nextPageToken",
+          message: `--all expected a page with ${list} and ${continuation}`,
         },
       }
-    const page = result as Record<string, unknown> & { items: unknown[] }
-    const items = [...page.items]
+    const items = [...first[list]!]
     const seen = new Set<string>(
-      typeof input.body.pageToken === "string" ? [input.body.pageToken] : []
+      typeof input.body[request] === "string" ? [input.body[request] as string] : []
     )
-    let token = page.nextPageToken
+    let page: Record<string, unknown> = first
     let count = 1
-    while (typeof token === "string" && token.length > 0) {
+    for (;;) {
+      const token = page[continuation]
+      if (typeof token !== "string" || token.length === 0) {
+        // A page that says more follow but names no way to get them would
+        // otherwise end the walk early and look complete.
+        if (page.hasMore === true)
+          return {
+            outcome: {
+              ok: false,
+              cause: "failed",
+              code: "pagination_truncated",
+              message: `host reported more pages but returned no ${continuation}`,
+            },
+          }
+        break
+      }
       if (input.signal?.aborted || now() >= deadline)
         return {
           outcome: { ok: false, cause: "timeout", message: "pagination exceeded its total budget" },
@@ -246,14 +316,10 @@ export async function invokeCommand(input: InvokeInput): Promise<InvokeResult> {
           },
         }
       seen.add(token)
-      const next = await execute({ ...input.body, pageToken: token })
+      const next = await execute({ ...input.body, [request]: token })
       if (!next.ok) return { outcome: next }
-      if (
-        next.accepted ||
-        !next.result ||
-        typeof next.result !== "object" ||
-        !Array.isArray((next.result as { items?: unknown }).items)
-      )
+      const nextPage = next.accepted ? null : pageOf(next.result)
+      if (!nextPage)
         return {
           outcome: {
             ok: false,
@@ -261,13 +327,15 @@ export async function invokeCommand(input: InvokeInput): Promise<InvokeResult> {
             message: "host returned an invalid pagination page",
           },
         }
-      const nextPage = next.result as typeof page
-      items.push(...nextPage.items)
-      token = nextPage.nextPageToken
+      items.push(...nextPage[list]!)
+      page = nextPage
       count++
     }
-    const { nextPageToken: _continuation, ...metadata } = page
-    outcome = { ...outcome, result: { ...metadata, items } }
+    const { [continuation]: _continuation, ...metadata } = first
+    outcome = {
+      ...outcome,
+      result: { ...metadata, ...("hasMore" in first ? { hasMore: false } : {}), [list]: items },
+    }
   }
   return { outcome, ...(operationId ? { operationId } : {}), ...(waited ? { waited } : {}) }
 }
@@ -304,20 +372,16 @@ export async function pollOperation(input: PollInput): Promise<CommandOutcome> {
     })
     if (!outcome.ok) return outcome
     // The route answers the Operation document (ADR-0175 B3): branch on
-    // `done`, then on `error`. Older hosts wrote a receipt with a status word.
-    if (!outcome.result || typeof outcome.result !== "object")
+    // `done`, then on `error`.
+    if (
+      !outcome.result ||
+      typeof outcome.result !== "object" ||
+      typeof (outcome.result as { done?: unknown }).done !== "boolean"
+    )
       return { ok: false, cause: "failed", message: "host returned an invalid operation" }
-    const operation = outcome.result as Record<string, unknown>
+    const operation = outcome.result as Record<string, unknown> & { done: boolean }
     const status = typeof operation.status === "string" ? operation.status : undefined
-    const done =
-      typeof operation.done === "boolean"
-        ? operation.done
-        : status === "completed" ||
-          status === "succeeded" ||
-          status === "failed" ||
-          status === "error" ||
-          status === "cancelled"
-    if (!done) continue
+    if (!operation.done) continue
     const error = operation.error
     if (error !== undefined && error !== null) {
       const detail =

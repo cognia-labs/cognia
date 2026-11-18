@@ -176,6 +176,20 @@ export function buildFlags(schema) {
   return { bodyKind: "fields", flags }
 }
 
+/**
+ * The result schema a plane's calls are checked against. The device spec
+ * answers every `/api/_rpc/{name}` with an untyped `RpcResult`, but the Host
+ * serves one result contract on both planes: its authenticated catalog hands
+ * a device the service catalog's `outputSchema` for each command
+ * (`discovery_schemas` in crates/cognia-companion/src/catalog.rs). Offline
+ * `--strict-output` on the device wire must check the same thing.
+ */
+export function planeOutputSchema(onHeadless, onDevice) {
+  const service = onHeadless?.outputSchema
+  if (service && Object.keys(service).length > 0) return service
+  return onDevice?.outputSchema ?? {}
+}
+
 function build() {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(root, "protocol/companion-commands.json"), "utf8")
@@ -214,7 +228,7 @@ function build() {
       planes: Object.fromEntries([["internal", onHeadless], ["http", onDevice]].filter(([, value]) => value).map(([wire, value]) => [wire, {
         ...buildFlags(value.schema),
         inputSchema: value.schema,
-        outputSchema: value.outputSchema,
+        outputSchema: planeOutputSchema(onHeadless, onDevice),
         ...(requireOneOfGroups(value.schema) ? { requireOneOf: requireOneOfGroups(value.schema) } : {}),
       }])),
       ...(requireOneOfGroups(source.schema) ? { requireOneOf: requireOneOfGroups(source.schema) } : {}),

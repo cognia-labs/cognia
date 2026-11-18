@@ -174,9 +174,9 @@ pnpm --silent dev:headless browser-enroll --skip-build --browser-listener-port 2
 
 生成的 HTTP 契约位于 `docs/api/headless-service-api.openapi.yaml`；事件流与 bridge frame 位于 `docs/api/headless-service-api.asyncapi.yaml`。它们与配对设备 spec 刻意分离，避免 service-only 命令被误认为公开移动端接口。
 
-当前 catalog 包含 **661** 个 Headless 命令（生成的 `docs/api/headless-service-api.openapi.yaml` 每条命令一个 `/internal/_rpc/{name}` 操作）。服务启动时会编译内嵌的 Draft 2020-12 输入与输出 schema，在 dispatch 前校验输入，并在写入成功 receipt 前校验输出。请求不符合契约时返回 `422 contract_input_violation`；实现输出与 schema 不一致时返回 `500 contract_output_violation`。违规详情只包含 instance path 与 schema path，不包含被拒绝的值。`COGNIA_HEADLESS_CONTRACT_ENFORCEMENT=off` 只用于紧急回滚，不是兼容模式。
+catalog 包含契约里的每一条 Headless 命令（生成的 `docs/api/headless-service-api.openapi.yaml` 每条命令一个 `/internal/_rpc/{name}` 操作；`pnpm companion-api:check` 会打印当前数量，契约版本 4 时为 991 条）。服务启动时会编译内嵌的 Draft 2020-12 输入与输出 schema，在 dispatch 前校验输入，并在写入成功 receipt 前校验输出。请求不符合契约时返回 `422 contract_input_violation`；实现输出与 schema 不一致时返回 `500 contract_output_violation`。违规详情只包含 instance path 与 schema path，不包含被拒绝的值。`COGNIA_HEADLESS_CONTRACT_ENFORCEMENT=off` 只用于紧急回滚，不是兼容模式。
 
-变更命令仍在执行时返回 `202`。`cognia host call` 会轮询 operation 路由直到 receipt 进入终态；仅当旧服务对 operation 路由返回 `404` 时，才兼容性地重放完全相同的 `POST`。进程重启后，原先处于 `queued`、`running` 或恢复中状态的操作会以 `operation_interrupted` 终止失败，不会永久停留在 pending。
+变更命令仍在执行时返回 `202`。`cognia host call` 会轮询 operation 路由直到 receipt 进入终态，不会再次发送该 `POST`；`cognia host call --no-wait` 会打印 operation id，之后可用 `cognia host operation <id> [--wait]` 查询。进程重启后，原先处于 `queued`、`running` 或恢复中状态的操作会以 `operation_interrupted` 终止失败，不会永久停留在 pending。
 
 ## Headless MCP OAuth
 
@@ -193,7 +193,7 @@ cognia host skills list
 cognia host skills list --kind workflow
 cognia host skills install --scope project
 cognia host skills read cognia-host-development
-cognia host commands --query session
+cognia host commands --search session
 cognia host commands --resource git --operation read
 cognia host schema session_list
 cognia host call session_list --data '{"limit":20,"offset":0}'
