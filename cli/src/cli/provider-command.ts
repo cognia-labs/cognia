@@ -11,9 +11,12 @@
  * provider probe        --live --yes [--provider id] [--model m]
  * ```
  *
- * Answers come from the first plane that is up (desktop bridge, then
- * `cognia-server`, then this process), and a verb an older host does not
- * carry degrades to the local path for that verb only. Reads that bill the
+ * Each verb says who answered it. `models`, `balance`, `limits` and `usage`
+ * read this machine's configuration, credentials and database, and never
+ * contact a plane. `capabilities` computes its cells here too, naming the
+ * attached desktop only as the source of the contract it lists. `probe` runs
+ * inside the gateway of the first plane that is up (desktop bridge, then
+ * `cognia-server`) and probes from here when none carries it. Reads that bill the
  * account (`balance`, `limits`, `probe`) require an explicit `--live`, and a
  * probe additionally `--yes` because it spends tokens on every provider.
  *
@@ -29,12 +32,19 @@ import { loadConfig as defaultLoadConfig, resolveHome } from "../config/load"
 import type { ResolvedConfig } from "../config/schema"
 import { formatCapabilityCell, readProviderCapabilities } from "../provider/capabilities"
 import { readProviderLimits, formatMeterLine, type LimitsVerb } from "../provider/limits"
-import { createCliProviderExecutor, type CliProviderExecutor } from "../provider/local"
+import {
+  createCliProviderExecutor,
+  isConfiguredLocally,
+  type CliProviderExecutor,
+} from "../provider/local"
 import { formatModelLine, listProviderModels } from "../provider/models"
 import { formatGatewayProbeRow, formatLocalProbeRow, probeProviders } from "../provider/probe"
 import {
+  LOCAL_ANSWER,
   PROVIDER_TRANSPORT_PREFERENCES,
   resolveProviderTransport,
+  localProviderTransport,
+  type ProviderAnswerSource,
   type ProviderTransportPreference,
   type ProviderTransportResolution,
 } from "../provider/transport"
@@ -80,15 +90,19 @@ Flags:
   --source <id>         usage: restrict all-tools to one external agent
   --model <id>          usage: substring match on the model id
                         probe: the model to route (gateway probe needs it)
-  --transport <t>       auto (default) | bridge | rpc | local
+  --transport <t>       capabilities, probe: auto (default) | bridge | rpc | local
   --live                required for balance, limits and probe: these read the
                         account upstream and may be billed
   --yes                 required for probe: it spends tokens on every provider
   --json                emit one machine-readable record instead of the summary
 
-Answers come from the running Cognia desktop (CLI bridge) when there is one,
-else a configured cognia-server, else this process. A verb the attached host
-does not carry falls back to the local path for that verb only.
+Every report starts with who answered it. models, balance, limits and usage
+answer from this machine's configuration, credentials and database, so
+--provider must be configured here. capabilities computes its cells here too,
+and lists the running desktop's contract when one is attached. probe runs in
+the gateway of the running Cognia desktop (CLI bridge) or a configured
+cognia-server, checking --provider against that gateway's candidates, and
+probes from this machine when neither carries it.
 `
 
 export interface ProviderCommandDeps {
@@ -118,6 +132,9 @@ type LimitsLoader = NonNullable<Parameters<typeof readProviderLimits>[0]["loadLi
 
 const BILLED_VERBS = new Set<ProviderVerb>(["balance", "limits", "probe"])
 
+/** The verbs that read anything from a plane; every other verb answers locally. */
+const PLANE_VERBS = new Set<ProviderVerb>(["capabilities", "probe"])
+
 function isVerb(value: string | undefined): value is ProviderVerb {
   return (PROVIDER_VERBS as readonly string[]).includes(value ?? "")
 }
@@ -129,9 +146,12 @@ function transportPreference(args: ParsedArgs): ProviderTransportPreference | nu
     : null
 }
 
-function transportHeader(resolution: ProviderTransportResolution): string {
-  const lines = [`Transport: ${resolution.transport.label}`]
-  for (const skipped of resolution.skipped)
+function answeredHeader(
+  answeredBy: ProviderAnswerSource,
+  resolution: ProviderTransportResolution | null
+): string {
+  const lines = [`Answered by: ${answeredBy.label}`]
+  for (const skipped of resolution?.skipped ?? [])
     lines.push(`  skipped ${skipped.kind}: ${skipped.message}`)
   return lines.join("\n")
 }
@@ -191,17 +211,21 @@ export async function providerCommand(
   }
 
   const providerId = stringFlag(args, "provider")
-  if (providerId && !config.providers?.[providerId] && providerId !== config.provider) {
+  // Every verb but probe answers from this machine's configuration, so the id
+  // is checked against it; probe checks it against whoever answers.
+  if (providerId && verb !== "probe" && !isConfiguredLocally(config, providerId)) {
     out.error(
-      `Provider "${providerId}" is not configured. Add it under providers in ~/.cognia/config.json.\n`
+      `Provider "${providerId}" is not configured on this machine, and provider ${verb} ` +
+        `answers from this machine's configuration. Add it under providers in ~/.cognia/config.json.\n`
     )
     return 2
   }
 
-  const resolution = await (
-    deps.resolveTransport ?? ((p) => resolveProviderTransport({ prefer: p }))
-  )(prefer)
-  const transport = resolution.transport
+  // Only the verbs that read a plane look for one: the others never contact it.
+  const resolution = PLANE_VERBS.has(verb)
+    ? await (deps.resolveTransport ?? ((p) => resolveProviderTransport({ prefer: p })))(prefer)
+    : null
+  const transport = resolution?.transport ?? localProviderTransport()
   const executor = (deps.createExecutor ?? ((c) => createCliProviderExecutor(c)))(config)
   const now = deps.now ?? Date.now
 
@@ -215,12 +239,12 @@ export async function providerCommand(
         ...(operationId ? { operationId } : {}),
       })
       if (json) {
-        out.json({ verb, skipped: resolution.skipped, ...report })
+        out.json({ verb, skipped: resolution?.skipped ?? [], ...report })
         return report.providers.some((p) => p.failure) ? 1 : 0
       }
-      out.write(`${transportHeader(resolution)}\n`)
+      out.write(`${answeredHeader(report.answeredBy, resolution)}\n`)
       out.write(
-        `Contract v${report.schemaVersion}: ${report.operationCount} operations` +
+        `Contract v${report.schemaVersion} (${report.contractFrom}): ${report.operationCount} operations` +
           (report.adminCommands.length
             ? `, desktop admin commands: ${report.adminCommands.join(", ")}`
             : "") +
@@ -248,10 +272,10 @@ export async function providerCommand(
         refresh: boolFlag(args, "refresh"),
       })
       if (json) {
-        out.json({ verb, transport: transport.kind, ...report })
+        out.json({ verb, answeredBy: LOCAL_ANSWER, ...report })
         return report.failure ? 1 : 0
       }
-      out.write(`${transportHeader(resolution)}\n`)
+      out.write(`${answeredHeader(LOCAL_ANSWER, null)}\n`)
       if (report.failure) {
         out.error(
           `${report.providerId}: ${report.failure.availability}: ${report.failure.failure.message}\n`
@@ -276,10 +300,10 @@ export async function providerCommand(
         ...(deps.loadLimits ? { loadLimits: deps.loadLimits } : {}),
       })
       if (json) {
-        out.json({ transport: transport.kind, ...report })
+        out.json({ answeredBy: LOCAL_ANSWER, ...report })
         return report.snapshots.some((s) => s.error) ? 1 : 0
       }
-      out.write(`${transportHeader(resolution)}\n`)
+      out.write(`${answeredHeader(LOCAL_ANSWER, null)}\n`)
       let failed = false
       for (const snapshot of report.snapshots) {
         out.write(`\n${snapshot.accountLabel ?? snapshot.accountId ?? snapshot.provider}\n`)
@@ -351,10 +375,11 @@ export async function providerCommand(
       const sources: SourceDiagnostic[] = deps.usageSources ? await deps.usageSources() : []
 
       if (json) {
-        out.json({ verb, transport: transport.kind, scope, ...filtered, sources })
+        out.json({ verb, answeredBy: LOCAL_ANSWER, scope, ...filtered, sources })
         return 0
       }
       const report2 = filtered
+      out.write(`${answeredHeader(LOCAL_ANSWER, null)}\n`)
       out.write(
         `Usage ${new Date(report2.from).toISOString().slice(0, 10)} to ${new Date(report2.to).toISOString().slice(0, 10)} (${scope})\n`
       )
@@ -398,16 +423,28 @@ export async function providerCommand(
         report.via === "gateway"
           ? report.rows.some((row) => !row.ok)
           : report.rows.some((row) => row.failure || !row.result?.reachable)
+      if (report.via === "local" && report.notConfigured) {
+        out.error(
+          `Provider "${report.notConfigured}" is not configured on this machine, which answered the probe` +
+            (report.degraded ? ` (${report.degraded})` : "") +
+            `. Add it under providers in ~/.cognia/config.json.\n`
+        )
+        return 2
+      }
       if (json) {
-        out.json({ verb, skipped: resolution.skipped, ...report })
+        out.json({ verb, skipped: resolution?.skipped ?? [], ...report })
         return anyFailure ? 1 : 0
       }
-      out.write(`${transportHeader(resolution)}\n`)
+      out.write(`${answeredHeader(report.answeredBy, resolution)}\n`)
       if (report.via === "gateway") {
         out.write(`Gateway probe for ${report.model} (${report.rows.length} candidates)\n`)
         for (const row of report.rows) out.write(`  ${formatGatewayProbeRow(row)}\n`)
         if (report.rows.length === 0)
-          out.write(`  (no candidate: the gateway has no route for this model)\n`)
+          out.write(
+            report.providerFilter
+              ? `  (no candidate: the gateway has no route for this model through ${report.providerFilter})\n`
+              : `  (no candidate: the gateway has no route for this model)\n`
+          )
       } else {
         if (report.degraded) out.write(`Note: ${report.degraded}\n`)
         for (const row of report.rows) out.write(`  ${formatLocalProbeRow(row)}\n`)

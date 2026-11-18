@@ -15,7 +15,11 @@
 import type { ResolvedConfig } from "../../config/schema"
 import { readProviderCapabilities } from "../../provider/capabilities"
 import { readProviderLimits } from "../../provider/limits"
-import { createCliProviderExecutor, type CliProviderExecutor } from "../../provider/local"
+import {
+  createCliProviderExecutor,
+  isConfiguredLocally,
+  type CliProviderExecutor,
+} from "../../provider/local"
 import { listProviderModels } from "../../provider/models"
 import { probeProviders } from "../../provider/probe"
 import {
@@ -85,10 +89,10 @@ function isAction(value: string): value is ProviderAction {
 function providerArg(deps: ProviderControllerDeps): string | null | undefined {
   const id = deps.arg?.trim()
   if (!id) return undefined
-  if (deps.config.providers?.[id] || id === deps.config.provider) return id
+  if (isConfiguredLocally(deps.config, id)) return id
   deps.dispatch({
     type: "NOTICE",
-    message: `Provider "${id}" is not configured. Configured: ${Object.keys(deps.config.providers ?? {}).join(", ") || "none"}.`,
+    message: `Provider "${id}" is not configured on this machine. Configured: ${Object.keys(deps.config.providers ?? {}).join(", ") || "none"}.`,
     severity: "error",
   })
   return null
@@ -296,6 +300,7 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
           readProviderCapabilities({ config, executor, transport, providerId }),
           listProviderModels({ config, executor, providerId, signal: deps.signal }),
         ])
+        // Both halves are computed here, whichever plane is attached.
         if (!isCurrent()) return
         dispatch({
           type: "OVERLAY_OPEN",
@@ -304,7 +309,7 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
             title: `Provider · ${providerId}`,
             body: formatInspectDocument({
               providerId,
-              transportLabel: transport.label,
+              answeredBy: capabilities.answeredBy.label,
               capabilities: capabilities.providers[0]!,
               models,
             }),

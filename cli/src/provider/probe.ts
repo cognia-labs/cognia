@@ -7,13 +7,21 @@
  * and header rules a live chat request walks. Otherwise every configured
  * provider is probed locally through the shared `health.probe` operation.
  * Either way a probe spends tokens, so the command requires `--live --yes`.
+ *
+ * `--provider` is checked against whoever answers: the gateway's candidates
+ * when the gateway probes, this machine's configuration when it does.
  */
 
 import type { ProviderOperationFailure, ProviderProbeResult } from "@cognia/provider-types"
 
 import type { ResolvedConfig } from "../config/schema"
-import { configuredProviderIds, type CliProviderExecutor } from "./local"
-import type { ProviderTransport } from "./transport"
+import { configuredProviderIds, isConfiguredLocally, type CliProviderExecutor } from "./local"
+import {
+  LOCAL_ANSWER,
+  planeAnswer,
+  type ProviderAnswerSource,
+  type ProviderTransport,
+} from "./transport"
 
 export const GATEWAY_PROBE_COMMAND = "gateway_probe_upstream"
 
@@ -35,12 +43,21 @@ export interface LocalProbeRow {
 }
 
 export type ProviderProbeReport =
-  | { via: "gateway"; transportLabel: string; model: string; rows: GatewayProbeRow[] }
+  | {
+      via: "gateway"
+      answeredBy: ProviderAnswerSource
+      model: string
+      /** `--provider`, which narrowed the gateway's candidates. */
+      providerFilter?: string
+      rows: GatewayProbeRow[]
+    }
   | {
       via: "local"
-      transportLabel: string
+      answeredBy: ProviderAnswerSource
       /** Why the gateway leg was not used, when a plane was attached. */
       degraded?: string
+      /** `--provider` named a provider this machine has not configured. */
+      notConfigured?: string
       rows: LocalProbeRow[]
     }
 
@@ -69,6 +86,15 @@ function toGatewayRow(value: unknown): GatewayProbeRow | null {
 }
 
 async function probeLocally(deps: ProbeDeps, degraded?: string): Promise<ProviderProbeReport> {
+  if (deps.providerId && !isConfiguredLocally(deps.config, deps.providerId)) {
+    return {
+      via: "local",
+      answeredBy: LOCAL_ANSWER,
+      ...(degraded ? { degraded } : {}),
+      notConfigured: deps.providerId,
+      rows: [],
+    }
+  }
   const ids = deps.providerId ? [deps.providerId] : configuredProviderIds(deps.config)
   const rows: LocalProbeRow[] = []
   for (const providerId of ids) {
@@ -90,7 +116,7 @@ async function probeLocally(deps: ProbeDeps, degraded?: string): Promise<Provide
   }
   return {
     via: "local",
-    transportLabel: deps.transport.label,
+    answeredBy: LOCAL_ANSWER,
     ...(degraded ? { degraded } : {}),
     rows,
   }
@@ -122,7 +148,14 @@ export async function probeProviders(deps: ProbeDeps): Promise<ProviderProbeRepo
   const rows = (Array.isArray(outcome.result) ? outcome.result : [])
     .map(toGatewayRow)
     .filter((row): row is GatewayProbeRow => row !== null)
-  return { via: "gateway", transportLabel: deps.transport.label, model: deps.model, rows }
+    .filter((row) => !deps.providerId || row.providerId === deps.providerId)
+  return {
+    via: "gateway",
+    answeredBy: planeAnswer(deps.transport),
+    model: deps.model,
+    ...(deps.providerId ? { providerFilter: deps.providerId } : {}),
+    rows,
+  }
 }
 
 export function formatGatewayProbeRow(row: GatewayProbeRow): string {

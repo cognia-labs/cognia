@@ -284,7 +284,7 @@ describe("runProvider", () => {
     const d = deps("capabilities")
     await runProvider(d)
     const doc = opened(d.actions, "document")[0]!.overlay as { body: string }
-    expect(doc.body).toContain("Transport: this process (local operation executor)")
+    expect(doc.body).toContain("Answered by: this machine (its own configuration and credentials)")
     expect(doc.body).toContain("## openai")
     expect(doc.body).toContain("## deepseek")
     expect(doc.body).toContain("| `batches.create` | unsupported | unavailable | no batch API |")

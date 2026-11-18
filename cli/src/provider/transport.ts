@@ -114,10 +114,33 @@ export function parseManifestProjection(
   }
 }
 
+/**
+ * Who supplied a report's data. A verb is answered by the plane only when the
+ * plane's data is in the answer; everything read from this machine's
+ * configuration, credentials or database is answered locally, whichever plane
+ * happens to be attached.
+ */
+export interface ProviderAnswerSource {
+  plane: ProviderTransportKind
+  label: string
+}
+
+export const LOCAL_ANSWER: ProviderAnswerSource = {
+  plane: "local",
+  label: "this machine (its own configuration and credentials)",
+}
+
+/** The plane as the source of an answer. */
+export function planeAnswer(transport: ProviderTransport): ProviderAnswerSource {
+  return transport.kind === "local"
+    ? LOCAL_ANSWER
+    : { plane: transport.kind, label: transport.label }
+}
+
 export function localProviderTransport(): ProviderTransport {
   return {
     kind: "local",
-    label: "this process (local operation executor)",
+    label: LOCAL_ANSWER.label,
     manifest: null,
     supportsCommand: () => false,
     execute: async (name) => ({

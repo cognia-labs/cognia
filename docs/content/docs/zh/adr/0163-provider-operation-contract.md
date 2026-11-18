@@ -59,7 +59,7 @@ dev token 与服务令牌只发给签发它们的那个平面。`cognia-agent x`
 
 ### 8. CLI 与 TUI 是同一组模块
 
-`cognia-agent provider <capabilities|models|balance|limits|usage|probe>` 与 TUI 的 `/provider …`、`/models`、`/balance` 都委托给 `cli/src/provider/*`。答案来自第一个在线的平面（bridge、然后 headless、然后本地），每个动词都有本地路径，CLI 从不需要桌面才能作答。会计费的读取必须显式 `--live`，探测另加 `--yes`，实时探测永不进 CI。
+`cognia-agent provider <capabilities|models|balance|limits|usage|probe>` 与 TUI 的 `/provider …`、`/models`、`/balance` 都委托给 `cli/src/provider/*`。每个动词都有本地路径，CLI 从不需要桌面才能作答，每份报告开头都写明由谁作答。`models`、`balance`、`limits`、`usage` 读的是本机的配置、凭据和数据库，从不连接任何平面，所以 `--provider` 按本机配置检查。`capabilities` 同样在本机计算各格子，只把已连接的桌面标为所列契约的来源。`probe` 在第一个在线平面（bridge、然后 headless）的网关里运行，`--provider` 按该网关的候选检查；两个平面都不提供时退回本机探测。会计费的读取必须显式 `--live`，探测另加 `--yes`，实时探测永不进 CI。
 
 ### 9. 插件通过一个新贡献点与三个投影点参与
 

@@ -8,7 +8,11 @@ import type { ProviderLimits } from "@/types/subscription"
 
 import type { ResolvedConfig } from "../config/schema"
 import type { CliProviderExecutor } from "../provider/local"
-import { localProviderTransport, type ProviderTransportResolution } from "../provider/transport"
+import {
+  localProviderTransport,
+  type ProviderTransport,
+  type ProviderTransportResolution,
+} from "../provider/transport"
 import { parseArgv } from "./args"
 import { PROVIDER_HELP, providerCommand } from "./provider-command"
 
@@ -112,6 +116,18 @@ const localResolution: ProviderTransportResolution = {
   ],
 }
 
+function bridgePlane(
+  execute: ProviderTransport["execute"] = async () => ({ ok: true, result: [] })
+): ProviderTransport {
+  return {
+    kind: "bridge",
+    label: "Cognia desktop bridge (http://127.0.0.1:1)",
+    manifest: null,
+    supportsCommand: () => true,
+    execute,
+  }
+}
+
 const emptyFs = {
   exists: () => false,
   isDirectory: () => false,
@@ -196,13 +212,13 @@ describe("providerCommand", () => {
     expect(r.stderr()).toMatch(/Config error: config.json/)
   })
 
-  it("capabilities: lists every cell per provider with the transport header", async () => {
+  it("capabilities: lists every cell per provider, answered by this machine", async () => {
     const r = run(["provider", "capabilities"])
     expect(await r.code).toBe(0)
     const text = r.stdout()
-    expect(text).toContain("Transport: this process (local operation executor)")
+    expect(text).toContain("Answered by: this machine (its own configuration and credentials)")
     expect(text).toContain("skipped bridge: no desktop")
-    expect(text).toMatch(/Contract v1: 50 operations/)
+    expect(text).toMatch(/Contract v1 \(the contract bundled with this CLI\): 50 operations/)
     expect(text).toContain("\nopenai\n")
     expect(text).toContain("\ndeepseek\n")
     expect(text).toContain("batches.create           unsupported unavailable  no batch API")
@@ -302,6 +318,54 @@ describe("providerCommand", () => {
     const r = run(["provider", "usage", "--days", "0"])
     expect(await r.code).toBe(2)
     expect(r.stderr()).toMatch(/--days must be a positive number/)
+  })
+
+  it.each(["models", "usage"])(
+    "%s: answers from this machine without looking for a plane, and says so",
+    async (verb) => {
+      const resolveTransport = jest.fn(async () => localResolution)
+      const r = run(["provider", verb], { resolveTransport })
+      expect(await r.code).toBe(0)
+      expect(r.stdout()).toContain("Answered by: this machine")
+      expect(r.stdout()).not.toContain("Transport:")
+      expect(resolveTransport).not.toHaveBeenCalled()
+    }
+  )
+
+  it("models --json names this machine as the answer, not an attached plane", async () => {
+    const r = run(["provider", "models", "--json"], {
+      resolveTransport: async () => ({ transport: bridgePlane(), skipped: [] }),
+    })
+    expect(await r.code).toBe(0)
+    expect(r.records[0]).toMatchObject({ answeredBy: { plane: "local" } })
+  })
+
+  it("probe: checks --provider against the gateway that answered, not this machine", async () => {
+    const execute = jest.fn(async () => ({
+      ok: true as const,
+      result: [
+        { providerId: "groq", modelId: "llama", ok: true, latencyMs: 5 },
+        { providerId: "openai", modelId: "llama", ok: true, latencyMs: 9 },
+      ],
+    }))
+    const r = run(
+      ["provider", "probe", "--live", "--yes", "--provider", "groq", "--model", "llama"],
+      { resolveTransport: async () => ({ transport: bridgePlane(execute), skipped: [] }) }
+    )
+    expect(await r.code).toBe(0)
+    expect(execute).toHaveBeenCalledWith("gateway_probe_upstream", { model: "llama" })
+    expect(r.stdout()).toContain("Answered by: Cognia desktop bridge (http://127.0.0.1:1)")
+    expect(r.stdout()).toContain("groq")
+    expect(r.stdout()).not.toMatch(/ok\s+openai/)
+  })
+
+  it("probe: refuses a provider this machine lacks when this machine answers", async () => {
+    const r = run(["provider", "probe", "--live", "--yes", "--provider", "groq"])
+    expect(await r.code).toBe(2)
+    expect(r.stderr()).toContain(
+      'Provider "groq" is not configured on this machine, which answered the probe'
+    )
+    expect(executor.execute).not.toHaveBeenCalledWith("health.probe", "groq", {}, {})
   })
 
   it("probe --live --yes: probes locally when no plane is attached", async () => {

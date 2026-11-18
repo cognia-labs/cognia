@@ -126,9 +126,15 @@ other side.
 
 `cognia-agent provider <capabilities|models|balance|limits|usage|probe>` and
 the TUI's `/provider …`, `/models` and `/balance` delegate to
-`cli/src/provider/*`. Answers come from the first plane that is up (bridge,
-then headless, then local), and every verb has a local path so the CLI never
-needs a desktop to answer. Reads that bill the account require an explicit
+`cli/src/provider/*`. Every verb has a local path, so the CLI never needs a
+desktop to answer, and every report opens with who answered it. `models`,
+`balance`, `limits` and `usage` read this machine's configuration, credentials
+and database and never contact a plane, so `--provider` is checked against
+this machine. `capabilities` computes its cells here as well and names the
+attached desktop only as the source of the contract it lists. `probe` runs in
+the gateway of the first plane that is up (bridge, then headless) and checks
+`--provider` against that gateway's candidates, falling back to a local probe
+when neither plane carries it. Reads that bill the account require an explicit
 `--live`, a probe additionally `--yes`, and live probes never run in CI.
 
 ### 9. Plugins contribute through one new point and three projected ones

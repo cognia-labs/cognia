@@ -2,9 +2,10 @@
  * `provider capabilities`: the operation profile per configured provider.
  *
  * Cells come from the shared `capabilities.read` operation (the pure matrix in
- * `@cognia/provider-core` plus this host's surfaces). The desktop's manifest,
- * when a bridge is attached, tells the CLI which admin commands that desktop
- * exposes. The contract itself is the same JSON on both sides.
+ * `@cognia/provider-core` plus this host's surfaces), run over this machine's
+ * configuration, so the answer is always local. The desktop's manifest, when
+ * a bridge is attached, only says which contract and admin commands that
+ * desktop exposes, and the report names it as such.
  */
 
 import type {
@@ -17,7 +18,7 @@ import { PROVIDER_OPERATION_MANIFEST } from "@/lib/ai/operations"
 
 import type { ResolvedConfig } from "../config/schema"
 import { configuredProviderIds, type CliProviderExecutor } from "./local"
-import type { ProviderTransport } from "./transport"
+import { LOCAL_ANSWER, type ProviderAnswerSource, type ProviderTransport } from "./transport"
 
 export interface ProviderCapabilityEntry {
   providerId: string
@@ -25,10 +26,14 @@ export interface ProviderCapabilityEntry {
   failure?: ProviderOperationFailure
 }
 
+/** The contract bundled with this CLI, named when no desktop manifest is attached. */
+export const BUNDLED_CONTRACT_LABEL = "the contract bundled with this CLI"
+
 export interface ProviderCapabilitiesReport {
-  transport: ProviderTransport["kind"]
-  transportLabel: string
-  /** Contract version the answering plane speaks. */
+  /** The cells: this machine's executor over its own configuration. */
+  answeredBy: ProviderAnswerSource
+  /** Whose contract the counts below describe: the desktop's manifest, or the bundled one. */
+  contractFrom: string
   schemaVersion: number
   operationCount: number
   /** Companion commands the attached desktop will dispatch (bridge only). */
@@ -68,8 +73,8 @@ export async function readProviderCapabilities(
     providers.push({ providerId, profile: { ...result.output, cells } })
   }
   return {
-    transport: deps.transport.kind,
-    transportLabel: deps.transport.label,
+    answeredBy: LOCAL_ANSWER,
+    contractFrom: deps.transport.manifest ? deps.transport.label : BUNDLED_CONTRACT_LABEL,
     schemaVersion: manifest.schemaVersion,
     operationCount: manifest.operations.length,
     adminCommands: deps.transport.manifest?.adminCommands ?? [],

@@ -7,9 +7,13 @@ import type { ProviderOperationCell, ProviderOperationProfile } from "@cognia/pr
 import { PROVIDER_OPERATION_MANIFEST } from "@/lib/ai/operations"
 
 import type { ResolvedConfig } from "../config/schema"
-import { formatCapabilityCell, readProviderCapabilities } from "./capabilities"
+import {
+  BUNDLED_CONTRACT_LABEL,
+  formatCapabilityCell,
+  readProviderCapabilities,
+} from "./capabilities"
 import type { CliProviderExecutor } from "./local"
-import { localProviderTransport, type ProviderTransport } from "./transport"
+import { LOCAL_ANSWER, localProviderTransport, type ProviderTransport } from "./transport"
 
 const CONFIG: ResolvedConfig = {
   provider: "openai",
@@ -61,7 +65,8 @@ describe("readProviderCapabilities", () => {
       executor,
       transport: localProviderTransport(),
     })
-    expect(report.transport).toBe("local")
+    expect(report.answeredBy).toBe(LOCAL_ANSWER)
+    expect(report.contractFrom).toBe(BUNDLED_CONTRACT_LABEL)
     expect(report.schemaVersion).toBe(PROVIDER_OPERATION_MANIFEST.schemaVersion)
     expect(report.operationCount).toBe(PROVIDER_OPERATION_MANIFEST.operations.length)
     expect(report.adminCommands).toEqual([])
@@ -98,7 +103,9 @@ describe("readProviderCapabilities", () => {
       execute: async () => ({ ok: true, result: null }),
     }
     const report = await readProviderCapabilities({ config: CONFIG, executor, transport: bridge })
-    expect(report.transport).toBe("bridge")
+    // The cells are computed here; the desktop only supplied its contract.
+    expect(report.answeredBy).toBe(LOCAL_ANSWER)
+    expect(report.contractFrom).toBe("desktop")
     expect(report.operationCount).toBe(3)
     expect(report.adminCommands).toEqual(["provider_catalog_status"])
   })

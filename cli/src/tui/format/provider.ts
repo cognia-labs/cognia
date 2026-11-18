@@ -62,8 +62,8 @@ export function formatCapabilitiesDocument(report: ProviderCapabilitiesReport): 
   const out = [
     `# Provider capabilities`,
     "",
-    `Transport: ${report.transportLabel}`,
-    `Contract v${report.schemaVersion}: ${report.operationCount} operations` +
+    `Answered by: ${report.answeredBy.label}`,
+    `Contract v${report.schemaVersion} (${report.contractFrom}): ${report.operationCount} operations` +
       (report.adminCommands.length
         ? `, desktop admin commands: ${report.adminCommands.map((c) => `\`${c}\``).join(", ")}`
         : ""),
@@ -131,11 +131,15 @@ export function formatUsageDocument(report: ProviderUsageReport): string {
 }
 
 export function formatProbeDocument(report: ProviderProbeReport): string {
-  const out = ["# Provider probe", "", `Transport: ${report.transportLabel}`]
+  const out = ["# Provider probe", "", `Answered by: ${report.answeredBy.label}`]
   if (report.via === "gateway") {
     out.push(`Gateway probe for \`${report.model}\` (${report.rows.length} candidates)`, "")
     if (report.rows.length === 0) {
-      out.push("_(no candidate: the gateway has no route for this model)_")
+      out.push(
+        report.providerFilter
+          ? `_(no candidate: the gateway has no route for this model through ${report.providerFilter})_`
+          : "_(no candidate: the gateway has no route for this model)_"
+      )
     } else {
       out.push(
         "| | Provider | Model | Latency | Status | Error |",
@@ -151,6 +155,12 @@ export function formatProbeDocument(report: ProviderProbeReport): string {
   }
   if (report.degraded) out.push(`Note: ${report.degraded}`)
   out.push("")
+  if (report.notConfigured) {
+    out.push(
+      `\`${report.notConfigured}\` is not configured on this machine, which answered the probe.`
+    )
+    return out.join("\n")
+  }
   if (report.rows.length === 0) {
     out.push("_(no configured provider to probe)_")
     return out.join("\n")
@@ -178,13 +188,14 @@ export function formatProbeDocument(report: ProviderProbeReport): string {
 
 export interface InspectDocumentInput {
   providerId: string
-  transportLabel: string
+  /** Who answered: models and capabilities both come from this machine. */
+  answeredBy: string
   capabilities: ProviderCapabilitiesReport["providers"][number]
   models: ProviderModelsReport
 }
 
 export function formatInspectDocument(input: InspectDocumentInput): string {
-  const out = [`# ${input.providerId}`, "", `Transport: ${input.transportLabel}`, ""]
+  const out = [`# ${input.providerId}`, "", `Answered by: ${input.answeredBy}`, ""]
   out.push("## Models", "")
   if (input.models.failure) {
     out.push(`${input.models.failure.availability}: ${input.models.failure.failure.message}`)

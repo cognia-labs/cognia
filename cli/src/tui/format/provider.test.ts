@@ -67,8 +67,8 @@ describe("profile formatting", () => {
 describe("formatCapabilitiesDocument", () => {
   it("renders the header, the admin commands, and one section per provider", () => {
     const report: ProviderCapabilitiesReport = {
-      transport: "bridge",
-      transportLabel: "Cognia desktop bridge (http://127.0.0.1:1)",
+      answeredBy: { plane: "local", label: "this machine" },
+      contractFrom: "Cognia desktop bridge (http://127.0.0.1:1)",
       schemaVersion: 1,
       operationCount: 50,
       adminCommands: ["provider_catalog_status"],
@@ -87,9 +87,9 @@ describe("formatCapabilitiesDocument", () => {
       ],
     }
     const doc = formatCapabilitiesDocument(report)
-    expect(doc).toContain("Transport: Cognia desktop bridge")
+    expect(doc).toContain("Answered by: this machine")
     expect(doc).toContain(
-      "Contract v1: 50 operations, desktop admin commands: `provider_catalog_status`"
+      "Contract v1 (Cognia desktop bridge (http://127.0.0.1:1)): 50 operations, desktop admin commands: `provider_catalog_status`"
     )
     expect(doc).toContain("Filter: `models.list`")
     expect(doc).toContain("## openai\n\n2 served · 1 unsupported · 1 unknown")
@@ -171,7 +171,7 @@ describe("formatProbeDocument", () => {
   it("renders gateway candidates", () => {
     const report: ProviderProbeReport = {
       via: "gateway",
-      transportLabel: "desktop",
+      answeredBy: { plane: "bridge", label: "desktop" },
       model: "gpt-4o",
       rows: [
         { providerId: "openai", modelId: "gpt-4o", ok: true, status: 200, latencyMs: 310 },
@@ -179,6 +179,7 @@ describe("formatProbeDocument", () => {
       ],
     }
     const doc = formatProbeDocument(report)
+    expect(doc).toContain("Answered by: desktop")
     expect(doc).toContain("Gateway probe for `gpt-4o` (2 candidates)")
     expect(doc).toContain("| ok | openai | `gpt-4o` | 310ms | 200 |  |")
     expect(doc).toContain("| FAIL | azure | `gpt-4o` | 9ms |  | bad key |")
@@ -187,7 +188,7 @@ describe("formatProbeDocument", () => {
   it("renders local rows with the degradation note", () => {
     const report: ProviderProbeReport = {
       via: "local",
-      transportLabel: "rpc plane",
+      answeredBy: { plane: "local", label: "this machine" },
       degraded: "rpc plane: no such command",
       rows: [
         {
@@ -214,9 +215,22 @@ describe("formatProbeDocument", () => {
     expect(doc).toContain("Note: rpc plane: no such command")
     expect(doc).toContain("| ok | openai | 42ms | yes |  |  |")
     expect(doc).toContain("| FAIL | anthropic | | | needs-auth | no key |")
-    expect(formatProbeDocument({ via: "local", transportLabel: "x", rows: [] })).toContain(
+    const local = { plane: "local" as const, label: "this machine" }
+    expect(formatProbeDocument({ via: "local", answeredBy: local, rows: [] })).toContain(
       "_(no configured provider to probe)_"
     )
+    expect(
+      formatProbeDocument({ via: "local", answeredBy: local, notConfigured: "groq", rows: [] })
+    ).toContain("`groq` is not configured on this machine, which answered the probe.")
+    expect(
+      formatProbeDocument({
+        via: "gateway",
+        answeredBy: { plane: "rpc", label: "server" },
+        model: "gpt-4o",
+        providerFilter: "groq",
+        rows: [],
+      })
+    ).toContain("no route for this model through groq")
   })
 })
 
@@ -224,7 +238,7 @@ describe("formatInspectDocument", () => {
   it("combines the inventory and the profile", () => {
     const doc = formatInspectDocument({
       providerId: "openai",
-      transportLabel: "local",
+      answeredBy: "this machine",
       capabilities: { providerId: "openai", profile: PROFILE },
       models: {
         providerId: "openai",

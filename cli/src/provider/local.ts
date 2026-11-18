@@ -80,6 +80,11 @@ export function configuredProviderIds(config: ResolvedConfig): string[] {
   return ids.sort((a, b) => (a === active ? -1 : b === active ? 1 : a.localeCompare(b)))
 }
 
+/** Whether this machine's configuration names the provider (an entry, or the active one). */
+export function isConfiguredLocally(config: ResolvedConfig, providerId: string): boolean {
+  return Boolean(config.providers?.[providerId]) || providerId === config.provider
+}
+
 export interface CliProviderExecutor {
   execute<TOutput = unknown>(
     operationId: ProviderOperationId,

@@ -11,7 +11,7 @@ import {
   formatLocalProbeRow,
   probeProviders,
 } from "./probe"
-import { localProviderTransport, type ProviderTransport } from "./transport"
+import { LOCAL_ANSWER, localProviderTransport, type ProviderTransport } from "./transport"
 
 const CONFIG: ResolvedConfig = {
   provider: "openai",
@@ -126,8 +126,49 @@ describe("probeProviders", () => {
     expect(report.via).toBe("local")
     if (report.via !== "local") return
     expect(report.degraded).toMatch(/does not expose gateway_probe_upstream/)
+    // The desktop was attached, but this machine answered.
+    expect(report.answeredBy).toBe(LOCAL_ANSWER)
     expect(report.rows.map((r) => r.providerId)).toEqual(["openai"])
     expect(report.rows[0]!.model).toBe("gpt-4o")
+  })
+
+  it("names a provider this machine lacks instead of probing it, when this machine answers", async () => {
+    const report = await probeProviders({
+      config: CONFIG,
+      executor,
+      transport: localProviderTransport(),
+      providerId: "groq",
+    })
+    expect(report).toMatchObject({ via: "local", notConfigured: "groq", rows: [] })
+    expect(executor.execute).not.toHaveBeenCalledWith(
+      "health.probe",
+      "groq",
+      expect.anything(),
+      expect.anything()
+    )
+  })
+
+  it("narrows the gateway's candidates to --provider, which only the gateway has to know", async () => {
+    const execute = jest.fn(async () => ({
+      ok: true as const,
+      result: [
+        { providerId: "groq", modelId: "llama", ok: true, latencyMs: 4 },
+        { providerId: "openai", modelId: "llama", ok: true, latencyMs: 8 },
+      ],
+    }))
+    const report = await probeProviders({
+      config: CONFIG,
+      executor,
+      transport: attached("rpc", null, execute),
+      model: "llama",
+      providerId: "groq",
+    })
+    expect(report).toMatchObject({
+      via: "gateway",
+      answeredBy: { plane: "rpc" },
+      providerFilter: "groq",
+    })
+    expect(report.rows.map((row) => row.providerId)).toEqual(["groq"])
   })
 
   it("tries the rpc plane, then degrades when it answers unknown_command", async () => {
