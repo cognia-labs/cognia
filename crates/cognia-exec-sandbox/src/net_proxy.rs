@@ -965,8 +965,14 @@ where
         if vetted.is_empty() {
             return reject(&mut client, "403 Forbidden", policy.header_timeout).await;
         }
-        Err(DialFailure::Refused) => {
-            return reject(&mut client, "502 Bad Gateway", policy.header_timeout).await
+        match dial_any(network, &request.host, request.port, &vetted, policy.dial_timeout).await {
+            Ok(upstream) => upstream,
+            Err(DialFailure::TimedOut) => {
+                return reject(&mut client, "504 Gateway Timeout", policy.header_timeout).await
+            }
+            Err(DialFailure::Refused) => {
+                return reject(&mut client, "502 Bad Gateway", policy.header_timeout).await
+            }
         }
     };
     let (activity, _) = watch::channel(Instant::now());
