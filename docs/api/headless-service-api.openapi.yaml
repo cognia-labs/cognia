@@ -180018,6 +180018,13 @@ paths:
                     - petCharacterBindings
                     - petActivityLog
                     - sessionUsage
+                    - siteProjects
+                    - siteVersions
+                    - siteEnvironmentRevisions
+                    - siteDeployments
+                    - siteOperations
+                    - siteOperationEvents
+                    - siteResources
                   description: |
                     Allowlist; mirror of `lib/sync/types.ts:SyncableTable` (live
                     registry: `sync_registry.rs::default_tables`, listable via

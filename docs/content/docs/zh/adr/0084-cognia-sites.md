@@ -62,3 +62,11 @@ Takedown 与 deletion 是两个动作。Takedown 移除生产流量但保留版�
 Desktop 是创作和部署主机。Mobile 只有在显式增加 sync table、delta reader、tombstone 与 handler 后才可接收只读 projection；普通 Web 不宣称能访问**其它主机**的本地 Sites metadata。
 
 Sites 控制台在所有 shell 中渲染，并读取各 shell 的本地数据库。浏览器使用自身 profile 的 IndexedDB，与桌面端数据库分开，不存在跨主机 projection。被拦截的是**特权动作**本身，逐控件拦截并给出原因：构建需要操作系统沙箱，预览需要 PTY，服务商调用需要系统密钥环和不被 CORS 拦截的 fetch，托管清单需要文件系统访问。拦截整个界面会使面板整页留白，看起来「完全没有功能」。这还会掩盖三个在非桌面端给出**错误结果而非报错**的路径：密钥环会静默回落成内存存储、服务商 fetch 会被 CORS 拦截、`readTextFile` 会把 dev server 的 404 正文当成文件内容。
+
+## 配对客户端 projection 补充（2026-11-18）
+
+「Consequences」一节允许的只读 projection 现已实现。`sites` 模块为 `siteProjects`、`siteVersions`、`siteEnvironmentRevisions`、`siteDeployments`、`siteOperations`、`siteOperationEvents` 与 `siteResources` 提供 companion sync（`lib/sites/sync/sync-handlers.ts`）。每张表都有 Host 端 reader、客户端 pull 与 tombstone，tombstone 由 `deleteSiteProjectMetadata` 在同一事务中写入。因此配对的手机或浏览器从镜像读取 Host 的站点，`sites` 界面契约为 `companion: "remote"`。
+
+projection 不携带任何凭据。服务商 token 与 secret 值保留在 Host 的密钥环中：站点只记录 token 是否已校验，环境修订只包含非机密变量和密钥环引用。`siteBuildLogs` 与 `siteArtifacts` 从不跨端传输，operation 传输时去掉 reconcile 输入与租约持有者。
+
+配对客户端不中转任何 Sites 写操作。镜像上的每个控件（包括 metadata 操作）都返回 `host-mirror` 拦截原因（`hooks/sites/use-site-action-gate.ts`），控制台横幅与手机概览都会说明改动需在 Host 的桌面端中进行。独立运行的浏览器或手机仍拥有自己的数据库，与上一段描述一致。

@@ -48,6 +48,11 @@ export interface SiteListRailProps {
   onSelect: (siteId: string) => void
   /** Rendered in the rail footer — the console owns the creation dialog. */
   footer?: React.ReactNode
+  /**
+   * What to say when there are no Sites. Defaults to inviting a new one; a
+   * paired Host's mirror says where Sites are created instead.
+   */
+  emptyDescription?: string
 }
 
 export function SiteListRail({
@@ -58,6 +63,7 @@ export function SiteListRail({
   operationSignals,
   onSelect,
   footer,
+  emptyDescription,
 }: SiteListRailProps) {
   const t = useTranslations("sites")
   const format = useFormatter()
@@ -164,7 +170,7 @@ export function SiteListRail({
               </EmptyMedia>
               <EmptyTitle className="text-sm">{t("title")}</EmptyTitle>
               <EmptyDescription className="max-w-[16rem] text-xs">
-                {t("sidebarEmpty")}
+                {emptyDescription ?? t("sidebarEmpty")}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

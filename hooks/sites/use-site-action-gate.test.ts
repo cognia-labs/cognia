@@ -4,12 +4,26 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => `t:${key}`,
 }))
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: jest.fn(() => "tauri") }))
+jest.mock("@/hooks/use-runtime-snapshot", () => ({
+  useRuntimeSnapshot: jest.fn(() => ({ target: null })),
+}))
 
 import { usePlatform } from "@/hooks/use-platform"
+import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import type { SiteProjectRow } from "@/types/sites"
-import { resolveSiteGate, useSiteActionGate } from "./use-site-action-gate"
+import {
+  isSitesHostMirror,
+  resolveSiteGate,
+  useSiteActionGate,
+  type SiteActionCapability,
+} from "./use-site-action-gate"
 
 const usePlatformMock = usePlatform as jest.Mock
+const useRuntimeSnapshotMock = useRuntimeSnapshot as jest.Mock
+
+const PAIRED = {
+  target: { id: "host_1", kind: "companion", platform: "mobile", hostKind: "desktop" },
+}
 
 function site(overrides: Partial<SiteProjectRow> = {}): SiteProjectRow {
   return {
@@ -37,6 +51,54 @@ function site(overrides: Partial<SiteProjectRow> = {}): SiteProjectRow {
 
 beforeEach(() => {
   usePlatformMock.mockReturnValue("tauri")
+  useRuntimeSnapshotMock.mockReturnValue({ target: null })
+})
+
+describe("resolveSiteGate — a paired Host's mirror", () => {
+  const capabilities: SiteActionCapability[] = [
+    "provider",
+    "recovery",
+    "build",
+    "preview",
+    "filesystem",
+    "metadata",
+  ]
+
+  it.each(capabilities)("closes %s, metadata included, and names the Host", (capability) => {
+    // Even the owner: a write here would change only the copy.
+    expect(
+      resolveSiteGate({
+        platform: "web",
+        mirror: true,
+        site: site(),
+        actorAccountId: "owner",
+        capability,
+        authoring: "manage",
+      })
+    ).toEqual({ allowed: false, reason: "host-mirror" })
+  })
+
+  it("answers host-mirror rather than requires-desktop on a paired browser with no Site", () => {
+    expect(
+      resolveSiteGate({
+        platform: "web",
+        mirror: true,
+        site: null,
+        actorAccountId: "owner",
+        capability: "metadata",
+      })
+    ).toEqual({ allowed: false, reason: "host-mirror" })
+  })
+
+  it("is a mirror only on a companion target", () => {
+    expect(isSitesHostMirror(PAIRED as never)).toBe(true)
+    expect(isSitesHostMirror({ target: null })).toBe(false)
+    expect(
+      isSitesHostMirror({
+        target: { id: "web-standalone", kind: "standalone", platform: "web" },
+      })
+    ).toBe(false)
+  })
 })
 
 describe("resolveSiteGate — preview sandbox (A11)", () => {
@@ -247,6 +309,17 @@ describe("useSiteActionGate", () => {
       allowed: true,
       reason: "ok",
       title: undefined,
+    })
+  })
+
+  it("closes every control on a paired client, with the Host as the reason", () => {
+    usePlatformMock.mockReturnValue("mobile")
+    useRuntimeSnapshotMock.mockReturnValue(PAIRED)
+    const { result } = renderHook(() => useSiteActionGate(site(), "owner"))
+    expect(result.current("metadata", "manage")).toEqual({
+      allowed: false,
+      reason: "host-mirror",
+      title: "t:host.reason.host-mirror",
     })
   })
 

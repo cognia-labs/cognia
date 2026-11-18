@@ -21,12 +21,20 @@
  * accepted and vanish on reload) and `readTextFile` falls back to `fetch`,
  * which turns a missing manifest into the dev server's 404 HTML. Those paths
  * must be closed here, not discovered downstream.
+ *
+ * A third thing closes everything at once: on a paired phone or browser the
+ * Sites tables are a read-only mirror of the Host's
+ * (`lib/sites/sync/sync-handlers.ts`). Even a `metadata` write there would
+ * change only the copy, which the next pull overwrites or never corrects, so
+ * every control answers `host-mirror` and names the Host as the place to act.
  */
 import { useCallback } from "react"
 import { useTranslations } from "next-intl"
 
 import { usePlatform, type Platform } from "@/hooks/use-platform"
+import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { detectOsFamily, type OsFamily } from "@/lib/platform/os"
+import type { RuntimeSnapshot } from "@/lib/runtime/operation-availability"
 import { canAuthorSite, type SiteAuthoringCapability } from "@/lib/sites/authoring-policy"
 import type { SiteProjectRow } from "@/types/sites"
 
@@ -47,6 +55,14 @@ export type SiteActionCapability =
 
 export type SiteGateReason =
   | "ok"
+  /**
+   * This shell shows the paired Host's Sites as a read-only mirror. Paired
+   * clients relay no Sites writes (no `hostWriteCommands`), so every change,
+   * metadata included, is made in the desktop app on the Host. Labelled by the
+   * console's banner and each control's title, pinned by
+   * `use-site-action-gate.test.ts` and `components/sites/sites-console.test.tsx`.
+   */
+  | "host-mirror"
   | "requires-desktop"
   /** The host has no wrangler binary — upload cannot run, deploy still can. */
   | "requires-wrangler"
@@ -82,6 +98,8 @@ const REASON_FOR_CAPABILITY: Record<SiteAuthoringCapability, SiteGateReason> = {
 
 export interface ResolveSiteGateInput {
   platform: Platform
+  /** The Sites tables here mirror a paired Host's (see {@link isSitesHostMirror}). */
+  mirror?: boolean
   site: SiteProjectRow | null
   actorAccountId: string
   capability: SiteActionCapability
@@ -95,6 +113,9 @@ export interface ResolveSiteGateInput {
  * it is the one the user can act on without anyone's permission.
  */
 export function resolveSiteGate(input: ResolveSiteGateInput): SiteGateDecision {
+  // Before the platform: a paired browser is also "not tauri", but telling its
+  // user to open the desktop app here is wrong when the Sites are the Host's.
+  if (input.mirror) return { allowed: false, reason: "host-mirror" }
   const needsHost = input.capability !== "metadata"
   if (needsHost && input.platform !== "tauri") {
     return { allowed: false, reason: "requires-desktop" }
@@ -120,6 +141,23 @@ export function resolveSiteGate(input: ResolveSiteGateInput): SiteGateDecision {
 }
 
 /**
+ * Whether this shell's Sites tables are a paired Host's mirror.
+ *
+ * A companion target (a paired phone, or a browser paired with a Host) reads
+ * the Host's account database, which companion sync fills. The desktop app and
+ * the headless brain are hosts themselves (no target), and a standalone browser
+ * or phone owns its database outright (ADR-0084).
+ */
+export function isSitesHostMirror(snapshot: Pick<RuntimeSnapshot, "target">): boolean {
+  return snapshot.target?.kind === "companion"
+}
+
+/** {@link isSitesHostMirror} for the live runtime snapshot. */
+export function useSitesHostMirror(): boolean {
+  return isSitesHostMirror(useRuntimeSnapshot())
+}
+
+/**
  * Bind the gate to the current shell and actor.
  *
  * Call sites read as two props, which is the idiom already used across
@@ -130,15 +168,23 @@ export function useSiteActionGate(
   actorAccountId: string
 ): SiteActionGate {
   const platform = usePlatform()
+  const mirror = useSitesHostMirror()
   const t = useTranslations("sites")
   return useCallback(
     (capability, authoring) => {
-      const decision = resolveSiteGate({ platform, site, actorAccountId, capability, authoring })
+      const decision = resolveSiteGate({
+        platform,
+        mirror,
+        site,
+        actorAccountId,
+        capability,
+        authoring,
+      })
       return {
         ...decision,
         title: decision.allowed ? undefined : t(`host.reason.${decision.reason}`),
       }
     },
-    [platform, site, actorAccountId, t]
+    [platform, mirror, site, actorAccountId, t]
   )
 }

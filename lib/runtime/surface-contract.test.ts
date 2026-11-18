@@ -7,7 +7,6 @@ import type { RuntimeSnapshot } from "./operation-availability"
 import { resolveRuntimeRecovery } from "./recovery-resolver"
 import {
   SURFACE_CONTRACTS,
-  companionSitesShowLocalDatabase,
   getSurfaceContract,
   getSurfaceContractForRoute,
   isInternalRouteExempt,
@@ -109,27 +108,31 @@ it("shows a host surface only when the Companion advertises the operation", () =
   ).toBe(false)
 })
 
-describe("/sites on a paired client (ADR-0084, F15)", () => {
-  it("does not claim the Host's Sites: the console reads this device's database", () => {
-    // `remote` promised a paired phone the desktop's production state; nothing
-    // serves it. Lifted only by a Host projection of the Sites tables.
-    expect(getSurfaceContract("sites")).toMatchObject({ companion: "explain" })
-    expect(companionSitesShowLocalDatabase).toEqual({
-      surfaceId: "sites",
-      reason: "sites-not-mirrored",
-    })
+describe("/sites on a paired client (ADR-0084)", () => {
+  const paired = snapshot({
+    target: { id: "desktop", kind: "companion", hostKind: "desktop", platform: "mobile" },
+    host: { compatible: true, operations: [] },
   })
 
-  it("is still shown to a paired client, which has its own Sites to read", () => {
+  it("reads the Host's Sites from the companion mirror", () => {
+    // Served by `lib/sites/sync/sync-handlers.ts`; no Host call to advertise.
     const sites = getSurfaceContract("sites")!
+    expect(sites).toMatchObject({ companion: "remote", offline: "cached-read" })
+    expect(sites).not.toHaveProperty("operation")
+    expect(resolveSurfaceAvailability(sites, paired)).toEqual({
+      state: "available",
+      reason: "local-host",
+    })
+    expect(shouldShowSurface(sites, paired)).toBe(true)
+  })
+
+  it("shows the last mirror read-only while the Host is unreachable", () => {
     expect(
-      shouldShowSurface(
-        sites,
-        snapshot({
-          target: { id: "desktop", kind: "companion", hostKind: "desktop", platform: "mobile" },
-        })
-      )
-    ).toBe(true)
+      resolveSurfaceAvailability(getSurfaceContract("sites")!, {
+        ...paired,
+        connectionState: "offline",
+      })
+    ).toEqual({ state: "read-only", reason: "offline-cache" })
   })
 })
 

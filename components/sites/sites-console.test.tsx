@@ -42,6 +42,14 @@ jest.mock("next-intl", () => ({
   useNow: () => new Date(1_700_000_000_000),
 }))
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: jest.fn(() => "tauri") }))
+// The runtime target decides whether the Sites tables are a paired Host's
+// mirror (`useSitesHostMirror`).
+jest.mock("@/hooks/use-runtime-snapshot", () => ({
+  useRuntimeSnapshot: jest.fn(() => ({ target: null })),
+}))
+jest.mock("@/hooks/sites/use-site-overview-details", () => ({
+  useSiteOverviewDetails: () => ({ versionsById: new Map(), operationsBySite: new Map() }),
+}))
 // Two signals: `usePlatform` answers "can this shell drive wrangler", while
 // `useCompactLayout` answers "is there room for the console".
 jest.mock("@/hooks/ui/use-compact-layout", () => ({ useCompactLayout: jest.fn(() => false) }))
@@ -119,10 +127,20 @@ jest.mock("@/lib/db/sites", () => ({
   updateSiteProviderConfig: jest.fn(async () => undefined),
 }))
 jest.mock("./new-site-dialog", () => ({
-  NewSiteDialog: () => <button type="button">new-site</button>,
+  NewSiteDialog: ({ gate }: { gate?: { allowed: boolean; title?: string } }) => (
+    <button
+      type="button"
+      data-testid="sites-new-site"
+      disabled={gate ? !gate.allowed : false}
+      title={gate?.title}
+    >
+      new-site
+    </button>
+  ),
 }))
 
 import { usePlatform } from "@/hooks/use-platform"
+import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { useSiteLiveData } from "@/hooks/sites/use-site-live-data"
 import type { SiteProjectRow } from "@/types/sites"
@@ -130,6 +148,10 @@ import { useSiteConsoleStore } from "@/stores/sites/site-console-store"
 import { SitesConsole } from "./sites-console"
 
 const usePlatformMock = usePlatform as jest.Mock
+const useRuntimeSnapshotMock = useRuntimeSnapshot as jest.Mock
+const PAIRED = {
+  target: { id: "host_1", kind: "companion", platform: "web", hostKind: "desktop" },
+}
 const useCompactLayoutMock = useCompactLayout as jest.Mock
 const useSiteLiveDataMock = useSiteLiveData as unknown as jest.Mock
 
@@ -172,6 +194,7 @@ function liveData(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   jest.clearAllMocks()
   usePlatformMock.mockReturnValue("tauri")
+  useRuntimeSnapshotMock.mockReturnValue({ target: null })
   useCompactLayoutMock.mockReturnValue(false)
   useSiteLiveDataMock.mockReturnValue(liveData())
 })
@@ -197,7 +220,7 @@ it("disables host-privileged actions in the browser rather than hiding them", ()
   expect(screen.getByTestId("site-save-token")).toBeDisabled()
 })
 
-it("shows the compact overview on a narrow viewport, where ADR-0084 defers the projection", () => {
+it("shows the compact overview on a narrow viewport", () => {
   // Width, not runtime: the console is a rail plus a detail pane, and a 375px
   // browser has no more room for it than a phone does.
   usePlatformMock.mockReturnValue("mobile")
@@ -208,10 +231,74 @@ it("shows the compact overview on a narrow viewport, where ADR-0084 defers the p
   expect(screen.queryByTestId("sites-console")).not.toBeInTheDocument()
 })
 
-it("says off the desktop that it lists this device's Sites, not a paired Host's (F15)", () => {
+describe("on a paired client, over the Host's mirror", () => {
+  const live = {
+    id: "deployment_1",
+    siteId: "site_1",
+    versionId: "version_1",
+    environmentRevisionId: "env_1",
+    status: "active",
+    productionUrl: "https://docs.example.workers.dev",
+    createdAt: 10,
+    updatedAt: 20,
+  }
+
+  beforeEach(() => {
+    usePlatformMock.mockReturnValue("web")
+    useRuntimeSnapshotMock.mockReturnValue(PAIRED)
+  })
+
+  it("lists the Host's Sites with the live deployment, and says whose they are", () => {
+    useSiteLiveDataMock.mockReturnValue(
+      liveData({ activeDeployments: [live], deployments: [live] })
+    )
+    render(<SitesConsole />)
+
+    expect(screen.getByTestId("site-rail")).toHaveTextContent("Docs")
+    expect(screen.getByTestId("site-production-url")).toHaveTextContent(
+      "https://docs.example.workers.dev"
+    )
+    const banner = screen.getByTestId("sites-host-mirror-banner")
+    expect(banner).toHaveTextContent("host.mirror.title")
+    expect(banner).toHaveTextContent("host.mirror.description")
+    // Not the standalone browser's banner: these are not this device's Sites.
+    expect(screen.queryByTestId("sites-host-banner")).not.toBeInTheDocument()
+  })
+
+  it("closes every control, metadata included, with the Host as the reason", () => {
+    useSiteLiveDataMock.mockReturnValue(
+      liveData({ sites: [site({ lifecycle: "deleted" })], activeDeployments: [live] })
+    )
+    render(<SitesConsole />)
+
+    for (const id of ["site-delete-metadata", "sites-new-site"]) {
+      const control = screen.getByTestId(id)
+      expect(control).toBeDisabled()
+      expect(control).toHaveAttribute("title", "host.reason.host-mirror")
+    }
+  })
+
+  it("closes provider actions the owner could take on the desktop", () => {
+    useSiteLiveDataMock.mockReturnValue(liveData({ activeDeployments: [live] }))
+    render(<SitesConsole />)
+
+    const takeDown = screen.getByTestId("site-take-down")
+    expect(takeDown).toBeDisabled()
+    expect(takeDown).toHaveAttribute("title", "host.reason.host-mirror")
+  })
+
+  it("says where Sites are created when the Host has none", () => {
+    useSiteLiveDataMock.mockReturnValue(liveData({ sites: [], selectedId: null }))
+    render(<SitesConsole />)
+    expect(screen.getByTestId("sites-console-empty")).toHaveTextContent("host.mirror.empty")
+  })
+})
+
+it("leaves creating a Site open in a standalone browser, which owns its database", () => {
   usePlatformMock.mockReturnValue("web")
   render(<SitesConsole />)
-  expect(screen.getByTestId("sites-host-local-only")).toHaveTextContent("host.localOnly")
+  expect(screen.getByTestId("sites-new-site")).toBeEnabled()
+  expect(screen.queryByTestId("sites-host-mirror-banner")).not.toBeInTheDocument()
 })
 
 it("starts every per-Site form afresh when the selection changes (A10)", () => {

@@ -731,6 +731,19 @@ export const COMPANION_SYNC_TABLES = new Set<CoreTableName>([
   // this mirror. Imported external-agent scans (`sourceId` rows) are this
   // device's own and stay local.
   "sessionUsage",
+  // Cognia Sites (ADR-0084). The desktop authors and deploys; a paired phone
+  // or browser reads the Host's Sites from this mirror, read-only
+  // (`lib/sites/sync/sync-handlers.ts`). Provider tokens and secret values sit
+  // in the Host's keyring and are never in these rows. `siteBuildLogs` and
+  // `siteArtifacts` stay off the list: hundreds of kilobytes of untrusted
+  // build output and the archive bytes are the Host's alone.
+  "siteProjects",
+  "siteVersions",
+  "siteEnvironmentRevisions",
+  "siteDeployments",
+  "siteOperations",
+  "siteOperationEvents",
+  "siteResources",
 ])
 
 /**
@@ -797,6 +810,13 @@ export const COMPANION_SYNC_PROTOCOL_TABLE_NAMES = [
   "petCharacterBindings",
   "petActivityLog",
   "sessionUsage",
+  "siteProjects",
+  "siteVersions",
+  "siteEnvironmentRevisions",
+  "siteDeployments",
+  "siteOperations",
+  "siteOperationEvents",
+  "siteResources",
 ] as const
 
 export type CompanionSyncProtocolTableName = (typeof COMPANION_SYNC_PROTOCOL_TABLE_NAMES)[number]
@@ -881,6 +901,13 @@ export const SYNC_TABLE_SOURCES: Readonly<Record<CompanionSyncProtocolTableName,
     petCharacterBindings: "petCharacterBindings",
     petActivityLog: "petActivityLog",
     sessionUsage: "sessionUsage",
+    siteProjects: "siteProjects",
+    siteVersions: "siteVersions",
+    siteEnvironmentRevisions: "siteEnvironmentRevisions",
+    siteDeployments: "siteDeployments",
+    siteOperations: "siteOperations",
+    siteOperationEvents: "siteOperationEvents",
+    siteResources: "siteResources",
   })
 
 /** Resolve Dexie ownership names through the same map used by Host invalidation. */
@@ -988,6 +1015,15 @@ export const COMPANION_SYNC_DELETE_STRATEGY: Readonly<
   // The 90-day prune runs on both sides, but deleting a conversation deletes
   // its usage rows at any age, so that path tombstones them.
   sessionUsage: "tombstoned",
+  // `deleteSiteProjectMetadata` is the one path that deletes any of these
+  // rows, and it tombstones every one it removes, in the same transaction.
+  siteProjects: "tombstoned",
+  siteVersions: "tombstoned",
+  siteEnvironmentRevisions: "tombstoned",
+  siteDeployments: "tombstoned",
+  siteOperations: "tombstoned",
+  siteOperationEvents: "tombstoned",
+  siteResources: "tombstoned",
 }
 
 const CACHE_TABLES = new Set<CoreTableName>([

@@ -431,6 +431,46 @@ fn default_tables() -> Vec<SyncTableDescriptor> {
             description: "Per-turn token and cost rows (wire id is the reply's messageId; paged on `at`; a deleted conversation tombstones its rows; both sides prune past the 90-day window)".to_string(),
             has_tombstones: true,
         },
+        // Cognia Sites (ADR-0084), read-only on a paired client: the Host's
+        // Sites, versions, deployments, operations and provider resources.
+        // Provider tokens and secret values live in the Host's keyring and are
+        // never in these rows; build output and artifact bytes stay on the Host.
+        // Deleting a Site's metadata tombstones every row it owned.
+        SyncTableDescriptor {
+            name: "siteProjects".to_string(),
+            description: "Cognia Sites (cursored on updatedAt and the provider-token verification time; a metadata delete tombstones the Site)".to_string(),
+            has_tombstones: true,
+        },
+        SyncTableDescriptor {
+            name: "siteVersions".to_string(),
+            description: "Immutable Site versions with build provenance and the measured toolchain (cursored on the newest of createdAt, completedAt and artifactCollectedAt)".to_string(),
+            has_tombstones: true,
+        },
+        SyncTableDescriptor {
+            name: "siteEnvironmentRevisions".to_string(),
+            description: "Site environment revisions: non-secret variables and keyring references, never secret values (append-only on createdAt)".to_string(),
+            has_tombstones: true,
+        },
+        SyncTableDescriptor {
+            name: "siteDeployments".to_string(),
+            description: "Which Site version serves traffic, with the anonymous entry-point verification (cursored on updatedAt)".to_string(),
+            has_tombstones: true,
+        },
+        SyncTableDescriptor {
+            name: "siteOperations".to_string(),
+            description: "The Site operation journal without its reconcile input or lease owner (cursored on updatedAt)".to_string(),
+            has_tombstones: true,
+        },
+        SyncTableDescriptor {
+            name: "siteOperationEvents".to_string(),
+            description: "Site operation lifecycle and build-phase events (append-only on createdAt)".to_string(),
+            has_tombstones: true,
+        },
+        SyncTableDescriptor {
+            name: "siteResources".to_string(),
+            description: "Provider objects a Site owns, adopts or shares, including worker routes (cursored on updatedAt)".to_string(),
+            has_tombstones: true,
+        },
     ]
 }
 
@@ -482,6 +522,16 @@ mod tests {
         assert!(r.contains("petCharacterBindings"));
         assert!(r.contains("sessionUsage"));
         assert!(r.contains("petActivityLog"));
+        assert!(r.contains("siteProjects"));
+        assert!(r.contains("siteVersions"));
+        assert!(r.contains("siteEnvironmentRevisions"));
+        assert!(r.contains("siteDeployments"));
+        assert!(r.contains("siteOperations"));
+        assert!(r.contains("siteOperationEvents"));
+        assert!(r.contains("siteResources"));
+        // Build output and archive bytes stay on the Host.
+        assert!(!r.contains("siteBuildLogs"));
+        assert!(!r.contains("siteArtifacts"));
         // Chat history and the model/sprite blobs stay on the host.
         assert!(!r.contains("petConversationV2"));
         assert!(!r.contains("petModels"));
@@ -546,6 +596,14 @@ mod tests {
             "executionRunBindings",
             // Deleting a conversation deletes its usage rows.
             "sessionUsage",
+            // Deleting a Site's metadata deletes every row it owned.
+            "siteProjects",
+            "siteVersions",
+            "siteEnvironmentRevisions",
+            "siteDeployments",
+            "siteOperations",
+            "siteOperationEvents",
+            "siteResources",
         ] {
             assert_eq!(by_name.get(name), Some(&true), "{name} must tombstone");
         }

@@ -15,6 +15,8 @@ const buildLogs = jest.fn((_versionId: string | null) => ({
 jest.mock("@/hooks/sites/use-site-build-logs", () => ({
   useSiteBuildLogs: (versionId: string | null) => buildLogs(versionId),
 }))
+const onHost = jest.fn(() => false)
+jest.mock("@/hooks/sites/use-site-action-gate", () => ({ useSitesHostMirror: () => onHost() }))
 
 import type { SiteBuildLogRow } from "@/types/sites"
 import { SiteBuildLogViewer } from "./site-build-log-viewer"
@@ -42,6 +44,7 @@ function log(overrides: Partial<SiteBuildLogRow> = {}): SiteBuildLogRow {
 beforeEach(() => {
   jest.clearAllMocks()
   buildLogs.mockReturnValue({ logs: [], loading: false })
+  onHost.mockReturnValue(false)
 })
 
 async function open() {
@@ -128,4 +131,16 @@ it("copies exactly what is on screen", async () => {
   const user = await open()
   await user.click(screen.getByRole("button", { name: "buildLog.copy" }))
   expect(copy).toHaveBeenCalledWith("built 42 modules")
+})
+
+it("says the output stays on the Host on a paired client, and reads nothing", async () => {
+  // The mirror carries the version, never its logs; "recorded no output"
+  // would be a claim about a build this client cannot see.
+  onHost.mockReturnValue(true)
+  buildLogs.mockReturnValue({ logs: [log()], loading: false })
+  await open()
+  expect(screen.getByTestId("site-build-log-on-host")).toHaveTextContent("buildLog.onHost")
+  expect(screen.queryByText("buildLog.empty")).not.toBeInTheDocument()
+  expect(screen.queryByText("built 42 modules")).not.toBeInTheDocument()
+  expect(buildLogs).not.toHaveBeenCalledWith("ver_1")
 })

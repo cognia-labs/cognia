@@ -85,6 +85,12 @@ it("invites the first Site when there are none", () => {
   expect(screen.getByText("sidebarEmpty")).toBeInTheDocument()
 })
 
+it("says what the console asks instead, where no Site can be created here", () => {
+  renderRail({ sites: [], emptyDescription: "host.mirror.empty" })
+  expect(screen.getByText("host.mirror.empty")).toBeInTheDocument()
+  expect(screen.queryByText("sidebarEmpty")).not.toBeInTheDocument()
+})
+
 it("marks the selection and reports clicks", async () => {
   const user = userEvent.setup()
   const { onSelect } = renderRail()

@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import type { SiteGate } from "@/hooks/sites/use-site-action-gate"
 import { createSiteProject } from "@/lib/db/sites"
 import type { Project } from "@/types"
 
@@ -25,6 +26,12 @@ export interface NewSiteDialogProps {
   projects: Project[]
   activeProjectId: string | null
   actorAccountId: string
+  /**
+   * Whether this shell may create a Site at all. Creation is Dexie-only, so
+   * every shell that owns its database may; on a paired Host's mirror the
+   * trigger is closed and its title says where Sites are created.
+   */
+  gate?: SiteGate
   onCreated: (siteId: string) => void
 }
 
@@ -41,6 +48,7 @@ export function NewSiteDialog({
   projects,
   activeProjectId,
   actorAccountId,
+  gate,
   onCreated,
 }: NewSiteDialogProps) {
   const t = useTranslations("sites")
@@ -104,7 +112,13 @@ export function NewSiteDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className="w-full" variant="outline">
+        <Button
+          className="w-full"
+          variant="outline"
+          disabled={gate ? !gate.allowed : false}
+          title={gate?.title}
+          data-testid="sites-new-site"
+        >
           <PlusIcon className="size-4" />
           {t("actions.newSite")}
         </Button>

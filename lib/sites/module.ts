@@ -46,4 +46,19 @@ export default defineHostModule({
   // Its workflow nodes (ADR-0250 §14 `workflowNodes`): the Cognia Sites build, deploy, rollback
   // and status actions. The workflow engine loads them before it looks an executor up.
   workflowNodes: { load: () => import("./workflow-nodes") },
+  // The Host's Sites, mirrored read-only onto a paired phone or browser
+  // (ADR-0084): the readers that project them on the Host and the pulls that
+  // apply them on the client. Build output and archive bytes stay on the Host.
+  syncHandlers: {
+    tables: [
+      "siteProjects",
+      "siteVersions",
+      "siteEnvironmentRevisions",
+      "siteDeployments",
+      "siteOperations",
+      "siteOperationEvents",
+      "siteResources",
+    ],
+    load: () => import("./sync/sync-handlers"),
+  },
 })

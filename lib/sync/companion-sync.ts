@@ -369,6 +369,46 @@ const DEFAULT_HANDLERS: RegisteredHandler[] = [
   // the Host, so this mirror is the member's only record of them; nothing on
   // the first screen waits for it.
   { table: "sessionUsage", stage: "background", run: syncSessionUsage },
+  // Cognia Sites (ADR-0084), read-only on a paired client. `/sites` is a page
+  // the user opens, not the first screen. The Site leads: every other row is
+  // about one, and the console lists Sites before anything hangs off them.
+  { table: "siteProjects", stage: "background", run: moduleSyncPull("siteProjects") },
+  {
+    table: "siteVersions",
+    stage: "background",
+    run: moduleSyncPull("siteVersions"),
+    after: ["siteProjects"],
+  },
+  {
+    table: "siteEnvironmentRevisions",
+    stage: "background",
+    run: moduleSyncPull("siteEnvironmentRevisions"),
+    after: ["siteProjects"],
+  },
+  {
+    table: "siteDeployments",
+    stage: "background",
+    run: moduleSyncPull("siteDeployments"),
+    after: ["siteVersions"],
+  },
+  {
+    table: "siteOperations",
+    stage: "background",
+    run: moduleSyncPull("siteOperations"),
+    after: ["siteProjects"],
+  },
+  {
+    table: "siteOperationEvents",
+    stage: "background",
+    run: moduleSyncPull("siteOperationEvents"),
+    after: ["siteOperations"],
+  },
+  {
+    table: "siteResources",
+    stage: "background",
+    run: moduleSyncPull("siteResources"),
+    after: ["siteProjects"],
+  },
 ]
 
 /** Which stage each table is pulled in. */
@@ -531,6 +571,20 @@ export const COMPANION_SYNC_DOMAINS: Readonly<
   // Token counts, cost, model and ids; no content. Paged on `at` + message id,
   // and a deleted conversation tombstones its rows.
   sessionUsage: syncDomain("tombstone", "internal", "opaque"),
+  // Cognia Sites. Deleting a Site's metadata tombstones every row it owned.
+  // `confidential` where a row carries source paths, visitor emails, build
+  // commands, variables or provider error text; `internal` for the
+  // deployments (ids, a status, the public URL) and the resources (provider
+  // ids and names). The Site's cursor folds in the provider-token
+  // verification time, which does not move `updatedAt`, and a version's is
+  // the newest of its creation, completion and archive collection: `opaque`.
+  siteProjects: syncDomain("tombstone", "confidential", "opaque"),
+  siteVersions: syncDomain("tombstone", "confidential", "opaque"),
+  siteEnvironmentRevisions: syncDomain("tombstone"),
+  siteDeployments: syncDomain("tombstone", "internal"),
+  siteOperations: syncDomain("tombstone"),
+  siteOperationEvents: syncDomain("tombstone"),
+  siteResources: syncDomain("tombstone", "internal"),
 })
 
 interface SyncState {

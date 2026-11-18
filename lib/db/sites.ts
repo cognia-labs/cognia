@@ -1,4 +1,5 @@
 import { getDb } from "./schema"
+import { recordTombstones } from "./tombstones"
 import type {
   SiteArtifactRow,
   SiteBuildLogRow,
@@ -1397,6 +1398,10 @@ export async function deleteSiteProjectMetadata(id: string): Promise<void> {
       db.siteOperations,
       db.siteOperationEvents,
       db.siteBuildLogs,
+      // A paired client mirrors every table below but the logs and archives
+      // (`lib/sites/sync/sync-handlers.ts`); each deletion it would otherwise
+      // never learn about is tombstoned in this transaction.
+      db.syncTombstones,
     ],
     async (): Promise<void> => {
       const site = await db.siteProjects.get(id)
@@ -1418,15 +1423,29 @@ export async function deleteSiteProjectMetadata(id: string): Promise<void> {
       if (site.lifecycle !== "deleted") throw new Error("site must complete its deletion lifecycle")
       const versions = await db.siteVersions.where("siteId").equals(id).toArray()
       const operations = await db.siteOperations.where("siteId").equals(id).toArray()
-      await db.siteOperationEvents.bulkDelete(
-        (
-          await Promise.all(
-            operations.map((row) =>
-              db.siteOperationEvents.where("operationId").equals(row.id).primaryKeys()
-            )
+      const eventIds = (
+        await Promise.all(
+          operations.map(
+            (row) =>
+              db.siteOperationEvents.where("operationId").equals(row.id).primaryKeys() as Promise<
+                string[]
+              >
           )
-        ).flat()
-      )
+        )
+      ).flat()
+      const deploymentIds = (await db.siteDeployments
+        .where("siteId")
+        .equals(id)
+        .primaryKeys()) as string[]
+      const environmentIds = (await db.siteEnvironmentRevisions
+        .where("siteId")
+        .equals(id)
+        .primaryKeys()) as string[]
+      const resourceIds = (await db.siteResources
+        .where("siteId")
+        .equals(id)
+        .primaryKeys()) as string[]
+      await db.siteOperationEvents.bulkDelete(eventIds)
       await db.siteBuildLogs.where("siteId").equals(id).delete()
       await db.siteOperations.where("siteId").equals(id).delete()
       await db.siteDeployments.where("siteId").equals(id).delete()
@@ -1440,6 +1459,43 @@ export async function deleteSiteProjectMetadata(id: string): Promise<void> {
         if (references === 0) await db.siteArtifacts.delete(digest)
       }
       await db.siteProjects.delete(id)
+      // One watermark for the whole cascade, so a client that pulls the Site's
+      // tombstone in the same run also drops everything that hung off it.
+      const at = Date.now()
+      await recordTombstones("siteOperationEvents", eventIds, at)
+      await recordTombstones(
+        "siteOperations",
+        operations.map((row) => row.id),
+        at
+      )
+      await recordTombstones("siteDeployments", deploymentIds, at)
+      await recordTombstones("siteEnvironmentRevisions", environmentIds, at)
+      await recordTombstones(
+        "siteVersions",
+        versions.map((row) => row.id),
+        at
+      )
+      await recordTombstones("siteResources", resourceIds, at)
+      await recordTombstones("siteProjects", [id], at)
     }
   )
+}
+
+/* ------------------------------------------------------- paired overview */
+
+/**
+ * The newest operations across every Site, newest first.
+ *
+ * The phone's overview shows what each Site did last without loading every
+ * Site's whole journal; `createdAt` is indexed, so this reads `limit` rows.
+ */
+export async function listRecentSiteOperations(limit: number): Promise<SiteOperationRow[]> {
+  return getDb().siteOperations.orderBy("createdAt").reverse().limit(limit).toArray()
+}
+
+/** The versions with these ids that exist, in no particular order. */
+export async function listSiteVersionsByIds(ids: readonly string[]): Promise<SiteVersionRow[]> {
+  if (ids.length === 0) return []
+  const rows = await getDb().siteVersions.bulkGet([...ids])
+  return rows.filter((row): row is SiteVersionRow => row !== undefined)
 }

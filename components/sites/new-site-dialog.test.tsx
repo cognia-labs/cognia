@@ -202,3 +202,37 @@ it("shows the source root the Site would be created against", async () => {
   await user.click(screen.getByText("actions.newSite"))
   expect(screen.getByText("/repo")).toBeInTheDocument()
 })
+
+it("is closed, with the gate's reason, where the Sites are a paired Host's mirror", async () => {
+  const user = userEvent.setup()
+  render(
+    <NewSiteDialog
+      projects={[PROJECT]}
+      activeProjectId="project-1"
+      actorAccountId="local-user"
+      gate={{ allowed: false, reason: "host-mirror", title: "host.reason.host-mirror" }}
+      onCreated={jest.fn()}
+    />
+  )
+  const trigger = screen.getByTestId("sites-new-site")
+  expect(trigger).toBeDisabled()
+  expect(trigger).toHaveAttribute("title", "host.reason.host-mirror")
+  await user.click(trigger)
+  expect(screen.queryByLabelText("create.name")).not.toBeInTheDocument()
+  expect(createSiteProjectMock).not.toHaveBeenCalled()
+})
+
+it("opens when the gate allows it", async () => {
+  const user = userEvent.setup()
+  render(
+    <NewSiteDialog
+      projects={[PROJECT]}
+      activeProjectId="project-1"
+      actorAccountId="local-user"
+      gate={{ allowed: true, reason: "ok", title: undefined }}
+      onCreated={jest.fn()}
+    />
+  )
+  await user.click(screen.getByTestId("sites-new-site"))
+  expect(screen.getByLabelText("create.name")).toBeInTheDocument()
+})

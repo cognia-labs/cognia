@@ -129,8 +129,26 @@ describe("DataTableCatalog", () => {
     })
   })
 
-  it("maps all 58 companion tables and makes governed other tables discoverable", () => {
-    expect(COMPANION_SYNC_TABLES.size).toBe(58)
+  it("maps all 65 companion tables and makes governed other tables discoverable", () => {
+    expect(COMPANION_SYNC_TABLES.size).toBe(65)
+    // Cognia Sites (ADR-0084): a paired client reads the Host's Sites
+    // read-only. Build output and archive bytes stay on the Host, and a
+    // deleted Site's rows leave with their tombstones.
+    for (const table of [
+      "siteProjects",
+      "siteVersions",
+      "siteEnvironmentRevisions",
+      "siteDeployments",
+      "siteOperations",
+      "siteOperationEvents",
+      "siteResources",
+    ] as const) {
+      expect(policyForTable(table)?.syncPolicy.mode).toBe("companion-readonly")
+      expect(COMPANION_SYNC_DELETE_STRATEGY[table]).toBe("tombstoned")
+    }
+    for (const table of ["siteBuildLogs", "siteArtifacts"]) {
+      expect(policyForTable(table)?.syncPolicy.mode).not.toBe("companion-readonly")
+    }
     // Per-turn usage, so an org member's dashboard reads the Host's record of
     // the turns it ran for them. A deleted conversation tombstones its rows.
     expect(policyForTable("sessionUsage")?.syncPolicy.mode).toBe("companion-readonly")

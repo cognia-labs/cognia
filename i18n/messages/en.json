@@ -28951,6 +28951,13 @@
           "sessionState": "Session state",
           "sessions": "Sessions",
           "settings": "App settings",
+          "siteDeployments": "Site deployments",
+          "siteEnvironmentRevisions": "Site environments",
+          "siteOperationEvents": "Site operation events",
+          "siteOperations": "Site operations",
+          "siteProjects": "Sites",
+          "siteResources": "Site resources",
+          "siteVersions": "Site versions",
           "skills": "Skills",
           "templateDefinitions": "Template definitions",
           "templateInstances": "Template instances",
@@ -60489,6 +60496,7 @@
       "loading": "Loading build output…",
       "noStderr": "Nothing was written to stderr.",
       "noStdout": "Nothing was written to stdout.",
+      "onHost": "Build output stays on the Host. Open this version in the desktop app there to read it.",
       "open": "Build log",
       "phase": {
         "build": "Build",
@@ -60605,8 +60613,13 @@
     },
     "host": {
       "banner": "Read-only: this shell cannot run builds, previews, or Cloudflare calls.",
-      "localOnly": "It lists the Sites in this device's own database; a paired Host's Sites are not mirrored here yet.",
+      "mirror": {
+        "description": "Read-only here. Building, deploying and every other change are made in the desktop app on the Host.",
+        "empty": "The Host has no Sites yet. Sites are created in the desktop app on the Host.",
+        "title": "Your Host's Sites"
+      },
       "reason": {
+        "host-mirror": "Changes to these Sites are made in the desktop app on the Host",
         "lifecycle-locked": "Unavailable while this Site is being deleted",
         "ok": "",
         "requires-access": "You are not on this Site's authoring policy",
@@ -60659,9 +60672,16 @@
     },
     "mobile": {
       "empty": "No Sites on this device.",
-      "emptyExplain": "Sites are created and published on the desktop. This phone shows only what is in its own local database; it does not mirror the desktop's Sites yet.",
       "explain": "Building, previewing, and publishing need the desktop app's sandbox, terminal, and keyring. What this phone can show is what its own database holds.",
+      "host": {
+        "empty": "The Host has no Sites yet.",
+        "emptyExplain": "Sites are created and published in the desktop app on the Host, and appear here once it has one.",
+        "explain": "Read-only on this device. Builds, deploys and take-downs run in the desktop app on the Host.",
+        "title": "Your Host's Sites"
+      },
+      "pairToSee": "Sites are created and published in the desktop app. Pair this phone with that desktop to see its Sites here.",
       "readOnly": "Read-only on this device.",
+      "recentOperations": "Recent operations",
       "title": "Sites"
     },
     "notify": {

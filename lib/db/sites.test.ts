@@ -13,7 +13,9 @@ import {
   getSiteOperation,
   listSiteDeployments,
   listSiteOperationEvents,
+  listRecentSiteOperations,
   listSiteProjects,
+  listSiteVersionsByIds,
   putSiteArtifact,
   queueSiteOperation,
   recordSiteResource,
@@ -963,5 +965,152 @@ describe("sweepSiteArtifacts (A07)", () => {
       }, 500)
     ).rejects.toThrow("boom")
     expect(await getSiteArtifact("1".repeat(64))).toBeDefined()
+  })
+})
+
+describe("deleting a Site's metadata tombstones what a paired client mirrors", () => {
+  it("records one tombstone per deleted row, at one watermark, and none for logs", async () => {
+    await makeSite()
+    await createSiteEnvironmentRevision({
+      id: "env_1",
+      siteId: "site_1",
+      variables: {},
+      secretRefs: [],
+      now: 100,
+    })
+    await putSiteArtifact({
+      digest: "d".repeat(64),
+      bytes: new Uint8Array([1]),
+      mediaType: "application/zip",
+      fileCount: 1,
+      now: 100,
+    })
+    await createSiteVersionDraft({
+      id: "version_1",
+      siteId: "site_1",
+      environmentRevisionId: "env_1",
+      source: { commitSha: "abc", dirty: false, lockfileDigest: "a", inputDigest: "b" },
+      build: {
+        command: "pnpm build",
+        runtime: "node@24",
+        packageManager: "pnpm@10",
+        compatibilityDate: "2026-07-18",
+        compatibilityFlags: [],
+        routes: [],
+        bindings: [],
+      },
+      now: 110,
+    })
+    await completeSiteVersion({ versionId: "version_1", artifactDigest: "d".repeat(64), now: 120 })
+    await createSiteDeployment({
+      id: "deployment_1",
+      siteId: "site_1",
+      versionId: "version_1",
+      environmentRevisionId: "env_1",
+      now: 130,
+    })
+    await queueSiteOperation({
+      id: "op_1",
+      siteId: "site_1",
+      type: "build",
+      executionTargetKey: "local",
+      idempotencyKey: "build:site_1:1",
+      inputDigest: "e".repeat(64),
+      now: 140,
+    })
+    await getDb().siteOperations.update("op_1", { status: "succeeded" })
+    await recordSiteResource({
+      id: "resource_1",
+      siteId: "site_1",
+      provider: "cloudflare",
+      kind: "worker-route",
+      providerResourceId: "route_1",
+      ownership: "adopted",
+      dependencies: [],
+      now: 150,
+    })
+    await setSiteLifecycle("site_1", "taken-down", 160)
+    await setSiteLifecycle("site_1", "deleting", 170)
+    await setSiteLifecycle("site_1", "deleted", 180)
+
+    await deleteSiteProjectMetadata("site_1")
+
+    const tombstones = await getDb().syncTombstones.toArray()
+    const byTable = (table: string) =>
+      tombstones
+        .filter((row) => row.table === table)
+        .map((row) => row.id)
+        .sort()
+    expect(byTable("siteProjects")).toEqual(["site_1"])
+    expect(byTable("siteVersions")).toEqual(["version_1"])
+    expect(byTable("siteEnvironmentRevisions")).toEqual(["env_1"])
+    expect(byTable("siteDeployments")).toEqual(["deployment_1"])
+    expect(byTable("siteOperations")).toEqual(["op_1"])
+    expect(byTable("siteOperationEvents")).toEqual(["op_1:1"])
+    expect(byTable("siteResources")).toEqual(["resource_1"])
+    // Build logs and archives never cross, so nothing tombstones them.
+    expect(byTable("siteBuildLogs")).toEqual([])
+    expect(byTable("siteArtifacts")).toEqual([])
+    expect(new Set(tombstones.map((row) => row.deletedAt)).size).toBe(1)
+  })
+
+  it("writes no tombstone when the delete is refused", async () => {
+    await makeSite()
+    await expect(deleteSiteProjectMetadata("site_1")).rejects.toThrow("deletion lifecycle")
+    expect(await getDb().syncTombstones.count()).toBe(0)
+  })
+})
+
+describe("paired overview reads", () => {
+  it("lists the newest operations across Sites, newest first, up to the limit", async () => {
+    await makeSite()
+    for (const [id, now] of [
+      ["op_a", 100],
+      ["op_b", 300],
+      ["op_c", 200],
+    ] as const) {
+      await queueSiteOperation({
+        id,
+        siteId: "site_1",
+        type: "reconcile",
+        executionTargetKey: "local",
+        idempotencyKey: `reconcile:${id}`,
+        inputDigest: "e".repeat(64),
+        now,
+      })
+      await getDb().siteOperations.update(id, { status: "succeeded" })
+    }
+    expect((await listRecentSiteOperations(2)).map((row) => row.id)).toEqual(["op_b", "op_c"])
+  })
+
+  it("returns the versions that exist among the ids asked for", async () => {
+    await makeSite()
+    await createSiteEnvironmentRevision({
+      id: "env_1",
+      siteId: "site_1",
+      variables: {},
+      secretRefs: [],
+      now: 100,
+    })
+    await createSiteVersionDraft({
+      id: "version_1",
+      siteId: "site_1",
+      environmentRevisionId: "env_1",
+      source: { commitSha: "abc", dirty: false, lockfileDigest: "a", inputDigest: "b" },
+      build: {
+        command: "pnpm build",
+        runtime: "node@24",
+        packageManager: "pnpm@10",
+        compatibilityDate: "2026-07-18",
+        compatibilityFlags: [],
+        routes: [],
+        bindings: [],
+      },
+      now: 110,
+    })
+    expect(
+      (await listSiteVersionsByIds(["version_1", "version_ghost"])).map((row) => row.id)
+    ).toEqual(["version_1"])
+    expect(await listSiteVersionsByIds([])).toEqual([])
   })
 })

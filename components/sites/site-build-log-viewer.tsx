@@ -12,6 +12,10 @@
  *
  * The dialog, not an inline panel: this is hundreds of kilobytes of monospace
  * inside a resizable pane that also has to render the version list.
+ *
+ * The output never leaves the Host: a paired client mirrors the version but
+ * not its logs (`lib/sites/sync/sync-handlers.ts`), so there the dialog says
+ * where to read them instead of claiming the build printed nothing.
  */
 import { useState } from "react"
 import { useTranslations } from "next-intl"
@@ -33,6 +37,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useCopy } from "@/hooks/ui"
+import { useSitesHostMirror } from "@/hooks/sites/use-site-action-gate"
 import { useSiteBuildLogs } from "@/hooks/sites/use-site-build-logs"
 import { cn } from "@/lib/utils"
 import type { SiteBuildLogRow } from "@/types/sites"
@@ -46,9 +51,10 @@ export interface SiteBuildLogViewerProps {
 export function SiteBuildLogViewer({ versionId, label }: SiteBuildLogViewerProps) {
   const t = useTranslations("sites")
   const [open, setOpen] = useState(false)
+  const onHost = useSitesHostMirror()
   // The query is keyed on null until the dialog opens, so a closed viewer never
-  // reads a byte.
-  const { logs, loading } = useSiteBuildLogs(open ? versionId : null)
+  // reads a byte. A mirror holds no logs, so it never reads either.
+  const { logs, loading } = useSiteBuildLogs(open && !onHost ? versionId : null)
   const [phase, setPhase] = useState<SiteBuildLogRow["phase"] | null>(null)
   const [stderrOnly, setStderrOnly] = useState(false)
   const { copy, copied } = useCopy()
@@ -74,7 +80,14 @@ export function SiteBuildLogViewer({ versionId, label }: SiteBuildLogViewerProps
           <DialogDescription>{label}</DialogDescription>
         </DialogHeader>
 
-        {loading ? (
+        {onHost ? (
+          <p
+            className="py-8 text-center text-sm text-muted-foreground"
+            data-testid="site-build-log-on-host"
+          >
+            {t("buildLog.onHost")}
+          </p>
+        ) : loading ? (
           <Skeleton className="h-64 w-full rounded-panel" data-testid="site-build-log-loading" />
         ) : logs.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">{t("buildLog.empty")}</p>

@@ -10,9 +10,11 @@
  * Dexie tables; only the actions that genuinely need the native host are
  * disabled, each with its reason (see `useSiteActionGate`).
  *
- * Mobile keeps the desktop-only card: ADR-0084 defers the phone projection
- * until the sync table, delta reader, and tombstones exist, and nothing here
- * pretends otherwise.
+ * On a paired phone or browser those tables are a read-only mirror of the
+ * Host's Sites (`lib/sites/sync/sync-handlers.ts`), so the same console shows
+ * the Host's Sites, says so in its banner, and closes every control: changes
+ * are made in the desktop app on the Host. A narrow screen gets the phone
+ * overview instead of the panes.
  */
 import { useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "next/navigation"
@@ -33,7 +35,11 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useSiteActionGate, type SiteGate } from "@/hooks/sites/use-site-action-gate"
+import {
+  useSiteActionGate,
+  useSitesHostMirror,
+  type SiteGate,
+} from "@/hooks/sites/use-site-action-gate"
 import { useSiteActions } from "@/hooks/sites/use-site-actions"
 import { useSiteBuildInputs } from "@/hooks/sites/use-site-build-inputs"
 import { useSiteHostingManifest } from "@/hooks/sites/use-site-hosting-manifest"
@@ -80,6 +86,7 @@ export function SitesConsole() {
   // this shell drive wrangler / reach a deploy host", which stays a runtime
   // fact. `compact` answers "is there room for the console", which is width.
   const platform = usePlatform()
+  const mirror = useSitesHostMirror()
   const compact = useCompactLayout()
   const projects = useProjectStore((state) => state.projects)
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
@@ -179,11 +186,8 @@ export function SitesConsole() {
   }, [deployGate, publish.wrangler, t])
 
   if (compact) {
-    // ADR-0084 defers the mobile projection, and that stands — nothing here
-    // reaches another host. But the same ADR says the console renders in every
-    // shell over whichever local database that shell owns, and a bare
-    // "desktop only" card ignored the second half: it could not say whether
-    // this device knew about any Sites at all.
+    // A phone has no room for the panes and never publishes, so it gets the
+    // overview: the paired Host's Sites, or this device's own when standalone.
     return (
       <SiteMobileOverview
         sites={live.sites}
@@ -199,6 +203,9 @@ export function SitesConsole() {
   const previewGate = gate("preview", "edit")
   const filesystemGate = gate("filesystem", "edit")
   const metadataGate = gate("metadata", "manage")
+  // Creating a Site is Dexie-only, so it works in every shell that owns its
+  // database, and nowhere the Sites are a paired Host's mirror.
+  const createGate = gate("metadata")
 
   const confirmDestructive = () => {
     const action = confirmation
@@ -295,11 +302,13 @@ export function SitesConsole() {
               activeDeployments={live.activeDeployments}
               operationSignals={live.operationSignals}
               onSelect={setPinnedId}
+              emptyDescription={mirror ? t("host.mirror.empty") : undefined}
               footer={
                 <NewSiteDialog
                   projects={projects}
                   activeProjectId={activeProjectId}
                   actorAccountId={actorAccountId}
+                  gate={createGate}
                   onCreated={setPinnedId}
                 />
               }
@@ -307,7 +316,19 @@ export function SitesConsole() {
           ),
         }}
       >
-        {platform !== "tauri" ? (
+        {mirror ? (
+          // The `host-mirror` gate reason (`use-site-action-gate.ts`): these
+          // are the Host's Sites, and every control below is closed.
+          <div
+            role="status"
+            data-testid="sites-host-mirror-banner"
+            className="flex shrink-0 flex-wrap items-center gap-2 bg-info/10 px-4 py-2 text-xs"
+          >
+            <CloudIcon aria-hidden className="size-3.5 shrink-0 text-info" />
+            <span className="font-medium">{t("host.mirror.title")}</span>
+            <span className="text-muted-foreground">{t("host.mirror.description")}</span>
+          </div>
+        ) : platform !== "tauri" ? (
           <div
             role="status"
             data-testid="sites-host-banner"
@@ -316,10 +337,6 @@ export function SitesConsole() {
             <CloudIcon aria-hidden className="size-3.5 shrink-0 text-warning" />
             <span className="font-medium">{t("desktopOnly.title")}</span>
             <span className="text-muted-foreground">{t("host.banner")}</span>
-            {/* `companionSitesShowLocalDatabase` (lib/runtime/surface-contract.ts) */}
-            <span className="text-muted-foreground" data-testid="sites-host-local-only">
-              {t("host.localOnly")}
-            </span>
           </div>
         ) : null}
 
@@ -548,7 +565,9 @@ export function SitesConsole() {
                 <GlobeIcon aria-hidden />
               </EmptyMedia>
               <EmptyTitle className="text-sm">{t("title")}</EmptyTitle>
-              <EmptyDescription className="max-w-md text-xs">{t("empty")}</EmptyDescription>
+              <EmptyDescription className="max-w-md text-xs">
+                {mirror ? t("host.mirror.empty") : t("empty")}
+              </EmptyDescription>
             </EmptyHeader>
           </Empty>
         )}
