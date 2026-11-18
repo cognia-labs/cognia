@@ -48,7 +48,6 @@
 
 import type { CogpackProvenance } from "@/types/plugin/plugin-cogset"
 import { loggers } from "@cognia/logging"
-import { deletePlugin } from "@/lib/db/plugins"
 import { readBinaryFile, removeFile } from "@/lib/file/file-operations"
 import { canUseTauriInvoke } from "@/lib/native/utils"
 import type { PluginRow } from "@/lib/db/plugin-types"
@@ -58,6 +57,7 @@ import {
   commitVscodeExtension,
   prepareVscodeExtension,
   type PreparedVscodeExtension,
+  type VscodeExtensionCommit,
 } from "./install-vscode-extension"
 import {
   resolveDependencyGraph,
@@ -114,9 +114,8 @@ export interface OpenVsxInstallFlowDeps {
   download?: (entry: OpenVsxQueryEntry) => Promise<DownloadedVsix>
   readBytes?: (path: string) => Promise<Uint8Array>
   prepare?: typeof prepareVscodeExtension
+  /** Commit one node; its `revert` is what rolls a failed graph back. */
   commit?: typeof commitVscodeExtension
-  /** Inverse of `commit`. Used only to roll a failed graph back. */
-  uninstall?: (row: PluginRow) => Promise<void>
   allowPrerelease?: boolean
   requestedVersion?: string
   /** Set when a cogpack import drives this install (ADR-0209). */
@@ -160,18 +159,6 @@ async function defaultDownload(entry: OpenVsxQueryEntry): Promise<DownloadedVsix
   })
 }
 
-/** The exact inverse of `commitVscodeExtension`: the row and the directory. */
-async function defaultUninstall(row: PluginRow): Promise<void> {
-  // Order matters: drop the row first. A leftover directory with no row is
-  // inert; a row pointing at a deleted directory is a plugin the manager will
-  // try to load and fail on.
-  await deletePlugin(row.id)
-  // `vsix://` paths are rows older browser builds recorded without unpacking.
-  if (row.path && !row.path.startsWith("vsix://")) {
-    await removeFile(row.path, { recursive: true })
-  }
-}
-
 /**
  * Download, verify, and parse every node of `plan`.
  *
@@ -190,9 +177,13 @@ export async function stageGraph(
   const prepare = deps.prepare ?? prepareVscodeExtension
 
   const staged: StagedExtension[] = []
+  // A download Rust finished but this loop has not staged yet. Reading,
+  // parsing or a failed check must still clean it up.
+  let inFlight: { extensionId: string; tempPath: string } | undefined
   try {
     for (const node of plan.nodes) {
       const downloaded = await download(node.entry)
+      inFlight = { extensionId: node.extensionId, tempPath: downloaded.tempPath }
       const bytes = await readBytes(downloaded.tempPath)
       // The commit installs from the file Rust already verified rather than
       // shipping these bytes back as base64.
@@ -226,11 +217,13 @@ export async function stageGraph(
         )
       }
       staged.push({ node, prepared, tempPath: downloaded.tempPath })
+      inFlight = undefined
     }
   } catch (error) {
     // Nothing is persisted yet, so "rollback" is just not leaving 80 MB
     // temp files behind per node.
     await discardStaged(staged)
+    if (inFlight) await discardTempFile(inFlight.extensionId, inFlight.tempPath)
     throw error
   }
 
@@ -239,16 +232,18 @@ export async function stageGraph(
 
 /** Drop staged temp files. Best-effort: a failed cleanup must not mask the cause. */
 async function discardStaged(staged: StagedExtension[]): Promise<void> {
-  for (const item of staged) {
-    try {
-      await removeFile(item.tempPath)
-    } catch (error) {
-      loggers.plugin.warn("Failed to clean up a staged Open VSX download", {
-        extension: item.node.extensionId,
-        tempPath: item.tempPath,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
+  for (const item of staged) await discardTempFile(item.node.extensionId, item.tempPath)
+}
+
+async function discardTempFile(extensionId: string, tempPath: string): Promise<void> {
+  try {
+    await removeFile(tempPath)
+  } catch (error) {
+    loggers.plugin.warn("Failed to clean up a staged Open VSX download", {
+      extension: extensionId,
+      tempPath,
+      error: error instanceof Error ? error.message : String(error),
+    })
   }
 }
 
@@ -317,26 +312,26 @@ function withCommitLock<T>(task: () => Promise<T>): Promise<T> {
 /**
  * Write every staged node, or none.
  *
- * Rollback only removes what *this* call created. A node that was already
- * installed is left alone: the user installed it before, possibly deliberately,
- * and a failed install of something else is no reason to take it away.
+ * Rollback reverts each node this call committed: one it installed fresh is
+ * removed, one that replaced an installed extension gets the previous version
+ * back. Uninstalling a replaced node would take away an extension the user
+ * installed before, possibly deliberately, because something else failed.
  */
 export async function commitGraph(
   graph: StagedGraph,
   deps: OpenVsxInstallFlowDeps = {}
 ): Promise<PluginRow[]> {
   const commit = deps.commit ?? commitVscodeExtension
-  const uninstall = deps.uninstall ?? defaultUninstall
 
   return withCommitLock(async () => {
-    const created: PluginRow[] = []
+    const created: VscodeExtensionCommit[] = []
     try {
       for (const item of graph.staged) {
         created.push(await commit(item.prepared, { viaCogpack: deps.viaCogpack }))
       }
-      return created
+      return created.map((done) => done.row)
     } catch (error) {
-      await rollback(created, uninstall)
+      await rollback(created)
       // Anything not yet committed still has a temp file to clean up.
       await discardStaged(graph.staged.slice(created.length))
       throw error
@@ -344,15 +339,12 @@ export async function commitGraph(
   })
 }
 
-async function rollback(
-  created: PluginRow[],
-  uninstall: (row: PluginRow) => Promise<void>
-): Promise<void> {
+async function rollback(created: VscodeExtensionCommit[]): Promise<void> {
   // Reverse order — dependents before their dependencies, mirroring the
   // install order.
-  for (const row of [...created].reverse()) {
+  for (const { row, revert } of [...created].reverse()) {
     try {
-      await uninstall(row)
+      await revert()
     } catch (error) {
       // Report and keep going: one stuck directory must not strand the rest of
       // the graph half-installed.

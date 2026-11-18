@@ -13,17 +13,38 @@ jest.mock("@/lib/plugin/vscode-shim/vsix-installer", () => ({
 
 jest.mock("@/lib/db/plugins", () => ({
   upsertPlugin: jest.fn().mockResolvedValue(undefined),
+  getPlugin: jest.fn(async () => undefined),
+  deletePlugin: jest.fn(async () => undefined),
 }))
+jest.mock("@/lib/db/plugin-install-origins", () => ({
+  getInstallOrigin: jest.fn(async () => undefined),
+}))
+// Nothing is installed yet; the commit registers the extension with the runtime.
+jest.mock("@/stores/plugin-runtime", () => ({
+  usePluginStore: { getState: () => ({ plugins: {} }) },
+}))
+const mockManager = {
+  registerVscodeExtension: jest.fn(async () => undefined),
+  restorePluginEntry: jest.fn(async () => undefined),
+  reservePluginRuntimeGraph: jest.fn(() => ({})),
+  releasePluginRuntimeGraph: jest.fn(),
+  withPluginPackageMutation: jest.fn(async (_id: string, operation: () => Promise<unknown>) =>
+    operation()
+  ),
+}
+jest.mock("@/lib/plugin/core/manager", () => ({ getPluginManager: () => mockManager }))
 
 const canUseTauriInvokeMock = jest.fn(() => true)
 jest.mock("@/lib/native/utils", () => ({
   canUseTauriInvoke: () => canUseTauriInvokeMock(),
 }))
 
-// The host unpacks the extension where VS Code extensions install.
-const invokeMock = jest.fn(async (_command: string, _args?: unknown) => ({
+// The host unpacks the extension where VS Code extensions install, and hashes
+// what it installed: the reviewed bytes, since it refuses any others.
+const invokeMock = jest.fn(async (_command: string, args?: unknown) => ({
   extensionId: "rust-lang.rust-analyzer",
   installPath: "/data/vscode-extensions/rust-lang.rust-analyzer",
+  sha256Hex: (args as { expectedSha256?: string } | undefined)?.expectedSha256 ?? "",
 }))
 jest.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: unknown) => invokeMock(command, args),

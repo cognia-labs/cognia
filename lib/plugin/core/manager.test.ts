@@ -819,6 +819,145 @@ describe("PluginManager", () => {
     })
   })
 
+  describe("VS Code extensions reach the runtime (PL05)", () => {
+    // What `adaptVscodeManifest` produces: validation wants an entry point.
+    const vscodeManifest = (version = "1.0.0"): PluginManifest => ({
+      ...createManifest("acme.vsc"),
+      version,
+      type: "vscode-extension",
+      vscodeMain: "./out/extension.js",
+    })
+    const EXT_PATH = "/data/cognia/vscode-extensions/acme.vsc"
+
+    function recordingStore(plugins: Record<string, Plugin> = {}) {
+      const store = {
+        plugins,
+        removedPlugins: {},
+        discoverPlugin: jest.fn((manifest: PluginManifest, source: string, path: string) => {
+          store.plugins[manifest.id] = {
+            ...store.plugins[manifest.id],
+            manifest,
+            status: store.plugins[manifest.id]?.status ?? "discovered",
+            source: source as Plugin["source"],
+            path,
+            config: {},
+          }
+        }),
+        installPlugin: jest.fn(async (pluginId: string) => {
+          store.plugins[pluginId] = { ...store.plugins[pluginId]!, status: "installed" }
+        }),
+        uninstallPlugin: jest.fn(async (pluginId: string) => {
+          delete store.plugins[pluginId]
+        }),
+      }
+      ;(usePluginStore.setState as unknown as jest.Mock).mockImplementation((update) => {
+        Object.assign(store, update(store))
+      })
+      mockGetState.mockReturnValue(store)
+      return store
+    }
+
+    it("registers an unpacked extension under its install-root path and source", async () => {
+      const store = recordingStore()
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+
+      await manager.registerVscodeExtension(vscodeManifest(), EXT_PATH, "marketplace")
+
+      expect(store.plugins["acme.vsc"]).toMatchObject({
+        status: "installed",
+        path: EXT_PATH,
+        source: "marketplace",
+      })
+      // The package under that path may be new; no cached verdict survives.
+      expect(mockVerifier.clearCache).toHaveBeenCalledWith(EXT_PATH)
+    })
+
+    it("refreshes an existing entry without re-installing it, and refuses other types", async () => {
+      const store = recordingStore({
+        "acme.vsc": {
+          manifest: vscodeManifest("0.9.0"),
+          status: "enabled",
+          source: "local",
+          path: EXT_PATH,
+          config: {},
+        },
+      })
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+
+      await manager.registerVscodeExtension(vscodeManifest(), EXT_PATH, "local")
+      expect(store.installPlugin).not.toHaveBeenCalled()
+      expect(store.plugins["acme.vsc"]?.manifest.version).toBe("1.0.0")
+
+      await expect(
+        manager.registerVscodeExtension(createManifest("acme.vsc"), EXT_PATH, "local")
+      ).rejects.toThrow(/not a VS Code extension/)
+    })
+
+    it("puts a replaced entry back as installed, or drops an entry that had none", async () => {
+      const previous: Plugin = {
+        manifest: vscodeManifest("0.9.0"),
+        status: "enabled",
+        source: "local",
+        path: EXT_PATH,
+        config: { theme: "dark" },
+        tools: [],
+      }
+      const store = recordingStore({
+        "acme.vsc": { ...previous, manifest: vscodeManifest("1.0.0"), status: "installed" },
+      })
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+
+      await manager.restorePluginEntry("acme.vsc", previous)
+      // Metadata comes back; the stopped runtime is never resurrected from it.
+      expect(store.plugins["acme.vsc"]).toMatchObject({
+        status: "installed",
+        config: { theme: "dark" },
+        tools: undefined,
+      })
+      expect(store.plugins["acme.vsc"]?.manifest.version).toBe("0.9.0")
+
+      await manager.restorePluginEntry("acme.vsc", undefined)
+      expect(store.uninstallPlugin).toHaveBeenCalledWith("acme.vsc", {
+        skipFileRemoval: true,
+        viaManager: false,
+        rememberRemoval: false,
+      })
+      expect(mockGuard.unregisterPlugin).toHaveBeenCalledWith("acme.vsc")
+      expect(store.plugins["acme.vsc"]).toBeUndefined()
+    })
+
+    it("rebuilds missing entries from installed extension rows when the desktop scans", async () => {
+      const store = recordingStore()
+      jest.requireMock("@/lib/db/plugins").listPlugins.mockResolvedValueOnce([
+        {
+          id: "acme.vsc",
+          type: "vscode-extension",
+          source: "marketplace",
+          path: EXT_PATH,
+          manifest: vscodeManifest(),
+        },
+        // Not an extension: the directory scan owns it.
+        { id: "plain", type: "frontend", source: "local", path: "/plugins/plain", manifest: {} },
+        // A row that will not validate must not stop the rest.
+        {
+          id: "broken.ext",
+          type: "vscode-extension",
+          source: "local",
+          path: "/data/cognia/vscode-extensions/broken.ext",
+          manifest: { id: "", name: "", type: "vscode-extension" },
+        },
+      ])
+      mockInvoke.mockResolvedValueOnce([])
+      const manager = new PluginManager({ pluginDirectory: "/plugins", runtimeProfile: "tauri" })
+
+      await manager.scanPlugins()
+
+      expect(store.plugins["acme.vsc"]).toMatchObject({ path: EXT_PATH, source: "marketplace" })
+      expect(store.plugins["plain"]).toBeUndefined()
+      expect(store.plugins["broken.ext"]).toBeUndefined()
+    })
+  })
+
   describe("scanBrowserBuiltins persistence", () => {
     it("preserves a loaded adapter's executable functions across metadata rediscovery", async () => {
       const { getBrowserBuiltinRegistry } = await import("./browser-builtin-registry")

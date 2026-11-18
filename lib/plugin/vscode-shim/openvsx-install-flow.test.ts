@@ -29,13 +29,36 @@ jest.mock("@tauri-apps/api/core", () => ({ invoke: jest.fn() }))
 jest.mock("@cognia/logging", () => ({
   loggers: { plugin: { warn: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() } },
 }))
+jest.mock("@/lib/db/plugin-install-origins", () => ({
+  getInstallOrigin: jest.fn(async () => undefined),
+  putInstallOrigin: jest.fn(async () => undefined),
+}))
+// The real commit registers with the runtime; nothing is installed yet here.
+jest.mock("@/stores/plugin-runtime", () => ({
+  usePluginStore: { getState: () => ({ plugins: {} }) },
+}))
+const mockManager = {
+  registerVscodeExtension: jest.fn(async () => undefined),
+  restorePluginEntry: jest.fn(async () => undefined),
+  reservePluginRuntimeGraph: jest.fn(() => ({})),
+  releasePluginRuntimeGraph: jest.fn(),
+  withPluginPackageMutation: jest.fn(async (_id: string, operation: () => Promise<unknown>) =>
+    operation()
+  ),
+  enablePlugin: jest.fn(),
+  disablePlugin: jest.fn(),
+  suspendPlugin: jest.fn(),
+  loadPlugin: jest.fn(),
+  unloadPlugin: jest.fn(),
+}
+jest.mock("@/lib/plugin/core/manager", () => ({ getPluginManager: () => mockManager }))
 
 import JSZip from "jszip"
 import { runMarketplaceInstall } from "@/lib/plugin/marketplace/install-flow"
 import { prepareVscodeExtension } from "./install-vscode-extension"
 import type { PluginRow } from "@/lib/db/plugin-types"
 import type { PluginManifest, PluginPermission } from "@/types/plugin"
-import type { PreparedVscodeExtension } from "./install-vscode-extension"
+import type { PreparedVscodeExtension, VscodeExtensionCommit } from "./install-vscode-extension"
 import {
   commitGraph,
   createOpenVsxInstallClient,
@@ -120,26 +143,33 @@ function deferred() {
   return { promise, resolve }
 }
 
+/** The flow's deps, plus the recorder every committed node's `revert` reports to. */
+type FlowDeps = OpenVsxInstallFlowDeps & {
+  download: jest.Mock
+  commit: jest.Mock
+  /** Called with the row of each node a rollback reverts. */
+  revert: jest.Mock
+  /** A successful commit of `id`, wired to `revert`. */
+  committed: (id: string) => VscodeExtensionCommit
+}
+
 /**
  * Deps wired to an in-memory world: every download hands back a temp path,
  * every prepare hands back a manifest with `permissions`.
  */
-function makeDeps(
-  ids: string[],
-  overrides: Partial<OpenVsxInstallFlowDeps> = {}
-): OpenVsxInstallFlowDeps & {
-  download: jest.Mock
-  commit: jest.Mock
-  uninstall: jest.Mock
-} {
+function makeDeps(ids: string[], overrides: Partial<OpenVsxInstallFlowDeps> = {}): FlowDeps {
   const download = jest.fn(async (entry: OpenVsxQueryEntry) => ({
     tempPath: `/tmp/${entry.namespace}.${entry.name}.vsix`,
     sha256Hex: `sha-${entry.namespace}.${entry.name}`,
     sizeBytes: 3,
     signature: "verified" as const,
   }))
-  const commit = jest.fn(async (p: PreparedVscodeExtension) => row(p.adapted.manifest.id))
-  const uninstall = jest.fn(async () => undefined)
+  const revert = jest.fn(async (_row: PluginRow) => undefined)
+  const committed = (id: string): VscodeExtensionCommit => {
+    const r = row(id)
+    return { row: r, revert: () => revert(r) }
+  }
+  const commit = jest.fn(async (p: PreparedVscodeExtension) => committed(p.adapted.manifest.id))
 
   return {
     resolveHost: async () => "darwin-arm64",
@@ -148,9 +178,10 @@ function makeDeps(
     readBytes: jest.fn(async (path: string) => new Uint8Array([path.length])),
     prepare: jest.fn(async (_bytes: Uint8Array) => prepared("placeholder")),
     commit,
-    uninstall,
+    revert,
+    committed,
     ...overrides,
-  } as OpenVsxInstallFlowDeps & { download: jest.Mock; commit: jest.Mock; uninstall: jest.Mock }
+  } as FlowDeps
 }
 
 /**
@@ -162,7 +193,7 @@ function stagingDeps(
   ids: string[],
   permissions: Record<string, PluginPermission[]> = {},
   overrides: Partial<OpenVsxInstallFlowDeps> = {}
-): OpenVsxInstallFlowDeps & { download: jest.Mock; commit: jest.Mock; uninstall: jest.Mock } {
+): FlowDeps {
   const base = makeDeps(ids, overrides)
   return {
     ...base,
@@ -176,7 +207,7 @@ function stagingDeps(
       return prepared(id, permissions[id] ?? [])
     }),
     ...overrides,
-  } as OpenVsxInstallFlowDeps & { download: jest.Mock; commit: jest.Mock; uninstall: jest.Mock }
+  } as FlowDeps
 }
 
 /** A consent chain that approves everything, recording what it was shown. */
@@ -284,6 +315,46 @@ describe("stageGraph", () => {
     await expect(stageGraph(plan(["b.dep", "a.root"]), deps)).rejects.toThrow("registry went away")
     // The first node's 80 MB download must not be orphaned in app data.
     expect(removeFile).toHaveBeenCalledWith("/tmp/b.dep.vsix")
+  })
+
+  it.each([
+    [
+      "reading the downloaded file fails",
+      {
+        readBytes: jest.fn(async () => {
+          throw new Error("EIO")
+        }),
+      },
+      "EIO",
+    ],
+    [
+      "the archive cannot be parsed",
+      {
+        prepare: jest.fn(async () => {
+          throw new Error("not a zip")
+        }),
+      },
+      "not a zip",
+    ],
+    [
+      "the checksum check fails",
+      {
+        download: jest.fn(async () => ({
+          tempPath: "/tmp/a.root.vsix",
+          sha256Hex: "some-other-digest",
+          sizeBytes: 3,
+          signature: "unsigned" as const,
+        })),
+      },
+      /Checksum disagreement/,
+    ],
+  ])("removes a download that never got staged when %s (PL19)", async (_label, override, error) => {
+    const { removeFile } = jest.requireMock("@/lib/file/file-operations")
+    const deps = stagingDeps(["a.root"], {}, override as never)
+
+    await expect(stageGraph(plan(["a.root"]), deps)).rejects.toThrow(error)
+
+    expect(removeFile).toHaveBeenCalledWith("/tmp/a.root.vsix")
   })
 })
 
@@ -442,24 +513,21 @@ describe("commitGraph", () => {
     const deps = stagingDeps(["c.deep", "b.mid", "a.root"])
     ;(deps.commit as jest.Mock).mockImplementation(async (p: PreparedVscodeExtension) => {
       if (p.adapted.manifest.id === "a.root") throw new Error("disk full")
-      return row(p.adapted.manifest.id)
+      return deps.committed(p.adapted.manifest.id)
     })
 
     const graph = await stageGraph(plan(["c.deep", "b.mid", "a.root"]), deps)
     await expect(commitGraph(graph, deps)).rejects.toThrow("disk full")
 
     // Reverse order — dependents come off before their dependencies.
-    expect(deps.uninstall.mock.calls.map((c) => (c[0] as PluginRow).id)).toEqual([
-      "b.mid",
-      "c.deep",
-    ])
+    expect(deps.revert.mock.calls.map((c) => (c[0] as PluginRow).id)).toEqual(["b.mid", "c.deep"])
   })
 
   it("partial_install_never_persisted", async () => {
     const deps = stagingDeps(["b.dep", "a.root"])
     ;(deps.commit as jest.Mock).mockImplementation(async (p: PreparedVscodeExtension) => {
       if (p.adapted.manifest.id === "a.root") throw new Error("boom")
-      return row(p.adapted.manifest.id)
+      return deps.committed(p.adapted.manifest.id)
     })
     const client = createOpenVsxInstallClient(deps)
 
@@ -477,28 +545,25 @@ describe("commitGraph", () => {
     const committed = deps.commit.mock.calls.map(
       (c) => (c[0] as PreparedVscodeExtension).adapted.manifest.id
     )
-    const rolledBack = deps.uninstall.mock.calls.map((c) => (c[0] as PluginRow).id)
+    const rolledBack = deps.revert.mock.calls.map((c) => (c[0] as PluginRow).id)
     expect(committed.filter((id) => id !== "a.root")).toEqual(rolledBack)
   })
 
-  it("keeps rolling back after one uninstall fails", async () => {
+  it("keeps rolling back after one revert fails", async () => {
     // One stuck directory must not strand the rest of the graph installed.
     const deps = stagingDeps(["c.deep", "b.mid", "a.root"])
     ;(deps.commit as jest.Mock).mockImplementation(async (p: PreparedVscodeExtension) => {
       if (p.adapted.manifest.id === "a.root") throw new Error("boom")
-      return row(p.adapted.manifest.id)
+      return deps.committed(p.adapted.manifest.id)
     })
-    ;(deps.uninstall as jest.Mock).mockImplementation(async (r: PluginRow) => {
+    ;(deps.revert as jest.Mock).mockImplementation(async (r: PluginRow) => {
       if (r.id === "b.mid") throw new Error("directory locked")
     })
 
     const graph = await stageGraph(plan(["c.deep", "b.mid", "a.root"]), deps)
     await expect(commitGraph(graph, deps)).rejects.toThrow("boom")
 
-    expect(deps.uninstall.mock.calls.map((c) => (c[0] as PluginRow).id)).toEqual([
-      "b.mid",
-      "c.deep",
-    ])
+    expect(deps.revert.mock.calls.map((c) => (c[0] as PluginRow).id)).toEqual(["b.mid", "c.deep"])
   })
 
   it("returns every created row on success", async () => {
@@ -508,7 +573,7 @@ describe("commitGraph", () => {
     const rows = await commitGraph(graph, deps)
 
     expect(rows.map((r) => r.id)).toEqual(["b.dep", "a.root"])
-    expect(deps.uninstall).not.toHaveBeenCalled()
+    expect(deps.revert).not.toHaveBeenCalled()
   })
 
   it("concurrent_installs_serialize", async () => {
@@ -533,7 +598,7 @@ describe("commitGraph", () => {
         await gate.promise
       }
       events.push(`exit:${id}`)
-      return row(id)
+      return deps.committed(id)
     })
 
     const graphA = await stageGraph(plan(["shared.dep", "a.root"]), deps)
@@ -572,7 +637,7 @@ describe("commitGraph", () => {
     await expect(commitGraph(graph, deps)).rejects.toThrow("first fails")
 
     ;(deps.commit as jest.Mock).mockImplementation(async (p: PreparedVscodeExtension) =>
-      row(p.adapted.manifest.id)
+      deps.committed(p.adapted.manifest.id)
     )
     const second = await stageGraph(plan(["a.root"]), deps)
     await expect(commitGraph(second, deps)).resolves.toHaveLength(1)
@@ -688,54 +753,6 @@ describe("default download", () => {
   })
 })
 
-describe("default uninstall", () => {
-  it("drops the Dexie row before the directory", async () => {
-    // A leftover directory with no row is inert. A row pointing at a deleted
-    // directory is a plugin the manager will try to load and fail on — so the
-    // row goes first.
-    const { deletePlugin } = jest.requireMock("@/lib/db/plugins")
-    const { removeFile } = jest.requireMock("@/lib/file/file-operations")
-    const order: string[] = []
-    deletePlugin.mockImplementation(async () => void order.push("row"))
-    removeFile.mockImplementation(async (p: string) => {
-      if (p.startsWith("/ext/")) order.push("dir")
-    })
-
-    const deps = stagingDeps(["b.dep", "a.root"])
-    ;(deps.commit as jest.Mock).mockImplementation(async (p: PreparedVscodeExtension) => {
-      if (p.adapted.manifest.id === "a.root") throw new Error("boom")
-      return row(p.adapted.manifest.id)
-    })
-    const graph = await stageGraph(plan(["b.dep", "a.root"]), deps)
-
-    await expect(commitGraph(graph, { ...deps, uninstall: undefined })).rejects.toThrow("boom")
-
-    expect(deletePlugin).toHaveBeenCalledWith("b.dep")
-    expect(removeFile).toHaveBeenCalledWith("/ext/b.dep", { recursive: true })
-    expect(order).toEqual(["row", "dir"])
-  })
-
-  it("skips the filesystem for a browser-mode placeholder path", async () => {
-    // Browser mode records `vsix://<id>@<sha>` — there is no directory to
-    // remove, and handing that to the fs plugin would throw.
-    const { removeFile } = jest.requireMock("@/lib/file/file-operations")
-    const deps = stagingDeps(["b.dep", "a.root"])
-    ;(deps.commit as jest.Mock).mockImplementation(async (p: PreparedVscodeExtension) => {
-      const id = p.adapted.manifest.id
-      if (id === "a.root") throw new Error("boom")
-      return { id, path: `vsix://${id}@abc123` } as PluginRow
-    })
-    const graph = await stageGraph(plan(["b.dep", "a.root"]), deps)
-
-    await expect(commitGraph(graph, { ...deps, uninstall: undefined })).rejects.toThrow("boom")
-
-    expect(removeFile).not.toHaveBeenCalledWith(
-      expect.stringContaining("vsix://"),
-      expect.anything()
-    )
-  })
-})
-
 // =============================================================================
 // The real chain, end to end
 // =============================================================================
@@ -798,10 +815,17 @@ describe("staging a real .vsix through the undefaulted pipeline", () => {
     // installing and OOMing the webview.
     expect(invoke).toHaveBeenCalledWith("plugin_vscode_install_vsix_from_path", {
       tempPath: "/tmp/cognia.hello.vsix",
+      expectedSha256: vsix.sha256,
     })
     expect(invoke).not.toHaveBeenCalledWith("plugin_vscode_install_vsix", expect.anything())
     expect(upsertPlugin).toHaveBeenCalledWith(
       expect.objectContaining({ id: "cognia.hello", source: "marketplace", enabled: false })
+    )
+    // The runtime knows the extension too, so enabling it can find it.
+    expect(mockManager.registerVscodeExtension).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "cognia.hello" }),
+      "/data/cognia/vscode-extensions/cognia.hello",
+      "marketplace"
     )
   })
 })

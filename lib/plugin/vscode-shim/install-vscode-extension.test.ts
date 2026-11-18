@@ -11,20 +11,90 @@
  * Fixtures are synthesised in-memory with JSZip, matching `vsix-installer.test.ts`.
  */
 
+import { createHash } from "node:crypto"
 import JSZip from "jszip"
 
-jest.mock("@/lib/db/plugins", () => ({ upsertPlugin: jest.fn(async (draft) => draft) }))
+import type { Plugin } from "@/types/plugin"
+
+jest.mock("@/lib/db/plugins", () => ({
+  upsertPlugin: jest.fn(async (draft) => draft),
+  getPlugin: jest.fn(async () => undefined),
+  deletePlugin: jest.fn(async () => undefined),
+}))
 jest.mock("@/lib/native/utils", () => ({ canUseTauriInvoke: jest.fn(() => false) }))
 jest.mock("@tauri-apps/api/core", () => ({ invoke: jest.fn() }))
 jest.mock("@/lib/db/plugin-install-origins", () => ({
   putInstallOrigin: jest.fn(async () => undefined),
+  getInstallOrigin: jest.fn(async () => undefined),
 }))
+jest.mock("@/lib/file/file-operations", () => ({ removeFile: jest.fn(async () => undefined) }))
+jest.mock("@/lib/plugin/error-bus", () => ({ dispatchPluginError: jest.fn() }))
+
+/** The runtime store the manager owns, reduced to its entries. */
+const mockStore: { plugins: Record<string, Plugin> } = { plugins: {} }
+jest.mock("@/stores/plugin-runtime", () => ({ usePluginStore: { getState: () => mockStore } }))
+
+/** Every manager and backup call, in order, as `name:arg`. */
+const mockEvents: string[] = []
+function mockSetStatus(id: string, status: Plugin["status"]) {
+  const entry = mockStore.plugins[id]
+  if (entry) mockStore.plugins[id] = { ...entry, status }
+}
+function mockStep(name: string, status?: Plugin["status"]) {
+  return jest.fn(async (id: string) => {
+    mockEvents.push(`${name}:${id}`)
+    if (status) mockSetStatus(id, status)
+  })
+}
+const mockManager = {
+  registerVscodeExtension: jest.fn(async (manifest: Plugin["manifest"], path: string, source) => {
+    mockEvents.push(`register:${manifest.id}@${manifest.version}`)
+    const existing = mockStore.plugins[manifest.id]
+    mockStore.plugins[manifest.id] = {
+      manifest,
+      path,
+      source,
+      status: existing?.status ?? "installed",
+      config: {},
+    } as Plugin
+  }),
+  restorePluginEntry: jest.fn(async (id: string, previous: Plugin | undefined) => {
+    mockEvents.push(`restore-entry:${id}:${previous ? previous.manifest.version : "none"}`)
+    if (previous) mockStore.plugins[id] = { ...previous, status: "installed" }
+    else delete mockStore.plugins[id]
+  }),
+  reservePluginRuntimeGraph: jest.fn((id: string) => ({ id })),
+  releasePluginRuntimeGraph: jest.fn(),
+  withPluginPackageMutation: jest.fn(async (_id: string, operation: () => Promise<unknown>) =>
+    operation()
+  ),
+  enablePlugin: mockStep("enable", "enabled"),
+  disablePlugin: mockStep("disable", "disabled"),
+  suspendPlugin: mockStep("suspend", "suspended"),
+  loadPlugin: mockStep("load", "loaded"),
+  unloadPlugin: mockStep("unload", "installed"),
+}
+jest.mock("@/lib/plugin/core/manager", () => ({ getPluginManager: () => mockManager }))
+
+const mockBackup = {
+  createBackup: jest.fn(async (id: string) => {
+    mockEvents.push(`backup:${id}`)
+    return { success: true, backup: { id: `${id}-snap` }, duration: 0 }
+  }),
+  restore: jest.fn(async (backupId: string) => {
+    mockEvents.push(`restore-backup:${backupId}`)
+    return { success: true, pluginId: "", restoredVersion: "", duration: 0, requiresRestart: false }
+  }),
+}
+jest.mock("@/lib/plugin/lifecycle/backup", () => ({ getPluginBackupManager: () => mockBackup }))
 jest.mock("@cognia/logging", () => ({
   loggers: { plugin: { warn: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() } },
 }))
 
 import { invoke } from "@tauri-apps/api/core"
-import { upsertPlugin } from "@/lib/db/plugins"
+import { deletePlugin, getPlugin, upsertPlugin } from "@/lib/db/plugins"
+import { removeFile } from "@/lib/file/file-operations"
+import { dispatchPluginError } from "@/lib/plugin/error-bus"
 import { canUseTauriInvoke } from "@/lib/native/utils"
 import { canonicalExtensionId, InvalidExtensionIdError } from "./extension-id"
 import {
@@ -35,7 +105,7 @@ import {
   VscodeExtensionsUnavailableError,
   type PreparedVscodeExtension,
 } from "./install-vscode-extension"
-import { putInstallOrigin } from "@/lib/db/plugin-install-origins"
+import { getInstallOrigin, putInstallOrigin } from "@/lib/db/plugin-install-origins"
 import type { VsCodeExtensionBlock } from "@/types/plugin/plugin-vscode"
 
 const upsertPluginMock = upsertPlugin as jest.Mock
@@ -65,6 +135,8 @@ const BENIGN = {
 beforeEach(() => {
   jest.clearAllMocks()
   canUseTauriInvokeMock.mockReturnValue(true)
+  mockStore.plugins = {}
+  mockEvents.length = 0
 })
 
 /** Commit as the desktop does, with Rust unpacking to the extension's own directory. */
@@ -186,14 +258,14 @@ describe("commitVscodeExtension", () => {
   })
 
   it("uses the Rust install path and rejects an id the two sides disagree on", async () => {
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
     invokeMock.mockResolvedValue({
       extensionId: "cognia.hello",
       installPath: "/data/cognia/vscode-extensions/cognia.hello",
-      sha256Hex: "a".repeat(64),
+      sha256Hex: prepared.vsix.sha256,
       packageJson: {},
     })
 
-    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
     await commitVscodeExtension(prepared)
     expect(upsertPluginMock.mock.calls[0]![0].path).toBe(
       "/data/cognia/vscode-extensions/cognia.hello"
@@ -205,7 +277,7 @@ describe("commitVscodeExtension", () => {
     invokeMock.mockResolvedValue({
       extensionId: "someone.else",
       installPath: "/data/cognia/vscode-extensions/someone.else",
-      sha256Hex: "a".repeat(64),
+      sha256Hex: prepared.vsix.sha256,
       packageJson: {},
     })
     await expect(commitVscodeExtension(prepared)).rejects.toThrow(/id mismatch/)
@@ -224,6 +296,307 @@ describe("commitVscodeExtension", () => {
   })
 })
 
+const INSTALL_PATH = "/data/cognia/vscode-extensions/cognia.hello"
+
+/** The host installing exactly what it was handed, as the real commands do. */
+function hostInstalls(prepared: PreparedVscodeExtension) {
+  invokeMock.mockImplementation(async (_command: string, args: { expectedSha256: string }) => {
+    mockEvents.push("host-install")
+    return {
+      extensionId: prepared.adapted.manifest.id,
+      installPath: INSTALL_PATH,
+      sha256Hex: args.expectedSha256,
+      packageJson: {},
+    }
+  })
+}
+
+/** An installed `cognia.hello` at `version`, with a runtime entry in `status`. */
+function installed(version: string, status: Plugin["status"]) {
+  const manifest = { id: "cognia.hello", name: "hello", version, type: "vscode-extension" }
+  mockStore.plugins["cognia.hello"] = {
+    manifest,
+    status,
+    source: "local",
+    path: INSTALL_PATH,
+    config: {},
+  } as unknown as Plugin
+  const row = {
+    id: "cognia.hello",
+    name: "hello",
+    version,
+    type: "vscode-extension",
+    status: "enabled",
+    enabled: true,
+    source: "local",
+    path: INSTALL_PATH,
+    manifest,
+  }
+  ;(getPlugin as jest.Mock).mockResolvedValue(row)
+  ;(getInstallOrigin as jest.Mock).mockResolvedValue({
+    pluginId: "cognia.hello",
+    version,
+    origin: { kind: "local", via: "vsix" },
+    recordedAt: 1,
+  })
+  return row
+}
+
+describe("commit transaction (PL03, PL04, PL05)", () => {
+  afterEach(() => {
+    ;(getPlugin as jest.Mock).mockResolvedValue(undefined)
+    ;(getInstallOrigin as jest.Mock).mockResolvedValue(undefined)
+  })
+
+  it("asks the host for exactly the reviewed bytes on both install paths", async () => {
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+
+    await commitVscodeExtension(prepared)
+    await commitVscodeExtension({ ...prepared, stagedPath: "/data/.downloads/x.vsix" })
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "plugin_vscode_install_vsix", {
+      vsixBase64: expect.any(String),
+      expectedSha256: prepared.vsix.sha256,
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "plugin_vscode_install_vsix_from_path", {
+      tempPath: "/data/.downloads/x.vsix",
+      expectedSha256: prepared.vsix.sha256,
+    })
+  })
+
+  it("undoes a fresh install whose installed bytes are not the reviewed ones", async () => {
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    invokeMock.mockResolvedValue({
+      extensionId: "cognia.hello",
+      installPath: INSTALL_PATH,
+      sha256Hex: "f".repeat(64),
+      packageJson: {},
+    })
+
+    await expect(commitVscodeExtension(prepared)).rejects.toThrow(/not the reviewed/)
+
+    expect(upsertPluginMock).not.toHaveBeenCalled()
+    expect(removeFile).toHaveBeenCalledWith(INSTALL_PATH, { recursive: true })
+  })
+
+  it("registers a fresh install with the runtime, discovered and off", async () => {
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+
+    const { row } = await commitVscodeExtension(prepared)
+
+    expect(mockManager.registerVscodeExtension).toHaveBeenCalledWith(
+      prepared.adapted.manifest,
+      INSTALL_PATH,
+      "local"
+    )
+    expect(mockStore.plugins["cognia.hello"]?.path).toBe(INSTALL_PATH)
+    expect(row).toMatchObject({ status: "discovered", enabled: false })
+    // Nothing was installed before, so there was nothing to stop or snapshot.
+    expect(mockEvents).toEqual(["host-install", "register:cognia.hello@1.0.0"])
+  })
+
+  it("stops, snapshots and restarts an enabled extension it replaces, keeping its row state", async () => {
+    installed("0.9.0", "enabled")
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+
+    await commitVscodeExtension(prepared)
+
+    expect(mockEvents).toEqual([
+      "disable:cognia.hello",
+      "unload:cognia.hello",
+      "backup:cognia.hello",
+      "host-install",
+      "register:cognia.hello@1.0.0",
+      "enable:cognia.hello",
+    ])
+    const draft = upsertPluginMock.mock.calls[0]![0]
+    expect(draft).not.toHaveProperty("status")
+    expect(draft).not.toHaveProperty("enabled")
+    expect(mockManager.reservePluginRuntimeGraph).toHaveBeenCalledWith("cognia.hello")
+    expect(mockManager.releasePluginRuntimeGraph).toHaveBeenCalled()
+  })
+
+  it.each([
+    ["loaded", ["unload:cognia.hello", "load:cognia.hello"]],
+    [
+      "suspended",
+      [
+        "disable:cognia.hello",
+        "unload:cognia.hello",
+        "enable:cognia.hello",
+        "suspend:cognia.hello",
+      ],
+    ],
+  ] as const)("returns a %s extension to that state, not to enabled", async (status, calls) => {
+    installed("0.9.0", status)
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+
+    await commitVscodeExtension(prepared)
+
+    expect(mockEvents.filter((e) => !/^(backup|host-install|register)/.test(e))).toEqual(calls)
+  })
+
+  it("puts the previous package, row, entry and origin back when recording the new one fails", async () => {
+    const previousRow = installed("0.9.0", "enabled")
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+    upsertPluginMock.mockRejectedValueOnce(new Error("quota exceeded"))
+
+    await expect(commitVscodeExtension(prepared)).rejects.toThrow("quota exceeded")
+
+    expect(mockBackup.restore).toHaveBeenCalledWith("cognia.hello-snap", mockManager)
+    expect(upsertPluginMock).toHaveBeenLastCalledWith(previousRow)
+    expect(mockEvents).toEqual([
+      "disable:cognia.hello",
+      "unload:cognia.hello",
+      "backup:cognia.hello",
+      "host-install",
+      "restore-backup:cognia.hello-snap",
+      "restore-entry:cognia.hello:0.9.0",
+      "enable:cognia.hello",
+    ])
+    expect(putInstallOrigin).toHaveBeenLastCalledWith(
+      expect.objectContaining({ version: "0.9.0", origin: { kind: "local", via: "vsix" } })
+    )
+    expect(removeFile).not.toHaveBeenCalled()
+  })
+
+  it("removes a fresh install whose row could not be written: row, entry, then directory", async () => {
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+    upsertPluginMock.mockRejectedValueOnce(new Error("quota exceeded"))
+    const order: string[] = []
+    ;(deletePlugin as jest.Mock).mockImplementationOnce(async () => void order.push("row"))
+    mockManager.restorePluginEntry.mockImplementationOnce(async () => void order.push("entry"))
+    ;(removeFile as jest.Mock).mockImplementationOnce(async () => void order.push("dir"))
+
+    await expect(commitVscodeExtension(prepared)).rejects.toThrow("quota exceeded")
+
+    expect(order).toEqual(["row", "entry", "dir"])
+    expect(removeFile).toHaveBeenCalledWith(INSTALL_PATH, { recursive: true })
+  })
+
+  it("never touches the package when the snapshot fails, and restarts the old runtime", async () => {
+    installed("0.9.0", "enabled")
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+    mockBackup.createBackup.mockResolvedValueOnce({
+      success: false,
+      error: "disk full",
+      duration: 0,
+    } as never)
+
+    await expect(commitVscodeExtension(prepared)).rejects.toThrow(/Could not snapshot.*disk full/)
+
+    expect(invokeMock).not.toHaveBeenCalled()
+    expect(mockEvents).toEqual([
+      "disable:cognia.hello",
+      "unload:cognia.hello",
+      "enable:cognia.hello",
+    ])
+  })
+
+  it("registers an extension installed before installs reached the runtime, then replaces it", async () => {
+    const previousRow = installed("0.9.0", "installed")
+    delete mockStore.plugins["cognia.hello"]
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+
+    await commitVscodeExtension(prepared)
+
+    expect(mockManager.registerVscodeExtension).toHaveBeenNthCalledWith(
+      1,
+      previousRow.manifest,
+      INSTALL_PATH,
+      "local"
+    )
+    // Registered, so it could be snapshotted before its files were replaced.
+    expect(mockEvents.slice(0, 3)).toEqual([
+      "register:cognia.hello@0.9.0",
+      "backup:cognia.hello",
+      "host-install",
+    ])
+  })
+
+  it("refuses to install over a plugin of another type with the same id", async () => {
+    ;(getPlugin as jest.Mock).mockResolvedValue({ id: "cognia.hello", type: "frontend" })
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+
+    await expect(commitVscodeExtension(prepared)).rejects.toThrow(/frontend plugin/)
+    expect(invokeMock).not.toHaveBeenCalled()
+  })
+
+  it("leaves the directory of another id alone when the host and renderer disagree", async () => {
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    invokeMock.mockResolvedValue({
+      extensionId: "someone.else",
+      installPath: "/data/cognia/vscode-extensions/someone.else",
+      sha256Hex: prepared.vsix.sha256,
+      packageJson: {},
+    })
+
+    await expect(commitVscodeExtension(prepared)).rejects.toThrow(/id mismatch/)
+    expect(removeFile).not.toHaveBeenCalled()
+  })
+
+  it("reports a failed restart without calling the install a failure", async () => {
+    installed("0.9.0", "enabled")
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+    mockManager.enablePlugin.mockRejectedValueOnce(new Error("not trusted"))
+
+    await expect(commitVscodeExtension(prepared)).resolves.toMatchObject({
+      row: expect.objectContaining({ id: "cognia.hello" }),
+    })
+    expect(dispatchPluginError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "cognia.hello",
+        message: "not trusted",
+        severity: "warning",
+      })
+    )
+  })
+
+  it("reverts a fresh install by removing it", async () => {
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+    const { revert } = await commitVscodeExtension(prepared)
+    mockEvents.length = 0
+
+    await revert()
+
+    expect(deletePlugin).toHaveBeenCalledWith("cognia.hello")
+    expect(removeFile).toHaveBeenCalledWith(INSTALL_PATH, { recursive: true })
+    expect(mockStore.plugins["cognia.hello"]).toBeUndefined()
+    expect(mockBackup.restore).not.toHaveBeenCalled()
+  })
+
+  it("reverts a replacement by restoring the snapshot and the previous runtime state", async () => {
+    const previousRow = installed("0.9.0", "enabled")
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+    hostInstalls(prepared)
+    const { revert } = await commitVscodeExtension(prepared)
+    mockEvents.length = 0
+
+    await revert()
+
+    expect(mockEvents).toEqual([
+      "disable:cognia.hello",
+      "unload:cognia.hello",
+      "restore-backup:cognia.hello-snap",
+      "restore-entry:cognia.hello:0.9.0",
+      "enable:cognia.hello",
+    ])
+    expect(upsertPluginMock).toHaveBeenLastCalledWith(previousRow)
+    expect(removeFile).not.toHaveBeenCalled()
+  })
+})
+
 describe("hostile manifests", () => {
   // Rust unpacks the archive and derives the id from its own package.json.
   beforeEach(() => {
@@ -234,7 +607,10 @@ describe("hostile manifests", () => {
       return {
         extensionId: id,
         installPath: `/data/cognia/vscode-extensions/${id}`,
-        sha256Hex: "",
+        // The host hashes the bytes it installs, as the real command does.
+        sha256Hex: createHash("sha256")
+          .update(Buffer.from(args.vsixBase64, "base64"))
+          .digest("hex"),
         packageJson: pkg,
       }
     })

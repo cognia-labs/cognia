@@ -164,6 +164,7 @@ import {
   upsertPlugins,
   getPlugin,
   deletePlugin,
+  listPlugins,
   setPluginEnabled,
   setPluginConfig,
   getPythonHostSettings,
@@ -575,6 +576,27 @@ interface OptionalServiceSubscription {
  * grants, WASM preload). Runtime teardown deliberately has no shallow
  * resurrection path: once teardown starts, old effects stay detached.
  */
+/** Every runtime `PluginSource`; a Dexie row stores it as a plain string. */
+const PLUGIN_SOURCES: ReadonlySet<PluginSource> = new Set<PluginSource>([
+  "builtin",
+  "local",
+  "marketplace",
+  "git",
+  "dev",
+])
+
+/** Store statuses that describe a live (or stopping) runtime, not just a package. */
+const RUNTIME_ENTRY_STATUSES: ReadonlySet<Plugin["status"]> = new Set([
+  "loading",
+  "loaded",
+  "enabling",
+  "enabled",
+  "disabling",
+  "disabled",
+  "suspended",
+  "unloading",
+])
+
 interface StagedBackendInstallResult {
   manifest: PluginManifest
   path: string
@@ -3016,8 +3038,45 @@ export class PluginManager {
     }
 
     await this.persistDiscoveredPluginRows(pendingRows)
+    await this.reconcileVscodeExtensionRows()
 
     return discovered
+  }
+
+  /**
+   * Bring every installed VS Code extension into the runtime store.
+   *
+   * They are unpacked into their own install root, which the directory scan
+   * above never reads, so their Dexie row is the only record of them. A store
+   * that lost its entry (or never had one) is rebuilt from that row; an entry
+   * already pointing at the row's path is left alone. One bad row is logged
+   * and skipped so the rest still register.
+   */
+  private async reconcileVscodeExtensionRows(): Promise<void> {
+    let rows: PluginRow[]
+    try {
+      rows = await listPlugins()
+    } catch (error) {
+      loggers.manager.warn("Failed to read installed VS Code extensions", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return
+    }
+    for (const row of rows) {
+      if (row.type !== "vscode-extension" || !row.path) continue
+      if (usePluginStore.getState().plugins[row.id]?.path === row.path) continue
+      try {
+        await this.registerVscodeExtension(
+          row.manifest as unknown as PluginManifest,
+          row.path,
+          row.source
+        )
+      } catch (error) {
+        loggers.manager.warn(`[plugin:${row.id}] installed VS Code extension did not register`, {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
   }
 
   /**
@@ -3254,6 +3313,98 @@ export class PluginManager {
     }
 
     this.registerPluginPermissions(manifest.id, manifest.permissions || [])
+  }
+
+  /**
+   * Register a VS Code extension the host unpacked into the extension install
+   * root (`plugin_vscode_install_vsix*`). No directory scan reads that root, so
+   * without this an installed extension had a Library row and no runtime
+   * entry, and enabling it failed with "Plugin not found". Idempotent: an
+   * existing entry is refreshed in place, never re-installed.
+   */
+  async registerVscodeExtension(
+    manifest: PluginManifest,
+    path: string,
+    /** A runtime source, or a row's `source` column; anything else reads as local. */
+    source: PluginSource | string
+  ): Promise<void> {
+    if (manifest.type !== "vscode-extension") {
+      throw new Error(`${manifest.id} is not a VS Code extension`)
+    }
+    const store = usePluginStore.getState()
+    const validation = validatePluginManifest(manifest, {
+      governanceMode: this.pluginPointGovernanceMode,
+    })
+    if (!validation.valid) {
+      throw new Error(`Invalid plugin manifest: ${(validation.errors || []).join(", ")}`)
+    }
+    const compatibility = this.applyCompatibilityPolicy(manifest, `vscode:${manifest.id}`)
+    if (compatibility.blocked) {
+      const messages = compatibility.diagnostics
+        .filter((item) => item.severity === "error")
+        .map((item) => `${item.code}: ${item.message}`)
+      throw new Error(`Incompatible plugin manifest: ${messages.join("; ")}`)
+    }
+    const capabilityContractDiagnostics = this.extractCapabilityContractDiagnostics(
+      validation.diagnostics || []
+    )
+
+    const existing = store.plugins[manifest.id]
+    const projection = this.buildDiscoveryProjection(
+      manifest,
+      path,
+      PLUGIN_SOURCES.has(source as PluginSource) ? (source as PluginSource) : "local",
+      [...capabilityContractDiagnostics, ...compatibility.diagnostics],
+      this.collectObservedSources(existing)
+    )
+    // The bytes under this path may be new; a cached verdict described the old ones.
+    getPluginSignatureVerifier().clearCache(path)
+    store.discoverPlugin(manifest, projection.source, path, {
+      installRootKind: projection.installRootKind,
+      compatibilityDiagnostics: projection.compatibilityDiagnostics,
+      descriptor: projection.descriptor,
+    })
+    if (!existing) await store.installPlugin(manifest.id)
+    this.registerPluginPermissions(manifest.id, manifest.permissions || [])
+  }
+
+  /**
+   * Put a plugin's store entry back to what it was before a package
+   * replacement that is being undone, or drop it when there was none.
+   *
+   * Metadata only. The replacement stopped the runtime before it started, so
+   * the entry comes back as installed; restarting it is the caller's job, and
+   * a torn-down runtime is never resurrected from a snapshot.
+   */
+  async restorePluginEntry(pluginId: string, previous: Plugin | undefined): Promise<void> {
+    const store = usePluginStore.getState()
+    if (previous) {
+      const restored: Plugin = RUNTIME_ENTRY_STATUSES.has(previous.status)
+        ? {
+            ...previous,
+            status: "installed",
+            hooks: undefined,
+            tools: undefined,
+            components: undefined,
+            modes: undefined,
+            commands: undefined,
+            enabledAt: undefined,
+          }
+        : previous
+      usePluginStore.setState((state) => ({
+        plugins: { ...state.plugins, [pluginId]: restored },
+      }))
+      getPluginSignatureVerifier().clearCache(previous.path)
+      this.registerPluginPermissions(pluginId, previous.manifest.permissions || [])
+      return
+    }
+    if (!store.plugins[pluginId]) return
+    await store.uninstallPlugin(pluginId, {
+      skipFileRemoval: true,
+      viaManager: false,
+      rememberRemoval: false,
+    })
+    getPermissionGuard().unregisterPlugin(pluginId)
   }
 
   // ===========================================================================
