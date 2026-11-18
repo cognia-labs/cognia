@@ -745,3 +745,38 @@ What members see of a tool call is a per-session tier, `summary` by default
 and `full` only by an owner or maintainer, enforced with a revision the server
 checks on every publication. A conversation can also be shared from now on,
 leaving its private history on the device.
+
+## Implementation update — the CLI: one sign-in per local account (2026-11-18)
+
+Section 9 binds a LocalProfile to a person on first login. The CLI had no
+LocalProfile boundary for its sign-in: one `~/.cognia/logto.json` per home,
+read by every Brain on the machine, so signing one Host's Brain in as B
+switched every other Brain on that home to B, and the profile's registry
+binding was made afresh from whoever was in the file at each start.
+
+What changed:
+
+- **A sign-in belongs to a local account.** `--account`, else
+  `COGNIA_LOCAL_ACCOUNT_ID`, else `local_acct_a` (`cli/src/config/local-account.ts`),
+  resolved the same way by `logto`, `serve`, `account-sync` and `host login`,
+  so naming an account picks the partition and the person together. There is
+  no saved "current account": a restarted Brain opens the account its Host
+  names. Files live under `~/.cognia/accounts/<id>/` (`logto.json`,
+  `logto-login.json`, `person.json`), with one lock per account.
+- **The account binds on its first sign-in** (`person.json`: issuer plus the
+  access token's subject). A later sign-in as anyone else is refused, its
+  tokens revoked, and the message names both people; `logto login --rebind`
+  is the explicit takeover. Sign-out keeps the binding. An account signs in to
+  one deployment, as a desktop profile does, because the issuer is part of the
+  person.
+- **The Brain pins the person at start.** Account sync and the collaboration
+  reader take only tokens of that person; a `--rebind` while it runs takes
+  effect at the next start, when the collaboration reader rebinds the
+  profile's registry row and clears the old person's read cursors.
+- **Multi-tenant Hosts pair through the account's sign-in.** `host login`
+  registers the device with `mode: "oidc"` and the account's session; the
+  record keeps which account and person paired. Registration now accepts the
+  native client a Host announces (`nativeClientId`), which the desktop's and
+  phone's native sign-in use as well.
+
+`~/.cognia/logto.json` is no longer read; existing installs sign in once more.

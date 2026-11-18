@@ -103,7 +103,7 @@ connected to it shows a hint with the command.
 
 ```bash
 export COGNIA_ACCOUNT_SYNC=1            # here and for `cognia-agent serve`
-cognia-agent logto login                # the official account
+cognia-agent logto login                # the official account, for the default local account
 cognia-agent account-sync status        # what to run next
 cognia-agent account-sync join          # or `setup` on the first device, `recover` with the key
 ```
@@ -113,9 +113,11 @@ are `approve`, `deny`, `devices`, `revoke`, `rotate`, `recovery-key` and `data`.
 
 - **Keys** live in `~/.cognia/account-sync/`, one 0600 file per secret in a 0700 directory. The
   commands and the brain share them.
-- **Sign-in** is the CLI's Logto session (`~/.cognia/logto.json`), refreshed as needed. Only a
-  session of the official issuer counts, and a sign-in as someone else stops this space's
-  tokens.
+- **Sign-in** belongs to a local account (`--account`, else `COGNIA_LOCAL_ACCOUNT_ID`, else
+  `local_acct_a`), the same one `serve` opens: `~/.cognia/accounts/<id>/logto.json`, refreshed
+  as needed. The account binds to the person who signs in first; `logto login` refuses anyone
+  else unless `--rebind` hands the account over. Only the official issuer's person counts, and
+  the brain keeps acting for the person it started with until it restarts.
 - **The brain** checks every 20 s. Once the host is enrolled, it runs the same engine on its own
   database, keeps the socket open and logs where it stands.
 - **Merge or replace** has no window to ask in, so the brain waits and logs the command. Answer

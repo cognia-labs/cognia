@@ -322,7 +322,7 @@ Cognia 为普通用户运营账号。登录是可选的："离线继续"保留�
 **无界面主机**在自己的终端里登记。它们不使用计划最初提出的伴侣 RPC，那种方式会让浏览器标签页去操纵另一台主机的密钥。
 
 - `cognia-agent account-sync status|setup|join|recover|approve|deny|devices|revoke|rotate|recovery-key|data` 封装同一套登记流程。
-- 主机用 `cognia-agent logto login` 登录，只认官方签发方的会话。
+- 主机用 `cognia-agent logto login` 登录，只认官方签发方的会话。自 2026-11-18 起，登录属于某个本地账号，并把该账号绑定到一个人（ADR-0149，“CLI：每个本地账号一份登录”）。
 - 密钥以 0600 文件存放在 `~/.cognia/account-sync/` 下，与 brain 共用。
 - 主机登记后，brain 的 `account-sync` 运行时启动引擎。它采用通过 `account-sync data --merge|--replace` 给出的合并或替换答案，并先做备份。
 - 连接到无界面主机的标签页会显示这条命令。

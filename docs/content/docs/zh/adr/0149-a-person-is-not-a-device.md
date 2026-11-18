@@ -316,3 +316,16 @@ Schema v225 新增 `sharedRunJournals`，使用账号数据库加密存储执行
 ## 实施更新——成员实时观看 Run（2026-10-26）
 
 ADR-0241 细化了上面的共享 AI 会话更新。Run 的回复现在边生成边送达成员：执行端用 run token 发送从不存储的实时帧，服务端对每一帧检查租约、身份和灰度开关后转发给 `cognia.chat.v2` socket，已存储的 correction 仍是唯一记录（回复结束时写入，实时帧承载期间最多每 10 秒写一次）。成员能看到工具调用的多少由会话级别决定：默认 `summary`，只有 owner 或 maintainer 能开启 `full`，服务端在每次发布时校验其 revision。对话还可以"从现在开始"共享，私有历史留在本设备。
+
+## 实施更新——CLI：每个本地账号一份登录（2026-11-18）
+
+第 9 节规定 LocalProfile 在首次登录时绑定到一个人。CLI 的登录原先没有这层边界：每个 home 只有一份 `~/.cognia/logto.json`，同一台机器上的所有 Brain 都读它。给其中一个 Host 的 Brain 以 B 登录，其他 Brain 也会随之变成 B；分区在注册表里的绑定，也是每次启动时按文件里碰巧是谁重新建立的。
+
+改动如下：
+
+- **登录归属于本地账号。** 取值顺序是 `--account`，否则 `COGNIA_LOCAL_ACCOUNT_ID`，再否则 `local_acct_a`（`cli/src/config/local-account.ts`）。`logto`、`serve`、`account-sync` 和 `host login` 用同一套规则，所以指定一个账号就同时选定了数据分区和登录的人。不保存“当前账号”：Brain 重启后打开的是它的 Host 指定的账号。文件放在 `~/.cognia/accounts/<id>/` 下（`logto.json`、`logto-login.json`、`person.json`），每个账号一把锁。
+- **账号在首次登录时绑定**（`person.json`：签发方加访问令牌的 subject）。之后用别人登录会被拒绝，新令牌随即撤销，提示中写明双方是谁；`logto login --rebind` 是明确的接管方式。退出登录保留绑定。和桌面端的 profile 一样，一个账号只登录一个部署，因为签发方是身份的一部分。
+- **Brain 在启动时固定这个人。** 账号同步和协作读取器只接受这个人的令牌；运行期间执行的 `--rebind` 在下次启动时生效，届时协作读取器会重新绑定分区的注册表记录，并清掉前一个人的已读游标。
+- **多租户 Host 通过账号的登录完成配对。** `host login` 用该账号的会话以 `mode: "oidc"` 注册设备，记录中保存是哪个账号、哪个人完成的配对。注册现在也接受 Host 公布的原生客户端（`nativeClientId`），桌面端和手机的原生登录用的也是它。
+
+`~/.cognia/logto.json` 不再读取，现有安装需要重新登录一次。

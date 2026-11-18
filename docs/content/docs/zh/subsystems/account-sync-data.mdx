@@ -80,7 +80,7 @@ description: 账号同步的第 3a 阶段——会话、消息、角色、技能
 
 ```bash
 export COGNIA_ACCOUNT_SYNC=1            # here and for `cognia-agent serve`
-cognia-agent logto login                # the official account
+cognia-agent logto login                # the official account, for the default local account
 cognia-agent account-sync status        # what to run next
 cognia-agent account-sync join          # or `setup` on the first device, `recover` with the key
 ```
@@ -88,7 +88,7 @@ cognia-agent account-sync join          # or `setup` on the first device, `recov
 `join` 会打印六位代码，与批准设备上显示的代码比对。其他子命令有 `approve`、`deny`、`devices`、`revoke`、`rotate`、`recovery-key` 和 `data`。
 
 - **密钥**存放在 `~/.cognia/account-sync/`：目录权限 0700，每个密钥一个 0600 文件。命令和 brain 共用它们。
-- **登录**使用 CLI 的 Logto 会话（`~/.cognia/logto.json`），按需刷新。只有官方签发方的会话有效；改用别人的身份登录后，这个空间的令牌立即失效。
+- **登录**属于一个本地账号（`--account`，否则 `COGNIA_LOCAL_ACCOUNT_ID`，再否则 `local_acct_a`），与 `serve` 打开的是同一个：会话存在 `~/.cognia/accounts/<id>/logto.json`，按需刷新。账号绑定到第一个登录的人；之后用别人登录会被 `logto login` 拒绝，除非用 `--rebind` 把账号交给对方。只有官方签发方的人有效；brain 在重启前一直代表启动时的那个人。
 - **brain** 每 20 秒检查一次。主机登记后，它在自己的数据库上运行同一个引擎，保持 WebSocket 连接，并在日志中说明当前状态。
 - **合并还是替换**：没有窗口可以询问，所以 brain 会等待，并在日志里给出命令。可以事先用 `cognia-agent account-sync data --merge`（或 `--replace`）回答。brain 先备份到定时备份目录（或 `<serve home>/backups`），然后加入。
 

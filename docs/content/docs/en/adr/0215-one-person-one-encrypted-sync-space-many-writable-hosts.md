@@ -322,7 +322,7 @@ The schema is v236. The two-and-three-client convergence suite (`sync.integratio
 **Headless hosts** enroll from their own terminal. They do not take the companion RPCs the plan first proposed, which would have had a browser tab drive another host's keys.
 
 - `cognia-agent account-sync status|setup|join|recover|approve|deny|devices|revoke|rotate|recovery-key|data` wraps the same enrollment flows.
-- The host signs in with `cognia-agent logto login`; only an official-issuer session counts.
+- The host signs in with `cognia-agent logto login`; only an official-issuer session counts. Since 2026-11-18 the sign-in belongs to a local account and binds it to one person (ADR-0149, "The CLI: one sign-in per local account").
 - Keys live in 0600 files under `~/.cognia/account-sync/`, shared with the brain.
 - The brain's `account-sync` runtime starts the engine once the host is enrolled. It takes the merge-or-replace answer given with `account-sync data --merge|--replace`, and backs up first.
 - The tab connected to a headless host shows the command.
