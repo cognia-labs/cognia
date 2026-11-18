@@ -18,15 +18,25 @@
  *   html2canvas walks the DOM, and it cannot walk into the sandboxed preview
  *   frame (`components/artifacts/artifact-preview.tsx` gives that one
  *   `sandbox="allow-scripts"` with no `allow-same-origin`). This indirection is
- *   the same recipe `lib/export/html/chat-png.ts` uses.
+ *   the same recipe `lib/export/html/chat-png.ts` uses. While the HTML is
+ *   running interactively its scripts may have changed what it shows, so the
+ *   live frame is captured instead, exactly as for React.
  * - **react**: the same off-screen iframe, but re-rendering the SOURCE would
  *   capture unexecuted JSX, so the live preview is asked for a snapshot of
  *   what it actually drew first (`lib/artifacts/frame-capture-registry.ts`).
  *   Rasterising inside that frame is impossible: html2canvas clones into a
  *   child iframe, and an opaque-origin document cannot read its own child.
+ *   A snapshot is sanitised with the capture profile, which keeps the form
+ *   controls the frame drew (`sanitizeCapturedDocument`).
  * - **renderer types** (chart / mermaid / math): captured from the mounted
  *   node via `lib/artifacts/preview-registry.ts`. Recharts and Mermaid draw
  *   live React/SVG; there is no serialisable source to re-render off-screen.
+ *   The node scrolls; the capture expands it and every scroll box inside it,
+ *   so the image is the whole artifact whatever the scroll position.
+ *
+ * A capture is bound to the revision it was asked for: a preview showing
+ * another revision is refused (`ArtifactPreviewOutdatedError`), never
+ * exported under the requested one.
  * - **plugin renderers** (a cognia-office workbook, a cognia-pdf page, …):
  *   mounted off-screen through the same `mount` → `ready` → `dispose`
  *   contract the dock uses (`components/artifacts/artifact-renderers.tsx`), so
@@ -36,8 +46,12 @@
  */
 
 import html2canvas from "html2canvas-pro"
-import { sanitizeHTML } from "@/lib/artifacts/preview-utils"
-import { getArtifactPreviewNode } from "@/lib/artifacts/preview-registry"
+import { sanitizeCapturedDocument, sanitizeHTML } from "@/lib/artifacts/preview-utils"
+import {
+  ArtifactPreviewOutdatedError,
+  resolveArtifactPreview,
+  type ArtifactPreviewTarget,
+} from "@/lib/artifacts/preview-registry"
 import { captureArtifactFrame } from "@/lib/artifacts/frame-capture-registry"
 import {
   resolveRegisteredArtifactRenderer,
@@ -132,8 +146,16 @@ async function rasteriseSvg(content: string): Promise<Blob> {
   }
 }
 
-/** html / react → PNG through an off-screen same-origin iframe. */
-async function rasteriseHtml(content: string, background: string): Promise<Blob> {
+/**
+ * html / react → PNG through an off-screen same-origin iframe. `source` is
+ * model-written markup, sanitised like the passive preview it must match;
+ * `snapshot` is what a live frame drew, sanitised with the capture profile.
+ */
+async function rasteriseHtml(
+  content: string,
+  background: string,
+  origin: "source" | "snapshot"
+): Promise<Blob> {
   const iframe = document.createElement("iframe")
   iframe.setAttribute("aria-hidden", "true")
   iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${CAPTURE_WIDTH_PX}px;height:10px;border:0;visibility:hidden`
@@ -147,7 +169,10 @@ async function rasteriseHtml(content: string, background: string): Promise<Blob>
       // Sanitised, and deliberately NOT sandboxed: html2canvas has to read this
       // document. Scripts are stripped by `sanitizeHTML`, which is what makes
       // that safe.
-      iframe.srcdoc = sanitizeHTML(content, { wholeDocument: true })
+      iframe.srcdoc =
+        origin === "snapshot"
+          ? sanitizeCapturedDocument(content)
+          : sanitizeHTML(content, { wholeDocument: true })
     })
     const doc = iframe.contentDocument
     const body = doc?.body
@@ -168,14 +193,60 @@ async function rasteriseHtml(content: string, background: string): Promise<Blob>
   }
 }
 
-/** A live renderer node → PNG. */
-async function rasteriseMountedNode(node: HTMLElement, background: string): Promise<Blob> {
-  const height = Math.max(node.scrollHeight, 1)
-  if (height > MAX_PNG_HEIGHT_PX) throw new ArtifactTooLargeToRasteriseError(height)
+const SCROLLING_OVERFLOW = /^(auto|scroll|overlay)$/
+
+/**
+ * Lay a scrolling element out at its full content size, in the capture clone.
+ * html2canvas copies every element's scroll offset into its clone, so a node
+ * that scrolls was captured as its visible window at the current scroll
+ * position, and the image changed with where the user had scrolled.
+ */
+function expandScrollBox(element: HTMLElement, style: CSSStyleDeclaration): void {
+  const values = [style.overflowX, style.overflowY, ...style.overflow.split(/\s+/)]
+  if (!values.some((value) => SCROLLING_OVERFLOW.test(value))) return
+  element.style.setProperty("overflow", "visible", "important")
+  element.style.setProperty("height", "auto", "important")
+  element.style.setProperty("max-height", "none", "important")
+  // Only a box that overflows sideways is widened; setting every width would
+  // shrink border-box elements by their border and scrollbar.
+  if (element.scrollWidth > element.clientWidth) {
+    element.style.setProperty("width", `${element.scrollWidth}px`, "important")
+  }
+  element.scrollTop = 0
+  element.scrollLeft = 0
+}
+
+/** A live renderer node showing `artifact.content` → PNG, the whole of it. */
+async function rasteriseMountedNode(
+  artifact: Pick<Artifact, "id" | "content">,
+  target: ArtifactPreviewTarget,
+  background: string
+): Promise<Blob> {
+  const { node } = target
+  // A lower bound that needs no clone: the node's own content height.
+  const ownHeight = Math.max(node.scrollHeight, 1)
+  if (ownHeight > MAX_PNG_HEIGHT_PX) throw new ArtifactTooLargeToRasteriseError(ownHeight)
+  // Checked immediately before the call: html2canvas clones the node
+  // synchronously inside it, so nothing can repaint the node between this
+  // check and the copy it renders.
+  if (!document.contains(node) || target.shows() !== artifact.content) {
+    throw new ArtifactPreviewOutdatedError(artifact.id)
+  }
   const canvas = await html2canvas(node, {
     backgroundColor: background,
     scale: 2,
     logging: false,
+    onclone: (clonedDocument, clonedNode) => {
+      const view = clonedDocument.defaultView
+      if (!view) return
+      for (const element of [clonedNode, ...clonedNode.querySelectorAll<HTMLElement>("*")]) {
+        if (element instanceof view.HTMLElement) {
+          expandScrollBox(element, view.getComputedStyle(element))
+        }
+      }
+      const height = Math.ceil(clonedNode.getBoundingClientRect().height)
+      if (height > MAX_PNG_HEIGHT_PX) throw new ArtifactTooLargeToRasteriseError(height)
+    },
   })
   return canvasToPng(canvas)
 }
@@ -203,23 +274,29 @@ export async function renderArtifactToPngBlob(
   const adapter = getArtifactRuntimeAdapter(artifact.type)
 
   if (artifact.type === "svg") return rasteriseSvg(artifact.content)
-  if (artifact.type === "react") {
-    // A React artifact's source is JSX that has not run. The only thing worth
-    // capturing is what the live preview drew, so ask it.
-    const snapshot = await captureArtifactFrame(artifact.id)
-    if (!snapshot) throw new ArtifactPreviewNotMountedError(artifact.id)
-    if (snapshot.height > MAX_PNG_HEIGHT_PX) {
-      throw new ArtifactTooLargeToRasteriseError(snapshot.height)
+  if (artifact.type === "react" || artifact.type === "html") {
+    // A React artifact's source is JSX that has not run, and interactive HTML
+    // may have been changed by its scripts since it loaded. What is worth
+    // capturing is what the live frame drew, so ask a scripted frame.
+    const snapshot = await captureArtifactFrame(artifact.id, artifact.content, {
+      liveOnly: true,
+    })
+    if (snapshot) {
+      if (snapshot.height > MAX_PNG_HEIGHT_PX) {
+        throw new ArtifactTooLargeToRasteriseError(snapshot.height)
+      }
+      return rasteriseHtml(snapshot.html, background ?? "#ffffff", "snapshot")
     }
-    return rasteriseHtml(snapshot.html, background ?? "#ffffff")
+    if (artifact.type === "react") throw new ArtifactPreviewNotMountedError(artifact.id)
   }
   if (adapter.transport === "iframe") {
-    return rasteriseHtml(artifact.content, background ?? "#ffffff")
+    // Static HTML: the passive preview draws exactly its sanitised source.
+    return rasteriseHtml(artifact.content, background ?? "#ffffff", "source")
   }
   if (adapter.transport === "renderer") {
-    const node = getArtifactPreviewNode(artifact.id)
-    if (!node) throw new ArtifactPreviewNotMountedError(artifact.id)
-    return rasteriseMountedNode(node, background ?? "#ffffff")
+    const target = await resolveArtifactPreview(artifact.id, artifact.content)
+    if (!target) throw new ArtifactPreviewNotMountedError(artifact.id)
+    return rasteriseMountedNode(artifact, target, background ?? "#ffffff")
   }
   throw new ArtifactNotRasterisableError(artifact.type)
 }

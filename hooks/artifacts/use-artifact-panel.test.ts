@@ -49,19 +49,19 @@ jest.mock("@/lib/capacitor/clipboard", () => ({
   writeText: (v: string) => clipboardWriteTextMock(v),
 }))
 
-const saveGeneratedDocumentMock = jest.fn(
-  async (_o?: unknown): Promise<{ kind: string; [k: string]: unknown }> => ({
-    kind: "saved",
-    platform: "mobile",
-    location: "file://doc",
-    filename: "Page.docx",
-  })
-)
+const generateDocxMock = jest.fn(async (_o?: unknown) => ({
+  data: new Blob(["docx"]),
+  mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  filename: "Page.docx",
+}))
 jest.mock("@/lib/files/document-writer", () => ({
-  saveGeneratedDocument: (o: unknown) => saveGeneratedDocumentMock(o),
+  ...jest.requireActual("@/lib/files/document-writer"),
+  generateDocx: (o: unknown) => generateDocxMock(o),
 }))
 
 import { useArtifactPanelState } from "./use-artifact-panel"
+import { ArtifactNotebookUnreadableError } from "@/lib/artifacts/export/document-blocks"
+import { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
 import { registerArtifactRenderer } from "@/lib/artifacts/renderer-registry"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
@@ -89,6 +89,7 @@ import {
 beforeEach(() => {
   localStorage.clear()
   jest.mocked(toast.error).mockClear()
+  generateDocxMock.mockClear()
   // The active artifact is bucketed per conversation, so the panel only
   // resolves one once a conversation is on screen.
   useChatStore.setState({ activeSessionId: "s" })
@@ -135,11 +136,11 @@ describe("useArtifactPanelState", () => {
       const panel = useArtifactPanelState()
       useEffect(() => {
         if (panel.viewMode !== "preview") return
-        return registerArtifactFrameCapturer(a.id, async () => ({
-          html: "<p>Painted</p>",
-          width: 100,
-          height: 100,
-        }))
+        return registerArtifactFrameCapturer(a.id, {
+          live: true,
+          shows: () => artifact.content,
+          capture: async () => ({ html: "<p>Painted</p>", width: 100, height: 100 }),
+        })
       }, [panel.viewMode])
       return panel
     })
@@ -190,7 +191,7 @@ describe("useArtifactPanelState", () => {
         let unregister: (() => void) | undefined
         const mounting = setTimeout(() => {
           document.body.appendChild(node)
-          unregister = registerArtifactPreviewNode(a.id, node)
+          unregister = registerArtifactPreviewNode(a.id, node, () => a.content)
         }, 20)
         return () => {
           clearTimeout(mounting)
@@ -219,7 +220,9 @@ describe("useArtifactPanelState", () => {
     await act(async () => {
       await expect(result.current.handleExportAs("html")).resolves.toBeUndefined()
     })
-    expect(toast.error).toHaveBeenCalledWith("exportFailed")
+    // Saving source text renders no preview, so the copy does not send the
+    // user to one (it used to, even for code, which has no Preview tab).
+    expect(toast.error).toHaveBeenCalledWith("exportFailedSource")
   })
 
   it.each(["code", "document", "jupyter"] as const)(
@@ -523,7 +526,7 @@ describe("useArtifactPanelState", () => {
       await act(async () => {
         await result.current.handleDownloadAs("docx")
       })
-      expect(saveGeneratedDocumentMock).not.toHaveBeenCalled()
+      expect(generateDocxMock).not.toHaveBeenCalled()
     } finally {
       dispose()
     }
@@ -548,20 +551,83 @@ describe("useArtifactPanelState", () => {
     const { result } = renderHook(() => useArtifactPanelState())
     expect(result.current.canDownloadAsDocument).toBe(false)
     expect(result.current.exportFormats).toEqual(["raw"])
+    jest.mocked(renderArtifactToPdfBlob).mockClear()
     await act(async () => {
       await result.current.handleDownloadAs("pdf")
     })
-    expect(saveGeneratedDocumentMock).not.toHaveBeenCalled()
+    expect(renderArtifactToPdfBlob).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
   })
 
-  it("handleDownloadAs generates a Word/PDF document via the document writer", async () => {
+  it("saves a code artifact's Word file as one verbatim code block (A07)", async () => {
     const a = makeArtifact()
+    const source = "# a comment, not a heading\ndef f():\n    return 1"
+    act(() => {
+      useArtifactStore
+        .getState()
+        .updateArtifact(a.id, { type: "code", language: "python", content: source })
+    })
     const { result } = renderHook(() => useArtifactPanelState())
+    expect(result.current.canDownloadAsDocument).toBe(true)
+    saveExportMock.mockClear()
     await act(async () => {
       await result.current.handleDownloadAs("docx")
     })
-    expect(saveGeneratedDocumentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: a.title, markdown: a.content, format: "docx" })
-    )
+    expect(generateDocxMock).toHaveBeenCalledWith({
+      title: "Page",
+      blocks: [{ kind: "code", text: source }],
+    })
+    expect(saveExportMock).toHaveBeenCalledWith(expect.objectContaining({ filename: "Page.docx" }))
+  })
+
+  it.each(["html", "chart", "mermaid", "jupyter"] as const)(
+    "offers no Word file for a %s artifact, whose source is not its text (A07)",
+    async (type) => {
+      const a = makeArtifact()
+      act(() => useArtifactStore.getState().updateArtifact(a.id, { type }))
+      const { result } = renderHook(() => useArtifactPanelState())
+      expect(result.current.canDownloadAsDocument).toBe(false)
+      await act(async () => {
+        await result.current.handleDownloadAs("docx")
+      })
+      expect(generateDocxMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it("names the characters a text PDF cannot draw instead of blaming the preview (C09)", async () => {
+    const a = makeArtifact()
+    act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "document" }))
+    jest
+      .mocked(renderArtifactToPdfBlob)
+      .mockRejectedValueOnce(new PdfUnsupportedCharactersError(["中", "文"]))
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await result.current.handleExportAs("pdf")
+    })
+    expect(toast.error).toHaveBeenCalledWith("exportUnsupportedCharacters")
+  })
+
+  it("reports an unreadable notebook as such (C09)", async () => {
+    const a = makeArtifact()
+    act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "jupyter" }))
+    jest
+      .mocked(renderArtifactToPdfBlob)
+      .mockRejectedValueOnce(new ArtifactNotebookUnreadableError(a.id))
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await result.current.handleExportAs("pdf")
+    })
+    expect(toast.error).toHaveBeenCalledWith("exportNotebookUnreadable")
+  })
+
+  it("does not send a code export failure to a Preview the artifact lacks", async () => {
+    const a = makeArtifact()
+    act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "code" }))
+    jest.mocked(renderArtifactToPdfBlob).mockRejectedValueOnce(new Error("disk full"))
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await result.current.handleExportAs("pdf")
+    })
+    expect(toast.error).toHaveBeenCalledWith("exportFailedSource")
   })
 })

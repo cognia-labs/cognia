@@ -3,6 +3,7 @@
  */
 
 import {
+  serializeLiveDocument,
   buildArtifactModuleSource,
   createArtifactRequire,
   installArtifactShellRuntime,
@@ -696,6 +697,61 @@ describe("capture-snapshot", () => {
     expect(reply.width).toBeGreaterThan(0)
     expect(reply.height).toBeGreaterThan(0)
     dispose()
+  })
+
+  it("carries live control state the markup does not hold (C07)", () => {
+    document.body.innerHTML = [
+      '<input id="name" value="initial">',
+      '<input id="secret" type="password">',
+      '<input id="tick" type="checkbox">',
+      '<textarea id="note">first</textarea>',
+      '<select id="pick"><option>a</option><option>b</option></select>',
+      '<span data-cognia-picker="highlight">hl</span>',
+    ].join("")
+    ;(document.getElementById("name") as HTMLInputElement).value = "typed"
+    ;(document.getElementById("secret") as HTMLInputElement).value = "hunter2"
+    ;(document.getElementById("tick") as HTMLInputElement).checked = true
+    ;(document.getElementById("note") as HTMLTextAreaElement).value = "edited"
+    ;(document.getElementById("pick") as HTMLSelectElement).selectedIndex = 1
+
+    const snapshot = new DOMParser().parseFromString(serializeLiveDocument(document), "text/html")
+
+    expect(snapshot.getElementById("name")?.getAttribute("value")).toBe("typed")
+    expect(snapshot.getElementById("secret")?.getAttribute("value")).toBe("•••••••")
+    expect(serializeLiveDocument(document)).not.toContain("hunter2")
+    expect(snapshot.getElementById("tick")?.hasAttribute("checked")).toBe(true)
+    expect(snapshot.getElementById("note")?.textContent).toBe("edited")
+    const options = snapshot.querySelectorAll("#pick option")
+    expect(options[0].hasAttribute("selected")).toBe(false)
+    expect(options[1].hasAttribute("selected")).toBe(true)
+    expect(snapshot.querySelector("[data-cognia-picker]")).toBeNull()
+    // The live document is left as it was.
+    expect(document.getElementById("name")?.getAttribute("value")).toBe("initial")
+  })
+
+  it("replaces a drawn canvas with its pixels, keeping its attributes", () => {
+    document.body.innerHTML = '<canvas id="plot" class="chart" width="4" height="2"></canvas>'
+    const canvas = document.getElementById("plot") as HTMLCanvasElement
+    const toDataURL = jest
+      .spyOn(canvas, "toDataURL")
+      .mockReturnValue("data:image/png;base64,cGl4ZWxz")
+    const snapshot = new DOMParser().parseFromString(serializeLiveDocument(document), "text/html")
+    const image = snapshot.getElementById("plot")
+    expect(image?.tagName).toBe("IMG")
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,cGl4ZWxz")
+    expect(image?.getAttribute("class")).toBe("chart")
+    expect(image?.getAttribute("width")).toBe("4")
+    toDataURL.mockRestore()
+  })
+
+  it("leaves a canvas it cannot read as it is", () => {
+    document.body.innerHTML = '<canvas id="tainted"></canvas>'
+    const canvas = document.getElementById("tainted") as HTMLCanvasElement
+    jest.spyOn(canvas, "toDataURL").mockImplementation(() => {
+      throw new Error("SecurityError")
+    })
+    const snapshot = new DOMParser().parseFromString(serializeLiveDocument(document), "text/html")
+    expect(snapshot.getElementById("tainted")?.tagName).toBe("CANVAS")
   })
 
   it("addresses a failure to the request instead of the preview", () => {

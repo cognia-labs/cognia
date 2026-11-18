@@ -3,7 +3,7 @@
   "reactVersion": "19.3.1",
   "babelVersion": "8.1.1",
   "shellSources": {
-    "lib/artifacts/runtime/artifact-shell-entry.ts": "efb4e0aaf7c4d7d8d4e1ee4002e847daf7bce7e39f1e569b2f7a383a39100767",
+    "lib/artifacts/runtime/artifact-shell-entry.ts": "565c1b515b973f11bea8de7581af423ec9576b6656619f966e4534605684f9ef",
     "lib/artifacts/runtime/artifact-tab-bootstrap.ts": "399a66460704a6d7746777f2683a19acaa50b4a744967e03d01203266d2fddb9",
     "lib/artifacts/runtime/element-pick.ts": "f7442e19c10515355a2498d5498bcc08e353b05192e707b9720e5e32187d58b4",
     "scripts/build/build-artifact-runtime.mjs": "3a668284a398296f5cd9d4f10516648f6c1f526b778ca850a75f4442441e1fa1"
@@ -18,8 +18,8 @@
       "sha256": "171f17f31ca0ac82860a149427d3359d09395998ed5451b300921b31bb1f184c"
     },
     "artifact-shell.js": {
-      "bytes": 14131,
-      "sha256": "458625707855e219c0716c0cc0b13df022a9fdc80cbd53d07bfa89d85e6ee9af"
+      "bytes": 15178,
+      "sha256": "77600157c0c1d2af86bf6b20717f39ec9aeb1569c29c205d022b68c198b32248"
     },
     "artifact-tab-bootstrap.js": {
       "bytes": 586,

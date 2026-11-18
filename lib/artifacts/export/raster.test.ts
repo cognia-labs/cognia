@@ -19,6 +19,7 @@ import {
 } from "./raster"
 import { registerArtifactRenderer } from "@/lib/artifacts/renderer-registry"
 import {
+  ArtifactPreviewOutdatedError,
   clearArtifactPreviewNodes,
   registerArtifactPreviewNode,
 } from "@/lib/artifacts/preview-registry"
@@ -26,6 +27,28 @@ import {
   registerArtifactFrameCapturer,
   __resetArtifactFrameCapturersForTests,
 } from "@/lib/artifacts/frame-capture-registry"
+
+/** The off-screen capture frame, once the exporter has created it. */
+function captureFrame(): Promise<HTMLIFrameElement> {
+  return new Promise((resolve) => {
+    const poll = setInterval(() => {
+      const found = document.querySelector("iframe") as HTMLIFrameElement | null
+      if (found) {
+        clearInterval(poll)
+        resolve(found)
+      }
+    }, 0)
+  })
+}
+
+/** A live (scripted) frame registration answering with `html`. */
+function liveFrame(content: string, html: string, height = 400) {
+  return {
+    live: true,
+    shows: () => content,
+    capture: async () => ({ html, width: 900, height }),
+  }
+}
 
 function fakeCanvas(blob: Blob | null = new Blob(["png"], { type: "image/png" })) {
   return {
@@ -46,7 +69,7 @@ describe("renderArtifactToPngBlob — renderer transports", () => {
   it("captures the mounted preview node", async () => {
     const node = document.createElement("div")
     document.body.appendChild(node)
-    registerArtifactPreviewNode("a1", node)
+    registerArtifactPreviewNode("a1", node, () => chart.content)
 
     const blob = await renderArtifactToPngBlob(chart)
 
@@ -67,7 +90,7 @@ describe("renderArtifactToPngBlob — renderer transports", () => {
   it("treats a detached node as not mounted", async () => {
     const node = document.createElement("div")
     document.body.appendChild(node)
-    registerArtifactPreviewNode("a1", node)
+    registerArtifactPreviewNode("a1", node, () => chart.content)
     node.remove()
     await expect(renderArtifactToPngBlob(chart)).rejects.toBeInstanceOf(
       ArtifactPreviewNotMountedError
@@ -78,7 +101,7 @@ describe("renderArtifactToPngBlob — renderer transports", () => {
     const node = document.createElement("div")
     document.body.appendChild(node)
     Object.defineProperty(node, "scrollHeight", { value: MAX_PNG_HEIGHT_PX + 1 })
-    registerArtifactPreviewNode("a1", node)
+    registerArtifactPreviewNode("a1", node, () => chart.content)
     await expect(renderArtifactToPngBlob(chart)).rejects.toBeInstanceOf(
       ArtifactTooLargeToRasteriseError
     )
@@ -87,7 +110,7 @@ describe("renderArtifactToPngBlob — renderer transports", () => {
   it("surfaces a null toBlob rather than resolving an empty file", async () => {
     const node = document.createElement("div")
     document.body.appendChild(node)
-    registerArtifactPreviewNode("a1", node)
+    registerArtifactPreviewNode("a1", node, () => chart.content)
     html2canvasMock.mockResolvedValue(fakeCanvas(null))
     await expect(renderArtifactToPngBlob(chart)).rejects.toThrow("toBlob")
   })
@@ -103,7 +126,7 @@ describe("renderArtifactToPngBlob — iframe transports", () => {
       type: "html",
       content: "<p>hello</p>",
     })
-    const frame = document.querySelector("iframe") as HTMLIFrameElement
+    const frame = await captureFrame()
     expect(frame).not.toBeNull()
     expect(frame.getAttribute("sandbox")).toBeNull()
     frame.dispatchEvent(new Event("load"))
@@ -117,7 +140,7 @@ describe("renderArtifactToPngBlob — iframe transports", () => {
   it("removes the scratch frame even when the capture throws", async () => {
     html2canvasMock.mockRejectedValue(new Error("boom"))
     const promise = renderArtifactToPngBlob({ id: "a2", type: "html", content: "<p>x</p>" })
-    ;(document.querySelector("iframe") as HTMLIFrameElement).dispatchEvent(new Event("load"))
+    ;(await captureFrame()).dispatchEvent(new Event("load"))
     await expect(promise).rejects.toThrow("boom")
     expect(document.querySelector("iframe")).toBeNull()
   })
@@ -128,12 +151,144 @@ describe("renderArtifactToPngBlob — iframe transports", () => {
       type: "html",
       content: "<p>ok</p><script>fetch('https://evil.test')</script>",
     })
-    const frame = document.querySelector("iframe") as HTMLIFrameElement
+    const frame = await captureFrame()
     // The frame is deliberately NOT sandboxed so html2canvas can read it;
     // sanitisation is what makes that safe.
     expect(frame.srcdoc).not.toContain("<script")
     frame.dispatchEvent(new Event("load"))
     await promise
+  })
+})
+
+describe("renderArtifactToPngBlob — what the preview shows (C07, C08)", () => {
+  it("captures interactive HTML as its scripts left it, not as it loaded", async () => {
+    // The sandboxed frame had turned the box green; the source still says red.
+    const content = '<div id="box" style="background:red">box</div><script>go()</script>'
+    registerArtifactFrameCapturer(
+      "h1",
+      liveFrame(
+        content,
+        '<!DOCTYPE html><html><body><div style="background:green">box</div></body></html>'
+      )
+    )
+    const promise = renderArtifactToPngBlob({ id: "h1", type: "html", content })
+    const frame = await captureFrame()
+    expect(frame.srcdoc).toContain("background:green")
+    expect(frame.srcdoc).not.toContain("background:red")
+    frame.dispatchEvent(new Event("load"))
+    await promise
+  })
+
+  it("keeps the controls a live frame drew, which the source profile strips", async () => {
+    const content = "export default function App(){ return <button>Go</button> }"
+    registerArtifactFrameCapturer(
+      "r2",
+      liveFrame(
+        content,
+        '<!DOCTYPE html><html><body><button autofocus onclick="x()">Go</button><input value="typed"><script>bad()</script></body></html>'
+      )
+    )
+    const promise = renderArtifactToPngBlob({ id: "r2", type: "react", content })
+    const frame = await captureFrame()
+    expect(frame.srcdoc).toContain("<button>Go</button>")
+    expect(frame.srcdoc).toContain('value="typed"')
+    expect(frame.srcdoc).not.toContain("<script")
+    expect(frame.srcdoc).not.toContain("onclick")
+    expect(frame.srcdoc).not.toContain("autofocus")
+    frame.dispatchEvent(new Event("load"))
+    await promise
+  })
+
+  it("re-renders static HTML from source, as its passive preview draws it", async () => {
+    // A passive frame registers too, but is not live: its source is the truth.
+    registerArtifactFrameCapturer("h2", {
+      live: false,
+      shows: () => "<p>static</p><button>x</button>",
+      capture: async () => {
+        throw new Error("a passive frame is never asked")
+      },
+    })
+    const promise = renderArtifactToPngBlob({
+      id: "h2",
+      type: "html",
+      content: "<p>static</p><button>x</button>",
+    })
+    const frame = await captureFrame()
+    expect(frame.srcdoc).toContain("static")
+    expect(frame.srcdoc).not.toContain("<button")
+    frame.dispatchEvent(new Event("load"))
+    await promise
+  })
+
+  it("captures a scrolling renderer whole, whatever its scroll position", async () => {
+    const chart = { id: "s1", type: "chart" as const, content: "{}" }
+    const node = document.createElement("div")
+    node.style.overflow = "auto"
+    node.style.height = "120px"
+    const inner = document.createElement("div")
+    inner.style.overflowY = "scroll"
+    inner.style.maxHeight = "40px"
+    node.appendChild(inner)
+    document.body.appendChild(node)
+    registerArtifactPreviewNode("s1", node, () => chart.content)
+
+    await renderArtifactToPngBlob(chart)
+
+    const [, options] = html2canvasMock.mock.calls[0] as [
+      HTMLElement,
+      { onclone: (doc: Document, clone: HTMLElement) => void },
+    ]
+    // Run the hook on a copy, as html2canvas would on its clone.
+    const clone = node.cloneNode(true) as HTMLElement
+    document.body.appendChild(clone)
+    clone.scrollTop = 30
+    options.onclone(document, clone)
+    for (const element of [clone, clone.firstElementChild as HTMLElement]) {
+      expect(element.style.getPropertyValue("overflow")).toBe("visible")
+      expect(element.style.getPropertyValue("height")).toBe("auto")
+      expect(element.style.getPropertyValue("max-height")).toBe("none")
+    }
+    expect(clone.scrollTop).toBe(0)
+  })
+
+  it("refuses a renderer showing another revision than the one requested (C08)", async () => {
+    jest.useFakeTimers()
+    try {
+      const node = document.createElement("div")
+      document.body.appendChild(node)
+      registerArtifactPreviewNode("c1", node, () => "v2")
+      const pending = renderArtifactToPngBlob({ id: "c1", type: "chart", content: "v1" })
+      const assertion = expect(pending).rejects.toBeInstanceOf(ArtifactPreviewOutdatedError)
+      await jest.advanceTimersByTimeAsync(2_000)
+      await assertion
+      expect(html2canvasMock).not.toHaveBeenCalled()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("refuses when the node repaints between finding it and copying it", async () => {
+    const node = document.createElement("div")
+    document.body.appendChild(node)
+    const shown = ["v1", "v2"]
+    registerArtifactPreviewNode("c2", node, () => shown.shift() ?? "v2")
+    await expect(
+      renderArtifactToPngBlob({ id: "c2", type: "chart", content: "v1" })
+    ).rejects.toBeInstanceOf(ArtifactPreviewOutdatedError)
+    expect(html2canvasMock).not.toHaveBeenCalled()
+  })
+
+  it("never answers for one revision with a frame showing another", async () => {
+    jest.useFakeTimers()
+    try {
+      registerArtifactFrameCapturer("r3", liveFrame("v2", "<html>v2</html>"))
+      const pending = renderArtifactToPngBlob({ id: "r3", type: "react", content: "v1" })
+      const assertion = expect(pending).rejects.toBeInstanceOf(ArtifactPreviewOutdatedError)
+      await jest.advanceTimersByTimeAsync(2_000)
+      await assertion
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })
 
@@ -151,23 +306,13 @@ describe("renderArtifactToPngBlob — react", () => {
   it("captures what the live frame drew, not the unexecuted source", async () => {
     // The artifact's own content is JSX that has not run, so re-rendering it
     // off-screen would produce a blank image. The snapshot is the whole point.
-    registerArtifactFrameCapturer("r1", async () =>
-      snapshot("<!DOCTYPE html><html><body><h1>drawn</h1></body></html>")
+    const content = "export default function App(){ return <h1>drawn</h1> }"
+    registerArtifactFrameCapturer(
+      "r1",
+      liveFrame(content, snapshot("<!DOCTYPE html><html><body><h1>drawn</h1></body></html>").html)
     )
-    const promise = renderArtifactToPngBlob({
-      id: "r1",
-      type: "react",
-      content: "export default function App(){ return <h1>drawn</h1> }",
-    })
-    const frame = await new Promise<HTMLIFrameElement>((resolve) => {
-      const poll = setInterval(() => {
-        const found = document.querySelector("iframe") as HTMLIFrameElement | null
-        if (found) {
-          clearInterval(poll)
-          resolve(found)
-        }
-      }, 0)
-    })
+    const promise = renderArtifactToPngBlob({ id: "r1", type: "react", content })
+    const frame = await captureFrame()
     expect(frame.srcdoc).toContain("drawn")
     expect(frame.srcdoc).not.toContain("export default")
     frame.dispatchEvent(new Event("load"))
@@ -181,9 +326,7 @@ describe("renderArtifactToPngBlob — react", () => {
   })
 
   it("refuses a snapshot taller than a canvas can hold", async () => {
-    registerArtifactFrameCapturer("r1", async () =>
-      snapshot("<html></html>", MAX_PNG_HEIGHT_PX + 1)
-    )
+    registerArtifactFrameCapturer("r1", liveFrame("x", "<html></html>", MAX_PNG_HEIGHT_PX + 1))
     await expect(
       renderArtifactToPngBlob({ id: "r1", type: "react", content: "x" })
     ).rejects.toBeInstanceOf(ArtifactTooLargeToRasteriseError)

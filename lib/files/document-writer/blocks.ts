@@ -10,6 +10,16 @@ export type DocBlock =
   | { kind: "listItem"; text: string }
   | { kind: "code"; text: string }
 
+/** An embedded figure (a notebook's plotted output). The PDF writer draws it. */
+export interface DocImageBlock {
+  kind: "image"
+  dataUrl: string
+  format: "PNG" | "JPEG"
+}
+
+/** What the PDF writer lays out: text blocks and figures, in reading order. */
+export type PdfBlock = DocBlock | DocImageBlock
+
 const HEADING_RE = /^(#{1,3})\s+(.*)$/
 const LIST_RE = /^\s*[-*]\s+(.*)$/
 const FENCE_RE = /^\s*```/

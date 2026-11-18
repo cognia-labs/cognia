@@ -11,12 +11,20 @@
  *
  * `raw` / `html` / `svg` are the source text. `png` / `pdf` render, and are
  * lazily imported so `html2canvas-pro` and `jspdf` never enter the bundle for
- * a user who only ever copies source.
+ * a user who only ever copies source. Word (`exportArtifactAsWord`) sits
+ * beside them rather than in `ArtifactExportFormat`: that union is the plugin
+ * contract's, and Word is the panel's own "Download as Word" action.
  */
 
 import { getArtifactExportFormats } from "@/components/artifacts/runtime-adapters"
 import { getArtifactExtension } from "@/lib/artifacts/constants"
 import { saveExport, type SaveExportOutcome } from "@/lib/files/save-export"
+import { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
+import {
+  ArtifactNotebookUnreadableError,
+  artifactWordBlocks,
+  supportsWordExport,
+} from "./document-blocks"
 import type { Artifact, ArtifactExportFormat } from "@/types"
 
 export {
@@ -24,10 +32,12 @@ export {
   ArtifactPreviewNotMountedError,
   ArtifactTooLargeToRasteriseError,
 } from "./raster"
+export { ArtifactNotebookUnreadableError, supportsWordExport } from "./document-blocks"
+export { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
 
 /** The artifact's adapter does not offer the requested format. */
 export class UnsupportedArtifactExportError extends Error {
-  constructor(type: string, format: ArtifactExportFormat) {
+  constructor(type: string, format: ArtifactExportFormat | "docx") {
     super(`artifact type ${type} cannot be exported as ${format}`)
     this.name = "UnsupportedArtifactExportError"
   }
@@ -100,4 +110,63 @@ export async function exportArtifact(
     data: rendered.data,
     mimeType: rendered.mimeType,
   })
+}
+
+const WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+/**
+ * The artifact as a Word file. Only a document or code artifact has one
+ * (`supportsWordExport`); anything else rejects with
+ * `UnsupportedArtifactExportError` rather than writing its source into prose.
+ */
+export async function renderArtifactWordExport(
+  artifact: Pick<Artifact, "type" | "title" | "content">
+): Promise<RenderedArtifactExport> {
+  if (!supportsWordExport(artifact)) throw new UnsupportedArtifactExportError(artifact.type, "docx")
+  const { generateDocx } = await import("@/lib/files/document-writer")
+  const doc = await generateDocx({
+    title: artifact.title || "artifact",
+    blocks: artifactWordBlocks(artifact),
+  })
+  return { data: doc.data, mimeType: WORD_MIME, filename: `${safeBase(artifact.title)}.docx` }
+}
+
+/** Render the Word file and save it, like `exportArtifact`. */
+export async function exportArtifactAsWord(
+  artifact: Pick<Artifact, "type" | "title" | "content">
+): Promise<SaveExportOutcome> {
+  const rendered = await renderArtifactWordExport(artifact)
+  return saveExport({
+    filename: rendered.filename,
+    data: rendered.data,
+    mimeType: rendered.mimeType,
+  })
+}
+
+/**
+ * Why an export failed, as the panel explains it.
+ *
+ * - `unsupported-characters`: a text PDF holds characters its built-in fonts
+ *   cannot draw (`characters` names them).
+ * - `notebook-unreadable`: a notebook is not notebook JSON.
+ * - `preview`: the export renders the preview, and it was not ready or could
+ *   not be captured; the remedy is to open Preview and check it.
+ * - `failed`: anything else, which for a source-only export (code, a
+ *   document) is no reason to send the user to a Preview it may not have.
+ */
+export type ArtifactExportFailure =
+  | { reason: "unsupported-characters"; characters: string }
+  | { reason: "notebook-unreadable" }
+  | { reason: "preview" }
+  | { reason: "failed" }
+
+export function describeArtifactExportFailure(
+  error: unknown,
+  options: { neededPreview: boolean }
+): ArtifactExportFailure {
+  if (error instanceof PdfUnsupportedCharactersError) {
+    return { reason: "unsupported-characters", characters: error.characters.join(" ") }
+  }
+  if (error instanceof ArtifactNotebookUnreadableError) return { reason: "notebook-unreadable" }
+  return options.neededPreview ? { reason: "preview" } : { reason: "failed" }
 }

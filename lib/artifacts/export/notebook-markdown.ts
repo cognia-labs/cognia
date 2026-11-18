@@ -1,9 +1,6 @@
 import DOMPurify from "dompurify"
-import { parseMarkdownBlocks, type DocBlock } from "@/lib/files/document-writer/blocks"
+import { parseMarkdownBlocks, type PdfBlock } from "@/lib/files/document-writer/blocks"
 import type { JupyterNotebook, JupyterOutput } from "@/types"
-
-export type NotebookDocumentBlock =
-  DocBlock | { kind: "image"; dataUrl: string; format: "PNG" | "JPEG" }
 
 function notebookText(value: unknown): string {
   if (typeof value === "string") return value
@@ -59,7 +56,7 @@ function htmlText(html: string): string {
     .trim()
 }
 
-function outputBlocks(output: JupyterOutput): NotebookDocumentBlock[] {
+function outputBlocks(output: JupyterOutput): PdfBlock[] {
   if (output.output_type === "stream") {
     return [{ kind: "code", text: stripAnsi(notebookText(output.text)) }]
   }
@@ -92,7 +89,7 @@ function outputBlocks(output: JupyterOutput): NotebookDocumentBlock[] {
 }
 
 /** Convert notebook Markdown, fenced code and output into ordered PDF blocks. */
-export function notebookToDocumentBlocks(content: string): NotebookDocumentBlock[] | null {
+export function notebookToDocumentBlocks(content: string): PdfBlock[] | null {
   let notebook: JupyterNotebook | null
   try {
     notebook = JSON.parse(content) as JupyterNotebook | null
@@ -103,7 +100,7 @@ export function notebookToDocumentBlocks(content: string): NotebookDocumentBlock
   const languageName =
     notebook.metadata?.language_info?.name || notebook.metadata?.kernelspec?.language
   const language = typeof languageName === "string" ? languageName : "python"
-  const blocks: NotebookDocumentBlock[] = []
+  const blocks: PdfBlock[] = []
 
   for (const cell of notebook.cells) {
     if (!cell || typeof cell !== "object") return null

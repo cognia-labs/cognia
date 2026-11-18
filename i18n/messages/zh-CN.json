@@ -4948,6 +4948,9 @@
       "svg": "导出为 SVG"
     },
     "exportFailed": "导出失败。请打开预览，确认内容正常显示后，重新保存到可写入的位置。",
+    "exportFailedSource": "导出失败。请重试，或保存到可写入的位置。",
+    "exportNotebookUnreadable": "该 Notebook 不是有效的 Notebook JSON，无法按单元格导出。请修正 Notebook 源码后重新导出。",
+    "exportUnsupportedCharacters": "PDF 无法包含该产物中的部分字符（{characters}）：PDF 内置字体只支持西欧文字。请改用其他格式导出。",
     "filterByRuntime": "按运行时筛选",
     "filterByType": "按类型筛选",
     "fullscreen": "全屏",

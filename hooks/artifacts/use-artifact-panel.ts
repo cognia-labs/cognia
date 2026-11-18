@@ -42,7 +42,7 @@ import { useProjectStore } from "@/stores/project/project-store"
 import { useChatStore } from "@/stores/chat"
 import { getSession } from "@/lib/db/sessions"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
-import { saveGeneratedDocument, type DocFormat } from "@/lib/files/document-writer"
+import type { DocFormat } from "@/lib/files/document-writer"
 import { writeText as clipboardWriteText } from "@/lib/capacitor/clipboard"
 import { canPreview, resolveRegisteredArtifactRenderer } from "@/lib/artifacts"
 import { revealCanvasDocument } from "@/lib/artifacts/reveal"
@@ -61,8 +61,11 @@ import {
 } from "@/components/artifacts/runtime-adapters"
 import {
   artifactExportFilename,
+  describeArtifactExportFailure,
   exportArtifact,
+  exportArtifactAsWord,
   renderArtifactExport,
+  supportsWordExport,
 } from "@/lib/artifacts/export"
 import type {
   ArtifactAuthoringOrigin,
@@ -447,17 +450,40 @@ export function useArtifactPanelState() {
       )
     : []
 
-  /** Whether "Download as Word" can turn the content into a document. */
-  const canDownloadAsDocument = Boolean(activeArtifact) && !pluginOwnsContent
+  /**
+   * Whether "Download as Word" produces a faithful file: a document or code
+   * artifact the host renders itself. A chart's Word file used to be its JSON.
+   */
+  const canDownloadAsDocument = activeArtifact
+    ? !pluginOwnsContent && supportsWordExport(activeArtifact)
+    : false
+
+  /** The toast for a failed export, naming the cause when it is known. */
+  const exportFailureMessage = (error: unknown, neededPreview: boolean) => {
+    const failure = describeArtifactExportFailure(error, { neededPreview })
+    switch (failure.reason) {
+      case "unsupported-characters":
+        return t("exportUnsupportedCharacters", { characters: failure.characters })
+      case "notebook-unreadable":
+        return t("exportNotebookUnreadable")
+      case "preview":
+        return t("exportFailed")
+      case "failed":
+        return t("exportFailedSource")
+    }
+  }
 
   /**
    * Explicit "export as <format>" — the menu's path, so png / pdf / svg are
    * reachable here even though `handleDownload` will never pick them.
    */
   const handleExportAs = async (format: ArtifactExportFormat) => {
-    if (!activeArtifact) return
+    // Only what the menu offers: a plugin-owned artifact exports `raw` alone.
+    if (!activeArtifact || !exportFormats.includes(format)) return
+    const neededPreview =
+      format === "png" || (format === "pdf" && pdfNeedsMountedPreview(activeArtifact))
     try {
-      if (format === "png" || (format === "pdf" && pdfNeedsMountedPreview(activeArtifact))) {
+      if (neededPreview) {
         if (!isPreviewable) return
         setViewMode("preview")
         await waitForArtifactPreview(activeArtifact.id)
@@ -471,27 +497,23 @@ export function useArtifactPanelState() {
         artifactId: activeArtifact.id,
         format,
       })
-      toast.error(t("exportFailed"))
+      toast.error(exportFailureMessage(error, neededPreview))
     }
   }
 
-  // Generate + save the artifact's content as a Word (.docx) or PDF document.
-  // Treats the content as markdown; reuses the client-side document writer +
-  // cross-platform saver, so it works on mobile WebView (unlike <a download>).
+  // Save the artifact as a Word (.docx) or PDF document through the
+  // client-side document writer and the cross-platform saver, so it works in a
+  // mobile WebView (unlike <a download>). PDF takes the export menu's path, with
+  // its preparation and error feedback.
   const handleDownloadAs = async (format: DocFormat) => {
-    if (!activeArtifact || !canDownloadAsDocument) return
+    if (!activeArtifact) return
+    if (format === "pdf") {
+      await handleExportAs("pdf")
+      return
+    }
+    if (!canDownloadAsDocument) return
     try {
-      if (format === "pdf") {
-        await handleExportAs("pdf")
-        return
-      }
-      // Word keeps the document writer; PDF uses the same format-specific
-      // preparation and error feedback as the export menu above.
-      const outcome = await saveGeneratedDocument({
-        title: activeArtifact.title,
-        markdown: activeArtifact.content,
-        format,
-      })
+      const outcome = await exportArtifactAsWord(activeArtifact)
       if (outcome.kind === "error") throw new Error(outcome.message)
       if (outcome.kind === "saved" && isDesktop) setLastDownloadPath(outcome.location)
       loggers.ui.info("artifacts.action.download-as", { artifactId: activeArtifact.id, format })
@@ -499,7 +521,7 @@ export function useArtifactPanelState() {
       loggers.ui.error("artifacts.action.download-as-failed", error, {
         artifactId: activeArtifact.id,
       })
-      toast.error(t("exportFailed"))
+      toast.error(exportFailureMessage(error, false))
     }
   }
 

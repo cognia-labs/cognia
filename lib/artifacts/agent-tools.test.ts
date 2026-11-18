@@ -434,6 +434,7 @@ describe("artifact_capture", () => {
       ["ArtifactTooLargeToRasteriseError", "too_large"],
       ["ArtifactNotRasterisableError", "not_rasterisable"],
       ["ArtifactRenderTimeoutError", "render_timeout"],
+      ["ArtifactPreviewOutdatedError", "preview_outdated"],
     ]) {
       const error = new Error("nope")
       error.name = name

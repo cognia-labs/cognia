@@ -17,6 +17,7 @@ import {
   canPickArtifactElements,
 } from "@/lib/artifacts/element-pick-registry"
 import { PICKER_NODE_ATTRIBUTE } from "@/lib/artifacts/runtime/element-pick"
+import { ArtifactPreviewOutdatedError, findArtifactPreview } from "@/lib/artifacts/preview-registry"
 import { isInteractiveHtmlGranted } from "@/lib/artifacts/interactive-grant"
 
 jest.mock("next-intl", () => ({
@@ -139,7 +140,7 @@ describe("scripted preview recovery", () => {
     const iframe = container.querySelector("iframe")!
     const post = jest.fn()
     iframe.contentWindow!.postMessage = post
-    const capture = captureArtifactFrame(artifact.id)
+    const capture = captureArtifactFrame(artifact.id, artifact.content)
     const settled = capture.catch(() => null)
     try {
       expect(post).not.toHaveBeenCalled()
@@ -177,7 +178,7 @@ describe("scripted preview recovery", () => {
     dispatchFrame(iframe, { ...old, type: "artifact-preview-ready" })
     rerender(<ArtifactPreview artifact={{ ...artifact, content: "two" }} />)
     await waitFor(() => expect(latestRender(post)).toMatchObject({ code: "two" }))
-    const capture = captureArtifactFrame(artifact.id)
+    const capture = captureArtifactFrame(artifact.id, "two")
     dispatchFrame(iframe, { ...old, type: "artifact-preview-ready" })
     expect(post).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "capture-snapshot" }),
@@ -200,7 +201,7 @@ describe("scripted preview recovery", () => {
     const { container } = render(<ArtifactPreview artifact={artifact} />)
     const iframe = container.querySelector("iframe")!
     const post = await bootFrame(iframe)
-    const capture = captureArtifactFrame(artifact.id)
+    const capture = captureArtifactFrame(artifact.id, artifact.content)
     const rejected = expect(capture).rejects.toThrow("startup failed")
     dispatchFrame(iframe, {
       ...latestRender(post),
@@ -221,7 +222,7 @@ describe("scripted preview recovery", () => {
     const post = await bootFrame(iframe)
     jest.useFakeTimers()
     try {
-      const capture = captureArtifactFrame(artifact.id, 100)
+      const capture = captureArtifactFrame(artifact.id, artifact.content, { timeoutMs: 100 })
       const rejected = expect(capture).rejects.toBeInstanceOf(ArtifactFrameCaptureTimeoutError)
       await act(async () => jest.advanceTimersByTime(100))
       await rejected
@@ -247,7 +248,7 @@ describe("scripted preview recovery", () => {
       message: "click failed",
     })
     expect(screen.queryByRole("alert")).toBeNull()
-    const capture = captureArtifactFrame(artifact.id)
+    const capture = captureArtifactFrame(artifact.id, artifact.content)
     const request = post.mock.calls.find(([message]) => message.type === "capture-snapshot")![0]
     dispatchFrame(iframe, {
       type: "artifact-capture-result",
@@ -316,7 +317,7 @@ describe("scripted preview recovery", () => {
     iframe.contentWindow!.postMessage = post
     dispatchFrame(iframe, { type: "artifact-shell-ready" })
     await screen.findByRole("alert")
-    await expect(captureArtifactFrame(artifact.id)).rejects.toThrow("bad syntax")
+    await expect(captureArtifactFrame(artifact.id, artifact.content)).rejects.toThrow("bad syntax")
     rerender(<ArtifactPreview artifact={{ ...artifact, content: "fixed" }} />)
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith(
@@ -328,7 +329,7 @@ describe("scripted preview recovery", () => {
     dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
     expect(screen.queryByRole("alert")).toBeNull()
     expect(screen.queryByTestId("runtime-health-badge")).toBeNull()
-    const capture = captureArtifactFrame(artifact.id)
+    const capture = captureArtifactFrame(artifact.id, "fixed")
     const request = post.mock.calls.find(([message]) => message.type === "capture-snapshot")![0]
     dispatchFrame(iframe, {
       type: "artifact-capture-result",
@@ -357,7 +358,7 @@ describe("scripted preview recovery", () => {
     dispatchFrame(iframe, { ...old, type: "artifact-preview-ready" })
     dispatchFrame(iframe, { ...old, type: "artifact-preview-error", message: "old failure" })
     expect(screen.getByRole("alert")).toHaveTextContent("new failure")
-    await expect(captureArtifactFrame(artifact.id)).rejects.toThrow("new failure")
+    await expect(captureArtifactFrame(artifact.id, "two")).rejects.toThrow("new failure")
   })
 
   it.each(["resolve", "reject"] as const)(
@@ -531,7 +532,7 @@ describe("ArtifactPreview", () => {
       dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
       post.mockClear()
 
-      const pending = captureArtifactFrame("r1")
+      const pending = captureArtifactFrame("r1", "x")
       await waitFor(() => expect(post).toHaveBeenCalled())
       const requestId = post.mock.calls[0][0].requestId
       expect(post.mock.calls[0][0].type).toBe("capture-snapshot")
@@ -562,7 +563,9 @@ describe("ArtifactPreview", () => {
       loadArtifactReactRuntime.mockRejectedValueOnce(new Error("gone"))
       render(<ArtifactPreview artifact={dummy({ id: "r2", type: "react", content: "x" })} />)
       await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument())
-      await expect(captureArtifactFrame("r2")).rejects.toBeInstanceOf(ArtifactFrameCaptureError)
+      await expect(captureArtifactFrame("r2", "x")).rejects.toBeInstanceOf(
+        ArtifactFrameCaptureError
+      )
     })
 
     it("stops answering once the preview unmounts", async () => {
@@ -571,7 +574,28 @@ describe("ArtifactPreview", () => {
       )
       await waitFor(() => expect(hasArtifactFrameCapturer("r3")).toBe(true))
       unmount()
-      expect(await captureArtifactFrame("r3")).toBeNull()
+      expect(await captureArtifactFrame("r3", "x")).toBeNull()
+    })
+
+    it("binds a renderer node to the revision it has committed (C08)", () => {
+      const artifact = dummy({ id: "c2", type: "chart", content: "[]" })
+      const { rerender } = render(<ArtifactPreview artifact={artifact} />)
+      expect(findArtifactPreview("c2", "[]")).toMatchObject({ node: expect.any(HTMLElement) })
+      const next = '[{"name":"a","value":1}]'
+      rerender(<ArtifactPreview artifact={{ ...artifact, content: next }} />)
+      // An export of the old revision must not get the new one's pixels.
+      expect(findArtifactPreview("c2", "[]")).toBe("outdated")
+      expect(findArtifactPreview("c2", next)).toMatchObject({ node: expect.any(HTMLElement) })
+    })
+
+    it("refuses to answer for a revision its frame no longer shows (C08)", async () => {
+      const artifact = dummy({ id: "r4", type: "react", content: "one" })
+      const { rerender } = render(<ArtifactPreview artifact={artifact} />)
+      await waitFor(() => expect(hasArtifactFrameCapturer("r4")).toBe(true))
+      rerender(<ArtifactPreview artifact={{ ...artifact, content: "two" }} />)
+      await expect(captureArtifactFrame("r4", "one", { catchUpMs: 50 })).rejects.toBeInstanceOf(
+        ArtifactPreviewOutdatedError
+      )
     })
 
     it("never registers for a renderer type, which is read from the DOM instead", () => {

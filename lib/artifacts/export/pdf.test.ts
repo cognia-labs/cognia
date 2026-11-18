@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
-const generateDocumentMock = jest.fn()
+const generatePdfMock = jest.fn()
 jest.mock("@/lib/files/document-writer", () => ({
-  generateDocument: (opts: unknown) => generateDocumentMock(opts),
+  generatePdf: (opts: unknown) => generatePdfMock(opts),
 }))
 
 const renderPngMock = jest.fn()
@@ -33,6 +33,7 @@ jest.mock("jspdf", () => ({
 }))
 
 import { pdfNeedsMountedPreview, renderArtifactToPdfBlob } from "./pdf"
+import { ArtifactNotebookUnreadableError } from "./document-blocks"
 import { ARTIFACT_RUNTIME_ADAPTERS } from "@/components/artifacts/runtime-adapters"
 
 // jsdom does not decode images; stand in for the natural-size read.
@@ -50,7 +51,7 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
-  generateDocumentMock.mockReset().mockResolvedValue({
+  generatePdfMock.mockReset().mockResolvedValue({
     data: new Blob(["doc"], { type: "application/pdf" }),
     mimeType: "application/pdf",
     filename: "x.pdf",
@@ -70,24 +71,36 @@ describe("text-shaped artifacts", () => {
     (type) => expect(pdfNeedsMountedPreview({ type })).toBe(false)
   )
 
-  it("uses the jupyter transport as well as the text type list", async () => {
+  it("uses the jupyter transport as well as the text type list", () => {
     const adapter = ARTIFACT_RUNTIME_ADAPTERS.html
     const previousTransport = adapter.transport
     adapter.transport = "jupyter"
     try {
       expect(pdfNeedsMountedPreview({ type: "html" })).toBe(false)
-      await renderArtifactToPdfBlob({ id: "a", type: "html", title: "T", content: "# hi" })
-      expect(generateDocumentMock).toHaveBeenCalledWith({
-        title: "T",
-        markdown: "# hi",
-        format: "pdf",
-      })
-      expect(renderPngMock).not.toHaveBeenCalled()
     } finally {
       adapter.transport = previousTransport
     }
   })
-  it("lays out notebook cells and embeds image outputs in reading order", async () => {
+
+  it("lays a document out from its Markdown", async () => {
+    await renderArtifactToPdfBlob({ id: "a", type: "document", title: "T", content: "# hi" })
+    expect(generatePdfMock).toHaveBeenCalledWith({
+      title: "T",
+      blocks: [{ kind: "heading", level: 1, text: "hi" }],
+    })
+    expect(renderPngMock).not.toHaveBeenCalled()
+  })
+
+  it("lays code out verbatim, not as Markdown (A07)", async () => {
+    const content = "# comment\nif x:\n    y()"
+    await renderArtifactToPdfBlob({ id: "a", type: "code", title: "T", content })
+    expect(generatePdfMock).toHaveBeenCalledWith({
+      title: "T",
+      blocks: [{ kind: "code", text: content }],
+    })
+  })
+
+  it("lays notebook cells and their figures out in reading order", async () => {
     const content = JSON.stringify({
       metadata: { kernelspec: { language: "python" } },
       cells: [
@@ -99,139 +112,47 @@ describe("text-shaped artifacts", () => {
           outputs: [
             { output_type: "stream", text: ["42\n"] },
             { output_type: "display_data", data: { "image/png": "cG5n" } },
-            { output_type: "display_data", data: { "image/jpeg": "anBlZw==" } },
             { output_type: "display_data", data: { "text/markdown": "## Conclusion" } },
           ],
         },
       ],
     })
-    const result = await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
-    expect(result.type).toBe("application/pdf")
-    expect(generateDocumentMock).not.toHaveBeenCalled()
+    await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
+    expect(generatePdfMock.mock.calls[0][0].blocks).toEqual([
+      { kind: "heading", level: 1, text: "Analysis" },
+      { kind: "paragraph", text: "A result." },
+      { kind: "paragraph", text: "In [7] (python)" },
+      { kind: "code", text: "print(42)" },
+      { kind: "code", text: "42\n" },
+      { kind: "image", dataUrl: "data:image/png;base64,cG5n", format: "PNG" },
+      { kind: "heading", level: 2, text: "Conclusion" },
+    ])
     expect(renderPngMock).not.toHaveBeenCalled()
-    const text = textMock.mock.calls.map(([line]) => line).join("\n")
-    expect(text).toContain("Analysis")
-    expect(text).toContain("In [7] (python)")
-    expect(text).toContain("print(42)")
-    expect(text).toContain("42")
-    expect(text).toContain("Conclusion")
-    expect(text).not.toContain('"cell_type"')
-    expect(addImageMock).toHaveBeenCalledWith(
-      "data:image/png;base64,cG5n",
-      "PNG",
-      expect.any(Number),
-      expect.any(Number),
-      expect.any(Number),
-      expect.any(Number)
-    )
-    expect(addImageMock).toHaveBeenCalledWith(
-      "data:image/jpeg;base64,anBlZw==",
-      "JPEG",
-      expect.any(Number),
-      expect.any(Number),
-      expect.any(Number),
-      expect.any(Number)
-    )
-    expect(textMock.mock.invocationCallOrder[0]).toBeLessThan(
-      addImageMock.mock.invocationCallOrder[0]
-    )
-    expect(addImageMock.mock.invocationCallOrder[1]).toBeLessThan(
-      textMock.mock.invocationCallOrder.at(-1)!
-    )
   })
-
-  it.each(["document", "code", "jupyter"] as const)(
-    "lays %s out as selectable text instead of a picture of itself",
-    async (type) => {
-      await renderArtifactToPdfBlob({ id: "a", type, title: "T", content: "# hi" })
-      expect(generateDocumentMock).toHaveBeenCalledWith({
-        title: "T",
-        markdown: "# hi",
-        format: "pdf",
-      })
-      expect(renderPngMock).not.toHaveBeenCalled()
-    }
-  )
 
   it("falls back to a stable title when the artifact has none", async () => {
     await renderArtifactToPdfBlob({ id: "a", type: "document", title: "", content: "x" })
-    expect(generateDocumentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "artifact" })
-    )
+    expect(generatePdfMock).toHaveBeenCalledWith(expect.objectContaining({ title: "artifact" }))
   })
 
   it.each(["{malformed", "null", '{"cells":null}'])(
-    "retains raw text fallback for invalid notebook content %s",
+    "rejects an unreadable notebook %s instead of printing its JSON (C09)",
     async (content) => {
-      await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
-      expect(generateDocumentMock).toHaveBeenCalledWith({
-        title: "T",
-        markdown: content,
-        format: "pdf",
-      })
+      await expect(
+        renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
+      ).rejects.toBeInstanceOf(ArtifactNotebookUnreadableError)
+      expect(generatePdfMock).not.toHaveBeenCalled()
       expect(jsPDFMock).not.toHaveBeenCalled()
     }
   )
 
-  it("paginates long code output without losing its final line", async () => {
-    const content = JSON.stringify({
-      cells: [
-        {
-          cell_type: "code",
-          source: "run()",
-          execution_count: 1,
-          outputs: [
-            { output_type: "stream", text: Array.from({ length: 100 }, (_, i) => `line ${i}\n`) },
-          ],
-        },
-      ],
-    })
-    await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
-    expect(addPageMock).toHaveBeenCalled()
-    expect(textMock).toHaveBeenCalledWith("line 99", expect.any(Number), expect.any(Number))
-  })
-
-  it("fits a large notebook image onto a new page within the page margins", async () => {
-    imageSize = { width: 2000, height: 4000 }
-    const content = JSON.stringify({
-      cells: [
-        {
-          cell_type: "code",
-          source: "plot()",
-          outputs: [{ output_type: "display_data", data: { "image/png": "cG5n" } }],
-        },
-      ],
-    })
-    await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
-    expect(addPageMock).toHaveBeenCalledTimes(1)
-    const [, , x, y, width, height] = addImageMock.mock.calls[0]
-    expect(x).toBeGreaterThanOrEqual(36)
-    expect(y).toBe(36)
-    expect(x + width).toBeLessThanOrEqual(595.28 - 36)
-    expect(y + height).toBeLessThanOrEqual(841.89 - 36)
-    expect(width / height).toBeCloseTo(0.5)
-  })
-
-  it("propagates an unreadable notebook image instead of silently omitting it", async () => {
-    imageShouldFail = true
-    const content = JSON.stringify({
-      cells: [
-        {
-          cell_type: "code",
-          source: "plot()",
-          outputs: [{ output_type: "display_data", data: { "image/png": "broken" } }],
-        },
-      ],
-    })
-    await expect(
-      renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
-    ).rejects.toThrow("failed to measure the rendered image")
-    expect(generateDocumentMock).not.toHaveBeenCalled()
-  })
-
-  it("produces a real PDF with selectable text and an embedded PNG", async () => {
+  it("produces a real PDF of a notebook with selectable text and an embedded PNG", async () => {
     const { jsPDF } = jest.requireActual<typeof import("jspdf")>("jspdf")
     jsPDFMock.mockImplementationOnce((options) => new jsPDF(options))
+    const writer = jest.requireActual<typeof import("@/lib/files/document-writer")>(
+      "@/lib/files/document-writer"
+    )
+    generatePdfMock.mockImplementationOnce((opts) => writer.generatePdf(opts))
     const content = JSON.stringify({
       cells: [
         { cell_type: "markdown", source: "# Analysis" },
@@ -259,6 +180,7 @@ describe("text-shaped artifacts", () => {
     })
     expect(pdf).toMatch(/^%PDF-/)
     expect(pdf).toContain("(Analysis)")
+    expect(pdf).toContain("(plot\\(\\))")
     expect(pdf).toContain("/Subtype /Image")
   })
 })
@@ -273,7 +195,7 @@ describe("visual artifacts", () => {
     expect(renderPngMock).toHaveBeenCalledWith(expect.objectContaining({ type: "chart" }), {
       background: "#ffffff",
     })
-    expect(generateDocumentMock).not.toHaveBeenCalled()
+    expect(generatePdfMock).not.toHaveBeenCalled()
   })
 
   it("turns the page landscape for an image that is wider than tall", async () => {

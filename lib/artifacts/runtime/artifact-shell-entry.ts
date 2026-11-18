@@ -150,6 +150,83 @@ export function createArtifactRequire(globals: ArtifactReactGlobals) {
   }
 }
 
+/** Carry one live control's state onto its clone, where `cloneNode` left the markup's. */
+function carryLiveState(element: Element, copy: Element): void {
+  const tag = element.tagName.toLowerCase()
+  if (tag === "input") {
+    const input = element as HTMLInputElement
+    if (input.type === "checkbox" || input.type === "radio") {
+      if (input.checked) copy.setAttribute("checked", "")
+      else copy.removeAttribute("checked")
+    } else if (input.type === "password") {
+      // Drawn as dots either way; the typed secret never leaves the frame.
+      copy.setAttribute("value", "•".repeat(input.value.length))
+    } else if (input.type !== "file") {
+      copy.setAttribute("value", input.value)
+    }
+    return
+  }
+  if (tag === "textarea") {
+    copy.textContent = (element as HTMLTextAreaElement).value
+    return
+  }
+  if (tag === "select") {
+    const options = Array.from((element as HTMLSelectElement).options)
+    const copies = Array.from(copy.querySelectorAll("option"))
+    options.forEach((option, index) => {
+      const target = copies[index]
+      if (!target) return
+      if (option.selected) target.setAttribute("selected", "")
+      else target.removeAttribute("selected")
+    })
+    return
+  }
+  if (tag === "canvas") {
+    const canvas = element as HTMLCanvasElement
+    let pixels: string
+    try {
+      pixels = canvas.toDataURL("image/png")
+    } catch {
+      // A canvas tainted by a cross-origin image cannot be read; it stays blank.
+      return
+    }
+    const image = copy.ownerDocument.createElement("img")
+    for (const attribute of Array.from(copy.attributes)) {
+      image.setAttribute(attribute.name, attribute.value)
+    }
+    image.setAttribute("src", pixels)
+    image.setAttribute("width", String(canvas.width))
+    image.setAttribute("height", String(canvas.height))
+    copy.replaceWith(image)
+  }
+}
+
+/**
+ * The frame's document as it looks now, as static markup.
+ *
+ * `cloneNode` copies attributes, not live state: a field the user typed into,
+ * a ticked box, a chosen option and anything drawn on a canvas came out as the
+ * page first loaded, so the export showed a different page from the preview.
+ * Those are written onto the clone. The picker's highlight and label live in
+ * this document too and are removed, so an export taken mid-pick does not bake
+ * them in. The live document is never touched.
+ */
+export function serializeLiveDocument(doc: Document): string {
+  const root = doc.documentElement
+  const clone = root.cloneNode(true) as Element
+  const selector = "input, textarea, select, canvas"
+  const live = Array.from(root.querySelectorAll(selector))
+  const copies = Array.from(clone.querySelectorAll(selector))
+  live.forEach((element, index) => {
+    const copy = copies[index]
+    if (copy) carryLiveState(element, copy)
+  })
+  for (const node of Array.from(clone.querySelectorAll(`[${PICKER_NODE_ATTRIBUTE}]`))) {
+    node.remove()
+  }
+  return `<!DOCTYPE html>${clone.outerHTML}`
+}
+
 /**
  * Install the bootstrap into `scope`. Returns a disposer so the unit test can
  * tear it down; the frame itself never calls it.
@@ -391,15 +468,7 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
         // OWN about:blank child. Verified, not assumed. What the frame CAN do
         // is hand out a static snapshot of what it drew, which the parent then
         // renders in the same-origin capture frame it already uses for `html`.
-        // The picker's highlight and label live in THIS document, so an
-        // export taken while select mode is armed would bake them into the
-        // PNG/PDF. Clone, strip, serialize — never mutate the live document,
-        // which would make the highlight flicker mid-pick.
-        const clone = doc.documentElement.cloneNode(true) as Element
-        for (const node of Array.from(clone.querySelectorAll(`[${PICKER_NODE_ATTRIBUTE}]`))) {
-          node.remove()
-        }
-        const snapshot = `<!DOCTYPE html>${clone.outerHTML}`
+        const snapshot = serializeLiveDocument(doc)
         post({
           type: "artifact-capture-result",
           requestId: data.requestId,

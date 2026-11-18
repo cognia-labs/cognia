@@ -22,6 +22,8 @@
  * would re-render every preview whenever an unrelated one mounted.
  */
 
+import { awaitPreviewRevision } from "@/lib/artifacts/preview-registry"
+
 /** A capture the frame could not answer. */
 export class ArtifactFrameCaptureError extends Error {
   constructor(message: string) {
@@ -51,19 +53,44 @@ export interface ArtifactFrameSnapshot {
  */
 export const FRAME_CAPTURE_TIMEOUT_MS = 10_000
 
-type Capturer = (timeoutMs: number) => Promise<ArtifactFrameSnapshot>
-
-const capturers = new Map<string, Capturer>()
+/** One live preview frame's way of answering for its artifact. */
+export interface ArtifactFrameCapturer {
+  /**
+   * Whether the frame runs scripts (React, interactive HTML). What such a frame
+   * shows can differ from its source, so an export captures it; a static frame
+   * is re-rendered from source instead, which draws the same thing.
+   */
+  live: boolean
+  /**
+   * The revision this registration answers for. A frame re-registers on every
+   * content change, and holds a request until that revision has rendered.
+   */
+  shows: () => string | null
+  /**
+   * Ask the frame for a snapshot of `content`. Rejects with
+   * `ArtifactPreviewOutdatedError` when the frame has moved on to another
+   * revision by the time it would be asked.
+   */
+  capture: (timeoutMs: number, content: string) => Promise<ArtifactFrameSnapshot>
+}
 
 /**
- * Record how to ask `artifactId`'s live frame for a snapshot, returning a
- * disposer. Re-registering the same id replaces the entry, so a remount (the
- * preview iframe is keyed) never leaves the exporter holding a dead frame.
+ * Stacked per id, newest last, like `preview-registry.ts`: the chat card and
+ * the dock can both show one artifact, and unmounting one must leave the other
+ * answering.
  */
-export function registerArtifactFrameCapturer(artifactId: string, capture: Capturer): () => void {
-  capturers.set(artifactId, capture)
+const capturers = new Map<string, ArtifactFrameCapturer[]>()
+
+/** Record a frame that can answer for `artifactId`, returning a disposer for this one only. */
+export function registerArtifactFrameCapturer(
+  artifactId: string,
+  capturer: ArtifactFrameCapturer
+): () => void {
+  capturers.set(artifactId, [...(capturers.get(artifactId) ?? []), capturer])
   return () => {
-    if (capturers.get(artifactId) === capture) capturers.delete(artifactId)
+    const remaining = (capturers.get(artifactId) ?? []).filter((item) => item !== capturer)
+    if (remaining.length > 0) capturers.set(artifactId, remaining)
+    else capturers.delete(artifactId)
   }
 }
 
@@ -73,17 +100,33 @@ export function hasArtifactFrameCapturer(artifactId: string): boolean {
 }
 
 /**
- * Ask `artifactId`'s frame for a snapshot, or `null` when no preview is
- * mounted. `null` rather than a throw so the caller can raise the same
- * "preview it first" error it already raises for renderer types.
+ * Ask a frame showing `content` for a snapshot. `null` when no frame (or, with
+ * `liveOnly`, no scripted frame) is mounted, so the caller can raise the same
+ * "preview it first" error it raises for renderer types or fall back to the
+ * source. A frame a render behind gets a moment to catch up; one showing
+ * another revision rejects with `ArtifactPreviewOutdatedError`.
  */
-export async function captureArtifactFrame(
+export function captureArtifactFrame(
   artifactId: string,
-  timeoutMs: number = FRAME_CAPTURE_TIMEOUT_MS
+  content: string,
+  options: { timeoutMs?: number; liveOnly?: boolean; catchUpMs?: number } = {}
 ): Promise<ArtifactFrameSnapshot | null> {
-  const capture = capturers.get(artifactId)
-  if (!capture) return null
-  return capture(timeoutMs)
+  const timeoutMs = options.timeoutMs ?? FRAME_CAPTURE_TIMEOUT_MS
+  const find = (): ArtifactFrameCapturer | "outdated" | null => {
+    const candidates = [...(capturers.get(artifactId) ?? [])]
+      .reverse()
+      .filter((capturer) => !options.liveOnly || capturer.live)
+    if (candidates.length === 0) return null
+    return candidates.find((capturer) => capturer.shows() === content) ?? "outdated"
+  }
+  // Asked in this tick when a frame already answers for the revision, so the
+  // request reaches it before anything else the caller does next.
+  const found = find()
+  if (found === null) return Promise.resolve(null)
+  if (found !== "outdated") return found.capture(timeoutMs, content)
+  return awaitPreviewRevision(artifactId, find, options.catchUpMs).then((capturer) =>
+    capturer ? capturer.capture(timeoutMs, content) : null
+  )
 }
 
 /** Test seam. The registry is module state, so a suite has to be able to clear it. */

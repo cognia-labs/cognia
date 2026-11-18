@@ -165,6 +165,29 @@ export function sanitizeHTML(
   return out
 }
 
+/**
+ * Sanitize a snapshot a live preview frame serialised, for rasterising it.
+ *
+ * A different profile from `sanitizeHTML`, because the input is different. A
+ * passive preview strips form controls from model-written markup, and the
+ * export of that source must match it. A snapshot is what a *scripted* frame
+ * (a React artifact, interactive HTML) actually drew, buttons and inputs
+ * included, so stripping them exported a picture the user never saw. It still
+ * may not run anything: the capture document is same-origin and unsandboxed
+ * so html2canvas can read it, which is only safe with scripts, handlers,
+ * auto-focus, refreshes and form submission targets gone.
+ */
+export function sanitizeCapturedDocument(html: string): string {
+  return DOMPurify.sanitize(html, {
+    WHOLE_DOCUMENT: true,
+    ADD_TAGS: ["style", "link", "meta"],
+    ADD_ATTR: ["target", "rel", "class", "id", "style"],
+    ALLOW_DATA_ATTR: true,
+    FORBID_ATTR: ["http-equiv", "autofocus", "action", "formaction"],
+    FORBID_TAGS: ["script", "base", "iframe", "object", "embed"],
+  })
+}
+
 export function applyArtifactThemeVariables(
   doc: Document,
   themeVariables: ArtifactThemeVariables

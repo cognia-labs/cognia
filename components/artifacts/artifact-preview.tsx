@@ -16,6 +16,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -49,7 +50,10 @@ import { useSettingsStore } from "@/stores/settings"
 import { useThemeCssVars } from "@/lib/appearance/use-theme-css-vars"
 import { loggers } from "@cognia/logging"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
-import { registerArtifactPreviewNode } from "@/lib/artifacts/preview-registry"
+import {
+  ArtifactPreviewOutdatedError,
+  registerArtifactPreviewNode,
+} from "@/lib/artifacts/preview-registry"
 import {
   registerArtifactPicker,
   type ArtifactPickController,
@@ -238,13 +242,27 @@ export function ArtifactPreview({
    * would offer the dock and the conversation as pick targets.
    */
   const rendererNodeRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * The content the renderer node has committed to the DOM. Updated in a
+   * layout effect, so it moves with the DOM rather than with the render that
+   * is about to replace it, which is what lets an export of one revision
+   * refuse a node already showing the next (`preview-registry.ts`).
+   */
+  const rendererShowsRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    rendererShowsRef.current = artifact.content
+  }, [artifact.content])
   const registerRendererNode = useCallback(
     (node: HTMLDivElement | null) => {
       rendererNodeRef.current = node
       if (!node) return undefined
       // React 19 ref-callback cleanup: the disposer runs on unmount, so a
       // detached node can never be handed to the exporter.
-      const disposePreviewNode = registerArtifactPreviewNode(artifact.id, node)
+      const disposePreviewNode = registerArtifactPreviewNode(
+        artifact.id,
+        node,
+        () => rendererShowsRef.current
+      )
       return () => {
         if (rendererNodeRef.current === node) rendererNodeRef.current = null
         disposePreviewNode()
@@ -418,7 +436,16 @@ export function ArtifactPreview({
     if (!needsIframe) return undefined
     captureReadyRef.current = false
     const pending = pendingCaptures.current
-    const dispose = registerArtifactFrameCapturer(artifact.id, (timeoutMs) => {
+    // Registered per content: this effect re-runs on every edit, replacing the
+    // registration and rejecting what the old one still had pending. So the
+    // registration answers for exactly this revision, and a request for it
+    // is held below until the frame reports that revision ready.
+    const content = artifact.content
+    const shows = () => content
+    const capture = (timeoutMs: number, requested: string) => {
+      if (requested !== content) {
+        return Promise.reject(new ArtifactPreviewOutdatedError(artifact.id))
+      }
       const target = iframeRef.current?.contentWindow
       if (!target) {
         return Promise.reject(new ArtifactFrameCaptureError("preview frame is not mounted"))
@@ -463,6 +490,11 @@ export function ArtifactPreview({
         // timeout across readiness and the snapshot round trip.
         if (!needsRuntime || captureReadyRef.current) entry.send()
       })
+    }
+    const dispose = registerArtifactFrameCapturer(artifact.id, {
+      live: needsRuntime,
+      shows,
+      capture,
     })
     return () => {
       dispose()

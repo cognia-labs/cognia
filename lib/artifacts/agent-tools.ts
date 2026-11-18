@@ -357,6 +357,8 @@ const CAPTURE_ERROR_CODES: Record<string, string> = {
   ArtifactNotRasterisableError: "not_rasterisable",
   ArtifactRenderTimeoutError: "render_timeout",
   ArtifactFrameCaptureTimeoutError: "render_timeout",
+  // The preview moved on to another revision before it could be captured.
+  ArtifactPreviewOutdatedError: "preview_outdated",
 }
 
 function optionalInteger(args: Record<string, unknown>, key: string): number | undefined {

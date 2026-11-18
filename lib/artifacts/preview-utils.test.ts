@@ -10,6 +10,7 @@ import {
   buildArtifactFrameCsp,
   getInteractiveHtmlShellHtml,
   getReactShellHtml,
+  sanitizeCapturedDocument,
   sanitizeHTML,
 } from "./preview-utils"
 
@@ -120,6 +121,52 @@ describe("renderHTML / renderSVG", () => {
     renderSVG(doc, '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>')
     expect(doc.body.innerHTML.toLowerCase()).toContain("<svg")
     expect(doc.body.innerHTML.toLowerCase()).toContain("<rect")
+  })
+})
+
+describe("sanitizeCapturedDocument", () => {
+  const snapshot = (body: string, head = "") =>
+    `<!doctype html><html><head>${head}</head><body>${body}</body></html>`
+
+  it("keeps the form controls a live frame drew, which the passive profile strips (C07)", () => {
+    const body = `<button class="go" style="color:green">Run</button><input value="42" checked><select><option selected>b</option></select><textarea>notes</textarea>`
+    const out = sanitizeCapturedDocument(snapshot(body))
+    expect(out).toContain('<button class="go" style="color:green">Run</button>')
+    expect(out).toContain('value="42"')
+    expect(out).toContain("<textarea>notes</textarea>")
+    expect(sanitizeHTML(body)).not.toContain("<button")
+  })
+
+  it("keeps the frame's styles and data attributes", () => {
+    const out = sanitizeCapturedDocument(
+      snapshot('<div data-state="done" id="x">ok</div>', "<style>#x{color:green}</style>")
+    )
+    expect(out).toContain("<style>#x{color:green}</style>")
+    expect(out).toContain('data-state="done"')
+  })
+
+  it("removes everything that could run, navigate or submit in the capture document", () => {
+    const out = sanitizeCapturedDocument(
+      snapshot(
+        `<script>alert(1)</script><img src="x" onerror="alert(1)"><input autofocus onfocus="alert(1)"><form action="https://evil.test"><button formaction="https://evil.test">go</button></form><iframe src="https://evil.test"></iframe><object data="x"></object><embed src="x">`,
+        `<base href="https://evil.test/"><meta http-equiv="refresh" content="0;url=https://evil.test">`
+      )
+    )
+    for (const forbidden of [
+      "<script",
+      "onerror",
+      "onfocus",
+      "autofocus",
+      "action=",
+      "formaction",
+      "<iframe",
+      "<object",
+      "<embed",
+      "<base",
+      "http-equiv",
+    ]) {
+      expect(out).not.toContain(forbidden)
+    }
   })
 })
 
