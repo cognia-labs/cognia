@@ -54,12 +54,14 @@ function renderTab(props: Partial<React.ComponentProps<typeof SiteDomainsTab>> =
     onRemoveDomain: jest.fn(),
     onSaveProviderConfig: jest.fn(),
     onApplyAccess: jest.fn(),
+    onRecheckEntries: jest.fn(),
   }
   render(
     <SiteDomainsTab
       site={site()}
       resources={[]}
       gate={allowed}
+      recheckGate={allowed}
       isBusy={() => false}
       {...handlers}
       {...props}
@@ -146,10 +148,10 @@ it("seeds the access editor from the stored policy so re-applying cannot wipe it
   expect(screen.getByLabelText("access.values")).toHaveValue("a@example.com\nb@corp.io")
 
   await user.click(screen.getByTestId("site-apply-access"))
-  expect(handlers.onApplyAccess).toHaveBeenCalledWith(
-    { mode: "identities", emails: ["a@example.com", "b@corp.io"] },
-    ""
-  )
+  expect(handlers.onApplyAccess).toHaveBeenCalledWith({
+    mode: "identities",
+    emails: ["a@example.com", "b@corp.io"],
+  })
 })
 
 it("compiles each access mode into the right policy shape", async () => {
@@ -159,22 +161,22 @@ it("compiles each access mode into the right policy shape", async () => {
   await user.click(screen.getByRole("radio", { name: /access.modes.domains/ }))
   await user.type(screen.getByLabelText("access.values"), "example.com")
   await user.click(screen.getByTestId("site-apply-access"))
-  expect(handlers.onApplyAccess).toHaveBeenLastCalledWith(
-    { mode: "domains", domains: ["example.com"] },
-    ""
-  )
+  expect(handlers.onApplyAccess).toHaveBeenLastCalledWith({
+    mode: "domains",
+    domains: ["example.com"],
+  })
 
   await user.click(screen.getByRole("radio", { name: /access.modes.organization/ }))
   await user.type(screen.getByLabelText("access.values"), "org_1")
   await user.click(screen.getByTestId("site-apply-access"))
-  expect(handlers.onApplyAccess).toHaveBeenLastCalledWith(
-    { mode: "organization", organizationId: "org_1" },
-    ""
-  )
+  expect(handlers.onApplyAccess).toHaveBeenLastCalledWith({
+    mode: "organization",
+    organizationId: "org_1",
+  })
 
   await user.click(screen.getByRole("radio", { name: /access.modes.public/ }))
   await user.click(screen.getByTestId("site-apply-access"))
-  expect(handlers.onApplyAccess).toHaveBeenLastCalledWith({ mode: "public" }, "")
+  expect(handlers.onApplyAccess).toHaveBeenLastCalledWith({ mode: "public" })
 })
 
 it("groups access choices and supports keyboard navigation", async () => {
@@ -216,12 +218,61 @@ it("hides the value editor for the modes that take no values", async () => {
   expect(screen.getByLabelText("access.values")).toBeInTheDocument()
 })
 
-it("passes the protected hostname through with the policy", async () => {
+it("protects the whole Worker: no hostname to type, and the scope is stated (F03)", async () => {
+  // A free-text hostname protected one entry while workers.dev, other domains
+  // and routes stayed open.
   const user = userEvent.setup()
   const handlers = renderTab()
-  await user.type(screen.getByLabelText("access.hostname"), "docs.example.com")
+  expect(screen.queryByLabelText("access.hostname")).not.toBeInTheDocument()
+  expect(screen.getByText("access.scope")).toBeInTheDocument()
   await user.click(screen.getByTestId("site-apply-access"))
-  expect(handlers.onApplyAccess).toHaveBeenCalledWith({ mode: "private" }, "docs.example.com")
+  expect(handlers.onApplyAccess).toHaveBeenCalledWith({ mode: "private" })
+})
+
+describe("anonymous entry check (F03)", () => {
+  const verification = {
+    checkedAt: 5,
+    state: "exposed" as const,
+    entries: [
+      { url: "https://docs.workers.dev/", outcome: "protected" as const, status: 302 },
+      { url: "https://open.example.com/", outcome: "exposed" as const, status: 200 },
+    ],
+  }
+
+  it("lists every entry with what an anonymous visitor got", () => {
+    renderTab({ entryVerification: verification })
+    const check = screen.getByTestId("site-entry-check")
+    expect(check).toHaveTextContent("access.entries.state.exposed")
+    const rows = screen.getAllByTestId("site-entry")
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toHaveTextContent("https://open.example.com/")
+    expect(rows[1]).toHaveTextContent("200")
+    expect(rows[1].querySelector('[data-tone="danger"]')).not.toBeNull()
+  })
+
+  it("says the check has not run yet rather than implying protection", () => {
+    renderTab()
+    expect(screen.getByTestId("site-entry-check")).toHaveTextContent("access.entries.none")
+    expect(screen.queryAllByTestId("site-entry")).toHaveLength(0)
+  })
+
+  it("checks again on request, behind its own gate", async () => {
+    const user = userEvent.setup()
+    const handlers = renderTab({ entryVerification: verification })
+    await user.click(screen.getByTestId("site-recheck-entries"))
+    expect(handlers.onRecheckEntries).toHaveBeenCalledTimes(1)
+  })
+
+  it("disables the check for an actor who cannot deploy", () => {
+    renderTab({ recheckGate: blocked })
+    expect(screen.getByTestId("site-recheck-entries")).toBeDisabled()
+    expect(screen.getByTestId("site-recheck-entries")).toHaveAttribute("title", "Owner only")
+  })
+
+  it("has nothing to check on a public Site", () => {
+    renderTab({ site: site({ visitorPolicy: { mode: "public" } }) })
+    expect(screen.queryByTestId("site-entry-check")).not.toBeInTheDocument()
+  })
 })
 
 it("gates every mutation with its reason", () => {

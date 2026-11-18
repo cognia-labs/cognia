@@ -71,6 +71,12 @@ export interface SiteOperationsTabProps {
   deployments: readonly SiteDeploymentRow[]
   gate: SiteGate
   /**
+   * Resuming and abandoning operations: owner-only, and still allowed while a
+   * purge holds the Site in `deleting` — they are how an interrupted purge is
+   * finished or released.
+   */
+  recoveryGate: SiteGate
+  /**
    * Per-key busy predicate from `useSiteActions`. `isBusy(key)` is true while
    * that action is in flight or an exclusive lifecycle action is running; a
    * build no longer disables unrelated controls.
@@ -90,6 +96,7 @@ export function SiteOperationsTab({
   resources,
   deployments,
   gate,
+  recoveryGate,
   isBusy,
   result,
   onQuery,
@@ -184,8 +191,10 @@ export function SiteOperationsTab({
           operations={operations}
           onRefresh={onRefreshOperation}
           onCancel={onCancelOperation}
-          refreshDisabled={!gate.allowed}
-          refreshTitle={gate.title}
+          refreshDisabled={!recoveryGate.allowed}
+          refreshTitle={recoveryGate.title}
+          cancelDisabled={!recoveryGate.allowed}
+          cancelTitle={recoveryGate.title}
         />
       ) : (
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">

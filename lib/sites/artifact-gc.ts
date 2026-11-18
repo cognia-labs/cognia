@@ -22,20 +22,12 @@
  *     expects to still be there.
  *  4. **Anything newer than the retention window.**
  *
- * Enumeration goes through `listSiteArtifactDigests`, which reads primary keys
- * only — walking the table itself would structured-clone every archive the
- * sweep is about to decide it can keep.
+ * Enumeration reads the artifacts table's primary keys only — walking the
+ * table itself would structured-clone every archive the sweep is about to
+ * decide it can keep — and the whole sweep is one transaction
+ * (`sweepSiteArtifacts`).
  */
-import {
-  deleteSiteArtifacts,
-  deleteSiteBuildLogsForVersions,
-  listSiteArtifactDigests,
-  listSiteDeployments,
-  listSiteOperations,
-  listSiteProjects,
-  listSiteVersions,
-  markSiteVersionArtifactCollected,
-} from "@/lib/db/sites"
+import { sweepSiteArtifacts, type SiteArtifactSweepSnapshot } from "@/lib/db/sites"
 import type { SiteDeploymentRow, SiteOperationRow, SiteVersionRow } from "@/types/sites"
 
 /** Statuses that can still change, so their Site's artifacts are all pinned. */
@@ -75,27 +67,11 @@ export interface SiteArtifactGcReport {
 }
 
 export interface SiteArtifactGcDeps {
-  listProjects: typeof listSiteProjects
-  listVersions: typeof listSiteVersions
-  listDeployments: typeof listSiteDeployments
-  listOperations: typeof listSiteOperations
-  listDigests: typeof listSiteArtifactDigests
-  deleteArtifacts: typeof deleteSiteArtifacts
-  deleteBuildLogs: typeof deleteSiteBuildLogsForVersions
-  markCollected: typeof markSiteVersionArtifactCollected
+  sweep: typeof sweepSiteArtifacts
 }
 
 function defaults(): SiteArtifactGcDeps {
-  return {
-    listProjects: listSiteProjects,
-    listVersions: listSiteVersions,
-    listDeployments: listSiteDeployments,
-    listOperations: listSiteOperations,
-    listDigests: listSiteArtifactDigests,
-    deleteArtifacts: deleteSiteArtifacts,
-    deleteBuildLogs: deleteSiteBuildLogsForVersions,
-    markCollected: markSiteVersionArtifactCollected,
-  }
+  return { sweep: sweepSiteArtifacts }
 }
 
 export const SITE_ARTIFACT_GC_DEFAULTS = {
@@ -181,6 +157,51 @@ export function pinnedSiteArtifactDigests(
 }
 
 /**
+ * Decide, from one consistent snapshot, which archives go and which versions
+ * lose their bytes. Pure: `sweepSiteArtifacts` runs it inside the transaction
+ * that also applies it.
+ *
+ * A version whose digest is no longer stored but carries no collected mark is
+ * marked too. That state was reachable when deletion and marking were separate
+ * writes, and no sweep could repair it afterwards because the digest it
+ * enumerates was already gone.
+ */
+export function planSiteArtifactSweep(
+  snapshot: SiteArtifactSweepSnapshot,
+  input: SiteArtifactGcInput
+): { doomed: string[]; collect: SiteVersionRow[]; referenced: Set<string>; recent: Set<string> } {
+  const referenced = new Set<string>()
+  const recent = new Set<string>()
+  const collectable: SiteVersionRow[] = []
+  const stored = new Set(snapshot.digests)
+  const orphaned: SiteVersionRow[] = []
+
+  for (const { versions, deployments, operations } of snapshot.sites) {
+    const result = pinnedSiteArtifactDigests(versions, deployments, operations, input)
+    for (const digest of result.referenced) referenced.add(digest)
+    for (const digest of result.recent) recent.add(digest)
+    collectable.push(...result.collectable)
+    orphaned.push(
+      ...versions.filter(
+        (version) =>
+          version.artifactDigest !== undefined &&
+          version.artifactCollectedAt === undefined &&
+          !stored.has(version.artifactDigest)
+      )
+    )
+  }
+
+  // A digest pinned by one Site is pinned outright: artifacts are
+  // content-addressed, so two Sites that built byte-identical output share one
+  // row and deleting it for one would break the other.
+  const doomed = snapshot.digests.filter((digest) => !referenced.has(digest) && !recent.has(digest))
+  const doomedSet = new Set(doomed)
+  const losing = collectable.filter((version) => doomedSet.has(version.artifactDigest as string))
+  const collect = [...losing, ...orphaned.filter((version) => !losing.includes(version))]
+  return { doomed, collect, referenced, recent }
+}
+
+/**
  * Sweep every Site and delete the archives nothing needs any more.
  *
  * A collected version keeps `status: "ready"` — it really did build — but is
@@ -192,60 +213,36 @@ export async function collectUnreferencedSiteArtifacts(
   dependencies?: Partial<SiteArtifactGcDeps>
 ): Promise<SiteArtifactGcReport> {
   const deps = { ...defaults(), ...dependencies }
-  const allDigests = await deps.listDigests()
-  const referenced = new Set<string>()
-  const recent = new Set<string>()
-  const collectable: SiteVersionRow[] = []
-
-  for (const site of await deps.listProjects()) {
-    const [versions, deployments, operations] = await Promise.all([
-      deps.listVersions(site.id),
-      deps.listDeployments(site.id),
-      deps.listOperations(site.id),
-    ])
-    const result = pinnedSiteArtifactDigests(versions, deployments, operations, input)
-    for (const digest of result.referenced) referenced.add(digest)
-    for (const digest of result.recent) recent.add(digest)
-    collectable.push(...result.collectable)
-  }
-
-  // A digest pinned by one Site is pinned outright: artifacts are
-  // content-addressed, so two Sites that built byte-identical output share one
-  // row and deleting it for one would break the other.
-  const doomed = allDigests.filter((digest) => !referenced.has(digest) && !recent.has(digest))
-  const doomedSet = new Set(doomed)
-  const losing = collectable.filter((version) => doomedSet.has(version.artifactDigest as string))
-
-  let buildLogsDeleted = 0
-  let bytesFreed = 0
-  const counted = new Set<string>()
-  for (const version of losing) {
-    const digest = version.artifactDigest as string
-    if (!counted.has(digest)) {
-      counted.add(digest)
-      bytesFreed += version.artifactSize ?? 0
+  let decided: ReturnType<typeof planSiteArtifactSweep> | undefined
+  const { snapshot, buildLogsDeleted } = await deps.sweep((current) => {
+    decided = planSiteArtifactSweep(current, input)
+    return {
+      doomed: decided.doomed,
+      collectVersionIds: decided.collect.map((version) => version.id),
     }
-  }
+  }, input.now)
+  const plan = decided!
 
-  if (doomed.length > 0) {
-    await deps.deleteArtifacts(doomed)
-    // The captured build output goes with the archive it explains. A version
-    // that can no longer be republished does not need half a megabyte of its
-    // compiler's stdout kept forever, and `siteBuildLogs` would otherwise
-    // become the next unbounded table.
-    buildLogsDeleted = await deps.deleteBuildLogs(losing.map((version) => version.id))
-    for (const version of losing) await deps.markCollected(version.id, input.now)
+  let bytesFreed = 0
+  const doomedSet = new Set(plan.doomed)
+  const counted = new Set<string>()
+  for (const version of plan.collect) {
+    const digest = version.artifactDigest as string
+    if (!doomedSet.has(digest) || counted.has(digest)) continue
+    counted.add(digest)
+    bytesFreed += version.artifactSize ?? 0
   }
 
   return {
-    scanned: allDigests.length,
-    deletedDigests: doomed,
+    scanned: snapshot.digests.length,
+    deletedDigests: plan.doomed,
     bytesFreed,
     buildLogsDeleted,
-    retainedReferenced: allDigests.filter((digest) => referenced.has(digest)).length,
+    retainedReferenced: snapshot.digests.filter((digest) => plan.referenced.has(digest)).length,
     // `referenced` wins the label when a digest is pinned twice, so the two
     // counts plus the deletions always add up to `scanned`.
-    retainedRecent: allDigests.filter((digest) => !referenced.has(digest) && recent.has(digest))
-      .length,
+    retainedRecent: snapshot.digests.filter(
+      (digest) => !plan.referenced.has(digest) && plan.recent.has(digest)
+    ).length,
   }
 }

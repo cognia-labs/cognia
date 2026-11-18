@@ -60,6 +60,44 @@ it("rejects secrets and invalid provider identifiers in the manifest", () => {
   ).toThrow("binding")
 })
 
+describe("binding ownership (F11)", () => {
+  const withBinding = (binding: Record<string, unknown>) =>
+    JSON.stringify({
+      ...valid,
+      cloudflare: {
+        ...valid.cloudflare,
+        bindings: [{ kind: "d1", name: "DB", resourceName: "docs-db", ...binding }],
+      },
+    })
+
+  it("refuses a managed binding that names an existing resource", () => {
+    // `managed` is what purge deletes; naming another project's database here
+    // put it on that list.
+    expect(() =>
+      parseSiteHostingManifest(withBinding({ ownership: "managed", providerResourceId: "d1-x" }))
+    ).toThrow("binding DB is managed, so Cognia creates it")
+  })
+
+  it.each(["adopted", "shared"])("requires the resource id for an %s binding", (ownership) => {
+    expect(() => parseSiteHostingManifest(withBinding({ ownership }))).toThrow(
+      `binding DB is ${ownership}, so it needs providerResourceId`
+    )
+    expect(() =>
+      parseSiteHostingManifest(withBinding({ ownership, providerResourceId: "  " }))
+    ).toThrow("needs providerResourceId")
+  })
+
+  it("accepts an adopted binding with its id", () => {
+    const manifest = parseSiteHostingManifest(
+      withBinding({ ownership: "adopted", providerResourceId: "d1-x" })
+    )
+    expect(manifest.cloudflare.bindings[0]).toMatchObject({
+      ownership: "adopted",
+      providerResourceId: "d1-x",
+    })
+  })
+})
+
 it("requires localhost preview URLs", () => {
   expect(() =>
     parseSiteHostingManifest(

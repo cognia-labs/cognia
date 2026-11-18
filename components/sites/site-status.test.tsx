@@ -12,6 +12,7 @@ import type {
 } from "@/types/sites"
 import {
   SITE_DEPLOYMENT_FACE,
+  SITE_ENTRY_FACE,
   SITE_EVENT_TONE,
   SITE_LIFECYCLE_FACE,
   SITE_OWNERSHIP_CHIP,
@@ -63,6 +64,7 @@ const RESOURCE_KINDS: SiteResourceKind[] = [
   "access-application",
   "access-policy",
   "secret",
+  "worker-route",
 ]
 
 it("covers every member of every status union", () => {
@@ -77,6 +79,12 @@ it("covers every member of every status union", () => {
     expect(SITE_OWNERSHIP_CHIP[value]).toBeDefined()
   }
   for (const value of RESOURCE_KINDS) expect(SITE_RESOURCE_KIND_ICON[value]).toBeDefined()
+})
+
+it("tells an exposed entry from one that could not be checked (F03)", () => {
+  expect(SITE_ENTRY_FACE.protected.tone).toBe("success")
+  expect(SITE_ENTRY_FACE.unverified.tone).toBe("warning")
+  expect(SITE_ENTRY_FACE.exposed.tone).toBe("danger")
 })
 
 it("reserves the failure colour for failures only", () => {

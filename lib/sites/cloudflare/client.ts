@@ -4,7 +4,7 @@ import { hasNoLeakingPiiDeep } from "@cognia/redact"
 const API_BASE = "https://api.cloudflare.com/client/v4"
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
-type CloudflarePiiPolicy = "reject" | "intentional-secret-management" | "intentional-access-policy"
+type CloudflarePiiPolicy = "reject" | "intentional-access-policy"
 
 interface CloudflareMessage {
   code?: number
@@ -30,6 +30,61 @@ export class CloudflareSitesError extends Error {
     this.requestId = input.requestId
     this.codes = input.codes ?? []
   }
+}
+
+/**
+ * The request left this process and no answer came back.
+ *
+ * A browser `fetch` rejects with `TypeError` here, but the desktop proxy
+ * (`lib/network/proxy-fetch.ts`) rewraps every failure — an IPC timeout, a
+ * native response timeout — as a plain `Error("Proxy request failed: …")`.
+ * Classifying on `TypeError` therefore read a provider write that may well
+ * have landed as a definite failure, and reconciliation never looked at it.
+ * Whatever the fetcher throws, the outcome of the call is unknown.
+ */
+export class CloudflareSitesTransportError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = "CloudflareSitesTransportError"
+  }
+}
+
+/** One saved Worker version, as `GET …/scripts/{name}/versions` lists it. */
+export interface CloudflareWorkerVersion {
+  id: string
+  number?: number
+  annotations?: Record<string, string | undefined>
+  metadata?: { created_on?: string; source?: string }
+}
+
+/** One deployment. The first in the list is the one serving traffic. */
+export interface CloudflareWorkerDeployment {
+  id: string
+  created_on?: string
+  strategy?: string
+  versions: Array<{ version_id: string; percentage: number }>
+  annotations?: Record<string, string | undefined>
+}
+
+/** The Worker itself (`GET …/workers/workers/{id-or-name}`). */
+export interface CloudflareWorker {
+  /** Immutable Worker ID; what a Worker-scoped Access destination names. */
+  id: string
+  name?: string
+  subdomain?: { enabled?: boolean; previews_enabled?: boolean; url?: string }
+}
+
+export interface CloudflareWorkerRoute {
+  id: string
+  pattern: string
+  script?: string
+}
+
+function arrayField<T>(result: unknown, field: string, label: string): T[] {
+  const value =
+    result && typeof result === "object" ? (result as Record<string, unknown>)[field] : undefined
+  if (!Array.isArray(value)) throw new Error(`Cloudflare ${label} response is invalid`)
+  return value as T[]
 }
 
 export interface CloudflareSitesClientOptions {
@@ -66,7 +121,7 @@ export class CloudflareSitesClient {
     ) {
       throw new Error("Cloudflare request body failed the outbound PII gate")
     }
-    const response = await this.fetcher(`${this.baseUrl}${path}`, {
+    const response = await this.send(`${this.baseUrl}${path}`, {
       method: options.method ?? "GET",
       headers: {
         Authorization: `Bearer ${this.token}`,
@@ -99,11 +154,22 @@ export class CloudflareSitesClient {
     return envelope?.result as T
   }
 
+  private async send(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetcher(url, init)
+    } catch (error) {
+      throw new CloudflareSitesTransportError(
+        `Cloudflare request did not complete: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      )
+    }
+  }
+
   private async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     if (!hasNoLeakingPiiDeep(variables)) {
       throw new Error("Cloudflare GraphQL variables failed the outbound PII gate")
     }
-    const response = await this.fetcher(`${this.baseUrl}/graphql`, {
+    const response = await this.send(`${this.baseUrl}/graphql`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.token}`,
@@ -197,16 +263,24 @@ export class CloudflareSitesClient {
     )
   }
 
-  listVersions(accountId: string, workerName: string): Promise<unknown[]> {
-    return this.request(
+  /**
+   * Saved versions, newest first.
+   *
+   * `result` is `{ items: [...] }`, not an array: iterating it as one threw
+   * "is not iterable" right after a successful upload, so every first publish
+   * stopped in `waiting-reconcile` and reconciliation failed the same way.
+   */
+  async listVersions(accountId: string, workerName: string): Promise<CloudflareWorkerVersion[]> {
+    const result = await this.request<unknown>(
       `/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/versions`
     )
+    return arrayField<CloudflareWorkerVersion>(result, "items", "version list")
   }
 
-  deleteVersion(accountId: string, workerName: string, versionId: string): Promise<unknown> {
+  /** The Worker by name. Throws a 404 `CloudflareSitesError` when it does not exist. */
+  getWorker(accountId: string, workerName: string): Promise<CloudflareWorker> {
     return this.request(
-      `/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/versions/${encodeURIComponent(versionId)}`,
-      { method: "DELETE" }
+      `/accounts/${encodeURIComponent(accountId)}/workers/workers/${encodeURIComponent(workerName)}`
     )
   }
 
@@ -232,31 +306,41 @@ export class CloudflareSitesClient {
     )
   }
 
-  listDeployments(accountId: string, workerName: string): Promise<unknown[]> {
-    return this.request(
+  /**
+   * Deployments, newest first. Cloudflare documents the first entry as the one
+   * actively serving traffic.
+   *
+   * `result` is `{ deployments: [...] }`; calling `.find()` on the object made
+   * every deploy reconciliation throw and stay pending.
+   */
+  async listDeployments(
+    accountId: string,
+    workerName: string
+  ): Promise<CloudflareWorkerDeployment[]> {
+    const result = await this.request<unknown>(
       `/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/deployments`
     )
+    return arrayField<CloudflareWorkerDeployment>(result, "deployments", "deployment list")
   }
 
-  bulkUpdateSecrets(
-    accountId: string,
-    workerName: string,
-    values: Record<string, string | null>
-  ): Promise<Record<string, { name: string; type: string }>> {
-    const secrets = Object.fromEntries(
-      Object.entries(values).map(([name, value]) => [
-        name,
-        value === null ? null : { name, text: value, type: "secret_text" },
-      ])
-    )
+  listWorkerRoutes(zoneId: string): Promise<CloudflareWorkerRoute[]> {
+    return this.request(`/zones/${encodeURIComponent(zoneId)}/workers/routes`)
+  }
+
+  createWorkerRoute(
+    zoneId: string,
+    input: { pattern: string; script: string }
+  ): Promise<CloudflareWorkerRoute> {
+    return this.request(`/zones/${encodeURIComponent(zoneId)}/workers/routes`, {
+      method: "POST",
+      body: { pattern: input.pattern, script: input.script },
+    })
+  }
+
+  deleteWorkerRoute(zoneId: string, routeId: string): Promise<unknown> {
     return this.request(
-      `/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/secrets-bulk`,
-      {
-        method: "PATCH",
-        body: { secrets },
-        // The user explicitly configured these values for Cloudflare's secret store.
-        piiPolicy: "intentional-secret-management",
-      }
+      `/zones/${encodeURIComponent(zoneId)}/workers/routes/${encodeURIComponent(routeId)}`,
+      { method: "DELETE" }
     )
   }
 
@@ -302,6 +386,12 @@ export class CloudflareSitesClient {
       method: "POST",
       body: input,
     })
+  }
+
+  getAccessApplication(accountId: string, applicationId: string): Promise<unknown> {
+    return this.request(
+      `/accounts/${encodeURIComponent(accountId)}/access/apps/${encodeURIComponent(applicationId)}`
+    )
   }
 
   listAccessApplications(accountId: string): Promise<unknown[]> {

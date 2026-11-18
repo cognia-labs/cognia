@@ -33,7 +33,6 @@ import {
 } from "./site-status"
 
 /** Statuses that can no longer change, so cancelling them is meaningless. */
-const TERMINAL_STATUSES = new Set<SiteOperationRow["status"]>(["succeeded", "failed", "cancelled"])
 
 export interface SiteOperationTimelineProps {
   events: readonly SiteOperationEventRow[]
@@ -98,10 +97,23 @@ export interface SiteOperationJournalProps {
   operations: readonly SiteOperationRow[]
   /** Re-read one operation on demand — useful for a stuck `waiting-reconcile`. */
   onRefresh?: (operationId: string) => void
-  /** Abandon an operation that will never finish. Only offered while non-terminal. */
+  /**
+   * Abandon an operation that will never finish. Offered for a queued or
+   * waiting operation, or a running one whose lease has expired — never while
+   * its holder is still making provider calls.
+   */
   onCancel?: (operationId: string) => void
   refreshDisabled?: boolean
   refreshTitle?: string
+  /** Abandoning is the Site owner's call (`abandonOperation` asserts it). */
+  cancelDisabled?: boolean
+  cancelTitle?: string
+}
+
+/** True when the journal may offer "abandon" for this operation at `now`. */
+export function siteOperationCanBeAbandoned(operation: SiteOperationRow, now: number): boolean {
+  if (operation.status === "queued" || operation.status === "waiting-reconcile") return true
+  return operation.status === "running" && (operation.leaseExpiresAt ?? 0) < now
 }
 
 /**
@@ -122,6 +134,8 @@ interface SiteOperationJournalRowProps {
   onCancel?: (operationId: string) => void
   refreshDisabled?: boolean
   refreshTitle?: string
+  cancelDisabled?: boolean
+  cancelTitle?: string
 }
 
 /**
@@ -135,6 +149,8 @@ const SiteOperationJournalRow = memo(function SiteOperationJournalRow({
   onCancel,
   refreshDisabled,
   refreshTitle,
+  cancelDisabled,
+  cancelTitle,
 }: SiteOperationJournalRowProps) {
   const t = useTranslations("sites")
   const format = useFormatter()
@@ -202,13 +218,14 @@ const SiteOperationJournalRow = memo(function SiteOperationJournalRow({
                 {t("actions.refreshOperation")}
               </Button>
             ) : null}
-            {onCancel && !TERMINAL_STATUSES.has(operation.status) ? (
+            {onCancel && siteOperationCanBeAbandoned(operation, now.getTime()) ? (
               <Button
                 type="button"
                 size="xs"
                 variant="ghost"
                 className="text-muted-foreground"
-                title={t("operations.cancelHint")}
+                disabled={cancelDisabled}
+                title={cancelTitle ?? t("operations.cancelHint")}
                 onClick={() => onCancel(operation.id)}
                 data-testid={`site-operation-cancel-${operation.id}`}
               >
@@ -230,6 +247,8 @@ export function SiteOperationJournal({
   onCancel,
   refreshDisabled,
   refreshTitle,
+  cancelDisabled,
+  cancelTitle,
 }: SiteOperationJournalProps) {
   const t = useTranslations("sites")
   // Newest first: the thing that just failed is the thing being looked for.
@@ -290,6 +309,8 @@ export function SiteOperationJournal({
                 onCancel={onCancel}
                 refreshDisabled={refreshDisabled}
                 refreshTitle={refreshTitle}
+                cancelDisabled={cancelDisabled}
+                cancelTitle={cancelTitle}
               />
             </div>
           )

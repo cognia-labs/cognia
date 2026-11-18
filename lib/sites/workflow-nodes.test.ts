@@ -35,21 +35,19 @@ const publishSiteVersion = jest.fn(async () => ({
   productionUrl: "https://docs.example.com",
   updatedAt: 5,
 }))
-jest.mock("@/lib/sites/publish-version", () => ({
-  publishSiteVersion: (...args: Parameters<typeof publishSiteVersion>) =>
-    publishSiteVersion(...args),
-}))
-
-const deployVersion = jest.fn(async () => ({
+// Rollback goes through `deploySiteVersion`, the one deploy path that applies
+// a restricted Site's Access before moving traffic (F03). It used to call the
+// service's raw `deployVersion`, which skipped that.
+const deploySiteVersion = jest.fn(async (_input: { siteId: string; versionId: string }) => ({
   id: "dep_2",
   versionId: "ver_old",
   status: "active",
   updatedAt: 9,
 }))
-jest.mock("@/lib/sites/cloudflare/service", () => ({
-  CloudflareSitesService: jest.fn(function (this: Record<string, unknown>) {
-    this.deployVersion = deployVersion
-  }),
+jest.mock("@/lib/sites/publish-version", () => ({
+  publishSiteVersion: (...args: Parameters<typeof publishSiteVersion>) =>
+    publishSiteVersion(...args),
+  deploySiteVersion: (...args: Parameters<typeof deploySiteVersion>) => deploySiteVersion(...args),
 }))
 
 const db = {
@@ -216,7 +214,9 @@ describe("action.site.rollback", () => {
       { id: "d3", versionId: "ver_new", status: "active", updatedAt: 3 },
     ])
     const out = await run("action.site.rollback", { siteId: "site_1" })
-    expect(deployVersion).toHaveBeenCalledWith("site_1", "ver_old")
+    expect(deploySiteVersion).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: "site_1", versionId: "ver_old" })
+    )
     expect(out.output).toMatchObject({ rolledBackTo: "ver_old" })
   })
 

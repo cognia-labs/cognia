@@ -39,6 +39,81 @@ beforeEach(() => {
   usePlatformMock.mockReturnValue("tauri")
 })
 
+describe("resolveSiteGate — preview sandbox (A11)", () => {
+  it("refuses a preview on Windows, which has no terminal sandbox", () => {
+    expect(
+      resolveSiteGate({
+        platform: "tauri",
+        site: site(),
+        actorAccountId: "owner",
+        capability: "preview",
+        authoring: "edit",
+        osFamily: "windows",
+      })
+    ).toEqual({ allowed: false, reason: "requires-preview-sandbox" })
+  })
+
+  it.each(["macos", "linux"] as const)("allows a preview on %s", (osFamily) => {
+    expect(
+      resolveSiteGate({
+        platform: "tauri",
+        site: site(),
+        actorAccountId: "owner",
+        capability: "preview",
+        authoring: "edit",
+        osFamily,
+      })
+    ).toEqual({ allowed: true, reason: "ok" })
+  })
+
+  it("leaves the other host capabilities alone on Windows", () => {
+    expect(
+      resolveSiteGate({
+        platform: "tauri",
+        site: site(),
+        actorAccountId: "owner",
+        capability: "build",
+        osFamily: "windows",
+      })
+    ).toEqual({ allowed: true, reason: "ok" })
+  })
+})
+
+describe("resolveSiteGate — recovery while deleting (F07)", () => {
+  it("lets the owner reconcile and abandon on a Site mid-purge", () => {
+    expect(
+      resolveSiteGate({
+        platform: "tauri",
+        site: site({ lifecycle: "deleting" }),
+        actorAccountId: "owner",
+        capability: "recovery",
+        authoring: "manage",
+      })
+    ).toEqual({ allowed: true, reason: "ok" })
+  })
+
+  it("still locks every other host action, and still needs the owner", () => {
+    expect(
+      resolveSiteGate({
+        platform: "tauri",
+        site: site({ lifecycle: "deleting" }),
+        actorAccountId: "owner",
+        capability: "provider",
+        authoring: "manage",
+      })
+    ).toEqual({ allowed: false, reason: "lifecycle-locked" })
+    expect(
+      resolveSiteGate({
+        platform: "tauri",
+        site: site({ lifecycle: "deleting" }),
+        actorAccountId: "deployer",
+        capability: "recovery",
+        authoring: "manage",
+      })
+    ).toEqual({ allowed: false, reason: "requires-owner" })
+  })
+})
+
 describe("resolveSiteGate — host", () => {
   it.each(["provider", "build", "preview", "filesystem"] as const)(
     "blocks %s outside the desktop shell",

@@ -1,10 +1,16 @@
 import {
+  deploySiteVersion,
   publishSiteVersion,
   siteVersionIsUploaded,
   uploadSiteVersion,
   type PublishSiteVersionDeps,
 } from "./publish-version"
-import type { SiteArtifactRow, SiteResourceRow, SiteVersionRow } from "@/types/sites"
+import type {
+  SiteArtifactRow,
+  SiteProjectRow,
+  SiteResourceRow,
+  SiteVersionRow,
+} from "@/types/sites"
 
 const READY: SiteVersionRow = {
   id: "v1",
@@ -51,6 +57,25 @@ function resource(overrides: Partial<SiteResourceRow> = {}): SiteResourceRow {
   } as SiteResourceRow
 }
 
+function site(overrides: Partial<SiteProjectRow> = {}): SiteProjectRow {
+  return {
+    id: "s1",
+    name: "Docs",
+    projectId: "p1",
+    sourceRoot: "/repo",
+    executionTarget: { kind: "local" },
+    executionTargetKey: "local",
+    provider: "cloudflare",
+    providerConfig: { accountId: "acct", workerName: "docs" },
+    authoringPolicy: { ownerAccountId: "acct", editorAccountIds: [], deployerAccountIds: [] },
+    visitorPolicy: { mode: "public" },
+    lifecycle: "active",
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  } as SiteProjectRow
+}
+
 function deps(overrides: Partial<PublishSiteVersionDeps> = {}) {
   const uploadVersion = jest.fn(
     async (
@@ -58,9 +83,12 @@ function deps(overrides: Partial<PublishSiteVersionDeps> = {}) {
     ) => "cf-version-1"
   )
   const deployVersion = jest.fn(async () => ({ id: "d1" }))
+  const visitorAccessGap = jest.fn(async (): Promise<string | undefined> => undefined)
+  const reconcileVisitorAccess = jest.fn(async () => site())
   const base: PublishSiteVersionDeps = {
     ensureWrangler: jest.fn(async () => ({ path: "/bin/wrangler", version: "3", ready: true })),
     getArtifact: jest.fn(async () => ARTIFACT),
+    getSite: jest.fn(async () => site()),
     getVersion: jest.fn(async () => READY),
     listResources: jest.fn(async () => []),
     materialize: jest.fn(async () => ({
@@ -71,10 +99,15 @@ function deps(overrides: Partial<PublishSiteVersionDeps> = {}) {
     mkdir: jest.fn(async () => undefined),
     join: jest.fn(async (...parts: string[]) => parts.join("/")),
     cacheRoot: jest.fn(async () => "/cache"),
-    createService: jest.fn(() => ({ uploadVersion, deployVersion })),
+    createService: jest.fn(() => ({
+      uploadVersion,
+      deployVersion,
+      visitorAccessGap,
+      reconcileVisitorAccess,
+    })),
     ...overrides,
   } as unknown as PublishSiteVersionDeps
-  return { deps: base, uploadVersion, deployVersion }
+  return { deps: base, uploadVersion, deployVersion, visitorAccessGap, reconcileVisitorAccess }
 }
 
 const INPUT = { siteId: "s1", versionId: "v1", actorAccountId: "acct" }
@@ -86,6 +119,7 @@ describe("uploadSiteVersion", () => {
     expect(d.mkdir).toHaveBeenCalledWith("/cache/cognia-sites/s1/v1", { recursive: true })
     expect(uploadVersion).toHaveBeenCalledWith("s1", "v1", {
       wranglerBinaryPath: "/bin/wrangler",
+      wranglerVersion: "3",
       stagingRoot: "/cache/cognia-sites/s1/v1",
       configPath: "/cache/cognia-sites/s1/v1/wrangler.json",
       entryPath: "/cache/entry.js",
@@ -171,5 +205,51 @@ describe("publishSiteVersion", () => {
     await publishSiteVersion(INPUT, d)
     expect(uploadVersion).not.toHaveBeenCalled()
     expect(deployVersion).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("deploySiteVersion (F03)", () => {
+  const PRIVATE = site({ visitorPolicy: { mode: "private" } })
+
+  it("applies a restricted Site's own policy before deploying when Access is not in force", async () => {
+    const d = deps({ getSite: jest.fn(async () => PRIVATE) })
+    d.visitorAccessGap.mockResolvedValueOnce("no Access application covers the Worker")
+    await deploySiteVersion(INPUT, d.deps)
+    expect(d.reconcileVisitorAccess).toHaveBeenCalledWith("s1", { mode: "private" })
+    expect(d.reconcileVisitorAccess.mock.invocationCallOrder[0]).toBeLessThan(
+      d.deployVersion.mock.invocationCallOrder[0]
+    )
+  })
+
+  it("leaves Access alone when it is already in force", async () => {
+    const d = deps({ getSite: jest.fn(async () => PRIVATE) })
+    await deploySiteVersion(INPUT, d.deps)
+    expect(d.reconcileVisitorAccess).not.toHaveBeenCalled()
+    expect(d.deployVersion).toHaveBeenCalledWith("s1", "v1")
+  })
+
+  it("never applies Access for a deployer who cannot manage the Site; the deploy refuses instead", async () => {
+    const d = deps({
+      getSite: jest.fn(async () =>
+        site({
+          visitorPolicy: { mode: "private" },
+          authoringPolicy: {
+            ownerAccountId: "owner",
+            editorAccountIds: [],
+            deployerAccountIds: ["acct"],
+          },
+        })
+      ),
+    })
+    await deploySiteVersion(INPUT, d.deps)
+    expect(d.visitorAccessGap).not.toHaveBeenCalled()
+    expect(d.reconcileVisitorAccess).not.toHaveBeenCalled()
+    expect(d.deployVersion).toHaveBeenCalledTimes(1)
+  })
+
+  it("does nothing extra for a public Site", async () => {
+    const d = deps()
+    await deploySiteVersion(INPUT, d.deps)
+    expect(d.visitorAccessGap).not.toHaveBeenCalled()
   })
 })

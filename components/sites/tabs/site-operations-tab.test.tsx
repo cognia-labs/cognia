@@ -93,6 +93,7 @@ function renderTab(props: Partial<React.ComponentProps<typeof SiteOperationsTab>
       resources={[]}
       deployments={[]}
       gate={allowed}
+      recoveryGate={allowed}
       isBusy={() => false}
       result={null}
       onQuery={onQuery}
@@ -297,4 +298,16 @@ it("passes the abandon action through to the journal", async () => {
   await user.click(screen.getByTestId("site-operation-op1"))
   await user.click(screen.getByTestId("site-operation-cancel-op1"))
   expect(onCancelOperation).toHaveBeenCalledWith("op1")
+})
+
+it("gates the journal's recovery actions on the owner's right, not the provider gate (A04, F07)", async () => {
+  const user = userEvent.setup()
+  renderTab({
+    operations: [{ ...operation, status: "waiting-reconcile" }],
+    gate: allowed,
+    recoveryGate: blocked,
+  })
+  await user.click(screen.getByTestId("site-operation-op1"))
+  expect(screen.getByTestId("site-operation-cancel-op1")).toBeDisabled()
+  expect(screen.getByTestId("site-operation-cancel-op1")).toHaveAttribute("title", "Desktop only")
 })

@@ -4,6 +4,7 @@ import type {
   SiteBuildLogRow,
   SiteBuildPhase,
   SiteDeploymentRow,
+  SiteEntryVerification,
   SiteEnvironmentRevisionRow,
   SiteLifecycle,
   SiteOperationEventRow,
@@ -113,6 +114,23 @@ export async function createSiteProject(input: CreateSiteProjectInput): Promise<
     .equals([input.projectId, input.sourceRoot, sourceSubpath, executionTargetKey])
     .first()
   if (existing) throw new Error("a Site already exists for this project source and target")
+  // Every resource a Site records hangs off its Worker, and purge deletes the
+  // ones marked `managed`. Two Sites naming the same account + Worker both
+  // recorded it as their own, so purging one deleted the other's production.
+  const workerName = input.providerConfig.workerName.trim()
+  const accountId = input.providerConfig.accountId.trim()
+  const sameWorker = await db.siteProjects
+    .filter(
+      (site) =>
+        site.lifecycle !== "deleted" &&
+        site.provider === input.provider &&
+        site.providerConfig.accountId.trim() === accountId &&
+        site.providerConfig.workerName.trim().toLowerCase() === workerName.toLowerCase()
+    )
+    .first()
+  if (sameWorker) {
+    throw new Error(`Site "${sameWorker.name}" already publishes to this Cloudflare Worker`)
+  }
   const now = input.now ?? Date.now()
   const row: SiteProjectRow = {
     id: input.id,
@@ -173,38 +191,87 @@ export async function putSiteArtifact(
   return row
 }
 
-/**
- * Every stored digest, as primary keys only.
- *
- * `toArray()` here would structured-clone every archive in the table — the
- * retention sweep enumerates precisely so it can decide what NOT to read.
- */
-export async function listSiteArtifactDigests(): Promise<string[]> {
-  return (await getDb().siteArtifacts.orderBy("createdAt").primaryKeys()) as string[]
+export interface SiteArtifactSweepSnapshot {
+  /** Every stored digest (primary keys only — no archive bytes are read). */
+  digests: string[]
+  sites: Array<{
+    site: SiteProjectRow
+    versions: SiteVersionRow[]
+    deployments: SiteDeploymentRow[]
+    operations: SiteOperationRow[]
+  }>
 }
 
-/** Delete archives by digest. The caller owns the reference check. */
-export async function deleteSiteArtifacts(digests: readonly string[]): Promise<number> {
-  if (digests.length === 0) return 0
-  await getDb().siteArtifacts.bulkDelete([...digests])
-  return digests.length
+export interface SiteArtifactSweepPlan {
+  /** Archives to delete. */
+  doomed: string[]
+  /** Versions to mark `artifactCollectedAt` (their bytes are gone after this). */
+  collectVersionIds: string[]
 }
 
 /**
- * Record that retention took this version's archive.
+ * Decide and delete in one transaction.
  *
- * A narrow writer on purpose: `completeSiteVersion` refuses to touch a finished
- * version, which is the invariant that makes versions immutable. This changes
- * one field that describes local storage, not the build.
+ * Retention used to read references, then delete, then drop build logs, then
+ * mark versions, each as its own write. A deployment queued between the read
+ * and the delete lost its archive; a failure after the delete left `ready`
+ * versions with no bytes and no collected mark, which no later sweep could
+ * repair because the digest was no longer listed. `decide` is pure and runs
+ * on the snapshot taken inside the transaction, so nothing can start pinning
+ * an archive between the decision and its effect, and either everything lands
+ * or nothing does.
  */
-export async function markSiteVersionArtifactCollected(
-  versionId: string,
+export async function sweepSiteArtifacts(
+  decide: (snapshot: SiteArtifactSweepSnapshot) => SiteArtifactSweepPlan,
   now = Date.now()
-): Promise<void> {
+): Promise<{
+  snapshot: SiteArtifactSweepSnapshot
+  plan: SiteArtifactSweepPlan
+  buildLogsDeleted: number
+}> {
   const db = getDb()
-  const version = await db.siteVersions.get(versionId)
-  if (!version || version.artifactCollectedAt !== undefined) return
-  await db.siteVersions.put({ ...version, artifactCollectedAt: now })
+  return db.transaction(
+    "rw",
+    [
+      db.siteProjects,
+      db.siteVersions,
+      db.siteDeployments,
+      db.siteOperations,
+      db.siteArtifacts,
+      db.siteBuildLogs,
+    ],
+    async () => {
+      const digests = (await db.siteArtifacts.orderBy("createdAt").primaryKeys()) as string[]
+      const [projects, versions, deployments, operations] = await Promise.all([
+        db.siteProjects.toArray(),
+        db.siteVersions.toArray(),
+        db.siteDeployments.toArray(),
+        db.siteOperations.toArray(),
+      ])
+      const snapshot: SiteArtifactSweepSnapshot = {
+        digests,
+        sites: projects.map((site) => ({
+          site,
+          versions: versions.filter((row) => row.siteId === site.id),
+          deployments: deployments.filter((row) => row.siteId === site.id),
+          operations: operations.filter((row) => row.siteId === site.id),
+        })),
+      }
+      const plan = decide(snapshot)
+      if (plan.doomed.length > 0) await db.siteArtifacts.bulkDelete([...plan.doomed])
+      let buildLogsDeleted = 0
+      for (const versionId of plan.collectVersionIds) {
+        const keys = await db.siteBuildLogs.where("versionId").equals(versionId).primaryKeys()
+        await db.siteBuildLogs.bulkDelete(keys)
+        buildLogsDeleted += keys.length
+        const version = await db.siteVersions.get(versionId)
+        if (version && version.artifactCollectedAt === undefined) {
+          await db.siteVersions.put({ ...version, artifactCollectedAt: now })
+        }
+      }
+      return { snapshot, plan, buildLogsDeleted }
+    }
+  )
 }
 
 export async function getSiteArtifact(digest: string): Promise<SiteArtifactRow | undefined> {
@@ -357,6 +424,29 @@ export async function listSiteVersions(siteId: string): Promise<SiteVersionRow[]
   return getDb().siteVersions.where("siteId").equals(siteId).reverse().sortBy("sequence")
 }
 
+/**
+ * Operations that move production traffic or its entry points.
+ *
+ * Each used to take a lease on its own row only, so two publishes of the same
+ * Worker could interleave — Cloudflare ended on B while Cognia recorded the
+ * later-committing A as live — and a takedown could finish between a deploy's
+ * provider write and its local commit, leaving a taken-down Site with an
+ * `active` deployment. The provider has one traffic target per Worker, so the
+ * consistency boundary is the Site, not the operation.
+ */
+export const SITE_PRODUCTION_OPERATION_TYPES: ReadonlySet<SiteOperationRow["type"]> = new Set([
+  "deploy",
+  "takedown",
+  "restore",
+  "purge",
+])
+
+const UNFINISHED_OPERATION_STATUSES: ReadonlySet<SiteOperationRow["status"]> = new Set([
+  "queued",
+  "running",
+  "waiting-reconcile",
+])
+
 export async function queueSiteOperation(
   input: Omit<
     SiteOperationRow,
@@ -378,6 +468,7 @@ export async function queueSiteOperation(
     db.siteOperations,
     db.siteOperationEvents,
     async (): Promise<SiteOperationRow> => {
+      const now = input.now ?? Date.now()
       const duplicate = await db.siteOperations
         .where("idempotencyKey")
         .equals(input.idempotencyKey)
@@ -386,10 +477,32 @@ export async function queueSiteOperation(
         if (duplicate.inputDigest !== input.inputDigest || duplicate.type !== input.type) {
           throw new Error("site operation idempotency key was reused with different input")
         }
-        return duplicate
+        // `failed` is a definite provider rejection (nothing applied) and
+        // `cancelled` is the user taking responsibility for an attempt. Both
+        // used to be returned as-is, so fixing a permission and submitting the
+        // same domain or database again hit "requires reconciliation: failed"
+        // with nothing left for reconciliation to look at. The key still
+        // dedupes in-flight and completed work; a closed attempt reopens the
+        // same row so the journal keeps one history per intent.
+        if (duplicate.status !== "failed" && duplicate.status !== "cancelled") return duplicate
+        await assertNoConcurrentProductionChange(duplicate.siteId, duplicate.type, duplicate.id)
+        const reopened: SiteOperationRow = {
+          ...duplicate,
+          status: "queued",
+          inputPayload: input.inputPayload,
+          errorMessage: undefined,
+          providerRequestId: undefined,
+          leaseOwner: undefined,
+          leaseExpiresAt: undefined,
+          completedAt: undefined,
+          updatedAt: now,
+        }
+        await db.siteOperations.put(reopened)
+        await appendOperationEvent(reopened.id, "queued", now, { message: "Retry requested" })
+        return reopened
       }
       if (!(await db.siteProjects.get(input.siteId))) throw new Error("site project not found")
-      const now = input.now ?? Date.now()
+      await assertNoConcurrentProductionChange(input.siteId, input.type, input.id)
       const row: SiteOperationRow = {
         id: input.id,
         siteId: input.siteId,
@@ -408,6 +521,32 @@ export async function queueSiteOperation(
       return row
     }
   )
+}
+
+/** Must run inside a transaction that includes `siteOperations`. */
+async function assertNoConcurrentProductionChange(
+  siteId: string,
+  type: SiteOperationRow["type"],
+  operationId: string
+): Promise<void> {
+  if (!SITE_PRODUCTION_OPERATION_TYPES.has(type)) return
+  const busy = await getDb()
+    .siteOperations.where("siteId")
+    .equals(siteId)
+    .filter(
+      (operation) =>
+        operation.id !== operationId &&
+        SITE_PRODUCTION_OPERATION_TYPES.has(operation.type) &&
+        UNFINISHED_OPERATION_STATUSES.has(operation.status)
+    )
+    .first()
+  if (busy) {
+    throw new Error(
+      busy.status === "waiting-reconcile"
+        ? `a ${busy.type} for this Site needs reconciliation before production can change again`
+        : `a ${busy.type} for this Site is still in progress`
+    )
+  }
 }
 
 export async function claimNextSiteOperation(input: {
@@ -640,9 +779,15 @@ export async function listSiteOperationSignals(): Promise<SiteOperationRow[]> {
  * this attempt", and it is the only writer of that status.
  *
  * Deliberately does NOT require the lease owner — the whole point is that the
- * holder is gone — and deliberately does NOT release the idempotency key. A
- * retry with byte-identical input still has to go through reconciliation; what
- * cancelling buys is an honest status, not a forged clean slate.
+ * holder is gone. A LIVE lease is the opposite case: the holder is still
+ * making provider calls, and clearing its lease let it finish anyway — the
+ * journal said `cancelled` while the deployment became `active`, and the
+ * holder then failed on "completed site deployment cannot fail". So a
+ * `running` operation can only be abandoned once its lease has expired.
+ *
+ * Retrying the same input afterwards reopens this row (`queueSiteOperation`):
+ * the user who abandoned an uncertain attempt has accepted that its provider
+ * outcome is unknown.
  */
 export async function cancelSiteOperation(input: {
   operationId: string
@@ -665,6 +810,9 @@ export async function cancelSiteOperation(input: {
         throw new Error("site operation has already reached a terminal state")
       }
       const now = input.now ?? Date.now()
+      if (operation.status === "running" && (operation.leaseExpiresAt ?? 0) >= now) {
+        throw new Error("site operation is still running and cannot be abandoned")
+      }
       const cancelled: SiteOperationRow = {
         ...operation,
         status: "cancelled",
@@ -687,6 +835,12 @@ export async function resolveSiteOperationFromReconcile(input: {
   operationId: string
   providerRequestId?: string
   message?: string
+  /**
+   * `failed` when reconciliation found where the provider ended up and it is
+   * not what the operation asked for — a deploy whose entry check found the
+   * restricted Site exposed, so Cognia took it down.
+   */
+  outcome?: "succeeded" | "failed"
   now?: number
 }): Promise<SiteOperationRow> {
   const db = getDb()
@@ -700,16 +854,17 @@ export async function resolveSiteOperationFromReconcile(input: {
         throw new Error("waiting Site operation not found")
       }
       const now = input.now ?? Date.now()
+      const outcome = input.outcome ?? "succeeded"
       const resolved: SiteOperationRow = {
         ...operation,
-        status: "succeeded",
+        status: outcome,
         providerRequestId: input.providerRequestId ?? operation.providerRequestId,
-        errorMessage: undefined,
+        errorMessage: outcome === "failed" ? input.message : undefined,
         updatedAt: now,
         completedAt: now,
       }
       await db.siteOperations.put(resolved)
-      await appendOperationEvent(resolved.id, "succeeded", now, {
+      await appendOperationEvent(resolved.id, outcome, now, {
         message: input.message,
         providerRequestId: resolved.providerRequestId,
       })
@@ -769,20 +924,6 @@ export async function listSiteBuildLogs(versionId: string): Promise<SiteBuildLog
   return rows.sort((left, right) => order[left.phase] - order[right.phase])
 }
 
-export async function deleteSiteBuildLogsForVersions(
-  versionIds: readonly string[]
-): Promise<number> {
-  if (versionIds.length === 0) return 0
-  const db = getDb()
-  const keys = (
-    await Promise.all(
-      versionIds.map((id) => db.siteBuildLogs.where("versionId").equals(id).primaryKeys())
-    )
-  ).flat()
-  await db.siteBuildLogs.bulkDelete(keys)
-  return keys.length
-}
-
 export async function listSiteOperationEvents(
   operationId: string
 ): Promise<SiteOperationEventRow[]> {
@@ -831,39 +972,142 @@ export async function createSiteDeployment(
   )
 }
 
-export async function markSiteDeploymentActive(input: {
+/**
+ * Record that Cloudflare accepted the deployment, before anything else runs.
+ *
+ * The provider deployment ID is the receipt. Without it a later read failing
+ * (the workers.dev subdomain lookup returning 403) filed an accepted
+ * deployment as `failed`, reconciliation had nothing to look at, and a retry
+ * deployed the same version a second time.
+ */
+export async function markSiteDeploymentAccepted(input: {
   deploymentId: string
   providerDeploymentId: string
-  productionUrl: string
   now?: number
 }): Promise<SiteDeploymentRow> {
   const db = getDb()
   return db.transaction("rw", db.siteDeployments, async (): Promise<SiteDeploymentRow> => {
     const deployment = await db.siteDeployments.get(input.deploymentId)
     if (!deployment) throw new Error("site deployment not found")
-    if (!["pending", "deploying"].includes(deployment.status)) {
-      throw new Error("site deployment cannot become active from its current status")
+    if (deployment.status !== "pending" && deployment.status !== "deploying") {
+      throw new Error("site deployment cannot be accepted from its current status")
     }
-    const now = input.now ?? Date.now()
-    const active = await db.siteDeployments
-      .where("siteId")
-      .equals(deployment.siteId)
-      .filter((candidate) => candidate.status === "active" && candidate.id !== deployment.id)
-      .toArray()
-    await db.siteDeployments.bulkPut(
-      active.map((candidate) => ({ ...candidate, status: "superseded", updatedAt: now }))
-    )
     const updated: SiteDeploymentRow = {
       ...deployment,
-      status: "active",
+      status: "deploying",
       providerDeploymentId: input.providerDeploymentId,
-      productionUrl: input.productionUrl,
-      failureMessage: undefined,
-      updatedAt: now,
+      updatedAt: input.now ?? Date.now(),
     }
     await db.siteDeployments.put(updated)
     return updated
   })
+}
+
+export async function markSiteDeploymentActive(input: {
+  deploymentId: string
+  providerDeploymentId: string
+  productionUrl: string
+  entryVerification?: SiteEntryVerification
+  now?: number
+}): Promise<SiteDeploymentRow> {
+  const db = getDb()
+  return db.transaction(
+    "rw",
+    db.siteProjects,
+    db.siteDeployments,
+    async (): Promise<SiteDeploymentRow> => {
+      const deployment = await db.siteDeployments.get(input.deploymentId)
+      if (!deployment) throw new Error("site deployment not found")
+      if (!["pending", "deploying"].includes(deployment.status)) {
+        throw new Error("site deployment cannot become active from its current status")
+      }
+      const site = await db.siteProjects.get(deployment.siteId)
+      if (site?.lifecycle !== "active") {
+        throw new Error("a deployment cannot become active on a Site that is not active")
+      }
+      const now = input.now ?? Date.now()
+      const active = await db.siteDeployments
+        .where("siteId")
+        .equals(deployment.siteId)
+        .filter((candidate) => candidate.status === "active" && candidate.id !== deployment.id)
+        .toArray()
+      await db.siteDeployments.bulkPut(
+        active.map((candidate) => ({ ...candidate, status: "superseded", updatedAt: now }))
+      )
+      const updated: SiteDeploymentRow = {
+        ...deployment,
+        status: "active",
+        providerDeploymentId: input.providerDeploymentId,
+        productionUrl: input.productionUrl,
+        failureMessage: undefined,
+        ...(input.entryVerification ? { entryVerification: input.entryVerification } : {}),
+        updatedAt: now,
+      }
+      await db.siteDeployments.put(updated)
+      return updated
+    }
+  )
+}
+
+/** Replace the recorded entry check of a deployment (a later "check again"). */
+export async function setSiteDeploymentEntryVerification(
+  deploymentId: string,
+  entryVerification: SiteEntryVerification,
+  failureMessage?: string,
+  now = Date.now()
+): Promise<SiteDeploymentRow> {
+  const db = getDb()
+  const deployment = await db.siteDeployments.get(deploymentId)
+  if (!deployment) throw new Error("site deployment not found")
+  const updated: SiteDeploymentRow = {
+    ...deployment,
+    entryVerification,
+    ...(failureMessage ? { failureMessage } : {}),
+    updatedAt: now,
+  }
+  await db.siteDeployments.put(updated)
+  return updated
+}
+
+/**
+ * Bring back the deployment a takedown stopped serving.
+ *
+ * Takedown closes entry points; it never changes which version Cloudflare
+ * routes to. Restore only flipped the Site's lifecycle, so the console showed
+ * a restored Site with no live URL. The row to reactivate is the one whose
+ * receipt is the provider's current deployment — if something else was
+ * deployed out of band, nothing is marked live rather than the wrong thing.
+ */
+export async function restoreSiteDeployment(input: {
+  siteId: string
+  providerDeploymentId: string
+  now?: number
+}): Promise<SiteDeploymentRow | undefined> {
+  const db = getDb()
+  return db.transaction(
+    "rw",
+    db.siteDeployments,
+    async (): Promise<SiteDeploymentRow | undefined> => {
+      const candidate = (
+        await db.siteDeployments
+          .where("siteId")
+          .equals(input.siteId)
+          .filter(
+            (row) =>
+              row.status === "taken-down" && row.providerDeploymentId === input.providerDeploymentId
+          )
+          .toArray()
+      ).sort((left, right) => right.updatedAt - left.updatedAt)[0]
+      if (!candidate) return undefined
+      const restored: SiteDeploymentRow = {
+        ...candidate,
+        status: "active",
+        updatedAt: input.now ?? Date.now(),
+      }
+      await db.siteDeployments.put(restored)
+      return restored
+    }
+  )
 }
 
 export async function failSiteDeployment(
@@ -1112,16 +1356,6 @@ export async function updateSiteProviderConfig(
   }
   await db.siteProjects.put(updated)
   return updated
-}
-
-export async function siteResourceCanBePurged(id: string): Promise<boolean> {
-  const db = getDb()
-  const resource = await db.siteResources.get(id)
-  if (!resource || resource.ownership !== "managed" || resource.status === "deleted") return false
-  const dependents = await db.siteResources
-    .filter((candidate) => candidate.status !== "deleted" && candidate.dependencies.includes(id))
-    .count()
-  return dependents === 0
 }
 
 const LIFECYCLE_TRANSITIONS: Record<SiteLifecycle, readonly SiteLifecycle[]> = {

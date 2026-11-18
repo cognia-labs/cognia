@@ -157,6 +157,15 @@ export interface SiteBuildSnapshot {
    */
   installNetworkHosts?: string[]
   buildNetworkHosts?: string[]
+  /**
+   * The toolchain the confined build actually ran, as `node --version` and
+   * `<package manager> --version` reported it inside the sandbox.
+   *
+   * `runtime` and `packageManager` above are what was asked for; nothing used
+   * to check them, so a version could say `node@24` after a build on Node 20.
+   * A build whose measured major differs from the request now fails.
+   */
+  toolchain?: { runtime: string; packageManager: string }
 }
 
 export type SiteVersionStatus = "building" | "ready" | "failed"
@@ -209,6 +218,24 @@ export interface SiteArtifactRow {
 export type SiteDeploymentStatus =
   "pending" | "deploying" | "active" | "failed" | "superseded" | "taken-down"
 
+/**
+ * What an anonymous visitor got from one entry point of a restricted Site.
+ *
+ * `protected`: Cloudflare Access answered (a redirect to the team's
+ * `cloudflareaccess.com` login, or a 401/403) before the Worker could.
+ * `exposed`: the Worker answered directly. `unverified`: no answer could be
+ * read (DNS not propagated yet, a timeout, a wildcard route with no concrete
+ * URL to try).
+ */
+export type SiteEntryOutcome = "protected" | "exposed" | "unverified"
+
+export interface SiteEntryVerification {
+  checkedAt: number
+  /** The worst outcome across `entries`; `exposed` outranks `unverified`. */
+  state: SiteEntryOutcome
+  entries: Array<{ url: string; outcome: SiteEntryOutcome; status?: number }>
+}
+
 export interface SiteDeploymentRow {
   id: string
   siteId: string
@@ -218,6 +245,11 @@ export interface SiteDeploymentRow {
   providerDeploymentId?: string
   productionUrl?: string
   failureMessage?: string
+  /**
+   * The anonymous probe of every entry point, for Sites whose visitor policy
+   * is not `public`. Absent for public Sites.
+   */
+  entryVerification?: SiteEntryVerification
   createdAt: number
   updatedAt: number
 }
@@ -331,6 +363,8 @@ export type SiteResourceKind =
   | "access-application"
   | "access-policy"
   | "secret"
+  /** A zone route (`example.com/api/*`) that sends matching traffic to the Worker. */
+  | "worker-route"
 
 export type SiteResourceStatus = "active" | "deleting" | "deleted" | "orphaned"
 

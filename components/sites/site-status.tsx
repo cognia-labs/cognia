@@ -30,6 +30,7 @@ import {
   PauseCircleIcon,
   PackageIcon,
   RocketIcon,
+  RouteIcon,
   ShieldCheckIcon,
   ShieldIcon,
   TriangleAlertIcon,
@@ -42,6 +43,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type {
   SiteDeploymentStatus,
+  SiteEntryOutcome,
   SiteLifecycle,
   SiteOperationEventType,
   SiteOperationStatus,
@@ -106,6 +108,13 @@ export const SITE_DEPLOYMENT_FACE: Record<SiteDeploymentStatus, StatusFace> = {
   "taken-down": { tone: "warning", icon: PauseCircleIcon },
 }
 
+/** What an anonymous visitor got from one entry of a restricted Site. */
+export const SITE_ENTRY_FACE: Record<SiteEntryOutcome, StatusFace> = {
+  protected: { tone: "success", icon: CheckCircle2Icon },
+  unverified: { tone: "warning", icon: CircleDashedIcon },
+  exposed: { tone: "danger", icon: TriangleAlertIcon },
+}
+
 export const SITE_OPERATION_FACE: Record<SiteOperationStatus, StatusFace> = {
   queued: { tone: "neutral", icon: CircleDashedIcon },
   running: { tone: "info", icon: Loader2Icon, spin: true },
@@ -161,6 +170,7 @@ export const SITE_RESOURCE_KIND_ICON: Record<SiteResourceKind, LucideIcon> = {
   "d1-database": PackageIcon,
   "r2-bucket": PackageIcon,
   "custom-domain": LinkIcon,
+  "worker-route": RouteIcon,
   "access-application": ShieldIcon,
   "access-policy": ShieldCheckIcon,
   secret: KeyRoundIcon,

@@ -26,6 +26,7 @@ import { useCallback } from "react"
 import { useTranslations } from "next-intl"
 
 import { usePlatform, type Platform } from "@/hooks/use-platform"
+import { detectOsFamily, type OsFamily } from "@/lib/platform/os"
 import { canAuthorSite, type SiteAuthoringCapability } from "@/lib/sites/authoring-policy"
 import type { SiteProjectRow } from "@/types/sites"
 
@@ -35,14 +36,22 @@ import type { SiteProjectRow } from "@/types/sites"
  * `metadata` is the odd one out: creating a Site, editing its authoring policy,
  * and deleting its Cognia rows touch nothing but Dexie, so they work in every
  * shell against that shell's own local database.
+ *
+ * `recovery` is a provider call that must still work while a purge holds the
+ * Site in `deleting` — reconciling and resuming are how a purge interrupted by
+ * the host stopping gets finished. Locking them with everything else left the
+ * Site in `deleting` with no control that could move it.
  */
-export type SiteActionCapability = "provider" | "build" | "preview" | "filesystem" | "metadata"
+export type SiteActionCapability =
+  "provider" | "recovery" | "build" | "preview" | "filesystem" | "metadata"
 
 export type SiteGateReason =
   | "ok"
   | "requires-desktop"
   /** The host has no wrangler binary — upload cannot run, deploy still can. */
   | "requires-wrangler"
+  /** Previews run in a sandboxed terminal, which Windows does not provide yet. */
+  | "requires-preview-sandbox"
   | "requires-access"
   | "requires-owner"
   | "requires-editor"
@@ -77,6 +86,8 @@ export interface ResolveSiteGateInput {
   actorAccountId: string
   capability: SiteActionCapability
   authoring?: SiteAuthoringCapability
+  /** Defaults to this webview's own family. */
+  osFamily?: OsFamily
 }
 
 /**
@@ -88,12 +99,16 @@ export function resolveSiteGate(input: ResolveSiteGateInput): SiteGateDecision {
   if (needsHost && input.platform !== "tauri") {
     return { allowed: false, reason: "requires-desktop" }
   }
+  if (input.capability === "preview" && (input.osFamily ?? detectOsFamily()) === "windows") {
+    return { allowed: false, reason: "requires-preview-sandbox" }
+  }
   const site = input.site
   if (!site) return { allowed: true, reason: "ok" }
-  // `deleting` means a purge is mid-flight and holds the lease; `deleted`
-  // leaves only the metadata cleanup that `metadata` covers.
+  // `deleting` means a purge is mid-flight; only recovery may act on it.
+  // `deleted` leaves only the metadata cleanup that `metadata` covers.
   const lifecycleLocked =
-    site.lifecycle === "deleting" || (site.lifecycle === "deleted" && needsHost)
+    (site.lifecycle === "deleting" && input.capability !== "recovery") ||
+    (site.lifecycle === "deleted" && needsHost)
   if (lifecycleLocked) return { allowed: false, reason: "lifecycle-locked" }
   if (
     input.authoring &&

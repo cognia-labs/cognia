@@ -47,8 +47,7 @@ import {
   pickActiveDeployment,
   siteProductionUrl,
 } from "@/lib/sites/console-model"
-import { publishSiteVersion } from "@/lib/sites/publish-version"
-import { CloudflareSitesService } from "@/lib/sites/cloudflare/service"
+import { deploySiteVersion, publishSiteVersion } from "@/lib/sites/publish-version"
 import { useAccountStore } from "@/stores/account/account-store"
 import { registerNodeExecutor } from "@/lib/workflow/nodes/registry"
 import type { StepExecutionContext } from "@/types/workflow/visual"
@@ -214,10 +213,11 @@ registerNodeExecutor({
     if (!previous) throw new Error("action.site.rollback: this Site has no earlier version live")
     // Already uploaded, so this is a deploy of an existing worker version
     // rather than a republish.
-    const deployment = await new CloudflareSitesService({ actorAccountId }).deployVersion(
+    const deployment = await deploySiteVersion({
       siteId,
-      previous.versionId
-    )
+      versionId: previous.versionId,
+      actorAccountId,
+    })
     return {
       output: {
         rolledBackTo: previous.versionId,

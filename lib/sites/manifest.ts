@@ -176,6 +176,18 @@ export function parseSiteHostingManifest(text: string): SiteHostingManifest {
     ) {
       throw new Error("cloudflare binding providerResourceId must be a string")
     }
+    // `managed` is what purge deletes. A managed binding naming an existing
+    // resource ID put another project's database on that list.
+    if (binding.ownership === "managed" && binding.providerResourceId !== undefined) {
+      throw new Error(
+        `cloudflare binding ${binding.name} is managed, so Cognia creates it; declare an existing resource as adopted or shared`
+      )
+    }
+    if (binding.ownership !== "managed" && !binding.providerResourceId?.trim()) {
+      throw new Error(
+        `cloudflare binding ${binding.name} is ${binding.ownership}, so it needs providerResourceId`
+      )
+    }
     return {
       kind: binding.kind as "d1" | "r2",
       name: binding.name,

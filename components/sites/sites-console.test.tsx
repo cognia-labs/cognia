@@ -86,6 +86,7 @@ const publishActions = {
   addDomain: jest.fn(),
   removeDomain: jest.fn(),
   applyAccess: jest.fn(),
+  recheckEntries: jest.fn(),
   takeDown: jest.fn(),
   restore: jest.fn(),
   reconcile: jest.fn(),
@@ -205,6 +206,80 @@ it("shows the compact overview on a narrow viewport, where ADR-0084 defers the p
 
   expect(screen.getByTestId("sites-mobile-notice")).toBeInTheDocument()
   expect(screen.queryByTestId("sites-console")).not.toBeInTheDocument()
+})
+
+it("says off the desktop that it lists this device's Sites, not a paired Host's (F15)", () => {
+  usePlatformMock.mockReturnValue("web")
+  render(<SitesConsole />)
+  expect(screen.getByTestId("sites-host-local-only")).toHaveTextContent("host.localOnly")
+})
+
+it("starts every per-Site form afresh when the selection changes (A10)", () => {
+  // A token typed for Site A, a scaffold's pending files, secret edits and
+  // the zone field all used to stay on screen for Site B.
+  useSiteConsoleStore.getState().setTab("publish")
+  const { rerender } = render(<SitesConsole />)
+  fireEvent.change(screen.getByLabelText("provider.token"), {
+    target: { value: "token-for-site-1" },
+  })
+  expect(screen.getByLabelText("provider.token")).toHaveValue("token-for-site-1")
+
+  // Same Site re-rendered: the draft stays.
+  rerender(
+    <TooltipProvider>
+      <SitesConsole />
+    </TooltipProvider>
+  )
+  expect(screen.getByLabelText("provider.token")).toHaveValue("token-for-site-1")
+
+  useSiteLiveDataMock.mockReturnValue(
+    liveData({
+      sites: [site(), site({ id: "site_2", name: "Marketing" })],
+      selectedId: "site_2",
+    })
+  )
+  rerender(
+    <TooltipProvider>
+      <SitesConsole />
+    </TooltipProvider>
+  )
+  expect(screen.getByLabelText("provider.token")).toHaveValue("")
+})
+
+it("hands the access tab the newest entry check and the recheck action (F03)", async () => {
+  const user = userEvent.setup()
+  useSiteConsoleStore.getState().setTab("domains")
+  useSiteLiveDataMock.mockReturnValue(
+    liveData({
+      deployments: [
+        {
+          id: "dep_1",
+          siteId: "site_1",
+          versionId: "v1",
+          environmentRevisionId: "env",
+          status: "active",
+          entryVerification: {
+            checkedAt: 9,
+            state: "unverified",
+            entries: [{ url: "https://docs.example.com/", outcome: "unverified" }],
+          },
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    })
+  )
+  try {
+    render(<SitesConsole />)
+    expect(screen.getByTestId("site-entry-check")).toHaveTextContent(
+      "access.entries.state.unverified"
+    )
+    await user.click(screen.getByTestId("site-recheck-entries"))
+    expect(publishActions.recheckEntries).toHaveBeenCalledTimes(1)
+  } finally {
+    // The store outlives a test; later ones expect the publish tab.
+    useSiteConsoleStore.getState().setTab("publish")
+  }
 })
 
 it("shows no host banner on the desktop", () => {

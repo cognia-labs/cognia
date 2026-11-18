@@ -10,16 +10,20 @@
  */
 import { useCallback, useEffect, useMemo } from "react"
 
-import { cancelSiteOperation, getSiteOperation } from "@/lib/db/sites"
+import { getSiteOperation } from "@/lib/db/sites"
 import {
   SITE_ARTIFACT_GC_DEFAULTS,
   collectUnreferencedSiteArtifacts,
 } from "@/lib/sites/artifact-gc"
-import { uploadSiteVersion } from "@/lib/sites/publish-version"
+import { deploySiteVersion, uploadSiteVersion } from "@/lib/sites/publish-version"
 import { buildAndSaveSiteVersion } from "@/lib/sites/build-version"
 import { startSitePreview, stopSitePreview } from "@/lib/sites/preview"
 import type { WranglerDetection } from "@/lib/sites/wrangler-detect"
-import { latestEnvironmentRevision, siteTokenStanding } from "@/lib/sites/console-model"
+import {
+  latestEnvironmentRevision,
+  siteIsAccessProtected,
+  siteTokenStanding,
+} from "@/lib/sites/console-model"
 import type { SiteScaffoldFile } from "@/lib/sites/manifest-scaffold"
 import type {
   SiteProjectRow,
@@ -81,7 +85,9 @@ export interface SitePublishActions {
   deploy: (version: SiteVersionRow) => void
   addDomain: (hostname: string) => void
   removeDomain: (resourceId: string) => void
-  applyAccess: (policy: SiteVisitorPolicy, hostname: string) => void
+  applyAccess: (policy: SiteVisitorPolicy) => void
+  /** Probe every entry of a restricted, live Site again (closing it if exposed). */
+  recheckEntries: () => void
   takeDown: () => void
   restore: () => void
   reconcile: (onResult: (value: unknown) => void) => void
@@ -245,7 +251,12 @@ export function useSitePublishActions({
   const deploy = useCallback(
     (version: SiteVersionRow) => {
       void run(`deploy:${version.id}`, async () => {
-        const deployment = await service().deployVersion(requireSite().id, version.id)
+        // Shared with the agent and workflow entry points: a restricted Site is
+        // protected before its first publish rather than refused.
+        const deployment = await deploySiteVersion(
+          { siteId: requireSite().id, versionId: version.id, actorAccountId },
+          { createService: () => service() }
+        )
         // A deploy is what supersedes an older version, so it is the moment the
         // rollback window moves and something can genuinely be released. Never
         // fatal: the daily sweeper covers a failure here.
@@ -256,7 +267,7 @@ export function useSitePublishActions({
         return deployment
       })
     },
-    [run, service, requireSite]
+    [run, service, requireSite, actorAccountId]
   )
 
   const reclaimArtifacts = useCallback(() => {
@@ -280,12 +291,27 @@ export function useSitePublishActions({
     [run, service, requireSite]
   )
 
+  // A policy that is in force on Cloudflare is configuration, not proof: a
+  // live Site that just became (or stayed) restricted has its entries asked
+  // again, so exposure is found and closed now rather than on the next deploy.
+  const hasLiveDeployment = live.deployments.some((row) => row.status === "active")
   const applyAccess = useCallback(
-    (policy: SiteVisitorPolicy, hostname: string) => {
-      void run("access", () => service().reconcileVisitorAccess(requireSite().id, policy, hostname))
+    (policy: SiteVisitorPolicy) => {
+      void run("access", async () => {
+        const siteId = requireSite().id
+        const updated = await service().reconcileVisitorAccess(siteId, policy)
+        if (siteIsAccessProtected(policy) && hasLiveDeployment) {
+          await service().recheckEntries(siteId)
+        }
+        return updated
+      })
     },
-    [run, service, requireSite]
+    [run, service, requireSite, hasLiveDeployment]
   )
+
+  const recheckEntries = useCallback(() => {
+    void run("recheck-entries", () => service().recheckEntries(requireSite().id))
+  }, [run, service, requireSite])
 
   // Takedown and restore change what every other control acts on — a domain
   // form or a deploy button aimed at a Site that is mid-takedown is a click
@@ -325,9 +351,11 @@ export function useSitePublishActions({
 
   const cancelOperation = useCallback(
     (operationId: string) => {
-      void run(`cancel:${operationId}`, () => cancelSiteOperation({ operationId }))
+      void run(`cancel:${operationId}`, () =>
+        service().abandonOperation(requireSite().id, operationId)
+      )
     },
-    [run]
+    [run, service, requireSite]
   )
 
   return {
@@ -347,6 +375,7 @@ export function useSitePublishActions({
     addDomain,
     removeDomain,
     applyAccess,
+    recheckEntries,
     takeDown,
     restore,
     reconcile,

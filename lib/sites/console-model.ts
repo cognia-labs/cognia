@@ -19,6 +19,7 @@ import type {
   CloudflareSiteProviderConfig,
   SiteAuthoringPolicy,
   SiteDeploymentRow,
+  SiteEntryVerification,
   SiteEnvironmentRevisionRow,
   SiteOperationRow,
   SiteResourceKind,
@@ -36,6 +37,7 @@ export const SITE_RESOURCE_KIND_ORDER: readonly SiteResourceKind[] = [
   "worker",
   "worker-version",
   "custom-domain",
+  "worker-route",
   "d1-database",
   "r2-bucket",
   "secret",
@@ -516,6 +518,26 @@ export function siteAnalyticsIsZoneScoped(
 }
 
 /* ----------------------------------------------------------- visitor access */
+
+/**
+ * The newest anonymous entry check among a Site's deployments.
+ *
+ * The live deployment carries it normally; after a check found an entry
+ * exposed, Cognia took the Site down and the evidence sits on that now
+ * taken-down deployment, which is exactly what the console must still show.
+ */
+export function latestSiteEntryVerification(
+  deployments: readonly SiteDeploymentRow[]
+): SiteEntryVerification | undefined {
+  let latest: SiteEntryVerification | undefined
+  for (const deployment of deployments) {
+    const verification = deployment.entryVerification
+    if (verification && (!latest || verification.checkedAt > latest.checkedAt)) {
+      latest = verification
+    }
+  }
+  return latest
+}
 
 /** True when the visitor policy puts the Site behind Cloudflare Access. */
 export function siteIsAccessProtected(policy: SiteVisitorPolicy): boolean {

@@ -20,10 +20,15 @@ import {
   markSiteDeploymentActive,
   markSiteOperationForReconcile,
   failSiteOperation,
+  markSiteDeploymentAccepted,
+  markSiteDeploymentsTakenDown,
+  restoreSiteDeployment,
+  setSiteDeploymentEntryVerification,
   setSiteLifecycle,
-  siteResourceCanBePurged,
+  sweepSiteArtifacts,
   updateSiteProviderConfig,
 } from "./sites"
+import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 
 const dbFixture = createDbTestFixture()
@@ -94,6 +99,40 @@ describe("site project identity", () => {
   it("prevents duplicate Site bindings for the same project, root, subpath, and target", async () => {
     await makeSite()
     await expect(makeSite()).rejects.toThrow("already exists")
+  })
+
+  it("refuses a second Site on a Worker another Site already publishes to (F11)", async () => {
+    await makeSite()
+    // Purge deletes a Site's managed resources, all of which hang off the
+    // Worker: two Sites on one Worker meant purging one took the other down.
+    await expect(
+      createSiteProject({
+        ...siteInput(),
+        id: "site_2",
+        sourceSubpath: "apps/blog",
+        providerConfig: { workerName: " Cognia-Docs ", accountId: "account_1" },
+      })
+    ).rejects.toThrow('Site "Docs" already publishes to this Cloudflare Worker')
+
+    // Another account's Worker of the same name is a different Worker.
+    await expect(
+      createSiteProject({
+        ...siteInput(),
+        id: "site_3",
+        sourceSubpath: "apps/blog",
+        providerConfig: { workerName: "cognia-docs", accountId: "account_2" },
+      })
+    ).resolves.toMatchObject({ id: "site_3" })
+  })
+
+  it("frees the Worker once the Site that used it is deleted", async () => {
+    await makeSite()
+    await setSiteLifecycle("site_1", "taken-down", 150)
+    await setSiteLifecycle("site_1", "deleting", 180)
+    await setSiteLifecycle("site_1", "deleted", 200)
+    await expect(
+      createSiteProject({ ...siteInput(), id: "site_2", sourceSubpath: "apps/blog" })
+    ).resolves.toMatchObject({ id: "site_2" })
   })
 })
 
@@ -461,8 +500,8 @@ describe("provider resource ownership and deletion", () => {
       now: 100,
     })
 
-    expect(await siteResourceCanBePurged(managed.id)).toBe(true)
-    expect(await siteResourceCanBePurged(adopted.id)).toBe(false)
+    expect(managed.ownership).toBe("managed")
+    expect(adopted.ownership).toBe("adopted")
     await expect(
       recordSiteResource({ ...managed, ownership: "adopted", now: 200 })
     ).rejects.toThrow("ownership")
@@ -590,13 +629,25 @@ describe("abandoning an operation", () => {
     expect(events.at(-1)).toMatchObject({ type: "cancelled", message: "gave up" })
   })
 
-  it("releases a lease the dead claimant still held", async () => {
+  it("releases a lease the dead claimant still held once it has expired", async () => {
     await queuedOperation()
     await claimSiteOperation({ operationId: "op_1", leaseOwner: "gone", leaseMs: 1000, now: 110 })
 
-    const cancelled = await cancelSiteOperation({ operationId: "op_1", now: 200 })
+    const cancelled = await cancelSiteOperation({ operationId: "op_1", now: 1_200 })
     expect(cancelled.leaseOwner).toBeUndefined()
     expect(cancelled.leaseExpiresAt).toBeUndefined()
+  })
+
+  it("refuses to abandon an operation whose claimant still holds a live lease (A04)", async () => {
+    // Clearing a live lease let the in-flight deploy finish anyway: the
+    // journal said `cancelled` while the deployment became `active`.
+    await queuedOperation()
+    await claimSiteOperation({ operationId: "op_1", leaseOwner: "me", leaseMs: 1000, now: 110 })
+
+    await expect(cancelSiteOperation({ operationId: "op_1", now: 500 })).rejects.toThrow(
+      "still running"
+    )
+    expect(await getSiteOperation("op_1")).toMatchObject({ status: "running", leaseOwner: "me" })
   })
 
   it("refuses to reopen an operation that already finished", async () => {
@@ -610,5 +661,307 @@ describe("abandoning an operation", () => {
   it("refuses an unknown operation", async () => {
     await makeSite()
     await expect(cancelSiteOperation({ operationId: "missing" })).rejects.toThrow(/not found/)
+  })
+})
+
+describe("retrying a closed attempt (A05, F04, F05)", () => {
+  const operationInput = (id: string, type: "domain" | "deploy" = "domain") => ({
+    id,
+    siteId: "site_1",
+    type,
+    executionTargetKey: "local",
+    idempotencyKey: `${type}:site_1:docs.example.com`,
+    inputDigest: "digest",
+    inputPayload: { attempt: id },
+  })
+
+  it("reopens a failed attempt under the same key instead of returning the failure", async () => {
+    await makeSite()
+    await queueSiteOperation({ ...operationInput("op_1"), now: 100 })
+    await claimSiteOperation({ operationId: "op_1", leaseOwner: "me", leaseMs: 1000, now: 110 })
+    await failSiteOperation({ operationId: "op_1", leaseOwner: "me", message: "403", now: 120 })
+
+    const retried = await queueSiteOperation({ ...operationInput("op_2"), now: 200 })
+    expect(retried).toMatchObject({
+      id: "op_1",
+      status: "queued",
+      inputPayload: { attempt: "op_2" },
+      errorMessage: undefined,
+      completedAt: undefined,
+    })
+    const events = await listSiteOperationEvents("op_1")
+    expect(events.at(-1)).toMatchObject({ type: "queued", message: "Retry requested" })
+    // ...and it can be claimed again.
+    await expect(
+      claimSiteOperation({ operationId: "op_1", leaseOwner: "me", leaseMs: 1000, now: 210 })
+    ).resolves.toMatchObject({ status: "running", attemptCount: 2 })
+  })
+
+  it("reopens a cancelled attempt too", async () => {
+    await makeSite()
+    await queueSiteOperation({ ...operationInput("op_1"), now: 100 })
+    await cancelSiteOperation({ operationId: "op_1", now: 120 })
+    await expect(
+      queueSiteOperation({ ...operationInput("op_2"), now: 200 })
+    ).resolves.toMatchObject({ id: "op_1", status: "queued" })
+  })
+
+  it("still returns a succeeded or in-flight attempt as-is", async () => {
+    await makeSite()
+    await queueSiteOperation({ ...operationInput("op_1"), now: 100 })
+    await expect(
+      queueSiteOperation({ ...operationInput("op_2"), now: 101 })
+    ).resolves.toMatchObject({ id: "op_1", status: "queued" })
+    await claimSiteOperation({ operationId: "op_1", leaseOwner: "me", leaseMs: 1000, now: 110 })
+    await completeSiteOperation({ operationId: "op_1", leaseOwner: "me", now: 120 })
+    await expect(
+      queueSiteOperation({ ...operationInput("op_2"), now: 200 })
+    ).resolves.toMatchObject({ id: "op_1", status: "succeeded" })
+  })
+})
+
+describe("one production change per Site at a time (A01)", () => {
+  const production = (id: string, type: "deploy" | "takedown" | "restore" | "purge") => ({
+    id,
+    siteId: "site_1",
+    type,
+    executionTargetKey: "local",
+    idempotencyKey: `${type}:site_1:${id}`,
+    inputDigest: id,
+    now: 100,
+  })
+
+  it("refuses a second deploy or a takedown while a deploy is unfinished", async () => {
+    await makeSite()
+    await queueSiteOperation(production("op_a", "deploy"))
+    await expect(queueSiteOperation(production("op_b", "deploy"))).rejects.toThrow(
+      "a deploy for this Site is still in progress"
+    )
+    await expect(queueSiteOperation(production("op_c", "takedown"))).rejects.toThrow(
+      "still in progress"
+    )
+  })
+
+  it("names reconciliation when the unfinished one is waiting on it", async () => {
+    await makeSite()
+    await queueSiteOperation(production("op_a", "deploy"))
+    await claimSiteOperation({ operationId: "op_a", leaseOwner: "me", leaseMs: 1000, now: 110 })
+    await markSiteOperationForReconcile({
+      operationId: "op_a",
+      leaseOwner: "me",
+      message: "timeout",
+      now: 120,
+    })
+    await expect(queueSiteOperation(production("op_b", "restore"))).rejects.toThrow(
+      "needs reconciliation before production can change again"
+    )
+  })
+
+  it("does not hold back work that never changes production", async () => {
+    await makeSite()
+    await queueSiteOperation(production("op_a", "deploy"))
+    await expect(
+      queueSiteOperation({ ...production("op_b", "deploy"), type: "build" as never })
+    ).resolves.toMatchObject({ id: "op_b" })
+  })
+
+  it("lets the next change through once the first finished", async () => {
+    await makeSite()
+    await queueSiteOperation(production("op_a", "deploy"))
+    await claimSiteOperation({ operationId: "op_a", leaseOwner: "me", leaseMs: 1000, now: 110 })
+    await completeSiteOperation({ operationId: "op_a", leaseOwner: "me", now: 120 })
+    await expect(queueSiteOperation(production("op_b", "takedown"))).resolves.toMatchObject({
+      id: "op_b",
+    })
+  })
+})
+
+describe("deployment receipts and restore (A02, F05, F03)", () => {
+  async function readyDeployment(id = "deployment_1") {
+    await createSiteEnvironmentRevision({
+      id: "env_1",
+      siteId: "site_1",
+      variables: {},
+      secretRefs: [],
+      now: 100,
+    })
+    await createSiteVersionDraft({
+      id: "version_1",
+      siteId: "site_1",
+      environmentRevisionId: "env_1",
+      source: { commitSha: "abc", dirty: false, lockfileDigest: "a", inputDigest: "b" },
+      build: {
+        command: "pnpm build",
+        runtime: "node@24",
+        packageManager: "pnpm@10",
+        compatibilityDate: "2026-07-18",
+        compatibilityFlags: [],
+        routes: [],
+        bindings: [],
+      },
+      now: 110,
+    })
+    await putSiteArtifact({
+      digest: "c".repeat(64),
+      bytes: new Uint8Array([1]),
+      mediaType: "application/zip",
+      fileCount: 1,
+      now: 120,
+    })
+    await completeSiteVersion({ versionId: "version_1", artifactDigest: "c".repeat(64), now: 130 })
+    return createSiteDeployment({
+      id,
+      siteId: "site_1",
+      versionId: "version_1",
+      environmentRevisionId: "env_1",
+      now: 140,
+    })
+  }
+
+  it("records the provider's deployment id the moment it is accepted", async () => {
+    await makeSite()
+    await readyDeployment()
+    await expect(
+      markSiteDeploymentAccepted({
+        deploymentId: "deployment_1",
+        providerDeploymentId: "cf_dep_1",
+        now: 150,
+      })
+    ).resolves.toMatchObject({ status: "deploying", providerDeploymentId: "cf_dep_1" })
+  })
+
+  it("never marks a deployment active on a Site that was taken down meanwhile (A01)", async () => {
+    await makeSite()
+    await readyDeployment()
+    await setSiteLifecycle("site_1", "taken-down", 145)
+    await expect(
+      markSiteDeploymentActive({
+        deploymentId: "deployment_1",
+        providerDeploymentId: "cf_dep_1",
+        productionUrl: "https://docs.example.com",
+        now: 150,
+      })
+    ).rejects.toThrow("not active")
+  })
+
+  it("keeps the entry check on the deployment, and a later check replaces it", async () => {
+    await makeSite()
+    await readyDeployment()
+    const first = {
+      checkedAt: 150,
+      state: "unverified" as const,
+      entries: [{ url: "https://docs.example.com/", outcome: "unverified" as const }],
+    }
+    await markSiteDeploymentActive({
+      deploymentId: "deployment_1",
+      providerDeploymentId: "cf_dep_1",
+      productionUrl: "https://docs.example.com",
+      entryVerification: first,
+      now: 150,
+    })
+    const second = {
+      checkedAt: 300,
+      state: "protected" as const,
+      entries: [{ url: "https://docs.example.com/", outcome: "protected" as const, status: 302 }],
+    }
+    await expect(
+      setSiteDeploymentEntryVerification("deployment_1", second, undefined, 300)
+    ).resolves.toMatchObject({ status: "active", entryVerification: second })
+  })
+
+  it("brings back the deployment whose receipt is still the provider's current one", async () => {
+    await makeSite()
+    await readyDeployment()
+    await markSiteDeploymentActive({
+      deploymentId: "deployment_1",
+      providerDeploymentId: "cf_dep_1",
+      productionUrl: "https://docs.example.com",
+      now: 150,
+    })
+    await markSiteDeploymentsTakenDown("site_1", 200)
+
+    // Something else was deployed out of band: nothing is marked live.
+    await expect(
+      restoreSiteDeployment({ siteId: "site_1", providerDeploymentId: "cf_other", now: 300 })
+    ).resolves.toBeUndefined()
+    await expect(
+      restoreSiteDeployment({ siteId: "site_1", providerDeploymentId: "cf_dep_1", now: 300 })
+    ).resolves.toMatchObject({ id: "deployment_1", status: "active" })
+  })
+})
+
+describe("sweepSiteArtifacts (A07)", () => {
+  async function storedVersion(id: string, digest: string, sequence: number) {
+    await putSiteArtifact({
+      digest,
+      bytes: new Uint8Array([sequence]),
+      mediaType: "application/zip",
+      fileCount: 1,
+      now: 100,
+    })
+    await createSiteVersionDraft({
+      id,
+      siteId: "site_1",
+      environmentRevisionId: "env_1",
+      source: { commitSha: id, dirty: false, lockfileDigest: "a", inputDigest: id },
+      build: {
+        command: "pnpm build",
+        runtime: "node@24",
+        packageManager: "pnpm@10",
+        compatibilityDate: "2026-07-18",
+        compatibilityFlags: [],
+        routes: [],
+        bindings: [],
+      },
+      now: 110,
+    })
+    await completeSiteVersion({ versionId: id, artifactDigest: digest, now: 120 })
+  }
+
+  it("deletes archives, their build logs and marks versions in one transaction", async () => {
+    await makeSite()
+    await createSiteEnvironmentRevision({
+      id: "env_1",
+      siteId: "site_1",
+      variables: {},
+      secretRefs: [],
+      now: 100,
+    })
+    await storedVersion("version_1", "1".repeat(64), 1)
+    await storedVersion("version_2", "2".repeat(64), 2)
+
+    const result = await sweepSiteArtifacts((snapshot) => {
+      expect(snapshot.digests.sort()).toEqual(["1".repeat(64), "2".repeat(64)])
+      expect(snapshot.sites[0].versions.map((row) => row.id).sort()).toEqual([
+        "version_1",
+        "version_2",
+      ])
+      return { doomed: ["1".repeat(64)], collectVersionIds: ["version_1"] }
+    }, 500)
+
+    expect(result.plan.doomed).toEqual(["1".repeat(64)])
+    expect(await getSiteArtifact("1".repeat(64))).toBeUndefined()
+    expect(await getSiteArtifact("2".repeat(64))).toBeDefined()
+    const versions = await getDb().siteVersions.toArray()
+    expect(versions.find((row) => row.id === "version_1")?.artifactCollectedAt).toBe(500)
+    expect(versions.find((row) => row.id === "version_2")?.artifactCollectedAt).toBeUndefined()
+  })
+
+  it("applies nothing when deciding throws", async () => {
+    await makeSite()
+    await createSiteEnvironmentRevision({
+      id: "env_1",
+      siteId: "site_1",
+      variables: {},
+      secretRefs: [],
+      now: 100,
+    })
+    await storedVersion("version_1", "1".repeat(64), 1)
+    await expect(
+      sweepSiteArtifacts(() => {
+        throw new Error("boom")
+      }, 500)
+    ).rejects.toThrow("boom")
+    expect(await getSiteArtifact("1".repeat(64))).toBeDefined()
   })
 })

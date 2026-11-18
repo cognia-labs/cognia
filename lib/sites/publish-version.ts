@@ -14,8 +14,10 @@
  * Every host-privileged edge is injectable so the unit suite can drive the
  * whole path without Tauri.
  */
-import { getSiteArtifact, getSiteVersion, listSiteResources } from "@/lib/db/sites"
+import { getSiteArtifact, getSiteProject, getSiteVersion, listSiteResources } from "@/lib/db/sites"
 import { createDir } from "@/lib/file/file-operations"
+import { canAuthorSite } from "@/lib/sites/authoring-policy"
+import { compileCloudflareAccessPolicy } from "@/lib/sites/cloudflare/access-policy"
 import { CloudflareSitesService } from "@/lib/sites/cloudflare/service"
 import { materializeSiteArtifact } from "@/lib/sites/artifact-package"
 import { ensureWranglerApproved, type WranglerDetection } from "@/lib/sites/wrangler-detect"
@@ -31,6 +33,7 @@ export interface PublishSiteVersionDeps {
   /** Resolves wrangler and approves its exact bytes in the Sites tool ledger. */
   ensureWrangler: () => Promise<WranglerDetection>
   getArtifact: typeof getSiteArtifact
+  getSite: typeof getSiteProject
   getVersion: typeof getSiteVersion
   listResources: typeof listSiteResources
   materialize: typeof materializeSiteArtifact
@@ -44,6 +47,7 @@ function defaults(): PublishSiteVersionDeps {
   return {
     ensureWrangler: () => ensureWranglerApproved(),
     getArtifact: getSiteArtifact,
+    getSite: getSiteProject,
     getVersion: getSiteVersion,
     listResources: listSiteResources,
     materialize: materializeSiteArtifact,
@@ -110,11 +114,39 @@ export async function uploadSiteVersion(
 
   return deps.createService(input.actorAccountId).uploadVersion(input.siteId, input.versionId, {
     wranglerBinaryPath: wrangler.path,
+    wranglerVersion: wrangler.version,
     stagingRoot,
     configPath: await deps.join(stagingRoot, "wrangler.json"),
     entryPath: materialized.entryPath,
     ...(materialized.assetsPath ? { assetsPath: materialized.assetsPath } : {}),
   })
+}
+
+/**
+ * Deploy an uploaded version, protecting a restricted Site first.
+ *
+ * `deployVersion` refuses a restricted Site whose Worker-scoped Access is not
+ * in force — the new Site default is `private`, so a first publish would
+ * otherwise always stop there. When the actor may manage the Site, its own
+ * visitor policy is applied first and the deploy then re-checks it; a
+ * deployer without that right gets the refusal and its reason.
+ */
+export async function deploySiteVersion(
+  input: PublishSiteVersionInput,
+  dependencies?: Partial<PublishSiteVersionDeps>
+): Promise<SiteDeploymentRow> {
+  const deps = { ...defaults(), ...dependencies }
+  const service = deps.createService(input.actorAccountId)
+  const site = await deps.getSite(input.siteId)
+  if (
+    site &&
+    compileCloudflareAccessPolicy(site.visitorPolicy).applicationRequired &&
+    canAuthorSite(site.authoringPolicy, input.actorAccountId, "manage") &&
+    (await service.visitorAccessGap(input.siteId))
+  ) {
+    await service.reconcileVisitorAccess(input.siteId, site.visitorPolicy)
+  }
+  return service.deployVersion(input.siteId, input.versionId)
 }
 
 /**
@@ -132,9 +164,7 @@ export async function publishSiteVersion(
   if (!(await siteVersionIsUploaded(input.siteId, input.versionId, deps))) {
     await uploadSiteVersion(input, deps)
   }
-  return deps
-    .createService(input.actorAccountId)
-    .deployVersion(input.siteId, input.versionId) as Promise<SiteDeploymentRow>
+  return deploySiteVersion(input, deps)
 }
 
 /**

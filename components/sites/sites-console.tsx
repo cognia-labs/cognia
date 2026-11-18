@@ -46,7 +46,7 @@ import {
   updateSiteAuthoringPolicy,
   updateSiteProviderConfig,
 } from "@/lib/db/sites"
-import { purgeRetentionReport } from "@/lib/sites/console-model"
+import { latestSiteEntryVerification, purgeRetentionReport } from "@/lib/sites/console-model"
 import { useAccountStore } from "@/stores/account/account-store"
 import {
   SITE_CONSOLE_TABS,
@@ -194,6 +194,7 @@ export function SitesConsole() {
   }
 
   const providerGate = gate("provider", "manage")
+  const recoveryGate = gate("recovery", "manage")
   const buildGate = gate("build", "edit")
   const previewGate = gate("preview", "edit")
   const filesystemGate = gate("filesystem", "edit")
@@ -274,7 +275,7 @@ export function SitesConsole() {
                 id: "reconcile",
                 label: t("actions.reconcile"),
                 icon: RefreshCwIcon,
-                disabled: !site || isBusy("reconcile") || !providerGate.allowed,
+                disabled: !site || isBusy("reconcile") || !recoveryGate.allowed,
                 onSelect: () => publish.reconcile(showReconcileResult),
               },
             ]}
@@ -315,11 +316,21 @@ export function SitesConsole() {
             <CloudIcon aria-hidden className="size-3.5 shrink-0 text-warning" />
             <span className="font-medium">{t("desktopOnly.title")}</span>
             <span className="text-muted-foreground">{t("host.banner")}</span>
+            {/* `companionSitesShowLocalDatabase` (lib/runtime/surface-contract.ts) */}
+            <span className="text-muted-foreground" data-testid="sites-host-local-only">
+              {t("host.localOnly")}
+            </span>
           </div>
         ) : null}
 
         {site ? (
           <div
+            // Keyed by Site: every form below seeds its drafts from the Site it
+            // was mounted for — a scaffold's pending files, an unsaved token,
+            // secret edits, the zone and Access fields. Without the key a switch
+            // kept A's drafts on B's screen, and saving B's manifest wrote A's
+            // `.cognia/worker.js` into B.
+            key={site.id}
             // `@container/site-pane`: everything multi-column inside a tab
             // sizes off THIS, never the viewport. The pane is a draggable
             // fraction of the window (the rail takes 16–34%), so a viewport
@@ -441,6 +452,9 @@ export function SitesConsole() {
                       )
                     }
                     onApplyAccess={publish.applyAccess}
+                    entryVerification={latestSiteEntryVerification(live.deployments)}
+                    recheckGate={deployGate}
+                    onRecheckEntries={publish.recheckEntries}
                   />
                 </div>
               </div>
@@ -501,6 +515,7 @@ export function SitesConsole() {
                     resources={live.resources}
                     deployments={live.deployments}
                     gate={providerGate}
+                    recoveryGate={recoveryGate}
                     isBusy={isBusy}
                     result={observabilityResult}
                     onQuery={runObservability}

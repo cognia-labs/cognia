@@ -1,7 +1,15 @@
 {
   "access": {
     "description": "Authoring permissions stay in Cognia. Visitor policy is reconciled with Cloudflare Access.",
-    "hostname": "Protected hostname",
+    "entries": {
+      "title": "Anonymous entry check",
+      "none": "Not checked yet",
+      "state": {
+        "protected": "Protected",
+        "unverified": "Unverified",
+        "exposed": "Exposed"
+      }
+    },
     "loginLabel": "Visitors sign in at",
     "loginUnknown": "Set the Access team to show the sign-in origin",
     "mode": "Visitor access mode",
@@ -12,6 +20,7 @@
       "private": "Private (deny all)",
       "public": "Public"
     },
+    "scope": "The policy covers the whole Worker: workers.dev, every custom domain and every route. A deploy is refused until it is in force, and every entry is then checked without credentials.",
     "title": "Visitor access",
     "values": "One email, domain, or organization ID per line"
   },
@@ -39,6 +48,7 @@
     "preview": "Start preview",
     "provision": "Provision bindings",
     "purge": "Purge managed resources",
+    "recheckEntries": "Check entries again",
     "reconcile": "Reconcile provider state",
     "redetectWrangler": "Re-detect Wrangler",
     "refreshOperation": "Re-check",
@@ -217,6 +227,7 @@
   },
   "host": {
     "banner": "Read-only: this shell cannot run builds, previews, or Cloudflare calls.",
+    "localOnly": "It lists the Sites in this device's own database; a paired Host's Sites are not mirrored here yet.",
     "reason": {
       "lifecycle-locked": "Unavailable while this Site is being deleted",
       "ok": "",
@@ -225,6 +236,7 @@
       "requires-desktop": "Available in the Cognia desktop app",
       "requires-editor": "Requires editor access to this Site",
       "requires-owner": "Only the Site owner can do this",
+      "requires-preview-sandbox": "Site previews need the terminal sandbox, which Windows does not provide yet",
       "requires-wrangler": "Install the wrangler CLI to upload a version"
     }
   },
@@ -258,6 +270,11 @@
     "missing": {
       "description": "Build, preview, and binding provisioning all read this file. Generate a starting point from the source tree, review it, then save.",
       "title": "No hosting manifest yet"
+    },
+    "staticExport": {
+      "next": "Next.js deploys here only as a static export: set output: \"export\" in next.config so the build writes out/. Server rendering, API routes and middleware do not run on the generated Worker.",
+      "sveltekit": "SvelteKit deploys here only with @sveltejs/adapter-static, which writes build/. Server routes and server load functions do not run on the generated Worker.",
+      "remix": "Remix deploys here only in SPA mode: build/client holds the browser assets, and loaders and actions do not run on the generated Worker."
     },
     "title": "Hosting manifest",
     "unsupported": "The manifest lives in the Site's source tree, which only the desktop app can read."
@@ -453,7 +470,8 @@
       "r2-bucket": "R2 buckets",
       "secret": "Secrets",
       "worker": "Worker",
-      "worker-version": "Worker versions"
+      "worker-version": "Worker versions",
+      "worker-route": "Worker routes"
     },
     "legend": "Purge deletes managed resources only.",
     "noDependencies": "No dependencies",
@@ -583,6 +601,8 @@
       "ready": "Ready"
     },
     "title": "Versions",
+    "toolchain": "Toolchain measured in the build sandbox",
+    "toolchainValue": "{runtime} · {packageManager}",
     "uploaded": "Uploaded",
     "version": "Version {sequence}"
   },

@@ -7080,12 +7080,28 @@
       "basis": ["lib/signaling/client.ts#webSocketFactory"]
     },
     {
-      "key": "lib/sites/cloudflare/version-uploader.ts::uploadCloudflareWorkerVersion>result::network::a878954dcb56:1",
+      "key": "lib/sites/cloudflare/entry-probe.ts::probeSiteEntry::network::259cf84e6e03:1",
+      "file": "lib/sites/cloudflare/entry-probe.ts",
+      "owner": "probeSiteEntry",
+      "kind": "network",
+      "primitive": "fetcher",
+      "line": 42,
+      "lexicalGate": null,
+      "classification": "tool-gated",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "reason": "Anonymous, credential-free GET of a restricted Site's own entries (workers.dev, custom domains, routes) after a deploy, restore or Access change, to confirm Cloudflare Access stops visitors. Reached from the deploy_site outbound tool and workflow action.site.deploy through CloudflareSitesService.deployVersion, and from the console's explicit re-check; carries no request body.",
+      "basis": [
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      ],
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+    },
+    {
+      "key": "lib/sites/cloudflare/version-uploader.ts::uploadCloudflareWorkerVersion>run::network::820fa050f0d8:1",
       "file": "lib/sites/cloudflare/version-uploader.ts",
-      "owner": "uploadCloudflareWorkerVersion>result",
+      "owner": "uploadCloudflareWorkerVersion>run",
       "kind": "network",
       "primitive": "invoke",
-      "line": 159,
+      "line": 286,
       "lexicalGate": null,
       "classification": "tool-gated",
       "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
@@ -7118,7 +7134,7 @@
       "owner": "defaultWaitUntilReady>response",
       "kind": "network",
       "primitive": "proxyFetch",
-      "line": 39,
+      "line": 111,
       "lexicalGate": null,
       "classification": "host-system",
       "authority": "lib/sites/preview.ts#defaultWaitUntilReady>response",
@@ -7126,12 +7142,12 @@
       "basis": ["lib/sites/preview.ts#defaultWaitUntilReady>response"]
     },
     {
-      "key": "lib/sites/preview.ts::startSitePreview>outcome::process::86c9cf3d25c8:1",
+      "key": "lib/sites/preview.ts::startSitePreview>outcome::process::be579d5166c7:1",
       "file": "lib/sites/preview.ts",
       "owner": "startSitePreview>outcome",
       "kind": "process",
       "primitive": "deps.spawn",
-      "line": 91,
+      "line": 171,
       "lexicalGate": null,
       "classification": "host-system",
       "authority": "lib/sites/preview.ts#startSitePreview>outcome",

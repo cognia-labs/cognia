@@ -1,0 +1,5 @@
+---
+"cognia-next": minor
+---
+
+Sites publishing now reads back the uploaded Worker version and the live deployment correctly, and a private Site goes live only once a Cloudflare Access app covers the whole Worker; after each deploy every entry (workers.dev, custom domains, routes) is checked anonymously, and an exposed entry is closed and the deploy marked failed. Routes in the manifest are attached on deploy and removed on take-down. Only one production change runs per Site at a time, a deploy Cloudflare accepted is never recorded as failed by a later lookup, uncertain desktop-proxy timeouts are reconciled instead of failed, and retrying after fixing permissions, re-applying the same access policy, a second take-down, and resuming an interrupted purge all run again. Secrets are bound to the version that actually deploys, older revisions keep the secrets they reference, versions keep the bindings they were built with, resources another Site uses are never purged, switching Sites no longer carries over unsaved drafts, and artifact cleanup no longer deletes an artifact a new deployment just started using.

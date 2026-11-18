@@ -10,6 +10,7 @@ import {
   groupResourcesByKind,
   joinVersionsWithDeployments,
   latestEnvironmentRevision,
+  latestSiteEntryVerification,
   operationFailureText,
   pickActiveDeployment,
   purgeRetentionReport,
@@ -269,7 +270,15 @@ describe("resources", () => {
       resource({ id: "d1", kind: "custom-domain" }),
     ])
     expect(groups.map((group) => group.kind)).toEqual(["worker", "custom-domain", "secret"])
-    expect(SITE_RESOURCE_KIND_ORDER).toHaveLength(8)
+    expect(SITE_RESOURCE_KIND_ORDER).toHaveLength(9)
+  })
+
+  it("groups routes Cognia manages as their own kind (F13)", () => {
+    const groups = groupResourcesByKind([
+      resource({ id: "rt1", kind: "worker-route" }),
+      resource({ id: "dom1", kind: "custom-domain" }),
+    ])
+    expect(groups.map((group) => group.kind)).toEqual(["custom-domain", "worker-route"])
   })
 
   it("orders rows inside a group by creation time", () => {
@@ -419,6 +428,27 @@ describe("resolveSiteRailHint", () => {
       [operation({ id: "op", siteId: "site_2", status: "running" })]
     )
     expect(hint).toEqual({ kind: "never", tone: "neutral", live: false })
+  })
+})
+
+describe("latestSiteEntryVerification (F03)", () => {
+  const check = (checkedAt: number, state: "protected" | "exposed" | "unverified") => ({
+    checkedAt,
+    state,
+    entries: [{ url: "https://docs.example.com/", outcome: state }],
+  })
+
+  it("is undefined when no deployment was ever checked", () => {
+    expect(latestSiteEntryVerification([deployment({ id: "d1" })])).toBeUndefined()
+  })
+
+  it("keeps the evidence of a takedown after the check found an entry exposed", () => {
+    const verification = latestSiteEntryVerification([
+      deployment({ id: "d1", status: "superseded", entryVerification: check(5, "protected") }),
+      deployment({ id: "d2", status: "taken-down", entryVerification: check(9, "exposed") }),
+    ])
+    expect(verification?.state).toBe("exposed")
+    expect(verification?.checkedAt).toBe(9)
   })
 })
 

@@ -47,9 +47,14 @@ import {
 } from "@/lib/sites/console-model"
 import { cn } from "@/lib/utils"
 import type { SiteGate } from "@/hooks/sites/use-site-action-gate"
-import type { SiteProjectRow, SiteResourceRow, SiteVisitorPolicy } from "@/types/sites"
+import type {
+  SiteEntryVerification,
+  SiteProjectRow,
+  SiteResourceRow,
+  SiteVisitorPolicy,
+} from "@/types/sites"
 import { splitValues } from "../split-values"
-import { SITE_RESOURCE_FACE, SiteStatusPill } from "../site-status"
+import { SITE_ENTRY_FACE, SITE_RESOURCE_FACE, SiteStatusPill } from "../site-status"
 
 const ACCESS_MODES: SiteVisitorPolicy["mode"][] = [
   "private",
@@ -80,7 +85,15 @@ export interface SiteDomainsTabProps {
   onAddDomain: (hostname: string) => void
   onRemoveDomain: (resourceId: string) => void
   onSaveProviderConfig: (patch: { zoneId?: string; accessTeamName?: string }) => void
-  onApplyAccess: (policy: SiteVisitorPolicy, hostname: string) => void
+  onApplyAccess: (policy: SiteVisitorPolicy) => void
+  /**
+   * The anonymous check of every entry, from the live deployment of a
+   * restricted Site. Absent when nothing is live or the Site is public.
+   */
+  entryVerification?: SiteEntryVerification
+  /** Check every entry again; gated separately because it is a deploy-level action. */
+  recheckGate: SiteGate
+  onRecheckEntries: () => void
 }
 
 export function SiteDomainsTab({
@@ -92,6 +105,9 @@ export function SiteDomainsTab({
   onRemoveDomain,
   onSaveProviderConfig,
   onApplyAccess,
+  entryVerification,
+  recheckGate,
+  onRecheckEntries,
 }: SiteDomainsTabProps) {
   const t = useTranslations("sites")
 
@@ -100,7 +116,6 @@ export function SiteDomainsTab({
   const [hostname, setHostname] = useState("")
   const [accessMode, setAccessMode] = useState<SiteVisitorPolicy["mode"]>(site.visitorPolicy.mode)
   const [accessValues, setAccessValues] = useState(() => seedAccessValues(site.visitorPolicy))
-  const [accessHostname, setAccessHostname] = useState("")
 
   const zoneMissing = !site.providerConfig.zoneId?.trim()
   const accessLoginUrl = siteAccessLoginUrl(site.providerConfig)
@@ -348,28 +363,73 @@ export function SiteDomainsTab({
             </div>
           ) : null}
 
+          <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+            <InfoIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+            {t("access.scope")}
+          </p>
+
           <div className="flex flex-wrap items-end gap-2">
-            <div className="min-w-0 flex-1">
-              <Label htmlFor="site-access-hostname">{t("access.hostname")}</Label>
-              <Input
-                id="site-access-hostname"
-                className="mt-1"
-                value={accessHostname}
-                placeholder={t("domains.hostname")}
-                onChange={(event) => setAccessHostname(event.target.value)}
-              />
-            </div>
             <Button
               type="button"
               size="sm"
               disabled={isBusy("access") || !gate.allowed}
               title={gate.title}
-              onClick={() => onApplyAccess(compilePolicy(), accessHostname)}
+              onClick={() => onApplyAccess(compilePolicy())}
               data-testid="site-apply-access"
             >
               {t("actions.saveAccess")}
             </Button>
           </div>
+
+          {accessProtected ? (
+            <div className="space-y-2 rounded-md border p-2" data-testid="site-entry-check">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-medium">{t("access.entries.title")}</span>
+                {entryVerification ? (
+                  <SiteStatusPill
+                    face={SITE_ENTRY_FACE[entryVerification.state]}
+                    label={t(`access.entries.state.${entryVerification.state}`)}
+                  />
+                ) : (
+                  <span className="text-muted-foreground">{t("access.entries.none")}</span>
+                )}
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="ml-auto"
+                  disabled={isBusy("recheck-entries") || !recheckGate.allowed}
+                  title={recheckGate.title}
+                  onClick={onRecheckEntries}
+                  data-testid="site-recheck-entries"
+                >
+                  {t("actions.recheckEntries")}
+                </Button>
+              </div>
+              {entryVerification?.entries.length ? (
+                <ul className="space-y-1">
+                  {entryVerification.entries.map((entry) => (
+                    <li
+                      key={entry.url}
+                      className="flex min-w-0 items-center gap-2 text-xs"
+                      data-testid="site-entry"
+                    >
+                      <SiteStatusPill
+                        face={SITE_ENTRY_FACE[entry.outcome]}
+                        label={t(`access.entries.state.${entry.outcome}`)}
+                      />
+                      <code className="min-w-0 truncate font-mono">{entry.url}</code>
+                      {entry.status !== undefined ? (
+                        <span className="shrink-0 tabular-nums text-muted-foreground">
+                          {entry.status}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
     </div>

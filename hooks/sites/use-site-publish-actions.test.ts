@@ -21,8 +21,15 @@ const uploadSiteVersion = jest.fn(
   async (..._args: Parameters<typeof import("@/lib/sites/publish-version").uploadSiteVersion>) =>
     "cf-version-1"
 )
+const deploySiteVersion = jest.fn(
+  async (
+    _input: { siteId: string; versionId: string; actorAccountId: string },
+    _deps: { createService: () => unknown }
+  ) => ({ id: "dep_1" })
+)
 jest.mock("@/lib/sites/publish-version", () => ({
   uploadSiteVersion: (...args: Parameters<typeof uploadSiteVersion>) => uploadSiteVersion(...args),
+  deploySiteVersion: (...args: Parameters<typeof deploySiteVersion>) => deploySiteVersion(...args),
 }))
 jest.mock("@/lib/sites/build-version", () => ({
   buildAndSaveSiteVersion: jest.fn(async () => ({})),
@@ -43,13 +50,15 @@ jest.mock("@/lib/sites/artifact-package", () => ({
   })),
 }))
 jest.mock("@/lib/file/file-operations", () => ({ createDir: jest.fn(async () => undefined) }))
+jest.mock("@/lib/sites/artifact-gc", () => ({
+  SITE_ARTIFACT_GC_DEFAULTS: { keepDays: 30, keepReadyVersionsPerSite: 5 },
+  collectUnreferencedSiteArtifacts: jest.fn(async () => ({})),
+}))
 jest.mock("@/lib/db/sites", () => ({
-  cancelSiteOperation: jest.fn(async () => ({ id: "op1", status: "cancelled" })),
   getSiteArtifact: jest.fn(async () => ({ bytes: new Uint8Array([1]) })),
   getSiteOperation: jest.fn(async () => ({ id: "op1" })),
 }))
 
-import { cancelSiteOperation } from "@/lib/db/sites"
 import { buildAndSaveSiteVersion } from "@/lib/sites/build-version"
 import { startSitePreview, stopSitePreview } from "@/lib/sites/preview"
 import { detectWranglerBinary, ensureWranglerApproved } from "@/lib/sites/wrangler-detect"
@@ -116,6 +125,8 @@ function setup(overrides: Record<string, unknown> = {}) {
     restore: jest.fn(async () => undefined),
     reconcile: jest.fn(async () => ({ resolved: 1, remaining: 0 })),
     recoverInterruptedOperations: jest.fn(async () => 0),
+    recheckEntries: jest.fn(async () => ({ state: "protected" })),
+    abandonOperation: jest.fn(async () => ({ id: "op1", status: "cancelled" })),
   }
   const run = jest.fn(async (_key: string, action: () => Promise<unknown>) => {
     try {
@@ -312,35 +323,78 @@ it("hands upload the approval callback, so the ledger hash happens there", async
   )
 })
 
-it("deploys, takes down, restores, and reconciles through the service", async () => {
-  const onResult = jest.fn()
+it("deploys through the shared path that protects a restricted Site first (F03)", async () => {
   const { result, service } = setup()
   await act(async () => {
     result.current.deploy({ id: "v1" } as SiteVersionRow)
+  })
+  expect(deploySiteVersion).toHaveBeenCalledWith(
+    { siteId: "site_1", versionId: "v1", actorAccountId: "owner" },
+    { createService: expect.any(Function) }
+  )
+  expect(deploySiteVersion.mock.calls[0][1].createService()).toBe(service)
+  // Never the raw provider deploy, which skips the Access step.
+  expect(service.deployVersion).not.toHaveBeenCalled()
+})
+
+it("takes down, restores, and reconciles through the service", async () => {
+  const onResult = jest.fn()
+  const { result, service } = setup()
+  await act(async () => {
     result.current.takeDown()
     result.current.restore()
     result.current.reconcile(onResult)
   })
-  expect(service.deployVersion).toHaveBeenCalledWith("site_1", "v1")
   expect(service.takeDown).toHaveBeenCalledWith("site_1")
   expect(service.restore).toHaveBeenCalledWith("site_1")
   expect(onResult).toHaveBeenCalledWith({ resolved: 1, remaining: 0 })
 })
 
-it("manages domains and the visitor policy", async () => {
+it("manages domains and applies the visitor policy to the whole Worker", async () => {
   const { result, service } = setup()
   await act(async () => {
     result.current.addDomain("docs.example.com")
     result.current.removeDomain("res_1")
-    result.current.applyAccess({ mode: "public" }, "docs.example.com")
+    result.current.applyAccess({ mode: "public" })
   })
   expect(service.addDomain).toHaveBeenCalledWith("site_1", "docs.example.com")
   expect(service.removeDomain).toHaveBeenCalledWith("site_1", "res_1")
-  expect(service.reconcileVisitorAccess).toHaveBeenCalledWith(
-    "site_1",
-    { mode: "public" },
-    "docs.example.com"
+  expect(service.reconcileVisitorAccess).toHaveBeenCalledWith("site_1", { mode: "public" })
+  // A public Site has no entries to check.
+  expect(service.recheckEntries).not.toHaveBeenCalled()
+})
+
+it("asks every entry again after protecting a live Site (F03)", async () => {
+  const { result, service } = setup({
+    live: liveData({
+      deployments: [{ id: "dep_1", status: "active" } as never],
+    }),
+  })
+  await act(async () => {
+    result.current.applyAccess({ mode: "private" })
+  })
+  expect(service.reconcileVisitorAccess).toHaveBeenCalledWith("site_1", { mode: "private" })
+  expect(service.recheckEntries).toHaveBeenCalledWith("site_1")
+  expect(service.reconcileVisitorAccess.mock.invocationCallOrder[0]).toBeLessThan(
+    service.recheckEntries.mock.invocationCallOrder[0]
   )
+})
+
+it("does not check entries of a Site with nothing live", async () => {
+  const { result, service } = setup()
+  await act(async () => {
+    result.current.applyAccess({ mode: "private" })
+  })
+  expect(service.recheckEntries).not.toHaveBeenCalled()
+})
+
+it("checks entries on request", async () => {
+  const { result, service, run } = setup()
+  await act(async () => {
+    result.current.recheckEntries()
+  })
+  expect(run).toHaveBeenCalledWith("recheck-entries", expect.any(Function))
+  expect(service.recheckEntries).toHaveBeenCalledWith("site_1")
 })
 
 it("re-checks a single operation silently", async () => {
@@ -366,10 +420,10 @@ it("exposes only the versions that are ready to publish", async () => {
   expect(result.current.readyVersions.map((version) => version.id)).toEqual(["v1"])
 })
 
-it("abandons a wedged operation", async () => {
-  const { result } = setup()
+it("abandons a wedged operation through the service, which checks the role (A04)", async () => {
+  const { result, service } = setup()
   await act(async () => {
     result.current.cancelOperation("op1")
   })
-  expect(cancelSiteOperation).toHaveBeenCalledWith({ operationId: "op1" })
+  expect(service.abandonOperation).toHaveBeenCalledWith("site_1", "op1")
 })

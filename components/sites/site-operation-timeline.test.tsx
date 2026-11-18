@@ -242,6 +242,41 @@ describe("abandoning a wedged operation", () => {
     }
   )
 
+  it("hides it while a claimant still holds a live lease, and offers it once the lease lapsed (A04)", async () => {
+    // Abandoning a live operation let it finish anyway: `cancelled` in the
+    // journal, `active` on the deployment.
+    const user = userEvent.setup()
+    const now = 1_700_000_000_000
+    render(
+      <SiteOperationJournal
+        operations={[
+          operation({ id: "live", status: "running", leaseExpiresAt: now + 60_000 }),
+          operation({ id: "dead", status: "running", leaseExpiresAt: now - 1 }),
+        ]}
+        onCancel={jest.fn()}
+      />
+    )
+    await user.click(screen.getByTestId("site-operation-live"))
+    expect(screen.queryByTestId("site-operation-cancel-live")).not.toBeInTheDocument()
+    await user.click(screen.getByTestId("site-operation-dead"))
+    expect(screen.getByTestId("site-operation-cancel-dead")).toBeInTheDocument()
+  })
+
+  it("disables it for an actor who may not manage the Site (A04)", async () => {
+    const user = userEvent.setup()
+    render(
+      <SiteOperationJournal
+        operations={[operation({ id: "stuck", status: "waiting-reconcile" })]}
+        onCancel={jest.fn()}
+        cancelDisabled
+        cancelTitle="Owner only"
+      />
+    )
+    await user.click(screen.getByTestId("site-operation-stuck"))
+    expect(screen.getByTestId("site-operation-cancel-stuck")).toBeDisabled()
+    expect(screen.getByTestId("site-operation-cancel-stuck")).toHaveAttribute("title", "Owner only")
+  })
+
   it("shows nothing when the caller offers no cancel", async () => {
     const user = userEvent.setup()
     render(<SiteOperationJournal operations={[operation({ id: "stuck", status: "queued" })]} />)
