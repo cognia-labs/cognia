@@ -13,6 +13,17 @@
  * still comes from the environment. Every resolved value carries the source
  * that won, because `host show` printing "where did this come from" is the
  * thing that turns a confusing 401 into a one-line fix.
+ *
+ * A host named explicitly (`--host`, `--profile` or `COGNIA_PROFILE`) is the
+ * exception: the person picked that record, so it is used whole. A name no
+ * record carries resolves nothing instead of falling through to whatever the
+ * environment points at; the environment's endpoint and token do not replace
+ * the record's; and only `--endpoint` can point it elsewhere, which drops the
+ * record's credentials exactly as for an unnamed host.
+ *
+ * A paired device identity belongs to the one tenant it was paired into, so a
+ * `--tenant` or `COGNIA_TENANT_ID` naming another one is refused rather than
+ * sent with that device's key.
  */
 
 import type { HostKind, HostRecord, HostsFile } from "./store"
@@ -36,6 +47,8 @@ export interface ResolvedValue<T> {
 
 export interface ResolvedHost {
   name?: string
+  /** How the name was chosen, for `host show`. */
+  nameSource?: ResolvedValue<string>
   kind: ResolvedValue<HostKind>
   endpoint: ResolvedValue<string>
   tenantId?: ResolvedValue<string>
@@ -60,6 +73,11 @@ export interface HostResolution {
   host?: ResolvedHost
   /** Why nothing resolved, and the legs that were considered. */
   skipped: Array<{ leg: string; reason: string }>
+  /**
+   * The inputs contradict each other (a tenant that is not the paired
+   * device's). Nothing resolves, and this says why.
+   */
+  conflict?: { error: string; fix: string[] }
 }
 
 export function loadHostsLayers(input: Pick<HostResolutionInput, "home" | "cwd" | "fs">): {
@@ -118,11 +136,13 @@ export function resolveHost(input: HostResolutionInput): HostResolution {
   const layers = loadHostsLayers(input)
   const merged = mergeHosts(layers.user, layers.project)
 
-  const requestedName = input.profile ?? env.COGNIA_PROFILE?.trim()
+  const envProfile = env.COGNIA_PROFILE?.trim()
+  const requestedName = input.profile ?? envProfile
+  const named = requestedName !== undefined && requestedName.length > 0
 
   let record: HostRecord | undefined
   let name: string | undefined
-  if (requestedName) {
+  if (named) {
     record = merged.hosts[requestedName]
     if (!record) {
       const known = Object.keys(merged.hosts)
@@ -133,9 +153,11 @@ export function resolveHost(input: HostResolutionInput): HostResolution {
             ? `no host named "${requestedName}" (known: ${known.join(", ")})`
             : `no host named "${requestedName}" and no hosts are saved`,
       })
-    } else {
-      name = requestedName
+      // An explicit name that matches nothing is a mistake to report, never
+      // a reason to use whatever host the environment points at.
+      return { skipped }
     }
+    name = requestedName
   } else if (merged.active) {
     record = merged.hosts[merged.active]
     name = merged.active
@@ -144,12 +166,28 @@ export function resolveHost(input: HostResolutionInput): HostResolution {
   const recordSource: HostValueSource =
     name && layers.project.hosts[name] ? "project-file" : "user-file"
   const recordOrigin = recordSource === "project-file" ? layers.projectPath : layers.userPath
+  const nameSource: ResolvedValue<string> | undefined = name
+    ? input.profile
+      ? { value: name, source: "flag", origin: "--host" }
+      : named
+        ? { value: name, source: "env", origin: "COGNIA_PROFILE" }
+        : {
+            value: name,
+            source: layers.project.active === name ? "project-file" : "user-file",
+            origin:
+              layers.project.active === name
+                ? `active in ${layers.projectPath}`
+                : `active in ${layers.userPath}`,
+          }
+    : undefined
 
   const flagEndpoint = input.endpoint ? normalizeEndpoint(input.endpoint) : undefined
   const fromEnv = envEndpoint(env)
 
   let endpoint: ResolvedValue<string> | undefined
   if (flagEndpoint) endpoint = { value: flagEndpoint, source: "flag", origin: "--endpoint" }
+  else if (named && record)
+    endpoint = { value: record.endpoint, source: recordSource, origin: recordOrigin }
   else if (fromEnv) endpoint = { value: fromEnv.value, source: "env", origin: fromEnv.name }
   else if (record) endpoint = { value: record.endpoint, source: recordSource, origin: recordOrigin }
 
@@ -172,11 +210,16 @@ export function resolveHost(input: HostResolutionInput): HostResolution {
   // describe, so its token is only reused when the endpoints agree. Sending a
   // host's token to a different host would be the worst kind of convenience.
   const recordMatchesEndpoint = record && record.endpoint === endpoint.value
+  // A named record's own credential is not replaced by an ambient one: the
+  // environment fills in a token only for a record that carries none.
+  const recordToken = recordMatchesEndpoint ? record?.serviceToken : undefined
   let serviceToken: ResolvedValue<string> | undefined
-  if (tokenFromEnv) {
+  if (named && recordToken) {
+    serviceToken = { value: recordToken, source: recordSource, origin: recordOrigin }
+  } else if (tokenFromEnv) {
     serviceToken = { value: tokenFromEnv.value, source: "env", origin: tokenFromEnv.name }
-  } else if (recordMatchesEndpoint && record?.serviceToken) {
-    serviceToken = { value: record.serviceToken, source: recordSource, origin: recordOrigin }
+  } else if (recordToken) {
+    serviceToken = { value: recordToken, source: recordSource, origin: recordOrigin }
   }
 
   const kindValue: HostKind = recordMatchesEndpoint && record ? record.kind : "headless"
@@ -184,6 +227,25 @@ export function resolveHost(input: HostResolutionInput): HostResolution {
     ? { value: kindValue, source: recordSource, origin: recordOrigin }
     : { value: "headless", source: "default", origin: "no saved host matches this endpoint" }
 
+  const pairedTenant =
+    recordMatchesEndpoint && record?.kind === "device" && record.deviceId
+      ? record.tenantId
+      : undefined
+  const overrideTenant = input.tenantId ?? (env.COGNIA_TENANT_ID?.trim() || undefined)
+  if (pairedTenant && overrideTenant && overrideTenant !== pairedTenant) {
+    return {
+      skipped,
+      conflict: {
+        error:
+          `host ${name ?? endpoint.value} is a device paired into tenant ${pairedTenant}; ` +
+          `${input.tenantId ? "--tenant" : "COGNIA_TENANT_ID"} names ${overrideTenant}`,
+        fix: [
+          input.tenantId ? "drop --tenant" : "unset COGNIA_TENANT_ID",
+          `or pair a device into ${overrideTenant}: cognia-agent host login <name> --invitation 'cgnp4|…'`,
+        ],
+      },
+    }
+  }
   const tenantValue =
     input.tenantId ??
     env.COGNIA_TENANT_ID?.trim() ??
@@ -203,6 +265,7 @@ export function resolveHost(input: HostResolutionInput): HostResolution {
   return {
     host: {
       ...(name ? { name } : {}),
+      ...(nameSource ? { nameSource } : {}),
       kind,
       endpoint,
       ...(tenantId ? { tenantId } : {}),
@@ -225,7 +288,13 @@ export function describeResolution(host: ResolvedHost): Array<Record<string, str
       origin: resolved.origin ?? "",
     })
   }
-  if (host.name) rows.push({ key: "host", value: host.name, source: "user-file", origin: "" })
+  if (host.name)
+    rows.push({
+      key: "host",
+      value: host.name,
+      source: host.nameSource?.source ?? "user-file",
+      origin: host.nameSource?.origin ?? "",
+    })
   rows.push({
     key: "kind",
     value: host.kind.value,

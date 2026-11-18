@@ -80,6 +80,29 @@ describe("connectHost with nothing resolved", () => {
     )
   })
 
+  it("names the missing host instead of calling nothing configured", async () => {
+    const result = await connectHost(
+      { skipped: [{ leg: "named host", reason: 'no host named "prdo" (known: prod)' }] },
+      { detect: async () => null }
+    )
+    const failure = (result as { failure: { error: string; cause: string } }).failure
+    expect(failure.error).toBe('no host named "prdo" (known: prod)')
+    expect(failure.cause).toBe("invalid-request")
+  })
+
+  it("refuses a resolution whose inputs conflict", async () => {
+    const result = await connectHost(
+      {
+        skipped: [],
+        conflict: { error: "paired into tenant a; --tenant names b", fix: ["drop --tenant"] },
+      },
+      { detect: async () => null }
+    )
+    const failure = (result as { failure: { error: string; fix: string[] } }).failure
+    expect(failure.error).toContain("tenant a")
+    expect(failure.fix).toEqual(["drop --tenant"])
+  })
+
   it("survives a desktop probe that throws", async () => {
     const result = await connectHost(empty, {
       detect: async () => {
@@ -155,7 +178,10 @@ describe("connectResolvedHost", () => {
     const result = await connectResolvedHost(deviceHost({ record: undefined }))
     const failure = (result as { failure: { cause: string; fix: string[] } }).failure
     expect(failure.cause).toBe("auth")
-    expect(failure.fix[0]).toContain("host login --profile prod")
+    // `host login` takes the name as a positional plus pairing material.
+    expect(failure.fix[0]).toBe("cognia-agent host login prod --invitation 'cgnp4|…'")
+    expect(failure.fix[1]).toContain("host login prod --endpoint")
+    expect(failure.fix.join(" ")).not.toContain("--profile")
   })
 
   it("refuses a device host with no tenant id, which the token exchange needs", async () => {

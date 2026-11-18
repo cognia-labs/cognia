@@ -408,3 +408,160 @@ describe("host login", () => {
     expect(d.out.stderr[0]).toContain("--fingerprint")
   })
 })
+
+describe("host selection, credentials and revocation (audit 13–17)", () => {
+  const PAIRED = {
+    kind: "device" as const,
+    endpoint: "https://prod",
+    tenantId: "tnt_1",
+    deviceId: "dev_old",
+    devicePrivateKeyJwk: { kty: "EC", d: "OLD" },
+  }
+  const seed = (d: ReturnType<typeof deps>, target: string, file: object) =>
+    d.fs.files.set(target, JSON.stringify(file))
+  const pairingLogin = {
+    fetchConfig: async () =>
+      ({ deploymentMode: "single-user", hostId: "host_1", tenantId: "tnt_1" }) as never,
+    register: async () =>
+      ({
+        baseUrl: "https://prod",
+        deviceId: "dev_new",
+        devicePrivateKeyJwk: { kty: "EC", d: "NEW" },
+        deviceKeyThumbprint: "thumb",
+        serverVersion: "1",
+      }) as never,
+  }
+  const loginArgs = ["host", "login", "prod", "--endpoint", "https://prod", "--pair-code", "ABC"]
+
+  it("refuses a host-selecting flag given without a value", async () => {
+    const d = deps()
+    expect(await run(["host", "show", "--host"], d)).toBe(EXIT_USAGE)
+    expect(d.out.stderr.join("")).toContain("--host needs a value")
+    expect(await run(["host", "add", "x", "--endpoint", "https://h", "--token"], d)).toBe(
+      EXIT_USAGE
+    )
+    expect(d.fs.files.has(USER_FILE)).toBe(false)
+  })
+
+  it("host use fails instead of reporting a choice the project file overrides", async () => {
+    const d = deps()
+    seed(d, USER_FILE, {
+      version: 1,
+      active: "a",
+      hosts: {
+        a: { kind: "headless", endpoint: "https://a" },
+        b: { kind: "headless", endpoint: "https://b" },
+      },
+    })
+    seed(d, PROJECT_FILE, {
+      version: 1,
+      active: "a",
+      hosts: { a: { kind: "headless", endpoint: "https://pa" } },
+    })
+    expect(await run(["host", "use", "b"], d)).toBe(EXIT_USAGE)
+    expect(d.out.stderr.join("")).toContain("--local")
+    expect(parseHostsFile(d.fs.files.get(USER_FILE)!).active).toBe("a")
+  })
+
+  it("host use says when the project's record of that name is the one used", async () => {
+    const d = deps()
+    seed(d, USER_FILE, {
+      version: 1,
+      active: "b",
+      hosts: {
+        a: { kind: "headless", endpoint: "https://a" },
+        b: { kind: "headless", endpoint: "https://b" },
+      },
+    })
+    seed(d, PROJECT_FILE, {
+      version: 1,
+      hosts: { a: { kind: "headless", endpoint: "https://pa" } },
+    })
+    expect(await run(["host", "use", "a", "--format", "raw"], d)).toBe(EXIT_OK)
+    const result = JSON.parse(d.out.stdout)
+    expect(result.record).toBe(PROJECT_FILE)
+    expect(result.note).toContain("its record is the one used")
+  })
+
+  it("keeps a project hosts file holding a credential out of Git, once", async () => {
+    const d = deps()
+    const ignore = `${CWD}/.cognia/.gitignore`
+    await run(["host", "add", "plain", "--endpoint", "https://p", "--local"], d)
+    expect(d.fs.files.has(ignore)).toBe(false)
+    d.out.stdout = ""
+    await run(
+      ["host", "add", "s", "--endpoint", "https://s", "--token", "t", "--local", "--format", "raw"],
+      d
+    )
+    expect(d.fs.files.get(ignore)).toMatch(/^# Written by cognia-agent.*\nhosts\.json\n$/)
+    expect(JSON.parse(d.out.stdout).gitignore).toBe(".cognia/.gitignore")
+    await run(["host", "add", "s2", "--endpoint", "https://s", "--token", "t", "--local"], d)
+    expect(d.fs.files.get(ignore)!.match(/hosts\.json/g)).toHaveLength(1)
+  })
+
+  it("host remove asks the host to revoke a paired device, and says when it could not", async () => {
+    const revokeDevice = jest.fn(async () => ({
+      deviceId: "dev_old",
+      revoked: false,
+      reason: "403 host.admin",
+    }))
+    const d = deps({ revokeDevice })
+    seed(d, USER_FILE, { version: 1, active: "prod", hosts: { prod: PAIRED } })
+    expect(await run(["host", "remove", "prod", "--format", "raw"], d)).toBe(EXIT_OK)
+    expect(revokeDevice).toHaveBeenCalledWith(
+      "prod",
+      expect.objectContaining({ deviceId: "dev_old" }),
+      expect.any(Number)
+    )
+    const result = JSON.parse(d.out.stdout)
+    expect(result.revokedOnHost).toBe(false)
+    expect(result.fix.join(" ")).toContain("cognia-server devices revoke-device dev_old")
+    expect(parseHostsFile(d.fs.files.get(USER_FILE)!).hosts.prod).toBeUndefined()
+  })
+
+  it("host remove --keep-on-host skips the revocation and says the device stays", async () => {
+    const revokeDevice = jest.fn()
+    const d = deps({ revokeDevice })
+    seed(d, USER_FILE, { version: 1, active: "prod", hosts: { prod: PAIRED } })
+    expect(await run(["host", "remove", "prod", "--keep-on-host", "--format", "raw"], d)).toBe(
+      EXIT_OK
+    )
+    expect(revokeDevice).not.toHaveBeenCalled()
+    expect(JSON.parse(d.out.stdout).fix.join(" ")).toContain("dev_old")
+  })
+
+  it("re-pairing a saved device needs --replace, and then revokes the old device", async () => {
+    const revokeDevice = jest.fn(async () => ({ deviceId: "dev_old", revoked: true }))
+    const refused = deps({ revokeDevice, login: pairingLogin })
+    seed(refused, USER_FILE, { version: 1, active: "prod", hosts: { prod: PAIRED } })
+    expect(await run(loginArgs, refused)).toBe(EXIT_USAGE)
+    expect(parseHostsFile(refused.fs.files.get(USER_FILE)!).hosts.prod.deviceId).toBe("dev_old")
+    expect(revokeDevice).not.toHaveBeenCalled()
+
+    const replaced = deps({ revokeDevice, login: pairingLogin })
+    seed(replaced, USER_FILE, { version: 1, active: "prod", hosts: { prod: PAIRED } })
+    expect(await run([...loginArgs, "--replace", "--format", "raw"], replaced)).toBe(EXIT_OK)
+    expect(revokeDevice).toHaveBeenCalledTimes(1)
+    expect(parseHostsFile(replaced.fs.files.get(USER_FILE)!).hosts.prod.deviceId).toBe("dev_new")
+    expect(JSON.parse(replaced.out.stdout).replaced).toEqual({ deviceId: "dev_old", revoked: true })
+  })
+
+  it("reports an unreachable host as not revoked rather than assuming it", async () => {
+    const { revokeOnHost } = await import("./host-command")
+    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+      "sign",
+      "verify",
+    ])
+    const jwk = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as unknown as Record<
+      string,
+      unknown
+    >
+    const revocation = await revokeOnHost("prod", { ...PAIRED, devicePrivateKeyJwk: jwk }, 1_000, {
+      fetchImpl: async () => {
+        throw new TypeError("fetch failed: ECONNREFUSED")
+      },
+    })
+    expect(revocation).toMatchObject({ deviceId: "dev_old", revoked: false })
+    expect(revocation.reason).toContain("ECONNREFUSED")
+  })
+})

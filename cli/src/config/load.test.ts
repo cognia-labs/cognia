@@ -4,6 +4,7 @@
 import path from "node:path"
 
 import {
+  describeProviderCredentials,
   resolveConfig,
   userConfigPath,
   credentialsPath,
@@ -798,5 +799,34 @@ describe("Reader and new search-provider layering", () => {
       })
     ).toThrow()
     expect(run({}).webReader).toBeUndefined()
+  })
+})
+
+describe("describeProviderCredentials", () => {
+  it("lists every source in the order a run applies them, so the last one is used", () => {
+    const files = {
+      [userConfigPath(HOME)]: JSON.stringify({ providers: { openai: { apiKey: "u" } } }),
+      [credentialsPath(HOME)]: JSON.stringify({ providers: { openai: { apiKey: "c" } } }),
+      [projectConfigPath(CWD)]: JSON.stringify({ providers: { openai: { apiKey: "p" } } }),
+    }
+    const env = { OPENAI_API_KEY: "e", CLAUDE_CODE_OAUTH_TOKEN: "t", COGNIA_API_KEY: "g" }
+    const sources = describeProviderCredentials({
+      home: HOME,
+      cwd: CWD,
+      env,
+      readFile: reader(files),
+    })
+    expect(sources.openai!.map((source) => source.layer)).toEqual([
+      "user-config",
+      "credentials",
+      "project-config",
+      "env",
+    ])
+    expect(sources.anthropic).toEqual([
+      { layer: "env", kind: "authToken", origin: "CLAUDE_CODE_OAUTH_TOKEN" },
+      { layer: "env", kind: "apiKey", origin: "COGNIA_API_KEY" },
+    ])
+    // The same key a resolution picks.
+    expect(run(files, { env }).providers.openai?.apiKey).toBe("e")
   })
 })

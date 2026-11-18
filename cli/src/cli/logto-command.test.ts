@@ -487,4 +487,164 @@ describe("logtoCommand", () => {
     expect(code).toBe(2)
     expect(cap.errText()).toMatch(/login \| status \| logout/)
   })
+
+  /** A JWT-shaped token whose payload names `sub` (signature is never checked here). */
+  function tokenFor(sub: string): string {
+    return `h.${Buffer.from(JSON.stringify({ sub })).toString("base64url")}.s`
+  }
+
+  function officialArgs(...extra: string[]) {
+    return parseArgv(["logto", "login", ...extra])
+  }
+
+  it("login: an earlier sign-in that finishes last is discarded and its tokens revoked", async () => {
+    const fs = memFs()
+    const revoke = jest.fn(async () => ({ status: "revoked" as const }))
+    const finishFirst: Array<(session: LogtoSession) => void> = []
+    const firstSession = { ...sampleSession, accessToken: tokenFor("usr_a"), refreshToken: "RTK-a" }
+    const secondSession = {
+      ...sampleSession,
+      accessToken: tokenFor("usr_b"),
+      refreshToken: "RTK-b",
+    }
+    const firstOut = captureOut()
+    const first = logtoCommand(officialArgs(), {
+      home: HOME,
+      out: firstOut.sink,
+      sessionFs: fs,
+      revoke,
+      login: () => new Promise<LogtoSession>((resolve) => finishFirst.push(resolve)),
+      startCallbackServer: async () => fakeServer() as never,
+      openBrowser: async () => true,
+      env: {},
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    const secondOut = captureOut()
+    const second = await logtoCommand(officialArgs(), {
+      home: HOME,
+      out: secondOut.sink,
+      sessionFs: fs,
+      revoke,
+      login: async () => secondSession,
+      startCallbackServer: async () => fakeServer() as never,
+      openBrowser: async () => true,
+      env: {},
+    })
+    expect(second).toBe(0)
+    expect(secondOut.text()).toMatch(/as usr_b/)
+    finishFirst[0]!(firstSession)
+    expect(await first).toBe(1)
+    expect(firstOut.errText()).toMatch(/discarded/)
+    expect(JSON.parse(fs.store.get(SESSION_FILE)!).accessToken).toBe(secondSession.accessToken)
+    expect(revoke.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      "RTK-a",
+      firstSession.accessToken,
+    ])
+  })
+
+  it("logout: keeps a sign-in that was saved while the old tokens were being revoked", async () => {
+    const fs = memFs({ [SESSION_FILE]: JSON.stringify(sampleSession) })
+    const newer = { ...sampleSession, accessToken: tokenFor("usr_b") }
+    const revoke = jest.fn(async () => {
+      // Another terminal finished `logto login` meanwhile.
+      fs.store.set(SESSION_FILE, JSON.stringify(newer))
+      return { status: "revoked" as const }
+    })
+    const cap = captureOut()
+    const code = await logtoCommand(parseArgv(["logto", "logout"]), {
+      home: HOME,
+      out: cap.sink,
+      sessionFs: fs,
+      env: {},
+      revoke,
+    })
+    expect(code).toBe(0)
+    expect(JSON.parse(fs.store.get(SESSION_FILE)!).accessToken).toBe(newer.accessToken)
+    expect(cap.text()).toMatch(/newer sign-in was saved meanwhile and is kept/)
+  })
+
+  it("logout: supersedes a sign-in still waiting for its browser", async () => {
+    const fs = memFs()
+    let finish!: (session: LogtoSession) => void
+    const pending = logtoCommand(officialArgs(), {
+      home: HOME,
+      out: captureOut().sink,
+      sessionFs: fs,
+      revoke: async () => ({ status: "revoked" as const }),
+      login: () => new Promise<LogtoSession>((resolve) => (finish = resolve)),
+      startCallbackServer: async () => fakeServer() as never,
+      openBrowser: async () => true,
+      env: {},
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    await logtoCommand(parseArgv(["logto", "logout"]), {
+      home: HOME,
+      out: captureOut().sink,
+      sessionFs: fs,
+      env: {},
+    })
+    finish(sampleSession)
+    expect(await pending).toBe(1)
+    expect(fs.store.has(SESSION_FILE)).toBe(false)
+  })
+
+  it("login --switch-account forces the official issuer to authenticate again", async () => {
+    const login = jest.fn<Promise<LogtoSession>, [LogtoClientConfig, LogtoDrivers]>(async () => ({
+      ...sampleSession,
+      issuerKind: "oidc",
+    }))
+    const code = await logtoCommand(officialArgs("--switch-account"), {
+      home: HOME,
+      out: captureOut().sink,
+      sessionFs: memFs(),
+      login,
+      startCallbackServer: async () => fakeServer() as never,
+      openBrowser: async () => true,
+      env: {},
+    })
+    expect(code).toBe(0)
+    expect(login.mock.calls[0][0].freshLogin).toBe(true)
+    const refused = captureOut()
+    expect(
+      await logtoCommand(
+        officialArgs(
+          "--switch-account",
+          "--issuer",
+          "https://l",
+          "--client-id",
+          "c",
+          "--resource",
+          "r"
+        ),
+        { home: HOME, out: refused.sink, sessionFs: memFs(), env: {} }
+      )
+    ).toBe(2)
+    expect(refused.errText()).toMatch(/official Cognia account only/)
+  })
+
+  it("status and logout name the signed-in person and how to switch", async () => {
+    const official = {
+      ...sampleSession,
+      accessToken: tokenFor("usr_a"),
+      issuerKind: "oidc" as const,
+    }
+    const fs = memFs({ [SESSION_FILE]: JSON.stringify(official) })
+    const status = captureOut()
+    await logtoCommand(parseArgv(["logto", "status"]), {
+      home: HOME,
+      out: status.sink,
+      sessionFs: fs,
+      env: {},
+    })
+    expect(status.text()).toMatch(/person: {3}usr_a/)
+    const logout = captureOut()
+    await logtoCommand(parseArgv(["logto", "logout"]), {
+      home: HOME,
+      out: logout.sink,
+      sessionFs: fs,
+      env: {},
+      revoke: async () => ({ status: "revoked" as const }),
+    })
+    expect(logout.text()).toMatch(/logto login --switch-account/)
+  })
 })

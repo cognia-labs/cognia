@@ -213,7 +213,137 @@ describe("resolveHost", () => {
   })
 })
 
+describe("an explicitly named host", () => {
+  const PAIRED: HostRecord = {
+    kind: "device",
+    endpoint: "https://prod",
+    tenantId: "tnt_paired",
+    deviceId: "dev_1",
+    devicePrivateKeyJwk: { kty: "EC" },
+  }
+  const AMBIENT = {
+    COGNIA_ENDPOINT: "https://ambient",
+    COGNIA_SERVICE_TOKEN: "ambient-token",
+  }
+
+  it("is used whole: the environment's endpoint and token do not replace the record's", () => {
+    const resolution = resolveHost({
+      profile: "local",
+      home: HOME,
+      cwd: CWD,
+      env: AMBIENT,
+      fs: withHosts(addHost(EMPTY_HOSTS, "local", LOCAL)),
+    })
+    expect(resolution.host?.endpoint).toMatchObject({ value: LOCAL.endpoint, source: "user-file" })
+    expect(resolution.host?.serviceToken).toMatchObject({ value: "svc-token", source: "user-file" })
+    expect(resolution.host?.record).toEqual(LOCAL)
+  })
+
+  it("by COGNIA_PROFILE is used whole too", () => {
+    const resolution = resolveHost({
+      home: HOME,
+      cwd: CWD,
+      env: { ...AMBIENT, COGNIA_PROFILE: "local" },
+      fs: withHosts(addHost(EMPTY_HOSTS, "local", LOCAL)),
+    })
+    expect(resolution.host?.endpoint.value).toBe(LOCAL.endpoint)
+    expect(resolution.host?.serviceToken?.value).toBe("svc-token")
+    expect(resolution.host?.nameSource).toMatchObject({ source: "env", origin: "COGNIA_PROFILE" })
+  })
+
+  it("resolves nothing when misspelled, never the environment's host", () => {
+    const resolution = resolveHost({
+      profile: "lcoal",
+      home: HOME,
+      cwd: CWD,
+      env: AMBIENT,
+      fs: withHosts(addHost(EMPTY_HOSTS, "local", LOCAL)),
+    })
+    expect(resolution.host).toBeUndefined()
+    expect(resolution.skipped).toEqual([
+      { leg: "named host", reason: 'no host named "lcoal" (known: local)' },
+    ])
+  })
+
+  it("takes the environment's token only when the record carries none", () => {
+    const resolution = resolveHost({
+      profile: "bare",
+      home: HOME,
+      cwd: CWD,
+      env: { COGNIA_SERVICE_TOKEN: "ambient-token" },
+      fs: withHosts(addHost(EMPTY_HOSTS, "bare", { kind: "headless", endpoint: "https://bare" })),
+    })
+    expect(resolution.host?.serviceToken).toMatchObject({ value: "ambient-token", source: "env" })
+  })
+
+  it("can still be pointed elsewhere by --endpoint, without its credentials", () => {
+    const resolution = resolveHost({
+      profile: "local",
+      endpoint: "https://elsewhere",
+      home: HOME,
+      cwd: CWD,
+      env: {},
+      fs: withHosts(addHost(EMPTY_HOSTS, "local", LOCAL)),
+    })
+    expect(resolution.host?.endpoint.value).toBe("https://elsewhere")
+    expect(resolution.host?.serviceToken).toBeUndefined()
+  })
+
+  it("refuses a tenant that is not the paired device's, from a flag or the environment", () => {
+    const fs = withHosts(addHost(EMPTY_HOSTS, "prod", PAIRED))
+    const flagged = resolveHost({
+      profile: "prod",
+      tenantId: "tnt_other",
+      home: HOME,
+      cwd: CWD,
+      env: {},
+      fs,
+    })
+    expect(flagged.host).toBeUndefined()
+    expect(flagged.conflict?.error).toContain("tnt_paired")
+    expect(flagged.conflict?.fix[0]).toBe("drop --tenant")
+    const fromEnv = resolveHost({
+      home: HOME,
+      cwd: CWD,
+      env: { COGNIA_TENANT_ID: "tnt_other" },
+      fs,
+    })
+    expect(fromEnv.conflict?.fix[0]).toBe("unset COGNIA_TENANT_ID")
+    const same = resolveHost({
+      profile: "prod",
+      tenantId: "tnt_paired",
+      home: HOME,
+      cwd: CWD,
+      env: {},
+      fs,
+    })
+    expect(same.host?.tenantId?.value).toBe("tnt_paired")
+  })
+})
+
 describe("describeResolution", () => {
+  it("says how the host name was chosen", () => {
+    const fsx = fsWith({
+      [USER_PATH]: addHost(EMPTY_HOSTS, "local", LOCAL),
+      [PROJECT_PATH]: addHost(EMPTY_HOSTS, "staging", { kind: "headless", endpoint: "https://s" }),
+    })
+    const fromProject = describeResolution(
+      resolveHost({ home: HOME, cwd: CWD, env: {}, fs: fsx }).host!
+    )
+    expect(fromProject.find((row) => row.key === "host")).toMatchObject({
+      value: "staging",
+      source: "project-file",
+      origin: `active in ${PROJECT_PATH}`,
+    })
+    const fromFlag = describeResolution(
+      resolveHost({ profile: "local", home: HOME, cwd: CWD, env: {}, fs: fsx }).host!
+    )
+    expect(fromFlag.find((row) => row.key === "host")).toMatchObject({
+      source: "flag",
+      origin: "--host",
+    })
+  })
+
   it("reports a source for every value and never prints the token", () => {
     const resolution = resolveHost({
       home: HOME,

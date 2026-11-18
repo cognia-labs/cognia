@@ -5,8 +5,10 @@
  *
  * `login` with no issuer configured signs in to the official account with the
  * first-party `cognia-app` client; `--provider feishu|github|google|apple`
- * goes straight to that provider, and `COGNIA_ID_ISSUER` /
- * `COGNIA_ID_AUDIENCE` point it at staging or a local identity Worker.
+ * goes straight to that provider, `--switch-account` makes the issuer ask
+ * again instead of answering with the person its browser session remembers,
+ * and `COGNIA_ID_ISSUER` / `COGNIA_ID_AUDIENCE` point it at staging or a
+ * local identity Worker.
  * `--issuer`, `--client-id` and `--resource` (or `COGNIA_LOGTO_*`) together
  * select a self-hosted Logto instead; naming only some of them is an error.
  *
@@ -15,6 +17,9 @@
  * (`../mcp/open-browser`), and hands both to the runtime-agnostic
  * `loginToLogto` (`@/lib/logto/client`). The resulting access token — a JWT the
  * companion gateway validates — is stored in `~/.cognia/logto.json` (0600).
+ * Several processes share that file (the Brain refreshes it while a command
+ * signs in or out in another terminal), so only the newest sign-in saves and
+ * a sign-out removes only the session it revoked (`../config/logto-session`).
  * Everything is injected so the command unit-tests without sockets or a browser.
  */
 
@@ -35,16 +40,22 @@ import {
 } from "@/lib/identity/official-deployment"
 
 import { resolveHome } from "../config/load"
+import { readLogtoIdentity } from "@/lib/identity/logto-claims"
+
 import {
-  writeLogtoSessionFile,
+  abandonLogtoLogin,
+  beginLogtoLogin,
+  cancelLogtoLogins,
+  completeLogtoLogin,
   readLogtoSessionFile,
-  removeLogtoSessionFile,
+  readLogtoSessionSnapshot,
+  removeLogtoSessionFileIf,
   type LogtoSessionFs,
 } from "../config/logto-session"
 import { startCallbackServer as defaultStartCallback } from "../mcp/oauth-callback-server"
 import { openBrowser as defaultOpenBrowser } from "../mcp/open-browser"
 
-import { stringFlag, type ParsedArgs } from "./args"
+import { boolFlag, stringFlag, type ParsedArgs } from "./args"
 import { realOutput, type OutputSink } from "./output"
 
 /** Default wait for the browser round-trip: 3 minutes. */
@@ -120,13 +131,28 @@ async function loginSub(
     )
     return 2
   }
+  const switchAccount = boolFlag(args, "switch-account")
+  if (switchAccount && !official) {
+    // Logto needs `prompt=consent` for its refresh token, and the client
+    // sends a forced re-authentication to non-Logto issuers only.
+    out.error(
+      "logto login: --switch-account applies to the official Cognia account only; " +
+        "sign out of the self-hosted Logto in the browser to change who signs in"
+    )
+    return 2
+  }
 
   const startCallbackServer = deps.startCallbackServer ?? defaultStartCallback
   const openBrowser = deps.openBrowser ?? defaultOpenBrowser
   const login = deps.login ?? defaultLogin
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
+  const sessionFs = deps.sessionFs
   const server = await startCallbackServer({})
+  // Recorded before the browser opens: a later `logto login` or a
+  // `logto logout` supersedes this attempt even while it is still waiting.
+  const attempt = await beginLogtoLogin(home, sessionFs)
+  let settled = false
   try {
     const config: LogtoClientConfig = official
       ? officialLogtoConfig(
@@ -137,6 +163,7 @@ async function loginSub(
             redirectUri: server.redirectUrl,
             clientKind: "native",
             ...(provider && isOfficialSocialProvider(provider) ? { socialProvider: provider } : {}),
+            ...(switchAccount ? { freshLogin: true } : {}),
           }
         )
       : {
@@ -161,9 +188,23 @@ async function loginSub(
       },
     }
     const session = await login(config, drivers)
-    writeLogtoSessionFile(home, session, deps.sessionFs)
+    const completion = await completeLogtoLogin(home, attempt, session, sessionFs)
+    settled = true
+    if (completion === "superseded") {
+      // The tokens were minted for nobody's use now: tell the issuer.
+      const revoke = deps.revoke ?? defaultRevoke
+      if (session.refreshToken)
+        await revoke(session, session.refreshToken, "refresh_token", deps.fetchImpl)
+      await revoke(session, session.accessToken, "access_token", deps.fetchImpl)
+      out.error(
+        "logto login: a newer `logto login` or a `logto logout` ran after this sign-in started, " +
+          "so this one was discarded and its tokens revoked. Run `cognia-agent logto status` to " +
+          "see who is signed in."
+      )
+      return 1
+    }
     out.write(
-      `Signed in to ${accountName(session)} (resource ${session.resource}` +
+      `Signed in to ${accountName(session)} as ${personLabel(session)} (resource ${session.resource}` +
         `${session.organizationId ? `, org ${session.organizationId}` : ""}).\n` +
         `Saved session to ${home}/logto.json\n`
     )
@@ -172,8 +213,17 @@ async function loginSub(
     out.error(`logto login failed: ${(err as Error).message}`)
     return 1
   } finally {
+    if (!settled) await abandonLogtoLogin(home, attempt, sessionFs).catch(() => undefined)
     server.close()
   }
+}
+
+/** Who a session names: the ID token's name or email with the token subject, or the subject alone. */
+function personLabel(session: Parameters<typeof readLogtoIdentity>[0]): string {
+  const identity = readLogtoIdentity(session)
+  if (!identity) return "an unreadable subject"
+  const display = identity.profile.name ?? identity.profile.email
+  return display ? `${display} (${identity.access.subject})` : identity.access.subject
 }
 
 /** What to call the account a session belongs to. */
@@ -186,13 +236,20 @@ function accountName(session: { issuerKind?: string }): string {
  * reported: the file is removed whether or not the issuer could be reached,
  * because a token this process has forgotten but the issuer still honours is
  * the worse of the two outcomes to hide.
+ *
+ * A sign-in still waiting for its browser round trip is superseded first, so
+ * it cannot land after this sign-out. The file is removed only if it still
+ * holds the session that was revoked: a sign-in that finished while the
+ * issuer was being called is the newer intent and is kept.
  */
 async function logoutSub(deps: LogtoCommandDeps, out: OutputSink, home: string): Promise<number> {
-  const session = readLogtoSessionFile(home, deps.sessionFs)
-  if (!session) {
+  await cancelLogtoLogins(home, deps.sessionFs)
+  const snapshot = readLogtoSessionSnapshot(home, deps.sessionFs)
+  if (!snapshot) {
     out.write("Not signed in; nothing to sign out of.\n")
     return 0
   }
+  const session = snapshot.session
   const name = accountName(session)
   const revoke = deps.revoke ?? defaultRevoke
   const outcomes = []
@@ -200,32 +257,36 @@ async function logoutSub(deps: LogtoCommandDeps, out: OutputSink, home: string):
     outcomes.push(await revoke(session, session.refreshToken, "refresh_token", deps.fetchImpl))
   }
   outcomes.push(await revoke(session, session.accessToken, "access_token", deps.fetchImpl))
-  removeLogtoSessionFile(home, deps.sessionFs)
+  if (!(await removeLogtoSessionFileIf(home, snapshot, deps.sessionFs))) {
+    out.write(
+      `Revoked the session of ${name} this sign-out started with, but a newer sign-in was ` +
+        "saved meanwhile and is kept. Run `cognia-agent logto status` to see who is signed in.\n"
+    )
+    return 0
+  }
   const failed = outcomes.find((outcome) => outcome.status === "failed")
-  if (failed && failed.status === "failed") {
-    out.write(
-      `Signed out of ${name} (removed logto.json), but the issuer could not be told to ` +
+  const summary =
+    failed && failed.status === "failed"
+      ? `Signed out of ${name} (removed logto.json), but the issuer could not be told to ` +
         `revoke the token: ${failed.reason}\n`
-    )
-    return 0
-  }
-  if (outcomes.some((outcome) => outcome.status === "unsupported")) {
-    out.write(
-      `Signed out of ${name} (removed logto.json). The issuer advertises no revocation ` +
-        "endpoint, so the token expires on its own schedule.\n"
-    )
-    return 0
-  }
-  if (outcomes.some((outcome) => outcome.status === "self-expiring")) {
-    out.write(
-      `Signed out of ${name} (removed logto.json; the session is revoked at the issuer, ` +
-        "and the short-lived access token expires on its own).\n"
-    )
-    return 0
-  }
-  out.write(`Signed out of ${name} (removed logto.json; tokens revoked at the issuer).\n`)
+      : outcomes.some((outcome) => outcome.status === "unsupported")
+        ? `Signed out of ${name} (removed logto.json). The issuer advertises no revocation ` +
+          "endpoint, so the token expires on its own schedule.\n"
+        : outcomes.some((outcome) => outcome.status === "self-expiring")
+          ? `Signed out of ${name} (removed logto.json; the session is revoked at the issuer, ` +
+            "and the short-lived access token expires on its own).\n"
+          : `Signed out of ${name} (removed logto.json; tokens revoked at the issuer).\n`
+  out.write(summary + (session.issuerKind === "oidc" ? SWITCH_HINT : ""))
   return 0
 }
+
+/**
+ * Signing out here does not sign the browser out at the issuer, which may
+ * answer the next sign-in with the same person without asking.
+ */
+const SWITCH_HINT =
+  "To sign in as someone else, run `cognia-agent logto login --switch-account`: the browser may " +
+  "still be signed in to the issuer as this person.\n"
 
 function statusSub(deps: LogtoCommandDeps, out: OutputSink, home: string): number {
   const session = readLogtoSessionFile(home, deps.sessionFs)
@@ -247,6 +308,7 @@ function statusSub(deps: LogtoCommandDeps, out: OutputSink, home: string): numbe
     : `Signed in to ${name}\n`
   out.write(
     heading +
+      `  person:   ${personLabel(session)}\n` +
       `  issuer:   ${session.issuer}\n` +
       `  resource: ${session.resource}\n` +
       `  org:      ${session.organizationId ?? "-"}\n` +

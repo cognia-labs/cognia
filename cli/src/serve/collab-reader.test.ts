@@ -84,6 +84,65 @@ it("binds the server identity and hands its own credentials to the registered ru
   reader.stop()
 })
 
+it("never acts under this profile with a token for another person signed in since", async () => {
+  const bind = jest.fn().mockResolvedValue({})
+  const session = sessionFs({
+    issuer: "https://issuer.test/oidc",
+    clientId: "brain",
+    resource: "collab",
+    accessToken: sessionToken("person-a"),
+    scopes: [],
+  })
+  const presented: string[] = []
+  let now = 0
+  const reader = await startHeadlessCollabReader({
+    localAccountId: "acct-1",
+    cliHome: "/home",
+    config: { url: "https://collab.test", orgId: ORG },
+    deps: {
+      sessionFs: session,
+      now: () => now,
+      fetchImpl: (url: string, init?: RequestInit) => {
+        presented.push(String((init?.headers as Record<string, string>)?.authorization ?? ""))
+        return fetchImpl(url)
+      },
+      registry: { bind, get: jest.fn().mockResolvedValue({ orgId: ORG, userId: USER }) } as never,
+    },
+  })
+  expect(reader.status).toBe("active")
+  // Another terminal signs in as B; the reader's grant for A expires.
+  session.write(
+    "/home/logto.json",
+    JSON.stringify({
+      issuer: "https://issuer.test/oidc",
+      clientId: "brain",
+      resource: "collab",
+      accessToken: sessionToken("person-b"),
+      scopes: [],
+    }),
+    0o600
+  )
+  now = 20_000_000
+  presented.length = 0
+  expect(await reader.runtime!.resolve("acct-1")).toBeNull()
+  await reader.runtime!.refreshAll()
+  expect(presented.some((header) => header.includes(sessionToken("person-b")))).toBe(false)
+  // A signs back in: the profile works again with A's own token.
+  session.write(
+    "/home/logto.json",
+    JSON.stringify({
+      issuer: "https://issuer.test/oidc",
+      clientId: "brain",
+      resource: "collab",
+      accessToken: sessionToken("person-a"),
+      scopes: [],
+    }),
+    0o600
+  )
+  expect(await reader.runtime!.resolve("acct-1")).not.toBeNull()
+  reader.stop()
+})
+
 describe("durable collaboration notification cursors", () => {
   function files() {
     const values = new Map<string, string>()

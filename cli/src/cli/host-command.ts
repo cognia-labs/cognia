@@ -12,8 +12,9 @@
  */
 
 import os from "node:os"
+import path from "node:path"
 
-import { stringFlag, type ParsedArgs } from "./args"
+import { flagsMissingValues, HOST_SELECTION_FLAGS, stringFlag, type ParsedArgs } from "./args"
 import { EXIT_OK, EXIT_USAGE, emitFailure, usageFailure } from "./errors"
 import { emitResult, resolveOutputOptions } from "./format"
 import { realOutput, type OutputSink } from "./output"
@@ -26,16 +27,20 @@ import {
 } from "../host/pair-invitation"
 import { CompanionWorkerTransport } from "../worker/companion-worker-transport"
 import type { AuthFetcher } from "@/lib/tauri/companion-auth"
-import { describeResolution, resolveHost } from "../host/resolve"
+import { connectResolvedHost, type ConnectDeps } from "../api/connect"
+import { describeResolution, loadHostsLayers, mergeHosts, resolveHost } from "../host/resolve"
 import {
   addHost,
   hostsPath,
   projectHostsPath,
   readHostsFile,
+  realHostsFs as realHostsFsForIgnore,
   redactHost,
   removeHost,
   activateHost,
   writeHostsFile,
+  PROJECT_HOSTS_DIR,
+  HOSTS_FILE_NAME,
   type HostKind,
   type HostRecord,
   type HostsFs,
@@ -55,13 +60,25 @@ Usage:
                               [--label <display name>]
   cognia-agent host use <name>
   cognia-agent host show                 the active host, with the source of each value
-  cognia-agent host remove <name>
+  cognia-agent host remove <name> [--keep-on-host]
   cognia-agent host path                 where the hosts file lives
 
 Flags:
   --local        write to ./.cognia/hosts.json instead of the CLI home
+  --replace      let add or login replace a saved paired device of the same name
+  --keep-on-host remove the local record without revoking its device on the host
   --format raw|json|pretty
   -o, --output <dir>
+
+Revocation:
+  A paired device stays registered on its host until it is revoked there.
+  \`host remove\` and a \`--replace\` login first ask the host to revoke the old
+  device, which needs the host.admin grant; without it, revoke the device in
+  the host's Device Console or with \`cognia-server devices revoke-device <id>\`.
+
+Project file:
+  A record written with --local that holds a token or a device key keeps
+  ./.cognia/hosts.json out of Git through ./.cognia/.gitignore.
 
 Kinds:
   headless  POST /internal/_rpc, loopback service token, carries every command
@@ -89,6 +106,109 @@ export interface HostCommandDeps {
   invitationLogin?: Partial<InvitationLoginInput>
   /** The direct route's fetcher. Defaults to one that pins the host's TLS key. */
   fetcher?: AuthFetcher
+  /** How `host remove` and a `--replace` login reach the host to revoke a device. */
+  connectDeps?: ConnectDeps
+  /** Injected so tests need no DPoP exchange; defaults to {@link revokeOnHost}. */
+  revokeDevice?: (
+    name: string,
+    record: HostRecord & { deviceId: string },
+    timeoutMs: number
+  ) => Promise<DeviceRevocation>
+}
+
+/** Value flags of the host subcommands; a missing value is a usage error, never "absent". */
+const HOST_VALUE_FLAGS = [
+  ...HOST_SELECTION_FLAGS,
+  "kind",
+  "token",
+  "fingerprint",
+  "label",
+  "invitation",
+  "pair-code",
+] as const
+
+function holdsDevice(record: HostRecord | undefined): record is HostRecord & { deviceId: string } {
+  return Boolean(record?.deviceId && record.devicePrivateKeyJwk)
+}
+
+function holdsSecret(record: HostRecord): boolean {
+  return Boolean(record.serviceToken || record.devicePrivateKeyJwk || record.relay)
+}
+
+export interface DeviceRevocation {
+  deviceId: string
+  revoked: boolean
+  reason?: string
+}
+
+/**
+ * Ask the host to revoke a saved device with that device's own credential.
+ * `DELETE /api/devices/{id}` needs the host.admin grant, and raw routes have
+ * no relay form, so a device without either is reported, not assumed revoked.
+ */
+export async function revokeOnHost(
+  name: string,
+  record: HostRecord & { deviceId: string },
+  timeoutMs: number,
+  connectDeps: ConnectDeps | undefined
+): Promise<DeviceRevocation> {
+  const connected = await connectResolvedHost(
+    {
+      name,
+      kind: { value: "device", source: "user-file" },
+      endpoint: { value: record.endpoint, source: "user-file" },
+      ...(record.tenantId ? { tenantId: { value: record.tenantId, source: "user-file" } } : {}),
+      record,
+    },
+    connectDeps ?? {}
+  )
+  if (!connected.ok)
+    return { deviceId: record.deviceId, revoked: false, reason: connected.failure.error }
+  try {
+    const outcome = await connected.transport.request(
+      "DELETE",
+      `/api/devices/${encodeURIComponent(record.deviceId)}`,
+      undefined,
+      { timeoutMs }
+    )
+    return outcome.ok
+      ? { deviceId: record.deviceId, revoked: true }
+      : { deviceId: record.deviceId, revoked: false, reason: outcome.message }
+  } finally {
+    connected.transport.close?.()
+  }
+}
+
+function revocationFix(revocation: DeviceRevocation): string[] {
+  return revocation.revoked
+    ? []
+    : [
+        `device ${revocation.deviceId} is still registered on the host` +
+          (revocation.reason ? ` (${revocation.reason})` : ""),
+        "revoke it in the host's Device Console, or on the host run " +
+          `\`cognia-server devices revoke-device ${revocation.deviceId}\``,
+      ]
+}
+
+/**
+ * Keep a project hosts file that holds a credential out of Git. The project
+ * file exists so a repository can pin its host; the token or device key a
+ * `--local` write puts beside it must not be committed with it.
+ */
+function ensureProjectIgnore(cwd: string, fsx: HostsFs | undefined): string | null {
+  const store = fsx ?? realHostsFsForIgnore
+  const ignorePath = path.join(cwd, PROJECT_HOSTS_DIR, ".gitignore")
+  const current = store.read(ignorePath)
+  const lines = (current ?? "").split(/\r?\n/).map((line) => line.trim())
+  if (lines.includes(HOSTS_FILE_NAME) || lines.includes(`/${HOSTS_FILE_NAME}`)) return null
+  store.mkdirp(store.dirname(ignorePath))
+  const prefix = current && !current.endsWith("\n") ? `${current}\n` : (current ?? "")
+  store.write(
+    ignorePath,
+    `${prefix}# Written by cognia-agent: this file holds Host credentials.\n${HOSTS_FILE_NAME}\n`,
+    0o644
+  )
+  return `${PROJECT_HOSTS_DIR}/.gitignore`
 }
 
 /**
@@ -129,8 +249,67 @@ export async function hostCommand(args: ParsedArgs, deps: HostCommandDeps = {}):
 
   const options = resolveOutputOptions(args, env)
   if ("error" in options) return usageFailure(out, options.error, [options.fix])
+  const missing = flagsMissingValues(args, HOST_VALUE_FLAGS)
+  if (missing.length > 0)
+    return usageFailure(out, `${missing.map((name) => `--${name}`).join(", ")} needs a value`, [
+      "cognia-agent host --help",
+    ])
 
   const file = targetPath(args, home, cwd)
+  const local = args.flags.local === true
+  const revokeDevice =
+    deps.revokeDevice ??
+    ((name: string, record: HostRecord & { deviceId: string }, timeoutMs: number) =>
+      revokeOnHost(name, record, timeoutMs, deps.connectDeps))
+
+  /**
+   * Replace (or add) one record. A saved paired device of the same name is
+   * only replaced under --replace, after its revocation was asked of the host.
+   */
+  const saveRecord = async (
+    name: string,
+    record: HostRecord,
+    revokeReplaced: boolean
+  ): Promise<
+    | {
+        ok: true
+        updated: ReturnType<typeof addHost>
+        replaced?: DeviceRevocation
+        ignore?: string
+      }
+    | { ok: false; code: number }
+  > => {
+    const current = readHostsFile(file, deps.fs)
+    const previous = current.hosts[name]
+    let replaced: DeviceRevocation | undefined
+    if (holdsDevice(previous) && previous.deviceId !== record.deviceId) {
+      if (args.flags.replace !== true) {
+        return {
+          ok: false,
+          code: emitFailure(
+            out,
+            {
+              error: `host "${name}" already holds paired device ${previous.deviceId}`,
+              cause: "invalid-request",
+              fix: [
+                `pass --replace to replace it (its revocation is asked of the host first)`,
+                `or choose another name; cognia-agent host remove ${name} revokes and removes it`,
+              ],
+              inspect: ["cognia-agent host list"],
+            },
+            EXIT_USAGE
+          ),
+        }
+      }
+      if (revokeReplaced) replaced = await revokeDevice(name, previous, options.timeoutMs)
+    }
+    const updated = addHost(readHostsFile(file, deps.fs), name, record, {
+      activate: args.flags.use === true,
+    })
+    writeHostsFile(file, updated, deps.fs)
+    const ignore = local && holdsSecret(record) ? ensureProjectIgnore(cwd, deps.fs) : null
+    return { ok: true, updated, ...(replaced ? { replaced } : {}), ...(ignore ? { ignore } : {}) }
+  }
 
   switch (args.subcommand) {
     case "path": {
@@ -164,13 +343,18 @@ export async function hostCommand(args: ParsedArgs, deps: HostCommandDeps = {}):
           : {}),
         ...(stringFlag(args, "label") ? { label: stringFlag(args, "label") } : {}),
       }
-      const updated = addHost(readHostsFile(file, deps.fs), name, record, {
-        activate: args.flags.use === true,
-      })
-      writeHostsFile(file, updated, deps.fs)
+      // A record typed in by hand has no device identity to revoke.
+      const saved = await saveRecord(name, record, false)
+      if (!saved.ok) return saved.code
       emitResult(
         out,
-        { added: name, active: updated.active, file, ...redactHost(updated.hosts[name]) },
+        {
+          added: name,
+          active: saved.updated.active,
+          file,
+          ...(saved.ignore ? { gitignore: saved.ignore } : {}),
+          ...redactHost(saved.updated.hosts[name]),
+        },
         options,
         "host-add"
       )
@@ -192,16 +376,19 @@ export async function hostCommand(args: ParsedArgs, deps: HostCommandDeps = {}):
           ...(deps.invitationLogin ?? {}),
         })
         if (!paired.ok) return emitFailure(out, paired.failure)
-        const updated = addHost(readHostsFile(file, deps.fs), name, paired.record, {
-          activate: args.flags.use === true,
-        })
-        writeHostsFile(file, updated, deps.fs)
+        const saved = await saveRecord(name, paired.record, true)
+        if (!saved.ok) return saved.code
         emitResult(
           out,
           {
             paired: name,
-            active: updated.active,
+            active: saved.updated.active,
             file,
+            ...(saved.ignore ? { gitignore: saved.ignore } : {}),
+            ...(saved.replaced ? { replaced: saved.replaced } : {}),
+            ...(saved.replaced && !saved.replaced.revoked
+              ? { fix: revocationFix(saved.replaced) }
+              : {}),
             path: paired.path,
             ...(paired.path === "relay"
               ? {
@@ -238,13 +425,21 @@ export async function hostCommand(args: ParsedArgs, deps: HostCommandDeps = {}):
         ...(deps.login ?? {}),
       })
       if (!result.ok) return emitFailure(out, result.failure)
-      const updated = addHost(readHostsFile(file, deps.fs), name, result.record, {
-        activate: args.flags.use === true,
-      })
-      writeHostsFile(file, updated, deps.fs)
+      const saved = await saveRecord(name, result.record, true)
+      if (!saved.ok) return saved.code
       emitResult(
         out,
-        { paired: name, active: updated.active, file, ...redactHost(result.record) },
+        {
+          paired: name,
+          active: saved.updated.active,
+          file,
+          ...(saved.ignore ? { gitignore: saved.ignore } : {}),
+          ...(saved.replaced ? { replaced: saved.replaced } : {}),
+          ...(saved.replaced && !saved.replaced.revoked
+            ? { fix: revocationFix(saved.replaced) }
+            : {}),
+          ...redactHost(result.record),
+        },
         options,
         "host-login"
       )
@@ -276,13 +471,56 @@ export async function hostCommand(args: ParsedArgs, deps: HostCommandDeps = {}):
           EXIT_USAGE
         )
       }
+      // The choice has to be the one later commands make: a project file's
+      // `active` wins over the user file, and its record wins over a user
+      // record of the same name.
+      const layers = loadHostsLayers({ home, cwd, ...(deps.fs ? { fs: deps.fs } : {}) })
+      const effective = mergeHosts(
+        local ? layers.user : result.file,
+        local ? result.file : layers.project
+      )
+      if (effective.active !== name) {
+        return emitFailure(
+          out,
+          {
+            error: `${layers.projectPath} makes "${effective.active}" the active host, and it wins over ${file}`,
+            cause: "invalid-request",
+            fix: [
+              `cognia-agent host use ${name} --local   (change the project's choice)`,
+              `or remove "active" from ${layers.projectPath}`,
+            ],
+            inspect: ["cognia-agent host show"],
+          },
+          EXIT_USAGE
+        )
+      }
       writeHostsFile(file, result.file, deps.fs)
-      emitResult(out, { active: name, file }, options, "host-use")
+      const shadowed = !local && layers.project.hosts[name] !== undefined
+      emitResult(
+        out,
+        {
+          active: name,
+          file,
+          record: shadowed ? layers.projectPath : file,
+          ...(shadowed
+            ? {
+                note: `${layers.projectPath} also defines "${name}", and its record is the one used here`,
+              }
+            : {}),
+        },
+        options,
+        "host-use"
+      )
       return EXIT_OK
     }
     case "remove": {
       const name = args.positionals[0]
       if (!name) return usageFailure(out, "host remove needs a <name>", ["cognia-agent host list"])
+      const stored = readHostsFile(file, deps.fs).hosts[name]
+      const revocation =
+        holdsDevice(stored) && args.flags["keep-on-host"] !== true
+          ? await revokeDevice(name, stored, options.timeoutMs)
+          : undefined
       const result = removeHost(readHostsFile(file, deps.fs), name)
       if (result.error) {
         return emitFailure(
@@ -294,7 +532,22 @@ export async function hostCommand(args: ParsedArgs, deps: HostCommandDeps = {}):
       writeHostsFile(file, result.file, deps.fs)
       emitResult(
         out,
-        { removed: name, active: result.file.active ?? null, file },
+        {
+          removed: name,
+          active: result.file.active ?? null,
+          file,
+          ...(revocation ? { revokedOnHost: revocation.revoked } : {}),
+          ...(revocation && !revocation.revoked ? { fix: revocationFix(revocation) } : {}),
+          ...(holdsDevice(stored) && !revocation
+            ? {
+                fix: revocationFix({
+                  deviceId: stored.deviceId,
+                  revoked: false,
+                  reason: "--keep-on-host",
+                }),
+              }
+            : {}),
+        },
         options,
         "host-remove"
       )

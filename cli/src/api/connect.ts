@@ -49,6 +49,18 @@ function pinnedFetch(serverFingerprint: string | undefined, base?: TransportFetc
 
 /** The Fix lines offered when nothing resolved, tuned by what is running here. */
 async function noHostFailure(resolution: HostResolution, deps: ConnectDeps): Promise<CliFailure> {
+  const missingName = resolution.skipped.find((leg) => leg.leg === "named host")
+  if (missingName) {
+    return {
+      error: missingName.reason,
+      cause: "invalid-request",
+      fix: [
+        "pass --host with one of the saved names",
+        "cognia-agent host add <name> --endpoint <url>",
+      ],
+      inspect: ["cognia-agent host list"],
+    }
+  }
   const detect = deps.detect ?? detectDesktop
   const desktop = await detect().catch(() => null)
   const fix = desktop
@@ -78,6 +90,17 @@ export async function connectHost(
   resolution: HostResolution,
   deps: ConnectDeps = {}
 ): Promise<ConnectResult> {
+  if (resolution.conflict) {
+    return {
+      ok: false,
+      failure: {
+        error: resolution.conflict.error,
+        cause: "invalid-request",
+        fix: resolution.conflict.fix,
+        inspect: ["cognia-agent host show", "cognia-agent host list"],
+      },
+    }
+  }
   if (!resolution.host) {
     return { ok: false, failure: await noHostFailure(resolution, deps) }
   }
@@ -98,7 +121,10 @@ export function connectResolvedHost(
         failure: {
           error: `host ${host.name ?? endpoint} is a device host with no device identity`,
           cause: "auth",
-          fix: [`cognia-agent host login${host.name ? ` --profile ${host.name}` : ""}`],
+          fix: [
+            `cognia-agent host login ${host.name ?? "<name>"} --invitation 'cgnp4|…'`,
+            `or: cognia-agent host login ${host.name ?? "<name>"} --endpoint ${endpoint} --pair-code <code>`,
+          ],
           inspect: ["cognia-agent host show"],
         },
       })

@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  */
-import { authCommand } from "./auth-command"
+import { authCommand as runAuth, type AuthDeps } from "./auth-command"
 import { parseArgv } from "./args"
 import type { OutputSink } from "./output"
 
@@ -14,6 +14,11 @@ function sink() {
     json: () => undefined,
   }
   return { out, stdout: () => stdout.join(""), stderr: () => stderr.join("") }
+}
+
+/** Hermetic by default: no real env, files or cwd. */
+function authCommand(args: Parameters<typeof runAuth>[0], deps: AuthDeps) {
+  return runAuth(args, { env: {}, describeCredentials: () => ({}), ...deps })
 }
 
 describe("authCommand", () => {
@@ -121,7 +126,7 @@ describe("authCommand", () => {
       home: "/h",
       listCredentialProviders: () => [],
     })
-    expect(s.stdout()).toMatch(/No stored credentials/)
+    expect(s.stdout()).toMatch(/No credentials/)
   })
 
   it("logout removes the provider credential", async () => {
@@ -141,5 +146,99 @@ describe("authCommand", () => {
     const code = await authCommand(parseArgv(["auth"]), { out: s.out, home: "/h" })
     expect(code).toBe(2)
     expect(s.stderr()).toMatch(/login \| status \| logout/)
+  })
+
+  it("an explicit --api-key is saved even with a Claude token in the environment", async () => {
+    const setCredential = jest.fn().mockReturnValue("/p")
+    const code = await authCommand(
+      parseArgv(["auth", "login", "--provider", "openai", "--api-key", "sk-openai"]),
+      { out: sink().out, home: "/h", env: { CLAUDE_CODE_OAUTH_TOKEN: "claude-tok" }, setCredential }
+    )
+    expect(code).toBe(0)
+    expect(setCredential).toHaveBeenCalledWith("/h", "openai", "sk-openai", undefined, {
+      kind: "apiKey",
+    })
+  })
+
+  it("never saves the Claude token from the environment for another provider", async () => {
+    const s = sink()
+    const setCredential = jest.fn()
+    const code = await authCommand(parseArgv(["auth", "login", "--provider", "openai"]), {
+      out: s.out,
+      home: "/h",
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "claude-tok" },
+      setCredential,
+    })
+    expect(code).toBe(2)
+    expect(setCredential).not.toHaveBeenCalled()
+  })
+
+  it("refuses both secret kinds at once, and an ambiguous environment", async () => {
+    const both = sink()
+    expect(
+      await authCommand(parseArgv(["auth", "login", "--api-key", "k", "--subscription", "t"]), {
+        out: both.out,
+        home: "/h",
+        setCredential: jest.fn(),
+      })
+    ).toBe(2)
+    const ambient = sink()
+    expect(
+      await authCommand(parseArgv(["auth", "login"]), {
+        out: ambient.out,
+        home: "/h",
+        env: { COGNIA_LOGIN_API_KEY: "k", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+        setCredential: jest.fn(),
+      })
+    ).toBe(2)
+    expect(ambient.stderr()).toMatch(/say which to save/)
+  })
+
+  it("refuses a secret flag given without a value", async () => {
+    const s = sink()
+    const setCredential = jest.fn()
+    expect(
+      await authCommand(parseArgv(["auth", "login", "--provider", "openai", "--api-key"]), {
+        out: s.out,
+        home: "/h",
+        env: { COGNIA_LOGIN_API_KEY: "ambient" },
+        setCredential,
+      })
+    ).toBe(2)
+    expect(setCredential).not.toHaveBeenCalled()
+    expect(s.stderr()).toMatch(/--api-key needs a value/)
+  })
+
+  it("status names the source each provider's run uses", async () => {
+    const s = sink()
+    await authCommand(parseArgv(["auth", "status"]), {
+      out: s.out,
+      home: "/h",
+      listCredentialProviders: () => ["openai"],
+      describeCredentials: () => ({
+        openai: [
+          { layer: "credentials", kind: "apiKey", origin: "/h/credentials.json" },
+          { layer: "env", kind: "apiKey", origin: "OPENAI_API_KEY" },
+        ],
+        anthropic: [
+          { layer: "project-config", kind: "apiKey", origin: "/repo/.cognia/config.json" },
+        ],
+      }),
+    })
+    expect(s.stdout()).toContain("openai: api key from env OPENAI_API_KEY")
+    expect(s.stdout()).toContain("anthropic: api key in project config /repo/.cognia/config.json")
+  })
+
+  it("logout says which sources still supply a key", async () => {
+    const s = sink()
+    await authCommand(parseArgv(["auth", "logout", "--provider", "openai"]), {
+      out: s.out,
+      home: "/h",
+      deleteCredential: jest.fn(),
+      describeCredentials: () => ({
+        openai: [{ layer: "env", kind: "apiKey", origin: "OPENAI_API_KEY" }],
+      }),
+    })
+    expect(s.stdout()).toContain("still provided by: api key from env OPENAI_API_KEY")
   })
 })

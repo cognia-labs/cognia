@@ -70,6 +70,10 @@ export const BOOLEAN_FLAGS = new Set([
   "live",
   // `provider models --refresh` — bypass the cached inventory.
   "refresh",
+  // `logto login --switch-account` — ask the issuer to authenticate again.
+  "switch-account",
+  // `host remove --keep-on-host` — skip the host-side device revocation.
+  "keep-on-host",
   // `--debug` — log the request/response envelope to stderr. Never takes a
   // value, so `--debug --format json` cannot swallow the format.
   "debug",
@@ -211,6 +215,19 @@ export function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const v = args.flags[name]
   return typeof v === "string" ? v : undefined
 }
+
+/**
+ * The flags of `names` given with no value. The parser keeps a value flag
+ * that ends the line, or is followed by another flag, as `true`, which
+ * {@link stringFlag} reads as absent: a command must refuse it rather than
+ * act as if the flag had not been passed.
+ */
+export function flagsMissingValues(args: ParsedArgs, names: readonly string[]): string[] {
+  return names.filter((name) => args.flags[name] === true)
+}
+
+/** The flags that choose which Host a command talks to. */
+export const HOST_SELECTION_FLAGS = ["host", "profile", "endpoint", "tenant"] as const
 
 /** Read a boolean flag. */
 export function boolFlag(args: ParsedArgs, name: string): boolean {

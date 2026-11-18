@@ -67,7 +67,7 @@ Usage:
                                                        own package manager
   cognia-agent auth <login|status|logout> [--provider p] [--api-key k]
   cognia-agent logto <login|status|logout>          Cognia account (default) or Logto session
-                     [--provider feishu|github|google|apple]
+                     [--provider feishu|github|google|apple] [--switch-account]
                      [--issuer u] [--client-id id] [--resource api] [--scope a,b] [--org id]
   cognia-agent account-sync <status|setup|join|recover|approve|deny|devices|
                              revoke|rotate|recovery-key|data> [--name n] [--kit file]

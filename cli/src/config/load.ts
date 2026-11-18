@@ -507,6 +507,67 @@ export function resolveConfig(input: ResolveConfigInput): ResolvedConfig {
   return { ...acc, bypassConfirmation: userFile?.bypassConfirmation ?? "ask", cliHome: home }
 }
 
+/** Where one model-provider secret comes from. */
+export interface ProviderCredentialSource {
+  layer: "user-config" | "credentials" | "project-config" | "env"
+  kind: "apiKey" | "authToken"
+  /** The file path or environment variable name. */
+  origin: string
+}
+
+/**
+ * Every source of a model-provider secret, per provider id, in the order
+ * {@link resolveConfig} applies them: for each kind, the last entry is the
+ * one a run uses. `auth logout` only removes the `credentials` layer, so this
+ * is how it can say what still supplies a key afterwards.
+ */
+export function describeProviderCredentials(
+  input: Omit<ResolveConfigInput, "flags">
+): Record<string, ProviderCredentialSource[]> {
+  const { home, cwd, env, readFile } = input
+  const sources: Record<string, ProviderCredentialSource[]> = {}
+  const add = (id: string, source: ProviderCredentialSource) => {
+    ;(sources[id] ??= []).push(source)
+  }
+  const fromFile = (
+    providers: Record<string, { apiKey?: string; authToken?: string }> | undefined,
+    layer: ProviderCredentialSource["layer"],
+    origin: string
+  ) => {
+    for (const [id, entry] of Object.entries(providers ?? {})) {
+      if (entry.apiKey) add(id, { layer, kind: "apiKey", origin })
+      if (entry.authToken) add(id, { layer, kind: "authToken", origin })
+    }
+  }
+  const user = parseJsonFile(readFile(userConfigPath(home)), cliConfigFileSchema, "config.json")
+  const creds = parseJsonFile(
+    readFile(credentialsPath(home)),
+    credentialsFileSchema,
+    "credentials.json"
+  )
+  const project = parseJsonFile(
+    readFile(projectConfigPath(cwd)),
+    cliConfigFileSchema,
+    "project config.json"
+  )
+  fromFile(user?.providers, "user-config", userConfigPath(home))
+  fromFile(creds?.providers, "credentials", credentialsPath(home))
+  fromFile(project?.providers, "project-config", projectConfigPath(cwd))
+  for (const [varName, providerId] of Object.entries(ENV_API_KEY_TO_PROVIDER)) {
+    if (env[varName]?.trim()) add(providerId, { layer: "env", kind: "apiKey", origin: varName })
+  }
+  if (env.CLAUDE_CODE_OAUTH_TOKEN?.trim())
+    add("anthropic", { layer: "env", kind: "authToken", origin: "CLAUDE_CODE_OAUTH_TOKEN" })
+  // Same provider `envLayer` lands COGNIA_API_KEY on.
+  if (env.COGNIA_API_KEY?.trim())
+    add(env.COGNIA_PROVIDER?.trim() || DEFAULT_RESOLVED_CONFIG.provider, {
+      layer: "env",
+      kind: "apiKey",
+      origin: "COGNIA_API_KEY",
+    })
+  return sources
+}
+
 /** Real-fs reader: returns file text or `null` when missing. */
 export const fsReader: FileReader = (absPath) => {
   try {

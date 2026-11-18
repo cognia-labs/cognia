@@ -96,11 +96,22 @@ export function createCollabCursorStorage(
   }
 }
 
+function sameIssuer(a: string, b: string): boolean {
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "")
+}
+
 /**
  * Bind the Brain profile to the server-owned identity and pull once. The
  * registered collab runtimes own subsequent feed, notification and poll work.
  * It intentionally installs no outbound runner: Brain is a reader, never an
  * autonomous collaboration actor.
+ *
+ * The CLI's `logto.json` can change while the Brain runs (`logto login` as
+ * someone else in another terminal). The profile stays bound to the person it
+ * was bound to here, so every later token is checked against that subject and
+ * issuer: a different person's token is never exchanged for a grant, never
+ * reconciles this profile's user id, and never acknowledges its
+ * notifications. The reader goes quiet until that person signs in again.
  */
 export async function startHeadlessCollabReader(input: {
   localAccountId: string
@@ -112,8 +123,19 @@ export async function startHeadlessCollabReader(input: {
   const initial = await freshSession(input.cliHome, deps)
   if (!initial) return { status: "not-signed-in", stop: () => undefined }
 
+  const subject = jwtSubject(initial.accessToken)
+  if (!subject) throw new Error("collaboration Logto token has no readable subject")
+  /** The current session, only while it is still the person this profile is bound to. */
+  const boundSession = async (): Promise<LogtoSession | null> => {
+    const current = await freshSession(input.cliHome, deps)
+    return current &&
+      jwtSubject(current.accessToken) === subject &&
+      sameIssuer(current.issuer, initial.issuer)
+      ? current
+      : null
+  }
   const accessToken = async (): Promise<string | null> =>
-    (await freshSession(input.cliHome, deps))?.accessToken ?? null
+    (await boundSession())?.accessToken ?? null
   const fetchImpl = deps.fetchImpl ?? fetch
   const client = new CollabClient({
     baseUrl: input.config.url,
@@ -122,8 +144,6 @@ export async function startHeadlessCollabReader(input: {
     ...(deps.now ? { now: deps.now } : {}),
   })
   const identity = await client.identity(input.config.orgId)
-  const subject = jwtSubject(initial.accessToken)
-  if (!subject) throw new Error("collaboration Logto token has no readable subject")
 
   const registry = deps.registry ?? new UserBindingRegistry()
   await registry.bind({
@@ -150,7 +170,7 @@ export async function startHeadlessCollabReader(input: {
     status: "active",
     runtime: {
       resolve: async (localAccountId) =>
-        localAccountId === input.localAccountId && (await freshSession(input.cliHome, deps))
+        localAccountId === input.localAccountId && (await boundSession())
           ? { client, orgId: input.config.orgId }
           : null,
       refresh,
