@@ -41,6 +41,7 @@ import {
   planJoin,
   seedClass,
   type JoinChoice,
+  type JoinQuestion,
   type JoinTarget,
   type LocalDataSummary,
   type SeedProgress,
@@ -96,7 +97,7 @@ export type EngineStatus =
   /** Another window of this database syncs. */
   | { kind: "follower" }
   | { kind: "seeding"; progress: SeedProgress | null }
-  | { kind: "join-choice"; local: LocalDataSummary; remoteSeq: number }
+  | { kind: "join-choice"; question: JoinQuestion; local: LocalDataSummary; remoteSeq: number }
   | ({ kind: "running" } & EngineSyncState)
   | { kind: "removed"; removal: RemovalRecord }
   | { kind: "stopped" }
@@ -483,7 +484,12 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
       setStatus({ kind: "seeding", progress: null })
       await armAndSeed(target, (progress) => setStatus({ kind: "seeding", progress }))
     } else if (plan.kind === "ask") {
-      setStatus({ kind: "join-choice", local: plan.local, remoteSeq: plan.remoteSeq })
+      setStatus({
+        kind: "join-choice",
+        question: plan.question,
+        local: plan.local,
+        remoteSeq: plan.remoteSeq,
+      })
       const choice = await new Promise<JoinChoice>((resolve) => {
         choose = resolve
       })

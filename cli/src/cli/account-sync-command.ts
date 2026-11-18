@@ -256,8 +256,8 @@ async function statusSub(run: Run): Promise<number> {
   out.write(
     choice
       ? `data: the brain will ${choice} this host's data with the account's when it joins\n`
-      : "data: no choice saved (needed only if this host and the account both hold data; " +
-          "see `cognia-agent account-sync data`)\n"
+      : "data: no choice saved (needed only if this host and the account both hold data, or " +
+          "this host's data last synced with another account; see `cognia-agent account-sync data`)\n"
   )
   return 0
 }

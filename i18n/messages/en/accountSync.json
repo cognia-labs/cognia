@@ -182,6 +182,7 @@
   "joinChoice": {
     "title": "Combine this device's data with your account?",
     "description": "Your account already holds data from your other devices, and this device has its own. Choose how to combine them. A backup of this device is saved first, so you can restore it if needed.",
+    "descriptionOtherAccount": "This device's data last synced with a different Cognia account. Nothing from it is sent to this account until you choose. Merge sends it to this account too; using the account's data removes it from this device. A backup of this device is saved first, so you can restore it if needed.",
     "onDevice": "On this device",
     "counts": {
       "sessions": "{count, plural, one {# chat} other {# chats}}",

@@ -8,10 +8,12 @@
  * (it holds the lead: one process, no Web Locks), and stops it when the host
  * is removed or signed out.
  *
- * When the host and the account both hold data, the engine asks; there is no
- * window to ask in, so the brain takes the answer the person gave with
- * `cognia-agent account-sync data --merge|--replace`, backs up its database,
- * and joins. Until then it waits and says what to run.
+ * When the host and the account both hold data, or the database last synced
+ * with another person's space (a sign-in as someone else since), the engine
+ * asks; there is no window to ask in, so the brain takes the answer the
+ * person gave with `cognia-agent account-sync data --merge|--replace`, backs
+ * up its database, and joins. Until then it waits, sends nothing, and says
+ * what to run.
  */
 
 import type { AccountSyncContext } from "@/lib/account-sync/enrollment/context"
@@ -129,8 +131,12 @@ export function startHeadlessAccountSync(deps: HeadlessAccountSyncDeps): Headles
     if (!choice) {
       say(
         "info",
-        "this host and your account both hold data; run `cognia-agent account-sync data --merge` " +
-          "(or `--replace`) to choose how to combine them"
+        status.question === "other-account"
+          ? "this host's data last synced with a different Cognia account; nothing is sent to " +
+              "this one until you run `cognia-agent account-sync data --merge` (send it here " +
+              "too) or `--replace` (back it up, then keep only this account's data)"
+          : "this host and your account both hold data; run `cognia-agent account-sync data " +
+              "--merge` (or `--replace`) to choose how to combine them"
       )
       return
     }

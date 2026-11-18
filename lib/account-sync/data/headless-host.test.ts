@@ -2,8 +2,11 @@ import "fake-indexeddb/auto"
 
 import { CogniaDB } from "@/lib/db/schema"
 
+import { commitFirstDevice, prepareFirstDevice } from "../enrollment/first-device"
 import { revokeDevice } from "../enrollment/manage"
 import { recoverWithKey } from "../enrollment/recover"
+import { createFakeSyncServer } from "../testing/fake-sync-server"
+import { runSyncRound } from "./sync-round"
 import { TEST_SPACE } from "../enrollment/test-support"
 import type { SyncSession } from "../sync-session"
 import { createMemoryKeyring } from "../testing/memory-keyring"
@@ -158,6 +161,108 @@ describe("startHeadlessAccountSync", () => {
     })
     h.finish()
   })
+})
+
+describe("a sign-in as someone else on the same host", () => {
+  it("sends nothing to the new person's space until the person chooses, then backs up first", async () => {
+    const spaceA = "a".repeat(43)
+    const spaceB = "b".repeat(43)
+    const personA: SyncSession = {
+      ...session,
+      userId: "usr_a",
+      spaceId: spaceA,
+      accessToken: async () => "token-a",
+    }
+    const personB: SyncSession = {
+      ...session,
+      userId: "usr_b",
+      spaceId: spaceB,
+      accessToken: async () => "token-b",
+    }
+    const serverA = createFakeSyncServer({ spaceId: spaceA })
+    const serverB = createFakeSyncServer({ spaceId: spaceB })
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const auth = request.headers.get("authorization")
+      if (auth === "Bearer token-a") return serverA.fetch(request)
+      if (auth === "Bearer token-b") return serverB.fetch(request)
+      throw new Error(`unexpected authorization ${auth}`)
+    }
+    const keyring = createMemoryKeyring()
+    const contextA = headlessSyncContext(personA, keyring, fetchImpl)
+    await commitFirstDevice(
+      contextA,
+      await prepareFirstDevice(contextA, { name: "Host", platform: "desktop" })
+    )
+
+    const db = new CogniaDB(`account-sync-headless-${++databases}`, "account-sync-test")
+    await db.open()
+    await db.sessions.put({
+      id: "a-row",
+      title: "Written as A",
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+    let signedIn: SyncSession = personA
+    const logs: string[] = []
+    const backup = jest.fn(async () => undefined)
+    const sync = startHeadlessAccountSync({
+      host: { session: async () => signedIn, keyring, backup },
+      db: () => db,
+      log: (_level, message) => logs.push(message),
+      pollMs: 60_000,
+      fetchImpl,
+      engineDeps: { openSocket: null, delays: FAST },
+    })
+    const receiverDb = new CogniaDB(`account-sync-headless-${++databases}`, "account-sync-test")
+    await receiverDb.open()
+    try {
+      await sync.check()
+      await until(() => serverA.batches.length > 0)
+
+      // `logto login` as B; B's space is enrolled, with an empty log.
+      signedIn = personB
+      const contextB = headlessSyncContext(personB, keyring, fetchImpl)
+      const prepared = await prepareFirstDevice(contextB, { name: "Host", platform: "desktop" })
+      await commitFirstDevice(contextB, prepared)
+      const receiver = headlessSyncContext(
+        { ...personB, localAccountId: "local_acct_receiver" },
+        createMemoryKeyring(),
+        fetchImpl
+      )
+      await recoverWithKey(receiver, prepared.recoveryKeyText, {
+        name: "B's phone",
+        platform: "desktop",
+      })
+
+      await sync.check()
+      await until(() => logs.some((line) => line.includes("different Cognia account")))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(serverB.batches).toHaveLength(0)
+      expect(backup).not.toHaveBeenCalled()
+
+      // B chooses to keep only B's data: backed up first, and A's row never reaches B.
+      await saveDataChoice(keyring, { localAccountId: HOST_ACCOUNT, spaceId: spaceB }, "replace")
+      await sync.check()
+      await until(async () => (await db.sessions.get("a-row")) === undefined)
+      expect(backup).toHaveBeenCalledTimes(1)
+      await runSyncRound(
+        {
+          db: receiverDb,
+          api: receiver.api,
+          vault: receiver.vault,
+          spaceId: spaceB,
+          now: receiver.now,
+        },
+        (await receiver.vault.loadDeviceKeys())!
+      )
+      expect(await receiverDb.sessions.get("a-row")).toBeUndefined()
+    } finally {
+      sync.stop()
+      receiverDb.close()
+      db.close()
+    }
+  }, 20_000)
 })
 
 describe("data choice", () => {

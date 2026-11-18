@@ -60,9 +60,36 @@ describe("planJoin", () => {
     await b.db.characters.put({ id: "c1", name: "Mine", createdAt: 1, updatedAt: 1 } as never)
     expect(await planJoin(await target(b), b.context.api, keysB)).toMatchObject({
       kind: "ask",
+      question: "both-hold-data",
       remoteSeq: 1,
       local: { total: 1, counts: { characters: 1 } },
     })
+    closeAll(devices)
+  })
+})
+
+describe("planJoin for a database that synced with another space", () => {
+  it("asks instead of seeding, however empty either side is, even after a removal", async () => {
+    const { devices, a, target } = await unarmedPair()
+    const keysA = await a.keys()
+    await armAndSeed(await target(a))
+    const other = { ...(await target(a)), spaceId: "o".repeat(43) }
+    // Nothing queued on the other side yet, nothing local: still a question.
+    expect(await planJoin(other, a.context.api, keysA)).toMatchObject({
+      kind: "ask",
+      question: "other-account",
+      local: { total: 0 },
+    })
+    await a.db.sessions.put(session("s1"))
+    // A removal disarms capture; the cursor still names the old space.
+    await disarm(a.db)
+    expect(await planJoin(other, a.context.api, keysA)).toMatchObject({
+      kind: "ask",
+      question: "other-account",
+      local: { total: 1 },
+    })
+    // Joining the old space again is an ordinary join (its log is still empty here).
+    expect(await planJoin(await target(a), a.context.api, keysA)).toMatchObject({ kind: "seed" })
     closeAll(devices)
   })
 })

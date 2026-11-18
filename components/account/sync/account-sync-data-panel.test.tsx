@@ -84,7 +84,12 @@ describe("AccountSyncDataPanel", () => {
 
   it("reopens the join choice", () => {
     render(<AccountSyncDataPanel />)
-    withEngine({ kind: "join-choice", local: { counts: {} as never, total: 2 }, remoteSeq: 4 })
+    withEngine({
+      kind: "join-choice",
+      question: "both-hold-data",
+      local: { counts: {} as never, total: 2 },
+      remoteSeq: 4,
+    })
     act(() => useAccountSyncStore.getState().setJoinDialogOpen(false))
     fireEvent.click(screen.getByTestId("account-sync-open-join"))
     expect(useAccountSyncStore.getState().joinDialogOpen).toBe(true)

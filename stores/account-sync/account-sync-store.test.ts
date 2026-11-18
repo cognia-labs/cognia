@@ -53,6 +53,7 @@ describe("useAccountSyncStore", () => {
     const store = useAccountSyncStore.getState()
     const asking = {
       kind: "join-choice" as const,
+      question: "both-hold-data" as const,
       local: { counts: {} as never, total: 3 },
       remoteSeq: 9,
     }

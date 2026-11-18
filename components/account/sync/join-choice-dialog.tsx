@@ -2,7 +2,8 @@
 
 /**
  * The merge-or-replace choice (ADR-0215 phase 3a, protocol §5.4), opened by
- * the data engine when this device and the account both hold data.
+ * the data engine when this device and the account both hold data, or when
+ * this database last synced with another account's space.
  *
  * Continuing first saves a backup of this device through the normal backup
  * flow (a save dialog on desktop, a download on the web, recorded in backup
@@ -79,7 +80,9 @@ export function JoinChoiceDialog() {
       <DialogContent data-testid="account-sync-join-choice">
         <DialogHeader>
           <DialogTitle>{t("title")}</DialogTitle>
-          <DialogDescription>{t("description")}</DialogDescription>
+          <DialogDescription>
+            {t(status.question === "other-account" ? "descriptionOtherAccount" : "description")}
+          </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1">
           <p className="text-xs font-medium text-muted-foreground">{t("onDevice")}</p>

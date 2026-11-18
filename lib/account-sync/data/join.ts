@@ -11,6 +11,11 @@
  *   the account's rows then merge in field by field; **replace** removes the
  *   device's synced rows and takes the account's. Either changes local data,
  *   so a backup is taken first, and a failed backup changes nothing.
+ * - The database already synced with another space (another person, or the
+ *   same person on another issuer): the person chooses too, however empty
+ *   either side is. Its rows came from or went to someone else's account, so
+ *   seeding them into this one without asking would hand that account's data
+ *   to whoever signed in next on the same profile or host.
  *
  * Re-arming for a new device id (a device that was removed and joined again)
  * keeps the clocks, which are still true orderings in the same space, but
@@ -50,6 +55,13 @@ const RECORD_TABLES = SYNCED_TABLES.filter((table): table is RecordTable => tabl
 
 export type JoinChoice = "merge" | "replace"
 
+/**
+ * Why the person is asked: `both-hold-data` when this device and the account
+ * both have rows; `other-account` when this database last synced with a
+ * different space.
+ */
+export type JoinQuestion = "both-hold-data" | "other-account"
+
 export interface LocalDataSummary {
   /** Synced rows per table; for settings, the synced keys that hold a value. */
   counts: Record<SyncedTableName, number>
@@ -60,8 +72,8 @@ export type JoinPlan =
   | { kind: "armed" }
   /** Arm and seed without asking: one side is empty. */
   | { kind: "seed"; local: LocalDataSummary }
-  /** Both sides hold data: the person picks merge or replace. */
-  | { kind: "ask"; local: LocalDataSummary; remoteSeq: number }
+  /** The person picks merge or replace. */
+  | { kind: "ask"; question: JoinQuestion; local: LocalDataSummary; remoteSeq: number }
 
 export interface SeedProgress {
   table: SyncedTableName
@@ -78,6 +90,19 @@ export interface JoinTarget {
 
 async function captureState(db: CogniaDB): Promise<AccountSyncCaptureState | undefined> {
   return (await db.accountSyncState.get("capture")) as AccountSyncCaptureState | undefined
+}
+
+async function cursorState(db: CogniaDB): Promise<AccountSyncCursorState | undefined> {
+  return (await db.accountSyncState.get("cursor")) as AccountSyncCursorState | undefined
+}
+
+/**
+ * The space this database last synced with, if any. The cursor outlives a
+ * disarm (removal from a space), so a database that was removed from one
+ * account still remembers whose data it holds.
+ */
+export async function lastSyncedSpace(db: CogniaDB): Promise<string | undefined> {
+  return (await captureState(db))?.spaceId ?? (await cursorState(db))?.spaceId
 }
 
 export function isArmedFor(
@@ -123,9 +148,20 @@ export async function planJoin(
   if (isArmedFor(await captureState(target.db), target.spaceId, target.deviceId))
     return { kind: "armed" }
   const local = await summarizeLocalData(target.db)
+  const previous = await lastSyncedSpace(target.db)
+  if (previous !== undefined && previous !== target.spaceId) {
+    return {
+      kind: "ask",
+      question: "other-account",
+      local,
+      remoteSeq: await remoteLogLength(api, device),
+    }
+  }
   if (local.total === 0) return { kind: "seed", local }
   const remoteSeq = await remoteLogLength(api, device)
-  return remoteSeq === 0 ? { kind: "seed", local } : { kind: "ask", local, remoteSeq }
+  return remoteSeq === 0
+    ? { kind: "seed", local }
+    : { kind: "ask", question: "both-hold-data", local, remoteSeq }
 }
 
 /** Writes the capture row; a new space or device id also starts the cursor and inbox over. */

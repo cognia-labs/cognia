@@ -15,7 +15,7 @@ import { useAccountSyncStore } from "@/stores/account-sync/account-sync-store"
 
 import { JoinChoiceDialog } from "./join-choice-dialog"
 
-function asking() {
+function asking(question: "both-hold-data" | "other-account" = "both-hold-data") {
   const engine = {
     join: jest.fn(async (_choice: string, backup: () => Promise<void>) => {
       await backup()
@@ -25,6 +25,7 @@ function asking() {
     useAccountSyncStore.getState().setEngine(engine)
     useAccountSyncStore.getState().setEngineStatus({
       kind: "join-choice",
+      question,
       local: {
         counts: { sessions: 3, messages: 40, characters: 0, skills: 1, memories: 0, settings: 2 },
         total: 44,
@@ -65,6 +66,14 @@ describe("JoinChoiceDialog", () => {
       encryption: "auto-key",
       type: "auto",
     })
+  })
+
+  it("says the data came from another account when the database synced with one", () => {
+    render(<JoinChoiceDialog />)
+    asking("other-account")
+    expect(screen.getByTestId("account-sync-join-choice")).toHaveTextContent(
+      "descriptionOtherAccount"
+    )
   })
 
   it("replaces when chosen", async () => {
