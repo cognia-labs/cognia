@@ -56,7 +56,7 @@ import {
 } from "./companion-contract"
 import { COMPANION_CONTRACT_VERSION } from "./command-descriptors"
 import { remoteEventResyncCoordinator } from "./resync-coordinator"
-import { RtcCarrierError, TransportRtc } from "./transport-rtc"
+import { RtcCarrierError, RtcCatalogUnsupportedError, TransportRtc } from "./transport-rtc"
 import { CompanionApiError } from "./companion-auth"
 import {
   clearActiveRuntimeTargetContext,
@@ -4825,6 +4825,83 @@ describe("relay-only route when the native stack cannot pin", () => {
     expect((error as CompanionError).code).toBe("network")
     expect((error as CompanionError).retryable).toBe(true)
     expect(nativeRequest).not.toHaveBeenCalled()
+  })
+
+  it("reads the catalog through the relay when only the relay reaches the Host", async () => {
+    installCapacitor(unimplemented)
+    await setConfig(relayConfig)
+    const document = {
+      contractVersion: COMPANION_CONTRACT_VERSION,
+      catalogHash: "c".repeat(64),
+      plane: "device" as const,
+      commands: [{ name: "session_list" }],
+      schemas: { session_list: { input: {}, output: {} } },
+    }
+    const relayCatalog = jest
+      .spyOn(TransportRtc.prototype, "catalog")
+      .mockResolvedValue(document as never)
+    transport = new CompanionTransport()
+
+    await expect(transport.catalog()).resolves.toEqual(document)
+    expect(relayCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ deadlineAt: expect.any(Number) })
+    )
+    expect(nativeRequest).not.toHaveBeenCalled()
+    expect(hostContractVerdict(relayConfig.deviceId)).toMatchObject({
+      state: "compatible",
+      catalogHash: "c".repeat(64),
+    })
+  })
+
+  it("refuses an incompatible Host's relay catalog like its HTTP one", async () => {
+    installCapacitor(unimplemented)
+    await setConfig(relayConfig)
+    jest.spyOn(TransportRtc.prototype, "catalog").mockResolvedValue({
+      contractVersion: 1,
+      catalogHash: "x",
+      plane: "device",
+      commands: [],
+      schemas: {},
+    })
+    transport = new CompanionTransport()
+    await expect(transport.catalog()).rejects.toMatchObject({ code: "contract_incompatible" })
+    expect(transport.getPlaneHealth().rpc).toBe("incompatible")
+  })
+
+  it("names an older Host that cannot list its catalog over the relay", async () => {
+    installCapacitor(unimplemented)
+    await setConfig(relayConfig)
+    jest
+      .spyOn(TransportRtc.prototype, "catalog")
+      .mockRejectedValue(new RtcCatalogUnsupportedError())
+    transport = new CompanionTransport()
+    await expect(transport.catalog()).rejects.toMatchObject({
+      code: "relay_catalog_unsupported",
+      retryable: false,
+    })
+  })
+
+  it("moves the catalog to the relay when the direct route answers 502", async () => {
+    await setConfig({
+      ...relayConfig,
+      baseUrl: "https://host.example.test",
+      serverFingerprint: undefined,
+    })
+    const document = {
+      contractVersion: COMPANION_CONTRACT_VERSION,
+      catalogHash: "d".repeat(64),
+      plane: "device" as const,
+      commands: [],
+      schemas: {},
+    }
+    __setAuthorizationHeadersProviderForTests(async () => ({ Authorization: "Bearer t" }))
+    fetchSpy.mockResolvedValueOnce(mockResponse({}, 502))
+    const relayCatalog = jest
+      .spyOn(TransportRtc.prototype, "catalog")
+      .mockResolvedValue(document as never)
+    transport = new CompanionTransport()
+    await expect(transport.catalog()).resolves.toEqual(document)
+    expect(relayCatalog).toHaveBeenCalledTimes(1)
   })
 
   it("reports a retryable failure when the relay does not open", async () => {

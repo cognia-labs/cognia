@@ -53,6 +53,7 @@ import {
   type TransportBinaryResource,
   type TransportBinaryResponse,
 } from "@/lib/tauri/transport-types"
+import type { CommandDescriptor } from "@/lib/tauri/command-descriptors"
 import { remoteEventResyncCoordinator } from "@/lib/tauri/resync-coordinator"
 import {
   DATACHANNEL_LABEL,
@@ -119,8 +120,11 @@ export const RECONNECT_BACKOFF_MS: readonly number[] = [1_000, 2_000, 4_000, 8_0
  */
 export const RECONNECT_NOW_MIN_SPACING_MS = 5_000
 
+/** Control frames the Host answers itself instead of dispatching a command. */
+export type RtcControlKind = "operation-get" | "catalog-get"
+
 export interface RtcMessage {
-  kind?: "operation-get"
+  kind?: RtcControlKind
   id: string
   method: string
   params?: Record<string, unknown>
@@ -160,8 +164,70 @@ export function parseRelayQuotaRetryAfterMs(message: string): number | null {
 /** Fallback when a quota refusal does not say when the window resets. */
 const RELAY_QUOTA_DEFAULT_BACKOFF_MS = 15 * 60 * 1000
 
+/**
+ * The control method a `catalog-get` frame names
+ * (`crates/cognia-companion/src/catalog.rs`). Not a command: an older Host
+ * dispatches it as one and answers `unknown_command`.
+ */
+export const RTC_CATALOG_METHOD = "host.catalog.get"
+
+/** More pages than any catalog takes: a Host that keeps paging is refused. */
+const MAX_RTC_CATALOG_PAGES = 64
+
+/**
+ * The Host's command catalog for this device as the data lane reads it: the
+ * `GET /api/catalog` document for the WebRTC transport (ADR-0175).
+ */
+export interface RtcCommandCatalog {
+  contractVersion: number
+  catalogHash: string
+  plane: "device"
+  commands: CommandDescriptor[]
+  /** Input and output schemas per listed command, as the HTTP document has them. */
+  schemas: Record<string, { input?: unknown; output?: unknown }>
+}
+
+/** An older Host cannot list its catalog over this lane, only over HTTP. */
+export class RtcCatalogUnsupportedError extends Error {
+  override name = "RtcCatalogUnsupportedError"
+  readonly code = "relay_catalog_unsupported"
+  constructor() {
+    super(
+      "this Host predates reading its command catalog through the relay; update the Host, or reach it directly"
+    )
+  }
+}
+
+interface RtcCatalogPage extends RtcCommandCatalog {
+  etag: string
+  nextCursor?: number
+}
+
+function catalogPage(value: unknown, cursor: number): RtcCatalogPage {
+  const page = value as Partial<RtcCatalogPage> | null
+  if (
+    !page ||
+    typeof page !== "object" ||
+    typeof page.contractVersion !== "number" ||
+    typeof page.catalogHash !== "string" ||
+    page.plane !== "device" ||
+    typeof page.etag !== "string" ||
+    !Array.isArray(page.commands) ||
+    page.commands.some(
+      (command) => !command || typeof (command as { name?: unknown }).name !== "string"
+    ) ||
+    !page.schemas ||
+    typeof page.schemas !== "object" ||
+    (page.nextCursor !== undefined &&
+      (!Number.isSafeInteger(page.nextCursor) || page.nextCursor <= cursor))
+  ) {
+    throw new Error("TransportRtc: the Host answered a malformed catalog page")
+  }
+  return page as RtcCatalogPage
+}
+
 export interface RtcCallOptions {
-  controlKind?: "operation-get"
+  controlKind?: RtcControlKind
   idempotencyKey?: string
   deadlineAt?: number
 }
@@ -1248,6 +1314,63 @@ export class TransportRtc {
         pending.reject(error instanceof Error ? error : new Error(String(error)))
       })
     })
+  }
+
+  /**
+   * The Host's command catalog for this device, read over this lane
+   * (ADR-0175). The relay carries at most one MiB per message and the whole
+   * document is larger, so the Host answers `catalog-get` in pages; they are
+   * joined here into the document `GET /api/catalog` serves. A list that
+   * changes while it is read (a grant changed) is read again once.
+   */
+  async catalog(options: { deadlineAt?: number } = {}): Promise<RtcCommandCatalog> {
+    for (let attempt = 0; ; attempt++) {
+      const commands: CommandDescriptor[] = []
+      const schemas: RtcCommandCatalog["schemas"] = {}
+      let first: RtcCatalogPage | null = null
+      let cursor: number | undefined = 0
+      let changed = false
+      for (let pages = 0; cursor !== undefined; pages++) {
+        if (pages >= MAX_RTC_CATALOG_PAGES)
+          throw new Error("TransportRtc: the Host's catalog did not end")
+        let answer: unknown
+        try {
+          answer = await this.call(
+            RTC_CATALOG_METHOD,
+            { cursor },
+            {
+              controlKind: "catalog-get",
+              ...(options.deadlineAt !== undefined ? { deadlineAt: options.deadlineAt } : {}),
+            }
+          )
+        } catch (error) {
+          if ((error as { code?: unknown })?.code === "unknown_command")
+            throw new RtcCatalogUnsupportedError()
+          throw error
+        }
+        const page = catalogPage(answer, cursor)
+        if (first && page.etag !== first.etag) {
+          changed = true
+          break
+        }
+        first ??= page
+        commands.push(...page.commands)
+        Object.assign(schemas, page.schemas)
+        cursor = page.nextCursor
+      }
+      if (changed) {
+        if (attempt === 0) continue
+        throw new Error("TransportRtc: the Host's catalog kept changing while it was read")
+      }
+      const head = first!
+      return {
+        contractVersion: head.contractVersion,
+        catalogHash: head.catalogHash,
+        plane: head.plane,
+        commands,
+        schemas,
+      }
+    }
   }
 
   /** Read one authenticated transcript media resource over raw binary frames. */

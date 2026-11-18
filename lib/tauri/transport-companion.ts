@@ -41,7 +41,12 @@ import {
   type SocketTicketRequest,
 } from "./companion-auth"
 import { remoteEventResyncCoordinator } from "./resync-coordinator"
-import { RtcCarrierError, TransportRtc, type TransportRtcOptions } from "./transport-rtc"
+import {
+  RtcCarrierError,
+  RtcCatalogUnsupportedError,
+  TransportRtc,
+  type TransportRtcOptions,
+} from "./transport-rtc"
 
 export type { CompanionConfig } from "./companion-storage"
 
@@ -662,6 +667,23 @@ function isTlsBaseUrl(baseUrl: string): boolean {
  * the native stack to send an unpinnable request keeps its own code and is not
  * retryable: the same request on the same build is refused the same way.
  */
+/** A relay catalog read that failed, in the transport's error vocabulary. */
+function relayCatalogError(error: unknown): CompanionError {
+  if (error instanceof CompanionError) return error
+  if (error instanceof RtcCatalogUnsupportedError) {
+    return new CompanionError({ code: error.code, message: error.message, retryable: false })
+  }
+  if (error instanceof RtcCarrierError) {
+    return new CompanionError({ code: "network", message: error.message, retryable: true })
+  }
+  const code = (error as { code?: unknown })?.code
+  return new CompanionError({
+    code: typeof code === "string" ? code : "network",
+    message: error instanceof Error ? error.message : String(error),
+    retryable: typeof code !== "string",
+  })
+}
+
 function networkFailure(err: unknown): CompanionError {
   if (err instanceof NativePinningUnavailableError) {
     return new CompanionError({ code: err.code, message: err.message, retryable: false })
@@ -966,6 +988,10 @@ export class CompanionTransport implements Transport {
    * `GET /internal/catalog` with every remote command. The document names the
    * Host's contract, so reading it also settles the contract verdict for this
    * pairing: a Host on another version is refused here, before any command.
+   *
+   * A device that reaches its Host only through the relay room reads the
+   * same list there (`TransportRtc.catalog`, filtered for the WebRTC
+   * transport), routed the way {@link call} routes a read.
    */
   public async catalog(): Promise<CompanionCommandCatalog> {
     const config = this.config()
@@ -976,6 +1002,64 @@ export class CompanionTransport implements Transport {
         retryable: false,
       })
     }
+    const devicePlane = !this.rpcPath.startsWith("/internal")
+    const relayRoom = Boolean(
+      config.rendezvousId && config.signalingRoomDescriptor && config.signalingPrivateKey
+    )
+    if (
+      devicePlane &&
+      usesNativePinnedRoute(config.baseUrl, config.serverFingerprint) &&
+      (await isPinnedRouteUnavailable(config.baseUrl, config.serverFingerprint))
+    ) {
+      return this.relayCatalog(config)
+    }
+    if (devicePlane && this.preferRtc()) {
+      try {
+        return this.judgeCatalog(config, await this.rtc!.catalog())
+      } catch (error) {
+        // Only a lost carrier moves the read to HTTPS; a Host answer stands.
+        if (!(error instanceof RtcCarrierError)) throw relayCatalogError(error)
+      }
+    }
+    try {
+      return await this.httpCatalog(config)
+    } catch (error) {
+      const routeUnavailable =
+        error instanceof CompanionError &&
+        error.retryable &&
+        (error.code === "network" || /^http_50[234]$/.test(error.code))
+      if (!devicePlane || !routeUnavailable || !relayRoom) throw error
+      return this.relayCatalog(config)
+    }
+  }
+
+  /** The catalog through the paired relay room, judged like the HTTP one. */
+  private async relayCatalog(config: CompanionConfig): Promise<CompanionCommandCatalog> {
+    const controller = new AbortController()
+    const deadlineAt = Date.now() + CALL_TIMEOUT_MS
+    const rtc = await this.awaitRelayRoute(config, deadlineAt, controller.signal)
+    try {
+      return this.judgeCatalog(config, await rtc.catalog({ deadlineAt }))
+    } catch (error) {
+      throw relayCatalogError(error)
+    }
+  }
+
+  /** Settle the contract verdict from a catalog document, refusing another version. */
+  private judgeCatalog(
+    config: CompanionConfig,
+    document: CompanionCommandCatalog
+  ): CompanionCommandCatalog {
+    const verdict = recordHostContract(config.deviceId, document)
+    if (verdict.state === "incompatible") {
+      this.setPlaneHealth({ rpc: "incompatible" })
+      throw new CompanionError(contractIncompatibleError(verdict))
+    }
+    this.setPlaneHealth({ rpc: "ready" })
+    return document
+  }
+
+  private async httpCatalog(config: CompanionConfig): Promise<CompanionCommandCatalog> {
     const path = this.rpcPath.startsWith("/internal") ? "/internal/catalog" : "/api/catalog"
     const headers = await authorizationHeadersProvider(config, "GET", path)
     let response: Response
@@ -999,14 +1083,7 @@ export class CompanionTransport implements Transport {
         retryable: detail?.retryable ?? response.status >= 500,
       })
     }
-    const document = (await response.json()) as CompanionCommandCatalog
-    const verdict = recordHostContract(config.deviceId, document)
-    if (verdict.state === "incompatible") {
-      this.setPlaneHealth({ rpc: "incompatible" })
-      throw new CompanionError(contractIncompatibleError(verdict))
-    }
-    this.setPlaneHealth({ rpc: "ready" })
-    return document
+    return this.judgeCatalog(config, (await response.json()) as CompanionCommandCatalog)
   }
 
   /**

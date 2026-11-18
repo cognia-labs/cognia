@@ -24,6 +24,8 @@ import { connectDeadlineMs, neverSent } from "../util/connect-phase"
 
 export const INTERNAL_RPC_PREFIX = "/internal/_rpc"
 export const DEVICE_RPC_PREFIX = "/api/_rpc"
+/** The device plane's command catalog (ADR-0175); the relay serves it as `catalog-get`. */
+export const DEVICE_CATALOG_PATH = "/api/catalog"
 export const INTERNAL_OPERATION_PREFIX = "/internal/operations"
 export const DEVICE_OPERATION_PREFIX = "/api/operations"
 
@@ -578,6 +580,8 @@ export function operationPath(wire: HostWire, operationId: string): string {
 export interface RelayCommandLane {
   watch?: (options: WatchOptions) => Promise<CommandOutcome>
   getOperation?: (operationId: string, options?: RequestOptions) => Promise<CommandOutcome>
+  /** The device catalog (`GET /api/catalog`) as the relay room serves it. */
+  getCatalog?: (options?: RequestOptions) => Promise<CommandOutcome>
   execute(
     name: string,
     args: Record<string, unknown>,
@@ -664,9 +668,10 @@ function directOptions<T extends RequestOptions | undefined>(remaining: T): T {
  *
  * The direct route gets a short connect deadline, and a request moves to the
  * other route when it provably never left, or when the host deduplicates it
- * ({@link mayTryOtherRoute}). Only commands, operation reads and event
- * watches fall back. `request` is the raw HTTP escape hatch, which has no
- * relay form, so its failure says so instead of pretending.
+ * ({@link mayTryOtherRoute}). Only commands, operation reads, the device
+ * catalog and event watches fall back. `request` is otherwise the raw HTTP
+ * escape hatch, which has no relay form, so its failure says so instead of
+ * pretending.
  */
 export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane): HostTransport {
   let relayFirst = false
@@ -744,6 +749,17 @@ export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane
     },
     async request(method, routePath, body, options) {
       const attempt = routeAttempts(options)
+      // A read the relay has its own form for: a receipt, or the catalog.
+      const read = async (viaRelay: (remaining?: RequestOptions) => Promise<CommandOutcome>) => {
+        if (relayFirst) return attempt(viaRelay)
+        const outcome = await attempt((remaining) =>
+          direct.request(method, routePath, body, directOptions(remaining))
+        )
+        // Reading changes nothing on the host, so it may always move.
+        return mayTryOtherRoute(outcome, { ...options, replaySafe: true }) && attempt.hasBudget()
+          ? attempt(viaRelay)
+          : outcome
+      }
       const operationPrefix = operationPath(direct.wire, "")
       if (
         method.toUpperCase() === "GET" &&
@@ -751,17 +767,16 @@ export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane
         relay.getOperation
       ) {
         const id = routePath.slice(operationPrefix.length)
-        if (/^[0-9a-f-]{36}$/i.test(id)) {
-          if (relayFirst) return attempt((remaining) => relay.getOperation!(id, remaining))
-          const outcome = await attempt((remaining) =>
-            direct.request(method, routePath, body, directOptions(remaining))
-          )
-          // Reading a receipt changes nothing on the host.
-          return mayTryOtherRoute(outcome, { ...options, replaySafe: true }) && attempt.hasBudget()
-            ? attempt((remaining) => relay.getOperation!(id, remaining))
-            : outcome
-        }
+        if (/^[0-9a-f-]{36}$/i.test(id))
+          return read((remaining) => relay.getOperation!(id, remaining))
       }
+      if (
+        method.toUpperCase() === "GET" &&
+        direct.wire === "http" &&
+        routePath === DEVICE_CATALOG_PATH &&
+        relay.getCatalog
+      )
+        return read((remaining) => relay.getCatalog!(remaining))
       const outcome = await attempt((remaining) =>
         direct.request(method, routePath, body, remaining)
       )

@@ -13,7 +13,10 @@ description: How the command manifest, runtime allowlist, route catalog, and gen
   the single contract: it supplies target, transport, capability, risk, approval, idempotency, and
   schema metadata, and the runtime allowlist is rendered from it into
   `generated/known_commands.rs` (ADR-0175) instead of being typed a second time. A Host lists what
-  a caller may dispatch at `GET /api/catalog` and `GET /internal/catalog`.
+  a caller may dispatch at `GET /api/catalog` and `GET /internal/catalog`. A device reached only
+  through its relay room reads the same list, filtered for the WebRTC transport, as `catalog-get`
+  control frames: the relay carries at most one MiB per message, so the Host answers in pages of
+  under 384 KiB that share one admitted-set tag.
 </TLDR>
 
 <StatGrid>

@@ -39,7 +39,7 @@ import {
 import { invokeCommand, preflight } from "../api/invoke"
 import { buildRequestBody, parseDataFlag, requestTemplate, validateContract } from "../api/validate"
 import { commandForWire } from "../api/types"
-import type { HostTransport } from "../api/transport"
+import { DEVICE_CATALOG_PATH, type HostTransport } from "../api/transport"
 import { resolveHost, type HostResolution } from "../host/resolve"
 import { resolveHome } from "../config/load"
 
@@ -219,7 +219,7 @@ async function liveEntries(
 ): Promise<ApiCommandEntry[]> {
   const result = await transport.request(
     "GET",
-    transport.wire === "internal" ? "/internal/catalog" : "/api/catalog",
+    transport.wire === "internal" ? "/internal/catalog" : DEVICE_CATALOG_PATH,
     undefined,
     { timeoutMs: options.timeoutMs, signal }
   )

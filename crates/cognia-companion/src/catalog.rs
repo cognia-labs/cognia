@@ -12,6 +12,11 @@
 //! with a fingerprint of the admitted set, because two devices with different
 //! grants see different lists under the same contract, and a grant change must
 //! never answer 304 with a stale list.
+//!
+//! A device reached only through its relay room reads the same document as
+//! `catalog-get` control frames (`signaling::dispatch`), filtered for the
+//! WebRTC transport and cut into pages ([`relay_catalog_page`]): the relay
+//! carries at most one MiB per message, and the whole document is larger.
 
 // Handlers here answer failures as `cognia_problem::Problem`, the one RFC 9457
 // document every companion plane returns (ADR-0175), by value, the way
@@ -114,6 +119,101 @@ fn presented_etags(headers: &HeaderMap) -> Vec<String> {
         .filter(|tag| !tag.is_empty())
         .map(|tag| tag.strip_prefix("W/").unwrap_or(tag).to_string())
         .collect()
+}
+
+/// The control method a `catalog-get` frame names. Not a command: an older
+/// Host dispatches it as one and answers `unknown_command`, which is how a
+/// client tells that Host apart.
+pub const RELAY_CATALOG_METHOD: &str = "host.catalog.get";
+
+/// Bytes one relay catalog page may carry. Well under the framing's one MiB
+/// message limit, so a page never fails to send for its size.
+pub const RELAY_CATALOG_PAGE_BYTES: usize = 384 * 1024;
+
+/// One page of the catalog read over the relay. The pages together are the
+/// `GET /api/catalog` document for the WebRTC transport: same commands in the
+/// same order, same schemas. `etag` is the admitted-set tag; a client that
+/// sees it change between pages started reading a different list.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCatalogPage {
+    pub contract_version: u32,
+    pub catalog_hash: &'static str,
+    pub plane: &'static str,
+    pub etag: String,
+    pub commands: Vec<&'static CommandDescriptor>,
+    pub schemas: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<usize>,
+}
+
+/// Answer one `catalog-get` frame: `params.cursor` (default 0) is the index
+/// of the first command, and the page ends before the command that would
+/// take it past [`RELAY_CATALOG_PAGE_BYTES`] (one command at least).
+pub(crate) fn relay_catalog_page(
+    principal: &DeviceContext,
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, Problem> {
+    if method != RELAY_CATALOG_METHOD {
+        return Err(Problem::new(
+            400,
+            "invalid_catalog_request",
+            "catalog-get names the host.catalog.get method",
+        ));
+    }
+    let cursor = match params.get("cursor") {
+        None | Some(serde_json::Value::Null) => 0,
+        Some(value) => value
+            .as_u64()
+            .and_then(|cursor| usize::try_from(cursor).ok())
+            .ok_or_else(|| {
+                Problem::new(400, "invalid_catalog_request", "cursor is a command index")
+            })?,
+    };
+    let commands = admitted_commands(principal, ExecutionTransport::WebRtc)?;
+    if cursor > commands.len() {
+        return Err(Problem::new(
+            400,
+            "invalid_catalog_request",
+            "cursor is past the end of the catalog",
+        ));
+    }
+    let tag = etag("device", &commands);
+    let schemas = discovery_schemas(&commands[cursor..], "device")?;
+    let mut page = Vec::new();
+    let mut page_schemas = serde_json::Map::new();
+    let mut bytes = 0usize;
+    for command in &commands[cursor..] {
+        let schema = schemas
+            .get(command.name.as_str())
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let size = serde_json::to_vec(command).map(|v| v.len()).unwrap_or(0)
+            + serde_json::to_vec(&schema).map(|v| v.len()).unwrap_or(0)
+            + command.name.len()
+            + 8;
+        if !page.is_empty() && bytes + size > RELAY_CATALOG_PAGE_BYTES {
+            break;
+        }
+        bytes += size;
+        page.push(*command);
+        if !schema.is_null() {
+            page_schemas.insert(command.name.to_string(), schema);
+        }
+    }
+    let end = cursor + page.len();
+    let document = RelayCatalogPage {
+        contract_version: CONTRACT_VERSION,
+        catalog_hash: CATALOG_HASH,
+        plane: "device",
+        etag: tag,
+        commands: page,
+        schemas: serde_json::Value::Object(page_schemas),
+        next_cursor: (end < commands.len()).then_some(end),
+    };
+    serde_json::to_value(document)
+        .map_err(|_| Problem::new(500, "catalog_unavailable", "catalog page did not serialize"))
 }
 
 fn discovery_schemas(commands: &[&CommandDescriptor], plane: &str) -> Result<serde_json::Value, Problem> {
@@ -319,6 +419,78 @@ mod tests {
         assert!(full.starts_with(&format!("\"{CATALOG_HASH}.")));
         assert_ne!(full, half);
         assert_eq!(etag("device", &all), full, "deterministic");
+    }
+
+    /// The relay pages, read in turn, are the WebRTC catalog: every admitted
+    /// command once, in order, with its schema, under one tag, and every page
+    /// small enough for the relay's one MiB message limit.
+    #[test]
+    fn relay_catalog_pages_reassemble_the_webrtc_catalog() {
+        let granted = ["sessions.read", "host.observe", "workspace.write", "sessions.write"];
+        let device = principal("device", Some(granted.to_vec()));
+        let expected = admitted_commands(&device, ExecutionTransport::WebRtc).unwrap();
+        assert!(!expected.is_empty());
+        let mut names = Vec::new();
+        let mut tags = std::collections::HashSet::new();
+        let mut cursor: Option<u64> = Some(0);
+        let mut pages = 0;
+        while let Some(at) = cursor {
+            let page =
+                relay_catalog_page(&device, RELAY_CATALOG_METHOD, &serde_json::json!({ "cursor": at }))
+                    .unwrap();
+            pages += 1;
+            assert!(serde_json::to_vec(&page).unwrap().len() < 1024 * 1024);
+            assert_eq!(page["contractVersion"], CONTRACT_VERSION);
+            assert_eq!(page["catalogHash"], CATALOG_HASH);
+            assert_eq!(page["plane"], "device");
+            tags.insert(page["etag"].as_str().unwrap().to_string());
+            for command in page["commands"].as_array().unwrap() {
+                let name = command["name"].as_str().unwrap().to_string();
+                assert!(page["schemas"].get(&name).is_some(), "{name} has its schemas");
+                names.push(name);
+            }
+            cursor = page["nextCursor"].as_u64();
+        }
+        let wanted: Vec<String> = expected.iter().map(|c| c.name.to_string()).collect();
+        assert_eq!(names, wanted);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags.into_iter().next().unwrap(), etag("device", &expected));
+
+        // A device with every capability needs several pages.
+        let all = principal(
+            "device",
+            Some(
+                command_manifest::commands()
+                    .iter()
+                    .map(|c| c.capability.as_str())
+                    .collect(),
+            ),
+        );
+        let first =
+            relay_catalog_page(&all, RELAY_CATALOG_METHOD, &serde_json::json!({})).unwrap();
+        assert!(first["nextCursor"].as_u64().is_some(), "the full catalog spans pages");
+        assert!(pages >= 1);
+    }
+
+    #[test]
+    fn relay_catalog_page_refuses_a_bad_method_or_cursor() {
+        let device = principal("device", Some(vec!["host.observe"]));
+        for (method, params) in [
+            ("host.operation.get", serde_json::json!({})),
+            (RELAY_CATALOG_METHOD, serde_json::json!({ "cursor": "one" })),
+            (RELAY_CATALOG_METHOD, serde_json::json!({ "cursor": 1_000_000 })),
+        ] {
+            let problem = relay_catalog_page(&device, method, &params).unwrap_err();
+            assert_eq!(problem.code, "invalid_catalog_request", "{method} {params}");
+        }
+        let empty = relay_catalog_page(
+            &principal("device", Some(Vec::new())),
+            RELAY_CATALOG_METHOD,
+            &serde_json::json!({ "cursor": 0 }),
+        )
+        .unwrap();
+        assert_eq!(empty["commands"], serde_json::json!([]));
+        assert!(empty.get("nextCursor").is_none());
     }
 
     #[test]

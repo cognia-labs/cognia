@@ -485,8 +485,10 @@ cognia-agent api events --channels 'claude://message' --cursor-file events.curso
 Use channel identifiers allowed by the Host event catalog and the paired device grants. Event output is JSONL. Cursor files are scoped to the selected Host;
 a retention gap is an explicit failure that requires refreshing authoritative
 state. Without `--since`, watch starts at the live boundary. Current Hosts support
-atomic relay subscription/replay and device-owned operation observation; older
-Hosts that lack these controls cannot provide those relay observation features.
+atomic relay subscription/replay, device-owned operation observation and reading
+the live catalog (`api list --live`, `api call --live`) through the relay room;
+older Hosts that lack these controls cannot provide those relay features, and
+say so instead of failing as unreachable.
 Raw file/HTTP routes need a direct address. Saved responses are renamed into
 place only on success. `--json` and `--format raw|json` also produce structured
 failures on stderr. Debug logs contain field names, not credential values.

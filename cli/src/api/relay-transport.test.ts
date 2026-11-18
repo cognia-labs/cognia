@@ -1,4 +1,8 @@
-import type { TransportRtc, TransportRtcOptions } from "@/lib/tauri/transport-rtc"
+import {
+  RtcCatalogUnsupportedError,
+  type TransportRtc,
+  type TransportRtcOptions,
+} from "@/lib/tauri/transport-rtc"
 
 import { classifyRelayCode, relayCommandChannel, type RelayRouteRecord } from "./relay-transport"
 
@@ -138,6 +142,43 @@ describe("relayCommandChannel", () => {
       unsent: true,
     })
     expect(rtc.factory).not.toHaveBeenCalled()
+  })
+})
+
+describe("relay catalog", () => {
+  /** A room whose transport reads the catalog with `read`. */
+  function catalogRoom(read: jest.Mock) {
+    const factory = jest.fn((options: TransportRtcOptions) => {
+      const rtc = fakeRtc(jest.fn()).factory(options)
+      return Object.assign(rtc, { catalog: read })
+    })
+    return relayCommandChannel({ route, deviceId: "d", transportFactory: factory })
+  }
+
+  it("reads the catalog through the room's pages", async () => {
+    const catalog = {
+      contractVersion: 4,
+      catalogHash: "h",
+      plane: "device",
+      commands: [],
+      schemas: {},
+    }
+    const read = jest.fn(async () => catalog)
+    await expect(catalogRoom(read).getCatalog!({ timeoutMs: 1000 })).resolves.toEqual({
+      ok: true,
+      result: catalog,
+    })
+    expect(read).toHaveBeenCalledWith({ deadlineAt: expect.any(Number) })
+  })
+
+  it("names an older Host instead of calling the relay down", async () => {
+    const outcome = await catalogRoom(
+      jest.fn(async () => {
+        throw new RtcCatalogUnsupportedError()
+      })
+    ).getCatalog!()
+    expect(outcome).toMatchObject({ ok: false, code: "relay_catalog_unsupported" })
+    expect(!outcome.ok && outcome.message).toMatch(/predates reading its command catalog/)
   })
 })
 

@@ -45,6 +45,8 @@ export const RELAY_HANDSHAKE_TIMEOUT_MS = 15_000
 export interface RelayCommandChannel {
   watch?: (options: WatchOptions) => Promise<CommandOutcome>
   getOperation?: (operationId: string, options?: RequestOptions) => Promise<CommandOutcome>
+  /** The device catalog the Host serves over its relay room (`catalog-get`). */
+  getCatalog?: (options?: RequestOptions) => Promise<CommandOutcome>
   execute: (
     name: string,
     args: Record<string, unknown>,
@@ -350,6 +352,14 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
           { operationId },
           { controlKind: "operation-get", deadlineAt }
         ),
+      }))
+    },
+    getCatalog(options) {
+      // The same document `GET /api/catalog` serves, for the WebRTC
+      // transport, read in the pages the relay can carry.
+      return bounded(options, async (rtc, deadlineAt) => ({
+        ok: true,
+        result: await rtc.catalog({ deadlineAt }),
       }))
     },
     close() {

@@ -1,5 +1,6 @@
 import {
   deviceTransport,
+  DEVICE_CATALOG_PATH,
   DEVICE_RPC_PREFIX,
   INTERNAL_RPC_PREFIX,
   classifyStatus,
@@ -496,6 +497,34 @@ describe("withRelayFallback (ADR-0224 A4)", () => {
     const transport = withRelayFallback(direct, relay)
     await transport.execute("x")
     await expect(transport.execute("y")).resolves.toEqual({ ok: true, result: "direct" })
+  })
+
+  it("reads the device catalog through the relay when the address does not answer", async () => {
+    const direct = directReturning()
+    direct.request = jest.fn().mockResolvedValue(lostInFlight)
+    const relay = {
+      ...relayReturning(),
+      getCatalog: jest.fn(async () => ({ ok: true as const, result: { commands: [] } })),
+    }
+    const transport = withRelayFallback(direct, relay)
+    await expect(
+      transport.request("GET", DEVICE_CATALOG_PATH, undefined, { timeoutMs: 30_000 })
+    ).resolves.toEqual({ ok: true, result: { commands: [] } })
+    expect(direct.request).toHaveBeenCalledWith(
+      "GET",
+      DEVICE_CATALOG_PATH,
+      undefined,
+      expect.objectContaining({ connectTimeoutMs: 5_000 })
+    )
+    expect(relay.getCatalog).toHaveBeenCalledTimes(1)
+
+    // A host that answered keeps its answer, and the catalog is not re-read.
+    direct.request = jest.fn().mockResolvedValue({ ok: true, result: { commands: ["x"] } })
+    await expect(transport.request("GET", DEVICE_CATALOG_PATH)).resolves.toMatchObject({
+      ok: true,
+      result: { commands: ["x"] },
+    })
+    expect(relay.getCatalog).toHaveBeenCalledTimes(1)
   })
 
   it("keeps raw routes direct and says they have no relay form", async () => {

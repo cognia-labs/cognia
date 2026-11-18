@@ -12,7 +12,9 @@ description: 命令 manifest、运行时允许列表、路由目录与生成器�
   Brain 使用 `POST /internal/_rpc/{name}`。`protocol/companion-commands.json` 是唯一的契约：
   它提供 target、transport、capability、risk、approval、idempotency 与 schema 元数据，运行时
   allowlist 由它渲染成 `generated/known_commands.rs`（ADR-0175），不再手写第二份。宿主在
-  `GET /api/catalog` 与 `GET /internal/catalog` 列出调用方可以派发的命令。
+  `GET /api/catalog` 与 `GET /internal/catalog` 列出调用方可以派发的命令。只能经中继房间连到宿主的
+  设备用 `catalog-get` 控制帧读同一份列表（按 WebRTC transport 过滤）：中继每条消息最多 1 MiB，
+  所以宿主分页作答，每页不超过 384 KiB，各页带同一个准入集合标签。
 </TLDR>
 
 <StatGrid>

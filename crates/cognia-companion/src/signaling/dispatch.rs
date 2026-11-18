@@ -258,7 +258,10 @@ fn inbound_is_read_only(bytes: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return false;
     };
-    if matches!(value.get("kind").and_then(Value::as_str), Some("binary-resource" | "operation-get")) {
+    if matches!(
+        value.get("kind").and_then(Value::as_str),
+        Some("binary-resource" | "operation-get" | "catalog-get")
+    ) {
         return true;
     }
     value
@@ -701,6 +704,9 @@ async fn handle_inbound(
         return handle_binary_resource(peer, request, state, device_id).await;
     }
     let operation_lookup = envelope.get("kind").and_then(Value::as_str) == Some("operation-get");
+    // The catalog over the relay (ADR-0175): what this device may dispatch
+    // here, which HTTP serves as `GET /api/catalog`.
+    let catalog_lookup = envelope.get("kind").and_then(Value::as_str) == Some("catalog-get");
     let rpc: InboundRpc =
         serde_json::from_value(envelope).map_err(|e| format!("malformed inbound rpc: {e}"))?;
     log::debug!("signaling::dispatch: inbound rpc method={}", rpc.method);
@@ -738,6 +744,13 @@ async fn handle_inbound(
             crate::api::operation_document(&principal, operation_id).await
         };
         let frame = match result {
+            Ok(value) => ResponseFrame { id: request_id, ok: true, result: Some(value), error: None },
+            Err(error) => ResponseFrame { id: request_id, ok: false, result: None, error: Some(ErrorBody { code: error.code, message: error.detail }) },
+        };
+        return send_outbound(peer, &OutboundFrame::Response(frame)).await.map_err(|error| error.to_string());
+    }
+    if catalog_lookup {
+        let frame = match crate::catalog::relay_catalog_page(&principal, &rpc.method, &rpc.params) {
             Ok(value) => ResponseFrame { id: request_id, ok: true, result: Some(value), error: None },
             Err(error) => ResponseFrame { id: request_id, ok: false, result: None, error: Some(ErrorBody { code: error.code, message: error.detail }) },
         };
@@ -1571,5 +1584,6 @@ mod tests {
     #[test]
     fn operation_observation_is_a_read_control_frame() {
         assert!(inbound_is_read_only(br#"{"kind":"operation-get","method":"host.operation.get","params":{"operationId":"00000000-0000-4000-8000-000000000001"}}"#));
+        assert!(inbound_is_read_only(br#"{"kind":"catalog-get","method":"host.catalog.get","params":{"cursor":0}}"#));
     }
 }

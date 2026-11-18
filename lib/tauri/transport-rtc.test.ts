@@ -12,6 +12,8 @@ import {
   RECONNECT_BACKOFF_MS,
   RTC_CLOSE_REASON_RESTART_WITHOUT_PEER,
   RtcCarrierError,
+  RtcCatalogUnsupportedError,
+  RTC_CATALOG_METHOD,
   TransportRtc,
   type RtcMessage,
   type RtcResponse,
@@ -470,6 +472,118 @@ describe("TransportRtc", () => {
       rtc.close()
       jest.useRealTimers()
     }
+  })
+
+  describe("catalog()", () => {
+    async function openRtc() {
+      const made = makeRtc()
+      const connect = made.rtc.connect()
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      made.sig.emitEnvelope(envelope("rtc:answer", { sdp: "x" } as RtcAnswerBody))
+      made.pcs[0].channels[0].open()
+      await connect
+      return { ...made, dc: made.pcs[0].channels[0] }
+    }
+
+    /** Answer each catalog-get frame in turn, as the Host would. */
+    function host(
+      dc: { sent: string[]; push: (frame: unknown) => void },
+      answer: (cursor: number, request: RtcMessage) => RtcResponse | null
+    ) {
+      const seen = new Set<string>()
+      const requests: RtcMessage[] = []
+      const timer = setInterval(() => {
+        for (const raw of dc.sent) {
+          const frame = JSON.parse(raw) as RtcMessage
+          if (frame.kind !== "catalog-get" || seen.has(frame.id)) continue
+          seen.add(frame.id)
+          requests.push(frame)
+          const response = answer(Number(frame.params?.cursor), frame)
+          if (response) dc.push({ ...response, id: frame.id })
+        }
+      }, 1)
+      return { requests, stop: () => clearInterval(timer) }
+    }
+
+    const page = (cursor: number, names: string[], next?: number, etag = '"h.a"') => ({
+      id: "",
+      ok: true as const,
+      result: {
+        contractVersion: 4,
+        catalogHash: "h",
+        plane: "device",
+        etag,
+        commands: names.map((name) => ({ name })),
+        schemas: Object.fromEntries(names.map((name) => [name, { input: { cursor } }])),
+        ...(next === undefined ? {} : { nextCursor: next }),
+      },
+    })
+
+    it("joins the Host's pages into the catalog document", async () => {
+      const { rtc, dc } = await openRtc()
+      const fake = host(dc, (cursor) => (cursor === 0 ? page(0, ["a", "b"], 2) : page(2, ["c"])))
+      try {
+        await expect(rtc.catalog()).resolves.toEqual({
+          contractVersion: 4,
+          catalogHash: "h",
+          plane: "device",
+          commands: [{ name: "a" }, { name: "b" }, { name: "c" }],
+          schemas: {
+            a: { input: { cursor: 0 } },
+            b: { input: { cursor: 0 } },
+            c: { input: { cursor: 2 } },
+          },
+        })
+        expect(fake.requests.map((r) => [r.method, r.params?.cursor])).toEqual([
+          [RTC_CATALOG_METHOD, 0],
+          [RTC_CATALOG_METHOD, 2],
+        ])
+      } finally {
+        fake.stop()
+      }
+    })
+
+    it("reads the list again once when it changed between pages", async () => {
+      const { rtc, dc } = await openRtc()
+      let round = 0
+      const fake = host(dc, (cursor) => {
+        if (cursor === 0) round++
+        if (round === 1)
+          return cursor === 0 ? page(0, ["a"], 1) : page(1, ["b"], undefined, '"h.b"')
+        return cursor === 0 ? page(0, ["a"], 1, '"h.b"') : page(1, ["b"], undefined, '"h.b"')
+      })
+      try {
+        const catalog = await rtc.catalog()
+        expect(catalog.commands).toEqual([{ name: "a" }, { name: "b" }])
+        expect(fake.requests).toHaveLength(4)
+      } finally {
+        fake.stop()
+      }
+    })
+
+    it("names an older Host that dispatches the control method as a command", async () => {
+      const { rtc, dc } = await openRtc()
+      const fake = host(dc, () => ({
+        id: "",
+        ok: false,
+        error: { code: "unknown_command", message: "unknown command host.catalog.get" },
+      }))
+      try {
+        await expect(rtc.catalog()).rejects.toBeInstanceOf(RtcCatalogUnsupportedError)
+      } finally {
+        fake.stop()
+      }
+    })
+
+    it("refuses a page that does not advance", async () => {
+      const { rtc, dc } = await openRtc()
+      const fake = host(dc, () => page(0, ["a"], 0))
+      try {
+        await expect(rtc.catalog()).rejects.toThrow("malformed catalog page")
+      } finally {
+        fake.stop()
+      }
+    })
   })
 
   it("keeps Host refusals typed and preserves the legacy rate limit wait", async () => {
