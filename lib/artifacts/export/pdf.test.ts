@@ -1,4 +1,6 @@
 /** @jest-environment jsdom */
+import { inflateSync } from "node:zlib"
+
 const generatePdfMock = jest.fn()
 jest.mock("@/lib/files/document-writer", () => ({
   generatePdf: (opts: unknown) => generatePdfMock(opts),
@@ -174,13 +176,21 @@ describe("text-shaped artifacts", () => {
     const blob = await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
     const pdf = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
-      reader.onload = () => resolve(String(reader.result))
+      reader.onload = () => resolve(Buffer.from(reader.result as ArrayBuffer).toString("latin1"))
       reader.onerror = () => reject(reader.error)
-      reader.readAsText(blob)
+      reader.readAsArrayBuffer(blob)
     })
+    // The writer deflates its streams, the page's text included.
+    const text = Array.from(pdf.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g), ([, body]) => {
+      try {
+        return inflateSync(Buffer.from(body, "latin1")).toString("latin1")
+      } catch {
+        return body
+      }
+    }).join("\n")
     expect(pdf).toMatch(/^%PDF-/)
-    expect(pdf).toContain("(Analysis)")
-    expect(pdf).toContain("(plot\\(\\))")
+    expect(text).toContain("(Analysis)")
+    expect(text).toContain("(plot\\(\\))")
     expect(pdf).toContain("/Subtype /Image")
   })
 })

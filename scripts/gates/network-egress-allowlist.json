@@ -431,6 +431,12 @@
       "kind": "fetch",
       "reason": "transport-impl",
       "note": "withKeylessFetch's fallback when the caller passes no fetch: the same global the SDK would use by default. Callers on the desktop renderer pass the platform transport; the sidecar's global is the proxy-aware interceptor."
+    },
+    {
+      "file": "lib/files/document-writer/unicode-font.ts",
+      "kind": "fetch",
+      "reason": "resource-read",
+      "note": "Reads the PDF writer's bundled font under public/fonts/noto-sans-sc/. Same-origin static asset from the export (out/), resolved against location.href — never a network origin, and the packaged shell's connect-src 'self' allows it."
     }
   ]
 }

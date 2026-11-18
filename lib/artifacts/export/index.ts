@@ -20,6 +20,7 @@ import { getArtifactExportFormats } from "@/components/artifacts/runtime-adapter
 import { getArtifactExtension } from "@/lib/artifacts/constants"
 import { saveExport, type SaveExportOutcome } from "@/lib/files/save-export"
 import { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
+import { PdfFontUnavailableError } from "@/lib/files/document-writer/unicode-font"
 import {
   ArtifactNotebookUnreadableError,
   artifactWordBlocks,
@@ -34,6 +35,7 @@ export {
 } from "./raster"
 export { ArtifactNotebookUnreadableError, supportsWordExport } from "./document-blocks"
 export { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
+export { PdfFontUnavailableError } from "@/lib/files/document-writer/unicode-font"
 
 /** The artifact's adapter does not offer the requested format. */
 export class UnsupportedArtifactExportError extends Error {
@@ -146,8 +148,10 @@ export async function exportArtifactAsWord(
 /**
  * Why an export failed, as the panel explains it.
  *
- * - `unsupported-characters`: a text PDF holds characters its built-in fonts
- *   cannot draw (`characters` names them).
+ * - `unsupported-characters`: a text PDF holds characters none of its fonts
+ *   can draw, emoji or Hangul say (`characters` names them).
+ * - `pdf-font-unavailable`: the bundled font a text PDF needed for text
+ *   beyond Latin-1 (Chinese, kana, Russian) could not be read.
  * - `notebook-unreadable`: a notebook is not notebook JSON.
  * - `preview`: the export renders the preview, and it was not ready or could
  *   not be captured; the remedy is to open Preview and check it.
@@ -156,6 +160,7 @@ export async function exportArtifactAsWord(
  */
 export type ArtifactExportFailure =
   | { reason: "unsupported-characters"; characters: string }
+  | { reason: "pdf-font-unavailable" }
   | { reason: "notebook-unreadable" }
   | { reason: "preview" }
   | { reason: "failed" }
@@ -167,6 +172,7 @@ export function describeArtifactExportFailure(
   if (error instanceof PdfUnsupportedCharactersError) {
     return { reason: "unsupported-characters", characters: error.characters.join(" ") }
   }
+  if (error instanceof PdfFontUnavailableError) return { reason: "pdf-font-unavailable" }
   if (error instanceof ArtifactNotebookUnreadableError) return { reason: "notebook-unreadable" }
   return options.neededPreview ? { reason: "preview" } : { reason: "failed" }
 }

@@ -24,6 +24,7 @@ jest.mock("@/lib/files/document-writer", () => ({
 
 import {
   ArtifactNotebookUnreadableError,
+  PdfFontUnavailableError,
   PdfUnsupportedCharactersError,
   UnsupportedArtifactExportError,
   artifactExportFilename,
@@ -187,6 +188,14 @@ describe("describeArtifactExportFailure", () => {
         neededPreview: false,
       })
     ).toEqual({ reason: "unsupported-characters", characters: "中 文" })
+  })
+
+  it("reports a bundled PDF font that could not be read (C09)", () => {
+    expect(
+      describeArtifactExportFailure(new PdfFontUnavailableError(new Error("HTTP 404")), {
+        neededPreview: false,
+      })
+    ).toEqual({ reason: "pdf-font-unavailable" })
   })
 
   it("reports an unreadable notebook (C09)", () => {

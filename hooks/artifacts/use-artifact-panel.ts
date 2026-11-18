@@ -464,6 +464,8 @@ export function useArtifactPanelState() {
     switch (failure.reason) {
       case "unsupported-characters":
         return t("exportUnsupportedCharacters", { characters: failure.characters })
+      case "pdf-font-unavailable":
+        return t("exportPdfFontUnavailable")
       case "notebook-unreadable":
         return t("exportNotebookUnreadable")
       case "preview":

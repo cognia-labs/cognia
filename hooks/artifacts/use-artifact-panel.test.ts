@@ -62,6 +62,7 @@ jest.mock("@/lib/files/document-writer", () => ({
 import { useArtifactPanelState } from "./use-artifact-panel"
 import { ArtifactNotebookUnreadableError } from "@/lib/artifacts/export/document-blocks"
 import { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
+import { PdfFontUnavailableError } from "@/lib/files/document-writer/unicode-font"
 import { registerArtifactRenderer } from "@/lib/artifacts/renderer-registry"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
@@ -605,6 +606,19 @@ describe("useArtifactPanelState", () => {
       await result.current.handleExportAs("pdf")
     })
     expect(toast.error).toHaveBeenCalledWith("exportUnsupportedCharacters")
+  })
+
+  it("says the PDF font could not load instead of blaming the source save (C09)", async () => {
+    const a = makeArtifact()
+    act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "document" }))
+    jest
+      .mocked(renderArtifactToPdfBlob)
+      .mockRejectedValueOnce(new PdfFontUnavailableError(new Error("HTTP 404")))
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await result.current.handleExportAs("pdf")
+    })
+    expect(toast.error).toHaveBeenCalledWith("exportPdfFontUnavailable")
   })
 
   it("reports an unreadable notebook as such (C09)", async () => {
