@@ -137,6 +137,7 @@ import {
   PluginDataVersionError,
   runPluginMigrations,
 } from "@/lib/plugin/dexie/migration-runner"
+import { restoreDataTakenSince } from "@/lib/plugin/dexie/data-rollback"
 import { baselinePluginMigrationVersion, getPluginDexieMeta } from "@/lib/plugin/dexie/meta"
 import {
   activationBreakerKey,
@@ -1991,6 +1992,19 @@ export class PluginManager {
         await this.getPluginLifecycleState(pluginId)
         return false
       }
+      // The interrupted update may have migrated the data before the app
+      // went away; its snapshot puts it back for the restored package.
+      await restoreDataTakenSince(
+        () => getDb(),
+        pluginId,
+        pending.version,
+        new Date(pending.createdAt).getTime()
+      ).catch((error) => {
+        loggers.manager.error(
+          `[manager] restoring ${pluginId}'s data after an interrupted update failed:`,
+          error
+        )
+      })
       await this.setActualState(pluginId, "inactive", { dirty: undefined, lastError: undefined })
       await this.scanPlugins()
       await this.syncRuntimeState()

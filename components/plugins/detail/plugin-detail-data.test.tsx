@@ -40,6 +40,11 @@ jest.mock("../plugin-backup-panel", () => ({
     <div data-testid="backup-panel" data-plugin-id={pluginId} />
   ),
 }))
+jest.mock("./plugin-data-snapshots", () => ({
+  PluginDataSnapshots: ({ pluginId }: { pluginId: string }) => (
+    <div data-testid="data-snapshots" data-plugin-id={pluginId} />
+  ),
+}))
 jest.mock("./plugin-resource-manager", () => ({
   PluginResourceManager: ({ pluginId }: { pluginId: string }) => (
     <div data-testid="resource-manager" data-plugin-id={pluginId} />
@@ -90,6 +95,7 @@ describe("PluginDetailData", () => {
       "scheduled-jobs",
       "analytics",
       "backup-panel",
+      "data-snapshots",
       "resource-manager",
       "dep-graph",
     ]) {
@@ -97,6 +103,14 @@ describe("PluginDetailData", () => {
       expect(child).toBeVisible()
       expect(child.getAttribute("data-plugin-id")).toBe("alpha")
     }
+  })
+
+  it("lists the data snapshots a rollback can restore under the backups", () => {
+    mockPlugin = makeRow({})
+    render(<PluginDetailData pluginId="alpha" />)
+    const backups = screen.getByTestId("data-sub-backup")
+    expect(backups).toContainElement(screen.getByTestId("backup-panel"))
+    expect(backups).toContainElement(screen.getByTestId("data-snapshots"))
   })
 
   it("draws flat sections with a heading and hairline, never a bordered box", () => {

@@ -36,7 +36,7 @@ Install over an existing copy, update, and rollback are all one operation: **rep
 1. **Identity binding.** The package committed is the one that was reviewed: same plugin id, same version, and the same digest where the source has one (a VSIX sha256, a GitHub commit, a bundled catalog's file inventory). A mismatch is refused before anything installed is touched.
 2. **Cancellation.** A cancel is honoured until the commit, the moment the package on disk changes. After the commit the operation finishes its records and does not report success.
 3. **Runtime state restoration.** The runtime returns to the state it was in, one of `enabled`, `suspended`, `loaded` or `stopped` (`lib/plugin/lifecycle/runtime-state.ts`). A replacement is never a reason to activate a plugin that was loaded, wake one that was suspended, or start one that was stopped or disabled.
-4. **Reconcile.** Afterwards the package on disk, the runtime store entry, the Dexie row and the install origin describe the same version.
+4. **Reconcile.** Afterwards the package on disk, the runtime store entry, the Dexie row and the install origin describe the same version, and the plugin's data is at a data version that package can read. The data version is the package's major version. A rollback past a data migration brings the data back from the snapshot taken before that migration, after the user has confirmed what is discarded. With no snapshot, it refuses before touching anything.
 5. **Recovery acceptance.** A failure is never reported as success. A failure before the commit leaves everything as it was, runtime included. A failure after the commit leaves one of two recoveries:
    - the previous package is back, and the runtime is either in its prior state or stopped with a restart requested;
    - the new package stays, its records describe it, its runtime is stopped, and the caller is told it must be restarted.
@@ -65,7 +65,7 @@ An interpreter that does not meet the plugin's requirement adds a warning (`inte
 `lib/plugin/lifecycle/contract.ts` holds the contract as data:
 
 - `REPLACEMENT_SCENARIOS`: every prior runtime state, plus an identity mismatch, a failure before the commit, a failure after it, and a cancel;
-- `contractViolations(scenario, versions, observed)`: the clauses an observation breaks;
+- `contractViolations(scenario, versions, observed)`: the clauses an observation breaks, the data clause included when the harness reports a `dataVersion`;
 - `CONTRACT_GAPS`: the clauses an environment has not closed, each with its reason;
 - `NOT_YET_CONFORMING`: the environments that do not run the suite yet.
 
@@ -76,7 +76,7 @@ Each environment runs `scenariosFor(environment)` through the test harness it al
 | Environment | Identity | Cancel | Runtime state | Reconcile | Recovery | Runs the suite |
 | --- | --- | --- | --- | --- | --- | --- |
 | Desktop registry update (`updater.ts`) | yes | **no**: `installUpdate` takes no signal | yes | yes | previous package back, runtime stopped, restart requested | `updater.test.ts` |
-| Desktop rollback (`rollback.ts`) | yes | no | yes | yes | safety snapshot restored | not yet |
+| Desktop rollback (`rollback.ts`) | **no**: the installed version is checked only after the package changed | **no**: takes no signal | yes | yes, data included | safety snapshot restores the previous package, stopped, restart requested | `rollback.test.ts` |
 | CLI update (`plugin-controller.ts`) | yes | yes | yes | yes | new package kept, runtime stopped, restart requested | `plugin-lifecycle.integration.test.ts` |
 | VS Code extension install | yes | **no**: cancel means not committing the staged graph | yes | yes | previous package, row, entry and origin back, runtime in its prior state | `install-vscode-extension.test.ts` |
 | Headless Host reconcile | n/a (the native install already ran) | n/a | **no**: always enables | partly | none | not yet |
@@ -86,7 +86,7 @@ Each environment runs `scenariosFor(environment)` through the test harness it al
 ## Consequences
 
 - A new environment that replaces packages, or a new failure mode, starts by adding a scenario or a gap to `contract.ts`. Code review then sees a contract change instead of a local fix.
-- The two cancel gaps are explicit. Closing them means giving `installUpdate` and the VS Code commit a cancel point before their commit, then deleting the gap entries.
-- Rollback joins the suite once its data snapshot (plan P1) lands, because restoring plugin data becomes part of its recovery clause.
+- The gaps are explicit: no cancel point in the desktop update, the rollback or the VS Code commit, and a rollback that checks the installed version only after the package changed. Closing one means adding the check or cancel point before the commit, then deleting the gap entry.
+- Plugin data takes part in the contract (plan P1). Before a data migration, the plugin's rows are copied into a snapshot in the same transaction. A failed update and a crash recovery undo the migration that update ran from that snapshot. An explicit rollback restores it only after confirmation. When the copy will not fit, the user chooses between migrating without one and cancelling the upgrade. A headless Host, with nobody to ask, migrates without one. Either way, the plugin's page shows which data version has no snapshot.
 - The headless Host and paired clients are aligned last (plan P5). Until then their rows stay in `NOT_YET_CONFORMING` with the behaviour they still have.
 - The contract is about the host's behaviour. It does not change the plugin contract (`@cognia/plugin-contract`), so the authoring kit pin is unaffected.

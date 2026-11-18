@@ -24,7 +24,14 @@ import {
   putPluginDexiaMeta,
   deletePluginDexiaMeta,
   baselinePluginMigrationVersion,
+  type PluginDexieMeta,
 } from "./meta"
+import { deletePluginDataSnapshots } from "./data-snapshots"
+import {
+  deletePluginDataSnapshotRecords,
+  listPluginDataSnapshots,
+  pluginDataSnapshotStores,
+} from "@/lib/db/plugin-data-snapshots"
 
 export type RetentionMode = "keep" | "purge"
 type DexieSource = Dexie | (() => Dexie)
@@ -403,7 +410,11 @@ export async function removePluginTables(
 
     // Retained data must retain its schema fingerprint and migration baseline
     // too, so reinstalling a newer package runs the pending transformations.
-    if (retentionMode === "purge") await deletePluginDexiaMeta(pluginId)
+    // Its snapshots stay with it; purged data takes them along.
+    if (retentionMode === "purge") {
+      await deletePluginDataSnapshots(db, pluginId)
+      await deletePluginDexiaMeta(pluginId)
+    }
   })
 }
 
@@ -455,11 +466,116 @@ export async function clearPluginTables(
       await clearNativeStores(db.backendDB(), undeclared)
     }
     const metaTable = db.table("pluginDexieMeta")
-    await db.transaction("rw", [metaTable, ...live.map((name) => db.table(name))], async () => {
-      await Promise.all(live.map((name) => db.table(name).clear()))
-      await metaTable.update(pluginId, { appliedMigrationVersion: 0 })
-    })
+    const { snapshots, chunks } = pluginDataSnapshotStores(db)
+    await db.transaction(
+      "rw",
+      [metaTable, snapshots, chunks, ...live.map((name) => db.table(name))],
+      async () => {
+        await Promise.all(live.map((name) => db.table(name).clear()))
+        await metaTable.update(pluginId, { appliedMigrationVersion: 0 })
+        // Erased means erased: a snapshot would bring the rows back.
+        const records = await listPluginDataSnapshots(db, pluginId)
+        await deletePluginDataSnapshotRecords(
+          db,
+          records.map((record) => record.id)
+        )
+      }
+    )
     return [...live, ...undeclared]
+  })
+}
+
+/**
+ * Put a plugin's rows back as a captured snapshot holds them (ADR-0258).
+ *
+ * In one transaction: every store the snapshot covers is emptied and refilled
+ * from it, stores the plugin registered after the snapshot was taken are
+ * emptied (they did not exist then), the migration ledger goes back to the
+ * snapshot's data version, and the snapshot is deleted along with every newer
+ * one, which describe data that no longer exists. Either all of it commits or
+ * none of it does.
+ *
+ * A store the snapshot covers but the live schema no longer declares (a later
+ * version stopped declaring it, and the app restarted since) is declared again
+ * first, from the schema the snapshot recorded.
+ *
+ * Runs under the schema lock so a concurrent purge cannot drop a store
+ * between the declaration and the write.
+ */
+export async function restorePluginDataSnapshot(
+  dbSource: DexieSource,
+  pluginId: string,
+  snapshotId: string
+): Promise<{ dataVersion: number; rows: number }> {
+  const dbName = resolveDb(dbSource).name
+  return runSchemaMutationExclusive(dbName, async () => {
+    const db = resolveDb(dbSource)
+    if (!db.isOpen()) await db.open()
+    const record = await pluginDataSnapshotStores(db).snapshots.get(snapshotId)
+    if (!record || record.pluginId !== pluginId || record.kind !== "captured") {
+      throw new Error(`Plugin "${pluginId}" has no data snapshot ${snapshotId} to restore`)
+    }
+
+    const declared = new Set(db.tables.map((table) => table.name))
+    const undeclared = record.tables.filter((table) => !declared.has(table.name))
+    if (undeclared.length > 0) {
+      const patch = Object.fromEntries(undeclared.map((table) => [table.name, table.schema]))
+      const nextVersion = await nextSchemaVersion(db)
+      db.close()
+      db.version(nextVersion).stores(patch)
+      await db.open()
+    }
+
+    const metaTable = db.table<PluginDexieMeta, string>("pluginDexieMeta")
+    const { snapshots, chunks } = pluginDataSnapshotStores(db)
+    const meta = await metaTable.get(pluginId)
+    if (!meta) throw new Error(`Plugin "${pluginId}" has no Dexie registration`)
+    const captured = new Set(record.tables.map((table) => table.name))
+    const live = new Set(db.tables.map((table) => table.name))
+    const later = meta.tableNames.filter((name) => !captured.has(name) && live.has(name))
+
+    await db.transaction(
+      "rw",
+      [
+        metaTable,
+        snapshots,
+        chunks,
+        ...record.tables.map((table) => db.table(table.name)),
+        ...later.map((name) => db.table(name)),
+      ],
+      async () => {
+        for (const table of record.tables) {
+          const store = db.table(table.name)
+          await store.clear()
+          for (let chunk = 0; chunk < table.chunks; chunk += 1) {
+            const part = await chunks.get([record.id, table.name, chunk])
+            if (!part) {
+              throw new Error(
+                `Data snapshot ${record.id} of "${pluginId}" is missing chunk ${chunk} of ${table.name}`
+              )
+            }
+            if (table.outboundKeys) {
+              await store.bulkPut(part.values, part.keys as never)
+            } else {
+              await store.bulkPut(part.values)
+            }
+          }
+        }
+        for (const name of later) await db.table(name).clear()
+        const records = await listPluginDataSnapshots(db, pluginId)
+        await deletePluginDataSnapshotRecords(
+          db,
+          records.filter((other) => other.createdAt >= record.createdAt).map((other) => other.id)
+        )
+        await metaTable.put({
+          ...meta,
+          // Keep every store the plugin ever registered, so a purge still drops it.
+          tableNames: [...new Set([...meta.tableNames, ...captured])],
+          appliedMigrationVersion: record.dataVersion,
+        })
+      }
+    )
+    return { dataVersion: record.dataVersion, rows: record.rows }
   })
 }
 

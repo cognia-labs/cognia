@@ -16,8 +16,10 @@ import {
   applyPluginTables,
   clearPluginTables,
   removePluginTables,
+  restorePluginDataSnapshot,
   restorePluginTables,
 } from "./bridge"
+import { listPluginDataSnapshots, pluginDataSnapshotStores } from "@/lib/db/plugin-data-snapshots"
 import { getPluginDexieMeta } from "./meta"
 import { CogniaDB, CURRENT_SCHEMA, CURRENT_SCHEMA_VERSION } from "@/lib/db/schema"
 import { ensureActiveDatabaseReady, assertPluginSchemaReady } from "@/lib/db/boot"
@@ -31,10 +33,17 @@ jest.mock("@/lib/external-services/derived-data-registry", () => ({
 }))
 
 // We bypass CogniaDB entirely and spin up a lightweight test Dexie instance
-// that includes the pluginDexieMeta table but nothing else.
+// with the plugin ledger and the data snapshot stores (ADR-0258), and nothing
+// else.
+const CORE_STORES = {
+  pluginDexieMeta: "&pluginId, appliedAt",
+  pluginDataSnapshots: CURRENT_SCHEMA.pluginDataSnapshots!,
+  pluginDataSnapshotRows: CURRENT_SCHEMA.pluginDataSnapshotRows!,
+}
+
 function makeTestDb(): Dexie {
   const db = new Dexie(`test-bridge-${Math.random().toString(36).slice(2)}`)
-  db.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+  db.version(1).stores(CORE_STORES)
   return db
 }
 
@@ -329,7 +338,7 @@ describe("applyPluginTables", () => {
     // physical native version to 3 (native == verno * 10 == 30). ---
     {
       const prior = new Dexie(name)
-      prior.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+      prior.version(1).stores(CORE_STORES)
       __setTestDb(prior)
       await applyPluginTables(prior, "plugin-a", { tables: [{ name: "t", schema: "&id" }] })
       await applyPluginTables(prior, "plugin-b", { tables: [{ name: "t", schema: "&id" }] })
@@ -340,7 +349,7 @@ describe("applyPluginTables", () => {
     // --- Fresh process: a NEW instance re-declares only the static ceiling v1,
     // so db.verno starts at 1 — well below the persisted native v3. ---
     const fresh = new Dexie(name)
-    fresh.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+    fresh.version(1).stores(CORE_STORES)
     __setTestDb(fresh)
 
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
@@ -518,7 +527,7 @@ describe("clearPluginTables", () => {
     // A fresh process declares only the static schema; the plugin store is
     // physical-only until a restore re-declares it.
     const fresh = new Dexie(name)
-    fresh.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+    fresh.version(1).stores(CORE_STORES)
     __setTestDb(fresh)
     db = fresh
     await fresh.open()
@@ -718,7 +727,7 @@ describe("restorePluginTables", () => {
 
     // Session 1: actually create the physical namespaced store.
     const first = new Dexie(dbName)
-    first.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+    first.version(1).stores(CORE_STORES)
     __setTestDb(first)
     await applyPluginTables(first, "github-delivery", {
       tables: [{ name: "repos", schema: "&fullName" }],
@@ -729,7 +738,7 @@ describe("restorePluginTables", () => {
     // Session 2: fresh instance over the SAME physical DB, core schema only —
     // the store exists physically but is absent from `db.tables`.
     const second = new Dexie(dbName)
-    second.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+    second.version(1).stores(CORE_STORES)
     __setTestDb(second)
     await second.open()
     expect(second.tables.map((t) => t.name)).not.toContain("github-delivery:repos")
@@ -758,7 +767,7 @@ describe("restorePluginTables", () => {
     // Two prior plugin mutations leave the physical database at v3 while the
     // next application build only advances its static core schema to v2.
     const first = new Dexie(dbName)
-    first.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+    first.version(1).stores(CORE_STORES)
     __setTestDb(first)
     await applyPluginTables(first, "plugin-a", {
       tables: [{ name: "rows", schema: "++id" }],
@@ -773,7 +782,7 @@ describe("restorePluginTables", () => {
     // The fresh process knows about the new core store, but IndexedDB already
     // passed that declared version while plugin schemas were being bumped.
     const second = new Dexie(dbName)
-    second.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+    second.version(1).stores(CORE_STORES)
     second.version(2).stores({ lateCore: "++id" })
     __setTestDb(second)
     await second.open()
@@ -801,7 +810,7 @@ describe("restorePluginTables", () => {
         requiredStoreNames: ["lateCore"],
         recreateDatabase: () => {
           repaired = new Dexie(dbName)
-          repaired.version(1).stores({ pluginDexieMeta: "&pluginId, appliedAt" })
+          repaired.version(1).stores(CORE_STORES)
           repaired.version(2).stores({ lateCore: "++id" })
           __setTestDb(repaired)
           return repaired
@@ -969,4 +978,185 @@ it("boots and backfills a real higher-version database through the production pl
   } finally {
     await active.delete()
   }
+})
+
+describe("plugin data snapshots (ADR-0258)", () => {
+  let db: Dexie
+  const reshape = async (tx: import("dexie").Transaction) => {
+    await tx
+      .table("p:items")
+      .toCollection()
+      .modify((row: { shape: string }) => {
+        row.shape = "v2"
+      })
+  }
+  const migrateTo = (version: number) =>
+    runPluginMigrations(
+      db,
+      "p",
+      version,
+      Array.from({ length: version - 1 }, (_, i) => ({ toVersion: i + 2, upgrade: "reshape" })),
+      { reshape }
+    )
+  const snapshots = () => listPluginDataSnapshots(db, "p")
+  const ledger = async () => (await getPluginDexieMeta("p"))?.appliedMigrationVersion
+
+  beforeEach(async () => {
+    db = makeTestDb()
+    __setTestDb(db)
+    await applyPluginTables(db, "p", { tables: [{ name: "items", schema: "id" }] }, 1)
+    await db.table("p:items").bulkPut([
+      { id: 1, shape: "v1" },
+      { id: 2, shape: "v1" },
+    ])
+  })
+
+  afterEach(async () => {
+    db.close()
+    await Dexie.delete(db.name)
+  })
+
+  it("puts the rows and the ledger back, and drops the snapshot it used", async () => {
+    await migrateTo(2)
+    await db.table("p:items").put({ id: 3, shape: "v2" })
+    const [snapshot] = await snapshots()
+
+    await expect(restorePluginDataSnapshot(db, "p", snapshot!.id)).resolves.toEqual({
+      dataVersion: 1,
+      rows: 2,
+    })
+
+    expect(await db.table("p:items").toArray()).toEqual([
+      { id: 1, shape: "v1" },
+      { id: 2, shape: "v1" },
+    ])
+    expect(await ledger()).toBe(1)
+    expect(await snapshots()).toEqual([])
+    expect(await pluginDataSnapshotStores(db).chunks.count()).toBe(0)
+  })
+
+  it("lets the older package run again, and the newer one migrate again", async () => {
+    await migrateTo(2)
+    const [snapshot] = await snapshots()
+    await restorePluginDataSnapshot(db, "p", snapshot!.id)
+    await expect(runPluginMigrations(db, "p", 1, [], {})).resolves.toBeUndefined()
+    await migrateTo(2)
+    expect(await db.table("p:items").get(1)).toEqual({ id: 1, shape: "v2" })
+    expect(await snapshots()).toHaveLength(1)
+  })
+
+  it("goes back two migrations and forgets the snapshots after the one it used", async () => {
+    await migrateTo(2)
+    await migrateTo(3)
+    const records = await snapshots()
+    expect(records.map((record) => record.dataVersion)).toEqual([2, 1])
+
+    await restorePluginDataSnapshot(db, "p", records[1]!.id)
+
+    expect(await ledger()).toBe(1)
+    expect(await db.table("p:items").get(1)).toEqual({ id: 1, shape: "v1" })
+    expect(await snapshots()).toEqual([])
+  })
+
+  it("empties a store the plugin registered after the snapshot, and keeps it registered", async () => {
+    await migrateTo(2)
+    const [snapshot] = await snapshots()
+    await applyPluginTables(db, "p", {
+      tables: [
+        { name: "items", schema: "id" },
+        { name: "later", schema: "++id" },
+      ],
+    })
+    await db.table("p:later").add({ v: 1 })
+
+    await restorePluginDataSnapshot(db, "p", snapshot!.id)
+
+    expect(await db.table("p:later").count()).toBe(0)
+    expect((await getPluginDexieMeta("p"))?.tableNames.sort()).toEqual(["p:items", "p:later"])
+  })
+
+  it("restores outbound keys with their rows", async () => {
+    await applyPluginTables(db, "p", {
+      tables: [
+        { name: "items", schema: "id" },
+        { name: "kv", schema: "" },
+      ],
+    })
+    await db.table("p:kv").put({ value: "a" }, "key-a")
+    await migrateTo(2)
+    await db.table("p:kv").clear()
+    const [snapshot] = await snapshots()
+
+    await restorePluginDataSnapshot(db, "p", snapshot!.id)
+
+    expect(await db.table("p:kv").get("key-a")).toEqual({ value: "a" })
+  })
+
+  it("declares a captured store the live schema lost before refilling it", async () => {
+    await migrateTo(2)
+    const [snapshot] = await snapshots()
+    const name = db.name
+    db.close()
+    const fresh = new Dexie(name)
+    fresh.version(1).stores(CORE_STORES)
+    __setTestDb(fresh)
+    db = fresh
+    await fresh.open()
+    expect(fresh.tables.map((t) => t.name)).not.toContain("p:items")
+
+    await restorePluginDataSnapshot(fresh, "p", snapshot!.id)
+
+    expect(fresh.tables.map((t) => t.name)).toContain("p:items")
+    expect(await fresh.table("p:items").get(2)).toEqual({ id: 2, shape: "v1" })
+  })
+
+  it("changes nothing when the snapshot is incomplete", async () => {
+    await migrateTo(2)
+    const [snapshot] = await snapshots()
+    await pluginDataSnapshotStores(db).chunks.delete([snapshot!.id, "p:items", 0])
+
+    await expect(restorePluginDataSnapshot(db, "p", snapshot!.id)).rejects.toThrow(
+      "missing chunk 0 of p:items"
+    )
+
+    expect(await db.table("p:items").get(1)).toEqual({ id: 1, shape: "v2" })
+    expect(await ledger()).toBe(2)
+    expect(await snapshots()).toHaveLength(1)
+  })
+
+  it("refuses another plugin's snapshot, and a migration that ran without one", async () => {
+    await migrateTo(2)
+    const [snapshot] = await snapshots()
+    await expect(restorePluginDataSnapshot(db, "other", snapshot!.id)).rejects.toThrow(
+      'Plugin "other" has no data snapshot'
+    )
+    await pluginDataSnapshotStores(db).snapshots.put({
+      kind: "skipped",
+      id: "skipped-1",
+      pluginId: "p",
+      dataVersion: 2,
+      migratedTo: 3,
+      createdAt: Date.now() + 10,
+      reason: "insufficient-space",
+    })
+    await expect(restorePluginDataSnapshot(db, "p", "skipped-1")).rejects.toThrow(
+      "no data snapshot skipped-1"
+    )
+  })
+
+  it("deleting the plugin's data deletes its snapshots too", async () => {
+    await migrateTo(2)
+    await clearPluginTables(db, "p")
+    expect(await snapshots()).toEqual([])
+    expect(await pluginDataSnapshotStores(db).chunks.count()).toBe(0)
+  })
+
+  it("purging the plugin deletes its snapshots; keeping its data keeps them", async () => {
+    await migrateTo(2)
+    await removePluginTables(db, "p", "keep")
+    expect(await snapshots()).toHaveLength(1)
+    await removePluginTables(db, "p", "purge")
+    expect(await snapshots()).toEqual([])
+    expect(await pluginDataSnapshotStores(db).chunks.count()).toBe(0)
+  })
 })

@@ -199,7 +199,9 @@ describe("lifecycle contract (ADR-0258)", () => {
   function statefulHost(status: string, scenario: ReplacementScenario) {
     let current = status
     const become = (next: string) => async () => void (current = next)
-    const host: HostManager = {
+    const dir = path.join(home, ".cognia", "plugins", "demo.plugin")
+    const host: HostManager & { pluginDir: (id: string) => string | undefined } = {
+      pluginDir: (id) => (id === "demo.plugin" ? dir : undefined),
       registerDiskPlugin: async () => {
         if (scenario.fault === "after-commit") throw new Error("the new manifest was rejected")
       },
@@ -224,7 +226,7 @@ describe("lifecycle contract (ADR-0258)", () => {
           name: "Demo",
           version: VERSIONS.from,
           type: "frontend",
-          path: path.join(home, ".cognia", "plugins", "demo.plugin"),
+          path: dir,
           status: current,
         },
       ],

@@ -35878,6 +35878,31 @@
       },
       "title": "转换报告"
     },
+    "dataSnapshot": {
+      "list": {
+        "captured": "数据版本 {from}（迁移到 {to} 之前）：{rows} 条记录，保存于 {date}",
+        "empty": "暂无数据快照。每次会迁移该插件数据的升级之前都会自动保留一份。",
+        "loadFailed": "无法读取该插件的数据快照。",
+        "skipped": "数据版本 {from} 没有快照：{date} 迁移到 {to} 时因空间不足未保留快照，这部分数据无法恢复。",
+        "title": "数据快照"
+      },
+      "notice": {
+        "checkFailed": "无法确认此操作对插件数据的影响，因此暂不能继续。",
+        "restore": "回滚还会把 {name} 的数据恢复到 {date} 时的状态。它现在的 {currentRows} 条记录会被该快照中的 {snapshotRows} 条替换，之后保存的内容都会丢失。",
+        "rowRestore": "将恢复 {date} 的数据",
+        "rowUnavailable": "无法读取当前数据",
+        "unavailable": "v{version} 无法读取 {name} 当前的数据（已迁移到数据版本 {current}），并且已没有该次迁移之前的快照。如仍要回滚，请先删除该插件的数据。"
+      },
+      "space": {
+        "available": "当前可用存储只有 {available}。",
+        "body": "升级 {name} 会把它的数据从版本 {from} 迁移到 {to}。为当前数据保留一份快照（约 {required}），以后回滚时才能恢复这些数据。",
+        "cancel": "取消升级",
+        "consequence": "不保留快照的话，回滚到数据版本 {to} 之前的版本时，将无法恢复这些数据。",
+        "continue": "不留快照继续",
+        "ranOut": "写入快照时存储空间已用尽。",
+        "title": "空间不足，无法保留数据快照"
+      }
+    },
     "deepLink": {
       "routing": "正在打开……"
     },
@@ -36501,6 +36526,8 @@
       "adapter": "{pluginName} 的插件适配器运行失败",
       "codes": {
         "authProviderConflict": "登录提供方“{provider}”已被另一个插件占用。请先卸载那个插件。",
+        "dataRestoreUnconfirmed": "此次回滚会用快照恢复插件数据，并丢弃之后保存的内容。请先在回滚对话框中确认。",
+        "dataSnapshotDeclined": "升级已取消：没有空间保留数据快照，它的数据仍停留在版本 {from}，没有迁移到 {to}。",
         "dataVersionAhead": "它的数据已被 {applied} 版升级。请将插件更新到 {applied} 版或更高版本，或先清除它的数据，再运行 {current} 版。",
         "dependencyInUse": "其他插件依赖它：{dependents}。请先停用或卸载这些插件。",
         "dependencyMissing": "它依赖尚未启用的插件：{dependencies}。",

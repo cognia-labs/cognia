@@ -7,8 +7,8 @@
  * {@link REPLACEMENT_SCENARIOS} through its own test harness and checks what
  * it observed with {@link contractViolations}. The clauses are the ADR's:
  * identity binding, cancellation before the commit, runtime state
- * restoration, records that agree with the package on disk, and what must
- * hold after a failure.
+ * restoration, records (and data) that agree with the package on disk, and
+ * what must hold after a failure.
  *
  * Gaps an environment has not closed are listed in {@link CONTRACT_GAPS} with
  * the reason, so a skipped scenario is a recorded decision rather than a
@@ -17,7 +17,8 @@
 import type { RuntimeResumeState } from "./runtime-state"
 
 /** Environments whose package replacement already runs the contract suite. */
-export type ContractEnvironment = "desktop-update" | "cli-update" | "vscode-install"
+export type ContractEnvironment =
+  "desktop-update" | "desktop-rollback" | "cli-update" | "vscode-install"
 
 /** Where a scenario makes the operation fail, if anywhere. */
 export type ReplacementFault =
@@ -60,6 +61,12 @@ export const CONTRACT_GAPS: Readonly<
     cancel:
       "PluginUpdater.installUpdate takes no AbortSignal; a running update cannot be cancelled",
   },
+  "desktop-rollback": {
+    identity:
+      "PluginRollbackManager.rollback checks the installed version only after the package changed; the safety snapshot then restores the previous package, stopped, with a restart requested",
+    cancel:
+      "PluginRollbackManager.rollback takes no AbortSignal; a running rollback cannot be cancelled",
+  },
   "cli-update": {},
   "vscode-install": {
     cancel:
@@ -98,6 +105,11 @@ export interface ReplacementObservation {
   recordedVersion: string | undefined
   /** The runtime state afterwards. */
   runtime: RuntimeResumeState
+  /**
+   * The plugin's data version afterwards (ADR-0258), for environments whose
+   * harness models plugin data; the package on disk must be able to read it.
+   */
+  dataVersion?: number
 }
 
 export interface ReplacementVersions {
@@ -126,6 +138,14 @@ export function contractViolations(
     observed.packageVersion === observed.recordedVersion,
     `records name v${observed.recordedVersion ?? "none"} while v${observed.packageVersion ?? "none"} is on disk`
   )
+  // And the package on disk can read the data, whatever happened.
+  if (observed.dataVersion !== undefined && observed.packageVersion !== undefined) {
+    const readable = Number.parseInt(observed.packageVersion.split(".")[0] ?? "", 10)
+    expect(
+      observed.dataVersion <= readable,
+      `the data is at v${observed.dataVersion}, newer than v${observed.packageVersion} can read`
+    )
+  }
 
   switch (scenario.fault) {
     case "none":

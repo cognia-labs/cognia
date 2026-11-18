@@ -14,7 +14,9 @@
 //     version list while B's request is in flight.
 //   - While that request is in flight the dialog says so (it used to show the
 //     "no snapshots" empty state, which is a claim, not a wait).
-//   - Rolling back replaces the installed version, so it asks first.
+//   - Rolling back replaces the installed version, so it asks first. When it
+//     also puts the plugin's data back to a snapshot, the question says what
+//     is lost, and only that answer authorizes the restore (ADR-0258).
 //   - Dates are formatted for the user's locale, not sliced out of ISO.
 
 import { useEffect, useState } from "react"
@@ -47,14 +49,20 @@ import { notifyPluginBackupsChanged } from "@/hooks/plugins/use-plugin-rollback-
 import {
   getPluginRollbackManager,
   type RollbackInfo,
+  type RollbackOptions,
   type RollbackResult,
   type VersionInfo,
 } from "@/lib/plugin/lifecycle/rollback"
 import { isTauri } from "@/lib/tauri"
+import { PluginDataRollbackHint, PluginDataRollbackNotice } from "../plugin-data-rollback-notice"
 
 interface RollbackClient {
   getRollbackInfo: (pluginId: string) => Promise<RollbackInfo>
-  rollback: (pluginId: string, targetVersion: string) => Promise<RollbackResult>
+  rollback: (
+    pluginId: string,
+    targetVersion: string,
+    options: RollbackOptions
+  ) => Promise<RollbackResult>
 }
 
 let cachedClient: RollbackClient | null = null
@@ -64,7 +72,7 @@ function getClient(): RollbackClient {
   const mgr = getPluginRollbackManager()
   cachedClient = {
     getRollbackInfo: (pluginId) => mgr.getRollbackInfo(pluginId),
-    rollback: (pluginId, version) => mgr.rollback(pluginId, version),
+    rollback: (pluginId, version, options) => mgr.rollback(pluginId, version, options),
   }
   return cachedClient
 }
@@ -128,12 +136,18 @@ export function PluginRollbackDialog({ open, pluginId, onClose }: Props) {
   const loading = open && pluginId !== null && info === null && loadErrorMessage === null
   const error = actionError ?? loadErrorMessage
 
-  const apply = async (version: string) => {
+  const apply = async (target: VersionInfo) => {
     if (!pluginId) return
+    const version = target.version
     setBusyVersion(version)
     setActionError(null)
     try {
-      const result = await getClient().rollback(pluginId, version)
+      // The confirmation showed this snapshot; restoring any other is refused.
+      const result = await getClient().rollback(pluginId, version, {
+        ...(target.data.kind === "restore"
+          ? { confirmedDataSnapshot: target.data.snapshotId }
+          : {}),
+      })
       if (!result.success) {
         setActionError(result.error ?? t("rollbackFailed"))
         return
@@ -235,6 +249,7 @@ export function PluginRollbackDialog({ open, pluginId, onClose }: Props) {
                             {version.reason}
                           </p>
                         )}
+                        <PluginDataRollbackHint data={version.data} />
                       </div>
                       <Button
                         size="sm"
@@ -280,6 +295,11 @@ export function PluginRollbackDialog({ open, pluginId, onClose }: Props) {
                 to: confirmVersion?.version ?? "",
               })}
             </AlertDialogDescription>
+            <PluginDataRollbackNotice
+              data={confirmVersion?.data ?? null}
+              name={pluginName}
+              version={confirmVersion?.version ?? ""}
+            />
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
@@ -287,7 +307,7 @@ export function PluginRollbackDialog({ open, pluginId, onClose }: Props) {
               onClick={() => {
                 const target = confirmVersion
                 setConfirmVersion(null)
-                if (target) void apply(target.version)
+                if (target) void apply(target)
               }}
             >
               {t("confirmAction")}

@@ -36,18 +36,62 @@ import {
 } from "./schema"
 import type { OutboundJobRow } from "./connector-types"
 
+it("v257 adds empty plugin data snapshot stores without changing v256 data", async () => {
+  expect(CURRENT_SCHEMA_VERSION).toBe(257)
+  const name = "cognia-plugin-data-snapshots-v257-upgrade"
+  const previous = new Dexie(name)
+  previous.version(256).stores({
+    ...CURRENT_SCHEMA,
+    pluginDataSnapshots: null,
+    pluginDataSnapshotRows: null,
+  })
+  await previous.open()
+  await previous.table("pluginDexieMeta").put({
+    pluginId: "kept",
+    tableNames: ["kept:items"],
+    dexieVersion: 1,
+    appliedAt: 1,
+  })
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(257)
+    expect(await current.pluginDataSnapshots.count()).toBe(0)
+    expect(await current.pluginDataSnapshotRows.count()).toBe(0)
+    expect(current.pluginDataSnapshots.schema.primKey.keyPath).toBe("id")
+    expect(Object.keys(current.pluginDataSnapshots.schema.idxByName)).toEqual(["pluginId"])
+    expect(current.pluginDataSnapshotRows.schema.primKey.keyPath).toEqual([
+      "snapshotId",
+      "table",
+      "chunk",
+    ])
+    expect(Object.keys(current.pluginDataSnapshotRows.schema.idxByName)).toEqual(["snapshotId"])
+    expect(await current.pluginDexieMeta.get("kept")).toMatchObject({
+      tableNames: ["kept:items"],
+    })
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v256 adds the usage write outbox without changing v255 data", async () => {
-  expect(CURRENT_SCHEMA_VERSION).toBe(256)
   const name = "cognia-usage-outbox-v256-upgrade"
   const previous = new Dexie(name)
-  previous.version(255).stores({ ...CURRENT_SCHEMA, usageWriteOutbox: null })
+  previous.version(255).stores({
+    ...CURRENT_SCHEMA,
+    usageWriteOutbox: null,
+    pluginDataSnapshots: null,
+    pluginDataSnapshotRows: null,
+  })
   await previous.open()
   await previous.table("sessionUsage").put({ messageId: "kept", sessionId: "s", at: 1 })
   previous.close()
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(256)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(await current.usageWriteOutbox.count()).toBe(0)
     expect(current.usageWriteOutbox.schema.primKey.keyPath).toBe("id")
     expect(Object.keys(current.usageWriteOutbox.schema.idxByName).sort()).toEqual([
@@ -69,6 +113,8 @@ it("v255 adds empty external sync stores without backfilling or changing v254 da
     externalSyncCursors: null,
     externalSyncSeen: null,
     usageWriteOutbox: null,
+    pluginDataSnapshots: null,
+    pluginDataSnapshotRows: null,
   })
   await previous.open()
   await previous.table("syncLeases").put({

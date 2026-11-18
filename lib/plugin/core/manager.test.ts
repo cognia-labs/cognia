@@ -202,6 +202,12 @@ jest.mock("@/lib/plugin/dexie/bridge", () => ({
   restorePluginTables: jest.fn(async () => [] as string[]),
 }))
 
+// Undoing an interrupted update's data migration (ADR-0258); covered against a
+// real database in `lib/plugin/dexie/data-rollback.test.ts`.
+jest.mock("@/lib/plugin/dexie/data-rollback", () => ({
+  restoreDataTakenSince: jest.fn(async () => "not-needed"),
+}))
+
 // The Dexie-backed plugin row CRUD has no IndexedDB in this unit env; stub it so
 // the install/update lifecycle tracking (getPlugin/updatePlugin) is observable
 // without a real database.
@@ -6815,10 +6821,22 @@ describe("PluginManager", () => {
             hostState = "v1"
           }
         })
+        const { restoreDataTakenSince } = jest.requireMock("@/lib/plugin/dexie/data-rollback")
+        restoreDataTakenSince.mockClear()
         expect(await manager.recoverPluginRuntime(plugin.manifest.id)).toBe(false)
         expect(getPluginBackupManager().getPendingUpdateRestore(plugin.manifest.id)).toBeDefined()
+        // No package came back, so no data is touched.
+        expect(restoreDataTakenSince).not.toHaveBeenCalled()
         rejectRestore = false
+        // A data restore that fails does not undo the package recovery.
+        restoreDataTakenSince.mockRejectedValueOnce(new Error("snapshot unreadable"))
         expect(await manager.recoverPluginRuntime(plugin.manifest.id)).toBe(true)
+        expect(restoreDataTakenSince).toHaveBeenCalledWith(
+          expect.any(Function),
+          "owed-restore",
+          "1.0.0",
+          expect.any(Number)
+        )
         expect(hostState).toBe("v1")
         expect(getPluginBackupManager().getPendingUpdateRestore(plugin.manifest.id)).toBeUndefined()
         await expect(manager.getPluginLifecycleState(plugin.manifest.id)).resolves.toMatchObject({

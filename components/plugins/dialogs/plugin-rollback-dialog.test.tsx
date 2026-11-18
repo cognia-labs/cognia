@@ -22,6 +22,9 @@ jest.mock("@/lib/tauri", () => ({
 
 import { PluginRollbackDialog, __resetPluginRollbackClientForTests } from "./plugin-rollback-dialog"
 import { isTauri } from "@/lib/tauri"
+import type { PluginDataRollback } from "@/lib/plugin/dexie/data-rollback"
+
+const NO_DATA_CHANGE: PluginDataRollback = { kind: "none" }
 
 beforeEach(() => {
   __resetPluginRollbackClientForTests(null)
@@ -40,6 +43,7 @@ const sampleInfo = {
       size: 100,
       canRollback: true,
       reason: "before update",
+      data: NO_DATA_CHANGE,
     },
   ],
   lastBackup: undefined,
@@ -67,7 +71,7 @@ describe("PluginRollbackDialog", () => {
         fromVersion: "",
         toVersion: "",
         duration: 0,
-        migrationApplied: false,
+        dataRestored: false,
         requiresRestart: false,
       }),
     })
@@ -82,7 +86,7 @@ describe("PluginRollbackDialog", () => {
       fromVersion: "1.2.0",
       toVersion: "1.0.0",
       duration: 1,
-      migrationApplied: false,
+      dataRestored: false,
       requiresRestart: false,
     }))
     const onClose = jest.fn()
@@ -96,8 +100,67 @@ describe("PluginRollbackDialog", () => {
     // Rolling back replaces the installed version, so it asks first.
     expect(rollback).not.toHaveBeenCalled()
     await confirmRollback()
-    expect(rollback).toHaveBeenCalledWith("alpha", "1.0.0")
+    expect(rollback).toHaveBeenCalledWith("alpha", "1.0.0", {})
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it("says the data goes back to a snapshot and authorizes exactly that one", async () => {
+    const rollback = jest.fn(async () => ({
+      success: true,
+      pluginId: "alpha",
+      fromVersion: "2.0.0",
+      toVersion: "1.0.0",
+      duration: 1,
+      dataRestored: true,
+      requiresRestart: false,
+    }))
+    const data: PluginDataRollback = {
+      kind: "restore",
+      snapshotId: "snap-1",
+      capturedAt: Date.parse("2026-03-30T10:00:00.000Z"),
+      dataVersion: 1,
+      currentDataVersion: 2,
+      currentRows: 9,
+      snapshotRows: 4,
+    }
+    __resetPluginRollbackClientForTests({
+      getRollbackInfo: async () => ({
+        ...sampleInfo,
+        currentVersion: "2.0.0",
+        availableVersions: [{ ...sampleInfo.availableVersions[0]!, data }],
+      }),
+      rollback,
+    })
+    render(<PluginRollbackDialog open pluginId="alpha" onClose={() => {}} />)
+    // The row already says the data comes back from that snapshot.
+    expect(await screen.findByText(/^rowRestore/)).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/rollbackAria.*1\.0\.0/))
+    const confirm = await screen.findByRole("alertdialog")
+    expect(within(confirm).getByTestId("plugin-data-rollback-restore")).toHaveTextContent(
+      '"snapshotRows":4'
+    )
+    await confirmRollback()
+    expect(rollback).toHaveBeenCalledWith("alpha", "1.0.0", { confirmedDataSnapshot: "snap-1" })
+  })
+
+  it("does not offer a version that cannot read the data, and says why", async () => {
+    __resetPluginRollbackClientForTests({
+      getRollbackInfo: async () => ({
+        ...sampleInfo,
+        currentVersion: "2.0.0",
+        availableVersions: [
+          {
+            ...sampleInfo.availableVersions[0]!,
+            canRollback: false,
+            data: { kind: "unavailable", currentDataVersion: 2, targetDataVersion: 1 },
+          },
+        ],
+      }),
+      rollback: jest.fn(),
+    })
+    render(<PluginRollbackDialog open pluginId="alpha" onClose={() => {}} />)
+    expect(await screen.findByText("rowUnavailable")).toBeInTheDocument()
+    expect(screen.getByLabelText(/rollbackAria.*1\.0\.0/)).toBeDisabled()
   })
 
   it("surfaces a non-success result error", async () => {
@@ -109,7 +172,7 @@ describe("PluginRollbackDialog", () => {
         fromVersion: "1.2.0",
         toVersion: "1.0.0",
         duration: 0,
-        migrationApplied: false,
+        dataRestored: false,
         requiresRestart: false,
         error: "lockfile mismatch",
       }),
@@ -135,6 +198,7 @@ describe("PluginRollbackDialog", () => {
             size: 0,
             canRollback: false,
             reason: "missing migration",
+            data: NO_DATA_CHANGE,
           },
         ],
       }),

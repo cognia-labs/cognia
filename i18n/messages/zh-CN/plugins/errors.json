@@ -3,6 +3,8 @@
   "adapter": "{pluginName} 的插件适配器运行失败",
   "codes": {
     "authProviderConflict": "登录提供方“{provider}”已被另一个插件占用。请先卸载那个插件。",
+    "dataRestoreUnconfirmed": "此次回滚会用快照恢复插件数据，并丢弃之后保存的内容。请先在回滚对话框中确认。",
+    "dataSnapshotDeclined": "升级已取消：没有空间保留数据快照，它的数据仍停留在版本 {from}，没有迁移到 {to}。",
     "dataVersionAhead": "它的数据已被 {applied} 版升级。请将插件更新到 {applied} 版或更高版本，或先清除它的数据，再运行 {current} 版。",
     "dependencyInUse": "其他插件依赖它：{dependents}。请先停用或卸载这些插件。",
     "dependencyMissing": "它依赖尚未启用的插件：{dependencies}。",

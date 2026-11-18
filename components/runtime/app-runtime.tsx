@@ -67,6 +67,7 @@ import { PluginToolDispatchProvider } from "@/components/providers/plugin-tool-d
 import { PluginModalRoot } from "@/components/plugins/dialogs/plugin-modal-root"
 import { PluginConsentOverlay } from "@/components/plugins/dialogs/plugin-consent-overlay"
 import { PluginPermissionRequestHost } from "@/components/plugins/plugin-permission-request-host"
+import { PluginDataSnapshotSpaceHost } from "@/components/plugins/plugin-data-snapshot-space-host"
 import { PluginConnectionPromptHost } from "@/components/plugins/auth/plugin-connection-prompt-host"
 import { PluginUpdateToaster } from "@/components/plugins/plugin-update-toaster"
 import { PluginEnableFailureToaster } from "@/components/plugins/plugin-enable-failure-toaster"
@@ -418,6 +419,11 @@ export function AppRuntime({
                              * plugin can ask from any page, so this belongs at
                              * the root rather than on /plugins. */}
                             <PluginPermissionRequestHost />
+                            {/* A plugin data migration whose snapshot will not
+                             * fit waits for the user here: migrate without
+                             * one, or cancel the upgrade (ADR-0258). Upgrades
+                             * and activations migrate from any page. */}
+                            <PluginDataSnapshotSpaceHost />
                             <PluginConnectionPromptHost />
                             {/* "Notify only" auto-update dispatched an event
                              * nothing listened for, so the cadence the Policy

@@ -14,6 +14,16 @@ import type { PluginDexieMigrationDef } from "@/types/plugin"
 import { bindPluginCallbacks, HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 import type { PluginDexieMeta } from "./meta"
 import { loggers } from "@/lib/plugin/core/logger"
+import {
+  capturePluginDataSnapshot,
+  estimatePluginDataBytes,
+  isQuotaExceeded,
+  prunePluginDataSnapshots,
+  recordSkippedPluginDataSnapshot,
+  snapshotSpaceRequired,
+  storageHeadroom,
+} from "./data-snapshots"
+import { requestPluginDataSnapshotSpaceDecision } from "./snapshot-space-requests"
 
 /** A package rollback cannot roll back already committed plugin data. */
 export class PluginDataVersionError extends Error {
@@ -27,6 +37,24 @@ export class PluginDataVersionError extends Error {
         `update to v${appliedMigrationVersion} or later, or clear plugin data before activating v${currentVersion}`
     )
     this.name = "PluginDataVersionError"
+  }
+}
+
+/**
+ * The user cancelled an upgrade whose data migration had no room for a
+ * snapshot. Nothing was migrated; the data is still at `fromVersion`.
+ */
+export class PluginDataSnapshotDeclinedError extends Error {
+  constructor(
+    readonly pluginId: string,
+    readonly fromVersion: number,
+    readonly toVersion: number
+  ) {
+    super(
+      `Plugin "${pluginId}" upgrade cancelled: its data was left at v${fromVersion} ` +
+        `because a snapshot before migrating it to v${toVersion} would not fit in storage`
+    )
+    this.name = "PluginDataSnapshotDeclinedError"
   }
 }
 
@@ -82,7 +110,18 @@ export async function runPendingMigrations(
   }
 }
 
-/** Commit all backfills and their durable version together, before activation. */
+type SnapshotMode = "capture" | "skip"
+
+/**
+ * Commit all backfills and their durable version together, before activation.
+ *
+ * When the data version advances, the plugin's rows are copied into a
+ * snapshot first, in the same transaction (ADR-0258), so a rollback to the
+ * older package can restore them. A copy that will not fit in the storage
+ * quota, by estimate or because IndexedDB ran out while writing it, asks the
+ * user whether to migrate without one or cancel; cancelling throws
+ * {@link PluginDataSnapshotDeclinedError} with nothing migrated.
+ */
 export async function runPluginMigrations(
   db: Dexie,
   pluginId: string,
@@ -93,48 +132,104 @@ export async function runPluginMigrations(
   const metaTable = db.table<PluginDexieMeta, string>("pluginDexieMeta")
   const meta = await metaTable.get(pluginId)
   if (!meta) throw new Error(`Plugin "${pluginId}" has no Dexie registration`)
-  let baselinedUnknownVersion = false
-  await db.transaction(
-    "rw",
-    [metaTable, ...meta.tableNames.map((name) => db.table(name))],
-    async (tx) => {
-      // Read inside the write transaction so concurrent windows cannot run the
-      // same pending backfill after both observed an older version.
-      const current = await metaTable.get(pluginId)
-      if (!current) throw new Error(`Plugin "${pluginId}" has no Dexie registration`)
-      if (current.appliedMigrationVersion === undefined) {
-        // Legacy data already has the installed shape. Without evidence of the
-        // old version, replaying historical transformations could corrupt it.
-        await metaTable.put({ ...current, appliedMigrationVersion: currentVersion })
-        baselinedUnknownVersion = true
-        return
-      }
-      const previousVersion = current.appliedMigrationVersion
-      assertPluginDataVersion(pluginId, currentVersion, previousVersion)
-      if (currentVersion === previousVersion) return
-      const upgradeHandlers: MigrationContext["upgradeHandlers"] = {}
-      for (const migration of migrations) {
-        const handler = Object.hasOwn(moduleExports, migration.upgrade)
-          ? moduleExports[migration.upgrade]
-          : undefined
-        if (typeof handler === "function") {
-          upgradeHandlers[migration.upgrade] = bindPluginCallbacks(
-            pluginId,
-            handler,
-            () => HOST_BACKGROUND
-          ) as MigrationContext["upgradeHandlers"][string]
-        }
-      }
-      await Dexie.waitFor(
-        runPendingMigrations(tx, migrations, {
-          previousVersion,
-          currentVersion,
-          upgradeHandlers,
-        })
-      )
-      await metaTable.put({ ...current, appliedMigrationVersion: currentVersion })
+  const fromVersion = meta.appliedMigrationVersion
+  const pending = fromVersion !== undefined && fromVersion < currentVersion
+  let estimatedBytes = 0
+  let mode: SnapshotMode = "capture"
+  const decide = async (availableBytes: number | undefined): Promise<SnapshotMode> => {
+    const decision = await requestPluginDataSnapshotSpaceDecision({
+      pluginId,
+      fromVersion: fromVersion ?? 0,
+      toVersion: currentVersion,
+      requiredBytes: snapshotSpaceRequired(estimatedBytes),
+      ...(availableBytes !== undefined ? { availableBytes } : {}),
+    })
+    if (decision === "cancel") {
+      throw new PluginDataSnapshotDeclinedError(pluginId, fromVersion ?? 0, currentVersion)
     }
-  )
+    return "skip"
+  }
+  if (pending) {
+    estimatedBytes = await estimatePluginDataBytes(db, meta.tableNames)
+    const headroom = await storageHeadroom()
+    if (headroom !== undefined && snapshotSpaceRequired(estimatedBytes) > headroom) {
+      mode = await decide(headroom)
+    }
+  }
+
+  let baselinedUnknownVersion = false
+  let snapshotWritten = false
+  const migrate = (snapshot: SnapshotMode) =>
+    db.transaction(
+      "rw",
+      [
+        metaTable,
+        db.table("pluginDataSnapshots"),
+        db.table("pluginDataSnapshotRows"),
+        ...meta.tableNames.map((name) => db.table(name)),
+      ],
+      async (tx) => {
+        // Read inside the write transaction so concurrent windows cannot run the
+        // same pending backfill after both observed an older version.
+        const current = await metaTable.get(pluginId)
+        if (!current) throw new Error(`Plugin "${pluginId}" has no Dexie registration`)
+        if (current.appliedMigrationVersion === undefined) {
+          // Legacy data already has the installed shape. Without evidence of the
+          // old version, replaying historical transformations could corrupt it.
+          await metaTable.put({ ...current, appliedMigrationVersion: currentVersion })
+          baselinedUnknownVersion = true
+          return
+        }
+        const previousVersion = current.appliedMigrationVersion
+        assertPluginDataVersion(pluginId, currentVersion, previousVersion)
+        if (currentVersion === previousVersion) return
+        // Copy the rows before any plugin code sees the transaction. Plugin
+        // upgrade code can already reach the whole database through `tx.db`,
+        // so having the snapshot stores in scope exposes nothing new.
+        const target = { pluginId, dataVersion: previousVersion, migratedTo: currentVersion }
+        if (snapshot === "capture") {
+          await capturePluginDataSnapshot(db, {
+            ...target,
+            tableNames: current.tableNames.filter((name) => meta.tableNames.includes(name)),
+            bytes: estimatedBytes,
+          })
+        } else {
+          await recordSkippedPluginDataSnapshot(db, target)
+        }
+        snapshotWritten = true
+        const upgradeHandlers: MigrationContext["upgradeHandlers"] = {}
+        for (const migration of migrations) {
+          const handler = Object.hasOwn(moduleExports, migration.upgrade)
+            ? moduleExports[migration.upgrade]
+            : undefined
+          if (typeof handler === "function") {
+            upgradeHandlers[migration.upgrade] = bindPluginCallbacks(
+              pluginId,
+              handler,
+              () => HOST_BACKGROUND
+            ) as MigrationContext["upgradeHandlers"][string]
+          }
+        }
+        await Dexie.waitFor(
+          runPendingMigrations(tx, migrations, {
+            previousVersion,
+            currentVersion,
+            upgradeHandlers,
+          })
+        )
+        await metaTable.put({ ...current, appliedMigrationVersion: currentVersion })
+      }
+    )
+
+  try {
+    await migrate(mode)
+  } catch (error) {
+    // The estimate can be wrong; IndexedDB refusing the copy is the real answer.
+    if (mode !== "capture" || !isQuotaExceeded(error)) throw error
+    snapshotWritten = false
+    await migrate(await decide(undefined))
+  }
+  if (snapshotWritten) await prunePluginDataSnapshots(db, pluginId)
   if (baselinedUnknownVersion) {
     loggers.manager.warn(
       `[plugin:${pluginId}] Dexie migration previous version is unknown; baselined at ${currentVersion} without replaying migrations`

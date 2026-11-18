@@ -53,6 +53,7 @@ import { getDb } from "@/lib/db/schema"
 import { getInstallOrigin } from "@/lib/db/plugin-install-origins"
 import { baselinePluginMigrationVersion, getPluginDexieMeta } from "@/lib/plugin/dexie/meta"
 import { assertPluginDataVersion } from "@/lib/plugin/dexie/migration-runner"
+import { restoreDataTakenSince } from "@/lib/plugin/dexie/data-rollback"
 import { codeServerClient, type CodeServerProxyArtifact } from "@/lib/codeserver/client"
 import { stageManagedIdeProxy } from "../ide/proxy-manager"
 import { recordInstallOrigin, resolvePluginOrigin } from "../origin/install-origin"
@@ -859,6 +860,9 @@ export class PluginUpdater {
             packageRestored = true
             await this.refreshRuntimePlugins()
             try {
+              // The update may have migrated the data before it failed; its
+              // snapshot puts it back where the restored package can read it.
+              await restoreDataTakenSince(() => getDb(), pluginId, currentVersion, startTime)
               assertPluginDataVersion(
                 pluginId,
                 Number.parseInt(currentVersion.split(".")[0], 10),

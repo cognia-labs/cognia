@@ -1135,7 +1135,50 @@ describe("PluginUpdater", () => {
       }
     })
 
-    it("review regression: surfaces migrated data incompatibility after restoring the old package", async () => {
+    it("ENV04: puts back the data the failed update migrated, with the old package", async () => {
+      const state = mockGetStoreState() as never as {
+        plugins: Record<
+          string,
+          { manifest: import("@/types/plugin").PluginManifest; status: string; error?: string }
+        >
+      }
+      const previous = state.plugins["plugin-a"].manifest
+      state.plugins["plugin-a"].status = "enabled"
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        state.plugins["plugin-a"].manifest = { ...previous, version: "2.0.0" }
+      })
+      const db = getDb()
+      // Earlier cases migrate plugin-a in this shared database too.
+      await db.pluginDataSnapshots.where("pluginId").equals("plugin-a").delete()
+      managerModule.__enablePluginSpy.mockImplementationOnce(async () => {
+        await db
+          .table("pluginDexieMeta")
+          .put({ pluginId: "plugin-a", tableNames: [], appliedMigrationVersion: 1 })
+        await runPluginMigrations(db, "plugin-a", 2, [], {})
+        throw new Error("v2 activation failed")
+      })
+      backupModule.__restoreBackupSpy.mockImplementationOnce(async () => {
+        state.plugins["plugin-a"].manifest = previous
+        return { success: true }
+      })
+      try {
+        const result = await updater.update("plugin-a", { force: true, version: "2.0.0" })
+        expect(result).toMatchObject({
+          success: false,
+          error: expect.stringContaining("v2 activation failed"),
+          rollback: { attempted: true, succeeded: true },
+        })
+        // The snapshot the migration took brought the data back to v1.
+        expect((await db.table("pluginDexieMeta").get("plugin-a")).appliedMigrationVersion).toBe(1)
+        expect(await db.pluginDataSnapshots.where("pluginId").equals("plugin-a").count()).toBe(0)
+        expect(state.plugins["plugin-a"].status).not.toBe("error")
+      } finally {
+        await db.pluginDexieMeta.delete("plugin-a")
+        await db.pluginDataSnapshots.where("pluginId").equals("plugin-a").delete()
+      }
+    })
+
+    it("review regression: surfaces migrated data incompatibility when no snapshot can restore it", async () => {
       const state = mockGetStoreState() as never as {
         plugins: Record<
           string,
@@ -1153,6 +1196,8 @@ describe("PluginUpdater", () => {
           .table("pluginDexieMeta")
           .put({ pluginId: "plugin-a", tableNames: [], appliedMigrationVersion: 1 })
         await runPluginMigrations(db, "plugin-a", 2, [], {})
+        // The user migrated without a snapshot (not enough space).
+        await db.pluginDataSnapshots.where("pluginId").equals("plugin-a").delete()
         throw new Error("v2 activation failed")
       })
       backupModule.__restoreBackupSpy.mockImplementationOnce(async () => {

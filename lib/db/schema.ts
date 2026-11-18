@@ -439,7 +439,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 256
+export const CURRENT_SCHEMA_VERSION = 257
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1112,6 +1112,11 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
     "&id, connectionId, providerFingerprint, accountId, workflowId, sessionId, expiresAt, [connectionId+providerFingerprint], consumerPluginId, [connectionId+consumerPluginId]",
   // v256 (ADR-0253 §10) — usage rows whose write failed, retried until kept.
   usageWriteOutbox: "&id, state, nextAttemptAt",
+  // v257 (ADR-0258) — a plugin's Dexie rows as they were before a data
+  // migration, so a rollback to the older package can put them back
+  // (`lib/db/plugin-data-snapshots.ts`, `lib/plugin/dexie/data-snapshots.ts`).
+  pluginDataSnapshots: "&id, pluginId",
+  pluginDataSnapshotRows: "[snapshotId+table+chunk], snapshotId",
 }
 
 let databaseConnectionSequence = 0
@@ -1745,6 +1750,12 @@ export class CogniaDB extends Dexie {
   // v256 — a usage row whose write failed, kept until it is written
   // (`lib/usage/usage-write-outbox.ts`, ADR-0253 §10).
   usageWriteOutbox!: Table<import("@/lib/usage/usage-write-outbox").UsageWriteOutboxRow, string>
+  // v257 — pre-migration snapshots of a plugin's Dexie tables (ADR-0258).
+  pluginDataSnapshots!: Table<import("./plugin-data-snapshots").PluginDataSnapshotRecord, string>
+  pluginDataSnapshotRows!: Table<
+    import("./plugin-data-snapshots").PluginDataSnapshotChunk,
+    [string, string, number]
+  >
 
   messageSyncClock!: Table<MessageSyncClock, "singleton">
 

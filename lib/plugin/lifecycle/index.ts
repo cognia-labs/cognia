@@ -28,6 +28,5 @@ export {
   resetPluginRollbackManager,
   type RollbackInfo,
   type RollbackResult,
-  type RollbackPlan,
-  type MigrationScript,
+  type RollbackOptions,
 } from "./rollback"

@@ -129,11 +129,36 @@ describe("contractViolations", () => {
   })
 })
 
+describe("the data clause (ADR-0258)", () => {
+  it("requires the package on disk to read the data", () => {
+    expect(
+      contractViolations(scenario("replaces-enabled"), VERSIONS, observed({ dataVersion: 2 }))
+    ).toEqual([])
+    expect(
+      contractViolations(
+        scenario("fails-after-commit"),
+        VERSIONS,
+        observed({
+          outcome: "failed",
+          packageVersion: "1.0.0",
+          recordedVersion: "1.0.0",
+          dataVersion: 2,
+        })
+      )
+    ).toEqual(["the data is at v2, newer than v1.0.0 can read"])
+  })
+
+  it("is not checked where the harness does not model data", () => {
+    expect(contractViolations(scenario("replaces-enabled"), VERSIONS, observed({}))).toEqual([])
+  })
+})
+
 describe("recorded gaps", () => {
   it("pins every clause an environment has not closed", () => {
     // Closing a gap means deleting its entry here, in contract.ts and in ADR-0258.
     expect(CONTRACT_GAPS).toEqual({
       "desktop-update": { cancel: expect.any(String) },
+      "desktop-rollback": { identity: expect.any(String), cancel: expect.any(String) },
       "cli-update": {},
       "vscode-install": { cancel: expect.any(String) },
     })
@@ -148,5 +173,13 @@ describe("recorded gaps", () => {
     expect(scenariosFor("cli-update")).toHaveLength(REPLACEMENT_SCENARIOS.length)
     expect(scenariosFor("desktop-update").map((s) => s.fault)).not.toContain("cancel")
     expect(scenariosFor("vscode-install")).toHaveLength(REPLACEMENT_SCENARIOS.length - 1)
+    expect(scenariosFor("desktop-rollback").map((s) => s.fault)).toEqual([
+      "none",
+      "none",
+      "none",
+      "none",
+      "before-commit",
+      "after-commit",
+    ])
   })
 })

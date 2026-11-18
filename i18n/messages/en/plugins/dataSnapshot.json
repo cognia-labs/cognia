@@ -1,0 +1,25 @@
+{
+  "list": {
+    "captured": "Data version {from}, before the move to {to}: {rows, plural, one {# record} other {# records}}, taken {date}",
+    "empty": "No data snapshots. One is taken before each upgrade that migrates this plugin's data.",
+    "loadFailed": "Couldn't read this plugin's data snapshots.",
+    "skipped": "No snapshot of data version {from}: the move to {to} on {date} ran without one, for lack of space. That data cannot be restored.",
+    "title": "Data snapshots"
+  },
+  "notice": {
+    "checkFailed": "Couldn't check what this does to the plugin's data, so it can't go ahead.",
+    "restore": "Rolling back also puts {name}'s data back as it was on {date}. The {currentRows, plural, one {# record} other {# records}} it has now are replaced by the {snapshotRows, plural, one {# record} other {# records}} in that snapshot, and anything it saved since is lost.",
+    "rowRestore": "Restores data from {date}",
+    "rowUnavailable": "Can't read the current data",
+    "unavailable": "v{version} cannot read {name}'s current data (migrated to data version {current}), and no snapshot from before that migration is left. Delete the plugin's data first if you still want to roll back."
+  },
+  "space": {
+    "available": "Only {available} of storage is free.",
+    "body": "Upgrading {name} migrates its data from version {from} to {to}. A snapshot of the current data, about {required}, would let a rollback bring it back.",
+    "cancel": "Cancel upgrade",
+    "consequence": "Without a snapshot, rolling back to a version before data version {to} cannot bring this data back.",
+    "continue": "Continue without snapshot",
+    "ranOut": "Storage ran out while writing it.",
+    "title": "Not enough space to keep a data snapshot"
+  }
+}

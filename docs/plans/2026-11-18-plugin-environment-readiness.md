@@ -77,6 +77,19 @@ uv 的锁安装语义（来源：astral-sh/uv 文档，经 context7 查询）：
 - **配额**：写快照前用 `navigator.storage.estimate()` 估算可用空间。不够时弹窗说明这次升级之后无法回滚数据，用户选「不留快照继续」或「取消升级」（2026-11-18 已定）；选择继续时，在插件详情页标出该版本没有数据快照。
 - **测试**：migration-runner、bridge 和 rollback 的单元测试，加 `persistence.integration.test.ts` 的真实 IndexedDB（fake-indexeddb）用例。场景：迁移失败、恢复失败、多次迁移后回滚两级、卸载清理。
 
+**实施记录（2026-11-19，已完成）**
+
+- 快照在迁移的同一个读写事务里写入，先于任何插件代码执行。迁移抛错时，快照随事务一起回滚，因此不需要额外的删除步骤。读写都经过 Dexie：插件表在账户库中按行加密，并把表名和主键绑定进去，原生层面的拷贝无法解密。
+- schema v257。两张表分别是 `pluginDataSnapshots`（`&id, pluginId`）和 `pluginDataSnapshotRows`（`[snapshotId+table+chunk], snapshotId`）。排序在内存中完成，同一插件内的创建时间严格递增。行表标为机密、加密存储，只保存在本机，不参与同步，也不导出。快照在表目录中的保留策略为 `cap`。
+- 恢复分三种情况：
+  - 显式回滚：只有在用户确认了对应快照之后才执行；没有可用快照时，在动任何东西之前就拒绝。
+  - 更新失败和崩溃恢复：只自动恢复本次更新开始之后拍下的快照。
+  - 恢复完成后，删除用过的那份快照和比它更新的快照。
+- 无头 Host 没有人可问，默认不留快照继续，并记录一条“已跳过”的快照，插件数据页会标出来。
+- 删除了 `rollback.ts` 中从未被调用的内存配置迁移，包括 `MigrationScript`、`registerMigration` 和 `applyMigration`，以及 `createRollbackPlan`、`rollbackToLatestBackup` 和回滚历史。
+- 契约：回滚作为 `desktop-rollback` 加入契约用例，并新增一条数据条款：磁盘上的包必须能读取当前数据。回滚的身份检查和取消点记为缺口。
+- 测试改用真实 fake-indexeddb，放在 `bridge.test.ts`、`migration-runner.test.ts`、`data-snapshots.test.ts` 和 `data-rollback.test.ts` 中，没有另写 `persistence.integration.test.ts` 用例。
+
 ### P2 解释器版本探测（ENV03）
 
 - **探测**：用户为插件指定解释器时，Host 执行 `<path> -c "import sys; print('%d.%d.%d' % sys.version_info[:3])"`，用现有的 `parse_python_version` 解析，再与两项要求比对：Host 最低版本 3.9，以及插件 `pyproject.toml` 里 `[project].requires-python` 的 PEP 440 范围（如果有）。

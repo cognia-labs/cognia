@@ -33,6 +33,8 @@ export type PluginErrorCode =
   | "invalidManifest"
   | "uninstallMirrored"
   | "dataVersionAhead"
+  | "dataSnapshotDeclined"
+  | "dataRestoreUnconfirmed"
   | "authProviderConflict"
 
 export interface ClassifiedPluginError {
@@ -87,6 +89,17 @@ const PATTERNS: ReadonlyArray<{
     code: "dataVersionAhead",
     test: /^Plugin "[^"]+" data was migrated to v(\d+); update to v\d+ or later, or clear plugin data before activating v(\d+)$/,
     values: (m) => ({ applied: m[1] ?? "", current: m[2] ?? "" }),
+  },
+  {
+    // `PluginDataSnapshotDeclinedError` (lib/plugin/dexie/migration-runner.ts).
+    code: "dataSnapshotDeclined",
+    test: /^Plugin "[^"]+" upgrade cancelled: its data was left at v(\d+) because a snapshot before migrating it to v(\d+) would not fit in storage$/,
+    values: (m) => ({ from: m[1] ?? "", to: m[2] ?? "" }),
+  },
+  {
+    // `PluginDataRestoreUnconfirmedError` (lib/plugin/dexie/data-rollback.ts).
+    code: "dataRestoreUnconfirmed",
+    test: /^Rolling back plugin "[^"]+" restores its data from snapshot \S+ and discards what it saved since; confirm that first$/,
   },
   {
     // lib/plugin/auth/auth-provider-registry.ts ownership guard.

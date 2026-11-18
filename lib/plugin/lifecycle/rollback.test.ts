@@ -8,6 +8,13 @@ import {
   resetPluginRollbackManager,
 } from "./rollback"
 import { PluginServiceRegistry } from "../core/service-registry"
+import {
+  contractViolations,
+  scenariosFor,
+  type ReplacementObservation,
+  type ReplacementScenario,
+} from "./contract"
+import { runtimeResumeStateOf } from "./runtime-state"
 import { InMemoryPluginLifecycleStateAdapter } from "../core/lifecycle-state"
 
 const mockInvoke = jest.fn()
@@ -67,6 +74,18 @@ jest.mock("@/stores/plugin-runtime", () => ({
     setState: (...args: unknown[]) => mockStoreSetState(...args),
   },
 }))
+
+// What the rollback does to the plugin's data (ADR-0258).
+const mockDescribeDataRollback = jest.fn()
+const mockRestoreDataSnapshot = jest.fn()
+jest.mock("../dexie/data-rollback", () => ({
+  ...jest.requireActual("../dexie/data-rollback"),
+  describePluginDataRollback: (...args: unknown[]) => mockDescribeDataRollback(...args),
+}))
+jest.mock("../dexie/bridge", () => ({
+  restorePluginDataSnapshot: (...args: unknown[]) => mockRestoreDataSnapshot(...args),
+}))
+jest.mock("@/lib/db/schema", () => ({ getDb: () => ({ name: "test-db" }) }))
 
 jest.mock("../core/logger", () => ({
   loggers: {
@@ -130,6 +149,8 @@ describe("PluginRollbackManager", () => {
     mockGetVersions.mockResolvedValue([])
     mockInstallPlugin.mockResolvedValue({ success: true })
     mockInvoke.mockResolvedValue(null)
+    mockDescribeDataRollback.mockReset().mockResolvedValue({ kind: "none" })
+    mockRestoreDataSnapshot.mockReset().mockResolvedValue({ dataVersion: 1, rows: 2 })
     for (const mock of Object.values(mockManager)) mock.mockReset()
     mockManager.reservePluginRuntimeGraph.mockReturnValue({ pluginId: "plugin-a" })
     mockManager.hasUnresolvedActivationResources.mockReturnValue(false)
@@ -224,32 +245,25 @@ describe("PluginRollbackManager", () => {
       const info = await manager.getRollbackInfo("missing-plugin")
       expect(info.currentVersion).toBe("unknown")
     })
-  })
 
-  describe("createRollbackPlan", () => {
-    it("does not plan to load or enable a disabled plugin", async () => {
-      storeState.plugins["plugin-a"].status = "disabled"
-      mockGetBackups.mockReturnValue([{ version: "1.0.0", createdAt: new Date() }])
-      const plan = await manager.createRollbackPlan("plugin-a", "1.0.0")
-      expect(plan.steps.map((step) => step.action)).not.toContain("enable")
-      expect(plan.steps.map((step) => step.action)).not.toContain("load")
-    })
-    it("should create a rollback plan with steps", async () => {
+    it("says what each version does to the data, and does not offer one that cannot read it", async () => {
       mockGetBackups.mockReturnValue([
-        { pluginId: "plugin-a", version: "1.0.0", createdAt: new Date(), size: 1000 },
+        { pluginId: "plugin-a", version: "1.5.0", createdAt: new Date(), size: 1 },
+        { pluginId: "plugin-a", version: "0.9.0", createdAt: new Date(), size: 1 },
       ])
-
-      const plan = await manager.createRollbackPlan("plugin-a", "1.0.0")
-
-      expect(plan.pluginId).toBe("plugin-a")
-      expect(plan.targetVersion).toBe("1.0.0")
-      expect(plan.steps.length).toBeGreaterThan(0)
-    })
-
-    it("should throw for unavailable target version", async () => {
-      await expect(manager.createRollbackPlan("plugin-a", "1.0.0")).rejects.toThrow(
-        "Version 1.0.0 is not available for rollback"
+      const restore = { kind: "restore", snapshotId: "s1", capturedAt: 1, dataVersion: 1 }
+      mockDescribeDataRollback.mockImplementation(async (_db, _id, version: string) =>
+        version === "1.5.0"
+          ? restore
+          : { kind: "unavailable", currentDataVersion: 2, targetDataVersion: 0 }
       )
+      const [newer, older] = (await manager.getRollbackInfo("plugin-a")).availableVersions
+      expect(newer).toMatchObject({ version: "1.5.0", canRollback: true, data: restore })
+      expect(older).toMatchObject({
+        version: "0.9.0",
+        canRollback: false,
+        data: { kind: "unavailable" },
+      })
     })
   })
 
@@ -394,26 +408,71 @@ describe("PluginRollbackManager", () => {
       expect(storeState.plugins["plugin-a"].status).toBe("suspended")
     })
 
-    it("reports a failed down migration and does not reactivate", async () => {
-      storeState.plugins["plugin-a"].config = { nested: { value: "keep" } }
-      manager.registerMigration("plugin-a", {
-        fromVersion: "1.0.0",
-        toVersion: "2.0.0",
-        up: (data) => data,
-        down: (data) => {
-          ;(data.nested as { value: string }).value = "changed"
-          throw new Error("down migration rejected")
-        },
+    it("refuses, before touching anything, when the data cannot be brought back", async () => {
+      mockDescribeDataRollback.mockResolvedValue({
+        kind: "unavailable",
+        currentDataVersion: 2,
+        targetDataVersion: 1,
       })
       const result = await manager.rollback("plugin-a", "1.0.0")
       expect(result).toMatchObject({
         success: false,
-        migrationApplied: false,
-        error: "down migration rejected",
+        dataRestored: false,
+        error:
+          'Plugin "plugin-a" data was migrated to v2; update to v2 or later, or clear plugin data before activating v1',
       })
-      expect(mockManager.enablePlugin).not.toHaveBeenCalled()
-      expect(storeState.plugins["plugin-a"].config).toEqual({ nested: { value: "keep" } })
-      expect(mockManager.releasePluginRuntimeGraph).toHaveBeenCalled()
+      expect(result.rollback).toBeUndefined()
+      expect(mockCreateBackup).not.toHaveBeenCalled()
+      expect(mockManager.disablePlugin).not.toHaveBeenCalled()
+      expect(mockInstallPlugin).not.toHaveBeenCalled()
+      expect(storeState.plugins["plugin-a"].status).toBe("enabled")
+    })
+
+    it("refuses a data restore nobody confirmed, before touching anything", async () => {
+      mockDescribeDataRollback.mockResolvedValue({ kind: "restore", snapshotId: "s1" })
+      for (const confirmed of [undefined, "another"]) {
+        const result = await manager.rollback("plugin-a", "1.0.0", {
+          ...(confirmed ? { confirmedDataSnapshot: confirmed } : {}),
+        })
+        expect(result).toMatchObject({
+          success: false,
+          error: expect.stringContaining("restores its data from snapshot s1"),
+        })
+      }
+      expect(mockCreateBackup).not.toHaveBeenCalled()
+      expect(mockInstallPlugin).not.toHaveBeenCalled()
+      expect(mockRestoreDataSnapshot).not.toHaveBeenCalled()
+    })
+
+    it("restores the confirmed data snapshot after the package and before reactivating", async () => {
+      mockDescribeDataRollback.mockResolvedValue({ kind: "restore", snapshotId: "s1" })
+      const order: string[] = []
+      mockInstallPlugin.mockImplementation(async () => {
+        order.push("install")
+        return { success: true }
+      })
+      mockRestoreDataSnapshot.mockImplementation(async () => {
+        order.push("data")
+        return { dataVersion: 1, rows: 2 }
+      })
+      mockManager.enablePlugin.mockImplementation(async () => {
+        order.push("enable")
+        storeState.plugins["plugin-a"].status = "enabled"
+      })
+      const result = await manager.rollback("plugin-a", "1.0.0", { confirmedDataSnapshot: "s1" })
+      expect(result).toMatchObject({ success: true, dataRestored: true })
+      expect(mockRestoreDataSnapshot).toHaveBeenCalledWith(expect.any(Function), "plugin-a", "s1")
+      expect(order).toEqual(["install", "data", "enable"])
+    })
+
+    it("passes the confirmation through a backup restore", async () => {
+      mockGetBackups.mockReturnValue([{ id: "old", pluginId: "plugin-a", version: "1.0.0" }])
+      mockDescribeDataRollback.mockResolvedValue({ kind: "restore", snapshotId: "s1" })
+      expect(await manager.restoreBackup("old", { confirmedDataSnapshot: "s1" })).toMatchObject({
+        success: true,
+        dataRestored: true,
+      })
+      expect(mockRestore).toHaveBeenCalledWith("old", mockManager)
     })
 
     it("does not manufacture the target version when scanning fails", async () => {
@@ -469,19 +528,14 @@ describe("PluginRollbackManager", () => {
       expect(storeState.plugins["plugin-a"].status).toBe("enabled")
     })
 
-    it("restores the safety snapshot when the down migration throws after installing", async () => {
-      manager.registerMigration("plugin-a", {
-        fromVersion: "1.0.0",
-        toVersion: "2.0.0",
-        up: (data) => data,
-        down: () => {
-          throw new Error("down migration rejected")
-        },
-      })
-      const result = await manager.rollback("plugin-a", "1.0.0")
+    it("restores the safety snapshot when restoring the data throws after installing", async () => {
+      mockDescribeDataRollback.mockResolvedValue({ kind: "restore", snapshotId: "s1" })
+      mockRestoreDataSnapshot.mockRejectedValueOnce(new Error("missing chunk 0"))
+      const result = await manager.rollback("plugin-a", "1.0.0", { confirmedDataSnapshot: "s1" })
       expect(result).toMatchObject({
         success: false,
-        error: "down migration rejected",
+        dataRestored: false,
+        error: "missing chunk 0",
         requiresRestart: true,
         rollback: { attempted: true, succeeded: true },
       })
@@ -496,18 +550,16 @@ describe("PluginRollbackManager", () => {
       })
     })
 
-    it("puts the pre-migration config back with the safety snapshot", async () => {
-      storeState.plugins["plugin-a"].config = { schema: 2 }
-      manager.registerMigration("plugin-a", {
-        fromVersion: "1.0.0",
-        toVersion: "2.0.0",
-        up: (data) => data,
-        down: () => ({ schema: 1 }),
-      })
+    it("says the data stayed restored when a later step fails", async () => {
+      mockDescribeDataRollback.mockResolvedValue({ kind: "restore", snapshotId: "s1" })
       mockManager.enablePlugin.mockRejectedValueOnce(new Error("activation failed"))
-      const result = await manager.rollback("plugin-a", "1.0.0")
-      expect(result).toMatchObject({ success: false, migrationApplied: true })
-      expect(storeState.setPluginConfig).toHaveBeenLastCalledWith("plugin-a", { schema: 2 })
+      const result = await manager.rollback("plugin-a", "1.0.0", { confirmedDataSnapshot: "s1" })
+      expect(result).toMatchObject({
+        success: false,
+        dataRestored: true,
+        error: "activation failed; the plugin's data was already restored from its snapshot",
+        rollback: { attempted: true, succeeded: true },
+      })
       expect(mockRestore).toHaveBeenCalledWith("safety", mockManager)
     })
 
@@ -547,38 +599,73 @@ describe("PluginRollbackManager", () => {
     })
   })
 
-  describe("rollbackToLatestBackup", () => {
-    it("should rollback to latest backup version", async () => {
-      mockGetBackups.mockReturnValue([
-        {
-          pluginId: "plugin-a",
-          version: "1.5.0",
-          createdAt: new Date(),
-          size: 1200,
-          path: "/backup/1.5.0",
-        },
-        {
-          pluginId: "plugin-a",
-          version: "1.0.0",
-          createdAt: new Date(Date.now() - 10000),
-          size: 1000,
-          path: "/backup/1.0.0",
-        },
-      ])
+  describe("lifecycle contract (ADR-0258)", () => {
+    const VERSIONS = { from: "2.0.0", to: "1.0.0" }
+    const STATUS_OF = {
+      enabled: "enabled",
+      suspended: "suspended",
+      loaded: "loaded",
+      stopped: "installed",
+    } as const
 
-      mockManager.scanPlugins.mockImplementationOnce(async () => {
-        storeState.plugins["plugin-a"].manifest.version = "1.5.0"
+    /** Roll the installed v2.0.0 (data at v2) back to v1.0.0, with `scenario`'s fault. */
+    async function run(scenario: ReplacementScenario): Promise<ReplacementObservation> {
+      const plugin = storeState.plugins["plugin-a"]
+      plugin.status = STATUS_OF[scenario.before]
+      // The store's manifest stands for the package on disk.
+      let disk = VERSIONS.from
+      let recorded = VERSIONS.from
+      let dataVersion = 2
+      const project = () => void (plugin.manifest.version = disk)
+      mockCreateBackup.mockResolvedValue({ success: true, backup: { id: "safety" } })
+      mockReadOrigin.mockResolvedValue({
+        pluginId: "plugin-a",
+        version: VERSIONS.from,
+        origin: { kind: "registry", registryUrl: "https://r.test", version: VERSIONS.from },
       })
+      mockRecordOrigin.mockImplementation(async (record: { version: string }) => {
+        recorded = record.version
+      })
+      // The registry install records its own origin, as the marketplace does.
+      mockInstallPlugin.mockImplementation(async () => {
+        if (scenario.fault === "before-commit") return { success: false, error: "network down" }
+        disk = VERSIONS.to
+        recorded = VERSIONS.to
+        return { success: true }
+      })
+      mockRestore.mockImplementation(async (id: string) => {
+        if (id === "safety") disk = VERSIONS.from
+        return { success: true, requiresRestart: false }
+      })
+      mockManager.scanPlugins.mockImplementation(async () => project())
+      mockDescribeDataRollback.mockResolvedValue({ kind: "restore", snapshotId: "s1" })
+      mockRestoreDataSnapshot.mockImplementation(async () => {
+        dataVersion = 1
+        return { dataVersion: 1, rows: 2 }
+      })
+      if (scenario.fault === "after-commit") {
+        const fail = async () => {
+          throw new Error("v1 activation failed")
+        }
+        mockManager.enablePlugin.mockImplementationOnce(fail)
+        mockManager.loadPlugin.mockImplementationOnce(fail)
+      }
 
-      const result = await manager.rollbackToLatestBackup("plugin-a")
-      expect(result.success).toBe(true)
-      expect(result.toVersion).toBe("1.5.0")
-    })
+      const result = await manager.rollback("plugin-a", VERSIONS.to, {
+        confirmedDataSnapshot: "s1",
+      })
+      return {
+        outcome: result.success ? "succeeded" : "failed",
+        restartRequired: result.requiresRestart,
+        packageVersion: disk,
+        recordedVersion: recorded,
+        runtime: runtimeResumeStateOf(plugin.status),
+        dataVersion,
+      }
+    }
 
-    it("should fail if no backups available", async () => {
-      mockGetBackups.mockReturnValue([])
-      const result = await manager.rollbackToLatestBackup("plugin-a")
-      expect(result.success).toBe(false)
+    it.each(scenariosFor("desktop-rollback"))("$id", async (scenario) => {
+      expect(contractViolations(scenario, VERSIONS, await run(scenario))).toEqual([])
     })
   })
 })

@@ -5,6 +5,8 @@
 import { renderHook } from "@testing-library/react"
 
 import { classifyPluginError, usePluginErrorMessage } from "./use-plugin-error-message"
+import { PluginDataSnapshotDeclinedError } from "@/lib/plugin/dexie/migration-runner"
+import { PluginDataRestoreUnconfirmedError } from "@/lib/plugin/dexie/data-rollback"
 
 describe("classifyPluginError", () => {
   it.each([
@@ -49,6 +51,16 @@ describe("classifyPluginError", () => {
       'Auth provider "feishu" is owned by another plugin.',
       "authProviderConflict",
       { provider: "feishu" },
+    ],
+    [
+      new PluginDataSnapshotDeclinedError("notes", 1, 2).message,
+      "dataSnapshotDeclined",
+      { from: "1", to: "2" },
+    ],
+    [
+      new PluginDataRestoreUnconfirmedError("notes", "0b9d-snap").message,
+      "dataRestoreUnconfirmed",
+      {},
     ],
   ])("classifies lifecycle guard %s", (message, code, values) => {
     expect(classifyPluginError(new Error(message))).toEqual({ code, message, values })

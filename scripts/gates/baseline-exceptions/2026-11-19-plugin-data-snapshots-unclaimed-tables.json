@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:unclaimedTables",
+  "allowGrowth": 2,
+  "owner": "lib/plugin",
+  "repaymentPhase": "2",
+  "reason": "ADR-0258 (plan P1) adds pluginDataSnapshots and pluginDataSnapshotRows (schema v257), the copy of a plugin's Dexie rows taken in the same transaction as each data migration so a rollback can restore them. The plugin subsystem is an ownership-table row without a module manifest, so nothing can claim the tables yet; they are claimed when lib/plugin gets its manifest."
+}

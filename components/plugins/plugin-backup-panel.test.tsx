@@ -56,6 +56,17 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(() => true),
 }))
 
+jest.mock("@/hooks/plugins/use-plugin-display-name", () => ({
+  usePluginDisplayName: () => "Alpha",
+}))
+
+// What restoring the backup does to the plugin's data (ADR-0258).
+const mockDataRollback = jest.fn()
+jest.mock("@/hooks/plugins/use-plugin-data-rollback", () => ({
+  usePluginDataRollback: (pluginId: string | null, version: string | null) =>
+    mockDataRollback(pluginId, version),
+}))
+
 const mockRawRestore = jest.fn()
 const mockRestoreBackup = jest.fn()
 jest.mock("@/lib/plugin/lifecycle/backup", () => ({
@@ -85,6 +96,7 @@ beforeEach(() => {
   __resetPluginBackupClientForTests(null)
   mockRawRestore.mockReset().mockResolvedValue({ success: true })
   mockRestoreBackup.mockReset().mockResolvedValue({ success: true, requiresRestart: false })
+  mockDataRollback.mockReset().mockReturnValue({ data: { kind: "none" }, error: null })
   ;(isTauri as jest.Mock).mockReturnValue(true)
 })
 
@@ -96,8 +108,62 @@ describe("PluginBackupPanel", () => {
     await act(async () => {
       fireEvent.click(within(confirm).getByRole("button", { name: "restore" }))
     })
-    expect(mockRestoreBackup).toHaveBeenCalledWith(sampleBackup.id)
+    expect(mockRestoreBackup).toHaveBeenCalledWith(sampleBackup.id, {})
     expect(mockRawRestore).not.toHaveBeenCalled()
+  })
+
+  it("asks about the data for the backup's version, and only while restoring", async () => {
+    render(<PluginBackupPanel pluginId="alpha" />)
+    expect(mockDataRollback).toHaveBeenLastCalledWith("alpha", null)
+    fireEvent.click(screen.getByRole("button", { name: /^restoreAria/ }))
+    await screen.findByRole("alertdialog")
+    expect(mockDataRollback).toHaveBeenLastCalledWith("alpha", "1.2.3")
+  })
+
+  it("says the data goes back to the snapshot and authorizes exactly that one", async () => {
+    mockDataRollback.mockReturnValue({
+      data: {
+        kind: "restore",
+        snapshotId: "snap-1",
+        capturedAt: Date.parse("2026-05-01T08:00:00.000Z"),
+        dataVersion: 1,
+        currentDataVersion: 2,
+        currentRows: 7,
+        snapshotRows: 5,
+      },
+      error: null,
+    })
+    render(<PluginBackupPanel pluginId="alpha" />)
+    fireEvent.click(screen.getByRole("button", { name: /^restoreAria/ }))
+    const confirm = await screen.findByRole("alertdialog")
+    expect(within(confirm).getByTestId("plugin-data-rollback-restore")).toHaveTextContent(
+      '"currentRows":7'
+    )
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "restore" }))
+    })
+    expect(mockRestoreBackup).toHaveBeenCalledWith(sampleBackup.id, {
+      confirmedDataSnapshot: "snap-1",
+    })
+  })
+
+  it.each([
+    [
+      "the data cannot be brought back",
+      { data: { kind: "unavailable", currentDataVersion: 2, targetDataVersion: 1 }, error: null },
+      "plugin-data-rollback-unavailable",
+    ],
+    ["its effect on the data is still loading", { data: null, error: null }, null],
+    ["checking the data failed", { data: null, error: "db closed" }, "alert"],
+  ])("refuses to restore while %s", async (_case, state, marker) => {
+    mockDataRollback.mockReturnValue(state)
+    render(<PluginBackupPanel pluginId="alpha" />)
+    fireEvent.click(screen.getByRole("button", { name: /^restoreAria/ }))
+    const confirm = await screen.findByRole("alertdialog")
+    if (marker === "alert")
+      expect(within(confirm).getByRole("alert")).toHaveTextContent("checkFailed")
+    else if (marker) expect(within(confirm).getByTestId(marker)).toBeInTheDocument()
+    expect(within(confirm).getByRole("button", { name: "restore" })).toBeDisabled()
   })
 
   it.each([
@@ -275,7 +341,7 @@ describe("PluginBackupPanel", () => {
     await act(async () => {
       fireEvent.click(within(confirm).getByRole("button", { name: "restore" }))
     })
-    expect(restore).toHaveBeenCalledWith(sampleBackup.id)
+    expect(restore).toHaveBeenCalledWith(sampleBackup.id, {})
 
     fireEvent.click(screen.getByLabelText(/^deleteAria/))
     confirm = await screen.findByRole("alertdialog")

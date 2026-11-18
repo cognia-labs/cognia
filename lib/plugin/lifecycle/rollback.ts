@@ -1,17 +1,26 @@
 /**
  * Plugin Rollback System
  *
- * Handles plugin version rollback with state migration support.
+ * Moves a plugin back to an earlier package (a backup or a registry release)
+ * and, when that crosses a data migration, back to the data snapshot taken
+ * before it (ADR-0258).
  */
 
 import { getPluginBackupManager, type PluginBackup } from "./backup"
-import { loggers } from "../core/logger"
 import { usePluginStore } from "@/stores/plugin-runtime"
 import { getPluginMarketplace } from "../package/marketplace"
 import { getPluginManager } from "../core/manager"
 import type { PluginGraphReservation } from "../core/lifecycle-coordinator"
 import { getInstallOrigin } from "@/lib/db/plugin-install-origins"
 import { recordInstallOrigin } from "../origin/install-origin"
+import { getDb } from "@/lib/db/schema"
+import { restorePluginDataSnapshot } from "../dexie/bridge"
+import {
+  describePluginDataRollback,
+  PluginDataRestoreUnconfirmedError,
+  type PluginDataRollback,
+} from "../dexie/data-rollback"
+import { PluginDataVersionError } from "../dexie/migration-runner"
 import {
   quiesceRuntime,
   restoreRuntimeState,
@@ -39,6 +48,8 @@ export interface VersionInfo {
   size?: number
   canRollback: boolean
   reason?: string
+  /** What rolling back to this version does to the plugin's data. */
+  data: PluginDataRollback
 }
 
 export interface RollbackResult {
@@ -48,39 +59,28 @@ export interface RollbackResult {
   toVersion: string
   duration: number
   error?: string
-  migrationApplied: boolean
+  /** The plugin's data was put back to the snapshot taken before a migration. */
+  dataRestored: boolean
   requiresRestart: boolean
   rollback?: { attempted: boolean; succeeded: boolean; error?: string }
 }
 
-export interface RollbackPlan {
-  pluginId: string
-  targetVersion: string
-  steps: RollbackStep[]
-  estimatedDuration: number
-  warnings: string[]
-}
-
-export interface RollbackStep {
-  order: number
-  action: "backup" | "disable" | "unload" | "restore" | "migrate" | "load" | "enable" | "verify"
-  description: string
-  reversible: boolean
-}
-
-export interface MigrationScript {
-  fromVersion: string
-  toVersion: string
-  up: (data: Record<string, unknown>) => Record<string, unknown>
-  down: (data: Record<string, unknown>) => Record<string, unknown>
+export interface RollbackOptions {
+  /** Restore this exact backup rather than the newest one of the version. */
+  backupId?: string
+  /**
+   * The data snapshot the user agreed to restore, discarding what the plugin
+   * saved since. Required when the rollback crosses a data migration.
+   */
+  confirmedDataSnapshot?: string
 }
 
 export interface RollbackConfig {
   createBackupBeforeRollback: boolean
   verifyAfterRollback: boolean
-  migrateData: boolean
-  maxRollbackHistory: number
 }
+
+const pluginDb = () => getDb()
 
 // =============================================================================
 // Plugin Rollback Manager
@@ -93,8 +93,6 @@ export interface RollbackDeps {
 
 export class PluginRollbackManager {
   private config: RollbackConfig
-  private migrations: Map<string, MigrationScript[]> = new Map()
-  private rollbackHistory: RollbackResult[] = []
   private readOrigin: NonNullable<RollbackDeps["readOrigin"]>
   private recordOrigin: typeof recordInstallOrigin
 
@@ -104,8 +102,6 @@ export class PluginRollbackManager {
     this.config = {
       createBackupBeforeRollback: true,
       verifyAfterRollback: true,
-      migrateData: true,
-      maxRollbackHistory: 50,
       ...config,
     }
   }
@@ -136,6 +132,7 @@ export class PluginRollbackManager {
           size: backup.size,
           canRollback:
             backup.version !== currentVersion || backup.metadata?.hostStateRestorePending === true,
+          data: { kind: "none" },
         })
       }
     }
@@ -152,6 +149,7 @@ export class PluginRollbackManager {
             source: "marketplace",
             date: v.publishedAt,
             canRollback: v.version !== currentVersion,
+            data: { kind: "none" },
           })
         }
       }
@@ -161,6 +159,13 @@ export class PluginRollbackManager {
 
     // Sort by version (newest first)
     availableVersions.sort((a, b) => this.compareVersions(b.version, a.version))
+
+    // A version that cannot read the data, with no snapshot to bring it
+    // back, is listed but not offered.
+    for (const version of availableVersions) {
+      version.data = await describePluginDataRollback(pluginDb, pluginId, version.version)
+      if (version.data.kind === "unavailable") version.canRollback = false
+    }
 
     return {
       pluginId,
@@ -172,126 +177,14 @@ export class PluginRollbackManager {
   }
 
   // ===========================================================================
-  // Rollback Planning
-  // ===========================================================================
-
-  async createRollbackPlan(pluginId: string, targetVersion: string): Promise<RollbackPlan> {
-    const info = await this.getRollbackInfo(pluginId)
-    const steps: RollbackStep[] = []
-    const warnings: string[] = []
-
-    // Check if target version is available
-    const targetVersionInfo = info.availableVersions.find((v) => v.version === targetVersion)
-    if (!targetVersionInfo) {
-      throw new Error(`Version ${targetVersion} is not available for rollback`)
-    }
-
-    if (!targetVersionInfo.canRollback) {
-      throw new Error(`Cannot rollback to version ${targetVersion}`)
-    }
-
-    // Plan steps
-    let order = 1
-
-    // Step 1: Backup current state
-    if (this.config.createBackupBeforeRollback) {
-      steps.push({
-        order: order++,
-        action: "backup",
-        description: "Create backup of current state",
-        reversible: true,
-      })
-    }
-
-    // Step 2: Disable plugin
-    steps.push({
-      order: order++,
-      action: "disable",
-      description: "Disable plugin",
-      reversible: true,
-    })
-
-    // Step 3: Unload plugin
-    steps.push({
-      order: order++,
-      action: "unload",
-      description: "Unload plugin module",
-      reversible: true,
-    })
-
-    // Step 4: Restore/install target version
-    steps.push({
-      order: order++,
-      action: "restore",
-      description: `Restore to version ${targetVersion}`,
-      reversible: false,
-    })
-
-    // Step 5: Migrate data if needed
-    if (this.config.migrateData) {
-      const hasMigration = this.hasMigrationPath(pluginId, info.currentVersion, targetVersion)
-      if (hasMigration) {
-        steps.push({
-          order: order++,
-          action: "migrate",
-          description: "Migrate plugin data",
-          reversible: true,
-        })
-      } else {
-        warnings.push("No migration script found; data may be incompatible")
-      }
-    }
-
-    const status = usePluginStore.getState().plugins[pluginId]?.status
-    const reactivate = ["enabled", "suspended", "enabling"].includes(status ?? "")
-    // Match execution: inactive plugins stay inactive after restoring bytes.
-    if (reactivate || status === "loaded" || status === "loading")
-      steps.push({
-        order: order++,
-        action: "load",
-        description: "Load plugin module",
-        reversible: true,
-      })
-
-    // Step 7: Enable plugin
-    if (reactivate)
-      steps.push({
-        order: order++,
-        action: "enable",
-        description: "Enable plugin",
-        reversible: true,
-      })
-
-    // Step 8: Verify
-    if (this.config.verifyAfterRollback) {
-      steps.push({
-        order: order++,
-        action: "verify",
-        description: "Verify rollback success",
-        reversible: false,
-      })
-    }
-
-    // Check for potential issues
-    if (this.isMajorVersionChange(info.currentVersion, targetVersion)) {
-      warnings.push("Major version change detected; breaking changes may occur")
-    }
-
-    return {
-      pluginId,
-      targetVersion,
-      steps,
-      estimatedDuration: steps.length * 1000, // Rough estimate
-      warnings,
-    }
-  }
-
-  // ===========================================================================
   // Rollback Execution
   // ===========================================================================
 
   /** Restore the selected snapshot, including multiple backups of one version. */
-  async restoreBackup(backupId: string): Promise<RollbackResult> {
+  async restoreBackup(
+    backupId: string,
+    options: Omit<RollbackOptions, "backupId"> = {}
+  ): Promise<RollbackResult> {
     const backup = getPluginBackupManager().getBackup(backupId)
     if (!backup) {
       return {
@@ -301,35 +194,46 @@ export class PluginRollbackManager {
         toVersion: "",
         duration: 0,
         error: "Backup not found",
-        migrationApplied: false,
+        dataRestored: false,
         requiresRestart: false,
       }
     }
-    return this.rollback(backup.pluginId, backup.version, backupId)
+    return this.rollback(backup.pluginId, backup.version, { ...options, backupId })
   }
 
   async rollback(
     pluginId: string,
     targetVersion: string,
-    backupId?: string
+    options: RollbackOptions = {}
   ): Promise<RollbackResult> {
+    const { backupId } = options
     const startTime = Date.now()
     const info = await this.getRollbackInfo(pluginId)
     const fromVersion = info.currentVersion
     let initialStatus = usePluginStore.getState().plugins[pluginId]?.status
     const lifecycle = getPluginManager()
     let reservation: PluginGraphReservation | undefined
-    let migrationApplied = false
+    let dataRestored = false
     let pendingRestore = false
     // Compensation state: what to put back if a step after teardown fails.
     let safetyBackupId: string | undefined
     let resumeState: RuntimeResumeState = "stopped"
     let quiesced = false
     let packageMutated = false
-    let configBeforeMigration: Record<string, unknown> | undefined
     let originBefore: PluginInstallOriginRecord | undefined
 
     try {
+      // A rollback past a data migration needs the snapshot taken before it,
+      // and the user's agreement to lose what the plugin saved since. Both
+      // are checked before anything is touched.
+      const data = await describePluginDataRollback(pluginDb, pluginId, targetVersion)
+      if (data.kind === "unavailable") {
+        throw new PluginDataVersionError(pluginId, data.targetDataVersion, data.currentDataVersion)
+      }
+      if (data.kind === "restore" && options.confirmedDataSnapshot !== data.snapshotId) {
+        throw new PluginDataRestoreUnconfirmedError(pluginId, data.snapshotId)
+      }
+
       // Step 1: Create backup if configured
       if (this.config.createBackupBeforeRollback) {
         const backupManager = getPluginBackupManager()
@@ -410,11 +314,11 @@ export class PluginRollbackManager {
         throw new Error("Rollback restored an unexpected plugin version")
       }
 
-      // Step 4: Migrate data if needed
-      if (this.config.migrateData) {
-        const config = usePluginStore.getState().plugins[pluginId]?.config
-        configBeforeMigration = config ? structuredClone(config) : undefined
-        migrationApplied = await this.applyMigration(pluginId, fromVersion, targetVersion)
+      // Step 4: Put the data back where the restored package can read it,
+      // before anything activates it.
+      if (data.kind === "restore") {
+        await restorePluginDataSnapshot(pluginDb, pluginId, data.snapshotId)
+        dataRestored = true
       }
 
       // Restore the pre-rollback activation state through the same owner as a
@@ -450,17 +354,20 @@ export class PluginRollbackManager {
         fromVersion,
         toVersion: targetVersion,
         duration: Date.now() - startTime,
-        migrationApplied,
+        dataRestored,
         requiresRestart: pendingRestore || (await this.checkRequiresRestart(pluginId)),
       }
-
-      this.recordRollback(result)
       return result
     } catch (error) {
       pendingRestore ||=
         lifecycle.hasUnresolvedActivationResources(pluginId) ||
         (error instanceof Error && error.name === "PluginActivationConflictError")
-      const message = error instanceof Error ? error.message : String(error)
+      const cause = error instanceof Error ? error.message : String(error)
+      // The newer package may come back below, but the data stays restored:
+      // the user agreed to discard it, and that package migrates it again.
+      const message = dataRestored
+        ? `${cause}; the plugin's data was already restored from its snapshot`
+        : cause
       const errorMessage = pendingRestore
         ? `Pending restore of ${pluginId} to ${targetVersion}; a restart is required, then retry rollback after cleanup: ${message}`
         : message
@@ -475,7 +382,6 @@ export class PluginRollbackManager {
           initialStatus,
           packageMutated,
           safetyBackupId,
-          configBeforeMigration: migrationApplied ? configBeforeMigration : undefined,
           originBefore,
         })
         compensation = outcome.rollback
@@ -488,12 +394,10 @@ export class PluginRollbackManager {
         toVersion: targetVersion,
         duration: Date.now() - startTime,
         error: errorMessage,
-        migrationApplied,
+        dataRestored,
         requiresRestart: pendingRestore,
         ...(compensation ? { rollback: compensation } : {}),
       }
-
-      this.recordRollback(result)
       return result
     } finally {
       if (reservation) lifecycle.releasePluginRuntimeGraph(reservation)
@@ -505,8 +409,8 @@ export class PluginRollbackManager {
    *
    * Before the package changed, the plugin that was running is still on disk,
    * so its runtime state is restored as an update does. After it changed, the
-   * safety snapshot taken in step 1 restores the package (and the config a
-   * migration rewrote, and the origin a marketplace install re-recorded); the
+   * safety snapshot taken in step 1 restores the package (and the origin a
+   * marketplace install re-recorded); the
    * restored package stays inactive and asks for a restart instead of
    * resurrecting the runtime, as a failed update does.
    */
@@ -517,7 +421,6 @@ export class PluginRollbackManager {
     initialStatus: string | undefined
     packageMutated: boolean
     safetyBackupId: string | undefined
-    configBeforeMigration: Record<string, unknown> | undefined
     originBefore: PluginInstallOriginRecord | undefined
   }): Promise<{ rollback: NonNullable<RollbackResult["rollback"]>; requiresRestart: boolean }> {
     const { pluginId, resumeState } = input
@@ -571,9 +474,6 @@ export class PluginRollbackManager {
       failures.push(`restore safety snapshot: ${describe(error)}`)
     }
     if (failures.length === 0) {
-      if (input.configBeforeMigration) {
-        usePluginStore.getState().setPluginConfig(pluginId, input.configBeforeMigration)
-      }
       await this.recordOrigin(
         input.originBefore && input.originBefore.version === input.fromVersion
           ? {
@@ -609,26 +509,6 @@ export class PluginRollbackManager {
     }))
   }
 
-  async rollbackToLatestBackup(pluginId: string): Promise<RollbackResult> {
-    const backupManager = getPluginBackupManager()
-    const backups = backupManager.getBackups(pluginId)
-
-    if (backups.length === 0) {
-      return {
-        success: false,
-        pluginId,
-        fromVersion: "",
-        toVersion: "",
-        duration: 0,
-        error: "No backups available",
-        migrationApplied: false,
-        requiresRestart: false,
-      }
-    }
-
-    return this.rollback(pluginId, backups[0].version)
-  }
-
   private async verifyRollback(pluginId: string, expectedVersion: string): Promise<boolean> {
     return this.getPluginVersion(pluginId) === expectedVersion
   }
@@ -640,96 +520,6 @@ export class PluginRollbackManager {
       lifecycle.hasUnresolvedActivationResources(pluginId) ||
       ["activating", "stopping", "dirty"].includes(state.actual)
     )
-  }
-
-  // ===========================================================================
-  // Migration Support
-  // ===========================================================================
-
-  registerMigration(pluginId: string, migration: MigrationScript): void {
-    const migrations = this.migrations.get(pluginId) || []
-    migrations.push(migration)
-    migrations.sort((a, b) => this.compareVersions(a.fromVersion, b.fromVersion))
-    this.migrations.set(pluginId, migrations)
-  }
-
-  hasMigrationPath(pluginId: string, fromVersion: string, toVersion: string): boolean {
-    const migrations = this.migrations.get(pluginId)
-    if (!migrations) return false
-
-    // Check if we can migrate between these versions
-    const isDowngrade = this.compareVersions(fromVersion, toVersion) > 0
-
-    if (isDowngrade) {
-      // Need down migrations
-      return migrations.some(
-        (m) =>
-          this.compareVersions(m.toVersion, fromVersion) <= 0 &&
-          this.compareVersions(m.fromVersion, toVersion) >= 0
-      )
-    } else {
-      // Need up migrations
-      return migrations.some(
-        (m) =>
-          this.compareVersions(m.fromVersion, fromVersion) >= 0 &&
-          this.compareVersions(m.toVersion, toVersion) <= 0
-      )
-    }
-  }
-
-  private async applyMigration(
-    pluginId: string,
-    fromVersion: string,
-    toVersion: string
-  ): Promise<boolean> {
-    const migrations = this.migrations.get(pluginId)
-    if (!migrations) return false
-
-    const isDowngrade = this.compareVersions(fromVersion, toVersion) > 0
-
-    try {
-      const store = usePluginStore.getState()
-      const existingPlugin = store.plugins[pluginId]
-      if (!existingPlugin) {
-        return false
-      }
-
-      // A throwing migration must not mutate nested values in the live config.
-      let migratedData = structuredClone(existingPlugin.config)
-
-      if (isDowngrade) {
-        // Apply down migrations in reverse order
-        const applicableMigrations = migrations
-          .filter(
-            (m) =>
-              this.compareVersions(m.toVersion, fromVersion) <= 0 &&
-              this.compareVersions(m.fromVersion, toVersion) >= 0
-          )
-          .reverse()
-
-        for (const migration of applicableMigrations) {
-          migratedData = migration.down(migratedData)
-        }
-      } else {
-        // Apply up migrations in order
-        const applicableMigrations = migrations.filter(
-          (m) =>
-            this.compareVersions(m.fromVersion, fromVersion) >= 0 &&
-            this.compareVersions(m.toVersion, toVersion) <= 0
-        )
-
-        for (const migration of applicableMigrations) {
-          migratedData = migration.up(migratedData)
-        }
-      }
-
-      // Save migrated data
-      store.setPluginConfig(pluginId, migratedData)
-      return true
-    } catch (error) {
-      loggers.manager.error("[Rollback] Migration failed:", error)
-      throw error
-    }
   }
 
   private getPluginVersion(pluginId: string): string | null {
@@ -758,34 +548,6 @@ export class PluginRollbackManager {
     }
 
     return 0
-  }
-
-  private isMajorVersionChange(from: string, to: string): boolean {
-    const fromMajor = parseInt(from.split(".")[0]) || 0
-    const toMajor = parseInt(to.split(".")[0]) || 0
-    return fromMajor !== toMajor
-  }
-
-  // ===========================================================================
-  // History
-  // ===========================================================================
-
-  private recordRollback(result: RollbackResult): void {
-    this.rollbackHistory.push(result)
-    if (this.rollbackHistory.length > this.config.maxRollbackHistory) {
-      this.rollbackHistory = this.rollbackHistory.slice(-this.config.maxRollbackHistory)
-    }
-  }
-
-  getRollbackHistory(pluginId?: string): RollbackResult[] {
-    if (pluginId) {
-      return this.rollbackHistory.filter((r) => r.pluginId === pluginId)
-    }
-    return [...this.rollbackHistory]
-  }
-
-  clearHistory(): void {
-    this.rollbackHistory = []
   }
 }
 

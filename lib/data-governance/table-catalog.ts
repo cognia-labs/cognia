@@ -312,6 +312,8 @@ export const CORE_TABLE_NAMES = [
   "pluginAnalytics",
   "pluginCogsetState",
   "pluginCogsets",
+  "pluginDataSnapshotRows",
+  "pluginDataSnapshots",
   "pluginDexieMeta",
   "pluginInstallOrigins",
   "pluginMarketplaceSources",
@@ -1349,6 +1351,9 @@ const USER_CONTENT_TABLES = new Set<CoreTableName>([
 /** Stores whose rows hold encrypted user content rather than ids and metadata. */
 const CONFIDENTIAL_TABLES = new Set<CoreTableName>([
   "collabIssues",
+  // A copy of a plugin's own rows, which are confidential and encrypted as
+  // dynamic plugin tables (see `policyForTable`); the copy is no less so.
+  "pluginDataSnapshotRows",
   // Host-owned external-agent configurations. Not `secret` — the credential
   // VALUES live in the keyring and only opaque refs are stored here — but a
   // revision still carries the command line, argv, environment variable names
@@ -1415,6 +1420,8 @@ const VERY_LARGE_TABLES = new Set<CoreTableName>([
 
 const LARGE_TABLES = new Set<CoreTableName>([
   "petMediaPacks",
+  // Every row of a plugin's tables, twice at most per plugin.
+  "pluginDataSnapshotRows",
   // Live2D model files and Sprite-v2 atlases: real binaries, capped at 50 MiB
   // per model and 25 MiB per atlas. Left at the "medium" default they were
   // budgeted like metadata rows.
@@ -1617,6 +1624,17 @@ const WORKFLOW_APP_ROW_EXPIRY: DataRetentionPolicy = {
 }
 
 const RETENTION_OVERRIDES: Partial<Record<CoreTableName, DataRetentionPolicy>> = {
+  pluginDataSnapshots: {
+    mode: "cap",
+    enforcement: "domain",
+    reason:
+      "`lib/plugin/dexie/data-snapshots.ts` keeps each plugin's two newest snapshots after every capture; a restore deletes the one it used and every newer one, and clearing or purging the plugin's data deletes them all.",
+  },
+  pluginDataSnapshotRows: {
+    mode: "cap",
+    enforcement: "domain",
+    reason: "Deleted with their snapshot by `lib/plugin/dexie/data-snapshots.ts`.",
+  },
   syncLeases: {
     mode: "ttl",
     enforcement: "domain",

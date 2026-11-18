@@ -29,7 +29,7 @@ const withBackups = (backups: PluginBackup[]): Decorator =>
   function WithBackups(Story) {
     __resetPluginBackupClientForTests({
       createBackup: fn(async () => ({ success: true, backup: backups[0] })),
-      restore: fn(async () => undefined),
+      restore: fn(async () => ({ success: true })),
       getBackups: () => backups,
       deleteBackup: fn(async () => true),
     })

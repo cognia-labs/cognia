@@ -6,7 +6,8 @@
 //   - PluginDataManagement   Dexie tables this plugin owns (+ "Delete data")
 //   - PluginScheduledJobs    cron jobs filtered to this plugin
 //   - PluginAnalytics        invocation counts / errors filtered to this plugin
-//   - PluginBackupPanel      per-plugin backup/restore controls
+//   - PluginBackupPanel      per-plugin backup/restore controls, and the data
+//                            snapshots a rollback can restore (ADR-0258)
 //   - PluginResourceManager  rate-limit token buckets
 //   - PluginDependencyGraph  dependency verdict, list, and (on request) graph
 //
@@ -38,6 +39,7 @@ import { DEFAULT_RATE_LIMITS } from "@/lib/plugin/security/rate-limiter"
 import { PluginAnalytics } from "./plugin-analytics"
 import { PluginScheduledJobs } from "./plugin-scheduled-jobs"
 import { PluginBackupPanel } from "../plugin-backup-panel"
+import { PluginDataSnapshots } from "./plugin-data-snapshots"
 import { PluginResourceManager, type RateLimitMeta } from "./plugin-resource-manager"
 import { PluginDependencyGraph } from "./plugin-dependency-graph"
 import { PluginDetailGroup } from "./plugin-detail-group"
@@ -118,7 +120,10 @@ export function PluginDetailData({ pluginId }: { pluginId: string }) {
         icon={<ArchiveIcon className={ICON_CLASS} aria-hidden="true" />}
         testId="data-sub-backup"
       >
-        <PluginBackupPanel pluginId={pluginId} />
+        <div className="space-y-4">
+          <PluginBackupPanel pluginId={pluginId} />
+          <PluginDataSnapshots pluginId={pluginId} />
+        </div>
       </DataSection>
 
       <DataSection

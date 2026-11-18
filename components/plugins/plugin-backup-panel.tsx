@@ -19,6 +19,12 @@
 // loaded once per page (`usePluginBackupIndexRevision`), and every write here
 // bumps it so the Library's Rollback menu items re-check as well. Dates and
 // sizes are formatted for the user's locale.
+//
+// Restoring a backup of an older major version can also put the plugin's data
+// back to the snapshot taken before a migration (ADR-0258). The restore
+// question then says what is lost, waits until that is known, and only that
+// answer authorizes the data restore; one the data cannot be brought back
+// for is refused there instead of failing halfway.
 
 import { useMemo, useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
@@ -38,6 +44,9 @@ import {
   notifyPluginBackupsChanged,
   usePluginBackupIndexRevision,
 } from "@/hooks/plugins/use-plugin-rollback-availability"
+import { usePluginDataRollback } from "@/hooks/plugins/use-plugin-data-rollback"
+import { usePluginDisplayName } from "@/hooks/plugins/use-plugin-display-name"
+import { PluginDataRollbackNotice } from "./plugin-data-rollback-notice"
 import { getPluginBackupManager, type PluginBackup } from "@/lib/plugin/lifecycle/backup"
 import { getPluginRollbackManager } from "@/lib/plugin/lifecycle/rollback"
 import { isTauri } from "@/lib/tauri"
@@ -47,7 +56,8 @@ interface BackupClient {
     pluginId: string
   ) => Promise<{ success: boolean; backup?: PluginBackup; error?: string }>
   restore: (
-    backupId: string
+    backupId: string,
+    options: { confirmedDataSnapshot?: string }
   ) => Promise<{ success: boolean; error?: string; requiresRestart?: boolean }>
   getBackups: (pluginId: string) => PluginBackup[]
   deleteBackup: (backupId: string) => Promise<boolean>
@@ -60,7 +70,7 @@ function getClient(): BackupClient {
   const manager = getPluginBackupManager()
   cachedClient = {
     createBackup: (pluginId) => manager.createBackup(pluginId),
-    restore: (backupId) => getPluginRollbackManager().restoreBackup(backupId),
+    restore: (backupId, options) => getPluginRollbackManager().restoreBackup(backupId, options),
     getBackups: (pluginId) => manager.getBackups(pluginId),
     deleteBackup: (backupId) => manager.deleteBackup(backupId),
   }
@@ -96,6 +106,16 @@ export function PluginBackupPanel({ pluginId }: Props) {
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [showAll, setShowAll] = useState(false)
   const tauri = isTauri()
+  const pluginName = usePluginDisplayName(pluginId)
+  const restoring = pending?.kind === "restore" ? pending.backup : null
+  const dataRollback = usePluginDataRollback(pluginId, restoring?.version ?? null)
+  // A restore waits until its effect on the data is known, and is refused
+  // when the data could not be brought back.
+  const restoreBlocked =
+    restoring !== null &&
+    (dataRollback.error !== null ||
+      dataRollback.data === null ||
+      dataRollback.data.kind === "unavailable")
 
   const listing = useMemo(() => {
     try {
@@ -138,7 +158,10 @@ export function PluginBackupPanel({ pluginId }: Props) {
     if (!action) return
     void run(async () => {
       if (action.kind === "restore") {
-        const result = await getClient().restore(action.backup.id)
+        const data = dataRollback.data
+        const result = await getClient().restore(action.backup.id, {
+          ...(data?.kind === "restore" ? { confirmedDataSnapshot: data.snapshotId } : {}),
+        })
         setRequiresRestart(result.requiresRestart === true)
         return result.success ? null : result.error || t("restoreFailed")
       }
@@ -280,12 +303,21 @@ export function PluginBackupPanel({ pluginId }: Props) {
                   )
                 : null}
             </AlertDialogDescription>
+            {restoring && (
+              <PluginDataRollbackNotice
+                data={dataRollback.data}
+                checkFailed={dataRollback.error !== null}
+                name={pluginName}
+                version={restoring.version}
+              />
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
             <AlertDialogAction
               variant={pending?.kind === "delete" ? "destructive" : "default"}
               onClick={confirmPending}
+              disabled={restoreBlocked}
             >
               {pending?.kind === "delete" ? t("delete") : t("restore")}
             </AlertDialogAction>

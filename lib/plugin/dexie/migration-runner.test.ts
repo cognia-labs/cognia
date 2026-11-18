@@ -9,10 +9,36 @@ import {
 import type { PluginDexieMigrationDef } from "@/types/plugin"
 import { loggers } from "@/lib/plugin/core/logger"
 import { HOST_BACKGROUND, pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { CURRENT_SCHEMA } from "@/lib/db/schema"
+import { capturePluginDataSnapshot } from "./data-snapshots"
+import {
+  listPluginDataSnapshots,
+  pluginDataSnapshotStores,
+  type CapturedPluginDataSnapshot,
+} from "@/lib/db/plugin-data-snapshots"
+import {
+  __resetPluginDataSnapshotSpaceRequestsForTests,
+  resolvePluginDataSnapshotSpaceRequest,
+  subscribePluginDataSnapshotSpaceRequests,
+  type PluginDataSnapshotSpaceDecision,
+  type PluginDataSnapshotSpaceRequest,
+} from "./snapshot-space-requests"
 
 jest.mock("@/lib/plugin/core/logger", () => ({
   loggers: { manager: { warn: jest.fn() } },
 }))
+
+// The real copy, wrapped so one test can make IndexedDB refuse it.
+jest.mock("./data-snapshots", () => {
+  const actual = jest.requireActual("./data-snapshots")
+  return {
+    ...actual,
+    capturePluginDataSnapshot: jest.fn(
+      (...args: Parameters<typeof actual.capturePluginDataSnapshot>) =>
+        actual.capturePluginDataSnapshot(...args)
+    ),
+  }
+})
 
 function makeTx(): Transaction {
   // jest mock — we only test that the right handlers are called
@@ -107,7 +133,12 @@ describe("runPluginMigrations", () => {
   let db: Dexie
   beforeEach(async () => {
     db = new Dexie(`migration-ledger-${crypto.randomUUID()}`)
-    db.version(1).stores({ pluginDexieMeta: "&pluginId", "plugin:items": "id" })
+    db.version(1).stores({
+      pluginDexieMeta: "&pluginId",
+      pluginDataSnapshots: CURRENT_SCHEMA.pluginDataSnapshots!,
+      pluginDataSnapshotRows: CURRENT_SCHEMA.pluginDataSnapshotRows!,
+      "plugin:items": "id",
+    })
     await db.table("pluginDexieMeta").put({
       pluginId: "plugin",
       tableNames: ["plugin:items"],
@@ -200,5 +231,161 @@ describe("runPluginMigrations", () => {
     })
     expect(await db.table("plugin:items").count()).toBe(1)
     expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(2)
+  })
+})
+
+describe("runPluginMigrations data snapshots (ADR-0258)", () => {
+  let db: Dexie
+  const upgrade = async (tx: Transaction) => {
+    await tx
+      .table("plugin:items")
+      .toCollection()
+      .modify((row: { shape: number }) => {
+        row.shape = 2
+      })
+  }
+  const toV2 = [{ toVersion: 2, upgrade: "upgrade" }]
+
+  const setStorage = (estimate: { quota: number; usage: number } | undefined) =>
+    Object.defineProperty(globalThis.navigator, "storage", {
+      configurable: true,
+      value: estimate ? { estimate: async () => estimate } : undefined,
+    })
+
+  /** Answer every space question with `decision`; returns what was asked. */
+  function answerSpace(decision: PluginDataSnapshotSpaceDecision) {
+    const asked: PluginDataSnapshotSpaceRequest[] = []
+    const stop = subscribePluginDataSnapshotSpaceRequests((state) => {
+      if (state.current && !asked.some((request) => request.id === state.current!.id)) {
+        asked.push(state.current)
+        resolvePluginDataSnapshotSpaceRequest(state.current.id, decision)
+      }
+    })
+    return { asked, stop }
+  }
+
+  beforeEach(async () => {
+    setStorage(undefined)
+    db = new Dexie(`migration-snapshot-${crypto.randomUUID()}`)
+    db.version(1).stores({
+      pluginDexieMeta: "&pluginId",
+      pluginDataSnapshots: CURRENT_SCHEMA.pluginDataSnapshots!,
+      pluginDataSnapshotRows: CURRENT_SCHEMA.pluginDataSnapshotRows!,
+      "plugin:items": "id",
+    })
+    await db.table("pluginDexieMeta").put({
+      pluginId: "plugin",
+      tableNames: ["plugin:items"],
+      dexieVersion: 1,
+      appliedAt: 1,
+      appliedMigrationVersion: 1,
+    })
+    await db.table("plugin:items").bulkPut([
+      { id: 1, shape: 1 },
+      { id: 2, shape: 1 },
+    ])
+  })
+  afterEach(async () => {
+    __resetPluginDataSnapshotSpaceRequestsForTests()
+    setStorage(undefined)
+    await db.delete()
+  })
+
+  it("copies the rows as they were before migrating them", async () => {
+    await runPluginMigrations(db, "plugin", 2, toV2, { upgrade })
+    const [snapshot] = (await listPluginDataSnapshots(db, "plugin")) as CapturedPluginDataSnapshot[]
+    expect(snapshot).toMatchObject({
+      kind: "captured",
+      pluginId: "plugin",
+      dataVersion: 1,
+      migratedTo: 2,
+      rows: 2,
+      tables: [{ name: "plugin:items", schema: "id", rows: 2, chunks: 1, outboundKeys: false }],
+    })
+    const chunk = await pluginDataSnapshotStores(db).chunks.get([snapshot!.id, "plugin:items", 0])
+    expect(chunk?.values).toEqual([
+      { id: 1, shape: 1 },
+      { id: 2, shape: 1 },
+    ])
+    expect(await db.table("plugin:items").toArray()).toEqual([
+      { id: 1, shape: 2 },
+      { id: 2, shape: 2 },
+    ])
+  })
+
+  it("takes its snapshot with it when the migration fails", async () => {
+    await expect(
+      runPluginMigrations(db, "plugin", 2, toV2, {
+        upgrade: async () => {
+          throw new Error("bad upgrade")
+        },
+      })
+    ).rejects.toThrow("bad upgrade")
+    expect(await listPluginDataSnapshots(db, "plugin")).toEqual([])
+    expect(await pluginDataSnapshotStores(db).chunks.count()).toBe(0)
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(1)
+  })
+
+  it("takes no snapshot when the data version does not move", async () => {
+    await runPluginMigrations(db, "plugin", 1, toV2, { upgrade })
+    expect(await listPluginDataSnapshots(db, "plugin")).toEqual([])
+  })
+
+  it("asks when the copy will not fit, and records that it ran without one", async () => {
+    setStorage({ quota: 1000, usage: 999 })
+    const { asked, stop } = answerSpace("continue-without-snapshot")
+    await runPluginMigrations(db, "plugin", 2, toV2, { upgrade })
+    stop()
+    expect(asked).toEqual([
+      expect.objectContaining({
+        pluginId: "plugin",
+        fromVersion: 1,
+        toVersion: 2,
+        availableBytes: 1,
+      }),
+    ])
+    expect(asked[0]!.requiredBytes).toBeGreaterThan(1)
+    expect(await listPluginDataSnapshots(db, "plugin")).toEqual([
+      expect.objectContaining({ kind: "skipped", reason: "insufficient-space", dataVersion: 1 }),
+    ])
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(2)
+  })
+
+  it("cancelling leaves the data where it was", async () => {
+    setStorage({ quota: 1000, usage: 999 })
+    const { stop } = answerSpace("cancel")
+    await expect(runPluginMigrations(db, "plugin", 2, toV2, { upgrade })).rejects.toMatchObject({
+      name: "PluginDataSnapshotDeclinedError",
+      pluginId: "plugin",
+      fromVersion: 1,
+      toVersion: 2,
+    })
+    stop()
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(1)
+    expect(await db.table("plugin:items").get(1)).toEqual({ id: 1, shape: 1 })
+    expect(await listPluginDataSnapshots(db, "plugin")).toEqual([])
+  })
+
+  it("asks again when IndexedDB refuses the copy the estimate allowed", async () => {
+    jest.mocked(capturePluginDataSnapshot).mockImplementationOnce(async () => {
+      throw Object.assign(new Error("quota"), { name: "QuotaExceededError" })
+    })
+    const { asked, stop } = answerSpace("continue-without-snapshot")
+    await runPluginMigrations(db, "plugin", 2, toV2, { upgrade })
+    stop()
+    expect(asked).toEqual([expect.not.objectContaining({ availableBytes: expect.anything() })])
+    expect(await listPluginDataSnapshots(db, "plugin")).toEqual([
+      expect.objectContaining({ kind: "skipped" }),
+    ])
+    expect(await db.table("plugin:items").get(1)).toEqual({ id: 1, shape: 2 })
+  })
+
+  it("keeps each plugin's two newest snapshots", async () => {
+    const steps = [2, 3, 4]
+    const migrations = steps.map((toVersion) => ({ toVersion, upgrade: "upgrade" }))
+    for (const step of steps) await runPluginMigrations(db, "plugin", step, migrations, { upgrade })
+    const kept = await listPluginDataSnapshots(db, "plugin")
+    expect(kept.map((record) => record.dataVersion)).toEqual([3, 2])
+    expect(await pluginDataSnapshotStores(db).chunks.count()).toBe(2)
   })
 })
