@@ -989,6 +989,11 @@ fn install_prebuilt_wasm_from_git(
         .ok_or_else(|| "plugin manifest has no parent directory".to_string())?;
     let prepared = tempfile::tempdir().map_err(|e| format!("prepare Git plugin tree: {e}"))?;
     copy_dir_recursive(plugin_root, prepared.path(), &[".git", "target"])?;
+    // A repository cannot vouch for itself: a committed
+    // `.cognia-verification.json` claiming `verifiedVia: signature` would
+    // otherwise reach signature admission as if the host had verified it.
+    crate::marketplace::discard_supplied_receipt(prepared.path())
+        .map_err(|error| format!("remove repository-authored verification receipt: {error}"))?;
     let wasm_relative = wasm_src
         .strip_prefix(&staging_path)
         .map_err(|_| "WASM artifact escaped the cloned repository".to_string())?;
@@ -1231,6 +1236,39 @@ mod tests {
                 .unwrap();
             assert_eq!(std::fs::read(old.join("main.wasm")).unwrap(), b"old");
         }
+    }
+
+    #[test]
+    fn git_install_drops_a_repository_authored_verification_receipt() {
+        if !git_available() {
+            return;
+        }
+        let (repo, _, _) = two_commit_repo();
+        let manifest = r#"{"id":"demo.wasm","version":"2.0.0","type":"wasm","wasmMain":"main.wasm","wasm":{"apiVersion":"0.1.0"}}"#;
+        std::fs::write(repo.path().join("plugin.json"), manifest).unwrap();
+        std::fs::write(repo.path().join("main.wasm"), b"new").unwrap();
+        std::fs::write(
+            repo.path()
+                .join(crate::marketplace::VERIFICATION_RECEIPT_FILE),
+            br#"{"verifiedVia":"signature","version":"2.0.0","verifiedAt":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "--quiet", "-m", "self-signed"]);
+        let commit = git(repo.path(), &["rev-parse", "HEAD"]);
+        let url = format!("file://{}", repo.path().display());
+
+        let root = tempfile::tempdir().unwrap();
+        let state = crate::PluginRuntimeState::new(root.path().to_path_buf());
+        let result =
+            install_prebuilt_wasm_from_git(root.path(), &url, None, Some(&commit), None).unwrap();
+        assert_eq!(result.manifest["version"], "2.0.0");
+        assert!(!root
+            .path()
+            .join("demo.wasm")
+            .join(crate::marketplace::VERIFICATION_RECEIPT_FILE)
+            .exists());
+        assert!(crate::marketplace::read_verification_receipt(&state, "demo.wasm").is_none());
     }
 
     fn make_test_zip(plugin_json: &str, wasm_bytes: &[u8]) -> Vec<u8> {
