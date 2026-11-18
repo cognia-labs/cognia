@@ -46,10 +46,10 @@ import {
   ChevronDownIcon,
   CodeXmlIcon,
   EyeIcon,
-  ExternalLinkIcon,
   FileWarningIcon,
   Maximize2Icon,
   Minimize2Icon,
+  PanelRightOpenIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -126,7 +126,9 @@ export const ArtifactPart = memo(function ArtifactPart({ part, className }: Arti
   const naturalHeight = artifact ? hasNaturalHeight(artifact, view) : false
   const clipped = useClipped(bodyRef, open && naturalHeight && !expanded)
 
-  const handleOpenInCanvas = useCallback(() => {
+  // Opens the artifacts panel beside the chat, not Canvas: the action used to
+  // be labelled "Open in canvas", which is a different surface.
+  const handleOpenInPanel = useCallback(() => {
     revealArtifactInWorkspace(part.artifactId)
   }, [part.artifactId])
 
@@ -320,12 +322,12 @@ export const ArtifactPart = memo(function ArtifactPart({ part, className }: Arti
             />
           ) : null}
           <ArtifactAction
-            tooltip={t("openInCanvas")}
-            label={t("openInCanvasAria")}
-            icon={ExternalLinkIcon}
-            onClick={handleOpenInCanvas}
+            tooltip={t("openInPanel")}
+            label={t("openInPanelAria")}
+            icon={PanelRightOpenIcon}
+            onClick={handleOpenInPanel}
             className="size-7 p-0 [&_svg]:size-3.5"
-            data-testid="artifact-part-open-canvas"
+            data-testid="artifact-part-open-panel"
           />
           <Button
             variant="ghost"

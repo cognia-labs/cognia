@@ -124,11 +124,14 @@ describe("ArtifactPart", () => {
     expect(screen.queryByTestId("artifact-preview")).toBeNull()
   })
 
-  it("triggers revealArtifactInWorkspace when Open-in-Canvas is clicked", () => {
+  it("opens the artifact in the artifacts panel, and says so rather than Canvas (A04)", () => {
     mockArtifacts["art-1"] = createArtifactRow()
     render(<ArtifactPart part={createPart()} />)
 
-    fireEvent.click(screen.getByTestId("artifact-part-open-canvas"))
+    const action = screen.getByTestId("artifact-part-open-panel")
+    expect(action).toHaveAccessibleName(expect.stringMatching(/artifacts panel/))
+    expect(action).not.toHaveAccessibleName(expect.stringMatching(/canvas/i))
+    fireEvent.click(action)
 
     expect(mockRevealArtifact).toHaveBeenCalledWith("art-1")
   })
