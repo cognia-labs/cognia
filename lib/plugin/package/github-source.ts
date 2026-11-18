@@ -170,6 +170,20 @@ export function parseGithubPluginRef(input: string): GithubPluginRef {
 }
 
 /**
+ * The reference string {@link parseGithubPluginRef} reads back as `ref`.
+ *
+ * A pinned reference with a subdirectory uses the `/tree/<ref>/` form, which
+ * keeps a subdirectory whose first segment is `tree` or `blob` intact. Refs
+ * containing `/` (a `feature/x` branch) have no unambiguous form in this
+ * grammar; pinned commits never do.
+ */
+export function formatGithubPluginRef(ref: GithubPluginRef): string {
+  const base = `${ref.owner}/${ref.repo}`
+  if (ref.ref) return ref.subdir ? `${base}/tree/${ref.ref}/${ref.subdir}` : `${base}@${ref.ref}`
+  return ref.subdir ? `${base}/${ref.subdir}` : base
+}
+
+/**
  * Browser URL for a parsed reference — what "Open on GitHub" navigates to.
  * A pinned `ref` becomes a `/tree/<ref>` path (plus the subdir when present),
  * which is the form GitHub itself produces, so the round trip

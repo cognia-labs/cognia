@@ -37,6 +37,8 @@ import {
   DANGEROUS_PERMISSIONS,
   PERMISSION_DESCRIPTIONS,
 } from "@/lib/plugin/security/permission-guard"
+import { compareVersions } from "@/lib/plugin/package/dependency-resolver"
+import { formatGithubPluginRef, parseGithubPluginRef } from "@/lib/plugin/package/github-source"
 import type { TuiAction } from "../state/types"
 import type { PluginManifest, PluginPermission } from "@/types/plugin"
 
@@ -57,14 +59,28 @@ export interface PluginDeps {
   reload?: (id: string) => Promise<void>
   /** Uninstall a plugin (unload + remove dir). */
   uninstall?: (id: string) => Promise<void>
-  /** Fetch a GitHub install preview (manifest + README) for consent / preview. */
-  preview?: (ref: string) => Promise<{ manifest: PluginManifest; readme?: string }>
+  /**
+   * Fetch a GitHub install preview (manifest + README) for consent / preview.
+   * `pinnedRef` is the reviewed commit (`owner/repo@<sha>[/subdir]`); consent
+   * installs exactly it, never the mutable ref the user typed.
+   */
+  preview?: (ref: string) => Promise<PluginPreview>
   /** Whether a plugin id is already installed (for the conflict note). */
   isInstalled?: (id: string) => boolean
-  /** Perform the real install (download + register + enable). */
-  install?: (ref: string) => Promise<{ id: string; version?: string; fingerprint?: string }>
-  /** Re-download an existing plugin's bundle (no register) for `update`. */
-  refetch?: (ref: string) => Promise<{ id: string; version: string; fingerprint: string }>
+  /** Perform the real install (download + register + enable) of a pinned ref. */
+  install?: (
+    pinnedRef: string,
+    opts: { signal?: AbortSignal }
+  ) => Promise<{ id: string; version?: string; fingerprint?: string }>
+  /**
+   * Update an installed plugin from its recorded ref: download it staged,
+   * refuse another plugin id, then swap it in under a stopped runtime and
+   * return the runtime to its previous state. Honours `signal` until the swap.
+   */
+  applyUpdate?: (
+    ref: string,
+    opts: { expectedId: string; signal?: AbortSignal }
+  ) => Promise<{ id: string; version: string; fingerprint: string }>
   /** Provenance store — where each plugin was installed from. */
   getOrigin?: (id: string) => PluginOrigin | undefined
   getOrigins?: () => Record<string, PluginOrigin>
@@ -82,11 +98,60 @@ export interface PluginDeps {
   getSources?: () => string[]
   addSource?: (ref: string) => void
   removeSource?: (ref: string) => void
+  /** The live manager the default seams drive. Default wraps `getPluginManager()`. */
+  host?: () => Promise<CliHost>
   /** Fetch merged catalog entries from the configured sources. */
   browse?: (sources: string[]) => Promise<{
     entries: MarketplaceBrowseEntry[]
     errors: Array<{ repoRef: string; message: string }>
   }>
+}
+
+export interface PluginPreview {
+  manifest: PluginManifest
+  readme?: string
+  pinnedRef?: string
+}
+
+/**
+ * The new tree is installed, but returning the plugin to its previous runtime
+ * state failed. Provenance still has to describe what is on disk.
+ */
+export class PluginUpdateActivationError extends Error {
+  constructor(
+    readonly installed: { id: string; version: string; fingerprint: string },
+    readonly activationError: unknown
+  ) {
+    super(activationError instanceof Error ? activationError.message : String(activationError))
+    this.name = "PluginUpdateActivationError"
+  }
+}
+
+async function defaultPreview(ref: string): Promise<PluginPreview> {
+  const { fetchGithubPluginPreview } = await import("@/lib/plugin/package/github-source")
+  const preview = await fetchGithubPluginPreview(parseGithubPluginRef(ref))
+  return {
+    manifest: preview.manifest,
+    readme: preview.readme ?? undefined,
+    pinnedRef: formatGithubPluginRef(preview.ref),
+  }
+}
+
+/** Whether `ref` names an exact commit, which is what a consent may install. */
+function isPinnedCommitRef(ref: string): boolean {
+  try {
+    return /^[0-9a-f]{40}$/i.test(parseGithubPluginRef(ref).ref ?? "")
+  } catch {
+    return false
+  }
+}
+
+/** The command a consent overlay runs: install the reviewed commit, track `ref`. */
+function confirmedInstallCommand(ref: string, pinnedRef: string | undefined): string {
+  if (!pinnedRef || !isPinnedCommitRef(pinnedRef)) {
+    throw new Error("the preview did not resolve the source to a commit")
+  }
+  return `plugin install ${ref} --confirmed --pinned ${pinnedRef}`
 }
 
 // ── unified list (manager store) ──────────────────────────────────────────────
@@ -151,11 +216,13 @@ function ownerOfRef(ref: string): string {
 
 // ── default live-manager wiring (lazy; injected in tests) ───────────────────────
 
-async function realHost(): Promise<
-  import("../../plugin/host").HostManager & {
-    pluginDir: (id: string) => string | undefined
-  }
-> {
+type CliHost = import("../../plugin/host").HostManager & {
+  pluginDir: (id: string) => string | undefined
+}
+
+const hostOf = (deps: PluginDeps): Promise<CliHost> => (deps.host ?? realHost)()
+
+async function realHost(): Promise<CliHost> {
   const { getPluginManager } = await import("@/lib/plugin/core/manager")
   const { usePluginStore } = await import("@/stores/plugin-runtime")
   const { makeHostManager } = await import("../../plugin/host-manager")
@@ -293,7 +360,7 @@ export async function pluginSetEnabled(
     const setLive =
       deps.setLive ??
       (async (pid: string, on: boolean) => {
-        const host = await realHost()
+        const host = await hostOf(deps)
         await host.setPluginIntent(pid, on ? "enabled" : "disabled")
       })
     await setLive(id, enabled)
@@ -334,7 +401,7 @@ export async function pluginReload(id: string, deps: PluginDeps): Promise<void> 
       deps.reload ??
       (async (pid: string) => {
         const { reloadPlugin } = await import("../../plugin/host")
-        await reloadPlugin(pid, { manager: await realHost() })
+        await reloadPlugin(pid, { manager: await hostOf(deps) })
       })
     await reload(id)
     deps.dispatch({ type: "NOTICE", message: `Plugin "${id}" reloaded.` })
@@ -429,16 +496,30 @@ export function buildConsentSummary(
   return lines.join("\n")
 }
 
-/** Strip the internal `--confirmed` flag and return `{ ref, confirmed }`. */
-export function parseInstallArg(arg: string): { ref: string; confirmed: boolean } {
-  const confirmed = /(^|\s)--confirmed(\s|$)/.test(arg)
-  const ref = arg.replace(/(^|\s)--confirmed(\s|$)/, " ").trim()
-  return { ref, confirmed }
+/**
+ * Strip the internal `--confirmed` / `--pinned <ref>` flags a consent overlay
+ * adds and return `{ ref, confirmed, pinned }`.
+ */
+export function parseInstallArg(arg: string): {
+  ref: string
+  confirmed: boolean
+  pinned?: string
+} {
+  const tokens = arg.trim().split(/\s+/).filter(Boolean)
+  const rest: string[] = []
+  let confirmed = false
+  let pinned: string | undefined
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index] === "--confirmed") confirmed = true
+    else if (tokens[index] === "--pinned") pinned = tokens[++index]
+    else rest.push(tokens[index])
+  }
+  return { ref: rest.join(" "), confirmed, ...(pinned ? { pinned } : {}) }
 }
 
 export async function pluginInstall(arg: string, deps: PluginDeps): Promise<void> {
   if (deps.signal?.aborted) return
-  const { ref, confirmed } = parseInstallArg(arg)
+  const { ref, confirmed, pinned } = parseInstallArg(arg)
   if (!ref) {
     deps.dispatch({ type: "NOTICE", message: "Usage: /plugin install <owner/repo[@ref][/subdir]>" })
     return
@@ -446,18 +527,14 @@ export async function pluginInstall(arg: string, deps: PluginDeps): Promise<void
 
   if (!confirmed) {
     // Phase 1 — fetch the manifest and show a single consent summary. Enter
-    // re-runs this command with the internal --confirmed flag.
+    // re-runs this command with the internal --confirmed flag and the commit
+    // the summary was built from, so phase 2 installs what was reviewed.
     try {
-      const preview =
-        deps.preview ??
-        (async (r: string) => {
-          const { parseGithubPluginRef, fetchGithubPluginPreview } =
-            await import("@/lib/plugin/package/github-source")
-          return fetchGithubPluginPreview(parseGithubPluginRef(r))
-        })
+      const preview = deps.preview ?? defaultPreview
       const isInstalled = deps.isInstalled ?? (() => false)
-      const { manifest } = await preview(ref)
+      const { manifest, pinnedRef } = await preview(ref)
       if (deps.signal?.aborted) return
+      const onConfirmCommand = confirmedInstallCommand(ref, pinnedRef)
       const owner = ownerOfRef(ref)
       deps.dispatch({
         type: "OVERLAY_OPEN",
@@ -471,7 +548,7 @@ export async function pluginInstall(arg: string, deps: PluginDeps): Promise<void
             trusted: isTrustedOf(deps, owner),
           }),
           format: "markdown",
-          onConfirmCommand: `plugin install ${ref} --confirmed`,
+          onConfirmCommand,
         },
       })
     } catch (err) {
@@ -483,15 +560,24 @@ export async function pluginInstall(arg: string, deps: PluginDeps): Promise<void
     return
   }
 
-  // Phase 2 — user confirmed: download + register + enable.
+  // Phase 2 — user confirmed: download + register + enable the reviewed
+  // commit. A mutable ref here would resolve again and could install a
+  // version nobody reviewed.
+  if (!pinned || !isPinnedCommitRef(pinned)) {
+    deps.dispatch({
+      type: "NOTICE",
+      message: `Install of "${ref}" was not confirmed against a reviewed commit. Run /plugin install ${ref} to review it first.`,
+    })
+    return
+  }
   try {
     const install =
       deps.install ??
-      (async (r: string) => {
+      (async (r: string, opts: { signal?: AbortSignal }) => {
         const { installFromGithubRef } = await import("../../plugin/install")
         const { registerDiskPlugins } = await import("../../plugin/host")
-        const result = await installFromGithubRef(r, { home: deps.home })
-        const host = await realHost()
+        const result = await installFromGithubRef(r, { home: deps.home, signal: opts.signal })
+        const host = await hostOf(deps)
         await registerDiskPlugins({
           manager: host,
           discover: async () => [
@@ -506,14 +592,17 @@ export async function pluginInstall(arg: string, deps: PluginDeps): Promise<void
           fingerprint: result.fingerprint,
         }
       })
-    const { id, version, fingerprint } = await install(ref)
+    const { id, version, fingerprint } = await install(pinned, { signal: deps.signal })
+    // The ref the user typed is what `/plugin update` follows later.
     recordOriginOf(deps)(id, {
       repoRef: ref,
       version: version ?? "0.0.0",
       fingerprint: fingerprint ?? "",
     })
+    if (deps.signal?.aborted) return
     deps.dispatch({ type: "NOTICE", message: `Installed "${id}".` })
   } catch (err) {
+    if (deps.signal?.aborted) return
     deps.dispatch({
       type: "NOTICE",
       message: `Install failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -618,15 +707,10 @@ export async function pluginPreview(ref: string, deps: PluginDeps): Promise<void
     return
   }
   try {
-    const preview =
-      deps.preview ??
-      (async (r: string) => {
-        const { parseGithubPluginRef, fetchGithubPluginPreview } =
-          await import("@/lib/plugin/package/github-source")
-        return fetchGithubPluginPreview(parseGithubPluginRef(r))
-      })
-    const { manifest, readme } = await preview(trimmed)
+    const preview = deps.preview ?? defaultPreview
+    const { manifest, readme, pinnedRef } = await preview(trimmed)
     if (deps.signal?.aborted) return
+    const onConfirmCommand = confirmedInstallCommand(trimmed, pinnedRef)
     const owner = ownerOfRef(trimmed)
     deps.dispatch({
       type: "OVERLAY_OPEN",
@@ -640,7 +724,7 @@ export async function pluginPreview(ref: string, deps: PluginDeps): Promise<void
           readme: readme ?? undefined,
         }),
         format: "markdown",
-        onConfirmCommand: `plugin install ${trimmed} --confirmed`,
+        onConfirmCommand,
       },
     })
   } catch (err) {
@@ -667,30 +751,71 @@ export async function pluginUpdate(arg: string, deps: PluginDeps): Promise<void>
     return
   }
   try {
-    const refetch =
-      deps.refetch ??
-      (async (r: string) => {
-        const { installFromGithubRef } = await import("../../plugin/install")
-        const result = await installFromGithubRef(r, { home: deps.home })
-        return {
-          id: result.id,
-          version: result.manifest.version ?? "0.0.0",
-          fingerprint: result.fingerprint,
+    const applyUpdate =
+      deps.applyUpdate ??
+      (async (r: string, opts: { expectedId: string; signal?: AbortSignal }) => {
+        const { stageFromGithubRef } = await import("../../plugin/install")
+        const { replaceDiskPlugin } = await import("../../plugin/host")
+        const staged = await stageFromGithubRef(r, {
+          home: deps.home,
+          expectedId: opts.expectedId,
+          signal: opts.signal,
+        })
+        const installed = {
+          id: staged.id,
+          version: staged.manifest.version ?? "0.0.0",
+          fingerprint: staged.fingerprint,
         }
+        let committed = false
+        try {
+          opts.signal?.throwIfAborted()
+          await replaceDiskPlugin(
+            {
+              ...staged,
+              commit: async () => {
+                await staged.commit()
+                committed = true
+              },
+            },
+            { manager: await hostOf(deps) }
+          )
+        } catch (error) {
+          if (committed) throw new PluginUpdateActivationError(installed, error)
+          throw error
+        } finally {
+          await staged.discard()
+        }
+        return installed
       })
-    const reload =
-      deps.reload ??
-      (async (pid: string) => {
-        const { reloadPlugin } = await import("../../plugin/host")
-        await reloadPlugin(pid, { manager: await realHost() })
-      })
-    const next = await refetch(origin.repoRef)
-    await reload(id)
+    let next: { id: string; version: string; fingerprint: string }
+    let activationError: unknown
+    try {
+      next = await applyUpdate(origin.repoRef, { expectedId: id, signal: deps.signal })
+    } catch (error) {
+      if (!(error instanceof PluginUpdateActivationError)) throw error
+      next = error.installed
+      activationError = error.activationError
+    }
+    if (next.id !== id) {
+      throw new Error(`${origin.repoRef} returned plugin "${next.id}", not "${id}"`)
+    }
+    // From here the new tree is on disk: provenance must describe it even if
+    // the request was cancelled after the swap.
     recordOriginOf(deps)(id, {
       repoRef: origin.repoRef,
       version: next.version,
       fingerprint: next.fingerprint,
     })
+    if (deps.signal?.aborted) return
+    if (activationError !== undefined) {
+      deps.dispatch({
+        type: "NOTICE",
+        message: `Updated "${id}" to v${next.version}, but restarting it failed: ${
+          activationError instanceof Error ? activationError.message : String(activationError)
+        }`,
+      })
+      return
+    }
     const unchanged = next.fingerprint === origin.fingerprint
     deps.dispatch({
       type: "NOTICE",
@@ -699,6 +824,7 @@ export async function pluginUpdate(arg: string, deps: PluginDeps): Promise<void>
         : `Updated "${id}": v${origin.version} → v${next.version}.`,
     })
   } catch (err) {
+    if (deps.signal?.aborted) return
     deps.dispatch({
       type: "NOTICE",
       message: `Update failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -717,13 +843,7 @@ async function pluginUpdateCheckAll(deps: PluginDeps): Promise<void> {
     })
     return
   }
-  const preview =
-    deps.preview ??
-    (async (r: string) => {
-      const { parseGithubPluginRef, fetchGithubPluginPreview } =
-        await import("@/lib/plugin/package/github-source")
-      return fetchGithubPluginPreview(parseGithubPluginRef(r))
-    })
+  const preview = deps.preview ?? defaultPreview
   const available: string[] = []
   const failures: string[] = []
   for (const id of ids) {
@@ -731,7 +851,8 @@ async function pluginUpdateCheckAll(deps: PluginDeps): Promise<void> {
       const { manifest } = await preview(origins[id].repoRef)
       if (deps.signal?.aborted) return
       const latest = manifest.version ?? "0.0.0"
-      if (latest !== origins[id].version)
+      // Only a newer upstream is an update; an older one would be a downgrade.
+      if (compareVersions(latest, origins[id].version) > 0)
         available.push(`${id} (v${origins[id].version} → v${latest})`)
     } catch (err) {
       if (deps.signal?.aborted) return
@@ -767,7 +888,7 @@ export async function pluginUninstall(id: string, deps: PluginDeps): Promise<voi
       deps.uninstall ??
       (async (pid: string) => {
         const { uninstallHostPlugin } = await import("../../plugin/host")
-        const host = await realHost()
+        const host = await hostOf(deps)
         const dir = host.pluginDir(pid)
         if (!dir) throw new Error(`unknown plugin: ${pid}`)
         await uninstallHostPlugin(pid, dir, { manager: host })

@@ -1,4 +1,5 @@
 import {
+  formatGithubPluginRef,
   parseGithubPluginRef,
   fetchGithubFile,
   fetchGithubPluginPreview,
@@ -60,6 +61,23 @@ function repositoryFetch(tree: Record<string, string>) {
     return entries.size || !path ? dirResponse([...entries.values()]) : notFound()
   })
 }
+
+describe("formatGithubPluginRef", () => {
+  const sha = "0123456789abcdef0123456789abcdef01234567"
+  it.each([
+    { owner: "o", repo: "r" },
+    { owner: "o", repo: "r", subdir: "plugins/demo" },
+    { owner: "o", repo: "r", ref: sha },
+    { owner: "o", repo: "r", ref: sha, subdir: "plugins/demo" },
+    { owner: "o", repo: "r", ref: sha, subdir: "tree/demo" },
+  ])("round-trips %j through parseGithubPluginRef", (ref) => {
+    expect(parseGithubPluginRef(formatGithubPluginRef(ref))).toEqual({
+      ref: undefined,
+      subdir: undefined,
+      ...ref,
+    })
+  })
+})
 
 describe("parseGithubPluginRef", () => {
   it("parses owner/repo shorthand", () => {

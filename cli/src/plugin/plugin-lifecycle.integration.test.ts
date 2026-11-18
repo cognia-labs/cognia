@@ -2,13 +2,14 @@
  * @jest-environment node
  *
  * Headless integration for the `/plugin update` path: drives the controller's
- * REAL default `refetch` seam (which imports `installFromGithubRef`) against a
- * mocked GitHub contents API and a real `plugin-origins.json` on a tmpdir —
- * the part unit tests stub out. Verifies the bundle is re-downloaded, the
- * fingerprint changes when content changes, and provenance is persisted.
+ * REAL default `applyUpdate` seam (staged download + `replaceDiskPlugin`)
+ * against a mocked GitHub contents API, a real plugin directory and a real
+ * `plugin-origins.json` on a tmpdir — the part unit tests stub out. Verifies
+ * the tree is replaced whole, the fingerprint changes when content changes,
+ * provenance is persisted, and the runtime returns to the state it was in.
  *
- * The live TUI additionally hot-reloads the module; that hop is injected here
- * (`reload`) because it needs the singleton PluginManager + Ink runtime.
+ * The live manager is injected (`host`) because the singleton PluginManager
+ * needs the Ink runtime; it records the lifecycle calls it receives.
  */
 import os from "node:os"
 import path from "node:path"
@@ -17,7 +18,45 @@ import nodeFsP from "node:fs/promises"
 
 import { pluginUpdate } from "../tui/runtime/plugin-controller"
 import { recordOrigin, getOrigin } from "./plugin-origins"
+import type { HostManager } from "./host"
 import type { TuiAction } from "../tui/state/types"
+import type { PluginManifest } from "@/types/plugin"
+
+/** A live manager that holds `demo.plugin` at `status` and records calls. */
+function recordingHost(home: string, status: string) {
+  const events: string[] = []
+  const record =
+    (name: string) =>
+    async (id: string): Promise<void> =>
+      void events.push(`${name}:${id}`)
+  const host: HostManager & { pluginDir: (id: string) => string | undefined } = {
+    registerDiskPlugin: async (manifest: PluginManifest) =>
+      void events.push(`register:${manifest.id}@${manifest.version}`),
+    loadPlugin: record("load"),
+    enablePlugin: record("enable"),
+    disablePlugin: record("disable"),
+    suspendPlugin: record("suspend"),
+    setPluginIntent: async () => undefined,
+    unloadPlugin: record("unload"),
+    reloadPlugin: record("reload"),
+    withPluginPackageMutation: (_id, operation) => operation(),
+    reservePluginRuntimeGraph: (id) =>
+      ({ managerId: "m", pluginId: id, token: Symbol(id) }) as never,
+    releasePluginRuntimeGraph: () => undefined,
+    list: () => [
+      {
+        id: "demo.plugin",
+        name: "Demo",
+        version: "1.0.0",
+        type: "frontend",
+        path: path.join(home, ".cognia", "plugins", "demo.plugin"),
+        status,
+      },
+    ],
+    pluginDir: () => path.join(home, ".cognia", "plugins", "demo.plugin"),
+  }
+  return { host, events }
+}
 
 type Node = string | Array<{ type: "file" | "dir"; path: string }>
 
@@ -84,21 +123,30 @@ describe("plugin update — real refetch + origins store", () => {
       "main.js": `export default { v: "${version}" }`,
     }))
 
+    // v1 on disk carries a file v2 no longer ships.
+    const dir = path.join(home, ".cognia", "plugins", "demo.plugin")
+    nodeFs.mkdirSync(dir, { recursive: true })
+    nodeFs.writeFileSync(path.join(dir, "plugin.json"), manifestText("1.0.0"))
+    nodeFs.writeFileSync(path.join(dir, "legacy.js"), "export {}")
+
     const actions: TuiAction[] = []
-    const reloaded: string[] = []
+    const { host, events } = recordingHost(home, "enabled")
     await pluginUpdate("demo.plugin", {
       roots: [home],
       home,
       dispatch: (a) => actions.push(a),
-      reload: async (id) => void reloaded.push(id),
+      host: async () => host,
     })
 
-    // Re-downloaded to disk.
-    expect(nodeFs.existsSync(path.join(home, ".cognia", "plugins", "demo.plugin", "main.js"))).toBe(
-      true
-    )
-    // Hot-reload was requested for the right id.
-    expect(reloaded).toEqual(["demo.plugin"])
+    // The tree was replaced whole: the new files, nothing left over.
+    expect(nodeFs.readdirSync(dir).sort()).toEqual(["main.js", "plugin.json"])
+    // Stopped, swapped, re-registered with the new manifest, then re-enabled.
+    expect(events).toEqual([
+      "disable:demo.plugin",
+      "unload:demo.plugin",
+      "register:demo.plugin@2.0.0",
+      "enable:demo.plugin",
+    ])
     // Provenance updated to the new version + a real fingerprint (not "stale").
     const origin = getOrigin(home, "demo.plugin")
     expect(origin?.version).toBe("2.0.0")

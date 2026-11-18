@@ -9,8 +9,15 @@
 import nodeFsPromises from "node:fs/promises"
 import path from "node:path"
 import { releaseAuthProviderOwnership } from "@/lib/plugin/auth/auth-provider-registry"
+import {
+  quiesceRuntime,
+  restoreRuntimeState,
+  runtimeResumeStateOf,
+} from "@/lib/plugin/lifecycle/runtime-state"
+import type { PluginGraphReservation } from "@/lib/plugin/core/lifecycle-coordinator"
 
 import { discoverPlugins, type PluginFs } from "./discover-plugins"
+import type { StagedInstall } from "./install"
 import type { PluginManifest } from "@/types/plugin"
 
 export type PluginOrigin = "builtin" | "disk" | "marketplace"
@@ -38,10 +45,17 @@ export interface DiskPluginEntry {
 export interface HostManager {
   registerDiskPlugin: (manifest: PluginManifest, dir: string) => Promise<void>
   loadPlugin: (id: string) => Promise<void>
-  enablePlugin: (id: string) => Promise<void>
-  disablePlugin: (id: string) => Promise<void>
+  enablePlugin: (id: string, reason?: string) => Promise<void>
+  disablePlugin: (id: string, reason?: string) => Promise<void>
+  suspendPlugin: (id: string, reason?: string) => Promise<void>
   setPluginIntent: (id: string, intent: "enabled" | "disabled") => Promise<void>
   unloadPlugin: (id: string) => Promise<void>
+  /** The manager's reload: quiesce, unload, and return to the state it was in. */
+  reloadPlugin: (id: string, reason: string) => Promise<void>
+  /** Serialize package I/O with activation of the same plugin. */
+  withPluginPackageMutation: <T>(id: string, operation: () => Promise<T>) => Promise<T>
+  reservePluginRuntimeGraph: (id: string) => PluginGraphReservation
+  releasePluginRuntimeGraph: (reservation: PluginGraphReservation) => void
   list: () => Array<{
     id: string
     name: string
@@ -101,12 +115,59 @@ export function listHostPlugins(deps: { manager: HostManager }): HostPluginRow[]
   }))
 }
 
-/** Hot-reload: deactivate, tear down the module, then re-load + re-activate. */
+/**
+ * Hot-reload through the manager's own reload, which re-activates only what
+ * was active and never a plugin whose intent is disabled. Calling
+ * disable/unload/load/enable here re-loaded a disabled plugin and then failed
+ * on its enable, reporting a broken reload for a plugin that was simply off.
+ */
 export async function reloadPlugin(id: string, deps: { manager: HostManager }): Promise<void> {
-  await deps.manager.disablePlugin(id)
-  await deps.manager.unloadPlugin(id)
-  await deps.manager.loadPlugin(id)
-  await deps.manager.enablePlugin(id)
+  await deps.manager.reloadPlugin(id, "cli-reload")
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Swap a staged tree in for a disk plugin's live directory.
+ *
+ * The runtime is stopped first and brought back to exactly the state it was
+ * in afterwards (enabled, suspended, loaded or stopped). The new manifest is
+ * registered before it restarts, so the manager loads the new tree rather than
+ * the manifest it held for the old one. If the swap fails the old tree is
+ * still in place and its runtime state is restored.
+ */
+export async function replaceDiskPlugin(
+  staged: Pick<StagedInstall, "id" | "dir" | "manifest" | "commit">,
+  deps: { manager: HostManager }
+): Promise<void> {
+  const { manager } = deps
+  const current = manager.list().find((plugin) => plugin.id === staged.id)
+  const resume = runtimeResumeStateOf(current?.status)
+  const reservation = current ? manager.reservePluginRuntimeGraph(staged.id) : undefined
+  try {
+    await quiesceRuntime(manager, staged.id, resume, "cli-update")
+    // A disabled plugin is inactive but still loaded from the old tree.
+    if (current?.status === "disabled") await manager.unloadPlugin(staged.id)
+    try {
+      await manager.withPluginPackageMutation(staged.id, () => staged.commit())
+    } catch (error) {
+      try {
+        await restoreRuntimeState(manager, staged.id, resume, "cli-update-restore")
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          `${messageOf(error)}; restoring the previous runtime also failed: ${messageOf(restoreError)}`
+        )
+      }
+      throw error
+    }
+    await manager.registerDiskPlugin(staged.manifest, staged.dir)
+    await restoreRuntimeState(manager, staged.id, resume, "cli-update")
+  } finally {
+    if (reservation) manager.releasePluginRuntimeGraph(reservation)
+  }
 }
 
 /** Unload then remove the plugin's on-disk directory. */

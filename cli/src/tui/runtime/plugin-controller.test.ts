@@ -24,6 +24,7 @@ import {
   pluginInstall,
   pluginPreview,
   pluginUpdate,
+  PluginUpdateActivationError,
   pluginUninstall,
   pluginSourcesList,
   pluginSourcesAdd,
@@ -34,6 +35,9 @@ import {
   pluginMarketplace,
 } from "./plugin-controller"
 import type { PluginInfo, PluginToolInfo } from "../../plugin/discover-plugins"
+
+const SHA = "0123456789abcdef0123456789abcdef01234567"
+const PINNED = `owner/repo@${SHA}`
 import type { PluginManifest } from "@/types/plugin"
 import type { TuiAction } from "../state/types"
 
@@ -247,6 +251,14 @@ describe("parseInstallArg", () => {
       confirmed: true,
     })
   })
+
+  it("extracts the reviewed commit a consent pins", () => {
+    expect(parseInstallArg(`owner/repo@main --confirmed --pinned ${PINNED}`)).toEqual({
+      ref: "owner/repo@main",
+      confirmed: true,
+      pinned: PINNED,
+    })
+  })
 })
 
 describe("buildConsentSummary", () => {
@@ -323,12 +335,16 @@ describe("pluginInstall", () => {
           version: "1.0.0",
           type: "frontend",
         } as PluginManifest,
+        pinnedRef: PINNED,
       }),
       isInstalled: () => false,
     })
     expect(actions[0]).toMatchObject({
       type: "OVERLAY_OPEN",
-      overlay: { kind: "confirm", onConfirmCommand: "plugin install owner/repo --confirmed" },
+      overlay: {
+        kind: "confirm",
+        onConfirmCommand: `plugin install owner/repo --confirmed --pinned ${PINNED}`,
+      },
     })
   })
 
@@ -336,7 +352,7 @@ describe("pluginInstall", () => {
     const { dispatch, actions } = recorder()
     const installed: string[] = []
     const origins: Array<{ id: string; entry: unknown }> = []
-    await pluginInstall("owner/repo --confirmed", {
+    await pluginInstall(`owner/repo --confirmed --pinned ${PINNED}`, {
       ...base,
       dispatch,
       install: async (ref) => {
@@ -345,7 +361,8 @@ describe("pluginInstall", () => {
       },
       recordOrigin: (id, entry) => origins.push({ id, entry }),
     })
-    expect(installed).toEqual(["owner/repo"])
+    // The reviewed commit is installed; the typed ref is what update follows.
+    expect(installed).toEqual([PINNED])
     expect(origins).toEqual([
       { id: "demo", entry: { repoRef: "owner/repo", version: "1.2.0", fingerprint: "fp" } },
     ])
@@ -374,7 +391,7 @@ describe("pluginInstall", () => {
 
   it("surfaces an install failure in phase 2", async () => {
     const { dispatch, actions } = recorder()
-    await pluginInstall("owner/repo --confirmed", {
+    await pluginInstall(`owner/repo --confirmed --pinned ${PINNED}`, {
       ...base,
       dispatch,
       install: async () => {
@@ -714,12 +731,19 @@ describe("pluginPreview", () => {
     await pluginPreview("acme/demo", {
       ...base,
       dispatch,
-      preview: async () => ({ manifest: manifest(), readme: "hello" }),
+      preview: async () => ({
+        manifest: manifest(),
+        readme: "hello",
+        pinnedRef: `acme/demo@${SHA}`,
+      }),
       isTrusted: () => false,
     })
     expect(actions[0]).toMatchObject({
       type: "OVERLAY_OPEN",
-      overlay: { kind: "confirm", onConfirmCommand: "plugin install acme/demo --confirmed" },
+      overlay: {
+        kind: "confirm",
+        onConfirmCommand: `plugin install acme/demo --confirmed --pinned acme/demo@${SHA}`,
+      },
     })
   })
 
@@ -745,19 +769,22 @@ describe("pluginPreview", () => {
 describe("pluginUpdate (single)", () => {
   const origin = { repoRef: "acme/demo", version: "1.0.0", fingerprint: "old", installedAt: 1 }
 
-  it("re-fetches, reloads, records, and notices the version bump", async () => {
+  it("applies the update, records, and notices the version bump", async () => {
     const { dispatch, actions } = recorder()
-    const reloaded: string[] = []
+    const applied: Array<{ ref: string; expectedId: string }> = []
     const recorded: Array<{ id: string; entry: unknown }> = []
     await pluginUpdate("demo", {
       ...base,
       dispatch,
       getOrigin: () => origin,
-      refetch: async () => ({ id: "demo", version: "2.0.0", fingerprint: "new" }),
-      reload: async (id) => void reloaded.push(id),
+      applyUpdate: async (ref, opts) => {
+        applied.push({ ref, expectedId: opts.expectedId })
+        return { id: "demo", version: "2.0.0", fingerprint: "new" }
+      },
       recordOrigin: (id, entry) => recorded.push({ id, entry }),
     })
-    expect(reloaded).toEqual(["demo"])
+    // The id the update must keep travels with the download (PL15).
+    expect(applied).toEqual([{ ref: "acme/demo", expectedId: "demo" }])
     expect(recorded[0].entry).toEqual({
       repoRef: "acme/demo",
       version: "2.0.0",
@@ -772,8 +799,7 @@ describe("pluginUpdate (single)", () => {
       ...base,
       dispatch,
       getOrigin: () => origin,
-      refetch: async () => ({ id: "demo", version: "1.0.0", fingerprint: "old" }),
-      reload: async () => {},
+      applyUpdate: async () => ({ id: "demo", version: "1.0.0", fingerprint: "old" }),
       recordOrigin: () => {},
     })
     expect((actions[0] as { message: string }).message).toContain("already up to date")
@@ -785,18 +811,138 @@ describe("pluginUpdate (single)", () => {
     expect((actions[0] as { message: string }).message).toContain("nothing to update")
   })
 
-  it("surfaces a refetch failure", async () => {
+  it("surfaces a download failure", async () => {
     const { dispatch, actions } = recorder()
     await pluginUpdate("demo", {
       ...base,
       dispatch,
       getOrigin: () => origin,
-      refetch: async () => {
+      applyUpdate: async () => {
         throw new Error("network down")
       },
-      reload: async () => {},
     })
     expect((actions[0] as { message: string }).message).toMatch(/Update failed.*network down/)
+  })
+
+  it("never attributes another plugin to the requested id (PL15)", async () => {
+    const { dispatch, actions } = recorder()
+    const recordOrigin = jest.fn()
+    await pluginUpdate("demo", {
+      ...base,
+      dispatch,
+      getOrigin: () => origin,
+      applyUpdate: async () => ({ id: "different.plugin", version: "9.0.0", fingerprint: "x" }),
+      recordOrigin,
+    })
+    expect(recordOrigin).not.toHaveBeenCalled()
+    expect((actions[0] as { message: string }).message).toMatch(
+      /Update failed.*"different\.plugin", not "demo"/
+    )
+  })
+
+  it("does nothing more once cancelled before the swap (PL16)", async () => {
+    const { dispatch, actions } = recorder()
+    const controller = new AbortController()
+    const recordOrigin = jest.fn()
+    await pluginUpdate("demo", {
+      ...base,
+      dispatch,
+      signal: controller.signal,
+      getOrigin: () => origin,
+      applyUpdate: async (_ref, opts) => {
+        controller.abort()
+        opts.signal?.throwIfAborted()
+        return { id: "demo", version: "2.0.0", fingerprint: "new" }
+      },
+      recordOrigin,
+    })
+    expect(recordOrigin).not.toHaveBeenCalled()
+    expect(actions).toEqual([])
+  })
+
+  it("keeps provenance true but stays quiet when cancelled after the swap (PL16)", async () => {
+    const { dispatch, actions } = recorder()
+    const controller = new AbortController()
+    const recordOrigin = jest.fn()
+    await pluginUpdate("demo", {
+      ...base,
+      dispatch,
+      signal: controller.signal,
+      getOrigin: () => origin,
+      applyUpdate: async () => {
+        controller.abort()
+        return { id: "demo", version: "2.0.0", fingerprint: "new" }
+      },
+      recordOrigin,
+    })
+    expect(recordOrigin).toHaveBeenCalledWith("demo", {
+      repoRef: "acme/demo",
+      version: "2.0.0",
+      fingerprint: "new",
+    })
+    expect(actions).toEqual([])
+  })
+
+  it("records the installed tree and says so when only the restart failed", async () => {
+    const { dispatch, actions } = recorder()
+    const recordOrigin = jest.fn()
+    await pluginUpdate("demo", {
+      ...base,
+      dispatch,
+      getOrigin: () => origin,
+      applyUpdate: async () => {
+        throw new PluginUpdateActivationError(
+          { id: "demo", version: "2.0.0", fingerprint: "new" },
+          new Error("trust refused")
+        )
+      },
+      recordOrigin,
+    })
+    expect(recordOrigin).toHaveBeenCalledWith("demo", expect.objectContaining({ version: "2.0.0" }))
+    expect((actions[0] as { message: string }).message).toMatch(
+      /Updated "demo" to v2\.0\.0, but restarting it failed: trust refused/
+    )
+  })
+})
+
+describe("pluginInstall pins the reviewed commit (PL14)", () => {
+  it.each([
+    ["no pinned commit", "owner/repo --confirmed"],
+    ["a mutable pinned ref", "owner/repo --confirmed --pinned owner/repo@main"],
+  ])("refuses a confirmation with %s", async (_label, arg) => {
+    const { dispatch, actions } = recorder()
+    const install = jest.fn()
+    await pluginInstall(arg, { ...base, dispatch, install })
+    expect(install).not.toHaveBeenCalled()
+    expect((actions[0] as { message: string }).message).toMatch(/not confirmed against a reviewed/)
+  })
+
+  it("refuses to offer consent for a preview that did not pin a commit", async () => {
+    const { dispatch, actions } = recorder()
+    await pluginInstall("owner/repo@main", {
+      ...base,
+      dispatch,
+      preview: async () => ({ manifest: manifest() }),
+    })
+    expect(actions[0]).toMatchObject({ type: "NOTICE" })
+    expect((actions[0] as { message: string }).message).toMatch(/did not resolve.*commit/)
+  })
+
+  it("installs the commit the consent showed, even if the branch moved since", async () => {
+    const { dispatch } = recorder()
+    const install = jest.fn(async () => ({ id: "demo", version: "1.0.0", fingerprint: "fp" }))
+    const recordOrigin = jest.fn()
+    await pluginInstall(`owner/repo@main --confirmed --pinned ${PINNED}`, {
+      ...base,
+      dispatch,
+      install,
+      recordOrigin,
+    })
+    expect(install).toHaveBeenCalledWith(PINNED, expect.anything())
+    expect(recordOrigin).toHaveBeenCalledWith(
+      "demo",
+      expect.objectContaining({ repoRef: "owner/repo@main" })
+    )
   })
 })
 
@@ -814,6 +960,34 @@ describe("pluginUpdate (check-all)", () => {
     expect((actions[0] as { message: string }).message).toMatch(
       /Updates available.*demo.*1\.0\.0.*2\.0\.0/
     )
+  })
+
+  it("does not advertise an older upstream as an update (PL17)", async () => {
+    const { dispatch, actions } = recorder()
+    await pluginUpdate("", {
+      ...base,
+      dispatch,
+      getOrigins: () => ({
+        demo: { repoRef: "acme/demo", version: "2.0.0", fingerprint: "", installedAt: 1 },
+      }),
+      preview: async () => ({ manifest: manifest({ version: "1.0.0" }) }),
+    })
+    const message = (actions[0] as { message: string }).message
+    expect(message).not.toContain("Updates available")
+    expect(message).toContain("up to date")
+  })
+
+  it("orders prereleases by SemVer, not by string (PL17)", async () => {
+    const { dispatch, actions } = recorder()
+    await pluginUpdate("", {
+      ...base,
+      dispatch,
+      getOrigins: () => ({
+        demo: { repoRef: "acme/demo", version: "1.0.0-beta.2", fingerprint: "", installedAt: 1 },
+      }),
+      preview: async () => ({ manifest: manifest({ version: "1.0.0-beta.11" }) }),
+    })
+    expect((actions[0] as { message: string }).message).toMatch(/Updates available.*beta\.11/)
   })
 
   it("reports all up to date when versions match", async () => {

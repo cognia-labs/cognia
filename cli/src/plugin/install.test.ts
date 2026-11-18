@@ -2,7 +2,12 @@ import path from "node:path"
 import os from "node:os"
 import nodeFs from "node:fs"
 import nodeFsP from "node:fs/promises"
-import { installFromGithubRef, bundleFingerprint, type InstallFs } from "./install"
+import {
+  installFromGithubRef,
+  stageFromGithubRef,
+  bundleFingerprint,
+  type InstallFs,
+} from "./install"
 
 const MANIFEST = JSON.stringify({
   id: "demo.plugin",
@@ -50,13 +55,48 @@ function installGlobalFetch(tree: Record<string, Node>): jest.Mock {
   return impl
 }
 
-function fakeFs(): InstallFs & { writes: Map<string, string | Uint8Array> } {
+const homes: string[] = []
+function tempHome(): string {
+  const home = nodeFs.mkdtempSync(path.join(os.tmpdir(), "cognia-install-"))
+  homes.push(home)
+  return home
+}
+afterEach(async () => {
+  for (const home of homes.splice(0)) await nodeFsP.rm(home, { recursive: true, force: true })
+})
+
+/** The real filesystem, with every write recorded and an optional failure hook. */
+function recordingFs(
+  failWrite?: (p: string) => boolean
+): InstallFs & { writes: Map<string, string | Uint8Array> } {
   const writes = new Map<string, string | Uint8Array>()
   return {
     writes,
-    mkdir: async () => undefined,
-    writeFile: async (p: string, c: string | Uint8Array) => void writes.set(p, c),
+    mkdir: (p, o) => nodeFsP.mkdir(p, o),
+    writeFile: async (p, c) => {
+      if (failWrite?.(p)) throw new Error(`disk full writing ${path.basename(p)}`)
+      writes.set(p, c)
+      await nodeFsP.writeFile(p, c)
+    },
+    mkdtemp: (prefix) => nodeFsP.mkdtemp(prefix),
+    rename: (from, to) => nodeFsP.rename(from, to),
+    rm: (p, o) => nodeFsP.rm(p, o),
+    exists: async (p) => nodeFs.existsSync(p),
   }
+}
+
+/** Every file under `dir`, relative and `/`-separated, sorted. */
+function treeOf(dir: string): string[] {
+  const out: string[] = []
+  const visit = (rel: string) => {
+    for (const entry of nodeFs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) visit(child)
+      else out.push(child)
+    }
+  }
+  visit("")
+  return out.sort()
 }
 
 describe("installFromGithubRef", () => {
@@ -77,15 +117,14 @@ describe("installFromGithubRef", () => {
       lib: [{ type: "file", path: "lib/util.js" }],
       "lib/util.js": "export const x = 1",
     })
-    const fs = fakeFs()
-    const result = await installFromGithubRef("owner/repo", { home: "/home/u", fs })
+    const home = tempHome()
+    const result = await installFromGithubRef("owner/repo", { home, fs: recordingFs() })
 
     expect(result.id).toBe("demo.plugin")
-    expect(result.dir).toBe(path.join("/home/u", ".cognia", "plugins", "demo.plugin"))
-    const keys = [...fs.writes.keys()]
-    expect(keys.some((k) => k.endsWith("plugin.json"))).toBe(true)
-    expect(keys.some((k) => k.endsWith("main.js"))).toBe(true)
-    expect(keys.some((k) => k.endsWith(path.join("lib", "util.js")))).toBe(true)
+    expect(result.dir).toBe(path.join(home, ".cognia", "plugins", "demo.plugin"))
+    expect(treeOf(result.dir)).toEqual(["lib/util.js", "main.js", "plugin.json"])
+    // The staging area is emptied once the tree is live.
+    expect(nodeFs.readdirSync(path.join(home, ".cognia", "plugin-staging"))).toEqual([])
   })
 
   it("returns a stable SHA-256 fingerprint of the installed bundle", async () => {
@@ -97,8 +136,8 @@ describe("installFromGithubRef", () => {
       ],
       "main.js": "export default {}",
     })
-    const a = await installFromGithubRef("owner/repo", { home: "/home/u", fs: fakeFs() })
-    const b = await installFromGithubRef("owner/repo", { home: "/home/u", fs: fakeFs() })
+    const a = await installFromGithubRef("owner/repo", { home: tempHome() })
+    const b = await installFromGithubRef("owner/repo", { home: tempHome() })
     expect(a.fingerprint).toMatch(/^[0-9a-f]{64}$/)
     expect(a.fingerprint).toBe(b.fingerprint)
   })
@@ -150,11 +189,9 @@ describe("installFromGithubRef", () => {
       return { status: 404, ok: false, json: async () => ({}) } as unknown as Response
     })
     ;(globalThis as { fetch: unknown }).fetch = impl
-    const fs = fakeFs()
+    const result = await installFromGithubRef("owner/repo", { home: tempHome() })
 
-    const result = await installFromGithubRef("owner/repo", { home: "/home/u", fs })
-
-    expect(Buffer.from(fs.writes.get(path.join(result.dir, "asset.bin"))!)).toEqual(binary)
+    expect(nodeFs.readFileSync(path.join(result.dir, "asset.bin"))).toEqual(binary)
   })
 
   it("writes the generated Cognia overlay for a foreign plugin", async () => {
@@ -173,14 +210,12 @@ describe("installFromGithubRef", () => {
       "skills/review": [{ type: "file", path: "skills/review/SKILL.md" }],
       "skills/review/SKILL.md": "---\nname: Review\n---\nReview every changed line.",
     })
-    const fs = fakeFs()
-
-    const result = await installFromGithubRef("owner/repo", { home: "/home/u", fs })
+    const result = await installFromGithubRef("owner/repo", { home: tempHome() })
 
     const manifestPath = path.join(result.dir, "plugin.json")
     const distPath = path.join(result.dir, "dist", "index.js")
-    expect(fs.writes.get(manifestPath)).toContain('"id": "claude-review"')
-    expect(fs.writes.get(distPath)).toContain("claude-review")
+    expect(nodeFs.readFileSync(manifestPath, "utf8")).toContain('"id": "claude-review"')
+    expect(nodeFs.readFileSync(distPath, "utf8")).toContain("claude-review")
   })
 
   it("bundleFingerprint is order-independent but content-sensitive", () => {
@@ -233,9 +268,9 @@ describe("installFromGithubRef", () => {
       return { status: 500, ok: false, json: async () => ({}) } as unknown as Response
     })
     ;(globalThis as { fetch: unknown }).fetch = impl
-    await expect(
-      installFromGithubRef("owner/repo", { home: "/home/u", fs: fakeFs() })
-    ).rejects.toThrow(/GitHub API 500/)
+    await expect(installFromGithubRef("owner/repo", { home: tempHome() })).rejects.toThrow(
+      /GitHub API 500/
+    )
   })
 
   it("rejects a listing entry that stops being a file", async () => {
@@ -275,9 +310,9 @@ describe("installFromGithubRef", () => {
     })
     ;(globalThis as { fetch: unknown }).fetch = impl
 
-    await expect(
-      installFromGithubRef("owner/repo", { home: "/home/u", fs: fakeFs() })
-    ).rejects.toThrow(/could not be read completely: vanished\.js/)
+    await expect(installFromGithubRef("owner/repo", { home: tempHome() })).rejects.toThrow(
+      /could not be read completely: vanished\.js/
+    )
   })
 
   it("rejects a non-frontend plugin as unsupported in CLI", async () => {
@@ -290,9 +325,9 @@ describe("installFromGithubRef", () => {
       }),
       "": [{ type: "file", path: "plugin.json" }],
     })
-    await expect(
-      installFromGithubRef("owner/repo", { home: "/home/u", fs: fakeFs() })
-    ).rejects.toThrow(/unsupported in CLI/i)
+    await expect(installFromGithubRef("owner/repo", { home: tempHome() })).rejects.toThrow(
+      /unsupported in CLI/i
+    )
   })
 
   it("resolves a monorepo subdir + pinned ref and rebases paths", async () => {
@@ -301,15 +336,12 @@ describe("installFromGithubRef", () => {
       "plugins/demo": [{ type: "file", path: "plugins/demo/main.js" }],
       "plugins/demo/main.js": "export default {}",
     })
-    const fs = fakeFs()
-    const result = await installFromGithubRef("owner/repo@main/plugins/demo", {
-      home: "/home/u",
-      fs,
-    })
+    const home = tempHome()
+    const result = await installFromGithubRef("owner/repo@main/plugins/demo", { home })
     expect(result.id).toBe("demo.plugin")
     // The subdir prefix is stripped so files land at the plugin root.
-    expect([...fs.writes.keys()]).toContain(
-      path.join("/home/u", ".cognia", "plugins", "demo.plugin", "main.js")
+    expect(nodeFs.existsSync(path.join(home, ".cognia", "plugins", "demo.plugin", "main.js"))).toBe(
+      true
     )
   })
 
@@ -323,8 +355,8 @@ describe("installFromGithubRef", () => {
         "plugin.json": MANIFEST,
         "": listing as Node,
       })
-      const fs = fakeFs()
-      await expect(installFromGithubRef("owner/repo", { home: "/home/u", fs })).rejects.toThrow(
+      const fs = recordingFs()
+      await expect(installFromGithubRef("owner/repo", { home: tempHome(), fs })).rejects.toThrow(
         error
       )
       expect(fs.writes.size).toBe(0)
@@ -348,5 +380,117 @@ describe("installFromGithubRef", () => {
     } finally {
       await nodeFsP.rm(home, { recursive: true, force: true })
     }
+  })
+})
+
+describe("staged replacement (PL13, PL15)", () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    ;(globalThis as { fetch: unknown }).fetch = realFetch
+  })
+
+  function v2Tree(): Record<string, Node> {
+    return {
+      "plugin.json": JSON.stringify({ ...JSON.parse(MANIFEST), version: "2.0.0" }),
+      "": [
+        { type: "file", path: "plugin.json" },
+        { type: "file", path: "main.js" },
+      ],
+      "main.js": "export const v = 2",
+    }
+  }
+
+  function installV1(home: string): string {
+    const dir = path.join(home, ".cognia", "plugins", "demo.plugin")
+    nodeFs.mkdirSync(path.join(dir, "old"), { recursive: true })
+    nodeFs.writeFileSync(path.join(dir, "plugin.json"), MANIFEST)
+    nodeFs.writeFileSync(path.join(dir, "main.js"), "export const v = 1")
+    nodeFs.writeFileSync(path.join(dir, "old", "removed.js"), "gone in v2")
+    return dir
+  }
+
+  it("leaves v1 untouched when a write fails halfway through v2", async () => {
+    installGlobalFetch(v2Tree())
+    const home = tempHome()
+    const dir = installV1(home)
+    const fs = recordingFs((p) => p.endsWith("main.js"))
+
+    await expect(installFromGithubRef("owner/repo", { home, fs })).rejects.toThrow(/disk full/)
+
+    expect(JSON.parse(nodeFs.readFileSync(path.join(dir, "plugin.json"), "utf8")).version).toBe(
+      "1.0.0"
+    )
+    expect(nodeFs.readFileSync(path.join(dir, "main.js"), "utf8")).toBe("export const v = 1")
+    expect(nodeFs.readdirSync(path.join(home, ".cognia", "plugin-staging"))).toEqual([])
+  })
+
+  it("replaces the whole tree, dropping files the new version no longer ships", async () => {
+    installGlobalFetch(v2Tree())
+    const home = tempHome()
+    const dir = installV1(home)
+
+    const result = await installFromGithubRef("owner/repo", { home })
+
+    expect(treeOf(dir)).toEqual(["main.js", "plugin.json"])
+    expect(result.fingerprint).toBe(
+      bundleFingerprint(
+        treeOf(dir).map((rel) => ({ rel, content: nodeFs.readFileSync(path.join(dir, rel)) }))
+      )
+    )
+  })
+
+  it("restores the old tree when the swap itself fails", async () => {
+    installGlobalFetch(v2Tree())
+    const home = tempHome()
+    const dir = installV1(home)
+    const fs = recordingFs()
+    const rename = fs.rename
+    fs.rename = async (from, to) => {
+      if (to === dir && !from.endsWith(".previous")) throw new Error("EXDEV")
+      return rename(from, to)
+    }
+
+    await expect(installFromGithubRef("owner/repo", { home, fs })).rejects.toThrow("EXDEV")
+
+    expect(treeOf(dir)).toEqual(["main.js", "old/removed.js", "plugin.json"])
+  })
+
+  it("refuses a source that now names another plugin before writing anything (PL15)", async () => {
+    installGlobalFetch(v2Tree())
+    const home = tempHome()
+    const fs = recordingFs()
+
+    await expect(
+      stageFromGithubRef("owner/repo", { home, fs, expectedId: "other.plugin" })
+    ).rejects.toThrow(/provides plugin "demo\.plugin", not "other\.plugin"/)
+
+    expect(fs.writes.size).toBe(0)
+    expect(nodeFs.existsSync(path.join(home, ".cognia", "plugins"))).toBe(false)
+  })
+
+  it("stops before the swap once cancelled, and stages nothing live", async () => {
+    installGlobalFetch(v2Tree())
+    const home = tempHome()
+    const dir = installV1(home)
+    const controller = new AbortController()
+    const staged = await stageFromGithubRef("owner/repo", { home, signal: controller.signal })
+    controller.abort()
+
+    await expect(
+      installFromGithubRef("owner/repo", { home, signal: controller.signal })
+    ).rejects.toThrow()
+    await staged.discard()
+
+    expect(treeOf(dir)).toEqual(["main.js", "old/removed.js", "plugin.json"])
+    expect(nodeFs.readdirSync(path.join(home, ".cognia", "plugin-staging"))).toEqual([])
+  })
+
+  it("commits a staged tree only once", async () => {
+    installGlobalFetch(v2Tree())
+    const staged = await stageFromGithubRef("owner/repo", { home: tempHome() })
+    await staged.commit()
+    await expect(staged.commit()).rejects.toThrow(/committed/)
+    await staged.discard()
+    expect(nodeFs.existsSync(path.join(staged.dir, "main.js"))).toBe(true)
   })
 })

@@ -12,6 +12,7 @@ import {
 import {
   listHostPlugins,
   reloadPlugin,
+  replaceDiskPlugin,
   registerDiskPlugins,
   uninstallHostPlugin,
   defaultDiscoverDiskPlugins,
@@ -41,6 +42,19 @@ function fakeManager() {
     loadPlugin: jest.fn(async (id: string) => void events.push(`load:${id}`)),
     enablePlugin: jest.fn(async (id: string) => void events.push(`enable:${id}`)),
     disablePlugin: jest.fn(async (id: string) => void events.push(`disable:${id}`)),
+    suspendPlugin: jest.fn(async (id: string) => void events.push(`suspend:${id}`)),
+    reloadPlugin: jest.fn(
+      async (id: string, reason: string) => void events.push(`reload:${id}:${reason}`)
+    ),
+    withPluginPackageMutation: jest.fn(async (id: string, operation: () => Promise<unknown>) => {
+      events.push(`mutate:${id}`)
+      return operation()
+    }) as HostManager["withPluginPackageMutation"],
+    reservePluginRuntimeGraph: jest.fn((id: string) => {
+      events.push(`reserve:${id}`)
+      return { managerId: "m", pluginId: id, token: Symbol(id) } as never
+    }),
+    releasePluginRuntimeGraph: jest.fn(() => void events.push("release")),
     setPluginIntent: jest.fn(
       async (id: string, intent: "enabled" | "disabled") =>
         void events.push(`intent:${id}:${intent}`)
@@ -150,10 +164,129 @@ describe("listHostPlugins", () => {
 })
 
 describe("reloadPlugin", () => {
-  it("runs disable → unload → load → enable in order", async () => {
+  it("delegates to the manager's state-preserving reload (PL18)", async () => {
     const mgr = fakeManager()
     await reloadPlugin("demo", { manager: mgr })
-    expect(mgr.events).toEqual(["disable:demo", "unload:demo", "load:demo", "enable:demo"])
+    // Never a blind enable: the manager re-activates only what was active.
+    expect(mgr.events).toEqual(["reload:demo:cli-reload"])
+  })
+})
+
+describe("replaceDiskPlugin", () => {
+  function managerWith(status: string | undefined) {
+    const mgr = fakeManager()
+    ;(mgr.list as jest.Mock).mockReturnValue(
+      status === undefined
+        ? []
+        : [
+            {
+              id: "demo",
+              name: "Demo",
+              version: "1.0.0",
+              type: "frontend",
+              path: "/p/demo",
+              status,
+              tools: [],
+            },
+          ]
+    )
+    return mgr
+  }
+  const staged = (commit = jest.fn(async () => undefined)) => ({
+    id: "demo",
+    dir: "/p/demo",
+    manifest: { ...manifest("demo"), version: "2.0.0" } as PluginManifest,
+    commit,
+  })
+
+  it.each([
+    [
+      "enabled",
+      [
+        "reserve:demo",
+        "disable:demo",
+        "unload:demo",
+        "mutate:demo",
+        "register:demo@/p/demo",
+        "enable:demo",
+        "release",
+      ],
+    ],
+    [
+      "suspended",
+      [
+        "reserve:demo",
+        "disable:demo",
+        "unload:demo",
+        "mutate:demo",
+        "register:demo@/p/demo",
+        "enable:demo",
+        "suspend:demo",
+        "release",
+      ],
+    ],
+    [
+      "loaded",
+      [
+        "reserve:demo",
+        "unload:demo",
+        "mutate:demo",
+        "register:demo@/p/demo",
+        "load:demo",
+        "release",
+      ],
+    ],
+    [
+      "disabled",
+      ["reserve:demo", "unload:demo", "mutate:demo", "register:demo@/p/demo", "release"],
+    ],
+  ])("returns a %s plugin to the state it was in (PL18)", async (status, events) => {
+    const mgr = managerWith(status)
+    await replaceDiskPlugin(staged(), { manager: mgr })
+    expect(mgr.events).toEqual(events)
+  })
+
+  it("registers the new manifest before restarting, so the new tree loads", async () => {
+    const mgr = managerWith("enabled")
+    await replaceDiskPlugin(staged(), { manager: mgr })
+    expect(mgr.registerDiskPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({ version: "2.0.0" }),
+      "/p/demo"
+    )
+  })
+
+  it("brings the old runtime back when the swap fails", async () => {
+    const mgr = managerWith("enabled")
+    const commit = jest.fn(async () => {
+      throw new Error("EXDEV")
+    })
+    await expect(replaceDiskPlugin(staged(commit), { manager: mgr })).rejects.toThrow("EXDEV")
+    expect(mgr.events).toEqual([
+      "reserve:demo",
+      "disable:demo",
+      "unload:demo",
+      "mutate:demo",
+      "enable:demo",
+      "release",
+    ])
+    expect(mgr.registerDiskPlugin).not.toHaveBeenCalled()
+  })
+
+  it("reports both failures when the old runtime cannot be brought back", async () => {
+    const mgr = managerWith("enabled")
+    ;(mgr.enablePlugin as jest.Mock).mockRejectedValueOnce(new Error("trust refused"))
+    const commit = jest.fn(async () => {
+      throw new Error("EXDEV")
+    })
+    await expect(replaceDiskPlugin(staged(commit), { manager: mgr })).rejects.toThrow(
+      /EXDEV; restoring the previous runtime also failed: trust refused/
+    )
+  })
+
+  it("installs a plugin the manager does not know yet without touching its runtime", async () => {
+    const mgr = managerWith(undefined)
+    await replaceDiskPlugin(staged(), { manager: mgr })
+    expect(mgr.events).toEqual(["mutate:demo", "register:demo@/p/demo"])
   })
 })
 
