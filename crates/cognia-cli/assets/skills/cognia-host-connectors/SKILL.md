@@ -17,7 +17,7 @@ Discover connector commands with:
 
 ```bash
 cognia host resources --category connectors
-cognia host commands --category connectors --resource <resource> --query <platform-or-transport>
+cognia host commands --category connectors --resource <resource> --search <platform-or-transport>
 ```
 
 ## Workflow

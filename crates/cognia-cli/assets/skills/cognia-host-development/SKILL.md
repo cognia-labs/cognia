@@ -17,7 +17,7 @@ Narrow discovery to development tools:
 
 ```bash
 cognia host resources --category development
-cognia host commands --category development --resource <resource> --query <git-file-terminal-browser-lsp>
+cognia host commands --category development --resource <resource> --search <git-file-terminal-browser-lsp>
 ```
 
 ## Workflow

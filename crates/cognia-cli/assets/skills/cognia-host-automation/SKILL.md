@@ -17,7 +17,7 @@ Discover automation commands with:
 
 ```bash
 cognia host resources --category automation
-cognia host commands --category automation --resource <resource> --query <workflow-or-schedule-term>
+cognia host commands --category automation --resource <resource> --search <workflow-or-schedule-term>
 ```
 
 ## Workflow

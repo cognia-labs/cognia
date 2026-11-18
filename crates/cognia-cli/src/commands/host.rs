@@ -9,13 +9,14 @@ use std::fs;
 use std::io::{self, Read};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use cognia_companion_contract::command_manifest::{CATALOG_HASH, CONTRACT_VERSION};
 use comfy_table::{presets::UTF8_FULL, Table};
 use native_tls::{Certificate, TlsConnector};
 use serde::{Deserialize, Serialize};
@@ -31,8 +32,6 @@ use crate::cli::{
 use crate::ui::RuntimeUi;
 
 const CATALOG_BYTES: &[u8] = cognia_headless_contract::EMBEDDED_CATALOG_BYTES;
-// ADR-0175: the catalog carries the protocol version this CLI understands.
-const SUPPORTED_CATALOG_SCHEMA_VERSION: u32 = 3;
 static HEADLESS_CONTRACT: OnceLock<Result<cognia_headless_contract::HeadlessContract, String>> =
     OnceLock::new();
 const HOST_SKILL: &str = include_str!("../../assets/skills/cognia-host/SKILL.md");
@@ -62,8 +61,19 @@ const HOST_EXTENSION_ROLLOUT_SKILL: &str =
     include_str!("../../assets/skills/cognia-host-extension-rollout/SKILL.md");
 const HOST_CONNECTOR_DELIVERY_SKILL: &str =
     include_str!("../../assets/skills/cognia-host-connector-delivery/SKILL.md");
-const MAX_REQUEST_BYTES: usize = 64 * 1024;
+/// The largest body `/internal/_rpc` admits. Mirrors
+/// `INTERNAL_BODY_LIMIT_BYTES` in `crates/cognia-companion/src/server.rs`,
+/// which both body-limit layers on the internal router apply. That crate is
+/// the axum server itself, too heavy to link for one constant, so a test
+/// pins the two equal.
+const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest any single HTTP exchange may take; a call's `--timeout-seconds`
+/// budget shortens it further.
+const REQUEST_TIMEOUT_CAP: Duration = Duration::from_secs(30);
+/// Budget for the commands without `--timeout-seconds` (`doctor`, `events`)
+/// when they issue a token or send their one RPC.
+const UNTIMED_COMMAND_BUDGET: Duration = Duration::from_secs(30);
 const EVENT_READ_TIMEOUT: Duration = Duration::from_secs(40);
 
 #[derive(Debug)]
@@ -303,6 +313,26 @@ pub(crate) fn run(command: HostCommand, config: HostConfig, ui: &mut RuntimeUi) 
             );
             result.map_err(|failure| emit_failure("call", Some(&rpc_command), failure))
         }
+        HostCommand::Operation {
+            operation_id,
+            rpc_command,
+            wait,
+            strict_output,
+            timeout_seconds,
+            format,
+            query,
+        } => run_operation(
+            &catalog,
+            &config,
+            &operation_id,
+            rpc_command.as_deref(),
+            wait,
+            strict_output,
+            timeout_seconds,
+            format,
+            query.as_deref(),
+        )
+        .map_err(|failure| emit_failure("operation", rpc_command.as_deref(), failure)),
         HostCommand::Doctor {
             offline,
             format,
@@ -365,15 +395,24 @@ fn parse_catalog(bytes: &[u8]) -> std::result::Result<HostCatalog, HostFailure> 
             format!("embedded Headless command catalog is invalid: {error}"),
         )
     })?;
-    if catalog.schema_version != SUPPORTED_CATALOG_SCHEMA_VERSION
-        || catalog.catalog_hash.len() != 64
+    // The catalog must be the one rendered from the companion contract this
+    // binary was built against: the generated table is the only authority
+    // for its version and hash, so the CLI keeps no copy of either.
+    if catalog.schema_version != CONTRACT_VERSION
+        || catalog.catalog_hash != CATALOG_HASH
         || catalog.categories.is_empty()
         || catalog.resources.is_empty()
     {
         return Err(HostFailure::configuration(
             "unsupported_catalog",
-            "embedded Headless command catalog has an unsupported version",
-        ));
+            "embedded Headless command catalog does not match the companion contract this CLI was built against",
+        )
+        .with_details(json!({
+            "catalogSchemaVersion": catalog.schema_version,
+            "contractVersion": CONTRACT_VERSION,
+            "catalogHash": catalog.catalog_hash,
+            "contractCatalogHash": CATALOG_HASH,
+        })));
     }
     Ok(catalog)
 }
@@ -809,9 +848,20 @@ fn run_call(
     ui: &mut RuntimeUi,
 ) -> std::result::Result<(), HostFailure> {
     let command = find_command(catalog, name)?;
+    // Everything that can be checked offline is checked here, before the dry
+    // run, the confirmation prompt, the token and the first byte on the wire.
+    // A flag refused after the RPC ran reports a failure for a call whose
+    // effect already happened.
+    validate_query(query)?;
+    let pagination = if paginate {
+        Some(require_pagination_plan(command)?)
+    } else {
+        None
+    };
     let (body, body_bytes) = build_request_body(data, fields, fields_json)?;
     validate_body(command, &body)?;
     let idempotency_key = resolve_idempotency_key(command, explicit_idempotency_key)?;
+    let retry = RetryPolicy::for_command(command);
 
     if dry_run {
         let body_hash = hex::encode(Sha256::digest(&body_bytes));
@@ -845,49 +895,62 @@ fn run_call(
     }
 
     require_confirmation(command, ui)?;
+    // `--timeout-seconds` bounds the whole call from here, once the user has
+    // answered: token issuance, every HTTP exchange, retry backoff, operation
+    // polling and pagination all draw on this one deadline.
+    let deadline = call_deadline(timeout_seconds);
     let resolved = resolve_config(config)?;
     let agent = build_agent(&resolved)?;
-    let token = resolve_service_token(&resolved)?;
-    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    let token = resolve_service_token(&resolved, deadline)?;
     let mut delay = Duration::from_millis(250);
-    let mut last_operation_id = None;
-    let mut poll_operation = false;
+    // Set by the 202 that accepted the call; from then on the call is only
+    // ever followed through the operation route, never re-sent.
+    let mut last_operation_id: Option<String> = None;
 
     loop {
-        let outcome = if poll_operation {
-            let operation_id = last_operation_id.as_deref().ok_or_else(|| {
-                HostFailure::new(
-                    "server",
-                    "missing_operation_id",
-                    "the Headless server accepted an operation without an operation id",
-                )
-                .with_exit(6)
-            })?;
-            // A missing/hidden receipt is not permission to repeat a mutation.
-            poll_operation_with_retry(&agent, &resolved, &token, operation_id)?
+        let outcome = if let Some(operation_id) = last_operation_id.as_deref() {
+            poll_operation_with_retry(&agent, &resolved, &token, operation_id, deadline).map_err(
+                |failure| operation_poll_failure(failure, operation_id, idempotency_key.as_deref()),
+            )?
         } else {
             post_rpc_with_retry(
                 &agent,
                 &resolved,
                 &token,
                 name,
-                &body,
+                &body_bytes,
                 idempotency_key.as_deref(),
-            )?
+                retry,
+                deadline,
+            )
+            .map_err(|failure| with_idempotency_key(failure, idempotency_key.as_deref()))?
         };
         if outcome.status == 202 {
-            last_operation_id = outcome
-                .body
-                .get("id")
-                .or_else(|| outcome.body.get("operationId"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or(last_operation_id);
-            poll_operation = last_operation_id.is_some();
+            if last_operation_id.is_none() {
+                // The Host answers 202 with the ADR-0175 Operation document
+                // (`crates/cognia-companion-security/src/operations.rs`); its
+                // `id` is the only way to follow the call without sending it
+                // again.
+                let operation_id = outcome
+                    .body
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        HostFailure::new(
+                            "server",
+                            "missing_operation_id",
+                            "the Headless server accepted the call without the Operation document's `id`",
+                        )
+                        .with_status(202)
+                        .with_exit(6)
+                    })?;
+                last_operation_id = Some(operation_id.to_owned());
+            }
             if no_wait {
-                return print_call_success(
-                    name,
-                    command,
+                let document = call_success_document(
+                    "call",
+                    Some(name),
+                    Some(command),
                     "accepted",
                     outcome.body,
                     idempotency_key.as_deref(),
@@ -895,23 +958,22 @@ fn run_call(
                     None,
                     None,
                     format,
+                );
+                return print_call_output(
+                    &document,
                     query,
+                    "accepted",
+                    last_operation_id.as_deref(),
+                    idempotency_key.as_deref(),
                 );
             }
             if Instant::now() >= deadline {
-                return Err(HostFailure::new(
-                    "timeout",
-                    "operation_timeout",
-                    "the durable operation is still running after the requested timeout",
-                )
-                .with_exit(5)
-                .retryable()
-                .with_details(json!({
-                    "operationId": last_operation_id,
-                    "idempotencyKey": idempotency_key,
-                })));
+                return Err(operation_timeout(
+                    last_operation_id.as_deref(),
+                    idempotency_key.as_deref(),
+                ));
             }
-            thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+            sleep_within(delay, deadline);
             delay = (delay * 2).min(Duration::from_secs(2));
             continue;
         }
@@ -924,17 +986,7 @@ fn run_call(
         }
         let mut body_out = outcome.body;
         let mut pages = None;
-        if paginate {
-            let plan = pagination_plan(command)?.ok_or_else(|| {
-                HostFailure::validation(
-                    "pagination_unsupported",
-                    format!(
-                        "Headless command `{name}` does not declare a followable page token \
-                         (pageToken→nextPageToken or cursor→nextCursor); drop --paginate or \
-                         page through it manually"
-                    ),
-                )
-            })?;
+        if let Some(plan) = &pagination {
             let mut count = 1_u64;
             let mut last_sent: Option<String> = None;
             loop {
@@ -954,26 +1006,29 @@ fn run_call(
                     .with_details(json!({ "token": next, "pagesFetched": count })));
                 }
                 if Instant::now() >= deadline {
-                    return Err(HostFailure::new(
-                        "timeout",
-                        "pagination_timeout",
-                        "pagination did not finish within --timeout-seconds",
-                    )
-                    .with_exit(5)
-                    .retryable()
-                    .with_details(json!({ "pagesFetched": count })));
+                    return Err(pagination_timeout(count));
                 }
                 let mut page_body = body.clone();
                 page_body[plan.request_field] = json!(next);
+                let page_bytes = encode_request_body(&page_body)?;
                 last_sent = Some(next);
                 let page = post_rpc_with_retry(
                     &agent,
                     &resolved,
                     &token,
                     name,
-                    &page_body,
+                    &page_bytes,
                     idempotency_key.as_deref(),
-                )?;
+                    retry,
+                    deadline,
+                )
+                .map_err(|failure| {
+                    if failure.code == "call_timeout" {
+                        pagination_timeout(count)
+                    } else {
+                        with_idempotency_key(failure, idempotency_key.as_deref())
+                    }
+                })?;
                 if page.status == 202 {
                     return Err(HostFailure::new(
                         "server",
@@ -991,14 +1046,15 @@ fn run_call(
                         page_validation.violations.join("; ")
                     );
                 }
-                merge_page(&mut body_out, &page.body, &plan)?;
+                merge_page(&mut body_out, &page.body, plan)?;
                 count += 1;
             }
             pages = Some(count);
         }
-        return print_call_success(
-            name,
-            command,
+        let document = call_success_document(
+            "call",
+            Some(name),
+            Some(command),
             "completed",
             body_out,
             idempotency_key.as_deref(),
@@ -1006,9 +1062,252 @@ fn run_call(
             Some(&output_validation),
             pages,
             format,
+        );
+        return print_call_output(
+            &document,
             query,
+            "completed",
+            last_operation_id.as_deref(),
+            idempotency_key.as_deref(),
         );
     }
+}
+
+/// Read a durable operation by id once, or with `wait` until it is terminal,
+/// and print it in the `call` envelope: `accepted` while it still runs,
+/// `completed` with its result once it succeeded. The operation route does
+/// not name the command, so `rpc_command` (optional) fills `meta` and selects
+/// the output contract the result is checked against.
+#[allow(clippy::too_many_arguments)]
+fn run_operation(
+    catalog: &HostCatalog,
+    config: &HostConfig,
+    operation_id: &str,
+    rpc_command: Option<&str>,
+    wait: bool,
+    strict_output: bool,
+    timeout_seconds: u64,
+    format: HostCallFormat,
+    query: Option<&str>,
+) -> std::result::Result<(), HostFailure> {
+    validate_operation_id(operation_id)?;
+    let command = rpc_command
+        .map(|name| find_command(catalog, name))
+        .transpose()?;
+    if strict_output && command.is_none() {
+        return Err(HostFailure::validation(
+            "strict_output_requires_command",
+            "--strict-output needs --rpc-command to know which output contract applies",
+        ));
+    }
+    validate_query(query)?;
+    let deadline = call_deadline(timeout_seconds);
+    let resolved = resolve_config(config)?;
+    let agent = build_agent(&resolved)?;
+    let token = resolve_service_token(&resolved, deadline)?;
+    let (state, document) = follow_operation(
+        &agent,
+        &resolved,
+        &token,
+        operation_id,
+        command,
+        wait,
+        strict_output,
+        deadline,
+        format,
+    )?;
+    print_call_output(&document, query, state, Some(operation_id), None)
+}
+
+/// The network half of `host operation`: returns the state and the document
+/// to print (before `--query`).
+#[allow(clippy::too_many_arguments)]
+fn follow_operation(
+    agent: &ureq::Agent,
+    resolved: &ResolvedConfig,
+    token: &str,
+    operation_id: &str,
+    command: Option<&HostCatalogCommand>,
+    wait: bool,
+    strict_output: bool,
+    deadline: Instant,
+    format: HostCallFormat,
+) -> std::result::Result<(&'static str, Value), HostFailure> {
+    let mut delay = Duration::from_millis(250);
+    loop {
+        let outcome = poll_operation_with_retry(agent, resolved, token, operation_id, deadline)
+            .map_err(|failure| operation_poll_failure(failure, operation_id, None))?;
+        if outcome.status == 202 {
+            if !wait {
+                let document = call_success_document(
+                    "operation",
+                    command.map(|command| command.name.as_str()),
+                    command,
+                    "accepted",
+                    outcome.body,
+                    None,
+                    Some(operation_id),
+                    None,
+                    None,
+                    format,
+                );
+                return Ok(("accepted", document));
+            }
+            if Instant::now() >= deadline {
+                return Err(operation_timeout(Some(operation_id), None));
+            }
+            sleep_within(delay, deadline);
+            delay = (delay * 2).min(Duration::from_secs(2));
+            continue;
+        }
+        let output_validation = command
+            .map(|command| validate_completed_output(command, &outcome.body, strict_output))
+            .transpose()?;
+        if let Some(validation) = output_validation
+            .as_ref()
+            .filter(|validation| validation.status == "invalid")
+        {
+            eprintln!(
+                "warning: operation {operation_id} returned data that violates the `{}` output contract: {}",
+                command.map(|command| command.name.as_str()).unwrap_or_default(),
+                validation.violations.join("; ")
+            );
+        }
+        let document = call_success_document(
+            "operation",
+            command.map(|command| command.name.as_str()),
+            command,
+            "completed",
+            outcome.body,
+            None,
+            Some(operation_id),
+            output_validation.as_ref(),
+            None,
+            format,
+        );
+        return Ok(("completed", document));
+    }
+}
+
+/// A caller-supplied operation id is local input: refuse a non-UUID before
+/// any token or network work, with the usage exit code.
+fn validate_operation_id(operation_id: &str) -> std::result::Result<(), HostFailure> {
+    Uuid::parse_str(operation_id).map(|_| ()).map_err(|_| {
+        HostFailure::validation(
+            "invalid_operation_id",
+            "the operation id must be the UUID a call reported as `meta.operationId`",
+        )
+    })
+}
+
+/// Check a `--query` expression's syntax before anything runs, so a typo
+/// never surfaces only after the RPC already took effect.
+fn validate_query(query: Option<&str>) -> std::result::Result<(), HostFailure> {
+    match query {
+        Some(expression) => crate::shared::json_path::validate(expression)
+            .map_err(|message| HostFailure::validation("invalid_query", message)),
+        None => Ok(()),
+    }
+}
+
+fn require_pagination_plan(
+    command: &HostCatalogCommand,
+) -> std::result::Result<PaginationPlan, HostFailure> {
+    pagination_plan(command)?.ok_or_else(|| {
+        HostFailure::validation(
+            "pagination_unsupported",
+            format!(
+                "Headless command `{name}` does not declare a followable page token \
+                 (pageToken→nextPageToken or cursor→nextCursor); drop --paginate or \
+                 page through it manually",
+                name = command.name
+            ),
+        )
+    })
+}
+
+fn operation_timeout(operation_id: Option<&str>, idempotency_key: Option<&str>) -> HostFailure {
+    HostFailure::new(
+        "timeout",
+        "operation_timeout",
+        "the durable operation is still running after the requested timeout",
+    )
+    .with_exit(5)
+    .retryable()
+    .with_details(json!({
+        "operationId": operation_id,
+        "idempotencyKey": idempotency_key,
+    }))
+}
+
+fn pagination_timeout(pages_fetched: u64) -> HostFailure {
+    HostFailure::new(
+        "timeout",
+        "pagination_timeout",
+        "pagination did not finish within --timeout-seconds",
+    )
+    .with_exit(5)
+    .retryable()
+    .with_details(json!({ "pagesFetched": pages_fetched }))
+}
+
+/// A poll that ran out of budget means the operation is still running as far
+/// as the CLI knows: report it in the `operation_timeout` shape so the
+/// caller can resume it by id.
+fn operation_poll_failure(
+    failure: HostFailure,
+    operation_id: &str,
+    idempotency_key: Option<&str>,
+) -> HostFailure {
+    if failure.code == "call_timeout" {
+        operation_timeout(Some(operation_id), idempotency_key)
+    } else {
+        failure
+    }
+}
+
+/// Attach the idempotency key a transport failure or timeout needs to be
+/// resumed: an auto-generated key is otherwise never shown to the caller.
+fn with_idempotency_key(mut failure: HostFailure, idempotency_key: Option<&str>) -> HostFailure {
+    if let (Some(key), Some(details)) = (idempotency_key, failure.details.as_object_mut()) {
+        if matches!(failure.error_type, "transport" | "timeout") {
+            details.insert("idempotencyKey".into(), json!(key));
+        }
+    }
+    failure
+}
+
+/// `--timeout-seconds` from now; an absurdly large value saturates instead
+/// of overflowing `Instant`.
+fn call_deadline(timeout_seconds: u64) -> Instant {
+    let now = Instant::now();
+    now.checked_add(Duration::from_secs(timeout_seconds))
+        .unwrap_or_else(|| now + Duration::from_secs(u64::from(u32::MAX)))
+}
+
+fn sleep_within(delay: Duration, deadline: Instant) {
+    thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+}
+
+/// The timeout for the next HTTP exchange: the fixed cap, shortened to what
+/// is left of the call's budget. `None` once the budget is spent.
+fn exchange_timeout(deadline: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    (!remaining.is_zero()).then(|| remaining.min(REQUEST_TIMEOUT_CAP))
+}
+
+fn call_timeout(phase: &str, request_may_have_been_sent: bool) -> HostFailure {
+    HostFailure::new(
+        "timeout",
+        "call_timeout",
+        format!("--timeout-seconds elapsed while {phase}"),
+    )
+    .with_exit(5)
+    .retryable()
+    .with_details(json!({
+        "phase": phase,
+        "requestMayHaveBeenSent": request_may_have_been_sent,
+    }))
 }
 
 /// Pagination conventions detectable from a command's declared schemas:
@@ -1172,15 +1471,26 @@ fn build_request_body(
             }
         }
     }
-    let bytes = serde_json::to_vec(&body)
+    let bytes = encode_request_body(&body)?;
+    Ok((body, bytes))
+}
+
+/// Serialize a body the CLI assembled itself (field flags, a later page)
+/// into the exact bytes it sends, under the same limit as a supplied body.
+fn encode_request_body(body: &Value) -> std::result::Result<Vec<u8>, HostFailure> {
+    let bytes = serde_json::to_vec(body)
         .map_err(|error| HostFailure::new("server", "serialize_body", error.to_string()))?;
     if bytes.len() > MAX_REQUEST_BYTES {
-        return Err(HostFailure::validation(
-            "request_body_too_large",
-            format!("request body exceeds the {MAX_REQUEST_BYTES}-byte Headless limit"),
-        ));
+        return Err(request_body_too_large());
     }
-    Ok((body, bytes))
+    Ok(bytes)
+}
+
+fn request_body_too_large() -> HostFailure {
+    HostFailure::validation(
+        "request_body_too_large",
+        format!("request body exceeds the {MAX_REQUEST_BYTES}-byte Headless limit"),
+    )
 }
 
 fn read_data(data: Option<&str>) -> std::result::Result<Vec<u8>, HostFailure> {
@@ -1207,10 +1517,7 @@ fn read_data(data: Option<&str>) -> std::result::Result<Vec<u8>, HostFailure> {
     };
     if bytes.len() > MAX_REQUEST_BYTES {
         bytes.clear();
-        return Err(HostFailure::validation(
-            "request_body_too_large",
-            format!("request body exceeds the {MAX_REQUEST_BYTES}-byte Headless limit"),
-        ));
+        return Err(request_body_too_large());
     }
     Ok(bytes)
 }
@@ -1505,7 +1812,7 @@ fn build_agent(resolved: &ResolvedConfig) -> std::result::Result<ureq::Agent, Ho
     Ok(ureq::Agent::config_builder()
         .tls_config(tls_config)
         .timeout_connect(Some(CONNECT_TIMEOUT))
-        .timeout_global(Some(Duration::from_secs(30)))
+        .timeout_global(Some(REQUEST_TIMEOUT_CAP))
         .max_redirects(0)
         .http_status_as_error(false)
         .user_agent(concat!("cognia/", env!("CARGO_PKG_VERSION")))
@@ -1513,7 +1820,14 @@ fn build_agent(resolved: &ResolvedConfig) -> std::result::Result<ureq::Agent, Ho
         .new_agent())
 }
 
-fn resolve_service_token(resolved: &ResolvedConfig) -> std::result::Result<String, HostFailure> {
+/// Read the service token from `COGNIA_SERVICE_TOKEN`, or have the colocated
+/// `cognia-server issue-service-token` print one. The issuer runs under
+/// `deadline`: past it the child is killed and the call times out instead of
+/// hanging on a stuck issuer.
+fn resolve_service_token(
+    resolved: &ResolvedConfig,
+    deadline: Instant,
+) -> std::result::Result<String, HostFailure> {
     if let Some(value) = std::env::var_os("COGNIA_SERVICE_TOKEN") {
         let token = value.into_string().map_err(|_| {
             HostFailure::authentication(
@@ -1523,24 +1837,70 @@ fn resolve_service_token(resolved: &ResolvedConfig) -> std::result::Result<Strin
         })?;
         return validate_service_token(token, "COGNIA_SERVICE_TOKEN");
     }
+    issue_service_token(resolved, deadline)
+}
+
+/// Run `cognia-server issue-service-token`, killing it if it is still
+/// running at `deadline`.
+fn issue_service_token(
+    resolved: &ResolvedConfig,
+    deadline: Instant,
+) -> std::result::Result<String, HostFailure> {
     let binary = resolve_server_binary(resolved);
-    let output = Command::new(&binary)
+    let issuer_unavailable = || {
+        HostFailure::authentication(
+            "token_issuer_unavailable",
+            "could not execute cognia-server to issue a local service token",
+        )
+    };
+    let mut child = Command::new(&binary)
         .arg("issue-service-token")
         .env("COGNIA_DATA_DIR", &resolved.data_dir)
-        .output()
-        .map_err(|_| {
-            HostFailure::authentication(
-                "token_issuer_unavailable",
-                "could not execute cognia-server to issue a local service token",
-            )
-        })?;
-    if !output.status.success() {
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| issuer_unavailable())?;
+    // Drain stdout on its own thread so a chatty issuer cannot block on a
+    // full pipe while this thread waits for it to exit.
+    let mut stdout = child.stdout.take().ok_or_else(issuer_unavailable)?;
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout_tx.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
+    });
+    let token_timeout = || call_timeout("issuing a service token", false);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(token_timeout());
+            }
+            Ok(None) => sleep_within(Duration::from_millis(10), deadline),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(issuer_unavailable());
+            }
+        }
+    };
+    if !status.success() {
         return Err(HostFailure::authentication(
             "token_issuance_failed",
             "cognia-server could not issue a service token for the selected data directory",
         ));
     }
-    let token = String::from_utf8(output.stdout).map_err(|_| {
+    // A grandchild that inherited the pipe can hold it open after the issuer
+    // exits; the read is bounded by the same deadline.
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let stdout = match stdout_rx.recv_timeout(remaining) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) => return Err(issuer_unavailable()),
+        Err(_) => return Err(token_timeout()),
+    };
+    let token = String::from_utf8(stdout).map_err(|_| {
         HostFailure::authentication(
             "invalid_issued_token",
             "cognia-server returned a non-UTF-8 service token",
@@ -1594,48 +1954,157 @@ fn executable_available(path: &Path) -> bool {
     })
 }
 
+/// How far a failed RPC exchange may be repeated, from the command's declared
+/// idempotency (`protocol/companion-commands.json`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryPolicy {
+    /// `required` (the server dedupes on the Idempotency-Key) or `structural`
+    /// (repeating changes nothing): any transport failure may be retried.
+    AnyTransportFailure,
+    /// `forbidden`, or a declaration this CLI does not know: the request
+    /// carries no key the server could dedupe on, so only an attempt that
+    /// provably never reached the server may be repeated.
+    UnsentOnly,
+}
+
+impl RetryPolicy {
+    fn for_command(command: &HostCatalogCommand) -> Self {
+        match command.idempotency.as_str() {
+            "required" | "structural" => Self::AnyTransportFailure,
+            _ => Self::UnsentOnly,
+        }
+    }
+}
+
+/// Whether a ureq 3.4 error proves the request never left the client, so not
+/// even a command without an idempotency key can have run.
+///
+/// Only failures raised before ureq writes the request head qualify: name
+/// resolution (`HostNotFound`, `Timeout::Resolve`), a connector chain that
+/// produced no connection (`ConnectionFailed`), a timeout while connecting or
+/// in the TLS handshake (`Timeout::Connect`), a native-tls handshake failure
+/// (`NativeTls`: after the handshake, TLS I/O surfaces as `Io`), and a refused
+/// TCP connect (`Io` with `ConnectionRefused`, which an established socket
+/// never reports; a peer reset there is `ConnectionReset`). `Timeout::Global`
+/// and `Timeout::PerCall` name the budget, not the phase, so they may fire
+/// after the request was written; they and every other I/O, protocol or body
+/// error do not qualify.
+fn request_provably_unsent(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::NativeTls(_) => {
+            true
+        }
+        ureq::Error::Timeout(timeout) => {
+            matches!(timeout, ureq::Timeout::Resolve | ureq::Timeout::Connect)
+        }
+        ureq::Error::Io(error) => error.kind() == io::ErrorKind::ConnectionRefused,
+        _ => false,
+    }
+}
+
+const RPC_ATTEMPTS: u64 = 3;
+
+#[allow(clippy::too_many_arguments)]
 fn post_rpc_with_retry(
     agent: &ureq::Agent,
     resolved: &ResolvedConfig,
     token: &str,
     name: &str,
-    body: &Value,
+    body: &[u8],
     idempotency_key: Option<&str>,
+    retry: RetryPolicy,
+    deadline: Instant,
 ) -> std::result::Result<HttpOutcome, HostFailure> {
     let endpoint = resolved
         .base_url
         .join(&format!("internal/_rpc/{name}"))
         .map_err(|_| HostFailure::configuration("invalid_rpc_url", "cannot build RPC URL"))?;
-    for attempt in 0..3 {
+    // Whether any attempt may have reached the server.
+    let mut maybe_sent = false;
+    for attempt in 1..=RPC_ATTEMPTS {
+        let Some(timeout) = exchange_timeout(deadline) else {
+            return Err(rpc_deadline_failure(maybe_sent, retry));
+        };
         let mut request = agent
             .post(endpoint.as_str())
+            .config()
+            .timeout_global(Some(timeout))
+            .build()
             .header("Authorization", format!("Bearer {token}"))
             .content_type("application/json");
         if let Some(key) = idempotency_key {
             request = request.header("Idempotency-Key", key);
         }
-        match request.send_json(body.clone()) {
-            Ok(response) if response.status().is_success() => return parse_response(response),
+        // The exact bytes that were validated, size-checked and hashed.
+        let error = match request.send(body) {
+            Ok(response) if response.status().is_success() => {
+                return parse_response(response).map_err(|failure| {
+                    if exchange_timeout(deadline).is_none() {
+                        rpc_deadline_failure(true, retry)
+                    } else {
+                        failure
+                    }
+                });
+            }
             Ok(response) => {
                 return Err(server_failure(response.status().as_u16(), response));
             }
-            Err(_) if attempt < 2 => thread::sleep(Duration::from_millis(100 * (attempt + 1))),
-            Err(_) => {
-                return Err(HostFailure::transport(
-                    "rpc_transport_failed",
-                    "could not connect to the loopback Headless server after three attempts",
-                ))
-            }
+            Err(error) => error,
+        };
+        let unsent = request_provably_unsent(&error);
+        maybe_sent |= !unsent;
+        if exchange_timeout(deadline).is_none() {
+            return Err(rpc_deadline_failure(maybe_sent, retry));
         }
+        if attempt == RPC_ATTEMPTS || (retry == RetryPolicy::UnsentOnly && !unsent) {
+            return Err(rpc_transport_failure(attempt, maybe_sent, retry));
+        }
+        sleep_within(Duration::from_millis(100 * attempt), deadline);
     }
-    unreachable!()
+    unreachable!("the final attempt always returns")
 }
 
+/// After an attempt that may have reached the server, a command without an
+/// idempotency key must not be presented as safe to repeat.
+fn unsafe_to_repeat(maybe_sent: bool, retry: RetryPolicy) -> bool {
+    maybe_sent && retry == RetryPolicy::UnsentOnly
+}
+
+fn rpc_deadline_failure(maybe_sent: bool, retry: RetryPolicy) -> HostFailure {
+    let phase = if maybe_sent {
+        "waiting for the Headless RPC response"
+    } else {
+        "connecting to the Headless server"
+    };
+    call_timeout(phase, maybe_sent).with_retryable(!unsafe_to_repeat(maybe_sent, retry))
+}
+
+fn rpc_transport_failure(attempts: u64, maybe_sent: bool, retry: RetryPolicy) -> HostFailure {
+    let unsafe_repeat = unsafe_to_repeat(maybe_sent, retry);
+    let message = if unsafe_repeat {
+        "the connection to the loopback Headless server failed after the request may have \
+         reached it; this command takes no idempotency key, so it was not repeated. Verify \
+         state before calling it again"
+            .to_string()
+    } else {
+        format!("could not reach the loopback Headless server after {attempts} attempt(s)")
+    };
+    HostFailure::transport("rpc_transport_failed", message)
+        .with_retryable(!unsafe_repeat)
+        .with_details(json!({
+            "attempts": attempts,
+            "requestMayHaveBeenSent": maybe_sent,
+        }))
+}
+
+/// Read a durable operation. A GET changes nothing, so every transport
+/// failure may be retried, within `deadline`.
 fn poll_operation_with_retry(
     agent: &ureq::Agent,
     resolved: &ResolvedConfig,
     token: &str,
     operation_id: &str,
+    deadline: Instant,
 ) -> std::result::Result<HttpOutcome, HostFailure> {
     Uuid::parse_str(operation_id).map_err(|_| {
         HostFailure::new(
@@ -1651,19 +2120,36 @@ fn poll_operation_with_retry(
         .map_err(|_| {
             HostFailure::configuration("invalid_operation_url", "cannot build operation URL")
         })?;
-    for attempt in 0..3 {
+    let poll_timeout = || call_timeout("polling the durable operation", true);
+    for attempt in 1..=RPC_ATTEMPTS {
+        let Some(timeout) = exchange_timeout(deadline) else {
+            return Err(poll_timeout());
+        };
         match agent
             .get(endpoint.as_str())
+            .config()
+            .timeout_global(Some(timeout))
+            .build()
             .header("Authorization", format!("Bearer {token}"))
             .call()
         {
             Ok(response) if response.status().is_success() => {
-                return parse_operation_response(parse_response(response)?);
+                let outcome = parse_response(response).map_err(|failure| {
+                    if exchange_timeout(deadline).is_none() {
+                        poll_timeout()
+                    } else {
+                        failure
+                    }
+                })?;
+                return parse_operation_response(outcome);
             }
             Ok(response) => {
                 return Err(server_failure(response.status().as_u16(), response));
             }
-            Err(_) if attempt < 2 => thread::sleep(Duration::from_millis(100 * (attempt + 1))),
+            Err(_) if exchange_timeout(deadline).is_none() => return Err(poll_timeout()),
+            Err(_) if attempt < RPC_ATTEMPTS => {
+                sleep_within(Duration::from_millis(100 * attempt), deadline);
+            }
             Err(_) => {
                 return Err(HostFailure::transport(
                     "operation_poll_failed",
@@ -1672,91 +2158,57 @@ fn poll_operation_with_retry(
             }
         }
     }
-    unreachable!()
+    unreachable!("the final attempt always returns")
 }
 
+/// Read the ADR-0175 Operation document the operation route answers
+/// (`crates/cognia-companion-security/src/operations.rs`): while `done` is
+/// false the operation still runs; once true, `result` or `error` is final.
+/// A body without a boolean `done` is not that document.
 fn parse_operation_response(outcome: HttpOutcome) -> std::result::Result<HttpOutcome, HostFailure> {
-    if let Some(done) = outcome.body.get("done").and_then(Value::as_bool) {
-        if !done { return Ok(HttpOutcome { status: 202, body: outcome.body }); }
-        if outcome.body.get("status").and_then(Value::as_str) == Some("cancelled") {
-            return Err(HostFailure::new("server", "operation_cancelled", "the operation was cancelled").with_exit(6));
-        }
-        if let Some(error) = outcome.body.get("error").filter(|v| !v.is_null()) {
-            let status = error.get("status").and_then(Value::as_u64).and_then(|v| u16::try_from(v).ok()).unwrap_or(500);
-            return Err(server_failure_from_detail(status, error));
-        }
-        if let Some(result) = outcome.body.get("result") { return Ok(HttpOutcome {status:200,body:result.clone()}); }
-        return Err(HostFailure::new("server", "invalid_operation_response", "completed operation has no result or error").with_exit(6));
-    }
-    let operation_status = outcome
-        .body
-        .get("status")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            HostFailure::new(
-                "server",
-                "invalid_operation_response",
-                "the Headless operation response has no status",
-            )
-            .with_status(outcome.status)
-            .with_exit(6)
-        })?;
-    match operation_status {
-        "queued" | "running" | "waiting_input" | "cancelling" | "recovering" => Ok(HttpOutcome {
-            status: 202,
-            body: outcome.body,
-        }),
-        "succeeded" => {
-            let receipt = outcome.body.get("receipt").ok_or_else(|| {
-                HostFailure::new(
-                    "server",
-                    "missing_operation_receipt",
-                    "the completed Headless operation has no receipt",
-                )
-                .with_exit(6)
-            })?;
-            let body = receipt
-                .get("result")
-                .cloned()
-                .or_else(|| receipt.get("body").cloned())
-                .ok_or_else(|| {
-                    HostFailure::new(
-                        "server",
-                        "invalid_operation_receipt",
-                        "the completed Headless operation receipt has no result",
-                    )
-                    .with_exit(6)
-                })?;
-            Ok(HttpOutcome { status: 200, body })
-        }
-        "failed" => {
-            let receipt = outcome.body.get("receipt").ok_or_else(|| {
-                HostFailure::new(
-                    "server",
-                    "missing_operation_receipt",
-                    "the failed Headless operation has no receipt",
-                )
-                .with_exit(6)
-            })?;
-            let status = receipt
-                .get("httpStatus")
-                .and_then(Value::as_u64)
-                .and_then(|value| u16::try_from(value).ok())
-                .unwrap_or(500);
-            let detail = receipt
-                .get("error")
-                .or_else(|| receipt.get("body").and_then(|body| body.get("error")))
-                .unwrap_or(receipt);
-            Err(server_failure_from_detail(status, detail))
-        }
-        _ => Err(HostFailure::new(
+    let Some(done) = outcome.body.get("done").and_then(Value::as_bool) else {
+        return Err(HostFailure::new(
             "server",
-            "unknown_operation_status",
-            "the Headless operation returned an unknown status",
+            "invalid_operation_response",
+            "the Headless operation response is not an Operation document: it has no boolean `done`",
         )
         .with_status(outcome.status)
-        .with_exit(6)),
+        .with_exit(6));
+    };
+    if !done {
+        return Ok(HttpOutcome {
+            status: 202,
+            body: outcome.body,
+        });
     }
+    if outcome.body.get("status").and_then(Value::as_str) == Some("cancelled") {
+        return Err(HostFailure::new(
+            "server",
+            "operation_cancelled",
+            "the operation was cancelled",
+        )
+        .with_exit(6));
+    }
+    if let Some(error) = outcome.body.get("error").filter(|value| !value.is_null()) {
+        let status = error
+            .get("status")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or(500);
+        return Err(server_failure_from_detail(status, error));
+    }
+    if let Some(result) = outcome.body.get("result") {
+        return Ok(HttpOutcome {
+            status: 200,
+            body: result.clone(),
+        });
+    }
+    Err(HostFailure::new(
+        "server",
+        "invalid_operation_response",
+        "completed operation has no result or error",
+    )
+    .with_exit(6))
 }
 
 fn parse_response(
@@ -1828,10 +2280,15 @@ impl HostFailure {
     }
 }
 
+/// The success document `call` and `operation` print (before `--query`):
+/// the raw result for `--format raw`, otherwise the envelope. `operation`
+/// may not know the command, which leaves its `rpcCommand` and catalog
+/// metadata `null` while keeping the same shape.
 #[allow(clippy::too_many_arguments)]
-fn print_call_success(
-    name: &str,
-    command: &HostCatalogCommand,
+fn call_success_document(
+    action: &str,
+    rpc_command: Option<&str>,
+    command: Option<&HostCatalogCommand>,
     state: &str,
     data: Value,
     idempotency_key: Option<&str>,
@@ -1839,33 +2296,59 @@ fn print_call_success(
     output_validation: Option<&OutputValidation>,
     pages: Option<u64>,
     format: HostCallFormat,
-    query: Option<&str>,
-) -> std::result::Result<(), HostFailure> {
+) -> Value {
     match format {
-        HostCallFormat::Raw => print_projected(&data, query),
-        HostCallFormat::Json => print_projected(
-            &json!({
-                "schemaVersion": 1,
-                "ok": true,
-                "action": "call",
-                "rpcCommand": name,
-                "state": state,
-                "data": data,
-                "meta": {
-                    "category": command.category,
-                    "resource": command.resource,
-                    "risk": command.risk,
-                    "approval": command.approval,
-                    "outputTyped": command.output_typed,
-                    "outputValidation": output_validation,
-                    "idempotencyKey": idempotency_key,
-                    "operationId": operation_id,
-                    "pages": pages,
-                }
-            }),
-            query,
-        ),
+        HostCallFormat::Raw => data,
+        HostCallFormat::Json => json!({
+            "schemaVersion": 1,
+            "ok": true,
+            "action": action,
+            "rpcCommand": rpc_command,
+            "state": state,
+            "data": data,
+            "meta": {
+                "category": command.map(|command| &command.category),
+                "resource": command.map(|command| &command.resource),
+                "risk": command.map(|command| &command.risk),
+                "approval": command.map(|command| &command.approval),
+                "outputTyped": command.map(|command| command.output_typed),
+                "outputValidation": output_validation,
+                "idempotencyKey": idempotency_key,
+                "operationId": operation_id,
+                "pages": pages,
+            }
+        }),
     }
+}
+
+/// Print a call result through `--query`. The expression's syntax was
+/// checked before the call; a miss here means the RPC already ran, so the
+/// failure says so and carries what is needed to re-read instead of repeat.
+fn print_call_output(
+    document: &Value,
+    query: Option<&str>,
+    state: &str,
+    operation_id: Option<&str>,
+    idempotency_key: Option<&str>,
+) -> std::result::Result<(), HostFailure> {
+    let Some(expression) = query else {
+        return print_json(document);
+    };
+    let selected = crate::shared::json_path::project(document, expression).map_err(|message| {
+        HostFailure::validation(
+            "query_no_match",
+            format!(
+                "the call is {state}, but --query matched nothing in its output ({message}); \
+                 re-read state instead of repeating the call"
+            ),
+        )
+        .with_details(json!({
+            "state": state,
+            "operationId": operation_id,
+            "idempotencyKey": idempotency_key,
+        }))
+    })?;
+    print_json(&selected)
 }
 
 fn run_doctor(
@@ -1960,7 +2443,8 @@ pub(crate) fn probe_host_plane(
                 Err(failure) => return (checks, Some(failure)),
             }
         }
-        let token = match resolve_service_token(&resolved) {
+        let deadline = Instant::now() + UNTIMED_COMMAND_BUDGET;
+        let token = match resolve_service_token(&resolved, deadline) {
             Ok(token) => token,
             Err(failure) => return (checks, Some(failure)),
         };
@@ -1976,8 +2460,10 @@ pub(crate) fn probe_host_plane(
             &resolved,
             &token,
             "host_capabilities",
-            &json!({}),
+            b"{}",
             None,
+            RetryPolicy::for_command(safe),
+            deadline,
         ) {
             return (checks, Some(failure));
         }
@@ -2074,7 +2560,7 @@ fn run_events(
     }
     let resolved = resolve_config(config)?;
     let connector = build_tls_connector(&resolved.ca_cert)?;
-    let token = resolve_service_token(&resolved)?;
+    let token = resolve_service_token(&resolved, Instant::now() + UNTIMED_COMMAND_BUDGET)?;
     let stop = Arc::new(AtomicBool::new(false));
     let signal_stop = stop.clone();
     ctrlc::set_handler(move || signal_stop.store(true, Ordering::SeqCst)).map_err(|_| {
@@ -2652,24 +3138,95 @@ mod tests {
         resolved: ResolvedConfig,
         requests: Receiver<String>,
         handle: JoinHandle<()>,
+        /// Ends every `Scripted::Stall` early; dropping the server does too.
+        release: mpsc::Sender<()>,
+        /// A `cognia-server` stand-in that prints a token (unix only).
+        server_bin: Option<PathBuf>,
         _temp_dir: TempDir,
     }
 
+    impl TlsTestServer {
+        fn config(&self) -> HostConfig {
+            HostConfig {
+                server_url: self
+                    .resolved
+                    .base_url
+                    .as_str()
+                    .trim_end_matches('/')
+                    .to_string(),
+                data_dir: Some(self.resolved.data_dir.clone()),
+                ca_cert: Some(self.resolved.ca_cert.clone()),
+                server_bin: self.server_bin.clone(),
+            }
+        }
+
+        /// Wait for the server thread, then count the requests it read.
+        fn finish(self) -> Vec<String> {
+            drop(self.release);
+            self.handle.join().expect("TLS server");
+            self.requests.try_iter().collect()
+        }
+    }
+
+    /// What the test server does with one accepted connection.
+    enum Scripted {
+        /// Answer with this status and JSON body.
+        Respond(u16, &'static str),
+        /// Read the request, then close after half a status line, so the
+        /// client fails while receiving the response.
+        DropMidResponse,
+        /// Read the request and never answer, until released.
+        Stall,
+    }
+
     fn spawn_tls_server(responses: Vec<(u16, &'static str)>) -> TlsTestServer {
+        spawn_scripted_tls_server(
+            responses
+                .into_iter()
+                .map(|(status, body)| Scripted::Respond(status, body))
+                .collect(),
+        )
+    }
+
+    /// Serve one connection per script entry. The listener gives up after
+    /// two idle seconds, so a test can count requests even when the client
+    /// stopped before the script ran out.
+    fn spawn_scripted_tls_server(script: Vec<Scripted>) -> TlsTestServer {
         let (cert_pem, key_pem) = localhost_certificate();
         let identity = Identity::from_pkcs8(&cert_pem, &key_pem).expect("TLS identity");
         let acceptor = TlsAcceptor::new(identity).expect("TLS acceptor");
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        listener
+            .set_nonblocking(true)
+            .expect("non-blocking listener");
         let port = listener.local_addr().expect("listener address").port();
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let ca_cert = temp_dir.path().join("tls.pem");
         fs::write(&ca_cert, &cert_pem).expect("write CA certificate");
+        let server_bin = token_issuer_script(temp_dir.path(), "printf 'test-token\\n'");
         let (request_tx, requests) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
         let handle = thread::spawn(move || {
-            for (status, body) in responses {
-                let Ok((stream, _)) = listener.accept() else {
-                    return;
+            for entry in script {
+                let idle_since = Instant::now();
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            if idle_since.elapsed() > Duration::from_secs(2) {
+                                return;
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => return,
+                    }
                 };
+                // An accepted socket inherits the listener's non-blocking
+                // flag on BSD-derived systems.
+                stream.set_nonblocking(false).expect("blocking stream");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .expect("read timeout");
                 let Ok(mut stream) = acceptor.accept(stream) else {
                     continue;
                 };
@@ -2677,18 +3234,31 @@ mod tests {
                     continue;
                 };
                 let _ = request_tx.send(request);
-                let reason = match status {
-                    200 => "OK",
-                    202 => "Accepted",
-                    409 => "Conflict",
-                    _ => "Error",
-                };
-                let response = format!(
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
+                match entry {
+                    Scripted::Respond(status, body) => {
+                        let reason = match status {
+                            200 => "OK",
+                            202 => "Accepted",
+                            404 => "Not Found",
+                            409 => "Conflict",
+                            _ => "Error",
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Scripted::DropMidResponse => {
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Ty");
+                        let _ = stream.flush();
+                        let _ = stream.shutdown();
+                    }
+                    Scripted::Stall => {
+                        let _ = release_rx.recv_timeout(Duration::from_secs(30));
+                    }
+                }
             }
         });
         TlsTestServer {
@@ -2700,8 +3270,25 @@ mod tests {
             },
             requests,
             handle,
+            release,
+            server_bin,
             _temp_dir: temp_dir,
         }
+    }
+
+    /// Write an executable `cognia-server` stand-in whose body is `script`.
+    #[cfg(unix)]
+    fn token_issuer_script(directory: &Path, script: &str) -> Option<PathBuf> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.join(format!("issuer-{}", Uuid::new_v4()));
+        fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("issuer script");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod issuer");
+        Some(path)
+    }
+
+    #[cfg(not(unix))]
+    fn token_issuer_script(_directory: &Path, _script: &str) -> Option<PathBuf> {
+        None
     }
 
     fn localhost_certificate() -> (Vec<u8>, Vec<u8>) {
@@ -2809,21 +3396,36 @@ mod tests {
 
     #[test]
     fn catalog_rejects_unsupported_versions_instead_of_guessing_compatibility() {
-        let mut value: Value = serde_json::from_slice(CATALOG_BYTES).expect("embedded JSON");
-        let supported_version = SUPPORTED_CATALOG_SCHEMA_VERSION;
+        // The generated companion contract is the only authority: the CLI
+        // runs exactly the catalog rendered from it, and nothing else.
+        let embedded = catalog();
+        assert_eq!(embedded.schema_version, CONTRACT_VERSION);
+        assert_eq!(embedded.catalog_hash, CATALOG_HASH);
         assert_eq!(
             shared_contract()
                 .expect("embedded contract")
                 .schema_version(),
-            supported_version
+            CONTRACT_VERSION
         );
-        for version in [0, supported_version - 1, supported_version + 1] {
-            value["schemaVersion"] = json!(version);
-            let bytes = serde_json::to_vec(&value).expect("serialize catalog");
+
+        let value: Value = serde_json::from_slice(CATALOG_BYTES).expect("embedded JSON");
+        for version in [0, CONTRACT_VERSION - 1, CONTRACT_VERSION + 1] {
+            let mut changed = value.clone();
+            changed["schemaVersion"] = json!(version);
+            let bytes = serde_json::to_vec(&changed).expect("serialize catalog");
             let error = parse_catalog(&bytes).expect_err("unsupported version");
             assert_eq!(error.code, "unsupported_catalog");
+            assert_eq!(error.exit_code, 2);
+            assert_eq!(error.details["catalogSchemaVersion"], version);
+            assert_eq!(error.details["contractVersion"], CONTRACT_VERSION);
         }
-        assert_eq!(catalog().schema_version, supported_version);
+
+        let mut stale = value;
+        stale["catalogHash"] = json!("0".repeat(64));
+        let bytes = serde_json::to_vec(&stale).expect("serialize catalog");
+        let error = parse_catalog(&bytes).expect_err("catalog from another contract");
+        assert_eq!(error.code, "unsupported_catalog");
+        assert_eq!(error.details["contractCatalogHash"], CATALOG_HASH);
     }
 
     #[test]
@@ -3177,8 +3779,10 @@ mod tests {
             &server.resolved,
             "service-token",
             "session_list",
-            &json!({"limit": 10}),
+            br#"{"limit":10}"#,
             Some(&key),
+            RetryPolicy::AnyTransportFailure,
+            test_deadline(),
         )
         .expect("RPC response");
 
@@ -3206,10 +3810,10 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let server = spawn_tls_server(vec![
-            (202, r#"{"operationId":"operation-1","status":"running"}"#),
+            (202, RUNNING_OPERATION),
             (
                 200,
-                r#"{"operationId":"operation-1","status":"succeeded","receipt":{"httpStatus":200,"result":{"done":true}},"createdAt":1,"updatedAt":2}"#,
+                r#"{"id":"00000000-0000-4000-8000-0000000000aa","done":true,"status":"succeeded","result":{"done":true},"metadata":{"createdAt":1,"updatedAt":2}}"#,
             ),
         ]);
         let agent = build_agent(&server.resolved).expect("trusted TLS agent");
@@ -3221,26 +3825,29 @@ mod tests {
             &server.resolved,
             "service-token",
             "test_command",
-            &body,
+            &serde_json::to_vec(&body).expect("body bytes"),
             Some(&key),
+            RetryPolicy::AnyTransportFailure,
+            test_deadline(),
         )
         .expect("accepted response");
         let completed = poll_operation_with_retry(
             &agent,
             &server.resolved,
             "service-token",
-            "00000000-0000-4000-8000-000000000001",
+            OPERATION_ID,
+            test_deadline(),
         )
         .expect("completed operation");
 
         assert_eq!(accepted.status, 202);
-        assert_eq!(accepted.body["operationId"], "operation-1");
+        assert_eq!(accepted.body["id"], OPERATION_ID);
         assert_eq!(completed.status, 200);
+        assert_eq!(completed.body, json!({"done": true}));
         let first = server.requests.recv().expect("first request");
         let second = server.requests.recv().expect("operation poll");
         assert!(first.starts_with("POST /internal/_rpc/test_command HTTP/1.1"));
-        assert!(second
-            .starts_with("GET /internal/operations/00000000-0000-4000-8000-000000000001 HTTP/1.1"));
+        assert!(second.starts_with(&format!("GET /internal/operations/{OPERATION_ID} HTTP/1.1")));
         server.handle.join().expect("TLS server");
     }
 
@@ -3259,8 +3866,10 @@ mod tests {
             &server.resolved,
             "service-token",
             "test_command",
-            &json!({}),
+            b"{}",
             Some(&Uuid::new_v4().to_string()),
+            RetryPolicy::AnyTransportFailure,
+            test_deadline(),
         )
         .expect_err("server rejection");
 
@@ -3288,8 +3897,10 @@ mod tests {
             &server.resolved,
             "service-token",
             "test_command",
-            &json!({}),
+            b"{}",
             None,
+            RetryPolicy::AnyTransportFailure,
+            test_deadline(),
         )
         .expect_err("hostname mismatch");
 
@@ -3312,8 +3923,10 @@ mod tests {
             &server.resolved,
             "service-token",
             "test_command",
-            &json!({}),
+            b"{}",
             None,
+            RetryPolicy::AnyTransportFailure,
+            test_deadline(),
         )
         .expect_err("untrusted CA");
 
@@ -3568,5 +4181,621 @@ mod tests {
         }
         let cancelled = parse_operation_response(HttpOutcome {status:200, body:json!({"id":"op","done":true,"status":"cancelled"})}).expect_err("cancelled must fail");
         assert_eq!(cancelled.code, "operation_cancelled");
+    }
+
+    fn test_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(20)
+    }
+
+    fn quiet_ui() -> RuntimeUi {
+        RuntimeUi::new(UiFlags {
+            color: ColorMode::Never,
+            ..UiFlags::default()
+        })
+    }
+
+    /// `run_call` against a test server, everything else at its default.
+    fn call_test_server(
+        server: &TlsTestServer,
+        name: &str,
+        data: &str,
+        paginate: bool,
+        timeout_seconds: u64,
+        query: Option<&str>,
+    ) -> std::result::Result<(), HostFailure> {
+        run_call(
+            &catalog(),
+            &server.config(),
+            name,
+            Some(data),
+            &[],
+            &[],
+            None,
+            false,
+            false,
+            paginate,
+            false,
+            timeout_seconds,
+            HostCallFormat::Json,
+            query,
+            &mut quiet_ui(),
+        )
+    }
+
+    const CLAIM_BODY: &str = r#"{"kind":"job","id":"job-1","consumer":"cli"}"#;
+
+    #[test]
+    fn offline_flag_checks_run_before_any_request_is_sent() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = spawn_tls_server(vec![(200, r#"{"claimed":true}"#), (200, "{}")]);
+        let catalog = catalog();
+        let command = find_command(&catalog, "background_job_claim_delivery").unwrap();
+        assert_eq!(command.operation, "write");
+        assert!(pagination_plan(command).unwrap().is_none());
+
+        // A write that cannot paginate used to be sent, run, and only then
+        // refused for --paginate.
+        let failure = call_test_server(
+            &server,
+            "background_job_claim_delivery",
+            CLAIM_BODY,
+            true,
+            5,
+            None,
+        )
+        .expect_err("--paginate is unsupported");
+        assert_eq!(failure.code, "pagination_unsupported");
+        assert_eq!(failure.exit_code, 2);
+
+        let failure = call_test_server(
+            &server,
+            "background_job_claim_delivery",
+            CLAIM_BODY,
+            false,
+            5,
+            Some(".data["),
+        )
+        .expect_err("malformed --query");
+        assert_eq!(failure.code, "invalid_query");
+        assert_eq!(failure.exit_code, 2);
+
+        assert!(
+            server.finish().is_empty(),
+            "a flag refused offline must not reach the server"
+        );
+    }
+
+    #[test]
+    fn a_query_that_misses_after_the_call_ran_says_the_call_ran() {
+        let document = json!({"ok": true, "data": {"id": "x"}});
+        let failure = print_call_output(
+            &document,
+            Some(".data.missing"),
+            "completed",
+            Some("operation-1"),
+            Some("key-1"),
+        )
+        .expect_err("no match");
+        assert_eq!(failure.code, "query_no_match");
+        assert_eq!(failure.details["state"], "completed");
+        assert_eq!(failure.details["operationId"], "operation-1");
+        assert_eq!(failure.details["idempotencyKey"], "key-1");
+        assert!(failure.message.contains("re-read state"));
+        print_call_output(&document, Some(".data.id"), "completed", None, None)
+            .expect("a matching query prints");
+    }
+
+    #[test]
+    fn request_limit_matches_the_internal_router_limit() {
+        assert_eq!(MAX_REQUEST_BYTES, 16 * 1024 * 1024);
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../cognia-companion/src/server.rs"),
+        )
+        .expect("companion server source");
+        assert!(
+            source.contains("const INTERNAL_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;"),
+            "the internal router limit changed; update MAX_REQUEST_BYTES to match"
+        );
+        assert!(source.contains("RequestBodyLimitLayer::new(INTERNAL_BODY_LIMIT_BYTES)"));
+    }
+
+    #[test]
+    fn agent_sized_bodies_pass_every_local_body_source() {
+        // 1 MiB of context: over the old 64 KiB local cap, well inside the
+        // 16 MiB the internal router accepts.
+        let text = "x".repeat(1024 * 1024);
+        let data = json!({ "text": text }).to_string();
+        let (_, bytes) = build_request_body(Some(&data), &[], &[]).expect("--data literal");
+        assert_eq!(bytes, data.as_bytes());
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("body.json");
+        fs::write(&path, &data).expect("body file");
+        let (_, bytes) = build_request_body(Some(&format!("@{}", path.display())), &[], &[])
+            .expect("--data @file");
+        assert_eq!(bytes.len(), data.len());
+
+        let (_, bytes) =
+            build_request_body(None, &[format!("text={text}")], &[]).expect("-f field");
+        assert!(bytes.len() > 1024 * 1024);
+
+        let error = encode_request_body(&json!({ "text": "x".repeat(MAX_REQUEST_BYTES) }))
+            .expect_err("over the limit");
+        assert_eq!(error.code, "request_body_too_large");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_seconds_bounds_a_call_to_a_stalled_server() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = spawn_scripted_tls_server(vec![Scripted::Stall]);
+        let started = Instant::now();
+        let failure = call_test_server(&server, "session_list", "{}", false, 1, None)
+            .expect_err("stalled call");
+        let elapsed = started.elapsed();
+        assert_eq!(failure.error_type, "timeout");
+        assert_eq!(failure.code, "call_timeout");
+        assert_eq!(failure.exit_code, 5);
+        assert_eq!(failure.details["requestMayHaveBeenSent"], true);
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "a 1 s budget took {elapsed:?}"
+        );
+        assert_eq!(server.finish().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn token_issuance_is_bounded_by_the_call_deadline() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let resolved = |script: &str| ResolvedConfig {
+            base_url: Url::parse("https://127.0.0.1:1/").expect("URL"),
+            data_dir: directory.path().to_path_buf(),
+            ca_cert: directory.path().join("tls.pem"),
+            server_bin: token_issuer_script(directory.path(), script),
+        };
+
+        let started = Instant::now();
+        let failure = issue_service_token(
+            &resolved("exec sleep 30"),
+            Instant::now() + Duration::from_millis(300),
+        )
+        .expect_err("stuck issuer");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(failure.code, "call_timeout");
+        assert_eq!(failure.exit_code, 5);
+        assert_eq!(failure.details["phase"], "issuing a service token");
+        assert_eq!(failure.details["requestMayHaveBeenSent"], false);
+        assert!(failure.retryable);
+
+        assert_eq!(
+            issue_service_token(&resolved("printf 'issued-token\\n'"), test_deadline())
+                .expect("issued token"),
+            "issued-token"
+        );
+        assert_eq!(
+            issue_service_token(&resolved("exit 3"), test_deadline())
+                .expect_err("failing issuer")
+                .code,
+            "token_issuance_failed"
+        );
+    }
+
+    #[test]
+    fn only_errors_raised_before_sending_prove_a_request_unsent() {
+        use ureq::Timeout;
+        for error in [
+            ureq::Error::HostNotFound,
+            ureq::Error::ConnectionFailed,
+            ureq::Error::Timeout(Timeout::Resolve),
+            ureq::Error::Timeout(Timeout::Connect),
+            ureq::Error::Io(io::Error::from(io::ErrorKind::ConnectionRefused)),
+        ] {
+            assert!(request_provably_unsent(&error), "{error}");
+        }
+        for error in [
+            ureq::Error::Timeout(Timeout::Global),
+            ureq::Error::Timeout(Timeout::PerCall),
+            ureq::Error::Timeout(Timeout::SendRequest),
+            ureq::Error::Timeout(Timeout::SendBody),
+            ureq::Error::Timeout(Timeout::RecvResponse),
+            ureq::Error::Timeout(Timeout::RecvBody),
+            ureq::Error::Io(io::Error::from(io::ErrorKind::ConnectionReset)),
+            ureq::Error::Io(io::Error::from(io::ErrorKind::BrokenPipe)),
+            ureq::Error::Io(io::Error::from(io::ErrorKind::UnexpectedEof)),
+            ureq::Error::BodyExceedsLimit(1),
+            ureq::Error::RedirectFailed,
+        ] {
+            assert!(!request_provably_unsent(&error), "{error}");
+        }
+    }
+
+    #[test]
+    fn idempotency_declarations_map_to_retry_policies() {
+        let catalog = catalog();
+        assert!(catalog
+            .commands
+            .iter()
+            .any(|command| command.idempotency == "forbidden"));
+        for command in &catalog.commands {
+            let expected = match command.idempotency.as_str() {
+                "required" | "structural" => RetryPolicy::AnyTransportFailure,
+                _ => RetryPolicy::UnsentOnly,
+            };
+            assert_eq!(
+                RetryPolicy::for_command(command),
+                expected,
+                "{}",
+                command.name
+            );
+        }
+        let mut unknown = command_with_schemas("future_command", json!({}), json!({}));
+        unknown.idempotency = "a-future-declaration".into();
+        assert_eq!(RetryPolicy::for_command(&unknown), RetryPolicy::UnsentOnly);
+    }
+
+    #[test]
+    fn forbidden_commands_are_sent_once_when_the_response_is_lost() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = spawn_scripted_tls_server(vec![
+            Scripted::DropMidResponse,
+            Scripted::DropMidResponse,
+            Scripted::DropMidResponse,
+        ]);
+        let agent = build_agent(&server.resolved).expect("trusted TLS agent");
+        let catalog = catalog();
+        let command = find_command(&catalog, "sandbox_preview_create").unwrap();
+        assert_eq!(command.idempotency, "forbidden");
+        let failure = post_rpc_with_retry(
+            &agent,
+            &server.resolved,
+            "service-token",
+            "sandbox_preview_create",
+            b"{}",
+            None,
+            RetryPolicy::for_command(command),
+            test_deadline(),
+        )
+        .expect_err("lost response");
+
+        assert_eq!(failure.error_type, "transport");
+        assert_eq!(failure.code, "rpc_transport_failed");
+        assert!(!failure.retryable, "the effect may already have happened");
+        assert_eq!(failure.details["attempts"], 1);
+        assert_eq!(failure.details["requestMayHaveBeenSent"], true);
+        let requests = server.finish();
+        assert_eq!(
+            requests.len(),
+            1,
+            "a forbidden command must not be replayed"
+        );
+        assert!(requests[0].starts_with("POST /internal/_rpc/sandbox_preview_create HTTP/1.1"));
+        assert!(!requests[0].to_ascii_lowercase().contains("idempotency-key"));
+    }
+
+    #[test]
+    fn keyed_commands_still_retry_a_lost_response() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = spawn_scripted_tls_server(vec![
+            Scripted::DropMidResponse,
+            Scripted::DropMidResponse,
+            Scripted::DropMidResponse,
+        ]);
+        let agent = build_agent(&server.resolved).expect("trusted TLS agent");
+        let catalog = catalog();
+        let command = find_command(&catalog, "background_job_claim_delivery").unwrap();
+        assert_eq!(command.idempotency, "required");
+        let key = Uuid::new_v4().to_string();
+        let failure = post_rpc_with_retry(
+            &agent,
+            &server.resolved,
+            "service-token",
+            "background_job_claim_delivery",
+            CLAIM_BODY.as_bytes(),
+            Some(&key),
+            RetryPolicy::for_command(command),
+            test_deadline(),
+        )
+        .expect_err("lost responses");
+
+        assert_eq!(failure.code, "rpc_transport_failed");
+        assert!(failure.retryable);
+        assert_eq!(failure.details["attempts"], 3);
+        let requests = server.finish();
+        assert_eq!(requests.len(), 3);
+        for request in requests {
+            assert!(request
+                .to_ascii_lowercase()
+                .contains(&format!("idempotency-key: {key}").to_ascii_lowercase()));
+        }
+    }
+
+    #[test]
+    fn forbidden_commands_retry_a_refused_connection() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            listener.local_addr().expect("address").port()
+        };
+        let directory = tempfile::tempdir().expect("temp dir");
+        let ca_cert = directory.path().join("tls.pem");
+        fs::write(&ca_cert, localhost_certificate().0).expect("CA certificate");
+        let resolved = ResolvedConfig {
+            base_url: Url::parse(&format!("https://127.0.0.1:{port}/")).expect("URL"),
+            data_dir: directory.path().to_path_buf(),
+            ca_cert,
+            server_bin: None,
+        };
+        let agent = build_agent(&resolved).expect("TLS agent");
+        let failure = post_rpc_with_retry(
+            &agent,
+            &resolved,
+            "service-token",
+            "sandbox_preview_create",
+            b"{}",
+            None,
+            RetryPolicy::UnsentOnly,
+            test_deadline(),
+        )
+        .expect_err("refused connection");
+
+        assert_eq!(failure.code, "rpc_transport_failed");
+        assert!(failure.retryable);
+        assert_eq!(failure.details["attempts"], 3);
+        assert_eq!(failure.details["requestMayHaveBeenSent"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_202_without_the_operation_id_is_refused_instead_of_replayed() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        // The pre-ADR-0175 `operationId` key is not the Operation document's
+        // `id`; neither a structural nor a forbidden command may be sent
+        // again to wait for an operation it cannot name.
+        for name in ["session_list", "person_agent_policy_get"] {
+            let server = spawn_tls_server(vec![
+                (
+                    202,
+                    r#"{"operationId":"00000000-0000-4000-8000-0000000000aa","status":"running"}"#,
+                ),
+                (200, "{}"),
+            ]);
+            let failure = call_test_server(&server, name, "{}", false, 5, None)
+                .expect_err("unnamed operation");
+            assert_eq!(failure.code, "missing_operation_id", "{name}");
+            assert_eq!(failure.exit_code, 6);
+            assert_eq!(
+                server.finish().len(),
+                1,
+                "{name}: the POST must not be replayed"
+            );
+        }
+    }
+
+    #[test]
+    fn operation_answers_must_carry_a_boolean_done() {
+        for body in [
+            // The pre-ADR-0175 receipt shape, answered by older hosts.
+            json!({"operationId": "op", "status": "succeeded", "receipt": {"result": {"ok": true}}}),
+            json!({"id": "op", "status": "running"}),
+            json!({"id": "op", "done": "true", "status": "succeeded", "result": {}}),
+        ] {
+            let failure = parse_operation_response(HttpOutcome { status: 200, body })
+                .expect_err("not an Operation document");
+            assert_eq!(failure.code, "invalid_operation_response");
+            assert_eq!(failure.exit_code, 6);
+        }
+        let running = parse_operation_response(HttpOutcome {
+            status: 200,
+            body: serde_json::from_str(RUNNING_OPERATION).expect("operation JSON"),
+        })
+        .expect("running operation");
+        assert_eq!(running.status, 202);
+        let failed = parse_operation_response(HttpOutcome {
+            status: 200,
+            body: json!({
+                "id": "op",
+                "done": true,
+                "status": "failed",
+                "error": {"status": 409, "code": "conflict", "detail": "already exists"},
+            }),
+        })
+        .expect_err("failed operation");
+        assert_eq!(failed.code, "conflict");
+        assert_eq!(failed.http_status, Some(409));
+        assert_eq!(failed.exit_code, 6);
+    }
+
+    const OPERATION_ID: &str = "00000000-0000-4000-8000-0000000000aa";
+    const RUNNING_OPERATION: &str = r#"{"id":"00000000-0000-4000-8000-0000000000aa","done":false,"status":"running","metadata":{"createdAt":1,"updatedAt":1}}"#;
+
+    #[test]
+    fn operation_reports_accepted_while_running_and_completed_once_done() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = spawn_tls_server(vec![
+            (200, RUNNING_OPERATION),
+            (
+                200,
+                r#"{"id":"00000000-0000-4000-8000-0000000000aa","done":true,"status":"succeeded","result":{"items":[],"total":0},"metadata":{"createdAt":1,"updatedAt":2}}"#,
+            ),
+        ]);
+        let agent = build_agent(&server.resolved).expect("trusted TLS agent");
+        let catalog = catalog();
+        let command = find_command(&catalog, "session_list").unwrap();
+        let read = || {
+            follow_operation(
+                &agent,
+                &server.resolved,
+                "service-token",
+                OPERATION_ID,
+                Some(command),
+                false,
+                false,
+                test_deadline(),
+                HostCallFormat::Json,
+            )
+        };
+
+        let (state, accepted) = read().expect("running operation");
+        assert_eq!(state, "accepted");
+        assert_eq!(accepted["schemaVersion"], 1);
+        assert_eq!(accepted["ok"], true);
+        assert_eq!(accepted["action"], "operation");
+        assert_eq!(accepted["rpcCommand"], "session_list");
+        assert_eq!(accepted["state"], "accepted");
+        assert_eq!(accepted["data"]["status"], "running");
+        assert_eq!(accepted["meta"]["operationId"], OPERATION_ID);
+        assert_eq!(accepted["meta"]["resource"], "session");
+        assert!(accepted["meta"]["outputValidation"].is_null());
+
+        let (state, completed) = read().expect("completed operation");
+        assert_eq!(state, "completed");
+        assert_eq!(completed["state"], "completed");
+        assert_eq!(completed["data"], json!({"items": [], "total": 0}));
+        assert_eq!(completed["meta"]["outputValidation"]["status"], "valid");
+        assert_eq!(completed["meta"]["operationId"], OPERATION_ID);
+
+        let requests = server.finish();
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            assert!(
+                request.starts_with(&format!("GET /internal/operations/{OPERATION_ID} HTTP/1.1"))
+            );
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer service-token"));
+        }
+    }
+
+    #[test]
+    fn operation_wait_polls_until_terminal_in_the_call_shape() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let done = r#"{"id":"00000000-0000-4000-8000-0000000000aa","done":true,"status":"succeeded","result":{"done":true},"metadata":{"createdAt":1,"updatedAt":3}}"#;
+        let server = spawn_tls_server(vec![
+            (200, RUNNING_OPERATION),
+            (200, RUNNING_OPERATION),
+            (200, done),
+            (200, done),
+        ]);
+        let agent = build_agent(&server.resolved).expect("trusted TLS agent");
+        let follow = |format| {
+            follow_operation(
+                &agent,
+                &server.resolved,
+                "service-token",
+                OPERATION_ID,
+                None,
+                true,
+                false,
+                test_deadline(),
+                format,
+            )
+        };
+
+        let (state, document) = follow(HostCallFormat::Json).expect("completed operation");
+        assert_eq!(state, "completed");
+        assert_eq!(document["action"], "operation");
+        assert_eq!(document["state"], "completed");
+        assert_eq!(document["data"], json!({"done": true}));
+        // Without --rpc-command the envelope keeps its shape with nulls.
+        assert!(document["rpcCommand"].is_null());
+        assert!(document["meta"]["category"].is_null());
+        assert!(document["meta"]["outputValidation"].is_null());
+        assert_eq!(document["meta"]["operationId"], OPERATION_ID);
+
+        let (_, raw) = follow(HostCallFormat::Raw).expect("raw result");
+        assert_eq!(raw, json!({"done": true}));
+        assert_eq!(server.finish().len(), 4);
+    }
+
+    #[test]
+    fn operation_wait_stops_at_the_timeout_in_the_resumable_shape() {
+        let _guard = TLS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = spawn_tls_server(vec![(200, RUNNING_OPERATION); 10]);
+        let agent = build_agent(&server.resolved).expect("trusted TLS agent");
+        let started = Instant::now();
+        let failure = follow_operation(
+            &agent,
+            &server.resolved,
+            "service-token",
+            OPERATION_ID,
+            None,
+            true,
+            false,
+            Instant::now() + Duration::from_millis(700),
+            HostCallFormat::Json,
+        )
+        .expect_err("still running");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(failure.code, "operation_timeout");
+        assert_eq!(failure.exit_code, 5);
+        assert_eq!(failure.details["operationId"], OPERATION_ID);
+        server.finish();
+    }
+
+    #[test]
+    fn the_core_skill_explains_how_to_resume_a_no_wait_call() {
+        assert!(HOST_SKILL.contains("--no-wait"));
+        assert!(HOST_SKILL.contains("cognia host operation <operation-id>"));
+        assert!(HOST_OUTPUT_REFERENCE.contains("action: operation"));
+        assert!(!HOST_SKILL.contains("waits by replaying"));
+    }
+
+    #[test]
+    fn operation_inputs_are_validated_before_any_network_work() {
+        let catalog = catalog();
+        let config = HostConfig {
+            server_url: "https://127.0.0.1:1".into(),
+            data_dir: None,
+            ca_cert: None,
+            server_bin: None,
+        };
+        let run = |id: &str, command: Option<&str>, strict: bool, query: Option<&str>| {
+            run_operation(
+                &catalog,
+                &config,
+                id,
+                command,
+                false,
+                strict,
+                5,
+                HostCallFormat::Json,
+                query,
+            )
+            .expect_err("refused offline")
+        };
+        let failure = run("not-a-uuid", None, false, None);
+        assert_eq!(failure.code, "invalid_operation_id");
+        assert_eq!(failure.exit_code, 2);
+        assert_eq!(
+            run(OPERATION_ID, Some("no_such_command"), false, None).code,
+            "unknown_command"
+        );
+        assert_eq!(
+            run(OPERATION_ID, None, true, None).code,
+            "strict_output_requires_command"
+        );
+        assert_eq!(
+            run(OPERATION_ID, None, false, Some(".data[")).code,
+            "invalid_query"
+        );
     }
 }

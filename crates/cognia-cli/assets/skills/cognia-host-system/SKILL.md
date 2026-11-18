@@ -17,7 +17,7 @@ Discover system commands with:
 
 ```bash
 cognia host resources --category system
-cognia host commands --category system --resource <resource> --query <capability-secret-backup-sync-or-log>
+cognia host commands --category system --resource <resource> --search <capability-secret-backup-sync-or-log>
 ```
 
 ## Workflow

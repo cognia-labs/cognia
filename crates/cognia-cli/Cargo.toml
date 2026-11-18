@@ -65,6 +65,9 @@ ctrlc = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 cognia-observability = { version = "0.1.0", path = "../cognia-observability" }
 cognia-headless-contract = { version = "0.1.0", path = "../cognia-headless-contract" }
+# The generated contract version and catalog hash the embedded Headless
+# catalog must carry (`command_manifest::{CONTRACT_VERSION, CATALOG_HASH}`).
+cognia-companion-contract = { version = "0.1.0", path = "../cognia-companion-contract" }
 uuid = { workspace = true, features = ["v4"] }
 url.workspace = true
 

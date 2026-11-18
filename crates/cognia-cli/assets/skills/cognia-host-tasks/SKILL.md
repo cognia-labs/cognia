@@ -17,7 +17,7 @@ Search the task domain:
 
 ```bash
 cognia host resources --category tasks
-cognia host commands --category tasks --resource <resource> --query <workspace-or-resource-term>
+cognia host commands --category tasks --resource <resource> --search <workspace-or-resource-term>
 ```
 
 ## Workflow

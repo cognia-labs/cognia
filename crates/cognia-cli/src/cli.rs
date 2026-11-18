@@ -360,6 +360,9 @@ pub(crate) enum HostCommand {
         idempotency_key: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        /// Return `state: accepted` with `meta.operationId` as soon as the
+        /// server accepts a durable operation; resume it with
+        /// `cognia host operation <operation-id>`.
         #[arg(long)]
         no_wait: bool,
         /// Follow page tokens (pageToken→nextPageToken, cursor→nextCursor)
@@ -369,11 +372,38 @@ pub(crate) enum HostCommand {
         /// Fail when a completed response violates the embedded output contract.
         #[arg(long)]
         strict_output: bool,
-        #[arg(long, default_value_t = 30)]
+        /// Budget for the whole call: token issuance, every request, retries,
+        /// operation polling and pagination.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
         timeout_seconds: u64,
         #[arg(long, value_enum, default_value_t = HostCallFormat::Json)]
         format: HostCallFormat,
         /// Project the JSON output through a dot-path selector (e.g. `.data.id`).
+        #[arg(long, alias = "select", value_name = "PATH")]
+        query: Option<String>,
+    },
+    /// Read a durable operation by id, e.g. one `call --no-wait` accepted or
+    /// a call left running when its timeout elapsed.
+    Operation {
+        /// The operation id a call reported as `meta.operationId`.
+        operation_id: String,
+        /// The RPC command that started the operation. Fills `meta` and checks
+        /// the result against that command's output contract.
+        #[arg(long)]
+        rpc_command: Option<String>,
+        /// Poll until the operation finishes instead of reading it once.
+        #[arg(long)]
+        wait: bool,
+        /// Fail when the completed result violates the `--rpc-command` output
+        /// contract.
+        #[arg(long, requires = "rpc_command")]
+        strict_output: bool,
+        /// Budget for token issuance and every poll.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = HostCallFormat::Json)]
+        format: HostCallFormat,
+        /// Project the JSON output through a dot-path selector (e.g. `.data`).
         #[arg(long, alias = "select", value_name = "PATH")]
         query: Option<String>,
     },
@@ -1538,6 +1568,97 @@ mod tests {
             panic!("expected host call command");
         };
         assert!(!strict_output);
+    }
+
+    #[test]
+    fn host_operation_parses_its_flags_and_defaults() {
+        let cli = Cli::try_parse_from([
+            "cognia",
+            "host",
+            "operation",
+            "00000000-0000-4000-8000-0000000000aa",
+            "--rpc-command",
+            "session_list",
+            "--wait",
+            "--strict-output",
+            "--timeout-seconds",
+            "90",
+            "--format",
+            "raw",
+            "--query",
+            ".items",
+        ])
+        .expect("host operation should parse");
+        let TopCommand::Host {
+            command:
+                HostCommand::Operation {
+                    operation_id,
+                    rpc_command,
+                    wait,
+                    strict_output,
+                    timeout_seconds,
+                    format,
+                    query,
+                },
+            ..
+        } = cli.command
+        else {
+            panic!("expected host operation command");
+        };
+        assert_eq!(operation_id, "00000000-0000-4000-8000-0000000000aa");
+        assert_eq!(rpc_command.as_deref(), Some("session_list"));
+        assert!(wait);
+        assert!(strict_output);
+        assert_eq!(timeout_seconds, 90);
+        assert!(matches!(format, HostCallFormat::Raw));
+        assert_eq!(query.as_deref(), Some(".items"));
+
+        let cli = Cli::try_parse_from(["cognia", "host", "operation", "op"])
+            .expect("defaults should parse");
+        let TopCommand::Host {
+            command:
+                HostCommand::Operation {
+                    rpc_command,
+                    wait,
+                    timeout_seconds,
+                    format,
+                    ..
+                },
+            ..
+        } = cli.command
+        else {
+            panic!("expected host operation command");
+        };
+        assert!(rpc_command.is_none());
+        assert!(!wait);
+        assert_eq!(timeout_seconds, 30);
+        assert!(matches!(format, HostCallFormat::Json));
+
+        for args in [
+            vec!["cognia", "host", "operation"],
+            vec!["cognia", "host", "operation", "op", "--strict-output"],
+            vec![
+                "cognia",
+                "host",
+                "operation",
+                "op",
+                "--timeout-seconds",
+                "0",
+            ],
+            vec![
+                "cognia",
+                "host",
+                "call",
+                "session_list",
+                "--timeout-seconds",
+                "0",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "expected rejection for {args:?}"
+            );
+        }
     }
 
     #[test]

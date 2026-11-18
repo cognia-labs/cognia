@@ -88,12 +88,61 @@ fn host_help_exposes_the_agent_first_surface() {
         "commands",
         "schema",
         "call",
+        "operation",
         "doctor",
         "events",
         "skills",
     ] {
         assert!(stdout.contains(command), "missing {command}: {stdout}");
     }
+
+    let (code, stdout, stderr) = run(&["host", "call", "--help"], &[]);
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert!(stdout.contains("cognia host operation"), "stdout: {stdout}");
+}
+
+#[test]
+fn operation_rejects_a_malformed_id_before_credentials() {
+    let (code, stdout, stderr) = run(
+        &[
+            "host",
+            "--server-url",
+            "https://127.0.0.1:9",
+            "operation",
+            "not-a-uuid",
+            "--wait",
+        ],
+        &[],
+    );
+    assert_eq!(code, Some(2), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.trim().is_empty());
+    let payload: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(payload["action"], "operation");
+    assert_eq!(payload["error"]["type"], "validation");
+    assert_eq!(payload["error"]["code"], "invalid_operation_id");
+}
+
+#[test]
+fn paginate_on_a_write_is_refused_before_credentials() {
+    // Port 9 has no listener: reaching the network would surface a token or
+    // transport failure instead of the usage error.
+    let (code, stdout, stderr) = run(
+        &[
+            "host",
+            "--server-url",
+            "https://127.0.0.1:9",
+            "call",
+            "background_job_claim_delivery",
+            "--data",
+            r#"{"kind":"job","id":"job-1","consumer":"cli"}"#,
+            "--paginate",
+        ],
+        &[],
+    );
+    assert_eq!(code, Some(2), "stdout: {stdout}\nstderr: {stderr}");
+    let payload: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(payload["rpcCommand"], "background_job_claim_delivery");
+    assert_eq!(payload["error"]["code"], "pagination_unsupported");
 }
 
 #[test]

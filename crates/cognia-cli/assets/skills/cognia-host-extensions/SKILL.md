@@ -17,7 +17,7 @@ Search this domain before choosing a runtime:
 
 ```bash
 cognia host resources --category extensions
-cognia host commands --category extensions --resource <resource> --query <plugin-skill-mcp-or-provider>
+cognia host commands --category extensions --resource <resource> --search <plugin-skill-mcp-or-provider>
 ```
 
 ## Workflow

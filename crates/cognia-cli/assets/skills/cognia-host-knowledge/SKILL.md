@@ -17,7 +17,7 @@ Discover knowledge commands with:
 
 ```bash
 cognia host resources --category knowledge
-cognia host commands --category knowledge --resource <resource> --query <memory-twin-or-ocr-term>
+cognia host commands --category knowledge --resource <resource> --search <memory-twin-or-ocr-term>
 ```
 
 ## Workflow

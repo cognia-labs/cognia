@@ -1909,6 +1909,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "cognia-canonical-json",
+ "cognia-companion-contract",
  "cognia-headless-contract",
  "cognia-observability",
  "color-eyre",

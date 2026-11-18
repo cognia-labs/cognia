@@ -21,7 +21,7 @@ connector delivery.
 2. Choose a domain with `cognia host categories`; read its skill when one is listed.
 3. List its resource groups with `cognia host resources --category <category>`.
 4. Search before guessing:
-   `cognia host commands --category <category> --resource <resource> --query <term>`.
+   `cognia host commands --category <category> --resource <resource> --search <term>`.
 5. Inspect the exact input contract with `cognia host schema <rpc-command>` and read current
    authoritative state before any mutation.
 6. For a mutation, run the exact body through `--dry-run`, obtain required user confirmation, then
@@ -44,15 +44,22 @@ connector delivery.
 
 - Required idempotency keys are generated automatically. Reuse an explicitly supplied key when
   resuming a timed-out call.
-- The default call waits by replaying the same request and idempotency key. Use `--no-wait` only
-  when the caller can retain the returned `operationId` and idempotency key.
+- The default call waits by polling the durable operation until it finishes, within
+  `--timeout-seconds`. Use `--no-wait` only when the caller can retain the returned
+  `meta.operationId`; resume it with
+  `cognia host operation <operation-id> --rpc-command <rpc-command> --wait`. Without `--wait`,
+  `host operation` reads it once and reports `state: accepted` while it still runs.
 - `cognia host events` prints NDJSON. Persist the last `seq` and reconnect with `--since`.
 - `resync_required` means the cursor left the retention window; refresh authoritative state through
   RPC rather than inventing missing events.
 
 ## Failure handling
 
-- After a timeout, retry only the same body with the same idempotency key.
+- After `operation_timeout`, resume with `cognia host operation <operationId> --wait` instead of
+  calling again. After any other timeout, retry only the same body with the same idempotency key
+  (failure `details.idempotencyKey`).
+- A command whose schema reports `idempotency: forbidden` is never retried once the request may
+  have reached the server; such a failure has `retryable: false`. Verify state before calling again.
 - Stop on validation, authentication, confirmation, or resynchronization errors; correct the cause
   instead of changing arguments speculatively.
 - A transport failure is not proof that a mutation failed. Verify state before deciding whether to

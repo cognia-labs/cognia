@@ -17,7 +17,7 @@ Discover only this domain:
 
 ```bash
 cognia host resources --category agents
-cognia host commands --category agents --resource <resource> --query <agent-or-goal-term>
+cognia host commands --category agents --resource <resource> --search <agent-or-goal-term>
 ```
 
 ## Workflow
