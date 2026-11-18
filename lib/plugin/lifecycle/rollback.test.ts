@@ -19,6 +19,8 @@ const mockGetVersions = jest.fn()
 const mockInstallPlugin = jest.fn()
 const mockStoreGetState = jest.fn()
 const mockStoreSetState = jest.fn()
+const mockReadOrigin = jest.fn()
+const mockRecordOrigin = jest.fn()
 const mockManager = {
   scanPlugins: jest.fn(),
   syncRuntimeState: jest.fn(),
@@ -90,8 +92,13 @@ describe("PluginRollbackManager", () => {
 
   beforeEach(() => {
     resetPluginRollbackManager()
-    manager = new PluginRollbackManager()
+    manager = new PluginRollbackManager(
+      {},
+      { readOrigin: mockReadOrigin, recordOrigin: mockRecordOrigin }
+    )
     jest.clearAllMocks()
+    mockReadOrigin.mockResolvedValue(undefined)
+    mockRecordOrigin.mockResolvedValue(undefined)
 
     storeState = {
       plugins: {
@@ -364,7 +371,7 @@ describe("PluginRollbackManager", () => {
       const result = await manager.rollback("plugin-a", "1.0.0")
 
       expect(result.success).toBe(true)
-      expect(mockManager.enablePlugin).toHaveBeenCalledWith("plugin-a")
+      expect(mockManager.enablePlugin).toHaveBeenCalledWith("plugin-a", "rollback")
       expect(mockManager.unloadPlugin).toHaveBeenCalledWith("plugin-a")
       expect(mockInvoke).not.toHaveBeenCalled()
     })
@@ -423,6 +430,120 @@ describe("PluginRollbackManager", () => {
       mockManager.scanPlugins.mockResolvedValueOnce([])
       expect((await manager.rollback("plugin-a", "1.0.0")).success).toBe(false)
       expect(mockManager.enablePlugin).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("failure compensation (PL09)", () => {
+    const registryOrigin = {
+      pluginId: "plugin-a",
+      version: "2.0.0",
+      origin: { kind: "registry", registryUrl: "https://r.test", version: "2.0.0" },
+      recordedAt: 1,
+    }
+    let safetyRestored: boolean
+
+    beforeEach(() => {
+      safetyRestored = false
+      mockCreateBackup.mockResolvedValue({ success: true, backup: { id: "safety" } })
+      mockReadOrigin.mockResolvedValue(registryOrigin)
+      mockRestore.mockImplementation(async (id: string) => {
+        if (id === "safety") safetyRestored = true
+        return { success: true, requiresRestart: false }
+      })
+      mockManager.scanPlugins.mockImplementation(async () => {
+        storeState.plugins["plugin-a"].manifest.version = safetyRestored ? "2.0.0" : "1.0.0"
+      })
+    })
+
+    it("restarts the untouched old runtime when the download fails", async () => {
+      mockInstallPlugin.mockResolvedValueOnce({ success: false, error: "network down" })
+      const result = await manager.rollback("plugin-a", "1.0.0")
+      expect(result).toMatchObject({
+        success: false,
+        error: "network down",
+        requiresRestart: false,
+        rollback: { attempted: true, succeeded: true },
+      })
+      expect(mockManager.enablePlugin).toHaveBeenCalledWith("plugin-a", "rollback-restore")
+      expect(mockRestore).not.toHaveBeenCalled()
+      expect(storeState.plugins["plugin-a"].status).toBe("enabled")
+    })
+
+    it("restores the safety snapshot when the down migration throws after installing", async () => {
+      manager.registerMigration("plugin-a", {
+        fromVersion: "1.0.0",
+        toVersion: "2.0.0",
+        up: (data) => data,
+        down: () => {
+          throw new Error("down migration rejected")
+        },
+      })
+      const result = await manager.rollback("plugin-a", "1.0.0")
+      expect(result).toMatchObject({
+        success: false,
+        error: "down migration rejected",
+        requiresRestart: true,
+        rollback: { attempted: true, succeeded: true },
+      })
+      expect(mockRestore).toHaveBeenCalledWith("safety", mockManager)
+      expect(storeState.plugins["plugin-a"].manifest.version).toBe("2.0.0")
+      // The restored package stays inactive until a restart, like a failed update.
+      expect(mockManager.enablePlugin).not.toHaveBeenCalled()
+      expect(mockRecordOrigin).toHaveBeenCalledWith({
+        pluginId: "plugin-a",
+        version: "2.0.0",
+        origin: registryOrigin.origin,
+      })
+    })
+
+    it("puts the pre-migration config back with the safety snapshot", async () => {
+      storeState.plugins["plugin-a"].config = { schema: 2 }
+      manager.registerMigration("plugin-a", {
+        fromVersion: "1.0.0",
+        toVersion: "2.0.0",
+        up: (data) => data,
+        down: () => ({ schema: 1 }),
+      })
+      mockManager.enablePlugin.mockRejectedValueOnce(new Error("activation failed"))
+      const result = await manager.rollback("plugin-a", "1.0.0")
+      expect(result).toMatchObject({ success: false, migrationApplied: true })
+      expect(storeState.setPluginConfig).toHaveBeenLastCalledWith("plugin-a", { schema: 2 })
+      expect(mockRestore).toHaveBeenCalledWith("safety", mockManager)
+    })
+
+    it("reports, without pretending, when there is no safety snapshot to restore", async () => {
+      mockCreateBackup.mockResolvedValue({ success: true })
+      mockManager.scanPlugins.mockRejectedValueOnce(new Error("scan failed"))
+      expect(await manager.rollback("plugin-a", "1.0.0")).toMatchObject({
+        success: false,
+        error: "scan failed",
+        requiresRestart: true,
+        rollback: { attempted: false, succeeded: false },
+      })
+    })
+
+    it("asks for a restart when the safety snapshot itself cannot be restored", async () => {
+      mockManager.enablePlugin.mockRejectedValueOnce(new Error("activation failed"))
+      mockRestore.mockResolvedValueOnce({ success: false, error: "disk full" })
+      expect(await manager.rollback("plugin-a", "1.0.0")).toMatchObject({
+        success: false,
+        requiresRestart: true,
+        rollback: {
+          attempted: true,
+          succeeded: false,
+          error: expect.stringContaining("disk full"),
+        },
+      })
+    })
+
+    it("records a restored snapshot as a restored origin, not the replaced version's", async () => {
+      mockGetBackups.mockReturnValue([{ id: "old", pluginId: "plugin-a", version: "1.0.0" }])
+      expect(await manager.restoreBackup("old")).toMatchObject({ success: true })
+      expect(mockRecordOrigin).toHaveBeenCalledWith({
+        pluginId: "plugin-a",
+        version: "1.0.0",
+        origin: { kind: "local", via: "restored" },
+      })
     })
   })
 

@@ -14,7 +14,18 @@
  * extension. Routing is now by `manifest.type`:
  *
  * - `"vscode-extension"` -> Open VSX (`checkOpenVsxUpdates`)
- * - everything else      -> the cognia registry (unchanged)
+ * - everything else      -> the cognia registry
+ *
+ * ## ...and by where the plugin was installed from
+ *
+ * Type alone still sent every non-extension id to the default registry: a
+ * plugin installed from a Git commit, a local directory, a dev folder or the
+ * app bundle got "updates" from whatever registry plugin happened to share its
+ * id, and an explicit `autoInstall` replaced it with that package. Only a
+ * plugin whose recorded install origin (ADR-0209) is this registry is checked
+ * against it, and only an extension installed from Open VSX is checked there.
+ * Everything else is updated from where it came from, which this class does
+ * not do; `update()` refuses it rather than switching its source.
  *
  * ## Why the Open VSX check is not batched
  *
@@ -39,11 +50,20 @@ import { getPluginBackupManager } from "./backup"
 import { getPluginManager } from "../core/manager"
 import { hasNetworkAccessWidened } from "../security/network-allowlist"
 import { getDb } from "@/lib/db/schema"
+import { getInstallOrigin } from "@/lib/db/plugin-install-origins"
 import { baselinePluginMigrationVersion, getPluginDexieMeta } from "@/lib/plugin/dexie/meta"
 import { assertPluginDataVersion } from "@/lib/plugin/dexie/migration-runner"
 import { codeServerClient, type CodeServerProxyArtifact } from "@/lib/codeserver/client"
 import { stageManagedIdeProxy } from "../ide/proxy-manager"
+import { recordInstallOrigin, resolvePluginOrigin } from "../origin/install-origin"
+import {
+  quiesceRuntime,
+  restoreRuntimeState,
+  runtimeResumeStateOf,
+  type RuntimeResumeState,
+} from "./runtime-state"
 import type { Plugin, PluginManifest } from "@/types/plugin"
+import type { PluginInstallOrigin } from "@/types/plugin/plugin-cogset"
 import type { StagedPluginUpdate } from "../package/marketplace"
 import type { PluginGraphReservation } from "../core/lifecycle-coordinator"
 // Type-only: erased at compile time, so the Open VSX modules stay behind the
@@ -217,6 +237,27 @@ async function mapWithConcurrency<T, R>(
  */
 export const PLUGIN_UPDATES_AVAILABLE_EVENT = "plugin:updates-available"
 
+/** Where an installed plugin came from (ADR-0209); `undefined` when unknown. */
+export type ResolveInstallOrigin = (pluginId: string) => Promise<PluginInstallOrigin | undefined>
+
+async function resolveRecordedInstallOrigin(
+  pluginId: string
+): Promise<PluginInstallOrigin | undefined> {
+  const row = usePluginStore.getState().plugins[pluginId]
+  return resolvePluginOrigin({ path: row?.path }, await getInstallOrigin(pluginId))
+}
+
+function sameRegistry(a: string, b: string): boolean {
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "")
+}
+
+function describeOrigin(origin: PluginInstallOrigin | undefined): string {
+  if (!origin) return "an unrecorded source"
+  if (origin.kind === "local") return `a local ${origin.via}`
+  if (origin.kind === "registry") return `the registry ${origin.registryUrl}`
+  return origin.kind
+}
+
 /** Stands in for a pin when the pins could not be read. */
 const UNKNOWN_PIN: CogsetPin = { cogsetId: "", cogsetName: "", pinnedVersion: "" }
 
@@ -234,12 +275,20 @@ export class PluginUpdater {
   private isChecking = false
 
   private resolveCogsetPins: () => Promise<Map<string, CogsetPin>>
+  private resolveInstallOrigin: ResolveInstallOrigin
+  private recordOrigin: typeof recordInstallOrigin
 
   constructor(
     config: Partial<UpdaterConfig> = {},
-    deps: { resolveCogsetPins?: () => Promise<Map<string, CogsetPin>> } = {}
+    deps: {
+      resolveCogsetPins?: () => Promise<Map<string, CogsetPin>>
+      resolveInstallOrigin?: ResolveInstallOrigin
+      recordOrigin?: typeof recordInstallOrigin
+    } = {}
   ) {
     this.resolveCogsetPins = deps.resolveCogsetPins ?? resolveAppliedCogsetPins
+    this.resolveInstallOrigin = deps.resolveInstallOrigin ?? resolveRecordedInstallOrigin
+    this.recordOrigin = deps.recordOrigin ?? recordInstallOrigin
     this.config = {
       autoCheck: false,
       checkIntervalMs: 3600000, // 1 hour
@@ -271,17 +320,41 @@ export class PluginUpdater {
       for (const { id } of installedPlugins) this.pendingUpdates.delete(id)
 
       // Partition before any lookup. A VS Code extension id must never reach
-      // the cognia registry — see the module doc.
-      const vscodeExtensions = installedPlugins.filter((p) => p.type === "vscode-extension")
-      const cogniaPlugins = installedPlugins.filter((p) => p.type !== "vscode-extension")
+      // the cognia registry, and no plugin may be checked against a source it
+      // was not installed from — see the module doc.
+      const routed = await this.routeByInstallOrigin(installedPlugins)
 
-      updates.push(...(await this.checkCogniaUpdates(cogniaPlugins, allowPrerelease)))
-      updates.push(...(await this.checkOpenVsxUpdates(vscodeExtensions, allowPrerelease)))
+      updates.push(...(await this.checkCogniaUpdates(routed.registry, allowPrerelease)))
+      updates.push(...(await this.checkOpenVsxUpdates(routed.openVsx, allowPrerelease)))
 
       return updates
     } finally {
       this.isChecking = false
     }
+  }
+
+  /** Split installed plugins by the source they may be updated from. */
+  private async routeByInstallOrigin(
+    plugins: InstalledPluginRef[]
+  ): Promise<{ registry: InstalledPluginRef[]; openVsx: InstalledPluginRef[] }> {
+    const registryUrl = getPluginMarketplace().getRegistryUrl()
+    const registry: InstalledPluginRef[] = []
+    const openVsx: InstalledPluginRef[] = []
+    for (const plugin of plugins) {
+      let origin: PluginInstallOrigin | undefined
+      try {
+        origin = await this.resolveInstallOrigin(plugin.id)
+      } catch (error) {
+        loggers.manager.warn(`[Updater] Install origin of ${plugin.id} is unreadable:`, error)
+        continue
+      }
+      if (plugin.type === "vscode-extension") {
+        if (origin?.kind === "openvsx") openVsx.push(plugin)
+      } else if (origin?.kind === "registry" && sameRegistry(origin.registryUrl, registryUrl)) {
+        registry.push(plugin)
+      }
+    }
+    return { registry, openVsx }
   }
 
   /**
@@ -513,10 +586,38 @@ export class PluginUpdater {
       }
     }
 
+    // An update replaces the package from this registry, so it may only reach
+    // a plugin that was installed from it. Anything else is updated from its
+    // own source, never silently switched to a same-id registry package.
+    let origin: PluginInstallOrigin | undefined
+    try {
+      origin = await this.resolveInstallOrigin(pluginId)
+    } catch (error) {
+      loggers.manager.warn(`[Updater] Install origin of ${pluginId} is unreadable:`, error)
+    }
+    if (
+      origin?.kind !== "registry" ||
+      !sameRegistry(origin.registryUrl, marketplace.getRegistryUrl())
+    ) {
+      return {
+        success: false,
+        pluginId,
+        previousVersion: updateInfo?.currentVersion ?? this.getPluginVersion(pluginId) ?? "",
+        newVersion: options.version || updateInfo?.latestVersion || "",
+        duration: Date.now() - startTime,
+        error:
+          `${pluginId} was installed from ${describeOrigin(origin)}, not from ${marketplace.getRegistryUrl()}; ` +
+          `update it from where it was installed.`,
+      }
+    }
+
     const currentVersion = updateInfo?.currentVersion || this.getPluginVersion(pluginId) || ""
     let targetVersion = options.version || updateInfo?.latestVersion || ""
     const installedManifest = usePluginStore.getState().plugins[pluginId]?.manifest
-    let shouldReactivate = false
+    // What was live before teardown; restored after commit, or after a
+    // failure that left the package untouched.
+    let resumeState: RuntimeResumeState = "stopped"
+    let quiesced = false
     let restartRequired = false
     let backupId: string | undefined
     let packageMutationStarted = false
@@ -591,16 +692,9 @@ export class PluginUpdater {
       const manager = getPluginManager()
       lifecycleManager = manager
       graphReservation = manager.reservePluginRuntimeGraph(pluginId)
-      const liveStatus = usePluginStore.getState().plugins[pluginId]?.status
-      shouldReactivate = ["loading", "loaded", "enabling", "enabled", "suspended"].includes(
-        liveStatus || ""
-      )
-      if (shouldReactivate) {
-        if (liveStatus === "enabled" || liveStatus === "suspended") {
-          await manager.disablePlugin(pluginId, "transactional-update")
-        }
-        await manager.unloadPlugin(pluginId)
-      }
+      resumeState = runtimeResumeStateOf(usePluginStore.getState().plugins[pluginId]?.status)
+      quiesced = true
+      await quiesceRuntime(manager, pluginId, resumeState, "transactional-update")
 
       // Step 4: Commit the exact staged tree with a same-filesystem rename.
       this.emitProgress({
@@ -649,15 +743,32 @@ export class PluginUpdater {
         }
       }
 
-      // Step 6: Live activation performs the runtime/proxy handshake. The
-      // code-server host first attempts a hot activation, restarts only the
-      // extension host if necessary, and restores the old proxy on failure.
-      if (shouldReactivate) {
-        if (stagedProxy) await codeServerClient.activateProxy(stagedProxy)
-        await manager.enablePlugin(pluginId)
+      // Step 6: Return the plugin to the state it was in: an update is not a
+      // reason to activate a plugin that was only loaded, or to wake one that
+      // was idle-suspended. Live activation performs the runtime/proxy
+      // handshake; the code-server host first attempts a hot activation,
+      // restarts only the extension host if necessary, and restores the old
+      // proxy on failure.
+      if (stagedProxy && (resumeState === "enabled" || resumeState === "suspended")) {
+        await codeServerClient.activateProxy(stagedProxy)
       }
+      await restoreRuntimeState(manager, pluginId, resumeState, "transactional-update")
       await marketplace.finalizeStagedPluginUpdate(stagedUpdate)
       getPluginBackupManager().completeUpdateRecovery(backupId)
+
+      // The origin describes the bytes now installed. Left at the previous
+      // version, a cogpack export would no longer recognise this install as
+      // the registry release and would embed it instead (ADR-0209).
+      await this.recordOrigin({
+        pluginId,
+        version: targetVersion,
+        origin: {
+          kind: "registry",
+          registryUrl: marketplace.getRegistryUrl(),
+          version: targetVersion,
+          ...(matchedVersion.checksum ? { checksum: matchedVersion.checksum } : {}),
+        },
+      })
 
       // Complete
       this.emitProgress({
@@ -697,6 +808,21 @@ export class PluginUpdater {
         await marketplace.discardStagedPluginUpdate(stagedUpdate).catch((discardError) => {
           errorMessage = `${errorMessage}; discard staged update: ${String(discardError)}`
         })
+      }
+      if (!packageMutationStarted && quiesced && !requiresRestart && lifecycleManager) {
+        // The package never changed, so the plugin that was running is still
+        // on disk: bring it back instead of leaving a working install stopped.
+        try {
+          await restoreRuntimeState(
+            lifecycleManager,
+            pluginId,
+            resumeState,
+            "transactional-update-restore"
+          )
+        } catch (restoreError) {
+          requiresRestart = true
+          errorMessage = `${errorMessage}; restore previous runtime: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`
+        }
       } else if (packageMutationStarted && backupId) {
         rollback = { attempted: true, succeeded: false }
         const failures: string[] = []
@@ -752,7 +878,7 @@ export class PluginUpdater {
             // Once teardown began, never resurrect the old runtime object
             // graph. The package is restored, while desired intent remains in
             // the lifecycle record for an explicit retry/restart.
-            requiresRestart = shouldReactivate
+            requiresRestart = resumeState !== "stopped"
           }
         } catch (rollbackError) {
           if (

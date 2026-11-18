@@ -10,6 +10,15 @@ import { usePluginStore } from "@/stores/plugin-runtime"
 import { getPluginMarketplace } from "../package/marketplace"
 import { getPluginManager } from "../core/manager"
 import type { PluginGraphReservation } from "../core/lifecycle-coordinator"
+import { getInstallOrigin } from "@/lib/db/plugin-install-origins"
+import { recordInstallOrigin } from "../origin/install-origin"
+import {
+  quiesceRuntime,
+  restoreRuntimeState,
+  runtimeResumeStateOf,
+  type RuntimeResumeState,
+} from "./runtime-state"
+import type { PluginInstallOriginRecord } from "@/types/plugin/plugin-cogset"
 
 // =============================================================================
 // Types
@@ -77,12 +86,21 @@ export interface RollbackConfig {
 // Plugin Rollback Manager
 // =============================================================================
 
+export interface RollbackDeps {
+  readOrigin?: (pluginId: string) => Promise<PluginInstallOriginRecord | undefined>
+  recordOrigin?: typeof recordInstallOrigin
+}
+
 export class PluginRollbackManager {
   private config: RollbackConfig
   private migrations: Map<string, MigrationScript[]> = new Map()
   private rollbackHistory: RollbackResult[] = []
+  private readOrigin: NonNullable<RollbackDeps["readOrigin"]>
+  private recordOrigin: typeof recordInstallOrigin
 
-  constructor(config: Partial<RollbackConfig> = {}) {
+  constructor(config: Partial<RollbackConfig> = {}, deps: RollbackDeps = {}) {
+    this.readOrigin = deps.readOrigin ?? getInstallOrigin
+    this.recordOrigin = deps.recordOrigin ?? recordInstallOrigin
     this.config = {
       createBackupBeforeRollback: true,
       verifyAfterRollback: true,
@@ -303,6 +321,13 @@ export class PluginRollbackManager {
     let reservation: PluginGraphReservation | undefined
     let migrationApplied = false
     let pendingRestore = false
+    // Compensation state: what to put back if a step after teardown fails.
+    let safetyBackupId: string | undefined
+    let resumeState: RuntimeResumeState = "stopped"
+    let quiesced = false
+    let packageMutated = false
+    let configBeforeMigration: Record<string, unknown> | undefined
+    let originBefore: PluginInstallOriginRecord | undefined
 
     try {
       // Step 1: Create backup if configured
@@ -317,16 +342,20 @@ export class PluginRollbackManager {
         if (!backupResult.success) {
           throw new Error(`Failed to create backup: ${backupResult.error}`)
         }
+        // The safety snapshot a failure after the package changed restores.
+        safetyBackupId = backupResult.backup?.id
       }
+      originBefore = await this.readOrigin(pluginId).catch(() => undefined)
 
       // The TS manager owns frontend modules, contributions and graph leases.
       // Native status changes alone leave the old UI and commands alive.
       reservation = lifecycle.reservePluginRuntimeGraph(pluginId)
       initialStatus = usePluginStore.getState().plugins[pluginId]?.status
-      if (initialStatus === "enabled" || initialStatus === "suspended") {
-        await lifecycle.disablePlugin(pluginId, "rollback")
-      }
-      await lifecycle.unloadPlugin(pluginId)
+      resumeState = runtimeResumeStateOf(initialStatus)
+      quiesced = true
+      await quiesceRuntime(lifecycle, pluginId, resumeState, "rollback")
+      // A disabled plugin is still loaded; nothing runs, but its module goes.
+      if (resumeState === "stopped") await lifecycle.unloadPlugin(pluginId)
 
       // Step 3: Restore target version
       const versionInfo = backupId
@@ -353,6 +382,7 @@ export class PluginRollbackManager {
       if (versionInfo?.source === "backup") {
         await lifecycle.withPluginPackageMutation(pluginId, async () => {
           await assertStopped()
+          packageMutated = true
           // Restore from backup
           const backupManager = getPluginBackupManager()
           const restoreResult = backupId
@@ -365,11 +395,14 @@ export class PluginRollbackManager {
         })
       } else {
         await assertStopped()
-        // Download and install from marketplace
+        // Download and install from marketplace. A failed install rolls its
+        // own transaction back, so the package only counts as changed once it
+        // reports success.
         const installResult = await getPluginMarketplace().installPlugin(pluginId, targetVersion)
         if (!installResult.success) {
           throw new Error(installResult.error || "Marketplace install failed")
         }
+        packageMutated = true
       }
 
       await this.refreshRuntimePlugins()
@@ -379,28 +412,15 @@ export class PluginRollbackManager {
 
       // Step 4: Migrate data if needed
       if (this.config.migrateData) {
+        const config = usePluginStore.getState().plugins[pluginId]?.config
+        configBeforeMigration = config ? structuredClone(config) : undefined
         migrationApplied = await this.applyMigration(pluginId, fromVersion, targetVersion)
       }
 
       // Restore the pre-rollback activation state through the same owner as a
       // normal enable. A disabled package must not acquire running code.
-      if (
-        initialStatus === "enabled" ||
-        initialStatus === "suspended" ||
-        initialStatus === "enabling"
-      ) {
-        await lifecycle.enablePlugin(pluginId)
-        if (initialStatus === "suspended") await lifecycle.suspendPlugin(pluginId, "rollback")
-      } else if (initialStatus === "loaded" || initialStatus === "loading") {
-        await lifecycle.loadPlugin(pluginId)
-      } else if (initialStatus === "disabled") {
-        usePluginStore.setState((state) => ({
-          plugins: {
-            ...state.plugins,
-            [pluginId]: { ...state.plugins[pluginId], status: "disabled" },
-          },
-        }))
-      }
+      await restoreRuntimeState(lifecycle, pluginId, resumeState, "rollback")
+      if (initialStatus === "disabled") this.markDisabled(pluginId)
 
       // Step 6: Verify
       if (this.config.verifyAfterRollback) {
@@ -412,6 +432,16 @@ export class PluginRollbackManager {
 
       if (backupId && this.config.createBackupBeforeRollback) {
         await getPluginBackupManager().cleanupOldBackups(pluginId)
+      }
+      // A marketplace install recorded its own registry origin. A restored
+      // snapshot has nothing to fetch again; say so rather than leave the
+      // origin of the version it replaced (ADR-0209).
+      if (versionInfo?.source === "backup") {
+        await this.recordOrigin({
+          pluginId,
+          version: targetVersion,
+          origin: { kind: "local", via: "restored" },
+        })
       }
 
       const result: RollbackResult = {
@@ -434,6 +464,23 @@ export class PluginRollbackManager {
       const errorMessage = pendingRestore
         ? `Pending restore of ${pluginId} to ${targetVersion}; a restart is required, then retry rollback after cleanup: ${message}`
         : message
+      let compensation: RollbackResult["rollback"] = pendingRestore
+        ? { attempted: true, succeeded: false, error: errorMessage }
+        : undefined
+      if (!pendingRestore && quiesced) {
+        const outcome = await this.compensate({
+          pluginId,
+          fromVersion,
+          resumeState,
+          initialStatus,
+          packageMutated,
+          safetyBackupId,
+          configBeforeMigration: migrationApplied ? configBeforeMigration : undefined,
+          originBefore,
+        })
+        compensation = outcome.rollback
+        pendingRestore = outcome.requiresRestart
+      }
       const result: RollbackResult = {
         success: false,
         pluginId,
@@ -443,9 +490,7 @@ export class PluginRollbackManager {
         error: errorMessage,
         migrationApplied,
         requiresRestart: pendingRestore,
-        ...(pendingRestore
-          ? { rollback: { attempted: true, succeeded: false, error: errorMessage } }
-          : {}),
+        ...(compensation ? { rollback: compensation } : {}),
       }
 
       this.recordRollback(result)
@@ -453,6 +498,115 @@ export class PluginRollbackManager {
     } finally {
       if (reservation) lifecycle.releasePluginRuntimeGraph(reservation)
     }
+  }
+
+  /**
+   * Put the plugin back the way the failed rollback found it.
+   *
+   * Before the package changed, the plugin that was running is still on disk,
+   * so its runtime state is restored as an update does. After it changed, the
+   * safety snapshot taken in step 1 restores the package (and the config a
+   * migration rewrote, and the origin a marketplace install re-recorded); the
+   * restored package stays inactive and asks for a restart instead of
+   * resurrecting the runtime, as a failed update does.
+   */
+  private async compensate(input: {
+    pluginId: string
+    fromVersion: string
+    resumeState: RuntimeResumeState
+    initialStatus: string | undefined
+    packageMutated: boolean
+    safetyBackupId: string | undefined
+    configBeforeMigration: Record<string, unknown> | undefined
+    originBefore: PluginInstallOriginRecord | undefined
+  }): Promise<{ rollback: NonNullable<RollbackResult["rollback"]>; requiresRestart: boolean }> {
+    const { pluginId, resumeState } = input
+    const lifecycle = getPluginManager()
+    const describe = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+    if (!input.packageMutated) {
+      try {
+        await restoreRuntimeState(lifecycle, pluginId, resumeState, "rollback-restore")
+        if (input.initialStatus === "disabled") this.markDisabled(pluginId)
+        return { rollback: { attempted: true, succeeded: true }, requiresRestart: false }
+      } catch (error) {
+        return {
+          rollback: {
+            attempted: true,
+            succeeded: false,
+            error: `restore previous runtime: ${describe(error)}`,
+          },
+          requiresRestart: true,
+        }
+      }
+    }
+
+    if (!input.safetyBackupId) {
+      return {
+        rollback: {
+          attempted: false,
+          succeeded: false,
+          error: `no safety snapshot of ${pluginId}@${input.fromVersion} to restore`,
+        },
+        requiresRestart: true,
+      }
+    }
+
+    const failures: string[] = []
+    try {
+      const live = runtimeResumeStateOf(usePluginStore.getState().plugins[pluginId]?.status)
+      await quiesceRuntime(lifecycle, pluginId, live, "rollback-compensate")
+      const restored = await lifecycle.withPluginPackageMutation(pluginId, () =>
+        getPluginBackupManager().restore(input.safetyBackupId!, lifecycle)
+      )
+      if (!restored.success) {
+        failures.push(`restore safety snapshot: ${restored.error ?? "unknown error"}`)
+      } else {
+        await this.refreshRuntimePlugins()
+        if (!(await this.verifyRollback(pluginId, input.fromVersion))) {
+          failures.push(`safety snapshot did not restore ${pluginId}@${input.fromVersion}`)
+        }
+      }
+    } catch (error) {
+      failures.push(`restore safety snapshot: ${describe(error)}`)
+    }
+    if (failures.length === 0) {
+      if (input.configBeforeMigration) {
+        usePluginStore.getState().setPluginConfig(pluginId, input.configBeforeMigration)
+      }
+      await this.recordOrigin(
+        input.originBefore && input.originBefore.version === input.fromVersion
+          ? {
+              pluginId,
+              version: input.originBefore.version,
+              origin: input.originBefore.origin,
+              ...(input.originBefore.viaCogpack
+                ? { viaCogpack: input.originBefore.viaCogpack }
+                : {}),
+            }
+          : { pluginId, version: input.fromVersion, origin: { kind: "local", via: "restored" } }
+      )
+      if (input.initialStatus === "disabled") this.markDisabled(pluginId)
+    }
+    return {
+      rollback: {
+        attempted: true,
+        succeeded: failures.length === 0,
+        ...(failures.length > 0 ? { error: failures.join("; ") } : {}),
+      },
+      // The restored package is left inactive; anything that was running
+      // comes back on a restart, never from the torn-down object graph.
+      requiresRestart: failures.length > 0 || resumeState !== "stopped",
+    }
+  }
+
+  private markDisabled(pluginId: string): void {
+    usePluginStore.setState((state) => ({
+      plugins: {
+        ...state.plugins,
+        [pluginId]: { ...state.plugins[pluginId], status: "disabled" },
+      },
+    }))
   }
 
   async rollbackToLatestBackup(pluginId: string): Promise<RollbackResult> {

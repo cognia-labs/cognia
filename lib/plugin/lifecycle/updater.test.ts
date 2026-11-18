@@ -15,6 +15,7 @@ import {
   getPluginUpdater,
   resetPluginUpdater,
 } from "./updater"
+import type { PluginInstallOrigin } from "@/types/plugin/plugin-cogset"
 
 jest.mock("@/stores/plugin-runtime", () => ({
   usePluginStore: {
@@ -69,6 +70,7 @@ jest.mock("../package/marketplace", () => {
     __discardStagedPluginUpdateSpy: discardStagedPluginUpdate,
     __finalizeStagedPluginUpdateSpy: finalizeStagedPluginUpdate,
     getPluginMarketplace: () => ({
+      getRegistryUrl: () => "https://plugins.example.test/api/v1",
       getPlugin,
       getVersions,
       installPlugin,
@@ -124,6 +126,8 @@ jest.mock("../core/manager", () => ({
   __scanPluginsSpy: jest.fn().mockResolvedValue([]),
   __syncRuntimeStateSpy: jest.fn().mockResolvedValue(undefined),
   __enablePluginSpy: jest.fn().mockResolvedValue(undefined),
+  __loadPluginSpy: jest.fn().mockResolvedValue(undefined),
+  __suspendPluginSpy: jest.fn().mockResolvedValue(undefined),
   __hasUnresolvedActivationResourcesSpy: jest.fn(() => false),
   __reservePluginRuntimeGraphSpy: jest.fn(() => ({
     managerId: "manager",
@@ -139,6 +143,8 @@ jest.mock("../core/manager", () => ({
       scanPlugins: mockedManager.__scanPluginsSpy,
       syncRuntimeState: mockedManager.__syncRuntimeStateSpy,
       enablePlugin: mockedManager.__enablePluginSpy,
+      loadPlugin: mockedManager.__loadPluginSpy,
+      suspendPlugin: mockedManager.__suspendPluginSpy,
       hasUnresolvedActivationResources: mockedManager.__hasUnresolvedActivationResourcesSpy,
       withPluginPackageMutation: (_id: string, operation: () => Promise<unknown>) => operation(),
       getPluginLifecycleState: async () => ({ actual: "inactive" }),
@@ -201,6 +207,8 @@ const managerModule = jest.requireMock("../core/manager") as {
   __scanPluginsSpy: jest.Mock
   __syncRuntimeStateSpy: jest.Mock
   __enablePluginSpy: jest.Mock
+  __loadPluginSpy: jest.Mock
+  __suspendPluginSpy: jest.Mock
   __hasUnresolvedActivationResourcesSpy: jest.Mock
   __reservePluginRuntimeGraphSpy: jest.Mock
   __releasePluginRuntimeGraphSpy: jest.Mock
@@ -219,13 +227,45 @@ function storePlugin(manifest: Record<string, unknown>) {
   return { manifest, status: "installed" }
 }
 
+const REGISTRY_URL = "https://plugins.example.test/api/v1"
+/** Per-test origin overrides; absent ids get the origin their type implies. */
+const originOverrides = new Map<string, PluginInstallOrigin | undefined>()
+const recordOriginSpy = jest.fn(async () => undefined)
+
+/** A registry plugin came from the registry; an extension from Open VSX. */
+async function testInstallOrigin(id: string): Promise<PluginInstallOrigin | undefined> {
+  if (originOverrides.has(id)) return originOverrides.get(id)
+  const manifest = (
+    mockGetStoreState().plugins as Record<string, { manifest: { type?: string; version: string } }>
+  )[id]?.manifest
+  if (manifest?.type === "vscode-extension") {
+    const [namespace, ...name] = id.split(".")
+    return {
+      kind: "openvsx",
+      namespace,
+      name: name.join("."),
+      version: manifest.version,
+      sha256: "0".repeat(64),
+    }
+  }
+  return { kind: "registry", registryUrl: REGISTRY_URL, version: manifest?.version ?? "1.0.0" }
+}
+
+function makeUpdater(deps: ConstructorParameters<typeof PluginUpdater>[1] = {}): PluginUpdater {
+  return new PluginUpdater(
+    {},
+    { resolveInstallOrigin: testInstallOrigin, recordOrigin: recordOriginSpy, ...deps }
+  )
+}
+
 describe("PluginUpdater", () => {
   let updater: PluginUpdater
 
   beforeEach(() => {
     resetPluginUpdater()
-    updater = new PluginUpdater()
+    updater = makeUpdater()
     jest.clearAllMocks()
+    originOverrides.clear()
     cogniaGetPlugin.mockResolvedValue({
       id: "plugin-a",
       latestVersion: "2.0.0",
@@ -981,7 +1021,10 @@ describe("PluginUpdater", () => {
         "transactional-update"
       )
       expect(managerModule.__unloadPluginSpy).toHaveBeenCalledWith("plugin-a")
-      expect(managerModule.__enablePluginSpy).toHaveBeenCalledWith("plugin-a")
+      expect(managerModule.__enablePluginSpy).toHaveBeenCalledWith(
+        "plugin-a",
+        "transactional-update"
+      )
       expect(managerModule.__reservePluginRuntimeGraphSpy).toHaveBeenCalledWith("plugin-a")
       expect(managerModule.__releasePluginRuntimeGraphSpy).toHaveBeenCalledTimes(1)
       expect(managerModule.__unloadPluginSpy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1366,6 +1409,185 @@ describe("PluginUpdater", () => {
     })
   })
 
+  describe("Install origin, runtime state and provenance (PL06–PL10)", () => {
+    function commitBumpsVersion() {
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        mockGetStoreState().plugins["plugin-a"].manifest.version = "2.0.0"
+      })
+    }
+
+    it.each<[string, PluginInstallOrigin | undefined]>([
+      ["git", { kind: "git", url: "https://git.example/p.git", commit: "a".repeat(40) }],
+      ["github", { kind: "github", owner: "o", repo: "r", commit: "b".repeat(40) }],
+      ["local directory", { kind: "local", via: "directory" }],
+      ["builtin", { kind: "builtin" }],
+      ["unrecorded", undefined],
+      [
+        "another registry",
+        { kind: "registry", registryUrl: "https://other.test/api", version: "1.0.0" },
+      ],
+    ])(
+      "never asks this registry about a plugin installed from %s (PL06)",
+      async (_label, origin) => {
+        originOverrides.set("plugin-a", origin)
+        expect(await updater.checkForUpdates()).toEqual([])
+        expect(cogniaGetPlugin).not.toHaveBeenCalled()
+      }
+    )
+
+    it("treats a trailing slash on the same registry as the same source (PL06)", async () => {
+      originOverrides.set("plugin-a", {
+        kind: "registry",
+        registryUrl: `${REGISTRY_URL}/`,
+        version: "1.0.0",
+      })
+      expect(await updater.checkForUpdates()).toEqual([
+        expect.objectContaining({ pluginId: "plugin-a", latestVersion: "2.0.0" }),
+      ])
+    })
+
+    it("refuses to replace a Git-installed plugin with a same-id registry release (PL06)", async () => {
+      originOverrides.set("plugin-a", {
+        kind: "git",
+        url: "https://git.example/p.git",
+        commit: "c".repeat(40),
+      })
+      const result = await updater.update("plugin-a", { force: true, version: "2.0.0" })
+      expect(result).toMatchObject({
+        success: false,
+        error: expect.stringContaining("installed from git"),
+      })
+      expect(stagePluginUpdate).not.toHaveBeenCalled()
+      expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+    })
+
+    it("auto-install leaves a Git-installed plugin alone (PL06)", async () => {
+      originOverrides.set("plugin-a", {
+        kind: "git",
+        url: "https://git.example/p.git",
+        commit: "d".repeat(40),
+      })
+      updater.configureAutoUpdate({
+        enabled: false,
+        checkInterval: 3600000,
+        autoInstall: true,
+        notifyOnly: false,
+        excludePlugins: [],
+        allowPrerelease: false,
+      })
+      await updater.runAutoUpdateOnce()
+      expect(stagePluginUpdate).not.toHaveBeenCalled()
+    })
+
+    it("does not check a sideloaded .vsix against Open VSX (PL06)", async () => {
+      mockGetStoreState.mockReturnValue({
+        plugins: {
+          "ns.ext": storePlugin({ id: "ns.ext", version: "1.0.0", type: "vscode-extension" }),
+        },
+      } as never)
+      originOverrides.set("ns.ext", { kind: "local", via: "vsix" })
+      const queryExtension = jest.fn()
+      getOpenVsxClientMock.mockReturnValue({ queryExtension })
+      expect(await updater.checkForUpdates()).toEqual([])
+      expect(queryExtension).not.toHaveBeenCalled()
+    })
+
+    it("returns a loaded plugin to loaded, not enabled (PL07)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "loaded"
+      commitBumpsVersion()
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: true })
+      expect(managerModule.__unloadPluginSpy).toHaveBeenCalledTimes(1)
+      expect(managerModule.__disablePluginSpy).not.toHaveBeenCalled()
+      expect(managerModule.__loadPluginSpy).toHaveBeenCalledWith("plugin-a")
+      expect(managerModule.__enablePluginSpy).not.toHaveBeenCalled()
+    })
+
+    it("returns an idle-suspended plugin to suspended (PL07)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "suspended"
+      commitBumpsVersion()
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: true })
+      expect(managerModule.__enablePluginSpy).toHaveBeenCalledWith(
+        "plugin-a",
+        "transactional-update"
+      )
+      expect(managerModule.__suspendPluginSpy).toHaveBeenCalledWith(
+        "plugin-a",
+        "transactional-update"
+      )
+      expect(managerModule.__suspendPluginSpy.mock.invocationCallOrder[0]).toBeGreaterThan(
+        managerModule.__enablePluginSpy.mock.invocationCallOrder[0]
+      )
+    })
+
+    it("does not activate a plugin that was installed but stopped (PL07)", async () => {
+      commitBumpsVersion()
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: true })
+      expect(managerModule.__enablePluginSpy).not.toHaveBeenCalled()
+      expect(managerModule.__loadPluginSpy).not.toHaveBeenCalled()
+    })
+
+    it("restarts the old runtime when the update fails before the package changed (PL08)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "enabled"
+      backupModule.__beginRecoverySpy.mockImplementationOnce(() => {
+        throw new Error("recovery record unavailable")
+      })
+      const result = await updater.installUpdate("plugin-a", "2.0.0")
+      expect(result).toMatchObject({ success: false, requiresRestart: false })
+      expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+      expect(discardStagedPluginUpdate).toHaveBeenCalledTimes(1)
+      expect(managerModule.__disablePluginSpy).toHaveBeenCalledTimes(1)
+      expect(managerModule.__enablePluginSpy).toHaveBeenCalledWith(
+        "plugin-a",
+        "transactional-update-restore"
+      )
+      expect(managerModule.__enablePluginSpy.mock.invocationCallOrder[0]).toBeGreaterThan(
+        discardStagedPluginUpdate.mock.invocationCallOrder[0]
+      )
+    })
+
+    it("asks for a restart when the untouched old runtime cannot be restarted (PL08)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "enabled"
+      backupModule.__beginRecoverySpy.mockImplementationOnce(() => {
+        throw new Error("recovery record unavailable")
+      })
+      managerModule.__enablePluginSpy.mockRejectedValueOnce(new Error("activation refused"))
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({
+        success: false,
+        requiresRestart: true,
+        error: expect.stringContaining("restore previous runtime: activation refused"),
+      })
+    })
+
+    it("records the registry release it installed as the plugin's origin (PL10)", async () => {
+      cogniaGetVersions.mockResolvedValue([
+        { version: "2.0.0", publishedAt: new Date(), downloadUrl: "https://x", checksum: "abc" },
+      ])
+      commitBumpsVersion()
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: true })
+      expect(recordOriginSpy).toHaveBeenCalledWith({
+        pluginId: "plugin-a",
+        version: "2.0.0",
+        origin: {
+          kind: "registry",
+          registryUrl: REGISTRY_URL,
+          version: "2.0.0",
+          checksum: "abc",
+        },
+      })
+      expect(recordOriginSpy.mock.invocationCallOrder[0]).toBeGreaterThan(
+        finalizeStagedPluginUpdate.mock.invocationCallOrder[0]
+      )
+    })
+
+    it("keeps the old origin when the update is rolled back (PL10)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "enabled"
+      commitBumpsVersion()
+      managerModule.__enablePluginSpy.mockRejectedValueOnce(new Error("activation rejected"))
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: false })
+      expect(recordOriginSpy).not.toHaveBeenCalled()
+    })
+  })
+
   describe("Progress Handlers", () => {
     it("should add progress handler", () => {
       const handler = jest.fn()
@@ -1440,7 +1662,7 @@ describe("PluginUpdater", () => {
     ])
 
     function pinnedUpdater(resolve = async () => pins) {
-      const u = new PluginUpdater({}, { resolveCogsetPins: resolve })
+      const u = makeUpdater({ resolveCogsetPins: resolve })
       jest.spyOn(u, "checkForUpdates").mockResolvedValue(updates)
       const install = jest.spyOn(u, "update").mockResolvedValue({ success: true } as never)
       const events: Array<{ pluginId: string; pinned: boolean }[]> = []
