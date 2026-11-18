@@ -9,6 +9,8 @@
 
 import type { RoomDescriptor } from "@/lib/signaling/crypto"
 
+import { Agent, fetch as undiciFetch } from "undici"
+
 import { CompanionWorkerTransport } from "../worker/companion-worker-transport"
 import type { CliFailure } from "../cli/errors"
 import { detectDesktop, type HandoffClientDeps } from "../handoff/client"
@@ -41,10 +43,45 @@ export type ConnectResult =
  * at pair time is what makes that safe: a host presenting a different key is
  * refused rather than trusted because the URL still matches.
  */
-function pinnedFetch(serverFingerprint: string | undefined, base?: TransportFetch): TransportFetch {
-  if (!serverFingerprint) return base ?? ((url, init) => fetch(url, init))
+/** One undici agent per connect deadline, so the deadline applies to the connect alone. */
+const connectAgents = new Map<number, Agent>()
+
+function agentFor(connectTimeoutMs: number): Agent {
+  let agent = connectAgents.get(connectTimeoutMs)
+  if (!agent) {
+    agent = new Agent({ connect: { timeout: connectTimeoutMs } })
+    connectAgents.set(connectTimeoutMs, agent)
+  }
+  return agent
+}
+
+/**
+ * The direct route's fetch: pinned to the host's TLS key when the record has
+ * one, and honouring `connectTimeoutMs` either way. A connect that runs out
+ * of time fails as never sent (`../util/connect-phase.ts`), which is what
+ * lets the relay fallback carry any command.
+ */
+export function pinnedFetch(
+  serverFingerprint: string | undefined,
+  base?: TransportFetch
+): TransportFetch {
+  if (!serverFingerprint) {
+    if (base) return base
+    return (url, { connectTimeoutMs, ...init }) =>
+      connectTimeoutMs
+        ? (undiciFetch(url, {
+            ...(init as Parameters<typeof undiciFetch>[1]),
+            dispatcher: agentFor(connectTimeoutMs),
+          }) as unknown as Promise<Response>)
+        : fetch(url, init)
+  }
   const worker = new CompanionWorkerTransport()
-  return (url, init) => worker.fetch(url, { ...init, serverFingerprint })
+  return (url, { connectTimeoutMs, ...init }) =>
+    worker.fetchPinned(
+      url,
+      { ...(init as Parameters<typeof worker.fetchPinned>[1]), serverFingerprint },
+      connectTimeoutMs
+    )
 }
 
 /** The Fix lines offered when nothing resolved, tuned by what is running here. */

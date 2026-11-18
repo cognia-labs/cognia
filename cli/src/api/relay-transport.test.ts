@@ -106,16 +106,37 @@ describe("relayCommandChannel", () => {
       ok: false,
       cause: "network",
       message: expect.stringContaining("relay unreachable"),
+      unsent: true,
     })
     await expect(channel.execute("x", {})).resolves.toEqual({ ok: true, result: "ok" })
     expect(rtc.factory).toHaveBeenCalledTimes(2)
+  })
+
+  it("marks only a failure before the room opened as never sent", async () => {
+    const rtc = fakeRtc(jest.fn().mockRejectedValueOnce(new Error("carrier closed")))
+    const channel = relayCommandChannel({ route, deviceId: "d", transportFactory: rtc.factory })
+    const dispatched = await channel.execute("x", {})
+    // The call reached the open room: it may have run on the host.
+    expect(dispatched).toMatchObject({ ok: false, cause: "network" })
+    expect(dispatched).not.toHaveProperty("unsent")
+
+    const stopped = new AbortController()
+    stopped.abort()
+    await expect(channel.execute("x", {}, { signal: stopped.signal })).resolves.toMatchObject({
+      cause: "timeout",
+      unsent: true,
+    })
   })
 
   it("refuses after it was closed", async () => {
     const rtc = fakeRtc(jest.fn())
     const channel = relayCommandChannel({ route, deviceId: "d", transportFactory: rtc.factory })
     channel.close()
-    await expect(channel.execute("x", {})).resolves.toMatchObject({ ok: false, cause: "network" })
+    await expect(channel.execute("x", {})).resolves.toMatchObject({
+      ok: false,
+      cause: "network",
+      unsent: true,
+    })
     expect(rtc.factory).not.toHaveBeenCalled()
   })
 })

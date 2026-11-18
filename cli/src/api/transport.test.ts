@@ -12,6 +12,7 @@ import {
   type RequestOptions,
 } from "./transport"
 import type { WatchOptions } from "./events"
+import { connectDeadlineMs } from "../util/connect-phase"
 
 interface Call {
   url: string
@@ -184,6 +185,34 @@ describe("internalTransport", () => {
     }).execute("x")
     expect(outcome).toMatchObject({ ok: false, cause: "network", message: "ECONNREFUSED" })
     expect(outcome).not.toHaveProperty("status")
+    expect(outcome).not.toHaveProperty("unsent")
+  })
+
+  it("marks a failure before the connection opened as never sent", async () => {
+    const refused = (async () => {
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      })
+    }) as TransportFetch
+    const reset = (async () => {
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
+      })
+    }) as TransportFetch
+    const send = (fetchImpl: TransportFetch) =>
+      internalTransport({ endpoint: ENDPOINT, serviceToken: "s", fetchImpl }).execute("x")
+    await expect(send(refused)).resolves.toMatchObject({ cause: "network", unsent: true })
+    await expect(send(reset)).resolves.not.toHaveProperty("unsent")
+  })
+
+  it("hands the connect deadline to the fetch it uses", async () => {
+    const fetchImpl = stubFetch(() => ({ status: 200, body: { result: 1 } }))
+    await internalTransport({ endpoint: ENDPOINT, serviceToken: "s", fetchImpl }).execute(
+      "x",
+      {},
+      { connectTimeoutMs: 700 }
+    )
+    expect(fetchImpl.calls[0].init).toMatchObject({ connectTimeoutMs: 700 })
   })
 
   it("classifies an aborted request as a timeout", async () => {
@@ -247,7 +276,15 @@ describe("device wire constants", () => {
 })
 
 describe("withRelayFallback (ADR-0224 A4)", () => {
-  const unreachable: CommandOutcome = { ok: false, cause: "network", message: "ECONNREFUSED" }
+  const unreachable: CommandOutcome = {
+    ok: false,
+    cause: "network",
+    message: "ECONNREFUSED",
+    unsent: true,
+  }
+  // The connection was open when it failed: the host may have run the command.
+  const lostInFlight: CommandOutcome = { ok: false, cause: "network", message: "socket hang up" }
+  const stalled: CommandOutcome = { ok: false, cause: "timeout", message: "request timed out" }
 
   function directReturning(...outcomes: CommandOutcome[]): HostTransport {
     const execute = jest.fn()
@@ -323,11 +360,89 @@ describe("withRelayFallback (ADR-0224 A4)", () => {
     try {
       await expect(
         withRelayFallback(direct, relay).execute("write", {}, { timeoutMs: 100 })
-      ).resolves.toMatchObject({ ok: false, cause: "timeout" })
+      ).resolves.toMatchObject({ ok: false, cause: "network", message: "ECONNREFUSED" })
       expect(relay.execute).not.toHaveBeenCalled()
     } finally {
       clock.mockRestore()
     }
+  })
+
+  it("gives the direct route a short connect deadline out of the budget", async () => {
+    const direct = directReturning({ ok: true, result: 1 })
+    await withRelayFallback(direct, relayReturning()).execute("x", {}, { timeoutMs: 30_000 })
+    expect((direct.execute as jest.Mock).mock.calls[0][2]).toMatchObject({
+      connectTimeoutMs: connectDeadlineMs(30_000),
+    })
+    expect(connectDeadlineMs(30_000)).toBe(5_000)
+  })
+
+  it("does not repeat a command that may have run and forbids a second run", async () => {
+    const relay = relayReturning({ ok: true, result: "twice" })
+    const outcome = await withRelayFallback(directReturning(lostInFlight), relay).execute(
+      "sandbox_preview_create",
+      {}
+    )
+    expect(relay.execute).not.toHaveBeenCalled()
+    expect(outcome).toMatchObject({ ok: false, cause: "network", message: "socket hang up" })
+    expect(!outcome.ok && outcome.details?.join(" ")).toContain(
+      "sandbox_preview_create must not run twice"
+    )
+  })
+
+  it.each([
+    ["a lost connection", lostInFlight],
+    ["a stalled request", stalled],
+  ])("repeats a deduplicated command through the relay after %s", async (_label, failure) => {
+    const relay = relayReturning({ ok: true, result: "once" })
+    const outcome = await withRelayFallback(directReturning(failure), relay).execute(
+      "session_create",
+      {},
+      { idempotencyKey: "k", replaySafe: true }
+    )
+    expect(outcome).toEqual({ ok: true, result: "once" })
+    expect(relay.execute.mock.calls[0][2]).toMatchObject({ idempotencyKey: "k" })
+  })
+
+  it("does not move a command once the caller stopped it", async () => {
+    const stopped = new AbortController()
+    const direct = directReturning()
+    direct.execute = jest.fn(async () => {
+      stopped.abort()
+      return unreachable
+    })
+    const relay = relayReturning({ ok: true, result: {} })
+    await withRelayFallback(direct, relay).execute("x", {}, { signal: stopped.signal })
+    expect(relay.execute).not.toHaveBeenCalled()
+  })
+
+  it("keeps the relay first, but does not repeat a maybe-run command on the address", async () => {
+    const direct = directReturning(unreachable)
+    const relay = relayReturning({ ok: true, result: "a" }, lostInFlight)
+    const transport = withRelayFallback(direct, relay)
+    await transport.execute("x")
+    const outcome = await transport.execute("y")
+    expect(direct.execute).toHaveBeenCalledTimes(1)
+    expect(outcome).toMatchObject({ ok: false, message: "socket hang up" })
+    expect(!outcome.ok && outcome.details?.join(" ")).toContain("y must not run twice")
+  })
+
+  it("reads a receipt and watches through the relay even after a lost connection", async () => {
+    const direct = directReturning()
+    direct.request = jest.fn().mockResolvedValue(lostInFlight)
+    direct.watch = jest.fn().mockResolvedValue(stalled)
+    const relay = {
+      ...relayReturning(),
+      getOperation: jest.fn(async () => ({ ok: true as const, result: "receipt" })),
+      watch: jest.fn(async () => ({ ok: true as const, result: "events" })),
+    }
+    const transport = withRelayFallback(direct, relay)
+    await expect(
+      transport.request("GET", operationPath("http", "00000000-0000-4000-8000-000000000001"))
+    ).resolves.toEqual({ ok: true, result: "receipt" })
+    await expect(transport.watch!({ channels: ["a"], onEvent: () => {} })).resolves.toEqual({
+      ok: true,
+      result: "events",
+    })
   })
 
   it("uses the address while it answers, and never joins the relay", async () => {
@@ -551,7 +666,34 @@ describe("deviceTransport token exchange failures", () => {
       ok: false,
       cause: "network",
       message: "connect ECONNREFUSED 127.0.0.1:1",
+      // The command waits for its token, so it never left this machine.
+      unsent: true,
     })
+  })
+
+  it("passes the connect deadline to the token exchange, and marks a lost command as maybe sent", async () => {
+    const inits: Array<{ url: string; connectTimeoutMs?: number }> = []
+    const transport = await deviceTransport({
+      endpoint: ENDPOINT,
+      tenantId: "t",
+      deviceId: "d",
+      privateKeyJwk,
+      fetchImpl: async (url, init) => {
+        inits.push({ url, connectTimeoutMs: init.connectTimeoutMs })
+        if (url.endsWith("/challenge")) return Response.json({ challengeId: "c", nonce: "n" })
+        if (url.endsWith("/token"))
+          return Response.json({
+            accessToken: `e30.${Buffer.from('{"jti":"j"}').toString("base64url")}.sig`,
+            expiresIn: 300,
+          })
+        throw new Error("socket hang up")
+      },
+    })
+    const outcome = await transport.execute("x", {}, { connectTimeoutMs: 900 })
+    expect(inits.map((call) => call.url.split("/").pop())).toEqual(["challenge", "token", "x"])
+    expect(inits.every((call) => call.connectTimeoutMs === 900)).toBe(true)
+    expect(outcome).toMatchObject({ ok: false, cause: "network" })
+    expect(outcome).not.toHaveProperty("unsent")
   })
 
   it("reports the host refusing the device as an auth failure", async () => {
@@ -721,7 +863,11 @@ describe("relay operation observation", () => {
       },
     }))
     const host = withRelayFallback(direct, { execute, getOperation, close: () => {} })
-    await host.execute("mutation", {}, { idempotencyKey: "11111111-1111-4111-8111-111111111111" })
+    await host.execute(
+      "mutation",
+      {},
+      { idempotencyKey: "11111111-1111-4111-8111-111111111111", replaySafe: true }
+    )
     await expect(
       host.request("GET", "/api/operations/11111111-1111-4111-8111-111111111111")
     ).resolves.toMatchObject({ ok: true, result: { done: true, result: null } })

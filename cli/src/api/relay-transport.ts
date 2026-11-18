@@ -178,12 +178,16 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
     options: RequestOptions | undefined,
     send: (rtc: TransportRtc, deadlineAt: number) => Promise<CommandOutcome>
   ): Promise<CommandOutcome> {
-    if (closed) return { ok: false, cause: "network", message: "the relay route is closed" }
+    if (closed)
+      return { ok: false, cause: "network", message: "the relay route is closed", unsent: true }
     if (options?.signal?.aborted)
-      return { ok: false, cause: "timeout", message: "relay request stopped" }
+      return { ok: false, cause: "timeout", message: "relay request stopped", unsent: true }
     const deadlineAt = Date.now() + (options?.timeoutMs ?? 30000)
     return new Promise((resolve) => {
       let done = false
+      // Until the room is joined nothing has been sent, so a failure before
+      // then can be repeated on the direct route whatever the command is.
+      let sent = false
       const finish = (outcome: CommandOutcome) => {
         if (done) return
         done = true
@@ -196,6 +200,7 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
           ok: false,
           cause: "timeout",
           message: "relay request stopped or exceeded its budget",
+          ...(sent ? {} : { unsent: true }),
         })
         closeRoute()
       }
@@ -207,11 +212,13 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
             rtc.close()
             return
           }
+          sent = true
           finish(await send(rtc, deadlineAt))
         })
         .catch((error) => {
           const message = error instanceof Error ? error.message : String(error)
           finish({
+            ...(sent ? {} : { unsent: true }),
             ok: false,
             cause: isHostError(error)
               ? classifyRelayCode(error.code)

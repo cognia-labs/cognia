@@ -14,6 +14,7 @@ import {
   normalizeSpkiFingerprint,
   verifyPinnedPeer,
 } from "./companion-worker-transport"
+import { CONNECT_TIMEOUT_CODE, neverSent } from "../util/connect-phase"
 
 describe("CompanionWorkerTransport pinning", () => {
   it("normalizes SHA-256 SPKI fingerprints", () => {
@@ -147,12 +148,14 @@ describe("CompanionWorkerTransport pinning", () => {
       await expect(reader.read()).rejects.toThrow()
       reader.releaseLock()
 
-      await expect(
-        transport.fetch(`https://localhost:${address.port}/health`, {
-          method: "GET",
-          serverFingerprint: "00".repeat(32),
-        })
-      ).rejects.toThrow("does not match")
+      const wrongPin = transport.fetch(`https://localhost:${address.port}/health`, {
+        method: "GET",
+        serverFingerprint: "00".repeat(32),
+      })
+      await expect(wrongPin).rejects.toThrow("does not match")
+      // Refused before the request was handed the socket: it never left.
+      await expect(wrongPin.catch((error: unknown) => neverSent(error))).resolves.toBe(true)
+      await expect(wrongPin).rejects.toBeInstanceOf(CompanionWorkerTransportError)
       await expect(
         transport.fetch(`http://localhost:${address.port}/health`, {
           method: "GET",
@@ -219,6 +222,36 @@ describe("CompanionWorkerTransport pinning", () => {
       wss.close()
       await new Promise<void>((resolve) => server.close(() => resolve()))
       rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("gives up connecting after its connect deadline, as never sent", async () => {
+    // Accepts TCP and never answers the ClientHello, like a black-holed route.
+    const held: net.Socket[] = []
+    const server = net.createServer((socket) => {
+      held.push(socket)
+      socket.resume()
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const port = (server.address() as net.AddressInfo).port
+    try {
+      const started = Date.now()
+      const failure = await new CompanionWorkerTransport()
+        .fetchPinned(
+          `https://127.0.0.1:${port}/api/_rpc/x`,
+          { method: "POST", body: "{}", serverFingerprint: "ab".repeat(32) },
+          80
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        )
+      expect(Date.now() - started).toBeLessThan(2_000)
+      expect(failure).toMatchObject({ name: "HostConnectError", code: CONNECT_TIMEOUT_CODE })
+      expect(neverSent(failure)).toBe(true)
+    } finally {
+      for (const socket of held) socket.destroy()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 

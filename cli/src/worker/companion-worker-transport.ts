@@ -9,6 +9,8 @@ import WebSocket from "ws"
 import type { AuthFetcher } from "@/lib/tauri/companion-auth"
 import type { PinnedFetchInit } from "@/lib/tauri/pinned-fetch"
 
+import { CONNECT_TIMEOUT_CODE, HostConnectError } from "../util/connect-phase"
+
 import type { WorkerWebSocket } from "./worker-connect"
 
 export class CompanionWorkerTransportError extends Error {
@@ -64,7 +66,11 @@ class PinnedHttpsAgent extends https.Agent {
    */
   private readonly pending = new Set<tls.TLSSocket>()
 
-  constructor(private readonly fingerprint: string) {
+  constructor(
+    private readonly fingerprint: string,
+    /** Give up connecting (TCP, TLS and the pin check) after this long. */
+    private readonly connectTimeoutMs?: number
+  ) {
     super({ keepAlive: false })
   }
 
@@ -90,13 +96,36 @@ class PinnedHttpsAgent extends https.Agent {
     const socket = tls.connect(connectionOptions)
     this.pending.add(socket)
     let settled = false
+    const timer = this.connectTimeoutMs
+      ? setTimeout(
+          () =>
+            settle(
+              new HostConnectError(
+                `no connection to ${connectionOptions.host ?? "the host"} within ${this.connectTimeoutMs} ms`,
+                CONNECT_TIMEOUT_CODE
+              )
+            ),
+          this.connectTimeoutMs
+        )
+      : undefined
+    // Until the pin is verified the request has not been handed the socket,
+    // so nothing was written: every failure here is one the request never sent.
     const settle = (error?: Error) => {
       if (settled) return
       settled = true
+      if (timer) clearTimeout(timer)
       this.pending.delete(socket)
       if (error) {
-        socket.destroy(error)
-        callback?.(error, socket)
+        // A pin refusal keeps its own type: callers tell it apart from a
+        // retryable failure, and its code already reads as never sent.
+        const unsent =
+          error instanceof HostConnectError || error instanceof CompanionWorkerTransportError
+            ? error
+            : new HostConnectError(error.message, codeOf(error) ?? "COGNIA_CONNECT_FAILED", {
+                cause: error,
+              })
+        socket.destroy(unsent)
+        callback?.(unsent, socket)
       } else {
         callback?.(null, socket)
       }
@@ -141,10 +170,16 @@ function abortError(signal: AbortSignal | undefined): Error {
   return new DOMException("This operation was aborted", "AbortError")
 }
 
+function codeOf(error: Error): string | undefined {
+  const code = (error as { code?: unknown }).code
+  return typeof code === "string" ? code : undefined
+}
+
 async function pinnedRequest(
   url: URL,
   init: PinnedFetchInit,
-  fingerprint: string
+  fingerprint: string,
+  connectTimeoutMs?: number
 ): Promise<Response> {
   if (url.protocol !== "https:") {
     throw new CompanionWorkerTransportError(
@@ -155,7 +190,7 @@ async function pinnedRequest(
   const signal = init.signal ?? undefined
   if (signal?.aborted) return Promise.reject(abortError(signal))
   return new Promise((resolve, reject) => {
-    const agent = new PinnedHttpsAgent(fingerprint)
+    const agent = new PinnedHttpsAgent(fingerprint, connectTimeoutMs)
     // Abort reaches a socket that is still connecting (an unroutable address
     // otherwise holds the request, and the process, for the OS connect
     // timeout) as well as one already handed to the request.
@@ -207,6 +242,18 @@ export class CompanionWorkerTransport {
       return fetch(url, standard)
     }
     return pinnedRequest(new URL(url), init, init.serverFingerprint)
+  }
+
+  /**
+   * {@link fetch} to a pinned host, giving up after `connectTimeoutMs` of
+   * connecting with a {@link HostConnectError}: the request was never sent.
+   */
+  fetchPinned(
+    url: string,
+    init: PinnedFetchInit & { serverFingerprint: string },
+    connectTimeoutMs?: number
+  ): Promise<Response> {
+    return pinnedRequest(new URL(url), init, init.serverFingerprint, connectTimeoutMs)
   }
 
   openWebSocket(url: string, serverFingerprint?: string): WorkerWebSocket {

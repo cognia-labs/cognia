@@ -182,6 +182,10 @@ export async function invokeCommand(input: InvokeInput): Promise<InvokeResult> {
   const options: RequestOptions = {
     timeoutMs: input.timeoutMs,
     signal: input.signal,
+    // A required key is minted below, and the host's idempotency ledger is
+    // shared by every route; structural reads repeat harmlessly. Only these
+    // may be sent again another way after the first attempt may have arrived.
+    replaySafe: input.entry.idempotency === "required" || input.entry.idempotency === "structural",
     ...(input.entry.idempotency === "required"
       ? { idempotencyKey: input.idempotencyKey ?? (input.newId ?? randomUUID)() }
       : input.idempotencyKey

@@ -1,5 +1,8 @@
-import { connectHost, connectResolvedHost } from "./connect"
+import net from "node:net"
+
+import { connectHost, connectResolvedHost, pinnedFetch } from "./connect"
 import type { HostResolution, ResolvedHost } from "../host/resolve"
+import { neverSent } from "../util/connect-phase"
 
 const ENDPOINT = "https://127.0.0.1:27890"
 
@@ -189,5 +192,43 @@ describe("connectResolvedHost", () => {
     const failure = (result as { failure: { cause: string; fix: string[] } }).failure
     expect(failure.cause).toBe("auth")
     expect(failure.fix[0]).toContain("--tenant")
+  })
+})
+
+describe("pinnedFetch connect deadline", () => {
+  // Accepts TCP and never answers the TLS ClientHello, like a black-holed route.
+  let server: net.Server
+  let held: net.Socket[]
+  let port: number
+  beforeEach(async () => {
+    held = []
+    server = net.createServer((socket) => {
+      held.push(socket)
+      socket.resume()
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    port = (server.address() as net.AddressInfo).port
+  })
+  afterEach(async () => {
+    for (const socket of held) socket.destroy()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  it.each([
+    ["the standard CA path", undefined],
+    ["a pinned host", "ab".repeat(32)],
+  ])("gives up connecting on %s as a request that never left", async (_label, pin) => {
+    const started = Date.now()
+    const failure = await pinnedFetch(pin)(`https://127.0.0.1:${port}/api/_rpc/x`, {
+      method: "POST",
+      body: "{}",
+      connectTimeoutMs: 100,
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    )
+    expect(Date.now() - started).toBeLessThan(3_000)
+    expect(failure).toBeDefined()
+    expect(neverSent(failure)).toBe(true)
   })
 })

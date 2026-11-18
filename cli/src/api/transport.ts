@@ -20,6 +20,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { CompanionApiError, createCompanionSession, signerFromJwk } from "@cognia/companion-client"
 
 import type { FailureCause } from "../cli/errors"
+import { connectDeadlineMs, neverSent } from "../util/connect-phase"
 
 export const INTERNAL_RPC_PREFIX = "/internal/_rpc"
 export const DEVICE_RPC_PREFIX = "/api/_rpc"
@@ -51,6 +52,12 @@ export interface CommandFailure {
   retryAfter?: string
   retryAfterMs?: number
   operationId?: string
+  /**
+   * The request provably never reached the host: the connection was not made
+   * (`../util/connect-phase.ts`). Only then may any command be sent again
+   * another way without asking whether it already ran.
+   */
+  unsent?: boolean
 }
 
 export type CommandOutcome = CommandSuccess | CommandFailure
@@ -65,6 +72,19 @@ export interface RequestOptions {
   headers?: Record<string, string>
   onChunk?: (chunk: Uint8Array) => void
   maxBytes?: number
+  /**
+   * The host deduplicates this request, so repeating it after it may have
+   * arrived cannot run it twice: a command whose idempotency key is required
+   * (the host's ledger is shared by every route), or a structural read. A
+   * command that forbids the key is never repeated once it may have been sent.
+   */
+  replaySafe?: boolean
+  /**
+   * Give up connecting after this long, reporting the request as never sent.
+   * Set by the relay fallback so a black-holed address leaves the budget to
+   * the relay instead of spending all of it on the direct connect.
+   */
+  connectTimeoutMs?: number
 }
 
 export interface HostTransport {
@@ -91,8 +111,11 @@ export interface HostTransport {
   close?(): void
 }
 
+/** `fetch`'s init, plus how long the connection layer may spend connecting. */
+export type TransportInit = RequestInit & { connectTimeoutMs?: number }
+
 /** Injected so tests never open a socket, and so TLS pinning can wrap it. */
-export type TransportFetch = (url: string, init: RequestInit) => Promise<Response>
+export type TransportFetch = (url: string, init: TransportInit) => Promise<Response>
 
 /** Cancel this waiter even when another call owns the shared authentication work. */
 function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -184,7 +207,7 @@ function networkFailure(error: unknown, aborted = false): CommandFailure {
   if (aborted || isAbortError(error)) {
     return { ok: false, cause: "timeout", message: "the request exceeded its timeout budget" }
   }
-  return { ok: false, cause: "network", message }
+  return { ok: false, cause: "network", message, ...(neverSent(error) ? { unsent: true } : {}) }
 }
 
 function successFromResponse(status: number, body: unknown): CommandSuccess {
@@ -221,6 +244,9 @@ async function httpCall(input: HttpCallInput): Promise<CommandOutcome> {
     for (const [name, value] of new Headers(input.options?.headers)) headers.set(name, value)
     if (input.options?.idempotencyKey) headers.set("idempotency-key", input.options.idempotencyKey)
     const response = await input.fetchImpl(`${input.endpoint}${input.routePath}`, {
+      ...(input.options?.connectTimeoutMs
+        ? { connectTimeoutMs: input.options.connectTimeoutMs }
+        : {}),
       method: input.method,
       headers: Object.fromEntries(headers),
       ...(input.options?.rawBody !== undefined
@@ -358,25 +384,38 @@ export async function deviceTransport(options: DeviceTransportOptions): Promise<
   const endpoint = options.endpoint.replace(/\/+$/, "")
   const fetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init))
   const signer = await signerFromJwk(options.deviceId, options.privateKeyJwk)
-  const authContext = new AsyncLocalStorage<AbortSignal>()
+  // The token exchange runs inside the call that needed it, so it shares that
+  // call's signal and connect deadline: a fresh process's first command
+  // exchanges a token before anything else, over the same direct route.
+  const authContext = new AsyncLocalStorage<{ signal: AbortSignal; connectTimeoutMs?: number }>()
   const session = createCompanionSession({
     baseUrl: endpoint,
     tenantId: options.tenantId,
     signer,
     fetchImpl: (input, init) => {
-      const signal = authContext.getStore() ?? init?.signal
+      const context = authContext.getStore()
+      const signal = context?.signal ?? init?.signal
       signal?.throwIfAborted()
-      return fetchImpl(input, { ...init, signal })
+      return fetchImpl(String(input), {
+        ...init,
+        ...(signal ? { signal } : {}),
+        ...(context?.connectTimeoutMs ? { connectTimeoutMs: context.connectTimeoutMs } : {}),
+      })
     },
   })
   let authentication: { controller: AbortController; waiters: number } | undefined
 
-  async function authorizationHeaders(method: string, routePath: string, signal: AbortSignal) {
+  async function authorizationHeaders(
+    method: string,
+    routePath: string,
+    signal: AbortSignal,
+    connectTimeoutMs?: number
+  ) {
     signal.throwIfAborted()
     const shared = (authentication ??= { controller: new AbortController(), waiters: 0 })
     shared.waiters++
     const authorize = () =>
-      authContext.run(shared.controller.signal, () =>
+      authContext.run({ signal: shared.controller.signal, connectTimeoutMs }, () =>
         session.authorizationHeaders(method, routePath)
       )
     try {
@@ -412,15 +451,19 @@ export async function deviceTransport(options: DeviceTransportOptions): Promise<
     const signal = requestOptions?.signal
       ? AbortSignal.any([budget.signal, requestOptions.signal])
       : budget.signal
+    const connectTimeoutMs = requestOptions?.connectTimeoutMs
+    // Until the command itself is handed to fetch, a failure (the token
+    // exchange, the budget running out) means the command never left.
+    let dispatched = false
     try {
-      return await authContext.run(signal, async () => {
+      return await authContext.run({ signal, connectTimeoutMs }, async () => {
         signal.throwIfAborted()
         requestOptions = { ...requestOptions, signal }
         let authorization: Record<string, string>
         try {
           // The proof is bound to the method and path, so it is minted per call
           // and cannot be replayed against a different route.
-          authorization = await authorizationHeaders(method, routePath, signal)
+          authorization = await authorizationHeaders(method, routePath, signal, connectTimeoutMs)
         } catch (error) {
           signal.throwIfAborted()
           const message = error instanceof Error ? error.message : String(error)
@@ -431,9 +474,10 @@ export async function deviceTransport(options: DeviceTransportOptions): Promise<
             return { ok: false, cause: "auth", message, status: error.status, code: error.code }
           }
           if (/malformed/.test(message)) return { ok: false, cause: "auth", message }
-          return networkFailure(error)
+          return { ...networkFailure(error), unsent: true }
         }
         signal.throwIfAborted()
+        dispatched = true
         const outcome = await httpCall({
           fetchImpl,
           endpoint,
@@ -447,9 +491,12 @@ export async function deviceTransport(options: DeviceTransportOptions): Promise<
         // a fresh one. Anything past that is a real authorization problem.
         if (!outcome.ok && outcome.status === 401) {
           session.invalidate()
-          const retryAuthorization = await authorizationHeaders(method, routePath, signal).catch(
-            () => null
-          )
+          const retryAuthorization = await authorizationHeaders(
+            method,
+            routePath,
+            signal,
+            connectTimeoutMs
+          ).catch(() => null)
           signal.throwIfAborted()
           if (retryAuthorization) {
             return httpCall({
@@ -470,7 +517,8 @@ export async function deviceTransport(options: DeviceTransportOptions): Promise<
         return outcome
       })
     } catch (error) {
-      return networkFailure(error, signal.aborted)
+      const failure = networkFailure(error, signal.aborted)
+      return dispatched ? failure : { ...failure, unsent: true }
     } finally {
       if (timer) clearTimeout(timer)
     }
@@ -538,19 +586,72 @@ export interface RelayCommandLane {
   close(): void
 }
 
-/** Whether a direct failure means the host was not reached at all. */
-function unreachable(outcome: CommandOutcome): outcome is CommandFailure {
-  return !outcome.ok && outcome.cause === "network" && outcome.status === undefined
+/** Whether a route failed without the host answering at all. */
+function unanswered(outcome: CommandOutcome): outcome is CommandFailure {
+  return (
+    !outcome.ok &&
+    outcome.status === undefined &&
+    (outcome.cause === "network" || outcome.cause === "timeout")
+  )
+}
+
+/**
+ * Whether a failed route may hand the request to the other one.
+ *
+ * The host answering (any status) settles it, and so does the caller
+ * stopping. Otherwise a request that never left goes the other way whatever
+ * it is; one that may have arrived only when the host deduplicates it
+ * (`replaySafe`: the idempotency ledger is shared by every route, and
+ * structural reads repeat harmlessly). A command that forbids an idempotency
+ * key is never sent a second time once it may have run.
+ */
+function mayTryOtherRoute(
+  outcome: CommandOutcome,
+  options: RequestOptions | undefined
+): outcome is CommandFailure {
+  if (!unanswered(outcome) || options?.signal?.aborted) return false
+  return outcome.unsent === true || options?.replaySafe === true
+}
+
+/** Why a request that may have arrived was not repeated through the relay. */
+function notRepeated(outcome: CommandFailure, name: string): CommandOutcome {
+  // Stopped before it left: nothing to warn about.
+  if (outcome.unsent) return outcome
+  return {
+    ...outcome,
+    details: [
+      ...(outcome.details ?? []),
+      `the request may have reached the host, and ${name} must not run twice, so it was not ` +
+        "repeated through the relay room",
+      "check on the host whether it ran before sending it again",
+    ],
+  }
 }
 
 /** A route switch spends the same request budget instead of starting another one. */
 function routeAttempts<T extends RequestOptions | undefined>(options: T) {
   const deadline = options?.timeoutMs ? Date.now() + options.timeoutMs : Infinity
-  return async (send: (remaining: T) => Promise<CommandOutcome>): Promise<CommandOutcome> => {
+  const attempt = async (
+    send: (remaining: T) => Promise<CommandOutcome>
+  ): Promise<CommandOutcome> => {
     const remaining = deadline - Date.now()
-    if (options?.signal?.aborted || remaining <= 0) return networkFailure(undefined, true)
+    if (options?.signal?.aborted || remaining <= 0)
+      return { ...networkFailure(undefined, true), unsent: true }
     return send((Number.isFinite(deadline) ? { ...options, timeoutMs: remaining } : options) as T)
   }
+  return Object.assign(attempt, {
+    /** Whether any budget is left for another route. */
+    hasBudget: () => !options?.signal?.aborted && deadline - Date.now() > 0,
+  })
+}
+
+/**
+ * The direct route's options when a relay stands behind it: give up
+ * connecting early, so a black-holed address (a home network's private
+ * address seen from outside) leaves most of the budget to the relay.
+ */
+function directOptions<T extends RequestOptions | undefined>(remaining: T): T {
+  return { ...remaining, connectTimeoutMs: connectDeadlineMs(remaining?.timeoutMs) } as T
 }
 
 /**
@@ -561,8 +662,11 @@ function routeAttempts<T extends RequestOptions | undefined>(options: T) {
  * is only reachable through the relay does not cost a failed connection per
  * command.
  *
- * Only commands fall back. `request` is the raw HTTP escape hatch, which has
- * no relay form, so its failure says so instead of pretending.
+ * The direct route gets a short connect deadline, and a request moves to the
+ * other route when it provably never left, or when the host deduplicates it
+ * ({@link mayTryOtherRoute}). Only commands, operation reads and event
+ * watches fall back. `request` is the raw HTTP escape hatch, which has no
+ * relay form, so its failure says so instead of pretending.
  */
 export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane): HostTransport {
   let relayFirst = false
@@ -589,8 +693,11 @@ export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane
         },
       }
       const attempt = routeAttempts(watched)
-      const outcome = await attempt((remaining) => direct.watch!(remaining))
-      return unreachable(outcome) && relay.watch && !options.signal?.aborted
+      const outcome = await attempt((remaining) => direct.watch!(directOptions(remaining)))
+      // Watching only reads, and resumes from its cursor: always safe to move.
+      return mayTryOtherRoute(outcome, { ...options, replaySafe: true }) &&
+        relay.watch &&
+        attempt.hasBudget()
         ? attempt((remaining) =>
             relay.watch!({
               ...options,
@@ -608,20 +715,27 @@ export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane
       const attempt = routeAttempts(options)
       if (relayFirst) {
         const viaRelay = await attempt((remaining) => relay.execute(name, args, remaining))
-        if (!unreachable(viaRelay)) return viaRelay
+        if (!unanswered(viaRelay)) return viaRelay
+        if (!mayTryOtherRoute(viaRelay, options)) return notRepeated(viaRelay, name)
+        // Out of budget says nothing about the relay: keep it first.
+        if (!attempt.hasBudget()) return viaRelay
         relayFirst = false
       }
-      const viaDirect = await attempt((remaining) => direct.execute(name, args, remaining))
-      if (!unreachable(viaDirect)) return viaDirect
+      const viaDirect = await attempt((remaining) =>
+        direct.execute(name, args, directOptions(remaining))
+      )
+      if (!unanswered(viaDirect)) return viaDirect
+      if (!mayTryOtherRoute(viaDirect, options)) return notRepeated(viaDirect, name)
+      if (!attempt.hasBudget()) return viaDirect
       const viaRelay = await attempt((remaining) => relay.execute(name, args, remaining))
-      if (!unreachable(viaRelay)) {
+      if (!unanswered(viaRelay)) {
         relayFirst = true
         return viaRelay
       }
       return {
-        ...viaDirect,
+        ...viaRelay,
         details: [
-          ...(viaDirect.details ?? []),
+          ...(viaRelay.details ?? []),
           `direct: ${viaDirect.message}`,
           `relay: ${viaRelay.message}`,
         ],
@@ -640,9 +754,10 @@ export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane
         if (/^[0-9a-f-]{36}$/i.test(id)) {
           if (relayFirst) return attempt((remaining) => relay.getOperation!(id, remaining))
           const outcome = await attempt((remaining) =>
-            direct.request(method, routePath, body, remaining)
+            direct.request(method, routePath, body, directOptions(remaining))
           )
-          return unreachable(outcome)
+          // Reading a receipt changes nothing on the host.
+          return mayTryOtherRoute(outcome, { ...options, replaySafe: true }) && attempt.hasBudget()
             ? attempt((remaining) => relay.getOperation!(id, remaining))
             : outcome
         }
@@ -650,7 +765,7 @@ export function withRelayFallback(direct: HostTransport, relay: RelayCommandLane
       const outcome = await attempt((remaining) =>
         direct.request(method, routePath, body, remaining)
       )
-      if (!unreachable(outcome)) return outcome
+      if (!unanswered(outcome)) return outcome
       return {
         ...outcome,
         details: [

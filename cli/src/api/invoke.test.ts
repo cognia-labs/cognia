@@ -181,6 +181,24 @@ describe("invokeCommand", () => {
     expect(host.calls[0].options?.idempotencyKey).toBeUndefined()
   })
 
+  it.each([
+    ["required", true],
+    ["structural", true],
+    ["forbidden", false],
+  ] as const)(
+    "lets a %s command move to the relay after it may have arrived: %p",
+    async (idempotency, replaySafe) => {
+      const host = transport("internal", [{ ok: true, result: {} }])
+      await invokeCommand({
+        entry: entry({ idempotency }),
+        body: {},
+        transport: host,
+        timeoutMs: 1000,
+      })
+      expect(host.calls[0].options?.replaySafe).toBe(replaySafe)
+    }
+  )
+
   it("honours an explicit key over the minted one", async () => {
     const host = transport("internal", [{ ok: true, result: {} }])
     await invokeCommand({
