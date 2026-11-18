@@ -20,6 +20,8 @@
  */
 
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
+import { isTauri } from "@/lib/tauri"
+import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
 
 import type { BaseTerminalSession } from "./base-session"
 import type { SessionInfo } from "./types"
@@ -106,6 +108,16 @@ export interface SpawnFromDockInput {
    * originating message.
    */
   agentSpawnerMessageId?: string
+  /**
+   * Run on this machine's PTY even while a remote Host is selected.
+   *
+   * The default chain follows the active Host, which is right for a tab the
+   * user opens. A caller whose process must live next to local state — a
+   * Sites preview whose readiness probe dials this machine's `localhost` —
+   * pins it here instead; with no local PTY (a browser or phone shell) the
+   * spawn fails rather than landing on another machine.
+   */
+  local?: boolean
 }
 
 /**
@@ -130,6 +142,11 @@ function pickSpawnChain(): Array<(req: SpawnRequest) => Promise<BaseTerminalSess
     }
   }
   return chain
+}
+
+/** This machine's PTY, and nothing else — for {@link SpawnFromDockInput.local}. */
+function localSpawnChain(): Array<(req: SpawnRequest) => Promise<BaseTerminalSession>> {
+  return isTauri() ? [TerminalSession.spawn.bind(TerminalSession)] : []
 }
 
 /**
@@ -218,10 +235,18 @@ function withTimeout<T>(
  */
 export async function spawnFromDock(input: SpawnFromDockInput): Promise<SpawnOutcome> {
   const hooks = input.hooks ?? getPluginEventHooks()
-  const spawnChain = input.spawn ? [input.spawn] : (input.transportSpawns ?? pickSpawnChain())
+  const spawnChain = input.spawn
+    ? [input.spawn]
+    : (input.transportSpawns ?? (input.local ? localSpawnChain() : pickSpawnChain()))
   if (spawnChain.length === 0) {
-    return { kind: "error", message: "terminal transport unavailable" }
+    return {
+      kind: "error",
+      message: input.local ? "local terminal unavailable" : "terminal transport unavailable",
+    }
   }
+  // The host-state badge describes the selected Host. A pinned local spawn
+  // failing while a remote Host is selected says nothing about that Host.
+  const reportsHostState = !input.local || !isRemoteHostActive()
 
   // 1. Veto / mutate gate.
   const { decision, req } = await hooks.dispatchTerminalWillSpawn(input.req)
@@ -255,13 +280,13 @@ export async function spawnFromDock(input: SpawnFromDockInput): Promise<SpawnOut
     if (!session) throw lastError
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    input.store.setHostState?.(classifyTerminalHostError(err), message)
+    if (reportsHostState) input.store.setHostState?.(classifyTerminalHostError(err), message)
     return { kind: "error", message }
   }
 
   // 3. Register.
   registerLiveSession(session)
-  input.store.setHostState?.("online")
+  if (reportsHostState) input.store.setHostState?.("online")
   input.store.registerSession(
     session.info,
     input.agentSpawner || input.title

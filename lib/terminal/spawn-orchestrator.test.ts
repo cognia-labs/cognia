@@ -10,10 +10,22 @@ import {
   RESTART_NOT_LOCAL_PTY,
 } from "./spawn-orchestrator"
 import { __clearLiveSessionsForTesting, getLiveSession } from "./session-registry"
+import { TerminalSession } from "./session"
 import { RemoteTerminalSession } from "./transport-ws"
 import type { SpawnRequest, SessionInfo } from "./types"
 
 jest.mock("./pick-transport", () => ({ selectTerminalTransportChain: jest.fn(() => []) }))
+// What a pinned-local spawn asks about the shell: is there a local PTY, and is
+// the dock pointed at a remote Host right now.
+const mockHost = { tauri: false, remoteActive: false }
+jest.mock("@/lib/tauri", () => ({
+  ...jest.requireActual("@/lib/tauri"),
+  isTauri: () => mockHost.tauri,
+}))
+jest.mock("@/lib/tauri/transport-routing", () => ({
+  ...jest.requireActual("@/lib/tauri/transport-routing"),
+  isRemoteHostActive: () => mockHost.remoteActive,
+}))
 jest.mock("./host-profiles", () => ({
   ...jest.requireActual("./host-profiles"),
   ensureRemoteSpawnProfile: jest.fn(async (req: SpawnRequest) => req.profileId ?? "default"),
@@ -735,6 +747,77 @@ describe("spawnFromDock", () => {
       },
     })
     expect(capturedReq!.shell).toBe("/usr/local/bin/fish")
+  })
+})
+
+describe("spawnFromDock — pinned to this machine (A09)", () => {
+  const { selectTerminalTransportChain } = jest.requireMock("./pick-transport") as {
+    selectTerminalTransportChain: jest.Mock
+  }
+
+  afterEach(() => {
+    mockHost.tauri = false
+    mockHost.remoteActive = false
+    jest.restoreAllMocks()
+  })
+
+  it("uses the local PTY even while the dock is pointed at a remote Host", async () => {
+    mockHost.tauri = true
+    mockHost.remoteActive = true
+    selectTerminalTransportChain.mockReturnValue(["ws", "webrtc"])
+    const local = makeFakeSession("local-preview")
+    const localSpawn = jest
+      .spyOn(TerminalSession, "spawn")
+      .mockResolvedValue(local as unknown as TerminalSession)
+    const remote = jest.spyOn(RemoteTerminalSession, "spawn")
+    const store = { ...makeFakeStore(), setHostState: jest.fn() }
+
+    await expect(
+      spawnFromDock({ req: baseReq, store, hooks: makeFakeHooks() as never, local: true })
+    ).resolves.toEqual({ kind: "spawned", sessionId: "local-preview", shell: "/bin/bash" })
+
+    expect(localSpawn).toHaveBeenCalledTimes(1)
+    expect(remote).not.toHaveBeenCalled()
+    // The badge describes the remote Host; a local preview says nothing about it.
+    expect(store.setHostState).not.toHaveBeenCalled()
+  })
+
+  it("fails rather than landing on another machine when there is no local PTY", async () => {
+    mockHost.tauri = false
+    selectTerminalTransportChain.mockReturnValue(["ws"])
+    const remote = jest.spyOn(RemoteTerminalSession, "spawn")
+    const store = makeFakeStore()
+
+    await expect(
+      spawnFromDock({ req: baseReq, store, hooks: makeFakeHooks() as never, local: true })
+    ).resolves.toEqual({ kind: "error", message: "local terminal unavailable" })
+    expect(remote).not.toHaveBeenCalled()
+    expect(store.registered).toEqual([])
+  })
+
+  it("reports host state for a local failure only when local is the selected Host", async () => {
+    mockHost.tauri = true
+    jest.spyOn(TerminalSession, "spawn").mockRejectedValue(new Error("pty failed"))
+
+    mockHost.remoteActive = true
+    const remoteSelected = { ...makeFakeStore(), setHostState: jest.fn() }
+    await spawnFromDock({
+      req: baseReq,
+      store: remoteSelected,
+      hooks: makeFakeHooks() as never,
+      local: true,
+    })
+    expect(remoteSelected.setHostState).not.toHaveBeenCalled()
+
+    mockHost.remoteActive = false
+    const localSelected = { ...makeFakeStore(), setHostState: jest.fn() }
+    await spawnFromDock({
+      req: baseReq,
+      store: localSelected,
+      hooks: makeFakeHooks() as never,
+      local: true,
+    })
+    expect(localSelected.setHostState).toHaveBeenCalledWith(expect.any(String), "pty failed")
   })
 })
 
