@@ -24,6 +24,7 @@ import { assertSiteAuthoringCapability } from "./authoring-policy"
 import { runConfinedSiteBuild, type ConfinedSiteBuildResult } from "./confined-build"
 import { parseSiteHostingManifest, type SiteHostingManifest } from "./manifest"
 import { resolveSiteManifestPath, resolveSiteSourceDir } from "./manifest-file"
+import { measureSiteToolchain } from "./toolchain"
 import type {
   SiteBuildPhase,
   SiteProjectRow,
@@ -50,6 +51,8 @@ interface BuildVersionDeps {
   readDir: (path: string) => Promise<LocalEntry[]>
   gitSnapshot: (repoPath: string) => Promise<{ commit: GitCommit | undefined; status: GitStatus }>
   runBuild: typeof runConfinedSiteBuild
+  /** Asks the sandbox for each tool's version, through {@link runBuild}. */
+  measureToolchain: typeof measureSiteToolchain
   getSite: typeof getSiteProject
   getEnvironment: typeof getSiteEnvironmentRevision
   createDraft: typeof createSiteVersionDraft
@@ -98,6 +101,7 @@ function defaults(): BuildVersionDeps {
     },
     gitSnapshot: defaultGitSnapshot,
     runBuild: runConfinedSiteBuild,
+    measureToolchain: measureSiteToolchain,
     getSite: getSiteProject,
     getEnvironment: getSiteEnvironmentRevision,
     createDraft: createSiteVersionDraft,
@@ -244,6 +248,17 @@ export async function buildAndSaveSiteVersion(
     await deps.readText(await resolveSiteManifestPath(site, deps.join))
   )
   const source = await resolveSiteBuildSource(site, manifest, deps)
+  // Asked before anything is drafted: a version records the toolchain it was
+  // built with, so one the sandbox cannot provide never becomes a version.
+  const toolchain = await deps.measureToolchain(
+    {
+      runtime: input.runtime,
+      packageManager: input.packageManager,
+      sandbox: { cwd: sourceDir, writableRoots: [sourceDir], readableRoots: [site.sourceRoot] },
+      packageManagerNetworkHosts: input.installNetworkHosts,
+    },
+    deps.runBuild
+  )
 
   const versionId = deps.newId("siteversion")
   let version: SiteVersionRow
@@ -257,6 +272,7 @@ export async function buildAndSaveSiteVersion(
         command: JSON.stringify(manifest.build.command),
         runtime: input.runtime,
         packageManager: input.packageManager,
+        toolchain,
         compatibilityDate: manifest.cloudflare.compatibilityDate,
         compatibilityFlags: manifest.cloudflare.compatibilityFlags,
         routes: manifest.cloudflare.routes ?? [],

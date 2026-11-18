@@ -109,6 +109,28 @@ it("invites a first build when there are no versions", () => {
   expect(screen.getByText("versions.empty")).toBeInTheDocument()
 })
 
+it("shows the toolchain the sandbox measured, and nothing for a version without one (F14)", () => {
+  renderTab({
+    versions: [
+      version({
+        id: "v2",
+        sequence: 2,
+        build: {
+          ...version({ id: "x" }).build,
+          toolchain: { runtime: "node@24.3.0", packageManager: "pnpm@10.12.1" },
+        },
+      }),
+      version({ id: "v1", sequence: 1 }),
+    ],
+  })
+  const measured = screen.getAllByTestId("site-version-toolchain")
+  expect(measured).toHaveLength(1)
+  expect(measured[0]).toHaveTextContent(
+    'versions.toolchainValue:{"runtime":"node@24.3.0","packageManager":"pnpm@10.12.1"}'
+  )
+  expect(measured[0]).toHaveAttribute("title", "versions.toolchain")
+})
+
 it("renders building and failed versions, which the old panel hid entirely", () => {
   renderTab({
     versions: [

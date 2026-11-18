@@ -43,10 +43,31 @@ export interface SiteScaffoldFile {
   contents: string
 }
 
+/**
+ * Frameworks whose default build is a server bundle.
+ *
+ * The generated Worker hands every request to the static assets binding and
+ * runs no framework server, so "Next.js detected" says nothing about whether
+ * the project can deploy. These only can once their build is configured for
+ * static output — the console says so instead of implying the defaults work.
+ */
+export type SiteServerFramework = "next" | "sveltekit" | "remix"
+
+const SERVER_FRAMEWORKS: ReadonlySet<SiteProjectKind> = new Set(["next", "sveltekit", "remix"])
+
+export function siteServerFramework(kind: SiteProjectKind): SiteServerFramework | undefined {
+  return SERVER_FRAMEWORKS.has(kind) ? (kind as SiteServerFramework) : undefined
+}
+
 export interface SiteScaffoldResult {
   kind: SiteProjectKind
   packageManager: SitePackageManager
   confidence: SiteScaffoldConfidence
+  /**
+   * Set when {@link kind} only deploys as a static export (see
+   * {@link SiteServerFramework}); absent when its default build already is.
+   */
+  serverFramework?: SiteServerFramework
   manifest: SiteHostingManifest
   /** Files that must be written alongside the manifest. */
   extraFiles: SiteScaffoldFile[]
@@ -208,10 +229,12 @@ export function scaffoldSiteHostingManifest(
       bindings: [],
     },
   }
+  const serverFramework = siteServerFramework(kind)
   return {
     kind,
     packageManager,
     confidence: siteScaffoldConfidence(kind),
+    ...(serverFramework ? { serverFramework } : {}),
     manifest,
     extraFiles: [{ relativePath: SITE_WORKER_ENTRY_PATH, contents: SITE_WORKER_ENTRY_SOURCE }],
   }

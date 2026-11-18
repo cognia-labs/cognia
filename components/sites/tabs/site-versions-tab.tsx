@@ -100,6 +100,15 @@ const SiteVersionRow = memo(function SiteVersionRow({
             {t("versions.dirty")}
           </Badge>
         ) : null}
+        {version.build.toolchain ? (
+          <code
+            className="truncate font-mono text-[10px] text-muted-foreground"
+            title={t("versions.toolchain")}
+            data-testid="site-version-toolchain"
+          >
+            {t("versions.toolchainValue", version.build.toolchain)}
+          </code>
+        ) : null}
         {version.build.bindings.map((binding) => (
           <Badge
             key={binding.name}

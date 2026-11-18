@@ -16,7 +16,7 @@
  */
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
-import { FileJsonIcon, RefreshCwIcon, SparklesIcon } from "lucide-react"
+import { FileJsonIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from "lucide-react"
 
 import { LightCodeEditor } from "@/components/editor/light-code-editor"
 import { Badge } from "@/components/ui/badge"
@@ -31,7 +31,11 @@ import {
 } from "@/components/ui/empty"
 import { SITE_MANIFEST_RELATIVE_PATH } from "@/lib/sites/manifest-file"
 import { parseSiteHostingManifest } from "@/lib/sites/manifest"
-import { serializeSiteHostingManifest, type SiteScaffoldFile } from "@/lib/sites/manifest-scaffold"
+import {
+  serializeSiteHostingManifest,
+  type SiteScaffoldFile,
+  type SiteServerFramework,
+} from "@/lib/sites/manifest-scaffold"
 import { cn } from "@/lib/utils"
 import type { SiteHostingManifestController } from "@/hooks/sites/use-site-hosting-manifest"
 import type { SiteGate } from "@/hooks/sites/use-site-action-gate"
@@ -63,6 +67,7 @@ export function SiteManifestEditor({ manifest, gate, isBusy, onSave }: SiteManif
     kind: string
     packageManager: string
     template: boolean
+    serverFramework?: SiteServerFramework
   } | null>(null)
   const [scaffolding, setScaffolding] = useState(false)
 
@@ -109,6 +114,7 @@ export function SiteManifestEditor({ manifest, gate, isBusy, onSave }: SiteManif
         kind: result.kind,
         packageManager: result.packageManager,
         template: result.confidence === "template",
+        ...(result.serverFramework ? { serverFramework: result.serverFramework } : {}),
       })
     } finally {
       setScaffolding(false)
@@ -250,6 +256,16 @@ export function SiteManifestEditor({ manifest, gate, isBusy, onSave }: SiteManif
           <span>{t("manifest.extraFiles", { count: pendingFiles.length })}</span>
         ) : null}
       </div>
+      {detected?.serverFramework ? (
+        <p
+          role="note"
+          className="flex items-start gap-1.5 text-xs text-warning"
+          data-testid="site-manifest-static-export"
+        >
+          <TriangleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          {t(`manifest.staticExport.${detected.serverFramework}`)}
+        </p>
+      ) : null}
     </div>
   )
 }

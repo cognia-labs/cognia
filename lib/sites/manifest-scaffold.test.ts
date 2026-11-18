@@ -7,6 +7,7 @@ import {
   scaffoldSiteHostingManifestFromProbe,
   serializeSiteHostingManifest,
   siteScaffoldConfidence,
+  siteServerFramework,
   type SiteProjectKind,
   type SiteProjectProbe,
 } from "./manifest-scaffold"
@@ -154,6 +155,28 @@ describe("scaffoldSiteHostingManifest", () => {
         .confidence
     ).toBe("template")
   })
+})
+
+describe("frameworks that only deploy as a static export (F14)", () => {
+  // The generated Worker serves static assets and runs no framework server,
+  // so "Next.js detected" must not read as "deployable as configured".
+  it.each(["next", "sveltekit", "remix"] as const)("flags %s", (kind) => {
+    expect(siteServerFramework(kind)).toBe(kind)
+    expect(
+      scaffoldSiteHostingManifest(kind, { packageManager: "pnpm", compatibilityDate: DATE })
+        .serverFramework
+    ).toBe(kind)
+  })
+
+  it.each(["astro", "vite", "static", "node", "unknown"] as const)(
+    "does not flag %s, whose default build is already static",
+    (kind) => {
+      expect(siteServerFramework(kind)).toBeUndefined()
+      expect(
+        scaffoldSiteHostingManifest(kind, { packageManager: "pnpm", compatibilityDate: DATE })
+      ).not.toHaveProperty("serverFramework")
+    }
+  )
 })
 
 describe("scaffoldSiteHostingManifestFromProbe", () => {

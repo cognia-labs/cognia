@@ -7,6 +7,7 @@ import type { RuntimeSnapshot } from "./operation-availability"
 import { resolveRuntimeRecovery } from "./recovery-resolver"
 import {
   SURFACE_CONTRACTS,
+  companionSitesShowLocalDatabase,
   getSurfaceContract,
   getSurfaceContractForRoute,
   isInternalRouteExempt,
@@ -106,6 +107,30 @@ it("shows a host surface only when the Companion advertises the operation", () =
       host: { ...companion.host!, operations: [] },
     })
   ).toBe(false)
+})
+
+describe("/sites on a paired client (ADR-0084, F15)", () => {
+  it("does not claim the Host's Sites: the console reads this device's database", () => {
+    // `remote` promised a paired phone the desktop's production state; nothing
+    // serves it. Lifted only by a Host projection of the Sites tables.
+    expect(getSurfaceContract("sites")).toMatchObject({ companion: "explain" })
+    expect(companionSitesShowLocalDatabase).toEqual({
+      surfaceId: "sites",
+      reason: "sites-not-mirrored",
+    })
+  })
+
+  it("is still shown to a paired client, which has its own Sites to read", () => {
+    const sites = getSurfaceContract("sites")!
+    expect(
+      shouldShowSurface(
+        sites,
+        snapshot({
+          target: { id: "desktop", kind: "companion", hostKind: "desktop", platform: "mobile" },
+        })
+      )
+    ).toBe(true)
+  })
 })
 
 describe("the pet (runtime on desktop, console remote, ADR-0058 D9 / D16, ADR-0219)", () => {

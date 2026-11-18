@@ -86,11 +86,15 @@ export const SURFACE_CONTRACTS = [
     offline: "cached-read",
   },
   {
+    // Not `remote`: nothing serves a Host's Sites to a paired client. The
+    // console renders over whichever database this shell owns (ADR-0084), and
+    // the projection of the Host's Sites is deferred — see
+    // `companionSitesShowLocalDatabase` below.
     id: "sites",
     route: "/sites",
     navigation: true,
     standalone: "full",
-    companion: "remote",
+    companion: "explain",
     offline: "cached-read",
   },
   {
@@ -414,6 +418,32 @@ export const standaloneInboxRequiresHost = {
   surfaceId: "inbox",
   reason: "connector-runtime-absent",
   remedy: "/pair",
+} as const
+
+/**
+ * `/sites` on a paired client shows that client's own Sites, not the Host's.
+ *
+ * The contract said `companion: "remote"`, which every other remote surface
+ * honours with a Host call or a mirrored table. Sites has neither: the console
+ * reads the local Dexie tables and ADR-0084 defers the mobile projection, so a
+ * paired phone or browser could not see the desktop's production version or
+ * status, while the contract claimed it could.
+ *
+ * Documented on all three axes (CLAUDE.md rule 7):
+ *
+ *  1. **Type** — the `sites` contract above is `companion: "explain"`, and this
+ *     constant carries the reason.
+ *  2. **UI** — `components/sites/sites-console.tsx` says so in its host banner
+ *     off the desktop, and `components/sites/site-mobile-overview.tsx` in its
+ *     empty and read-only notes.
+ *  3. **Test** — pinned by `lib/runtime/surface-contract.test.ts` and
+ *     `components/sites/sites-console.test.tsx`.
+ *
+ * A Host projection of the Sites tables lifts it.
+ */
+export const companionSitesShowLocalDatabase = {
+  surfaceId: "sites",
+  reason: "sites-not-mirrored",
 } as const
 
 /**

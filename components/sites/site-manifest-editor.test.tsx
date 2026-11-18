@@ -141,6 +141,64 @@ it("labels an unrecognized project as a template that needs review", async () =>
   await waitFor(() => expect(screen.getByText("manifest.confidence.template")).toBeInTheDocument())
 })
 
+it("says a server framework deploys only as a static export (F14)", async () => {
+  const user = userEvent.setup()
+  render(
+    <SiteManifestEditor
+      manifest={controller({
+        state: { status: "missing", path: "/p" },
+        ready: false,
+        text: "",
+        scaffold: jest.fn(async () => ({
+          kind: "next" as const,
+          packageManager: "pnpm" as const,
+          confidence: "detected" as const,
+          serverFramework: "next" as const,
+          manifest: JSON.parse(VALID),
+          extraFiles: [],
+          text: VALID,
+        })),
+      })}
+      gate={allowed}
+      isBusy={() => false}
+      onSave={jest.fn()}
+    />
+  )
+  await user.click(screen.getByTestId("site-manifest-scaffold"))
+  await waitFor(() =>
+    expect(screen.getByTestId("site-manifest-static-export")).toHaveTextContent(
+      "manifest.staticExport.next"
+    )
+  )
+})
+
+it("adds no static-export note for a framework whose build is already static", async () => {
+  const user = userEvent.setup()
+  render(
+    <SiteManifestEditor
+      manifest={controller({
+        state: { status: "missing", path: "/p" },
+        ready: false,
+        text: "",
+        scaffold: jest.fn(async () => ({
+          kind: "vite" as const,
+          packageManager: "pnpm" as const,
+          confidence: "detected" as const,
+          manifest: JSON.parse(VALID),
+          extraFiles: [],
+          text: VALID,
+        })),
+      })}
+      gate={allowed}
+      isBusy={() => false}
+      onSave={jest.fn()}
+    />
+  )
+  await user.click(screen.getByTestId("site-manifest-scaffold"))
+  await waitFor(() => expect(screen.getByText(/manifest.detected/)).toBeInTheDocument())
+  expect(screen.queryByTestId("site-manifest-static-export")).not.toBeInTheDocument()
+})
+
 it("blocks saving a draft the real parser rejects", async () => {
   const user = userEvent.setup()
   const onSave = jest.fn()

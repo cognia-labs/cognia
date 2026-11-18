@@ -123,6 +123,10 @@ function dependencies(
       status: cleanStatus,
     }),
     runBuild,
+    measureToolchain: jest.fn(async () => ({
+      runtime: "node@24.3.0",
+      packageManager: "pnpm@10.12.1",
+    })),
     getSite: jest.fn(async () => site),
     getEnvironment: jest.fn(async () => environment),
     createDraft,
@@ -176,6 +180,64 @@ it("runs install/build in confinement and saves a self-contained immutable versi
     2,
     expect.objectContaining({ argv: ["pnpm", "build"], networkHosts: undefined })
   )
+})
+
+it("records the toolchain the sandbox measured beside the one that was asked for (F14)", async () => {
+  const deps = dependencies()
+  await buildAndSaveSiteVersion(
+    {
+      siteId: "site_1",
+      environmentRevisionId: "env_1",
+      runtime: "node@24",
+      packageManager: "pnpm@10",
+      installNetworkHosts: ["registry.npmjs.org"],
+    },
+    deps
+  )
+
+  expect(deps.measureToolchain).toHaveBeenCalledWith(
+    {
+      runtime: "node@24",
+      packageManager: "pnpm@10",
+      sandbox: {
+        cwd: "/repo/apps/docs",
+        writableRoots: ["/repo/apps/docs"],
+        readableRoots: ["/repo"],
+      },
+      packageManagerNetworkHosts: ["registry.npmjs.org"],
+    },
+    deps.runBuild
+  )
+  expect(deps.createDraft).toHaveBeenCalledWith(
+    expect.objectContaining({
+      build: expect.objectContaining({
+        runtime: "node@24",
+        packageManager: "pnpm@10",
+        toolchain: { runtime: "node@24.3.0", packageManager: "pnpm@10.12.1" },
+      }),
+    })
+  )
+})
+
+it("drafts no version when the sandbox cannot provide the requested toolchain (F14)", async () => {
+  const deps = dependencies()
+  deps.measureToolchain.mockRejectedValueOnce(
+    new Error("Build runtime node@24 was requested, but the build sandbox runs node 20.11.0")
+  )
+  await expect(
+    buildAndSaveSiteVersion(
+      {
+        siteId: "site_1",
+        environmentRevisionId: "env_1",
+        runtime: "node@24",
+        packageManager: "pnpm@10",
+      },
+      deps
+    )
+  ).rejects.toThrow("node 20.11.0")
+  expect(deps.createDraft).not.toHaveBeenCalled()
+  expect(deps.queueOperation).not.toHaveBeenCalled()
+  expect(deps.runBuild).not.toHaveBeenCalled()
 })
 
 it("marks both the draft and operation failed when the confined build fails", async () => {
