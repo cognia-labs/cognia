@@ -251,6 +251,7 @@
     "0253-a-members-standing-reaches-the-host-and-every-partition-effect-answers-to-it",
     "0254-a-playbook-is-a-skill-that-compiles-to-a-workflow",
     "0255-runs-that-share-a-directory-keep-their-diffs-and-lose-undo",
-    "0257-a-remote-reader-folds-the-hosts-transcript-without-its-detail"
+    "0257-a-remote-reader-folds-the-hosts-transcript-without-its-detail",
+    "0258-every-environment-replaces-a-plugin-package-under-one-contract"
   ]
 }

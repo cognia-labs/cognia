@@ -106,6 +106,13 @@ import {
   type PreparedVscodeExtension,
 } from "./install-vscode-extension"
 import { getInstallOrigin, putInstallOrigin } from "@/lib/db/plugin-install-origins"
+import {
+  contractViolations,
+  scenariosFor,
+  type ReplacementObservation,
+  type ReplacementScenario,
+} from "@/lib/plugin/lifecycle/contract"
+import { runtimeResumeStateOf } from "@/lib/plugin/lifecycle/runtime-state"
 import type { VsCodeExtensionBlock } from "@/types/plugin/plugin-vscode"
 
 const upsertPluginMock = upsertPlugin as jest.Mock
@@ -594,6 +601,97 @@ describe("commit transaction (PL03, PL04, PL05)", () => {
     ])
     expect(upsertPluginMock).toHaveBeenLastCalledWith(previousRow)
     expect(removeFile).not.toHaveBeenCalled()
+  })
+})
+
+describe("lifecycle contract (ADR-0258)", () => {
+  const VERSIONS = { from: "0.9.0", to: "1.0.0" }
+  const STATUS_OF = {
+    enabled: "enabled",
+    suspended: "suspended",
+    loaded: "loaded",
+    stopped: "installed",
+  } as const
+
+  afterEach(() => {
+    upsertPluginMock.mockImplementation(async (draft) => draft)
+    mockBackup.restore.mockImplementation(async (backupId: string) => {
+      mockEvents.push(`restore-backup:${backupId}`)
+      return {
+        success: true,
+        pluginId: "",
+        restoredVersion: "",
+        duration: 0,
+        requiresRestart: false,
+      }
+    })
+    ;(getPlugin as jest.Mock).mockResolvedValue(undefined)
+    ;(getInstallOrigin as jest.Mock).mockResolvedValue(undefined)
+  })
+
+  /** Install v1.0.0 over an installed v0.9.0, with `scenario`'s fault injected. */
+  async function run(scenario: ReplacementScenario): Promise<ReplacementObservation> {
+    installed(VERSIONS.from, STATUS_OF[scenario.before])
+    let disk: string | undefined = VERSIONS.from
+    let recorded: string | undefined = VERSIONS.from
+    const prepared = await prepareVscodeExtension(await buildVsix(BENIGN), "vsix-upload")
+
+    invokeMock.mockImplementation(async (_command: string, args: { expectedSha256: string }) => {
+      // The host refuses bytes other than the reviewed ones before unpacking.
+      if (scenario.fault === "identity") throw { code: "digest_mismatch", message: "not reviewed" }
+      disk = VERSIONS.to
+      return {
+        extensionId: "cognia.hello",
+        installPath: INSTALL_PATH,
+        sha256Hex: args.expectedSha256,
+        packageJson: {},
+      }
+    })
+    mockBackup.restore.mockImplementation(async () => {
+      disk = VERSIONS.from
+      return {
+        success: true,
+        pluginId: "",
+        restoredVersion: "",
+        duration: 0,
+        requiresRestart: false,
+      }
+    })
+    upsertPluginMock.mockImplementation(async (draft: { version: string }) => {
+      if (scenario.fault === "after-commit" && draft.version === VERSIONS.to) {
+        throw new Error("quota exceeded")
+      }
+      recorded = draft.version
+      return draft
+    })
+    if (scenario.fault === "before-commit") {
+      mockBackup.createBackup.mockResolvedValueOnce({
+        success: false,
+        error: "disk full",
+        duration: 0,
+      } as never)
+    }
+
+    let outcome: ReplacementObservation["outcome"] = "succeeded"
+    try {
+      await commitVscodeExtension(prepared)
+    } catch {
+      outcome = "failed"
+    }
+    return {
+      outcome,
+      // The commit reports a runtime it could not restart as an activation warning.
+      restartRequired: (dispatchPluginError as jest.Mock).mock.calls.some(
+        ([detail]) => detail.stage === "activation"
+      ),
+      packageVersion: disk,
+      recordedVersion: recorded,
+      runtime: runtimeResumeStateOf(mockStore.plugins["cognia.hello"]?.status),
+    }
+  }
+
+  it.each(scenariosFor("vscode-install"))("$id", async (scenario) => {
+    expect(contractViolations(scenario, VERSIONS, await run(scenario))).toEqual([])
   })
 })
 

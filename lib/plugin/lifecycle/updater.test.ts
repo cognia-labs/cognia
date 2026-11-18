@@ -16,6 +16,13 @@ import {
   resetPluginUpdater,
 } from "./updater"
 import type { PluginInstallOrigin } from "@/types/plugin/plugin-cogset"
+import {
+  contractViolations,
+  scenariosFor,
+  type ReplacementObservation,
+  type ReplacementScenario,
+} from "./contract"
+import { runtimeResumeStateOf } from "./runtime-state"
 
 jest.mock("@/stores/plugin-runtime", () => ({
   usePluginStore: {
@@ -1585,6 +1592,82 @@ describe("PluginUpdater", () => {
       managerModule.__enablePluginSpy.mockRejectedValueOnce(new Error("activation rejected"))
       expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: false })
       expect(recordOriginSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("lifecycle contract (ADR-0258)", () => {
+    const VERSIONS = { from: "1.0.0", to: "2.0.0" }
+    const STATUS_OF = {
+      enabled: "enabled",
+      suspended: "suspended",
+      loaded: "loaded",
+      stopped: "installed",
+    } as const
+    const stateful = [
+      managerModule.__disablePluginSpy,
+      managerModule.__loadPluginSpy,
+      managerModule.__suspendPluginSpy,
+    ]
+
+    afterEach(() => {
+      for (const spy of stateful) spy.mockReset().mockResolvedValue(undefined)
+      managerModule.__scanPluginsSpy.mockReset().mockResolvedValue([])
+    })
+
+    /** Update the installed v1.0.0 to the registry's v2.0.0, with `scenario`'s fault. */
+    async function run(scenario: ReplacementScenario): Promise<ReplacementObservation> {
+      const plugin = () =>
+        mockGetStoreState().plugins["plugin-a"] as unknown as {
+          status: string
+          manifest: { version: string }
+        }
+      plugin().status = STATUS_OF[scenario.before]
+      const become = (status: string) => async () => void (plugin().status = status)
+      managerModule.__disablePluginSpy.mockImplementation(become("disabled"))
+      managerModule.__enablePluginSpy.mockImplementation(become("enabled"))
+      managerModule.__loadPluginSpy.mockImplementation(become("loaded"))
+      managerModule.__suspendPluginSpy.mockImplementation(become("suspended"))
+      // The store's manifest stands for the package on disk.
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        plugin().manifest.version = VERSIONS.to
+      })
+      backupModule.__restoreBackupSpy.mockImplementation(async () => {
+        plugin().manifest.version = VERSIONS.from
+        return { success: true }
+      })
+
+      if (scenario.fault === "identity") {
+        // The registry staged another release than the one asked for.
+        const reviewed = await stagePluginUpdate.getMockImplementation()?.("plugin-a", {})
+        stagePluginUpdate.mockResolvedValueOnce({
+          ...(reviewed as object),
+          version: "2.0.1",
+          manifest: { ...(reviewed as { manifest: object }).manifest, version: "2.0.1" },
+        })
+      }
+      if (scenario.fault === "before-commit") {
+        // The recovery marker cannot be written after the runtime stopped (PL08).
+        backupModule.__beginRecoverySpy.mockImplementationOnce(() => {
+          throw new Error("recovery marker not written")
+        })
+      }
+      if (scenario.fault === "after-commit") {
+        managerModule.__scanPluginsSpy.mockRejectedValueOnce(new Error("refresh failed"))
+      }
+
+      const result = await updater.installUpdate("plugin-a", VERSIONS.to)
+      const origins = recordOriginSpy.mock.calls as unknown as Array<[{ version: string }]>
+      return {
+        outcome: result.success ? "succeeded" : "failed",
+        restartRequired: Boolean(result.requiresRestart),
+        packageVersion: plugin().manifest.version,
+        recordedVersion: origins.at(-1)?.[0].version ?? VERSIONS.from,
+        runtime: runtimeResumeStateOf(plugin().status),
+      }
+    }
+
+    it.each(scenariosFor("desktop-update"))("$id", async (scenario) => {
+      expect(contractViolations(scenario, VERSIONS, await run(scenario))).toEqual([])
     })
   })
 

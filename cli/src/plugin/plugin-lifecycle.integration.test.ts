@@ -16,6 +16,14 @@ import path from "node:path"
 import nodeFs from "node:fs"
 import nodeFsP from "node:fs/promises"
 
+import {
+  contractViolations,
+  scenariosFor,
+  type ReplacementObservation,
+  type ReplacementScenario,
+} from "@/lib/plugin/lifecycle/contract"
+import { runtimeResumeStateOf } from "@/lib/plugin/lifecycle/runtime-state"
+
 import { pluginUpdate } from "../tui/runtime/plugin-controller"
 import { recordOrigin, getOrigin } from "./plugin-origins"
 import type { HostManager } from "./host"
@@ -166,5 +174,127 @@ describe("plugin update — real refetch + origins store", () => {
     expect((actions[0] as { message: string }).message).toMatch(
       /Updates available.*demo\.plugin.*3\.0\.0/
     )
+  })
+})
+
+describe("lifecycle contract (ADR-0258)", () => {
+  const VERSIONS = { from: "1.0.0", to: "2.0.0" }
+  const STATUS_OF = {
+    enabled: "enabled",
+    suspended: "suspended",
+    loaded: "loaded",
+    stopped: "installed",
+  } as const
+  const realFetch = globalThis.fetch
+  let home: string
+  beforeEach(() => {
+    home = nodeFs.mkdtempSync(path.join(os.tmpdir(), "cognia-contract-"))
+  })
+  afterEach(async () => {
+    ;(globalThis as { fetch: unknown }).fetch = realFetch
+    await nodeFsP.rm(home, { recursive: true, force: true })
+  })
+
+  /** A live manager whose status follows the lifecycle calls it receives. */
+  function statefulHost(status: string, scenario: ReplacementScenario) {
+    let current = status
+    const become = (next: string) => async () => void (current = next)
+    const host: HostManager = {
+      registerDiskPlugin: async () => {
+        if (scenario.fault === "after-commit") throw new Error("the new manifest was rejected")
+      },
+      loadPlugin: become("loaded"),
+      enablePlugin: become("enabled"),
+      disablePlugin: become("disabled"),
+      suspendPlugin: become("suspended"),
+      setPluginIntent: async () => undefined,
+      unloadPlugin: become("installed"),
+      reloadPlugin: async () => undefined,
+      withPluginPackageMutation: async (_id, operation) => {
+        // The package fence refuses after the runtime was stopped.
+        if (scenario.fault === "before-commit") throw new Error("package mutation refused")
+        return operation()
+      },
+      reservePluginRuntimeGraph: (id) =>
+        ({ managerId: "m", pluginId: id, token: Symbol(id) }) as never,
+      releasePluginRuntimeGraph: () => undefined,
+      list: () => [
+        {
+          id: "demo.plugin",
+          name: "Demo",
+          version: VERSIONS.from,
+          type: "frontend",
+          path: path.join(home, ".cognia", "plugins", "demo.plugin"),
+          status: current,
+        },
+      ],
+    }
+    return { host, status: () => current }
+  }
+
+  /** Update an installed v1.0.0 to the v2.0.0 upstream serves, with `scenario`'s fault. */
+  async function run(scenario: ReplacementScenario): Promise<ReplacementObservation> {
+    const dir = path.join(home, ".cognia", "plugins", "demo.plugin")
+    nodeFs.mkdirSync(dir, { recursive: true })
+    nodeFs.writeFileSync(path.join(dir, "plugin.json"), manifestText(VERSIONS.from))
+    nodeFs.writeFileSync(path.join(dir, "main.js"), "export default {}")
+    recordOrigin(home, "demo.plugin", {
+      repoRef: "owner/repo",
+      version: VERSIONS.from,
+      fingerprint: "stale",
+    })
+
+    const upstream =
+      scenario.fault === "identity"
+        ? JSON.stringify({ ...JSON.parse(manifestText(VERSIONS.to)), id: "other.plugin" })
+        : manifestText(VERSIONS.to)
+    installFetch(() => ({
+      "plugin.json": upstream,
+      "": [
+        { type: "file", path: "plugin.json" },
+        { type: "file", path: "main.js" },
+      ],
+      "main.js": `export default { v: "${VERSIONS.to}" }`,
+    }))
+    const controller = new AbortController()
+    const serve = globalThis.fetch
+    ;(globalThis as { fetch: unknown }).fetch = jest.fn(async (url: string) => {
+      // Cancelled while the bundle is still downloading.
+      if (scenario.fault === "cancel" && /contents\/main\.js/.test(String(url))) controller.abort()
+      return serve(url)
+    })
+
+    const { host, status } = statefulHost(STATUS_OF[scenario.before], scenario)
+    const notices: string[] = []
+    await pluginUpdate("demo.plugin", {
+      roots: [home],
+      home,
+      dispatch: (action) => notices.push((action as { message?: string }).message ?? ""),
+      host: async () => host,
+      signal: controller.signal,
+    })
+
+    const notice = notices.join("\n")
+    const restartRequired = notice.includes("but restarting it failed")
+    const outcome: ReplacementObservation["outcome"] =
+      controller.signal.aborted && notices.length === 0
+        ? "cancelled"
+        : notice.startsWith('Updated "demo.plugin":') && !restartRequired
+          ? "succeeded"
+          : "failed"
+    const manifestPath = path.join(dir, "plugin.json")
+    return {
+      outcome,
+      restartRequired,
+      packageVersion: nodeFs.existsSync(manifestPath)
+        ? (JSON.parse(nodeFs.readFileSync(manifestPath, "utf8")) as { version: string }).version
+        : undefined,
+      recordedVersion: getOrigin(home, "demo.plugin")?.version,
+      runtime: runtimeResumeStateOf(status()),
+    }
+  }
+
+  it.each(scenariosFor("cli-update"))("$id", async (scenario) => {
+    expect(contractViolations(scenario, VERSIONS, await run(scenario))).toEqual([])
   })
 })
