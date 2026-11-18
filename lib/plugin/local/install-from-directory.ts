@@ -54,6 +54,18 @@ export interface InstallFromDirectoryOptions {
   viaCogpack?: CogpackProvenance
   /** The manifest version, when the caller already knows it. */
   version?: string
+  /**
+   * The plugin id the user reviewed. The host refuses a directory whose
+   * manifest names another plugin before it touches anything installed.
+   */
+  expectedPluginId?: string
+  /**
+   * The `plugin.json` the user reviewed, for a native directory. The host
+   * refuses one that changed since (a widened permission list, another
+   * version). A converted bundle's manifest is the overlay this call passes
+   * itself, so it needs none.
+   */
+  expectedManifest?: PluginManifest
 }
 
 function overlayVersion(generatedFiles: Record<string, string> | undefined): string | undefined {
@@ -109,8 +121,18 @@ export async function installPluginFromDirectory(
   try {
     const result = await invoke<{ pluginId: string; warnings: string[] }>(
       "plugin_install_from_directory",
-      { sourceDir, generatedFiles: options.generatedFiles }
+      {
+        sourceDir,
+        generatedFiles: options.generatedFiles,
+        expectedPluginId: options.expectedPluginId,
+        expectedManifest: options.expectedManifest,
+      }
     )
+    if (options.expectedPluginId && result.pluginId !== options.expectedPluginId) {
+      throw new Error(
+        `The host installed "${result.pluginId}" from ${sourceDir}, not the reviewed "${options.expectedPluginId}"`
+      )
+    }
     loggers.plugin.info(`[local-install] installed ${result.pluginId} from ${sourceDir}`)
     const origin = options.origin ?? { kind: "local", via: "directory" }
     await recordInstallOrigin({

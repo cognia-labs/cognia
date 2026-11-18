@@ -391,6 +391,66 @@ impl TreeWriter {
     }
 }
 
+/// One file a packager recorded for a plugin tree (the bundled-plugin seed
+/// catalog, `lib/plugin/distribution/bundled-plugins.generated.json`).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedPluginFile {
+    /// Path relative to the plugin root, `/`-separated.
+    pub path: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// Refuse a tree under `dir` that is not exactly `expected`: a missing, extra,
+/// resized or altered regular file. Symbolic links and `.git` are outside the
+/// installable tree here as they are for export.
+pub fn verify_plugin_tree_inventory(dir: &Path, expected: &[ExpectedPluginFile]) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let mut wanted = std::collections::BTreeMap::new();
+    for file in expected {
+        if wanted.insert(file.path.replace('\\', "/"), file).is_some() {
+            return Err(PluginError::Internal(format!(
+                "the expected plugin inventory lists {:?} twice",
+                file.path
+            )));
+        }
+    }
+    let root = dir.canonicalize()?;
+    let mut paths = Vec::new();
+    let mut total = 0u64;
+    collect(&root, COGPACK_TREE_LIMITS, &mut paths, &mut total)?;
+    for path in paths {
+        let relative = path
+            .strip_prefix(&root)
+            .map_err(|_| PluginError::Internal(format!("plugin file escaped its root: {path:?}")))?
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        let Some(entry) = wanted.remove(&relative) else {
+            return Err(PluginError::Internal(format!(
+                "plugin tree carries {relative}, which its inventory does not list"
+            )));
+        };
+        let bytes = std::fs::read(&path)?;
+        if bytes.len() as u64 != entry.bytes
+            || !hex::encode(Sha256::digest(&bytes)).eq_ignore_ascii_case(&entry.sha256)
+        {
+            return Err(PluginError::Internal(format!(
+                "{relative} does not match the size and sha256 its inventory records"
+            )));
+        }
+    }
+    if let Some(missing) = wanted.keys().next() {
+        return Err(PluginError::Internal(format!(
+            "plugin tree is missing {missing}, which its inventory lists"
+        )));
+    }
+    Ok(())
+}
+
 /// Host-neutral entry point: the plugin id names the directory, never a path.
 pub async fn plugin_export_tree_for_state(
     state: &PluginRuntimeState,
@@ -445,6 +505,57 @@ mod tests {
         );
         assert_eq!(js.size, 9);
         assert_eq!(exported.total_bytes, 9 + 10);
+    }
+
+    fn inventory_of(dir: &Path) -> Vec<ExpectedPluginFile> {
+        use sha2::{Digest, Sha256};
+        read_plugin_tree("x", dir)
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|file| {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&file.base64)
+                    .unwrap();
+                ExpectedPluginFile {
+                    path: file.path,
+                    bytes: bytes.len() as u64,
+                    sha256: hex::encode(Sha256::digest(&bytes)),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accepts_exactly_the_recorded_inventory() {
+        let dir = tree();
+        let expected = inventory_of(dir.path());
+        verify_plugin_tree_inventory(dir.path(), &expected).unwrap();
+    }
+
+    #[test]
+    fn refuses_an_altered_extra_missing_or_duplicated_file() {
+        let dir = tree();
+        let expected = inventory_of(dir.path());
+
+        std::fs::write(dir.path().join("dist/nested/a.js"), b"export {x}").unwrap();
+        let altered = verify_plugin_tree_inventory(dir.path(), &expected).unwrap_err();
+        assert!(altered.to_string().contains("dist/nested/a.js does not match"), "{altered}");
+        std::fs::write(dir.path().join("dist/nested/a.js"), b"export {}").unwrap();
+
+        std::fs::write(dir.path().join("extra.js"), b"1").unwrap();
+        let extra = verify_plugin_tree_inventory(dir.path(), &expected).unwrap_err();
+        assert!(extra.to_string().contains("extra.js"), "{extra}");
+        std::fs::remove_file(dir.path().join("extra.js")).unwrap();
+
+        std::fs::remove_file(dir.path().join("dist/nested/a.js")).unwrap();
+        let missing = verify_plugin_tree_inventory(dir.path(), &expected).unwrap_err();
+        assert!(missing.to_string().contains("missing dist/nested/a.js"), "{missing}");
+
+        let mut twice = expected.clone();
+        twice.push(expected[0].clone());
+        let duplicated = verify_plugin_tree_inventory(dir.path(), &twice).unwrap_err();
+        assert!(duplicated.to_string().contains("twice"), "{duplicated}");
     }
 
     #[cfg(unix)]

@@ -9,6 +9,10 @@
  * The "plugin id" surfaced to the chain is the directory path itself —
  * the chain never needs the real manifest id until step 1 (`getPlugin`),
  * which we resolve by reading `plugin.json` from disk.
+ *
+ * The manifest read for review is the one installed: the first read is kept,
+ * and the install hands its id (and, for a native directory, the manifest
+ * itself) to the host, which refuses a directory that changed in between.
  */
 
 import type { PluginManifest } from "@/types/plugin"
@@ -42,29 +46,36 @@ export function createLocalDirectoryClient(
   getPlugin: (id: string) => Promise<{ manifest: PluginManifest; name?: string } | null>
   installPlugin: (id: string, version?: string) => Promise<unknown>
 } {
-  let cachedManifest: PluginManifest | null = conversion?.manifest ?? null
+  let reviewed: PluginManifest | null = conversion?.manifest ?? null
   return {
     async getPlugin(_id: string) {
       // A converted bundle has no `plugin.json` on disk to read, and its
       // converted manifest is what the chain must gate on.
       if (conversion) return { manifest: conversion.manifest, name: conversion.manifest.name }
+      if (reviewed) return { manifest: reviewed, name: reviewed.name }
       try {
         const manifest = await previewLocalManifest(sourceDir)
-        cachedManifest = manifest
+        reviewed = manifest
         return { manifest, name: manifest.name }
       } catch {
         // Caller treats a null return as "plugin_not_found".
         return null
       }
     },
-    async installPlugin(_id: string, _version?: string) {
-      const pluginName = cachedManifest?.name
-      const receipt = await installPluginFromDirectory(sourceDir, {
-        pluginName,
+    async installPlugin(id: string, version?: string) {
+      if (!reviewed) throw new Error(`${sourceDir} was not reviewed before installing`)
+      if (id !== reviewed.id || (version && version !== reviewed.version)) {
+        throw new Error(
+          `Refusing to install ${id}@${version ?? "?"}: the review was of ${reviewed.id}@${reviewed.version}`
+        )
+      }
+      return installPluginFromDirectory(sourceDir, {
+        pluginName: reviewed.name,
         generatedFiles: conversion?.generatedFiles,
-        version: cachedManifest?.version,
+        version: reviewed.version,
+        expectedPluginId: reviewed.id,
+        ...(conversion ? {} : { expectedManifest: reviewed }),
       })
-      return receipt
     },
   }
 }

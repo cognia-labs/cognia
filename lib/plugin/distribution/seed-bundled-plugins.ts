@@ -17,7 +17,10 @@
  * already does exactly this job for the "Load unpacked" affordance, including
  * the part that is easy to get wrong: `replace_directory_atomically`, so a
  * crash mid-copy cannot leave a half-written plugin that the next scan would
- * try to load.
+ * try to load. It is handed the catalog entry's id and file inventory, and
+ * refuses a staged tree that disagrees with either before replacing anything,
+ * so the marker and the `builtin` origin below only ever describe what the
+ * catalog promised.
  *
  * ## Policy, stated rather than implied
  *
@@ -219,7 +222,14 @@ export async function seedBundledPluginsOnHost(): Promise<SeedOutcome> {
     },
     resolveResource: (relative) => resolveResource(relative),
     installFromDirectory: async (sourceDir, entry) => {
-      await invoke("plugin_install_from_directory", { sourceDir })
+      const receipt = await invoke<{ pluginId: string }>("plugin_install_from_directory", {
+        sourceDir,
+        expectedPluginId: entry.id,
+        expectedFiles: entry.files,
+      })
+      if (receipt.pluginId !== entry.id) {
+        throw new Error(`bundled ${entry.id} installed as "${receipt.pluginId}"`)
+      }
       // Ships with the installer, so it exports as a reference, never as a
       // copy of its files (ADR-0209).
       await recordInstallOrigin({

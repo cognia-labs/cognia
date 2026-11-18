@@ -133,6 +133,28 @@ describe("installPluginFromDirectory", () => {
     expect(mockDispatch).not.toHaveBeenCalled()
   })
 
+  it("hands the host the reviewed id and manifest to bind the install to (PL02)", async () => {
+    const reviewed = { id: "demo-plugin", name: "Demo", version: "1.0.0" } as never
+    mockInvoke.mockResolvedValueOnce({ pluginId: "demo-plugin", warnings: [] })
+    await installPluginFromDirectory("C:/plugins/demo", {
+      expectedPluginId: "demo-plugin",
+      expectedManifest: reviewed,
+    })
+    expect(mockInvoke).toHaveBeenCalledWith("plugin_install_from_directory", {
+      sourceDir: "C:/plugins/demo",
+      expectedPluginId: "demo-plugin",
+      expectedManifest: reviewed,
+    })
+  })
+
+  it("refuses a receipt for another plugin and records no origin for it (PL02)", async () => {
+    mockInvoke.mockResolvedValueOnce({ pluginId: "someone.else", warnings: [] })
+    await expect(
+      installPluginFromDirectory("C:/plugins/demo", { expectedPluginId: "demo-plugin" })
+    ).rejects.toThrow(/installed "someone\.else".*not the reviewed "demo-plugin"/)
+    expect(readUnpackedSources()["someone.else"]).toBeUndefined()
+  })
+
   it("normalizes missing warnings to an empty array", async () => {
     mockInvoke.mockResolvedValueOnce({ pluginId: "demo", warnings: undefined as never })
     const receipt = await installPluginFromDirectory("C:/plugins/demo")

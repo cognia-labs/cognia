@@ -862,6 +862,17 @@ async function runReviewedInstall(
     if (result && typeof result === "object" && "success" in result && result.success === false) {
       throw new Error("error" in result ? String(result.error) : "Plugin installation failed")
     }
+    // A receipt naming another plugin means something other than what the
+    // user reviewed was installed; never report the reviewed id as done.
+    if (
+      result &&
+      typeof result === "object" &&
+      "pluginId" in result &&
+      typeof result.pluginId === "string" &&
+      result.pluginId !== pluginId
+    ) {
+      throw new Error(`installed "${result.pluginId}" instead of the reviewed "${pluginId}"`)
+    }
   } catch (err) {
     return {
       status: "failed",

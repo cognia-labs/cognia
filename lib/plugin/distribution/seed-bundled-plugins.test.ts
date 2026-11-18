@@ -25,12 +25,14 @@ jest.mock("@tauri-apps/api/path", () => ({
   resolveResource: jest.fn(async (relative: string) => `/Bundle/${relative}`),
 }))
 jest.mock("@tauri-apps/api/core", () => ({
-  invoke: jest.fn(async (command: string) =>
+  invoke: jest.fn(async (command: string, args?: { expectedPluginId?: string }) =>
     command === "plugin_scan_directory"
       ? []
       : command === "plugin_get_directory"
         ? "/plugins"
-        : undefined
+        : command === "plugin_install_from_directory"
+          ? { pluginId: args?.expectedPluginId, warnings: [] }
+          : undefined
   ),
 }))
 jest.mock("@/lib/db/plugin-install-origins", () => ({
@@ -330,8 +332,11 @@ describe("seedBundledPluginsOnHost", () => {
     const entries = Object.entries(bundledPluginCatalog().entries)
     expect(outcome.seeded).toEqual(entries.map(([directory]) => directory))
     for (const [directory, entry] of entries) {
+      // The host refuses a staged tree that is not this catalog entry (PL12).
       expect(invoke).toHaveBeenCalledWith("plugin_install_from_directory", {
         sourceDir: `/Bundle/${STAGED_PLUGIN_ROOT}/${directory}`,
+        expectedPluginId: entry.id,
+        expectedFiles: entry.files,
       })
       expect(putInstallOrigin).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -341,5 +346,28 @@ describe("seedBundledPluginsOnHost", () => {
         })
       )
     }
+  })
+
+  it("records neither marker nor origin when the host installs another plugin (PL12)", async () => {
+    localStorage.removeItem(SEED_MARKER_KEY)
+    const { invoke } = jest.requireMock("@tauri-apps/api/core")
+    const { putInstallOrigin } = jest.requireMock("@/lib/db/plugin-install-origins")
+    putInstallOrigin.mockClear()
+    invoke.mockImplementation(async (command: string) =>
+      command === "plugin_scan_directory"
+        ? []
+        : command === "plugin_get_directory"
+          ? "/plugins"
+          : command === "plugin_install_from_directory"
+            ? { pluginId: "someone.else", warnings: [] }
+            : undefined
+    )
+    const outcome = await seedBundledPluginsOnHost()
+    expect(outcome.seeded).toEqual([])
+    expect(Object.values(outcome.failed).every((m) => /installed as "someone\.else"/.test(m))).toBe(
+      true
+    )
+    expect(putInstallOrigin).not.toHaveBeenCalled()
+    expect(localStorage.getItem(SEED_MARKER_KEY)).toBeNull()
   })
 })

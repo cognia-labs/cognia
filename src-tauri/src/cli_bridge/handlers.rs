@@ -673,7 +673,10 @@ async fn reload_inner(state: SharedState, req: ReloadRequest) -> Response {
             install_from_directory_blocking(
                 &blocking_state.app_handle,
                 source_dir,
-                requested_plugin_id.as_deref(),
+                DirectoryExpectation {
+                    plugin_id: requested_plugin_id.as_deref(),
+                    ..DirectoryExpectation::default()
+                },
                 &BTreeMap::new(),
                 true,
             )?
@@ -1352,6 +1355,35 @@ pub async fn plugin_dev_session_event(
     Json(json!({ "ok": true })).into_response()
 }
 
+/// What a caller vouched for about a directory before installing it. Every
+/// field it sets must hold for the tree actually staged, or nothing installed
+/// is touched: the "Load unpacked" review binds the id and manifest it showed,
+/// the bundled-plugin seed binds the id and the file inventory of its catalog.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DirectoryExpectation<'a> {
+    pub plugin_id: Option<&'a str>,
+    pub manifest: Option<&'a serde_json::Value>,
+    pub files: Option<&'a [cognia_plugin_runtime::plugin_tree::ExpectedPluginFile]>,
+}
+
+/// JSON equality that ignores how a number is spelled: a manifest that went
+/// through the renderer comes back with `1.0` as `1`.
+fn same_manifest_value(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x == y || x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_manifest_value(x, y))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(key, x)| y.get(key).is_some_and(|y| same_manifest_value(x, y)))
+        }
+        _ => a == b,
+    }
+}
+
 fn validate_expected_plugin_id(expected: Option<&str>, installed: &str) -> anyhow::Result<()> {
     if let Some(expected) = expected.filter(|value| !value.trim().is_empty()) {
         if expected != installed {
@@ -1549,8 +1581,13 @@ pub async fn install_from_directory_inner<P: tauri::Runtime>(
     app_handle: &tauri::AppHandle<P>,
     source_dir: &str,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    let package =
-        install_from_directory_blocking(app_handle, source_dir, None, &BTreeMap::new(), false)?;
+    let package = install_from_directory_blocking(
+        app_handle,
+        source_dir,
+        DirectoryExpectation::default(),
+        &BTreeMap::new(),
+        false,
+    )?;
     Ok((package.plugin_id, package.warnings))
 }
 
@@ -1562,10 +1599,11 @@ pub async fn install_from_directory_inner<P: tauri::Runtime>(
 pub async fn install_converted_from_directory_inner<P: tauri::Runtime>(
     app_handle: &tauri::AppHandle<P>,
     source_dir: &str,
+    expected: DirectoryExpectation<'_>,
     generated_files: &BTreeMap<String, String>,
 ) -> anyhow::Result<(String, Vec<String>)> {
     let package =
-        install_from_directory_blocking(app_handle, source_dir, None, generated_files, false)?;
+        install_from_directory_blocking(app_handle, source_dir, expected, generated_files, false)?;
     Ok((package.plugin_id, package.warnings))
 }
 
@@ -1586,7 +1624,10 @@ pub fn install_embedded_files_blocking<P: tauri::Runtime>(
     let package = install_from_directory_blocking(
         app_handle,
         &staging.path().to_string_lossy(),
-        Some(expected_plugin_id),
+        DirectoryExpectation {
+            plugin_id: Some(expected_plugin_id),
+            ..DirectoryExpectation::default()
+        },
         &BTreeMap::new(),
         false,
     )?;
@@ -1633,7 +1674,7 @@ fn stage_embedded_files(
 fn install_from_directory_blocking<P: tauri::Runtime>(
     app_handle: &tauri::AppHandle<P>,
     source_dir: &str,
-    expected_plugin_id: Option<&str>,
+    expected: DirectoryExpectation<'_>,
     generated_files: &BTreeMap<String, String>,
     stage_only: bool,
 ) -> anyhow::Result<LocalPackage> {
@@ -1662,6 +1703,11 @@ fn install_from_directory_blocking<P: tauri::Runtime>(
         .prefix(".cognia-plugin-convert-")
         .tempdir()?;
     copy_dir_recursive(&source, scratch.path())?;
+    // The inventory describes the source tree, before any conversion overlay.
+    if let Some(files) = expected.files {
+        cognia_plugin_runtime::plugin_tree::verify_plugin_tree_inventory(scratch.path(), files)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", source.display()))?;
+    }
     if converting {
         cognia_plugin_runtime::generated_files::apply_generated_files(
             scratch.path(),
@@ -1679,7 +1725,15 @@ fn install_from_directory_blocking<P: tauri::Runtime>(
     }
     let manifest_bytes = std::fs::read(&staged_manifest)?;
     let (manifest, plugin_id) = read_manifest_from_bytes(&manifest_bytes)?;
-    validate_expected_plugin_id(expected_plugin_id, &plugin_id)?;
+    validate_expected_plugin_id(expected.plugin_id, &plugin_id)?;
+    if let Some(reviewed) = expected.manifest {
+        if !same_manifest_value(reviewed, &manifest) {
+            anyhow::bail!(
+                "plugin.json in {} changed after it was reviewed; review it again",
+                source.display()
+            );
+        }
+    }
 
     let plugin_state = app_handle.state::<PluginRuntimeState>();
     let target_dir = plugin_state.plugin_dir(&plugin_id);
@@ -2271,6 +2325,22 @@ mod tests {
         );
         assert_eq!(request.attempt, 7);
         assert!(request.activate);
+    }
+
+    #[test]
+    fn reviewed_manifest_comparison_ignores_number_spelling_only() {
+        let reviewed = json!({"id": "a", "version": "1.0.0", "weight": 1, "tags": ["x"]});
+        let staged: serde_json::Value =
+            serde_json::from_str(r#"{"tags":["x"],"weight":1.0,"version":"1.0.0","id":"a"}"#)
+                .unwrap();
+        assert!(same_manifest_value(&reviewed, &staged));
+        let widened = json!({"id": "a", "version": "1.0.0", "weight": 1, "tags": ["x"],
+            "permissions": ["network:fetch"]});
+        assert!(!same_manifest_value(&reviewed, &widened));
+        assert!(!same_manifest_value(
+            &reviewed,
+            &json!({"id": "a", "version": "1.0.1", "weight": 1, "tags": ["x"]})
+        ));
     }
 
     #[test]

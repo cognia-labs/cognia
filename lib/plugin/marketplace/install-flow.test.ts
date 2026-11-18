@@ -67,6 +67,38 @@ function makeOpts(over: Partial<RunMarketplaceInstallOpts> = {}): RunMarketplace
   }
 }
 
+describe("runMarketplaceInstall receipt identity (PL02)", () => {
+  beforeEach(() => {
+    listPlugins.mockResolvedValue([])
+    setPluginConfig.mockResolvedValue(undefined)
+  })
+
+  it("fails, instead of reporting the reviewed id, when the receipt names another plugin", async () => {
+    const opts = makeOpts()
+    ;(opts.client.installPlugin as jest.Mock).mockResolvedValueOnce({
+      pluginId: "someone.else",
+      warnings: [],
+    })
+    expect(await runMarketplaceInstall({ ...opts, rollback: null })).toMatchObject({
+      status: "failed",
+      stage: "install",
+      message: expect.stringContaining('installed "someone.else" instead of the reviewed'),
+    })
+  })
+
+  it("accepts a receipt for the reviewed plugin", async () => {
+    const opts = makeOpts()
+    ;(opts.client.installPlugin as jest.Mock).mockResolvedValueOnce({
+      pluginId: "demo-plugin",
+      warnings: [],
+    })
+    expect(await runMarketplaceInstall({ ...opts, rollback: null })).toMatchObject({
+      status: "installed",
+      pluginId: "demo-plugin",
+    })
+  })
+})
+
 describe("runMarketplaceInstall", () => {
   const lifecycleManager = (ids: string[], intent: "auto" | "enabled" = "enabled") => {
     const coordinator = new PluginLifecycleCoordinator()

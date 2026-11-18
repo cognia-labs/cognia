@@ -594,10 +594,24 @@ pub async fn plugin_install_from_directory(
     // behaviour byte for byte. Allowlisted and confined by
     // `cognia_plugin_runtime::generated_files`.
     generated_files: Option<std::collections::BTreeMap<String, String>>,
+    // What the caller vouched for: the plugin id (and, for "Load unpacked",
+    // the manifest) its review showed, or the file inventory a bundled-plugin
+    // catalog recorded. A tree that disagrees is refused before anything
+    // installed is touched.
+    expected_plugin_id: Option<String>,
+    expected_manifest: Option<serde_json::Value>,
+    expected_files: Option<Vec<cognia_plugin_runtime::plugin_tree::ExpectedPluginFile>>,
 ) -> Result<PluginInstallReceipt, String> {
     use tauri::Emitter;
     let overlay = generated_files.unwrap_or_default();
-    match handlers::install_converted_from_directory_inner(&app, &source_dir, &overlay).await {
+    let expected = handlers::DirectoryExpectation {
+        plugin_id: expected_plugin_id.as_deref(),
+        manifest: expected_manifest.as_ref(),
+        files: expected_files.as_deref(),
+    };
+    match handlers::install_converted_from_directory_inner(&app, &source_dir, expected, &overlay)
+        .await
+    {
         Ok((plugin_id, warnings)) => {
             // `source` tells the renderer which driver did this. Without it
             // the DevTools hot-reload panel labels a drag-and-drop install as
