@@ -1,5 +1,6 @@
 import { computeDiff } from "@/lib/artifacts/diff"
 import {
+  rebaseCanvasProposal,
   generateDiffPreview,
   isCanvasReviewStale,
   buildCanvasReview,
@@ -106,10 +107,9 @@ describe("buildCanvasReview / applyAcceptedCanvasReviewItems", () => {
         proposedText: "INS",
         status: "accepted",
         range: { startLine: 2, endLine: 1 },
-        diffLines: [],
-      } as never,
+        diffLines: [{ type: "added", content: "INS", newLineNumber: 2 }],
+      },
     ])
-    // start=2 maps to index 1; endLine<startLine → deleteCount=0; insert "INS" before "b"
     expect(out.split("\n")).toEqual(["a", "INS", "b"])
   })
 
@@ -123,10 +123,136 @@ describe("buildCanvasReview / applyAcceptedCanvasReviewItems", () => {
         proposedText: "",
         status: "accepted",
         range: { startLine: 2, endLine: 2 },
-        diffLines: [],
-      } as never,
+        diffLines: [{ type: "removed", content: "b", lineNumber: 2 }],
+      },
     ])
     expect(out.split("\n")).toEqual(["a", "c"])
+  })
+})
+
+/**
+ * The independent oracle: walk the diff the reader saw, taking each accepted
+ * hunk's new side and every other hunk's old side. Whatever the apply step
+ * computes from anchors must agree with this, for every subset of hunks.
+ */
+function expectedFromDiff(original: string, proposed: string, accepted: Set<number>): string {
+  const out: string[] = []
+  let hunk = -1
+  let inHunk = false
+  for (const line of generateDiffPreview(original, proposed)) {
+    if (line.type === "unchanged") {
+      inHunk = false
+      out.push(line.content)
+      continue
+    }
+    if (!inHunk) {
+      hunk += 1
+      inHunk = true
+    }
+    const keepNew = accepted.has(hunk)
+    if (line.type === "added" && keepNew) out.push(line.content)
+    if (line.type === "removed" && !keepNew) out.push(line.content)
+  }
+  return out.join("\n")
+}
+
+function applySubset(original: string, proposed: string, accepted: Set<number>): string {
+  const review = buildCanvasReview({
+    requestId: "r",
+    actionType: "custom",
+    originalContent: original,
+    proposedContent: proposed,
+  })
+  return applyAcceptedCanvasReviewItems(
+    original,
+    review.items.map((item, index) => ({
+      ...item,
+      status: accepted.has(index) ? ("accepted" as const) : ("rejected" as const),
+    }))
+  )
+}
+
+describe("hunks are applied where the reader saw them (C01)", () => {
+  it("anchors a pure insertion on the original side after a hunk that grew the text", () => {
+    const original = "a\nb\nc\nd"
+    const proposed = "A1\nA2\nb\nx\nc\nd"
+    const review = buildCanvasReview({
+      requestId: "r",
+      actionType: "custom",
+      originalContent: original,
+      proposedContent: proposed,
+    })
+    expect(review.items.map((item) => [item.changeType, item.range])).toEqual([
+      ["replace", { startLine: 1, endLine: 1 }],
+      // Before original line 3 ("c"), not before new line 4.
+      ["insert", { startLine: 3, endLine: 2 }],
+    ])
+    expect(applySubset(original, proposed, new Set([0, 1]))).toBe(proposed)
+    // Only the later insertion: it must still land between b and c.
+    expect(applySubset(original, proposed, new Set([1]))).toBe("a\nb\nx\nc\nd")
+  })
+
+  it("anchors an insertion after a hunk that shrank the text", () => {
+    const original = "a\nb\nc\nd\ne"
+    const proposed = "e0\nd\nINS\ne"
+    expect(applySubset(original, proposed, new Set([0, 1]))).toBe(proposed)
+  })
+
+  it("keeps an accepted insertion of a single empty line", () => {
+    expect(applySubset("a\nb", "a\n\nb", new Set([0]))).toBe("a\n\nb")
+  })
+
+  it("keeps accepted blank lines inside a multi-line insertion", () => {
+    expect(applySubset("a\nb", "a\n\n\nmid\n\nb", new Set([0]))).toBe("a\n\n\nmid\n\nb")
+  })
+
+  it("fills an empty document without a stray newline", () => {
+    expect(applySubset("", "filled", new Set([0]))).toBe("filled")
+    expect(applySubset("", "one\ntwo", new Set([0]))).toBe("one\ntwo")
+  })
+
+  it("empties a document completely", () => {
+    expect(applySubset("a\nb", "", new Set([0]))).toBe("")
+  })
+
+  it("appends after the last line and keeps a trailing newline", () => {
+    expect(applySubset("a\nb\n", "a\nb\nc\n", new Set([0]))).toBe("a\nb\nc\n")
+    expect(applySubset("a\nb", "a\nb\nc", new Set([0]))).toBe("a\nb\nc")
+  })
+
+  it("agrees with the rendered diff for every subset of hunks on generated edits", () => {
+    // A small deterministic generator: random line-level edits over a short
+    // alphabet, so moves, duplicates and blank lines all occur.
+    let seed = 20261118
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      return seed / 2147483648
+    }
+    const alphabet = ["", "a", "b", "c", "d", "x", "  indented", "}"]
+    const randomDoc = () =>
+      Array.from({ length: Math.floor(next() * 7) }, () => alphabet[Math.floor(next() * 8)]).join(
+        "\n"
+      )
+    for (let run = 0; run < 300; run++) {
+      const original = randomDoc()
+      const proposed = randomDoc()
+      const review = buildCanvasReview({
+        requestId: "r",
+        actionType: "custom",
+        originalContent: original,
+        proposedContent: proposed,
+      })
+      const hunks = review.items.length
+      for (let mask = 0; mask < 1 << hunks; mask++) {
+        const accepted = new Set(
+          Array.from({ length: hunks }, (_, index) => index).filter((i) => mask & (1 << i))
+        )
+        expect(applySubset(original, proposed, accepted)).toBe(
+          expectedFromDiff(original, proposed, accepted)
+        )
+      }
+      expect(applySubset(original, proposed, new Set(review.items.map((_, i) => i)))).toBe(proposed)
+    }
   })
 })
 
@@ -209,5 +335,61 @@ describe("isCanvasReviewStale", () => {
     const built = { ...review("a\nb"), baseContentHash: undefined }
     expect(isCanvasReviewStale(built, "a\nb")).toBe(false)
     expect(isCanvasReviewStale(built, "changed")).toBe(true)
+  })
+})
+
+describe("rebaseCanvasProposal (C10)", () => {
+  it("keeps a manual edit elsewhere and carries the proposal's own change over", () => {
+    expect(
+      rebaseCanvasProposal("header\nkeep\nold", "manual\nkeep\nold", "header\nkeep\nnew")
+    ).toEqual({ content: "manual\nkeep\nnew", applied: 1, conflicts: 0 })
+  })
+
+  it("re-anchors through lines the user inserted above", () => {
+    expect(rebaseCanvasProposal("a\nb\nc", "intro\nmore\na\nb\nc", "a\nB\nc").content).toBe(
+      "intro\nmore\na\nB\nc"
+    )
+  })
+
+  it("drops a hunk whose lines the user also changed", () => {
+    expect(rebaseCanvasProposal("a\nb\nc", "a\nb-mine\nc", "a\nb-ai\nc")).toEqual({
+      content: "a\nb-mine\nc",
+      applied: 0,
+      conflicts: 1,
+    })
+  })
+
+  it("drops an insertion at the very spot the user inserted", () => {
+    expect(rebaseCanvasProposal("a\nb", "a\nmine\nb", "a\nai\nb")).toMatchObject({
+      content: "a\nmine\nb",
+      conflicts: 1,
+    })
+  })
+
+  it("drops a replacement the user split with an insertion", () => {
+    expect(rebaseCanvasProposal("a\nb\nc\nd", "a\nb\nmine\nc\nd", "a\nX\nd")).toMatchObject({
+      conflicts: 1,
+      content: "a\nb\nmine\nc\nd",
+    })
+  })
+
+  it("applies the clean hunks and counts the conflicting ones", () => {
+    expect(
+      rebaseCanvasProposal(
+        "one\nmid\ntwo\nend",
+        "one\nmid\nTWO-mine\nend",
+        "ONE\nmid\ntwo-ai\nend\nfive"
+      )
+    ).toEqual({ content: "ONE\nmid\nTWO-mine\nend\nfive", applied: 2, conflicts: 1 })
+  })
+
+  it("is the proposal itself when nothing changed in between", () => {
+    const base = "a\nb\nc"
+    const proposed = "A\n\nb\nc\nd"
+    expect(rebaseCanvasProposal(base, base, proposed).content).toBe(proposed)
+  })
+
+  it("fills an empty document when it is still empty", () => {
+    expect(rebaseCanvasProposal("", "", "x").content).toBe("x")
   })
 })

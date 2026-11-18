@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { editor as MonacoEditorNS } from "monaco-editor"
 import { useCanvasSettingsStore } from "@/stores/canvas/canvas-settings-store"
 import {
+  AlertTriangle,
   ClipboardListIcon,
   Maximize2,
   Minimize2,
@@ -122,6 +123,7 @@ export function ArtifactPanelContent({ panelMode }: { panelMode: ArtifactPanelMo
     copied,
     editContent,
     hasChanges,
+    draftConflict,
     isFullscreen,
     showVersionHistory,
     setShowVersionHistory,
@@ -132,8 +134,11 @@ export function ArtifactPanelContent({ panelMode }: { panelMode: ArtifactPanelMo
     handleOpenInCanvas,
     handleEditMode,
     handleSaveEdit,
+    handleOverwriteDraft,
+    handleDiscardDraft,
     handleCancelEdit,
     handleEditorChange,
+    handlePanelKeyDown,
     toggleFullscreen,
     handleCopy,
     handleDownload,
@@ -388,7 +393,8 @@ export function ArtifactPanelContent({ panelMode }: { panelMode: ArtifactPanelMo
       <Button
         size="sm"
         onClick={handleSaveEdit}
-        disabled={!hasChanges}
+        // A conflicted draft is saved through the banner's explicit Overwrite.
+        disabled={!hasChanges || draftConflict}
         className="h-8 px-2 text-xs"
       >
         <Save className="h-4 w-4 mr-1" />
@@ -520,62 +526,114 @@ export function ArtifactPanelContent({ panelMode }: { panelMode: ArtifactPanelMo
     </ScrollArea>
   )
 
+  /**
+   * The committed content changed while this draft was open — an applied AI
+   * proposal, an agent update, a restored version. Saving silently replaced
+   * that revision; the user now picks which one stays.
+   */
+  const renderDraftConflict = () =>
+    draftConflict ? (
+      <div
+        role="alert"
+        data-testid="artifact-draft-conflict"
+        className="flex flex-wrap items-center gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+      >
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          {t("draftConflict.message", { version: activeArtifact?.version ?? 0 })}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          data-testid="artifact-draft-overwrite"
+          onClick={handleOverwriteDraft}
+        >
+          {t("draftConflict.overwrite")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          data-testid="artifact-draft-discard"
+          onClick={handleDiscardDraft}
+        >
+          {t("draftConflict.discard")}
+        </Button>
+      </div>
+    ) : null
+
   const renderContentBody = () => {
     if (!activeArtifact) return null
     if (viewMode === "review" && pendingReview) {
       return <ArtifactReviewView artifact={activeArtifact} panelMode={panelMode} />
     }
     if (viewMode === "edit") {
-      return panelMode === "mobile" ? (
-        <LightCodeEditor
-          value={editContent}
-          onChange={(v) => handleEditorChange(v)}
-          language={editorLanguageFromMonacoId(
-            getMonacoLanguage(activeArtifact.language || "plaintext")
-          )}
-          aria-label={activeArtifact.title}
-          className="px-3"
-          fontSize={editorSettings.fontSize}
-          fontFamily={editorSettings.fontFamily}
-          lineHeight={editorSettings.lineHeight}
-          tabSize={editorSettings.tabSize}
-          wordWrap={editorSettings.wordWrap}
-          lineNumbers={editorSettings.lineNumbers !== "off"}
-        />
-      ) : (
-        <div className="flex h-full flex-col">
-          <LspServerHint language={getMonacoLanguage(activeArtifact.language || "plaintext")} />
-          <div className="min-h-0 flex-1">
-            <MonacoEditor
-              height="100%"
-              language={getMonacoLanguage(activeArtifact.language || "plaintext")}
-              theme={themeId}
-              value={editContent}
-              onChange={handleEditorChange}
-              onMount={(editor, monaco) => {
-                registerMonaco(monaco)
-                setDiag({
-                  monaco: monaco as unknown as MonacoLike,
-                  editor: editor as unknown as EditorLike,
-                })
-                workbenchHandleRef.current = mountMonacoWorkbench(
-                  editor as unknown as IMonacoEditor,
-                  monaco as unknown as MonacoNamespace,
-                  {
-                    surface: "artifact",
-                    documentId: activeArtifact.id,
-                    language: getMonacoLanguage(activeArtifact.language || "plaintext"),
-                    initialContent: editContent,
-                  }
-                )
-              }}
-              options={monacoOptions}
-            />
-          </div>
-          <MonacoDiagnosticsBar monaco={diag?.monaco ?? null} editor={diag?.editor ?? null} />
+      return (
+        <div className="flex h-full min-h-0 flex-col">
+          {renderDraftConflict()}
+          <div className="min-h-0 flex-1">{renderEditor()}</div>
         </div>
       )
     }
+    return renderNonEditBody()
+  }
+
+  const renderEditor = () => {
+    if (!activeArtifact) return null
+    return panelMode === "mobile" ? (
+      <LightCodeEditor
+        value={editContent}
+        onChange={(v) => handleEditorChange(v)}
+        language={editorLanguageFromMonacoId(
+          getMonacoLanguage(activeArtifact.language || "plaintext")
+        )}
+        aria-label={activeArtifact.title}
+        className="px-3"
+        fontSize={editorSettings.fontSize}
+        fontFamily={editorSettings.fontFamily}
+        lineHeight={editorSettings.lineHeight}
+        tabSize={editorSettings.tabSize}
+        wordWrap={editorSettings.wordWrap}
+        lineNumbers={editorSettings.lineNumbers !== "off"}
+      />
+    ) : (
+      <div className="flex h-full flex-col">
+        <LspServerHint language={getMonacoLanguage(activeArtifact.language || "plaintext")} />
+        <div className="min-h-0 flex-1">
+          <MonacoEditor
+            height="100%"
+            language={getMonacoLanguage(activeArtifact.language || "plaintext")}
+            theme={themeId}
+            value={editContent}
+            onChange={handleEditorChange}
+            onMount={(editor, monaco) => {
+              registerMonaco(monaco)
+              setDiag({
+                monaco: monaco as unknown as MonacoLike,
+                editor: editor as unknown as EditorLike,
+              })
+              workbenchHandleRef.current = mountMonacoWorkbench(
+                editor as unknown as IMonacoEditor,
+                monaco as unknown as MonacoNamespace,
+                {
+                  surface: "artifact",
+                  documentId: activeArtifact.id,
+                  language: getMonacoLanguage(activeArtifact.language || "plaintext"),
+                  initialContent: editContent,
+                }
+              )
+            }}
+            options={monacoOptions}
+          />
+        </div>
+        <MonacoDiagnosticsBar monaco={diag?.monaco ?? null} editor={diag?.editor ?? null} />
+      </div>
+    )
+  }
+
+  const renderNonEditBody = () => {
+    if (!activeArtifact) return null
     if (viewMode === "split" && canSplit) {
       return (
         <ResizablePanelGroup
@@ -602,7 +660,7 @@ export function ArtifactPanelContent({ panelMode }: { panelMode: ArtifactPanelMo
   if (activeArtifact) {
     return (
       <>
-        <Artifact className="h-full min-h-0 border-0 rounded-none">
+        <Artifact className="h-full min-h-0 border-0 rounded-none" onKeyDown={handlePanelKeyDown}>
           <ArtifactHeader className="flex-col items-stretch gap-2">
             {renderIdentityRow()}
             <PluginExtensionSlot

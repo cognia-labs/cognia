@@ -12,13 +12,24 @@
 
 "use client"
 
-import { useState, useCallback, useEffect, useRef, type SetStateAction } from "react"
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react"
 import { usePathname, useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 import { useTranslations } from "next-intl"
 import { useMediaQuery } from "@/hooks/ui"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import {
+  isDraftConflicted,
+  isDraftDirty,
+  useArtifactDraftStore,
+} from "@/stores/artifact/artifact-draft-store"
 import { useActiveArtifactId } from "@/hooks/artifacts/use-session-artifacts"
 import { useSettingsStore } from "@/stores/settings"
 import { isTauri } from "@/lib/tauri"
@@ -57,6 +68,7 @@ import type {
   ArtifactAuthoringOrigin,
   ArtifactExportFormat,
   ArtifactWorkspaceReturnContext,
+  CanvasDocument,
 } from "@/types"
 
 type ArtifactPanelAction =
@@ -83,10 +95,8 @@ export function useArtifactPanelState() {
   const pathname = usePathname()
 
   // Store state - using useShallow for optimized subscriptions
-  const { panelOpen, panelView, artifacts, artifactWorkspace } = useArtifactStore(
+  const { artifacts, artifactWorkspace } = useArtifactStore(
     useShallow((state) => ({
-      panelOpen: state.panelOpen,
-      panelView: state.panelView,
       artifacts: state.artifacts,
       artifactWorkspace: state.artifactWorkspace,
     }))
@@ -125,97 +135,56 @@ export function useArtifactPanelState() {
   const isDesktop = isTauri()
   const isMobileViewport = useMediaQuery("(max-width: 639px)")
   const isTabletViewport = useMediaQuery("(min-width: 640px) and (max-width: 1023px)")
-  // Local state
-  const [viewState, setViewState] = useState({
-    artifactId: activeArtifactId,
-    panelOpen,
-    mode: initialViewMode as ArtifactViewMode,
-  })
+  // The unsaved edit buffer lives in its own store, keyed by artifact, so it
+  // survives this panel leaving edit mode, the dock switching tabs, and the
+  // panel being remounted (see `artifact-draft-store.ts`).
+  const draft = useArtifactDraftStore((state) =>
+    activeArtifactId ? state.drafts[activeArtifactId] : undefined
+  )
+  const beginDraft = useArtifactDraftStore((state) => state.beginDraft)
+  const updateDraft = useArtifactDraftStore((state) => state.updateDraft)
+  const clearDraft = useArtifactDraftStore((state) => state.clearDraft)
+  // An artifact with a draft opens back in Edit: that is where the user left it.
+  const openingViewMode: ArtifactViewMode = draft ? "edit" : initialViewMode
+  // `mode: null` follows the opening mode (the Settings default, or Edit for a
+  // draft) until the user — or a capture's Preview request — picks one. Read
+  // live, a default changed while the panel sat mounted applies the next time
+  // it is looked at; the `panelOpen` reset that did this before followed a flag
+  // the docked surfaces no longer drive.
+  const [viewState, setViewState] = useState<{
+    artifactId: string | null
+    mode: ArtifactViewMode | null
+  }>({ artifactId: activeArtifactId, mode: null })
   // Reset synchronously so a previous artifact's Preview/Edit never paints for
   // the newly selected artifact. A user's tab choice survives ordinary renders.
-  if (viewState.artifactId !== activeArtifactId || viewState.panelOpen !== panelOpen) {
-    setViewState({
-      artifactId: activeArtifactId,
-      panelOpen,
-      mode:
-        viewState.artifactId !== activeArtifactId || panelOpen ? initialViewMode : viewState.mode,
-    })
+  if (viewState.artifactId !== activeArtifactId) {
+    setViewState({ artifactId: activeArtifactId, mode: null })
   }
-  const viewMode = viewState.mode
-  const setViewMode = useCallback((next: SetStateAction<ArtifactViewMode>) => {
-    setViewState((state) => ({
-      ...state,
-      mode: typeof next === "function" ? next(state.mode) : next,
-    }))
+  const viewMode = viewState.mode ?? openingViewMode
+  const setViewMode = useCallback((mode: ArtifactViewMode) => {
+    setViewState((state) => ({ ...state, mode }))
   }, [])
   const [copied, setCopied] = useState(false)
-  const [editContent, setEditContent] = useState("")
-  const [hasChanges, setHasChanges] = useState(false)
+  const editContent = draft?.content ?? activeArtifact?.content ?? ""
+  const hasChanges = isDraftDirty(draft)
+  /** The committed content moved on since this draft was started. */
+  const draftConflict = isDraftConflicted(draft, activeArtifact?.content)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [showVersionHistory, setShowVersionHistory] = useState(false)
   const [lastDownloadPath, setLastDownloadPath] = useState<string | null>(null)
 
+  // A capture (the agent's `artifact_capture`, or an export that needs pixels)
+  // can ask this panel to show its Preview. Leaving Edit for it is safe: the
+  // draft is kept, and Edit resumes it.
   useEffect(() => {
-    if (!panelOpen || panelView !== "artifact" || !activeArtifactId || !isPreviewable) return
+    if (!activeArtifactId || !isPreviewable) return
     const showRequestedPreview = (id: string) => {
       if (id === activeArtifactId) setViewMode("preview")
     }
     const unsubscribe = onArtifactPreviewRequest(showRequestedPreview)
     if (isArtifactPreviewRequested(activeArtifactId)) showRequestedPreview(activeArtifactId)
     return unsubscribe
-  }, [activeArtifactId, isPreviewable, panelOpen, panelView, setViewMode])
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    if (!panelOpen || panelView !== "artifact") return
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return
-
-      if (e.key === "Escape") {
-        e.preventDefault()
-        closePanel()
-        return
-      }
-
-      if (!activeArtifact) return
-
-      if ((e.ctrlKey || e.metaKey) && e.key === "s" && viewMode === "edit") {
-        e.preventDefault()
-        if (hasChanges) {
-          saveArtifactVersion(activeArtifact.id, t("beforeEdit"))
-          updateArtifact(activeArtifact.id, { content: editContent })
-          setHasChanges(false)
-          setViewMode("code")
-        }
-        return
-      }
-
-      if ((e.ctrlKey || e.metaKey) && e.key === "e" && viewMode !== "edit") {
-        e.preventDefault()
-        setEditContent(activeArtifact.content)
-        setHasChanges(false)
-        setViewMode("edit")
-        return
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [
-    panelOpen,
-    panelView,
-    activeArtifact,
-    viewMode,
-    hasChanges,
-    editContent,
-    closePanel,
-    updateArtifact,
-    saveArtifactVersion,
-    t,
-    setViewMode,
-  ])
+  }, [activeArtifactId, isPreviewable, setViewMode])
 
   // Auto-enter the review surface when a fresh AI-revision proposal appears,
   // and leave it once the proposal is resolved (applied/rejected). Keyed on the
@@ -255,28 +224,10 @@ export function useArtifactPanelState() {
     [activeArtifact, artifactWorkspace]
   )
 
-  // Handlers
-  const handleOpenInCanvas = useCallback(() => {
-    if (activeArtifact) {
-      const returnContext = buildReturnContext("artifact-panel")
-      setArtifactWorkspaceReturnContext(returnContext)
-
-      // Reopen the document this artifact was already sent to. Without this the
-      // action minted a fresh copy every time, so a user who alternated between
-      // the panel and the canvas accumulated duplicates and lost their edits to
-      // whichever copy they had stopped looking at. A link pointing at a
-      // deleted document falls through to creating a new one.
-      const existingId = activeArtifact.metadata?.derivedFromCanvasDocumentId
-      if (existingId && canvasDocuments[existingId]) {
-        if (revealCanvasDocument(existingId) && pathname !== "/") router.push("/")
-        loggers.ui.info("artifacts.action.open-in-canvas", {
-          artifactId: activeArtifact.id,
-          canvasId: existingId,
-          reused: true,
-        })
-        return
-      }
-
+  /** Mint a Canvas copy of the active artifact and open it. */
+  const createCanvasFromArtifact = useCallback(
+    (returnContext: ArtifactWorkspaceReturnContext | null) => {
+      if (!activeArtifact) return
       const docId = createCanvasDocument({
         title: activeArtifact.title,
         content: activeArtifact.content,
@@ -292,46 +243,143 @@ export function useArtifactPanelState() {
         artifactId: activeArtifact.id,
         canvasId: docId,
       })
+    },
+    [activeArtifact, createCanvasDocument, pathname, router]
+  )
+
+  // Handlers
+  const handleOpenInCanvas = useCallback(() => {
+    if (!activeArtifact) return
+    const returnContext = buildReturnContext("artifact-panel")
+    setArtifactWorkspaceReturnContext(returnContext)
+
+    // Reopen the document this artifact was already sent to. Without this the
+    // action minted a fresh copy every time, so a user who alternated between
+    // the panel and the canvas accumulated duplicates and lost their edits to
+    // whichever copy they had stopped looking at. A link pointing at a deleted
+    // document falls through to creating a new one.
+    const existingId = findCanvasDocumentForArtifact(
+      activeArtifact.id,
+      activeArtifact.metadata?.derivedFromCanvasDocumentId,
+      canvasDocuments
+    )
+    if (existingId) {
+      if (revealCanvasDocument(existingId)) {
+        if (pathname !== "/") router.push("/")
+        loggers.ui.info("artifacts.action.open-in-canvas", {
+          artifactId: activeArtifact.id,
+          canvasId: existingId,
+          reused: true,
+        })
+        return
+      }
+      // The document exists but belongs to another workspace, so the canvas
+      // here cannot show it. Doing nothing read as a broken button.
+      loggers.ui.info("artifacts.action.open-in-canvas-other-workspace", {
+        artifactId: activeArtifact.id,
+        canvasId: existingId,
+      })
+      toast.info(t("canvasInOtherWorkspace"), {
+        action: {
+          label: t("canvasCopyHere"),
+          onClick: () => createCanvasFromArtifact(returnContext),
+        },
+      })
+      return
     }
+
+    createCanvasFromArtifact(returnContext)
   }, [
     activeArtifact,
     buildReturnContext,
     canvasDocuments,
-    createCanvasDocument,
+    createCanvasFromArtifact,
     pathname,
     router,
     setArtifactWorkspaceReturnContext,
+    t,
   ])
 
   const handleEditMode = useCallback(() => {
     if (activeArtifact) {
-      setEditContent(activeArtifact.content)
-      setHasChanges(false)
+      // Resumes an existing draft rather than reseeding it from the committed
+      // content: re-entering Edit used to discard whatever had been typed.
+      beginDraft(activeArtifact.id, {
+        content: activeArtifact.content,
+        version: activeArtifact.version,
+      })
       setViewMode("edit")
     }
-  }, [activeArtifact, setViewMode])
+  }, [activeArtifact, beginDraft, setViewMode])
+
+  /** Commit the draft, snapshotting what it replaces. */
+  const commitDraft = useCallback(() => {
+    if (!activeArtifact || !draft) return
+    saveArtifactVersion(activeArtifact.id, t("beforeEdit"))
+    updateArtifact(activeArtifact.id, { content: draft.content })
+    clearDraft(activeArtifact.id)
+    setViewMode("code")
+    loggers.ui.info("artifacts.action.save-edit", { artifactId: activeArtifact.id })
+  }, [activeArtifact, clearDraft, draft, saveArtifactVersion, setViewMode, t, updateArtifact])
 
   const handleSaveEdit = useCallback(() => {
-    if (activeArtifact && hasChanges) {
-      saveArtifactVersion(activeArtifact.id, t("beforeEdit"))
-      updateArtifact(activeArtifact.id, { content: editContent })
-      setHasChanges(false)
-      setViewMode("code")
-      loggers.ui.info("artifacts.action.save-edit", { artifactId: activeArtifact.id })
+    if (!activeArtifact || !hasChanges) return
+    // Another revision landed while this draft was open. Saving would replace
+    // it without the user ever having seen it, so the save waits for an
+    // explicit choice (`handleOverwriteDraft` / `handleDiscardDraft`).
+    if (draftConflict) {
+      loggers.ui.info("artifacts.action.save-edit-conflict", { artifactId: activeArtifact.id })
+      return
     }
-  }, [activeArtifact, editContent, hasChanges, updateArtifact, saveArtifactVersion, t, setViewMode])
+    commitDraft()
+  }, [activeArtifact, commitDraft, draftConflict, hasChanges])
+
+  /** Keep the draft over the revision committed meanwhile (that one is snapshotted). */
+  const handleOverwriteDraft = useCallback(() => {
+    if (!activeArtifact || !draft) return
+    commitDraft()
+    loggers.ui.info("artifacts.action.save-edit-overwrite", { artifactId: activeArtifact.id })
+  }, [activeArtifact, commitDraft, draft])
+
+  /** Drop the draft and show the revision committed meanwhile. */
+  const handleDiscardDraft = useCallback(() => {
+    if (!activeArtifact) return
+    clearDraft(activeArtifact.id)
+    setViewMode("code")
+  }, [activeArtifact, clearDraft, setViewMode])
 
   const handleCancelEdit = useCallback(() => {
+    if (activeArtifact) clearDraft(activeArtifact.id)
     setViewMode("code")
-    setHasChanges(false)
-  }, [setViewMode])
+  }, [activeArtifact, clearDraft, setViewMode])
 
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
-      setEditContent(value || "")
-      setHasChanges(value !== activeArtifact?.content)
+      if (activeArtifact) updateDraft(activeArtifact.id, value ?? "")
     },
-    [activeArtifact?.content]
+    [activeArtifact, updateDraft]
+  )
+
+  /**
+   * Save (Cmd/Ctrl+S) and Edit (Cmd/Ctrl+E), for key presses inside the panel.
+   *
+   * Attached to the panel rather than the window: a window listener fired for
+   * every keystroke anywhere in the app, while ignoring the one place a save
+   * shortcut is pressed — the editor itself, whose input is a textarea.
+   */
+  const handlePanelKeyDown = useCallback(
+    (event: ReactKeyboardEvent) => {
+      if (!activeArtifact || !(event.ctrlKey || event.metaKey) || event.altKey) return
+      const key = event.key.toLowerCase()
+      if (key === "s" && viewMode === "edit") {
+        event.preventDefault()
+        handleSaveEdit()
+      } else if (key === "e" && viewMode !== "edit") {
+        event.preventDefault()
+        handleEditMode()
+      }
+    },
+    [activeArtifact, handleEditMode, handleSaveEdit, viewMode]
   )
 
   const toggleFullscreen = useCallback(() => {
@@ -622,8 +670,6 @@ export function useArtifactPanelState() {
     t,
     tCommon,
     // Store state
-    panelOpen,
-    panelView,
     activeArtifact,
     pendingReview,
     theme,
@@ -634,6 +680,7 @@ export function useArtifactPanelState() {
     copied,
     editContent,
     hasChanges,
+    draftConflict,
     isFullscreen,
     showVersionHistory,
     setShowVersionHistory,
@@ -650,8 +697,11 @@ export function useArtifactPanelState() {
     handleOpenInCanvas,
     handleEditMode,
     handleSaveEdit,
+    handleOverwriteDraft,
+    handleDiscardDraft,
     handleCancelEdit,
     handleEditorChange,
+    handlePanelKeyDown,
     toggleFullscreen,
     handleCopy,
     handleDownload,
@@ -663,4 +713,29 @@ export function useArtifactPanelState() {
     handleRevealInExplorer,
     handleSaveToProject,
   }
+}
+
+/**
+ * The Canvas document an artifact was sent to, if it still exists.
+ *
+ * The artifact's back-link (`derivedFromCanvasDocumentId`) is checked first;
+ * the documents' own forward link (`sourceArtifactId`) answers when the
+ * back-link is missing or points at a deleted document, because that one lives
+ * on the document and no artifact write can drop it. The most recently edited
+ * document wins when several were made from the same artifact.
+ */
+export function findCanvasDocumentForArtifact(
+  artifactId: string,
+  linkedId: string | undefined,
+  documents: Record<string, CanvasDocument>
+): string | null {
+  if (linkedId && documents[linkedId]) return linkedId
+  let found: CanvasDocument | null = null
+  for (const doc of Object.values(documents)) {
+    if (doc.sourceArtifactId !== artifactId) continue
+    if (!found || new Date(doc.updatedAt).getTime() > new Date(found.updatedAt).getTime()) {
+      found = doc
+    }
+  }
+  return found?.id ?? null
 }

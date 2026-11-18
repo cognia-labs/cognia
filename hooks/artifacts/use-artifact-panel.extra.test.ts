@@ -3,6 +3,7 @@
  */
 
 import { renderHook, act } from "@testing-library/react"
+import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 
 jest.mock("next/navigation", () => {
   const push = jest.fn()
@@ -68,6 +69,7 @@ import { loggers } from "@cognia/logging"
 import { useUIStore } from "@/stores/ui"
 import { useSettingsStore } from "@/stores/settings"
 import { usePathname } from "next/navigation"
+import { toast } from "sonner"
 import { requestArtifactPreview } from "@/lib/artifacts/preview-view-request"
 import type { AppSettings } from "@cognia/agent-config-types"
 
@@ -304,15 +306,18 @@ describe("useArtifactPanelState — extra coverage", () => {
     release()
   })
 
-  it("DG01 applies the current default when an already-mounted panel first opens", () => {
+  it("DG01 an already-mounted panel follows the current default until the user picks a mode", () => {
     bindSessionToProject()
     makeArtifact()
-    useArtifactStore.setState({ panelOpen: false })
     const { result } = renderHook(() => useArtifactPanelState())
-    act(() => setDefaultPanelMode("preview"))
     expect(result.current.viewMode).toBe("code")
-    act(() => useArtifactStore.getState().openPanel("artifact"))
+    act(() => setDefaultPanelMode("preview"))
     expect(result.current.viewMode).toBe("preview")
+    act(() => result.current.setViewMode("code"))
+    act(() => setDefaultPanelMode("code"))
+    act(() => setDefaultPanelMode("preview"))
+    // An explicit choice wins over later default changes.
+    expect(result.current.viewMode).toBe("code")
   })
 
   it("B01 opens a scriptless outer document containing only an opaque sandbox", async () => {
@@ -392,50 +397,55 @@ describe("useArtifactPanelState — extra coverage", () => {
     expect(result.current.exportFormats).not.toContain("png")
   })
 
-  it("Esc keyboard shortcut closes the panel", () => {
-    makeArtifact()
-    const { result } = renderHook(() => useArtifactPanelState())
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
-    })
-    expect(useArtifactStore.getState().panelOpen).toBe(false)
-    // result.current is still readable after the unmount-side cleanup ran.
-    expect(typeof result.current).toBe("object")
-  })
+  /** A key press inside the panel, as `ArtifactPanelContent` forwards it. */
+  function pressInPanel(
+    handler: (event: ReactKeyboardEvent) => void,
+    init: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean }
+  ) {
+    const preventDefault = jest.fn()
+    handler({
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      ...init,
+      preventDefault,
+    } as unknown as ReactKeyboardEvent)
+    return preventDefault
+  }
 
-  it("Ctrl+E enters edit mode for a previewable artifact", () => {
+  it("Ctrl+E inside the panel enters edit mode", () => {
     makeArtifact()
     const { result } = renderHook(() => useArtifactPanelState())
+    let prevented!: jest.Mock
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", ctrlKey: true }))
+      prevented = pressInPanel(result.current.handlePanelKeyDown, { key: "e", ctrlKey: true })
     })
+    expect(prevented).toHaveBeenCalled()
     expect(result.current.viewMode).toBe("edit")
   })
 
-  it("Ctrl+S in edit mode persists pending changes", () => {
+  it("Cmd+S inside the panel (the editor included) saves the draft", () => {
     const a = makeArtifact()
     const { result } = renderHook(() => useArtifactPanelState())
     act(() => result.current.handleEditMode())
     act(() => result.current.handleEditorChange("<html>changed</html>"))
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true }))
+      pressInPanel(result.current.handlePanelKeyDown, { key: "s", metaKey: true })
     })
     expect(result.current.viewMode).toBe("code")
     expect(useArtifactStore.getState().artifacts[a.id].content).toBe("<html>changed</html>")
   })
 
-  it("keyboard shortcuts ignore events from input/textarea", () => {
+  it("keystrokes elsewhere in the app no longer drive the panel", () => {
     makeArtifact()
+    act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(false))
     const { result } = renderHook(() => useArtifactPanelState())
-    const input = document.createElement("input")
-    document.body.appendChild(input)
     act(() => {
-      input.focus()
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", ctrlKey: true }))
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
     })
-    // panelOpen stays true because the handler bailed out.
-    expect(useArtifactStore.getState().panelOpen).toBe(true)
     expect(result.current.viewMode).toBe("code")
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(false)
   })
 
   it("handleRevealInExplorer is a no-op when not desktop", async () => {
@@ -538,9 +548,9 @@ describe("useArtifactPanelState — extra coverage", () => {
         content: "<p>hi</p>",
       })
       act(() => useArtifactStore.getState().setActiveArtifact(artifact.id))
-      const { result } = renderHook(() => useArtifactPanelState())
+      const { result, rerender } = renderHook(() => useArtifactPanelState())
       act(() => result.current.handleOpenInCanvas())
-      return { artifact, result }
+      return { artifact, result, rerender }
     }
 
     it("links the artifact to the document it created", () => {
@@ -581,19 +591,92 @@ describe("useArtifactPanelState — extra coverage", () => {
         jest.mocked(usePathname).mockReturnValueOnce("/artifacts")
         const push = jest.requireMock("next/navigation").__push as jest.Mock
         push.mockClear()
-        const { result } = openArtifactInCanvas()
+        const { result, rerender } = openArtifactInCanvas()
         expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
         expect(push).toHaveBeenCalledWith("/")
         expect(result.current.activeArtifact).not.toBeNull()
         jest.mocked(usePathname).mockReturnValue("/artifacts")
         act(() => useUIStore.getState().setSelectedGuild({ kind: "dm" }))
-        act(() => useArtifactStore.getState().openPanel("artifact"))
+        // Picks up the new pathname, as navigating to /artifacts would.
+        rerender()
         act(() => result.current.handleOpenInCanvas())
         expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
         expect(push).toHaveBeenCalledTimes(2)
         jest.mocked(usePathname).mockReturnValue("/")
       }
     )
+
+    it("C04 reuses the edited document after an older version is restored", () => {
+      const artifact = useArtifactStore.getState().createArtifact({
+        sessionId: "s",
+        messageId: "m",
+        type: "html",
+        title: "page",
+        content: "<p>hi</p>",
+      })
+      act(() => useArtifactStore.getState().setActiveArtifact(artifact.id))
+      const snapshot = useArtifactStore.getState().saveArtifactVersion(artifact.id, "before")!
+      const { result } = renderHook(() => useArtifactPanelState())
+      act(() => result.current.handleOpenInCanvas())
+      const firstDocId = useArtifactStore.getState().activeCanvasId!
+      act(() => {
+        useArtifactStore.getState().updateCanvasDocument(firstDocId, { content: "Canvas edits" })
+        useArtifactStore.getState().restoreArtifactVersion(artifact.id, snapshot.id)
+        useUIStore.getState().setSelectedGuild({ kind: "dm" })
+      })
+      act(() => result.current.handleOpenInCanvas())
+      const state = useArtifactStore.getState()
+      expect(state.activeCanvasId).toBe(firstDocId)
+      expect(Object.keys(state.canvasDocuments)).toEqual([firstDocId])
+      expect(state.canvasDocuments[firstDocId].content).toBe("Canvas edits")
+    })
+
+    it("C04 finds the document through its own link when the artifact's link is gone", () => {
+      const { artifact, result } = openArtifactInCanvas()
+      const firstDocId = useArtifactStore.getState().activeCanvasId!
+      act(() => {
+        const current = useArtifactStore.getState().artifacts[artifact.id]
+        useArtifactStore.setState((state) => ({
+          artifacts: { ...state.artifacts, [artifact.id]: { ...current, metadata: {} } },
+        }))
+        useUIStore.getState().setSelectedGuild({ kind: "dm" })
+      })
+      act(() => result.current.handleOpenInCanvas())
+      expect(useArtifactStore.getState().activeCanvasId).toBe(firstDocId)
+      expect(Object.keys(useArtifactStore.getState().canvasDocuments)).toEqual([firstDocId])
+      expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
+    })
+
+    it("C04 says why a document in another workspace cannot open, and offers a copy", () => {
+      const { result } = openArtifactInCanvas()
+      const firstDocId = useArtifactStore.getState().activeCanvasId!
+      act(() => {
+        useArtifactStore.setState((state) => ({
+          canvasDocuments: {
+            ...state.canvasDocuments,
+            [firstDocId]: { ...state.canvasDocuments[firstDocId], projectId: "elsewhere" },
+          },
+        }))
+        useProjectStore.setState({ activeProjectId: "here" })
+        useUIStore.getState().setSelectedGuild({ kind: "dm" })
+        useArtifactStore.getState().setActiveCanvas(null)
+      })
+      const info = jest.spyOn(toast, "info").mockImplementation(() => "toast-id")
+      act(() => result.current.handleOpenInCanvas())
+      expect(useUIStore.getState().selectedGuild.kind).toBe("dm")
+      expect(info).toHaveBeenCalledWith(
+        "canvasInOtherWorkspace",
+        expect.objectContaining({ action: expect.objectContaining({ label: "canvasCopyHere" }) })
+      )
+      const action = info.mock.calls[0][1]!.action as unknown as { onClick: () => void }
+      act(() => action.onClick())
+      const docs = Object.values(useArtifactStore.getState().canvasDocuments)
+      expect(docs).toHaveLength(2)
+      expect(useArtifactStore.getState().activeCanvasId).not.toBe(firstDocId)
+      expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
+      info.mockRestore()
+      useProjectStore.setState({ activeProjectId: null })
+    })
 
     it("creates a fresh document when the linked one was deleted", () => {
       const { result } = openArtifactInCanvas()

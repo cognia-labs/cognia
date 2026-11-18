@@ -4881,6 +4881,8 @@
     "batchSelect": "Toggle batch selection",
     "beforeEdit": "Before edit",
     "cancel": "Cancel",
+    "canvasCopyHere": "Create a copy here",
+    "canvasInOtherWorkspace": "This artifact's Canvas document belongs to another workspace, so it can't open here.",
     "code": "Code",
     "compareAgainst": "Compare with",
     "compareVersion": "Compare this version",
@@ -4921,6 +4923,11 @@
     "download": "Download",
     "downloadAsPdf": "Download as PDF",
     "downloadAsWord": "Download as Word",
+    "draftConflict": {
+      "discard": "Discard my changes",
+      "message": "This artifact changed to v{version} while you were editing. Saving would replace that revision.",
+      "overwrite": "Save my changes anyway"
+    },
     "duplicate": "Duplicate",
     "editInCanvas": "Edit in Canvas",
     "elementPick": {
@@ -4993,6 +5000,9 @@
       "promoteSelectionAria": "Make {title} the edit target",
       "proposed": "Proposed",
       "reDiff": "Re-diff against current",
+      "reDiffAlreadyApplied": "The current text already includes this proposal.",
+      "reDiffConflicted": "Every change in this proposal overlaps your edits. Discard it, or ask for a new revision.",
+      "reDiffPartial": "{count, plural, one {# change overlapped your edits and was left out.} other {# changes overlapped your edits and were left out.}}",
       "refreshSelectionAria": "Refresh the copy of “{title}”",
       "refreshSelectionHint": "This record changed after it was referenced — click to re-read it",
       "reject": "Reject",

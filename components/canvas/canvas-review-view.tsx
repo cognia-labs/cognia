@@ -4,7 +4,7 @@
  * CanvasReviewView — Codex-style per-hunk review of an AI revision to a Canvas
  * document. A structural sibling of `ArtifactReviewView`: it reuses the same
  * `ReviewHunkItem` rows, Monaco `DiffEditor`, and diff helpers, but binds to the
- * canvas-scoped store mutators (`proposeCanvasReview` / `applyCanvasReview` /
+ * canvas-scoped store mutators (`applyCanvasReview` / `rediffCanvasReview` /
  * `rejectCanvasReview`) and the shared `pendingReviews` map keyed by document id.
  *
  * Desktop shows a side-by-side Monaco diff; mobile falls back to a lightweight
@@ -16,13 +16,14 @@ import { useCallback, useMemo, useRef } from "react"
 import dynamic from "next/dynamic"
 import type { editor as MonacoEditor } from "monaco-editor"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
 import { AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useMonacoActiveTheme } from "@/hooks/git/use-monaco-active-theme"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { useArtifactStore, type ReviewRediffOutcome } from "@/stores/artifact/artifact-store"
 import { computeDiff, computeDiffStats, newLineForOldLine } from "@/lib/artifacts/diff"
 import { getMonacoLanguage } from "@/lib/artifacts/constants"
 import { guardDiffEditorModelDisposal } from "@/lib/canvas/monaco-diff-disposal"
@@ -61,7 +62,18 @@ export function CanvasReviewView({ documentId, panelMode, className }: CanvasRev
   const setReviewItemStatus = useArtifactStore((state) => state.setReviewItemStatus)
   const applyCanvasReview = useArtifactStore((state) => state.applyCanvasReview)
   const rejectCanvasReview = useArtifactStore((state) => state.rejectCanvasReview)
-  const proposeCanvasReview = useArtifactStore((state) => state.proposeCanvasReview)
+  const rediffCanvasReview = useArtifactStore((state) => state.rediffCanvasReview)
+  /** Say what Re-diff did; a silent no-op read as a broken button. */
+  const reportRediff = useCallback(
+    (outcome: ReviewRediffOutcome) => {
+      if (outcome.kind === "already-applied") toast.success(t("reDiffAlreadyApplied"))
+      else if (outcome.kind === "conflicted") toast.warning(t("reDiffConflicted"))
+      else if (outcome.kind === "rebased" && outcome.conflicts > 0) {
+        toast.warning(t("reDiffPartial", { count: outcome.conflicts }))
+      }
+    },
+    [t]
+  )
   const diffEditorRef = useRef<MonacoEditor.IStandaloneDiffEditor | null>(null)
   const lineDiffRef = useRef<LineDiffViewHandle | null>(null)
 
@@ -116,7 +128,7 @@ export function CanvasReviewView({ documentId, panelMode, className }: CanvasRev
             size="sm"
             variant="outline"
             className="h-7 text-xs"
-            onClick={() => proposeCanvasReview(documentId, review.proposedContent)}
+            onClick={() => reportRediff(rediffCanvasReview(documentId))}
           >
             {t("reDiff")}
           </Button>

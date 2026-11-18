@@ -15,7 +15,7 @@ import { useTranslations } from "next-intl"
 import { History, Save, RotateCcw, GitCompareArrows } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
-import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { sortArtifactVersions, useArtifactStore } from "@/stores/artifact/artifact-store"
 import { computeDiff, computeDiffStats } from "@/lib/artifacts"
 import { LineDiffView } from "@/components/diff/line-diff-view"
 import type { Artifact, ArtifactVersion } from "@/types"
@@ -97,11 +97,18 @@ function InlineDiff({
 
 export function PanelVersionHistory({ artifact, onVersionRestored }: PanelVersionHistoryProps) {
   const t = useTranslations("artifacts")
-  const getArtifactVersions = useArtifactStore((state) => state.getArtifactVersions)
+  // Subscribed to the version list itself. Reading it through the
+  // `getArtifactVersions` function selector subscribed to nothing that changes
+  // on a save, so "Save Version" wrote a snapshot the list kept hiding until
+  // something unrelated re-rendered it.
+  const storedVersions = useArtifactStore((state) => state.artifactVersions[artifact.id])
   const saveArtifactVersion = useArtifactStore((state) => state.saveArtifactVersion)
   const restoreArtifactVersion = useArtifactStore((state) => state.restoreArtifactVersion)
 
-  const versions: ArtifactVersion[] = getArtifactVersions(artifact.id)
+  const versions: ArtifactVersion[] = useMemo(
+    () => sortArtifactVersions(storedVersions ?? []),
+    [storedVersions]
+  )
   const [diffVersionId, setDiffVersionId] = useState<string | null>(null)
   // What the open comparison compares against: the current version, or the
   // id of another saved version.

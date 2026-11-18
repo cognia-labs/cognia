@@ -14,13 +14,14 @@ import { useCallback, useMemo, useRef } from "react"
 import dynamic from "next/dynamic"
 import type { editor as MonacoEditor } from "monaco-editor"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
 import { AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useMonacoActiveTheme } from "@/hooks/git/use-monaco-active-theme"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { useArtifactStore, type ReviewRediffOutcome } from "@/stores/artifact/artifact-store"
 import {
   computeDiff,
   computeDiffStats,
@@ -58,7 +59,18 @@ export function ArtifactReviewView({ artifact, panelMode }: ArtifactReviewViewPr
   const setReviewItemStatus = useArtifactStore((state) => state.setReviewItemStatus)
   const applyArtifactReview = useArtifactStore((state) => state.applyArtifactReview)
   const rejectArtifactReview = useArtifactStore((state) => state.rejectArtifactReview)
-  const proposeArtifactUpdate = useArtifactStore((state) => state.proposeArtifactUpdate)
+  const rediffArtifactReview = useArtifactStore((state) => state.rediffArtifactReview)
+  /** Say what Re-diff did; a silent no-op read as a broken button. */
+  const reportRediff = useCallback(
+    (outcome: ReviewRediffOutcome) => {
+      if (outcome.kind === "already-applied") toast.success(t("reDiffAlreadyApplied"))
+      else if (outcome.kind === "conflicted") toast.warning(t("reDiffConflicted"))
+      else if (outcome.kind === "rebased" && outcome.conflicts > 0) {
+        toast.warning(t("reDiffPartial", { count: outcome.conflicts }))
+      }
+    },
+    [t]
+  )
   const diffEditorRef = useRef<MonacoEditor.IStandaloneDiffEditor | null>(null)
   const lineDiffRef = useRef<LineDiffViewHandle | null>(null)
 
@@ -127,7 +139,7 @@ export function ArtifactReviewView({ artifact, panelMode }: ArtifactReviewViewPr
             size="sm"
             variant="outline"
             className="h-7 text-xs"
-            onClick={() => proposeArtifactUpdate(artifact.id, review.proposedContent)}
+            onClick={() => reportRediff(rediffArtifactReview(artifact.id))}
           >
             {t("reDiff")}
           </Button>

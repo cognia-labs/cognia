@@ -939,6 +939,32 @@ describe("artifact version history", () => {
     })
   })
 
+  it("restoreArtifactVersion keeps relationships formed after the snapshot (C04)", () => {
+    const store = useArtifactStore.getState()
+    const a = store.createArtifact({
+      sessionId: "s",
+      messageId: "m",
+      type: "code",
+      title: "t",
+      content: "v1",
+      metadata: { runnable: false },
+    })
+    const snapshot = store.saveArtifactVersion(a.id, "before handoff")!
+    const docId = useArtifactStore.getState().createCanvasDocument({
+      title: "t",
+      content: "v1",
+      language: "javascript",
+      type: "code",
+      sourceArtifactId: a.id,
+    })
+    useArtifactStore.getState().updateArtifact(a.id, { content: "v2" })
+    useArtifactStore.getState().restoreArtifactVersion(a.id, snapshot.id)
+    expect(useArtifactStore.getState().artifacts[a.id]).toMatchObject({
+      content: "v1",
+      metadata: { runnable: false, derivedFromCanvasDocumentId: docId },
+    })
+  })
+
   it("restoreArtifactVersion ignores unknown versions", () => {
     const a = useArtifactStore
       .getState()

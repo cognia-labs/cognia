@@ -207,18 +207,31 @@ describe("CanvasReviewView", () => {
     expect(screen.getByTestId("diff-editor")).toBeInTheDocument()
   })
 
-  it("shows the stale banner and can re-diff a stale proposal", async () => {
+  it("shows the stale banner and re-diffs a stale proposal onto the current text (C10)", async () => {
     const user = userEvent.setup()
     const id = seedReview()
-    // A manual edit moves the baseline -> stale.
+    // A manual edit elsewhere moves the baseline -> stale.
     act(() => {
-      useArtifactStore.getState().updateCanvasDocument(id, { content: "manual\nedit" })
+      useArtifactStore.getState().updateCanvasDocument(id, { content: "a\nb\nC-mine\nd" })
     })
     render(<CanvasReviewView documentId={id} panelMode="desktop" />)
     expect(screen.getByTestId("canvas-review-stale-banner")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /Re-diff against current/i }))
-    // Re-diff rebuilds against the current buffer -> no longer stale.
-    expect(useArtifactStore.getState().pendingReviews[id].isStale).toBeFalsy()
+    const review = useArtifactStore.getState().pendingReviews[id]
+    expect(review.isStale).toBeFalsy()
+    // The proposal's own A/D hunks, with the manual C kept.
+    expect(review.proposedContent).toBe("A\nb\nC-mine\nD")
+  })
+
+  it("keeps a fully conflicting proposal stale on re-diff (C10)", async () => {
+    const user = userEvent.setup()
+    const id = seedReview()
+    act(() => {
+      useArtifactStore.getState().updateCanvasDocument(id, { content: "manual\nedit" })
+    })
+    render(<CanvasReviewView documentId={id} panelMode="desktop" />)
+    await user.click(screen.getByRole("button", { name: /Re-diff against current/i }))
+    expect(useArtifactStore.getState().pendingReviews[id].isStale).toBe(true)
   })
 
   it("discards a stale proposal from the stale banner", async () => {

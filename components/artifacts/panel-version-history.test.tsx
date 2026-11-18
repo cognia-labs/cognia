@@ -58,6 +58,17 @@ describe("PanelVersionHistory", () => {
     expect(useArtifactStore.getState().getArtifactVersions(a.id)).toHaveLength(1)
   })
 
+  it("lists the version it just saved without waiting for another render (A02)", () => {
+    const a = makeArtifact()
+    render(<PanelVersionHistory artifact={a} />)
+    expect(screen.getByText("noVersions")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("saveVersion"))
+    expect(screen.queryByText("noVersions")).not.toBeInTheDocument()
+    expect(screen.getAllByText("restoreVersion")).toHaveLength(1)
+    fireEvent.click(screen.getByText("saveVersion"))
+    expect(screen.getAllByText("restoreVersion")).toHaveLength(2)
+  })
+
   it("renders a saved version row with restore + diff buttons", () => {
     const a = makeArtifact()
     useArtifactStore.getState().saveArtifactVersion(a.id, "first")

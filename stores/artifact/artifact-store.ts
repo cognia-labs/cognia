@@ -31,6 +31,7 @@ import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
 import {
   buildCanvasReview,
   applyAcceptedCanvasReviewItems,
+  rebaseCanvasProposal,
   isCanvasReviewStale,
 } from "@/lib/ai/generation/canvas-review"
 
@@ -433,6 +434,94 @@ const INITIAL_ARTIFACT_WORKSPACE: ArtifactWorkspaceState = {
 }
 
 /** Project-owned rows stay in their project; legacy rows remain visible everywhere. */
+/**
+ * What re-diffing a stale proposal did.
+ *
+ * - `already-applied` — the content already says what the proposal said; it is
+ *   resolved.
+ * - `rebased` — the proposal now reads against the current content;
+ *   `conflicts` of its hunks were left out because the user changed the same
+ *   lines.
+ * - `conflicted` — every hunk collided with an edit; the stale proposal stays
+ *   for the user to discard.
+ */
+export type ReviewRediffOutcome =
+  | { kind: "missing" }
+  | { kind: "already-applied" }
+  | { kind: "rebased"; conflicts: number }
+  | { kind: "conflicted"; conflicts: number }
+
+/**
+ * Re-diff a proposal against `current`. Returns the outcome and, when the
+ * proposal survives, the review that replaces it.
+ */
+function rediffReview(
+  review: CanvasPendingReview,
+  current: string
+): { outcome: ReviewRediffOutcome; next: CanvasPendingReview | null } {
+  if (current === review.proposedContent) {
+    return { outcome: { kind: "already-applied" }, next: null }
+  }
+  const rebased = rebaseCanvasProposal(review.originalContent, current, review.proposedContent)
+  if (rebased.content === current) {
+    return rebased.conflicts > 0
+      ? { outcome: { kind: "conflicted", conflicts: rebased.conflicts }, next: null }
+      : { outcome: { kind: "already-applied" }, next: null }
+  }
+  return {
+    outcome: { kind: "rebased", conflicts: rebased.conflicts },
+    next: buildCanvasReview({
+      requestId: review.requestId,
+      actionType: review.actionType,
+      originalContent: current,
+      proposedContent: rebased.content,
+    }),
+  }
+}
+
+/** An artifact's saved versions, newest first, with `createdAt` as a `Date`. */
+export function sortArtifactVersions(versions: readonly ArtifactVersion[]): ArtifactVersion[] {
+  return versions
+    .map((v) => ({ ...v, createdAt: ensureDate(v.createdAt) }))
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+}
+
+/**
+ * Metadata that describes the artifact's relationships rather than one
+ * revision of its content: the Canvas document it was sent to, the lineage it
+ * belongs to, where it came from, when it was last opened.
+ *
+ * A version snapshot is a revision of the content; restoring it must not undo
+ * relationships formed after it was taken. Copying the snapshot's metadata
+ * wholesale dropped `derivedFromCanvasDocumentId`, so the next "Edit in
+ * Canvas" minted a second document beside the one holding the user's edits.
+ */
+const ARTIFACT_RELATIONSHIP_METADATA_KEYS = [
+  "derivedFromCanvasDocumentId",
+  "derivedFromArtifactId",
+  "derivedFromVersionId",
+  "lineageId",
+  "sourceOrigin",
+  "sourceFingerprint",
+  "sourceRange",
+  "userInitiated",
+  "lastAccessedAt",
+] as const satisfies readonly (keyof ArtifactMetadata)[]
+
+/** A restored version's metadata, with the artifact's current relationships kept. */
+export function restoredArtifactMetadata(
+  snapshot: ArtifactMetadata | undefined,
+  current: ArtifactMetadata | undefined
+): ArtifactMetadata | undefined {
+  if (!current) return snapshot
+  const kept: ArtifactMetadata = {}
+  for (const key of ARTIFACT_RELATIONSHIP_METADATA_KEYS) {
+    if (current[key] !== undefined) Object.assign(kept, { [key]: current[key] })
+  }
+  if (Object.keys(kept).length === 0) return snapshot
+  return { ...snapshot, ...kept }
+}
+
 export function isVisibleToProject(
   item: { projectId?: string },
   projectId: string | null
@@ -812,6 +901,13 @@ interface ArtifactActions {
    */
   applyArtifactReview: (id: string, changeDescription?: string) => void
   rejectArtifactReview: (id: string) => void
+  /**
+   * Bring a stale proposal up to date with the artifact as it is now: its own
+   * hunks are carried over onto the current content (`rebaseCanvasProposal`),
+   * so edits the user made meanwhile are kept rather than offered for undoing.
+   * A proposal the content already matches is resolved as applied.
+   */
+  rediffArtifactReview: (id: string) => ReviewRediffOutcome
   getPendingReview: (id: string) => CanvasPendingReview | null
   /**
    * This session's pending review outcomes, without consuming them. The
@@ -852,6 +948,8 @@ interface ArtifactActions {
    */
   applyCanvasReview: (documentId: string, changeDescription?: string) => void
   rejectCanvasReview: (documentId: string) => void
+  /** The Canvas twin of `rediffArtifactReview`. */
+  rediffCanvasReview: (documentId: string) => ReviewRediffOutcome
 
   // Artifact version history
   saveArtifactVersion: (id: string, description?: string) => ArtifactVersion | null
@@ -1671,6 +1769,32 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         })
       },
 
+      rediffArtifactReview: (id) => {
+        const state = get()
+        const review = state.pendingReviews[id]
+        const artifact = state.artifacts[id]
+        if (!review || !artifact) return { kind: "missing" }
+        const { outcome, next } = rediffReview(review, artifact.content)
+        if (outcome.kind === "conflicted") return outcome
+        set((s) => {
+          if (next) return { pendingReviews: { ...s.pendingReviews, [id]: next } }
+          const { [id]: _resolved, ...pendingReviews } = s.pendingReviews
+          return {
+            pendingReviews,
+            reviewReceipts: appendReviewReceipt(s.reviewReceipts, {
+              sessionId: artifact.sessionId,
+              artifactId: id,
+              title: artifact.title,
+              outcome: "applied",
+              accepted: review.items.length,
+              total: review.items.length,
+            }),
+          }
+        })
+        loggers.store.info("artifacts.review.rediff", { artifactId: id, outcome: outcome.kind })
+        return outcome
+      },
+
       getPendingReview: (id) => get().pendingReviews[id] ?? null,
 
       peekReviewReceipts: (sessionId) =>
@@ -1765,6 +1889,22 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         })
       },
 
+      rediffCanvasReview: (documentId) => {
+        const state = get()
+        const review = state.pendingReviews[documentId]
+        const doc = state.canvasDocuments[documentId]
+        if (!review || !doc) return { kind: "missing" }
+        const { outcome, next } = rediffReview(review, doc.content)
+        if (outcome.kind === "conflicted") return outcome
+        set((s) => {
+          if (next) return { pendingReviews: { ...s.pendingReviews, [documentId]: next } }
+          const { [documentId]: _resolved, ...pendingReviews } = s.pendingReviews
+          return { pendingReviews }
+        })
+        loggers.store.info("canvas.review.rediff", { documentId, outcome: outcome.kind })
+        return outcome
+      },
+
       // Artifact version history
       saveArtifactVersion: (id, description) => {
         const state = get()
@@ -1833,7 +1973,7 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
                 ...artifact,
                 title: version.title ?? artifact.title,
                 content: version.content,
-                metadata: version.metadata,
+                metadata: restoredArtifactMetadata(version.metadata, artifact.metadata),
                 version: artifact.version + 1,
                 updatedAt: new Date(),
               },
@@ -1852,13 +1992,7 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         })
       },
 
-      getArtifactVersions: (id) => {
-        const versions = get().artifactVersions[id]
-        if (!versions) return []
-        return [...versions]
-          .map((v) => ({ ...v, createdAt: ensureDate(v.createdAt) }))
-          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      },
+      getArtifactVersions: (id) => sortArtifactVersions(get().artifactVersions[id] ?? []),
 
       // Canvas actions
       createCanvasDocument: ({

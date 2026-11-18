@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent } from "@testing-library/react"
+import { act, render, screen, fireEvent } from "@testing-library/react"
 
 import { __resetArtifactPickersForTests } from "@/lib/artifacts/element-pick-registry"
 
@@ -53,6 +53,7 @@ jest.mock("@/components/editor/light-code-editor", () => ({
 
 import { ArtifactPanelContent } from "./artifact-panel-content"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { useArtifactDraftStore } from "@/stores/artifact/artifact-draft-store"
 import { useChatStore } from "@/stores/chat"
 
 beforeEach(() => {
@@ -60,6 +61,7 @@ beforeEach(() => {
   // The active artifact is bucketed per conversation, so the panel only
   // resolves one once a conversation is on screen.
   __resetArtifactPickersForTests()
+  useArtifactDraftStore.setState({ drafts: {} })
   useChatStore.setState({ activeSessionId: "s" })
   useArtifactStore.setState({
     artifacts: {},
@@ -156,5 +158,60 @@ describe("ArtifactPanelContent element picking", () => {
     render(<ArtifactPanelContent panelMode="desktop" />)
     // The default tab is `code`; only rendered surfaces can be pointed at.
     expect(screen.queryByTestId("artifact-element-pick-toggle")).not.toBeInTheDocument()
+  })
+})
+
+describe("ArtifactPanelContent unsaved drafts (A01, C02)", () => {
+  it("brings the typed text back after switching to another artifact and returning", () => {
+    const first = makeArtifact()
+    const second = useArtifactStore.getState().createArtifact({
+      sessionId: "s",
+      messageId: "m2",
+      type: "code",
+      title: "Other",
+      content: "SECOND",
+      language: "javascript",
+    })
+    act(() => useArtifactStore.getState().setActiveArtifact(first.id, "s"))
+    render(<ArtifactPanelContent panelMode="desktop" />)
+    fireEvent.click(screen.getByTestId("action-edit"))
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "unsaved work" } })
+    act(() => useArtifactStore.getState().setActiveArtifact(second.id, "s"))
+    expect(screen.queryByTestId("monaco")).not.toBeInTheDocument()
+    act(() => useArtifactStore.getState().setActiveArtifact(first.id, "s"))
+    expect(screen.getByTestId("monaco")).toHaveValue("unsaved work")
+    expect(useArtifactStore.getState().artifacts[first.id].content).toBe(first.content)
+  })
+
+  it("asks before a save would replace a revision committed meanwhile", () => {
+    const artifact = makeArtifact()
+    render(<ArtifactPanelContent panelMode="desktop" />)
+    fireEvent.click(screen.getByTestId("action-edit"))
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "local v1 edits" } })
+    expect(screen.queryByTestId("artifact-draft-conflict")).not.toBeInTheDocument()
+    act(() =>
+      useArtifactStore.getState().updateArtifact(artifact.id, { content: "new external v2" })
+    )
+    expect(screen.getByTestId("artifact-draft-conflict")).toBeVisible()
+    expect(screen.getByRole("button", { name: "save" })).toBeDisabled()
+    expect(screen.getByTestId("monaco")).toHaveValue("local v1 edits")
+
+    fireEvent.click(screen.getByTestId("artifact-draft-overwrite"))
+    const state = useArtifactStore.getState()
+    expect(state.artifacts[artifact.id].content).toBe("local v1 edits")
+    expect(state.getArtifactVersions(artifact.id).map((v) => v.content)).toContain(
+      "new external v2"
+    )
+  })
+
+  it("discarding a conflicted draft keeps the newer revision", () => {
+    const artifact = makeArtifact()
+    render(<ArtifactPanelContent panelMode="desktop" />)
+    fireEvent.click(screen.getByTestId("action-edit"))
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "stale draft" } })
+    act(() => useArtifactStore.getState().updateArtifact(artifact.id, { content: "v2" }))
+    fireEvent.click(screen.getByTestId("artifact-draft-discard"))
+    expect(useArtifactStore.getState().artifacts[artifact.id].content).toBe("v2")
+    expect(screen.queryByTestId("monaco")).not.toBeInTheDocument()
   })
 })

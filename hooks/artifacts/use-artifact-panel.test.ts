@@ -64,6 +64,9 @@ jest.mock("@/lib/files/document-writer", () => ({
 import { useArtifactPanelState } from "./use-artifact-panel"
 import { registerArtifactRenderer } from "@/lib/artifacts/renderer-registry"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
+import { useArtifactDraftStore } from "@/stores/artifact/artifact-draft-store"
+import { requestArtifactPreview } from "@/lib/artifacts/preview-view-request"
 import { useChatStore } from "@/stores/chat"
 import {
   renderArtifactToPngBlob,
@@ -134,13 +137,13 @@ describe("useArtifactPanelState", () => {
     const { result } = renderHook(() => {
       const panel = useArtifactPanelState()
       useEffect(() => {
-        if (!panel.panelOpen || panel.viewMode !== "preview") return
+        if (panel.viewMode !== "preview") return
         return registerArtifactFrameCapturer(a.id, async () => ({
           html: "<p>Painted</p>",
           width: 100,
           height: 100,
         }))
-      }, [panel.panelOpen, panel.viewMode])
+      }, [panel.viewMode])
       return panel
     })
     expect(result.current.viewMode).toBe("code")
@@ -152,7 +155,7 @@ describe("useArtifactPanelState", () => {
     await act(async () => {
       await expect(capturing).resolves.toMatchObject({ data: "cG5n" })
     })
-    expect(result.current.panelOpen).toBe(true)
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(false)
     expect(captureArtifactToPngBlob).toHaveBeenCalledTimes(2)
     expect(isArtifactPreviewRequested(a.id)).toBe(false)
   })
@@ -294,6 +297,117 @@ describe("useArtifactPanelState", () => {
     act(() => result.current.handleCancelEdit())
     expect(result.current.viewMode).toBe("code")
     expect(result.current.hasChanges).toBe(false)
+  })
+
+  describe("unsaved drafts (A01, C02)", () => {
+    beforeEach(() => useArtifactDraftStore.setState({ drafts: {} }))
+
+    function second() {
+      return useArtifactStore.getState().createArtifact({
+        sessionId: "s",
+        messageId: "m2",
+        type: "html",
+        title: "Other",
+        content: "<p>other</p>",
+        language: "html",
+      })
+    }
+
+    it("keeps the draft across a switch to another artifact and back", () => {
+      const a = makeArtifact()
+      const b = second()
+      act(() => useArtifactStore.getState().setActiveArtifact(a.id, "s"))
+      const { result } = renderHook(() => useArtifactPanelState())
+      act(() => result.current.handleEditMode())
+      act(() => result.current.handleEditorChange("<p>unsaved</p>"))
+      act(() => useArtifactStore.getState().setActiveArtifact(b.id, "s"))
+      expect(result.current.viewMode).toBe("code")
+      expect(result.current.editContent).toBe("<p>other</p>")
+      act(() => useArtifactStore.getState().setActiveArtifact(a.id, "s"))
+      // It opens back where the user left it, with the text they typed.
+      expect(result.current.viewMode).toBe("edit")
+      expect(result.current.editContent).toBe("<p>unsaved</p>")
+      expect(result.current.hasChanges).toBe(true)
+      expect(useArtifactStore.getState().artifacts[a.id].content).toBe(a.content)
+    })
+
+    it("keeps the draft when the panel is remounted", () => {
+      makeArtifact()
+      const first = renderHook(() => useArtifactPanelState())
+      act(() => first.result.current.handleEditMode())
+      act(() => first.result.current.handleEditorChange("<p>kept</p>"))
+      first.unmount()
+      const { result } = renderHook(() => useArtifactPanelState())
+      expect(result.current.viewMode).toBe("edit")
+      expect(result.current.editContent).toBe("<p>kept</p>")
+    })
+
+    it("a background Preview request leaves Edit without losing the draft", () => {
+      const a = makeArtifact()
+      const { result } = renderHook(() => useArtifactPanelState())
+      act(() => result.current.handleEditMode())
+      act(() => result.current.handleEditorChange("<p>experiment</p>"))
+      let release!: () => void
+      act(() => {
+        release = requestArtifactPreview(a.id)
+      })
+      expect(result.current.viewMode).toBe("preview")
+      act(() => release())
+      act(() => result.current.handleEditMode())
+      expect(result.current.editContent).toBe("<p>experiment</p>")
+      expect(result.current.hasChanges).toBe(true)
+    })
+
+    it("does not save over a revision committed while the draft was open", () => {
+      const a = makeArtifact()
+      const { result } = renderHook(() => useArtifactPanelState())
+      act(() => result.current.handleEditMode())
+      act(() => result.current.handleEditorChange("<p>local</p>"))
+      act(() => useArtifactStore.getState().updateArtifact(a.id, { content: "<p>v2</p>" }))
+      expect(result.current.draftConflict).toBe(true)
+      act(() => result.current.handleSaveEdit())
+      expect(useArtifactStore.getState().artifacts[a.id].content).toBe("<p>v2</p>")
+      expect(result.current.viewMode).toBe("edit")
+      expect(result.current.editContent).toBe("<p>local</p>")
+    })
+
+    it("overwrite keeps the draft and snapshots the revision it replaces", () => {
+      const a = makeArtifact()
+      const { result } = renderHook(() => useArtifactPanelState())
+      act(() => result.current.handleEditMode())
+      act(() => result.current.handleEditorChange("<p>local</p>"))
+      act(() => useArtifactStore.getState().updateArtifact(a.id, { content: "<p>v2</p>" }))
+      act(() => result.current.handleOverwriteDraft())
+      const state = useArtifactStore.getState()
+      expect(state.artifacts[a.id].content).toBe("<p>local</p>")
+      expect(state.getArtifactVersions(a.id).map((v) => v.content)).toContain("<p>v2</p>")
+      expect(result.current.draftConflict).toBe(false)
+      expect(useArtifactDraftStore.getState().drafts[a.id]).toBeUndefined()
+    })
+
+    it("discard drops the draft and leaves the newer revision in place", () => {
+      const a = makeArtifact()
+      const { result } = renderHook(() => useArtifactPanelState())
+      act(() => result.current.handleEditMode())
+      act(() => result.current.handleEditorChange("<p>local</p>"))
+      act(() => useArtifactStore.getState().updateArtifact(a.id, { content: "<p>v2</p>" }))
+      act(() => result.current.handleDiscardDraft())
+      expect(useArtifactStore.getState().artifacts[a.id].content).toBe("<p>v2</p>")
+      expect(result.current.viewMode).toBe("code")
+      act(() => result.current.handleEditMode())
+      expect(result.current.editContent).toBe("<p>v2</p>")
+    })
+
+    it("cancel drops the draft", () => {
+      const a = makeArtifact()
+      const { result } = renderHook(() => useArtifactPanelState())
+      act(() => result.current.handleEditMode())
+      act(() => result.current.handleEditorChange("<p>gone</p>"))
+      act(() => result.current.handleCancelEdit())
+      expect(useArtifactDraftStore.getState().drafts[a.id]).toBeUndefined()
+      act(() => result.current.handleEditMode())
+      expect(result.current.editContent).toBe(a.content)
+    })
   })
 
   it("toggleFullscreen flips isFullscreen", () => {

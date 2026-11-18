@@ -152,7 +152,10 @@
     "title": "Review changes",
     "viewChanges": "View changes",
     "widenSelectionAria": "Include more of the conversation around this message from “{title}”",
-    "widenSelectionHint": "Include one more turn on each side"
+    "widenSelectionHint": "Include one more turn on each side",
+    "reDiffAlreadyApplied": "The current text already includes this proposal.",
+    "reDiffConflicted": "Every change in this proposal overlaps your edits. Discard it, or ask for a new revision.",
+    "reDiffPartial": "{count, plural, one {# change overlapped your edits and was left out.} other {# changes overlapped your edits and were left out.}}"
   },
   "runnable": "Runnable",
   "runtimeStates": {
@@ -348,5 +351,12 @@
     }
   },
   "compareVersion": "Compare this version",
-  "compareAgainst": "Compare with"
+  "compareAgainst": "Compare with",
+  "draftConflict": {
+    "message": "This artifact changed to v{version} while you were editing. Saving would replace that revision.",
+    "overwrite": "Save my changes anyway",
+    "discard": "Discard my changes"
+  },
+  "canvasInOtherWorkspace": "This artifact's Canvas document belongs to another workspace, so it can't open here.",
+  "canvasCopyHere": "Create a copy here"
 }

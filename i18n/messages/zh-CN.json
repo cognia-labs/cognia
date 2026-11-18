@@ -4881,6 +4881,8 @@
     "batchSelect": "切换批量选择",
     "beforeEdit": "编辑前",
     "cancel": "取消",
+    "canvasCopyHere": "在这里创建副本",
+    "canvasInOtherWorkspace": "此产物关联的 Canvas 文档属于另一个工作区，无法在这里打开。",
     "code": "代码",
     "compareAgainst": "比较对象",
     "compareVersion": "比较此版本",
@@ -4921,6 +4923,11 @@
     "download": "下载",
     "downloadAsPdf": "下载为 PDF",
     "downloadAsWord": "下载为 Word",
+    "draftConflict": {
+      "discard": "放弃我的修改",
+      "message": "编辑期间该产物已更新到 v{version}。保存会覆盖这一版本。",
+      "overwrite": "仍然保存我的修改"
+    },
     "duplicate": "复制",
     "editInCanvas": "在画布中编辑",
     "elementPick": {
@@ -4993,6 +5000,9 @@
       "promoteSelectionAria": "把 {title} 设为编辑目标",
       "proposed": "提案",
       "reDiff": "与当前重新比对",
+      "reDiffAlreadyApplied": "当前内容已包含此提案。",
+      "reDiffConflicted": "此提案的所有修改都与你的编辑重叠。请丢弃它，或重新请求修订。",
+      "reDiffPartial": "{count, plural, other {有 # 处修改与你的编辑重叠，已略去。}}",
       "refreshSelectionAria": "刷新“{title}”的副本",
       "refreshSelectionHint": "该记录在被引用后有改动 — 点击重新读取",
       "reject": "拒绝",

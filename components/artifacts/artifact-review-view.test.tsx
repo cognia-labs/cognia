@@ -61,6 +61,7 @@ jest.mock("next/dynamic", () => ({
   },
 }))
 
+import { toast } from "sonner"
 import { ArtifactReviewView } from "./artifact-review-view"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import type { Artifact } from "@/types"
@@ -213,7 +214,45 @@ describe("ArtifactReviewView", () => {
     expect(screen.queryAllByTestId("review-hunk-item")).toHaveLength(0)
   })
 
-  it("re-diff rebuilds the proposal against current content (clears stale)", () => {
+  it("re-diff carries the proposal over a manual edit elsewhere instead of offering to undo it (C10)", () => {
+    const a = seedArtifact("header\nkeep\nold")
+    act(() => {
+      useArtifactStore.getState().proposeArtifactUpdate(a.id, "header\nkeep\nnew")
+      useArtifactStore.getState().updateArtifact(a.id, { content: "manual\nkeep\nold" })
+    })
+    render(<ArtifactReviewView artifact={a} panelMode="desktop" />)
+    fireEvent.click(screen.getByText("reDiff"))
+    const review = useArtifactStore.getState().pendingReviews[a.id]
+    expect(review.isStale).toBeFalsy()
+    expect(review.originalContent).toBe("manual\nkeep\nold")
+    expect(review.proposedContent).toBe("manual\nkeep\nnew")
+    // One hunk: the proposal's own change. The manual "header" edit is not on offer.
+    expect(review.items.map((item) => item.proposedText)).toEqual(["new"])
+  })
+
+  it("re-diff resolves a proposal the content already matches (C10)", () => {
+    const success = jest.spyOn(toast, "success").mockImplementation(() => "t")
+    const a = seedArtifact()
+    act(() => {
+      useArtifactStore.getState().proposeArtifactUpdate(a.id, "already saved manually")
+      useArtifactStore.getState().updateArtifact(a.id, { content: "already saved manually" })
+    })
+    render(<ArtifactReviewView artifact={a} panelMode="desktop" />)
+    expect(screen.getByTestId("review-stale-banner")).toBeVisible()
+    fireEvent.click(screen.getByText("reDiff"))
+    expect(useArtifactStore.getState().pendingReviews[a.id]).toBeUndefined()
+    expect(success).toHaveBeenCalledWith("reDiffAlreadyApplied")
+    expect(
+      useArtifactStore
+        .getState()
+        .peekReviewReceipts("s1")
+        .filter((receipt) => receipt.artifactId === a.id)
+    ).toEqual([expect.objectContaining({ artifactId: a.id, outcome: "applied" })])
+    success.mockRestore()
+  })
+
+  it("re-diff keeps a fully conflicting proposal stale and says why (C10)", () => {
+    const warning = jest.spyOn(toast, "warning").mockImplementation(() => "t")
     const a = seedArtifact()
     act(() => {
       useArtifactStore.getState().proposeArtifactUpdate(a.id, "A\nb\nc\nD")
@@ -221,9 +260,8 @@ describe("ArtifactReviewView", () => {
     })
     render(<ArtifactReviewView artifact={a} panelMode="desktop" />)
     fireEvent.click(screen.getByText("reDiff"))
-    const review = useArtifactStore.getState().pendingReviews[a.id]
-    expect(review).toBeDefined()
-    expect(review.isStale).toBeFalsy()
-    expect(review.originalContent).toBe("x\ny\nz\nw")
+    expect(useArtifactStore.getState().pendingReviews[a.id].isStale).toBe(true)
+    expect(warning).toHaveBeenCalledWith("reDiffConflicted")
+    warning.mockRestore()
   })
 })
