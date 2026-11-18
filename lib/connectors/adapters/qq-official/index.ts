@@ -160,6 +160,9 @@ const QQ_PASSIVE_LIMIT_CODES = new Set([
 ])
 const QQ_PENDING_AUDIT_CODES = new Set([304023, 304024])
 
+/** GET /v2/users/{openid}/info: the user and the bot are not friends. */
+const QQ_NO_FRIEND_RELATIONSHIP_CODE = 40184001
+
 class QQApiError extends Error {
   constructor(
     message: string,
@@ -854,6 +857,23 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
     return sendNormal(req, undefined, options)
   }
 
+  /**
+   * `allow_proactive_msg` from GET /v2/users/{user_openid}/info (2026-11-16).
+   * `undefined` when the platform gives no boolean answer, so the recorded
+   * C2C_MSG_RECEIVE / C2C_MSG_REJECT opt-in stays the deciding evidence.
+   */
+  async function qqUserProactiveConsent(userOpenid: string): Promise<boolean | undefined> {
+    try {
+      const value = (await qqRequest("GET", `/v2/users/${encodeURIComponent(userOpenid)}/info`))
+        .body.data?.allow_proactive_msg
+      return typeof value === "boolean" ? value : undefined
+    } catch (error) {
+      if (error instanceof QQApiError && error.platformCode === QQ_NO_FRIEND_RELATIONSHIP_CODE)
+        throw new QQValidationError("QQ user has no friend relationship with this bot")
+      return undefined
+    }
+  }
+
   async function prepareExplicitDelivery(req: OutboundRequest) {
     const explicitPush = req.sendOptions?.mode && req.sendOptions.mode !== "reply"
     const mentionsAll = req.segments.some(
@@ -885,11 +905,17 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
           buildConversationKey("qq-official", opts.id, ref.sceneId)
         )
       )?.deliveryPermissions
-      if (
-        permission?.proactive === false ||
-        (req.sendOptions?.mode === "proactive" && permission?.proactive !== true)
-      )
+      if (permission?.proactive === false)
         throw new QQValidationError("QQ C2C proactive delivery requires a recorded user opt-in")
+      if (req.sendOptions?.mode === "proactive") {
+        // The user's live switch outranks a recorded event (which may have been
+        // missed or predate this adapter), exactly as group bot_state does.
+        const live = await qqUserProactiveConsent(ref.sceneId)
+        if (live === false)
+          throw new QQValidationError("QQ C2C user has not enabled proactive messages")
+        if (live !== true && permission?.proactive !== true)
+          throw new QQValidationError("QQ C2C proactive delivery requires a recorded user opt-in")
+      }
     }
     if (explicitPush) {
       quotas.push(

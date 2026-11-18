@@ -1166,21 +1166,33 @@ describe("createQQOfficialAdapter", () => {
     expect(httpCalls().filter((call) => call.url.endsWith("/messages"))).toHaveLength(2)
     await a.stop()
   })
-  it.each([true, false, undefined])(
-    "enforces captured C2C proactive consent %s before native POST",
-    async (allowed) => {
+  it.each([
+    // [recorded opt-in, live allow_proactive_msg, expected]
+    [true, undefined, true],
+    [false, undefined, false],
+    [undefined, undefined, false],
+    [undefined, true, true],
+    [true, false, false],
+    [false, true, false],
+  ] as const)(
+    "enforces C2C proactive consent (recorded %s, live %s) before native POST",
+    async (recorded, live, allowed) => {
       const a = adapter()
       await startWithDispatch(a, C2C_DISPATCH)
-      if (allowed !== undefined) {
+      if (recorded !== undefined) {
         const event = parseQQDispatch("qq-1", "bot", {
           op: 0,
           id: "consent",
-          t: allowed ? "C2C_MSG_RECEIVE" : "C2C_MSG_REJECT",
+          t: recorded ? "C2C_MSG_RECEIVE" : "C2C_MSG_REJECT",
           d: { openid: "UO", timestamp: Math.floor(Date.now() / 1000) },
         } as never)!
         await captureSystemDeliveryContext(event)
       }
-      mockInvoke.mockResolvedValue(httpResp(200, { id: "proactive" }))
+      mockInvoke.mockImplementation(async (_command, args) =>
+        args.req.url.endsWith("/v2/users/UO/info")
+          ? httpResp(200, live === undefined ? {} : { allow_proactive_msg: live })
+          : httpResp(200, { id: "proactive" })
+      )
       const request = sendReq({
         conversationRef: {
           platform: "qq-official",
@@ -1193,15 +1205,44 @@ describe("createQQOfficialAdapter", () => {
         sendOptions: { mode: "proactive" },
       })
       const result = await a.send(request)
-      expect(result.ok).toBe(allowed === true)
+      expect(result.ok).toBe(allowed)
+      const posts = () => httpCalls().filter((call) => call.method === "POST")
+      // A recorded rejection is decided locally, without asking the platform.
+      if (recorded === false)
+        expect(httpCalls().some((call) => call.url.endsWith("/info"))).toBe(false)
       if (allowed) {
-        expect(JSON.parse(httpCalls()[0].body!)).not.toHaveProperty("msg_id")
+        expect(JSON.parse(posts()[0].body!)).not.toHaveProperty("msg_id")
         expect((await adapter().send(request)).ok).toBe(true)
-        expect(httpCalls()).toHaveLength(1)
-      } else expect(httpCalls()).toHaveLength(0)
+        expect(posts()).toHaveLength(1)
+      } else expect(posts()).toHaveLength(0)
       await a.stop()
     }
   )
+  it("refuses C2C proactive delivery without retry when the user is no longer a friend", async () => {
+    const a = adapter()
+    await startWithDispatch(a, C2C_DISPATCH)
+    mockInvoke.mockImplementation(async (_command, args) =>
+      args.req.url.endsWith("/info")
+        ? httpResp(400, { code: 40184001, message: "无好友关系" })
+        : httpResp(200, { id: "proactive" })
+    )
+    const result = await a.send(
+      sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "c2c",
+          sceneId: "UO",
+          msgId: "in-1",
+          receivedAt: Date.now(),
+        },
+        sendOptions: { mode: "proactive" },
+      })
+    )
+    expect(result).toMatchObject({ ok: false, error: { code: "validation", retryable: false } })
+    expect(httpCalls().filter((call) => call.method === "POST")).toHaveLength(0)
+    await a.stop()
+  })
   it("protects card and stream reusable media references, including padded tokens", async () => {
     const a = adapter()
     const reference = "qqbot-media://image/v1/token=="

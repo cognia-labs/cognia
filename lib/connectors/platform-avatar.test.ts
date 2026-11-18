@@ -616,6 +616,20 @@ it("separates DingTalk staff identity and QQ channel identity from opaque conver
       },
     })
   ).toBeNull()
+  expect(
+    conversationPlatformAvatarTarget({
+      platform: "qq-official",
+      adapterId: "qq",
+      conversationKey: "opaque",
+      conversationRef: { platform: "qq-official", adapterId: "qq", scene: "c2c", sceneId: "UO" },
+    })
+  ).toEqual({
+    platform: "qq-official",
+    adapterId: "qq",
+    kind: "user",
+    remoteId: "UO",
+    remoteIdType: "c2c_openid",
+  })
 })
 
 it("uses the self-bot endpoint for a confirmed Feishu app instead of contact users", async () => {
@@ -961,6 +975,56 @@ it("retains official QQ channel portraits without interpreting the opaque user a
     })
   ).toContain("data:image/png")
   expect(connectorsKeyringGet).not.toHaveBeenCalled()
+})
+
+it("resolves a QQ C2C user portrait through the user info endpoint", async () => {
+  const { getQQAccessToken } = await import("@/lib/connectors/adapters/qq-official/auth")
+  jest.mocked(getAdapterInstance).mockResolvedValue({ type: "qq-official", settings: {} } as never)
+  jest.mocked(getQQAccessToken).mockResolvedValue("PRIVATE_APP_TOKEN")
+  jest
+    .mocked(connectorsKeyringGet)
+    .mockImplementation(async (_id, name) => (name === "appId" ? "app" : "secret"))
+  jest
+    .mocked(connectorsHttpRequest)
+    .mockResolvedValueOnce(
+      http({ username: "U", avatar: "https://thirdqq.qlogo.cn/bqqthird?key=k&s=640" })
+    )
+  expect(
+    await resolvePlatformAvatar({
+      platform: "qq-official",
+      adapterId: "qq",
+      kind: "user",
+      remoteId: "USER_OPENID",
+      remoteIdType: "c2c_openid",
+    })
+  ).toContain("data:image/png")
+  expect(connectorsHttpRequest).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "GET",
+      url: "https://api.bot.qq.com/v2/users/USER_OPENID/info",
+      headers: expect.objectContaining({ Authorization: "QQBot PRIVATE_APP_TOKEN" }),
+    })
+  )
+  expect(fetchAttachment).toHaveBeenCalledWith(
+    expect.objectContaining({
+      headers: undefined,
+      sourceUrl: "https://thirdqq.qlogo.cn/bqqthird?key=k&s=640",
+    })
+  )
+})
+
+it("never sends a QQ group member openid to the user info endpoint", async () => {
+  jest.mocked(getAdapterInstance).mockResolvedValue({ type: "qq-official", settings: {} } as never)
+  expect(
+    await resolvePlatformAvatar({
+      platform: "qq-official",
+      adapterId: "qq",
+      kind: "user",
+      remoteId: "MEMBER_OPENID",
+      remoteIdType: "group_openid",
+    })
+  ).toBeUndefined()
+  expect(connectorsHttpRequest).not.toHaveBeenCalled()
 })
 
 it("uses QQ channel metadata for the server portrait and strips API auth from the image download", async () => {

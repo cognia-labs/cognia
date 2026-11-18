@@ -30,12 +30,26 @@ export function encodeQQMessageId(scene: QQScene, sceneId: string, id: string): 
   return `${scene}:${sceneId}:${id}`
 }
 
+/**
+ * Sender / mention identity. Since the 2026-11-16 platform update group
+ * (`GroupUser`) and C2C (`C2CUser`) authors carry `avatar`, group authors carry
+ * `member_nickname`, and group mentions (`GroupMentionsUser`) carry `is_you`,
+ * which marks the current bot even when its group member openid differs from
+ * the READY self id.
+ */
 export interface QQAuthor {
   id?: string
   username?: string
   avatar?: string
   member_openid?: string
   user_openid?: string
+  /** Group scene: the sender's nickname inside this group. */
+  member_nickname?: string
+  /** Cross-app user openid; only set when the bot is bound to a third-party app. */
+  union_openid?: string
+  bot?: boolean
+  /** Group mention: true when this mention targets the current bot. */
+  is_you?: boolean
 }
 
 export interface QQAttachmentData {
@@ -75,6 +89,8 @@ export interface QQMessageData extends QQMsgElement {
   timestamp?: string
   author?: QQAuthor
   group_openid?: string
+  /** Cross-app group openid; only set when the bot is bound to a third-party app. */
+  union_group_openid?: string
   channel_id?: string
   guild_id?: string
   attachments?: QQAttachmentData[]
@@ -113,6 +129,42 @@ export const QQ_MESSAGE_EVENTS = [
 /** Strip a leading `<@!12345>` channel mention QQ prefixes to AT messages. */
 export function stripChannelMention(content: string): string {
   return content.replace(/^\s*<@!?\d+>\s*/, "").trim()
+}
+
+/**
+ * Ids that address the current bot in this message: mentions the platform
+ * marks `is_you`, plus the verified self id when one is known.
+ */
+export function qqSelfMentionIds(
+  mentions: readonly (QQAuthor | null | undefined)[] | undefined,
+  selfId: string
+): Set<string> {
+  const ids = new Set<string>(selfId ? [selfId] : [])
+  for (const mention of Array.isArray(mentions) ? mentions : []) {
+    if (!mention || typeof mention !== "object" || mention.is_you !== true) continue
+    for (const id of [mention.member_openid, mention.id])
+      if (typeof id === "string" && id) ids.add(id)
+  }
+  return ids
+}
+
+/**
+ * Remove leading `<@id>` tokens that address the bot, so `<@bot> /status`
+ * reads as `/status`. Mentions of anyone else are kept verbatim: a message
+ * addressed to another member is not a command to this bot.
+ */
+export function stripLeadingSelfMentions(content: string, selfIds: ReadonlySet<string>): string {
+  let rest = content
+  for (;;) {
+    const match = /^\s*<@!?([^>\s]+)>/.exec(rest)
+    if (!match || !selfIds.has(match[1])) break
+    rest = rest.slice(match[0].length)
+  }
+  return rest === content ? content : rest.trim()
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined
 }
 
 function tsToMillis(ts: string | undefined): number {
@@ -240,8 +292,12 @@ function safeQQData(data: QQMessageData): QQMessageData {
           id: qqReferenceIndex(value.id),
           member_openid: qqReferenceIndex(value.member_openid),
           user_openid: qqReferenceIndex(value.user_openid),
+          union_openid: qqReferenceIndex(value.union_openid),
           username: text(value.username, 256),
+          member_nickname: text(value.member_nickname, 256),
           avatar: safeQQUrl(value.avatar),
+          ...(value.bot === true ? { bot: true } : {}),
+          ...(value.is_you === true ? { is_you: true } : {}),
         }
       : undefined
   function element(value: QQMsgElement, depth: number): QQMsgElement | undefined {
@@ -326,6 +382,7 @@ function safeQQData(data: QQMessageData): QQMessageData {
     id: qqReferenceIndex(data.id),
     timestamp: text(data.timestamp, 128),
     group_openid: qqReferenceIndex(data.group_openid),
+    union_group_openid: qqReferenceIndex(data.union_group_openid),
     channel_id: qqReferenceIndex(data.channel_id),
     guild_id: qqReferenceIndex(data.guild_id),
     mentions: Array.isArray(data.mentions)
@@ -350,9 +407,10 @@ function safeQQData(data: QQMessageData): QQMessageData {
 }
 
 /** One normalization owns both model text and the read-only inbound surface. */
-export function qqMessageProjection(dispatch: QQDispatch) {
+export function qqMessageProjection(dispatch: QQDispatch, selfId = "") {
   const data = safeQQData(dispatch.d ?? {})
   const indexes = sceneIndexes(data.message_scene)
+  const selfIds = qqSelfMentionIds(data.mentions, selfId)
   const segments: MessageSegment[] = []
   const nodes: InboundA2UINode[] = []
   function render(
@@ -383,8 +441,11 @@ export function qqMessageProjection(dispatch: QQDispatch) {
       value.ark_data && (cardTitle || children.length || value.ark_data.prompt)
     )
     const rawText = typeof value.content === "string" ? value.content.trim() : ""
-    const content =
-      root && dispatch.t === "AT_MESSAGE_CREATE" ? stripChannelMention(rawText) : rawText
+    const content = !root
+      ? rawText
+      : dispatch.t === "AT_MESSAGE_CREATE"
+        ? stripChannelMention(rawText)
+        : stripLeadingSelfMentions(rawText, selfIds)
     if (content && !(hasCard && /^\[卡片消息\]/.test(content))) {
       into.push({ type: "text", text: content })
       body.push({ kind: "text", text: content })
@@ -527,17 +588,18 @@ export function parseQQDispatch(
   const actor = deletion ? dispatch.d?.op_user : d.author
   if (deletion && typeof actor?.id === "string" && actor.id) remoteUserId = actor.id
   const conversationKey = buildConversationKey("qq-official", adapterId, sceneId)
+  const displayName =
+    (scene === "group" ? nonEmpty(actor?.member_nickname) : undefined) ?? nonEmpty(actor?.username)
+  const avatarUrl = safeQQUrl(actor?.avatar)
   const sender: PlatformIdentity = {
     id: `qq:${sceneId}:${remoteUserId}`,
     platform: "qq-official",
     adapterId,
     remoteUserId,
     remoteIdType: scene === "channel" || scene === "direct" ? "channel_user" : `${scene}_openid`,
-    displayName: typeof actor?.username === "string" ? actor.username : undefined,
-    avatarUrl:
-      (scene === "channel" || scene === "direct") && typeof actor?.avatar === "string"
-        ? actor.avatar
-        : undefined,
+    ...(displayName ? { displayName } : {}),
+    ...(avatarUrl ? { avatarUrl } : {}),
+    ...(!deletion && actor?.bot === true ? { kind: "bot" as const } : {}),
   }
 
   const rawText = typeof d.content === "string" ? d.content : ""
@@ -548,15 +610,16 @@ export function parseQQDispatch(
         return typeof id === "string" && id ? [id] : []
       })
     : []
+  const selfIds = qqSelfMentionIds(d.mentions, selfId)
   const selfMentioned =
     scene === "c2c" ||
     scene === "direct" ||
     dispatch.t === "GROUP_AT_MESSAGE_CREATE" ||
     dispatch.t === "AT_MESSAGE_CREATE" ||
-    (Boolean(selfId) &&
-      (users.includes(selfId) ||
-        [...rawText.matchAll(/<@!?([^>]+)>/g)].some((match) => match[1] === selfId)))
-  const projection = qqMessageProjection({ ...dispatch, d })
+    (Array.isArray(d.mentions) && d.mentions.some((user) => user?.is_you === true)) ||
+    users.some((id) => selfIds.has(id)) ||
+    [...rawText.matchAll(/<@!?([^>]+)>/g)].some((match) => selfIds.has(match[1]))
+  const projection = qqMessageProjection({ ...dispatch, d }, selfId)
   const segments = projection.segments
 
   return {

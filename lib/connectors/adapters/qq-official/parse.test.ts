@@ -1,3 +1,4 @@
+import { parseControlCommand } from "@/lib/connectors/commands/parse"
 import { parseQQDispatch, stripChannelMention, type QQDispatch } from "./parse"
 
 const ADAPTER = "qq-1"
@@ -762,19 +763,186 @@ it.each(["AT_MESSAGE_CREATE", "DIRECT_MESSAGE_CREATE"])(
   }
 )
 
-it("does not promote arbitrary group message fields or ARK content into an author portrait", () => {
-  const result = parseQQDispatch(
-    ADAPTER,
-    SELF,
-    dispatch("GROUP_AT_MESSAGE_CREATE", {
-      id: "group",
-      group_openid: "group-openid",
-      content: "kept",
-      author: { member_openid: "opaque", avatar: "https://q1.qlogo.cn/arbitrary" },
-    })
+describe("2026-11-16 sender identity fields", () => {
+  const avatar = "https://thirdqq.qlogo.cn/bqqthird?key=abc&s=640"
+
+  it.each(["GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"])(
+    "uses the %s group nickname and avatar for the sender",
+    (t) => {
+      const result = parseQQDispatch(
+        ADAPTER,
+        SELF,
+        dispatch(t, {
+          id: "group",
+          group_openid: "group-openid",
+          union_group_openid: "union-group",
+          content: "kept",
+          author: {
+            id: "opaque",
+            member_openid: "opaque",
+            username: "Account name",
+            member_nickname: "Group alias",
+            union_openid: "union-user",
+            avatar,
+          },
+        })
+      )
+      expect(result?.sender).toMatchObject({
+        remoteUserId: "opaque",
+        remoteIdType: "group_openid",
+        displayName: "Group alias",
+        avatarUrl: avatar,
+      })
+      expect(result?.sender.kind).toBeUndefined()
+      const raw = result?.raw as QQDispatch
+      expect(raw.d?.union_group_openid).toBe("union-group")
+      expect(raw.d?.author).toMatchObject({
+        member_nickname: "Group alias",
+        union_openid: "union-user",
+      })
+    }
   )
-  expect(result?.sender.avatarUrl).toBeUndefined()
-  expect(result?.sender.remoteIdType).toBe("group_openid")
+
+  it("falls back to the account name when the group nickname is empty", () => {
+    const result = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("GROUP_MESSAGE_CREATE", {
+        id: "group",
+        group_openid: "group-openid",
+        content: "kept",
+        author: { member_openid: "opaque", username: "Account name", member_nickname: "" },
+      })
+    )
+    expect(result?.sender.displayName).toBe("Account name")
+  })
+
+  it("uses the C2C avatar and treats an empty username as absent", () => {
+    const result = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("C2C_MESSAGE_CREATE", {
+        id: "c2c",
+        content: "hello",
+        author: { id: "user", user_openid: "user", username: "", avatar },
+      })
+    )
+    expect(result?.sender.avatarUrl).toBe(avatar)
+    expect(result?.sender).not.toHaveProperty("displayName")
+  })
+
+  it.each(["javascript:alert(1)", "https://127.0.0.1/a.png", "https://u:p@q1.qlogo.cn/a"])(
+    "rejects the unsafe author avatar %s",
+    (url) => {
+      const result = parseQQDispatch(
+        ADAPTER,
+        SELF,
+        dispatch("GROUP_MESSAGE_CREATE", {
+          id: "group",
+          group_openid: "group-openid",
+          content: "kept",
+          author: { member_openid: "opaque", avatar: url },
+        })
+      )
+      expect(result?.sender).not.toHaveProperty("avatarUrl")
+    }
+  )
+
+  it("marks a sender the platform reports as a bot", () => {
+    const result = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("GROUP_MESSAGE_CREATE", {
+        id: "group",
+        group_openid: "group-openid",
+        content: "beep",
+        author: { member_openid: "other-bot", bot: true },
+      })
+    )
+    expect(result?.sender.kind).toBe("bot")
+  })
+})
+
+describe("group mentions marked is_you", () => {
+  const BOT_MEMBER = "BOT_MEMBER_OPENID"
+  const full = (content: string, mentions: unknown[]) =>
+    dispatch("GROUP_MESSAGE_CREATE", {
+      id: "full",
+      group_openid: "GROUP",
+      author: { member_openid: "member" },
+      content,
+      mentions,
+    } as unknown as QQDispatch["d"])
+
+  it("treats a platform is_you mention as a self mention before the self id is known", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      "",
+      full(`<@${BOT_MEMBER}> hello`, [{ member_openid: BOT_MEMBER, bot: true, is_you: true }])
+    )
+    expect(event?.mentions).toEqual({ selfMentioned: true, users: [BOT_MEMBER] })
+    expect(event?.plainText).toBe("hello")
+  })
+
+  it("does not treat another bot's mention as a self mention", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      "",
+      full("<@OTHER_BOT> hello", [{ member_openid: "OTHER_BOT", bot: true, is_you: false }])
+    )
+    expect(event?.mentions.selfMentioned).toBe(false)
+    expect(event?.plainText).toBe("<@OTHER_BOT> hello")
+  })
+
+  it("keeps is_you through the sanitized raw payload", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      "",
+      full(`<@${BOT_MEMBER}> hi`, [{ member_openid: BOT_MEMBER, is_you: true }])
+    )
+    expect((event?.raw as QQDispatch).d?.mentions?.[0]).toMatchObject({
+      member_openid: BOT_MEMBER,
+      is_you: true,
+    })
+  })
+
+  it.each([
+    [`<@${BOT_MEMBER}> /status`, "/status"],
+    [`<@${BOT_MEMBER}><@${BOT_MEMBER}>   /model gpt-5`, "/model gpt-5"],
+    [`<@${BOT_MEMBER}> <@member-2> /status`, "<@member-2> /status"],
+    [`hello <@${BOT_MEMBER}>`, `hello <@${BOT_MEMBER}>`],
+  ])("strips only leading self mentions from %j", (content, expected) => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      "",
+      full(content, [{ member_openid: BOT_MEMBER, is_you: true }, { member_openid: "member-2" }])
+    )
+    expect(event?.plainText).toBe(expected)
+  })
+
+  it("lets a mention-prefixed control command reach the command parser", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      "",
+      full(`<@${BOT_MEMBER}> /status`, [{ member_openid: BOT_MEMBER, is_you: true }])
+    )!
+    expect(parseControlCommand(event.plainText)).toMatchObject({ kind: "known", name: "status" })
+  })
+
+  it("strips a leading self mention matched by the verified self id", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("MESSAGE_CREATE", {
+        id: "channel-full",
+        channel_id: "CHANNEL",
+        author: { id: "user" },
+        content: `<@!${SELF}> /help`,
+      })
+    )
+    expect(event?.plainText).toBe("/help")
+    expect(event?.mentions.selfMentioned).toBe(true)
+  })
 })
 it("normalizes messages without loading the media enrichment runtime", () => {
   try {

@@ -104,7 +104,11 @@ export function conversationPlatformAvatarTarget(
   }
   if (binding.platform === "qq-official") {
     const remoteId = id(ref.sceneId)
-    return ref.scene === "channel" && remoteId ? { ...base, kind: "channel", remoteId } : null
+    if (!remoteId) return null
+    if (ref.scene === "channel") return { ...base, kind: "channel", remoteId }
+    // A C2C scene id is the user's openid, which GET /v2/users/{openid}/info resolves.
+    if (ref.scene === "c2c") return { ...base, kind: "user", remoteId, remoteIdType: "c2c_openid" }
+    return null
   }
   const remoteId = address?.containerId ?? id(ref.chatId) ?? id(ref.channelId) ?? id(ref.roomId)
   if (!remoteId) return null
@@ -278,19 +282,34 @@ async function resolveSource(
     return safe ? { url: safe } : undefined
   }
   if (platform === "qq-official") {
+    const qqApi = async () => {
+      const [appId, clientSecret] = await Promise.all([
+        connectorsKeyringGet(adapterId, "appId"),
+        connectorsKeyringGet(adapterId, "clientSecret"),
+      ])
+      if (!appId || !clientSecret || !active()) return undefined
+      const { getQQAccessToken, qqAuthHeaders, QQ_API_BASE } =
+        await import("@/lib/connectors/adapters/qq-official/auth")
+      return {
+        base: QQ_API_BASE,
+        headers: qqAuthHeaders(await getQQAccessToken(appId, clientSecret)),
+      }
+    }
+    // Group member openids are not user openids; only a C2C openid has a profile endpoint.
+    if (kind === "user" && target.remoteIdType === "c2c_openid") {
+      const api = await qqApi()
+      if (!api) return undefined
+      const result = await request(`${api.base}/v2/users/${encode(remoteId)}/info`, api.headers)
+      const safe = publicUrl(platform, result?.avatar, true)
+      return safe ? { url: safe } : undefined
+    }
     const ref = await conversationRef()
     const channelId =
       kind === "channel" ? remoteId : ref?.scene === "channel" ? id(ref.sceneId) : undefined
     if (!channelId) return undefined
-    const [appId, clientSecret] = await Promise.all([
-      connectorsKeyringGet(adapterId, "appId"),
-      connectorsKeyringGet(adapterId, "clientSecret"),
-    ])
-    if (!appId || !clientSecret || !active()) return undefined
-    const { getQQAccessToken, qqAuthHeaders, QQ_API_BASE } =
-      await import("@/lib/connectors/adapters/qq-official/auth")
-    const token = await getQQAccessToken(appId, clientSecret)
-    const headers = qqAuthHeaders(token)
+    const api = await qqApi()
+    if (!api) return undefined
+    const { base: QQ_API_BASE, headers } = api
     const channel = await request(`${QQ_API_BASE}/channels/${encode(channelId)}`, headers)
     const guildId = id(channel?.guild_id)
     if (!guildId) return undefined
