@@ -579,8 +579,28 @@ export const builtinToolsSchema: z.ZodType<Partial<BuiltinToolsConfig>> = z
   )
   .strict() as z.ZodType<Partial<BuiltinToolsConfig>>
 
+/**
+ * A stored provider account's name (`auth login --name`). `default` is the
+ * provider's unnamed credentials slot, so it is never a key under `accounts`.
+ */
+export const DEFAULT_PROVIDER_ACCOUNT = "default"
+export const providerAccountNameSchema = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+    "account names are 1-64 letters, digits, dots, dashes or underscores"
+  )
+
 export const providerConfigSchema = z
   .object({
+    /**
+     * Which stored account (`credentials.json`) supplies this provider's
+     * secrets. Set in a project config, it pins the repository to one key.
+     * An explicit choice wins over keys from project config and the
+     * environment, because it names the key to use. Unset, the unnamed
+     * `default` account is used, or the only one stored.
+     */
+    account: providerAccountNameSchema.optional(),
     /** Secret. Normally lives in credentials.json, but accepted here too. */
     apiKey: z.string().min(1).optional(),
     /**
@@ -986,6 +1006,12 @@ export const cliConfigFileSchema = z
      * were all overridable but the dialect they are spoken in was not.
      */
     protocol: z.enum(RESOLVER_PROTOCOLS).optional(),
+    /**
+     * The ACTIVE provider's stored account, bound onto its slot like
+     * `protocol`. The face `--provider-account` and `COGNIA_PROVIDER_ACCOUNT`
+     * write; `providers.<id>.account` names one provider's account.
+     */
+    providerAccount: providerAccountNameSchema.optional(),
     systemPrompt: z.string().optional(),
     permissionMode: z.enum(PERMISSION_MODES).optional(),
     bypassConfirmation: z.enum(["ask", "never"]).optional(),
@@ -1281,7 +1307,23 @@ export const cliConfigFileSchema = z
 
 export type CliConfigFile = z.infer<typeof cliConfigFileSchema>
 
-/** The `credentials.json` shape — api keys / subscription tokens by provider id. */
+/** One stored account's secrets: a metered key, a subscription token, or both. */
+export const storedProviderSecretSchema = z
+  .object({
+    apiKey: z.string().min(1).optional(),
+    authToken: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((v) => Boolean(v.apiKey || v.authToken), {
+    message: "provider credential needs an apiKey or authToken",
+  })
+
+/**
+ * The `credentials.json` shape: api keys and subscription tokens by provider
+ * id. The entry's own `apiKey` / `authToken` are its `default` account;
+ * `accounts` holds the named ones (`auth login --name`), so one provider can
+ * keep a personal and a work key without a second provider id.
+ */
 export const credentialsFileSchema = z
   .object({
     providers: z
@@ -1291,12 +1333,19 @@ export const credentialsFileSchema = z
           .object({
             apiKey: z.string().min(1).optional(),
             authToken: z.string().min(1).optional(),
+            accounts: z
+              .record(providerAccountNameSchema, storedProviderSecretSchema)
+              .refine((accounts) => !(DEFAULT_PROVIDER_ACCOUNT in accounts), {
+                message: `"${DEFAULT_PROVIDER_ACCOUNT}" is the provider's own apiKey/authToken, not a named account`,
+              })
+              .optional(),
           })
           .strict()
           // At least one secret must be present for an entry to be meaningful.
-          .refine((v) => Boolean(v.apiKey || v.authToken), {
-            message: "provider credential needs an apiKey or authToken",
-          })
+          .refine(
+            (v) => Boolean(v.apiKey || v.authToken || Object.keys(v.accounts ?? {}).length > 0),
+            { message: "provider credential needs an apiKey, authToken or named account" }
+          )
       )
       .optional(),
     /** Search API credentials, kept separate from model-provider credentials. */
@@ -1330,6 +1379,28 @@ export const credentialsFileSchema = z
 
 export type CredentialsFile = z.infer<typeof credentialsFileSchema>
 
+/** What chose a provider's stored account. */
+export type ProviderAccountSource =
+  /** `--provider-account`. */
+  | "flag"
+  /** `COGNIA_PROVIDER_ACCOUNT`. */
+  | "env"
+  /** `providers.<id>.account` (or `providerAccount`) in the project config. */
+  | "project-config"
+  /** The same keys in `~/.cognia/config.json`. */
+  | "user-config"
+  /** Nothing: the unnamed `default` account. */
+  | "default"
+  /** Nothing: the only account stored. */
+  | "only"
+
+export interface ProviderAccountSelection {
+  name: string
+  source: ProviderAccountSource
+  /** The file or variable that chose it, for an explicit choice. */
+  origin?: string
+}
+
 /**
  * Fully-resolved, defaults-applied config. This is what the rest of the CLI
  * consumes — `provider`, `permissionMode`, `builtinTools`, `cwd`, and
@@ -1347,6 +1418,12 @@ export interface ResolvedConfig {
   /** Generic wire-dialect override, bound onto the active provider's slot
    * during resolution. See the config-file schema field. */
   protocol?: ResolverProtocol
+  /**
+   * The stored account whose secrets each provider's run uses, and what chose
+   * it. Absent for a provider whose secrets come from config or the
+   * environment instead.
+   */
+  providerAccounts?: Record<string, ProviderAccountSelection>
   systemPrompt?: string
   bypassConfirmation?: "ask" | "never"
   permissionMode: (typeof PERMISSION_MODES)[number]

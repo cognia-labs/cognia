@@ -34,7 +34,7 @@ import {
 } from "@cognia/agent-codex/app-server-client"
 
 import type { LimitsSourceContext, ProviderId, ProviderLimits } from "@/types/subscription"
-import type { ResolvedConfig } from "../../config/schema"
+import { DEFAULT_PROVIDER_ACCOUNT, type ResolvedConfig } from "../../config/schema"
 import { createCliTranslator, type CliLocale } from "../i18n"
 
 type NativeRateLimit = Extract<CanonicalAgentEvent, { kind: "rate-limit" }> & {
@@ -291,10 +291,12 @@ export async function buildCliLimits(deps: CliLimitsDeps): Promise<ProviderLimit
     const sources = resolveLimitsSources({ provider, providerKey, baseUrl })
     if (sources.length === 0) return null
 
+    // A named stored account is part of the label: its meters are that account's.
+    const account = deps.config.providerAccounts?.[id]?.name
     const ctx: LimitsSourceContext = {
       provider,
       accountId: id,
-      accountLabel: id,
+      accountLabel: account && account !== DEFAULT_PROVIDER_ACCOUNT ? `${id} (${account})` : id,
       token,
       baseUrl,
       providerKey,

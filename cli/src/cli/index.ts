@@ -53,7 +53,7 @@ Usage:
                     [--plugin-tools] [--dev-plugins] [--bypass]
   cognia-agent -p "<prompt>"                            headless one-shot (alias of run)
   cognia-agent run "<prompt>" [--model m] [--provider p] [--protocol openai|anthropic|…]
-                              [--cwd dir]
+                              [--provider-account name] [--cwd dir]
                               [--system s] [--allow a,b] [--yes] [--max-turns n]
                               [--output-format text|json|stream-json] [--json]
                               [--timeout ms] [--handoff]
@@ -66,6 +66,9 @@ Usage:
   cognia-agent update [check] [--yes] [--json]         upgrade the CLI through its
                                                        own package manager
   cognia-agent auth <login|status|logout> [--provider p] [--api-key k]
+                     [--name account] [--all] [--provider-account account]
+                     one provider can keep several named accounts; login and
+                     logout act on "default" unless --name names another
   cognia-agent logto <login|status|logout>          Cognia account (default) or Logto session
                      [--provider feishu|github|google|apple] [--switch-account]
                      [--issuer u] [--client-id id] [--resource api] [--scope a,b] [--org id]

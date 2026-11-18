@@ -348,10 +348,17 @@ export interface AppProps {
   /**
    * Persist a freshly-entered provider credential to
    * `~/.cognia/credentials.json` (0600) when the `/provider` key prompt is
-   * submitted; defaults to the real {@link setCredential} writer. Returns false
-   * on failure (read-only home) so the prompt can surface the error inline.
+   * submitted; defaults to the real {@link setCredential} writer. `account`
+   * is the stored account this session uses for the provider, absent for its
+   * default one. Returns false on failure (read-only home) so the prompt can
+   * surface the error inline.
    */
-  persistCredential?: (providerId: string, secret: string, kind: CredentialKind) => boolean
+  persistCredential?: (
+    providerId: string,
+    secret: string,
+    kind: CredentialKind,
+    account?: string
+  ) => boolean
   /**
    * Flush the CLI-local Dexie after a runtime feature writes to it; defaults to
    * scheduling a debounced snapshot. Injected as a no-op by tests so they never
@@ -1903,20 +1910,29 @@ export function App({
   )
 
   // Write a provider credential (api key / subscription token) to
-  // `~/.cognia/credentials.json` when the `/provider` key prompt is submitted.
-  // Failures (read-only home) return false so the prompt surfaces the error
-  // inline instead of the App throwing.
+  // `~/.cognia/credentials.json` when the `/provider` key prompt is submitted,
+  // into the stored account this session uses for the provider (the default
+  // one when none is). Failures (read-only home) return false so the prompt
+  // surfaces the error inline instead of the App throwing.
+  const providerAccounts = state.config.providerAccounts
   const persistCredentialFn = useCallback(
     (providerId: string, secret: string, kind: CredentialKind): boolean => {
       try {
-        if (persistCredential) return persistCredential(providerId, secret, kind)
-        setCredential(home, providerId, secret, undefined, { kind })
+        const account = providerAccounts?.[providerId]?.name
+        if (persistCredential)
+          return account
+            ? persistCredential(providerId, secret, kind, account)
+            : persistCredential(providerId, secret, kind)
+        setCredential(home, providerId, secret, undefined, {
+          kind,
+          ...(account ? { account } : {}),
+        })
         return true
       } catch {
         return false
       }
     },
-    [home, persistCredential]
+    [home, persistCredential, providerAccounts]
   )
 
   // Resolve a plan-approval choice (Claude Code parity — the execution mode is

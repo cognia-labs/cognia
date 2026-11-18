@@ -108,15 +108,22 @@ describe("authCommand", () => {
     expect(s.stderr()).toMatch(/--api-key/)
   })
 
-  it("status lists stored providers", async () => {
+  it("status lists every stored account per provider", async () => {
     const s = sink()
     const code = await authCommand(parseArgv(["auth", "status"]), {
       out: s.out,
       home: "/h",
-      listCredentialProviders: () => ["anthropic", "openai"],
+      listStoredAccounts: () => ({
+        anthropic: [{ name: "default", kinds: ["authToken"] }],
+        openai: [
+          { name: "default", kinds: ["apiKey"] },
+          { name: "work", kinds: ["apiKey"] },
+        ],
+      }),
     })
     expect(code).toBe(0)
-    expect(s.stdout()).toMatch(/anthropic, openai/)
+    expect(s.stdout()).toContain("anthropic: default (subscription token)")
+    expect(s.stdout()).toContain("openai: default (api key), work (api key)")
   })
 
   it("status reports when empty", async () => {
@@ -124,21 +131,128 @@ describe("authCommand", () => {
     await authCommand(parseArgv(["auth", "status"]), {
       out: s.out,
       home: "/h",
-      listCredentialProviders: () => [],
+      listStoredAccounts: () => ({}),
     })
     expect(s.stdout()).toMatch(/No credentials/)
   })
 
-  it("logout removes the provider credential", async () => {
+  it("status names the stored account a run uses and what chose it", async () => {
     const s = sink()
-    const deleteCredential = jest.fn()
+    await authCommand(parseArgv(["auth", "status"]), {
+      out: s.out,
+      home: "/h",
+      listStoredAccounts: () => ({
+        openai: [
+          { name: "personal", kinds: ["apiKey"] },
+          { name: "work", kinds: ["apiKey"] },
+        ],
+        groq: [
+          { name: "a", kinds: ["apiKey"] },
+          { name: "b", kinds: ["apiKey"] },
+        ],
+      }),
+      describeCredentials: () => ({
+        openai: [
+          {
+            layer: "credentials",
+            kind: "apiKey",
+            origin: "/h/credentials.json",
+            account: {
+              name: "work",
+              source: "project-config",
+              origin: "/repo/.cognia/config.json",
+            },
+          },
+        ],
+      }),
+    })
+    expect(s.stdout()).toContain(
+      'openai: api key of stored account "work" (chosen in project config /repo/.cognia/config.json)'
+    )
+    // Two named accounts, no default and no choice: none is guessed.
+    expect(s.stdout()).toContain(
+      "groq: none (several accounts: a, b; choose one with --provider-account or providers.groq.account)"
+    )
+  })
+
+  it("login --name saves a named account", async () => {
+    const s = sink()
+    const setCredential = jest.fn(() => "/h/credentials.json")
+    const code = await authCommand(
+      parseArgv(["auth", "login", "--provider", "openai", "--name", "work", "--api-key", "sk-w"]),
+      { out: s.out, home: "/h", setCredential }
+    )
+    expect(code).toBe(0)
+    expect(setCredential).toHaveBeenCalledWith("/h", "openai", "sk-w", undefined, {
+      kind: "apiKey",
+      account: "work",
+    })
+    expect(s.stdout()).toContain('Saved api key for "openai" as account "work"')
+  })
+
+  it("login notes when a run would still use another account", async () => {
+    const s = sink()
+    await authCommand(
+      parseArgv(["auth", "login", "--provider", "openai", "--name", "spare", "--api-key", "k"]),
+      {
+        out: s.out,
+        home: "/h",
+        setCredential: jest.fn(() => "/h/credentials.json"),
+        describeCredentials: () => ({
+          openai: [
+            {
+              layer: "credentials",
+              kind: "apiKey",
+              origin: "/h/credentials.json",
+              account: { name: "default", source: "default" },
+            },
+          ],
+        }),
+      }
+    )
+    expect(s.stdout()).toContain(
+      'note: runs use the api key of stored account "default" (the default account)'
+    )
+  })
+
+  it("logout removes the default account", async () => {
+    const s = sink()
+    const deleteCredential = jest.fn(() => ({ removed: ["default"] }))
     const code = await authCommand(parseArgv(["auth", "logout", "--provider", "openai"]), {
       out: s.out,
       home: "/h",
       deleteCredential,
     })
     expect(code).toBe(0)
-    expect(deleteCredential).toHaveBeenCalledWith("/h", "openai")
+    expect(deleteCredential).toHaveBeenCalledWith("/h", "openai", undefined, { all: false })
+    expect(s.stdout()).toContain('Removed stored account "default" for "openai"')
+  })
+
+  it("logout --name and --all pick what is removed, and a missing account says what is stored", async () => {
+    const s = sink()
+    const deleteCredential = jest
+      .fn()
+      .mockReturnValueOnce({ removed: [], missing: "work", stored: ["default", "home"] })
+      .mockReturnValueOnce({ removed: ["default", "home"] })
+    expect(
+      await authCommand(parseArgv(["auth", "logout", "--provider", "openai", "--name", "work"]), {
+        out: s.out,
+        home: "/h",
+        deleteCredential,
+      })
+    ).toBe(1)
+    expect(s.stderr()).toContain(
+      'auth logout: "openai" has no stored account "work" (stored: default, home; pass --name <account> or --all)'
+    )
+    expect(
+      await authCommand(parseArgv(["auth", "logout", "--provider", "openai", "--all"]), {
+        out: s.out,
+        home: "/h",
+        deleteCredential,
+      })
+    ).toBe(0)
+    expect(deleteCredential).toHaveBeenLastCalledWith("/h", "openai", undefined, { all: true })
+    expect(s.stdout()).toContain('Removed stored accounts "default", "home" for "openai"')
   })
 
   it("errors with exit 2 on an unknown subcommand", async () => {
@@ -214,7 +328,7 @@ describe("authCommand", () => {
     await authCommand(parseArgv(["auth", "status"]), {
       out: s.out,
       home: "/h",
-      listCredentialProviders: () => ["openai"],
+      listStoredAccounts: () => ({ openai: [{ name: "default", kinds: ["apiKey"] }] }),
       describeCredentials: () => ({
         openai: [
           { layer: "credentials", kind: "apiKey", origin: "/h/credentials.json" },
@@ -234,7 +348,7 @@ describe("authCommand", () => {
     await authCommand(parseArgv(["auth", "logout", "--provider", "openai"]), {
       out: s.out,
       home: "/h",
-      deleteCredential: jest.fn(),
+      deleteCredential: jest.fn(() => ({ removed: ["default"] })),
       describeCredentials: () => ({
         openai: [{ layer: "env", kind: "apiKey", origin: "OPENAI_API_KEY" }],
       }),

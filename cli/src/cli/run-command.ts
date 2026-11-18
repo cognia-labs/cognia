@@ -131,6 +131,9 @@ export function runFlagsToOverrides(args: ParsedArgs): Partial<CliConfigFile> {
   // sending the turn in the wrong shape.
   const protocol = stringFlag(args, "protocol")
   if (protocol) flags.protocol = protocol as NonNullable<CliConfigFile["protocol"]>
+  // Which stored account of the active provider this run uses (`auth login --name`).
+  const providerAccount = stringFlag(args, "provider-account")
+  if (providerAccount) flags.providerAccount = providerAccount
   const backend = stringFlag(args, "backend")
   if (backend) flags.agentBackend = backend
   const cwd = stringFlag(args, "cwd")

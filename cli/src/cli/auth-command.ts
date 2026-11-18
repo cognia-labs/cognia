@@ -8,6 +8,11 @@
  * `logout` says which sources still supply a key after it removed the stored
  * one, because removing a credential that is still being used elsewhere is
  * not signing out.
+ *
+ * One provider can keep several named accounts (`--name`, a personal and a
+ * work key for the same id; `../config/provider-accounts`). `login` and
+ * `logout` act on the `default` account unless `--name` names another, and
+ * `status` lists each provider's accounts and which one a run uses.
  */
 
 import os from "node:os"
@@ -21,10 +26,11 @@ import {
 import {
   setCredential as defaultSet,
   deleteCredential as defaultDelete,
-  listCredentialProviders as defaultList,
+  listStoredAccounts as defaultListAccounts,
 } from "../config/credentials"
-import { DEFAULT_PROVIDER } from "../config/schema"
-import { flagsMissingValues, stringFlag, type ParsedArgs } from "./args"
+import { describeAccountChoice } from "../config/provider-accounts"
+import { DEFAULT_PROVIDER, DEFAULT_PROVIDER_ACCOUNT } from "../config/schema"
+import { boolFlag, flagsMissingValues, stringFlag, type ParsedArgs } from "./args"
 import { realOutput, type OutputSink } from "./output"
 
 export interface AuthDeps {
@@ -32,7 +38,7 @@ export interface AuthDeps {
   cwd?: string
   setCredential?: typeof defaultSet
   deleteCredential?: typeof defaultDelete
-  listCredentialProviders?: typeof defaultList
+  listStoredAccounts?: typeof defaultListAccounts
   /** Every source of a provider secret (defaults to the real files and env). */
   describeCredentials?: () => Record<string, ProviderCredentialSource[]>
   out?: OutputSink
@@ -49,7 +55,9 @@ function describeSource(source: ProviderCredentialSource): string {
     case "env":
       return `${what} from env ${source.origin}`
     case "credentials":
-      return `${what} stored in ${source.origin}`
+      return source.account
+        ? `${what} of stored account "${source.account.name}" (${describeAccountChoice(source.account)}) in ${source.origin}`
+        : `${what} stored in ${source.origin}`
     case "project-config":
       return `${what} in project config ${source.origin}`
     case "user-config":
@@ -71,16 +79,34 @@ export async function authCommand(args: ParsedArgs, deps: AuthDeps = {}): Promis
   const cwd = deps.cwd ?? process.cwd()
   const setCredential = deps.setCredential ?? defaultSet
   const deleteCredential = deps.deleteCredential ?? defaultDelete
-  const listCredentialProviders = deps.listCredentialProviders ?? defaultList
-  const describeCredentials =
-    deps.describeCredentials ?? (() => defaultDescribe({ home, cwd, env, readFile: fsReader }))
+  const listStoredAccounts = deps.listStoredAccounts ?? defaultListAccounts
 
-  const missing = flagsMissingValues(args, ["provider", "api-key", "subscription", "auth-token"])
+  const missing = flagsMissingValues(args, [
+    "provider",
+    "api-key",
+    "subscription",
+    "auth-token",
+    "name",
+    "provider-account",
+  ])
   if (missing.length > 0) {
     out.error(`auth: ${missing.map((name) => `--${name}`).join(", ")} needs a value`)
     return 2
   }
   const provider = stringFlag(args, "provider") ?? DEFAULT_PROVIDER
+  const name = stringFlag(args, "name")
+  // `status --provider-account` shows what a run with that flag would use.
+  const selected = stringFlag(args, "provider-account")
+  const describeCredentials =
+    deps.describeCredentials ??
+    (() =>
+      defaultDescribe({
+        home,
+        cwd,
+        env,
+        readFile: fsReader,
+        ...(selected ? { flags: { provider, providerAccount: selected } } : {}),
+      }))
 
   switch (args.subcommand) {
     case "login": {
@@ -118,15 +144,24 @@ export async function authCommand(args: ParsedArgs, deps: AuthDeps = {}): Promis
         return 2
       }
       const kind = authToken ? "authToken" : "apiKey"
+      const account = name ?? DEFAULT_PROVIDER_ACCOUNT
       try {
-        const path = setCredential(home, provider, secret, undefined, { kind })
+        const path = setCredential(home, provider, secret, undefined, {
+          kind,
+          ...(name ? { account: name } : {}),
+        })
         const label = kind === "authToken" ? "subscription token" : "api key"
-        out.write(`Saved ${label} for "${provider}" to ${path}\n`)
-        const winning = effective(describeCredentials()[provider] ?? []).filter(
-          (source) => source.kind === kind && source.layer !== "credentials"
+        out.write(
+          `Saved ${label} for "${provider}"` +
+            (account === DEFAULT_PROVIDER_ACCOUNT ? "" : ` as account "${account}"`) +
+            ` to ${path}\n`
         )
-        for (const source of winning)
-          out.write(`  note: runs use the ${describeSource(source)} instead\n`)
+        // Say which secret a run takes instead, when it is not this one.
+        const used = effective(describeCredentials()[provider] ?? []).find(
+          (source) => source.kind === kind
+        )
+        if (used && !(used.layer === "credentials" && used.account?.name === account))
+          out.write(`  note: runs use the ${describeSource(used)} instead\n`)
         return 0
       } catch (err) {
         out.error(`auth login failed: ${(err as Error).message}`)
@@ -134,34 +169,69 @@ export async function authCommand(args: ParsedArgs, deps: AuthDeps = {}): Promis
       }
     }
     case "status": {
-      const stored = listCredentialProviders(home)
       let sources: Record<string, ProviderCredentialSource[]>
+      let accounts: ReturnType<typeof defaultListAccounts>
       try {
         sources = describeCredentials()
+        accounts = listStoredAccounts(home)
       } catch (err) {
         out.error(`auth status: ${(err as Error).message}`)
         return 1
       }
+      const stored = Object.keys(accounts).sort()
       const providers = [...new Set([...stored, ...Object.keys(sources)])].sort()
       if (providers.length === 0) {
         out.write("No credentials. Run: cognia-agent auth login --provider <id> --api-key <key>\n")
         return 0
       }
-      out.write(
-        stored.length > 0
-          ? `Stored credentials for: ${stored.join(", ")}\n`
-          : "No stored credentials.\n"
-      )
+      if (stored.length === 0) out.write("No stored credentials.\n")
+      else {
+        out.write("Stored accounts:\n")
+        for (const id of stored) {
+          const list = (accounts[id] ?? []).map(
+            (account) =>
+              `${account.name} (${account.kinds
+                .map((kind) => (kind === "authToken" ? "subscription token" : "api key"))
+                .join(", ")})`
+          )
+          out.write(`  ${id}: ${list.join(", ")}\n`)
+        }
+      }
       out.write("Credentials a run uses:\n")
       for (const id of providers) {
         const used = effective(sources[id] ?? [])
-        out.write(`  ${id}: ${used.length > 0 ? used.map(describeSource).join("; ") : "none"}\n`)
+        const names = (accounts[id] ?? []).map((account) => account.name)
+        const unchosen =
+          used.length === 0 && names.length > 1 && !names.includes(DEFAULT_PROVIDER_ACCOUNT)
+            ? ` (several accounts: ${names.join(", ")}; choose one with --provider-account or providers.${id}.account)`
+            : ""
+        out.write(
+          `  ${id}: ${used.length > 0 ? used.map(describeSource).join("; ") : "none"}${unchosen}\n`
+        )
       }
       return 0
     }
     case "logout": {
-      deleteCredential(home, provider)
-      out.write(`Removed stored credentials for "${provider}"\n`)
+      const result = deleteCredential(home, provider, undefined, {
+        ...(name ? { account: name } : {}),
+        all: boolFlag(args, "all"),
+      })
+      if ("missing" in result) {
+        out.error(
+          `auth logout: "${provider}" has no stored account "${result.missing}"` +
+            (result.stored.length
+              ? ` (stored: ${result.stored.join(", ")}; pass --name <account> or --all)`
+              : "")
+        )
+        return 1
+      }
+      out.write(
+        result.removed.length > 0
+          ? `Removed stored ${result.removed.length === 1 ? "account" : "accounts"} ${result.removed
+              .map((removed) => `"${removed}"`)
+              .join(", ")} for "${provider}"\n`
+          : `No stored credentials for "${provider}"\n`
+      )
       const remaining = (describeCredentials()[provider] ?? []).filter(
         (source) => source.layer !== "credentials"
       )

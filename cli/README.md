@@ -30,14 +30,28 @@ cognia-agent chat --dev-plugins --dev-plugins-dir ./plugins   #   …from an exp
 
 # Credentials (stored in ~/.cognia/credentials.json, 0600)
 cognia-agent auth login --provider anthropic --api-key sk-...
+cognia-agent auth login --provider openai --name work --api-key sk-...   # a second, named account
 cognia-agent auth status
 cognia-agent auth logout --provider anthropic
+cognia-agent -p "…" --provider openai --provider-account work            # pick it for one run
 
 # Config (~/.cognia/config.json)
 cognia-agent config path
 cognia-agent config get [key]
 cognia-agent config set model claude-opus-4-8
 ```
+
+One provider can keep several named accounts, for example a personal and a
+work key. A run uses the account named by `--provider-account`, then
+`COGNIA_PROVIDER_ACCOUNT`, then `providers.<id>.account` in the project config,
+then the same key in `~/.cognia/config.json`. A named account wins over keys
+from config and the environment, so a project that sets
+`"providers": { "openai": { "account": "work" } }` always runs on the work key.
+With nothing named, a run uses the `default` account (what `auth login` saves
+without `--name`), or the only one stored. A provider with several named
+accounts and no `default` uses none until one is chosen. The provider id stays
+the same, so the subscription path, models, limits and usage still treat the
+accounts as one provider; `provider limits` names the account it measured.
 
 ## Signing in
 

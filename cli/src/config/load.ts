@@ -4,7 +4,9 @@
  * Precedence (low → high, later wins):
  *   1. defaults ({@link DEFAULT_RESOLVED_CONFIG})
  *   2. user      `~/.cognia/config.json`
- *   3. credentials `~/.cognia/credentials.json` (api keys only)
+ *   3. credentials `~/.cognia/credentials.json` (api keys only). A provider's
+ *      named account (`./provider-accounts`) is applied after step 6 instead:
+ *      naming the key to use wins over keys from later layers.
  *   4. project   `./.cognia/config.json`
  *   5. env vars  (ANTHROPIC_API_KEY, COGNIA_PROVIDER, …)
  *   6. CLI flags (passed by the command parser)
@@ -31,9 +33,16 @@ import {
   type EditorConfig,
   type ExternalBackendConfig,
   type ProviderConfig,
+  type ProviderAccountSelection,
   type ResolvedConfig,
   type ResolverProtocol,
 } from "./schema"
+import {
+  chooseAccount,
+  namedAccounts,
+  type AccountChoice,
+  type StoredAccount,
+} from "./provider-accounts"
 
 /** Reads a file's text, or returns `null` when it does not exist. */
 export type FileReader = (absPath: string) => string | null
@@ -285,18 +294,71 @@ function applyLayer(acc: ResolvedConfig, layer: CliConfigFile | undefined): Reso
   }
 }
 
-/** Overlay credentials.json secrets (api key + subscription token) onto providers. */
-function applyCredentials(acc: ResolvedConfig, creds: CredentialsFile | null): ResolvedConfig {
-  if (!creds?.providers) return acc
-  const providers = { ...acc.providers }
-  for (const [id, secret] of Object.entries(creds.providers)) {
-    providers[id] = {
-      ...(providers[id] ?? {}),
-      ...(secret.apiKey ? { apiKey: secret.apiKey } : {}),
-      ...(secret.authToken ? { authToken: secret.authToken } : {}),
-    }
+/** Overlay one stored account's secrets (api key + subscription token) onto a provider. */
+function applyAccount(acc: ResolvedConfig, id: string, account: StoredAccount): ResolvedConfig {
+  return {
+    ...acc,
+    providers: {
+      ...acc.providers,
+      [id]: {
+        ...(acc.providers[id] ?? {}),
+        ...(account.apiKey ? { apiKey: account.apiKey } : {}),
+        ...(account.authToken ? { authToken: account.authToken } : {}),
+      },
+    },
   }
-  return { ...acc, providers }
+}
+
+/** The layers and stored accounts one resolution reads, parsed once. */
+interface CredentialPlan {
+  userFile: CliConfigFile | null
+  creds: CredentialsFile | null
+  projectFile: CliConfigFile | null
+  environmentLayer: CliConfigFile
+  /** The provider a run ends up on, which `providerAccount` names. */
+  activeProvider: string
+  /** Per provider: the stored account a run uses, and whether a layer named it. */
+  choices: Map<string, AccountChoice & { named: boolean }>
+}
+
+function credentialPlan(input: ResolveConfigInput): CredentialPlan {
+  const { home, cwd, env, flags, readFile } = input
+  const userFile = parseJsonFile(readFile(userConfigPath(home)), cliConfigFileSchema, "config.json")
+  const creds = parseJsonFile(
+    readFile(credentialsPath(home)),
+    credentialsFileSchema,
+    "credentials.json"
+  )
+  const projectFile = parseJsonFile(
+    readFile(projectConfigPath(cwd)),
+    cliConfigFileSchema,
+    "project config.json"
+  )
+  const environmentLayer = envLayer(env)
+  const activeProvider =
+    flags?.provider ??
+    environmentLayer.provider ??
+    projectFile?.provider ??
+    userFile?.provider ??
+    DEFAULT_RESOLVED_CONFIG.provider
+  const named = namedAccounts(
+    [
+      { source: "user-config", origin: userConfigPath(home), layer: userFile },
+      { source: "project-config", origin: projectConfigPath(cwd), layer: projectFile },
+      { source: "env", origin: "COGNIA_PROVIDER_ACCOUNT", layer: environmentLayer },
+      { source: "flag", origin: "--provider-account", layer: flags },
+    ],
+    activeProvider
+  )
+  const choices: CredentialPlan["choices"] = new Map()
+  for (const id of new Set([...Object.keys(creds?.providers ?? {}), ...named.keys()])) {
+    const selection = named.get(id)
+    choices.set(id, {
+      ...chooseAccount(id, creds?.providers?.[id], selection),
+      named: selection !== undefined,
+    })
+  }
+  return { userFile, creds, projectFile, environmentLayer, activeProvider, choices }
 }
 
 /** Build a config layer from environment variables. */
@@ -345,6 +407,8 @@ function envLayer(env: Record<string, string | undefined>): CliConfigFile {
 
   const provider = env.COGNIA_PROVIDER?.trim()
   if (provider) layer.provider = provider
+  const providerAccount = env.COGNIA_PROVIDER_ACCOUNT?.trim()
+  if (providerAccount) layer.providerAccount = providerAccount
   const model = env.COGNIA_MODEL?.trim()
   if (model) layer.model = model
   const collabUrl = env.COGNIA_COLLAB_URL?.trim()
@@ -431,19 +495,8 @@ function parseProtocol(value: string | undefined, source: string): ResolverProto
  * applies env + flags, and returns a fully-defaulted {@link ResolvedConfig}.
  */
 export function resolveConfig(input: ResolveConfigInput): ResolvedConfig {
-  const { home, cwd, env, flags, readFile } = input
-
-  const userFile = parseJsonFile(readFile(userConfigPath(home)), cliConfigFileSchema, "config.json")
-  const creds = parseJsonFile(
-    readFile(credentialsPath(home)),
-    credentialsFileSchema,
-    "credentials.json"
-  )
-  const projectFile = parseJsonFile(
-    readFile(projectConfigPath(cwd)),
-    cliConfigFileSchema,
-    "project config.json"
-  )
+  const { home, cwd, env, flags } = input
+  const { userFile, creds, projectFile, environmentLayer, choices } = credentialPlan(input)
 
   let acc: ResolvedConfig = {
     ...DEFAULT_RESOLVED_CONFIG,
@@ -452,15 +505,29 @@ export function resolveConfig(input: ResolveConfigInput): ResolvedConfig {
     cwd,
   }
   acc = applyLayer(acc, userFile ?? undefined)
-  acc = applyCredentials(acc, creds)
+  // The default (or only) stored account is the credentials layer.
+  for (const [id, choice] of choices)
+    if (choice.kind === "account" && !choice.named) acc = applyAccount(acc, id, choice.account)
   acc = applyLayer(acc, projectFile ?? undefined)
-  acc = applyLayer(acc, envLayer(env))
+  acc = applyLayer(acc, environmentLayer)
   acc = applyLayer(acc, flags)
+  // A named account names the key to use, so it wins over project and env keys.
+  for (const [id, choice] of choices)
+    if (choice.kind === "account" && choice.named) acc = applyAccount(acc, id, choice.account)
+  const providerAccounts: Record<string, ProviderAccountSelection> = {}
+  for (const [id, choice] of choices) {
+    if (choice.kind !== "account") continue
+    const slot = acc.providers[id]
+    const inEffect =
+      (choice.account.apiKey !== undefined && slot?.apiKey === choice.account.apiKey) ||
+      (choice.account.authToken !== undefined && slot?.authToken === choice.account.authToken)
+    if (inEffect) providerAccounts[id] = choice.selection
+  }
+  if (Object.keys(providerAccounts).length > 0) acc.providerAccounts = providerAccounts
 
   // Search credentials have their own documented order: env > credentials >
   // project > user. Re-resolve this one nested section explicitly rather than
   // inheriting the model-provider overlay order above.
-  const environmentLayer = envLayer(input.env)
   acc.search = mergeSearch(userFile?.search, projectFile?.search)
   acc.search = mergeSearchCredentials(acc.search, creds)
   acc.search = mergeSearch(acc.search, environmentLayer.search)
@@ -513,6 +580,8 @@ export interface ProviderCredentialSource {
   kind: "apiKey" | "authToken"
   /** The file path or environment variable name. */
   origin: string
+  /** For a stored secret: its account, and what chose it. */
+  account?: ProviderAccountSelection
 }
 
 /**
@@ -522,9 +591,10 @@ export interface ProviderCredentialSource {
  * is how it can say what still supplies a key afterwards.
  */
 export function describeProviderCredentials(
-  input: Omit<ResolveConfigInput, "flags">
+  input: ResolveConfigInput
 ): Record<string, ProviderCredentialSource[]> {
-  const { home, cwd, env, readFile } = input
+  const { home, cwd, env } = input
+  const { userFile: user, projectFile: project, choices } = credentialPlan(input)
   const sources: Record<string, ProviderCredentialSource[]> = {}
   const add = (id: string, source: ProviderCredentialSource) => {
     ;(sources[id] ??= []).push(source)
@@ -539,19 +609,15 @@ export function describeProviderCredentials(
       if (entry.authToken) add(id, { layer, kind: "authToken", origin })
     }
   }
-  const user = parseJsonFile(readFile(userConfigPath(home)), cliConfigFileSchema, "config.json")
-  const creds = parseJsonFile(
-    readFile(credentialsPath(home)),
-    credentialsFileSchema,
-    "credentials.json"
-  )
-  const project = parseJsonFile(
-    readFile(projectConfigPath(cwd)),
-    cliConfigFileSchema,
-    "project config.json"
-  )
+  const fromAccount = (id: string, choice: AccountChoice) => {
+    if (choice.kind !== "account") return
+    const source = { layer: "credentials" as const, origin: credentialsPath(home) }
+    if (choice.account.apiKey) add(id, { ...source, kind: "apiKey", account: choice.selection })
+    if (choice.account.authToken)
+      add(id, { ...source, kind: "authToken", account: choice.selection })
+  }
   fromFile(user?.providers, "user-config", userConfigPath(home))
-  fromFile(creds?.providers, "credentials", credentialsPath(home))
+  for (const [id, choice] of choices) if (!choice.named) fromAccount(id, choice)
   fromFile(project?.providers, "project-config", projectConfigPath(cwd))
   for (const [varName, providerId] of Object.entries(ENV_API_KEY_TO_PROVIDER)) {
     if (env[varName]?.trim()) add(providerId, { layer: "env", kind: "apiKey", origin: varName })
@@ -565,6 +631,8 @@ export function describeProviderCredentials(
       kind: "apiKey",
       origin: "COGNIA_API_KEY",
     })
+  // A named account is applied last (see `resolveConfig`).
+  for (const [id, choice] of choices) if (choice.named) fromAccount(id, choice)
   return sources
 }
 

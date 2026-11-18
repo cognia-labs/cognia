@@ -61,6 +61,11 @@ describe("runFlagsToOverrides", () => {
     })
   })
 
+  it("carries --provider-account, the stored account this run uses", () => {
+    const args = parseArgv(["run", "hi", "--provider", "openai", "--provider-account", "work"])
+    expect(runFlagsToOverrides(args)).toMatchObject({ provider: "openai", providerAccount: "work" })
+  })
+
   it("carries --protocol so a custom endpoint's wire dialect is selectable", () => {
     // Base URL and key were already overridable per run; the dialect they are
     // spoken in was not, so an Anthropic-format gateway needed a config-file

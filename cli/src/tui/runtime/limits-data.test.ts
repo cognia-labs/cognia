@@ -246,6 +246,24 @@ describe("buildCliLimits", () => {
     expect(out[0].accountId).toBe("anthropic")
   })
 
+  it("names the stored account whose meters it read", async () => {
+    const authedGet = async () => JSON.stringify({ code: 0, data: { available_balance: 3 } })
+    const out = await buildCliLimits({
+      config: {
+        ...config({ moonshot: { apiKey: "work-key" }, deepseek: { apiKey: "d" } }),
+        providerAccounts: {
+          moonshot: { name: "work", source: "flag" },
+          deepseek: { name: "default", source: "default" },
+        },
+      },
+      now: NOW,
+      authedGet,
+    })
+    expect(out.find((s) => s.accountId === "moonshot")?.accountLabel).toBe("moonshot (work)")
+    // The default account adds nothing to the provider's own name.
+    expect(out.find((s) => s.accountId === "deepseek")?.accountLabel).toBe("deepseek")
+  })
+
   it("handles a config with no providers map", async () => {
     const cfg = {
       ...DEFAULT_RESOLVED_CONFIG,

@@ -10,6 +10,7 @@ import {
   deleteSearchCredential,
   listCredentialProviders,
   listSearchCredentialProviders,
+  listStoredAccounts,
   CREDENTIALS_MODE,
   type CredentialsFs,
 } from "./credentials"
@@ -141,6 +142,82 @@ describe("deleteCredential", () => {
     const m = memFs()
     deleteCredential(HOME, "anthropic", m.fsx)
     expect(m.writes).toHaveLength(0)
+  })
+})
+
+describe("named accounts", () => {
+  const read = (m: ReturnType<typeof memFs>) =>
+    JSON.parse(m.files.get(credentialsPath(HOME))!) as {
+      providers: Record<string, Record<string, unknown> | undefined>
+    }
+
+  it("saves a named account beside the default one, keeping both", () => {
+    const m = memFs({
+      [credentialsPath(HOME)]: JSON.stringify({ providers: { openai: { apiKey: "sk-d" } } }),
+    })
+    setCredential(HOME, "openai", "sk-w", m.fsx, { account: "work" })
+    setCredential(HOME, "openai", "tok-w", m.fsx, { account: "work", kind: "authToken" })
+    expect(read(m).providers.openai).toEqual({
+      apiKey: "sk-d",
+      accounts: { work: { apiKey: "sk-w", authToken: "tok-w" } },
+    })
+    // "default" is the unnamed slot, never a key under accounts.
+    setCredential(HOME, "openai", "sk-d2", m.fsx, { account: "default" })
+    expect(read(m).providers.openai?.apiKey).toBe("sk-d2")
+  })
+
+  it("refuses an account name it could not store", () => {
+    expect(() => setCredential(HOME, "openai", "k", memFs().fsx, { account: "has space" })).toThrow(
+      /invalid account name/
+    )
+  })
+
+  it("removes one account, then the provider once nothing is left", () => {
+    const m = memFs({
+      [credentialsPath(HOME)]: JSON.stringify({
+        providers: { openai: { apiKey: "sk-d", accounts: { work: { apiKey: "sk-w" } } } },
+      }),
+    })
+    expect(deleteCredential(HOME, "openai", m.fsx, { account: "work" })).toEqual({
+      removed: ["work"],
+    })
+    expect(read(m).providers.openai).toEqual({ apiKey: "sk-d" })
+    expect(deleteCredential(HOME, "openai", m.fsx)).toEqual({ removed: ["default"] })
+    expect(read(m).providers.openai).toBeUndefined()
+  })
+
+  it("says what is stored instead of removing an account that is not", () => {
+    const m = memFs({
+      [credentialsPath(HOME)]: JSON.stringify({
+        providers: { openai: { accounts: { a: { apiKey: "1" }, b: { apiKey: "2" } } } },
+      }),
+    })
+    expect(deleteCredential(HOME, "openai", m.fsx)).toEqual({
+      removed: [],
+      missing: "default",
+      stored: ["a", "b"],
+    })
+    expect(m.writes).toHaveLength(0)
+    expect(deleteCredential(HOME, "openai", m.fsx, { all: true })).toEqual({ removed: ["a", "b"] })
+    expect(read(m).providers.openai).toBeUndefined()
+  })
+
+  it("lists every account with its secret kinds, never the secrets", () => {
+    const m = memFs({
+      [credentialsPath(HOME)]: JSON.stringify({
+        providers: {
+          openai: { apiKey: "sk-d", accounts: { work: { authToken: "t" } } },
+        },
+      }),
+    })
+    const listed = listStoredAccounts(HOME, m.fsx)
+    expect(listed).toEqual({
+      openai: [
+        { name: "default", kinds: ["apiKey"] },
+        { name: "work", kinds: ["authToken"] },
+      ],
+    })
+    expect(JSON.stringify(listed)).not.toContain("sk-d")
   })
 })
 

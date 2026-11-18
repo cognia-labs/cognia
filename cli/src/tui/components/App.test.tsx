@@ -1990,6 +1990,36 @@ describe("App", () => {
     expect(persistConfig).toHaveBeenCalledWith("provider", "deepseek")
   })
 
+  it("saves a replaced key into the stored account the session uses", async () => {
+    const { create } = fakeSession()
+    const persistCredential = jest.fn().mockReturnValue(true)
+    const configured: ResolvedConfig = {
+      ...config,
+      provider: "deepseek",
+      model: "deepseek-chat",
+      providers: { deepseek: { apiKey: "sk-work", model: "deepseek-chat" } },
+      providerAccounts: { deepseek: { name: "work", source: "project-config" } },
+    }
+    render(
+      <App
+        config={configured}
+        sessionId="s1"
+        createSession={create}
+        persistConfig={jest.fn().mockReturnValue(true)}
+        persistCredential={persistCredential}
+      />
+    )
+    runBareCommand("/provider")
+    act(() => __fireInput("", { return: true }))
+    act(() => __fireInput("u", { ctrl: true }))
+    type("sk-work-2")
+    await act(async () => {
+      __fireInput("", { return: true })
+      await Promise.resolve()
+    })
+    expect(persistCredential).toHaveBeenCalledWith("deepseek", "sk-work-2", "apiKey", "work")
+  })
+
   it("returns from credential management to the provider picker on Escape", () => {
     const { create } = fakeSession()
     const configured: ResolvedConfig = {

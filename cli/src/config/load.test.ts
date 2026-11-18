@@ -280,6 +280,112 @@ describe("credentials overlay", () => {
     expect(cfg.providers.anthropic).toEqual({ authToken: "oauth-tok" })
   })
 
+  describe("named accounts", () => {
+    const creds = (providers: Record<string, unknown>) => ({
+      [credentialsPath(HOME)]: JSON.stringify({ providers }),
+    })
+    const stored = {
+      openai: { apiKey: "sk-default", accounts: { work: { apiKey: "sk-work" } } },
+    }
+
+    it("uses the default account when nothing names one, at the credentials layer", () => {
+      const cfg = run(creds(stored), { env: { OPENAI_API_KEY: "sk-env" } })
+      // Env still beats the implicit default, as it always did.
+      expect(cfg.providers.openai?.apiKey).toBe("sk-env")
+      expect(cfg.providerAccounts?.openai).toBeUndefined()
+      expect(run(creds(stored)).providerAccounts?.openai).toEqual({
+        name: "default",
+        source: "default",
+      })
+    })
+
+    it("uses the only stored account when there is no default", () => {
+      const cfg = run(creds({ openai: { accounts: { work: { apiKey: "sk-work" } } } }))
+      expect(cfg.providers.openai?.apiKey).toBe("sk-work")
+      expect(cfg.providerAccounts?.openai).toEqual({ name: "work", source: "only" })
+    })
+
+    it("guesses none of several named accounts", () => {
+      const cfg = run(
+        creds({ openai: { accounts: { a: { apiKey: "sk-a" }, b: { apiKey: "sk-b" } } } })
+      )
+      expect(cfg.providers.openai?.apiKey).toBeUndefined()
+      expect(cfg.providerAccounts).toBeUndefined()
+    })
+
+    it("lets a project pin an account, over keys from the environment", () => {
+      const cfg = run(
+        {
+          ...creds(stored),
+          [projectConfigPath(CWD)]: JSON.stringify({ providers: { openai: { account: "work" } } }),
+        },
+        { env: { OPENAI_API_KEY: "sk-env" } }
+      )
+      expect(cfg.providers.openai?.apiKey).toBe("sk-work")
+      expect(cfg.providerAccounts?.openai).toEqual({
+        name: "work",
+        source: "project-config",
+        origin: projectConfigPath(CWD),
+      })
+    })
+
+    it("lets the flag and COGNIA_PROVIDER_ACCOUNT name the active provider's account", () => {
+      const files = {
+        ...creds({
+          openai: {
+            apiKey: "sk-default",
+            accounts: { work: { apiKey: "sk-work" }, home: { apiKey: "sk-home" } },
+          },
+        }),
+        [projectConfigPath(CWD)]: JSON.stringify({ providers: { openai: { account: "work" } } }),
+      }
+      const byEnv = run(files, {
+        env: { COGNIA_PROVIDER: "openai", COGNIA_PROVIDER_ACCOUNT: "home" },
+      })
+      expect(byEnv.providers.openai?.apiKey).toBe("sk-home")
+      expect(byEnv.providerAccounts?.openai?.source).toBe("env")
+      const byFlag = run(files, {
+        env: { COGNIA_PROVIDER_ACCOUNT: "home" },
+        flags: { provider: "openai", providerAccount: "default" },
+      })
+      expect(byFlag.providers.openai?.apiKey).toBe("sk-default")
+      expect(byFlag.providerAccounts?.openai).toEqual({
+        name: "default",
+        source: "flag",
+        origin: "--provider-account",
+      })
+    })
+
+    it("refuses an account that is not stored instead of using another key", () => {
+      expect(() =>
+        run(creds(stored), { flags: { provider: "openai", providerAccount: "ops" } })
+      ).toThrow(
+        'provider "openai" has no stored account "ops" (chosen by --provider-account; stored: default, work)'
+      )
+    })
+
+    it("rejects a named account called default", () => {
+      expect(() => run(creds({ openai: { accounts: { default: { apiKey: "x" } } } }))).toThrow(
+        /not a named account/
+      )
+    })
+
+    it("tells auth status which account each source came from", () => {
+      const sources = describeProviderCredentials({
+        home: HOME,
+        cwd: CWD,
+        env: { OPENAI_API_KEY: "sk-env" },
+        flags: { provider: "openai", providerAccount: "work" },
+        readFile: reader(creds(stored)),
+      })
+      // The named account applies last, so it is the one a run uses.
+      expect(sources.openai?.map((source) => [source.layer, source.account?.name])).toEqual([
+        ["env", undefined],
+        ["credentials", "work"],
+      ])
+    })
+  })
+
   it("resolves search settings with env > credentials > project > user precedence", () => {
     const cfg = run(
       {
