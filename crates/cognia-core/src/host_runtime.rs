@@ -6,7 +6,6 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use wait_timeout::ChildExt;
 
 const BUN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const BUN_IDENTITY_SCRIPT: &str =
@@ -132,43 +131,21 @@ impl RuntimeConfig {
             })
         }
         .ok_or("Bun probe failed: executable could not be resolved")?;
-        let mut command = std::process::Command::new(&executable);
+        let mut command = crate::process_probe::background_command(&executable);
         command
             .args(["--eval", BUN_IDENTITY_SCRIPT, "--no-env-file"])
-            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000);
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("Bun probe failed: {error}"))?;
-        match child.wait_timeout(timeout) {
-            Ok(Some(_)) => {}
-            result => {
-                crate::node_runtime::terminate_probe_process_tree(&mut child);
-                let _ = child.wait();
-                return Err(match result {
-                    Ok(None) => "Bun probe timed out".into(),
-                    Err(error) => format!("Bun probe wait failed: {error}").into(),
-                    _ => unreachable!(),
-                });
-            }
-        }
-        // A launcher can exit while a descendant still holds stdout open.
-        // Reap its process group before collecting output, so EOF is bounded too.
-        crate::node_runtime::terminate_probe_process_tree(&mut child);
-        let output = child
-            .wait_with_output()
-            .map_err(|error| error.to_string())?;
+        let output =
+            crate::process_probe::run_probe(command, timeout).map_err(|error| match error {
+                crate::process_probe::ProbeError::TimedOut(_) => "Bun probe timed out".to_string(),
+                crate::process_probe::ProbeError::Spawn(error) => {
+                    format!("Bun probe failed: {error}")
+                }
+                crate::process_probe::ProbeError::Wait(error) => {
+                    format!("Bun probe wait failed: {error}")
+                }
+            })?;
         let version = String::from_utf8_lossy(&output.stdout);
         let version = version
             .trim()

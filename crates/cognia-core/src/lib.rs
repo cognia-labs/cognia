@@ -16,6 +16,7 @@ pub mod fs_atomic;
 pub mod host_runtime;
 pub mod installed;
 pub mod node_runtime;
+pub mod process_probe;
 #[cfg(feature = "rt")]
 pub mod rt;
 #[cfg(feature = "signal")]

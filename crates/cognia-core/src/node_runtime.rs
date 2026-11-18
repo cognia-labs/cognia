@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
-use wait_timeout::ChildExt;
+
+use crate::process_probe::{background_command, run_probe, ProbeError};
 
 pub const MIN_SYSTEM_NODE_MAJOR: u64 = 26;
 pub const BUNDLED_NODE_VERSION: (u64, u64, u64) = (26, 3, 1);
@@ -66,17 +67,6 @@ fn probe_node(path: &Path) -> Result<(String, (u64, u64, u64)), NodeRuntimeError
     probe_node_with_timeout(path, NODE_PROBE_TIMEOUT)
 }
 
-fn background_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
-    #[allow(unused_mut)]
-    let mut command = std::process::Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    command
-}
-
 fn probe_node_with_timeout(
     path: &Path,
     timeout: Duration,
@@ -84,54 +74,28 @@ fn probe_node_with_timeout(
     let mut command = background_command(path);
     command
         .arg("--version")
-        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command.spawn().map_err(|error| {
-        NodeRuntimeError::new(
+    let output = run_probe(command, timeout).map_err(|error| match error {
+        ProbeError::TimedOut(_) => NodeRuntimeError::new(
+            "COGNIA_NODE_PROBE_TIMEOUT",
+            format!(
+                "Node.js at {} did not answer `--version` within {} seconds",
+                path.display(),
+                timeout.as_secs_f64()
+            ),
+        ),
+        ProbeError::Spawn(error) => NodeRuntimeError::new(
             "COGNIA_NODE_PROBE_FAILED",
             format!("Failed to execute Node.js at {}: {error}", path.display()),
-        )
-    })?;
-    match child.wait_timeout(timeout) {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            terminate_probe_process_tree(&mut child);
-            let _ = child.wait();
-            return Err(NodeRuntimeError::new(
-                "COGNIA_NODE_PROBE_TIMEOUT",
-                format!(
-                    "Node.js at {} did not answer `--version` within {} seconds",
-                    path.display(),
-                    timeout.as_secs_f64()
-                ),
-            ));
-        }
-        Err(error) => {
-            terminate_probe_process_tree(&mut child);
-            let _ = child.wait();
-            return Err(NodeRuntimeError::new(
-                "COGNIA_NODE_PROBE_FAILED",
-                format!(
-                    "Failed while waiting for Node.js at {}: {error}",
-                    path.display()
-                ),
-            ));
-        }
-    }
-    let output = child.wait_with_output().map_err(|error| {
-        NodeRuntimeError::new(
+        ),
+        ProbeError::Wait(error) => NodeRuntimeError::new(
             "COGNIA_NODE_PROBE_FAILED",
             format!(
-                "Failed to collect Node.js version output from {}: {error}",
+                "Failed while waiting for Node.js at {}: {error}",
                 path.display()
             ),
-        )
+        ),
     })?;
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !output.status.success() {
@@ -154,31 +118,6 @@ fn probe_node_with_timeout(
         )
     })?;
     Ok((version, parsed))
-}
-
-pub(crate) fn terminate_probe_process_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    unsafe {
-        // The probe starts in its own process group, so a shim cannot leave a
-        // descendant behind after the startup deadline expires.
-        libc::kill(-(child.id() as i32), libc::SIGKILL);
-    }
-    #[cfg(windows)]
-    {
-        if let Ok(mut taskkill) = background_command("taskkill")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            if !matches!(taskkill.wait_timeout(Duration::from_secs(1)), Ok(Some(_))) {
-                let _ = taskkill.kill();
-                let _ = taskkill.wait();
-            }
-        }
-    }
-    let _ = child.kill();
 }
 
 pub fn system_node_missing_error() -> NodeRuntimeError {
@@ -306,7 +245,6 @@ pub(crate) static EXECUTABLE_SCRIPT_LOCK: std::sync::Mutex<()> = std::sync::Mute
 mod tests {
     use super::*;
     use std::path::Path;
-
 
     #[test]
     fn parses_canonical_node_versions() {
