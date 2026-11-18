@@ -28,7 +28,7 @@ Unix 会在写入后 best-effort 改为 `0600`；Windows 依赖用户 profile AC
 
 ## 路由 catalog
 
-实际注册 path 严格为 **23** 条。`src-tauri/src/cli_bridge/server.rs` 内的 Rust characterization test 锁定了列表与 router 路由数。wire 前缀为 `/api/dev/*`（稳定，与已安装的 CLI 共用，并非仅调试可用）。
+实际注册 path 严格为 **21** 条。`src-tauri/src/cli_bridge/server.rs` 内的 Rust characterization test 锁定了列表与 router 路由数。wire 前缀为 `/api/dev/*`（稳定，与已安装的 CLI 共用，并非仅调试可用）。
 
 | Method 与 path | 消费者 | 执行方式 |
 | --- | --- | --- |
@@ -51,12 +51,10 @@ Unix 会在写入后 best-effort 改为 `0600`；Windows 依赖用户 profile AC
 | `POST /api/dev/teams/run` | `cognia-agent` | Renderer round-trip |
 | `POST /api/dev/teams/run-status` | `cognia-agent` | Renderer round-trip |
 | `POST /api/dev/best-of-n/{action}` | `cognia-agent` | Renderer round-trip：best-of-N 的 `list`、`status`、`start`、`cancel`、`select`、`publish`、`archive` |
-| `GET /api/dev/provider-operations/manifest` | `cognia-agent` | Provider admin manifest（ADR-0163） |
-| `POST /api/dev/provider-operations/execute` | `cognia-agent` | 执行 provider admin 操作 |
 | `POST /api/dev/gateway/route-ticket` | `cognia-agent` | 签发 LLM gateway route ticket |
 | `POST /api/dev/gateway/route-ticket/revoke` | `cognia-agent` | 撤销 route ticket |
 
-`cognia` 使用 8 条 path（插件、ACP ticket 与 health），`cognia-agent` 使用 16 条。Health 是唯一共享项，所以并集为 23。Installed-plugin projection 刻意排除 `runtime_state`；twin context 只返回脱敏 prompt segment，不会返回 raw source chunk。
+`cognia` 使用 8 条 path（插件、ACP ticket 与 health），`cognia-agent` 使用 14 条。Health 是唯一共享项，所以并集为 21。Provider 管理不走 bridge：`cognia-agent provider` 通过 Companion API 询问它选中的 Host（ADR-0163 §5）。Installed-plugin projection 刻意排除 `runtime_state`；twin context 只返回脱敏 prompt segment，不会返回 raw source chunk。
 
 ## Renderer request/response
 

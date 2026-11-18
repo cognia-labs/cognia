@@ -1,6 +1,6 @@
 ---
 title: "0163：一份 provider 操作契约，网关只做推理"
-description: "每项 provider 能力对应同一 JSON 契约中五十个具名操作之一。注册表依次按 provider、协议和通用规则解析。网关仅接收无状态推理 JSON 族。管理操作通过 CLI bridge、headless RPC 与进程内执行器使用同一分发器；管理凭据不得进入 agent 子进程。"
+description: "每项 provider 能力对应同一 JSON 契约中五十个具名操作之一。注册表依次按 provider、协议和通用规则解析。网关仅接收无状态推理 JSON 族。管理操作通过选中 Host 的 Companion API 与进程内执行器使用同一分发器；管理凭据不得进入 agent 子进程。"
 ---
 
 # ADR 0163：一份 provider 操作契约
@@ -41,13 +41,14 @@ description: "每项 provider 能力对应同一 JSON 契约中五十个具名�
 
 ### 5. 管理面走已经在鉴权的平面，共用一个分发器
 
-管理操作有三条腿、一个分发器：
+管理操作有两条腿、一个分发器：
 
-- **桌面 bridge**（`src-tauri/src/cli_bridge`）：`X-Cognia-Dev-Token`，仅回环，允许清单（`provider_admin.rs`）里的每一项都必须证明自己是无需审批的低风险读操作。bridge 在 `/api/dev/provider-operations/manifest` 提供契约，CLI 据此对旧桌面按动词降级而不是整体报错。
-- **headless**（`cognia-server`）：`POST /internal/_rpc/{name}`，携带服务令牌。
+- **选中的 Host**，走所有 Host 命令共用的 Companion API：配对设备（`/api/_rpc/{name}`，设备密钥与令牌交换，以及中继回退）或服务令牌（`/internal/_rpc/{name}`）。命令自身的审批规则照常生效：配对设备发出的 interactive 命令要带一个在 Host 上由人批准的审批租约。
 - **进程内**：执行器本身，CLI 用自己的配置跑它。
 
-三条腿都经 `remote_execution::execute` 分发。没有第二个分发器，也没有第二份允许清单。两个网关平面都不得为宿主没有真正执行的操作伪造同步结果。
+Host 一侧经 `remote_execution::execute` 分发。没有第二个分发器，也没有第二份允许清单。两个网关平面都不得为宿主没有真正执行的操作伪造同步结果。
+
+*2026-11-18 修订。* 桌面 bridge 这条腿已移除：`/api/dev/provider-operations/{manifest,execute}` 两条路由和 `provider_admin.rs` 允许清单都删掉了。桌面要回答 provider 动词，就作为 CLI 配对的 Host（`cognia-agent host login`）。bridge 保留 `/api/dev/gateway/route-ticket`，因为 `cognia-agent x` 要靠它接入桌面网关（`cognia_companion_rpc::route_tickets`）。
 
 ### 6. 管理凭据永远不进 agent 子进程
 
@@ -59,7 +60,16 @@ dev token 与服务令牌只发给签发它们的那个平面。`cognia-agent x`
 
 ### 8. CLI 与 TUI 是同一组模块
 
-`cognia-agent provider <capabilities|models|balance|limits|usage|probe>` 与 TUI 的 `/provider …`、`/models`、`/balance` 都委托给 `cli/src/provider/*`。每个动词都有本地路径，CLI 从不需要桌面才能作答，每份报告开头都写明由谁作答。`models`、`balance`、`limits`、`usage` 读的是本机的配置、凭据和数据库，从不连接任何平面，所以 `--provider` 按本机配置检查。`capabilities` 同样在本机计算各格子，只把已连接的桌面标为所列契约的来源。`probe` 在第一个在线平面（bridge、然后 headless）的网关里运行，`--provider` 按该网关的候选检查；两个平面都不提供时退回本机探测。会计费的读取必须显式 `--live`，探测另加 `--yes`，实时探测永不进 CI。
+`cognia-agent provider <capabilities|models|balance|limits|usage|probe>` 与 TUI 的 `/provider …`、`/models`、`/balance` 都委托给 `cli/src/provider/*`，每份报告开头都写明由谁作答。
+
+这些动词沿用所有命令共用的 Host 选择（`--host`、`--endpoint`、`COGNIA_PROFILE`、`COGNIA_SERVER_URL`、`host use`；见 `cli/src/provider/target.ts`）。`--local` 不管选了什么都由本机作答；什么都没选时也由本机作答。显式点名一个不存在的 Host 是错误，绝不因此改由别处作答。
+
+选中的 Host 回答两个动词（`cli/src/provider/host.ts`）：
+
+- `balance` 读 Host 最近一次测得的余额（`provider_diagnostics_status`）。这不访问 provider，所以不需要 `--live`。
+- 配对设备上的 `probe` 为 `--provider` 启动一个 `provider_diagnostics_start` 任务。该命令是 interactive 的，CLI 会带上用户以 `--admin-lease` 传入的租约，并确认任务的确切规模（一个目标、一次请求、零花费）。走服务令牌时，由 Host 的网关探测 `--model`（`gateway_probe_upstream`）。
+
+诊断命令只回应 Host 允许远程控制的配对设备，被拒时按 Host 的拒绝如实报告。`capabilities`、`models`、`limits`（Host 不保存用量窗口计量）和 `usage` 不管选了什么都读本机的配置、凭据和数据库，`--provider` 按本机检查；选中了 Host 时会注明这一点。由本机访问 provider 的读取（`balance`、`limits`）必须显式 `--live`；探测不论在哪里跑都要 `--live --yes`；实时探测永不进 CI。
 
 ### 9. 插件通过一个新贡献点与三个投影点参与
 

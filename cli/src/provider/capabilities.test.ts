@@ -7,13 +7,9 @@ import type { ProviderOperationCell, ProviderOperationProfile } from "@cognia/pr
 import { PROVIDER_OPERATION_MANIFEST } from "@/lib/ai/operations"
 
 import type { ResolvedConfig } from "../config/schema"
-import {
-  BUNDLED_CONTRACT_LABEL,
-  formatCapabilityCell,
-  readProviderCapabilities,
-} from "./capabilities"
+import { formatCapabilityCell, readProviderCapabilities } from "./capabilities"
 import type { CliProviderExecutor } from "./local"
-import { LOCAL_ANSWER, localProviderTransport, type ProviderTransport } from "./transport"
+import { LOCAL_ANSWER } from "./target"
 
 const CONFIG: ResolvedConfig = {
   provider: "openai",
@@ -60,16 +56,11 @@ const executor: CliProviderExecutor = {
 
 describe("readProviderCapabilities", () => {
   it("reads one profile per configured provider off the local contract", async () => {
-    const report = await readProviderCapabilities({
-      config: CONFIG,
-      executor,
-      transport: localProviderTransport(),
-    })
+    const report = await readProviderCapabilities({ config: CONFIG, executor })
     expect(report.answeredBy).toBe(LOCAL_ANSWER)
-    expect(report.contractFrom).toBe(BUNDLED_CONTRACT_LABEL)
     expect(report.schemaVersion).toBe(PROVIDER_OPERATION_MANIFEST.schemaVersion)
     expect(report.operationCount).toBe(PROVIDER_OPERATION_MANIFEST.operations.length)
-    expect(report.adminCommands).toEqual([])
+    expect(report).not.toHaveProperty("adminCommands")
     expect(report.providers.map((p) => p.providerId)).toEqual(["openai", "anthropic"])
     expect(report.providers[0]!.profile?.cells).toHaveLength(2)
     expect(report.providers[1]!.failure?.availability).toBe("needs-auth")
@@ -79,7 +70,6 @@ describe("readProviderCapabilities", () => {
     const report = await readProviderCapabilities({
       config: CONFIG,
       executor,
-      transport: localProviderTransport(),
       providerId: "openai",
       operationId: "batches.create",
     })
@@ -88,26 +78,6 @@ describe("readProviderCapabilities", () => {
     expect(report.providers[0]!.profile?.cells.map((c) => c.operationId)).toEqual([
       "batches.create",
     ])
-  })
-
-  it("reports the attached desktop's contract version and admin commands", async () => {
-    const bridge: ProviderTransport = {
-      kind: "bridge",
-      label: "desktop",
-      manifest: {
-        schemaVersion: 1,
-        operations: PROVIDER_OPERATION_MANIFEST.operations.slice(0, 3),
-        adminCommands: ["provider_catalog_status"],
-      },
-      supportsCommand: () => true,
-      execute: async () => ({ ok: true, result: null }),
-    }
-    const report = await readProviderCapabilities({ config: CONFIG, executor, transport: bridge })
-    // The cells are computed here; the desktop only supplied its contract.
-    expect(report.answeredBy).toBe(LOCAL_ANSWER)
-    expect(report.contractFrom).toBe("desktop")
-    expect(report.operationCount).toBe(3)
-    expect(report.adminCommands).toEqual(["provider_catalog_status"])
   })
 })
 

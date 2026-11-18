@@ -77,9 +77,43 @@ it("forwards only the constrained remote start and cancel contracts", async () =
     confirmedMaxEstimatedCostUsd: 0.01,
   }
 
-  await startRemoteProviderDiagnosticJob(input, { transport: remote })
-  await cancelRemoteProviderDiagnosticJob("job-1", { transport: remote })
+  // A shell that is the Host itself attaches no lease.
+  const approve = jest.fn(async (_command: string, args: Record<string, unknown>) => args)
+  await startRemoteProviderDiagnosticJob(input, { transport: remote, approve })
+  await cancelRemoteProviderDiagnosticJob("job-1", { transport: remote, approve })
 
   expect(call).toHaveBeenNthCalledWith(1, "provider_diagnostics_start", input)
   expect(call).toHaveBeenNthCalledWith(2, "provider_diagnostics_cancel", { jobId: "job-1" })
+})
+
+it("sends start and cancel with the lease minted for each command", async () => {
+  const call = jest
+    .fn()
+    .mockResolvedValueOnce({ accepted: true, jobId: "job-2" })
+    .mockResolvedValueOnce({ cancelled: true })
+  const approve = jest.fn(async (command: string, args: Record<string, unknown>) => ({
+    ...args,
+    adminLease: `lease-for-${command}`,
+  }))
+  const input = {
+    targets: [{ providerId: "openai", capability: "probe" as const }],
+    mode: "quick" as const,
+    costConfirmed: false,
+    confirmedRequestLimit: 1,
+    confirmedMaxEstimatedCostUsd: 0,
+  }
+
+  await startRemoteProviderDiagnosticJob(input, { transport: mockTransport(call), approve })
+  await cancelRemoteProviderDiagnosticJob("job-2", { transport: mockTransport(call), approve })
+
+  expect(approve).toHaveBeenNthCalledWith(1, "provider_diagnostics_start", input)
+  expect(approve).toHaveBeenNthCalledWith(2, "provider_diagnostics_cancel", { jobId: "job-2" })
+  expect(call).toHaveBeenNthCalledWith(1, "provider_diagnostics_start", {
+    ...input,
+    adminLease: "lease-for-provider_diagnostics_start",
+  })
+  expect(call).toHaveBeenNthCalledWith(2, "provider_diagnostics_cancel", {
+    jobId: "job-2",
+    adminLease: "lease-for-provider_diagnostics_cancel",
+  })
 })

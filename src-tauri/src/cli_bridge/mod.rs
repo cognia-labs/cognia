@@ -22,10 +22,6 @@
 //! - `GET  /api/dev/health`            — liveness probe
 //! - `POST /api/dev/acp/ticket`         — mint a single-use Companion socket ticket
 //!   for the `cognia acp` stdio bridge
-//! - `GET  /api/dev/provider-operations/manifest` — the provider operation contract
-//!   plus the admin commands this desktop exposes (ADR-0163)
-//! - `POST /api/dev/provider-operations/execute` — one allowlisted read-only
-//!   companion command, through `remote_execution::execute`
 //! - `POST /api/dev/gateway/route-ticket` — mint a gateway route ticket for
 //!   `cognia-agent x`
 //! - `POST /api/dev/gateway/route-ticket/revoke` — revoke the route ticket a
@@ -54,7 +50,6 @@
 pub mod detect;
 pub mod download;
 pub mod handlers;
-pub mod provider_admin;
 pub mod release_key;
 pub mod renderer_bridge;
 #[cfg(all(desktop, not(any(target_os = "android", target_os = "ios"))))]

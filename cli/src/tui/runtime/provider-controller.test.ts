@@ -6,8 +6,9 @@ import type { ProviderOperationProfile } from "@cognia/provider-types"
 import type { ProviderLimits } from "@/types/subscription"
 
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "../../config/schema"
+import type { CommandOutcome, HostTransport } from "../../api/transport"
 import type { CliProviderExecutor } from "../../provider/local"
-import { localProviderTransport } from "../../provider/transport"
+import type { ProviderTarget } from "../../provider/target"
 import type { TuiAction } from "../state/types"
 import { runProvider, type ProviderControllerDeps } from "./provider-controller"
 import { runLimits } from "./limits-controller"
@@ -102,7 +103,7 @@ function deps(
     action,
     now: () => NOW,
     createExecutor: () => fakeExecutor(),
-    resolveTransport: async () => ({ transport: localProviderTransport(), skipped: [] }),
+    selectTarget: () => ({ ok: true, target: { kind: "local", why: "nothing-selected" } }),
     ensureDb: async () => undefined,
     fsx: emptyFs,
     modelOptions: () => ["gpt-4o"],
@@ -125,6 +126,138 @@ function notices(actions: TuiAction[]): string[] {
     .filter((a): a is Extract<TuiAction, { type: "NOTICE" }> => a.type === "NOTICE")
     .map((a) => a.message)
 }
+
+const HOST_TARGET: Extract<ProviderTarget, { kind: "host" }> = {
+  kind: "host",
+  host: {
+    name: "home",
+    kind: { value: "device", source: "user-file" },
+    endpoint: { value: "https://10.0.0.2:27890", source: "user-file" },
+  },
+  label: 'Host "home" (https://10.0.0.2:27890)',
+}
+
+function hostSelected(
+  wire: "http" | "internal",
+  answer: (name: string) => CommandOutcome
+): Partial<ProviderControllerDeps> & { transport: HostTransport & { close: jest.Mock } } {
+  const transport = {
+    wire,
+    label: `Cognia Host (${wire})`,
+    close: jest.fn(),
+    execute: jest.fn(async (name: string) => answer(name)),
+    request: jest.fn(async () => ({ ok: false as const, cause: "failed" as const, message: "no" })),
+  }
+  return {
+    transport,
+    selectTarget: () => ({ ok: true, target: HOST_TARGET }),
+    connect: jest.fn(async () => ({ ok: true as const, transport })),
+  }
+}
+
+describe("runProvider on a selected Host", () => {
+  it("balance: loads what the Host last measured into the panel and says who answered", async () => {
+    const host = hostSelected("http", () => ({
+      ok: true,
+      result: {
+        capturedAt: NOW,
+        jobs: [],
+        balanceSnapshots: [
+          {
+            providerId: "deepseek",
+            sourceId: "deepseek:official",
+            amounts: [{ unit: "CNY", remaining: 42 }],
+            fetchedAt: NOW - 1000,
+            staleAt: NOW + 1000,
+          },
+        ],
+        balanceSources: [],
+      },
+    }))
+    const loadLimits = jest.fn()
+    const d = deps("balance", { ...host, loadLimits })
+    await runProvider(d)
+    await flush()
+    await flush()
+    expect(loadLimits).not.toHaveBeenCalled()
+    const loaded = d.actions.find(
+      (a): a is Extract<TuiAction, { type: "LIMITS_LOADED" }> => a.type === "LIMITS_LOADED"
+    )
+    expect(loaded?.snapshots).toEqual([
+      expect.objectContaining({
+        provider: "deepseek",
+        meters: [expect.objectContaining({ remaining: 42, currency: "CNY" })],
+      }),
+    ])
+    expect(notices(d.actions).at(-1)).toMatch(/^Answered by: Host "home"/)
+    expect(host.transport.close).toHaveBeenCalled()
+  })
+
+  it("balance: a Host that cannot be reached lands as an error snapshot naming it", async () => {
+    const d = deps("balance", {
+      selectTarget: () => ({ ok: true, target: HOST_TARGET }),
+      connect: jest.fn(async () => ({
+        ok: false as const,
+        failure: { error: "host home has no tenant id", cause: "auth" as const },
+      })),
+    })
+    await runProvider(d)
+    await flush()
+    await flush()
+    const loaded = d.actions.find(
+      (a): a is Extract<TuiAction, { type: "LIMITS_LOADED" }> => a.type === "LIMITS_LOADED"
+    )
+    expect(loaded?.snapshots[0]).toMatchObject({
+      accountLabel: HOST_TARGET.label,
+      error: expect.stringContaining("host home has no tenant id"),
+    })
+  })
+
+  it("probe: a headless Host probes the model through its gateway", async () => {
+    const host = hostSelected("internal", () => ({
+      ok: true,
+      result: [{ providerId: "groq", modelId: "llama", ok: true, latencyMs: 5 }],
+    }))
+    const d = deps("probe", { ...host, arg: "llama" })
+    await runProvider(d)
+    const doc = opened(d.actions, "document")[0]!.overlay as { body: string }
+    expect(doc.body).toContain(`Answered by: ${HOST_TARGET.label}`)
+    expect(doc.body).toContain("| ok | groq | `llama` | 5ms |")
+    expect(host.transport.close).toHaveBeenCalled()
+  })
+
+  it("probe: a paired Host needs the CLI's lease, so the panel says how instead of probing here", async () => {
+    const host = hostSelected("http", () => ({ ok: true, result: {} }))
+    const createExecutor = jest.fn(() => fakeExecutor())
+    const d = deps("probe", { ...host, createExecutor })
+    await runProvider(d)
+    expect(notices(d.actions).at(-1)).toMatch(/runs a probe as a diagnostics job for one provider/)
+    expect(host.transport.execute).not.toHaveBeenCalled()
+    expect(opened(d.actions, "document")).toEqual([])
+  })
+
+  it("capabilities: answers here and notes the selected Host", async () => {
+    const d = deps("capabilities", { selectTarget: () => ({ ok: true, target: HOST_TARGET }) })
+    await runProvider(d)
+    const doc = opened(d.actions, "document")[0]!.overlay as { body: string }
+    expect(doc.body).toContain("Answered by: this machine")
+    expect(doc.body).toContain(`Note: ${HOST_TARGET.label} is selected`)
+  })
+
+  it("a selection that names a missing Host is reported, and nothing runs", async () => {
+    const createExecutor = jest.fn(() => fakeExecutor())
+    const d = deps("usage", {
+      createExecutor,
+      selectTarget: () => ({
+        ok: false,
+        failure: { error: 'no host named "work"', cause: "invalid-request" },
+      }),
+    })
+    await runProvider(d)
+    expect(notices(d.actions).at(-1)).toContain('Error: no host named "work"')
+    expect(opened(d.actions, "document")).toEqual([])
+  })
+})
 
 describe("runProvider", () => {
   it("rejects an unknown verb with the list of verbs", async () => {
@@ -280,7 +413,7 @@ describe("runProvider", () => {
     expect(notices(d.actions)[0]).toMatch(/Provider "ghost" is not configured/)
   })
 
-  it("capabilities: renders the profile table with the transport line", async () => {
+  it("capabilities: renders the profile table, answered by this machine", async () => {
     const d = deps("capabilities")
     await runProvider(d)
     const doc = opened(d.actions, "document")[0]!.overlay as { body: string }

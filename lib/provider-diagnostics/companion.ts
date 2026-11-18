@@ -45,6 +45,17 @@ function assertExactKeys(payload: Record<string, unknown>, allowed: readonly str
   }
 }
 
+/**
+ * The body an interactive command's handler validates: without the approval
+ * lease a paired device attaches. `authorize_approval` checks the lease before
+ * dispatch and the RPC layer forwards the body untouched, so left in, the
+ * lease fails the closed-shape check below as a forbidden field.
+ */
+function withoutApprovalLease(payload: Record<string, unknown>): Record<string, unknown> {
+  const { adminLease: _adminLease, admin_lease: _adminLeaseSnake, ...request } = payload
+  return request
+}
+
 function requiredDeviceId(payload: Record<string, unknown>): string {
   const value = payload.callerDeviceId
   if (typeof value !== "string" || value.length === 0) {
@@ -210,8 +221,9 @@ export async function getRemoteProviderDiagnosticsHistory(
 }
 
 export async function startRemoteProviderDiagnostics(
-  payload: Record<string, unknown>
+  leased: Record<string, unknown>
 ): Promise<{ accepted: true; jobId: string }> {
+  const payload = withoutApprovalLease(leased)
   assertExactKeys(payload, [
     "callerDeviceId",
     "targets",
@@ -346,8 +358,9 @@ export async function startRemoteProviderDiagnostics(
 }
 
 export async function cancelRemoteProviderDiagnostics(
-  payload: Record<string, unknown>
+  leased: Record<string, unknown>
 ): Promise<{ cancelled: boolean }> {
+  const payload = withoutApprovalLease(leased)
   assertExactKeys(payload, ["callerDeviceId", "jobId"])
   const deviceId = requiredDeviceId(payload)
   await assertRemoteControlDevice(deviceId)

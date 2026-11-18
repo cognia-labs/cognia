@@ -5,13 +5,17 @@
  * panel and in the notice.
  */
 
-import type { ProviderOperationCell, ProviderOperationProfile } from "@cognia/provider-types"
+import type {
+  ProviderOperationCell,
+  ProviderOperationProfile,
+  ProviderProbeResult,
+} from "@cognia/provider-types"
 
 import type { ProviderLimits } from "@/types/subscription"
 
 import type { ProviderCapabilitiesReport } from "../../provider/capabilities"
 import type { ProviderModelsReport } from "../../provider/models"
-import type { ProviderProbeReport } from "../../provider/probe"
+import { probePassed, type ProviderProbeReport } from "../../provider/probe"
 import type { ProviderUsageReport } from "../../provider/usage"
 import { meterLabel, meterResetText, meterRightLabel } from "./limits"
 
@@ -58,15 +62,16 @@ export function summarizeProfile(profile: ProviderOperationProfile): string {
   return `${served} served · ${unsupported} unsupported · ${unknown} unknown`
 }
 
-export function formatCapabilitiesDocument(report: ProviderCapabilitiesReport): string {
+export function formatCapabilitiesDocument(
+  report: ProviderCapabilitiesReport,
+  note?: string
+): string {
   const out = [
     `# Provider capabilities`,
     "",
     `Answered by: ${report.answeredBy.label}`,
-    `Contract v${report.schemaVersion} (${report.contractFrom}): ${report.operationCount} operations` +
-      (report.adminCommands.length
-        ? `, desktop admin commands: ${report.adminCommands.map((c) => `\`${c}\``).join(", ")}`
-        : ""),
+    ...(note ? [`Note: ${note}`] : []),
+    `Contract v${report.schemaVersion}: ${report.operationCount} operations`,
   ]
   if (report.operationFilter) out.push(`Filter: \`${report.operationFilter}\``)
   for (const entry of report.providers) {
@@ -130,6 +135,15 @@ export function formatUsageDocument(report: ProviderUsageReport): string {
   return out.join("\n")
 }
 
+/** The mark and the latency, auth, status and detail columns of one probe result. */
+function probeResultColumns(result: ProviderProbeResult): { mark: string; columns: string } {
+  const auth = result.authenticated === undefined ? "" : result.authenticated ? "yes" : "no"
+  return {
+    mark: probePassed(result) ? "ok" : "FAIL",
+    columns: `${result.durationMs}ms | ${auth} | ${result.httpStatus ?? ""} | ${result.failure?.message ?? ""}`,
+  }
+}
+
 export function formatProbeDocument(report: ProviderProbeReport): string {
   const out = ["# Provider probe", "", `Answered by: ${report.answeredBy.label}`]
   if (report.via === "gateway") {
@@ -153,7 +167,36 @@ export function formatProbeDocument(report: ProviderProbeReport): string {
     }
     return out.join("\n")
   }
-  if (report.degraded) out.push(`Note: ${report.degraded}`)
+  if (report.via === "host-job") {
+    out.push(`Diagnostics job \`${report.jobId}\` for ${report.providerId}: ${report.status}`, "")
+    if (!report.settled) {
+      out.push(
+        "_The Host is still running this job. Read it later with_ " +
+          `\`cognia-agent api call provider_diagnostics_history --provider-id ${report.providerId}\``
+      )
+      return out.join("\n")
+    }
+    if (report.rows.length === 0) {
+      out.push("_(the Host recorded no sample for this job)_")
+      return out.join("\n")
+    }
+    out.push(
+      "| | Provider | Model | Latency | Auth | Status | Detail |",
+      "| --- | --- | --- | --- | --- | --- | --- |"
+    )
+    for (const row of report.rows) {
+      const model = row.modelId ? `\`${row.modelId}\`` : ""
+      if (row.probe) {
+        const { mark, columns } = probeResultColumns(row.probe)
+        out.push(`| ${mark} | ${row.providerId} | ${model} | ${columns} |`)
+      } else {
+        out.push(
+          `| FAIL | ${row.providerId} | ${model} | | | ${row.status} | ${row.failure?.message ?? ""} |`
+        )
+      }
+    }
+    return out.join("\n")
+  }
   out.push("")
   if (report.notConfigured) {
     out.push(
@@ -176,12 +219,8 @@ export function formatProbeDocument(report: ProviderProbeReport): string {
       )
       continue
     }
-    const r = row.result!
-    const ok = r.reachable && r.authenticated !== false && !r.failure
-    const auth = r.authenticated === undefined ? "" : r.authenticated ? "yes" : "no"
-    out.push(
-      `| ${ok ? "ok" : "FAIL"} | ${row.providerId} | ${r.durationMs}ms | ${auth} | ${r.httpStatus ?? ""} | ${r.failure?.message ?? ""} |`
-    )
+    const { mark, columns } = probeResultColumns(row.result!)
+    out.push(`| ${mark} | ${row.providerId} | ${columns} |`)
   }
   return out.join("\n")
 }

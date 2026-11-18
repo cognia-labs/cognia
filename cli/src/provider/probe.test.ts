@@ -6,12 +6,14 @@ import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 import type { ResolvedConfig } from "../config/schema"
 import type { CliProviderExecutor } from "./local"
 import {
-  GATEWAY_PROBE_COMMAND,
   formatGatewayProbeRow,
+  formatHostProbeRow,
   formatLocalProbeRow,
-  probeProviders,
+  probeLocally,
+  probeReportFailed,
+  type ProviderProbeReport,
 } from "./probe"
-import { LOCAL_ANSWER, localProviderTransport, type ProviderTransport } from "./transport"
+import { LOCAL_ANSWER } from "./target"
 
 const CONFIG: ResolvedConfig = {
   provider: "openai",
@@ -46,160 +48,96 @@ const executor: CliProviderExecutor = {
   ) as CliProviderExecutor["execute"],
 }
 
-function attached(
-  kind: "bridge" | "rpc",
-  supports: boolean | null,
-  execute: ProviderTransport["execute"]
-): ProviderTransport {
-  return { kind, label: `${kind} plane`, manifest: null, supportsCommand: () => supports, execute }
-}
-
-describe("probeProviders", () => {
+describe("probeLocally", () => {
   beforeEach(() => jest.clearAllMocks())
 
-  it("probes every configured provider locally through health.probe when nothing is attached", async () => {
-    const report = await probeProviders({
-      config: CONFIG,
-      executor,
-      transport: localProviderTransport(),
-      timeoutMs: 5000,
-    })
+  it("probes every configured provider through health.probe", async () => {
+    const report = await probeLocally({ config: CONFIG, executor, timeoutMs: 5000 })
     expect(report.via).toBe("local")
     if (report.via !== "local") return
-    expect(report.degraded).toBeUndefined()
+    expect(report.answeredBy).toBe(LOCAL_ANSWER)
     expect(report.rows.map((r) => r.providerId)).toEqual(["openai", "anthropic"])
     expect(report.rows[0]!.result?.reachable).toBe(true)
     expect(report.rows[1]!.failure?.availability).toBe("needs-auth")
     expect(executor.execute).toHaveBeenCalledWith("health.probe", "openai", { timeoutMs: 5000 }, {})
   })
 
-  it("runs the gateway probe when the attached desktop exposes it and a model is named", async () => {
-    const execute = jest.fn(async () => ({
-      ok: true as const,
-      result: [
-        { providerId: "openai", modelId: "gpt-4o", ok: true, status: 200, latencyMs: 310 },
-        {
-          providerId: "azure",
-          modelId: "gpt-4o",
-          ok: false,
-          status: 401,
-          latencyMs: 90,
-          error: "bad key",
-        },
-        "junk",
-      ],
-    }))
-    const report = await probeProviders({
+  it("probes one provider with the model it was given", async () => {
+    const report = await probeLocally({
       config: CONFIG,
       executor,
-      transport: attached("bridge", true, execute),
-      model: "gpt-4o",
-    })
-    expect(execute).toHaveBeenCalledWith(GATEWAY_PROBE_COMMAND, { model: "gpt-4o" })
-    expect(executor.execute).not.toHaveBeenCalled()
-    expect(report.via).toBe("gateway")
-    if (report.via !== "gateway") return
-    expect(report.model).toBe("gpt-4o")
-    expect(report.rows).toEqual([
-      { providerId: "openai", modelId: "gpt-4o", ok: true, status: 200, latencyMs: 310 },
-      {
-        providerId: "azure",
-        modelId: "gpt-4o",
-        ok: false,
-        status: 401,
-        latencyMs: 90,
-        error: "bad key",
-      },
-    ])
-  })
-
-  it("degrades to the local probe when the desktop does not carry the command", async () => {
-    const execute = jest.fn()
-    const report = await probeProviders({
-      config: CONFIG,
-      executor,
-      transport: attached("bridge", false, execute),
-      model: "gpt-4o",
       providerId: "openai",
+      model: "gpt-4o",
     })
-    expect(execute).not.toHaveBeenCalled()
-    expect(report.via).toBe("local")
-    if (report.via !== "local") return
-    expect(report.degraded).toMatch(/does not expose gateway_probe_upstream/)
-    // The desktop was attached, but this machine answered.
-    expect(report.answeredBy).toBe(LOCAL_ANSWER)
-    expect(report.rows.map((r) => r.providerId)).toEqual(["openai"])
-    expect(report.rows[0]!.model).toBe("gpt-4o")
+    if (report.via !== "local") throw new Error("expected a local probe")
+    expect(report.rows).toEqual([
+      expect.objectContaining({ providerId: "openai", model: "gpt-4o" }),
+    ])
+    expect(executor.execute).toHaveBeenCalledWith("health.probe", "openai", { model: "gpt-4o" }, {})
   })
 
-  it("names a provider this machine lacks instead of probing it, when this machine answers", async () => {
-    const report = await probeProviders({
-      config: CONFIG,
-      executor,
-      transport: localProviderTransport(),
-      providerId: "groq",
-    })
+  it("names a provider this machine lacks instead of probing it", async () => {
+    const report = await probeLocally({ config: CONFIG, executor, providerId: "groq" })
     expect(report).toMatchObject({ via: "local", notConfigured: "groq", rows: [] })
-    expect(executor.execute).not.toHaveBeenCalledWith(
-      "health.probe",
-      "groq",
-      expect.anything(),
-      expect.anything()
+    expect(executor.execute).not.toHaveBeenCalled()
+  })
+})
+
+describe("probeReportFailed", () => {
+  const passed = {
+    reachable: true,
+    authenticated: true,
+    capabilityVerified: true,
+    durationMs: 5,
+  }
+
+  it("fails a local probe that reached the provider but was refused the credential", () => {
+    const report: ProviderProbeReport = {
+      via: "local",
+      answeredBy: LOCAL_ANSWER,
+      rows: [{ providerId: "openai", result: { ...passed, authenticated: false } }],
+    }
+    expect(probeReportFailed(report)).toBe(true)
+    expect(probeReportFailed({ ...report, rows: [{ providerId: "openai", result: passed }] })).toBe(
+      false
     )
   })
 
-  it("narrows the gateway's candidates to --provider, which only the gateway has to know", async () => {
-    const execute = jest.fn(async () => ({
-      ok: true as const,
-      result: [
-        { providerId: "groq", modelId: "llama", ok: true, latencyMs: 4 },
-        { providerId: "openai", modelId: "llama", ok: true, latencyMs: 8 },
-      ],
-    }))
-    const report = await probeProviders({
-      config: CONFIG,
-      executor,
-      transport: attached("rpc", null, execute),
-      model: "llama",
-      providerId: "groq",
-    })
-    expect(report).toMatchObject({
+  it("fails a Host job that has not settled, did not complete, or has no sample", () => {
+    const base: ProviderProbeReport = {
+      via: "host-job",
+      answeredBy: { plane: "host", label: "Host" },
+      providerId: "openai",
+      jobId: "job-1",
+      status: "completed",
+      settled: true,
+      rows: [{ providerId: "openai", status: "completed", probe: passed }],
+    }
+    expect(probeReportFailed(base)).toBe(false)
+    expect(probeReportFailed({ ...base, settled: false })).toBe(true)
+    expect(probeReportFailed({ ...base, status: "failed" })).toBe(true)
+    expect(probeReportFailed({ ...base, rows: [] })).toBe(true)
+    expect(
+      probeReportFailed({
+        ...base,
+        rows: [
+          { providerId: "openai", status: "completed", probe: { ...passed, reachable: false } },
+        ],
+      })
+    ).toBe(true)
+  })
+
+  it("fails a gateway probe with any failed candidate", () => {
+    const report: ProviderProbeReport = {
       via: "gateway",
-      answeredBy: { plane: "rpc" },
-      providerFilter: "groq",
-    })
-    expect(report.rows.map((row) => row.providerId)).toEqual(["groq"])
-  })
-
-  it("tries the rpc plane, then degrades when it answers unknown_command", async () => {
-    const execute = jest.fn(async () => ({
-      ok: false as const,
-      reason: "unavailable" as const,
-      message: "no such command",
-    }))
-    const report = await probeProviders({
-      config: CONFIG,
-      executor,
-      transport: attached("rpc", null, execute),
-      model: "gpt-4o",
-    })
-    expect(execute).toHaveBeenCalledTimes(1)
-    expect(report.via).toBe("local")
-    if (report.via !== "local") return
-    expect(report.degraded).toBe("rpc plane: no such command")
-  })
-
-  it("explains that the gateway probe needs a model", async () => {
-    const execute = jest.fn()
-    const report = await probeProviders({
-      config: CONFIG,
-      executor,
-      transport: attached("bridge", true, execute),
-    })
-    expect(execute).not.toHaveBeenCalled()
-    expect(report.via).toBe("local")
-    if (report.via !== "local") return
-    expect(report.degraded).toMatch(/needs --model/)
+      answeredBy: { plane: "host", label: "Host" },
+      model: "m",
+      rows: [
+        { providerId: "a", modelId: "m", ok: true, latencyMs: 1 },
+        { providerId: "b", modelId: "m", ok: false, latencyMs: 1 },
+      ],
+    }
+    expect(probeReportFailed(report)).toBe(true)
   })
 })
 
@@ -262,5 +200,29 @@ describe("format rows", () => {
         },
       })
     ).toBe("FAIL anthropic        needs-auth: no key")
+  })
+
+  it("renders Host job rows from the sample's probe or its failure", () => {
+    expect(
+      formatHostProbeRow({
+        providerId: "openai",
+        modelId: "gpt-4o",
+        status: "completed",
+        probe: {
+          reachable: true,
+          authenticated: true,
+          capabilityVerified: true,
+          durationMs: 42,
+          httpStatus: 200,
+        },
+      })
+    ).toBe("ok   openai           gpt-4o                       42ms auth HTTP 200")
+    expect(
+      formatHostProbeRow({
+        providerId: "openai",
+        status: "failed",
+        failure: { code: "network", retryable: true, message: "connection reset" },
+      })
+    ).toBe("FAIL openai           failed  network: connection reset")
   })
 })

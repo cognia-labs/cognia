@@ -1,6 +1,6 @@
 ---
 title: "0163: One provider operation contract, and the gateway stays inference-only"
-description: "Defines every provider capability as one of fifty named operations in a single JSON contract. A registry resolves provider, then protocol, then any. The gateway accepts only stateless inference. One dispatcher handles management through the CLI bridge, headless RPC and in-process executor. Management credentials never reach agent subprocesses."
+description: "Defines every provider capability as one of fifty named operations in a single JSON contract. A registry resolves provider, then protocol, then any. The gateway accepts only stateless inference. One dispatcher handles management through the selected Host's Companion API and the in-process executor. Management credentials never reach agent subprocesses."
 ---
 
 # ADR 0163: One provider operation contract
@@ -89,20 +89,25 @@ port, and management does not belong on the agent's port.
 
 ### 5. Management rides the planes that already authenticate, through one dispatcher
 
-Management operations have three legs and one dispatcher:
+Management operations have two legs and one dispatcher:
 
-- **desktop bridge** (`src-tauri/src/cli_bridge`): `X-Cognia-Dev-Token`,
-  loopback only, with an allowlist (`provider_admin.rs`) that every entry must
-  prove is a low-risk read with no approval. The bridge serves the contract at
-  `/api/dev/provider-operations/manifest` so a CLI can degrade per verb against
-  an older desktop instead of failing.
-- **headless** (`cognia-server`): `POST /internal/_rpc/{name}` with the
-  service token.
+- **the selected Host**, over the Companion API every Host command uses: a
+  paired device (`/api/_rpc/{name}`, device key and token exchange, the relay
+  fallback) or a service token (`/internal/_rpc/{name}`). The command's own
+  approval applies: an interactive command from a paired device carries an
+  approval lease a person granted on the Host.
 - **in process**: the executor itself, which the CLI runs over its own config.
 
-All three dispatch through `remote_execution::execute`. There is no second
+A Host dispatches through `remote_execution::execute`. There is no second
 dispatcher and no second allowlist. Neither gateway plane may fabricate a
 synchronous result for an operation the host has not actually run.
+
+*Amended 2026-11-18.* The desktop bridge leg is gone: its
+`/api/dev/provider-operations/{manifest,execute}` routes and the
+`provider_admin.rs` allowlist are removed. A desktop answers provider verbs
+as a Host the CLI pairs with (`cognia-agent host login`). The bridge keeps
+`/api/dev/gateway/route-ticket`, which `cognia-agent x` needs to reach the
+desktop gateway (`cognia_companion_rpc::route_tickets`).
 
 ### 6. A management credential never reaches an agent subprocess
 
@@ -126,16 +131,34 @@ other side.
 
 `cognia-agent provider <capabilities|models|balance|limits|usage|probe>` and
 the TUI's `/provider …`, `/models` and `/balance` delegate to
-`cli/src/provider/*`. Every verb has a local path, so the CLI never needs a
-desktop to answer, and every report opens with who answered it. `models`,
-`balance`, `limits` and `usage` read this machine's configuration, credentials
-and database and never contact a plane, so `--provider` is checked against
-this machine. `capabilities` computes its cells here as well and names the
-attached desktop only as the source of the contract it lists. `probe` runs in
-the gateway of the first plane that is up (bridge, then headless) and checks
-`--provider` against that gateway's candidates, falling back to a local probe
-when neither plane carries it. Reads that bill the account require an explicit
-`--live`, a probe additionally `--yes`, and live probes never run in CI.
+`cli/src/provider/*`, and every report opens with who answered it.
+
+The verbs follow the Host selection every command uses (`--host`,
+`--endpoint`, `COGNIA_PROFILE`, `COGNIA_SERVER_URL`, `host use`;
+`cli/src/provider/target.ts`). `--local` answers from this machine whatever is
+selected, and with nothing selected this machine answers. A Host named
+explicitly that does not exist is an error, never a reason to answer from
+somewhere else.
+
+A selected Host answers two verbs (`cli/src/provider/host.ts`):
+
+- `balance` reads the balances the Host last measured
+  (`provider_diagnostics_status`). That asks no provider, so it needs no
+  `--live`.
+- `probe` on a paired device starts one `provider_diagnostics_start` job for
+  `--provider`. The command is interactive, so the CLI sends the lease the
+  person passes as `--admin-lease`, and confirms the job's exact size (one
+  target, one request, no spend). On a service token the Host's gateway probes
+  `--model` (`gateway_probe_upstream`).
+
+The diagnostics commands answer only a paired device the Host lets control it
+remotely, and a refusal is reported as the Host's. `capabilities`, `models`,
+`limits` (a Host keeps no usage-window meters) and `usage` read this machine's
+configuration, credentials and database whatever is selected, check
+`--provider` against this machine, and say so when a Host is selected. A
+reading that contacts the provider from this machine (`balance`, `limits`)
+requires an explicit `--live`, a probe requires `--live --yes` wherever it
+runs, and live probes never run in CI.
 
 ### 9. Plugins contribute through one new point and three projected ones
 

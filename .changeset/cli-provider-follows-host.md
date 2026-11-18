@@ -1,0 +1,5 @@
+---
+"cognia-next": minor
+---
+
+`cognia-agent provider` now follows the Host you selected with `--host` or `host use`, the same selection as every other Host command, and `--local` answers from this machine. A selected Host answers `provider balance` with the balances it last measured, with no `--live` needed because nothing is fetched from the provider. `provider probe` on a paired Host runs one diagnostics job for `--provider`, using the approval lease passed as `--admin-lease`; a headless Host probes `--model` through its gateway. `capabilities`, `models`, `limits` and `usage` still answer from this machine, and say so when a Host is selected. The desktop's CLI bridge no longer carries provider routes, and `--transport` is gone; to use a desktop, pair the CLI with it as a Host. Separately, a paired phone can now start and cancel provider diagnostics on its Host: it attaches the approval lease the Host requires, and the Host accepts that lease instead of rejecting it as an unknown field.

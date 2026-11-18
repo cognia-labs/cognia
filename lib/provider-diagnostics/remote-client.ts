@@ -10,6 +10,7 @@ import type {
 } from "@cognia/provider-types"
 
 import { transport } from "@/lib/tauri"
+import { withInteractiveApproval } from "@/lib/tauri/interactive-approval"
 import { loadCompanionConfig } from "@/lib/tauri/transport-companion"
 import type { Transport } from "@/lib/tauri/transport-types"
 
@@ -156,6 +157,16 @@ export async function fetchRemoteProviderDiagnosticsHistory(
   }
 }
 
+/**
+ * Start and cancel are `approval: "interactive"` on the Host, so a paired
+ * client sends them with a lease minted from the gesture that sends them
+ * (`withInteractiveApproval`); the Host refuses them without one.
+ */
+interface ApprovalDependencies {
+  transport?: Transport
+  approve?: (command: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>
+}
+
 export async function startRemoteProviderDiagnosticJob(
   input: {
     targets: RemoteProviderDiagnosticSelection[]
@@ -164,14 +175,22 @@ export async function startRemoteProviderDiagnosticJob(
     confirmedRequestLimit: number
     confirmedMaxEstimatedCostUsd: number
   },
-  dependencies: Pick<RemoteClientDependencies, "transport"> = {}
+  dependencies: ApprovalDependencies = {}
 ): Promise<{ accepted: true; jobId: string }> {
-  return (dependencies.transport ?? transport).call("provider_diagnostics_start", input)
+  const args = await (dependencies.approve ?? withInteractiveApproval)(
+    "provider_diagnostics_start",
+    input
+  )
+  return (dependencies.transport ?? transport).call("provider_diagnostics_start", args)
 }
 
 export async function cancelRemoteProviderDiagnosticJob(
   jobId: string,
-  dependencies: Pick<RemoteClientDependencies, "transport"> = {}
+  dependencies: ApprovalDependencies = {}
 ): Promise<{ cancelled: boolean }> {
-  return (dependencies.transport ?? transport).call("provider_diagnostics_cancel", { jobId })
+  const args = await (dependencies.approve ?? withInteractiveApproval)(
+    "provider_diagnostics_cancel",
+    { jobId }
+  )
+  return (dependencies.transport ?? transport).call("provider_diagnostics_cancel", args)
 }

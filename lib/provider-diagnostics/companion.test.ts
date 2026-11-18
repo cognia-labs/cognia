@@ -10,10 +10,12 @@ import { getSettings, saveSettings } from "@/lib/db/settings"
 import { useAccountStore } from "@/stores/account/account-store"
 
 import {
+  cancelRemoteProviderDiagnostics,
   getRemoteProviderDiagnosticsHistory,
   getRemoteProviderDiagnosticsStatus,
   startRemoteProviderDiagnostics,
 } from "./companion"
+import { cancelProviderDiagnosticJob, startProviderDiagnosticJob } from "./service"
 
 jest.mock("./targets", () => ({
   resolveProviderDiagnosticTargets: jest.fn(async ({ providerId, capability }) => [
@@ -161,4 +163,41 @@ it("denies a paired device without the remote-control grant", async () => {
   await expect(getRemoteProviderDiagnosticsStatus({ callerDeviceId: "device-1" })).rejects.toThrow(
     "not permitted"
   )
+})
+
+it("accepts the approval lease a paired device attaches to start and cancel", async () => {
+  // `provider_diagnostics_start` and `_cancel` are interactive, so the device
+  // wire requires an `adminLease` and the RPC layer forwards it in the body.
+  const started = await startRemoteProviderDiagnostics({
+    callerDeviceId: "device-1",
+    targets: [{ providerId: "openai", capability: "probe" }],
+    mode: "quick",
+    confirmedRequestLimit: 1,
+    confirmedMaxEstimatedCostUsd: 0,
+    adminLease: "lease-token",
+  })
+  expect(started).toEqual({
+    accepted: true,
+    jobId: expect.stringMatching(/^provider-diagnostic-remote-/),
+  })
+  expect(startProviderDiagnosticJob).toHaveBeenCalledWith(
+    expect.objectContaining({ providerId: "openai", capability: "probe" })
+  )
+  const job = await getDb().providerDiagnosticJobs.get(started.jobId)
+  expect(job?.remoteAudit?.deviceId).toBe("device-1")
+
+  await expect(
+    cancelRemoteProviderDiagnostics({
+      callerDeviceId: "device-1",
+      jobId: started.jobId,
+      admin_lease: "lease-token",
+    })
+  ).resolves.toEqual({ cancelled: true })
+  expect(cancelProviderDiagnosticJob).toHaveBeenCalledWith(started.jobId)
+})
+
+it("still refuses a field that is neither the request nor the lease", async () => {
+  await expect(
+    cancelRemoteProviderDiagnostics({ callerDeviceId: "device-1", jobId: "j", deviceId: "other" })
+  ).rejects.toThrow("forbidden fields: deviceId")
 })

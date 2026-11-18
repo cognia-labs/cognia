@@ -105,8 +105,9 @@ Usage:
                      typed Claude Agent SDK management (never raw option JSON)
   cognia-agent provider <capabilities|models|balance|limits|usage|probe>
                      [--provider id] [--operation id] [--refresh] [--days n]
-                     [--model m] [--transport auto|bridge|rpc|local] [--live] [--yes] [--json]
-                     the provider operation plane: profiles, inventory, meters, spend, probes
+                     [--model m] [--host name] [--local] [--admin-lease l] [--live] [--yes] [--json]
+                     the provider operation plane: profiles, inventory, meters, spend, probes;
+                     balance and probe follow the selected Host, the rest answer here
   cognia-agent api <call|list|groups|describe|schema|request> ...
                      every command a Cognia Host exposes, driven from the frozen
                      protocol contract (656 on the headless wire, 527 on the

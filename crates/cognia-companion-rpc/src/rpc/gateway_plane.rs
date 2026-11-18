@@ -528,9 +528,9 @@ pub(super) async fn dispatch(
         }
 
         "gateway_mint_route_ticket" => {
-            let request: crate::provider_admin::BridgeTicketRequest = required(&args, "request")?;
+            let request: crate::route_tickets::BridgeTicketRequest = required(&args, "request")?;
             with_gateway(state, host, |gateway, _| {
-                let minted = crate::provider_admin::mint_bridge_ticket(gateway, request).map_err(
+                let minted = crate::route_tickets::mint_bridge_ticket(gateway, request).map_err(
                     |(status, message)| match status {
                         StatusCode::SERVICE_UNAVAILABLE => RpcError::service_unavailable(message),
                         StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST => {

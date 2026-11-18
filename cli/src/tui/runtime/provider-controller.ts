@@ -4,6 +4,10 @@
  * `cognia-agent provider …` runs, so the panel and the terminal command
  * cannot answer differently.
  *
+ * They answer where the CLI command answers without flags: the selected Host
+ * (`COGNIA_PROFILE`, `COGNIA_SERVER_URL`, `host use`) for `/balance` and
+ * `/provider probe`, this machine for the rest, and every document says which.
+ *
  * Overlays are the existing ones: `/models` seeds the real model switcher
  * (the `model` overlay) from the catalog and live-refreshes it with the
  * discovered inventory, `/balance` opens the `limits` panel filtered to
@@ -12,6 +16,11 @@
  * cannot turn subsequent input into a queued steer.
  */
 
+import type { ProviderLimits } from "@/types/subscription"
+
+import type { ConnectDeps } from "../../api/connect"
+import type { HostTransport } from "../../api/transport"
+import { renderFailure, type CliFailure } from "../../cli/errors"
 import type { ResolvedConfig } from "../../config/schema"
 import { readProviderCapabilities } from "../../provider/capabilities"
 import { readProviderLimits } from "../../provider/limits"
@@ -21,11 +30,13 @@ import {
   type CliProviderExecutor,
 } from "../../provider/local"
 import { listProviderModels } from "../../provider/models"
-import { probeProviders } from "../../provider/probe"
+import { probeLocally, type ProviderProbeReport } from "../../provider/probe"
 import {
-  resolveProviderTransport,
-  type ProviderTransportResolution,
-} from "../../provider/transport"
+  localWhileHostSelected,
+  selectProviderTarget,
+  type ProviderTarget,
+  type ProviderTargetResult,
+} from "../../provider/target"
 import { readProviderUsage, type ReadUsageDeps } from "../../provider/usage"
 import { collectModelOptions } from "../components/model-options"
 import {
@@ -70,8 +81,16 @@ export interface ProviderControllerDeps {
   backendAgentId?: string
   agentRateLimits?: LimitsDeps["agentRateLimits"]
   loadCodexLimits?: LimitsDeps["loadCodexLimits"]
-  /** Seams (tests). Production resolves the live planes and the real executor. */
-  resolveTransport?: () => Promise<ProviderTransportResolution>
+  /** Where `hosts.json` is looked up from (defaults to the process's). */
+  cwd?: string
+  env?: Record<string, string | undefined>
+  /** Seams (tests). Production resolves the selected Host and the real executor. */
+  selectTarget?: () => ProviderTargetResult
+  connect?: (
+    target: Extract<ProviderTarget, { kind: "host" }>,
+    deps: ConnectDeps
+  ) => Promise<{ ok: true; transport: HostTransport } | { ok: false; failure: CliFailure }>
+  connectDeps?: ConnectDeps
   createExecutor?: (config: ResolvedConfig) => CliProviderExecutor
   loadLimits?: LimitsLoader
   ensureDb?: ReadUsageDeps["ensureDb"]
@@ -96,6 +115,46 @@ function providerArg(deps: ProviderControllerDeps): string | null | undefined {
     severity: "error",
   })
   return null
+}
+
+function cliFailureNotice(deps: ProviderControllerDeps, failure: CliFailure): void {
+  deps.dispatch({ type: "NOTICE", message: renderFailure(failure).trimEnd(), severity: "error" })
+}
+
+async function connectTarget(
+  deps: ProviderControllerDeps,
+  target: Extract<ProviderTarget, { kind: "host" }>
+): Promise<{ ok: true; transport: HostTransport } | { ok: false; failure: CliFailure }> {
+  if (deps.connect) return deps.connect(target, deps.connectDeps ?? {})
+  // Loaded on use: the Host leg pulls the command contract and the TLS
+  // pinning worker, which a session that never asks a Host does not need.
+  const { connectResolvedHost } = await import("../../api/connect")
+  return connectResolvedHost(target.host, deps.connectDeps ?? {})
+}
+
+/** A Host refusal carried through a promise chain with its whole Fix block. */
+class HostVerbError extends Error {
+  constructor(readonly failure: CliFailure) {
+    super(renderFailure(failure).trimEnd())
+    this.name = "HostVerbError"
+  }
+}
+
+async function readBalanceFromHost(
+  deps: ProviderControllerDeps,
+  target: Extract<ProviderTarget, { kind: "host" }>,
+  at: number
+): Promise<{ snapshots: ProviderLimits[]; silent: string[] }> {
+  const connected = await connectTarget(deps, target)
+  if (!connected.ok) throw new HostVerbError(connected.failure)
+  try {
+    const { readHostBalance } = await import("../../provider/host")
+    const result = await readHostBalance({ transport: connected.transport, target, now: () => at })
+    if (!result.ok) throw new HostVerbError(result.failure)
+    return result.report
+  } finally {
+    connected.transport.close?.()
+  }
 }
 
 function failureNotice(deps: ProviderControllerDeps, what: string, error: unknown): void {
@@ -138,7 +197,20 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
   const requestId = ++nextProviderRequestId
   const isCurrent = () => nextProviderRequestId === requestId
   const executor = (deps.createExecutor ?? ((c) => createCliProviderExecutor(c)))(config)
-  const resolveTransport = deps.resolveTransport ?? (() => resolveProviderTransport({}))
+  const selected = (
+    deps.selectTarget ??
+    (() =>
+      selectProviderTarget({
+        env: deps.env ?? process.env,
+        home: deps.home,
+        cwd: deps.cwd ?? process.cwd(),
+      }))
+  )()
+  if (!selected.ok) {
+    cliFailureNotice(deps, selected.failure)
+    return
+  }
+  const target = selected.target
 
   switch (action) {
     case "models": {
@@ -189,12 +261,16 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
           activeProvider: config.provider,
         },
       })
-      void readProviderLimits({
-        config,
-        verb: "balance",
-        now: () => at,
-        ...(deps.loadLimits ? { loadLimits: deps.loadLimits } : {}),
-      })
+      const load =
+        target.kind === "host"
+          ? readBalanceFromHost(deps, target, at)
+          : readProviderLimits({
+              config,
+              verb: "balance",
+              now: () => at,
+              ...(deps.loadLimits ? { loadLimits: deps.loadLimits } : {}),
+            })
+      void load
         .then((report) => {
           dispatch({
             type: "LIMITS_LOADED",
@@ -203,15 +279,22 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
           })
           if (!isCurrent()) return
           const summary = formatMeterSummary(report.snapshots, at)
-          if (summary) dispatch({ type: "NOTICE", message: summary })
+          const answered = target.kind === "host" ? `Answered by: ${target.label}\n` : ""
+          if (summary) dispatch({ type: "NOTICE", message: `${answered}${summary}` })
           else if (report.silent.length > 0) {
             dispatch({
               type: "NOTICE",
-              message: `No balance meter for ${report.silent.join(", ")}.`,
+              message: `${answered}No balance meter for ${report.silent.join(", ")}.`,
+            })
+          } else if (target.kind === "host") {
+            dispatch({
+              type: "NOTICE",
+              message: `${answered}The Host has measured no balance yet.`,
             })
           }
         })
         .catch((error: unknown) => {
+          const label = target.kind === "host" ? target.label : config.provider
           dispatch({
             type: "LIMITS_LOADED",
             requestId: limitsRequestId,
@@ -219,7 +302,7 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
               {
                 provider: config.provider,
                 accountId: config.provider,
-                accountLabel: config.provider,
+                accountLabel: label,
                 fetchedAt: at,
                 meters: [],
                 error: error instanceof Error ? error.message : String(error),
@@ -266,11 +349,9 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
       if (providerId === null) return
       dispatch({ type: "NOTICE", message: "Reading provider capabilities…" })
       try {
-        const { transport } = await resolveTransport()
         const report = await readProviderCapabilities({
           config,
           executor,
-          transport,
           ...(providerId ? { providerId } : {}),
         })
         if (!isCurrent()) return
@@ -279,7 +360,13 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
           overlay: {
             kind: "document",
             title: providerId ? `Capabilities · ${providerId}` : "Provider capabilities",
-            body: formatCapabilitiesDocument(report),
+            body: formatCapabilitiesDocument(
+              report,
+              localWhileHostSelected(
+                target,
+                "the operation profile is computed from this machine's configuration"
+              )
+            ),
             format: "markdown",
           },
         })
@@ -295,12 +382,11 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
       const providerId = picked ?? config.provider
       dispatch({ type: "NOTICE", message: `Inspecting ${providerId}…` })
       try {
-        const { transport } = await resolveTransport()
         const [capabilities, models] = await Promise.all([
-          readProviderCapabilities({ config, executor, transport, providerId }),
+          readProviderCapabilities({ config, executor, providerId }),
           listProviderModels({ config, executor, providerId, signal: deps.signal }),
         ])
-        // Both halves are computed here, whichever plane is attached.
+        // Both halves are computed here, whichever Host is selected.
         if (!isCurrent()) return
         dispatch({
           type: "OVERLAY_OPEN",
@@ -326,19 +412,45 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
       const model = deps.arg?.trim() || undefined
       dispatch({
         type: "NOTICE",
-        message: model
-          ? `Probing ${model}… (one real request per candidate)`
-          : "Probing every configured provider… (one real request each)",
+        message:
+          target.kind === "host"
+            ? `Probing on ${target.label}… (real requests to the provider)`
+            : model
+              ? `Probing ${model}… (one real request per provider)`
+              : "Probing every configured provider… (one real request each)",
       })
       try {
-        const { transport } = await resolveTransport()
-        const report = await probeProviders({
-          config,
-          executor,
-          transport,
-          ...(model ? { model } : {}),
-          ...(deps.signal ? { signal: deps.signal } : {}),
-        })
+        let report: ProviderProbeReport
+        if (target.kind === "host") {
+          const connected = await connectTarget(deps, target)
+          if (!connected.ok) {
+            if (isCurrent()) cliFailureNotice(deps, connected.failure)
+            return
+          }
+          try {
+            const { probeOnHost } = await import("../../provider/host")
+            const result = await probeOnHost({
+              transport: connected.transport,
+              target,
+              ...(model ? { model } : {}),
+              ...(deps.signal ? { signal: deps.signal } : {}),
+            })
+            if (!result.ok) {
+              if (isCurrent()) cliFailureNotice(deps, result.failure)
+              return
+            }
+            report = result.report
+          } finally {
+            connected.transport.close?.()
+          }
+        } else {
+          report = await probeLocally({
+            config,
+            executor,
+            ...(model ? { model } : {}),
+            ...(deps.signal ? { signal: deps.signal } : {}),
+          })
+        }
         if (!isCurrent()) return
         dispatch({
           type: "OVERLAY_OPEN",

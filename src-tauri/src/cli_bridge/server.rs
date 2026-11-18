@@ -121,19 +121,11 @@ pub fn build_router(state: SharedState) -> Router {
             post(handlers::teams_run_status),
         )
         .route("/api/dev/best-of-n/{action}", post(handlers::best_of_n))
-        // ── Provider admin leg (ADR-0163) ───────────────────────────────
-        // The management plane for providers. Deliberately NOT on the LLM
-        // gateway listener (that port is an agent subprocess's base URL):
-        // it rides this authenticated loopback bridge and shares the
-        // companion dispatcher with the headless `/internal/_rpc` route.
-        .route(
-            "/api/dev/provider-operations/manifest",
-            get(handlers::provider_operations_manifest),
-        )
-        .route(
-            "/api/dev/provider-operations/execute",
-            post(handlers::provider_execute),
-        )
+        // ── Gateway route tickets (ADR-0163) ────────────────────────────
+        // Provider management is not on this bridge: `cognia-agent provider`
+        // asks the Host it selected over the Companion API like every other
+        // Host command. The tickets stay, because `cognia-agent x` needs one
+        // to reach the desktop gateway.
         .route(
             "/api/dev/gateway/route-ticket",
             post(handlers::gateway_route_ticket),
@@ -314,7 +306,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    const DOCUMENTED_DEV_ROUTES: [&str; 23] = [
+    const DOCUMENTED_DEV_ROUTES: [&str; 21] = [
         "/api/dev/health",
         "/api/dev/plugins/installed",
         "/api/dev/plugins/install",
@@ -334,8 +326,6 @@ mod tests {
         "/api/dev/teams/run",
         "/api/dev/teams/run-status",
         "/api/dev/best-of-n/{action}",
-        "/api/dev/provider-operations/manifest",
-        "/api/dev/provider-operations/execute",
         "/api/dev/gateway/route-ticket",
         "/api/dev/gateway/route-ticket/revoke",
     ];

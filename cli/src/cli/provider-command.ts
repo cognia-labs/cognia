@@ -1,36 +1,49 @@
 /**
- * `cognia-agent provider …` (ADR-0163 Phase 6): the provider operation plane
- * from the terminal.
+ * `cognia-agent provider …` (ADR-0163 §8): the provider operation plane from
+ * the terminal.
  *
  * ```
  * provider capabilities [--provider id] [--operation id]
  * provider models       [--provider id] [--refresh]
- * provider balance      --live [--provider id]
+ * provider balance      [--live] [--provider id]
  * provider limits       --live [--provider id]
  * provider usage        [--provider id] [--days n]
- * provider probe        --live --yes [--provider id] [--model m]
+ * provider probe        --live --yes [--provider id] [--model m] [--admin-lease l]
  * ```
  *
- * Each verb says who answered it. `models`, `balance`, `limits` and `usage`
- * read this machine's configuration, credentials and database, and never
- * contact a plane. `capabilities` computes its cells here too, naming the
- * attached desktop only as the source of the contract it lists. `probe` runs
- * inside the gateway of the first plane that is up (desktop bridge, then
- * `cognia-server`) and probes from here when none carries it. Reads that bill the
- * account (`balance`, `limits`, `probe`) require an explicit `--live`, and a
- * probe additionally `--yes` because it spends tokens on every provider.
+ * The verbs follow the Host selection every command uses (`--host`,
+ * `--endpoint`, `COGNIA_PROFILE`, `COGNIA_SERVER_URL`, `host use`), and
+ * `--local` answers from this machine whatever is selected (`../provider/target.ts`).
+ * A selected Host answers `balance` (the balances it last measured) and
+ * `probe` (its gateway, or a diagnostics job on the paired-device wire).
+ * `capabilities`, `models`, `limits` and `usage` read this machine's
+ * configuration, credentials and database whatever is selected, and say so.
  *
- * No management credential ever leaves this process. The dev token and the
- * service token are sent only to the plane that issued them.
+ * Every report opens with who answered it. A reading that contacts a provider
+ * from this machine (`balance`, `limits`) needs `--live`, and a probe needs
+ * `--live --yes` wherever it runs.
+ *
+ * No management credential ever leaves this process: the Host's transport
+ * carries its own token or device key and nothing reaches an agent.
  */
 
 import os from "node:os"
 
 import { PROVIDER_OPERATION_IDS, isProviderOperationId } from "@cognia/provider-types"
 
+import type { ProviderLimits } from "@/types/subscription"
+
+import { connectResolvedHost, type ConnectDeps } from "../api/connect"
 import { loadConfig as defaultLoadConfig, resolveHome } from "../config/load"
 import type { ResolvedConfig } from "../config/schema"
+import { resolveHost } from "../host/resolve"
 import { formatCapabilityCell, readProviderCapabilities } from "../provider/capabilities"
+import {
+  HOST_PROBE_WAIT_MS,
+  probeOnHost,
+  readHostBalance,
+  type HostVerbResult,
+} from "../provider/host"
 import { readProviderLimits, formatMeterLine, type LimitsVerb } from "../provider/limits"
 import {
   createCliProviderExecutor,
@@ -38,16 +51,20 @@ import {
   type CliProviderExecutor,
 } from "../provider/local"
 import { formatModelLine, listProviderModels } from "../provider/models"
-import { formatGatewayProbeRow, formatLocalProbeRow, probeProviders } from "../provider/probe"
+import {
+  formatGatewayProbeRow,
+  formatHostProbeRow,
+  formatLocalProbeRow,
+  probeLocally,
+  probeReportFailed,
+  type ProviderProbeReport,
+} from "../provider/probe"
 import {
   LOCAL_ANSWER,
-  PROVIDER_TRANSPORT_PREFERENCES,
-  resolveProviderTransport,
-  localProviderTransport,
+  localWhileHostSelected,
+  selectProviderTarget,
   type ProviderAnswerSource,
-  type ProviderTransportPreference,
-  type ProviderTransportResolution,
-} from "../provider/transport"
+} from "../provider/target"
 import { formatUsageRow, readProviderUsage, type ReadUsageDeps } from "../provider/usage"
 import {
   applyFilters,
@@ -57,6 +74,7 @@ import {
   type SourceDiagnostic,
 } from "../provider/usage-filters"
 import { boolFlag, numberFlag, stringFlag, type ParsedArgs } from "./args"
+import { EXIT_FAILURE, EXIT_USAGE, emitFailure } from "./errors"
 import { realOutput, type OutputSink } from "./output"
 
 export const PROVIDER_VERBS = [
@@ -73,15 +91,30 @@ export const PROVIDER_HELP = `cognia-agent provider — the provider operation p
 
   provider capabilities [--provider id] [--operation id]   operation profile per provider
   provider models       [--provider id] [--refresh]        model inventory (catalog + upstream)
-  provider balance      --live [--provider id]             credit balance meters
+  provider balance      [--live] [--provider id]           credit balance meters
   provider limits       --live [--provider id]             usage window meters
   provider usage        [--provider id] [--days n] [--scope s] [--source id] [--model m]
                                                             local spend per provider and model
-  provider probe        --live --yes [--provider id] [--model m]
+  provider probe        --live --yes [--provider id] [--model m] [--admin-lease l]
                                                             one minimal request per provider
 
+Where it answers:
+  The verbs follow the Host every command uses: --host / --profile, --endpoint,
+  COGNIA_PROFILE, COGNIA_ENDPOINT or COGNIA_SERVER_URL, then the active host of
+  ./.cognia/hosts.json and ~/.cognia/hosts.json (cognia-agent host use). With
+  no Host selected, or with --local, this machine answers.
+
+  A selected Host answers balance and probe:
+    balance  the balances the Host last measured; this asks no provider, so
+             it needs no --live
+    probe    a paired-device Host runs one diagnostics job for --provider and
+             needs an approval lease granted on the Host (--admin-lease); a
+             headless Host probes --model through its gateway
+  capabilities, models, limits and usage always read this machine's
+  configuration, credentials and database, and say so when a Host is selected.
+
 Flags:
-  --provider <id>       one configured provider (default: every configured one)
+  --provider <id>       one provider (default: every one the answering side has)
   --operation <id>      capabilities: only this operation's cell
   --refresh             models: bypass the cached inventory and ask upstream
   --days <n>            usage: window length (default 7)
@@ -89,28 +122,34 @@ Flags:
                         what your other coding agents cost, shown separately
   --source <id>         usage: restrict all-tools to one external agent
   --model <id>          usage: substring match on the model id
-                        probe: the model to route (gateway probe needs it)
-  --transport <t>       capabilities, probe: auto (default) | bridge | rpc | local
-  --live                required for balance, limits and probe: these read the
-                        account upstream and may be billed
-  --yes                 required for probe: it spends tokens on every provider
+                        probe: the model to probe (a headless Host needs it)
+  --host <name>         a saved Host (also --profile); --endpoint <url> and
+                        --tenant <id> as for every Host command
+  --local               answer from this machine, whatever Host is selected
+  --admin-lease <l>     probe on a paired-device Host: the approval lease from
+                        cognia-agent api call host_admin_lease_issue
+                          --operations '["provider_diagnostics_start"]'
+  --timeout <ms>        probe: per-provider timeout here; how long to wait for
+                        a Host's job there (default ${HOST_PROBE_WAIT_MS})
+  --live                required where a reading contacts the provider from
+                        this machine (balance, limits) and for every probe
+  --yes                 required for probe: it sends real requests
   --json                emit one machine-readable record instead of the summary
-
-Every report starts with who answered it. models, balance, limits and usage
-answer from this machine's configuration, credentials and database, so
---provider must be configured here. capabilities computes its cells here too,
-and lists the running desktop's contract when one is attached. probe runs in
-the gateway of the running Cognia desktop (CLI bridge) or a configured
-cognia-server, checking --provider against that gateway's candidates, and
-probes from this machine when neither carries it.
 `
 
 export interface ProviderCommandDeps {
   out?: OutputSink
   env?: Record<string, string | undefined>
+  /** CLI home (`~/.cognia`), where `hosts.json` lives. */
+  home?: string
+  cwd?: string
   now?: () => number
   loadConfig?: (flags?: Record<string, string | boolean>) => ResolvedConfig
-  resolveTransport?: (prefer: ProviderTransportPreference) => Promise<ProviderTransportResolution>
+  resolveHost?: typeof resolveHost
+  connect?: typeof connectResolvedHost
+  connectDeps?: ConnectDeps
+  /** Poll sleep for a Host probe job (tests). */
+  sleep?: (ms: number) => Promise<void>
   createExecutor?: (config: ResolvedConfig) => CliProviderExecutor
   /** Seams the verb modules expose (tests). */
   loadLimits?: LimitsLoader
@@ -130,30 +169,29 @@ export interface ProviderCommandDeps {
 
 type LimitsLoader = NonNullable<Parameters<typeof readProviderLimits>[0]["loadLimits"]>
 
-const BILLED_VERBS = new Set<ProviderVerb>(["balance", "limits", "probe"])
+/** The verbs a selected Host answers. Every other verb answers here. */
+const HOST_VERBS = new Set<ProviderVerb>(["balance", "probe"])
 
-/** The verbs that read anything from a plane; every other verb answers locally. */
-const PLANE_VERBS = new Set<ProviderVerb>(["capabilities", "probe"])
+/** Why a verb answers here even with a Host selected, for the report's note. */
+const LOCAL_REASON: Record<Exclude<ProviderVerb, "balance" | "probe">, string> = {
+  capabilities: "the operation profile is computed from this machine's configuration",
+  models: "the model inventory is read with this machine's credentials",
+  limits: "a Host keeps no usage-window meters",
+  usage: "spend is read from this machine's ledger and sessions",
+}
 
 function isVerb(value: string | undefined): value is ProviderVerb {
   return (PROVIDER_VERBS as readonly string[]).includes(value ?? "")
 }
 
-function transportPreference(args: ParsedArgs): ProviderTransportPreference | null {
-  const raw = stringFlag(args, "transport") ?? "auto"
-  return (PROVIDER_TRANSPORT_PREFERENCES as readonly string[]).includes(raw)
-    ? (raw as ProviderTransportPreference)
-    : null
+function answeredHeader(answeredBy: ProviderAnswerSource, note?: string): string {
+  return note
+    ? `Answered by: ${answeredBy.label}\nNote: ${note}`
+    : `Answered by: ${answeredBy.label}`
 }
 
-function answeredHeader(
-  answeredBy: ProviderAnswerSource,
-  resolution: ProviderTransportResolution | null
-): string {
-  const lines = [`Answered by: ${answeredBy.label}`]
-  for (const skipped of resolution?.skipped ?? [])
-    lines.push(`  skipped ${skipped.kind}: ${skipped.message}`)
-  return lines.join("\n")
+function hostVerbFailure<T>(out: OutputSink, result: Extract<HostVerbResult<T>, { ok: false }>) {
+  return emitFailure(out, result.failure, result.usage ? EXIT_USAGE : EXIT_FAILURE)
 }
 
 export async function providerCommand(
@@ -177,29 +215,84 @@ export async function providerCommand(
     return 2
   }
 
-  if (BILLED_VERBS.has(verb) && !boolFlag(args, "live")) {
-    out.error(
-      `provider ${verb} reads the account upstream and may be billed. Re-run with --live to confirm.\n`
-    )
-    return 2
-  }
-  if (verb === "probe" && !boolFlag(args, "yes")) {
-    out.error(`provider probe sends one real request per provider. Add --yes to spend it.\n`)
-    return 2
-  }
-
-  const prefer = transportPreference(args)
-  if (!prefer) {
-    out.error(`--transport must be one of ${PROVIDER_TRANSPORT_PREFERENCES.join(", ")}\n`)
-    return 2
-  }
-
   const operationId = stringFlag(args, "operation")
   if (operationId !== undefined && !isProviderOperationId(operationId)) {
     out.error(
       `Unknown operation "${operationId}". Known operations:\n  ${PROVIDER_OPERATION_IDS.join("\n  ")}\n`
     )
     return 2
+  }
+
+  const env = deps.env ?? process.env
+  const home = deps.home ?? resolveHome(env, os.homedir())
+  const profile = stringFlag(args, "host") ?? stringFlag(args, "profile")
+  const selected = selectProviderTarget({
+    local: boolFlag(args, "local"),
+    ...(stringFlag(args, "endpoint") ? { endpoint: stringFlag(args, "endpoint") } : {}),
+    ...(profile ? { profile } : {}),
+    ...(stringFlag(args, "tenant") ? { tenantId: stringFlag(args, "tenant") } : {}),
+    env,
+    home,
+    cwd: deps.cwd ?? process.cwd(),
+    ...(deps.resolveHost ? { resolve: deps.resolveHost } : {}),
+  })
+  if (!selected.ok) return emitFailure(out, selected.failure, EXIT_USAGE)
+  const target = selected.target
+  const onHost = target.kind === "host" && HOST_VERBS.has(verb)
+
+  // Every probe contacts a provider. A balance or limits reading does only
+  // when this machine takes it: the Host's balance is what it last measured.
+  const needsLive = verb === "probe" || ((verb === "balance" || verb === "limits") && !onHost)
+  if (needsLive && !boolFlag(args, "live")) {
+    out.error(
+      `provider ${verb} contacts the provider${verb === "probe" ? "" : " from this machine"} and may be billed. Re-run with --live to confirm.\n`
+    )
+    return 2
+  }
+  if (verb === "probe" && !boolFlag(args, "yes")) {
+    out.error(`provider probe sends real requests to the provider. Add --yes to spend them.\n`)
+    return 2
+  }
+
+  const providerId = stringFlag(args, "provider")
+  const now = deps.now ?? Date.now
+
+  if (onHost && target.kind === "host") {
+    const connected = await (deps.connect ?? connectResolvedHost)(
+      target.host,
+      deps.connectDeps ?? {}
+    )
+    if (!connected.ok) return emitFailure(out, connected.failure)
+    const transport = connected.transport
+    try {
+      if (verb === "balance") {
+        const result = await readHostBalance({
+          transport,
+          target,
+          now,
+          ...(providerId ? { providerId } : {}),
+        })
+        if (!result.ok) return hostVerbFailure(out, result)
+        return printBalance(out, json, result.report, verb)
+      }
+      const timeout = numberFlag(args, "timeout")
+      const adminLease = stringFlag(args, "admin-lease")
+      const model = stringFlag(args, "model")
+      const result = await probeOnHost({
+        transport,
+        target,
+        now,
+        ...(deps.sleep ? { sleep: deps.sleep } : {}),
+        ...(providerId ? { providerId } : {}),
+        ...(model ? { model } : {}),
+        ...(adminLease ? { adminLease } : {}),
+        ...(timeout ? { waitMs: timeout } : {}),
+      })
+      if (!result.ok) return hostVerbFailure(out, result)
+      return printProbe(out, json, result.report)
+    } finally {
+      transport.close?.()
+    }
   }
 
   let config: ResolvedConfig
@@ -210,46 +303,37 @@ export async function providerCommand(
     return 2
   }
 
-  const providerId = stringFlag(args, "provider")
-  // Every verb but probe answers from this machine's configuration, so the id
-  // is checked against it; probe checks it against whoever answers.
+  // This machine answers from here on, so the id is checked against its
+  // configuration.
   if (providerId && verb !== "probe" && !isConfiguredLocally(config, providerId)) {
     out.error(
-      `Provider "${providerId}" is not configured on this machine, and provider ${verb} ` +
-        `answers from this machine's configuration. Add it under providers in ~/.cognia/config.json.\n`
+      `Provider "${providerId}" is not configured on this machine, which answers provider ${verb}. ` +
+        `Add it under providers in ~/.cognia/config.json.\n`
     )
     return 2
   }
 
-  // Only the verbs that read a plane look for one: the others never contact it.
-  const resolution = PLANE_VERBS.has(verb)
-    ? await (deps.resolveTransport ?? ((p) => resolveProviderTransport({ prefer: p })))(prefer)
-    : null
-  const transport = resolution?.transport ?? localProviderTransport()
+  const note =
+    verb === "balance" || verb === "probe"
+      ? undefined
+      : localWhileHostSelected(target, LOCAL_REASON[verb])
+  const selectedHost = target.kind === "host" ? { selectedHost: target.label } : {}
   const executor = (deps.createExecutor ?? ((c) => createCliProviderExecutor(c)))(config)
-  const now = deps.now ?? Date.now
 
   switch (verb) {
     case "capabilities": {
       const report = await readProviderCapabilities({
         config,
         executor,
-        transport,
         ...(providerId ? { providerId } : {}),
         ...(operationId ? { operationId } : {}),
       })
       if (json) {
-        out.json({ verb, skipped: resolution?.skipped ?? [], ...report })
+        out.json({ verb, ...selectedHost, ...report })
         return report.providers.some((p) => p.failure) ? 1 : 0
       }
-      out.write(`${answeredHeader(report.answeredBy, resolution)}\n`)
-      out.write(
-        `Contract v${report.schemaVersion} (${report.contractFrom}): ${report.operationCount} operations` +
-          (report.adminCommands.length
-            ? `, desktop admin commands: ${report.adminCommands.join(", ")}`
-            : "") +
-          "\n"
-      )
+      out.write(`${answeredHeader(report.answeredBy, note)}\n`)
+      out.write(`Contract v${report.schemaVersion}: ${report.operationCount} operations\n`)
       let failed = false
       for (const entry of report.providers) {
         out.write(`\n${entry.providerId}\n`)
@@ -272,10 +356,10 @@ export async function providerCommand(
         refresh: boolFlag(args, "refresh"),
       })
       if (json) {
-        out.json({ verb, answeredBy: LOCAL_ANSWER, ...report })
+        out.json({ verb, answeredBy: LOCAL_ANSWER, ...selectedHost, ...report })
         return report.failure ? 1 : 0
       }
-      out.write(`${answeredHeader(LOCAL_ANSWER, null)}\n`)
+      out.write(`${answeredHeader(LOCAL_ANSWER, note)}\n`)
       if (report.failure) {
         out.error(
           `${report.providerId}: ${report.failure.availability}: ${report.failure.failure.message}\n`
@@ -299,31 +383,13 @@ export async function providerCommand(
         now,
         ...(deps.loadLimits ? { loadLimits: deps.loadLimits } : {}),
       })
-      if (json) {
-        out.json({ answeredBy: LOCAL_ANSWER, ...report })
-        return report.snapshots.some((s) => s.error) ? 1 : 0
-      }
-      out.write(`${answeredHeader(LOCAL_ANSWER, null)}\n`)
-      let failed = false
-      for (const snapshot of report.snapshots) {
-        out.write(`\n${snapshot.accountLabel ?? snapshot.accountId ?? snapshot.provider}\n`)
-        if (snapshot.error) {
-          failed = true
-          out.write(`  error: ${snapshot.error}\n`)
-        }
-        for (const meter of snapshot.meters) {
-          out.write(`  ${formatMeterLine(meter, report.fetchedAt)}\n`)
-        }
-      }
-      if (report.silent.length > 0) {
-        out.write(
-          `\nNo ${verb === "balance" ? "balance" : "window"} meters: ${report.silent.join(", ")}\n`
-        )
-      }
-      if (report.snapshots.length === 0 && report.silent.length === 0) {
-        out.write(`No configured provider exposes ${verb} meters.\n`)
-      }
-      return failed ? 1 : 0
+      return printBalance(
+        out,
+        json,
+        { ...report, answeredBy: LOCAL_ANSWER, ...selectedHost },
+        verb,
+        note
+      )
     }
 
     case "usage": {
@@ -350,7 +416,6 @@ export async function providerCommand(
         ...(sourceFilter ? { sourceId: sourceFilter } : {}),
         ...(stringFlag(args, "model") ? { model: stringFlag(args, "model") as string } : {}),
       }
-      const home = resolveHome(deps.env ?? process.env, os.homedir())
       const to = now()
       const report = await readProviderUsage({
         config,
@@ -375,11 +440,11 @@ export async function providerCommand(
       const sources: SourceDiagnostic[] = deps.usageSources ? await deps.usageSources() : []
 
       if (json) {
-        out.json({ verb, answeredBy: LOCAL_ANSWER, scope, ...filtered, sources })
+        out.json({ verb, answeredBy: LOCAL_ANSWER, ...selectedHost, scope, ...filtered, sources })
         return 0
       }
       const report2 = filtered
-      out.write(`${answeredHeader(LOCAL_ANSWER, null)}\n`)
+      out.write(`${answeredHeader(LOCAL_ANSWER, note)}\n`)
       out.write(
         `Usage ${new Date(report2.from).toISOString().slice(0, 10)} to ${new Date(report2.to).toISOString().slice(0, 10)} (${scope})\n`
       )
@@ -411,46 +476,104 @@ export async function providerCommand(
     }
 
     case "probe": {
-      const report = await probeProviders({
+      const report = await probeLocally({
         config,
         executor,
-        transport,
         ...(providerId ? { providerId } : {}),
         ...(stringFlag(args, "model") ? { model: stringFlag(args, "model") } : {}),
         ...(numberFlag(args, "timeout") ? { timeoutMs: numberFlag(args, "timeout") } : {}),
       })
-      const anyFailure =
-        report.via === "gateway"
-          ? report.rows.some((row) => !row.ok)
-          : report.rows.some((row) => row.failure || !row.result?.reachable)
       if (report.via === "local" && report.notConfigured) {
         out.error(
-          `Provider "${report.notConfigured}" is not configured on this machine, which answered the probe` +
-            (report.degraded ? ` (${report.degraded})` : "") +
-            `. Add it under providers in ~/.cognia/config.json.\n`
+          `Provider "${report.notConfigured}" is not configured on this machine, which answered the probe. ` +
+            `Add it under providers in ~/.cognia/config.json.\n`
         )
         return 2
       }
-      if (json) {
-        out.json({ verb, skipped: resolution?.skipped ?? [], ...report })
-        return anyFailure ? 1 : 0
-      }
-      out.write(`${answeredHeader(report.answeredBy, resolution)}\n`)
-      if (report.via === "gateway") {
-        out.write(`Gateway probe for ${report.model} (${report.rows.length} candidates)\n`)
-        for (const row of report.rows) out.write(`  ${formatGatewayProbeRow(row)}\n`)
-        if (report.rows.length === 0)
-          out.write(
-            report.providerFilter
-              ? `  (no candidate: the gateway has no route for this model through ${report.providerFilter})\n`
-              : `  (no candidate: the gateway has no route for this model)\n`
-          )
-      } else {
-        if (report.degraded) out.write(`Note: ${report.degraded}\n`)
-        for (const row of report.rows) out.write(`  ${formatLocalProbeRow(row)}\n`)
-        if (report.rows.length === 0) out.write(`  (no configured provider to probe)\n`)
-      }
-      return anyFailure ? 1 : 0
+      return printProbe(out, json, report)
     }
   }
+}
+
+interface BalanceOutput {
+  verb: LimitsVerb
+  answeredBy: ProviderAnswerSource
+  selectedHost?: string
+  fetchedAt: number
+  snapshots: ProviderLimits[]
+  silent: string[]
+}
+
+function printBalance(
+  out: OutputSink,
+  json: boolean,
+  report: BalanceOutput,
+  verb: LimitsVerb,
+  note?: string
+): number {
+  const failed = report.snapshots.some((snapshot) => snapshot.error)
+  if (json) {
+    out.json(report)
+    return failed ? 1 : 0
+  }
+  out.write(`${answeredHeader(report.answeredBy, note)}\n`)
+  for (const snapshot of report.snapshots) {
+    out.write(`\n${snapshot.accountLabel ?? snapshot.accountId ?? snapshot.provider}\n`)
+    if (snapshot.notice) out.write(`  ${snapshot.notice}\n`)
+    if (snapshot.error) out.write(`  error: ${snapshot.error}\n`)
+    for (const meter of snapshot.meters) {
+      out.write(`  ${formatMeterLine(meter, report.fetchedAt)}\n`)
+    }
+  }
+  if (report.silent.length > 0) {
+    out.write(
+      `\nNo ${verb === "balance" ? "balance" : "window"} meters: ${report.silent.join(", ")}\n`
+    )
+  }
+  if (report.snapshots.length === 0 && report.silent.length === 0) {
+    out.write(
+      report.answeredBy.plane === "host"
+        ? `The Host has measured no balance yet.\n`
+        : `No configured provider exposes ${verb} meters.\n`
+    )
+  }
+  return failed ? 1 : 0
+}
+
+function printProbe(out: OutputSink, json: boolean, report: ProviderProbeReport): number {
+  const failed = probeReportFailed(report)
+  if (json) {
+    out.json({ verb: "probe", ...report })
+    return failed ? 1 : 0
+  }
+  out.write(`${answeredHeader(report.answeredBy)}\n`)
+  switch (report.via) {
+    case "gateway":
+      out.write(`Gateway probe for ${report.model} (${report.rows.length} candidates)\n`)
+      for (const row of report.rows) out.write(`  ${formatGatewayProbeRow(row)}\n`)
+      if (report.rows.length === 0)
+        out.write(
+          report.providerFilter
+            ? `  (no candidate: the gateway has no route for this model through ${report.providerFilter})\n`
+            : `  (no candidate: the gateway has no route for this model)\n`
+        )
+      break
+    case "host-job":
+      out.write(`Diagnostics job ${report.jobId} for ${report.providerId}: ${report.status}\n`)
+      for (const row of report.rows) out.write(`  ${formatHostProbeRow(row)}\n`)
+      if (!report.settled) {
+        out.write(
+          `  The Host is still running it. Read it later with:\n` +
+            `  cognia-agent api call provider_diagnostics_history --provider-id ${report.providerId}\n`
+        )
+      } else if (report.rows.length === 0) {
+        out.write(`  (the Host recorded no sample for this job)\n`)
+      }
+      break
+    case "local":
+      for (const row of report.rows) out.write(`  ${formatLocalProbeRow(row)}\n`)
+      if (report.rows.length === 0) out.write(`  (no configured provider to probe)\n`)
+      break
+  }
+  return failed ? 1 : 0
 }

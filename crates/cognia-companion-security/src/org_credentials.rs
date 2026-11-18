@@ -179,7 +179,7 @@ mod tests {
             include_str!("../../cognia-companion-rpc/src/rpc/chat.rs"),
             include_str!("../../cognia-companion-rpc/src/rpc/service_plane.rs"),
             include_str!("../../cognia-companion-rpc/src/rpc/gateway_plane.rs"),
-            include_str!("../../cognia-companion-rpc/src/provider_admin.rs"),
+            include_str!("../../cognia-companion-rpc/src/route_tickets.rs"),
             include_str!("../../cognia-server/src/main.rs"),
             include_str!("../../cognia-companion/src/org_policy.rs")] {
             assert!(!source.contains("::org_provider_key("));

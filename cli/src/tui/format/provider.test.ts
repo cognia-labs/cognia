@@ -65,13 +65,11 @@ describe("profile formatting", () => {
 })
 
 describe("formatCapabilitiesDocument", () => {
-  it("renders the header, the admin commands, and one section per provider", () => {
+  it("renders the header, the note, and one section per provider", () => {
     const report: ProviderCapabilitiesReport = {
       answeredBy: { plane: "local", label: "this machine" },
-      contractFrom: "Cognia desktop bridge (http://127.0.0.1:1)",
       schemaVersion: 1,
       operationCount: 50,
-      adminCommands: ["provider_catalog_status"],
       operationFilter: "models.list",
       providers: [
         { providerId: "openai", profile: PROFILE },
@@ -86,11 +84,10 @@ describe("formatCapabilitiesDocument", () => {
         },
       ],
     }
-    const doc = formatCapabilitiesDocument(report)
-    expect(doc).toContain("Answered by: this machine")
-    expect(doc).toContain(
-      "Contract v1 (Cognia desktop bridge (http://127.0.0.1:1)): 50 operations, desktop admin commands: `provider_catalog_status`"
-    )
+    const doc = formatCapabilitiesDocument(report, "Host x is selected, but …")
+    expect(doc).toContain("Answered by: this machine\nNote: Host x is selected, but …")
+    expect(doc).toContain("Contract v1: 50 operations")
+    expect(formatCapabilitiesDocument(report)).not.toContain("Note:")
     expect(doc).toContain("Filter: `models.list`")
     expect(doc).toContain("## openai\n\n2 served · 1 unsupported · 1 unknown")
     expect(doc).toContain("## anthropic\n\nneeds-auth: no key")
@@ -171,7 +168,7 @@ describe("formatProbeDocument", () => {
   it("renders gateway candidates", () => {
     const report: ProviderProbeReport = {
       via: "gateway",
-      answeredBy: { plane: "bridge", label: "desktop" },
+      answeredBy: { plane: "host", label: "desktop" },
       model: "gpt-4o",
       rows: [
         { providerId: "openai", modelId: "gpt-4o", ok: true, status: 200, latencyMs: 310 },
@@ -185,11 +182,10 @@ describe("formatProbeDocument", () => {
     expect(doc).toContain("| FAIL | azure | `gpt-4o` | 9ms |  | bad key |")
   })
 
-  it("renders local rows with the degradation note", () => {
+  it("renders local rows", () => {
     const report: ProviderProbeReport = {
       via: "local",
       answeredBy: { plane: "local", label: "this machine" },
-      degraded: "rpc plane: no such command",
       rows: [
         {
           providerId: "openai",
@@ -212,7 +208,7 @@ describe("formatProbeDocument", () => {
       ],
     }
     const doc = formatProbeDocument(report)
-    expect(doc).toContain("Note: rpc plane: no such command")
+    expect(doc).not.toContain("Note:")
     expect(doc).toContain("| ok | openai | 42ms | yes |  |  |")
     expect(doc).toContain("| FAIL | anthropic | | | needs-auth | no key |")
     const local = { plane: "local" as const, label: "this machine" }
@@ -225,12 +221,64 @@ describe("formatProbeDocument", () => {
     expect(
       formatProbeDocument({
         via: "gateway",
-        answeredBy: { plane: "rpc", label: "server" },
+        answeredBy: { plane: "host", label: "server" },
         model: "gpt-4o",
         providerFilter: "groq",
         rows: [],
       })
     ).toContain("no route for this model through groq")
+  })
+})
+
+describe("formatProbeDocument for a Host diagnostics job", () => {
+  const host = { plane: "host" as const, label: 'Host "home"' }
+  const probe = {
+    reachable: true,
+    authenticated: false,
+    capabilityVerified: false,
+    durationMs: 12,
+    httpStatus: 401,
+    failure: { code: "authentication" as const, retryable: false, message: "invalid key" },
+  }
+
+  it("renders the job's samples", () => {
+    const doc = formatProbeDocument({
+      via: "host-job",
+      answeredBy: host,
+      providerId: "openai",
+      model: "gpt-4o",
+      jobId: "job-1",
+      status: "completed",
+      settled: true,
+      rows: [
+        { providerId: "openai", modelId: "gpt-4o", status: "completed", probe },
+        {
+          providerId: "openai",
+          status: "failed",
+          failure: { code: "network", retryable: true, message: "reset" },
+        },
+      ],
+    })
+    expect(doc).toContain('Answered by: Host "home"')
+    expect(doc).toContain("Diagnostics job `job-1` for openai: completed")
+    expect(doc).toContain("| FAIL | openai | `gpt-4o` | 12ms | no | 401 | invalid key |")
+    expect(doc).toContain("| FAIL | openai |  | | | failed | reset |")
+  })
+
+  it("says when the Host is still running it, or recorded nothing", () => {
+    const base = {
+      via: "host-job" as const,
+      answeredBy: host,
+      providerId: "openai",
+      jobId: "job-2",
+      rows: [],
+    }
+    expect(formatProbeDocument({ ...base, status: "running", settled: false })).toContain(
+      "`cognia-agent api call provider_diagnostics_history --provider-id openai`"
+    )
+    expect(formatProbeDocument({ ...base, status: "completed", settled: true })).toContain(
+      "_(the Host recorded no sample for this job)_"
+    )
   })
 })
 

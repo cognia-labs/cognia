@@ -1,29 +1,23 @@
 /**
- * `provider probe`: one minimal, billable request per provider (or per
- * gateway candidate for a model), reporting reachability, auth and latency.
+ * `provider probe` on this machine, and the row shapes every probe report
+ * shares.
  *
- * Attached to a desktop or server that exposes `gateway_probe_upstream`, the
- * probe runs INSIDE the gateway, walking the same pool expansion, cooldowns
- * and header rules a live chat request walks. Otherwise every configured
- * provider is probed locally through the shared `health.probe` operation.
- * Either way a probe spends tokens, so the command requires `--live --yes`.
- *
- * `--provider` is checked against whoever answers: the gateway's candidates
- * when the gateway probes, this machine's configuration when it does.
+ * Here every configured provider is probed through the shared `health.probe`
+ * operation, with this machine's credentials. A selected Host probes inside
+ * its own gateway or diagnostics job instead (`./host.ts`). Either way a probe
+ * contacts the provider, so the command requires `--live --yes`.
  */
 
-import type { ProviderOperationFailure, ProviderProbeResult } from "@cognia/provider-types"
+import type {
+  ProviderDiagnosticFailure,
+  ProviderDiagnosticStatus,
+  ProviderOperationFailure,
+  ProviderProbeResult,
+} from "@cognia/provider-types"
 
 import type { ResolvedConfig } from "../config/schema"
 import { configuredProviderIds, isConfiguredLocally, type CliProviderExecutor } from "./local"
-import {
-  LOCAL_ANSWER,
-  planeAnswer,
-  type ProviderAnswerSource,
-  type ProviderTransport,
-} from "./transport"
-
-export const GATEWAY_PROBE_COMMAND = "gateway_probe_upstream"
+import { LOCAL_ANSWER, type ProviderAnswerSource } from "./target"
 
 /** One gateway candidate's answer (`cognia_gateway::server::UpstreamProbeResult`). */
 export interface GatewayProbeRow {
@@ -42,8 +36,18 @@ export interface LocalProbeRow {
   failure?: ProviderOperationFailure
 }
 
+/** One sample of a Host diagnostics job (`ProviderDiagnosticSample`, endpoint withheld). */
+export interface HostProbeRow {
+  providerId: string
+  modelId?: string
+  status: ProviderDiagnosticStatus
+  probe?: ProviderProbeResult
+  failure?: ProviderDiagnosticFailure
+}
+
 export type ProviderProbeReport =
   | {
+      /** The Host's gateway walked its candidates for one model. */
       via: "gateway"
       answeredBy: ProviderAnswerSource
       model: string
@@ -52,10 +56,20 @@ export type ProviderProbeReport =
       rows: GatewayProbeRow[]
     }
   | {
+      /** A Host diagnostics job probed one provider. */
+      via: "host-job"
+      answeredBy: ProviderAnswerSource
+      providerId: string
+      model?: string
+      jobId: string
+      status: ProviderDiagnosticStatus
+      /** False when the wait ran out before the Host finished the job. */
+      settled: boolean
+      rows: HostProbeRow[]
+    }
+  | {
       via: "local"
       answeredBy: ProviderAnswerSource
-      /** Why the gateway leg was not used, when a plane was attached. */
-      degraded?: string
       /** `--provider` named a provider this machine has not configured. */
       notConfigured?: string
       rows: LocalProbeRow[]
@@ -64,36 +78,16 @@ export type ProviderProbeReport =
 export interface ProbeDeps {
   config: ResolvedConfig
   executor: CliProviderExecutor
-  transport: ProviderTransport
   providerId?: string
   model?: string
   timeoutMs?: number
   signal?: AbortSignal
 }
 
-function toGatewayRow(value: unknown): GatewayProbeRow | null {
-  if (!value || typeof value !== "object") return null
-  const row = value as Record<string, unknown>
-  if (typeof row.providerId !== "string" || typeof row.modelId !== "string") return null
-  return {
-    providerId: row.providerId,
-    modelId: row.modelId,
-    ok: row.ok === true,
-    ...(typeof row.status === "number" ? { status: row.status } : {}),
-    latencyMs: typeof row.latencyMs === "number" ? row.latencyMs : 0,
-    ...(typeof row.error === "string" ? { error: row.error } : {}),
-  }
-}
-
-async function probeLocally(deps: ProbeDeps, degraded?: string): Promise<ProviderProbeReport> {
+/** Probe every configured provider (or `--provider`) from this machine. */
+export async function probeLocally(deps: ProbeDeps): Promise<ProviderProbeReport> {
   if (deps.providerId && !isConfiguredLocally(deps.config, deps.providerId)) {
-    return {
-      via: "local",
-      answeredBy: LOCAL_ANSWER,
-      ...(degraded ? { degraded } : {}),
-      notConfigured: deps.providerId,
-      rows: [],
-    }
+    return { via: "local", answeredBy: LOCAL_ANSWER, notConfigured: deps.providerId, rows: [] }
   }
   const ids = deps.providerId ? [deps.providerId] : configuredProviderIds(deps.config)
   const rows: LocalProbeRow[] = []
@@ -114,47 +108,28 @@ async function probeLocally(deps: ProbeDeps, degraded?: string): Promise<Provide
         : { providerId, ...(deps.model ? { model: deps.model } : {}), failure: result }
     )
   }
-  return {
-    via: "local",
-    answeredBy: LOCAL_ANSWER,
-    ...(degraded ? { degraded } : {}),
-    rows,
-  }
+  return { via: "local", answeredBy: LOCAL_ANSWER, rows }
 }
 
-export async function probeProviders(deps: ProbeDeps): Promise<ProviderProbeReport> {
-  const supported = deps.transport.supportsCommand(GATEWAY_PROBE_COMMAND)
-  // The gateway probe is keyed by model: without one there is nothing for the
-  // route planner to expand, so the local per-provider probe is the answer.
-  if (deps.transport.kind === "local" || supported === false || !deps.model) {
-    const degraded =
-      deps.transport.kind === "local"
-        ? undefined
-        : !deps.model
-          ? "gateway probe needs --model; probing each provider directly instead"
-          : `${deps.transport.label} does not expose ${GATEWAY_PROBE_COMMAND}`
-    return probeLocally(deps, degraded)
-  }
-  const outcome = await deps.transport.execute(GATEWAY_PROBE_COMMAND, { model: deps.model })
-  if (!outcome.ok) {
-    if (outcome.reason === "unavailable") {
-      return probeLocally(deps, `${deps.transport.label}: ${outcome.message}`)
-    }
-    return probeLocally(
-      deps,
-      `${deps.transport.label} refused the gateway probe: ${outcome.message}`
-    )
-  }
-  const rows = (Array.isArray(outcome.result) ? outcome.result : [])
-    .map(toGatewayRow)
-    .filter((row): row is GatewayProbeRow => row !== null)
-    .filter((row) => !deps.providerId || row.providerId === deps.providerId)
-  return {
-    via: "gateway",
-    answeredBy: planeAnswer(deps.transport),
-    model: deps.model,
-    ...(deps.providerId ? { providerFilter: deps.providerId } : {}),
-    rows,
+/** A probe passed: the provider answered, accepted the credential and reported no failure. */
+export function probePassed(result: ProviderProbeResult): boolean {
+  return result.reachable && result.authenticated !== false && !result.failure
+}
+
+/** Whether a report carries any failure, for the exit code. */
+export function probeReportFailed(report: ProviderProbeReport): boolean {
+  switch (report.via) {
+    case "gateway":
+      return report.rows.some((row) => !row.ok)
+    case "host-job":
+      return (
+        !report.settled ||
+        report.status !== "completed" ||
+        report.rows.length === 0 ||
+        report.rows.some((row) => row.failure || !row.probe || !probePassed(row.probe))
+      )
+    case "local":
+      return report.rows.some((row) => row.failure || !row.result || !probePassed(row.result))
   }
 }
 
@@ -165,15 +140,25 @@ export function formatGatewayProbeRow(row: GatewayProbeRow): string {
   return `${mark} ${row.providerId.padEnd(16)} ${row.modelId.padEnd(28)} ${row.latencyMs}ms${status}${error}`
 }
 
+function formatProbeResult(name: string, result: ProviderProbeResult): string {
+  const mark = probePassed(result) ? "ok  " : "FAIL"
+  const auth = result.authenticated === undefined ? "" : result.authenticated ? " auth" : " no-auth"
+  const status = result.httpStatus !== undefined ? ` HTTP ${result.httpStatus}` : ""
+  const failure = result.failure ? `  ${result.failure.message}` : ""
+  return `${mark} ${name} ${result.durationMs}ms${auth}${status}${failure}`
+}
+
 export function formatLocalProbeRow(row: LocalProbeRow): string {
   const name = row.providerId.padEnd(16)
   if (row.failure) {
     return `FAIL ${name} ${row.failure.availability}: ${row.failure.failure.message}`
   }
-  const r = row.result!
-  const mark = r.reachable && r.authenticated !== false && !r.failure ? "ok  " : "FAIL"
-  const auth = r.authenticated === undefined ? "" : r.authenticated ? " auth" : " no-auth"
-  const status = r.httpStatus !== undefined ? ` HTTP ${r.httpStatus}` : ""
-  const failure = r.failure ? `  ${r.failure.message}` : ""
-  return `${mark} ${name} ${r.durationMs}ms${auth}${status}${failure}`
+  return formatProbeResult(name, row.result!)
+}
+
+export function formatHostProbeRow(row: HostProbeRow): string {
+  const name = `${row.providerId.padEnd(16)}${row.modelId ? ` ${row.modelId.padEnd(28)}` : ""}`
+  if (row.probe) return formatProbeResult(name, row.probe)
+  const failure = row.failure ? `  ${row.failure.code}: ${row.failure.message}` : ""
+  return `FAIL ${name} ${row.status}${failure}`
 }
