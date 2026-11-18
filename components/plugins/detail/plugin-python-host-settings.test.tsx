@@ -32,6 +32,10 @@ jest.mock("@/lib/plugin/core/manager", () => ({
 }))
 
 import { PluginPythonHostSettings } from "./plugin-python-host-settings"
+import {
+  __resetPythonInterpreterReportStoreForTesting,
+  recordPythonInterpreterReport,
+} from "@/stores/plugin-runtime/python-interpreter-report-store"
 
 describe("PluginPythonHostSettings", () => {
   beforeEach(() => {
@@ -46,6 +50,7 @@ describe("PluginPythonHostSettings", () => {
     // Default: no native host (the web shell), so the runtime strip is absent.
     runtimeInfoMock.mockRejectedValue(new Error("no native host"))
     installUvMock.mockResolvedValue("uv 0.5.0")
+    __resetPythonInterpreterReportStoreForTesting()
   })
 
   async function renderLoaded(deps: string[] = []) {
@@ -486,6 +491,118 @@ describe("PluginPythonHostSettings", () => {
       clearSpy.mockRestore()
       jest.useRealTimers()
     }
+  })
+
+  describe("interpreter warning (ENV03)", () => {
+    const unmet = {
+      kind: "requirement-unmet" as const,
+      version: "3.9.18",
+      requirement: ">=3.10",
+    }
+
+    it("shows the host's warning for the saved override path", async () => {
+      getSettingsMock.mockResolvedValue({ interpreterPath: "/opt/py39/bin/python" })
+      recordPythonInterpreterReport("demo", {
+        source: "override",
+        argv: ["/opt/py39/bin/python"],
+        version: "3.9.18",
+        warning: unmet,
+      })
+      await renderLoaded()
+
+      const warning = screen.getByTestId("interpreter-warning")
+      expect(warning).toHaveTextContent(
+        `interpreterWarning.requirementUnmet:${JSON.stringify({ version: "3.9.18", requirement: ">=3.10" })}`
+      )
+      expect(screen.getByLabelText("interpreterPath")).toHaveAttribute(
+        "aria-describedby",
+        warning.id
+      )
+    })
+
+    it("words every warning kind", async () => {
+      await renderLoaded()
+      const cases = [
+        [{ kind: "version-unknown" as const }, "interpreterWarning.versionUnknown"],
+        [
+          { kind: "below-host-minimum" as const, version: "3.8.10", minimum: "3.9" },
+          `interpreterWarning.belowHostMinimum:${JSON.stringify({ version: "3.8.10", minimum: "3.9" })}`,
+        ],
+        [
+          { kind: "requirement-unreadable" as const, problem: "invalid-pyproject" as const },
+          "interpreterWarning.invalidPyproject",
+        ],
+        [
+          { kind: "requirement-unreadable" as const, problem: "not-a-string" as const },
+          "interpreterWarning.requirementNotAString",
+        ],
+        [
+          {
+            kind: "requirement-unreadable" as const,
+            problem: "invalid-specifier" as const,
+            requirement: "3.10",
+          },
+          `interpreterWarning.invalidSpecifier:${JSON.stringify({ requirement: "3.10" })}`,
+        ],
+      ] as const
+      for (const [warning, text] of cases) {
+        act(() =>
+          recordPythonInterpreterReport("demo", {
+            source: "runtime",
+            argv: ["python3"],
+            version: null,
+            warning,
+          })
+        )
+        expect(screen.getByTestId("interpreter-warning")).toHaveTextContent(text)
+      }
+    })
+
+    it("shows a venv or runtime warning only while no override is saved", async () => {
+      getSettingsMock.mockResolvedValue({ interpreterPath: "/opt/py312/bin/python" })
+      recordPythonInterpreterReport("demo", {
+        source: "venv",
+        argv: ["/v/bin/python"],
+        version: "3.9.18",
+        warning: unmet,
+      })
+      await renderLoaded()
+      expect(screen.queryByTestId("interpreter-warning")).not.toBeInTheDocument()
+    })
+
+    it("hides a report about another path until the plugin loads again", async () => {
+      getSettingsMock.mockResolvedValue({ interpreterPath: "/opt/py39/bin/python" })
+      recordPythonInterpreterReport("demo", {
+        source: "override",
+        argv: ["/opt/py39/bin/python"],
+        version: "3.9.18",
+        warning: unmet,
+      })
+      await renderLoaded()
+      expect(screen.getByTestId("interpreter-warning")).toBeInTheDocument()
+
+      // Typing alone does not hide it: the saved path is what the next load uses.
+      fireEvent.change(screen.getByLabelText("interpreterPath"), {
+        target: { value: "/opt/py312/bin/python" },
+      })
+      expect(screen.getByTestId("interpreter-warning")).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole("button", { name: "save" }))
+      await waitFor(() =>
+        expect(screen.queryByTestId("interpreter-warning")).not.toBeInTheDocument()
+      )
+    })
+
+    it("shows nothing when the last load raised no warning", async () => {
+      recordPythonInterpreterReport("demo", {
+        source: "runtime",
+        argv: ["python3"],
+        version: "3.12.4",
+        warning: null,
+      })
+      await renderLoaded()
+      expect(screen.queryByTestId("interpreter-warning")).not.toBeInTheDocument()
+    })
   })
 
   it("names an unknown interpreter version through i18n instead of a dash", async () => {

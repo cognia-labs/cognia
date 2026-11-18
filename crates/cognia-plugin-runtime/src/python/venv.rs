@@ -316,10 +316,11 @@ fn complete_venv(dir: &Path) -> Option<Interpreter> {
     if !python.is_file() || !dir.join(VENV_MARKER).is_file() {
         return None;
     }
+    // An empty version is a marker that never recorded one: unknown, not a
+    // version to compare.
     let version = read_marker(dir)
         .map(|marker| marker.version)
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "venv".to_string());
+        .filter(|v| !v.is_empty());
     Some(Interpreter {
         argv_prefix: vec![python.to_string_lossy().into_owned()],
         version,
@@ -454,7 +455,9 @@ pub async fn ensure_venv_at(
     let python = venv_python(dir);
     if python.is_file() {
         if let Some(marker) = read_marker(dir) {
-            let compatible = marker.installer == installer.name() && marker.version == base.version;
+            let compatible = marker.installer == installer.name()
+                && !marker.version.is_empty()
+                && base.version.as_deref() == Some(marker.version.as_str());
             if compatible {
                 return Ok(marker);
             }
@@ -476,7 +479,7 @@ pub async fn ensure_venv_at(
                         &marker.version
                     },
                     installer.name(),
-                    base.version,
+                    base.version.as_deref().unwrap_or("an unknown interpreter"),
                 ),
             );
         }
@@ -547,7 +550,7 @@ pub async fn ensure_venv_at(
     let marker = VenvMarker {
         created_at: chrono::Utc::now().to_rfc3339(),
         base_interpreter: base.argv_prefix.clone(),
-        version: base.version.clone(),
+        version: base.version.clone().unwrap_or_default(),
         installer: installer.name().to_string(),
         scope: String::new(),
         deps: Vec::new(),
@@ -846,7 +849,7 @@ mod tests {
     fn fake_interpreter() -> Interpreter {
         Interpreter {
             argv_prefix: vec!["python3".into()],
-            version: "3.12.0".into(),
+            version: Some("3.12.0".into()),
         }
     }
 
@@ -888,8 +891,17 @@ mod tests {
         assert!(venv_interpreter(tmp.path(), "demo").is_none());
         std::fs::write(dir.join(VENV_MARKER), r#"{"version":"3.12.0"}"#).unwrap();
         let interp = venv_interpreter(tmp.path(), "demo").unwrap();
-        assert_eq!(interp.version, "3.12.0");
+        assert_eq!(interp.version.as_deref(), Some("3.12.0"));
         assert!(interp.argv_prefix[0].contains("demo"));
+    }
+
+    #[test]
+    fn a_marker_without_a_version_leaves_it_unknown() {
+        let tmp = TempDir::new().unwrap();
+        let dir = venv_dir(tmp.path(), "demo");
+        seed_venv(&dir, &VenvMarker::default());
+        let interp = venv_interpreter(tmp.path(), "demo").unwrap();
+        assert_eq!(interp.version, None);
     }
 
     #[test]
@@ -1214,7 +1226,7 @@ mod tests {
             .unwrap();
         assert!(venv_python(&dir).is_file());
         let marker = read_marker(&dir).unwrap();
-        assert_eq!(marker.version, interp.version);
+        assert_eq!(Some(marker.version.as_str()), interp.version.as_deref());
         assert!(!marker.installer.is_empty(), "provenance must be recorded");
         assert!(collected.lock().iter().any(|e| e.data["phase"] == "venv"));
 

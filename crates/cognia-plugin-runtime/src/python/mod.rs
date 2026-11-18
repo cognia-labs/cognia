@@ -18,6 +18,7 @@
 pub mod commands;
 pub mod discover;
 pub mod events;
+pub mod interpreter_check;
 pub mod protocol;
 pub mod venv;
 
@@ -505,7 +506,7 @@ mod tests {
             spec: RespawnSpec {
                 interpreter: Interpreter {
                     argv_prefix: vec!["python".into()],
-                    version: "3.12.0".into(),
+                    version: Some("3.12.0".into()),
                 },
                 host_script: PathBuf::from("/tmp/host.py"),
                 import_params: json!({}),

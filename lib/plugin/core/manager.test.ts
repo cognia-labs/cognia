@@ -97,6 +97,10 @@ import {
 } from "@/lib/plugin/registries/character-pack-registry"
 import { __resetSkillsForTesting, registerSkill } from "@/lib/plugin/registries/skill-registry"
 import { __resetPluginActivationProgressStoreForTesting } from "@/stores/plugin-runtime/plugin-activation-progress-store"
+import {
+  __resetPythonInterpreterReportStoreForTesting,
+  usePythonInterpreterReportStore,
+} from "@/stores/plugin-runtime/python-interpreter-report-store"
 import { PluginActivationConflictError, PluginLifecycleCoordinator } from "./lifecycle-coordinator"
 import { InMemoryPluginLifecycleStateAdapter, type PluginDirtyDiagnostic } from "./lifecycle-state"
 import {
@@ -7109,6 +7113,38 @@ describe("PluginManager", () => {
       const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
       await manager.loadPythonPlugin("py-plugin")
       expect(store.registerPluginHooks).not.toHaveBeenCalled()
+    })
+
+    it("loadPythonPlugin records the interpreter the host checked (ENV03)", async () => {
+      const plugin = createTypedPlugin("py-plugin", "python")
+      mockGetState.mockReturnValue(createLoadStore(plugin))
+      __resetPythonInterpreterReportStoreForTesting()
+      const interpreter = { source: "override", argv: ["/opt/py38/bin/python"], version: "3.8.10" }
+      let reply: Record<string, unknown> = {
+        generation: "python-gen-1",
+        interpreter,
+        interpreterWarning: { kind: "below-host-minimum", version: "3.8.10", minimum: "3.9" },
+      }
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "plugin_python_load") return reply
+        if (cmd === "plugin_python_get_tools") return []
+        return undefined
+      })
+
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      await manager.loadPythonPlugin("py-plugin")
+      expect(usePythonInterpreterReportStore.getState().byPluginId["py-plugin"]).toEqual({
+        ...interpreter,
+        warning: { kind: "below-host-minimum", version: "3.8.10", minimum: "3.9" },
+      })
+
+      // The next load replaces it; a reply without a report clears it.
+      reply = { generation: "python-gen-2", interpreter: { ...interpreter, version: "3.12.4" } }
+      await manager.loadPythonPlugin("py-plugin")
+      expect(usePythonInterpreterReportStore.getState().byPluginId["py-plugin"]?.warning).toBeNull()
+      reply = { generation: "python-gen-3" }
+      await manager.loadPythonPlugin("py-plugin")
+      expect(usePythonInterpreterReportStore.getState().byPluginId["py-plugin"]).toBeUndefined()
     })
 
     it("notifyPluginConfigChanged pushes config into python hosts", async () => {

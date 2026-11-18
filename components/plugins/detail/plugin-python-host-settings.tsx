@@ -46,6 +46,11 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { getPythonHostSettings, setPythonHostSettings } from "@/lib/db/plugins"
+import {
+  reportMatchesInterpreterPath,
+  type PythonInterpreterWarning,
+} from "@/lib/plugin/python/interpreter-report"
+import { usePythonInterpreterReportStore } from "@/stores/plugin-runtime/python-interpreter-report-store"
 import type { PythonHostSettings, PythonInstallOutcome } from "@/types/plugin"
 
 const ENV_LINE = /^[A-Za-z_][A-Za-z0-9_]*=.*$/
@@ -150,6 +155,37 @@ export function formsEqual(a: PythonHostForm, b: PythonHostForm): boolean {
 /** How long the "Saved" confirmation stays up. */
 const SAVED_TICK_MS = 2000
 
+type Translate = ReturnType<typeof useTranslations<"plugins.detail.pythonHost">>
+
+/** The Host's interpreter warning (ENV03), in words. */
+function interpreterWarningText(t: Translate, warning: PythonInterpreterWarning): string {
+  switch (warning.kind) {
+    case "version-unknown":
+      return t("interpreterWarning.versionUnknown")
+    case "below-host-minimum":
+      return t("interpreterWarning.belowHostMinimum", {
+        version: warning.version,
+        minimum: warning.minimum,
+      })
+    case "requirement-unmet":
+      return t("interpreterWarning.requirementUnmet", {
+        version: warning.version,
+        requirement: warning.requirement,
+      })
+    case "requirement-unreadable":
+      switch (warning.problem) {
+        case "invalid-pyproject":
+          return t("interpreterWarning.invalidPyproject")
+        case "not-a-string":
+          return t("interpreterWarning.requirementNotAString")
+        case "invalid-specifier":
+          return t("interpreterWarning.invalidSpecifier", {
+            requirement: warning.requirement ?? "",
+          })
+      }
+  }
+}
+
 export function PluginPythonHostSettings({
   pluginId,
   pythonDependencies = [],
@@ -177,6 +213,7 @@ export function PluginPythonHostSettings({
   const [runtimeProbed, setRuntimeProbed] = useState(false)
   const [installingUv, setInstallingUv] = useState(false)
   const [uvError, setUvError] = useState<string | null>(null)
+  const interpreterReport = usePythonInterpreterReportStore((state) => state.byPluginId[pluginId])
 
   useEffect(() => {
     let cancelled = false
@@ -257,6 +294,14 @@ export function PluginPythonHostSettings({
   }, [installerKind, installerPath, installArgsText])
 
   const installerChanged = installerKind !== baseline.installerKind
+
+  // What the Host found when the plugin last loaded, shown only while the
+  // saved settings still select that interpreter (they apply on the next load).
+  const interpreterWarning =
+    interpreterReport?.warning &&
+    reportMatchesInterpreterPath(interpreterReport, baseline.interpreterPath)
+      ? interpreterReport.warning
+      : null
 
   const buildSettings = useCallback((): PythonHostSettings | null => {
     const env = parseEnvText(envText)
@@ -380,7 +425,18 @@ export function PluginPythonHostSettings({
             value={interpreterPath}
             onChange={(e) => update("interpreterPath", e.target.value)}
             placeholder={t("interpreterPathPlaceholder")}
+            aria-describedby={interpreterWarning ? `py-interpreter-warning-${pluginId}` : undefined}
           />
+          {interpreterWarning && (
+            <p
+              id={`py-interpreter-warning-${pluginId}`}
+              data-testid="interpreter-warning"
+              className="flex items-start gap-1.5 text-xs text-muted-foreground"
+            >
+              <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+              {interpreterWarningText(t, interpreterWarning)}
+            </p>
+          )}
         </div>
 
         <div className="space-y-1.5 @md:col-span-2">

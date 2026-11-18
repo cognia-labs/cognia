@@ -56,6 +56,10 @@ wasmtime-wasi = { version = "=49.0.4", default-features = false, features = ["p2
 wasmparser = "0.261"
 # Bounded child-process shutdown in the python host.
 wait-timeout.workspace = true
+# A Python plugin's `pyproject.toml` and its `requires-python` specifier
+# set, evaluated against the interpreter it loads on (ENV03).
+toml_edit.workspace = true
+pep440_rs = { version = "0.7.3", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "sync", "time", "io-util", "fs"] }

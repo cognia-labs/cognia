@@ -12,7 +12,7 @@
 //! Tests pin this ordering.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,9 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use super::discover::{discover_interpreter, Interpreter};
+use super::interpreter_check::{
+    interpreter_warning, read_requires_python, warning_line, InterpreterWarning, RequiresPython,
+};
 use super::protocol::{PluginHost, CALL_TIMEOUT, CONTROL_TIMEOUT};
 use super::PythonRuntimeState;
 use crate::{PluginError, PluginRuntimeState, Result};
@@ -990,7 +993,7 @@ fn record_interpreter(state: &PythonRuntimeState, interpreter: Option<Interprete
             log::info!(
                 "python runtime initialized: {} ({})",
                 interp.argv_prefix.join(" "),
-                interp.version
+                interp.version.as_deref().unwrap_or("unknown version")
             );
             *state.interpreter.write() = Some(interp);
         }
@@ -1007,7 +1010,7 @@ fn runtime_info_inner(state: &PythonRuntimeState) -> PythonRuntimeInfo {
     let interpreter = state.interpreter.read();
     PythonRuntimeInfo {
         available: interpreter.is_some(),
-        version: interpreter.as_ref().map(|i| i.version.clone()),
+        version: interpreter.as_ref().and_then(|i| i.version.clone()),
         // Probed per call rather than cached: the user may install uv from
         // the settings panel and expect the panel to notice.
         uv_version: super::venv::discover_uv(None)
@@ -1077,14 +1080,37 @@ fn require_host(state: &PythonRuntimeState, plugin_id: &str) -> Result<std::sync
         .ok_or_else(|| PluginError::NotFound(format!("python plugin not loaded: {plugin_id}")))
 }
 
+/// Where a plugin's interpreter came from (ENV03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InterpreterSource {
+    /// The user's `interpreterPath` for this plugin.
+    Override,
+    /// The environment the Host built for the plugin.
+    Venv,
+    /// The interpreter the runtime discovered at initialize.
+    Runtime,
+}
+
+/// The interpreter a load ran on, as the load reply reports it
+/// (`interpreter`), next to its `interpreterWarning` when there is one.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InterpreterReport<'a> {
+    source: InterpreterSource,
+    argv: &'a [String],
+    version: Option<&'a str>,
+}
+
 /// Interpreter resolution order: explicit per-plugin override → installed
 /// venv (unless opted out) → globally probed interpreter. Initialization is
-/// required in every case (host.py must have been written).
+/// required in every case (host.py must have been written). An override's
+/// version is not known yet: [`check_plugin_interpreter`] probes it.
 fn resolve_plugin_interpreter(
     state: &PythonRuntimeState,
     plugin_id: &str,
     settings: &PythonHostSettings,
-) -> Result<Interpreter> {
+) -> Result<(Interpreter, InterpreterSource)> {
     if let Some(path) = settings
         .interpreter_path
         .as_deref()
@@ -1092,20 +1118,40 @@ fn resolve_plugin_interpreter(
         .filter(|p| !p.is_empty())
     {
         require_interpreter(state)?;
-        // Explicit user choice: trusted as-is; a bad path fails at spawn
-        // with an actionable message.
-        return Ok(Interpreter {
-            argv_prefix: vec![path.to_string()],
-            version: "custom".into(),
-        });
+        return Ok((
+            Interpreter {
+                argv_prefix: vec![path.to_string()],
+                version: None,
+            },
+            InterpreterSource::Override,
+        ));
     }
     if settings.use_venv.unwrap_or(true) {
         if let Some(venv_interp) = super::venv::venv_interpreter(&state.python_dir, plugin_id) {
             require_interpreter(state)?;
-            return Ok(venv_interp);
+            return Ok((venv_interp, InterpreterSource::Venv));
         }
     }
-    require_interpreter(state)
+    Ok((require_interpreter(state)?, InterpreterSource::Runtime))
+}
+
+/// Check the interpreter a plugin is about to load on (ENV03). A user-chosen
+/// one is probed for its version first; the venv's comes from the marker the
+/// Host wrote when it built it, the runtime's from discovery. The result is a
+/// warning at most: the user's choice still runs, and a bad path still fails
+/// at spawn with its own error. Blocking: it runs a subprocess and reads the
+/// plugin's `pyproject.toml`.
+fn check_plugin_interpreter(
+    mut interpreter: Interpreter,
+    source: InterpreterSource,
+    plugin_root: &Path,
+) -> (Interpreter, RequiresPython, Option<InterpreterWarning>) {
+    if source == InterpreterSource::Override {
+        interpreter.version = super::discover::probe_version(&interpreter.argv_prefix);
+    }
+    let requirement = read_requires_python(plugin_root);
+    let warning = interpreter_warning(interpreter.version.as_deref(), &requirement);
+    (interpreter, requirement, warning)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1121,18 +1167,23 @@ async fn load_inner(
 ) -> Result<Value> {
     // Gate order: permission beats availability (tests pin this).
     check_execute_grant(plugins, &plugin_id)?;
-    let interpreter = resolve_plugin_interpreter(state, &plugin_id, &settings)?;
+    let (interpreter, source) = resolve_plugin_interpreter(state, &plugin_id, &settings)?;
     let root_for_validation = PathBuf::from(&plugin_path);
     let main_for_validation = main_module.clone();
-    tokio::task::spawn_blocking(move || {
+    let (interpreter, requirement, warning) = tokio::task::spawn_blocking(move || {
         crate::contained_path::resolve_existing_plugin_file(
             &root_for_validation,
             &main_for_validation,
         )
+        .map_err(|error| PluginError::Internal(format!("invalid pythonMain: {error}")))?;
+        Ok::<_, PluginError>(check_plugin_interpreter(
+            interpreter,
+            source,
+            &root_for_validation,
+        ))
     })
     .await
-    .map_err(|error| PluginError::Internal(format!("plugin path task panicked: {error}")))?
-    .map_err(|error| PluginError::Internal(format!("invalid pythonMain: {error}")))?;
+    .map_err(|error| PluginError::Internal(format!("plugin path task panicked: {error}")))??;
 
     let host_script = state.host_script_path();
     if !host_script.is_file() {
@@ -1173,6 +1224,20 @@ async fn load_inner(
     };
 
     let generation = uuid::Uuid::now_v7().to_string();
+    if let Some(warning) = &warning {
+        let line = warning_line(warning, &requirement);
+        log::warn!("[python.{plugin_id}] {line}");
+        // Into the plugin's Logs tab too, under this load's generation.
+        if let Some(sink) = state.sink() {
+            sink(super::events::PythonEvent {
+                plugin_id: plugin_id.clone(),
+                generation: generation.clone(),
+                kind: "log".into(),
+                call_id: None,
+                data: json!({ "line": line }),
+            });
+        }
+    }
     let host = PluginHost::spawn(
         &plugin_id,
         &interpreter,
@@ -1207,6 +1272,17 @@ async fn load_inner(
     let hook_count = info.get("hook_count").and_then(Value::as_u64).unwrap_or(0) as usize;
     if let Some(object) = info.as_object_mut() {
         object.insert("generation".into(), Value::String(generation.clone()));
+        object.insert(
+            "interpreter".into(),
+            serde_json::to_value(InterpreterReport {
+                source,
+                argv: &interpreter.argv_prefix,
+                version: interpreter.version.as_deref(),
+            })?,
+        );
+        if let Some(warning) = &warning {
+            object.insert("interpreterWarning".into(), serde_json::to_value(warning)?);
+        }
     }
 
     state.hosts.write().insert(
@@ -1594,7 +1670,7 @@ mod tests {
             &state,
             Some(Interpreter {
                 argv_prefix: vec!["python".into()],
-                version: "3.12.0".into(),
+                version: Some("3.12.0".into()),
             }),
         )
         .unwrap();
@@ -1879,15 +1955,16 @@ mod tests {
             &state,
             Some(Interpreter {
                 argv_prefix: vec!["python".into()],
-                version: "3.12.0".into(),
+                version: Some("3.12.0".into()),
             }),
         )
         .unwrap();
 
         // Global only.
-        let interp =
+        let (interp, source) =
             resolve_plugin_interpreter(&state, "demo", &PythonHostSettings::default()).unwrap();
-        assert_eq!(interp.version, "3.12.0");
+        assert_eq!(interp.version.as_deref(), Some("3.12.0"));
+        assert_eq!(source, InterpreterSource::Runtime);
 
         // Fake a venv: it wins over global.
         let venv = super::super::venv::venv_dir(&state.python_dir, "demo");
@@ -1899,12 +1976,13 @@ mod tests {
             r#"{"version":"3.13.0"}"#,
         )
         .unwrap();
-        let interp =
+        let (interp, source) =
             resolve_plugin_interpreter(&state, "demo", &PythonHostSettings::default()).unwrap();
-        assert_eq!(interp.version, "3.13.0");
+        assert_eq!(interp.version.as_deref(), Some("3.13.0"));
+        assert_eq!(source, InterpreterSource::Venv);
 
         // useVenv=false opts back to global.
-        let interp = resolve_plugin_interpreter(
+        let (interp, source) = resolve_plugin_interpreter(
             &state,
             "demo",
             &PythonHostSettings {
@@ -1913,10 +1991,11 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(interp.version, "3.12.0");
+        assert_eq!(interp.version.as_deref(), Some("3.12.0"));
+        assert_eq!(source, InterpreterSource::Runtime);
 
-        // Explicit path beats everything.
-        let interp = resolve_plugin_interpreter(
+        // Explicit path beats everything; its version is probed at load.
+        let (interp, source) = resolve_plugin_interpreter(
             &state,
             "demo",
             &PythonHostSettings {
@@ -1925,7 +2004,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(interp.version, "custom");
+        assert_eq!(interp.version, None);
+        assert_eq!(source, InterpreterSource::Override);
         assert_eq!(interp.argv_prefix, vec!["D:/custom/python.exe".to_string()]);
 
         // But still requires initialization.
@@ -1940,6 +2020,108 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, PluginError::PythonUnavailable(_)));
+    }
+
+    /// A stand-in interpreter that only answers `--version`.
+    #[cfg(unix)]
+    fn banner_interpreter(dir: &std::path::Path, banner: &str) -> Interpreter {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-python");
+        std::fs::write(&path, format!("#!/bin/sh\necho '{banner}'\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Interpreter {
+            argv_prefix: vec![path.to_string_lossy().into_owned()],
+            version: None,
+        }
+    }
+
+    fn write_requires_python(root: &std::path::Path, requirement: &str) {
+        std::fs::write(
+            root.join("pyproject.toml"),
+            format!("[project]\nname = \"demo\"\nrequires-python = \"{requirement}\"\n"),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_override_is_probed_and_checked_against_requires_python() {
+        let tmp = TempDir::new().unwrap();
+        write_requires_python(tmp.path(), ">=3.10");
+        let (interp, _, warning) = check_plugin_interpreter(
+            banner_interpreter(tmp.path(), "Python 3.9.18"),
+            InterpreterSource::Override,
+            tmp.path(),
+        );
+        assert_eq!(interp.version.as_deref(), Some("3.9.18"));
+        assert_eq!(
+            warning,
+            Some(InterpreterWarning::RequirementUnmet {
+                version: "3.9.18".into(),
+                requirement: ">=3.10".into(),
+            })
+        );
+
+        let (interp, _, warning) = check_plugin_interpreter(
+            banner_interpreter(tmp.path(), "Python 3.12.4"),
+            InterpreterSource::Override,
+            tmp.path(),
+        );
+        assert_eq!(interp.version.as_deref(), Some("3.12.4"));
+        assert_eq!(warning, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_override_that_reports_no_version_still_runs_with_a_warning() {
+        let tmp = TempDir::new().unwrap();
+        let (interp, _, warning) = check_plugin_interpreter(
+            banner_interpreter(tmp.path(), "not python"),
+            InterpreterSource::Override,
+            tmp.path(),
+        );
+        assert_eq!(interp.version, None);
+        assert_eq!(warning, Some(InterpreterWarning::VersionUnknown));
+
+        let (interp, _, warning) = check_plugin_interpreter(
+            Interpreter {
+                argv_prefix: vec!["cognia-definitely-not-a-real-binary".into()],
+                version: None,
+            },
+            InterpreterSource::Override,
+            tmp.path(),
+        );
+        assert_eq!(
+            interp.argv_prefix,
+            vec!["cognia-definitely-not-a-real-binary".to_string()]
+        );
+        assert_eq!(warning, Some(InterpreterWarning::VersionUnknown));
+    }
+
+    #[test]
+    fn venv_and_runtime_interpreters_keep_their_recorded_version() {
+        let tmp = TempDir::new().unwrap();
+        write_requires_python(tmp.path(), ">=3.13");
+        for source in [InterpreterSource::Venv, InterpreterSource::Runtime] {
+            // Not probed: a nonexistent program keeps the recorded version.
+            let (interp, _, warning) = check_plugin_interpreter(
+                Interpreter {
+                    argv_prefix: vec!["cognia-definitely-not-a-real-binary".into()],
+                    version: Some("3.12.4".into()),
+                },
+                source,
+                tmp.path(),
+            );
+            assert_eq!(interp.version.as_deref(), Some("3.12.4"));
+            assert_eq!(
+                warning,
+                Some(InterpreterWarning::RequirementUnmet {
+                    version: "3.12.4".into(),
+                    requirement: ">=3.13".into(),
+                }),
+                "{source:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2049,6 +2231,11 @@ def helper(a, b):
         // import_main's reply surfaces the declared hooks for TS dispatch.
         assert_eq!(load_info["hooks"][0]["event"], "onMessage");
         assert_eq!(load_info["hooks"][0]["name"], "on_message");
+        // The interpreter it ran on, and no warning for a plugin with no
+        // pyproject.toml on a discovered interpreter.
+        assert_eq!(load_info["interpreter"]["source"], "runtime");
+        assert!(load_info["interpreter"]["version"].is_string());
+        assert!(load_info.get("interpreterWarning").is_none());
 
         // Runtime info reflects the loaded host.
         let info = runtime_info_inner(&state);
@@ -3020,6 +3207,72 @@ def rewrite(payload):
         assert_eq!(stamped["metadata"]["pythonDemo"], json!(true));
 
         unload_inner(&state, "cognia-python-demo").await.unwrap();
+    }
+
+    /// ENV03: an override that misses the plugin's `requires-python` still
+    /// loads, and the reply and the plugin's log both say so.
+    #[tokio::test]
+    async fn load_on_an_override_reports_an_unmet_requirement_and_still_runs() {
+        let Some(interp) = super::super::discover::discover_interpreter(None) else {
+            eprintln!("skipping override-warning test: no python interpreter found");
+            return;
+        };
+        // An override is one program path; the Windows `py -3` launcher is not.
+        let [program] = interp.argv_prefix.as_slice() else {
+            eprintln!("skipping override-warning test: interpreter needs a launcher argument");
+            return;
+        };
+        let program = program.clone();
+
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        grant_execute(&plugins, "demo");
+        apply_initialize(&state, Some(interp)).unwrap();
+        let collected: std::sync::Arc<parking_lot::Mutex<Vec<super::super::events::PythonEvent>>> =
+            std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink_target = std::sync::Arc::clone(&collected);
+        *state.event_sink.write() = Some(std::sync::Arc::new(move |event| {
+            sink_target.lock().push(event)
+        }));
+
+        let plugin_dir = tmp.path().join("demo-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("main.py"), "x = 1\n").unwrap();
+        write_requires_python(&plugin_dir, ">=99");
+
+        let info = load_inner(
+            &state,
+            &plugins,
+            "demo".into(),
+            plugin_dir.to_string_lossy().into_owned(),
+            "main.py".into(),
+            None,
+            None,
+            PythonHostSettings {
+                interpreter_path: Some(program.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(info["interpreter"]["source"], "override");
+        assert_eq!(info["interpreter"]["argv"], json!([program]));
+        let version = info["interpreter"]["version"].as_str().unwrap().to_string();
+        assert_eq!(
+            info["interpreterWarning"],
+            json!({ "kind": "requirement-unmet", "version": version, "requirement": ">=99" })
+        );
+        let generation = info["generation"].as_str().unwrap();
+        assert!(collected.lock().iter().any(|event| {
+            event.kind == "log"
+                && event.generation == generation
+                && event.data["line"]
+                    .as_str()
+                    .is_some_and(|line| line.contains("requires-python \">=99\""))
+        }));
+        assert!(state.loaded("demo"));
+        unload_inner(&state, "demo").await.unwrap();
     }
 
     /// Missing pip dependencies must produce the actionable error message.

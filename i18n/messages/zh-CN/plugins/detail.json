@@ -165,6 +165,14 @@
     "idleShutdownMin": "闲置关闭(分钟,0 表示从不)",
     "interpreterPath": "解释器路径覆盖",
     "interpreterPathPlaceholder": "留空则使用 venv 或全局解释器",
+    "interpreterWarning": {
+      "belowHostMinimum": "Python {version} 低于 Host 支持的最低版本 {minimum}。插件仍会加载，但可能无法运行。",
+      "invalidPyproject": "无法读取该插件的 pyproject.toml，因此没有按它的 requires-python 检查解释器。",
+      "invalidSpecifier": "该插件的 requires-python“{requirement}”不是有效的版本范围，因此没有按它检查解释器。",
+      "requirementNotAString": "该插件的 requires-python 不是字符串，因此没有按它检查解释器。",
+      "requirementUnmet": "Python {version} 不满足该插件的 requires-python（{requirement}）。插件仍会加载，但可能无法运行。",
+      "versionUnknown": "插件上次加载时，这个解释器没有报告 Python 版本。插件仍会加载，但可能无法运行。"
+    },
     "maxConcurrentCalls": "最大并发调用数",
     "maxOutboundHostCalls": "最大反向调用并发数",
     "maxOutboundHostCallsHint": "插件回调宿主的并发上限。超出的调用会排队，而不是失败。",

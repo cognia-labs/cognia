@@ -3,24 +3,34 @@
 //! Resolution order: an explicit `pythonPath` from the manager config, then
 //! the Windows `py -3` launcher, then `python3`, then `python`. Each
 //! candidate is validated by actually running `--version` — PATH presence is
-//! not trusted (Windows Store stubs exist on PATH but exit non-zero).
+//! not trusted (Windows Store stubs exist on PATH but exit non-zero). The
+//! probe is bounded: a candidate that does not answer in time is unusable.
 //!
 //! "No interpreter found" is a normal outcome (`Ok(None)`), not an error:
 //! the desktop runs without Python support and `plugin_python_runtime_info`
 //! reports `available: false`.
 
-use std::process::Command;
+use std::process::Stdio;
+use std::time::Duration;
+
+use cognia_core::process_probe::{background_command, run_probe};
 
 /// Minimum supported Python (matches the design spec).
-const MIN_VERSION: (u32, u32, u32) = (3, 9, 0);
+pub(crate) const MIN_VERSION: (u32, u32, u32) = (3, 9, 0);
 
-/// A validated interpreter invocation. `argv_prefix` is the full command
-/// prefix (e.g. `["py", "-3"]` or `["python3"]`) the host spawn appends
-/// `-u <host.py>` to.
+/// How long `--version` may take. Python answers in well under a second; a
+/// path that hangs (a GUI program, a wrapper waiting on something) is not one.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// An interpreter invocation. `argv_prefix` is the full command prefix (e.g.
+/// `["py", "-3"]` or `["python3"]`) the host spawn appends `-u <host.py>` to.
 #[derive(Debug, Clone)]
 pub struct Interpreter {
     pub argv_prefix: Vec<String>,
-    pub version: String,
+    /// The version it reported, e.g. "3.12.4". Discovery only returns
+    /// interpreters that reported one; `None` is a user-chosen interpreter
+    /// that would not say (ENV03: it still runs, with a warning).
+    pub version: Option<String>,
 }
 
 /// Candidate command prefixes in resolution order.
@@ -48,7 +58,7 @@ pub fn discover_interpreter(explicit: Option<&str>) -> Option<Interpreter> {
                 if meets_min(parsed) {
                     return Some(Interpreter {
                         argv_prefix,
-                        version,
+                        version: Some(version),
                     });
                 }
                 log::warn!(
@@ -66,17 +76,19 @@ pub fn discover_interpreter(explicit: Option<&str>) -> Option<Interpreter> {
 
 /// Run `<prefix> --version` and return the reported version string
 /// (e.g. "3.12.4"). Old Pythons print to stderr; check both streams.
-fn probe_version(argv_prefix: &[String]) -> Option<String> {
+pub(crate) fn probe_version(argv_prefix: &[String]) -> Option<String> {
+    probe_version_within(argv_prefix, PROBE_TIMEOUT)
+}
+
+fn probe_version_within(argv_prefix: &[String], timeout: Duration) -> Option<String> {
     let (program, args) = argv_prefix.split_first()?;
-    let mut cmd = Command::new(program);
-    cmd.args(args).arg("--version");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = cmd.output().ok()?;
+    let mut command = background_command(program);
+    command
+        .args(args)
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_probe(command, timeout).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -93,7 +105,7 @@ fn extract_version_token(banner: &str) -> Option<String> {
     parse_python_version(token).map(|_| token.to_string())
 }
 
-fn parse_python_version(s: &str) -> Option<(u32, u32, u32)> {
+pub(crate) fn parse_python_version(s: &str) -> Option<(u32, u32, u32)> {
     let mut parts = s.trim().split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
@@ -188,5 +200,50 @@ mod tests {
             probe_version(&["cognia-definitely-not-a-real-binary".to_string()]),
             None
         );
+    }
+
+    /// A stand-in interpreter: a shell script with the given body.
+    #[cfg(unix)]
+    fn fake_interpreter(dir: &std::path::Path, body: &str) -> Vec<String> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("python");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        vec![path.to_string_lossy().into_owned()]
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_reads_the_banner_from_either_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let stdout = fake_interpreter(dir.path(), "echo 'Python 3.8.10'");
+        assert_eq!(probe_version(&stdout), Some("3.8.10".into()));
+        let dir = tempfile::tempdir().unwrap();
+        let stderr = fake_interpreter(dir.path(), "echo 'Python 2.7.18' >&2");
+        assert_eq!(probe_version(&stderr), Some("2.7.18".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_rejects_failures_and_non_python_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let failing = fake_interpreter(dir.path(), "echo 'Python 3.12.0'; exit 1");
+        assert_eq!(probe_version(&failing), None);
+        let dir = tempfile::tempdir().unwrap();
+        let other = fake_interpreter(dir.path(), "echo 'node v22.1.0'");
+        assert_eq!(probe_version(&other), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_gives_up_on_an_interpreter_that_hangs() {
+        let dir = tempfile::tempdir().unwrap();
+        let hanging = fake_interpreter(dir.path(), "exec sleep 30");
+        let started = std::time::Instant::now();
+        assert_eq!(
+            probe_version_within(&hanging, Duration::from_millis(300)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 }

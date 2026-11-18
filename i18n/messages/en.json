@@ -36139,6 +36139,14 @@
         "idleShutdownMin": "Idle shutdown (minutes, 0 = never)",
         "interpreterPath": "Interpreter path override",
         "interpreterPathPlaceholder": "Leave empty to use the venv or global interpreter",
+        "interpreterWarning": {
+          "belowHostMinimum": "Python {version} is older than {minimum}, the oldest version the host supports. The plugin still loads, but it may not run.",
+          "invalidPyproject": "This plugin's pyproject.toml could not be read, so the interpreter was not checked against its requires-python.",
+          "invalidSpecifier": "This plugin's requires-python “{requirement}” is not a valid version specifier, so the interpreter was not checked against it.",
+          "requirementNotAString": "This plugin's requires-python is not a string, so the interpreter was not checked against it.",
+          "requirementUnmet": "Python {version} does not meet this plugin's requires-python ({requirement}). The plugin still loads, but it may not run.",
+          "versionUnknown": "This interpreter did not report a Python version when the plugin last loaded. The plugin still loads, but it may not run."
+        },
         "maxConcurrentCalls": "Max concurrent calls",
         "maxOutboundHostCalls": "Max outbound host calls",
         "maxOutboundHostCallsHint": "Concurrent plugin → host RPC calls. Excess calls queue rather than fail.",

@@ -994,7 +994,7 @@ mod tests {
     async fn spawn_failure_is_python_host_error() {
         let interp = Interpreter {
             argv_prefix: vec!["cognia-no-such-python".into()],
-            version: "3.99.0".into(),
+            version: Some("3.99.0".into()),
         };
         match PluginHost::spawn(
             "t-spawn-fail",

@@ -16,6 +16,8 @@ import {
 } from "./invocation-identity"
 import type { SlashCommandContext } from "@/lib/slash-commands/registry"
 import { usePluginStore } from "@/stores/plugin-runtime"
+import { recordPythonInterpreterReport } from "@/stores/plugin-runtime/python-interpreter-report-store"
+import { readPythonInterpreterReport } from "@/lib/plugin/python/interpreter-report"
 import { getPluginBackupManager } from "../lifecycle/backup"
 import stagedPluginCatalog from "@/lib/plugin/distribution/bundled-plugins.generated.json"
 import type {
@@ -7820,6 +7822,8 @@ export class PluginManager {
         throw new Error(`Python host did not return a runtime generation for ${pluginId}`)
       }
       this.bindPythonGeneration(pluginId, pythonGeneration)
+      // ENV03: the interpreter it loaded on, and the Host's warning about it.
+      recordPythonInterpreterReport(pluginId, readPythonInterpreterReport(loadResult))
 
       const callableFunctions = new Set(
         Array.isArray(loadResult.callable_functions) ? loadResult.callable_functions : []

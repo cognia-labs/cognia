@@ -98,6 +98,15 @@ uv 的锁安装语义（来源：astral-sh/uv 文档，经 context7 查询）：
 - **UI**：`plugin-python-host-settings.tsx` 在解释器字段旁显示警告；en/zh-CN 加 key。
 - **测试**：crate 内测试覆盖版本输出解析、范围匹配和探测失败；组件测试覆盖警告显示。
 
+**实施记录（2026-11-19，已完成）**
+
+- 范围解析用 `pep440_rs` 0.7.3，不在 crate 内自写。许可证 Apache-2.0 OR BSD-2-Clause，在 `deny.toml` 允许范围内；默认不启用任何 feature，新增的传递依赖只有 `unscanny`。`pyproject.toml` 用工作区已有的 `toml_edit` 读取，读取时不跟随符号链接，超过 1 MiB 不读。
+- 探测沿用 `--version` 输出，与全局发现走同一个函数和同一套解析，没有另加 `-c` 脚本。探测本身改用 `cognia_core::process_probe::run_probe`，这是从 Node 和 Bun 的版本探测里抽出的共享实现：独立进程组、超时后杀掉整组进程、读取输出前先清理残留子进程。Node 和 Bun 的探测也改用它，三处重复合成一处。
+- `Interpreter.version` 改为 `Option<String>`，删除占位值 `"custom"`，也删除了 venv 标记缺少版本时的占位值 `"venv"`。
+- 检查覆盖所有来源：用户指定的解释器（加载时现探测）、Host 构建的 venv（版本取自标记）、全局发现的解释器。顺序依次是：能否读到版本、是否低于 Host 最低版本 3.9、是否满足 `requires-python`。`requires-python` 无法解析也给出警告，所以没有警告就表示检查通过。
+- 加载回复带 `interpreter`（`source`、`argv`、`version`），有问题时再带 `interpreterWarning`（`version-unknown`、`below-host-minimum`、`requirement-unmet`、`requirement-unreadable`）。警告同时写入插件的日志页和应用日志，插件照常加载。
+- 没有新增 Host 命令。命令注册链（companion 协议、生成的命令目录、OpenAPI）目前有其他会话的未提交改动；按需检查由 P3 的 `plugin_python_readiness` 提供。设置卡片显示最近一次加载的结果，并且只在已保存的解释器路径与那次加载一致时显示。回复用 zod 校验，存入非持久的 Zustand store `stores/plugin-runtime/python-interpreter-report-store.ts`。
+
 ### P3 依赖就绪与一键准备（ENV01）
 
 - **就绪计算**：新增 Host 命令 `plugin_python_readiness(plugin_id)`，结合 manifest 依赖（或锁摘要，见 P4）、`VenvMarker` 里该插件记录的依赖、解释器版本和安装器，返回 P0 定义的就绪状态和原因。companion RPC 同步接入：用 `pnpm companion-api:gen` 重新生成 `known_commands`，再运行 `pnpm companion-api:check`。
@@ -143,7 +152,7 @@ uv 的锁安装语义（来源：astral-sh/uv 文档，经 context7 查询）：
 1. **快照空间不足时怎么办**：已定（2026-11-18），让用户选择，见 P1「配额」。
 2. **ADR 编号**：其他会话可能同时新增 ADR，编号在写入前现取。
 3. **schema 版本递增**：其他会话可能同时修改 `CURRENT_SCHEMA_VERSION`，按 `dexie-migration` skill 先检查有没有并发占用。
-4. **`pep440_rs` 依赖**：许可证和体积需要先核实，见 P2。
+4. **`pep440_rs` 依赖**：已核实并引入（2026-11-19），见 P2 实施记录。
 5. **Windows 路径**：uv 的 `--project` 和 `UV_PROJECT_ENVIRONMENT` 在 Windows 上要实机验证。
 6. **共享工作区**：本仓库多个会话并发编辑，提交按 CLAUDE.md Rule 8 只包含自己的路径。
 
