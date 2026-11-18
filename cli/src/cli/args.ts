@@ -72,6 +72,8 @@ export const BOOLEAN_FLAGS = new Set([
   "refresh",
   // `logto login --switch-account` — ask the issuer to authenticate again.
   "switch-account",
+  // `logto login --rebind` — let another person take the account over.
+  "rebind",
   // `host remove --keep-on-host` — skip the host-side device revocation.
   "keep-on-host",
   // `--debug` — log the request/response envelope to stderr. Never takes a

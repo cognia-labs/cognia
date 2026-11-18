@@ -96,7 +96,46 @@ describe("accountSyncCommand", () => {
       session: async () => null,
     })
     expect(code).toBe(1)
-    expect(signedOut.errors[0]).toMatch(/cognia-agent logto login/)
+    expect(signedOut.errors[0]).toMatch(
+      /account local_acct_a is not signed in to the Cognia account; run `cognia-agent logto login --account local_acct_a`/
+    )
+
+    const work = capture()
+    let asked: string | undefined
+    expect(
+      await accountSyncCommand(parseArgv(["account-sync", "status", "--account", "work"]), {
+        env: { COGNIA_ACCOUNT_SYNC: "1", COGNIA_LOCAL_ACCOUNT_ID: "other" },
+        out: work.out,
+        session: async () => {
+          asked = "asked"
+          return null
+        },
+      })
+    ).toBe(1)
+    expect(asked).toBe("asked")
+    expect(work.errors[0]).toMatch(/account work is not signed in.*--account work/)
+
+    const unreadable = capture()
+    expect(
+      await accountSyncCommand(parseArgv(["account-sync", "status"]), {
+        env: { COGNIA_ACCOUNT_SYNC: "1" },
+        out: unreadable.out,
+        session: async () => {
+          throw new Error("person.json is not a readable binding")
+        },
+      })
+    ).toBe(1)
+    expect(unreadable.errors[0]).toBe("account-sync: person.json is not a readable binding")
+
+    const missing = capture()
+    expect(
+      await accountSyncCommand(parseArgv(["account-sync", "status", "--account"]), {
+        env: { COGNIA_ACCOUNT_SYNC: "1" },
+        out: missing.out,
+        session: async () => session,
+      })
+    ).toBe(2)
+    expect(missing.errors[0]).toMatch(/--account needs a value/)
 
     const h = host(testServer())
     expect(await h.run([])).toBe(2)

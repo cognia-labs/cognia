@@ -446,10 +446,13 @@ function validateRegistrationContext(
   if (!isMultiTenantAuthConfig(config) || !input.oidc) {
     throw new Error("an active OIDC session is required for this pairing")
   }
+  // The web app signs in as the announced web client; the desktop and the
+  // CLI as its native one (config v2). Either is the deployment's own client.
+  const announcedClients = [config.oidc.webClientId, config.oidc.nativeClientId]
   if (
     input.oidc.issuer !== config.oidc.issuer ||
     input.oidc.resource !== config.oidc.audience ||
-    input.oidc.clientId !== config.oidc.webClientId
+    !announcedClients.includes(input.oidc.clientId)
   ) {
     throw new Error("OIDC session issuer, resource, or client does not match server config")
   }

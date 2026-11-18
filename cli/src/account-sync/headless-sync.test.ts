@@ -26,7 +26,13 @@ import { spaceIdFor } from "@cognia/sync-protocol"
 
 import { officialDeployment } from "@/lib/identity/official-deployment"
 
-import { logtoSessionPath, type LogtoSessionFs } from "../config/logto-session"
+import { accountSignInDir } from "../config/local-account"
+import {
+  logtoBoundPersonPath,
+  logtoSessionPath,
+  type BoundPerson,
+  type LogtoSessionFs,
+} from "../config/logto-session"
 import {
   accountSyncDir,
   brainAccountSyncHost,
@@ -37,15 +43,32 @@ import {
 
 const HOME = "/home/u/.cognia"
 const ISSUER = officialDeployment({})!.issuer
+const DIR = accountSignInDir(HOME, "local_acct_a")
 
 const token = (sub: string) => `h.${Buffer.from(JSON.stringify({ sub })).toString("base64url")}.s`
+const personFor = (subject: string, issuer = ISSUER): BoundPerson => ({
+  issuer,
+  subject,
+  boundAt: 1,
+})
 
+/** The account's session file and binding, in memory. */
 function sessionFs(
-  session: Record<string, unknown> | null
+  session: Record<string, unknown> | null,
+  person: BoundPerson | string | null = session
+    ? personFor(
+        JSON.parse(Buffer.from(String(session.accessToken).split(".")[1]!, "base64url").toString())
+          .sub,
+        String(session.issuer)
+      )
+    : null
 ): LogtoSessionFs & { set: (s: unknown) => void } {
   let raw = session ? JSON.stringify(session) : null
+  const binding =
+    person === null ? null : typeof person === "string" ? person : JSON.stringify(person)
   return {
-    read: (file) => (file === logtoSessionPath(HOME) ? raw : null),
+    read: (file) =>
+      file === logtoSessionPath(DIR) ? raw : file === logtoBoundPersonPath(DIR) ? binding : null,
     write: (_file, content) => {
       raw = content
     },
@@ -53,6 +76,7 @@ function sessionFs(
       raw = null
     },
     mkdirp: () => undefined,
+    listDirs: () => [],
     set: (next) => {
       raw = JSON.stringify(next)
     },
@@ -96,6 +120,37 @@ describe("headlessSyncSession", () => {
     expect(await headlessSyncSession(input(foreign))).toBeNull()
     const notAPerson = sessionFs({ issuer: ISSUER, accessToken: token("app_x") })
     expect(await headlessSyncSession(input(notAPerson))).toBeNull()
+  })
+
+  it("follows the account's binding, never a session of someone else", async () => {
+    // Bound to Ann, but the session file now holds Bob: there is no Ann to act for.
+    const swapped = sessionFs(
+      { issuer: ISSUER, accessToken: token("usr_bob") },
+      personFor("usr_ann")
+    )
+    expect(await headlessSyncSession(input(swapped))).toBeNull()
+    // Signed out: the binding alone acts for nobody.
+    expect(await headlessSyncSession(input(sessionFs(null, personFor("usr_ann"))))).toBeNull()
+    // Bound to a self-hosted person: no official space.
+    const selfHosted = sessionFs(
+      { issuer: "https://logto.example/oidc", accessToken: token("usr_a") },
+      personFor("usr_a", "https://logto.example/oidc")
+    )
+    expect(await headlessSyncSession(input(selfHosted))).toBeNull()
+  })
+
+  it("acts for the pinned person the Brain started with", async () => {
+    const fs = sessionFs({ issuer: ISSUER, accessToken: token("usr_bob") }, personFor("usr_bob"))
+    // The binding says Bob now (a --rebind ran), but this Brain started as Ann.
+    const pinned = { ...input(fs), person: () => personFor("usr_ann") }
+    expect(await headlessSyncSession(pinned)).toBeNull()
+    fs.set({ issuer: ISSUER, accessToken: token("usr_ann") })
+    expect((await headlessSyncSession(pinned))?.userId).toBe("usr_ann")
+  })
+
+  it("throws on an unreadable binding instead of calling the account signed out", async () => {
+    const fs = sessionFs({ issuer: ISSUER, accessToken: token("usr_a") }, "garbage")
+    await expect(headlessSyncSession(input(fs))).rejects.toThrow(/not a readable binding/)
   })
 
   it("is the person's space on the official account, and stops handing out tokens for someone else", async () => {
@@ -195,7 +250,12 @@ describe("brainBackup", () => {
 describe("brainAccountSyncHost", () => {
   it("is absent while account sync is off, and otherwise shares the commands' store", async () => {
     const backup = jest.fn(async () => undefined)
-    const base = { cliHome: HOME, localAccountId: "local_acct_a", backup }
+    const base = {
+      cliHome: HOME,
+      localAccountId: "local_acct_a",
+      backup,
+      person: () => personFor("usr_a"),
+    }
     expect(brainAccountSyncHost({ ...base, env: {} })).toBeUndefined()
     const host = brainAccountSyncHost({ ...base, env: { COGNIA_ACCOUNT_SYNC: "1" } })!
     expect(host.backup).toBe(backup)

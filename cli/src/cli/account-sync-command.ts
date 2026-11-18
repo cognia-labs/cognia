@@ -2,9 +2,11 @@
  * `cognia-agent account-sync …` — enroll and manage a headless host in the
  * person's account sync (ADR-0215 phase 3a), from the host's own terminal.
  *
- * The host signs in with `cognia-agent logto login` (the official account),
- * keeps its keys in `~/.cognia/account-sync/` (0600), and the brain
- * (`cognia-agent serve`) syncs with them once enrolled. Every subcommand
+ * The host's local account signs in with `cognia-agent logto login --account
+ * <id>` (the official account), keeps its keys in `~/.cognia/account-sync/`
+ * (0600), and the brain (`cognia-agent serve` for the same account) syncs
+ * with them once enrolled. Every subcommand takes `--account`, resolved the
+ * way `serve` resolves it. Every subcommand
  * wraps the same enrollment flows the app runs (`lib/account-sync/enrollment`).
  *
  *   status                       where this host stands, and what to run next
@@ -67,7 +69,7 @@ import {
   headlessSyncSession,
 } from "../account-sync/headless-sync"
 import { resolveHome } from "../config/load"
-import { HEADLESS_LOCAL_ACCOUNT_ID } from "../serve/account"
+import { resolveLocalAccount } from "../config/local-account"
 import { boolFlag, stringFlag, type ParsedArgs } from "./args"
 import { realOutput, type OutputSink } from "./output"
 
@@ -139,14 +141,25 @@ export async function accountSyncCommand(
     return 2
   }
   const home = deps.home ?? resolveHome(env, os.homedir())
-  const localAccountId =
-    stringFlag(args, "account") ?? env.COGNIA_LOCAL_ACCOUNT_ID ?? HEADLESS_LOCAL_ACCOUNT_ID
-  const session = await (
-    deps.session ?? (() => headlessSyncSession({ cliHome: home, localAccountId, env }))
-  )()
+  const account = resolveLocalAccount(args, env)
+  if (!account.ok) {
+    out.error(`account-sync: ${account.error}`)
+    return 2
+  }
+  const localAccountId = account.account.id
+  let session: Awaited<ReturnType<typeof headlessSyncSession>>
+  try {
+    session = await (
+      deps.session ?? (() => headlessSyncSession({ cliHome: home, localAccountId, env }))
+    )()
+  } catch (error) {
+    out.error(`account-sync: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
   if (!session) {
     out.error(
-      "account-sync: this host is not signed in to the Cognia account; run `cognia-agent logto login`"
+      `account-sync: account ${localAccountId} is not signed in to the Cognia account; run ` +
+        `\`cognia-agent logto login --account ${localAccountId}\` as the person it acts for`
     )
     return 1
   }

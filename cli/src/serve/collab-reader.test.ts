@@ -1,7 +1,13 @@
 import { LogtoRefreshError, type LogtoSession } from "@/lib/logto/client"
 
-import type { LogtoSessionFs } from "../config/logto-session"
-import { createCollabCursorStorage, startHeadlessCollabReader } from "./collab-reader"
+import { officialDeployment } from "@/lib/identity/official-deployment"
+
+import type { BoundPerson, LogtoSessionFs } from "../config/logto-session"
+import {
+  clearCollabCursors,
+  createCollabCursorStorage,
+  startHeadlessCollabReader,
+} from "./collab-reader"
 
 function sessionToken(sub: string): string {
   const payload = Buffer.from(JSON.stringify({ sub })).toString("base64url")
@@ -19,8 +25,15 @@ function sessionFs(session: LogtoSession | null): LogtoSessionFs {
       raw = null
     },
     mkdirp: () => undefined,
+    listDirs: () => [],
   }
 }
+
+const ISSUER = "https://issuer.test/oidc"
+/** The person the account is bound to (and the Brain pinned at start). */
+const pinned =
+  (subject: string, issuer = ISSUER): (() => BoundPerson) =>
+  () => ({ issuer, subject, boundAt: 1 })
 
 const ORG = "org_acme00000000000000000"
 const USER = "usr_aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -42,6 +55,7 @@ it("stays inactive without the existing 0600 Logto session", async () => {
     localAccountId: "acct-1",
     cliHome: "/home",
     config: { url: "https://collab.test", orgId: ORG },
+    person: pinned("logto-subject"),
     deps: { sessionFs: sessionFs(null) },
   })
   expect(reader.status).toBe("not-signed-in")
@@ -60,10 +74,15 @@ it("binds the server identity and hands its own credentials to the registered ru
     localAccountId: "acct-1",
     cliHome: "/home",
     config: { url: "https://collab.test", orgId: ORG },
+    person: pinned("logto-subject"),
     deps: {
       sessionFs: session,
       fetchImpl,
-      registry: { bind, get: jest.fn().mockResolvedValue({ orgId: ORG }) } as never,
+      registry: {
+        bind,
+        getOwner: jest.fn().mockResolvedValue(null),
+        get: jest.fn().mockResolvedValue({ orgId: ORG }),
+      } as never,
     },
   })
   expect(reader.status).toBe("active")
@@ -99,6 +118,7 @@ it("never acts under this profile with a token for another person signed in sinc
     localAccountId: "acct-1",
     cliHome: "/home",
     config: { url: "https://collab.test", orgId: ORG },
+    person: pinned("person-a"),
     deps: {
       sessionFs: session,
       now: () => now,
@@ -106,7 +126,11 @@ it("never acts under this profile with a token for another person signed in sinc
         presented.push(String((init?.headers as Record<string, string>)?.authorization ?? ""))
         return fetchImpl(url)
       },
-      registry: { bind, get: jest.fn().mockResolvedValue({ orgId: ORG, userId: USER }) } as never,
+      registry: {
+        bind,
+        getOwner: jest.fn().mockResolvedValue(null),
+        get: jest.fn().mockResolvedValue({ orgId: ORG, userId: USER }),
+      } as never,
     },
   })
   expect(reader.status).toBe("active")
@@ -141,6 +165,138 @@ it("never acts under this profile with a token for another person signed in sinc
   )
   expect(await reader.runtime!.resolve("acct-1")).not.toBeNull()
   reader.stop()
+})
+
+describe("the person the account is bound to", () => {
+  const stored = (sub: string, issuer = ISSUER): LogtoSession => ({
+    issuer,
+    clientId: "brain",
+    resource: "collab",
+    accessToken: sessionToken(sub),
+    scopes: [],
+  })
+
+  it("stays inactive when the session signs in as someone other than the pinned person", async () => {
+    const reader = await startHeadlessCollabReader({
+      localAccountId: "acct-1",
+      cliHome: "/home",
+      config: { url: "https://collab.test", orgId: ORG },
+      person: pinned("person-a"),
+      deps: { sessionFs: sessionFs(stored("person-b")), fetchImpl },
+    })
+    expect(reader.status).toBe("not-signed-in")
+  })
+
+  it("stays inactive for an account that was never bound", async () => {
+    const reader = await startHeadlessCollabReader({
+      localAccountId: "acct-1",
+      cliHome: "/home",
+      config: { url: "https://collab.test", orgId: ORG },
+      person: () => null,
+      deps: { sessionFs: sessionFs(stored("person-a")), fetchImpl },
+    })
+    expect(reader.status).toBe("not-signed-in")
+  })
+
+  it("rebinds the profile to the account's new person and clears the old person's cursors", async () => {
+    const bind = jest.fn()
+    const rebind = jest.fn().mockResolvedValue({})
+    const cursors = new Map<string, string>([
+      ["/home/collab-notifications/acct-1.json", JSON.stringify({ scope: "ann's cursor" })],
+    ])
+    const reader = await startHeadlessCollabReader({
+      localAccountId: "acct-1",
+      cliHome: "/home",
+      config: { url: "https://collab.test", orgId: ORG },
+      person: () => ({ issuer: ISSUER, subject: "person-b", displayName: "Bob", boundAt: 9 }),
+      deps: {
+        sessionFs: sessionFs(stored("person-b")),
+        fetchImpl,
+        cursorFs: {
+          readFile: (file) => cursors.get(file) ?? null,
+          writeFileAtomic: (file, value) => {
+            cursors.set(file, value)
+          },
+        },
+        registry: {
+          bind,
+          rebind,
+          getOwner: jest.fn().mockResolvedValue({
+            localAccountId: "acct-1",
+            userId: "usr_ann",
+            displayName: "Ann",
+            logtoSubject: "person-a",
+            logtoIssuer: `${ISSUER}/`,
+          }),
+          get: jest.fn().mockResolvedValue({ orgId: ORG, userId: USER }),
+        } as never,
+      },
+    })
+    expect(reader.status).toBe("active")
+    expect(bind).not.toHaveBeenCalled()
+    expect(rebind).toHaveBeenCalledWith(
+      expect.objectContaining({ logtoSubject: "person-b", userId: USER, displayName: "Bob" })
+    )
+    expect(reader.rebound).toEqual({ from: "Ann (usr_ann)", to: "Bob (person-b)" })
+    expect(cursors.get("/home/collab-notifications/acct-1.json")).toBe("{}")
+  })
+
+  it("keeps the binding of the same person, at an issuer spelled with a trailing slash", async () => {
+    const bind = jest.fn().mockResolvedValue({})
+    const rebind = jest.fn()
+    await startHeadlessCollabReader({
+      localAccountId: "acct-1",
+      cliHome: "/home",
+      config: { url: "https://collab.test", orgId: ORG },
+      person: pinned("person-a"),
+      deps: {
+        sessionFs: sessionFs(stored("person-a")),
+        fetchImpl,
+        registry: {
+          bind,
+          rebind,
+          getOwner: jest.fn().mockResolvedValue({
+            userId: USER,
+            logtoSubject: "person-a",
+            logtoIssuer: `${ISSUER}/`,
+          }),
+          get: jest.fn().mockResolvedValue({ orgId: ORG, userId: USER }),
+        } as never,
+      },
+    })
+    expect(bind).toHaveBeenCalled()
+    expect(rebind).not.toHaveBeenCalled()
+  })
+
+  it("says the Cognia account is the wrong deployment when the collaboration server refuses it", async () => {
+    const official = officialDeployment({})!.issuer
+    await expect(
+      startHeadlessCollabReader({
+        localAccountId: "acct-1",
+        cliHome: "/home",
+        config: { url: "https://collab.test", orgId: ORG },
+        person: pinned("usr_a", official),
+        env: {},
+        deps: {
+          sessionFs: sessionFs(stored("usr_a", official)),
+          fetchImpl: async () => new Response("no", { status: 401 }),
+        },
+      })
+    ).rejects.toThrow(
+      /account acct-1 is signed in to the Cognia account, which the collaboration server at https:\/\/collab\.test does not accept/
+    )
+  })
+
+  it("clears an account's cursors on request", () => {
+    const values = new Map<string, string>([["/home/collab-notifications/a%2Fb.json", '{"x":"1"}']])
+    clearCollabCursors("/home", "a/b", {
+      readFile: (file) => values.get(file) ?? null,
+      writeFileAtomic: (file, value) => {
+        values.set(file, value)
+      },
+    })
+    expect(values.get("/home/collab-notifications/a%2Fb.json")).toBe("{}")
+  })
 })
 
 describe("durable collaboration notification cursors", () => {
@@ -198,6 +354,7 @@ describe("a refresh that is refused vs one that merely failed", () => {
       localAccountId: "acct-1",
       cliHome: "/home",
       config: { url: "https://collab.test", orgId: ORG },
+      person: pinned("logto-subject"),
       deps: { sessionFs: fs, refreshToken, now: () => 10_000 },
     })
     expect(reader.status).toBe("not-signed-in")
@@ -213,6 +370,7 @@ describe("a refresh that is refused vs one that merely failed", () => {
       localAccountId: "acct-1",
       cliHome: "/home",
       config: { url: "https://collab.test", orgId: ORG },
+      person: pinned("logto-subject"),
       deps: { sessionFs: fs, refreshToken, now: () => 10_000 },
     })
     expect(reader.status).toBe("not-signed-in")
@@ -228,6 +386,7 @@ describe("a refresh that is refused vs one that merely failed", () => {
       localAccountId: "acct-1",
       cliHome: "/home",
       config: { url: "https://collab.test", orgId: ORG },
+      person: pinned("logto-subject"),
       deps: { sessionFs: fs, refreshToken, now: () => 10_000 },
     })
     expect(reader.status).toBe("not-signed-in")

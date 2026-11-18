@@ -55,6 +55,16 @@ export interface HostRecord {
    * answer. `signalingPrivateKeyJwk` is a secret like the device key.
    */
   relay?: HostRelayRecord
+  /**
+   * `device` only, on a multi-tenant Host: the local account whose sign-in
+   * registered the device, and the person it signed in as.
+   */
+  pairedAs?: HostPairedAs
+}
+
+export interface HostPairedAs {
+  account: string
+  person: string
 }
 
 export interface HostRelayRecord {
@@ -159,6 +169,17 @@ function coerceHost(value: unknown): HostRecord | null {
   }
   const relay = coerceRelay(record.relay)
   if (relay) host.relay = relay
+  const pairedAs = record.pairedAs as Record<string, unknown> | null | undefined
+  if (
+    typeof pairedAs === "object" &&
+    pairedAs !== null &&
+    typeof pairedAs.account === "string" &&
+    pairedAs.account.length > 0 &&
+    typeof pairedAs.person === "string" &&
+    pairedAs.person.length > 0
+  ) {
+    host.pairedAs = { account: pairedAs.account, person: pairedAs.person }
+  }
   return host
 }
 

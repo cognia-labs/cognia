@@ -63,7 +63,12 @@ async function setup() {
   let sync: HeadlessAccountSync | null = null
   const begin = () => {
     sync = startHeadlessAccountSync({
-      host: { session: async () => signedIn, keyring, backup },
+      host: {
+        session: async () => signedIn,
+        signInCommand: "cognia-agent logto login --account local_acct_a",
+        keyring,
+        backup,
+      },
       db: () => db,
       log: (_level, message) => logs.push(message),
       pollMs: 60_000,
@@ -103,7 +108,9 @@ describe("startHeadlessAccountSync", () => {
     h.signOut()
     const sync = h.begin()
     await sync.check()
-    expect(h.logs.at(-1)).toMatch(/not signed in; run `cognia-agent logto login`/)
+    expect(h.logs.at(-1)).toMatch(
+      /not signed in; run `cognia-agent logto login --account local_acct_a`/
+    )
     h.finish()
 
     const enrolled = await setup()
@@ -207,7 +214,12 @@ describe("a sign-in as someone else on the same host", () => {
     const logs: string[] = []
     const backup = jest.fn(async () => undefined)
     const sync = startHeadlessAccountSync({
-      host: { session: async () => signedIn, keyring, backup },
+      host: {
+        session: async () => signedIn,
+        signInCommand: "cognia-agent logto login --account local_acct_a",
+        keyring,
+        backup,
+      },
       db: () => db,
       log: (_level, message) => logs.push(message),
       pollMs: 60_000,

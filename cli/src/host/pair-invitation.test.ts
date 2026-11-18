@@ -160,12 +160,24 @@ describe("loginWithInvitation", () => {
       ["not-an-invitation", /not a Cognia pairing invitation/],
       ["cgnp9|abc", /version cgnp9/],
       [encodePairPayload({ ...payload, expiresAt: Date.now() - 1 }), /cannot be used/],
-      [encodePairPayload({ ...payload, mode: "oidc", invitation: undefined }), /OIDC/],
+      [encodePairPayload({ ...payload, mode: "oidc", invitation: undefined }), /member's sign-in/],
     ]
     for (const [invitation, expected] of cases) {
       const result = await loginWithInvitation({ invitation })
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.failure.error).toMatch(expected)
+    }
+  })
+
+  it("points a member's invitation at pairing as a signed-in account", async () => {
+    const result = await loginWithInvitation({
+      invitation: encodePairPayload({ ...payload, mode: "oidc", invitation: undefined }),
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.failure.fix?.[0]).toBe(
+        `pair as a signed-in local account: cognia-agent host login <name> --endpoint ${payload.baseUrl} --tenant ${payload.tenantId} --account <id>`
+      )
     }
   })
 })

@@ -39,6 +39,27 @@ cognia-agent config get [key]
 cognia-agent config set model claude-opus-4-8
 ```
 
+## Signing in
+
+`cognia-agent logto login` signs in to the official Cognia account (or, with
+`--issuer --client-id --resource`, a self-hosted Logto). Each sign-in belongs to
+a local account: `--account <id>`, else `COGNIA_LOCAL_ACCOUNT_ID`, else
+`local_acct_a`, the same account `serve`, `account-sync` and `host login` act
+for. The account binds to the person who signs in first; signing in as anyone
+else is refused unless `--rebind` hands the account over, and `logout` keeps
+the binding.
+
+```bash
+cognia-agent logto login                      # the default local account
+cognia-agent logto login --account work       # a second person keeps their own account
+cognia-agent logto status                     # every account, and whom it acts for
+cognia-agent logto login --account work --rebind   # make `work` act for someone else
+```
+
+Sessions live in `~/.cognia/accounts/<id>/` at 0600. The single
+`~/.cognia/logto.json` of earlier versions is no longer read: sign in again,
+then delete it.
+
 ## Calling a Cognia Host
 
 Beyond running an agent, the CLI is a complete client for a Host's command
@@ -51,6 +72,7 @@ hand-written verb for each one.
 # Where to call. Records live in ~/.cognia/hosts.json at 0600.
 cognia-agent host add local --endpoint https://127.0.0.1:27890 --token "$COGNIA_SERVICE_TOKEN"
 cognia-agent host login desktop --endpoint https://127.0.0.1:27890 --pair-code ABC123
+cognia-agent host login team --endpoint https://host.example --account work  # multi-tenant Host
 cognia-agent host show          # every value, and where it came from
 cognia-agent host use local
 

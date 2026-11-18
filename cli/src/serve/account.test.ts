@@ -12,7 +12,8 @@ import {
 } from "@/lib/accounts/partition-artifact-keys"
 import { unlockAccountForHost, useAccountStore } from "@/stores/account/account-store"
 
-import { ensureHeadlessAccount, HEADLESS_LOCAL_ACCOUNT_ID } from "./account"
+import { HEADLESS_LOCAL_ACCOUNT_ID } from "../config/local-account"
+import { ensureHeadlessAccount } from "./account"
 
 describe("unlockAccountForHost guard", () => {
   it("refuses without the headless marker", async () => {

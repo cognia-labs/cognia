@@ -4,7 +4,7 @@
  * brain (`cognia-agent serve`) syncs with the same keys, as two processes, so
  * they share a directory rather than the brain's server-side secret store
  * (reachable only with the brain's service token). Like the CLI's Logto
- * session (`~/.cognia/logto.json`), the files are the user's alone: the
+ * sessions (`~/.cognia/accounts/<id>/logto.json`), the files are the user's alone: the
  * directory is 0700 and every file 0600.
  *
  * One file per key, each written to a temporary file and renamed into place,

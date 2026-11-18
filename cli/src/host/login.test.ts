@@ -129,15 +129,29 @@ describe("loginHost", () => {
     expect(seen[0].displayName).toBe("build box")
   })
 
-  it("refuses a multi-tenant host and names the OIDC route", async () => {
+  it("refuses a multi-tenant host that announces no issuer to sign in with", async () => {
     const result = await loginHost({
       endpoint: "https://h",
       invitation: "CODE",
       fetchConfig: async () => ({ deploymentMode: "multi-tenant", hostId: "h" }) as never,
       register: async () => paired() as never,
     })
-    expect(result).toMatchObject({ ok: false })
-    expect((result as { failure: { fix: string[] } }).failure.fix[0]).toContain("logto login")
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { error: expect.stringContaining("announces no OIDC issuer") },
+    })
+  })
+
+  it("needs a pairing code for a single-user host", async () => {
+    const result = await loginHost({
+      endpoint: "https://h",
+      fetchConfig: async () => CONFIG as never,
+      register: async () => paired() as never,
+    })
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { error: "https://h pairs with the owner's pairing code" },
+    })
   })
 
   it("refuses when neither the host nor the operator names a tenant", async () => {
@@ -177,5 +191,179 @@ describe("loginHost", () => {
     const failure = (result as { failure: { cause: string; fix: string[] } }).failure
     expect(failure.cause).toBe("auth")
     expect(failure.fix[0]).toContain("single-use")
+  })
+})
+
+describe("loginHost on a multi-tenant Host", () => {
+  const MULTI = {
+    deploymentMode: "multi-tenant",
+    hostId: "host_m",
+    configVersion: 6,
+    oidc: {
+      issuer: "https://id.example/oidc",
+      audience: "https://api.example",
+      webClientId: "web",
+      nativeClientId: "native",
+      scopes: ["openid"],
+    },
+    signaling: { url: "wss://s", iceServers: [] },
+  }
+  const session = (overrides: Record<string, unknown> = {}) =>
+    ({
+      issuer: "https://id.example/oidc/",
+      clientId: "native",
+      resource: "https://api.example",
+      organizationId: "tnt_team",
+      accessToken: "member-token",
+      scopes: [],
+      ...overrides,
+    }) as never
+  const account = (value: unknown) => ({
+    id: "work",
+    session: async () => value as never,
+    describe: () => "Ann (usr_ann)",
+  })
+
+  it("registers the device as the account's person, with the tenant from their organization", async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const result = await loginHost({
+      endpoint: "https://team.example",
+      account: account(session()),
+      fetchConfig: async () => MULTI as never,
+      register: async (input) => {
+        seen.push(input as Record<string, unknown>)
+        return paired() as never
+      },
+    })
+    expect(seen[0]).toMatchObject({
+      mode: "oidc",
+      hostId: "host_m",
+      tenantId: "tnt_team",
+      oidc: {
+        issuer: "https://id.example/oidc",
+        resource: "https://api.example",
+        clientId: "native",
+        organizationId: "tnt_team",
+        accessToken: "member-token",
+      },
+    })
+    expect(seen[0]).not.toHaveProperty("invitation")
+    expect(result).toMatchObject({
+      ok: true,
+      record: {
+        kind: "device",
+        tenantId: "tnt_team",
+        deviceId: "dev_1",
+        pairedAs: { account: "work", person: "Ann (usr_ann)" },
+      },
+    })
+  })
+
+  it("names the exact sign-in to run when the account is not signed in", async () => {
+    const result = await loginHost({
+      endpoint: "https://team.example",
+      tenantId: "tnt_team",
+      account: account(null),
+      fetchConfig: async () => MULTI as never,
+      register: async () => paired() as never,
+    })
+    expect(result).toMatchObject({ ok: false })
+    expect((result as { failure: { fix: string[] } }).failure.fix[0]).toBe(
+      "cognia-agent logto login --account work --issuer https://id.example/oidc --client-id native " +
+        "--resource https://api.example --org tnt_team"
+    )
+  })
+
+  it("asks for an account when none was given", async () => {
+    const result = await loginHost({
+      endpoint: "https://team.example",
+      fetchConfig: async () => MULTI as never,
+      register: async () => paired() as never,
+    })
+    expect((result as { failure: { fix: string[] } }).failure.fix[0]).toMatch(/--account <id>/)
+  })
+
+  it("refuses a session of another deployment before calling the Host", async () => {
+    const register = jest.fn()
+    for (const wrong of [
+      { issuer: "https://id.cognia.cn/oidc" },
+      { resource: "https://sync.cognia.cn" },
+      { clientId: "someone-elses-app" },
+    ]) {
+      const result = await loginHost({
+        endpoint: "https://team.example",
+        account: account(session(wrong)),
+        fetchConfig: async () => MULTI as never,
+        register,
+      })
+      expect(result).toMatchObject({
+        ok: false,
+        failure: {
+          error: expect.stringContaining("signs people in through https://id.example/oidc"),
+        },
+      })
+    }
+    expect(register).not.toHaveBeenCalled()
+  })
+
+  it("refuses a tenant the session's organization does not match, or no organization at all", async () => {
+    const register = jest.fn()
+    const mismatch = await loginHost({
+      endpoint: "https://team.example",
+      tenantId: "tnt_other",
+      account: account(session()),
+      fetchConfig: async () => MULTI as never,
+      register,
+    })
+    expect(mismatch).toMatchObject({
+      ok: false,
+      failure: {
+        error: "account work is signed in to organization tnt_team, not tenant tnt_other",
+      },
+    })
+    const none = await loginHost({
+      endpoint: "https://team.example",
+      account: account(session({ organizationId: undefined })),
+      fetchConfig: async () => MULTI as never,
+      register,
+    })
+    expect((none as { failure: { error: string } }).failure.error).toMatch(
+      /without an organization/
+    )
+    expect(register).not.toHaveBeenCalled()
+  })
+
+  it("reports an unreadable sign-in, and a Host that refuses the member", async () => {
+    const unreadable = await loginHost({
+      endpoint: "https://team.example",
+      account: {
+        id: "work",
+        session: async () => {
+          throw new Error("person.json is not a readable binding")
+        },
+        describe: () => "x",
+      },
+      fetchConfig: async () => MULTI as never,
+      register: async () => paired() as never,
+    })
+    expect(unreadable).toMatchObject({
+      ok: false,
+      failure: { details: ["person.json is not a readable binding"] },
+    })
+    const refused = await loginHost({
+      endpoint: "https://team.example",
+      account: account(session()),
+      fetchConfig: async () => MULTI as never,
+      register: async () => {
+        throw new Error("403 not a member")
+      },
+    })
+    expect(refused).toMatchObject({
+      ok: false,
+      failure: {
+        error: "https://team.example refused to register this device for Ann (usr_ann)",
+        details: ["403 not a member"],
+      },
+    })
   })
 })

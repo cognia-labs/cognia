@@ -476,6 +476,48 @@ describe("companion auth lifecycle", () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
+  it("accepts the native client the config announces, as the desktop and the CLI sign in", async () => {
+    const fetcher = jest
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          deploymentMode: "multi-tenant",
+          hostId: "host-a",
+          oidc: {
+            issuer: "https://id.test/oidc",
+            audience: "https://api.test",
+            webClientId: "web-client",
+            nativeClientId: "native-client",
+            scopes: ["openid", "brain:rpc"],
+          },
+          signaling: { url: "wss://host.test/signaling", iceServers: [] },
+        })
+      )
+      .mockRejectedValueOnce(new Error("challenge reached")) as unknown as AuthFetcher
+
+    await expect(
+      registerCompanionDevice(
+        {
+          baseUrl: "https://host.test",
+          mode: "oidc",
+          hostId: "host-a",
+          tenantId: "tenant-a",
+          displayName: "Cognia CLI",
+          serverVersion: "1.0.0",
+          oidc: {
+            issuer: "https://id.test/oidc",
+            resource: "https://api.test",
+            clientId: "native-client",
+            organizationId: "tenant-a",
+            accessToken: "oidc-access",
+          },
+        },
+        fetcher
+      )
+    ).rejects.toThrow("challenge reached")
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
   it("rejects an OIDC organization mismatch before device registration", async () => {
     const fetcher = jest.fn().mockResolvedValue(
       Response.json({

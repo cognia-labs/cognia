@@ -16,9 +16,7 @@ import {
 import { LocalAccountRegistry } from "@/lib/accounts/account-db"
 import type { PasswordVerifierRecord } from "@/lib/accounts/account-types"
 import { unlockAccountForHost, useAccountStore } from "@/stores/account/account-store"
-
-/** Must stay in lockstep with `HEADLESS_LOCAL_ACCOUNT_ID` in crates/cognia-server/src/main.rs. */
-export const HEADLESS_LOCAL_ACCOUNT_ID = "local_acct_a"
+import { HEADLESS_LOCAL_ACCOUNT_ID } from "../config/local-account"
 
 /**
  * A syntactically-valid verifier that can never verify: the headless account

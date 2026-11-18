@@ -19,7 +19,15 @@ import { EXIT_OK, EXIT_USAGE, emitFailure, usageFailure } from "./errors"
 import { emitResult, resolveOutputOptions } from "./format"
 import { realOutput, type OutputSink } from "./output"
 import { resolveHome } from "../config/load"
-import { loginHost } from "../host/login"
+import { accountSignInDir, resolveLocalAccount } from "../config/local-account"
+import {
+  describePerson,
+  freshSessionFor,
+  personOfSession,
+  readBoundPerson,
+  type LogtoSessionFs,
+} from "../config/logto-session"
+import { loginHost, type LoginAccount } from "../host/login"
 import {
   isPairInvitation,
   loginWithInvitation,
@@ -58,6 +66,9 @@ Usage:
   cognia-agent host login <name> --endpoint <url> --pair-code <code>
                               [--fingerprint <sha256 hex>] [--tenant <id>]
                               [--label <display name>]
+  cognia-agent host login <name> --endpoint <url> [--account <id>]
+                              [--tenant <id>] [--fingerprint <sha256 hex>]
+                              [--label <display name>]   (multi-tenant Host)
   cognia-agent host use <name>
   cognia-agent host show                 the active host, with the source of each value
   cognia-agent host remove <name> [--keep-on-host]
@@ -90,6 +101,12 @@ Pairing:
   carries a relay room, so a host that does not answer on its address is paired
   through the relay instead. --endpoint overrides the address.
 
+  A multi-tenant Host has no pairing code: the device registers as the person
+  a local account is signed in as (\`cognia-agent logto login --account <id>\`,
+  against the issuer the Host announces). --account picks it, else
+  COGNIA_LOCAL_ACCOUNT_ID, else local_acct_a; the tenant is that sign-in's
+  organization unless --tenant names it.
+
 Secrets live in hosts.json at 0600. They are never printed back, only shown
 as "(set)".
 `
@@ -114,11 +131,34 @@ export interface HostCommandDeps {
     record: HostRecord & { deviceId: string },
     timeoutMs: number
   ) => Promise<DeviceRevocation>
+  /** The local accounts' sign-in files, which a multi-tenant `host login` pairs with (tests). */
+  sessionFs?: LogtoSessionFs
+}
+
+/**
+ * The local account a multi-tenant `host login` registers the device for: its
+ * session, but only while it still signs in as the person the account is
+ * bound to.
+ */
+function loginAccount(home: string, accountId: string, sessionFs?: LogtoSessionFs): LoginAccount {
+  const dir = accountSignInDir(home, accountId)
+  return {
+    id: accountId,
+    session: async () => {
+      const person = readBoundPerson(dir, sessionFs)
+      return person ? freshSessionFor(dir, person, { sessionFs }) : null
+    },
+    describe: (session) => {
+      const person = personOfSession(session, 0)
+      return person ? describePerson(person) : "an unreadable subject"
+    },
+  }
 }
 
 /** Value flags of the host subcommands; a missing value is a usage error, never "absent". */
 const HOST_VALUE_FLAGS = [
   ...HOST_SELECTION_FLAGS,
+  "account",
   "kind",
   "token",
   "fingerprint",
@@ -402,20 +442,32 @@ export async function hostCommand(args: ParsedArgs, deps: HostCommandDeps = {}):
         )
         return EXIT_OK
       }
-      if (!name || !endpoint || !invitation) {
+      if (!name || !endpoint) {
         return usageFailure(
           out,
-          "host login needs a <name> and --invitation 'cgnp4|…' (or --endpoint and --pair-code)",
+          "host login needs a <name> and --invitation 'cgnp4|…' (or --endpoint, with --pair-code " +
+            "for a single-user Host)",
           [
             "cognia-agent host login home --invitation 'cgnp4|…'",
             "cognia-agent host login desktop --endpoint https://127.0.0.1:27890 --pair-code ABC123",
+            "cognia-agent host login team --endpoint https://host.example --account work",
           ],
-          ["run `cognia-server pair` on the host, or take one from its pairing screen"]
+          [
+            "run `cognia-server pair` on the host, or take one from its pairing screen",
+            "a multi-tenant Host pairs as the signed-in --account instead of a code",
+          ]
         )
+      }
+      const account = resolveLocalAccount(args, env)
+      if (!account.ok) {
+        return usageFailure(out, account.error, [
+          "cognia-agent host login team --endpoint https://host.example --account work",
+        ])
       }
       const result = await loginHost({
         endpoint,
-        invitation,
+        ...(invitation ? { invitation } : {}),
+        account: loginAccount(home, account.account.id, deps.sessionFs),
         fetcher,
         ...(stringFlag(args, "label") ? { displayName: stringFlag(args, "label") } : {}),
         ...(stringFlag(args, "fingerprint")

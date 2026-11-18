@@ -19,7 +19,12 @@ import { openSqliteBackend, sqliteFile } from "./persistence/sqlite"
 import { BRIDGE_PROTOCOL_VERSION } from "./protocol"
 import { WorkerRpcPool, type WorkerRpcPoolOptions } from "@/lib/squads/workers/worker-rpc-pool"
 import { getRemoteWorkerRuntime } from "@/lib/squads/workers/remote-worker-runtime"
-import { projectWorkerPlacement, resolveServeCollabConfig, serveCommand } from "./serve-command"
+import {
+  actsForLine,
+  projectWorkerPlacement,
+  resolveServeCollabConfig,
+  serveCommand,
+} from "./serve-command"
 import type { HeadlessRuntimeContext } from "@/lib/headless/types"
 import { getStorageRetentionSnapshot } from "@/lib/storage/retention"
 import { brainBackup } from "../account-sync/headless-sync"
@@ -50,10 +55,18 @@ jest.mock("./durability", () => {
     },
   }
 })
+let mockCollabInput: { person: () => unknown; localAccountId: string } | undefined
+let mockCollabRebound: { from: string; to: string } | undefined
 jest.mock("./collab-reader", () => ({
-  startHeadlessCollabReader: async () => {
+  startHeadlessCollabReader: async (input: { person: () => unknown; localAccountId: string }) => {
     mockBootOrder.push("collab-activated")
-    return { status: "active", runtime: mockCollabAdapter, stop: () => undefined }
+    mockCollabInput = input
+    return {
+      status: "active",
+      runtime: mockCollabAdapter,
+      ...(mockCollabRebound ? { rebound: mockCollabRebound } : {}),
+      stop: () => undefined,
+    }
   },
 }))
 jest.mock("@/lib/headless/bootstrap", () => {
@@ -397,6 +410,22 @@ describe("serveCommand", () => {
     30_000
   )
 
+  it("refuses --account without a value before unlocking anything", async () => {
+    const out = sink()
+    expect(
+      await serveCommand(parseArgv(["serve", "--account"]), {
+        out,
+        env: env({
+          COGNIA_SERVER_URL: "https://127.0.0.1:7999",
+          COGNIA_SERVICE_TOKEN: "svc",
+          COGNIA_LOCAL_ACCOUNT_ID: "elsewhere",
+        }),
+      })
+    ).toBe(2)
+    expect(out.logs.join("")).toContain("serve: --account needs a value")
+    expect(out.logs.join("")).not.toContain("unlocked")
+  })
+
   it("fails fast without a server url or a service token", async () => {
     const out = sink()
     expect(await serveCommand(parseArgv(["serve"]), { out, env: env() })).toBe(2)
@@ -639,6 +668,7 @@ describe("serveCommand", () => {
       throw new Error(`no respond frame arrived; sent=${JSON.stringify(server.sent)}`)
     }
 
+    mockCollabRebound = { from: "Ann (usr_ann)", to: "Bob (usr_bob)" }
     let code: number
     try {
       code = await serveCommand(parseArgv(["serve", "--home", home]), {
@@ -668,7 +698,20 @@ describe("serveCommand", () => {
     expect(joined).toContain("bridge connected")
     expect(joined).toContain("desktop-sync-source")
     expect(joined).toContain("account-sync")
-    expect(joined).toContain("account sync: not signed in; run `cognia-agent logto login`")
+    expect(joined).toContain(
+      "account sync: not signed in; run `cognia-agent logto login --account local_acct_a`"
+    )
+    expect(joined).toContain(
+      "serve: account local_acct_a is not signed in; run `cognia-agent logto login --account local_acct_a`"
+    )
+    expect(joined).toContain("account local_acct_a unlocked (from default)")
+    expect(joined).toContain(
+      "serve: account local_acct_a now acts for Bob (usr_bob) (was Ann (usr_ann)); its collaboration read cursors were reset"
+    )
+    // The readers share the pin; nobody is bound, so it pins nobody.
+    expect(mockCollabInput?.localAccountId).toBe("local_acct_a")
+    expect(mockCollabInput?.person()).toBeNull()
+    mockCollabRebound = undefined
 
     // The brain persisted the seeded row in its default store (ADR-0224).
     expect(joined).toContain("serve: durability sqlite-v5")
@@ -695,4 +738,43 @@ describe("serveCommand", () => {
     __resetCliDbForTesting()
     fs.rmSync(home, { recursive: true, force: true })
   }, 30_000)
+})
+
+describe("actsForLine", () => {
+  const files = (entries: Record<string, string>) => ({
+    read: (file: string) => entries[file] ?? null,
+    write: () => undefined,
+    remove: () => undefined,
+    mkdirp: () => undefined,
+    listDirs: () => [],
+  })
+  const dir = path.join("/h", "accounts", "acct")
+  const person = JSON.stringify({
+    issuer: "https://id.test",
+    subject: "usr_ann",
+    displayName: "Ann",
+    boundAt: 1,
+  })
+
+  it("names the bound person, and whether the account is signed in as them", () => {
+    expect(
+      actsForLine(
+        "/h",
+        "acct",
+        files({ [path.join(dir, "person.json")]: person, [path.join(dir, "logto.json")]: "{}" })
+      )
+    ).toBe("account acct acts for Ann (usr_ann) at https://id.test")
+    expect(actsForLine("/h", "acct", files({ [path.join(dir, "person.json")]: person }))).toBe(
+      "account acct acts for Ann (usr_ann) at https://id.test (signed out; run `cognia-agent logto login --account acct` as this person)"
+    )
+  })
+
+  it("says when the account was never bound, or its binding cannot be read", () => {
+    expect(actsForLine("/h", "acct", files({}))).toBe(
+      "account acct is not signed in; run `cognia-agent logto login --account acct`"
+    )
+    expect(
+      actsForLine("/h", "acct", files({ [path.join(dir, "person.json")]: "garbage" }))
+    ).toMatch(/^account acct acts for nobody: .*not a readable binding/)
+  })
 })

@@ -74,7 +74,7 @@ use clap::{Parser, Subcommand};
 /// Fallback local account for a deployment that names none.
 ///
 /// Kept as a literal because the Node brain's own account registry defaults to
-/// the same id (`HEADLESS_LOCAL_ACCOUNT_ID` in `cli/src/serve/account.ts`); the
+/// the same id (`HEADLESS_LOCAL_ACCOUNT_ID` in `cli/src/config/local-account.ts`); the
 /// two must agree or `desktop-sync-source` rejects the brain's pulls. It is a
 /// local account *namespace*, not a tenant — the tenant now comes from the host
 /// binding this id is bound to at startup.

@@ -70,9 +70,12 @@ export async function loginWithInvitation(
   const payload = decoded.payload
   if (payload.mode !== "owner-invitation" || !payload.invitation) {
     return failure({
-      error: "this invitation pairs through OIDC sign-in, not an owner invitation",
+      error: "this invitation pairs through a member's sign-in, not an owner invitation",
       cause: "auth",
-      fix: ["cognia-agent logto login", "then add the host with --kind device --tenant <id>"],
+      fix: [
+        `pair as a signed-in local account: cognia-agent host login <name> --endpoint ${payload.baseUrl} --tenant ${payload.tenantId} --account <id>`,
+        "it names the `cognia-agent logto login` to run first when the account is not signed in",
+      ],
     })
   }
 

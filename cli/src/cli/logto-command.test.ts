@@ -36,7 +36,23 @@ function memFs(seed?: Record<string, string>): LogtoSessionFs & { store: Map<str
       store.delete(p)
     },
     mkdirp: () => {},
+    // Directories exist where files do; enough for listing the accounts.
+    listDirs: (dir) => {
+      const prefix = `${dir}${path.sep}`
+      const names = new Set<string>()
+      for (const key of store.keys()) {
+        if (!key.startsWith(prefix)) continue
+        const rest = key.slice(prefix.length).split(path.sep)
+        if (rest.length > 1) names.add(rest[0]!)
+      }
+      return [...names]
+    },
   }
+}
+
+/** An unsigned JWT; the CLI reads claims but never verifies (the Host does). */
+function jwtFor(claims: Record<string, unknown>): string {
+  return `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`
 }
 
 function fakeServer() {
@@ -48,15 +64,17 @@ function fakeServer() {
 }
 
 const HOME = "/home/u/.cognia"
-// Build the expected path the same way the source does (path.join), so the
-// store key matches on both POSIX and Windows separators.
-const SESSION_FILE = path.join(HOME, "logto.json")
+// Build the expected paths the same way the source does (path.join), so the
+// store keys match on both POSIX and Windows separators.
+const ACCOUNT_DIR = path.join(HOME, "accounts", "local_acct_a")
+const SESSION_FILE = path.join(ACCOUNT_DIR, "logto.json")
+const PERSON_FILE = path.join(ACCOUNT_DIR, "person.json")
 const sampleSession: LogtoSession = {
   issuer: "https://logto.test/oidc",
   clientId: "cli-1",
   resource: "https://brain.test/api",
   organizationId: "org_9",
-  accessToken: "ATK-secret-xyz",
+  accessToken: jwtFor({ sub: "usr_ann", jti: "ATK-secret-xyz" }),
   refreshToken: "RTK-secret-xyz",
   expiresAt: 1893456000000,
   scopes: ["brain:rpc"],
@@ -273,7 +291,7 @@ describe("logtoCommand", () => {
       env: {},
       now: () => 0,
     })
-    expect(cap.text()).toMatch(/^Signed in to your Cognia account/)
+    expect(cap.text()).toMatch(/deployment: your Cognia account/)
   })
 
   it("login: exits 1 and closes the server when the flow throws", async () => {
@@ -334,7 +352,7 @@ describe("logtoCommand", () => {
     expect(code).toBe(0)
     expect(cap.text()).toMatch(/https:\/\/brain\.test\/api/)
     expect(cap.text()).toMatch(/org_9/)
-    expect(cap.text()).not.toContain("ATK-secret-xyz")
+    expect(cap.text()).not.toContain(sampleSession.accessToken)
     expect(cap.text()).not.toContain("RTK-secret-xyz")
   })
 
@@ -347,7 +365,8 @@ describe("logtoCommand", () => {
       env: {},
     })
     expect(code).toBe(0)
-    expect(cap.text()).toMatch(/not signed in/i)
+    expect(cap.text()).toMatch(/No local account has signed in/)
+    expect(cap.text()).toMatch(/logto login \[--account <id>\]/)
   })
 
   it("logout: revokes both tokens at the issuer, then removes the session file", async () => {
@@ -372,7 +391,7 @@ describe("logtoCommand", () => {
     ])
     expect(revoke.mock.calls[1]).toEqual([
       sampleSession,
-      "ATK-secret-xyz",
+      sampleSession.accessToken,
       "access_token",
       undefined,
     ])
@@ -443,7 +462,7 @@ describe("logtoCommand", () => {
       env: {},
       now: () => 2,
     })
-    expect(cap.text()).toMatch(/refresh on next use/i)
+    expect(cap.text()).toMatch(/refreshes on next use/i)
     expect(cap.text()).not.toContain("RTK-secret-xyz")
   })
 
@@ -636,7 +655,7 @@ describe("logtoCommand", () => {
       sessionFs: fs,
       env: {},
     })
-    expect(status.text()).toMatch(/person: {3}usr_a/)
+    expect(status.text()).toMatch(/person: {5}usr_a/)
     const logout = captureOut()
     await logtoCommand(parseArgv(["logto", "logout"]), {
       home: HOME,
@@ -645,6 +664,213 @@ describe("logtoCommand", () => {
       env: {},
       revoke: async () => ({ status: "revoked" as const }),
     })
-    expect(logout.text()).toMatch(/logto login --switch-account/)
+    expect(logout.text()).toMatch(/still acts for this person/)
+    expect(logout.text()).toMatch(/--account <id>.*--rebind.*--switch-account/s)
+    expect(fs.store.has(SESSION_FILE)).toBe(false)
+  })
+
+  describe("one sign-in per local account", () => {
+    const ann = {
+      ...sampleSession,
+      accessToken: jwtFor({ sub: "usr_ann" }),
+      refreshToken: "RTK-ann",
+    }
+    const bob = {
+      ...sampleSession,
+      accessToken: jwtFor({ sub: "usr_bob" }),
+      idToken: jwtFor({ name: "Bob", email: "bob@example.com" }),
+      refreshToken: "RTK-bob",
+    }
+    const bound = {
+      issuer: sampleSession.issuer,
+      subject: "usr_ann",
+      userId: "usr_ann",
+      displayName: "Ann",
+      boundAt: 1,
+    }
+
+    function signIn(session: LogtoSession, fs: ReturnType<typeof memFs>, ...extra: string[]) {
+      const out = captureOut()
+      const revoke = jest.fn(async () => ({ status: "revoked" as const }))
+      const result = logtoCommand(parseArgv(["logto", "login", ...extra]), {
+        home: HOME,
+        out: out.sink,
+        sessionFs: fs,
+        revoke,
+        login: async () => session,
+        startCallbackServer: async () => fakeServer() as never,
+        openBrowser: async () => true,
+        env: {},
+        now: () => 50,
+      })
+      return { out, revoke, result }
+    }
+
+    it("binds the account on its first sign-in", async () => {
+      const fs = memFs()
+      const { out, result } = signIn(ann, fs)
+      expect(await result).toBe(0)
+      expect(out.text()).toMatch(/for account local_acct_a; the account now acts for this person/)
+      expect(JSON.parse(fs.store.get(PERSON_FILE)!)).toMatchObject({
+        subject: "usr_ann",
+        boundAt: 50,
+      })
+    })
+
+    it("refuses someone else, revokes their tokens and keeps the account's session", async () => {
+      const fs = memFs({
+        [SESSION_FILE]: JSON.stringify(ann),
+        [PERSON_FILE]: JSON.stringify(bound),
+      })
+      const { out, revoke, result } = signIn(bob, fs)
+      expect(await result).toBe(1)
+      expect(out.errText()).toMatch(
+        /account local_acct_a acts for Ann \(usr_ann\) at Logto https:\/\/logto\.test\/oidc; this sign-in was Bob <bob@example\.com> \(usr_bob\)/
+      )
+      expect(out.errText()).toMatch(/use another --account for this one, or pass --rebind/)
+      expect(out.errText()).toMatch(/Its tokens were revoked/)
+      expect(revoke.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+        "RTK-bob",
+        bob.accessToken,
+      ])
+      expect(JSON.parse(fs.store.get(SESSION_FILE)!).accessToken).toBe(ann.accessToken)
+      expect(JSON.parse(fs.store.get(PERSON_FILE)!).subject).toBe("usr_ann")
+    })
+
+    it("--rebind hands the account over and says what follows", async () => {
+      const fs = memFs({
+        [SESSION_FILE]: JSON.stringify(ann),
+        [PERSON_FILE]: JSON.stringify(bound),
+      })
+      const { out, revoke, result } = signIn(bob, fs, "--rebind")
+      expect(await result).toBe(0)
+      expect(out.text()).toMatch(/now acts for this person instead of Ann \(usr_ann\)/)
+      expect(out.text()).toMatch(/keeps acting for the previous person until it restarts/)
+      expect(out.text()).toMatch(
+        /account-sync data --merge` or `--replace` \(with --account local_acct_a\)/
+      )
+      expect(revoke).not.toHaveBeenCalled()
+      expect(JSON.parse(fs.store.get(PERSON_FILE)!).subject).toBe("usr_bob")
+      expect(JSON.parse(fs.store.get(SESSION_FILE)!).accessToken).toBe(bob.accessToken)
+    })
+
+    it("refuses a token that names nobody, and revokes it", async () => {
+      const fs = memFs()
+      const { out, revoke, result } = signIn({ ...ann, accessToken: "opaque" }, fs)
+      expect(await result).toBe(1)
+      expect(out.errText()).toMatch(
+        /names no subject, so there is nobody to bind account local_acct_a to/
+      )
+      expect(revoke).toHaveBeenCalledTimes(2)
+      expect(fs.store.size).toBe(0)
+    })
+
+    it("--account keeps a second person in their own account", async () => {
+      const fs = memFs({
+        [SESSION_FILE]: JSON.stringify(ann),
+        [PERSON_FILE]: JSON.stringify(bound),
+      })
+      const { result } = signIn(bob, fs, "--account", "work")
+      expect(await result).toBe(0)
+      const work = path.join(HOME, "accounts", "work")
+      expect(JSON.parse(fs.store.get(path.join(work, "person.json"))!).subject).toBe("usr_bob")
+      expect(JSON.parse(fs.store.get(SESSION_FILE)!).accessToken).toBe(ann.accessToken)
+    })
+
+    it("refuses --account without a value", async () => {
+      const out = captureOut()
+      expect(
+        await logtoCommand(parseArgv(["logto", "status", "--account"]), {
+          home: HOME,
+          out: out.sink,
+          sessionFs: memFs(),
+          env: { COGNIA_LOCAL_ACCOUNT_ID: "work" },
+        })
+      ).toBe(2)
+      expect(out.errText()).toMatch(/--account needs a value/)
+    })
+
+    it("status lists every account and marks the one this shell acts for", async () => {
+      const work = path.join(HOME, "accounts", "work")
+      const fs = memFs({
+        [SESSION_FILE]: JSON.stringify(ann),
+        [PERSON_FILE]: JSON.stringify(bound),
+        [path.join(work, "person.json")]: JSON.stringify({
+          ...bound,
+          subject: "usr_bob",
+          displayName: "Bob",
+        }),
+      })
+      const out = captureOut()
+      await logtoCommand(parseArgv(["logto", "status"]), {
+        home: HOME,
+        out: out.sink,
+        sessionFs: fs,
+        env: { COGNIA_LOCAL_ACCOUNT_ID: "work" },
+        now: () => 0,
+      })
+      const text = out.text()
+      expect(text).toMatch(
+        /Account local_acct_a\n {2}state: {6}signed in\n {2}person: {5}Ann \(usr_ann\)/
+      )
+      expect(text).toMatch(
+        /Account work {2}\(selected by COGNIA_LOCAL_ACCOUNT_ID\)\n {2}state: {6}signed out\n {2}person: {5}Bob \(usr_bob\)/
+      )
+      expect(text).not.toContain(ann.accessToken)
+
+      const json = captureOut()
+      await logtoCommand(parseArgv(["logto", "status", "--json"]), {
+        home: HOME,
+        out: json.sink,
+        sessionFs: fs,
+        env: {},
+        now: () => 0,
+      })
+      const parsed = JSON.parse(json.text()) as { accounts: Array<Record<string, unknown>> }
+      expect(parsed.accounts.map((a) => [a.account, a.state, a.selected])).toEqual([
+        ["local_acct_a", "signed-in", true],
+        ["work", "signed-out", false],
+      ])
+      expect(parsed.accounts[0]).toMatchObject({
+        selectedBy: "default",
+        person: { subject: "usr_ann", boundAt: new Date(1).toISOString() },
+        session: { resource: sampleSession.resource, organizationId: "org_9" },
+      })
+      expect(json.text()).not.toContain(ann.accessToken)
+    })
+
+    it("status --account asks about one account, even one that never signed in", async () => {
+      const out = captureOut()
+      await logtoCommand(parseArgv(["logto", "status", "--account", "lab", "--json"]), {
+        home: HOME,
+        out: out.sink,
+        sessionFs: memFs({ [SESSION_FILE]: JSON.stringify(ann) }),
+        env: {},
+      })
+      expect(JSON.parse(out.text())).toMatchObject({
+        account: "lab",
+        selected: true,
+        selectedBy: "--account",
+        state: "not-signed-in",
+        person: null,
+      })
+    })
+
+    it("logout keeps the binding, so the next sign-in as someone else is refused", async () => {
+      const fs = memFs({
+        [SESSION_FILE]: JSON.stringify(ann),
+        [PERSON_FILE]: JSON.stringify(bound),
+      })
+      await logtoCommand(parseArgv(["logto", "logout"]), {
+        home: HOME,
+        out: captureOut().sink,
+        sessionFs: fs,
+        env: {},
+        revoke: async () => ({ status: "revoked" as const }),
+      })
+      expect(fs.store.has(SESSION_FILE)).toBe(false)
+      expect(fs.store.has(PERSON_FILE)).toBe(true)
+      expect(await signIn(bob, fs).result).toBe(1)
+    })
   })
 })

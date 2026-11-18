@@ -1,3 +1,5 @@
+import path from "node:path"
+
 import { parseArgv } from "./args"
 import { EXIT_OK, EXIT_FAILURE, EXIT_USAGE } from "./errors"
 import { hostCommand, HOST_HELP, relayLoginNote, type HostCommandDeps } from "./host-command"
@@ -359,22 +361,131 @@ describe("host login", () => {
     expect(used).toEqual([fetcher, fetcher])
   })
 
-  it("needs a name, an endpoint and a pairing code", async () => {
+  it("needs a name and an endpoint, and a single-user host a pairing code", async () => {
     const d = deps()
-    expect(await run(["host", "login", "desktop", "--endpoint", "https://h"], d)).toBe(EXIT_USAGE)
+    expect(await run(["host", "login", "desktop"], d)).toBe(EXIT_USAGE)
     expect(d.out.stderr[0]).toContain("--pair-code")
-  })
-
-  it("sends a multi-tenant host to the OIDC flow instead of guessing", async () => {
-    const d = deps({
+    const single = deps({
       login: {
-        fetchConfig: async () => ({ deploymentMode: "multi-tenant", hostId: "h" }) as never,
+        fetchConfig: async () =>
+          ({ deploymentMode: "single-user", hostId: "h", tenantId: "t" }) as never,
       },
     })
-    expect(
-      await run(["host", "login", "cloud", "--endpoint", "https://h", "--pair-code", "X"], d)
-    ).toBe(EXIT_FAILURE)
-    expect(d.out.stderr[0]).toContain("logto login")
+    expect(await run(["host", "login", "desktop", "--endpoint", "https://h"], single)).toBe(
+      EXIT_FAILURE
+    )
+    expect(single.out.stderr[0]).toContain("pairs with the owner's pairing code")
+  })
+
+  describe("a multi-tenant host", () => {
+    const MULTI = {
+      deploymentMode: "multi-tenant",
+      hostId: "host_m",
+      oidc: {
+        issuer: "https://id.example/oidc",
+        audience: "https://api.example",
+        webClientId: "web",
+        nativeClientId: "native",
+        scopes: [],
+      },
+      signaling: { url: "wss://s", iceServers: [] },
+    }
+    const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url")
+    const accessToken = `h.${b64({ sub: "usr_ann", organization_id: "tnt_team" })}.s`
+    const accountDir = path.join(HOME, "accounts", "work")
+    const signedIn = (person = "usr_ann") => {
+      const files = new Map<string, string>([
+        [
+          path.join(accountDir, "logto.json"),
+          JSON.stringify({
+            issuer: "https://id.example/oidc",
+            clientId: "native",
+            resource: "https://api.example",
+            organizationId: "tnt_team",
+            accessToken,
+            idToken: `h.${b64({ name: "Ann" })}.s`,
+            scopes: [],
+          }),
+        ],
+        [
+          path.join(accountDir, "person.json"),
+          JSON.stringify({ issuer: "https://id.example/oidc", subject: person, boundAt: 1 }),
+        ],
+      ])
+      return {
+        read: (file: string) => files.get(file) ?? null,
+        write: () => undefined,
+        remove: () => undefined,
+        mkdirp: () => undefined,
+        listDirs: () => [],
+      }
+    }
+
+    it("registers the device as the signed-in account's person and records who paired", async () => {
+      const seen: Array<Record<string, unknown>> = []
+      const d = deps({
+        sessionFs: signedIn(),
+        login: {
+          fetchConfig: async () => MULTI as never,
+          register: async (input) => {
+            seen.push(input as Record<string, unknown>)
+            return { baseUrl: "https://team", deviceId: "dev_m", serverVersion: "6" } as never
+          },
+        },
+      })
+      expect(
+        await run(
+          [
+            "host",
+            "login",
+            "team",
+            "--endpoint",
+            "https://team",
+            "--account",
+            "work",
+            "--format",
+            "raw",
+          ],
+          d
+        )
+      ).toBe(EXIT_OK)
+      expect(seen[0]).toMatchObject({
+        mode: "oidc",
+        tenantId: "tnt_team",
+        oidc: { accessToken, clientId: "native" },
+      })
+      expect(JSON.parse(d.out.stdout)).toMatchObject({
+        paired: "team",
+        kind: "device",
+        tenantId: "tnt_team",
+        pairedAs: { account: "work", person: "Ann (usr_ann)" },
+      })
+      expect(d.out.stdout).not.toContain(accessToken)
+    })
+
+    it("never pairs with a session that no longer signs in as the account's person", async () => {
+      const register = jest.fn()
+      const d = deps({
+        sessionFs: signedIn("usr_bob"),
+        login: { fetchConfig: async () => MULTI as never, register },
+      })
+      expect(
+        await run(["host", "login", "team", "--endpoint", "https://team", "--account", "work"], d)
+      ).toBe(EXIT_FAILURE)
+      expect(register).not.toHaveBeenCalled()
+      expect(d.out.stderr[0]).toContain("account work is not signed in")
+      expect(d.out.stderr[0]).toContain(
+        "cognia-agent logto login --account work --issuer https://id.example/oidc --client-id native"
+      )
+    })
+
+    it("refuses --account without a value", async () => {
+      const d = deps()
+      expect(
+        await run(["host", "login", "team", "--endpoint", "https://team", "--account"], d)
+      ).toBe(EXIT_USAGE)
+      expect(d.out.stderr[0]).toContain("--account")
+    })
   })
 
   it("says a pairing code is single-use when the host refuses", async () => {

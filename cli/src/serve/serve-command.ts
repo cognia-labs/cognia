@@ -49,9 +49,20 @@ import type { ParsedArgs } from "../cli/args"
 import { stringFlag } from "../cli/args"
 import type { OutputSink } from "../cli/output"
 import { fsReader, resolveHome, userConfigPath } from "../config/load"
+import {
+  accountSignInDir,
+  describeLocalAccountSource,
+  resolveLocalAccount,
+} from "../config/local-account"
+import {
+  describePerson,
+  pinBoundPerson,
+  readAccountSignIn,
+  type LogtoSessionFs,
+} from "../config/logto-session"
 import { cliConfigFileSchema, collabCliSchema, type CollabCliConfig } from "../config/schema"
 import { VERSION } from "../version"
-import { ensureHeadlessAccount, HEADLESS_LOCAL_ACCOUNT_ID } from "./account"
+import { ensureHeadlessAccount } from "./account"
 import {
   createNodeBackupFilesystem,
   createUnavailableBackupFilesystem,
@@ -75,6 +86,26 @@ export interface ServeDeps {
   /** Test hook: runs after the runtimes started, before blocking. */
   onStarted?: () => Promise<void> | void
   proc?: Pick<NodeJS.Process, "on" | "off" | "memoryUsage">
+  /** The accounts' sign-in files (tests). */
+  sessionFs?: LogtoSessionFs
+}
+
+/** The start-up line naming whom the Brain acts for, from the account's sign-in. */
+export function actsForLine(
+  cliHome: string,
+  localAccountId: string,
+  sessionFs?: LogtoSessionFs
+): string {
+  const entry = readAccountSignIn(
+    accountSignInDir(cliHome, localAccountId),
+    localAccountId,
+    sessionFs
+  )
+  const login = `\`cognia-agent logto login --account ${localAccountId}\``
+  if (entry.personError) return `account ${localAccountId} acts for nobody: ${entry.personError}`
+  if (!entry.person) return `account ${localAccountId} is not signed in; run ${login}`
+  const who = `account ${localAccountId} acts for ${describePerson(entry.person)} at ${entry.person.issuer}`
+  return entry.session ? who : `${who} (signed out; run ${login} as this person)`
 }
 
 export function resolveServeCollabConfig(
@@ -142,8 +173,12 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
     const { uninstallCliExternalAgentHost } = await import("../runtime/external/host-branch")
     uninstallCliExternalAgentHost()
   }
-  const localAccountId =
-    stringFlag(args, "account") ?? env.COGNIA_LOCAL_ACCOUNT_ID ?? HEADLESS_LOCAL_ACCOUNT_ID
+  const account = resolveLocalAccount(args, env)
+  if (!account.ok) {
+    out.error(`serve: ${account.error}\n`)
+    return 2
+  }
+  const localAccountId = account.account.id
   const bridgeUrl = env.COGNIA_BRIDGE_URL ?? deriveBridgeUrl(serverUrl)
   const home = resolveServeHome(env, stringFlag(args, "home"))
   let backupInstallationId: string | undefined
@@ -165,7 +200,9 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
 
   // ── 2. Account ─────────────────────────────────────────────────────────────
   await ensureHeadlessAccount(localAccountId, { partitionArtifactKeys: personBrain })
-  out.write(`serve: account ${localAccountId} unlocked\n`)
+  out.write(
+    `serve: account ${localAccountId} unlocked (from ${describeLocalAccountSource(account.account.source)})\n`
+  )
   if (personBrain) out.write("serve: person partition profile (data only)\n")
 
   // ── 3. Durability ──────────────────────────────────────────────────────────
@@ -176,23 +213,43 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   })
   out.write(`serve: durability ${durability.backend}\n`)
 
-  // Optional read-only collaboration plane. Credentials are loaded from the
-  // CLI's existing 0600 Logto session; no bearer token is accepted in env.
+  // The person this Brain acts for: the account's binding, pinned for the
+  // life of the process (`pinBoundPerson`). A member's partition has none: its
+  // person comes from the Host's member standing, never the CLI's sign-in.
   const cliHome = resolveHome(env, os.homedir())
+  const person = personBrain
+    ? () => null
+    : pinBoundPerson(accountSignInDir(cliHome, localAccountId), deps.sessionFs)
+  if (!personBrain) out.write(`serve: ${actsForLine(cliHome, localAccountId, deps.sessionFs)}\n`)
+
+  // Optional read-only collaboration plane. Credentials are loaded from the
+  // account's 0600 Logto session; no bearer token is accepted in env.
   const collabConfig = personBrain ? null : resolveServeCollabConfig(env, cliHome)
   const collabReader = collabConfig
     ? await startHeadlessCollabReader({
         localAccountId,
         cliHome,
         config: collabConfig,
+        person,
+        env,
       }).catch((cause) => {
         out.error(`serve: collaboration reader failed: ${String(cause)}\n`)
         return null
       })
     : null
+  if (collabReader?.rebound) {
+    out.write(
+      `serve: account ${localAccountId} now acts for ${collabReader.rebound.to} ` +
+        `(was ${collabReader.rebound.from}); its collaboration read cursors were reset\n`
+    )
+  }
   if (collabReader?.status === "active") out.write("serve: collaboration reader active\n")
   if (collabReader?.status === "not-signed-in") {
-    out.write("serve: collaboration configured; run `cognia-agent logto login` to activate\n")
+    out.write(
+      "serve: collaboration configured; run " +
+        `\`cognia-agent logto login --account ${localAccountId}\` as this account's person, ` +
+        "then restart, to activate\n"
+    )
   }
 
   // ── 4. Control plane: CompanionTransport with the service token ───────────
@@ -304,7 +361,7 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   const backupFilesystem = backupFailure
     ? createUnavailableBackupFilesystem(backupFailure)
     : createNodeBackupFilesystem(backupInstallationId)
-  // Account sync (ADR-0215 phase 3a): the host's own `logto login` and the
+  // Account sync (ADR-0215 phase 3a): the account's own `logto login` and the
   // key store `cognia-agent account-sync` enrolls into; absent unless
   // COGNIA_ACCOUNT_SYNC is on.
   const accountSync = personBrain
@@ -313,6 +370,7 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
         cliHome,
         localAccountId,
         env,
+        person,
         backup: brainBackup({
           filesystem: backupFilesystem,
           fallbackDir: path.join(home, "backups"),

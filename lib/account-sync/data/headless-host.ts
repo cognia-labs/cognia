@@ -38,6 +38,8 @@ export const HEADLESS_POLL_MS = 20_000
 export interface HeadlessAccountSyncHost {
   /** The host's own sync session, or null when it is not signed in. */
   session: () => Promise<SyncSession | null>
+  /** The command that signs this host's account in, for the signed-out log line. */
+  signInCommand: string
   /** The store the `cognia-agent account-sync` commands keep the keys in. */
   keyring: KeyringStore
   /** Backs up the brain's database before a join changes it. */
@@ -167,7 +169,7 @@ export function startHeadlessAccountSync(deps: HeadlessAccountSyncDeps): Headles
     const session = await deps.host.session()
     if (!session) {
       stopEngine()
-      say("info", "not signed in; run `cognia-agent logto login`")
+      say("info", `not signed in; run \`${deps.host.signInCommand}\``)
       return
     }
     const db = deps.db()

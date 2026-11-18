@@ -21,7 +21,7 @@ import { connectorVendor } from "../vendor-contribution"
 
 /**
  * Must stay in lockstep with `HEADLESS_LOCAL_ACCOUNT_ID` in
- * `cli/src/serve/account.ts` and `crates/cognia-server/src/main.rs` (lib
+ * `cli/src/config/local-account.ts` and `crates/cognia-server/src/main.rs` (lib
  * code cannot import from cli/).
  */
 
