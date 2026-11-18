@@ -29,8 +29,6 @@ beforeEach(() => {
     },
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: false,
-    panelView: "artifact",
   })
 })
 

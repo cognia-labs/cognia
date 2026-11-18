@@ -19,6 +19,7 @@ import {
   useArtifactStore,
 } from "@/stores/artifact/artifact-store"
 import { useChatStore } from "@/stores/chat"
+import { __resetDockTabFocusForTests } from "@/lib/artifacts/dock-tab-focus"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
 
 const SESSION = "s1"
@@ -42,6 +43,7 @@ const activeTab = () => selectActiveArtifactId(useArtifactStore.getState(), SESS
 beforeEach(() => {
   jest.clearAllMocks()
   localStorage.clear()
+  __resetDockTabFocusForTests()
   act(() => {
     useArtifactStore.setState({
       artifacts: {},
@@ -121,6 +123,18 @@ describe("ArtifactTabStrip", () => {
 
     expect(openTabs()).toEqual([first.id, third.id])
     expect(activeTab()).toBe(third.id)
+  })
+
+  it("moves focus to the tab that takes over when the focused tab is closed (A03)", () => {
+    const [first, second, third] = seed(["First", "Second", "Third"])
+    act(() => useArtifactStore.getState().setActiveArtifact(second.id))
+    render(<ArtifactTabStrip />)
+    screen.getByTestId(`artifact-tab-${second.id}`).focus()
+
+    fireEvent.click(screen.getByTestId(`artifact-tab-close-${second.id}`))
+
+    expect(openTabs()).toEqual([first.id, third.id])
+    expect(screen.getByTestId(`artifact-tab-${third.id}`)).toHaveFocus()
   })
 
   it("closing the last tab falls back to the one before it", () => {

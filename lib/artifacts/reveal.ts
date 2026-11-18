@@ -14,15 +14,11 @@ export function revealArtifactInWorkspace(id: string): Artifact | null {
   }
 
   store.setActiveArtifact(id)
-  store.openPanel("artifact")
-  // Make "open in panel" target the docked panel when one is mounted: expand
-  // the desktop dock and open the mobile Sheet fallback. Harmless no-ops when
-  // the dock isn't on screen.
-  const dock = useArtifactDockLayoutStore.getState()
-  dock.setDockCollapsed(false)
+  // Puts the surface on screen: the desktop dock and the narrow Sheet alike.
+  store.openPanel()
   // The artifact surface opens on its preview; ask for it explicitly so a dock
   // parked on (say) the workspace panel follows the artifact you just revealed.
-  dock.requestReveal({ panelId: "preview", mode: "narrow" })
+  useArtifactDockLayoutStore.getState().requestReveal({ panelId: "preview", mode: "narrow" })
   return artifact
 }
 
@@ -63,10 +59,8 @@ export function revealSessionPanel(
  * Callers that are not already on `/` must route there themselves — `lib/` has
  * no router. `components/shell/use-shell-nav.ts:goHome` is the shape to copy.
  *
- * `openPanel("canvas")` is *not* called: `panelView === "canvas"` has no reader
- * in production (only the store writes it), so the dock's canvas mode renders
- * nothing. `setActiveCanvas` still sets it — that is the store's own long-
- * standing behaviour and is left alone.
+ * The artifact store's `openPanel` is *not* called: it puts the artifact dock
+ * on screen, which has nothing to do with the Canvas surface.
  */
 export function revealCanvasDocument(id: string): CanvasDocument | null {
   const store = useArtifactStore.getState()

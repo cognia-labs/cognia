@@ -7,6 +7,7 @@
 import { getActiveEditorContext } from "@/lib/editor-workbench/editor-context-registry"
 import { mapToArtifactLanguage } from "@/lib/artifacts/constants"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { revealCanvasDocument } from "@/lib/artifacts/reveal"
 import {
   executeCanvasAction,
   executeCanvasActionStreaming,
@@ -301,9 +302,13 @@ export function createCanvasAPI(pluginId: string): PluginCanvasAPI {
     },
 
     openDocument: (id: string) => {
-      const store = useArtifactStore.getState()
-      store.setActiveCanvas(id)
-      store.setPanelView("canvas")
+      // The same reveal the chat cards and the agent's `canvas_open` use:
+      // activate the document and switch to the Canvas surface. Setting the
+      // artifact store's old `panelView` flag showed nothing.
+      if (!revealCanvasDocument(id)) {
+        logger.warn(`Canvas document not open here: ${id}`)
+        return
+      }
       logger.info(`Opened canvas document: ${id}`)
     },
 

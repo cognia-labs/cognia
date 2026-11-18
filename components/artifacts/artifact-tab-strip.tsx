@@ -13,7 +13,7 @@
  * the panels need more.
  */
 
-import { useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import { CornerUpLeftIcon, MessageSquarePlusIcon, XIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -21,7 +21,8 @@ import { Button } from "@/components/ui/button"
 import { wholeArtifactSelection } from "@/lib/artifacts/format-selection-context"
 import { cn } from "@/lib/utils"
 import { MotionSelectionIndicator } from "@/components/chat/motion/motion-reveal"
-import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { selectActiveArtifactId, useArtifactStore } from "@/stores/artifact/artifact-store"
+import { requestDockTabFocus, takeDockTabFocus } from "@/lib/artifacts/dock-tab-focus"
 import { useActiveArtifactId, useOpenArtifactIds } from "@/hooks/artifacts/use-session-artifacts"
 import { useChatStore } from "@/stores/chat"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
@@ -92,10 +93,31 @@ export function ArtifactTabStrip({
     }
   }
 
+  // Closing a tab removes the element that has focus. When the close came from
+  // the strip itself, focus follows the tab selected afterwards, the way the
+  // desktop strip does (`lib/artifacts/dock-tab-focus.ts`).
+  const focusScope = `artifact-tab-strip:${sessionKey}`
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>())
+  useLayoutEffect(() => {
+    takeDockTabFocus(focusScope, (id) => tabRefs.current.get(id))
+  })
+  const closeTab = (id: string) => {
+    const focusInStrip = Boolean(stripRef.current?.contains(document.activeElement))
+    closeArtifact(id)
+    if (!focusInStrip) return
+    const next = selectActiveArtifactId(
+      useArtifactStore.getState(),
+      useChatStore.getState().activeSessionId
+    )
+    if (next) requestDockTabFocus(focusScope, next)
+  }
+
   if (tabs.length === 0) return null
 
   return (
     <div
+      ref={stripRef}
       role="tablist"
       aria-label={t("dock.openArtifacts")}
       data-testid="artifact-tab-strip"
@@ -149,6 +171,10 @@ export function ArtifactTabStrip({
                   className="absolute inset-0 rounded-md bg-secondary"
                 />
                 <button
+                  ref={(element) => {
+                    if (element) tabRefs.current.set(id, element)
+                    else tabRefs.current.delete(id)
+                  }}
                   type="button"
                   role="tab"
                   aria-selected={active}
@@ -166,7 +192,7 @@ export function ArtifactTabStrip({
                   onDoubleClick={() => goToSource(artifact.messageId)}
                   // Browser/editor convention: middle-click closes the tab.
                   onAuxClick={(event) => {
-                    if (event.button === 1) closeArtifact(id)
+                    if (event.button === 1) closeTab(id)
                   }}
                 >
                   <span className="shrink-0 text-muted-foreground">
@@ -183,7 +209,7 @@ export function ArtifactTabStrip({
                   // Hover-revealed on mouse; always visible on coarse pointers,
                   // where there is no hover to reveal it.
                   className="relative size-5 shrink-0 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
-                  onClick={() => closeArtifact(id)}
+                  onClick={() => closeTab(id)}
                 >
                   <XIcon className="size-3" />
                 </Button>
@@ -207,7 +233,7 @@ export function ArtifactTabStrip({
               </ContextMenuItem>
               <ContextMenuItem
                 data-testid={`artifact-tab-close-item-${id}`}
-                onSelect={() => closeArtifact(id)}
+                onSelect={() => closeTab(id)}
               >
                 <XIcon className="size-4" />
                 {t("dock.closeTabMenuItem")}

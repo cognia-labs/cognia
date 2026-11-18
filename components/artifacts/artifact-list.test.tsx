@@ -69,8 +69,6 @@ beforeEach(() => {
     },
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: false,
-    panelView: "artifact",
   })
   useChatStore.setState({ activeSessionId: "s1", status: "idle", messages: [] })
   useSettingsStore.setState({ settings: { artifacts: {} } } as never)

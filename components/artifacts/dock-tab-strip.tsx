@@ -24,7 +24,15 @@
  * page tab in front, so the pages stand in for it.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -76,6 +84,11 @@ import { contextPanelRegistry } from "@/lib/context-workbench/panel-registry"
 import { resolveWorkbenchPanelLabel } from "@/lib/context-workbench/panel-label"
 import { openExternal } from "@/lib/tauri/opener"
 import { cn } from "@/lib/utils"
+import {
+  requestDockTabFocus,
+  returnFocusFromDock,
+  takeDockTabFocus,
+} from "@/lib/artifacts/dock-tab-focus"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import { selectOpenArtifactIds, useArtifactStore } from "@/stores/artifact/artifact-store"
 import {
@@ -145,9 +158,25 @@ export function presentDockTabs({
   ]
 }
 
+/**
+ * Whether a panel tab can be drawn: the panel is known, and the session
+ * workbench resolved it on its last reconcile (when it has reconciled at all).
+ * A saved tab whose condition stopped holding — Project overview after the
+ * conversation lost its project roots — would otherwise open a blank panel.
+ */
+export function isDrawableDockPanel(
+  panelId: string,
+  isKnown: (panelId: string) => boolean,
+  available: readonly string[] | undefined
+): boolean {
+  return isKnown(panelId) && (available === undefined || available.includes(panelId))
+}
+
 /** The strip for `sessionId` as it is drawn, read outside React. */
 export function drawnDockTabs(sessionId: string, sessionScopeKey: string): DockTabKey[] {
-  const layout = useContextWorkbenchStore.getState().layouts[sessionScopeKey]
+  const workbench = useContextWorkbenchStore.getState()
+  const layout = workbench.layouts[sessionScopeKey]
+  const available = workbench.availablePanelIds[sessionScopeKey]
   const artifacts = useArtifactStore.getState()
   const tabs = useDockTabsStore.getState()
   return orderDockTabs(
@@ -157,7 +186,7 @@ export function drawnDockTabs(sessionId: string, sessionScopeKey: string): DockT
       activePanelId: layout?.activePanelId ?? null,
       openArtifactIds: selectOpenArtifactIds(artifacts, sessionId),
       artifactExists: (id) => Boolean(artifacts.artifacts[id]),
-      isKnownPanel: isKnownDockPanel,
+      isKnownPanel: (id) => isDrawableDockPanel(id, isKnownDockPanel, available),
       pageTabIds: selectPageTabs(tabs, sessionId).map((tab) => tab.id),
       documentTabIds: selectDockDocuments(useDockDocumentsStore.getState(), sessionId).map(
         (tab) => tab.id
@@ -273,6 +302,9 @@ export function DockTabStrip({
   const { copy } = useCopy()
   const panelInfo = usePanelInfo()
   const layout = useContextWorkbenchStore((state) => state.layouts[sessionScopeKey])
+  const availablePanelIds = useContextWorkbenchStore(
+    (state) => state.availablePanelIds[sessionScopeKey]
+  )
   const navigatePanel = useContextWorkbenchStore((state) => state.navigatePanel)
   const closePanelTab = useContextWorkbenchStore((state) => state.closePanelTab)
   const artifacts = useArtifactStore((state) => state.artifacts)
@@ -315,7 +347,8 @@ export function DockTabStrip({
           activePanelId,
           openArtifactIds,
           artifactExists: (id) => Boolean(artifacts[id]),
-          isKnownPanel: (id) => panelInfo(id) !== null,
+          isKnownPanel: (id) =>
+            isDrawableDockPanel(id, (panelId) => panelInfo(panelId) !== null, availablePanelIds),
           pageTabIds: pageTabs.map((tab) => tab.id),
           documentTabIds: documentTabs.map((tab) => tab.id),
         })
@@ -324,6 +357,7 @@ export function DockTabStrip({
       activatedPanelIds,
       activePanelId,
       artifacts,
+      availablePanelIds,
       openArtifactIds,
       pageTabs,
       documentTabs,
@@ -375,11 +409,22 @@ export function DockTabStrip({
     } else activatePanel(tab.panelId)
   }
 
+  // Honour a focus request once this strip is the one on screen: activating a
+  // tab can swap the dock's surface, and only the strip of the surface that
+  // ends up visible may take focus (see `lib/artifacts/dock-tab-focus.ts`).
+  useLayoutEffect(() => {
+    takeDockTabFocus(sessionScopeKey, (key) => tabRefs.current.get(key as DockTabKey))
+  })
+
   const close = (key: DockTabKey) => {
     const index = keys.indexOf(key)
     const remaining = keys.filter((candidate) => candidate !== key)
+    // Closing removes the element that has focus, which dropped it to <body>.
+    // When the close came from the strip (Delete, the tab's X, middle-click),
+    // focus follows the tab that is selected afterwards.
+    const focusInStrip = Boolean(strip?.contains(document.activeElement))
     const tab = parseDockTabKey(key)
-    if (tab.kind === "artifact") closeArtifact(tab.artifactId)
+    if (tab.kind === "artifact") closeArtifact(tab.artifactId, sessionId)
     else if (tab.kind === "doc") {
       if (sessionId) closeDockDocument(sessionId, tab.docTabId)
     } else if (tab.kind === "page") {
@@ -388,10 +433,13 @@ export function DockTabStrip({
     // Nothing left open in this task: the dock has nothing to show.
     if (remaining.length === 0) {
       setDockCollapsed(true)
+      if (focusInStrip) returnFocusFromDock()
       return
     }
     // The browser convention: the tab to the right takes over, else the left.
-    if (key === activeKey) activate(remaining[Math.min(index, remaining.length - 1)])
+    const next = key === activeKey ? remaining[Math.min(index, remaining.length - 1)] : activeKey
+    if (key === activeKey && next) activate(next)
+    if (focusInStrip && next) requestDockTabFocus(sessionScopeKey, next)
   }
 
   const goToSource = (messageId: string) => {
@@ -401,7 +449,9 @@ export function DockTabStrip({
 
   const focusTab = (key: DockTabKey | undefined) => {
     if (!key) return
-    tabRefs.current.get(key)?.focus()
+    // Requested rather than focused here: crossing between a panel tab and an
+    // artifact tab swaps the surface, and this strip is then the hidden copy.
+    requestDockTabFocus(sessionScopeKey, key)
     activate(key)
   }
 

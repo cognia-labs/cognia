@@ -58,7 +58,6 @@ describe("useArtifactDockShortcuts", () => {
     __resetContextKeysForTesting()
     act(() => {
       useArtifactDockLayoutStore.getState().resetLayout()
-      useArtifactStore.setState({ panelOpen: false, panelView: "artifact" })
     })
   })
 
@@ -117,12 +116,12 @@ describe("useArtifactDockShortcuts", () => {
     // panel while raising `mobileSheetOpen`, which the narrow dock reconciles
     // straight back into re-opening — so the Sheet could never be dismissed.
     act(() => useArtifactDockLayoutStore.getState().setWorkspaceSurfaceActive(true))
-    act(() => useArtifactStore.getState().openPanel("artifact"))
+    act(() => useArtifactStore.getState().openPanel())
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
     mount()
 
     act(() => pressMod(document.body, "j"))
 
-    expect(useArtifactStore.getState().panelOpen).toBe(false)
     expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(false)
   })
 
@@ -133,8 +132,20 @@ describe("useArtifactDockShortcuts", () => {
 
     act(() => pressMod(document.body, "j"))
 
-    expect(useArtifactStore.getState().panelOpen).toBe(true)
-    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+    // The Sheet is what a tablet shows; the shortcut used to flip a flag the
+    // Sheet does not read and leave it shut (C05).
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
+  })
+
+  it("on tablet: Cmd+J opens the Sheet when a restored desktop state says the dock is open (C05)", () => {
+    useBreakpointMock.mockReturnValue("tablet")
+    act(() => useArtifactDockLayoutStore.getState().restoreDock({ open: true, dismissed: false }))
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(false)
+    mount()
+
+    act(() => pressMod(document.body, "j"))
+
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
   })
 
   it("on narrow Artifact mode: Cmd+J opens and closes the Artifact Sheet", () => {
@@ -142,11 +153,10 @@ describe("useArtifactDockShortcuts", () => {
     mount()
 
     act(() => pressMod(document.body, "j"))
-    expect(useArtifactStore.getState().panelOpen).toBe(true)
-    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(false)
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
 
     act(() => pressMod(document.body, "j"))
-    expect(useArtifactStore.getState().panelOpen).toBe(false)
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(false)
   })
 
   it("preventDefault only when matched", () => {

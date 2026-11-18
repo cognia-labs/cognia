@@ -110,8 +110,6 @@ beforeEach(() => {
     },
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: true,
-    panelView: "artifact",
   })
 })
 
@@ -581,7 +579,6 @@ describe("useArtifactPanelState — extra coverage", () => {
       expect(useArtifactStore.getState().activeCanvasId).toBe(firstDocId)
       expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
       expect(Object.keys(useArtifactStore.getState().canvasDocuments)).toHaveLength(1)
-      expect(useArtifactStore.getState().panelView).toBe("canvas")
     })
 
     it.each([true, false])(

@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { act, render, screen, fireEvent } from "@testing-library/react"
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -92,8 +92,6 @@ beforeEach(() => {
     },
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: true,
-    panelView: "artifact",
   })
 })
 
@@ -140,24 +138,14 @@ describe("ArtifactPanel", () => {
     expect(await screen.findByRole("menuitem", { name: "browser.title" })).toBeInTheDocument()
   })
 
-  it("takes its visibility from mobileSheetOpen, not from panelOpen", () => {
+  it("takes its visibility from mobileSheetOpen", () => {
     makeArtifact()
     const { rerender } = render(<ArtifactPanel />)
     expect(screen.getByTestId("context-workbench-mobile-sheet")).toHaveAttribute(
       "data-state",
       "open"
     )
-
-    // `panelOpen` is an engagement flag for the panel's keyboard shortcuts, not
-    // a visibility flag. It used to gate this Sheet, and because `createArtifact`
-    // and `setActiveArtifact` raise it unconditionally, every new artifact threw
-    // a 92dvh modal over the conversation — `userDismissed` never got a say.
-    act(() => useArtifactStore.setState({ panelOpen: false }))
     rerender(<ArtifactPanel />)
-    expect(screen.getByTestId("context-workbench-mobile-sheet")).toHaveAttribute(
-      "data-state",
-      "open"
-    )
 
     act(() => useArtifactDockLayoutStore.setState({ mobileSheetOpen: false }))
     rerender(<ArtifactPanel />)
@@ -221,24 +209,32 @@ describe("ArtifactPanel", () => {
   it("dismissing the drawer closes the artifact panel", async () => {
     makeArtifact()
     render(<ArtifactPanel />)
-    expect(useArtifactStore.getState().panelOpen).toBe(true)
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
 
     // The rail's trailing button is the drawer's dismiss affordance here — a
     // drawer has no collapsed strip to shrink into, which is why it reads
     // "Close" rather than "Collapse" on this placement.
     fireEvent.click(await screen.findByRole("button", { name: "contextWorkbench.actions.close" }))
 
-    expect(useArtifactStore.getState().panelOpen).toBe(false)
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(false)
   })
 
-  it("clicking the close action closes the panel", async () => {
+  it("the artifact toolbar's Close closes the drawer itself (A08)", async () => {
     makeArtifact()
     render(<ArtifactPanel />)
     // Sheet portal renders close-buttons asynchronously into document.body;
     // pick the first matching button.
     const buttons = await screen.findAllByTestId("artifact-close")
     fireEvent.click(buttons[0])
-    expect(useArtifactStore.getState().panelOpen).toBe(false)
+    // It used to lower only the artifact store's `panelOpen`, which neither
+    // host reads, so the Sheet stayed open.
+    expect(useArtifactDockLayoutStore.getState()).toMatchObject({
+      mobileSheetOpen: false,
+      dockCollapsed: true,
+    })
+    await waitFor(() =>
+      expect(screen.queryByTestId("context-workbench-mobile-sheet")).not.toBeInTheDocument()
+    )
   })
 
   it("overrides the drawer slide to a snappier pace that honors motion-speed (not vaul's 500ms default)", async () => {

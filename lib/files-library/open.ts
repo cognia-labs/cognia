@@ -71,7 +71,7 @@ export async function openArtifactInSession(
   useChatStore.getState().setActiveSession(sessionId)
   useUIStore.getState().setSelectedGuild(guildFromSession(session))
   useArtifactStore.getState().setActiveArtifact(artifactId, sessionId)
-  useArtifactStore.getState().openPanel("artifact")
+  useArtifactStore.getState().openPanel()
   navigator.push("/")
   return true
 }

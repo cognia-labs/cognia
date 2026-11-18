@@ -6,6 +6,11 @@ import { render, screen, fireEvent, act } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import { ArtifactDockToggle } from "./artifact-dock-toggle"
+import { useBreakpoint } from "@/hooks/ui"
+import { __resetDockTabFocusForTests, returnFocusFromDock } from "@/lib/artifacts/dock-tab-focus"
+
+jest.mock("@/hooks/ui", () => ({ useBreakpoint: jest.fn(() => "desktop") }))
+const useBreakpointMock = useBreakpoint as jest.MockedFunction<typeof useBreakpoint>
 
 const messages = {
   chat: {
@@ -26,6 +31,9 @@ function renderToggle() {
 }
 
 beforeEach(() => {
+  useBreakpointMock.mockReturnValue("desktop")
+  __resetDockTabFocusForTests()
+  act(() => useArtifactDockLayoutStore.setState({ mobileSheetOpen: false }))
   act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(true))
   act(() => useArtifactDockLayoutStore.setState({ unreadArtifact: false }))
 })
@@ -71,5 +79,38 @@ describe("ArtifactDockToggle", () => {
     renderToggle()
 
     expect(screen.queryByTestId("chat-artifact-dock-unread")).toBeNull()
+  })
+
+  it("follows the Sheet below desktop, opening it in one press (C05)", () => {
+    useBreakpointMock.mockReturnValue("tablet")
+    // The desktop dock was left open; the Sheet itself is shut.
+    act(() => useArtifactDockLayoutStore.setState({ dockCollapsed: false, mobileSheetOpen: false }))
+    renderToggle()
+    const button = screen.getByTestId("chat-artifact-dock-toggle")
+    // It used to read `dockCollapsed` and claim "Hide" over a closed Sheet.
+    expect(button).toHaveAttribute("aria-pressed", "false")
+    expect(button).toHaveAccessibleName("Show artifacts panel")
+
+    fireEvent.click(button)
+
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
+    expect(button).toHaveAttribute("aria-pressed", "true")
+    expect(button).toHaveAccessibleName("Hide artifacts panel")
+
+    fireEvent.click(button)
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(false)
+  })
+
+  it("takes focus back when the dock it opened is closed from inside (A03)", () => {
+    renderToggle()
+    const button = screen.getByTestId("chat-artifact-dock-toggle")
+    expect(returnFocusFromDock()).toBe(true)
+    expect(button).toHaveFocus()
+  })
+
+  it("stops offering itself as a focus target once unmounted", () => {
+    const { unmount } = renderToggle()
+    unmount()
+    expect(returnFocusFromDock()).toBe(false)
   })
 })

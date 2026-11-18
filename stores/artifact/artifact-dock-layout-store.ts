@@ -234,6 +234,14 @@ export interface ArtifactDockLayoutState {
   /** Apply a width preset and ask the mounted dock to resize to it. */
   requestDockSize: (pct: number) => void
   toggleDock: () => void
+  /**
+   * The narrow-screen toggle: opens or closes the Sheet by what the Sheet is
+   * doing, not by `dockCollapsed`. The two disagree after a desktop-open state
+   * is restored (`restoreDock` never raises the Sheet), and toggling by
+   * `dockCollapsed` there "closed" a Sheet that was not showing, so the first
+   * tap did nothing.
+   */
+  toggleSheet: () => void
   setDockCollapsed: (collapsed: boolean) => void
   /**
    * Fold an *idle* dock away — one showing "No artifacts yet" for a
@@ -444,6 +452,17 @@ export const useArtifactDockLayoutStore = create<ArtifactDockLayoutState>()(
                 mobileSheetOpen: true,
               }
             : { dockCollapsed: true, userDismissed: true, mobileSheetOpen: false }
+        ),
+      toggleSheet: () =>
+        set((state) =>
+          state.mobileSheetOpen
+            ? { dockCollapsed: true, userDismissed: true, mobileSheetOpen: false }
+            : {
+                dockCollapsed: false,
+                userDismissed: false,
+                unreadArtifact: false,
+                mobileSheetOpen: true,
+              }
         ),
       setDockCollapsed: (collapsed) =>
         set(

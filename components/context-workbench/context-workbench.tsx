@@ -349,6 +349,16 @@ export interface ContextWorkbenchProps {
    */
   sessionScopeKey?: string
   /**
+   * Panel ids the scope keeps that this host does not draw: the phone and
+   * tablet Sheet has no New Tab page, which only the desktop dock's strip can
+   * reach (ADR-0214). The narrow host shares the conversation's scope with the
+   * desktop dock, so reconciling against its own smaller set replaced a New Tab
+   * left in front on the desktop with its fallback, and the desktop came back on
+   * that fallback. A retained id stays in the store; while it is in front, this
+   * host shows its own first panel in its place without writing it.
+   */
+  retainedPanelIds?: readonly string[]
+  /**
    * Restore the host's own shell layout (width, collapsed state, sizing
    * profile) to its defaults. Surfaced in the header's layout menu.
    *
@@ -447,6 +457,13 @@ export interface ContextWorkbenchMobileDrawerProps extends Omit<
    */
   snapPoint?: number | string | null
   onSnapPointChange?: (snapPoint: number | string | null) => void
+  /**
+   * Where focus goes once the drawer closes. The drawer is opened from state,
+   * not from a trigger it owns, so without a host answer focus fell to
+   * `<body>` instead of back to the control that opened it. Call
+   * `event.preventDefault()` after moving focus.
+   */
+  onCloseAutoFocus?: (event: Event) => void
 }
 
 /**
@@ -483,6 +500,7 @@ export function ContextWorkbenchMobileDrawer({
   onOpenChange,
   snapPoint,
   onSnapPointChange,
+  onCloseAutoFocus,
   ...workbenchProps
 }: ContextWorkbenchMobileDrawerProps) {
   const t = useTranslations("contextWorkbench")
@@ -549,6 +567,7 @@ export function ContextWorkbenchMobileDrawer({
           paddingBottom: bottomReserve,
         }}
         data-testid="context-workbench-mobile-sheet"
+        onCloseAutoFocus={onCloseAutoFocus}
       >
         <DrawerHeader className="sr-only">
           <DrawerTitle>{t("mobileTitle")}</DrawerTitle>
@@ -711,6 +730,7 @@ function ContextWorkbenchView({
   headerLeading,
   resolvedMode,
   sessionScopeKey,
+  retainedPanelIds,
   onResetLayout,
   tabStrip = "internal",
   resourcePanelSwitcher = false,
@@ -790,7 +810,7 @@ function ContextWorkbenchView({
   const scopeKey = layoutScopeKey ?? `${workbenchInstanceId}::${getContextResourceKey(resource)}`
   const panelHistory = usePanelHistory(scopeKey)
   const persistedLayout = useContextWorkbenchStore((state) => state.layouts[scopeKey])
-  const layout = persistedLayout ?? FALLBACK_CONTEXT_WORKBENCH_LAYOUT
+  const storedLayout = persistedLayout ?? FALLBACK_CONTEXT_WORKBENCH_LAYOUT
   const navigationStyle = useContextWorkbenchStore((state) => state.navigationStyle)
   const setNavigationStyle = useContextWorkbenchStore((state) => state.setNavigationStyle)
   const closePanelTab = useContextWorkbenchStore((state) => state.closePanelTab)
@@ -803,7 +823,7 @@ function ContextWorkbenchView({
       panelTabsRef.current
         ?.querySelector<HTMLElement>('[aria-selected="true"]')
         ?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
-  }, [useTabs, layout.activePanelId])
+  }, [useTabs, storedLayout.activePanelId])
   const navigatePanel = useContextWorkbenchStore((state) => state.navigatePanel)
   const reconcilePanels = useContextWorkbenchStore((state) => state.reconcilePanels)
   const markPanelActivated = useContextWorkbenchStore((state) => state.markPanelActivated)
@@ -850,7 +870,7 @@ function ContextWorkbenchView({
    * button does, whether re-clicking the active activity closes or opens —
    * asks this rather than either source, so the two can never disagree.
    */
-  const bodyHidden = railOnly || layout.mode === "collapsed"
+  const bodyHidden = railOnly || storedLayout.mode === "collapsed"
 
   // Held in a ref so the host registration only churns on resource/scope
   // changes: a host passing an inline arrow would otherwise re-register on
@@ -921,7 +941,7 @@ function ContextWorkbenchView({
   )
 
   useEffect(() => {
-    if (layout.mode !== "focus") return
+    if (storedLayout.mode !== "focus") return
     const section = sectionRef.current
     if (!section) return
     previousFocusRef.current = document.activeElement as HTMLElement | null
@@ -961,10 +981,10 @@ function ContextWorkbenchView({
       requestAnimationFrame(() => window.dispatchEvent(new Event("resize")))
       previousFocusRef.current?.focus()
     }
-  }, [layout.mode, onExitFocus])
+  }, [storedLayout.mode, onExitFocus])
 
   useEffect(() => {
-    if (layout.mode !== "focus") return
+    if (storedLayout.mode !== "focus") return
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       event.preventDefault()
@@ -972,7 +992,7 @@ function ContextWorkbenchView({
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [layout.mode, scopeKey, setMode])
+  }, [storedLayout.mode, scopeKey, setMode])
 
   const registeredPanels = contextPanelRegistry.resolve(resource)
   const resolvedPanels = useMemo(
@@ -991,6 +1011,26 @@ function ContextWorkbenchView({
       ),
     [panels, registeredPanels, resource]
   )
+  const retainedKey = (retainedPanelIds ?? []).join("\u0000")
+  // What this render shows in front. A retained panel this host cannot draw is
+  // projected onto the host's first panel — a projection, like the split and
+  // mode narrowings below: the store keeps the retained id for the host that
+  // draws it.
+  const projectedActivePanelId =
+    storedLayout.activePanelId &&
+    retainedKey.split("\u0000").includes(storedLayout.activePanelId) &&
+    !resolvedPanels.some((panel) => panel.id === storedLayout.activePanelId)
+      ? (resolvedPanels[0]?.id ?? null)
+      : storedLayout.activePanelId
+  // Memoised: the layout is part of the workbench context value.
+  const layout = useMemo(
+    () =>
+      projectedActivePanelId === storedLayout.activePanelId
+        ? storedLayout
+        : { ...storedLayout, activePanelId: projectedActivePanelId },
+    [projectedActivePanelId, storedLayout]
+  )
+  const activeIsProjected = layout !== storedLayout
   const leadingKey = (leadingActivities ?? []).join("\u0000")
   /** Position among the host's pinned activities, or -1 for every other one. */
   const leadingRank = useCallback(
@@ -1151,8 +1191,9 @@ function ContextWorkbenchView({
   const resolvedPanelKey = resolvedPanels.map((panel) => panel.id).join("\u0000")
   useEffect(() => {
     const panelIds = resolvedPanelKey ? resolvedPanelKey.split("\u0000") : []
-    reconcilePanels(scopeKey, panelIds, panelIds[0])
-  }, [reconcilePanels, resolvedPanelKey, scopeKey])
+    const retained = retainedKey ? retainedKey.split("\u0000") : []
+    reconcilePanels(scopeKey, [...panelIds, ...retained], panelIds[0])
+  }, [reconcilePanels, resolvedPanelKey, retainedKey, scopeKey])
 
   // Publish the resolved set so surfaces outside the workbench can name a panel
   // — the command palette and the activity shortcuts both need it, and native
@@ -1209,7 +1250,9 @@ function ContextWorkbenchView({
     // Record this navigation for the back/forward history.
     pushPanelHistory(scopeKey, activePanel.id)
 
-    if (!persistedLayout?.activatedPanelIds.includes(activePanel.id)) {
+    // A projected panel stands in for a retained one; writing it in front
+    // would replace the retained panel this projection exists to keep.
+    if (!activeIsProjected && !persistedLayout?.activatedPanelIds.includes(activePanel.id)) {
       navigatePanel(scopeKey, activePanel.id, layout.mode === "collapsed" ? "narrow" : layout.mode)
     }
     // Catches the routes that never touch `handleActivate` — a one-shot reveal
@@ -1219,6 +1262,7 @@ function ContextWorkbenchView({
     }
   }, [
     activePanel,
+    activeIsProjected,
     layout.mode,
     markPanelActivated,
     navigatePanel,

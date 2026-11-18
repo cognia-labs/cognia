@@ -13,6 +13,7 @@ import { useArtifactPanelState } from "@/hooks/artifacts/use-artifact-panel"
 import { ArtifactContextWorkbench, SessionContextWorkbench } from "./artifact-dock"
 import { useActiveArtifactId } from "@/hooks/artifacts/use-session-artifacts"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
+import { returnFocusFromDock } from "@/lib/artifacts/dock-tab-focus"
 
 export function ArtifactPanel() {
   const { panelMode, closePanel } = useArtifactPanelState()
@@ -23,16 +24,17 @@ export function ArtifactPanel() {
   // straight from the artifact store, so a new artifact threw a 92dvh modal
   // over the conversation even right after the user swiped it away.
   const open = useArtifactDockLayoutStore((state) => state.mobileSheetOpen)
-  const setDockCollapsed = useArtifactDockLayoutStore((state) => state.setDockCollapsed)
   const host = {
     open,
     // Swiping the Sheet away IS this platform's dismissal gesture, so record it
-    // the same way the desktop collapse does. `setDockCollapsed(true)` lowers
-    // `mobileSheetOpen` with it, which is what actually closes the Sheet.
+    // the same way the desktop collapse does. `closePanel` collapses the dock,
+    // which lowers `mobileSheetOpen` with it and actually closes the Sheet.
     onOpenChange: (next: boolean) => {
-      if (next) return
-      setDockCollapsed(true)
-      closePanel()
+      if (!next) closePanel()
+    },
+    // Back to the toggle that opened the Sheet; Radix has no trigger to aim at.
+    onCloseAutoFocus: (event: Event) => {
+      if (returnFocusFromDock()) event.preventDefault()
     },
     panelMode,
   }

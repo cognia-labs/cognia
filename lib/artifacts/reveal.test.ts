@@ -13,8 +13,6 @@ afterEach(() => {
     activeArtifactIdBySession: {},
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: false,
-    panelView: "artifact",
   })
   useArtifactDockLayoutStore.getState().resetLayout()
   useUIStore.getState().setSelectedGuild({ kind: "dm" })
@@ -33,14 +31,12 @@ describe("revealArtifactInWorkspace", () => {
       title: "t",
       content: "console.log(1)",
     })
-    // createArtifact already opens the panel; clear it to make the assertion crisp.
-    useArtifactStore.setState({ panelOpen: false, activeArtifactIdBySession: {} })
+    useArtifactStore.setState({ activeArtifactIdBySession: {} })
 
     const revealed = revealArtifactInWorkspace(artifact.id)
     expect(revealed?.id).toBe(artifact.id)
     expect(selectActiveArtifactId(useArtifactStore.getState(), "s")).toBe(artifact.id)
-    expect(useArtifactStore.getState().panelOpen).toBe(true)
-    expect(useArtifactStore.getState().panelView).toBe("artifact")
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
   })
 
   it("expands the docked panel and asks the workbench for the preview panel", () => {

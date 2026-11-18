@@ -78,8 +78,6 @@ beforeEach(() => {
     },
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: true,
-    panelView: "artifact",
   })
 })
 

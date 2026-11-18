@@ -294,8 +294,6 @@ beforeEach(() => {
     useArtifactStore.setState({
       activeArtifactIdBySession: {},
       openArtifactIdsBySession: {},
-      panelOpen: false,
-      panelView: "artifact",
       pendingReviews: {},
     })
   })

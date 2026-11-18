@@ -3324,3 +3324,91 @@ describe("ContextWorkbench — memoised", () => {
     expect(renders).toBe(settled)
   })
 })
+
+describe("ContextWorkbench — panels a host keeps without drawing (C06)", () => {
+  const SCOPE = "test:retained"
+  const retainedPanels: ContextPanelDefinition[] = [
+    {
+      id: "comments",
+      activity: "comments",
+      labelKey: "contextWorkbench.panels.comments",
+      appliesTo: () => true,
+      retention: "stateful",
+      renderer: () => <div data-testid="comments-body" />,
+    },
+    {
+      id: "review",
+      activity: "review",
+      labelKey: "contextWorkbench.panels.review",
+      appliesTo: () => true,
+      retention: "stateful",
+      renderer: () => <div data-testid="review-body" />,
+    },
+  ]
+
+  function seed(activePanelId: string) {
+    useContextWorkbenchStore.setState({
+      navigationStyle: "tabs",
+      layouts: {
+        [SCOPE]: {
+          mode: "narrow",
+          width: 360,
+          panelWidths: {},
+          activePanelId,
+          userPinned: false,
+          activatedPanelIds: [activePanelId],
+          pendingPanelIds: [],
+          lastUsedAt: Date.now(),
+          splitPanelId: null,
+          splitRatio: 50,
+        },
+      },
+    })
+  }
+
+  function renderHost(retainedPanelIds?: string[]) {
+    return render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ContextWorkbench
+          workbenchInstanceId="window-a"
+          resource={resource}
+          panels={retainedPanels}
+          layoutScopeKey={SCOPE}
+          retainedPanelIds={retainedPanelIds}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  beforeEach(() => {
+    resetPanelHistoryForTesting()
+    useSettingsStore.setState({ settings: {} as never })
+  })
+
+  it("shows its own first panel in place of a retained one, leaving the store alone", () => {
+    seed("new-tab")
+    renderHost(["new-tab"])
+
+    expect(screen.getByTestId("comments-body")).toBeInTheDocument()
+    // The desktop dock comes back on the New Tab page it left in front.
+    expect(useContextWorkbenchStore.getState().layouts[SCOPE]?.activePanelId).toBe("new-tab")
+  })
+
+  it("replaces a panel it does not draw when nothing asks to keep it", () => {
+    seed("new-tab")
+    renderHost()
+
+    expect(useContextWorkbenchStore.getState().layouts[SCOPE]?.activePanelId).toBe("comments")
+  })
+
+  it("lets an explicit choice replace the retained panel", () => {
+    seed("new-tab")
+    useContextWorkbenchStore.setState({ navigationStyle: "rail" })
+    renderHost(["new-tab"])
+
+    fireEvent.click(screen.getByRole("button", { name: "contextWorkbench.panels.review" }))
+
+    expect(screen.getByTestId("review-body")).toBeInTheDocument()
+    expect(useContextWorkbenchStore.getState().layouts[SCOPE]?.activePanelId).toBe("review")
+  })
+})

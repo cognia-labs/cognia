@@ -42,7 +42,6 @@ const mockArtifacts: Record<
   }
 > = {}
 let mockActiveArtifactId: string | null = null
-let mockPanelView: string | null = null
 let mockPanelOpen = false
 const mockSubscribers: Array<(state: unknown) => void> = []
 const mockSaveArtifactVersion = jest.fn()
@@ -80,16 +79,11 @@ jest.mock("@/stores/artifact/artifact-store", () => ({
       setActiveArtifact: jest.fn((id) => {
         mockActiveArtifactId = id
       }),
-      setPanelView: jest.fn((view) => {
-        mockPanelView = view
-      }),
-      openPanel: jest.fn((view) => {
+      openPanel: jest.fn(() => {
         mockPanelOpen = true
-        mockPanelView = view
       }),
       closePanel: jest.fn(() => {
         mockPanelOpen = false
-        mockPanelView = null
       }),
     })),
     subscribe: jest.fn((callback) => {
@@ -126,16 +120,11 @@ jest.mock("@/stores", () => ({
       setActiveArtifact: jest.fn((id) => {
         mockActiveArtifactId = id
       }),
-      setPanelView: jest.fn((view) => {
-        mockPanelView = view
-      }),
-      openPanel: jest.fn((view) => {
+      openPanel: jest.fn(() => {
         mockPanelOpen = true
-        mockPanelView = view
       }),
       closePanel: jest.fn(() => {
         mockPanelOpen = false
-        mockPanelView = null
       }),
     })),
   },
@@ -190,7 +179,6 @@ describe("Artifact API", () => {
     // Clear state
     Object.keys(mockArtifacts).forEach((key) => delete mockArtifacts[key])
     mockActiveArtifactId = null
-    mockPanelView = null
     mockPanelOpen = false
     mockSubscribers.length = 0
     jest.clearAllMocks()
@@ -599,16 +587,15 @@ describe("Artifact API", () => {
 
       expect(mockActiveArtifactId).toBe("artifact-to-open")
       expect(mockPanelOpen).toBe(true)
-      expect(mockPanelView).toBe("artifact")
     })
 
     it("should close artifact panel", () => {
-      mockPanelView = "artifact"
+      mockPanelOpen = true
 
       const api = createArtifactAPI(testPluginId)
       api.closeArtifact()
 
-      expect(mockPanelView).toBeNull()
+      expect(mockPanelOpen).toBe(false)
     })
   })
 

@@ -5,6 +5,7 @@
 
 import "fake-indexeddb/auto"
 import { createCanvasAPI } from "./canvas-api"
+import { useUIStore } from "@/stores/ui"
 import { initializePluginPermissions } from "./permission-api"
 
 // Cold Dexie delete + reseed in beforeEach can exceed the default 5s hook
@@ -48,9 +49,6 @@ const mockCanvasDocuments: Record<
   }
 > = {}
 let mockActiveCanvasId: string | null = null
-// Written by the store mock's `setPanelView` so `openDocument` exercises the
-// real path; nothing asserts on it directly.
-let _mockPanelView: string | null = null
 const mockSubscribers: Array<(state: unknown) => void> = []
 
 function clampOffset(value: number, content: string): number {
@@ -212,9 +210,6 @@ jest.mock("@/stores/artifact/artifact-store", () => ({
       setActiveCanvas: jest.fn((id) => {
         mockActiveCanvasId = id
       }),
-      setPanelView: jest.fn((view) => {
-        _mockPanelView = view
-      }),
       saveCanvasVersion: jest.fn((id, description) => {
         const versionId = `version-${Date.now()}`
         if (mockCanvasDocuments[id]) {
@@ -249,7 +244,6 @@ describe("Canvas API", () => {
     // Clear state
     Object.keys(mockCanvasDocuments).forEach((key) => delete mockCanvasDocuments[key])
     mockActiveCanvasId = null
-    _mockPanelView = null
     mockActiveEditorContext = null
     mockSubscribers.length = 0
   })
@@ -454,11 +448,33 @@ describe("Canvas API", () => {
   })
 
   describe("openDocument / closeCanvas", () => {
-    it("should open a document", () => {
+    it("should open a document on the Canvas surface", () => {
+      mockCanvasDocuments["doc-to-open"] = {
+        id: "doc-to-open",
+        sessionId: "session-1",
+        title: "Open me",
+        content: "",
+        type: "text",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        versions: [],
+      } as never
+      useUIStore.getState().setSelectedGuild({ kind: "dm" })
       const api = createCanvasAPI(testPluginId)
       api.openDocument("doc-to-open")
 
       expect(mockActiveCanvasId).toBe("doc-to-open")
+      // It used to set a `panelView` flag nothing read, so nothing showed.
+      expect(useUIStore.getState().selectedGuild).toEqual({ kind: "canvas" })
+    })
+
+    it("does not open a document this workspace cannot show", () => {
+      useUIStore.getState().setSelectedGuild({ kind: "dm" })
+      const api = createCanvasAPI(testPluginId)
+      api.openDocument("not-here")
+
+      expect(mockActiveCanvasId).toBeNull()
+      expect(useUIStore.getState().selectedGuild).toEqual({ kind: "dm" })
     })
 
     it("should close canvas", () => {

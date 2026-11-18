@@ -24,6 +24,7 @@ import { disposeCanvasDocument } from "@/lib/canvas/document-disposal"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useChatStore } from "@/stores/chat"
 import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
+import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import { registerProjectBucketPurger } from "@/lib/project/project-bucket-purge"
 import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
 // Pure diff → hunk → apply engine (no `ai`/provider imports — safe for this
@@ -772,22 +773,6 @@ interface ArtifactState {
    * never evict another one's tabs.
    */
   openArtifactIdsBySession: Record<string, string[]>
-
-  // Panel state
-  /**
-   * The artifact surface is engaged — it drives the panel's keyboard shortcuts
-   * (Escape / ⌘S / ⌘E in `useArtifactPanelState`).
-   *
-   * **Not a visibility flag.** The narrow-screen Sheet's visibility belongs to
-   * `artifactDockLayoutStore.mobileSheetOpen` alone, which is also the only
-   * field that can see `userDismissed`. This used to double as that flag, and
-   * because `createArtifact` / `setActiveArtifact` raise it unconditionally,
-   * every new artifact threw a 92dvh Sheet over the conversation — including
-   * immediately after the user swiped it away.
-   */
-  panelOpen: boolean
-  /** Which resource surface the artifact panel is bound to. */
-  panelView: "artifact" | "canvas"
 }
 
 interface ArtifactActions {
@@ -820,16 +805,23 @@ interface ArtifactActions {
   ) => void
   deleteArtifact: (id: string) => void
   /**
-   * Drop an artifact's tab. When it was the active one, activate its neighbour
-   * so the dock never lands on an empty surface with tabs still showing.
+   * Drop an artifact's tab from one conversation's dock. When it was the active
+   * one, activate its neighbour so the dock never lands on an empty surface
+   * with tabs still showing.
+   *
+   * `sessionId` is the conversation whose strip holds the tab, resolved like
+   * `setActiveArtifact`'s: the argument, else the conversation on screen, else
+   * the artifact's own. An artifact can be open in several conversations, so
+   * its origin is not where every tab of it lives.
    */
-  closeArtifact: (id: string) => void
+  closeArtifact: (id: string, sessionId?: string | null) => void
   /**
    * Move an open tab to a new position (drag-reorder in the tab strip).
    * Only touches `openArtifactIds` — NOT `artifactWorkspace.recentArtifactIds`,
-   * which is MRU history, not tab order.
+   * which is MRU history, not tab order. `sessionId` resolves as for
+   * `closeArtifact`.
    */
-  reorderOpenArtifact: (id: string, toIndex: number) => void
+  reorderOpenArtifact: (id: string, toIndex: number, sessionId?: string | null) => void
   /**
    * Drop every artifact + canvas document owned by a workspace. Called by
    * `deleteProjectCascade` when a project is deleted (Workspace isolation).
@@ -1056,9 +1048,14 @@ interface ArtifactActions {
   ) => { v1: string; v2: string } | null
 
   // Panel actions
-  openPanel: (view?: "artifact" | "canvas") => void
+  /**
+   * Put the artifact surface on screen (the desktop dock and the narrow Sheet
+   * alike), first restoring the artifact the workspace route was launched
+   * from when its conversation has none active.
+   */
+  openPanel: () => void
+  /** Take the artifact surface off screen, recorded as the user's dismissal. */
   closePanel: () => void
-  setPanelView: (view: "artifact" | "canvas") => void
 
   // Utility
   /**
@@ -1088,8 +1085,6 @@ const initialState: ArtifactState = {
   reviewReceipts: [],
   canvasDocuments: {},
   activeCanvasId: null,
-  panelOpen: false,
-  panelView: "artifact",
 }
 
 export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
@@ -1134,8 +1129,6 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
               artifact.id
             ),
           },
-          panelOpen: true,
-          panelView: "artifact",
         }))
 
         getPluginEventHooks().dispatchArtifactCreate(artifact)
@@ -1293,9 +1286,11 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         })
       },
 
-      closeArtifact: (id) => {
+      closeArtifact: (id, sessionId) => {
         set((state) => {
-          const sessionKey = artifactSessionKey(state.artifacts[id]?.sessionId)
+          const sessionKey = artifactSessionKey(
+            sessionId ?? focusedSessionId() ?? state.artifacts[id]?.sessionId
+          )
           const current = state.openArtifactIdsBySession[sessionKey] ?? []
           const openArtifactIds = current.filter((openId) => openId !== id)
           if (openArtifactIds.length === current.length) return state
@@ -1323,9 +1318,11 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         })
       },
 
-      reorderOpenArtifact: (id, toIndex) => {
+      reorderOpenArtifact: (id, toIndex, sessionId) => {
         set((state) => {
-          const sessionKey = artifactSessionKey(state.artifacts[id]?.sessionId)
+          const sessionKey = artifactSessionKey(
+            sessionId ?? focusedSessionId() ?? state.artifacts[id]?.sessionId
+          )
           const current = state.openArtifactIdsBySession[sessionKey] ?? []
           const fromIndex = current.indexOf(id)
           if (fromIndex === -1) return state
@@ -1431,7 +1428,6 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
           }
         })
         if (id) {
-          set({ panelOpen: true, panelView: "artifact" })
           getPluginEventHooks().dispatchArtifactOpen(id)
         } else if (previousId) {
           getPluginEventHooks().dispatchArtifactClose()
@@ -1654,12 +1650,21 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
 
         useDockTabsStore.getState().setReviewAttention(artifact.sessionId, true)
 
+        const sessionKey = artifactSessionKey(artifact.sessionId)
         set((state) => ({
           pendingReviews: { ...state.pendingReviews, [id]: review },
           activeArtifactIdBySession: {
             ...state.activeArtifactIdBySession,
-            [artifactSessionKey(artifact.sessionId)]: id,
+            [sessionKey]: id,
           },
+          // The review is shown as this artifact's surface, so it needs this
+          // artifact's tab: a proposal on a closed artifact used to take over
+          // the dock with no tab selected, leaving nothing to switch back to.
+          openArtifactIdsBySession: withSessionTabs(
+            state.openArtifactIdsBySession,
+            sessionKey,
+            withOpenArtifact(state.openArtifactIdsBySession[sessionKey] ?? [], id)
+          ),
           // See `autoCreateFromContent`: raising the surface is the dock's call,
           // not this store's. `useDockAttentionSignal` watches the pending-review
           // count and raises it through `notifyNewArtifact`, which is also why a
@@ -2051,7 +2056,6 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
             artifacts,
             canvasDocuments: { ...state.canvasDocuments, [doc.id]: doc },
             activeCanvasId: doc.id,
-            panelView: "canvas",
           }
         })
 
@@ -2208,9 +2212,6 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
       setActiveCanvas: (id) => {
         const previousId = get().activeCanvasId
         set({ activeCanvasId: id })
-        if (id) {
-          set({ panelView: "canvas" })
-        }
         if (previousId !== id) {
           getPluginEventHooks().dispatchCanvasSwitch(id)
         }
@@ -2519,40 +2520,40 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
       },
 
       // Panel actions
-      openPanel: (view = "artifact") => {
+      openPanel: () => {
         set((state) => {
           // Restore the artifact the workspace route was launched from, into
           // *its own* session's slot — the return context records an id, and
           // the artifact it names is what says which conversation owns it.
           const restoredId = state.artifactWorkspace.returnContext?.activeArtifactId
           const restored = restoredId ? state.artifacts[restoredId] : undefined
-          if (view !== "artifact" || !restored) return { panelOpen: true, panelView: view }
+          if (!restored) return state
           const sessionKey = artifactSessionKey(restored.sessionId)
-          if (state.activeArtifactIdBySession[sessionKey]) {
-            return { panelOpen: true, panelView: view }
-          }
+          if (state.activeArtifactIdBySession[sessionKey]) return state
           return {
-            panelOpen: true,
-            panelView: view,
             activeArtifactIdBySession: {
               ...state.activeArtifactIdBySession,
               [sessionKey]: restoredId ?? null,
             },
           }
         })
-        getPluginEventHooks().dispatchArtifactOpen(view)
-        // Generic UI panel hook — fires for every right-rail panel open so
-        // plugins that don't need the artifact-vs-canvas distinction get a
-        // single event keyed by the active view.
-        getPluginEventHooks().dispatchPanelOpen(`artifact:${view}`)
+        // What is on screen belongs to the dock layout: the desktop dock and
+        // the narrow Sheet both follow it. This used to raise a `panelOpen`
+        // flag neither host read, so callers that relied on it alone (the
+        // Files page's "open in conversation") left a collapsed dock shut.
+        useArtifactDockLayoutStore.getState().setDockCollapsed(false)
+        getPluginEventHooks().dispatchArtifactOpen("artifact")
+        // Generic UI panel hook — fires for every right-rail panel open.
+        getPluginEventHooks().dispatchPanelOpen("artifact:artifact")
       },
       closePanel: () => {
-        const previousView = get().panelView
-        set({ panelOpen: false })
+        // A dismissal, recorded the way the hosts' own close controls record it.
+        // Lowering only the old `panelOpen` flag made the artifact toolbar's
+        // Close and the plugin API's `closeArtifact()` do nothing visible.
+        useArtifactDockLayoutStore.getState().setDockCollapsed(true)
         getPluginEventHooks().dispatchArtifactClose()
-        getPluginEventHooks().dispatchPanelClose(`artifact:${previousView}`)
+        getPluginEventHooks().dispatchPanelClose("artifact:artifact")
       },
-      setPanelView: (view) => set({ panelView: view }),
 
       // Batch operations
       deleteArtifacts: (ids) => {
@@ -2646,8 +2647,6 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
               duplicated.id
             ),
           },
-          panelOpen: true,
-          panelView: "artifact",
         }))
 
         getPluginEventHooks().dispatchArtifactCreate(duplicated)

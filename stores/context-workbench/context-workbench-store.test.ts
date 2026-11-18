@@ -124,6 +124,26 @@ describe("context workbench layout store", () => {
     expect(pruned["scope-204"]).toBeUndefined()
   })
 
+  it("records the panels a scope resolved, for the dock strip, without persisting them (C06)", () => {
+    const store = createContextWorkbenchStoreForTesting()
+    const key = "window-a::session:s1"
+    store.getState().reconcilePanels(key, ["new-tab", "artifacts"], "new-tab")
+    const recorded = store.getState().availablePanelIds[key]
+    expect(recorded).toEqual(["new-tab", "artifacts"])
+
+    // The same set again keeps the identity, so subscribers do not re-render.
+    store.getState().reconcilePanels(key, ["new-tab", "artifacts"], "new-tab")
+    expect(store.getState().availablePanelIds[key]).toBe(recorded)
+    store.getState().reconcilePanels(key, ["artifacts"], "artifacts")
+    expect(store.getState().availablePanelIds[key]).toEqual(["artifacts"])
+
+    const written = useContextWorkbenchStore.persist.getOptions().partialize?.({
+      ...useContextWorkbenchStore.getState(),
+      availablePanelIds: { [key]: ["artifacts"] },
+    }) as Record<string, unknown>
+    expect(written).not.toHaveProperty("availablePanelIds")
+  })
+
   it("never persists the focus takeover, in or out", () => {
     const options = useContextWorkbenchStore.persist.getOptions()
     const focused: Record<string, ContextWorkbenchLayout> = {

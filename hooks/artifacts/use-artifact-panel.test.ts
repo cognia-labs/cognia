@@ -108,8 +108,6 @@ beforeEach(() => {
     },
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: false,
-    panelView: "artifact",
   })
 })
 
@@ -128,7 +126,6 @@ describe("useArtifactPanelState", () => {
   it("B18 agent capture reveals a closed Code panel and mounts the React capturer", async () => {
     const a = makeArtifact()
     useArtifactStore.getState().updateArtifact(a.id, { type: "react" })
-    useArtifactStore.setState({ panelOpen: false })
     const artifact = useArtifactStore.getState().artifacts[a.id]
     jest.mocked(captureArtifactToPngBlob).mockImplementation(async () => {
       if (!hasArtifactFrameCapturer(a.id)) throw new ArtifactPreviewNotMountedError(a.id)

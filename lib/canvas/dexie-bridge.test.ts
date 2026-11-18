@@ -367,7 +367,7 @@ describe("startCanvasDexieBridge", () => {
     await new Promise((r) => setTimeout(r, DOCUMENT_SYNC_WAIT_MS))
     canvasDocumentsTable.bulkPut.mockClear()
 
-    artifactStore.setState({ panelOpen: true } as never)
+    artifactStore.setState({ reviewReceipts: [] } as never)
     await new Promise((r) => setTimeout(r, DOCUMENT_SYNC_WAIT_MS))
 
     expect(canvasDocumentsTable.bulkPut).not.toHaveBeenCalled()

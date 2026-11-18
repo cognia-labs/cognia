@@ -71,9 +71,16 @@ let workbenchLayouts: Record<string, unknown> = {}
 jest.mock("@/stores/context-workbench/context-workbench-store", () => ({
   ...jest.requireActual("@/stores/context-workbench/context-workbench-store"),
   useContextWorkbenchStore: Object.assign(
-    (selector: (state: unknown) => unknown) => selector({ layouts: workbenchLayouts }),
+    (selector: (state: unknown) => unknown) =>
+      selector({ layouts: workbenchLayouts, availablePanelIds: {} }),
     {
-      getState: () => ({ navigatePanel, smartReveal, closePanelTab, layouts: workbenchLayouts }),
+      getState: () => ({
+        navigatePanel,
+        smartReveal,
+        closePanelTab,
+        layouts: workbenchLayouts,
+        availablePanelIds: {},
+      }),
     }
   ),
 }))

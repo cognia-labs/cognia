@@ -10,6 +10,10 @@ import {
   presentDockTabs,
 } from "./dock-tab-strip"
 import { dockSessionScopeKey, openDockNewTab } from "@/lib/artifacts/dock-pages"
+import {
+  __resetDockTabFocusForTests,
+  registerDockFocusReturn,
+} from "@/lib/artifacts/dock-tab-focus"
 import { setLocalChromiumInstalled } from "@/lib/browser/agent-engine"
 import { openExternal } from "@/lib/tauri/opener"
 import { contextPanelRegistry } from "@/lib/context-workbench/panel-registry"
@@ -94,12 +98,13 @@ function tabNames() {
 beforeEach(() => {
   jest.clearAllMocks()
   localStorage.clear()
+  __resetDockTabFocusForTests()
   useChatStore.setState({ activeSessionId: SESSION })
   useDockTabsStore.setState({ bySession: {} })
   useDockDocumentsStore.setState({ bySession: {} })
   useArtifactDockLayoutStore.getState().resetLayout()
   act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(false))
-  useContextWorkbenchStore.setState({ layouts: {} })
+  useContextWorkbenchStore.setState({ layouts: {}, availablePanelIds: {} })
   setArtifacts([], null)
 })
 
@@ -272,6 +277,95 @@ describe("DockTabStrip", () => {
       screen.getByRole("button", { name: 'close{"name":"contextWorkbench.newTab.title"}' })
     )
     expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+  })
+
+  it("keeps keyboard focus on the tab that takes the front after Delete (A03)", async () => {
+    const user = userEvent.setup()
+    setPanels(["workspace"], "workspace")
+    setArtifacts(["a1", "a2"], "a1")
+    renderStrip()
+    screen.getByRole("tab", { name: "Report" }).focus()
+
+    await user.keyboard("{Delete}")
+
+    expect(useArtifactStore.getState().openArtifactIdsBySession[SESSION]).toEqual(["a2"])
+    // Focus used to fall to <body> with the removed element.
+    expect(screen.getByRole("tab", { name: "Notes" })).toHaveFocus()
+  })
+
+  it("keeps focus in the strip when Delete closes a tab that is not in front (A03)", async () => {
+    const user = userEvent.setup()
+    setPanels(["workspace"], "workspace")
+    setArtifacts(["a1", "a2"], "a1")
+    renderStrip()
+    screen.getByRole("tab", { name: "Notes" }).focus()
+
+    await user.keyboard("{Delete}")
+
+    expect(useArtifactStore.getState().activeArtifactIdBySession[SESSION]).toBe("a1")
+    expect(screen.getByRole("tab", { name: "Report" })).toHaveFocus()
+  })
+
+  it("returns focus to the dock toggle when Delete closes the last tab (A03)", async () => {
+    const user = userEvent.setup()
+    const toggle = document.createElement("button")
+    document.body.appendChild(toggle)
+    const dispose = registerDockFocusReturn(toggle)
+    setPanels(["new-tab"], "new-tab")
+    renderStrip()
+    screen.getByRole("tab", { name: "contextWorkbench.newTab.title" }).focus()
+
+    await user.keyboard("{Delete}")
+
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+    expect(toggle).toHaveFocus()
+    dispose()
+    toggle.remove()
+  })
+
+  it("leaves focus alone when a pointer closes a tab", () => {
+    const outside = document.createElement("button")
+    document.body.appendChild(outside)
+    setPanels(["workspace"], "workspace")
+    setArtifacts(["a1", "a2"], "a1")
+    renderStrip()
+    outside.focus()
+
+    fireEvent(
+      screen.getByRole("tab", { name: "Report" }),
+      new MouseEvent("auxclick", { bubbles: true, button: 1 })
+    )
+
+    expect(outside).toHaveFocus()
+    outside.remove()
+  })
+
+  it("leaves out a saved panel tab the conversation can no longer show (C06)", () => {
+    setPanels(["new-tab", "project-overview"], "new-tab")
+    // The session workbench resolved no Project overview: the project roots are gone.
+    act(() =>
+      useContextWorkbenchStore.setState({
+        availablePanelIds: { [SCOPE]: ["new-tab", "artifacts"] },
+      })
+    )
+    renderStrip()
+
+    expect(tabNames()).toEqual(["contextWorkbench.newTab.title"])
+    expect(drawnDockTabs(SESSION, SCOPE)).toEqual(["panel:new-tab"])
+
+    // Once it resolves again, the saved tab is back where it was.
+    act(() =>
+      useContextWorkbenchStore.setState({
+        availablePanelIds: { [SCOPE]: ["new-tab", "project-overview", "artifacts"] },
+      })
+    )
+    expect(tabNames()).toEqual(["contextWorkbench.newTab.title", "projectOverview.panelTitle"])
+  })
+
+  it("draws every known panel tab before the workbench has reconciled", () => {
+    setPanels(["new-tab", "project-overview"], "new-tab")
+    renderStrip()
+    expect(tabNames()).toEqual(["contextWorkbench.newTab.title", "projectOverview.panelTitle"])
   })
 
   it("opens the New Tab page from +, parking the artifact", () => {

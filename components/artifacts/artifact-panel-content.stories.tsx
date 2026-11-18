@@ -38,8 +38,6 @@ function seed(active: typeof artifact) {
   seedStore(useArtifactStore, {
     artifacts: { [active.id]: active },
     activeArtifactIdBySession: { [active.sessionId]: active.id },
-    panelOpen: true,
-    panelView: "artifact",
   })
 }
 

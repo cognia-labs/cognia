@@ -24,8 +24,6 @@ beforeEach(() => {
     },
     canvasDocuments: {},
     activeCanvasId: null,
-    panelOpen: false,
-    panelView: "artifact",
   })
   useChatStore.setState({ activeSessionId: "s1" })
 })

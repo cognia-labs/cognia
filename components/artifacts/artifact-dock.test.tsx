@@ -3,6 +3,7 @@
  */
 
 import { render, screen, fireEvent, act, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { useEffect } from "react"
 import {
   TitleBarOutletsProvider,
@@ -251,6 +252,7 @@ import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
 import { revealActiveWorkbenchPanel } from "@/lib/context-workbench/active-context"
 import { openDockPage } from "@/lib/artifacts/dock-pages"
 import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
+import { __resetDockTabFocusForTests } from "@/lib/artifacts/dock-tab-focus"
 
 /** Open a conversation tool the way a user does: `+`, then the tool. */
 function openFromNewTab(panelId: string) {
@@ -316,6 +318,7 @@ function activateArtifact(version = 1) {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  __resetDockTabFocusForTests()
   mockActiveSessionId = "sess-1"
   mockSessionMessages = []
   mockProjects = []
@@ -501,6 +504,27 @@ describe("ArtifactDock — converged workbench shell", () => {
     expect(screen.getByTestId("browser-preview")).toHaveAttribute("data-session", "sess-1")
   })
 
+  it("moves keyboard focus to the strip on screen when an arrow swaps the surface (A03)", async () => {
+    const user = userEvent.setup()
+    activateArtifact()
+    act(() => useArtifactStore.setState({ activeArtifactIdBySession: { "sess-1": null } }))
+    openArtifactTabs("artifact-1")
+    render(<ArtifactDock />)
+    screen.getByRole("tab", { name: "contextWorkbench.newTab.title" }).focus()
+
+    await user.keyboard("{ArrowRight}")
+
+    // The artifact is in front, so the session surface (and its strip) is
+    // hidden and inert. Focus used to stay on its copy of the tab.
+    expect(screen.getByTestId("dock-session-surface")).toHaveAttribute("hidden")
+    const visible = screen.getByRole("tab", { name: "Document" })
+    expect(visible).toHaveFocus()
+    expect(visible.closest("[hidden]")).toBeNull()
+
+    await user.keyboard("{ArrowLeft}")
+    expect(screen.getByRole("tab", { name: "contextWorkbench.newTab.title" })).toHaveFocus()
+  })
+
   it("opens a tool from the New Tab page in that page's place on the strip", () => {
     activateArtifact()
     openArtifactTabs("artifact-1")
@@ -651,6 +675,27 @@ describe("ArtifactDock — converged workbench shell", () => {
     // and must leave the separate desktop dock state alone.
     expect(onOpenChange).toHaveBeenCalledWith(false)
     expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(false)
+  })
+
+  it("keeps the desktop's New Tab in front while the phone Sheet shows its own panel (C06)", () => {
+    // The desktop dock left the conversation on its New Tab page.
+    const { unmount } = render(<ArtifactDock />)
+    expect(activePanelId("session:sess-1")).toBe("new-tab")
+    unmount()
+
+    // The Sheet has no New Tab page: it shows its first panel in that place.
+    const { unmount: unmountSheet } = render(
+      <SessionContextWorkbench
+        mobile={{ open: true, onOpenChange: jest.fn(), panelMode: "mobile" }}
+      />
+    )
+    expect(screen.getByTestId("list")).toBeInTheDocument()
+    // It used to reconcile the shared scope onto that fallback.
+    expect(activePanelId("session:sess-1")).toBe("new-tab")
+    unmountSheet()
+
+    render(<ArtifactDock />)
+    expect(screen.getByTestId("new-tab-page")).toBeInTheDocument()
   })
 
   it("dismisses the drawer from the session surface too", () => {

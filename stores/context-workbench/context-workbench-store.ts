@@ -85,6 +85,16 @@ export interface ContextWorkbenchState {
   navigatePanel: (scopeKey: string, panelId: string, preferredMode?: ContextPanelMode) => boolean
   reconcilePanels: (scopeKey: string, availablePanelIds: string[], fallbackPanelId?: string) => void
   /**
+   * The panels each scope's workbench resolved on its last reconcile: the ones
+   * it can show now. Runtime only, never persisted: a panel's conditions (a
+   * conversation's project roots, a capability, a plugin) are re-evaluated on
+   * every mount. The chat dock's tab strip draws panel tabs from
+   * `activatedPanelIds`, which outlives those conditions on purpose (it also
+   * decides first activation versus restore), so it reads this to leave out a
+   * tab whose panel would open blank.
+   */
+  availablePanelIds: Record<string, readonly string[]>
+  /**
    * Record that a panel has been opened in a scope, without touching which
    * panel is showing or how wide the host is.
    *
@@ -419,6 +429,7 @@ function stateCreator(
       })),
     layouts: {},
     sessionOverrides: {},
+    availablePanelIds: {},
     activatePanel: reveal,
     smartReveal: (scopeKey, panelId, preferredMode) =>
       reveal(scopeKey, panelId, preferredMode, false, false),
@@ -426,6 +437,9 @@ function stateCreator(
       reveal(scopeKey, panelId, preferredMode, false, true),
     reconcilePanels: (scopeKey, availablePanelIds, fallbackPanelId) =>
       set((state) => ({
+        availablePanelIds: sameIds(state.availablePanelIds[scopeKey], availablePanelIds)
+          ? state.availablePanelIds
+          : { ...state.availablePanelIds, [scopeKey]: [...availablePanelIds] },
         layouts: updateLayout(state.layouts, scopeKey, (layout) => {
           const available = new Set(availablePanelIds)
           const activePanelId =
@@ -576,6 +590,12 @@ function stateCreator(
         return { sessionOverrides }
       }),
   }
+}
+
+function sameIds(left: readonly string[] | undefined, right: readonly string[]): boolean {
+  return (
+    left !== undefined && left.length === right.length && left.every((id, i) => id === right[i])
+  )
 }
 
 /** Test-only isolated store; production uses the persisted bound store below. */

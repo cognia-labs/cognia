@@ -91,7 +91,7 @@ describe("openFilesEntry", () => {
     expect(useChatStore.getState().activeSessionId).toBe("s1")
     expect(useUIStore.getState().selectedGuild).toEqual({ kind: "team", teamId: "t1" })
     expect(setActiveArtifact).toHaveBeenCalledWith("a1", "s1")
-    expect(openPanel).toHaveBeenCalledWith("artifact")
+    expect(openPanel).toHaveBeenCalledWith()
     expect(push).toHaveBeenCalledWith("/")
   })
 

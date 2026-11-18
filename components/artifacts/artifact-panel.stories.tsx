@@ -30,8 +30,6 @@ export const Open: Story = {
     seedStore(useArtifactStore, {
       artifacts: { [artifact.id]: artifact },
       activeArtifactIdBySession: { [artifact.sessionId]: artifact.id },
-      panelOpen: true,
-      panelView: "artifact",
     })
     seedStore(useArtifactDockLayoutStore, { mobileSheetOpen: true })
   },

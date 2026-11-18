@@ -63,6 +63,7 @@ import {
 import { useCanvasSettingsStore } from "@/stores/canvas/canvas-settings-store"
 import { useCanvasLayoutStore } from "@/stores/canvas/canvas-layout-store"
 import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
+import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import { MAX_CANVAS_ACTION_HISTORY } from "@/stores/artifact/artifact-store"
 import {
   registerCanvasDocumentDisposer,
@@ -86,8 +87,6 @@ const initial = {
   },
   canvasDocuments: {},
   activeCanvasId: null,
-  panelOpen: false,
-  panelView: "artifact" as const,
   // Staged review outcomes survive an apply/reject, so unlike `pendingReviews`
   // they do not clear themselves as a side effect of what each test does —
   // without this they accumulate across the suite.
@@ -228,6 +227,72 @@ describe("openArtifactIds (the dock's tab strip)", () => {
     expect(useArtifactStore.getState().artifacts[a.id]).toBeDefined()
   })
 
+  it("closes the tab in the conversation whose strip shows it, not the artifact's origin (C03)", () => {
+    const store = useArtifactStore.getState()
+    const foreign = store.createArtifact({
+      sessionId: "origin",
+      messageId: "m",
+      type: "code",
+      title: "Foreign",
+      content: "x",
+    })
+    store.createArtifact({
+      sessionId: "here",
+      messageId: "m2",
+      type: "code",
+      title: "Local",
+      content: "y",
+    })
+    // Reused in "here" (the Recent list's cross-session open).
+    useArtifactStore.getState().setActiveArtifact(foreign.id, "here")
+    expect(openTabs("origin")).toContain(foreign.id)
+    expect(openTabs("here")).toContain(foreign.id)
+
+    useArtifactStore.getState().closeArtifact(foreign.id, "here")
+
+    expect(openTabs("here")).not.toContain(foreign.id)
+    expect(openTabs("origin")).toContain(foreign.id)
+    expect(activeTab("here")).not.toBe(foreign.id)
+  })
+
+  it("closes in the conversation on screen when no session is named (C03)", () => {
+    const foreign = useArtifactStore.getState().createArtifact({
+      sessionId: "origin",
+      messageId: "m",
+      type: "code",
+      title: "Foreign",
+      content: "x",
+    })
+    useArtifactStore.getState().setActiveArtifact(foreign.id, "here")
+    mockActiveSessionId = "here"
+    useArtifactStore.getState().closeArtifact(foreign.id)
+    expect(openTabs("here")).not.toContain(foreign.id)
+    expect(openTabs("origin")).toContain(foreign.id)
+  })
+
+  it("reorders the tab in the named conversation (C03)", () => {
+    const store = useArtifactStore.getState()
+    const a = store.createArtifact({
+      sessionId: "origin",
+      messageId: "m",
+      type: "code",
+      title: "A",
+      content: "a",
+    })
+    const b = store.createArtifact({
+      sessionId: "here",
+      messageId: "m",
+      type: "code",
+      title: "B",
+      content: "b",
+    })
+    useArtifactStore.getState().setActiveArtifact(a.id, "here")
+    expect(openTabs("here")).toEqual([b.id, a.id])
+    useArtifactStore.getState().reorderOpenArtifact(a.id, 0, "here")
+    expect(openTabs("here")).toEqual([a.id, b.id])
+    expect(openTabs("origin")).toEqual([a.id])
+  })
+
   it("closing a tab keeps the artifact itself", () => {
     const a = make("A")
     make("B")
@@ -289,8 +354,6 @@ describe("createArtifact", () => {
     expect(a.id).toBeDefined()
     const s = useArtifactStore.getState()
     expect(activeTab()).toBe(a.id)
-    expect(s.panelOpen).toBe(true)
-    expect(s.panelView).toBe("artifact")
     expect(s.artifactWorkspace.recentArtifactIds[0]).toBe(a.id)
   })
 })
@@ -434,23 +497,21 @@ describe("duplicateArtifact", () => {
 })
 
 describe("plugin event dispatch — onPanelOpen / onPanelClose", () => {
-  it("openPanel dispatches onPanelOpen with the artifact:<view> id", () => {
-    useArtifactStore.getState().openPanel("canvas")
-    expect(mockHooksManager.dispatchPanelOpen).toHaveBeenCalledWith("artifact:canvas")
-    useArtifactStore.getState().openPanel("artifact")
+  it("openPanel dispatches onPanelOpen with the artifact:artifact id", () => {
+    useArtifactStore.getState().openPanel()
     expect(mockHooksManager.dispatchPanelOpen).toHaveBeenLastCalledWith("artifact:artifact")
   })
 
-  it("closePanel dispatches onPanelClose with the previously-active view", () => {
-    useArtifactStore.getState().openPanel("canvas")
+  it("closePanel dispatches onPanelClose with the artifact:artifact id", () => {
+    useArtifactStore.getState().openPanel()
     mockHooksManager.dispatchPanelClose.mockClear()
     useArtifactStore.getState().closePanel()
-    expect(mockHooksManager.dispatchPanelClose).toHaveBeenCalledWith("artifact:canvas")
+    expect(mockHooksManager.dispatchPanelClose).toHaveBeenCalledWith("artifact:artifact")
   })
 })
 
 describe("setActiveArtifact + panel open/close", () => {
-  it("opens the panel when activating", () => {
+  it("activates the artifact's tab", () => {
     const a = useArtifactStore.getState().createArtifact({
       sessionId: "s",
       messageId: "m",
@@ -458,9 +519,8 @@ describe("setActiveArtifact + panel open/close", () => {
       title: "t",
       content: "x",
     })
-    useArtifactStore.setState({ activeArtifactIdBySession: {}, panelOpen: false })
+    useArtifactStore.setState({ activeArtifactIdBySession: {} })
     useArtifactStore.getState().setActiveArtifact(a.id)
-    expect(useArtifactStore.getState().panelOpen).toBe(true)
     expect(activeTab("s")).toBe(a.id)
   })
 
@@ -560,17 +620,20 @@ describe("setActiveArtifact + panel open/close", () => {
     expect(useArtifactStore.getState().artifactWorkspace.sessionId).toBe("focused")
   })
 
-  it("closes the panel via closePanel and reopens via openPanel", () => {
+  it("closePanel takes the dock off screen and openPanel brings it back (A08)", () => {
+    useArtifactDockLayoutStore.getState().setDockCollapsed(false)
     useArtifactStore.getState().closePanel()
-    expect(useArtifactStore.getState().panelOpen).toBe(false)
-    useArtifactStore.getState().openPanel("canvas")
-    expect(useArtifactStore.getState().panelOpen).toBe(true)
-    expect(useArtifactStore.getState().panelView).toBe("canvas")
-  })
-
-  it("setPanelView swaps the active view", () => {
-    useArtifactStore.getState().setPanelView("canvas")
-    expect(useArtifactStore.getState().panelView).toBe("canvas")
+    expect(useArtifactDockLayoutStore.getState()).toMatchObject({
+      dockCollapsed: true,
+      mobileSheetOpen: false,
+      userDismissed: true,
+    })
+    useArtifactStore.getState().openPanel()
+    expect(useArtifactDockLayoutStore.getState()).toMatchObject({
+      dockCollapsed: false,
+      mobileSheetOpen: true,
+      userDismissed: false,
+    })
   })
 })
 
@@ -956,6 +1019,7 @@ describe("artifact version history", () => {
       language: "javascript",
       type: "code",
       sourceArtifactId: a.id,
+      createdBy: "user",
     })
     useArtifactStore.getState().updateArtifact(a.id, { content: "v2" })
     useArtifactStore.getState().restoreArtifactVersion(a.id, snapshot.id)
@@ -1016,7 +1080,6 @@ describe("canvas documents", () => {
     expect(id).toBeDefined()
     const s = useArtifactStore.getState()
     expect(s.activeCanvasId).toBe(id)
-    expect(s.panelView).toBe("canvas")
   })
 
   it("updateCanvasDocument bumps updatedAt for content changes", () => {
@@ -1052,7 +1115,6 @@ describe("canvas documents", () => {
     expect(useArtifactStore.getState().activeCanvasId).toBeNull()
     useArtifactStore.getState().setActiveCanvas(id)
     expect(useArtifactStore.getState().activeCanvasId).toBe(id)
-    expect(useArtifactStore.getState().panelView).toBe("canvas")
   })
 
   it("deleteCanvasDocument clears active when needed", () => {
@@ -1850,7 +1912,7 @@ describe("openPanel honors returnContext when no active artifact", () => {
         },
       },
     }))
-    useArtifactStore.getState().openPanel("artifact")
+    useArtifactStore.getState().openPanel()
     // Restored into the session that owns the artifact, not a global slot.
     expect(activeTab("s")).toBe(a.id)
   })
@@ -1859,7 +1921,7 @@ describe("openPanel honors returnContext when no active artifact", () => {
     const a = useArtifactStore
       .getState()
       .createArtifact({ sessionId: "s", messageId: "m", type: "code", title: "t", content: "x" })
-    useArtifactStore.getState().openPanel("artifact")
+    useArtifactStore.getState().openPanel()
     expect(activeTab("s")).toBe(a.id)
   })
 })
@@ -2282,7 +2344,8 @@ describe("persist partialize — artifacts live in Dexie", () => {
       .createArtifact({ sessionId: "s", messageId: "m", type: "code", title: "big", content: big })
     useArtifactStore.getState().updateArtifact(artifact.id, { content: `${big}!` })
 
-    useArtifactStore.getState().setPanelView("artifact")
+    // Any write flushes the persist middleware.
+    useArtifactStore.getState().setArtifactWorkspaceFilters({ searchQuery: "" })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const persisted = localStorage.getItem("cognia-artifacts")
@@ -2965,13 +3028,23 @@ describe("AI-revision review (pending reviews)", () => {
       language: "javascript",
     })
 
+  it("proposeArtifactUpdate on a closed artifact opens its tab with the review (C06)", () => {
+    const a = makeArtifact("a\nb\nc\nd")
+    useArtifactStore.getState().closeArtifact(a.id, a.sessionId)
+    expect(useArtifactStore.getState().openArtifactIdsBySession[a.sessionId] ?? []).not.toContain(
+      a.id
+    )
+    useArtifactStore.getState().proposeArtifactUpdate(a.id, "A\nb\nc\nD")
+    const s = useArtifactStore.getState()
+    expect(s.activeArtifactIdBySession[a.sessionId]).toBe(a.id)
+    expect(s.openArtifactIdsBySession[a.sessionId]).toContain(a.id)
+  })
+
   it("proposeArtifactUpdate stages a review and activates the artifact without raising the panel", () => {
     const a = makeArtifact("a\nb\nc\nd")
-    // `makeArtifact` opens the panel on the way in, so the old assertion that
-    // this call "opens the panel" passed no matter what it did. Close it first
-    // and the real contract shows: whether a proposal may take over the screen
-    // depends on `userDismissed`, which lives in the dock's layout store — so
-    // the decision belongs to `useDockAttentionSignal`, not here.
+    // Whether a proposal may take over the screen depends on `userDismissed`,
+    // which lives in the dock's layout store — so the decision belongs to
+    // `useDockAttentionSignal`, not here.
     useArtifactStore.getState().closePanel()
 
     const review = useArtifactStore.getState().proposeArtifactUpdate(a.id, "A\nb\nc\nD")
@@ -2981,7 +3054,7 @@ describe("AI-revision review (pending reviews)", () => {
     const s = useArtifactStore.getState()
     expect(s.pendingReviews[a.id]).toBeDefined()
     expect(activeTab()).toBe(a.id)
-    expect(s.panelOpen).toBe(false)
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
     // content is NOT applied yet
     expect(s.artifacts[a.id].content).toBe("a\nb\nc\nd")
   })

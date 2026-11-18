@@ -10,20 +10,34 @@
  * this button living in `chat-header` never mounted, leaving only ⌘/Ctrl+J and
  * the Tauri title bar (which does not exist in the web shell).
  *
- * Drives the one `dockCollapsed` field that ⌘J and the title-bar layout
- * controls also drive.
+ * Drives the same state ⌘J and the title-bar layout controls drive: the dock's
+ * `dockCollapsed` on desktop, the Sheet's `mobileSheetOpen` below it.
  */
 
+import { useCallback } from "react"
 import { useTranslations } from "next-intl"
 import { PanelRightCloseIcon, PanelRightOpenIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useBreakpoint } from "@/hooks/ui"
+import { registerDockFocusReturn } from "@/lib/artifacts/dock-tab-focus"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 
 export function ArtifactDockToggle({ className }: { className?: string }) {
   const t = useTranslations("chat.header")
-  const dockCollapsed = useArtifactDockLayoutStore((s) => s.dockCollapsed)
-  const toggleDock = useArtifactDockLayoutStore((s) => s.toggleDock)
+  // Narrow screens show the Sheet, whose visibility is `mobileSheetOpen`; the
+  // desktop dock's is `dockCollapsed`. The label, the pressed state and the
+  // action all follow the surface this breakpoint actually shows.
+  const sheet = useBreakpoint() !== "desktop"
+  const dockCollapsed = useArtifactDockLayoutStore((s) =>
+    sheet ? !s.mobileSheetOpen : s.dockCollapsed
+  )
+  const toggleDock = useArtifactDockLayoutStore((s) => (sheet ? s.toggleSheet : s.toggleDock))
+  // Where focus returns when the dock it opened is closed from inside.
+  const registerReturn = useCallback(
+    (element: HTMLButtonElement | null) => (element ? registerDockFocusReturn(element) : undefined),
+    []
+  )
   // A new artifact arrived while the dock was dismissed — surface it as an
   // unread dot instead of force-expanding the panel.
   const unreadArtifact = useArtifactDockLayoutStore((s) => s.unreadArtifact)
@@ -44,6 +58,7 @@ export function ArtifactDockToggle({ className }: { className?: string }) {
       // never existed there at all, leaving no way back once the Sheet was
       // closed. Desktop hosts opt into the breakpoint themselves.
       className={cn("relative size-8 shrink-0", className)}
+      ref={registerReturn}
       onClick={toggleDock}
       aria-label={label}
       aria-pressed={!dockCollapsed}

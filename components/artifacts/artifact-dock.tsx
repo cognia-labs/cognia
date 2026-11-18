@@ -30,11 +30,13 @@ import type { ArtifactPanelMode } from "./artifact-panel-content"
 import { ArtifactTabStrip, useOpenArtifactTabs } from "./artifact-tab-strip"
 import { DockTabStrip, isKnownDockPanel } from "./dock-tab-strip"
 import { useArtifactSurfacePanels, useSessionSurfacePanels } from "./chat-dock-panels"
+import { NEW_TAB_PANEL_ID } from "./dock-panel-meta"
 import {
   ContextWorkbench,
   ContextWorkbenchMobileDrawer,
 } from "@/components/context-workbench/context-workbench"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { returnFocusFromDock } from "@/lib/artifacts/dock-tab-focus"
 import { useActiveArtifactId } from "@/hooks/artifacts/use-session-artifacts"
 import {
   ARTIFACT_DOCK_WORKBENCH_HOST_KEY,
@@ -246,6 +248,12 @@ function useDockPanelSync(
 
 /** Stable identity so the sync effects don't re-run on every render. */
 const EMPTY_PANEL_IDS: string[] = []
+/**
+ * The conversation's panels the Sheet keeps without drawing: the New Tab page
+ * is the desktop strip's (ADR-0214), so a phone or tablet shows its own first
+ * panel in its place and the desktop finds it again.
+ */
+const SHEET_RETAINED_PANEL_IDS: readonly string[] = [NEW_TAB_PANEL_ID]
 const SOURCE_COUNT_LABELS = { document: "", file: "" }
 
 /**
@@ -273,6 +281,8 @@ export interface SheetHost {
   open: boolean
   onOpenChange: (open: boolean) => void
   panelMode: ArtifactPanelMode
+  /** See `ContextWorkbenchMobileDrawerProps.onCloseAutoFocus`. */
+  onCloseAutoFocus?: (event: Event) => void
 }
 
 export function ArtifactContextWorkbench({
@@ -462,7 +472,12 @@ export function ArtifactContextWorkbench({
 
   // Stable props, so the memoised workbench skips renders of this surface that
   // change nothing it draws.
-  const collapseDock = useCallback(() => setDockCollapsed(true), [setDockCollapsed])
+  // Collapsing from inside the dock removes what had focus; hand it to the
+  // dock toggle, the control that brings the dock back.
+  const collapseDock = useCallback(() => {
+    setDockCollapsed(true)
+    returnFocusFromDock()
+  }, [setDockCollapsed])
   const ensureDockVisible = useCallback(() => setDockCollapsed(false), [setDockCollapsed])
   const tabStrip = useMemo(
     () => (
@@ -484,6 +499,7 @@ export function ArtifactContextWorkbench({
     <ContextWorkbenchMobileDrawer
       open={mobile.open}
       onOpenChange={mobile.onOpenChange}
+      onCloseAutoFocus={mobile.onCloseAutoFocus}
       workbenchInstanceId={workbenchInstanceId}
       resource={resource}
       panels={panels}
@@ -647,7 +663,12 @@ export function SessionContextWorkbench({
         : null,
     [messageCount, scopeKey, session]
   )
-  const collapseDock = useCallback(() => setDockCollapsed(true), [setDockCollapsed])
+  // Collapsing from inside the dock removes what had focus; hand it to the
+  // dock toggle, the control that brings the dock back.
+  const collapseDock = useCallback(() => {
+    setDockCollapsed(true)
+    returnFocusFromDock()
+  }, [setDockCollapsed])
   const ensureDockVisible = useCallback(() => setDockCollapsed(false), [setDockCollapsed])
   const tabStrip = useMemo(
     () => (
@@ -666,9 +687,11 @@ export function SessionContextWorkbench({
         <ContextWorkbenchMobileDrawer
           open={mobile.open}
           onOpenChange={mobile.onOpenChange}
+          onCloseAutoFocus={mobile.onCloseAutoFocus}
           workbenchInstanceId={workbenchInstanceId}
           resource={resource}
           panels={panels}
+          retainedPanelIds={SHEET_RETAINED_PANEL_IDS}
           headerLeading={
             hasArtifactTabs ? (
               <ArtifactTabStrip showSingle={showSingleArtifactTab} className="min-w-0 flex-1" />
