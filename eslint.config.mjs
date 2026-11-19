@@ -15,7 +15,7 @@ const eslintConfig = defineConfig([
     // Flat ESLint does not inherit these exclusions from .gitignore.
     "**/.cache/**",
     // Generated native acceptance fixture output
-    // (scripts/smoke/fixtures/cloud-docs-p0/build.mjs --public; bundles third-party code).
+    // (scripts/smoke/fixtures/cloud-document-native/build.mjs --public; bundles third-party code).
     "public/.p0-native-fixture/**",
     ".tmp/**",
     ".codex-tmp/**",

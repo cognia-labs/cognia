@@ -238,7 +238,7 @@ const REGISTRY = [
   { script: "audit:docs-links", group: "audit" },
   { script: "audit:adr-catalog", group: "audit" },
   // scripts/ keeps its consolidated folders, nothing loose at the top level,
-  // and no script that nothing runs (docs/plans/2026-11-04-scripts-layout-phase2.md).
+  // and no script that nothing runs (docs/plans/2026-11-04-scripts-layout-path-mapping.md).
   { script: "audit:scripts-layout", group: "audit" },
   // ADR-0250 §11: every ratchet baseline is compared with the merge base and
   // may grow only with an exception record (owner + repayment phase). Its

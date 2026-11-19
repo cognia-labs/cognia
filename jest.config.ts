@@ -322,6 +322,9 @@ const projectCommon: Config = {
     // is short enough to leave it untransformed. Tests don't render real
     // syntax highlighting, so a thin mock is sufficient.
     "^shiki$": "<rootDir>/__mocks__/shiki.js",
+    // Real installed theme data, without executing ESM in the CJS runner.
+    "^shiki/themes/(one-light|one-dark-pro|github-light-default|github-dark-default)\\.mjs$":
+      "<rootDir>/__mocks__/shiki-theme-$1.js",
 
     // @xterm/addon-ligatures@0.10.0 is mis-packaged rather than ESM-only: its
     // `main` points at `lib/addon-ligatures.js`, which the tarball does not

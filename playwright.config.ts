@@ -44,8 +44,12 @@ const crossBrowserEnabled = process.env.PLAYWRIGHT_CROSS_BROWSER === "1"
 const staticMode = process.env.PLAYWRIGHT_STATIC === "1"
 const isCI = Boolean(process.env.CI)
 
-// Native and mobile specs have their own explicitly configured projects.
-const WEB_PROJECT_IGNORE = ["**/tests/e2e/tauri/**", "**/tests/e2e/mobile/**"]
+// Native, mobile and component-workshop specs have their own configurations.
+const WEB_PROJECT_IGNORE = [
+  "**/tests/e2e/tauri/**",
+  "**/tests/e2e/mobile/**",
+  "**/tests/e2e/storybook/**",
+]
 
 // Shared with the dual-host lane: global setup owns the mock fleet and the
 // Tauri CDP launcher, and both native projects reuse the existing fixture.

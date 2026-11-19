@@ -277,7 +277,7 @@ recoverable from git history.
 ## Moved paths
 
 Folders were consolidated on 2026-11-04 (plan:
-`docs/plans/2026-11-04-scripts-layout-phase2.md`). Older records still name the
+`docs/plans/2026-11-04-scripts-layout-path-mapping.md`). Older records still name the
 old paths; this table maps them.
 
 | Old path                                  | New path                                                                           |

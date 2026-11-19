@@ -36,7 +36,7 @@ junit.xml
 /.swc/
 /out/
 
-# Cloud-document P0 native fixture output (scripts/smoke/fixtures/cloud-docs-p0/build.mjs --public).
+# Cloud-document P0 native fixture output (scripts/smoke/fixtures/cloud-document-native/build.mjs --public).
 # Generated, and must not ship in the static export: delete after the run.
 /public/.p0-native-fixture/
 
@@ -297,3 +297,5 @@ plugin-sdk/python/build/
 # regenerating would write other sessions' uncommitted manifests into a commit.
 /lib/modules/generated/
 /components/modules/generated/
+# Staged by scripts/build/copy-ocr-assets.mjs from the pinned PDF.js package.
+/public/ocr/pdf.worker.min.mjs

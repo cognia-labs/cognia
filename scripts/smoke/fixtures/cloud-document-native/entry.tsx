@@ -1,5 +1,5 @@
 // Native acceptance harness for the cloud-document P0 boundaries
-// (docs/reports/2026-10-22-cloud-documents-p0-boundaries.md). Runs the
+// (docs/reports/2026-10-22-cloud-document-identity-and-binary-boundaries.md). Runs the
 // production remote-doc search, staging, attachment intake, preparation and
 // proxy fetch against in-memory document accounts. Built by ./build.mjs, which
 // swaps the provider registry and host-only modules for the stubs it declares.

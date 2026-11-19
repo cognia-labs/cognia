@@ -4,8 +4,8 @@
 // modules are bundled as-is; the provider registry and host-only modules are
 // replaced by the in-memory stubs below.
 //
-//   node scripts/smoke/fixtures/cloud-docs-p0/build.mjs            → .cache/cloud-docs-p0/ui-fixture/public
-//   node scripts/smoke/fixtures/cloud-docs-p0/build.mjs --public   → public/.p0-native-fixture (served by `pnpm dev`)
+//   node scripts/smoke/fixtures/cloud-document-native/build.mjs            → .cache/cloud-docs-p0/ui-fixture/public
+//   node scripts/smoke/fixtures/cloud-document-native/build.mjs --public   → public/.p0-native-fixture (served by `pnpm dev`)
 //   add --force to replace an existing output directory
 //
 // The --public output is gitignored and must be removed after the run: anything

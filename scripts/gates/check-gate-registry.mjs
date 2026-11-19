@@ -121,6 +121,8 @@ export const EXEMPTIONS = {
   "test:pty": "jest lane helper — its pty project is covered by test.yml's full plan",
   "test:changed": "jest dev helper — owned by test.yml",
   "test:watch": "interactive jest — never runs unattended",
+  "storybook:config:test": "Storybook infrastructure contracts — owned by storybook.yml",
+  "storybook:test": "dedicated static Storybook Playwright quality lane — owned by storybook.yml",
   "test:coverage": "jest coverage — owned by test.yml",
   "test:coverage:changed": "incremental coverage — owned by test.yml",
   "tauri:frontend:check":

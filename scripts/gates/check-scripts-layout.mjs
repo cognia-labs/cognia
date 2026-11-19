@@ -5,7 +5,7 @@
  *
  * The folder grew one subsystem at a time until it held 24 folders, eleven
  * loose top-level scripts and a few dozen files no command, workflow or import
- * reached (docs/plans/2026-11-04-scripts-layout-phase2.md). This gate holds the
+ * reached (docs/plans/2026-11-04-scripts-layout-path-mapping.md). This gate holds the
  * consolidated layout:
  *
  *   1. Every tracked top-level file is listed in `topLevelFiles`.

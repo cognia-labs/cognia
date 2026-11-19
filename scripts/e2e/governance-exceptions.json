@@ -5,8 +5,8 @@
       "file": "tests/e2e/helpers/gestures.ts",
       "rule": "arbitrary-timeout",
       "occurrences": 3,
-      "reason": "Synthetic gesture frames and hold durations intentionally model elapsed pointer time rather than app readiness.",
-      "reviewAfter": "2026-10-31"
+      "reason": "Reviewed 2026-11-10: the three waits in touchDrag/touchDragHold pace dispatched touchMove frames and optional holdMs before touchEnd. They define gesture duration, not application readiness; callers assert the resulting UI state separately.",
+      "reviewAfter": "2026-12-31"
     },
     {
       "file": "tests/e2e/mobile/chat-render-perf.spec.ts",
