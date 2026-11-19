@@ -1,10 +1,12 @@
 # Evidence ledger: terminal support audit
 
 - Status: verifying
-- Lane: standard
+- Lane: deep
 - Created: 2026-11-08
-- Updated: 2026-11-08
+- Updated: 2026-11-18
 - Related: ADR-0031, ADR-0033, ADR-0039, ADR-0133, ADR-0162; `lib/terminal/module.ts`
+
+本轮结果见 [2026-11-18 内置终端与外部 Shell 审计](#2026-11-18-内置终端与外部-shell-审计)。同日的[对抗复核](#2026-11-18-对抗复核)记录审批边界、实验和改判。此前日期的测试和发现保留为历史记录。
 
 ## Original request
 
@@ -29,6 +31,18 @@
 | O10 | Host capability cache survives host changes; mobile default creation separately ignores the host default shell.                                     | Observed | Two host-cache invariant probes fail; source-loaded mobile resolver returns zsh/bash for a Windows host; owning callers checked, 2026-11-08.                                       | -          |
 | O11 | Serial detach does not close the native session, and active-host changes redirect serial subscriptions away from local native writes.               | Observed | Current serial-session and RoutingTransport adapter probe; native registry/close and dock removal inspected, 2026-11-08.                                                           | -          |
 | O12 | Correcting only the prior fixture assumptions makes all 75 tests in scratch copies of the two failing suites pass.                                  | Observed | fixture-results.json: 2 suites, 75 passed; public consent response and in-app confirmation used; no tracked test changes, 2026-11-08.                                              | O4         |
+| G2 | 审计内置终端，以及本机 Shell、Cognia Host、SSH、容器和外部终端入口的支持差距，并与业内实践对照。 | Agreed | 用户请求，2026-11-18。 | G1 |
+| O13 | 普通远端命名 Profile 的实际启动参数与已解析的工作目录和项目绑定存在差异。远端 Profile 同步按页面缓存，临时打开共用固定 ID。 | Verified | 当前 TypeScript 探针控制了 RPC 目标和时序。Host 按设备与 ID 查找配置的行为由 Rust 源码确认，2026-11-18。 | G2 |
+| O14 | 原始集成构造器在 macOS PTY 上复现 Zsh 登录文件丢失及 Bash 登录集成缺失。 | Observed | 临时 HOME、Zsh 5.9、Bash 3.2.57，集成开关对照，2026-11-18。 | G2 |
+| O15 | Restart、释放端口与补全有各自的路由来源，可能与原 PTY 或 SSH Shell 不同。 | Verified | fresh-context 复核、调用链与测试边界，2026-11-18。未触发真实进程终止。 | G2 |
+| O16 | OpenSSH 解析有效配置时继承 Include、Host * 和多条 IdentityFile。Cognia 的导入返回子集并提示部分省略项。 | Observed | OpenSSH 10.2p1 的 ssh -G 与真实 TS 解析器，使用相同的合成配置，2026-11-18。 | G2 |
+| O17 | 保留了 durable PTY、tmux 会话、SSH/SFTP、录制与独立无人值守路径。此前桌面 remote overlay 的 Host capability、稳定配对下的手机默认 Shell、Serial 与 Dock 输出修复可在当前源码找到。 | Verified | 运行入口与现有回归用例，2026-11-18。 | G2 |
+| O18 | 当前 git HEAD 上的 net_proxy.rs 已存在 Rust 语法错误，阻断 terminal crate 套件。 | Observed | cargo test --locked -p cognia-terminal --lib 和 git show HEAD 对照，2026-11-18。 | G2 |
+| G3 | 对抗审查原 12 项，重点复核 Profile、并发、Restart、Free Port 的执行位置，复现可测问题并更新优先级。 | Agreed | 用户追问，2026-11-18。 | G2 |
+| O19 | Companion 的 Profile sync 与 Free Port 要求交互 lease，正常 UI 不提供。前者拒绝后普通 ad hoc 可静默使用 default，后者拒绝被吞掉。 | Verified | 命令 manifest、HTTP/RTC adapter、Rust 审批门及受控拒绝对照，2026-11-18。 | G3 |
+| O20 | Host 切换可分离同步目标与实际 Spawn。接受同步的对照还复现同设备临时 Profile 覆盖、整表删 Agent Profile、WS 丢确认后尝试 WAN。 | Observed | 实际客户端编排、帧编码和 WS/RTC adapter，使用确定性 Host 表替身，2026-11-18。 | G3 |
+| O21 | Restart 停止与替换的 Host 可分离。停止拒绝仍移除标签并打开替代项，同机重启也可省略原启动参数。 | Observed | 实际启动编排、路由和会话句柄，原生 IPC/远端 Host 替身，2026-11-18。 | G3 |
+| O22 | 既有能力说明需更正启动命令接线、SSH 导入有效值、协议功能缓存与重连提示。 | Verified | 原生 PTY、OpenSSH/TS 方案对照及三组独立源码复核，2026-11-18。 | G3 |
 
 ## Problem frame
 
@@ -56,6 +70,12 @@ Audit the current checkout, treating terminal support as the integrated interact
 | R5  | Host affinity is conflated across native sessions, selected-host calls and serial subscriptions. | medium   | Fresh-context reviewers; ADR-0082 routing contract; O8, O11 | Report each execution/subscription boundary against its actual command contract.              | A local serial subscription follows remote, or the matrix implies all terminal execution follows the selected UI host. |
 | R6  | Client or previous-host shell information is used for another host.                              | medium   | Fresh-context platform review; O10                          | Cross-platform and host-switch limitations are named explicitly.                              | A Windows host is given the mobile client shell or a stale previous-host capability set.                               |
 | R7  | A detached or cancelled session becomes unreachable while remaining live.                        | medium   | Fresh-context runtime/lifecycle review; O9, O11             | Durable PTY detach is not generalized to serial or late workflow-spawn cleanup.               | A resource completes after cleanup or a serial handle is discarded without recovery.                                   |
+| R8 | 切 Host、并行打开或重启后进入意外的主机、目录或项目。 | high | O13、O15、ADR-0082 | 每个操作都保留用户确认的启动目标及实际 Profile。 | 相同 ID 在不同上下文命中旧配置，或重启把原会话替换到另一台机器。 |
+| R9 | 交互 Shell 启动语义变化，命令检测或自定义工具路径丢失。 | medium | O14、VS Code 和 Ghostty 的 Shell Integration 文档 | 支持的 Profile 保留启动配置或明确报告降级。 | 集成开启后登录文件消失或首个提示符一直没有事件。 |
+| R10 | 停止进程与重跑发生在不同机器。 | high | O15、fresh-context 终端复核 | 修复动作与输出它的会话使用同一执行位置。 | 释放端口只拿到端口号，而重跑通过原会话。 |
+| R11 | 把配置导入、纯终端连接与远程开发环境的能力当成可互换。 | medium | O16、OpenSSH 配置手册、VS Code Remote 文档 | 每条能力都有对应的执行位置、适用范围和失败反馈。 | 导入后遗漏有效参数，或文件工具查询与 Shell 不同的文件系统。 |
+| R12 | 审批门拒绝同步后启动错误的默认会话，或评估把受控接受下的竞态当成常规 paired 行为。 | high | O19、Companion execution manifest | 同步结果及实际 Profile 可观察，审批绑定目标。 | 当前请求失败后用默认值启动，且用户看不到原因。 |
+| R13 | 首次 Spawn 已完成但结果未知，备用传输再次创建会话。 | medium | O20、durable host 断开保留 | 一次请求在同一 Host 最多创建一条会话。 | WS ACK 丢失后 WAN 产生第二条会话。 |
 
 ## Verification obligations
 
@@ -73,6 +93,15 @@ Audit the current checkout, treating terminal support as the integrated interact
 | V10 | R6                 | Assert host capability freshness after remote-to-remote and remote-to-local changes.                                                        | tool           | host-capabilities-results.json: 2 expected invariant failures; previous /bin/bash and feature set retained, describeHost calls=0.                                                                                                                                                    | Actual cache and routing holder; remote carrier/probe mocked, no network.                                                                                 | failed  |
 | V11 | R1, R3             | Isolate the four prior failures by adapting only scratch test fixtures.                                                                     | tool           | fixture-results.json: 2 suites passed, 75 tests passed, 1.382 s. Broker pre-grant now uses request/respond; takeover answers the actual AlertDialog.                                                                                                                                 | Copies of existing suites; relative imports and one __dirname-based source read relocated; tracked tests and production logic unchanged.                  | passed  |
 | V12 | R5, R6, R7         | Source-executed mobile default and serial lifecycle/routing probes.                                                                         | tool           | platform-mobile-output.json: host=powershell.exe, mobileIOS=/bin/zsh, mobileAndroid=/bin/bash. platform-serial-output.json: local subscriptions=0, remote=2 during switch; local write still occurs; observed AC rather than ABC; nativeCloseCalls=0 after detach.                   | Real resolver/session/routing source with controlled carriers; no serial hardware or mobile OS acceptance.                                                | failed  |
+| V13 | R8, R10, R11 | 追踪 Runtime 与 UI 调用链，并在固定设置下测试 Host 切换、命名 Profile、交错请求。 | tool | 源码执行探针出现同步 0 次、命名 cwd 错配和共享槽被覆盖。 | TS 实现加内存模拟 RPC。Rust Host lookup 经源码确认。 | passed |
+| V14 | R9, R11 | 用真实 Shell PTY 与无网络 OpenSSH 配置解析做对照。 | real-env | 五次 PTY 启动及一组 OpenSSH 配置得出报告中的差异。 | macOS ARM64，系统 Zsh/Bash/OpenSSH，临时文件。 | passed |
+| V15 | R8, R10, R11 | 独立检查重启、Profile 绑定和资源操作是否指向原执行位置。 | fresh-reviewer | 确认 cwd/projectId 失配、Free Port 与 Restart 路由差异及对应限制。 | 源码调用链。无实际进程终止或 SSH 远程操作。 | passed |
+| V16 | R8, R9, R10, R11 | 聚焦运行现有 Jest 与独立 Rust 集成构造器测试。 | tool | 19 个 Jest 套件 444 个通过，integration.rs 的 21 个 Rust 测试通过。 | 当前 checkout，含桌面和移动组件 mock、原生构造器；无整包 GUI。 | passed |
+| V17 | R8, R9, R10, R11 | 执行 terminal crate 全量单测。 | tool | 编译在 net_proxy.rs:968 中止，错误见本轮验证记录。 | 依赖编译，terminal crate 测试未启动。 | blocked |
+| V18 | R8, R9, R10, R11 | 验收真实 Tauri、双 Host、Windows/Linux、SSH、WAN/手机和串口。 | real-env | 本轮尚未执行完整端到端矩阵。 | macOS PTY 探针覆盖启动子链。 | planned |
+| V19 | R8, R10, R12, R13 | 独立检查 12 条结论，逐项搜索反例并与当前源码调和。 | fresh-reviewer | 三次独立复核覆盖 Profile/并发、Restart/Free Port 和外部环境。收窄广义的远端误停止结论，补审批前置等四项。 | 共享工作区当前源码，无真实 Host。 | passed |
+| V20 | R8, R10, R12, R13 | 对相同/不同设备、同步拒绝、选 Host 时序、ACK 丢失、旧会话 Stop ACK 以及原生/远端 Free Port 分支做受控故障注入。 | tool | affinity.cjs 的 12 组断言通过，包含符合同一 manifest 的拒绝替身和接受同步对照。 | 实际 TS 模块与帧编码，模拟 Host、审批应答和 IPC，未运行真实端口停用。 | passed |
+| V21 | R8, R9, R10, R11 | 重跑聚焦 Jest，补 Zsh 非登录对照和 SSH 导入计划。 | real-env | 10 个 Jest 套件 279 个用例通过。七次 macOS PTY 及 OpenSSH 配置/导入计划对照通过。 | macOS ARM64 与受控 JS，SSH 配置无网络连接。 | passed |
 
 ## Decisions
 
@@ -81,29 +110,35 @@ Audit the current checkout, treating terminal support as the integrated interact
 | D1  | 2026-11-08 | Audit the source and run bounded existing checks; report discrepancies and next priorities without changing product behavior.                                                                                                                                                                                            | diagnose | G1, C1, O2, O3                    | A source-level contradiction or test failure changes the capability classification.      |
 | D2  | 2026-11-08 | Re-enter risk discovery for the interactive output contract; classify test drift separately from a confirmed runtime outage and leave remediation to a follow-up implementation task.                                                                                                                                    | diagnose | O4, O6, C1                        | A controlled runtime observation contradicts the identified test or output semantics.    |
 | D3  | 2026-11-08 | Re-enter discovery and revise the matrix to carry known failures. After the second-cycle contract challenge, prioritize fresh-tab execution and lifecycle/host-affinity fixes; classify Tauri client-local unattended dispatch as a support limitation, not a proven wrong-host defect. No product fixes in this review. | diagnose | G1, C1, O7, O8, O9, O10, O11, O12 | A real owning-layer regression or runtime observation refutes a retained counterexample. |
+| D4 | 2026-11-18 | 复用现有账本，优先排查可以成功进入错误执行上下文的行为，再比较外部环境覆盖面。 | diagnose | O13, O14, O15, O16, O17 | 真实双 Host 复核证明请求与会话全程保留同一目标或发现更强反证。 |
+| D5 | 2026-11-18 | 按审批→目标→操作顺序重新分级。先处理常规 Profile 拒绝后替代和切 Host，再处理原生 Free Port、Restart 与同步获准后的竞态。重复 Spawn 暂列 P2，原生和远端 Free Port 分开定级。 | diagnose | O19, O20, O21, O22 | 真实 Host 的同设备批准流、双传输恢复或会话 namespace 验收推翻复核路径。 |
 
 ## Residual risks
 
 | ID  | Residual                                                                                                | From    | Why still open                                                                                                                                               | Next action                                                                                                                                 | Status |
 | --- | ------------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| X1  | Terminal test sweep is not green.                                                                       | V2      | Three tests seed the previous consent-key format; one mocks window.confirm after the UI moved to an in-app dialog.                                           | Update fixtures through public broker behavior and confirm the actual dialog, then rerun both suites and the terminal sweep.                | open   |
+| X1 | Terminal test sweep is not green. | V2 | 2026-11-18 重跑曾失败的两个文件及聚焦套件，见 V16。 | — | closed |
 | X2  | Current Rust host behavior has not been executed in this audit.                                         | V3      | Low and fluctuating disk headroom; no cached crate test executable.                                                                                          | Restore sufficient headroom and run cargo test --locked -p cognia-terminal.                                                                 | open   |
 | X3  | Cross-shell and real remote/device acceptance remain outstanding.                                       | V4      | No real Tauri UI, paired WAN/device, SSH/SFTP server, serial hardware, Windows or Linux run here.                                                            | Run the matrix described below in the owning real environments.                                                                             | open   |
-| X4  | Interactive Dock output contract does not provide command output.                                       | R4, V6  | Source finding only; no product change requested or applied.                                                                                                 | Define the intended result contract and add a behavioral regression before repairing both Dock return paths.                                | open   |
-| X5  | Terminal recording utilities have no identified runtime consumer.                                       | R1      | Recorder/player/codecs and tests exist, but production imports outside their own barrel were not found.                                                      | Decide whether recording is intended product scope, then wire a real entry point or label its limited availability.                         | open   |
-| X6  | Fresh interactive Dock commands fail before execution.                                                  | V9, R1  | Stale snapshot remains in product source.                                                                                                                    | Add a fresh-spawn behavioral regression and reread store state after spawn; check agent and interactive workflow callers.                   | open   |
+| X4 | Interactive Dock output contract does not provide command output. | R4, V6 | 修复见 2026-11-08 Remediation。当前 run-in-dock 测试通过，见 V16。 | — | closed |
+| X5 | Terminal recording utilities have no identified runtime consumer. | R1 | 录制和回放入口已交付，见 2026-11-08 Follow-up。 | — | closed |
+| X6 | Fresh interactive Dock commands fail before execution. | V9, R1 | 修复已重新读取启动后的 store，当前 run-in-dock 测试通过。 | — | closed |
 | X7  | The proposed wrong-host P1 was not established; Tauri unattended execution is client-local by contract. | V9, R5  | Resolved by second-cycle contract review: native headless commands are client.local/internal, and this workflow helper receives no remote execution binding. | Keep the support limitation explicit. A future wrong-host defect claim needs a concrete remote-bound invocation and its execution contract. | closed |
-| X8  | Cancellation can leak a late persistent workflow shell.                                                 | V9, R7  | Resource registration remains possible after the run cleanup pass.                                                                                           | Add delayed-spawn cancellation/timeout tests and dispose late successes without losing a retryable cleanup handle.                          | open   |
-| X9  | Host defaults and features remain stale after a host switch.                                            | V10, R6 | Cache is global and not invalidated or keyed by target.                                                                                                      | Bind cache/in-flight answers to host identity and test remote changes, return to local, and stale replies.                                  | open   |
-| X10 | Mobile default New may request an unavailable client-platform shell on the host.                        | V12, R6 | handleNew omits hostDefaultShell despite known capabilities.                                                                                                 | Reuse host-aware resolution and test iOS/Android against Windows and Linux defaults.                                                        | open   |
-| X11 | Serial detach discards UI recovery while native port remains open.                                      | V12, R7 | There is no reachable serial list/reattach path restoring the discarded session.                                                                             | Give serial close explicit resource-release semantics or a real discovery/recovery path.                                                    | open   |
-| X12 | Serial input/output affinity diverges during remote-host selection.                                     | V12, R5 | Generic subscriptions switch hosts while native writes stay local.                                                                                           | Bind serial events to the local carrier; test active-host changes while the tab is open.                                                    | open   |
+| X8 | Cancellation can leak a late persistent workflow shell. | V9, R7 | 现有 workflow session 回归覆盖取消后到达的 spawn，见 V16。 | — | closed |
+| X9 | Host defaults and features remain stale after a host switch. | V10, R6 | 桌面 remote overlay 修复已有回归覆盖。配对基础 Host 切换的范围见 T06。 | — | closed |
+| X10 | Mobile default New may request an unavailable client-platform shell on the host. | V12, R6 | 移动端默认 New 已传 Host default shell，相关聚焦用例通过。 | — | closed |
+| X11 | Serial detach discards UI recovery while native port remains open. | V12, R7 | Serial detach 即关闭端口，聚焦用例通过。 | — | closed |
+| X12 | Serial input/output affinity diverges during remote-host selection. | V12, R5 | Serial 输入和订阅均走本机实现，聚焦用例通过。 | — | closed |
+| X13 | Terminal crate 当前无法整套编译测试。 | V17 | HEAD 中 net_proxy.rs 语法错误，与本轮文档改动独立。 | 基线修复后重跑 crate 测试。 | open |
+| X14 | 实际双 Host、SSH、Windows/Linux、移动、WAN 与物理串口验收待做。 | V18 | 本轮 PTY 探针和回归套件只能验证部分链路。 | 按报告中的验收用例执行。 | open |
 
 ## Outcome
 
 | ID  | Signal                                                                                                           | How / when measured                          | Result                                                                                                                                                                                                 | Status |
 | --- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
 | M1  | A reproducible current-support matrix with implementation evidence, test results and explicit gaps is delivered. | Source audit and focused checks, 2026-11-08. | The report below records current implementation, deterministic checks, a real sidecar PTY smoke, discrepancies and remaining acceptance work. Research outcome met; product acceptance is not claimed. | met    |
+| M2 | 当前支持范围、候选缺陷、分级和业内对照可逐项回溯。 | 查阅 2026-11-18 补充审计及验证输出。 | 交付，关键发现包含实测、源码推断及各自的适用范围。 | met |
+| M3 | 原 12 项逐项复核，误判已修正，P1 的实际前提写明，漏项进入审计排序。 | 2026-11-18 对抗复核及主表。 | 12 项已复核，补列 T13–T16。 | met |
 
 ## Audit snapshot and evidence levels
 
@@ -236,3 +271,91 @@ Verification: 24 suites / 480 tests passed (touched and adjacent); scoped `tsc` 
 ## Follow-up: recording product entry (2026-11-08)
 
 User decisions: save as `.cast` on stop (no Dexie table), start/stop from the tab context menu with an on-tab indicator, playback dialog, output only (no input capture). Shipped: `session-recordings.ts` (tapData-based, follows fitted size via `r` frames, holds a take that ended by cap/exit/closed tab until saved or discarded), `asciicast-file.ts` (validated import, safe file names), `playback-request.ts`, `use-terminal-recording-actions.ts`, `terminal-recording-player.tsx`, `terminal-recording-badge.tsx`; "Open recording…" in the shell picker. Library fixes found on the way: the duration cap made `stop()` report duration 0; the player drew input frames as output and never cleared the screen on a backward seek. The dormancy pin was removed and the docs page gained a "Recording a tab" section. Verified: 19 suites / 320 tests, scoped tsc, eslint, lint:i18n, audit:colocated-tests, audit:modules. Not run: browser/Tauri visual check (3 GiB free disk), docs:build. Not offered on the phone's terminal screen.
+
+## 2026-11-18 内置终端与外部 Shell 审计
+
+> 帮我分析一下，看看现有的内置终端和对外部shell环境的支持，差什么功能，或者存在什么问题，并且对照业内的优秀实践
+
+Cognia 已经具备可持续运行的 PTY、命令感知终端和多种外部连接。最紧迫的差距是执行位置的一致性。打开、重启、释放端口和补全各自解析运行位置，用户在终端看到的上下文可能与动作实际使用的 Host、目录或环境不同。其次是登录 Shell 的兼容性。当前集成能产生结构化事件，但部分启动配置会在注入过程中改变。
+
+审计取样为 2026-11-18 的共享工作区，基线为 `f6b7354c51ac80d256653ce2e62b2eb4dc3d73e2`。核心终端实现与基线一致，Companion 通用 Shell RPC 和终端文档含共享改动。本轮聚焦可交互终端、关联 Agent/Workflow 执行、SSH 和已接入的外部运行环境。只更新证据账本及本地验证产物。复杂度主要来自终端流、通用 RPC、项目绑定分别维护状态，以及真实双 Host 和跨平台环境才会出现的差异。
+
+### 现有能力
+
+| 场景 | 已有实现与边界 |
+| --- | --- |
+| 本机桌面 | xterm.js、Rust PTY、标签/分屏、搜索、文件链接、命令导航和粘性滚动、历史、建议、Quick Fix、录制与 asciicast 回放。Profile 可配置 Shell、argv、cwd 和环境变量。启动命令字段与执行帮助函数尚未接入，见 T16。终端 Host 可继续运行，关闭标签可 detach。Host 进程退出后的恢复另有边界。见 `components/terminal/terminal-dock.tsx`、`crates/cognia-terminal/src/host.rs`、`packages/plugin-contract/src/lib/terminal/profiles.ts`。 |
+| Cognia Host | 桌面选择远端 Host、配对浏览器和 Capacitor 可走 WS / WebRTC 终端流。Host 侧有回放和控制权租约。独立浏览器需要先连接 Host，本机串口只走桌面原生路径。见 `lib/terminal/pick-transport.ts`、`lib/terminal/transport-ws.ts`、`lib/terminal/serial-session.ts`。 |
+| 外部 SSH | 原生 SSH PTY、密码/私钥/本机 SSH agent、跳板、主机密钥记录、显式端口转发、单独的 SFTP。桌面即使选了远端 Cognia Host，保存的 SSH 配置仍从本机侧拨号。配对端只能选已同步的配置，可使用其跳板链，转发配置留在本机。见 `lib/terminal/ssh-connect.ts:160`、`lib/terminal/host-profiles.ts:84`、`crates/cognia-terminal/src/ssh.rs:1070`。 |
+| multiplexer、容器、外部终端 | Dock 能列出和附着 tmux 会话。screen/zellij 有环境识别。沙箱管理页有 Docker 容器 Shell，项目运行环境已有 Dev Container 声明解析和执行入口。Fleet 可以识别并聚焦已存在的外部终端。见 `lib/terminal/multiplexer.ts`、`lib/sandbox/machine-shell.ts`、`lib/project-environment/devcontainer.ts`、`crates/cognia-fleet/src/control.rs:335`。 |
+| Agent 和 Workflow | 可见 Dock 写入走按会话和终端授权，命令状态与输出可通过集成事件采集。无人值守走独立 runner。桌面 Headless workflow 是客户端本机执行，配对和 headless 客户端可走有功能限制的一次性 Host RPC。见 `lib/terminal/run-in-dock.ts:132`、`lib/terminal/await-command-end.ts:51`、`lib/terminal/headless-exec.ts:249`。 |
+
+11 月 8 日记录的 Dock 新建后找不到会话、命令输出返回值、迟到会话取消清理、Serial detach 和订阅归属已有代码修复，录制也已有用户入口。桌面远端 overlay 的能力缓存已按 transport 区分，手机 New 会读取 Host 默认 Shell。基础配对 Host 切换仍可能保留旧能力和协议功能，见 T06。
+
+### 问题与功能缺口
+
+| ID | 优先级 / 证据 | 用户影响与来源 |
+| --- | --- | --- |
+| T01 | **P1 · 需同步获准或已有 Profile** | 普通远端命名 Profile 丢失本次 cwd、项目及插件接受后的修改。受控测试用真实启动编排和 WS 帧，Host 替身按设备表选择已存配置，拿到旧 cwd、无项目、新请求的 sandbox 标志缺失。本机直接传原请求。影响仅适用于 Host 能解析该 Profile ID 的情况；当前常规 paired 同步先遇到 T13。见 `lib/terminal/spawn-default.ts:137`、`lib/terminal/host-profiles.ts:62,302`、`lib/terminal/transport-ws.ts:263`、`crates/cognia-terminal/src/host.rs:941,1074`。 |
+| T02 | **P1 · 需同步获准，同 Host/设备** | 两个 ad hoc 启动都命名 `__adhoc`，受控交错下第一笔在 WS 端得到第二笔的 Shell 和 cwd。另一配对设备受独立表隔离。普通整表同步还可删除已同步等待启动的 Agent 临时 Profile，WS-only 测试产生未知 Profile；WAN 重试可重新同步，故障不一定持续。设置推送、启动同步与清理也共享替换边界，实际重叠概率待测。见 `lib/terminal/host-profiles.ts:96,256,302`、`crates/cognia-terminal/src/host.rs:893,941`。 |
+| T03 | **P1 · 原生本机错目标；P2 · 远端反馈** | SSH 或切回本机后仍可见的旧远端标签，可能以本机 Tauri IPC 停止同端口监听；旧标签重跑则走原会话。测试拦截 RPC/IPC，未停止进程。常规 Companion 路径缺少 `adminLease`，有 `terminal.open` 仍会在执行门前拒绝，不支持此前广义的远端误停止判断。客户端吞掉拒绝，本机返回空 PID 列表时依旧会重跑。见 `components/terminal/terminal-instance.tsx:585`、`lib/terminal/remote-api.ts:132`、`lib/terminal/quick-fix/run-action.ts:49`、`crates/cognia-terminal/src/commands.rs:145`、`crates/cognia-companion/src/remote_execution.rs:1059`。 |
+| T04 | **P1 · 受控调用链 + Rust 默认值** | Restart 按原连接请求停止、移除原标签，再按当前目标发起新建。受控实验中 Kill 到 A、新建到 B。原停止被拒绝时也会丢失标签句柄并继续，原进程仍可存在；替代被插件否决则发生在旧进程已结束之后。即使同一原生 Host，缺失的 argv/env/cwd 元数据及 sandbox、编码会按默认值替代，sandbox 为 false。SSH Reconnect 是成功建新连接后再尝试结束旧连接的单独流程。见 `lib/terminal/spawn-orchestrator.ts:444,534`、`crates/cognia-terminal/src/host.rs:1497`、`crates/cognia-terminal/src/session.rs:98,548`。 |
+| T05 | **P2 · 受控调用链** | 命名 Profile 同步按页面缓存。本地 no-op 后切远端时零次同步，第一次 RPC 失败后也不会自动重试。本页切 Host、换配对身份和 Host 进程重启都可保留旧完成状态。无保存表会报未知 Profile，有同名表可能沿用旧版本。另查 T13 的常规审批失败。见 `lib/terminal/host-profiles.ts:140,302`、`crates/cognia-terminal/src/host.rs:668`。 |
+| T06 | **P2 · 受控缓存探针** | 基础配对 Host 共用 `default` 键。切到 B 后可命中 A 的 Shell；迟到的 A 结果在 B 刷新后仍可覆盖。List 只更新 Shell 能力，协议功能由 Hello 更新，前一个 Host 的 feature 列表可继续留下。桌面 remote overlay 键按 transport 区分。见 `lib/terminal/host-capabilities.ts:60,181,276`、`lib/terminal/transport-ws.ts:319,363`。 |
+| T07 | **P2 · macOS 真实 PTY** | 集成启用后，Zsh 登录与非登录均跳过用户的 `.zshenv`，登录还跳过 `.zprofile`。对照保留 `.zshrc` 与 OSC 633。机上 Bash `--login` 的 fixture 读取 `.bash_profile`，缺少集成事件，该 fixture 没有手动挂入集成。Dock 本机默认/命名启动和手机 ad hoc 写死集成开启；远端普通命名配置在同步获准时读取设置。见 `crates/cognia-terminal/src/integration.rs:176,194`、`lib/terminal/spawn-default.ts:169,219`、`components/mobile/mobile-terminal-screen.tsx:203`。 |
+| T08 | **P2 · 源码路径** | 可执行文件补全读取桌面进程 PATH，手机的该 provider 只有静态 builtins；即使改走已有的 Host 扫描 RPC，也只有服务 PATH。路径补全和文件链接使用 cwd/path 与当前路由，缺少原会话目标。现有 SSH 标签的 SFTP 入口已经带 Profile ID，可复用其归属。外部 Agent CLI 补查常见安装目录，避免运行用户 dotfiles，是已知环境取舍。见 `lib/terminal/completion/exe-provider.ts:34`、`lib/terminal/remote-api.ts:91,112`、`components/terminal/terminal-instance.tsx:1323`、`components/terminal/terminal-dock.tsx:595`。 |
+| T09 | **P2 · 离线实测 + 兼容性** | 合成配置在 OpenSSH 下得到用户、2202 和两个密钥。Cognia 的预览方案填 22、空用户名及首个密钥，空用户名会阻止连接。Include/通配有预览提示，第二个 IdentityFile 丢弃时无提示。Host CA 目前明确不支持；转发范围收窄是已有行为。见 `lib/terminal/ssh-config-import.ts:178,247,403`、`lib/terminal/ssh-profiles.ts:101`、`crates/cognia-terminal/src/ssh.rs:504`。 [OpenSSH ssh_config](https://man.openbsd.org/ssh_config) |
+| T10 | **P2 · 目标说明；扩展按需求** | Workflow 控件已有 cwd/Shell，Dock 有工作目录和 Host 标识。Tauri unattended 即使选了远端 Host，仍按客户端合同在本机跑，节点缺少这一落点提示。配对一次性 RPC 拒绝不支持的持久会话、Shell 和 sandbox，保留这条失败边界。容器有独立 Shell 入口及运行位置校验。WSL 目前可配置可执行文件与参数，完整的 distro 发现和项目路径绑定属于扩展。见 `lib/terminal/headless-exec.ts:249,332`、`components/workflow/editor/inspector/forms/terminal-forms.tsx:85`、`lib/sandbox/machine-shell.ts:80`。 |
+| T11 | **P2 · SSH 状态；跨 Host 重启恢复属扩展** | 已有自动重连通知、手动 Reconnect 和集成降级标识。自动重连会重新开 Shell，但通知未区分原进程与新 Shell；等待期间输入可排入新 Shell。初始 SSH 集成能力基于 hook 写入，重连重新建 parser，现有快照未更新协商结果。原生 PTY 已有首个有效事件检测。Host 存活期间的原进程 reattach 是现有合同，Host 重启后的恢复另行定义。见 `crates/cognia-terminal/src/ssh.rs:1091,1594,1726,1748`、`crates/cognia-terminal/src/host.rs:1599`。 |
+| T12 | **P3 · 可选扩展** | Desktop 和移动端已有同 Host 的 tmux 附着，Fleet 能聚焦已有系统终端；会话菜单「Open in Terminal」在 Cognia Dock 打开 CLI。可选增强为从项目目录显式打开指定系统终端、screen/zellij 会话发现，以及外部应用间会话互通。见 `components/terminal/terminal-dock.tsx:395`、`components/mobile/mobile-terminal-screen.tsx:326`、`crates/cognia-fleet/src/control.rs:324`、`hooks/chat/use-session-desktop-handoffs.ts:80`。 |
+| T13 | **P1 · 常规配对链路的首要问题** | Profile 同步要求交互审批凭证，当前客户端只发 `profiles`。拒绝后，普通 ad hoc 会改发 `default`，可按 Host 默认目录、Shell、无 sandbox 等配置成功；命名 Profile 继续查同名记录，Agent 临时 Profile 直接报错。客户端行为由受控帧实验确认，403/428 门来自 Rust 源码。见 `protocol/companion-commands.json:27291`、`crates/cognia-companion/src/remote_execution.rs:1059`、`lib/terminal/host-profiles.ts:115`、`lib/terminal/spawn-orchestrator.ts:154`。 |
+| T14 | **P1 · 受控切 Host** | 启动请求只保留传输类型。RPC、WS endpoint 与 WAN peer 各自读当时选中的目标。模拟 A 的同步已提交、返回前切 B，实发启动帧到 B，B 有预存同名配置时成功启动。没有配置则报错；批准检查也需要绑定到实际发帧的目标。见 `lib/terminal/spawn-orchestrator.ts:117,154,219`、`lib/terminal/transport-ws.ts:203,215`。 |
+| T15 | **P2 · 受控双传输故障** | 模拟 Host 已创建 WS 会话、连接断开且 ACK 丢失，真实编排经 WebRTC 再发 Spawn。替身 Host 留下 2 条会话，Dock 注册 1 条。当前协议 Spawn 无跨传输请求 ID，Rust 断开保留 PTY；迟到补偿仅能清理后来拿到的会话句柄。频率与真实进程后果待验收。见 `lib/terminal/spawn-orchestrator.ts:237`、`lib/terminal/transport-ws.ts:270,504`、`crates/cognia-terminal/src/host.rs:2553`。 |
+| T16 | **P3 · 未接入能力** | `startupCommands` 有数据字段和执行帮助函数，生产 Profile 设置与启动链均未找到调用方。已更正能力表。见 `packages/plugin-contract/src/lib/terminal/profiles.ts:18`、`lib/terminal/startup-commands.ts:39`。 |
+
+### 行业实践与取舍
+
+| 对照面 | 已验证的业内做法 | 对 Cognia 的启发 |
+| --- | --- | --- |
+| Profile 和环境 | VS Code 按平台配置可执行文件、参数与变量，支持删除继承变量，用独立的 automation profile 定义 Tasks/Debug。远程工作区的终端在工作区所属环境执行。 | 按实际目标的 OS/Host 解析交互和自动化 Profile，定义环境继承、覆盖、删除和拒绝规则。展示实际 Shell、cwd、运行身份与隔离属性。自动化仅使用显式允许的环境值。 [VS Code Terminal Profiles](https://code.visualstudio.com/docs/terminal/profiles) · [VS Code Remote Development](https://code.visualstudio.com/docs/remote/remote-overview) |
+| Shell 集成 | VS Code 和 Ghostty 文档分别列明支持的 Shell、自动注入适用范围与手动安装。Ghostty 对切换 Shell、被包装的 Shell 和远端 terminfo 有明确处理方式。 | 兼容登录和非登录启动顺序，公开脚本定位和集成健康状态。首次检测前呈现待就绪状态。对嵌套 Shell、SSH 或 multiplexer 显式报告能力变化，允许自愿加载对应 hook。 [VS Code Shell Integration](https://code.visualstudio.com/docs/terminal/shell-integration) · [Ghostty Shell Integration](https://ghostty.org/docs/features/shell-integration) · [Ghostty SSH](https://ghostty.org/docs/features/ssh) |
+| 恢复与多路复用 | VS Code 区分原进程重连和以原环境重启并回放内容。WezTerm 可以在 SSH domain 下连接远端 multiplexer。 | 明示原进程、回放或新 Shell 的状态。先修复 Cognia 的 Host 归属及重启保真，为 SSH 提供显式的 tmux 附着或远端会话所有者方案。恢复历史时需要确认明确的副作用边界。 [VS Code Terminal Advanced](https://code.visualstudio.com/docs/terminal/advanced) · [WezTerm Multiplexing](https://wezterm.org/multiplexing.html) |
+| 外部环境 | VS Code 的 Remote-SSH、WSL、Dev Containers 把终端与同一位置的文件及项目工具绑定。OpenSSH 能求出带条件规则和包含文件的有效配置。 | 先贯通已支持的 Cognia Host 与容器上的新建终端、文件链接、完成提示和任务。SSH 配置可先给出兼容性预检、有效参数预览和已有系统 SSH 的显式入口。WSL 依据 Windows 用户需求决定投入。 [VS Code WSL](https://code.visualstudio.com/docs/remote/wsl) · [VS Code Dev Containers](https://code.visualstudio.com/docs/devcontainers/containers) · [OpenSSH ssh](https://man.openbsd.org/ssh) |
+
+### 建议处理顺序与验收
+
+1. **先校准执行位置。** 先处理 T13/T14，再处理 T03/T04，随后统一 T01/T02/T05/T06/T15 的启动和缓存。保持已有审批约束，启动时绑定目标、实际 Profile 和工作目录，给每次远端启动独立请求身份。同一会话的 restart 和有副作用的动作使用其归属。无法解析的目标显示错误，保住原会话。用本机加两个 Host 验收同名 Profile、并发启动、项目 worktree、切换后的重启和端口修复。端口动作可用预置响应或受控监听验证，同端口出现在不同环境时只允许对准用户选中的会话位置。
+2. **补 Shell 兼容矩阵。** 处理 T07–T09。用临时 dotfiles 对比项目根、Shell argv、PATH、配置开关与集成事件。覆盖 macOS 登录/非登录 zsh/bash、Linux bash/fish/nu、Windows PowerShell 7/5.1 和 cmd，含 GUI 冷启动、常见版本管理器、SSH agent 与软件包安装路径。完成提示、路径链接和外部 Agent 能否发现工具要查各自使用的有效环境。
+3. **接通外部环境的日常工作流。** 处理 T10–T12、T16。优先让用户能从当前项目打开已存在的 Host/容器 Shell，并在同一环境完成补全、跳转和任务。分别验证重载、断网、App 重启、Host 重启和 SSH 断线时是否保留原进程、当前目录和历史。外部终端切换和 WSL distro 的投入可根据使用场景排序。
+
+### 本轮验证
+
+- 两次运行仓库 `pnpm test -- --runTestsByPath … --runInBand`，共 **19 个 Jest 套件、444 个测试通过**。涉及 Dock 执行、headless、Profile、Host 能力、rehydrate、WS、SSH 配置解析、补全、Quick Fix、Serial、Workflow 与移动终端。移动用例仍出现 React `act` 提示。
+- `integration.rs` 使用原模块独立编译执行，**21 个 Rust 测试通过**。原构造器和仓库集成脚本也通过 node-pty 驱动了 **5 次真实 macOS PTY 启动**，使用临时 HOME。环境为 macOS 26.5.2 ARM64、Zsh 5.9、Bash 3.2.57、Node 26.12.1。命名 Profile、缓存与并发用同一 TypeScript 源码和受控 RPC 替身。OpenSSH 10.2p1 使用 `ssh -G` 解析合成配置，无网络连接。本机材料位于 `.cache/terminal-gap-audit-2026-11-18/`。用 `node .cache/terminal-gap-audit-2026-11-18/probes.cjs` 重跑源码、PTY 与配置对照。
+- `cargo test --locked -p cognia-terminal --lib` 在已有的 `crates/cognia-exec-sandbox/src/net_proxy.rs:968` 编译失败，错误为 `` expected one of `.`, `;`, `?`, `}`, or an operator, found `=>` ``。通过 `git show HEAD` 确认错误也存在于基线。整套 Rust Host、Tauri GUI、真实 SSH/双 Host/WAN、Windows/Linux 和物理串口待验收。审计状态因此保持 `verifying`。
+
+## 2026-11-18 对抗复核
+
+> 对这 12 项做一次对抗性审查，重点核实远端 Profile、并发启动、重启和释放端口的 Host 归属。看看有没有误判、漏项或优先级不合理的地方，能复现的直接验证，再更新审计账本。
+
+在 `f6b7354c51` 基线上，把 Profile、动作路由、兼容性分别交给三组独立的只读复核。采纳了可由生产调用链重复验证的结论。主表 T01–T12 已逐项替换并追加 T13–T16。
+
+### 改判依据
+
+- **T13 上调为首要问题。** `terminal_host_sync_profiles` 与 `terminal_kill_port` 都声明 `approval: interactive`。常规配对 HTTP 和 WebRTC 转发调用参数，统一进入 `authorize_approval`。参数缺少 `adminLease` 时，且前置的设备和能力检查已通过，返回 `428 interactive_approval_required`。启动流另走终端 ticket、配对授权和 Spawn 帧，因此同步拒绝后仍可能开出 Host 的默认 Shell。正常界面没有在这些调用处取得批准。见 `protocol/companion-commands.json:27291,27325`、`lib/tauri/transport-companion.ts:1196,1237`、`crates/cognia-companion/src/api.rs:1184`、`crates/cognia-companion/src/signaling/dispatch.rs:766`、`crates/cognia-companion/src/remote_execution.rs:1030` 和 `crates/cognia-companion-security/src/admin_lease.rs:101`。
+- **T01/T02 保留条件性 P1。** 旧探针以单个 JS Map 模拟 Profile 同步。本轮使用生产 WS adapter 和帧编解码，Host 替身按设备整表替换。接受同步的对照中，普通命名项使用保存字段，两个并行 ad hoc 会互相覆盖，同一 Host 的另一设备作为隔离对照。普通 ad hoc 还可覆盖等待 Spawn 的 Agent 临时项。修复 T13 时需同时验证这些竞态，以免恢复同步后暴露。
+- **T03 分成两个等级。** 本机 IPC 可以命中与原标签不同的 TCP 监听，保留 P1。以 SSH 标签为例，需要命令集成能识别失败、用户点击修复、本机具有同端口监听和终止权限。配对 RPC 常规路径被审批门拒绝，保留 P2 的静默失败。原生 RPC 成功返回空数组时照样尝试重跑。以实际客户端替身捕获动作发往本机，重跑发往旧远端 A 或原 SSH 句柄。由 Rust 源码确认本机执行空间及强制信号行为。
+- **T04 保留 P1。** 对旧会话的停止请求送回原连接。可以成功结束、被拒绝，或连接失败。非严格停止处理随后移除标签与句柄，替代会话通过当前路由打开。实验分别验证 A 成功停止后 B 启动、停止被拒绝后旧会话仍在替身 Host 以及原会话已退出后新建被插件否决。原生同机请求也缺少原 argv/env、cwd 快照和 sandbox/编码字段，Rust 有自己的默认值。扩展伪终端菜单仍显示无法完成的 Restart，分屏菜单操作组主标签，替代项会另开普通标签。后两个属于界面一致性问题，未另立 P1。见 `components/terminal/terminal-tab-context-menu.tsx:130,202`、`components/terminal/terminal-dock.tsx:947`、`stores/terminal/terminal-store.ts:684`。
+- **T14/T15 是两个独立失败窗口。** T14 在将 A 的同步结果交还客户端前切到 B，收到实际编码的 Spawn 帧的是 B。T15 让模拟 Host 在构造会话后关闭 WS，而后真实编排切到 WebRTC 发送第二次请求。同一目标也可能重复启动，因此只固定 Host 仍需处理丢确认。
+- **T05–T12 保留分级，调整范围。** T06 的配置刷新与协议功能刷新是两件事。T07 新增 Zsh 非登录复验。T09 将解析阶段的「无端口」更正为导入计划的「22 端口」，第二个密钥无预览提示。T10 的远端一次性合同属于主动拒绝，现有缺口主要是运行位置提示及环境接入。T11 已有降级与重连通知，待补的是准确说明新 Shell 和重协商结果。T12 保留可选扩展。Profile 启动命令只有类型与帮助函数，改列 T16。
+
+### 本轮验证与边界
+
+| 检查 | 实际结果 |
+| --- | --- |
+| `node .cache/terminal-gap-audit-2026-11-18/review/affinity.cjs` | 12 组断言通过。运行生产 TS 编排、路由、Profile/cache、WS/WebRTC 编解码、SSH 写入选择和 Quick Fix 处理，使用模拟端点、协议回应、配对记录和 IPC。审批拒绝响应由夹具提供，审批要求由 manifest 与 Rust 实现分别核对。 |
+| `node .cache/terminal-gap-audit-2026-11-18/review-shell.cjs` | 7 次真实 macOS ARM64 PTY 启动通过断言。集成开启的 Zsh 登录和非登录均跳过 fixture 的 `.zshenv`，登录配置额外跳过 `.zprofile`。离线 OpenSSH 与 Cognia 导入计划均按预期解析出差异。 |
+| 仓库 Jest 聚焦回归 | 10 个套件、279 个用例通过。包括 Profile、能力缓存、启动/重启、WS、Quick Fix、SSH 导入、通用路由与终端组件。 |
+| 完整 Host 与终端验收 | 重跑 cargo test --locked -p cognia-terminal --lib，退出码 101，依旧止于 net_proxy.rs:968。实际双 Host、移动和 SSH 验收见 V18。本轮所有进程停止请求都由夹具拦截。 |
+
+T13、T14、T03 原生分支和 T04 优先处理。后续真实双 Host 验收要同时覆盖已获准与被拒绝的同步、同一和不同设备身份、各传输确认丢失、本机/SSH 同端口及旧连接停止被拒绝。变更后应能观测实际目标与是否建成原请求的环境，并验证原会话失败时仍有可恢复的归属。

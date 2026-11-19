@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS unresolved_refs (
 CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_refs(reference_name);
 CREATE INDEX IF NOT EXISTS idx_unresolved_file ON unresolved_refs(file_path);
 
+CREATE TABLE IF NOT EXISTS resolved_ref_ids (id INTEGER PRIMARY KEY);
+
 -- Full-text search over symbol identity + docs, kept in sync by triggers.
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
   name,

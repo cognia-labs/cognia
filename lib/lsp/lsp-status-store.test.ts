@@ -156,6 +156,42 @@ describe("useLspStatusStore.refresh", () => {
     adapter.fireInstallProgress({ serverId: "typescript", phase: "installing" })
     expect(useLspStatusStore.getState().installProgress["typescript"]?.phase).toBe("installing")
   })
+
+  it.each(["success", "failure"])(
+    "discards stale detection %s after switching hosts",
+    async (outcome) => {
+      const { deps, adapter } = makeDeps()
+      let host = "first"
+      let finishFirst!: (entries: LspDetectResultEntry[]) => void
+      let failFirst!: (error: Error) => void
+      adapter.detect.mockImplementationOnce(
+        () =>
+          new Promise<LspDetectResultEntry[]>((resolve, reject) => {
+            finishFirst = resolve
+            failFirst = reject
+          })
+      )
+      adapter.detect.mockResolvedValueOnce([
+        {
+          serverId: "typescript",
+          status: "installed",
+          source: "path",
+          resolvedPath: "/second/tsls",
+        },
+      ])
+      configureLspStatusStore({ ...deps, hostIdentity: () => host })
+      const first = useLspStatusStore.getState().refresh()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(adapter.detect).toHaveBeenCalledTimes(1)
+      host = "second"
+      await useLspStatusStore.getState().refresh()
+      if (outcome === "success") finishFirst([])
+      else failFirst(new Error("previous host disconnected"))
+      await first
+      expect(useLspStatusStore.getState().statuses.typescript.resolvedPath).toBe("/second/tsls")
+    }
+  )
 })
 
 describe("useLspStatusStore.install", () => {

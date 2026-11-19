@@ -144,5 +144,12 @@ export async function resolveLspServers(
   }
 
   // Drop disabled entries last so a higher layer can re-enable a lower one.
-  return Array.from(byId.values()).filter((s) => s.enabled !== false)
+  return Array.from(byId.values()).filter(
+    (s) =>
+      s.enabled !== false &&
+      typeof s.command === "string" &&
+      s.command.length > 0 &&
+      Array.isArray(s.languages) &&
+      s.languages.every((language) => typeof language === "string")
+  )
 }

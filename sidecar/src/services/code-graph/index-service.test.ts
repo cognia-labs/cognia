@@ -6,6 +6,7 @@ import fsp from "node:fs/promises"
 import path from "node:path"
 import type { Worker } from "node:worker_threads"
 import { execFileSync } from "node:child_process"
+import { setTimeout as delay } from "node:timers/promises"
 
 import { createIndexService } from "./index-service.ts"
 
@@ -130,6 +131,124 @@ async function tmpRepo(files: Record<string, string>): Promise<string> {
   }
   return root
 }
+
+test("unchanged callers rebind after an indexed definition moves", async () => {
+  const root = await tmpRepo({
+    "a.ts": "export function target() { return 1 }\n",
+    "b.ts": "import { target } from './a'\nexport function caller() { return target() }\n",
+  })
+  let now = 1000
+  let index = createIndexService({ root, now: () => now })
+  try {
+    await index.ensureIndexed()
+    const old = index.search("target").find((node) => node.name === "target")!
+    assert.deepEqual(
+      index.callers(old.id).map((row) => row.node?.name),
+      ["caller"]
+    )
+    assert.match(index.status().binding, /sqlite/)
+    index.dispose()
+    const extractions: string[] = []
+    index = createIndexService({
+      root,
+      now: () => now,
+      onExtraction: (event) => extractions.push(event),
+    })
+    await index.ensureIndexed()
+    assert.match(index.status().binding, /sqlite/)
+    assert.deepEqual(extractions, [], "warm reopen must reuse unchanged graph data")
+    await fsp.writeFile(path.join(root, "a.ts"), "// move\nexport function target() { return 1 }\n")
+    now += 2000
+    await index.syncStale()
+    const current = index.search("target").find((node) => node.name === "target")!
+    assert.notEqual(current.id, old.id)
+    assert.deepEqual(
+      index.callers(current.id).map((row) => row.node?.name),
+      ["caller"]
+    )
+  } finally {
+    index.dispose()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("watcher updates preserve ignore and symlink admission and react to ignore changes", async (t) => {
+  const root = await tmpRepo({
+    ".gitignore": "ignored/\n",
+    "ignored/private.ts": "export function ignoredBefore() {}",
+    "visible.ts": "export function visibleBefore() {}",
+  })
+  const outside = await tmpRepo({ "external.ts": "export function externalSymbol() {}" })
+  const index = createIndexService({ root, watch: true, forceMemory: true, now: () => 1000 })
+  async function waitForSync(predicate: () => boolean) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      await delay(25)
+      await index.syncStale()
+      if (predicate()) return
+    }
+    assert.fail("watcher did not index the expected change")
+  }
+  try {
+    await index.ensureIndexed()
+    if (!index.status().watching) return t.skip("recursive filesystem watcher unavailable")
+    await fsp.writeFile(path.join(root, "ignored/private.ts"), "export function ignoredAfter() {}")
+    await fsp.symlink(path.join(outside, "external.ts"), path.join(root, "link.ts"))
+    await fsp.writeFile(path.join(root, "visible.ts"), "export function visibleAfter() {}")
+    await waitForSync(
+      () =>
+        index.files().some((file) => file.path === "visible.ts") &&
+        index.search("visibleAfter").some((node) => node.name === "visibleAfter")
+    )
+    assert.deepEqual(
+      index.files().map((file) => file.path),
+      ["visible.ts"]
+    )
+    await fsp.writeFile(path.join(root, ".gitignore"), "visible.ts\n")
+    await waitForSync(() => index.files().some((file) => file.path === "ignored/private.ts"))
+    assert.deepEqual(
+      index.files().map((file) => file.path),
+      ["ignored/private.ts"]
+    )
+  } finally {
+    index.dispose()
+    await Promise.all([root, outside].map((dir) => fsp.rm(dir, { recursive: true, force: true })))
+  }
+})
+
+test("snippets never combine indexed locations with a different file generation", async () => {
+  const root = await tmpRepo({ "a.ts": "export function oldSymbol() {}\n" })
+  const index = createIndexService({ root, forceMemory: true, now: () => 1000 })
+  try {
+    await index.ensureIndexed()
+    const old = index.search("oldSymbol")[0]!
+    await fsp.writeFile(path.join(root, "a.ts"), "export function replacement() {}\n")
+    assert.equal(index.snippetFor(old), "")
+    assert.match(index.stalenessBanner(), /pending/)
+    await index.syncStale()
+    assert.equal(index.search("oldSymbol").length, 0)
+    assert.match(index.snippetFor(index.search("replacement")[0]), /replacement/)
+  } finally {
+    index.dispose()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("files that grow past the index limit no longer expose stale symbols", async () => {
+  const root = await tmpRepo({ "a.ts": "export function before() {}" })
+  let now = 0
+  const index = createIndexService({ root, forceMemory: true, now: () => now })
+  try {
+    await index.ensureIndexed()
+    await fsp.writeFile(path.join(root, "a.ts"), "x".repeat(5 * 1024 * 1024 + 1))
+    now += 2000
+    await index.syncStale()
+    assert.equal(index.search("before").length, 0)
+    assert.match(index.stalenessBanner(), /skipped.*5 MiB/)
+  } finally {
+    index.dispose()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
 
 test("ensureIndexed builds the graph; status/search/context/callers work", async () => {
   const root = await tmpRepo({

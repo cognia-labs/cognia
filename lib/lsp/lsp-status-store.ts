@@ -21,7 +21,8 @@
 import { create } from "zustand"
 import type { LspServerStatus, LspHealthState, ResolvedLspServer } from "@/types/lsp/config"
 import {
-  TauriLspClientAdapter,
+  getSystemLspClient,
+  type TauriLspClientAdapter,
   type LspDetectResultEntry,
   type LspInstallProgressEvent,
   type LspRuntimeStatusEntry,
@@ -31,6 +32,9 @@ import { isVscodeHostAvailable } from "@/lib/plugin/core/vscode-loader"
 import { resolveLspServers } from "@/lib/lsp/resolve-config"
 import { readProjectLspFile } from "@/lib/lsp/project-file-reader"
 import { useSettingsStore } from "@/stores/settings/settings-store"
+import { useProjectStore } from "@/stores/project/project-store"
+import { primaryRootOf } from "@/lib/workspace/roots"
+import { getRemoteLspTransport } from "@/lib/lsp/host-transport"
 
 export interface LspStatusDeps {
   adapter: Pick<
@@ -42,6 +46,7 @@ export interface LspStatusDeps {
   /** Managed install root (`<appData>/lsp`); undefined off-Tauri. */
   resolveInstallDir: () => Promise<string | undefined>
   hostAvailable: () => boolean
+  hostIdentity?: () => unknown
 }
 
 let deps: LspStatusDeps | null = null
@@ -52,18 +57,22 @@ export function configureLspStatusStore(next: LspStatusDeps | null): void {
 }
 
 function productionDeps(): LspStatusDeps {
-  const adapter = new TauriLspClientAdapter()
+  const adapter = getSystemLspClient()
   return {
     adapter,
     resolveServers: async () => {
       const settings = useSettingsStore.getState().settings
+      const { projects, activeProjectId } = useProjectStore.getState()
+      const project = projects.find((entry) => entry.id === activeProjectId)
       return resolveLspServers({
+        rootDir: project ? primaryRootOf(project)?.path : undefined,
         userServers: settings?.lsp?.servers,
         readProjectFile: readProjectLspFile,
       })
     },
     resolveInstallDir: async () => {
       try {
+        if (getRemoteLspTransport()) return undefined
         const { isTauri } = await import("@/lib/tauri")
         if (!isTauri()) return undefined
         const { appDataDir, join } = await import("@tauri-apps/api/path")
@@ -72,7 +81,8 @@ function productionDeps(): LspStatusDeps {
         return undefined
       }
     },
-    hostAvailable: isVscodeHostAvailable,
+    hostAvailable: () => isVscodeHostAvailable() || Boolean(getRemoteLspTransport()),
+    hostIdentity: getRemoteLspTransport,
   }
 }
 
@@ -112,6 +122,8 @@ export interface LspStatusStoreState {
 }
 
 let pushesWired = false
+let refreshRevision = 0
+let lastRefreshHost: unknown
 
 export const useLspStatusStore = create<LspStatusStoreState>((set, get) => ({
   statuses: {},
@@ -134,6 +146,13 @@ export const useLspStatusStore = create<LspStatusStoreState>((set, get) => ({
 
   refresh: async () => {
     const d = getDeps()
+    const host = d.hostIdentity?.()
+    const revision = ++refreshRevision
+    const current = () => revision === refreshRevision && host === d.hostIdentity?.()
+    if (host !== lastRefreshHost) {
+      lastRefreshHost = host
+      set({ statuses: {}, installProgress: {}, logs: [] })
+    }
     if (!d.hostAvailable()) {
       set({ statuses: {}, refreshing: false })
       return
@@ -161,6 +180,7 @@ export const useLspStatusStore = create<LspStatusStoreState>((set, get) => ({
     set({ refreshing: true })
     try {
       const [servers, installDir] = await Promise.all([d.resolveServers(), d.resolveInstallDir()])
+      if (!current()) return
       const [detected, runtime] = await Promise.all([
         d.adapter.detect({
           servers: servers.map((s) => ({
@@ -197,9 +217,9 @@ export const useLspStatusStore = create<LspStatusStoreState>((set, get) => ({
           lastError: det?.error ?? run.find((e) => e.lastError)?.lastError,
         }
       }
-      set({ statuses, refreshing: false })
+      if (current()) set({ statuses, refreshing: false })
     } catch {
-      set({ refreshing: false })
+      if (current()) set({ statuses: {}, installProgress: {}, refreshing: false })
     }
   },
 
@@ -241,5 +261,7 @@ export const useLspStatusStore = create<LspStatusStoreState>((set, get) => ({
 export function __resetLspStatusStoreForTesting(): void {
   deps = null
   pushesWired = false
+  refreshRevision += 1
+  lastRefreshHost = undefined
   useLspStatusStore.setState({ statuses: {}, installProgress: {}, refreshing: false, logs: [] })
 }

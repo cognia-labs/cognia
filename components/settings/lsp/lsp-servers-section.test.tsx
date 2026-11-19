@@ -5,6 +5,16 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
 
 const saveMock = jest.fn(async (_patch: unknown) => {})
+const mockConnectRemote = jest.fn(async () => {})
+let mockRemoteHost: object | null = null
+
+jest.mock("@/lib/lsp/ensure-editor-lsp-runtime", () => ({
+  connectRemoteEditorLsp: () => mockConnectRemote(),
+}))
+jest.mock("@/lib/lsp/host-transport", () => ({
+  getRemoteLspTransport: () => mockRemoteHost,
+  subscribeRemoteLspTransport: () => () => {},
+}))
 const settingsRef: {
   settings: {
     lsp?: { servers?: unknown[]; enabled?: boolean; autoInstall?: boolean }
@@ -57,6 +67,8 @@ import { LspServersSection } from "./lsp-servers-section"
 
 beforeEach(() => {
   saveMock.mockClear()
+  mockConnectRemote.mockClear()
+  mockRemoteHost = null
   settingsRef.settings = { lsp: {} }
 })
 
@@ -127,6 +139,15 @@ describe("LspServersSection runtime block", () => {
 })
 
 describe("LspServersSection", () => {
+  it("requests remote authorization only after a user clicks Connect", async () => {
+    mockRemoteHost = {}
+    render(<LspServersSection />)
+    expect(mockConnectRemote).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "remote.connect" }))
+    expect(await screen.findByText("remote.connected")).toBeInTheDocument()
+    expect(mockConnectRemote).toHaveBeenCalledTimes(1)
+  })
+
   it("renders the four builtin rows and the empty custom state", () => {
     render(<LspServersSection />)
     expect(screen.getByTestId("lsp-builtin-typescript")).toBeInTheDocument()

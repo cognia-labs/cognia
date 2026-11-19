@@ -597,7 +597,6 @@ fn lsp_host_script_path(sidecar_dir: &Path) -> PathBuf {
         .join("host.js")
 }
 
-#[cfg(feature = "tauri-host")]
 /// Resolve the LSP entry using the shared directory installed at host boot.
 fn resolve_lsp_host_script() -> Result<PathBuf, String> {
     let dir = cognia_sidecar::directory()?;
@@ -644,20 +643,13 @@ pub async fn ensure_system_lsp_host_for_state(
     state: &VscodeExtensionState,
 ) -> Result<(), VscodeCommandError> {
     // Fast idempotent path — the host outlives route changes for the session.
-    if state.sidecars.read().contains_key(LSP_HOST_KEY) {
+    if state
+        .sidecars
+        .read()
+        .get(LSP_HOST_KEY)
+        .is_some_and(|sidecar| sidecar.exit().is_none())
+    {
         return Ok(());
-    }
-    let script = state.sidecar_script.read().clone().ok_or_else(|| {
-        VscodeCommandError::new(
-            "lsp_host_script_missing",
-            "VS Code/LSP host script is not configured",
-        )
-    })?;
-    if !script.is_file() {
-        return Err(VscodeCommandError::new(
-            "lsp_host_script_missing",
-            format!("VS Code/LSP host script not found at {}", script.display()),
-        ));
     }
     let event_sink = state.event_sink.read().as_ref().cloned().ok_or_else(|| {
         VscodeCommandError::new(
@@ -665,16 +657,113 @@ pub async fn ensure_system_lsp_host_for_state(
             "VS Code/LSP event sink is not configured",
         )
     })?;
-    let script_str = script.to_string_lossy().to_string();
-    let node_binary = state.node_binary.read().clone();
+    let sidecar = spawn_lsp_host(state, event_sink).await?;
 
+    let mut sidecars = state.sidecars.write();
+    if sidecars
+        .get(LSP_HOST_KEY)
+        .is_none_or(|current| current.exit().is_some())
+    {
+        sidecars.insert(LSP_HOST_KEY.to_string(), sidecar);
+    }
+    Ok(())
+}
+
+/// Start the caller's private system host. The Companion dispatcher supplies
+/// both the authenticated device identity and the device-targeted sink.
+pub async fn ensure_device_lsp_host(
+    state: &VscodeExtensionState,
+    tenant_id: &str,
+    device_id: &str,
+    event_sink: super::VscodeEventSink,
+) -> Result<(), VscodeCommandError> {
+    let slot = {
+        let mut hosts = state.device_lsp_hosts.write();
+        Arc::clone(
+            hosts
+                .entry((tenant_id.to_owned(), device_id.to_owned()))
+                .or_default(),
+        )
+    };
+    let mut host = slot.lock().await;
+    if let Some(current) = host
+        .as_ref()
+        .filter(|current| current.sidecar.exit().is_none())
+    {
+        *current.events.write() = event_sink;
+        return Ok(());
+    }
+    let events = Arc::new(parking_lot::RwLock::new(event_sink));
+    let forward = Arc::clone(&events);
+    let sidecar = spawn_lsp_host(
+        state,
+        Arc::new(move |event, frame| {
+            let sink = forward.read().clone();
+            sink(event, frame);
+        }),
+    )
+    .await?;
+    *host = Some(super::DeviceLspHost { sidecar, events });
+    Ok(())
+}
+
+pub async fn invoke_device_lsp_host(
+    state: &VscodeExtensionState,
+    tenant_id: &str,
+    device_id: &str,
+    method: &str,
+    payload: serde_json::Value,
+) -> Result<String, VscodeCommandError> {
+    let slot = state
+        .device_lsp_hosts
+        .read()
+        .get(&(tenant_id.to_owned(), device_id.to_owned()))
+        .cloned()
+        .ok_or_else(|| VscodeCommandError::new("not_loaded", "device LSP host not loaded"))?;
+    let sidecar = slot
+        .lock()
+        .await
+        .as_ref()
+        .filter(|host| host.sidecar.exit().is_none())
+        .map(|host| Arc::clone(&host.sidecar))
+        .ok_or_else(|| VscodeCommandError::new("not_loaded", "device LSP host not loaded"))?;
+    request_sidecar(sidecar.as_ref(), method, payload)
+        .await
+        .map(|result| result.to_string())
+}
+
+async fn spawn_lsp_host(
+    state: &VscodeExtensionState,
+    event_sink: super::VscodeEventSink,
+) -> Result<Arc<Sidecar>, VscodeCommandError> {
+    let configured_script = state.sidecar_script.read().clone();
+    let script = match configured_script {
+        Some(script) if script.is_file() => script,
+        Some(script) => {
+            return Err(VscodeCommandError::new(
+                "lsp_host_script_missing",
+                format!("VS Code/LSP host script not found at {}", script.display()),
+            ));
+        }
+        None => resolve_lsp_host_script()
+            .map_err(|error| VscodeCommandError::new("lsp_host_script_missing", error))?,
+    };
+    let script_str = script.to_string_lossy().to_string();
+    let node_override = state.node_binary.read().clone();
+    let node_binary = match node_override {
+        Some(binary) => binary,
+        None => cognia_core::node_runtime::node_executable()
+            .map_err(|error| VscodeCommandError::new("lsp_host_spawn_failed", error.to_string()))?
+            .to_string_lossy()
+            .into_owned(),
+    };
     let sidecar = Sidecar::spawn(SpawnRequest {
         extension_id: LSP_HOST_KEY.to_string(),
         // host.ts never reads extension_path/COGNIA_VSCODE_EXTENSION_PATH at
         // boot; pass the script path itself so the arg is non-empty/valid.
         extension_path: script_str.clone(),
         generation: "system".to_string(),
-        node_binary,
+        node_binary: Some(node_binary),
         sidecar_script: Some(script_str),
     })
     .await
@@ -697,14 +786,7 @@ pub async fn ensure_system_lsp_host_for_state(
         }
     });
 
-    // Re-check under the write lock: another caller may have spawned + inserted
-    // while we were `.await`ing the spawn. If so, drop our sidecar (its `Drop`
-    // start_kills the orphan child — no `.await` held under the lock).
-    let mut sidecars = state.sidecars.write();
-    if !sidecars.contains_key(LSP_HOST_KEY) {
-        sidecars.insert(LSP_HOST_KEY.to_string(), Arc::new(sidecar));
-    }
-    Ok(())
+    Ok(Arc::new(sidecar))
 }
 
 #[derive(Debug, Serialize, Default, Deserialize)]

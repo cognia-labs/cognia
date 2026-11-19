@@ -32,6 +32,7 @@ export interface LspInstallSpec {
 export interface LspServerEntry {
   id: string
   command: string
+  languages?: string[]
   args?: string[]
   env?: Record<string, string>
   extensions?: string[]
@@ -43,6 +44,9 @@ export interface LspServerEntry {
   workspaceFolderRequired?: boolean
   install?: LspInstallSpec
   startupTimeout?: number
+  memoryLimitMb?: number
+  transport?: "stdio" | "socket"
+  endpoint?: string
 }
 
 /**
@@ -77,6 +81,7 @@ export interface ServerInfo {
   /** Lower-cased, with leading dot. */
   extensions: string[]
   filenames: string[]
+  languages: string[]
   root: RootResolver
   resolveCommand: (root: string, ctx?: RootContext) => ServerCommand
   settings?: Record<string, unknown> | undefined
@@ -84,6 +89,9 @@ export interface ServerInfo {
   install?: LspInstallSpec | undefined
   /** ms to wait for `initialize` before treating the spawn as failed. */
   startupTimeout?: number | undefined
+  memoryLimitMb?: number | undefined
+  transport?: "stdio" | "socket" | undefined
+  endpoint?: string | undefined
 }
 
 /**
@@ -131,7 +139,7 @@ function isAncestor(ancestor: string, dir: string): boolean {
   const d = path.resolve(dir)
   if (a === d) return true
   const rel = path.relative(a, d)
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
 }
 
 /**
@@ -157,19 +165,37 @@ export function buildServers(configList: unknown): ServerInfo[] {
   const list: readonly (Partial<LspServerEntry> | null | undefined)[] = Array.isArray(configList)
     ? configList
     : []
+  const stringArrays = [
+    "languages",
+    "extensions",
+    "filenames",
+    "rootMarkers",
+    "excludeRootMarkers",
+    "args",
+  ] as const
   return list
     .filter(
       (cfg): cfg is LspServerEntry =>
-        !!cfg && !!cfg.id && typeof cfg.command === "string" && cfg.command.length > 0
+        !!cfg &&
+        typeof cfg.id === "string" &&
+        cfg.id.length > 0 &&
+        typeof cfg.command === "string" &&
+        cfg.command.length > 0 &&
+        stringArrays.every(
+          (key) =>
+            cfg[key] === undefined ||
+            (Array.isArray(cfg[key]) && cfg[key].every((value) => typeof value === "string"))
+        )
     )
     .map((cfg) => ({
       id: cfg.id,
       extensions: (cfg.extensions ?? []).map((e) => String(e).toLowerCase()),
       filenames: cfg.filenames ?? [],
+      languages: cfg.languages ?? [],
       root: rootResolverFor(cfg),
-      resolveCommand: () => ({
-        command: cfg.command,
-        args: cfg.args ?? [],
+      resolveCommand: (root) => ({
+        command: cfg.command.replaceAll("${workspaceFolder}", () => root),
+        args: (cfg.args ?? []).map((arg) => arg.replaceAll("${workspaceFolder}", () => root)),
         env: cfg.env,
         initializationOptions: cfg.initializationOptions,
       }),
@@ -177,7 +203,34 @@ export function buildServers(configList: unknown): ServerInfo[] {
       workspaceFolderRequired: cfg.workspaceFolderRequired,
       install: cfg.install,
       startupTimeout: cfg.startupTimeout,
+      memoryLimitMb: cfg.memoryLimitMb,
+      transport: cfg.transport,
+      endpoint: cfg.endpoint,
     }))
+}
+
+const LANGUAGE_IDS: Record<string, string> = {
+  ".ts": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
+  ".tsx": "typescriptreact",
+  ".js": "javascript",
+  ".mjs": "javascript",
+  ".cjs": "javascript",
+  ".jsx": "javascriptreact",
+  ".py": "python",
+  ".pyi": "python",
+  ".rs": "rust",
+  ".go": "go",
+  ".htm": "html",
+  ".yml": "yaml",
+  ".sh": "shellscript",
+  ".bash": "shellscript",
+}
+
+export function languageIdForFile(filePath: string, server: ServerInfo): string {
+  const extension = path.extname(filePath).toLowerCase()
+  return LANGUAGE_IDS[extension] ?? server.languages[0] ?? (extension.slice(1) || "plaintext")
 }
 
 /**

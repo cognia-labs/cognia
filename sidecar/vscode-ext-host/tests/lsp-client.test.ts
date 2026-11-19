@@ -533,6 +533,28 @@ test("changeTextDocument before registerTextDocument auto-registers (best-effort
   await client.stop()
 })
 
+test("incremental synchronization replaces the old UTF-16 range", async () => {
+  const mock = makeMockConnection()
+  mock.replyTo("initialize", () => ({ capabilities: { textDocumentSync: { change: 2 } } }))
+  const client = new CogniaLspClient({ serverId: "fixture", command: "unused" }, async () => ({
+    connection: mock.connection,
+    dispose: () => undefined,
+  }))
+  await client.start()
+  client.registerTextDocument("file:///main.ts", "typescript", "one\r\n😀")
+  client.changeTextDocument("file:///main.ts", "replacement")
+  assert.deepEqual(
+    mock.inspect().sentNotifications.find((event) => event.method === "textDocument/didChange")
+      .params.contentChanges,
+    [
+      {
+        range: { start: { line: 0, character: 0 }, end: { line: 1, character: 2 } },
+        text: "replacement",
+      },
+    ]
+  )
+})
+
 test("invoking a provider before start() throws with a clear error", async () => {
   const mock = makeMockConnection()
   const client = makeClient(mock)

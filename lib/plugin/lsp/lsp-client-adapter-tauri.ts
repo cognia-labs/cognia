@@ -11,25 +11,19 @@
  * multiple servers (under different ownerId/serverId composites) can
  * coexist.
  *
- * Why we use the existing VS Code channel rather than a new
- * `lsp://`-prefixed one: the channel + plumbing already work end-to-
- * end with the Tauri `plugin_invoke_vscode_rpc` command and the
- * dispatcher. Introducing a new channel would force matching Rust
- * changes for no functional gain — the sidecar is one process, and
- * the JSON-RPC method names alone discriminate `lsp:*` vs
- * `extension:*`.
+ * Local requests use the VS Code system channel. A paired device uses the
+ * authorized Companion facade and the same JSON-RPC envelope, delivered
+ * through the device-scoped event topic.
  */
 
 import { invokeVscodeRpc, isVscodeHostAvailable } from "@/lib/plugin/core/vscode-loader"
 import { transport } from "@/lib/tauri"
-import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
+import { getRemoteLspTransport, waitForLspEventStream } from "@/lib/lsp/host-transport"
+import type { createInteractiveApprovalScope } from "@/lib/tauri/interactive-approval"
+import { fileUriToPath } from "@/lib/files/path-uri"
 import { registerMethod } from "@/lib/plugin/vscode-shim/rpc-dispatcher"
 import { lspPublishDiagnosticsToBridgePayload } from "@/lib/plugin/vscode-shim/lsp-protocol-adapter"
-import type {
-  LspClientAdapter,
-  LspServerNotificationEvent,
-  LspServerRequestEvent,
-} from "./lsp-registry"
+import type { LspClientAdapter } from "./lsp-registry"
 import { lspServerKey } from "./lsp-registry"
 
 /**
@@ -41,31 +35,68 @@ import { lspServerKey } from "./lsp-registry"
  * field on every payload.
  */
 export const LSP_TAURI_CHANNEL_ID = "cognia.lsp-service"
+const WORKSPACE_FOLDERS_REQUEST = "workspace/workspaceFolders"
 
 type InvokeFn = (pluginId: string, method: string, payload: unknown) => Promise<unknown>
 
-async function invokeActiveLspHost(
+let remoteApproval: ReturnType<typeof createInteractiveApprovalScope> | undefined
+let approvedTransport: ReturnType<typeof getRemoteLspTransport>
+
+/** Called from the Language Servers connection gesture. */
+export async function authorizeRemoteLspHost(): Promise<void> {
+  const target = getRemoteLspTransport()
+  if (!target) return
+  const { createInteractiveApprovalScope, InteractiveApprovalRequiredError } =
+    await import("@/lib/tauri/interactive-approval")
+  const approval = createInteractiveApprovalScope(["lsp_host_ensure", "lsp_host_request"], {
+    target,
+    remote: true,
+  })
+  await approval.authorize()
+  if (getRemoteLspTransport() !== target)
+    throw new InteractiveApprovalRequiredError("approval_target_changed")
+  remoteApproval?.clear()
+  remoteApproval = approval
+  approvedTransport = target
+}
+
+export async function callLspHost<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const target = getRemoteLspTransport()
+  if (!target) return transport.call<T>(command, args)
+  const approval = remoteApproval
+  if (!approval || approvedTransport !== target) {
+    const { InteractiveApprovalRequiredError } = await import("@/lib/tauri/interactive-approval")
+    throw new InteractiveApprovalRequiredError()
+  }
+  // Initialization may issue callbacks before its response, so request the
+  // subscription acknowledgement before starting a language server.
+  if (command === "lsp_host_request" && args?.method === "lsp:start") {
+    await waitForLspEventStream(target)
+  }
+  if (getRemoteLspTransport() !== target || remoteApproval !== approval) {
+    const { InteractiveApprovalRequiredError } = await import("@/lib/tauri/interactive-approval")
+    throw new InteractiveApprovalRequiredError("approval_target_changed")
+  }
+  return approval.call<T>(command, args)
+}
+
+export async function invokeActiveLspHost(
   pluginId: string,
   method: string,
   payload: unknown
 ): Promise<unknown> {
-  if (!isRemoteHostActive()) return invokeVscodeRpc(pluginId, method, payload)
+  if (!getRemoteLspTransport()) return invokeVscodeRpc(pluginId, method, payload)
   if (pluginId !== LSP_TAURI_CHANNEL_ID) {
     throw new Error(`remote LSP facade rejects non-system channel ${pluginId}`)
   }
-  const raw = await transport.call<string>("lsp_host_request", {
+  const raw = await callLspHost<string>("lsp_host_request", {
     method,
     payloadJson: JSON.stringify(payload ?? null),
   })
   return raw ? JSON.parse(raw) : null
 }
 
-type DiagnosticsForwarder = (
-  uri: string,
-  markers: ReturnType<typeof lspPublishDiagnosticsToBridgePayload>["markers"]
-) => void
-type ServerRequestForwarder = (event: LspServerRequestEvent) => void
-type ServerNotificationForwarder = (event: LspServerNotificationEvent) => void
+type LspStartInput = Parameters<LspClientAdapter["start"]>[0]
 
 interface ConstructorDeps {
   /** Override the Tauri `invokeVscodeRpc` for tests. Defaults to the real one. */
@@ -90,9 +121,14 @@ export class TauriLspClientAdapter implements LspClientAdapter {
   private registerHandler: NonNullable<ConstructorDeps["registerHandler"]>
   private isHostAvailable: () => boolean
   private channelId: string
-  private diagnosticsRoutes = new Map<string, DiagnosticsForwarder>()
-  private serverRequestRoutes = new Map<string, ServerRequestForwarder>()
-  private serverNotificationRoutes = new Map<string, ServerNotificationForwarder>()
+  private routes = new Map<
+    string,
+    { host: ReturnType<typeof getRemoteLspTransport>; input: LspStartInput }
+  >()
+  private remoteCallbacks = new Map<
+    string,
+    { host: NonNullable<ReturnType<typeof getRemoteLspTransport>>; expiresAt: number }
+  >()
   private unregisterPublishDiagnostics: (() => void) | null = null
   private unregisterServerRequest: (() => void) | null = null
   private unregisterServerNotification: (() => void) | null = null
@@ -102,8 +138,13 @@ export class TauriLspClientAdapter implements LspClientAdapter {
     this.invoke = deps.invoke ?? invokeActiveLspHost
     this.registerHandler = deps.registerHandler ?? registerMethod
     this.isHostAvailable =
-      deps.isHostAvailable ?? (() => isVscodeHostAvailable() || isRemoteHostActive())
+      deps.isHostAvailable ?? (() => isVscodeHostAvailable() || Boolean(getRemoteLspTransport()))
     this.channelId = deps.channelId ?? LSP_TAURI_CHANNEL_ID
+  }
+
+  private route(ownerId: string, serverId: string): LspStartInput | undefined {
+    const route = this.routes.get(lspServerKey(ownerId, serverId))
+    if (route?.host === getRemoteLspTransport()) return route?.input
   }
 
   /**
@@ -122,7 +163,7 @@ export class TauriLspClientAdapter implements LspClientAdapter {
           uri: string
           diagnostics: Parameters<typeof lspPublishDiagnosticsToBridgePayload>[0]["diagnostics"]
         }
-        const forwarder = this.diagnosticsRoutes.get(lspServerKey(p.ownerId, p.serverId))
+        const forwarder = this.route(p.ownerId, p.serverId)?.onDiagnostics
         if (!forwarder) return
         const { uri, markers } = lspPublishDiagnosticsToBridgePayload({
           uri: p.uri,
@@ -140,9 +181,17 @@ export class TauriLspClientAdapter implements LspClientAdapter {
         payload: unknown
         preconditions?: Record<string, { exists: boolean; version?: number; contentHash?: string }>
       }
-      const route = this.serverRequestRoutes.get(lspServerKey(p.ownerId, p.serverId))
-      if (route) {
-        route({
+      const host = getRemoteLspTransport()
+      if (host) {
+        const now = Date.now()
+        for (const [id, callback] of this.remoteCallbacks) {
+          if (callback.expiresAt <= now) this.remoteCallbacks.delete(id)
+        }
+        this.remoteCallbacks.set(p.requestId, { host, expiresAt: now + 30_000 })
+      }
+      const input = this.route(p.ownerId, p.serverId)
+      if (input?.onServerRequest) {
+        input.onServerRequest({
           requestId: p.requestId,
           method: p.method,
           payload: p.payload,
@@ -154,10 +203,11 @@ export class TauriLspClientAdapter implements LspClientAdapter {
         ownerId: p.ownerId,
         serverId: p.serverId,
         requestId: p.requestId,
-        error: {
-          code: -32601,
-          message: `LSP_CLIENT_METHOD_UNAVAILABLE: ${p.method}`,
-        },
+        ...(input && p.method === WORKSPACE_FOLDERS_REQUEST
+          ? { result: input.workspaceFolders ?? null }
+          : { error: { code: -32601, message: `LSP_CLIENT_METHOD_UNAVAILABLE: ${p.method}` } }),
+      }).catch(() => {
+        // A switch or expired approval can retire the route before we reply.
       })
     })
     this.unregisterServerNotification = this.registerHandler(
@@ -169,7 +219,7 @@ export class TauriLspClientAdapter implements LspClientAdapter {
           method: string
           payload: unknown
         }
-        this.serverNotificationRoutes.get(lspServerKey(p.ownerId, p.serverId))?.({
+        this.route(p.ownerId, p.serverId)?.onServerNotification?.({
           method: p.method,
           payload: p.payload,
         })
@@ -183,9 +233,8 @@ export class TauriLspClientAdapter implements LspClientAdapter {
       this.unregisterServerRequest = null
       this.unregisterServerNotification = null
       this.unregisterHandlers = null
-      this.diagnosticsRoutes.clear()
-      this.serverRequestRoutes.clear()
-      this.serverNotificationRoutes.clear()
+      this.routes.clear()
+      this.remoteCallbacks.clear()
     }
     return this.unregisterHandlers
   }
@@ -204,25 +253,21 @@ export class TauriLspClientAdapter implements LspClientAdapter {
       throw new Error("TauriLspClientAdapter: VS Code host unavailable — sidecar cannot be reached")
     }
     this.install() // guarantee diagnostic handler is up
-    this.diagnosticsRoutes.set(lspServerKey(input.ownerId, input.serverId), input.onDiagnostics)
-    if (input.onServerRequest) {
-      this.serverRequestRoutes.set(
-        lspServerKey(input.ownerId, input.serverId),
-        input.onServerRequest
-      )
-    }
-    if (input.onServerNotification) {
-      this.serverNotificationRoutes.set(
-        lspServerKey(input.ownerId, input.serverId),
-        input.onServerNotification
-      )
-    }
+    const key = lspServerKey(input.ownerId, input.serverId)
+    const route = { host: getRemoteLspTransport(), input: { ...input } }
+    this.routes.set(key, route)
 
+    const cwd = input.workspaceFolders?.[0]
+      ? (fileUriToPath(input.workspaceFolders[0].uri) ?? undefined)
+      : undefined
+    const expand = (value: string) =>
+      cwd ? value.replaceAll("${workspaceFolder}", () => cwd) : value
     const payload = {
       ownerId: input.ownerId,
       serverId: input.serverId,
-      command: input.config.command,
-      args: input.config.args,
+      command: input.ownerId === "user" ? expand(input.config.command) : input.config.command,
+      args: input.config.args?.map(expand),
+      cwd,
       env: input.config.env,
       transport: input.config.transport ?? "stdio",
       endpoint: input.config.endpoint,
@@ -234,6 +279,11 @@ export class TauriLspClientAdapter implements LspClientAdapter {
       settings: input.config.settings,
       startupTimeout: input.config.startupTimeout,
       memoryLimitMb: input.config.memoryLimitMb,
+      forwardServerRequests: input.onServerRequest
+        ? true
+        : route.host
+          ? [WORKSPACE_FOLDERS_REQUEST]
+          : false,
     }
     try {
       return (await this.invoke(this.channelId, "lsp:start", payload)) as {
@@ -242,9 +292,7 @@ export class TauriLspClientAdapter implements LspClientAdapter {
     } catch (err) {
       // Route is dead — drop it so a future retry doesn't leak the
       // closure.
-      this.diagnosticsRoutes.delete(lspServerKey(input.ownerId, input.serverId))
-      this.serverRequestRoutes.delete(lspServerKey(input.ownerId, input.serverId))
-      this.serverNotificationRoutes.delete(lspServerKey(input.ownerId, input.serverId))
+      if (this.routes.get(key) === route) this.routes.delete(key)
       throw err
     }
   }
@@ -256,9 +304,8 @@ export class TauriLspClientAdapter implements LspClientAdapter {
    */
   async stop(ownerId: string, serverId: string): Promise<void> {
     const key = lspServerKey(ownerId, serverId)
-    this.diagnosticsRoutes.delete(key)
-    this.serverRequestRoutes.delete(key)
-    this.serverNotificationRoutes.delete(key)
+    if (!this.route(ownerId, serverId) && this.routes.has(key)) return
+    this.routes.delete(key)
     if (!this.isHostAvailable()) return
     try {
       await this.invoke(this.channelId, "lsp:stop", { ownerId, serverId })
@@ -319,6 +366,12 @@ export class TauriLspClientAdapter implements LspClientAdapter {
     result?: unknown
     error?: { code: number; message: string; data?: unknown }
   }): Promise<boolean> {
+    const host = getRemoteLspTransport()
+    const callback = this.remoteCallbacks.get(input.requestId)
+    if (host || callback) {
+      if (!callback || callback.host !== host || callback.expiresAt <= Date.now()) return false
+      this.remoteCallbacks.delete(input.requestId)
+    }
     const response = (await this.invoke(this.channelId, "lsp:serverResponse", input)) as {
       accepted?: unknown
     }
@@ -331,6 +384,23 @@ export class TauriLspClientAdapter implements LspClientAdapter {
     method: string
     payload: unknown
   }): Promise<boolean> {
+    const route = this.route(input.ownerId, input.serverId)
+    if (route && input.method === "workspace/didChangeWorkspaceFolders") {
+      const event = (
+        input.payload as {
+          event?: {
+            added?: LspStartInput["workspaceFolders"]
+            removed?: LspStartInput["workspaceFolders"]
+          }
+        } | null
+      )?.event
+      if (Array.isArray(event?.added) && Array.isArray(event.removed)) {
+        const folders = new Map(route.workspaceFolders?.map((folder) => [folder.uri, folder]))
+        for (const folder of event.removed) if (folder?.uri) folders.delete(folder.uri)
+        for (const folder of event.added) if (folder?.uri) folders.set(folder.uri, folder)
+        route.workspaceFolders = [...folders.values()]
+      }
+    }
     const response = (await this.invoke(this.channelId, "lsp:clientNotification", input)) as {
       accepted?: unknown
     }
@@ -426,6 +496,13 @@ export class TauriLspClientAdapter implements LspClientAdapter {
   onStateChange(cb: (p: LspStatePushEvent) => void): () => void {
     return this.onStatePush(cb)
   }
+}
+
+let systemClient: TauriLspClientAdapter | undefined
+
+/** One dispatcher handler per method serves the editor, inventory and managed LSP. */
+export function getSystemLspClient(): TauriLspClientAdapter {
+  return (systemClient ??= new TauriLspClientAdapter())
 }
 
 /** `lsp:detect` / `lsp:install` result entry (sidecar lsp-installer). */

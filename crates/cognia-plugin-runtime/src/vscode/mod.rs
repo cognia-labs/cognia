@@ -100,6 +100,9 @@ pub struct ExtensionRuntime {
 pub struct VscodeExtensionState {
     /// One spawned sidecar per loaded extension.
     pub sidecars: Arc<RwLock<HashMap<String, Arc<host::Sidecar>>>>,
+    /// Paired-device LSP hosts never share documents or pending callbacks with
+    /// extensions, the local system host, or another device.
+    device_lsp_hosts: RwLock<HashMap<(String, String), DeviceLspSlot>>,
     pub runtimes: Arc<RwLock<HashMap<String, ExtensionRuntime>>>,
     pub extension_install_dir: PathBuf,
     /// Server-owned host executable configuration. The desktop wrapper fills
@@ -115,6 +118,13 @@ pub struct VscodeExtensionState {
     staged_downloads: RwLock<HashMap<PathBuf, StagedDownload>>,
 }
 
+type DeviceLspSlot = Arc<tokio::sync::Mutex<Option<DeviceLspHost>>>;
+
+struct DeviceLspHost {
+    sidecar: Arc<host::Sidecar>,
+    events: Arc<RwLock<VscodeEventSink>>,
+}
+
 /// A staged `.vsix` as its download verified it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedDownload {
@@ -126,6 +136,7 @@ impl VscodeExtensionState {
     pub fn new(install_dir: PathBuf) -> Self {
         Self {
             sidecars: Arc::new(RwLock::new(HashMap::new())),
+            device_lsp_hosts: RwLock::new(HashMap::new()),
             runtimes: Arc::new(RwLock::new(HashMap::new())),
             extension_install_dir: install_dir,
             sidecar_script: RwLock::new(None),

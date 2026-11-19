@@ -14,6 +14,8 @@ import crypto from "node:crypto"
 import fastGlob from "fast-glob"
 
 import { loadIgnoreGlobs } from "../../platform/fs/gitignore.ts"
+import { isSecretPath } from "../../platform/fs/secret-paths.ts"
+import { canonicalisePartial } from "../../platform/fs/paths.ts"
 import { isSupportedFile, languageFor } from "./languages/index.ts"
 import { extractFile } from "./extractor.ts"
 import type { ExtractResult } from "./extractor.ts"
@@ -29,7 +31,6 @@ import type { CodeGraphStore, FileRecord, GraphNode, StoreStats } from "./store-
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 const SYNC_THROTTLE_MS = 1500
-const SNIPPET_CACHE_MAX = 64
 
 interface BunCryptoHasher {
   update(bytes: Uint8Array): BunCryptoHasher
@@ -115,6 +116,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   let lastSyncAt = 0
   let disposed = false
   let syncing: Promise<number> | null = null
+  let resolutionPending = false
   let pool: ExtractionPool | null = null
   let workerFailed = false
   let serialTail: Promise<unknown> = Promise.resolve()
@@ -124,8 +126,24 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
     !standaloneResourceDir()
   /** files known-changed (from the watcher) awaiting re-index → drives the banner */
   const pendingPaths = new Set<string>()
-  /** snippet LRU: relPath → { hash, lines } */
-  const snippetCache = new Map<string, { hash: string | null; lines: string[] }>()
+  const oversizedPaths = new Set<string>()
+  let canonicalRoot: string | undefined
+
+  // Discovery and direct snippet reads must never follow a file or directory
+  // symlink below the selected root, including a path from a persisted graph.
+  function sourcePath(rel: string): string | null {
+    if (path.isAbsolute(rel) || rel.split(/[\\/]/).some((part) => !part || part.startsWith(".")))
+      return null
+    try {
+      canonicalRoot ??= fs.realpathSync(root)
+      const expected = path.join(canonicalRoot, rel)
+      if (isSecretPath(expected)) return null
+      if (fs.realpathSync(expected) !== expected || !fs.lstatSync(expected).isFile()) return null
+      return expected
+    } catch {
+      return null
+    }
+  }
 
   function assertActive(): void {
     if (disposed) throw new Error("code graph index is disposed")
@@ -185,14 +203,25 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   function ensureStore(): CodeGraphStore {
     assertActive()
     if (!store) {
-      if (dbPath) {
+      let writableCache = dbPath
+      if (writableCache) {
         try {
-          fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+          const expected = path.join(fs.realpathSync(root), path.relative(root, writableCache))
+          for (const suffix of ["", "-wal", "-shm"]) {
+            const candidate = writableCache + suffix
+            if (
+              canonicalisePartial(candidate) !== expected + suffix ||
+              fs.lstatSync(candidate, { throwIfNoEntry: false })?.isSymbolicLink()
+            ) {
+              throw new Error("CodeGraph cache must not follow symlinks")
+            }
+          }
+          fs.mkdirSync(path.dirname(writableCache), { recursive: true })
         } catch {
-          /* fall through to memory if .cognia can't be created */
+          writableCache = undefined
         }
       }
-      store = createStore({ dbPath, forceMemory: opts.forceMemory })
+      store = createStore({ dbPath: writableCache, forceMemory: opts.forceMemory })
     }
     return store
   }
@@ -225,20 +254,31 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   /** Re-extract a single file into the store (or delete it when gone). */
   async function prepareOne(rel: string): Promise<() => boolean> {
     assertActive()
-    const abs = path.join(root, rel)
+    const abs = sourcePath(rel)
+    const existing = ensureStore().getFile(rel)
+    const remove = () => {
+      if (!existing) return false
+      ensureStore().deleteFile(rel)
+      return true
+    }
+    if (!abs) return remove
     let stat: fs.Stats
     try {
       stat = await fsp.stat(abs)
     } catch {
-      return () => {
-        ensureStore().deleteFile(rel)
-        return true
-      }
+      return remove
     }
-    if (stat.size > MAX_FILE_BYTES) return () => false
-    const existing = ensureStore().getFile(rel)
+    if (stat.size > MAX_FILE_BYTES) {
+      oversizedPaths.add(rel)
+      return remove
+    }
     const { hash, size, buf } = await hashFile(abs)
     assertActive()
+    if (size > MAX_FILE_BYTES) {
+      oversizedPaths.add(rel)
+      return remove
+    }
+    oversizedPaths.delete(rel)
     if (existing && existing.content_hash === hash) return () => false
     const source = new TextDecoder().decode(buf)
     const result = await extract(rel, source)
@@ -279,19 +319,22 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
 
   /** Full build (or warm delta): index every changed/new file, drop the gone. */
   async function buildAll(): Promise<void> {
-    ensureStore()
+    const current = ensureStore()
     const onDisk = await listSourceFiles()
     const onDiskSet = new Set(onDisk)
     let changed = (await indexFiles(onDisk)).length
     // Drop files removed from disk since the last index.
-    const current = openStore()
     for (const f of current.allFiles()) {
       if (!onDiskSet.has(f.path)) {
         current.deleteFile(f.path)
         changed++
       }
     }
-    if (changed > 0) resolveAll(current)
+    if (changed > 0 || resolutionPending) {
+      resolutionPending = true
+      resolveAll(current)
+      resolutionPending = false
+    }
     lastSyncAt = now()
   }
 
@@ -299,7 +342,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
     assertActive()
     if (!opts.watch || watcher) return
     watcher = startWatcher(root, {
-      accept: (abs) => isSupportedFile(abs),
+      accept: (abs) => isSupportedFile(abs) || path.basename(abs) === ".gitignore",
       onChange: (absPaths) => {
         for (const abs of absPaths) {
           const rel = toRel(abs)
@@ -330,29 +373,38 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   async function performSync(): Promise<number> {
     await ensureIndexed()
     let changed = 0
-    if (pendingPaths.size > 0) {
-      const todo = [...pendingPaths]
+    if (pendingPaths.size > 0 || now() - lastSyncAt >= SYNC_THROTTLE_MS) {
+      const pending = [...pendingPaths]
+      const fullScan =
+        pending.length === 0 || pending.some((rel) => path.basename(rel) === ".gitignore")
       pendingPaths.clear()
-      const updates = await indexFiles(todo)
-      changed += updates.length
-      for (const rel of updates) snippetCache.delete(rel)
-    } else if (now() - lastSyncAt >= SYNC_THROTTLE_MS) {
-      // No watcher signal (or unsupported) → bounded re-scan.
-      const onDisk = await listSourceFiles()
-      const onDiskSet = new Set(onDisk)
-      const updates = await indexFiles(onDisk)
-      changed += updates.length
-      for (const rel of updates) snippetCache.delete(rel)
-      const current = openStore()
-      for (const f of current.allFiles()) {
-        if (!onDiskSet.has(f.path)) {
-          current.deleteFile(f.path)
-          changed++
+      try {
+        const onDisk = await listSourceFiles()
+        const onDiskSet = new Set(onDisk)
+        const updates = await indexFiles(
+          fullScan ? onDisk : pending.filter((rel) => onDiskSet.has(rel))
+        )
+        changed += updates.length
+        const current = openStore()
+        for (const f of current.allFiles()) {
+          if (!onDiskSet.has(f.path)) {
+            current.deleteFile(f.path)
+            changed++
+          }
         }
+        for (const rel of oversizedPaths) if (!onDiskSet.has(rel)) oversizedPaths.delete(rel)
+        if (fullScan) lastSyncAt = now()
+      } catch (error) {
+        resolutionPending = true
+        for (const rel of pending) pendingPaths.add(rel)
+        throw error
       }
-      lastSyncAt = now()
     }
-    if (changed > 0) resolveAll(openStore())
+    resolutionPending ||= changed > 0
+    if (resolutionPending) {
+      resolveAll(openStore())
+      resolutionPending = false
+    }
     return changed
   }
 
@@ -369,7 +421,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
     if (!node || node.kind === "file") return ""
     const rel = node.file_path
     const lines = readLines(rel)
-    if (!lines) return node.signature ?? ""
+    if (!lines) return ""
     const start = Math.max(1, node.start_line)
     const end = Math.min(lines.length, node.end_line || start)
     return lines.slice(start - 1, end).join("\n")
@@ -377,22 +429,23 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
 
   function readLines(rel: string): string[] | null {
     const fileRec = store?.getFile(rel)
-    const cached = snippetCache.get(rel)
-    if (cached && fileRec && cached.hash === fileRec.content_hash) return cached.lines
+    if (!fileRec) return null
     try {
-      const text = fs.readFileSync(path.join(root, rel), "utf-8")
-      const lines = text.split(/\r?\n/)
-      // LRU touch
-      snippetCache.delete(rel)
-      snippetCache.set(rel, { hash: fileRec?.content_hash ?? null, lines })
-      if (snippetCache.size > SNIPPET_CACHE_MAX) {
-        const oldest = snippetCache.keys().next()
-        if (!oldest.done) snippetCache.delete(oldest.value)
+      const abs = sourcePath(rel)
+      if (abs && fs.statSync(abs).size <= MAX_FILE_BYTES) {
+        const bytes = fs.readFileSync(abs)
+        const hash = bunRuntime
+          ? new bunRuntime.CryptoHasher("sha1").update(bytes).digest("hex")
+          : crypto.createHash("sha1").update(bytes).digest("hex")
+        if (bytes.length <= MAX_FILE_BYTES && hash === fileRec.content_hash) {
+          return bytes.toString("utf-8").split(/\r?\n/)
+        }
       }
-      return lines
     } catch {
-      return null
+      // A file may be replaced between discovery and reading.
     }
+    pendingPaths.add(rel)
+    return null
   }
 
   function toRel(abs: string): string | null {
@@ -464,11 +517,16 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
     },
 
     stalenessBanner() {
-      if (pendingPaths.size === 0) return ""
+      const skipped =
+        oversizedPaths.size > 0
+          ? `⚠️ ${oversizedPaths.size} source file(s) skipped because they exceed 5 MiB.`
+          : ""
+      if (pendingPaths.size === 0) return skipped
       const sample = [...pendingPaths].slice(0, 5).join(", ")
       return (
         `⚠️ ${pendingPaths.size} file(s) changed on disk and are pending re-index ` +
-        `(${sample}${pendingPaths.size > 5 ? ", …" : ""}). Read them directly for current content.`
+        `(${sample}${pendingPaths.size > 5 ? ", …" : ""}). Read them directly for current content.` +
+        (skipped ? ` ${skipped}` : "")
       )
     },
 
@@ -490,7 +548,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
       }
       store = null
       initPromise = null
-      snippetCache.clear()
+      oversizedPaths.clear()
       pendingPaths.clear()
     },
   }

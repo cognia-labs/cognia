@@ -48,17 +48,13 @@ export function makeLazyCodeGraphResolver({
       let root = resolveCodeGraphRoot(cwd)
       const scope = sendOptions.builtinProcessSandbox
       if (scope) {
-        const roots = scope.writableRoots.map((entry) => fs.realpathSync(entry))
-        const cacheAllowed = (candidate: string): boolean => {
-          const database = path.join(candidate, ".cognia", "codegraph.db")
-          const target = fs.realpathSync(
-            fs.existsSync(database)
-              ? database
-              : fs.existsSync(path.dirname(database))
-                ? path.dirname(database)
-                : candidate
-          )
-          return roots.some((allowed) => {
+        const writableRoots = scope.writableRoots.map((entry) => fs.realpathSync(entry))
+        const readableRoots = [
+          ...writableRoots,
+          ...(scope.readableRoots ?? []).map((entry) => fs.realpathSync(entry)),
+        ]
+        const insideScope = (roots: readonly string[], target: string) =>
+          roots.some((allowed) => {
             const relative = path.relative(allowed, target)
             return (
               relative === "" ||
@@ -67,6 +63,17 @@ export function makeLazyCodeGraphResolver({
                 !path.isAbsolute(relative))
             )
           })
+        const cacheAllowed = (candidate: string): boolean => {
+          if (!insideScope(readableRoots, fs.realpathSync(candidate))) return false
+          const database = path.join(candidate, ".cognia", "codegraph.db")
+          const target = fs.realpathSync(
+            fs.existsSync(database)
+              ? database
+              : fs.existsSync(path.dirname(database))
+                ? path.dirname(database)
+                : candidate
+          )
+          return insideScope(writableRoots, target)
         }
         // A nested workspace must not create an index in its parent repository.
         if (!cacheAllowed(root)) root = cwd

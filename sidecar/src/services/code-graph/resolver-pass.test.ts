@@ -43,7 +43,7 @@ test("resolveAll is a no-op on an empty store", () => {
   assert.deepEqual(resolveAll(s), { resolved: 0, edgesAdded: 0, remaining: 0 })
 })
 
-test("resolves a cross-file call by name and deletes the ref", () => {
+test("resolves a cross-file call and retains the reference for future re-resolution", () => {
   const s = createMemoryStore()
   s.insertNodes([
     n({ id: "caller.ts::useFmt::1", name: "useFmt", file_path: "caller.ts" }),
@@ -85,6 +85,7 @@ test("resolves a cross-file call by name and deletes the ref", () => {
   assert.equal(edge.target, "fmt.ts::format::1")
   assert.equal(edge.provenance, "resolved")
   assert.equal(s.unresolvedAll().length, 0)
+  assert.equal(s.referenceCandidates().length, 1)
 })
 
 test("unknown reference stays unresolved for a later pass", () => {

@@ -2,9 +2,8 @@
 //
 // The extractor can only see one file, so cross-file calls/imports/inheritance
 // land in `unresolved_refs`. `resolveAll(store)` links what it can into concrete
-// `edges`, deletes the refs it resolved, and leaves the rest (e.g. third-party
-// symbols) for a later pass once more files are indexed. Idempotent: resolved
-// refs are removed, so re-running never double-inserts.
+// `edges` and retains candidates so unchanged callers can rebind when a target
+// moves, disappears, or becomes ambiguous. Each pass replaces synthesized edges.
 //
 // Resolution is best-effort name matching — an augmentation of, not a
 // replacement for, the LSP tools. Every synthesized edge stamps `provenance`
@@ -29,7 +28,7 @@ const JS_IMPORT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".
 const JS_INDEX_FILES = JS_IMPORT_EXTS.map((e) => `index${e}`)
 
 export function resolveAll(store: CodeGraphStore): ResolveSummary {
-  const unresolved = store.unresolvedAll()
+  const unresolved = store.referenceCandidates()
   if (unresolved.length === 0) {
     return { resolved: 0, edgesAdded: 0, remaining: 0 }
   }
@@ -38,7 +37,7 @@ export function resolveAll(store: CodeGraphStore): ResolveSummary {
   const filePathSet = new Set(filePaths)
 
   const edges: GraphEdge[] = []
-  const resolvedIds: (number | undefined)[] = []
+  const resolvedIds: number[] = []
 
   for (const ref of unresolved) {
     let edge: GraphEdge | null = null
@@ -49,12 +48,11 @@ export function resolveAll(store: CodeGraphStore): ResolveSummary {
     }
     if (edge) {
       edges.push(edge)
-      resolvedIds.push(ref.id)
+      if (ref.id !== undefined) resolvedIds.push(ref.id)
     }
   }
 
-  if (edges.length > 0) store.insertEdges(edges)
-  if (resolvedIds.length > 0) store.deleteUnresolved(resolvedIds)
+  store.replaceResolvedReferences(edges, resolvedIds)
 
   return {
     resolved: resolvedIds.length,

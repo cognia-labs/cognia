@@ -1,15 +1,14 @@
 import type { CodeServerProxyArtifact } from "@/lib/codeserver/client"
 import { codeServerClient } from "@/lib/codeserver/client"
 import { ensureEditorLspRuntime } from "@/lib/lsp/ensure-editor-lsp-runtime"
-import { invokeVscodeRpc } from "@/lib/plugin/core/vscode-loader"
 import {
+  getSystemLspClient,
+  invokeActiveLspHost,
   LSP_TAURI_CHANNEL_ID,
-  TauriLspClientAdapter,
+  type TauriLspClientAdapter,
   type LspDetectResultEntry,
 } from "@/lib/plugin/lsp/lsp-client-adapter-tauri"
 import { registerMethod } from "@/lib/plugin/vscode-shim/rpc-dispatcher"
-import { transport } from "@/lib/tauri"
-import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
 import { useSettingsStore } from "@/stores/settings"
 import type {
   PluginIdeExecutableResource,
@@ -490,7 +489,7 @@ function defaultDependencies(): ManagedProtocolRuntimeDependencies {
   return {
     listProxies: () => codeServerClient.listProxies(),
     ensureHost: () => ensureEditorLspRuntime(),
-    createLspAdapter: () => new TauriLspClientAdapter(),
+    createLspAdapter: getSystemLspClient,
     notify: (root, generation, params) => codeServerClient.notifyBroker(root, generation, params),
     invokeHost: invokeManagedProtocolHost,
     onHostMessage: (listener) => {
@@ -510,12 +509,7 @@ function defaultDependencies(): ManagedProtocolRuntimeDependencies {
 }
 
 async function invokeManagedProtocolHost(method: string, payload: unknown): Promise<unknown> {
-  if (!isRemoteHostActive()) return invokeVscodeRpc(LSP_TAURI_CHANNEL_ID, method, payload)
-  const raw = await transport.call<string>("lsp_host_request", {
-    method,
-    payloadJson: JSON.stringify(payload ?? null),
-  })
-  return raw ? JSON.parse(raw) : null
+  return invokeActiveLspHost(LSP_TAURI_CHANNEL_ID, method, payload)
 }
 
 function sessionKey(input: {

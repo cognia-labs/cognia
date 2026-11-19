@@ -5,7 +5,7 @@
 
 const registerMock = jest.fn(async (_input: unknown) => ({ state: "running" }))
 const unregisterMock = jest.fn(async (_owner: string, _id: string) => undefined)
-let listResult: Array<{ ownerId: string; serverId: string }> = []
+let listResult: Array<{ ownerId: string; serverId: string; config?: unknown }> = []
 
 jest.mock("./lsp-registry", () => ({
   registerLspServer: (input: unknown) => registerMock(input),
@@ -51,27 +51,37 @@ describe("syncUserLspServers", () => {
   })
 
   it("skips entries already registered (idempotent re-sync)", async () => {
-    listResult = [{ ownerId: "user", serverId: "eslint" }]
-    const result = await syncUserLspServers([
-      {
-        id: "eslint",
-        name: "ESLint",
-        languages: ["typescript"],
-        command: "/eslint-server",
-      },
-    ])
+    const config = {
+      id: "eslint",
+      name: "ESLint",
+      languages: ["typescript"],
+      command: "/eslint-server",
+    }
+    listResult = [{ ownerId: "user", serverId: "eslint", config }]
+    const result = await syncUserLspServers([config])
     expect(result).toEqual({ added: 0, removed: 0, skipped: 1 })
     expect(registerMock).not.toHaveBeenCalled()
   })
 
+  it("restarts a same-id server with changed startup settings", async () => {
+    const config = { id: "eslint", name: "ESLint", languages: ["typescript"], command: "/old" }
+    listResult = [{ ownerId: "user", serverId: config.id, config }]
+    await syncUserLspServers([{ ...config, command: "/new", startupTimeout: 8000 }])
+    expect(unregisterMock).toHaveBeenCalledWith("user", config.id)
+    expect(registerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ command: "/new", startupTimeout: 8000 }),
+      })
+    )
+  })
+
   it("removes entries no longer present in settings", async () => {
+    const config = { id: "pyright", name: "Pyright", languages: ["python"], command: "/p" }
     listResult = [
       { ownerId: "user", serverId: "eslint" },
-      { ownerId: "user", serverId: "pyright" },
+      { ownerId: "user", serverId: "pyright", config },
     ]
-    const result = await syncUserLspServers([
-      { id: "pyright", name: "Pyright", languages: ["python"], command: "/p" },
-    ])
+    const result = await syncUserLspServers([config])
     expect(result.removed).toBe(1)
     expect(unregisterMock).toHaveBeenCalledWith("user", "eslint")
     expect(registerMock).not.toHaveBeenCalled()

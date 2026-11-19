@@ -55,6 +55,7 @@ type InstallSandbox = ProcessSandboxScope & { writableRoots: readonly string[] }
 
 export interface SessionLspOptions {
   cwd: string
+  additionalDirectories?: readonly string[] | undefined
   servers?: unknown
   installDir?: string | undefined
   allowInstall?: boolean
@@ -92,7 +93,10 @@ export async function loadLspServiceCtor(): Promise<LspServiceCtor> {
         throw new Error("LspService not found in compiled vscode-ext-host bundle")
       }
       return Ctor as LspServiceCtor
-    })()
+    })().catch((error: unknown) => {
+      lspServiceCtorPromise = null
+      throw error
+    })
   }
   return lspServiceCtorPromise
 }
@@ -158,10 +162,12 @@ async function makeInstallerEnsureCommand(opts: SessionLspOptions): Promise<Ensu
         return res.resolvedPath
       })
     // Never let a slow install hold an agent turn hostage.
-    const budget = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), ENSURE_COMMAND_TURN_BUDGET_MS)
-    )
-    return Promise.race([ladder, budget])
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const budget = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), ENSURE_COMMAND_TURN_BUDGET_MS)
+      timer.unref?.()
+    })
+    return Promise.race([ladder, budget]).finally(() => clearTimeout(timer))
   }
 }
 
@@ -188,6 +194,11 @@ export async function createSessionLspResolver(
   const service = new LspService((method, params) => {
     if (method === "lsp:publishDiagnostics")
       resolverRef?.ingestDiagnostics(params as PublishDiagnosticsParams)
+    if (method === "lsp:state") {
+      const state = params as { serverId?: string; state?: string } | null
+      if (state?.serverId && state.state !== "running")
+        resolverRef?.forgetDiagnostics?.(state.serverId)
+    }
   }, opts.logger ?? {})
 
   const ensureCommand = opts.ensureCommand ?? (await makeInstallerEnsureCommand(opts)) ?? undefined
@@ -195,6 +206,7 @@ export async function createSessionLspResolver(
   const resolver = createLspResolver({
     service,
     cwd: opts.cwd,
+    additionalDirectories: opts.additionalDirectories,
     servers: opts.servers,
     ensureCommand,
     logger: opts.logger,

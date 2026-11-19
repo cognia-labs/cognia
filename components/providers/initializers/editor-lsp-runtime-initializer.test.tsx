@@ -9,11 +9,11 @@ jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn() }))
 jest.mock("@/lib/lsp/ensure-editor-lsp-runtime", () => ({
   ensureEditorLspRuntime: jest.fn(),
 }))
-let mockRemoteActive = false
+let mockRemoteHost: object | null = null
 let mockRemoteNotify: (() => void) | undefined
-jest.mock("@/lib/tauri/transport-routing", () => ({
-  isRemoteHostActive: jest.fn(() => mockRemoteActive),
-  subscribeActiveRemoteTransport: jest.fn((listener: () => void) => {
+jest.mock("@/lib/lsp/host-transport", () => ({
+  getRemoteLspTransport: jest.fn(() => mockRemoteHost),
+  subscribeRemoteLspTransport: jest.fn((listener: () => void) => {
     mockRemoteNotify = listener
     return () => {
       if (mockRemoteNotify === listener) mockRemoteNotify = undefined
@@ -27,7 +27,7 @@ const mockEnsure = ensureEditorLspRuntime as jest.MockedFunction<typeof ensureEd
 describe("EditorLspRuntimeInitializer", () => {
   beforeEach(() => {
     jest.clearAllMocks()
-    mockRemoteActive = false
+    mockRemoteHost = null
     mockRemoteNotify = undefined
   })
 
@@ -49,10 +49,15 @@ describe("EditorLspRuntimeInitializer", () => {
     expect(mockEnsure).not.toHaveBeenCalled()
 
     act(() => {
-      mockRemoteActive = true
+      mockRemoteHost = {}
       mockRemoteNotify?.()
     })
     expect(mockEnsure).toHaveBeenCalledTimes(1)
+    act(() => {
+      mockRemoteHost = {}
+      mockRemoteNotify?.()
+    })
+    expect(mockEnsure).toHaveBeenCalledTimes(2)
   })
 
   it("does not re-trigger across a rerender", () => {

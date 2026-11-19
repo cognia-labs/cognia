@@ -7,6 +7,7 @@ const mockEnsureEditorLspRuntime = jest.fn(async () => undefined)
 const mockInvokeVscodeRpc = jest.fn()
 const mockIsRemoteHostActive = jest.fn(() => false)
 const mockTransportCall = jest.fn()
+const mockRemoteTransport = { call: (...args: unknown[]) => mockTransportCall(...args) }
 
 jest.mock("@/lib/lsp/ensure-editor-lsp-runtime", () => ({
   ensureEditorLspRuntime: () => mockEnsureEditorLspRuntime(),
@@ -17,6 +18,15 @@ jest.mock("@/lib/plugin/core/vscode-loader", () => ({
 }))
 jest.mock("@/lib/tauri/transport-routing", () => ({
   isRemoteHostActive: () => mockIsRemoteHostActive(),
+  getActiveRemoteTransport: () => (mockIsRemoteHostActive() ? mockRemoteTransport : null),
+}))
+jest.mock("@/lib/tauri/interactive-approval", () => ({
+  createInteractiveApprovalScope: () => ({
+    authorize: async () => undefined,
+    clear: () => undefined,
+    call: (command: string, args: object) =>
+      mockTransportCall(command, { ...args, adminLease: "lease" }),
+  }),
 }))
 // `isTauri` / `isCapacitor` are not used by this suite directly, but the module
 // under test pulls in `@/stores/settings` (for `readSetting`), which reaches
@@ -841,6 +851,7 @@ describe("ManagedProtocolRuntime", () => {
     const artifact = (await dependencies().listProxies())[0]!
     jest.spyOn(codeServerClient, "listProxies").mockResolvedValue([artifact])
     mockIsRemoteHostActive.mockReturnValue(true)
+    await (await import("@/lib/plugin/lsp/lsp-client-adapter-tauri")).authorizeRemoteLspHost()
     const call = mockTransportCall
       .mockResolvedValueOnce(
         JSON.stringify({
@@ -877,6 +888,7 @@ describe("ManagedProtocolRuntime", () => {
       "lsp_host_request",
       expect.objectContaining({
         method: "protocol:start",
+        adminLease: "lease",
         payloadJson: expect.any(String),
       })
     )

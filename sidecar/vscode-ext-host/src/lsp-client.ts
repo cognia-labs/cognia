@@ -323,7 +323,7 @@ export class CogniaLspClient {
   private serverCapabilities: unknown = null
   private diagnosticsListeners = new Set<DiagnosticsListener>()
   private startedAt = 0
-  private openDocuments = new Map<string, { version: number; languageId: string }>()
+  private openDocuments = new Map<string, { version: number; languageId: string; text: string }>()
   private startPromise: Promise<void> | null = null
   /** Live server-specific settings — seeded from opts, mutable via updateConfiguration. */
   private currentSettings: Record<string, unknown> | undefined
@@ -612,7 +612,7 @@ export class CogniaLspClient {
    */
   registerTextDocument(uri: string, languageId: string, text: string): void {
     this.assertRunning()
-    this.openDocuments.set(uri, { version: 1, languageId })
+    this.openDocuments.set(uri, { version: 1, languageId, text })
     this.connection!.sendNotification("textDocument/didOpen", {
       textDocument: { uri, languageId, version: 1, text },
     })
@@ -628,10 +628,23 @@ export class CogniaLspClient {
       this.registerTextDocument(uri, "plaintext", text)
       return
     }
+    const sync = (
+      this.serverCapabilities as { textDocumentSync?: number | { change?: number } } | null
+    )?.textDocumentSync
+    const mode = typeof sync === "object" ? sync?.change : sync
+    if (mode === 0) return
+    const lines = mode === 2 ? entry.text.split(/\r\n|\r|\n/) : undefined
+    const range = lines
+      ? {
+          start: { line: 0, character: 0 },
+          end: { line: lines.length - 1, character: lines.at(-1)!.length },
+        }
+      : undefined
     entry.version += 1
+    entry.text = text
     this.connection!.sendNotification("textDocument/didChange", {
       textDocument: { uri, version: entry.version },
-      contentChanges: [{ text }],
+      contentChanges: [range ? { range, text } : { text }],
     })
   }
 

@@ -65,6 +65,16 @@ const NODE_COLUMNS: readonly (keyof GraphNode)[] = [
 export function createSqliteStore(dbPath: string, Database: SqliteDatabaseCtor): CodeGraphStore {
   const db = new Database(dbPath)
   db.exec(SCHEMA_SQL)
+  // v0 discarded source references after resolution. The missing references
+  // cannot be reconstructed from all edge kinds. Rebuild this derived cache.
+  db.transaction(() => {
+    const { user_version } = db.prepare("PRAGMA user_version").get() as { user_version: number }
+    if (user_version === 0) {
+      db.exec(
+        "DELETE FROM resolved_ref_ids; DELETE FROM unresolved_refs; DELETE FROM edges; DELETE FROM nodes; DELETE FROM files; PRAGMA user_version = 1;"
+      )
+    }
+  })()
 
   const stmt = {
     upsertFile: db.prepare(`
@@ -98,17 +108,26 @@ export function createSqliteStore(dbPath: string, Database: SqliteDatabaseCtor):
     edgesTo: db.prepare("SELECT * FROM edges WHERE target = ?"),
     edgesToKind: db.prepare("SELECT * FROM edges WHERE target = ? AND kind = ?"),
     allEdges: db.prepare("SELECT * FROM edges"),
-    unresolvedAll: db.prepare("SELECT * FROM unresolved_refs"),
-    deleteEdgesForFile: db.prepare(
-      "DELETE FROM edges WHERE source IN (SELECT id FROM nodes WHERE file_path = ?)"
+    referenceCandidates: db.prepare("SELECT * FROM unresolved_refs"),
+    unresolvedAll: db.prepare(
+      "SELECT * FROM unresolved_refs WHERE id NOT IN (SELECT id FROM resolved_ref_ids)"
     ),
+    deleteEdgesForFile: db.prepare(
+      "DELETE FROM edges WHERE source IN (SELECT id FROM nodes WHERE file_path = ?) OR target IN (SELECT id FROM nodes WHERE file_path = ?)"
+    ),
+    deleteResolvedForFile: db.prepare(
+      "DELETE FROM resolved_ref_ids WHERE id IN (SELECT id FROM unresolved_refs WHERE file_path = ?)"
+    ),
+    markResolved: db.prepare("INSERT INTO resolved_ref_ids (id) VALUES (?)"),
     deleteUnresolvedForFile: db.prepare("DELETE FROM unresolved_refs WHERE file_path = ?"),
     deleteNodesForFile: db.prepare("DELETE FROM nodes WHERE file_path = ?"),
     deleteFileRow: db.prepare("DELETE FROM files WHERE path = ?"),
     countFiles: db.prepare("SELECT COUNT(*) AS c FROM files"),
     countNodes: db.prepare("SELECT COUNT(*) AS c FROM nodes WHERE kind != 'file'"),
     countEdges: db.prepare("SELECT COUNT(*) AS c FROM edges"),
-    countUnresolved: db.prepare("SELECT COUNT(*) AS c FROM unresolved_refs"),
+    countUnresolved: db.prepare(
+      "SELECT COUNT(*) AS c FROM unresolved_refs WHERE id NOT IN (SELECT id FROM resolved_ref_ids)"
+    ),
     langHistogram: db.prepare("SELECT language, COUNT(*) AS c FROM files GROUP BY language"),
     searchLike: db.prepare(`
       SELECT * FROM nodes
@@ -128,7 +147,8 @@ export function createSqliteStore(dbPath: string, Database: SqliteDatabaseCtor):
   })
 
   const removeFileGraph = (filePath: string) => {
-    stmt.deleteEdgesForFile.run(filePath)
+    stmt.deleteEdgesForFile.run(filePath, filePath)
+    stmt.deleteResolvedForFile.run(filePath)
     stmt.deleteUnresolvedForFile.run(filePath)
     stmt.deleteNodesForFile.run(filePath)
   }
@@ -216,6 +236,16 @@ export function createSqliteStore(dbPath: string, Database: SqliteDatabaseCtor):
       return stmt.allEdges.all() as GraphEdge[]
     },
 
+    referenceCandidates() {
+      return stmt.referenceCandidates.all() as UnresolvedRef[]
+    },
+    replaceResolvedReferences: db.transaction((edges: GraphEdge[], ids: number[]) => {
+      db.exec(
+        "DELETE FROM edges WHERE provenance IN ('resolved', 'resolved-ambiguous'); DELETE FROM resolved_ref_ids;"
+      )
+      insertEdgesTx(edges)
+      for (const id of ids) stmt.markResolved.run(id)
+    }),
     unresolvedAll() {
       return stmt.unresolvedAll.all() as UnresolvedRef[]
     },
@@ -224,6 +254,9 @@ export function createSqliteStore(dbPath: string, Database: SqliteDatabaseCtor):
       if (ids.length === 0) return
       const del = db.prepare(
         `DELETE FROM unresolved_refs WHERE id IN (${ids.map(() => "?").join(",")})`
+      )
+      db.prepare(`DELETE FROM resolved_ref_ids WHERE id IN (${ids.map(() => "?").join(",")})`).run(
+        ...ids
       )
       del.run(...ids)
     },

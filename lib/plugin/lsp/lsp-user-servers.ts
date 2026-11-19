@@ -21,6 +21,7 @@
 
 import type { LspServerConfig, ResolvedLspServer } from "@/types/lsp/config"
 import type { PluginLspServerDef } from "@/types/plugin"
+import { getRemoteLspTransport } from "@/lib/lsp/host-transport"
 import { listLspServers, registerLspServer, unregisterLspServer } from "./lsp-registry"
 
 const USER_OWNER = "user"
@@ -51,6 +52,7 @@ export async function syncUserLspServers(
   entries: LspServerConfig[] | undefined
 ): Promise<{ added: number; removed: number; skipped: number }> {
   const desired = (entries ?? []).filter((e) => e.enabled !== false)
+  const host = getRemoteLspTransport()
   const desiredById = new Map(desired.map((e) => [e.id, e] as const))
   const existing = listLspServers().filter((r) => r.ownerId === USER_OWNER)
   const existingById = new Map(existing.map((r) => [r.serverId, r] as const))
@@ -61,6 +63,7 @@ export async function syncUserLspServers(
 
   // Remove entries no longer wanted (disabled or deleted).
   for (const rec of existing) {
+    if (getRemoteLspTransport() !== host) return { added, removed, skipped }
     if (!desiredById.has(rec.serverId)) {
       await unregisterLspServer(USER_OWNER, rec.serverId)
       removed += 1
@@ -69,13 +72,21 @@ export async function syncUserLspServers(
 
   // Add new entries.
   for (const entry of desired) {
-    if (existingById.has(entry.id)) {
+    if (getRemoteLspTransport() !== host) return { added, removed, skipped }
+    const config = toServerDef(entry)
+    const existingEntry = existingById.get(entry.id)
+    if (existingEntry && JSON.stringify(existingEntry.config) === JSON.stringify(config)) {
       skipped += 1
       continue
     }
+    if (existingEntry) {
+      await unregisterLspServer(USER_OWNER, entry.id)
+      removed += 1
+    }
+    if (getRemoteLspTransport() !== host) return { added, removed, skipped }
     await registerLspServer({
       ownerId: USER_OWNER,
-      config: toServerDef(entry),
+      config,
       pluginPath: USER_LSP_PLUGIN_PATH,
       confirmedConsent: true,
     })
@@ -98,6 +109,10 @@ function toServerDef(entry: LspServerConfig): PluginLspServerDef {
     rootMarkers: entry.rootMarkers,
     excludeRootMarkers: entry.excludeRootMarkers,
     transport: entry.transport,
+    endpoint: entry.endpoint,
+    startupTimeout: entry.startupTimeout,
+    memoryLimitMb: entry.memoryLimitMb,
+    install: entry.install,
     initializationOptions: entry.initializationOptions,
     settings: entry.settings,
     workspaceFolderRequired: entry.workspaceFolderRequired,

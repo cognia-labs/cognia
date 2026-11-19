@@ -36,10 +36,14 @@ import { useProjectStore } from "@/stores/project/project-store"
 import { primaryRootOf } from "@/lib/workspace/roots"
 import { resolveLspServers } from "@/lib/lsp/resolve-config"
 import { readProjectLspFile } from "@/lib/lsp/project-file-reader"
+import { isWorkspaceRestricted } from "@/lib/workspace/trust-gate"
+import { watchRoot } from "@/lib/plugin/vscode-shim/root-watchers"
+import { liveQuery } from "dexie"
+import { listTrustedWorkspaces } from "@/lib/db/trusted-workspaces"
 import type { LspServerConfig } from "@/types/lsp/config"
 import { configureLspRegistry, type LspBridgeAdapter, type LspClientAdapter } from "./lsp-registry"
 import { editorEligibleServers, syncUserLspServers } from "./lsp-user-servers"
-import { TauriLspClientAdapter } from "./lsp-client-adapter-tauri"
+import { getSystemLspClient } from "./lsp-client-adapter-tauri"
 
 interface BootstrapDeps {
   /** Override the production adapter — used by tests. */
@@ -65,6 +69,12 @@ interface BootstrapDeps {
 
 let installed = false
 let disposers: Array<() => void> = []
+let refreshServers: ((restart?: boolean) => Promise<void>) | undefined
+
+/** Reconcile on the newly authorized host while keeping open document state. */
+export async function refreshEditorLspServers(restart = false): Promise<void> {
+  await refreshServers?.(restart)
+}
 
 /**
  * Wire the LSP pipeline. Returns a disposer that tears down every
@@ -91,7 +101,7 @@ export function bootstrapLspRegistry(deps: BootstrapDeps = {}): () => void {
   const client =
     deps.client ??
     (() => {
-      const a = new TauriLspClientAdapter()
+      const a = getSystemLspClient()
       a.install()
       return a
     })()
@@ -126,20 +136,44 @@ export function bootstrapLspRegistry(deps: BootstrapDeps = {}): () => void {
   // user ← project), keep the editor-eligible ones, and converge the
   // registry. Re-run whenever settings.lsp or the active project changes.
   const resolveEditorServers = deps.resolveEditorServers ?? defaultResolveEditorServers
+  let revision = 0
+  let applying = Promise.resolve()
+  let restartRequested = false
 
-  const applyEditorServers = () => {
-    void resolveEditorServers()
-      .then((servers) => syncUserLspServers(servers))
+  const applyEditorServers = (restart = false) => {
+    restartRequested ||= restart
+    const ticket = ++revision
+    return resolveEditorServers()
+      .then((servers) => {
+        applying = applying
+          .catch(() => undefined)
+          .then(async () => {
+            if (ticket !== revision) return
+            if (restartRequested) {
+              restartRequested = false
+              await syncUserLspServers([])
+            }
+            if (ticket === revision) await syncUserLspServers(servers)
+          })
+        return applying
+      })
       .catch(() => {
         /* resolution / registration failures are non-fatal */
       })
   }
 
-  applyEditorServers()
+  refreshServers = applyEditorServers
+  void applyEditorServers()
 
   const subscribeFn = deps.subscribeChanges ?? defaultSubscribeChanges
-  const unsubscribe = subscribeFn(applyEditorServers)
-  disposers.push(unsubscribe)
+  const unsubscribe = subscribeFn(() => {
+    void applyEditorServers()
+  })
+  disposers.push(() => {
+    revision += 1
+    refreshServers = undefined
+    unsubscribe()
+  })
 
   installed = true
   return () => {
@@ -156,10 +190,9 @@ export function bootstrapLspRegistry(deps: BootstrapDeps = {}): () => void {
 }
 
 /** Primary root dir of the active project, or undefined when none is active. */
-function activeProjectRootDir(): string | undefined {
+function activeProject() {
   const { projects, activeProjectId } = useProjectStore.getState()
-  const proj = projects.find((p) => p.id === activeProjectId)
-  return proj ? primaryRootOf(proj)?.path : undefined
+  return projects.find((p) => p.id === activeProjectId)
 }
 
 /** Production resolver: layer builtin ← settings.lsp ← project `.cognia/lsp.json`. */
@@ -177,8 +210,16 @@ async function defaultResolveEditorServers(): Promise<LspServerConfig[]> {
   // *tools to the model*, and borrowing that default here would have silently
   // switched editor completion and diagnostics off for every existing user.
   if (settings?.lsp?.enabled === false) return []
+  const project = activeProject()
+  if (
+    await isWorkspaceRestricted(project, {
+      enabled: settings?.workspaceTrust?.enabled !== false,
+      onWeb: false,
+    })
+  )
+    return []
   const resolved = await resolveLspServers({
-    rootDir: activeProjectRootDir(),
+    rootDir: project ? primaryRootOf(project)?.path : undefined,
     userServers: settings?.lsp?.servers,
     readProjectFile: readProjectLspFile,
   })
@@ -190,23 +231,42 @@ async function defaultResolveEditorServers(): Promise<LspServerConfig[]> {
  *  because the settings store re-creates the object on every save. */
 function defaultSubscribeChanges(cb: () => void): () => void {
   let prevLsp = useSettingsStore.getState().settings?.lsp
-  let prevProject = useProjectStore.getState().activeProjectId
+  let prevTrust = useSettingsStore.getState().settings?.workspaceTrust?.enabled
+  let prevProject = activeProject()
+  let stopWatching: (() => void) | undefined
+  const rebindWatcher = () => {
+    stopWatching?.()
+    const root = prevProject && primaryRootOf(prevProject)?.path
+    stopWatching = root
+      ? watchRoot(root, ({ path }) => {
+          if (path.endsWith("/.cognia/lsp.json") || path.endsWith("/.cognia")) cb()
+        })
+      : undefined
+  }
+  rebindWatcher()
+  const trust = liveQuery(listTrustedWorkspaces).subscribe({ next: cb, error: () => cb() })
   const unsubSettings = useSettingsStore.subscribe((state) => {
     const nextLsp = state.settings?.lsp
-    if (nextLsp !== prevLsp) {
+    const nextTrust = state.settings?.workspaceTrust?.enabled
+    if (nextLsp !== prevLsp || nextTrust !== prevTrust) {
       prevLsp = nextLsp
+      prevTrust = nextTrust
       cb()
     }
   })
-  const unsubProject = useProjectStore.subscribe((state) => {
-    if (state.activeProjectId !== prevProject) {
-      prevProject = state.activeProjectId
+  const unsubProject = useProjectStore.subscribe(() => {
+    const project = activeProject()
+    if (project !== prevProject) {
+      prevProject = project
+      rebindWatcher()
       cb()
     }
   })
   return () => {
     unsubSettings()
     unsubProject()
+    stopWatching?.()
+    trust.unsubscribe()
   }
 }
 

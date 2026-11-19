@@ -17,9 +17,8 @@ jest.mock("@/lib/tauri", () => ({
   transport: { call: (...args: unknown[]) => mockTransportCall(...args) },
 }))
 jest.mock("@/lib/platform/detect", () => ({ isHeadlessHost: jest.fn(() => false) }))
-jest.mock("@/lib/tauri/transport-routing", () => ({
-  getActiveRemoteTransport: jest.fn(() => null),
-  isRemoteHostActive: jest.fn(() => false),
+jest.mock("@/lib/lsp/host-transport", () => ({
+  getRemoteLspTransport: jest.fn(() => null),
 }))
 
 // Mocked so the DEFAULT (deps-omitted) branch resolves the real dynamic

@@ -18,11 +18,13 @@
 import { nanoid } from "nanoid"
 
 import { isHeadlessHost, isTauri } from "@/lib/platform/detect"
+import { getRemoteLspTransport, listenToLspHostEvents } from "@/lib/lsp/host-transport"
 import { loggers } from "@cognia/logging"
 import type { PluginDefinition, PluginManifest } from "@/types/plugin"
 import {
   configureRpcDispatcher,
   subscribeToVscodeEvents,
+  vscodeRpcEventName,
 } from "@/lib/plugin/vscode-shim/rpc-dispatcher"
 import { getVscodeHostSupervisor } from "@/lib/plugin/vscode-shim/host-supervisor"
 import { listWorkspaceFolders } from "@/lib/plugin/vscode-shim/lsp-workspace-manager"
@@ -32,6 +34,7 @@ import { persistRuntimeStubWarning, RUNTIME_STUB_WARNINGS } from "./runtime-stub
 const vscodeLoaderLogger = loggers.plugin.child("vscode-loader")
 
 let dispatcherConfigured = false
+let dispatcherSetup: Promise<void> | null = null
 const vscodeGenerations = new Map<string, string>()
 let documentSync: import("@/lib/plugin/vscode-shim/document-sync").DocumentSync | null = null
 
@@ -116,18 +119,28 @@ export function getVscodeRuntimeGeneration(pluginId: string): string | undefined
  */
 export async function ensureDispatcherConfigured(): Promise<void> {
   if (dispatcherConfigured) return
-  if (!isVscodeHostAvailable()) return
+  if (!isVscodeHostAvailable() && !getRemoteLspTransport()) return
+  dispatcherSetup ??= configureDispatcher().finally(() => {
+    dispatcherSetup = null
+  })
+  return dispatcherSetup
+}
+
+async function configureDispatcher(): Promise<void> {
   const invoke = await getInvoke()
-  const listen: (event: string, cb: (event: { payload: string }) => void) => Promise<() => void> =
-    isHeadlessHost()
-      ? async (event, cb) => {
-          const { transport } = await import("@/lib/tauri/transport-instance")
-          return transport.subscribe<string>(event, (payload) => cb({ payload }))
-        }
-      : async (event, cb) => {
-          const { listen: listenTauri } = await import("@tauri-apps/api/event")
-          return listenTauri<string>(event, cb)
-        }
+  const { LSP_TAURI_CHANNEL_ID } = await import("@/lib/plugin/lsp/lsp-client-adapter-tauri")
+  const lspEvent = vscodeRpcEventName(LSP_TAURI_CHANNEL_ID)
+  const listen = async (event: string, cb: (event: { payload: string }) => void) => {
+    if (event === lspEvent) {
+      return listenToLspHostEvents(event, (payload) => cb({ payload }))
+    }
+    if (isHeadlessHost()) {
+      const { transport } = await import("@/lib/tauri/transport-instance")
+      return transport.subscribe<string>(event, (payload) => cb({ payload }))
+    }
+    const { listen: listenTauri } = await import("@tauri-apps/api/event")
+    return listenTauri<string>(event, cb)
+  }
   configureRpcDispatcher({
     sendResponse: async (pluginId, generation, responseJson) => {
       await invoke("plugin_vscode_send_response", {

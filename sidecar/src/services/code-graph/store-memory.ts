@@ -100,6 +100,8 @@ export interface CodeGraphStore {
   edgesFrom(id: string, kind?: string): GraphEdge[]
   edgesTo(id: string, kind?: string): GraphEdge[]
   allEdges(): GraphEdge[]
+  referenceCandidates(): UnresolvedRef[]
+  replaceResolvedReferences(edges: GraphEdge[], ids: number[]): void
   unresolvedAll(): UnresolvedRef[]
   deleteUnresolved(ids: Iterable<number | undefined>): void
   stats(): StoreStats
@@ -111,6 +113,7 @@ export function createMemoryStore(): CodeGraphStore {
   const nodes = new Map<string, GraphNode>()
   let edges: GraphEdge[] = []
   let unresolved: UnresolvedRef[] = []
+  let resolvedIds = new Set<number>()
   // file_path → Set(nodeId) for fast per-file deletion.
   const nodesByFile = new Map<string, Set<string>>()
   // tokenized inverted index: token → Set(nodeId)
@@ -162,8 +165,8 @@ export function createMemoryStore(): CodeGraphStore {
       }
       nodesByFile.delete(filePath)
     }
-    // Drop edges/unresolved that originated from this file's nodes.
-    edges = edges.filter((e) => !owned.has(e.source))
+    edges = edges.filter((e) => !owned.has(e.source) && !owned.has(e.target))
+    for (const ref of unresolved) if (ref.file_path === filePath) resolvedIds.delete(ref.id!)
     unresolved = unresolved.filter((u) => u.file_path !== filePath)
   }
 
@@ -252,11 +255,22 @@ export function createMemoryStore(): CodeGraphStore {
       return edges.slice()
     },
 
-    unresolvedAll() {
+    referenceCandidates() {
       return unresolved.slice()
+    },
+    replaceResolvedReferences(nextEdges, ids) {
+      edges = edges.filter(
+        (e) => e.provenance !== "resolved" && e.provenance !== "resolved-ambiguous"
+      )
+      for (const edge of nextEdges) edges.push(edge)
+      resolvedIds = new Set(ids)
+    },
+    unresolvedAll() {
+      return unresolved.filter((ref) => !resolvedIds.has(ref.id!))
     },
     deleteUnresolved(ids) {
       const drop = new Set(ids)
+      for (const id of drop) if (id !== undefined) resolvedIds.delete(id)
       unresolved = unresolved.filter((u) => !drop.has(u.id))
     },
 
@@ -271,7 +285,7 @@ export function createMemoryStore(): CodeGraphStore {
         fileCount: files.size,
         nodeCount: nodes.size,
         edgeCount: edges.length,
-        unresolvedCount: unresolved.length,
+        unresolvedCount: unresolved.length - resolvedIds.size,
         languages,
         binding: "memory",
       }
@@ -282,6 +296,7 @@ export function createMemoryStore(): CodeGraphStore {
       nodes.clear()
       edges = []
       unresolved = []
+      resolvedIds.clear()
       nodesByFile.clear()
       invIndex.clear()
     },

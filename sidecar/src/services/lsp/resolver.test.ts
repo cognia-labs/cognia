@@ -142,6 +142,7 @@ test("ingestDiagnostics + getDiagnostics returns cached diagnostics", async () =
     diagnosticsWaitMs: 1,
   })
   const uri = pathToFileURL(file).href
+  await resolver.touchFile(file)
   resolver.ingestDiagnostics({ uri, diagnostics: [{ message: "boom", severity: 1 }] })
   const diags = await resolver.getDiagnostics(file)
   assert.equal(diags.length, 1)
@@ -177,6 +178,108 @@ test("request throws when no server available", async () => {
     ensureCommand: (c) => c,
   })
   await assert.rejects(() => resolver.request(file, "hover", {}))
+})
+
+test("a provider request uses a second applicable server when the first lacks the method", async () => {
+  const { root, file } = tsProject()
+  const service = makeFakeService()
+  const request = service.request.bind(service)
+  service.request = async (params) => {
+    if (params.serverId.startsWith("lint#")) throw new Error("Method not found")
+    return request(params)
+  }
+  const resolver = createLspResolver({
+    cwd: root,
+    service,
+    servers: [{ ...TS_SERVERS[0]!, id: "lint" }, ...TS_SERVERS],
+    ensureCommand: (command) => command,
+  })
+  try {
+    await resolver.request(file, "hover")
+    assert.equal(service.calls.start.length, 2)
+    assert.match(service.calls.request[0]!.serverId, /^typescript#/)
+    assert.equal(service.calls.didOpen[0]!.languageId, "typescript")
+  } finally {
+    await resolver.dispose()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("diagnostics distinguish a missing server from a clean document", async () => {
+  const { root, file } = tsProject()
+  const resolver = createLspResolver({
+    service: makeFakeService(),
+    cwd: root,
+    servers: TS_SERVERS,
+    ensureCommand: () => null,
+  })
+  try {
+    await assert.rejects(resolver.getDiagnostics(file), /no language server available/)
+  } finally {
+    await resolver.dispose()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a protected or out-of-scope path is rejected before opening the document", async () => {
+  const { root, file } = tsProject()
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-alias-outside-"))
+  const service = makeFakeService()
+  const resolver = createLspResolver({
+    cwd: root,
+    service,
+    servers: TS_SERVERS,
+    ensureCommand: (command) => command,
+  })
+  try {
+    const protectedFile = path.join(root, ".ssh", "fixture.ts")
+    fs.mkdirSync(path.dirname(protectedFile))
+    fs.writeFileSync(protectedFile, "const fixture = 1")
+    const link = path.join(root, "linked.ts")
+    fs.symlinkSync(protectedFile, link)
+    await assert.rejects(resolver.request(link, "hover"), /protected credential path/)
+    await assert.rejects(
+      resolver.request(path.join(root, "..", "outside.ts"), "hover"),
+      /outside authorized workspace roots/
+    )
+    const outsideAlias = path.join(outside, "alias.ts")
+    fs.symlinkSync(file, outsideAlias)
+    await assert.rejects(
+      resolver.request(outsideAlias, "hover"),
+      /outside authorized workspace roots/
+    )
+    assert.equal(service.calls.didOpen.length, 0)
+    await resolver.request(file, "hover")
+    assert.equal(service.calls.didOpen.length, 1)
+  } finally {
+    await resolver.dispose()
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test("an initially missing binary can be found after the retry interval", async () => {
+  const { root, file } = tsProject()
+  const service = makeFakeService()
+  let now = 0
+  let binary: string | null = null
+  const resolver = createLspResolver({
+    cwd: root,
+    service,
+    servers: TS_SERVERS,
+    ensureCommand: () => binary,
+    now: () => now,
+  })
+  try {
+    assert.deepEqual(await resolver.touchFile(file), [])
+    binary = "/fixture/server"
+    assert.deepEqual(await resolver.touchFile(file), [])
+    now += 20_000
+    assert.equal((await resolver.touchFile(file)).length, 1)
+  } finally {
+    await resolver.dispose()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test("per-server settings are forwarded to service.start", async () => {

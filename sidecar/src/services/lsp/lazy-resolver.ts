@@ -34,6 +34,7 @@ export function makeLazyLspResolver(
     sendOptions: {
       lsp?: LspSendOptions | null
       cwd?: string
+      additionalDirectories?: readonly string[] | undefined
       builtinProcessSandbox?: SessionLspOptions["builtinProcessSandbox"]
     }
     log: (level: "info" | "warn" | "error", message: string) => void
@@ -50,22 +51,28 @@ export function makeLazyLspResolver(
     if (!lspResolverPromise) {
       lspResolverPromise = createResolver({
         cwd: sendOptions.cwd!,
+        additionalDirectories: sendOptions.additionalDirectories,
         builtinProcessSandbox: sendOptions.builtinProcessSandbox,
         servers: lspConfig?.servers ?? [],
         installDir: lspConfig?.installDir,
         allowInstall: lspConfig?.autoInstall !== false,
         logger: { warn: (m) => log("warn", String(m)) },
-      }).catch((e) => {
-        // Surface the reason and clear the cached promise so a TRANSIENT
-        // failure (installer race, first-run download hiccup) doesn't disable
-        // LSP for the whole session — the next tool call retries.
-        log(
-          "warn",
-          `LSP resolver init failed (will retry on next use): ${(e as Error | null)?.message ?? e}`
-        )
-        lspResolverPromise = null
-        return null
       })
+        .then((resolver) => {
+          if (!resolver) lspResolverPromise = null
+          return resolver
+        })
+        .catch((e) => {
+          // Surface the reason and clear the cached promise so a TRANSIENT
+          // failure (installer race, first-run download hiccup) doesn't disable
+          // LSP for the whole session — the next tool call retries.
+          log(
+            "warn",
+            `LSP resolver init failed (will retry on next use): ${(e as Error | null)?.message ?? e}`
+          )
+          lspResolverPromise = null
+          return null
+        })
     }
     return lspResolverPromise
   }

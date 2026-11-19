@@ -135,3 +135,56 @@ test("sandboxed graph indexing rejects a cache symlink outside writable roots", 
     await fsp.rm(parent, { recursive: true, force: true })
   }
 })
+
+test("an in-scope cache symlink cannot authorize an out-of-scope index root", async () => {
+  const parent = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-parent-scope-"))
+  const cwd = path.join(parent, "workspace")
+  await fsp.mkdir(cwd)
+  await fsp.writeFile(path.join(parent, "package.json"), "{}")
+  await fsp.writeFile(path.join(parent, "outside.ts"), "export function outside() {}")
+  await fsp.writeFile(path.join(cwd, "inside.ts"), "export function inside() {}")
+  await fsp.symlink(cwd, path.join(parent, ".cognia"), "dir")
+  const resolver = makeLazyCodeGraphResolver({
+    sendOptions: {
+      cwd,
+      builtinTools: { codeGraph: true },
+      builtinProcessSandbox: { writableRoots: [cwd] },
+    },
+  })
+  try {
+    await resolver.codeGraphResolver!.syncStale()
+    assert.equal(resolver.codeGraphResolver!.status().root, cwd)
+    assert.deepEqual(
+      resolver.codeGraphResolver!.files().map((file) => file.path),
+      ["inside.ts"]
+    )
+  } finally {
+    resolver.dispose()
+    await fsp.rm(parent, { recursive: true, force: true })
+  }
+})
+
+test("an explicitly readable repository can use its authorized writable cache", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-readable-root-"))
+  const cwd = path.join(root, "workspace")
+  const cache = path.join(root, ".cognia")
+  await fsp.mkdir(cwd)
+  await fsp.mkdir(cache)
+  await fsp.writeFile(path.join(root, "package.json"), "{}")
+  await fsp.writeFile(path.join(root, "outer.ts"), "export function permitted() {}")
+  const resolver = makeLazyCodeGraphResolver({
+    sendOptions: {
+      cwd,
+      builtinTools: { codeGraph: true },
+      builtinProcessSandbox: { writableRoots: [cache], readableRoots: [root] },
+    },
+  })
+  try {
+    await resolver.codeGraphResolver!.syncStale()
+    assert.equal(resolver.codeGraphResolver!.status().root, root)
+    assert.ok(resolver.codeGraphResolver!.files().some((file) => file.path === "outer.ts"))
+  } finally {
+    resolver.dispose()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})

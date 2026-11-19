@@ -16,6 +16,20 @@ describe("resolveLspServers", () => {
     expect(out).toEqual([])
   })
 
+  it("keeps a valid server when another imported setting is incomplete", async () => {
+    const valid = { id: "valid", name: "Valid", command: "valid", languages: ["typescript"] }
+    const incomplete = {
+      id: "incomplete",
+      name: "Incomplete",
+      languages: ["typescript"],
+    } as LspServerConfig
+    const out = await resolveLspServers({
+      includeBuiltins: false,
+      userServers: [incomplete, valid],
+    })
+    expect(out.map((entry) => entry.id)).toEqual(["valid"])
+  })
+
   it("lets a user entry override a builtin field-by-field and tags provenance", async () => {
     const userServers: LspServerConfig[] = [
       {

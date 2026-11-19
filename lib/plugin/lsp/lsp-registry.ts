@@ -30,6 +30,7 @@
  */
 
 import { loggers } from "@cognia/logging"
+import { getRemoteLspTransport, subscribeRemoteLspTransport } from "@/lib/lsp/host-transport"
 import type { PluginLspServerDef } from "@/types/plugin"
 import {
   evaluateLspBinary,
@@ -77,13 +78,86 @@ interface RegistryDeps {
 
 let deps: RegistryDeps | null = null
 const records = new Map<string, LspServerRecord>()
+const recordHosts = new Map<string, ReturnType<typeof getRemoteLspTransport>>()
 const providerDisposables = new Map<string, { dispose(): void }>()
 const documentServers = new Map<string, { recordKey: string; fileUri: string }>()
+const diagnosticUris = new Map<string, Set<string>>()
+const openEditors = new Map<
+  string,
+  { editorId: string; host: ReturnType<typeof getRemoteLspTransport> }
+>()
 let nextRegistrationOrder = 0
 let unsubscribeEditorChanges: (() => void) | null = null
 let unsubscribeServerState: (() => void) | null = null
 let unsubscribeWorkspaceFolders: (() => void) | null = null
+let unsubscribeHost: (() => void) | null = null
 const documentQueues = new Map<string, Promise<void>>()
+
+const onActiveHost = (record: LspServerRecord) =>
+  recordHosts.get(record.key) === getRemoteLspTransport()
+
+function diagnosticsFor(input: RegistryDeps, record: LspServerRecord) {
+  return (uri: string, markers: Parameters<LspBridgeAdapter["setDiagnostics"]>[0]["markers"]) => {
+    if (records.get(record.key) !== record || !onActiveHost(record)) return
+    const resolved = resolveMonacoDocumentUri(uri)
+    let seen = diagnosticUris.get(record.key)
+    if (markers.length > 0) {
+      if (!seen) diagnosticUris.set(record.key, (seen = new Set()))
+      seen.add(resolved)
+    } else {
+      seen?.delete(resolved)
+    }
+    input.bridge.setDiagnostics({ extensionId: record.key, uri: resolved, markers })
+  }
+}
+
+function clearServerDiagnostics(input: RegistryDeps, serverKey: string): void {
+  for (const uri of diagnosticUris.get(serverKey) ?? []) {
+    input.bridge.setDiagnostics({ extensionId: serverKey, uri, markers: [] })
+  }
+  diagnosticUris.delete(serverKey)
+}
+
+type EditorEvent = Parameters<Parameters<NonNullable<LspBridgeAdapter["onEditorChange"]>>[0]>[0] & {
+  replay?: boolean
+}
+
+function enqueueEditorChange(input: RegistryDeps, event: EditorEvent): Promise<void> {
+  const host = getRemoteLspTransport()
+  const previous = documentQueues.get(event.uri) ?? Promise.resolve()
+  const next = previous
+    .then(() => {
+      if (getRemoteLspTransport() === host) return handleEditorChange(input, event, host)
+    })
+    .catch((error: unknown) => {
+      lspRegistryLogger.warn("lsp-registry document sync failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+    .finally(() => {
+      if (documentQueues.get(event.uri) === next) documentQueues.delete(event.uri)
+    })
+  documentQueues.set(event.uri, next)
+  return next
+}
+
+async function replayOpenEditors(input: RegistryDeps): Promise<void> {
+  const host = getRemoteLspTransport()
+  await Promise.all(
+    [...openEditors].flatMap(([uri, editor]) =>
+      editor.host === host
+        ? [
+            enqueueEditorChange(input, {
+              uri,
+              editorId: editor.editorId,
+              kind: "open",
+              replay: true,
+            }),
+          ]
+        : []
+    )
+  )
+}
 
 /**
  * Wire the registry. Called once at app init (or per-test). Returns a
@@ -91,27 +165,45 @@ const documentQueues = new Map<string, Promise<void>>()
  */
 export function configureLspRegistry(input: RegistryDeps): () => void {
   deps = input
+  let activeHost = getRemoteLspTransport()
+  unsubscribeHost = subscribeRemoteLspTransport(() => {
+    const host = getRemoteLspTransport()
+    if (host === activeHost) return
+    activeHost = host
+    documentServers.clear()
+    for (const serverKey of diagnosticUris.keys()) clearServerDiagnostics(input, serverKey)
+    reconcileProviderRegistrations(input.client)
+  })
   unsubscribeEditorChanges =
     input.bridge.onEditorChange?.((event) => {
       if (event.kind === "change-selection") return
-      const previous = documentQueues.get(event.uri) ?? Promise.resolve()
-      const next = previous
-        .catch(() => undefined)
-        .then(() => handleEditorChange(input, event))
-        .finally(() => {
-          if (documentQueues.get(event.uri) === next) documentQueues.delete(event.uri)
-        })
-      documentQueues.set(event.uri, next)
+      const previous = openEditors.get(event.uri)
+      const host = getRemoteLspTransport()
+      if (event.kind === "close") {
+        if (previous?.editorId !== event.editorId) return
+        openEditors.delete(event.uri)
+        if (previous.host !== host) return
+      } else {
+        if (
+          event.kind !== "open" &&
+          previous?.editorId === event.editorId &&
+          previous.host !== host
+        )
+          return
+        openEditors.set(event.uri, { editorId: event.editorId, host })
+      }
+      void enqueueEditorChange(input, event)
     }) ?? null
   unsubscribeServerState =
     input.client.onStateChange?.((event) => {
       const record = records.get(key(event.ownerId, event.serverId))
-      if (!record) return
+      if (!record || !onActiveHost(record)) return
       record.state = event.state === "broken" ? "crashed" : event.state
       record.lastError = event.lastError
       reconcileProviderRegistrations(input.client)
     }) ?? null
   let previousFolders = input.resolveWorkspaceFolders()
+  let folderUpdates = Promise.resolve()
   unsubscribeWorkspaceFolders = onWorkspaceFoldersChanged(() => {
     const nextFolders = input.resolveWorkspaceFolders()
     const before = new Map(previousFolders.map((folder) => [folder.uri, folder]))
@@ -120,7 +212,11 @@ export function configureLspRegistry(input: RegistryDeps): () => void {
     const removed = previousFolders.filter((folder) => !after.has(folder.uri))
     previousFolders = nextFolders
     if (added.length === 0 && removed.length === 0) return
-    void updateRunningServerWorkspaces(input, added, removed)
+    folderUpdates = folderUpdates
+      .then(() => updateRunningServerWorkspaces(input, added, removed))
+      .catch((error: unknown) => {
+        lspRegistryLogger.warn("lsp-registry workspace update failed", { error: String(error) })
+      })
   })
   return async () => {
     unsubscribeEditorChanges?.()
@@ -129,20 +225,25 @@ export function configureLspRegistry(input: RegistryDeps): () => void {
     unsubscribeServerState = null
     unsubscribeWorkspaceFolders?.()
     unsubscribeWorkspaceFolders = null
+    unsubscribeHost?.()
+    unsubscribeHost = null
     disposeAllProviders()
     const keys = [...records.keys()]
     for (const k of keys) {
       const rec = records.get(k)
       if (!rec) continue
       try {
-        await input.client.stop(rec.ownerId, rec.serverId)
+        if (onActiveHost(rec)) await input.client.stop(rec.ownerId, rec.serverId)
       } catch {
         /* swallow */
       }
+      clearServerDiagnostics(input, k)
       records.delete(k)
+      recordHosts.delete(k)
     }
     deps = null
     documentServers.clear()
+    openEditors.clear()
     documentQueues.clear()
   }
 }
@@ -151,13 +252,18 @@ export function configureLspRegistry(input: RegistryDeps): () => void {
 export function __resetLspRegistryForTesting(): void {
   unsubscribeEditorChanges?.()
   unsubscribeEditorChanges = null
+  diagnosticUris.clear()
   unsubscribeServerState?.()
   unsubscribeServerState = null
   unsubscribeWorkspaceFolders?.()
   unsubscribeWorkspaceFolders = null
+  unsubscribeHost?.()
+  unsubscribeHost = null
   disposeAllProviders()
   records.clear()
+  recordHosts.clear()
   documentServers.clear()
+  openEditors.clear()
   documentQueues.clear()
   nextRegistrationOrder = 0
   deps = null
@@ -195,12 +301,16 @@ export async function registerLspServer(input: {
     ownerId: input.ownerId,
     serverId: input.config.id,
     key: k,
-    config: input.config,
+    config:
+      input.ownerId === "user"
+        ? input.config
+        : { ...input.config, command: resolveBinaryPath(input.config.command, input.pluginPath) },
     pluginPath: input.pluginPath,
     state: "stopped",
     registrationOrder: nextRegistrationOrder++,
   }
   records.set(k, record)
+  recordHosts.set(k, getRemoteLspTransport())
 
   // Policy gate — skipped only when the consent UI explicitly confirms.
   if (!input.confirmedConsent) {
@@ -208,7 +318,7 @@ export async function registerLspServer(input: {
     try {
       policy = await evaluateLspBinary({
         pluginId: input.ownerId,
-        binaryPath: resolveBinaryPath(input.config.command, input.pluginPath),
+        binaryPath: record.config.command,
         pluginPath: input.pluginPath,
       })
     } catch (err) {
@@ -238,27 +348,30 @@ export async function registerLspServer(input: {
   }
 
   // Spawn.
+  const workspaceFolders = d.resolveWorkspaceFolders()
+  if (
+    !onActiveHost(record) ||
+    (record.config.workspaceFolderRequired && workspaceFolders.length === 0)
+  ) {
+    return record
+  }
   record.state = "starting"
   try {
     const initialized = await d.client.start({
       ownerId: input.ownerId,
       serverId: input.config.id,
-      config: input.config,
-      workspaceFolders: d.resolveWorkspaceFolders(),
-      onDiagnostics: (uri, markers) => {
-        d.bridge.setDiagnostics({
-          extensionId: k,
-          uri: resolveMonacoDocumentUri(uri),
-          markers,
-        })
-      },
+      config: record.config,
+      workspaceFolders,
+      onDiagnostics: diagnosticsFor(d, record),
     })
+    if (records.get(k) !== record || !onActiveHost(record)) return record
     record.capabilities =
       initialized && "capabilities" in initialized && initialized.capabilities
         ? (initialized.capabilities as Record<string, unknown>)
         : {}
     record.state = "running"
     record.startedAt = d.now()
+    await replayOpenEditors(d)
     reconcileProviderRegistrations(d.client)
   } catch (err) {
     record.state = "crashed"
@@ -284,7 +397,7 @@ export async function unregisterLspServer(
   const record = records.get(k)
   if (!record) return
   try {
-    await d.client.stop(ownerId, serverId)
+    if (onActiveHost(record)) await d.client.stop(ownerId, serverId)
   } catch (err) {
     lspRegistryLogger.warn("lsp-registry stop failed", {
       key: k,
@@ -293,7 +406,11 @@ export async function unregisterLspServer(
   }
   providerDisposables.get(k)?.dispose()
   providerDisposables.delete(k)
+  clearServerDiagnostics(d, k)
   records.delete(k)
+  recordHosts.delete(k)
+  for (const [uri, route] of documentServers) if (route.recordKey === k) documentServers.delete(uri)
+  await replayOpenEditors(d)
   reconcileProviderRegistrations(d.client)
 }
 
@@ -319,7 +436,12 @@ export function listLspServers(): LspServerRecord[] {
 /** Lookup the first record whose `languages` array includes `languageId`. */
 export function getLspServerForLanguage(languageId: string): LspServerRecord | undefined {
   return [...records.values()]
-    .filter((record) => record.state === "running" && record.config.languages.includes(languageId))
+    .filter(
+      (record) =>
+        onActiveHost(record) &&
+        record.state === "running" &&
+        record.config.languages.includes(languageId)
+    )
     .sort(compareServerPriority)[0]
 }
 
@@ -405,15 +527,26 @@ async function updateRunningServerWorkspaces(
   added: Array<{ uri: string; name: string }>,
   removed: Array<{ uri: string; name: string }>
 ): Promise<void> {
-  for (const record of [...records.values()].filter((item) => item.state === "running")) {
+  for (const record of records.values()) {
+    if (!onActiveHost(record)) continue
+    if (
+      record.state === "stopped" &&
+      !record.consentReason &&
+      record.config.workspaceFolderRequired &&
+      added.length > 0
+    ) {
+      await restartServerForWorkspaceChange(input, record)
+      continue
+    }
+    if (record.state !== "running") continue
     if (supportsDynamicWorkspaceFolders(record) && input.client.clientNotification) {
-      await input.client.clientNotification({
+      const updated = await input.client.clientNotification({
         ownerId: record.ownerId,
         serverId: record.serverId,
         method: "workspace/didChangeWorkspaceFolders",
         payload: { event: { added, removed } },
       })
-      continue
+      if (updated) continue
     }
     await restartServerForWorkspaceChange(input, record)
   }
@@ -425,21 +558,42 @@ async function restartServerForWorkspaceChange(
 ): Promise<void> {
   providerDisposables.get(record.key)?.dispose()
   providerDisposables.delete(record.key)
+  clearServerDiagnostics(input, record.key)
   record.state = "starting"
+  for (const [uri, route] of documentServers) {
+    if (route.recordKey === record.key) documentServers.delete(uri)
+  }
   try {
     await input.client.stop(record.ownerId, record.serverId)
+    const workspaceFolders = input.resolveWorkspaceFolders()
+    if (
+      !onActiveHost(record) ||
+      (record.config.workspaceFolderRequired && workspaceFolders.length === 0)
+    ) {
+      record.state = "stopped"
+      return
+    }
+    if (record.ownerId !== "user") {
+      const policy = await evaluateLspBinary({
+        pluginId: record.ownerId,
+        pluginPath: record.pluginPath,
+        binaryPath: record.config.command,
+      })
+      if (!policy.allowed) {
+        record.state = "stopped"
+        record.consentReason = policy.reason
+        return
+      }
+    }
+    if (records.get(record.key) !== record || !onActiveHost(record)) return
     const initialized = await input.client.start({
       ownerId: record.ownerId,
       serverId: record.serverId,
       config: record.config,
-      workspaceFolders: input.resolveWorkspaceFolders(),
-      onDiagnostics: (uri, markers) =>
-        input.bridge.setDiagnostics({
-          extensionId: record.key,
-          uri: resolveMonacoDocumentUri(uri),
-          markers,
-        }),
+      workspaceFolders,
+      onDiagnostics: diagnosticsFor(input, record),
     })
+    if (records.get(record.key) !== record || !onActiveHost(record)) return
     record.capabilities =
       initialized && typeof initialized === "object" && initialized.capabilities
         ? (initialized.capabilities as Record<string, unknown>)
@@ -447,6 +601,7 @@ async function restartServerForWorkspaceChange(
     record.state = "running"
     record.startedAt = input.now()
     record.lastError = undefined
+    await replayOpenEditors(input)
   } catch (error) {
     record.state = "crashed"
     record.lastError = error instanceof Error ? error.message : String(error)
@@ -456,17 +611,15 @@ async function restartServerForWorkspaceChange(
 
 async function handleEditorChange(
   input: RegistryDeps,
-  event: {
-    editorId: string
-    uri: string
-    kind: "open" | "close" | "change-selection" | "change-content" | "change-language"
-  }
+  event: EditorEvent,
+  host: ReturnType<typeof getRemoteLspTransport>
 ): Promise<void> {
+  if (getRemoteLspTransport() !== host) return
   if (event.kind === "change-language") {
     // The document may belong to another server now: close it where it was
     // and open it with the server for its new language.
-    await handleEditorChange(input, { ...event, kind: "close" })
-    await handleEditorChange(input, { ...event, kind: "open" })
+    await handleEditorChange(input, { ...event, kind: "close" }, host)
+    await handleEditorChange(input, { ...event, kind: "open" }, host)
     return
   }
   const model = input.bridge.getEditorById?.(event.editorId)?.getModel()
@@ -474,14 +627,14 @@ async function handleEditorChange(
     const route = documentServers.get(event.uri)
     const record = route ? records.get(route.recordKey) : undefined
     const uri = route?.fileUri ?? resolveMaterializedDocumentUri(event.uri)
-    if (record && uri && input.client.didClose) {
+    documentServers.delete(event.uri)
+    if (record?.state === "running" && onActiveHost(record) && uri && input.client.didClose) {
       await input.client.didClose({
         ownerId: record.ownerId,
         serverId: record.serverId,
         uri,
       })
     }
-    documentServers.delete(event.uri)
     return
   }
   if (!model) return
@@ -489,42 +642,38 @@ async function handleEditorChange(
   const uri = resolveMaterializedDocumentUri(event.uri)
   if (!record || !uri) return
 
-  if (event.kind === "open") {
-    documentServers.set(event.uri, { recordKey: record.key, fileUri: uri })
+  const route = documentServers.get(event.uri)
+  const routed = route ? records.get(route.recordKey) : undefined
+  const sameRoute = route?.recordKey === record.key && route.fileUri === uri
+  if (event.kind === "open" && sameRoute) return
+  if (event.kind !== "open" && event.kind !== "change-content") return
+  const text = model.getValue()
+  if (event.uri !== uri && (event.kind === "change-content" || event.replay)) {
+    await flushMaterializedDocument(event.uri, text)
+  }
+  if (getRemoteLspTransport() !== host || records.get(record.key) !== record) return
+  if (!sameRoute) {
+    if (routed?.state === "running" && onActiveHost(routed) && route && input.client.didClose) {
+      await input.client.didClose({
+        ownerId: routed.ownerId,
+        serverId: routed.serverId,
+        uri: route.fileUri,
+      })
+    }
+    if (getRemoteLspTransport() !== host || records.get(record.key) !== record) return
     await input.client.didOpen?.({
       ownerId: record.ownerId,
       serverId: record.serverId,
       uri,
       languageId: model.language,
-      text: model.getValue(),
-    })
-    return
-  }
-  if (event.kind === "change-content") {
-    const routedKey = documentServers.get(event.uri)?.recordKey
-    const previous = routedKey ? records.get(routedKey) : undefined
-    const routed = previous?.state === "running" ? previous : record
-    if (!routed || !input.client.didChange) return
-    const text = model.getValue()
-    await flushMaterializedDocument(event.uri, text)
-    if (routed.key !== routedKey) {
-      documentServers.set(event.uri, { recordKey: routed.key, fileUri: uri })
-      await input.client.didOpen?.({
-        ownerId: routed.ownerId,
-        serverId: routed.serverId,
-        uri,
-        languageId: model.language,
-        text,
-      })
-      return
-    }
-    await input.client.didChange({
-      ownerId: routed.ownerId,
-      serverId: routed.serverId,
-      uri,
       text,
     })
+    if (getRemoteLspTransport() === host && records.get(record.key) === record) {
+      documentServers.set(event.uri, { recordKey: record.key, fileUri: uri })
+    }
+    return
   }
+  await input.client.didChange?.({ ownerId: record.ownerId, serverId: record.serverId, uri, text })
 }
 
 /**

@@ -23,7 +23,7 @@ describe("readProjectLspFile", () => {
   it("reads .cognia/lsp.json confined to the root, not by absolute path", async () => {
     mockRead.mockResolvedValue(JSON.stringify({ servers: [] }))
     await readProjectLspFile("/proj")
-    expect(mockRead).toHaveBeenCalledWith("/proj", PROJECT_LSP_CONFIG_RELPATH)
+    expect(mockRead).toHaveBeenCalledWith("/proj", PROJECT_LSP_CONFIG_RELPATH, 256 * 1024)
   })
 
   it("parses a valid object file", async () => {
@@ -32,6 +32,20 @@ describe("readProjectLspFile", () => {
     )
     const out = await readProjectLspFile("/proj")
     expect(out?.servers?.[0].id).toBe("x")
+  })
+
+  it("ignores malformed server entries without losing valid overrides", async () => {
+    mockRead.mockResolvedValue(
+      JSON.stringify({
+        servers: [
+          { id: "bad", extensions: ".ts" },
+          { id: "typescript", settings: { typescript: {} } },
+        ],
+      })
+    )
+    expect(await readProjectLspFile("/proj")).toEqual({
+      servers: [{ id: "typescript", settings: { typescript: {} } }],
+    })
   })
 
   it("returns null when the read fails (missing file)", async () => {
@@ -52,7 +66,7 @@ describe("readProjectLspFile", () => {
   it("passes a Windows-style root through unchanged", async () => {
     mockRead.mockResolvedValue(JSON.stringify({ servers: [] }))
     await readProjectLspFile("C:\\code\\proj")
-    expect(mockRead).toHaveBeenCalledWith("C:\\code\\proj", ".cognia/lsp.json")
+    expect(mockRead).toHaveBeenCalledWith("C:\\code\\proj", ".cognia/lsp.json", 256 * 1024)
   })
 
   it("uses an injected reader outside Tauri", async () => {

@@ -111,6 +111,14 @@ export class DiagnosticsBuffer {
     this.pending.set(slot, { handle, params: deduped })
   }
 
+  cancelDocument(key: string, uri: string): void {
+    const slot = `${key}\n${uri}`
+    const pending = this.pending.get(slot)
+    if (!pending) return
+    this.clearTimeoutFn(pending.handle)
+    this.pending.delete(slot)
+  }
+
   /** Drop (without emitting) every pending frame for a routing key. */
   cancelKey(key: string): void {
     const prefix = `${key}\n`

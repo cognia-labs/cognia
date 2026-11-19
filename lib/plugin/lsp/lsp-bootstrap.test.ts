@@ -19,7 +19,7 @@ jest.mock("./lsp-registry", () => ({
 jest.mock("./lsp-client-adapter-tauri", () => {
   return {
     LSP_TAURI_CHANNEL_ID: "cognia.lsp-service",
-    TauriLspClientAdapter: jest.fn().mockImplementation(() => ({
+    getSystemLspClient: jest.fn().mockImplementation(() => ({
       install: jest.fn(),
       start: jest.fn(),
       stop: jest.fn(),

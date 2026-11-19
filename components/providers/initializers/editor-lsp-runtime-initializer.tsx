@@ -19,18 +19,18 @@ import { useEffect, useSyncExternalStore } from "react"
 
 import { isTauri } from "@/lib/tauri"
 import { ensureEditorLspRuntime } from "@/lib/lsp/ensure-editor-lsp-runtime"
-import { isRemoteHostActive, subscribeActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import { getRemoteLspTransport, subscribeRemoteLspTransport } from "@/lib/lsp/host-transport"
 
 export function EditorLspRuntimeInitializer() {
-  const remoteHostActive = useSyncExternalStore(
-    (notify) => subscribeActiveRemoteTransport(() => notify()),
-    isRemoteHostActive,
-    () => false
+  const remoteHost = useSyncExternalStore(
+    (notify) => subscribeRemoteLspTransport(() => notify()),
+    getRemoteLspTransport,
+    () => null
   )
   useEffect(() => {
-    if (!isTauri() && !remoteHostActive) return
+    if (!isTauri() && !remoteHost) return
     void ensureEditorLspRuntime()
-  }, [remoteHostActive])
+  }, [remoteHost])
   return null
 }
 

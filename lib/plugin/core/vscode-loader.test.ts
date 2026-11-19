@@ -698,6 +698,38 @@ describe("vscode-loader — ensureDispatcherConfigured export", () => {
     await expect(ensureDispatcherConfigured()).resolves.toBeUndefined()
     await expect(ensureDispatcherConfigured()).resolves.toBeUndefined()
   })
+
+  it("configures the system LSP subscription in a paired browser", async () => {
+    jest.doMock("@/lib/canvas/monaco-loader", () => ({
+      loadConfiguredMonaco: jest.fn(async () => {
+        throw new Error("Monaco is outside this subscription test")
+      }),
+    }))
+    const { CompanionTransport, __setCompanionConfigCacheForTests } =
+      await import("@/lib/tauri/transport-companion")
+    const { setTransport, transport } = await import("@/lib/tauri/transport-instance")
+    const { configureRpcDispatcher, subscribeToVscodeEvents } =
+      await import("@/lib/plugin/vscode-shim/rpc-dispatcher")
+    __setCompanionConfigCacheForTests({
+      deviceId: "browser-fixture",
+      baseUrl: "https://fixture.invalid",
+      serverVersion: "fixture",
+    })
+    const paired = new CompanionTransport()
+    const listen = jest.spyOn(paired, "subscribe").mockImplementation(() => () => {})
+    setTransport(paired)
+    try {
+      const { ensureDispatcherConfigured } = await import("./vscode-loader")
+      await ensureDispatcherConfigured()
+      await subscribeToVscodeEvents("cognia.lsp-service")
+      expect(listen).toHaveBeenCalledWith("lsp://rpc", expect.any(Function))
+    } finally {
+      configureRpcDispatcher(null)
+      __setCompanionConfigCacheForTests(null)
+      setTransport(transport)
+      jest.dontMock("@/lib/canvas/monaco-loader")
+    }
+  })
 })
 
 describe("vscode-loader — invokeVscodeRpc without Tauri", () => {

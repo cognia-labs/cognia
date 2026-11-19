@@ -3,7 +3,7 @@
 | 项目     | 内容                                                                                                                                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 日期     | 2026-10-25，Asia/Shanghai                                                                                                                                                                                                  |
-| 目的     | 回答 [第二期计划](../plans/2026-10-25-adr-0239-phase-2.md) WP10：四种浏览器引擎上，agent 的动作造成的提交能否在发出前被看见并挂起，挂起靠什么机制，误判与漏判在哪里                                                        |
+| 目的     | 回答 [第二期计划](../plans/2026-10-25-adr-0239-github-write-and-browser-submission-authorization.md) WP10：四种浏览器引擎上，agent 的动作造成的提交能否在发出前被看见并挂起，挂起靠什么机制，误判与漏判在哪里                                                        |
 | 环境     | macOS 26（Darwin 25.5），Playwright 1.63.0，Chromium 153.0.8010.12（rev 1243），Playwright WebKit 26.6（rev 2359），cognia-browser-extension HEAD `0deecc0`                                                                |
 | 实测脚本 | [`2026-10-25-browser-submit-signal/`](./2026-10-25-browser-submit-signal/)：`fixtures.mjs`（两个源的夹具服务器）、`run-playwright.mjs`、`run-extension.mjs`、`run-block.mjs`、`run-refuse.mjs`、`summarize.py`、`results/` |
 | 结论     | 本地 Chromium、远程 Chromium **可靠**（`context.route` + `routeWebSocket`）；内嵌 webview **部分**；扩展引擎在现有权限下 **部分**，只有加 `debugger` 权限才对 HTTP 可靠。动作前判定在所有引擎上只能作提示                  |

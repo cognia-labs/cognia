@@ -1,12 +1,28 @@
 const mockTransportCall = jest.fn()
 let mockRemoteActive = false
+let mockRemoteTarget: object = {}
 const mockInvokeVscodeRpc = jest.fn()
+const mockAuthorize = jest.fn(async () => undefined)
 
 jest.mock("@/lib/tauri", () => ({
   transport: { call: (...args: unknown[]) => mockTransportCall(...args) },
 }))
-jest.mock("@/lib/tauri/transport-routing", () => ({
-  isRemoteHostActive: jest.fn(() => mockRemoteActive),
+jest.mock("@/lib/lsp/host-transport", () => ({
+  DEVICE_LSP_EVENT: "lsp://rpc",
+  getRemoteLspTransport: () => (mockRemoteActive ? mockRemoteTarget : null),
+}))
+jest.mock("@/lib/tauri/interactive-approval", () => ({
+  InteractiveApprovalRequiredError: class extends Error {
+    constructor() {
+      super("interactive_approval_required")
+    }
+  },
+  createInteractiveApprovalScope: () => ({
+    authorize: mockAuthorize,
+    clear: jest.fn(),
+    call: (command: string, args: object) =>
+      mockTransportCall(command, { ...args, adminLease: "lease" }),
+  }),
 }))
 jest.mock("@/lib/plugin/core/vscode-loader", () => ({
   invokeVscodeRpc: (...args: unknown[]) => mockInvokeVscodeRpc(...args),
@@ -19,7 +35,11 @@ jest.mock("@/lib/plugin/core/vscode-loader", () => ({
  * any Tauri runtime.
  */
 
-import { LSP_TAURI_CHANNEL_ID, TauriLspClientAdapter } from "./lsp-client-adapter-tauri"
+import {
+  authorizeRemoteLspHost,
+  LSP_TAURI_CHANNEL_ID,
+  TauriLspClientAdapter,
+} from "./lsp-client-adapter-tauri"
 
 function makeAdapter(opts?: {
   isHostAvailable?: () => boolean
@@ -65,6 +85,7 @@ describe("TauriLspClientAdapter", () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockRemoteActive = false
+    mockRemoteTarget = {}
   })
 
   it("uses the confined Companion LSP facade when a remote host is active", async () => {
@@ -72,12 +93,18 @@ describe("TauriLspClientAdapter", () => {
     mockTransportCall.mockResolvedValue(JSON.stringify([{ key: "user:eslint" }]))
     const adapter = new TauriLspClientAdapter({ registerHandler: () => () => {} })
 
+    await expect(adapter.status()).rejects.toThrow("interactive_approval_required")
+    expect(mockAuthorize).not.toHaveBeenCalled()
+    await authorizeRemoteLspHost()
     await expect(adapter.status()).resolves.toEqual([{ key: "user:eslint" }])
     expect(mockTransportCall).toHaveBeenCalledWith("lsp_host_request", {
       method: "lsp:status",
       payloadJson: "{}",
+      adminLease: "lease",
     })
     expect(mockInvokeVscodeRpc).not.toHaveBeenCalled()
+    mockRemoteTarget = {}
+    await expect(adapter.status()).rejects.toThrow("interactive_approval_required")
   })
 
   it("keeps the existing VS Code RPC path for the local host", async () => {

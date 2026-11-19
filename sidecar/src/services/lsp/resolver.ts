@@ -25,7 +25,9 @@ import {
   resolveProcessPortEnv,
 } from "../../platform/process/exec.ts"
 import type { ProcessSandboxScope } from "../../platform/process/exec.ts"
-import { buildServers, serversForFile } from "./servers.ts"
+import { assertPathInside, canonicalisePartial, resolveToolPath } from "../../platform/fs/paths.ts"
+import { isSecretPath } from "../../platform/fs/secret-paths.ts"
+import { buildServers, languageIdForFile, serversForFile } from "./servers.ts"
 import type { LspInstallSpec, ServerInfo } from "./servers.ts"
 
 /** Identifies one open document on one server. */
@@ -67,17 +69,21 @@ export interface LspResolverOptions {
   service: LspServiceLike
   /** Agent working directory (root boundary). */
   cwd: string
+  additionalDirectories?: readonly string[] | undefined
   /** Resolved LSP config list (from `sendOptions.lsp.servers`). */
   servers?: unknown
   ensureCommand?: EnsureCommand | undefined
   logger?: LspLogger | undefined
   diagnosticsWaitMs?: number
+  now?: () => number
   builtinProcessSandbox?: ProcessSandboxScope | undefined
 }
 
 /** A published diagnostics notification, as `lsp:publishDiagnostics` carries it. */
 export interface PublishDiagnosticsParams {
   uri?: string
+  serverId?: string
+  version?: number
   diagnostics?: unknown[]
 }
 
@@ -86,11 +92,13 @@ export interface LspResolver {
   getDiagnostics(absPath: string, opts?: { text?: string; waitMs?: number }): Promise<unknown[]>
   request(absPath: string, method: string, payload?: Record<string, unknown>): Promise<unknown>
   ingestDiagnostics(params: PublishDiagnosticsParams | null | undefined): void
+  forgetDiagnostics?(serverId: string): void
   dispose(): Promise<void>
 }
 
 const OWNER = "agent"
 const DEFAULT_DIAGNOSTICS_WAIT_MS = 800
+const SERVER_RETRY_MS = 15_000
 
 /** Stable, short, dependency-free hash for serverId disambiguation. */
 function djb2(str: string): string {
@@ -132,28 +140,40 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
   const ensureCommand: EnsureCommand = args.ensureCommand ?? defaultEnsureCommand
   const logger: LspLogger = args.logger ?? {}
   const diagnosticsWaitMs = args.diagnosticsWaitMs ?? DEFAULT_DIAGNOSTICS_WAIT_MS
+  const now = args.now ?? Date.now
+  const workspaceRoots = [cwd, ...(args.additionalDirectories ?? [])]
   // The runnable server list is built once from the injected config. The
   // sidecar no longer owns a hard-coded registry — it consumes whatever the
   // renderer resolved (builtin ← user ← project).
   const builtServers = buildServers(args.servers ?? [])
 
-  /** uri(normalized) -> diagnostics[] */
+  /** server and normalized URI -> latest diagnostics for the current text */
   const diagnostics = new Map<string, unknown[]>()
   /** serverId -> { server, root } */
   const servers = new Map<string, { server: ServerInfo; root: string }>()
-  /** `${serverId}\n${uri}` -> true once didOpen'd */
-  const openDocs = new Set<string>()
-  /**
-   * serverIds whose binary resolution or spawn already failed this session.
-   * Without this, every file touch would retry the full ladder — including
-   * a doomed npm install — turning one missing toolchain into per-edit lag.
-   */
-  const failedServers = new Set<string>()
+  const openDocs = new Map<string, string>()
+  const retryAt = new Map<string, number>()
+  const starting = new Map<string, Promise<string | null>>()
+  let disposed = false
+
+  const docKey = (serverId: string, uri: string) => `${serverId}\n${normalizeUri(uri)}`
 
   /** Feed a `lsp:publishDiagnostics` notification payload into the cache. */
   function ingestDiagnostics(params: PublishDiagnosticsParams | null | undefined): void {
     if (!params || !params.uri) return
-    diagnostics.set(normalizeUri(params.uri), params.diagnostics ?? [])
+    const uri = params.uri
+    // Older host bundles did not always stamp the server id. Accept their
+    // frames only if there is exactly one matching open document.
+    const keys = params.serverId
+      ? [docKey(params.serverId, uri)]
+      : [...openDocs.keys()].filter((key) => key.endsWith(`\n${normalizeUri(uri)}`))
+    const key = keys.length === 1 ? keys[0] : undefined
+    if (key && openDocs.has(key)) diagnostics.set(key, params.diagnostics ?? [])
+  }
+
+  function forgetDiagnostics(serverId: string): void {
+    for (const key of diagnostics.keys())
+      if (key.startsWith(`${serverId}\n`)) diagnostics.delete(key)
   }
 
   function serverIdFor(server: ServerInfo, root: string): string {
@@ -162,18 +182,40 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
 
   async function ensureServer(server: ServerInfo, root: string): Promise<string | null> {
     const serverId = serverIdFor(server, root)
+    if (disposed) throw new Error("lsp: session is closed")
     if (servers.has(serverId)) return serverId
-    if (failedServers.has(serverId)) return null
+    if ((retryAt.get(serverId) ?? -Infinity) > now()) return null
+    let pending = starting.get(serverId)
+    if (!pending) {
+      pending = startServer(server, root, serverId).finally(() => starting.delete(serverId))
+      starting.set(serverId, pending)
+    }
+    return pending
+  }
+
+  async function startServer(
+    server: ServerInfo,
+    root: string,
+    serverId: string
+  ): Promise<string | null> {
     const portEnv = await resolveProcessPortEnv(root)
     const spawn = server.resolveCommand(root, { cwd })
     const resolved = await ensureCommand(spawn.command, { serverId, root, install: server.install })
     if (!resolved) {
-      failedServers.add(serverId)
+      retryAt.set(serverId, now() + SERVER_RETRY_MS)
       logger.warn?.(`[lsp] binary not found for ${server.id}: ${spawn.command} (skipping)`)
       return null
     }
     const folderUri = pathToFileURL(root.endsWith(path.sep) ? root : root + path.sep).href
     try {
+      if (disposed) return null
+      if (
+        server.transport === "socket" &&
+        args.builtinProcessSandbox &&
+        args.builtinProcessSandbox.network !== true
+      ) {
+        throw new Error("lsp: socket transport requires sandbox network permission")
+      }
       const target = sandboxedProcessTarget(
         resolved,
         spawn.args ?? [],
@@ -193,7 +235,10 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
         ),
         ...(args.builtinProcessSandbox ? { inheritEnv: false } : {}),
         cwd: root,
-        transport: "stdio",
+        transport: server.transport ?? "stdio",
+        endpoint: server.endpoint,
+        startupTimeout: server.startupTimeout,
+        memoryLimitMb: server.memoryLimitMb,
         workspaceFolders: [{ uri: folderUri, name: path.basename(root) || root }],
         initializationOptions: spawn.initializationOptions,
         // Per-server `settings` drive the LSP `workspace/configuration` pull
@@ -201,13 +246,14 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
         settings: server.settings,
       })
     } catch (err) {
-      failedServers.add(serverId)
+      retryAt.set(serverId, now() + SERVER_RETRY_MS)
       logger.warn?.(`[lsp] failed to start ${server.id}`, {
         err: err instanceof Error ? err.message : String(err),
       })
       return null
     }
     servers.set(serverId, { server, root })
+    retryAt.delete(serverId)
     return serverId
   }
 
@@ -217,34 +263,78 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
    * matching touch. `text` is the current contents; read from disk when omitted.
    */
   async function touchFile(absPath: string, text?: string): Promise<string[]> {
+    if (disposed) throw new Error("lsp: session is closed")
+    absPath = resolveToolPath(cwd, absPath)
+    const real = canonicalisePartial(absPath)
+    const inside = (root: string) => {
+      try {
+        assertPathInside(root, real)
+        return true
+      } catch {
+        return false
+      }
+    }
+    if (isSecretPath(absPath) || isSecretPath(real))
+      throw new Error("lsp: protected credential path")
+    const workspace = workspaceRoots.find(inside)
+    const scope = args.builtinProcessSandbox
+    if (
+      !workspace ||
+      (scope && ![...(scope.writableRoots ?? []), ...(scope.readableRoots ?? [])].some(inside))
+    ) {
+      throw new Error("lsp: file is outside authorized workspace roots")
+    }
+    // A symlink outside the workspace can resolve to an authorized file.
+    // Do not let its lexical parent choose the server's workspace/cwd.
+    const lexicalRoot = [workspace, canonicalisePartial(workspace)].find((root) => {
+      const relative = path.relative(root, absPath)
+      return (
+        relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+      )
+    })
+    if (!lexicalRoot) throw new Error("lsp: file is outside authorized workspace roots")
     const candidates = serversForFile(absPath, builtServers)
     if (candidates.length === 0) return []
     let content = text
     if (content == null) {
       try {
-        content = fs.readFileSync(absPath, "utf-8")
+        content = fs.readFileSync(real, "utf-8")
       } catch {
         return []
       }
     }
     const uri = pathToFileURL(absPath).href
-    const languageId = path.extname(absPath).slice(1) || "plaintext"
     const touched: string[] = []
     for (const server of candidates) {
-      const root = server.root(absPath, { cwd })
+      const root = server.root(absPath, { cwd: lexicalRoot })
       if (!root) continue
-      const serverId = await ensureServer(server, root)
-      if (!serverId) continue
-      const docKey = `${serverId}\n${uri}`
       try {
-        if (openDocs.has(docKey)) {
-          service.didChange({ ownerId: OWNER, serverId, uri, languageId, text: content })
-        } else {
-          service.didOpen({ ownerId: OWNER, serverId, uri, languageId, text: content })
-          openDocs.add(docKey)
+        assertPathInside(workspace, root)
+      } catch {
+        continue
+      }
+      const serverId = await ensureServer(server, root)
+      if (!serverId || disposed) continue
+      const key = docKey(serverId, uri)
+      const previous = openDocs.get(key)
+      try {
+        if (previous !== content) {
+          diagnostics.delete(key)
+          openDocs.set(key, content)
+          const params = {
+            ownerId: OWNER,
+            serverId,
+            uri,
+            languageId: languageIdForFile(absPath, server),
+            text: content,
+          }
+          if (previous === undefined) service.didOpen(params)
+          else service.didChange(params)
         }
         touched.push(serverId)
       } catch (err) {
+        if (previous === undefined) openDocs.delete(key)
+        else openDocs.set(key, previous)
         logger.warn?.(`[lsp] didOpen/didChange failed for ${serverId}`, {
           err: err instanceof Error ? err.message : String(err),
         })
@@ -262,9 +352,15 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
     opts: { text?: string; waitMs?: number } = {}
   ): Promise<unknown[]> {
     const touched = await touchFile(absPath, opts.text)
-    if (touched.length === 0) return []
-    await delay(opts.waitMs ?? diagnosticsWaitMs)
-    return diagnostics.get(normalizeUri(pathToFileURL(absPath).href)) ?? []
+    if (touched.length === 0) throw new Error(`lsp: no language server available for ${absPath}`)
+    const uri = pathToFileURL(resolveToolPath(cwd, absPath)).href
+    const keys = touched.map((id) => docKey(id, uri))
+    if (keys.some((key) => !diagnostics.has(key))) await delay(opts.waitMs ?? diagnosticsWaitMs)
+    const current = keys.flatMap((key) => diagnostics.get(key) ?? [])
+    if (current.length === 0 && keys.some((key) => !diagnostics.has(key))) {
+      throw new Error(`lsp: diagnostics not yet available for ${absPath}`)
+    }
+    return current
   }
 
   /**
@@ -282,13 +378,36 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
     if (touched.length === 0) {
       throw new Error(`lsp: no language server available for ${absPath}`)
     }
-    const serverId = touched[0]!
-    const uri = pathToFileURL(absPath).href
-    return service.request({ ownerId: OWNER, serverId, method, payload: { ...payload, uri } })
+    const uri = pathToFileURL(resolveToolPath(cwd, absPath)).href
+    let empty: unknown
+    let supported = false
+    for (const serverId of touched) {
+      try {
+        const result = await service.request({
+          ownerId: OWNER,
+          serverId,
+          method,
+          payload: { ...payload, uri },
+        })
+        if (result != null && (!Array.isArray(result) || result.length > 0)) return result
+        empty = result
+        supported = true
+      } catch (error) {
+        if (
+          (error as { code?: number })?.code !== -32601 &&
+          !/method not found/i.test(String(error))
+        )
+          throw error
+      }
+    }
+    if (supported) return empty
+    throw new Error(`lsp: no applicable server supports ${method}`)
   }
 
   /** Stop all servers this resolver started. */
   async function dispose(): Promise<void> {
+    disposed = true
+    await Promise.allSettled([...starting.values()])
     for (const serverId of servers.keys()) {
       try {
         await service.stop(OWNER, serverId)
@@ -299,9 +418,10 @@ export function createLspResolver(args: LspResolverOptions): LspResolver {
     servers.clear()
     openDocs.clear()
     diagnostics.clear()
+    retryAt.clear()
   }
 
-  return { touchFile, getDiagnostics, request, ingestDiagnostics, dispose }
+  return { touchFile, getDiagnostics, request, ingestDiagnostics, forgetDiagnostics, dispose }
 }
 
 function delay(ms: number): Promise<void> {

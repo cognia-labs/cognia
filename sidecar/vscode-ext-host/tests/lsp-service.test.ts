@@ -199,9 +199,42 @@ test("publishDiagnostics from the client → connection.sendNotification('lsp:pu
   assert.equal(published[0].params.diagnostics.length, 1, "duplicates are dropped")
 })
 
+test("paired editor forwards workspace-folder callbacks and refuses workspace edit callbacks", async () => {
+  const { service, created, notifications } = makeService()
+  const owner = { ownerId: "user", serverId: "ts" }
+  const folders = [{ uri: "file:///workspace", name: "workspace" }]
+  await service.start({
+    ...owner,
+    command: "/x",
+    workspaceFolders: folders,
+    forwardServerRequests: ["workspace/workspaceFolders"],
+  })
+  const handle = created[0].opts.handleServerRequest
+  await assert.rejects(handle("workspace/applyEdit", {}), /LSP_CLIENT_METHOD_UNAVAILABLE/)
+  const pending = handle("workspace/workspaceFolders", null)
+  const callbacks = notifications.filter((item: any) => item.method === "lsp:serverRequest")
+  assert.equal(callbacks.length, 1)
+  assert.equal(callbacks[0].params.method, "workspace/workspaceFolders")
+  assert.deepEqual(
+    service.serverResponse({
+      ...owner,
+      requestId: callbacks[0].params.requestId,
+      result: folders,
+    }),
+    { accepted: true }
+  )
+  assert.deepEqual(await pending, folders)
+  await service.stop(owner)
+})
+
 test("server requests are correlated, carry workspace-edit preconditions, and accept responses", async () => {
   const { service, created, notifications } = makeService()
-  await service.start({ ownerId: "managed-pro:acme", serverId: "ts", command: "/x" })
+  await service.start({
+    ownerId: "managed-pro:acme",
+    serverId: "ts",
+    command: "/x",
+    forwardServerRequests: true,
+  })
   service.didOpen({
     ownerId: "managed-pro:acme",
     serverId: "ts",
@@ -256,9 +289,32 @@ test("server requests are correlated, carry workspace-edit preconditions, and ac
   )
 })
 
+test("a resolver without a request consumer answers folders and rejects server edits", async () => {
+  const { service, created, notifications } = makeService()
+  const workspaceFolders = [{ uri: "file:///workspace", name: "workspace" }]
+  await service.start({ ownerId: "agent", serverId: "ts", command: "/x", workspaceFolders })
+  assert.deepEqual(
+    await created[0].opts.handleServerRequest("workspace/workspaceFolders", null),
+    workspaceFolders
+  )
+  await assert.rejects(
+    created[0].opts.handleServerRequest("workspace/applyEdit", {}),
+    /LSP_CLIENT_METHOD_UNAVAILABLE/
+  )
+  assert.equal(
+    notifications.some((item: { method: string }) => item.method === "lsp:serverRequest"),
+    false
+  )
+})
+
 test("server notifications are projected and pending requests fail on stop", async () => {
   const { service, created, notifications } = makeService()
-  await service.start({ ownerId: "managed-pro:acme", serverId: "ts", command: "/x" })
+  await service.start({
+    ownerId: "managed-pro:acme",
+    serverId: "ts",
+    command: "/x",
+    forwardServerRequests: true,
+  })
   created[0].opts.handleServerNotification("$/progress", {
     token: "index",
     value: { kind: "report", message: "50%" },

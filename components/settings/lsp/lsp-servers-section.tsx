@@ -29,13 +29,16 @@
  * meant the section could not actually turn the subsystem on.
  */
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 import { Plus, Trash2, Pencil, RotateCcw, Download, ScrollText } from "lucide-react"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import type { LspServerConfig, LspSettings } from "@/types/lsp/config"
 import { BUILTIN_LSP_SERVERS, BUILTIN_LSP_SERVER_IDS } from "@/lib/lsp/builtin-defaults"
 import { useLspStatusStore } from "@/lib/lsp/lsp-status-store"
+import { connectRemoteEditorLsp } from "@/lib/lsp/ensure-editor-lsp-runtime"
+import { hostConsentCodeFrom } from "@/lib/tauri/admin-lease"
+import { getRemoteLspTransport, subscribeRemoteLspTransport } from "@/lib/lsp/host-transport"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
@@ -62,6 +65,16 @@ export function LspServersSection() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<LspServerConfig | undefined>(undefined)
   const [logsOpen, setLogsOpen] = useState(false)
+  const remoteHost = useSyncExternalStore(
+    subscribeRemoteLspTransport,
+    getRemoteLspTransport,
+    () => null
+  )
+  const [connecting, setConnecting] = useState(false)
+  const [connectionNotice, setConnectionNotice] = useState<{
+    host: typeof remoteHost
+    message: string
+  } | null>(null)
 
   const statuses = useLspStatusStore((s) => s.statuses)
   const installProgress = useLspStatusStore((s) => s.installProgress)
@@ -71,7 +84,25 @@ export function LspServersSection() {
   // Detect binaries + runtime health once the section mounts (inert on web).
   useEffect(() => {
     void refreshStatus()
-  }, [refreshStatus])
+  }, [refreshStatus, remoteHost])
+
+  const connectRemote = async () => {
+    setConnecting(true)
+    setConnectionNotice(null)
+    try {
+      await connectRemoteEditorLsp()
+      await refreshStatus()
+      setConnectionNotice({ host: remoteHost, message: t("remote.connected") })
+    } catch (error) {
+      const code = hostConsentCodeFrom(error)
+      setConnectionNotice({
+        host: remoteHost,
+        message: code ? t("remote.consent", { code }) : t("remote.failed"),
+      })
+    } finally {
+      setConnecting(false)
+    }
+  }
 
   const userServers = useMemo<LspServerConfig[]>(
     () => settings?.lsp?.servers ?? [],
@@ -152,6 +183,19 @@ export function LspServersSection() {
           </Button>
         </div>
       </header>
+
+      {remoteHost && (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" disabled={connecting} onClick={() => void connectRemote()}>
+            {t("remote.connect")}
+          </Button>
+          {connectionNotice?.host === remoteHost && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {connectionNotice.message}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Runtime — the rest of the `AppSettings.lsp` slice */}
       <div className="space-y-3" data-testid="lsp-runtime-block">

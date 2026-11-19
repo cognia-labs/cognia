@@ -28,6 +28,8 @@ import {
   type LspClientAdapter,
 } from "./lsp-registry"
 import type { PluginLspServerDef } from "@/types/plugin"
+import { setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import type { Transport } from "@/lib/tauri/transport-types"
 import {
   __resetLspWorkspaceManagerForTesting,
   configureLspWorkspaceManager,
@@ -348,6 +350,19 @@ describe("lsp-registry", () => {
         uri: "file:///foo.ts",
         markersCount: 1,
       })
+
+      setActiveRemoteTransport({} as Transport)
+      try {
+        expect(bridge.diagnosticsCalls.at(-1)).toEqual({
+          extensionId: "publisher.eslint:eslint",
+          uri: "file:///foo.ts",
+          markersCount: 0,
+        })
+        fire("file:///foo.ts", [])
+        expect(bridge.diagnosticsCalls).toHaveLength(2)
+      } finally {
+        setActiveRemoteTransport(null)
+      }
     })
   })
 
@@ -555,6 +570,32 @@ describe("lsp-registry", () => {
   })
 
   describe("document lifecycle", () => {
+    it("replays a project document opened before startup and synchronizes unsaved project changes", async () => {
+      const { client, bridge } = makeFakeAdapters()
+      const uri = "file:///tmp/project/main.ts"
+      let text = "const before = 1"
+      let emit: Parameters<NonNullable<LspBridgeAdapter["onEditorChange"]>>[0] | undefined
+      bridge.onEditorChange = (listener) => {
+        emit = listener
+        return () => {}
+      }
+      bridge.getEditorById = () => ({
+        getModel: () => ({ uri, language: "typescript", getValue: () => text }),
+      })
+      client.didOpen = jest.fn(async () => {})
+      client.didChange = jest.fn(async () => {})
+      configureLspRegistry({ client, bridge, resolveWorkspaceFolders: () => [], now: () => 0 })
+      registerProjectWorkspace("/tmp/project", "project")
+      emit?.({ editorId: "editor", uri, kind: "open" })
+      await Promise.resolve()
+      await registerLspServer({ ownerId: "user", config: makeServer(), pluginPath: "/u" })
+      expect(client.didOpen).toHaveBeenCalledWith(expect.objectContaining({ uri, text }))
+      text = "const after = 2"
+      emit?.({ editorId: "editor", uri, kind: "change-content" })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(client.didChange).toHaveBeenCalledWith(expect.objectContaining({ uri, text }))
+    })
+
     it("opens after materialization, then flushes before didChange and closes the routed document", async () => {
       const events: string[] = []
       const files = new Map<string, string>()

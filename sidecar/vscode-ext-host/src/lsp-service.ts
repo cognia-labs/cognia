@@ -52,6 +52,8 @@ const crypto = require("node:crypto") as typeof import("node:crypto")
 const fs = require("node:fs/promises") as typeof import("node:fs/promises")
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const url = require("node:url") as typeof import("node:url")
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const path = require("node:path") as typeof import("node:path")
 
 import type { CogniaLspClient, ClientState } from "./lsp-client"
 import type { DiagnosticsBuffer } from "./lsp-diagnostics-buffer"
@@ -84,6 +86,8 @@ export interface LspStartParams {
   /** ms budget for the `initialize` handshake (default 10 000). */
   startupTimeout?: number
   memoryLimitMb?: number
+  /** Only clients with an explicit responder can receive server requests. */
+  forwardServerRequests?: boolean | string[]
 }
 
 export interface LspDocumentParams {
@@ -354,6 +358,7 @@ export class LspService {
           if (state === "crashed" && !tracked.stopping) {
             this.scheduleRestart(k, tracked)
           }
+          if (state !== "running") this.diagnosticsBuffer.cancelKey(k)
           this.emitState(k, tracked)
         })
       )
@@ -367,6 +372,11 @@ export class LspService {
     method: string,
     payload: unknown
   ): Promise<unknown> {
+    const forward = tracked.params.forwardServerRequests
+    if (forward !== true && !(Array.isArray(forward) && forward.includes(method))) {
+      if (method === "workspace/workspaceFolders") return tracked.params.workspaceFolders ?? null
+      throw new jsonrpc.ResponseError(-32601, `LSP_CLIENT_METHOD_UNAVAILABLE: ${method}`)
+    }
     const requestId = crypto.randomUUID()
     const preconditions =
       method === "workspace/applyEdit"
@@ -403,6 +413,15 @@ export class LspService {
     payload: unknown
   ): Promise<Record<string, { exists: boolean; version?: number; contentHash?: string }>> {
     const uris = workspaceEditUris(payload)
+    const roots = await Promise.all(
+      (tracked.params.workspaceFolders ?? []).map(async (folder) => {
+        try {
+          return await fs.realpath(url.fileURLToPath(folder.uri))
+        } catch {
+          return null
+        }
+      })
+    )
     const preconditions: Record<
       string,
       { exists: boolean; version?: number; contentHash?: string }
@@ -418,14 +437,23 @@ export class LspService {
         }
         continue
       }
-      let path: string
+      let file: string
       try {
-        path = url.fileURLToPath(uri)
+        file = url.fileURLToPath(uri)
       } catch {
         throw new jsonrpc.ResponseError(-32602, `LSP_WORKSPACE_EDIT_URI_INVALID: ${uri}`)
       }
       try {
-        const contents = await fs.readFile(path)
+        const resolved = await fs.realpath(file)
+        const allowed = roots.some((root) => {
+          if (!root) return false
+          const relative = path.relative(root, resolved)
+          return (
+            relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+          )
+        })
+        if (!allowed) throw new jsonrpc.ResponseError(-32602, "LSP_WORKSPACE_EDIT_OUTSIDE_ROOT")
+        const contents = await fs.readFile(resolved)
         preconditions[uri] = {
           exists: true,
           contentHash: crypto.createHash("sha256").update(contents).digest("hex"),
@@ -627,6 +655,7 @@ export class LspService {
   didChange(params: LspDocumentParams): void {
     const tracked = this.requireServer(params.ownerId, params.serverId)
     if (params.text == null) throw new Error("lsp:didChange requires `text`")
+    this.diagnosticsBuffer.cancelDocument(this.key(params.ownerId, params.serverId), params.uri)
     const doc = tracked.docs.get(params.uri)
     tracked.docs.set(params.uri, {
       languageId: doc?.languageId ?? params.languageId ?? "plaintext",
@@ -638,6 +667,7 @@ export class LspService {
   /** `textDocument/didClose`. */
   didClose(params: Omit<LspDocumentParams, "text" | "languageId">): void {
     const tracked = this.requireServer(params.ownerId, params.serverId)
+    this.diagnosticsBuffer.cancelDocument(this.key(params.ownerId, params.serverId), params.uri)
     tracked.docs.delete(params.uri)
     tracked.client.closeTextDocument(params.uri)
   }
@@ -736,6 +766,24 @@ export class LspService {
     const tracked = this.servers.get(this.key(params.ownerId, params.serverId))
     if (!tracked) return { accepted: false }
     tracked.client.notifyRaw(params.method, params.payload)
+    if (params.method === "workspace/didChangeWorkspaceFolders") {
+      const event = (
+        params.payload as {
+          event?: {
+            added?: LspStartParams["workspaceFolders"]
+            removed?: LspStartParams["workspaceFolders"]
+          }
+        } | null
+      )?.event
+      if (Array.isArray(event?.added) && Array.isArray(event?.removed)) {
+        const folders = new Map(
+          (tracked.params.workspaceFolders ?? []).map((folder) => [folder.uri, folder])
+        )
+        for (const folder of event.removed) if (folder?.uri) folders.delete(folder.uri)
+        for (const folder of event.added) if (folder?.uri) folders.set(folder.uri, folder)
+        tracked.params.workspaceFolders = [...folders.values()]
+      }
+    }
     return { accepted: true }
   }
 
