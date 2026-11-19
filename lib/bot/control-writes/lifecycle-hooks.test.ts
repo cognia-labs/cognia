@@ -18,6 +18,13 @@ import {
   runBotLifecycleHook,
 } from "./lifecycle-hooks"
 
+jest.mock("@/lib/bot/installation-snapshot", () => {
+  const actual = jest.requireActual("@/lib/bot/installation-snapshot")
+  return {
+    ...actual,
+    projectBotInstallationSnapshot: jest.fn(actual.projectBotInstallationSnapshot),
+  }
+})
 jest.mock("@/lib/plugin/core/logger", () => ({
   loggers: { manager: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() } },
 }))
@@ -220,6 +227,39 @@ describe("runBotLifecycleHook", () => {
       "[bot-lifecycle]",
       expect.objectContaining({ phase: "onUninstall", outcome: "error" })
     )
+  })
+
+  it("treats a snapshot that cannot be read as a failed hook in every phase", async () => {
+    const onUninstall = jest.fn()
+    const onInstall = jest.fn()
+    registerBot(
+      "digest",
+      { id: "acme:digest", definition: definition(), lifecycle: { onUninstall, onInstall } },
+      { pluginId: "acme" }
+    )
+    jest
+      .mocked(projectBotInstallationSnapshot)
+      .mockRejectedValueOnce(new Error("snapshot read failed"))
+      .mockRejectedValueOnce(new Error("snapshot read failed"))
+
+    // Advisory: an uninstall proceeds without the hook.
+    await expect(
+      runBotLifecycleHook({
+        installation: installation(),
+        definition: resolvedDefinition(),
+        phase: "onUninstall",
+      })
+    ).resolves.toBeUndefined()
+    // Veto: an install it cannot vouch for does not proceed.
+    await expect(
+      runBotLifecycleHook({
+        installation: installation(),
+        definition: resolvedDefinition(),
+        phase: "onInstall",
+      })
+    ).rejects.toMatchObject({ name: "BotLifecycleHookError", phase: "onInstall" })
+    expect(onUninstall).not.toHaveBeenCalled()
+    expect(onInstall).not.toHaveBeenCalled()
   })
 
   it("times a stuck hook out and reports it like a failure", async () => {

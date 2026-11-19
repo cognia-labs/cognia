@@ -5,18 +5,16 @@ import "fake-indexeddb/auto"
 import type { HeadlessRuntimeContext } from "../types"
 
 const startBotDeliveryRunner = jest.fn()
-const recoverStaleBotDeliveries = jest.fn(async () => 0)
+const recoverStaleBotAttempts = jest.fn(async (_input: { owner: string }) => 0)
 
 jest.mock("@/lib/bot/runtime/delivery-runner", () => ({
   startBotDeliveryRunner: (...args: Parameters<typeof startBotDeliveryRunner>) =>
     startBotDeliveryRunner(...args),
+  recoverStaleBotAttempts: (...args: Parameters<typeof recoverStaleBotAttempts>) =>
+    recoverStaleBotAttempts(...args),
 }))
 jest.mock("@/lib/bot/schedule/reconcile-timed-triggers", () => ({
   reconcileAllBotSchedules: jest.fn(async () => undefined),
-}))
-jest.mock("@/lib/db/bot-event-deliveries", () => ({
-  recoverStaleBotDeliveries: (...args: Parameters<typeof recoverStaleBotDeliveries>) =>
-    recoverStaleBotDeliveries(...args),
 }))
 
 function context(overrides: Partial<HeadlessRuntimeContext> = {}): HeadlessRuntimeContext {
@@ -46,7 +44,7 @@ async function loadRuntime() {
 }
 
 beforeEach(() => {
-  recoverStaleBotDeliveries.mockReset().mockResolvedValue(0)
+  recoverStaleBotAttempts.mockReset().mockResolvedValue(0)
   startBotDeliveryRunner.mockReset()
 })
 
@@ -100,5 +98,5 @@ it("reclaims the rows this brain abandoned before it starts draining", async () 
 
   runtime.start(context())
 
-  expect(recoverStaleBotDeliveries).toHaveBeenCalledWith({ owner: "brain:acct_1" })
+  expect(recoverStaleBotAttempts).toHaveBeenCalledWith({ owner: "brain:acct_1" })
 })

@@ -14,6 +14,13 @@
 import { getDb } from "@/lib/db/schema"
 import type { BotRunStepRow } from "@/lib/db/bot-types"
 
+/**
+ * The host-owned checkpoint holding a settled run's final output.
+ *
+ * Reserved (`__host:`), so a handler cannot write it through `ctx.step`.
+ */
+export const BOT_RUN_RESULT_STEP = "__host:result"
+
 /** The memoization key. Stable across re-entries by construction. */
 export function botRunStepId(runId: string, name: string): string {
   return `${runId}::${name}`
@@ -57,6 +64,35 @@ export async function beginBotRunStep(
   })
 }
 
+/**
+ * Write a completed checkpoint. `replace` decides what an existing completed
+ * row means: kept (a step's memoized value) or overwritten (the run result).
+ */
+async function writeCompletedStep(
+  runId: string,
+  name: string,
+  output: unknown,
+  now: number,
+  replace: boolean
+): Promise<void> {
+  const db = getDb()
+  const id = botRunStepId(runId, name)
+  await db.transaction("rw", db.botRunSteps, async () => {
+    const existing = await db.botRunSteps.get(id)
+    if (existing?.status === "completed" && !replace) return
+    await db.botRunSteps.put({
+      id,
+      runId,
+      name,
+      status: "completed",
+      output,
+      attempt: replace ? (existing?.attempt ?? 0) + 1 : (existing?.attempt ?? 1),
+      startedAt: existing?.startedAt ?? now,
+      updatedAt: now,
+    })
+  })
+}
+
 /** Record a step's output. Idempotent: a repeat write keeps the first value. */
 export async function completeBotRunStep(
   runId: string,
@@ -64,22 +100,7 @@ export async function completeBotRunStep(
   output: unknown,
   now = Date.now()
 ): Promise<void> {
-  const db = getDb()
-  const id = botRunStepId(runId, name)
-  await db.transaction("rw", db.botRunSteps, async () => {
-    const existing = await db.botRunSteps.get(id)
-    if (existing?.status === "completed") return
-    await db.botRunSteps.put({
-      id,
-      runId,
-      name,
-      status: "completed",
-      output,
-      attempt: existing?.attempt ?? 1,
-      startedAt: existing?.startedAt ?? now,
-      updatedAt: now,
-    })
-  })
+  await writeCompletedStep(runId, name, output, now, false)
 }
 
 /**
@@ -113,6 +134,24 @@ export async function failBotRunStep(
   })
 }
 
+/**
+ * Record the output of the attempt that settled the run.
+ *
+ * Overwrites, unlike {@link completeBotRunStep}. A step memoizes the FIRST
+ * value because a re-entry must replay what the handler already did; the
+ * result is the opposite case: an attempt whose terminal commit failed is
+ * retried, recomputes, and the attempt that actually committed is the one
+ * whose output the run reports. Call it inside the transaction that commits
+ * the run's terminal state, so the two can never disagree.
+ */
+export async function putBotRunResult(
+  runId: string,
+  output: unknown,
+  now = Date.now()
+): Promise<void> {
+  await writeCompletedStep(runId, BOT_RUN_RESULT_STEP, output, now, true)
+}
+
 export async function getBotRunStep(
   runId: string,
   name: string
@@ -126,10 +165,21 @@ export async function listBotRunSteps(runId: string): Promise<BotRunStepRow[]> {
   return rows.sort((a, b) => a.startedAt - b.startedAt || a.name.localeCompare(b.name))
 }
 
-/** Drop a run's checkpoints. Used when a retry mints a fresh attempt. */
-export async function clearBotRunSteps(runId: string): Promise<number> {
+/**
+ * Drop every checkpoint of these runs: business steps, the policy snapshot and
+ * the final result alike. Joins the caller's transaction when it includes
+ * `botRunSteps`, so a retention sweep removes a delivery and the checkpoints
+ * it owns in one commit.
+ */
+export async function deleteBotRunStepsForRuns(runIds: readonly string[]): Promise<number> {
+  if (runIds.length === 0) return 0
   const db = getDb()
-  const ids = (await db.botRunSteps.where("runId").equals(runId).toArray()).map((row) => row.id)
+  const ids = (
+    await db.botRunSteps
+      .where("runId")
+      .anyOf([...runIds])
+      .toArray()
+  ).map((row) => row.id)
   if (ids.length === 0) return 0
   await db.botRunSteps.bulkDelete(ids)
   return ids.length

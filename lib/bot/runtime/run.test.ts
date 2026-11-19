@@ -4,7 +4,12 @@ import "fake-indexeddb/auto"
 
 import { enqueueBotDelivery, listBotDeliveries } from "@/lib/db/bot-event-deliveries"
 import { installBot } from "@/lib/db/bot-installations"
-import { getBotRunStep, completeBotRunStep } from "@/lib/db/bot-run-steps"
+import {
+  BOT_RUN_RESULT_STEP,
+  completeBotRunStep,
+  getBotRunStep,
+  putBotRunResult,
+} from "@/lib/db/bot-run-steps"
 import type { BotEventDeliveryRow, BotInstallationRow } from "@/lib/db/bot-types"
 import { getExecutionRun, runEventJournal } from "@/lib/db/execution-runs"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
@@ -34,6 +39,7 @@ jest.mock("@/lib/db/bot-run-steps", () => {
     ...actual,
     getBotRunStep: jest.fn(actual.getBotRunStep),
     completeBotRunStep: jest.fn(actual.completeBotRunStep),
+    putBotRunResult: jest.fn(actual.putBotRunResult),
   }
 })
 jest.mock("@/lib/bot/sources/bot-run", () => ({ dispatchBotRunToBots: jest.fn() }))
@@ -104,6 +110,12 @@ beforeEach(async () => {
     .mocked(completeBotRunStep)
     .mockReset()
     .mockImplementation(jest.requireActual("@/lib/db/bot-run-steps").completeBotRunStep)
+  jest
+    .mocked(putBotRunResult)
+    .mockReset()
+    .mockImplementation(jest.requireActual("@/lib/db/bot-run-steps").putBotRunResult)
+  const source = await import("@/lib/bot/sources/bot-run")
+  jest.mocked(source.dispatchBotRunToBots).mockReset()
   __resetDbForTesting()
   __resetLiveBotRunsForTesting()
   const db = getDb()
@@ -114,6 +126,11 @@ beforeEach(async () => {
   await db.executionRunEvents.clear()
   await db.executionRunInterrupts.clear()
 }, 15_000)
+
+/** Let the post-commit publication and other detached work run to completion. */
+async function settleAsyncWork(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 describe("botRunId", () => {
   it("is derived from the delivery, so a re-entry finds its own state", () => {
@@ -264,34 +281,154 @@ describe("runBotDelivery", () => {
   it("does not publish a completed event when cancellation wins before completion commits", async () => {
     const { delivery, resolved } = await seed()
     const source = await import("@/lib/bot/sources/bot-run")
-    jest.mocked(source.dispatchBotRunToBots).mockClear()
-    let release!: () => void
-    const blocker = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let entered!: () => void
-    const ready = new Promise<void>((resolve) => {
-      entered = resolve
-    })
-    jest.mocked(completeBotRunStep).mockImplementation(async (...args) => {
-      if (args[1] === "__host:result") {
-        entered()
-        await blocker
-      }
-      return jest.requireActual("@/lib/db/bot-run-steps").completeBotRunStep(...args)
-    })
     const running = runBotDelivery({
       delivery,
       resolved,
       now,
-      executors: { handler: async () => ({ summary: "late" }) },
+      executors: {
+        handler: async () => {
+          // The cancel commits while the handler is still on its way back.
+          await cancelAcceptedBotDeliveries(delivery.installationId)
+          return { summary: "late" }
+        },
+      },
     })
-    await ready
-    await cancelAcceptedBotDeliveries(delivery.installationId)
-    release()
     expect((await running).status).toBe("cancelled")
+    await settleAsyncWork()
     expect(source.dispatchBotRunToBots).not.toHaveBeenCalled()
     expect((await getExecutionRun(botRunId(delivery.id)))?.status).toBe("cancelled")
+    expect(await getBotRunStep(botRunId(delivery.id), BOT_RUN_RESULT_STEP)).toBeUndefined()
+  })
+
+  it("reports the output of the attempt that committed, not of one whose commit failed (B19)", async () => {
+    const { delivery, resolved } = await seed()
+    jest.mocked(putBotRunResult).mockImplementationOnce(async () => {
+      throw new Error("disk write failed")
+    })
+    const outputs = ["A", "B"]
+    const handler = jest.fn(async () => ({ summary: "done", output: outputs.shift() }))
+    const first = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(first.status).toBe("failed")
+    expect(await getBotRunStep(botRunId(delivery.id), BOT_RUN_RESULT_STEP)).toBeUndefined()
+
+    const retried = (await getDb().botEventDeliveries.get(delivery.id))!
+    expect(retried.status).toBe("pending")
+    const second = await runBotDelivery({
+      delivery: retried,
+      resolved,
+      now,
+      executors: { handler },
+    })
+    expect(second.status).toBe("completed")
+    expect((await getBotRunStep(botRunId(delivery.id), BOT_RUN_RESULT_STEP))?.output).toEqual({
+      summary: "done",
+      output: "B",
+    })
+  })
+
+  it("publishes bot.run.failed once a run fails for good, and clears the stage (B05)", async () => {
+    const { delivery, resolved } = await seed()
+    const source = await import("@/lib/bot/sources/bot-run")
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: {
+        handler: () => {
+          throw new Error("403 forbidden")
+        },
+      },
+    })
+    expect(outcome.status).toBe("failed")
+    await settleAsyncWork()
+    expect(source.dispatchBotRunToBots).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: outcome.runId, status: "failed", botId: "acme:digest" })
+    )
+    expect((await getDb().botEventDeliveries.get(delivery.id))?.runPublication).toBeUndefined()
+  })
+
+  it("does not publish a failure while the delivery still owns a retry", async () => {
+    const { delivery, resolved } = await seed()
+    const source = await import("@/lib/bot/sources/bot-run")
+    await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: {
+        handler: () => {
+          throw new Error("upstream 500")
+        },
+      },
+    })
+    await settleAsyncWork()
+    expect(source.dispatchBotRunToBots).not.toHaveBeenCalled()
+    expect((await getDb().botEventDeliveries.get(delivery.id))?.runPublication).toBeUndefined()
+  })
+
+  it("keeps a completion staged when its dispatch fails, for the runner's flush", async () => {
+    const { delivery, resolved } = await seed()
+    const source = await import("@/lib/bot/sources/bot-run")
+    jest.mocked(source.dispatchBotRunToBots).mockRejectedValueOnce(new Error("router down"))
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: { handler: async () => ({ summary: "posted" }) },
+    })
+    expect(outcome.status).toBe("completed")
+    await settleAsyncWork()
+    expect((await getDb().botEventDeliveries.get(delivery.id))?.runPublication).toMatchObject({
+      status: "completed",
+      botId: "acme:digest",
+      summary: "posted",
+    })
+  })
+
+  it("keeps a failed run failed when its dead letter is cancelled (B22)", async () => {
+    const { delivery, resolved } = await seed()
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: {
+        handler: () => {
+          throw new Error("403 forbidden")
+        },
+      },
+    })
+    expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("deadletter")
+    expect(await cancelAcceptedBotDeliveries(delivery.installationId, delivery.id)).toBe(1)
+
+    const row = await getDb().botEventDeliveries.get(delivery.id)
+    expect(row).toMatchObject({ status: "dismissed", lastError: "cancelled" })
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("failed")
+    const events = await runEventJournal.replay(outcome.runId)
+    expect(events.at(-1)?.type).toBe("run.failed")
+    expect(events.some((event) => event.type === "run.cancelled")).toBe(false)
+  })
+
+  it("does not commit success for an installation removed while its handler ran (B16)", async () => {
+    const { delivery, resolved } = await seed()
+    const source = await import("@/lib/bot/sources/bot-run")
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: {
+        handler: async () => {
+          await getDb().botInstallations.delete(delivery.installationId)
+          return { summary: "late" }
+        },
+      },
+    })
+    expect(outcome.status).toBe("cancelled")
+    await settleAsyncWork()
+    expect(await getDb().botEventDeliveries.get(delivery.id)).toMatchObject({
+      status: "dismissed",
+      lastError: "installation was removed",
+    })
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("cancelled")
+    expect(source.dispatchBotRunToBots).not.toHaveBeenCalled()
   })
 
   it("stops durable Workflow and parked Squad children and does not recancel new work on an operation retry", async () => {
@@ -443,6 +580,33 @@ describe("runBotDelivery", () => {
     expect(getLiveBotRunSignal(outcome.runId)).toBeUndefined()
   })
 
+  it("settles at the deadline even when the handler ignores its signal (B14)", async () => {
+    const { delivery, resolved } = await seed()
+    resolved.policy.maxRunDurationMs = 20
+    let finish!: (value: { summary: string }) => void
+    const started = Date.now()
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: {
+        handler: () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      },
+    })
+    expect(outcome.status).toBe("cancelled")
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("dismissed")
+    expect(getLiveBotRunSignal(outcome.runId)).toBeUndefined()
+    // The abandoned handler returning later changes nothing.
+    finish({ summary: "too late" })
+    await settleAsyncWork()
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("cancelled")
+    expect(await getBotRunStep(outcome.runId, BOT_RUN_RESULT_STEP)).toBeUndefined()
+  })
+
   it("does not consume execution time while approval is parked", async () => {
     const { delivery, resolved } = await seed()
     resolved.policy.maxRunDurationMs = 25
@@ -546,7 +710,9 @@ describe("runBotDelivery", () => {
         })
       ).status
     ).toBe("unavailable")
-    expect((await getBotRunStep(botRunId(delivery.id), "__host:result"))?.output).toEqual(result)
+    expect((await getBotRunStep(botRunId(delivery.id), BOT_RUN_RESULT_STEP))?.output).toEqual(
+      result
+    )
     expect((await getExecutionRun(botRunId(delivery.id)))?.latestSnapshot?.status).toBe("failed")
   })
   it("settles a turn that needed approval as failed and does not replay it", async () => {
@@ -571,7 +737,9 @@ describe("runBotDelivery", () => {
       error: "needs approval: Bash",
     })
     // The denials stay on the run for whoever clears them.
-    expect((await getBotRunStep(botRunId(delivery.id), "__host:result"))?.output).toEqual(result)
+    expect((await getBotRunStep(botRunId(delivery.id), BOT_RUN_RESULT_STEP))?.output).toEqual(
+      result
+    )
     expect((await getExecutionRun(botRunId(delivery.id)))?.latestSnapshot?.status).toBe("failed")
     // Dismissed, not backed off: a retry would stop at the same denial.
     expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("dismissed")

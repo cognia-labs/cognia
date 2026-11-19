@@ -22,6 +22,7 @@ import {
   listDueBotDeliveries,
   pruneSettledBotDeliveries,
   recoverAbandonedBotDelivery,
+  recoverStaleBotDeliveries,
   renewBotDeliveryLease,
 } from "@/lib/db/bot-event-deliveries"
 import { getBotInstallation } from "@/lib/db/bot-installations"
@@ -31,6 +32,11 @@ import type { PluginBotPolicyV1 } from "@/types/plugin/plugin-bot"
 
 import { resolveBotInstallationCwd } from "./resolve-cwd"
 import { botRunId, cancelLiveBotRun, runBotDelivery, type BotRunOutcome } from "./run"
+import {
+  BOT_RUN_PUBLICATION_FLUSH_INTERVAL_MS,
+  flushStagedBotRunPublications,
+  settleDeadletteredBotRun,
+} from "./run-publication"
 
 /** How often the loop looks for due deliveries. */
 export const BOT_RUNNER_INTERVAL_MS = 2_000
@@ -99,10 +105,17 @@ export async function drainBotDeliveries(
   options: BotDeliveryRunnerOptions
 ): Promise<BotDeliveryAttempt[]> {
   const now = options.now ?? Date.now
-  // Select runnable, distinct keys BEFORE applying the batch limit. Otherwise
-  // a busy repository's pending prefix can indefinitely starve its monitor.
-  // The claim still checks concurrency atomically against competing passes.
-  const due = await listDueBotDeliveries(options.batch ?? BOT_RUNNER_BATCH, now(), true)
+  // Select runnable, distinct keys and installations with a free slot BEFORE
+  // applying the batch limit. Otherwise a busy repository's pending prefix, or
+  // an installation already at its `maxConcurrentRuns`, can fill every batch
+  // with work that is only skipped while ready work elsewhere starves. The
+  // claim still checks both atomically against competing passes.
+  const due = await listDueBotDeliveries(
+    options.batch ?? BOT_RUNNER_BATCH,
+    now(),
+    true,
+    (installationId) => effectiveMaxConcurrentRuns(installationId, options)
+  )
 
   return Promise.all(
     due.map(async (delivery) => ({
@@ -135,7 +148,7 @@ async function attemptDelivery(
   // Recovery runs BEFORE the claim, for the same reason serialisation does: the
   // claim rewrites the row, so afterwards nothing can tell an attempt that was
   // abandoned from one that is simply starting.
-  const recovery = await recoverAbandonedBotDelivery(delivery.id, now())
+  const recovery = await recoverAbandonedBotDelivery(delivery.id, settleDeadletteredBotRun, now())
   if (recovery) return { status: "skipped", reason: "recovered" }
 
   // Serialisation is checked BEFORE the claim. Claiming first would make this
@@ -234,6 +247,20 @@ async function effectiveMaxConcurrentRuns(
   return typeof max === "number" && Number.isFinite(max) && max >= 1 ? Math.floor(max) : undefined
 }
 
+/**
+ * Reclaim, at boot, the attempts this host was executing when it stopped,
+ * failing the runs of any the recovery dead-letters. The one boot entry point
+ * both hosts call before {@link startBotDeliveryRunner}, so neither recovers a
+ * delivery and leaves its run reading `running`.
+ */
+export function recoverStaleBotAttempts(input: {
+  owner: string
+  now?: number
+  random?: () => number
+}): Promise<number> {
+  return recoverStaleBotDeliveries({ ...input, settle: settleDeadletteredBotRun })
+}
+
 export interface BotDeliveryRunnerHandle {
   stop(): void
 }
@@ -249,6 +276,9 @@ export function startBotDeliveryRunner(options: BotDeliveryRunnerOptions): BotDe
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let lastPrune = (options.now ?? Date.now)()
+  // Flushed on the first tick, so a host that stopped between a run's commit
+  // and its event's dispatch sends the event as soon as it is back.
+  let lastFlush = Number.NEGATIVE_INFINITY
   const controller = new AbortController()
   const passes = new Set<Promise<unknown>>()
 
@@ -263,6 +293,10 @@ export function startBotDeliveryRunner(options: BotDeliveryRunnerOptions): BotDe
         void pass.catch(() => undefined).finally(() => passes.delete(pass))
       }
       const now = (options.now ?? Date.now)()
+      if (now - lastFlush >= BOT_RUN_PUBLICATION_FLUSH_INTERVAL_MS) {
+        lastFlush = now
+        await flushStagedBotRunPublications()
+      }
       if (now - lastPrune >= BOT_RUNNER_PRUNE_INTERVAL_MS) {
         lastPrune = now
         await pruneSettledBotDeliveries(now)

@@ -5,9 +5,9 @@ import { act, render, waitFor } from "@testing-library/react"
 const startBotDeliveryRunner = jest.fn()
 const getLocalAccountId = jest.fn(async () => "tauri:acct_1")
 const markBotRunnerOwned = jest.fn(() => jest.fn())
-const recoverStaleBotDeliveries = jest.fn(
+const recoverStaleBotAttempts = jest.fn(
   async (
-    ..._args: Parameters<typeof import("@/lib/db/bot-event-deliveries").recoverStaleBotDeliveries>
+    ..._args: Parameters<typeof import("@/lib/bot/runtime/delivery-runner").recoverStaleBotAttempts>
   ) => 0
 )
 const hasCapability = jest.fn(
@@ -24,14 +24,12 @@ let remoteListener: ((remote: unknown) => void) | undefined
 
 jest.mock("@/lib/bot/runtime/delivery-runner", () => ({
   startBotDeliveryRunner: (...args: unknown[]) => startBotDeliveryRunner(...args),
+  recoverStaleBotAttempts: (...args: Parameters<typeof recoverStaleBotAttempts>) =>
+    recoverStaleBotAttempts(...args),
 }))
 jest.mock("@/lib/bot/runtime/runner-owner", () => ({
   getLocalAccountId: () => getLocalAccountId(),
   markBotRunnerOwned: () => markBotRunnerOwned(),
-}))
-jest.mock("@/lib/db/bot-event-deliveries", () => ({
-  recoverStaleBotDeliveries: (...args: Parameters<typeof recoverStaleBotDeliveries>) =>
-    recoverStaleBotDeliveries(...args),
 }))
 jest.mock("@/lib/platform/capabilities", () => ({
   hasCapability: (...args: Parameters<typeof hasCapability>) => hasCapability(...args),
@@ -56,7 +54,7 @@ beforeEach(() => {
   startBotDeliveryRunner.mockReset().mockReturnValue({ stop: jest.fn() })
   getLocalAccountId.mockReset().mockResolvedValue("tauri:acct_1")
   markBotRunnerOwned.mockReset().mockReturnValue(jest.fn())
-  recoverStaleBotDeliveries.mockReset().mockResolvedValue(0)
+  recoverStaleBotAttempts.mockReset().mockResolvedValue(0)
   hasCapability.mockReset().mockReturnValue(true)
   acquireExclusiveWebLock.mockReset().mockResolvedValue(true)
   remoteActive = false
@@ -77,7 +75,7 @@ describe("BotRuntimeInitializer", () => {
     render(<BotRuntimeInitializer />)
 
     await waitFor(() => expect(startBotDeliveryRunner).toHaveBeenCalled())
-    expect(recoverStaleBotDeliveries).toHaveBeenCalledWith({ owner: "tauri:acct_1" })
+    expect(recoverStaleBotAttempts).toHaveBeenCalledWith({ owner: "tauri:acct_1" })
   })
 
   it("does not run on a shell without always-on, so a phone never drains", async () => {

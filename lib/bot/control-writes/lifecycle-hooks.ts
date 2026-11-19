@@ -82,15 +82,17 @@ export async function runBotLifecycleHook(input: RunBotLifecycleHookInput): Prom
   const pluginId = definition.id.split(":")[0]
   const now = input.now ?? Date.now
 
-  const context: BotLifecycleContextV1 = {
-    installation: await projectBotInstallationSnapshot(installation, definition),
-    ...(input.previousConfig !== undefined ? { previousConfig: input.previousConfig } : {}),
-    ...(input.trigger ? { trigger: input.trigger } : {}),
-  }
-
   const started = now()
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
+    // Inside the try: preparing the hook's view is part of running the hook.
+    // A snapshot that cannot be read is a hook that could not run, which
+    // vetoes the first three phases and must not strand an uninstall.
+    const context: BotLifecycleContextV1 = {
+      installation: await projectBotInstallationSnapshot(installation, definition),
+      ...(input.previousConfig !== undefined ? { previousConfig: input.previousConfig } : {}),
+      ...(input.trigger ? { trigger: input.trigger } : {}),
+    }
     await Promise.race([
       Promise.resolve().then(() =>
         withPluginExecutionContext(pluginId, HOST_BACKGROUND, () => hook(context))

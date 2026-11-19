@@ -12,6 +12,7 @@
  */
 
 import { getDb } from "@/lib/db/schema"
+import { deleteBotRunStepsForRuns } from "./bot-run-steps"
 import { recordTombstones } from "./tombstones"
 import type { BotDeliveryStatus, BotEventDeliveryRow } from "@/lib/db/bot-types"
 import type { PluginBotRetryPolicy } from "@/types/plugin/plugin-bot"
@@ -113,6 +114,41 @@ function chargeAbandonedAttempt(
   delete next.leaseOwner
   delete next.leaseExpiresAt
   return next
+}
+
+/**
+ * Settle what a dead-lettered delivery's run owes, inside the recovery's
+ * transaction, and return the row to store.
+ *
+ * Required of every recovery caller, and supplied by the Bot runtime, which
+ * owns runs: a delivery and its run are one outcome, and dead-lettering the
+ * delivery alone is how a run used to read `running` for the rest of its
+ * life. It runs inside a transaction over `botEventDeliveries`,
+ * `botInstallations`, `executionRuns`, `executionRunEvents` and
+ * `notificationProjectionWork`, and must await nothing else.
+ */
+export type BotDeadletterSettler = (
+  row: BotEventDeliveryRow,
+  now: number
+) => Promise<BotEventDeliveryRow>
+
+/** The stores a recovery transaction spans, so its settler can write the run. */
+function recoveryStores(db: ReturnType<typeof getDb>) {
+  return [
+    db.botEventDeliveries,
+    db.botInstallations,
+    db.executionRuns,
+    db.executionRunEvents,
+    db.notificationProjectionWork,
+  ]
+}
+
+async function settledRecovery(
+  next: BotEventDeliveryRow,
+  now: number,
+  settle: BotDeadletterSettler
+): Promise<BotEventDeliveryRow> {
+  return next.status === "deadletter" ? settle(next, now) : next
 }
 
 /**
@@ -296,7 +332,15 @@ export async function enqueueBotDelivery(
 export async function listDueBotDeliveries(
   limit = 20,
   now = Date.now(),
-  runnableOnly = false
+  runnableOnly = false,
+  /**
+   * An installation's effective `maxConcurrentRuns`, when it has one. With it,
+   * the batch skips candidates whose installation has no free slot left,
+   * counting the attempts already running AND the ones this batch has picked,
+   * so an installation at capacity cannot fill the batch with work the runner
+   * would only throttle while another installation's ready work waits.
+   */
+  capacityFor?: (installationId: string) => Promise<number | undefined>
 ): Promise<BotEventDeliveryRow[]> {
   const db = getDb()
   const rows = await db.botEventDeliveries.toArray()
@@ -322,7 +366,7 @@ export async function listDueBotDeliveries(
     }
   }
   const selectedKeys = new Set<string>()
-  return rows
+  const candidates = rows
     .filter((row) => {
       if (
         !isLocallyOwned(row) ||
@@ -345,7 +389,32 @@ export async function listDueBotDeliveries(
       selectedKeys.add(row.concurrencyKey)
       return true
     })
-    .slice(0, limit)
+  if (!capacityFor) return candidates.slice(0, limit)
+
+  // The same count `countRunningBotDeliveriesForInstallation` takes, read off
+  // the rows already loaded instead of one query per candidate.
+  const running = new Map<string, number>()
+  for (const row of rows) {
+    if (isLocallyOwned(row) && isMidAttempt(row.status) && !isAbandonedAttempt(row, now))
+      running.set(row.installationId, (running.get(row.installationId) ?? 0) + 1)
+  }
+  const capacities = new Map<string, number | undefined>()
+  const selected: BotEventDeliveryRow[] = []
+  for (const row of candidates) {
+    if (selected.length >= limit) break
+    if (!capacities.has(row.installationId))
+      capacities.set(row.installationId, await capacityFor(row.installationId))
+    const capacity = capacities.get(row.installationId)
+    // An abandoned attempt is due for recovery, which charges it rather than
+    // starting it, so it needs no slot.
+    if (capacity !== undefined && !isAbandonedAttempt(row, now)) {
+      const taken = running.get(row.installationId) ?? 0
+      if (taken >= capacity) continue
+      running.set(row.installationId, taken + 1)
+    }
+    selected.push(row)
+  }
+  return selected
 }
 
 /**
@@ -697,14 +766,15 @@ export type BotDeliveryRecovery = "recovered" | "deadlettered"
  */
 export async function recoverAbandonedBotDelivery(
   id: string,
+  settle: BotDeadletterSettler,
   now = Date.now(),
   random?: () => number
 ): Promise<BotDeliveryRecovery | null> {
   const db = getDb()
-  return db.transaction("rw", db.botEventDeliveries, async () => {
+  return db.transaction("rw", recoveryStores(db), async () => {
     const row = await db.botEventDeliveries.get(id)
     if (!row || !isLocallyOwned(row) || !isAbandonedAttempt(row, now)) return null
-    const next = chargeAbandonedAttempt(row, now, random)
+    const next = await settledRecovery(chargeAbandonedAttempt(row, now, random), now, settle)
     await db.botEventDeliveries.put(next)
     return next.status === "deadletter" ? "deadlettered" : "recovered"
   })
@@ -723,12 +793,13 @@ export async function recoverAbandonedBotDelivery(
  */
 export async function recoverStaleBotDeliveries(input: {
   owner: string
+  settle: BotDeadletterSettler
   now?: number
   random?: () => number
 }): Promise<number> {
   const db = getDb()
   const now = input.now ?? Date.now()
-  return db.transaction("rw", db.botEventDeliveries, async () => {
+  return db.transaction("rw", recoveryStores(db), async () => {
     const rows = await db.botEventDeliveries.toArray()
     const mine = rows.filter(
       (row) =>
@@ -737,7 +808,9 @@ export async function recoverStaleBotDeliveries(input: {
         (row.status === "leased" || row.status === "running")
     )
     for (const row of mine) {
-      await db.botEventDeliveries.put(chargeAbandonedAttempt(row, now, input.random))
+      await db.botEventDeliveries.put(
+        await settledRecovery(chargeAbandonedAttempt(row, now, input.random), now, input.settle)
+      )
     }
     return mine.length
   })
@@ -872,12 +945,16 @@ export async function pruneSettledBotDeliveries(now = Date.now()): Promise<numbe
     await dismissBotDelivery(row.id, "unsettled past the retention window", now)
   }
 
-  const ids = rows
-    .filter((row) => row.settledAt !== undefined && row.settledAt <= cutoff)
-    .map((row) => row.id)
-  if (ids.length === 0) return 0
-  await db.transaction("rw", db.botEventDeliveries, db.syncTombstones, async () => {
+  const pruned = rows.filter((row) => row.settledAt !== undefined && row.settledAt <= cutoff)
+  if (pruned.length === 0) return 0
+  const ids = pruned.map((row) => row.id)
+  await db.transaction("rw", db.botEventDeliveries, db.botRunSteps, db.syncTombstones, async () => {
     await db.botEventDeliveries.bulkDelete(ids)
+    // The run's checkpoints (business steps, its policy snapshot, its final
+    // result) go with the delivery that owns them, as the data catalog
+    // declares. A run id is derived per delivery, so no other delivery can
+    // still need them; a retry mints a successor delivery with its own run.
+    await deleteBotRunStepsForRuns(pruned.flatMap((row) => (row.runId ? [row.runId] : [])))
     // Paired clients mirror the delivery-status projection and hear about a
     // pruned row only through this tombstone.
     await recordTombstones("botEventDeliveries", ids, now)

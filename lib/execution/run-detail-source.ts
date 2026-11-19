@@ -1,7 +1,7 @@
 /** One run's existing journal and approval artifacts; no secondary read store. */
 import { getDb } from "@/lib/db/schema"
 import { getExecutionRun, listVisibleExecutionRunEvents } from "@/lib/db/execution-runs"
-import { getBotRunStep } from "@/lib/db/bot-run-steps"
+import { BOT_RUN_RESULT_STEP, getBotRunStep } from "@/lib/db/bot-run-steps"
 import { summarizeBotRunCost, type BotRunCostSummary } from "@/lib/bot/runtime/run-cost"
 import type { ExecutionRun, ExecutionRunInterrupt, RunEvent } from "@/types/execution/run"
 import type { BotHandlerResultV1 } from "@/types/bot/run"
@@ -27,7 +27,7 @@ export async function readExecutionRunDetailSources(
   const [events, interrupts, result, cost] = await Promise.all([
     listVisibleExecutionRunEvents(runId, includePrivate),
     getDb().executionRunInterrupts.where("runId").equals(runId).toArray(),
-    run.kind === "bot" ? getBotRunStep(runId, "__host:result") : undefined,
+    run.kind === "bot" ? getBotRunStep(runId, BOT_RUN_RESULT_STEP) : undefined,
     run.kind === "bot" ? summarizeBotRunCost(runId) : undefined,
   ])
   return {

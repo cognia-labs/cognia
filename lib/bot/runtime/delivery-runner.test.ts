@@ -18,6 +18,10 @@ import type { PluginBotDef } from "@/types/plugin/plugin-bot"
 import { drainBotDeliveries, startBotDeliveryRunner } from "./delivery-runner"
 import { __resetLiveBotRunsForTesting } from "./run"
 
+jest.mock("@/lib/bot/sources/bot-run", () => ({
+  dispatchBotRunToBots: jest.fn().mockResolvedValue({}),
+}))
+
 const NOW = 1_700_000_000_000
 const now = () => NOW
 
@@ -325,10 +329,10 @@ describe("drainBotDeliveries", () => {
     await claimBotDelivery("bdl_1", "host-b", NOW)
     await markBotDeliveryRunning("bdl_1", "run_x", NOW)
 
+    // Not even selected: an installation with no free slot does not spend a
+    // batch place on work the runner could only throttle.
     const attempts = await drainBotDeliveries({ owner: "host-a", now })
-    expect(attempts).toEqual([
-      { deliveryId: "bdl_2", outcome: { status: "skipped", reason: "throttled" } },
-    ])
+    expect(attempts).toEqual([])
     expect(handler).not.toHaveBeenCalled()
     // Not charged: it waits for the slot, it did not fail.
     expect(await getDb().botEventDeliveries.get("bdl_2")).toMatchObject({
@@ -355,11 +359,60 @@ describe("drainBotDeliveries", () => {
     for (const release of releases) release()
     const attempts = await pass
     expect(handler).toHaveBeenCalledTimes(2)
-    expect(
-      attempts.filter(
-        (attempt) => "reason" in attempt.outcome && attempt.outcome.reason === "throttled"
-      )
-    ).toHaveLength(1)
+    expect(attempts.map((attempt) => attempt.deliveryId)).toEqual(["bdl_1", "bdl_2"])
+    expect(await getDb().botEventDeliveries.get("bdl_3")).toMatchObject({
+      status: "pending",
+      attempts: 0,
+    })
+  })
+
+  it("does not let an installation at capacity starve another one's ready work (B09)", async () => {
+    const handler = jest.fn()
+    await seedInstallation(handler, { maxConcurrentRuns: 1 })
+    const other = jest.fn()
+    registerBot(
+      "other",
+      {
+        id: "acme:other",
+        definition: {
+          id: "other",
+          name: "Other",
+          version: "1.0.0",
+          executor: "handler",
+          triggers: [{ id: "opened", kind: "manual" }],
+        } as PluginBotDef,
+        handler: other,
+      },
+      { pluginId: "acme" }
+    )
+    await installBot({
+      id: "boti_2",
+      definitionId: "acme:other",
+      definitionSource: "plugin",
+      pinnedVersion: "1.0.0",
+      scope: { kind: "account" },
+      now: NOW,
+    })
+    // A holds its only slot on another host and has five more at the head.
+    await enqueueBotDelivery({ envelope: envelope(), concurrencyKey: "a#0", now: NOW })
+    await claimBotDelivery("bdl_1", "host-b", NOW)
+    await markBotDeliveryRunning("bdl_1", "run_x", NOW)
+    for (const n of [2, 3, 4, 5, 6]) {
+      await enqueueBotDelivery({
+        envelope: envelope({ eventId: `bev_${n}`, deliveryId: `bdl_${n}` }),
+        concurrencyKey: `a#${n}`,
+        now: NOW,
+      })
+    }
+    await enqueueBotDelivery({
+      envelope: envelope({ eventId: "bev_b", deliveryId: "bdl_b", installationId: "boti_2" }),
+      now: NOW + 1,
+    })
+
+    const attempts = await drainBotDeliveries({ owner: "host-a", now: () => NOW + 1 })
+    expect(attempts.map((attempt) => attempt.deliveryId)).toEqual(["bdl_b"])
+    expect(other).toHaveBeenCalledTimes(1)
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it("does not count a run parked on a person against maxConcurrentRuns", async () => {
@@ -613,6 +666,32 @@ describe("startBotDeliveryRunner", () => {
     } finally {
       handle.stop()
       prune.mockRestore()
+    }
+  })
+
+  it("dispatches an event a stopped host left staged, on its first pass (B05)", async () => {
+    const source = await import("@/lib/bot/sources/bot-run")
+    const dispatch = jest.mocked(source.dispatchBotRunToBots)
+    dispatch.mockClear()
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await getDb().botEventDeliveries.update("bdl_1", {
+      status: "succeeded",
+      runId: "run_bot_bdl_1",
+      settledAt: NOW,
+      runPublication: { status: "completed", botId: "acme:digest", stagedAt: NOW },
+    })
+    const handle = startBotDeliveryRunner({ owner: "host", intervalMs: 5, now })
+    try {
+      await waitFor(() =>
+        expect(dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({ runId: "run_bot_bdl_1", status: "completed" })
+        )
+      )
+      await waitFor(async () =>
+        expect((await getDb().botEventDeliveries.get("bdl_1"))?.runPublication).toBeUndefined()
+      )
+    } finally {
+      handle.stop()
     }
   })
 

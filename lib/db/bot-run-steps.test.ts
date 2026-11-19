@@ -3,13 +3,15 @@
 import "fake-indexeddb/auto"
 
 import {
+  BOT_RUN_RESULT_STEP,
   beginBotRunStep,
   botRunStepId,
-  clearBotRunSteps,
   completeBotRunStep,
+  deleteBotRunStepsForRuns,
   failBotRunStep,
   getBotRunStep,
   listBotRunSteps,
+  putBotRunResult,
 } from "./bot-run-steps"
 import { __resetDbForTesting, getDb } from "./schema"
 
@@ -123,13 +125,32 @@ describe("bot run steps", () => {
     expect((await listBotRunSteps("run_1")).map((s) => s.name)).toEqual(["first", "second"])
   })
 
-  it("clears a run's checkpoints when a retry mints a fresh attempt", async () => {
+  it("deletes every checkpoint of the named runs and nothing else", async () => {
     await beginBotRunStep("run_1", "a", NOW)
-    await beginBotRunStep("run_1", "b", NOW)
+    await putBotRunResult("run_1", { summary: "done" }, NOW)
     await beginBotRunStep("run_2", "a", NOW)
+    await beginBotRunStep("run_3", "a", NOW)
 
-    expect(await clearBotRunSteps("run_1")).toBe(2)
+    expect(await deleteBotRunStepsForRuns(["run_1", "run_2"])).toBe(3)
     expect(await listBotRunSteps("run_1")).toEqual([])
-    expect(await listBotRunSteps("run_2")).toHaveLength(1)
+    expect(await listBotRunSteps("run_2")).toEqual([])
+    expect(await listBotRunSteps("run_3")).toHaveLength(1)
+    expect(await deleteBotRunStepsForRuns([])).toBe(0)
+  })
+
+  it("keeps the result of the attempt that settled the run, not the first one", async () => {
+    // A step memoizes its first value; the result must not. The first attempt
+    // computed A and failed to commit its terminal state, the retry computed
+    // B and committed: the run reports B.
+    await putBotRunResult("run_1", { output: "A" }, NOW)
+    await putBotRunResult("run_1", { output: "B" }, NOW + 1)
+
+    expect(await getBotRunStep("run_1", BOT_RUN_RESULT_STEP)).toMatchObject({
+      status: "completed",
+      output: { output: "B" },
+      attempt: 2,
+      startedAt: NOW,
+      updatedAt: NOW + 1,
+    })
   })
 })

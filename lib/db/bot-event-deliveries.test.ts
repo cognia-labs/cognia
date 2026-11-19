@@ -27,10 +27,21 @@ import {
   recoverStaleBotDeliveries,
   renewBotDeliveryLease,
   replayBotDelivery,
+  type BotDeadletterSettler,
 } from "./bot-event-deliveries"
+import {
+  BOT_RUN_RESULT_STEP,
+  completeBotRunStep,
+  getBotRunStep,
+  listBotRunSteps,
+  putBotRunResult,
+} from "./bot-run-steps"
 import { __resetDbForTesting, getDb } from "./schema"
 
 const NOW = 1_700_000_000_000
+
+/** A recovery settler that leaves the row as the queue derived it. */
+const keep: BotDeadletterSettler = async (row) => row
 
 function envelope(overrides: Partial<BotEventEnvelopeV1> = {}): BotEventEnvelopeV1 {
   return {
@@ -539,6 +550,27 @@ describe("botEventDeliveries", () => {
     // The prune's clock stamps the tombstones.
     expect(tombs.every((t) => t.deletedAt === pruneAt)).toBe(true)
   })
+
+  it("drops a pruned delivery's run checkpoints with it and keeps a live run's (B21)", async () => {
+    const steps = getDb().botRunSteps
+    await steps.clear()
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await enqueueBotDelivery({
+      envelope: envelope({ eventId: "evt_2", deliveryId: "del_2" }),
+      now: NOW,
+    })
+    await markBotDeliveryRunning("del_1", "run_bot_del_1", NOW)
+    await completeBotDelivery("del_1", NOW)
+    await markBotDeliveryRunning("del_2", "run_bot_del_2", NOW)
+    await putBotRunResult("run_bot_del_1", { output: "done" }, NOW)
+    await completeBotRunStep("run_bot_del_1", "fetch", ["item"], NOW)
+    await completeBotRunStep("run_bot_del_2", "fetch", ["item"], NOW)
+
+    expect(await pruneSettledBotDeliveries(NOW + BOT_DELIVERY_RETENTION_MS + 1)).toBe(1)
+    expect(await listBotRunSteps("run_bot_del_1")).toEqual([])
+    expect((await listBotRunSteps("run_bot_del_2")).map((step) => step.name)).toEqual(["fetch"])
+    expect(await getBotRunStep("run_bot_del_1", BOT_RUN_RESULT_STEP)).toBeUndefined()
+  })
 })
 
 /**
@@ -581,7 +613,7 @@ describe("botEventDeliveries recovery after a host stops mid-attempt", () => {
   it("charges one attempt and backs the delivery off rather than re-running it", async () => {
     await abandonedRunningDelivery()
 
-    expect(await recoverAbandonedBotDelivery("del_1", AFTER_LEASE, () => 0)).toBe("recovered")
+    expect(await recoverAbandonedBotDelivery("del_1", keep, AFTER_LEASE, () => 0)).toBe("recovered")
 
     const row = await getDb().botEventDeliveries.get("del_1")
     expect(row?.status).toBe("pending")
@@ -593,7 +625,7 @@ describe("botEventDeliveries recovery after a host stops mid-attempt", () => {
 
   it("leaves a delivery that is not abandoned alone", async () => {
     await abandonedRunningDelivery()
-    expect(await recoverAbandonedBotDelivery("del_1", NOW)).toBeNull()
+    expect(await recoverAbandonedBotDelivery("del_1", keep, NOW)).toBeNull()
     expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("running")
   })
 
@@ -605,7 +637,12 @@ describe("botEventDeliveries recovery after a host stops mid-attempt", () => {
       const at = NOW + (attempt + 1) * (BOT_DELIVERY_LEASE_MS + 1)
       await claimBotDelivery("del_1", "runner-a", at)
       await markBotDeliveryRunning("del_1", "run_bot_del_1", at)
-      outcome = await recoverAbandonedBotDelivery("del_1", at + BOT_DELIVERY_LEASE_MS + 1, () => 0)
+      outcome = await recoverAbandonedBotDelivery(
+        "del_1",
+        keep,
+        at + BOT_DELIVERY_LEASE_MS + 1,
+        () => 0
+      )
       if (outcome === "deadlettered") break
     }
 
@@ -613,6 +650,27 @@ describe("botEventDeliveries recovery after a host stops mid-attempt", () => {
     const row = await getDb().botEventDeliveries.get("del_1")
     expect(row?.status).toBe("deadletter")
     expect(row?.settledAt).toBeDefined()
+  })
+
+  it("hands only a dead-lettered row to the settler and stores what it returns (B06)", async () => {
+    await enqueueBotDelivery({ envelope: envelope(), retry: { maxAttempts: 2 }, now: NOW })
+    const settle = jest.fn<ReturnType<BotDeadletterSettler>, Parameters<BotDeadletterSettler>>(
+      async (row) => ({ ...row, lastError: "settled by the run owner" })
+    )
+    await claimBotDelivery("del_1", "desktop:acct", NOW)
+    await recoverStaleBotDeliveries({ owner: "desktop:acct", settle, now: NOW, random: () => 0 })
+    // Retried, not dead-lettered: the run stays open and the settler is not asked.
+    expect(settle).not.toHaveBeenCalled()
+    expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("pending")
+
+    const at = NOW + 60 * 60_000
+    await claimBotDelivery("del_1", "desktop:acct", at)
+    await recoverStaleBotDeliveries({ owner: "desktop:acct", settle, now: at, random: () => 0 })
+    expect(settle).toHaveBeenCalledWith(expect.objectContaining({ status: "deadletter" }), at)
+    expect(await getDb().botEventDeliveries.get("del_1")).toMatchObject({
+      status: "deadletter",
+      lastError: "settled by the run owner",
+    })
   })
 
   it("refuses a claim while another owner's lease on a running row is alive", async () => {
@@ -632,7 +690,12 @@ describe("botEventDeliveries recovery after a host stops mid-attempt", () => {
     await claimBotDelivery("del_2", "brain:acct", NOW)
 
     expect(
-      await recoverStaleBotDeliveries({ owner: "desktop:acct", now: NOW, random: () => 0 })
+      await recoverStaleBotDeliveries({
+        owner: "desktop:acct",
+        settle: keep,
+        now: NOW,
+        random: () => 0,
+      })
     ).toBe(1)
 
     expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("pending")
@@ -691,8 +754,8 @@ describe("botEventDeliveries mirrored from a Host", () => {
     const row = await getDb().botEventDeliveries.get("del_1")
     await getDb().botEventDeliveries.put({ ...row!, status: "running", leaseOwner: "host-a" })
 
-    expect(await recoverAbandonedBotDelivery("del_1", NOW + 10 * 60_000)).toBeNull()
-    expect(await recoverStaleBotDeliveries({ owner: "host-a", now: NOW })).toBe(0)
+    expect(await recoverAbandonedBotDelivery("del_1", keep, NOW + 10 * 60_000)).toBeNull()
+    expect(await recoverStaleBotDeliveries({ owner: "host-a", settle: keep, now: NOW })).toBe(0)
 
     await pruneSettledBotDeliveries(NOW + BOT_DELIVERY_RETENTION_MS + 1)
     expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("running")

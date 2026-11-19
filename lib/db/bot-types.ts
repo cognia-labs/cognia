@@ -329,6 +329,25 @@ export interface BotEventDeliveryRow {
   updatedAt: number
   /** When the delivery reached a terminal status. Drives retention. */
   settledAt?: number
+  /**
+   * The `bot.run.*` event this delivery's settled run still owes the Bot plane.
+   *
+   * A transactional outbox in one field: staged in the SAME transaction that
+   * settles the run, cleared once the event is dispatched, and flushed by every
+   * drain pass, so a host that stops between the commit and the dispatch costs
+   * the subscriber a delay rather than the event. The event id is derived from
+   * the run, so a second dispatch folds onto the first delivery.
+   */
+  runPublication?: BotRunPublication
+}
+
+/** A settled run's pending `bot.run.<status>` event. See `runPublication`. */
+export interface BotRunPublication {
+  status: "completed" | "failed"
+  /** The settled run's definition id, the event's `actor` and `botId`. */
+  botId: string
+  summary?: string
+  stagedAt: number
 }
 
 /**

@@ -17,6 +17,7 @@ import { setBotTriggerArmedLocally } from "@/lib/bot/control-writes/local"
 import { cancelBotRun, getLiveBotRunSignal } from "@/lib/bot/runtime/run"
 import { sha256Hex } from "@/lib/share/hash"
 import {
+  BOT_RUN_RESULT_STEP,
   beginBotRunStep,
   completeBotRunStep,
   failBotRunStep,
@@ -328,7 +329,7 @@ export function createBotsAPI(
       const { installation } = await own(runId)
       const run = await getDb().executionRuns.get(input.runId)
       if (!run || run.kind !== "bot" || run.sourceId !== installation.id) return null
-      const step = await getBotRunStep(input.runId, "__host:result")
+      const step = await getBotRunStep(input.runId, BOT_RUN_RESULT_STEP)
       const result =
         step?.status === "completed" ? (step.output as BotHandlerResultV1 | undefined) : undefined
       return {

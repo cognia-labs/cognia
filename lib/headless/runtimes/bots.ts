@@ -13,8 +13,7 @@
  * in one process, or a restarted host picking up after itself.
  */
 
-import { recoverStaleBotDeliveries } from "@/lib/db/bot-event-deliveries"
-import { startBotDeliveryRunner } from "@/lib/bot/runtime/delivery-runner"
+import { recoverStaleBotAttempts, startBotDeliveryRunner } from "@/lib/bot/runtime/delivery-runner"
 import { markBotRunnerOwned } from "@/lib/bot/runtime/runner-owner"
 import { reconcileAllBotSchedules } from "@/lib/bot/schedule/reconcile-timed-triggers"
 
@@ -30,7 +29,7 @@ registerHeadlessRuntime({
     const owner = `brain:${ctx.localAccountId}`
     // Rows this brain was executing when it stopped. Owner-scoped, so a peer
     // host's live work is left alone.
-    void recoverStaleBotDeliveries({ owner }).catch(() => 0)
+    void recoverStaleBotAttempts({ owner }).catch(() => 0)
     // Armed timed triggers become scheduler rows here, and orphans go.
     void reconcileAllBotSchedules().catch(() => undefined)
     const runner = startBotDeliveryRunner({ owner })

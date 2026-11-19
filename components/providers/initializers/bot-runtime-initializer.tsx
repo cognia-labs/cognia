@@ -49,11 +49,13 @@ export function BotRuntimeInitializer() {
 
     void (async () => {
       try {
-        const [{ startBotDeliveryRunner }, { getLocalAccountId, markBotRunnerOwned }] =
-          await Promise.all([
-            import("@/lib/bot/runtime/delivery-runner"),
-            import("@/lib/bot/runtime/runner-owner"),
-          ])
+        const [
+          { recoverStaleBotAttempts, startBotDeliveryRunner },
+          { getLocalAccountId, markBotRunnerOwned },
+        ] = await Promise.all([
+          import("@/lib/bot/runtime/delivery-runner"),
+          import("@/lib/bot/runtime/runner-owner"),
+        ])
         const owner = await getLocalAccountId()
         const won = await acquireExclusiveWebLock(BOT_RUNTIME_LOCK, lockAbort.signal)
         if (!won || cancelled) return
@@ -61,8 +63,7 @@ export function BotRuntimeInitializer() {
         // Rows this host abandoned when it stopped. Reclaimed by owner rather
         // than waiting out a lease nobody is holding: this process IS that
         // owner, and it has just started.
-        const { recoverStaleBotDeliveries } = await import("@/lib/db/bot-event-deliveries")
-        await recoverStaleBotDeliveries({ owner }).catch(() => 0)
+        await recoverStaleBotAttempts({ owner }).catch(() => 0)
         if (cancelled) return
 
         // Armed timed triggers become scheduler rows here, and orphans go.

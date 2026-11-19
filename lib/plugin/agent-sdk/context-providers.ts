@@ -27,6 +27,7 @@ import type {
   PluginTwinMemoryChunk,
   PluginTwinMemoryQueryOptions,
 } from "@/types/plugin/plugin-context-provider"
+import { unlessAborted } from "@/lib/utils/abort"
 
 /** How long one context provider may take before the run goes on without it. */
 export const PLUGIN_CONTEXT_PROVIDER_DEADLINE_MS = 5_000
@@ -61,17 +62,6 @@ function settleWithin(work: () => unknown, ms: number): Promise<Outcome> {
       (): Outcome => ({ skipped: "failed" })
     )
   return Promise.race([produced, deadline]).finally(() => clearTimeout(timer))
-}
-
-/** `work`, unless `signal` aborts first; then its reason. */
-function unlessAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-  if (!signal) return work
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason)
-    if (signal.aborted) return abort()
-    signal.addEventListener("abort", abort, { once: true })
-    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
-  })
 }
 
 /**
