@@ -2067,6 +2067,265 @@ function seedSession(
   )._sessions.set(id, { permissionMode, allowedTools })
 }
 
+describe("AcpClientAdapter — negotiated turn steering", () => {
+  async function connectedSteering(
+    initialMeta: unknown = { steering: { supported: true } },
+    agentCapabilities: Record<string, unknown> = {}
+  ) {
+    mockIsTauri.mockReturnValue(true)
+    let meta = initialMeta
+    let result: unknown = { outcome: "injected" }
+    let closeResult: unknown
+    let stdout: ((event: PlaneOutput) => void) | undefined
+    const frames: Array<{ id?: number; method: string; params?: Record<string, unknown> }> = []
+    mockListen.mockImplementation(async (channel, listener) => {
+      if (channel === "external-agent://stdout") stdout = listener
+      return jest.fn()
+    })
+    mockInvoke.mockImplementation(async (command, args) => {
+      if (command !== "send_to_external_agent") return "proc-1"
+      const frame = JSON.parse(args.message)
+      frames.push(frame)
+      const response =
+        frame.method === "initialize"
+          ? { protocolVersion: 1, agentCapabilities, _meta: meta }
+          : frame.method === "_session/steering"
+            ? result
+            : frame.method === "session/close"
+              ? closeResult
+              : undefined
+      if (response !== undefined)
+        queueMicrotask(() =>
+          stdout?.({
+            payload: {
+              agentId: "proc-1",
+              data: JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: response }),
+            },
+          })
+        )
+      return undefined
+    })
+    const adapter = new AcpClientAdapter(acpDeps())
+    const config = { ...stdioConfig(), timeout: 50 }
+    await adapter.connect(config)
+    seedSession(adapter, "running", "default")
+    adapter.getSession("running")!.status = "executing"
+    return {
+      adapter,
+      config,
+      frames,
+      setResult: (value: unknown) => {
+        result = value
+      },
+      setMeta: (value: unknown) => {
+        meta = value
+      },
+      setCloseResult: (value: unknown) => {
+        closeResult = value
+      },
+    }
+  }
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { steering: { supported: false } },
+    { steering: { supported: "true" } },
+    { steering: true },
+  ])("does not expose steering for unnegotiated root metadata %j", async (meta) => {
+    const { adapter } = await connectedSteering(meta ?? null, {
+      _meta: { steering: { supported: true } },
+    })
+    try {
+      expect(adapter.steerTurn).toBeUndefined()
+      expect(adapter.capabilities?.steering).toBe(false)
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("sends one gated ACP steering request without prompting or cancelling", async () => {
+    const { adapter, frames } = await connectedSteering()
+    try {
+      expect(adapter.capabilities?.steering).toBe(true)
+      await adapter.steerTurn!("running", "Focus on regression tests")
+      expect(frames.filter(({ method }) => method !== "initialize")).toEqual([
+        {
+          jsonrpc: "2.0",
+          id: expect.any(Number),
+          method: "_session/steering",
+          params: {
+            sessionId: "running",
+            prompt: [{ type: "text", text: "Focus on regression tests" }],
+          },
+        },
+      ])
+      expect(adapter.getSession("running")?.status).toBe("executing")
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("rejects sensitive input and idle or unknown sessions before sending", async () => {
+    const { adapter, frames } = await connectedSteering()
+    try {
+      await expect(adapter.steerTurn!("running", "Email alice@example.com")).rejects.toThrow(
+        /PII gate/
+      )
+      await expect(adapter.steerTurn!("missing", "continue")).rejects.toThrow(/Session not found/)
+      adapter.getSession("running")!.status = "active"
+      await expect(adapter.steerTurn!("running", "continue")).rejects.toThrow(/active turn/)
+      expect(frames.filter(({ method }) => method === "_session/steering")).toHaveLength(0)
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it.each([
+    { outcome: "promptRequired", reason: "noRunningTurn" },
+    { outcome: "unknown" },
+    {},
+    null,
+  ])("rejects unaccepted steering replies without fallback: %j", async (response) => {
+    const { adapter, frames, setResult } = await connectedSteering()
+    try {
+      setResult(response)
+      await expect(adapter.steerTurn!("running", "continue")).rejects.toThrow()
+      expect(
+        frames.filter(({ method }) => method !== "initialize").map(({ method }) => method)
+      ).toEqual(["_session/steering"])
+      expect(adapter.getSession("running")?.status).toBe("executing")
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("does not retry an unacknowledged steer", async () => {
+    const { adapter, frames, setResult } = await connectedSteering()
+    try {
+      setResult(undefined)
+      await expect(adapter.steerTurn!("running", "continue")).rejects.toThrow(
+        "Request timeout: _session/steering"
+      )
+      expect(frames.filter(({ method }) => method === "_session/steering")).toHaveLength(1)
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("refuses steering after cancellation while waiting for the prompt to settle", async () => {
+    const { adapter, frames } = await connectedSteering()
+    try {
+      await adapter.cancel("running")
+      expect(adapter.getSession("running")?.status).toBe("executing")
+      await expect(adapter.steerTurn!("running", "continue")).rejects.toThrow(/active turn/)
+      expect(frames.filter(({ method }) => method === "_session/steering")).toHaveLength(0)
+      expect(frames.filter(({ method }) => method === "session/cancel")).toHaveLength(1)
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("keeps the original prompt response authoritative after steering", async () => {
+    const { adapter, frames } = await connectedSteering()
+    const peer = (adapter as unknown as { peer: JsonRpcPeer }).peer
+    try {
+      const events: ExternalAgentEvent[] = []
+      const consume = (async () => {
+        for await (const event of adapter.prompt("running", {
+          id: "message",
+          role: "user",
+          content: [{ type: "text", text: "Run checks" }],
+          timestamp: new Date(),
+        }))
+          events.push(event)
+      })()
+      await adapter.steerTurn!("running", "Focus on regression tests")
+      expect(events).toEqual([])
+      expect(adapter.getSession("running")?.status).toBe("executing")
+      const prompts = frames.filter(({ method }) => method === "session/prompt")
+      expect(prompts).toHaveLength(1)
+      expect(frames.filter(({ method }) => method === "session/cancel")).toHaveLength(0)
+      peer.ingest(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: prompts[0].id,
+          result: { stopReason: "end_turn" },
+        })
+      )
+      await consume
+      expect(events).toEqual([expect.objectContaining({ type: "done", success: true })])
+      expect(adapter.getSession("running")?.status).toBe("idle")
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("retires steering on teardown and renegotiates on reconnect", async () => {
+    const { adapter, config, frames, setMeta } = await connectedSteering()
+    const staleSteer = adapter.steerTurn!
+    await adapter.disconnect()
+    expect(adapter.steerTurn).toBeUndefined()
+    await expect(staleSteer("running", "continue")).rejects.toThrow()
+    setMeta({})
+    await adapter.connect(config)
+    try {
+      expect(adapter.steerTurn).toBeUndefined()
+      expect(adapter.capabilities?.steering).toBe(false)
+      expect(frames.filter(({ method }) => method === "_session/steering")).toHaveLength(0)
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("closes steering admission before disconnect waits for session close", async () => {
+    const { adapter, frames, setCloseResult } = await connectedSteering(
+      { steering: { supported: true } },
+      { sessionCapabilities: { close: {} } }
+    )
+    adapter.getSession("running")!.id = "running"
+    adapter.getSession("running")!.status = "active"
+    seedSession(adapter, "other", "default")
+    adapter.getSession("other")!.id = "other"
+    adapter.getSession("other")!.status = "executing"
+    const staleSteer = adapter.steerTurn!
+    const peer = (adapter as unknown as { peer: JsonRpcPeer }).peer
+    const disconnect = adapter.disconnect()
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(frames.filter(({ method }) => method === "session/close")).toHaveLength(1)
+      await expect(staleSteer("other", "continue")).rejects.toThrow(/not negotiated/)
+      expect(adapter.steerTurn).toBeUndefined()
+      expect(adapter.capabilities?.steering).toBe(false)
+      expect(frames.filter(({ method }) => method === "_session/steering")).toHaveLength(0)
+    } finally {
+      setCloseResult({})
+      const close = frames.find(({ method }) => method === "session/close")!
+      peer.ingest(JSON.stringify({ jsonrpc: "2.0", id: close.id, result: {} }))
+      await disconnect
+    }
+  })
+
+  it("retires negotiated steering immediately when the transport exits", async () => {
+    const { adapter, frames } = await connectedSteering()
+    const staleSteer = adapter.steerTurn!
+    try {
+      const onExit = mockListen.mock.calls.find(
+        ([channel]) => channel === "external-agent://exit"
+      )![1]
+      onExit({ payload: { agentId: "proc-1", code: 1 } })
+      expect(adapter.connectionStatus).toBe("disconnected")
+      expect(adapter.steerTurn).toBeUndefined()
+      expect(adapter.capabilities?.steering).toBe(false)
+      await expect(staleSteer("running", "continue")).rejects.toThrow(/not negotiated/)
+      expect(frames.filter(({ method }) => method === "_session/steering")).toHaveLength(0)
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+})
+
 function callPermission(
   a: AcpClientAdapter,
   params: PermissionParams,

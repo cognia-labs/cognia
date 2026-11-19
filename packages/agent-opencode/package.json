@@ -41,7 +41,7 @@
   },
   "peerDependencies": {
     "@opencode-ai/sdk": "^1.18.32",
-    "@opencode/client": "^2.0.18"
+    "@opencode/client": "^2.2.7"
   },
   "engines": {
     "node": ">=20.19.0"

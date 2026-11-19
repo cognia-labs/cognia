@@ -134,11 +134,36 @@ describe("negotiateCapabilityProfile", () => {
   })
 
   it("never lets a present method widen a protocol that has no such slot", () => {
-    // ACP has no mid-turn input method. An adapter that grew a `steerTurn`
+    // A2A has no mid-turn input method. An adapter that grew a `steerTurn`
     // anyway does not give the protocol one.
-    const profile = negotiateCapabilityProfile({ protocol: "acp", adapter, liveFacts: {} })
+    const profile = negotiateCapabilityProfile({ protocol: "a2a", adapter, liveFacts: {} })
     expect(profile.effective.steer.level).toBe("unsupported")
     expect(profile.effective.steer.reasonKey).toBe("noProtocolSlot")
+  })
+
+  it("leaves ACP steering unknown until the agent can negotiate its extension", () => {
+    const profile = buildDeclaredCapabilityProfile({ protocol: "acp" })
+    expect(profile.effective.steer.level).toBe("unknown")
+    expect(profile.negotiated).toBe(false)
+  })
+
+  it("recognizes an ACP steering extension only after the live negotiation", () => {
+    const profile = negotiateCapabilityProfile({
+      protocol: "acp",
+      adapter,
+      liveFacts: liveCapabilityFacts({ negotiated: { steering: true } }),
+    })
+    expect(profile.effective.steer).toMatchObject({
+      level: "native",
+      evidence: "handshake",
+      reasonKey: "negotiatedSteering",
+    })
+    const unsupported = negotiateCapabilityProfile({
+      protocol: "acp",
+      adapter: {},
+      liveFacts: liveCapabilityFacts({ negotiated: { steering: false } }),
+    })
+    expect(unsupported.effective.steer.level).toBe("unsupported")
   })
 
   it("lets the handshake overrule a stale declaration and records the drift", () => {

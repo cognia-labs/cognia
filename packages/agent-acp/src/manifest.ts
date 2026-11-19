@@ -162,9 +162,10 @@ export const ACP_CAPABILITIES: AgentCapabilityContribution = {
           evidence: "none",
         },
         steer: {
-          level: "unsupported",
+          // OpenCode's `_session/steering` extension is negotiated at initialize;
+          // baseline ACP alone cannot decide whether this agent supports it.
+          level: "unknown",
           evidence: "protocol-spec",
-          reasonKey: "noProtocolSlot",
         },
         "set-model": {
           level: "native",

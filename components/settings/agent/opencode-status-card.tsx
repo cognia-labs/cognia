@@ -39,7 +39,9 @@ export function OpencodeStatusCard({ agentId, connected }: OpencodeStatusCardPro
               ? "loadFailed"
               : state === "unsupported"
                 ? "unavailableForVersion"
-                : "checking"
+                : state === "partial"
+                  ? "partial"
+                  : "checking"
           )}
         </p>
         {state === "error" && (
@@ -118,10 +120,14 @@ export function OpencodeStatusCard({ agentId, connected }: OpencodeStatusCardPro
           <Plug className="h-3.5 w-3.5" />
           {t("providers")}
         </div>
-        {surfaceNotice("providerAuth")}
-        {surfaceNotice("providers") ??
+        {status.surfaces?.providerAuth !== status.surfaces?.providers &&
+          surfaceNotice("providerAuth")}
+        {status.surfaces?.providers === "partial" && surfaceNotice("providers")}
+        {(status.surfaces?.providers === "partial" ? null : surfaceNotice("providers")) ??
           (status.providers.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t("noProviders")}</p>
+            status.surfaces?.providers === "partial" ? null : (
+              <p className="text-xs text-muted-foreground">{t("noProviders")}</p>
+            )
           ) : (
             <div className="flex flex-wrap gap-1">
               {status.providers.map((provider) => (
@@ -144,9 +150,12 @@ export function OpencodeStatusCard({ agentId, connected }: OpencodeStatusCardPro
           <Bot className="h-3.5 w-3.5" />
           {t("agents")}
         </div>
-        {surfaceNotice("agents") ??
+        {status.surfaces?.agents === "partial" && surfaceNotice("agents")}
+        {(status.surfaces?.agents === "partial" ? null : surfaceNotice("agents")) ??
           (status.agents.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t("noAgents")}</p>
+            status.surfaces?.agents === "partial" ? null : (
+              <p className="text-xs text-muted-foreground">{t("noAgents")}</p>
+            )
           ) : (
             <div className="flex flex-wrap gap-1">
               {status.agents.map((agent) => (
@@ -168,9 +177,12 @@ export function OpencodeStatusCard({ agentId, connected }: OpencodeStatusCardPro
           <TerminalSquare className="h-3.5 w-3.5" />
           {t("commands")}
         </div>
-        {surfaceNotice("commands") ??
+        {status.surfaces?.commands === "partial" && surfaceNotice("commands")}
+        {(status.surfaces?.commands === "partial" ? null : surfaceNotice("commands")) ??
           (status.commands.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t("noCommands")}</p>
+            status.surfaces?.commands === "partial" ? null : (
+              <p className="text-xs text-muted-foreground">{t("noCommands")}</p>
+            )
           ) : (
             <div className="flex flex-wrap gap-1">
               {status.commands.map((command) => (

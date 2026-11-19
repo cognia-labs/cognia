@@ -3062,6 +3062,37 @@ describe("CodexAppServerAdapter", () => {
       }
     )
 
+    it("explains a nested Seatbelt failure without weakening the sandbox", async () => {
+      const adapter = await connectedAdapter()
+      const session = await adapter.createSession()
+      const it = iterator(adapter, session.id, userMessage("run command"))
+      const first = it.next()
+      feed("item/completed", {
+        threadId: session.id,
+        turnId: "turn_1",
+        item: {
+          id: "seatbelt-error",
+          type: "commandExecution",
+          command: "echo hello",
+          status: "failed",
+          exitCode: 71,
+          aggregatedOutput: "sandbox-exec: sandbox_apply: Operation not permitted\n",
+        },
+      })
+      feed("turn/completed", {
+        threadId: session.id,
+        turn: { id: "turn_1", status: "completed" },
+      })
+      expect((await first).value?.type).toBe("tool_use_end")
+      expect((await it.next()).value).toMatchObject({
+        type: "tool_result",
+        isError: true,
+        result: expect.stringContaining("nested macOS sandbox"),
+      })
+      while (!(await it.next()).done) {}
+      await adapter.disconnect()
+    })
+
     it.each(["failed", "declined"])(
       "does not record a %s file change as an applied edit",
       async (status) => {

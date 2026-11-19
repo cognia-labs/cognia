@@ -11,9 +11,13 @@ import type {
   OpenCodeClient,
 } from "@opencode/client"
 
+import { OpenCodeV2Catalog, type OpenCodeDiscoveryState } from "./v2-catalog"
+
 export type { FormAnswer, FormField, IntegrationOAuthMethod }
 export type OpenCodeAuthClient = {
   integration: Pick<OpenCodeClient["integration"], "list" | "oauth">
+  model: Pick<OpenCodeClient["model"], "list">
+  event: Pick<OpenCodeClient["event"], "subscribe">
 }
 
 export interface OpenCodeAuthIntegration {
@@ -28,6 +32,7 @@ export type OpenCodeAuthError =
 export interface OpenCodeAuthSnapshot {
   integrations: OpenCodeAuthIntegration[]
   loading: boolean
+  discovery?: OpenCodeDiscoveryState
   phase: "idle" | "starting" | "pending" | "submitting" | "cancelling" | "complete"
   attempt?: IntegrationAttempt & { integrationID: string }
   error?: OpenCodeAuthError
@@ -90,7 +95,8 @@ export class OpenCodeV2Auth {
   private listeners = new Set<() => void>()
   private timer?: ReturnType<typeof setTimeout>
   private revision = 0
-  private reads = 0
+  private readonly catalog: OpenCodeV2Catalog
+  private readonly unsubscribeCatalog: () => void
   private disposed = false
   private cancelling?: Promise<boolean>
   private checking?: number
@@ -101,6 +107,23 @@ export class OpenCodeV2Auth {
     directory?: string
   ) {
     this.location = directory ? { location: { directory } } : {}
+    this.catalog = new OpenCodeV2Catalog(client, directory)
+    this.unsubscribeCatalog = this.catalog.subscribe(() => {
+      const catalog = this.catalog.getSnapshot()
+      const discovery = catalog.states.integrations
+      this.publish({
+        integrations:
+          discovery === "error" ? [] : summarizeOpenCodeIntegrations(catalog.integrations),
+        discovery,
+        loading: discovery === "loading",
+        error:
+          discovery === "error"
+            ? "load"
+            : this.snapshot.error === "load"
+              ? undefined
+              : this.snapshot.error,
+      })
+    })
   }
 
   getSnapshot = (): OpenCodeAuthSnapshot => this.snapshot
@@ -123,22 +146,8 @@ export class OpenCodeV2Auth {
   }
 
   async refresh(): Promise<void> {
-    const read = ++this.reads
-    this.publish({ loading: true })
-    try {
-      const result = await this.client.integration.list(this.location, {
-        signal: AbortSignal.timeout(15_000),
-      })
-      if (read === this.reads)
-        this.publish({
-          integrations: summarizeOpenCodeIntegrations(result.data),
-          error: this.snapshot.error === "load" ? undefined : this.snapshot.error,
-        })
-    } catch {
-      if (read === this.reads) this.publish({ integrations: [], error: "load" })
-    } finally {
-      if (read === this.reads) this.publish({ loading: false })
-    }
+    if (this.disposed) return
+    await this.catalog.refresh()
   }
 
   private reference(attempt: NonNullable<OpenCodeAuthSnapshot["attempt"]>) {
@@ -288,6 +297,8 @@ export class OpenCodeV2Auth {
     ++this.revision
     this.stopTimer()
     this.listeners.clear()
+    this.unsubscribeCatalog()
+    this.catalog.dispose()
     if (this.snapshot.attempt && !this.cancelling)
       void this.cancelRemote(this.snapshot.attempt).catch(() => undefined)
   }

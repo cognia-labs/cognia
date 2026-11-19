@@ -19,3 +19,11 @@ code. `@opencode/client` and `@opencode-ai/sdk` are peer dependencies.
 
 The app wires the adapters in `lib/ai/agent/external/integrations/opencode.ts`.
 Checked by `node scripts/build/pack-test-agent-package.mjs agent-opencode`.
+
+OpenCode 2.2.7 uses `@opencode/client` 2.2.7. `./v2-catalog` observes progressive
+plugin discovery: subscribe before list reads, publish loading/partial/ready,
+then reread after the waiting model-list activation barrier. Catalog requests
+and session model refreshes are independent of turn cancellation. OAuth discovery
+uses the same observer through a narrow authenticated client; credential bytes
+remain owned by OpenCode. Session totals include native generate/cache-warming
+usage and stay separate from turn-level accounting.

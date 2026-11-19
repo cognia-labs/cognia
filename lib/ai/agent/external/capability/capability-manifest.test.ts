@@ -5,6 +5,11 @@
  */
 import MANIFEST from "@/protocol/agent-capabilities.json"
 import {
+  OPENCODE_SERVER_EXECUTION_SEMANTICS,
+  OPENCODE_V2_EXECUTION_SEMANTICS,
+  opencodeManifest,
+} from "@cognia/agent-opencode/manifest"
+import {
   BUILTIN_EXECUTABLE_EXTERNAL_AGENT_PROTOCOLS,
   EXTERNAL_AGENT_CAPABILITY_IDS,
 } from "@cognia/agent-config-types/external-agent-capability"
@@ -56,9 +61,33 @@ describe("the shipped manifest", () => {
     }
   })
 
-  it("does not advertise capabilities for retired OpenCode V1 configs", () => {
+  it("retains the separate registered OpenCode server and V2 contracts", () => {
     const manifest = externalCapabilityManifest()
-    expect(manifest.protocols).not.toHaveProperty("opencode")
+    expect(opencodeManifest.protocols).toEqual([
+      { protocol: "opencode-v2", semantics: OPENCODE_V2_EXECUTION_SEMANTICS },
+      { protocol: "opencode", semantics: OPENCODE_SERVER_EXECUTION_SEMANTICS },
+    ])
+    for (const semantics of [
+      OPENCODE_SERVER_EXECUTION_SEMANTICS,
+      OPENCODE_V2_EXECUTION_SEMANTICS,
+    ]) {
+      expect(semantics).toMatchObject({
+        cancel: { scope: "turn", reconnectsAfterCancel: false },
+        resume: "native",
+        fork: "native",
+        approvals: "per-tool-call",
+        processModel: "shared",
+      })
+    }
+    for (const protocol of ["opencode", "opencode-v2"] as const) {
+      expect(manifest.protocols[protocol].capabilities.streaming.level).toBe("native")
+      expect(manifest.protocols[protocol].capabilities["session.resume"].level).toBe("native")
+      expect(manifest.protocols[protocol].capabilities["permissions.interrupt-resume"].level).toBe(
+        "native"
+      )
+    }
+    expect(manifest.protocols.opencode.capabilities.steer.level).toBe("unsupported")
+    expect(manifest.protocols["opencode-v2"].capabilities.steer.level).toBe("native")
     expect(manifest.presetRefinements).not.toHaveProperty("opencode-remote")
     expect(presetCapabilityLayer("opencode-remote").cells).toEqual({})
   })
@@ -123,7 +152,8 @@ describe("the shipped manifest", () => {
       "native"
     )
     expect(manifest.presetRefinements["opencode-v2-service"].protocol).toBe("opencode-v2")
-    for (const protocol of ["acp", "dsh-sdk", "a2a"] as const) {
+    expect(manifest.protocols.acp.capabilities.steer.level).toBe("unknown")
+    for (const protocol of ["dsh-sdk", "a2a"] as const) {
       expect(manifest.protocols[protocol].capabilities.steer.level).toBe("unsupported")
     }
     // A protocol slot is necessary but not sufficient: if Cognia's adapter
@@ -143,7 +173,7 @@ describe("protocolCapabilityLayer", () => {
     // A plugin protocol declares its own row; a legacy `http` config has none
     // at all. Both must produce every id as `unknown`, never an empty object —
     // an absent cell reads as "unsupported" at every call site downstream.
-    for (const protocol of ["my-plugin:demo", "http", "opencode"]) {
+    for (const protocol of ["my-plugin:demo", "http"]) {
       const layer = protocolCapabilityLayer(protocol)
       for (const id of EXTERNAL_AGENT_CAPABILITY_IDS) {
         expect(layer.cells[id]).toEqual({

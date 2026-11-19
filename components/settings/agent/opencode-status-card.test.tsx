@@ -189,3 +189,15 @@ it("offers one retry when adapter discovery fails before availability is known",
   await userEvent.click(screen.getByRole("button", { name: enMessages.settings.opencode.retry }))
   expect(hookValue.refresh).toHaveBeenCalledTimes(1)
 })
+
+it("shows discovered agents while plugins are still loading without claiming empty", () => {
+  hookValue.status = {
+    ...EMPTY,
+    agents: [{ id: "build", name: "Build" }],
+    surfaces: { agents: "partial" },
+  }
+  renderCard()
+  expect(screen.getByText("Build")).toBeVisible()
+  expect(screen.getByRole("status")).toHaveTextContent("Plugins are still loading")
+  expect(screen.queryByText(enMessages.settings.opencode.noAgents)).not.toBeInTheDocument()
+})

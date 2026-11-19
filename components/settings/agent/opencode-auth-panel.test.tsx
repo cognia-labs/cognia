@@ -20,9 +20,26 @@ import { getExternalAgentManager } from "@/lib/ai/agent/external/manager"
 import { openUrl } from "@/lib/native/opener"
 import type { FormField } from "@cognia/agent-opencode/v2-auth"
 
-function fixture(mode: "auto" | "code" = "auto", form?: FormField[]) {
+function fixture(mode: "auto" | "code" = "auto", form?: FormField[], activation?: Promise<void>) {
   let signedIn = false
   const client = {
+    model: {
+      list: jest.fn(async () => {
+        await activation
+        return { data: [] }
+      }),
+    },
+    event: {
+      subscribe: ({ signal }: { signal: AbortSignal }) => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "server.connected" }
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) resolve()
+            else signal.addEventListener("abort", () => resolve(), { once: true })
+          })
+        },
+      }),
+    },
     integration: {
       list: jest.fn(async () => ({
         data: [
@@ -170,4 +187,29 @@ it("shows an empty state when no integration has OAuth methods or accounts", asy
   await screen.findByRole("button", { name: "Refresh sign-in status" })
   await userEvent.setup().click(screen.getByRole("button", { name: "Refresh sign-in status" }))
   expect(await screen.findByText("No sign-in methods or accounts reported.")).toBeInTheDocument()
+})
+
+it("shows loaded sign-in methods while plugin discovery remains partial", async () => {
+  let finish!: () => void
+  const activation = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  fixture("auto", undefined, activation)
+  expect(await screen.findByRole("button", { name: "Sign in with Console" })).toBeVisible()
+  expect(screen.getByRole("status")).toHaveTextContent("Plugins are still loading")
+  finish()
+  await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument())
+})
+
+it("does not claim no sign-in methods until activation completes", async () => {
+  let finish!: () => void
+  const activation = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const { client } = fixture("auto", undefined, activation)
+  client.integration.list.mockResolvedValue({ data: [] } as never)
+  await screen.findByRole("status")
+  expect(screen.queryByText("No sign-in methods or accounts reported.")).not.toBeInTheDocument()
+  finish()
+  expect(await screen.findByText("No sign-in methods or accounts reported.")).toBeVisible()
 })

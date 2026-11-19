@@ -21,6 +21,7 @@ import {
   type SpanHandle,
 } from "@cognia/agent-trace/emitter"
 import { costFromTokensUsd, resolveModelPricingUsd } from "@/lib/usage/pricing"
+import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import type { SpanProviderName, SpanUsage } from "@/types/agent-trace/span"
 
 export interface ExternalAgentTraceBridgeOptions {
@@ -55,6 +56,8 @@ export function createExternalAgentTraceBridge(
 ): ExternalAgentTraceBridge {
   let handle: SpanHandle = NO_HANDLE
   let finished = false
+  const streamedResult: Record<string, unknown> = {}
+  let streamedText = ""
 
   const providerName = providerFromProtocol(options.protocol)
   const handoff = options.parentSpanId
@@ -76,6 +79,7 @@ export function createExternalAgentTraceBridge(
           operationName: "invoke_agent",
           providerName,
           sessionId: options.sessionId,
+          turnId: options.turnId,
           surface: "agent-team",
           traceId: options.traceId,
           parentSpanId: options.parentSpanId,
@@ -95,6 +99,26 @@ export function createExternalAgentTraceBridge(
     async onEvent(event: unknown) {
       try {
         if (!handle.spanId) return
+        if (isPlainObject(event)) {
+          if (event.tokenUsage) streamedResult.tokenUsage = event.tokenUsage
+          if (event.type === "done") {
+            if (typeof event.success === "boolean") streamedResult.success = event.success
+            if (typeof event.stopReason === "string") streamedResult.finishReason = event.stopReason
+          }
+          if (event.type === "error") {
+            streamedResult.success = false
+            streamedResult.error = event.error
+          }
+          const delta = event.delta
+          if (
+            event.type === "message_delta" &&
+            isPlainObject(delta) &&
+            delta.type === "text" &&
+            typeof delta.text === "string"
+          ) {
+            streamedText = (streamedText + delta.text).slice(0, 4096)
+          }
+        }
         const attributes = isPlainObject(event) ? event : { value: event }
         const name = pickEventName(event) ?? "external_event"
         recordEvent(handle.spanId, {
@@ -113,10 +137,21 @@ export function createExternalAgentTraceBridge(
         finished = true
         endSpan(
           handle.spanId,
-          buildCompletionInput(result, {
-            fallbackModelId: options.modelId,
-            pricingProviderId: pricingProviderFromProtocol(options.protocol),
-          })
+          buildCompletionInput(
+            {
+              ...streamedResult,
+              ...(isPlainObject(result) ? result : {}),
+              tokenUsage:
+                isPlainObject(result) && standardUsageOf(result.tokenUsage)
+                  ? result.tokenUsage
+                  : streamedResult.tokenUsage,
+              finalResponse: pickOutputText(result) || streamedText || undefined,
+            },
+            {
+              fallbackModelId: options.modelId,
+              pricingProviderId: pricingProviderFromProtocol(options.protocol),
+            }
+          )
         )
       } catch {
         // bridge contract
@@ -130,6 +165,13 @@ export function createExternalAgentTraceBridge(
         const errMsg = stringifyError(error)
         const ctxMeta = isPlainObject(context) ? { context } : undefined
         endSpan(handle.spanId, {
+          ...buildCompletionInput(
+            { ...streamedResult, finalResponse: streamedText },
+            {
+              fallbackModelId: options.modelId,
+              pricingProviderId: pricingProviderFromProtocol(options.protocol),
+            }
+          ),
           errorType: "external_agent_error",
           errorMessage: errMsg,
           metadata: ctxMeta,
@@ -162,6 +204,12 @@ function buildCompletionInput(
   const out: EndSpanInput = {}
   if (!isPlainObject(result)) return out
 
+  if (result.success === false || result.is_error === true) {
+    out.errorType = "external_agent_error"
+    out.errorMessage =
+      typeof result.error === "string" ? result.error : "External agent execution failed"
+  }
+
   const usage = extractUsageLike(result)
   if (usage) out.usage = usage
 
@@ -181,10 +229,11 @@ function buildCompletionInput(
     out.responseModel = modelRaw
   }
 
-  const costRaw = (result as Record<string, unknown>).total_cost_usd
+  const standardUsage = standardUsageOf(result.tokenUsage)
+  const costRaw = result.total_cost_usd ?? standardUsage?.totalCostUsd
   if (typeof costRaw === "number" && Number.isFinite(costRaw)) {
     out.costUsdEstimate = costRaw
-  } else if (usage) {
+  } else if (usage && !isPlainObject(result.tokenUsage)) {
     const modelId = out.responseModel ?? context.fallbackModelId
     const pricing = resolveModelPricingUsd(context.pricingProviderId, modelId)
     const fallbackCost = costFromTokensUsd(
@@ -206,6 +255,16 @@ function buildCompletionInput(
 }
 
 function extractUsageLike(result: Record<string, unknown>): SpanUsage | undefined {
+  const standard = standardUsageOf(result.tokenUsage)
+  if (standard) {
+    const usage = {
+      inputTokens: standard.inputTokens ?? 0,
+      outputTokens: standard.outputTokens ?? 0,
+      cacheCreationTokens: standard.cacheCreationInputTokens ?? 0,
+      cacheReadTokens: standard.cacheReadInputTokens ?? 0,
+    }
+    return Object.values(usage).some((value) => value > 0) ? usage : undefined
+  }
   const direct = isPlainObject(result.usage) ? result.usage : undefined
   const nested =
     !direct && isPlainObject(result.message) && isPlainObject(result.message.usage)
@@ -239,9 +298,24 @@ function extractUsageLike(result: Record<string, unknown>): SpanUsage | undefine
 function pickOutputText(result: unknown): string | undefined {
   if (typeof result === "string") return result
   if (!isPlainObject(result)) return undefined
-  const direct = result.result ?? result.output ?? result.text
+  const direct = result.finalResponse || result.result || result.output || result.text
   if (typeof direct === "string") return direct
   return undefined
+}
+
+function standardUsageOf(
+  value: unknown
+): ReturnType<typeof externalTokenUsageToUsageInfo> | undefined {
+  if (!isPlainObject(value)) return undefined
+  if (
+    ![value.promptTokens, value.completionTokens, value.totalTokens].every(
+      (v) => typeof v === "number" && Number.isFinite(v) && v >= 0
+    )
+  )
+    return undefined
+  return externalTokenUsageToUsageInfo(
+    value as unknown as Parameters<typeof externalTokenUsageToUsageInfo>[0]
+  )
 }
 
 function pickEventName(event: unknown): string | undefined {

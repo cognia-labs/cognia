@@ -52,6 +52,177 @@ const ROLLOUT = jsonl([
 ])
 
 describe("parseCodexRollout", () => {
+  it("updates cumulative fallback baselines even when a last-usage block is present", () => {
+    const parsed = parseCodexRollout(
+      jsonl([
+        { type: "response_item", payload: { type: "message", role: "assistant", content: "one" } },
+        {
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: { input_tokens: 100 },
+              total_token_usage: { input_tokens: 100 },
+            },
+          },
+        },
+        { type: "response_item", payload: { type: "message", role: "assistant", content: "two" } },
+        {
+          type: "event_msg",
+          payload: { type: "token_count", info: { total_token_usage: { input_tokens: 150 } } },
+        },
+      ]),
+      "r",
+      host
+    )
+    expect(parsed.messages.map((message) => message.usage?.inputTokens)).toEqual([100, 50])
+  })
+
+  it("keeps late canonical receipts on their original model and resets usage on context-only turns", () => {
+    const parsed = parseCodexRollout(
+      jsonl([
+        { type: "turn_context", payload: { turn_id: "a", model: "model-a" } },
+        { type: "response_item", payload: { type: "message", role: "assistant", content: "one" } },
+        { type: "turn_context", payload: { turn_id: "b", model: "model-b" } },
+        {
+          type: "event_msg",
+          payload: { type: "token_count", info: { last_token_usage: { input_tokens: 500 } } },
+        },
+        {
+          type: "token_usage_record",
+          timestamp: "2026-11-11T10:00:01Z",
+          payload: {
+            turn_id: "a",
+            response_id: "r1",
+            usage: { input_tokens: 0, output_tokens: 0 },
+          },
+        },
+        { type: "response_item", payload: { type: "message", role: "assistant", content: "two" } },
+      ]),
+      "r",
+      host
+    )
+    expect(parsed.messages[0].usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+    })
+    expect(parsed.messages[0].usageModel).toBe("model-a")
+    expect(parsed.messages[1].usage).toBeUndefined()
+    const contextOnly = parseCodexRollout(
+      jsonl([
+        { type: "turn_context", payload: { turn_id: "a" } },
+        { type: "response_item", payload: { type: "message", role: "assistant", content: "one" } },
+        { type: "turn_context", payload: { turn_id: "b" } },
+        {
+          type: "event_msg",
+          payload: { type: "token_count", info: { last_token_usage: { input_tokens: 500 } } },
+        },
+      ]),
+      "r",
+      host
+    )
+    expect(contextOnly.messages[0].usage).toBeUndefined()
+  })
+
+  it("preserves system/developer roles and assistant phases without using them as the title", () => {
+    const rows = ["developer", "system", "user", "assistant"].map((role) => ({
+      type: "response_item",
+      payload: { type: "message", role, channel: "analysis", content: role },
+    }))
+    const parsed = parseCodexRollout(jsonl(rows), "r", host)
+    expect(parsed.title).toBe("user")
+    expect(parsed.messages.map((message) => message.role)).toEqual([
+      "system",
+      "system",
+      "user",
+      "assistant",
+    ])
+    expect(parsed.messages[0].annotations).toEqual({ codexMessage: { role: "developer" } })
+    expect(parsed.messages[3].annotations).toEqual({ codexMessage: { phase: "analysis" } })
+    const spaced = rows.map((row) => JSON.stringify(row).replace(/:/g, ": ")).join("\n")
+    expect(summarizeCodexRollout(spaced, "r")?.title).toBe("user")
+    expect(summarizeCodexRollout(jsonl(rows), "r")?.title).toBe("user")
+  })
+
+  it("recognizes desktop task lifecycle and isolates canonical per-response usage", () => {
+    const row = (type: string, payload: Record<string, unknown>, second: number) => ({
+      type,
+      payload,
+      timestamp: `2026-11-11T10:00:${String(second).padStart(2, "0")}Z`,
+    })
+    const assistant = (text: string, second: number) =>
+      row(
+        "response_item",
+        {
+          type: "message",
+          role: "assistant",
+          content: text,
+        },
+        second
+      )
+    const usage = (responseId: string, input: number, second: number, threadId = "session") =>
+      row(
+        "token_usage_record",
+        {
+          thread_id: threadId,
+          turn_id: "a",
+          response_id: responseId,
+          usage: { input_tokens: input, output_tokens: 2, cached_input_tokens: 1 },
+          turn_token_usage: { input_tokens: 9999 },
+        },
+        second
+      )
+    const parsed = parseCodexRollout(
+      jsonl([
+        row("session_meta", { id: "session" }, 0),
+        row("event_msg", { type: "task_started", turn_id: "a" }, 1),
+        row("turn_context", { turn_id: "a", model: "model-a" }, 1),
+        assistant("progress", 2),
+        row(
+          "event_msg",
+          { type: "token_count", info: { last_token_usage: { input_tokens: 500 } } },
+          3
+        ),
+        usage("r1", 10, 4),
+        usage("r1", 20, 5),
+        usage("r1", 15, 4),
+        usage("r2", 30, 6),
+        usage("foreign", 5000, 6, "other"),
+        assistant("done", 7),
+        row("event_msg", { type: "task_complete", turn_id: "a" }, 8),
+        row("event_msg", { type: "task_started", turn_id: "b" }, 9),
+        row("turn_context", { turn_id: "b", model: "model-b" }, 9),
+        assistant("second", 10),
+        row(
+          "event_msg",
+          { type: "token_count", info: { last_token_usage: { input_tokens: 7 } } },
+          11
+        ),
+        row("event_msg", { type: "task_complete", turn_id: "b" }, 12),
+      ]),
+      "r",
+      host
+    )
+    expect(parsed.lifecycle).toMatchObject({ status: "completed", endedAt: "2026-11-11T10:00:12Z" })
+    expect(parsed.messages.map((message) => message.usage)).toEqual([
+      undefined,
+      { inputTokens: 50, outputTokens: 4, cacheReadInputTokens: 2 },
+      { inputTokens: 7, outputTokens: 0, cacheReadInputTokens: 0 },
+    ])
+    expect(parsed.messages.map((message) => message.usageModel)).toEqual([
+      undefined,
+      "model-a",
+      "model-b",
+    ])
+    expect(parsed.losses).toEqual([])
+    expect(
+      parsed.recordedEvents
+        .filter((event) => event.event.kind === "lifecycle")
+        .map((event) => event.turnId)
+    ).toEqual(["a", "a", "b", "b"])
+  })
+
   it("rebuilds the transcript as neutral parts", () => {
     const parsed = parseCodexRollout(ROLLOUT, "rollout.jsonl", host)
     expect(parsed).toMatchObject({
@@ -125,7 +296,10 @@ describe("parseCodexRollout", () => {
             type: "message",
             role: "assistant",
             phase: "commentary",
-            content: [{ type: "output_text", text: "Checking" }],
+            content: [
+              { type: "output_text", text: "Checking" },
+              { type: "output_text", text: "Next" },
+            ],
           },
         },
       ]),
@@ -133,7 +307,7 @@ describe("parseCodexRollout", () => {
       host
     )
     expect(parsed.messages[0].parts).toEqual([
-      { type: "commentary", text: "Checking", messageId: "c-1", source: "codex" },
+      { type: "commentary", text: "Checking\nNext", messageId: "c-1", source: "codex" },
     ])
   })
 

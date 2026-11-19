@@ -4,7 +4,7 @@
 // hard-capability gaps, gateway-required routing, and the frozen-model rule.
 // The gateway-side halves (invalid/expired tickets, unmapped selectors,
 // candidate freezing) are proven end-to-end in
-// crates/cognia-gateway/tests/phase2_gateway.rs and
+// crates/cognia-gateway/tests/inference_http.rs and
 // tests/conformance/cases/vertical-slice.test.mjs.
 
 import type { AgentExecutionFlag } from "./feature-flags"

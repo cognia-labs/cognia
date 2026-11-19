@@ -18,6 +18,19 @@ const fakeAdapter = {
 }
 let adapterForAgent: typeof fakeAdapter | null = fakeAdapter
 const v2Client = {
+  model: { list: jest.fn(async () => ({ data: [] })) },
+  event: {
+    subscribe: ({ signal }: { signal: AbortSignal }) => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "server.connected" }
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve()
+          else signal.addEventListener("abort", () => resolve(), { once: true })
+        })
+      },
+    }),
+  },
+
   integration: {
     list: jest.fn(async () => ({
       data: [{ id: "openai", connections: [{ type: "env", name: "OPENAI_API_KEY" }] }],
@@ -37,17 +50,24 @@ let v2ForAgent: { getSdkClient: () => typeof v2Client } | null = null
 jest.mock("@cognia/agent-opencode/client", () => ({ openCodeServerExtension: "v1" }))
 jest.mock("@cognia/agent-opencode/v2-client", () => ({ openCodeV2Extension: "v2" }))
 
+const statusLifecycleListeners = new Set<(event: { agentId: string }) => void>()
+
 jest.mock("@/lib/ai/agent/external/manager", () => ({
   getExternalAgentManager: () => ({
     getAdapterExtension: (_id: string, extension: string) =>
       extension === "v1" ? adapterForAgent : v2ForAgent,
     getAgent: () => ({ config: { process: { cwd: "/v2-project" } } }),
+    addLifecycleListener: (listener: (event: { agentId: string }) => void) => {
+      statusLifecycleListeners.add(listener)
+      return () => statusLifecycleListeners.delete(listener)
+    },
   }),
 }))
 
 beforeEach(() => {
   adapterForAgent = fakeAdapter
   v2ForAgent = null
+  statusLifecycleListeners.clear()
   jest.clearAllMocks()
 })
 
@@ -154,10 +174,13 @@ it("ignores a status response after switching agents", async () => {
 it("keeps failed V2 integration reads unknown with retry state", async () => {
   adapterForAgent = null
   v2ForAgent = { getSdkClient: () => v2Client }
-  v2Client.integration.list.mockRejectedValueOnce(new Error("integration unavailable"))
+  v2Client.integration.list.mockRejectedValue(new Error("integration unavailable"))
   const { result } = renderHook(() => useOpencodeStatus("v2", true))
   await waitFor(() => expect(result.current.status.surfaces?.providerAuth).toBe("error"))
   expect(result.current.status.providers[0].connected).toBeUndefined()
+  v2Client.integration.list.mockResolvedValue({
+    data: [{ id: "openai", connections: [{ type: "env", name: "OPENAI_API_KEY" }] }],
+  })
   await act(async () => {
     await result.current.refresh()
   })
@@ -183,4 +206,46 @@ it("clears the old snapshot while a different connected agent is loading", async
     finish({ fs: { status: "connected" }, gh: { state: "connected" } })
   })
   expect(result.current.status.providers).toHaveLength(2)
+})
+
+it("publishes partial agents before activation and rereads them before ready", async () => {
+  adapterForAgent = null
+  v2ForAgent = { getSdkClient: () => v2Client }
+  let finish!: () => void
+  v2Client.model.list.mockImplementationOnce(async () => {
+    await new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    return { data: [] }
+  })
+  const { result, unmount } = renderHook(() => useOpencodeStatus("v2", true))
+  await waitFor(() => expect(result.current.status.surfaces?.agents).toBe("partial"))
+  expect(result.current.status.agents).toEqual([{ id: "build", name: "Build" }])
+  v2Client.agent.list.mockResolvedValueOnce({ data: [{ id: "late", name: "Late plugin" }] })
+  await act(async () => {
+    finish()
+  })
+  await waitFor(() => expect(result.current.status.surfaces?.agents).toBe("ready"))
+  expect(result.current.status.agents).toEqual([{ id: "late", name: "Late plugin" }])
+  unmount()
+})
+
+it("rebinds discovery when the same Agent switches service client", async () => {
+  adapterForAgent = null
+  let current = v2Client
+  v2ForAgent = { getSdkClient: () => current }
+  const { result } = renderHook(() => useOpencodeStatus("v2", true))
+  await waitFor(() => expect(result.current.status.surfaces?.agents).toBe("ready"))
+  const replacement = {
+    ...v2Client,
+    agent: { list: jest.fn(async () => ({ data: [{ id: "replacement", name: "Replacement" }] })) },
+  }
+  current = replacement
+  act(() => {
+    statusLifecycleListeners.forEach((listener) => listener({ agentId: "v2" }))
+  })
+  await waitFor(() =>
+    expect(result.current.status.agents).toEqual([{ id: "replacement", name: "Replacement" }])
+  )
+  expect(replacement.agent.list).toHaveBeenCalled()
 })

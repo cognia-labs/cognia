@@ -7,6 +7,19 @@ import { getExternalAgentManager } from "@/lib/ai/agent/external/manager"
 
 function fixture() {
   const client = {
+    model: { list: jest.fn(async () => ({ data: [] })) },
+    event: {
+      subscribe: ({ signal }: { signal: AbortSignal }) => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "server.connected" }
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) resolve()
+            else signal.addEventListener("abort", () => resolve(), { once: true })
+          })
+        },
+      }),
+    },
+
     integration: {
       list: jest.fn(async () => ({ data: [] })),
       oauth: {
@@ -51,7 +64,7 @@ it("refreshes service state on focus and cancels owned attempts on Agent switch"
   act(() => {
     window.dispatchEvent(new Event("focus"))
   })
-  await waitFor(() => expect(client.integration.list).toHaveBeenCalledTimes(2))
+  await waitFor(() => expect(client.integration.list).toHaveBeenCalledTimes(3))
   rerender({ id: "b" })
   await waitFor(() => expect(client.integration.oauth.cancel).toHaveBeenCalledTimes(1))
   expect(result.current.snapshot.attempt).toBeUndefined()
@@ -85,7 +98,7 @@ it("rebinds the same Agent when its service client changes", async () => {
     listeners[0]({ agentId: "a" })
   })
   await waitFor(() => expect(old.integration.oauth.cancel).toHaveBeenCalledTimes(1))
-  await waitFor(() => expect(next.integration.list).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(next.integration.list).toHaveBeenCalledTimes(2))
   expect(result.current.snapshot.attempt).toBeUndefined()
   unmount()
 })

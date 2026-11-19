@@ -6,6 +6,7 @@ import {
 import * as catalog from "../config/install-catalog"
 import { externalAgentDuplicateInput } from "../config/duplicate-config"
 import { externalAgentSandboxSupportsPlatform } from "../policy/security-policy"
+import { hostPlatformId } from "@/lib/tauri/os"
 import { EXTERNAL_AGENT_KEYRING_NAMESPACE } from "./credentials"
 import type { RegistryDiscoveryResult } from "./registry-discovery"
 export * from "@cognia/agent-runtime-kit/lifecycle/service"
@@ -89,25 +90,10 @@ export async function createDefaultLifecycleDependencies(): Promise<LifecycleDep
     // A host with no stable device identity gets a per-process one, which makes
     // every stored consent fail its host check rather than silently apply.
     hostId: (await getDeviceId()) ?? `ephemeral:${Math.random().toString(36).slice(2)}`,
-    platform: detectPlatform(),
+    platform: hostPlatformId() ?? "unknown",
     policyRevision: EXTERNAL_AGENT_SECURITY_POLICY_VERSION,
     now: () => new Date(),
   }
-}
-
-/**
- * This host's Node-style platform id.
- *
- * A browser renderer has no platform and no spawn path either, so it reports
- * the one platform where the sandbox is always available — the same fallback
- * `externalAgentSandboxSupportsPlatform` makes, kept consistent so the two
- * cannot disagree about whether a web shell may configure an agent.
- */
-function detectPlatform(): string {
-  if (typeof process !== "undefined" && typeof process.platform === "string") {
-    return process.platform
-  }
-  return "darwin"
 }
 
 let cachedService: ExternalAgentLifecycleService | null = null

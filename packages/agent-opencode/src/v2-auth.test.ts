@@ -27,7 +27,24 @@ function fixture() {
       cancel: jest.fn(async () => {}),
     },
   }
-  const auth = new OpenCodeV2Auth({ integration: api } as unknown as OpenCodeClient, "/repo")
+  const auth = new OpenCodeV2Auth(
+    {
+      model: { list: jest.fn(async () => ({ data: [] })) },
+      event: {
+        subscribe: ({ signal }: { signal: AbortSignal }) => ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: "server.connected" }
+            await new Promise<void>((resolve) => {
+              if (signal.aborted) resolve()
+              else signal.addEventListener("abort", () => resolve(), { once: true })
+            })
+          },
+        }),
+      },
+      integration: api,
+    } as unknown as OpenCodeClient,
+    "/repo"
+  )
   return { auth, api, attempt }
 }
 
@@ -35,7 +52,7 @@ afterEach(() => jest.useRealTimers())
 
 it("discovers OAuth methods and safe account summaries without reading credentials", async () => {
   const { auth, api } = fixture()
-  api.list.mockResolvedValueOnce({
+  api.list.mockResolvedValue({
     data: [
       {
         id: "opencode",
@@ -71,7 +88,7 @@ it("polls completion and refreshes service-owned login state", async () => {
   await auth.start("opencode", "device", {})
   await jest.advanceTimersByTimeAsync(1_000)
   expect(auth.getSnapshot().phase).toBe("complete")
-  expect(api.list).toHaveBeenCalledTimes(1)
+  expect(api.list).toHaveBeenCalledTimes(2)
   expect(api.oauth.connect).toHaveBeenCalledWith(
     { integrationID: "opencode", methodID: "device", answer: {}, location: { directory: "/repo" } },
     expect.anything()

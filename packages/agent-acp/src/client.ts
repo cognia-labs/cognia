@@ -763,6 +763,8 @@ export function buildSpawnArgs(
  */
 export class AcpClientAdapter extends BaseProtocolAdapter {
   readonly protocol = ACP_PROTOCOL
+  /** Present only when initialize negotiated the mid-turn steering extension. */
+  steerTurn?: (sessionId: string, text: string) => Promise<void>
 
   private readonly processHost: AgentProcessHost
   private readonly files: AgentFileHost
@@ -1082,6 +1084,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       return
     }
 
+    this.steerTurn = undefined
     this._config = config
     this.vendor?.validateConfiguration?.(config)
     if (this.vendor?.requiresGuardedClientPorts) {
@@ -1139,12 +1142,20 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
 
       // Initialize the protocol
       const initResult = await this.initialize()
+      const steering = initResult._meta?.steering
+      const supportsSteering =
+        steering !== null &&
+        typeof steering === "object" &&
+        !Array.isArray(steering) &&
+        "supported" in steering &&
+        steering.supported === true
       // Map agent capabilities to legacy format for backward compatibility
       this._capabilities = {
         ...(this.vendor?.permissionModes?.supportedCanonicalModes
           ? { permissionModes: [...this.vendor.permissionModes.supportedCanonicalModes] }
           : {}),
         streaming: true,
+        steering: supportsSteering,
         toolExecution: true,
         fileOperations: initResult.agentCapabilities?.promptCapabilities?.embeddedContext,
         // ACP's prompt capabilities default to false: an agent that leaves
@@ -1168,6 +1179,9 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
           initResult.agentCapabilities?.loadSession,
       }
       this._tools = []
+      this.steerTurn = supportsSteering
+        ? (sessionId, text) => this.steerActiveTurn(sessionId, text)
+        : undefined
 
       this._connectionStatus = "connected"
       this.reconnectAttempts = 0
@@ -1207,6 +1221,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
    * between "disconnected" and "error". Idempotent.
    */
   private async teardownTransport(terminalDeadline = Date.now() + 2_000): Promise<void> {
+    this.steerTurn = undefined
+    if (this._capabilities) this._capabilities = { ...this._capabilities, steering: false }
     const daemonLease = this.daemonLease
     this.daemonLease = undefined
     try {
@@ -1959,6 +1975,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     // Mark intent before the early-return so a reconnect already scheduled by a
     // concurrent process-exit/socket-close cannot resurrect the connection.
     this.intentionalDisconnect = true
+    this.steerTurn = undefined
+    if (this._capabilities) this._capabilities = { ...this._capabilities, steering: false }
     // A user/manager-initiated disconnect clears the rapid-crash breaker so a
     // later manual reconnect starts fresh instead of being blocked by an old
     // crash loop. Autonomous reconnection never routes through here, so the
@@ -2811,6 +2829,30 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     if (!this.peer.cancelRequest(requestId)) {
       this.sendNotification("$/cancel_request", { requestId })
     }
+  }
+
+  private async steerActiveTurn(sessionId: string, text: string): Promise<void> {
+    if (this.intentionalDisconnect || !this.isConnected() || this._capabilities?.steering !== true)
+      throw new Error("ACP turn steering is not negotiated")
+    const session = this._sessions.get(sessionId)
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
+    if (session.status !== "executing" || this.closedTerminalSessions.has(sessionId))
+      throw new Error("ACP steering requires an active turn")
+    if (!this.outboundGate(text)) throw new Error("ACP outbound payload blocked by the PII gate")
+    // This extension has no delivery id: retrying can inject the same input
+    // twice. Keep the original prompt, its cancellation and its deadline intact.
+    const result = await this.sendRequest<unknown>(
+      "_session/steering",
+      { sessionId, prompt: [{ type: "text", text }] },
+      this._config?.timeout ?? 30_000
+    )
+    if (result && typeof result === "object" && !Array.isArray(result)) {
+      const reply = result as { outcome?: unknown; reason?: unknown }
+      if (reply.outcome === "injected") return
+      if (reply.outcome === "promptRequired" && reply.reason === "noRunningTurn")
+        throw new Error("ACP steering requires an active turn: noRunningTurn")
+    }
+    throw new Error("ACP steering returned an invalid response")
   }
 
   /**
@@ -5900,6 +5942,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
    */
   private handleProcessExit(code: number): void {
     this._connectionStatus = "disconnected"
+    this.steerTurn = undefined
+    if (this._capabilities) this._capabilities = { ...this._capabilities, steering: false }
 
     // Reject all pending requests
     this.toolCallStates.clear()

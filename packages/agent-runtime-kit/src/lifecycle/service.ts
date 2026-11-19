@@ -129,6 +129,8 @@ export interface LifecycleStateRoots {
 export interface LifecycleDependencies<TRegistry = unknown> {
   catalog: RuntimeCatalog
   sandboxSupportsPlatform(platform: string): boolean
+  /** Only a Host with a real Windows exception launcher may enable consent. */
+  allowUnsandboxedWindowsLaunch?: boolean
   duplicateConfig(
     source: ExternalAgentConfig,
     options: ExternalAgentDuplicateOptions | string
@@ -568,10 +570,13 @@ export class ExternalAgentLifecycleService<TRegistry = unknown> {
    * now go through {@link launchIdentity}.
    */
   async grantUnsandboxedWindowsConsent(id: string): Promise<UnsandboxedLaunchConsent> {
-    if (this.deps.catalog.normalizePlatform(this.deps.platform) !== "win32") {
+    if (
+      !this.deps.allowUnsandboxedWindowsLaunch ||
+      this.deps.catalog.normalizePlatform(this.deps.platform) !== "win32"
+    ) {
       throw new ExternalAgentLifecycleError(
         "platform_unsupported",
-        "unsandboxed launch consent exists only on Windows desktop",
+        "this Host does not support the Windows launch exception",
         { platform: this.deps.platform }
       )
     }
@@ -935,9 +940,10 @@ export class ExternalAgentLifecycleService<TRegistry = unknown> {
 
     if (this.deps.sandboxSupportsPlatform(this.deps.platform)) return undefined
 
-    // Unix without a sandbox is unreachable (both supported platforms have
-    // one), so this is the Windows case: allowed only with valid consent.
-    if (this.deps.catalog.normalizePlatform(this.deps.platform) !== "win32") {
+    if (
+      !this.deps.allowUnsandboxedWindowsLaunch ||
+      this.deps.catalog.normalizePlatform(this.deps.platform) !== "win32"
+    ) {
       return {
         status: "blocked",
         reasonCode: "platform_unsupported",
@@ -990,7 +996,12 @@ export class ExternalAgentLifecycleService<TRegistry = unknown> {
   }
 
   private assessConsent(config: LifecycleAgentConfig): ReadinessVerdict | undefined {
-    if (this.deps.sandboxSupportsPlatform(this.deps.platform)) return undefined
+    if (
+      !this.deps.allowUnsandboxedWindowsLaunch ||
+      config.transport !== "stdio" ||
+      this.deps.sandboxSupportsPlatform(this.deps.platform)
+    )
+      return undefined
 
     const identity = this.launchIdentity(config)
     if (!identity) return undefined

@@ -235,6 +235,77 @@ describe("current OpenCode V2 adapter", () => {
       await adapter.disconnect()
     }
   )
+  it("retains authoritative session usage without treating it as another turn", async () => {
+    await adapter.connect(config)
+    await adapter.createSession()
+    client.event.subscribe.mockReturnValueOnce(
+      streamEvents(
+        event("server.connected"),
+        event("session.usage.updated", {
+          tokens: { input: 30, output: 5, reasoning: 2, cache: { read: 20, write: 3 } },
+          cost: 0.004,
+        }),
+        event("session.execution.succeeded")
+      )
+    )
+    await collect(adapter.prompt("s1", message))
+    expect(adapter.getSession("s1")?.metadata?.opencodeSessionUsage).toMatchObject({
+      totalTokens: 37,
+      providerCost: { amount: 0.004, currency: "USD" },
+    })
+  })
+  it("refreshes late models after a turn completes and isolates discovery errors", async () => {
+    await adapter.connect(config)
+    await adapter.createSession()
+    let finish!: (result: { data: object[] }) => void
+    client.model.list.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    client.event.subscribe.mockReturnValueOnce(
+      streamEvents(
+        event("server.connected"),
+        event("model.updated"),
+        event("session.execution.succeeded")
+      )
+    )
+    await collect(adapter.prompt("s1", message))
+    finish({
+      data: [{ id: "auto", providerID: "copilot", name: "Auto", enabled: true, variants: [] }],
+    })
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    expect(adapter.getSessionModels("s1")?.availableModels).toEqual(
+      expect.arrayContaining([expect.objectContaining({ modelId: "copilot/auto" })])
+    )
+    client.model.list.mockRejectedValueOnce(new Error("catalog unavailable"))
+    client.event.subscribe.mockReturnValueOnce(
+      streamEvents(
+        event("server.connected"),
+        event("credential.updated", { integrationID: "copilot", credentialID: "account" }),
+        event("session.execution.succeeded")
+      )
+    )
+    expect(await collect(adapter.prompt("s1", message))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "done", success: true })])
+    )
+    expect(client.session.interrupt).not.toHaveBeenCalled()
+  })
+
+  it("restores authoritative session totals from native session info", async () => {
+    await adapter.connect(config)
+    client.session.create.mockResolvedValueOnce({
+      ...info(),
+      cost: 0.012,
+      tokens: { input: 30, output: 5, reasoning: 2, cache: { read: 20, write: 3 } },
+    })
+    const session = await adapter.createSession()
+    expect(session.metadata?.opencodeSessionUsage).toMatchObject({
+      totalTokens: 37,
+      providerCost: { amount: 0.012, currency: "USD" },
+    })
+  })
+
   it("refuses SDK connection when placement changes during discovery", async () => {
     jest.mocked(discoverOpenCodeV2ViaSidecar).mockImplementationOnce(async () => {
       placed.add(config.id)
@@ -408,9 +479,15 @@ describe("current OpenCode V2 adapter", () => {
       list: jest.fn(),
       oauth: { connect: jest.fn(), status: jest.fn(), complete: jest.fn(), cancel: jest.fn() },
     }
-    jest.mocked(OpenCode.make).mockReturnValueOnce({ integration: authApi } as never)
+    jest.mocked(OpenCode.make).mockReturnValueOnce({
+      integration: authApi,
+      model: { list: jest.fn() },
+      event: { subscribe: jest.fn() },
+    } as never)
     const auth = adapter.getAuthClient()
-    expect(Object.keys(auth)).toEqual(["integration"])
+    expect(Object.keys(auth)).toEqual(["integration", "model", "event"])
+    expect(Object.keys(auth.model)).toEqual(["list"])
+    expect(Object.keys(auth.event)).toEqual(["subscribe"])
     expect(Object.keys(auth.integration)).toEqual(["list", "oauth"])
     expect(adapter.getAuthClient()).toBe(auth)
     const authOptions = jest.mocked(OpenCode.make).mock.calls.at(-1)![0]!

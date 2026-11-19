@@ -758,6 +758,16 @@ describe("Windows unsandboxed consent", () => {
       },
     })
 
+  it("reports an eligible runtime blocked when the Host cannot launch the exception", async () => {
+    const { service, store, manager } = build({ platform: "win32" }, [boundConfig()])
+    await expect(service.grantUnsandboxedWindowsConsent("agent-1")).rejects.toMatchObject({
+      code: "platform_unsupported",
+    })
+    await expect(service.connect("agent-1")).rejects.toMatchObject({ code: "platform_unsupported" })
+    expect(store.getAgent("agent-1")?.unsandboxedConsent).toBeUndefined()
+    expect(manager.connect).not.toHaveBeenCalled()
+  })
+
   it("refuses on macOS, where the sandbox is mandatory", async () => {
     const { service } = build({ platform: "darwin" }, [boundConfig()])
     await expect(service.grantUnsandboxedWindowsConsent("agent-1")).rejects.toMatchObject({
@@ -773,23 +783,33 @@ describe("Windows unsandboxed consent", () => {
   })
 
   it("refuses a runtime the catalog does not mark eligible", async () => {
-    const { service } = build({ platform: "win32" }, [boundConfig({ runtimeId: "droid" })])
+    const { service } = build({ platform: "win32", allowUnsandboxedWindowsLaunch: true }, [
+      boundConfig({ runtimeId: "droid" }),
+    ])
     await expect(service.grantUnsandboxedWindowsConsent("agent-1")).rejects.toMatchObject({
       code: "platform_unsupported",
     })
   })
 
   it("refuses an agent bound to no runtime, rather than approving an unknown command", async () => {
-    const { service } = build({ platform: "win32" }, [stdioConfig()])
+    const { service } = build({ platform: "win32", allowUnsandboxedWindowsLaunch: true }, [
+      stdioConfig(),
+    ])
     await expect(service.grantUnsandboxedWindowsConsent("agent-1")).rejects.toMatchObject({
       code: "runtime_missing",
     })
   })
 
   it("binds consent to the host and policy revision it was given under", async () => {
-    const { service, store } = build({ platform: "win32", hostId: "win-host", policyRevision: 7 }, [
-      boundConfig(),
-    ])
+    const { service, store } = build(
+      {
+        platform: "win32",
+        allowUnsandboxedWindowsLaunch: true,
+        hostId: "win-host",
+        policyRevision: 7,
+      },
+      [boundConfig()]
+    )
 
     const consent = await service.grantUnsandboxedWindowsConsent("agent-1")
 
@@ -808,9 +828,10 @@ describe("Windows unsandboxed consent", () => {
   it("describes the command that would run, not one the caller supplied", async () => {
     // The UI used to hand in its own identity; it described what it displayed
     // while the check described what would run.
-    const { service, store } = build({ platform: "win32", hostId: "win-host" }, [
-      boundConfig({ executableDigest: "c".repeat(64) }),
-    ])
+    const { service, store } = build(
+      { platform: "win32", allowUnsandboxedWindowsLaunch: true, hostId: "win-host" },
+      [boundConfig({ executableDigest: "c".repeat(64) })]
+    )
 
     const consent = await service.grantUnsandboxedWindowsConsent("agent-1")
 
@@ -825,9 +846,10 @@ describe("Windows unsandboxed consent", () => {
   it("invalidates an approval once the executable underneath it changes", async () => {
     // This could not fire before: the check read the digest out of the consent
     // it was checking, so it compared a value with itself.
-    const { service, store } = build({ platform: "win32", hostId: "win-host" }, [
-      boundConfig({ executableDigest: "c".repeat(64) }),
-    ])
+    const { service, store } = build(
+      { platform: "win32", allowUnsandboxedWindowsLaunch: true, hostId: "win-host" },
+      [boundConfig({ executableDigest: "c".repeat(64) })]
+    )
     await service.grantUnsandboxedWindowsConsent("agent-1")
     expect(store.getAgent("agent-1")?.lifecycleStatus).toBe("ready")
 
@@ -843,9 +865,10 @@ describe("Windows unsandboxed consent", () => {
   })
 
   it("revoking consent removes the record and stops the agent", async () => {
-    const { service, store, manager } = build({ platform: "win32", hostId: "win-host" }, [
-      boundConfig(),
-    ])
+    const { service, store, manager } = build(
+      { platform: "win32", allowUnsandboxedWindowsLaunch: true, hostId: "win-host" },
+      [boundConfig()]
+    )
     await service.grantUnsandboxedWindowsConsent("agent-1")
     await service.connect("agent-1").catch(() => {})
     manager.instances.set("agent-1", { sessions: new Map() })
@@ -858,11 +881,14 @@ describe("Windows unsandboxed consent", () => {
   })
 
   it("blocks a Windows launch whose consent no longer matches what would run", async () => {
-    const { service, store } = build({ platform: "win32", hostId: "win-host" }, [
-      stdioConfig({
-        runtimeBinding: { runtimeId: "codex-acp", ownership: "system" },
-      }),
-    ])
+    const { service, store } = build(
+      { platform: "win32", allowUnsandboxedWindowsLaunch: true, hostId: "win-host" },
+      [
+        stdioConfig({
+          runtimeBinding: { runtimeId: "codex-acp", ownership: "system" },
+        }),
+      ]
+    )
 
     await expect(service.connect("agent-1")).rejects.toMatchObject({ code: "consent_required" })
     expect(store.getAgent("agent-1")?.lifecycleStatus).toBe("needs-consent")

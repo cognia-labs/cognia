@@ -36,6 +36,20 @@ describe("liveCapabilityFacts", () => {
     expect(cells["session.resume"]?.level).toBe("unsupported")
   })
 
+  it("answers steering only from the negotiated extension flag", () => {
+    expect(liveCapabilityFacts({ negotiated: { steering: true } }).steer).toEqual({
+      level: "native",
+      evidence: "handshake",
+      reasonKey: "negotiatedSteering",
+    })
+    expect(liveCapabilityFacts({ negotiated: { steering: false } }).steer).toEqual({
+      level: "unsupported",
+      evidence: "handshake",
+      reasonKey: "negotiatedNoSteering",
+    })
+    expect(liveCapabilityFacts({ negotiated: { streaming: true } }).steer).toBeUndefined()
+  })
+
   it("treats an OMITTED mcpTools flag as no evidence, not as a refusal", () => {
     // Every shipped ACP preset omits the flag, and the codebase has always
     // read that omission as "the protocol slot exists". Emitting an

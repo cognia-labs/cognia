@@ -94,7 +94,7 @@ function createHost(options: HarnessOptions = {}) {
 
 const envelope = (id: string) => ({ eventId: id, sequence: 0, event: { kind: "text-delta" } })
 
-describe("client — ADR-0142 Phase 1 surfaces", () => {
+describe("client protocol negotiation and lifecycle", () => {
   it("sends the real package version, not a hardcoded string", async () => {
     const host = createHost()
     const client = await createCogniaClient({ host: { kind: "streams", ...host.streams } })

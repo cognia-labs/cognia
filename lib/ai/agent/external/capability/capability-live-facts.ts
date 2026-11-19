@@ -58,6 +58,11 @@ export function liveCapabilityFacts(
     if (negotiated.streaming === true) cells.streaming = yes("negotiatedStreaming")
     if (negotiated.streaming === false) cells.streaming = no("negotiatedNoStreaming")
 
+    // ACP has no baseline steering method; the initialize extension flag is
+    // the evidence that this build supports it. Other protocols omit the flag.
+    if (negotiated.steering === true) cells.steer = yes("negotiatedSteering")
+    if (negotiated.steering === false) cells.steer = no("negotiatedNoSteering")
+
     // `multiTurn` is not what its name suggests. `acp-client.ts` sets it from
     // `initResult.agentCapabilities.loadSession`, so it answers "can this agent
     // REOPEN a session?" — the resume capability, not the multi-turn one.

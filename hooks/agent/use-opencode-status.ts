@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { OpenCodeV2Catalog } from "@cognia/agent-opencode/v2-catalog"
 
 /** Normalized snapshot of a connected OpenCode server's status surfaces. */
 export interface OpencodeStatus {
@@ -18,7 +19,7 @@ export interface OpencodeStatus {
   surfaces?: Partial<
     Record<
       "providers" | "providerAuth" | "agents" | "commands" | "mcp" | "lsp" | "project",
-      "loading" | "ready" | "error" | "unsupported"
+      "loading" | "partial" | "ready" | "error" | "unsupported"
     >
   >
   /** Current project info (worktree path, VCS kind) when available. */
@@ -81,6 +82,16 @@ export function useOpencodeStatus(
     available: boolean
   }>({ request: null, status: EMPTY_STATUS, loading: false, available: false })
   const issued = useRef(0)
+  const catalogBinding = useRef<
+    | {
+        request: typeof request
+        catalog: OpenCodeV2Catalog
+        client: object
+        directory?: string
+        unsubscribe?: () => void
+      }
+    | undefined
+  >(undefined)
 
   const refresh = useCallback(async () => {
     if (!connected) return
@@ -113,53 +124,73 @@ export function useOpencodeStatus(
         const client = v2.getSdkClient()
         const directory = manager.getAgent(agentId)?.config.process?.cwd
         const input = directory ? { location: { directory } } : undefined
-        const [providers, integrations, agents, commands, mcp, project] = await Promise.allSettled([
-          client.provider.list(input),
-          client.integration.list(input),
-          client.agent.list(input),
-          client.command.list(input),
-          client.mcp.list(input),
-          client.location.get(input),
-        ])
-        if (issued.current !== ticket) return
-        publish({
-          status: {
-            providers:
-              providers.status === "fulfilled"
-                ? providers.value.data.map(({ id, name, integrationID }) => {
-                    const integration =
-                      integrations.status === "fulfilled"
-                        ? integrations.value.data.find((item) => item.id === integrationID)
-                        : undefined
-                    return {
-                      id,
-                      name,
-                      connected: integration
+        if (
+          catalogBinding.current?.request !== request ||
+          catalogBinding.current.client !== client ||
+          catalogBinding.current.directory !== directory
+        ) {
+          catalogBinding.current?.unsubscribe?.()
+          catalogBinding.current?.catalog.dispose()
+          catalogBinding.current = {
+            request,
+            client,
+            directory,
+            catalog: new OpenCodeV2Catalog(client, directory),
+          }
+        }
+        const binding = catalogBinding.current
+        binding.unsubscribe?.()
+        let reads: Awaited<ReturnType<typeof readStatus>> | undefined
+        const readStatus = () =>
+          Promise.allSettled([client.mcp.list(input), client.location.get(input)] as const)
+        const publishV2 = () => {
+          const catalog = binding.catalog.getSnapshot()
+          const [mcp, project] = reads ?? []
+          publish({
+            status: {
+              providers: catalog.providers.map(({ id, name, integrationID }) => {
+                const integration = catalog.integrations.find((item) => item.id === integrationID)
+                return {
+                  id,
+                  name,
+                  connected:
+                    catalog.states.integrations === "error"
+                      ? undefined
+                      : integration
                         ? integration.connections.some((connection) => !connection.status)
                         : undefined,
-                    }
-                  })
-                : [],
-            agents: agents.status === "fulfilled" ? agents.value.data : [],
-            commands: commands.status === "fulfilled" ? commands.value.data : [],
-            mcpServers:
-              mcp.status === "fulfilled"
-                ? mcp.value.data.map(({ name, status }) => ({ name, status: status.status }))
-                : [],
-            lspServers: [],
-            project:
-              project.status === "fulfilled" ? { worktree: project.value.directory } : undefined,
-            surfaces: {
-              providers: providers.status === "fulfilled" ? "ready" : "error",
-              providerAuth: integrations.status === "fulfilled" ? "ready" : "error",
-              agents: agents.status === "fulfilled" ? "ready" : "error",
-              commands: commands.status === "fulfilled" ? "ready" : "error",
-              mcp: mcp.status === "fulfilled" ? "ready" : "error",
-              project: project.status === "fulfilled" ? "ready" : "error",
-              lsp: "unsupported",
+                }
+              }),
+              agents: catalog.agents,
+              commands: catalog.commands,
+              mcpServers:
+                mcp?.status === "fulfilled"
+                  ? mcp.value.data.map(({ name, status }) => ({ name, status: status.status }))
+                  : [],
+              lspServers: [],
+              project:
+                project?.status === "fulfilled" ? { worktree: project.value.directory } : undefined,
+              surfaces: {
+                providers: catalog.states.providers,
+                providerAuth: catalog.states.integrations,
+                agents: catalog.states.agents,
+                commands: catalog.states.commands,
+                mcp: !mcp ? "loading" : mcp.status === "fulfilled" ? "ready" : "error",
+                project: !project ? "loading" : project.status === "fulfilled" ? "ready" : "error",
+                lsp: "unsupported",
+              },
             },
-          },
-        })
+          })
+        }
+        binding.unsubscribe = binding.catalog.subscribe(publishV2)
+        publishV2()
+        await Promise.all([
+          binding.catalog.refresh(),
+          readStatus().then((result) => {
+            reads = result
+            publishV2()
+          }),
+        ])
       } else if (adapter) {
         const [mcp, lsp, project] = await Promise.allSettled([
           adapter.getMcpStatus(),
@@ -229,11 +260,27 @@ export function useOpencodeStatus(
   }, [agentId, connected, request])
 
   useEffect(() => {
+    let alive = true
+    let unsubscribe: (() => void) | undefined
     void refresh()
+    if (connected)
+      void import("@/lib/ai/agent/external/manager")
+        .then(({ getExternalAgentManager }) => {
+          if (alive)
+            unsubscribe = getExternalAgentManager().addLifecycleListener((event) => {
+              if (event.agentId === agentId) void refresh()
+            })
+        })
+        .catch(() => undefined)
     return () => {
+      alive = false
+      unsubscribe?.()
       issued.current += 1
+      catalogBinding.current?.unsubscribe?.()
+      catalogBinding.current?.catalog.dispose()
+      catalogBinding.current = undefined
     }
-  }, [refresh])
+  }, [refresh, agentId, connected])
 
   const current = connected && snapshot.request === request
   return {

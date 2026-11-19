@@ -23,7 +23,7 @@ export type OpenCodeEvent =
   | Exclude<V2Event, { type: "form.created" }>
   | (Omit<Extract<V2Event, { type: "form.created" }>, "data"> & { data: { form: FormInfo } })
 
-function mapUsage(tokens: TokenUsageInfo, cost?: number): ExternalAgentTokenUsage {
+export function mapOpenCodeV2Usage(tokens: TokenUsageInfo, cost?: number): ExternalAgentTokenUsage {
   return {
     promptTokens: tokens.input,
     completionTokens: tokens.output + tokens.reasoning,
@@ -142,7 +142,9 @@ export function mapOpenCodeV2Messages(messages: SessionMessageInfo[]): ExternalA
         else
           content.push({
             type: "text",
-            text: [message.summary, message.recent].filter(Boolean).join("\n\n"),
+            text: [message.summary, "recent" in message ? message.recent : undefined]
+              .filter(Boolean)
+              .join("\n\n"),
           })
         break
       case "shell": {
@@ -174,7 +176,7 @@ export function mapOpenCodeV2Messages(messages: SessionMessageInfo[]): ExternalA
       content,
       timestamp: new Date(message.time.created),
       ...("tokens" in message && message.tokens
-        ? { tokenUsage: mapUsage(message.tokens, message.cost) }
+        ? { tokenUsage: mapOpenCodeV2Usage(message.tokens, message.cost) }
         : {}),
       metadata: { ...message.metadata, openCodeMessage: message },
     }
@@ -257,7 +259,7 @@ export class OpenCodeV2EventMapper {
       write += tokens.cache.write
       cost += step.cost
     }
-    return mapUsage({ input, output, reasoning, cache: { read, write } }, cost)
+    return mapOpenCodeV2Usage({ input, output, reasoning, cache: { read, write } }, cost)
   }
 
   map(event: OpenCodeEvent): ExternalAgentEvent[] {
@@ -270,6 +272,18 @@ export class OpenCodeV2EventMapper {
       timestamp: new Date("created" in event ? event.created : Date.now()),
     }
     switch (event.type) {
+      case "session.usage.updated":
+        // Includes session.generate/cache-warming requests. Keep authoritative
+        // session totals separate from step/turn usage to avoid double counting.
+        return [
+          {
+            ...base,
+            type: "session_info_update",
+            metadata: {
+              opencodeSessionUsage: mapOpenCodeV2Usage(event.data.tokens, event.data.cost),
+            },
+          },
+        ]
       case "session.execution.started":
         this.resetExecution()
         return []

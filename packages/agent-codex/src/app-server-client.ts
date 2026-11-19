@@ -2985,6 +2985,10 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
         return
       }
       case "commandExecution": {
+        const output = item.aggregatedOutput ?? ""
+        const nestedSeatbeltFailure =
+          item.exitCode === 71 &&
+          output.includes("sandbox-exec: sandbox_apply: Operation not permitted")
         this.emit(sessionId, {
           type: "tool_use_end",
           sessionId,
@@ -2997,7 +3001,10 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
           sessionId,
           timestamp: new Date(),
           toolUseId: id,
-          result: item.aggregatedOutput ?? "",
+          result: nestedSeatbeltFailure
+            ? output.trimEnd() +
+              "\nCodex could not apply its nested macOS sandbox. Run this task on a compatible isolated Host."
+            : output,
           isError:
             item.status === "failed" ||
             item.status === "declined" ||

@@ -42,6 +42,9 @@ const getDeviceId = jest.fn(async () => "device-abc")
 // Jest runs in neither Tauri nor the headless brain, so the default is the
 // browser answer; flip it to prove the on-host branch as well.
 const supportsProcesses = jest.fn(() => false)
+const hostPlatformId = jest.fn<string | undefined, []>(() => process.platform)
+
+jest.mock("@/lib/tauri/os", () => ({ hostPlatformId: () => hostPlatformId() }))
 
 jest.mock("@/stores/agent/external-agent-store", () => ({
   useExternalAgentStore: { getState: () => storeState },
@@ -76,6 +79,7 @@ beforeEach(() => {
   jest.clearAllMocks()
   getDeviceId.mockResolvedValue("device-abc")
   supportsProcesses.mockReturnValue(false)
+  hostPlatformId.mockReturnValue(process.platform)
   __resetLifecycleServiceForTests()
 })
 
@@ -152,6 +156,18 @@ describe("createDefaultLifecycleDependencies", () => {
     const deps = await createDefaultLifecycleDependencies()
     expect(deps.platform).toBe(process.platform)
     expect(deps.now()).toBeInstanceOf(Date)
+  })
+
+  it("uses the Windows WebView platform for strict local launch readiness", async () => {
+    hostPlatformId.mockReturnValue("windows")
+    const deps = await createDefaultLifecycleDependencies()
+    expect(deps.platform).toBe("windows")
+    expect(deps.allowUnsandboxedWindowsLaunch).toBeUndefined()
+  })
+
+  it("does not assume a supported platform when the Host cannot identify itself", async () => {
+    hostPlatformId.mockReturnValue(undefined)
+    expect((await createDefaultLifecycleDependencies()).platform).toBe("unknown")
   })
 
   it("leaves the runtime host absent on a host with no processes", async () => {

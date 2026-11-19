@@ -735,6 +735,8 @@ export type AcpCompactionStatus = SdkAcpCompactionStatus
 export interface AcpCapabilities {
   /** Agent supports streaming responses */
   streaming?: boolean
+  /** Mid-turn steering extension explicitly negotiated during initialization. */
+  steering?: boolean
   /** Agent can execute tools */
   toolExecution?: boolean
   /** Agent supports file operations */

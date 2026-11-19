@@ -25,6 +25,76 @@ beforeEach(() => {
 })
 
 describe("createExternalAgentTraceBridge", () => {
+  it("maps the manager's standard result and preserves reported USD accounting on failure", async () => {
+    const cap = captureWriter()
+    cap.install()
+    const bridge = createExternalAgentTraceBridge({ sessionId: "s1", agentId: "a1", turnId: "t1" })
+    await bridge.onStart("p")
+    await bridge.onComplete({
+      success: false,
+      finalResponse: "partial answer",
+      error: "provider failed",
+      tokenUsage: {
+        promptTokens: 150,
+        promptTokensIncludeCache: true,
+        completionTokens: 20,
+        totalTokens: 170,
+        cacheReadTokens: 40,
+        cacheWriteTokens: 10,
+        providerCost: { amount: 0.03, currency: "USD" },
+      },
+    })
+    expect(cap.spans[0]).toMatchObject({
+      status: "error",
+      errorType: "external_agent_error",
+      errorMessage: "provider failed",
+      turnId: "t1",
+      outputPreview: "partial answer",
+      usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 40, cacheCreationTokens: 10 },
+      costUsdEstimate: 0.03,
+    })
+  })
+
+  it("retains the latest streamed usage and output when the manager closes with an empty summary", async () => {
+    const cap = captureWriter()
+    cap.install()
+    const bridge = createExternalAgentTraceBridge({ sessionId: "s1", agentId: "a1" })
+    await bridge.onStart("p")
+    await bridge.onEvent({ type: "message_delta", delta: { type: "text", text: "answer" } })
+    await bridge.onEvent({
+      type: "usage_update",
+      tokenUsage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    })
+    await bridge.onEvent({
+      type: "done",
+      success: false,
+      tokenUsage: { promptTokens: 20, completionTokens: 4, totalTokens: 24 },
+    })
+    await bridge.onComplete({ success: false, finalResponse: "" })
+    expect(cap.spans[0]).toMatchObject({
+      status: "error",
+      outputPreview: "answer",
+      usage: { inputTokens: 20, outputTokens: 4 },
+    })
+  })
+
+  it("does not relabel non-USD provider cost or empty counters as USD or real usage", async () => {
+    const cap = captureWriter()
+    cap.install()
+    const bridge = createExternalAgentTraceBridge({ sessionId: "s1", agentId: "a1" })
+    await bridge.onStart("p")
+    await bridge.onComplete({
+      success: true,
+      tokenUsage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        providerCost: { amount: 2, currency: "EUR" },
+      },
+    })
+    expect(cap.spans[0].costUsdEstimate).toBeUndefined()
+    expect(cap.spans[0].usage).toBeUndefined()
+  })
   it("returns a bridge exposing the 4 lifecycle methods", () => {
     const bridge = createExternalAgentTraceBridge({ sessionId: "s1", agentId: "a1" })
     expect(typeof bridge.onStart).toBe("function")
@@ -171,11 +241,24 @@ describe("createExternalAgentTraceBridge", () => {
     cap.install()
     const bridge = createExternalAgentTraceBridge({ sessionId: "s1", agentId: "a1" })
     await bridge.onStart("p")
+    await bridge.onEvent({
+      type: "usage_update",
+      tokenUsage: {
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+        providerCost: { amount: 0.03, currency: "USD" },
+      },
+    })
     await bridge.onError(new Error("boom"), { detail: 1 })
     expect(cap.spans).toHaveLength(1)
     expect(cap.spans[0].errorType).toBe("external_agent_error")
     expect(cap.spans[0].errorMessage).toBe("boom")
     expect(cap.spans[0].metadata?.context).toEqual({ detail: 1 })
+    expect(cap.spans[0]).toMatchObject({
+      usage: { inputTokens: 10, outputTokens: 2 },
+      costUsdEstimate: 0.03,
+    })
   })
 
   it("onError accepts a string error and stringifies non-Error objects", async () => {

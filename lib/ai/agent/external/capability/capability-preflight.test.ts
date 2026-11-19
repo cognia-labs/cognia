@@ -1,5 +1,6 @@
 import { admitNegotiatedExternalAgent, preflightExternalAgent } from "./capability-preflight"
 import { negotiateCapabilityProfile } from "./capability-profile"
+import { liveCapabilityFacts } from "./capability-live-facts"
 
 const always = () => true
 const never = () => false
@@ -67,6 +68,18 @@ describe("preflightExternalAgent", () => {
     expect(result.ok).toBe(true)
   })
 
+  it("lets ACP negotiate a required steering extension before deciding", () => {
+    const result = preflightExternalAgent({
+      protocol: "acp",
+      presetId: "opencode-acp",
+      requires: ["steer"],
+      hasAdapter: always,
+    })
+    expect(result.ok).toBe(true)
+    expect(result.profile.effective.steer.level).toBe("unknown")
+    expect(result.profile.negotiated).toBe(false)
+  })
+
   it("reports an external-only capability in detail rather than in `capability`", () => {
     const result = preflightExternalAgent({
       protocol: "acp",
@@ -97,6 +110,32 @@ describe("preflightExternalAgent", () => {
 })
 
 describe("admitNegotiatedExternalAgent", () => {
+  it.each([false, undefined])(
+    "refuses ACP steering after a non-supporting handshake: %j",
+    (steering) => {
+      const profile = negotiateCapabilityProfile({
+        protocol: "acp",
+        presetId: "opencode-acp",
+        adapter: {},
+        liveFacts: liveCapabilityFacts({ negotiated: { steering } }),
+      })
+      expect(profile.effective.steer.level).toBe("unsupported")
+      const result = admitNegotiatedExternalAgent({ profile, requires: ["steer"] })
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error.code).toBe("unsupported_capability")
+    }
+  )
+
+  it("admits ACP steering after the extension is negotiated and wired", () => {
+    const profile = negotiateCapabilityProfile({
+      protocol: "acp",
+      presetId: "opencode-acp",
+      adapter: { steerTurn: () => undefined },
+      liveFacts: liveCapabilityFacts({ negotiated: { steering: true } }),
+    })
+    expect(admitNegotiatedExternalAgent({ profile, requires: ["steer"] })).toEqual({ ok: true })
+  })
+
   it("refuses to admit a profile that was never negotiated", () => {
     const profile = negotiateCapabilityProfile({ protocol: "acp" })
     const result = admitNegotiatedExternalAgent({ profile })

@@ -4,6 +4,7 @@ import type {
   ModelRef,
   SessionInfo,
   SessionMessageInfo,
+  V2Event,
   PermissionRuleset,
 } from "@opencode/client"
 import { defineAdapterExtension } from "@cognia/agent-contracts/adapter-extension"
@@ -33,7 +34,7 @@ import {
   assertNativeToolDeniesExpressible,
 } from "@cognia/agent-contracts/external-agent"
 import { validateAcpElicitationResponse } from "@cognia/agent-runtime-kit/elicitation"
-import { OpenCodeV2EventMapper, mapOpenCodeV2Messages } from "./v2-events"
+import { OpenCodeV2EventMapper, mapOpenCodeV2Messages, mapOpenCodeV2Usage } from "./v2-events"
 import {
   assertOpenCodeV2LocalPlacement,
   canProjectOpenCodeV2Mcp,
@@ -258,6 +259,7 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
   private catalog = new Map<string, ModelInfo[]>()
   private models = new Map<string, ModelRef>()
   private commands = new Map<string, AcpAvailableCommand[]>()
+  private modelCatalogRequests = new Map<string, AbortController>()
   private active = new Map<string, ActiveTurn>()
   private restoredForms = new Map<string, { sessionId: string; request: AcpElicitationRequest }>()
   private connection = new AbortController()
@@ -300,7 +302,69 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
     this.channels.delete(sessionId)
   }
 
+  private async refreshModelsForEvent(sessionId: string, event: V2Event): Promise<void> {
+    if (
+      ![
+        "model.updated",
+        "provider.updated",
+        "integration.updated",
+        "credential.updated",
+        "credential.switched",
+      ].includes(event.type)
+    )
+      return
+    const session = this.getSession(sessionId)
+    const directory = session?.metadata?.directory
+    if (
+      !session ||
+      typeof directory !== "string" ||
+      (event.location && event.location.directory !== directory)
+    )
+      return
+    this.modelCatalogRequests.get(sessionId)?.abort()
+    const controller = new AbortController()
+    this.modelCatalogRequests.set(sessionId, controller)
+    const signal = AbortSignal.any([
+      this.connection.signal,
+      controller.signal,
+      AbortSignal.timeout(90_000),
+    ])
+    try {
+      const client = this.getSdkClient(sessionId)
+      const result = await client.model.list({ location: { directory } }, { signal })
+      if (signal.aborted || !this.getSession(sessionId) || this.getSdkClient(sessionId) !== client)
+        return
+      this.catalog.set(
+        sessionId,
+        result.data.filter((model) => model.enabled)
+      )
+      this.updateMetadata(sessionId)
+      this.publish(sessionId, {
+        type: "config_options_update",
+        sessionId,
+        timestamp: new Date(),
+        configOptions: this.getConfigOptions(sessionId) ?? [],
+      })
+    } catch {
+      // Catalog discovery must never interrupt a running inference or tool call.
+    } finally {
+      if (this.modelCatalogRequests.get(sessionId) === controller)
+        this.modelCatalogRequests.delete(sessionId)
+    }
+  }
+
+  private retainSessionInfo(event: ExternalAgentEvent): void {
+    if (event.type !== "session_info_update" || !event.sessionId) return
+    const session = this.requireSession(event.sessionId)
+    session.metadata = {
+      ...session.metadata,
+      ...event.metadata,
+      ...(event.title !== undefined ? { title: event.title } : {}),
+    }
+  }
+
   private publish(sessionId: string, event: ExternalAgentEvent): void {
+    this.retainSessionInfo(event)
     const channel = this.channels.get(sessionId)
     if (
       channel?.discarding &&
@@ -358,6 +422,7 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
             ready()
             continue
           }
+          void this.refreshModelsForEvent(sessionId, native)
           if (native.type === "command.updated") {
             await this.refreshSessionCommands(sessionId)
             continue
@@ -500,9 +565,13 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
         const auth = OpenCode.make({
           baseUrl: endpoint,
           headers: Object.fromEntries(headers.entries()),
-          fetch: (input, init) => this.fetch(input, { ...init, readTimeout: 15_000 }),
+          fetch: (input, init) => this.fetch(input, { ...init, readTimeout: 90_000 }),
         })
-        return { integration: { list: auth.integration.list, oauth: auth.integration.oauth } }
+        return {
+          integration: { list: auth.integration.list, oauth: auth.integration.oauth },
+          model: { list: auth.model.list },
+          event: { subscribe: auth.event.subscribe },
+        }
       }
       const status = await this.client.server.info({ signal: this.connection.signal })
       if (
@@ -579,6 +648,8 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
     this.authClient = undefined
     this.authFactory = undefined
     this.catalog.clear()
+    for (const controller of this.modelCatalogRequests.values()) controller.abort()
+    this.modelCatalogRequests.clear()
     this.commands.clear()
     this.models.clear()
     this._sessions.clear()
@@ -679,6 +750,7 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
       messages: [],
       metadata: {
         ...info.metadata,
+        opencodeSessionUsage: mapOpenCodeV2Usage(info.tokens, info.cost),
         title: info.title,
         directory: info.location.directory,
         cwd: info.location.directory,
@@ -971,6 +1043,8 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
     this._sessions.delete(sessionId)
     this.models.delete(sessionId)
     this.catalog.delete(sessionId)
+    this.modelCatalogRequests.get(sessionId)?.abort()
+    this.modelCatalogRequests.delete(sessionId)
     this.commands.delete(sessionId)
     this.mountedMcp.delete(sessionId)
     for (const [id, form] of this.restoredForms)
@@ -1161,6 +1235,7 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
         const next = await iterator.next()
         controller.signal.throwIfAborted()
         if (next.done) throw new Error("OpenCode event stream ended before execution completed")
+        void this.refreshModelsForEvent(sessionId, next.value)
         if (next.value.type === "command.updated") await this.refreshSessionCommands(sessionId)
         if (
           next.value.type === "session.model.selected" &&
@@ -1176,10 +1251,7 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
           }
         }
         for (const event of turn.mapper.map(next.value)) {
-          if (event.type === "session_info_update" && event.title !== undefined) {
-            const session = this.requireSession(sessionId)
-            session.metadata = { ...session.metadata, title: event.title }
-          }
+          this.retainSessionInfo(event)
           if (event.type === "error" && event.code?.startsWith("opencode_form_")) {
             // A form the shared renderer cannot represent must not leave the
             // server waiting indefinitely for an answer the user cannot send.

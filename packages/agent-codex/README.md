@@ -19,6 +19,16 @@ The app wires the adapter in `lib/ai/agent/external/integrations/codex.ts` and
 the reader in `lib/session-import/adapters/codex.ts`. Checked by
 `node scripts/build/pack-test-agent-package.mjs agent-codex`.
 
+The history reader accepts both `turn_started/turn_complete` and desktop
+`task_started/task_complete` lifecycle events. Per-response `token_usage_record`
+receipts supersede `token_count` fallback within the same turn and deduplicate
+by response ID using the latest recorded timestamp. Developer/system messages
+retain the neutral `system` role; native developer roles and assistant phases
+are kept in `annotations.codexMessage` so hosts can filter their own exports.
+The reader itself does not apply an outbound PII policy to visible transcript
+parts: each host must redact before persistence or transport. Diagnostics still
+pass through the required `redactText` port.
+
 ## Native compatibility check
 
 The opt-in test in `src/app-server-client.test.ts` runs the real CLI against

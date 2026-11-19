@@ -81,9 +81,15 @@ export function OpencodeAuthPanel({
           {t("errors.load")}
         </p>
       )}
-      {!snapshot.loading && !snapshot.error && integrations.length === 0 && (
-        <p className="text-xs text-muted-foreground">{t("empty")}</p>
+      {(snapshot.discovery === "loading" || snapshot.discovery === "partial") && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t(snapshot.discovery === "loading" ? "loading" : "partial")}
+        </p>
       )}
+      {!snapshot.loading &&
+        !snapshot.error &&
+        snapshot.discovery !== "partial" &&
+        integrations.length === 0 && <p className="text-xs text-muted-foreground">{t("empty")}</p>}
       {integrations.map((entry) => (
         <div key={entry.id} className="space-y-2 rounded-md border p-3">
           <p className="text-xs font-medium">{entry.name}</p>

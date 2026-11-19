@@ -699,3 +699,20 @@ describe("mapOpenCodeV2Messages", () => {
     expect(result[9].content).toEqual([{ type: "text", text: "Partial" }])
   })
 })
+
+it("preserves authoritative session totals separately from turn usage", () => {
+  const mapper = new OpenCodeV2EventMapper("ses_test")
+  const tokens = { input: 30, output: 5, reasoning: 2, cache: { read: 20, write: 3 } }
+  expect(mapper.map(event("session.usage.updated", { ...scope, tokens, cost: 0.004 }))).toEqual([
+    expect.objectContaining({
+      type: "session_info_update",
+      metadata: {
+        opencodeSessionUsage: expect.objectContaining({
+          totalTokens: 37,
+          providerCost: { amount: 0.004, currency: "USD" },
+        }),
+      },
+    }),
+  ])
+  expect(mapper.tokenUsage).toBeUndefined()
+})

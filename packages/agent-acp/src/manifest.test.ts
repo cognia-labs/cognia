@@ -8,10 +8,18 @@ import {
   ACP_PROTOCOL,
   ACP_REMOTE_EXECUTION_SEMANTICS,
   DEVIN_ACP_EXECUTION_SEMANTICS,
+  ACP_CAPABILITIES,
   acpProtocolIntegration,
 } from "./manifest"
 
 describe("ACP manifest", () => {
+  it("leaves steering open for extension negotiation before connecting", () => {
+    expect(ACP_CAPABILITIES.protocols?.acp.capabilities.steer).toEqual({
+      level: "unknown",
+      evidence: "protocol-spec",
+    })
+  })
+
   it("declares a turn-scoped cancel that keeps the session", () => {
     for (const semantics of [
       ACP_EXECUTION_SEMANTICS,

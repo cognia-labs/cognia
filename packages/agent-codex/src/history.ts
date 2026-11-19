@@ -116,9 +116,10 @@ function codexTurnUsage(
 ): HistoryUsage | null {
   const last = info.last_token_usage as CodexTokenUsage | undefined
   const total = info.total_token_usage as CodexTokenUsage | undefined
-  if (last && (last.input_tokens || last.output_tokens || last.cached_input_tokens)) {
-    return toUsage(last)
-  }
+  const lastUsage =
+    last && (last.input_tokens || last.output_tokens || last.cached_input_tokens)
+      ? toUsage(last)
+      : null
   if (total) {
     const input = numOf(total.input_tokens)
     const output = numOf(total.output_tokens)
@@ -131,10 +132,11 @@ function codexTurnUsage(
     prev.input = input
     prev.output = output
     prev.cacheRead = cacheRead
+    if (lastUsage) return lastUsage
     if (!delta.inputTokens && !delta.outputTokens && !delta.cacheReadInputTokens) return null
     return delta
   }
-  return null
+  return lastUsage
 }
 
 function asString(v: unknown): string {
@@ -153,7 +155,7 @@ function messageText(payload: Record<string, unknown>): string {
       if (typeof b.text === "string") out.push(b.text)
     }
   }
-  return out.join("")
+  return out.join("\n")
 }
 
 function messageParts(payload: Record<string, unknown>): HistoryPart[] {
@@ -331,11 +333,30 @@ export function parseCodexRollout(
   // Codex emits token accounting as a standalone `event_msg` after each turn,
   // so it is attached to the turn's last-seen assistant message.
   let lastAssistantIndex = -1
+  let currentTurnId = ""
+  const assistantTurns = new Map<string, number[]>()
+  const modelsByTurn = new Map<string, string>()
+  const responseUsage = new Map<
+    string,
+    {
+      turnId: string
+      responseId: string
+      at: string | undefined
+      ms: number
+      usage: HistoryUsage
+      model: string | undefined
+    }
+  >()
   const prevTotal: CumulativeTokens = { input: 0, output: 0, cacheRead: 0 }
   const diagnostic = (value: unknown) => boundedDiagnostic(value, host)
   const push = (message: HistoryMessage) => {
     messages.push(message)
-    if (message.role === "assistant") lastAssistantIndex = messages.length - 1
+    if (message.role === "assistant") {
+      lastAssistantIndex = messages.length - 1
+      const indices = assistantTurns.get(currentTurnId) ?? []
+      indices.push(lastAssistantIndex)
+      assistantTurns.set(currentTurnId, indices)
+    }
     return messages.length - 1
   }
   const pushTool = (part: HistoryToolPart, createdAtMs: number) =>
@@ -366,7 +387,31 @@ export function parseCodexRollout(
       continue
     }
     if (rec.type === "turn_context") {
+      const turnId = asString(payload.turn_id) || currentTurnId
+      if (turnId !== currentTurnId) lastAssistantIndex = -1
+      currentTurnId = turnId
       model = asString(payload.model) || model
+      if (model) modelsByTurn.set(currentTurnId, model)
+      continue
+    }
+    if (rec.type === "token_usage_record") {
+      const threadId = asString(payload.thread_id)
+      if (threadId && meta.sessionId && threadId !== meta.sessionId) continue
+      const turnId = asString(payload.turn_id) || currentTurnId
+      const responseId = asString(payload.response_id)
+      if (!responseId || !payload.usage || typeof payload.usage !== "object") continue
+      const key = JSON.stringify([turnId, responseId])
+      const previous = responseUsage.get(key)
+      if (!previous || ms >= previous.ms) {
+        responseUsage.set(key, {
+          turnId,
+          responseId,
+          at: rec.timestamp,
+          ms,
+          usage: toUsage(payload.usage as CodexTokenUsage),
+          model,
+        })
+      }
       continue
     }
     if (rec.type === "event_msg") {
@@ -391,7 +436,9 @@ export function parseCodexRollout(
         })
         continue
       }
-      if (eventType === "turn_started") {
+      if (eventType === "turn_started" || eventType === "task_started") {
+        currentTurnId = asString(payload.turn_id) || currentTurnId
+        lastAssistantIndex = -1
         lifecycle = { status: "running", startedAt: rec.timestamp, updatedAt: rec.timestamp }
         recordedEvents.push({
           eventId: `codex-event-${eventSequence}`,
@@ -402,7 +449,7 @@ export function parseCodexRollout(
         })
         continue
       }
-      if (eventType === "turn_complete") {
+      if (eventType === "turn_complete" || eventType === "task_complete") {
         const error = payload.error
         lifecycle = {
           status: error ? "failed" : "completed",
@@ -649,13 +696,15 @@ export function parseCodexRollout(
     }
 
     if (itemType === "message") {
-      const role = asString(payload.role) === "assistant" ? "assistant" : "user"
+      const nativeRole = asString(payload.role) || "user"
+      const role = nativeRole === "assistant" || nativeRole === "user" ? nativeRole : "system"
+      const phase = asString(payload.phase) || asString(payload.channel)
       const text = messageText(payload)
       const contentParts = messageParts(payload)
       if (contentParts.length === 0) continue
       if (role === "user" && !firstUserText) firstUserText = text
       const commentary =
-        role === "assistant" && asString(payload.phase) === "commentary"
+        role === "assistant" && phase === "commentary"
           ? ({
               type: "commentary",
               text,
@@ -663,7 +712,16 @@ export function parseCodexRollout(
               source: "codex",
             } satisfies HistoryPart)
           : undefined
-      push({ role, parts: commentary ? [commentary] : contentParts, createdAt: ms })
+      const annotation = {
+        ...(role === "system" ? { role: nativeRole } : {}),
+        ...(role === "assistant" && phase ? { phase } : {}),
+      }
+      push({
+        role,
+        parts: commentary ? [commentary] : contentParts,
+        createdAt: ms,
+        ...(Object.keys(annotation).length ? { annotations: { codexMessage: annotation } } : {}),
+      })
       continue
     }
 
@@ -814,6 +872,45 @@ export function parseCodexRollout(
     })
   }
 
+  // Canonical receipts supersede token_count fallback for their own turn. A
+  // response may be corrected or repeated; only its latest receipt contributes.
+  const canonicalTurns = new Map<string, HistoryUsage>()
+  const turnModels = new Map<string, string | undefined>()
+  for (const receipt of responseUsage.values()) {
+    const sum = canonicalTurns.get(receipt.turnId) ?? {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+    }
+    sum.inputTokens += receipt.usage.inputTokens
+    sum.outputTokens += receipt.usage.outputTokens
+    sum.cacheReadInputTokens =
+      (sum.cacheReadInputTokens ?? 0) + (receipt.usage.cacheReadInputTokens ?? 0)
+    if (receipt.usage.reasoningTokens)
+      sum.reasoningTokens = (sum.reasoningTokens ?? 0) + receipt.usage.reasoningTokens
+    canonicalTurns.set(receipt.turnId, sum)
+    turnModels.set(receipt.turnId, receipt.model)
+    recordedEvents.push({
+      eventId: `codex-event-${eventSequence}`,
+      sequence: eventSequence++,
+      turnId: receipt.turnId || undefined,
+      at: receipt.at,
+      event: { kind: "usage", usage: { ...receipt.usage, responseId: receipt.responseId } },
+    })
+  }
+  for (const [turnId, usage] of canonicalTurns) {
+    const indices = assistantTurns.get(turnId) ?? []
+    for (const index of indices) {
+      delete messages[index].usage
+      delete messages[index].usageModel
+    }
+    const index = indices.at(-1)
+    if (index !== undefined) {
+      messages[index].usage = usage
+      messages[index].usageModel = modelsByTurn.get(turnId) ?? turnModels.get(turnId)
+    }
+  }
+
   const now = Date.now()
   return {
     sourceId: CODEX_SESSION_SOURCE_ID,
@@ -911,7 +1008,7 @@ export function summarizeCodexRollout(
   let firstUserText = ""
   for (const line of messageLines) {
     const payload = parseRolloutLine(line)?.payload ?? {}
-    if (asString(payload.role) === "assistant") continue
+    if (asString(payload.role) !== "user") continue
     const text = messageText(payload)
     if (text) {
       firstUserText = text
@@ -959,7 +1056,7 @@ function summarizeCodexRolloutSlow(lines: string[], locator: string): HistorySes
       const text = messageText(payload)
       if (!text) continue
       count += 1
-      if (asString(payload.role) !== "assistant" && !firstUserText) firstUserText = text
+      if (asString(payload.role) === "user" && !firstUserText) firstUserText = text
     } else if (
       itemType === "reasoning" ||
       itemType === "function_call" ||
