@@ -12,7 +12,8 @@
  * failed); a plugin that needs nothing, is already ready, or runs on the
  * user's own environment passes without a dialog. Preparing then runs in the
  * background with a toast, and its progress shows on the plugin's card and
- * detail page.
+ * detail page. A plugin whose start was refused for want of this environment
+ * is started again by the manager, and the toast says so.
  */
 
 import { useEffect, useState } from "react"
@@ -27,6 +28,7 @@ import {
 } from "@/lib/plugin/python/prepare-prompt-requests"
 import { readinessCanPrepare, type PythonInstaller } from "@/lib/plugin/python/readiness"
 import { usePluginStore } from "@/stores/plugin-runtime"
+import { usePythonReadinessStore } from "@/stores/plugin-runtime/python-readiness-store"
 
 import { PythonPrepareDialog } from "./python-prepare-dialog"
 
@@ -125,7 +127,12 @@ export function PythonPreparePromptHost() {
       try {
         const { getPluginManager } = await import("@/lib/plugin/core/manager")
         await getPluginManager().installPythonDeps(id, [...dependencies])
-        toast.success(t("toast.ready", { name: pluginName }), { id: toastId })
+        // A plugin whose start this preparation unblocked was started again.
+        const result = usePythonReadinessStore.getState().lastPreparationByPluginId[id]
+        const resumed = result?.status === "succeeded" && result.resumed
+        toast.success(t(resumed ? "toast.resumed" : "toast.ready", { name: pluginName }), {
+          id: toastId,
+        })
       } catch (error) {
         toast.error(t("toast.failed", { name: pluginName }), {
           id: toastId,

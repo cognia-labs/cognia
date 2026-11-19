@@ -5,9 +5,9 @@
  * The Host computes it from the environment it recorded when it built it and
  * from the preparation it is running or last failed. Four states stop a load
  * (`not-prepared`, `stale`, `preparing`, `failed`): the manager refuses to
- * enable such a plugin with {@link PythonDependenciesNotReadyError}, and the
- * user prepares the environment, which is its own operation with its own
- * consent (network and disk).
+ * enable such a plugin with `PythonDependenciesNotReadyError`
+ * (`./dependencies-not-ready.ts`), and the user prepares the environment,
+ * which is its own operation with its own consent (network and disk).
  *
  * Wire-exact counterpart of `ReadinessReport` in
  * `crates/cognia-plugin-runtime/src/python/readiness.rs`.
@@ -107,22 +107,4 @@ export function readPythonReadinessReport(reply: unknown): PythonReadinessReport
     (reply as { interpreterWarning?: unknown }).interpreterWarning
   )
   return { readiness: readiness.data, interpreterWarning: warning.success ? warning.data : null }
-}
-
-/**
- * Thrown when a Python plugin is enabled while its environment is not ready.
- * The message shape is stable: `usePluginErrorMessage` classifies it after it
- * was stringified into the store or an enable-failed event, and the enable
- * failure toast offers to prepare the environment.
- */
-export class PythonDependenciesNotReadyError extends Error {
-  constructor(
-    public readonly pluginId: string,
-    public readonly readiness: PythonReadiness
-  ) {
-    super(
-      `Cannot load Python plugin "${pluginId}": its Python dependencies are not ready (${readiness.state})`
-    )
-    this.name = "PythonDependenciesNotReadyError"
-  }
 }

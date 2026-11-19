@@ -136,7 +136,11 @@ export function usePythonEnvironment(
     try {
       const { getPluginManager } = await import("@/lib/plugin/core/manager")
       const outcome = await getPluginManager().installPythonDeps(pluginId, [...dependencies])
-      return { status: "succeeded", outcome: outcome ?? null }
+      // The manager records whether it also restarted the plugin.
+      const recorded = usePythonReadinessStore.getState().lastPreparationByPluginId[pluginId]
+      return recorded?.status === "succeeded"
+        ? recorded
+        : { status: "succeeded", outcome: outcome ?? null, resumed: false }
     } catch (error) {
       return { status: "failed", message: error instanceof Error ? error.message : String(error) }
     }

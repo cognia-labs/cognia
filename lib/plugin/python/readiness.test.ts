@@ -1,5 +1,4 @@
 import {
-  PythonDependenciesNotReadyError,
   readPythonReadinessReport,
   readinessBlocksLoad,
   readinessCanPrepare,
@@ -88,18 +87,5 @@ describe("readiness predicates", () => {
       failed: "not-ready",
       "user-managed": "installed",
     })
-  })
-})
-
-describe("PythonDependenciesNotReadyError", () => {
-  it("names the plugin and the state, and carries the readiness", () => {
-    const readiness: PythonReadiness = { state: "stale", reasons: ["installer"], installer: "uv" }
-    const error = new PythonDependenciesNotReadyError("demo", readiness)
-    expect(error.name).toBe("PythonDependenciesNotReadyError")
-    expect(error.message).toBe(
-      'Cannot load Python plugin "demo": its Python dependencies are not ready (stale)'
-    )
-    expect(error.readiness).toBe(readiness)
-    expect(error.pluginId).toBe("demo")
   })
 })

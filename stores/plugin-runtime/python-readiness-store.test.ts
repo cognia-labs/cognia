@@ -59,8 +59,12 @@ describe("python readiness store", () => {
       installer: "uv" as const,
       downgradedReason: null,
     }
-    recordPythonPreparation("demo", { status: "succeeded", outcome })
-    expect(state().lastPreparationByPluginId.demo).toEqual({ status: "succeeded", outcome })
+    recordPythonPreparation("demo", { status: "succeeded", outcome, resumed: true })
+    expect(state().lastPreparationByPluginId.demo).toEqual({
+      status: "succeeded",
+      outcome,
+      resumed: true,
+    })
   })
 
   it("forgets everything about an uninstalled plugin", () => {

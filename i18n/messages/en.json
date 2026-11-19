@@ -37237,7 +37237,8 @@
       "toast": {
         "failed": "Couldn't prepare the Python dependencies of {name}",
         "preparing": "Preparing the Python dependencies of {name}…",
-        "ready": "{name} is ready to run"
+        "ready": "{name} is ready to run",
+        "resumed": "{name} is ready and running again"
       }
     },
     "resourceManager": {

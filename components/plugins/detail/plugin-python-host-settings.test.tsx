@@ -35,7 +35,11 @@ jest.mock("@/lib/plugin/core/manager", () => ({
       )
       try {
         const outcome = await installDepsMock(id, deps)
-        recordPythonPreparation(id, { status: "succeeded", outcome: outcome ?? null })
+        recordPythonPreparation(id, {
+          status: "succeeded",
+          outcome: outcome ?? null,
+          resumed: false,
+        })
         return outcome
       } catch (error) {
         recordPythonPreparation(id, {

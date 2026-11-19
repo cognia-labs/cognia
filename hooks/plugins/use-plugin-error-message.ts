@@ -18,6 +18,8 @@
 import { useCallback } from "react"
 import { useTranslations } from "next-intl"
 
+import { PYTHON_DEPENDENCIES_NOT_READY_PATTERN } from "@/lib/plugin/python/dependencies-not-ready"
+
 export type PluginErrorCode =
   | "dependencyInUse"
   | "dependencyMissing"
@@ -71,11 +73,10 @@ const PATTERNS: ReadonlyArray<{
   },
   { code: "pythonDisabled", test: /the Python runtime is disabled in this profile/ },
   {
-    // `PythonDependenciesNotReadyError` (lib/plugin/python/readiness.ts). Not
-    // anchored: `PluginEnableError` wraps it in its own prefix.
+    // `PythonDependenciesNotReadyError`; its module owns the pattern.
     code: "pythonDependenciesNotReady",
-    test: /Cannot load Python plugin "[^"]+": its Python dependencies are not ready \((not-prepared|stale|preparing|failed)\)/,
-    values: (m) => ({ state: m[1] ?? "" }),
+    test: PYTHON_DEPENDENCIES_NOT_READY_PATTERN,
+    values: (m) => ({ state: m[2] ?? "" }),
   },
   { code: "intentDisabled", test: /^Plugin "[^"]+" is explicitly disabled$/ },
   {

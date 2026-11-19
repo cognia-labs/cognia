@@ -116,8 +116,25 @@ describe("usePythonEnvironment", () => {
     const outcome = { venvDir: "/v", scope: "isolated", installer: "uv", downgradedReason: null }
     mockInstallDeps.mockResolvedValue(outcome)
     const { result } = renderHook(() => usePythonEnvironment("demo", python))
-    await expect(result.current.prepare()).resolves.toEqual({ status: "succeeded", outcome })
+    await expect(result.current.prepare()).resolves.toEqual({
+      status: "succeeded",
+      outcome,
+      resumed: false,
+    })
     expect(mockInstallDeps).toHaveBeenCalledWith("demo", ["requests>=2"])
+  })
+
+  it("returns what the manager recorded, restart included", async () => {
+    mockInstallDeps.mockImplementation(async (id: string) => {
+      recordPythonPreparation(id, { status: "succeeded", outcome: null, resumed: true })
+      return null
+    })
+    const { result } = renderHook(() => usePythonEnvironment("demo", python))
+    await expect(result.current.prepare()).resolves.toEqual({
+      status: "succeeded",
+      outcome: null,
+      resumed: true,
+    })
   })
 
   it("reports a failed preparation instead of throwing", async () => {

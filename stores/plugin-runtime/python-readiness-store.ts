@@ -16,9 +16,12 @@ import { create } from "zustand"
 import type { PythonReadinessReport } from "@/lib/plugin/python/readiness"
 import type { PythonInstallOutcome } from "@/types/plugin"
 
-/** How the last preparation ended. */
+/**
+ * How the last preparation ended. `resumed`: the plugin the user had switched
+ * on, refused for want of this environment, was started again.
+ */
 export type PythonPreparationResult =
-  | { status: "succeeded"; outcome: PythonInstallOutcome | null }
+  | { status: "succeeded"; outcome: PythonInstallOutcome | null; resumed: boolean }
   | { status: "failed"; message: string }
 
 export interface PythonReadinessStoreState {

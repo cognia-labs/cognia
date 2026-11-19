@@ -7,10 +7,8 @@ import { renderHook } from "@testing-library/react"
 import { classifyPluginError, usePluginErrorMessage } from "./use-plugin-error-message"
 import { PluginDataSnapshotDeclinedError } from "@/lib/plugin/dexie/migration-runner"
 import { PluginDataRestoreUnconfirmedError } from "@/lib/plugin/dexie/data-rollback"
-import {
-  PythonDependenciesNotReadyError,
-  type PythonReadiness,
-} from "@/lib/plugin/python/readiness"
+import { PythonDependenciesNotReadyError } from "@/lib/plugin/python/dependencies-not-ready"
+import type { PythonReadiness } from "@/lib/plugin/python/readiness"
 
 describe("classifyPluginError", () => {
   it.each([

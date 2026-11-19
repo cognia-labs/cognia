@@ -133,6 +133,14 @@ uv 的锁安装语义（来源：astral-sh/uv 文档，经 context7 查询）：
 - **状态显示**：卡片、Library 行和详情页头部显示 `PluginPythonEnvironmentBadge`；详情页的环境区显示原因、进度行和准备结果。
 - **安装后提示的接入点**：`runMarketplaceInstall` 新增 `onInstalled`，在整个安装（含连带安装的依赖插件）提交后回调一次。`usePluginPreInstall` 用它覆盖 marketplace、GitHub/Git、本地目录和 Load unpacked 四条 UI 流程；cogpack 导入对话框对 `result.installed` 逐个提示。种子插件、devtools 自动重装和回滚重装不提示。
 - **启用失败**：启用失败的 toast 遇到 `pythonDependenciesNotReady` 时提供「准备依赖」操作，直接打开确认框。
+- **准备成功后自动重新启用**：manager 在准备成功后读取插件的生命周期记录。同时满足以下四个条件时，它以 `python-environment-prepared` 为原因重新启用插件：
+  1. 用户把插件设为启用（intent 为 `enabled`）；
+  2. 插件当前没有在运行；
+  3. 最近一次失败正是本插件的 `PythonDependenciesNotReadyError`；
+  4. 准备后的就绪状态不再阻止加载。
+
+  拒绝信息的格式和识别它的正则只在 `lib/plugin/python/dependencies-not-ready.ts` 定义一次，错误分类和 manager 都用它。重新启用失败不影响准备本身，准备仍记为成功。准备结果多了 `resumed` 字段，toast 据此显示「已就绪，并已重新启用」。
+
 - **未验证**：没有在 Tauri 桌面实机跑过「安装 → 提示 → 准备 → 可运行」这条流程。
 
 ### P4 uv.lock 锁定与离线安装（ENV02）

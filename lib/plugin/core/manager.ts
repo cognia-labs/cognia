@@ -25,11 +25,14 @@ import {
 } from "@/stores/plugin-runtime/python-readiness-store"
 import { readPythonInterpreterReport } from "@/lib/plugin/python/interpreter-report"
 import {
-  PythonDependenciesNotReadyError,
   readPythonReadinessReport,
   readinessBlocksLoad,
   type PythonReadinessReport,
 } from "@/lib/plugin/python/readiness"
+import {
+  PythonDependenciesNotReadyError,
+  readDependenciesNotReady,
+} from "@/lib/plugin/python/dependencies-not-ready"
 import { getPluginBackupManager } from "../lifecycle/backup"
 import stagedPluginCatalog from "@/lib/plugin/distribution/bundled-plugins.generated.json"
 import type {
@@ -8009,6 +8012,11 @@ export class PluginManager {
    * The environment may be shared with other plugins — the host only shares
    * when the whole contributor set still resolves together, and reports a
    * downgrade in the result rather than silently giving the plugin its own.
+   *
+   * Once it is ready, a plugin the user had switched on whose start was
+   * refused for want of this environment starts again
+   * (`resumeAfterPythonPreparation`). How it ended, restart included, is
+   * recorded in `usePythonReadinessStore`.
    */
   async installPythonDeps(
     pluginId: string,
@@ -8025,8 +8033,9 @@ export class PluginManager {
     })()
     const hostSettings = await getPythonHostSettings(pluginId).catch(() => undefined)
     markPythonPreparing(pluginId)
+    let outcome: PythonInstallOutcome | null
     try {
-      const outcome = await this.invokeNativeHost<PythonInstallOutcome | null>(
+      outcome = await this.invokeNativeHost<PythonInstallOutcome | null>(
         "plugin_python_install_deps",
         {
           pluginId,
@@ -8035,19 +8044,51 @@ export class PluginManager {
           hostSettings: hostSettings ?? null,
         }
       )
-      recordPythonPreparation(pluginId, { status: "succeeded", outcome: outcome ?? null })
-      return outcome
     } catch (error) {
       recordPythonPreparation(pluginId, {
         status: "failed",
         message: error instanceof Error ? error.message : String(error),
       })
-      throw error
-    } finally {
-      // Succeeded, failed or refused (one already running): what the Host
-      // recorded is what the card shows next. A failed refresh keeps the
-      // install's own outcome.
+      // Failed or refused (one already running): what the Host recorded is
+      // what the card shows next.
       await this.getPythonReadiness(pluginId).catch(() => undefined)
+      throw error
+    }
+    // A failed refresh keeps the install's own outcome, and starts nothing.
+    const readiness = await this.getPythonReadiness(pluginId).catch(() => null)
+    const resumed = await this.resumeAfterPythonPreparation(pluginId, readiness)
+    recordPythonPreparation(pluginId, { status: "succeeded", outcome: outcome ?? null, resumed })
+    return outcome
+  }
+
+  /**
+   * Start a plugin again once its environment is ready, when the user had
+   * switched it on and its start was refused only because the environment was
+   * not ready (ENV01, ADR-0258). That refusal is the plugin's last lifecycle
+   * error; any other failure, a plugin nobody switched on (an install, an
+   * on-demand activation) and one already running are left alone. Returns
+   * whether it is running again.
+   *
+   * A failed restart reports itself the way every enable does (the plugin's
+   * error, the enable-failed toast) and does not fail the preparation, which
+   * did succeed.
+   */
+  private async resumeAfterPythonPreparation(
+    pluginId: string,
+    readiness: PythonReadinessReport | null
+  ): Promise<boolean> {
+    if (!readiness || readinessBlocksLoad(readiness.readiness)) return false
+    const plugin = usePluginStore.getState()?.plugins?.[pluginId]
+    if (!plugin || plugin.status === "enabled") return false
+    const lifecycle = await this.getPluginLifecycleState(pluginId)
+    if (lifecycle.intent !== "enabled" || lifecycle.actual === "active") return false
+    if (readDependenciesNotReady(lifecycle.lastError)?.pluginId !== pluginId) return false
+    try {
+      await this.enablePlugin(pluginId, "python-environment-prepared")
+      return true
+    } catch (error) {
+      console.warn(`[plugin:${pluginId}] restart after preparing its environment failed`, error)
+      return false
     }
   }
 

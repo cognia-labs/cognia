@@ -37237,7 +37237,8 @@
       "toast": {
         "failed": "未能为 {name} 准备 Python 依赖",
         "preparing": "正在为 {name} 准备 Python 依赖…",
-        "ready": "{name} 已可运行"
+        "ready": "{name} 已可运行",
+        "resumed": "{name} 已就绪，并已重新启用"
       }
     },
     "resourceManager": {

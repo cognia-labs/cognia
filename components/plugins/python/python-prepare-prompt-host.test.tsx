@@ -34,6 +34,10 @@ import {
   type PythonPreparePromptState,
 } from "@/lib/plugin/python/prepare-prompt-requests"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
+import {
+  __resetPythonReadinessStoreForTesting,
+  recordPythonPreparation,
+} from "@/stores/plugin-runtime/python-readiness-store"
 
 import {
   PYTHON_PREPARE_PROMPT_ROW_WAIT_MS,
@@ -66,6 +70,7 @@ beforeEach(() => {
     prompts = state
   })
   seed({})
+  __resetPythonReadinessStoreForTesting()
   mockGetReadiness.mockReset().mockResolvedValue(notPrepared)
   mockInstallDeps.mockReset().mockResolvedValue(null)
   mockToast.loading.mockClear()
@@ -107,6 +112,23 @@ describe("PythonPreparePromptHost", () => {
       })
     )
     expect(prompts.current).toBeNull()
+  })
+
+  it("says the plugin runs again when the manager restarted it", async () => {
+    seed({ wiki: { type: "python", pythonDependencies: ["requests>=2"] } })
+    mockInstallDeps.mockImplementation(async (id: string) => {
+      recordPythonPreparation(id, { status: "succeeded", outcome: null, resumed: true })
+      return null
+    })
+    const user = userEvent.setup()
+    render(<PythonPreparePromptHost />)
+    ask("wiki")
+    await user.click(await screen.findByRole("button", { name: "confirm" }))
+    await waitFor(() =>
+      expect(mockToast.success).toHaveBeenCalledWith('toast.resumed:{"name":"wiki"}', {
+        id: "toast-1",
+      })
+    )
   })
 
   it("reports a failed preparation on the same toast", async () => {

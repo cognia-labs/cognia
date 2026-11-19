@@ -106,7 +106,7 @@ import {
   recordPythonReadiness,
   usePythonReadinessStore,
 } from "@/stores/plugin-runtime/python-readiness-store"
-import { PythonDependenciesNotReadyError } from "@/lib/plugin/python/readiness"
+import { PythonDependenciesNotReadyError } from "@/lib/plugin/python/dependencies-not-ready"
 import { PluginActivationConflictError, PluginLifecycleCoordinator } from "./lifecycle-coordinator"
 import { InMemoryPluginLifecycleStateAdapter, type PluginDirtyDiagnostic } from "./lifecycle-state"
 import {
@@ -7270,6 +7270,101 @@ describe("PluginManager", () => {
         expect(state.lastPreparationByPluginId["py-plugin"]).toEqual({
           status: "succeeded",
           outcome,
+          resumed: false,
+        })
+      })
+
+      describe("starting a refused plugin again once it is prepared", () => {
+        const refusal = new PythonDependenciesNotReadyError("py-plugin", {
+          state: "not-prepared",
+          installer: "uv",
+        }).message
+        const ready = { state: "ready", scope: "isolated", installer: "uv" }
+
+        const setup = (opts: {
+          status?: Plugin["status"]
+          intent?: "enabled" | "auto" | "disabled"
+          actual?: "error" | "active" | "inactive"
+          lastError?: string
+          readiness?: Record<string, unknown>
+        }) => {
+          const plugin = withDependencies()
+          plugin.status = opts.status ?? "error"
+          mockGetState.mockReturnValue(createLoadStore(plugin))
+          mockInvoke.mockImplementation(async (cmd: string) => {
+            if (cmd === "plugin_python_install_deps") return null
+            if (cmd === "plugin_python_readiness") return opts.readiness ?? ready
+            return undefined
+          })
+          const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+          jest.spyOn(manager, "getPluginLifecycleState").mockResolvedValue({
+            intent: opts.intent ?? "enabled",
+            actual: opts.actual ?? "error",
+            generation: 0,
+            lastError: "lastError" in opts ? opts.lastError : `PluginEnableError: ${refusal}`,
+          } as never)
+          const enable = jest.spyOn(manager, "enablePlugin").mockResolvedValue(undefined)
+          return { manager, enable }
+        }
+
+        const resumedFlag = () => {
+          const result = usePythonReadinessStore.getState().lastPreparationByPluginId["py-plugin"]
+          return result?.status === "succeeded" ? result.resumed : undefined
+        }
+
+        it("starts a plugin the user switched on that was refused for want of it", async () => {
+          const { manager, enable } = setup({})
+          await manager.installPythonDeps("py-plugin", ["requests>=2"])
+          expect(enable).toHaveBeenCalledWith("py-plugin", "python-environment-prepared")
+          expect(resumedFlag()).toBe(true)
+        })
+
+        it.each([
+          ["nobody switched it on", { intent: "auto" as const }],
+          ["the user switched it off", { intent: "disabled" as const }],
+          ["it is already running", { actual: "active" as const, status: "enabled" as const }],
+          ["it failed for another reason", { lastError: "ModuleNotFoundError: No module named x" }],
+          ["it never failed", { lastError: undefined, actual: "inactive" as const }],
+          [
+            "the environment is still not ready",
+            { readiness: { state: "stale", reasons: ["interpreter"], installer: "uv" } },
+          ],
+        ])("leaves it alone when %s", async (_label, opts) => {
+          const { manager, enable } = setup(opts)
+          await manager.installPythonDeps("py-plugin", ["requests>=2"])
+          expect(enable).not.toHaveBeenCalled()
+          expect(resumedFlag()).toBe(false)
+        })
+
+        it("leaves it alone when the refusal named another plugin", async () => {
+          const { manager, enable } = setup({
+            lastError: refusal.replace('"py-plugin"', '"other-plugin"'),
+          })
+          await manager.installPythonDeps("py-plugin", ["requests>=2"])
+          expect(enable).not.toHaveBeenCalled()
+        })
+
+        it("keeps the preparation a success when the restart fails", async () => {
+          const { manager, enable } = setup({})
+          enable.mockRejectedValue(new Error("host crashed"))
+          const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+          await expect(manager.installPythonDeps("py-plugin", ["requests>=2"])).resolves.toBeNull()
+          expect(enable).toHaveBeenCalled()
+          expect(resumedFlag()).toBe(false)
+          warn.mockRestore()
+        })
+
+        it("starts nothing when the preparation itself failed", async () => {
+          const { manager, enable } = setup({})
+          mockInvoke.mockImplementation(async (cmd: string) => {
+            if (cmd === "plugin_python_install_deps") throw new Error("no network")
+            if (cmd === "plugin_python_readiness") return ready
+            return undefined
+          })
+          await expect(manager.installPythonDeps("py-plugin", ["requests>=2"])).rejects.toThrow(
+            "no network"
+          )
+          expect(enable).not.toHaveBeenCalled()
         })
       })
 
