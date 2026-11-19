@@ -182,18 +182,22 @@ describe("createRunLogger().stepUsage", () => {
   it("appends a step_usage event AND shadow-writes the unified billing row", async () => {
     const logger = createRunLogger("run_x")
     await logger.stepUsage("n1", {
+      stepExecutionId: "attempt-a",
       inputTokens: 120,
       outputTokens: 40,
       totalTokens: 160,
       cacheReadTokens: 30,
-      costUsd: 0.01,
+      costUsd: 0,
       modelId: "gpt-4o",
       providerId: "openai",
     })
-    // Durable event log carries the raw StepUsage payload.
+    // Durable event and ledger share the same frozen zero-cost snapshot.
     const events = await listRunEvents("run_x")
     expect(events).toHaveLength(1)
     expect(events[0].type).toBe("step_usage")
+    expect(events[0].payload).toEqual(
+      expect.objectContaining({ stepExecutionId: "attempt-a", costUsd: 0, costKnown: true })
+    )
 
     // The fire-and-forget shadow write lands a workflow row (sessionId wf:run_x).
     // Poll briefly since the billing mirror is intentionally not awaited.
@@ -204,11 +208,12 @@ describe("createRunLogger().stepUsage", () => {
     }
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({
-      messageId: "wf:run_x:n1",
+      messageId: 'wf-execution:["run_x","n1","attempt-a"]',
       surface: "workflow",
       model: "gpt-4o",
       cacheReadTokens: 30,
-      costUsd: 0.01,
+      costUsd: 0,
+      costKnown: true,
     })
   })
 })

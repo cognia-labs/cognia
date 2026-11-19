@@ -1,3 +1,4 @@
+import { isOcrPluginTool } from "@/lib/claude/ocr-tool-gate"
 import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { registerNodeExecutor } from "../registry"
 import {
@@ -407,6 +408,14 @@ registerNodeExecutor({
     const taskId = params.taskId?.trim()
     if (!pluginId) throw nonRetryable("action.plugin.invoke requires 'pluginId'")
     const mode = params.mode ?? (toolName ? "tool" : "task")
+    if (
+      mode === "tool" &&
+      toolName &&
+      ctx.securityContext?.piiEgressRequired &&
+      isOcrPluginTool({ pluginId, name: toolName })
+    ) {
+      throw nonRetryable("Protected workflow runs must use the on-device OCR node.")
+    }
     const args = (params.args && typeof params.args === "object" ? params.args : {}) as Record<
       string,
       unknown

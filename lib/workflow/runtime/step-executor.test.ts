@@ -198,6 +198,38 @@ describe("team dispatch automatic retry", () => {
 })
 
 describe("runStep pin short-circuit", () => {
+  it("stamps one identity per actual execution rather than trusting executor-supplied identities", async () => {
+    execSpy.mockImplementationOnce(async (ctx) => {
+      ctx.reportUsage?.({
+        stepExecutionId: "untrusted",
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+        costUsd: 0.01,
+      })
+      ctx.reportUsage?.({ inputTokens: 2, outputTokens: 2, totalTokens: 4, costUsd: 0.02 })
+      return { output: { real: true } }
+    })
+    execSpy.mockImplementationOnce(async (ctx) => {
+      ctx.reportUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0.01 })
+      ctx.reportUsage?.({ inputTokens: 2, outputTokens: 2, totalTokens: 4, costUsd: 0.02 })
+      return { output: { real: true } }
+    })
+    await runStep(await buildInput({}))
+    const second = await buildInput({})
+    second.cacheKey = "second-iteration"
+    await runStep(second)
+    const events = (await listRunEvents("run_1")).filter((event) => event.type === "step_usage")
+    const identities = events.map(
+      (event) => (event.payload as { stepExecutionId?: string }).stepExecutionId
+    )
+    expect(identities).toHaveLength(4)
+    expect(identities[0]).toBeTruthy()
+    expect(identities[0]).not.toBe("untrusted")
+    expect(identities[0]).toBe(identities[1])
+    expect(identities[2]).toBe(identities[3])
+    expect(identities[0]).not.toBe(identities[2])
+  })
   it("returns the pinned value WITHOUT invoking the executor when honorPinData is true", async () => {
     const input = await buildInput({ honorPinData: true, pinData: { n1: { pinned: 1 } } })
     const result = await runStep(input)

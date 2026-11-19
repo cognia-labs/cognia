@@ -10,6 +10,13 @@ import { defaultTypeVersionFor } from "@/lib/workflow/editor/node-handles"
 // Production hosts install the Agent Team node implementations from their
 // composition root (ADR-0217); this suite exercises them through the registry.
 import { installTeamWorkflowNodeRuntime } from "@/lib/squads/workflow-nodes/install"
+import {
+  __resetDurableTeamCoordinatorForTesting,
+  getDurableTeamCoordinator,
+} from "@/lib/squads/durable/durable-runtime"
+import type { AgentTeam } from "@/types/agent/agent-team"
+import type { TeamRunContext } from "@/lib/squads/team-run-context"
+import { createLocalTauriExecutionEnvironment } from "@/lib/ai/agent/execution/local-tauri-environment"
 
 installTeamWorkflowNodeRuntime()
 import { registerSkill, __resetSkillsForTesting } from "@/lib/plugin/registries/skill-registry"
@@ -38,6 +45,7 @@ jest.mock("@/lib/ai/renderer-llm-client", () => ({
 // adapters through it. Inline jest.fn()s (TDZ-safe) with per-test overrides.
 jest.mock("@/lib/connectors/bus", () => ({
   getBus: () => ({
+    getAdapter: () => ({ meta: { type: "lark" } }),
     addReactionOutbound: (...args: unknown[]) => mockAddReaction(...args),
     removeReactionOutbound: (...args: unknown[]) => mockRemoveReaction(...args),
     forwardOutbound: (...args: unknown[]) => mockForward(...args),
@@ -94,6 +102,7 @@ const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
 beforeEach(async () => {
   await dbFixture.restore()
+  __resetDurableTeamCoordinatorForTesting()
   stopTaskScheduler()
   await schedulerDb.clearAll()
   unregisterTaskExecutor("custom")
@@ -135,6 +144,39 @@ async function exec(
   const reg = getExecutor(kind, defaultTypeVersionFor(kind))
   if (!reg) throw new Error(`No executor for ${kind}`)
   return reg.execute(ctx)
+}
+
+function createTestEnvironment(): NonNullable<TeamRunContext["durableEnvironment"]> {
+  return {
+    adapter: createLocalTauriExecutionEnvironment({
+      executeSetup: async () => ({ success: true }),
+      openWorkspace: async ({ repositoryPath }) => ({
+        executionRoot: repositoryPath,
+        settle: async () => [],
+      }),
+      collectEvidence: async () => [],
+    }),
+    profile: {
+      id: "workflow-test-v1",
+      environmentId: "workflow-test",
+      projectId: "project-test",
+      version: 1,
+      name: "Workflow test",
+      setupScript: { default: "" },
+      actions: [],
+      variables: {},
+      keyringReferences: [],
+      policy: { requiredRuntimeCapabilities: [] },
+      createdAt: 1,
+    },
+    preparedByRepository: new Map(),
+  }
+}
+
+async function prepareTeamRun(team: AgentTeam, runId: string) {
+  const coordinator = getDurableTeamCoordinator()
+  await coordinator.prepareRun({ ...team, task: team.task ?? "Workflow test" }, runId)
+  await coordinator.store.updateRun(runId, { status: "running" })
 }
 
 async function waitForSchedulerExecutions(taskId: string, count: number) {
@@ -2738,7 +2780,7 @@ describe("action.skill.invoke", () => {
         id: "skill_a",
         name: "Alpha",
         description: "alpha desc",
-        systemPrompt: "Alpha body",
+        content: "Alpha body",
         isBuiltIn: false,
         createdAt: 0,
         updatedAt: 0,
@@ -2747,7 +2789,7 @@ describe("action.skill.invoke", () => {
         id: "skill_b",
         name: "Beta",
         description: "beta desc",
-        systemPrompt: "Beta body",
+        content: "Beta body",
         isBuiltIn: false,
         createdAt: 0,
         updatedAt: 0,
@@ -2825,7 +2867,7 @@ describe("action.team.task.dispatch", () => {
       team: {
         id: "team-1",
         name: "Test",
-        config: { defaultTimeout: 1_000 },
+        config: { defaultTimeout: 1_000, workingDir: "/repo" },
       } as never,
       pool,
       budget,
@@ -2839,22 +2881,13 @@ describe("action.team.task.dispatch", () => {
         updateTeammate: () => {},
       },
       resolvedCapabilities: new Map(),
+      durableEnvironment: createTestEnvironment(),
     }
     registerTeamRunContext(ctx as never)
     // Dispatch is durable: it admits a task only while the persisted run is
     // live, so the in-memory context alone is refused ("Run is not accepting
     // dispatch").
-    const { createAgentTeamRun } = await import("@/lib/db/agent-team-runtime")
-    await createAgentTeamRun({
-      id: params.runId,
-      teamId: "team-1",
-      objective: "Dispatch test",
-      status: "running",
-      priority: 1,
-      decisionVersion: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    })
+    await prepareTeamRun(ctx.team, params.runId)
     return { messages, taskStatuses, ctx }
   }
 
@@ -2867,6 +2900,7 @@ describe("action.team.task.dispatch", () => {
     await setupTeamCtx({ runId: "run_dispatch_ok", workers: [{ id: "w1", name: "W1" }] })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
     })
@@ -2889,7 +2923,10 @@ describe("action.team.task.dispatch", () => {
   it("reports the access and kind it dispatched the task as", async () => {
     await setupTeamCtx({ runId: "run_dispatch_kind", workers: [{ id: "w1", name: "W1" }] })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-    ;(executeAgent as jest.Mock).mockResolvedValue({ text: "notes" })
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "notes",
+    })
     const ctx = makeCtx("action.team.task.dispatch", {
       teamId: "team-1",
       taskId: "t1",
@@ -2905,7 +2942,10 @@ describe("action.team.task.dispatch", () => {
   it("parks a default (code) task that reports only text at the evidence gate", async () => {
     await setupTeamCtx({ runId: "run_dispatch_code", workers: [{ id: "w1", name: "W1" }] })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-    ;(executeAgent as jest.Mock).mockResolvedValue({ text: "I changed the code" })
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "I changed the code",
+    })
     const ctx = makeCtx("action.team.task.dispatch", {
       teamId: "team-1",
       taskId: "t1",
@@ -2927,6 +2967,7 @@ describe("action.team.task.dispatch", () => {
     })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -2983,6 +3024,7 @@ describe("action.team.task.dispatch", () => {
     })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 5, completionTokens: 3, totalTokens: 8 },
     })
@@ -3019,6 +3061,7 @@ describe("action.team.task.dispatch", () => {
     await setupTeamCtx({ runId: "run_bb_write", workers: [{ id: "w1", name: "W1" }] })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "Deliverable done.",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -3040,13 +3083,18 @@ describe("action.team.task.dispatch", () => {
     const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     useAgentTeamStore.getState().reset()
     const { autoPublishTaskResult } = await import("@/lib/squads/memory/shared-memory-orchestrator")
-    autoPublishTaskResult({ id: "team-1" }, { id: "dep1", title: "Recon" }, "Recon found X.", {
-      id: "w0",
-      name: "Scout",
-    })
     await setupTeamCtx({ runId: "run_bb_read", workers: [{ id: "w1", name: "W1" }] })
+    const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
+    autoPublishTaskResult(
+      { id: "team-1" },
+      { id: "dep1", title: "Recon" },
+      "Recon found X.",
+      { id: "w0", name: "Scout" },
+      agentTeamExecutionRunId("run_bb_read")
+    )
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -3142,6 +3190,7 @@ describe("action.team.task.review", () => {
         name: "Test",
         config: {
           defaultTimeout: 1_000,
+          workingDir: "/repo",
           taskReview: { enabled: true },
           ...(params.workingDir ? { workingDir: params.workingDir } : {}),
           ...(params.requireResultReview
@@ -3164,20 +3213,11 @@ describe("action.team.task.review", () => {
         addEvent: (e: Record<string, unknown>) => events.push(e),
       },
       resolvedCapabilities: new Map(),
+      durableEnvironment: createTestEnvironment(),
     }
     registerTeamRunContext(ctx as never)
     // A revision is a durable dispatch, admitted only while the run is live.
-    const { createAgentTeamRun } = await import("@/lib/db/agent-team-runtime")
-    await createAgentTeamRun({
-      id: params.runId,
-      teamId: "team-1",
-      objective: "Review test",
-      status: "running",
-      priority: 1,
-      decisionVersion: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    })
+    await prepareTeamRun(ctx.team, params.runId)
     return { messages, taskStatuses, events, runLeadReview, reviewCalls }
   }
 
@@ -3254,7 +3294,10 @@ describe("action.team.task.review", () => {
       ],
     })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-    ;(executeAgent as jest.Mock).mockResolvedValue({ text: "revised work" })
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "revised work",
+    })
 
     const r = await exec("action.team.task.review", reviewCtx("rv_revise"))
 
@@ -3282,7 +3325,10 @@ describe("action.team.task.review", () => {
       ],
     })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-    ;(executeAgent as jest.Mock).mockResolvedValue({ text: "revised notes" })
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "revised notes",
+    })
     // The shared coordinator is a plain object, so its method can be spied on
     // (a module export compiled by SWC cannot).
     const { getDurableTeamCoordinator } = await import("@/lib/squads/durable/durable-runtime")
@@ -3305,7 +3351,10 @@ describe("action.team.task.review", () => {
       verdicts: [{ verdict: "changes_requested", feedback: "again" }],
     })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-    ;(executeAgent as jest.Mock).mockResolvedValue({ text: "revised" })
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "revised",
+    })
     await expect(
       exec(
         "action.team.task.review",
@@ -3325,7 +3374,10 @@ describe("action.team.task.review", () => {
       ],
     })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-    ;(executeAgent as jest.Mock).mockResolvedValue({ text: "attempt" })
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "attempt",
+    })
 
     await expect(exec("action.team.task.review", reviewCtx("rv_exhaust"))).rejects.toThrow(
       /still requested changes after 2 revision/
@@ -3430,7 +3482,10 @@ describe("action.team.task.review", () => {
       ],
     })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-    ;(executeAgent as jest.Mock).mockResolvedValue({ text: "revised" })
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "revised",
+    })
 
     await exec("action.team.task.review", reviewCtx("rv_reject_evt"))
 
@@ -3506,7 +3561,11 @@ describe("action.team.task.dispatch output validation", () => {
       const ctx = {
         runId: "run_empty",
         teamId: "team-1",
-        team: { id: "team-1", name: "Test", config: { defaultTimeout: 1_000 } } as never,
+        team: {
+          id: "team-1",
+          name: "Test",
+          config: { defaultTimeout: 1_000, workingDir: "/repo" },
+        } as never,
         pool,
         budget,
         notifier,
@@ -3518,23 +3577,15 @@ describe("action.team.task.dispatch output validation", () => {
           updateTeammate: () => {},
         },
         resolvedCapabilities: new Map(),
+        durableEnvironment: createTestEnvironment(),
       }
       registerTeamRunContext(ctx as never)
-      const { createAgentTeamRun } = await import("@/lib/db/agent-team-runtime")
-      await createAgentTeamRun({
-        id: "run_empty",
-        teamId: "team-1",
-        objective: "Empty output test",
-        status: "running",
-        priority: 1,
-        decisionVersion: 0,
-        createdAt: 1,
-        updatedAt: 1,
-      })
+      await prepareTeamRun(ctx.team, "run_empty")
       return { ctx }
     })()
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "   \n  \t  ",
       usage: { promptTokens: 1, completionTokens: 0, totalTokens: 1 },
     })

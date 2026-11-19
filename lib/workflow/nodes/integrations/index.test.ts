@@ -81,6 +81,24 @@ it("carries the workflow run through generic plugin-tool invocation", async () =
   )
 })
 
+it("does not let generic plugin invocation bypass protected workflow OCR", async () => {
+  const { invokePluginTool } = await import("@/lib/plugin/core/invoke-plugin-tool")
+  jest.mocked(invokePluginTool).mockClear()
+  await expect(
+    getExecutor("action.plugin.invoke", 1)!.execute({
+      runId: "wf",
+      params: {
+        pluginId: "cognia-ocr",
+        toolName: "ocr.extract",
+        args: { source: { kind: "screen" } },
+      },
+      securityContext: { piiEgressRequired: true, sourceTriggerKind: "trigger.manual" },
+      signal: new AbortController().signal,
+    } as never)
+  ).rejects.toThrow(/on-device OCR node/)
+  expect(invokePluginTool).not.toHaveBeenCalled()
+})
+
 it("binds workflow.task callbacks to the exact Host workflow execution", async () => {
   const handler = jest.fn(async () => {
     await Promise.resolve()

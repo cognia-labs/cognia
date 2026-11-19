@@ -9,6 +9,7 @@ import { nanoid } from "nanoid"
 import { getDb } from "@/lib/db/schema"
 import { recordWorkflowStepUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import { trackEvent } from "@/lib/telemetry/events/track-event"
+import { stepCostUsd } from "@/lib/workflow/runs/step-cost"
 import type { StepErrorDetail } from "./step-event-payload"
 import type {
   RunEventLogLevel,
@@ -324,6 +325,8 @@ export function createRunLogger(runId: string) {
       }),
     /** Token/cost usage snapshot for one step (payload = StepUsage). */
     stepUsage: (stepId: string, usage: StepUsage, meta?: StepEventMeta) => {
+      const cost = stepCostUsd(usage)
+      const snapshot = { ...usage, costUsd: cost, costKnown: cost !== undefined }
       // Shadow-write into the unified billing table so workflow spend reaches
       // the Subscription → Usage tab. Fire-and-forget: never block or fail the
       // durable event append on the billing mirror.
@@ -331,12 +334,16 @@ export function createRunLogger(runId: string) {
         recordWorkflowStepUsage({
           runId,
           stepId,
+          stepExecutionId: usage.stepExecutionId,
           usage: {
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens,
             cacheCreationTokens: usage.cacheCreationTokens,
-            costUsd: usage.costUsd,
+            costUsd: cost,
+            costKnown: cost !== undefined,
+            costSource:
+              cost === undefined ? "unknown" : usage.costUsd !== undefined ? "sdk" : "derived",
             model: usage.modelId,
             providerId: usage.providerId,
           },
@@ -347,7 +354,7 @@ export function createRunLogger(runId: string) {
         type: "step_usage",
         stepId,
         // The runtime's identity wins over anything the executor reported.
-        payload: { ...usage, ...meta },
+        payload: { ...snapshot, ...meta },
       })
     },
     /** Emitted before each retry backoff wait (attempt = the one that failed). */

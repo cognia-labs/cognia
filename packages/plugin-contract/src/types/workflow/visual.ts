@@ -1329,6 +1329,8 @@ export interface WorkflowTriggerRow {
  * of a `step_usage` event; aggregated per-run by the Runs UI.
  */
 export interface StepUsage {
+  /** Runtime-owned identity of one actual attempt; reports for it are cumulative snapshots. */
+  stepExecutionId?: string
   inputTokens: number
   outputTokens: number
   totalTokens: number
@@ -1341,6 +1343,8 @@ export interface StepUsage {
   modelId?: string
   /** Estimated USD cost; undefined when no pricing is known for the model. */
   costUsd?: number
+  /** False marks an incomplete/unpriced aggregate; it must not be repriced as an exact bill. */
+  costKnown?: boolean
 }
 
 /**
@@ -1413,7 +1417,8 @@ export interface StepExecutionContext<TParams = Record<string, unknown>> {
   emitCommentary?: (delta: string) => void
   /**
    * Report token/cost usage for this step. Lands as a `step_usage` event;
-   * call at most once, after the LLM call settles.
+   * reports within one actual attempt are cumulative snapshots. The runtime
+   * stamps their identity; independent attempts/iterations accumulate separately.
    */
   reportUsage?: (usage: StepUsage) => void
 }

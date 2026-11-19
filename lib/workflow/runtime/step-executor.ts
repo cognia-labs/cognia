@@ -349,7 +349,8 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     })
     ctx.emitStream = (delta) => sink.push(delta)
     ctx.emitCommentary = (delta) => commentarySink.push(delta)
-    ctx.reportUsage = (usage) => void logger.stepUsage(node.id, usage, executionMeta)
+    ctx.reportUsage = (usage) =>
+      void logger.stepUsage(node.id, { ...usage, stepExecutionId }, executionMeta)
     let executionSettled = false
     try {
       const result = await runWithTimeout(

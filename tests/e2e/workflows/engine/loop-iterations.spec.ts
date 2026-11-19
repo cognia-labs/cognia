@@ -68,7 +68,7 @@ test.describe("workflow engine — loop iterations", () => {
     await resetCogniaDb(page)
   })
 
-  test("a times:3 loop runs the body exactly 3 times", async ({ page }) => {
+  test("@critical a times:3 loop runs the body exactly 3 times", async ({ page }) => {
     const id = await seed(page)
     await page.goto(`/workflows/editor?id=${id}`)
     await expect(page.getByTestId("workflow-canvas")).toBeVisible()
