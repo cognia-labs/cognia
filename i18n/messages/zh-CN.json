@@ -36091,14 +36091,8 @@
         "applyHint": "更改会在插件下次加载时生效。",
         "callTimeoutMs": "调用超时(毫秒)",
         "deps": {
-          "cancel": "取消",
-          "confirm": "安装",
-          "confirmBody": "将为该插件创建隔离的虚拟环境,并从 PyPI 下载 {count} 个包。安装进度会显示在“日志”标签页。",
-          "confirmTitle": "安装 Python 依赖?",
           "downgraded": "请求了共用环境但未能使用：{reason}",
           "error": "安装失败:{message}",
-          "install": "安装依赖",
-          "installing": "安装中…",
           "outcome": "已用 {installer} 安装到{scope, select, shared {共用} isolated {独享} other {{scope}}}环境。",
           "summary": "该插件声明了 {count} 个 Python 依赖。"
         },
@@ -36526,6 +36520,7 @@
     "enableFailure": {
       "description": "{pluginName} 启用失败：{errorMessage}",
       "manualReason": "启用插件时出错",
+      "prepareDependencies": "准备依赖",
       "retryHint": "打开插件设置查看错误并重试。",
       "title": "{pluginName} 启用失败"
     },
@@ -36546,6 +36541,7 @@
         "invalidManifest": "它的清单文件无效。",
         "managerNotReady": "插件仍在启动中，请稍后再试。",
         "notFound": "它已不再安装。",
+        "pythonDependenciesNotReady": "它的 Python 依赖{state, select, preparing {仍在准备中} failed {未就绪：上次准备失败} stale {已过期} other {尚未安装}}。请先准备依赖，再重新启用。",
         "pythonDisabled": "当前设备已关闭 Python 运行时。",
         "signature": "无法验证它的签名。",
         "uninstallMirrored": "请在桌面应用中卸载它。本设备只是它的镜像。",
@@ -37180,6 +37176,47 @@
       "stepConflict": "冲突",
       "stepPermission": "权限",
       "title": "安装 {name} 前确认"
+    },
+    "pythonEnvironment": {
+      "badge": {
+        "installed": "已安装 · 自管环境",
+        "notReady": "依赖未就绪",
+        "preparing": "正在准备依赖…",
+        "runnable": "可运行"
+      },
+      "dialog": {
+        "body": "{name} 需要先安装 {count} 个 Python 包才能运行。准备时会用 {installer, select, uv {uv} pip {pip} other {所配置的安装器}} 创建它的环境，并从软件包索引下载这些包。",
+        "confirm": "准备",
+        "impact": "这会占用网络和磁盘空间。进度会实时显示在插件的「日志」标签页，准备期间可以继续做别的事。",
+        "later": "稍后",
+        "packages": "软件包",
+        "title": "为 {name} 准备 Python 依赖？"
+      },
+      "prepare": "准备依赖",
+      "prepareAgain": "重新准备",
+      "state": {
+        "failed": "上次准备失败：{message}",
+        "notPrepared": "它的 Python 依赖尚未安装。准备时将使用 {installer}。",
+        "notRequired": "它没有声明 Python 依赖。",
+        "preparing": "正在用 {installer} 准备它的 Python 环境。",
+        "ready": "它的{scope, select, shared {共享} isolated {独立} other {}} Python 环境与声明一致（由 {installer} 构建）。",
+        "stale": "它的 Python 环境已不再匹配：{reasons}。运行前需要重新准备。",
+        "staleReason": {
+          "dependencies": "依赖要求已变更",
+          "installer": "由另一个安装器构建",
+          "interpreter": "基于另一个 Python 版本构建"
+        },
+        "userManaged": {
+          "customInstaller": "它的环境由自定义安装器构建，主机不做检查。",
+          "interpreterOverride": "它运行在你指定的解释器上，主机不负责准备。",
+          "venvDisabled": "托管环境已关闭，它运行在你自行配置的 Python 上。"
+        }
+      },
+      "toast": {
+        "failed": "未能为 {name} 准备 Python 依赖",
+        "preparing": "正在为 {name} 准备 Python 依赖…",
+        "ready": "{name} 已可运行"
+      }
     },
     "resourceManager": {
       "loadingUsage": "正在加载已记录的用量…",

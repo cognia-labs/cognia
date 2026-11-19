@@ -16,7 +16,8 @@ const interpreterSchema = z.object({
   version: z.string().nullable(),
 })
 
-const warningSchema = z.discriminatedUnion("kind", [
+/** Also part of the `plugin_python_readiness` reply (`lib/plugin/python/readiness.ts`). */
+export const pythonInterpreterWarningSchema = z.discriminatedUnion("kind", [
   /** It reported no version: it would not run, printed no banner, or timed out. */
   z.object({ kind: z.literal("version-unknown") }),
   z.object({
@@ -37,7 +38,7 @@ const warningSchema = z.discriminatedUnion("kind", [
 ])
 
 export type PythonInterpreterSource = z.infer<typeof interpreterSchema>["source"]
-export type PythonInterpreterWarning = z.infer<typeof warningSchema>
+export type PythonInterpreterWarning = z.infer<typeof pythonInterpreterWarningSchema>
 
 export interface PythonInterpreterReport {
   source: PythonInterpreterSource
@@ -58,7 +59,7 @@ export function readPythonInterpreterReport(loadResult: unknown): PythonInterpre
   // A paired Host of another build may send a kind this one cannot word; it is
   // left out rather than shown as a warning it is not. The Host's own log
   // line still carries it.
-  const warning = warningSchema.safeParse(reply.interpreterWarning)
+  const warning = pythonInterpreterWarningSchema.safeParse(reply.interpreterWarning)
   return { ...interpreter.data, warning: warning.success ? warning.data : null }
 }
 

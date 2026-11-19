@@ -117,14 +117,8 @@
     "applyHint": "Changes apply the next time the plugin loads.",
     "callTimeoutMs": "Call timeout (ms)",
     "deps": {
-      "cancel": "Cancel",
-      "confirm": "Install",
-      "confirmBody": "This creates an isolated virtual environment for the plugin and downloads {count, plural, one {# package} other {# packages}} from PyPI. Progress streams into the Logs tab.",
-      "confirmTitle": "Install Python dependencies?",
       "downgraded": "A shared environment was requested but not used: {reason}",
       "error": "Install failed: {message}",
-      "install": "Install dependencies",
-      "installing": "Installing…",
       "outcome": "Installed with {installer} into {scope, select, shared {a shared} isolated {an isolated} other {a {scope}}} environment.",
       "summary": "This plugin declares {count, plural, one {# Python dependency} other {# Python dependencies}}."
     },

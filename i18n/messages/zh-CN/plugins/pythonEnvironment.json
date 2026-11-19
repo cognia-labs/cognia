@@ -1,0 +1,41 @@
+{
+  "badge": {
+    "installed": "已安装 · 自管环境",
+    "notReady": "依赖未就绪",
+    "preparing": "正在准备依赖…",
+    "runnable": "可运行"
+  },
+  "dialog": {
+    "body": "{name} 需要先安装 {count} 个 Python 包才能运行。准备时会用 {installer, select, uv {uv} pip {pip} other {所配置的安装器}} 创建它的环境，并从软件包索引下载这些包。",
+    "confirm": "准备",
+    "impact": "这会占用网络和磁盘空间。进度会实时显示在插件的「日志」标签页，准备期间可以继续做别的事。",
+    "later": "稍后",
+    "packages": "软件包",
+    "title": "为 {name} 准备 Python 依赖？"
+  },
+  "prepare": "准备依赖",
+  "prepareAgain": "重新准备",
+  "state": {
+    "failed": "上次准备失败：{message}",
+    "notPrepared": "它的 Python 依赖尚未安装。准备时将使用 {installer}。",
+    "notRequired": "它没有声明 Python 依赖。",
+    "preparing": "正在用 {installer} 准备它的 Python 环境。",
+    "ready": "它的{scope, select, shared {共享} isolated {独立} other {}} Python 环境与声明一致（由 {installer} 构建）。",
+    "stale": "它的 Python 环境已不再匹配：{reasons}。运行前需要重新准备。",
+    "staleReason": {
+      "dependencies": "依赖要求已变更",
+      "installer": "由另一个安装器构建",
+      "interpreter": "基于另一个 Python 版本构建"
+    },
+    "userManaged": {
+      "customInstaller": "它的环境由自定义安装器构建，主机不做检查。",
+      "interpreterOverride": "它运行在你指定的解释器上，主机不负责准备。",
+      "venvDisabled": "托管环境已关闭，它运行在你自行配置的 Python 上。"
+    }
+  },
+  "toast": {
+    "failed": "未能为 {name} 准备 Python 依赖",
+    "preparing": "正在为 {name} 准备 Python 依赖…",
+    "ready": "{name} 已可运行"
+  }
+}

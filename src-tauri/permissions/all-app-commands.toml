@@ -841,6 +841,7 @@ commands.allow = [
   "plugin_python_module_call",
   "plugin_python_module_getattr",
   "plugin_python_push_config",
+  "plugin_python_readiness",
   "plugin_python_runtime_info",
   "plugin_python_unload",
   "plugin_read_entry",

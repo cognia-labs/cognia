@@ -58,6 +58,9 @@ jest.mock("@/components/plugins/plugin-permission-request-host", () => ({
 jest.mock("@/components/plugins/plugin-data-snapshot-space-host", () => ({
   PluginDataSnapshotSpaceHost: () => <span data-testid="plugin-data-snapshot-space-host" />,
 }))
+jest.mock("@/components/plugins/python/python-prepare-prompt-host", () => ({
+  PythonPreparePromptHost: () => <span data-testid="python-prepare-prompt-host" />,
+}))
 jest.mock("@/components/plugins/auth/plugin-connection-prompt-host", () => ({
   PluginConnectionPromptHost: () => <span data-testid="plugin-connection-prompt-host" />,
 }))
@@ -98,6 +101,7 @@ const pluginHosts = [
   "plugin-consent-overlay",
   "plugin-permission-request-host",
   "plugin-data-snapshot-space-host",
+  "python-prepare-prompt-host",
   "plugin-connection-prompt-host",
   "plugin-enable-failure-toaster",
 ]

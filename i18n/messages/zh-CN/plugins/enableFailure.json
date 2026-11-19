@@ -1,6 +1,7 @@
 {
   "description": "{pluginName} 启用失败：{errorMessage}",
   "manualReason": "启用插件时出错",
+  "prepareDependencies": "准备依赖",
   "retryHint": "打开插件设置查看错误并重试。",
   "title": "{pluginName} 启用失败"
 }

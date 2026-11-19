@@ -66,6 +66,7 @@ import { PluginSourceBadge } from "../plugin-source-badge"
 import { PluginSignatureBadge, type SignatureState } from "../plugin-signature-badge"
 import { PluginActivationProgress } from "../plugin-activation-progress"
 import { PluginRuntimeWarnings, PluginStatusPill } from "../plugin-status-badge"
+import { PluginPythonEnvironmentBadge } from "../python/plugin-python-environment-badge"
 import { PluginAvatar } from "../plugin-avatar"
 import { PluginHint } from "../_shared/plugin-hint"
 import { PluginRowActionsMenu } from "../plugin-row-actions-menu"
@@ -224,6 +225,7 @@ export function PluginDetailHeader({ plugin, onClose, reserveCloseCorner }: Prop
         ) : null}
         <PluginSignatureBadge state={signatureState} compact />
         <PluginRuntimeWarnings plugin={plugin} />
+        <PluginPythonEnvironmentBadge plugin={plugin} />
       </div>
 
       {diagnostics.length > 0 && <DiagnosticsSummary entries={diagnostics} />}

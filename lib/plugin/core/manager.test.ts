@@ -101,6 +101,12 @@ import {
   __resetPythonInterpreterReportStoreForTesting,
   usePythonInterpreterReportStore,
 } from "@/stores/plugin-runtime/python-interpreter-report-store"
+import {
+  __resetPythonReadinessStoreForTesting,
+  recordPythonReadiness,
+  usePythonReadinessStore,
+} from "@/stores/plugin-runtime/python-readiness-store"
+import { PythonDependenciesNotReadyError } from "@/lib/plugin/python/readiness"
 import { PluginActivationConflictError, PluginLifecycleCoordinator } from "./lifecycle-coordinator"
 import { InMemoryPluginLifecycleStateAdapter, type PluginDirtyDiagnostic } from "./lifecycle-state"
 import {
@@ -3934,6 +3940,10 @@ describe("PluginManager", () => {
 
       mockGetState.mockReturnValue(store)
       mockInvoke.mockResolvedValueOnce(undefined)
+      recordPythonReadiness("to-remove", {
+        readiness: { state: "not-prepared", installer: "uv" },
+        interpreterWarning: null,
+      })
 
       const manager = new PluginManager({ pluginDirectory: "/plugins" })
 
@@ -3942,6 +3952,8 @@ describe("PluginManager", () => {
       expect(mockInvoke).toHaveBeenCalledWith("plugin_uninstall", {
         pluginId: "to-remove",
       })
+      // A reinstall must not show the removed package's environment state.
+      expect(usePythonReadinessStore.getState().byPluginId["to-remove"]).toBeUndefined()
 
       expect(store.uninstallPlugin).toHaveBeenCalledWith("to-remove", {
         skipFileRemoval: true,
@@ -7040,11 +7052,12 @@ describe("PluginManager", () => {
       const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
       await manager.loadPythonPlugin("py-plugin")
 
-      expect(mockInvoke).toHaveBeenCalledWith("plugin_python_load", {
+      const loadArgs = mockInvoke.mock.calls.find(([cmd]) => cmd === "plugin_python_load")?.[1]
+      // The Host checks readiness itself (ENV01); load carries no requirements.
+      expect(loadArgs).toStrictEqual({
         pluginId: "py-plugin",
         pluginPath: "/plugins/py-plugin",
         mainModule: "main.py",
-        dependencies: undefined,
         config: {},
         hostSettings: null,
       })
@@ -7113,6 +7126,173 @@ describe("PluginManager", () => {
       const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
       await manager.loadPythonPlugin("py-plugin")
       expect(store.registerPluginHooks).not.toHaveBeenCalled()
+    })
+
+    describe("environment readiness (ENV01)", () => {
+      const withDependencies = () => {
+        const plugin = createTypedPlugin("py-plugin", "python")
+        plugin.manifest.pythonDependencies = ["requests>=2"]
+        return plugin
+      }
+
+      beforeEach(() => __resetPythonReadinessStoreForTesting())
+
+      it.each([
+        [{ state: "not-prepared", installer: "uv" }],
+        [{ state: "stale", reasons: ["dependencies"], installer: "uv" }],
+        [{ state: "preparing", installer: "pip" }],
+        [{ state: "failed", message: "pip exited 1", installer: "pip" }],
+      ])("refuses to load while the environment is %o", async (readiness) => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        mockInvoke.mockImplementation(async (cmd: string) =>
+          cmd === "plugin_python_readiness" ? readiness : undefined
+        )
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+
+        const failure = manager.loadPythonPlugin("py-plugin")
+        await expect(failure).rejects.toBeInstanceOf(PythonDependenciesNotReadyError)
+        await expect(failure).rejects.toMatchObject({ pluginId: "py-plugin", readiness })
+        expect(mockInvoke).toHaveBeenCalledWith("plugin_python_readiness", {
+          pluginId: "py-plugin",
+          dependencies: ["requests>=2"],
+          hostSettings: null,
+        })
+        expect(mockInvoke).not.toHaveBeenCalledWith("plugin_python_load", expect.anything())
+        expect(usePythonReadinessStore.getState().byPluginId["py-plugin"]?.readiness).toEqual(
+          readiness
+        )
+      })
+
+      it.each([
+        [{ state: "ready", scope: "isolated", installer: "uv" }],
+        [{ state: "not-required" }],
+        [{ state: "user-managed", reason: "venv-disabled" }],
+      ])("loads when the environment is %o", async (readiness) => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "plugin_python_readiness") return readiness
+          if (cmd === "plugin_python_load") return { generation: "python-gen-1" }
+          if (cmd === "plugin_python_get_tools") return []
+          return undefined
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await manager.loadPythonPlugin("py-plugin")
+        expect(mockInvoke).toHaveBeenCalledWith("plugin_python_load", expect.anything())
+      })
+
+      it("asks readiness with the host settings the load uses", async () => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        const { getPythonHostSettings } = jest.requireMock("@/lib/db/plugins") as {
+          getPythonHostSettings: jest.Mock
+        }
+        getPythonHostSettings.mockResolvedValueOnce({ interpreterPath: "/opt/py/bin/python" })
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "plugin_python_readiness") return { state: "not-prepared", installer: "uv" }
+          return undefined
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await expect(manager.loadPythonPlugin("py-plugin")).rejects.toBeInstanceOf(
+          PythonDependenciesNotReadyError
+        )
+        expect(mockInvoke).toHaveBeenCalledWith(
+          "plugin_python_readiness",
+          expect.objectContaining({
+            hostSettings: expect.objectContaining({ interpreterPath: "/opt/py/bin/python" }),
+          })
+        )
+      })
+
+      it("refuses nothing on a reply it cannot read", async () => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "plugin_python_readiness") return { state: "needs-uv" }
+          if (cmd === "plugin_python_load") return { generation: "python-gen-1" }
+          if (cmd === "plugin_python_get_tools") return []
+          return undefined
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await manager.loadPythonPlugin("py-plugin")
+        expect(mockInvoke).toHaveBeenCalledWith("plugin_python_load", expect.anything())
+        expect(usePythonReadinessStore.getState().byPluginId["py-plugin"]).toBeUndefined()
+        warn.mockRestore()
+      })
+
+      it("getPythonReadiness answers only for Python plugins with the runtime on", async () => {
+        const frontend = createTypedPlugin("ui-plugin", "frontend")
+        mockGetState.mockReturnValue(createLoadStore(frontend))
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await expect(manager.getPythonReadiness("ui-plugin")).resolves.toBeNull()
+        const off = new PluginManager({ pluginDirectory: "/plugins", enablePython: false })
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        await expect(off.getPythonReadiness("py-plugin")).resolves.toBeNull()
+        expect(mockInvoke).not.toHaveBeenCalledWith("plugin_python_readiness", expect.anything())
+
+        mockInvoke.mockImplementation(async (cmd: string) =>
+          cmd === "plugin_python_readiness"
+            ? { state: "ready", scope: "shared", installer: "uv" }
+            : undefined
+        )
+        await expect(manager.getPythonReadiness("py-plugin")).resolves.toEqual({
+          readiness: { state: "ready", scope: "shared", installer: "uv" },
+          interpreterWarning: null,
+        })
+      })
+
+      it("installPythonDeps shows the preparation everywhere, then what the Host recorded", async () => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        recordPythonReadiness("py-plugin", {
+          readiness: { state: "not-prepared", installer: "uv" },
+          interpreterWarning: null,
+        })
+        const outcome = {
+          venvDir: "/v",
+          scope: "isolated",
+          installer: "uv",
+          downgradedReason: null,
+        }
+        const seen: string[] = []
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "plugin_python_install_deps") {
+            seen.push(usePythonReadinessStore.getState().byPluginId["py-plugin"]!.readiness.state)
+            return outcome
+          }
+          if (cmd === "plugin_python_readiness") {
+            return { state: "ready", scope: "isolated", installer: "uv" }
+          }
+          return undefined
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await expect(manager.installPythonDeps("py-plugin", ["requests>=2"])).resolves.toBe(outcome)
+        expect(seen).toEqual(["preparing"])
+        const state = usePythonReadinessStore.getState()
+        expect(state.byPluginId["py-plugin"]?.readiness.state).toBe("ready")
+        expect(state.lastPreparationByPluginId["py-plugin"]).toEqual({
+          status: "succeeded",
+          outcome,
+        })
+      })
+
+      it("installPythonDeps records a failure, rethrows it and still refreshes", async () => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "plugin_python_install_deps") throw new Error("no network")
+          if (cmd === "plugin_python_readiness") {
+            return { state: "failed", message: "no network", installer: "uv" }
+          }
+          return undefined
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await expect(manager.installPythonDeps("py-plugin", ["requests>=2"])).rejects.toThrow(
+          "no network"
+        )
+        const state = usePythonReadinessStore.getState()
+        expect(state.lastPreparationByPluginId["py-plugin"]).toEqual({
+          status: "failed",
+          message: "no network",
+        })
+        expect(state.byPluginId["py-plugin"]?.readiness.state).toBe("failed")
+      })
     })
 
     it("loadPythonPlugin records the interpreter the host checked (ENV03)", async () => {

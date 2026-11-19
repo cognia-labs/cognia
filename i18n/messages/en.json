@@ -36091,14 +36091,8 @@
         "applyHint": "Changes apply the next time the plugin loads.",
         "callTimeoutMs": "Call timeout (ms)",
         "deps": {
-          "cancel": "Cancel",
-          "confirm": "Install",
-          "confirmBody": "This creates an isolated virtual environment for the plugin and downloads {count, plural, one {# package} other {# packages}} from PyPI. Progress streams into the Logs tab.",
-          "confirmTitle": "Install Python dependencies?",
           "downgraded": "A shared environment was requested but not used: {reason}",
           "error": "Install failed: {message}",
-          "install": "Install dependencies",
-          "installing": "Installing…",
           "outcome": "Installed with {installer} into {scope, select, shared {a shared} isolated {an isolated} other {a {scope}}} environment.",
           "summary": "This plugin declares {count, plural, one {# Python dependency} other {# Python dependencies}}."
         },
@@ -36526,6 +36520,7 @@
     "enableFailure": {
       "description": "{pluginName} failed to enable: {errorMessage}",
       "manualReason": "Plugin enable failed",
+      "prepareDependencies": "Prepare dependencies",
       "retryHint": "Open the plugin settings to inspect the error and retry.",
       "title": "Couldn't enable {pluginName}"
     },
@@ -36546,6 +36541,7 @@
         "invalidManifest": "Its manifest is invalid.",
         "managerNotReady": "Plugins are still starting. Try again in a moment.",
         "notFound": "It's no longer installed.",
+        "pythonDependenciesNotReady": "Its Python dependencies are {state, select, preparing {still being prepared} failed {not ready: the last preparation failed} stale {out of date} other {not installed yet}}. Prepare them, then enable it again.",
         "pythonDisabled": "The Python runtime is turned off on this device.",
         "signature": "Its signature couldn't be verified.",
         "uninstallMirrored": "Uninstall it in the desktop app. This device only mirrors it.",
@@ -37180,6 +37176,47 @@
       "stepConflict": "Conflicts",
       "stepPermission": "Permissions",
       "title": "Review before installing {name}"
+    },
+    "pythonEnvironment": {
+      "badge": {
+        "installed": "Installed · own environment",
+        "notReady": "Dependencies not ready",
+        "preparing": "Preparing dependencies…",
+        "runnable": "Ready to run"
+      },
+      "dialog": {
+        "body": "{name} needs {count, plural, one {# Python package} other {# Python packages}} before it can run. Preparing builds its environment with {installer, select, uv {uv} pip {pip} other {the configured installer}} and downloads them from the package index.",
+        "confirm": "Prepare",
+        "impact": "This uses the network and disk space. Progress streams into the plugin's Logs tab, and you can keep working meanwhile.",
+        "later": "Later",
+        "packages": "Packages",
+        "title": "Prepare Python dependencies for {name}?"
+      },
+      "prepare": "Prepare dependencies",
+      "prepareAgain": "Prepare again",
+      "state": {
+        "failed": "The last preparation failed: {message}",
+        "notPrepared": "Its Python dependencies are not installed yet. Preparing them uses {installer}.",
+        "notRequired": "It declares no Python dependencies.",
+        "preparing": "Its Python environment is being prepared with {installer}.",
+        "ready": "Its {scope, select, shared {shared} isolated {isolated} other {}} Python environment matches what it declares (built with {installer}).",
+        "stale": "Its Python environment no longer matches: {reasons}. Prepare it again before it runs.",
+        "staleReason": {
+          "dependencies": "its requirements changed",
+          "installer": "another installer built it",
+          "interpreter": "it was built on another Python"
+        },
+        "userManaged": {
+          "customInstaller": "A custom installer builds its environment, so the host does not check it.",
+          "interpreterOverride": "It runs on the interpreter you chose, which the host does not prepare.",
+          "venvDisabled": "The managed environment is turned off; it runs on the Python you set up."
+        }
+      },
+      "toast": {
+        "failed": "Couldn't prepare the Python dependencies of {name}",
+        "preparing": "Preparing the Python dependencies of {name}…",
+        "ready": "{name} is ready to run"
+      }
     },
     "resourceManager": {
       "loadingUsage": "Loading recorded usage…",

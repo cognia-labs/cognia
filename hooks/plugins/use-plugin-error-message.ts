@@ -22,6 +22,7 @@ export type PluginErrorCode =
   | "dependencyInUse"
   | "dependencyMissing"
   | "pythonDisabled"
+  | "pythonDependenciesNotReady"
   | "intentDisabled"
   | "dirtyRuntime"
   | "frontendTrust"
@@ -69,6 +70,13 @@ const PATTERNS: ReadonlyArray<{
     values: (m) => ({ dependencies: m[1] ?? "" }),
   },
   { code: "pythonDisabled", test: /the Python runtime is disabled in this profile/ },
+  {
+    // `PythonDependenciesNotReadyError` (lib/plugin/python/readiness.ts). Not
+    // anchored: `PluginEnableError` wraps it in its own prefix.
+    code: "pythonDependenciesNotReady",
+    test: /Cannot load Python plugin "[^"]+": its Python dependencies are not ready \((not-prepared|stale|preparing|failed)\)/,
+    values: (m) => ({ state: m[1] ?? "" }),
+  },
   { code: "intentDisabled", test: /^Plugin "[^"]+" is explicitly disabled$/ },
   {
     code: "dirtyRuntime",

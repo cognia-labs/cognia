@@ -2654,6 +2654,9 @@
     "plugin_python_runtime_info": {
       "to": "plugin.python.runtime_info.get"
     },
+    "plugin_python_readiness": {
+      "to": "plugin.python.readiness.get"
+    },
     "plugin_python_unload": {
       "to": "plugin.python.unload"
     },

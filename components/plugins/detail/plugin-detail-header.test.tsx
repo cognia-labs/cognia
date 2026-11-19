@@ -16,6 +16,11 @@ const setPluginEnabledForHostMock = jest.fn(async (_id: string, _enabled: boolea
   ok: true,
 }))
 const mockMirrored = jest.fn(() => false)
+jest.mock("../python/plugin-python-environment-badge", () => ({
+  PluginPythonEnvironmentBadge: ({ plugin }: { plugin: { id: string } }) => (
+    <span data-testid={`python-environment-badge-${plugin.id}`} />
+  ),
+}))
 jest.mock("@/lib/plugin/core/set-plugin-enabled-for-host", () => ({
   setPluginEnabledForHost: (id: string, enabled: boolean) =>
     setPluginEnabledForHostMock(id, enabled),
@@ -110,6 +115,11 @@ describe("PluginDetailHeader", () => {
     // `t("marketplace")` and the old raw `{plugin.source}` render identically
     // and a text assertion could not tell them apart.
     expect(screen.getByTestId("plugin-source-badge-marketplace")).toBeInTheDocument()
+  })
+
+  it("shows a Python plugin's environment readiness (ENV01)", () => {
+    render(<PluginDetailHeader plugin={makePlugin()} />)
+    expect(screen.getByTestId("python-environment-badge-alpha")).toBeInTheDocument()
   })
 
   it("marks a dev build that is standing in front of the installed one", () => {

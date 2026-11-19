@@ -6,11 +6,13 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 jest.mock("next-intl", () => ({
+  useLocale: () => "en",
   useTranslations: () => {
     const t = (key: string, values?: Record<string, unknown>) =>
       values ? `${key}:${JSON.stringify(values)}` : key
     return t
   },
+  useFormatter: () => ({ list: (items: string[]) => items.join(", ") }),
 }))
 
 const getSettingsMock = jest.fn()
@@ -23,9 +25,27 @@ jest.mock("@/lib/db/plugins", () => ({
 const installDepsMock = jest.fn()
 const runtimeInfoMock = jest.fn()
 const installUvMock = jest.fn()
+const readinessMock = jest.fn()
 jest.mock("@/lib/plugin/core/manager", () => ({
   getPluginManager: jest.fn(() => ({
-    installPythonDeps: installDepsMock,
+    // Records how it ended into the shared store, as the real manager does.
+    installPythonDeps: async (id: string, deps: string[]) => {
+      const { recordPythonPreparation } = jest.requireActual(
+        "@/stores/plugin-runtime/python-readiness-store"
+      )
+      try {
+        const outcome = await installDepsMock(id, deps)
+        recordPythonPreparation(id, { status: "succeeded", outcome: outcome ?? null })
+        return outcome
+      } catch (error) {
+        recordPythonPreparation(id, {
+          status: "failed",
+          message: error instanceof Error ? error.message : String(error),
+        })
+        throw error
+      }
+    },
+    getPythonReadiness: readinessMock,
     getPythonRuntimeInfo: runtimeInfoMock,
     installUv: installUvMock,
   })),
@@ -36,6 +56,10 @@ import {
   __resetPythonInterpreterReportStoreForTesting,
   recordPythonInterpreterReport,
 } from "@/stores/plugin-runtime/python-interpreter-report-store"
+import {
+  __resetPythonReadinessStoreForTesting,
+  recordPythonReadiness,
+} from "@/stores/plugin-runtime/python-readiness-store"
 
 describe("PluginPythonHostSettings", () => {
   beforeEach(() => {
@@ -50,7 +74,9 @@ describe("PluginPythonHostSettings", () => {
     // Default: no native host (the web shell), so the runtime strip is absent.
     runtimeInfoMock.mockRejectedValue(new Error("no native host"))
     installUvMock.mockResolvedValue("uv 0.5.0")
+    readinessMock.mockReset().mockResolvedValue(null)
     __resetPythonInterpreterReportStoreForTesting()
+    __resetPythonReadinessStoreForTesting()
   })
 
   async function renderLoaded(deps: string[] = []) {
@@ -159,20 +185,77 @@ describe("PluginPythonHostSettings", () => {
 
   it("hides the deps block when the manifest declares none", async () => {
     await renderLoaded([])
-    expect(screen.queryByRole("button", { name: /deps\.install/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "prepare" })).not.toBeInTheDocument()
   })
 
   it("installs deps only after the confirm dialog is accepted", async () => {
     const user = userEvent.setup()
     await renderLoaded(["requests>=2", "numpy"])
 
-    await user.click(screen.getByRole("button", { name: /deps\.install/ }))
+    await user.click(screen.getByRole("button", { name: "prepare" }))
     // Dialog open — nothing installed yet.
     expect(installDepsMock).not.toHaveBeenCalled()
-    await user.click(screen.getByRole("button", { name: "deps.confirm" }))
+    await user.click(screen.getByRole("button", { name: "confirm" }))
     await waitFor(() =>
       expect(installDepsMock).toHaveBeenCalledWith("demo", ["requests>=2", "numpy"])
     )
+  })
+
+  it("asks for consent in the shared dialog, naming the installer the Host reported", async () => {
+    const user = userEvent.setup()
+    await renderLoaded(["requests>=2"])
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "not-prepared", installer: "pip" },
+        interpreterWarning: null,
+      })
+    )
+    await user.click(screen.getByRole("button", { name: "prepare" }))
+    expect(screen.getByTestId("python-prepare-dialog")).toHaveTextContent('"installer":"pip"')
+    await user.click(screen.getByRole("button", { name: "later" }))
+    expect(installDepsMock).not.toHaveBeenCalled()
+  })
+
+  it("shows the Host's readiness and offers to prepare again once ready", async () => {
+    await renderLoaded(["requests>=2"])
+    await waitFor(() => expect(readinessMock).toHaveBeenCalledWith("demo"))
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "stale", reasons: ["interpreter"], installer: "uv" },
+        interpreterWarning: null,
+      })
+    )
+    expect(screen.getByTestId("py-readiness")).toHaveAttribute("data-state", "stale")
+    expect(screen.getByTestId("py-readiness")).toHaveTextContent(
+      'stale:{"reasons":"staleReason.interpreter"}'
+    )
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "ready", scope: "isolated", installer: "uv" },
+        interpreterWarning: null,
+      })
+    )
+    expect(screen.getByRole("button", { name: "prepareAgain" })).toBeEnabled()
+  })
+
+  it("shows a running preparation, wherever it started, without offering another", async () => {
+    await renderLoaded(["requests>=2"])
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "preparing", installer: "uv" },
+        interpreterWarning: null,
+      })
+    )
+    expect(screen.getByRole("button", { name: "badge.preparing" })).toBeDisabled()
+  })
+
+  it("asks readiness again after saving settings that decide it", async () => {
+    const user = userEvent.setup()
+    await renderLoaded(["requests>=2"])
+    await waitFor(() => expect(readinessMock).toHaveBeenCalledTimes(1))
+    await user.click(screen.getByLabelText("useVenv"))
+    await user.click(screen.getByRole("button", { name: "save" }))
+    await waitFor(() => expect(readinessMock).toHaveBeenCalledTimes(2))
   })
 
   it("surfaces install failures inline", async () => {
@@ -180,8 +263,8 @@ describe("PluginPythonHostSettings", () => {
     const user = userEvent.setup()
     await renderLoaded(["requests"])
 
-    await user.click(screen.getByRole("button", { name: /deps\.install/ }))
-    await user.click(screen.getByRole("button", { name: "deps.confirm" }))
+    await user.click(screen.getByRole("button", { name: "prepare" }))
+    await user.click(screen.getByRole("button", { name: "confirm" }))
     expect(await screen.findByRole("alert")).toHaveTextContent("pip exploded")
   })
 
@@ -361,8 +444,8 @@ describe("PluginPythonHostSettings", () => {
     const user = userEvent.setup()
     await renderLoaded(["numpy<2"])
 
-    await user.click(screen.getByRole("button", { name: /deps\.install/ }))
-    await user.click(screen.getByRole("button", { name: "deps.confirm" }))
+    await user.click(screen.getByRole("button", { name: "prepare" }))
+    await user.click(screen.getByRole("button", { name: "confirm" }))
 
     const outcome = await screen.findByTestId("py-install-outcome")
     expect(outcome).toHaveTextContent("/data/venvs/repowiki")
@@ -382,8 +465,8 @@ describe("PluginPythonHostSettings", () => {
     const user = userEvent.setup()
     await renderLoaded(["requests"])
 
-    await user.click(screen.getByRole("button", { name: /deps\.install/ }))
-    await user.click(screen.getByRole("button", { name: "deps.confirm" }))
+    await user.click(screen.getByRole("button", { name: "prepare" }))
+    await user.click(screen.getByRole("button", { name: "confirm" }))
 
     const outcome = await screen.findByTestId("py-install-outcome")
     expect(outcome).toHaveTextContent("/data/venvs/_shared/py312")
@@ -636,8 +719,8 @@ describe("PluginPythonHostSettings", () => {
     })
     const user = userEvent.setup()
     await renderLoaded(["requests"])
-    await user.click(screen.getByRole("button", { name: /deps\.install/ }))
-    await user.click(screen.getByRole("button", { name: "deps.confirm" }))
+    await user.click(screen.getByRole("button", { name: "prepare" }))
+    await user.click(screen.getByRole("button", { name: "confirm" }))
     const outcome = await screen.findByTestId("py-install-outcome")
     expect(outcome.className).not.toMatch(/(^|\s)(rounded(-\w+)?|bg-muted\/40)(\s|$)/)
     expect(outcome.className).toContain("border-l-2")

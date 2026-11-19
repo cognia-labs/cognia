@@ -7,11 +7,14 @@
 // on the Dexie plugins row and apply on the next (re)load of the host.
 //
 // The card also owns the environment: which installer provisions it, whether
-// it is shared with other Python plugins, and the dependency-install consent
-// flow. Installs hit the network and write a venv, so they only ever run from
-// the explicit confirm dialog here (progress streams into the Logs tab), and
-// the outcome — including the reason a shared environment was downgraded to
-// an isolated one — is reported back into this card (ADR-0145).
+// it is shared with other Python plugins, the Host's readiness for it, and the
+// consent to prepare it (ENV01, ADR-0258). Preparing hits the network and
+// writes a venv, so it only ever runs after `PythonPrepareDialog` (progress
+// streams into the Logs tab and the line below the button), and the outcome,
+// including the reason a shared environment was downgraded to an isolated
+// one, is reported back into this card (ADR-0145). The readiness and the
+// outcome live in the shared store, so a preparation started from the card's
+// badge or the post-install prompt shows here too.
 //
 // Save / Reset track a baseline the same way the config form below does:
 // Save is enabled only once something changed (and the input is valid), and
@@ -34,24 +37,17 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
 import { getPythonHostSettings, setPythonHostSettings } from "@/lib/db/plugins"
 import {
   reportMatchesInterpreterPath,
   type PythonInterpreterWarning,
 } from "@/lib/plugin/python/interpreter-report"
 import { usePythonInterpreterReportStore } from "@/stores/plugin-runtime/python-interpreter-report-store"
-import type { PythonHostSettings, PythonInstallOutcome } from "@/types/plugin"
+import { PythonPrepareDialog } from "@/components/plugins/python/python-prepare-dialog"
+import { usePluginDisplayName } from "@/hooks/plugins/use-plugin-display-name"
+import { usePythonEnvironment } from "@/hooks/plugins/use-python-environment"
+import { usePythonReadinessText } from "@/hooks/plugins/use-python-readiness-text"
+import type { PythonHostSettings } from "@/types/plugin"
 
 const ENV_LINE = /^[A-Za-z_][A-Za-z0-9_]*=.*$/
 
@@ -195,6 +191,7 @@ export function PluginPythonHostSettings({
   pythonDependencies?: string[]
 }) {
   const t = useTranslations("plugins.detail.pythonHost")
+  const tEnvironment = useTranslations("plugins.pythonEnvironment")
 
   const [form, setForm] = useState<PythonHostForm>(EMPTY_FORM)
   /** What is persisted: the dirty baseline, the Reset target, the switch-warning reference. */
@@ -204,9 +201,18 @@ export function PluginPythonHostSettings({
   const [savedTick, setSavedTick] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const savedTickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [installing, setInstalling] = useState(false)
-  const [installError, setInstallError] = useState<string | null>(null)
-  const [installOutcome, setInstallOutcome] = useState<PythonInstallOutcome | null>(null)
+  // Rendered only for python and hybrid plugins (`PluginDetailConfigure`).
+  const dependencyKey = pythonDependencies.join("\n")
+  const environmentManifest = useMemo(
+    () => ({ type: "python", pythonDependencies: dependencyKey ? dependencyKey.split("\n") : [] }),
+    [dependencyKey]
+  )
+  const environment = usePythonEnvironment(pluginId, environmentManifest)
+  const describeReadiness = usePythonReadinessText()
+  const pluginName = usePluginDisplayName(pluginId)
+  const [prepareOpen, setPrepareOpen] = useState(false)
+  /** This card's own preparation, for a Host that has not answered readiness. */
+  const [preparingHere, setPreparingHere] = useState(false)
   const [uvVersion, setUvVersion] = useState<string | null>(null)
   const [pythonVersion, setPythonVersion] = useState<string | null>(null)
   /** Null until the runtime answers; stays null off Tauri, where it has none. */
@@ -356,6 +362,8 @@ export function PluginPythonHostSettings({
     try {
       await setPythonHostSettings(pluginId, settings)
       setBaseline(savedForm)
+      // The interpreter, installer and venv switch decide readiness.
+      void environment.refresh()
       setSavedTick(true)
       if (savedTickTimer.current !== null) clearTimeout(savedTickTimer.current)
       savedTickTimer.current = setTimeout(() => {
@@ -375,19 +383,20 @@ export function PluginPythonHostSettings({
     setSaveError(null)
   }
 
-  const handleInstallDeps = async () => {
-    setInstalling(true)
-    setInstallError(null)
+  const handlePrepare = async () => {
+    setPrepareOpen(false)
+    setPreparingHere(true)
     try {
-      const { getPluginManager } = await import("@/lib/plugin/core/manager")
-      const outcome = await getPluginManager().installPythonDeps(pluginId, pythonDependencies)
-      setInstallOutcome(outcome ?? null)
-    } catch (error) {
-      setInstallError(String(error))
+      await environment.prepare()
     } finally {
-      setInstalling(false)
+      setPreparingHere(false)
     }
   }
+
+  const readiness = environment.readiness
+  const preparing = preparingHere || readiness?.state === "preparing"
+  const lastPreparation = environment.lastPreparation
+  const installOutcome = lastPreparation?.status === "succeeded" ? lastPreparation.outcome : null
 
   const handleInstallUv = async () => {
     setInstallingUv(true)
@@ -714,36 +723,45 @@ export function PluginPythonHostSettings({
             {t("deps.summary", { count: pythonDependencies.length })}
           </p>
           <p className="text-xs font-mono break-all">{pythonDependencies.join(", ")}</p>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                size="sm"
-                variant="outline"
-                className="pointer-coarse:h-10"
-                disabled={installing}
-              >
-                <DownloadIcon className="size-3.5" />
-                {installing ? t("deps.installing") : t("deps.install")}
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>{t("deps.confirmTitle")}</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {t("deps.confirmBody", { count: pythonDependencies.length })}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>{t("deps.cancel")}</AlertDialogCancel>
-                <AlertDialogAction onClick={handleInstallDeps}>
-                  {t("deps.confirm")}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-          {installError && (
+          {readiness && (
+            <p className="text-xs" data-testid="py-readiness" data-state={readiness.state}>
+              {describeReadiness(readiness)}
+            </p>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="pointer-coarse:h-10"
+            disabled={preparing}
+            onClick={() => setPrepareOpen(true)}
+          >
+            <DownloadIcon className="size-3.5" />
+            {preparing
+              ? tEnvironment("badge.preparing")
+              : environment.summary === "runnable"
+                ? tEnvironment("prepareAgain")
+                : tEnvironment("prepare")}
+          </Button>
+          {preparing && environment.progress && (
+            <p
+              className="text-xs font-mono break-all text-muted-foreground"
+              data-testid="py-prepare-progress"
+              role="status"
+            >
+              {environment.progress}
+            </p>
+          )}
+          <PythonPrepareDialog
+            open={prepareOpen}
+            pluginName={pluginName}
+            dependencies={pythonDependencies}
+            installer={readiness && "installer" in readiness ? readiness.installer : null}
+            onConfirm={() => void handlePrepare()}
+            onLater={() => setPrepareOpen(false)}
+          />
+          {lastPreparation?.status === "failed" && (
             <p className="text-xs text-destructive" role="alert">
-              {t("deps.error", { message: installError })}
+              {t("deps.error", { message: lastPreparation.message })}
             </p>
           )}
           {installOutcome && (

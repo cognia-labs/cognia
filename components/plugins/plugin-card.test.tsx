@@ -6,6 +6,11 @@ import { render, screen, fireEvent } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { PluginRow } from "@/lib/db/plugin-types"
 
+jest.mock("./python/plugin-python-environment-badge", () => ({
+  PluginPythonEnvironmentBadge: ({ plugin }: { plugin: { id: string } }) => (
+    <span data-testid={`python-environment-badge-${plugin.id}`} />
+  ),
+}))
 jest.mock("@/hooks/plugins/use-plugin-rollback-availability", () => ({
   usePluginRollbackAvailable: () => true,
 }))
@@ -67,6 +72,12 @@ describe("PluginCard", () => {
     rerender(<PluginCard plugin={{ ...baseRow }} selected={false} {...cb} />)
     expect(screen.getByTestId("plugin-simulated-badge-plugin_test")).toHaveTextContent("simulated")
     mockSimulated.clear()
+  })
+
+  it("shows a Python plugin's environment readiness (ENV01)", () => {
+    const cb = callbacks()
+    render(<PluginCard plugin={baseRow} selected={false} {...cb} />)
+    expect(screen.getByTestId("python-environment-badge-plugin_test")).toBeInTheDocument()
   })
 
   it("renders core metadata", () => {

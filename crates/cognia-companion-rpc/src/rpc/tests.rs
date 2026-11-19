@@ -3325,10 +3325,36 @@ def helper(a, b):
         "pluginId": plugin_id,
         "pluginPath": plugin_dir.to_string_lossy(),
         "mainModule": "main.py",
-        "dependencies": Value::Null,
         "config": {},
         "hostSettings": Value::Null,
     });
+
+    // Readiness is a read: it needs no grant, and it answers the contract the
+    // headless and mobile planes enforce.
+    let contract = cognia_companion::command_manifest::headless_contract().unwrap();
+    let readiness = |dependencies: Value| {
+        let host_settings = Value::Null;
+        json!({ "pluginId": plugin_id, "dependencies": dependencies, "hostSettings": host_settings })
+    };
+    let not_required = call!("plugin_python_readiness", readiness(json!([])))
+        .expect("readiness without dependencies");
+    assert_eq!(not_required["state"], "not-required");
+    contract
+        .validate_output("plugin_python_readiness", &not_required)
+        .expect("readiness answers its published contract");
+    let not_prepared = call!("plugin_python_readiness", readiness(json!(["requests>=2"])))
+        .expect("readiness with dependencies");
+    assert_eq!(not_prepared["state"], "not-prepared");
+    assert!(
+        matches!(not_prepared["installer"].as_str(), Some("uv" | "pip")),
+        "a state the Host prepares names its installer: {not_prepared}"
+    );
+    contract
+        .validate_output("plugin_python_readiness", &not_prepared)
+        .expect("readiness answers its published contract");
+    call!("plugin_python_readiness", json!({ "pluginId": plugin_id }))
+        .expect_err("dependencies are required");
+
     let denied = call!("plugin_python_load", load_args.clone())
         .expect_err("python:execute must be explicitly granted");
     assert_eq!(denied.0, StatusCode::FORBIDDEN);

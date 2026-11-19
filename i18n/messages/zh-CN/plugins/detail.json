@@ -117,14 +117,8 @@
     "applyHint": "更改会在插件下次加载时生效。",
     "callTimeoutMs": "调用超时(毫秒)",
     "deps": {
-      "cancel": "取消",
-      "confirm": "安装",
-      "confirmBody": "将为该插件创建隔离的虚拟环境,并从 PyPI 下载 {count} 个包。安装进度会显示在“日志”标签页。",
-      "confirmTitle": "安装 Python 依赖?",
       "downgraded": "请求了共用环境但未能使用：{reason}",
       "error": "安装失败:{message}",
-      "install": "安装依赖",
-      "installing": "安装中…",
       "outcome": "已用 {installer} 安装到{scope, select, shared {共用} isolated {独享} other {{scope}}}环境。",
       "summary": "该插件声明了 {count} 个 Python 依赖。"
     },

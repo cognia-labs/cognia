@@ -57,11 +57,9 @@ import collections.abc
 import contextvars
 import functools
 import importlib
-import importlib.util
 import inspect
 import itertools
 import json
-import re
 import sys
 import threading
 import types
@@ -509,26 +507,6 @@ def _install_cognia_shim():
     sys.modules["cognia"] = shim
 
 
-_DEP_NAME_SPLIT = re.compile(r"[<>=!~\[; ]")
-
-
-def _check_dependencies(dependencies):
-    """find_spec each declared pip dependency; return missing pip names."""
-    missing = []
-    for dep in dependencies or []:
-        pip_name = _DEP_NAME_SPLIT.split(dep.strip(), 1)[0]
-        if not pip_name:
-            continue
-        import_name = pip_name.replace("-", "_")
-        try:
-            spec = importlib.util.find_spec(import_name)
-        except (ImportError, ValueError, ModuleNotFoundError):
-            spec = None
-        if spec is None:
-            missing.append(pip_name)
-    return missing
-
-
 def _module_name_from(main_module):
     """manifest.pythonMain is file-like ("main.py", "src/entry.py") — convert
     to an importable dotted module name."""
@@ -570,14 +548,6 @@ async def _handle_import_main(params):
     global _MAIN_MODULE, _CONFIG, _HOST_CALL_TIMEOUT, _MAX_INFLIGHT_HOST_CALLS
     plugin_path = params["plugin_path"]
     main_module = params["main_module"]
-    missing = _check_dependencies(params.get("dependencies"))
-    if missing:
-        raise RuntimeError(
-            "missing Python dependencies: "
-            + ", ".join(missing)
-            + " — install them with: pip install "
-            + " ".join(missing)
-        )
     timeout_ms = params.get("host_call_timeout_ms")
     if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
         _HOST_CALL_TIMEOUT = float(timeout_ms) / 1000.0

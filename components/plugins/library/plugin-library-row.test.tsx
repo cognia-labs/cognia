@@ -16,6 +16,11 @@ jest.mock("next-intl", () => ({
   },
 }))
 
+jest.mock("../python/plugin-python-environment-badge", () => ({
+  PluginPythonEnvironmentBadge: ({ plugin }: { plugin: { id: string } }) => (
+    <span data-testid={`python-environment-badge-${plugin.id}`} />
+  ),
+}))
 jest.mock("../_shared/plugin-compatibility-badge", () => ({
   PluginCompatibilityBadge: () => <div data-testid="compatibility-badge-stub" />,
 }))
@@ -262,6 +267,12 @@ describe("PluginLibraryRow", () => {
     const h = handlers()
     render(<PluginLibraryRow plugin={baseRow} selected={false} active={false} {...h} />)
     expect(screen.getByTestId("compatibility-badge-stub")).toBeInTheDocument()
+  })
+
+  it("shows a Python plugin's environment readiness, as the card does (ENV01)", () => {
+    const h = handlers()
+    render(<PluginLibraryRow plugin={baseRow} selected={false} active={false} {...h} />)
+    expect(screen.getByTestId(`python-environment-badge-${baseRow.id}`)).toBeInTheDocument()
   })
 
   it("renders the loader's degraded-runtime markers", () => {

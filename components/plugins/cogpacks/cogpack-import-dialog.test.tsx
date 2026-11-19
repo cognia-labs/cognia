@@ -20,6 +20,10 @@ jest.mock("@/lib/plugin/cogpack/import", () => ({
   applyCogpackImport: (...a: unknown[]) => applyCogpackImport(...a),
 }))
 jest.mock("sonner", () => ({ toast: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } }))
+const mockRequestPrompt = jest.fn()
+jest.mock("@/lib/plugin/python/prepare-prompt-requests", () => ({
+  requestPythonPreparePrompt: (id: string) => mockRequestPrompt(id),
+}))
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
@@ -135,6 +139,8 @@ describe("CogpackImportDialog", () => {
     })
     await expect(reviewStagedWasm({ manifest: { id: "w", type: "wasm" } })).resolves.toBeNull()
     expect(toast.warning).toHaveBeenCalledWith('doneWithMissing:{"name":"Deep writer","count":1}')
+    // ENV01: every installed member is offered its Python preparation.
+    expect(mockRequestPrompt.mock.calls).toEqual([["gh"]])
     fireEvent.click(screen.getByTestId("cogpack-import-switch"))
     expect(onSwitch).toHaveBeenCalledWith("c")
   })

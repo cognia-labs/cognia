@@ -17,7 +17,19 @@ import {
 import type { SlashCommandContext } from "@/lib/slash-commands/registry"
 import { usePluginStore } from "@/stores/plugin-runtime"
 import { recordPythonInterpreterReport } from "@/stores/plugin-runtime/python-interpreter-report-store"
+import {
+  forgetPythonReadiness,
+  markPythonPreparing,
+  recordPythonPreparation,
+  recordPythonReadiness,
+} from "@/stores/plugin-runtime/python-readiness-store"
 import { readPythonInterpreterReport } from "@/lib/plugin/python/interpreter-report"
+import {
+  PythonDependenciesNotReadyError,
+  readPythonReadinessReport,
+  readinessBlocksLoad,
+  type PythonReadinessReport,
+} from "@/lib/plugin/python/readiness"
 import { getPluginBackupManager } from "../lifecycle/backup"
 import stagedPluginCatalog from "@/lib/plugin/distribution/bundled-plugins.generated.json"
 import type {
@@ -5480,6 +5492,7 @@ export class PluginManager {
         getPluginConsentBroker().clearSessionGrantsForPlugin(pluginId)
         this.registeredSlashCommandsByPlugin.delete(pluginId)
         this.activationInFlight.delete(pluginId)
+        forgetPythonReadiness(pluginId)
         this.recordPluginVerification(pluginId, {
           status: "installed",
           action: "uninstall",
@@ -7784,25 +7797,15 @@ export class PluginManager {
     }
 
     try {
-      // Host-level settings are user state on the Dexie row; absent in
-      // tests/web mode is fine (backend defaults apply).
-      const hostSettings = await getPythonHostSettings(pluginId).catch(() => undefined)
+      const effectiveHostSettings = await this.effectivePythonHostSettings(pluginId)
 
-      // ADR-0028 Phase 3 — default the OS-sandbox flag from the global toggle
-      // when the plugin hasn't chosen one. Stays `null` (backend defaults) when
-      // neither per-plugin settings nor the global sandbox are set, so the
-      // common no-config path is unchanged.
-      let sandboxDefault = false
-      try {
-        const { useSettingsStore } = await import("@/stores/settings")
-        sandboxDefault = useSettingsStore.getState().settings?.sandboxDefaultEnabled ?? false
-      } catch {
-        // Settings store unavailable (web/test) — leave the backend default.
+      // ENV01: the Host says whether the environment it built still matches
+      // the plugin; it no longer guesses import names at load. A reply this
+      // build cannot read refuses nothing.
+      const readiness = await this.queryPythonReadiness(pluginId, effectiveHostSettings)
+      if (readiness && readinessBlocksLoad(readiness.readiness)) {
+        throw new PythonDependenciesNotReadyError(pluginId, readiness.readiness)
       }
-      const effectiveHostSettings: PythonHostSettings | null =
-        hostSettings || sandboxDefault
-          ? { ...(hostSettings ?? {}), sandboxed: hostSettings?.sandboxed ?? sandboxDefault }
-          : null
 
       // Load Python plugin via the subprocess host. The reply surfaces the
       // plugin's declared @hook handlers for TS-side dispatch.
@@ -7812,7 +7815,6 @@ export class PluginManager {
           pluginId,
           pluginPath: plugin.path,
           mainModule: plugin.manifest.pythonMain,
-          dependencies: plugin.manifest.pythonDependencies,
           config: plugin.config ?? null,
           hostSettings: effectiveHostSettings,
         }
@@ -8022,12 +8024,84 @@ export class PluginManager {
       }
     })()
     const hostSettings = await getPythonHostSettings(pluginId).catch(() => undefined)
-    return this.invokeNativeHost<PythonInstallOutcome | null>("plugin_python_install_deps", {
+    markPythonPreparing(pluginId)
+    try {
+      const outcome = await this.invokeNativeHost<PythonInstallOutcome | null>(
+        "plugin_python_install_deps",
+        {
+          pluginId,
+          dependencies,
+          venvScope: manifestScope,
+          hostSettings: hostSettings ?? null,
+        }
+      )
+      recordPythonPreparation(pluginId, { status: "succeeded", outcome: outcome ?? null })
+      return outcome
+    } catch (error) {
+      recordPythonPreparation(pluginId, {
+        status: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    } finally {
+      // Succeeded, failed or refused (one already running): what the Host
+      // recorded is what the card shows next. A failed refresh keeps the
+      // install's own outcome.
+      await this.getPythonReadiness(pluginId).catch(() => undefined)
+    }
+  }
+
+  /**
+   * Whether a Python plugin's environment can load it now (ENV01, ADR-0258),
+   * recorded into `usePythonReadinessStore`. `null` for a plugin that is not
+   * a Python plugin, when the Python runtime is off, or when the Host's
+   * answer is not one this build can read.
+   */
+  async getPythonReadiness(pluginId: string): Promise<PythonReadinessReport | null> {
+    if (!this.config.enablePython) return null
+    const type = usePluginStore.getState()?.plugins?.[pluginId]?.manifest?.type
+    if (type !== "python" && type !== "hybrid") return null
+    return this.queryPythonReadiness(pluginId, await this.effectivePythonHostSettings(pluginId))
+  }
+
+  private async queryPythonReadiness(
+    pluginId: string,
+    hostSettings: PythonHostSettings | null
+  ): Promise<PythonReadinessReport | null> {
+    const plugin = usePluginStore.getState()?.plugins?.[pluginId]
+    const reply = await this.invokeNativeHost<unknown>("plugin_python_readiness", {
       pluginId,
-      dependencies,
-      venvScope: manifestScope,
-      hostSettings: hostSettings ?? null,
+      dependencies: plugin?.manifest?.pythonDependencies ?? [],
+      hostSettings,
     })
+    const report = readPythonReadinessReport(reply)
+    if (!report) {
+      console.warn(`[plugin:${pluginId}] unreadable Python readiness reply`, reply)
+    }
+    recordPythonReadiness(pluginId, report)
+    return report
+  }
+
+  /**
+   * The host settings a load runs with: the plugin's own (user state on the
+   * Dexie row; absent in tests/web mode is fine, backend defaults apply),
+   * with the OS-sandbox flag defaulted from the global toggle when the plugin
+   * has not chosen one (ADR-0028 Phase 3). `null` (backend defaults) when
+   * neither is set, so the common no-config path is unchanged. Readiness is
+   * asked with the same settings, so it describes the load that follows.
+   */
+  private async effectivePythonHostSettings(pluginId: string): Promise<PythonHostSettings | null> {
+    const hostSettings = await getPythonHostSettings(pluginId).catch(() => undefined)
+    let sandboxDefault = false
+    try {
+      const { useSettingsStore } = await import("@/stores/settings")
+      sandboxDefault = useSettingsStore.getState().settings?.sandboxDefaultEnabled ?? false
+    } catch {
+      // Settings store unavailable (web/test) — leave the backend default.
+    }
+    return hostSettings || sandboxDefault
+      ? { ...(hostSettings ?? {}), sandboxed: hostSettings?.sandboxed ?? sandboxDefault }
+      : null
   }
 
   /** Host-level python settings (persisted on the Dexie plugins row). */

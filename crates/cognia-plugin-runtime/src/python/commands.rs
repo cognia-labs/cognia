@@ -26,6 +26,7 @@ use super::interpreter_check::{
     interpreter_warning, read_requires_python, warning_line, InterpreterWarning, RequiresPython,
 };
 use super::protocol::{PluginHost, CALL_TIMEOUT, CONTROL_TIMEOUT};
+use super::readiness::{compute_readiness, ReadinessInputs, ReadinessReport};
 use super::PythonRuntimeState;
 use crate::{PluginError, PluginRuntimeState, Result};
 
@@ -241,7 +242,6 @@ pub async fn plugin_python_load(
     plugin_id: String,
     plugin_path: String,
     main_module: String,
-    dependencies: Option<Vec<String>>,
     config: Option<Value>,
     host_settings: Option<PythonHostSettings>,
 ) -> Result<Value> {
@@ -251,7 +251,6 @@ pub async fn plugin_python_load(
         plugin_id,
         plugin_path,
         main_module,
-        dependencies,
         config,
         host_settings,
     )
@@ -265,7 +264,6 @@ pub async fn plugin_python_load_for_state(
     plugin_id: String,
     plugin_path: String,
     main_module: String,
-    dependencies: Option<Vec<String>>,
     config: Option<Value>,
     host_settings: Option<PythonHostSettings>,
 ) -> Result<Value> {
@@ -286,7 +284,6 @@ pub async fn plugin_python_load_for_state(
         plugin_id,
         safe_root.to_string_lossy().into_owned(),
         main_module,
-        dependencies,
         config,
         host_settings.unwrap_or_default(),
     )
@@ -854,6 +851,77 @@ pub async fn plugin_python_install_deps_for_state(
     .await
 }
 
+/// Whether a plugin's Python environment can load it (ENV01, ADR-0258):
+/// computed from the environment the Host recorded and the preparation it is
+/// running or last failed. Read-only; preparing stays `plugin_python_install_deps`.
+#[cfg(feature = "tauri-host")]
+#[tauri::command]
+pub async fn plugin_python_readiness(
+    state: State<'_, PythonRuntimeState>,
+    plugins: State<'_, PluginRuntimeState>,
+    plugin_id: String,
+    dependencies: Vec<String>,
+    host_settings: Option<PythonHostSettings>,
+) -> Result<ReadinessReport> {
+    plugin_python_readiness_for_state(
+        state.inner(),
+        plugins.inner(),
+        &plugin_id,
+        &dependencies,
+        host_settings.unwrap_or_default(),
+    )
+    .await
+}
+
+pub async fn plugin_python_readiness_for_state(
+    state: &PythonRuntimeState,
+    plugins: &PluginRuntimeState,
+    plugin_id: &str,
+    dependencies: &[String],
+    settings: PythonHostSettings,
+) -> Result<ReadinessReport> {
+    // No permission gate: this only reads. But it does run the plugin's venv
+    // interpreter with `--version`, and the id is joined into that path, so
+    // it must be a single path component before anything is resolved.
+    let plugin_id = crate::validate_plugin_id_path_component(plugin_id)?;
+    let plugin_id = plugin_id.as_str();
+    let runtime = require_interpreter(state)?;
+    let (interpreter, source) = resolve_plugin_interpreter(state, plugin_id, &settings)?;
+    let preparation = state.preparations.get(plugin_id);
+    let python_dir = state.python_dir.clone();
+    let plugin_root = plugins.plugin_dir(plugin_id);
+    let plugin_id = plugin_id.to_string();
+    let dependencies = dependencies.to_vec();
+    // Marker reads, the uv probe and the interpreter probe are all blocking.
+    tokio::task::spawn_blocking(move || {
+        let environment = super::venv::recorded_environment(&python_dir, &plugin_id);
+        // Resolved at most once: on `auto` it probes for uv.
+        let resolved = std::cell::OnceCell::new();
+        let expected_installer =
+            || *resolved.get_or_init(|| super::venv::expected_installer_name(&settings.installer));
+        let readiness = compute_readiness(&ReadinessInputs {
+            plugin_id: &plugin_id,
+            dependencies: &dependencies,
+            use_venv: settings.use_venv.unwrap_or(true),
+            interpreter_override: source == InterpreterSource::Override,
+            expected_installer: &expected_installer,
+            runtime_version: runtime.version.as_deref(),
+            environment: environment.as_ref(),
+            preparation: preparation.as_ref(),
+        });
+        let installer = readiness.host_prepared().then(expected_installer);
+        let (_, _, interpreter_warning) =
+            check_plugin_interpreter(interpreter, source, &plugin_root);
+        ReadinessReport {
+            readiness,
+            installer,
+            interpreter_warning,
+        }
+    })
+    .await
+    .map_err(|error| PluginError::Internal(format!("readiness task panicked: {error}")))
+}
+
 /// Answer one plugin -> host RPC request (ADR-0145).
 ///
 /// The renderer (or the headless plugin runtime) calls this once per
@@ -1161,7 +1229,6 @@ async fn load_inner(
     plugin_id: String,
     plugin_path: String,
     main_module: String,
-    dependencies: Option<Vec<String>>,
     config: Option<Value>,
     settings: PythonHostSettings,
 ) -> Result<Value> {
@@ -1205,7 +1272,6 @@ async fn load_inner(
     let import_params = json!({
         "plugin_path": plugin_path,
         "main_module": main_module,
-        "dependencies": dependencies,
         "config": config,
         "host_call_timeout_ms": host_call_timeout_ms(&settings),
         "max_inflight_host_calls": max_inflight_host_calls(&settings),
@@ -1541,13 +1607,39 @@ async fn install_deps_inner(
     // Same gate order as load: permission first, availability second.
     check_execute_grant(plugins, plugin_id)?;
     let base = require_interpreter(state)?;
+    let preparation = state.preparations.begin(plugin_id).ok_or_else(|| {
+        PluginError::InvalidArgument(format!(
+            "the Python environment of {plugin_id} is already being prepared"
+        ))
+    })?;
+    let outcome = provision_for_plugin(
+        state,
+        plugin_id,
+        dependencies,
+        manifest_scope,
+        &base,
+        settings,
+    )
+    .await;
+    preparation.finish(&outcome);
+    outcome
+}
+
+async fn provision_for_plugin(
+    state: &PythonRuntimeState,
+    plugin_id: &str,
+    dependencies: &[String],
+    manifest_scope: Option<&str>,
+    base: &Interpreter,
+    settings: PythonHostSettings,
+) -> Result<PythonInstallOutcome> {
     let sink = state.sink();
     let installer = super::venv::resolve_installer(&settings.installer)?;
     // The user's setting beats the manifest: the plugin author knows whether
     // its dependencies are unusual, but the user owns the disk.
     let scope = super::venv::VenvScope::parse(settings.venv_scope.as_deref().or(manifest_scope));
     let outcome = super::venv::provision_dependencies(
-        &base,
+        base,
         &state.python_dir,
         plugin_id,
         dependencies,
@@ -1695,7 +1787,6 @@ mod tests {
             "/p".into(),
             "main.py".into(),
             None,
-            None,
             PythonHostSettings::default(),
         )
         .await
@@ -1715,7 +1806,6 @@ mod tests {
             "demo".into(),
             "/p".into(),
             "main.py".into(),
-            None,
             None,
             PythonHostSettings::default(),
         )
@@ -1792,7 +1882,6 @@ mod tests {
             "demo".into(),
             plugin_dir.to_string_lossy().into_owned(),
             "main.py".into(),
-            None,
             None,
             PythonHostSettings::default(),
         )
@@ -2124,6 +2213,208 @@ mod tests {
         }
     }
 
+    fn seed_isolated_venv(state: &PythonRuntimeState, plugin_id: &str, marker: Value) {
+        let venv = super::super::venv::venv_dir(&state.python_dir, plugin_id);
+        let python = super::super::venv::venv_python(&venv);
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, "").unwrap();
+        std::fs::write(
+            venv.join(super::super::venv::VENV_MARKER),
+            serde_json::to_string(&marker).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn pip_settings() -> PythonHostSettings {
+        PythonHostSettings {
+            installer: super::super::venv::InstallerPreference {
+                kind: Some("pip".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn readiness_json(
+        state: &PythonRuntimeState,
+        plugins: &PluginRuntimeState,
+        dependencies: &[&str],
+        settings: PythonHostSettings,
+    ) -> Value {
+        let dependencies: Vec<String> = dependencies.iter().map(|d| d.to_string()).collect();
+        let report =
+            plugin_python_readiness_for_state(state, plugins, "demo", &dependencies, settings)
+                .await
+                .unwrap();
+        serde_json::to_value(report).unwrap()
+    }
+
+    #[tokio::test]
+    async fn readiness_needs_an_initialized_runtime() {
+        let tmp = TempDir::new().unwrap();
+        let err = plugin_python_readiness_for_state(
+            &py_state(&tmp),
+            &plugins_state(&tmp),
+            "demo",
+            &["requests".into()],
+            PythonHostSettings::default(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, PluginError::PythonUnavailable(_)));
+    }
+
+    #[tokio::test]
+    async fn readiness_refuses_an_id_that_is_not_one_path_component() {
+        // The id reaches the venv path whose interpreter is then run, so a
+        // traversal must be refused before the runtime is even consulted.
+        let tmp = TempDir::new().unwrap();
+        for id in ["../escape", "a/b", "", "Upper"] {
+            let err = plugin_python_readiness_for_state(
+                &py_state(&tmp),
+                &plugins_state(&tmp),
+                id,
+                &["requests".into()],
+                PythonHostSettings::default(),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, PluginError::InvalidArgument(_)),
+                "{id:?}: {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn readiness_follows_the_recorded_environment() {
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        apply_initialize(
+            &state,
+            Some(Interpreter {
+                argv_prefix: vec!["python".into()],
+                version: Some("3.12.0".into()),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            readiness_json(&state, &plugins, &[], pip_settings()).await["state"],
+            "not-required"
+        );
+        assert_eq!(
+            readiness_json(&state, &plugins, &["requests"], pip_settings()).await["state"],
+            "not-prepared"
+        );
+
+        seed_isolated_venv(
+            &state,
+            "demo",
+            json!({ "version": "3.12.0", "installer": "pip", "scope": "isolated", "deps": ["requests"] }),
+        );
+        assert_eq!(
+            readiness_json(&state, &plugins, &["requests"], pip_settings()).await,
+            json!({ "state": "ready", "scope": "isolated", "installer": "pip" })
+        );
+        assert_eq!(
+            readiness_json(&state, &plugins, &["requests", "pillow"], pip_settings()).await,
+            json!({ "state": "stale", "reasons": ["dependencies"], "installer": "pip" })
+        );
+        // Nothing to prepare names no installer.
+        assert_eq!(
+            readiness_json(&state, &plugins, &[], pip_settings()).await,
+            json!({ "state": "not-required" })
+        );
+
+        // A running preparation wins over what is on disk.
+        let running = state.preparations.begin("demo").unwrap();
+        assert_eq!(
+            readiness_json(&state, &plugins, &["requests"], pip_settings()).await["state"],
+            "preparing"
+        );
+        drop(running);
+    }
+
+    #[tokio::test]
+    async fn readiness_leaves_a_user_chosen_interpreter_to_the_user() {
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        apply_initialize(
+            &state,
+            Some(Interpreter {
+                argv_prefix: vec!["python".into()],
+                version: Some("3.12.0".into()),
+            }),
+        )
+        .unwrap();
+        let report = readiness_json(
+            &state,
+            &plugins,
+            &["requests"],
+            PythonHostSettings {
+                interpreter_path: Some("cognia-definitely-not-a-real-binary".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            report,
+            json!({
+                "state": "user-managed",
+                "reason": "interpreter-override",
+                "interpreterWarning": { "kind": "version-unknown" },
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_preparation_is_reported_and_one_runs_at_a_time() {
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        grant_execute(&plugins, "demo");
+        // A base interpreter that cannot run: creating the venv fails.
+        apply_initialize(
+            &state,
+            Some(Interpreter {
+                argv_prefix: vec!["cognia-definitely-not-a-real-binary".into()],
+                version: Some("3.12.0".into()),
+            }),
+        )
+        .unwrap();
+
+        let running = state.preparations.begin("demo").unwrap();
+        let err = install_deps_inner(
+            &state,
+            &plugins,
+            "demo",
+            &["requests".into()],
+            None,
+            pip_settings(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("already being prepared"), "{err}");
+        drop(running);
+
+        install_deps_inner(
+            &state,
+            &plugins,
+            "demo",
+            &["requests".into()],
+            Some("isolated"),
+            pip_settings(),
+        )
+        .await
+        .unwrap_err();
+        let report = readiness_json(&state, &plugins, &["requests"], pip_settings()).await;
+        assert_eq!(report["state"], "failed");
+        assert!(report["message"].as_str().is_some_and(|m| !m.is_empty()));
+    }
+
     #[tokio::test]
     async fn install_deps_gate_order_permission_then_availability() {
         let tmp = TempDir::new().unwrap();
@@ -2222,7 +2513,6 @@ def helper(a, b):
             "demo".into(),
             plugin_path,
             "main.py".into(),
-            None,
             None,
             PythonHostSettings::default(),
         )
@@ -2375,7 +2665,6 @@ class Tesseract:
             "contrib".into(),
             plugin_dir.to_string_lossy().into_owned(),
             "main.py".into(),
-            None,
             None,
             PythonHostSettings::default(),
         )
@@ -2587,7 +2876,6 @@ cognia.contribution("shared")(Shared())
             "inst".into(),
             plugin_dir.to_string_lossy().into_owned(),
             "main.py".into(),
-            None,
             None,
             PythonHostSettings::default(),
         )
@@ -2841,7 +3129,6 @@ def rewrite(payload):
             "demo".into(),
             plugin_dir.to_string_lossy().into_owned(),
             "main.py".into(),
-            None,
             Some(json!({"greeting": "hi"})),
             PythonHostSettings::default(),
         )
@@ -2960,7 +3247,6 @@ def rewrite(payload):
             plugin_dir.to_string_lossy().into_owned(),
             "main.py".into(),
             None,
-            None,
             PythonHostSettings::default(),
         )
         .await
@@ -3035,7 +3321,6 @@ def rewrite(payload):
             "cognia-python-runtime-demo".into(),
             demo_dir.to_string_lossy().into_owned(),
             "main.py".into(),
-            None,
             None,
             PythonHostSettings::default(),
         )
@@ -3152,7 +3437,6 @@ def rewrite(payload):
             "cognia-python-demo".into(),
             demo_dir.to_string_lossy().into_owned(),
             "main.py".into(),
-            None,
             Some(json!({"greeting": "Hi", "shout": true})),
             PythonHostSettings::default(),
         )
@@ -3248,7 +3532,6 @@ def rewrite(payload):
             plugin_dir.to_string_lossy().into_owned(),
             "main.py".into(),
             None,
-            None,
             PythonHostSettings {
                 interpreter_path: Some(program.clone()),
                 ..Default::default()
@@ -3273,44 +3556,6 @@ def rewrite(payload):
         }));
         assert!(state.loaded("demo"));
         unload_inner(&state, "demo").await.unwrap();
-    }
-
-    /// Missing pip dependencies must produce the actionable error message.
-    #[tokio::test]
-    async fn load_with_missing_dependency_reports_pip_install_hint() {
-        let Some(interp) = super::super::discover::discover_interpreter(None) else {
-            eprintln!("skipping missing-dependency test: no python interpreter found");
-            return;
-        };
-
-        let tmp = TempDir::new().unwrap();
-        let state = py_state(&tmp);
-        let plugins = plugins_state(&tmp);
-        grant_execute(&plugins, "demo");
-        apply_initialize(&state, Some(interp)).unwrap();
-
-        let plugin_dir = tmp.path().join("demo-plugin");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::write(plugin_dir.join("main.py"), "x = 1\n").unwrap();
-
-        let err = load_inner(
-            &state,
-            &plugins,
-            "demo".into(),
-            plugin_dir.to_string_lossy().into_owned(),
-            "main.py".into(),
-            Some(vec!["cognia-definitely-missing-pkg>=1.0".into()]),
-            None,
-            PythonHostSettings::default(),
-        )
-        .await
-        .unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("missing Python dependencies"));
-        assert!(message.contains("cognia-definitely-missing-pkg"));
-        assert!(message.contains("pip install"));
-        // Failed load must not leave a host behind.
-        assert!(state.hosts.read().is_empty());
     }
 
     #[test]
@@ -3482,7 +3727,6 @@ def rewrite(payload):
             "cognia-python-demo".into(),
             demo_dir.to_string_lossy().into_owned(),
             "main.py".into(),
-            None,
             None,
             PythonHostSettings::default(),
         )

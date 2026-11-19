@@ -15,6 +15,10 @@ jest.mock("@/lib/db/plugins", () => ({
     id === "demo-plugin" ? { id, version: "1.0.0" } : null
   ),
 }))
+const mockRequestPrompt = jest.fn()
+jest.mock("@/lib/plugin/python/prepare-prompt-requests", () => ({
+  requestPythonPreparePrompt: (id: string) => mockRequestPrompt(id),
+}))
 jest.mock("@/lib/plugin/marketplace/review-client", () => ({
   loadRegistryReviewClient: jest.fn(async () => ({
     getPlugin: jest.fn(async () => null),
@@ -148,6 +152,16 @@ describe("usePluginPreInstall", () => {
     expect(result.current.busy).toBe(false)
   })
 
+  it("offers no preparation for an install that did not happen", async () => {
+    mockRequestPrompt.mockClear()
+    const client = makeClient({ installPlugin: jest.fn().mockRejectedValue(new Error("boom")) })
+    const { result } = renderHook(() => usePluginPreInstall(client))
+    await act(async () => {
+      await result.current.install("demo-plugin", "1.0.0", "Demo")
+    })
+    expect(mockRequestPrompt).not.toHaveBeenCalled()
+  })
+
   it("accepts a per-install client for a freshly selected local directory", async () => {
     const client = makeClient()
     const { result } = renderHook(() => usePluginPreInstall(null))
@@ -169,6 +183,9 @@ describe("usePluginPreInstall", () => {
     })
 
     expect(resolved).toEqual({ status: "installed", pluginId: "demo-plugin" })
+    // ENV01: the installed plugin is offered its Python preparation; the
+    // prompt itself decides whether there is anything to ask.
+    expect(mockRequestPrompt).toHaveBeenCalledWith("demo-plugin")
     // Adoption signal, outcome only — no plugin id leaves the process.
     expect(trackEvent).toHaveBeenCalledWith("app.plugin.installed", { outcome: "succeeded" })
     expect(client.installPlugin).toHaveBeenCalledWith("demo-plugin", "1.0.0")

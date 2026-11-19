@@ -112,6 +112,13 @@ export interface RunMarketplaceInstallOpts {
   signal?: AbortSignal
   /** Reviewed active consumers to pause immediately before this commit. */
   pauseBeforeInstall?: string[]
+  /**
+   * Told once the whole install committed, with every plugin it installed:
+   * the dependencies it pulled in, then `pluginId`. Not called when the
+   * install failed, was cancelled or was rolled back. A throwing callback
+   * does not undo the install.
+   */
+  onInstalled?: (pluginIds: readonly string[]) => void
 
   /**
    * Resolve the conflict-review step. Invoked only when the install detects
@@ -529,6 +536,13 @@ export async function runMarketplaceInstall(
     }
   }
   for (const reservation of context.reservations) reservation.dispose()
+  if (result.status === "installed") {
+    try {
+      opts.onInstalled?.([...context.committedPlugins])
+    } catch (error) {
+      console.warn("[plugin-install] onInstalled callback failed (install kept):", error)
+    }
+  }
   return result
 }
 

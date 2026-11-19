@@ -24,6 +24,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { PermissionListCard } from "@/components/plugins/dialogs/plugin-pre-install-dialog"
 import { useWasmCapabilityGrant } from "@/hooks/plugins/use-wasm-capability-grant"
 import { packageFormatErrorCode, type PackageFormatErrorCode } from "@/lib/packaging/archive-path"
+import { requestPythonPreparePrompt } from "@/lib/plugin/python/prepare-prompt-requests"
 import { shortFingerprint } from "@/lib/plugin/security/signature"
 import {
   applyCogpackImport,
@@ -170,6 +171,9 @@ export function CogpackImportDialog({
             )?.decision ?? null,
         }
       )
+      // ENV01: offer to prepare each installed Python member's dependencies
+      // (asked only when the Host says there is something to prepare).
+      result.installed.forEach(requestPythonPreparePrompt)
       const name = current.inspected.manifest.name
       if (result.missing.length > 0)
         toast.warning(t("doneWithMissing", { name, count: result.missing.length }))

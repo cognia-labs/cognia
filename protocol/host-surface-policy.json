@@ -723,6 +723,10 @@
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
     },
     {
+      "arm": "plugin_python_readiness",
+      "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
+    },
+    {
       "arm": "plugin_python_runtime_info",
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
     },

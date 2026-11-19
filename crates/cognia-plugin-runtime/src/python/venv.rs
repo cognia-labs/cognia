@@ -134,12 +134,16 @@ pub fn uv_version_of(program: &str) -> Option<String> {
     uv_version(program)
 }
 
+/// How long `uv --version` may take before uv counts as absent.
+const UV_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn uv_version(program: &str) -> Option<String> {
-    let output = std::process::Command::new(program)
+    let mut command = cognia_core::process_probe::background_command(program);
+    command
         .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let output = cognia_core::process_probe::run_probe(command, UV_PROBE_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -186,6 +190,24 @@ pub fn resolve_installer(pref: &InstallerPreference) -> Result<Installer> {
         _ => Ok(discover_uv(pref.path.as_deref())
             .map(Installer::Uv)
             .unwrap_or(Installer::Pip)),
+    }
+}
+
+/// The name the marker would record for the installer `pref` selects, without
+/// failing when it is missing: an explicit `uv` that is not installed still
+/// selects uv, and the preparation reports that it cannot run it.
+pub fn expected_installer_name(pref: &InstallerPreference) -> &'static str {
+    match pref.kind.as_deref().unwrap_or("auto") {
+        "pip" => "pip",
+        "uv" => "uv",
+        "custom" => "custom",
+        _ => {
+            if discover_uv(pref.path.as_deref()).is_some() {
+                "uv"
+            } else {
+                "pip"
+            }
+        }
     }
 }
 
@@ -298,15 +320,57 @@ fn write_marker(venv: &Path, marker: &VenvMarker) -> Result<()> {
 /// this plugin is actually recorded as a contributor. A shared environment
 /// someone else populated is not this plugin's interpreter.
 pub fn venv_interpreter(python_dir: &Path, plugin_id: &str) -> Option<Interpreter> {
-    if let Some(interpreter) = complete_venv(&venv_dir(python_dir, plugin_id)) {
-        return Some(interpreter);
+    recorded_environment(python_dir, plugin_id).map(|environment| environment.interpreter)
+}
+
+/// The environment the Host built for a plugin, as its marker records it.
+#[derive(Debug, Clone)]
+pub struct RecordedEnvironment {
+    pub scope: VenvScope,
+    pub interpreter: Interpreter,
+    pub marker: VenvMarker,
+}
+
+impl RecordedEnvironment {
+    /// The requirements installed for this plugin: an isolated environment's
+    /// own, or what this plugin contributed to the shared one.
+    pub fn plugin_requirements(&self, plugin_id: &str) -> Vec<String> {
+        match self.scope {
+            VenvScope::Isolated => self.marker.deps.clone(),
+            VenvScope::Shared => self
+                .marker
+                .contributors
+                .get(plugin_id)
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// Find the environment a plugin loads from, with the same precedence as
+/// [`venv_interpreter`]: its isolated environment first, then the shared one
+/// when this plugin is recorded as a contributor.
+pub fn recorded_environment(python_dir: &Path, plugin_id: &str) -> Option<RecordedEnvironment> {
+    let isolated = venv_dir(python_dir, plugin_id);
+    if let Some(interpreter) = complete_venv(&isolated) {
+        // A marker that no longer parses still marks a finished environment;
+        // it records nothing, so readiness reads it as built for nothing.
+        return Some(RecordedEnvironment {
+            scope: VenvScope::Isolated,
+            interpreter,
+            marker: read_marker(&isolated).unwrap_or_default(),
+        });
     }
     let shared = shared_venv_dir(python_dir);
     let marker = read_marker(&shared)?;
     if !marker.contributors.contains_key(plugin_id) {
         return None;
     }
-    complete_venv(&shared)
+    Some(RecordedEnvironment {
+        scope: VenvScope::Shared,
+        interpreter: complete_venv(&shared)?,
+        marker,
+    })
 }
 
 /// `Some` only when both the marker and the python binary exist (a

@@ -34,6 +34,7 @@ import { PluginSimulatedBadge } from "./_shared/plugin-simulated-badge"
 import { PluginActivationProgress } from "./plugin-activation-progress"
 import { PluginCompatibilityBadge } from "./_shared/plugin-compatibility-badge"
 import { PluginRuntimeWarnings, PluginStatusPill } from "./plugin-status-badge"
+import { PluginPythonEnvironmentBadge } from "./python/plugin-python-environment-badge"
 import { PluginVersionBadge } from "./_shared/plugin-version-badge"
 import { PluginAvatar } from "./plugin-avatar"
 import { PluginContributionChip } from "./_shared/plugin-contribution-chip"
@@ -222,6 +223,7 @@ export const PluginCard = memo(function PluginCard({
 
       <PluginCompatibilityBadge manifest={plugin.manifest} className="relative z-10" />
       <PluginRuntimeWarnings plugin={plugin} className="relative z-10" />
+      <PluginPythonEnvironmentBadge plugin={plugin} className="relative z-10" />
 
       {errored && errorMessage && (
         <div className="flex items-start gap-1 text-xs text-destructive">

@@ -20,7 +20,11 @@ import { toast } from "sonner"
 // Leaf imports only: this toaster is mounted in the root layout, and the
 // plugin manager must stay out of the first-paint module graph.
 import { pluginDetailHref, pluginEnableFailureToastId } from "@/hooks/plugins/plugin-links"
-import { usePluginErrorMessage } from "@/hooks/plugins/use-plugin-error-message"
+import {
+  classifyPluginError,
+  usePluginErrorMessage,
+} from "@/hooks/plugins/use-plugin-error-message"
+import { requestPythonPreparePrompt } from "@/lib/plugin/python/prepare-prompt-requests"
 
 import {
   PLUGIN_ENABLE_FAILED_EVENT,
@@ -63,10 +67,18 @@ export function PluginEnableFailureToaster() {
         // Same id the panel's own enable feedback uses for this failure, so
         // the two reports collapse into one toast.
         id: pluginEnableFailureToastId(detail.pluginId, detail.errorMessage),
-        action: {
-          label: tLifecycle("viewDetails"),
-          onClick: () => router.push(pluginDetailHref(detail.pluginId)),
-        },
+        // A Python plugin whose environment is not ready is fixed by
+        // preparing it (ENV01): the action asks for that consent directly.
+        action:
+          classifyPluginError(detail.errorMessage).code === "pythonDependenciesNotReady"
+            ? {
+                label: t("prepareDependencies"),
+                onClick: () => requestPythonPreparePrompt(detail.pluginId),
+              }
+            : {
+                label: tLifecycle("viewDetails"),
+                onClick: () => router.push(pluginDetailHref(detail.pluginId)),
+              },
       })
     }
     window.addEventListener(PLUGIN_ENABLE_FAILED_EVENT, handler)

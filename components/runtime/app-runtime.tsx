@@ -68,6 +68,7 @@ import { PluginModalRoot } from "@/components/plugins/dialogs/plugin-modal-root"
 import { PluginConsentOverlay } from "@/components/plugins/dialogs/plugin-consent-overlay"
 import { PluginPermissionRequestHost } from "@/components/plugins/plugin-permission-request-host"
 import { PluginDataSnapshotSpaceHost } from "@/components/plugins/plugin-data-snapshot-space-host"
+import { PythonPreparePromptHost } from "@/components/plugins/python/python-prepare-prompt-host"
 import { PluginConnectionPromptHost } from "@/components/plugins/auth/plugin-connection-prompt-host"
 import { PluginUpdateToaster } from "@/components/plugins/plugin-update-toaster"
 import { PluginEnableFailureToaster } from "@/components/plugins/plugin-enable-failure-toaster"
@@ -424,6 +425,11 @@ export function AppRuntime({
                              * one, or cancel the upgrade (ADR-0258). Upgrades
                              * and activations migrate from any page. */}
                             <PluginDataSnapshotSpaceHost />
+                            {/* Right after a Python plugin is installed, or
+                             * its enable failed for want of dependencies, the
+                             * consent to prepare its environment (ADR-0258).
+                             * Installs and enables run from any page. */}
+                            <PythonPreparePromptHost />
                             <PluginConnectionPromptHost />
                             {/* "Notify only" auto-update dispatched an event
                              * nothing listened for, so the cadence the Policy

@@ -7,6 +7,10 @@ import { renderHook } from "@testing-library/react"
 import { classifyPluginError, usePluginErrorMessage } from "./use-plugin-error-message"
 import { PluginDataSnapshotDeclinedError } from "@/lib/plugin/dexie/migration-runner"
 import { PluginDataRestoreUnconfirmedError } from "@/lib/plugin/dexie/data-rollback"
+import {
+  PythonDependenciesNotReadyError,
+  type PythonReadiness,
+} from "@/lib/plugin/python/readiness"
 
 describe("classifyPluginError", () => {
   it.each([
@@ -64,6 +68,23 @@ describe("classifyPluginError", () => {
     ],
   ])("classifies lifecycle guard %s", (message, code, values) => {
     expect(classifyPluginError(new Error(message))).toEqual({ code, message, values })
+  })
+
+  it.each<[PythonReadiness]>([
+    [{ state: "not-prepared", installer: "uv" }],
+    [{ state: "stale", reasons: ["dependencies"], installer: "uv" }],
+    [{ state: "preparing", installer: "pip" }],
+    [{ state: "failed", message: "pip exited 1", installer: "pip" }],
+  ])("classifies a Python environment that is not ready (%o)", (readiness) => {
+    const error = new PythonDependenciesNotReadyError("wiki", readiness)
+    expect(classifyPluginError(error)).toEqual({
+      code: "pythonDependenciesNotReady",
+      message: error.message,
+      values: { state: readiness.state },
+    })
+    // `PluginEnableError` wraps it, and the store keeps the class name.
+    const wrapped = `PluginEnableError: Failed to enable plugin "wiki": ${error.message}`
+    expect(classifyPluginError(wrapped).code).toBe("pythonDependenciesNotReady")
   })
 
   it("matches messages the store persisted with their class name", () => {

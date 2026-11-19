@@ -1,6 +1,7 @@
 {
   "description": "{pluginName} failed to enable: {errorMessage}",
   "manualReason": "Plugin enable failed",
+  "prepareDependencies": "Prepare dependencies",
   "retryHint": "Open the plugin settings to inspect the error and retry.",
   "title": "Couldn't enable {pluginName}"
 }

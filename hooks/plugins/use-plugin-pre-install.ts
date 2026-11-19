@@ -20,6 +20,7 @@ import {
   type RunMarketplaceInstallOpts,
   type RunMarketplaceInstallResult,
 } from "@/lib/plugin/marketplace/install-flow"
+import { requestPythonPreparePrompt } from "@/lib/plugin/python/prepare-prompt-requests"
 import { trackEvent } from "@/lib/telemetry/events/track-event"
 import type {
   PreInstallTarget,
@@ -170,6 +171,10 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
           version,
           client: activeClient,
           signal: controller.current?.signal,
+          // ENV01: a Python plugin's dependencies are not part of the
+          // install; offer to prepare them right away (the prompt asks only
+          // when the Host says there is something to prepare).
+          onInstalled: (installedIds) => installedIds.forEach(requestPythonPreparePrompt),
           requestConflictReview: (conflict) =>
             awaitStep<"continue" | "disable-conflicting" | "cancel">("conflict", () => {
               setTarget({

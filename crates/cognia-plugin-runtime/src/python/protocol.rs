@@ -1276,7 +1276,6 @@ for line in sys.stdin:
             json!({
                 "plugin_path": tmp.path().to_string_lossy(),
                 "main_module": "main.py",
-                "dependencies": [],
                 "config": {},
             }),
             CALL_TIMEOUT,
@@ -1332,7 +1331,6 @@ for line in sys.stdin:
             json!({
                 "plugin_path": tmp.path().to_string_lossy(),
                 "main_module": "main.py",
-                "dependencies": [],
                 "config": {},
             }),
             CALL_TIMEOUT,

@@ -17845,15 +17845,6 @@
         "mainModule": {
           "type": "string"
         },
-        "dependencies": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
         "config": {
           "type": [
             "object",
@@ -17941,6 +17932,99 @@
         },
         "generation": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "plugin_python_readiness": {
+      "type": "object",
+      "required": [
+        "pluginId",
+        "dependencies"
+      ],
+      "properties": {
+        "pluginId": {
+          "type": "string"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hostSettings": {
+          "type": "object",
+          "properties": {
+            "interpreterPath": {
+              "type": "string"
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "callTimeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "useVenv": {
+              "type": "boolean"
+            },
+            "idleShutdownMin": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxConcurrentCalls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxOutboundHostCalls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "installer": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "auto",
+                    "uv",
+                    "pip",
+                    "custom"
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "createArgs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "installArgs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "venvScope": {
+              "type": "string",
+              "enum": [
+                "shared",
+                "isolated"
+              ]
+            },
+            "sandboxed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

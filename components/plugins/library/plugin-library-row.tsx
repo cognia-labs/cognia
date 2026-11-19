@@ -59,6 +59,7 @@ import { PluginSignatureBadge, type SignatureState } from "../plugin-signature-b
 import { PluginSourceBadge, isDevelopmentSource, parsePluginSource } from "../plugin-source-badge"
 import { PluginActivationProgress } from "../plugin-activation-progress"
 import { PluginRuntimeWarnings, PluginStatusPill } from "../plugin-status-badge"
+import { PluginPythonEnvironmentBadge } from "../python/plugin-python-environment-badge"
 import { PluginVersionBadge } from "../_shared/plugin-version-badge"
 import { PluginAvatar } from "../plugin-avatar"
 import { PluginContributionChip } from "../_shared/plugin-contribution-chip"
@@ -321,6 +322,7 @@ export const PluginLibraryRow = memo(function PluginLibraryRow({
               runtime. Only the card grid rendered them, so in the default list
               view a plugin could read "Enabled" while doing nothing at all. */}
           <PluginRuntimeWarnings plugin={plugin} className="relative z-10 shrink-0" />
+          <PluginPythonEnvironmentBadge plugin={plugin} className="relative z-10 shrink-0" />
           {errored && plugin.error && (
             <span className="flex min-w-0 items-center gap-0.5 text-destructive">
               <CircleAlertIcon className="size-3 shrink-0" />

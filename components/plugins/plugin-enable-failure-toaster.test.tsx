@@ -20,6 +20,11 @@ jest.mock("sonner", () => ({
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const sonner = require("sonner") as { toast: { error: jest.Mock } }
 
+const mockRequestPrompt = jest.fn()
+jest.mock("@/lib/plugin/python/prepare-prompt-requests", () => ({
+  requestPythonPreparePrompt: (id: string) => mockRequestPrompt(id),
+}))
+
 const mockPush = jest.fn()
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush, replace: jest.fn() }),
@@ -48,6 +53,8 @@ const sampleDetail: PluginEnableFailedEventDetail = {
 
 beforeEach(() => {
   sonner.toast.error.mockReset()
+  mockPush.mockReset()
+  mockRequestPrompt.mockReset()
 })
 
 describe("PluginEnableFailureToaster", () => {
@@ -127,6 +134,21 @@ describe("PluginEnableFailureToaster", () => {
     expect(options.action.label).toBe("View details")
     options.action.onClick()
     expect(mockPush).toHaveBeenCalledWith("/plugins?plugin=com.example.foo")
+  })
+
+  it("offers to prepare a Python plugin whose dependencies are not ready", () => {
+    renderToaster("en")
+    fireEvent({
+      ...sampleDetail,
+      errorMessage:
+        'PluginEnableError: Failed to enable plugin "com.example.foo": Cannot load Python plugin "com.example.foo": its Python dependencies are not ready (not-prepared)',
+    })
+    const [, options] = sonner.toast.error.mock.calls[0]
+    expect(options.action.label).toBe("Prepare dependencies")
+    expect(options.description).toContain("not installed yet")
+    options.action.onClick()
+    expect(mockRequestPrompt).toHaveBeenCalledWith("com.example.foo")
+    expect(mockPush).not.toHaveBeenCalled()
   })
 
   it("localizes a known manager failure instead of printing it raw", () => {

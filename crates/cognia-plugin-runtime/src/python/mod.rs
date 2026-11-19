@@ -20,6 +20,7 @@ pub mod discover;
 pub mod events;
 pub mod interpreter_check;
 pub mod protocol;
+pub mod readiness;
 pub mod venv;
 
 use std::collections::HashMap;
@@ -122,6 +123,8 @@ pub struct PythonRuntimeState {
     /// exactly one subprocess.
     materialize_lock: tokio::sync::Mutex<()>,
     sweep_started: AtomicBool,
+    /// Environment preparations running now, or the last one that failed.
+    pub preparations: readiness::Preparations,
 }
 
 impl PythonRuntimeState {
@@ -135,6 +138,7 @@ impl PythonRuntimeState {
             host_request_sink: RwLock::new(None),
             materialize_lock: tokio::sync::Mutex::new(()),
             sweep_started: AtomicBool::new(false),
+            preparations: readiness::Preparations::default(),
         }
     }
 

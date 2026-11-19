@@ -511,12 +511,16 @@ describe("runMarketplaceInstall", () => {
       },
       requestDependencyReview: async () => "resolve",
       checkInstalledPlugin: async (id) => rows.find((row) => row.id === id) ?? null,
+      onInstalled: jest.fn(),
     })
     expect(await runMarketplaceInstall(opts)).toEqual({
       status: "installed",
       pluginId: "demo-plugin",
     })
     expect(events).toEqual(["e@2.0.0", "d@2.0.0", "target"])
+    // Told once, about every plugin the install committed, dependencies first.
+    expect(opts.onInstalled).toHaveBeenCalledTimes(1)
+    expect(opts.onInstalled).toHaveBeenCalledWith(["e", "d", "demo-plugin"])
   })
 
   it("replans an incompatible stale sibling and reviews its new version before installing", async () => {
@@ -857,10 +861,11 @@ describe("runMarketplaceInstall", () => {
   })
 
   it("happy path: skips conflict + permission + config when manifest is bare", async () => {
-    const opts = makeOpts()
+    const opts = makeOpts({ onInstalled: jest.fn() })
     const result = await runMarketplaceInstall(opts)
 
     expect(result).toEqual({ status: "installed", pluginId: "demo-plugin" })
+    expect(opts.onInstalled).toHaveBeenCalledWith(["demo-plugin"])
     expect(opts.requestConflictReview).not.toHaveBeenCalled()
     expect(opts.requestPermissionReview).not.toHaveBeenCalled()
     expect(opts.requestConfig).not.toHaveBeenCalled()
@@ -871,14 +876,44 @@ describe("runMarketplaceInstall", () => {
     listPlugins.mockResolvedValue([{ id: "demo-plugin", version: "0.9.0" }])
     const opts = makeOpts({
       requestConflictReview: jest.fn().mockResolvedValue("cancel"),
+      onInstalled: jest.fn(),
     })
 
     const result = await runMarketplaceInstall(opts)
 
     expect(result).toEqual({ status: "cancelled", stage: "conflict" })
+    expect(opts.onInstalled).not.toHaveBeenCalled()
     expect(opts.requestConflictReview).toHaveBeenCalledTimes(1)
     expect(opts.requestPermissionReview).not.toHaveBeenCalled()
     expect(opts.client.installPlugin).not.toHaveBeenCalled()
+  })
+
+  it("keeps a committed install when its onInstalled callback throws", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+    const opts = makeOpts({
+      onInstalled: () => {
+        throw new Error("prompt queue gone")
+      },
+    })
+    await expect(runMarketplaceInstall(opts)).resolves.toEqual({
+      status: "installed",
+      pluginId: "demo-plugin",
+    })
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it("does not report a failed install as installed", async () => {
+    const onInstalled = jest.fn()
+    const opts = makeOpts({
+      onInstalled,
+      client: {
+        getPlugin: async () => ({ manifest: makeManifest() }),
+        installPlugin: jest.fn().mockRejectedValue(new Error("disk full")),
+      },
+    })
+    expect((await runMarketplaceInstall(opts)).status).toBe("failed")
+    expect(onInstalled).not.toHaveBeenCalled()
   })
 
   it("continues past conflict when the user confirms", async () => {

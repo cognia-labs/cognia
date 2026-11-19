@@ -15,6 +15,7 @@
     "invalidManifest": "它的清单文件无效。",
     "managerNotReady": "插件仍在启动中，请稍后再试。",
     "notFound": "它已不再安装。",
+    "pythonDependenciesNotReady": "它的 Python 依赖{state, select, preparing {仍在准备中} failed {未就绪：上次准备失败} stale {已过期} other {尚未安装}}。请先准备依赖，再重新启用。",
     "pythonDisabled": "当前设备已关闭 Python 运行时。",
     "signature": "无法验证它的签名。",
     "uninstallMirrored": "请在桌面应用中卸载它。本设备只是它的镜像。",

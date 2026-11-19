@@ -19570,6 +19570,23 @@
       "outputSchema": "#/components/schemas/RpcResult"
     },
     {
+      "name": "plugin_python_readiness",
+      "resource": "plugin.python.readiness",
+      "verb": "get",
+      "arm": "plugin_python_readiness",
+      "target": "service",
+      "operation": "write",
+      "capability": "service.internal",
+      "risk": "critical",
+      "approval": "signed-policy",
+      "idempotency": "required",
+      "transports": ["internal"],
+      "pagination": "none",
+      "longRunning": false,
+      "inputSchema": "#/components/schemas/RpcArgs",
+      "outputSchema": "#/components/schemas/RpcResult"
+    },
+    {
       "name": "plugin_python_runtime_info",
       "resource": "plugin.python.runtime_info",
       "verb": "get",

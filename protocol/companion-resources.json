@@ -947,6 +947,7 @@
             "host": {},
             "info": {},
             "module": {},
+            "readiness": {},
             "runtime_info": {},
             "tool": {},
             "uv": {}

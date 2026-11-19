@@ -5857,6 +5857,230 @@
       },
       "additionalProperties": false
     },
+    "PythonInterpreterWarning": {
+      "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
+      "description": "A reason to doubt the interpreter a plugin runs on. It never stops the plugin loading (ADR-0258).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "version-unknown"
+            }
+          },
+          "required": ["kind"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "below-host-minimum"
+            },
+            "version": {
+              "type": "string"
+            },
+            "minimum": {
+              "type": "string"
+            }
+          },
+          "required": ["kind", "version", "minimum"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "requirement-unmet"
+            },
+            "version": {
+              "type": "string"
+            },
+            "requirement": {
+              "type": "string"
+            }
+          },
+          "required": ["kind", "version", "requirement"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "requirement-unreadable"
+            },
+            "problem": {
+              "type": "string",
+              "enum": ["invalid-pyproject", "not-a-string", "invalid-specifier"]
+            },
+            "requirement": {
+              "type": "string"
+            }
+          },
+          "required": ["kind", "problem"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PythonReadinessReport": {
+      "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::ReadinessReport",
+      "description": "Whether a Python plugin's dependencies are prepared for the interpreter and installer it would run with now (ADR-0258 §2). not-prepared, stale, preparing and failed stop the plugin loading; every state the Host prepares names the installer a preparation runs with.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "not-required"
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "not-prepared"
+            },
+            "installer": {
+              "type": "string",
+              "enum": ["uv", "pip"]
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state", "installer"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "stale"
+            },
+            "reasons": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": ["dependencies", "interpreter", "installer"]
+              }
+            },
+            "installer": {
+              "type": "string",
+              "enum": ["uv", "pip"]
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state", "reasons", "installer"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "preparing"
+            },
+            "installer": {
+              "type": "string",
+              "enum": ["uv", "pip"]
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state", "installer"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "ready"
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["shared", "isolated"]
+            },
+            "installer": {
+              "type": "string",
+              "enum": ["uv", "pip"]
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state", "scope", "installer"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "failed"
+            },
+            "message": {
+              "type": "string"
+            },
+            "installer": {
+              "type": "string",
+              "enum": ["uv", "pip"]
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state", "message", "installer"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "user-managed"
+            },
+            "reason": {
+              "type": "string",
+              "enum": ["venv-disabled", "interpreter-override", "custom-installer"]
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state", "reason"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PythonInstallOutcome": {
+      "type": "object",
+      "x-cognia-wire-source": "cognia_plugin_runtime::python::commands::PythonInstallOutcome",
+      "description": "Where a plugin's dependencies were installed, and why an asked-for shared environment was not used.",
+      "required": ["venvDir", "scope", "installer", "downgradedReason"],
+      "properties": {
+        "venvDir": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["shared", "isolated"]
+        },
+        "installer": {
+          "type": "string",
+          "enum": ["uv", "pip", "custom"]
+        },
+        "downgradedReason": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
     "NullResult": {
       "type": "null"
     },
@@ -19686,7 +19910,7 @@
       "$ref": "#/$defs/NullResult"
     },
     "plugin_python_install_deps": {
-      "$ref": "#/$defs/NullResult"
+      "$ref": "#/$defs/PythonInstallOutcome"
     },
     "plugin_python_is_initialized": {
       "$ref": "#/$defs/BooleanResult"
@@ -19705,6 +19929,9 @@
     },
     "plugin_python_push_config": {
       "$ref": "#/$defs/NullResult"
+    },
+    "plugin_python_readiness": {
+      "$ref": "#/$defs/PythonReadinessReport"
     },
     "plugin_python_runtime_info": {
       "$ref": "#/$defs/LegacyResult"

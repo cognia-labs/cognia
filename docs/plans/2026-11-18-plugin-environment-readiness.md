@@ -1,6 +1,6 @@
 # 插件运行环境就绪、Python 锁定、数据回滚与生命周期契约方案
 
-> 状态：Proposed；尚未实施。创建：2026-11-18（Asia/Shanghai）。
+> 状态：实施中，P0–P3 已完成（2026-11-19）。创建：2026-11-18（Asia/Shanghai）。
 > 依据：[插件支持审计证据](../evidence/2026-11-08-plugin-support-audit.md)（第 697 行起的 ENV01–ENV07），以及 2026-11-18 已落地的 PL01–PL19 修复（`de7889b157..81c5c55bc4`）。
 > 范围：ENV01、ENV02、ENV03、ENV04、ENV07。ENV05 已修复；ENV06（独立插件 release 的产品采用）不在本方案内。
 > 本文的阶段划分、默认值和数据格式是建议，经确认后才实施。
@@ -115,6 +115,25 @@ uv 的锁安装语义（来源：astral-sh/uv 文档，经 context7 查询）：
 - **安装后提示**：在 marketplace、本地目录、Git、cogpack 这几条安装流程成功之后，对声明了依赖的 python/hybrid 插件弹出「准备 Python 依赖」确认框，列出依赖、安装器和网络/磁盘影响，提供「准备 / 稍后」。准备动作与详情页按钮共用一个 hook（新建 `hooks/plugins/use-python-environment.ts`，附同目录测试）。
 - **状态显示**：`components/plugins/plugin-card.tsx`、`plugin-status-badge.tsx` 和详情页显示三种状态，其中「依赖未就绪」带准备操作。准备过程中显示进度，复用现有的 python 事件流。
 - **测试**：Rust 就绪计算覆盖每种状态各一条；manager 的结构化错误；hook 与确认框测试；四条安装流程各有一条「装完弹出提示」的测试。
+
+**实施记录（2026-11-19，已完成）**
+
+- **Host 端计算**：`crates/cognia-plugin-runtime/src/python/readiness.rs` 的 `compute_readiness` 依次判断：
+  1. 没有声明依赖 → `not-required`。
+  2. 关闭了托管环境、用户指定了解释器、或使用自定义安装器 → `user-managed`，原因分别是 `venv-disabled`、`interpreter-override`、`custom-installer`。用户指定解释器是计划之外加的一种：Host 不为它构建环境，拿 venv 记录去比对没有意义。
+  3. 正在准备 → `preparing`。
+  4. 有环境记录时比对三项：依赖集合（共享环境只比对本插件登记的那份）、解释器版本、安装器。都一致 → `ready`；有不一致，且最近一次准备失败 → `failed`，否则 → `stale`，并列出原因。
+  5. 没有环境记录：最近一次准备失败 → `failed`，否则 → `not-prepared`。
+- **回复带安装器**：凡是 Host 负责准备的状态，`plugin_python_readiness` 的回复都带 `installer`（`uv` 或 `pip`），确认框据此写明用哪个安装器。设置为 `auto` 时只有 Host 知道有没有 uv，所以由 Host 报告。回复同时带 P2 的 `interpreterWarning`。
+- **同一插件一次只准备一个**：由 `Preparations` 守卫保证，第二个请求直接拒绝。请求中途被放弃时记为失败，状态不会卡在 `preparing`。
+- **删除名字猜测**：`plugin_python_load` 删除了 `dependencies` 参数，`host.py` 删除了 `_check_dependencies` 和对应的字符串报错。manager 加载前先查询就绪状态，处于四种未就绪状态时抛出 `PythonDependenciesNotReadyError`；回复无法解析时不拒绝加载。headless brain 用的是同一个 manager，同样经过这道检查。
+- **顺带修正**：companion 响应目录里 `plugin_python_install_deps` 原来声明为 `NullResult`，实际返回的是 `PythonInstallOutcome`，headless 和移动端平面会以 `contract_output_violation` 拒绝这个回复。
+- **前端状态**：就绪报告和最近一次准备的结果存在非持久的 `stores/plugin-runtime/python-readiness-store.ts` 里；`hooks/plugins/use-python-environment.ts` 读取它，并提供刷新和准备两个动作。确认框只有一个，`components/plugins/python/python-prepare-dialog.tsx`。
+- **提示宿主**：`PythonPreparePromptHost` 挂在应用根部，消费 `lib/plugin/python/prepare-prompt-requests.ts` 的队列。它先查询 Host，只有 `not-prepared`、`stale`、`failed` 三种状态才弹窗。
+- **状态显示**：卡片、Library 行和详情页头部显示 `PluginPythonEnvironmentBadge`；详情页的环境区显示原因、进度行和准备结果。
+- **安装后提示的接入点**：`runMarketplaceInstall` 新增 `onInstalled`，在整个安装（含连带安装的依赖插件）提交后回调一次。`usePluginPreInstall` 用它覆盖 marketplace、GitHub/Git、本地目录和 Load unpacked 四条 UI 流程；cogpack 导入对话框对 `result.installed` 逐个提示。种子插件、devtools 自动重装和回滚重装不提示。
+- **启用失败**：启用失败的 toast 遇到 `pythonDependenciesNotReady` 时提供「准备依赖」操作，直接打开确认框。
+- **未验证**：没有在 Tauri 桌面实机跑过「安装 → 提示 → 准备 → 可运行」这条流程。
 
 ### P4 uv.lock 锁定与离线安装（ENV02）
 

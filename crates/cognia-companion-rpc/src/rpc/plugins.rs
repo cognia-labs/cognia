@@ -41,6 +41,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "plugin_python_is_initialized",
     "plugin_python_get_info",
     "plugin_python_install_deps",
+    "plugin_python_readiness",
     "plugin_python_unload",
     "plugin_python_list",
     "plugin_api_invoke",
@@ -650,7 +651,6 @@ pub(super) async fn dispatch(
             let plugin_id: String = required_aliased(&args, "plugin_id", "pluginId")?;
             let plugin_path: String = required_aliased(&args, "plugin_path", "pluginPath")?;
             let main_module: String = required_aliased(&args, "main_module", "mainModule")?;
-            let dependencies: Option<Vec<String>> = optional(&args, "dependencies")?;
             let config: Option<Value> = optional(&args, "config")?;
             let host_settings: Option<cognia_plugin_runtime::python::commands::PythonHostSettings> =
                 optional(&args, "hostSettings")?;
@@ -660,7 +660,6 @@ pub(super) async fn dispatch(
                 plugin_id,
                 plugin_path,
                 main_module,
-                dependencies,
                 config,
                 host_settings,
             )
@@ -880,6 +879,26 @@ pub(super) async fn dispatch(
                     &plugin_id,
                     &dependencies,
                     venv_scope.as_deref(),
+                    host_settings.unwrap_or_default(),
+                )
+                .await
+                .map_err(plugin_rpc_error)?,
+            )
+        }
+        "plugin_python_readiness" => {
+            let services = host
+                .headless()
+                .ok_or_else(|| RpcError::headless_host_required(name))?;
+            let plugin_id: String = required_aliased(&args, "plugin_id", "pluginId")?;
+            let dependencies: Vec<String> = required(&args, "dependencies")?;
+            let host_settings: Option<cognia_plugin_runtime::python::commands::PythonHostSettings> =
+                optional_aliased(&args, "host_settings", "hostSettings")?;
+            to_json(
+                cognia_plugin_runtime::python::commands::plugin_python_readiness_for_state(
+                    services.python_plugins.as_ref(),
+                    services.plugin_runtime.as_ref(),
+                    &plugin_id,
+                    &dependencies,
                     host_settings.unwrap_or_default(),
                 )
                 .await
