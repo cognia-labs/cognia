@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 import cognia
-from cognia.bot import BotRun, BotRunParked, bot_run, define_bot
+from cognia.bot import BotRun, BotRunParked, BotStepAttempt, bot_run, define_bot
 
 
 class TestDefineBot:
@@ -293,56 +293,48 @@ class TestBotRun:
         assert run.event["eventId"] == "bev_1"
         assert run.config == {"channel": "#ops"}
 
-    def test_step_completes_with_the_holder_value(self, fresh_runtime):
-        calls = _host_recorder(fresh_runtime, {"bots.stepBegin": {"memoized": False, "attempt": 1}})
-        run = bot_run(cognia.ctx, SNAPSHOT)
-
-        async def main():
-            async with run.step("fetch") as step:
-                assert step.memoized is False
-                step.complete({"items": 3})
-
-        asyncio.run(main())
-        assert calls == [
-            ("bots.stepBegin", {"args": ["run_1", "fetch"]}),
-            ("bots.stepComplete", {"args": ["run_1", "fetch", {"items": 3}]}),
-        ]
-
-    def test_step_defaults_to_none_when_never_completed(self, fresh_runtime):
-        calls = _host_recorder(fresh_runtime, {"bots.stepBegin": {"memoized": False, "attempt": 1}})
-        run = bot_run(cognia.ctx, SNAPSHOT)
-
-        async def main():
-            async with run.step("fetch"):
-                pass
-
-        asyncio.run(main())
-        assert calls[-1] == ("bots.stepComplete", {"args": ["run_1", "fetch", None]})
-
-    def test_step_replays_a_memoized_value_without_completing(self, fresh_runtime):
+    def test_step_run_skips_the_callback_on_a_memoized_step(self, fresh_runtime):
+        # B03: a `with` body cannot be skipped, so the callback form is the one
+        # that runs the work at most once per checkpointed step.
         calls = _host_recorder(
             fresh_runtime, {"bots.stepBegin": {"memoized": True, "value": {"items": 3}}}
         )
         run = bot_run(cognia.ctx, SNAPSHOT)
+        effects = []
 
-        async def main():
-            async with run.step("fetch") as step:
-                assert step.memoized is True
-                assert step.value == {"items": 3}
-
-        asyncio.run(main())
+        assert asyncio.run(run.step_run("fetch", lambda: effects.append(1))) == {"items": 3}
+        assert effects == []
         assert calls == [("bots.stepBegin", {"args": ["run_1", "fetch"]})]
 
-    def test_step_fails_and_reraises_on_body_error(self, fresh_runtime):
-        calls = _host_recorder(fresh_runtime, {"bots.stepBegin": {"memoized": False, "attempt": 2}})
+    def test_step_run_hands_the_callback_its_attempt_and_key(self, fresh_runtime):
+        key = "0b1f62c4-9c2e-8d1a-a3f0-5e7d9c4b2a10"
+        calls = _host_recorder(
+            fresh_runtime,
+            {"bots.stepBegin": {"memoized": False, "attempt": 2, "idempotencyKey": key}},
+        )
+        run = bot_run(cognia.ctx, SNAPSHOT)
+        seen = []
+
+        async def charge(attempt: BotStepAttempt):
+            seen.append(attempt)
+            return {"charged": attempt.idempotency_key}
+
+        assert asyncio.run(run.step_run("charge", charge)) == {"charged": key}
+        assert seen == [BotStepAttempt(attempt=2, idempotency_key=key)]
+        assert calls[-1] == ("bots.stepComplete", {"args": ["run_1", "charge", {"charged": key}]})
+
+    def test_step_run_fails_the_step_and_reraises(self, fresh_runtime):
+        calls = _host_recorder(
+            fresh_runtime,
+            {"bots.stepBegin": {"memoized": False, "attempt": 1, "idempotencyKey": "k"}},
+        )
         run = bot_run(cognia.ctx, SNAPSHOT)
 
-        async def main():
-            async with run.step("fetch"):
-                raise RuntimeError("upstream 500")
+        def boom():
+            raise RuntimeError("upstream 500")
 
         with pytest.raises(RuntimeError, match="upstream 500"):
-            asyncio.run(main())
+            asyncio.run(run.step_run("fetch", boom))
         assert calls[-1] == ("bots.stepFail", {"args": ["run_1", "fetch", "upstream 500"]})
 
     def test_wait_for_approval_returns_the_decision(self, fresh_runtime):

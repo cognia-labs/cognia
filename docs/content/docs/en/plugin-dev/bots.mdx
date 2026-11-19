@@ -87,7 +87,7 @@ The console renders these as badges on the trigger row.
 
 ## Handler contract
 
-A handler Bot re-enters from the top after a crash or a resumed wait; anything that must not happen twice belongs inside `ctx.step.run` (TypeScript) or `run.step` (Python), which memoizes completed steps in `botRunSteps`. Step names beginning `__host:` are reserved for the host's own bookkeeping (publication checkpoints, snapshots, results).
+A handler Bot re-enters from the top after a crash or a resumed wait; anything that must not happen twice belongs inside `ctx.step.run` (TypeScript) or `run.step_run` (Python), which memoizes completed steps in `botRunSteps`: once a step's result is checkpointed, a re-entry returns it without calling the callback again. A step runs at least once, not exactly once. The checkpoint is written after the callback returns, so an attempt whose effect happened but whose checkpoint never committed (a crash, a lost lease) runs again. The callback is handed the attempt (`attempt`, and an `idempotencyKey` that is the same for every attempt of that step in that run); pass the key to the service the step writes to, so a repeated attempt lands on the first one's effect. Step names beginning `__host:` are reserved for the host's own bookkeeping (publication checkpoints, snapshots, results).
 
 <table>
 <tr><th>TypeScript (`BotRunContextV1`)</th><th>Python (`BotRun`)</th></tr>
@@ -96,11 +96,13 @@ A handler Bot re-enters from the top after a crash or a resumed wait; anything t
 ```ts
 export default async function run(ctx: BotRunContextV1) {
   const snap = await ctx.step.run("snapshot", fetchSnapshot)
+  await ctx.step.run("comment", ({ idempotencyKey }) =>
+    postComment(snap.pr, { idempotencyKey }))
   const decision = await ctx.step.waitForApproval("gate", {
     title: "Push changes?", risk: "medium",
   })
   const event = await ctx.step.waitForEvent("ci", {
-    key: run.correlation, timeoutMs: 300_000,
+    key: `pr:${snap.pr}`, timeoutMs: 300_000,
   })
   await ctx.log("info", "done", { pr: snap.pr })
   await ctx.progress({ fraction: 0.9 })
@@ -114,13 +116,14 @@ export default async function run(ctx: BotRunContextV1) {
 @cognia.contribution("daily-digest")
 class DailyDigest:
     async def run(self, run: BotRun):
-        async with run.step("snapshot") as s:
-            s.complete({"pr": 7})
+        snap = await run.step_run("snapshot", fetch_snapshot)
+        await run.step_run("comment", lambda attempt: post_comment(
+            snap["pr"], idempotency_key=attempt.idempotency_key))
         decision = await run.wait_for_approval(
             "gate", {"title": "Push?", "risk": "medium"})
         event = await run.wait_for_event(
-            "ci", key="pr:7", timeout_ms=300_000)
-        await run.log("info", "done", {"pr": 7})
+            "ci", key=f"pr:{snap['pr']}", timeout_ms=300_000)
+        await run.log("info", "done", {"pr": snap["pr"]})
         await run.progress(fraction=0.9)
         return {"summary": "ok"}
 ```

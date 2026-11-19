@@ -32,7 +32,11 @@ jest.mock("@/lib/bot/runtime/run", () => ({
   ...jest.requireActual("@/lib/bot/runtime/run"),
   getLiveBotRunSignal: () => liveSignal.current,
 }))
-import { botApprovalInterruptId, BotRunParkedError } from "@/lib/bot/runtime/step"
+import {
+  botApprovalInterruptId,
+  BotRunParkedError,
+  botStepIdempotencyKey,
+} from "@/lib/bot/runtime/step"
 import { pendingParks } from "@/lib/bot/runtime/host-step"
 import { runEventJournal } from "@/lib/db/execution-runs"
 import { createBotsAPI } from "./bots-api"
@@ -484,7 +488,12 @@ describe("cross-process step parity", () => {
   it("begins a step, memoizes it on re-entry, and journals the host call", async () => {
     await seedRun()
     const api = createBotsAPI("p", () => true)
-    expect(await api.stepBegin("run", "fetch")).toEqual({ memoized: false, attempt: 1 })
+    // The same key the in-process `ctx.step.run` hands its callback (B03).
+    expect(await api.stepBegin("run", "fetch")).toEqual({
+      memoized: false,
+      attempt: 1,
+      idempotencyKey: await botStepIdempotencyKey("run", "fetch"),
+    })
     await api.stepComplete("run", "fetch", { items: 3 })
     expect(await api.stepBegin("run", "fetch")).toEqual({
       memoized: true,

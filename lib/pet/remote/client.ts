@@ -12,7 +12,7 @@
 // retry after a lost reply, over any channel, folds onto the first answer.
 
 import type { Transport } from "@/lib/tauri/transport-types"
-import { sha256Hex } from "@/lib/share/hash"
+import { sha256Uuid } from "@/lib/share/hash"
 import { PET_REMOTE_COMMANDS } from "./commands"
 import type {
   PetActResult,
@@ -93,8 +93,7 @@ export function createPetRemoteClient(
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key)) {
       // Caller-held body keys may be arbitrary. A stable UUID v8 keeps retries
       // on the same companion ledger entry without changing the host's key.
-      const hex = await sha256Hex(`cognia:pet-intent:${key}`)
-      transportKey = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+      transportKey = await sha256Uuid(`cognia:pet-intent:${key}`)
     }
     return transport.call<T>(command, args, { idempotencyKey: transportKey })
   }

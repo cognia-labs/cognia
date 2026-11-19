@@ -15,9 +15,9 @@
  * neither the callback nor its disposer survives the stdio boundary
  * (ADR-0145). So the host side of a step is `stepBegin` / `stepComplete` /
  * `stepFail`, all of which take and return plain values, and each SDK wraps
- * them in whatever reads naturally for its language. TypeScript gets
- * `step.run(name, fn)`. Python gets an async context manager. Both drive the
- * same three calls, so the two languages cannot drift.
+ * them as a callback step: TypeScript's `step.run(name, fn)` and Python's
+ * `run.step_run(name, fn)`. Both drive the same three calls, so the two
+ * languages cannot drift.
  */
 
 import type { BotEventEnvelopeV1 } from "./event"
@@ -80,16 +80,33 @@ export interface BotWaitForEventInput {
   timeoutMs: number
 }
 
+/** What a step's callback is told about the attempt it is running in. */
+export interface BotStepAttemptV1 {
+  /** 1 for the step's first attempt in this run. */
+  attempt: number
+  /**
+   * The same for every attempt of this step in this run (a UUID). Hand it to
+   * the service the step acts on, so an attempt repeated after its effect but
+   * before its checkpoint lands on the first attempt's effect.
+   */
+  idempotencyKey: string
+}
+
 export interface BotStepApiV1 {
   /**
-   * Run `fn` once per run, ever. On re-entry the memoized value is returned
-   * without calling `fn`.
+   * Run `fn` until one attempt's result is checkpointed. On re-entry after
+   * that, the checkpointed value is returned without calling `fn`.
+   *
+   * At least once, not exactly once: the checkpoint is written after `fn`
+   * returns, so an attempt whose effect happened but whose checkpoint did not
+   * commit (a crash, a lost lease) runs `fn` again. An effect that must not
+   * repeat passes `attempt.idempotencyKey` to the service performing it.
    *
    * `name` is the memoization key, so it must be stable across re-entries and
    * unique within the run. A name built from loop data needs the loop index in
    * it, or the second iteration replays the first one's output.
    */
-  run<T>(name: string, fn: () => Promise<T> | T): Promise<T>
+  run<T>(name: string, fn: (attempt: BotStepAttemptV1) => Promise<T> | T): Promise<T>
 
   /**
    * Park the run until a human answers. The run's status becomes `waiting` and

@@ -18,10 +18,13 @@ jest.mock("@/lib/execution/run-approval-push", () => ({
   announceRunApproval: jest.fn(async () => undefined),
 }))
 
+import type { BotStepAttemptV1 } from "@/types/bot/run"
+
 import {
   BotRunCancelledError,
   BotRunParkedError,
   botApprovalInterruptId,
+  botStepIdempotencyKey,
   createBotStepApi,
 } from "./step"
 
@@ -328,6 +331,27 @@ describe("step.run", () => {
     const fn = jest.fn().mockResolvedValue({ issues: 2 })
     expect(await api().run("fetch", fn)).toEqual({ issues: 2 })
     expect(fn).toHaveBeenCalledTimes(1)
+  })
+
+  it("hands every attempt of a step one idempotency key (B03)", async () => {
+    // The first attempt's effect may land before its checkpoint fails; the
+    // retry must reach the service under the same key so it is not repeated.
+    const attempts: BotStepAttemptV1[] = []
+    await expect(
+      api().run("charge", (attempt) => {
+        attempts.push(attempt)
+        throw new Error("checkpoint lost")
+      })
+    ).rejects.toThrow("checkpoint lost")
+    await api().run("charge", (attempt) => {
+      attempts.push(attempt)
+      return "ok"
+    })
+
+    expect(attempts.map((attempt) => attempt.attempt)).toEqual([1, 2])
+    expect(attempts[0].idempotencyKey).toBe(attempts[1].idempotencyKey)
+    expect(attempts[0].idempotencyKey).toBe(await botStepIdempotencyKey(RUN_ID, "charge"))
+    expect(await botStepIdempotencyKey(RUN_ID, "other")).not.toBe(attempts[0].idempotencyKey)
   })
 
   it("does not call the function again after a re-entry", async () => {

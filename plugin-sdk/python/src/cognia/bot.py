@@ -33,8 +33,7 @@ on a host that cannot know the contribution is a Bot, wrap it by hand::
 
     async def run(self, snapshot):
         run = cognia.bot.bot_run(cognia.ctx, snapshot)
-        async with run.step("fetch") as step:
-            step.complete({"items": ...})
+        items = await run.step_run("fetch", fetch_items)
 
 A wait that cannot be answered leaves the queue as ``{"status": "parked"}`` —
 the host records the park itself, so :class:`BotRunParked` propagating out of
@@ -64,10 +63,20 @@ contribution object.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+import inspect
 import re
-from typing import Any, Dict, Iterator, List, Literal, Mapping, Optional, Set, TypedDict
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Set,
+    TypedDict,
+)
 
 
 class BotPublicationReference(TypedDict):
@@ -131,15 +140,18 @@ def is_bot_contribution(contribution_id: str) -> bool:
     return contribution_id in _DEFINED_BOT_IDS
 
 
-class _StepHolder:
-    """Yielded by :meth:`BotRun.step`. ``complete`` records the step's output."""
+@dataclass(frozen=True)
+class BotStepAttempt:
+    """What a :meth:`BotRun.step_run` callback is told about its attempt.
 
-    def __init__(self, memoized: bool, value: Any = None) -> None:
-        self.memoized = memoized
-        self.value = value
+    ``idempotency_key`` is the same for every attempt of the step in this run.
+    Hand it to the service the step acts on: a step is checkpointed after the
+    callback returns, so an attempt whose effect happened but whose checkpoint
+    did not commit runs again, and the key is how it lands on the first effect.
+    """
 
-    def complete(self, value: Any = None) -> None:
-        self.value = value
+    attempt: int
+    idempotency_key: str
 
 
 class BotRun:
@@ -169,26 +181,31 @@ class BotRun:
             )
         return outcome.get("value")
 
-    @asynccontextmanager
-    async def step(self, name: str) -> Iterator[_StepHolder]:
-        """Run the body once per run, ever.
+    async def step_run(self, name: str, fn: Callable[..., Any]) -> Any:
+        """Call ``fn`` until one attempt's result is checkpointed; the twin of
+        TypeScript's ``ctx.step.run``.
 
-        ``stepBegin`` memoizes on the host: a re-entered handler replays the
-        completed value without running the body. On a normal exit the holder's
-        value is written via ``stepComplete``; on an exception the step is
-        failed and the error re-raised.
+        On re-entry after that the checkpointed value is returned and ``fn`` is
+        not called. ``fn`` may be sync or async, and takes either no argument
+        or a :class:`BotStepAttempt`. At least once, not exactly once: an effect
+        that must not repeat passes ``attempt.idempotency_key`` to its service.
         """
         begun = await self._ctx.bots.stepBegin(self.run_id, name)
         if begun.get("memoized"):
-            yield _StepHolder(memoized=True, value=begun.get("value"))
-            return
-        holder = _StepHolder(memoized=False)
+            return begun.get("value")
+        attempt = BotStepAttempt(
+            attempt=int(begun["attempt"]),
+            idempotency_key=str(begun["idempotencyKey"]),
+        )
         try:
-            yield holder
+            takes_attempt = len(inspect.signature(fn).parameters) > 0
+            result = fn(attempt) if takes_attempt else fn()
+            value = await result if inspect.isawaitable(result) else result
         except Exception as exc:
             await self._ctx.bots.stepFail(self.run_id, name, str(exc))
             raise
-        await self._ctx.bots.stepComplete(self.run_id, name, holder.value)
+        await self._ctx.bots.stepComplete(self.run_id, name, value)
+        return value
 
     async def wait_for_approval(
         self, name: str, request: Mapping[str, Any]
@@ -661,6 +678,7 @@ __all__ = [
     "BotApprovalRequest",
     "BotRun",
     "BotRunParked",
+    "BotStepAttempt",
     "bot_run",
     "define_bot",
     "is_bot_contribution",

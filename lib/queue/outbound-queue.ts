@@ -46,7 +46,7 @@ import { detectNativePlatform } from "@/lib/capacitor/_shared"
 import { subscribe as subscribeNetwork } from "@/lib/capacitor/network"
 import type { RuntimeTargetScope } from "@/lib/runtime/runtime-target-context"
 import { transportCommandTimeoutMs } from "@/lib/tauri/transport-types"
-import { sha256Hex } from "@/lib/share/hash"
+import { sha256Uuid } from "@/lib/share/hash"
 import { isOperation } from "@/lib/tauri/companion-paging"
 import { companionErrorInitFromProblem, parseProblem } from "@/lib/tauri/companion-problem"
 
@@ -409,8 +409,7 @@ export function createOutboundRunner(opts: RunnerOptions): OutboundRunner {
       // dispatch. Derive a stable wire key so retries and restarts retain the
       // same operation without changing the row's audit or HostState identity.
       if (/^[A-Za-z0-9_-]{21}$/.test(idempotencyKey)) {
-        const hex = await sha256Hex(`cognia:outbound-queue:${idempotencyKey}`)
-        idempotencyKey = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+        idempotencyKey = await sha256Uuid(`cognia:outbound-queue:${idempotencyKey}`)
       }
       const result = await withDeadline(
         dispatcher.call(row.command, row.payload, { idempotencyKey }),

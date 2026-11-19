@@ -28,3 +28,13 @@ export async function sha256Hex(value: string): Promise<string> {
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")
 }
+
+/**
+ * A UUID that names `value`: its SHA-256 laid out as an RFC 9562 version-8
+ * UUID (variant `10`). The same input always gives the same id, so it serves
+ * as a stable idempotency or transport key wherever a UUID is required.
+ */
+export async function sha256Uuid(value: string): Promise<string> {
+  const hex = await sha256Hex(value)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}

@@ -31,6 +31,7 @@ import {
   BotRunCancelledError,
   BotRunParkedError,
   assertPublicStepName,
+  botStepIdempotencyKey,
   journalBotStep,
 } from "@/lib/bot/runtime/step"
 import { appendBotRunLog, appendBotRunProgress } from "@/lib/bot/runtime/journal"
@@ -220,7 +221,11 @@ export function createBotsAPI(
         { attempt: begun.attempt, via: "host-call" },
         Date.now
       )
-      return { memoized: false, attempt: begun.attempt }
+      return {
+        memoized: false,
+        attempt: begun.attempt,
+        idempotencyKey: await botStepIdempotencyKey(runId, name),
+      }
     },
     async stepComplete(runId, name, value) {
       await ownLive(runId)

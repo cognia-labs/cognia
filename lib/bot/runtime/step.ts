@@ -37,12 +37,13 @@ import {
 } from "@/lib/execution/run-control"
 import { resolveOwnedBotAuthority } from "@/lib/bot/policy/run-authority"
 import { getActionReviewChannelAdapter } from "@/lib/policy/action-review/registry"
-import { sha256Hex } from "@/lib/share/hash"
+import { sha256Hex, sha256Uuid } from "@/lib/share/hash"
 import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 import type {
   BotApprovalDecisionV1,
   BotApprovalRequestV1,
   BotStepApiV1,
+  BotStepAttemptV1,
   BotWaitForEventInput,
 } from "@/types/bot/run"
 import { announceRunApproval } from "@/lib/execution/run-approval-push"
@@ -100,6 +101,18 @@ export class BotRunParkedError extends Error {
  * already on somebody's screen instead of asking again. Two questions for one
  * step is how an approval queue fills with duplicates nobody can tell apart.
  */
+/**
+ * The idempotency key of one step, the same for every attempt of it in its run.
+ *
+ * A step is checkpointed after its callback returns, so an attempt whose effect
+ * reached a service but whose checkpoint did not commit runs again. Handing the
+ * service this key is how that second attempt lands on the first one's effect.
+ * A Retry is a new run, with new keys: it is meant to do the work again.
+ */
+export function botStepIdempotencyKey(runId: string, stepName: string): Promise<string> {
+  return sha256Uuid(JSON.stringify(["bot-step", runId, stepName]))
+}
+
 export async function botApprovalInterruptId(runId: string, stepName: string): Promise<string> {
   // Control IDs cross redacted projections. Keep the authority reference short,
   // opaque, and collision-resistant rather than embedding event text or paths.
@@ -195,7 +208,10 @@ export function createBotStepApi(input: {
     await journalBotStep(runId, type, name, payload, now)
   }
 
-  async function run<T>(name: string, fn: () => Promise<T> | T): Promise<T> {
+  async function run<T>(
+    name: string,
+    fn: (attempt: BotStepAttemptV1) => Promise<T> | T
+  ): Promise<T> {
     assertPublicStepName(name)
     assertLive(signal, runId)
     const begun = await beginBotRunStep(runId, name, now())
@@ -203,7 +219,10 @@ export function createBotStepApi(input: {
 
     await journal("step.started", name, { attempt: begun.attempt })
     try {
-      const value = await fn()
+      const value = await fn({
+        attempt: begun.attempt,
+        idempotencyKey: await botStepIdempotencyKey(runId, name),
+      })
       await completeBotRunStep(runId, name, value, now())
       await journal("step.completed", name)
       return value

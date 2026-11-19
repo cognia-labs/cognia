@@ -77,7 +77,7 @@ Bot 将已有执行器与触发器绑定，并为该绑定设置策略上限。�
 
 ## Handler 契约
 
-handler Bot 在崩溃或等待恢复后从头重入；任何不得执行两次的工作都必须放进 `ctx.step.run`（TypeScript）或 `run.step`（Python），它把已完成的 step 记忆化在 `botRunSteps` 里。以 `__host:` 开头的 step 名是宿主自留的记账名（发布检查点、快照、结果）。
+handler Bot 在崩溃或等待恢复后从头重入；任何不得执行两次的工作都必须放进 `ctx.step.run`（TypeScript）或 `run.step_run`（Python），它把已完成的 step 记忆化在 `botRunSteps` 里：step 的结果一旦写入检查点，重入时直接返回，不再调用回调。step 至少执行一次，而不是恰好一次。检查点在回调返回之后才写入，所以副作用已经发生、检查点却没提交的尝试（崩溃、租约丢失）会再跑一遍。回调会拿到本次尝试的信息（`attempt`，以及同一 run 内该 step 每次尝试都相同的 `idempotencyKey`）；把这个键交给 step 写入的服务，重复的尝试就会落到第一次的副作用上。以 `__host:` 开头的 step 名是宿主自留的记账名（发布检查点、快照、结果）。
 
 <table>
 <tr><th>TypeScript（`BotRunContextV1`）</th><th>Python（`BotRun`）</th></tr>
@@ -86,11 +86,13 @@ handler Bot 在崩溃或等待恢复后从头重入；任何不得执行两次�
 ```ts
 export default async function run(ctx: BotRunContextV1) {
   const snap = await ctx.step.run("snapshot", fetchSnapshot)
+  await ctx.step.run("comment", ({ idempotencyKey }) =>
+    postComment(snap.pr, { idempotencyKey }))
   const decision = await ctx.step.waitForApproval("gate", {
     title: "Push changes?", risk: "medium",
   })
   const event = await ctx.step.waitForEvent("ci", {
-    key: run.correlation, timeoutMs: 300_000,
+    key: `pr:${snap.pr}`, timeoutMs: 300_000,
   })
   await ctx.log("info", "done", { pr: snap.pr })
   await ctx.progress({ fraction: 0.9 })
@@ -104,13 +106,14 @@ export default async function run(ctx: BotRunContextV1) {
 @cognia.contribution("daily-digest")
 class DailyDigest:
     async def run(self, run: BotRun):
-        async with run.step("snapshot") as s:
-            s.complete({"pr": 7})
+        snap = await run.step_run("snapshot", fetch_snapshot)
+        await run.step_run("comment", lambda attempt: post_comment(
+            snap["pr"], idempotency_key=attempt.idempotency_key))
         decision = await run.wait_for_approval(
             "gate", {"title": "Push?", "risk": "medium"})
         event = await run.wait_for_event(
-            "ci", key="pr:7", timeout_ms=300_000)
-        await run.log("info", "done", {"pr": 7})
+            "ci", key=f"pr:{snap['pr']}", timeout_ms=300_000)
+        await run.log("info", "done", {"pr": snap["pr"]})
         await run.progress(fraction=0.9)
         return {"summary": "ok"}
 ```

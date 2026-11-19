@@ -6,6 +6,7 @@ import type {
   BotApprovalRequestV1,
   BotLogLevel,
   BotProgressUpdateV1,
+  BotStepAttemptV1,
   BotWaitForEventInput,
 } from "./run"
 
@@ -124,13 +125,12 @@ export interface BotEnqueueInput {
   correlation?: string
 }
 
-export interface BotStepBeginResult {
-  memoized: boolean
-  /** Present when memoized. */
-  value?: unknown
-  /** Present when not memoized. */
-  attempt?: number
-}
+/**
+ * A memoized step hands back its checkpointed value; any other begin hands back
+ * the attempt the caller is about to run, as `BotStepAttemptV1`.
+ */
+export type BotStepBeginResult =
+  { memoized: true; value: unknown } | ({ memoized: false } & BotStepAttemptV1)
 
 export type BotWaitOutcome<T> =
   | { status: "settled"; value: T }

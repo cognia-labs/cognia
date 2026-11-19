@@ -94,6 +94,12 @@ resumed wait. Nothing in it may assume the process that started the run is the p
 that finishes it. Work that must not repeat goes inside `step.run`, which memoizes on
 the run's own event journal.
 
+A step runs at least once, not exactly once: its checkpoint is written after the
+callback returns, so an attempt whose effect happened but whose checkpoint never
+committed runs again. The callback is handed `{ attempt, idempotencyKey }`, and the key
+is the same for every attempt of that step in that run. Pass it to the service the step
+writes to.
+
 ```ts title="bots/digest.js"
 import { defineBotHandler } from "@cognia/plugin-sdk/api/bot"
 
@@ -107,7 +113,7 @@ export default defineBotHandler(async (ctx) => {
   })
   if (decision.outcome !== "approved") return { summary: "declined" }
 
-  await ctx.step.run("post", () => postDigest(issues))
+  await ctx.step.run("post", ({ idempotencyKey }) => postDigest(issues, { idempotencyKey }))
   return { summary: `posted ${issues.length} items` }
 })
 ```
@@ -134,18 +140,20 @@ DIGEST = define_bot(
 
 @cognia.contribution("daily-digest")
 class DailyDigest:
-    async def run(self, snapshot):
-        run = BotRun(snapshot)
+    async def run(self, run: BotRun):
         issues = await run.step_run("fetch", fetch_open_issues)
-        decision = await run.wait_for_approval("send", title="Post the digest?")
+        decision = await run.wait_for_approval("send", {"title": "Post the digest?"})
         if decision["outcome"] != "approved":
             return {"summary": "declined"}
-        await run.step_run("post", lambda: post_digest(issues))
+        await run.step_run("post", lambda attempt: post_digest(
+            issues, idempotency_key=attempt.idempotency_key))
         return {"summary": f"posted {len(issues)} items"}
 ```
 
-Python is handed the serialisable half of the run (`runId`, `installationId`, `botId`,
-`event`, `config`) and reaches the rest through `ctx.bots.*`. Cancellation crosses at
+Python is handed a `BotRun` over the serialisable half of the run (`run_id`,
+`installation_id`, `bot_id`, `event`, `config`), which reaches the rest through
+`ctx.bots.*`. The runtime builds it for any contribution whose id matches a
+`define_bot` id. Cancellation crosses at
 step edges: once a run is cancelled, the next `step_run`, `wait_for_approval` or
 `wait_for_event` raises.
 

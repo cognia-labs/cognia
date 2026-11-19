@@ -130,6 +130,7 @@ from .bot import (
     Bot,
     BotRun,
     BotRunParked,
+    BotStepAttempt,
     bot_run,
     define_bot,
 )
@@ -195,6 +196,7 @@ __all__ = [
     "BotRunParked",
     "bot_run",
     "define_bot",
+    "BotStepAttempt",
     "Ctx",
     "HostNamespace",
     "PYTHON_HOST_NAMESPACES",

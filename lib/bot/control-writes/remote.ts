@@ -31,7 +31,7 @@
  */
 
 import { enqueue, enqueueOnChannel } from "@/lib/db/mobile-outbound-queue"
-import { sha256Hex } from "@/lib/share/hash"
+import { sha256Uuid } from "@/lib/share/hash"
 import type { MobileOutboundJobRow } from "@/lib/db/mobile-outbound-types"
 import { setMirroredBotTriggerOverride } from "@/lib/db/bot-installations"
 
@@ -66,9 +66,8 @@ export async function botWriteIdempotencyKey(
 }
 
 /** UUID v8: a namespaced digest, with the complete delivery identity included. */
-async function botControlUuid(key: string): Promise<string> {
-  const hex = await sha256Hex(`cognia:bot-control:${key}`)
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+function botControlUuid(key: string): Promise<string> {
+  return sha256Uuid(`cognia:bot-control:${key}`)
 }
 
 /** Upgrade only the two exact legacy Bot key formats at dispatch, without rewriting audit rows. */
