@@ -2,7 +2,7 @@
 
 日期：2026-11-11（Asia/Shanghai）。状态：**P1 Partial，2026-11-13 修复后复核发现新反例；真实环境验收待完成**。取代 [2026-11-10 change lifecycle convergence](2026-11-10-change-lifecycle-convergence.md)；原文保留，只用作审计项来源和全量映射的对照。并发模型见 [ADR-0255](../content/docs/zh/adr/0255-runs-that-share-a-directory-keep-their-diffs-and-lose-undo.md)。
 
-> **最新修复（2026-11-13）：** 见[P1 修复与验证记录](../reports/2026-11-13-change-lifecycle-p1-repairs.md)。N01/N02、S1-3–S1-7 已补齐实现与核心回归，S1-2/S2 保留同目录并发并补上 alias、不可逆 Restore 和未知停止保护。真实 Tauri/模型/Linux Host 验收、RPC 定向测试仍开放；全局 lint/typecheck/Host parity 有范围外失败。S3/S4 未在本轮实施。[修复前校验](../reports/2026-11-13-change-lifecycle-implementation-validation.md)作为历史基线保留。
+> **最新修复（2026-11-13）：** 见[P1 修复与验证记录](../reports/2026-11-13-change-lifecycle-stop-restore-and-review-repairs.md)。N01/N02、S1-3–S1-7 已补齐实现与核心回归，S1-2/S2 保留同目录并发并补上 alias、不可逆 Restore 和未知停止保护。真实 Tauri/模型/Linux Host 验收、RPC 定向测试仍开放；全局 lint/typecheck/Host parity 有范围外失败。S3/S4 未在本轮实施。[修复前校验](../reports/2026-11-13-change-lifecycle-implementation-validation.md)作为历史基线保留。
 
 > **修复后复核（2026-11-13）：** [新反例与验收顺序](../reports/2026-11-13-change-lifecycle-postfix-adversarial-review.md)确认四个 P1：prune 删除借用的活跃 bundle 根、跨连接 settle 覆盖 overlap 并允许误 Undo、archive 删除未 opt-in stop 表的活跃根、Best-of-N 外层 abort 绕过内层停止未知保护。另有原 Host 控制/监听未固定的 P1 风险。原核心测试通过事实保留，整体 P1 重新打开；优先修目录所有权、结算单调性和外层释放，继续复用原 owner 并保留同目录并发，不增加独占 writer 或 quarantine 平台。本次复核没有实施产品修复。
 

@@ -4,7 +4,7 @@ Date: 2026-10-16. Status: **P1 desktop boundary verified in E2B; production rema
 
 The accepted [ADR-0233](../content/docs/en/adr/0233-a-managed-desktop-accepts-a-delivered-commit.md)
 defines workload isolation separately from trusted provider initialization.
-[P0](2026-10-16-managed-desktop-mmds-p0-verification.md) established kernel
+[P0](2026-10-16-managed-desktop-mmds-e2b-capability-verification.md) established kernel
 capabilities. This record tests the compiled supervisor, launcher and fixed
 ingress relay in the published image; it does not qualify handoff or install
 production receipts.

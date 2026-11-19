@@ -715,7 +715,7 @@ The focused suite rerun used the repository Jest entry point directly under the 
 node scripts/test/jest.mjs -- --runInBand --runTestsByPath \
   lib/automation/client.test.ts lib/automation/action-schemas.test.ts \
   lib/automation/ocr-click.test.ts lib/plugin/api/automation-api.test.ts \
-  plugins/computer-use/src/index.test.ts lib/claude/computer-use-tools.g6.test.ts \
+  plugins/computer-use/src/index.test.ts lib/claude/computer-use-tools.admission.test.ts \
   lib/external-bridge/handlers/computer-use.test.ts lib/browser/agent-engine.test.ts \
   lib/browser/backend-availability.test.ts lib/browser/extension-engine.test.ts \
   lib/browser/local-chromium-engine.test.ts lib/browser/remote-chromium-engine.test.ts \

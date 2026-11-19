@@ -8,7 +8,7 @@
 
 ## Entry gates and dependency ownership
 
-Phase 1 source implementation and bounded verification are recorded in [the Phase 1 report](./2026-10-15-managed-cloud-desktop-phase1-verification.md). Final native compilation and provider qualification are not claimed.
+Phase 1 source implementation and bounded verification are recorded in [the Phase 1 report](./2026-10-15-managed-cloud-desktop-lifecycle-verification.md). Final native compilation and provider qualification are not claimed.
 
 | Gate                                | Responsible role                     | Required evidence                                                                                                                                                                  | Work permitted before gate                                                       |
 | ----------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -19,7 +19,7 @@ Phase 1 source implementation and bounded verification are recorded in [the Phas
 | D3: Provider smoke authorization    | User plus Host maintainer            | Named user-supplied account/config, credential location on Host, region, shape, short provider-valid TTL and estimated spend explicitly approved                                   | Mock/fixture/contract work; never consume credentials or create a cloud resource |
 | D4: Per-configuration qualification | Host maintainer                      | Smoke receipt bound to release/image/recipe/protocol, provider credential/account binding, ingress/egress/region and shape                                                         | Feature remains unqualified and disabled for normal use                          |
 
-D1a is satisfied by merged delivery commit `ff3c51c617deb351caf07415d25d4b59467e6fe0`. The user authorized implementing D1b, followed by Phase 3. Trusted admission/source persistence and handoff now live together in the isolated integration checkout; they must land together, and legacy source-less deliveries still refuse. See [the original readiness report](./2026-10-15-managed-cloud-desktop-phase3-readiness.md) and [implementation evidence](./2026-10-15-managed-cloud-desktop-phase3-verification.md). D2 was verified before the authorized Phase 4 implementation; see the Phase 4 report.
+D1a is satisfied by merged delivery commit `ff3c51c617deb351caf07415d25d4b59467e6fe0`. The user authorized implementing D1b, followed by Phase 3. Trusted admission/source persistence and handoff now live together in the isolated integration checkout; they must land together, and legacy source-less deliveries still refuse. See [the original readiness report](./2026-10-15-managed-cloud-desktop-handoff-provenance-readiness.md) and [implementation evidence](./2026-10-15-managed-cloud-desktop-source-handoff-verification.md). D2 was verified before the authorized Phase 4 implementation; see the Phase 4 report.
 
 Use a detached worktree for any overlap with foreign edits. Before each package, inspect scoped status and the current owning source. Only stage/commit owned paths. Reallocate ADR/schema identifiers if another branch claims them before integration. No stash, shared-tree reset, branch switch or tree-wide formatting. This documentation worktree starts at committed HEAD and intentionally omits foreign implementation changes.
 
@@ -114,7 +114,7 @@ The smoke command is restricted to an explicit owner/config/build and uses ordin
 
 ## P2 — Extend the existing viewer and control authority
 
-Implementation and bounded validation are recorded in [the Phase 2 report](./2026-10-15-managed-cloud-desktop-phase2-verification.md).
+Implementation and bounded validation are recorded in [the Phase 2 report](./2026-10-15-managed-cloud-desktop-viewer-control-verification.md).
 
 Authorized by the user on 2026-10-15. Native builds remain skipped at the user's request after ENOSPC; this limits validation and does not qualify the provider. Phase 2 has a separate GUI qualification receipt; lifecycle qualification alone never enables input. Agent control remains dormant through the Phase 3 diagnostic rollout; production delegation needs Phase 4 and qualification. Reuse a single user-requested admin lease across acquire/renew/release/input and fail closed on its expiry. No automatic admin lease renewal or acceptance creation.
 
@@ -133,7 +133,7 @@ Authorized by the user on 2026-10-15. Native builds remain skipped at the user's
 
 ## P3 — Accept a merged delivery through read-only source transfer
 
-**Implementation authorized after D1a:** the user explicitly extended scope to complete D1b first. The isolated checkout contains both changes and the dormant Phase 3 transfer. [The verification report](./2026-10-15-managed-cloud-desktop-phase3-verification.md) records the exact base, source files and evidence limits. Host-minted coding-run identity is authoritative; the original conversation run reference is retained separately and never grants source authority. Production execution and agent delegation still require Phase 4 and qualification.
+**Implementation authorized after D1a:** the user explicitly extended scope to complete D1b first. The isolated checkout contains both changes and the dormant Phase 3 transfer. [The verification report](./2026-10-15-managed-cloud-desktop-source-handoff-verification.md) records the exact base, source files and evidence limits. Host-minted coding-run identity is authoritative; the original conversation run reference is retained separately and never grants source authority. Production execution and agent delegation still require Phase 4 and qualification.
 
 1. Resolve authorized delivery by immutable record ID, not agent ID. Capture source owner/Host/session/task/run, delivery revision and commit. Reject missing identity, foreign Host/account or conflicting source.
 2. Create a versioned handoff manifest and child acceptance run with `parentRunId`, `sessionId`, `sourceId`; record a fresh desktop binding. Original terminal coding run and its placement are not mutated.
@@ -149,7 +149,7 @@ Authorized by the user on 2026-10-15. Native builds remain skipped at the user's
 
 ## P4 — Durable results, private artifacts and deletion as one lifecycle
 
-**Implementation authorized on 2026-10-15 after D1/D2 verification.** Source implementation and bounded checks are recorded in [the Phase 4 report](./2026-10-15-managed-cloud-desktop-phase4-verification.md). Rust validation remains skipped and production acceptance remains hard-disabled. Own acceptance metadata/evidence/GC modules, existing execution artifact/history projections and narrow canonical deletion/retention hooks. Coordinate the merged history contract before modifying it.
+**Implementation authorized on 2026-10-15 after D1/D2 verification.** Source implementation and bounded checks are recorded in [the Phase 4 report](./2026-10-15-managed-cloud-desktop-acceptance-evidence-verification.md). Rust validation remains skipped and production acceptance remains hard-disabled. Own acceptance metadata/evidence/GC modules, existing execution artifact/history projections and narrow canonical deletion/retention hooks. Coordinate the merged history contract before modifying it.
 
 ### P4.1 Result storage and projection → verify source identity and terminal semantics
 

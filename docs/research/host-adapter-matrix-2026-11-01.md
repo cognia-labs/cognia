@@ -1,6 +1,6 @@
 # Host adapter matrix: how each runtime is assembled on desktop, brain and person brain
 
-> Status: **draft 1** (phase 0a, work package A5 of `docs/plans/2026-11-01-convergence-phase-0.md`).<br>
+> Status: **draft 1** (phase 0a, work package A5 of `docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md`).<br>
 > Source commit: `d8e3ac4fb9` (branch `codex/modular-sync-20261030`). Read-only study; no code changed.<br>
 > Inputs: `lib/headless/runtimes/*.ts`, `lib/headless/types.ts`, `cli/src/serve/serve-command.ts`, `components/runtime/app-runtime.tsx`, `components/providers/**`, `protocol/companion-commands.json`, `protocol/headless-command-dispositions.json`, `crates/cognia-companion/src/ws_bridge.rs`.<br>
 > Method: two read-only research passes (one per half), the claims this document's conclusions rest on re-checked by hand (marked **[checked]**), then an adversarial review by a second model (Codex gpt-6.1-sol); its four findings are folded in.<br>

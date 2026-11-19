@@ -336,6 +336,6 @@ actual weakened-profile rejection and complete termination.
 
 - [E2B pricing](https://e2b.dev/pricing), checked 2026-10-16: 2 vCPU + 4 GiB compute US$0.1656/hour, Hobby 1-hour and Pro 24-hour lifetimes. Template and subscription charges are separate.
 - [Accepted isolation plan](2026-10-16-managed-desktop-mmds-isolation.md).
-- [P3 evidence](2026-10-16-managed-desktop-mmds-p3-verification.md).
+- [P3 evidence](2026-10-16-managed-desktop-host-boundary-and-native-handoff-verification.md).
 
 - [Chromium Linux interface classification](https://github.com/chromium/chromium/blob/main/net/base/address_tracker_linux.cc#L548-L569), [TCP completion](https://github.com/chromium/chromium/blob/main/net/socket/tcp_socket_posix.cc#L619-L642), and [DNS completion](https://github.com/chromium/chromium/blob/main/net/dns/host_resolver_system_task.cc#L409-L447), checked 2026-10-17: loopback does not establish an online connection; failed TCP/DNS operations can be reported as `ERR_INTERNET_DISCONNECTED`.

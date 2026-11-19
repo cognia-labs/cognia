@@ -4,7 +4,7 @@ Date: 2026-10-15. The user authorized Phase 3 only after the delivery dependency
 
 ## Follow-up implementation
 
-The user subsequently authorized completing D1b and then Phase 3 on 2026-10-15. That implementation is recorded in [the Phase 3 verification report](./2026-10-15-managed-cloud-desktop-phase3-verification.md). The original check below remains as historical evidence of why provenance had to be added; it is not the current implementation status. Native validation and real-provider qualification remain unverified.
+The user subsequently authorized completing D1b and then Phase 3 on 2026-10-15. That implementation is recorded in [the Phase 3 verification report](./2026-10-15-managed-cloud-desktop-source-handoff-verification.md). The original check below remains as historical evidence of why provenance had to be added; it is not the current implementation status. Native validation and real-provider qualification remain unverified.
 
 ## Original decision
 

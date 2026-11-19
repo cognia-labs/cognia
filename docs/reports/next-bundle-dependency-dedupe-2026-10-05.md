@@ -1,6 +1,6 @@
 # Dependency deduplication — 2026-10-05
 
-The application and Streamdown now resolve one Shiki runtime. The five local schema packages share the host Zod runtime, eliminating the duplicate AI SDK peer contexts. This implements P1-A from [the P1 analysis](../research/2026-10-05-next-bundle-p1-analysis.md).
+The application and Streamdown now resolve one Shiki runtime. The five local schema packages share the host Zod runtime, eliminating the duplicate AI SDK peer contexts. This implements P1-A from [the P1 analysis](../research/2026-10-05-next-bundle-dependency-and-route-boundary-analysis.md).
 
 ## Changes
 

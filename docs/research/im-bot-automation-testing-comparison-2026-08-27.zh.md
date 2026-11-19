@@ -233,7 +233,7 @@ Matrix 没有把历史 event 再投递成新 event 的通用 API，但本地 hom
 1. [`telegram-bidirectional.spec.ts`](../../tests/e2e/tauri/telegram-bidirectional.spec.ts) 已有 **mock full-path E2E**：本地 Telegram Bot API mock 提供 `getUpdates`/`sendMessage`，Tauri adapter 轮询 synthetic update → mock AI → outbound runner → mock server 断言回复；[`connector-inbound-trigger.spec.ts`](../../tests/e2e/tauri/connector-inbound-trigger.spec.ts) 还覆盖 inbound → workflow run。它们证明 Cognia 全路径 wiring，但不触达 Telegram Test DC。
 2. [`scripts/smoke/compose-smoke.mjs`](../../scripts/smoke/compose-smoke.mjs) 的 `--tier im` 使用 OneBot reverse-WS **协议 stub** 注入 private message，但后半段走真实 headless Brain AI path，并断言返回的 `send_private_msg` 包含 `pong`。当前 [compose CI workflow](../../.github/workflows/compose-e2e.yml) 只运行 `services`/`server`，没有运行 secret-gated 的 `im` tier。
 3. [`scripts/lark-live-smoke.mts`](../../scripts/lark-live-smoke.mts) 是真实飞书 OpenAPI **出站 live smoke**，不覆盖长连接/webhook 入站。
-4. [`phase-1-ship-gate.mdx`](../content/docs/en/connectors/phase-1-ship-gate.mdx) 对 Telegram、Discord、Slack、Lark、OneBot 的真实入站/回复仍是人工 checklist；WeCom、WeChat、DingTalk、QQ Official、Matrix 尚未进入该清单。
+4. [`release-verification.mdx`](../content/docs/en/connectors/release-verification.mdx) 对 Telegram、Discord、Slack、Lark、OneBot 的真实入站/回复仍是人工 checklist；WeCom、WeChat、DingTalk、QQ Official、Matrix 尚未进入该清单。
 5. [`inbound-a2ui-pipeline.smoke.test.ts`](../../lib/connectors/__smoke__/inbound-a2ui-pipeline.smoke.test.ts) 只验证 mapper dispatch wiring，当前只列 Phase 1 的 Slack/Lark/Discord/Telegram/OneBot；它不是 transport 或平台 E2E。
 
 因此当前最大缺口不是 adapter 单测数量，而是缺少一套共享 runner，把不同平台的真实 driver、readiness、correlation、回复断言、去重和清理统一起来。

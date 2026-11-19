@@ -163,7 +163,7 @@ native probe 需要 `COGNIA_REVIEW_FIXTURE_ROOT`（绝对、独立临时目录�
 
 P01–P03 同时涉及 `service.rs`，实施时应由同一 owner 顺序修改；不通过抢占整个目录来规避竞态。工作区历史 UI、S3 投影/失效和 S4 归因回执继续留在已有阶段，当前先确保历史清理不会删除活跃目录。性能预算与真实大仓测量仍开放，不从本轮小 fixture 推断吞吐或 RSS。
 
-当前修复状态已回写[原修复记录](2026-11-13-change-lifecycle-p1-repairs.md)、[实施方案](../plans/2026-11-11-change-lifecycle-stopgap-and-history.md)和[原 evidence ledger](../evidence/2026-10-29-turn-diff-completion.md)。原有测试通过事实保留，整体 P1 完成声明重新打开。
+当前修复状态已回写[原修复记录](2026-11-13-change-lifecycle-stop-restore-and-review-repairs.md)、[实施方案](../plans/2026-11-11-change-lifecycle-stopgap-and-history.md)和[原 evidence ledger](../evidence/2026-10-29-turn-diff-completion.md)。原有测试通过事实保留，整体 P1 完成声明重新打开。
 
 ## 8. 修复状态（2026-11-14）
 

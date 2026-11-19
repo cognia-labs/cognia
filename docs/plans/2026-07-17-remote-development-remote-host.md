@@ -138,7 +138,7 @@ Cognia 的架构是 **`Rust 前门 + 一份 TS brain`**,brain 既能跑在桌面
 
 ### F10. codeserver / lsp 完全不在 companion RPC —— 缺口 B [CONFIRMED]
 
-阳性对照: `grep -e "codeserver" -e "lsp_" src-tauri/src/companion_api/rpc.rs` → **0 命中**;**同一次 grep** 在 `src-tauri/src/codeserver/PHASE2_AGENT_DRIVE.md:142` 找到 `codeserver_agent_open`(证明词存在、工具在工作)。codeserver 命令是 **Tauri 命令**,不是 companion RPC。`lsp_*` arm 根本不存在。
+阳性对照: `grep -e "codeserver" -e "lsp_" src-tauri/src/companion_api/rpc.rs` → **0 命中**;**同一次 grep** 在当时 Agent Drive 设计正文的第 142 行找到 `codeserver_agent_open`（现见 [Agent Drive 历史说明](../../src-tauri/src/codeserver/AGENT_DRIVE_HISTORY.md)）(证明词存在、工具在工作)。codeserver 命令是 **Tauri 命令**,不是 companion RPC。`lsp_*` arm 根本不存在。
 
 **新增一个 companion RPC arm 的代价(headless-full-parity F4,本计划复核)= 5 触点**: `KNOWN_COMMANDS` → `SERVICE_ONLY_COMMANDS`/门 → `dispatch()` match 分支 → `docs/api/mobile-companion-api.openapi.yaml` → `spec_parity.rs`(双向 CI 门,漏一边 CI 红)。两者均已确认存在(`docs/api/mobile-companion-api.openapi.yaml`、`src-tauri/src/companion_api/spec_parity.rs`)。
 
@@ -271,7 +271,7 @@ Cognia 的架构是 **`Rust 前门 + 一份 TS brain`**,brain 既能跑在桌面
 
 **问题**: 见 F10。`codeserver_*` 是 Tauri 命令、不在 companion RPC;`lsp_*` arm 不存在。所以 Pro-IDE(浏览器版 VS Code)和真远程 LSP 都打不到远端。
 
-**复用(既有)**: `lib/codeserver/client.ts`(已是 `transport.call` 的传输无关 client)、`src-tauri/src/codeserver/`(process/webview/download,`PHASE2_AGENT_DRIVE.md` 已有 Phase 2 设计)。
+**复用(既有)**: `lib/codeserver/client.ts`(已是 `transport.call` 的传输无关 client)、`src-tauri/src/codeserver/`(process/webview/download,`AGENT_DRIVE_HISTORY.md` 已有 Phase 2 设计)。
 
 **新建(代价明确)**:
 

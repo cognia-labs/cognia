@@ -1,0 +1,332 @@
+# ADR-0239 第一期实施计划：外发动作按请求授权
+
+| 项目        | 内容                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 状态        | 实施计划，待评审；未开工                                                                                                                      |
+| 作者 / 日期 | Claude / 2026-10-24，Asia/Shanghai                                                                                                            |
+| 设计        | [ADR-0239](../content/docs/zh/adr/0239-an-outbound-action-is-authorized-by-the-request.md)；来源 [roadmap §3](2026-10-24-grok-gap-roadmap.md) |
+| 深度        | Heavy：共享契约、Dexie 索引、sidecar 权限阶梯、两个咽喉点、约 25 个外发调用方、审批卡片（桌面与手机）、设置界面                               |
+| 已定决策    | ADR-0239 全部决策；另：bypass/yolo 下发给非发起线程仍要问；先影子模式再强制；第一期同时修正嵌套子任务的根会话                                 |
+| 上线方式    | 默认 `shadow`：只计算并记录“本会拦下”，行为不变；用户确认受影响的收件人后切到 `enforce`（下一个版本默认 `enforce`）                           |
+
+## 1. 总体做法
+
+**新代码集中在 `lib/policy/action-review/`，其余是在现有路径上接线。** 引擎是纯函数，所有 IO（读 receipt、读消息、读会话绑定、读策略授予）由一层“上下文收集”函数完成，咽喉点只调用这一层。
+
+```
+lib/policy/action-review/
+  policy.ts            planActionReview：纯函数，判定顺序见 ADR
+  outbound-targets.ts  外发工具判定 + 目标提取与归一化 + 指纹
+  root-session.ts      任意会话 → 根会话
+  instruction-epoch.ts 根会话的当前指令纪元
+  plan-context.ts      收集引擎所需上下文（屏障、授予、发起线程、模式）
+  plan-tool-call.ts    工具调用咽喉点的适配
+  plan-delivery.ts     connector 投递咽喉点的适配
+```
+
+每个工作包单独提交，带 co-located 测试。工作包顺序：WP0–WP3 → WP4 → WP5、WP6、WP8、WP9 → WP7、WP10 → WP11 → WP12。
+
+## 2. 已核实的现状（实施依据）
+
+| 事实                                                                                                                                                                                                                                                                                                                            | 位置                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Dexie：HEAD 为 247，冻结的 `SCHEMA_V240` 加 v240–v242 回填步，最后 `version(CURRENT_SCHEMA_VERSION).stores(CURRENT_SCHEMA)`；改 schema 即改 `CURRENT_SCHEMA` 并升版本。**另一会话有未提交改动占用 248**（`petMediaPacks`，并把末步拆成 `SCHEMA_V247` + 增量）。CLAUDE.md 的“单一版本、无链、无 upgrade”说法已过时（WP0 已更正） | `lib/db/schema.ts:438`、`:1702-1706`                                                                           |
+| receipt 表索引：`&id, decidedAt, expiresAt, outcome, authority, tier, channel, sessionId, runId, projectId, [channel+decidedAt], [sessionId+decidedAt], *surfaceIds`                                                                                                                                                            | `schema.ts:750-751`                                                                                            |
+| 派生列只由 `toReceiptRow` 写；上限裁剪按 `decidedAt` 删最旧                                                                                                                                                                                                                                                                     | `lib/db/action-review-receipts.ts:90`、`:127-136`                                                              |
+| `pruneActionReviewReceipts` 与 `attachActionReviewEffect` 无生产调用方                                                                                                                                                                                                                                                          | 同上 `:222`、`:153`                                                                                            |
+| 卡片按钮在 `ApprovalActions`；“始终允许”的隐藏条件为 `!suppressAlwaysAllowRule && !requiresPerCallApproval`；键在 `chat.toolApproval`                                                                                                                                                                                           | `components/chat/decisions/pending-decision-surface.tsx:346`、`:363`                                           |
+| 桌面审批路径：插件 pre-tool（`:820-855`）→ allowlist 自动放行（`:857`）→ 子任务路由（`:880`）→ 会话未打开则拒（`:959`）→ auto-mode（`:968`）→ 弹卡（`:985`）                                                                                                                                                                    | `hooks/chat/claude-chat-events.ts`                                                                             |
+| `approveTool` 只有传了 `attribution` 才写 receipt；多个自动拒绝路径没传                                                                                                                                                                                                                                                         | `lib/claude/ipc.ts:819-885`                                                                                    |
+| sidecar 的 `ALWAYS_ASK_CLASSES = outbound, secrets, hostConfig`；无 profile 时直接 `{kind:"none"}`；always-ask 会压过 ruleset allow、`alwaysAllowTools` 和 bypass，ruleset deny 仍然先生效                                                                                                                                      | `sidecar/src/policy/permission/permission-classes.ts:53-57`、`:150`；`ladder.ts:263-293`、`:479`               |
+| 渲染侧的外发分类来自插件 manifest 权限（`connectors:send`、`share:create`、`network:upload`）和 `HOST_TOOL_CLASSES`；与风险分类器的 `EXTERNAL_SEND_IDS` 是两份名单                                                                                                                                                              | `lib/claude/unattended-permission-options.ts:27-31`、`:69-78`；`lib/policy/risk/classify-risk.ts:144-158`      |
+| 无人值守响应器：`park ? parked(...) : deny(...)`，只会收到 ask                                                                                                                                                                                                                                                                  | `lib/claude/unattended-permission-responder.ts:107-160`                                                        |
+| 队友审批：`alwaysAllowTools` 自动放行 → 房间关闭则拒 → 推给团队会话；不经无人值守响应器                                                                                                                                                                                                                                         | `lib/chat/room/runner.ts:1556-1609`                                                                            |
+| 嵌套子任务：`parentSessionId: req.sessionId` 指向调用方（可能是中间层临时会话），没有根会话                                                                                                                                                                                                                                     | `dispatch-agent-handler.ts:124`；`lib/claude/agents/subagent-approval-routes.ts:33-37`                         |
+| digest turn 未传 `capabilityGrants` 和 `onPermissionRequest`                                                                                                                                                                                                                                                                    | `lib/connectors/scheduled-outbound.ts:280-291`、`:346-349`                                                     |
+| 投递入口是 `enqueueGoverned`（多数文件别名为 `enqueueOutbound`）；`AUTOMATED_SOURCES = ai-run, workflow, skill, plugin`；`notification`、`manual`、`draft-approved` 不过 PII 门禁                                                                                                                                               | `lib/connectors/delivery-gateway.ts:9`、`:57-64`、`:97-119`                                                    |
+| 目标 = `adapterId + conversationKey`；`buildConversationKey` 以 `:` 拼接；会话的发起线程在 `ChatSession.platformBinding.conversationKey`                                                                                                                                                                                        | `packages/plugin-contract/src/types/connectors/event.ts:236-253`、`binding.ts:5-13`                            |
+| IM 请求人按会话推断：最新 `running` 的 inbound job 的 `sender`；IM 消息行把 sender 放在 `metadata.platformMessage.sender`                                                                                                                                                                                                       | `lib/workflow/runtime/trigger-origin.ts:28-50`；`lib/connectors/runtime.ts:868-944`                            |
+| 草稿：`createDraft`、`approveDraftLocally`（以 `draft-approved` 入队）、草稿中心 `/inbox/drafts`                                                                                                                                                                                                                                | `lib/db/connector-drafts.ts:38`；`lib/connectors/inbox-writes/local.ts:318`                                    |
+| 人工编辑入口：`TaskSchedulerImpl.updateTask`（`TaskWriteSource` 区分 user/agent/plugin/system）；`updateBotConfigLocally` 等                                                                                                                                                                                                    | `lib/scheduler/task-scheduler.ts:1568`、`write-authority.ts:33`；`lib/bot/control-writes/lifecycle.ts:232-391` |
+| 现有哈希：同步 `sha256Hex(string)`（`packages/agent/src/digest.ts:30`）、`fnv1a32`（`lib/connectors/adapters/_shared/fnv1a.ts:17`）                                                                                                                                                                                             | —                                                                                                              |
+
+## 3. 工作包
+
+### WP0 文档与引用更正（单独小提交）
+
+- `packages/agent-config-types/src/action-review.ts` 文件头：ADR-0102 → ADR-0239；`lib/ai/agent/agent-team-runtime.ts` → `lib/ai/agent/team/agent-team-runtime.ts`；说明策略引擎在 WP4 落地。
+- `lib/policy/action-review/registry.ts:4`：“Nine channels” → 实际数量（加上 WP1 新增的渠道后再写）。
+- CLAUDE.md “Dexie schema is ONE version” 一条改为描述现行的短链做法，并指向 `dexie-migration` skill。
+
+### WP1 契约与 receipt 存储
+
+**契约（`action-review.ts`，契约版本仍为 1，只追加可选字段）**
+
+- `ActionReviewTarget { channel: string; fingerprint: string }`；`ActionReviewSubject.targets?: ActionReviewTarget[]`（一次审核可覆盖多个目标，如 `im.broadcast`）。**实施时更正**：receipt 不存收件人原文和标签。receipt 表为 metadata-only，而持有同样目标的定时任务因此被加密存储；校验函数拒绝非 64 位十六进制的指纹和任何多余字段。收件人原文与标签只存在于内存中的待审批对象（WP6/WP7 的卡片显示），WP11 的影子报告用各任务/Bot 自身配置的目标反查指纹。
+- `ActionReviewOrigin.rootSessionId?`、`ActionReviewOrigin.instructionEpoch?`。
+- `ActionReviewDecision.grant?: { scope: "once" | "instruction" | "policy"; policyRef?: string }`。
+- `ActionReviewRequest.plan?: { outcome: "allow" | "ask" | "draft" | "park" | "deny"; enforced: boolean }`：影子模式下记录“本会如何”。
+- 新渠道 `"connector-delivery"`（追加到联合类型末尾，永不改名）。`registry.ts` 的 `Record` 会迫使为它选定投影：`interruptType: null`（草稿不是运行中断）。
+- 校验函数同步更新，`contract-parity.test.ts` 与 `action-review.test.ts`（如无则新建）覆盖新字段。
+
+**Receipt 行与索引（`lib/db/action-review-receipts.ts`）**
+
+- 新派生列 `authKeys: string[]`（multiEntry），由 `toReceiptRow` 计算，仅对外发审核生成：
+  - 人工拒绝（`outcome: "deny"`、`authority: "human"`）：每个目标一条 `deny|<rootSessionId>|<epoch>|<fingerprint>`；
+  - `instruction` 范围的授予：每个目标一条 `grant|<rootSessionId>|<epoch>|<fingerprint>`。
+  - 超时、过期、系统拒绝、模型意见都不生成。
+- 不用复合索引：Dexie 不支持 multiEntry 的复合索引，单个 `*authKeys` 即可同时服务屏障和指令授予的查询。
+- 新查询：`hasActionReviewAuthKey(key)`、`listActionReviewAuthKeys(prefix)`；键由 `actionReviewAuthKey` / `actionReviewAuthKeyPrefix` 生成，根会话与纪元做 URI 编码，避免 IM 消息 id 中的 `|` 让前缀串到别的纪元。
+- 上限裁剪：先删不带 `authKeys` 的最旧行；带 `authKeys` 的行仅在超出保留期后删除。
+- `pruneActionReviewReceipts` 接入中央保留期清理器（`lib/storage/retention.ts` 的 `RETENTION_EXECUTORS`，表目录改为 `enforcement: "central"`、`executorId: "actionReviewReceipts"`），不另建定时任务。
+
+**Dexie（按 `.claude/skills/dexie-migration/SKILL.md`）**
+
+- 开工时重新读取 `CURRENT_SCHEMA_VERSION`，并用 `git diff -- lib/db/schema.ts` 检查并发占用。**已定**：另一会话的 248 仍未提交，本改动占用 249。工作区为 247 → 248（对方）→ 249（本改动）的增量链；提交内容为 HEAD 加本改动（247 → 249），不带对方的 248。
+- 按开工时 `schema.ts` 的约定改：HEAD 的约定是在 `CURRENT_SCHEMA` 中把 `actionReviewReceipts` 改为“原索引, *authKeys”并升版本；若 248 的增量拆分已提交，则相应新增一个只含 `actionReviewReceipts` 的增量步。不写 `upgrade()`：旧行没有 `authKeys` 也不需要。顺带把 `schema.ts` 中 receipt 表注释里的 “ADR-0102” 改掉（WP0 因该文件有他人未提交改动而跳过）。
+- `lib/db/schema.test.ts` 按 v248 先例补用例；`pnpm db:governance:write`（表名不变，表目录条目不变，只需确认生成物无差异）。
+
+**测试**：`lib/db/action-review-receipts.test.ts`（authKeys 生成规则、裁剪保留规则、查询）、`lib/db/schema.test.ts`。
+
+### WP2 外发工具名单、目标与指纹（`outbound-tools.ts`、`outbound-targets.ts`）
+
+- **一份名单**（`lib/policy/risk/outbound-tools.ts`，无依赖的叶模块）：`normalizeToolId` 从 `classify-risk.ts` 移入；`RISK_EXTERNAL_SEND_TOOL_IDS` 就是风险分类器原有的 6 个名称，`classify-risk.ts` 改为引用它，**行为不变**；`OUTBOUND_TOOL_IDS` = 风险集 ∪ `OUTBOUND_TOOLS_OUTSIDE_RISK`（`im_broadcast`、`im_create_chat`、`im_dispatch_task`、`team_post_to_chat`、`connectors_send_message`）。差集有测试固定：把它们并入风险集会改变每个团队和目标的计划门控（`team_post_to_chat` 并入会让无人值守的 IM 团队运行全部失败关闭，ADR-0070 已否决），等影子模式给出受影响的运行数后再单独决定。**不含** `send_session_message`、`team_send_message`（只触达用户自己的会话或队友）、`im_invite_members` / `im_remove_members` / `im_update_chat`（只改成员或名称，不投递内容）。`HOST_TOOL_CLASSES` 与插件 manifest 的 outbound 归类留给 WP5。
+- **目标提取**（`lib/policy/action-review/outbound-targets.ts`）：`extractOutboundTargets(toolName, input, { defaultAdapterId? })` 返回 `OutboundTarget[]`（`kind` + `channel` + `recipient`），非外发工具返回 `[]`，外发工具至少返回一个：
+  - `im_broadcast`：每个 `conversationKeys` → `conv:<platform>:<adapterId>:<chatId>`，channel 为 adapterId；
+  - `im_create_chat`：每个 `memberIds` → `person:<adapterId>:<memberId>`（adapterId 取输入，否则取绑定会话的 bot）；
+  - `im_dispatch_task`：`existingConversationKey` 优先，否则为新群成员；
+  - `team_post_to_chat`、`connectors_send_message`，以及通用名 `connector_send` / `send_message`：`conversationKey`；
+  - `send_email`：`to` / `cc` / `bcc`（字符串按 `,` `;` 拆分，或字符串数组）→ `mail:<小写地址>`，去掉显示名；
+  - `deploy_site`、`filespace_share`、`filespace_enable_webdav`：`public:<工具名>`，channel `tool:<工具名>`（公开链接没有具体收件人，每次都需授予）。
+  - 无法命名收件人（键格式错误、缺参数、未知的第三方工具形状、新群缺 bot）→ `unknown` 目标 `tool:<名称>` / `*`。引擎不会隐式放行 `unknown` 或 `public`，所以只会偏向询问。
+- **归一化到受众**：会话去掉线程 id（同一群的各线程是同一批成员，拒绝一个线程即屏蔽该群）；人员按 bot 限定作用域（IM 工具接收的是平台成员 id，Lark open_id 随应用不同，与触发策略 `user-allowlist` 按 adapter 存放远端用户 id 一致；`PlatformIdentity.id` 是随机行 id，不用于指纹）；同一调用内去重。
+- **指纹**：`outboundFingerprint` = `sha256Hex("outbound|" + channel + "|" + recipient)`，用 `@cognia/agent` 的同步纯 JS 实现；不含消息正文。`toReviewTarget` 产出回执存储形式（channel + fingerprint，不含收件人）。
+- **测试**：`outbound-tools.test.ts`（两份名单与差集固定、排除项、MCP 线路名）；`outbound-targets.test.ts`（每个提取器、Matrix 房间 id、格式错误 → unknown、每个名单内工具的合法调用都有已解析目标、换工具或改正文指纹不变、存储形式不含收件人）；`classify-risk.test.ts` 不变且通过。
+
+### WP3 根会话、发起线程、指令纪元
+
+**根会话（`lib/claude/agents/root-session.ts`，同时修正嵌套审批归属）**
+
+- `PluginDispatchApprovalRoute` 增加 `rootSessionId`，由 `startDispatchRun` 在父路由仍存活时解析并写入；后台任务日志 `BackgroundTaskJournalRecord.rootSessionId` 一并持久化，`redispatchBackgroundRun` 重启后带回，孙级任务在父任务结束或应用重启后仍能归位。
+- `resolveRootSessionId(sessionId)`：团队子会话 → 团队会话；子任务路由 → `rootSessionId ?? parentSessionId`（逐层解析，带环保护）；其他 → 自身。Agent Team 运行以 run id 执行，根取团队记录的 `sessionId`，由调用方读取。
+- `stores/chat/chat-store.ts` 的 `resolveApprovalBucket` 与 `hooks/chat/claude-chat-events.ts` 的超时归属都改用根会话。
+- 测试：`root-session.test.ts`（三层嵌套、中间路由已清除、团队成员派发、环）、`dispatch-run.test.ts`、`redispatch.test.ts`、`chat-store.test.ts`。
+
+**请求人与发起线程（`request-origin.ts` 纯规则，`resolve-request-origin.ts` 读取）**
+
+- 请求人三类：`local`（本机或其配对设备上的本人）、`im`（正在运行的入站任务的已验证发送者，取自 `resolveWorkflowTriggerOrigin`，与审批作用域同源）、`member`（共享会话运行所服务的成员，`getSharedRunRequester` 读取队列项 `requestedByUserId`）。IM 会话没有运行中的入站任务时，请求人是本人。
+- 发起线程：根会话有 `platformBinding` → 该会话（去掉线程 id）。桌面会话没有发起线程。
+- 定时任务：复用 `/schedule` 已写入的 `payload.scheduleProvenance`，不新增字段（`lib/scheduler/schedule-provenance.ts`）。它只能经 `createTask` 的受信选项写入：输入 payload 里的同名字段被丢弃，`updateTask` 保留存储值，导入任务不带它。agent、插件、工作流、配对设备 RPC 和导入文件都不能伪造发起线程。桌面创建的任务没有发起线程，需要 `policy` 授予。
+
+**指令纪元**
+
+- 会话：请求人在根会话中最新一条指令的消息 id（`msg:<id>`）。沿 `[sessionId+createdAt]` 索引倒序扫描到第一条匹配为止，不用固定窗口（长运行会把指令挤出窗口，回退值会让旧的屏蔽复活）；按（根会话、请求人、最新消息 id）缓存。没有任何指令时为 `none:<根会话>`。
+- 判定（`isRequesterInstruction`）：`im` 匹配 `platformMessage.sender` 的身份 id 或平台用户 id；`member` 匹配 `collaboration.author`（`kind: "human"`）的 id；`local` 是既无 IM 发送者也无协作作者的行。群里其他人、共享会话其他成员不推进。
+- 自动化写入的 `role: "user"` 行一律不算指令：新增 `metadata.automatedTurn`（`@cognia/agent-config-types/automated-turn`，生产者清单有测试固定），已标记后台任务结果、项目协调器（催促、路由、暂存简报、续作种子）、工作流 `appendMessage` / `character.send`、插件 `addMessage` / `startSeededSession` / agent-SDK `send` / best-of-N、校验器请求、外部运行时上报的用户事件、跨设备交接导入；繁忙会话里排队的自动化消息同样保留标记。已有标记照常识别：`sessionPeerMessage`（`origin: "agent"`）、`larkImport`、`importSourceOwned`、`routerFusion`。本人经非输入框的界面产生的消息（审批拒绝理由、浮岛回复、异步问题回答、语音、配对设备）仍是本人的指令。
+- 无会话的运行：`task:<id>@<humanRevision>`、`bot:<id>@<humanRevision>`。`humanRevision` 为非索引字段：`updateTask` 只在 `source: "user"`（调度页面、通知静音、配对设备 UI 编辑）时加一；Bot 控制面的配置、执行路由、凭据绑定、启停加一，插件或运行时经 `updateBotInstallation` 的补丁不能写它。
+- 测试：`request-origin.test.ts`、`resolve-request-origin.test.ts`（本人、嵌套子任务与团队成员、IM 群他人不推进、无运行任务的 IM 会话、共享会话成员、无指令、缓存）、`automated-turn.test.ts`，各生产者测试断言标记，`task-scheduler`、`schedule-provenance`、`bot control-writes` 的 humanRevision 与发起线程用例。
+
+### WP4 引擎（`policy.ts`、`plan-context.ts`）
+
+- `planActionReview(request, ctx): ActionReviewPlan`，纯函数。`ctx`：`{ mode: "shadow" | "enforce"; unattended: boolean; rulesetVerdict; originTargets: Set; isFenced(fp); hasInstructionGrant(fp); policyGrants: Set; via: "tool" | "delivery" }`。
+- 判定顺序与 ADR 一致：显式 deny / 屏障 → `deny`（`policy-deny`）；所有目标都属于发起线程 → `allow`（`policy-default`）；所有目标都有授予 → `allow`（`human` 或 `policy-rule`，附 `grant`）；否则交互 → `ask`（附未授权目标列表），无人值守 → 投递为 `draft`、工具为 `park`。多目标时任一目标被屏蔽则整体 `deny`，并在结果中列出被屏蔽目标。
+- ruleset 的 `allow` 只影响“工具能否使用”，不进入收件人判定；bypass 不影响判定。
+- `mode: "shadow"` 时返回 `{ ...plan, enforced: false }`，调用方据此只记录不执行。
+- `plan-context.ts` 负责收集上下文：模式来自设置 `agentPermissions.outboundAuthorization`（WP11），屏障与授予查 `authKeys`，策略授予来自 WP10 的字段。
+- `recommendation` 只复制，不读取（测试断言它对结果无影响）。
+- **测试**：`policy.test.ts` 以表格覆盖 ADR“验证义务”的每一条，以及：多目标部分屏蔽、unknown 目标、bypass/ruleset allow 不放宽、影子模式不执行。
+- **实施时更正**（已落地）：
+  - 签名为 `planActionReview({ verdict, targets }, ctx)`：receipt 只存指纹，引擎需要带 kind 的完整 `OutboundTarget`，由调用方传入；ctx 中屏障、指令授予、发起线程均为指纹集合，策略授予为“指纹 → policyRef”映射，函数式 `isFenced` 改为集合以保持纯函数。
+  - 返回 `ActionReviewPlanResult`：`plan`、`reason`、`authority`、`grant`、被屏蔽目标、未授权目标。
+  - 逐目标判定：每个目标各自属于发起线程、指令授予或策略授予即可，混合也放行；结果的授权方取所用的最具体依据（指令授予 → `human`，否则策略授予 → `policy-rule`，否则 `policy-default`）。
+  - `verdict === "deny"` 不论是否显式都拒绝（只会更严）。没有目标的动作走 ask/draft/park，`reason: "no-target"`。
+  - 发起线程只匹配 `conversation` 类目标；`public`/`unknown` 永不经发起线程、指令或策略授予放行，但会被屏障拒绝。
+  - `plan-context.ts`：`taskPlanOrigin` 以 `task:<id>` 为根、`botPlanOrigin` 以 `bot:<id>` 为根且无发起线程；模式经 `readOutboundAuthorizationMode` 结构化读取 `agentPermissions.outboundAuthorization`，仅精确为 `enforce` 时执行（该字段与开关在 WP11 加入，此前只有 `shadow` 可达，测试固定）；策略授予由调用方以列表传入（WP10 前为空）。
+  - 未加内存缓存：每次计划为 `*authKeys` 上的两次前缀索引查询；若 WP6 热路径需要，再在 receipt 模块加按写入失效的缓存。
+
+### WP5 sidecar：外发类总是询问
+
+- **复用已有字段 `SendOptions.alwaysExplicitTools`**（`packages/agent-config-types/src/index.ts:808-833`）：它的设计正是“这些工具总是以 `permission_request` 到达渲染侧，无视 `alwaysAllowTools`、`suppressApprovalForTools` 和 connector yolo，但不覆盖 deny”。目前它只有类型声明，没有生产方也没有读取方（WP0 已在类型上标注为休眠）。不再新增 `outboundToolIds`。
+- 渲染侧：`resolveSendOptions` 计算 `alwaysExplicitTools`，**本期只放外发工具**（`OUTBOUND_TOOL_IDS` 及插件中带 outbound 类的工具）。注释中列出的 computer-use、native-command、data-destructive 不在本期：让 Bash 等工具总是询问是本 ADR 范围之外的大幅摩擦变化，需另行决策；同步更新该字段注释。
+- sidecar：两个 `canUseTool` 门禁（AI SDK 与 Agent SDK）读取 `alwaysExplicitTools`，对列表内工具禁用 grants、dont-ask、sandbox 自动放行和 bypass（复用 `mustAsk()` 机制），deny 仍先生效；`permission_request` 事件带上 `permissionClass: "outbound"`。无 profile 时的 `profileVerdict` 不变。
+- 由于 always-ask 已压过 bypass（`ladder.ts:479`），bypass 下也会询问，与已定决策一致；询问到达渲染侧后，引擎对发起线程等情况静默放行。
+- **测试**：`sidecar/src/policy/permission/permission-classes.test.ts`、`ladder` 相关用例（无 profile 的 outbound 总是 ask、bypass 下仍 ask、ruleset deny 仍先于 always-ask）；`pnpm sidecar:test`、`pnpm sidecar:typecheck`、`pnpm audit:sidecar-architecture`；`unattended-permission-options.test.ts`、`build-options` 相关用例。
+- **实施时更正**（已落地，用户已定）：
+  - **影子期不改变发送结果**：按原计划，名单内工具一律询问，影子期就会出现新卡片，无人值守运行也会被 park，与“只记录、不改变”的约定冲突。新增 `SendOptions.alwaysExplicitToolsMode: "observe" | "enforce"`，由 `readOutboundAuthorizationMode` 决定（影子 → `observe`）。`observe` 下天梯不变；名单内调用若被快捷路径放行，就发 `explicit_tool_allowed` 事件（`ExplicitToolAllowedEvent`，带 input、`permissionClass: "outbound"`），供 WP6 记录影子 receipt。除 `observe` 之外的任何值都按 `enforce` 处理：名单内调用经 `mustAsk()` 总是询问，dontAsk 和无审批通道时拒绝，带 `requiresPerCallApproval`、`suppressAlwaysAllowRule`、`defaultToNo`。
+  - 匹配按注册名进行（最后一个 `__` 段，小写）：sidecar 用 `explicitToolName`，宿主用 `normalizeToolId`，两者一致由 `lib/policy/risk/outbound-tools.sidecar-parity.test.ts` 固定。
+  - Agent SDK 轨：SDK 自身的 bypass 和 allowedTools 放行不经 `canUseTool`。`enforce` 下由 PreToolUse 钩子把名单内调用转给 `canUseTool`，与 profile always-ask 同路。`observe` 下由 PostToolUse 钩子上报 SDK 自行放行的调用；`canUseTool` 已放行或已上报的 toolUseID 记在 `explicitSeen` 中，避免重复上报。
+  - 计算位置：`lib/claude/always-explicit-tools.ts`，名单为 `OUTBOUND_TOOL_IDS` 加上 outbound 类插件工具，在 `resolveSendOptions` 的 profile 块之前写入，每个回合都写。
+  - **`HOST_TOOL_CLASSES` 不加 IM、team 工具**：加了它们就进入无人值守 profile 的 outbound 类，影子期也会每次询问，所有无人值守 IM 团队运行都会被 park。这些工具改由名单按名称覆盖。
+  - **计划未列出的第三个闸门**：CLI 工具宿主（`cli/src/agent/tool-host/`，外部 agent 调用 Cognia 工具的入口）。`explicitToolMode` 让 `needsApproval` 在 `enforce` 下总是询问；`observe` 下的放行通过 `onExplicitToolAllowed` 回调上报，该回调尚无调用方接线，归 WP6。
+  - `explicit_tool_allowed` 目前没有宿主消费方（类型注释标注为休眠，由 sidecar 闸门测试固定），由 WP6 接入。
+
+### WP6 工具调用咽喉点（`plan-tool-call.ts`）
+
+- **桌面**：`claude-chat-events.ts` 在插件 pre-tool 之后、allowlist 之前（`:855` 与 `:857` 之间）对外发工具调用 `planOutboundToolCall(evt)`。为此把 `isSessionOpen` 和子任务路由的查询提前。结果：
+  - `allow` → `approveTool(..., "allow", ..., attribution)`，authority 为 `policy-default` 或 `policy-rule`；
+  - `deny` → `approveTool(..., "deny", 屏障说明, ..., attribution: policy-deny)`；
+  - `ask` → 继续原有流程，并把 `outboundTargets`（带标签）挂到 `PendingApproval` 上；
+  - 影子模式：记录 plan 后继续原有流程。
+- **对外发工具关闭现有自动放行**：enforce 模式下 allowlist（`:857`）与 auto-mode 不再对外发工具放行。
+- **无人值守**：`createUnattendedPermissionResponder` 的 `options` 增加 `planner`；在 `parked(...)` 之前调用：`allow` 直接返回允许，`deny` 直接拒绝，否则照旧停泊。影子模式只记录。
+- **队友**：`room/runner.ts` 在 `alwaysAllowTools` 自动放行之前调用同一适配；enforce 时 `alwaysAllowTools` 不再放行外发工具。
+- **回应审批**：`use-claude-chat-controller.ts` 的 `respondToApproval`：
+  - 外发审批的 deny 不再调用 `rememberDenial`，改为写带 `targets`、`rootSessionId`、`instructionEpoch` 的 receipt（由 `toReceiptRow` 生成屏障键）；
+  - 新的界面决定 `allow_for_request`：发给 sidecar 的仍是 `"allow"`，receipt 带 `grant.scope: "instruction"`；
+  - 外发审批不提供 `allow_always`。
+- 补上自动拒绝路径缺失的 `attribution`（`claude-chat-events.ts:889`、`:959`、`denyTimedOutApproval`；`approval-supersede.ts:148`）：authority 分别为 `system` 或 `timeout`，不生成屏障。
+- **测试**：`plan-tool-call.test.ts`；`claude-chat-events` 相关测试（发起线程静默放行、未授权弹卡带收件人、屏蔽直接拒绝、影子模式不改行为、allowlist 不放行外发）；`unattended-permission-responder.test.ts`；`room/runner` 相关用例；`use-claude-chat-controller` 的回应审批用例。
+- **实施时更正**（已落地）：
+  - **无人值守不在 responder 里规划**：所有 headless 捕获（目标运行、插件 agent turn、Bot、IM connector、CLI 会话）的权限请求都经 `run-and-capture.ts` 的 `handlePermissionRequest`，因此外发规划放在那里的 `answerWithOutboundPolicy`（`RunAndCaptureOptions.outboundPolicy`，未传时按无人值守）。定时任务的执行器自有事件循环，单独接入。origin：定时任务用 `taskPlanOrigin`，Bot 用 `botPlanOrigin`，其余由 `resolveSessionRequestOrigin` 从会话读取。
+  - `answerWithOutboundPolicy` 的行为：引擎放行或屏障时自己回答；需要人时把请求带上 `requiresPerCallApproval`、`suppressAlwaysAllowRule`、`defaultToNo` 交给原 responder，`allow_always` 收为 `allow`，人的放行补 `grant: once`。enforce 下规划失败按“需要人”处理；影子模式原样转交。
+  - **桌面**用 `planOutboundAsk`：放行或屏障直接 `approveTool`；否则把 `PendingApproval.outbound`（`targets`、`unauthorized`、`enforced`）挂上，enforce 下关闭 allowlist 与 auto-mode 并按每次调用询问。卡片上的收件人标签归 WP7。
+  - **“本次请求允许”不是新的决定值**：`ApprovalResponseOptions.forRequest` 加 `humanOutboundGrant`；只有全部目标都可授予（非 public、非 unknown）时才得 `instruction`，否则 `once`。按钮归 WP7。
+  - receipt 的 `targets`、`rootSessionId`、`instructionEpoch`、`plan` 由 `annotateChatToolReview` 在规划时挂到待审项上，settle 时合并；grant 经 `ApproveToolAttribution.grant` 传到 `settleChatToolReview`，拒绝时丢弃。
+  - **计划未列出的自动放行**，对每次调用的询问一并关闭：IM 的 yolo、会话 bypass 和“本会话允许”按钮（`connectors/hitl/tool-approval.ts`）；队友的 `alwaysAllowTools`；CLI 记住的放行（`session-runner.ts`）。
+  - **影子 receipt**（`recordOutboundShadowObservation`，id 为 `explicit:<toolUseID>`，verdict 与决定都是 `allow` / `policy-rule`，带 plan）的写入方：桌面监听（非捕获会话）、`run-and-capture`（捕获会话，经 `hasCaptureResponder` 认领，桌面不重复写）、定时任务执行器、CLI `external-agent-session.ts`（WP5 留下的 `onExplicitToolAllowed`）。CLI 工具宿主的 gate 同样经 `answerWithOutboundPolicy`，但不挂 receipt 注释（CLI 没有 chat 审核通道）。
+  - attribution 还补在：无人值守 responder 的停泊结果（人的回答 `human`，过期或撤回 `timeout`，停泊失败 `system`）与 `approval-supersede.ts`（`system`）。
+
+### WP7 审批卡片（桌面与手机）
+
+- `pending-decision-surface.tsx`：
+  - 有 `outboundTargets` 时显示收件人列表（`recipientsLabel`；无法识别时显示 `recipientUnknown`）；
+  - 按钮为“仅本次”（`allowOnce`）、“本次请求内允许发给这些收件人”（`allowForRequest`）、“拒绝”（`deny`）；隐藏“始终允许”；
+  - 拒绝时提示屏障效果（`denyFencesNotice`）。
+- 检查并同步 `tool-approval-dialog.tsx`、`tool-decision-content.tsx` 的同类按钮。
+- 手机：停泊审批的界面（`i18n/messages/*/mobile/runApprovals.json` 对应的组件）显示收件人，并提供同样的三个选项。
+- 影子模式提示：在卡片上不显示任何新内容（行为不变）。
+- **i18n**：`i18n/messages/{en,zh-CN}/chat.json` 的 `toolApproval` 下新增 `allowForRequest`、`recipientsLabel`、`recipientUnknown`、`denyFencesNotice`、`fencedNotice`；`mobile/runApprovals.json` 新增对应键；运行 `pnpm i18n:build`、`pnpm lint:i18n`。
+- **测试**：`pending-decision-surface.test.tsx`（显示收件人、外发隐藏“始终允许”、三个按钮各自发出的决定）、手机审批组件测试。
+- **实施时更正**（已落地）：
+  - **没有“标签”**：宿主上没有任何地方记录 IM 会话名或成员名，卡片按种类、平台 id 和经由的 bot 显示收件人（`outboundRecipientId`，`lib/policy/action-review/outbound-targets.ts`）；公开链接与无法识别的收件人照实说明。共用组件 `components/chat/decisions/outbound-recipients.tsx`，手机卡片复用它，因此手机只新增 `allowForRequest` 一个键。
+  - “本次请求内允许”只在每个收件人都能被授予时出现（`outboundGrantableForRequest`，`policy.ts`），出现时取代“始终允许”的位置；影子模式与观察者模式的卡片不显示收件人。未使用 `fencedNotice`：被屏障的调用当场拒绝，没有卡片可以显示它，模型收到的是 `outboundFenceMessage`。
+  - **headless 的“本次请求内允许”**：responder 在决定上带 `forRequest`，`answerWithOutboundPolicy` 换成校验过的 `grant`（responder 自带的 `grant` 一律忽略），`run-and-capture` 与定时任务执行器把它并入最终 attribution（IM 卡片的 attribution 要等 responder 返回后才从 interrupt 推得）。`PermissionRequestEvent.outbound` 由宿主写入交给 responder 的请求，sidecar 不写。
+  - **手机停泊审批**：interrupt 行是 metadata-only，收件人只在停泊期间存于宿主内存（`lib/execution/run-approval-outbound.ts`，停泊与 IM 卡片写入、等待结束即删）；`execution_run_approval_list` 返回 `outbound { recipients, allowForRequest }`，`execution_run_approval_respond` 接受 `forRequest`（仅 approve），经 `RunControlCommand.forRequest` 到达 agent-turn 处理器的 `resolveApproval`。请求与响应 schema 已更新并重新生成 companion API 产物。
+  - **IM 卡片**（计划未列出）：外发询问显示收件人与屏障提示，按钮为允许 / 拒绝 / 本次请求内允许（`tapr:` 前缀，数字回复 3），回调解析为 `{ decision: "allow", forRequest: true }`。
+  - **配对手机看桌面会话的卡片**（`use-remote-session-stream.ts`）只拿到 sidecar 原始事件，没有 `outbound`：本期只补上每次询问的标志（此前它会为每次询问的工具提供“始终允许”），收件人仍以工具参数显示。要显示收件人和“本次请求内允许”需要 HostState 决定投影与 `approval.respond` 意图携带这些字段，留待后续。CLI TUI 的询问已随 `suppressAlwaysAllowRule` 隐藏“始终允许”，不显示收件人。
+  - `tool-decision-content.tsx` 没有按钮；`components/agent/external-agent/tool-approval-dialog.tsx` 是外部 agent 自身工具的 ACP 询问，不经外发策略，均无需改动。
+
+### WP8 connector 投递咽喉点（`plan-delivery.ts`、`delivery-gateway.ts`）
+
+- `EnqueueInput` 新增必填（对自动来源）字段 `authorization: OutboundAuthorization`：
+  - `{ kind: "receipt"; receiptId }`：本次投递已由工具调用审核授权；
+  - `{ kind: "origin-reply"; inboundConversationKey }`：回复到触发它的会话，网关校验与目标一致；
+  - `{ kind: "system-notice"; inboundConversationKey }`：系统在同一会话内发出的卡片或提示（HITL 卡、计划审批卡、帮助、跟进控制），同样校验一致；
+  - `{ kind: "unattended"; ownerRef }`：定时、workflow、插件代码、通知等无会话来源，交给引擎按策略授予判定。
+- `enqueueGoverned` 在 PII 门禁之前调用 `planDelivery`。enforce 模式下：`allow` → 入队，`authorizedBy` 写入 job；`draft` → `createDraft`，不入队；`deny` → 抛出 `ConnectorDeliveryDeniedError`。影子模式：照常入队，另写一条 `connector-delivery` 渠道的 receipt 记录 plan。
+- 返回值改为 `EnqueueGovernedResult = { kind: "queued"; job } | { kind: "drafted"; draft }`。类型变化会让编译器列出全部调用方，按下表逐一处理：
+
+| 调用方                                                                                                                                                                                                | 来源                  | authorization                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------- |
+| `runtime.ts:382`、`:2767`、`:2775`（IM 自动回复）                                                                                                                                                     | ai-run                | origin-reply                                                    |
+| `commands/goal.ts:228`、`commands/dispatch.ts`、`help/help-dispatch.ts:154,208`、`follow-up-control.ts:109`、`callback-authorization.ts`、`adapters/lark/menu-actions.ts`、`principal/unbound.ts:100` | ai-run                | system-notice                                                   |
+| `hitl/tool-approval.ts:228`、`plan-approval.ts:213`、`workflow-run-approval.ts:211`、`media-grant.ts:199`                                                                                             | ai-run                | system-notice                                                   |
+| `run-presentation/runner.ts:448`（Bot/run 呈现）                                                                                                                                                      | ai-run / workflow     | 有 IM 触发 → origin-reply；否则 unattended（Bot 安装）          |
+| `scheduled-outbound.ts:410`（digest）                                                                                                                                                                 | ai-run                | unattended（任务；经 `/schedule` 创建的以发起会话为发起线程）   |
+| `notifications/im-deliver.ts:242`、`notifications/delivery/governed.ts:292`                                                                                                                           | ai-run / notification | unattended（用户配置的通知目标视为 `policy` 授予，见 WP10）     |
+| `skills/built-in/im/broadcast.ts:103`、`create-chat.ts:107`、`dispatch-task.ts:210`、`claude/team-builtin-tools.ts:689`                                                                               | skill                 | receipt（来自工具调用审核）                                     |
+| `lib/plugin/api/connectors-api.ts:291`                                                                                                                                                                | plugin                | 有工具调用上下文 → receipt；否则 unattended（插件）             |
+| `workflow/nodes/connectors/index.ts:~100`、`a2ui/workflow-fanout-handler.ts:87`、`a2ui/workflow-approval-handler.ts:92`                                                                               | workflow              | unattended（workflow）；交互触发且目标为发起会话 → origin-reply |
+| `outbound-runner.ts:638`（改路由重新入队）                                                                                                                                                            | 原来源                | 沿用原 job 的 `authorizedBy`，不重新判定                        |
+| `manual`、`draft-approved` 各调用方                                                                                                                                                                   | —                     | 不需要（人本人的操作）                                          |
+
+- `OutboundJobRow` 新增非索引字段 `authorizedBy?: { receiptId?: string; authority; grantScope?; requester?: { platformIdentityId?: string; localUser?: true } }`（`packages/plugin-contract/src/lib/db/connector-types.ts`）。
+- **测试**：`delivery-gateway.test.ts`（各 authorization 分支、发起会话校验失败、影子模式只记录、enforce 转草稿、deny 抛错）、`plan-delivery.test.ts`，以及上表中每个调用方现有测试的更新。
+- **实施时更正**（已落地，用户已定）：
+  - **没有 `receipt` 种类，改为登记已授权的工具调用**：工具在投递时拿不到自己调用的 receipt id（receipt 在审核结算后才异步写入）。`lib/policy/action-review/authorized-tool-calls.ts` 在内存中登记：`planCall` 规划时按（会话、requestId）记下调用及其目标指纹；允许时同步改按（会话、toolUseId）登记，带 authority 与授予（拒绝即删）。这一步发生在允许被发出之前，宿主的每条批准路径（`plan-tool-call` 的自动允许与询问后允许、`chat-tool-channel`、`ipc.approveTool`）都如此。TTL 30 分钟，上限 512 条；插件工具调用返回时（`plugin-tool-ipc` 的 finally）结束其授权。投递时 authorization 为 `{ kind: "tool-call"; sessionId; toolUseId }`：登记项的指纹覆盖目标即发送，`authorizedBy.receiptId` 为该调用的 requestId（即其 chat-tool receipt 的 id）；新建会话的工具（`im_create_chat`、`im_dispatch_task`）以 `createdConversation` 覆盖它刚建的群。登记项缺失时：影子模式照发、不记录；enforce 模式按 unattended（`tool-call:<id>`，会话自身的 origin）判定。
+  - **其余种类**：`plugin`（插件代码：该插件正在运行的已授权调用覆盖目标即发送，否则按 unattended `plugin:<id>`）、`human`（IM 确认卡上人点了确认后重新执行技能，授予 once；只在 enforce 下写 receipt）、`rerouted`（`outbound-runner` 改路由沿用原 job 的 `authorizedBy`，不重新判定）。origin-reply、system-notice、rerouted 只比较平台与 remoteChatId（不比较 adapter 与线程）；不一致即 deny（`conversation-mismatch`）。
+  - **两个入口而非一个返回值**：`enqueueGoverned`（人发起的来源与 origin-reply / system-notice / rerouted，只会入队或被拒，返回 job）与 `enqueueAuthorized`（返回 `EnqueueGovernedResult`）；`enqueueGovernedMany` 中任一条被拒则整批拒绝。规划在 PII 门禁之前；草稿不经 PII 门禁（不外发）。
+  - **只记录会被改变的投递**：影子模式下只有 enforce 会改变结果的投递写 `connector-delivery` receipt（outcome allow、authority policy-default）；草稿写 deny / policy-default，拒绝写 policy-deny。receipt 的 request id 为 `delivery:<uuid>`，subject 种类新增 `connector-delivery`，经 `projectActionReviewSettled` 写入，写入失败只告警。审计新增 `outbound.drafted`、`outbound.denied`，`outbound.enqueued` 带 authority 与 receiptId。
+  - **调用方与上表的差异**：Bot/run 呈现卡片是投进运行自身会话的提示，一律 system-notice（`binding.conversationKey`）；workflow 节点按 unattended，origin 为 `workflowRunPlanOrigin`（IM 触发的会话为发起线程，`plan-context.ts`）；定时发送与 digest 为 `task:<id>` + `taskPlanOrigin`，回调触发的 digest 默认按 unattended `digest:<…>` 在绑定会话的 origin 中判定；外部桥接为 unattended `external-bridge`；通知为 unattended `notification:<id>`。`governed.ts` 的主动推送目标写入 `authorizedBy`（policy-rule / policy，`policyRef: notification-target:<id>`），但规划尚未把它当作授予，由 WP10 决定。`authorizedBy` 未包含 `requester`（WP3 的请求人推断尚未接到网关）。转为草稿的投递：定时任务、im-push 执行器、workflow 节点返回成功并带 `heldAsDraft`，不重试成第二份草稿；插件 `enqueueSend` 抛 `ConnectorDeliveryHeldError`（`connector_delivery_held`，带 `draftId`）；`team_post_to_chat` 告诉模型已转草稿、不要重发。
+  - **已知缺口**：插件已弃用的直接 `send` / `sendText` 不经网关；HostState / 配对设备的批准不经宿主 `approveTool`，其工具投递按 unattended 判定；`/lark` 斜杠命令路径按 unattended 判定；外部桥接的 digest 在 enforce 下转为草稿。
+
+### WP9 digest turn 的审批响应
+
+- `runConnectorDigestTurn`：`resolveSendOptions` 传入 `buildSchedulerCapabilityGrant` 生成的授予；`injectedDigestSender` 调用时传入 `createUnattendedPermissionResponder("scheduled digest", { park: createUnattendedPark({ origin: "scheduler", ... }), planner })` 与 `pauseTimeoutWhileAwaitingPermission: true`。
+- **测试**：`scheduled-outbound.test.ts`（审批停泊并推送、不再无人应答）。
+- **实施时更正**（已落地，用户已定）：
+  - **按来源决定由谁应答**：`RunDigestInput.approver`（`DigestApprover`）。`parked`：定时 digest，`createUnattendedPark({ origin: "scheduler" })` 停泊，停泊期间暂停 capture 计时并持有执行时钟（`holdExecutionClock`），外发按 unattended、以 `taskPlanOrigin` 规划；`resolveSendOptions` 收到只带 `permissionProfile: {}` 的 scheduler 授予（digest payload 不是 chat 类 payload，不复用 `buildSchedulerCapabilityGrant`）。`conversation`：A2UI 卡片回调触发的 turn，在该会话发 IM 审批卡（`makeImPermissionResponder`，点击者为 initiator，沿用会话的 `approvalMode`），外发按 attended 规划；卡片过期由 `onUnanswered` 记为未批准；平台无法识别时退化为 `none`。`none`（默认，外部桥接传入 `surface: "external bridge"`）：当场拒绝。
+  - **未批准的收尾**：回复照常经网关投递，运行结果为 `success: false`、`terminalReason: "needs-approval"`、`output.status: "needs_approval"` 与 `needsApproval` 列表（与定时聊天任务一致）；外部桥接把它映射为 `ok: true`，`detail` 带同样字段。
+  - **`safeSendPrompt` 补转发 `outboundPolicy` 与 `pauseTimeoutWhileAwaitingPermission`**：此前两者被丢弃，IM 自动回复在 WP6 设的 `outboundPolicy: { unattended: false }` 实际未生效（按 unattended 规划）。同一处还丢弃了 `idleTimeoutMs`、`onSdkSessionId` 等，本期不改（会改变 IM 回合的超时与恢复行为），另开任务。
+  - digest capture 现在接收定时执行的 `signal`，任务取消会中断 turn 并撤回停泊。
+
+### WP10 `policy` 授予（只能由人写）
+
+- 类型：`OutboundRecipientGrant { target: ActionReviewTarget; addedAt: number; addedBy: "local-user" }`。
+- 存放：`BotInstallationRow.outboundRecipients?`、`AdapterInstanceRow.outboundRecipients?`（connector 频道策略）。定时任务的无人值守发送使用其 connector 实例的列表。用户配置的通知目标在引擎中视为该实例的 `policy` 授予。
+- 写入：只经人工入口（`lib/bot/control-writes/lifecycle.ts` 新增 `setBotOutboundRecipientsLocally`；connector 设置表单的保存路径）。`PluginBotPolicyV1`、插件 API、agent 工具都不暴露该字段。测试断言插件与 agent 路径无法写入。
+- 界面：
+  - `components/bots/sections/policy-section.tsx`（目前只读）新增“无人值守可发送的收件人”编辑区；
+  - connector 实例设置新增同名区块，复用 `trigger-policy-editor.tsx` 的 `ChipInput`。
+  - i18n：`bots` 与 `settings/connections` 对应的 split source 新增键。
+- 同步与远端：检查 `lib/sync/handlers/bot-*.ts` 的入站清洗是否保留新字段；Bot 安装经 host 修改的路径（`lifecycle-host.ts`、`control-writes/remote.ts`）同步支持；若这些行经过 companion API，需更新手工维护的响应 schema 目录（`pnpm companion-api:check` 查不出新增字段，需逐项核对）。
+- **测试**：control-writes、表单组件、同步清洗各自的用例。
+- **实施时更正**（已落地，用户已定）：
+  - **类型与形式**：`OutboundRecipientGrant { recipient: OutboundRecipient; addedAt; addedBy: "local-user" }`，存收件人原文（`conversation` / `person` / `mail` 三类，引擎的规范化形式，由 `conversationTarget` / `personTarget` / `mailTarget` 生成），不存 `ActionReviewTarget`：名单是人写的配置，界面要显示与移除；指纹在规划时现算（`configured-grants.ts`）。`validateOutboundRecipientGrants`（≤500 条，前缀与频道一致，无多余字段）是两条写入路径的共同校验。
+  - **三份名单**，均只经人工入口写入：
+    - connector 实例名单（`adapter:<id>`）覆盖经该实例的**所有**无人值守发送（定时、Bot、插件、workflow），每次规划按目标频道查；只收会话与成员，且必须经该实例（`setAdapterOutboundRecipients` 拒绝别的实例的收件人）。写入走单独的 `updateAdapterConfigSection(..., "outboundRecipients")` 分区，`createAdapterInstance` / `updateAdapterInstance` 与插件的 `connectors-api` 都剥掉该字段，插件读取的 `PluginAdapterInstanceInfo` 也不含它。清空写空数组（远端补丁无法删除键）。该字段属于可迁移字段，配对设备经 `instance-transfer` 写入时记为 `paired-device`。
+    - 会话的 `proactivePush` 开关（`proactive-push:<key>`）算作对该会话的授予，按会话键与线程键依次查。
+    - Bot 安装名单（`bot:<id>`）只覆盖该安装的运行：agent-turn Bot 随 turn 传入 `outboundPolicy.policyGrants`；handler Bot 的插件代码投递在运行存活期间计入（`beginBotOutboundRun` 在 `run.ts` 包住执行器，`plan-delivery` 的 plugin 分支取 `runningBotGrantsOf(pluginId)`）。只收会话与邮件（成员只在某个机器人账号内有意义，放实例名单）。写入经 `setBotOutboundRecipients`（本机）或 lifecycle relay 的 `outbound_recipients` 操作（配对客户端，`lifecycle-host.ts` 分派，`companion-request-schemas.json` 新增该分支）；`updateBotInstallation` 的普通补丁剥掉该字段，host 同步来的占位行拒绝写入。
+  - **查找失败不授予**：任一名单读取出错时该名单不计，计划照常询问、草稿或停泊。
+  - **同步**：Bot 名单不进 `projectBotInstallationRow` 的同步投影（与 `policyGrant` 不同，名单只在 host 上生效），控制台读取（`bot_console_read`，行 schema 为 `additionalProperties: true`）带出；connector 实例的 companion 投影随可迁移字段带出。
+  - **界面**：共享编辑器 `components/outbound/outbound-recipients-editor.tsx`，从本设备已知的会话（`hooks/outbound/use-known-conversations.ts`，按会话标题、按聊天去重）里选，也可粘贴会话键、输入成员 ID 或邮箱；每次增删保存整份名单。Bot 详情新增“收件人”区块（`sections/outbound-recipients-section.tsx`，不放进只读的 policy 区块）；connector 设置在触发策略之后新增“无人值守时可达的收件人”卡片（`forms/adapter-outbound-recipients.tsx`），未复用 `ChipInput`（条目需显示类型与会话名）。i18n 新增 `outboundRecipients` split source，`bots` 加 `recipients.*` 与 `lifecycle.recipientsSaved`。
+  - **WP8 遗留的通知目标问题**：`governed.ts` 的主动推送不经规划，直接写队列；目标的 `consent.mode === "proactive"` 本身就是人写的授予，已记为 `policy-rule`（`notification-target:<id>`），无需再进名单；非主动目标只发审批请求。`im-deliver.ts` 的会话通知仍按 unattended 规划，会话开了 `proactivePush` 或在实例名单内即放行。
+
+### WP11 影子模式与切换
+
+- 设置：`agentPermissions.outboundAuthorization: "shadow" | "enforce"`，默认 `"shadow"`（`packages/agent-config-types/src/index.ts:4635`，同步类别沿用 `desktop-only`）。
+- 设置页（`components/settings/security/` 新增区块）：
+  - 列出影子期内 `request.plan.outcome` 不是 `allow` 的记录，按 Bot、定时任务、connector 实例和收件人分组；
+  - 每组提供“允许此收件人”（写入 WP10 的 `policy` 授予，属人工操作）；
+  - 一个切换到 `enforce` 的开关，并说明切换后的行为变化。
+- Rule 7（有意休眠）：`shadow` 在类型注释中说明，界面明确标注“仅观察”，并有测试固定“影子模式不改变任何发送结果”。
+- i18n：`settings/security` 的 split source 新增键。
+- **测试**：设置区块组件测试、`plan-context` 读取模式的用例。
+- **实施时更正**（已落地，用户已定）：
+  - **设置**：`AppSettings.agentPermissions.outboundAuthorization?: "shadow" | "enforce"`，类型注释写明 `shadow` 有意休眠并指向固定测试；同步类别沿用 `agentPermissions` 的 `desktop-only`，无需改动。只有安全设置卡片写它（设置导入只认 `agentPermissions.toolRules`，插件无应用设置写入口）。
+  - **影子报告**（`lib/policy/action-review/shadow-report.ts`，纯函数）：取 `request.plan.enforced === false` 且 `outcome !== "allow"` 的 receipt，按发送方（运行根 `bot:` / `task:` / `workflow-run:`，否则投递的 `ownerRef`：`task:`、`digest:<taskId>`、`workflow:`、`notification:`、`plugin:`，否则聊天会话）和收件人指纹归组，计次数、各 outcome 次数与最近时间。收件人用本机已有的数据反查指纹：connector 会话状态表的全部会话键、绑定了平台的会话（附会话标题）、各名单里的条目（`hooks/outbound/use-shadow-report.ts`），不向平台查询。查不到的按发送方与频道计“未识别的收件人”及次数，不给允许按钮。名单现已包含的行不再列出，总数即开启执行后仍会改变的发送数。
+  - **允许此收件人**（`allow-recipient.ts`）：发送方是 Bot 且收件人是会话或邮件 → 写该 Bot 安装的名单；其余（含 Bot 的成员目标）→ 写投递所经 connector 实例的名单；邮件且非 Bot 发送 → 无名单可写，行上注明。点击时重读名单再追加，已有则不重复。
+  - **界面**：`components/settings/security/outbound-authorization-card.tsx`，挂在安全设置的自动锁定之后。影子模式标“仅观察”徽标；打开执行前弹确认框，写明行为变化与观察期内会被改变的发送数（按询问 / 草稿 / 等待批准 / 拒绝分列）；关回影子模式不确认。本机驱动配对 Host 时（`useRemoteHostActive`）显示说明、开关停用、不读报告：设置与 receipt 都在执行的那台机器上，本期不加远程读写。
+  - **Rule 7**：`lib/policy/action-review/shadow-mode.test.ts` 固定“影子模式不改变任何发送结果”：四种会被执行改变的投递（无授权的无人值守发送、被拒绝的收件人、回复到别的会话、无记录的工具投递）与一次工具调用，在各种非 `enforce` 设置下结果都与引擎出现前一致。
+
+### WP12 收尾
+
+- ADR-0239 状态改为“已接受”，补一段实施说明（en、zh 同步），`pnpm docs:build`（需约 5 GB 空闲空间）。
+- CLAUDE.md 的 Subsystem Map 增加一行“Outbound authorization”，指向 `lib/policy/action-review/` 与 ADR-0239。
+- Changeset：`minor`（新增功能，默认影子模式不改变行为），写明切换到 enforce 后的行为变化。
+- **实施时更正**（已落地）：
+  - ADR-0239 en / zh 状态改为“已接受（第一期已实现，默认影子模式）”，新增“实现（第一期）”一节：代码位置、实施中的决定（receipt 不存收件人、名单存原文、无人值守在 `run-and-capture` 规划、通知目标无需名单、`authorizedBy` 尚无请求人）、已知缺口（插件弃用的直接发送、配对设备 / HostState 批准、`/lark`、外部桥接 digest、配对 Host 上只读、未做真机验证）。`pnpm docs:build` 通过。
+  - CLAUDE.md Subsystem Map 新增 “Outbound authorization” 行。
+  - Changeset `.changeset/outbound-message-authorization.md`（`minor`）。
+  - 收尾门禁发现 WP5 的 `lib/policy/risk/outbound-tools.sidecar-parity.test.ts` 引入了 sidecar 非公开模块，`audit:sidecar-architecture` 不通过；已把 `sidecar/src/policy/permission/permission-classes.ts` 加入 `scripts/gates/sidecar-architecture.json` 的 `public`（与 `resolver.ts` 同例）。该门禁剩余两项来自其他工作（`b4a6b180bc` 的层级引用与未提交的 smoke 脚本）。
+  - 门禁结果：本期相关 Jest 29 个套件 738 例、sidecar 权限相关 73 例、`pnpm typecheck`（全量）、`sidecar:typecheck`、`lint:i18n`、`i18n:build:check` 通过；`db:governance` 的过期来自共享工作区里他人未提交的 `schema.ts` / `table-catalog.ts`，以 HEAD 输入计算一致；`audit:colocated-tests` 仅剩他人的 Rust 文件。
+  - **未完成**：第 4 节的真机验证（enforce 模式下的发起线程回复、跨群发送、手机批准停泊审批、Bot 定时投递从草稿到批准）尚未执行。
+
+## 4. 验证
+
+| ADR 验证义务                                                                            | 证据                                                                                                                           |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| “给 A 起草，不要发”：任何路径都发不出；拒绝后所有工具和子运行都被屏蔽；请求人新消息解除 | `policy.test.ts` 表格用例；`claude-chat-events`、`room/runner`、`unattended-permission-responder` 集成用例；三层嵌套子任务用例 |
+| IM 回复到同一线程不弹卡；发往另一个群第一次询问                                         | `plan-tool-call.test.ts`；`delivery-gateway.test.ts` 的 origin-reply 分支                                                      |
+| 定时广播发往未列出的群生成草稿；有 `policy` 授予时直接发送；触发不推进纪元              | `delivery-gateway.test.ts`；`instruction-epoch.test.ts`                                                                        |
+| 屏障在重载后仍有效                                                                      | `action-review-receipts.test.ts`（以 fake-indexeddb 重新打开数据库后查询 `authKeys`）                                          |
+| 超时不形成屏障                                                                          | `action-review-receipts.test.ts`；`claude-chat-events` 超时用例                                                                |
+| 每个结果都有带 authority、授予范围、纪元的 receipt；每个 job 带 `authorizedBy`          | 各咽喉点测试断言 receipt 与 job 字段                                                                                           |
+| digest 审批停泊并推送                                                                   | `scheduled-outbound.test.ts`                                                                                                   |
+
+**门禁**（只跑受影响的测试，不跑全量、不跑覆盖率）：`pnpm test -- <受影响的测试文件>`、`pnpm sidecar:test`、`pnpm sidecar:typecheck`、`pnpm audit:sidecar-architecture`、`pnpm typecheck`（需 16 GB 堆）、`pnpm lint:i18n`、`pnpm i18n:build:check`、`pnpm db:governance:write`、`pnpm audit:colocated-tests`；涉及 companion API 时 `pnpm companion-api:check` 并人工核对 schema 目录。
+
+**真机验证**（单元测试之外，需在 enforce 模式下做）：桌面端一次发起线程回复和一次跨群发送；手机上批准一次停泊的外发审批；一次 Bot 定时投递从草稿到批准发送。
+
+## 5. 风险
+
+| 风险                                                | 应对                                                                                                        |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Dexie 版本号与另一会话的未提交改动冲突              | 开工时按 skill 检查；对方未提交则先协调，不并行占号                                                         |
+| `enqueueGoverned` 返回值变化波及约 25 个调用方      | 依靠类型错误逐一列出；按 §3 WP8 的表逐个处理并更新其测试；单独提交                                          |
+| MCP 工具没有可信的外发标注，按名判定会漏            | 名单之外的 MCP 写工具维持现有 `ask`；本期不扩大判定；漏判的工具可补入名单                                   |
+| IM 请求人按会话而非按消息推断，并发请求时可能取错人 | 取最新 `running` 的 inbound job；在 `instruction-epoch.test.ts` 固定该行为，并在 ADR 实施说明中记录这一局限 |
+| 纪元查询每次读消息带来延迟                          | 只取最新若干条，并按（根会话、最新消息 id）缓存                                                             |
+| companion API 的响应 schema 是手工维护的封闭目录    | WP10 逐项核对 Bot 安装与 connector 实例经过的接口                                                           |
+| 影子期过长导致保护迟迟不生效                        | 设置页显示影子期记录数量；下一个版本将默认值改为 `enforce`                                                  |
+| 改动面大、跨多个会话共享的文件                      | 每个工作包单独提交，只提交自己的路径；共享文件按 hunk 暂存                                                  |

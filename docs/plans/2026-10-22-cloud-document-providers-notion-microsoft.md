@@ -143,7 +143,7 @@ flowchart LR
 
 搜索和链接解析结果进入 picker 时绑定当时选定账号；账号切换立即清旧选择，任何晚到结果必须同时匹配 request token、accountId 与 epoch。旧结果不能绑定到当前账号后继续 fetch。provider 按 expected epoch 执行 native fetch，staging 在 fetch 后、acceptFiles 前再检验 epoch；异步 preparation 完成后、提交前再次检验。
 
-2026-10-22 P0 源码验证修订：当前 citation 绑定与 `attachments.add` 都是同步提交；最终 `isCurrent` 与这段提交之间没有 `await`。因此复用 `beforeCommit` 异步账号复核，再用 `isCurrent` 同步检查 composer/session generation 与账号快照，拒绝旧提交即可，不引入没有实际异步窗口的 rollback/回执抽象。若未来 add/commit 改为异步，必须增加隔离事务与精确 attachment ID 回滚，不能让未完成校验的附件成为可发送/持久化草稿。fetch、preparation、beforeCommit 以及 A→B→A 的回归覆盖均见 [P0 实施报告](../reports/2026-10-22-cloud-documents-p0-boundaries.md)。
+2026-10-22 P0 源码验证修订：当前 citation 绑定与 `attachments.add` 都是同步提交；最终 `isCurrent` 与这段提交之间没有 `await`。因此复用 `beforeCommit` 异步账号复核，再用 `isCurrent` 同步检查 composer/session generation 与账号快照，拒绝旧提交即可，不引入没有实际异步窗口的 rollback/回执抽象。若未来 add/commit 改为异步，必须增加隔离事务与精确 attachment ID 回滚，不能让未完成校验的附件成为可发送/持久化草稿。fetch、preparation、beforeCommit 以及 A→B→A 的回归覆盖均见 [P0 实施报告](../reports/2026-10-22-cloud-document-identity-and-binary-boundaries.md)。
 
 新增可选 `subscribeAccounts(listener)`，让搜索/设置监听无凭据变更信号并重取快照。事件不是 authority，不携带 tokens；重新打开面板也必须取 host 状态。现有 Lark/Google 可先保留旧合同，P0 的 UI 结果绑定则对所有 provider 生效。
 

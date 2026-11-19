@@ -1,0 +1,52 @@
+# Code Mode 外部参考核验
+
+核验日期 **2026-11-19**。本次查阅维护方文档、版本发布记录和基准作者公开的结果，未运行真实 Claude Code 会话或重新跑基准。
+
+## Claude Code 的 Code Mode 是交互式终端能力
+
+Claude Code 在会话中运行模型生成的 JavaScript。脚本可根据前一步数据调用后续工具，也可做循环、并发和结果筛选。界面显示实际的工具活动，`Ctrl+O` 可展开脚本。实验默认关闭，用户可在 shell 或用户设置启用，首次需要确认。会话恢复必须使用相同模式。仓库设置无权替用户开启实验。[Claude Code Code Mode 文档](https://code.claude.com/docs/en/code-mode)
+
+| 版本      | 发布包时间（Asia/Shanghai）     | 版本记录确认的变化                                                                                                                                                                                                                                                                                                        |
+| --------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2.1.323` | `2026-11-13T04:29:28.626+08:00` | 首次加入实验性 Code Mode。[发布说明](https://github.com/anthropics/claude-code/releases/tag/v2.1.323)                                                                                                                                                                                                                     |
+| `2.1.326` | `2026-11-17T02:43:39.005+08:00` | 支持同时启用 Agent Teams。默认进程内 teammate 使用 Code Mode，split pane 不使用。[发布说明](https://github.com/anthropics/claude-code/releases/tag/v2.1.326)、[环境要求](https://code.claude.com/docs/en/code-mode#requirements)                                                                                          |
+| `2.1.328` | `2026-11-19T07:09:39.159+08:00` | 脚本输出不再触发 `UserPromptSubmit`，包括 managed hooks。发布说明指定用 `PostToolUse` 的 `updatedToolOutput` 处理该输出。还缩短工具描述、优化有 MCP 的新会话 prompt caching，并在适用的权限模式去掉多数脚本之后的 0.75 秒等待。[版本变更记录](https://github.com/anthropics/claude-code/blob/v2.1.328/CHANGELOG.md#21328) |
+
+以上时间取自 npm registry `time`。材料的前两项与发布包的 UTC 日期相同，第三项与 Asia/Shanghai 日期相同。[npm 发布元数据](https://registry.npmjs.org/@anthropic-ai%2fclaude-code)
+
+**Cognia 的接入边界。** 产品文档限定原生交互式终端，明确排除 Agent SDK、`claude -p`、Desktop、VS Code panel 和云端会话。需要符合文档列出的账号、模型和组织条件，直连 Anthropic。Gateway、自定义 API base、OpenTelemetry export、Remote Control、Claude in Chrome 和 computer use 等组合受限。当前适用模型清单为 Opus 5.5、Sonnet 5.5、Haiku 5.5、Fable 5.2。将实验环境变量传给 Cognia 的 Claude Agent SDK 进程无法获得官方支持的能力。[环境要求](https://code.claude.com/docs/en/code-mode#requirements)、[启动排障](https://code.claude.com/docs/en/code-mode#code-mode-doesnt-start)
+
+**授权和 Hooks。** 官方文档描述脚本子调用以实际工具名经过现有 `deny`、`ask` 和 `PreToolUse`。Auto mode 的分类器审核脚本，运行时才计算出的实参仍需按工具检查。执行前还可以针对外层 `REPL` 审查脚本。查阅时通用指南仍描述某些后台脚本输出会触发 `UserPromptSubmit`，与 `2.1.328` 版本记录存在差异。Cognia 可以借鉴这两层机制，为每次子调用检查实际参数，同时把脚本最终输出和子调用遥测纳入各自的脱敏边界。[权限检查](https://code.claude.com/docs/en/code-mode#permission-checks)、[通用指南的输出 Hook 描述](https://code.claude.com/docs/en/code-mode#code-output-withheld-by-a-hook)、[版本变更记录](https://github.com/anthropics/claude-code/blob/v2.1.328/CHANGELOG.md#21328)
+
+## Anthropic API 与 Cloudflare 的实现有不同部署约束
+
+| 方案                                                       | 执行与工具边界                                                                                                                                                                      | 对 Cognia 的参考价值                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Anthropic `Code execution with MCP` 架构文章，`2025-11-04` | 为 MCP 工具生成代码接口，按需发现工具，在执行环境加工结果。                                                                                                                         | 可分别评估目录按需加载和脚本编排的收益。[Anthropic 工程文章](https://www.anthropic.com/research/code-execution-with-mcp)                                                                                                                                                                                                                                                                                                                               |
+| Claude API `Programmatic tool calling`                     | Claude 生成 Python，由 Anthropic 容器运行。工具定义通过 `allowed_callers` 声明直接、程序化或二者兼容。客户端仍根据 `caller.tool_id` 处理每次子调用并回传结果，待续请求携带容器 ID。 | 可作为 Anthropic provider 专用实现候选。它仍有工具请求往返，收益来自中途跳过模型采样和保留中间数据在容器。MCP connector 提供的工具不支持，程序化子调用结果限文本，容器的数据处理合同也需独立考虑。官方列为不符合 ZDR、HIPAA。[API 文档](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling)                                                                                                                       |
+| Cloudflare API MCP Code Mode                               | 将完整 API 目录收敛成 `search`、`execute` 两个工具，使用 Dynamic Worker isolate，通过受控宿主接口调用服务。                                                                         | 可参考按需查询 schema、隔离执行与 RPC 分发。Cloudflare 报告约 1,000 tokens 的数字适用于它对自身完整 API 工具定义的对比。[Cloudflare 实现说明](https://blog.cloudflare.com/code-mode-mcp/)                                                                                                                                                                                                                                                              |
+| Cloudflare Agents SDK `@cloudflare/codemode`               | 分开 executor、connector 和 durable runtime。默认 Worker executor 依赖 Worker Loader。运行时记录调用，审批后重跑脚本并从日志复用已完成调用的结果。包另提供 AI SDK 适配。            | 可参考可替换 executor、能力分发和调用级 durable audit。Cognia 的本地/桌面环境仍需选择单独验证的安全执行器。Node.js 官方明确 `node:vm` 不能当作运行不可信代码的安全边界。[Cloudflare 运行机制](https://developers.cloudflare.com/agents/tools/codemode/how-it-works/)、[Cloudflare SDK 源码文档](https://github.com/cloudflare/agents/blob/main/packages/codemode/README.md)、[Node.js VM 文档](https://nodejs.org/api/vm.html#vm-executing-javascript) |
+
+## Cognia 已使用的上游组件有两条可核验的集成路线
+
+- **OpenCode V2 原生 `execute`。** OpenCode 的 JavaScript 解释器让模型编排目录内的工具，子调用继续执行自身的权限检查。MCP 工具默认经 `execute` 暴露，单个服务设置 `codemode: false` 可保留直接工具。Cognia 在构造托管 OpenCode V2 会话的 stdio 和 HTTP MCP 配置时明确写入 `codemode: false`。这个结论适用于 Cognia 投影的 MCP 服务，OpenCode 原生工具和外部服务仍由对应的运行时配置决定。[OpenCode 工具文档](https://opencode.ai/docs/tools/)、[OpenCode MCP 配置](https://opencode.ai/docs/mcp-servers/#permissions)、[Cognia 配置投影](../../packages/agent-opencode/src/v2-launcher.ts)、[投影测试](../../packages/agent-opencode/src/v2-launcher.test.ts)
+- **Vercel AI SDK `@ai-sdk/code-mode`。** 独立实验包以 QuickJS 运行 JavaScript 或去掉类型注解后的 TypeScript。子调用输入输出经过 JSON 边界，工具在宿主执行。文档描述 schema 验证、abort signal 转发和运行、CPU、内存、调用数量、并发、I/O 限额。代码库当前 `ai` 锁定 `7.0.163`，未声明 `@ai-sdk/code-mode` 依赖。注册表中 `@ai-sdk/code-mode@1.0.120` 的 peer 精确匹配 `ai@7.0.163`，Node 要求 `>=22.13.0`。核验时 latest `1.0.134` 的 peer 要求 `7.0.177`。[AI SDK Code Mode 文档](https://ai-sdk.dev/docs/ai-sdk-core/code-mode)、[发布包元数据 1.0.120](https://registry.npmjs.org/@ai-sdk%2fcode-mode/1.0.120)、[发布包元数据 1.0.134](https://registry.npmjs.org/@ai-sdk%2fcode-mode/1.0.134)、[Cognia sidecar 依赖](../../sidecar/package.json)
+
+AI SDK 指南说明常规工具审批流无法自动处理脚本中的子调用。`1.0.120` 发布包类型定义另提供实验性审批回调、审批中断、签名 continuation 和显式继续执行。采用这些机制需要接入 Cognia 的审批记录、运行身份、撤销和副作用账本，并验证 packaged sidecar 运行兼容性。当前证据为文档、包元数据、类型定义和仓库配置。[AI SDK 指南](https://ai-sdk.dev/docs/ai-sdk-core/code-mode#tool-approval)、[1.0.120 发布类型](https://cdn.jsdelivr.net/npm/@ai-sdk/code-mode@1.0.120/dist/index.d.ts)
+
+**Provider 托管执行也可单独评估。** 本机已安装的 AI SDK OpenAI 和 Anthropic provider 类型分别暴露 `programmaticToolCalling()` 与 `codeExecution_20260120()`，并支持工具级 `allowedCallers`。OpenAI Responses API 在托管 V8 中执行程序，应用继续处理客户端工具调用，可对符合条件的远程 MCP 调用使用审批。Claude Messages API 在 Anthropic 容器执行 Python，工具和数据约束见前表。两条路线会分别依赖 provider、模型和请求续接实现。当前核验到 SDK 能力，Cognia 的实际接线和账号可用性均未验证。[OpenAI Programmatic Tool Calling](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling)、[Anthropic Programmatic Tool Calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling)
+
+## 基准支持优先验证多次取数后的小结果聚合
+
+Bicameral-AI 在 Claude Code `2.1.326` 上测了 4 个模型、6 个任务、开关两种模式，每格两次，共 96 轮。脚本判定 93 轮通过，3 个失败均为 Haiku 5.5，其中两次开启、一次关闭。累计 processed tokens 对每个模型请求的输入（含缓存读取）与输出求和。Task context 衡量主会话在该任务中的新增上下文。成本还受缓存读写和模型价格影响。[基准方法与结果](https://github.com/Bicameral-AI/claude-code-mode-benchmark)、[逐项结果](https://github.com/Bicameral-AI/claude-code-mode-benchmark/blob/main/results/README.md)
+
+| 工作负载            | 开启后的累计 processed tokens 变化      | 样本边界                                                                                                         |
+| ------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| MCP 聚合 120 条记录 | 减少 62%–77%                            | 16 轮聚合结果全部正确，底层 MCP 调用量接近，任务上下文减少 84%–94%。这是按作者标准唯一无需附加解释的任务级差异。 |
+| MCP 阅读和判断      | 减少 40%–68%                            | 合成票据存在可由脚本利用的规律，出现 3 轮漏项。                                                                  |
+| 文件操作            | 3 个模型减少 15%–54%，Haiku 5.5 增加 9% | 原模式也会用 shell 脚本批处理。16 对比较中，14 对开启后任务上下文增长，作者无法将任务级差异与噪声区分。          |
+| 单文件对照          | 减少 29%–30%                            | 该配置每个开启会话的首次请求约少 13,000 tokens，基准只连接了一个含两个工具的 MCP 服务。                          |
+
+数据以作者原始报告为准。[基准逐项结果](https://github.com/Bicameral-AI/claude-code-mode-benchmark/blob/main/results/README.md)
+
+Cognia 的验证可固定模型和数据，分别跑当前直接调用、当前目录按需发现路径（如果该入口已有）和 Code Mode。用同一个正确性判定统计覆盖率与漏项，同时记录模型调用数、工具调用数、缓存读取/写入和非缓存 token、响应时间、审批/取消结果与实际费用。这样能分辨压缩工具目录、跳过采样、缩减结果分别贡献了什么。

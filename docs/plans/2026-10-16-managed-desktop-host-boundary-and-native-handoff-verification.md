@@ -120,4 +120,4 @@ resources were deleted and absence verified before closing the checkpoint.
   plus 4 GiB US$0.000018/s; Hobby 1 hour and Pro 24 hours.
 - [E2B sandbox lifetime](https://docs.e2b.dev/faq/sandbox-lifetime), checked 2026-10-16:
   kill is distinct from pause/auto-resume. Native diagnostics retain explicit kill settings.
-- [P2 evidence](2026-10-16-managed-desktop-mmds-p2-verification.md).
+- [P2 evidence](2026-10-16-managed-desktop-source-import-and-acceptance-isolation.md).

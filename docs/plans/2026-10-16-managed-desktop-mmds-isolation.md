@@ -4,7 +4,7 @@ Date: 2026-10-16. Status: **accepted by the user on 2026-10-16; P0/P1 verified; 
 Author/owner: managed-desktop workstream. Review: runtime/security and delivery owners.
 Baseline: `6c97c9dc7d09500753b4b60acfcc97fdd9af2073`, detached integration worktree.
 Scope: guest image, Linux workload confinement, Host qualification and handoff.
-The approved wording is recorded in both ADR-0233 locales. Production remains dormant. [P1 evidence](2026-10-16-managed-desktop-mmds-p1-verification.md) verifies the actual desktop boundary; [P2 evidence](2026-10-16-managed-desktop-mmds-p2-verification.md) records confined import/Git and acceptance diagnostics. [P3 evidence](2026-10-16-managed-desktop-mmds-p3-verification.md) records versioned Host binding and native commit/bundle handoff diagnostics. The [P4 evidence](2026-10-16-managed-desktop-mmds-p4-verification.md) now records complete native qualification on one exact recipe-7 image; production enablement remains separate.
+The approved wording is recorded in both ADR-0233 locales. Production remains dormant. [P1 evidence](2026-10-16-managed-desktop-mmds-guest-guard-verification.md) verifies the actual desktop boundary; [P2 evidence](2026-10-16-managed-desktop-source-import-and-acceptance-isolation.md) records confined import/Git and acceptance diagnostics. [P3 evidence](2026-10-16-managed-desktop-host-boundary-and-native-handoff-verification.md) records versioned Host binding and native commit/bundle handoff diagnostics. The [P4 evidence](2026-10-16-managed-desktop-native-qualification.md) now records complete native qualification on one exact recipe-7 image; production enablement remains separate.
 
 ## Recommendation: isolate the complete workload in an offline network namespace
 
@@ -278,7 +278,7 @@ test definitions are not reported as passing. No full suite or coverage run.
 Runtime target is the existing quoted 120-second smoke lifetime and existing
 provider limits; added startup latency has no measured baseline yet. It must
 leave sufficient time for probes and real delete retry. If it does not, fail
-and revise an explicit quote—never extend the paid lifetime silently. The initial research used no paid resources. After approval, P0 used explicitly bounded diagnostics; see [P0 evidence and cleanup](2026-10-16-managed-desktop-mmds-p0-verification.md). No Rust tests or production enablement ran.
+and revise an explicit quote—never extend the paid lifetime silently. The initial research used no paid resources. After approval, P0 used explicitly bounded diagnostics; see [P0 evidence and cleanup](2026-10-16-managed-desktop-mmds-e2b-capability-verification.md). No Rust tests or production enablement ran.
 
 ## 8. Approved ADR wording (English; accepted 2026-10-16)
 

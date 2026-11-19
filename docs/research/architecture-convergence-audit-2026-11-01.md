@@ -351,7 +351,7 @@ Rust 层：
 - 插件 API 换新契约，与阶段 2 一起硬切换。
 - 话题被承诺以 owner 身份跟随时，追问只由承诺负责执行。
 
-详见 ADR-0250 和 `docs/plans/2026-11-01-convergence-phase-0.md`。
+详见 ADR-0250 和 `docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md`。
 
 ## 9. 待核实清单
 
