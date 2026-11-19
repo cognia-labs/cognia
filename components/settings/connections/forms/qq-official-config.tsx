@@ -30,6 +30,13 @@ import { WebhookUrlCard } from "./shared/webhook-url-card"
 import { connectorWebhookPath } from "@/lib/connectors/server-transport"
 import { useConnectorIngress } from "@/hooks/use-connector-ingress"
 import { CredentialInput } from "./_shared/credential-input"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { QuietHoursAndMute, type QuietHoursValue } from "./quiet-hours-and-mute"
 import {
   ConnectorHostNotice,
@@ -81,6 +88,9 @@ export function QQOfficialConfigDialog({
   const [receiveMessageAudit, setReceiveMessageAudit] = useState(
     row?.settings.receiveMessageAudit === true
   )
+  const [guildMarkdownEnabled, setGuildMarkdownEnabled] = useState(
+    row?.settings.guildMarkdownEnabled === true
+  )
   const [muted, setMuted] = useState<boolean>(row?.muted ?? false)
   const [quietHours, setQuietHours] = useState<QuietHoursValue | null>(row?.quietHours ?? null)
   const [testing, setTesting] = useState(false)
@@ -111,6 +121,7 @@ export function QQOfficialConfigDialog({
     transportMode !== (row?.transportMode === "webhook" ? "webhook" : "gateway") ||
     receiveGuildMessages !== (row?.settings.receiveGuildMessages === true) ||
     receiveMessageAudit !== (row?.settings.receiveMessageAudit === true) ||
+    guildMarkdownEnabled !== (row?.settings.guildMarkdownEnabled === true) ||
     muted !== (row?.muted ?? false) ||
     quietHours !== (row?.quietHours ?? null)
 
@@ -162,7 +173,7 @@ export function QQOfficialConfigDialog({
           displayName: displayName.trim(),
           enabled: true,
           transportMode,
-          settings: { receiveGuildMessages, receiveMessageAudit },
+          settings: { receiveGuildMessages, receiveMessageAudit, guildMarkdownEnabled },
           credentialsRef: {
             keyringService: "com.cognia.platforms",
             accounts: [...QQ_CREDENTIALS],
@@ -179,7 +190,12 @@ export function QQOfficialConfigDialog({
         await updateAdapterInstance(adapterId, {
           displayName: displayName.trim(),
           transportMode,
-          settings: { ...row.settings, receiveGuildMessages, receiveMessageAudit },
+          settings: {
+            ...row.settings,
+            receiveGuildMessages,
+            receiveMessageAudit,
+            guildMarkdownEnabled,
+          },
           muted,
           quietHours: quietHours ?? undefined,
         })
@@ -342,6 +358,24 @@ export function QQOfficialConfigDialog({
             </div>
           </div>
         </RadioGroup>
+
+        <FieldGroup className="gap-2 py-2">
+          <Field orientation="horizontal">
+            <Switch
+              id="qq-guild-markdown"
+              checked={guildMarkdownEnabled}
+              onCheckedChange={setGuildMarkdownEnabled}
+              disabled={saving || testing}
+              aria-describedby="qq-guild-markdown-help"
+            />
+            <FieldContent>
+              <FieldLabel htmlFor="qq-guild-markdown">{t("guildMarkdownLabel")}</FieldLabel>
+              <FieldDescription id="qq-guild-markdown-help">
+                {t("guildMarkdownHelp")}
+              </FieldDescription>
+            </FieldContent>
+          </Field>
+        </FieldGroup>
 
         <div className="flex items-start gap-3 py-2">
           <Switch

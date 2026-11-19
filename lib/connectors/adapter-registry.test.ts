@@ -169,6 +169,18 @@ beforeEach(() => {
 })
 
 describe("buildQQOfficialAdapter", () => {
+  it.each([undefined, false, "true", 1, true])(
+    "only forwards strict guild Markdown opt-in: %s",
+    async (value) => {
+      await buildQQOfficialAdapter(
+        makeRow({ type: "qq-official", settings: { guildMarkdownEnabled: value } })
+      )
+      expect(mockCreateQQOfficialAdapter).toHaveBeenCalledWith(
+        expect.objectContaining({ guildMarkdownEnabled: value === true })
+      )
+    }
+  )
+
   it("forwards the private-guild opt-in and confirmed bot identity", async () => {
     const row = makeRow({
       type: "qq-official",

@@ -484,7 +484,209 @@ describe("callback binding persistence", () => {
   })
 })
 
+describe("data widget text alternatives", () => {
+  const surface: A2UISegmentContent = {
+    rootId: "root",
+    dataModel: { rows: [{ name: "**Alice**", total: 0, active: false, private: "hidden-field" }] },
+    components: {
+      root: { component: "Column", children: ["table", "chart"] },
+      table: {
+        component: "Table",
+        title: "Sales",
+        columns: [
+          { key: "name", header: "Name" },
+          { key: "total", header: "Total" },
+          { key: "active", header: "Active" },
+        ],
+        data: { path: "/rows" },
+      },
+      chart: {
+        component: "Chart",
+        chartType: "bar",
+        title: "Trend",
+        xKey: "name",
+        yKeys: ["total"],
+        data: { path: "/rows" },
+      },
+    },
+  }
+
+  it("opts into selected static/bound data and preserves legacy default output", () => {
+    expect(generatePlainTextMirror(surface)).toBe("[Table]\n[Chart]")
+    const body = generatePlainTextMirror(surface, { dataWidgets: true })
+    expect(body).toBe(
+      "[Table] Sales\n1. Name: **Alice**; Total: 0; Active: false\n[Chart] Trend\n1. name: **Alice**; total: 0"
+    )
+    expect(body).not.toContain("hidden-field")
+    expect(generateMarkdownMirror(surface, { dataWidgets: true })).toContain(
+      "Name: \\*\\*Alice\\*\\*"
+    )
+    expect(generatePlainTextMirror(surface, { dataWidgets: true, resourcesOnly: true })).toBe("")
+  })
+
+  it.each(["pie", "donut"])("only includes the first rendered %s series", (chartType) => {
+    const input: A2UISegmentContent = {
+      rootId: "chart",
+      dataModel: {},
+      components: {
+        chart: {
+          component: "Chart",
+          chartType,
+          xKey: "category",
+          yKeys: ["count", "secret"],
+          data: [{ category: "A", count: 2, secret: 999 }],
+        },
+      },
+    }
+    const body = generatePlainTextMirror(input, { dataWidgets: true })
+    expect(body).toContain("category: A; count: 2")
+    expect(body).not.toContain("secret")
+    expect(body).not.toContain("999")
+  })
+
+  it("bounds rows, columns and cell length with explicit omission markers", () => {
+    const input: A2UISegmentContent = {
+      rootId: "table",
+      dataModel: {},
+      components: {
+        table: {
+          component: "Table",
+          columns: Array.from({ length: 14 }, (_, i) => ({ key: `c${i}`, header: `C${i}` })),
+          data: Array.from({ length: 55 }, () => ({ c0: "A".repeat(300), c13: "omitted-field" })),
+        },
+      },
+    }
+    const body = generatePlainTextMirror(input, { dataWidgets: true })
+    expect(body).toContain("…")
+    expect(body).toMatch(/\+\d+ rows/)
+    expect(body).toContain("+2 columns")
+    expect(body).not.toContain("omitted-field")
+    expect(body).not.toContain("A".repeat(300))
+    expect(body).toContain("A".repeat(255) + "…")
+    expect(body.length).toBeLessThanOrEqual(12_000)
+  })
+
+  it("limits small source-order tables to fifty rows independently of the text budget", () => {
+    const input: A2UISegmentContent = {
+      rootId: "table",
+      dataModel: {},
+      components: {
+        table: {
+          component: "Table",
+          columns: [{ key: "id", header: "ID" }],
+          data: Array.from({ length: 55 }, (_, i) => ({ id: `record-${i + 1}` })),
+        },
+      },
+    }
+    const body = generatePlainTextMirror(input, { dataWidgets: true })
+    expect(body).toContain("50. ID: record-50")
+    expect(body).not.toContain("record-51")
+    expect(body).toContain("[… +5 rows]")
+  })
+
+  it("retains all declared scatter series without serializing non-display Chart metadata", () => {
+    for (const data of [[], [{ category: "A", first: 0, second: 2, hidden: "unselected" }]]) {
+      const input: A2UISegmentContent = {
+        rootId: "chart",
+        dataModel: {},
+        components: {
+          chart: {
+            component: "Chart",
+            chartType: "scatter",
+            xKey: "category",
+            yKeys: ["first", "second"],
+            description: "undisplayed-description",
+            emptyMessage: "undisplayed-empty-message",
+            data,
+          },
+        },
+      }
+      const body = generatePlainTextMirror(input, { dataWidgets: true })
+      expect(body).not.toMatch(/undisplayed|unselected/)
+      if (data.length) expect(body).toContain("category: A; first: 0; second: 2")
+      else expect(body).toContain("[0 rows]")
+    }
+  })
+
+  it("does not execute custom renderers or serialize object/inherited cells", () => {
+    const render = jest.fn(() => "renderer-secret")
+    const row = Object.assign(Object.create({ inherited: "prototype-secret" }), {
+      name: { nested: "object-secret" },
+      private: "selector-secret",
+    })
+    const input: A2UISegmentContent = {
+      rootId: "table",
+      dataModel: {},
+      components: {
+        table: {
+          component: "Table",
+          columns: [
+            { key: "name", header: "Name", render },
+            { key: "inherited", header: "Inherited" },
+            Object.create({ key: "private", header: "Inherited selector" }),
+          ],
+          data: [row, null],
+        },
+      },
+    }
+    const body = generatePlainTextMirror(input, { dataWidgets: true })
+    expect(body).toContain("[Table]")
+    expect(body).not.toMatch(/renderer-secret|prototype-secret|object-secret|selector-secret/)
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  it("caps normalized Unicode cells including the ellipsis and keeps row boundaries literal", () => {
+    for (const text of ["a\n".repeat(128), "😀".repeat(300)]) {
+      const input: A2UISegmentContent = {
+        rootId: "table",
+        dataModel: {},
+        components: {
+          table: {
+            component: "Table",
+            columns: [{ key: "text", header: "Text" }],
+            data: [{ text }],
+          },
+        },
+      }
+      const value = generatePlainTextMirror(input, { dataWidgets: true }).split("1. Text: ")[1]
+      expect([...value]).toHaveLength(256)
+      expect(value.endsWith("…")).toBe(true)
+      expect(value).not.toMatch(/[\r\n]/)
+    }
+  })
+})
+
 describe("generateMarkdownMirror", () => {
+  it("opts into admitted resources without changing default mirrors or turning action links into navigation", () => {
+    const surface: A2UISegmentContent = {
+      rootId: "root",
+      dataModel: { image: "https://example.org/card.png" },
+      components: {
+        root: {
+          component: "Card",
+          title: "Report",
+          image: { path: "/image" },
+          children: ["link", "action"],
+        },
+        link: { component: "Link", text: "Read", href: "https://example.org/report(1)" },
+        action: {
+          component: "Link",
+          text: "Run",
+          href: "https://example.org/hidden",
+          action: "run",
+        },
+      },
+    }
+    const resourceUrl = (value: string) => value
+    const body = generateMarkdownMirror(surface, { resourceUrl })
+    expect(body).toContain("![Report](https://example.org/card.png)")
+    expect(body).toContain("[Read](https://example.org/report%281%29)")
+    expect(body).not.toContain("https://example.org/hidden")
+    expect(generatePlainTextMirror(surface, { resourceUrl, resourcesOnly: true })).toBe(
+      "[Report] https://example.org/card.png\nRead (https://example.org/report(1))"
+    )
+    expect(generateMarkdownMirror(surface)).not.toContain("https://example.org/card.png")
+  })
   it("renders semantic headings and paragraphs while preserving literal Unicode and markup", () => {
     const surface: A2UISegmentContent = {
       rootId: "root",

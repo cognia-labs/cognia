@@ -108,6 +108,21 @@ export interface PlatformCard {
   payload: unknown
 }
 
+/** Portable article-style card; requires the adapter's send.card.image-text capability. */
+export interface ImageTextCard extends PlatformCard {
+  kind: "image-text"
+  payload: {
+    /** 1–50 Unicode characters. */
+    title: string
+    /** 1–200 Unicode characters. */
+    description: string
+    /** Public HTTPS article URL, at most 1024 characters. */
+    url: string
+    /** Public HTTPS image URL, at most 1024 characters. */
+    imageUrl: string
+  }
+}
+
 /**
  * The unified A2UI segment carried across the bus.
  *

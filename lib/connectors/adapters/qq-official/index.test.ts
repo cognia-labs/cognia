@@ -1,4 +1,5 @@
 import * as personalSinkHost from "@/lib/execution/personal-sink"
+import { hasNoLeakingPiiDeep } from "@cognia/redact"
 jest.mock("@/lib/audio/transcode", () => ({
   ...jest.requireActual("@/lib/audio/transcode"),
   transcodeAudio: jest.fn(),
@@ -145,7 +146,284 @@ beforeEach(() => {
   __resetBusForTesting()
 })
 
+it.each(["group", "c2c"] as const)(
+  "delivers %s image-text cards through normal adapter receipts",
+  async (scene) => {
+    mockInvoke.mockResolvedValue(
+      httpResp(200, { id: "card-message", ext_info: { ref_idx: "REFIDX_card" } })
+    )
+    const result = await adapter().send(
+      sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "inbound",
+        },
+        segments: [
+          {
+            type: "card",
+            card: {
+              kind: "image-text",
+              payload: {
+                title: "Article",
+                description: "Summary",
+                url: "https://example.org/article",
+                imageUrl: "https://example.org/cover.png",
+              },
+            },
+          },
+        ],
+      })
+    )
+    expect(result).toMatchObject({ ok: true, platformMessageId: `${scene}:target:card-message` })
+    expect(httpCalls()).toHaveLength(1)
+    expect(JSON.parse(httpCalls()[0].body!)).toMatchObject({
+      msg_type: 8,
+      card: { type: "tuwen", content: { pic_url: "https://example.org/cover.png" } },
+    })
+    expect(
+      await wasDeliveredByUs("qq-1", "qq-official:qq-1:target", `${scene}:target:card-message`)
+    ).toBe(true)
+    expect(
+      await findQQReference(
+        { adapterId: "qq-1", scene, sceneId: "target" },
+        { messageId: "card-message" }
+      )
+    ).toMatchObject({ referenceIndex: "REFIDX_card" })
+  }
+)
+
+it("preflights an invalid trailing card before posting an earlier valid part", async () => {
+  const result = await adapter().send(
+    sendReq({
+      segments: [
+        { type: "markdown", md: "Before" },
+        {
+          type: "card",
+          card: {
+            kind: "image-text",
+            payload: {
+              title: "Title",
+              description: "Summary",
+              url: "https://example.org",
+              imageUrl: "file:///private/secret.png",
+            },
+          },
+        },
+      ],
+    })
+  )
+  expect(result).toMatchObject({ ok: false, error: { code: "validation", retryable: false } })
+  expect(httpCalls()).toHaveLength(0)
+  expect(qqPassiveReplyCount("m1")).toBe(0)
+})
+
 describe("createQQOfficialAdapter", () => {
+  it.each(
+    (["group", "c2c"] as const).flatMap((scene) =>
+      (["Table", "Chart"] as const).flatMap((component) =>
+        (scene === "c2c"
+          ? (["reply", "proactive", "reengagement"] as const)
+          : (["reply", "proactive"] as const)
+        ).map((mode) => ({ scene, component, mode }))
+      )
+    )
+  )(
+    "blocks newly rendered numeric PII in $scene $component $mode before HTTP",
+    async ({ scene, component, mode }) => {
+      const input: OutboundRequest = {
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "input",
+        },
+        segments: [
+          buildA2UISegment("numeric", {
+            rootId: "data",
+            dataModel: { rows: [{ name: "A", amount: 4111111111111111 }] },
+            components: {
+              data: {
+                component,
+                columns: [{ key: "amount", header: "Amount" }],
+                chartType: "bar",
+                xKey: "name",
+                yKeys: ["amount"],
+                data: { path: "/rows" },
+              },
+            },
+          }),
+        ],
+        metadata: { idempotencyKey: "numeric-pii" },
+        sendOptions: { mode },
+      }
+      expect(hasNoLeakingPiiDeep(input.segments)).toBe(true)
+      const result = await adapter().send(input)
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "validation", retryable: false, message: expect.stringMatching(/PII gate/) },
+      })
+      expect(httpCalls()).toHaveLength(0)
+      expect(qqPassiveReplyCount("input")).toBe(0)
+      expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+    }
+  )
+
+  it.each(["group", "c2c"] as const)(
+    "sends selected %s table data through the real automatic fallback path",
+    async (scene) => {
+      mockInvoke.mockResolvedValue(httpResp(200, { id: "table-sent" }))
+      const result = await adapter().send({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "input",
+        },
+        segments: [
+          buildA2UISegment("table", {
+            rootId: "table",
+            dataModel: { rows: [{ units: 123, hidden: "not-displayed" }] },
+            components: {
+              table: {
+                component: "Table",
+                columns: [{ key: "units", header: "Units" }],
+                data: { path: "/rows" },
+              },
+            },
+          }),
+        ],
+        metadata: { idempotencyKey: "table-data" },
+      })
+      expect(result).toMatchObject({
+        ok: true,
+        downgrades: [{ from: "a2ui", to: "text", reason: "qq_a2ui_text_alternative" }],
+      })
+      expect(httpCalls()).toHaveLength(1)
+      expect(JSON.parse(httpCalls()[0].body!)).toMatchObject({
+        msg_type: 0,
+        content: "[Table]\n1. Units: 123",
+      })
+      expect(httpCalls()[0].body).not.toContain("not-displayed")
+      expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+    }
+  )
+
+  it.each(["channel", "direct"] as const)(
+    "uses trusted per-instance Markdown configuration for %s",
+    async (scene) => {
+      mockInvoke.mockResolvedValue(httpResp(200, { id: "sent" }))
+      const input: OutboundRequest = {
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "guild",
+          msgId: "input",
+          guildMarkdownEnabled: true,
+        },
+        segments: [{ type: "markdown", md: "## Native" }],
+        metadata: { idempotencyKey: "guild-markdown" },
+      }
+      expect(await adapter({ guildMarkdownEnabled: true }).send(input)).toMatchObject({
+        ok: true,
+        platformMessageId: `${scene}:guild:sent`,
+      })
+      expect(JSON.parse(httpCalls()[0].body!)).toEqual({
+        markdown: { content: "## Native" },
+        msg_id: "input",
+      })
+      expect(await adapter().send(input)).toMatchObject({
+        ok: true,
+        downgrades: [{ from: "markdown", to: "text", reason: "qq_markdown_scene_unsupported" }],
+      })
+      expect(JSON.parse(httpCalls()[1].body!)).toEqual({ content: "## Native", msg_id: "input" })
+    }
+  )
+
+  it.each(["channel", "direct"] as const)(
+    "never retries %s native Markdown as text after rejection or uncertain audit",
+    async (scene) => {
+      const input: OutboundRequest = {
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "guild",
+          msgId: "input",
+        },
+        segments: [{ type: "markdown", md: "**Native**" }],
+        metadata: { idempotencyKey: "guild-reject" },
+      }
+      const a = adapter({ guildMarkdownEnabled: true })
+      mockInvoke.mockResolvedValueOnce(
+        httpResp(400, { code: 304003, message: "permission denied" })
+      )
+      expect(await a.send(input)).toMatchObject({ ok: false })
+      expect(httpCalls()).toHaveLength(1)
+      mockInvoke.mockResolvedValueOnce(
+        httpResp(202, { code: 304024, data: { message_audit: { audit_id: "guild-audit" } } })
+      )
+      expect(await a.send(input)).toMatchObject(
+        scene === "channel"
+          ? {
+              ok: false,
+              pendingReceipt: { id: "guild-audit" },
+              error: { code: "delivery_pending", retryable: false },
+            }
+          : { ok: false, error: { code: "reconciliation_required", retryable: false } }
+      )
+      expect(httpCalls()).toHaveLength(2)
+      for (const call of httpCalls()) expect(JSON.parse(call.body!)).toHaveProperty("markdown")
+    }
+  )
+
+  it.each(["channel", "direct"] as const)(
+    "retains confirmed %s Markdown parts when a later part is uncertain",
+    async (scene) => {
+      mockInvoke
+        .mockResolvedValueOnce(httpResp(200, { id: "confirmed-markdown" }))
+        .mockResolvedValueOnce(
+          httpResp(202, { code: 304024, data: { message_audit: { audit_id: "partial-audit" } } })
+        )
+      const result = await adapter({ guildMarkdownEnabled: true }).send({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "guild",
+          msgId: "input",
+        },
+        segments: [
+          { type: "markdown", md: "## First" },
+          { type: "image", url: "https://example.org/p.png" },
+        ],
+        metadata: { idempotencyKey: "guild-partial" },
+      })
+      expect(result).toMatchObject({
+        ok: false,
+        platformMessageId: `${scene}:guild:confirmed-markdown`,
+        error: { code: "reconciliation_required", retryable: false },
+      })
+      expect(result).not.toHaveProperty("pendingReceipt")
+      expect(httpCalls().map((call) => JSON.parse(call.body!))).toEqual([
+        { markdown: { content: "## First" }, msg_id: "input" },
+        { content: "", image: "https://example.org/p.png", msg_id: "input" },
+      ])
+      expect(
+        await wasDeliveredByUs(
+          "qq-1",
+          "qq-official:qq-1:guild",
+          `${scene}:guild:confirmed-markdown`
+        )
+      ).toBe(true)
+    }
+  )
+
   it("reports gateway starting until authenticated and stops reporting running on disconnect", async () => {
     mockStartGateway.mockReturnValue({
       selfId: "",
@@ -1291,11 +1569,42 @@ describe("createQQOfficialAdapter", () => {
     })
     expect(await a.send(req)).toMatchObject({ error: { code: "validation" } })
     expect(mockInvoke).not.toHaveBeenCalled()
+    const boundResource = (component: "Card" | "Image") =>
+      sendReq({
+        metadata: { idempotencyKey: `owned-${component}` },
+        segments: [
+          buildA2UISegment(`owned-${component}`, {
+            rootId: "root",
+            dataModel: { resource: reference },
+            components: {
+              root:
+                component === "Card"
+                  ? { component, title: "Owned image", image: { path: "/resource" } }
+                  : { component, src: { path: "/resource" }, alt: "Owned image" },
+            },
+          }),
+        ],
+      })
+    await rememberConnectorAssets("qq-other", [
+      { adapterId: "qq-other", id: "image", reference, expiresAt: Date.now() + 60000 },
+    ])
+    for (const component of ["Card", "Image"] as const) {
+      expect(await a.send(boundResource(component))).toMatchObject({
+        error: { code: "validation" },
+      })
+      expect(httpCalls()).toHaveLength(0)
+    }
     await rememberConnectorAssets("qq-1", [
       { adapterId: "qq-1", id: "image", reference, expiresAt: Date.now() + 60000 },
     ])
     mockInvoke.mockResolvedValue(httpResp(200, { id: "sent" }))
     expect((await a.send(req)).ok).toBe(true)
+    for (const component of ["Card", "Image"] as const) {
+      expect((await a.send(boundResource(component))).ok).toBe(true)
+      const payload = JSON.parse(httpCalls().at(-1)!.body!)
+      expect(payload.msg_type).toBe(2)
+      expect(payload.markdown.content).toContain(reference)
+    }
   })
   it("isolates passive plugin observers from the trusted event and each other", async () => {
     const bus = getBus(),
@@ -2737,7 +3046,7 @@ it.each(["group", "c2c"] as const)(
   }
 )
 
-it.each(["multipart", "stream-final"] as const)(
+it.each(["multipart", "image-text", "stream-final"] as const)(
   "keeps real QQ %s uncertainty non-replayable across an outbound runner restart",
   async (kind) => {
     const a = adapter()
@@ -2758,9 +3067,25 @@ it.each(["multipart", "stream-final"] as const)(
       },
       metadata: { idempotencyKey: `unknown-${kind}`, streamKey: "complex-turn" },
       segments:
-        kind === "multipart"
-          ? [{ type: "markdown", md: "Part one" }, keyboardSurface]
-          : [{ type: "markdown", md: "Partial complete" }],
+        kind === "image-text"
+          ? [
+              {
+                type: "card",
+                card: {
+                  kind: "image-text",
+                  payload: {
+                    title: "Report",
+                    description: "Summary",
+                    url: "https://example.org/report",
+                    imageUrl: "https://example.org/report.png",
+                  },
+                },
+              },
+              { type: "markdown", md: "After card" },
+            ]
+          : kind === "multipart"
+            ? [{ type: "markdown", md: "Part one" }, keyboardSurface]
+            : [{ type: "markdown", md: "Partial complete" }],
     })
     if (kind === "stream-final")
       await a.streamReply!({
@@ -2797,7 +3122,7 @@ it.each(["multipart", "stream-final"] as const)(
     const beforeRestart = httpCalls().length
     expect(beforeRestart).toBe(2)
     expect(await getDb().connectorCallbackBindings.count()).toBe(0)
-    if (kind === "multipart")
+    if (kind !== "stream-final")
       expect(
         await wasDeliveredByUs("qq-1", "qq-official:qq-1:target", "c2c:target:known-first-part")
       ).toBe(true)

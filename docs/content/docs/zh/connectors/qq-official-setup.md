@@ -1,13 +1,13 @@
 ---
 title: "QQ 官方机器人配置"
-description: "配置 QQ 官方机器人，支持群聊／C2C 文件发送、二进制及分片上传、原生 Markdown、引用回复、按钮键盘与交互回调。"
+description: "配置 QQ 官方机器人，支持原生 Markdown、图文卡片、安全图片与链接、数据与键盘文字替代、受管交互回调、文件上传与 C2C 流式回复。"
 ---
 
 # QQ 官方机器人配置指南
 
 Cognia 使用 **QQ 开放平台**机器人的 **App ID** 和 **AppSecret**（界面称为 **Client Secret**）接入官方服务。个人 QQ 账号接入请参阅 [OneBot / NapCat 指南](./qq-via-onebot-faq)。
 
-群聊／C2C 支持原生 Markdown 与可见引用回复。接收的引用、嵌套消息／聊天记录及 ARK 卡片会转换为会话内容；引用索引与被动发送授权分别保存。
+群聊／C2C 支持原生 Markdown、图文卡片、可见引用回复及带完整文字替代的原生键盘，卡片图片和链接保留安全地址。接收的引用、嵌套消息／聊天记录及 ARK 卡片会转换为会话内容；卡片头像与来源图标仅作展示，引用索引与被动发送授权分别保存。
 
 群聊／C2C 文件发送支持公网 URL 及用户选择的本地附件原始字节。更新后的原生主机对 5,000,000 字节以内的附件直接上传二进制，更大的附件分片上传，原生来源上限为 200,000,000 字节，再按原有被动回复规则发送文件。
 
@@ -65,6 +65,8 @@ QQ 提示“灵魂不在线”或“未连接服务”时，表示其后台服�
 
 在会话中发送 `/help welcome` 可预览当前欢迎消息。它复用通用帮助入口和受治理队列，不调用模型，也不会重置或消耗首次欢迎的去重记录。配置了自定义帮助触发词时，在该触发词后追加 ` welcome`。`/help` 仍显示完整帮助。更新后不会自动向已有会话重复发送欢迎消息。
 
+获得 QQ 邀请权限后，开启频道 Markdown，分别在子频道和频道私信验证一条含标题／链接的答复，核对客户端排版与真实送达 ID；再关闭开关，确认记录文字替代降级。权限拒绝、待审核或缺失发送确认必须保持可见，Cognia 不会再发送一条文本作为重试。A2UI 欢迎／帮助的原生呈现仍仅支持群聊／C2C。官方[频道私信接口](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/message/dms.html)沿用[子频道发送参数](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/message/send.html)，邀请要求参见 [QQ Markdown 指引](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html)。
+
 ### 复杂场景验收
 
 使用你控制的测试会话，先完成欢迎阶段，再统计答复数量，因为首次欢迎本身是一条独立消息。每个场景保留入站 ID、AI 运行次数、出站状态／尝试次数和客户端观察结果。故障注入在隔离测试中进行，不要强制终止共享服务或耗尽真实平台额度。
@@ -106,8 +108,8 @@ QQ 的业务错误可能伴随 HTTP 成功状态。Cognia 检查 `err_code`，�
 - **大小与失败处理**：原生上传器读取一个有界快照，上限为 **200,000,000 字节**；群聊／C2C 输入框可选择任意文件类型，保留原始字节，不做文档提取、图片缩放或视频采样；沿用共享输入框的**单文件 10 MiB、每条消息六个文件**上限，超过直接上传阈值仍会走分片上传。已知文件大小在上传前校验，真实字节数在主机侧再次校验。原生图片／语音超过 20,000,000 字节、视频超过 30,000,000 字节时，按 QQ 软限制改为文件上传。URL 来源仍由 QQ 下载，并受平台格式、配额和权限约束。分片顺序上传，总时限 300 秒；尚未实现跨重启持久续传。上传失败不会发送消息；耗时较长的上传可能用尽被动窗口，发送前会再次检查。
 - **上传授权与次数**：适用的上传阶段始终使用 `srv_send_msg=false`；分片不消耗被动回复次数，最终媒体消息按每段计次。QQ API 凭据不会发送给预签名存储地址；存储请求仅允许公网 HTTPS、拒绝重定向，并走主机经过地址校验的代理链路。上传不会改为主动推送。
 - **被动回复预算**：群聊每条消息 **5 分钟内最多回复 5 次**；C2C **60 分钟内最多回复 4 次**。多段发送共用预算。Cognia 保守地将 C2C 输入状态计入次数，并为最终答案预留一格。频道／频道私信保留 5 分钟窗口；上下文过期后拒绝发送，不会自动改为主动推送。
-- **原生 Markdown**：群聊／C2C 的助手回复和显式 Markdown 片段使用 `msg_type=2` 与 `markdown.content`，无需申请模板。标题、强调、列表、链接和内联图片交由 QQ 的 Markdown 渲染器处理。纯文本消息仍按文本发送；混合普通文本与 Markdown 时，普通文本会转义，Markdown 原文保留。频道／频道私信的 Markdown 仍显式降级为文本，频道内邀权限尚未在此适配器启用。
-- **Markdown 与媒体混排**：独立附件与原生 Markdown 按片段顺序分开发送，每一段均计入同一被动回复预算；超出预算会在任何上传或发送前拒绝。原生 Markdown 被平台拒绝时直接报告错误，不会静默改为文本重发。Markdown 中的内联图片链接由 QQ 自行处理，不额外拆分为附件消息。
+- **原生 Markdown**：群聊／C2C 的助手回复和显式 Markdown 片段使用 `msg_type=2` 与 `markdown.content`，无需申请模板。标题、强调、列表、链接和内联图片交由 QQ 的 Markdown 渲染器处理。纯文本消息仍按文本发送；混合普通文本与 Markdown 时，普通文本会转义，Markdown 原文保留。机器人获得 QQ 的 Markdown 邀请权限后，可在连接器的投递设置中开启**启用频道 Markdown**（`guildMarkdownEnabled: true`）。子频道及频道私信随后通过各自已有接口发送 `markdown.content`，不附带群聊／C2C 的 `msg_type` 或 `msg_seq`。开关默认关闭，此时仍明确降级为文本；它不会开启频道 A2UI／按钮、图文卡片或严格图片校验。保存设置后，桌面和 headless runtime 都会重建适配器。
+- **Markdown 与媒体混排**：独立附件与原生 Markdown 按片段顺序分开发送，群聊／C2C 的每一段均计入同一被动回复预算，超出预算会在任何上传或发送前拒绝；频道场景沿用现有被动窗口和平台配额检查。原生 Markdown 被平台拒绝时直接报告错误，不会静默改为文本重发。Markdown 中的内联图片链接由 QQ 自行处理，不额外拆分为附件消息。
 - **原生引用回复**：群聊／C2C 的显式回复将接收消息的 `message_scene.ext.msg_idx`，或机器人发送结果的 `ext_info.ref_idx`，写入 `message_reference.message_id`。当前真实入站 `msg_id` 仍负责被动授权，引用其他消息不能绕过时限或次数。文本、Markdown、媒体分段均保留同一引用目标。按适配器和会话隔离的映射在重启后保留，多段发送的每个确认成功段也会保存；缓存有界，索引缺失、冲突或已清理时，显式原生引用会在发送前失败。没有已知索引的旧式 reply 片段保留已报告的文本降级；频道／频道私信行为不变。
 - **结构化接收**：`message_scene.ext` 保留带填充的索引并移除 `auth_token`；`msg_elements` 支持有深度和数量上限的递归消息及聊天记录。原生引用保留只读预览，已知父消息可关联本地记录；未知父消息仅展示预览，不虚构跳转或机器人身份。ARK 卡片展示白名单内的标题、描述、来源／标签、地址、安全链接和预览；未知字段、含凭据或非公网 URL 会被忽略。卡片头像不会成为发送者头像。引用／聊天记录中的历史媒体及卡片预览只作展示上下文，不会成为新的模型附件；当前消息附件仍遵循原有媒体策略。
 - **原生按钮**：群聊／C2C 的 A2UI `Button` 转为自定义 `keyboard.content.rows`。回调按钮使用 action type 1，HTTP(S) 链接按钮使用 type 0，Button 的可选 `qqCommand` 字符串使用 type 2，在输入框插入指令。行、列、卡片和文本保留可读正文；不支持的输入控件保留已报告的文本替代。频道场景继续使用文本替代，不支持消息编辑，也不会自动从已处理卡片上移除按钮。
@@ -119,15 +121,60 @@ QQ 的业务错误可能伴随 HTTP 成功状态。Cognia 检查 `err_code`，�
 - **其他限制**：群聊流式、通用 ARK 发送及小程序跳转仍不可用。当前群聊／C2C 发送参数表没有明确 ARK 出站结构，与旧指引存在冲突。快捷菜单、反馈及授权事件不会自动成为模型消息。
 - **撤回及分场景能力**：原生撤回接口受 QQ 权限与时限约束；输入状态仅限 C2C，表情反应仅限频道。
 
+### 原生图文卡片
+
+群聊／C2C 按照 [2026-10-28 平台更新](https://bot.q.qq.com/wiki/develop/api-v2/changelog.html)，通过通用 `image-text` 卡片契约支持 QQ 的 `msg_type=8`、`card.type=tuwen`。应检查专门的 `send.card.image-text` 能力，不能仅凭 `send.card` 判断格式支持。插件沿用受管队列入口：
+
+```ts
+import type { ImageTextCard } from "@cognia/plugin-sdk"
+
+const adapter = ctx.connectors.getAdapter(adapterId)
+if (!adapter?.capabilities.includes("send.card.image-text")) {
+  throw new Error("This adapter does not support image-text cards")
+}
+const card: ImageTextCard = {
+  kind: "image-text",
+  payload: {
+    title: "版本更新",
+    description: "查看最新变更。",
+    url: "https://example.org/releases",
+    imageUrl: "https://example.org/releases.png",
+  },
+}
+await ctx.connectors.enqueueSend(adapterId, conversationKey, {
+  conversationRef: { platform: adapter.type, adapterId },
+  segments: [{ type: "card", card }],
+  metadata: { idempotencyKey: ctx.connectors.newIdempotencyKey() },
+})
+```
+
+主机从已保存的会话目标解析收件方，沿用授权、PII 检查及持久队列。标题为 1–50 个 Unicode 字符，描述为 1–200 个字符；两种 URL 均须为无凭据的公网 HTTPS，最长 1,024 字符。卡片图片不接受本地路径、内联字节或 `qqbot-media://` 引用。未知字段不会传给 QQ；腾讯仍可能要求应用及域名权限。
+
+每张图文卡片独占一个消息段；相邻文本、Markdown、媒体和键盘保持顺序分段发送，在任何上传或 POST 前校验被动回复总预算。原生引用及稳定重试序号复用现有发送链路。频道／频道私信及 `imagePolicy: "require-complete"` 不支持此卡片格式，会明确拒绝。本地契约测试通过不代表 QQ 客户端展示和账号权限已经验收。
+
+群聊／C2C 将 `Card.image`、`Image.src` 及普通 `Link.href` 投影为原生 Markdown，包括卡片／图片的绑定来源。资源地址须为无凭据的公网 HTTP(S)，被拒绝的地址不会从自动文字镜像重新进入正文。已有 `qqbot-media://` 图片仍校验所属适配器及有效期；禁用的 Link／Button 不会获得资源或指令目标。A2UI `Card` 不会自动转换为 tuwen。
+
+A2UI 同时包含不支持的组件及按钮时，会完整保留 `plainTextMirror`（包括作者提供的 `widget.fallbackText`），将其按字面转义，并保留获准的图片和链接。媒体说明保留安全资源 URL，不为此增加被动回复次数。全部支持的布局仍使用语义化投影；交互表单仍应提供作者编写的文字摘要。
+
+未提供作者摘要时，群聊／C2C 的 Table 和 Chart 文字替代会按数据源顺序展示已声明的表格列或图表序列，支持绑定数据，并保留零值和 false。饼图／环形图只使用第一个序列，其他图表类型保留声明的序列。不序列化额外字段、嵌套对象值，也不执行列渲染代码。显式 `widget.fallbackText` 始终优先，即使它与旧占位符相同。这些内容是只读文字替代，不代表原生表格、图表或行／数据点交互。
+
+自动数据摘要最多展示 50 行、12 列，单元格最多 256 个 Unicode 码点（包括省略号），每个组件的纯文本预算为 12,000 个字符。换行显示为 `↵`；省略的行／列及截断单元格会明确标记。不重建分页、排序或自定义单元格格式。数值格式化后的摘要再次经过 PII 检查，失败时会在投递前拒绝，不会发送敏感值。需要精确聚合或自定义排版时，请提供作者摘要。
+
+`Link.action` 优先于普通跳转，`Card.clickAction` 转为原生回调控件。确认送达的 receipt 保留 Link 的获准 href，或 Card 的标题／描述作为回调上下文，继续检查会话、操作者及过期时间。有效的无正文动作 Card／空标签动作 Link 使用动作标签补足正文，不会回退到未经校验的资源地址。
+
 ### 键盘边界与原生卡片
 
-Cognia 最多使用五行、每行五个按钮。QQ 标签上限为十个字符；生成的 A2UI 按钮会缩短标签，可读正文仍保留完整文字。显式原生载荷的非法标签、重复 ID、不安全链接或不支持的字段在发送前拒绝。链接仅接受不带 URL 凭据的 HTTP(S)。指令的 `enter=true`、`anchor=1` 仅限 C2C，选图器还取决于手机 QQ 客户端能力。本适配器不开放已废弃的 `click_limit`、频道专用身份组权限和小程序跳转。共享 `Button.confirmation` 映射至 QQ 回调按钮的 `action.modal`，`exclusiveGroup` 映射至 `group_id`。确认内容最多 40 字符且不可含链接，按钮文字最多四字符；其他适配器必须显式声明对应策略能力，QQ 客户端也需支持。
+Cognia 最多使用五行、每行五个原生控件。生成的 A2UI 键盘超过 25 个控件时，整条消息改为完整文字替代，保留摘要、动作标签及获准的链接／指令，不创建 callback binding。不会将它拆成多个独立键盘，避免破坏跨消息的互斥组语义；显式原生超限载荷仍会校验失败。
+
+QQ 标签上限为十个字符。只要生成的标签过长或互相重复，就为整副键盘添加可区分的编号，正文按编号保留完整标签，原生标签仍不超过十字符。显式原生载荷的非法标签、重复 ID、不安全链接或不支持的字段在发送前拒绝。链接仅接受不带 URL 凭据的 HTTP(S)。指令的 `enter=true`、`anchor=1` 仅限 C2C，选图器还取决于手机 QQ 客户端能力。本适配器不开放已废弃的 `click_limit`、频道专用身份组权限和小程序跳转。共享 `Button.confirmation` 映射至 QQ 回调按钮的 `action.modal`，`exclusiveGroup` 映射至 `group_id`。确认内容最多 40 字符且不可含链接，确认弹窗按钮文字最多四字符；其他适配器必须显式声明对应策略能力，QQ 客户端也需支持。
 
 显式原生卡片使用 `MessageSegment` 的 `type: "card"`、`card.kind: "qq-keyboard"`，`card.payload` 包含 `content` 或 `markdown: { content }`，以及 `keyboard`；普通正文与 Markdown 互斥。键盘接受模板 `id` 或自定义 `content.rows`，二者不能同时传入。显式自定义回调的 `action.data` 必须指向同一会话中现有、有效的 callback binding，发送时由 Cognia 替换为本次发送的独立 token。没有受管 receipt 的模板／外部回调会被拒绝，其他不透明卡片类型仍不支持。
 
 按钮 receipt 在连接器重启后保留，最长有效期为 30 天，不能超过作者 binding 的更短期限；已消费的审批不能再次授权。延迟超过五分钟的回调事件会在本地拒绝。键盘消息单独占用一个有序消息段，与 Markdown、媒体混排可能超过共享的群聊五次／C2C 四次回复预算，此时在任何上传或发送前拒绝。
 
 验收时分别在群聊和 C2C 发送按钮卡片，重复点击普通按钮、重试一次性审批，并确认只有获准用户能够批准；通过已配置的 HTTPS 回调再测一次，核对回复保持在同一会话，区分失败／拒绝提示与最终操作结果。这些步骤依赖应用的真实 QQ 权限和兼容客户端。
+
+仅提供文字 `content` 的 `qq-keyboard` 正文会按字面转义后使用原生 Markdown，文字标记不会被误解为排版。显式模板／自定义键盘缺少非空正文时会在发送前拒绝；生成的无正文动作控件使用动作标签补足。
 
 ## 通用连接器入口
 
@@ -188,18 +235,18 @@ AAC-LC／HE-AAC 均在本地解码，支持单／双声道 ADTS，以及自包�
 
 ## 官方参考
 
-邀请链接及来源事件依据[生成分享链接](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_generate_url_link.post.html)和 [FRIEND_ADD](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/friend_add.html)，于 **2026-10-28** 核验。
+邀请链接及来源事件依据[生成分享链接](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_generate_url_link.post.html)和 [FRIEND_ADD](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/friend_add.html)，于 **2026-11-11** 核验。
 
 系统互动依据 [INTERACTION_CREATE](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/interaction_create.html)；审核关联依据[频道发送](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/message/send.html)及[频道审核事件](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/message/event.html)。
 
-参见[访问凭证](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html)、[Webhook 回调](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/event-emit/webhook.html)、[群聊全量消息](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)、[消息规则](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html)、[自定义 Markdown](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html)和 [BotGo 配置指引](https://github.com/tencent-connect/botgo)。能力说明于 **2026-10-28** 对照官方文档核验，真实授权范围以应用为准。
+参见[访问凭证](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html)、[Webhook 回调](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/event-emit/webhook.html)、[群聊全量消息](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)、[消息规则](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html)、[自定义 Markdown](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html)和 [BotGo 配置指引](https://github.com/tencent-connect/botgo)。能力说明于 **2026-11-11** 对照官方文档核验，真实授权范围以应用为准。
 
 引用及结构化字段以官方[群聊发送](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html)、[单聊发送](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)和[单聊事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/c2c_message_create.html)为依据。
 
 文件上传参见[群聊上传](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_files.post.html)、[单聊上传](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_files.post.html)、[预上传](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_id_upload_prepare.post.html)及[分片完成](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_id_upload_part_finish.post.html)。官方 [Node SDK 用法](https://github.com/tencent-connect/qqbot-nodejs/blob/main/USAGE.md)确认 `fileData` 使用 base64；其旧大小表与较新的上传页面不同，本实现以此处明确列出的适配器字节上限为准。
 
-按钮协议依据当前的[群聊发送](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html)、[C2C 发送](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)、[交互事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/interaction_create.html)和[交互确认](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/interactions_interaction_id.put.html)文档，于 **2026-10-28** 校对。
+按钮协议依据当前的[群聊发送](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html)、[C2C 发送](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)、[交互事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/interaction_create.html)和[交互确认](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/interactions_interaction_id.put.html)文档，于 **2026-11-11** 校对。
 
-C2C 流式依据[原生流式接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_stream_messages.post.html)及[官方 Node SDK 用法](https://github.com/tencent-connect/qqbot-nodejs/blob/main/USAGE.md)，核对日期为 **2026-10-28**。验收时请求一段较长的 C2C 回复，确认同一个 QQ 气泡持续增长并正常结束；再验证取消及连接器重启。分别测试按钮触发的回复与待审批草稿。本地回归不能证明应用已获得实际流式权限，也不能代替 QQ 客户端渲染验收。
+C2C 流式依据[原生流式接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_stream_messages.post.html)及[官方 Node SDK 用法](https://github.com/tencent-connect/qqbot-nodejs/blob/main/USAGE.md)，核对日期为 **2026-11-11**。验收时请求一段较长的 C2C 回复，确认同一个 QQ 气泡持续增长并正常结束；再验证取消及连接器重启。分别测试按钮触发的回复与待审批草稿。本地回归不能证明应用已获得实际流式权限，也不能代替 QQ 客户端渲染验收。
 
 补充参考：[素材管理](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/material-management.html)、[全局菜单](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_menu.put.html)、[指令面板](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_panels.post.html)、[成员禁言](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_restrict_chat_setting.post.html)及[入群策略](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_join_approval_strategy.get.html)。

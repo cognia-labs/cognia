@@ -46,6 +46,7 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
 }))
 const mockPiiDeep = jest.fn(() => true)
 jest.mock("@cognia/redact", () => ({
+  ...jest.requireActual("@cognia/redact"),
   hasNoLeakingPiiDeep: (...args: unknown[]) => mockPiiDeep(...(args as [])),
   hasNoLeakingPii: () => true,
 }))
@@ -440,6 +441,20 @@ describe("ConnectorBus dispatchInboundFull — end-to-end", () => {
     }
     await bus.dispatchInboundFull(imageEvent)
     expect(mockRunInboundOcr).toHaveBeenCalledTimes(1)
+  })
+
+  it("never sends an inbound image to OCR when the conversation opts out", async () => {
+    const event: NormalizedInboundEvent = {
+      ...privateEvent(autoAdapterId, "msg_ocr_denied"),
+      segments: [{ type: "image", url: "img://x", dataBase64: "AAAA" } as never],
+    }
+    await upsertByConversationKey({
+      conversationKey: event.conversationKey,
+      sessionId: "s-ocr",
+      allowOcr: false,
+    })
+    await getBus().dispatchInboundFull(event)
+    expect(mockRunInboundOcr).not.toHaveBeenCalled()
   })
 
   it("plugin onConnectorInbound block stops the turn (routeHandler not called)", async () => {

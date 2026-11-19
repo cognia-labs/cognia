@@ -363,6 +363,7 @@ export async function buildQQOfficialAdapter(row: AdapterInstanceRow): Promise<P
     transportMode: row.transportMode === "webhook" ? "webhook" : "gateway",
     receiveGuildMessages: row.settings.receiveGuildMessages === true,
     receiveMessageAudit: row.settings.receiveMessageAudit === true,
+    guildMarkdownEnabled: row.settings.guildMarkdownEnabled === true,
     // Startup identity confirmation happens after start(), so read its latest
     // persisted result instead of retaining the row used to build the adapter.
     selfId: async () => (await getAdapterInstance(row.id))?.selfIdentity?.platformAccountId ?? "",

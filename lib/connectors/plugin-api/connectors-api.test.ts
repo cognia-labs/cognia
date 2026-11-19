@@ -22,6 +22,7 @@ import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
 import { routePythonHostRequest } from "@/lib/plugin/python/host-request-router"
 import type { PluginContext } from "@/types/plugin/plugin"
+import type { ImageTextCard } from "@cognia/plugin-sdk"
 import {
   withPluginExecutionContext,
   beginPluginEgressInstance,
@@ -1329,6 +1330,63 @@ describe("createConnectorsAPI", () => {
   })
 
   describe("enqueueSend (durable queue)", () => {
+    it("keeps typed image-text cards on the governed plugin enqueue path", async () => {
+      const card: ImageTextCard = {
+        kind: "image-text",
+        payload: {
+          title: "Article",
+          description: "Summary",
+          url: "https://example.org/article",
+          imageUrl: "https://example.org/cover.png",
+        },
+      }
+      const api = createConnectorsAPI(PLUGIN)
+      const segments = [{ type: "card" as const, card }]
+      await api.enqueueSend("tg", "telegram:tg:42", {
+        conversationRef: {},
+        segments,
+        metadata: { idempotencyKey: "card-job" },
+      } as never)
+      expect(hasNoLeakingPiiDeep).toHaveBeenCalledWith(segments)
+      expect(enqueueOutbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "plugin",
+          request: expect.objectContaining({
+            segments,
+            conversationRef: TARGET_42.conversationRef,
+          }),
+        })
+      )
+    })
+
+    it.each(["title", "description", "url", "imageUrl"])(
+      "PII-gates image-text card %s before queueing",
+      async (field) => {
+        const api = createConnectorsAPI(PLUGIN)
+        await expect(
+          api.enqueueSend("tg", "telegram:tg:42", {
+            conversationRef: {},
+            segments: [
+              {
+                type: "card",
+                card: {
+                  kind: "image-text",
+                  payload: {
+                    title: "Title",
+                    description: "Summary",
+                    url: "https://example.org",
+                    imageUrl: "https://example.org/a.png",
+                    [field]: "leak@pii.example",
+                  },
+                },
+              },
+            ],
+            metadata: { idempotencyKey: "private-card" },
+          } as never)
+        ).rejects.toThrow(/PII gate/)
+        expect(enqueueOutbound).not.toHaveBeenCalled()
+      }
+    )
     beforeEach(() => guard.registerPlugin(PLUGIN, ["connectors:send"]))
 
     it("is gated by connectors:send", () => {

@@ -6,7 +6,7 @@ import type {
 import { buildConversationKey } from "@/types/connectors/event"
 import { resolveCallbackBinding } from "../_shared/a2ui-mapper"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import type { QQKeyboardReceipt } from "./a2ui-mapper"
+import { qqResourceUrl, type QQKeyboardReceipt } from "./a2ui-mapper"
 
 export interface QQInteraction {
   id: string
@@ -140,6 +140,19 @@ export async function resolveQQInteraction(
     eventId: interaction.id,
     receivedAt: interaction.timestamp,
   }
+  const actionHref =
+    typeof receipt.actionPayload?.href === "string"
+      ? qqResourceUrl(receipt.actionPayload.href, "link")
+      : undefined
+  const actionPayload = {
+    ...(actionHref ? { href: actionHref } : {}),
+    ...(typeof receipt.actionPayload?.title === "string"
+      ? { title: receipt.actionPayload.title }
+      : {}),
+    ...(typeof receipt.actionPayload?.description === "string"
+      ? { description: receipt.actionPayload.description }
+      : {}),
+  }
   return {
     platform: "qq-official",
     adapterId,
@@ -150,6 +163,7 @@ export async function resolveQQInteraction(
     componentId: binding.componentId,
     actionType: "button",
     value: receipt.action,
+    ...(Object.keys(actionPayload).length ? { payload: actionPayload } : {}),
     conversationKey,
     originatingMessageId: interaction.messageId,
     user: {

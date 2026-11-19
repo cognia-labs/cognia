@@ -75,7 +75,22 @@ describe("deriveImPermissionCeiling", () => {
     expect(result.disallowedTools).toEqual(
       expect.arrayContaining([...SCHEDULER_AGENT_TOOL_NAMES, "perform_action"])
     )
-    expect(result.disallowedTools).not.toEqual(expect.arrayContaining([...IM_OCR_TOOL_NAMES]))
+    expect(result.disallowedTools).toEqual(
+      expect.arrayContaining([
+        "ocr.extract",
+        "mcp__cognia-plugin-tools__extract_screenshot_ocr",
+        "take_screenshot",
+      ])
+    )
+    const direct = deriveImPermissionCeiling({
+      adapter,
+      override: null,
+      target: "direct",
+      allBuiltInSkills: [],
+      allowedBuiltInToolNames: new Set(),
+    })
+    expect(direct.disallowedTools).not.toContain("ocr.extract")
+    expect(direct.disallowedTools).toContain("extract_screenshot_ocr")
   })
 
   it("lets the adapter ceiling restrict OCR and never lets it grant Computer Use", () => {

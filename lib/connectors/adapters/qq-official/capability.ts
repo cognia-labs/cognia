@@ -10,8 +10,12 @@ import {
  * QQ's open messaging API delivers plain text (`msg_type: 0`) for group / C2C /
  * channel / direct messages, with passive replies (`msg_id`) free inside the
  * reply window. Native custom Markdown (`msg_type: 2`) is supported for
- * group/C2C without approved templates. Channel/direct Markdown remains a
- * reported text fallback. Group/C2C keyboards project A2UI buttons natively.
+ * group/C2C without approved templates. Channel/direct Markdown requires the
+ * operator's explicit guildMarkdownEnabled opt-in after QQ invitation approval;
+ * otherwise it remains a reported text fallback. Guild A2UI retains its text
+ * fallback. Group/C2C keyboards project A2UI buttons natively.
+ * Portable image-text cards use group/C2C `msg_type: 8` (`tuwen`);
+ * guild scenes and arbitrary opaque card payloads remain unsupported.
  * Outbound media (rich media upload)
  * supports group/C2C images, video, SILK voice and files through URL uploads
  * or native binary/chunked uploads. Guild channel/direct supports URL images;
@@ -48,6 +52,8 @@ export const QQ_OFFICIAL_CAPS: readonly Capability[] = [
   "send.text",
   "send.markdown",
   "send.a2ui",
+  "send.card",
+  "send.card.image-text",
   "send.image",
   "send.video",
   "send.voice",
@@ -67,4 +73,6 @@ export const QQ_OFFICIAL_A2UI_CAPABILITY: A2UICapabilityMatrix = buildA2UICapabi
   Row: "native",
   Column: "native",
   Card: "native",
+  Image: "native",
+  Link: "native",
 })

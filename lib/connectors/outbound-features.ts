@@ -21,6 +21,10 @@ export function validateOutboundFeatures(
     }
   const caps = adapter.meta.capabilities
   const supported =
+    (!req.segments.some(
+      (segment) => segment.type === "card" && segment.card.kind === "image-text"
+    ) ||
+      caps.includes("send.card.image-text")) &&
     (!options?.mode ||
       options.mode === "reply" ||
       caps.includes(options.mode === "proactive" ? "send.proactive" : "send.reengagement")) &&
@@ -42,7 +46,7 @@ export function validateOutboundFeatures(
       error: {
         code: "unsupported_segment",
         message:
-          "Adapter does not support the requested delivery, image or broadcast-mention policy",
+          "Adapter does not support the requested card, delivery, image or broadcast-mention policy",
         retryable: false,
       },
     }

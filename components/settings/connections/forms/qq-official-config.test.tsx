@@ -83,6 +83,29 @@ beforeEach(() => {
 })
 
 describe("QQOfficialConfigDialog", () => {
+  it("keeps guild Markdown opt-in and saves the operator's selection", async () => {
+    const user = userEvent.setup()
+    render(<QQOfficialConfigDialog open onOpenChange={jest.fn()} row={null} />)
+    const toggle = screen.getByRole("switch", { name: /enable channel markdown/i })
+    expect(toggle).not.toBeChecked()
+    expect(toggle).toHaveAccessibleDescription(/invitation/i)
+    await user.click(toggle)
+    await user.type(screen.getByLabelText(/app id/i), "102000")
+    await user.type(screen.getByLabelText(/client secret/i), "secret")
+    await user.click(screen.getByRole("button", { name: /add connector/i }))
+    await waitFor(() =>
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          settings: {
+            receiveGuildMessages: false,
+            receiveMessageAudit: false,
+            guildMarkdownEnabled: true,
+          },
+        })
+      )
+    )
+  })
+
   it("keeps audit-event subscription opt-in and persists it with the other settings", async () => {
     const user = userEvent.setup()
     render(<QQOfficialConfigDialog open onOpenChange={jest.fn()} row={null} />)
@@ -95,7 +118,11 @@ describe("QQOfficialConfigDialog", () => {
     await waitFor(() =>
       expect(mockCreate).toHaveBeenCalledWith(
         expect.objectContaining({
-          settings: { receiveGuildMessages: false, receiveMessageAudit: true },
+          settings: {
+            receiveGuildMessages: false,
+            receiveMessageAudit: true,
+            guildMarkdownEnabled: false,
+          },
         })
       )
     )
@@ -112,7 +139,11 @@ describe("QQOfficialConfigDialog", () => {
     await waitFor(() =>
       expect(mockCreate).toHaveBeenCalledWith(
         expect.objectContaining({
-          settings: { receiveGuildMessages: true, receiveMessageAudit: false },
+          settings: {
+            receiveGuildMessages: true,
+            receiveMessageAudit: false,
+            guildMarkdownEnabled: false,
+          },
         })
       )
     )
@@ -281,6 +312,37 @@ describe("QQOfficialConfigDialog — credential prefill", () => {
       return null
     })
   }
+
+  it("loads and disables existing guild Markdown without losing other settings", async () => {
+    storedCredentials()
+    const user = userEvent.setup()
+    render(
+      <QQOfficialConfigDialog
+        open
+        onOpenChange={jest.fn()}
+        row={{ ...prefillRow, settings: { guildMarkdownEnabled: true, retained: "value" } }}
+      />
+    )
+    const toggle = screen.getByRole("switch", { name: /enable channel markdown/i })
+    expect(toggle).toBeChecked()
+    await waitFor(() => expect(screen.getByRole("button", { name: /save/i })).toBeDisabled())
+    await user.click(toggle)
+    await clickSave()
+    await waitFor(() =>
+      expect(mockUpdate).toHaveBeenCalledWith(
+        prefillRow.id,
+        expect.objectContaining({
+          settings: {
+            guildMarkdownEnabled: false,
+            retained: "value",
+            receiveGuildMessages: false,
+            receiveMessageAudit: false,
+          },
+        })
+      )
+    )
+    expect(mockRotated).toHaveBeenCalledWith(prefillRow.id)
+  })
 
   it("reads the stored credentials back into the fields", async () => {
     storedCredentials()

@@ -2,6 +2,7 @@ import type { Character } from "@cognia/agent-config-types"
 import Dexie from "dexie"
 import { autonomyAuthorityCap, narrowAuthority } from "@cognia/agent-config-types/agent-composition"
 
+import { OCR_TOOL_NAMES, SCREENSHOT_TOOL_NAMES } from "@/lib/claude/ocr-tool-gate"
 import { COMPUTER_USE_PLUGIN_TOOL_NAMES } from "@/lib/claude/computer-use-tools"
 import { effectiveCapabilitiesForRow } from "@/lib/connectors/effective-capabilities"
 import { resolveImHostCapabilities } from "@/lib/connectors/permission-resolve"
@@ -12,7 +13,11 @@ import type { BuiltInSkill } from "@/lib/skills/built-in/types"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 
-export const IM_OCR_TOOL_NAMES = ["ocr.extract", "mcp__cognia-plugin-tools__ocr.extract"] as const
+function pluginToolAliases(toolName: string): string[] {
+  return [toolName, `mcp__cognia-plugin-tools__${toolName}`]
+}
+
+export const IM_OCR_TOOL_NAMES = OCR_TOOL_NAMES.flatMap(pluginToolAliases)
 
 function builtInToolAliases(toolName: string): string[] {
   return [toolName, `mcp__cognia-builtin-skills__${toolName}`]
@@ -43,6 +48,12 @@ export function deriveImPermissionCeiling(input: {
   }
   if (!host.computer_use) {
     for (const name of COMPUTER_USE_PLUGIN_TOOL_NAMES) denied.add(name)
+    for (const name of SCREENSHOT_TOOL_NAMES.flatMap(pluginToolAliases)) denied.add(name)
+    // Nested targets do not necessarily inherit the IM binding used to check
+    // the source argument. Deny the mixed-source tool at that boundary.
+    if (input.target !== "direct") {
+      for (const name of ["ocr.extract", "ocr_extract"].flatMap(pluginToolAliases)) denied.add(name)
+    }
   }
   if (!host.ocr) {
     for (const name of IM_OCR_TOOL_NAMES) denied.add(name)

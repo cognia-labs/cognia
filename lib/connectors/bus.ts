@@ -54,7 +54,7 @@ import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter
 import { readForResolution, setStatus, setSlaDue } from "@/lib/db/conversation-overrides"
 import { computeDueAt } from "@/lib/connectors/sla"
 import { findSessionByConversationKey, findActiveSessionForConversation } from "./session-bindings"
-import { restrictQueuedImPermissions } from "./permission-resolve"
+import { resolveImHostCapabilities, restrictQueuedImPermissions } from "./permission-resolve"
 import { upsertIdentity } from "@/lib/db/platform-identities"
 import { getCharacter } from "@/lib/db/characters"
 import { getDb } from "@/lib/db/schema"
@@ -806,16 +806,6 @@ export class ConnectorBus {
       adapterId: event.adapterId,
       platform: event.platform,
     })
-    // ── Step 1.5: eager OCR of inbound images (ADR-0024) ─────────────────────
-    // Attaches `ocrText` to image segments that carry inline bytes, so trigger
-    // matching (Step 6), the stored message, the agent prompt, and the digest
-    // all see the image's text. Best-effort — never blocks delivery. Gated on
-    // an OCR-able image so a text-only / URL-only message skips the settings
-    // read + dep build entirely (the common case).
-    if (hasOcrableInboundImage(event.segments)) {
-      await runInboundOcr(event).catch(() => undefined)
-    }
-
     // ── Step 2: adapter instance lookup ──────────────────────────────────────
     const adapterRow = await getAdapterInstance(event.adapterId)
     if (!adapterRow) {
@@ -939,6 +929,14 @@ export class ConnectorBus {
         reason: admission.reason,
       })
       return
+    }
+
+    // Enrich only admitted media under the current conversation and adapter policy.
+    if (
+      resolveImHostCapabilities({ adapter: adapterRow, override }).ocr &&
+      hasOcrableInboundImage(event.segments)
+    ) {
+      await runInboundOcr(event).catch(() => undefined)
     }
 
     // ── Step 3.5: lifecycle auto-reopen (CRM, schema v83) ─────────────────────

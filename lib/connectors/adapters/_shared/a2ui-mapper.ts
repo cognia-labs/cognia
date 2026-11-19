@@ -33,7 +33,7 @@ import type { A2UISegmentContent } from "@/types/connectors/segment"
 import type { A2UIComponent } from "@/types/a2ui/schema"
 import { getComponentChildReferences } from "@cognia/a2ui-core/component-tree"
 import { getValueByPath } from "@cognia/a2ui-core/data-model"
-import { escapeMarkdown } from "./inbound-markdown"
+import { escapeMarkdown, markdownLinkDestination } from "./inbound-markdown"
 
 /**
  * A component node as the mapper sees it. We accept the unknown-typed
@@ -465,23 +465,41 @@ export async function resolveCallbackBinding(
  * in [brackets] — so the result is legible across every channel
  * (Telegram, OneBot, raw email body, etc.).
  */
-export function generatePlainTextMirror(surface: A2UISegmentContent): string {
-  return generateTextMirror(surface, false)
+interface MirrorOptions {
+  omitButtonIds?: ReadonlySet<string>
+  maxHeadingLevel?: 1 | 2 | 3 | 4 | 5 | 6
+  /** Opt-in per-platform resource admission; absent preserves legacy text mirrors. */
+  resourceUrl?: (value: string, kind: "image" | "link") => string | undefined
+  resourcesOnly?: boolean
+  /** Read-only, bounded data alternatives; absent preserves legacy widget placeholders. */
+  dataWidgets?: boolean
+}
+
+export function generatePlainTextMirror(
+  surface: A2UISegmentContent,
+  options: MirrorOptions = {}
+): string {
+  return generateTextMirror(surface, false, options)
 }
 
 /** Semantic Markdown for channels with rich text; plain node values stay literal. */
 export function generateMarkdownMirror(
   surface: A2UISegmentContent,
-  options: { omitButtonIds?: ReadonlySet<string>; maxHeadingLevel?: 1 | 2 | 3 | 4 | 5 | 6 } = {}
+  options: MirrorOptions = {}
 ): string {
-  return generateTextMirror(surface, true, options.omitButtonIds, options.maxHeadingLevel)
+  return generateTextMirror(surface, true, options)
 }
 
 function generateTextMirror(
   surface: A2UISegmentContent,
   markdown: boolean,
-  omitButtonIds?: ReadonlySet<string>,
-  maxHeadingLevel = 6
+  {
+    omitButtonIds,
+    maxHeadingLevel = 6,
+    resourceUrl,
+    resourcesOnly,
+    dataWidgets,
+  }: MirrorOptions = {}
 ): string {
   // Plain-text mirror is content-driven, not layout-driven — we don't
   // indent based on tree depth because pure layout containers (Column /
@@ -490,7 +508,16 @@ function generateTextMirror(
   // interactive verbs, `[!]` for Alerts, etc.) rather than whitespace.
   const lines: string[] = []
   const literal = markdown ? escapeMarkdown : (value: string) => value
+  const image = (source: unknown, alt: string) => {
+    const url = typeof source === "string" ? resourceUrl?.(source, "image") : undefined
+    if (url)
+      lines.push(
+        markdown ? `![${literal(alt)}](${markdownLinkDestination(url)})` : `[${alt}] ${url}`
+      )
+    return Boolean(url)
+  }
   walkA2UISurface(surface, (node) => {
+    if (resourcesOnly && !["Image", "Link", "Card"].includes(node.component)) return
     switch (node.component) {
       case "Text": {
         const text = stringValue(node.raw.text)
@@ -507,17 +534,36 @@ function generateTextMirror(
         if (omitButtonIds?.has(node.id)) break
         const text = stringValue(node.raw.text)
         const action = stringValue(node.raw.action)
-        if (text || action) lines.push(literal(`[${text || action}]`))
+        const href = stringValue(node.raw.href) || stringValue(node.raw.url)
+        const url = href && node.raw.disabled !== true ? resourceUrl?.(href, "link") : undefined
+        const command =
+          resourceUrl && node.raw.disabled !== true ? stringValue(node.raw.qqCommand) : ""
+        if (text || action)
+          lines.push(
+            literal(`[${text || action}]${url ? ` ${url}` : command ? ` ${command}` : ""}`)
+          )
         break
       }
       case "Link": {
-        const text = stringValue(node.raw.text) || stringValue(node.raw.href)
-        if (text) lines.push(literal(text))
+        const text = stringValue(node.raw.text) || (!resourceUrl ? stringValue(node.raw.href) : "")
+        const url =
+          node.raw.disabled !== true && !node.raw.action && typeof node.raw.href === "string"
+            ? resourceUrl?.(node.raw.href, "link")
+            : undefined
+        if (url)
+          lines.push(
+            markdown
+              ? `[${literal(text || url)}](${markdownLinkDestination(url)})`
+              : text && text !== url
+                ? `${text} (${url})`
+                : url
+          )
+        else if (text && !resourcesOnly) lines.push(literal(text))
         break
       }
       case "Image": {
         const alt = stringValue(node.raw.alt) || "image"
-        lines.push(literal(`[${alt}]`))
+        if (!image(node.raw.src, alt) && !resourcesOnly) lines.push(literal(`[${alt}]`))
         break
       }
       case "Divider":
@@ -532,14 +578,19 @@ function generateTextMirror(
       }
       case "Card": {
         const title = stringValue(node.raw.title)
-        if (title)
+        if (title && !resourcesOnly)
           lines.push(
             `${markdown ? "#".repeat(Math.min(2, maxHeadingLevel)) : "#"} ${literal(title)}`
           )
         const description = stringValue(node.raw.description)
-        if (description) lines.push(literal(description))
+        if (description && !resourcesOnly) lines.push(literal(description))
+        image(node.raw.image, title || "image")
         break
       }
+      case "Table":
+      case "Chart":
+        lines.push(...(dataWidgets ? dataWidgetMirror(node) : [`[${node.component}]`]).map(literal))
+        break
       case "Row":
       case "Column":
       case "ButtonGroup":
@@ -582,6 +633,94 @@ function generateTextMirror(
     }
   })
   return lines.join(markdown ? "\n\n" : "\n")
+}
+
+/** Scalar display values only: never enumerate object cells or execute column renderers. */
+function dataMirrorCell(value: unknown): string {
+  const text = stringValue(value)
+  // Slice before iterating Unicode so hostile long strings cannot expand an
+  // unbounded code-point array. Keep cell truncation visible to the reader.
+  const prefix = text.slice(0, 512)
+  const normalized = prefix.replace(/[\r\n]+/g, " ↵ ").replace(/\t/g, " ")
+  const points = [...normalized]
+  return text.length > prefix.length || points.length > 256
+    ? points.slice(0, 255).join("") + "…"
+    : normalized
+}
+
+/** Source-order summary of fields the canonical Table/Chart actually selects. */
+function dataWidgetMirror(node: A2UIWalkNode): string[] {
+  const raw = node.raw
+  const title = dataMirrorCell(raw.title)
+  const lines = [`[${node.component}]${title ? ` ${title}` : ""}`]
+  const description = node.component === "Table" ? dataMirrorCell(raw.description) : ""
+  if (description) lines.push(description)
+  const data = Array.isArray(raw.data) ? raw.data : []
+  let columns: Array<{ key: string; header: string }> = []
+  let omittedColumns = 0
+  if (node.component === "Table" && Array.isArray(raw.columns)) {
+    columns = raw.columns.slice(0, 12).flatMap((column) =>
+      column &&
+      typeof column === "object" &&
+      Object.hasOwn(column, "key") &&
+      typeof column.key === "string"
+        ? [
+            {
+              key: column.key,
+              header:
+                dataMirrorCell(Object.hasOwn(column, "header") ? column.header : undefined) ||
+                dataMirrorCell(column.key),
+            },
+          ]
+        : []
+    )
+    omittedColumns = Math.max(0, raw.columns.length - 12)
+  } else if (node.component === "Chart") {
+    const xKey = typeof raw.xKey === "string" && raw.xKey ? raw.xKey : "name"
+    const yKeys = Array.isArray(raw.yKeys) ? raw.yKeys : ["value"]
+    // Pie/donut consume only the first series; scatter renders all yKeys.
+    const selected = ["pie", "donut"].includes(String(raw.chartType)) ? yKeys.slice(0, 1) : yKeys
+    columns = [
+      { key: xKey, header: dataMirrorCell(xKey) },
+      ...selected
+        .slice(0, 11)
+        .flatMap((key) => (typeof key === "string" ? [{ key, header: dataMirrorCell(key) }] : [])),
+    ]
+    omittedColumns = Math.max(0, selected.length - 11)
+  }
+  if (omittedColumns) lines.push(`[… +${omittedColumns} columns]`)
+  if (!data.length) {
+    lines.push(
+      Array.isArray(raw.data)
+        ? (node.component === "Table" ? dataMirrorCell(raw.emptyMessage) : "") || "[0 rows]"
+        : "[data unavailable]"
+    )
+    return lines
+  }
+  if (!columns.length) return [...lines, `[${data.length} rows; no display columns]`]
+  let size = lines.join("\n").length
+  let shown = 0
+  for (let index = 0; index < Math.min(data.length, 50); index++) {
+    const row = data[index]
+    const fields =
+      row && typeof row === "object" && !Array.isArray(row)
+        ? columns
+            .map(
+              ({ key, header }) =>
+                `${header}: ${dataMirrorCell(Object.hasOwn(row, key) ? row[key] : undefined)}`
+            )
+            .join("; ")
+        : "[data unavailable]"
+    const line = `${index + 1}. ${fields}`
+    // Reserve space for an explicit omitted-row count; do not send a
+    // truncated row or an unbounded expansion of an already large surface.
+    if (size + line.length + 1 > 11_936) break
+    lines.push(line)
+    size += line.length + 1
+    shown++
+  }
+  if (shown < data.length) lines.push(`[… +${data.length - shown} rows]`)
+  return lines
 }
 
 function stringValue(v: unknown): string {

@@ -435,8 +435,20 @@ export function qqMessageProjection(dispatch: QQDispatch, selfId = "") {
         href: fields.jump_url,
         label: cardTitle || value.ark_data?.ark_type || "Link",
       })
-    if (typeof fields.preview === "string")
-      children.push({ kind: "image", url: fields.preview, alt: cardTitle })
+    const cardImages = new Set<string>()
+    for (const key of ["preview", "avatar", "source_logo", "tag_icon"] as const) {
+      const url = fields[key]
+      if (typeof url !== "string" || cardImages.has(url)) continue
+      cardImages.add(url)
+      // Card artwork stays display-only, never a sender portrait or a new
+      // model attachment. safeQQData already admitted these public URLs.
+      children.push({
+        kind: "image",
+        url,
+        alt: cardTitle,
+        ...(key === "preview" ? {} : { width: 48, height: 48 }),
+      })
+    }
     const hasCard = Boolean(
       value.ark_data && (cardTitle || children.length || value.ark_data.prompt)
     )

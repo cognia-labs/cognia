@@ -6,6 +6,33 @@ const req: OutboundRequest = {
   segments: [{ type: "text", text: "Hello" }],
   metadata: { idempotencyKey: "k" },
 }
+it("requires the specific image-text capability even when an adapter supports opaque native cards", () => {
+  const cardRequest: OutboundRequest = {
+    ...req,
+    segments: [
+      {
+        type: "card",
+        card: {
+          kind: "image-text",
+          payload: {
+            title: "Title",
+            description: "Summary",
+            url: "https://example.org",
+            imageUrl: "https://example.org/a.png",
+          },
+        },
+      },
+    ],
+  }
+  const adapter = { meta: { capabilities: ["send.card"] } } as unknown as PlatformAdapter
+  expect(validateOutboundFeatures(adapter, cardRequest)).toMatchObject({
+    error: { code: "unsupported_segment" },
+  })
+  const supported = {
+    meta: { capabilities: ["send.card.image-text"] },
+  } as unknown as PlatformAdapter
+  expect(validateOutboundFeatures(supported, cardRequest)).toBeUndefined()
+})
 it("rejects explicit unsupported features instead of silently changing delivery semantics", () => {
   const adapter = { meta: { capabilities: [] } } as unknown as PlatformAdapter
   expect(validateOutboundFeatures(adapter, req)).toBeUndefined()

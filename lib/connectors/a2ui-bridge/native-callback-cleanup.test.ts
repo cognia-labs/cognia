@@ -164,6 +164,7 @@ describe("native callback cleanup through serializers and parsers", () => {
   it("preserves QQ HTTP links and ordinary command data", () => {
     const segments = [
       native("qq-keyboard", {
+        markdown: { content: "Choose" },
         keyboard: {
           content: {
             rows: [
@@ -186,9 +187,10 @@ describe("native callback cleanup through serializers and parsers", () => {
         },
       }),
     ]
-    expect(
-      qqSend(request("qq-official", sanitizeOutboundSegments(segments)), false)?.payload.keyboard
-    ).toEqual(qqSend(request("qq-official", segments), false)?.payload.keyboard)
+    const original = qqSend(request("qq-official", segments), false)
+    const cleaned = qqSend(request("qq-official", sanitizeOutboundSegments(segments)), false)
+    expect(original?.payload).toMatchObject({ msg_type: 2, markdown: { content: "Choose" } })
+    expect(cleaned?.payload).toEqual(original?.payload)
   })
 
   it("downgrades Slack opaque blocks without emitting their action_id", async () => {

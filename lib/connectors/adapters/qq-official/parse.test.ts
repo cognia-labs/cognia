@@ -19,6 +19,30 @@ describe("stripChannelMention", () => {
 })
 
 describe("parseQQDispatch", () => {
+  it("keeps card portraits out of sender identity and current model attachments", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("C2C_MESSAGE_CREATE", {
+        id: "portrait",
+        author: { user_openid: "sender" },
+        message_type: 3,
+        ark_data: {
+          ark_type: "contact_card",
+          ark_name: "Contact",
+          fields: {
+            nickname: "Alice",
+            avatar: "https://example.org/avatar.png",
+            source_logo: "https://example.org/source.png",
+            tag_icon: "https://127.0.0.1/secret.png",
+          },
+        },
+      })
+    )!
+    expect(event.segments.every((segment) => segment.type !== "image")).toBe(true)
+    expect(JSON.stringify(event.sender)).not.toContain("avatar.png")
+    expect(JSON.stringify(event.raw)).not.toContain("127.0.0.1")
+  })
   it.each([
     [12, { feature_id: "help" }, { kind: "menu", featureId: "help" }],
     [

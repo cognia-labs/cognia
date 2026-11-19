@@ -112,6 +112,8 @@ export interface QQOfficialAdapterOptions {
   receiveGuildMessages?: boolean
   /** Subscribe only after the app has QQ's MESSAGE_AUDIT grant. */
   receiveMessageAudit?: boolean
+  /** Enable guild channel/DM Markdown only after QQ grants the app invitation. */
+  guildMarkdownEnabled?: boolean
   /** Resolve the current confirmed identity; startup probes can finish after start(). */
   selfId?: () => Promise<string>
 }
@@ -139,6 +141,11 @@ const QQ_CONFIG_SCHEMA = {
     receiveMessageAudit: {
       type: "boolean",
       description: "Subscribe to channel MESSAGE_AUDIT results after platform approval",
+      default: false,
+    },
+    guildMarkdownEnabled: {
+      type: "boolean",
+      description: "Enable channel and guild-DM native Markdown after QQ invitation approval",
       default: false,
     },
   },
@@ -882,7 +889,10 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
     const ref = req.conversationRef
     if ((ref.scene !== "c2c" && ref.scene !== "group") || typeof ref.sceneId !== "string")
       throw new QQValidationError("QQ explicit delivery requires a captured group/C2C destination")
-    const prepared = await prepareQQKeyboards(req)
+    const prepared = await prepareQQKeyboards(req).catch((error: unknown) => {
+      if (error instanceof QQKeyboardValidationError) throw new QQValidationError(error.message)
+      throw error
+    })
     const preview = serializeOutboundParts(prepared.request, false)
     const cost = preview.length
     const now = Date.now(),
@@ -1072,7 +1082,7 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
         // Only the scoped lookup/current captured event may authorize this quote.
         req = { ...req, conversationRef: { ...req.conversationRef, qqQuoteIndex: index } }
       }
-      calls = serializeOutboundParts(req, false)
+      calls = serializeOutboundParts(req, false, opts)
     } catch (err) {
       if (!(err instanceof QQValidationError)) throw err
       return { ok: false, error: { code: "validation", message: err.message, retryable: false } }
@@ -1099,7 +1109,7 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
         uploaded.set(index, body.file_info)
       }
       // Recheck capacity/expiry after uploads, then reserve all parts atomically.
-      calls = serializeOutboundParts(req)
+      calls = serializeOutboundParts(req, true, opts)
       for (const [index, call] of calls.entries()) {
         const fileInfo = uploaded.get(index)
         const payload = fileInfo

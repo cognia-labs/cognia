@@ -1,13 +1,13 @@
 ---
 title: "QQ Official Bot Setup"
-description: "Connect QQ official bots with group/C2C files, binary/chunked uploads, native Markdown, quote replies, button keyboards, interaction callbacks and C2C native streaming."
+description: "Connect QQ official bots with native Markdown and image-text cards, safe card images/links, readable data and keyboard fallbacks, scoped callbacks, file uploads and C2C streaming."
 ---
 
 # QQ Official Bot Setup Guide
 
 Cognia connects to the **QQ Open Platform** with an official bot's **App ID** and **AppSecret** (called **Client Secret** in Cognia). This connector is separate from personal-account access through [OneBot / NapCat](./qq-via-onebot-faq).
 
-Group/C2C supports native Markdown, visible quote replies and native button keyboards. Button interactions return through the same verified transport and callback authorization pipeline. Incoming quotes, nested messages/chat records and ARK cards are normalized for the transcript; quote indexes are kept separately from passive-send authorization.
+Group/C2C supports native Markdown, image-text cards, visible quote replies and native keyboards with readable overflow alternatives. Card images and links retain safe destinations. Interactions return through the same verified transport and callback authorization pipeline. Incoming quotes, nested messages/chat records and ARK cards are normalized for the transcript; card portraits/source icons remain display-only, and quote indexes are kept separately from passive-send authorization.
 
 Group/C2C file sends accept public URLs and the original bytes of user-selected local attachments. The updated native host uses direct binary upload up to 5,000,000 bytes and chunked upload above that, with a 200,000,000-byte native source cap, then sends the file through the same passive-reply rules.
 
@@ -66,6 +66,8 @@ Welcome and help use the shared A2UI builder. QQ group/C2C projects supported Ca
 
 Send `/help welcome` to preview the current welcome in the conversation. This reuses the common help entry and governed queue, does not invoke the model, and does not reset or consume first-contact welcome deduplication. With custom help triggers, append ` welcome` to that trigger instead. `/help` still shows the full help content. Existing conversations are not automatically greeted again after an update.
 
+With QQ’s invitation granted, enable channel Markdown and verify one heading/link reply in a channel and one in a guild DM. Check native client formatting and delivered IDs, then disable the switch and confirm the text-alternative downgrade. A permission denial, pending audit or missing send acknowledgement must remain visible; Cognia never retries it as a second text message. Native A2UI welcome/help remains group/C2C-only. The official [guild DM API](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/message/dms.html) shares [channel send parameters](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/message/send.html); invitation requirements follow [QQ’s Markdown guide](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html).
+
 ### Complex-case acceptance
 
 Use a controlled test conversation. Complete onboarding before checking reply counts, because the initial welcome is a separate message. For each case retain incoming IDs, AI-run count, outbound status/attempts and the client's observed result. Keep failure injection in isolated tests; do not crash shared services or exhaust real platform quotas.
@@ -107,8 +109,8 @@ Enable **Receive message audit results** only after QQ grants `MESSAGE_AUDIT`. G
 - **Upload limits and failures:** the native uploader reads one bounded snapshot, capped at **200,000,000 bytes**. The composer preserves original bytes and retains its shared limit of **10 MiB per file and six files per message**; its attachments can still use chunked upload above the direct-upload threshold. Known file sizes are checked before upload, and actual native bytes are checked on the host. Native images/voice above 20,000,000 bytes and video above 30,000,000 bytes upload as files, following QQ's soft-limit behavior. URL uploads remain server-side downloads and still depend on QQ's format, quota and permission checks. Chunk uploads are sequential with a 300-second total deadline; persistent cross-restart upload resume is not implemented. Upload failure prevents the message send. A long upload may exhaust the passive window, which is checked again before sending.
 - **Upload authorization:** all upload stages use `srv_send_msg=false` where applicable; chunks never consume passive reply slots. The final media message consumes one slot per part. QQ API credentials stay off presigned storage requests, which require public HTTPS, reject redirects and follow the host's checked proxy path. No upload is converted into a proactive send.
 - **Passive budgets:** a group message allows up to **5 replies within 5 minutes**; C2C allows up to **4 replies within 60 minutes**. Multipart sends share that budget. Cognia conservatively counts C2C typing notifications as replies and reserves the final slot for the answer. Channel/direct replies retain the 5-minute window. Expired context is rejected rather than converted into a proactive send.
-- **Native Markdown:** group/C2C assistant replies and explicit Markdown segments use `msg_type=2` with `markdown.content`; no template registration is needed. Headings, emphasis, lists, links and inline images are passed to QQ's Markdown renderer. Plain-text messages remain text. When a request mixes literal text with Markdown, the literal text is escaped; the Markdown source is preserved. Channel/channel-direct Markdown retains a reported text fallback because channel permission is invitation-only and is not enabled by this adapter.
-- **Markdown with media:** standalone attachments are sent separately from native Markdown, in segment order. Every resulting part consumes the same passive reply budget; over-budget messages are rejected before any upload or send. Native Markdown rejection is reported rather than silently resent as text. Inline image links in Markdown use QQ's own resource handling and do not require a separate attachment part.
+- **Native Markdown:** group/C2C assistant replies and explicit Markdown segments use `msg_type=2` with `markdown.content`; no template registration is needed. Headings, emphasis, lists, links and inline images are passed to QQ's Markdown renderer. Plain-text messages remain text. When a request mixes literal text with Markdown, the literal text is escaped; the Markdown source is preserved. For an app with QQ’s Markdown invitation, enable **Enable channel Markdown** in the connector’s delivery settings (`guildMarkdownEnabled: true`). Channel and guild-direct Markdown then uses `markdown.content` on the existing guild endpoints, without group/C2C `msg_type` or `msg_seq`. The switch defaults off; these scenes otherwise retain their reported text fallback. It does not enable guild A2UI/keyboards, image-text cards or strict image verification. Save the setting to rebuild the adapter in both desktop and headless runtimes.
+- **Markdown with media:** standalone attachments are sent separately from native Markdown, in segment order. For group/C2C, every resulting part consumes the same passive reply budget; over-budget messages are rejected before any upload or send. Guild scenes retain the existing passive window and platform quota checks. Native Markdown rejection is reported rather than silently resent as text. Inline image links in Markdown use QQ's own resource handling and do not require a separate attachment part.
 - **Native quote replies:** explicit group/C2C replies use the received message's `message_scene.ext.msg_idx`, or a bot response's `ext_info.ref_idx`, in `message_reference.message_id`. The current real inbound `msg_id` still supplies passive authorization, so quoting another message cannot bypass expiry or reply limits. Native text, Markdown and media parts retain the same selected quote. Scoped mappings persist across connector restarts, including every confirmed part of multipart sends; the cache is bounded, and missing/conflicting/pruned indexes make an explicit native quote fail before sending. Legacy reply segments without a known index retain their reported text alternative. Channel/direct behavior is unchanged.
 - **Structured incoming content:** `message_scene.ext` preserves padded indexes and strips `auth_token`; `msg_elements` supports bounded recursive messages and chat records. Native quotes keep a read-only preview and resolve known parents to stored messages; unknown parents remain previews without an invented jump or bot identity. ARK cards show allowlisted titles, descriptions, sources/tags, addresses, safe links and previews. Unknown card fields and credential-bearing/non-public URLs are omitted. Card portraits do not become sender identities. Quoted/chat-record media and card previews are display context, not new model attachments; current message attachments retain the normal media policy.
 - **Native buttons:** group/C2C A2UI `Button` components become custom `keyboard.content.rows` buttons. Callback buttons use action type 1, HTTP(S) link buttons use type 0, and a Button's optional `qqCommand` string uses type 2 to insert a command. Rows, columns, cards and text retain a readable body; unsupported inputs retain a reported text alternative. Guild scenes keep the text alternative. There is no message editing or automatic removal of a completed card's buttons.
@@ -120,15 +122,60 @@ Enable **Receive message audit results** only after QQ grants `MESSAGE_AUDIT`. G
 - **Other limitations:** group streaming, generic outbound ARK and miniapp jumps remain unavailable. Current group/C2C send tables do not establish an outbound ARK body; legacy guides conflict. Provider controls remain system events and do not automatically become model messages.
 - **Recall and scene-specific features:** native recall endpoints are available subject to QQ's restrictions; typing is C2C-only and reactions are channel-only.
 
+### Native image-text cards
+
+Group/C2C supports QQ's `msg_type=8`, `card.type=tuwen` through the portable `image-text` card contract, following the [2026-10-28 platform update](https://bot.q.qq.com/wiki/develop/api-v2/changelog.html). Check `send.card.image-text`, rather than assuming any adapter with `send.card` supports this format. Plugin authors can use the existing governed enqueue API:
+
+```ts
+import type { ImageTextCard } from "@cognia/plugin-sdk"
+
+const adapter = ctx.connectors.getAdapter(adapterId)
+if (!adapter?.capabilities.includes("send.card.image-text")) {
+  throw new Error("This adapter does not support image-text cards")
+}
+const card: ImageTextCard = {
+  kind: "image-text",
+  payload: {
+    title: "Release notes",
+    description: "Read the latest changes.",
+    url: "https://example.org/releases",
+    imageUrl: "https://example.org/releases.png",
+  },
+}
+await ctx.connectors.enqueueSend(adapterId, conversationKey, {
+  conversationRef: { platform: adapter.type, adapterId },
+  segments: [{ type: "card", card }],
+  metadata: { idempotencyKey: ctx.connectors.newIdempotencyKey() },
+})
+```
+
+The host resolves the stored conversation destination and applies its existing authorization, PII checks and durable queue. Titles accept 1–50 Unicode characters; descriptions accept 1–200. Both URLs must be public HTTPS URLs without credentials, at most 1,024 characters. Local paths, inline bytes and `qqbot-media://` references are not card image URLs. Unknown payload fields are not forwarded. Tencent may impose additional application/domain permissions.
+
+Each image-text card is an exclusive message part. Adjacent text, Markdown, media and keyboards keep their order in separate parts, with the total passive allowance checked before any upload or POST. Native quotes and stable retry sequences use the existing send path. Channel/direct scenes and `imagePolicy: "require-complete"` are rejected for this card format. A successful local contract test does not establish QQ-client display or account permissions.
+
+QQ group/C2C projects `Card.image`, `Image.src` and ordinary `Link.href` into native Markdown, including bound card/image sources. Resource destinations must be public HTTP(S) without credentials; rejected resource addresses are not restored from generated text fallbacks. Owned `qqbot-media://` images retain the existing adapter ownership/expiry checks. Disabled Links and Buttons do not acquire resource or command destinations. An A2UI `Card` is not automatically converted into a tuwen card.
+
+When an A2UI surface contains unsupported widgets and buttons, QQ preserves the complete `plainTextMirror` (including a supplied `widget.fallbackText`) as escaped literal Markdown, retaining admitted resource links/images beside the keyboard. Media captions retain safe resource URLs without adding another passive reply. Fully supported layouts retain their semantic rich projection; interactive forms still need an authored text summary.
+
+Without an authored summary, group/C2C Table and Chart alternatives include source-order data from declared table columns or selected chart series, including bound values, zero and false. Pie/donut uses the first series; other chart types retain the declared series. Extra fields, nested object values and column-renderer code are not serialized or executed. Explicit `widget.fallbackText` remains authoritative even when it equals the old placeholder. These are read-only text alternatives, not native tables, charts or chart/row actions.
+
+Automatic data summaries show at most 50 rows, 12 columns and 256 Unicode code points per cell (including an ellipsis), with a 12,000-character plain-text budget per widget. Newlines become `↵`; omitted rows/columns and clipped cells are marked. The summary does not reproduce pagination, sorting or custom cell formatting. Generated text passes the PII gate after numeric formatting; a failed check rejects before delivery rather than sending sensitive values. Use an authored summary when exact aggregation or custom presentation matters.
+
+`Link.action` takes precedence over navigation and `Card.clickAction` becomes a native callback control. Confirmed receipts preserve the Link's reviewed href or the Card's title/description as callback context, under the existing conversation, actor and expiry checks. A valid action-only Card or unlabeled action Link uses its action label when no other body text is available; it never falls back to an unvalidated resource address.
+
 ### Keyboard bounds and native cards
 
-Cognia uses at most five rows of five buttons. QQ labels are limited to ten characters; generated A2UI labels are shortened while the full readable mirror is retained. Explicit native payloads with invalid labels, duplicate IDs, unsafe links or unsupported fields fail before sending. Links accept HTTP(S) without URL credentials. Command `enter=true` and `anchor=1` are C2C-only; image-picker anchors also depend on the QQ mobile client. Deprecated `click_limit`, guild-only role restrictions, and mini-program jumps are not exposed. Shared `Button.confirmation` maps to QQ callback-button `action.modal`, and `exclusiveGroup` maps to `group_id`. Modal content is limited to 40 characters, cannot include links, and button labels are limited to four characters. Other adapters must declare this policy explicitly; QQ client support remains required.
+Cognia uses at most five rows of five native controls. A generated A2UI keyboard with more than 25 controls becomes one complete text alternative, preserving its summary, action labels, admitted links and commands without creating callback bindings. It is not split across messages, so exclusive groups cannot accidentally span independent keyboards. Explicit oversized native payloads still fail validation.
+
+QQ labels are limited to ten characters. If any generated label is too long or duplicates another label, the whole keyboard receives distinct numbers and the body contains the corresponding full labels; the native labels remain within ten characters. Explicit native payloads with invalid labels, duplicate IDs, unsafe links or unsupported fields fail before sending. Links accept HTTP(S) without URL credentials. Command `enter=true` and `anchor=1` are C2C-only; image-picker anchors also depend on the QQ mobile client. Deprecated `click_limit`, guild-only role restrictions, and mini-program jumps are not exposed. Shared `Button.confirmation` maps to QQ callback-button `action.modal`, and `exclusiveGroup` maps to `group_id`. Modal content is limited to 40 characters, cannot include links, and modal button labels are limited to four characters. Other adapters must declare this policy explicitly; QQ client support remains required.
 
 For an explicit platform card, use a `MessageSegment` with `type: "card"`, `card.kind: "qq-keyboard"`, and `card.payload` containing `content` or `markdown: { content }` plus `keyboard`. `content` and Markdown are exclusive. The keyboard accepts a template `id` or custom `content.rows`, never both. Explicit custom callback `action.data` must name an existing live callback binding in the same conversation; Cognia replaces it with a per-delivery token. Template/external callbacks without a managed receipt are rejected. Unknown opaque card kinds remain unsupported.
 
 Callback receipts persist across connector restarts, expire after at most 30 days and cannot outlive a shorter author binding. Already-consumed approval bindings cannot grant again. Callback envelopes delayed more than five minutes are rejected locally. A keyboard message is its own ordered part; mixing Markdown, keyboards and media may exceed the conversation's shared 5/4-reply budget and is rejected before upload/send.
 
 For acceptance, send a button card in both group and C2C, press a generic button twice, retry a one-shot approval, and verify that only the permitted user can approve. Repeat through the configured HTTPS callback, confirm the reply stays in the same conversation, and check failure/denial feedback separately from final action completion. These steps require the application's live QQ grants and a compatible QQ client.
+
+Text-only `qq-keyboard` bodies are escaped and sent as native Markdown, so literal markers do not become formatting. An explicit template/custom keyboard without a nonempty body is rejected before sending; a generated action-only control uses its action label.
 
 ## Shared connector entry points
 

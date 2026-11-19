@@ -45,6 +45,240 @@ function req(
 
 const HI: MessageSegment[] = [{ type: "text", text: "hi" }]
 
+describe.each(["channel", "direct"] as const)("%s opt-in Markdown", (scene) => {
+  const options = { guildMarkdownEnabled: true }
+  const markdown: MessageSegment = { type: "markdown", md: "## Native\n**body**" }
+  const message = (segments: MessageSegment[]) => req(scene, "guild-target", segments, {}, "input")
+
+  it("keeps default fallback even when conversation data claims permission", () => {
+    const input = message([markdown])
+    input.conversationRef.guildMarkdownEnabled = true
+    const call = serializeOutbound(input, false)!
+    expect(call.payload).toEqual({ content: markdown.md, msg_id: "input" })
+    expect(call.downgrades).toContainEqual({
+      from: "markdown",
+      to: "text",
+      reason: "qq_markdown_scene_unsupported",
+    })
+  })
+
+  it("sends native Markdown with only guild fields and escapes adjacent literal text", () => {
+    const call = serializeOutbound(
+      message([markdown, { type: "text", text: "**literal**" }]),
+      false,
+      options
+    )!
+    expect(call.path).toBe(
+      scene === "channel" ? "/channels/guild-target/messages" : "/dms/guild-target/messages"
+    )
+    expect(call.payload).toEqual({
+      markdown: { content: "## Native\n**body**\n\\*\\*literal\\*\\*" },
+      msg_id: "input",
+    })
+    expect(call.downgrades).toBeUndefined()
+  })
+
+  it("preserves native Markdown/image/Markdown order in preview and reservation", () => {
+    const input = message([markdown, { type: "image", url: "https://example.org/p.png" }, markdown])
+    const preview = serializeOutboundParts(input, false, options)
+    expect(preview.map((call) => call.payload)).toEqual([
+      { markdown: { content: markdown.md }, msg_id: "input" },
+      { content: "", image: "https://example.org/p.png", msg_id: "input" },
+      { markdown: { content: markdown.md }, msg_id: "input" },
+    ])
+    expect(serializeOutboundParts(input, true, options)).toEqual(preview)
+    expect(qqPassiveReplyCount("input")).toBe(0)
+  })
+
+  it("rejects unsupported strict-image verification and expired passive context", () => {
+    expect(() =>
+      serializeOutbound(
+        { ...message([markdown]), sendOptions: { imagePolicy: "require-complete" } },
+        false,
+        options
+      )
+    ).toThrow(/group.*C2C/)
+    const input = message([markdown])
+    input.conversationRef.receivedAt = Date.now() - 6 * 60_000
+    expect(() => serializeOutbound(input, false, options)).toThrow(/expired/)
+  })
+})
+
+it.each(["group", "c2c"] as const)(
+  "normalizes %s text-only keyboard bodies to literal native Markdown",
+  (scene) => {
+    const call = serializeOutboundParts(
+      req(
+        scene,
+        "target",
+        [
+          {
+            type: "card",
+            card: {
+              kind: "qq-keyboard",
+              payload: { content: "Choose **literal**", keyboard: { id: "template" } },
+            },
+          },
+        ],
+        {},
+        "input"
+      ),
+      false
+    )[0]
+    expect(call.payload).toMatchObject({
+      msg_type: 2,
+      markdown: { content: "Choose \\*\\*literal\\*\\*" },
+      keyboard: { id: "template" },
+    })
+    expect(call.payload).not.toHaveProperty("content")
+    expect(() =>
+      serializeOutboundParts(
+        req(
+          scene,
+          "target",
+          [
+            {
+              type: "card",
+              card: { kind: "qq-keyboard", payload: { keyboard: { id: "template" } } },
+            },
+          ],
+          {},
+          "input"
+        ),
+        false
+      )
+    ).toThrow(/Markdown.*empty|body/i)
+  }
+)
+
+function imageTextCard(overrides: Record<string, unknown> = {}): MessageSegment {
+  return {
+    type: "card",
+    card: {
+      kind: "image-text",
+      payload: {
+        title: "Article",
+        description: "Summary",
+        url: "https://example.org/article",
+        imageUrl: "https://example.org/cover.png",
+        ...overrides,
+      },
+    },
+  }
+}
+
+describe("native image-text cards", () => {
+  it.each(["group", "c2c"] as const)(
+    "emits an exclusive %s tuwen body with native quotes",
+    (scene) => {
+      const input = req(scene, "target", [imageTextCard()], {}, "inbound")
+      input.conversationRef.qqMsgIndex = "REFIDX_parent"
+      input.replyTo = { messageId: "inbound" }
+      const call = serializeOutboundParts(input, false)[0]
+      expect(call.payload).toMatchObject({
+        msg_type: 8,
+        card: {
+          type: "tuwen",
+          content: {
+            title: "Article",
+            description: "Summary",
+            url: "https://example.org/article",
+            pic_url: "https://example.org/cover.png",
+          },
+        },
+        msg_id: "inbound",
+        message_reference: { message_id: "REFIDX_parent" },
+      })
+      expect(Object.keys(call.payload)).not.toEqual(expect.arrayContaining(["content"]))
+      for (const field of ["content", "markdown", "media", "keyboard", "ark"])
+        expect(call.payload).not.toHaveProperty(field)
+    }
+  )
+
+  it("preserves mixed content order and stable retry sequences while preflighting all slots", () => {
+    const input = req(
+      "c2c",
+      "target",
+      [
+        { type: "markdown", md: "Before" },
+        imageTextCard(),
+        { type: "image", url: "https://example.org/image.png" },
+        { type: "text", text: "After" },
+      ],
+      {},
+      "inbound"
+    )
+    const calls = serializeOutboundParts(input)
+    expect(calls.map((call) => call.payload.msg_type)).toEqual([2, 8, 7, 0])
+    expect(serializeOutboundParts(input)).toEqual(calls)
+    expect(qqPassiveReplyCount("inbound")).toBe(4)
+    __resetQQMsgSeqForTesting()
+    const tooMany = { ...input, segments: [...input.segments, imageTextCard()] }
+    expect(() => serializeOutboundParts(tooMany)).toThrow(/remaining.*reply limit/)
+    expect(qqPassiveReplyCount("inbound")).toBe(0)
+  })
+
+  it.each(["channel", "direct"] as const)(
+    "rejects image-text cards in %s instead of flattening them",
+    (scene) => {
+      expect(() =>
+        serializeOutboundParts(req(scene, "target", [imageTextCard()], {}, "inbound"))
+      ).toThrow(/image.text|group.*C2C/i)
+    }
+  )
+
+  it.each([
+    { title: "" },
+    { title: "x".repeat(51) },
+    { description: " " },
+    { description: "x".repeat(201) },
+    { url: "http://example.org/article" },
+    { url: "https://user:secret@example.org/" },
+    { imageUrl: "https://127.0.0.1/cover.png" },
+    { imageUrl: "data:image/png;base64,YQ==" },
+    { url: "https://example.org/" + "x".repeat(1024) },
+    { url: "https://example.org/" + "中".repeat(200) },
+  ])("rejects invalid card fields before reserving a reply: %j", (overrides) => {
+    expect(() =>
+      serializeOutboundParts(req("group", "target", [imageTextCard(overrides)], {}, "inbound"))
+    ).toThrow()
+    expect(qqPassiveReplyCount("inbound")).toBe(0)
+  })
+
+  it("counts Unicode characters, strips unknown wire fields, and rejects incompatible policies", () => {
+    const input = req(
+      "group",
+      "target",
+      [imageTextCard({ title: "😀".repeat(50), injected: "never send" })],
+      {},
+      "inbound"
+    )
+    expect(serializeOutboundParts(input, false)[0].payload.card).toMatchObject({
+      type: "tuwen",
+      content: { title: "😀".repeat(50) },
+    })
+    expect(JSON.stringify(serializeOutboundParts(input, false))).not.toContain("never send")
+    expect(() =>
+      serializeOutboundParts({ ...input, sendOptions: { imagePolicy: "require-complete" } })
+    ).toThrow(/strict image|Markdown/)
+    expect(() =>
+      serializeOutbound({ ...input, segments: [imageTextCard(), ...HI] }, false)
+    ).toThrow(/separate|exclusive/)
+    expect(() =>
+      serializeOutbound(
+        {
+          ...input,
+          segments: [
+            imageTextCard(),
+            { type: "reply", messageId: "unknown", snippet: "Do not discard" },
+          ],
+        },
+        false
+      )
+    ).toThrow(/separate|exclusive/)
+  })
+})
+
 beforeEach(() => {
   __resetQQMsgSeqForTesting()
 })

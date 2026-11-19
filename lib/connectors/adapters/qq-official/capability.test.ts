@@ -29,12 +29,14 @@ describe("qq-official capability", () => {
     )
     expect(QQ_OFFICIAL_CAPS).toContain("send.file")
     expect(QQ_OFFICIAL_CAPS).toContain("send.a2ui")
+    expect(QQ_OFFICIAL_CAPS).toContain("send.card")
+    expect(QQ_OFFICIAL_CAPS).toContain("send.card.image-text")
   })
 
   it("advertises only implemented native components and keeps other widgets as fallback", () => {
     for (const kind of A2UI_COMPONENT_KINDS) {
       expect(QQ_OFFICIAL_A2UI_CAPABILITY[kind]).toBe(
-        ["Button", "ButtonGroup", "Text", "Row", "Column", "Card"].includes(kind)
+        ["Button", "ButtonGroup", "Text", "Row", "Column", "Card", "Image", "Link"].includes(kind)
           ? "native"
           : "fallback"
       )

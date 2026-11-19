@@ -19,6 +19,7 @@ describe("capability flags", () => {
       "send.mention",
       "send.thread",
       "send.a2ui",
+      "send.card.image-text",
       "edit",
       "delete",
       "typing",

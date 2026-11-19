@@ -32,7 +32,7 @@
 
 import { validateQQKeyboard } from "./keyboard"
 import type { OutboundRequest, SegmentDowngrade } from "@/types/connectors/outbound"
-import type { MessageSegment } from "@/types/connectors/segment"
+import type { ImageTextCard, MessageSegment } from "@/types/connectors/segment"
 import { fnv1a32 } from "../_shared/fnv1a"
 import { isPublicHttpUrl } from "../_shared/inbound-media"
 import { escapeMarkdown } from "../_shared/inbound-markdown"
@@ -48,6 +48,11 @@ export interface QQSendCall {
     payload: { file_type: number; url?: string; file_name?: string; srv_send_msg: false }
     binary?: QQBinarySource
   }
+}
+
+/** Trusted adapter configuration, never inferred from caller conversation data. */
+export interface QQSendOptions {
+  guildMarkdownEnabled?: boolean
 }
 
 export interface QQBinarySource {
@@ -129,6 +134,51 @@ export class QQValidationError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "QQValidationError"
+  }
+}
+
+/** Validate the portable card at the provider boundary; emit only reviewed fields. */
+function qqImageTextCard(payload: unknown): ImageTextCard["payload"] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    throw new QQValidationError("QQ image-text card requires an object")
+  const fields = payload as Record<string, unknown>
+  const text = (key: string, max: number) => {
+    const value = fields[key]
+    if (
+      typeof value !== "string" ||
+      !value.trim() ||
+      [...value].length > max ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)
+    )
+      throw new QQValidationError(`QQ image-text card ${key} must contain 1-${max} characters`)
+    return value
+  }
+  const httpsUrl = (key: string) => {
+    const value = text(key, 1024)
+    try {
+      const url = new URL(value)
+      if (
+        url.protocol !== "https:" ||
+        url.username ||
+        url.password ||
+        url.href.length > 1024 ||
+        !isPublicHttpUrl(value) ||
+        value !== value.trim() ||
+        /[\u0000-\u0020\u007f]/.test(value)
+      )
+        throw new Error("invalid URL")
+      return url.href
+    } catch {
+      throw new QQValidationError(
+        `QQ image-text card ${key} requires a public HTTPS URL without credentials`
+      )
+    }
+  }
+  return {
+    title: text("title", 50),
+    description: text("description", 200),
+    url: httpsUrl("url"),
+    imageUrl: httpsUrl("imageUrl"),
   }
 }
 
@@ -307,7 +357,11 @@ function passiveReplyFields(
   return fields
 }
 
-export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendCall | null {
+export function serializeOutbound(
+  req: OutboundRequest,
+  reserve = true,
+  options: QQSendOptions = {}
+): QQSendCall | null {
   if (JSON.stringify(req.segments).includes("<qqbot-at-everyone"))
     throw new QQValidationError("QQ broadcast mentions require a structured mention segment")
   const ref = req.conversationRef as {
@@ -331,6 +385,20 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
     nativeQuoteScene && quoteIndex
       ? req.segments.filter((segment) => segment.type !== "reply")
       : req.segments
+
+  const imageTextSegments = req.segments.filter(
+    (segment) => segment.type === "card" && segment.card.kind === "image-text"
+  )
+  if (imageTextSegments.length && !nativeQuoteScene)
+    throw new QQValidationError("QQ image-text cards require group/C2C scenes")
+  if (
+    imageTextSegments.length > 1 ||
+    (imageTextSegments.length && bodySegments.some((segment) => segment !== imageTextSegments[0]))
+  )
+    throw new QQValidationError("QQ image-text cards require separate exclusive message parts")
+  const imageTextSegment = imageTextSegments[0]
+  const imageText =
+    imageTextSegment?.type === "card" ? qqImageTextCard(imageTextSegment.card.payload) : undefined
 
   const cards = nativeQuoteScene
     ? req.segments.filter((s) => s.type === "card" && s.card.kind === "qq-keyboard")
@@ -357,7 +425,12 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
     if (nativeCard.content && nativeCard.markdown)
       throw new QQValidationError("QQ content and Markdown are exclusive")
   }
-  const cardMarkdown = (nativeCard?.markdown as { content?: string } | undefined)?.content
+  // QQ renders keyboards only on Markdown messages. Public text bodies are
+  // literal content, so upgrading them must not activate Markdown syntax.
+  const cardMarkdown = nativeCard
+    ? ((nativeCard.markdown as { content?: string } | undefined)?.content ??
+      escapeMarkdown(typeof nativeCard.content === "string" ? nativeCard.content : ""))
+    : undefined
   const media = req.segments.filter(
     (segment) =>
       segment.type === "image" ||
@@ -368,7 +441,8 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
   if (media.length > 1) throw new QQValidationError("QQ requires one media resource per message")
   const resource = media[0]
   const useMarkdown =
-    (scene === "group" || scene === "c2c") &&
+    (nativeQuoteScene ||
+      ((scene === "channel" || scene === "direct") && options.guildMarkdownEnabled === true)) &&
     (req.segments.some((segment) => segment.type === "markdown") || cardMarkdown !== undefined)
   if (keyboard && resource)
     throw new QQValidationError("QQ keyboards and media require separate parts")
@@ -402,22 +476,24 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         to: "text",
         reason: nativeQuoteScene ? "qq_a2ui_text_alternative" : "qq_a2ui_scene_unsupported",
       })
-  const content = nativeCard
-    ? (cardMarkdown ?? (nativeCard.content as string) ?? " ")
-    : useMarkdown
-      ? bodySegments
-          .map((segment) =>
-            segment.type === "markdown"
-              ? segment.md
-              : segment.type === "mention" && segment.audience === "all"
-                ? "<qqbot-at-everyone />"
-                : escapeMarkdown(buildQQContent([segment], downgrades))
+  const content = imageText
+    ? ""
+    : nativeCard
+      ? (cardMarkdown ?? (nativeCard.content as string) ?? " ")
+      : useMarkdown
+        ? bodySegments
+            .map((segment) =>
+              segment.type === "markdown"
+                ? segment.md
+                : segment.type === "mention" && segment.audience === "all"
+                  ? "<qqbot-at-everyone />"
+                  : escapeMarkdown(buildQQContent([segment], downgrades))
+            )
+            .join("\n")
+        : buildQQContent(
+            bodySegments.filter((segment) => segment !== resource),
+            downgrades
           )
-          .join("\n")
-      : buildQQContent(
-          bodySegments.filter((segment) => segment !== resource),
-          downgrades
-        )
   if (useMarkdown && !content.trim()) throw new QQValidationError("QQ Markdown content is empty")
   if (!useMarkdown) {
     for (const segment of req.segments) {
@@ -436,8 +512,8 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
     throw new QQValidationError("QQ broadcast mentions require a group")
   if (req.segments.some((segment) => segment.type === "mention" && segment.audience === "online"))
     throw new QQValidationError("QQ online-only mentions are unsupported")
-  if (req.sendOptions?.imagePolicy === "require-complete" && !useMarkdown)
-    throw new QQValidationError("QQ strict image verification requires native Markdown")
+  if (req.sendOptions?.imagePolicy === "require-complete" && (!useMarkdown || !nativeQuoteScene))
+    throw new QQValidationError("QQ strict image verification requires group/C2C native Markdown")
   const explicitPush =
     req.sendOptions?.mode === "proactive" || req.sendOptions?.mode === "reengagement"
   if (explicitPush && !nativeQuoteScene)
@@ -481,17 +557,30 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         ...(downgrades.length ? { downgrades } : {}),
         path: `/v2/groups/${encodeURIComponent(sceneId)}/messages`,
         payload: {
-          ...(useMarkdown
+          ...(imageText
             ? {
-                msg_type: 2,
-                markdown: {
-                  content,
-                  ...(req.sendOptions?.imagePolicy === "require-complete"
-                    ? { force_verify_image_resource: true }
-                    : {}),
+                msg_type: 8,
+                card: {
+                  type: "tuwen",
+                  content: {
+                    title: imageText.title,
+                    description: imageText.description,
+                    url: imageText.url,
+                    pic_url: imageText.imageUrl,
+                  },
                 },
               }
-            : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
+            : useMarkdown
+              ? {
+                  msg_type: 2,
+                  markdown: {
+                    content,
+                    ...(req.sendOptions?.imagePolicy === "require-complete"
+                      ? { force_verify_image_resource: true }
+                      : {}),
+                  },
+                }
+              : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
           ...(explicitPush
             ? {
                 msg_seq: qqPassiveMsgSeq(idempotencyKey),
@@ -528,17 +617,30 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         ...(downgrades.length ? { downgrades } : {}),
         path: `/v2/users/${encodeURIComponent(sceneId)}/messages`,
         payload: {
-          ...(useMarkdown
+          ...(imageText
             ? {
-                msg_type: 2,
-                markdown: {
-                  content,
-                  ...(req.sendOptions?.imagePolicy === "require-complete"
-                    ? { force_verify_image_resource: true }
-                    : {}),
+                msg_type: 8,
+                card: {
+                  type: "tuwen",
+                  content: {
+                    title: imageText.title,
+                    description: imageText.description,
+                    url: imageText.url,
+                    pic_url: imageText.imageUrl,
+                  },
                 },
               }
-            : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
+            : useMarkdown
+              ? {
+                  msg_type: 2,
+                  markdown: {
+                    content,
+                    ...(req.sendOptions?.imagePolicy === "require-complete"
+                      ? { force_verify_image_resource: true }
+                      : {}),
+                  },
+                }
+              : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
           ...(explicitPush
             ? {
                 msg_seq: qqPassiveMsgSeq(idempotencyKey),
@@ -576,7 +678,7 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         ...(downgrades.length ? { downgrades } : {}),
         path: `/channels/${encodeURIComponent(sceneId)}/messages`,
         payload: {
-          content,
+          ...(useMarkdown ? { markdown: { content } } : { content }),
           ...(resource ? { image: resource.url } : {}),
           ...(msgId ? { msg_id: msgId } : {}),
         },
@@ -586,7 +688,7 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         ...(downgrades.length ? { downgrades } : {}),
         path: `/dms/${encodeURIComponent(sceneId)}/messages`,
         payload: {
-          content,
+          ...(useMarkdown ? { markdown: { content } } : { content }),
           ...(resource ? { image: resource.url } : {}),
           ...(msgId ? { msg_id: msgId } : {}),
         },
@@ -595,12 +697,19 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
 }
 
 /** Preserve order across QQ's exclusive Markdown/media message types. */
-export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQSendCall[] {
+export function serializeOutboundParts(
+  req: OutboundRequest,
+  reserve = true,
+  options: QQSendOptions = {}
+): QQSendCall[] {
   const parts: MessageSegment[][] = []
   let current: MessageSegment[] = []
   const scene = (req.conversationRef as { scene?: QQScene }).scene
-  const nativeMarkdown = scene === "group" || scene === "c2c"
-  if (nativeMarkdown) {
+  const nativeQuoteScene = scene === "group" || scene === "c2c"
+  const nativeMarkdown =
+    nativeQuoteScene ||
+    ((scene === "channel" || scene === "direct") && options.guildMarkdownEnabled === true)
+  if (nativeQuoteScene) {
     const target = qqQuoteTarget(req)
     const index = qqReferenceIndex(
       req.conversationRef.qqQuoteIndex ??
@@ -614,7 +723,11 @@ export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQ
       }
   }
   for (const segment of req.segments) {
-    if (nativeMarkdown && segment.type === "card" && segment.card.kind === "qq-keyboard") {
+    if (
+      nativeQuoteScene &&
+      segment.type === "card" &&
+      ["qq-keyboard", "image-text"].includes(segment.card.kind)
+    ) {
       if (current.length) parts.push(current)
       current = []
       parts.push([segment])
@@ -648,11 +761,11 @@ export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQ
           : `${req.metadata.idempotencyKey}:part:${index}`,
     },
   }))
-  const preview = requests.map((part) => serializeOutbound(part, false))
+  const preview = requests.map((part) => serializeOutbound(part, false, options))
   if (preview.some((call) => !call))
     throw new QQValidationError("QQ send: unaddressable conversationRef")
   const ref = req.conversationRef as { scene?: QQScene; msgId?: string; eventId?: string }
-  const msgId = nativeMarkdown
+  const msgId = nativeQuoteScene
     ? ref.eventId
       ? `event:${ref.eventId}`
       : ref.msgId
@@ -670,7 +783,9 @@ export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQ
         `QQ multipart message exceeds the remaining ${QQ_MAX_PASSIVE_REPLIES[ref.scene]}-reply limit`
       )
   }
-  return reserve ? requests.map((part) => serializeOutbound(part)!) : (preview as QQSendCall[])
+  return reserve
+    ? requests.map((part) => serializeOutbound(part, true, options)!)
+    : (preview as QQSendCall[])
 }
 
 // ---------------------------------------------------------------------------

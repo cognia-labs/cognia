@@ -10,6 +10,8 @@ export const ALL_CAPABILITIES = [
   "send.video",
   "send.file",
   "send.card",
+  // Portable image-text cards, distinct from opaque provider-native cards.
+  "send.card.image-text",
   // Recipient-only group messages; unsupported adapters must fail closed.
   "send.ephemeral",
   "send.poll",

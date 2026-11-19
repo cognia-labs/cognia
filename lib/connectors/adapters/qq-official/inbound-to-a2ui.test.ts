@@ -6,6 +6,33 @@ function dispatch(d: QQDispatch["d"]): QQDispatch {
 }
 
 describe("qqOfficialInboundToA2UI", () => {
+  it("displays safe card portraits and source icons as read-only card content", () => {
+    const input = dispatch({
+      id: "portrait",
+      author: { user_openid: "sender" },
+      message_type: 3,
+      ark_data: {
+        ark_type: "contact_card",
+        ark_name: "Contact",
+        fields: {
+          nickname: "Alice",
+          avatar: "https://example.org/avatar.png",
+          source_logo: "https://example.org/source.png",
+          tag_icon: "https://example.org/tag.png",
+        },
+      },
+    })
+    const card = qqOfficialInboundToA2UI(input)!.body[0]
+    expect(card).toMatchObject({
+      kind: "card",
+      title: "Alice",
+      children: expect.arrayContaining([
+        expect.objectContaining({ kind: "image", url: "https://example.org/avatar.png" }),
+        expect.objectContaining({ kind: "image", url: "https://example.org/source.png" }),
+        expect.objectContaining({ kind: "image", url: "https://example.org/tag.png" }),
+      ]),
+    })
+  })
   it("preserves a second member mention when reprojecting a sanitized channel event", () => {
     const event = parseQQDispatch("qq-1", "bot", {
       op: 0,

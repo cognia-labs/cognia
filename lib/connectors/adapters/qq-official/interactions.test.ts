@@ -13,6 +13,90 @@ beforeAll(fixture.initialize)
 beforeEach(fixture.restore)
 afterAll(fixture.dispose)
 
+it.each([
+  ["group", "Link"],
+  ["c2c", "Link"],
+  ["group", "Card"],
+  ["c2c", "Card"],
+] as const)(
+  "resolves %s %s actions only after confirmation and keeps reviewed context",
+  async (scene, component) => {
+    const actorId = scene === "c2c" ? "target" : "owner"
+    const prepared = await prepareQQKeyboards({
+      conversationRef: {
+        platform: "qq-official",
+        adapterId: "qq",
+        scene,
+        sceneId: "target",
+        msgId: "inbound",
+      },
+      metadata: { idempotencyKey: "link-action" },
+      segments: [
+        {
+          type: "a2ui",
+          surfaceId: "links",
+          plainTextMirror: "Run",
+          content: {
+            rootId: "link",
+            dataModel: {},
+            components: {
+              link: {
+                component,
+                ...(component === "Link"
+                  ? { text: "Run", action: "run-report", href: "https://example.org/report" }
+                  : { title: "Report", description: "Summary", clickAction: "run-report" }),
+                bindingActorScope: { mode: "initiator", allowedUserIds: [actorId] },
+              },
+            },
+          },
+        },
+      ],
+    })
+    const token = [...prepared.bindings.keys()][0]
+    const interaction = {
+      id: "click",
+      scene,
+      sceneId: "target",
+      actorId,
+      buttonData: token,
+      buttonId: "b0",
+      messageId: "confirmed",
+      timestamp: Date.now(),
+    }
+    expect(await resolveQQInteraction("qq", "bot", interaction)).toBeNull()
+    const segment = prepared.request.segments[0]
+    if (segment.type !== "card") throw new Error("Expected native keyboard")
+    await recordQQKeyboardReceipts(
+      prepared.bindings,
+      (segment.card.payload as { keyboard: unknown }).keyboard,
+      "confirmed"
+    )
+    expect(
+      await resolveQQInteraction("qq", "bot", { ...interaction, actorId: "outsider" })
+    ).toBeNull()
+    expect(await resolveQQInteraction("qq", "bot", interaction)).toMatchObject({
+      componentId: "link",
+      value: "run-report",
+      payload:
+        component === "Link"
+          ? { href: "https://example.org/report" }
+          : { title: "Report", description: "Summary" },
+      deliveryTarget: { conversationRef: { scene, sceneId: "target", eventId: "click" } },
+    })
+    const row = await getDb().connectorCallbackBindings.get(`qq:${token}`)
+    const receipt = row!.payload!.qqKeyboard as Record<string, unknown>
+    await getDb().connectorCallbackBindings.update(row!.id, {
+      payload: {
+        qqKeyboard: {
+          ...receipt,
+          actionPayload: { href: "https://user:secret@example.org", injected: "never forward" },
+        },
+      },
+    })
+    expect((await resolveQQInteraction("qq", "bot", interaction))?.payload).toBeUndefined()
+  }
+)
+
 async function envelope(scene: "group" | "c2c" = "group") {
   const prepared = await prepareQQKeyboards({
     conversationRef: {
