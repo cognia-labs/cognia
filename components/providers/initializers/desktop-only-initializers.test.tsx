@@ -7,8 +7,13 @@ import { DesktopOnlyInitializers } from "./desktop-only-initializers"
 // desktop subsystem graphs into the test.
 jest.mock("next/dynamic", () => (loader: () => unknown) => {
   const consent = String(loader).includes("consent-overlay")
+  const lsp = String(loader).includes("editor-lsp-runtime-initializer")
   const Stub = () => (
-    <span data-testid="desktop-child" data-consent-overlay={consent || undefined} />
+    <span
+      data-testid="desktop-child"
+      data-consent-overlay={consent || undefined}
+      data-lsp={lsp || undefined}
+    />
   )
   Stub.displayName = "MockDesktopChild"
   return Stub
@@ -56,13 +61,17 @@ describe("DesktopOnlyInitializers", () => {
     mockDesktopRequested = true
   })
 
-  it("renders nothing on web (isTauri() === false)", async () => {
+  it("only mounts the editor LSP initializer for a web desktop-tools request", async () => {
     isTauriMock.mockReturnValue(false)
     let container!: HTMLElement
     await act(async () => {
       container = render(<DesktopOnlyInitializers />).container
     })
-    expect(container.querySelectorAll('[data-testid="desktop-child"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[data-testid="desktop-child"]')).toHaveLength(1)
+    expect(container.querySelector('[data-lsp="true"]')).not.toBeNull()
+    mockDesktopRequested = false
+    const { container: idle } = render(<DesktopOnlyInitializers />)
+    expect(idle.querySelectorAll('[data-testid="desktop-child"]')).toHaveLength(0)
   })
 
   it("renders every desktop child once mounted on Tauri", async () => {

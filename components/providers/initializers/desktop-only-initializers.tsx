@@ -227,7 +227,8 @@ export function DesktopOnlyInitializers() {
     if (requested && isClient && !secondary) markBootCapabilityReady("desktop-tools")
   }, [isClient, requested, secondary])
 
-  if (!isClient || !tauri) return null
+  if (!isClient) return null
+  if (!tauri) return requested ? <EditorLspRuntimeInitializer /> : null
 
   // The transparent desktop-pet windows (sprite overlay + click popup) load this
   // same root layout, but every initializer bundled here is a MAIN-window boot

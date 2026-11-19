@@ -9,35 +9,33 @@ import type {
   StorageHealth,
   StorageHealthStatus,
   StorageIssue,
-  StorageQuotaSnapshot,
   StorageRecommendation,
   StorageStats,
 } from "./types"
+import { CATEGORY_INFO } from "./category-info"
 
 describe("lib/storage/types", () => {
-  it("StorageCategory union accepts all documented buckets", () => {
-    const categories: StorageCategory[] = [
-      "settings",
-      "session",
-      "chat",
-      "character",
-      "skill",
-      "team",
-      "mcp",
-      "preset",
-      "canvas",
-      "trustedWorkspace",
-      "ttsKey",
-      "backupHistory",
-      "artifact",
-      "vector",
-      "pet",
-      "system",
-      "other",
-    ]
-    // Restated as a value so a widened union without a bucket here fails.
-    // `artifact` and `vector` were already missing when `pet` was added.
-    expect(new Set(categories).size).toBe(17)
+  it("maps every StorageCategory to a production descriptor", () => {
+    const categories = {
+      settings: true,
+      session: true,
+      chat: true,
+      character: true,
+      skill: true,
+      team: true,
+      mcp: true,
+      preset: true,
+      canvas: true,
+      trustedWorkspace: true,
+      ttsKey: true,
+      backupHistory: true,
+      artifact: true,
+      vector: true,
+      pet: true,
+      system: true,
+      other: true,
+    } satisfies Record<StorageCategory, true>
+    expect(Object.keys(CATEGORY_INFO).sort()).toEqual(Object.keys(categories).sort())
   })
 
   it("StorageCategoryInfo aggregates breakdown data", () => {
@@ -50,12 +48,6 @@ describe("lib/storage/types", () => {
     }
     expect(info.itemCount).toBe(42)
     expect(info.sources).toContain("sessions")
-  })
-
-  it("StorageQuotaSnapshot uses a usagePercent field clamped to [0, 100]", () => {
-    const snap: StorageQuotaSnapshot = { used: 50, quota: 100, usagePercent: 50 }
-    expect(snap.usagePercent).toBeLessThanOrEqual(100)
-    expect(snap.usagePercent).toBeGreaterThanOrEqual(0)
   })
 
   it("StorageStats stitches total + per-category + backend tiles", () => {

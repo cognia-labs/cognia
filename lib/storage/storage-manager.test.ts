@@ -320,12 +320,18 @@ describe("readQuota fallbacks (storage-manager.ts:36-44)", () => {
     }
   })
 
-  it("clamps usagePercent to 100 when usage exceeds quota", async () => {
+  it.each([
+    [250, 1000, 25],
+    [5000, 100, 100],
+    [0, 100, 0],
+    [50, 0, 0],
+    [-50, 100, 0],
+  ])("computes bounded quota percentage for usage=%s quota=%s", async (usage, quota, expected) => {
     const originalNav = globalThis.navigator
     Object.defineProperty(globalThis, "navigator", {
       value: {
         storage: {
-          estimate: jest.fn(() => Promise.resolve({ usage: 5000, quota: 100 })),
+          estimate: jest.fn(() => Promise.resolve({ usage, quota })),
         },
       },
       configurable: true,
@@ -333,7 +339,7 @@ describe("readQuota fallbacks (storage-manager.ts:36-44)", () => {
     })
     try {
       const stats = await StorageManager.getStats()
-      expect(stats.total.usagePercent).toBe(100)
+      expect(stats.total.usagePercent).toBe(expected)
     } finally {
       Object.defineProperty(globalThis, "navigator", {
         value: originalNav,

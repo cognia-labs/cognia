@@ -43,7 +43,7 @@ async function readQuota(): Promise<StorageQuotaSnapshot> {
     const est = await navigator.storage.estimate()
     const used = est.usage ?? 0
     const quota = est.quota ?? 0
-    const usagePercent = quota > 0 ? Math.min(100, (used / quota) * 100) : 0
+    const usagePercent = quota > 0 ? Math.max(0, Math.min(100, (used / quota) * 100)) : 0
     return { used, quota, usagePercent }
   } catch {
     return { used: 0, quota: 0, usagePercent: 0 }
