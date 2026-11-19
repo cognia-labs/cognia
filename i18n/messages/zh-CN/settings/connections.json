@@ -1620,6 +1620,8 @@
     "receiveGuildMessagesLabel": "接收全部频道消息",
     "receiveMessageAuditHelp": "获得 QQ 的 MESSAGE_AUDIT 权限后开启。网关订阅频道审核结果；Webhook 还需在控制台订阅。已受理的发送会持续等待明确结果。",
     "receiveMessageAuditLabel": "接收消息审核结果",
+    "guildMarkdownLabel": "启用频道 Markdown",
+    "guildMarkdownHelp": "需要此机器人已获得 QQ 的 Markdown 邀请权限。适用于子频道和频道私信；关闭时发送文字替代。群聊和 C2C 的 Markdown 始终可用。",
     "save": "保存",
     "sectionAdvanced": "高级",
     "sectionAdvancedDesc": "免打扰时段与静音。",

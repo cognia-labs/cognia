@@ -855,5 +855,41 @@
       "backend": "后端",
       "lastError": "最近错误"
     }
+  },
+  "sessionEngine": {
+    "title": "本机应用会话引擎",
+    "description": "选择 Cognia 读取和操作应用控件的方式。截图、鼠标和键盘输入继续由 Native 负责。",
+    "selection": "会话引擎",
+    "restartHelp": "重启 Cognia 后生效。现有会话继续使用当前引擎。",
+    "native": "Native",
+    "agentDesktop": "agent-desktop（预览）",
+    "effective": "当前生效：{engine}",
+    "needsRestart": "已保存，重启 Cognia 后生效。",
+    "recoveryRestart": "请在上次执行结束后重启 Cognia，重新尝试恢复。",
+    "candidateStatus": "agent-desktop 状态：{status}",
+    "probe": "检查可用性",
+    "loadError": "无法读取会话引擎设置。",
+    "saveError": "保存失败，已重新读取最新设置，请重试。",
+    "probeError": "无法检查 agent-desktop 的可用性。",
+    "recoveryTitle": "恢复不可用的设置",
+    "recoveryHelp": "保留损坏设置的副本，并保存下次启动使用 Native。当前引擎保持不变。",
+    "recoverNative": "恢复 Native 设置",
+    "health": {
+      "ready": "可用",
+      "missing": "当前构建未包含此引擎",
+      "unsupportedPlatform": "当前平台不支持",
+      "permissionRequired": "需要辅助功能权限",
+      "incompatible": "构建不兼容",
+      "configError": "配置不可用",
+      "recovering": "上次执行尚未结束，结束后需要重启",
+      "quarantined": "需要处理未完成的执行清理"
+    },
+    "activeStatus": "当前引擎状态：{status}"
+  },
+  "executionStop": {
+    "stopping": "正在停止本机自动化",
+    "stopped": "本机自动化已停止",
+    "stoppingHelp": "执行清理完成前，在途操作仍可能生效。会话授权已清除。",
+    "stoppedHelp": "不会启动新的本机操作，会话授权已清除。可从设置中重新启用自动化。"
   }
 }

@@ -113,7 +113,8 @@
       "terminal-host-state": "主机已停止",
       "account-locked": "账户已锁定",
       "quota-exceeded": "超出配额",
-      "client-terminated": "窗口已关闭"
+      "client-terminated": "窗口已关闭",
+      "write-failed": "保存失败，证据不完整"
     },
     "trust": {
       "verified": "签名已验证",
@@ -158,7 +159,23 @@
       "cognia-perf-decompression-limit-exceeded": "包解压后超出允许大小。",
       "cognia-perf-entry-count-invalid": "包中的条目数量无效。",
       "cognia-perf-frame-schema-invalid": "包中的帧已损坏或版本不受支持。",
-      "cognia-perf-samples-missing": "包中没有样本。"
+      "cognia-perf-samples-missing": "包中没有样本。",
+      "performance-capture-execution-inactive": "所选运行已不处于活动状态。请查看已有采样，或选择另一个正在执行的运行。",
+      "performance-capture-write-failed": "采样因证据保存失败而停止，已保存的样本不完整。"
+    },
+    "association": {
+      "scope": "指标描述采样区间内所选进程或 renderer 的资源状态；共享 CPU 和内存不代表某个 Agent 的独占用量。",
+      "run": "关联运行：{id}",
+      "trace": "关联 trace：{id}",
+      "fromNow": "从现在开始采集并显式关联此运行；无法补采此前的资源消耗。",
+      "historical": "此运行已结束、不可用或仍在加载。可查看下方已有采样；新建关联采样需要运行处于活动状态。",
+      "clear": "显示全部采样",
+      "error": "部分运行信息或加密采样 metadata 无法读取；列表为空不代表没有相关证据。",
+      "loading": "正在读取加密采样关联…",
+      "openRun": "查看运行",
+      "openTrace": "查看 trace",
+      "originExpired": "源运行或 trace 可能已按各自的保留策略过期。",
+      "runScopeEvidence": "关联到此 trace 所属运行的采样描述整个记录区间，其中可能包含其他并发工作。"
     }
   },
   "desktopOnly": {

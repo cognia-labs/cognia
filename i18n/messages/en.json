@@ -2742,6 +2742,7 @@
       "deny": "Deny",
       "openConversation": "View conversation history",
       "pause": "Pause",
+      "performanceEvidence": "Performance evidence",
       "resume": "Resume",
       "retry": "Retry",
       "steer": "Steer",
@@ -5483,6 +5484,12 @@
         "title": "Screen-off mode"
       }
     },
+    "executionStop": {
+      "stopped": "Local automation stopped",
+      "stoppedHelp": "No new local actions can start. Session grants have been cleared. Re-enable automation from Settings.",
+      "stopping": "Stopping local automation",
+      "stoppingHelp": "A running operation may still take effect until cleanup finishes. Session grants have been cleared."
+    },
     "feedback": {
       "engineDisabled": "Automation engine off",
       "engineEnabled": "Automation engine on",
@@ -6101,6 +6108,36 @@
       },
       "title": "Screen-off mode",
       "unsupportedNote": "This platform has no screen-off backend. Computer Use uses the physical display."
+    },
+    "sessionEngine": {
+      "activeStatus": "Active engine status: {status}",
+      "agentDesktop": "agent-desktop (Preview)",
+      "candidateStatus": "agent-desktop status: {status}",
+      "description": "Choose how Cognia reads and operates application controls. Screenshots, mouse and keyboard input continue to use Native.",
+      "effective": "Active engine: {engine}",
+      "health": {
+        "configError": "Configuration unavailable",
+        "incompatible": "Incompatible build",
+        "missing": "Not included in this build",
+        "permissionRequired": "Accessibility permission required",
+        "quarantined": "Execution cleanup requires attention",
+        "ready": "Available",
+        "recovering": "Previous execution has not settled; a restart is required afterward",
+        "unsupportedPlatform": "Unsupported on this platform"
+      },
+      "loadError": "Could not load the session engine settings.",
+      "native": "Native",
+      "needsRestart": "Saved. Restart Cognia to apply this change.",
+      "probe": "Check availability",
+      "probeError": "Could not check agent-desktop availability.",
+      "recoverNative": "Restore Native settings",
+      "recoveryHelp": "Keep a copy of the damaged settings and save Native for the next start. The current engine stays unchanged.",
+      "recoveryRestart": "Restart Cognia after the previous execution finishes to retry recovery.",
+      "recoveryTitle": "Recover unavailable settings",
+      "restartHelp": "Applies after restarting Cognia. Existing sessions keep their current engine.",
+      "saveError": "Could not save. The latest settings have been loaded; try again.",
+      "selection": "Session engine",
+      "title": "Local application session engine"
     },
     "status": {
       "engine": {
@@ -20263,11 +20300,13 @@
             "start": "Could not start authorization. Try again.",
             "status": "Could not check authorization. Retry or cancel this attempt."
           },
+          "loading": "Loading sign-in methods…",
           "needsAuth": "Sign in again",
           "notSignedIn": "Not signed in",
           "onePerLine": "Enter one value per line.",
           "open": "Open authorization page",
           "ownership": "These accounts belong to this OpenCode service. OpenCode stores and refreshes their credentials.",
+          "partial": "Plugins are still loading. Discovered capabilities are available now.",
           "refresh": "Refresh sign-in status",
           "retryStatus": "Check authorization again",
           "signInWith": "Sign in with {method}",
@@ -20288,6 +20327,7 @@
         "noMcpServers": "No MCP servers configured.",
         "noProviders": "No providers discovered.",
         "notConnected": "Connect the agent to view its OpenCode server status.",
+        "partial": "Plugins are still loading. Discovered capabilities are available now.",
         "project": "Project",
         "providerAuthUnknown": "Provider sign-in status could not be checked.",
         "providers": "Providers",
@@ -27138,6 +27178,7 @@
           "copyValue": "Copy {label} ID",
           "cost": "Cost",
           "duration": "Duration",
+          "durationUnknown": "Not measured",
           "empty": "Select a span in the waterfall.",
           "error": "Error",
           "errorType": "Type",
@@ -27157,6 +27198,7 @@
           "openSession": "Show this session in logs",
           "outputTokens": "Output tokens",
           "parentSpanId": "Parent",
+          "performanceEvidence": "Performance evidence for this trace",
           "plugin": "Plugin",
           "provider": "Provider",
           "requestModel": "Requested",
@@ -29923,6 +29965,7 @@
           "criticalHint": "{percent}% used — clear space to avoid losing data.",
           "healthy": "Healthy",
           "healthyHint": "{percent}% of your quota used.",
+          "unknown": "Unknown",
           "warning": "Filling up",
           "warningHint": "{percent}% used — consider clearing space."
         },
@@ -31567,12 +31610,12 @@
       "byTool": "By tool",
       "cacheHitRate": "Cache hit rate",
       "costOverTime": "Cost over time",
-      "errorRate": "Error rate",
-      "errorRateOverTime": "Error rate",
-      "latencyPercentiles": "Latency percentiles",
-      "p95Latency": "Latency (p95)",
-      "reqPerMin": "Requests / min",
-      "requestRate": "Request rate",
+      "errorRate": "Span error rate",
+      "errorRateOverTime": "Span error rate",
+      "latencyPercentiles": "Span latency percentiles",
+      "p95Latency": "Span latency (p95)",
+      "reqPerMin": "Spans / min",
+      "requestRate": "Span rate",
       "tokenThroughput": "Token throughput",
       "toolCalls": "Tool calls",
       "toolFailures": "Tool failures",
@@ -31617,7 +31660,7 @@
       "p50": "p50",
       "p95": "p95",
       "p99": "p99",
-      "perSec": "Requests/s",
+      "perSec": "Spans/s",
       "perSecValue": "{value}/s"
     },
     "settings": {
@@ -31639,7 +31682,7 @@
         "cacheHitRate": "Cache hit rate",
         "cost": "Window cost",
         "errorRate": "Error rate",
-        "latencyP95": "Latency p95"
+        "latencyP95": "Span latency p95"
       },
       "panels": {
         "description": "Hide panels you don't need — layout stays intact.",
@@ -32854,6 +32897,20 @@
         "progress": "Capture progress",
         "title": "Active capture"
       },
+      "association": {
+        "clear": "Show all captures",
+        "error": "Some execution or encrypted capture metadata could not be read. An empty list does not establish that no evidence exists.",
+        "fromNow": "Start an explicitly linked capture from now; earlier execution has no retrospective resource samples.",
+        "historical": "This execution has ended, is unavailable, or is still loading. View existing captures below; a new linked capture requires an active execution.",
+        "loading": "Reading encrypted capture associations…",
+        "openRun": "View run",
+        "openTrace": "View trace",
+        "originExpired": "The source run or trace may have expired under its own retention policy.",
+        "run": "Linked run: {id}",
+        "runScopeEvidence": "Captures linked to this trace’s canonical run describe the whole recorded interval, including other concurrent work.",
+        "scope": "Metrics describe the selected process or renderer during the capture interval. Shared CPU and memory are not exclusive Agent usage.",
+        "trace": "Linked trace: {id}"
+      },
       "comparison": {
         "acceptEnvironment": "Accept a different environment",
         "baseline": "Baseline",
@@ -32930,6 +32987,7 @@
         "performance-capture-already-active": "A capture is already recording.",
         "performance-capture-attachment-invalid": "An attachment is invalid.",
         "performance-capture-cadence-invalid": "Capture cadence must be at least 500 ms.",
+        "performance-capture-execution-inactive": "The selected execution is no longer active. Open its existing captures or choose another running execution.",
         "performance-capture-frame-schema-invalid": "The capture's frames are damaged or from an unsupported version.",
         "performance-capture-metadata-schema-invalid": "The capture's metadata is damaged or from an unsupported version.",
         "performance-capture-not-found": "This capture no longer exists.",
@@ -32937,6 +32995,7 @@
         "performance-capture-source-mismatch": "The metrics source changed during the capture.",
         "performance-capture-stopped": "The capture has already stopped.",
         "performance-capture-target-mismatch": "The target changed during the capture.",
+        "performance-capture-write-failed": "The capture stopped because evidence could not be saved. Stored samples are incomplete.",
         "performance-security-generation-changed": "Account security changed while working; try again.",
         "unknown": "Something went wrong: {detail}"
       },
@@ -32991,7 +33050,8 @@
         "quota-exceeded": "Quota exceeded",
         "remote-timeout": "Host timed out",
         "target-switched": "Target switched",
-        "terminal-host-state": "Host stopped"
+        "terminal-host-state": "Host stopped",
+        "write-failed": "Write failed; incomplete evidence"
       },
       "toast": {
         "deleted": "Capture deleted.",
@@ -38868,6 +38928,7 @@
     "enabledHint": "When off, setup and actions are skipped and report success.",
     "failure": "Environment command failed: {message}",
     "initNotice": {
+      "miseIsolationUnavailable": "The host skipped mise install because it does not support isolated setup. Update the host to enable it.",
       "miseMissing": "mise install was skipped: mise is not on PATH where setup runs. Cognia does not install it.",
       "miseNoSafeMode": "mise install was skipped: this mise has no safe mode, so it could run the repository's hooks or tasks. Update mise to run it.",
       "miseNotApproved": "mise install was skipped: this copy's mise.toml or lockfile is not the one accepted under Worktree provisioning.",
@@ -50156,6 +50217,8 @@
         "displayNameLabel": "Display name",
         "displayNamePlaceholder": "QQ bot",
         "displayNameRequired": "Display name is required",
+        "guildMarkdownHelp": "Requires QQ's Markdown invitation for this bot. Applies to channels and guild direct messages; leave off to send text alternatives. Group and C2C Markdown is always available.",
+        "guildMarkdownLabel": "Enable channel Markdown",
         "openCompanion": "Open tunnel settings",
         "openCompanionAria": "Open the tunnel controls in Connections → Overview",
         "openConsole": "Open QQ Bot console",
@@ -54433,6 +54496,12 @@
         "title": "Language Server logs"
       },
       "overrideAriaLabel": "Override {name}",
+      "remote": {
+        "connect": "Authorize remote language servers",
+        "connected": "Remote language servers connected.",
+        "consent": "Approve the request on the host using code {code}, then try again.",
+        "failed": "Could not connect to the remote language server host."
+      },
       "removeAriaLabel": "Remove {name}",
       "resetAriaLabel": "Reset {name} to default",
       "runtime": {

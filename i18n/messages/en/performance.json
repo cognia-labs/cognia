@@ -113,7 +113,8 @@
       "terminal-host-state": "Host stopped",
       "account-locked": "Account locked",
       "quota-exceeded": "Quota exceeded",
-      "client-terminated": "Window closed"
+      "client-terminated": "Window closed",
+      "write-failed": "Write failed; incomplete evidence"
     },
     "trust": {
       "verified": "Signature verified",
@@ -158,7 +159,23 @@
       "cognia-perf-decompression-limit-exceeded": "The package expands beyond the allowed size.",
       "cognia-perf-entry-count-invalid": "The package contains an invalid number of entries.",
       "cognia-perf-frame-schema-invalid": "The package's frames are damaged or from an unsupported version.",
-      "cognia-perf-samples-missing": "The package contains no samples."
+      "cognia-perf-samples-missing": "The package contains no samples.",
+      "performance-capture-execution-inactive": "The selected execution is no longer active. Open its existing captures or choose another running execution.",
+      "performance-capture-write-failed": "The capture stopped because evidence could not be saved. Stored samples are incomplete."
+    },
+    "association": {
+      "scope": "Metrics describe the selected process or renderer during the capture interval. Shared CPU and memory are not exclusive Agent usage.",
+      "run": "Linked run: {id}",
+      "trace": "Linked trace: {id}",
+      "fromNow": "Start an explicitly linked capture from now; earlier execution has no retrospective resource samples.",
+      "historical": "This execution has ended, is unavailable, or is still loading. View existing captures below; a new linked capture requires an active execution.",
+      "clear": "Show all captures",
+      "error": "Some execution or encrypted capture metadata could not be read. An empty list does not establish that no evidence exists.",
+      "loading": "Reading encrypted capture associations…",
+      "openRun": "View run",
+      "openTrace": "View trace",
+      "originExpired": "The source run or trace may have expired under its own retention policy.",
+      "runScopeEvidence": "Captures linked to this trace’s canonical run describe the whole recorded interval, including other concurrent work."
     }
   },
   "desktopOnly": {

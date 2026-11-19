@@ -1,4 +1,10 @@
 {
+  "remote": {
+    "connect": "授权远程语言服务器",
+    "connected": "远程语言服务器已连接。",
+    "consent": "请在 Host 上使用代码 {code} 批准请求，然后重试。",
+    "failed": "无法连接到远程语言服务器 Host。"
+  },
   "add": {
     "cancel": "取消",
     "description": "指向你机器上一个兼容 LSP 的二进制。cognia 会在 sidecar 中启动它，并将其诊断信息桥接到编辑器。",

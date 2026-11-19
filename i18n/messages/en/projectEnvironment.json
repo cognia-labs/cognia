@@ -540,7 +540,8 @@
     "miseNotApproved": "mise install was skipped: this copy's mise.toml or lockfile is not the one accepted under Worktree provisioning.",
     "miseUntrusted": "mise install was skipped: this workspace is not trusted.",
     "miseMissing": "mise install was skipped: mise is not on PATH where setup runs. Cognia does not install it.",
-    "miseNoSafeMode": "mise install was skipped: this mise has no safe mode, so it could run the repository's hooks or tasks. Update mise to run it."
+    "miseNoSafeMode": "mise install was skipped: this mise has no safe mode, so it could run the repository's hooks or tasks. Update mise to run it.",
+    "miseIsolationUnavailable": "The host skipped mise install because it does not support isolated setup. Update the host to enable it."
   },
   "unsaved": "Unsaved changes",
   "newUnsaved": "New environment — not saved yet",

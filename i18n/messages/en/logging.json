@@ -1221,7 +1221,9 @@
         "openSession": "Show this session in logs",
         "offsetValue": "+{value}",
         "copyValue": "Copy {label} ID",
-        "copied": "{label} ID copied"
+        "copied": "{label} ID copied",
+        "performanceEvidence": "Performance evidence for this trace",
+        "durationUnknown": "Not measured"
       },
       "spanCount": "{count, plural, =1 {1 span} other {# spans}}",
       "timeline": {

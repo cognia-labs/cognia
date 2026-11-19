@@ -96,12 +96,12 @@
     "byTool": "按工具",
     "cacheHitRate": "缓存命中率",
     "costOverTime": "成本走势",
-    "errorRate": "错误率",
-    "errorRateOverTime": "错误率",
-    "latencyPercentiles": "延迟分位",
-    "p95Latency": "延迟 (p95)",
-    "reqPerMin": "请求数 / 分钟",
-    "requestRate": "请求速率",
+    "errorRate": "Span 错误率",
+    "errorRateOverTime": "Span 错误率",
+    "latencyPercentiles": "Span 耗时分位数",
+    "p95Latency": "Span 耗时（p95）",
+    "reqPerMin": "Span / 分钟",
+    "requestRate": "Span 速率",
     "tokenThroughput": "Token 吞吐",
     "toolCalls": "工具调用",
     "toolFailures": "工具失败",
@@ -146,7 +146,7 @@
     "p50": "p50",
     "p95": "p95",
     "p99": "p99",
-    "perSec": "请求/秒",
+    "perSec": "Span/秒",
     "perSecValue": "{value}/秒"
   },
   "settings": {
@@ -168,7 +168,7 @@
       "cacheHitRate": "缓存命中率",
       "cost": "窗口成本",
       "errorRate": "错误率",
-      "latencyP95": "延迟 p95"
+      "latencyP95": "Span 耗时 p95"
     },
     "panels": {
       "description": "隐藏不需要的面板 —— 布局保持不变。",

@@ -8,7 +8,8 @@
     "steer": "介入",
     "steerPlaceholder": "不中断运行，直接给出新的指示…",
     "stop": "停止",
-    "openConversation": "查看对话记录"
+    "openConversation": "查看对话记录",
+    "performanceEvidence": "性能采样证据"
   },
   "activityCategory": {
     "approval": "审批",

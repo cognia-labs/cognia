@@ -1620,6 +1620,8 @@
     "receiveGuildMessagesLabel": "Receive all channel messages",
     "receiveMessageAuditHelp": "Enable only after QQ grants MESSAGE_AUDIT. Gateway subscribes to channel audit results; Webhook also requires the matching console subscription. Accepted sends remain held until a definitive result.",
     "receiveMessageAuditLabel": "Receive message audit results",
+    "guildMarkdownLabel": "Enable channel Markdown",
+    "guildMarkdownHelp": "Requires QQ's Markdown invitation for this bot. Applies to channels and guild direct messages; leave off to send text alternatives. Group and C2C Markdown is always available.",
     "save": "Save",
     "sectionAdvanced": "Advanced",
     "sectionAdvancedDesc": "Quiet hours and mute.",

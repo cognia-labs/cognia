@@ -855,5 +855,41 @@
       "backend": "Backend",
       "lastError": "Last error"
     }
+  },
+  "sessionEngine": {
+    "title": "Local application session engine",
+    "description": "Choose how Cognia reads and operates application controls. Screenshots, mouse and keyboard input continue to use Native.",
+    "selection": "Session engine",
+    "restartHelp": "Applies after restarting Cognia. Existing sessions keep their current engine.",
+    "native": "Native",
+    "agentDesktop": "agent-desktop (Preview)",
+    "effective": "Active engine: {engine}",
+    "needsRestart": "Saved. Restart Cognia to apply this change.",
+    "recoveryRestart": "Restart Cognia after the previous execution finishes to retry recovery.",
+    "candidateStatus": "agent-desktop status: {status}",
+    "probe": "Check availability",
+    "loadError": "Could not load the session engine settings.",
+    "saveError": "Could not save. The latest settings have been loaded; try again.",
+    "probeError": "Could not check agent-desktop availability.",
+    "recoveryTitle": "Recover unavailable settings",
+    "recoveryHelp": "Keep a copy of the damaged settings and save Native for the next start. The current engine stays unchanged.",
+    "recoverNative": "Restore Native settings",
+    "health": {
+      "ready": "Available",
+      "missing": "Not included in this build",
+      "unsupportedPlatform": "Unsupported on this platform",
+      "permissionRequired": "Accessibility permission required",
+      "incompatible": "Incompatible build",
+      "configError": "Configuration unavailable",
+      "recovering": "Previous execution has not settled; a restart is required afterward",
+      "quarantined": "Execution cleanup requires attention"
+    },
+    "activeStatus": "Active engine status: {status}"
+  },
+  "executionStop": {
+    "stopping": "Stopping local automation",
+    "stopped": "Local automation stopped",
+    "stoppingHelp": "A running operation may still take effect until cleanup finishes. Session grants have been cleared.",
+    "stoppedHelp": "No new local actions can start. Session grants have been cleared. Re-enable automation from Settings."
   }
 }

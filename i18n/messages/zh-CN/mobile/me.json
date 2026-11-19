@@ -237,7 +237,8 @@
       "healthy": "健康",
       "healthyHint": "已使用配额的 {percent}%。",
       "warning": "空间偏紧",
-      "warningHint": "已使用 {percent}%——建议清理空间。"
+      "warningHint": "已使用 {percent}%——建议清理空间。",
+      "unknown": "未知"
     },
     "heroEmpty": "此设备尚未存储任何数据。",
     "heroPercent": "已用 {percent}%",

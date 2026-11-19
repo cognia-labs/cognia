@@ -96,12 +96,12 @@
     "byTool": "By tool",
     "cacheHitRate": "Cache hit rate",
     "costOverTime": "Cost over time",
-    "errorRate": "Error rate",
-    "errorRateOverTime": "Error rate",
-    "latencyPercentiles": "Latency percentiles",
-    "p95Latency": "Latency (p95)",
-    "reqPerMin": "Requests / min",
-    "requestRate": "Request rate",
+    "errorRate": "Span error rate",
+    "errorRateOverTime": "Span error rate",
+    "latencyPercentiles": "Span latency percentiles",
+    "p95Latency": "Span latency (p95)",
+    "reqPerMin": "Spans / min",
+    "requestRate": "Span rate",
     "tokenThroughput": "Token throughput",
     "toolCalls": "Tool calls",
     "toolFailures": "Tool failures",
@@ -146,7 +146,7 @@
     "p50": "p50",
     "p95": "p95",
     "p99": "p99",
-    "perSec": "Requests/s",
+    "perSec": "Spans/s",
     "perSecValue": "{value}/s"
   },
   "settings": {
@@ -168,7 +168,7 @@
       "cacheHitRate": "Cache hit rate",
       "cost": "Window cost",
       "errorRate": "Error rate",
-      "latencyP95": "Latency p95"
+      "latencyP95": "Span latency p95"
     },
     "panels": {
       "description": "Hide panels you don't need — layout stays intact.",

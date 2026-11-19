@@ -540,7 +540,8 @@
     "miseNotApproved": "已跳过 mise install：这个副本的 mise.toml 或锁文件不是在“工作树供给”中接受的那一份。",
     "miseUntrusted": "已跳过 mise install：这个工作区未被信任。",
     "miseMissing": "已跳过 mise install：运行初始化的环境里 PATH 上没有 mise。Cognia 不会安装它。",
-    "miseNoSafeMode": "已跳过 mise install：这个版本的 mise 没有安全模式，可能会运行仓库的 hooks 或 tasks。升级 mise 后才会运行。"
+    "miseNoSafeMode": "已跳过 mise install：这个版本的 mise 没有安全模式，可能会运行仓库的 hooks 或 tasks。升级 mise 后才会运行。",
+    "miseIsolationUnavailable": "主机不支持隔离初始化，已跳过 mise install。更新主机后即可使用。"
   },
   "unsaved": "有未保存的更改",
   "newUnsaved": "新环境，尚未保存",

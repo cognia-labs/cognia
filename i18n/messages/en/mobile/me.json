@@ -237,7 +237,8 @@
       "healthy": "Healthy",
       "healthyHint": "{percent}% of your quota used.",
       "warning": "Filling up",
-      "warningHint": "{percent}% used — consider clearing space."
+      "warningHint": "{percent}% used — consider clearing space.",
+      "unknown": "Unknown"
     },
     "heroEmpty": "Nothing stored on this device yet.",
     "heroPercent": "{percent}% used",

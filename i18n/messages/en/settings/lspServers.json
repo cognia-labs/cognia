@@ -1,4 +1,10 @@
 {
+  "remote": {
+    "connect": "Authorize remote language servers",
+    "connected": "Remote language servers connected.",
+    "consent": "Approve the request on the host using code {code}, then try again.",
+    "failed": "Could not connect to the remote language server host."
+  },
   "add": {
     "cancel": "Cancel",
     "description": "Point cognia at an LSP-compatible binary on your machine. Cognia spawns the binary in the sidecar and bridges its diagnostics into the editor.",

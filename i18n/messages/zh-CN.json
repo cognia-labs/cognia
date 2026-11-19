@@ -2742,6 +2742,7 @@
       "deny": "拒绝",
       "openConversation": "查看对话记录",
       "pause": "暂停",
+      "performanceEvidence": "性能采样证据",
       "resume": "继续",
       "retry": "重试",
       "steer": "介入",
@@ -5483,6 +5484,12 @@
         "title": "熄屏模式"
       }
     },
+    "executionStop": {
+      "stopped": "本机自动化已停止",
+      "stoppedHelp": "不会启动新的本机操作，会话授权已清除。可从设置中重新启用自动化。",
+      "stopping": "正在停止本机自动化",
+      "stoppingHelp": "执行清理完成前，在途操作仍可能生效。会话授权已清除。"
+    },
     "feedback": {
       "engineDisabled": "自动化引擎已关闭",
       "engineEnabled": "自动化引擎已开启",
@@ -6101,6 +6108,36 @@
       },
       "title": "熄屏模式",
       "unsupportedNote": "此平台没有熄屏后端，Computer Use 使用物理显示器。"
+    },
+    "sessionEngine": {
+      "activeStatus": "当前引擎状态：{status}",
+      "agentDesktop": "agent-desktop（预览）",
+      "candidateStatus": "agent-desktop 状态：{status}",
+      "description": "选择 Cognia 读取和操作应用控件的方式。截图、鼠标和键盘输入继续由 Native 负责。",
+      "effective": "当前生效：{engine}",
+      "health": {
+        "configError": "配置不可用",
+        "incompatible": "构建不兼容",
+        "missing": "当前构建未包含此引擎",
+        "permissionRequired": "需要辅助功能权限",
+        "quarantined": "需要处理未完成的执行清理",
+        "ready": "可用",
+        "recovering": "上次执行尚未结束，结束后需要重启",
+        "unsupportedPlatform": "当前平台不支持"
+      },
+      "loadError": "无法读取会话引擎设置。",
+      "native": "Native",
+      "needsRestart": "已保存，重启 Cognia 后生效。",
+      "probe": "检查可用性",
+      "probeError": "无法检查 agent-desktop 的可用性。",
+      "recoverNative": "恢复 Native 设置",
+      "recoveryHelp": "保留损坏设置的副本，并保存下次启动使用 Native。当前引擎保持不变。",
+      "recoveryRestart": "请在上次执行结束后重启 Cognia，重新尝试恢复。",
+      "recoveryTitle": "恢复不可用的设置",
+      "restartHelp": "重启 Cognia 后生效。现有会话继续使用当前引擎。",
+      "saveError": "保存失败，已重新读取最新设置，请重试。",
+      "selection": "会话引擎",
+      "title": "本机应用会话引擎"
     },
     "status": {
       "engine": {
@@ -20263,11 +20300,13 @@
             "start": "无法发起授权，请重试。",
             "status": "无法检查授权状态，请重试或取消本次授权。"
           },
+          "loading": "正在加载登录方式…",
           "needsAuth": "需要重新登录",
           "notSignedIn": "尚未登录",
           "onePerLine": "每行填写一个值。",
           "open": "打开授权页面",
           "ownership": "这些账号属于当前 OpenCode 服务，由 OpenCode 保存和刷新凭据。",
+          "partial": "插件仍在加载，已发现的能力现在即可使用。",
           "refresh": "刷新登录状态",
           "retryStatus": "重新检查授权",
           "signInWith": "使用 {method} 登录",
@@ -20288,6 +20327,7 @@
         "noMcpServers": "未配置 MCP 服务器。",
         "noProviders": "未发现提供商。",
         "notConnected": "连接该智能体以查看其 OpenCode 服务器状态。",
+        "partial": "插件仍在加载，已发现的能力现在即可使用。",
         "project": "项目",
         "providerAuthUnknown": "无法检查提供商登录状态。",
         "providers": "提供商",
@@ -27138,6 +27178,7 @@
           "copyValue": "复制{label} ID",
           "cost": "成本",
           "duration": "耗时",
+          "durationUnknown": "未测量",
           "empty": "在瀑布图中选择一个 span。",
           "error": "错误",
           "errorType": "类型",
@@ -27157,6 +27198,7 @@
           "openSession": "在日志中查看该会话",
           "outputTokens": "输出 token",
           "parentSpanId": "父 Span",
+          "performanceEvidence": "此 trace 的性能采样证据",
           "plugin": "插件",
           "provider": "提供方",
           "requestModel": "请求模型",
@@ -29923,6 +29965,7 @@
           "criticalHint": "已使用 {percent}%——请清理空间以免数据丢失。",
           "healthy": "健康",
           "healthyHint": "已使用配额的 {percent}%。",
+          "unknown": "未知",
           "warning": "空间偏紧",
           "warningHint": "已使用 {percent}%——建议清理空间。"
         },
@@ -31567,12 +31610,12 @@
       "byTool": "按工具",
       "cacheHitRate": "缓存命中率",
       "costOverTime": "成本走势",
-      "errorRate": "错误率",
-      "errorRateOverTime": "错误率",
-      "latencyPercentiles": "延迟分位",
-      "p95Latency": "延迟 (p95)",
-      "reqPerMin": "请求数 / 分钟",
-      "requestRate": "请求速率",
+      "errorRate": "Span 错误率",
+      "errorRateOverTime": "Span 错误率",
+      "latencyPercentiles": "Span 耗时分位数",
+      "p95Latency": "Span 耗时（p95）",
+      "reqPerMin": "Span / 分钟",
+      "requestRate": "Span 速率",
       "tokenThroughput": "Token 吞吐",
       "toolCalls": "工具调用",
       "toolFailures": "工具失败",
@@ -31617,7 +31660,7 @@
       "p50": "p50",
       "p95": "p95",
       "p99": "p99",
-      "perSec": "请求/秒",
+      "perSec": "Span/秒",
       "perSecValue": "{value}/秒"
     },
     "settings": {
@@ -31639,7 +31682,7 @@
         "cacheHitRate": "缓存命中率",
         "cost": "窗口成本",
         "errorRate": "错误率",
-        "latencyP95": "延迟 p95"
+        "latencyP95": "Span 耗时 p95"
       },
       "panels": {
         "description": "隐藏不需要的面板 —— 布局保持不变。",
@@ -32854,6 +32897,20 @@
         "progress": "捕获进度",
         "title": "当前捕获"
       },
+      "association": {
+        "clear": "显示全部采样",
+        "error": "部分运行信息或加密采样 metadata 无法读取；列表为空不代表没有相关证据。",
+        "fromNow": "从现在开始采集并显式关联此运行；无法补采此前的资源消耗。",
+        "historical": "此运行已结束、不可用或仍在加载。可查看下方已有采样；新建关联采样需要运行处于活动状态。",
+        "loading": "正在读取加密采样关联…",
+        "openRun": "查看运行",
+        "openTrace": "查看 trace",
+        "originExpired": "源运行或 trace 可能已按各自的保留策略过期。",
+        "run": "关联运行：{id}",
+        "runScopeEvidence": "关联到此 trace 所属运行的采样描述整个记录区间，其中可能包含其他并发工作。",
+        "scope": "指标描述采样区间内所选进程或 renderer 的资源状态；共享 CPU 和内存不代表某个 Agent 的独占用量。",
+        "trace": "关联 trace：{id}"
+      },
       "comparison": {
         "acceptEnvironment": "接受不同的环境",
         "baseline": "基线",
@@ -32930,6 +32987,7 @@
         "performance-capture-already-active": "已有捕获正在录制。",
         "performance-capture-attachment-invalid": "附件无效。",
         "performance-capture-cadence-invalid": "捕获采样间隔至少为 500 毫秒。",
+        "performance-capture-execution-inactive": "所选运行已不处于活动状态。请查看已有采样，或选择另一个正在执行的运行。",
         "performance-capture-frame-schema-invalid": "捕获的帧已损坏或版本不受支持。",
         "performance-capture-metadata-schema-invalid": "捕获的元数据已损坏或版本不受支持。",
         "performance-capture-not-found": "此捕获已不存在。",
@@ -32937,6 +32995,7 @@
         "performance-capture-source-mismatch": "捕获期间指标数据源发生了变化。",
         "performance-capture-stopped": "捕获已经停止。",
         "performance-capture-target-mismatch": "捕获期间目标发生了变化。",
+        "performance-capture-write-failed": "采样因证据保存失败而停止，已保存的样本不完整。",
         "performance-security-generation-changed": "操作期间账户安全状态发生变化，请重试。",
         "unknown": "出现问题：{detail}"
       },
@@ -32991,7 +33050,8 @@
         "quota-exceeded": "超出配额",
         "remote-timeout": "主机超时",
         "target-switched": "目标已切换",
-        "terminal-host-state": "主机已停止"
+        "terminal-host-state": "主机已停止",
+        "write-failed": "保存失败，证据不完整"
       },
       "toast": {
         "deleted": "捕获已删除。",
@@ -38868,6 +38928,7 @@
     "enabledHint": "关闭后，初始化和动作都会被跳过并直接报告成功。",
     "failure": "环境命令失败：{message}",
     "initNotice": {
+      "miseIsolationUnavailable": "主机不支持隔离初始化，已跳过 mise install。更新主机后即可使用。",
       "miseMissing": "已跳过 mise install：运行初始化的环境里 PATH 上没有 mise。Cognia 不会安装它。",
       "miseNoSafeMode": "已跳过 mise install：这个版本的 mise 没有安全模式，可能会运行仓库的 hooks 或 tasks。升级 mise 后才会运行。",
       "miseNotApproved": "已跳过 mise install：这个副本的 mise.toml 或锁文件不是在“工作树供给”中接受的那一份。",
@@ -50156,6 +50217,8 @@
         "displayNameLabel": "显示名称",
         "displayNamePlaceholder": "QQ 机器人",
         "displayNameRequired": "显示名称不能为空",
+        "guildMarkdownHelp": "需要此机器人已获得 QQ 的 Markdown 邀请权限。适用于子频道和频道私信；关闭时发送文字替代。群聊和 C2C 的 Markdown 始终可用。",
+        "guildMarkdownLabel": "启用频道 Markdown",
         "openCompanion": "打开隧道设置",
         "openCompanionAria": "打开 平台连接 → 概览 中的隧道设置",
         "openConsole": "打开 QQ 机器人控制台",
@@ -54433,6 +54496,12 @@
         "title": "语言服务器日志"
       },
       "overrideAriaLabel": "覆盖 {name}",
+      "remote": {
+        "connect": "授权远程语言服务器",
+        "connected": "远程语言服务器已连接。",
+        "consent": "请在 Host 上使用代码 {code} 批准请求，然后重试。",
+        "failed": "无法连接到远程语言服务器 Host。"
+      },
       "removeAriaLabel": "删除 {name}",
       "resetAriaLabel": "重置 {name} 为默认",
       "runtime": {

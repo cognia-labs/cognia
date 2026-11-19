@@ -872,8 +872,11 @@
           "invalidUrl": "OpenCode 返回了无效的授权链接，请取消后重试。",
           "open": "无法打开授权页面，请使用显示的链接。"
         },
-        "onePerLine": "每行填写一个值。"
-      }
+        "onePerLine": "每行填写一个值。",
+        "partial": "插件仍在加载，已发现的能力现在即可使用。",
+        "loading": "正在加载登录方式…"
+      },
+      "partial": "插件仍在加载，已发现的能力现在即可使用。"
     },
     "opencodeV2PresetDescription": "通过 HTTP 和 SSE 连接当前版本的 OpenCode 服务。",
     "opencodeV2PresetName": "OpenCode V2",

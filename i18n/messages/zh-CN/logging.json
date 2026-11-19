@@ -1221,7 +1221,9 @@
         "openSession": "在日志中查看该会话",
         "offsetValue": "+{value}",
         "copyValue": "复制{label} ID",
-        "copied": "已复制{label} ID"
+        "copied": "已复制{label} ID",
+        "performanceEvidence": "此 trace 的性能采样证据",
+        "durationUnknown": "未测量"
       },
       "spanCount": "{count, plural, other {# 个 span}}",
       "timeline": {

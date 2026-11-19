@@ -872,8 +872,11 @@
           "invalidUrl": "OpenCode returned an invalid authorization URL. Cancel this attempt and try again.",
           "open": "Could not open the authorization page. Use the displayed URL."
         },
-        "onePerLine": "Enter one value per line."
-      }
+        "onePerLine": "Enter one value per line.",
+        "partial": "Plugins are still loading. Discovered capabilities are available now.",
+        "loading": "Loading sign-in methods…"
+      },
+      "partial": "Plugins are still loading. Discovered capabilities are available now."
     },
     "opencodeV2PresetDescription": "Connect to the current OpenCode service over HTTP and SSE.",
     "opencodeV2PresetName": "OpenCode V2",

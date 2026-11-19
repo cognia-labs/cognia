@@ -8,7 +8,8 @@
     "steer": "Steer",
     "steerPlaceholder": "Redirect this run without stopping it…",
     "stop": "Stop",
-    "openConversation": "View conversation history"
+    "openConversation": "View conversation history",
+    "performanceEvidence": "Performance evidence"
   },
   "activityCategory": {
     "approval": "Approval",
