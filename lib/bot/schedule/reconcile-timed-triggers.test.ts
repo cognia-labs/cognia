@@ -13,8 +13,11 @@ let nextId = 0
 const schedulerApi = {
   getAllTasks: jest.fn(async () => [...tasks.values()]),
   createTask: jest.fn(async (input: Record<string, unknown>) => {
-    const id = `task_${(nextId += 1)}`
-    tasks.set(id, { id, status: "active", ...input } as unknown as ScheduledTask)
+    const id = typeof input.id === "string" ? input.id : `task_${(nextId += 1)}`
+    // The task table's primary key, as Dexie's `add` enforces it.
+    if (tasks.has(id))
+      throw Object.assign(new Error("Key already exists"), { name: "ConstraintError" })
+    tasks.set(id, { status: "active", ...input, id } as unknown as ScheduledTask)
     return tasks.get(id)!
   }),
   updateTask: jest.fn(async (id: string, patch: Record<string, unknown>) => {
@@ -48,6 +51,7 @@ import { readBotTriggerState, writeBotTriggerState } from "@/lib/db/bot-installa
 import {
   BOT_TRIGGER_TAG,
   botTriggerScheduleTag,
+  botTriggerTaskId,
   reconcileAllBotSchedules,
   removeBotTriggerSchedules,
   schedulerTriggerFor,
@@ -129,20 +133,21 @@ describe("schedulerTriggerFor", () => {
 describe("syncBotTriggerSchedules", () => {
   it("keeps routine delivery ticks quiet and migrates existing noisy tasks", async () => {
     const bot = resolved([{ id: "poll", kind: "poll", everyMs: 60_000 }])
+    const taskId = await botTriggerTaskId("boti_1", "poll")
     await syncBotTriggerSchedules(bot)
-    expect(tasks.get("task_1")?.notification).toEqual({
+    expect(tasks.get(taskId)?.notification).toEqual({
       onStart: false,
       onComplete: false,
       onError: true,
       channels: ["toast"],
     })
-    const existing = tasks.get("task_1")!
-    tasks.set("task_1", {
+    const existing = tasks.get(taskId)!
+    tasks.set(taskId, {
       ...existing,
       notification: { onStart: true, onComplete: true, onError: false, channels: ["none"] },
     })
     await syncBotTriggerSchedules(bot)
-    expect(tasks.get("task_1")?.notification).toEqual({
+    expect(tasks.get(taskId)?.notification).toEqual({
       onStart: false,
       onComplete: false,
       onError: false,
@@ -155,21 +160,22 @@ describe("syncBotTriggerSchedules", () => {
 
   it("repairs legacy notification defaults without changing unrelated tasks", async () => {
     const bot = resolved([{ id: "poll", label: "Repository", kind: "poll", everyMs: 60_000 }])
+    const taskId = await botTriggerTaskId("boti_1", "poll")
     await syncBotTriggerSchedules(bot)
-    const existing = tasks.get("task_1")!
-    tasks.set("task_1", { ...existing, notification: undefined } as unknown as ScheduledTask)
+    const existing = tasks.get(taskId)!
+    tasks.set(taskId, { ...existing, notification: undefined } as unknown as ScheduledTask)
     tasks.set("foreign", { ...existing, id: "foreign", type: "chat" })
     tasks.set("untagged", { ...existing, id: "untagged", tags: undefined })
     await syncBotTriggerSchedules(bot)
-    expect(tasks.get("task_1")?.notification).toEqual({ onStart: false, onComplete: false })
-    tasks.set("task_1", {
+    expect(tasks.get(taskId)?.notification).toEqual({ onStart: false, onComplete: false })
+    tasks.set(taskId, {
       ...existing,
       status: "paused",
       notification: { ...existing.notification, onStart: false, onComplete: true },
     })
     await syncBotTriggerSchedules(bot)
-    expect(tasks.get("task_1")?.status).toBe("active")
-    expect(tasks.get("task_1")?.notification.onComplete).toBe(false)
+    expect(tasks.get(taskId)?.status).toBe("active")
+    expect(tasks.get(taskId)?.notification.onComplete).toBe(false)
     await removeBotTriggerSchedules("boti_1")
     expect([...tasks.keys()]).toEqual(["foreign", "untagged"])
   })
@@ -193,6 +199,36 @@ describe("syncBotTriggerSchedules", () => {
     )
   })
 
+  it("leaves one task when two reconciles of an installation run at once (B23)", async () => {
+    const bot = resolved([{ id: "sweep", kind: "poll", everyMs: 60_000 }])
+
+    await Promise.all([syncBotTriggerSchedules(bot), syncBotTriggerSchedules(bot)])
+
+    expect([...tasks.keys()]).toEqual([await botTriggerTaskId("boti_1", "sweep")])
+  })
+
+  it("adopts the row another window inserted between its read and its create (B23)", async () => {
+    const bot = resolved([{ id: "sweep", kind: "poll", everyMs: 60_000 }])
+    await syncBotTriggerSchedules(bot)
+    const taskId = await botTriggerTaskId("boti_1", "sweep")
+    tasks.set(taskId, { ...tasks.get(taskId)!, status: "paused" })
+    // This window read the list before the other one's insert landed.
+    schedulerApi.getAllTasks.mockResolvedValueOnce([])
+
+    await syncBotTriggerSchedules(bot)
+
+    expect(tasks.size).toBe(1)
+    expect(tasks.get(taskId)?.status).toBe("active")
+  })
+
+  it("keeps a removal from being undone by a reconcile that started first (B23)", async () => {
+    const bot = resolved([{ id: "sweep", kind: "poll", everyMs: 60_000 }])
+
+    await Promise.all([syncBotTriggerSchedules(bot), removeBotTriggerSchedules("boti_1")])
+
+    expect(tasks.size).toBe(0)
+  })
+
   it("is idempotent, so an edit does not accumulate rows", async () => {
     const bot = resolved([{ id: "daily", kind: "schedule", cron: "0 9 * * *" }])
     await syncBotTriggerSchedules(bot)
@@ -209,7 +245,7 @@ describe("syncBotTriggerSchedules", () => {
     await syncBotTriggerSchedules(resolved([{ id: "p", kind: "poll", everyMs: 30_000 }]))
 
     expect(schedulerApi.updateTask).toHaveBeenCalledWith(
-      "task_1",
+      await botTriggerTaskId("boti_1", "p"),
       expect.objectContaining({ trigger: { type: "interval", intervalMs: 30_000 } })
     )
   })

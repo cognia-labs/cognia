@@ -37,11 +37,12 @@ import { completeBotRunStep, getBotRunStep, putBotRunResult } from "@/lib/db/bot
 import { BOT_RUN_POLICY_STEP } from "@/lib/bot/policy/run-authority"
 import { NEEDS_APPROVAL_STATUS } from "@/lib/ai/agent/execution/permissions/unattended-responder"
 import { expireRunInterruptFromSource } from "@/lib/execution/run-control"
-import { writeBotTriggerState } from "@/lib/db/bot-installations"
+import { readBotTriggerState, writeBotTriggerState } from "@/lib/db/bot-installations"
 import { resolveBotExecutionComposition, resolveBotPolicy } from "@/lib/bot/policy/ceilings"
 import { projectBotComposition } from "@/lib/bot/composition/project-bot-composition"
 import { defaultsFromConfigSchema, resolveBotConfig } from "@/lib/bot/config/resolve-effective"
 import type { InstalledBot } from "@/lib/bot/installed-bot"
+import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 import type { BotHandlerResultV1, BotLogLevel, BotProgressUpdateV1 } from "@/types/bot/run"
 import { isTerminalRunStatus, type ExecutionRunStatus } from "@/types/execution/run"
 import type { PluginBotExecutor } from "@/types/plugin/plugin-bot"
@@ -410,6 +411,57 @@ async function persistTimedTriggerState(
   await writeBotTriggerState(resolved.installation.id, triggerId, patch, ts).catch(() => undefined)
 }
 
+/** The host step a poll or derivedState slot's trigger state is pinned under. */
+const BOT_RUN_TRIGGER_STATE_STEP = "__host:trigger-state"
+
+/**
+ * The event a poll or derivedState slot runs against: its envelope plus the
+ * trigger state (`cursor`, `previousEdgeValue`, `lastFiredAt`) it is pinned to.
+ *
+ * Read on the slot's first execution, not when the scheduler enqueued it. Two
+ * slots queued before the first one ran used to copy the same cursor, so the
+ * second read the first page again however strictly the two ran in turn.
+ * Pinned once, as a host step beside the policy checkpoint, so a retry, a
+ * lease recovery or a resumed wait sees what the slot's first attempt saw and
+ * never a cursor a later slot has committed since.
+ */
+async function eventWithTimedTriggerState(
+  resolved: InstalledBot,
+  delivery: BotEventDeliveryRow,
+  runId: string,
+  ts: number
+): Promise<BotEventEnvelopeV1> {
+  const trigger = resolved.definition.triggers.find(
+    (candidate) => candidate.id === delivery.triggerId
+  )
+  if (!trigger || (trigger.kind !== "poll" && trigger.kind !== "derivedState")) {
+    return delivery.envelope
+  }
+  if ((await getBotRunStep(runId, BOT_RUN_TRIGGER_STATE_STEP))?.status !== "completed") {
+    const state = await readBotTriggerState(delivery.installationId, delivery.triggerId)
+    await completeBotRunStep(
+      runId,
+      BOT_RUN_TRIGGER_STATE_STEP,
+      {
+        ...(state?.cursor !== undefined ? { cursor: state.cursor } : {}),
+        ...(state?.lastEdgeValue !== undefined ? { previousEdgeValue: state.lastEdgeValue } : {}),
+        ...(state?.lastFiredAt !== undefined ? { lastFiredAt: state.lastFiredAt } : {}),
+      },
+      ts
+    )
+  }
+  // Re-read rather than trusting the write: the step keeps the first value.
+  const pinned = (await getBotRunStep(runId, BOT_RUN_TRIGGER_STATE_STEP))?.output
+  const payload = delivery.envelope.payload
+  return {
+    ...delivery.envelope,
+    payload: {
+      ...(payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {}),
+      ...(pinned && typeof pinned === "object" ? pinned : {}),
+    },
+  }
+}
+
 export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRunOutcome> {
   const now = input.now ?? Date.now
   const { delivery } = input
@@ -535,6 +587,8 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     )
     .catch(() => undefined)
 
+  const event = await eventWithTimedTriggerState(resolved, delivery, runId, ts)
+
   const controller = new AbortController()
   liveRuns.set(runId, controller)
   liveInstallations.set(runId, resolved.installation.id)
@@ -569,7 +623,7 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     runId,
     installationId: resolved.installation.id,
     botId: resolved.definition.id,
-    event: delivery.envelope,
+    event,
     config,
     signal: controller.signal,
     step,

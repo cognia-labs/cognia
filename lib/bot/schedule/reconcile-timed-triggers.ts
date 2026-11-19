@@ -20,9 +20,10 @@
 import type { BotInstallationRow } from "@/lib/db/bot-types"
 import type { InstalledBot } from "@/lib/bot/installed-bot"
 import { BOT_TIMED_TRIGGER_MIN_EVERY_MS, type PluginBotTriggerDef } from "@/types/plugin/plugin-bot"
-import type { TaskTrigger } from "@/types/scheduler"
+import type { ScheduledTask, TaskTrigger } from "@/types/scheduler"
 import { runsHere } from "@/lib/placement/ownership"
 import { defaultsFromConfigSchema, resolveBotConfig } from "@/lib/bot/config/resolve-effective"
+import { sha256Hex } from "@/lib/share/hash"
 
 /** The task type `lib/scheduler/executors/bot-executor.ts` is registered for. */
 export const BOT_TRIGGER_TASK_TYPE = "bot"
@@ -133,12 +134,60 @@ function resolveTimedTriggerConfig(
   return { def }
 }
 
+/** Enqueueing a delivery is routine; the Bot run owns meaningful results. */
+const BOT_TRIGGER_TASK_NOTIFICATION = {
+  onStart: false,
+  onComplete: false,
+  onError: true,
+  channels: ["toast"],
+} satisfies ScheduledTask["notification"]
+
+/**
+ * The scheduler task id of one installation's timed trigger.
+ *
+ * Fixed per trigger rather than random, so two windows reconciling at once
+ * collide on the task table's primary key instead of each inserting a row.
+ * Hashed so the id stays bounded whatever the trigger id is.
+ */
+export async function botTriggerTaskId(installationId: string, triggerId: string): Promise<string> {
+  return `bot-trigger:${await sha256Hex(JSON.stringify([installationId, triggerId]))}`
+}
+
+/**
+ * Schedule writes for one installation, in the order they were asked for.
+ *
+ * Each reconcile reads the task list and then writes from it; two running at
+ * once both saw no row and both created one. A removal racing a reconcile
+ * could likewise delete the rows and then watch the reconcile recreate one
+ * for an installation that no longer exists. Chained per installation, each
+ * write starts from what the previous one left. Across windows the fixed task
+ * id is what keeps one row.
+ */
+const scheduleWrites = new Map<string, Promise<void>>()
+
+function serializeScheduleWrite(installationId: string, write: () => Promise<void>): Promise<void> {
+  const run = (scheduleWrites.get(installationId) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(write)
+  scheduleWrites.set(installationId, run)
+  void run
+    .finally(() => {
+      if (scheduleWrites.get(installationId) === run) scheduleWrites.delete(installationId)
+    })
+    .catch(() => undefined)
+  return run
+}
+
 /**
  * Bring one installation's schedule rows in line with its armed triggers.
  *
  * Idempotent, so it is safe to call on every install, every edit, and at boot.
  */
-export async function syncBotTriggerSchedules(resolved: InstalledBot): Promise<void> {
+export function syncBotTriggerSchedules(resolved: InstalledBot): Promise<void> {
+  return serializeScheduleWrite(resolved.installation.id, () => reconcileSchedules(resolved))
+}
+
+async function reconcileSchedules(resolved: InstalledBot): Promise<void> {
   const [{ isBotTriggerArmed, writeBotTriggerState }, { validateCronExpression }] =
     await Promise.all([import("@/lib/db/bot-installations"), import("@/lib/scheduler/cron-parser")])
   const installation = resolved.installation
@@ -207,24 +256,40 @@ export async function syncBotTriggerSchedules(resolved: InstalledBot): Promise<v
   }
 
   for (const [tag, want] of wanted) {
-    await api.createTask({
-      name: `${resolved.definition.name} · ${want.def.label ?? want.def.id}`,
-      type: BOT_TRIGGER_TASK_TYPE,
-      trigger: want.trigger,
-      // Exactly the shape `executeBotTask` reads.
-      payload: { installationId: installation.id, triggerId: want.def.id },
-      tags: [BOT_TRIGGER_TAG, tag],
-      // Enqueueing a delivery is routine; the Bot run owns meaningful results.
-      notification: { onStart: false, onComplete: false, onError: true, channels: ["toast"] },
-      // So the task lists in the workspace that owns the installation rather
-      // than in every one of them.
-      ...(installation.projectId ? { projectId: installation.projectId } : {}),
-    })
+    const id = await botTriggerTaskId(installation.id, want.def.id)
+    try {
+      await api.createTask({
+        id,
+        name: `${resolved.definition.name} · ${want.def.label ?? want.def.id}`,
+        type: BOT_TRIGGER_TASK_TYPE,
+        trigger: want.trigger,
+        // Exactly the shape `executeBotTask` reads.
+        payload: { installationId: installation.id, triggerId: want.def.id },
+        tags: [BOT_TRIGGER_TAG, tag],
+        notification: BOT_TRIGGER_TASK_NOTIFICATION,
+        // So the task lists in the workspace that owns the installation rather
+        // than in every one of them.
+        ...(installation.projectId ? { projectId: installation.projectId } : {}),
+      })
+    } catch (error) {
+      // Another window inserted this trigger's row first. Anything else, a
+      // failed arm after the insert included, stays visible.
+      if (!(error instanceof Error) || error.name !== "ConstraintError") throw error
+      await api.updateTask(id, {
+        trigger: want.trigger,
+        status: "active",
+        notification: BOT_TRIGGER_TASK_NOTIFICATION,
+      })
+    }
   }
 }
 
 /** Drop every schedule row an installation owned. Called on uninstall. */
-export async function removeBotTriggerSchedules(installationId: string): Promise<void> {
+export function removeBotTriggerSchedules(installationId: string): Promise<void> {
+  return serializeScheduleWrite(installationId, () => removeSchedules(installationId))
+}
+
+async function removeSchedules(installationId: string): Promise<void> {
   const api = await scheduler()
   const all = await api.getAllTasks()
   const prefix = `bot-trigger:${installationId}:`

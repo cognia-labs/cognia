@@ -147,30 +147,37 @@ describe("executeBotTask", () => {
     ])
   })
 
-  it("carries the stored cursor to a poll trigger", async () => {
-    await seed([{ id: "sweep", kind: "poll", everyMs: 60_000 }])
+  it("leaves the cursor and edge value for the slot's first run to read (B08)", async () => {
+    await seed([
+      { id: "sweep", kind: "poll", everyMs: 60_000 },
+      { id: "stale", kind: "derivedState", everyMs: 60_000, state: "stale" },
+    ])
     await writeBotTriggerState("boti_1", "sweep", { cursor: "page-2" }, NOW)
-
-    await executeBotTask(task({ installationId: "boti_1", triggerId: "sweep" }), execution, live)
-
-    const [row] = await getDb().botEventDeliveries.toArray()
-    expect(row.envelope.payload).toMatchObject({ triggerKind: "poll", cursor: "page-2" })
-  })
-
-  it("carries the last edge value to a derivedState trigger", async () => {
-    await seed([{ id: "stale", kind: "derivedState", everyMs: 60_000, state: "stale" }])
     await writeBotTriggerState("boti_1", "stale", { lastEdgeValue: true }, NOW)
 
+    await executeBotTask(task({ installationId: "boti_1", triggerId: "sweep" }), execution, live)
     await executeBotTask(task({ installationId: "boti_1", triggerId: "stale" }), execution, live)
 
-    const [row] = await getDb().botEventDeliveries.toArray()
-    // The host cannot evaluate the predicate, so it carries the last answer
-    // and lets the handler tell a change from a state.
-    expect(row.envelope.payload).toMatchObject({
-      triggerKind: "derivedState",
-      previousEdgeValue: true,
-      state: "stale",
-    })
+    // Copied here, a second slot queued before the first committed carried the
+    // same stale cursor. `runBotDelivery` pins it when the slot starts.
+    const rows = await getDb().botEventDeliveries.toArray()
+    const payloads = Object.fromEntries(rows.map((row) => [row.triggerId, row.envelope.payload]))
+    expect(payloads.sweep).toEqual({ triggerKind: "poll" })
+    expect(payloads.stale).toEqual({ triggerKind: "derivedState", state: "stale" })
+  })
+
+  it("enqueues nothing for a trigger disarmed before its tick reached intake (B07)", async () => {
+    await seed([{ id: "sweep", kind: "poll", everyMs: 60_000 }])
+    await updateBotInstallation("boti_1", { triggerOverrides: { sweep: false } })
+
+    const result = await executeBotTask(
+      task({ installationId: "boti_1", triggerId: "sweep" }),
+      execution,
+      live
+    )
+
+    expect(result).toMatchObject({ success: true, output: { skipped: "trigger-disarmed" } })
+    expect(await getDb().botEventDeliveries.count()).toBe(0)
   })
 
   it("refuses to fire a trigger the scheduler does not own", async () => {

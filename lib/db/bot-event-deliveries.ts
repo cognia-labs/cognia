@@ -12,6 +12,7 @@
  */
 
 import { getDb } from "@/lib/db/schema"
+import { isBotTriggerArmed } from "./bot-installations"
 import { deleteBotRunStepsForRuns } from "./bot-run-steps"
 import { recordTombstones } from "./tombstones"
 import type { BotDeliveryStatus, BotEventDeliveryRow } from "@/lib/db/bot-types"
@@ -161,16 +162,22 @@ async function settledRecovery(
 export function botDeliveryDedupKey(
   installationId: string,
   eventId: string,
-  triggerId?: string
+  triggerId: string
 ): string {
-  return triggerId === undefined
-    ? `${installationId}::${eventId}`
-    : `v2:${JSON.stringify([installationId, triggerId, eventId])}`
+  return `v2:${JSON.stringify([installationId, triggerId, eventId])}`
 }
+
+/**
+ * Why intake refused a delivery. `disabled` and `disarmed` are the
+ * {@link EnqueueBotDeliveryInput.armedTrigger} admission: the installation or
+ * its trigger was switched off after the producer decided to fire.
+ */
+export type BotIntakeRefusal =
+  "installation" | "conversation" | "cancelled" | "disabled" | "disarmed"
 
 export class BotIntakePausedError extends Error {
   readonly code = "bot_intake_paused"
-  constructor(readonly reason: "installation" | "conversation" | "cancelled" = "installation") {
+  constructor(readonly reason: BotIntakeRefusal = "installation") {
     super("Bot intake is paused")
   }
 }
@@ -179,6 +186,17 @@ export interface EnqueueBotDeliveryInput {
   envelope: BotEventEnvelopeV1
   /** Synchronous in-memory readiness fence immediately before a new insert. */
   assertReady?: () => undefined
+  /**
+   * Admit only while the installation is enabled and this trigger armed, read
+   * in the transaction that inserts the row.
+   *
+   * Event and timed producers pass the trigger they routed to. They decide to
+   * fire from a read taken before this one, so a disarm or a disable that
+   * returned in between would otherwise still let one delivery in. A manual
+   * run leaves it out: it reads and enqueues in one transaction of its own,
+   * and pressing Run is the arming for that once.
+   */
+  armedTrigger?: { id: string; enabledByDefault?: boolean }
   /** Hold the delivery until this instant, for a debounced trigger. */
   notBefore?: number
   concurrencyKey?: string
@@ -264,20 +282,19 @@ export async function enqueueBotDelivery(
     async () => {
       const existing = await db.botEventDeliveries.where("dedupKey").equals(dedupKey).first()
       if (existing) return existing
-      // Existing run IDs and step journals must survive the identity upgrade.
-      const legacy = await db.botEventDeliveries
-        .where("dedupKey")
-        .equals(botDeliveryDedupKey(envelope.installationId, envelope.eventId))
-        .first()
-      if (legacy?.triggerId === envelope.triggerId) return legacy
       const conversation = envelope.binding?.conversationKey
         ? await db.conversationOverrides
             .where("conversationKey")
             .equals(envelope.binding.conversationKey)
             .first()
         : undefined
-      if ((await db.botInstallations.get(row.installationId))?.paused)
-        throw new BotIntakePausedError("installation")
+      const installation = await db.botInstallations.get(row.installationId)
+      if (installation?.paused) throw new BotIntakePausedError("installation")
+      if (input.armedTrigger) {
+        if (installation?.status !== "enabled") throw new BotIntakePausedError("disabled")
+        if (!isBotTriggerArmed(installation, input.armedTrigger))
+          throw new BotIntakePausedError("disarmed")
+      }
       if (conversation?.automationPaused) throw new BotIntakePausedError("conversation")
       if (
         conversation?.automationCancelledBefore !== undefined &&

@@ -981,6 +981,51 @@ describe("runBotDelivery", () => {
     })
   })
 
+  it("hands each slot the cursor committed before it first ran, and keeps it on retry (B08)", async () => {
+    const { delivery, resolved } = await seed()
+    resolved.definition.triggers = [{ id: "opened", kind: "poll", everyMs: 60_000 }]
+    // Both slots are queued before either has run, as a backlog is.
+    const second = await enqueueBotDelivery({
+      envelope: { ...envelope(), eventId: "bev_2", deliveryId: "bdl_2" },
+      now: NOW,
+    })
+    const seen: unknown[] = []
+    const handler = (cursor: string) => async (ctx: { event: { payload: unknown } }) => {
+      seen.push((ctx.event.payload as { cursor?: string }).cursor)
+      return { output: { cursor } }
+    }
+
+    await runBotDelivery({ delivery, resolved, now, executors: { handler: handler("page-2") } })
+    await runBotDelivery({
+      delivery: second,
+      resolved,
+      now,
+      executors: {
+        handler: async (ctx: { event: { payload: unknown } }) => {
+          seen.push((ctx.event.payload as { cursor?: string }).cursor)
+          throw new Error("transient")
+        },
+      },
+    })
+    // A later slot commits a cursor while the second one is backing off.
+    const { writeBotTriggerState } = await import("@/lib/db/bot-installations")
+    await writeBotTriggerState("boti_1", "opened", { cursor: "page-9" }, NOW + 5)
+    const retry = (await getDb().botEventDeliveries.get(second.id))!
+    await runBotDelivery({
+      delivery: retry,
+      resolved,
+      now,
+      executors: { handler: handler("page-3") },
+    })
+
+    // The first slot reads the empty state, the second the cursor the first
+    // committed, and its retry the same page again rather than page-9.
+    expect(seen).toEqual([undefined, "page-2", "page-2"])
+    expect((await getDb().botEventDeliveries.get(second.id))?.envelope.payload).toEqual({
+      number: 42,
+    })
+  })
+
   it("carries a derived-state edge forward, so the handler can tell a change", async () => {
     const { delivery, resolved } = await seed()
     resolved.definition.triggers = [

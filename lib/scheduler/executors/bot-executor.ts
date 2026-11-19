@@ -47,8 +47,8 @@ export async function executeBotTask(
   // is loaded on every host at boot, and the Bot control plane is a graph a
   // schedule with no Bot tasks has no reason to pay for.
   const [
-    { enqueueBotDelivery },
-    { getBotInstallation, readBotTriggerState },
+    { BotIntakePausedError, enqueueBotDelivery },
+    { getBotInstallation },
     { buildBotEventEnvelope, oneOffSourceRecordId },
     { externalProvenance },
     { projectBotDeliveryPolicy },
@@ -94,7 +94,6 @@ export async function executeBotTask(
     }
   }
 
-  const state = await readBotTriggerState(installationId, triggerId)
   const now = Date.now()
   const slot = execution.scheduledFor?.getTime()
   const envelope = buildBotEventEnvelope({
@@ -114,21 +113,44 @@ export async function executeBotTask(
     triggerId,
     occurredAt: slot !== undefined && Number.isFinite(slot) ? slot : now,
     receivedAt: now,
+    // The cursor and the last edge value are NOT copied here. They are read
+    // when the slot first runs (`runBotDelivery`): a second slot queued before
+    // the first one committed would otherwise carry the same stale cursor.
     payload: {
       triggerKind: trigger.kind,
-      ...(state?.cursor !== undefined ? { cursor: state.cursor } : {}),
-      ...(state?.lastEdgeValue !== undefined ? { previousEdgeValue: state.lastEdgeValue } : {}),
-      ...(state?.lastFiredAt !== undefined ? { lastFiredAt: state.lastFiredAt } : {}),
       ...(trigger.kind === "derivedState" ? { state: trigger.state, edge: trigger.edge } : {}),
     },
     provenance: externalProvenance(),
   })
 
-  const delivery = await enqueueBotDelivery({
-    envelope,
-    now,
-    ...projectBotDeliveryPolicy(trigger, envelope, now),
-  })
+  let delivery
+  try {
+    delivery = await enqueueBotDelivery({
+      envelope,
+      now,
+      // Checked in the insert's transaction, not from the reads above: a tick
+      // the scheduler handed over before a disarm returned must not enqueue
+      // after it. Work accepted before the disarm keeps its own rules.
+      armedTrigger: trigger,
+      ...projectBotDeliveryPolicy(trigger, envelope, now),
+    })
+  } catch (error) {
+    if (!(error instanceof BotIntakePausedError)) throw error
+    // A disarmed trigger fires nothing, which is the outcome asked for. Its
+    // schedule row is removed by the same disarm. Anything else is the
+    // installation being off, reported like the runnable check above.
+    if (error.reason === "disarmed") {
+      return {
+        success: true,
+        output: {
+          skipped: "trigger-disarmed",
+          botId: resolved.definition.id,
+          triggerKind: trigger.kind,
+        },
+      }
+    }
+    return { success: false, error: `Bot installation ${installationId} is not runnable` }
+  }
 
   return {
     success: true,

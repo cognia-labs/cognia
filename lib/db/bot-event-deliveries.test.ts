@@ -63,7 +63,15 @@ describe("botDeliveryDedupKey", () => {
   it("scopes the key to the installation, not the event", () => {
     // The same event legitimately fans out to several installations, and a
     // global key would let the first recipient swallow everyone else's copy.
-    expect(botDeliveryDedupKey("boti_1", "evt_1")).not.toBe(botDeliveryDedupKey("boti_2", "evt_1"))
+    expect(botDeliveryDedupKey("boti_1", "evt_1", "opened")).not.toBe(
+      botDeliveryDedupKey("boti_2", "evt_1", "opened")
+    )
+  })
+
+  it("keeps one event's triggers apart", () => {
+    expect(botDeliveryDedupKey("boti_1", "evt_1", "opened")).not.toBe(
+      botDeliveryDedupKey("boti_1", "evt_1", "another")
+    )
   })
 })
 
@@ -268,24 +276,32 @@ describe("botEventDeliveries", () => {
     expect(await getDb().botEventDeliveries.count()).toBe(1)
   })
 
-  it("deduplicates legacy receipts for their original trigger while delivering another trigger", async () => {
-    const legacy = await enqueueBotDelivery({ envelope: envelope(), now: NOW })
-    await getDb().botEventDeliveries.update(legacy.id, {
-      dedupKey: botDeliveryDedupKey("boti_1", "evt_1"),
-      status: "succeeded",
-    })
-    const retry = await enqueueBotDelivery({
-      envelope: envelope({ deliveryId: "new-format" }),
-      now: NOW + 1,
-    })
-    expect(retry.id).toBe(legacy.id)
-    expect(retry.status).toBe("succeeded")
-    const sibling = await enqueueBotDelivery({
-      envelope: envelope({ triggerId: "another", deliveryId: "another-trigger" }),
-      now: NOW + 1,
-    })
-    expect(sibling.triggerId).toBe("another")
-    expect(await getDb().botEventDeliveries.count()).toBe(2)
+  it("admits an armed-trigger delivery only while the installation is enabled and the trigger armed (B07)", async () => {
+    const db = getDb()
+    const opened = { id: "opened" }
+    await db.botInstallations.put({ id: "boti_1", status: "enabled" } as never)
+    await db.botInstallations.update("boti_1", { triggerOverrides: { opened: false } } as never)
+    await expect(
+      enqueueBotDelivery({ envelope: envelope(), now: NOW, armedTrigger: opened })
+    ).rejects.toMatchObject({ reason: "disarmed" })
+
+    await db.botInstallations.put({ id: "boti_1", status: "disabled" } as never)
+    await expect(
+      enqueueBotDelivery({ envelope: envelope(), now: NOW, armedTrigger: opened })
+    ).rejects.toMatchObject({ reason: "disabled" })
+    // A trigger shipped off by default is disarmed until someone arms it.
+    await db.botInstallations.put({ id: "boti_1", status: "enabled" } as never)
+    await expect(
+      enqueueBotDelivery({
+        envelope: envelope(),
+        now: NOW,
+        armedTrigger: { id: "opened", enabledByDefault: false },
+      })
+    ).rejects.toMatchObject({ reason: "disarmed" })
+    expect(await db.botEventDeliveries.count()).toBe(0)
+
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW, armedTrigger: opened })
+    expect(await db.botEventDeliveries.count()).toBe(1)
   })
 
   it("fans the same event out to two installations", async () => {

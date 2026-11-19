@@ -134,15 +134,26 @@ export async function dispatchBotEvent(
   }
 
   const routed = routeBotEvent({ envelope: input.envelope, bindings, query: input.query, now })
+  const triggers = new Map(
+    bindings.map((binding) => [
+      JSON.stringify([binding.installationId, binding.trigger.id]),
+      binding.trigger,
+    ])
+  )
 
   let deferred = false
   const enqueued: BotEventDeliveryRow[] = []
   for (const delivery of routed.deliveries) {
+    const trigger = triggers.get(JSON.stringify([delivery.installationId, delivery.triggerId]))
     try {
       enqueued.push(
         await enqueueBotDelivery({
           envelope: delivery.envelope,
           now,
+          // The bindings were armed when they were read. Intake checks again
+          // in the insert's own transaction, so a disarm that already
+          // returned cannot still let this event in.
+          ...(trigger ? { armedTrigger: trigger } : {}),
           ...(delivery.notBefore ? { notBefore: delivery.notBefore } : {}),
           ...(delivery.concurrencyKey ? { concurrencyKey: delivery.concurrencyKey } : {}),
           ...(delivery.holdConcurrencyWhileWaiting !== undefined
