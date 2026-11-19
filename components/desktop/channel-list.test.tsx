@@ -337,6 +337,11 @@ jest.mock("@/components/shell/sidebar-nav-section", () => {
     SidebarNavSection: () => <nav data-testid="sidebar-nav" />,
   }
 })
+// Its own suite is `sidebar-workspace-shortcuts.test.tsx`; here only where
+// the expanded rail puts it (sidebar audit item 9).
+jest.mock("@/components/shell/sidebar-workspace-shortcuts", () => ({
+  SidebarWorkspaceShortcuts: () => <div data-testid="sidebar-workspace-shortcuts" />,
+}))
 jest.mock("@/components/shell/sidebar-guild-sections", () => {
   const actual = jest.requireActual("@/components/shell/sidebar-guild-sections") as {
     guildSectionRows: unknown
@@ -3650,6 +3655,8 @@ describe("title-bar projection", () => {
     // it rather than folding in.
     expect(screen.getByTestId("start-outlet")).toBeEmptyDOMElement()
     expect(screen.queryByTestId("sidebar-nav")).toBeNull()
+    // The workspace shortcuts belong to the expanded workspace sidebar only.
+    expect(screen.queryByTestId("sidebar-workspace-shortcuts")).toBeNull()
     expect(screen.queryByTestId("sidebar-footer")).toBeNull()
     expect(useShellColumnsStore.getState().sidebarHostsNav).toBe(false)
     // Its own 40px header carries the guild title and the list's actions.
@@ -3783,6 +3790,8 @@ describe("title-bar projection", () => {
     // the field open; the resting trigger state is covered under "search in
     // its resting form".
     const newChat = screen.getByTestId("sidebar-new-conversation")
+    // Pinned and recent workspaces head the scroll, above the nav rows.
+    const workspaces = screen.getByTestId("sidebar-workspace-shortcuts")
     const nav = screen.getByTestId("sidebar-nav")
     const search = screen.getByTestId("channel-list-search")
     const chats = screen.getByTestId("sidebar-scope-chats")
@@ -3791,7 +3800,8 @@ describe("title-bar projection", () => {
     const gamma = screen.getByTestId("sidebar-scope-t-3")
     const footer = screen.getByTestId("sidebar-footer")
     for (const [before, after] of [
-      [newChat, nav],
+      [newChat, workspaces],
+      [workspaces, nav],
       [nav, search],
       [search, chats],
       [chats, alpha],

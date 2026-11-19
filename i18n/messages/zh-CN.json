@@ -74713,6 +74713,10 @@
       "pinnedHeading": "已置顶",
       "recentHeading": "最近",
       "searchPlaceholder": "搜索工作区…",
+      "sidebar": {
+        "manage": "工作区设置…",
+        "switchTo": "切换到 {name}"
+      },
       "switchTitle": "切换工作区",
       "undoFollow": "撤销",
       "unpin": "取消置顶 {name}",

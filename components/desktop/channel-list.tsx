@@ -110,6 +110,7 @@ import { useSidebarNavHost } from "@/hooks/shell/use-sidebar-nav-host"
 import { useMutedTeamIds } from "@/hooks/shell/use-team-mute"
 import { useAppShortcut } from "@/hooks/shortcuts/use-app-shortcut"
 import { SidebarNavSection, SidebarRow } from "@/components/shell/sidebar-nav-section"
+import { SidebarWorkspaceShortcuts } from "@/components/shell/sidebar-workspace-shortcuts"
 import { ConversationCreateMenu } from "@/components/chat/conversation-create-menu"
 import { SidebarRowsScope } from "@/components/shell/sidebar-row-roving"
 import {
@@ -2965,7 +2966,8 @@ function ChannelListBodyImpl({
           onMouseLeave={releaseOrder}
         >
           {merged ? (
-            // Nav rows → search row → scope tree, all in the same scroll.
+            // Workspace shortcuts → nav rows → search row → scope tree, all in
+            // the same scroll.
             // The search row heads the conversation list it narrows; the
             // secondary chrome it can surface (archived chip, filter chips,
             // the bulk bar, status hints) slides open right under it instead
@@ -2973,6 +2975,10 @@ function ChannelListBodyImpl({
             // the viewport once the nav rows have scrolled away, so the field
             // and a live bulk selection's bar never scroll out of reach.
             <>
+              {/* Pinned and recent workspaces, one click each, at the top of
+                  the scroll (sidebar audit item 9). Nothing when there is no
+                  other workspace to switch to. */}
+              <SidebarWorkspaceShortcuts className="pt-1.5" />
               <SidebarNavSection className="pt-1" />
               <div
                 ref={stickyChromeRef}

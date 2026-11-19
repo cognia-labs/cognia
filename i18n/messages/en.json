@@ -74713,6 +74713,10 @@
       "pinnedHeading": "Pinned",
       "recentHeading": "Recent",
       "searchPlaceholder": "Search workspaces…",
+      "sidebar": {
+        "manage": "Workspace settings…",
+        "switchTo": "Switch to {name}"
+      },
       "switchTitle": "Switch workspace",
       "undoFollow": "Undo",
       "unpin": "Unpin {name}",

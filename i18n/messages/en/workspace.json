@@ -293,7 +293,11 @@
     "unpin": "Unpin {name}",
     "untrustedHint": "Untrusted workspace",
     "adoptEntry": "Folders in use",
-    "switchTitle": "Switch workspace"
+    "switchTitle": "Switch workspace",
+    "sidebar": {
+      "switchTo": "Switch to {name}",
+      "manage": "Workspace settings…"
+    }
   },
   "capabilities": {
     "loading": "Loading capabilities",

@@ -293,7 +293,11 @@
     "unpin": "取消置顶 {name}",
     "untrustedHint": "未受信任的工作区",
     "adoptEntry": "正在使用的目录",
-    "switchTitle": "切换工作区"
+    "switchTitle": "切换工作区",
+    "sidebar": {
+      "switchTo": "切换到 {name}",
+      "manage": "工作区设置…"
+    }
   },
   "capabilities": {
     "loading": "正在加载能力",

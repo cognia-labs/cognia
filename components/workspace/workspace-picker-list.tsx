@@ -50,6 +50,7 @@ import { cn } from "@/lib/utils"
 import { isTauri } from "@/lib/tauri"
 import { useProjectStore } from "@/stores/project/project-store"
 import { primaryRootOf, allRootPaths } from "@/lib/workspace/roots"
+import { pinnedWorkspaces, recentWorkspaces } from "@/lib/workspace/quick-access"
 import { isWorkspaceTrusted } from "@/lib/db/trusted-workspaces"
 import { openFolderAsWorkspace, openPathAsWorkspace } from "@/lib/workspace/open-folder"
 import { useAdoptionCandidates } from "@/hooks/workspace/use-adoption-candidates"
@@ -63,10 +64,9 @@ import type { Project } from "@/types"
 
 // Above this count the flat list stops being scannable, so the search field and
 // a "Recent" quick-access group appear. Below it the whole list fits in view and
-// both would just be clutter.
+// both would just be clutter. Which workspaces count as recent or pinned is
+// `lib/workspace/quick-access.ts`, shared with the expanded sidebar.
 const LARGE_THRESHOLD = 8
-// How many most-recently-used workspaces to pin above the full list.
-const RECENT_COUNT = 3
 
 /**
  * What the footer can do. {@link useWorkspacePickerRequests} for a switcher,
@@ -229,14 +229,8 @@ export function WorkspacePickerList({
       ).sort((a, b) => a.name.localeCompare(b.name)),
     [projects, selection]
   )
-  const recent = useMemo(
-    () =>
-      [...visible]
-        .sort((a, b) => +new Date(b.lastAccessedAt ?? 0) - +new Date(a.lastAccessedAt ?? 0))
-        .slice(0, RECENT_COUNT),
-    [visible]
-  )
-  const pinned = useMemo(() => visible.filter((project) => project.pinned), [visible])
+  const recent = useMemo(() => recentWorkspaces(visible), [visible])
+  const pinned = useMemo(() => pinnedWorkspaces(visible), [visible])
 
   const isLarge = visible.length >= LARGE_THRESHOLD
   const trimmed = query.trim().toLowerCase()
