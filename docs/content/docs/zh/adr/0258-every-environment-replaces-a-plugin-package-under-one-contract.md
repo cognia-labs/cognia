@@ -74,9 +74,11 @@ description: "覆盖安装、更新和回滚插件是同一个操作：替换已
 - `REPLACEMENT_SCENARIOS`：每一种原运行时状态，外加身份不匹配、提交前失败、提交后失败和取消；
 - `contractViolations(scenario, versions, observed)`：某次观察违反了哪些条款；测试框架报告 `dataVersion` 时也检查数据条款；
 - `CONTRACT_GAPS`：某个环境尚未补齐的条款，每条附原因；
-- `NOT_YET_CONFORMING`：还没有运行这套用例的环境。
+- `MIRROR_CLAUSES` 和 `mirrorViolations(observed)`：镜像 Host 插件的客户端必须满足的条款。它不替换任何包，自己不运行插件；它发出的开关在 Host 回复之前标为“已排队”，Host 回复之后从 Host 读回插件行。
 
-每个环境用已有的测试框架运行 `scenariosFor(environment)`，观察结果、磁盘上的包、它的记录以及之后的运行时。这样适配代码就挨着它所测试的代码。共用一个测试框架则要把每个环境的外部依赖重新 mock 一遍。`contract.test.ts` 固定这两份清单，所以补齐一个缺口或新增一个环境时，要同时修改本 ADR、该模块和测试。
+每个环境用已有的测试框架运行 `scenariosFor(environment)`，观察结果、磁盘上的包、它的记录以及之后的运行时。这样适配代码就挨着它所测试的代码。共用一个测试框架则要把每个环境的外部依赖重新 mock 一遍。`contract.test.ts` 固定缺口清单和镜像条款，所以补齐一个缺口或新增一个环境时，要同时修改本 ADR、该模块和测试。
+
+所有会替换包的环境共用一份步骤实现：`lib/plugin/lifecycle/replace-package.ts`。它先预留插件的依赖图，停下正在运行的部分，在包锁内提交，再登记磁盘上现在的 manifest，然后把每个插件恢复到原来的状态。持久意图为 `disabled` 的插件保持停止；Host 上原本没有的插件进入调用方指定的状态。CLI 更新、无头 Host 对齐、设备请求 Host 做的包变更，以及迁移到 Host 的 cogpack 都调用它。
 
 ### 4. 各环境现状
 
@@ -86,14 +88,17 @@ description: "覆盖安装、更新和回滚插件是同一个操作：替换已
 | 桌面端回滚（`rollback.ts`） | **否**：包变更之后才检查安装的版本 | **否**：不接收取消信号 | 是 | 是，包括数据 | 安全快照恢复旧包，运行时已停止，要求重启 | `rollback.test.ts` |
 | CLI 更新（`plugin-controller.ts`） | 是 | 是 | 是 | 是 | 新包保留，运行时已停止，要求重启 | `plugin-lifecycle.integration.test.ts` |
 | VS Code 扩展安装 | 是 | **否**：取消即不提交已暂存的依赖图 | 是 | 是 | 旧包、数据库行、条目和来源恢复，运行时回到原状态 | `install-vscode-extension.test.ts` |
-| 无头 Host 对齐 | 不适用（原生安装已执行） | 不适用 | **否**：总是启用 | 部分 | 无 | 尚未 |
-| 配对客户端（经由 Host） | 各 RPC 命令未验证 | 未验证 | 由 Host 负责 | 由 Host 负责 | 由 Host 负责 | 尚未 |
-| Capacitor 镜像 | 只读 | — | — | 只有“已排队”与“已生效”的标注 | — | 尚未 |
+| 无头 Host 对齐（`plugin-runtime-adapter.ts`） | 不适用：变更包的命令已经检查过 | 不适用：事件到达之前包已变更 | 是；意图为停用的插件保持停止 | 是；Host 自己的处理已应用的变更，其事件会被跳过 | 无：失败只记录日志 | `plugin-runtime-adapter.test.ts` |
+| 设备请求 Host 做的包变更（`host-package-change.ts`） | 是：暂存的更新只按审核过的 `expectedVersion` 提交，替换之前在 Rust 中再查一次；manifest 安装只认它自己的 id；GitHub 安装先暂存 | **否**：Host 接受请求之后没有取消点 | 是 | 是 | 新包保留，运行时已停止，返回 `plugin_restart_required` | `host-package-change.test.ts` |
+| 迁移到 Host 的 cogpack（`transfer-install.ts`） | 是：manifest 哈希和成员清单，外加 Host 自己的签名与策略检查 | — | 是，包括 Host 上已在运行的成员 | 是 | 无法启动的成员报告为未安装 | `transfer-install.test.ts` |
+| 配对客户端 | 用审核过的 id 和版本核对 Host 的回复（`plugin-transfer.ts`） | — | 由 Host 负责 | Host 回复之前为“已排队”，之后从 Host 读回插件行 | 由 Host 负责 | `plugin-transfer.test.ts`、`mirrored-toggle-receipt.test.ts` |
+| Capacitor 镜像 | 只读：不安装、不更新、不回滚、不卸载 | — | 不运行插件 | Host 回复之前为“已排队”，之后从 Host 读回插件行 | — | `set-plugin-enabled-for-host.test.ts`、`use-plugin-uninstall.test.tsx` |
 
 ## 影响
 
 - 新的会替换包的环境，或新的失败方式，都先在 `contract.ts` 里加一个场景或缺口。代码评审因此看到的是契约变更，而不是一处本地修复。
 - 缺口都是显式的：桌面端更新、回滚和 VS Code 提交都没有取消点，回滚要等包变更之后才检查安装的版本。补齐的办法是在提交之前加上对应的检查或取消点，然后删除缺口条目。
 - 插件数据纳入契约（方案 P1）。数据迁移之前，插件的行会在同一事务中复制成一份快照。更新失败和崩溃恢复会用这份快照撤销该次更新所做的迁移。显式回滚要在用户确认之后才恢复快照。快照放不下时，用户在不留快照继续和取消升级之间选择；没有人可问的无头 Host 不留快照继续。无论哪种情况，插件页面都会标出哪个数据版本没有快照。
-- 无头 Host 和配对客户端最后对齐（方案 P5）。在此之前，它们留在 `NOT_YET_CONFORMING`，并记录各自仍有的行为。
+- 无头 Host 和配对客户端最后对齐（方案 P5），“尚未运行用例的环境”清单随之删除。配对设备或远程 API 调用方请求 Host 做的包变更，不再先在 Rust 中执行。除 Host 自己的 service principal 之外，RPC arm 把所有调用方都交给 Host 的插件管理器，桌面端和无头 Host 都一样。插件管理器先停下运行时，再以 service principal 的身份回调原生命令，最后恢复运行时。因此桌面端 Host 会立即应用这类变更，而不是等到下次重新加载。
+- 剩下的问题：Host 没有亲自做的变更，无头对齐仍然只能在包变更之后才停下插件，因为事件在提交之后才到达。设备请求的 GitHub 安装只绑定它给出的仓库和 ref。设备如果要绑定审核过的版本，应当用 `deferCommit` 暂存安装，再带上 `expectedVersion` 提交。
 - 本契约约束的是宿主的行为，不改动插件契约（`@cognia/plugin-contract`），因此不影响创作工具包的固定版本。

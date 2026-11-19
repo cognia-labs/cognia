@@ -10,10 +10,9 @@ import nodeFsPromises from "node:fs/promises"
 import path from "node:path"
 import { releaseAuthProviderOwnership } from "@/lib/plugin/auth/auth-provider-registry"
 import {
-  quiesceRuntime,
-  restoreRuntimeState,
-  runtimeResumeStateOf,
-} from "@/lib/plugin/lifecycle/runtime-state"
+  replacePluginPackage,
+  type PackageReplacementOwner,
+} from "@/lib/plugin/lifecycle/replace-package"
 import type { PluginGraphReservation } from "@/lib/plugin/core/lifecycle-coordinator"
 
 import { discoverPlugins, type PluginFs } from "./discover-plugins"
@@ -125,12 +124,9 @@ export async function reloadPlugin(id: string, deps: { manager: HostManager }): 
   await deps.manager.reloadPlugin(id, "cli-reload")
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 /**
- * Swap a staged tree in for a disk plugin's live directory.
+ * Swap a staged tree in for a disk plugin's live directory, through the one
+ * replacement every environment shares (`lib/plugin/lifecycle/replace-package.ts`).
  *
  * The runtime is stopped first and brought back to exactly the state it was
  * in afterwards (enabled, suspended, loaded or stopped). The new manifest is
@@ -143,30 +139,26 @@ export async function replaceDiskPlugin(
   deps: { manager: HostManager }
 ): Promise<void> {
   const { manager } = deps
-  const current = manager.list().find((plugin) => plugin.id === staged.id)
-  const resume = runtimeResumeStateOf(current?.status)
-  const reservation = current ? manager.reservePluginRuntimeGraph(staged.id) : undefined
-  try {
-    await quiesceRuntime(manager, staged.id, resume, "cli-update")
-    // A disabled plugin is inactive but still loaded from the old tree.
-    if (current?.status === "disabled") await manager.unloadPlugin(staged.id)
-    try {
-      await manager.withPluginPackageMutation(staged.id, () => staged.commit())
-    } catch (error) {
-      try {
-        await restoreRuntimeState(manager, staged.id, resume, "cli-update-restore")
-      } catch (restoreError) {
-        throw new AggregateError(
-          [error, restoreError],
-          `${messageOf(error)}; restoring the previous runtime also failed: ${messageOf(restoreError)}`
-        )
-      }
-      throw error
-    }
-    await manager.registerDiskPlugin(staged.manifest, staged.dir)
-    await restoreRuntimeState(manager, staged.id, resume, "cli-update")
-  } finally {
-    if (reservation) manager.releasePluginRuntimeGraph(reservation)
+  await replacePluginPackage(hostPackageOwner(manager), {
+    pluginId: staged.id,
+    commit: () => staged.commit(),
+    register: () => manager.registerDiskPlugin(staged.manifest, staged.dir),
+    reason: "cli-update",
+  })
+}
+
+/** The CLI host manager as a package-replacement owner (ADR-0258). */
+function hostPackageOwner(manager: HostManager): PackageReplacementOwner {
+  return {
+    statusOf: (id) => manager.list().find((plugin) => plugin.id === id)?.status,
+    enablePlugin: (id, reason) => manager.enablePlugin(id, reason),
+    disablePlugin: (id, reason) => manager.disablePlugin(id, reason),
+    suspendPlugin: (id, reason) => manager.suspendPlugin(id, reason),
+    loadPlugin: (id) => manager.loadPlugin(id),
+    unloadPlugin: (id) => manager.unloadPlugin(id),
+    reservePluginRuntimeGraph: (id) => manager.reservePluginRuntimeGraph(id),
+    releasePluginRuntimeGraph: (reservation) => manager.releasePluginRuntimeGraph(reservation),
+    withPluginPackageMutation: (id, operation) => manager.withPluginPackageMutation(id, operation),
   }
 }
 

@@ -19,9 +19,12 @@
  * The staged install then runs in Rust, anchored on the SHA-256 of the
  * canonical manifest verified here: the archive's `manifest.json` must hash to
  * it and every file must match its record, so what installs is what the
- * signature covers. A desktop host registers and enables the new plugins in
- * its renderer; a headless host's brain does the same on the
- * `plugin://runtime-changed` event the install publishes.
+ * signature covers. It runs as one package replacement (ADR-0258,
+ * `lib/plugin/lifecycle/replace-package.ts`): members this host already has
+ * are stopped before their packages change and come back in the state they
+ * were in, new ones start, and a member whose intent is disabled here stays
+ * stopped. Desktop and headless hosts run the same steps; the brain skips the
+ * `plugin://runtime-changed` events the install publishes for them.
  *
  * Idempotent by operation id: the device retries a transfer whose answer it
  * lost, and the second call answers what the first one installed.
@@ -30,6 +33,8 @@
 import { z } from "zod"
 
 import { sha256Bytes } from "@/lib/utils/hash"
+import type { HostPackageChangeDeps } from "@/lib/plugin/lifecycle/host-package-change"
+import { packageOwnerOf, replacePluginPackages } from "@/lib/plugin/lifecycle/replace-package"
 import { verifyEd25519PackageSignature } from "@/lib/packaging/signed-zip"
 import { canonicalJsonBytes } from "@/lib/plugin/character-pack/canonical-json"
 import type { CogpackManifestV1, CogpackProvenance } from "@/types/plugin/plugin-cogset"
@@ -81,11 +86,8 @@ export interface TransferInstallDeps {
     members: Array<{ id: string; version: string }>
   }) => Promise<TransferInstallResult>
   recordOrigin: (member: TransferInstallMember, viaCogpack: CogpackProvenance) => Promise<void>
-  /**
-   * Register, load and enable what landed on disk, answering the plugins that
-   * could not be. A headless host's brain does this on the event instead.
-   */
-  activate: (pluginIds: string[]) => Promise<Array<{ pluginId: string; message: string }>>
+  /** This host's plugin manager and registration, for the replacement around the install. */
+  packages: Pick<HostPackageChangeDeps, "manager" | "register" | "expectRuntimeEvent">
 }
 
 /** Bounded memory of answered operations, for a device retrying a lost answer. */
@@ -134,26 +136,18 @@ async function verifiedManifest(raw: unknown): Promise<CogpackManifestV1> {
 }
 
 async function defaultDeps(): Promise<TransferInstallDeps> {
-  const [{ resolveCogpackTrust }, { recordInstallOrigin }, { isTauri }, { isHeadlessHost }] =
+  const [{ resolveCogpackTrust }, { recordInstallOrigin }, { hostPackageChangeDeps }] =
     await Promise.all([
       import("./trust"),
       import("@/lib/plugin/origin/install-origin"),
-      import("@/lib/tauri"),
-      import("@/lib/platform/detect"),
+      import("@/lib/plugin/lifecycle/host-package-change"),
     ])
+  const packages = await hostPackageChangeDeps()
   return {
     resolveTrust: (signature) => resolveCogpackTrust(signature),
-    installStaged: async (request) => {
-      if (isTauri()) {
-        const { invoke } = await import("@tauri-apps/api/core")
-        return invoke<TransferInstallResult>("plugin_cogpack_install_staged", { ...request })
-      }
-      if (isHeadlessHost()) {
-        const { transport } = await import("@/lib/tauri")
-        return transport.call<TransferInstallResult>("plugin_cogpack_install_staged", request)
-      }
-      throw new Error("headless_host: only a desktop or headless host installs plugins")
-    },
+    // As this host: the desktop's Tauri command, the brain's service transport.
+    installStaged: (request) =>
+      packages.native<TransferInstallResult>("plugin_cogpack_install_staged", { ...request }),
     recordOrigin: (member, viaCogpack) =>
       recordInstallOrigin({
         pluginId: member.pluginId,
@@ -161,49 +155,18 @@ async function defaultDeps(): Promise<TransferInstallDeps> {
         origin: { kind: "local", via: "cogpack-embedded" },
         viaCogpack,
       }),
-    activate: async (pluginIds) => (isTauri() ? activateOnDesktop(pluginIds) : []),
+    packages,
   }
 }
 
-/**
- * The desktop half of what the headless brain's reconcile does
- * (`cli/src/serve/plugin-runtime-adapter.ts`): unload a running older copy,
- * rediscover, then load and enable. A plugin discovery skips (its policy
- * refused it, its manifest did not validate) is reported, not hidden.
- */
-async function activateOnDesktop(
-  pluginIds: string[]
-): Promise<Array<{ pluginId: string; message: string }>> {
-  const [{ getPluginManager }, { usePluginStore }] = await Promise.all([
-    import("@/lib/plugin/core/manager"),
-    import("@/stores/plugin-runtime"),
-  ])
-  const manager = getPluginManager()
-  const failures: Array<{ pluginId: string; message: string }> = []
-  for (const pluginId of pluginIds) {
-    const existing = usePluginStore.getState().plugins[pluginId]
-    if (existing && existing.status !== "installed") await manager.unloadPlugin(pluginId)
+function notEnabled(pluginId: string, error: unknown): { pluginId: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error)
+  return {
+    pluginId,
+    message: message.startsWith("plugin_not_discovered")
+      ? message
+      : `plugin_not_enabled: ${message}`,
   }
-  const discovered = new Set((await manager.scanPlugins()).map((entry) => entry.manifest.id))
-  for (const pluginId of pluginIds) {
-    if (!discovered.has(pluginId)) {
-      failures.push({
-        pluginId,
-        message: "plugin_not_discovered: installed but refused by discovery",
-      })
-      continue
-    }
-    try {
-      await manager.loadPlugin(pluginId)
-      await manager.enablePlugin(pluginId, "transfer")
-    } catch (error) {
-      failures.push({
-        pluginId,
-        message: `plugin_not_enabled: ${error instanceof Error ? error.message : String(error)}`,
-      })
-    }
-  }
-  return failures
 }
 
 /** The `plugin_cogpack_transfer_install` arm. */
@@ -234,21 +197,47 @@ export async function installTransferredCogpack(
   const trust = await d.resolveTrust(manifest.signature)
   if (trust.refusedBy) throw new TransferRefusedError("cogpack_refused", trust.refusedBy)
 
-  const result = await d.installStaged({
-    uploadId: request.uploadId,
-    manifestSha256: await sha256Bytes(canonicalJsonBytes(manifest)),
-    members: manifest.members.map((member) => ({ id: member.id, version: member.version })),
+  const manifestSha256 = await sha256Bytes(canonicalJsonBytes(manifest))
+  const memberIds = manifest.members.map((member) => member.id)
+  const expected = new Map<string, () => void>()
+  const replacement = await replacePluginPackages(packageOwnerOf(d.packages.manager), {
+    pluginIds: memberIds,
+    commit: async () => {
+      for (const pluginId of memberIds) {
+        const cancel = d.packages.expectRuntimeEvent?.(pluginId)
+        if (cancel) expected.set(pluginId, cancel)
+      }
+      try {
+        const installed = await d.installStaged({
+          uploadId: request.uploadId,
+          manifestSha256,
+          members: manifest.members.map((member) => ({ id: member.id, version: member.version })),
+        })
+        // Only installed members publish an event.
+        const landed = new Set(installed.installed.map((member) => member.pluginId))
+        for (const [pluginId, cancel] of expected) if (!landed.has(pluginId)) cancel()
+        return installed
+      } catch (error) {
+        for (const cancel of expected.values()) cancel()
+        throw error
+      }
+    },
+    replaced: (installed) => installed.installed.map((member) => member.pluginId),
+    register: (pluginId) => d.packages.register(pluginId),
+    // A plugin carried here for an item is meant to run; a disabled one stays off.
+    whenNew: "enabled",
+    reason: "transfer",
   })
+  const result = replacement.result
   const viaCogpack: CogpackProvenance = {
     cogpackId: manifest.id,
     version: manifest.version,
     fingerprint: result.fingerprint,
   }
   for (const member of result.installed) await d.recordOrigin(member, viaCogpack)
-  const inactive =
-    result.installed.length > 0
-      ? await d.activate(result.installed.map((member) => member.pluginId))
-      : []
+  const inactive = replacement.failures.map((failure) =>
+    notEnabled(failure.pluginId, failure.error)
+  )
   const inactiveIds = new Set(inactive.map((entry) => entry.pluginId))
   const answer: TransferInstallResult = {
     fingerprint: result.fingerprint,

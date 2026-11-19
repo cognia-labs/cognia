@@ -518,6 +518,18 @@ export async function dispatchCommand(
       const { installTransferredCogpack } = await import("@/lib/plugin/cogpack/transfer-install")
       return installTransferredCogpack(payload)
     }
+    // A package change a paired device or a remote API caller asked for
+    // (ADR-0258 §4). The RPC layer checked the device's approval and hands
+    // over every non-service caller; the Host's plugin manager stops the
+    // runtime, commits natively as this Host, and brings the plugin back.
+    case "plugin_install":
+    case "plugin_install_from_github":
+    case "plugin_uninstall":
+    case "plugin_commit_staged_update":
+    case "plugin_backup_restore": {
+      const { applyHostPackageChange } = await import("@/lib/plugin/lifecycle/host-package-change")
+      return applyHostPackageChange(command, payload)
+    }
     case "app_settings_update":
       return appSettingsUpdate(payload)
     case "issue_apply_action":

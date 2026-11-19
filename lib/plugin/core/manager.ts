@@ -4068,7 +4068,11 @@ export class PluginManager {
       }
       // Set before invoking: a lost response can hide a successful host commit.
       committed = true
-      await invoke("plugin_commit_staged_update", { pluginId, transactionId: result.transactionId })
+      await invoke("plugin_commit_staged_update", {
+        pluginId,
+        transactionId: result.transactionId,
+        expectedVersion: result.manifest.version,
+      })
       grantsChanged = Boolean(grantDecision)
       const plugin = await this.registerBackendInstall(
         { ...result, source },

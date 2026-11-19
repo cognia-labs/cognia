@@ -9,6 +9,7 @@ import type { Transport } from "@/lib/tauri/transport-types"
 import {
   PluginChangedHereError,
   pluginsToTransfer,
+  reconcileTransferWithReview,
   transferPlugins,
   type PluginTransferDeps,
 } from "./plugin-transfer"
@@ -222,5 +223,38 @@ describe("pluginsToTransfer", () => {
       { pluginId: "alpha", version: "2.0.0" },
       { pluginId: "zeta", version: "1.0.0" },
     ])
+  })
+})
+
+describe("reconcileTransferWithReview (ADR-0258)", () => {
+  const reviewed = [
+    { pluginId: "match", version: "1.0.0" },
+    { pluginId: "other-version", version: "2.0.0" },
+    { pluginId: "unreported", version: "1.0.0" },
+    { pluginId: "refused", version: "1.0.0" },
+  ]
+
+  it("counts only what the host applied at the reviewed version", () => {
+    expect(
+      reconcileTransferWithReview(reviewed, {
+        fingerprint: "f",
+        installed: [
+          { pluginId: "match", version: "1.0.0" },
+          { pluginId: "other-version", version: "2.0.1" },
+        ],
+        failed: [{ pluginId: "refused", message: "plugin_not_enabled: activation failed" }],
+      })
+    ).toEqual({
+      fingerprint: "f",
+      installed: [{ pluginId: "match", version: "1.0.0" }],
+      failed: [
+        { pluginId: "refused", message: "plugin_not_enabled: activation failed" },
+        {
+          pluginId: "other-version",
+          message: "plugin_not_applied: the host installed v2.0.1, not the reviewed v2.0.0",
+        },
+        { pluginId: "unreported", message: "plugin_not_applied: the host did not report this plugin" },
+      ],
+    })
   })
 })

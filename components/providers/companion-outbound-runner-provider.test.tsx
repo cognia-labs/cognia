@@ -48,6 +48,10 @@ jest.mock("@/lib/queue/outbound-queue", () => ({
   createOutboundRunner: (options: unknown) => createRunner(options),
 }))
 
+const mockSettleToggle = jest.fn(async (_answer: unknown) => undefined)
+jest.mock("@/lib/plugin/core/mirrored-toggle-receipt", () => ({
+  settleMirroredPluginToggle: (answer: unknown) => mockSettleToggle(answer),
+}))
 jest.mock("@/lib/platform/web-companion", () => ({
   hasWebCompanionTarget: () => false,
 }))
@@ -750,6 +754,35 @@ it("hands a refused dispatch to the approval gate so the retry re-mints its leas
 
   await expect(options.dispatcher.call("host_state_submit", { actions: [] })).rejects.toBe(refusal)
   expect(mockNoteRefused).toHaveBeenCalledWith(refusal)
+})
+
+it("reads a plugin toggle's rows back once the Host answered it, applied or refused", async () => {
+  render(
+    <CompanionOutboundRunnerProvider
+      platformOverride="web"
+      webCompanionOverride
+      scopeOverride={scope}
+    />
+  )
+  const options = createRunner.mock.calls.at(-1)?.[0] as {
+    dispatcher: { call: (command: string, payload: unknown) => Promise<unknown> }
+  }
+  mockSettleToggle.mockClear()
+  transportCall.mockResolvedValueOnce(null)
+  await options.dispatcher.call("plugin_set_enabled", { id: "demo", enabled: true })
+  expect(mockSettleToggle).toHaveBeenCalledWith({ ok: true })
+
+  const refusal = Object.assign(new Error("activation failed"), { code: "server_error" })
+  transportCall.mockRejectedValueOnce(refusal)
+  await expect(
+    options.dispatcher.call("plugin_set_enabled", { id: "demo", enabled: true })
+  ).rejects.toBe(refusal)
+  expect(mockSettleToggle).toHaveBeenLastCalledWith({ ok: false, error: refusal })
+
+  mockSettleToggle.mockClear()
+  transportCall.mockResolvedValueOnce(null)
+  await options.dispatcher.call("host_state_submit", { actions: [] })
+  expect(mockSettleToggle).not.toHaveBeenCalled()
 })
 
 it("says so when the host refused a memory command, wherever the user now is", async () => {

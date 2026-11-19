@@ -24,6 +24,7 @@ import {
 } from "@/lib/queue/outbound-approval"
 import { subscribeToHostConsent } from "@/lib/host-consent/client"
 import { runSyncDown } from "@/lib/sync/companion-sync"
+import { settleMirroredPluginToggle } from "@/lib/plugin/core/mirrored-toggle-receipt"
 import {
   settleRemoteMemoryMutation,
   subscribeRemoteMemoryRefusals,
@@ -74,8 +75,13 @@ const liveDispatcher: OutboundDispatcher = {
       // A lease the host voided early (restart, last stream closed) must not
       // ride along on every retry of this row; the next pre-flight re-mints.
       noteOutboundApprovalRefused(error)
+      // A toggle the Host refused: show its state, not the optimistic one.
+      if (command === "plugin_set_enabled") void settleMirroredPluginToggle({ ok: false, error })
       throw error
     }
+    // A queued plugin toggle is applied once the Host answers; read its rows
+    // back so the mirror shows what the Host now runs (ADR-0258).
+    if (command === "plugin_set_enabled") void settleMirroredPluginToggle({ ok: true })
     // The `/memory` console's commands: the mirror already moved, so the
     // host's answer decides between a follow-up pull and a rewind-and-repull.
     if (command === "memory_mutate") void settleRemoteMemoryMutation(result)

@@ -951,6 +951,28 @@ pub fn commit_staged_update_for_state(
     })
 }
 
+/// Commit a staged update only at the version its caller reviewed
+/// (ADR-0258): a transaction staged at any other version is refused before the
+/// installed package is touched. The staged metadata is written once, when the
+/// update is staged, so the check cannot race the commit.
+pub fn commit_reviewed_staged_update_for_state(
+    state: &PluginRuntimeState,
+    plugin_id: &str,
+    transaction_id: &str,
+    expected_version: &str,
+) -> Result<DownloadPayload> {
+    let transaction_dir = update_transaction_dir(state, plugin_id, transaction_id)?;
+    let metadata: StagedUpdateMetadata =
+        serde_json::from_slice(&fs::read(transaction_dir.join("transaction.json"))?)?;
+    if metadata.version != expected_version {
+        return Err(PluginError::InvalidArgument(format!(
+            "staged update is v{}, not the reviewed v{expected_version}",
+            metadata.version
+        )));
+    }
+    commit_staged_update_for_state(state, plugin_id, transaction_id)
+}
+
 pub fn discard_staged_update_for_state(
     state: &PluginRuntimeState,
     plugin_id: &str,
@@ -1131,8 +1153,14 @@ pub async fn plugin_commit_staged_update(
     state: State<'_, PluginRuntimeState>,
     plugin_id: String,
     transaction_id: String,
+    expected_version: String,
 ) -> Result<DownloadPayload> {
-    commit_staged_update_for_state(state.inner(), &plugin_id, &transaction_id)
+    commit_reviewed_staged_update_for_state(
+        state.inner(),
+        &plugin_id,
+        &transaction_id,
+        &expected_version,
+    )
 }
 
 #[cfg(feature = "tauri-host")]
@@ -1302,6 +1330,37 @@ mod tests {
         assert_eq!(
             fs::read(state.plugin_dir("demo.market").join("index.js")).unwrap(),
             b"old"
+        );
+    }
+
+    #[test]
+    fn a_reviewed_commit_refuses_a_transaction_staged_at_another_version() {
+        let root = TempDir::new().unwrap();
+        let state = make_state(&root);
+        let old = stage_test_tree(&state, b"old");
+        commit_staged_update_for_state(&state, "demo.market", &old).unwrap();
+        finalize_staged_update_for_state(&state, "demo.market", &old).unwrap();
+        let new = stage_test_tree(&state, b"new");
+
+        let refused = commit_reviewed_staged_update_for_state(&state, "demo.market", &new, "2.0.0")
+            .unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("staged update is v1.0.0, not the reviewed v2.0.0"),
+            "{refused}"
+        );
+        assert_eq!(
+            fs::read(state.plugin_dir("demo.market").join("index.js")).unwrap(),
+            b"old"
+        );
+
+        let committed =
+            commit_reviewed_staged_update_for_state(&state, "demo.market", &new, "1.0.0").unwrap();
+        assert_eq!(committed.version, "1.0.0");
+        assert_eq!(
+            fs::read(state.plugin_dir("demo.market").join("index.js")).unwrap(),
+            b"new"
         );
     }
 

@@ -18,6 +18,19 @@ export interface TransportCallOptions {
 }
 
 /** Keep command deadlines identical across HTTPS, WebRTC and encrypted relay. */
+/**
+ * The package changes a Host runs through its plugin manager
+ * (`HOST_PACKAGE_COMMANDS` in `lib/plugin/lifecycle/host-package-change.ts`,
+ * kept equal by its test; this transport leaf does not import plugin code).
+ */
+export const HOST_PACKAGE_CHANGE_COMMANDS: ReadonlySet<string> = new Set([
+  "plugin_install",
+  "plugin_install_from_github",
+  "plugin_uninstall",
+  "plugin_commit_staged_update",
+  "plugin_backup_restore",
+])
+
 export function transportCommandTimeoutMs(command: string): number {
   // First launch can install the broker (60s) and language pack (120s) before
   // the startup probe (30s). Leave download/proxy-install headroom, bounded so
@@ -41,6 +54,9 @@ export function transportCommandTimeoutMs(command: string): number {
   // which allows itself 300s for it (ADR-0224); wait for that answer.
   if (command === "plugin_cogpack_transfer_install" || command === "plugin_cogpack_install_staged")
     return 330_000
+  // A package change a device asks for runs through the Host's plugin manager,
+  // which may download a tree and restart the plugin; the Host allows 300s.
+  if (HOST_PACKAGE_CHANGE_COMMANDS.has(command)) return 330_000
   return 30_000
 }
 

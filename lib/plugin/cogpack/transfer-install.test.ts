@@ -57,20 +57,65 @@ async function signer(): Promise<CogpackSigner> {
   }
 }
 
-function deps(overrides: Partial<TransferInstallDeps> = {}): TransferInstallDeps & {
+/** A host manager whose statuses move the way the real lifecycle's do. */
+function packages(
+  initial: Record<string, string> = {},
+  intents: Record<string, "auto" | "enabled" | "disabled"> = {}
+) {
+  const status: Record<string, string | undefined> = { ...initial }
+  const events: string[] = []
+  const move = (name: string, next: string) =>
+    jest.fn(async (pluginId: string) => {
+      events.push(`${name}:${pluginId}`)
+      if (status[pluginId] !== undefined) status[pluginId] = next
+    })
+  const manager = {
+    getPlugin: (pluginId: string) =>
+      status[pluginId] === undefined ? undefined : ({ status: status[pluginId] } as never),
+    getPluginLifecycleState: async (pluginId: string) => ({ intent: intents[pluginId] ?? "auto" }),
+    enablePlugin: jest.fn(async (pluginId: string) => {
+      events.push(`enable:${pluginId}`)
+      status[pluginId] = "enabled"
+    }),
+    disablePlugin: move("disable", "disabled"),
+    suspendPlugin: move("suspend", "suspended"),
+    loadPlugin: move("load", "loaded"),
+    unloadPlugin: move("unload", "installed"),
+    uninstallPlugin: jest.fn(),
+    reservePluginRuntimeGraph: jest.fn(() => ({}) as never),
+    releasePluginRuntimeGraph: jest.fn(() => true),
+    withPluginPackageMutation: jest.fn(<T>(_id: string, operation: () => Promise<T>) =>
+      operation()
+    ),
+  }
+  const register = jest.fn(async (pluginId: string) => {
+    events.push(`register:${pluginId}`)
+    if (status[pluginId] === undefined) status[pluginId] = "installed"
+  })
+  return { manager, register, status, events }
+}
+
+function deps(
+  overrides: Partial<TransferInstallDeps> = {},
+  host = packages()
+): TransferInstallDeps & {
   installStaged: jest.Mock
   recordOrigin: jest.Mock
-  activate: jest.Mock
+  host: ReturnType<typeof packages>
 } {
   return {
     resolveTrust: jest.fn(async () => ({ trust: "signed-unknown" as const })),
-    installStaged: jest.fn(async () => ({
-      fingerprint: "f".repeat(64),
-      installed: [{ pluginId: "acme-notes", version: "0.2.0" }],
-      failed: [],
-    })),
+    installStaged: jest.fn(async () => {
+      host.events.push("installStaged")
+      return {
+        fingerprint: "f".repeat(64),
+        installed: [{ pluginId: "acme-notes", version: "0.2.0" }],
+        failed: [],
+      }
+    }),
     recordOrigin: jest.fn(async () => undefined),
-    activate: jest.fn(async () => []),
+    packages: { manager: host.manager, register: host.register },
+    host,
     ...overrides,
   } as never
 }
@@ -99,7 +144,57 @@ describe("installTransferredCogpack", () => {
       { pluginId: "acme-notes", version: "0.2.0" },
       { cogpackId: "transfer.work-laptop", version: "1.0.0", fingerprint: "f".repeat(64) }
     )
-    expect(d.activate).toHaveBeenCalledWith(["acme-notes"])
+    // New here: registered and started.
+    expect(d.host.events).toEqual(["installStaged", "register:acme-notes", "enable:acme-notes"])
+  })
+
+  it("stops a member this host runs before its package changes, and brings it back", async () => {
+    const exported = await exportCogpack(input())
+    const d = deps({}, packages({ "acme-notes": "loaded" }))
+    await installTransferredCogpack(
+      { uploadId: UPLOAD, operationId: OP, manifest: exported.manifest },
+      d
+    )
+    expect(d.host.events).toEqual([
+      "unload:acme-notes",
+      "installStaged",
+      "register:acme-notes",
+      "load:acme-notes",
+    ])
+  })
+
+  it("leaves a member whose intent is disabled here stopped", async () => {
+    const exported = await exportCogpack(input())
+    const d = deps(
+      {},
+      packages({ "acme-notes": "disabled" }, { "acme-notes": "disabled" })
+    )
+    const result = await installTransferredCogpack(
+      { uploadId: UPLOAD, operationId: OP, manifest: exported.manifest },
+      d
+    )
+    expect(d.host.events).toEqual(["unload:acme-notes", "installStaged", "register:acme-notes"])
+    expect(result.installed).toEqual([{ pluginId: "acme-notes", version: "0.2.0" }])
+  })
+
+  it("puts a running member back when the staged install fails", async () => {
+    const exported = await exportCogpack(input())
+    const host = packages({ "acme-notes": "enabled" })
+    const d = deps(
+      {
+        installStaged: jest.fn(async () => {
+          throw new Error("cogpack_manifest_mismatch: archive changed")
+        }),
+      },
+      host
+    )
+    await expect(
+      installTransferredCogpack(
+        { uploadId: UPLOAD, operationId: OP, manifest: exported.manifest },
+        d
+      )
+    ).rejects.toThrow("cogpack_manifest_mismatch")
+    expect(host.status["acme-notes"]).toBe("enabled")
   })
 
   it("refuses what this host's own plugin policy refuses, and never trusts the signer for it", async () => {
@@ -157,11 +252,9 @@ describe("installTransferredCogpack", () => {
 
   it("reports a plugin that installed but could not be enabled as not installed", async () => {
     const exported = await exportCogpack(input())
-    const d = deps({
-      activate: jest.fn(async () => [
-        { pluginId: "acme-notes", message: "plugin_not_discovered: refused" },
-      ]),
-    })
+    const host = packages()
+    host.register.mockRejectedValueOnce(new Error("plugin_not_discovered: refused"))
+    const d = deps({}, host)
     const result = await installTransferredCogpack(
       { uploadId: UPLOAD, operationId: OP, manifest: exported.manifest },
       d

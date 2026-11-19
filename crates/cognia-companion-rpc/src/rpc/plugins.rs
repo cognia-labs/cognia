@@ -105,6 +105,40 @@ pub(super) const COMMANDS: &[&str] = &[
 /// A plugin install can copy a large tree; the bridge's default 30 s is too short.
 const TRANSFER_INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// How long a device's package change may take on the Host: it can download a
+/// GitHub tree or copy a large one before the runtime restarts.
+const PACKAGE_CHANGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A package change a device or a remote caller asks for runs through the
+/// Host's own plugin manager (ADR-0258 §4, `lib/plugin/lifecycle/host-package-change.ts`):
+/// it stops the plugin's runtime, calls back into this command as the service
+/// principal for the native step, and brings the plugin back to the state it
+/// was in. Only the service principal reaches the native mutation directly.
+async fn hand_package_change_to_host(
+    state: &SharedState,
+    name: &str,
+    args: Value,
+) -> Result<Value, (StatusCode, Json<RpcError>)> {
+    let bridge = std::sync::Arc::clone(&state.desktop_writes_bridge);
+    let transport = cognia_companion::ws_bridge::resolve_bridge_transport(state)
+        .map_err(RpcError::service_unavailable)?;
+    bridge
+        .dispatch(transport.as_ref(), name, args, PACKAGE_CHANGE_TIMEOUT)
+        .await
+        .map_err(package_change_error)
+}
+
+/// The Host's TypeScript answers a refused change with a stable code prefix.
+fn package_change_error(detail: String) -> (StatusCode, Json<RpcError>) {
+    if detail.contains("plugin_change_malformed") {
+        RpcError::malformed(detail)
+    } else if detail.contains("plugin_identity_mismatch") {
+        RpcError::validation_failed(detail)
+    } else {
+        RpcError::internal(detail)
+    }
+}
+
 /// Transfer errors carry a stable code prefix the device's TypeScript reads.
 fn transfer_error(detail: String) -> (StatusCode, Json<RpcError>) {
     if detail.starts_with("REMOTE_SCOPE_DENIED") {
@@ -130,8 +164,10 @@ pub(super) async fn dispatch(
     let result = match name {
         // ── Plugins ──────────────────────────────────────────────────────────
         // Native install/uninstall manage the on-disk plugin dir + Rust
-        // snapshot. Headless mutations notify the Node PluginManager; desktop
-        // mutations take effect on the next renderer reload.
+        // snapshot. A device's package change is handed to the Host's plugin
+        // manager first (`hand_package_change_to_host`), which calls back here
+        // as the service principal; headless mutations then notify the Node
+        // PluginManager, which skips a change its own arm already applied.
         "plugin_list" => {
             if let Some(services) = host.headless() {
                 return cognia_plugin_runtime::lifecycle::plugin_get_all_for_state(
@@ -165,6 +201,9 @@ pub(super) async fn dispatch(
                 .and_then(to_json)
         }
         "plugin_install" => {
+            if !cognia_companion::jwt::is_service_scope(scope) {
+                return hand_package_change_to_host(state, name, args).await;
+            }
             let plugin_id: String = required(&args, "pluginId")?;
             let source: String = required(&args, "source")?;
             let payload_val: Value =
@@ -206,6 +245,10 @@ pub(super) async fn dispatch(
             let generated_files: Option<std::collections::BTreeMap<String, String>> =
                 optional(&args, "generatedFiles")?;
             let defer_commit: bool = optional(&args, "deferCommit")?.unwrap_or(false);
+            // Staging alone changes no installed package.
+            if !defer_commit && !cognia_companion::jwt::is_service_scope(scope) {
+                return hand_package_change_to_host(state, name, args).await;
+            }
             if let Some(services) = host.headless() {
                 let result =
                     cognia_plugin_runtime::github::installer::plugin_install_from_github_for_state(
@@ -244,6 +287,9 @@ pub(super) async fn dispatch(
             .and_then(to_json)
         }
         "plugin_uninstall" => {
+            if !cognia_companion::jwt::is_service_scope(scope) {
+                return hand_package_change_to_host(state, name, args).await;
+            }
             let plugin_id: String = required(&args, "pluginId")?;
             if let Some(services) = host.headless() {
                 cognia_plugin_runtime::lifecycle::plugin_uninstall_for_state(
@@ -393,15 +439,23 @@ pub(super) async fn dispatch(
             .and_then(to_json)
         }
         "plugin_commit_staged_update" => {
+            if !cognia_companion::jwt::is_service_scope(scope) {
+                return hand_package_change_to_host(state, name, args).await;
+            }
             let plugin_id: String = required(&args, "pluginId")?;
             let transaction_id: String = required(&args, "transactionId")?;
+            // The version the caller reviewed; a transaction staged at any
+            // other is refused before the installed package is touched.
+            let expected_version: String = required(&args, "expectedVersion")?;
             if let Some(services) = host.headless() {
-                let committed = cognia_plugin_runtime::marketplace::commit_staged_update_for_state(
-                    services.plugin_runtime.as_ref(),
-                    &plugin_id,
-                    &transaction_id,
-                )
-                .map_err(|error| RpcError::internal(error.to_string()))?;
+                let committed =
+                    cognia_plugin_runtime::marketplace::commit_reviewed_staged_update_for_state(
+                        services.plugin_runtime.as_ref(),
+                        &plugin_id,
+                        &transaction_id,
+                        &expected_version,
+                    )
+                    .map_err(|error| RpcError::internal(error.to_string()))?;
                 services.event_bus.publish(
                     "plugin://runtime-changed".to_string(),
                     serde_json::json!({
@@ -413,10 +467,11 @@ pub(super) async fn dispatch(
                 return to_json(committed);
             }
             let state = host.plugin_runtime();
-            cognia_plugin_runtime::marketplace::commit_staged_update_for_state(
+            cognia_plugin_runtime::marketplace::commit_reviewed_staged_update_for_state(
                 state,
                 &plugin_id,
                 &transaction_id,
+                &expected_version,
             )
             .map_err(|error| RpcError::internal(error.to_string()))
             .and_then(to_json)
@@ -483,6 +538,9 @@ pub(super) async fn dispatch(
                 .and_then(to_json)
         }
         "plugin_backup_restore" => {
+            if !cognia_companion::jwt::is_service_scope(scope) {
+                return hand_package_change_to_host(state, name, args).await;
+            }
             let plugin_id: String = required(&args, "pluginId")?;
             let backup_id: String = required(&args, "backupId")?;
             if let Some(services) = host.headless() {

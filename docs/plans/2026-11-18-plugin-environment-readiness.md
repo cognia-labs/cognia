@@ -1,6 +1,6 @@
 # 插件运行环境就绪、Python 锁定、数据回滚与生命周期契约方案
 
-> 状态：实施中，P0–P4 已完成（2026-11-19）。创建：2026-11-18（Asia/Shanghai）。
+> 状态：P0–P5 已完成（2026-11-19），只剩各阶段的实机验证。创建：2026-11-18（Asia/Shanghai）。
 > 依据：[插件支持审计证据](../evidence/2026-11-08-plugin-support-audit.md)（第 697 行起的 ENV01–ENV07），以及 2026-11-18 已落地的 PL01–PL19 修复（`de7889b157..81c5c55bc4`）。
 > 范围：ENV01、ENV02、ENV03、ENV04、ENV07。ENV05 已修复；ENV06（独立插件 release 的产品采用）不在本方案内。
 > 本文的阶段划分、默认值和数据格式是建议，经确认后才实施。
@@ -209,6 +209,29 @@ uv 的锁安装语义（来源：astral-sh/uv 文档，经 context7 查询）：
 - **paired client**：Host 端 RPC 安装命令接收并校验审核过的 id、版本和摘要（与 PL02/PL03 一样）；client 端区分「已排队」和「已生效」，Host 回执后刷新状态。
 - **Capacitor 镜像**：只读，标注清楚，纳入一致性测试中的只读断言。
 - **收尾**：每个环境通过一致性测试后，更新 ADR 的矩阵。
+
+**实施记录（2026-11-19）**：
+
+- **决定**：用户选择让设备的包变更经由 Host 的插件管理器执行（桌面端与无头 Host 同一套），不在 Rust 里先换包。
+- **共用的替换步骤**：新增 `lib/plugin/lifecycle/replace-package.ts`。它依次预留依赖图、停下运行时、在包锁内提交、登记磁盘上的 manifest、恢复原状态。持久意图为停用的插件保持停止，新插件进入调用方指定的状态。支持一次提交替换多个插件，包锁按 id 排序加锁。CLI 的 `replaceDiskPlugin` 改为调用它，原有测试不变、全部通过。
+- **headless**：`plugin-runtime-adapter.ts` 的对齐改走共用步骤（提交为空操作，因为包已经换好），不再一律启用。Host 自己的处理已经应用过的变更，事件会被跳过：处理前登记，事件到达时消费一次，5 分钟后过期。适配器启动时把 Node 端的磁盘发现提供给 Host 处理逻辑，停止时撤回。契约环境 `headless-reconcile` 运行 4 个前置状态场景；身份、提交前失败、取消、提交后失败记为缺口，并写明原因。
+- **Host 处理设备请求**：新增 `lib/plugin/lifecycle/host-package-change.ts`，`desktop-write-source` 把 `plugin_install`、`plugin_install_from_github`、`plugin_uninstall`、`plugin_commit_staged_update`、`plugin_backup_restore` 交给它。`plugins.rs` 中这些 arm 对非 service 调用方一律转交 Host 桥接（GitHub 安装仅在非 `deferCommit` 时转交，超时 300 秒）；只有 service principal 直接执行原生命令。brain 用 service 传输回调原生命令，这条路径不需要新增内部命令。
+  - 身份：`plugin_commit_staged_update` 新增必填的 `expectedVersion`。TS 端先校验一次；Rust 端新增 `commit_reviewed_staged_update_for_state`，在换包之前比对暂存元数据中的版本。Tauri 命令同样要求这个参数。请求 schema 已同步更新，桌面端的两个调用方也会传入它。
+  - manifest 安装只接受 manifest 中的 id；GitHub 安装先用 `deferCommit` 暂存，得知插件 id 后再停下插件、带版本提交、最后 finalize；提交失败时丢弃暂存。
+  - 卸载交给插件管理器，由它先卸载运行时再删包。
+  - 提交后若无法启动，新包保留、运行时停止，返回 `plugin_restart_required:`。前缀 `plugin_change_malformed` / `plugin_identity_mismatch` 在 Rust 端映射为 400 / 422。
+  - 客户端等待时间：`transport-types.ts` 为这五个命令设为 330 秒，测试确保两份命令清单保持一致。
+  - 契约环境 `host-package-change` 运行 7 个场景；取消记为缺口。
+- **cogpack 迁移**：`transfer-install.ts` 改为一次替换全部成员。Host 上已有的成员先停下，安装后恢复原状态；新成员启动；停用意图的成员保持停止；安装失败时恢复原运行状态。桌面端和无头 Host 走同一条路径，旧的 `activateOnDesktop` 已删除。
+- **配对客户端**：
+  - `plugin-transfer.ts` 新增 `reconcileTransferWithReview`，用审核过的 id 和版本核对 Host 的回复。版本不同或未提到的插件记为 `plugin_not_applied`。
+  - 开关：新增 `lib/plugin/core/mirrored-toggle-receipt.ts`。Host 回复后读回 `plugins` 表：应用成功时合并成一次拉取；Host 拒绝时先回卷游标再拉取；网络错误或超时不算回复，开关保持“已排队”。由 `companion-outbound-runner-provider.tsx` 的 dispatcher 调用。手机端 Discover 插件面板在开关排队时给出“已排队”提示（复用 `plugins.lifecycleFeedback` 的文案，没有新增 key）。
+- **Capacitor 镜像**：`contract.ts` 新增 `MIRROR_CLAUSES` 和 `mirrorViolations`，共四条：不替换包、不运行插件、Host 回复前标为已排队、回复后读回。这些条款由开关、回执和卸载拒绝的测试运行。`NOT_YET_CONFORMING` 已清空并删除。
+- **ADR**：矩阵按环境重写，新增 cogpack 迁移一行，影响部分写明剩余问题。
+- **未验证**：
+  - Rust 改动（`plugins.rs`、`marketplace.rs`）没有编译，新加的 Rust 测试也没有运行：磁盘只剩约 150 MB，其他会话正在占用。
+  - 没有在桌面端或无头 Host 上用真实的配对设备跑过更新、回滚、卸载或 cogpack 迁移。
+  - 没有在手机上看过“已排队”提示和读回效果。
 
 ## 5. 失败场景清单（每项至少一条测试）
 

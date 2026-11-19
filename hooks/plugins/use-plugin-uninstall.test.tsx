@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 
+import { mirrorViolations } from "@/lib/plugin/lifecycle/contract"
 import { act, renderHook } from "@testing-library/react"
 
 jest.mock("@/lib/plugin/core/manager", () => ({
@@ -102,11 +103,21 @@ describe("uninstallPluginForHost", () => {
     expect(deletePlugin).toHaveBeenCalledWith("draft")
   })
 
-  it("refuses on a mirrored client", async () => {
+  it("refuses on a mirrored client (ADR-0258 mirror clause replaces-nothing)", async () => {
     ;(isMirroredPluginClient as jest.Mock).mockReturnValue(true)
     await expect(uninstallPluginForHost("p1")).rejects.toBeInstanceOf(PluginUninstallBlockedError)
     expect(uninstallPlugin).not.toHaveBeenCalled()
     expect(deletePlugin).not.toHaveBeenCalled()
+    expect(
+      mirrorViolations({
+        packageOperations:
+          (uninstallPlugin as jest.Mock).mock.calls.length +
+          (deletePlugin as jest.Mock).mock.calls.length,
+        localRuntimeCalls: 0,
+        reportedBeforeAnswer: "queued",
+        readBackAfterAnswer: true,
+      })
+    ).not.toContain("replaces-nothing")
   })
 })
 

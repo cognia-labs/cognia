@@ -1024,6 +1024,7 @@ export class PluginMarketplace {
     await invoke("plugin_commit_staged_update", {
       pluginId: staged.pluginId,
       transactionId: staged.transactionId,
+      expectedVersion: staged.version,
     })
   }
 

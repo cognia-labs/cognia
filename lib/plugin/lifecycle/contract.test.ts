@@ -1,8 +1,9 @@
 import {
   CONTRACT_GAPS,
-  NOT_YET_CONFORMING,
+  MIRROR_CLAUSES,
   REPLACEMENT_SCENARIOS,
   contractViolations,
+  mirrorViolations,
   scenariosFor,
   type ReplacementObservation,
   type ReplacementScenario,
@@ -161,18 +162,27 @@ describe("recorded gaps", () => {
       "desktop-rollback": { identity: expect.any(String), cancel: expect.any(String) },
       "cli-update": {},
       "vscode-install": { cancel: expect.any(String) },
+      "headless-reconcile": {
+        identity: expect.any(String),
+        "before-commit": expect.any(String),
+        cancel: expect.any(String),
+        "after-commit": expect.any(String),
+      },
+      "host-package-change": { cancel: expect.any(String) },
     })
-    expect(Object.keys(NOT_YET_CONFORMING).sort()).toEqual([
-      "capacitor-mirror",
-      "headless-reconcile",
-      "paired-client",
-    ])
   })
 
   it("runs every scenario except an environment's recorded gaps", () => {
     expect(scenariosFor("cli-update")).toHaveLength(REPLACEMENT_SCENARIOS.length)
     expect(scenariosFor("desktop-update").map((s) => s.fault)).not.toContain("cancel")
     expect(scenariosFor("vscode-install")).toHaveLength(REPLACEMENT_SCENARIOS.length - 1)
+    expect(scenariosFor("headless-reconcile").map((s) => s.fault)).toEqual([
+      "none",
+      "none",
+      "none",
+      "none",
+    ])
+    expect(scenariosFor("host-package-change").map((s) => s.fault)).not.toContain("cancel")
     expect(scenariosFor("desktop-rollback").map((s) => s.fault)).toEqual([
       "none",
       "none",
@@ -181,5 +191,29 @@ describe("recorded gaps", () => {
       "before-commit",
       "after-commit",
     ])
+  })
+})
+
+describe("mirror clauses (ADR-0258)", () => {
+  const conforming = {
+    packageOperations: 0,
+    localRuntimeCalls: 0,
+    reportedBeforeAnswer: "queued" as const,
+    readBackAfterAnswer: true,
+  }
+
+  it("accepts a mirror that queues its toggle and reads the Host's answer back", () => {
+    expect(mirrorViolations(conforming)).toEqual([])
+  })
+
+  it("names each clause a mirror breaks", () => {
+    expect(
+      mirrorViolations({
+        packageOperations: 1,
+        localRuntimeCalls: 2,
+        reportedBeforeAnswer: "applied",
+        readBackAfterAnswer: false,
+      })
+    ).toEqual(Object.keys(MIRROR_CLAUSES))
   })
 })

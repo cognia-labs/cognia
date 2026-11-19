@@ -34,6 +34,11 @@ const mockTransferInstall = jest.fn()
 jest.mock("@/lib/plugin/cogpack/transfer-install", () => ({
   installTransferredCogpack: (input: unknown) => mockTransferInstall(input),
 }))
+const mockHostPackageChange = jest.fn()
+jest.mock("@/lib/plugin/lifecycle/host-package-change", () => ({
+  applyHostPackageChange: (command: string, input: unknown) =>
+    mockHostPackageChange(command, input),
+}))
 const mockGithubAccountSetup = jest.fn()
 jest.mock("@/lib/integrations/github-account-setup", () => ({
   connectGithubAccountFromSecret: (...args: unknown[]) => mockGithubAccountSetup(...args),
@@ -2368,6 +2373,21 @@ describe("dispatchCommand: plugin_cogpack_transfer_install", () => {
       answer
     )
     expect(mockTransferInstall).toHaveBeenCalledWith(payload)
+  })
+})
+
+describe("dispatchCommand: package changes a device asks the Host for", () => {
+  it.each([
+    "plugin_install",
+    "plugin_install_from_github",
+    "plugin_uninstall",
+    "plugin_commit_staged_update",
+    "plugin_backup_restore",
+  ])("hands %s to the Host's plugin manager (ADR-0258)", async (command) => {
+    mockHostPackageChange.mockResolvedValue({ applied: command })
+    const payload = { pluginId: "demo", adminLease: "lease" }
+    await expect(dispatchCommand(command, payload)).resolves.toEqual({ applied: command })
+    expect(mockHostPackageChange).toHaveBeenCalledWith(command, payload)
   })
 })
 

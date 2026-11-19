@@ -137,9 +137,43 @@ async function upload(
 }
 
 /**
+ * Hold the Host's answer to what the user reviewed (ADR-0258 §4): a plugin
+ * counts as applied only when the Host reports it installed and running at
+ * the reviewed version. One the Host reports at another version, or does not
+ * mention at all, is listed as not applied rather than taken on trust.
+ */
+export function reconcileTransferWithReview(
+  reviewed: readonly PluginTransferRequest[],
+  answer: TransferInstallResult
+): TransferInstallResult {
+  const failed = [...answer.failed]
+  const installed: TransferInstallResult["installed"] = []
+  const reported = new Map(answer.installed.map((member) => [member.pluginId, member.version]))
+  const refused = new Set(answer.failed.map((member) => member.pluginId))
+  for (const plugin of reviewed) {
+    const version = reported.get(plugin.pluginId)
+    if (version === plugin.version) {
+      installed.push({ pluginId: plugin.pluginId, version })
+    } else if (version !== undefined) {
+      failed.push({
+        pluginId: plugin.pluginId,
+        message: `plugin_not_applied: the host installed v${version}, not the reviewed v${plugin.version}`,
+      })
+    } else if (!refused.has(plugin.pluginId)) {
+      failed.push({
+        pluginId: plugin.pluginId,
+        message: "plugin_not_applied: the host did not report this plugin",
+      })
+    }
+  }
+  return { fingerprint: answer.fingerprint, installed, failed }
+}
+
+/**
  * Pack, upload and install `plugins` on the host. Resolves to what the host
- * installed and what it could not; refusals by the host's policy reject with
- * the host's `cogpack_*` message.
+ * applied, held to the reviewed versions ({@link reconcileTransferWithReview}),
+ * and what it could not; refusals by the host's policy reject with the host's
+ * `cogpack_*` message.
  */
 export async function transferPlugins(
   hostId: string,
@@ -193,13 +227,17 @@ export async function transferPlugins(
         totalBytes: exported.bytes.byteLength,
         phase: "installing",
       })
-      return transport.call<TransferInstallResult>("plugin_cogpack_transfer_install", {
-        uploadId,
-        operationId,
-        manifest: exported.manifest,
-        sourceLabel,
-        adminLease: options.adminLease,
-      })
+      const answer = await transport.call<TransferInstallResult>(
+        "plugin_cogpack_transfer_install",
+        {
+          uploadId,
+          operationId,
+          manifest: exported.manifest,
+          sourceLabel,
+          adminLease: options.adminLease,
+        }
+      )
+      return reconcileTransferWithReview(plugins, answer)
     },
     deps.channel
   )

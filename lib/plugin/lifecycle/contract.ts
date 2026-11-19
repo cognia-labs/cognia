@@ -12,13 +12,21 @@
  *
  * Gaps an environment has not closed are listed in {@link CONTRACT_GAPS} with
  * the reason, so a skipped scenario is a recorded decision rather than a
- * silent omission; `contract.test.ts` pins the list.
+ * silent omission; `contract.test.ts` pins the list. Clients that mirror a
+ * Host's plugins replace no package; they run {@link MIRROR_CLAUSES} instead.
  */
 import type { RuntimeResumeState } from "./runtime-state"
 
 /** Environments whose package replacement already runs the contract suite. */
 export type ContractEnvironment =
-  "desktop-update" | "desktop-rollback" | "cli-update" | "vscode-install"
+  | "desktop-update"
+  | "desktop-rollback"
+  | "cli-update"
+  | "vscode-install"
+  /** The headless brain catching up with a package that changed on disk (`plugin-runtime-adapter.ts`). */
+  | "headless-reconcile"
+  /** A package change a paired device or remote caller asks a Host for (`host-package-change.ts`). */
+  | "host-package-change"
 
 /** Where a scenario makes the operation fail, if anywhere. */
 export type ReplacementFault =
@@ -72,20 +80,58 @@ export const CONTRACT_GAPS: Readonly<
     cancel:
       "commitVscodeExtension has no cancel point; a caller cancels by discarding the staged graph instead of committing it",
   },
+  "headless-reconcile": {
+    identity:
+      "a runtime-changed event reports a package that already changed on disk; the command that changed it checked the identity",
+    "before-commit": "the commit happened before the event; there is no step before it to fail",
+    cancel: "the commit happened before the event; there is nothing left to cancel",
+    "after-commit":
+      "a reconcile that cannot register or restart the plugin is logged by the brain; nothing asks the user for a restart",
+  },
+  "host-package-change": {
+    cancel:
+      "a device's request has no cancel point once the Host accepted it; the device cancels by not committing what it staged",
+  },
 })
 
 /**
- * Environments that replace packages but do not run the suite yet, with what
- * they still do differently. Aligning them is ADR-0258's second step.
+ * Clients whose plugin rows mirror a Host's (a paired phone, a browser pointed
+ * at a Host). They replace no package, so the replacement scenarios do not
+ * apply; what they must not do, and how they must report a change they ask
+ * for, is below. A package change a client asks for runs on the Host as
+ * `host-package-change`.
  */
-export const NOT_YET_CONFORMING: Readonly<Record<string, string>> = Object.freeze({
-  "headless-reconcile":
-    "cli/src/serve/plugin-runtime-adapter.ts always unloads, registers, loads and enables: the prior runtime state is not restored and a plugin whose intent is disabled fails its enable",
-  "paired-client":
-    "installs and staged updates run on the Host over companion RPC; whether the reviewed identity reaches each RPC command, and how the client labels queued against applied, is unverified",
-  "capacitor-mirror":
-    "a read-only mirror of a Host's plugins; it performs no replacement, so only the queued-versus-applied labelling applies",
+export const MIRROR_CLAUSES: Readonly<Record<string, string>> = Object.freeze({
+  "replaces-nothing":
+    "installs, updates, rollbacks and uninstalls are refused on the mirror; the Host changes its own packages",
+  "runs-nothing": "a toggle never drives a local plugin manager on the mirror",
+  "queued-is-not-applied":
+    "a toggle the mirror sent is reported as queued until the Host answers, never as applied",
+  "host-answer-wins":
+    "once the Host answers, applied or refused, the mirror's row is read back from the Host",
 })
+
+/** What a mirror harness saw. */
+export interface MirrorObservation {
+  /** Package operations the mirror performed itself (install, update, rollback, uninstall). */
+  packageOperations: number
+  /** Lifecycle calls on a local plugin manager. */
+  localRuntimeCalls: number
+  /** What the toggle reported before the Host answered. */
+  reportedBeforeAnswer: "queued" | "applied" | "failed"
+  /** Whether the mirror read its plugin rows back from the Host after the answer. */
+  readBackAfterAnswer: boolean
+}
+
+/** Every {@link MIRROR_CLAUSES} clause `observed` breaks. */
+export function mirrorViolations(observed: MirrorObservation): string[] {
+  const violations: string[] = []
+  if (observed.packageOperations > 0) violations.push("replaces-nothing")
+  if (observed.localRuntimeCalls > 0) violations.push("runs-nothing")
+  if (observed.reportedBeforeAnswer !== "queued") violations.push("queued-is-not-applied")
+  if (!observed.readBackAfterAnswer) violations.push("host-answer-wins")
+  return violations
+}
 
 /** The scenarios `environment` must pass: every one whose clause is not a recorded gap. */
 export function scenariosFor(environment: ContractEnvironment): ReplacementScenario[] {

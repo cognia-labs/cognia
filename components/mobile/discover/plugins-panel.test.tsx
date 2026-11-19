@@ -35,7 +35,7 @@ jest.mock("@/components/plugins/cogsets/cogset-switcher", () => ({
   CogsetSwitcher: () => <div data-testid="cogset-switcher-stub" />,
 }))
 jest.mock("sonner", () => ({
-  toast: { error: jest.fn(), success: jest.fn(), info: jest.fn() },
+  toast: { error: jest.fn(), success: jest.fn(), info: jest.fn(), message: jest.fn() },
 }))
 
 import { useLiveQuery } from "dexie-react-hooks"
@@ -90,6 +90,16 @@ describe("PluginsPanel", () => {
     expect(setEnabledMock).toHaveBeenCalledWith("p1", true)
     expect(updateMock).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it("says a toggle sent to the Host is queued, not applied", async () => {
+    setEnabledMock.mockResolvedValue({ ok: true, queued: true })
+    useLiveQueryMock.mockReturnValue([{ id: "p1", name: "Web Tools", enabled: false }])
+    const user = userEvent.setup()
+    render(<PluginsPanel />)
+    await user.click(screen.getByTestId("plugin-switch-p1"))
+    const { toast } = jest.requireMock("sonner") as { toast: { message: jest.Mock } }
+    expect(toast.message).toHaveBeenCalledWith("enableQueued", { description: "queuedHint" })
   })
 
   it("surfaces a failed toggle as a toast", async () => {

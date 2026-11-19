@@ -12,7 +12,9 @@
  * The toggle goes through `setPluginEnabledForHost`, not through a Dexie write
  * plus an unconditional `plugin_set_enabled` enqueue. This panel used to do the
  * latter, which is right on a paired phone and wrong on a desktop or a
- * standalone browser, where the local manager owns the runtime.
+ * standalone browser, where the local manager owns the runtime. On a paired
+ * phone the toggle is queued for the Host and says so; the row shows the
+ * Host's state once it answers (`lib/plugin/core/mirrored-toggle-receipt.ts`).
  */
 
 import { CogsetSwitcher } from "@/components/plugins/cogsets/cogset-switcher"
@@ -36,6 +38,7 @@ interface PluginRow {
 
 export function PluginsPanel() {
   const t = useTranslations("mobile.plugins")
+  const tFeedback = useTranslations("plugins.lifecycleFeedback")
   const rows =
     useLiveQuery<PluginRow[]>(() => getDb().plugins.toArray() as Promise<PluginRow[]>, []) ?? []
 
@@ -45,9 +48,15 @@ export function PluginsPanel() {
       const result = await setPluginEnabledForHost(id, next)
       if (!result.ok) {
         toast.error(t("toggleFailed", { message: result.error ?? "" }))
+      } else if (result.queued) {
+        // Queued is not applied: the Host has not answered yet.
+        const name = rows.find((row) => row.id === id)?.name ?? id
+        toast.message(tFeedback(next ? "enableQueued" : "disableQueued", { name }), {
+          description: tFeedback("queuedHint"),
+        })
       }
     },
-    [t]
+    [rows, t, tFeedback]
   )
 
   // The cogset control heads the panel, empty or not: a paired phone switches

@@ -108808,14 +108808,22 @@ paths:
           application/json:
             schema:
               type: object
+              description: Commit a staged update at the version the caller reviewed; a transaction staged at any other version is
+                refused before the installed package changes (ADR-0258). A device's commit runs through the Host's
+                plugin manager, which stops the plugin first and restores its runtime state afterwards
+                (lib/plugin/lifecycle/host-package-change.ts).
               required:
                 - pluginId
                 - transactionId
+                - expectedVersion
               properties:
                 pluginId:
                   type: string
                 transactionId:
                   type: string
+                expectedVersion:
+                  type: string
+                  minLength: 1
               additionalProperties: false
       responses:
         "200":

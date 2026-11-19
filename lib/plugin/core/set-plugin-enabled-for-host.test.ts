@@ -25,6 +25,8 @@ jest.mock("@/lib/plugin/analytics/record", () => ({
 }))
 
 import { isMirroredPluginClient, setPluginEnabledForHost } from "./set-plugin-enabled-for-host"
+import { mirrorViolations } from "@/lib/plugin/lifecycle/contract"
+import { settleMirroredPluginToggle } from "./mirrored-toggle-receipt"
 import { __resetDbForTesting, activateAccountDatabase, getDb } from "@/lib/db/schema"
 import {
   clearActiveRuntimeTargetContext,
@@ -258,5 +260,39 @@ describe("setPluginEnabledForHost", () => {
     mockIsCapacitor.mockReturnValue(true)
     await setPluginEnabledForHost("p1", true)
     expect(mockRecordAnalytic).toHaveBeenCalledWith("p1", "lifecycle.enabled")
+  })
+})
+
+describe("ADR-0258 mirror clauses: capacitor-mirror", () => {
+  it("queues the toggle, runs nothing here, and reads the Host's rows back once it answers", async () => {
+    mockIsCapacitor.mockReturnValue(true)
+    const result = await setPluginEnabledForHost("p1", true)
+    const queuedRows = await getDb().mobileOutboundQueue.toArray()
+
+    // The Host answers the queued job; the mirror reads its rows back.
+    const pull = jest.fn(async () => [])
+    await settleMirroredPluginToggle(
+      { ok: true },
+      {
+        rewind: jest.fn(),
+        pull,
+        schedule: (run) => {
+          run()
+          return 1
+        },
+        cancel: jest.fn(),
+      }
+    )
+
+    expect(queuedRows.map((row) => row.command)).toEqual(["plugin_set_enabled"])
+    expect(
+      mirrorViolations({
+        // The toggle is the mirror's only lifecycle path; it never reaches a package.
+        packageOperations: 0,
+        localRuntimeCalls: mockToggle.mock.calls.length,
+        reportedBeforeAnswer: !result.ok ? "failed" : result.queued ? "queued" : "applied",
+        readBackAfterAnswer: pull.mock.calls.length === 1,
+      })
+    ).toEqual([])
   })
 })
