@@ -150,9 +150,9 @@ minimumReleaseAgeExclude:
   - ai@7.0.48 || 7.0.128
   - get-tsconfig@4.14.1
   - tsx@4.23.3
-  - "@opencode/client@2.0.5 || 2.0.23"
-  - "@opencode/protocol@2.0.5 || 2.0.23"
-  - "@opencode/schema@2.0.5 || 2.0.23"
+  - "@opencode/client@2.0.5 || 2.0.23 || 2.2.7"
+  - "@opencode/protocol@2.0.5 || 2.0.23 || 2.2.7"
+  - "@opencode/schema@2.0.5 || 2.0.23 || 2.2.7"
   - "@ai-sdk/alibaba@2.0.61"
   - "@ai-sdk/amazon-bedrock@5.0.106"
   - "@ai-sdk/anthropic@4.0.72"

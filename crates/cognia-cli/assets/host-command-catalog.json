@@ -26707,6 +26707,30 @@
             "type": "string",
             "description": "The command's whole input; its stdin closes after it."
           },
+          "network": {
+            "type": "object",
+            "description": "Optional command egress ceiling. When absent, the admitted environment's egress policy applies. The Host refuses a broader environment.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "allowlist",
+                  "on"
+                ]
+              },
+              "hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
           "timeoutMs": {
             "type": "integer",
             "minimum": 1,
@@ -113933,5 +113957,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "80b24638bde5e0924c33ef7d9aeb82e45e8fbf705776ad215b14b345f4cc71b1"
+  "catalogHash": "3067c626cf41882f1d7c9d8eb24a4ada0ea2903113ba2161f374eb5c21466556"
 }

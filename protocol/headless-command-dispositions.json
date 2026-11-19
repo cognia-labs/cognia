@@ -1079,6 +1079,15 @@
       "disposition": "local-only",
       "reason": "A WASM plugin's guest log lines are drained by the renderer on the machine that runs the plugin, the same one that receives each line as a plugin-wasm://log event, to fill the plugin Dev Session's Runtime logs card. A paired or headless client has no event stream to backfill and no Dev Session for that Host's plugins.",
       "commands": ["plugin_wasm_logs"]
+    },
+    {
+      "disposition": "local-only",
+      "reason": "The local desktop owns restart-only application-session engine configuration, bundled executable integrity and native Accessibility permissions. Paired and headless clients cannot select or launch a local engine.",
+      "commands": [
+        "automation_session_engine_get",
+        "automation_session_engine_set",
+        "automation_session_engine_probe"
+      ]
     }
   ]
 }

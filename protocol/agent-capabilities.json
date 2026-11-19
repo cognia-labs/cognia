@@ -152,9 +152,8 @@
           "evidence": "none"
         },
         "steer": {
-          "level": "unsupported",
-          "evidence": "protocol-spec",
-          "reasonKey": "noProtocolSlot"
+          "level": "unknown",
+          "evidence": "protocol-spec"
         },
         "set-model": {
           "level": "native",
