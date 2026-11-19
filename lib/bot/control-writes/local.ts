@@ -121,8 +121,12 @@ export interface RunBotManuallyInput {
   installationId: string
   /** The `manual` trigger to attribute the run to. Defaults to the first one. */
   triggerId?: string
-  /** Free-form input the handler receives as the event payload. */
-  input?: unknown
+  /**
+   * Fields the handler receives as the event payload. An object, as
+   * `bot_run_manual` carries it on the wire, so a press run here and one
+   * relayed to a paired Host start the same run.
+   */
+  input?: Record<string, unknown>
   /**
    * Distinguishes a second run from a retry of the first.
    *

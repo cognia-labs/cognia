@@ -2464,13 +2464,17 @@ async function botRunManual(
   const idempotencyKey = String(payload.idempotencyKey ?? "")
   if (!installationId) throw new Error("bot_run_manual.installationId is required")
   if (!idempotencyKey) throw new Error("bot_run_manual.idempotencyKey is required")
+  // Refused rather than dropped: a run started with `{}` in place of what the
+  // press sent would do something nobody asked for.
+  const input = payload.input
+  if (input !== undefined && (!input || typeof input !== "object" || Array.isArray(input))) {
+    throw new Error("bot_run_manual.input must be an object")
+  }
   const { runBotManuallyLocally } = await import("@/lib/bot/control-writes/local")
   const result = await runBotManuallyLocally({
     installationId,
     ...(typeof payload.triggerId === "string" ? { triggerId: payload.triggerId } : {}),
-    ...(payload.input && typeof payload.input === "object"
-      ? { input: payload.input as Record<string, unknown> }
-      : {}),
+    ...(input !== undefined ? { input: input as Record<string, unknown> } : {}),
     idempotencyKey,
   })
   return result

@@ -155,11 +155,10 @@ export interface RunBotManuallyRemotelyInput {
   installationId: string
   triggerId?: string
   /**
-   * Free-form, and typed as it is on the local leg rather than narrowed to an
-   * object. The handler decides what its payload means, and narrowing here
-   * would make the two legs take different inputs for the same button.
+   * Typed as it is on the local leg and on the wire (`bot_run_manual.input`
+   * is an object), so the two legs take the same input for the same button.
    */
-  input?: unknown
+  input?: Record<string, unknown>
   /** Minted once by the caller and reused on every retry of this press. */
   idempotencyKey: string
 }

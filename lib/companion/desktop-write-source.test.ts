@@ -3274,6 +3274,28 @@ describe("dispatchCommand: the Bot control arms", () => {
     })
   })
 
+  it("hands the pressed input through and refuses one that is not an object (B13)", async () => {
+    await dispatchCommand("bot_run_manual", {
+      installationId: "boti_1",
+      input: { pr: 7 },
+      idempotencyKey: "uuid-8",
+    })
+    expect(botRunLocal).toHaveBeenCalledWith({
+      installationId: "boti_1",
+      input: { pr: 7 },
+      idempotencyKey: "uuid-8",
+    })
+    botRunLocal.mockClear()
+    for (const input of ["review #7", ["pr"], null]) {
+      await expect(
+        dispatchCommand("bot_run_manual", { installationId: "boti_1", input, idempotencyKey: "k" })
+      ).rejects.toThrow(/input must be an object/)
+    }
+    // A run started with `{}` instead of what was pressed is the bug, so
+    // nothing may reach the runner.
+    expect(botRunLocal).not.toHaveBeenCalled()
+  })
+
   it("refuses a manual run with no idempotency key", async () => {
     await expect(dispatchCommand("bot_run_manual", { installationId: "boti_1" })).rejects.toThrow(
       /idempotencyKey is required/
