@@ -24,6 +24,8 @@ import {
 import type { BundledLanguage, BundledTheme, HighlighterGeneric, ThemedToken } from "shiki"
 import { createHighlighter } from "shiki"
 import { CHAT_CODE_THEME } from "@/lib/chat/code-theme"
+import { chatCodeThemeInputs } from "@/lib/shiki/chat-code-themes"
+import { useTranslations } from "next-intl"
 
 // Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
 // oxlint-disable-next-line eslint(no-bitwise)
@@ -81,7 +83,7 @@ const LINE_NUMBER_CLASSES = cn(
   "before:w-8",
   "before:mr-4",
   "before:text-right",
-  "before:text-muted-foreground/50",
+  "before:text-muted-foreground",
   "before:font-mono",
   "before:select-none"
 )
@@ -112,6 +114,8 @@ interface TokenizedCode {
   tokens: ThemedToken[][]
   fg: string
   bg: string
+  darkFg: string
+  darkBg: string
 }
 
 interface CodeBlockContextType {
@@ -136,9 +140,7 @@ const tokensCache = new Map<string, TokenizedCode>()
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>()
 
 const getTokensCacheKey = (code: string, language: BundledLanguage) => {
-  const start = code.slice(0, 100)
-  const end = code.length > 100 ? code.slice(-100) : ""
-  return `${language}:${code.length}:${start}:${end}`
+  return `${language.length}:${language}${code}`
 }
 
 const getHighlighter = (
@@ -151,7 +153,7 @@ const getHighlighter = (
 
   const highlighterPromise = createHighlighter({
     langs: [language],
-    themes: [CHAT_CODE_THEME.light, CHAT_CODE_THEME.dark],
+    themes: chatCodeThemeInputs(CHAT_CODE_THEME),
   })
 
   highlighterCache.set(language, highlighterPromise)
@@ -162,6 +164,8 @@ const getHighlighter = (
 const createRawTokens = (code: string): TokenizedCode => ({
   bg: "transparent",
   fg: "inherit",
+  darkBg: "transparent",
+  darkFg: "inherit",
   tokens: code.split("\n").map((line) =>
     line === ""
       ? []
@@ -204,17 +208,23 @@ export const highlightCode = (
       const availableLangs = highlighter.getLoadedLanguages()
       const langToUse = availableLangs.includes(language) ? language : "text"
 
+      const [light, dark] = chatCodeThemeInputs(CHAT_CODE_THEME)
       const result = highlighter.codeToTokens(code, {
         lang: langToUse,
         themes: {
-          dark: CHAT_CODE_THEME.dark,
-          light: CHAT_CODE_THEME.light,
+          dark,
+          light,
         },
       })
 
       const tokenized: TokenizedCode = {
-        bg: result.bg ?? "transparent",
-        fg: result.fg ?? "inherit",
+        // Dual-theme fg/bg contain CSS declaration lists in Shiki 4, which
+        // are invalid as React colour values. Read each registered theme's
+        // actual root colours and expose the dark pair as CSS variables.
+        bg: highlighter.getTheme(light).bg,
+        fg: highlighter.getTheme(light).fg,
+        darkBg: highlighter.getTheme(dark).bg,
+        darkFg: highlighter.getTheme(dark).fg,
         tokens: result.tokens,
       }
 
@@ -250,11 +260,14 @@ const CodeBlockBody = memo(
     className?: string
   }) => {
     const preStyle = useMemo(
-      () => ({
-        backgroundColor: tokenized.bg,
-        color: tokenized.fg,
-      }),
-      [tokenized.bg, tokenized.fg]
+      () =>
+        ({
+          backgroundColor: tokenized.bg,
+          color: tokenized.fg,
+          "--shiki-dark-bg": tokenized.darkBg,
+          "--shiki-dark": tokenized.darkFg,
+        }) as CSSProperties,
+      [tokenized.bg, tokenized.fg, tokenized.darkBg, tokenized.darkFg]
     )
 
     const keyedLines = useMemo(() => addKeysToTokens(tokenized.tokens), [tokenized.tokens])
@@ -365,6 +378,7 @@ export const CodeBlockContent = ({
   language: BundledLanguage
   showLineNumbers?: boolean
 }) => {
+  const t = useTranslations("chat.renderers.code")
   // Memoized raw tokens for immediate display
   const rawTokens = useMemo(() => createRawTokens(code), [code])
 
@@ -401,7 +415,12 @@ export const CodeBlockContent = ({
   const tokenized = asyncTokens ?? syncTokens
 
   return (
-    <div className="relative overflow-auto">
+    <div
+      className="relative overflow-auto"
+      role="region"
+      aria-label={t("ariaInLanguage", { language })}
+      tabIndex={0}
+    >
       <CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} />
     </div>
   )

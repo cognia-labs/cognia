@@ -23,6 +23,7 @@ import {
 import { LruCache } from "@cognia/primitives"
 import { CHAT_CODE_THEME, type ChatCodeThemePair } from "@/lib/chat/code-theme"
 import { createMutex } from "@cognia/primitives"
+import { chatCodeThemeInputs } from "./chat-code-themes"
 import { findGrammarsByLanguage } from "@/lib/plugin/bridge/grammars-bridge"
 
 export interface HighlightHtml {
@@ -114,13 +115,14 @@ export async function highlightCached(
         // Sequential, not `Promise.all`: the two themes contend for the same
         // thread anyway, and running them back to back leaves a yield point
         // between them.
+        const [lightTheme, darkTheme] = chatCodeThemeInputs(theme)
         const light = await codeToHtml(code, {
           lang: language as BundledLanguage,
-          theme: theme.light,
+          theme: lightTheme,
         })
         const dark = await codeToHtml(code, {
           lang: language as BundledLanguage,
-          theme: theme.dark,
+          theme: darkTheme,
         })
         const result: HighlightHtml = { light, dark }
         // Clearing invalidates active and queued writes, without interrupting
@@ -156,7 +158,7 @@ async function ensurePluginGrammarLoaded(language: string): Promise<boolean> {
   const task = (async () => {
     try {
       const highlighter = await getSingletonHighlighter({
-        themes: [CHAT_CODE_THEME.light, CHAT_CODE_THEME.dark],
+        themes: chatCodeThemeInputs(CHAT_CODE_THEME),
       })
       // The grammar payload IS a TextMate LanguageRegistration body; stamp
       // the language name so shiki can resolve `lang: language`.

@@ -122,7 +122,7 @@ export const RichBlockFrame = forwardRef<HTMLDivElement, RichBlockFrameProps>(
                 </span>
               ) : null}
               {meta ? (
-                <span data-rich-block-title className="min-w-0 truncate text-muted-foreground/70">
+                <span data-rich-block-title className="min-w-0 truncate text-muted-foreground">
                   {meta}
                 </span>
               ) : null}

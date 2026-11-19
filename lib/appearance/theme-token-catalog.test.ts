@@ -10,7 +10,7 @@
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { converter, parse } from "culori"
+import { converter, parse, wcagContrast } from "culori"
 import {
   ADVANCED_THEME_COLOR_KEYS,
   BASE_THEME_COLOR_KEYS,
@@ -46,6 +46,11 @@ const LIGHT_DECLARED = declaredBlock(":root,")
 const DARK_DECLARED = declaredBlock(".dark,")
 
 describe("theme token catalog", () => {
+  it("keeps small alert text readable on the measured light-theme washes", () => {
+    const colors = defaultThemeColors("light")
+    expect(wcagContrast(colors.mutedForeground, "#eeeeee")).toBeGreaterThanOrEqual(4.5)
+    expect(wcagContrast(colors.destructive, "#fff3f1")).toBeGreaterThanOrEqual(4.5)
+  })
   it("covers exactly 58 tokens, 27 required and 31 optional", () => {
     expect(THEME_TOKEN_CATALOG).toHaveLength(58)
     expect(BASE_THEME_COLOR_KEYS).toHaveLength(27)

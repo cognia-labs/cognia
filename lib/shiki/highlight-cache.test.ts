@@ -8,6 +8,8 @@ jest.mock("shiki", () => ({
 }))
 
 import { codeToHtml } from "shiki"
+import { CHAT_CODE_THEME } from "@/lib/chat/code-theme"
+import { chatCodeThemeInputs } from "./chat-code-themes"
 import {
   getCachedHighlight,
   highlightCached,
@@ -60,7 +62,10 @@ describe("highlight-cache", () => {
     expect(getCachedHighlight("themed", "ts")).toBe(byDefault)
     expect(getCachedHighlight("themed", "ts", github)).toBe(byGithub)
     const themes = (codeToHtml as jest.Mock).mock.calls.map(([, opts]) => opts.theme)
-    expect(themes).toEqual(["one-light", "one-dark-pro", github.light, github.dark])
+    expect(themes).toEqual([
+      ...chatCodeThemeInputs(CHAT_CODE_THEME),
+      ...chatCodeThemeInputs(github),
+    ])
   })
 
   it("keys on language so the same code under different langs is distinct", async () => {

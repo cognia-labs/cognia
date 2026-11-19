@@ -102,6 +102,17 @@ describe("CodeBlock", () => {
     expect(container.querySelector(".code-scroll-x")).toBeTruthy()
   })
 
+  it.each([{ isStreaming: true }, { highlightLines: [1] }])(
+    "keeps the manual code scroll region keyboard-reachable with %j",
+    (props) => {
+      renderInProvider(<CodeBlock code="const value = 1" language="ts" {...props} />)
+      const region = screen.getByRole("region", { name: "Code in ts" })
+      region.focus()
+      expect(region).toHaveFocus()
+      expect(within(region).getByRole("code")).toHaveTextContent("const value = 1")
+    }
+  )
+
   it("keeps the header toolbar reachable on coarse pointers (no hover on touch)", () => {
     const { container } = renderInProvider(<CodeBlock code="x = 1" language="python" />)
     // The toolbar is hover-revealed on desktop; `pointer-coarse:opacity-100`
@@ -273,6 +284,15 @@ describe("CodeBlock", () => {
       expect(container.querySelector("table")).toBeNull()
     })
 
+    it("keeps highlighted code keyboard-reachable after the async render", async () => {
+      await highlightCached("const value = 1", "ts")
+      renderInProvider(<CodeBlock code="const value = 1" language="ts" />)
+      const region = screen.getByRole("region", { name: "Code in ts" })
+      region.focus()
+      expect(region).toHaveFocus()
+      expect(region.querySelectorAll("pre")).toHaveLength(2)
+    })
+
     it("marks the highlighted container with the line-number affordance class when line numbers are on", async () => {
       await highlightCached("const n = 1", "ts")
       const { container } = renderInProvider(
@@ -384,11 +404,28 @@ describe("CodeBlock", () => {
 
       await waitFor(() => expect(writeText).toHaveBeenCalled())
       // The cap is a render budget; the data is never truncated.
-      expect(writeText.mock.calls[0][0].split("\n")).toHaveLength(CODE_AUTO_RENDER_MAX_LINES + 500)
+      expect(writeText).toHaveBeenCalledWith(hugeCode)
     })
   })
 
   describe("ADR-0218 frame options", () => {
+    it("does not request another highlight when only the global colour mode flips", async () => {
+      clearHighlightCache()
+      ;(highlightCached as jest.Mock).mockClear()
+      const { container } = renderInProvider(<CodeBlock code="const stable = 42" language="ts" />)
+      await waitFor(() => expect(container.querySelectorAll("pre")).toHaveLength(2))
+      const calls = (highlightCached as jest.Mock).mock.calls.length
+      const nodes = Array.from(container.querySelectorAll("pre"))
+      const wasDark = document.documentElement.classList.contains("dark")
+      try {
+        document.documentElement.classList.toggle("dark")
+        expect(Array.from(container.querySelectorAll("pre"))).toEqual(nodes)
+        expect(highlightCached).toHaveBeenCalledTimes(calls)
+      } finally {
+        document.documentElement.classList.toggle("dark", wasDark)
+      }
+    })
+
     it("highlights with the theme pair it is given", async () => {
       clearHighlightCache()
       const github = { light: "github-light-default", dark: "github-dark-default" }
@@ -468,7 +505,7 @@ describe("CodeBlock", () => {
      *  on the highlighted wrapper — either way the class string carries it. */
     const isWrapped = (container: HTMLElement) =>
       /whitespace-pre-wrap/.test(
-        (container.querySelector('[role="code"]')?.className ?? "") +
+        (container.querySelector('[role="region"]')?.className ?? "") +
           (container.querySelector("pre")?.className ?? "")
       )
 
@@ -541,7 +578,7 @@ describe("CodeBlock", () => {
     it("paints the theme-token surface over Shiki's own theme background", async () => {
       await highlightCached("const s = 1", "ts")
       const { container } = renderInProvider(<CodeBlock code="const s = 1" language="ts" />)
-      const surface = container.querySelector('[role="code"]') as HTMLElement
+      const surface = within(container).getByRole("region", { name: "Code in ts" })
       expect(surface.className).toContain("bg-muted/40")
       // The `<pre>` is nested in the per-theme wrapper, so only a descendant
       // selector reaches it; `[&>pre]` never matched.

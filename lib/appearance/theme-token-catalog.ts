@@ -187,7 +187,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--muted-foreground",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(0.545 0 0)", "oklch(0.708 0 0)"),
+    default: lit("oklch(0.52 0 0)", "oklch(0.708 0 0)"),
     vscode: ["descriptionForeground", "editorLineNumber.foreground", "tab.inactiveForeground"],
   },
   {
@@ -334,7 +334,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--destructive",
     group: "status",
     base: true,
-    default: lit("oklch(0.577 0.245 27.325)", "oklch(0.704 0.191 22.216)"),
+    default: lit("oklch(0.55 0.22 27.325)", "oklch(0.704 0.191 22.216)"),
     vscode: ["errorForeground", "editorError.foreground", "inputValidation.errorBorder"],
   },
   {

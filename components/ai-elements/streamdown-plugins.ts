@@ -3,7 +3,7 @@ import { createCodePlugin } from "@streamdown/code"
 import { math } from "@streamdown/math"
 import { mermaid } from "@streamdown/mermaid"
 import type { PluginConfig } from "streamdown"
-import type { BundledTheme } from "shiki"
+import { chatCodeThemeInputs } from "@/lib/shiki/chat-code-themes"
 import {
   CHAT_CODE_THEME,
   resolveChatCodeTheme,
@@ -26,7 +26,7 @@ import type { ChatCodeThemeId } from "@/types/appearance"
  * `lib/chat/code-theme.test.ts`.
  */
 const code = createCodePlugin({
-  themes: [CHAT_CODE_THEME.light, CHAT_CODE_THEME.dark],
+  themes: chatCodeThemeInputs(CHAT_CODE_THEME),
 }) as NonNullable<PluginConfig["code"]>
 
 export const streamdownPlugins = {
@@ -58,7 +58,7 @@ function codePluginFor(theme: ChatCodeThemePair): NonNullable<PluginConfig["code
   let plugin = codePlugins.get(key)
   if (!plugin) {
     plugin = createCodePlugin({
-      themes: [theme.light, theme.dark] as [BundledTheme, BundledTheme],
+      themes: chatCodeThemeInputs(theme),
     }) as NonNullable<PluginConfig["code"]>
     codePlugins.set(key, plugin)
   }

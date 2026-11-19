@@ -271,8 +271,9 @@ export const CodeBlock = memo(function CodeBlock({
                 ? ({ "--code-line-offset": String(startLineNumber - 1) } as React.CSSProperties)
                 : undefined
             }
-            role="code"
+            role="region"
             aria-label={t("ariaInLanguage", { language: langLabel })}
+            tabIndex={0}
           >
             <div className="dark:hidden" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
             <div
@@ -287,6 +288,9 @@ export const CodeBlock = memo(function CodeBlock({
       return (
         <pre
           ref={inFullscreen ? undefined : codeRef}
+          role="region"
+          aria-label={t("ariaInLanguage", { language: langLabel })}
+          tabIndex={0}
           className={cn(
             "code-scroll-x overflow-x-auto font-mono",
             documentView && !inFullscreen ? "bg-transparent" : CODE_SURFACE,
