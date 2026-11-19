@@ -12,11 +12,13 @@
  */
 
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
-import type { BotStepApiV1 } from "@/types/bot/run"
+import type { BotApprovalDecisionV1, BotStepApiV1 } from "@/types/bot/run"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
+import type { ExecutionRunStatus } from "@/types/execution/run"
+import type { ApprovalDecision } from "@/lib/runtime/approval-bus"
 import { botPermissionCeiling } from "@/lib/bot/policy/ceilings"
 
-import { BotRunParkedError, BOT_PARK_INTERVAL_MS } from "../step"
+import { BotRunCancelledError, BotRunParkedError, BOT_PARK_INTERVAL_MS } from "../step"
 import { botTriggeredFrom } from "./workflow"
 import { BotExecutorUnavailableError, type BotExecutorContext, type BotExecutorFn } from "./types"
 
@@ -46,7 +48,7 @@ export interface SquadStartInput {
     planText: string
     revision: number
     riskReason?: string
-  }) => Promise<unknown> | unknown
+  }) => Promise<ApprovalDecision>
 }
 
 export interface SquadExecutorDeps {
@@ -67,15 +69,30 @@ export interface SquadExecutorDeps {
    */
   blockingStep?: (ctx: BotExecutorContext) => BotStepApiV1
   /**
-   * Has the Squad run this Bot dispatched reached a terminal state?
+   * The status of the Squad run this Bot dispatched, or `undefined` while the
+   * Squad has not journalled itself yet.
    *
    * The Bot run's lifetime is the Squad's, not the dispatch's. `startSquadRun`
    * returns as soon as the run id is reserved, so settling here would mark the
    * card complete while the Squad was still working, and the plan-approval
    * delegate would then be asking a question on a run the journal had closed.
+   * The status, not a "has it settled" flag, because HOW it settled is the Bot
+   * run's own outcome: a failed or cancelled Squad is not a finished Bot.
    */
-  isSquadRunSettled?: (squadRunId: string) => Promise<boolean> | boolean
+  squadRunStatus?: (
+    squadRunId: string
+  ) => Promise<ExecutionRunStatus | undefined> | ExecutionRunStatus | undefined
   now?: () => number
+}
+
+/**
+ * The Squad plan gate's answer for a Bot approval decision.
+ *
+ * Only `approved` approves. `denied`, `expired` and `cancelled` all reject:
+ * nobody saying yes in time is not a quiet approval.
+ */
+export function squadPlanDecision(decision: BotApprovalDecisionV1): ApprovalDecision {
+  return { outcome: decision.outcome === "approved" ? "approve" : "reject" }
 }
 
 /**
@@ -128,19 +145,14 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
         } satisfies BotStepApiV1
       })
 
-    const isSettled =
-      deps.isSquadRunSettled ??
+    const readSquadStatus =
+      deps.squadRunStatus ??
       (async (squadRunId: string) => {
-        const [{ agentTeamExecutionRunId }, { TERMINAL_RUN_STATUSES }, { getDb }] =
-          await Promise.all([
-            import("@/lib/execution/agent-team-bridge"),
-            import("@/lib/execution/run-control"),
-            import("@/lib/db/schema"),
-          ])
-        const row = await getDb().executionRuns.get(agentTeamExecutionRunId(squadRunId))
-        // No row yet means the Squad has not journalled itself, which is not
-        // the same as finished. Parking is the safe answer.
-        return row ? TERMINAL_RUN_STATUSES.has(row.status) : false
+        const [{ agentTeamExecutionRunId }, { getDb }] = await Promise.all([
+          import("@/lib/execution/agent-team-bridge"),
+          import("@/lib/db/schema"),
+        ])
+        return (await getDb().executionRuns.get(agentTeamExecutionRunId(squadRunId)))?.status
       })
 
     const start =
@@ -180,7 +192,7 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
                 ...(request.riskReason ? { message: request.riskReason } : {}),
                 risk: "medium",
               })
-              return decision.outcome === "approved"
+              return squadPlanDecision(decision)
             },
           },
         })
@@ -196,8 +208,18 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
       throw new Error(`Squad ${squadId} did not start (${result.reason ?? "unknown"})`)
     }
 
-    const squadRunId = result.runId
-    if (squadRunId && !(await isSettled(squadRunId))) {
+    // Launched under this run's id, so that is the Squad's when the primitive
+    // does not echo one back.
+    const squadRunId = result.runId ?? ctx.runId
+    // Mapped per status, the way the workflow executor maps its child: only a
+    // completed Squad completes the Bot run, so a `bot.run.completed`
+    // subscriber never fires for work that failed or was stopped. No row yet
+    // means the Squad has not journalled itself, which is not the same as
+    // finished, so it parks like any other unfinished child.
+    const status = await readSquadStatus(squadRunId)
+    if (status === "cancelled") throw new BotRunCancelledError(ctx.runId)
+    if (status === "failed") throw new Error(`Squad ${squadId} failed`)
+    if (status !== "completed") {
       throw new BotRunParkedError(
         ctx.runId,
         "squad-settle",

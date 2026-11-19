@@ -37,6 +37,7 @@ import {
 } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { SquadReadiness, SquadReadinessBlocker } from "@/lib/squads/squad-readiness"
 import type { LocalPersonRun } from "@/lib/execution/acting-authority"
+import type { ApprovalDecision } from "@/lib/runtime/approval-bus"
 import type { KnowledgeReadingAccess } from "@cognia/plugin-contract/lib/knowledge-base/runtime/progressive-reading"
 
 /** A request for human sign-off on the lead's plan, raised mid-run. */
@@ -46,9 +47,19 @@ export interface SquadPlanApprovalRequest {
   riskReason?: string
 }
 
+/**
+ * The answer a plan-approval delegate owes the Squad's plan gate.
+ *
+ * Named, never `unknown`: the gate reads `outcome === "approve"` and treats
+ * anything else as a rejection, so a delegate answering with any other shape
+ * (a bare boolean, a Bot decision's `"approved"`) silently rejects a plan a
+ * person approved.
+ */
+export type SquadPlanApprovalDecision = ApprovalDecision
+
 export type SquadPlanApprovalDelegate = (
   request: SquadPlanApprovalRequest
-) => Promise<unknown> | unknown
+) => Promise<SquadPlanApprovalDecision>
 
 export interface StartSquadRunInput {
   localAuthorization?: LocalPersonRun
@@ -273,13 +284,7 @@ async function defaultRunLifecycle(
     triggeredFrom: input.triggeredFrom,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.ultracode !== undefined ? { ultracode: input.ultracode } : {}),
-    ...(input.planApprovalDelegate
-      ? {
-          planApprovalDelegate: input.planApprovalDelegate as NonNullable<
-            import("./squad-lifecycle-runner").RunSquadLifecycleInput["planApprovalDelegate"]
-          >,
-        }
-      : {}),
+    ...(input.planApprovalDelegate ? { planApprovalDelegate: input.planApprovalDelegate } : {}),
     ...(input.requirePlanApprovalFloor ? { requirePlanApprovalFloor: true } : {}),
     ...(input.permissionCeiling ? { permissionCeiling: input.permissionCeiling } : {}),
     ...(input.sessionWorkingDir ? { sessionWorkingDir: input.sessionWorkingDir } : {}),

@@ -760,7 +760,7 @@ describe("squadStartSurfaceOf", () => {
     expect(squadStartSurfaceOf("wakeup")).toEqual({ kind: "scheduler" })
     expect(squadStartSurfaceOf("interactive")).toEqual({ kind: "issue" })
     expect(squadStartSurfaceOf("im")).toEqual({ kind: "im", triggeredFrom: { source: "im" } })
-    const planApprovalDelegate = async () => undefined
+    const planApprovalDelegate = async () => ({ outcome: "approve" as const })
     const session = { id: "chat-1" } as never
     expect(
       squadStartSurfaceOf("im", {

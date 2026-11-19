@@ -70,7 +70,7 @@ describe("buildSquadStartInput", () => {
   })
 
   it("binds an IM run to its conversation and passes its policy through", () => {
-    const delegate = async () => undefined
+    const delegate = async () => ({ outcome: "approve" as const })
     const triggeredFrom = { source: "im" as const, adapterId: "lark", conversationKey: "c-1" }
     expect(
       build({

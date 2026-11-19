@@ -1,8 +1,8 @@
 import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 
-import { BotRunParkedError } from "../step"
+import { BotRunCancelledError, BotRunParkedError } from "../step"
 import { BotExecutorUnavailableError, type BotExecutorContext } from "./types"
-import { createSquadBotExecutor, squadObjective } from "./squad"
+import { createSquadBotExecutor, squadObjective, squadPlanDecision } from "./squad"
 
 jest.mock("@/lib/squads/durable/durable-control", () => ({
   controlSquadRun: jest.fn().mockResolvedValue({ accepted: true }),
@@ -83,7 +83,7 @@ describe("squadObjective", () => {
 describe("createSquadBotExecutor", () => {
   it("inherits the Bot authority and autonomy cap instead of the Squad's wider mode", async () => {
     const start = jest.fn().mockResolvedValue({ started: true, runId: "sq_1" })
-    await createSquadBotExecutor({ start, isSquadRunSettled: () => true })(
+    await createSquadBotExecutor({ start, squadRunStatus: () => "completed" })(
       ctx({
         policy: { maxAuthority: "plan" },
         composition: {
@@ -102,7 +102,7 @@ describe("createSquadBotExecutor", () => {
 
   it("starts the Squad with a bot origin", async () => {
     const start = jest.fn().mockResolvedValue({ started: true, runId: "sq_1" })
-    const result = await createSquadBotExecutor({ start, isSquadRunSettled: () => true })(ctx())
+    const result = await createSquadBotExecutor({ start, squadRunStatus: () => "completed" })(ctx())
 
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({ squadId: "team_1", origin: "bot" })
@@ -119,9 +119,13 @@ describe("createSquadBotExecutor", () => {
       waitForEvent: jest.fn(),
     }))
 
-    await createSquadBotExecutor({ start, blockingStep, isSquadRunSettled: () => true })(ctx())
+    await createSquadBotExecutor({ start, blockingStep, squadRunStatus: () => "completed" })(ctx())
     const delegate = start.mock.calls[0][0].planApprovalDelegate
-    expect(await delegate({ planText: "1. read 2. write", revision: 1 })).toBe(true)
+    // The Squad plan gate reads `outcome === "approve"`. A bare `true` reads as
+    // a rejection there, which is how an approved plan used to fail.
+    expect(await delegate({ planText: "1. read 2. write", revision: 1 })).toEqual({
+      outcome: "approve",
+    })
     expect(waitForApproval).toHaveBeenCalledWith(
       "squad-plan",
       expect.objectContaining({
@@ -137,10 +141,10 @@ describe("createSquadBotExecutor", () => {
     const start = jest.fn().mockResolvedValue({ started: true })
     const blockingStep = () => ({ run: jest.fn(), waitForApproval, waitForEvent: jest.fn() })
 
-    await createSquadBotExecutor({ start, blockingStep, isSquadRunSettled: () => true })(ctx())
-    expect(await start.mock.calls[0][0].planApprovalDelegate({ planText: "x", revision: 1 })).toBe(
-      false
-    )
+    await createSquadBotExecutor({ start, blockingStep, squadRunStatus: () => "completed" })(ctx())
+    expect(
+      await start.mock.calls[0][0].planApprovalDelegate({ planText: "x", revision: 1 })
+    ).toEqual({ outcome: "reject" })
   })
 
   it("asks through a BLOCKING step, because the delegate runs detached", async () => {
@@ -156,7 +160,7 @@ describe("createSquadBotExecutor", () => {
     }))
     const start = jest.fn().mockResolvedValue({ started: true })
 
-    await createSquadBotExecutor({ start, blockingStep, isSquadRunSettled: () => true })(
+    await createSquadBotExecutor({ start, blockingStep, squadRunStatus: () => "completed" })(
       ctx({
         step: {
           run: (_name: string, fn: () => unknown) => Promise.resolve(fn()),
@@ -173,14 +177,14 @@ describe("createSquadBotExecutor", () => {
 
   it("launches under the run id, so a re-entry rejoins instead of forking", async () => {
     const start = jest.fn(async () => ({ started: true, runId: "sq_1" }))
-    await createSquadBotExecutor({ start, isSquadRunSettled: () => true })(ctx())
+    await createSquadBotExecutor({ start, squadRunStatus: () => "completed" })(ctx())
 
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ runId: "run_1" }))
   })
 
   it("completes only once the Squad itself has settled", async () => {
     const start = jest.fn(async () => ({ started: true, runId: "sq_1" }))
-    const result = await createSquadBotExecutor({ start, isSquadRunSettled: () => true })(ctx())
+    const result = await createSquadBotExecutor({ start, squadRunStatus: () => "completed" })(ctx())
 
     expect(result).toEqual({
       summary: expect.stringContaining("finished"),
@@ -196,7 +200,7 @@ describe("createSquadBotExecutor", () => {
     // The executor's return type allows a plain value, so the rejection is
     // awaited through `Promise.resolve` rather than `.catch` on the call.
     const parked = await Promise.resolve(
-      createSquadBotExecutor({ start, isSquadRunSettled: () => false, now: () => 1_000 })(ctx())
+      createSquadBotExecutor({ start, squadRunStatus: () => "running", now: () => 1_000 })(ctx())
     ).catch((error: unknown) => error)
 
     expect(parked).toBeInstanceOf(BotRunParkedError)
@@ -214,16 +218,38 @@ describe("createSquadBotExecutor", () => {
       } as unknown as BotExecutorContext["step"],
     })
 
-    await createSquadBotExecutor({ start, isSquadRunSettled: () => true })(context)
+    await createSquadBotExecutor({ start, squadRunStatus: () => "completed" })(context)
 
     expect(context.step.run).toHaveBeenCalledWith("squad-start", expect.any(Function))
     expect(start).not.toHaveBeenCalled()
   })
 
+  it("parks while the Squad has not journalled itself yet", async () => {
+    const start = jest.fn(async () => ({ started: true, runId: "sq_1" }))
+    const parked = await Promise.resolve(
+      createSquadBotExecutor({ start, squadRunStatus: () => undefined })(ctx())
+    ).catch((error: unknown) => error)
+    expect(parked).toBeInstanceOf(BotRunParkedError)
+  })
+
+  it("fails the Bot run when the Squad failed", async () => {
+    const start = jest.fn(async () => ({ started: true, runId: "sq_1" }))
+    await expect(
+      Promise.resolve(createSquadBotExecutor({ start, squadRunStatus: () => "failed" })(ctx()))
+    ).rejects.toThrow(/Squad team_1 failed/)
+  })
+
+  it("cancels the Bot run when the Squad was cancelled", async () => {
+    const start = jest.fn(async () => ({ started: true, runId: "sq_1" }))
+    await expect(
+      Promise.resolve(createSquadBotExecutor({ start, squadRunStatus: () => "cancelled" })(ctx()))
+    ).rejects.toBeInstanceOf(BotRunCancelledError)
+  })
+
   it("fails when the Squad did not start", async () => {
     const start = jest.fn().mockResolvedValue({ started: false, reason: "squad_not_found" })
     await expect(
-      createSquadBotExecutor({ start, isSquadRunSettled: () => true })(ctx())
+      createSquadBotExecutor({ start, squadRunStatus: () => "completed" })(ctx())
     ).rejects.toThrow(/squad_not_found/)
   })
 
@@ -244,8 +270,19 @@ it("stops a child that finishes admission after the Bot was cancelled", async ()
     return { started: true, runId: "child" }
   })
   await expect(
-    createSquadBotExecutor({ start, isSquadRunSettled: () => false })(context)
+    createSquadBotExecutor({ start, squadRunStatus: () => "running" })(context)
   ).rejects.toThrow(/cancelled/)
   const { controlSquadRun } = await import("@/lib/squads/durable/durable-control")
   expect(controlSquadRun).toHaveBeenCalledWith({ runId: "child" }, "stop")
+})
+
+describe("squadPlanDecision", () => {
+  it.each([
+    ["approved", "approve"],
+    ["denied", "reject"],
+    ["expired", "reject"],
+    ["cancelled", "reject"],
+  ] as const)("maps a Bot %s decision to a Squad %s", (outcome, expected) => {
+    expect(squadPlanDecision({ outcome, decidedAt: 1 })).toEqual({ outcome: expected })
+  })
 })
