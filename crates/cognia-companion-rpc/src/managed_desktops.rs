@@ -96,6 +96,7 @@ pub struct ManagedControlRuntime {
     pub refresh_persisted: bool,
 }
 static HEADLESS_ENFORCEMENT: Lazy<Enforcement> = Lazy::new(|| Enforcement {
+    execution: None,
     gate: cognia_automation::automation::permission::PermissionGate::new(Default::default()),
     audit: cognia_automation::automation::audit::AuditRing::new(),
     consent: cognia_automation::automation::consent::ConsentBroker::new(),
@@ -2765,6 +2766,7 @@ mod tests {
         });
         let runtime = ManagedControlRuntime {
             enforcement: Enforcement {
+                execution: None,
                 gate,
                 audit: cognia_automation::automation::audit::AuditRing::new(),
                 consent: Default::default(),
@@ -2843,6 +2845,7 @@ mod tests {
                 cognia_automation::automation::permission::Tier::PerCall;
         });
         Enforcement {
+            execution: None,
             gate,
             audit: cognia_automation::automation::audit::AuditRing::new(),
             consent: Default::default(),

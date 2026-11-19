@@ -4,6 +4,30 @@
 
 use tauri::{App, Manager};
 
+struct AutomationRuns(crate::automation::execution::ExecutionControl);
+
+impl cognia_sidecar::host::AutomationRunLifecycle for AutomationRuns {
+    fn pending_epoch(&self) -> Option<u64> {
+        self.0.pending_run_epoch()
+    }
+    fn begin(&self, epoch: u64, owner: &str, session: &str, turn: &str) -> bool {
+        self.0
+            .begin_run_at(epoch, owner.into(), session.into(), turn.into())
+    }
+    fn revoke(&self, owner: &str) {
+        self.0.revoke_run(owner);
+    }
+    fn revoke_session(&self, session: &str) {
+        self.0.revoke_session(session);
+    }
+    fn revoke_all(&self) {
+        self.0.revoke_all();
+    }
+    fn settled(&self, session: Option<&str>) -> bool {
+        self.0.settled(session)
+    }
+}
+
 /// ADR-0020 W1 — automation subsystem. We construct the worker thread with an
 /// `AppHandle` so it can emit `automation:worker-restart` /
 /// `automation:worker-dead` events when the backend panics. Built here
@@ -17,14 +41,36 @@ pub(crate) fn automation_state(app: &App) {
     // fails too.
     let app_handle_for_builder = app_handle.clone();
     let app_handle_for_vdd = app_handle.clone();
-    let worker = crate::automation::Worker::spawn_with_app(Some(app_handle), move || {
-        crate::automation::make_default_backend_with_app(Some(app_handle_for_builder.clone()))
-    });
-    // ADR-0020 — hydrate the gate + policy from disk so a configured tier /
-    // whitelist / per-action policy survives a restart (previously this
-    // booted to `default()`, silently dropping every persisted setting on
-    // every launch).
+    #[cfg(feature = "custom-protocol")]
+    let binary = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|directory| directory.join("resources/agent-desktop/agent-desktop"));
+    // Development intentionally does not copy the bundle resources. Use only
+    // the fixed checkout resource; packaged builds never use this fallback.
+    #[cfg(not(feature = "custom-protocol"))]
+    let binary = Some(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/agent-desktop/agent-desktop"),
+    );
+    // Hydrate permissions before constructing the fence: a persisted disabled
+    // state must not admit pending runs that become writable after re-enable.
     let gate = crate::automation::PermissionGate::new(crate::automation::persist::load_settings());
+    let worker = crate::automation::Worker::spawn_with_resources(
+        Some(app_handle),
+        binary,
+        gate.settings().enabled,
+        move || {
+            crate::automation::make_default_backend_with_app(Some(app_handle_for_builder.clone()))
+        },
+    );
+    app.state::<crate::claude::SidecarState>()
+        .set_automation_lifecycle(std::sync::Arc::new(AutomationRuns(
+            worker.execution_control(),
+        )));
+    // ADR-0020 — hydrate the remaining policy and supporting state; the
+    // permission gate was restored before worker construction above.
     let audit = crate::automation::AuditRing::new();
     let consent = crate::automation::ConsentBroker::new();
     let policy = crate::automation::persist::load_policy_state();

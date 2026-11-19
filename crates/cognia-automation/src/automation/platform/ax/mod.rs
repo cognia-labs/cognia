@@ -718,6 +718,29 @@ impl AutomationBackend for AxBackend {
         )
     }
 
+    fn application_window_binding(&self, app: &ResolvedApplication) -> Result<ElementInfo> {
+        if !raw::is_trusted() {
+            return Err(AutomationError::PermissionDenied {
+                reason: "macOS Accessibility permission not granted".into(),
+            });
+        }
+        let application = AxElement::application(app.process_id);
+        raw::set_messaging_timeout(&application, 0.25);
+        let root = raw::resolve_window_root(&application);
+        if root.role().as_deref() != Some("AXWindow") {
+            return Err(AutomationError::StaleElement);
+        }
+        let mut info = ax_element_to_info(&root, Some(app.process_id), Some(&app.display_name));
+        let key = format!("native-session-window:{}", uuid::Uuid::new_v4());
+        let mut elements = self.elements.lock().map_err(poisoned)?;
+        if elements.len() > 50_000 {
+            elements.clear();
+        }
+        elements.insert(key.clone(), root);
+        info.element_ref = ElementRef(key);
+        Ok(info)
+    }
+
     fn find(&self, locator: &Locator) -> Result<Option<ElementRef>> {
         // Materialize the bounded frontmost-window subtree, then delegate the
         // (cross-platform) matching to tree_shape. This now satisfies
@@ -782,8 +805,20 @@ impl AutomationBackend for AxBackend {
                     .unwrap_or(if opts.double.unwrap_or(false) { 2 } else { 1 });
                 for i in 0..count.max(1) {
                     screen_off_input_continues(generation)?;
-                    e.button(button, Direction::Click)
-                        .map_err(input_err("click"))?;
+                    crate::automation::platform::shared::keymap::with_held_inputs(
+                        &mut e,
+                        &[button],
+                        || screen_off_input_continues(generation),
+                        |e, button| {
+                            e.button(*button, Direction::Press)
+                                .map_err(input_err("click.press"))
+                        },
+                        |e, button| {
+                            e.button(*button, Direction::Release)
+                                .map_err(input_err("click.release"))
+                        },
+                        |_| Ok(()),
+                    )?;
                     if i + 1 < count {
                         std::thread::sleep(Duration::from_millis(50));
                     }
@@ -952,6 +987,7 @@ impl AutomationBackend for AxBackend {
     }
 
     fn scroll(&self, target: ScrollTarget, opts: ScrollOpts) -> Result<()> {
+        let generation = screen_off_input_generation()?;
         let mut e = enigo_new()?;
         let point = match target {
             ScrollTarget::Point { x, y } => Point { x, y },
@@ -963,7 +999,7 @@ impl AutomationBackend for AxBackend {
         let point = screen_off_point(point)?;
         e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
             .map_err(input_err("scroll.move"))?;
-        send_scroll(&mut e, opts, || Ok(()))
+        send_scroll(&mut e, opts, || screen_off_input_continues(generation))
     }
 
     fn hold_key(&self, chord: &KeyChord, duration_ms: u32) -> Result<()> {
@@ -1194,6 +1230,7 @@ fn screen_off_element(element: &AxElement) -> Result<()> {
 }
 
 fn screen_off_input_generation() -> Result<Option<u64>> {
+    crate::automation::execution::checkpoint()?;
     crate::automation::virtual_display::driver_macos::input_generation().map_err(|e| {
         AutomationError::BackendError {
             message: e.to_string(),
@@ -1202,6 +1239,7 @@ fn screen_off_input_generation() -> Result<Option<u64>> {
 }
 
 fn screen_off_input_continues(generation: Option<u64>) -> Result<()> {
+    crate::automation::execution::checkpoint()?;
     crate::automation::virtual_display::driver_macos::validate_input_generation(generation).map_err(
         |e| AutomationError::BackendError {
             message: e.to_string(),
@@ -1210,6 +1248,7 @@ fn screen_off_input_continues(generation: Option<u64>) -> Result<()> {
 }
 
 fn screen_off_input_ready() -> Result<()> {
+    crate::automation::execution::checkpoint()?;
     crate::automation::virtual_display::driver_macos::validate_input().map_err(|e| {
         AutomationError::BackendError {
             message: e.to_string(),
@@ -1289,49 +1328,31 @@ fn send_chord(e: &mut Enigo, tokens: &[KeyToken], hold: Duration) -> Result<()> 
             message: "chord has no main key".into(),
         });
     };
-    let mut pressed = Vec::new();
-    let result = (|| {
-        for m in &modifiers {
-            screen_off_input_continues(generation)?;
-            e.key(*m, Direction::Press)
-                .map_err(input_err("chord.mod_press"))?;
-            pressed.push(*m);
-        }
-        screen_off_input_continues(generation)?;
-        if hold.is_zero() {
-            e.key(main_key, Direction::Click)
-                .map_err(input_err("chord.main_click"))
-        } else {
-            e.key(main_key, Direction::Press)
-                .map_err(input_err("chord.main_press"))?;
+    modifiers.push(main_key);
+    crate::automation::platform::shared::keymap::with_held_inputs(
+        e,
+        &modifiers,
+        || screen_off_input_continues(generation),
+        |e, key| {
+            e.key(*key, Direction::Press)
+                .map_err(input_err("chord.press"))
+        },
+        |e, key| {
+            e.key(*key, Direction::Release)
+                .map_err(input_err("chord.release"))
+        },
+        |_| {
             let deadline = Instant::now() + hold;
-            let mut result = Ok(());
             while Instant::now() < deadline {
                 std::thread::sleep(
                     Duration::from_millis(25)
                         .min(deadline.saturating_duration_since(Instant::now())),
                 );
-                if let Err(error) = screen_off_input_continues(generation) {
-                    result = Err(error);
-                    break;
-                }
+                screen_off_input_continues(generation)?;
             }
-            let released = e
-                .key(main_key, Direction::Release)
-                .map_err(input_err("chord.main_release"));
-            result.and(released)
-        }
-    })();
-    let mut cleanup = Ok(());
-    for m in pressed.iter().rev() {
-        if let Err(error) = e
-            .key(*m, Direction::Release)
-            .map_err(input_err("chord.mod_release"))
-        {
-            cleanup = Err(error);
-        }
-    }
-    result.and(cleanup)
+            Ok(())
+        },
+    )
 }
 
 fn modifier_to_enigo(m: Modifier) -> enigo::Key {

@@ -17,7 +17,7 @@ use super::policy::{Policy, PolicyState};
 
 const BACKUP_KEEP: usize = 5;
 
-fn dir() -> Option<PathBuf> {
+pub(crate) fn dir() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("cognia").join("automation"))
 }
 
@@ -101,7 +101,7 @@ pub fn save_policy(policy: &Policy) {
     }
 }
 
-fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+pub(crate) fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

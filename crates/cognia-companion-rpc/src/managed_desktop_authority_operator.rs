@@ -147,6 +147,7 @@ fn runtime(events: HostEventSink) -> ManagedControlRuntime {
     });
     ManagedControlRuntime {
         enforcement: Enforcement {
+            execution: None,
             gate,
             audit: Default::default(),
             consent: Default::default(),

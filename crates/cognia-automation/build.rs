@@ -14,6 +14,19 @@
 //! app binary still gets its (single) manifest from `src-tauri/build.rs` — no
 //! duplicate-manifest CVT1100 / LNK1123. See tauri-apps/tauri #13419 and #13948.
 fn main() {
+    let digest =
+        std::path::Path::new("../../src-tauri/resources/agent-desktop/agent-desktop.sha256");
+    println!("cargo:rerun-if-changed={}", digest.display());
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+        && std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64")
+    {
+        if let Ok(value) = std::fs::read_to_string(digest) {
+            let value = value.trim();
+            if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                println!("cargo:rustc-env=COGNIA_AGENT_DESKTOP_SHA256={value}");
+            }
+        }
+    }
     println!("cargo:rerun-if-changed=native/macos/screen_capture.m");
 
     println!("cargo:rerun-if-changed=native/macos/virtual_display.m");

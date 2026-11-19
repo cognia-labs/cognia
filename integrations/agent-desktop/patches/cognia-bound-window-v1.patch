@@ -1,0 +1,1019 @@
+diff --git a/crates/core/src/actions/action_request.rs b/crates/core/src/actions/action_request.rs
+index 99a321c..3e4b36e 100644
+--- a/crates/core/src/actions/action_request.rs
++++ b/crates/core/src/actions/action_request.rs
+@@ -13,6 +13,8 @@ pub struct ActionRequest {
+     pub(crate) verified_point: Option<Point>,
+     #[serde(skip)]
+     pub(crate) expected_process: Option<crate::ProcessIdentity>,
++    #[serde(skip)]
++    pub(crate) expected_ref: Option<Box<crate::RefEntry>>,
+ }
+ 
+ impl ActionRequest {
+@@ -31,6 +33,7 @@ impl ActionRequest {
+             timeout_ms: None,
+             verified_point: None,
+             expected_process: None,
++            expected_ref: None,
+         }
+     }
+ 
+@@ -41,6 +44,7 @@ impl ActionRequest {
+             timeout_ms: None,
+             verified_point: None,
+             expected_process: None,
++            expected_ref: None,
+         }
+     }
+ 
+@@ -51,6 +55,7 @@ impl ActionRequest {
+             timeout_ms: None,
+             verified_point: None,
+             expected_process: None,
++            expected_ref: None,
+         }
+     }
+ 
+@@ -69,6 +74,15 @@ impl ActionRequest {
+         self
+     }
+ 
++    pub fn with_expected_ref(mut self, entry: crate::RefEntry) -> Self {
++        self.expected_ref = Some(Box::new(entry));
++        self
++    }
++
++    pub fn expected_ref(&self) -> Option<&crate::RefEntry> {
++        self.expected_ref.as_deref()
++    }
++
+     pub fn verified_point(&self) -> Option<&Point> {
+         self.verified_point.as_ref()
+     }
+diff --git a/crates/core/src/commands/execute_by_ref.rs b/crates/core/src/commands/execute_by_ref.rs
+index 4fd2a58..ff41b67 100644
+--- a/crates/core/src/commands/execute_by_ref.rs
++++ b/crates/core/src/commands/execute_by_ref.rs
+@@ -49,6 +49,7 @@ pub fn execute_with_timeout(
+         timeout_ms,
+         verified_point: None,
+         expected_process: None,
++        expected_ref: None,
+     };
+     execute_ref_action_with_context(
+         RefArgs {
+diff --git a/crates/core/src/commands/version.rs b/crates/core/src/commands/version.rs
+index 180a3a4..18ea98f 100644
+--- a/crates/core/src/commands/version.rs
++++ b/crates/core/src/commands/version.rs
+@@ -6,5 +6,13 @@ pub fn execute() -> Result<Value, AppError> {
+         "version": env!("CARGO_PKG_VERSION"),
+         "target": std::env::consts::ARCH,
+         "os": std::env::consts::OS,
++        "cognia": {
++            "profile": "cognia-bound-window-v1",
++            "windowBinding": "per-ax-mutation-v1",
++            "supervisorLease": "inherited-flock-v1",
++            "legacyHostCleanup": false,
++            "rendererActivation": false,
++            "rendererObservation": "partial-without-activation-v1"
++        },
+     }))
+ }
+diff --git a/crates/core/src/context/mod.rs b/crates/core/src/context/mod.rs
+index 6f01209..946d709 100644
+--- a/crates/core/src/context/mod.rs
++++ b/crates/core/src/context/mod.rs
+@@ -219,6 +219,7 @@ impl CommandContext {
+             timeout_ms: None,
+             verified_point: None,
+             expected_process: None,
++            expected_ref: None,
+         }
+     }
+ 
+diff --git a/crates/core/src/locator/live_locator/observed_tree.rs b/crates/core/src/locator/live_locator/observed_tree.rs
+index ec2b4a4..664bc39 100644
+--- a/crates/core/src/locator/live_locator/observed_tree.rs
++++ b/crates/core/src/locator/live_locator/observed_tree.rs
+@@ -47,6 +47,13 @@ impl ObservedTree {
+         self.structurally_complete
+     }
+ 
++    pub fn mark_incomplete(&mut self) {
++        self.structurally_complete = false;
++        for root in &self.roots {
++            self.nodes[*root as usize].completeness.subtree_complete = false;
++        }
++    }
++
+     /// Whether this observation read the whole window: complete, and with no
+     /// container whose descendants it left unread. A capture proof and a
+     /// tokenless resolution both rest on it, because both count evidence over
+@@ -290,3 +297,25 @@ impl ObservedTree {
+         Ok((projected, child_indices))
+     }
+ }
++
++#[cfg(test)]
++mod cognia_tests {
++    use super::*;
++    use crate::locator::live_locator::test_support::{evidence, node, tree};
++    #[test]
++    fn unavailable_renderer_keeps_readable_nodes_without_proving_absence() {
++        let mut observed = tree(
++            vec![node(0, evidence("button", Some("Run")), vec![], &[])],
++            vec![0],
++            true,
++        );
++        observed.mark_incomplete();
++        assert!(!observed.is_complete());
++        assert!(!observed.is_exhaustive());
++        let (projected, complete, count) = observed.into_accessibility_tree_partial().unwrap();
++        assert!(!complete);
++        assert!(projected.subtree_truncated);
++        assert_eq!(count, 1);
++        assert_eq!(projected.identity.name.as_deref(), Some("Run"));
++    }
++}
+diff --git a/crates/core/src/ref_action/mod.rs b/crates/core/src/ref_action/mod.rs
+index 5358369..cac84d5 100644
+--- a/crates/core/src/ref_action/mod.rs
++++ b/crates/core/src/ref_action/mod.rs
+@@ -4,9 +4,8 @@ use crate::adapter::{NativeHandle, PlatformAdapter};
+ use crate::context::CommandContext;
+ use crate::ref_action::ref_action_context::RefActionContext;
+ use crate::ref_action::ref_action_wait_support::{after_scroll, trace_scroll_error};
+-use crate::refs::RefEntry;
+ use crate::refs::resolve_saved_ref::resolve_saved_ref;
+-use crate::{AdapterError, AppError, actionability};
++use crate::{AdapterError, AppError, RefEntry, actionability};
+ use serde_json::json;
+ 
+ pub(crate) mod presentation;
+@@ -82,6 +81,7 @@ pub(crate) fn dispatch_resolved_landing(
+             )
+         })?;
+     crate::ref_action::ref_action_wait_support::trace_resolve_ok(target.context, target.ref_id);
++    let mut scrolled = false;
+     let initial_target = ResolvedRefAction::new(target, &handle);
+     let preflight = match stable_preflight(&initial_target, &request) {
+         Ok(preflight) => preflight,
+@@ -96,7 +96,10 @@ pub(crate) fn dispatch_resolved_landing(
+                 .adapter
+                 .scroll_ref_into_view(target.entry, &handle, lease)
+             {
+-                Ok(recovered) => recovered,
++                Ok(recovered) => {
++                    scrolled = true;
++                    recovered
++                }
+                 Err(scroll_error) => {
+                     trace_scroll_error(&target, &scroll_error);
+                     return Err(
+@@ -128,7 +131,8 @@ pub(crate) fn dispatch_resolved_landing(
+     }
+     request = request
+         .with_verified_point(preflight.verified_point.clone())
+-        .with_expected_process(expected_process.clone());
++        .with_expected_process(expected_process.clone())
++        .with_expected_ref(target.entry.clone());
+     let final_target = ResolvedRefAction::new(target, &handle);
+     final_target.context.trace_lazy(
+         "action.dispatch.start",
+@@ -140,7 +144,8 @@ pub(crate) fn dispatch_resolved_landing(
+     let ripples = presentation::effect_ripples(&final_target, &presentation_action);
+     presentation::before_dispatch(&final_target, &preflight, &presentation_action, lease);
+     let dispatch_result =
+-        crate::execute_verified_action(final_target.adapter, final_target.handle, request, lease);
++        crate::execute_verified_action(final_target.adapter, final_target.handle, request, lease)
++            .map_err(|error| ref_action_wait_support::after_optional_scroll(scrolled, error));
+     let mut preflight = preflight;
+     if presentation::after_text_entry(&final_target, &presentation_action, &dispatch_result) {
+         preflight.presentation_bounds = None;
+diff --git a/crates/core/src/ref_action/ref_action_exactly_once_tests.rs b/crates/core/src/ref_action/ref_action_exactly_once_tests.rs
+index e09ec38..5f30fa8 100644
+--- a/crates/core/src/ref_action/ref_action_exactly_once_tests.rs
++++ b/crates/core/src/ref_action/ref_action_exactly_once_tests.rs
+@@ -95,7 +95,11 @@ impl ObservationOps for DispatchGuardAdapter {
+                 value: None,
+                 enabled: Some(true),
+                 hidden: Some(self.mode == "hidden_after_scroll"),
+-                offscreen: (self.mode != "zero_geometry").then_some(self.mode == "offscreen_slow"),
++                offscreen: (self.mode != "zero_geometry").then_some(
++                    self.mode == "offscreen_slow"
++                        || (self.mode == "refused_after_scroll"
++                            && self.scroll_calls.load(Ordering::SeqCst) == 0),
++                ),
+             },
+             states_complete: true,
+             bounds: Some(live_bounds),
+@@ -146,6 +150,12 @@ impl ActionOps for DispatchGuardAdapter {
+         _lease: &crate::InteractionLease,
+     ) -> Result<ActionResult, AdapterError> {
+         self.dispatch_calls.fetch_add(1, Ordering::SeqCst);
++        if self.mode == "refused_after_scroll" {
++            return Err(
++                AdapterError::stale_ref_because("Final owning window changed")
++                    .with_disposition(crate::DeliverySemantics::not_delivered()),
++            );
++        }
+         if self.mode == "dispatch_error" {
+             return Err(AdapterError::new(
+                 ErrorCode::ActionFailed,
+@@ -248,10 +258,10 @@ fn execute(adapter: &DispatchGuardAdapter, timeout_ms: u64) -> Result<ActionResu
+ }
+ 
+ #[test]
+-fn failed_preflight_after_scroll_reports_nothing_delivered_and_the_moved_view() {
++fn failed_preflight_after_scroll_preserves_possible_preparatory_delivery() {
+     let adapter = DispatchGuardAdapter::new("hidden_after_scroll", 0);
+     let error = execute(&adapter, 500).unwrap_err();
+-    assert_eq!(error.disposition, crate::DeliverySemantics::not_delivered());
++    assert_eq!(error.disposition, crate::DeliverySemantics::uncertain());
+     assert_eq!(
+         error.details.unwrap()["preparatory_scroll"],
+         "may_have_changed_view"
+@@ -268,6 +278,19 @@ fn dispatch_failure_is_returned_without_repeating_the_action() {
+     assert_eq!(adapter.dispatch_calls.load(Ordering::SeqCst), 1);
+ }
+ 
++#[test]
++fn final_guard_refusal_after_scroll_is_not_retry_safe() {
++    let adapter = DispatchGuardAdapter::new("refused_after_scroll", 0);
++    let error = execute(&adapter, 500).unwrap_err();
++    assert_eq!(error.disposition, crate::DeliverySemantics::uncertain());
++    assert_eq!(
++        error.details.unwrap()["preparatory_scroll"],
++        "may_have_changed_view"
++    );
++    assert_eq!(adapter.scroll_calls.load(Ordering::SeqCst), 1);
++    assert_eq!(adapter.dispatch_calls.load(Ordering::SeqCst), 1);
++}
++
+ #[test]
+ fn poll_resolution_timeout_is_retry_safe_before_dispatch() {
+     let adapter = DispatchGuardAdapter::new("resolve_timeout", 0);
+diff --git a/crates/core/src/ref_action/ref_action_tests.rs b/crates/core/src/ref_action/ref_action_tests.rs
+index f9aa696..7e1cbff 100644
+--- a/crates/core/src/ref_action/ref_action_tests.rs
++++ b/crates/core/src/ref_action/ref_action_tests.rs
+@@ -23,6 +23,7 @@ impl Drop for DropProbe {
+ struct SuccessfulAdapter {
+     drops: Arc<AtomicU32>,
+     dispatched_policies: Mutex<Vec<crate::InteractionPolicy>>,
++    dispatched_windows: Mutex<Vec<Option<String>>>,
+ }
+ 
+ impl SuccessfulAdapter {
+@@ -30,6 +31,7 @@ impl SuccessfulAdapter {
+         Self {
+             drops: Arc::new(AtomicU32::new(0)),
+             dispatched_policies: Mutex::new(Vec::new()),
++            dispatched_windows: Mutex::new(Vec::new()),
+         }
+     }
+ }
+@@ -54,6 +56,11 @@ impl ActionOps for SuccessfulAdapter {
+         request: ActionRequest,
+         _lease: &crate::InteractionLease,
+     ) -> Result<ActionResult, AdapterError> {
++        self.dispatched_windows.lock().unwrap().push(
++            request
++                .expected_ref()
++                .and_then(|entry| entry.source.source_window_id.clone()),
++        );
+         self.dispatched_policies
+             .lock()
+             .unwrap()
+@@ -235,6 +242,16 @@ fn entry() -> RefEntry {
+     }
+ }
+ 
++#[test]
++fn cognia_dispatch_preserves_source_window_identity() {
++    let adapter = SuccessfulAdapter::new();
++    execute_entry(&adapter, &entry(), ActionRequest::headless(Action::Click)).unwrap();
++    assert_eq!(
++        adapter.dispatched_windows.lock().unwrap().as_slice(),
++        &[Some("w-1".into())]
++    );
++}
++
+ #[test]
+ fn successful_action_drops_resolved_payload() {
+     let adapter = SuccessfulAdapter::new();
+diff --git a/crates/core/src/ref_action/ref_action_wait_evidence.rs b/crates/core/src/ref_action/ref_action_wait_evidence.rs
+index c53aaa7..8375fbb 100644
+--- a/crates/core/src/ref_action/ref_action_wait_evidence.rs
++++ b/crates/core/src/ref_action/ref_action_wait_evidence.rs
+@@ -19,6 +19,7 @@ pub(crate) fn attach_scroll_recovery_failure(
+     let attempt = json!({
+         "code": scroll_error.code.as_str(),
+         "message": scroll_error.message,
++        "disposition": scroll_error.disposition,
+     });
+     match details.as_object_mut() {
+         Some(object) => {
+@@ -26,7 +27,32 @@ pub(crate) fn attach_scroll_recovery_failure(
+         }
+         None => details = json!({ "scroll_into_view_attempted": attempt }),
+     }
+-    error.with_details(details)
++    let disposition = if scroll_error.disposition == crate::DeliverySemantics::not_delivered() {
++        error.disposition
++    } else {
++        crate::DeliverySemantics::uncertain()
++    };
++    error.with_details(details).with_disposition(disposition)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn recovery_failure_retains_possible_preparatory_writes() {
++        for delivery in [
++            crate::DeliverySemantics::Unknown,
++            crate::DeliverySemantics::uncertain(),
++            crate::DeliverySemantics::delivered_unverified(),
++        ] {
++            let original = AdapterError::stale_ref_because("not visible")
++                .with_disposition(crate::DeliverySemantics::not_delivered());
++            let scroll = AdapterError::stale_ref_because("owner changed after scroll")
++                .with_disposition(delivery);
++            let error = attach_scroll_recovery_failure(original, &scroll);
++            assert_eq!(error.disposition, crate::DeliverySemantics::uncertain());
++        }
++    }
+ }
+ 
+ pub(crate) fn failed_check(error: &AdapterError, check_name: &str) -> bool {
+diff --git a/crates/core/src/ref_action/ref_action_wait_support.rs b/crates/core/src/ref_action/ref_action_wait_support.rs
+index 08fd417..0a10976 100644
+--- a/crates/core/src/ref_action/ref_action_wait_support.rs
++++ b/crates/core/src/ref_action/ref_action_wait_support.rs
+@@ -140,12 +140,12 @@ pub(crate) fn trace_resolve_error(context: &CommandContext, ref_id: &str, err: &
+     });
+ }
+ 
+-/// The preparatory scroll moves the view, never the requested action, so a
+-/// refusal after it writes nothing: the disposition says so, and the
+-/// `preparatory_scroll` detail records that the view may have changed.
++/// Preparatory UI writes make replay unsafe even if the requested action was refused.
+ pub(crate) fn after_scroll(mut error: AdapterError) -> AdapterError {
+-    if error.disposition == crate::DeliverySemantics::Unknown {
+-        error.disposition = crate::DeliverySemantics::not_delivered();
++    if error.disposition == crate::DeliverySemantics::Unknown
++        || error.disposition == crate::DeliverySemantics::not_delivered()
++    {
++        error.disposition = crate::DeliverySemantics::uncertain();
+     }
+     let details = error.details.get_or_insert_with(|| json!({}));
+     if let Some(details) = details.as_object_mut() {
+@@ -154,6 +154,10 @@ pub(crate) fn after_scroll(mut error: AdapterError) -> AdapterError {
+     error
+ }
+ 
++pub(crate) fn after_optional_scroll(scrolled: bool, error: AdapterError) -> AdapterError {
++    if scrolled { after_scroll(error) } else { error }
++}
++
+ pub(crate) fn trace_scroll_error(
+     target: &crate::ref_action::ref_action_context::RefActionContext<'_>,
+     error: &AdapterError,
+diff --git a/crates/macos/src/actions/adapter.rs b/crates/macos/src/actions/adapter.rs
+index 111e263..7ed85f8 100644
+--- a/crates/macos/src/actions/adapter.rs
++++ b/crates/macos/src/actions/adapter.rs
+@@ -6,6 +6,17 @@ use agent_desktop_core::{
+ use crate::adapter::{MacOSAdapter, ax_element};
+ 
+ impl ActionOps for MacOSAdapter {
++    fn scroll_ref_into_view(
++        &self,
++        entry: &agent_desktop_core::RefEntry,
++        handle: &NativeHandle,
++        lease: &InteractionLease,
++    ) -> Result<Option<NativeHandle>, AdapterError> {
++        let _scope = crate::actions::bound_window_scope::BoundWindowScope::enter(Some(entry))?;
++        self.scroll_into_view(handle, lease)?;
++        Ok(None)
++    }
++
+     fn execute_action(
+         &self,
+         handle: &NativeHandle,
+@@ -35,6 +46,8 @@ fn execute_action_impl(
+     request: ActionRequest,
+     lease: &InteractionLease,
+ ) -> Result<ActionResult, AdapterError> {
++    let _scope =
++        crate::actions::bound_window_scope::BoundWindowScope::enter(request.expected_ref())?;
+     crate::actions::perform_action(ax_element(handle)?, &request, lease.deadline())
+ }
+ 
+diff --git a/crates/macos/src/actions/bound_window_native_tests.rs b/crates/macos/src/actions/bound_window_native_tests.rs
+new file mode 100644
+index 0000000..ef97682
+--- /dev/null
++++ b/crates/macos/src/actions/bound_window_native_tests.rs
+@@ -0,0 +1,120 @@
++use super::*;
++use crate::tree::{AXElement, properties::ax_ipc, surface_read};
++use core_foundation::{base::TCFType, string::CFString};
++use std::path::Path;
++use std::time::{Duration, Instant};
++
++fn state(directory: &Path) -> serde_json::Value {
++    serde_json::from_slice(&std::fs::read(directory.join("state.json")).unwrap()).unwrap()
++}
++
++fn command(directory: &Path, action: &str) {
++    let sequence = state(directory)["sequence"].as_u64().unwrap() + 1;
++    let temporary = directory.join("command.tmp");
++    std::fs::write(
++        &temporary,
++        serde_json::to_vec(&serde_json::json!({"sequence": sequence, "action": action})).unwrap(),
++    )
++    .unwrap();
++    std::fs::rename(temporary, directory.join("command.json")).unwrap();
++    let deadline = Instant::now() + Duration::from_secs(3);
++    while state(directory)["sequence"].as_u64() != Some(sequence) {
++        assert!(Instant::now() < deadline, "Fixture command timed out");
++        std::thread::sleep(Duration::from_millis(10));
++    }
++}
++
++fn find(element: &AXElement, identifier: &str, depth: usize) -> Option<AXElement> {
++    let deadline = Instant::now() + Duration::from_secs(3);
++    if surface_read::string(element, "AXIdentifier", deadline)
++        .ok()
++        .flatten()
++        .as_deref()
++        == Some(identifier)
++    {
++        return Some(element.clone());
++    }
++    if depth == 0 {
++        return None;
++    }
++    for child in surface_read::elements(element, "AXChildren", deadline).unwrap_or_default() {
++        if let Some(found) = find(&child, identifier, depth - 1) {
++            return Some(found);
++        }
++    }
++    None
++}
++
++#[test]
++#[ignore = "Requires the disposable Cognia window fixture and an authorized AX runner"]
++fn retained_object_reparent_is_rejected_at_each_native_write() {
++    let directory = std::path::PathBuf::from(
++        std::env::var_os("COGNIA_AX_FIXTURE_DIR").expect("Fixture path required"),
++    );
++    command(&directory, "reset");
++    let initial = state(&directory);
++    let pid = initial["pid"].as_i64().unwrap() as i32;
++    let app = AXElement(unsafe { accessibility_sys::AXUIElementCreateApplication(pid) });
++    let button = find(&app, "cognia-p0-counter", 8).expect("Fixture button");
++    let field = find(&app, "cognia-p0-field", 8).expect("Fixture field");
++    let mut entry = super::tests::entry(initial["windows"][0].as_str().unwrap());
++    entry.process.pid = agent_desktop_core::ProcessId::new(pid as u32);
++    entry.process.process_instance =
++        crate::system::process::process_identity::token_for_pid(pid).unwrap();
++    let scope = BoundWindowScope::enter(Some(&entry)).unwrap();
++    let deadline = || Instant::now() + Duration::from_secs(3);
++    let press = CFString::new("AXPress");
++    ax_ipc::perform_action(&button, press.as_concrete_TypeRef(), deadline()).unwrap();
++    assert_eq!(state(&directory)["counts"], serde_json::json!([1, 0]));
++    command(&directory, "move");
++    for element in [&button, &field] {
++        let owner = surface_read::element(element, "AXWindow", deadline())
++            .unwrap()
++            .unwrap();
++        let number = crate::system::window::window_bridge::window_id(&owner, deadline())
++            .unwrap()
++            .unwrap();
++        assert_eq!(
++            format!("w-{number}"),
++            initial["windows"][1].as_str().unwrap()
++        );
++    }
++    let press_error =
++        ax_ipc::perform_action(&button, press.as_concrete_TypeRef(), deadline()).unwrap_err();
++    assert_eq!(press_error.disposition, DeliverySemantics::not_delivered());
++    let attribute = CFString::new("AXValue");
++    let text = CFString::new("fixture-updated");
++    let value_error = ax_ipc::set_attribute_value(
++        &field,
++        attribute.as_concrete_TypeRef(),
++        text.as_CFTypeRef(),
++        deadline(),
++    )
++    .unwrap_err();
++    assert_eq!(value_error.disposition, DeliverySemantics::not_delivered());
++    assert_eq!(state(&directory)["counts"], serde_json::json!([1, 0]));
++    assert_eq!(
++        surface_read::string(&field, "AXValue", deadline())
++            .unwrap()
++            .as_deref(),
++        Some("fixture-original")
++    );
++    drop(scope);
++    entry.source.source_window_id = initial["windows"][1].as_str().map(str::to_owned);
++    let _rebound = BoundWindowScope::enter(Some(&entry)).unwrap();
++    ax_ipc::perform_action(&button, press.as_concrete_TypeRef(), deadline()).unwrap();
++    ax_ipc::set_attribute_value(
++        &field,
++        attribute.as_concrete_TypeRef(),
++        text.as_CFTypeRef(),
++        deadline(),
++    )
++    .unwrap();
++    assert_eq!(state(&directory)["counts"], serde_json::json!([1, 1]));
++    assert_eq!(
++        surface_read::string(&field, "AXValue", deadline())
++            .unwrap()
++            .as_deref(),
++        Some("fixture-updated")
++    );
++}
+diff --git a/crates/macos/src/actions/bound_window_scope.rs b/crates/macos/src/actions/bound_window_scope.rs
+new file mode 100644
+index 0000000..85a3e5a
+--- /dev/null
++++ b/crates/macos/src/actions/bound_window_scope.rs
+@@ -0,0 +1,122 @@
++use agent_desktop_core::{AdapterError, DeliverySemantics, RefEntry};
++use std::cell::RefCell;
++use std::marker::PhantomData;
++use std::rc::Rc;
++
++thread_local! {
++    static CURRENT: RefCell<Option<RefEntry>> = const { RefCell::new(None) };
++}
++
++pub(crate) struct BoundWindowScope {
++    previous: Option<RefEntry>,
++    _thread_affinity: PhantomData<Rc<()>>,
++}
++
++impl BoundWindowScope {
++    pub(crate) fn enter(entry: Option<&RefEntry>) -> Result<Self, AdapterError> {
++        if let Some(entry) = entry {
++            if entry
++                .source
++                .source_window_id
++                .as_deref()
++                .is_none_or(str::is_empty)
++                || entry
++                    .process
++                    .process_instance
++                    .as_deref()
++                    .is_none_or(str::is_empty)
++                || entry.source.source_surface != agent_desktop_core::SnapshotSurface::Window
++            {
++                return Err(refused("Ref action has no exact source-window identity"));
++            }
++        }
++        let previous = CURRENT.with(|current| {
++            let next = entry.cloned().or_else(|| current.borrow().clone());
++            current.replace(next)
++        });
++        Ok(Self {
++            previous,
++            _thread_affinity: PhantomData,
++        })
++    }
++}
++
++impl Drop for BoundWindowScope {
++    fn drop(&mut self) {
++        CURRENT.with(|current| {
++            current.replace(self.previous.take());
++        });
++    }
++}
++
++#[cfg(target_os = "macos")]
++pub(crate) fn validate(
++    element: &crate::tree::AXElement,
++    deadline: std::time::Instant,
++) -> Result<(), AdapterError> {
++    let Some(entry) = CURRENT.with(|current| current.borrow().clone()) else {
++        return Ok(());
++    };
++    let expected = entry
++        .source
++        .source_window_id
++        .as_deref()
++        .ok_or_else(|| refused("Source window is unavailable"))?;
++    let process = entry
++        .process
++        .process_instance
++        .as_deref()
++        .ok_or_else(|| refused("Source process generation is unavailable"))?;
++    let pid = crate::tree::properties::ax_ipc::pid(element, deadline)
++        .map_err(|_| refused("Target process identity is unreadable"))?;
++    if i32::try_from(entry.process.pid.get()).ok() != Some(pid)
++        || !crate::system::process::process_identity::matches_instance(pid, process)?
++    {
++        return Err(refused("Target process identity changed"));
++    }
++    let window =
++        match crate::tree::resolve::resolve_ax_read::read_string(element, "AXRole", deadline)? {
++            Some(role) if role == "AXWindow" => element.clone(),
++            _ => crate::tree::surface_read::element(element, "AXWindow", deadline)?
++                .ok_or_else(|| refused("Target owning window is unavailable"))?,
++        };
++    let actual = crate::system::window::window_bridge::window_id(&window, deadline)?;
++    verify_window(expected, actual)?;
++    crate::system::window::window_resolve::verify_window_identity_until(
++        expected,
++        crate::system::window::window_resolve::WindowIdentityEvidence {
++            pid,
++            app: None,
++            process_instance: Some(process),
++            title: None,
++            bounds_hash: None,
++        },
++        deadline,
++    )
++}
++
++fn verify_window(expected: &str, actual: Option<i64>) -> Result<(), AdapterError> {
++    if actual.is_none_or(|id| format!("w-{id}") != expected) {
++        return Err(refused("Target no longer belongs to its captured window"));
++    }
++    Ok(())
++}
++
++fn refused(message: &str) -> AdapterError {
++    AdapterError::stale_ref_because(message).with_disposition(DeliverySemantics::not_delivered())
++}
++
++pub(crate) fn allow_renderer_activation() -> Result<(), AdapterError> {
++    Err(
++        AdapterError::not_supported("Cognia forbids application-wide renderer activation")
++            .with_disposition(DeliverySemantics::not_delivered()),
++    )
++}
++
++#[cfg(test)]
++#[path = "bound_window_scope_tests.rs"]
++mod tests;
++
++#[cfg(all(test, target_os = "macos"))]
++#[path = "bound_window_native_tests.rs"]
++mod native_tests;
+diff --git a/crates/macos/src/actions/bound_window_scope_tests.rs b/crates/macos/src/actions/bound_window_scope_tests.rs
+new file mode 100644
+index 0000000..204433b
+--- /dev/null
++++ b/crates/macos/src/actions/bound_window_scope_tests.rs
+@@ -0,0 +1,102 @@
++use super::*;
++
++#[test]
++fn application_wide_renderer_activation_is_refused_before_native_calls() {
++    use agent_desktop_core::SystemOps;
++    let lease = agent_desktop_core::InteractionLease::guarded(
++        agent_desktop_core::Deadline::after(1000).unwrap(),
++        (),
++    )
++    .unwrap();
++    let error = crate::adapter::MacOSAdapter::new()
++        .activate_renderer_accessibility(
++            agent_desktop_core::ProcessIdentity::new(7, "generation"),
++            &lease,
++        )
++        .unwrap_err();
++    assert_eq!(
++        error.code,
++        agent_desktop_core::ErrorCode::PlatformNotSupported
++    );
++    assert_eq!(error.disposition, DeliverySemantics::not_delivered());
++}
++
++pub(super) fn entry(window: &str) -> RefEntry {
++    RefEntry {
++        process: agent_desktop_core::RefProcess {
++            pid: agent_desktop_core::ProcessId::new(7),
++            process_instance: Some("generation".into()),
++        },
++        identity: agent_desktop_core::RefEntryIdentity {
++            retained_object: None,
++            unique_at_capture: true,
++            role: "button".into(),
++            name: Some("Run".into()),
++            value: None,
++            description: None,
++            native_id: None,
++        },
++        geometry: agent_desktop_core::RefGeometry {
++            bounds_space: None,
++            bounds: None,
++            bounds_hash: None,
++        },
++        capabilities: agent_desktop_core::RefCapabilities {
++            states: vec![],
++            available_actions: vec![],
++        },
++        source: agent_desktop_core::RefSource {
++            source_app: None,
++            source_window_id: Some(window.into()),
++            source_window_title: None,
++            source_window_bounds_hash: None,
++            source_surface: agent_desktop_core::SnapshotSurface::Window,
++            renderer_accessibility_forced: false,
++        },
++        scope: agent_desktop_core::RefScope {
++            root_ref: None,
++            path_is_absolute: false,
++            path: smallvec::smallvec![],
++        },
++    }
++}
++
++#[test]
++fn reparented_or_unknown_window_is_not_delivered() {
++    assert!(verify_window("w-10", Some(10)).is_ok());
++    for window in [Some(11), None] {
++        let error = verify_window("w-10", window).unwrap_err();
++        assert_eq!(error.disposition, DeliverySemantics::not_delivered());
++    }
++}
++
++#[test]
++fn nested_scope_restores_previous_binding_and_does_not_cross_threads() {
++    let outer_entry = entry("w-10");
++    let _outer = BoundWindowScope::enter(Some(&outer_entry)).unwrap();
++    {
++        let inner_entry = entry("w-11");
++        let _inner = BoundWindowScope::enter(Some(&inner_entry)).unwrap();
++        assert_eq!(
++            CURRENT.with(|v| v.borrow().as_ref().unwrap().source.source_window_id.clone()),
++            Some("w-11".into())
++        );
++    }
++    assert_eq!(
++        CURRENT.with(|v| v.borrow().as_ref().unwrap().source.source_window_id.clone()),
++        Some("w-10".into())
++    );
++    assert!(
++        std::thread::spawn(|| CURRENT.with(|v| v.borrow().is_none()))
++            .join()
++            .unwrap()
++    );
++}
++
++#[test]
++fn missing_binding_identity_refuses_without_changing_scope() {
++    let mut invalid = entry("w-10");
++    invalid.process.process_instance = None;
++    assert!(BoundWindowScope::enter(Some(&invalid)).is_err());
++    assert!(CURRENT.with(|v| v.borrow().is_none()));
++}
+diff --git a/crates/macos/src/actions/mod.rs b/crates/macos/src/actions/mod.rs
+index d03382d..c8684c8 100644
+--- a/crates/macos/src/actions/mod.rs
++++ b/crates/macos/src/actions/mod.rs
+@@ -4,6 +4,7 @@ pub(crate) mod ax_helpers;
+ #[cfg(target_os = "macos")]
+ pub(crate) mod ax_mutation;
+ pub(crate) mod ax_perform;
++pub(crate) mod bound_window_scope;
+ pub(crate) mod chain;
+ pub(crate) mod delivery_tracker;
+ pub(crate) mod dispatch;
+diff --git a/crates/macos/src/system/adapter.rs b/crates/macos/src/system/adapter.rs
+index b36e1b0..688f24f 100644
+--- a/crates/macos/src/system/adapter.rs
++++ b/crates/macos/src/system/adapter.rs
+@@ -77,6 +77,7 @@ impl SystemOps for MacOSAdapter {
+         process: ProcessIdentity,
+         lease: &InteractionLease,
+     ) -> Result<(), AdapterError> {
++        crate::actions::bound_window_scope::allow_renderer_activation()?;
+         crate::system::renderer_activation::activate(process, lease.deadline())
+     }
+ 
+diff --git a/crates/macos/src/tree/properties/ax_ipc.rs b/crates/macos/src/tree/properties/ax_ipc.rs
+index 951b697..5caaa21 100644
+--- a/crates/macos/src/tree/properties/ax_ipc.rs
++++ b/crates/macos/src/tree/properties/ax_ipc.rs
+@@ -69,6 +69,7 @@ fn prepare_mutation(
+     element: &crate::tree::AXElement,
+     deadline: impl AxDeadline,
+ ) -> Result<Duration, AdapterError> {
++    crate::actions::bound_window_scope::validate(element, deadline.absolute()?)?;
+     install_messaging_timeout(element, deadline, mutation_slice)
+ }
+ 
+diff --git a/crates/macos/src/tree/query/mod.rs b/crates/macos/src/tree/query/mod.rs
+index 4fae0bf..e914f97 100644
+--- a/crates/macos/src/tree/query/mod.rs
++++ b/crates/macos/src/tree/query/mod.rs
+@@ -52,7 +52,7 @@ pub(crate) fn observe_tree(
+     let request = (*request).validate()?;
+     let deadline = crate::tree::locator_deadline::from_operation(request.deadline)?;
+     let resolved = resolve_root(root, &request, deadline)?;
+-    let (tree, renderer_ready, stats) =
++    let (mut tree, renderer_ready, stats) =
+         traversal::LocatorTraversal::new(&request, resolved.context, deadline)
+             .build(resolved.element, resolved.source)?;
+     tracing::debug!(?stats, "tree: native observation completed");
+@@ -66,30 +66,13 @@ pub(crate) fn observe_tree(
+                 tree.is_complete() && looked_deep_enough,
+                 deadline,
+             )? {
+-                return Err(renderer_activation_required(resolved.pid, stats));
++                tree.mark_incomplete();
+             }
+         }
+     }
+     Ok(tree)
+ }
+ 
+-fn renderer_activation_required(pid: i32, stats: agent_desktop_core::LocatorStats) -> AdapterError {
+-    let mut error = AdapterError::renderer_accessibility_activation_required(
+-        "The application requires accessibility activation before its surface is ready",
+-    );
+-    if let Some(details) = error
+-        .details
+-        .as_mut()
+-        .and_then(serde_json::Value::as_object_mut)
+-    {
+-        details.insert("pid".into(), json!(pid));
+-        details.insert("complete".into(), json!(true));
+-        details.insert("renderer_ready".into(), json!(false));
+-        details.insert("query_stats".into(), json!(stats));
+-    }
+-    error
+-}
+-
+ fn resolve_root(
+     root: ObservationRoot<'_>,
+     request: &ObservationRequest,
+diff --git a/src/cognia_lease.rs b/src/cognia_lease.rs
+new file mode 100644
+index 0000000..4089923
+--- /dev/null
++++ b/src/cognia_lease.rs
+@@ -0,0 +1,86 @@
++use agent_desktop_core::AppError;
++use std::fs::File;
++use std::os::fd::FromRawFd;
++
++pub(crate) struct SupervisorLease {
++    _file: File,
++}
++
++impl SupervisorLease {
++    pub(crate) fn adopt() -> Result<Option<Self>, AppError> {
++        let Some(value) = std::env::var_os("COGNIA_AUTOMATION_LEASE_FD") else {
++            return Ok(None);
++        };
++        let fd = value
++            .to_str()
++            .and_then(|v| v.parse::<i32>().ok())
++            .filter(|fd| *fd >= 3)
++            .ok_or_else(|| AppError::invalid_input("Invalid supervisor lease descriptor"))?;
++        Self::adopt_descriptor(fd).map(Some)
++    }
++
++    fn adopt_descriptor(fd: i32) -> Result<Self, AppError> {
++        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
++        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
++            return Err(AppError::invalid_input(
++                "Supervisor lease descriptor is unavailable",
++            ));
++        }
++        let stat = unsafe { stat.assume_init() };
++        if stat.st_mode & libc::S_IFMT != libc::S_IFREG
++            || stat.st_uid != unsafe { libc::geteuid() }
++            || stat.st_mode & 0o077 != 0
++            || stat.st_nlink != 1
++        {
++            return Err(AppError::invalid_input(
++                "Supervisor lease must be a private owned file",
++            ));
++        }
++        if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
++            return Err(AppError::invalid_input(
++                "Supervisor lease is not held by this executor",
++            ));
++        }
++        Ok(Self {
++            _file: unsafe { File::from_raw_fd(fd) },
++        })
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::os::fd::{AsRawFd, IntoRawFd};
++    use std::os::unix::fs::OpenOptionsExt;
++
++    #[test]
++    fn invalid_or_non_file_descriptor_is_rejected() {
++        assert!(SupervisorLease::adopt_descriptor(-1).is_err());
++        let file = File::open("/dev/null").unwrap();
++        assert!(SupervisorLease::adopt_descriptor(file.as_raw_fd()).is_err());
++    }
++
++    #[test]
++    fn adopted_descriptor_keeps_exclusive_lock_until_drop() {
++        let path = std::env::temp_dir().join(format!("cognia-lease-{}", std::process::id()));
++        let file = std::fs::OpenOptions::new()
++            .read(true)
++            .write(true)
++            .create_new(true)
++            .mode(0o600)
++            .open(&path)
++            .unwrap();
++        let successor = File::open(&path).unwrap();
++        let lease = SupervisorLease::adopt_descriptor(file.into_raw_fd()).unwrap();
++        assert_ne!(
++            unsafe { libc::flock(successor.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
++            0
++        );
++        drop(lease);
++        assert_eq!(
++            unsafe { libc::flock(successor.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
++            0
++        );
++        std::fs::remove_file(path).unwrap();
++    }
++}
+diff --git a/src/main.rs b/src/main.rs
+index 112b304..a092221 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -3,6 +3,8 @@
+ mod batch;
+ mod cli;
+ mod cli_args;
++#[cfg(unix)]
++mod cognia_lease;
+ mod command_policy;
+ mod diagnostic;
+ mod dispatch;
+@@ -32,6 +34,11 @@ use std::process::ExitCode;
+ const EXIT_INVALID_ARGS: u8 = 2;
+ 
+ fn main() -> ExitCode {
++    #[cfg(unix)]
++    let _supervisor_lease = match cognia_lease::SupervisorLease::adopt() {
++        Ok(lease) => lease,
++        Err(error) => return finish("startup", Err(pre_dispatch_error(error))),
++    };
+     let code = run_command();
+     #[cfg(target_os = "linux")]
+     agent_desktop_linux::end_input_session();
+@@ -54,8 +61,6 @@ fn run_command() -> ExitCode {
+     if let Some(exit_code) = agent_desktop_macos::permission_guide_from_env() {
+         return ExitCode::from(exit_code);
+     }
+-    #[cfg(target_os = "macos")]
+-    agent_desktop_macos::stop_legacy_command_hosts();
+     run()
+ }
+ 
+diff --git a/src/tests/command_host_absent.rs b/src/tests/command_host_absent.rs
+index d48c3e1..677f9c9 100644
+--- a/src/tests/command_host_absent.rs
++++ b/src/tests/command_host_absent.rs
+@@ -9,7 +9,6 @@ use std::sync::Mutex;
+ use std::time::{Duration, Instant};
+ 
+ const MARKER: &str = "AGENT_DESKTOP_INTERNAL_COMMAND_HOST";
+-const SIGKILL: i32 = 9;
+ 
+ static HOST_TEST_LOCK: Mutex<()> = Mutex::new(());
+ 
+@@ -106,7 +105,7 @@ fn commands_never_reach_or_remove_a_command_host_socket() {
+ }
+ 
+ #[test]
+-fn a_call_stops_marked_processes_under_any_name_and_leaves_others_running() {
++fn a_call_leaves_marked_and_unmarked_foreign_processes_running() {
+     let _lock = HOST_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+     let tmpdir = private_dir("marker");
+     let mut marked = spawn_renamed_copy(&tmpdir, "renamed-host", true, &["wait", "10000"]);
+@@ -114,8 +113,10 @@ fn a_call_stops_marked_processes_under_any_name_and_leaves_others_running() {
+ 
+     run(&["version"], &tmpdir);
+ 
+-    let status = exit_within(&mut marked, Duration::from_secs(3)).expect("marked copy survived");
+-    assert_eq!(status.signal(), Some(SIGKILL), "{status}");
++    assert!(
++        exit_within(&mut marked, Duration::from_secs(1)).is_none(),
++        "a foreign marked process was stopped"
++    );
+     assert!(
+         exit_within(&mut unmarked, Duration::from_secs(1)).is_none(),
+         "a process without the marker was stopped"

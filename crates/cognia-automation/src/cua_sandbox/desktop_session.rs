@@ -441,7 +441,7 @@ impl CuaSandboxRegistry {
                 expires_at: proof.expires_at,
                 screenshot,
             },
-            human
+            human,
         ))
     }
     pub async fn control_input(
@@ -665,7 +665,15 @@ impl CuaSandboxRegistry {
         desktop
             .run_mutation(deliver(&client, prepared.point, &action))
             .await?;
-        Ok(ActionResult { status: ActionStatus::Delivered, method: Some(ActionMethod::Synthetic),
+        Ok(ActionResult {
+            delivery: Some(crate::automation::session::ActionDelivery {
+                engine: crate::automation::session::DeliveryEngine::Remote,
+                disposition: crate::automation::session::DeliveryDisposition::Unverified,
+                mechanism: Some(ActionMethod::Synthetic),
+                verification_scope: None,
+                replay_allowed: false,
+            }),
+            status: ActionStatus::Unknown, method: Some(ActionMethod::Synthetic),
             before_revision: prepared.state.revision, after_revision: None,
             evidence: vec![ActionEvidence { kind: "remoteInputAcknowledged".into(),
                 message: "computer-server acknowledged synthetic input; observe again to verify its effect".into(),
@@ -1160,7 +1168,17 @@ mod tests {
             .remote_perform_action("a", request.clone(), "turn")
             .await
             .unwrap();
-        assert_eq!(result.status, ActionStatus::Delivered);
+        assert_eq!(result.status, ActionStatus::Unknown);
+        let delivery = result.delivery.as_ref().unwrap();
+        assert_eq!(
+            delivery.engine,
+            crate::automation::session::DeliveryEngine::Remote
+        );
+        assert_eq!(
+            delivery.disposition,
+            crate::automation::session::DeliveryDisposition::Unverified
+        );
+        assert!(!delivery.replay_allowed);
         assert_eq!(
             calls
                 .lock()

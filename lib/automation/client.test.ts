@@ -34,6 +34,28 @@ import { elementRef, keyChord } from "./types"
 
 const mockCall = transport.call as unknown as jest.Mock
 
+describe("session engine local commands", () => {
+  it("binds a damaged-config recovery to its snapshot token", async () => {
+    mockCall.mockResolvedValue({ revision: 1, needsRestart: true })
+    await desktop.sessionEngineSet(0, "native", "", "bad-file-digest")
+    expect(mockCall).toHaveBeenCalledWith("automation_session_engine_set", {
+      expectedRevision: 0,
+      expectedGeneration: "",
+      desiredEngine: "native",
+      recoveryToken: "bad-file-digest",
+    })
+  })
+  it("sends the revision and desired engine as a separate CAS update", async () => {
+    mockCall.mockResolvedValue({ revision: 8, needsRestart: true })
+    await desktop.sessionEngineSet(7, "agentDesktop", "generation")
+    expect(mockCall).toHaveBeenCalledWith("automation_session_engine_set", {
+      expectedRevision: 7,
+      expectedGeneration: "generation",
+      desiredEngine: "agentDesktop",
+    })
+  })
+})
+
 afterEach(() => {
   mockCall.mockReset()
   mockUiaListen.mockReset()

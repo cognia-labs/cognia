@@ -60,6 +60,23 @@ export type {
   UiaEventPayload,
 } from "@cognia/plugin-contract/lib/automation/client"
 
+export type SessionEngineId = "native" | "agentDesktop"
+export interface SessionEngineStatus {
+  configGeneration: string
+  configurationError: boolean
+  recoveryToken: string | null
+  revision: number
+  desiredEngine: SessionEngineId
+  effectiveEngine: SessionEngineId
+  needsRestart: boolean
+  agentDesktopAvailable: boolean
+  candidateHealth: string
+  health: string
+  reasonCode: string | null
+  binaryVersion: string | null
+  profile: string | null
+}
+
 /** Tauri event name carrying live UI events from the Rust watcher threads. */
 export const UIA_EVENT_NAME = "automation:uia-event"
 
@@ -431,6 +448,28 @@ export const desktop = {
     return transport.call<AutomationSettings>("automation_settings_get", {})
   },
 
+  sessionEngineGet(): Promise<SessionEngineStatus> {
+    return transport.call<SessionEngineStatus>("automation_session_engine_get", {})
+  },
+
+  sessionEngineSet(
+    expectedRevision: number,
+    desiredEngine: SessionEngineId,
+    expectedGeneration: string,
+    recoveryToken?: string
+  ): Promise<SessionEngineStatus> {
+    return transport.call<SessionEngineStatus>("automation_session_engine_set", {
+      expectedRevision,
+      expectedGeneration,
+      desiredEngine,
+      ...(recoveryToken === undefined ? {} : { recoveryToken }),
+    })
+  },
+
+  sessionEngineProbe(): Promise<SessionEngineStatus> {
+    return transport.call<SessionEngineStatus>("automation_session_engine_probe", {})
+  },
+
   /** Replace the permission settings. Never resumes an engaged kill switch. */
   settingsSet(settings: AutomationSettings): Promise<void> {
     return transport.call<void>("automation_settings_set", { settings })
@@ -450,7 +489,7 @@ export const desktop = {
     return transport.call<boolean>("automation_kill_switch_engaged", {})
   },
 
-  /** Engage the global kill switch — every in-flight call rejects with KILL_SWITCH_ACTIVE. */
+  /** Revoke local execution; the stop event reports whether cleanup has settled. */
   killSwitch(): Promise<void> {
     return transport.call<void>("automation_kill_switch", {})
   },

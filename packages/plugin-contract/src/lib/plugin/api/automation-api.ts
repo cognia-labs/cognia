@@ -104,7 +104,13 @@ export interface PluginAutomationAPI {
    * is why the element-handle path alone is not sufficient coverage.
    */
   findText(
-    args: { query?: string; languages?: string[]; opts?: ScreenshotOpts; state?: AppOcrState },
+    args: {
+      query?: string
+      languages?: string[]
+      opts?: ScreenshotOpts
+      state?: AppOcrState
+      signal?: AbortSignal
+    },
     origin?: PluginComputerUseOrigin
   ): Promise<FindScreenTextResult>
   /** Locate on-screen text by OCR and click the best match. */
@@ -112,6 +118,7 @@ export interface PluginAutomationAPI {
     args: {
       query: string
       occurrence?: number
+      signal?: AbortSignal
       state?: AppOcrState
       button?: MouseButton
       doubleClick?: boolean

@@ -94,6 +94,7 @@ impl GateContext {
 /// one pipeline instead of bypassing the gate.
 #[derive(Clone)]
 pub struct Enforcement {
+    pub execution: Option<super::execution::ExecutionControl>,
     pub gate: PermissionGate,
     pub audit: AuditRing,
     pub consent: ConsentBroker,
@@ -166,6 +167,7 @@ async fn capture_consent_thumbnail(handle: &AutomationHandle) -> Option<ConsentT
 impl Enforcement {
     pub fn from_state(state: &AutomationState) -> Self {
         Self {
+            execution: Some(state.handle.execution_control()),
             gate: state.gate.clone(),
             audit: state.audit.clone(),
             consent: state.consent.clone(),
@@ -189,19 +191,21 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
-    run_gated_impl(
-        app,
-        &state.gate,
-        &state.audit,
-        &state.consent,
-        &state.policy,
-        Some(&state.handle),
-        None,
-        gctx,
-        command,
-        do_call,
-    )
-    .await
+    let admission = state.handle.execution_control().capture()?;
+    admission
+        .scope(run_gated_impl(
+            app,
+            &state.gate,
+            &state.audit,
+            &state.consent,
+            &state.policy,
+            Some(&state.handle),
+            None,
+            gctx,
+            command,
+            do_call,
+        ))
+        .await
 }
 
 /// Same pipeline, driven by an owned [`Enforcement`] bundle — used by the
@@ -217,6 +221,23 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
+    if let Some(execution) = &enf.execution {
+        let admission = execution.capture()?;
+        return admission
+            .scope(run_gated_impl(
+                app,
+                &enf.gate,
+                &enf.audit,
+                &enf.consent,
+                &enf.policy,
+                None,
+                enf.consent_event_sink.as_ref(),
+                gctx,
+                command,
+                do_call,
+            ))
+            .await;
+    }
     run_gated_impl(
         app,
         &enf.gate,

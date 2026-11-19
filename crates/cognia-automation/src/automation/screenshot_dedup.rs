@@ -152,6 +152,7 @@ mod tests {
 
     fn revision(session: &str, rev: u64, bytes: &str) -> UiStateRevision {
         UiStateRevision {
+            session_engine: None,
             session_id: session.into(),
             lineage_id: "lineage".into(),
             revision: rev,

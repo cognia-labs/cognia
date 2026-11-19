@@ -15,6 +15,7 @@ import type { Capabilities } from "@/lib/automation/types"
 
 import { BehaviorCard } from "../behavior-card"
 import { ScreenOffCard } from "../screen-off-card"
+import { SessionEngineCard } from "../session-engine-card"
 
 export interface BehaviorPanelProps {
   /** `undefined` while the capability probe runs, `null` when it failed. */
@@ -24,6 +25,7 @@ export interface BehaviorPanelProps {
 export function BehaviorPanel({ caps }: BehaviorPanelProps) {
   return (
     <SettingsStack>
+      <SessionEngineCard />
       <BehaviorCard />
       {caps && screenOffSupported(caps.platform) ? (
         <ScreenOffCard platform={caps.platform} />

@@ -476,7 +476,7 @@ function buildPluginTools(
       execute: async (args, context) => {
         const input = args as unknown as Parameters<PluginContext["automation"]["findText"]>[0]
         if (!input.state) throw new Error("find_text requires state from get_app_state")
-        return automation.findText(input, origin(context))
+        return automation.findText({ ...input, signal: context?.signal }, origin(context))
       },
     }),
     definePluginTool({
@@ -492,7 +492,7 @@ function buildPluginTools(
       execute: async (args, context) => {
         const input = args as unknown as Parameters<PluginContext["automation"]["clickText"]>[0]
         if (!input.state) throw new Error("click_text requires state from get_app_state")
-        return automation.clickText(input, origin(context))
+        return automation.clickText({ ...input, signal: context?.signal }, origin(context))
       },
     }),
     definePluginTool({

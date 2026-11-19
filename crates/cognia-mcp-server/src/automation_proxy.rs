@@ -551,6 +551,7 @@ mod tests {
         // report "unknown automation command".
         settings.per_surface.mcp.tier = mcp_tier;
         Enforcement {
+            execution: None,
             gate: PermissionGate::new(settings),
             audit: AuditRing::new(),
             consent: ConsentBroker::default(),
@@ -681,6 +682,7 @@ mod tests {
         let mut settings = AutomationSettings::default();
         settings.per_surface.mcp.tier = Tier::Off;
         let enf = Enforcement {
+            execution: None,
             gate: PermissionGate::new(settings),
             audit: audit.clone(),
             consent: ConsentBroker::default(),

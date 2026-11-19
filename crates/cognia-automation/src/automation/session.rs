@@ -202,6 +202,8 @@ pub struct TruncationDescriptor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiStateRevision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_engine: Option<SessionEngineInfo>,
     pub session_id: String,
     pub lineage_id: String,
     pub revision: u64,
@@ -224,6 +226,17 @@ pub struct UiStateRevision {
     /// Short text the model reads in place of a withheld frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionEngineInfo {
+    pub engine: super::engine_config::SessionEngineId,
+    pub semantic_actions: Vec<String>,
+    pub native_actions: Vec<String>,
+    pub observation_complete: bool,
+    pub observe_after_action: bool,
+    pub automatic_fallback: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -361,6 +374,8 @@ pub struct ZoomedRegion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<ActionDelivery>,
     pub status: ActionStatus,
     pub method: Option<ActionMethod>,
     pub before_revision: u64,
@@ -368,6 +383,37 @@ pub struct ActionResult {
     pub evidence: Vec<ActionEvidence>,
     pub policy_decision: ActionPolicyDecision,
     pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeliveryDisposition {
+    #[serde(rename = "notDelivered")]
+    NotDelivered,
+    #[serde(rename = "deliveryUncertain")]
+    Uncertain,
+    #[serde(rename = "deliveredUnverified")]
+    Unverified,
+    #[serde(rename = "deliveredVerified")]
+    Verified,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionDelivery {
+    pub engine: DeliveryEngine,
+    pub disposition: DeliveryDisposition,
+    pub mechanism: Option<ActionMethod>,
+    pub verification_scope: Option<String>,
+    pub replay_allowed: bool,
+}
+
+/// The actual executor is separate from the local, configurable session engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeliveryEngine {
+    Native,
+    AgentDesktop,
+    Remote,
 }
 
 #[derive(Debug, Clone, Error, Serialize, Deserialize, PartialEq, Eq)]
@@ -401,6 +447,7 @@ pub enum SessionError {
 
 #[derive(Debug, Clone)]
 struct TokenRecord {
+    admission: Option<super::execution::Admission>,
     session_id: String,
     lineage_id: String,
     revision: u64,
@@ -411,6 +458,7 @@ struct TokenRecord {
 
 #[derive(Debug, Clone)]
 struct SessionRecord {
+    admission: Option<super::execution::Admission>,
     lineage_id: String,
     revision: u64,
     app_identity: String,
@@ -448,6 +496,52 @@ pub(crate) struct PreparedAction {
 }
 
 impl UiSessionManager {
+    pub(crate) fn forget_sessions(&mut self, sessions: &[String]) {
+        if sessions.is_empty() {
+            return;
+        }
+        for session in sessions {
+            self.sessions.remove(session);
+        }
+        self.tokens
+            .retain(|_, token| !sessions.contains(&token.session_id));
+        self.expansion_tokens
+            .retain(|_, token| !sessions.contains(&token.handle.session_id));
+    }
+    pub(crate) fn publish_engine_metadata(&mut self, state: &mut UiStateRevision, complete: bool) {
+        let writable = super::execution::current().is_ok_and(|admission| admission.is_run_bound());
+        state.session_engine = Some(SessionEngineInfo {
+            engine: super::engine_config::SessionEngineId::AgentDesktop,
+            semantic_actions: if writable {
+                vec![
+                    "click:left:single".into(),
+                    "setValue".into(),
+                    "secondaryAction:toggle".into(),
+                ]
+            } else {
+                Vec::new()
+            },
+            native_actions: if writable {
+                vec!["focus:windowOnly".into(), "explicitPixelTarget".into()]
+            } else {
+                Vec::new()
+            },
+            observation_complete: complete,
+            observe_after_action: true,
+            automatic_fallback: false,
+        });
+        if !complete {
+            state.tree.truncated = true;
+            state.truncation.push(TruncationDescriptor {
+                reason: "agentDesktopPartial".into(),
+                materialized_nodes: state.tree.nodes.len(),
+                omitted_nodes: 0,
+            });
+        }
+        if let Some(record) = self.sessions.get_mut(&state.session_id) {
+            record.current = state.clone();
+        }
+    }
     pub fn record_state(
         &mut self,
         mut capture: CapturedUiState,
@@ -459,8 +553,17 @@ impl UiSessionManager {
             .and_then(|bundle_id| self.instruction_packs.for_bundle_id(bundle_id))
             .cloned();
         let app_identity = application_identity(&capture.app);
+        let admission = super::execution::current().ok();
         let previous = self.sessions.get(&capture.session_id);
-        let same_lineage = previous.is_some_and(|record| record.app_identity == app_identity);
+        let same_lineage = previous.is_some_and(|record| {
+            record.app_identity == app_identity
+                && record.current.surface.window_id == capture.surface.window_id
+                && match (&record.admission, &admission) {
+                    (Some(previous), Some(current)) => previous.same_run(current),
+                    (None, None) => true,
+                    _ => false,
+                }
+        });
         let previous_state = same_lineage
             .then(|| previous.map(|record| record.current.clone()))
             .flatten();
@@ -535,6 +638,7 @@ impl UiSessionManager {
             .as_ref()
             .map(|previous| diff_trees(&previous.tree, &tree, previous.revision, revision));
         let state = UiStateRevision {
+            session_engine: None,
             session_id: capture.session_id.clone(),
             lineage_id: lineage_id.clone(),
             revision,
@@ -560,6 +664,7 @@ impl UiSessionManager {
         self.tokens.insert(
             turn_token,
             TokenRecord {
+                admission: admission.clone(),
                 session_id: capture.session_id.clone(),
                 lineage_id: lineage_id.clone(),
                 revision,
@@ -572,6 +677,7 @@ impl UiSessionManager {
         self.sessions.insert(
             capture.session_id,
             SessionRecord {
+                admission,
                 lineage_id,
                 revision,
                 app_identity,
@@ -637,6 +743,16 @@ impl UiSessionManager {
         }
         if token.turn_binding != turn_binding {
             return Err(SessionError::TurnBindingMismatch);
+        }
+        if let Some(expected) = &token.admission {
+            expected
+                .check()
+                .map_err(|_| SessionError::TurnBindingMismatch)?;
+            let current =
+                super::execution::current().map_err(|_| SessionError::TurnBindingMismatch)?;
+            if !expected.same_run(&current) {
+                return Err(SessionError::TurnBindingMismatch);
+            }
         }
         if token.session_id != session_id || token.lineage_id != lineage_id {
             return Err(SessionError::CrossSessionHandle);
@@ -1230,6 +1346,70 @@ mod tests {
                 projection: UiTreeProjectionKind::Model,
             }
         }
+    }
+
+    #[test]
+    fn an_observation_token_cannot_cross_a_revoked_host_run_with_the_same_client_tags() {
+        let control = super::super::execution::ExecutionControl::default();
+        control.begin_run("first".into(), "chat".into(), "turn".into());
+        let first = control.admit(Some("chat"), Some("turn"), true).unwrap();
+        let mut sessions = UiSessionManager::default();
+        let state = first.deliver(|| {
+            sessions
+                .record_state(CapturedUiState::fixture(root("Notes")))
+                .unwrap()
+        });
+        let request = ActionRequest {
+            turn_token: state.turn_token,
+            target: ActionTarget::Element {
+                handle: state.tree.nodes[0].handle.clone(),
+            },
+            action: UiAction::Focus,
+            strategy: ActionStrategy::Semantic,
+        };
+        control.revoke_run("first");
+        control.begin_run("second".into(), "chat".into(), "turn".into());
+        let second = control.admit(Some("chat"), Some("turn"), true).unwrap();
+        let error = second.deliver(|| sessions.prepare_action(&request, "turn:test").unwrap_err());
+        assert_eq!(error, SessionError::TurnBindingMismatch);
+    }
+
+    #[test]
+    fn old_handles_cannot_refetch_across_host_runs_or_target_windows() {
+        let control = super::super::execution::ExecutionControl::default();
+        control.begin_run("first".into(), "chat".into(), "first".into());
+        let first = control.admit(Some("chat"), Some("first"), true).unwrap();
+        let mut sessions = UiSessionManager::default();
+        let old = first.deliver(|| {
+            sessions
+                .record_state(CapturedUiState::fixture(root("Notes")))
+                .unwrap()
+        });
+        control.revoke_run("first");
+        control.begin_run("second".into(), "chat".into(), "second".into());
+        let second = control.admit(Some("chat"), Some("second"), true).unwrap();
+        let fresh = second.deliver(|| {
+            sessions
+                .record_state(CapturedUiState::fixture(root("Notes")))
+                .unwrap()
+        });
+        assert_ne!(old.lineage_id, fresh.lineage_id);
+        let request = ActionRequest {
+            turn_token: fresh.turn_token,
+            target: ActionTarget::Element {
+                handle: old.tree.nodes[0].handle.clone(),
+            },
+            action: UiAction::Focus,
+            strategy: ActionStrategy::Semantic,
+        };
+        assert_eq!(
+            second.deliver(|| sessions.prepare_action(&request, "turn:test").unwrap_err()),
+            SessionError::CrossSessionHandle
+        );
+        let mut another_window = CapturedUiState::fixture(root("Notes"));
+        another_window.surface.window_id = Some(8);
+        let other = second.deliver(|| sessions.record_state(another_window).unwrap());
+        assert_ne!(fresh.lineage_id, other.lineage_id);
     }
 
     fn png_shot(w: u32, h: u32) -> Screenshot {

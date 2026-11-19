@@ -380,14 +380,20 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
-    dispatcher::run_gated(app, state, gctx, command, || {
-        super::cua_route::with_agent_identity(
-            ctx.session_key.clone(),
-            ctx.character_id.clone(),
-            async { do_call().await },
-        )
-    })
-    .await
+    let admission = state.handle.execution_control().admit(
+        ctx.session_key.as_deref(),
+        ctx.turn_key.as_deref(),
+        ctx.surface() == Surface::ComputerUse && ctx.remote_connection_id().is_none(),
+    )?;
+    admission
+        .scope(dispatcher::run_gated(app, state, gctx, command, || {
+            super::cua_route::with_agent_identity(
+                ctx.session_key.clone(),
+                ctx.character_id.clone(),
+                async { do_call().await },
+            )
+        }))
+        .await
 }
 
 /// Thin shim over the shared `dispatcher::run_gated` pipeline. Kept as a macro
@@ -1463,6 +1469,60 @@ pub async fn automation_settings_get(
 
 #[cfg(feature = "tauri-host")]
 #[tauri::command]
+pub async fn automation_session_engine_get(
+    state: State<'_, AutomationState>,
+) -> std::result::Result<super::engine_config::EngineStatus, String> {
+    let host = state.handle.session_engine();
+    tokio::task::spawn_blocking(move || host.status())
+        .await
+        .map_err(|_| "configError".to_string())?
+}
+
+#[cfg(feature = "tauri-host")]
+#[tauri::command]
+pub async fn automation_session_engine_set(
+    state: State<'_, AutomationState>,
+    expected_revision: u64,
+    expected_generation: String,
+    desired_engine: super::engine_config::SessionEngineId,
+    recovery_token: Option<String>,
+) -> std::result::Result<super::engine_config::EngineStatus, String> {
+    let host = state.handle.session_engine();
+    tokio::task::spawn_blocking(move || {
+        super::engine_config::save(
+            expected_revision,
+            &expected_generation,
+            desired_engine,
+            recovery_token.as_deref(),
+        )?;
+        host.status()
+    })
+    .await
+    .map_err(|_| "configError".to_string())?
+}
+
+#[cfg(feature = "tauri-host")]
+#[tauri::command]
+pub async fn automation_session_engine_probe(
+    state: State<'_, AutomationState>,
+) -> std::result::Result<super::engine_config::EngineStatus, String> {
+    let host = state.handle.session_engine();
+    let control = state.handle.execution_control();
+    tokio::task::spawn_blocking(move || {
+        let admission = control
+            .admit_probe()
+            .map_err(|_| "probeUnavailable".to_string())?;
+        let _delivery = admission
+            .enter_delivery()
+            .map_err(|_| "probeUnavailable".to_string())?;
+        host.probe(&admission)
+    })
+    .await
+    .map_err(|_| "probeUnavailable".to_string())?
+}
+
+#[cfg(feature = "tauri-host")]
+#[tauri::command]
 pub async fn automation_settings_set(
     state: State<'_, AutomationState>,
     settings: super::permission::AutomationSettings,
@@ -1487,6 +1547,11 @@ pub async fn automation_set_enabled(
     enabled: bool,
 ) -> std::result::Result<(), String> {
     state.gate.set_enabled(enabled);
+    if enabled {
+        state.handle.execution_control().resume();
+    } else {
+        state.handle.execution_control().stop();
+    }
     super::persist::save_settings(&state.gate.settings());
     Ok(())
 }

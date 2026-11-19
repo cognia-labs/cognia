@@ -256,12 +256,14 @@ fn ax_result(error: AXError) -> Result<(), i32> {
 }
 
 pub fn perform_action(el: &AxElement, action: &str) -> Result<(), i32> {
+    crate::automation::execution::checkpoint().map_err(|_| AXError::APIDisabled.0)?;
     let action = CFString::from_str(action);
     // SAFETY: both arguments are valid CF objects.
     ax_result(unsafe { el.0.perform_action(&action) })
 }
 
 pub fn set_string_value(el: &AxElement, attribute: &str, value: &str) -> Result<(), i32> {
+    crate::automation::execution::checkpoint().map_err(|_| AXError::APIDisabled.0)?;
     let attribute = CFString::from_str(attribute);
     let value = CFString::from_str(value);
     // SAFETY: both arguments are valid CF objects.
@@ -269,11 +271,13 @@ pub fn set_string_value(el: &AxElement, attribute: &str, value: &str) -> Result<
 }
 
 pub fn focus_element(el: &AxElement) -> Result<(), i32> {
+    crate::automation::execution::checkpoint().map_err(|_| AXError::APIDisabled.0)?;
     let attribute = CFString::from_str("AXFocused");
     ax_result(unsafe { el.0.set_attribute_value(&attribute, CFBoolean::new(true)) })
 }
 
 pub fn activate_application(el: &AxElement) -> Result<(), i32> {
+    crate::automation::execution::checkpoint().map_err(|_| AXError::APIDisabled.0)?;
     let attribute = CFString::from_str("AXFrontmost");
     ax_result(unsafe { el.0.set_attribute_value(&attribute, CFBoolean::new(true)) })
 }
@@ -332,6 +336,7 @@ fn ax_value_get<T: AxStruct>(value: &CFType) -> Option<T> {
 }
 
 pub fn set_selected_text_range(el: &AxElement, start: usize, end: usize) -> Result<(), i32> {
+    crate::automation::execution::checkpoint().map_err(|_| AXError::APIDisabled.0)?;
     let range = CFRange::new(start as CFIndex, end.saturating_sub(start) as CFIndex);
     let Some(value) = range_value(range) else {
         return Err(AXError::Failure.0);
@@ -365,6 +370,9 @@ pub fn prompt_trust() {
 /// Set a boolean attribute to true. Best-effort: unsupported / illegal-argument
 /// errors on native apps are expected and ignored.
 fn set_bool_attr(el: &AxElement, name: &str) {
+    if crate::automation::execution::checkpoint().is_err() {
+        return;
+    }
     let attribute = CFString::from_str(name);
     // SAFETY: both arguments are valid CF objects.
     let _ = unsafe { el.0.set_attribute_value(&attribute, CFBoolean::new(true)) };

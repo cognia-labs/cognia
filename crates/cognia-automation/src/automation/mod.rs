@@ -14,13 +14,16 @@
 //! Renderer-facing types live in `types.rs`; the trait the worker dispatches
 //! against is in `backend.rs`.
 
+pub mod agent_desktop;
 pub mod audit;
 pub mod backend;
 pub mod commands;
 pub mod consent;
 pub mod cua_route;
 pub mod dispatcher;
+pub mod engine_config;
 pub mod events;
+pub mod execution;
 pub mod host;
 pub mod input_monitor;
 pub mod instruction_pack;
@@ -36,6 +39,7 @@ pub mod screenshot_dedup;
 pub mod selection;
 pub mod selection_events;
 pub mod session;
+pub mod session_engine;
 pub mod tool_exec;
 pub mod types;
 pub mod virtual_display;

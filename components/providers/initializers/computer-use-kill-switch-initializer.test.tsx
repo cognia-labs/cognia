@@ -57,15 +57,15 @@ describe("ComputerUseKillSwitchInitializer", () => {
 
   it("clears session grants and toasts when the kill switch fires", async () => {
     let handler: (() => void) | undefined
-    listenMock.mockImplementation(async (_event: string, cb: () => void) => {
-      handler = cb
+    listenMock.mockImplementation(async (event: string, cb: () => void) => {
+      if (event === "automation:kill-switch") handler = cb
       return () => {}
     })
     render(<ComputerUseKillSwitchInitializer />)
     await waitFor(() => expect(handler).toBeDefined())
     handler!()
     expect(clearAllSessionGrants).toHaveBeenCalledTimes(1)
-    expect(toastWarning).toHaveBeenCalledWith("Automation kill switch engaged", expect.any(Object))
+    expect(toastWarning).toHaveBeenCalledWith("Stopping local automation", expect.any(Object))
   })
 
   it("routes the unlisten through safeUnlisten on unmount", async () => {
@@ -79,18 +79,40 @@ describe("ComputerUseKillSwitchInitializer", () => {
     expect(rawUnlisten).not.toHaveBeenCalled()
   })
 
+  it("keeps settled state when stop events arrive out of order", async () => {
+    const handlers = new Map<
+      string,
+      (event: { payload: { epoch: number; settled: boolean } }) => void
+    >()
+    listenMock.mockImplementation(
+      async (
+        name: string,
+        handler: (event: { payload: { epoch: number; settled: boolean } }) => void
+      ) => {
+        handlers.set(name, handler)
+        return () => {}
+      }
+    )
+    render(<ComputerUseKillSwitchInitializer />)
+    await waitFor(() => expect(handlers.size).toBe(2))
+    handlers.get("automation:execution-settled")!({ payload: { epoch: 2, settled: true } })
+    handlers.get("automation:kill-switch")!({ payload: { epoch: 2, settled: false } })
+    expect(toastWarning).toHaveBeenLastCalledWith("Local automation stopped", expect.any(Object))
+    handlers.get("automation:kill-switch")!({ payload: { epoch: 3, settled: false } })
+    expect(toastWarning).toHaveBeenLastCalledWith("Stopping local automation", expect.any(Object))
+  })
+
   it("safe-unlistens the late-resolving handle when unmounted before subscribe settles", async () => {
     const rawUnlisten = jest.fn()
-    let resolveListen: ((u: () => void) => void) | undefined
-    listenMock.mockReturnValue(
-      new Promise<() => void>((res) => {
-        resolveListen = res
-      })
+    const resolveListen: ((u: () => void) => void)[] = []
+    listenMock.mockImplementation(
+      () => new Promise<() => void>((resolve) => resolveListen.push(resolve))
     )
     const { unmount } = render(<ComputerUseKillSwitchInitializer />)
     // Unmount before listen() settles — the StrictMode/early-cancel race.
+    await waitFor(() => expect(resolveListen).toHaveLength(2))
     unmount()
-    resolveListen!(rawUnlisten)
+    resolveListen.forEach((resolve) => resolve(rawUnlisten))
     await waitFor(() => expect(safeUnlisten).toHaveBeenCalledWith(rawUnlisten))
     expect(rawUnlisten).not.toHaveBeenCalled()
   })

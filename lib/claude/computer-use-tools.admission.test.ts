@@ -1,5 +1,5 @@
 /**
- * Tests for the G6 IM blacklist gate on applyComputerUseTools.
+ * Tests for Computer Use tool admission and consent settings.
  */
 
 import { applyComputerUseTools } from "./computer-use-tools"
@@ -44,7 +44,7 @@ function emptyOpts(): SendOptions {
   return {} as SendOptions
 }
 
-describe("applyComputerUseTools — G6 IM blacklist", () => {
+describe("applyComputerUseTools — IM conversation authorization", () => {
   it("attaches tools normally for a browser-side chat session", () => {
     const result = applyComputerUseTools({ character: baseChar, opts: emptyOpts() })
     expect(result.attachedCount).toBe(1)
@@ -82,7 +82,7 @@ describe("applyComputerUseTools — G6 IM blacklist", () => {
   })
 })
 
-describe("applyComputerUseTools — W1 forceTier / consentMode plumbing", () => {
+describe("applyComputerUseTools — consent requirements in send options", () => {
   it("requireConsent=true stamps forceTier:perCall on every attached tool", () => {
     const char = {
       ...baseChar,

@@ -108,7 +108,11 @@ pub fn with_held_inputs<A, K: Clone>(
     {
         fn drop(&mut self) {
             for key in self.keys.iter().rev() {
-                let _ = (self.release)(self.adapter, key);
+                if (self.release)(self.adapter, key).is_err() {
+                    if let Ok(admission) = crate::automation::execution::current() {
+                        admission.quarantine();
+                    }
+                }
             }
         }
     }
@@ -119,16 +123,21 @@ pub fn with_held_inputs<A, K: Clone>(
     };
     let result = (|| {
         for key in keys {
+            crate::automation::execution::checkpoint()?;
             guard()?;
             held.keys.push(key.clone());
             press(held.adapter, key)?;
         }
+        crate::automation::execution::checkpoint()?;
         operation(held.adapter)
     })();
     let mut cleanup = Ok(());
     let mut failed = Vec::new();
     while let Some(key) = held.keys.pop() {
         if let Err(error) = (held.release)(held.adapter, &key) {
+            if let Ok(admission) = crate::automation::execution::current() {
+                admission.quarantine();
+            }
             if cleanup.is_ok() {
                 cleanup = Err(error);
             }
@@ -265,7 +274,11 @@ fn parse_named(token: &str) -> Option<NamedKey> {
 fn parse_function_key(lower: &str) -> Option<u8> {
     let rest = lower.strip_prefix('f')?;
     let n: u8 = rest.parse().ok()?;
-    if (1..=24).contains(&n) { Some(n) } else { None }
+    if (1..=24).contains(&n) {
+        Some(n)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

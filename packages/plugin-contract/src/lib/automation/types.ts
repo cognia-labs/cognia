@@ -214,6 +214,14 @@ export interface InstructionPack {
 }
 
 export interface UiStateRevision {
+  sessionEngine?: {
+    engine: "native" | "agentDesktop"
+    semanticActions: string[]
+    nativeActions: string[]
+    observationComplete: boolean
+    observeAfterAction: boolean
+    automaticFallback: boolean
+  }
   sessionId: string
   lineageId: string
   revision: number
@@ -288,6 +296,13 @@ export interface ActionPolicyDecision {
 }
 
 export interface ActionResult {
+  delivery?: {
+    engine: "native" | "agentDesktop" | "remote"
+    disposition: "notDelivered" | "deliveryUncertain" | "deliveredUnverified" | "deliveredVerified"
+    mechanism: ActionMethod | null
+    verificationScope: string | null
+    replayAllowed: boolean
+  }
   status: ActionStatus
   method: ActionMethod | null
   beforeRevision: number

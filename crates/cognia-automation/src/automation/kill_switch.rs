@@ -44,6 +44,8 @@ pub enum KillSwitchCause {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct KillSwitchEvent {
+    pub epoch: u64,
+    pub settled: bool,
     pub cause: KillSwitchCause,
     pub at: i64,
     /// Present when a recording was interrupted. The journal is preserved and
@@ -68,6 +70,7 @@ pub fn engage<E: AutomationEventSink + ?Sized>(
     // 1. Deny everything, immediately. Any call already inside the gate fails
     //    from here on.
     state.gate.engage_kill_switch();
+    let epoch = state.handle.execution_control().stop();
     // 2. Persist `enabled == false` so a reload — or any later bulk save —
     //    reflects the stopped state instead of a stale `enabled: true`.
     super::persist::save_settings(&state.gate.settings());
@@ -95,6 +98,8 @@ pub fn engage<E: AutomationEventSink + ?Sized>(
     state.gate.reset_rate();
 
     let event = KillSwitchEvent {
+        epoch,
+        settled: state.handle.execution_control().settled(None),
         cause,
         at: super::commands::now_ms(),
         interrupted_recording_id,
@@ -111,6 +116,8 @@ mod tests {
     #[test]
     fn kill_switch_event_serializes_camel_case() {
         let json = serde_json::to_string(&KillSwitchEvent {
+            epoch: 1,
+            settled: true,
             cause: KillSwitchCause::Shortcut,
             at: 12,
             interrupted_recording_id: Some("0191b0e2-1c3a-7a11-9c1a-4d2f6b8c9e01".into()),
@@ -124,6 +131,8 @@ mod tests {
     #[test]
     fn absent_recording_is_omitted_from_the_payload() {
         let json = serde_json::to_string(&KillSwitchEvent {
+            epoch: 1,
+            settled: true,
             cause: KillSwitchCause::Tray,
             at: 1,
             interrupted_recording_id: None,

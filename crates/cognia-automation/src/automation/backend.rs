@@ -174,6 +174,11 @@ pub trait AutomationBackend {
         Err(AutomationError::UnsupportedPlatform)
     }
 
+    /// Capture only the Native window identity, without renderer activation or a tree walk.
+    fn application_window_binding(&self, _app: &ResolvedApplication) -> Result<ElementInfo> {
+        Err(AutomationError::UnsupportedPlatform)
+    }
+
     fn find(&self, locator: &Locator) -> Result<Option<ElementRef>>;
     fn screenshot(&self, opts: ScreenshotOpts) -> Result<Screenshot>;
     fn screenshot_application(

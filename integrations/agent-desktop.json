@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "repository": "vercel-labs/agent-desktop",
+  "version": "1.2.0",
+  "sourceRevision": "2b0a7334fc111730454b726e6800aa41cdafc093",
+  "sourceSha256": "b8e5c536ba6e66f2e82b6863c198e06f1d11fcdfc100d44de0a871a38a82dc7f",
+  "patch": "integrations/agent-desktop/patches/cognia-bound-window-v1.patch",
+  "patchSha256": "9b4517830ec877accd2f64e9eb5b4604fdf55201c51aa8b248f5d1063892abc3",
+  "profile": "cognia-bound-window-v1",
+  "qualifiedTargets": [],
+  "evaluationTargets": ["aarch64-apple-darwin"],
+  "transport": "cli-json-2.6",
+  "ffiEnabled": false,
+  "mutationPolicy": "headless-ref-only",
+  "allowedCommands": [
+    "version",
+    "permissions",
+    "list-windows",
+    "snapshot",
+    "click",
+    "toggle",
+    "set-value"
+  ]
+}

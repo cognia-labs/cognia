@@ -356,7 +356,8 @@ describe("zoom / wait / OCR fallbacks", () => {
   it("routes the OCR fallbacks to the guarded client", async () => {
     mockedAutomation.findText.mockResolvedValue({ ok: true, matches: [] })
     mockedAutomation.clickText.mockResolvedValue({ ok: true, clicked: {} })
-    const toolContext = { config: {}, sessionId: "chat", messageId: "m1" }
+    const signal = new AbortController().signal
+    const toolContext = { config: {}, sessionId: "chat", messageId: "m1", signal }
 
     await (
       await getTool("find_text")
@@ -370,11 +371,11 @@ describe("zoom / wait / OCR fallbacks", () => {
 
     const origin = { sessionId: "chat", messageId: "m1" }
     expect(mockedAutomation.findText).toHaveBeenCalledWith(
-      { query: "Save", state: buildRevision() },
+      { query: "Save", state: buildRevision(), signal },
       origin
     )
     expect(mockedAutomation.clickText).toHaveBeenCalledWith(
-      { query: "Save", occurrence: 2, button: "right", state: buildRevision() },
+      { query: "Save", occurrence: 2, button: "right", state: buildRevision(), signal },
       origin
     )
   })

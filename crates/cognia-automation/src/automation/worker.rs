@@ -36,10 +36,11 @@ use super::permission::ScreenshotScalingSettings;
 use super::policy::{self, Decision, HardTargetFacts};
 use super::selection::TextSelectionSnapshot;
 use super::session::{
-    ActionEvidence, ActionMethod, ActionPolicyDecision, ActionRequest, ActionResult, ActionStatus,
-    ActionStrategy, ActionTarget, AppLocator, CapturedUiState, CoordinateSpace, ElementHandle,
-    ExpandedElements, GetAppStateOptions, PreparedAction, SessionError, UiAction, UiSessionManager,
-    UiStateRevision, UiSurface, UiTreeNode, UiTreeProjectionKind, ZoomedRegion,
+    ActionDelivery, ActionEvidence, ActionMethod, ActionPolicyDecision, ActionRequest,
+    ActionResult, ActionStatus, ActionStrategy, ActionTarget, AppLocator, CapturedUiState,
+    CoordinateSpace, DeliveryDisposition, DeliveryEngine, ElementHandle, ExpandedElements,
+    GetAppStateOptions, PreparedAction, SessionError, UiAction, UiSessionManager, UiStateRevision,
+    UiSurface, UiTreeNode, UiTreeProjectionKind, ZoomedRegion,
 };
 use super::types::*;
 
@@ -71,6 +72,12 @@ struct AppStateRequest {
 /// channel because Tauri commands are async — the worker can't be made async
 /// (it must own a non-Send COM state on Windows), so we hop via channels.
 enum Request {
+    Cleanup,
+    Scoped {
+        _queued: super::execution::QueueSlot,
+        admission: super::execution::Admission,
+        request: Box<Request>,
+    },
     Capabilities {
         reply: oneshot::Sender<Capabilities>,
     },
@@ -201,11 +208,98 @@ enum Request {
     Shutdown,
 }
 
+impl Request {
+    fn is_mutation(&self) -> bool {
+        matches!(
+            self,
+            Self::Click { .. }
+                | Self::TypeText { .. }
+                | Self::SendKeys { .. }
+                | Self::InvokePattern { .. }
+                | Self::WindowOp { .. }
+                | Self::MouseMove { .. }
+                | Self::Drag { .. }
+                | Self::Scroll { .. }
+                | Self::HoldKey { .. }
+                | Self::MouseButton { .. }
+                | Self::PerformAction { .. }
+        )
+    }
+    fn refuse(self, error: AutomationError) {
+        match self {
+            Self::GetFocus { reply, .. } | Self::PickAtPoint { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ListApps { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ReadTree { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::Find { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::Screenshot { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::CaptureChatCopilotWindow { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::Click { reply, .. }
+            | Self::TypeText { reply, .. }
+            | Self::SendKeys { reply, .. }
+            | Self::WindowOp { reply, .. }
+            | Self::Unsubscribe { reply, .. }
+            | Self::MouseMove { reply, .. }
+            | Self::Drag { reply, .. }
+            | Self::Scroll { reply, .. }
+            | Self::HoldKey { reply, .. }
+            | Self::MouseButton { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::InvokePattern { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::SubscribeEvents { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::CursorPosition { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ReadTextSelection { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::SelectionPreflight { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::GetAppState { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::QueryElements { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ExpandElement { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::PerformAction { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ZoomRegion { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::Scoped { request, .. } => request.refuse(error),
+            Self::Capabilities { .. } | Self::Cleanup | Self::Shutdown => {}
+        }
+    }
+}
+
 /// Handle the renderer-facing layer holds. Cheap to clone; the underlying
 /// `Sender` is reference-counted by tokio.
 #[derive(Clone)]
 pub struct AutomationHandle {
     tx: tokio::sync::mpsc::Sender<Request>,
+    execution: super::execution::ExecutionControl,
+    engine: Arc<super::session_engine::EngineHost>,
     _thread: Arc<ThreadJoiner>,
 }
 
@@ -247,24 +341,72 @@ impl Worker {
     where
         F: Fn() -> Box<dyn AutomationBackend> + Send + 'static,
     {
+        Self::spawn_with_resources(app, None, true, builder)
+    }
+
+    pub fn spawn_with_resources<F>(
+        app: Option<AppHandle>,
+        binary: Option<std::path::PathBuf>,
+        initially_enabled: bool,
+        builder: F,
+    ) -> AutomationHandle
+    where
+        F: Fn() -> Box<dyn AutomationBackend> + Send + 'static,
+    {
+        let engine = Arc::new(super::session_engine::EngineHost::new(
+            binary,
+            app.is_some(),
+        ));
+        let worker_engine = engine.clone();
+        let execution = super::execution::ExecutionControl::with_enabled(initially_enabled);
+        engine.attach_execution(execution.clone());
+        let worker_execution = execution.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(64);
+        let wake_sender = tx.downgrade();
+        execution.set_waker(Arc::new(move || {
+            if let Some(sender) = wake_sender.upgrade() {
+                let _ = sender.try_send(Request::Cleanup);
+            }
+        }));
         let thread = thread::Builder::new()
             .name("automation-worker".into())
             .spawn(move || {
                 let mut backend = builder();
                 let mut sessions = UiSessionManager::default();
+                let mut session_engine =
+                    super::session_engine::SessionEngine::new(worker_engine.clone());
                 let mut restart_count: u32 = 0;
                 let mut window_start = Instant::now();
+                let mut stop_notified = None;
                 // Drain the channel synchronously. We're not in async land here;
                 // `blocking_recv` is exactly what we want.
                 while let Some(req) = rx.blocking_recv() {
+                    release_revoked_inputs(&*backend, &worker_execution);
+                    sessions.forget_sessions(&session_engine.prune_revoked());
                     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                        dispatch(&*backend, &mut sessions, req)
+                        dispatch(&*backend, &mut sessions, &mut session_engine, req)
                     }));
                     match result {
-                        Ok(DispatchControl::Continue) => continue,
+                        Ok(DispatchControl::Continue) => {
+                            if let Some(epoch) = worker_execution.settled_stop_epoch() {
+                                if stop_notified != Some(epoch) {
+                                    if let Some(handle) = app.as_ref() {
+                                        let _ = host::emit(
+                                            handle,
+                                            "automation:execution-settled",
+                                            &json!({ "settled": true, "epoch": epoch }),
+                                        );
+                                    }
+                                    stop_notified = Some(epoch);
+                                }
+                            } else {
+                                stop_notified = None;
+                            }
+                            continue;
+                        }
                         Ok(DispatchControl::Stop) => break,
                         Err(panic) => {
+                            worker_execution.revoke_all();
                             let panic_message = panic_payload_to_string(&panic);
                             if window_start.elapsed().as_secs() > RESTART_WINDOW_SECS {
                                 restart_count = 0;
@@ -297,14 +439,20 @@ impl Worker {
                             // drop + rebuild via the builder closure.
                             backend = builder();
                             sessions = UiSessionManager::default();
+                            session_engine =
+                                super::session_engine::SessionEngine::new(worker_engine.clone());
                         }
                     }
                 }
+                worker_execution.revoke_all();
+                release_revoked_inputs(&*backend, &worker_execution);
             })
             .expect("spawn automation worker thread");
 
         AutomationHandle {
             tx,
+            execution,
+            engine,
             _thread: Arc::new(ThreadJoiner(Some(thread))),
         }
     }
@@ -338,9 +486,46 @@ fn panic_payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> String {
 fn dispatch(
     backend: &dyn AutomationBackend,
     sessions: &mut UiSessionManager,
+    engine: &mut super::session_engine::SessionEngine,
     req: Request,
 ) -> DispatchControl {
+    // Observation can enable renderer accessibility. It needs the same lease
+    // as explicit input while an old executor is still recovering.
+    if !matches!(
+        &req,
+        Request::Scoped { .. }
+            | Request::Cleanup
+            | Request::Shutdown
+            | Request::Capabilities { .. }
+    ) {
+        if let Err(error) = engine.check_native() {
+            req.refuse(error);
+            return DispatchControl::Continue;
+        }
+    }
+    if matches!(&req, Request::PerformAction { .. }) {
+        if let Err(error) = engine.check() {
+            req.refuse(error);
+            return DispatchControl::Continue;
+        }
+    }
     match req {
+        Request::Cleanup => {}
+        Request::Scoped {
+            admission,
+            request,
+            _queued,
+        } => {
+            drop(_queued);
+            let _delivery = match admission.enter_delivery() {
+                Ok(delivery) => delivery,
+                Err(error) => {
+                    request.refuse(error);
+                    return DispatchControl::Continue;
+                }
+            };
+            return dispatch(backend, sessions, engine, *request);
+        }
         Request::Capabilities { reply } => {
             let _ = reply.send(backend.capabilities());
         }
@@ -426,7 +611,21 @@ fn dispatch(
             transition,
             reply,
         } => {
-            let _ = reply.send(backend.mouse_button(button, transition));
+            let result = super::execution::checkpoint()
+                .and_then(|_| backend.mouse_button(button, transition));
+            if let Ok(admission) = super::execution::current() {
+                if result.is_ok() {
+                    admission
+                        .button_delivered(button, matches!(transition, ButtonTransition::Down));
+                } else if result
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| semantic_delivery_error(error.clone()).may_have_delivered)
+                {
+                    admission.quarantine();
+                }
+            }
+            let _ = reply.send(result);
         }
         Request::CursorPosition { reply } => {
             let _ = reply.send(backend.cursor_position());
@@ -441,7 +640,9 @@ fn dispatch(
             let _ = reply.send(backend.selection_preflight());
         }
         Request::GetAppState { request, reply } => {
-            let _ = reply.send(capture_app_state(backend, sessions, request));
+            let _ = reply.send(capture_app_state_with_engine(
+                backend, sessions, request, engine,
+            ));
         }
         Request::QueryElements {
             session_id,
@@ -489,14 +690,35 @@ fn dispatch(
                 ActionTarget::Element { handle } => handle.revision,
                 ActionTarget::Pixel { target } => target.revision,
             };
+            let panic_engine = if engine.uses_candidate()
+                && matches!(request.target, ActionTarget::Element { .. })
+                && !matches!(request.action, UiAction::Focus)
+            {
+                DeliveryEngine::AgentDesktop
+            } else {
+                DeliveryEngine::Native
+            };
             match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                perform_session_action(backend, sessions, request, &turn_binding)
+                perform_session_action_with_engine(
+                    backend,
+                    sessions,
+                    request,
+                    &turn_binding,
+                    engine,
+                )
             })) {
                 Ok(result) => {
                     let _ = reply.send(result);
                 }
                 Err(panic) => {
                     let _ = reply.send(Ok(ActionResult {
+                        delivery: Some(ActionDelivery {
+                            engine: panic_engine,
+                            disposition: DeliveryDisposition::Uncertain,
+                            mechanism: None,
+                            verification_scope: None,
+                            replay_allowed: false,
+                        }),
                         status: ActionStatus::Unknown,
                         method: None,
                         before_revision,
@@ -517,6 +739,25 @@ fn dispatch(
         Request::Shutdown => return DispatchControl::Stop,
     }
     DispatchControl::Continue
+}
+
+fn release_revoked_inputs(
+    backend: &dyn AutomationBackend,
+    control: &super::execution::ExecutionControl,
+) {
+    let buttons = control.cleanup_buttons();
+    if buttons.is_empty() {
+        return;
+    }
+    let success = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut success = true;
+        for button in buttons {
+            success &= backend.mouse_button(button, ButtonTransition::Up).is_ok();
+        }
+        success
+    }))
+    .unwrap_or(false);
+    control.finish_cleanup(success);
 }
 
 /// Stable `PermissionDenied` reasons the renderer maps to copy (ADR-0194).
@@ -667,11 +908,13 @@ fn split_model_frame(
     Ok((Some(shown), Some(captured)))
 }
 
-fn capture_app_state(
+fn capture_app_state_with_engine(
     backend: &dyn AutomationBackend,
     sessions: &mut UiSessionManager,
     request: AppStateRequest,
+    engine: &mut super::session_engine::SessionEngine,
 ) -> Result<UiStateRevision> {
+    engine.check()?;
     let AppStateRequest {
         session_id,
         turn_binding,
@@ -698,14 +941,21 @@ fn capture_app_state(
     }) {
         return Err(AutomationError::PermissionDenied { reason });
     }
+    if engine.uses_candidate() && options.allow_launch {
+        return Err(AutomationError::UnsupportedPlatform);
+    }
     let app = backend.resolve_application(&locator, options.allow_launch)?;
-    let roots = backend.read_application_tree(
-        &app,
-        TreeOpts {
-            max_depth: options.max_depth,
-            cache_props: None,
-        },
-    )?;
+    let mut roots = if engine.uses_candidate() {
+        vec![backend.application_window_binding(&app)?]
+    } else {
+        backend.read_application_tree(
+            &app,
+            TreeOpts {
+                max_depth: options.max_depth,
+                cache_props: None,
+            },
+        )?
+    };
     let window_title = roots
         .first()
         .and_then(|root| root.window_title.as_deref())
@@ -805,12 +1055,28 @@ fn capture_app_state(
         .map(|shot| shot.captured_at)
         .unwrap_or_else(unix_time_millis);
     let input_focus = backend.input_focus(&app)?;
+    let native_root = if engine.uses_candidate() {
+        roots.first().cloned()
+    } else {
+        None
+    };
+    let mut complete = true;
+    if engine.uses_candidate() {
+        let window = application_screenshot
+            .as_ref()
+            .and_then(|capture| capture.window_id)
+            .ok_or(AutomationError::StaleElement)?;
+        let observed =
+            engine.observe(&session_id, &app, window, options.max_depth.unwrap_or(10))?;
+        roots = observed.0;
+        complete = observed.1;
+    }
     let mut state = sessions
         .record_state(CapturedUiState {
             session_id,
             turn_binding,
             app,
-            input_focus,
+            input_focus: input_focus.clone(),
             zoom_source,
             surface: UiSurface {
                 window_id: application_screenshot
@@ -835,6 +1101,14 @@ fn capture_app_state(
         .map_err(map_session_error)?;
     if options.disable_diff {
         state.diff = None;
+    }
+    if engine.uses_candidate() {
+        engine.record_native(
+            &state,
+            native_root.ok_or(AutomationError::StaleElement)?,
+            input_focus,
+        )?;
+        sessions.publish_engine_metadata(&mut state, complete);
     }
     Ok(state)
 }
@@ -877,11 +1151,12 @@ fn map_session_error(error: SessionError) -> AutomationError {
     }
 }
 
-fn perform_session_action(
+fn perform_session_action_with_engine(
     backend: &dyn AutomationBackend,
     sessions: &mut UiSessionManager,
     request: ActionRequest,
     turn_binding: &str,
+    engine: &mut super::session_engine::SessionEngine,
 ) -> Result<ActionResult> {
     let started = Instant::now();
     let prepared = sessions
@@ -908,6 +1183,17 @@ fn perform_session_action(
         }];
         append_refetch_evidence(&prepared, &mut evidence);
         return Ok(ActionResult {
+            delivery: Some(ActionDelivery {
+                engine: if engine.uses_candidate() {
+                    DeliveryEngine::AgentDesktop
+                } else {
+                    DeliveryEngine::Native
+                },
+                disposition: DeliveryDisposition::NotDelivered,
+                mechanism: None,
+                verification_scope: None,
+                replay_allowed: false,
+            }),
             status: ActionStatus::Refused,
             method: None,
             before_revision,
@@ -921,6 +1207,9 @@ fn perform_session_action(
         });
     }
 
+    if engine.uses_candidate() {
+        return perform_candidate_action(backend, engine, prepared, &request, started);
+    }
     let delivery = deliver_action(backend, &prepared, &request);
     let (method, delivery_error) = match delivery {
         Ok(method) => (Some(method), None),
@@ -934,6 +1223,17 @@ fn perform_session_action(
         }];
         append_refetch_evidence(&prepared, &mut evidence);
         return Ok(ActionResult {
+            delivery: Some(ActionDelivery {
+                engine: DeliveryEngine::Native,
+                disposition: if error.may_have_delivered {
+                    DeliveryDisposition::Uncertain
+                } else {
+                    DeliveryDisposition::NotDelivered
+                },
+                mechanism: None,
+                verification_scope: None,
+                replay_allowed: false,
+            }),
             status: if error.may_have_delivered {
                 ActionStatus::Unknown
             } else if matches!(error.error, AutomationError::PermissionDenied { .. }) {
@@ -980,11 +1280,8 @@ fn perform_session_action(
                 !diff.added.is_empty() || !diff.removed.is_empty() || !diff.updated.is_empty()
             });
             (
-                if changed || matches!(request.action, UiAction::Focus) {
-                    ActionStatus::Delivered
-                } else {
-                    ActionStatus::Unknown
-                },
+                // A tree change establishes observation, not the action's effect.
+                ActionStatus::Unknown,
                 Some(state.revision),
                 vec![
                     ActionEvidence {
@@ -1023,6 +1320,13 @@ fn perform_session_action(
     });
     append_refetch_evidence(&prepared, &mut evidence);
     Ok(ActionResult {
+        delivery: Some(ActionDelivery {
+            engine: DeliveryEngine::Native,
+            disposition: DeliveryDisposition::Unverified,
+            mechanism: method,
+            verification_scope: None,
+            replay_allowed: false,
+        }),
         status,
         method,
         before_revision,
@@ -1048,11 +1352,162 @@ fn append_refetch_evidence(prepared: &PreparedAction, evidence: &mut Vec<ActionE
     }
 }
 
+fn perform_candidate_action(
+    backend: &dyn AutomationBackend,
+    engine: &mut super::session_engine::SessionEngine,
+    prepared: PreparedAction,
+    request: &ActionRequest,
+    started: Instant,
+) -> Result<ActionResult> {
+    use super::agent_desktop::Delivery;
+    let before_revision = prepared.state.revision;
+    let target_pid = prepared.state.app.process_id;
+    if !super::execution::current()?.is_run_bound() {
+        return Err(AutomationError::PermissionDenied {
+            reason: "a Host-owned run is required for every candidate session action".into(),
+        });
+    }
+    if prepared.refetched_from_revision.is_some() {
+        return Err(AutomationError::StaleElement);
+    }
+    if matches!(request.action, UiAction::Focus)
+        && !matches!(request.target, ActionTarget::Pixel { .. })
+        && prepared
+            .element
+            .as_ref()
+            .and_then(|element| element.control_type.as_deref())
+            != Some("window")
+    {
+        return Err(AutomationError::PermissionDenied { reason: "agent-desktop controls cannot be translated into Native focus targets; focus the observed window and observe again".into() });
+    }
+    let explicit_native = matches!(request.target, ActionTarget::Pixel { .. })
+        || matches!(request.action, UiAction::Focus);
+    let (delivery, reason, method) = if explicit_native {
+        let native = engine.native_prepared(prepared, &request.target)?;
+        super::execution::checkpoint()?;
+        let result = if matches!(request.action, UiAction::Focus) {
+            deliver_action(backend, &native, request)
+        } else {
+            deliver_synthetic(backend, &native, request)
+        };
+        match result {
+            Ok(method) => (Delivery::Unverified, None, Some(method)),
+            Err(error) => (
+                if error.may_have_delivered {
+                    Delivery::Uncertain
+                } else {
+                    Delivery::NotDelivered
+                },
+                Some("nativeDeliveryFailed"),
+                None,
+            ),
+        }
+    } else {
+        if matches!(request.strategy, ActionStrategy::Pixel) {
+            return Err(AutomationError::PermissionDenied {
+                reason: "agent-desktop element refs cannot become Native pixel targets".into(),
+            });
+        }
+        backend.validate_action_target(
+            &engine.native_target(&prepared, &request.target)?,
+            TargetActionKind::Semantic,
+        )?;
+        let focus_before = backend
+            .get_focus()?
+            .process_id
+            .ok_or(AutomationError::StaleElement)?;
+        super::execution::checkpoint()?;
+        let (delivery, reason) = engine.perform(&prepared, &request.action);
+        let activated_background_target = focus_before != target_pid
+            && backend.get_focus().ok().and_then(|focus| focus.process_id) == Some(target_pid);
+        if activated_background_target {
+            super::execution::current()?.quarantine();
+            (
+                Delivery::Uncertain,
+                Some("backgroundTargetActivated"),
+                Some(ActionMethod::Ax),
+            )
+        } else {
+            (delivery, reason, Some(ActionMethod::Ax))
+        }
+    };
+    let method = if delivery == Delivery::NotDelivered {
+        None
+    } else {
+        method
+    };
+    Ok(ActionResult {
+        delivery: Some(super::session::ActionDelivery {
+            engine: if explicit_native {
+                DeliveryEngine::Native
+            } else {
+                DeliveryEngine::AgentDesktop
+            },
+            disposition: delivery,
+            mechanism: method,
+            verification_scope: (delivery == Delivery::Verified).then(|| "elementState".into()),
+            replay_allowed: false,
+        }),
+        status: match delivery {
+            Delivery::Verified => ActionStatus::Delivered,
+            Delivery::NotDelivered => ActionStatus::NotDelivered,
+            _ => ActionStatus::Unknown,
+        },
+        method,
+        before_revision,
+        after_revision: None,
+        evidence: vec![ActionEvidence {
+            kind: "sessionEngineDelivery".into(),
+            message: format!(
+                "engine={};delivery={delivery:?};reason={};observeAgain=true",
+                if explicit_native {
+                    "native"
+                } else {
+                    "agentDesktop"
+                },
+                reason.unwrap_or("none")
+            ),
+            revision: Some(before_revision),
+        }],
+        policy_decision: ActionPolicyDecision {
+            allowed: true,
+            reason: None,
+        },
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+#[cfg(test)]
+fn capture_app_state(
+    backend: &dyn AutomationBackend,
+    sessions: &mut UiSessionManager,
+    request: AppStateRequest,
+) -> Result<UiStateRevision> {
+    let mut engine = super::session_engine::SessionEngine::new(Arc::new(
+        super::session_engine::EngineHost::new(None, false),
+    ));
+    capture_app_state_with_engine(backend, sessions, request, &mut engine)
+}
+
+#[cfg(test)]
+fn perform_session_action(
+    backend: &dyn AutomationBackend,
+    sessions: &mut UiSessionManager,
+    request: ActionRequest,
+    turn_binding: &str,
+) -> Result<ActionResult> {
+    let mut engine = super::session_engine::SessionEngine::new(Arc::new(
+        super::session_engine::EngineHost::new(None, false),
+    ));
+    perform_session_action_with_engine(backend, sessions, request, turn_binding, &mut engine)
+}
+
 fn deliver_action(
     backend: &dyn AutomationBackend,
     prepared: &PreparedAction,
     request: &ActionRequest,
 ) -> std::result::Result<ActionMethod, NativeDeliveryError> {
+    super::execution::checkpoint()?;
     if matches!(request.action, UiAction::Focus) {
         let target = action_target_context(prepared)?;
         backend.validate_action_target(&target, TargetActionKind::Focus)?;
@@ -1294,21 +1749,43 @@ fn trees_equal(left: &[ElementInfo], right: &[ElementInfo]) -> bool {
 }
 
 /// Helper: send a request and await the reply, mapping channel errors.
-async fn round_trip<R, F>(tx: &tokio::sync::mpsc::Sender<Request>, build: F) -> Result<R>
+async fn round_trip<R, F>(handle: &AutomationHandle, build: F) -> Result<R>
 where
     F: FnOnce(oneshot::Sender<Result<R>>) -> Request,
 {
     let (reply_tx, reply_rx) = oneshot::channel();
-    let req = build(reply_tx);
-    tx.send(req).await.map_err(|_| AutomationError::Internal {
-        message: "automation worker channel closed".into(),
-    })?;
-    reply_rx.await.map_err(|_| AutomationError::Internal {
+    let admission = handle.execution.capture()?;
+    let slot = handle
+        .tx
+        .try_reserve()
+        .map_err(|_| AutomationError::PermissionDenied {
+            reason: "automation worker is unavailable or its queue is full".into(),
+        })?;
+    admission.check()?;
+    let queued = admission.reserve_queue()?;
+    let request = build(reply_tx);
+    let read_only = !request.is_mutation();
+    slot.send(Request::Scoped {
+        _queued: queued,
+        admission: admission.clone(),
+        request: Box::new(request),
+    });
+    let result = reply_rx.await.map_err(|_| AutomationError::Internal {
         message: "automation worker dropped reply channel".into(),
-    })?
+    })?;
+    if read_only {
+        admission.check()?;
+    }
+    result
 }
 
 impl AutomationHandle {
+    pub fn session_engine(&self) -> Arc<super::session_engine::EngineHost> {
+        self.engine.clone()
+    }
+    pub fn execution_control(&self) -> super::execution::ExecutionControl {
+        self.execution.clone()
+    }
     pub async fn capabilities(&self) -> Result<Capabilities> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
@@ -1323,11 +1800,11 @@ impl AutomationHandle {
     }
 
     pub async fn get_focus(&self) -> Result<ElementInfo> {
-        round_trip(&self.tx, |reply| Request::GetFocus { reply }).await
+        round_trip(self, |reply| Request::GetFocus { reply }).await
     }
 
     pub async fn list_apps(&self) -> Result<Vec<super::session::ResolvedApplication>> {
-        round_trip(&self.tx, |reply| Request::ListApps { reply }).await
+        round_trip(self, |reply| Request::ListApps { reply }).await
     }
 
     pub async fn read_tree(
@@ -1335,15 +1812,15 @@ impl AutomationHandle {
         root: Option<ElementRef>,
         opts: TreeOpts,
     ) -> Result<Vec<ElementInfo>> {
-        round_trip(&self.tx, |reply| Request::ReadTree { root, opts, reply }).await
+        round_trip(self, |reply| Request::ReadTree { root, opts, reply }).await
     }
 
     pub async fn find(&self, locator: Locator) -> Result<Option<ElementRef>> {
-        round_trip(&self.tx, |reply| Request::Find { locator, reply }).await
+        round_trip(self, |reply| Request::Find { locator, reply }).await
     }
 
     pub async fn screenshot(&self, opts: ScreenshotOpts) -> Result<Screenshot> {
-        round_trip(&self.tx, |reply| Request::Screenshot { opts, reply }).await
+        round_trip(self, |reply| Request::Screenshot { opts, reply }).await
     }
 
     /// ADR-0194 — capture the pinned target's window for the chat copilot.
@@ -1351,7 +1828,7 @@ impl AutomationHandle {
         &self,
         target: ChatCopilotTarget,
     ) -> Result<FrontmostWindowCapture> {
-        round_trip(&self.tx, |reply| Request::CaptureChatCopilotWindow {
+        round_trip(self, |reply| Request::CaptureChatCopilotWindow {
             target,
             reply,
         })
@@ -1359,7 +1836,7 @@ impl AutomationHandle {
     }
 
     pub async fn click(&self, target: ClickTarget, opts: ClickOpts) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::Click {
+        round_trip(self, |reply| Request::Click {
             target,
             opts,
             reply,
@@ -1368,11 +1845,11 @@ impl AutomationHandle {
     }
 
     pub async fn type_text(&self, text: String, opts: TypeOpts) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::TypeText { text, opts, reply }).await
+        round_trip(self, |reply| Request::TypeText { text, opts, reply }).await
     }
 
     pub async fn send_keys(&self, chord: KeyChord) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::SendKeys { chord, reply }).await
+        round_trip(self, |reply| Request::SendKeys { chord, reply }).await
     }
 
     pub async fn invoke_pattern(
@@ -1381,7 +1858,7 @@ impl AutomationHandle {
         pattern: PatternKind,
         args: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        round_trip(&self.tx, |reply| Request::InvokePattern {
+        round_trip(self, |reply| Request::InvokePattern {
             target,
             pattern,
             args,
@@ -1391,23 +1868,23 @@ impl AutomationHandle {
     }
 
     pub async fn window_op(&self, target: ElementRef, op: WindowOp) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::WindowOp { target, op, reply }).await
+        round_trip(self, |reply| Request::WindowOp { target, op, reply }).await
     }
 
     pub async fn subscribe_events(&self, filter: EventFilter) -> Result<SubscriptionId> {
-        round_trip(&self.tx, |reply| Request::SubscribeEvents { filter, reply }).await
+        round_trip(self, |reply| Request::SubscribeEvents { filter, reply }).await
     }
 
     pub async fn unsubscribe(&self, sub: SubscriptionId) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::Unsubscribe { sub, reply }).await
+        round_trip(self, |reply| Request::Unsubscribe { sub, reply }).await
     }
 
     pub async fn mouse_move(&self, point: Point) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::MouseMove { point, reply }).await
+        round_trip(self, |reply| Request::MouseMove { point, reply }).await
     }
 
     pub async fn drag(&self, from: Point, to: Point, opts: DragOpts) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::Drag {
+        round_trip(self, |reply| Request::Drag {
             from,
             to,
             opts,
@@ -1417,7 +1894,7 @@ impl AutomationHandle {
     }
 
     pub async fn scroll(&self, target: ScrollTarget, opts: ScrollOpts) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::Scroll {
+        round_trip(self, |reply| Request::Scroll {
             target,
             opts,
             reply,
@@ -1426,7 +1903,7 @@ impl AutomationHandle {
     }
 
     pub async fn hold_key(&self, chord: KeyChord, duration_ms: u32) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::HoldKey {
+        round_trip(self, |reply| Request::HoldKey {
             chord,
             duration_ms,
             reply,
@@ -1439,7 +1916,7 @@ impl AutomationHandle {
         button: MouseButton,
         transition: ButtonTransition,
     ) -> Result<()> {
-        round_trip(&self.tx, |reply| Request::MouseButton {
+        round_trip(self, |reply| Request::MouseButton {
             button,
             transition,
             reply,
@@ -1448,15 +1925,15 @@ impl AutomationHandle {
     }
 
     pub async fn cursor_position(&self) -> Result<Point> {
-        round_trip(&self.tx, |reply| Request::CursorPosition { reply }).await
+        round_trip(self, |reply| Request::CursorPosition { reply }).await
     }
 
     pub async fn pick_at_point(&self, point: Point) -> Result<ElementInfo> {
-        round_trip(&self.tx, |reply| Request::PickAtPoint { point, reply }).await
+        round_trip(self, |reply| Request::PickAtPoint { point, reply }).await
     }
 
     pub async fn read_text_selection(&self) -> Result<Option<TextSelectionSnapshot>> {
-        round_trip(&self.tx, |reply| Request::ReadTextSelection { reply }).await
+        round_trip(self, |reply| Request::ReadTextSelection { reply }).await
     }
 
     /// Who has focus, and may we read from it — without reading anything.
@@ -1464,7 +1941,7 @@ impl AutomationHandle {
     pub async fn selection_preflight(
         &self,
     ) -> Result<crate::automation::backend::SelectionPreflight> {
-        round_trip(&self.tx, |reply| Request::SelectionPreflight { reply }).await
+        round_trip(self, |reply| Request::SelectionPreflight { reply }).await
     }
 
     pub async fn get_app_state(
@@ -1476,7 +1953,7 @@ impl AutomationHandle {
         redact_credential_windows: bool,
         scaling: ScreenshotScalingSettings,
     ) -> Result<UiStateRevision> {
-        round_trip(&self.tx, |reply| Request::GetAppState {
+        round_trip(self, |reply| Request::GetAppState {
             request: AppStateRequest {
                 session_id,
                 turn_binding,
@@ -1498,7 +1975,7 @@ impl AutomationHandle {
         locator: Locator,
         limit: usize,
     ) -> Result<Vec<UiTreeNode>> {
-        round_trip(&self.tx, |reply| Request::QueryElements {
+        round_trip(self, |reply| Request::QueryElements {
             session_id,
             lineage_id,
             revision,
@@ -1516,7 +1993,7 @@ impl AutomationHandle {
         revision: u64,
         region: Rect,
     ) -> Result<ZoomedRegion> {
-        round_trip(&self.tx, |reply| Request::ZoomRegion {
+        round_trip(self, |reply| Request::ZoomRegion {
             session_id,
             lineage_id,
             revision,
@@ -1532,7 +2009,7 @@ impl AutomationHandle {
         continuation_token: Option<String>,
         limit: usize,
     ) -> Result<ExpandedElements> {
-        round_trip(&self.tx, |reply| Request::ExpandElement {
+        round_trip(self, |reply| Request::ExpandElement {
             handle,
             continuation_token,
             limit,
@@ -1546,7 +2023,7 @@ impl AutomationHandle {
         request: ActionRequest,
         turn_binding: String,
     ) -> Result<ActionResult> {
-        round_trip(&self.tx, |reply| Request::PerformAction {
+        round_trip(self, |reply| Request::PerformAction {
             request,
             turn_binding,
             reply,
@@ -1557,6 +2034,7 @@ impl AutomationHandle {
     /// Best-effort shutdown — the worker drains in-flight requests and then
     /// exits. The handle's Drop joins the thread.
     pub async fn shutdown(&self) {
+        self.execution.revoke_all();
         let _ = self.tx.send(Request::Shutdown).await;
     }
 }
@@ -2471,7 +2949,11 @@ mod tests {
             .perform_action(request.clone(), "turn".into())
             .await
             .unwrap();
-        assert_eq!(result.status, ActionStatus::Delivered);
+        assert_eq!(result.status, ActionStatus::Unknown);
+        let delivery = result.delivery.as_ref().unwrap();
+        assert_eq!(delivery.engine, DeliveryEngine::Native);
+        assert_eq!(delivery.disposition, DeliveryDisposition::Unverified);
+        assert!(!delivery.replay_allowed);
         assert_eq!(control.lock().focused_window, 1);
         assert!(h.perform_action(request, "turn".into()).await.is_err());
         let fresh = observe().await.unwrap();

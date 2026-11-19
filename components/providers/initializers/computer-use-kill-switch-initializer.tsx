@@ -19,38 +19,56 @@
 
 import { useEffect } from "react"
 import { toast } from "sonner"
+import { useTranslations } from "next-intl"
 
 import { isTauri } from "@/lib/tauri"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 
 export function ComputerUseKillSwitchInitializer() {
+  const t = useTranslations("automation.executionStop")
   useEffect(() => {
     if (!isTauri()) return
-    let unlisten: (() => void) | null = null
+    const unlisteners: (() => void)[] = []
     let cancelled = false
     void (async () => {
       const [{ listen }, { clearAllSessionGrants }] = await Promise.all([
         import("@tauri-apps/api/event"),
         import("@/lib/plugin/security/computer-use-session-grants"),
       ])
-      const u = await listen("automation:kill-switch", () => {
-        clearAllSessionGrants()
-        toast.warning("Automation kill switch engaged", {
-          description:
-            "Every in-flight call rejected. Session grants cleared on both gates. Re-enable from Settings → Automation.",
+      const notify = (settled: boolean) =>
+        toast.warning(t(settled ? "stopped" : "stopping"), {
+          id: "automation-execution-stop",
+          description: t(settled ? "stoppedHelp" : "stoppingHelp"),
         })
-      })
-      if (cancelled) {
-        safeUnlisten(u)
-      } else {
-        unlisten = u
+      let latestEpoch = -1
+      let latestSettled = false
+      const subscribe = async (name: string, clear: boolean) => {
+        const unlisten = await listen<{ epoch?: number; settled?: boolean }>(name, (event) => {
+          if (clear) clearAllSessionGrants()
+          const epoch = event?.payload?.epoch
+          if (epoch !== undefined) {
+            if (epoch < latestEpoch) return
+            if (epoch > latestEpoch) latestSettled = false
+            latestEpoch = epoch
+            latestSettled ||= event.payload.settled === true
+            notify(latestSettled)
+          } else {
+            notify(event?.payload?.settled === true)
+          }
+        })
+        if (cancelled) safeUnlisten(unlisten)
+        else unlisteners.push(unlisten)
       }
-    })()
+      await Promise.all([
+        subscribe("automation:kill-switch", true),
+        subscribe("automation:execution-settled", false),
+      ])
+    })().catch(() => {})
     return () => {
       cancelled = true
-      safeUnlisten(unlisten)
+      unlisteners.forEach(safeUnlisten)
     }
-  }, [])
+  }, [t])
 
   return null
 }
