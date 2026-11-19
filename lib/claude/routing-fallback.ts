@@ -251,6 +251,7 @@ async function issueRetry(
   // Bump the cache *before* the IPC so a second consecutive failure
   // increments cleanly and a concurrent read sees the post-bump state.
   useChatStore.getState().setLastSend(sessionId, {
+    startedAt: Date.now(),
     content: cached.content,
     options: dispatchOptions,
     attemptIndex: cacheUpdate.attemptIndex,

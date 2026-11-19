@@ -901,7 +901,9 @@ describe("BottomToolbar — the fold ladder", () => {
     expect(fusionChipProps.at(-1)).toMatchObject({ glyph: true })
     // The model chip switches to its short label and drops the chevron.
     expect(
-      screen.getByLabelText("switchModelAria").querySelector("svg.lucide-chevrons-up-down")
+      screen
+        .getByRole("button", { name: /^switchModelAria/ })
+        .querySelector("svg.lucide-chevrons-up-down")
     ).toBeNull()
     expect(screen.queryByTestId("composition-chip")).toBeNull()
     fireEvent.click(screen.getByTestId("composer-toolbar-more"))
@@ -928,7 +930,9 @@ describe("BottomToolbar — the fold ladder", () => {
     mockToolbarWidth = 900
     render(<BottomToolbar session={session} />)
     expect(
-      screen.getByLabelText("switchModelAria").querySelector("svg.lucide-chevrons-up-down")
+      screen
+        .getByRole("button", { name: /^switchModelAria/ })
+        .querySelector("svg.lucide-chevrons-up-down")
     ).not.toBeNull()
   })
 

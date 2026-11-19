@@ -12714,6 +12714,53 @@ describe("durable background result admission", () => {
 })
 
 describe("precise external steering ownership", () => {
+  it("does not replay external steering after an ambiguous timeout", async () => {
+    const { setSessionExternalLane } = await import("@/lib/chat/steer-runtime")
+    chatState.status = "streaming"
+    useAgentRuntimeStore
+      .getState()
+      .setSessionRuntimeRef("sess-1", { kind: "external", agentId: "ext-1" })
+    useAgentRuntimeStore
+      .getState()
+      .setSessionExternalLink("sess-1", { agentId: "ext-1", sessionId: "native" })
+    getSessionMock.mockResolvedValue({
+      id: "sess-1",
+      externalAgentSession: {
+        agentId: "ext-1",
+        sessionId: "native",
+        personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+      },
+    })
+    setSessionExternalLane("sess-1", "ext-1")
+    steerExternalSessionMock.mockRejectedValueOnce(new Error("Request timeout: _session/steering"))
+    const { result, unmount } = renderHook(() => useAgentChat())
+    await flush()
+    try {
+      await act(async () => {
+        await expect(result.current.send("Possibly delivered instruction")).resolves.toBe(true)
+      })
+      expect(steerExternalSessionMock).toHaveBeenCalledTimes(1)
+      expect(chatState.enqueueSteer).not.toHaveBeenCalled()
+      expect(chatState.status).toBe("streaming")
+      expect(persistMessagesMock).toHaveBeenCalledWith(
+        "sess-1",
+        expect.arrayContaining([
+          expect.objectContaining({
+            metadata: expect.objectContaining({
+              steer: expect.objectContaining({
+                state: "failed",
+                reason: "Request timeout: _session/steering",
+              }),
+            }),
+          }),
+        ])
+      )
+      expect(executeOnExternalAgentMock).not.toHaveBeenCalled()
+    } finally {
+      setSessionExternalLane("sess-1", null)
+      unmount()
+    }
+  })
   beforeEach(() => {
     steerExternalSessionMock.mockClear()
   })
@@ -13131,6 +13178,33 @@ it("lifts the Stop fence when Stop fails before sending its interrupt", async ()
   expect(interruptSessionMock).toHaveBeenCalledTimes(1)
   expect(botStarted).toBe(true)
   unmount()
+})
+
+describe("terminal trace lifecycle", () => {
+  it.each([
+    { label: "clean result-less end", error: undefined, httpStatus: undefined },
+    { label: "failed end without fallback candidates", error: "upstream error", httpStatus: 500 },
+  ])("settles the root after $label", async ({ error, httpStatus }) => {
+    const emitter = await import("@cognia/agent-trace/emitter")
+    emitter.__resetAgentTraceEmitterForTesting()
+    const captured: Array<Record<string, unknown>> = []
+    emitter.setAgentTraceWriter((span) => captured.push(span as unknown as Record<string, unknown>))
+    const { result } = renderHook(() => useAgentChat())
+    await flush()
+    await act(async () => {
+      await result.current.send("fixture", { provider: "anthropic", model: "sonnet" })
+    })
+    const spanId = chatState.lastSendBySession["sess-1"].options.spanId as string
+    expect(emitter.__getActiveSpanForTesting(spanId)).toBeDefined()
+    await act(async () => {
+      _messageCallback?.({ type: "session_ended", sessionId: "sess-1", error, httpStatus })
+    })
+    await flush()
+    expect(chatState.lastSendBySession["sess-1"]).toBeUndefined()
+    expect(emitter.__getActiveSpanForTesting(spanId)).toBeUndefined()
+    expect(captured.filter((s) => s.spanId === spanId)).toHaveLength(1)
+    emitter.__resetAgentTraceEmitterForTesting()
+  })
 })
 
 it("durably accepts a real window background turn and acknowledges replay without redispatch", async () => {

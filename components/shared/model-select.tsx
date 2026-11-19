@@ -400,6 +400,19 @@ export function ModelSelect({
     return resolveOptionModelName(options, model, provider)
   }, [options, leadingGroups, model, provider, autoActive, triggerLabel, t])
 
+  const visibleModelLabel = activeModelName
+    ? compactLabel
+      ? compactModelLabel(activeModelName)
+      : activeModelName
+    : placeholder
+  const accessibleModelLabel = [
+    t("switchModelAria"),
+    autoActive && !triggerLabel ? t("autoBadge") : null,
+    visibleModelLabel,
+  ]
+    .filter(Boolean)
+    .join(": ")
+
   return (
     // `TooltipTrigger` sits INSIDE the picker's trigger slot, so the picker's
     // own popover/drawer trigger keeps working while hover reports the
@@ -425,7 +438,7 @@ export function ModelSelect({
                 composerChipTriggerClass,
                 className
               )}
-              aria-label={t("switchModelAria")}
+              aria-label={accessibleModelLabel}
             >
               {triggerIcon ?? <CpuIcon className="size-3.5 shrink-0" />}
               {autoActive && !triggerLabel ? (
@@ -440,11 +453,7 @@ export function ModelSelect({
                 className={cn("min-w-0 truncate", !model && placeholder && "text-muted-foreground")}
                 title={triggerTitle || model || triggerLabel || placeholder}
               >
-                {activeModelName
-                  ? compactLabel
-                    ? compactModelLabel(activeModelName)
-                    : activeModelName
-                  : placeholder}
+                {visibleModelLabel}
               </span>
               {compactLabel ? null : <ChevronsUpDownIcon className="size-3 opacity-50" />}
             </Button>

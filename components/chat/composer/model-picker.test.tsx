@@ -1699,7 +1699,7 @@ describe("an external agent's own models", () => {
     })
     const trigger = screen.getByRole("button", { name: /switch model/i })
     expect(trigger).not.toHaveTextContent("kimi-code/k3")
-    expect(trigger).toHaveAttribute("aria-label", "Switch model")
+    expect(trigger).toHaveAccessibleName(`Switch model: ${trigger.textContent?.trim()}`)
   })
 
   it("persists a welcome-screen plugin model for the first conversation", async () => {

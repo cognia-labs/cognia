@@ -307,6 +307,7 @@ export function resolveChatTurnAttemptIdentity(input: {
  * Each one that sits in a checked-out source root moves into its alias, so the
  * turn never reaches into the source checkout; one outside every aliased root
  * is kept as it was.
+ * The write boundary follows the same mapping for the roots it already grants.
  */
 export function redirectSendToBundleAliases(
   options: SendOptions,
@@ -327,6 +328,14 @@ export function redirectSendToBundleAliases(
     ...options,
     cwd: aliases.primaryAlias,
     additionalDirectories,
+    ...(options.confinement
+      ? {
+          confinement: {
+            ...options.confinement,
+            roots: remapPathsIntoAliases(options.confinement.roots, aliasesBySource),
+          },
+        }
+      : {}),
     ...(options.trustedWorkspaceRoots?.length
       ? { trustedWorkspaceRoots: remapExactRoots(options.trustedWorkspaceRoots, aliasesBySource) }
       : {}),

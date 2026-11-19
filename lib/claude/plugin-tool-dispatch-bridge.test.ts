@@ -8,6 +8,10 @@ import type {
   PluginToolExecRequest,
   PluginToolExecResponse,
 } from "@/lib/plugin/bridge/agent-tool-types"
+import {
+  sendPluginToolResponse,
+  subscribePluginToolExec,
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { runAskUser, useAskUserStore } from "@/stores/agent/ask-user-store"
 
 jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
@@ -51,6 +55,20 @@ function harness() {
 }
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+it("subscribes, replies and unsubscribes through the default IPC transport", async () => {
+  const h = harness()
+  jest.mocked(subscribePluginToolExec).mockImplementationOnce((handler) => h.subscribe(handler))
+  const stop = await subscribePluginToolDispatchBridge({ handle: h.handle })
+  try {
+    h.emit()
+    await flush()
+    expect(sendPluginToolResponse).toHaveBeenCalledWith(response, request.remoteExecutionContext)
+  } finally {
+    stop()
+  }
+  expect(h.unsubscribe).toHaveBeenCalledTimes(1)
+})
 
 it("provides a per-call signal, clears a stopped question, drops its answer and opens the next question", async () => {
   const h = harness()

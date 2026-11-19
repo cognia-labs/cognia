@@ -702,7 +702,10 @@ export async function handleEvent(
             recordProviderOutcome({
               providerId: failedProvider,
               ok: false,
-              latencyMs: 0,
+              latencyMs:
+                failedSend.startedAt === undefined
+                  ? undefined
+                  : Math.max(0, Date.now() - failedSend.startedAt),
               errorMessage: evt.error,
               // Real HTTP status + Retry-After captured by the sidecar — drive
               // the breaker's dynamic cooldown off authoritative data.
@@ -764,8 +767,7 @@ export async function handleEvent(
             // End the agent-trace span on permanent failure (no retry). The
             // success path closes the span via the `sdkResult` branch in
             // case "event" instead.
-            const cached = useChatStore.getState().lastSendBySession[evt.sessionId]
-            const spanId = cached?.options.spanId
+            const spanId = failedSend?.options.spanId
             if (spanId) {
               endSpan(spanId, {
                 errorType: "turn_error",
@@ -806,6 +808,7 @@ export async function handleEvent(
           useChatStore.getState().setSessionStatus(evt.sessionId, "idle")
           chatTurnPerformance.finish(evt.sessionId, "completed")
           const cached = useChatStore.getState().lastSendBySession[evt.sessionId]
+          if (cached?.options.spanId) endSpan(cached.options.spanId, { finishReasons: ["stop"] })
           const durationMs = finishBehaviorTurn(evt.sessionId)
           if (durationMs !== undefined) {
             void trackEvent("chat.turn.completed", {

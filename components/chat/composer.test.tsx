@@ -2249,6 +2249,42 @@ describe("Composer — references staged before a conversation exists", () => {
 })
 
 describe("plugin command progress and cancellation", () => {
+  it("inserts OCR output into the draft without sending it to the model", async () => {
+    const { registerSlashCommand, unregisterSlashCommand } =
+      await import("@/lib/slash-commands/registry")
+    const commandId = "cognia-ocr.ocr"
+    const handler = jest.fn(() => ({
+      message: "system fallback",
+      payload: { composerText: "Recognized image text" },
+    }))
+    registerSlashCommand({ id: commandId, name: "ocr", source: "plugin", handler })
+    const Wrapper = withAdapter(makeAdapter())
+    const onSend = jest.fn(async () => undefined)
+    const view = render(
+      <Wrapper>
+        <Composer
+          session={mkSession()}
+          onStartNewSession={async () => undefined}
+          onOpenSettings={() => undefined}
+          onSend={onSend}
+          onStop={async () => undefined}
+        />
+      </Wrapper>
+    )
+    try {
+      const textarea = view.container.querySelector("textarea")!
+      fireEvent.change(textarea, { target: { value: "/ocr a.png --format text --into composer" } })
+      fireEvent.click(screen.getByRole("button", { name: /^Send$/ }))
+      await waitFor(() => expect(textarea).toHaveValue("Recognized image text"))
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(onSend).not.toHaveBeenCalled()
+      expect(screen.queryByText("system fallback")).not.toBeInTheDocument()
+    } finally {
+      view.unmount()
+      unregisterSlashCommand(commandId)
+    }
+  })
+
   it.each(["Cancel command", "Stop"])(
     "shows progress, cancels with %s, and drops a late response",
     async (cancelLabel) => {

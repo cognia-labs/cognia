@@ -106,6 +106,8 @@ export type SteerEntry = {
  * Capping retries at `fallbackEntries.length` keeps us bounded.
  */
 export interface LastSendCacheEntry {
+  /** Wall clock at this provider dispatch, for measured failure latency. */
+  startedAt?: number
   content: SendContent
   options: SendOptions
   attemptIndex: number

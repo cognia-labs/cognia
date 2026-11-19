@@ -155,7 +155,8 @@ export async function runComposerSlashCommand(
   >,
   cmd: SlashCommand,
   args: string,
-  staged?: SlashStagedFiles
+  staged?: SlashStagedFiles,
+  insertIntoDraft?: SlashContext["insertIntoDraft"]
 ): Promise<boolean> {
   const {
     session,
@@ -201,6 +202,7 @@ export async function runComposerSlashCommand(
       openSettings: onOpenSettings,
       setPermissionMode: (mode) => setPermissionMode(mode, session?.id ?? null),
       pushSystemMessage,
+      insertIntoDraft,
       ...(staged ? { stagedFiles: staged.files, consumeStagedFiles: staged.consume } : {}),
     }
     try {

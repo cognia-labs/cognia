@@ -420,7 +420,7 @@ export function EmptyChatState({
             size="sm"
             className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
             onClick={() => onToggleStyle(rich ? "minimal" : "rich")}
-            aria-label={t("style.toggleLabel")}
+            aria-label={`${t("style.toggleLabel")}: ${t(rich ? "style.minimal" : "style.rich")}`}
           >
             <Settings2Icon className="size-3.5" aria-hidden />
             {t(rich ? "style.minimal" : "style.rich")}
@@ -709,7 +709,7 @@ export function EmptyChatState({
               size="sm"
               className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
               onClick={() => toggleStyle(rich ? "minimal" : "rich")}
-              aria-label={t("style.toggleLabel")}
+              aria-label={`${t("style.toggleLabel")}: ${t(rich ? "style.minimal" : "style.rich")}`}
             >
               <Settings2Icon className="size-3.5" aria-hidden />
               {t(rich ? "style.minimal" : "style.rich")}

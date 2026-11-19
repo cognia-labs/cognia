@@ -195,6 +195,25 @@ describe("redirectSendToBundleAliases", () => {
     expect(leased.trustedWorkspaceRoots).toEqual(["/isolated/app", "/isolated/docs"])
   })
 
+  it("moves the write boundary to the copies without granting any new roots", () => {
+    const redirected = redirectSendToBundleAliases(
+      {
+        ...sourceSend,
+        confinement: { enabled: true, roots: ["/repo", "/docs/guides", "/shared"] },
+      },
+      lease,
+      aliasesBySource
+    )
+
+    expect(redirected.confinement).toEqual({
+      enabled: true,
+      roots: ["/isolated/app", "/isolated/docs/guides", "/shared"],
+    })
+    expect(redirectSendToBundleAliases(redirected, lease, aliasesBySource).confinement).toEqual(
+      redirected.confinement
+    )
+  })
+
   it("keeps the directories the send named, moving the ones inside a checked-out root into it", () => {
     const redirected = redirectSendToBundleAliases(
       {

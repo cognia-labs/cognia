@@ -133,9 +133,12 @@ describe("<EmptyChatState />", () => {
     const onToggleStyle = jest.fn()
     const user = userEvent.setup()
     const { rerender } = render(<EmptyChatState {...baseProps()} />)
-    expect(screen.queryByRole("button", { name: "style.toggleLabel" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /^style.toggleLabel/ })).not.toBeInTheDocument()
     rerender(<EmptyChatState {...baseProps()} onToggleStyle={onToggleStyle} />)
-    await user.click(screen.getByRole("button", { name: "style.toggleLabel" }))
+    await user.click(screen.getByRole("button", { name: /^style.toggleLabel/ }))
+    expect(screen.getByRole("button", { name: /^style.toggleLabel/ })).toHaveAccessibleName(
+      "style.toggleLabel: style.minimal"
+    )
     // Default style is "rich" → toggling targets "minimal".
     expect(onToggleStyle).toHaveBeenCalledWith("minimal")
   })
@@ -145,7 +148,7 @@ describe("<EmptyChatState />", () => {
     const user = userEvent.setup()
     render(<EmptyChatState {...baseProps()} welcomeStyle="minimal" onToggleStyle={onToggleStyle} />)
     expect(screen.getByText("style.rich")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "style.toggleLabel" }))
+    await user.click(screen.getByRole("button", { name: /^style.toggleLabel/ }))
     expect(onToggleStyle).toHaveBeenCalledWith("rich")
   })
 
@@ -744,7 +747,7 @@ describe("<EmptyChatState />", () => {
       try {
         render(<Harness />)
         placeComposer(403)
-        await userEvent.click(screen.getByRole("button", { name: "style.toggleLabel" }))
+        await userEvent.click(screen.getByRole("button", { name: /^style.toggleLabel/ }))
         expect(animate).toHaveBeenCalledTimes(1)
         expect(animate.mock.contexts[0]).toBe(screen.getByTestId("welcome-first-screen"))
         expect(animate.mock.calls[0][0]).toEqual([
@@ -763,7 +766,7 @@ describe("<EmptyChatState />", () => {
       try {
         render(<Harness />)
         placeComposer(403)
-        await userEvent.click(screen.getByRole("button", { name: "style.toggleLabel" }))
+        await userEvent.click(screen.getByRole("button", { name: /^style.toggleLabel/ }))
         expect(animate).not.toHaveBeenCalled()
       } finally {
         delete (HTMLElement.prototype as { animate?: unknown }).animate

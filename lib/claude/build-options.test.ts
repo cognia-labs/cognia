@@ -5586,6 +5586,63 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
   ])
   const notWeb = (n: string) => !ALWAYS_ON.has(n)
 
+  it("removes screen access from OCR and screenshot tools in IM without Computer Use", async () => {
+    mBuildManifest.mockReturnValue([
+      {
+        name: "ocr.extract",
+        pluginId: "cognia-ocr",
+        description: "Read an image or screen",
+        jsonSchema: {
+          properties: { source: { properties: { kind: { enum: ["data_url", "screen"] } } } },
+        },
+      },
+      {
+        name: "extract_screenshot_ocr",
+        pluginId: "cognia-screenshot",
+        description: "Capture",
+        jsonSchema: {},
+      },
+    ])
+    const opts = await resolveSendOptions({
+      session: makeSession({
+        id: "s1",
+        platformBinding: {
+          platform: "telegram",
+          adapterId: "bot",
+          conversationKey: "telegram:bot:1",
+          conversationRef: { platform: "telegram", adapterId: "bot", chatId: 1 },
+        },
+      }),
+      imOverrideRow: { allowComputerUse: false } as never,
+      character: makeChar({ enableComputerUse: true }),
+    })
+    expect(opts.pluginTools?.find((t) => t.name === "ocr.extract")).toMatchObject({
+      jsonSchema: { properties: { source: { properties: { kind: { enum: ["data_url"] } } } } },
+    })
+    expect(opts.pluginTools?.some((t) => t.name === "extract_screenshot_ocr")).toBe(false)
+  })
+
+  it("removes OCR tools across plugins while retaining raw screenshots", async () => {
+    mBuildManifest.mockReturnValue(
+      [
+        { name: "ocr.extract", pluginId: "cognia-ocr" },
+        { name: "extract_screenshot_ocr", pluginId: "cognia-screenshot" },
+        { name: "take_screenshot", pluginId: "cognia-screenshot" },
+        { name: "find_text", pluginId: "cognia-computer-use" },
+        { name: "click_text", pluginId: "cognia-computer-use" },
+      ].map((tool) => ({ ...tool, description: tool.name, jsonSchema: {} }))
+    )
+    const opts = await resolveSendOptions({
+      session: makeSession({ id: "s1" }),
+      character: makeChar({ enableOcr: false, enableComputerUse: true }),
+    })
+    const names = opts.pluginTools?.map((tool) => tool.name)
+    expect(names).toContain("take_screenshot")
+    for (const name of ["ocr.extract", "extract_screenshot_ocr", "find_text", "click_text"]) {
+      expect(names).not.toContain(name)
+    }
+  })
+
   it("includes computer-use plugin tools when character.enableComputerUse=true", async () => {
     const opts = await resolveSendOptions({
       session: makeSession({ id: "s1" }),
@@ -6124,6 +6181,24 @@ describe("resolveSendOptions — workflow-editor (Workflow Copilot mode)", () =>
     expect(opts.mcpServers).toBeUndefined()
   })
 
+  it("retains sandbox denials after applying the Workflow Copilot tool overlay", async () => {
+    const opts = await resolveSendOptions({
+      session: makeSession({
+        id: "workflow:wf_42",
+        kind: "workflow-editor",
+        sandboxEnabled: true,
+      }),
+    })
+    expect(opts.disallowedTools).toEqual(
+      expect.arrayContaining([
+        "apply_patch",
+        "mcp__cognia-tools__apply_patch",
+        "terminal_repl_spawn",
+      ])
+    )
+    expect(opts.allowedTools).toContain("mcp__cognia-plugin-tools__wf_read_graph")
+  })
+
   it("scopes Read to lib/workflow/copilot-templates via additionalDirectories", async () => {
     const ch = makeChar({ id: "c1" })
     const opts = await resolveSendOptions({
@@ -6500,6 +6575,18 @@ describe("resolveSendOptions — ADR-0028 sandbox builtin replacement", () => {
     expect(disallowed).toContain("start_process")
     expect(disallowed).toContain("shell_execute_advanced")
     expect(disallowed).toContain("mcp__cognia-tools__start_process")
+    expect(disallowed).toEqual(
+      expect.arrayContaining([
+        "apply_patch",
+        "mcp__cognia-tools__apply_patch",
+        "directory_delete",
+        "git_commit",
+        "terminal_repl_spawn",
+        "terminal_repl_write",
+        "NotebookEdit",
+      ])
+    )
+    expect(disallowed).not.toContain("read")
     // text_editor must NOT survive on anthropicTools when sandbox is on.
     if (Array.isArray(opts.anthropicTools)) {
       expect(opts.anthropicTools.map((t) => t.name)).not.toContain("text_editor")
@@ -7048,6 +7135,19 @@ describe("resolveSendOptions — unified LSP (sendOptions.lsp)", () => {
       appSettings: { lsp: { enabled: false, servers: [] } } as unknown as AppSettings,
     })
     expect(opts.lsp).toBeUndefined()
+  })
+
+  it("keeps language server startup out of a restricted workspace", async () => {
+    const readProjectFile = jest.fn(async () => null)
+    const opts = await resolveSendOptions({
+      session: makeSession({ id: "s1", workingDir: "/work" }),
+      appSettings: { lsp: { enabled: true, servers: [] } } as unknown as AppSettings,
+      workspaceRestricted: true,
+      lspHost: { readProjectFile, installDir: "/app/lsp", autoInstall: true },
+    })
+    expect(opts.lsp).toBeUndefined()
+    expect(opts.cwd).toBe("/work")
+    expect(readProjectFile).not.toHaveBeenCalled()
   })
 
   it("propagates autoInstall: false", async () => {
@@ -8541,6 +8641,7 @@ describe("resolveSendOptions — agent-trace root span minting", () => {
       traceSurface: "connector",
       conversationKey: "conv-9",
       routingContextHint: { promptText: "hello there" },
+      executionIdentity: { runId: "run-trace", turnId: "turn-trace", attemptId: "attempt-trace" },
     })
     const span = __getActiveSpanForTesting(opts.spanId!)
     expect(span).toBeDefined()
@@ -8549,6 +8650,11 @@ describe("resolveSendOptions — agent-trace root span minting", () => {
     expect(span?.operationName).toBe("invoke_agent")
     expect(span?.inputPreview).toBe("hello there")
     expect(span?.metadata).toMatchObject({ conversationKey: "conv-9" })
+    expect(span).toMatchObject({
+      runId: "run-trace",
+      turnId: "turn-trace",
+      attemptId: "attempt-trace",
+    })
     // parentSpanId is absent on a root span.
     expect(span?.parentSpanId).toBeUndefined()
   })

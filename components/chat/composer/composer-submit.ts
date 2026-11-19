@@ -629,12 +629,17 @@ export async function runComposerSubmit(
           for (const id of ids) consumed.add(id)
         },
       })
+      const draftOutput: string[] = []
       const { outgoingText, overrides, ranAction, errors, cancelled } = await runSegments(
         pipelineSegments,
         {
           commandMap,
           runAction: async (command, args) => {
-            return props.onCommand(command, args, stagedForCommand())
+            return props.onCommand(command, args, stagedForCommand(), (value) => {
+              if (currentDraftRef.current.sessionId !== sessionId) return false
+              draftOutput.push(value)
+              return true
+            })
           },
           applyTemplate,
         }
@@ -683,6 +688,11 @@ export async function runComposerSubmit(
       else {
         restoreInputAfterFailure()
         if (nativeMobile) void notify("error")
+      }
+      const liveDraft = currentDraftRef.current
+      if (draftOutput.length > 0 && liveDraft.sessionId === sessionId) {
+        const current = sent && liveDraft.text === text ? "" : liveDraft.text
+        textInput.setInput([current, ...draftOutput].filter(Boolean).join("\n\n"))
       }
       return sent
     }

@@ -69,6 +69,7 @@ import {
   streamdownPlugins,
 } from "@/components/ai-elements/streamdown-plugins"
 import type { MessageMarkdownOptions } from "@/types/appearance"
+import { chatCodeThemeInputs } from "@/lib/shiki/chat-code-themes"
 import { clearAllLinkMatchers, registerLinkMatcher } from "@/lib/plugin/api/link-matchers"
 
 const MARKDOWN_DEFAULTS: MessageMarkdownOptions = {
@@ -588,10 +589,9 @@ describe("markdown knobs (ADR-0127)", () => {
     expect(github).not.toBe(streamdownPlugins)
     expect(github.code).not.toBe(streamdownPlugins.code)
     // `@streamdown/code` is stubbed under Jest; the stub records its options.
-    expect((github.code as unknown as { options: { themes: string[] } }).options.themes).toEqual([
-      "github-light-default",
-      "github-dark-default",
-    ])
+    expect((github.code as unknown as { options: { themes: unknown[] } }).options.themes).toEqual(
+      chatCodeThemeInputs({ light: "github-light-default", dark: "github-dark-default" })
+    )
     expect(selectStreamdownPlugins({ codeTheme: "github" })).toBe(github)
     // The default theme id resolves to the historical shared set.
     expect(selectStreamdownPlugins({ codeTheme: "one" })).toBe(streamdownPlugins)

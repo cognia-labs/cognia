@@ -980,9 +980,9 @@ export async function runChatSend(
       // turn/steer (Codex app-server), or the Anthropic sidecar's streaming
       // input. Acceptance means the sidecar queued it into the running
       // query, NOT that the model has already acted on it, so the bubble
-      // says "accepted" until the turn settles. Anything else (unsupported
-      // provider, input already closed, transport hiccup) falls through to
-      // the durable queue below.
+      // says "accepted" until the turn settles. Unsupported lanes can use
+      // the durable queue below. An attempted external delivery cannot be
+      // replayed automatically: a lost reply may hide a successful inject.
       //
       // `awaiting_approval` is included deliberately: a turn paused on a
       // tool prompt still holds its input open, and it is the moment when
@@ -1028,6 +1028,7 @@ export async function runChatSend(
         // Adapter steering carries text only (`turn/steer` takes a string),
         // so an attachment-only follow-up has to queue on this lane.
         if (text && blocks.length === 0) {
+          let steeringAttempted = false
           try {
             const { getExternalAgentManager } = await import("@/lib/ai/agent/external/manager")
             const mgr = getExternalAgentManager()
@@ -1052,13 +1053,23 @@ export async function runChatSend(
                   ).steering === "supported"
                 : mgr.supportsSteering(externalAgentId))
             if (link && canSteer) {
+              steeringAttempted = true
               await (remoteClient ?? mgr).steerSession(externalAgentId, link.sessionId, text)
               mergeSteerWebSearchIntoLastSend(sessionId, callOptions?.webSearchContext)
               setSteerMessageState(sessionId, entryId, "accepted")
               return true
             }
           } catch (err) {
-            console.warn("live steer failed; queueing instead", err)
+            if (steeringAttempted) {
+              setSteerMessageState(
+                sessionId,
+                entryId,
+                "failed",
+                err instanceof Error ? err.message : String(err)
+              )
+              return true
+            }
+            console.warn("live steer unavailable; queueing instead", err)
           }
         }
       } else {
@@ -3968,6 +3979,7 @@ export async function runChatSend(
       // inside the awaited dispatch, and turnComplete reads this exact row to
       // persist pre-search sources on the assistant reply.
       useChatStore.getState().setLastSend(sessionId, {
+        startedAt: Date.now(),
         content: effectiveContent,
         options: sendOptions,
         attemptIndex: 0,

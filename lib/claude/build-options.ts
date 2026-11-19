@@ -122,7 +122,11 @@ import type {
   ImHostCapabilityId,
 } from "@/lib/db/connector-types"
 import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
-import { isOcrToolAllowed } from "@/lib/claude/ocr-tool-gate"
+import {
+  isOcrPluginTool,
+  isOcrToolAllowed,
+  restrictOcrScreenTools,
+} from "@/lib/claude/ocr-tool-gate"
 import { resolveOutputStyleSnippet } from "@/lib/ai/agent/execution/output-styles"
 import {
   COMPACT_HANDOFF_PROMPT,
@@ -1928,15 +1932,27 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const imChannel = imBinding
     ? await (await import("@/lib/chat/conversation-channel")).conversationChannelFor(imBinding)
     : null
+  const imAuthority = (session as (ChatSession & SessionImAuthority) | null | undefined)
+    ?.imAuthorityBinding
+  const imCapabilityBinding = imAuthority?.adapterId ? imAuthority : imBinding
+  const imCapabilitySession = Boolean(imCapabilityBinding)
   let imHostCapabilities: Readonly<Record<ImHostCapabilityId, boolean>> = NO_IM_HOST_CAPABILITIES
-  if (imChannel && imBinding) {
+  if (imCapabilityBinding) {
     try {
-      imHostCapabilities = await imChannel.hostCapabilities({
-        binding: imBinding,
-        adapter: imAdapterRow,
-        override: imOverrideRow,
-        characterComputerUseEnabled: character?.enableComputerUse,
-      })
+      const channel =
+        imCapabilityBinding === imBinding
+          ? imChannel
+          : await (
+              await import("@/lib/chat/conversation-channel")
+            ).conversationChannelFor(imCapabilityBinding)
+      imHostCapabilities =
+        (await channel?.hostCapabilities({
+          binding: imCapabilityBinding,
+          ...(imCapabilityBinding === imBinding
+            ? { adapter: imAdapterRow, override: imOverrideRow }
+            : {}),
+          characterComputerUseEnabled: character?.enableComputerUse,
+        })) ?? NO_IM_HOST_CAPABILITIES
     } catch {
       // A channel that cannot answer allows nothing.
     }
@@ -3468,11 +3484,17 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // `<cwd>/.cognia/lsp.json` for the project layer.
   {
     const lspEnabled = appSettings?.lsp?.enabled ?? appSettings?.builtinTools?.lsp ?? false
-    if (!supportAgent && lspEnabled && opts.cwd) {
+    // Even a read-only LSP request may launch a process that loads project code.
+    if (!supportAgent && !ctx.workspaceRestricted && lspEnabled && opts.cwd) {
       const servers = await resolveLspServers({
         rootDir: opts.cwd,
         userServers: appSettings?.lsp?.servers,
-        readProjectFile: ctx.lspHost?.readProjectFile ?? readProjectLspFile,
+        readProjectFile:
+          ctx.lspHost?.readProjectFile ??
+          (appSettings?.workspaceTrust?.enabled === false ||
+          ctx.trustedWorkspaceRoots?.includes(opts.cwd)
+            ? readProjectLspFile
+            : undefined),
       })
       // Managed install root for the npm-first install ladder. Resolved here
       // because the sidecar has no Tauri path API; absent on web/mobile.
@@ -3540,7 +3562,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const computerUseAllowedForChat =
     character?.enableComputerUse === true &&
     !mobileHostBlocked &&
-    (!imSession || allowImComputerUse)
+    (!imCapabilitySession || allowImComputerUse)
 
   // Agent browser tools (ADR-0055) drive the embedded preview webview, which
   // only exists in the desktop shell. Opt-in per character; never surfaced on
@@ -3553,10 +3575,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const ocrAllowedForChat =
     isOcrToolAllowed({
       character,
-      imSession,
+      imSession: imCapabilitySession,
       allowOcrOverride: imOverrideRow?.allowOcr,
     }) &&
-    (!imSession || imHostCapabilities.ocr)
+    (!imCapabilitySession || imHostCapabilities.ocr)
 
   // --- Plugin tools → SDK sidecar ------------------------------------------
   // Surface enabled plugin tools + ADR-0026 built-in skills as a manifest the sidecar turns into the synthetic `cognia-plugin-tools`
@@ -3600,9 +3622,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       }
       if (!computerUseAllowedForChat) {
         manifest = manifest.filter((entry) => entry.pluginId !== "cognia-computer-use")
+        if (imCapabilitySession) manifest = restrictOcrScreenTools(manifest)
       }
       if (!ocrAllowedForChat) {
-        manifest = manifest.filter((entry) => entry.pluginId !== "cognia-ocr")
+        manifest = manifest.filter((entry) => !isOcrPluginTool(entry))
       }
       if (!browserAllowedForChat) {
         manifest = manifest.filter((entry) => entry.pluginId !== "cognia-browser-tools")
@@ -3985,7 +4008,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     const applied = applyComputerUseTools({
       character,
       opts,
-      imSession,
+      imSession: imCapabilitySession,
       allowImComputerUse,
       mobileHostBlocked,
       // ADR-0020 W3 — session id flows in so the per-session grant
@@ -4160,48 +4183,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     if (ctx.builtinProcessSandbox && sandboxBinding.shellTier === "os") {
       opts.builtinProcessSandbox = ctx.builtinProcessSandbox
     }
-    const disallowed = new Set(opts.disallowedTools ?? [])
-    // SDK builtins AND the sidecar coreFiles mutators — either would bypass
-    // the sandbox (bare names = ai-sdk path, namespaced = Anthropic hatch).
-    // `start_process` / `shell_execute_advanced` are the process-execution
-    // escape hatches (ADR-0028 Phase 4): they spawn real host processes
-    // unconfined, so they are disallowed too — the model uses `sandbox_bash`
-    // for shell work in a sandboxed session.
-    for (const t of [
-      "Bash",
-      "Edit",
-      "Write",
-      "bash",
-      "edit",
-      "write",
-      "multi_edit",
-      "start_process",
-      "shell_execute_advanced",
-      "mcp__cognia-tools__bash",
-      "mcp__cognia-tools__edit",
-      "mcp__cognia-tools__write",
-      "mcp__cognia-tools__multi_edit",
-      "mcp__cognia-tools__start_process",
-      "mcp__cognia-tools__shell_execute_advanced",
-    ]) {
-      if (
-        opts.builtinProcessSandbox &&
-        [
-          "bash",
-          "start_process",
-          "shell_execute_advanced",
-          "mcp__cognia-tools__bash",
-          "mcp__cognia-tools__start_process",
-          "mcp__cognia-tools__shell_execute_advanced",
-        ].includes(t)
-      )
-        continue
-      disallowed.add(t)
-    }
-    // On an always-on Host every other tool that writes the disk or runs a
-    // process would do it on the Host itself, so none of them stays.
-    if (hostContainer) for (const t of RESTRICTED_MODE_DENIED_TOOLS) disallowed.add(t)
-    opts.disallowedTools = [...disallowed]
     if (Array.isArray(opts.anthropicTools)) {
       opts.anthropicTools = opts.anthropicTools.filter(
         (t) => t.name !== "text_editor" && t.name !== "str_replace_based_edit_tool"
@@ -4259,7 +4240,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // per-conversation `allowComputerUse` opt-in (the existing "this chat may
   // drive my machine" switch) lifts the deny. Read-only core tools stay
   // available so IM agents can still inspect the workspace.
-  if (imSession && !allowImComputerUse) {
+  if (imCapabilitySession && !allowImComputerUse) {
     const denied = new Set(opts.disallowedTools ?? [])
     // Same derived set as Restricted Mode. Previously this was a hand-written
     // 8-entry literal covering 4 logical tools, which left `directory_delete`,
@@ -5050,6 +5031,29 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     delete opts.lsp
   }
 
+  if (sandboxEnabled) {
+    const wrapped = new Set(
+      opts.builtinProcessSandbox
+        ? [
+            "bash",
+            "start_process",
+            "shell_execute_advanced",
+            "terminal_repl_spawn",
+            "terminal_repl_write",
+            "terminal_repl_kill",
+          ].flatMap((name) => [name, namespaced(name)])
+        : []
+    )
+    // Apply this after workflow and plugin overlays. Tools with native Host
+    // effects need either the process wrapper or a sandbox_* replacement.
+    opts.disallowedTools = [
+      ...new Set([
+        ...(opts.disallowedTools ?? []),
+        ...RESTRICTED_MODE_DENIED_TOOLS.filter((name) => !wrapped.has(name)),
+      ]),
+    ]
+  }
+
   // --- Unified built-in Skill delivery ------------------------------------
   // Resolve descriptor triggers, persisted enablement, capability reasons,
   // request scope, prompt delivery, resource scope, and loader scope once.
@@ -5548,6 +5552,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         providerName: providerNameFromId(providerId),
         sessionId: session?.id ?? "",
         surface: ctx.traceSurface ?? "chat",
+        runId: ctx.executionIdentity?.runId,
+        turnId: ctx.executionIdentity?.turnId,
+        attemptId: ctx.executionIdentity?.attemptId,
+        projectId: session?.projectId,
         requestModel: opts.model,
         agentId: character?.id,
         inputPreview: promptPreview || undefined,

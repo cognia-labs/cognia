@@ -81,6 +81,7 @@ import { listPendingForConversation as listPendingDrafts } from "@/lib/db/connec
 import {
   type SettingsTab,
   type SlashCommand,
+  type SlashContext,
   type SlashStagedFiles,
 } from "@/lib/slash-commands/builtin"
 import {
@@ -363,7 +364,12 @@ export interface ComposerInnerProps {
    * a command that uses one (`/video`'s start frame) consumes it, and the turn
    * sent after the batch leaves consumed files out.
    */
-  onCommand: (cmd: SlashCommand, args: string, staged?: SlashStagedFiles) => Promise<boolean>
+  onCommand: (
+    cmd: SlashCommand,
+    args: string,
+    staged?: SlashStagedFiles,
+    insertIntoDraft?: SlashContext["insertIntoDraft"]
+  ) => Promise<boolean>
   onSubmitMemory: (target: ComposerMemoryTarget, text: string) => Promise<boolean>
   /**
    * Run a `!shell` line. Lives here (rather than being inferred from the
@@ -1568,7 +1574,12 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   const openProviderSettings = useCallback(() => onOpenSettings("api-key"), [onOpenSettings])
 
   const handleSlashCommand = useCallback(
-    async (cmd: SlashCommand, args: string, staged?: SlashStagedFiles): Promise<boolean> =>
+    async (
+      cmd: SlashCommand,
+      args: string,
+      staged?: SlashStagedFiles,
+      insertIntoDraft?: SlashContext["insertIntoDraft"]
+    ): Promise<boolean> =>
       runComposerSlashCommand(
         {
           session,
@@ -1585,7 +1596,8 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
         },
         cmd,
         args,
-        staged
+        staged,
+        insertIntoDraft
       ),
     [
       session,

@@ -129,9 +129,23 @@ describe("resolveOptionModelName", () => {
 describe("ModelSelect", () => {
   beforeEach(() => seedSettings())
 
+  it("includes the visible Auto badge and automatic model label in its name", () => {
+    renderSelect({ model: "auto" })
+    const trigger = screen.getByRole("button", { name: /switch model/i })
+    expect(trigger).toHaveAccessibleName(
+      expect.stringContaining(enMessages.chat.composer.modelPicker.autoBadge)
+    )
+    expect(trigger).toHaveAccessibleName(
+      expect.stringContaining(enMessages.chat.composer.modelPicker.autoModel)
+    )
+  })
+
   it("labels the trigger with the catalog display name", () => {
     renderSelect()
     expect(screen.getByRole("button").textContent).toContain(ANTHROPIC_NAME)
+    expect(screen.getByRole("button")).toHaveAccessibleName(
+      expect.stringContaining(ANTHROPIC_NAME!)
+    )
   })
 
   it("keeps a retired configured pin visible with a translated explanation, without selecting it", () => {
@@ -241,7 +255,9 @@ describe("ModelSelect placeholder", () => {
   it("names the fallback when no model is set, and yields to a real one", () => {
     seedSettings()
     const { unmount } = renderSelect({ model: "", provider: "", placeholder: "App default" })
-    expect(screen.getByRole("button", { name: /switch model/i })).toHaveTextContent("App default")
+    expect(screen.getByRole("button", { name: /switch model/i })).toHaveAccessibleName(
+      "Switch model: App default"
+    )
     unmount()
     renderSelect({ placeholder: "App default" })
     expect(screen.getByRole("button", { name: /switch model/i })).not.toHaveTextContent(
@@ -327,6 +343,7 @@ describe("ModelSelect compact label", () => {
     const trigger = screen.getByRole("button", { name: /switch model/i })
     const label = trigger.querySelector("span[title]")
     expect(label).toHaveTextContent(/^Sonnet 4\.6$/)
+    expect(trigger).toHaveAccessibleName("Switch model: Sonnet 4.6")
     expect(label).toHaveAttribute("title", "claude-sonnet-4-6")
     expect(trigger.querySelector("svg.lucide-chevrons-up-down")).toBeNull()
   })
@@ -478,6 +495,7 @@ describe("ModelSelect for a surface run by an external agent", () => {
     })
     const trigger = screen.getByRole("button", { name: /switch model/i })
     expect(trigger).toHaveTextContent("K3")
+    expect(trigger).toHaveAccessibleName("Switch model: K3")
     expect(screen.getByTitle("kimi-code/k3")).toBeInTheDocument()
   })
 
