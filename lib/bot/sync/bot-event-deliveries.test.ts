@@ -112,11 +112,27 @@ describe("applyBotDeliveryRows", () => {
 })
 
 describe("sweepAgedMirroredDeliveries", () => {
-  it("ages out a settled mirrored row past the retention window", async () => {
+  it("ages out a mirrored row that settled past the retention window", async () => {
     const old = NOW - MIRROR_BOT_DELIVERY_RETENTION_MS - 1
-    await applyBotDeliveryRows([delivery("bdl_old", { status: "succeeded", receivedAt: old })], old)
+    await applyBotDeliveryRows(
+      [delivery("bdl_old", { status: "succeeded", receivedAt: old, settledAt: old })],
+      old
+    )
     expect(await sweepAgedMirroredDeliveries(NOW)).toBe(1)
     expect(await getDb().botEventDeliveries.get("bdl_old")).toBeUndefined()
+  })
+
+  it("keeps a delivery that arrived long ago but settled today (B15)", async () => {
+    // Held past the window by a paused installation, then completed: the Host
+    // still keeps it, so the client must too, or its terminal state is lost.
+    const arrived = NOW - MIRROR_BOT_DELIVERY_RETENTION_MS - 60_000
+    await applyBotDeliveryRows(
+      [delivery("bdl_paused", { status: "succeeded", receivedAt: arrived, settledAt: NOW - 1 })],
+      NOW
+    )
+    expect(await getDb().botEventDeliveries.get("bdl_paused")).toMatchObject({
+      status: "succeeded",
+    })
   })
 
   it("keeps an unsettled mirrored row however old it is", async () => {
@@ -129,7 +145,7 @@ describe("sweepAgedMirroredDeliveries", () => {
   it("never touches a row this device owns", async () => {
     const old = NOW - MIRROR_BOT_DELIVERY_RETENTION_MS - 1
     await getDb().botEventDeliveries.put(
-      delivery("bdl_mine", { status: "succeeded", receivedAt: old })
+      delivery("bdl_mine", { status: "succeeded", receivedAt: old, settledAt: old })
     )
     expect(await sweepAgedMirroredDeliveries(NOW)).toBe(0)
     expect(await getDb().botEventDeliveries.get("bdl_mine")).toBeDefined()
@@ -175,7 +191,12 @@ it("cancels before looking up the sweep table after an awaited apply", async () 
 
 it("fences retention deletion after reading expired victims", async () => {
   const table = getDb().botEventDeliveries
-  const row = delivery("cancel-aged", { status: "succeeded", syncedFromHost: true, receivedAt: 0 })
+  const row = delivery("cancel-aged", {
+    status: "succeeded",
+    syncedFromHost: true,
+    receivedAt: 0,
+    settledAt: 0,
+  })
   await table.put(row)
   const remove = jest.spyOn(table, "bulkDelete")
   const assertCurrent = jest.fn(() => {

@@ -1620,6 +1620,26 @@ describe("the Bot control plane projections", () => {
     expect(projectBotDeliveryRow(delivery()).runId).toBe("botrun_1")
     expect("runId" in projectBotDeliveryRow(delivery({ runId: undefined }))).toBe(false)
   })
+
+  it("re-exports a delivery that arrived before the retention window and settled since (B15)", async () => {
+    const db = getDb()
+    await db.botEventDeliveries.clear()
+    const now = Date.now()
+    // Held past the window by a paused installation, then completed: the Host
+    // keeps it until 14 days after it settled, so its paired clients must hear.
+    await db.botEventDeliveries.put(
+      delivery({
+        status: "succeeded",
+        receivedAt: now - 15 * 24 * 60 * 60_000,
+        updatedAt: now,
+        settledAt: now,
+      })
+    )
+
+    const delta = await readDexieDelta("botEventDeliveries", now - 1_000)
+
+    expect(delta.rows.map((row) => (row as { id: string }).id)).toEqual(["bdl_1"])
+  })
 })
 
 it("handles rejected native unregister promises during source teardown", async () => {

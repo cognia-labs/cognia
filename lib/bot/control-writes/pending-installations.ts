@@ -6,7 +6,8 @@
  * `mobileOutboundQueue`. Until the Host has applied it, a `sync_pull` of
  * `botInstallations` hands back the PRE-mutation row: the switch flips, flips
  * back a moment later, then flips again when the Host catches up. The sync
- * handler skips installations with a pending mutation for exactly that window.
+ * handler defers installations with a pending mutation for exactly that window,
+ * holding its cursor below them so the Host's row lands once the write settles.
  *
  * Two sources, for the same reason `pending-overrides.ts` consults two:
  *
@@ -14,13 +15,8 @@
  *     write done", which covers the gap before the queue row is persisted, and
  *   - the durable queue itself, which is what survives a reload.
  *
- * ## Armed ahead of its producer, on purpose
- *
- * Nothing enqueues `bot_trigger_set_armed` yet: `lib/bot/control-writes/remote.ts`
- * is shaped and dormant until the relay lands, so this set is empty today. It
- * is here now because the ORDER matters. The mirror is what arrives first, and
- * a fence added after the data it fences has a window where the bug is real.
- * That is the same reason `syncedFromHost` shipped before anything wrote it.
+ * The producer is `setBotTriggerArmedRemotely` (`./remote.ts`), which a paired
+ * client's trigger switch routes through.
  */
 
 import { getDb } from "@/lib/db/schema"

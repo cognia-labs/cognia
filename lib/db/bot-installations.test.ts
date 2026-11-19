@@ -197,6 +197,20 @@ describe("botInstallations", () => {
     await uninstallBot(row.id)
     expect(await getBotInstallation(row.id)).toBeUndefined()
   })
+
+  it("publishes the removal to a paired client's next delta (B25)", async () => {
+    const { finalizeDelta } = await import("@/lib/sync/delta")
+    await getDb().syncTombstones.clear()
+    const row = await installBot(input())
+    // The client's cursor after it last mirrored the installation.
+    const since = row.updatedAt
+
+    await uninstallBot(row.id, since + 5)
+
+    const delta = await finalizeDelta("botInstallations", [], since)
+    expect(delta.deleted_ids).toEqual([row.id])
+    expect(delta.next_since).toBe(since + 5)
+  })
 })
 
 describe("setBotInstallationExecutionRoute", () => {

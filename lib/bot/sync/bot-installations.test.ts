@@ -102,7 +102,7 @@ describe("applyBotInstallationRows", () => {
     expect(stored?.syncedFromHost).toBe(true)
   })
 
-  it("skips an installation with an in-flight relayed mutation", async () => {
+  it("defers an installation with an in-flight relayed mutation", async () => {
     // The client flipped the trigger optimistically and shipped the write
     // through the durable queue. A delta that predates the Host applying it
     // would flip the switch back under the user's finger.
@@ -110,7 +110,11 @@ describe("applyBotInstallationRows", () => {
       installation("boti_1", { triggerOverrides: { cron: true }, syncedFromHost: true })
     )
     pendingIds.mockResolvedValue(new Set(["boti_1"]))
-    await applyBotInstallationRows([installation("boti_1", { triggerOverrides: { cron: false } })])
+    expect(
+      await applyBotInstallationRows([
+        installation("boti_1", { triggerOverrides: { cron: false } }),
+      ])
+    ).toEqual({ deferred: 1, deferredFrom: 20 })
     const stored = await getDb().botInstallations.get("boti_1")
     expect(stored?.triggerOverrides).toEqual({ cron: true })
   })
@@ -129,6 +133,46 @@ describe("applyBotInstallationRows", () => {
 })
 
 describe("syncBotInstallations", () => {
+  it("holds its cursor below a deferred row, so a failed relayed write still converges (B24)", async () => {
+    // The Host's rows, answered by cursor the way `finalizeDelta` does.
+    const host = [
+      installation("boti_1", { paused: true, triggerOverrides: { cron: false }, updatedAt: 20 }),
+      installation("boti_2", { updatedAt: 25 }),
+    ]
+    const tx: Transport = {
+      call: jest.fn(async (_rpc: string, args: { since: number }) => {
+        const rows = host.filter((row) => row.updatedAt > args.since)
+        return {
+          rows,
+          deleted_ids: [],
+          next_since: Math.max(args.since, ...rows.map((row) => row.updatedAt)),
+        }
+      }) as unknown as Transport["call"],
+      subscribe: jest.fn(() => () => {}) as unknown as Transport["subscribe"],
+    }
+    // The optimistic switch, with its write still queued for the Host.
+    await getDb().botInstallations.put(
+      installation("boti_1", { triggerOverrides: { cron: true }, syncedFromHost: true })
+    )
+    pendingIds.mockResolvedValue(new Set(["boti_1"]))
+
+    const first = await syncBotInstallations(tx, { since: 0 })
+    expect(first).toMatchObject({ ok: true, result: { applied: 1, nextSince: 19 } })
+    expect((await getDb().botInstallations.get("boti_1"))?.triggerOverrides).toEqual({
+      cron: true,
+    })
+
+    // The queued write fails. The Host has nothing newer to send, and the
+    // next pull still lands its row: the switch and the pause both converge.
+    pendingIds.mockResolvedValue(new Set<string>())
+    const second = await syncBotInstallations(tx, { since: 19 })
+    expect(second).toMatchObject({ ok: true, result: { applied: 2, nextSince: 25 } })
+    expect(await getDb().botInstallations.get("boti_1")).toMatchObject({
+      paused: true,
+      triggerOverrides: { cron: false },
+    })
+  })
+
   it("pulls the table and mirrors the projection", async () => {
     const tx = makeTransport([installation("boti_1", { config: { secret: true } })])
     const out = await syncBotInstallations(tx, { since: 0 })

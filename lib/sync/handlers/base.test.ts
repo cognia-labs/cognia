@@ -351,6 +351,41 @@ describe("runSyncHandler", () => {
     expect(transport.call).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps the cursor below a row the apply deferred and ends the round", async () => {
+    const fake = makeFakeTable()
+    const transport = makeTransport({
+      rows: [
+        { id: "a", name: "a" },
+        { id: "b", name: "b" },
+      ],
+      deleted_ids: [],
+      next_since: 40,
+      has_more: true,
+    })
+
+    const out = await runSyncHandler<FakeRow>(
+      {
+        table: "botInstallations",
+        getTable: () => fake.table,
+        // "b" (watermark 30) is waiting on a write of this client's own.
+        applyRows: async (rows) => {
+          await fake.table.bulkPut(rows.filter((row) => row.id !== "b"))
+          return { deferred: 1, deferredFrom: 30 }
+        },
+      },
+      transport,
+      { since: 10 }
+    )
+
+    // Counted as written only what was, and resumed from below the deferred row
+    // instead of past it; a held page is not fetched again in the same round.
+    expect(out).toEqual({
+      ok: true,
+      result: { table: "botInstallations", applied: 1, nextSince: 29 },
+    })
+    expect(transport.call).toHaveBeenCalledTimes(1)
+  })
+
   it("drains pages while has_more is set, advancing the cursor each page", async () => {
     const fake = makeFakeTable()
     const deltas: SyncDelta<FakeRow>[] = [

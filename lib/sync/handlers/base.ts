@@ -30,7 +30,7 @@ export interface SyncHandlerOptions<TRow extends { id: string }> {
    * — every current one is (they write the rows they are handed, plus
    * idempotent housekeeping).
    */
-  applyRows?: (rows: TRow[], assertCurrent: () => void) => Promise<void>
+  applyRows?: (rows: TRow[], assertCurrent: () => void) => Promise<void | SyncApplyHold>
   /**
    * Optional override for how tombstoned ids are removed. Defaults to
    * `getTable().bulkDelete(ids)`, which is right whenever the wire id IS the
@@ -43,6 +43,19 @@ export interface SyncHandlerOptions<TRow extends { id: string }> {
   applyDeletes?: (ids: string[], assertCurrent: () => void) => Promise<void>
   /** Override the write slice size (tests). */
   applySliceSize?: number
+}
+
+/**
+ * What an {@link SyncHandlerOptions.applyRows} override reports when it did
+ * not write some rows it was handed (a Bot installation with a relayed write
+ * still in flight). The cursor stays below `deferredFrom`, the lowest cursor
+ * watermark of a deferred row, so the next pull hands those rows back instead
+ * of the table reporting them applied and moving past them for good. A held
+ * pull ends its round, so a paged table does not fetch the same page again.
+ */
+export interface SyncApplyHold {
+  deferred: number
+  deferredFrom: number
 }
 
 /**
@@ -190,6 +203,8 @@ export async function runSyncHandler<TRow extends { id: string }>(
     }
 
     const filtered = opts.rowFilter ? delta.rows.filter(opts.rowFilter) : delta.rows
+    let deferred = 0
+    let deferredFrom: number | undefined
 
     try {
       const t = target
@@ -199,7 +214,11 @@ export async function runSyncHandler<TRow extends { id: string }>(
         opts.applyDeletes ?? ((ids: string[]) => t.bulkDelete(ids).then(() => undefined))
       await applyInSlices(filtered, sliceSize, async (slice) => {
         assertCurrent()
-        await applySlice(slice as TRow[], assertCurrent)
+        const hold = await applySlice(slice as TRow[], assertCurrent)
+        if (hold && hold.deferred > 0) {
+          deferred += hold.deferred
+          deferredFrom = Math.min(deferredFrom ?? hold.deferredFrom, hold.deferredFrom)
+        }
         assertCurrent()
       })
       await applyInSlices(delta.deleted_ids, sliceSize, async (slice) => {
@@ -220,7 +239,12 @@ export async function runSyncHandler<TRow extends { id: string }>(
       })
     }
 
-    applied += filtered.length + delta.deleted_ids.length
+    applied += filtered.length - deferred + delta.deleted_ids.length
+    if (deferredFrom !== undefined) {
+      // Never past a deferred row, and never behind where this pull started.
+      since = Math.max(since, Math.min(delta.next_since, deferredFrom - 1))
+      return { ok: true, result: result() }
+    }
     since = delta.next_since
     nextCursor = delta.next_cursor
 

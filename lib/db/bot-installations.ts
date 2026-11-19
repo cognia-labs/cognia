@@ -11,6 +11,7 @@
 import { nanoid } from "nanoid"
 
 import { getDb } from "@/lib/db/schema"
+import { recordTombstones } from "@/lib/db/tombstones"
 import { assertRunsHere, isOwnedElsewhere } from "@/lib/placement/ownership"
 import type { ItemOwner } from "@/types/placement/item-owner"
 import type {
@@ -475,8 +476,15 @@ export async function listBotInstallations(
     .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
-export async function uninstallBot(id: string): Promise<void> {
-  await getDb().botInstallations.delete(id)
+export async function uninstallBot(id: string, now = Date.now()): Promise<void> {
+  const db = getDb()
+  // The tombstone commits with the delete: a paired client learns of a removal
+  // only through it, and a delta read after an untombstoned delete returned no
+  // row and no deleted id, so its mirror kept the installation.
+  await db.transaction("rw", db.botInstallations, db.syncTombstones, async () => {
+    await db.botInstallations.delete(id)
+    await recordTombstones("botInstallations", [id], now)
+  })
   // Before the row is gone the reconciler could still resolve it; after, only
   // the id is left, so removal is by tag prefix rather than by diffing.
   try {

@@ -44,7 +44,6 @@ import type { WorkflowDeployment } from "@/types/workflow/deployment"
 import type { ExecutionRunBinding } from "@/types/execution/run"
 import type { OutboundRequest } from "@/types/connectors/outbound"
 import type { BotDefinitionRow, BotEventDeliveryRow, BotInstallationRow } from "@/lib/db/bot-types"
-import { BOT_DELIVERY_RETENTION_MS } from "@/lib/db/bot-event-deliveries"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import { getDb } from "@/lib/db/schema"
 import { resolveTurnServerCredentials } from "@/lib/credentials/turn-credentials"
@@ -1103,22 +1102,21 @@ async function readBotInstallationsDelta(
 }
 
 /**
- * Deliveries changed since the cursor, over a bounded window.
+ * Deliveries changed since the cursor.
  *
  * `botEventDeliveries` has no `updatedAt` index (see `lib/db/schema.ts`), and
- * a status change moves `updatedAt` without touching `receivedAt`, so a pure
- * `receivedAt` cursor would never re-export a row that went from `running` to
- * `failed`. Adding the index would reset every existing database, which a
- * mirror is not worth, so this is the bounded scan
- * `readConnectorHeartbeatsDelta` and `readPlatformIdentitiesDelta` already
- * use: page the indexed column over the retention window, filter `updatedAt`
- * in memory.
+ * a status change moves `updatedAt` without touching `receivedAt`, so this
+ * filters `updatedAt` in memory. It walks every row the Host still holds
+ * rather than a `receivedAt` window: the Host keeps a settled row until 14
+ * days after it SETTLED (and tombstones it then), so a delivery held past the
+ * window by a paused installation and completed today is still the Host's,
+ * and a client cut off at its arrival never heard it finished. The table is
+ * that retention window already, which `pruneSettledBotDeliveries` also walks.
  */
 async function readBotEventDeliveriesDelta(
   since: number
 ): Promise<SyncDelta<BotDeliveryProjectionRow>> {
-  const floor = Date.now() - BOT_DELIVERY_RETENTION_MS
-  const rows = await getDb().botEventDeliveries.where("receivedAt").above(floor).toArray()
+  const rows = await getDb().botEventDeliveries.toArray()
   const changed = rows.filter((row) => row.syncedFromHost !== true && row.updatedAt > since)
   return finalizeDelta("botEventDeliveries", changed.map(projectBotDeliveryRow), since)
 }

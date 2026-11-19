@@ -19,9 +19,10 @@
  * pushing a Host's key into the client's unique index reserves a
  * `ConstraintError` for the first device that mirrors two Hosts.
  *
- * Terminal projections older than the retention window are aged out on every
- * pull, using the same constant the Host prunes on, so the two sweepers cannot
- * disagree about how long a delivery is worth keeping.
+ * Terminal projections are aged out on every pull by the Host's own rule (14
+ * days after they SETTLED, not after they arrived), so the two sweepers cannot
+ * disagree about how long a delivery is worth keeping. The Host's tombstone
+ * normally removes the row first; this is for a client that missed it.
  */
 
 import { BOT_DELIVERY_RETENTION_MS, isTerminalBotDelivery } from "@/lib/db/bot-event-deliveries"
@@ -66,15 +67,20 @@ export async function applyBotDeliveryRows(
   await sweepAgedMirroredDeliveries(now, assertCurrent)
 }
 
-/** Delete mirrored settled projections older than the retention window. */
+/**
+ * Delete mirrored projections that settled longer ago than the retention
+ * window, exactly as `pruneSettledBotDeliveries` deletes the Host's. Aged by
+ * arrival instead, a delivery that was held past the window and settled today
+ * was deleted the moment the client mirrored its terminal state.
+ */
 export async function sweepAgedMirroredDeliveries(
   now: number = Date.now(),
   assertCurrent: () => void = () => {}
 ): Promise<number> {
   const table = getDb().botEventDeliveries
   const victims = await table
-    .where("receivedAt")
-    .below(now - MIRROR_BOT_DELIVERY_RETENTION_MS)
+    .where("settledAt")
+    .belowOrEqual(now - MIRROR_BOT_DELIVERY_RETENTION_MS)
     .filter((row) => row.syncedFromHost === true && isTerminalBotDelivery(row.status))
     .limit(MIRROR_BOT_SWEEP_BATCH)
     .toArray()
