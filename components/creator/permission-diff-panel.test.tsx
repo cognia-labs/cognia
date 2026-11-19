@@ -57,9 +57,11 @@ describe("PermissionDiffPanel", () => {
   })
 
   it("marks the diff approved and disables the button once covered", () => {
-    renderPanel({ approvedAdditions: ["fs.write"] })
+    const { onApprove } = renderPanel({ approvedAdditions: ["fs.write"] })
     expect(screen.getByText(creatorMessages.permissions.approved)).toBeInTheDocument()
     expect(approveButton()).toBeDisabled()
+    fireEvent.click(approveButton())
+    expect(onApprove).not.toHaveBeenCalled()
   })
 
   // The smuggling case: a regenerated, wider proposal must not ride in on the

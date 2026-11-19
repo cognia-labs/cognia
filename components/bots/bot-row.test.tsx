@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
 import { fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 
 import type { BotConsoleRow } from "@/lib/bot/console/bot-rows"
 
@@ -30,6 +31,15 @@ function row(over: Partial<BotConsoleRow> = {}): BotConsoleRow {
 }
 
 describe("BotRowButton", () => {
+  it("selects a focused Bot through keyboard activation", async () => {
+    const onSelect = jest.fn()
+    const user = userEvent.setup()
+    render(<BotRowButton row={row()} selected={false} onSelect={onSelect} />)
+    await user.tab()
+    expect(screen.getByRole("button")).toHaveFocus()
+    await user.keyboard("{Enter}")
+    expect(onSelect).toHaveBeenCalledWith("boti_1")
+  })
   it("names the Bot, its executor and how many triggers are armed", () => {
     render(<BotRowButton row={row()} selected={false} onSelect={jest.fn()} />)
     expect(screen.getByText("Review")).toBeInTheDocument()

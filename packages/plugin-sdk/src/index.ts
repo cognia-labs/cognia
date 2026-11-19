@@ -25,6 +25,7 @@ export type {
   WorkflowNodeGroupPayload,
 } from "./templates"
 export type * from "./api/integration"
+export type { ImageTextCard } from "@cognia/plugin-contract/types/connectors/segment"
 export type { PluginModalProps } from "./api/modal-mount"
 export type { PluginViewProps, TreeDataProvider } from "./api/view"
 export type {

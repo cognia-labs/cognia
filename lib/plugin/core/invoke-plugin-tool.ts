@@ -1,5 +1,6 @@
 import { copyPersonalOperation } from "@/lib/execution/personal-operation"
 import { withPluginExecutionContext, withPluginContentDispatch } from "./invocation-identity"
+import { allowsOcrToolCall } from "@/lib/claude/ocr-tool-gate"
 /**
  * Unified plugin-tool invocation seam.
  *
@@ -440,8 +441,16 @@ async function invokeBoundPluginTool(
       dispatchAround<Record<string, unknown>, unknown>(
         "tool.execute",
         effectiveArgs,
-        (finalArgs) =>
-          runResilient(
+        async (finalArgs) => {
+          if (!(await allowsOcrToolCall(pluginId, toolName, finalArgs, options.sessionId))) {
+            throw new PluginToolInvocationError(
+              "permission-denied",
+              pluginId,
+              toolName,
+              "This conversation does not allow the requested OCR or screen access."
+            )
+          }
+          return runResilient(
             async (attemptSignal) => {
               if (!networkOffPort)
                 await assertPersonalToolEgress(toolName, options, false, {
@@ -469,7 +478,8 @@ async function invokeBoundPluginTool(
               label: `${pluginId}/${toolName}`,
               signal: options.signal,
             }
-          ),
+          )
+        },
         {
           operationId,
           credentialContext: options,
@@ -483,6 +493,7 @@ async function invokeBoundPluginTool(
     if (options.signal?.aborted) {
       throw abortedError(pluginId, toolName, err)
     }
+    if (err instanceof PluginToolInvocationError) throw err
     if (err instanceof CircuitOpenError) {
       throw new PluginToolInvocationError(
         "circuit-open",

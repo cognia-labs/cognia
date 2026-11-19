@@ -6,7 +6,7 @@ const tryBuildMemoryDeps = jest.fn(
     ..._args: Parameters<typeof import("@/lib/memory/runtime/build-deps").tryBuildMemoryDeps>
   ) => ({ loadCandidates: jest.fn() })
 )
-const storeSettings = { memory: { enabled: true, source: "store" } }
+const storeSettings = { memory: { enabled: false, source: "store" } }
 
 jest.mock("@/lib/db/settings", () => ({
   getSettings: (...a: unknown[]) => getSettings(...(a as [])),
@@ -43,6 +43,10 @@ describe("resolveTeamMemoryRuntime", () => {
     getSettings.mockRejectedValue(new Error("no indexeddb"))
     await resolveTeamMemoryRuntime()
     expect(tryBuildMemoryDeps).toHaveBeenCalledTimes(1)
+    expect(tryBuildMemoryDeps).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false }),
+      undefined
+    )
   })
 
   it("degrades to no recall instead of failing the run", async () => {
@@ -53,7 +57,12 @@ describe("resolveTeamMemoryRuntime", () => {
   })
 
   it("returns nothing when memory is disabled", async () => {
+    getSettings.mockResolvedValue({ memory: { enabled: false } })
     tryBuildMemoryDeps.mockResolvedValue(undefined as never)
     await expect(resolveTeamMemoryRuntime()).resolves.toBeUndefined()
+    expect(tryBuildMemoryDeps).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false }),
+      undefined
+    )
   })
 })

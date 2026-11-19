@@ -163,6 +163,16 @@ describe("read/write wrappers", () => {
     })
   })
 
+  it("serializes the sensitive-file restriction to the native command", async () => {
+    const callSpy = jest.spyOn(transport, "call").mockResolvedValueOnce("QUJD")
+    await readWorkspaceFileBase64("/repo", "img.png", undefined, false)
+    expect(callSpy).toHaveBeenCalledWith("fs_read_workspace_file_base64", {
+      root: "/repo",
+      relPath: "img.png",
+      allowSensitive: false,
+    })
+  })
+
   it("readWorkspaceFileChunk asks for one slice and returns it as sent", async () => {
     const chunk = { dataBase64: "QUJD", offset: 8, bytesRead: 3, size: 11, eof: true }
     const callSpy = jest.spyOn(transport, "call").mockResolvedValueOnce(chunk)

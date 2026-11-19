@@ -93,6 +93,12 @@ jest.mock("@/lib/db/projects", () => ({
   persistActiveProjectId: jest.fn(async () => undefined),
 }))
 
+// Port release is a native operation. Its ordering and failure propagation
+// are covered in the project store tests.
+jest.mock("@/lib/task-workspace/execution-port-lease", () => ({
+  releaseProjectPortLeases: jest.fn(async () => undefined),
+}))
+
 jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
   getPluginEventHooks: () => ({
     dispatchProjectCreate: jest.fn(async () => undefined),
@@ -497,8 +503,9 @@ describe("WorkspaceManageDialog", () => {
     })
     renderEditing()
     // First click arms the confirm, second removes.
-    fireEvent.click(screen.getByTestId("workspace-delete"))
-    await act(async () => fireEvent.click(screen.getByTestId("workspace-delete")))
+    fireEvent.click(screen.getByRole("button", { name: "delete" }))
+    fireEvent.click(screen.getByRole("button", { name: "confirmDetach" }))
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("detached"))
     expect(useProjectStore.getState().projects).toHaveLength(0)
     // Removing a workspace is not the same decision as destroying what was in
     // it, so the plain confirm must not take the destructive reading.
@@ -516,9 +523,10 @@ describe("WorkspaceManageDialog", () => {
     })
     renderEditing()
     // The destructive option only appears once the confirm is armed.
-    expect(screen.queryByTestId("workspace-delete-data")).not.toBeInTheDocument()
-    fireEvent.click(screen.getByTestId("workspace-delete"))
-    await act(async () => fireEvent.click(screen.getByTestId("workspace-delete-data")))
+    expect(screen.queryByRole("button", { name: "confirmDelete" })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "delete" }))
+    fireEvent.click(screen.getByRole("button", { name: "confirmDelete" }))
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("deleted"))
     expect(useProjectStore.getState().projects).toHaveLength(0)
     expect(removals.at(-1)?.[1]).toBe("delete-data")
   })

@@ -81,7 +81,7 @@ export function DeviceRowButton({ row, selected, onSelect }: DeviceRowButtonProp
         </span>
         <span className="mt-0.5 flex items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{detail}</span>
-          <span className="shrink-0 text-[11px] text-muted-foreground/80 tabular-nums">
+          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
             {row.isSelf ? t("kind.local") : relative(row.lastSeenAt)}
           </span>
         </span>

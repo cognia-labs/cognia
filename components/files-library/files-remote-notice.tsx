@@ -46,7 +46,7 @@ export function FilesRemoteNotice({
         <Button
           variant="outline"
           size={touch ? "default" : "sm"}
-          className={cn(touch && "h-10")}
+          className={cn("text-foreground", touch && "h-10")}
           disabled={retrying}
           onClick={() => {
             setRetrying(true)

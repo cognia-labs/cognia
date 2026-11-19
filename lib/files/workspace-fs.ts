@@ -205,12 +205,15 @@ export async function readWorkspaceFileVersioned(
 export async function readWorkspaceFileBase64(
   root: string,
   relPath: string,
-  maxBytes?: number
+  maxBytes?: number,
+  /** Desktop-only: narrow the trusted Tauri reader to its sensitive-file floor. */
+  allowSensitive?: false
 ): Promise<string> {
   return transport.call<string>("fs_read_workspace_file_base64", {
     root,
     relPath,
     maxBytes,
+    ...(allowSensitive === false ? { allowSensitive } : {}),
   })
 }
 

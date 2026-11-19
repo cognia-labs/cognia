@@ -73,10 +73,28 @@ describe("TeamNotifier", () => {
 
   it("critical level writes all three channels", () => {
     const { notifier, toast, osNotify, log } = setup()
-    notifier.notify({ level: "critical", title: "hi", runId: "r1", teamId: "t1" })
+    notifier.notify({
+      level: "critical",
+      title: "Approval required",
+      body: "Review the tool call",
+      runId: "r1",
+      teamId: "t1",
+      taskId: "task-1",
+    })
     expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith("error", "Approval required", {
+      body: "Review the tool call",
+      runId: "r1",
+      teamId: "t1",
+      taskId: "task-1",
+    })
     expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith("Approval required", { description: "Review the tool call" })
     expect(osNotify).toHaveBeenCalledTimes(1)
+    expect(osNotify).toHaveBeenCalledWith({
+      title: "Approval required",
+      body: "Review the tool call",
+    })
   })
 
   it("dedupeKey suppresses duplicate within 5min window", () => {
@@ -154,9 +172,20 @@ describe("TeamNotifier — unified deliver (ADR-0042)", () => {
 
   it("emits exactly one deliver per event and bypasses legacy toast/os", () => {
     const { notifier, deliver, toast, osNotify } = setupDeliver()
-    notifier.notify({ level: "critical", title: "hi", runId: "r1", teamId: "t1" })
+    const payload = {
+      level: "critical" as const,
+      title: "Approval required",
+      body: "Review the tool call",
+      runId: "r1",
+      teamId: "t1",
+      taskId: "task-1",
+    }
+    notifier.notify(payload)
     expect(deliver).toHaveBeenCalledTimes(1)
-    expect(deliver.mock.calls[0][0].level).toBe("critical")
+    expect(deliver).toHaveBeenCalledWith({
+      ...payload,
+      detailHref: "/agent-runs?run=execution%3Ateam%3Ar1",
+    })
     expect(toast).not.toHaveBeenCalled()
     expect(osNotify).not.toHaveBeenCalled()
   })

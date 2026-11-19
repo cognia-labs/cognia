@@ -64,7 +64,7 @@ export function BotRowButton({ row, selected, onSelect }: BotRowButtonProps) {
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
             {row.executor ? t(`executor.${row.executor}`) : row.definitionId}
           </span>
-          <span className="shrink-0 text-[11px] text-muted-foreground/80 tabular-nums">
+          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
             {t("row.armedOfTotal", {
               armed: row.armedTriggers,
               total: row.triggers.length,
@@ -77,7 +77,7 @@ export function BotRowButton({ row, selected, onSelect }: BotRowButtonProps) {
           </span>
         ) : null}
         {row.deadLetters > 0 ? (
-          <span className="mt-1 flex text-[11px] text-amber-600 dark:text-amber-400">
+          <span className="mt-1 flex text-[11px] text-amber-700 dark:text-amber-400">
             {t("row.deadLetters", { count: row.deadLetters })}
           </span>
         ) : null}

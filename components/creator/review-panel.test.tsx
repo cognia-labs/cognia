@@ -37,6 +37,16 @@ describe("ReviewPanel", () => {
     expect(screen.getByText(creatorMessages.review.noFindings)).toBeInTheDocument()
   })
 
+  it("keeps an approved warning verdict distinct from a rejection", () => {
+    renderPanel({
+      ...approved,
+      findings: [{ id: "warning", severity: "warning", summary: "Add an example" }],
+    })
+    expect(screen.getByRole("status")).toHaveTextContent(creatorMessages.review.approved)
+    expect(screen.getByText(creatorMessages.review.severity.warning)).toBeInTheDocument()
+    expect(screen.queryByText(creatorMessages.review.noFindings)).not.toBeInTheDocument()
+  })
+
   it("shows a rejection", () => {
     renderPanel({
       approved: false,

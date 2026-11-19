@@ -161,7 +161,13 @@ export function ArtifactCreateButton({
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button size="icon" variant="ghost" className={className} onClick={() => handleCreate()}>
+          <Button
+            size="icon"
+            variant="ghost"
+            className={className}
+            onClick={() => handleCreate()}
+            aria-label={t("createArtifact")}
+          >
             {created ? (
               <Check className="h-4 w-4 text-green-500" />
             ) : (

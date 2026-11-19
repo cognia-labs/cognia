@@ -36,7 +36,7 @@ beforeEach(() => {
 describe("ArtifactCreateButton", () => {
   it("creates an artifact when the icon variant is clicked", () => {
     render(<ArtifactCreateButton content={"console.log(1)"} language="javascript" messageId="m1" />)
-    fireEvent.click(screen.getByRole("button"))
+    fireEvent.click(screen.getByRole("button", { name: "createArtifact" }))
     const created = Object.values(useArtifactStore.getState().artifacts)
     expect(created).toHaveLength(1)
     expect(created[0].messageId).toBe("m1")

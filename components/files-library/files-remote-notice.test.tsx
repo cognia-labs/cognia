@@ -18,11 +18,10 @@ it("names why the host's library may be stale and retries on demand", async () =
   let finish!: () => void
   const refresh = jest.fn(() => new Promise<void>((resolve) => (finish = resolve)))
   render(<FilesRemoteNotice error="files_remote_unreachable" refresh={refresh} touch />)
-  expect(screen.getByTestId("files-remote-notice")).toHaveTextContent(
-    "Couldn’t read the desktop’s library"
-  )
+  expect(screen.getByRole("alert")).toHaveTextContent("Couldn’t read the desktop’s library")
   expect(screen.getByText("Couldn’t reach the desktop.")).toBeInTheDocument()
-  const retry = screen.getByTestId("files-remote-retry")
+  const retry = screen.getByRole("button")
+  expect(retry).toHaveAccessibleName("Retry")
   fireEvent.click(retry)
   expect(refresh).toHaveBeenCalledTimes(1)
   expect(retry).toBeDisabled()

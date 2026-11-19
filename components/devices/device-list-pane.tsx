@@ -231,15 +231,17 @@ export function DeviceListPane({
         {kindChips.length > 1 || attentionCount > 0 || attentionOnly ? (
           <div className="flex flex-wrap items-center gap-1" data-testid="device-filters">
             <ToggleGroup
-              type="single"
+              type="multiple"
               size="sm"
               variant="outline"
               spacing={1}
-              value={kindFilter}
-              onValueChange={(value) =>
-                // Radix hands back "" when the pressed chip is clicked again;
-                // that means "no kind filter", not an unknown kind.
-                onKindFilterChange((value || "all") as DeviceKindFilter)
+              value={[kindFilter]}
+              onValueChange={(values) =>
+                // Toggle buttons may be switched off. Keep one kind at most;
+                // choosing another replaces it, clearing it restores All.
+                onKindFilterChange(
+                  (values.find((value) => value !== kindFilter) || "all") as DeviceKindFilter
+                )
               }
               aria-label={t("listPane.filterAria")}
               className="flex-wrap"
@@ -274,8 +276,8 @@ export function DeviceListPane({
                 className={cn(
                   "h-6 gap-1 px-2 text-[11px] font-normal",
                   attentionOnly
-                    ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400"
-                    : "text-amber-700 dark:text-amber-400"
+                    ? "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-400"
+                    : "text-amber-800 dark:text-amber-400"
                 )}
                 data-testid="device-filter-attention"
               >

@@ -82,7 +82,7 @@ export function PermissionDiffPanel({
 
       {diff.requiresApproval ? (
         <div className="space-y-2">
-          <p className="text-xs text-amber-600 dark:text-amber-500">
+          <p className="text-xs text-amber-700 dark:text-amber-500">
             {t("requiresApproval", { count: diff.added.length })}
           </p>
           {stale ? (

@@ -374,7 +374,10 @@ function optionResolutionSites(
 }
 
 it("requires each options caller and identity shape in the N7 row-source audit", () => {
-  const ledger = readFileSync(join(root, "docs/evidence/2026-11-13-adr-0243-phase3a.md"), "utf8")
+  const ledger = readFileSync(
+    join(root, "docs/evidence/2026-11-13-adr-0243-child-run-authority.md"),
+    "utf8"
+  )
   const table =
     ledger.split("<!-- N7-OPTIONS-AUDIT -->")[1]?.split("<!-- /N7-OPTIONS-AUDIT -->")[0] ?? ""
   const reviewed = [

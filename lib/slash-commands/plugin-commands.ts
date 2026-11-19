@@ -45,6 +45,10 @@ function makePluginHandler(def: SlashCommandDefinition): (ctx: SlashContext) => 
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
       ...(ctx?.reportProgress ? { reportProgress: ctx.reportProgress } : {}),
     })
+    if (ctx.signal?.aborted) return
+    const draft = res?.payload?.composerText
+    if (def.id === "cognia-ocr.ocr" && typeof draft === "string" && ctx.insertIntoDraft?.(draft))
+      return
     if (res?.message) ctx.pushSystemMessage(res.message)
   }
 }

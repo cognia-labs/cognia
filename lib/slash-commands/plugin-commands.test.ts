@@ -161,6 +161,18 @@ describe("typed token", () => {
 })
 
 describe("plugin command adapter handler", () => {
+  it("keeps the OCR text visible when the host cannot insert into a draft", async () => {
+    registerSlashCommand({
+      id: "cognia-ocr.ocr",
+      name: "ocr",
+      source: "plugin",
+      handler: () => ({ message: "recognized text", payload: { composerText: "recognized text" } }),
+    })
+    const ctx = makeCtx({ insertIntoDraft: jest.fn(() => false) })
+    await getPluginSlashCommands()[0].handler!(ctx)
+    expect(ctx.pushSystemMessage).toHaveBeenCalledWith("recognized text")
+  })
+
   it("dispatches through the registry and pushes the returned message", async () => {
     const handler = jest.fn(async (args: string) => ({ message: `ran with: ${args}` }))
     registerSlashCommand({ id: "echo.it", name: "Echo", source: "plugin", handler })

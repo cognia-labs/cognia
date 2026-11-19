@@ -8,7 +8,7 @@
 
 import { useTranslations } from "next-intl"
 
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { isFilesLens } from "@/lib/files-library/deep-link"
 import { FILES_LENSES } from "@/lib/files-library/types"
 import { useFilesLibraryStore } from "@/stores/files-library"
@@ -21,19 +21,25 @@ export function FilesLensTabs() {
   if (inTrash) return null
 
   return (
-    <Tabs
+    <RadioGroup
+      orientation="horizontal"
+      aria-label={t("lenses.aria")}
+      className="flex h-9 w-fit max-w-full items-center gap-1 overflow-x-auto rounded-lg bg-(--control-fill) p-[3px]"
       value={lens}
       onValueChange={(value) => {
         if (isFilesLens(value)) setLens(value)
       }}
     >
-      <TabsList aria-label={t("lenses.aria")}>
-        {FILES_LENSES.map((id) => (
-          <TabsTrigger key={id} value={id} data-testid={`files-lens-${id}`}>
-            {t(`lenses.${id}`)}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-    </Tabs>
+      {FILES_LENSES.map((id) => (
+        <RadioGroupItem
+          key={id}
+          value={id}
+          data-testid={`files-lens-${id}`}
+          className="inline-flex h-full w-auto flex-1 aspect-auto items-center justify-center rounded-md border-transparent bg-transparent px-2 py-1 text-sm font-medium whitespace-nowrap text-muted-foreground data-[state=checked]:bg-background data-[state=checked]:text-foreground data-[state=checked]:shadow-sm dark:data-[state=checked]:bg-foreground/10"
+        >
+          {t(`lenses.${id}`)}
+        </RadioGroupItem>
+      ))}
+    </RadioGroup>
   )
 }

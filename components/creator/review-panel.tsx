@@ -36,7 +36,10 @@ export function ReviewPanel({ verdict, className }: ReviewPanelProps) {
       ) : (
         <div className="space-y-2">
           <p
-            className={cn("text-sm", verdict.approved ? "text-emerald-600" : "text-destructive")}
+            className={cn(
+              "text-sm",
+              verdict.approved ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
+            )}
             role="status"
           >
             {verdict.approved ? t("approved") : t("rejected")}
@@ -71,7 +74,7 @@ function FindingRow({ finding }: { finding: CreatorReviewFinding }) {
     finding.severity === "blocker"
       ? "text-destructive"
       : finding.severity === "warning"
-        ? "text-amber-600"
+        ? "text-amber-700 dark:text-amber-400"
         : "text-muted-foreground"
 
   return (

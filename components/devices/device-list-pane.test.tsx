@@ -197,6 +197,15 @@ describe("DeviceListPane", () => {
 })
 
 describe("DeviceListPane — filters", () => {
+  it("exposes deselectable kind chips as toggle buttons rather than radios", async () => {
+    const { onKindFilterChange } = renderPane({ kindFilter: "remote-host" })
+    const chip = screen.getByRole("button", { name: /^Hosts 1$/ })
+    expect(chip).toHaveAttribute("aria-pressed", "true")
+    await userEvent.click(chip)
+    expect(onKindFilterChange).toHaveBeenLastCalledWith("all")
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument()
+  })
+
   /**
    * The dropdown offered all five kinds whatever the fleet held, so picking
    * "Execution worker" in a fleet with none produced an empty list.

@@ -7,6 +7,9 @@ jest.mock("@/lib/execution/personal-sink", () => ({
   readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
 }))
 import { pluginExecutionContext } from "./invocation-identity"
+import { allowsOcrToolCall } from "@/lib/claude/ocr-tool-gate"
+
+jest.mock("@/lib/claude/ocr-tool-gate", () => ({ allowsOcrToolCall: jest.fn(async () => true) }))
 /**
  * Tests for the unified plugin-tool invocation seam.
  *
@@ -774,6 +777,44 @@ describe("invokePluginTool — interceptor points (ADR-0189)", () => {
     await expect(invokePluginTool("plug-a", "demo_tool", {})).resolves.toMatchObject({
       toolName: "demo_tool",
     })
+  })
+
+  it("rechecks rewritten OCR arguments and preserves the permission error", async () => {
+    const execute = jest.fn(async () => "inner")
+    const name = "ocr.extract"
+    __setInvokePluginToolDepsForTesting(
+      makeDeps({
+        plugins: { "cognia-ocr": { status: "enabled" } },
+        tools: [makeTool({ name, pluginId: "cognia-ocr", execute })],
+        sandboxRefs: { s1: "sandbox-runtime:one" },
+      })
+    )
+    interceptor(
+      "wrap",
+      "tool.execute",
+      "around",
+      async (_args: unknown, next: (value?: unknown) => Promise<unknown>) =>
+        next({ source: { kind: "screen" } })
+    )
+    jest.mocked(allowsOcrToolCall).mockResolvedValueOnce(false)
+    await expectInvocationError(
+      invokePluginTool(
+        "cognia-ocr",
+        name,
+        {
+          source: { kind: "data_url", value: "data:image/png;base64,YWJj" },
+        },
+        { sessionId: "s1" }
+      ),
+      "permission-denied"
+    )
+    expect(allowsOcrToolCall).toHaveBeenLastCalledWith(
+      "cognia-ocr",
+      name,
+      { source: { kind: "screen" } },
+      "s1"
+    )
+    expect(execute).not.toHaveBeenCalled()
   })
 
   it("wraps the execution in the `tool.execute` chain", async () => {

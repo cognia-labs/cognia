@@ -22,6 +22,11 @@ const renderStepper = (props: Partial<Parameters<typeof GuideStepper>[0]> = {}) 
   )
 
 describe("GuideStepper", () => {
+  it("names completed step controls even when their responsive label is hidden", () => {
+    renderStepper({ onSelect: jest.fn() })
+    screen.getByText("Alpha").hidden = true
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument()
+  })
   it("is a labelled navigation landmark holding an ordered list", () => {
     renderStepper()
     const nav = screen.getByRole("navigation", { name: "Progress" })

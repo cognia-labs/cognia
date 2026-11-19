@@ -38,6 +38,8 @@ export interface SlashContext {
    * renders as a compact inline result chip (/resume, …).
    */
   pushSystemMessage: (payload: string | SystemMessageBlock | SlashCommandResultBlock) => void
+  /** Queue text for review in the originating composer after the batch. */
+  insertIntoDraft?: (text: string) => boolean
   /**
    * Files staged in the composer when the command ran, in chip order. Hosts
    * without a composer (the tray, a plugin invoking a command) leave it unset.

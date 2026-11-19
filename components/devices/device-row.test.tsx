@@ -59,7 +59,9 @@ describe("DeviceRowButton", () => {
 
   it("marks the selected row for assistive tech, not just visually", () => {
     render(<DeviceRowButton row={row()} selected onSelect={jest.fn()} />)
-    expect(screen.getByTestId("device-row-device:a")).toHaveAttribute("aria-current", "true")
+    const selected = screen.getByRole("button", { name: /Max's iPhone/ })
+    expect(selected).toHaveAttribute("aria-current", "true")
+    expect(selected).toHaveTextContent("v1.2.3")
   })
 
   it("badges the always-on host in the list (ADR-0224 A4)", () => {

@@ -880,7 +880,8 @@ describe("<CompanionBootProvider /> — paired", () => {
       foreground: false,
     })
 
-    expect(pushMock).toHaveBeenCalledWith("/inbox/c?key=s-123")
+    expect(pushMock).toHaveBeenCalledTimes(1)
+    expect(pushMock).toHaveBeenCalledWith("/?session=s-123")
   })
 
   it("keeps boot listeners installed across in-app navigations", async () => {

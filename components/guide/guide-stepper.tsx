@@ -111,6 +111,7 @@ export function GuideStepper({
               {canReturn ? (
                 <button
                   type="button"
+                  aria-label={item.label}
                   onClick={() => onSelect(item.id)}
                   data-testid={itemTestId}
                   className="flex min-w-0 items-center gap-2 rounded-md transition-opacity hover:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
