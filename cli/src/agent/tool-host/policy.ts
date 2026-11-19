@@ -147,6 +147,7 @@ export function visibleHostTools(options: SendOptions): string[] {
  * tools escaped the CLI check entirely.
  */
 const PATH_ARG_KEYS = [
+  "file",
   "path",
   "file_path",
   "filePath",

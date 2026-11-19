@@ -15,6 +15,7 @@
 
 import os from "node:os"
 import path from "node:path"
+import type { SendOptions } from "@cognia/agent-config-types"
 
 /** Which MCP server the bridge is impersonating. */
 export type ToolHostServerName = "cognia-tools" | "cognia-plugin-tools"
@@ -87,6 +88,7 @@ export interface ToolHostSessionDescriptor {
   lsp?: unknown
   /** Code-graph knobs (watch mode). The root is derived from `cwd`. */
   codeGraph?: unknown
+  builtinProcessSandbox?: SendOptions["builtinProcessSandbox"]
 }
 
 export interface HelloParams {

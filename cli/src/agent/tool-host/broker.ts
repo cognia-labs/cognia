@@ -206,6 +206,9 @@ export async function startToolHostBroker(params: ToolHostBrokerParams): Promise
       ? { maxToolResultTokens: session.sendOptions.compaction.maxToolResultTokens }
       : {}),
     ...(session.sendOptions.lsp ? { lsp: session.sendOptions.lsp } : {}),
+    ...(session.sendOptions.builtinProcessSandbox
+      ? { builtinProcessSandbox: session.sendOptions.builtinProcessSandbox }
+      : {}),
     ...((session.sendOptions as { codeGraph?: unknown }).codeGraph
       ? { codeGraph: (session.sendOptions as { codeGraph?: unknown }).codeGraph }
       : {}),
