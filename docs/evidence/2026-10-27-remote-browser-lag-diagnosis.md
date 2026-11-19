@@ -4,7 +4,7 @@
 - Lane: standard
 - Created: 2026-10-27
 - Updated: 2026-10-29
-- Related: ADR-0020; ADR-0234; docs/plans/2026-10-18-remote-desktop-phase1.md; docs/plans/2026-10-18-remote-desktop-phase4.md
+- Related: ADR-0020; ADR-0234; docs/plans/2026-10-18-remote-desktop-control-lease-and-chat-dock.md; docs/plans/2026-10-18-remote-desktop-selkies-docker-streaming.md
 
 ## Original request
 
@@ -42,7 +42,7 @@ Follow-up request: 做一次对抗性审查，看看什么情况. The user expli
 | O14 | Before this repair Selkies gave up after six lifetime process exits; native desktop health does not require a live video process. | Verified | selkies-startup.py:105,122-130; startup.py:72-83; registry.rs:350-360; 9 existing Python tests passed, including six-exit restart exhaustion, 2026-10-27. | - |
 | O15 | Native screenshot observation competes for the desktop guard with shell exec, file read and health; this is not the Selkies media transport. | Verified | registry.rs:350-404 and desktop_session.rs:405-408; reviewer finding reconciled against source, 2026-10-27. Takeover fences new agent sends before waiting, so do not describe it as having no preemption at all. | - |
 | O16 | Frame proofs last 5 s; a slow input-preflight capture can consume the remaining validity and cause input rejection. Native dragging dispatches on pointerUp, and gestures longer than 5 s are discarded. | Verified | cognia-remote-desktop/src/control.rs:14-15,187-199; desktop_session.rs:451-462; sandbox-desktop-viewer.tsx:154-192, 2026-10-27. Source-level mechanisms, not timed Rust failure injection. | - |
-| O17 | A historical same-platform Selkies smoke reported about 18 FPS with CPU rendering/encoding settings; current instance performance is not established by that record. | Observed | docs/plans/2026-10-18-remote-desktop-phase4.md:196-220, read on 2026-10-27. Counterevidence to treating --disable-gpu or CPU encoding alone as proof of severe lag. | - |
+| O17 | A historical same-platform Selkies smoke reported about 18 FPS with CPU rendering/encoding settings; current instance performance is not established by that record. | Observed | docs/plans/2026-10-18-remote-desktop-selkies-docker-streaming.md:196-220, read on 2026-10-27. Counterevidence to treating --disable-gpu or CPU encoding alone as proof of severe lag. | - |
 | H4 | The incident may involve a granted but stalled media stream, with no automatic frontend detection or fallback. | Hypothesized | O12 and O14 establish a distinct possible failure branch; affected session not observed, 2026-10-27. | O1, O12, O14 |
 | H5 | Auxiliary screenshot failures may repeatedly revoke control/reload a usable media stream. | Hypothesized | O13 establishes the frontend chain; frequency and actual guest/media state not measured, 2026-10-27. | O1, O13 |
 

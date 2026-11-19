@@ -3,7 +3,7 @@
 - Commit: `d8e3ac4fb9` (detached worktree, node_modules symlinked to the main checkout)
 - Date: 2026-11-01
 - Registry: the 122 gates of `scripts/gates/check-all.mjs` at that commit
-- Ledger: [2026-11-01-convergence-0a.md](./2026-11-01-convergence-0a.md)
+- Ledger: [2026-11-01-convergence-baseline.md](./2026-11-01-convergence-baseline.md)
 
 Status: PASS; FAIL (the code fails the gate); ENV (the measuring environment caused the failure, with the reason given); NOT RUN (skipped, with the reason given). Cause: `real` = the code fails; `time` = fails by date only; `cascade` = an ordering artefact of the runner, so the row needs a rerun; `real?` = probable, not confirmed; `unverified` = only the first (shim) run exists. Every FAIL row except `cascade` and `unverified` was handed to conv-0b as work item B9.
 

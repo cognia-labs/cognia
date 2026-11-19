@@ -351,7 +351,7 @@ Artifacts are under `.cache/desktop-automation-audit-2026-10-28/`:
 Commands used:
 
 ```bash
-pnpm test --selectProjects node --runInBand --no-cache --cacheDirectory .cache/desktop-automation-audit-2026-10-28/jest-cache --roots lib plugins --runTestsByPath lib/automation/client.test.ts lib/automation/action-schemas.test.ts lib/automation/policy.test.ts lib/automation/supervision.test.ts lib/plugin/api/automation-api.test.ts lib/claude/computer-use-tools.g6.test.ts plugins/computer-use/src/index.test.ts
+pnpm test --selectProjects node --runInBand --no-cache --cacheDirectory .cache/desktop-automation-audit-2026-10-28/jest-cache --roots lib plugins --runTestsByPath lib/automation/client.test.ts lib/automation/action-schemas.test.ts lib/automation/policy.test.ts lib/automation/supervision.test.ts lib/plugin/api/automation-api.test.ts lib/claude/computer-use-tools.admission.test.ts plugins/computer-use/src/index.test.ts
 pnpm test --selectProjects node jsdom --runInBand --cacheDirectory .cache/desktop-automation-audit-2026-10-28/jest-cache --roots lib plugins components --runTestsByPath lib/external-bridge/handlers/computer-use.test.ts lib/external-bridge/handlers/computer-use-proxy.test.ts lib/automation/ocr-click.test.ts lib/workflow/nodes/automation/desktop.test.ts lib/workflow/nodes/automation/desktop.integration.test.ts components/settings/automation/automation-section.test.tsx components/settings/automation/inspector-tab.gating.test.tsx
 cargo test --locked --offline -p cognia-automation --lib automation:: -- --test-threads=2
 ```

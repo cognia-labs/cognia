@@ -1,9 +1,9 @@
 # Evidence ledger: scheduled task implementation audit
 
 - Status: verifying
-- Lane: standard
+- Lane: deep
 - Created: 2026-10-22
-- Updated: 2026-10-22
+- Updated: 2026-11-17
 - Related: ADR-0079, ADR-0128, ADR-0167; docs/reports/2026-10-22-scheduled-task-implementation-audit.md
 
 <!--
@@ -17,6 +17,15 @@ comma-separated IDs. Use "-" for an empty cell.
 ## Original request
 
 > 检查一下Cognia内部定时任务的实现情况
+
+Current audit-only follow-up (2026-11-17):
+
+> 帮我分析一下现在的定时任务的缺口，看看差什么功能，或者存在什么问题，并且对照业内的优秀实践
+
+The current increment authorizes source inspection, isolated diagnostic checks and
+an industry comparison. Historical implementation/provider authorization below
+does not extend the scope of this new increment. Do not alter user schedules,
+invoke real providers, install OS jobs, or repair product code in this audit.
 
 ## Knowledge
 
@@ -78,6 +87,25 @@ Basis: where it comes from + scope + date, e.g. "sidecar log 2026-10-21, macOS o
 | O28 | The shared native process still generates pre-repair macOS plists: mismatched Label, UTC fields used as host calendar, no canonical once metadata or guard. | Verified | Native PID 83487; native/c4148a29-9775-46d0-9784-827827ff466a/stale-native.plist and os-calendar-results.json; owned jobs cleaned, 2026-10-23 | G7 |
 | O29 | OS administrator authentication did not complete; the user explicitly defers physical sleep/hardware wake. No power event or sleep was initiated. | Observed | azure-wake/sleep-control/209d8d55-a3d9-4418-824d-98272b6b3bec/result.json and explicit user reply, 2026-10-23 | G7 |
 
+| G8 | Analyze the current scheduler's defects and missing capabilities against current primary-source industry practices; deliver prioritized evidence without product fixes. | Agreed | Current user request, 2026-11-17 | C1 |
+| O30 | Automatic app scheduling, workflow cron and native OS schedules have distinct timing and persistence owners. | Observed | Current lib/scheduler, crates/cognia-scheduling and ADR-0128/0167/0179/0224, 2026-11-17 | - |
+| Q3 | Which restart, cancellation and cross-platform guarantees fail in current source or isolated behavioral checks? | Answered | Current report F1-F11; seven behavioral counterexamples and four source-harness cases, 2026-11-17 | G8, O30 |
+| O31 | Current focused scheduler regressions pass 11 suites / 448 tests. | Verified | .cache/scheduler-gap-audit-2026-11-17/regression.log; pnpm test through the repository runner, no coverage, 2026-11-17 | - |
+| O32 | Isolated current-scheduler/DB/RTL checks produce seven failed invariants and two passing controls. Restart loses retry/queue/claimed work; completion reverses pause and loses counters; cap=1 rejects cancel-previous replacement; form changes zero retries to three. | Verified | docs/evidence/2026-11-17-scheduler-gap-audit.probes.mjs and .cache/scheduler-gap-audit-2026-11-17/probes.log; private fake-IndexedDB and mocked peripheral hooks, 2026-11-17 | - |
+| O33 | Linux timer/service naming and absolute-once offset, Windows month conversion, and native rename-collision replacement each have a source-harness counterexample. | Verified | Independent current-source review and native-probe-results.log; pure Rust generators plus full macos.rs with stubbed launchctl; no live platform claim, 2026-11-17 | - |
+| O34 | App tasks have overlap/catch-up/backfill/auto-pause controls; workflow cron separately skips offline slots; official Temporal/Kubernetes/EventBridge contracts provide useful comparison points. | Observed | Current report capability/source matrix and direct official source pages, accessed 2026-11-17 | O30 |
+
+| G9 | Adversarially challenge the current audit, reproduce omitted failure modes and correct unsupported claims; no product repair. | Agreed | User: 做一次对抗性审查, 2026-11-17 | C1, G8 |
+| H30 | Completion scheduling and buffered-drain continuations violate task controls independently of the statistics-write race. | Verified | Adversarial A1 pause/delete/stop and A2 desired assertions fail; real DB facade and public controls, 2026-11-17 | - |
+| H31 | The combined identity/replay hypothesis needs separation: subsecond keys and bookkeeping replay fail current requirements; retaining original retry time is a redesign expectation. | Contested | O36 and fresh reviewer contract reconciliation; split into H32 and H33, 2026-11-17 | - |
+| H32 | Current retry semantics require scheduledFor to remain the original slot. | Invalidated | occurrence.ts:20-23,69-72 explicitly treat retries as independent starts at retry time; A4 is a rejected expectation, 2026-11-17 | - |
+| H33 | API-accepted subsecond slots merge, and a post-success statistics failure can call the executor twice. | Verified | A3 100ms versus 1000ms control and A6 synthetic persistence failure; no external effects, 2026-11-17 | - |
+| O35 | Original seven desired-invariant failures still reproduce with two passing controls. | Verified | adversarial-original-probes.log, current source fixture, 2026-11-17 | - |
+| O36 | Expanded adversarial probes return 10 failed / 3 passed: nine defect assertions and one rejected design-comparison assertion A4. | Verified | adversarial-probes.log; A0 public due/claim boundary, A1 drain controls, A2 completion writer, A3 precision, A5 budget rollback, A6 bookkeeping replay, A7 cooperative cancellation, 2026-11-17 | - |
+| O37 | Current affected regression check passes 7 suites / 338 tests. | Verified | adversarial-regression.log; core/integration/DB/occurrence/workflow idempotency and executor/TaskForm; existing React act warnings preserved, 2026-11-17 | - |
+| O38 | User explicitly skipped additional CLI review. One boundary-review continuation was stopped by automatic tool risk review before its remaining candidate checks completed. | Observed | User reply and agent result possible cybersecurity risk, 2026-11-17; no external CLI invoked | G9 |
+| Q4 | Do queue-one concurrent replacements or late writes after account DB swap violate their boundaries? | Open | Independent source-level candidates; not reproduced or counted as verified findings in this bounded review, 2026-11-17 | - |
+
 ## Implementation authorization
 
 On 2026-10-22 the user requested fixing every finding from both reviews, permanent regressions, real Tauri verification and preservation of unrelated uncommitted work. This supersedes the original audit-only boundary for this increment. The existing unrelated managed Tauri session must not be stopped or have its schedules altered. No external model CLI is authorized.
@@ -119,6 +147,14 @@ claim false. -->
 
 | R8 | OS translation and early wake can move or duplicate an absolute once occurrence. | high | O18, O19 and independent promotion review | Canonical slot admission, Local minute ceiling, persistent one-attempt claim and original timestamp round-trip. | An early/duplicate attempt runs, pause is reversed, or a live plist has a mismatched label/time. |
 
+| R9 | Claimed occurrences, retries or buffered starts disappear across a process restart. | high | Failure-injection lens; Temporal schedule and Kubernetes CronJob reliability contracts | Durable state accounts for each accepted occurrence or records an explicit disposition. | Restart leaves an advanced cursor or retry-scheduled row with neither executable work nor a terminal disposition. |
+| R10 | Platform-specific translation or update failure silently disables native scheduling. | high | Fresh-context failure hunt; ADR-0128 | A generated timer addresses its generated service and unsuccessful edits preserve the old task. | Timer Unit names a different service or invalid replacement deletes the original. |
+| R11 | Feature comparison confuses implemented controls, intentional scope and real reliability gaps. | medium | ADR-0179/0224; current official industry documentation | Findings distinguish current protections, defects, missing capabilities and unverified environments. | Existing overlap, catch-up, ownership or backfill controls are described as absent. |
+| R12 | Concurrent completion reverses operator controls or loses counts; cancellation and policy editing change requested behavior. | high | Current statistics-write trace; F4-F7 deterministic counterexamples | Pause remains effective; concurrent completions accumulate; cancel-previous works with a cap of one; zero retries survives editing. | A completed run restores active status, counters undercount, replacement is dropped, or form changes zero to three. |
+
+| R13 | The audit overstates fixture evidence or recommends incomplete repairs. | high | doubt-driven fresh-context review | Each finding names its actual boundary and repair addresses all owning writers/continuations. | A stop/start fixture is called a real crash test or another whole-row writer still reverses pause after the proposed change. |
+| R14 | Buffered starts ignore cancellation, occurrence identities merge, or post-effect failures cause unsafe replay. | high | Independent failure hunt; STPA and failure-injection lenses | Cancellation fences pending starts and each admitted slot/attempt retains an accountable identity. | Paused/deleted work starts after a pending read, distinct accepted slots share a row, or completed effects are retried due only to bookkeeping failure. |
+
 ## Verification obligations
 
 <!-- ID prefix V. Risk: the R id(s) this obligation discharges.
@@ -157,6 +193,15 @@ Coverage: which conditions the evidence covers (and which it does not). -->
 | V23 | R8 | Verify the current macOS scheduler through real Tauri IPC and launchd calendar. | real-env | Native replacement PID 97006: native/5ee2363c-32e6-45fb-b045-994164ff0a64/os-calendar-results.json passes; current-source cached Rust opt-in OS test passes again in azure-wake/current-source-launchd.log. | Actual wrapper/local transport/IPC/launchd; correct Label, canonical metadata, minute ceiling, guard and argument round-trip; one calendar and one manual run; duplicate suppressed; cleanup confirmed. No hardware/cold-start claim. | passed |
 | V24 | R3, R8 | Verify application-quit OS launch and deep-link execution. | real-env | The native shell is owned/restarted by another active session. An owned launch attempt exits without a private endpoint once that replacement instance takes the single-instance lock; no other process is stopped. | Cold launch is distinct from an awake calendar job and from RTC hardware wake. | blocked |
 
+| V25 | R9 | Inspect and reproduce restart boundaries using the actual scheduler and account-DB facade in a private fake-IndexedDB fixture. | tool | F1-F3 desired invariants fail in probes.log; ordinary execution and same-process retry controls pass. O32, 2026-11-17. | Exact claim-to-record durable boundary, replacement scheduler instance, retry timer and queued starts; not actual SIGKILL or a deployed Host. | failed |
+| V26 | R10 | Independent Rust/OS scheduling failure hunt with current source evidence and isolated generators where feasible. | fresh-reviewer | Four source-harness counterexamples in native-probe-results.log and report F8-F11. O33, 2026-11-17. | Linux/Windows pure conversion and current full macOS source with OS stub; no native service acceptance. | failed |
+| V27 | R11 | Verify relevant controls and compare primary-source Temporal, Kubernetes and EventBridge contracts. | tool | Report links current owners and official schedule, CronJob, DLQ, monitoring and time-semantics pages. O34, 2026-11-17. | Reliability and user-facing capability matrix; existing protections and intentional scope are identified. | passed |
+| V28 | R9, R11 | Re-run focused existing scheduler regression suites and check final audit/ledger consistency. | tool | regression.log: 11 suites / 448 passed; ledger and file consistency checked in final audit notes. O31, 2026-11-17. | Scoped source/fixture verification; no coverage or full production acceptance. | passed |
+| V29 | R12 | Exercise concurrent statistics, public pause, cancel-previous at cap=1, and zero-retry editing. | tool | F4-F7 desired assertions fail in probes.log; pause is active again, counts=1, replacement concurrency-blocked, form retries=3. O32, 2026-11-17. | Actual core/DB plus RTL with existing form peripheral stubs; no live UI or external side effects. | failed |
+
+| V30 | R13 | Independently challenge findings, mocks, product reachability, severity and platform evidence. | fresh-reviewer | Two bounded review cycles; A4 rejected; F1/F3 capability scope, F6 display-only evidence, F7 cooperation, F2 public due and all-writer repair boundaries reconciled in report, 2026-11-17. | One reviewer completed both cycles; second contributed independent drain/candidate trace before its continuation stopped (O38). No external CLI or product edits. | passed |
+| V31 | R14 | Run isolated desired-invariant checks for completion scheduling, drain cancellation, occurrence/retry identity and post-effect failures. | tool | O36: 10 red assertions / 3 controls; nine defect counterexamples plus the independently rejected A4 expectation. Current regressions O37 pass 338 tests. | Private fake-IndexedDB core/DB fixture; due callback and cooperative-executor controls; no actual process death, native OS or external effects. | failed |
+
 ## Decisions
 
 <!-- ID prefix D. Based on: only the IDs this decision ASSUMES still hold (if one is
@@ -182,6 +227,15 @@ Reversal trigger: the new evidence that would reopen this decision. -->
 | D10 | 2026-10-23 | Keep the default Azure SDK family when the catalog records OpenAI wire compatibility; preserve explicit overrides and other catalog adapters. | implement | G7, O27 | Actual SDK request or relay/override regression contradicts the contract. |
 | D11 | 2026-10-23 | Reject the stale shared native backend as current-source acceptance; retain a source-hash-matched Rust OS run and wait for an independently available current shell. | experiment | G7, O28 | A current native shell becomes ready or the observed plist differs from the captured pre-repair behavior. |
 
+| D30 | 2026-11-17 | Audit current code and isolated failure boundaries; use independent platform review and primary sources. Historical repairs are not new findings. | diagnose | G8, O30 | Current-source tests contradict a candidate or the user expands scope. |
+| D31 | 2026-11-17 | Extend the failure hunt to statistics/control races, policy combinations and zero-valued form defaults after source inspection exposes those risks; retain desired assertions even when red. | diagnose | G8, O30 | Fixture limitations rather than product behavior explain a result. |
+| D32 | 2026-11-17 | Deliver 11 scoped findings and a prioritized capability comparison; keep repairs and live acceptance pending. Seven behavioral checks fail despite 448 existing passing tests. | diagnose | G8, O31, O32, O33, O34 | Independent review or a current-source counterexample changes a finding. |
+
+| D33 | 2026-11-17 | Reopen diagnosis for an adversarial review, test fresh counterexamples and correct the report's evidence/repair scope. | diagnose | G9 | Current-source checks refute candidates or the user changes the review scope. |
+| D34 | 2026-11-17 | Reject the original-slot retry expectation because current source explicitly defines retry-time semantics. Keep A4's red result as a design comparison, outside defect totals; no obligation is silently weakened. | diagnose | G9, O36 | A downstream current contract or observed failure requires retaining the original slot. |
+| D35 | 2026-11-17 | Preserve first-pass facts with narrower evidence claims; add F12-F14 and extend F4/F5. Require all-writer lifecycle consistency and cooperative cancellation semantics rather than a single-point statistics fix or unsafe reservation transfer. | diagnose | G9, H30, H33, O35, O36, O37 | A corrected fixture refutes a result or current owning source changes. |
+| D36 | 2026-11-17 | Stop after two cycles on materially changed artifacts; user skips extra CLI review. Carry Q4 as unverified rather than expanding findings from an incomplete reviewer continuation. | diagnose | G9, O38 | Repair scope or additional private-fixture evidence warrants reopening. |
+
 ## Residual risks
 
 <!-- ID prefix X. From: the R / V / H / M ids this residual comes from.
@@ -201,6 +255,16 @@ percentages. Status: open | accepted | closed. "accepted" needs the user. -->
 | X8 | Application-quit deep-link launch acceptance remains incomplete; IM deferred by G6. | R8, V24 | The replacement shared shell passes V23 but remains owned by another session. No exclusive instance can be stopped for cold-launch acceptance. AI proxy already passes V21. | Perform cold-launch/deep-link execution when the native app is exclusively available. | open |
 | X9 | Physical sleep/resume and RTC hardware wake remain unverified. | V19 | Administrator authentication did not complete; the user explicitly chose to retain this item as unverified on 2026-10-23. | Re-run the prepared bounded helper only when local authentication is available. | accepted |
 
+| X30 | Claimed work, pending retries and buffered starts can be lost at restart. | V25, R9 | F1-F3 are reproduced; current request is audit-only and no fix is implemented. Real process death and Host durability remain untested. | Implement atomic occurrence enqueue and durable attempt/queue recovery, then verify actual process termination and Host persistence. | open |
+| X31 | Four OS translation/update issues remain unrepaired and real platform acceptance is absent. | V26, R10 | F8-F11 use generator/source harnesses, not actual systemd/schtasks/launchd. | Repair canonical names, absolute-time conversion, month rejection/expression and failure-safe replacement; run native platform checks. | open |
+| X32 | Current industry comparison and implemented-feature inventory completed. | V27 | Relevant source contracts and primary documentation are linked in the report. | Revisit if product goals or upstream contracts change. | closed |
+| X33 | Focused existing regressions completed; full production checks remain outside this audit. | V28 | Existing 11 suites / 448 tests pass and artifact consistency is checked. | Broaden checks when repairs are implemented; do not reuse scoped tests as platform acceptance. | closed |
+| X34 | Completion/control races, cancellation-at-cap and zero-retry editing remain unrepaired. | V29, R12 | F4-F7 desired behavioral invariants fail; product changes are not authorized by this audit. | Use transactional narrow-field stats updates, settled cancellation admission and zero-preserving defaults; retain these counterexamples as permanent regressions during repair. | open |
+
+| X35 | Adversarial audit evidence/repair claims reconciled. | V30, R13 | Report now distinguishes direct controls, due/instance models, real OS limits, rejected A4 expectation and all-writer repair obligations. | Reopen on contradictory current-source evidence. | closed |
+| X36 | Additional confirmed controls, identity precision and post-success replay problems remain unfixed. | V31, R14 | Nine defect assertions remain red; no product repair is authorized. A4 is excluded as a rejected expectation. | Fix F12-F14 and expand F4/F5 remediation, retain controls, then verify actual process/Host/platform boundaries. | open |
+| X37 | Queue-one concurrency and late account-switch writes remain source-level candidates only. | Q4, O38 | The second reviewer continuation stopped at tool risk review; no completed reproduction exists. | Run separately bounded private fixtures if these candidates affect the repair design; do not treat them as verified defects. | open |
+
 ## Outcome
 
 <!-- ID prefix M. Signals that the ORIGINAL problem improved (validation, not verification).
@@ -216,7 +280,57 @@ Status: pending | met | not-met | not-measurable -->
 | M5 | Azure renderer features retain the correct default SDK authentication/endpoint family without changing configured overrides. | 5 focused suites/157 tests plus independent SDK request/PII review, 2026-10-23 | Existing renderer assertion and added resolver/request regressions pass. | met |
 | M6 | Repaired macOS OS-calendar behavior is observed through actual Tauri IPC. | native/5ee2363c-32e6-45fb-b045-994164ff0a64 and current-source-launchd.log, 2026-10-23 | One scheduled attempt, duplicate suppression, explicit manual execution and cleanup pass; no early run. | met |
 
+| M7 | Deliver a current-source scheduler gap audit and industry comparison with reproducible counterexamples and explicit evidence limits. | 2026-11-17 report; 11 suites / 448 existing passing tests; 7 failed desired invariants / 2 controls; four Rust source-harness cases; bounded independent final review. | Audit report delivered; product repairs and real-environment acceptance remain open in X30/X31/X34 and historical residuals. | met |
+
+| M8 | Adversarially review the scheduler gap audit, correct evidence/scope, and reproduce material omitted cases. | Original 7 red assertions/2 controls; new 10 red/3 controls with A4 explicitly rejected; current 338 regressions pass; two bounded fresh-review cycles, 2026-11-17. | Report adds three new issue groups and expands two existing impacts, narrows unsupported claims, and leaves repairs/real environments and Q4 candidates explicitly pending. | met |
+
 ## Final verification notes
+
+### Adversarial review follow-up (2026-11-17)
+
+- Read and applied `.agents/skills/doubt-driven/SKILL.md`; reviewer artifacts
+  excluded orchestration rationale. Two cycles were limited to the report and
+  then the changed private-fixture checks. No external model CLI ran; the user
+  explicitly skipped the optional offer.
+- The original defects/capability facts are retained with narrower evidence
+  wording. A4 is a rejected design expectation, not a defect. F12/F13/F14 are
+  new groups; A2/A5 expand existing F4/F5 rather than inflating root-cause counts.
+- New runner: `docs/evidence/2026-11-17-scheduler-gap-audit.adversarial-probes.mjs`.
+  Logs: `.cache/scheduler-gap-audit-2026-11-17/adversarial-{original-probes,probes,regression}.log`.
+  Raw outcomes and actual execution boundaries are O35-O38 and V30/V31.
+- No product fixes, real account data, existing schedules, OS jobs, provider
+  calls or repository history changes. Remaining source candidates from the
+  interrupted reviewer are Q4/X37, not findings. Native/process/Host acceptance
+  is still absent rather than inferred from fake-IndexedDB or driver fixtures.
+
+### Current audit-only follow-up (2026-11-17)
+
+- Deliverable: `docs/reports/2026-11-17-scheduled-task-gap-audit.md`; reusable
+  counterexamples: `docs/evidence/2026-11-17-scheduler-gap-audit.probes.mjs`.
+- Current focused regression evidence is O31; current desired-invariant failures
+  are O32/O33. Historical green repairs and provider authorization are not reused
+  as current production acceptance.
+- The initial pnpm invocation triggered automatic dependency installation and
+  failed in the unrelated sidecar-linked-package postinstall check. Subsequent
+  commands disable automatic install for that invocation only and still run the
+  repository's `pnpm test` entry point. No package configuration is edited.
+- No current live OS tasks, user schedules, model calls or Host installations are
+  used. This increment changes audit documentation and its isolated probe runner
+  only. Physical sleep, cold launch and paired/provider acceptance stay scoped to
+  the historical residuals; they have not been accepted anew or completed here.
+- Audit complexity: scale/coupling high (three schedule mechanisms and shells),
+  technical medium (existing seams), requirement low (analysis), verification
+  high (source/fixtures cannot establish real environments), execution risk low
+  under private fixtures. The next action is prioritized repair, not more
+  speculative exploration or an unsubstantiated engine replacement.
+- Independent final review narrowed F7 wording: the fixture proves abort was
+  requested and the replacement was skipped, not that an executor's external
+  effect stopped. Report wording now preserves that distinction.
+- Final artifact checks: `ledger.mjs check <this-file> --final` reports zero
+  errors/warnings; targeted Prettier check and `node --check` pass; the report's
+  61 local links resolve; both generated temporary fixture files are absent;
+  path-scoped `git diff --check` passes. Full dirty-tree changes are preserved
+  and nothing is staged or committed by this increment.
 
 ### Re-entry on 2026-10-23
 

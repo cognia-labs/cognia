@@ -4,7 +4,7 @@
 - Lane: deep
 - Created: 2026-11-01
 - Updated: 2026-11-01
-- Related: docs/plans/2026-11-01-convergence-phase-0.md §4; ADR-0250 (§4, §6, §8, §10); docs/research/architecture-convergence-audit-2026-11-01.md (§2.2, §5.2, §6, §10.1, §10.7); branch claude/convergence-0b-2609a6
+- Related: docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md §4; ADR-0250 (§4, §6, §8, §10); docs/research/architecture-convergence-audit-2026-11-01.md (§2.2, §5.2, §6, §10.1, §10.7); branch claude/convergence-0b-2609a6
 
 <!--
 Edit by hand; keep the table shapes, because `ledger.mjs check` parses them.
@@ -16,7 +16,7 @@ comma-separated IDs. Use "-" for an empty cell.
 
 ## Original request
 
-> Carry out track 0b of the convergence phase 0 plan: work packages B1–B9 in docs/plans/2026-11-01-convergence-phase-0.md §4
+> Carry out track 0b of the convergence phase 0 plan: work packages B1–B9 in docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md §4
 
 ## Knowledge
 

@@ -177,6 +177,16 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+  // Evidence probes are standalone Node scripts run by hand (`node <probe>`):
+  // CommonJS `require()` and a local `module` shim for vm-loaded sources are
+  // the correct idiom there, and Next.js rules do not apply.
+  {
+    files: ["docs/evidence/**/*.{cjs,mjs}"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+      "@next/next/no-assign-module-variable": "off",
+    },
+  },
   // Test files render raw <img> as fixtures/assertions; next/image optimization
   // is irrelevant in jsdom and would only complicate the test. Allow <img> here.
   {

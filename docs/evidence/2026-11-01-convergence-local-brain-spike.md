@@ -4,7 +4,7 @@
 - Lane: deep
 - Created: 2026-11-01
 - Updated: 2026-11-01
-- Related: ADR-0250 §2 (`docs/content/docs/en/adr/0250-the-runtime-is-a-headless-kernel-the-desktop-embeds.md`), plan `docs/plans/2026-11-01-convergence-phase-0.md` §3, audit §10.1, base commit d8e3ac4fb9. Spike branch `spike/local-brain-s1` (never merged).
+- Related: ADR-0250 §2 (`docs/content/docs/en/adr/0250-the-runtime-is-a-headless-kernel-the-desktop-embeds.md`), plan `docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md` §3, audit §10.1, base commit d8e3ac4fb9. Spike branch `spike/local-brain-s1` (never merged).
 
 <!--
 Edit by hand; keep the table shapes, because `ledger.mjs check` parses them.
@@ -16,7 +16,7 @@ comma-separated IDs. Use "-" for an empty cell.
 
 ## Original request
 
-> Run spike S1 from docs/plans/2026-11-01-convergence-phase-0.md §3: answer the five questions of ADR-0250 §2 with measurements and recommend 2a or 2b
+> Run spike S1 from docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md §3: answer the five questions of ADR-0250 §2 with measurements and recommend 2a or 2b
 
 ## Fixed acceptable ranges (written 2026-11-01, before any measurement; never edited afterwards)
 
