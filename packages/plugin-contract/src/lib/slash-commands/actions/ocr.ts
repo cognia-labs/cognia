@@ -2,7 +2,7 @@
  * The plugin contract's share of `lib/slash-commands/actions/ocr.ts`, which re-exports these.
  */
 import type { OcrError } from "../../ocr/errors"
-import type { OcrResult } from "../../../types/ocr/index"
+import type { OcrOutputFormat, OcrResult } from "../../../types/ocr/index"
 
 /** Where the OCR'd image came from — lets the chat card show a thumbnail. */
 export interface OcrSourceRef {
@@ -13,8 +13,10 @@ export interface OcrSourceRef {
 export interface SlashOcrResult {
   /** Markdown to push into the chat as a system message. */
   system: string
-  /** When set, the composer prepends this text to its textarea. */
+  /** When set, the composer inserts this text into its draft. */
   composerText?: string
+  /** Delivery format selected by the caller or saved settings. */
+  format?: OcrOutputFormat
   /** Raw result — useful for plugin authors. */
   result?: OcrResult
   /** Where the OCR'd image came from — fed into the chat card thumbnail. */

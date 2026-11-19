@@ -78,6 +78,21 @@ export function shellAllows(provider: OcrProvider, platform: NativePlatform): bo
   }
 }
 
+/** Only built-in engines whose image processing stays in this device. */
+const ON_DEVICE_PROVIDER_IDS = new Set([
+  "apple-vision",
+  "paddle-ocr",
+  "tesseract-native",
+  "tesseract-wasm",
+  "ocrs",
+  "windows-media-ocr",
+  "mlkit-android",
+])
+
+export function isOnDeviceOcrProvider(provider: OcrProvider): boolean {
+  return provider.category === "local" && ON_DEVICE_PROVIDER_IDS.has(provider.id)
+}
+
 /**
  * Shared singleton registry used by `lib/ocr/index.ts` in app code. Provider
  * implementation files call `registerOcrProvider()` at module-load time.

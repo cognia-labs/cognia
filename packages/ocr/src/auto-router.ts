@@ -12,8 +12,7 @@
  *   3. Fall back to the configured cloud provider when the local pick is
  *      missing or unready and `settings.cloudFallbackEnabled` is true and a
  *      cloud provider with credentials exists.
- *   4. As a last resort, return any enabled provider that supports the
- *      current shell.
+ *   4. As a last resort, try other ready local engines on this shell.
  *
  * Throws `OcrError("provider_failed", "auto-router", …)` when no provider
  * matches — callers surface that as "configure a provider in settings".
@@ -55,6 +54,7 @@ export interface AutoRouterDeps {
   hasCredentials?: HasCredentialsFn
   /** Preferred readiness contract. Hosts should provide this instead of the legacy split probes. */
   runtimeStatus?: OcrRuntimeStatusResolver
+  allowsProvider?: (provider: OcrProvider) => boolean
 }
 
 /**
@@ -79,7 +79,7 @@ export const DEFAULT_LOCAL_PREFERENCE: Required<NonNullable<AutoRouterDeps["loca
   browser: ["tesseract-wasm"],
 }
 
-const ADVANCED_ONLY_LOCAL_PROVIDERS = new Set(["ocrs", "windows-media-ocr"])
+const ADVANCED_ONLY_LOCAL_PROVIDERS = new Set(["ocrs", "windows-media-ocr", "local-http"])
 
 function isProviderUsable(
   provider: OcrProvider | undefined,
@@ -139,7 +139,13 @@ export async function listProviderCandidates(deps: AutoRouterDeps): Promise<OcrP
     if (!provider || seen.has(provider.id)) return
     if (!allowAdvancedOnly && ADVANCED_ONLY_LOCAL_PROVIDERS.has(provider.id)) return
     if (!isProviderUsable(provider, deps.platform, deps.settings)) return
-    if (!(await isRuntimeReady(deps, provider))) return
+    if (deps.allowsProvider && !deps.allowsProvider(provider)) return
+    try {
+      if (!(await isRuntimeReady(deps, provider))) return
+    } catch {
+      // An unavailable backend must not stop unrelated ready providers.
+      return
+    }
     seen.add(provider.id)
     candidates.push(provider)
   }
@@ -165,7 +171,7 @@ export async function listProviderCandidates(deps: AutoRouterDeps): Promise<OcrP
 
   // 4. Last resort — still readiness-gated; never route to placeholders.
   for (const p of deps.registry.listForShell(deps.platform)) {
-    await add(p)
+    if (p.category === "local") await add(p)
   }
 
   return candidates

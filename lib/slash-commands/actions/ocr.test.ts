@@ -95,6 +95,27 @@ describe("handleOcrSlashCommand", () => {
     expect(out.result).toBe(sampleResult)
   })
 
+  it("routes an explicit auto flag through the same selection as no flag", async () => {
+    const extract = jest.fn(async () => sampleResult)
+    const deps = makeDeps()
+    await handleOcrSlashCommand({ argv: "att_1", extract, deps })
+    await handleOcrSlashCommand({ argv: "att_1 --provider auto", extract, deps })
+    expect(extract.mock.calls[1]).toEqual(extract.mock.calls[0])
+  })
+
+  it("delivers text or structured blocks without using combined Markdown", async () => {
+    const extract = async () => sampleResult
+    const deps = makeDeps()
+    const plain = await handleOcrSlashCommand({ argv: "att_1 --format text", extract, deps })
+    expect(plain.composerText).toBe("Hello")
+    expect(plain.system).not.toContain("# Hello")
+    const blocks = await handleOcrSlashCommand({ argv: "att_1 --format blocks", extract, deps })
+    expect(JSON.parse(blocks.composerText!)).toEqual([
+      { pageNumber: 1, blocks: [{ text: "Hello", kind: "paragraph" }] },
+    ])
+    expect(blocks.system).toContain("pageNumber")
+  })
+
   it("returns invalid_input on parse failure", async () => {
     const out = await handleOcrSlashCommand({
       argv: "",

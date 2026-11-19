@@ -47,9 +47,11 @@ beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
 
 describe("buildOcrCacheId", () => {
-  it("lowercases and sorts languages", () => {
+  it("lowercases languages while preserving their order", () => {
     expect(buildOcrCacheId("sha", "p", ["EN", "zh"])).toBe("sha|p|en,zh")
-    expect(buildOcrCacheId("sha", "p", ["zh", "EN"])).toBe("sha|p|en,zh")
+    expect(buildOcrCacheId("sha", "p", ["zh", "EN"])).not.toBe(
+      buildOcrCacheId("sha", "p", ["EN", "zh"])
+    )
   })
 
   it("renders an empty language slice as an empty trailing segment", () => {

@@ -23,6 +23,12 @@ describe("buildMlkitAndroidProvider", () => {
 })
 
 describe("mapMlKitBlock", () => {
+  it("normalizes iOS maxY/minY box ordering", () => {
+    expect(
+      mapMlKitBlock({ text: "sample", boundingBox: { left: 2, top: 10, right: 8, bottom: 4 } }).bbox
+    ).toEqual({ x: 2, y: 4, width: 6, height: 6 })
+  })
+
   it("converts the plugin's left/top/right/bottom boundingBox to x/y/width/height", () => {
     expect(
       mapMlKitBlock({
@@ -55,6 +61,29 @@ describe("mlkitAndroidExtract", () => {
       })),
     }
   }
+
+  it("uses the native registry without a bundled web module", async () => {
+    const cap = globalThis as typeof globalThis & { Capacitor?: object }
+    const previous = cap.Capacitor
+    const native = plugin()
+    Object.defineProperty(native, "then", {
+      get() {
+        throw new Error("native proxy has no then")
+      },
+    })
+    cap.Capacitor = { Plugins: { CapacitorPluginMlKitTextRecognition: native } }
+    try {
+      const output = await mlkitAndroidExtract(input, {
+        credentials: { secrets: {} },
+        config: {},
+        platform: "mobile",
+      })
+      expect(output.pages[0]?.text).toBe("你好")
+      expect(native.detectText).toHaveBeenCalledTimes(1)
+    } finally {
+      cap.Capacitor = previous
+    }
+  })
 
   it("calls detectText with the base64Image payload (upstream v8 API)", async () => {
     const p = plugin()

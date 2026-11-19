@@ -69,25 +69,41 @@ registerNodeExecutor({
     const params = ctx.params
     const languages = languagesParam(params)
     const provider = strParam(params, "provider")
+    const providerId = provider && provider !== "auto" ? provider : undefined
     const format = strParam(params, "format") as OcrOutputFormat | undefined
     const pageRange = strParam(params, "pageRange")
+    // Text PII inspection cannot authorize sending raw pixels off the device.
+    const onDeviceOnly = ctx.securityContext?.piiEgressRequired === true
 
     let result: OcrResult
     if (params.screen === true) {
       const { ocrScreen } = await import("@/lib/automation/ocr-screen")
-      result = await ocrScreen({ languages })
+      result = await ocrScreen({
+        languages,
+        providerId,
+        format,
+        signal: ctx.signal,
+        ...(onDeviceOnly ? { onDeviceOnly } : {}),
+      })
     } else {
-      // OCR is the `ocr` port's (ADR-0250 §14), at the host's default deps.
+      // OCR is the `ocr` port's (ADR-0250 §14), with the saved settings.
       const ocr = await loadPort("ocr")
       if (!ocr) throw new Error("ocr.extract: OCR is not available on this host")
       const source = await resolveOcrNodeSource(params)
-      result = await ocr.extract({
+      const input: OcrInput = {
         source,
         languages,
         format,
         pageRange,
-        providerId: provider && provider !== "auto" ? provider : undefined,
-      })
+        signal: ctx.signal,
+        providerId,
+      }
+      result = onDeviceOnly
+        ? await ocr.extract(input, {
+            ...ocr.deps({ settings: await ocr.loadSettings() }),
+            onDeviceOnly,
+          })
+        : await ocr.extract(input)
     }
 
     return {

@@ -35,6 +35,8 @@ import { ocrScreen } from "@/lib/automation/ocr-screen"
 import { handleOcrSlashCommand, type SlashOcrResult } from "@/lib/slash-commands/actions/ocr"
 import { detectPlatform } from "@/lib/platform/detect"
 import type { PluginOcrAPI } from "@cognia/plugin-contract/lib/plugin/api/ocr-api"
+import { pluginExecutionContext } from "../core/invocation-identity"
+import { normalizeFsPath, relativePathWithinRoot } from "@/lib/files/permissions"
 export type { PluginOcrAPI } from "@cognia/plugin-contract/lib/plugin/api/ocr-api"
 
 // Track which provider ids each plugin has registered so we can drop them
@@ -46,8 +48,10 @@ interface PluginOcrRuntime {
   listAvailableProviders(): string[]
   extract(input: OcrInput): Promise<OcrResult>
   extractFile(path: string, options?: Omit<OcrInput, "source">): Promise<OcrResult>
-  extractScreen(options?: { languages?: string[] }): Promise<OcrResult>
-  runSlashCommand(argv: string): Promise<SlashOcrResult>
+  extractScreen(
+    options?: Pick<OcrInput, "languages" | "providerId" | "format" | "signal">
+  ): Promise<OcrResult>
+  runSlashCommand(argv: string, signal?: AbortSignal): Promise<SlashOcrResult>
 }
 
 /**
@@ -67,6 +71,7 @@ export function createOcrAPI(
   runtime: PluginOcrRuntime = defaultOcrRuntime
 ): PluginOcrAPI {
   const logger = createPluginSystemLogger(pluginId)
+  const isFirstPartyAgentOcr = runtime === defaultOcrRuntime && pluginId === "cognia-ocr"
   const api: PluginOcrAPI = {
     registerProvider(provider) {
       const prefixed = `${pluginId}:${provider.id}`
@@ -98,9 +103,19 @@ export function createOcrAPI(
     },
     listAvailableProviders: runtime.listAvailableProviders,
     isReady: () => runtime.listAvailableProviders().length > 0,
-    extract: runtime.extract,
-    extractFile: runtime.extractFile,
-    extractScreen: runtime.extractScreen,
+    extract: isFirstPartyAgentOcr
+      ? async (input) => {
+          const { ocr, deps } = await hostOcr()
+          return ocr.extract(input, { ...deps, requireEnabledProvider: true })
+        }
+      : runtime.extract,
+    extractFile: isFirstPartyAgentOcr
+      ? (path, options) =>
+          extractAgentFile(path, options, pluginExecutionContext(pluginId)?.sessionId)
+      : runtime.extractFile,
+    extractScreen: isFirstPartyAgentOcr
+      ? (options) => ocrScreen({ ...options, requireEnabledProvider: true })
+      : runtime.extractScreen,
     runSlashCommand: runtime.runSlashCommand,
   }
 
@@ -172,6 +187,71 @@ function mimeFromPath(path: string): string {
   return EXTENSION_MIME[extension] ?? "application/octet-stream"
 }
 
+async function extractAgentFile(
+  path: string,
+  options: Omit<OcrInput, "source"> | undefined,
+  sessionId?: string
+): Promise<OcrResult> {
+  if (detectPlatform() !== "tauri") {
+    throw new OcrError("unsupported_shell", "ocr", "File-path OCR requires the desktop app.")
+  }
+  if (!sessionId || !path || path !== path.trim()) {
+    throw new OcrError(
+      "invalid_input",
+      "ocr",
+      "File OCR requires a session workspace and an exact path."
+    )
+  }
+  const [{ resolveSessionCwd }, { sandboxSessionRuntime }] = await Promise.all([
+    import("@/lib/workspace/session-cwd"),
+    import("@/lib/sandbox/session-runtime"),
+  ])
+  const runtimeRef = sandboxSessionRuntime.activeRefForSession(sessionId)
+  const runtimeRoot = runtimeRef ? sandboxSessionRuntime.desktopFileOcrRoot(runtimeRef) : undefined
+  if (runtimeRoot === null) {
+    throw new OcrError(
+      "unsupported_shell",
+      "ocr",
+      "File OCR cannot use the desktop filesystem from a sandboxed session."
+    )
+  }
+  const root = runtimeRoot ?? (await resolveSessionCwd(sessionId))
+  const normalized = normalizeFsPath(path)
+  const absolute = /^(?:\/|[a-z]:\/)/i.test(normalized)
+  const relative =
+    root && normalized
+      ? relativePathWithinRoot(absolute ? normalized : `${root}/${normalized}`, root)
+      : null
+  const mimeType = mimeFromPath(path)
+  if (!root || !relative || mimeType === "application/octet-stream") {
+    throw new OcrError(
+      "invalid_input",
+      "ocr",
+      "Select an image or PDF inside the session workspace."
+    )
+  }
+  const { ocr, deps } = await hostOcr({
+    filePathResolver: async () => {
+      const { readWorkspaceFileBase64 } = await import("@/lib/files/workspace-fs")
+      if (sandboxSessionRuntime.activeRefForSession(sessionId) !== runtimeRef) {
+        throw new OcrError(
+          "invalid_input",
+          "ocr",
+          "The session workspace changed before OCR could read the file."
+        )
+      }
+      if (options?.signal?.aborted) throw new OcrError("aborted", "ocr", "OCR cancelled.")
+      const data = await readWorkspaceFileBase64(root, relative, undefined, false)
+      const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+      return { blob: new Blob([bytes], { type: mimeType }), mimeType, bytes }
+    },
+  })
+  return ocr.extract(
+    { ...options, source: { kind: "file-path", path } },
+    { ...deps, requireEnabledProvider: true }
+  )
+}
+
 const defaultOcrRuntime: PluginOcrRuntime = {
   listAvailableProviders: () =>
     getSharedOcrRegistry()
@@ -186,9 +266,9 @@ const defaultOcrRuntime: PluginOcrRuntime = {
     return ocr.extract({ ...options, source: { kind: "file-path", path } }, deps)
   },
   extractScreen: (options) => ocrScreen(options),
-  runSlashCommand: async (argv) => {
+  runSlashCommand: async (argv, signal) => {
     const { ocr, deps } = await hostOcr({ filePathResolver: resolveFilePath })
-    return handleOcrSlashCommand({ argv, deps, extract: ocr.extract })
+    return handleOcrSlashCommand({ argv, signal, deps, extract: ocr.extract })
   },
 }
 

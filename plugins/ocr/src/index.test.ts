@@ -33,6 +33,11 @@ function makeRuntime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("runOcrTool", () => {
+  it("does not rewrite a padded path after the permission check", async () => {
+    const runtime = makeRuntime()
+    expect(await runOcrTool({ path: "docs/a.png " }, { runtime })).toMatchObject({ ok: false })
+    expect(runtime.extractFile).not.toHaveBeenCalled()
+  })
   it("routes data URLs through ctx.ocr.extract with all overrides", async () => {
     const runtime = makeRuntime()
     const input: OcrToolInput = {
@@ -77,8 +82,15 @@ describe("runOcrTool", () => {
       providerId: undefined,
     })
 
-    await runOcrTool({ source: { kind: "screen" }, languages: ["zh"] }, { runtime })
-    expect(runtime.extractScreen).toHaveBeenCalledWith({ languages: ["zh"] })
+    await runOcrTool(
+      { source: { kind: "screen" }, languages: ["zh"], provider: "ocrs", format: "text" },
+      { runtime }
+    )
+    expect(runtime.extractScreen).toHaveBeenCalledWith({
+      languages: ["zh"],
+      providerId: "ocrs",
+      format: "text",
+    })
   })
 
   it("never reads a file from the nested source field (invisible to the confinement gate)", async () => {
@@ -155,7 +167,7 @@ type Hooks = {
   onCommand: (
     command: string,
     args: string[],
-    context?: { sessionId?: string }
+    context?: { sessionId?: string; rawArgs?: string }
   ) => Promise<boolean | { handled: boolean; message?: string }>
 }
 
@@ -174,8 +186,31 @@ describe("OCR plugin activation", () => {
       timeoutMs: OCR_TOOL_TIMEOUT_MS,
     })
     expect(tool.definition.description).not.toMatch(/\d+ cloud or on-device/)
-    await tool.execute({ source: { kind: "data_url", value: "data:image/png;base64,AA==" } })
-    expect(runtime.extract).toHaveBeenCalledTimes(1)
+    const signal = new AbortController().signal
+    await tool.execute(
+      { source: { kind: "data_url", value: "data:image/png;base64,AA==" } },
+      { signal }
+    )
+    expect(runtime.extract).toHaveBeenCalledWith(expect.objectContaining({ signal }))
+  })
+
+  it("returns a draft payload using the original quoting and spacing", async () => {
+    const runSlashCommand = jest.fn(async () => ({
+      result,
+      system: "fallback",
+      composerText: "literal text",
+    }))
+    const { ctx, appendMessagePart } = makeCtx(makeRuntime({ runSlashCommand }))
+    const hooks = (await ocrPluginDefinition.activate(ctx)) as unknown as Hooks
+    const rawArgs = '"a  b.png" --format text'
+    expect(
+      await hooks.onCommand("ocr", ['"a', 'b.png"', "--format", "text"], { rawArgs })
+    ).toMatchObject({
+      payload: { composerText: "literal text" },
+      message: "fallback",
+    })
+    expect(runSlashCommand).toHaveBeenCalledWith(rawArgs)
+    expect(appendMessagePart).not.toHaveBeenCalled()
   })
 
   it("appends the result card to the chat the command was typed in", async () => {

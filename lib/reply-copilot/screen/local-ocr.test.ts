@@ -84,6 +84,14 @@ describe("readWindowText", () => {
     expect(extract).not.toHaveBeenCalled()
   })
 
+  it("rejects a configured LAN OCR provider for a private screenshot", async () => {
+    const { d, extract } = deps([provider("local-http", "local")])
+    await expect(readWindowText(shot, undefined, d)).rejects.toBeInstanceOf(
+      LocalOcrUnavailableError
+    )
+    expect(extract).not.toHaveBeenCalled()
+  })
+
   it("stops before OCR when aborted", async () => {
     const { d, extract } = deps([provider("apple-vision", "local")])
     const controller = new AbortController()

@@ -131,6 +131,20 @@ describe("findScreenTextWith", () => {
 })
 
 describe("clickScreenTextWith", () => {
+  it("does not click when cancellation arrives during OCR", async () => {
+    const controller = new AbortController()
+    const d = deps({
+      extract: jest.fn(async () => {
+        controller.abort()
+        return ocrResult([{ text: "Submit", bbox: { x: 10, y: 20, width: 40, height: 10 } }])
+      }),
+    })
+    await expect(
+      clickScreenTextWith(d, { query: "Submit", signal: controller.signal })
+    ).rejects.toMatchObject({ code: "aborted" })
+    expect(d.click).not.toHaveBeenCalled()
+  })
+
   it("clicks the matched block's center and stamps click coords", async () => {
     const d = deps()
     const res = await clickScreenTextWith(d, { query: "submit" })

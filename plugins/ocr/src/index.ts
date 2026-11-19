@@ -53,6 +53,7 @@ export interface OcrToolInput {
 type SourceKind = OcrSourceKind | "attachment_id" | "file_path"
 
 interface OcrPluginConfig {
+  signal?: AbortSignal
   runtime?: Pick<PluginContext["ocr"], "extract" | "extractFile" | "extractScreen" | "isReady">
 }
 
@@ -98,19 +99,29 @@ export async function runOcrTool(
   if (!hasPath && !source) {
     return { ok: false, error: "Pass `path` (an image or PDF file) or `source`." }
   }
+  if (hasPath && input.path !== input.path!.trim()) {
+    return { ok: false, error: "File paths must not have leading or trailing whitespace." }
+  }
   const success = (result: OcrResult, sourceKind: SourceKind) => ({
     ok: true as const,
     result,
     ...buildOcrSecurityEnvelope(result, sourceKind),
   })
 
+  const signal = config.signal
+  if (signal?.aborted) return { ok: false, error: "OCR cancelled.", code: "aborted" }
+  const options = {
+    languages: input.languages,
+    format: input.format,
+    providerId,
+    ...(signal ? { signal } : {}),
+  }
+
   try {
     if (hasPath) {
-      const result = await runtime.extractFile(input.path!.trim(), {
-        languages: input.languages,
-        format: input.format,
+      const result = await runtime.extractFile(input.path!, {
+        ...options,
         pageRange: input.pageRange,
-        providerId,
       })
       return success(result, "file_path")
     }
@@ -119,7 +130,7 @@ export async function runOcrTool(
     if (kind === "screen") {
       // Captures the desktop and OCRs it; the capture half is gated by the
       // automation permission layer. Needs no `value`.
-      return success(await runtime.extractScreen({ languages: input.languages }), "screen")
+      return success(await runtime.extractScreen(options), "screen")
     }
     if ((kind as string) === "file_path") {
       return {
@@ -135,10 +146,8 @@ export async function runOcrTool(
     if (!mapped) return { ok: false, error: `\`source.value\` is required for kind "${kind}".` }
     const ocrInput: OcrInput = {
       source: mapped,
-      languages: input.languages,
-      format: input.format,
+      ...options,
       pageRange: input.pageRange,
-      providerId,
     }
     return success(await runtime.extract(ocrInput), kind)
   } catch (err) {
@@ -227,7 +236,8 @@ export const ocrPluginDefinition = definePlugin({
           timeoutMs: OCR_TOOL_TIMEOUT_MS,
           parametersSchema: TOOL_PARAMETERS as unknown as Record<string, unknown>,
         },
-        execute: async (args) => runOcrTool(args as OcrToolInput, { runtime: ctx.ocr }),
+        execute: async (args, context) =>
+          runOcrTool(args as OcrToolInput, { runtime: ctx.ocr, signal: context?.signal }),
       })
     )
 
@@ -237,18 +247,27 @@ export const ocrPluginDefinition = definePlugin({
     ctx.messagePart.registerPartRenderer("ocr-result", OcrResultCard)
 
     // The slash command is DECLARED in plugin.json (`commands[]`) and handled
-    // here. `hooks.onCommand` receives whitespace-split argv; `/ocr` takes a
-    // single path or URL argument, so rejoining is lossless for it.
+    // here. Prefer the original argument string to preserve quoted paths.
     return {
       onCommand: async (command: string, args: string[], context?: PluginCommandContext) => {
         if (command !== "ocr") return false
         if (!ctx.ocr.isReady()) {
           return { handled: true, message: t("command.notReady") }
         }
-        const out = await ctx.ocr.runSlashCommand(args.join(" "))
+        const argv = context?.rawArgs ?? args.join(" ")
+        const out = context?.signal
+          ? await ctx.ocr.runSlashCommand(argv, context.signal)
+          : await ctx.ocr.runSlashCommand(argv)
+        if (context?.signal?.aborted) return { handled: true }
         if (!out.result) {
           // Usage / validation text from the host's canonical `/ocr` parser.
           return { handled: true, message: out.system || t("command.failed") }
+        }
+        if (out.composerText !== undefined) {
+          return { handled: true, message: out.system, payload: { composerText: out.composerText } }
+        }
+        if (out.format === "text" || out.format === "blocks") {
+          return { handled: true, message: out.system }
         }
         // Emit the rich `ocr-result` card into the chat the command was typed
         // in — the focused chat can be a different one when the command ran

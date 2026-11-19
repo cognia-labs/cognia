@@ -33,6 +33,20 @@ function deps(over: Partial<OcrScreenDeps> = {}): OcrScreenDeps {
 }
 
 describe("ocrScreenWith", () => {
+  it("drops the captured frame if the caller cancelled during capture", async () => {
+    const controller = new AbortController()
+    const d = deps({
+      screenshot: jest.fn(async () => {
+        controller.abort()
+        return { bytes: "AAAA", format: "png" as const }
+      }),
+    })
+    await expect(ocrScreenWith(d, { signal: controller.signal })).rejects.toMatchObject({
+      code: "aborted",
+    })
+    expect(d.extract).not.toHaveBeenCalled()
+  })
+
   it("captures then OCRs the screen as a png data-url", async () => {
     const extract = jest.fn(async () => ocrResult("HELLO SCREEN"))
     const screenshot = jest.fn(async () => ({ bytes: "QUJD", format: "png" as const }))

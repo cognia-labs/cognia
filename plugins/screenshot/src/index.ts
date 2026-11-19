@@ -295,7 +295,8 @@ async function performCaptureOcr(
   ctx: Pick<PluginContext, "automation" | "ocr">,
   mode: CaptureMode,
   languages?: string[],
-  nativeOpts?: NativeCaptureOpts
+  nativeOpts?: NativeCaptureOpts,
+  signal?: AbortSignal
 ): Promise<
   | {
       ok: true
@@ -314,7 +315,9 @@ async function performCaptureOcr(
   | { ok: false; error: string }
 > {
   try {
+    if (signal?.aborted) return { ok: false, error: "aborted" }
     const image = await captureImage(ctx.automation, mode, nativeOpts)
+    if (signal?.aborted) return { ok: false, error: "aborted" }
     if (!image) return { ok: false, error: "user-cancelled-or-unsupported" }
     const result = await ctx.ocr.extract({
       source: {
@@ -323,7 +326,9 @@ async function performCaptureOcr(
         mimeType: image.mimeType,
       },
       languages,
+      ...(signal ? { signal } : {}),
     })
+    if (signal?.aborted) return { ok: false, error: "aborted" }
     // Surface per-block geometry (when the provider emits it) so callers can map
     // text to a location. Coordinates are relative to the captured image — for
     // an actionable screen click prefer the gated click_text / find_text tools.
@@ -460,7 +465,7 @@ const definition = definePlugin({
           },
           timeoutMs: CAPTURE_TOOL_TIMEOUT_MS,
         },
-        execute: async (args) => {
+        execute: async (args, context) => {
           const languages = Array.isArray(args.languages)
             ? args.languages.filter((l): l is string => typeof l === "string")
             : undefined
@@ -468,7 +473,8 @@ const definition = definePlugin({
             ctx,
             normalizeMode(args.mode),
             languages,
-            normalizeNativeOpts(args)
+            normalizeNativeOpts(args),
+            context?.signal
           )
           if (!result.ok) return result
           const { image, ...envelope } = result

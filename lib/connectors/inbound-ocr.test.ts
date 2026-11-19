@@ -133,7 +133,7 @@ describe("runInboundOcr (production wrapper)", () => {
     const event = { segments: [imageSeg({ dataBase64: "AAAA" })] }
     await runInboundOcr(event)
     expect((event.segments[0] as { ocrText?: string }).ocrText).toBe("FROM SETTINGS")
-    expect(extractMock.mock.calls[0][1]).toEqual({ built: { settings } })
+    expect(extractMock.mock.calls[0][1]).toEqual({ built: { settings }, onDeviceOnly: true })
   })
 
   it("skips OCR when inbound images are disabled in settings", async () => {

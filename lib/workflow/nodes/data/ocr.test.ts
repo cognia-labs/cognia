@@ -28,7 +28,13 @@ function result(text: string): OcrResult {
 }
 
 function ctx(params: Record<string, unknown>): StepExecutionContext {
-  return { runId: "r", workflowId: "w", stepId: "s", params } as StepExecutionContext
+  return {
+    runId: "r",
+    workflowId: "w",
+    stepId: "s",
+    params,
+    signal: new AbortController().signal,
+  } as StepExecutionContext
 }
 
 beforeEach(() => {
@@ -105,10 +111,25 @@ describe("ocr.extract node executor", () => {
     expect(extractMock).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps protected workflow screenshots on device", async () => {
+    await getExecutor("ocr.extract", 1)!.execute({
+      ...ctx({ screen: true, provider: "mistral-ocr" }),
+      securityContext: { piiEgressRequired: true, sourceTriggerKind: "trigger.manual" },
+    })
+    expect(ocrScreenMock).toHaveBeenCalledWith(expect.objectContaining({ onDeviceOnly: true }))
+  })
+
   it("routes screen mode through ocrScreen", async () => {
     const exec = getExecutor("ocr.extract", 1)!
-    const out = await exec.execute(ctx({ screen: true, languages: ["zh"] }))
-    expect(ocrScreenMock).toHaveBeenCalledWith({ languages: ["zh"] })
+    const out = await exec.execute(
+      ctx({ screen: true, languages: ["zh"], provider: "ocrs", format: "text" })
+    )
+    expect(ocrScreenMock).toHaveBeenCalledWith({
+      languages: ["zh"],
+      providerId: "ocrs",
+      format: "text",
+      signal: expect.any(AbortSignal),
+    })
     expect(extractMock).not.toHaveBeenCalled()
     expect(out.output).toMatchObject({ text: "SCREEN" })
   })

@@ -27,7 +27,9 @@ export interface PluginOcrAPI {
   /** Desktop file-path extraction with a host-owned filesystem resolver. */
   extractFile(path: string, options?: Omit<OcrInput, "source">): Promise<OcrResult>
   /** Capture the screen and OCR it through the native automation path. */
-  extractScreen(options?: { languages?: string[] }): Promise<OcrResult>
+  extractScreen(
+    options?: Pick<OcrInput, "languages" | "providerId" | "format" | "signal">
+  ): Promise<OcrResult>
   /** Execute the canonical `/ocr` parser and result projection. */
-  runSlashCommand(argv: string): Promise<SlashOcrResult>
+  runSlashCommand(argv: string, signal?: AbortSignal): Promise<SlashOcrResult>
 }

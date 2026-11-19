@@ -124,11 +124,18 @@ export async function extractPdf(input: PdfRouterInput, deps: PdfRouterDeps): Pr
   }
   deps.signal?.addEventListener("abort", cancelDocument, { once: true })
   const pages: OcrPage[] = []
+  let costEstimate: OcrResult["costEstimate"]
   const start = Date.now()
   try {
     checkAborted()
     deps.onDocument?.(doc.numPages)
-    const pagesToRead = parsePageRange(input.pageRange, doc.numPages) ?? rangeOf(doc.numPages)
+    let pagesToRead: number[]
+    try {
+      pagesToRead = parsePageRange(input.pageRange, doc.numPages) ?? rangeOf(doc.numPages)
+      if (pagesToRead.length === 0) throw new Error("No requested pages are in this PDF")
+    } catch (error) {
+      throw new OcrError("invalid_input", "pdf-router", String(error), error)
+    }
     for (const [index, pageNumber] of pagesToRead.entries()) {
       checkAborted()
       let page: PdfPage | undefined
@@ -142,7 +149,9 @@ export async function extractPdf(input: PdfRouterInput, deps: PdfRouterDeps): Pr
         }
         page = await doc.getPage(pageNumber)
         checkAborted()
-        const textContent = await page.getTextContent()
+        const textContent = settings.pdfTextLayerFastPath
+          ? await page.getTextContent()
+          : { items: [] }
         checkAborted()
         const text = joinPdfText(textContent)
         let pageOut: OcrPage
@@ -162,6 +171,12 @@ export async function extractPdf(input: PdfRouterInput, deps: PdfRouterDeps): Pr
             deps.extractDeps
           )
           checkAborted()
+          if (ocrResult.costEstimate) {
+            costEstimate = {
+              ...ocrResult.costEstimate,
+              amount: (costEstimate?.amount ?? 0) + ocrResult.costEstimate.amount,
+            }
+          }
           const firstPage = ocrResult.pages[0]
           pageOut = {
             pageNumber,
@@ -193,6 +208,7 @@ export async function extractPdf(input: PdfRouterInput, deps: PdfRouterDeps): Pr
       languages: input.languages ?? settings.defaultLanguages,
       durationMs: Date.now() - start,
       cached: false,
+      ...(costEstimate ? { costEstimate } : {}),
     }
   } finally {
     deps.signal?.removeEventListener("abort", cancelDocument)

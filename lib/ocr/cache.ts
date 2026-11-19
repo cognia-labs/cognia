@@ -29,7 +29,7 @@ export type { CacheLookupKey, CacheWriteInput, PageCacheKey } from "./cache-cont
 
 /** Read a cached OcrResult, or null when the row is missing / unreadable. */
 export async function readCachedResult(key: CacheLookupKey): Promise<OcrResult | null> {
-  const id = buildOcrCacheId(key.fileSha, key.providerId, key.languages)
+  const id = buildOcrCacheId(key.fileSha, key.providerId, key.languages, key.requestHash)
   const row = await getOcrCacheRow(id)
   if (!row) return null
   return decodeOcrResult(row.result)
@@ -37,15 +37,12 @@ export async function readCachedResult(key: CacheLookupKey): Promise<OcrResult |
 
 /** Store a fresh OcrResult under the canonical cache id. */
 export async function writeCachedResult(input: CacheWriteInput): Promise<void> {
-  const id = buildOcrCacheId(input.fileSha, input.providerId, input.languages)
+  const id = buildOcrCacheId(input.fileSha, input.providerId, input.languages, input.requestHash)
   const row: OcrResultRow = {
     id,
     fileSha: input.fileSha,
-    providerId: input.providerId,
-    langs: [...input.languages]
-      .map((l) => l.toLowerCase())
-      .sort()
-      .join(","),
+    providerId: input.result.providerId,
+    langs: [...input.languages].map((l) => l.toLowerCase()).join(","),
     result: encodeOcrResult(input.result),
     createdAt: Date.now(),
     bytesIn: input.bytesIn,
@@ -58,14 +55,11 @@ export async function writeCachedResult(input: CacheWriteInput): Promise<void> {
 // so a large-PDF run resumes from whatever pages already landed.
 
 function pageCacheId(key: PageCacheKey): string {
-  return `${buildOcrCacheId(key.fileSha, key.providerId, key.languages)}|p${key.pageNumber}`
+  return `${buildOcrCacheId(key.fileSha, key.providerId, key.languages, key.requestHash)}|p${key.pageNumber}`
 }
 
 function normalizeLangs(languages: readonly string[]): string {
-  return [...languages]
-    .map((l) => l.toLowerCase())
-    .sort()
-    .join(",")
+  return [...languages].map((l) => l.toLowerCase()).join(",")
 }
 
 /** Read a single cached page, or null when not yet processed. */

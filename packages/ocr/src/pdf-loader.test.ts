@@ -28,6 +28,7 @@ jest.mock("pdfjs-dist", () => ({
 }))
 
 import { createPdfLoader } from "./pdf-loader"
+import { GlobalWorkerOptions } from "pdfjs-dist"
 
 function fakeCanvas() {
   return {
@@ -39,10 +40,22 @@ function fakeCanvas() {
 }
 
 describe("createPdfLoader", () => {
-  it("loads a document and reports page count", async () => {
+  it("uses the staged worker even if another parser initialized PDF.js first", async () => {
+    GlobalWorkerOptions.workerSrc = "https://cdn.example.invalid/old-worker.js"
     const loader = createPdfLoader({ createCanvas: () => fakeCanvas() })
     const doc = await loader({ bytes: new Uint8Array([1, 2]) })
     expect(doc.numPages).toBe(3)
+    expect(GlobalWorkerOptions.workerSrc).toBe("/ocr/pdf.worker.min.mjs")
+  })
+
+  it("rejects oversized pages before allocating the canvas", async () => {
+    const createCanvas = jest.fn(fakeCanvas)
+    const doc = await createPdfLoader({ createCanvas })({ bytes: new Uint8Array() })
+    const page = await doc.getPage(1)
+    await expect(page.renderToDataUrl({ dpi: 7200 })).rejects.toMatchObject({
+      code: "invalid_input",
+    })
+    expect(createCanvas).not.toHaveBeenCalled()
   })
 
   it("maps text-content items to {str} (defaulting missing strings)", async () => {

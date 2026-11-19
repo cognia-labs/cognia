@@ -49,7 +49,7 @@ describe("cache read/write", () => {
     expect(out?.combinedMarkdown).toBe("# hello")
   })
 
-  it("the cache key is independent of language order/case", async () => {
+  it("retains the preferred language order while normalizing case", async () => {
     await writeCachedResult({
       fileSha: "abc",
       providerId: "mistral-ocr",
@@ -62,8 +62,10 @@ describe("cache read/write", () => {
       providerId: "mistral-ocr",
       languages: ["zh", "en"],
     })
-    expect(swapped).not.toBeNull()
-    expect(swapped?.cached).toBe(true)
+    expect(swapped).toBeNull()
+    await expect(
+      readCachedResult({ fileSha: "abc", providerId: "mistral-ocr", languages: ["en", "ZH"] })
+    ).resolves.toMatchObject({ cached: true })
   })
 
   it("write overwrites a previous entry under the same key", async () => {

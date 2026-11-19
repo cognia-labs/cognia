@@ -15,6 +15,8 @@ import type {
   ProviderParameterSchema,
 } from "@cognia/provider-types/provider-parameter-schema"
 
+import { MISTRAL_OCR_DEFAULT_MODEL } from "./types"
+
 const PROVIDER_PARAM_PREFIX = "ocr.params"
 
 /** Shared parameters that show up on every provider config tab. */
@@ -218,7 +220,7 @@ function compose(
  * shared dynamic-form helpers in `components/settings/provider/`.
  */
 export const OCR_PARAMETER_SCHEMAS: Record<string, ProviderParameterSchema> = {
-  "mistral-ocr": compose("mistral-ocr", "Mistral OCR", [MODEL_PARAM("mistral-ocr-4-0")]),
+  "mistral-ocr": compose("mistral-ocr", "Mistral OCR", [MODEL_PARAM(MISTRAL_OCR_DEFAULT_MODEL)]),
   "google-vision": compose("google-vision", "Google Cloud Vision", [
     MODEL_PARAM("DOCUMENT_TEXT_DETECTION"),
     ENABLE_TABLES_PARAM,

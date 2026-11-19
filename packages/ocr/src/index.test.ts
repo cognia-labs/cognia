@@ -22,7 +22,7 @@ function cacheId(key: CacheLookupKey): string {
     .map((l) => l.toLowerCase())
     .sort()
     .join(",")
-  return `${key.fileSha}|${key.providerId}|${langs}`
+  return `${key.fileSha}|${key.providerId}|${langs}|${key.requestHash ?? ""}`
 }
 
 const memoryResultCache: OcrResultCache = {
@@ -102,6 +102,72 @@ beforeEach(() => {
 })
 
 describe("extract — dispatch", () => {
+  it("rasterizes the requested PDF page before calling an image-only engine", async () => {
+    const d = makeDeps()
+    const renderToDataUrl = jest.fn(async () => ({
+      dataUrl: sampleInput.source.kind === "data-url" ? sampleInput.source.dataUrl : "",
+      width: 10,
+      height: 20,
+    }))
+    const getPage = jest.fn(async (pageNumber: number) => ({
+      pageNumber,
+      renderToDataUrl,
+      getTextContent: async () => ({ items: [] }),
+    }))
+    const engine = makeProvider({ id: "paddle-ocr", category: "local" })
+    const recognize = jest.fn(async (...args: Parameters<OcrProvider["extract"]>) => ({
+      ...(await engine.extract(...args)),
+      costEstimate: { unit: "image" as const, amount: 0.01, currency: "USD" as const },
+    }))
+    d.registry.register({ ...engine, extract: recognize })
+    const output = await extract(
+      {
+        source: {
+          kind: "data-url",
+          mimeType: "application/pdf",
+          dataUrl: "data:application/pdf;base64,JVBERi0x",
+        },
+        providerId: engine.id,
+        pageRange: "2",
+      },
+      { ...d, loadPdf: async () => ({ numPages: 3, getPage }) } as ExtractDeps
+    )
+    expect(output.pages.map((page) => page.pageNumber)).toEqual([2])
+    expect(output.costEstimate?.amount).toBe(0.01)
+    expect(getPage).toHaveBeenCalledTimes(1)
+    expect(recognize.mock.calls[0]?.[0].source).toMatchObject({ mimeType: "image/png" })
+  })
+  it("does not reuse OCR text across provider model changes", async () => {
+    const d = makeDeps()
+    d.registry.register(makeProvider({ id: "mock" }))
+    await extract(sampleInput, d)
+    const next = await extract(sampleInput, {
+      ...d,
+      settings: { ...d.settings, providerConfig: { mock: { model: "new-model" } } },
+    })
+    expect(next.cached).toBe(false)
+  })
+
+  it("keeps an explicit local provider when confidence is low", async () => {
+    const d = makeDeps({
+      settings: { ...DEFAULT_OCR_SETTINGS, confidenceEscalation: "escalate" },
+    })
+    const cloud = jest.fn(makeProvider({ id: "mistral-ocr" }).extract)
+    d.registry.register({ ...makeProvider({ id: "mistral-ocr" }), extract: cloud })
+    const local = makeProvider({ id: "mock", category: "local" })
+    d.registry.register({
+      ...local,
+      extract: async (input, ctx) => {
+        const out = await local.extract(input, ctx)
+        out.pages[0].blocks = [{ text: "page 1", confidence: 0.2 }]
+        return out
+      },
+    })
+    await expect(extract({ ...sampleInput, providerId: "mock" }, d)).resolves.toMatchObject({
+      providerId: "mock",
+    })
+    expect(cloud).not.toHaveBeenCalled()
+  })
   it("aborts immediately when the signal is already triggered", async () => {
     const deps = makeDeps()
     deps.registry.register(makeProvider({ id: "mock" }))
@@ -131,6 +197,24 @@ describe("extract — dispatch", () => {
     expect(result.combinedMarkdown).toContain("page 2")
     expect(result.combinedMarkdown).toContain("---")
     expect(result.combinedText).toBe("page 1\n\npage 2")
+  })
+
+  it("never lets an agent dispatch to an explicitly disabled provider", async () => {
+    const d = makeDeps()
+    const provider = makeProvider({ id: "mock" })
+    const recognize = jest.fn(provider.extract)
+    d.registry.register({ ...provider, extract: recognize })
+    await expect(
+      extract(
+        { ...sampleInput, providerId: provider.id },
+        {
+          ...d,
+          requireEnabledProvider: true,
+          settings: { ...d.settings, providerEnabled: { [provider.id]: false } },
+        }
+      )
+    ).rejects.toMatchObject({ code: "unsupported_shell" })
+    expect(recognize).not.toHaveBeenCalled()
   })
 
   it("honours an explicit providerId via the input", async () => {
@@ -231,6 +315,101 @@ describe("extract — source resolvers", () => {
 })
 
 describe("extract — caching", () => {
+  it.each(["read", "write"] as const)(
+    "keeps the local result when cache %s fails",
+    async (method) => {
+      const d = makeDeps({
+        cache: {
+          ...memoryResultCache,
+          [method]: () => Promise.reject(new Error("cache unavailable")),
+        },
+      })
+      const local = makeProvider({ id: "paddle-ocr", category: "local" })
+      const cloud = jest.fn(makeProvider({ id: "mistral-ocr" }).extract)
+      d.registry.register(local)
+      d.registry.register({ ...makeProvider({ id: "mistral-ocr" }), extract: cloud })
+      const deps = {
+        ...d,
+        platform: "tauri" as const,
+        settings: { ...d.settings, defaultProviderId: local.id, cloudFallbackEnabled: true },
+      }
+      await expect(extract(sampleInput, deps)).resolves.toMatchObject({ providerId: local.id })
+      expect(cloud).not.toHaveBeenCalled()
+    }
+  )
+
+  it("reuses an escalated result only while that target is allowed", async () => {
+    const d = makeDeps()
+    const local = makeProvider({ id: "paddle-ocr", category: "local" })
+    const cloud = jest.fn(makeProvider({ id: "mistral-ocr" }).extract)
+    const recognize = jest.fn(
+      async (input: OcrInput, ctx: Parameters<OcrProvider["extract"]>[1]) => ({
+        ...(await local.extract(input, ctx)),
+        pages: [
+          {
+            pageNumber: 1,
+            text: "local",
+            markdown: "local",
+            blocks: [{ text: "local", kind: "paragraph" as const, confidence: 0.1 }],
+          },
+        ],
+      })
+    )
+    d.registry.register({ ...local, extract: recognize })
+    d.registry.register({ ...makeProvider({ id: "mistral-ocr" }), extract: cloud })
+    const settings = {
+      ...d.settings,
+      defaultProviderId: local.id,
+      cloudFallbackEnabled: true,
+      confidenceEscalation: "escalate" as const,
+      escalationProviderId: "mistral-ocr",
+    }
+    const deps = { ...d, platform: "tauri" as const, settings }
+    await expect(extract(sampleInput, deps)).resolves.toMatchObject({
+      providerId: "mistral-ocr",
+      cached: false,
+    })
+    await expect(extract(sampleInput, deps)).resolves.toMatchObject({
+      providerId: "mistral-ocr",
+      cached: true,
+    })
+    expect(recognize).toHaveBeenCalledTimes(1)
+    await expect(
+      extract(sampleInput, { ...deps, settings: { ...settings, cloudFallbackEnabled: false } })
+    ).resolves.toMatchObject({ providerId: local.id })
+    expect(cloud).toHaveBeenCalledTimes(1)
+  })
+
+  it("discards an in-flight result from a provider that cannot be interrupted", async () => {
+    const controller = new AbortController()
+    const onResult = jest.fn()
+    const write = jest.fn(memoryResultCache.write)
+    const d = makeDeps({ onResult, cache: { ...memoryResultCache, write } })
+    const provider = makeProvider()
+    let started!: () => void
+    const inFlight = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    d.registry.register({
+      ...provider,
+      extract: async (input, ctx) => {
+        started()
+        await pending
+        return provider.extract(input, ctx)
+      },
+    })
+    const result = extract({ ...sampleInput, signal: controller.signal }, d)
+    await inFlight
+    controller.abort()
+    release()
+    await expect(result).rejects.toMatchObject({ code: "aborted" })
+    expect(write).not.toHaveBeenCalled()
+    expect(onResult).not.toHaveBeenCalled()
+  })
   it("returns cached:true on the second call with the same input", async () => {
     let called = 0
     const reg = createOcrRegistry()

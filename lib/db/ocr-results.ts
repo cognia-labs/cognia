@@ -1,8 +1,7 @@
 /**
  * OCR result cache (Dexie table `ocrResults`, schema v36).
  *
- * Identity key: `sha256(file) | providerId | sortedLangs.join(",")`. The same
- * image + provider + language combo always lands on the same row.
+ * The key preserves language order and can include a request options digest.
  *
  * Stored result blobs are kept as JSON strings to dodge structured-clone
  * overhead — pages can carry block arrays in the hundreds.
@@ -16,7 +15,7 @@ export interface OcrResultRow {
   id: string
   fileSha: string
   providerId: string
-  /** Comma-joined sorted language list — empty string when none. */
+  /** Comma-joined language list — empty string when none. */
   langs: string
   /** JSON-encoded {@link OcrResult} (with `cached:false` flipped at write time). */
   result: string
@@ -27,16 +26,17 @@ export interface OcrResultRow {
 }
 
 /**
- * Build the canonical row id from its parts. Languages are normalized to
- * lowercase + sorted so `["EN","zh"]` collides with `["zh","en"]`.
+ * Normalize casing while preserving the provider's language preference order.
  */
 export function buildOcrCacheId(
   fileSha: string,
   providerId: string,
-  langs: readonly string[] | undefined
+  langs: readonly string[] | undefined,
+  requestHash?: string
 ): string {
-  const normalized = (langs ?? []).map((l) => l.toLowerCase()).sort()
-  return `${fileSha}|${providerId}|${normalized.join(",")}`
+  const normalized = (langs ?? []).map((l) => l.toLowerCase())
+  const base = `${fileSha}|${providerId}|${normalized.join(",")}`
+  return requestHash ? `v2|${base}|${requestHash}` : base
 }
 
 export async function getOcrCacheRow(id: string): Promise<OcrResultRow | null> {

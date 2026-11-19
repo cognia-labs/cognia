@@ -91,6 +91,8 @@ export interface OcrInput {
   useCache?: boolean
 }
 
+export const MISTRAL_OCR_DEFAULT_MODEL = "mistral-ocr-4-1"
+
 export interface OcrCostEstimate {
   unit: "page" | "image" | "token"
   amount: number
@@ -198,7 +200,7 @@ export interface UserOcrSettings {
   pdfTextLayerFastPath: boolean
   /** Per-provider config blob (model, language pack, prompt template). */
   providerConfig: Record<string, OcrProviderConfig>
-  /** Per-provider enabled flag — disabled providers aren't picked by auto-router. */
+  /** Per-provider enabled flag. Automatic routing and agent requests respect it. */
   providerEnabled: Record<string, boolean>
   /** Cache TTL in days. 0 = no expiry. Default 30. */
   cacheTtlDays: number

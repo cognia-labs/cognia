@@ -197,7 +197,7 @@ describe("pickDefaultProvider", () => {
     expect(picked.id).toBe("google-vision")
   })
 
-  it("returns the last-resort provider when no preferred engine matches", async () => {
+  it("does not fall back to cloud or self-hosted HTTP when cloud fallback is off", async () => {
     const reg = createOcrRegistry()
     reg.register(
       makeProvider({
@@ -206,13 +206,15 @@ describe("pickDefaultProvider", () => {
         shells: { browser: true, tauri: true, capacitor: false },
       })
     )
-    const picked = await pickDefaultProvider({
-      registry: reg,
-      settings: settings({ cloudFallbackEnabled: false }),
-      platform: "tauri",
-      osTag: "linux",
-    })
-    expect(picked.id).toBe("weird")
+    reg.register(makeProvider({ id: "local-http", category: "local" }))
+    await expect(
+      pickDefaultProvider({
+        registry: reg,
+        settings: settings({ cloudFallbackEnabled: false }),
+        platform: "tauri",
+        osTag: "linux",
+      })
+    ).rejects.toMatchObject({ code: "provider_failed", providerId: "auto-router" })
   })
 
   it("throws when no provider is available", async () => {

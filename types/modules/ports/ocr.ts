@@ -35,7 +35,7 @@ export interface OcrPort {
   deps(options?: OcrDepsOptions): ExtractDeps
   /**
    * Read one image or document, and meter what the provider billed. Without
-   * `deps` it uses `deps()`, that is the default settings.
+   * `deps` it loads the person's saved settings, falling back to defaults.
    */
   extract(input: OcrInput, deps?: ExtractDeps): Promise<OcrResult>
   /** The PDF router's deps: the pdf.js loader over `deps({ settings })`. */

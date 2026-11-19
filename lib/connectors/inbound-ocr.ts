@@ -130,7 +130,7 @@ export async function runInboundOcr(event: {
   await maybeOcrInboundSegments(event.segments, {
     enabled: settings.ocrInboundImages !== false,
     extract: ocr.extract,
-    ocrDeps: ocr.deps({ settings }),
+    ocrDeps: { ...ocr.deps({ settings }), onDeviceOnly: true },
     onError:
       adapterId != null
         ? ({ error }) => {

@@ -143,7 +143,7 @@ describe("applyOcrParameterDefaults", () => {
     expect(out.format).toBe("markdown")
     expect(out.languages).toBe("en")
     expect(out.maxImageDimension).toBe(2000)
-    expect(out.model).toBe("mistral-ocr-4-0")
+    expect(out.model).toBe("mistral-ocr-4-1")
   })
 
   it("preserves caller-supplied overrides", () => {

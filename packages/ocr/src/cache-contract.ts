@@ -19,6 +19,8 @@ export interface CacheLookupKey {
   fileSha: string
   providerId: string
   languages: readonly string[]
+  /** Digest of input and provider options that can change the result. */
+  requestHash?: string
 }
 
 export interface CacheWriteInput extends CacheLookupKey {

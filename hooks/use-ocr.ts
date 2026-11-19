@@ -4,12 +4,13 @@
  * React hook that wraps `lib/ocr/extract()` with streaming state. Used by
  * the composer menu and the OCR settings' try-it and compare panels. It is
  * the OCR module's public hook (`lib/ocr/module.ts`): without `deps` it
- * extracts with the host's deps at the default settings.
+ * extracts with the host's deps with the saved settings.
  */
 
 import { useCallback, useRef, useState } from "react"
 import { OcrError } from "@/lib/ocr/errors"
 import { buildOcrDeps } from "@/lib/ocr/deps"
+import { loadUserOcrSettings } from "@/lib/ocr/user-settings"
 import { extract, type ExtractDeps } from "@/lib/ocr/index"
 import { type OcrErrorCode, type OcrInput, type OcrResult } from "@/types/ocr"
 
@@ -22,9 +23,12 @@ export interface UseOcrState {
   reset: () => void
 }
 
-const hostDeps = (): ExtractDeps => buildOcrDeps()
+const hostDeps = async (): Promise<ExtractDeps> =>
+  buildOcrDeps({ settings: await loadUserOcrSettings() })
 
-export function useOcr(deps: ExtractDeps | (() => ExtractDeps | null) = hostDeps): UseOcrState {
+export function useOcr(
+  deps: ExtractDeps | (() => ExtractDeps | null | Promise<ExtractDeps | null>) = hostDeps
+): UseOcrState {
   const [status, setStatus] = useState<UseOcrState["status"]>("idle")
   const [result, setResult] = useState<OcrResult | null>(null)
   const [error, setError] = useState<UseOcrState["error"]>(null)
@@ -34,6 +38,7 @@ export function useOcr(deps: ExtractDeps | (() => ExtractDeps | null) = hostDeps
     if (controllerRef.current) {
       controllerRef.current.abort()
       controllerRef.current = null
+      setStatus("idle")
     }
   }, [])
 
@@ -47,26 +52,24 @@ export function useOcr(deps: ExtractDeps | (() => ExtractDeps | null) = hostDeps
   const run = useCallback(
     async (input: OcrInput): Promise<OcrResult | null> => {
       abort()
-      const resolvedDeps = typeof deps === "function" ? deps() : deps
-      if (!resolvedDeps) {
-        const err = {
-          code: "provider_failed" as OcrErrorCode,
-          message: "OCR runtime is not ready.",
-        }
-        setError(err)
-        setStatus("error")
-        return null
-      }
       const controller = new AbortController()
       controllerRef.current = controller
       setStatus("running")
       setError(null)
+      const forwardAbort = () => controller.abort()
+      if (input.signal?.aborted) forwardAbort()
+      else input.signal?.addEventListener("abort", forwardAbort, { once: true })
       try {
+        const resolvedDeps = typeof deps === "function" ? await deps() : deps
+        if (controllerRef.current !== controller) return null
+        if (!resolvedDeps) throw new Error("OCR runtime is not ready.")
         const out = await extract({ ...input, signal: controller.signal }, resolvedDeps)
+        if (controllerRef.current !== controller) return null
         setResult(out)
         setStatus("success")
         return out
       } catch (err) {
+        if (controllerRef.current !== controller) return null
         // Cross-module `instanceof OcrError` can fail when jest re-resolves
         // `@/types/ocr` through a different require chain. Duck-type on the
         // `code`+`providerId` shape OcrError stamps onto its instances so the
@@ -90,6 +93,7 @@ export function useOcr(deps: ExtractDeps | (() => ExtractDeps | null) = hostDeps
         setStatus("error")
         return null
       } finally {
+        input.signal?.removeEventListener("abort", forwardAbort)
         if (controllerRef.current === controller) controllerRef.current = null
       }
     },

@@ -46,12 +46,13 @@ describe("ocr port", () => {
     expect(buildOcrDeps).toHaveBeenCalledWith({ settings: custom, filePathResolver })
   })
 
-  it("extracts through the metered entry, with the default deps when none are given", async () => {
+  it("extracts through the metered entry, with the saved settings when no deps are given", async () => {
     const input = {
       source: { kind: "data-url" as const, dataUrl: "data:,", mimeType: "image/png" },
     }
+    jest.mocked(loadUserOcrSettings).mockResolvedValueOnce(custom)
     await port.extract(input)
-    expect(extract).toHaveBeenCalledWith(input, builtDeps())
+    expect(extract).toHaveBeenCalledWith(input, builtDeps(custom))
     const given = builtDeps(custom) as unknown as ExtractDeps
     await port.extract(input, given)
     expect(extract).toHaveBeenLastCalledWith(input, given)

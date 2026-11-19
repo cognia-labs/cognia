@@ -2,9 +2,9 @@
  * Production `PdfLoader` for `lib/ocr/pdf-router.ts:extractPdf`.
  *
  * Wraps `pdfjs-dist` so the PDF router can read each page's text layer and
- * rasterize the empty ones to a PNG data URL for OCR. Mirrors the worker setup
- * in `lib/document/parsers/pdf-parser.ts` (CDN worker to dodge Turbopack URL
- * resolution issues). Requires a DOM (`document` / `<canvas>`) — it runs in the
+ * rasterize the empty ones to a PNG data URL for OCR. The app stages a
+ * version-matched worker with its static assets. Requires a DOM
+ * (`document` / `<canvas>`) — it runs in the
  * renderer/workbench, never the sidecar.
  *
  * Kept separate from `pdf-router.ts` so the router stays DOM-free and unit-
@@ -12,15 +12,10 @@
  */
 
 import type { PdfDocument, PdfLoader } from "./pdf-router"
+import { OcrError } from "./errors"
 
-/** Lazily import pdfjs and configure its worker exactly once. */
-async function loadPdfjs() {
-  const pdfjsLib = await import("pdfjs-dist")
-  if (typeof window !== "undefined" && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
-  }
-  return pdfjsLib
-}
+const PDF_WORKER_URL = "/ocr/pdf.worker.min.mjs"
+const MAX_RENDER_PIXELS = 32_000_000
 
 /**
  * The shared production loader. Pass as `PdfRouterDeps.loadPdf`. The optional
@@ -48,8 +43,9 @@ export function createPdfLoader(opts?: {
 
   return async ({ bytes, signal }): Promise<PdfDocument> => {
     signal?.throwIfAborted()
-    const pdfjsLib = await loadPdfjs()
+    const pdfjsLib = await import("pdfjs-dist")
     signal?.throwIfAborted()
+    if (typeof window !== "undefined") pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL
     const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() })
     let destruction: Promise<void> | undefined
     const destroy = () => (destruction ??= loadingTask.destroy())
@@ -86,6 +82,20 @@ export function createPdfLoader(opts?: {
             const viewport = page.getViewport({ scale: dpi / 72 })
             const width = Math.ceil(viewport.width)
             const height = Math.ceil(viewport.height)
+            if (
+              !Number.isSafeInteger(width * height) ||
+              width <= 0 ||
+              height <= 0 ||
+              width > 16_384 ||
+              height > 16_384 ||
+              width * height > MAX_RENDER_PIXELS
+            ) {
+              throw new OcrError(
+                "invalid_input",
+                "pdf-loader",
+                "PDF page exceeds the OCR raster size limit."
+              )
+            }
             const canvas = makeCanvas(width, height)
             const canvasContext = canvas.getContext("2d")
             const task = page.render({

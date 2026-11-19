@@ -13,16 +13,21 @@ import { extractPdf } from "./pdf-router"
 import { getSharedOcrRegistry } from "./registry"
 import { loadUserOcrSettings } from "./user-settings"
 
+async function loadSettings() {
+  return (await loadUserOcrSettings()) ?? DEFAULT_OCR_SETTINGS
+}
+
 export const port: OcrPort = {
-  loadSettings: async () => (await loadUserOcrSettings()) ?? DEFAULT_OCR_SETTINGS,
+  loadSettings,
   deps: (options = {}) => buildOcrDeps(options),
-  extract: (input, deps) => extract(input, deps ?? buildOcrDeps()),
-  pdfDeps: ({ settings } = {}) => {
+  extract: async (input, deps) =>
+    extract(input, deps ?? buildOcrDeps({ settings: await loadSettings() })),
+  pdfDeps: ({ settings }: NonNullable<Parameters<OcrPort["pdfDeps"]>[0]> = {}) => {
     const extractDeps = buildOcrDeps({ settings })
     return { loadPdf: createPdfLoader(), extractDeps, settings: extractDeps.settings }
   },
   extractPdf,
-  candidates: (deps, { cloudFallback } = {}) =>
+  candidates: (deps, { cloudFallback }: NonNullable<Parameters<OcrPort["candidates"]>[1]> = {}) =>
     listProviderCandidates({
       registry: deps.registry,
       settings:

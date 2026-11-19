@@ -8,6 +8,7 @@
  * Layout produced:
  *   public/ocr/worker.min.js                        ← tesseract.js/dist
  *   public/ocr/core/tesseract-core-*.wasm.js        ← tesseract.js-core
+ *   public/ocr/pdf.worker.min.mjs                   ← pdfjs-dist/build
  *
  * Only the `-lstm` core variants are copied: the provider always creates its
  * worker with the default OEM (LSTM_ONLY), and tesseract.js's browser worker
@@ -32,6 +33,11 @@ const ROOT = path.resolve(__dirname, "../..")
 const DST = path.resolve(ROOT, "public", "ocr")
 
 const require = createRequire(import.meta.url)
+
+// Keep the PDF worker in sync with the imported PDF.js version after upgrades.
+const pdfWorker = path.join(path.dirname(require.resolve("pdfjs-dist")), "pdf.worker.min.mjs")
+fs.mkdirSync(DST, { recursive: true })
+fs.copyFileSync(pdfWorker, path.join(DST, "pdf.worker.min.mjs"))
 
 /** Resolve a package.json location, returning null when not installed. */
 function resolvePackageDir(pkg, fromDir) {

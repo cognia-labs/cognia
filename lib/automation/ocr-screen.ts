@@ -13,6 +13,7 @@
  * model.
  */
 
+import type { ExtractDeps } from "@cognia/ocr"
 import { OcrError } from "@cognia/ocr/errors"
 import { loadPort } from "@/lib/modules/ports"
 import { desktop, type CallContext } from "./client"
@@ -50,31 +51,51 @@ export interface OcrScreenDeps {
 
 /**
  * Read an image through the `ocr` port (ADR-0250 §14) with the host's deps at
- * the default settings. A host without OCR fails with a typed
+ * the saved settings. A host without OCR fails with a typed
  * `unsupported_shell` error.
  */
-export async function extractWithOcrPort(input: OcrInput): Promise<OcrResult> {
+type OcrScreenPolicy = Pick<ExtractDeps, "onDeviceOnly" | "requireEnabledProvider">
+
+export async function extractWithOcrPort(
+  input: OcrInput,
+  policy: OcrScreenPolicy = {}
+): Promise<OcrResult> {
   const ocr = await loadPort("ocr")
   if (!ocr) throw new OcrError("unsupported_shell", "ocr", "OCR is not available on this host")
-  return ocr.extract(input)
+  if (!policy.onDeviceOnly && !policy.requireEnabledProvider) return ocr.extract(input)
+  return ocr.extract(input, {
+    ...ocr.deps({ settings: await ocr.loadSettings() }),
+    ...policy,
+  })
+}
+
+type OcrScreenOptions = Pick<OcrInput, "languages" | "providerId" | "format" | "signal"> & {
+  opts?: ScreenshotOpts
+  ctx?: CallContext
+}
+
+function checkCancelled(signal?: AbortSignal) {
+  if (signal?.aborted) throw new OcrError("aborted", "ocr-screen", "Screen OCR cancelled.")
 }
 
 /** DI core — capture then OCR. */
 export async function ocrScreenWith(
   deps: OcrScreenDeps,
-  args: { opts?: ScreenshotOpts; ctx?: CallContext; languages?: string[] } = {}
+  { opts, ctx, ...input }: OcrScreenOptions = {}
 ): Promise<OcrResult> {
   let shot: Pick<Screenshot, "bytes" | "format">
   try {
-    shot = await deps.screenshot(args.opts ?? {}, args.ctx ?? { surface: "computerUse" })
+    checkCancelled(input.signal)
+    shot = await deps.screenshot(opts ?? {}, ctx ?? { surface: "computerUse" })
   } catch (err) {
     rethrowPhase("capture", err)
   }
+  checkCancelled(input.signal)
   const mimeType = mimeForFormat(shot.format)
   try {
     return await deps.extract({
       source: { kind: "data-url", dataUrl: `data:${mimeType};base64,${shot.bytes}`, mimeType },
-      languages: args.languages,
+      ...input,
     })
   } catch (err) {
     rethrowPhase("extract", err)
@@ -82,17 +103,15 @@ export async function ocrScreenWith(
 }
 
 /** Production entry: real screenshot + keyring-backed OCR deps. */
-export async function ocrScreen(
-  args: {
-    opts?: ScreenshotOpts
-    ctx?: CallContext
-    languages?: string[]
-  } = {}
-): Promise<OcrResult> {
+export async function ocrScreen({
+  onDeviceOnly,
+  requireEnabledProvider,
+  ...args
+}: OcrScreenOptions & OcrScreenPolicy = {}): Promise<OcrResult> {
   return ocrScreenWith(
     {
       screenshot: (opts, ctx) => desktop.screenshot(opts, ctx),
-      extract: extractWithOcrPort,
+      extract: (input) => extractWithOcrPort(input, { onDeviceOnly, requireEnabledProvider }),
     },
     args
   )

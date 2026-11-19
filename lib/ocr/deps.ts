@@ -16,6 +16,7 @@
 
 import { detectPlatform, isHeadlessHost, type Platform } from "@/lib/platform/detect"
 import { getSharedOcrRegistry } from "./registry"
+import { createPdfLoader } from "./pdf-loader"
 import { createOcrCredentialsResolver } from "./credentials"
 import { dexieOcrPageCache, dexieOcrResultCache } from "./cache"
 import type { OcrPageCache, OcrResultCache } from "./cache-contract"
@@ -27,6 +28,7 @@ import type {
 } from "./index"
 import type { OcrRegistry } from "./registry"
 import { shellAllows } from "./registry"
+import { hasNativeTextRecognition } from "./providers/mlkit-android"
 import { DEFAULT_OCR_SETTINGS, type OcrResult, type UserOcrSettings } from "@/types/ocr"
 import type { OcrProvider } from "@/types/ocr"
 import type { OcrRuntimeStatus, OcrRuntimeStatusResolver } from "@cognia/ocr/runtime-status"
@@ -49,6 +51,10 @@ export function detectOcrOsTag(platform: Platform = detectPlatform()): OcrOsTag 
   }
   const ua = (typeof navigator !== "undefined" ? navigator.userAgent : "").toLowerCase()
   if (platform === "mobile") {
+    const native = (
+      globalThis as typeof globalThis & { Capacitor?: { getPlatform?: () => string } }
+    ).Capacitor?.getPlatform?.()
+    if (native === "ios" || native === "android") return native
     return /iphone|ipad|ipod/.test(ua) ? "ios" : "android"
   }
   if (platform === "web") return "browser"
@@ -102,6 +108,7 @@ export function buildOcrDeps(opts: BuildOcrDepsOptions = {}): ExtractDeps {
     pageCache: opts.pageCache ?? dexieOcrPageCache,
     attachmentResolver: opts.attachmentResolver,
     filePathResolver: opts.filePathResolver,
+    loadPdf: platform === "headless" ? undefined : createPdfLoader(),
     onResult: opts.onResult,
   }
 }
@@ -160,12 +167,24 @@ export function createOcrRuntimeStatusResolver(
     if (provider.id === "tesseract-wasm") {
       return { providerId: provider.id, shellSupported: true, ready: true }
     }
+    if (platform === "mobile") {
+      const os = detectOcrOsTag(platform)
+      const matches =
+        (os === "ios" && provider.id === "apple-vision") ||
+        (os === "android" && provider.id === "mlkit-android")
+      if (!matches) return unavailable(provider, "unsupported-shell")
+      return hasNativeTextRecognition()
+        ? { providerId: provider.id, shellSupported: true, backendBound: true, ready: true }
+        : { ...unavailable(provider, "backend-not-bound"), backendBound: false }
+    }
     if (platform !== "tauri" && platform !== "headless") {
       return unavailable(provider, "backend-not-bound")
     }
 
     const backends = await loadAvailableBackends()
-    const backendBound = backends.has(provider.id)
+    const backendBound = backends.has(
+      provider.id === "tesseract-native" ? "tesseract" : provider.id
+    )
     if (!backendBound) {
       return {
         ...unavailable(provider, "backend-not-bound"),

@@ -17,11 +17,19 @@
  */
 
 import type { NativePlatform } from "./types/platform"
-import { sha256Blob, sha256Bytes } from "./hash"
+import { sha256Blob, sha256Bytes, sha256String } from "./hash"
 import type { OcrPageCache, OcrResultCache } from "./cache-contract"
-import { combinePageMarkdown, combinePageText, normalizeLanguages } from "./image-prep"
+import {
+  combinePageMarkdown,
+  combinePageText,
+  isPdfMimeType,
+  normalizeLanguages,
+} from "./image-prep"
+import { OCR_PROVIDER_CAPABILITIES } from "./capabilities"
+import type { PdfLoader } from "./pdf-router"
+import { readBlobAsArrayBuffer } from "./blob-utils"
 import { buildOcrDocument } from "./document"
-import { maybeEscalateResult } from "./confidence"
+import { decideEscalation, documentConfidence } from "./confidence"
 import { OcrError } from "./errors"
 import {
   type OcrCredentials,
@@ -33,6 +41,7 @@ import {
   type UserOcrSettings,
 } from "./types"
 import type { OcrRegistry } from "./registry"
+import { isOnDeviceOcrProvider } from "./registry"
 import { listProviderCandidates, resolveProviderById } from "./auto-router"
 import type { HasCredentialsFn, LocalReadinessFn } from "./auto-router"
 import type { OcrRuntimeStatusResolver } from "./runtime-status"
@@ -76,6 +85,12 @@ export interface ExtractDeps {
   attachmentResolver?: AttachmentResolver
   /** Required only when callers pass `kind: "file-path"` sources. */
   filePathResolver?: FilePathResolver
+  /** Host PDF loader used when the selected engine requires image pages. */
+  loadPdf?: PdfLoader
+  /** Host restriction for inputs that must stay on the device. */
+  onDeviceOnly?: boolean
+  /** Model-owned requests cannot override the saved provider enablement. */
+  requireEnabledProvider?: boolean
   /** Hook for tests / observability — every extract result flows through here. */
   onResult?: (result: OcrResult) => void
   /** Runtime truth used by auto-routing; production hosts should always provide it. */
@@ -138,13 +153,19 @@ function pickProviderConfig(settings: UserOcrSettings, providerId: string): OcrP
   return settings.providerConfig[providerId] ?? {}
 }
 
+function checkCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new OcrError("aborted", "extract", "OCR cancelled.")
+}
+
 async function callProvider(
   provider: OcrProvider,
   input: OcrInput,
   deps: ExtractDeps,
   signal: AbortSignal | undefined
 ): Promise<OcrResult> {
+  checkCancelled(signal)
   const credentials = await deps.credentialsResolver(provider.id, provider.credentialKeys)
+  checkCancelled(signal)
   const start = Date.now()
   try {
     const out = await provider.extract(input, {
@@ -153,6 +174,7 @@ async function callProvider(
       signal,
       platform: deps.platform,
     })
+    checkCancelled(signal)
     const durationMs = out.durationMs > 0 ? out.durationMs : Date.now() - start
     return rebuildResult(out, provider.id, durationMs)
   } catch (err) {
@@ -219,36 +241,60 @@ function readOcrMockHook(): ((input: OcrInput) => Promise<OcrResult> | OcrResult
  * once via `lib/ocr/runtime.ts` (browser) or via `useOcr()` (React).
  */
 export async function extract(input: OcrInput, deps: ExtractDeps): Promise<OcrResult> {
-  if (input.signal?.aborted) {
-    throw new OcrError("aborted", "extract", "OCR cancelled before dispatch.")
-  }
+  checkCancelled(input.signal)
 
   const mock = readOcrMockHook()
   if (mock) {
     const out = await mock(input)
+    checkCancelled(input.signal)
     deps.onResult?.(out)
     return out
   }
 
+  if (
+    (deps.requireEnabledProvider || deps.onDeviceOnly) &&
+    input.providerId !== undefined &&
+    deps.settings.providerEnabled[input.providerId] === false
+  ) {
+    throw new OcrError(
+      "unsupported_shell",
+      input.providerId,
+      "The requested OCR provider is disabled."
+    )
+  }
+  const explicitProvider =
+    input.providerId === undefined
+      ? undefined
+      : resolveProviderById(deps.registry, input.providerId, deps.platform)
+  if (explicitProvider && deps.onDeviceOnly && !isOnDeviceOcrProvider(explicitProvider)) {
+    throw new OcrError(
+      "unsupported_shell",
+      explicitProvider.id,
+      "This OCR input requires an on-device engine."
+    )
+  }
   const resolved = await resolveSource(input.source, deps)
-  const fileSha = await computeFileSha(resolved)
+  checkCancelled(input.signal)
+  const useCache = input.useCache !== false
+  const fileSha = useCache ? await computeFileSha(resolved) : ""
+  checkCancelled(input.signal)
   const languages = normalizeLanguages(input.languages, deps.settings.defaultLanguages)
 
   // An explicit request is strict. Auto/default selection gets an ordered,
   // readiness-gated chain and may continue after retryable provider failures.
-  const candidates =
-    input.providerId !== undefined
-      ? [resolveProviderById(deps.registry, input.providerId, deps.platform)]
-      : await listProviderCandidates({
-          registry: deps.registry,
-          settings: deps.settings,
-          platform: deps.platform,
-          osTag: deps.osTag,
-          localPreference: deps.settings.platformOverrides,
-          runtimeStatus: deps.runtimeStatus,
-          localReadiness: deps.localReadiness,
-          hasCredentials: deps.hasCredentials,
-        })
+  const candidates = explicitProvider
+    ? [explicitProvider]
+    : await listProviderCandidates({
+        registry: deps.registry,
+        settings: deps.settings,
+        platform: deps.platform,
+        osTag: deps.osTag,
+        localPreference: deps.settings.platformOverrides,
+        runtimeStatus: deps.runtimeStatus,
+        localReadiness: deps.localReadiness,
+        hasCredentials: deps.hasCredentials,
+        allowsProvider: deps.onDeviceOnly ? isOnDeviceOcrProvider : undefined,
+      })
   if (candidates.length === 0) {
     throw new OcrError(
       "provider_failed",
@@ -264,50 +310,130 @@ export async function extract(input: OcrInput, deps: ExtractDeps): Promise<OcrRe
     languages,
     source: { kind: "blob", blob: resolved.blob, mimeType: resolved.mimeType },
   }
+  const isPdf = isPdfMimeType(resolved.mimeType)
+  const runProvider = async (provider: OcrProvider): Promise<OcrResult> => {
+    const nativePdf = OCR_PROVIDER_CAPABILITIES[provider.id]?.pdfNative
+    if (
+      !isPdf ||
+      provider.id === "mistral-ocr" ||
+      (!input.pageRange?.trim() && nativePdf && nativePdf !== "no")
+    ) {
+      return callProvider(provider, providerInput, deps, input.signal)
+    }
+    const { defaultPdfLoader, extractPdf } = await import("./pdf-router")
+    const result = await extractPdf(
+      {
+        bytes: resolved.bytes ?? new Uint8Array(await readBlobAsArrayBuffer(resolved.blob)),
+        pageRange: input.pageRange,
+        languages,
+      },
+      {
+        loadPdf: deps.loadPdf ?? defaultPdfLoader,
+        extractDeps: deps,
+        ocrProviderId: provider.id,
+        signal: input.signal,
+        ocrPage: (page) =>
+          callProvider(provider, { ...page, format: input.format }, deps, input.signal),
+      }
+    )
+    return rebuildResult(result, provider.id, result.durationMs)
+  }
 
-  const useCache = input.useCache !== false
+  // Bind the cached result to the primary request and the current escalation
+  // authority. A result produced by a now-disallowed target must be a miss.
+  const targetId = deps.settings.escalationProviderId ?? deps.settings.cloudFallbackProviderId
+  const target =
+    input.providerId === undefined && deps.settings.confidenceEscalation === "escalate"
+      ? candidates.find(
+          (candidate) =>
+            candidate.id === targetId &&
+            (candidate.category === "local" || deps.settings.cloudFallbackEnabled)
+        )
+      : undefined
   let lastError: unknown
   for (const [index, provider] of candidates.entries()) {
+    checkCancelled(input.signal)
+    const escalation = target?.id === provider.id ? undefined : target
+    const key = {
+      fileSha,
+      providerId: provider.id,
+      languages,
+      requestHash: useCache
+        ? await sha256String(
+            JSON.stringify([
+              resolved.mimeType,
+              input.pageRange?.trim(),
+              input.format ?? deps.settings.defaultFormat,
+              pickProviderConfig(deps.settings, provider.id),
+              isPdf && deps.settings.pdfTextLayerFastPath,
+              escalation && [
+                escalation.id,
+                deps.settings.confidenceThreshold,
+                pickProviderConfig(deps.settings, escalation.id),
+              ],
+            ])
+          )
+        : undefined,
+    }
+    checkCancelled(input.signal)
     if (useCache) {
-      const hit = await deps.cache.read({ fileSha, providerId: provider.id, languages })
+      let hit: OcrResult | null = null
+      try {
+        hit = await deps.cache.read(key)
+      } catch {
+        // Local storage failure is a miss, never a provider failure.
+      }
+      checkCancelled(input.signal)
       if (hit) {
         deps.onResult?.(hit)
         return hit
       }
     }
 
+    let result: OcrResult
     try {
-      const result = await callProvider(provider, providerInput, deps, input.signal)
-      const finalResult = await maybeEscalateResult({
-        result,
-        settings: deps.settings,
-        reextract: (providerId) =>
-          callProvider(
-            resolveProviderById(deps.registry, providerId, deps.platform),
-            providerInput,
-            deps,
-            input.signal
-          ),
-      })
-
-      if (useCache) {
-        await deps.cache.write({
-          fileSha,
-          providerId: finalResult.providerId,
-          languages,
-          result: finalResult,
-          bytesIn: resolved.blob.size,
-        })
-      }
-
-      deps.onResult?.(finalResult)
-      return finalResult
+      result = await runProvider(provider)
     } catch (error) {
+      checkCancelled(input.signal)
       lastError = error
-      const explicit = input.providerId !== undefined
-      const isLast = index === candidates.length - 1
-      if (explicit || isLast || !isRetryableProviderError(error)) throw error
+      if (
+        input.providerId !== undefined ||
+        index === candidates.length - 1 ||
+        !isRetryableProviderError(error)
+      )
+        throw error
+      continue
     }
+    checkCancelled(input.signal)
+    let cacheable = true
+    if (
+      escalation &&
+      decideEscalation({
+        settings: deps.settings,
+        primaryProviderId: provider.id,
+        confidence: documentConfidence(result.document),
+      }).escalate
+    ) {
+      try {
+        result = await runProvider(escalation)
+      } catch {
+        checkCancelled(input.signal)
+        // A transient escalation failure shouldn't suppress a later retry.
+        cacheable = false
+      }
+    }
+
+    checkCancelled(input.signal)
+    if (useCache && cacheable) {
+      try {
+        await deps.cache.write({ ...key, result, bytesIn: resolved.blob.size })
+      } catch {
+        // The OCR result is already usable. Storage must not trigger egress.
+      }
+    }
+    checkCancelled(input.signal)
+    deps.onResult?.(result)
+    return result
   }
 
   throw lastError

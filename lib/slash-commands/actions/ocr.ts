@@ -9,7 +9,7 @@
  * Returns a system Markdown blob containing the extracted text — the slash
  * dispatcher pushes this into the chat as a system message. When the user
  * passes `--into composer` (default), the dispatcher also writes the result
- * back into the composer textarea via `dispatchPrompt`.
+ * into the composer draft for review.
  */
 
 import type { ExtractDeps } from "@cognia/ocr"
@@ -62,6 +62,7 @@ export function buildOcrResultPart(result: OcrResult, sourceRef?: OcrSourceRef):
 export interface SlashOcrInput {
   /** Raw argv after the `/ocr ` prefix. */
   argv: string
+  signal?: AbortSignal
   /** Resolved at the call site — composer, registry, settings, platform. */
   deps: ExtractDeps
   /** Attachment-id resolver — required when callers pass an `att_*` arg. */
@@ -157,23 +158,43 @@ export async function handleOcrSlashCommand(input: SlashOcrInput): Promise<Slash
     attachmentResolver: input.attachmentResolver ?? input.deps.attachmentResolver,
     filePathResolver: input.filePathResolver ?? input.deps.filePathResolver,
   }
+  const format = parsed.format ?? deps.settings.defaultFormat
   const ocrInput: OcrInput = {
     source: parsed.source,
-    providerId: parsed.provider,
+    providerId: parsed.provider === "auto" ? undefined : parsed.provider,
     languages: parsed.languages,
     pageRange: parsed.pageRange,
-    format: parsed.format,
+    format,
+    signal: input.signal,
   }
   try {
     const result = await input.extract(ocrInput, deps)
-    const body = renderResultMarkdown(result)
+    const content =
+      format === "text"
+        ? result.combinedText
+        : format === "blocks"
+          ? JSON.stringify(
+              result.pages.map((page) => ({
+                pageNumber: page.pageNumber,
+                blocks: page.blocks?.length
+                  ? page.blocks
+                  : page.text
+                    ? [{ text: page.text, kind: "paragraph" }]
+                    : [],
+              })),
+              null,
+              2
+            )
+          : result.combinedMarkdown
+    const body = renderResultMarkdown(result, content, format)
     const sourceRef: OcrSourceRef =
       parsed.source.kind === "attachment-id"
         ? { kind: "attachment-id", value: parsed.source.attachmentId }
         : { kind: "file-path", value: parsed.source.path }
     return {
       system: body,
-      composerText: parsed.into === "composer" ? result.combinedMarkdown : undefined,
+      composerText: parsed.into === "composer" ? content : undefined,
+      format,
       result,
       sourceRef,
     }
@@ -188,11 +209,15 @@ export async function handleOcrSlashCommand(input: SlashOcrInput): Promise<Slash
   }
 }
 
-function renderResultMarkdown(result: OcrResult): string {
+function renderResultMarkdown(result: OcrResult, content: string, format: OcrOutputFormat): string {
   const header = `**OCR via ${result.providerId}** (${result.languages.join(", ") || "auto"}, ${result.durationMs}ms${
     result.cached ? ", cached" : ""
   })`
-  return `${header}\n\n${result.combinedMarkdown}`
+  if (format === "markdown") return `${header}\n\n${content}`
+  // Preserve literal text and keep OCR strings from breaking out of the fence.
+  const backticks = content.match(/`+/g) ?? []
+  const fence = "`".repeat(backticks.reduce((length, run) => Math.max(length, run.length + 1), 3))
+  return `${header}\n\n${fence}${format === "blocks" ? "json" : "text"}\n${content}\n${fence}`
 }
 
 function tokenize(argv: string): string[] {

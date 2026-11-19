@@ -109,37 +109,37 @@ export function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
  * beyond `totalPages` are dropped silently.
  */
 export function parsePageRange(spec: string | undefined, totalPages?: number): number[] | null {
-  if (spec === undefined) return null
-  const trimmed = spec.trim()
-  if (trimmed === "") return null
+  const ranges = parsePageRanges(spec)
+  if (!ranges) return null
   if (totalPages !== undefined && (!Number.isInteger(totalPages) || totalPages < 1)) {
     throw new Error(`Invalid totalPages: ${totalPages}`)
   }
   const pages = new Set<number>()
-  for (const part of trimmed.split(",")) {
-    const segment = part.trim()
-    if (segment === "") continue
-    if (segment.includes("-")) {
-      const [lo, hi] = segment.split("-").map((s) => s.trim())
-      const loNum = Number(lo)
-      const hiNum = Number(hi)
-      if (!Number.isInteger(loNum) || !Number.isInteger(hiNum) || loNum < 1 || hiNum < loNum) {
-        throw new Error(`Invalid page range segment: "${segment}"`)
-      }
-      for (let p = loNum; p <= hiNum; p++) pages.add(p)
-    } else {
-      const num = Number(segment)
-      if (!Number.isInteger(num) || num < 1) {
-        throw new Error(`Invalid page number: "${segment}"`)
-      }
-      pages.add(num)
-    }
+  for (const [start, end] of ranges) {
+    const last = Math.min(end, totalPages ?? end)
+    if (last - start >= 100_000) throw new Error("Page range is too large")
+    for (let p = start; p <= last; p++) pages.add(p)
   }
-  let out = Array.from(pages).sort((a, b) => a - b)
-  if (totalPages !== undefined) {
-    out = out.filter((p) => p <= totalPages)
-  }
-  return out
+  return Array.from(pages).sort((a, b) => a - b)
+}
+
+/** Parse inclusive one-based intervals without expanding large ranges. */
+export function parsePageRanges(spec: string | undefined): [number, number][] | null {
+  if (!spec?.trim()) return null
+  return spec
+    .split(",")
+    .filter((part) => part.trim())
+    .map((part) => {
+      const segment = part.trim()
+      const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(segment)
+      const start = Number(match?.[1])
+      const end = Number(match?.[2] ?? match?.[1])
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) {
+        const field = segment.includes("-") ? "page range segment" : "page number"
+        throw new Error(`Invalid ${field}: "${segment}"`)
+      }
+      return [start, end]
+    })
 }
 
 // ─── Language normalization ─────────────────────────────────────────────────

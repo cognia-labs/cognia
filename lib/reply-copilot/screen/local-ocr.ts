@@ -12,6 +12,7 @@
  */
 
 import type { ExtractDeps } from "@cognia/ocr"
+import { isOnDeviceOcrProvider } from "@cognia/ocr/registry"
 import { blocksToScreenMatches } from "@/lib/automation/ocr-click"
 import type { Screenshot } from "@/lib/automation/types"
 import { loadPort } from "@/lib/modules/ports"
@@ -59,7 +60,7 @@ export async function readWindowText(
   deps: LocalOcrDeps = defaultDeps
 ): Promise<WindowText> {
   const ocrDeps = await deps.ocrDeps()
-  const local = (await deps.candidates(ocrDeps)).find((provider) => provider.category === "local")
+  const local = (await deps.candidates(ocrDeps)).find(isOnDeviceOcrProvider)
   if (!local) throw new LocalOcrUnavailableError()
   signal?.throwIfAborted()
   const mimeType = shot.format === "jpeg" ? "image/jpeg" : "image/png"

@@ -105,7 +105,7 @@ describe("buildOcrDeps", () => {
 describe("headless native OCR status", () => {
   it("probes the server registry through the process transport", async () => {
     mockPlatform = "headless"
-    ;(transport.call as jest.Mock).mockResolvedValue(["tesseract-native"])
+    ;(transport.call as jest.Mock).mockResolvedValue(["tesseract"])
     const provider = {
       id: "tesseract-native",
       category: "local",
@@ -123,3 +123,41 @@ describe("headless native OCR status", () => {
   })
 })
 /** @jest-environment jsdom */
+
+it.each([
+  ["ios", "apple-vision", "mlkit-android"],
+  ["android", "mlkit-android", "apple-vision"],
+])("uses the actual %s text recognition binding", async (platform, expected, other) => {
+  const host = globalThis as typeof globalThis & { Capacitor?: object }
+  const original = host.Capacitor
+  const resolve = createOcrRuntimeStatusResolver(DEFAULT_OCR_SETTINGS, jest.fn())
+  const provider = (id: string) =>
+    ({
+      id,
+      label: id,
+      extract: jest.fn(),
+      category: "local",
+      credentialKeys: [],
+      shells: { browser: false, tauri: false, capacitor: true },
+    }) as OcrProvider
+  try {
+    host.Capacitor = { getPlatform: () => platform }
+    await expect(resolve(provider(expected), "mobile")).resolves.toMatchObject({
+      ready: false,
+      reason: "backend-not-bound",
+    })
+    host.Capacitor = {
+      ...host.Capacitor,
+      PluginHeaders: [
+        { name: "CapacitorPluginMlKitTextRecognition", methods: [{ name: "detectText" }] },
+      ],
+    }
+    await expect(resolve(provider(expected), "mobile")).resolves.toMatchObject({ ready: true })
+    await expect(resolve(provider(other), "mobile")).resolves.toMatchObject({
+      ready: false,
+      reason: "unsupported-shell",
+    })
+  } finally {
+    host.Capacitor = original
+  }
+})

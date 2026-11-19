@@ -62,18 +62,21 @@ describe("mistralExtract — success", () => {
     expect(result.costEstimate?.amount).toBeCloseTo(0.008)
   })
 
-  it("uses OCR 4 and requests its structured block output by default", async () => {
-    const seen: { body?: string } = {}
-    const fetchImpl = jest.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      seen.body = init?.body as string
-      return new Response(JSON.stringify({ pages: [] }), { status: 200 })
-    }) as unknown as typeof fetch
-    await mistralExtract(dataUrlInput, makeCtx(), fetchImpl)
-    expect(JSON.parse(seen.body!)).toMatchObject({
-      model: "mistral-ocr-4-0",
-      include_blocks: true,
-    })
-  })
+  it.each([undefined, "mistral-ocr-4-0"])(
+    "uses supported OCR 4.1 with the saved model %s",
+    async (model) => {
+      const seen: { body?: string } = {}
+      const fetchImpl = jest.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        seen.body = init?.body as string
+        return new Response(JSON.stringify({ pages: [] }), { status: 200 })
+      }) as unknown as typeof fetch
+      await mistralExtract(dataUrlInput, makeCtx({ config: { model } }), fetchImpl)
+      expect(JSON.parse(seen.body!)).toMatchObject({
+        model: "mistral-ocr-4-1",
+        include_blocks: true,
+      })
+    }
+  )
 
   it("falls back to positional page numbers when index is missing", async () => {
     const fetchImpl = makeFetch({
@@ -94,6 +97,7 @@ describe("mistralExtract — success", () => {
     }) as unknown as typeof fetch
     await mistralExtract(
       {
+        pageRange: "1,3-5",
         source: {
           kind: "data-url",
           dataUrl: "data:application/pdf;base64,JVBERi0x",
@@ -104,6 +108,7 @@ describe("mistralExtract — success", () => {
       fetchImpl
     )
     expect(seen.body).toContain("document_url")
+    expect(JSON.parse(seen.body!)).toMatchObject({ pages: "0,2-4" })
     expect(seen.body).not.toContain('"image_url":')
   })
 

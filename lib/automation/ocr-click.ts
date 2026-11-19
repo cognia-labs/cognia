@@ -53,6 +53,7 @@ export interface FindScreenTextArgs {
   /** Substring to locate (case-insensitive, whitespace-collapsed). Omit to list all blocks. */
   query?: string
   ctx?: CallContext
+  signal?: AbortSignal
   languages?: string[]
   opts?: ScreenshotOpts
 }
@@ -64,6 +65,10 @@ export interface ClickScreenTextArgs extends FindScreenTextArgs {
   /** Mouse button + click count forwarded to `desktop.click`. */
   button?: "left" | "right" | "middle"
   doubleClick?: boolean
+}
+
+function checkCancelled(signal?: AbortSignal) {
+  if (signal?.aborted) throw new OcrError("aborted", "ocr-click", "Screen OCR cancelled.")
 }
 
 function mimeForFormat(format: Screenshot["format"]): string {
@@ -141,6 +146,7 @@ export async function findScreenTextWith(
   args: FindScreenTextArgs = {}
 ): Promise<FindScreenTextResult> {
   const ctx = args.ctx ?? { surface: "computerUse" as const }
+  checkCancelled(args.signal)
   let shot: Screenshot
   let frame: Awaited<ReturnType<typeof desktop.zoom>> | undefined
   if (args.state) {
@@ -192,11 +198,14 @@ export async function findScreenTextWith(
     // require state and never enter whole-monitor capture.
     shot = await deps.screenshot(args.opts ?? {}, ctx)
   }
+  checkCancelled(args.signal)
   const mimeType = mimeForFormat(shot.format)
   const result = await deps.extract({
     source: { kind: "data-url", dataUrl: `data:${mimeType};base64,${shot.bytes}`, mimeType },
     languages: args.languages,
+    ...(args.signal ? { signal: args.signal } : {}),
   })
+  checkCancelled(args.signal)
   const all = blocksToScreenMatches(result, shot).map((match) => {
     if (!frame?.surface) return match
     const surface = frame.surface
@@ -270,7 +279,9 @@ export async function clickScreenTextWith(
     ctx,
     languages: args.languages,
     opts: args.opts,
+    signal: args.signal,
   })
+  checkCancelled(args.signal)
   const index = Math.max(1, Math.floor(args.occurrence ?? 1)) - 1
   const target = found.matches[index]
   if (!target) {

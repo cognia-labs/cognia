@@ -1,4 +1,20 @@
 let mockOcrPort: Record<string, jest.Mock> | null = null
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  detectPlatform: () => "tauri",
+}))
+jest.mock("@/lib/workspace/session-cwd", () => ({
+  resolveSessionCwd: jest.fn(async () => "/workspace"),
+}))
+jest.mock("@/lib/files/workspace-fs", () => ({
+  readWorkspaceFileBase64: jest.fn(async () => "YWJj"),
+}))
+jest.mock("@/lib/sandbox/session-runtime", () => ({
+  sandboxSessionRuntime: { activeRefForSession: jest.fn(), desktopFileOcrRoot: jest.fn() },
+}))
+import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
+import { readWorkspaceFileBase64 } from "@/lib/files/workspace-fs"
+import { withPluginExecutionContext } from "../core/invocation-identity"
 jest.mock("@/lib/modules/ports", () => ({
   loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
 }))
@@ -36,7 +52,7 @@ describe("createOcrAPI", () => {
     // path — the consent overlay itself is covered by the guard's own suite.
     const guard = getPermissionGuard({ confirmDangerousByDefault: false })
     // Extraction is permission-gated; registration is not.
-    for (const pluginId of ["p", "my-plugin"]) {
+    for (const pluginId of ["p", "my-plugin", "cognia-ocr"]) {
       guard.registerPlugin(pluginId, [
         "media:image:read",
         "database:write",
@@ -147,7 +163,7 @@ describe("createOcrAPI", () => {
       durationMs: 1,
       cached: false,
     } as OcrResult
-    const settings = { defaultProviderId: "auto" }
+    const settings = { defaultProviderId: "auto", defaultFormat: "markdown" }
     const input = {
       source: { kind: "data-url", dataUrl: "data:image/png;base64,AA==" },
     } as OcrInput
@@ -155,7 +171,7 @@ describe("createOcrAPI", () => {
     beforeEach(() => {
       mockOcrPort = {
         loadSettings: jest.fn(async () => settings),
-        deps: jest.fn((options: Record<string, unknown>) => ({ built: options })),
+        deps: jest.fn((options: Record<string, unknown>) => ({ built: options, settings })),
         extract: jest.fn(async () => portResult),
       }
     })
@@ -163,7 +179,7 @@ describe("createOcrAPI", () => {
     it("extracts with the person's settings", async () => {
       await expect(createOcrAPI("p").extract(input)).resolves.toBe(portResult)
       expect(mockOcrPort!.deps).toHaveBeenCalledWith({ settings })
-      expect(mockOcrPort!.extract).toHaveBeenCalledWith(input, { built: { settings } })
+      expect(mockOcrPort!.extract).toHaveBeenCalledWith(input, { built: { settings }, settings })
     })
 
     it("reads a file path through the desktop file resolver", async () => {
@@ -174,6 +190,38 @@ describe("createOcrAPI", () => {
         source: { kind: "file-path", path: "/tmp/a.png" },
       })
       expect(deps.built).toEqual({ settings, filePathResolver: expect.any(Function) })
+    })
+
+    it("limits agent file OCR to the originating workspace and denies sensitive reads", async () => {
+      const api = createOcrAPI("cognia-ocr")
+      const context = { sessionId: "session", executionRunId: "run" }
+      const run = (file: string) =>
+        withPluginExecutionContext("cognia-ocr", context, () => api.extractFile(file))
+      await expect(run("/outside/image.png")).rejects.toMatchObject({ code: "invalid_input" })
+      await expect(run("image.png ")).rejects.toMatchObject({ code: "invalid_input" })
+      await run("/workspace/image.png")
+      const [, deps] = mockOcrPort!.extract.mock.calls.at(-1)!
+      await deps.built.filePathResolver("/workspace/image.png")
+      expect(readWorkspaceFileBase64).toHaveBeenCalledWith(
+        "/workspace",
+        "image.png",
+        undefined,
+        false
+      )
+    })
+
+    it("does not read host files from a sandboxed session", async () => {
+      jest.mocked(sandboxSessionRuntime.activeRefForSession).mockReturnValueOnce("sandbox:one")
+      jest.mocked(sandboxSessionRuntime.desktopFileOcrRoot).mockReturnValueOnce(null)
+      const api = createOcrAPI("cognia-ocr")
+      await expect(
+        withPluginExecutionContext(
+          "cognia-ocr",
+          { sessionId: "session", executionRunId: "run" },
+          () => api.extractFile("image.png")
+        )
+      ).rejects.toMatchObject({ code: "unsupported_shell" })
+      expect(mockOcrPort!.extract).not.toHaveBeenCalled()
     })
 
     it("runs /ocr with the port's extract", async () => {
