@@ -16,6 +16,10 @@ jest.mock("@/components/agent-runs/agent-runs-panel", () => ({
   },
 }))
 
+jest.mock("@/components/attention/attention-panel", () => ({
+  AttentionSection: () => <div data-testid="attention-section">waiting</div>,
+}))
+
 beforeEach(() => {
   replace.mockReset()
   searchParams = new URLSearchParams()
@@ -26,6 +30,20 @@ describe("AgentRunsPage", () => {
   it("renders the panel inside a Suspense boundary", () => {
     render(<AgentRunsPage />)
     expect(screen.getByTestId("panel")).toBeInTheDocument()
+  })
+
+  /**
+   * The navigation's badge on this page counts chat approvals, team gates and
+   * waiting fleet agents, none of which is a row of the run list (sidebar
+   * audit item 13): they are drawn above it, ahead of the runs.
+   */
+  it("draws what the badge counts above the run list", () => {
+    render(<AgentRunsPage />)
+    const waiting = screen.getByTestId("attention-section")
+    expect(
+      waiting.compareDocumentPosition(screen.getByTestId("panel")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
   })
 
   it("passes ?run= / ?kind= / ?status= through to the panel", () => {

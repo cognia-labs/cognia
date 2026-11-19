@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { StateCard } from "@/components/inbox/state/state-card"
 import { PageLoading } from "@/components/ui/loading-states"
 import { useSessions } from "@/hooks/chat/use-sessions"
-import { focusSession } from "@/hooks/global-search/use-global-search-actions"
+import { focusSession } from "@/lib/chat/focus-session"
 import { resolveConversationLinkSession } from "@/lib/connectors/session-bindings"
 import { buildSessionHref } from "@/lib/chat/message-permalink"
 

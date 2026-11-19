@@ -14,7 +14,7 @@ jest.mock("next/navigation", () => ({
 }))
 jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => mockSession }))
 jest.mock("@/hooks/chat/use-sessions", () => ({ useSessions: () => ({ select: mockSelect }) }))
-jest.mock("@/hooks/global-search/use-global-search-actions", () => ({
+jest.mock("@/lib/chat/focus-session", () => ({
   focusSession: (...args: unknown[]) => mockFocus(...args),
 }))
 jest.mock("@/lib/connectors/session-bindings", () => ({

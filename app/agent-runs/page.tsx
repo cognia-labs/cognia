@@ -3,6 +3,7 @@
 import { Suspense, useCallback } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { AgentRunsPanel } from "@/components/agent-runs/agent-runs-panel"
+import { AttentionSection } from "@/components/attention/attention-panel"
 import { COCKPIT_STATUS_GROUPS, type CockpitStatusGroup } from "@/lib/execution/cockpit-model"
 import { EXECUTION_FILTER_KINDS, type ExecutionFilterKind } from "@/lib/execution/monitor-model"
 import type { ExecutionRunOrigin } from "@/types/execution/run"
@@ -54,6 +55,9 @@ function AgentRunsRoute() {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col" data-bg-target="chat">
+      {/* What the navigation's badge on this page counts — approvals, gates
+          and waiting agents from every surface — above the runs themselves. */}
+      <AttentionSection className="max-h-[40%] shrink-0 border-b px-4 py-3" />
       <AgentRunsPanel
         selectedId={selectedId}
         onSelect={(id) => setParam("run", id)}

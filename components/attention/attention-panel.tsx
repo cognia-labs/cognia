@@ -16,15 +16,16 @@
 import { useRouter } from "next/navigation"
 import { BellRingIcon, ExternalLinkIcon, FileTextIcon, TerminalIcon, XIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { useId } from "react"
 
 import { useAttentionItems, useAttentionCount } from "@/hooks/attention/use-attention"
 import { useChatStore } from "@/stores/chat/chat-store"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
-import { useUIStore } from "@/stores/ui/ui-store"
 import { IslandPermissionActions } from "@/components/fleet/island-permission-actions"
 import { activityLine } from "@/lib/fleet/format"
 import { fleetFocusTerminal, fleetRevealTranscript } from "@/lib/tauri/fleet"
 import type { AttentionItem } from "@/lib/attention/types"
+import { CHAT_ROUTE, focusSessionInItsWorkspace } from "@/lib/chat/focus-session"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -42,14 +43,21 @@ import { cn } from "@/lib/utils"
 function AttentionRow({ item, onNavigated }: { item: AttentionItem; onNavigated: () => void }) {
   const t = useTranslations("attention")
   const router = useRouter()
-  const setSelectedGuild = useUIStore((s) => s.setSelectedGuild)
 
+  /**
+   * The conversation that asked, in its own workspace and guild. A fixed
+   * Direct Messages guild and the current workspace used to open a team's
+   * approval, or another workspace's, onto the wrong conversation or none:
+   * the chat pane only reads the active workspace's conversations. Routed
+   * after the focus, so the pane never renders the previous one first.
+   */
   const openChatSession = () => {
-    if (!item.sessionId) return
-    useChatStore.getState().setActiveSession(item.sessionId)
-    setSelectedGuild({ kind: "dm" })
-    router.push("/")
-    onNavigated()
+    const sessionId = item.sessionId
+    if (!sessionId) return
+    void focusSessionInItsWorkspace(sessionId).then(() => {
+      router.push(CHAT_ROUTE)
+      onNavigated()
+    })
   }
   /**
    * A durable run approval is answered where the run lives, not here: the
@@ -210,6 +218,49 @@ function AttentionRow({ item, onNavigated }: { item: AttentionItem; onNavigated:
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * The same items inline, on the page the navigation's Agent Runs badge sends
+ * people to (`lib/shell/nav-badges.ts`: the badge counts these, and
+ * `/agent-runs` is where runs are). The run list there shows runs, not chat
+ * approvals, team gates or waiting fleet agents, so a badge of 3 opened onto
+ * a list with none of the three in it (sidebar audit item 13). Same rows, same
+ * actions as the sheet; nothing at all while nothing waits.
+ */
+export function AttentionSection({ className }: { className?: string }) {
+  const t = useTranslations("attention")
+  const items = useAttentionItems()
+  const count = useAttentionCount()
+  const headingId = useId()
+  if (items.length === 0) return null
+  return (
+    <section
+      aria-labelledby={headingId}
+      data-testid="attention-section"
+      className={cn("flex min-h-0 flex-col gap-2", className)}
+    >
+      <div className="flex items-baseline gap-2">
+        <h2 id={headingId} className="text-sm font-medium">
+          {t("section.title")}
+        </h2>
+        {count > 0 ? (
+          <span
+            className="text-xs font-medium text-amber-600"
+            data-testid="attention-section-count"
+          >
+            {count}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">{t("section.description")}</p>
+      <div className="grid min-h-0 gap-2 overflow-y-auto md:grid-cols-2">
+        {items.map((item) => (
+          <AttentionRow key={item.id} item={item} onNavigated={() => {}} />
+        ))}
+      </div>
+    </section>
   )
 }
 

@@ -25,7 +25,7 @@ import { jumpToSessionMessage } from "@/lib/chat/cross-session-jump"
 import { getSession } from "@/lib/db/sessions"
 import { notifyExportOutcome } from "@/lib/files/export-feedback"
 import { revealSideChat } from "@/lib/slash-commands/actions/side-chat"
-import { guildFromSession } from "@/lib/chat/session-guild"
+import { focusSession, isOnChatRoute, CHAT_ROUTE } from "@/lib/chat/focus-session"
 import { revealActiveWorkbenchPanel } from "@/lib/context-workbench/active-context"
 import { inboxConversationHref } from "@/lib/inbox/conversation-href"
 import type { BuiltinCommandId } from "@/lib/global-search/providers/actions"
@@ -76,25 +76,6 @@ export interface UseGlobalSearchActionsOptions {
   close: () => void
 }
 
-/**
- * Follow a session into its workspace + guild, then focus it. Shared by the
- * conversation rows and message hits (both palettes had a private copy).
- */
-export function focusSession(
-  session: ChatSession | undefined,
-  id: string,
-  select: (id: string) => void
-): void {
-  if (session?.projectId) {
-    const projectState = useProjectStore.getState()
-    if (session.projectId !== projectState.activeProjectId) {
-      projectState.setActiveProject(session.projectId)
-    }
-  }
-  if (session) useUIStore.getState().setSelectedGuild(guildFromSession(session))
-  select(id)
-}
-
 export function useGlobalSearchActions({
   host,
   sessions,
@@ -129,6 +110,12 @@ export function useGlobalSearchActions({
       } else {
         focusSession(target, focusId, select)
       }
+      // The palette opens over every route; the conversation only shows on
+      // the chat pane's. Focusing it from `/conversations` or `/settings` used
+      // to close the palette and leave the page where it was. The message
+      // jump and the side-chat reveal below wait for the pane to hydrate, so
+      // they land after the route change too.
+      if (!isOnChatRoute(pathname)) router.push(CHAT_ROUTE)
       if (parentId) {
         void revealSideChat(parentId, sessionId, messageId)
           .then((landed) => {
@@ -142,7 +129,7 @@ export function useGlobalSearchActions({
         if (!landed) toast.error(t("jumpFailed"))
       })
     },
-    [sessions, host, select, t]
+    [sessions, host, select, t, pathname, router]
   )
 
   /*
@@ -466,6 +453,8 @@ export function useGlobalSearchActions({
           })
           select(session.id)
           useUIStore.getState().setSelectedGuild({ kind: "dm" })
+          // Like opening one: the new conversation lives in the chat pane.
+          if (!isOnChatRoute(pathname)) router.push(CHAT_ROUTE)
           return
         }
         case "install":
@@ -512,7 +501,7 @@ export function useGlobalSearchActions({
           return
       }
     },
-    [openSession, router, host, runCommand, create, select, t]
+    [openSession, router, host, runCommand, create, select, t, pathname]
   )
 
   /** Select an item from the list: close, remember, run. */

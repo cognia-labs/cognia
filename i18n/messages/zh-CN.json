@@ -5253,6 +5253,10 @@
     },
     "openOwner": "打开",
     "revealTranscript": "在文件管理器中显示会话记录",
+    "section": {
+      "description": "Agent Runs 角标统计的审批、团队关卡和等待中的 Agent，来自所有界面。",
+      "title": "等待你处理"
+    },
     "source": {
       "chat": "聊天",
       "fleet": "舰队",

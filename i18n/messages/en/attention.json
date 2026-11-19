@@ -22,5 +22,9 @@
     "run": "Run",
     "team": "Team"
   },
-  "title": "Attention"
+  "title": "Attention",
+  "section": {
+    "title": "Waiting on you",
+    "description": "The approvals, team gates and waiting agents the Agent Runs badge counts, from every surface."
+  }
 }

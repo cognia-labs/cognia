@@ -1,5 +1,5 @@
 /** @jest-environment jsdom */
-import { render, screen, fireEvent, act } from "@testing-library/react"
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import en from "@/i18n/messages/en.json"
 
@@ -31,13 +31,13 @@ jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }))
 
-const setSelectedGuildMock = jest.fn()
-jest.mock("@/stores/ui/ui-store", () => ({
-  useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ setSelectedGuild: setSelectedGuildMock }),
+const focusInWorkspaceMock = jest.fn(async (_sessionId: string) => undefined)
+jest.mock("@/lib/chat/focus-session", () => ({
+  CHAT_ROUTE: "/",
+  focusSessionInItsWorkspace: (id: string) => focusInWorkspaceMock(id),
 }))
 
-import { AttentionPanel } from "./attention-panel"
+import { AttentionPanel, AttentionSection } from "./attention-panel"
 import { resetAttentionForTests } from "@/lib/attention/attention-store"
 import { useChatStore } from "@/stores/chat/chat-store"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
@@ -104,15 +104,19 @@ describe("AttentionPanel", () => {
     expect(screen.getByTestId("attention-row-chat:r1")).toBeInTheDocument()
   })
 
-  it("chat row navigates to the owning session", async () => {
+  it("chat row opens the owning session in its own workspace and guild, then the chat pane", async () => {
+    // Sidebar audit item 14: it used to force Direct Messages and keep the
+    // current workspace, so another workspace's approval opened nothing.
     renderPanel()
     await flush()
     act(() => useChatStore.getState().pushApproval(approval("r1")))
     fireEvent.click(screen.getByTestId("attention-trigger"))
     fireEvent.click(screen.getByRole("button", { name: "Open" }))
-    expect(useChatStore.getState().activeSessionId).toBe("s1")
-    expect(setSelectedGuildMock).toHaveBeenCalledWith({ kind: "dm" })
-    expect(pushMock).toHaveBeenCalledWith("/")
+    expect(focusInWorkspaceMock).toHaveBeenCalledWith("s1")
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/"))
+    expect(focusInWorkspaceMock.mock.invocationCallOrder[0]).toBeLessThan(
+      pushMock.mock.invocationCallOrder[0]
+    )
   })
 
   it("team row navigates to the workspace with the teamId param", async () => {
@@ -290,5 +294,48 @@ describe("AttentionPanel", () => {
     expect(row.className).toContain("opacity-60")
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
     expect(useChatStore.getState().sessions.s1.pendingApprovals).toEqual([])
+  })
+})
+
+/**
+ * Sidebar audit item 13: the navigation's Agent Runs badge counts these items
+ * and opens `/agent-runs`, whose run list has no row for a chat approval, a
+ * team gate or a waiting fleet agent. The page draws them inline.
+ */
+describe("AttentionSection", () => {
+  const renderSection = () =>
+    render(
+      <NextIntlClientProvider locale="en" messages={en}>
+        <AttentionSection />
+      </NextIntlClientProvider>
+    )
+
+  it("draws nothing while nothing waits", async () => {
+    renderSection()
+    await flush()
+    expect(screen.queryByTestId("attention-section")).toBeNull()
+  })
+
+  it("lists what the badge counts, with the same row actions as the sheet", async () => {
+    renderSection()
+    await flush()
+    act(() => {
+      useChatStore.getState().pushApproval(approval("r1"))
+      usePendingGatesStore.getState().open({
+        key: { scope: "agent-team-budget", id: "run-1" },
+        gateType: "budget",
+        title: "Budget",
+        runId: "run-1",
+        teamId: "team-9",
+      })
+    })
+    const section = screen.getByRole("region", { name: "Waiting on you" })
+    expect(section).toBeInTheDocument()
+    expect(screen.getByTestId("attention-section-count")).toHaveTextContent("2")
+    expect(screen.getByTestId("attention-row-chat:r1")).toBeInTheDocument()
+    const opens = screen.getAllByRole("button", { name: "Open" })
+    expect(opens).toHaveLength(2)
+    fireEvent.click(opens[1])
+    expect(pushMock).toHaveBeenCalledWith("/squads?id=team-9")
   })
 })

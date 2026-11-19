@@ -34,7 +34,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAdapterHealth } from "@/hooks/connectors/use-adapter-health"
 import { useLatestOutboundJob } from "@/hooks/connectors/use-latest-outbound-job"
 import { useSessions } from "@/hooks/chat/use-sessions"
-import { focusSession } from "@/hooks/global-search/use-global-search-actions"
+import { focusSession } from "@/lib/chat/focus-session"
 import { getSession } from "@/lib/db/sessions"
 import { decideBadge } from "./adapter-health-decision"
 import { effectiveStatus } from "@/lib/db/conversation-overrides"

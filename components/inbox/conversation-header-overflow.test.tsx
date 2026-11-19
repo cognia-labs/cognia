@@ -91,7 +91,7 @@ jest.mock("next/navigation", () => ({
 const mockSelect = jest.fn()
 jest.mock("@/hooks/chat/use-sessions", () => ({ useSessions: () => ({ select: mockSelect }) }))
 const mockFocusSession = jest.fn()
-jest.mock("@/hooks/global-search/use-global-search-actions", () => ({
+jest.mock("@/lib/chat/focus-session", () => ({
   focusSession: (...args: unknown[]) => mockFocusSession(...args),
 }))
 const mockGetSession = jest.fn(async (_id: string) => undefined as unknown)

@@ -18,7 +18,7 @@ import { FactList, FactRow } from "@/components/surface/fact-list"
 import type { ScheduledTask } from "@/types/scheduler"
 import type { UnifiedScheduledItem } from "@/types/scheduler/unified"
 
-import { focusSessionInItsWorkspace } from "../../run-artifact-links"
+import { focusSessionInItsWorkspace } from "@/lib/chat/focus-session"
 
 export interface OriginSectionProps {
   item: UnifiedScheduledItem

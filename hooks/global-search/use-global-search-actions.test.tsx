@@ -146,10 +146,15 @@ const projectState = { activeProjectId: "p1", setActiveProject: jest.fn() }
 jest.mock("@/stores/project/project-store", () => ({
   useProjectStore: { getState: () => projectState },
 }))
-const uiState = { setSelectedGuild: jest.fn(), toggleSidebar: jest.fn(), guildRailCollapsed: false }
+const uiState = {
+  setSelectedGuild: jest.fn(),
+  toggleSidebar: jest.fn(),
+  requestConversationReveal: jest.fn(),
+  guildRailCollapsed: false,
+}
 jest.mock("@/stores/ui", () => ({ useUIStore: { getState: () => uiState } }))
 
-import { focusSession, useGlobalSearchActions } from "./use-global-search-actions"
+import { useGlobalSearchActions } from "./use-global-search-actions"
 import { onComposerReferenceRequest } from "@/lib/chat/composer-reference-request"
 import { onWorkspaceDialogRequest } from "@/lib/workspace/workspace-dialog-request"
 
@@ -191,22 +196,6 @@ beforeEach(() => {
   settingsState.settings = {}
 })
 
-describe("focusSession", () => {
-  it("switches workspace and guild before selecting", () => {
-    const select = jest.fn()
-    focusSession(sessions[1], "s2", select)
-    expect(projectState.setActiveProject).toHaveBeenCalledWith("p2")
-    expect(uiState.setSelectedGuild).toHaveBeenCalledWith({ kind: "team", teamId: "t1" })
-    expect(select).toHaveBeenCalledWith("s2")
-    focusSession(undefined, "ghost", select)
-    expect(select).toHaveBeenLastCalledWith("ghost")
-    // Same workspace → no switch.
-    projectState.setActiveProject.mockClear()
-    focusSession(sessions[0], "s1", select)
-    expect(projectState.setActiveProject).not.toHaveBeenCalled()
-  })
-})
-
 describe("useGlobalSearchActions", () => {
   it("runItem closes, records, and opens a session with a message jump", async () => {
     const { result, close, select } = setup()
@@ -226,6 +215,26 @@ describe("useGlobalSearchActions", () => {
       result.current.runItem(item({ type: "open-session", sessionId: "s1", messageId: "m2" }))
     )
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("jumpFailed"))
+  })
+
+  it("takes a conversation opened over another page to the chat pane, revealing its row", () => {
+    // Sidebar audit item 3: from `/conversations` the palette closed and the
+    // page stayed put; item 8: the row stayed folded away in the list.
+    mockPathname = "/conversations"
+    const { result, select } = setup()
+    act(() => result.current.runItem(item({ type: "open-session", sessionId: "s2" })))
+    expect(projectState.setActiveProject).toHaveBeenCalledWith("p2")
+    expect(select).toHaveBeenCalledWith("s2")
+    expect(push).toHaveBeenCalledWith("/")
+    expect(uiState.requestConversationReveal).toHaveBeenCalledWith("s2")
+  })
+
+  it("stays on the chat pane when it is already there", () => {
+    mockPathname = "/"
+    const { result, select } = setup()
+    act(() => result.current.runItem(item({ type: "open-session", sessionId: "s1" })))
+    expect(select).toHaveBeenCalledWith("s1")
+    expect(push).not.toHaveBeenCalled()
   })
 
   it("prefers the host's session selector when provided", () => {
@@ -286,6 +295,8 @@ describe("useGlobalSearchActions", () => {
       characterId: "c1",
     })
     expect(select).toHaveBeenCalledWith("new")
+    // A new conversation lives in the chat pane, like an opened one.
+    expect(push).toHaveBeenLastCalledWith("/")
     const run = jest.fn()
     await act(() => result.current.runAction({ type: "callback", run }))
     expect(run).toHaveBeenCalled()

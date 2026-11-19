@@ -5253,6 +5253,10 @@
     },
     "openOwner": "Open",
     "revealTranscript": "Reveal transcript",
+    "section": {
+      "description": "The approvals, team gates and waiting agents the Agent Runs badge counts, from every surface.",
+      "title": "Waiting on you"
+    },
     "source": {
       "chat": "Chat",
       "fleet": "Fleet",

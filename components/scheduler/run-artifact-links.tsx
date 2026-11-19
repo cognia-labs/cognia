@@ -18,6 +18,7 @@ import { useTranslations } from "next-intl"
 import { ArrowUpRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { focusSessionInItsWorkspace } from "@/lib/chat/focus-session"
 import { runArtifactLinks, type RunArtifactLink } from "@/lib/scheduler/run-artifact-link"
 
 export interface RunArtifactLinksProps {
@@ -25,27 +26,6 @@ export interface RunArtifactLinksProps {
   output: unknown
   /** Injected in tests, so the suite does not need a chat store. */
   onOpenSession?: (sessionId: string) => void
-}
-
-/**
- * Focus a session in the chat pane, following it into its own workspace first.
- *
- * A scheduled run's conversation belongs to the task's workspace, which is
- * often not the one on screen; focusing it without switching left the chat
- * pane showing a session the sidebar did not list. Same path the ⌘K palette
- * takes (`focusSession` in `use-global-search-actions`). Shared with the task
- * detail's "open the conversation that created this".
- */
-export async function focusSessionInItsWorkspace(sessionId: string): Promise<void> {
-  const [{ useChatStore }, { getSession }, { focusSession }] = await Promise.all([
-    import("@/stores/chat"),
-    import("@/lib/db/sessions"),
-    import("@/hooks/global-search/use-global-search-actions"),
-  ])
-  const session = await getSession(sessionId).catch(() => undefined)
-  focusSession(session ?? undefined, sessionId, (id) =>
-    useChatStore.getState().setActiveSession(id)
-  )
 }
 
 export function RunArtifactLinks({ output, onOpenSession }: RunArtifactLinksProps) {

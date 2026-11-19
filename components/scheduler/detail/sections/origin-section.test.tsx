@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event"
 const push = jest.fn()
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
 const focusSession = jest.fn(async (_sessionId: string) => undefined)
-jest.mock("../../run-artifact-links", () => ({
+jest.mock("@/lib/chat/focus-session", () => ({
   focusSessionInItsWorkspace: (id: string) => focusSession(id),
 }))
 
