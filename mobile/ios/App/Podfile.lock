@@ -65,6 +65,9 @@ PODS:
     - MLKitBarcodeScanning (~> 7.0.0)
   - GoogleMLKit/MLKitCore (8.0.0):
     - MLKitCommon (~> 13.0.0)
+  - GoogleMLKit/TextRecognition (8.0.0):
+    - GoogleMLKit/MLKitCore
+    - MLKitTextRecognition (~> 6.0.0)
   - GoogleToolboxForMac/Defines (4.2.1)
   - GoogleToolboxForMac/Logger (4.2.1):
     - GoogleToolboxForMac/Defines (= 4.2.1)
@@ -117,6 +120,13 @@ PODS:
     - GoogleUtilities/Logger (~> 8.0)
     - GoogleUtilities/UserDefaults (~> 8.0)
     - GTMSessionFetcher/Core (< 4.0, >= 3.3.2)
+  - MLKitTextRecognition (6.0.0):
+    - MLKitCommon (~> 13.0)
+    - MLKitTextRecognitionCommon (= 5.0.0)
+    - MLKitVision (~> 9.0)
+  - MLKitTextRecognitionCommon (5.0.0):
+    - MLKitCommon (~> 13.0)
+    - MLKitVision (~> 9.0)
   - MLKitVision (9.0.0):
     - GoogleToolboxForMac/Logger (< 5.0, >= 4.2.1)
     - "GoogleToolboxForMac/NSData+zlib (< 5.0, >= 4.2.1)"
@@ -128,6 +138,9 @@ PODS:
     - nanopb/encode (= 3.30910.0)
   - nanopb/decode (3.30910.0)
   - nanopb/encode (3.30910.0)
+  - PantristCapacitorPluginMlKitTextRecognition (8.1.1):
+    - Capacitor
+    - GoogleMLKit/TextRecognition (< 10.0.0, >= 8.0.0)
   - PromisesObjC (2.4.1)
   - SwiftKeychainWrapper (4.0.1)
 
@@ -160,6 +173,7 @@ DEPENDENCIES:
   - "CapgoCapacitorNativeBiometric (from `../../../node_modules/.pnpm/@capgo+capacitor-native-biometric@8.9.1_patch_hash=8aed032e94ffe6e4edf67ccaf6954431b9e5_05622972a197607ad3e3eb7b14be0f67/node_modules/@capgo/capacitor-native-biometric`)"
   - "CapgoCapacitorNavigationBar (from `../../../node_modules/.pnpm/@capgo+capacitor-navigation-bar@8.2.19_@capacitor+core@8.6.0/node_modules/@capgo/capacitor-navigation-bar`)"
   - KSCrash (= 2.5.1)
+  - "PantristCapacitorPluginMlKitTextRecognition (from `../../../node_modules/.pnpm/@pantrist+capacitor-plugin-ml-kit-text-recognition@8.1.1_@capacitor+core@8.6.0/node_modules/@pantrist/capacitor-plugin-ml-kit-text-recognition`)"
 
 SPEC REPOS:
   trunk:
@@ -175,6 +189,8 @@ SPEC REPOS:
     - MLImage
     - MLKitBarcodeScanning
     - MLKitCommon
+    - MLKitTextRecognition
+    - MLKitTextRecognitionCommon
     - MLKitVision
     - nanopb
     - PromisesObjC
@@ -235,6 +251,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/.pnpm/@capgo+capacitor-native-biometric@8.9.1_patch_hash=8aed032e94ffe6e4edf67ccaf6954431b9e5_05622972a197607ad3e3eb7b14be0f67/node_modules/@capgo/capacitor-native-biometric"
   CapgoCapacitorNavigationBar:
     :path: "../../../node_modules/.pnpm/@capgo+capacitor-navigation-bar@8.2.19_@capacitor+core@8.6.0/node_modules/@capgo/capacitor-navigation-bar"
+  PantristCapacitorPluginMlKitTextRecognition:
+    :path: "../../../node_modules/.pnpm/@pantrist+capacitor-plugin-ml-kit-text-recognition@8.1.1_@capacitor+core@8.6.0/node_modules/@pantrist/capacitor-plugin-ml-kit-text-recognition"
 
 SPEC CHECKSUMS:
   Capacitor: 62cab4ab4ba04ea925576ddd1be188869e90d9ea
@@ -276,11 +294,14 @@ SPEC CHECKSUMS:
   MLImage: 2ab9c968e75f57911c16f4c9d9e8a8e9604a86a1
   MLKitBarcodeScanning: 72c6437f13a900833b400136be53a8a5d86f42fa
   MLKitCommon: 26b779f072a182c1603d4c88a101c350cac837b1
+  MLKitTextRecognition: 072488cfd29f1726733378661881f88db74ba3dc
+  MLKitTextRecognitionCommon: 228502b9dc61ea9cfb6199ebafef3baa842e2043
   MLKitVision: fa8dea9012ac59497c79ddbe9ebf32051047ac4c
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
+  PantristCapacitorPluginMlKitTextRecognition: 22330573cd47ebbe1370bab03cfde514cedb9f4a
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
   SwiftKeychainWrapper: 807ba1d63c33a7d0613288512399cd1eda1e470c
 
-PODFILE CHECKSUM: 6520af0c2d3c9898a05f4119ae999604f6e8c3e2
+PODFILE CHECKSUM: 83c06f651f4081ee5751d2b8696ac32c2c3bdbc7
 
 COCOAPODS: 1.16.2

@@ -41,6 +41,7 @@
     "@capacitor/toast": "^8.0.1",
     "@capgo/capacitor-native-biometric": "^8.9.1",
     "@capgo/capacitor-navigation-bar": "^8.2.10",
+    "@pantrist/capacitor-plugin-ml-kit-text-recognition": "8.1.1",
     "capacitor-native-settings": "^8.2.0",
     "capacitor-secure-storage-plugin": "^0.13.0",
     "capacitor-voice-recorder": "^7.0.6",

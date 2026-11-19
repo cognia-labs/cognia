@@ -31,6 +31,7 @@ def capacitor_pods
   pod 'CapacitorToast', :path => '../../../node_modules/.pnpm/@capacitor+toast@8.0.1_@capacitor+core@8.6.0/node_modules/@capacitor/toast'
   pod 'CapgoCapacitorNativeBiometric', :path => '../../../node_modules/.pnpm/@capgo+capacitor-native-biometric@8.9.1_patch_hash=8aed032e94ffe6e4edf67ccaf6954431b9e5_05622972a197607ad3e3eb7b14be0f67/node_modules/@capgo/capacitor-native-biometric'
   pod 'CapgoCapacitorNavigationBar', :path => '../../../node_modules/.pnpm/@capgo+capacitor-navigation-bar@8.2.19_@capacitor+core@8.6.0/node_modules/@capgo/capacitor-navigation-bar'
+  pod 'PantristCapacitorPluginMlKitTextRecognition', :path => '../../../node_modules/.pnpm/@pantrist+capacitor-plugin-ml-kit-text-recognition@8.1.1_@capacitor+core@8.6.0/node_modules/@pantrist/capacitor-plugin-ml-kit-text-recognition'
   pod 'CapacitorNativeSettings', :path => '../../../node_modules/.pnpm/capacitor-native-settings@8.2.0_@capacitor+core@8.6.0/node_modules/capacitor-native-settings'
   pod 'CapacitorSecureStoragePlugin', :path => '../../../node_modules/.pnpm/capacitor-secure-storage-plugin@0.13.0_patch_hash=107761618a151e09b442053f6e7c72f39a0ab_6e23d6d41a67f1a895d520c66db2de08/node_modules/capacitor-secure-storage-plugin'
   pod 'CapacitorVoiceRecorder', :path => '../../../node_modules/.pnpm/capacitor-voice-recorder@7.0.6_@capacitor+core@8.6.0_@capacitor+filesystem@8.1.5_@capacitor+core@8.6.0_/node_modules/capacitor-voice-recorder'
