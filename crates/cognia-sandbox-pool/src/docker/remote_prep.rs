@@ -629,6 +629,21 @@ impl DockerSandboxBackend {
         }
         let egress_tier = admitted.spec.egress.tier;
         let egress_enforced = remote.provisioner.egress_enforced(egress_tier);
+        let domains = if egress_tier == EgressTier::Allowlist {
+            self.admission.egress_allowlist(&admitted.spec)
+        } else {
+            Vec::new()
+        };
+        let network_ceiling = agent_network_ceiling(&config.sandbox_policy);
+        // A provider's general allowlist capability does not attest that all
+        // name resolution is also bounded (Cilium permits arbitrary DNS).
+        // Strict agent ceilings can use an attested offline remote environment.
+        require_network_ceiling(
+            &network_ceiling,
+            egress_tier,
+            &domains,
+            egress_enforced && egress_tier != EgressTier::Allowlist,
+        )?;
         if !egress_enforced && (placement.isolation_mandatory() || self.admission.multi_tenant()) {
             return Err(refused(
                 "sandbox_egress_unenforceable",
@@ -663,6 +678,11 @@ impl DockerSandboxBackend {
             &source,
             (!persistent).then_some(ephemeral_identity.as_str()),
         );
+        if network_ceiling != NetworkPolicy::On {
+            // Do not reuse an optional instance that could have been
+            // provisioned without enforcement before this admission.
+            key = sha256_hex(format!("{key}\0attested-offline-egress").as_bytes());
+        }
 
         let workspace_env = match config.cwd.as_deref() {
             Some(cwd) => workspace_port_env(cwd).await?,
@@ -724,10 +744,7 @@ impl DockerSandboxBackend {
             size: admitted.admission.size_class.clone(),
             egress: EgressPlan {
                 tier: egress_tier,
-                domains: match egress_tier {
-                    EgressTier::Allowlist => self.admission.egress_allowlist(&admitted.spec),
-                    EgressTier::Off | EgressTier::On => Vec::new(),
-                },
+                domains,
             },
             lifetime: remote.limits.max_lifetime,
             supervisor,
@@ -3571,6 +3588,33 @@ mod tests {
         assert_eq!(request.egress.domains, vec!["registry.npmjs.org".to_string()]);
         let placement = &remote.events(PLACEMENT_CHANNEL)[0]["placement"];
         assert_eq!(placement["egress"]["enforced"], false);
+        remote.backend.kill_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_strict_agent_requires_more_than_the_remote_allowlist_capability() {
+        let mut environment = spec(EgressTier::Allowlist, None);
+        environment.egress.approved_domains = vec!["registry.npmjs.org".into()];
+        let remote = Remote::new(FakeRemote::new("fake"), environment.clone(), 1);
+        let mut config = remote_config("strict", &environment);
+        config.sandbox_policy.network = SandboxNetworkMode::Allowlist;
+        config.sandbox_policy.allowed_hosts = environment.egress.approved_domains.clone();
+        let error = remote.spawn(config).await.unwrap_err();
+        assert_eq!(error.kind, SandboxErrorKind::Refused);
+        assert_eq!(error.code, "sandbox_egress_unenforceable");
+        assert!(remote.fake.provisions.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_attested_offline_spawn_does_not_reuse_an_optional_remote_instance() {
+        let mut environment = spec(EgressTier::Off, None);
+        environment.lifecycle = SandboxLifecycleKind::Persistent;
+        let remote = Remote::new(FakeRemote::new("fake"), environment.clone(), 2);
+        remote.spawn(remote_config("optional", &environment)).await.unwrap();
+        let mut strict = remote_config("offline", &environment);
+        strict.sandbox_policy.network = SandboxNetworkMode::Off;
+        remote.spawn(strict).await.unwrap();
+        assert_eq!(remote.fake.provisions.lock().len(), 2);
         remote.backend.kill_all().await.unwrap();
     }
 

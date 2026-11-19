@@ -100,6 +100,7 @@ describe("createContainerExecAdapter", () => {
       env: { LANG: "C" },
       stdin: "input",
       timeoutMs: 30_000,
+      network: { kind: "off" },
     })
     expect(result).toEqual({
       exit_code: 0,
@@ -121,6 +122,38 @@ describe("createContainerExecAdapter", () => {
     expect(args).not.toHaveProperty("stdin")
   })
 
+  it.each(["on", "allowlist"])(
+    "refuses an offline command in an egress-%s placement",
+    async (tier) => {
+      const { adapter, call, resolvePlacement } = setup()
+      resolvePlacement.mockResolvedValueOnce({
+        kind: "container",
+        spec: { egress: { tier } },
+      } as never)
+      await adapter.preflight!("ref-1", "/workspaces/p", "s1")
+      await expect(adapter.execute("ref-1", payload())).rejects.toMatchObject({
+        code: "policy-not-attested",
+      })
+      expect(call).not.toHaveBeenCalled()
+    }
+  )
+
+  it("does not dispatch an offline file helper into a network-enabled placement", async () => {
+    const { adapter, call, resolvePlacement } = setup()
+    resolvePlacement.mockResolvedValueOnce({
+      kind: "container",
+      spec: { egress: { tier: "on" } },
+    } as never)
+    await adapter.preflight!("ref-1", "/workspaces/p", "s1")
+    await expect(
+      adapter.execute("ref-1", {
+        ...payload({ argv: ["/bin/cat", "/workspaces/p/note.txt"] }),
+        tool: "sandbox_text_editor",
+      })
+    ).rejects.toMatchObject({ code: "policy-not-attested" })
+    expect(call).not.toHaveBeenCalled()
+  })
+
   it("reports truncation, a timeout without status and an environment with egress", async () => {
     const call = jest.fn(async () =>
       wire({ exitCode: null, timedOut: true, stdoutTruncated: true, stderrTruncated: true })
@@ -131,12 +164,20 @@ describe("createContainerExecAdapter", () => {
         ({ kind: "container", spec: { egress: { tier: "allowlist" } } }) as never,
     })
     await adapter.preflight!("ref-1", "/w", "s1")
-    const result = await adapter.execute("ref-1", payload())
+    const base = payload()
+    const result = await adapter.execute("ref-1", {
+      ...base,
+      request: { ...base.request, network: "allowlist", networkHosts: ["example.com"] },
+    })
     expect(result.exit_code).toBe(124)
     expect(result.timed_out).toBe(true)
     expect(result.stdout_truncated).toBe(true)
     expect(result.stderr_truncated).toBe(true)
     expect(result.confinement?.networkEnforced).toBe(false)
+    expect(call).toHaveBeenCalledWith(
+      "environment_task_shell_exec",
+      expect.objectContaining({ network: { kind: "allowlist", hosts: ["example.com"] } })
+    )
   })
 
   it("refuses without a workspace, a session, or a bound ref, and never calls the Host", async () => {

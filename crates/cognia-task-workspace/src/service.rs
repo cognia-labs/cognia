@@ -3266,6 +3266,12 @@ impl TaskWorkspaceService {
         let layout = crate::plan_bundle_layout(&group_roots, &devices, home_dir().as_deref());
         bundle.flat_layout = layout.flat;
         let group_provisioning = group_provisioning(&input, &groups, &group_roots, &inspected)?;
+        let primary_workspace_id = bundle
+            .leases
+            .iter()
+            .find(|lease| lease.role == crate::WorkspaceRootRole::Primary)
+            .map(|lease| lease.workspace_id.as_str())
+            .ok_or_else(|| "bundle planner omitted the primary lease".to_string())?;
         let bundle_dir = self
             .execution_dir
             .join("bundles")
@@ -3289,6 +3295,17 @@ impl TaskWorkspaceService {
                 .workspace_id
                 .clone()
                 .ok_or_else(|| "bundle planner omitted workspace identity".to_string())?;
+            // A named ref or PR belongs to the repository selected by the caller.
+            // Keep unrelated repositories at their own committed HEAD.
+            let base = if workspace_id != primary_workspace_id
+                && matches!(
+                    input.base,
+                    WorkspaceBaseSpec::GitRef { .. } | WorkspaceBaseSpec::PullRequest { .. }
+                ) {
+                &WorkspaceBaseSpec::LocalHead
+            } else {
+                &input.base
+            };
             let execution_root = bundle_root_in(&bundle_dir, &layout.relative[index])?;
             let provisioned = (|| {
                 let tracking_policy = crate::ResourceTrackingPolicy::default();
@@ -3304,7 +3321,7 @@ impl TaskWorkspaceService {
                         root.git_common_dir
                             .as_ref()
                             .map(|path| path.to_string_lossy().into_owned()),
-                        input.base.clone(),
+                        base.clone(),
                         root.isolation,
                         execution_root.to_string_lossy().into_owned(),
                         now,
@@ -3335,7 +3352,7 @@ impl TaskWorkspaceService {
                     create_execution(
                         source_root,
                         &execution_root,
-                        &input.base,
+                        base,
                         &baseline,
                         &blobs,
                         record.locked_by.as_deref(),
@@ -3354,7 +3371,7 @@ impl TaskWorkspaceService {
                     }
                 };
                 if root.isolation == IsolationKind::GitWorktree
-                    && input.base == WorkspaceBaseSpec::WorkingState
+                    && *base == WorkspaceBaseSpec::WorkingState
                 {
                     let persisted = (|| {
                         let acquisition_commit = crate::changeset::git_text(
@@ -18443,6 +18460,91 @@ mod tests {
             );
         }
         assert_eq!(git_lines(&root, &["rev-parse", "relative-ref"]), parent);
+    }
+
+    #[test]
+    fn bundle_primary_git_ref_leaves_sibling_on_its_own_head() {
+        let data = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        let app = parent.path().join("app");
+        let sdk = parent.path().join("sdk");
+        for repository in [&app, &sdk] {
+            git2::Repository::init(repository).unwrap();
+            seed_git_repository(repository);
+        }
+        let app_ref = git_lines(&app, &["rev-parse", "HEAD"]);
+        git_lines(&app, &["branch", "app-only"]);
+        fs::create_dir(app.join("src")).unwrap();
+        fs::write(app.join("src/current"), "app HEAD\n").unwrap();
+        git_lines(&app, &["add", "src/current"]);
+        git_lines(
+            &app,
+            &[
+                "-c",
+                "user.name=Task Workspace Test",
+                "-c",
+                "user.email=task@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "current app",
+            ],
+        );
+        fs::write(sdk.join("README.md"), "uncommitted SDK\n").unwrap();
+        let sdk_head = git_lines(&sdk, &["rev-parse", "HEAD"]);
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let requested = WorkspaceBaseSpec::GitRef {
+            git_ref: "app-only".into(),
+        };
+        let root = |id: &str, path: &Path, role| crate::WorkspaceBundleRootInput {
+            logical_root_id: id.into(),
+            source_root: path.to_string_lossy().into_owned(),
+            role,
+            provisioning: None,
+        };
+        use crate::WorkspaceRootRole::{Additional, Primary};
+        let bundle = service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("primary-ref".into()),
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                project_id: None,
+                requested_name: None,
+                base: requested.clone(),
+                roots: vec![
+                    root("app-src", &app.join("src"), Additional),
+                    root("sdk", &sdk, Additional),
+                    root("app", &app, Primary),
+                ],
+                provisioning: None,
+                provisioning_source: None,
+            })
+            .unwrap();
+        for (id, commit, base) in [
+            ("app", app_ref, requested),
+            ("sdk", sdk_head, WorkspaceBaseSpec::LocalHead),
+        ] {
+            let lease = bundle
+                .leases
+                .iter()
+                .find(|lease| lease.logical_root_id == id)
+                .unwrap();
+            let alias = Path::new(&lease.alias_path);
+            assert_eq!(git_lines(alias, &["rev-parse", "HEAD"]), commit);
+            assert_eq!(
+                fs::read_to_string(alias.join("README.md")).unwrap(),
+                "seed\n"
+            );
+            assert_eq!(
+                service
+                    .get_managed_workspace(&lease.workspace_id)
+                    .unwrap()
+                    .unwrap()
+                    .base,
+                base
+            );
+        }
     }
 
     /// ADR-0111 2026-11-08 amendment: sibling repositories stay siblings in

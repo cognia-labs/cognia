@@ -13,7 +13,7 @@ import {
   pluginAccessFor,
 } from "./classify.ts"
 import type { PluginAccessMap } from "./classify.ts"
-import { isSecretPath } from "./secret-paths.ts"
+import { isSecretPath } from "../../platform/fs/secret-paths.ts"
 
 /** The host-owned sandbox scope a native tool body must stay inside. */
 export interface SandboxScopePolicy {

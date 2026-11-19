@@ -1129,6 +1129,7 @@ mod tests {
             argv: vec!["true".into()],
             env: BTreeMap::new(),
             stdin: None,
+            network: cognia_exec_sandbox::types::NetworkPolicy::On,
             timeout_ms: 1000,
         };
 

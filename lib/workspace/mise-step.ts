@@ -10,30 +10,19 @@
  *
  * The acceptance is bound to the CONTENT of the mise files at the root:
  * `mise.toml` / `.mise.toml` and the lockfile beside it. Its consent id carries
- * that digest, so an edited file is a new proposal and the step does not run
- * until it is accepted again. A copy whose files differ from the accepted ones
- * (a worktree on another branch) skips the step and says why.
+ * that digest, so an edited file is a new proposal. A worktree with different
+ * content skips the step and says why.
  *
  * # What runs
  *
- * Only `mise install`, in mise's safe mode (`MISE_SAFE=1`): project `[env]`,
- * `[settings]` and hooks are ignored, and tasks, template `exec()`, tool
- * `postinstall` / `install_env` and plugin installs are refused with an error.
- * `MISE_NO_HOOKS=1` is set as well. A mise too old to know safe mode would
- * quietly run all of that, so the step first asks mise whether safe mode is on
- * and skips when it cannot say yes. mise itself is never installed: a machine
- * without it on `PATH` skips the step. Each skip prints a marker line the
- * executor turns into a notice on the setup record.
+ * The Host stages the approved bytes in its own temporary project and runs
+ * `mise install` in safe mode with isolated config discovery. The checkout
+ * and the Host's ambient mise overrides cannot change the approved inputs.
  */
 
-/** Config files, in the order mise prefers them. */
+/** The provisioning offer chooses one project config in this order. */
 export const MISE_CONFIG_FILES = ["mise.toml", ".mise.toml"] as const
-
-/** The lockfile beside each config file. */
-const MISE_LOCK_FOR: Record<(typeof MISE_CONFIG_FILES)[number], string> = {
-  "mise.toml": "mise.lock",
-  ".mise.toml": ".mise.lock",
-}
+const MISE_LOCKFILE = "mise.lock"
 
 /** The consent id prefix; the digest follows the `@`. */
 export const MISE_STEP_ID_PREFIX = "setupStep:mise@"
@@ -54,21 +43,33 @@ export interface MiseFiles {
   digest: string
 }
 
+interface MiseFileSnapshot extends MiseFiles {
+  /** The exact bytes used for approval, carried to the Host for staging. */
+  install: { config: string; lockfile?: string }
+}
+
 /**
  * The mise files at `root` and their digest, or null when the root has no
  * mise config. The first config file found is the one used, with its own
  * lockfile; the content of both is digested, so editing either changes it.
  */
-export async function readMiseFiles(root: string, io: MiseFilesIo): Promise<MiseFiles | null> {
+export async function readMiseFiles(
+  root: string,
+  io: MiseFilesIo
+): Promise<MiseFileSnapshot | null> {
   for (const config of MISE_CONFIG_FILES) {
     const content = await io.readFile(root, config).catch(() => null)
     if (content === null) continue
-    const lock = MISE_LOCK_FOR[config]
-    const lockContent = await io.readFile(root, lock).catch(() => null)
-    const files = lockContent === null ? [config] : [config, lock]
-    const material = [config, content, ...(lockContent === null ? [] : [lock, lockContent])]
+    const lockContent = await io.readFile(root, MISE_LOCKFILE).catch(() => null)
+    const files = lockContent === null ? [config] : [config, MISE_LOCKFILE]
+    const material = [
+      config,
+      content,
+      ...(lockContent === null ? [] : [MISE_LOCKFILE, lockContent]),
+    ]
     const digest = (await io.sha256Hex(material.join("\u0000"))).slice(0, DIGEST_LENGTH)
-    return { files, digest }
+    const install = { config: content, ...(lockContent === null ? {} : { lockfile: lockContent }) }
+    return { files, digest, install }
   }
   return null
 }
@@ -99,40 +100,21 @@ export type MiseStepNotice =
   | "miseMissing"
   /** This mise has no safe mode, so it cannot be kept from running project code. */
   | "miseNoSafeMode"
+  /** The Host predates the isolated snapshot runner. */
+  | "miseIsolationUnavailable"
 
 export const MISE_STEP_NOTICES: readonly MiseStepNotice[] = [
   "miseNotApproved",
   "miseUntrusted",
   "miseMissing",
   "miseNoSafeMode",
+  "miseIsolationUnavailable",
 ]
 
 const MARKER = "cognia-setup-notice:"
 
-/** The environment the step runs with, on top of the setup's own variables. */
-export const MISE_STEP_VARIABLES: Readonly<Record<string, string>> = Object.freeze({
-  MISE_SAFE: "1",
-  MISE_NO_HOOKS: "1",
-})
-
-/**
- * The step itself, per shell: `sh -c` everywhere but Windows, `cmd /C` there
- * (the host's setup runner). It checks for mise, then for safe mode, and only
- * then installs; a failed install fails the step.
- */
-export const MISE_STEP_SCRIPT = Object.freeze({
-  default: [
-    `if ! command -v mise >/dev/null 2>&1; then echo "${MARKER}miseMissing"; exit 0; fi`,
-    `if [ "$(mise settings get safe 2>/dev/null)" != "true" ]; then echo "${MARKER}miseNoSafeMode"; exit 0; fi`,
-    "exec mise install",
-  ].join("\n"),
-  byOs: {
-    windows: [
-      `(where mise >nul 2>nul || (echo ${MARKER}miseMissing& exit /b 0))`,
-      `(for /f "delims=" %S in ('mise settings get safe 2^>nul') do @if /i "%S"=="true" (mise install & exit /b)) & echo ${MARKER}miseNoSafeMode`,
-    ].join(" && "),
-  },
-})
+/** Legacy Hosts resolve the default script and skip the optional installer. */
+export const MISE_STEP_FALLBACK = `echo ${MARKER}miseIsolationUnavailable`
 
 /** The notices a run of the step printed. */
 export function miseStepNotices(output: string | undefined): MiseStepNotice[] {
@@ -149,7 +131,7 @@ export function miseStepNotices(output: string | undefined): MiseStepNotice[] {
 /** What setup does about mise in one root. */
 export interface MiseStepPlan {
   /** The accepted files to install from, or null when the step does not run. */
-  step: MiseFiles | null
+  step: MiseFileSnapshot | null
   /** Why it does not, when the root has mise files. */
   notices: MiseStepNotice[]
 }

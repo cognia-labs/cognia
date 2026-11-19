@@ -139,6 +139,8 @@ pub struct TaskShellRequest {
     pub argv: Vec<String>,
     pub env: std::collections::BTreeMap<String, String>,
     pub stdin: Option<String>,
+    /// Egress ceiling of the command, checked against the admitted environment.
+    pub network: cognia_exec_sandbox::types::NetworkPolicy,
     /// How long the command may run once started; preparing its runtime is
     /// not charged to it.
     pub timeout_ms: u64,

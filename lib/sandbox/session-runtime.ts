@@ -29,7 +29,12 @@ import {
   type MicrovmExecPayload,
   type MicrovmResult,
 } from "./microvm-bridge"
-import { clampPolicyRequest, clampReadableRequest, isPathUnderRoot } from "./policy-bridge"
+import {
+  clampNetwork,
+  clampPolicyRequest,
+  clampReadableRequest,
+  isPathUnderRoot,
+} from "./policy-bridge"
 import { lumeClient, type LumeBinding, type LumeClient } from "@/lib/automation/lume-client"
 import { lumeReference } from "./lume-adapter"
 import { projectLumeResource } from "./lume-projection"
@@ -790,8 +795,21 @@ export class SandboxSessionRuntime {
                 "The bound container placement is no longer available; the operation was not run locally."
               )
             }
-            // No ceiling stamp: the environment's own size class and egress tier
-            // bound the container, and the per-call request is clamped above.
+            // Recheck egress here even for callers that skipped clampRequest.
+            // A read target may intentionally sit outside the writable ceiling.
+            if (record.policy) {
+              payload = {
+                ...payload,
+                request: {
+                  ...payload.request,
+                  ...clampNetwork(
+                    payload.request.network,
+                    payload.request.networkHosts,
+                    record.policy
+                  ),
+                },
+              }
+            }
             const started = Date.now()
             try {
               const result = await adapter.execute(ref, payload)
@@ -1261,6 +1279,15 @@ export class SandboxSessionRuntime {
   activeRefForSession(sessionId: string | null | undefined): SandboxRuntimeRef | undefined {
     if (!sessionId) return undefined
     return this.activeBySession.get(sessionId)
+  }
+
+  /**
+   * File OCR uses the desktop binary reader. A sandboxed turn must never fall
+   * through to that reader; its file policy and placement may be different.
+   */
+  desktopFileOcrRoot(ref: SandboxRuntimeRef): string | null | undefined {
+    const record = this.requireRecord(ref)
+    return record.sandboxEnabled ? null : record.workspaceRoot
   }
 
   /**

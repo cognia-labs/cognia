@@ -1,5 +1,4 @@
-// Protected credential paths: the hard-deny set for every built-in tool, read
-// or write, whether or not a confinement policy is configured.
+// Shared protected credential path classification for policy and file readers.
 
 import path from "node:path"
 

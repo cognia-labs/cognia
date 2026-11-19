@@ -58,6 +58,7 @@ use cognia_environment::image::PinnedImage;
 use cognia_environment::spec::{
     DeclaredUser, EgressTier, EnvironmentSpec, IsolationTier, SandboxLifecycleKind, SpecUser,
 };
+use cognia_exec_sandbox::types::NetworkPolicy;
 use cognia_external_agent::container_backend::{
     default_instance_id, deployment_id_from_env, ownership_labels, reap_owned_orphans,
     remove_owned, sanitize_container_name, ContainerApi, RegistryAuth, RunnerEvent,
@@ -67,7 +68,8 @@ use cognia_external_agent::container_backend::{
 };
 use cognia_external_agent::exec_backend::ExecBackend;
 use cognia_external_agent::process::{
-    ExternalAgentEventSink, ExternalAgentProcessState, ExternalAgentSpawnConfig,
+    ExternalAgentEventSink, ExternalAgentProcessState, ExternalAgentSandboxPolicy,
+    ExternalAgentSpawnConfig, SandboxNetworkMode,
 };
 use cognia_external_agent::sandbox_routing_backend::{
     SandboxExecBackend, SandboxPlacement, SandboxSpawnError,
@@ -1089,6 +1091,55 @@ fn egress_enforced(tier: EgressTier, established: bool) -> bool {
     matches!(tier, EgressTier::Off) || (tier == EgressTier::Allowlist && established)
 }
 
+fn agent_network_ceiling(policy: &ExternalAgentSandboxPolicy) -> NetworkPolicy {
+    match policy.network {
+        SandboxNetworkMode::Full => NetworkPolicy::On,
+        SandboxNetworkMode::Off => NetworkPolicy::Off,
+        SandboxNetworkMode::Allowlist => NetworkPolicy::Allowlist {
+            hosts: policy.allowed_hosts.clone(),
+        },
+    }
+}
+
+/// The admitted environment's effective egress, including expanded presets,
+/// must be no broader than a tool or process is authorized to use.
+fn require_network_ceiling(
+    requested: &NetworkPolicy,
+    tier: EgressTier,
+    domains: &[String],
+    enforced: bool,
+) -> Result<(), SandboxSpawnError> {
+    let compatible = match requested {
+        NetworkPolicy::On => return Ok(()),
+        NetworkPolicy::Off => tier == EgressTier::Off,
+        NetworkPolicy::Allowlist { hosts } => {
+            cognia_exec_sandbox::launcher::validate_network_allowlist(hosts)
+                .map_err(|_| {
+                    SandboxSpawnError::refused(
+                        "sandbox_network_policy_invalid",
+                        "the requested network ceiling contains an invalid host pattern",
+                    )
+                })?;
+            tier == EgressTier::Off
+                || (tier == EgressTier::Allowlist
+                    && !hosts.is_empty()
+                    && domains.iter().all(|domain| {
+                        hosts
+                            .iter()
+                            .any(|host| host.trim().eq_ignore_ascii_case(domain.trim()))
+                    }))
+        }
+    };
+    if compatible && enforced {
+        Ok(())
+    } else {
+        Err(SandboxSpawnError::refused(
+            "sandbox_egress_unenforceable",
+            "the admitted environment cannot enforce this request's network ceiling",
+        ))
+    }
+}
+
 /// Keep the image environment intact until sandboxd applies the declared
 /// container and remote layers. Flattening at Docker create loses image PATH
 /// interpolation and cannot represent remoteEnv null unsets.
@@ -1315,6 +1366,7 @@ impl DockerSandboxBackend {
         placement: &SandboxPlacement,
         cwd: &str,
         leases: OperationLeases,
+        network_ceiling: &NetworkPolicy,
     ) -> Result<LocalPrepared, SandboxSpawnError> {
         let decision = cognia_external_agent::spawn_authority::execution_admission();
         if self.multi_tenant() && (decision.as_ref().map(|decision| &decision.binding) != placement.binding()
@@ -1372,8 +1424,16 @@ impl DockerSandboxBackend {
                 ),
             ));
         }
-        let egress = (admitted.spec.egress.tier == EgressTier::Allowlist)
-            .then(|| egress::FrozenPolicy::new(self.admission.egress_allowlist(&admitted.spec)));
+        let tier = admitted.spec.egress.tier;
+        let domains = if tier == EgressTier::Allowlist {
+            self.admission.egress_allowlist(&admitted.spec)
+        } else {
+            Vec::new()
+        };
+        // local_runner_spec uses a private namespace for off and allowlist,
+        // and acquisition requires a live bridge before running an allowlist.
+        require_network_ceiling(network_ceiling, tier, &domains, tier != EgressTier::On)?;
+        let egress = (tier == EgressTier::Allowlist).then(|| egress::FrozenPolicy::new(domains));
         let bundle = admitted.admission.bundle.image();
         self.check_snapshot_fork_bundle(cwd, &bundle.digest)?;
         let leases = OperationLeases {
@@ -1728,7 +1788,14 @@ impl DockerSandboxBackend {
                 "a sandbox runs the agent in its workspace and needs a cwd",
             )
         })?;
-        let prepared = self.prepare_local(placement, &cwd, leases).await?;
+        let prepared = self
+            .prepare_local(
+                placement,
+                &cwd,
+                leases,
+                &agent_network_ceiling(&config.sandbox_policy),
+            )
+            .await?;
         let libc = prepared.libc;
 
         let invocation =
@@ -2741,7 +2808,7 @@ pub(crate) mod tests {
                 .await
         }
 
-        fn specs(&self) -> Vec<RunnerSpec> {
+        pub(super) fn specs(&self) -> Vec<RunnerSpec> {
             self.api.specs.lock().clone()
         }
 
@@ -2868,7 +2935,7 @@ pub(crate) mod tests {
                 let decision = p4_decision(write);
                 if multi { placement.stamp(decision.clone()).unwrap(); }
                 with_execution_admission(multi.then_some(decision.clone()), async {
-                    let prepared = harness.backend.prepare_local(&placement, "/srv/workspaces/project", OperationLeases::default()).await.unwrap();
+                    let prepared = harness.backend.prepare_local(&placement, "/srv/workspaces/project", OperationLeases::default(), &NetworkPolicy::On).await.unwrap();
                     let runner = harness.backend.local_runner_spec("agent", &prepared, "bundle".into(), vec![], vec![]).unwrap();
                     assert_eq!(matches!(runner.mount, Some(RunnerMount::ReadOnly { .. })), multi && !write);
                     assert_eq!(runner.tmpfs.iter().any(|path| path.starts_with("/scratch/")), multi);
@@ -2897,7 +2964,7 @@ pub(crate) mod tests {
         let error = with_execution_admission(Some(decision.clone()), harness.spawn(config.clone())).await.unwrap_err();
         assert_eq!(error.code, "credential_use_forbidden");
         let mut viewer = decision; viewer.actions.retain(|action| action != "execution.request");
-        let error = with_execution_admission(Some(viewer), harness.backend.prepare_local(config.sandbox.as_ref().unwrap(), "/srv/workspaces/project", OperationLeases::default())).await.err().unwrap();
+        let error = with_execution_admission(Some(viewer), harness.backend.prepare_local(config.sandbox.as_ref().unwrap(), "/srv/workspaces/project", OperationLeases::default(), &NetworkPolicy::On)).await.err().unwrap();
         assert_eq!(error.code, "execution_request_forbidden");
         assert!(harness.specs().is_empty());
     }
@@ -4279,6 +4346,46 @@ pub(crate) mod tests {
                 "{tier:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn rejects_agent_network_off_before_starting_an_egress_on_environment() {
+        let spec = spec(EgressTier::On, None);
+        let harness = Harness::new(
+            admitted(spec.clone(), IsolationTier::Container),
+            report(vec![command("kiro-cli", None)], Vec::new()),
+            0,
+        );
+        let mut spawn = spawn_config("agent-1", "kiro-cli", &[], &spec);
+        spawn.sandbox_policy.network = SandboxNetworkMode::Off;
+        let error = harness.spawn(spawn).await.unwrap_err();
+        assert_eq!(error.kind, SandboxErrorKind::Refused);
+        assert_eq!(error.code, "sandbox_egress_unenforceable");
+        assert!(harness.specs().is_empty());
+    }
+
+    #[test]
+    fn restricted_egress_requires_effective_domains_and_attestation() {
+        let ceiling = NetworkPolicy::Allowlist {
+            hosts: vec!["API.example.com".into()],
+        };
+        let domains = vec!["api.example.com".into()];
+        assert!(require_network_ceiling(&ceiling, EgressTier::Allowlist, &domains, true).is_ok());
+        assert!(require_network_ceiling(&ceiling, EgressTier::Allowlist, &domains, false).is_err());
+        let broader = vec!["api.example.com".into(), "preset.example.com".into()];
+        assert!(require_network_ceiling(&ceiling, EgressTier::Allowlist, &broader, true).is_err());
+        assert!(require_network_ceiling(&ceiling, EgressTier::Off, &[], true).is_ok());
+        assert!(require_network_ceiling(&NetworkPolicy::Off, EgressTier::Allowlist, &[], true).is_err());
+    }
+
+    #[test]
+    fn invalid_ceiling_does_not_echo_the_host_input() {
+        let ceiling = NetworkPolicy::Allowlist {
+            hosts: vec!["https://audit-marker@example.com".into()],
+        };
+        let error = require_network_ceiling(&ceiling, EgressTier::Off, &[], true).unwrap_err();
+        assert_eq!(error.code, "sandbox_network_policy_invalid");
+        assert!(!error.message.contains("audit-marker"));
     }
 
     #[tokio::test]

@@ -1,7 +1,11 @@
-use crate::shell::{shell_exec_with_env_timeout_cap, ShellResult};
+use crate::shell::{ShellResult, shell_exec_with_env_timeout_cap};
 use cognia_exec_sandbox::types::{NetworkPolicy, SandboxCommand, SandboxPolicy};
 use serde::Deserialize;
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 const DEFAULT_KEYRING_NAMESPACE: &str = "project-environment";
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -18,12 +22,27 @@ pub struct EnvironmentKeyringReference {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum EnvironmentScript {
+    // Prefer the snapshot over the safe fallback script sent for older Hosts.
+    Mise {
+        mise: MiseInstallSnapshot,
+    },
     Structured {
         default: String,
         #[serde(default, rename = "byOs")]
         by_os: BTreeMap<String, String>,
     },
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MiseInstallSnapshot {
+    config: String,
+    lockfile: Option<String>,
+}
+
+const MISE_INSTALL_POSIX: &str = r#"if ! command -v mise >/dev/null 2>&1; then echo "cognia-setup-notice:miseMissing"; exit 0; fi
+if [ "$(mise settings get safe 2>/dev/null)" != "true" ]; then echo "cognia-setup-notice:miseNoSafeMode"; exit 0; fi
+exec mise install"#;
+const MISE_INSTALL_WINDOWS: &str = r#"(where mise >nul 2>nul || (echo cognia-setup-notice:miseMissing& exit /b 0)) && (for /f "delims=" %S in ('mise settings get safe 2^>nul') do @if /i "%S"=="true" (mise install & exit /b)) & echo cognia-setup-notice:miseNoSafeMode"#;
 
 impl EnvironmentScript {
     fn resolve_for(&self, os: &str) -> String {
@@ -35,8 +54,108 @@ impl EnvironmentScript {
                 .unwrap_or(default)
                 .trim()
                 .to_string(),
+            Self::Mise { .. } => if os == "windows" {
+                MISE_INSTALL_WINDOWS
+            } else {
+                MISE_INSTALL_POSIX
+            }
+            .to_owned(),
         }
     }
+}
+
+impl MiseInstallSnapshot {
+    fn stage(&self) -> Result<tempfile::TempDir, String> {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("cognia-mise-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let staged = builder
+            .tempdir()
+            .map_err(|error| format!("create mise staging directory: {error}"))?;
+        // Keep the snapshot in project scope. Global configs are exempt from
+        // mise's project safe-mode restrictions.
+        std::fs::write(staged.path().join("mise.toml"), &self.config)
+            .map_err(|error| format!("stage approved mise config: {error}"))?;
+        if let Some(lockfile) = &self.lockfile {
+            std::fs::write(staged.path().join("mise.lock"), lockfile)
+                .map_err(|error| format!("stage approved mise lockfile: {error}"))?;
+        }
+        Ok(staged)
+    }
+}
+
+fn mise_install_environment(stage: &Path) -> Result<BTreeMap<String, String>, String> {
+    // Preserve the Host's tool discovery, install location and download
+    // plumbing. All other inherited settings and project variables stay out.
+    let mut env: BTreeMap<_, _> = [
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "SystemRoot",
+        "PATHEXT",
+        "TMP",
+        "TEMP",
+        "TMPDIR",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "MISE_DATA_DIR",
+        "MISE_CACHE_DIR",
+        "MISE_STATE_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| (name.to_owned(), value))
+    })
+    .collect();
+    let parent = stage
+        .parent()
+        .ok_or("mise staging directory has no parent")?;
+    let ceiling = std::env::join_paths([parent])
+        .map_err(|error| format!("invalid mise configuration ceiling: {error}"))?;
+    env.extend(
+        [
+            ("MISE_SAFE", "1"),
+            ("MISE_NO_HOOKS", "1"),
+            ("MISE_ENV", ""),
+            ("MISE_AUTO_ENV", "0"),
+            ("MISE_ENV_CONF_D", "0"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned())),
+    );
+    for (name, path) in [
+        ("MISE_CONFIG_DIR", stage.join("global")),
+        ("MISE_SYSTEM_CONFIG_DIR", stage.join("system")),
+        ("MISE_GLOBAL_CONFIG_FILE", stage.join("global/config.toml")),
+        ("MISE_SYSTEM_CONFIG_FILE", stage.join("system/config.toml")),
+        ("MISE_CEILING_PATHS", PathBuf::from(ceiling)),
+    ] {
+        env.insert(
+            name.into(),
+            path.into_os_string()
+                .into_string()
+                .map_err(|_| "mise staging path is not UTF-8")?,
+        );
+    }
+    Ok(env)
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -140,9 +259,14 @@ fn redact(mut value: String, secrets: &[String]) -> String {
     value
 }
 
-fn shell_argv(script: String) -> Vec<String> {
+fn shell_argv(script: String, inherit_environment: bool) -> Vec<String> {
     if cfg!(target_os = "windows") {
-        vec!["cmd".into(), "/C".into(), script]
+        let mut args = vec!["cmd".into()];
+        if !inherit_environment {
+            args.push("/D".into());
+        }
+        args.extend(["/C".into(), script]);
+        args
     } else {
         vec!["sh".into(), "-c".into(), script]
     }
@@ -216,12 +340,26 @@ async fn execute_on_host<F, R>(
 where
     R: std::future::Future<Output = Result<Option<BTreeMap<String, String>>, String>>,
     F: std::future::Future<
-        Output = Result<
-            cognia_exec_sandbox::types::SandboxResult,
-            cognia_exec_sandbox::types::SandboxError,
+            Output = Result<
+                cognia_exec_sandbox::types::SandboxResult,
+                cognia_exec_sandbox::types::SandboxError,
+            >,
         >,
-    >,
 {
+    let staged_mise = match &script {
+        EnvironmentScript::Mise { mise } => {
+            if !Path::new(&cwd).is_dir() {
+                return Err("mise setup requires a workspace directory".into());
+            }
+            if !variables.is_empty() || !keyring_references.is_empty() {
+                return Err(
+                    "mise setup does not accept project variables or keyring references".into(),
+                );
+            }
+            Some(mise.stage()?)
+        }
+        _ => None,
+    };
     let script = script.resolve_for(std::env::consts::OS);
     if script.is_empty() {
         return Err(format!(
@@ -279,6 +417,20 @@ where
     {
         environment.extend(trusted);
     }
+    let inherit_environment = staged_mise.is_none();
+    let workspace_root = PathBuf::from(&cwd);
+    let cwd = if let Some(stage) = &staged_mise {
+        let path = stage
+            .path()
+            .canonicalize()
+            .map_err(|error| format!("resolve mise staging directory: {error}"))?;
+        environment = mise_install_environment(&path)?;
+        path.into_os_string()
+            .into_string()
+            .map_err(|_| "mise staging path is not UTF-8")?
+    } else {
+        cwd
+    };
     let effective = effective_policy(policy, host);
     let mut result = if !effective.require_sandbox {
         tokio::task::spawn_blocking(move || {
@@ -288,13 +440,18 @@ where
                 timeout_secs,
                 environment,
                 MAX_TIMEOUT_SECS,
+                inherit_environment,
             )
         })
         .await
         .map_err(|error| format!("project environment worker failed: {error}"))??
     } else {
         let cwd = PathBuf::from(cwd);
-        let mut readable = vec![cwd.clone()];
+        let mut writable = vec![workspace_root];
+        if !inherit_environment {
+            writable.push(cwd.clone());
+        }
+        let mut readable = writable.clone();
         if let Some(binary) = bootstrap_executable(&cwd, &environment) {
             readable.push(binary);
         }
@@ -302,14 +459,14 @@ where
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
             .clamp(1, MAX_TIMEOUT_SECS);
         let command = SandboxCommand {
-            argv: shell_argv(script),
+            argv: shell_argv(script, inherit_environment),
             cwd: cwd.clone(),
             env: environment,
             stdin: None,
             timeout: Duration::from_secs(timeout),
         };
         let sandbox_policy = SandboxPolicy::Bash {
-            writable: vec![cwd.clone()],
+            writable,
             readable,
             network: sandbox_network(effective.network),
             max_cpu_seconds: timeout.min(u32::MAX as u64) as u32,
@@ -392,6 +549,105 @@ pub async fn project_environment_execute_cloud(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mise_executes_only_the_approved_snapshot_in_private_project_scope() {
+        let workspace = tempfile::tempdir().unwrap();
+        let config = "[tools]\nnode = \"24\"\n";
+        let lockfile = "approved lockfile";
+        std::fs::write(
+            workspace.path().join("mise.toml"),
+            "[tools]\nnode = \"22\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.path().join(".mise.toml"),
+            "[tools]\nnode = \"20\"\n",
+        )
+        .unwrap();
+        let script = serde_json::from_value(serde_json::json!({
+            "default": "echo cognia-setup-notice:miseIsolationUnavailable",
+            "mise": { "config": config, "lockfile": lockfile }
+        }))
+        .unwrap();
+        let staging_path = std::sync::Mutex::new(None);
+        let result = execute_on_host(
+            script,
+            workspace.path().to_string_lossy().into(),
+            BTreeMap::new(),
+            vec![],
+            None,
+            Some(5),
+            ExecutionHost::Cloud,
+            |query| {
+                assert_eq!(query.cwd, workspace.path());
+                async { Ok(Some(workspace_ports())) }
+            },
+            |command, policy| {
+                let stage = &command.cwd;
+                assert!(!stage.starts_with(workspace.path()));
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(
+                        std::fs::metadata(stage).unwrap().permissions().mode() & 0o077,
+                        0
+                    );
+                }
+                assert_eq!(
+                    std::fs::read_to_string(stage.join("mise.toml")).unwrap(),
+                    config
+                );
+                assert_eq!(
+                    std::fs::read_to_string(stage.join("mise.lock")).unwrap(),
+                    lockfile
+                );
+                assert!(!stage.join(".mise.toml").exists());
+                assert_eq!(command.env["MISE_SAFE"], "1");
+                assert_eq!(command.env["MISE_ENV"], "");
+                assert_eq!(
+                    std::env::split_paths(&command.env["MISE_CEILING_PATHS"]).collect::<Vec<_>>(),
+                    vec![stage.parent().unwrap().to_path_buf()]
+                );
+                for key in [
+                    "MISE_CONFIG_DIR",
+                    "MISE_GLOBAL_CONFIG_FILE",
+                    "MISE_SYSTEM_CONFIG_FILE",
+                ] {
+                    assert!(Path::new(&command.env[key]).starts_with(stage));
+                }
+                assert!(!command.env.contains_key("MISE_NODE_VERSION"));
+                assert!(!command.env.contains_key("PORT"));
+                assert!(
+                    command
+                        .argv
+                        .last()
+                        .unwrap()
+                        .contains("mise settings get safe")
+                );
+                assert!(command.argv.last().unwrap().contains("mise install"));
+                assert!(matches!(
+                    policy, SandboxPolicy::Bash { writable, .. }
+                    if writable == [workspace.path().to_path_buf(), stage.clone()]
+                ));
+                *staging_path.lock().unwrap() = Some(stage.clone());
+                std::future::ready(Ok(cognia_exec_sandbox::types::SandboxResult {
+                    network: Default::default(),
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: Duration::ZERO,
+                    timed_out: false,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                }))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(!staging_path.into_inner().unwrap().unwrap().exists());
+    }
 
     fn script(source: String) -> EnvironmentScript {
         EnvironmentScript::Structured {

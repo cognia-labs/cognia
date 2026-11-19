@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto"
 
 import {
-  MISE_STEP_SCRIPT,
-  MISE_STEP_VARIABLES,
   acceptedMiseDigests,
   miseStepId,
   miseStepNotices,
@@ -46,10 +44,13 @@ describe("readMiseFiles", () => {
     expect(configEdited?.digest).not.toBe(base?.digest)
   })
 
-  it("prefers mise.toml, and reads the dotted config with its own lockfile", async () => {
-    expect(
-      (await readMiseFiles("/repo", io({ ".mise.toml": "x", ".mise.lock": "y" })))?.files
-    ).toEqual([".mise.toml", ".mise.lock"])
+  it("stages the selected config with mise.lock, including a dotted config", async () => {
+    const dotted = await readMiseFiles(
+      "/repo",
+      io({ ".mise.toml": "x", "mise.lock": "y", ".mise.lock": "unrelated" })
+    )
+    expect(dotted?.files).toEqual([".mise.toml", "mise.lock"])
+    expect(dotted?.install).toEqual({ config: "x", lockfile: "y" })
     expect(
       (await readMiseFiles("/repo", io({ "mise.toml": "x", ".mise.toml": "y" })))?.files
     ).toEqual(["mise.toml"])
@@ -117,16 +118,7 @@ describe("planMiseStep", () => {
   })
 })
 
-describe("the step itself", () => {
-  it("holds mise to safe mode and runs nothing but install", () => {
-    expect(MISE_STEP_VARIABLES).toEqual({ MISE_SAFE: "1", MISE_NO_HOOKS: "1" })
-    for (const script of [MISE_STEP_SCRIPT.default, MISE_STEP_SCRIPT.byOs.windows]) {
-      expect(script).toContain("mise install")
-      expect(script).toContain("mise settings get safe")
-      expect(script).not.toMatch(/mise (run|exec|use|trust|activate|self-update)|curl|install\.sh/)
-    }
-  })
-
+describe("mise step notices", () => {
   it("reads the notices the step printed, once each", () => {
     expect(
       miseStepNotices(

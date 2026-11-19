@@ -579,7 +579,7 @@ impl DockerSandboxBackend {
             RunnerMount::ReadOnly { .. } => unreachable!("source_mount unwraps read-only mounts"),
         };
         let prepared = self
-            .prepare_local(&placement, &root, OperationLeases::default())
+            .prepare_local(&placement, &root, OperationLeases::default(), &NetworkPolicy::On)
             .await?;
         let libc = self.stage_libc(&prepared).await?;
         let spec =
@@ -945,7 +945,7 @@ impl DockerSandboxBackend {
             return Err(fault("Workspace already has a fork image"));
         }
         let prepared = self
-            .prepare_local(&placement, workspace_root, OperationLeases::default())
+            .prepare_local(&placement, workspace_root, OperationLeases::default(), &NetworkPolicy::On)
             .await?;
         if prepared.bundle.digest != bundle_digest {
             return Err(SandboxSpawnError::refused(

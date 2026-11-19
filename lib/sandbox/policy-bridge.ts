@@ -113,7 +113,7 @@ function clampCap(requested: number, ceiling: number | undefined): number {
 }
 
 /** Apply the network ceiling. The model can only ever narrow, never widen. */
-function clampNetwork(
+export function clampNetwork(
   reqNetwork: "off" | "on" | "allowlist",
   reqHosts: string[],
   policy: SandboxResourcePolicy

@@ -1127,6 +1127,17 @@ describe("createDockerAcceptanceContainerRuntime", () => {
     )
   })
 
+  it("does not return a successful report when container teardown fails", async () => {
+    const { client } = dockerClient()
+    client.delete = jest.fn(async () => {
+      throw new Error("container still running")
+    })
+    const runtime = createDockerAcceptanceContainerRuntime({ client, fullSpecSupported: true })
+    await expect(runtime.run(buildAcceptanceContainerSpec(spec()), context)).rejects.toThrow(
+      "container still running"
+    )
+  })
+
   it("[ACC:SAFE-02] creates the container with no network, runs it and deletes it", async () => {
     const { client, calls } = dockerClient()
     const runtime = createDockerAcceptanceContainerRuntime({ client, fullSpecSupported: true })

@@ -55,12 +55,7 @@ jest.mock("@/lib/db/settings", () => ({ getSettings: async () => ({}) }))
 
 import { executeProjectEnvironment, resolveEnvironmentScript } from "./executor"
 import { createHash } from "node:crypto"
-import {
-  MISE_STEP_SCRIPT,
-  MISE_STEP_VARIABLES,
-  miseStepId,
-  readMiseFiles,
-} from "@/lib/workspace/mise-step"
+import { MISE_STEP_FALLBACK, miseStepId, readMiseFiles } from "@/lib/workspace/mise-step"
 import type { ProjectEnvironment } from "@/types/project-environment"
 import {
   __setPromptOverrideSnapshotForTests,
@@ -775,23 +770,29 @@ describe("mise install (ADR-0147, 2026-11-08 amendment)", () => {
     )
   })
 
-  it("runs only `mise install`, in safe mode and without secrets, before setup", async () => {
+  it("sends only the approved mise snapshot and keeps the setup variables out of it", async () => {
     workspaceFiles = { "mise.toml": MISE_TOML, "mise.lock": "lock" }
     await accept(workspaceFiles)
+    workspaceFiles[".mise.toml"] = '[tools]\nnode = "24"\n'
 
-    const result = await executeProjectEnvironment(input)
+    const variables = { ...environment.variables, MISE_NODE_VERSION: "24" }
+    const result = await executeProjectEnvironment({
+      ...input,
+      environment: { ...environment, variables },
+    })
 
     expect(result).toEqual(expect.objectContaining({ success: true }))
     expect(result.notices).toBeUndefined()
     expect(callMock).toHaveBeenNthCalledWith(1, "project_environment_execute", {
-      script: MISE_STEP_SCRIPT,
+      script: { default: MISE_STEP_FALLBACK, mise: { config: MISE_TOML, lockfile: "lock" } },
       cwd: "/worktree",
-      variables: { NODE_ENV: "development", ...MISE_STEP_VARIABLES },
+      variables: {},
       keyringReferences: [],
       policy: { network: "on", requireSandbox: false },
       timeoutSecs: undefined,
     })
     expect(scripts()[1]).toEqual(environment.setupScript)
+    expect(callMock.mock.calls[1][1]).toEqual(expect.objectContaining({ variables }))
   })
 
   it("skips with a notice when the workspace is not trusted", async () => {
@@ -805,21 +806,31 @@ describe("mise install (ADR-0147, 2026-11-08 amendment)", () => {
     expect(result.notices).toEqual(["miseUntrusted"])
   })
 
-  it("reports a missing mise from the step's output and still runs setup", async () => {
-    workspaceFiles = { "mise.toml": MISE_TOML }
-    await accept(workspaceFiles)
-    callMock.mockResolvedValueOnce({
-      stdout: "cognia-setup-notice:miseMissing\n",
-      stderr: "",
-      exit_code: 0,
-      timed_out: false,
-    })
+  it.each(["miseMissing", "miseIsolationUnavailable"])(
+    "reports %s, continues setup and does not cache the skipped install",
+    async (notice) => {
+      workspaceFiles = { "mise.toml": MISE_TOML }
+      await accept(workspaceFiles)
+      callMock.mockResolvedValueOnce({
+        stdout: `cognia-setup-notice:${notice}\n`,
+        stderr: "",
+        exit_code: 0,
+        timed_out: false,
+      })
 
-    const result = await executeProjectEnvironment(input)
+      const result = await executeProjectEnvironment({
+        ...input,
+        environment: {
+          ...environment,
+          setupReuse: { enabled: true, inputs: ["mise.toml"], outputs: [] },
+        },
+      })
 
-    expect(result).toEqual(expect.objectContaining({ success: true, notices: ["miseMissing"] }))
-    expect(scripts()).toHaveLength(2)
-  })
+      expect(result).toEqual(expect.objectContaining({ success: true, notices: [notice] }))
+      expect(scripts()).toHaveLength(2)
+      expect(updateInitializationMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("fingerprint")
+    }
+  )
 
   it("fails setup when mise install fails, without running the script", async () => {
     workspaceFiles = { "mise.toml": MISE_TOML }
@@ -831,7 +842,7 @@ describe("mise install (ADR-0147, 2026-11-08 amendment)", () => {
     expect(result).toEqual(
       expect.objectContaining({ success: false, error: "mise install exited with code 2" })
     )
-    expect(scripts()).toEqual([MISE_STEP_SCRIPT])
+    expect(scripts()).toEqual([{ default: MISE_STEP_FALLBACK, mise: { config: MISE_TOML } }])
   })
 
   it("runs the step alone for an environment with no setup script", async () => {
@@ -844,7 +855,7 @@ describe("mise install (ADR-0147, 2026-11-08 amendment)", () => {
     })
 
     expect(result).toEqual(expect.objectContaining({ success: true }))
-    expect(scripts()).toEqual([MISE_STEP_SCRIPT])
+    expect(scripts()).toEqual([{ default: MISE_STEP_FALLBACK, mise: { config: MISE_TOML } }])
   })
 
   it("never runs it for an action", async () => {

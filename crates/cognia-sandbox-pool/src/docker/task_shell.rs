@@ -170,6 +170,7 @@ impl DockerSandboxBackend {
             argv,
             env,
             stdin,
+            network,
             timeout_ms,
         } = request;
 
@@ -187,6 +188,7 @@ impl DockerSandboxBackend {
                     _prepare: Some(Arc::new(slot)),
                     ..OperationLeases::default()
                 },
+                &network,
             )
             .await?;
         let libc_volume = self.stage_libc(&prepared).await?;
@@ -444,6 +446,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "cat > note".into()],
             env: BTreeMap::from([("TASK_FLAG".to_string(), "1".to_string())]),
             stdin: Some("hello".into()),
+            network: NetworkPolicy::On,
             timeout_ms: 30_000,
         }
     }
@@ -456,6 +459,21 @@ mod tests {
             0,
         );
         (harness, environment)
+    }
+
+    #[tokio::test]
+    async fn rejects_an_offline_task_before_starting_an_egress_on_environment() {
+        let environment = spec(EgressTier::On, None);
+        let harness = Harness::new(
+            admitted(environment.clone(), IsolationTier::Container),
+            report(vec![command("kiro-cli", None)], Vec::new()),
+            0,
+        );
+        let mut command = request(&environment);
+        command.network = NetworkPolicy::Off;
+        let error = harness.backend.exec_task_shell(command).await.unwrap_err();
+        assert_eq!(error.code, "sandbox_egress_unenforceable");
+        assert!(harness.specs().is_empty());
     }
 
     /// The `connect-agent` exec of the next task command, once it exists.

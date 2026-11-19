@@ -24,7 +24,7 @@
 // Pure: no I/O beyond path canonicalisation (mirrors `src/platform/fs/paths.ts`).
 
 import { assertPathInside, canonicalisePartial, resolveToolPath } from "../../platform/fs/paths.ts"
-import { isSecretPath } from "./secret-paths.ts"
+import { isSecretPath } from "../../platform/fs/secret-paths.ts"
 
 export type ConfinementVerdict = "allow" | "ask" | "deny"
 
@@ -124,6 +124,11 @@ export const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "Monitor",
 ])
 export const READ_TOOLS: ReadonlySet<string> = new Set([
+  "lsp_goto_definition",
+  "lsp_find_references",
+  "lsp_hover",
+  "lsp_document_symbols",
+  "lsp_diagnostics",
   "read",
   "ls",
   "grep",
@@ -161,6 +166,7 @@ export const BASH_TOOLS: ReadonlySet<string> = new Set(["bash", "Bash"])
  * one of them judged, not just the first that matches.
  */
 const PATH_KEYS: readonly string[] = [
+  "file",
   "file_path",
   "filePath",
   "target",

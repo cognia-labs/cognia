@@ -20,6 +20,7 @@
  */
 
 import {
+  MicrovmAdapterError,
   SandboxRuntimeError,
   type MicrovmExecAdapter,
   type MicrovmExecPayload,
@@ -64,9 +65,9 @@ interface Binding {
 /** A killed command with no status of its own reports what `timeout(1)` does. */
 const TIMED_OUT_EXIT = 124
 
-function egressOff(placement: SandboxPlacement): boolean {
+function egressTier(placement: SandboxPlacement): unknown {
   const egress = (placement.spec as { egress?: { tier?: unknown } } | undefined)?.egress
-  return egress?.tier === "off"
+  return egress?.tier
 }
 
 export function createContainerExecAdapter(deps: ContainerExecDeps): MicrovmExecAdapter {
@@ -130,6 +131,18 @@ export function createContainerExecAdapter(deps: ContainerExecDeps): MicrovmExec
         )
       }
       const { command } = payload
+      const tier = egressTier(binding.placement)
+      const { network, networkHosts } = payload.request
+      const requiresOffline = network === "off" || (network === "allowlist" && !networkHosts.length)
+      if (
+        (requiresOffline && tier !== "off") ||
+        (network === "allowlist" && tier !== "off" && tier !== "allowlist")
+      ) {
+        throw new MicrovmAdapterError(
+          "policy-not-attested",
+          "The project container's egress policy is broader than this command allows."
+        )
+      }
       const seconds = command.timeout > 0 ? command.timeout : CONTAINER_DEFAULT_TIMEOUT_SECONDS
       const result = await deps.call<TaskShellResultWire>("environment_task_shell_exec", {
         placement: binding.placement,
@@ -140,6 +153,11 @@ export function createContainerExecAdapter(deps: ContainerExecDeps): MicrovmExec
         env: command.env ?? {},
         ...(command.stdin != null ? { stdin: command.stdin } : {}),
         timeoutMs: Math.max(1, Math.round(seconds * 1000)),
+        network: requiresOffline
+          ? { kind: "off" }
+          : network === "allowlist"
+            ? { kind: network, hosts: networkHosts }
+            : { kind: network },
       })
       // Recorded even for a generation released meanwhile: the release below
       // ran before this answer, so a runtime first seen now is released now.
@@ -163,10 +181,7 @@ export function createContainerExecAdapter(deps: ContainerExecDeps): MicrovmExec
         ...(result.stdoutTruncated ? { stdout_truncated: true } : {}),
         ...(result.stderrTruncated ? { stderr_truncated: true } : {}),
         confinement: {
-          // Only the environment's own egress tier is attested: the container
-          // has no network at all when it is `off`, and otherwise reaches what
-          // the environment's egress allows, whatever this call asked for.
-          networkEnforced: egressOff(binding.placement),
+          networkEnforced: tier === "off",
           backend: `container:${result.tier}`,
           platform: "linux",
         },

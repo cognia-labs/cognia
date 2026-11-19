@@ -1,11 +1,22 @@
 import type { SandboxResourcePolicy } from "@cognia/agent-config-types"
 
 import {
+  clampNetwork,
   clampPolicyRequest,
   clampSandboxPolicy,
   isPathUnderRoot,
   type ClampableRequest,
 } from "./policy-bridge"
+
+it("intersects an explicit network allowlist independently of file bounds", () => {
+  expect(
+    clampNetwork("allowlist", ["allowed.example", "other.example"], {
+      network: "allowlist",
+      networkAllowlist: ["allowed.example"],
+      writableRoots: ["/elsewhere"],
+    })
+  ).toEqual({ network: "allowlist", networkHosts: ["allowed.example"] })
+})
 
 function req(overrides: Partial<ClampableRequest> = {}): ClampableRequest {
   return {

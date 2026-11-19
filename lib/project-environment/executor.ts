@@ -26,8 +26,7 @@ import type {
   ProjectEnvironmentScript,
 } from "@/types/project-environment"
 import {
-  MISE_STEP_SCRIPT,
-  MISE_STEP_VARIABLES,
+  MISE_STEP_FALLBACK,
   miseStepNotices,
   planMiseStep,
   type MiseStepNotice,
@@ -208,7 +207,7 @@ async function runSetupCoalesced(
   // The mise files are part of what this setup does: a different accepted
   // content is a different setup, for joining and for reuse alike.
   const signature =
-    setupSignature(input.environment) + (mise.step ? `\u0000mise:${mise.step.digest}` : "")
+    setupSignature(input.environment) + (mise.step ? `\u0000mise:isolated:${mise.step.digest}` : "")
   for (let inFlight = setupFlights.get(key); inFlight; inFlight = setupFlights.get(key)) {
     const outcome = await inFlight.promise.catch(() => null)
     // Joined only when the finished setup did what this request would have
@@ -383,16 +382,18 @@ async function runScript(
       throw cause
     }
     const notices: MiseStepNotice[] = [...(options.mise?.notices ?? [])]
+    let miseSkipped = false
     if (options.mise?.step) {
-      // Its own call, ahead of the script, under the setup's policy and with
-      // mise held to safe mode. No secrets: installing tools needs none.
+      // The Host stages the snapshot under the setup's existing execution
+      // policy. Only the regular setup script receives project variables.
+      const miseInstall = options.mise.step.install
       const installed = await runPersonalEgressOperation(
         input.credentialContext ?? {},
         () =>
           transport.call<NativeEnvironmentResult>("project_environment_execute", {
-            script: MISE_STEP_SCRIPT,
+            script: { default: MISE_STEP_FALLBACK, mise: miseInstall },
             cwd: input.executionRoot,
-            variables: { ...input.environment.variables, ...MISE_STEP_VARIABLES },
+            variables: {},
             keyringReferences: [],
             policy,
             timeoutSecs: input.timeoutSecs,
@@ -404,6 +405,7 @@ async function runScript(
         throw new Error(`mise install exited with code ${installed.exit_code ?? "unknown"}`)
       }
       for (const notice of miseStepNotices(installed.stdout)) {
+        miseSkipped = true
         if (!notices.includes(notice)) notices.push(notice)
       }
     }
@@ -447,7 +449,9 @@ async function runScript(
           exitCode: result.exit_code ?? undefined,
           error,
           // Only a real success vouches for skipping a later setup.
-          ...(success && options.fingerprint ? { fingerprint: options.fingerprint } : {}),
+          ...(success && !miseSkipped && options.fingerprint
+            ? { fingerprint: options.fingerprint }
+            : {}),
           ...(notices.length ? { notices } : {}),
         },
         completedAt

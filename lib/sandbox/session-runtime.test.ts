@@ -31,6 +31,7 @@ import { __resetMicrovmBridgeForTesting, setMicrovmExec } from "./microvm-bridge
 import { __resetOsSandboxBridgeForTesting, setOsSandboxExec } from "./os-exec-bridge"
 import { requireManagedDesktopDelegation } from "./managed-desktop-binding"
 import { SandboxRuntimeError } from "@cognia/plugin-sdk/api/sandbox"
+import { createContainerExecAdapter } from "./container-exec-adapter"
 
 describe("managed desktop placement", () => {
   const input = {
@@ -662,6 +663,24 @@ function runningConnection(
 }
 
 describe("SandboxSessionRuntime", () => {
+  it("never lends the desktop file OCR reader to a sandbox", async () => {
+    const deps = createDeps()
+    deps.makeRef.mockReturnValueOnce("ocr:desktop").mockReturnValueOnce("ocr:sandbox")
+    const runtime = new SandboxSessionRuntime(deps)
+    const local = {
+      sessionId: "ocr",
+      binding: { shellTier: "os", computerTarget: "local" } as const,
+      policy: null,
+      confine: null,
+      computerUseEnabled: true,
+      workspaceRoot: "/project",
+    }
+    const open = await runtime.bindSession({ ...local, sandboxEnabled: false })
+    expect(runtime.desktopFileOcrRoot(open)).toBe("/project")
+    const isolated = await runtime.bindSession({ ...local, sandboxEnabled: true })
+    expect(runtime.desktopFileOcrRoot(isolated)).toBeNull()
+  })
+
   it.each([
     [false, 30],
     [true, 30],
@@ -2121,6 +2140,49 @@ describe("OS-tier audit", () => {
 
       await runtime.releaseSession("hosted")
       expect(adapter.release).toHaveBeenCalledWith(second)
+    })
+
+    it("applies the configured egress ceiling even when the caller skips clamping", async () => {
+      const deps = createDeps()
+      const call = jest.fn()
+      const adapter = createContainerExecAdapter({
+        call,
+        resolvePlacement: async () =>
+          ({
+            kind: "container",
+            spec: { egress: { tier: "on" } },
+          }) as never,
+      })
+      jest.mocked(deps.getContainerAdapter!).mockReturnValue(adapter)
+      const runtime = new SandboxSessionRuntime(deps)
+      const ref = await runtime.bindSession({ ...input, policy: { network: "off" } })
+      await expect(
+        runtime.executeSandbox(ref, {
+          ...payload,
+          request: { ...payload.request, network: "on" },
+        })
+      ).rejects.toMatchObject({ code: "policy-not-attested" })
+      expect(call).not.toHaveBeenCalled()
+    })
+
+    it("preserves a read target outside the writable ceiling", async () => {
+      const deps = createDeps()
+      const adapter = containerAdapter()
+      jest.mocked(deps.getContainerAdapter!).mockReturnValue(adapter)
+      const runtime = new SandboxSessionRuntime(deps)
+      const ref = await runtime.bindSession({
+        ...input,
+        policy: { writableRoots: ["/workspace/write"], readableRoots: ["/workspace/read"] },
+      })
+      const targetFiles = ["/workspace/read/note.txt"]
+      await runtime.executeSandbox(ref, {
+        ...payload,
+        request: { ...payload.request, writable: [], targetFiles },
+      })
+      expect(adapter.execute).toHaveBeenCalledWith(
+        ref,
+        expect.objectContaining({ request: expect.objectContaining({ targetFiles }) })
+      )
     })
 
     it("refuses an unplaced container session at call time and audits the refusal", async () => {

@@ -953,7 +953,8 @@ export function createDockerAcceptanceContainerRuntime(
           report,
         }
       } finally {
-        await deps.client.delete(connectionId).catch(() => undefined)
+        // A mounted checkout cannot be reused while container stop is unknown.
+        await deps.client.delete(connectionId)
       }
     },
   }

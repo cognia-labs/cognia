@@ -327,18 +327,14 @@ fn rlimits_for(policy: &SandboxPolicy) -> crate::limits::ResolvedLimits {
 /// toolchains (git, node, compilers) fail inside the sandbox because dyld,
 /// the C library, temp-file handling, ttys, and preference lookups all hit
 /// paths/services that a bare `(deny default)` blocks.
-fn push_base_policy(out: &mut String) {
-    // The rules that decide whether a confined binary can load at all, shared
-    // with `launcher.rs` so the two SBPL producers cannot drift again. They had:
-    // the launcher learned that a scoped read list aborts every confined binary
-    // on modern macOS and switched to a global read allow, this renderer kept
-    // the narrow list, and every one-shot sandbox call on macOS died with
-    // SIGABRT while the cheap health probe still reported "Active".
-    sbpl::push_loadability_base(out);
+fn push_base_policy(out: &mut String, scoped_reads: bool) {
+    if scoped_reads {
+        sbpl::push_scoped_loadability_base(out);
+    } else {
+        sbpl::push_loadability_base(out);
+    }
     out.push_str("(allow signal (target self))\n");
-    // The system surface a confined toolchain needs. Documentation now that
-    // reads are open globally, and the scope this profile returns to if a
-    // future macOS makes an enumerable read set viable again.
+    // System tools and their runtime data remain readable in a scoped profile.
     out.push_str("(allow file-read*\n");
     for p in [
         "/usr/lib",
@@ -381,7 +377,13 @@ fn push_base_policy(out: &mut String) {
 fn render_profile(policy: &SandboxPolicy, proxy_port: Option<u16>) -> Result<String, SandboxError> {
     let mut out = String::new();
     out.push_str("(version 1)\n(deny default)\n");
-    push_base_policy(&mut out);
+    let readable = match policy {
+        SandboxPolicy::Bash { readable, .. }
+        | SandboxPolicy::Edit { readable, .. }
+        | SandboxPolicy::Write { readable, .. }
+        | SandboxPolicy::TextEditor { readable, .. } => readable,
+    };
+    push_base_policy(&mut out, !readable.is_empty());
 
     match policy {
         SandboxPolicy::Bash {
@@ -422,8 +424,7 @@ fn render_profile(policy: &SandboxPolicy, proxy_port: Option<u16>) -> Result<Str
         }
     }
 
-    // Last matching rules in the profile, so they win over every allow above,
-    // including the global `(allow file-read*)` the base policy needs.
+    // These rules override prior allows, including legacy unscoped reads.
     push_baseline_secret_read_denies(&mut out);
 
     // Managed executions live inside the denied app store
@@ -472,10 +473,8 @@ fn render_profile_with_scratch(
 /// Deny reads of every credential store the profile knows about, anchored at
 /// the paths that exist whether or not the caller declared them.
 ///
-/// The base policy has to allow `file-read*` globally for a confined command to
-/// load at all, which means the caller's `readable` list no longer bounds what
-/// can be read. `push_secret_read_denies` only hides secrets nested under a
-/// root the caller happened to pass, so on its own it would leave `~/.ssh`,
+/// The unscoped base permits global reads. `push_secret_read_denies` only hides
+/// secrets nested under a declared root, so on its own it would leave `~/.ssh`,
 /// `~/.aws` and cognia's own credential store readable to any session whose
 /// workspace sits elsewhere. This anchors the same deny set at the home
 /// directory and the app data directory unconditionally.
@@ -658,6 +657,43 @@ mod tests {
         assert!(!outside.exists());
     }
 
+    #[tokio::test]
+    async fn explicit_readable_root_denies_sibling_content() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let workspace = root_path.join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let inside = workspace.join("inside");
+        let outside = root_path.join("outside");
+        std::fs::write(&inside, "allowed").unwrap();
+        std::fs::write(&outside, "denied").unwrap();
+        let command = SandboxCommand {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                r#"/bin/cat "$1" || exit 6; if /bin/cat "$2"; then exit 7; fi"#.into(),
+                "sandbox-test".into(),
+                inside.to_string_lossy().into_owned(),
+                outside.to_string_lossy().into_owned(),
+            ],
+            cwd: workspace.clone(),
+            env: Default::default(),
+            stdin: None,
+            timeout: Duration::from_secs(10),
+        };
+        let policy = SandboxPolicy::Bash {
+            writable: vec![workspace.clone()],
+            readable: vec![workspace],
+            network: NetworkPolicy::Off,
+            max_cpu_seconds: 0,
+            max_memory_mb: 0,
+            max_processes: 0,
+        };
+        let result = MacOsSandboxBackend::new().run(command, policy).await.unwrap();
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert_eq!(result.stdout, "allowed");
+    }
+
     #[test]
     fn temporary_writes_are_scoped_to_one_invocation() {
         let policy = SandboxPolicy::Bash {
@@ -834,12 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn base_policy_allows_reads_globally_so_a_confined_binary_can_load() {
-        // A scoped read list aborts every confined command on current macOS
-        // (`/bin/echo` dies with SIGABRT before it execs), which is what made
-        // `sandbox_health_check` report `confined: false` while the cheap probe
-        // still said "Active". Pinning the bare allow keeps a future narrowing
-        // from silently re-breaking every macOS sandbox call.
+    fn empty_read_scope_keeps_legacy_read_policy() {
         let p = render_profile(
             &SandboxPolicy::Bash {
                 writable: vec![PathBuf::from("/workspace")],
@@ -854,7 +885,7 @@ mod tests {
         .unwrap();
         assert!(
             p.contains("(allow file-read*)\n"),
-            "the base policy must allow reads globally:\n{p}"
+            "an empty read scope keeps legacy global reads:\n{p}"
         );
     }
 
