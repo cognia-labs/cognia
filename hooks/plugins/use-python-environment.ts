@@ -11,7 +11,9 @@
  *
  * `prepare` downloads and installs packages: it runs only after the user
  * agreed in `PythonPrepareDialog`. `requestPrepare` is how everything else
- * asks for that consent.
+ * asks for that consent. A plugin locked with `uv.lock` (ENV02) installs what
+ * its lock pins, and when the Host reported `needs-uv` the same consent
+ * covers installing uv first.
  *
  * The plugin manager is imported lazily, as the rest of the plugin UI does:
  * cards render on first paint and must not pull the manager into it.
@@ -23,8 +25,10 @@ import { getPythonLogs, subscribePythonLogs } from "@/lib/plugin/python/log-buff
 import { requestPythonPreparePrompt } from "@/lib/plugin/python/prepare-prompt-requests"
 import {
   readinessCanPrepare,
+  readinessNeedsUv,
   summarizeReadiness,
   type PythonEnvironmentSummary,
+  type PythonLockSummary,
   type PythonReadiness,
   type PythonReadinessReport,
 } from "@/lib/plugin/python/readiness"
@@ -47,11 +51,17 @@ export interface PythonEnvironment {
   applies: boolean
   /** The requirements the plugin declares. */
   dependencies: readonly string[]
+  /** Its `uv.lock`, when the Host reported it locked (ENV02). */
+  lock: PythonLockSummary | null
+  /** What preparing installs: the lock's pins, or the declared requirements. */
+  packages: readonly string[]
+  /** Preparing installs uv first: the plugin is locked and uv is missing. */
+  needsUv: boolean
   /** The Host's last answer; `null` until it answered, or when it could not. */
   report: PythonReadinessReport | null
   readiness: PythonReadiness | null
   summary: PythonEnvironmentSummary | null
-  /** Whether a preparation can start now (not prepared, stale or failed). */
+  /** Whether a preparation can start now (not prepared, needs uv, stale or failed). */
   canPrepare: boolean
   lastPreparation: PythonPreparationResult | null
   /** The latest line the running preparation printed. */
@@ -89,6 +99,8 @@ export function usePythonEnvironment(
     pluginId ? (state.lastPreparationByPluginId[pluginId] ?? null) : null
   )
   const readiness = applies ? (report?.readiness ?? null) : null
+  const lock = applies ? (report?.lock ?? null) : null
+  const needsUv = readinessNeedsUv(readiness)
   const preparing = readiness?.state === "preparing"
 
   const logs = useSyncExternalStore(
@@ -135,7 +147,9 @@ export function usePythonEnvironment(
     }
     try {
       const { getPluginManager } = await import("@/lib/plugin/core/manager")
-      const outcome = await getPluginManager().installPythonDeps(pluginId, [...dependencies])
+      const outcome = await getPluginManager().installPythonDeps(pluginId, [...dependencies], {
+        installUv: needsUv,
+      })
       // The manager records whether it also restarted the plugin.
       const recorded = usePythonReadinessStore.getState().lastPreparationByPluginId[pluginId]
       return recorded?.status === "succeeded"
@@ -144,11 +158,14 @@ export function usePythonEnvironment(
     } catch (error) {
       return { status: "failed", message: error instanceof Error ? error.message : String(error) }
     }
-  }, [applies, pluginId, dependencies])
+  }, [applies, pluginId, dependencies, needsUv])
 
   return {
     applies,
     dependencies,
+    lock,
+    packages: lock ? lock.packages : dependencies,
+    needsUv,
     report: applies ? report : null,
     readiness,
     summary: readiness ? summarizeReadiness(readiness) : null,

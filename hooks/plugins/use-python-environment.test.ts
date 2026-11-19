@@ -66,6 +66,7 @@ describe("usePythonEnvironment", () => {
     act(() => {
       recordPythonReadiness("demo", {
         readiness: { state: "stale", reasons: ["dependencies"], installer: "uv" },
+        lock: null,
         interpreterWarning: null,
       })
       recordPythonPreparation("demo", { status: "failed", message: "uv exited 2" })
@@ -89,6 +90,7 @@ describe("usePythonEnvironment", () => {
     act(() => {
       recordPythonReadiness("demo", {
         readiness: { state: "preparing", installer: "uv" },
+        lock: null,
         interpreterWarning: null,
       })
     })
@@ -121,7 +123,30 @@ describe("usePythonEnvironment", () => {
       outcome,
       resumed: false,
     })
-    expect(mockInstallDeps).toHaveBeenCalledWith("demo", ["requests>=2"])
+    expect(mockInstallDeps).toHaveBeenCalledWith("demo", ["requests>=2"], { installUv: false })
+  })
+
+  it("lists a locked plugin's pins and installs uv first when it is missing (ENV02)", async () => {
+    const lock = { packages: ["six==1.16.0"], offline: false, ignoresManifestDependencies: true }
+    const { result } = renderHook(() => usePythonEnvironment("demo", python))
+    expect(result.current.packages).toEqual(["requests>=2"])
+    expect(result.current.lock).toBeNull()
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "needs-uv", installer: "uv" },
+        lock,
+        interpreterWarning: null,
+      })
+    )
+    expect(result.current.lock).toEqual(lock)
+    expect(result.current.packages).toEqual(["six==1.16.0"])
+    expect(result.current.needsUv).toBe(true)
+    expect(result.current.canPrepare).toBe(true)
+    expect(result.current.summary).toBe("not-ready")
+    await act(async () => {
+      await result.current.prepare()
+    })
+    expect(mockInstallDeps).toHaveBeenCalledWith("demo", ["requests>=2"], { installUv: true })
   })
 
   it("returns what the manager recorded, restart included", async () => {

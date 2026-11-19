@@ -1,0 +1,117 @@
+---
+title: Python 环境
+description: 声明 Python 插件的依赖，用 uv.lock 锁定，并随插件携带 wheel 实现离线安装（ADR-0258，ENV01 与 ENV02）。
+---
+
+# Python 环境
+
+`python` 或 `hybrid` 插件运行在 Host 为它构建的环境中。构建环境要下载并安装软件包，因此它是一个独立的步骤，需要单独征得用户同意，不会并入安装或启用。插件刚安装完，Cognia 就会询问是否准备它的依赖。插件卡片、库列表中的行和详情页会显示插件能否运行。环境未就绪的插件不会启动，启用它时会提示先准备环境。
+
+Host 根据构建环境时记录的信息判断是否就绪，不会从依赖字符串猜测导入名。各个状态见[就绪状态](#就绪状态)，背景见 [ADR-0258](../adr/0258-every-environment-replaces-a-plugin-package-under-one-contract)。
+
+## 两种声明依赖的方式
+
+|              | manifest 中的 `pythonDependencies`          | 与 `pyproject.toml` 同目录的 `uv.lock` |
+| ------------ | ------------------------------------------- | -------------------------------------- |
+| 版本由谁决定 | 用户准备时由解析器决定                      | 由锁文件决定                           |
+| 安装器       | 按用户设置：有 uv 时用 uv（`auto`）、pip 或自定义 | 一律使用 uv                            |
+| 环境         | 默认共享；依赖冲突时改用独立环境            | 一律使用插件自己的独立环境             |
+| 离线安装     | 不支持                                      | 支持，需随插件携带 `wheels/` 目录      |
+
+### 在 manifest 中声明依赖
+
+```jsonc
+// plugin.json
+{
+  "type": "python",
+  "pythonMain": "main.py",
+  "pythonDependencies": ["requests>=2", "pillow"],
+}
+```
+
+只要共享环境中的所有插件仍能一起解析，Host 就把这些依赖装进共享环境，否则给插件单独建一个环境。插件详情页上用户设置的安装器和环境范围对这种方式生效。
+
+### 用 uv 锁定
+
+插件根目录同时有 `pyproject.toml` 和 `uv.lock` 时，插件视为已锁定，锁文件是它依赖的唯一来源：
+
+```toml
+# pyproject.toml
+[project]
+name = "my-plugin"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.32"]
+```
+
+在插件目录运行 `uv lock`，然后把这两个文件一起发布。准备环境时，Host 执行：
+
+```bash
+UV_PROJECT_ENVIRONMENT=<插件的环境> uv sync --locked --no-dev --no-install-project --project <插件目录> --python <它的解释器>
+```
+
+- `--locked`：锁文件与 `pyproject.toml` 不一致时拒绝安装。用户会看到需要插件作者重新锁定的提示：重新运行 `uv lock`，再重新发布插件。
+- `--no-dev`：不安装 `dev` 依赖组。
+- `--no-install-project`：不把插件本身当作软件包安装，Host 直接从插件目录加载它。
+- `uv sync` 是精确同步：锁文件中没有的包会从环境中移除。
+- 已锁定的插件一律使用自己的环境，一律用 uv 安装。详情页上的安装器和环境范围设置对它不生效，页面上会注明。
+- 如果 manifest 还写了 `pythonDependencies`，这些条目会被忽略，详情页会给出警告。请删除它们。
+- 同一个 `pyproject.toml` 中的 `requires-python` 会与解释器比对，不满足时只给出警告。
+- 环境会记录构建时所用锁文件的 sha256。插件更新或回滚后 `uv.lock` 有变化，环境就会变为过期状态，用户需要重新准备。
+
+没有安装 uv 时，插件处于 `needs-uv` 状态，不会退回到用 pip 做不带锁的安装。此时准备环境会先用 Python 运行时自带的 pip 安装 uv，确认框会在执行前说明这一点。
+
+### 携带 wheel 离线安装
+
+锁文件旁边有 `wheels/` 目录时，安装改为离线进行：Host 会加上 `--offline`，不下载任何内容。携带的 wheel 中缺少某个包时，准备失败，用户会看到缺少的包名。
+
+携带的 wheel 必须正是锁文件指向的那些。对着 PyPI 生成的锁记录的是 PyPI 上的地址，uv 会严格安装这些文件；安装时传 `--find-links` 也改变不了这一点，所以 Host 不传这个参数。应该对着携带的 wheel 生成锁文件：
+
+1. 照常联网锁定：`uv lock`。
+2. 导出锁定的版本，并下载对应的 wheel：
+
+   ```bash
+   uv export --format requirements.txt --no-dev --no-emit-project --no-hashes --frozen -o requirements.txt
+   python -m pip download -r requirements.txt --no-deps --only-binary=:all: -d wheels
+   ```
+
+   纯 Python 的 wheel（`py3-none-any`）在所有平台通用。含编译代码的包要为插件支持的每个平台各下载一次，放进同一个目录，下载时使用 pip 的 `--platform`、`--python-version`、`--implementation` 和 `--abi` 选项。插件只支持部分平台时，用 `[tool.uv]` 下的 `environments` 把锁定范围限制在这些平台。
+
+3. 让 uv 只从携带的 wheel 安装：
+
+   ```toml
+   # pyproject.toml
+   [tool.uv]
+   no-index = true
+   find-links = ["wheels"]
+   ```
+
+4. 离线重新锁定：`uv lock --offline`。此后 `uv.lock` 中每个包的来源都是 `source = { registry = "wheels" }`。
+5. 在插件目录的副本中用空缓存验证：
+
+   ```bash
+   UV_CACHE_DIR="$(mktemp -d)" uv sync --locked --offline --no-dev --no-install-project
+   ```
+
+## 就绪状态
+
+| 状态           | 含义                                                                                                                                                                 |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `not-required` | 插件没有声明依赖，也没有锁文件。                                                                                                                                     |
+| `not-prepared` | 还没有为它构建环境。                                                                                                                                                 |
+| `needs-uv`     | 插件已锁定，但没有安装 uv。准备时会先安装 uv。                                                                                                                       |
+| `stale`        | 环境已不再匹配。原因可能是：依赖要求变了（`dependencies`）、`uv.lock` 变了（`lock`）、环境基于另一个 Python 构建（`interpreter`），或由另一个安装器构建（`installer`）。 |
+| `preparing`    | 正在准备。                                                                                                                                                           |
+| `ready`        | 环境与插件一致。                                                                                                                                                     |
+| `failed`       | 上次准备失败。对已锁定的插件，Host 可能给出具体原因：锁文件与 `pyproject.toml` 不一致（`lock-out-of-date`），或离线安装缺少 wheel（`missing-wheels`，并列出缺少的包）。     |
+| `user-managed` | 用户让插件运行在自己的解释器上、关闭了托管环境，或者为未锁定的插件使用了自定义安装器。Host 不做检查。                                                                 |
+
+`not-prepared`、`needs-uv`、`stale`、`preparing` 和 `failed` 会阻止插件加载。用户把插件设为启用、但它只因环境未就绪而没能启动时，准备成功后插件会自动重新启用。
+
+## 打包与大小限制
+
+- 通过 Git 或本地目录安装时，插件目录原样复制，只跳过 `.git`、`.github`、`node_modules` 和 `target`。`pyproject.toml`、`uv.lock` 和 `wheels/` 都会一起带上。
+- 归档下载的上限是：下载 128 MiB、解压后 512 MiB、20,000 个条目。cogpack 的上限是：压缩后 100 MiB、展开后 300 MiB、8,192 个文件。wheel 本身已经压缩过，所以它们的大小几乎全额计入。为多个平台携带含编译代码的依赖时，可能超过 cogpack 的上限，这类插件应改为发布联网安装的锁文件。
+- 随应用捆绑的第一方插件会逐项列出要发布的文件。已锁定的插件要在 `include` 中加上 `pyproject.toml`、`uv.lock` 和 `wheels/**/*.whl`。
+
+带锁安装已在 macOS 上验证。Windows 上 `--project` 和 `UV_PROJECT_ENVIRONMENT` 的路径处理还没有验证。

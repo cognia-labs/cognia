@@ -15,7 +15,7 @@
     "invalidManifest": "Its manifest is invalid.",
     "managerNotReady": "Plugins are still starting. Try again in a moment.",
     "notFound": "It's no longer installed.",
-    "pythonDependenciesNotReady": "Its Python dependencies are {state, select, preparing {still being prepared} failed {not ready: the last preparation failed} stale {out of date} other {not installed yet}}. Prepare them, then enable it again.",
+    "pythonDependenciesNotReady": "Its Python dependencies are {state, select, preparing {still being prepared} failed {not ready: the last preparation failed} stale {out of date} needsUv {waiting for uv, which its uv.lock needs and is not installed} other {not installed yet}}. Prepare them, then enable it again.",
     "pythonDisabled": "The Python runtime is turned off on this device.",
     "signature": "Its signature couldn't be verified.",
     "uninstallMirrored": "Uninstall it in the desktop app. This device only mirrors it.",

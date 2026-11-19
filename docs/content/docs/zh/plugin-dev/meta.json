@@ -13,6 +13,7 @@
     "network-credentials",
     "pet",
     "pi-packages",
+    "python-environments",
     "scheduler"
   ]
 }

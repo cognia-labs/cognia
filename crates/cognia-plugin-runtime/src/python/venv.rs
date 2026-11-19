@@ -24,6 +24,11 @@
 //! Every marker records which installer built the environment. Switching
 //! installers does not delete anything; the next install notices the mismatch
 //! and rebuilds, which is why a switch is safe to make while offline.
+//!
+//! A plugin locked with `uv.lock` (ENV02, [`super::lock`]) takes neither
+//! path: [`provision_locked`] syncs its own environment from the lock with uv,
+//! whatever installer and scope the settings select, and the marker records
+//! the lock's digest.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -36,6 +41,8 @@ use tokio::process::Command;
 
 use super::discover::Interpreter;
 use super::events::{EventSink, PythonEvent};
+use super::lock::PluginLock;
+use super::readiness::PrepareError;
 use crate::{PluginError, Result};
 
 /// Marker file proving the venv was created (and finished) by us.
@@ -193,6 +200,18 @@ pub fn resolve_installer(pref: &InstallerPreference) -> Result<Installer> {
     }
 }
 
+/// The uv a locked plugin is synced with: the one the settings name when they
+/// select uv, otherwise the one on PATH. A locked plugin always uses uv,
+/// whatever installer the settings select for unlocked ones; `None` when uv
+/// cannot be found, which there is no falling back from.
+pub fn locked_uv(pref: &InstallerPreference) -> Option<String> {
+    let explicit = match pref.kind.as_deref() {
+        Some("uv") => pref.path.as_deref(),
+        _ => None,
+    };
+    discover_uv(explicit)
+}
+
 /// The name the marker would record for the installer `pref` selects, without
 /// failing when it is missing: an explicit `uv` that is not installed still
 /// selects uv, and the preparation reports that it cannot run it.
@@ -281,6 +300,10 @@ pub struct VenvMarker {
     /// Shared environments: plugin id → the requirements it contributed.
     /// Sorted so the file is stable across writes.
     pub contributors: BTreeMap<String, Vec<String>>,
+    /// Locked plugins: sha256 of the `uv.lock` the environment was synced
+    /// from. Empty for one built from manifest requirements, and while a sync
+    /// is running, so a sync that stopped half-way is never read as done.
+    pub lock_digest: String,
 }
 
 impl VenvMarker {
@@ -416,6 +439,11 @@ async fn run_streaming(
         .map(|_| ())
 }
 
+/// Lines of a command's output kept for the caller; older ones are dropped.
+const KEPT_OUTPUT_LINES: usize = 1000;
+/// Lines of output an error message quotes.
+const ERROR_TAIL_LINES: usize = 20;
+
 /// As [`run_streaming`], but hands back the output tail on success too — the
 /// dry run needs to distinguish "resolved" from "this pip is too old".
 async fn run_streaming_collecting(
@@ -424,6 +452,40 @@ async fn run_streaming_collecting(
     phase: &str,
     sink: &Option<EventSink>,
 ) -> Result<Vec<String>> {
+    let (status, output) = run_streaming_output(cmd, plugin_id, phase, sink).await?;
+    if !status.success() {
+        return Err(command_failed(phase, status, &output));
+    }
+    Ok(error_tail(&output).to_vec())
+}
+
+fn error_tail(output: &[String]) -> &[String] {
+    &output[output.len().saturating_sub(ERROR_TAIL_LINES)..]
+}
+
+fn command_failed(phase: &str, status: std::process::ExitStatus, output: &[String]) -> PluginError {
+    PluginError::PythonHost(failure_detail(phase, status, output))
+}
+
+/// "`phase` failed (exit N): <the last lines of its output>".
+fn failure_detail(phase: &str, status: std::process::ExitStatus, output: &[String]) -> String {
+    format!(
+        "{phase} failed (exit {}): {}",
+        status.code().map_or_else(|| "?".into(), |c| c.to_string()),
+        error_tail(output).join(" | ")
+    )
+}
+
+/// Run a command, streaming every stdout/stderr line as a `progress` event,
+/// and hand back how it exited and its output (the last
+/// [`KEPT_OUTPUT_LINES`] lines), whether it succeeded or not: a caller that
+/// explains a failure reads more than the tail the error quotes.
+async fn run_streaming_output(
+    cmd: &mut Command,
+    plugin_id: &str,
+    phase: &str,
+    sink: &Option<EventSink>,
+) -> Result<(std::process::ExitStatus, Vec<String>)> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -439,10 +501,10 @@ async fn run_streaming_collecting(
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let mut tail: Vec<String> = Vec::new();
+    let mut output: Vec<String> = Vec::new();
 
     // Drain both pipes concurrently so a chatty pip can't deadlock on a
-    // full pipe buffer; collect a bounded tail for the error message.
+    // full pipe buffer; keep a bounded tail for the caller.
     let mut readers = Vec::new();
     if let Some(stdout) = stdout {
         readers.push(tokio::spawn(read_lines(stdout)));
@@ -455,26 +517,18 @@ async fn run_streaming_collecting(
             for line in lines {
                 emit_progress(sink, plugin_id, phase, line.clone());
                 log::info!("[python.{plugin_id}] {phase}: {line}");
-                tail.push(line);
-                if tail.len() > 20 {
-                    tail.remove(0);
-                }
+                output.push(line);
             }
         }
     }
+    let dropped = output.len().saturating_sub(KEPT_OUTPUT_LINES);
+    output.drain(..dropped);
 
     let status = child
         .wait()
         .await
         .map_err(|e| PluginError::PythonHost(format!("{phase} did not exit cleanly: {e}")))?;
-    if !status.success() {
-        return Err(PluginError::PythonHost(format!(
-            "{phase} failed (exit {}): {}",
-            status.code().map_or_else(|| "?".into(), |c| c.to_string()),
-            tail.join(" | ")
-        )));
-    }
-    Ok(tail)
+    Ok((status, output))
 }
 
 async fn read_lines<R: tokio::io::AsyncRead + Unpin>(reader: R) -> Vec<String> {
@@ -619,6 +673,7 @@ pub async fn ensure_venv_at(
         scope: String::new(),
         deps: Vec::new(),
         contributors: BTreeMap::new(),
+        lock_digest: String::new(),
     };
     write_marker(dir, &marker)?;
     Ok(marker)
@@ -833,6 +888,55 @@ pub async fn provision_dependencies(
     })
 }
 
+/// Sync a locked plugin's own environment from its `uv.lock` (ENV02).
+///
+/// Always the isolated environment, created by uv; the plugin leaves the
+/// shared one. `uv sync` is exact, so packages a previous build left that the
+/// lock does not pin are removed. The marker forgets any lock while the sync
+/// runs and records this one only once it succeeded. A failure says why when
+/// uv's output does: the lock is out of date, or an offline install lacks
+/// wheels.
+pub async fn provision_locked(
+    base: &Interpreter,
+    python_dir: &Path,
+    plugin_id: &str,
+    uv: &str,
+    lock: &PluginLock,
+    sink: &Option<EventSink>,
+) -> std::result::Result<ProvisionOutcome, PrepareError> {
+    forget_shared_contributor(python_dir, plugin_id);
+    let dir = venv_dir(python_dir, plugin_id);
+    let installer = Installer::Uv(uv.to_string());
+    let mut marker = ensure_venv_at(base, &dir, plugin_id, &installer, sink).await?;
+    marker.scope = VenvScope::Isolated.as_str().to_string();
+    marker.deps.clear();
+    marker.contributors.clear();
+    marker.lock_digest.clear();
+    write_marker(&dir, &marker)?;
+
+    let mut command = super::lock::sync_command(uv, lock, &dir);
+    let (status, output) = run_streaming_output(&mut command, plugin_id, "sync", sink).await?;
+    if !status.success() {
+        let cause = super::lock::classify_sync_failure(&output, lock.offline);
+        let detail = failure_detail("uv sync", status, &output);
+        let message = super::lock::sync_failure_message(cause.as_ref(), &detail);
+        log::warn!("[python.{plugin_id}] {detail}");
+        return Err(PrepareError {
+            error: PluginError::PythonHost(message),
+            cause,
+        });
+    }
+
+    marker.lock_digest = lock.digest.clone();
+    write_marker(&dir, &marker)?;
+    Ok(ProvisionOutcome {
+        venv_dir: dir,
+        scope: VenvScope::Isolated,
+        installer: installer.name().to_string(),
+        downgraded_reason: None,
+    })
+}
+
 /// Try the shared environment. `Err(reason)` means "use an isolated one", and
 /// the shared environment is left exactly as it was.
 async fn try_shared(
@@ -899,6 +1003,7 @@ pub fn forget_shared_contributor(python_dir: &Path, plugin_id: &str) {
 mod tests {
     use super::*;
     use crate::python::discover::discover_interpreter;
+    use crate::python::readiness::FailureCause;
     use parking_lot::Mutex;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -1463,5 +1568,166 @@ mod tests {
         // And the plugin now resolves to its own environment.
         let interp_now = venv_interpreter(tmp.path(), "demo").unwrap();
         assert!(interp_now.argv_prefix[0].contains("demo"));
+    }
+
+    #[test]
+    fn a_locked_plugin_uses_the_settings_uv_only_when_they_select_uv() {
+        // A custom installer's program is not a uv; neither is pip's absence of one.
+        for kind in ["custom", "pip", "auto"] {
+            let pref = InstallerPreference {
+                kind: Some(kind.into()),
+                path: Some("/definitely/not/uv".into()),
+                ..Default::default()
+            };
+            assert_eq!(locked_uv(&pref), discover_uv(None), "{kind}");
+        }
+        let named = InstallerPreference {
+            kind: Some("uv".into()),
+            path: Some("/definitely/not/uv".into()),
+            ..Default::default()
+        };
+        assert_eq!(locked_uv(&named), None);
+    }
+
+    /// A tiny pure-Python wheel, `tinydep==1.0.0`, importable as `tinydep`.
+    fn tiny_wheel(path: &Path) {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, body) in [
+            ("tinydep/__init__.py", "VALUE = 42\n"),
+            (
+                "tinydep-1.0.0.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: tinydep\nVersion: 1.0.0\n",
+            ),
+            (
+                "tinydep-1.0.0.dist-info/WHEEL",
+                "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            ),
+            (
+                "tinydep-1.0.0.dist-info/RECORD",
+                "tinydep/__init__.py,,\ntinydep-1.0.0.dist-info/METADATA,,\n\
+                 tinydep-1.0.0.dist-info/WHEEL,,\ntinydep-1.0.0.dist-info/RECORD,,\n",
+            ),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(body.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    /// A plugin locked against its bundled wheels, as the plugin-dev docs
+    /// tell authors to build one: `[tool.uv]` points uv at `wheels/` and
+    /// nothing else, and the lock is made offline.
+    fn offline_plugin(uv: &str, root: &Path) -> PluginLock {
+        std::fs::create_dir_all(root.join("wheels")).unwrap();
+        tiny_wheel(&root.join("wheels/tinydep-1.0.0-py3-none-any.whl"));
+        std::fs::write(
+            root.join("pyproject.toml"),
+            "[project]\nname = \"demo-plugin\"\nversion = \"0.1.0\"\n\
+             requires-python = \">=3.9\"\ndependencies = [\"tinydep==1.0.0\"]\n\n\
+             [tool.uv]\nno-index = true\nfind-links = [\"wheels\"]\n",
+        )
+        .unwrap();
+        let locked = std::process::Command::new(uv)
+            .args(["lock", "--offline", "--project"])
+            .arg(root)
+            .output()
+            .unwrap();
+        assert!(
+            locked.status.success(),
+            "uv lock: {}",
+            String::from_utf8_lossy(&locked.stderr)
+        );
+        super::super::lock::detect_lock(root)
+            .unwrap()
+            .expect("locked")
+    }
+
+    #[tokio::test]
+    async fn a_locked_plugin_syncs_offline_from_its_bundled_wheels_with_real_uv() {
+        let (Some(base), Some(uv)) = (discover_interpreter(None), discover_uv(None)) else {
+            eprintln!("skipping the locked sync test: needs a python >= 3.9 and uv on PATH");
+            return;
+        };
+        let tmp = TempDir::new().unwrap();
+        let python_dir = tmp.path().join("python");
+        let root = tmp.path().join("plugin");
+        let lock = offline_plugin(&uv, &root);
+        assert!(lock.offline);
+        assert_eq!(lock.packages, vec!["tinydep==1.0.0"]);
+
+        // It was sharing before it was locked; the lock takes it out.
+        let mut shared = VenvMarker::default();
+        shared.contributors.insert("demo".into(), vec!["x".into()]);
+        seed_venv(&shared_venv_dir(&python_dir), &shared);
+
+        let outcome = provision_locked(&base, &python_dir, "demo", &uv, &lock, &None)
+            .await
+            .unwrap_or_else(|failure| panic!("sync failed: {}", failure.error));
+        assert_eq!(outcome.scope, VenvScope::Isolated);
+        assert_eq!(outcome.installer, "uv");
+        let environment = recorded_environment(&python_dir, "demo").unwrap();
+        assert_eq!(environment.scope, VenvScope::Isolated);
+        assert_eq!(environment.marker.lock_digest, lock.digest);
+        assert_eq!(environment.marker.installer, "uv");
+        assert!(read_marker(&shared_venv_dir(&python_dir))
+            .unwrap()
+            .contributors
+            .is_empty());
+        let imported = std::process::Command::new(venv_python(&venv_dir(&python_dir, "demo")))
+            .args(["-c", "import tinydep; print(tinydep.VALUE)"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&imported.stdout).trim(), "42");
+        // Nothing was written into the plugin.
+        let mut entries: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, vec!["pyproject.toml", "uv.lock", "wheels"]);
+    }
+
+    #[tokio::test]
+    async fn a_locked_sync_names_what_went_wrong_with_real_uv() {
+        let (Some(base), Some(uv)) = (discover_interpreter(None), discover_uv(None)) else {
+            eprintln!("skipping the locked failure test: needs a python >= 3.9 and uv on PATH");
+            return;
+        };
+        let tmp = TempDir::new().unwrap();
+        let python_dir = tmp.path().join("python");
+
+        // A wheel the lock pins is not in the bundle: refused, not downloaded.
+        let missing = tmp.path().join("missing");
+        let lock = offline_plugin(&uv, &missing);
+        std::fs::remove_file(missing.join("wheels/tinydep-1.0.0-py3-none-any.whl")).unwrap();
+        let failure = provision_locked(&base, &python_dir, "missing", &uv, &lock, &None)
+            .await
+            .expect_err("a missing wheel fails the sync");
+        assert_eq!(
+            failure.cause,
+            Some(FailureCause::MissingWheels {
+                packages: vec!["tinydep==1.0.0".into()]
+            })
+        );
+        // The half-built environment records no lock.
+        let environment = recorded_environment(&python_dir, "missing").unwrap();
+        assert!(environment.marker.lock_digest.is_empty());
+
+        // The requirements changed after the lock was made.
+        let stale = tmp.path().join("stale");
+        let lock = offline_plugin(&uv, &stale);
+        let pyproject = std::fs::read_to_string(stale.join("pyproject.toml")).unwrap();
+        std::fs::write(
+            stale.join("pyproject.toml"),
+            pyproject.replace("tinydep==1.0.0", "tinydep>=1"),
+        )
+        .unwrap();
+        let failure = provision_locked(&base, &python_dir, "stale", &uv, &lock, &None)
+            .await
+            .expect_err("an out-of-date lock is refused");
+        assert_eq!(failure.cause, Some(FailureCause::LockOutOfDate));
+        assert!(failure.error.to_string().contains("uv lock"));
     }
 }

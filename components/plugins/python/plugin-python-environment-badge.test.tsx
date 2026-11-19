@@ -30,7 +30,7 @@ import { PluginPythonEnvironmentBadge } from "./plugin-python-environment-badge"
 const plugin = { id: "wiki", manifest: { type: "python", pythonDependencies: ["requests"] } }
 
 function answer(readiness: PythonReadiness) {
-  act(() => recordPythonReadiness("wiki", { readiness, interpreterWarning: null }))
+  act(() => recordPythonReadiness("wiki", { readiness, lock: null, interpreterWarning: null }))
 }
 
 beforeEach(() => {

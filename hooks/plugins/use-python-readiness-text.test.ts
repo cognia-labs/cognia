@@ -28,6 +28,30 @@ describe("usePythonReadinessText", () => {
     )
   })
 
+  it("words a locked plugin's states (ENV02)", () => {
+    const text = describe_()
+    expect(text({ state: "needs-uv", installer: "uv" })).toBe("needsUv")
+    expect(text({ state: "stale", reasons: ["lock"], installer: "uv" })).toBe(
+      'stale:{"reasons":"staleReason.lock"}'
+    )
+    expect(
+      text({
+        state: "failed",
+        message: "uv sync failed",
+        cause: { kind: "lock-out-of-date" },
+        installer: "uv",
+      })
+    ).toBe("failedCause.lockOutOfDate")
+    expect(
+      text({
+        state: "failed",
+        message: "uv sync failed",
+        cause: { kind: "missing-wheels", packages: ["six==1.16.0", "idna==3.10"] },
+        installer: "uv",
+      })
+    ).toBe('failedCause.missingWheels:{"packages":"six==1.16.0 & idna==3.10"}')
+  })
+
   it("lists every reason an environment is stale", () => {
     expect(
       describe_()({ state: "stale", reasons: ["dependencies", "interpreter"], installer: "uv" })

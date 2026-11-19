@@ -9,6 +9,7 @@ import {
 
 const notPrepared = {
   readiness: { state: "not-prepared" as const, installer: "uv" as const },
+  lock: null,
   interpreterWarning: { kind: "version-unknown" as const },
 }
 
@@ -21,12 +22,13 @@ describe("python readiness store", () => {
     recordPythonReadiness("demo", notPrepared)
     recordPythonReadiness("other", {
       readiness: { state: "not-required" },
+      lock: null,
       interpreterWarning: null,
     })
     expect(state().byPluginId.demo).toBe(notPrepared)
     recordPythonReadiness("demo", null)
     expect(state().byPluginId).toEqual({
-      other: { readiness: { state: "not-required" }, interpreterWarning: null },
+      other: { readiness: { state: "not-required" }, lock: null, interpreterWarning: null },
     })
   })
 
@@ -36,9 +38,25 @@ describe("python readiness store", () => {
     markPythonPreparing("demo")
     expect(state().byPluginId.demo).toEqual({
       readiness: { state: "preparing", installer: "uv" },
+      lock: null,
       interpreterWarning: { kind: "version-unknown" },
     })
     expect(state().lastPreparationByPluginId.demo).toBeUndefined()
+  })
+
+  it("keeps a locked plugin's lock while it prepares, uv first or not (ENV02)", () => {
+    const lock = { packages: ["six==1.16.0"], offline: false, ignoresManifestDependencies: false }
+    recordPythonReadiness("locked", {
+      readiness: { state: "needs-uv", installer: "uv" },
+      lock,
+      interpreterWarning: null,
+    })
+    markPythonPreparing("locked")
+    expect(state().byPluginId.locked).toEqual({
+      readiness: { state: "preparing", installer: "uv" },
+      lock,
+      interpreterWarning: null,
+    })
   })
 
   it("marks nothing running without a report that names the installer", () => {
@@ -46,6 +64,7 @@ describe("python readiness store", () => {
     expect(state().byPluginId.unknown).toBeUndefined()
     recordPythonReadiness("mine", {
       readiness: { state: "user-managed", reason: "custom-installer" },
+      lock: null,
       interpreterWarning: null,
     })
     markPythonPreparing("mine")

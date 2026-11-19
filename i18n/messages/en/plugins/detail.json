@@ -118,7 +118,10 @@
     "callTimeoutMs": "Call timeout (ms)",
     "deps": {
       "downgraded": "A shared environment was requested but not used: {reason}",
+      "downgradedLocked": "A shared environment was requested but not used: a plugin locked with uv.lock always gets its own environment, so the lock is met exactly.",
       "error": "Install failed: {message}",
+      "ignoredManifest": "Its manifest also lists pythonDependencies. uv.lock replaces them, so they are ignored; the plugin's author should remove them.",
+      "lockedSummary": "This plugin is locked with uv.lock, which pins {count, plural, one {# Python package} other {# Python packages}}{offline, select, true {; it installs offline from the wheels it bundles} other {}}.",
       "outcome": "Installed with {installer} into {scope, select, shared {a shared} isolated {an isolated} other {a {scope}}} environment.",
       "summary": "This plugin declares {count, plural, one {# Python dependency} other {# Python dependencies}}."
     },
@@ -143,6 +146,7 @@
       "installerSwitchWarning": "Changing the installer rebuilds this plugin's environment on the next dependency install. Nothing is deleted until then.",
       "installerUv": "uv",
       "interpreterVersion": "Python {version}",
+      "lockedNote": "This plugin is locked with uv.lock: it is always prepared with uv in an isolated environment, so the installer and scope chosen here do not apply to it.",
       "scope": "Environment scope",
       "scopeDefault": "Follow the plugin manifest",
       "scopeHint": "Sharing saves disk. The host solves every contributor's requirements together first, and falls back to an isolated environment rather than breaking an installed plugin.",

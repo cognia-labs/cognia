@@ -26,7 +26,9 @@ use super::interpreter_check::{
     interpreter_warning, read_requires_python, warning_line, InterpreterWarning, RequiresPython,
 };
 use super::protocol::{PluginHost, CALL_TIMEOUT, CONTROL_TIMEOUT};
-use super::readiness::{compute_readiness, ReadinessInputs, ReadinessReport};
+use super::readiness::{
+    compute_readiness, LockInputs, LockSummary, PrepareError, ReadinessInputs, ReadinessReport,
+};
 use super::PythonRuntimeState;
 use crate::{PluginError, PluginRuntimeState, Result};
 
@@ -853,7 +855,8 @@ pub async fn plugin_python_install_deps_for_state(
 
 /// Whether a plugin's Python environment can load it (ENV01, ADR-0258):
 /// computed from the environment the Host recorded and the preparation it is
-/// running or last failed. Read-only; preparing stays `plugin_python_install_deps`.
+/// running or last failed, against the plugin's `uv.lock` when it has one
+/// (ENV02). Read-only; preparing stays `plugin_python_install_deps`.
 #[cfg(feature = "tauri-host")]
 #[tauri::command]
 pub async fn plugin_python_readiness(
@@ -892,34 +895,51 @@ pub async fn plugin_python_readiness_for_state(
     let plugin_root = plugins.plugin_dir(plugin_id);
     let plugin_id = plugin_id.to_string();
     let dependencies = dependencies.to_vec();
-    // Marker reads, the uv probe and the interpreter probe are all blocking.
+    // Marker and lock reads, the uv probe and the interpreter probe are all
+    // blocking.
     tokio::task::spawn_blocking(move || {
+        let lock = super::lock::detect_lock(&plugin_root).map_err(PluginError::PythonHost)?;
         let environment = super::venv::recorded_environment(&python_dir, &plugin_id);
-        // Resolved at most once: on `auto` it probes for uv.
+        // Each resolved at most once: they probe for uv.
         let resolved = std::cell::OnceCell::new();
         let expected_installer =
             || *resolved.get_or_init(|| super::venv::expected_installer_name(&settings.installer));
-        let readiness = compute_readiness(&ReadinessInputs {
+        let found_uv = std::cell::OnceCell::new();
+        let uv_available =
+            || *found_uv.get_or_init(|| super::venv::locked_uv(&settings.installer).is_some());
+        let inputs = ReadinessInputs {
             plugin_id: &plugin_id,
             dependencies: &dependencies,
+            lock: lock.as_ref().map(|lock| LockInputs {
+                digest: &lock.digest,
+                uv_available: &uv_available,
+            }),
             use_venv: settings.use_venv.unwrap_or(true),
             interpreter_override: source == InterpreterSource::Override,
             expected_installer: &expected_installer,
             runtime_version: runtime.version.as_deref(),
             environment: environment.as_ref(),
             preparation: preparation.as_ref(),
-        });
-        let installer = readiness.host_prepared().then(expected_installer);
+        };
+        let readiness = compute_readiness(&inputs);
+        let installer = readiness.host_prepared().then(|| inputs.installer());
         let (_, _, interpreter_warning) =
             check_plugin_interpreter(interpreter, source, &plugin_root);
-        ReadinessReport {
+        Ok(ReadinessReport {
             readiness,
             installer,
+            lock: lock.map(|lock| LockSummary {
+                packages: lock.packages,
+                offline: lock.offline,
+                ignores_manifest_dependencies: dependencies
+                    .iter()
+                    .any(|requirement| !requirement.trim().is_empty()),
+            }),
             interpreter_warning,
-        }
+        })
     })
     .await
-    .map_err(|error| PluginError::Internal(format!("readiness task panicked: {error}")))
+    .map_err(|error| PluginError::Internal(format!("readiness task panicked: {error}")))?
 }
 
 /// Answer one plugin -> host RPC request (ADR-0145).
@@ -1607,6 +1627,9 @@ async fn install_deps_inner(
     // Same gate order as load: permission first, availability second.
     check_execute_grant(plugins, plugin_id)?;
     let base = require_interpreter(state)?;
+    // The id is joined into the plugin and environment paths.
+    let plugin_id = crate::validate_plugin_id_path_component(plugin_id)?;
+    let plugin_id = plugin_id.as_str();
     let preparation = state.preparations.begin(plugin_id).ok_or_else(|| {
         PluginError::InvalidArgument(format!(
             "the Python environment of {plugin_id} is already being prepared"
@@ -1615,6 +1638,7 @@ async fn install_deps_inner(
     let outcome = provision_for_plugin(
         state,
         plugin_id,
+        &plugins.plugin_dir(plugin_id),
         dependencies,
         manifest_scope,
         &base,
@@ -1622,18 +1646,45 @@ async fn install_deps_inner(
     )
     .await;
     preparation.finish(&outcome);
-    outcome
+    outcome.map_err(|failure| failure.error)
 }
 
 async fn provision_for_plugin(
     state: &PythonRuntimeState,
     plugin_id: &str,
+    plugin_root: &Path,
     dependencies: &[String],
     manifest_scope: Option<&str>,
     base: &Interpreter,
     settings: PythonHostSettings,
-) -> Result<PythonInstallOutcome> {
+) -> std::result::Result<PythonInstallOutcome, PrepareError> {
     let sink = state.sink();
+    // Reading the lock and probing for uv both block.
+    let root = plugin_root.to_path_buf();
+    let preference = settings.installer.clone();
+    let (lock, uv) = tokio::task::spawn_blocking(move || {
+        let lock = super::lock::detect_lock(&root)?;
+        let uv = lock
+            .as_ref()
+            .and_then(|_| super::venv::locked_uv(&preference));
+        Ok::<_, String>((lock, uv))
+    })
+    .await
+    .map_err(|error| PluginError::Internal(format!("lock task panicked: {error}")))?
+    .map_err(PluginError::PythonHost)?;
+    if let Some(lock) = lock {
+        return provision_locked_plugin(
+            state,
+            plugin_id,
+            dependencies,
+            manifest_scope,
+            base,
+            &settings,
+            &lock,
+            uv,
+        )
+        .await;
+    }
     let installer = super::venv::resolve_installer(&settings.installer)?;
     // The user's setting beats the manifest: the plugin author knows whether
     // its dependencies are unusual, but the user owns the disk.
@@ -1656,6 +1707,54 @@ async fn provision_for_plugin(
         scope: outcome.scope.as_str().to_string(),
         installer: outcome.installer,
         downgraded_reason: outcome.downgraded_reason,
+    })
+}
+
+/// Why a locked plugin does not get the shared environment someone asked for:
+/// the user's setting wins over the manifest, as it does for scope anywhere.
+pub(crate) const LOCKED_SCOPE_REASON: &str =
+    "it is locked with uv.lock, and only its own environment can match the lock exactly";
+
+/// Prepare a plugin locked with `uv.lock` (ENV02): uv syncs its own
+/// environment from the lock. The installer and scope settings do not apply,
+/// and neither do the manifest's `pythonDependencies`, which the lock
+/// replaces; without uv there is nothing to fall back to.
+#[allow(clippy::too_many_arguments)]
+async fn provision_locked_plugin(
+    state: &PythonRuntimeState,
+    plugin_id: &str,
+    dependencies: &[String],
+    manifest_scope: Option<&str>,
+    base: &Interpreter,
+    settings: &PythonHostSettings,
+    lock: &super::lock::PluginLock,
+    uv: Option<String>,
+) -> std::result::Result<PythonInstallOutcome, PrepareError> {
+    let uv = uv.ok_or_else(|| {
+        PluginError::PythonHost(
+            "this plugin is locked with uv.lock and only uv installs it exactly, \
+             but uv is not installed; install uv and prepare it again"
+                .into(),
+        )
+    })?;
+    if dependencies
+        .iter()
+        .any(|requirement| !requirement.trim().is_empty())
+    {
+        log::warn!(
+            "[python.{plugin_id}] the manifest's pythonDependencies are ignored: \
+             the plugin is locked with uv.lock"
+        );
+    }
+    let outcome =
+        super::venv::provision_locked(base, &state.python_dir, plugin_id, &uv, lock, &state.sink())
+            .await?;
+    let asked_shared = settings.venv_scope.as_deref().or(manifest_scope) == Some("shared");
+    Ok(PythonInstallOutcome {
+        venv_dir: outcome.venv_dir.to_string_lossy().into_owned(),
+        scope: outcome.scope.as_str().to_string(),
+        installer: outcome.installer,
+        downgraded_reason: asked_shared.then(|| LOCKED_SCOPE_REASON.to_string()),
     })
 }
 
@@ -2368,6 +2467,147 @@ mod tests {
                 "interpreterWarning": { "kind": "version-unknown" },
             })
         );
+    }
+
+    /// Settings that name a uv which does not exist, so a test does not
+    /// depend on whether this machine has one.
+    fn missing_uv_settings() -> PythonHostSettings {
+        PythonHostSettings {
+            installer: super::super::venv::InstallerPreference {
+                kind: Some("uv".into()),
+                path: Some("/definitely/not/uv".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    const DEMO_LOCK: &str = "version = 1\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+        source = { virtual = \".\" }\n\n[[package]]\nname = \"six\"\nversion = \"1.16.0\"\n\
+        source = { registry = \"https://pypi.org/simple\" }\n";
+
+    fn lock_demo_plugin(plugins: &PluginRuntimeState, lock: &str) -> String {
+        let root = plugins.plugin_dir("demo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("pyproject.toml"), "[project]\nname = \"demo\"\n").unwrap();
+        std::fs::write(root.join("uv.lock"), lock).unwrap();
+        super::super::lock::detect_lock(&root)
+            .unwrap()
+            .unwrap()
+            .digest
+    }
+
+    #[tokio::test]
+    async fn a_locked_plugin_is_measured_against_its_lock() {
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        apply_initialize(
+            &state,
+            Some(Interpreter {
+                argv_prefix: vec!["python".into()],
+                version: Some("3.12.0".into()),
+            }),
+        )
+        .unwrap();
+        let digest = lock_demo_plugin(&plugins, DEMO_LOCK);
+
+        // Locked with no manifest requirements, and no uv to sync it with.
+        assert_eq!(
+            readiness_json(&state, &plugins, &[], missing_uv_settings()).await,
+            json!({
+                "state": "needs-uv",
+                "installer": "uv",
+                "lock": {
+                    "packages": ["six==1.16.0"],
+                    "offline": false,
+                    "ignoresManifestDependencies": false,
+                },
+            })
+        );
+
+        // Synced from this lock: ready, whether uv is still there or not, and
+        // the manifest's requirements are reported as ignored.
+        seed_isolated_venv(
+            &state,
+            "demo",
+            json!({ "version": "3.12.0", "installer": "uv", "scope": "isolated", "lockDigest": digest }),
+        );
+        let report = readiness_json(&state, &plugins, &["requests"], missing_uv_settings()).await;
+        assert_eq!(report["state"], "ready");
+        assert_eq!(report["installer"], "uv");
+        assert_eq!(report["lock"]["ignoresManifestDependencies"], true);
+
+        // An update that changed the lock: the environment is stale, and it
+        // cannot be prepared again without uv.
+        lock_demo_plugin(&plugins, &format!("{DEMO_LOCK}\n# changed\n"));
+        assert_eq!(
+            readiness_json(&state, &plugins, &[], missing_uv_settings()).await["state"],
+            "needs-uv"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_locked_plugin_is_not_prepared_without_uv() {
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        grant_execute(&plugins, "demo");
+        apply_initialize(
+            &state,
+            Some(Interpreter {
+                argv_prefix: vec!["python".into()],
+                version: Some("3.12.0".into()),
+            }),
+        )
+        .unwrap();
+        lock_demo_plugin(&plugins, DEMO_LOCK);
+
+        let err = plugin_python_install_deps_for_state(
+            &state,
+            &plugins,
+            "demo",
+            &[],
+            None,
+            missing_uv_settings(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("uv is not installed"), "{err}");
+        // Nothing fell back to pip: no environment was built.
+        assert!(super::super::venv::recorded_environment(&state.python_dir, "demo").is_none());
+        assert_eq!(
+            readiness_json(&state, &plugins, &[], missing_uv_settings()).await["state"],
+            "needs-uv"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_lock_fails_readiness_instead_of_guessing() {
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        apply_initialize(
+            &state,
+            Some(Interpreter {
+                argv_prefix: vec!["python".into()],
+                version: Some("3.12.0".into()),
+            }),
+        )
+        .unwrap();
+        let root = plugins.plugin_dir("demo");
+        std::fs::create_dir_all(root.join("uv.lock")).unwrap();
+        std::fs::write(root.join("pyproject.toml"), "[project]\n").unwrap();
+        let err = plugin_python_readiness_for_state(
+            &state,
+            &plugins,
+            "demo",
+            &[],
+            PythonHostSettings::default(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("uv.lock"), "{err}");
     }
 
     #[tokio::test]

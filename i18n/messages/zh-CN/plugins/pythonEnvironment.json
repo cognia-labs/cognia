@@ -7,16 +7,27 @@
   },
   "dialog": {
     "body": "{name} 需要先安装 {count} 个 Python 包才能运行。准备时会用 {installer, select, uv {uv} pip {pip} other {所配置的安装器}} 创建它的环境，并从软件包索引下载这些包。",
+    "bodyLocked": "{name} 在 uv.lock 中锁定了 {count} 个 Python 包。准备时会用 uv 把这些确切版本安装到它自己的环境中，{offline, select, true {使用它自带的 wheel} other {并从软件包索引下载}}。",
     "confirm": "准备",
+    "confirmWithUv": "安装 uv 并准备",
     "impact": "这会占用网络和磁盘空间。进度会实时显示在插件的「日志」标签页，准备期间可以继续做别的事。",
+    "impactOffline": "这会占用磁盘空间，插件的软件包不会联网下载。进度会实时显示在插件的「日志」标签页，准备期间可以继续做别的事。",
     "later": "稍后",
+    "needsUv": "尚未安装 uv，而只有 uv 能精确安装 uv.lock。Cognia 会先用 Python 运行时自带的 pip 安装 uv，这需要从软件包索引下载。",
     "packages": "软件包",
+    "packagesLocked": "uv.lock 锁定的软件包",
     "title": "为 {name} 准备 Python 依赖？"
   },
   "prepare": "准备依赖",
   "prepareAgain": "重新准备",
+  "prepareWithUv": "安装 uv 并准备",
   "state": {
     "failed": "上次准备失败：{message}",
+    "failedCause": {
+      "lockOutOfDate": "它的 uv.lock 与 pyproject.toml 已不一致，uv 拒绝按它安装。需要插件作者重新运行 uv lock 并重新发布。",
+      "missingWheels": "它使用自带的 wheel 离线安装，但缺少 {packages}。没有下载任何内容。"
+    },
+    "needsUv": "它用 uv.lock 锁定了依赖，只有 uv 能精确安装，但尚未安装 uv。请先安装 uv 再准备。",
     "notPrepared": "它的 Python 依赖尚未安装。准备时将使用 {installer}。",
     "notRequired": "它没有声明 Python 依赖。",
     "preparing": "正在用 {installer} 准备它的 Python 环境。",
@@ -25,7 +36,8 @@
     "staleReason": {
       "dependencies": "依赖要求已变更",
       "installer": "由另一个安装器构建",
-      "interpreter": "基于另一个 Python 版本构建"
+      "interpreter": "基于另一个 Python 版本构建",
+      "lock": "它的 uv.lock 已变化"
     },
     "userManaged": {
       "customInstaller": "它的环境由自定义安装器构建，主机不做检查。",

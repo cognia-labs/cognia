@@ -7,16 +7,27 @@
   },
   "dialog": {
     "body": "{name} needs {count, plural, one {# Python package} other {# Python packages}} before it can run. Preparing builds its environment with {installer, select, uv {uv} pip {pip} other {the configured installer}} and downloads them from the package index.",
+    "bodyLocked": "{name} pins {count, plural, one {# Python package} other {# Python packages}} in its uv.lock. Preparing installs exactly those versions with uv into its own environment, {offline, select, true {from the wheels it bundles} other {downloading them from the package index}}.",
     "confirm": "Prepare",
+    "confirmWithUv": "Install uv and prepare",
     "impact": "This uses the network and disk space. Progress streams into the plugin's Logs tab, and you can keep working meanwhile.",
+    "impactOffline": "This uses disk space; the plugin's packages are not downloaded. Progress streams into the plugin's Logs tab, and you can keep working meanwhile.",
     "later": "Later",
+    "needsUv": "uv is not installed, and only uv installs a uv.lock exactly. Cognia installs it first with the Python runtime's pip, which downloads it from the package index.",
     "packages": "Packages",
+    "packagesLocked": "Pinned by uv.lock",
     "title": "Prepare Python dependencies for {name}?"
   },
   "prepare": "Prepare dependencies",
   "prepareAgain": "Prepare again",
+  "prepareWithUv": "Install uv and prepare",
   "state": {
     "failed": "The last preparation failed: {message}",
+    "failedCause": {
+      "lockOutOfDate": "Its uv.lock no longer matches its pyproject.toml, so uv refused to install from it. The plugin's author needs to run uv lock and publish it again.",
+      "missingWheels": "It installs offline from the wheels it bundles, which lack {packages}. Nothing was downloaded."
+    },
+    "needsUv": "It is locked with uv.lock, which only uv installs exactly, and uv is not installed. Install uv to prepare it.",
     "notPrepared": "Its Python dependencies are not installed yet. Preparing them uses {installer}.",
     "notRequired": "It declares no Python dependencies.",
     "preparing": "Its Python environment is being prepared with {installer}.",
@@ -25,7 +36,8 @@
     "staleReason": {
       "dependencies": "its requirements changed",
       "installer": "another installer built it",
-      "interpreter": "it was built on another Python"
+      "interpreter": "it was built on another Python",
+      "lock": "its uv.lock changed"
     },
     "userManaged": {
       "customInstaller": "A custom installer builds its environment, so the host does not check it.",

@@ -8,9 +8,11 @@
  * Mounted at the app root next to the other plugin prompts: installs and
  * enables run from many pages. For each plugin queued by
  * `requestPythonPreparePrompt` it asks the Host for readiness first and only
- * asks the user when there is something to prepare (not prepared, stale, or
- * failed); a plugin that needs nothing, is already ready, or runs on the
- * user's own environment passes without a dialog. Preparing then runs in the
+ * asks the user when there is something to prepare (not prepared, needs uv,
+ * stale, or failed); a plugin that needs nothing, is already ready, or runs
+ * on the user's own environment passes without a dialog. The Host decides
+ * whether there is anything to prepare: a plugin locked with `uv.lock`
+ * (ENV02) may declare no `pythonDependencies` at all. Preparing then runs in the
  * background with a toast, and its progress shows on the plugin's card and
  * detail page. A plugin whose start was refused for want of this environment
  * is started again by the manager, and the toast says so.
@@ -21,12 +23,18 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { usePluginDisplayName } from "@/hooks/plugins/use-plugin-display-name"
+import { usePythonReadinessText } from "@/hooks/plugins/use-python-readiness-text"
 import {
   finishPythonPreparePrompt,
   subscribePythonPreparePrompts,
   type PythonPreparePromptState,
 } from "@/lib/plugin/python/prepare-prompt-requests"
-import { readinessCanPrepare, type PythonInstaller } from "@/lib/plugin/python/readiness"
+import {
+  readinessCanPrepare,
+  readinessNeedsUv,
+  type PythonInstaller,
+  type PythonLockSummary,
+} from "@/lib/plugin/python/readiness"
 import { usePluginStore } from "@/stores/plugin-runtime"
 import { usePythonReadinessStore } from "@/stores/plugin-runtime/python-readiness-store"
 
@@ -38,8 +46,13 @@ export const PYTHON_PREPARE_PROMPT_ROW_WAIT_MS = 10_000
 
 interface Question {
   pluginId: string
+  /** The manifest's requirements, which the Host ignores for a locked plugin. */
   dependencies: readonly string[]
+  /** What preparing installs: the lock's pins, or the requirements. */
+  packages: readonly string[]
   installer: PythonInstaller
+  lock: PythonLockSummary | null
+  needsUv: boolean
 }
 
 type PythonManifestFields = { type?: string; pythonDependencies?: string[] } | undefined
@@ -74,6 +87,7 @@ function waitForManifest(pluginId: string, signal: AbortSignal): Promise<PythonM
 
 export function PythonPreparePromptHost() {
   const t = useTranslations("plugins.pythonEnvironment")
+  const describeReadiness = usePythonReadinessText()
   const [prompts, setPrompts] = useState<PythonPreparePromptState>(EMPTY)
   const [question, setQuestion] = useState<Question | null>(null)
   useEffect(() => subscribePythonPreparePrompts(setPrompts), [])
@@ -89,7 +103,7 @@ export function PythonPreparePromptHost() {
       if (controller.signal.aborted) return
       const dependencies = manifest?.pythonDependencies ?? []
       const python = manifest?.type === "python" || manifest?.type === "hybrid"
-      if (!python || dependencies.length === 0) {
+      if (!python) {
         finishPythonPreparePrompt(pluginId)
         return
       }
@@ -105,7 +119,14 @@ export function PythonPreparePromptHost() {
         finishPythonPreparePrompt(pluginId)
         return
       }
-      setQuestion({ pluginId, dependencies, installer: report.readiness.installer })
+      setQuestion({
+        pluginId,
+        dependencies,
+        packages: report.lock ? report.lock.packages : dependencies,
+        installer: report.readiness.installer,
+        lock: report.lock,
+        needsUv: readinessNeedsUv(report.readiness),
+      })
     })()
     return () => controller.abort()
   }, [pluginId])
@@ -118,7 +139,7 @@ export function PythonPreparePromptHost() {
 
   const prepare = () => {
     if (!asking) return
-    const { pluginId: id, dependencies } = asking
+    const { pluginId: id, dependencies, needsUv } = asking
     const pluginName = name
     setQuestion(null)
     finishPythonPreparePrompt(id)
@@ -126,7 +147,7 @@ export function PythonPreparePromptHost() {
     void (async () => {
       try {
         const { getPluginManager } = await import("@/lib/plugin/core/manager")
-        await getPluginManager().installPythonDeps(id, [...dependencies])
+        await getPluginManager().installPythonDeps(id, [...dependencies], { installUv: needsUv })
         // A plugin whose start this preparation unblocked was started again.
         const result = usePythonReadinessStore.getState().lastPreparationByPluginId[id]
         const resumed = result?.status === "succeeded" && result.resumed
@@ -134,10 +155,15 @@ export function PythonPreparePromptHost() {
           id: toastId,
         })
       } catch (error) {
-        toast.error(t("toast.failed", { name: pluginName }), {
-          id: toastId,
-          description: error instanceof Error ? error.message : String(error),
-        })
+        // A cause the Host named reads better than the installer's text.
+        const after = usePythonReadinessStore.getState().byPluginId[id]?.readiness
+        const description =
+          after?.state === "failed" && after.cause
+            ? describeReadiness(after)
+            : error instanceof Error
+              ? error.message
+              : String(error)
+        toast.error(t("toast.failed", { name: pluginName }), { id: toastId, description })
       }
     })()
   }
@@ -146,8 +172,10 @@ export function PythonPreparePromptHost() {
     <PythonPrepareDialog
       open={asking !== null}
       pluginName={name}
-      dependencies={asking?.dependencies ?? []}
+      dependencies={asking?.packages ?? []}
       installer={asking?.installer ?? null}
+      lock={asking?.lock ?? null}
+      needsUv={asking?.needsUv ?? false}
       onConfirm={prepare}
       onLater={later}
     />

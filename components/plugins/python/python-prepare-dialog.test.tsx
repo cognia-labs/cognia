@@ -66,6 +66,32 @@ describe("PythonPrepareDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled()
   })
 
+  it("says a locked plugin installs exactly what its lock pins, online or offline", () => {
+    renderDialog({ dependencies: ["six==1.16.0"], lock: { offline: false } })
+    expect(
+      screen.getByText('bodyLocked:{"name":"Repo Wiki","count":1,"offline":"false"}')
+    ).toBeInTheDocument()
+    expect(screen.getByText("packagesLocked")).toBeInTheDocument()
+    expect(screen.getByTestId("python-prepare-dependencies")).toHaveTextContent("six==1.16.0")
+    expect(screen.getByText("impact")).toBeInTheDocument()
+  })
+
+  it("says an offline plugin uses its bundled wheels and no network", () => {
+    renderDialog({ dependencies: ["six==1.16.0"], lock: { offline: true } })
+    expect(
+      screen.getByText('bodyLocked:{"name":"Repo Wiki","count":1,"offline":"true"}')
+    ).toBeInTheDocument()
+    expect(screen.getByText("impactOffline")).toBeInTheDocument()
+  })
+
+  it("says uv is installed first when it is missing", async () => {
+    const user = userEvent.setup()
+    const { onConfirm } = renderDialog({ lock: { offline: false }, needsUv: true })
+    expect(screen.getByTestId("python-prepare-needs-uv")).toHaveTextContent("needsUv")
+    await user.click(screen.getByRole("button", { name: "confirmWithUv" }))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+  })
+
   it("renders nothing while closed", () => {
     renderDialog({ open: false })
     expect(screen.queryByTestId("python-prepare-dialog")).not.toBeInTheDocument()

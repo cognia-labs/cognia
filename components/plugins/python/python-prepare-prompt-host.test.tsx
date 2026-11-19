@@ -6,6 +6,7 @@ jest.mock("next-intl", () => ({
   useLocale: () => "en",
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
     vars ? `${key}:${JSON.stringify(vars)}` : key,
+  useFormatter: () => ({ list: (items: string[]) => items.join(" & ") }),
 }))
 const mockToast = { loading: jest.fn(() => "toast-1"), success: jest.fn(), error: jest.fn() }
 jest.mock("sonner", () => ({
@@ -37,6 +38,7 @@ import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import {
   __resetPythonReadinessStoreForTesting,
   recordPythonPreparation,
+  recordPythonReadiness,
 } from "@/stores/plugin-runtime/python-readiness-store"
 
 import {
@@ -58,6 +60,7 @@ function seed(plugins: Record<string, { type: string; pythonDependencies?: strin
 
 const notPrepared = {
   readiness: { state: "not-prepared", installer: "uv" },
+  lock: null,
   interpreterWarning: null,
 }
 
@@ -104,7 +107,9 @@ describe("PythonPreparePromptHost", () => {
     render(<PythonPreparePromptHost />)
     ask("wiki")
     await user.click(await screen.findByRole("button", { name: "confirm" }))
-    await waitFor(() => expect(mockInstallDeps).toHaveBeenCalledWith("wiki", ["requests>=2"]))
+    await waitFor(() =>
+      expect(mockInstallDeps).toHaveBeenCalledWith("wiki", ["requests>=2"], { installUv: false })
+    )
     expect(mockToast.loading).toHaveBeenCalledWith('toast.preparing:{"name":"wiki"}')
     await waitFor(() =>
       expect(mockToast.success).toHaveBeenCalledWith('toast.ready:{"name":"wiki"}', {
@@ -146,6 +151,75 @@ describe("PythonPreparePromptHost", () => {
     )
   })
 
+  it("asks for a locked plugin that declares no requirements, naming what its lock pins", async () => {
+    seed({ wiki: { type: "python" } })
+    mockGetReadiness.mockResolvedValue({
+      readiness: { state: "not-prepared", installer: "uv" },
+      lock: { packages: ["six==1.16.0"], offline: true, ignoresManifestDependencies: false },
+      interpreterWarning: null,
+    })
+    const user = userEvent.setup()
+    render(<PythonPreparePromptHost />)
+    ask("wiki")
+    expect(await screen.findByTestId("python-prepare-dependencies")).toHaveTextContent(
+      "six==1.16.0"
+    )
+    expect(screen.getByText(/bodyLocked:.*"offline":"true"/)).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "confirm" }))
+    await waitFor(() =>
+      expect(mockInstallDeps).toHaveBeenCalledWith("wiki", [], { installUv: false })
+    )
+  })
+
+  it("installs uv first when the plugin is locked and uv is missing", async () => {
+    seed({ wiki: { type: "python" } })
+    mockGetReadiness.mockResolvedValue({
+      readiness: { state: "needs-uv", installer: "uv" },
+      lock: { packages: ["six==1.16.0"], offline: false, ignoresManifestDependencies: false },
+      interpreterWarning: null,
+    })
+    const user = userEvent.setup()
+    render(<PythonPreparePromptHost />)
+    ask("wiki")
+    expect(await screen.findByTestId("python-prepare-needs-uv")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "confirmWithUv" }))
+    await waitFor(() =>
+      expect(mockInstallDeps).toHaveBeenCalledWith("wiki", [], { installUv: true })
+    )
+  })
+
+  it("words a failure from the cause the Host named", async () => {
+    seed({ wiki: { type: "python" } })
+    mockGetReadiness.mockResolvedValue({
+      readiness: { state: "not-prepared", installer: "uv" },
+      lock: { packages: [], offline: false, ignoresManifestDependencies: false },
+      interpreterWarning: null,
+    })
+    mockInstallDeps.mockImplementation(async (id: string) => {
+      recordPythonReadiness(id, {
+        readiness: {
+          state: "failed",
+          message: "python host: uv.lock does not match pyproject.toml",
+          cause: { kind: "lock-out-of-date" },
+          installer: "uv",
+        },
+        lock: null,
+        interpreterWarning: null,
+      })
+      throw new Error("python host: uv.lock does not match pyproject.toml")
+    })
+    const user = userEvent.setup()
+    render(<PythonPreparePromptHost />)
+    ask("wiki")
+    await user.click(await screen.findByRole("button", { name: "confirm" }))
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith('toast.failed:{"name":"wiki"}', {
+        id: "toast-1",
+        description: "failedCause.lockOutOfDate",
+      })
+    )
+  })
+
   it("puts it off on later and moves on to the next plugin", async () => {
     seed({
       a: { type: "python", pythonDependencies: ["x"] },
@@ -166,25 +240,30 @@ describe("PythonPreparePromptHost", () => {
   it.each([
     ["a frontend plugin", { type: "frontend", pythonDependencies: ["x"] }, notPrepared],
     [
-      "a Python plugin without requirements",
+      "a Python plugin the Host says needs nothing",
       { type: "python", pythonDependencies: [] },
-      notPrepared,
+      { readiness: { state: "not-required" }, lock: null, interpreterWarning: null },
     ],
     [
       "a ready environment",
       { type: "python", pythonDependencies: ["x"] },
-      { readiness: { state: "ready", scope: "shared", installer: "uv" }, interpreterWarning: null },
+      {
+        readiness: { state: "ready", scope: "shared", installer: "uv" },
+        lock: null,
+        interpreterWarning: null,
+      },
     ],
     [
       "a preparation already running",
       { type: "python", pythonDependencies: ["x"] },
-      { readiness: { state: "preparing", installer: "uv" }, interpreterWarning: null },
+      { readiness: { state: "preparing", installer: "uv" }, lock: null, interpreterWarning: null },
     ],
     [
       "an environment the user manages",
       { type: "python", pythonDependencies: ["x"] },
       {
         readiness: { state: "user-managed", reason: "venv-disabled" },
+        lock: null,
         interpreterWarning: null,
       },
     ],

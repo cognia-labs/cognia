@@ -3942,6 +3942,7 @@ describe("PluginManager", () => {
       mockInvoke.mockResolvedValueOnce(undefined)
       recordPythonReadiness("to-remove", {
         readiness: { state: "not-prepared", installer: "uv" },
+        lock: null,
         interpreterWarning: null,
       })
 
@@ -7139,9 +7140,19 @@ describe("PluginManager", () => {
 
       it.each([
         [{ state: "not-prepared", installer: "uv" }],
+        [{ state: "needs-uv", installer: "uv" }],
         [{ state: "stale", reasons: ["dependencies"], installer: "uv" }],
+        [{ state: "stale", reasons: ["lock"], installer: "uv" }],
         [{ state: "preparing", installer: "pip" }],
         [{ state: "failed", message: "pip exited 1", installer: "pip" }],
+        [
+          {
+            state: "failed",
+            message: "offline",
+            cause: { kind: "missing-wheels", packages: ["six==1.16.0"] },
+            installer: "uv",
+          },
+        ],
       ])("refuses to load while the environment is %o", async (readiness) => {
         mockGetState.mockReturnValue(createLoadStore(withDependencies()))
         mockInvoke.mockImplementation(async (cmd: string) =>
@@ -7206,7 +7217,7 @@ describe("PluginManager", () => {
         mockGetState.mockReturnValue(createLoadStore(withDependencies()))
         const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
         mockInvoke.mockImplementation(async (cmd: string) => {
-          if (cmd === "plugin_python_readiness") return { state: "needs-uv" }
+          if (cmd === "plugin_python_readiness") return { state: "from-the-future" }
           if (cmd === "plugin_python_load") return { generation: "python-gen-1" }
           if (cmd === "plugin_python_get_tools") return []
           return undefined
@@ -7235,6 +7246,20 @@ describe("PluginManager", () => {
         )
         await expect(manager.getPythonReadiness("py-plugin")).resolves.toEqual({
           readiness: { state: "ready", scope: "shared", installer: "uv" },
+          lock: null,
+          interpreterWarning: null,
+        })
+
+        // A locked plugin's reply carries its lock (ENV02).
+        const lock = { packages: ["six==1.16.0"], offline: true, ignoresManifestDependencies: true }
+        mockInvoke.mockImplementation(async (cmd: string) =>
+          cmd === "plugin_python_readiness"
+            ? { state: "needs-uv", installer: "uv", lock }
+            : undefined
+        )
+        await expect(manager.getPythonReadiness("py-plugin")).resolves.toEqual({
+          readiness: { state: "needs-uv", installer: "uv" },
+          lock,
           interpreterWarning: null,
         })
       })
@@ -7243,6 +7268,7 @@ describe("PluginManager", () => {
         mockGetState.mockReturnValue(createLoadStore(withDependencies()))
         recordPythonReadiness("py-plugin", {
           readiness: { state: "not-prepared", installer: "uv" },
+          lock: null,
           interpreterWarning: null,
         })
         const outcome = {
@@ -7272,6 +7298,52 @@ describe("PluginManager", () => {
           outcome,
           resumed: false,
         })
+      })
+
+      it("installs uv first when the consent to prepare covered it", async () => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        const order: string[] = []
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          order.push(cmd)
+          if (cmd === "plugin_python_install_uv") return "uv 0.11.21"
+          if (cmd === "plugin_python_install_deps") {
+            return { venvDir: "/v", scope: "isolated", installer: "uv", downgradedReason: null }
+          }
+          if (cmd === "plugin_python_readiness") {
+            return { state: "ready", scope: "isolated", installer: "uv" }
+          }
+          return undefined
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await manager.installPythonDeps("py-plugin", [], { installUv: true })
+        expect(order.slice(0, 2)).toEqual([
+          "plugin_python_install_uv",
+          "plugin_python_install_deps",
+        ])
+
+        order.length = 0
+        await manager.installPythonDeps("py-plugin", [])
+        expect(order).not.toContain("plugin_python_install_uv")
+      })
+
+      it("a uv install that fails is the preparation's failure", async () => {
+        mockGetState.mockReturnValue(createLoadStore(withDependencies()))
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "plugin_python_install_uv") throw new Error("externally-managed-environment")
+          if (cmd === "plugin_python_readiness") return { state: "needs-uv", installer: "uv" }
+          return undefined
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        await expect(
+          manager.installPythonDeps("py-plugin", [], { installUv: true })
+        ).rejects.toThrow("externally-managed-environment")
+        expect(mockInvoke).not.toHaveBeenCalledWith("plugin_python_install_deps", expect.anything())
+        const state = usePythonReadinessStore.getState()
+        expect(state.lastPreparationByPluginId["py-plugin"]).toEqual({
+          status: "failed",
+          message: "externally-managed-environment",
+        })
+        expect(state.byPluginId["py-plugin"]?.readiness.state).toBe("needs-uv")
       })
 
       describe("starting a refused plugin again once it is prepared", () => {

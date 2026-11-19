@@ -5924,13 +5924,16 @@
     },
     "PythonReadinessReport": {
       "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::ReadinessReport",
-      "description": "Whether a Python plugin's dependencies are prepared for the interpreter and installer it would run with now (ADR-0258 §2). not-prepared, stale, preparing and failed stop the plugin loading; every state the Host prepares names the installer a preparation runs with.",
+      "description": "Whether a Python plugin's dependencies are prepared for the interpreter and installer it would run with now (ADR-0258 §2), measured against its uv.lock when it ships one (ENV02). not-prepared, needs-uv, stale, preparing and failed stop the plugin loading; every state the Host prepares names the installer a preparation runs with, and a locked plugin's reply carries its lock.",
       "oneOf": [
         {
           "type": "object",
           "properties": {
             "state": {
               "const": "not-required"
+            },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
             },
             "interpreterWarning": {
               "$ref": "#/$defs/PythonInterpreterWarning"
@@ -5949,11 +5952,33 @@
               "type": "string",
               "enum": ["uv", "pip"]
             },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
+            },
             "interpreterWarning": {
               "$ref": "#/$defs/PythonInterpreterWarning"
             }
           },
           "required": ["state", "installer"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "needs-uv"
+            },
+            "installer": {
+              "const": "uv"
+            },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
+            },
+            "interpreterWarning": {
+              "$ref": "#/$defs/PythonInterpreterWarning"
+            }
+          },
+          "required": ["state", "installer", "lock"],
           "additionalProperties": false
         },
         {
@@ -5967,12 +5992,15 @@
               "minItems": 1,
               "items": {
                 "type": "string",
-                "enum": ["dependencies", "interpreter", "installer"]
+                "enum": ["dependencies", "interpreter", "installer", "lock"]
               }
             },
             "installer": {
               "type": "string",
               "enum": ["uv", "pip"]
+            },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
             },
             "interpreterWarning": {
               "$ref": "#/$defs/PythonInterpreterWarning"
@@ -5990,6 +6018,9 @@
             "installer": {
               "type": "string",
               "enum": ["uv", "pip"]
+            },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
             },
             "interpreterWarning": {
               "$ref": "#/$defs/PythonInterpreterWarning"
@@ -6012,6 +6043,9 @@
               "type": "string",
               "enum": ["uv", "pip"]
             },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
+            },
             "interpreterWarning": {
               "$ref": "#/$defs/PythonInterpreterWarning"
             }
@@ -6028,9 +6062,15 @@
             "message": {
               "type": "string"
             },
+            "cause": {
+              "$ref": "#/$defs/PythonPreparationFailureCause"
+            },
             "installer": {
               "type": "string",
               "enum": ["uv", "pip"]
+            },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
             },
             "interpreterWarning": {
               "$ref": "#/$defs/PythonInterpreterWarning"
@@ -6049,11 +6089,68 @@
               "type": "string",
               "enum": ["venv-disabled", "interpreter-override", "custom-installer"]
             },
+            "lock": {
+              "$ref": "#/$defs/PythonLockSummary"
+            },
             "interpreterWarning": {
               "$ref": "#/$defs/PythonInterpreterWarning"
             }
           },
           "required": ["state", "reason"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PythonLockSummary": {
+      "type": "object",
+      "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+      "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+      "required": ["packages", "offline", "ignoresManifestDependencies"],
+      "properties": {
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "offline": {
+          "type": "boolean"
+        },
+        "ignoresManifestDependencies": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PythonPreparationFailureCause": {
+      "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::FailureCause",
+      "description": "Why the last preparation failed, when the Host can tell: uv.lock out of date with pyproject.toml, or an offline install whose bundled wheels lack the listed packages.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "lock-out-of-date"
+            }
+          },
+          "required": ["kind"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "missing-wheels"
+            },
+            "packages": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["kind", "packages"],
           "additionalProperties": false
         }
       ]

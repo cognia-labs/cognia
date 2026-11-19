@@ -29,12 +29,12 @@ const readinessMock = jest.fn()
 jest.mock("@/lib/plugin/core/manager", () => ({
   getPluginManager: jest.fn(() => ({
     // Records how it ended into the shared store, as the real manager does.
-    installPythonDeps: async (id: string, deps: string[]) => {
+    installPythonDeps: async (id: string, deps: string[], options?: { installUv?: boolean }) => {
       const { recordPythonPreparation } = jest.requireActual(
         "@/stores/plugin-runtime/python-readiness-store"
       )
       try {
-        const outcome = await installDepsMock(id, deps)
+        const outcome = await installDepsMock(id, deps, options)
         recordPythonPreparation(id, {
           status: "succeeded",
           outcome: outcome ?? null,
@@ -201,7 +201,9 @@ describe("PluginPythonHostSettings", () => {
     expect(installDepsMock).not.toHaveBeenCalled()
     await user.click(screen.getByRole("button", { name: "confirm" }))
     await waitFor(() =>
-      expect(installDepsMock).toHaveBeenCalledWith("demo", ["requests>=2", "numpy"])
+      expect(installDepsMock).toHaveBeenCalledWith("demo", ["requests>=2", "numpy"], {
+        installUv: false,
+      })
     )
   })
 
@@ -211,6 +213,7 @@ describe("PluginPythonHostSettings", () => {
     act(() =>
       recordPythonReadiness("demo", {
         readiness: { state: "not-prepared", installer: "pip" },
+        lock: null,
         interpreterWarning: null,
       })
     )
@@ -226,6 +229,7 @@ describe("PluginPythonHostSettings", () => {
     act(() =>
       recordPythonReadiness("demo", {
         readiness: { state: "stale", reasons: ["interpreter"], installer: "uv" },
+        lock: null,
         interpreterWarning: null,
       })
     )
@@ -236,10 +240,68 @@ describe("PluginPythonHostSettings", () => {
     act(() =>
       recordPythonReadiness("demo", {
         readiness: { state: "ready", scope: "isolated", installer: "uv" },
+        lock: null,
         interpreterWarning: null,
       })
     )
     expect(screen.getByRole("button", { name: "prepareAgain" })).toBeEnabled()
+  })
+
+  it("shows a locked plugin's lock even when its manifest declares nothing (ENV02)", async () => {
+    const user = userEvent.setup()
+    await renderLoaded([])
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "not-prepared", installer: "uv" },
+        lock: { packages: ["six==1.16.0"], offline: true, ignoresManifestDependencies: false },
+        interpreterWarning: null,
+      })
+    )
+    expect(screen.getByTestId("py-lock-summary")).toHaveTextContent(
+      'deps.lockedSummary:{"count":1,"offline":"true"}'
+    )
+    expect(screen.getByText("six==1.16.0")).toBeInTheDocument()
+    expect(screen.getByTestId("py-locked-note")).toHaveTextContent("environment.lockedNote")
+    expect(screen.queryByTestId("py-ignored-dependencies")).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "prepare" }))
+    expect(screen.getByTestId("python-prepare-dependencies")).toHaveTextContent("six==1.16.0")
+    await user.click(screen.getByRole("button", { name: "confirm" }))
+    await waitFor(() =>
+      expect(installDepsMock).toHaveBeenCalledWith("demo", [], { installUv: false })
+    )
+  })
+
+  it("warns that a locked plugin's manifest requirements are ignored", async () => {
+    await renderLoaded(["requests>=2"])
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "ready", scope: "isolated", installer: "uv" },
+        lock: { packages: ["six==1.16.0"], offline: false, ignoresManifestDependencies: true },
+        interpreterWarning: null,
+      })
+    )
+    expect(screen.getByTestId("py-ignored-dependencies")).toHaveTextContent("deps.ignoredManifest")
+    // The lock is listed, not the requirements it replaces.
+    expect(screen.queryByText("requests>=2")).not.toBeInTheDocument()
+  })
+
+  it("installs uv and prepares a locked plugin that waits for uv", async () => {
+    const user = userEvent.setup()
+    await renderLoaded([])
+    act(() =>
+      recordPythonReadiness("demo", {
+        readiness: { state: "needs-uv", installer: "uv" },
+        lock: { packages: ["six==1.16.0"], offline: false, ignoresManifestDependencies: false },
+        interpreterWarning: null,
+      })
+    )
+    await user.click(screen.getByRole("button", { name: "prepareWithUv" }))
+    expect(screen.getByTestId("python-prepare-needs-uv")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "confirmWithUv" }))
+    await waitFor(() =>
+      expect(installDepsMock).toHaveBeenCalledWith("demo", [], { installUv: true })
+    )
   })
 
   it("shows a running preparation, wherever it started, without offering another", async () => {
@@ -247,6 +309,7 @@ describe("PluginPythonHostSettings", () => {
     act(() =>
       recordPythonReadiness("demo", {
         readiness: { state: "preparing", installer: "uv" },
+        lock: null,
         interpreterWarning: null,
       })
     )
@@ -409,6 +472,8 @@ describe("PluginPythonHostSettings", () => {
     await user.click(screen.getByRole("button", { name: "environment.uvInstall" }))
 
     await waitFor(() => expect(installUvMock).toHaveBeenCalled())
+    // A locked plugin waiting for uv is asked about again.
+    await waitFor(() => expect(readinessMock).toHaveBeenCalledTimes(2))
     // The reported version replaces the offer — no reload needed to see it.
     expect(
       await screen.findByText('environment.uvPresent:{"version":"uv 0.5.0"}')

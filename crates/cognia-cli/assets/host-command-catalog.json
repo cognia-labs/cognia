@@ -68661,13 +68661,38 @@
       "outputSchemaSource": "contract",
       "outputSchema": {
         "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::ReadinessReport",
-        "description": "Whether a Python plugin's dependencies are prepared for the interpreter and installer it would run with now (ADR-0258 §2). not-prepared, stale, preparing and failed stop the plugin loading; every state the Host prepares names the installer a preparation runs with.",
+        "description": "Whether a Python plugin's dependencies are prepared for the interpreter and installer it would run with now (ADR-0258 §2), measured against its uv.lock when it ships one (ENV02). not-prepared, needs-uv, stale, preparing and failed stop the plugin loading; every state the Host prepares names the installer a preparation runs with, and a locked plugin's reply carries its lock.",
         "oneOf": [
           {
             "type": "object",
             "properties": {
               "state": {
                 "const": "not-required"
+              },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               },
               "interpreterWarning": {
                 "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
@@ -68770,6 +68795,31 @@
                   "pip"
                 ]
               },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
               "interpreterWarning": {
                 "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
                 "description": "A reason to doubt the interpreter a plugin runs on. It never stops the plugin loading (ADR-0258).",
@@ -68863,6 +68913,130 @@
             "type": "object",
             "properties": {
               "state": {
+                "const": "needs-uv"
+              },
+              "installer": {
+                "const": "uv"
+              },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "interpreterWarning": {
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
+                "description": "A reason to doubt the interpreter a plugin runs on. It never stops the plugin loading (ADR-0258).",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "version-unknown"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "below-host-minimum"
+                      },
+                      "version": {
+                        "type": "string"
+                      },
+                      "minimum": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "version",
+                      "minimum"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "requirement-unmet"
+                      },
+                      "version": {
+                        "type": "string"
+                      },
+                      "requirement": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "version",
+                      "requirement"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "requirement-unreadable"
+                      },
+                      "problem": {
+                        "type": "string",
+                        "enum": [
+                          "invalid-pyproject",
+                          "not-a-string",
+                          "invalid-specifier"
+                        ]
+                      },
+                      "requirement": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "problem"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "installer",
+              "lock"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
                 "const": "stale"
               },
               "reasons": {
@@ -68873,7 +69047,8 @@
                   "enum": [
                     "dependencies",
                     "interpreter",
-                    "installer"
+                    "installer",
+                    "lock"
                   ]
                 }
               },
@@ -68883,6 +69058,31 @@
                   "uv",
                   "pip"
                 ]
+              },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               },
               "interpreterWarning": {
                 "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
@@ -68986,6 +69186,31 @@
                   "uv",
                   "pip"
                 ]
+              },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               },
               "interpreterWarning": {
                 "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
@@ -69096,6 +69321,31 @@
                   "pip"
                 ]
               },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
               "interpreterWarning": {
                 "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
                 "description": "A reason to doubt the interpreter a plugin runs on. It never stops the plugin loading (ADR-0258).",
@@ -69195,12 +69445,75 @@
               "message": {
                 "type": "string"
               },
+              "cause": {
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::FailureCause",
+                "description": "Why the last preparation failed, when the Host can tell: uv.lock out of date with pyproject.toml, or an offline install whose bundled wheels lack the listed packages.",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "lock-out-of-date"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "missing-wheels"
+                      },
+                      "packages": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "packages"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
               "installer": {
                 "type": "string",
                 "enum": [
                   "uv",
                   "pip"
                 ]
+              },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               },
               "interpreterWarning": {
                 "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
@@ -69305,6 +69618,31 @@
                   "interpreter-override",
                   "custom-installer"
                 ]
+              },
+              "lock": {
+                "type": "object",
+                "x-cognia-wire-source": "cognia_plugin_runtime::python::readiness::LockSummary",
+                "description": "A Python plugin locked with uv.lock (ENV02): what the lock pins (name==version, the plugin's own project excluded), whether it installs offline from its bundled wheels, and whether the manifest's pythonDependencies, which the lock replaces, are being ignored.",
+                "required": [
+                  "packages",
+                  "offline",
+                  "ignoresManifestDependencies"
+                ],
+                "properties": {
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "offline": {
+                    "type": "boolean"
+                  },
+                  "ignoresManifestDependencies": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               },
               "interpreterWarning": {
                 "x-cognia-wire-source": "cognia_plugin_runtime::python::interpreter_check::InterpreterWarning",
@@ -113589,5 +113927,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "5dfd1ea28b6f300440cd3b061c93a042e1a76045fd63abe00f4642f7062ec941"
+  "catalogHash": "d2a675eff43ab134faa8524b170ca03ed2242ffa27dc8a240edbfbe285a4dd80"
 }

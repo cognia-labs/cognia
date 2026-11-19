@@ -118,7 +118,10 @@
     "callTimeoutMs": "调用超时(毫秒)",
     "deps": {
       "downgraded": "请求了共用环境但未能使用：{reason}",
+      "downgradedLocked": "请求了共用环境但未能使用：用 uv.lock 锁定的插件一律使用独享环境，以精确满足锁文件。",
       "error": "安装失败:{message}",
+      "ignoredManifest": "它的 manifest 还列出了 pythonDependencies。uv.lock 取代了它们，因此会被忽略；插件作者应删除这些条目。",
+      "lockedSummary": "该插件用 uv.lock 锁定了 {count} 个 Python 包{offline, select, true {，并使用自带的 wheel 离线安装} other {}}。",
       "outcome": "已用 {installer} 安装到{scope, select, shared {共用} isolated {独享} other {{scope}}}环境。",
       "summary": "该插件声明了 {count} 个 Python 依赖。"
     },
@@ -143,6 +146,7 @@
       "installerSwitchWarning": "切换安装器会在下次安装依赖时重建该插件的环境。在那之前不会删除任何东西。",
       "installerUv": "uv",
       "interpreterVersion": "Python {version}",
+      "lockedNote": "该插件用 uv.lock 锁定了依赖：它总是用 uv 在独享环境中准备，这里选择的安装器和共用方式对它不生效。",
       "scope": "环境范围",
       "scopeDefault": "跟随插件 manifest",
       "scopeHint": "共用更省磁盘。宿主会先把所有共用方的依赖一起求解，解不出来就退回独享环境，而不是弄坏已装好的插件。",

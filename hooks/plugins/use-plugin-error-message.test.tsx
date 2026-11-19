@@ -68,17 +68,19 @@ describe("classifyPluginError", () => {
     expect(classifyPluginError(new Error(message))).toEqual({ code, message, values })
   })
 
-  it.each<[PythonReadiness]>([
-    [{ state: "not-prepared", installer: "uv" }],
-    [{ state: "stale", reasons: ["dependencies"], installer: "uv" }],
-    [{ state: "preparing", installer: "pip" }],
-    [{ state: "failed", message: "pip exited 1", installer: "pip" }],
-  ])("classifies a Python environment that is not ready (%o)", (readiness) => {
+  it.each<[PythonReadiness, string]>([
+    [{ state: "not-prepared", installer: "uv" }, "notPrepared"],
+    [{ state: "needs-uv", installer: "uv" }, "needsUv"],
+    [{ state: "stale", reasons: ["dependencies"], installer: "uv" }, "stale"],
+    [{ state: "preparing", installer: "pip" }, "preparing"],
+    [{ state: "failed", message: "pip exited 1", installer: "pip" }, "failed"],
+  ])("classifies a Python environment that is not ready (%o)", (readiness, state) => {
     const error = new PythonDependenciesNotReadyError("wiki", readiness)
+    // ICU select keys cannot hold a hyphen.
     expect(classifyPluginError(error)).toEqual({
       code: "pythonDependenciesNotReady",
       message: error.message,
-      values: { state: readiness.state },
+      values: { state },
     })
     // `PluginEnableError` wraps it, and the store keeps the class name.
     const wrapped = `PluginEnableError: Failed to enable plugin "wiki": ${error.message}`

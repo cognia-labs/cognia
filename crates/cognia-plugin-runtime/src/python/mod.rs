@@ -19,6 +19,7 @@ pub mod commands;
 pub mod discover;
 pub mod events;
 pub mod interpreter_check;
+pub mod lock;
 pub mod protocol;
 pub mod readiness;
 pub mod venv;

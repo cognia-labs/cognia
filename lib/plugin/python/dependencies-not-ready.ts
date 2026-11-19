@@ -13,7 +13,7 @@
 import type { PythonReadiness } from "@/lib/plugin/python/readiness"
 
 /** The states that refuse a load, as the message names them. */
-export type NotReadyState = "not-prepared" | "stale" | "preparing" | "failed"
+export type NotReadyState = "not-prepared" | "needs-uv" | "stale" | "preparing" | "failed"
 
 export class PythonDependenciesNotReadyError extends Error {
   constructor(
@@ -32,7 +32,7 @@ export class PythonDependenciesNotReadyError extends Error {
  * the store keeps the class name in front of it.
  */
 export const PYTHON_DEPENDENCIES_NOT_READY_PATTERN =
-  /Cannot load Python plugin "([^"]+)": its Python dependencies are not ready \((not-prepared|stale|preparing|failed)\)/
+  /Cannot load Python plugin "([^"]+)": its Python dependencies are not ready \((not-prepared|needs-uv|stale|preparing|failed)\)/
 
 /** The plugin and state a stringified refusal names, or `null` for any other text. */
 export function readDependenciesNotReady(

@@ -8013,6 +8013,11 @@ export class PluginManager {
    * when the whole contributor set still resolves together, and reports a
    * downgrade in the result rather than silently giving the plugin its own.
    *
+   * A plugin locked with `uv.lock` (ENV02) is synced from its lock instead,
+   * and `dependencies` are ignored. When the Host reported `needs-uv`, the
+   * consent covered installing uv too: `options.installUv` installs it first,
+   * as part of this preparation, so a failure there is the preparation's.
+   *
    * Once it is ready, a plugin the user had switched on whose start was
    * refused for want of this environment starts again
    * (`resumeAfterPythonPreparation`). How it ended, restart included, is
@@ -8020,7 +8025,8 @@ export class PluginManager {
    */
   async installPythonDeps(
     pluginId: string,
-    dependencies: string[]
+    dependencies: string[],
+    options: { installUv?: boolean } = {}
   ): Promise<PythonInstallOutcome | null> {
     // Both of these are hints the backend can do without; neither is allowed
     // to turn a missing store or Dexie row into a failed install.
@@ -8035,6 +8041,7 @@ export class PluginManager {
     markPythonPreparing(pluginId)
     let outcome: PythonInstallOutcome | null
     try {
+      if (options.installUv) await this.installUv()
       outcome = await this.invokeNativeHost<PythonInstallOutcome | null>(
         "plugin_python_install_deps",
         {

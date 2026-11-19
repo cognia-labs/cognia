@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { AlertTriangleIcon, DownloadIcon, PackageIcon, ServerCogIcon } from "lucide-react"
+import { AlertTriangleIcon, DownloadIcon, LockIcon, PackageIcon, ServerCogIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -405,6 +405,8 @@ export function PluginPythonHostSettings({
       const { getPluginManager } = await import("@/lib/plugin/core/manager")
       const version = await getPluginManager().installUv()
       setUvVersion(version)
+      // A plugin locked with uv.lock was waiting for it.
+      void environment.refresh()
     } catch (error) {
       setUvError(String(error))
     } finally {
@@ -564,6 +566,16 @@ export function PluginPythonHostSettings({
           </p>
         )}
 
+        {environment.lock && (
+          <p
+            className="flex items-start gap-1.5 text-xs text-muted-foreground"
+            data-testid="py-locked-note"
+          >
+            <LockIcon className="mt-0.5 size-3.5 shrink-0" />
+            {t("environment.lockedNote")}
+          </p>
+        )}
+
         <div className="grid gap-3 @md:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor={`py-installer-${pluginId}`}>{t("environment.installer")}</Label>
@@ -717,12 +729,39 @@ export function PluginPythonHostSettings({
         )}
       </div>
 
-      {pythonDependencies.length > 0 && (
+      {(pythonDependencies.length > 0 || environment.lock) && (
         <div className="border-t pt-3 space-y-2">
-          <p className="text-xs text-muted-foreground">
-            {t("deps.summary", { count: pythonDependencies.length })}
-          </p>
-          <p className="text-xs font-mono break-all">{pythonDependencies.join(", ")}</p>
+          {environment.lock ? (
+            <>
+              <p className="text-xs text-muted-foreground" data-testid="py-lock-summary">
+                {t("deps.lockedSummary", {
+                  count: environment.lock.packages.length,
+                  offline: String(environment.lock.offline),
+                })}
+              </p>
+              {environment.lock.packages.length > 0 && (
+                <p className="text-xs font-mono break-all">
+                  {environment.lock.packages.join(", ")}
+                </p>
+              )}
+              {environment.lock.ignoresManifestDependencies && (
+                <p
+                  className="flex items-start gap-1.5 text-xs text-muted-foreground"
+                  data-testid="py-ignored-dependencies"
+                >
+                  <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+                  {t("deps.ignoredManifest")}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {t("deps.summary", { count: pythonDependencies.length })}
+              </p>
+              <p className="text-xs font-mono break-all">{pythonDependencies.join(", ")}</p>
+            </>
+          )}
           {readiness && (
             <p className="text-xs" data-testid="py-readiness" data-state={readiness.state}>
               {describeReadiness(readiness)}
@@ -738,9 +777,11 @@ export function PluginPythonHostSettings({
             <DownloadIcon className="size-3.5" />
             {preparing
               ? tEnvironment("badge.preparing")
-              : environment.summary === "runnable"
-                ? tEnvironment("prepareAgain")
-                : tEnvironment("prepare")}
+              : environment.needsUv
+                ? tEnvironment("prepareWithUv")
+                : environment.summary === "runnable"
+                  ? tEnvironment("prepareAgain")
+                  : tEnvironment("prepare")}
           </Button>
           {preparing && environment.progress && (
             <p
@@ -754,8 +795,10 @@ export function PluginPythonHostSettings({
           <PythonPrepareDialog
             open={prepareOpen}
             pluginName={pluginName}
-            dependencies={pythonDependencies}
+            dependencies={environment.packages}
             installer={readiness && "installer" in readiness ? readiness.installer : null}
+            lock={environment.lock}
+            needsUv={environment.needsUv}
             onConfirm={() => void handlePrepare()}
             onLater={() => setPrepareOpen(false)}
           />
@@ -782,7 +825,9 @@ export function PluginPythonHostSettings({
               {installOutcome.downgradedReason && (
                 <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
                   <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
-                  {t("deps.downgraded", { reason: installOutcome.downgradedReason })}
+                  {environment.lock
+                    ? t("deps.downgradedLocked")
+                    : t("deps.downgraded", { reason: installOutcome.downgradedReason })}
                 </p>
               )}
             </div>

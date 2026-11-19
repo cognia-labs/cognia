@@ -36114,7 +36114,10 @@
         "callTimeoutMs": "Call timeout (ms)",
         "deps": {
           "downgraded": "A shared environment was requested but not used: {reason}",
+          "downgradedLocked": "A shared environment was requested but not used: a plugin locked with uv.lock always gets its own environment, so the lock is met exactly.",
           "error": "Install failed: {message}",
+          "ignoredManifest": "Its manifest also lists pythonDependencies. uv.lock replaces them, so they are ignored; the plugin's author should remove them.",
+          "lockedSummary": "This plugin is locked with uv.lock, which pins {count, plural, one {# Python package} other {# Python packages}}{offline, select, true {; it installs offline from the wheels it bundles} other {}}.",
           "outcome": "Installed with {installer} into {scope, select, shared {a shared} isolated {an isolated} other {a {scope}}} environment.",
           "summary": "This plugin declares {count, plural, one {# Python dependency} other {# Python dependencies}}."
         },
@@ -36139,6 +36142,7 @@
           "installerSwitchWarning": "Changing the installer rebuilds this plugin's environment on the next dependency install. Nothing is deleted until then.",
           "installerUv": "uv",
           "interpreterVersion": "Python {version}",
+          "lockedNote": "This plugin is locked with uv.lock: it is always prepared with uv in an isolated environment, so the installer and scope chosen here do not apply to it.",
           "scope": "Environment scope",
           "scopeDefault": "Follow the plugin manifest",
           "scopeHint": "Sharing saves disk. The host solves every contributor's requirements together first, and falls back to an isolated environment rather than breaking an installed plugin.",
@@ -36563,7 +36567,7 @@
         "invalidManifest": "Its manifest is invalid.",
         "managerNotReady": "Plugins are still starting. Try again in a moment.",
         "notFound": "It's no longer installed.",
-        "pythonDependenciesNotReady": "Its Python dependencies are {state, select, preparing {still being prepared} failed {not ready: the last preparation failed} stale {out of date} other {not installed yet}}. Prepare them, then enable it again.",
+        "pythonDependenciesNotReady": "Its Python dependencies are {state, select, preparing {still being prepared} failed {not ready: the last preparation failed} stale {out of date} needsUv {waiting for uv, which its uv.lock needs and is not installed} other {not installed yet}}. Prepare them, then enable it again.",
         "pythonDisabled": "The Python runtime is turned off on this device.",
         "signature": "Its signature couldn't be verified.",
         "uninstallMirrored": "Uninstall it in the desktop app. This device only mirrors it.",
@@ -37208,16 +37212,27 @@
       },
       "dialog": {
         "body": "{name} needs {count, plural, one {# Python package} other {# Python packages}} before it can run. Preparing builds its environment with {installer, select, uv {uv} pip {pip} other {the configured installer}} and downloads them from the package index.",
+        "bodyLocked": "{name} pins {count, plural, one {# Python package} other {# Python packages}} in its uv.lock. Preparing installs exactly those versions with uv into its own environment, {offline, select, true {from the wheels it bundles} other {downloading them from the package index}}.",
         "confirm": "Prepare",
+        "confirmWithUv": "Install uv and prepare",
         "impact": "This uses the network and disk space. Progress streams into the plugin's Logs tab, and you can keep working meanwhile.",
+        "impactOffline": "This uses disk space; the plugin's packages are not downloaded. Progress streams into the plugin's Logs tab, and you can keep working meanwhile.",
         "later": "Later",
+        "needsUv": "uv is not installed, and only uv installs a uv.lock exactly. Cognia installs it first with the Python runtime's pip, which downloads it from the package index.",
         "packages": "Packages",
+        "packagesLocked": "Pinned by uv.lock",
         "title": "Prepare Python dependencies for {name}?"
       },
       "prepare": "Prepare dependencies",
       "prepareAgain": "Prepare again",
+      "prepareWithUv": "Install uv and prepare",
       "state": {
         "failed": "The last preparation failed: {message}",
+        "failedCause": {
+          "lockOutOfDate": "Its uv.lock no longer matches its pyproject.toml, so uv refused to install from it. The plugin's author needs to run uv lock and publish it again.",
+          "missingWheels": "It installs offline from the wheels it bundles, which lack {packages}. Nothing was downloaded."
+        },
+        "needsUv": "It is locked with uv.lock, which only uv installs exactly, and uv is not installed. Install uv to prepare it.",
         "notPrepared": "Its Python dependencies are not installed yet. Preparing them uses {installer}.",
         "notRequired": "It declares no Python dependencies.",
         "preparing": "Its Python environment is being prepared with {installer}.",
@@ -37226,7 +37241,8 @@
         "staleReason": {
           "dependencies": "its requirements changed",
           "installer": "another installer built it",
-          "interpreter": "it was built on another Python"
+          "interpreter": "it was built on another Python",
+          "lock": "its uv.lock changed"
         },
         "userManaged": {
           "customInstaller": "A custom installer builds its environment, so the host does not check it.",

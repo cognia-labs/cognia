@@ -1,0 +1,163 @@
+---
+title: Python environments
+description: Declare a Python plugin's dependencies, lock them with uv.lock, and bundle wheels for an offline install (ADR-0258, ENV01 and ENV02).
+---
+
+# Python environments
+
+A `python` or `hybrid` plugin runs in an environment the Host builds for it.
+Building it downloads and installs packages, so it is a step of its own with
+its own consent. It is never folded into install or enable. Right after a
+plugin is installed, Cognia asks whether to prepare its dependencies. The
+plugin card, the Library row and the detail page show whether the plugin is
+ready to run. A plugin whose environment is not ready is not started, and
+enabling it offers to prepare it.
+
+The Host decides readiness from what it recorded when it built the
+environment. It does not guess import names from requirement strings. The
+states are listed under [Readiness](#readiness). Background is in
+[ADR-0258](../adr/0258-every-environment-replaces-a-plugin-package-under-one-contract).
+
+## Two ways to declare dependencies
+
+|                           | `pythonDependencies` in the manifest                         | `uv.lock` beside `pyproject.toml`    |
+| ------------------------- | ------------------------------------------------------------ | ------------------------------------ |
+| What decides the versions | The resolver, when the user prepares                         | The lock                             |
+| Installer                 | The user's setting: uv when present (`auto`), pip, or custom | Always uv                            |
+| Environment               | Shared by default; isolated when requirements conflict       | Always the plugin's own (isolated)   |
+| Offline install           | No                                                           | Yes, with a bundled `wheels/` folder |
+
+### Requirements in the manifest
+
+```jsonc
+// plugin.json
+{
+  "type": "python",
+  "pythonMain": "main.py",
+  "pythonDependencies": ["requests>=2", "pillow"],
+}
+```
+
+The Host installs these into a shared environment when every plugin sharing it
+still resolves together, and gives the plugin its own environment otherwise.
+The user's installer and scope settings on the plugin's detail page apply.
+
+### Locked with uv
+
+A plugin whose root holds both `pyproject.toml` and `uv.lock` is locked. The
+lock is the only source of its dependencies:
+
+```toml
+# pyproject.toml
+[project]
+name = "my-plugin"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.32"]
+```
+
+Run `uv lock` in the plugin directory and ship both files. To prepare the
+plugin, the Host runs:
+
+```bash
+UV_PROJECT_ENVIRONMENT=<the plugin's environment> uv sync --locked --no-dev --no-install-project --project <plugin directory> --python <its interpreter>
+```
+
+- `--locked` refuses a lock that no longer matches `pyproject.toml`. The user
+  is told the plugin's author needs to lock it again: run `uv lock` and publish
+  the plugin again.
+- `--no-dev` leaves out the `dev` dependency group.
+- `--no-install-project` does not install the plugin itself as a package: the
+  Host loads it from its directory.
+- `uv sync` is exact. Packages the lock does not pin are removed from the
+  environment.
+- A locked plugin always gets its own environment, and always uses uv. The
+  installer and scope settings on its detail page do not apply, and the page
+  says so.
+- If the manifest also lists `pythonDependencies`, they are ignored and the
+  detail page warns about it. Remove them.
+- `requires-python` in the same `pyproject.toml` is checked against the
+  interpreter. A mismatch only warns.
+- The environment records the sha256 of the lock it was built from. An update
+  or rollback that changes `uv.lock` makes the environment stale, and the user
+  prepares it again.
+
+When uv is not installed, the plugin is `needs-uv`. There is no fallback to an
+unlocked install with pip. Preparing then installs uv first with the Python
+runtime's own pip, which the consent dialog says before anything runs.
+
+### Offline install with bundled wheels
+
+A `wheels/` folder beside the lock makes the install offline. The Host adds
+`--offline`, so nothing is downloaded. A package the bundle does not provide
+fails the preparation, and the user is shown its name.
+
+The wheels must be the ones the lock points at. A lock made against PyPI
+records PyPI URLs, and uv installs exactly those files. Passing `--find-links`
+at install time does not change that, so the Host does not pass it. Lock
+against the bundle instead:
+
+1. Lock as usual, online: `uv lock`.
+2. Export the pinned versions and download their wheels:
+
+   ```bash
+   uv export --format requirements.txt --no-dev --no-emit-project --no-hashes --frozen -o requirements.txt
+   python -m pip download -r requirements.txt --no-deps --only-binary=:all: -d wheels
+   ```
+
+   Pure-Python wheels (`py3-none-any`) work everywhere. For compiled packages,
+   download once per platform the plugin supports, into the same folder, with
+   pip's `--platform`, `--python-version`, `--implementation` and `--abi`
+   options. If the plugin supports only some platforms, restrict the lock to
+   them with `environments` under `[tool.uv]`.
+
+3. Point uv at the bundle and nothing else:
+
+   ```toml
+   # pyproject.toml
+   [tool.uv]
+   no-index = true
+   find-links = ["wheels"]
+   ```
+
+4. Lock again, offline: `uv lock --offline`. Every package in `uv.lock` now
+   reads `source = { registry = "wheels" }`.
+5. Check it with an empty cache, in a copy of the plugin directory:
+
+   ```bash
+   UV_CACHE_DIR="$(mktemp -d)" uv sync --locked --offline --no-dev --no-install-project
+   ```
+
+## Readiness
+
+| State          | Meaning                                                                                                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `not-required` | The plugin declares no dependencies and has no lock.                                                                                                                                                                        |
+| `not-prepared` | No environment was built for it yet.                                                                                                                                                                                        |
+| `needs-uv`     | It is locked and uv is not installed. Preparing installs uv first.                                                                                                                                                          |
+| `stale`        | The environment no longer matches. Reasons: its requirements changed (`dependencies`), its `uv.lock` changed (`lock`), it was built on another Python (`interpreter`), or another installer built it (`installer`).           |
+| `preparing`    | A preparation is running.                                                                                                                                                                                                   |
+| `ready`        | The environment matches the plugin.                                                                                                                                                                                         |
+| `failed`       | The last preparation failed. For a locked plugin the Host may name the cause: the lock is out of date with `pyproject.toml` (`lock-out-of-date`), or an offline install lacks wheels (`missing-wheels`, with the packages). |
+| `user-managed` | The user runs the plugin on their own interpreter, turned the managed environment off, or uses a custom installer for an unlocked plugin. The Host does not check it.                                                       |
+
+`not-prepared`, `needs-uv`, `stale`, `preparing` and `failed` stop the plugin
+from loading. When the user prepares the environment of a plugin they had
+switched on, and its start was refused only because the environment was not
+ready, it starts by itself once the preparation succeeds.
+
+## Packaging and size limits
+
+- Git and local-folder installs copy the plugin directory as it is, apart from
+  `.git`, `.github`, `node_modules` and `target`. `pyproject.toml`, `uv.lock`
+  and `wheels/` travel with it.
+- Archive downloads are limited to 128 MiB downloaded, 512 MiB unpacked and
+  20,000 entries. Cogpacks are limited to 100 MiB compressed, 300 MiB expanded
+  and 8,192 files. Wheels are already compressed, so they count almost in full.
+  A compiled stack bundled for several platforms can exceed the cogpack limit;
+  such a plugin should ship an online lock instead.
+- A first-party plugin bundled with the app lists the files it ships. A locked
+  one adds `pyproject.toml`, `uv.lock` and `wheels/**/*.whl` to its `include`.
+
+Locked installs have been verified on macOS. Windows paths for `--project`
+and `UV_PROJECT_ENVIRONMENT` are not verified yet.

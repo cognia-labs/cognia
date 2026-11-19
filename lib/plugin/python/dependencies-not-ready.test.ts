@@ -32,7 +32,7 @@ describe("readDependenciesNotReady", () => {
     }
   })
 
-  it.each(["preparing", "failed", "stale"] as const)("reads the %s state", (state) => {
+  it.each(["needs-uv", "preparing", "failed", "stale"] as const)("reads the %s state", (state) => {
     expect(
       readDependenciesNotReady(
         `Cannot load Python plugin "wiki": its Python dependencies are not ready (${state})`

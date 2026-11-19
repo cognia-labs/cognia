@@ -1,6 +1,6 @@
 # 插件运行环境就绪、Python 锁定、数据回滚与生命周期契约方案
 
-> 状态：实施中，P0–P3 已完成（2026-11-19）。创建：2026-11-18（Asia/Shanghai）。
+> 状态：实施中，P0–P4 已完成（2026-11-19）。创建：2026-11-18（Asia/Shanghai）。
 > 依据：[插件支持审计证据](../evidence/2026-11-08-plugin-support-audit.md)（第 697 行起的 ENV01–ENV07），以及 2026-11-18 已落地的 PL01–PL19 修复（`de7889b157..81c5c55bc4`）。
 > 范围：ENV01、ENV02、ENV03、ENV04、ENV07。ENV05 已修复；ENV06（独立插件 release 的产品采用）不在本方案内。
 > 本文的阶段划分、默认值和数据格式是建议，经确认后才实施。
@@ -152,6 +152,56 @@ uv 的锁安装语义（来源：astral-sh/uv 文档，经 context7 查询）：
 - **打包**：确认 `scripts/build/plugin-artifact-format.mjs`、目录 / Git / 归档安装器和 `archive_limits.rs` 的大小上限都能容纳 `pyproject.toml`、`uv.lock` 和 `wheels/`。上限不够时先报告，不悄悄调大。
 - **文档**：plugin-dev 文档（en/zh）写明这项约定，并给出生成离线 wheel 的命令（`uv export` 加 `pip download`，或 `uv` 的等价流程，实施时按当时文档核实）。
 - **测试**：crate 内测试覆盖带锁命令的参数拼装、`--locked` 失败、离线参数和强制隔离；集成测试在装有 uv 的 CI job 上真实执行一次离线 sync，无 uv 的 job 跳过并标明。
+
+**实施记录（2026-11-19，已完成）**
+
+- **先做了实测**（uv 0.11.21，macOS）。结论有两条改变了方案：
+  - 锁文件记录了每个包的来源。对着 PyPI 生成的锁，安装时即使加 `--find-links wheels` 也照样去 PyPI 地址取文件，离线时失败。反过来，锁是对着 `wheels/` 生成的，安装时再传一个绝对路径的 `--find-links`，`--locked` 会判定锁需要更新。
+  - 因此 **Host 不传 `--find-links`**，离线时只加 `--offline`。作者在 `pyproject.toml` 写 `[tool.uv] no-index = true` 和 `find-links = ["wheels"]`，再执行 `uv lock --offline`，锁里每个包的来源都会是 `source = { registry = "wheels" }`。这套流程用空缓存实测通过。
+  - 实测还确认了几点：
+    - `--python` 可以直接指向插件自己 venv 里的解释器，uv 会复用这个 venv，并保留 Host 的 marker 文件。
+    - `uv sync` 不往插件目录写任何东西。
+    - 缺少 wheel 时，uv 输出 ``Failed to download `包==版本` ``。
+    - 锁与 `pyproject.toml` 不一致时，uv 输出 ``needs to be updated, but `--locked` was provided``。
+- **识别带锁插件**：`crates/cognia-plugin-runtime/src/python/lock.rs` 的 `detect_lock`，只在插件根目录同时有 `pyproject.toml` 和 `uv.lock` 时成立。
+  - `uv.lock` 通过 `contained_path` 读取，不跟随符号链接，上限 32 MiB。
+  - 它计算锁的 sha256，并列出锁定的包（不含插件自身的 project）。
+  - `wheels/` 是真实目录时，视为离线安装。
+  - 锁存在但读不了时直接报错，不猜测状态。
+- **安装**：`venv::provision_locked` 一律用 uv 建插件自己的隔离环境，并把插件从共享环境的贡献者里移除，然后执行 `uv sync --locked --no-dev --no-install-project --no-progress --project <插件目录> --python <venv 解释器> [--offline]`。
+  - 运行时设置 `UV_PROJECT_ENVIRONMENT`，并去掉用户环境里的 `VIRTUAL_ENV` 和 `UV_FROZEN`（后者与 `--locked` 冲突）。
+  - 同步期间 marker 的 `lockDigest` 先清空，成功后才写入，半装的环境不会被当作就绪。
+  - 设置或 manifest 要求共享时，安装结果的 `downgradedReason` 会说明带锁插件一律用独立环境；详情页对这种情况显示翻译后的文案。
+- **安装器**：带锁插件一律用 uv，安装器设置（包括 pip 和自定义安装器）对它不生效。只有设置为 uv 且填了路径时才用那个路径。
+  - 和方案写法的出入：方案写的是「安装器是 Pip 或 Custom 时为 `needs-uv`」，实际按已定决策「带锁插件一律用 uv」实现：找得到 uv 就用；只有找不到 uv 时才是 `needs-uv`，并且只在需要准备时才报这个状态。环境已经按当前锁就绪的插件，卸掉 uv 后照样能运行。
+- **就绪状态**：
+  - 新增 `needs-uv`，会阻止加载。
+  - 新增过期原因 `lock`：环境不是按当前锁同步的，比如锁变了、之前按 manifest 依赖构建，或者在共享环境里。
+  - `failed` 新增可选的 `cause`：`lock-out-of-date`，或 `missing-wheels`（附包名）。准备记录里保存 cause，前端据此显示中英文说明，不直接展示 uv 的原文。
+  - 回复新增 `lock`，内容是 `packages`、`offline` 和 `ignoresManifestDependencies`。
+  - companion 响应目录 `PythonReadinessReport` 同步更新，新增 `PythonLockSummary` 和 `PythonPreparationFailureCause` 两个定义。
+- **manifest 警告**：方案原本要在 manifest 校验里给出警告，但 manifest 校验在 `packages/plugin-contract` 里，改了会让 authoring kit 的 pin 失效，而且它看不到插件目录里的文件。所以改为：Host 在就绪回复里报告 `ignoresManifestDependencies`，详情页显示警告，准备时 Host 记一条 warn 日志。
+- **缺少 uv**：确认框写明会先用 Python 运行时的 pip 安装 uv，确认按钮改为「安装 uv 并准备」。`installPythonDeps` 新增 `installUv` 选项，在同一次准备里先装 uv，装失败也记为这次准备失败。
+- **前端**：
+  - 提示宿主不再因为 manifest 没有 `pythonDependencies` 就跳过，交给 Host 判断。
+  - 确认框和详情页列出锁定的包，并说明是否离线安装。
+  - 详情页在安装器设置旁注明安装器和环境范围对带锁插件不生效；详情页的 uv 安装按钮安装完 uv 后会重新查询就绪状态。
+  - 启用失败的文案增加 `needsUv` 分支。ICU 的 select 键不能含连字符，所以分类器传入驼峰形式的状态。
+- **打包核对**：
+  - Git 和本地目录安装原样复制，只跳过 `.git`、`.github`、`node_modules`、`target`。
+  - 归档下载上限：下载 128 MiB、解压 512 MiB、20,000 个条目。cogpack 上限：压缩 100 MiB、展开 300 MiB、8,192 个文件。
+  - 普通 wheel 包放得下；多平台的编译依赖可能超过 cogpack 上限，已写进文档，没有调大上限。
+  - 捆绑的第一方插件要在 `include` 里列出 `pyproject.toml`、`uv.lock` 和 `wheels/**/*.whl`；目前没有带锁的第一方插件。
+- **文档**：新增 `docs/content/docs/{en,zh}/plugin-dev/python-environments.mdx`，内容包括两种依赖声明方式、Host 执行的命令、离线 wheel 的五步流程（命令已实测）、就绪状态表和打包上限。
+- **测试**：
+  - `lock.rs` 覆盖识别、包列表、摘要、离线判定、拒绝符号链接、命令参数、失败归类和错误文案。
+  - `readiness.rs` 覆盖带锁插件的各个状态。
+  - `commands.rs` 覆盖：不依赖本机是否有 uv 的 `needs-uv`、按锁就绪、锁变化后过期、没有 uv 时拒绝准备且不退回 pip、锁读不了时报错。
+  - `venv.rs` 有两条真实 uv 测试：离线同步成功（包括移出共享环境、能导入、不写插件目录）；缺 wheel 归类为 `missing-wheels`、锁过期归类为 `lock-out-of-date`。本机没有 Python 或 uv 时，这两条打印 skip 后跳过。
+- **未验证**：
+  - 没有在 Tauri 桌面实机跑过带锁插件在线、离线各准备一次的流程。
+  - Windows 路径没有验证。
+  - `installUv` 走运行时的 pip，遇到 Homebrew 这类受 PEP 668 保护的 Python 会失败；这是已有的限制，这次没有改。
 
 ### P5 剩余环境对齐（ENV07 第二步）
 

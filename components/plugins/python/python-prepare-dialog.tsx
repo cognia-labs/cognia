@@ -9,6 +9,10 @@
  * will use, and the network and disk it costs. Dismissing it is "later":
  * nothing is installed, and the plugin stays "dependencies not ready".
  *
+ * A plugin locked with `uv.lock` (ENV02) lists what its lock pins and says
+ * whether it installs offline from bundled wheels. When uv is missing
+ * (`needs-uv`) the same consent covers installing uv first, and says so.
+ *
  * Shared by the prompt after an install (`PythonPreparePromptHost`) and the
  * detail page's environment section, so both ask the same question.
  */
@@ -27,14 +31,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import type { PythonInstaller } from "@/lib/plugin/python/readiness"
+import type { PythonInstaller, PythonLockSummary } from "@/lib/plugin/python/readiness"
 
 export interface PythonPrepareDialogProps {
   open: boolean
   pluginName: string
+  /** What preparing installs: the lock's pins, or the declared requirements. */
   dependencies: readonly string[]
   /** The installer the Host reported; `null` when it has not answered. */
   installer: PythonInstaller | null
+  /** The plugin's `uv.lock`, when it is locked. */
+  lock?: Pick<PythonLockSummary, "offline"> | null
+  /** uv is missing and is installed first. */
+  needsUv?: boolean
   onConfirm: () => void
   /** Closed without preparing. */
   onLater: () => void
@@ -45,6 +54,8 @@ export function PythonPrepareDialog({
   pluginName,
   dependencies,
   installer,
+  lock = null,
+  needsUv = false,
   onConfirm,
   onLater,
 }: PythonPrepareDialogProps) {
@@ -67,15 +78,28 @@ export function PythonPrepareDialog({
             {t("title", { name: pluginName })}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {t("body", {
-              name: pluginName,
-              count: dependencies.length,
-              installer: installer ?? "unknown",
-            })}
+            {lock
+              ? t("bodyLocked", {
+                  name: pluginName,
+                  count: dependencies.length,
+                  offline: String(lock.offline),
+                })
+              : t("body", {
+                  name: pluginName,
+                  count: dependencies.length,
+                  installer: installer ?? "unknown",
+                })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="space-y-2 text-sm">
-          <p className="text-xs font-medium text-muted-foreground">{t("packages")}</p>
+          {needsUv && (
+            <p className="text-xs" data-testid="python-prepare-needs-uv">
+              {t("needsUv")}
+            </p>
+          )}
+          <p className="text-xs font-medium text-muted-foreground">
+            {lock ? t("packagesLocked") : t("packages")}
+          </p>
           <ul
             className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs"
             data-testid="python-prepare-dependencies"
@@ -86,7 +110,9 @@ export function PythonPrepareDialog({
               </li>
             ))}
           </ul>
-          <p className="text-xs text-muted-foreground">{t("impact")}</p>
+          <p className="text-xs text-muted-foreground">
+            {lock?.offline ? t("impactOffline") : t("impact")}
+          </p>
         </div>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("later")}</AlertDialogCancel>
@@ -96,7 +122,7 @@ export function PythonPrepareDialog({
               onConfirm()
             }}
           >
-            {t("confirm")}
+            {needsUv ? t("confirmWithUv") : t("confirm")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

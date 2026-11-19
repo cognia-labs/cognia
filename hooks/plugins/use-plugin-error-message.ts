@@ -73,10 +73,14 @@ const PATTERNS: ReadonlyArray<{
   },
   { code: "pythonDisabled", test: /the Python runtime is disabled in this profile/ },
   {
-    // `PythonDependenciesNotReadyError`; its module owns the pattern.
+    // `PythonDependenciesNotReadyError`; its module owns the pattern. ICU
+    // select keys cannot hold a hyphen, so the state is camel-cased
+    // (`needs-uv` → `needsUv`).
     code: "pythonDependenciesNotReady",
     test: PYTHON_DEPENDENCIES_NOT_READY_PATTERN,
-    values: (m) => ({ state: m[2] ?? "" }),
+    values: (m) => ({
+      state: (m[2] ?? "").replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase()),
+    }),
   },
   { code: "intentDisabled", test: /^Plugin "[^"]+" is explicitly disabled$/ },
   {
