@@ -1,6 +1,7 @@
 // file_copy + file_rename + file_move — relocate files on disk.
 
 import fsp from "node:fs/promises"
+import { constants } from "node:fs"
 import { z } from "zod"
 
 import { assertNotSecretEscape } from "../../../policy/confinement/enforce.ts"
@@ -32,7 +33,7 @@ async function execFileCopy(args: ToolArgs<typeof fileCopyShape>) {
       const exists = await statOrNull(args.destination)
       if (exists) return toolError(`destination already exists: ${args.destination}`)
     }
-    await fsp.copyFile(args.source, args.destination)
+    await fsp.copyFile(args.source, args.destination, args.overwrite ? 0 : constants.COPYFILE_EXCL)
     const st = await statOrNull(args.destination)
     return toolText({
       source: args.source,
@@ -102,7 +103,11 @@ async function execFileMove(args: ToolArgs<typeof fileMoveShape>) {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EXDEV") {
         // Cross-device move: fall back to copy-then-delete.
-        await fsp.copyFile(args.source, args.destination)
+        await fsp.copyFile(
+          args.source,
+          args.destination,
+          args.overwrite ? 0 : constants.COPYFILE_EXCL
+        )
         await fsp.unlink(args.source)
       } else {
         throw err

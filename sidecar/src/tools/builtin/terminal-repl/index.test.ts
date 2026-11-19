@@ -579,12 +579,37 @@ test("session-bound PTYs use sandbox argv, prevent forged ownership, and dispose
   assert.equal(fake.__ptys[0]!.shell, process.execPath)
   assert.deepEqual(fake.__ptys[0]!.args.slice(-3), ["--", "/bin/sh", "-i"])
   assert.equal(sessions.get(sessionId)!.agentId, "owner1")
+  assert.equal(
+    (await tools[1]!.handler({ sessionId, data: "echo same policy\n" })).isError,
+    undefined
+  )
   const other = createTerminalReplTools({ sessionId: "owner2" })
   const denied = await other[1]!.handler({ agentId: "owner1", sessionId, data: "echo unsafe\n" })
   assert.equal(denied.isError, true)
+  assert.deepEqual(fake.__ptys[0]!.writeBuffer, ["echo same policy\n"])
   await disposeTerminalRepls("owner1")
   assert.equal(fake.__ptys[0]!.killed, true)
   assert.equal(sessions.has(sessionId), false)
+})
+
+test("a sandboxed turn cannot write to an older PTY outside its process scope", async () => {
+  const fake = makeFakePty()
+  __setNodePtyForTesting(fake)
+  const result = await execSpawn({
+    agentId: "owner",
+    shell: "/bin/sh",
+    cwd: tmpdir,
+    cols: 80,
+    rows: 24,
+  })
+  const { sessionId } = firstJson<ReplOutput>(result)
+  const tools = createTerminalReplTools({
+    sessionId: "owner",
+    builtinProcessSandbox: { launcher: process.execPath, writableRoots: [tmpdir], network: false },
+  })
+  const denied = await tools[1]!.handler({ sessionId, data: "echo unsafe\n" })
+  assert.equal(denied.isError, true)
+  assert.deepEqual(fake.__ptys[0]!.writeBuffer, [])
 })
 
 test("session disposal waits for PTY exit rather than the kill request", async () => {

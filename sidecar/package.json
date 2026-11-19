@@ -38,7 +38,7 @@
     "@langfuse/otel": "5.11.1",
     "@langfuse/vercel-ai-sdk": "5.11.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@opencode/client": "2.0.18",
+    "@opencode/client": "2.2.7",
     "@opentelemetry/api": "~1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
     "@opentelemetry/sdk-node": "^0.222.0",

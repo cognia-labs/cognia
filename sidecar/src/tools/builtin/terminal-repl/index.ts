@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util"
 import {
   sandboxedProcessTarget,
   sandboxedProcessEnv,
@@ -132,6 +133,7 @@ interface ReplSession {
   exitCode: number | null
   createdAt: number
   lastActivityAt: number
+  sandboxScope?: ProcessSandboxScope
 }
 
 /** The host session the tools are bound to; model input cannot override it. */
@@ -431,6 +433,9 @@ async function execSpawn(args: ToolArgs<typeof spawnShape>, extra: unknown = {})
     exitCode: null,
     createdAt: now,
     lastActivityAt: now,
+    ...(ctx.builtinProcessSandbox
+      ? { sandboxScope: structuredClone(ctx.builtinProcessSandbox) }
+      : {}),
   }
   if (!session.groupProofSupported) unconfirmedTerminalSessions.add(session.agentId)
   sessions.set(id, session)
@@ -599,8 +604,16 @@ export function createTerminalReplTools(ctx: TerminalReplContext = {}) {
   ) => Promise<ToolResult>)[]
   return terminalReplTools.map((definition, index) => ({
     ...definition,
-    handler: (args: Record<string, unknown>) =>
-      handlers[index]!(ctx.sessionId ? { ...args, agentId: ctx.sessionId } : args, ctx),
+    handler: async (args: Record<string, unknown>) => {
+      const bound = ctx.sessionId ? { ...args, agentId: ctx.sessionId } : args
+      if (index !== 0 && ctx.builtinProcessSandbox && typeof bound.sessionId === "string") {
+        const owned = ensureOwner(sessions.get(bound.sessionId), String(bound.agentId ?? ""))
+        if (owned.ok && !isDeepStrictEqual(owned.session.sandboxScope, ctx.builtinProcessSandbox)) {
+          return toolError("terminal was started under a different sandbox policy", definition.name)
+        }
+      }
+      return handlers[index]!(bound, ctx)
+    },
   }))
 }
 

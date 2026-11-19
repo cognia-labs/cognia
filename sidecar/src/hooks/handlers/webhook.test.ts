@@ -52,6 +52,99 @@ test("runWebhookHandler: redacts a PII-bearing lifecycle payload before fetch", 
     assert.doesNotMatch(received, /alice@example\.com/)
     assert.match(received, /<EMAIL_001>/)
   } finally {
-    server.close()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test("runWebhookHandler: sends custom headers with the JSON POST body", async () => {
+  let received: { method?: string; contentType?: string; hookKey?: string; body: string }
+  const server = http.createServer((req, res) => {
+    let body = ""
+    req.on("data", (chunk) => (body += chunk))
+    req.on("end", () => {
+      received = {
+        method: req.method,
+        contentType: req.headers["content-type"],
+        hookKey: req.headers["x-hook-key"] as string | undefined,
+        body,
+      }
+      res.writeHead(204)
+      res.end()
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const { port } = server.address() as AddressInfo
+  try {
+    const out = await runWebhookHandler(
+      `http://127.0.0.1:${port}/hook`,
+      { "x-hook-key": "test-hook-key" },
+      5,
+      '{"event":"ready"}'
+    )
+    assert.equal(out.warning, undefined)
+    assert.deepEqual(received!, {
+      method: "POST",
+      contentType: "application/json",
+      hookKey: "test-hook-key",
+      body: '{"event":"ready"}',
+    })
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test("runWebhookHandler: a pre-aborted signal prevents the HTTP request", async () => {
+  let requests = 0
+  const server = http.createServer((_req, res) => {
+    requests += 1
+    res.writeHead(204)
+    res.end()
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const { port } = server.address() as AddressInfo
+  const controller = new AbortController()
+  controller.abort(new Error("caller cancelled"))
+  try {
+    const out = await runWebhookHandler(
+      `http://127.0.0.1:${port}/hook`,
+      undefined,
+      5,
+      "{}",
+      controller.signal
+    )
+    assert.equal(requests, 0)
+    assert.match(out.warning!, /caller cancelled/)
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test("runWebhookHandler: caller cancellation during the request stays distinct from a timeout", async () => {
+  const controller = new AbortController()
+  let requests = 0
+  const server = http.createServer((req, res) => {
+    requests += 1
+    req.resume()
+    req.on("end", () => {
+      controller.abort()
+      res.writeHead(204)
+      res.end()
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const { port } = server.address() as AddressInfo
+  try {
+    const out = await runWebhookHandler(
+      `http://127.0.0.1:${port}/hook`,
+      undefined,
+      5,
+      "{}",
+      controller.signal
+    )
+    assert.equal(requests, 1)
+    assert.match(out.warning!, /failed:.*abort/i)
+    assert.doesNotMatch(out.warning!, /timed out/)
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })

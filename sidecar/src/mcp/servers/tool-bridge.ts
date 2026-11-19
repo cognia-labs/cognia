@@ -9,10 +9,12 @@ export interface BridgeSession {
   contentSafety?: { injectionProtection: boolean }
   sessionId?: string
   cwd?: string
+  additionalDirectories?: string[]
   model?: string
   provider?: string
   lsp?: ToolSessionSendOptions["lsp"]
   codeGraph?: ToolSessionSendOptions["codeGraph"]
+  builtinProcessSandbox?: ToolSessionSendOptions["builtinProcessSandbox"]
   enabledCategories?: Record<string, boolean>
   visibleBuiltinTools?: string[]
   hostTools?: { name: string; description: string; jsonSchema?: unknown }[]
@@ -144,6 +146,8 @@ export function buildToolSurface(
     process.stderr.write(`[cognia-tool-bridge:${level}] ${message}\n`)
   const toolSendOptions = {
     cwd: session.cwd,
+    additionalDirectories: session.additionalDirectories,
+    builtinProcessSandbox: session.builtinProcessSandbox,
     builtinTools: session.enabledCategories,
     ...(session.lsp ? { lsp: session.lsp } : {}),
     ...(session.codeGraph ? { codeGraph: session.codeGraph } : {}),
@@ -155,6 +159,7 @@ export function buildToolSurface(
   })
   const defs = collectCogniaToolDefs({
     enabled: session.enabledCategories,
+    builtinProcessSandbox: session.builtinProcessSandbox ?? undefined,
     ...toolSession.toolContext(),
     cwd: session.cwd,
     // The bridge is neither the Anthropic SDK nor the ai-sdk loop: it wants the

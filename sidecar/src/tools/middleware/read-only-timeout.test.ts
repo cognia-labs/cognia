@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import type { ToolHandlerExtra } from "../kernel/define.ts"
 
 import {
   DEFAULT_BUILTIN_TOOL_TIMEOUT_MS,
@@ -44,6 +45,30 @@ test("a read-only tool that finishes in time passes its result through", async (
   const res = asResult(await wrapped.handler({}, {}))
   assert.equal(res.content[0]!.text, "ok")
   assert.equal(res.isError, undefined)
+})
+
+test("a wrapped handler receives the original arguments, context and cancellation signal", async () => {
+  const args = { path: "/workspace/report.md", options: { encoding: "utf8" } }
+  const controller = new AbortController()
+  const extra = { signal: controller.signal }
+  const result = { content: [{ type: "text", text: "report contents" }] }
+  let forwardedSignal: AbortSignal | undefined
+  const def = {
+    name: "read",
+    handler: (receivedArgs: unknown, receivedExtra?: ToolHandlerExtra) => {
+      assert.equal(receivedArgs, args)
+      assert.equal(receivedExtra, extra)
+      forwardedSignal = receivedExtra?.signal
+      return result
+    },
+  }
+  const wrapped = wrapHandlerWithReadOnlyTimeout(def, 1000, READ_ONLY)
+  assert.equal(await wrapped.handler(args, extra), result)
+  assert.equal(forwardedSignal, controller.signal)
+  const reason = new Error("read cancelled")
+  controller.abort(reason)
+  assert.equal(forwardedSignal!.aborted, true)
+  assert.equal(forwardedSignal!.reason, reason)
 })
 
 test("a read-only handler that rejects before the deadline rethrows its own error", async () => {

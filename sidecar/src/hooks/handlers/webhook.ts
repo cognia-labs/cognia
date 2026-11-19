@@ -37,6 +37,7 @@ export async function runWebhookHandler(
     signal.addEventListener("abort", onOuterAbort, { once: true })
   }
   try {
+    signal?.throwIfAborted()
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...(headers ?? {}) },

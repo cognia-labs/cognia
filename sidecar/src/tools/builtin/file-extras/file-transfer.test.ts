@@ -21,6 +21,8 @@ test("file_copy refuses to overwrite by default", async () => {
   fs.writeFileSync(b, "y")
   const r = await execFileCopy({ source: a, destination: b, overwrite: false })
   assert.equal(r.isError, true)
+  assert.equal(fs.readFileSync(a, "utf-8"), "x")
+  assert.equal(fs.readFileSync(b, "utf-8"), "y")
 })
 
 test("file_copy overwrites with overwrite:true", async () => {
@@ -40,18 +42,79 @@ test("file_rename moves the file", async () => {
   const r = await execFileRename({ overwrite: false, oldPath: a, newPath: b })
   assert.equal(r.isError, undefined)
   assert.equal(fs.existsSync(a), false)
-  assert.equal(fs.existsSync(b), true)
+  assert.equal(fs.readFileSync(b, "utf-8"), "x")
 })
 
-test("file_move falls back to copy-then-delete on EXDEV", async () => {
-  // We can't easily simulate EXDEV without crossing devices; verify same-fs move works.
+test("file_move renames on the same filesystem", async () => {
   const a = path.join(TMP, "mv-a.txt")
   const b = path.join(TMP, "mv-b.txt")
   fs.writeFileSync(a, "z")
   const r = await execFileMove({ overwrite: false, source: a, destination: b })
   assert.equal(r.isError, undefined)
   assert.equal(fs.readFileSync(b, "utf-8"), "z")
+  assert.equal(fs.existsSync(a), false)
 })
+
+for (const overwrite of [false, true]) {
+  test(`file_move copies bytes and deletes the source on EXDEV with overwrite:${overwrite}`, async (t) => {
+    const source = path.join(TMP, `exdev-source-${overwrite}.bin`)
+    const destination = path.join(TMP, `exdev-destination-${overwrite}.bin`)
+    const bytes = Buffer.from([0, 255, 13, 10, 128, 42])
+    fs.writeFileSync(source, bytes)
+    if (overwrite) fs.writeFileSync(destination, "old destination")
+    t.mock.method(fs.promises, "rename", async () => {
+      throw Object.assign(new Error("cross-device rename"), { code: "EXDEV" })
+    })
+    const result = await execFileMove({ source, destination, overwrite })
+    assert.equal(result.isError, undefined)
+    assert.deepEqual(fs.readFileSync(destination), bytes)
+    assert.equal(fs.existsSync(source), false)
+  })
+}
+
+test("file_move preserves the source if its EXDEV copy fails", async (t) => {
+  const source = path.join(TMP, "failed-copy-source.txt")
+  const destination = path.join(TMP, "failed-copy-destination.txt")
+  fs.writeFileSync(source, "only copy")
+  t.mock.method(fs.promises, "rename", async () => {
+    throw Object.assign(new Error("cross-device rename"), { code: "EXDEV" })
+  })
+  t.mock.method(fs.promises, "copyFile", async () => {
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" })
+  })
+  const result = await execFileMove({ source, destination, overwrite: false })
+  assert.equal(result.isError, true)
+  const error = result.content[0]
+  assert(error?.type === "text")
+  assert.match(error.text, /no space left on device/)
+  assert.equal(fs.readFileSync(source, "utf-8"), "only copy")
+  assert.equal(fs.existsSync(destination), false)
+})
+
+for (const operation of ["copy", "EXDEV move"] as const) {
+  test(`file ${operation} preserves a destination created after the overwrite precheck`, async (t) => {
+    const source = path.join(TMP, `${operation}-race-source.txt`)
+    const destination = path.join(TMP, `${operation}-race-destination.txt`)
+    fs.writeFileSync(source, "source bytes")
+    const realCopy = fs.promises.copyFile
+    t.mock.method(fs.promises, "copyFile", async (...args: Parameters<typeof realCopy>) => {
+      const [src, dst, mode] = args
+      // Simulate the competing writer after statOrNull but before the copy.
+      await fs.promises.writeFile(dst, "concurrent writer", { flag: "wx" })
+      return realCopy(src, dst, mode)
+    })
+    if (operation === "EXDEV move") {
+      t.mock.method(fs.promises, "rename", async () => {
+        throw Object.assign(new Error("cross-device rename"), { code: "EXDEV" })
+      })
+    }
+    const args = { source, destination, overwrite: false }
+    const result = await (operation === "copy" ? execFileCopy(args) : execFileMove(args))
+    assert.equal(fs.readFileSync(destination, "utf-8"), "concurrent writer")
+    assert.equal(fs.readFileSync(source, "utf-8"), "source bytes")
+    assert.equal(result.isError, true)
+  })
+}
 
 test("file_rename refuses to clobber an existing destination by default", async () => {
   const a = path.join(TMP, "rc-a.txt")

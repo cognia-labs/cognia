@@ -88,8 +88,8 @@ importers:
         specifier: ^1.32.1
         version: 1.32.2(zod@4.6.7)
       '@opencode/client':
-        specifier: 2.0.18
-        version: 2.0.18(effect@4.0.0-rc.112)
+        specifier: 2.2.7
+        version: 2.2.7(effect@4.1.0)
       '@opentelemetry/api':
         specifier: ~1.9.1
         version: 1.9.1
@@ -749,11 +749,28 @@ packages:
       solid-js:
         optional: true
 
+  '@opencode/client@2.2.7':
+    resolution: {integrity: sha512-L1nqJqEBEHyg+OwJaMYA5jX8OA4nZ1Jxehp8xTw5u4kzKEgqLes2re7yWzXJSZmybZ5Kv4rX24gJjYHeegwf7g==}
+    peerDependencies:
+      effect: 4.1.0
+      solid-js: '>=1.9.0'
+    peerDependenciesMeta:
+      effect:
+        optional: true
+      solid-js:
+        optional: true
+
   '@opencode/protocol@2.0.18':
     resolution: {integrity: sha512-IhzzlCz/hAlFvBLWQ+kDceX0/CkYOrjVyTPwYJYvWwKze5AHzVxxDYxkhCqLJj0hn/wtdNL10nhjVothuHcaBQ==}
 
+  '@opencode/protocol@2.2.7':
+    resolution: {integrity: sha512-J86R/rNrFC0KRJd4G5i2yT5FG7FB4M9Yh418NS3PcTHoWP1jwWKLV85L5JvGYPwb7sKtahyxPeN88Q/Mw+pZvQ==}
+
   '@opencode/schema@2.0.18':
     resolution: {integrity: sha512-f+lp6f+kxhygdeSxjqkiu6vk9t0onH/6OVBghSNyo9ZUUFP9BU/2JKthMgy9kHGyFu2vp0lg01H9umXn76u52A==}
+
+  '@opencode/schema@2.2.7':
+    resolution: {integrity: sha512-A+aUfvpcPm8mN0ptFl2GUHwDFjyrCuLdig3jjQCRoOghF+un1+vVKek1IwIph935vMNqAwRDnwtvZDtHFiGokA==}
 
   '@opentelemetry/api-logs@0.222.0':
     resolution: {integrity: sha512-9mb1If+IF6u0ZVXkHQ6ogEae5HwA6ajIVUgpSDQyRASxft6BSXHvBvPooRle3yFN/fKnCdSOnuu0OC3PLcF6+g==}
@@ -1212,6 +1229,9 @@ packages:
 
   effect@4.0.0-rc.112:
     resolution: {integrity: sha512-wXxwuh1Ywnv4cPRM3Wfa0vDwuOHnZ1TsTgHJkG9XgzND6inhBH9n1vBxhg3iIXOia/OrpmvVmd3lrD4vq6bF3A==}
+
+  effect@4.1.0:
+    resolution: {integrity: sha512-lGx2MJJyrXA8RZb2UpQ/0Nkb5Utaimby7oD92+18noBxLPE85IFOvptdzau8dvcxAOwfwHo9iqapbKeFzqQM/Q==}
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
@@ -2280,15 +2300,32 @@ snapshots:
     optionalDependencies:
       effect: 4.0.0-rc.112
 
+  '@opencode/client@2.2.7(effect@4.1.0)':
+    dependencies:
+      '@opencode/protocol': 2.2.7
+      '@opencode/schema': 2.2.7
+    optionalDependencies:
+      effect: 4.1.0
+
   '@opencode/protocol@2.0.18':
     dependencies:
       '@opencode/schema': 2.0.18
       effect: 4.0.0-rc.112
 
+  '@opencode/protocol@2.2.7':
+    dependencies:
+      '@opencode/schema': 2.2.7
+      effect: 4.1.0
+
   '@opencode/schema@2.0.18':
     dependencies:
       '@standard-schema/spec': 1.1.0
       effect: 4.0.0-rc.112
+
+  '@opencode/schema@2.2.7':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      effect: 4.1.0
 
   '@opentelemetry/api-logs@0.222.0':
     dependencies:
@@ -2760,6 +2797,8 @@ snapshots:
     dependencies:
       fast-check: 4.9.0
       msgpackr: 2.1.0
+
+  effect@4.1.0: {}
 
   emoji-regex@8.0.0: {}
 
