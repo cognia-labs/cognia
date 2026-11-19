@@ -17,6 +17,7 @@
  */
 
 import type { AgentTraceSpan, SpanOperationName } from "@/types/agent-trace/span"
+import { accountingContributions } from "@cognia/agent-trace/accounting"
 import type {
   BuildTimelineOptions,
   TimelineBlock,
@@ -180,6 +181,7 @@ export function buildTraceTimeline(
   spans: AgentTraceSpan[],
   options: BuildTimelineOptions = {}
 ): TraceTimeline {
+  spans = [...new Map(spans.map((span) => [`${span.traceId}:${span.spanId}`, span])).values()]
   const scale = options.scale ?? "duration"
   const grouping = options.grouping ?? "operation"
   const tickCount = options.tickCount ?? 5
@@ -241,6 +243,9 @@ export function buildTraceTimeline(
 
   const laneMap = new Map<string, TimelineLane>()
   const markers: TimelineMarker[] = []
+  const accounting = new Map(
+    accountingContributions(spans).map((row) => [`${row.span.traceId}:${row.span.spanId}`, row])
+  )
   let errorCount = 0
   let costUsd = 0
   let tokens = 0
@@ -248,9 +253,10 @@ export function buildTraceTimeline(
   visible.forEach((span, index) => {
     const key = laneKeyFor(span, grouping)
     const { offsetPct, widthPct } = geometryFor(span, index)
-    const usage = span.usage
+    const contribution = accounting.get(`${span.traceId}:${span.spanId}`)
+    const usage = contribution?.usage
     const spanTokens = usage ? usage.inputTokens + usage.outputTokens : 0
-    const spanCost = span.costUsdEstimate ?? 0
+    const spanCost = contribution?.costUsdEstimate ?? 0
     const failed = isError(span)
 
     const block: TimelineBlock = {

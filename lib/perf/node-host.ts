@@ -33,6 +33,8 @@ export interface NodePerformanceProvider {
   nowWallMs(): number
   nowMonotonicMs(): number
   collect(): Promise<NodeCounters>
+  /** Expensive observers run only while at least one sampling lease is held. */
+  setActive?(active: boolean): void
   dispose?(): void
 }
 
@@ -285,6 +287,7 @@ export class NodePerformanceHost implements PerformanceHostAdapter {
   }
 
   private ensureLoop(): void {
+    this.provider.setActive?.(this.leases.size > 0)
     if (this.timer || this.collecting) return
     this.activeCadenceMs = this.fastestCadence()
     this.previousMonotonicMs = this.provider.nowMonotonicMs()
@@ -295,6 +298,7 @@ export class NodePerformanceHost implements PerformanceHostAdapter {
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.previousCounters = null
+    this.provider.setActive?.(false)
   }
 
   private async tick(): Promise<void> {
@@ -412,11 +416,19 @@ export async function createNativeNodePerformanceProvider(): Promise<NodePerform
   // static-export-exempt: Node-host only, lazy import
   const { monitorEventLoopDelay, performance: nodePerformance } = await import("node:perf_hooks")
   const histogram = monitorEventLoopDelay({ resolution: 20 })
-  histogram.enable()
+  let active = false
   let priorEventLoop = nodePerformance.eventLoopUtilization()
   return {
     nowWallMs: Date.now,
     nowMonotonicMs: () => nodePerformance.now(),
+    setActive: (next) => {
+      if (next === active) return
+      active = next
+      histogram.reset()
+      priorEventLoop = nodePerformance.eventLoopUtilization()
+      if (active) histogram.enable()
+      else histogram.disable()
+    },
     collect: async () => {
       const cpu = process.cpuUsage()
       const memory = process.memoryUsage()

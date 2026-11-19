@@ -8,14 +8,57 @@ import {
   generateSpanId,
   generateTraceId,
   getAgentTraceWriter,
+  isAgentTraceSpanActive,
   recordEvent,
   reapStaleSpans,
   setAgentTraceWriter,
+  setAgentTracePendingWriter,
   startSpan,
   __setAgentTraceNowForTesting,
 } from "./emitter"
 
 describe("agent-trace emitter", () => {
+  it("persists an immutable pending snapshot only to the local lifecycle sink", () => {
+    const local = jest.fn()
+    const finished = jest.fn()
+    setAgentTracePendingWriter(local)
+    setAgentTraceWriter(finished)
+    const handle = startSpan({
+      operationName: "invoke_agent",
+      providerName: "openai",
+      sessionId: "s",
+      surface: "chat",
+    })
+    expect(local).toHaveBeenCalledWith(
+      expect.objectContaining({ spanId: handle.spanId, status: "pending" })
+    )
+    expect(finished).not.toHaveBeenCalled()
+    endSpan(handle.spanId)
+    expect(local.mock.calls[0][0].status).toBe("pending")
+    expect(finished).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }))
+  })
+
+  it("settles abandoned spans on a timer without requiring another invocation", () => {
+    jest.useFakeTimers()
+    try {
+      const finished = jest.fn()
+      setAgentTraceWriter(finished)
+      const handle = startSpan({
+        operationName: "invoke_agent",
+        providerName: "openai",
+        sessionId: "s",
+        surface: "chat",
+      })
+      jest.advanceTimersByTime(30 * 60_000 + 1)
+      expect(finished).toHaveBeenCalledWith(
+        expect.objectContaining({ spanId: handle.spanId, status: "incomplete" })
+      )
+      expect(finished.mock.calls[0][0].endTime).toBeUndefined()
+    } finally {
+      __resetAgentTraceEmitterForTesting()
+      jest.useRealTimers()
+    }
+  })
   beforeEach(() => {
     __resetAgentTraceEmitterForTesting()
   })
@@ -95,6 +138,9 @@ describe("agent-trace emitter", () => {
       expect(active?.surface).toBe("chat")
       expect(typeof active?.startTime).toBe("number")
       expect(active?.endTime).toBeUndefined()
+      expect(isAgentTraceSpanActive(handle.spanId, handle.traceId)).toBe(true)
+      endSpan(handle.spanId)
+      expect(isAgentTraceSpanActive(handle.spanId, handle.traceId)).toBe(false)
     })
 
     it("reuses provided traceId and parentSpanId", () => {

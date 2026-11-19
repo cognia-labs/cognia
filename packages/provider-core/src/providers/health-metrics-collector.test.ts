@@ -11,6 +11,24 @@ const config: HealthMetricsConfig = {
 }
 
 describe("recordToBuckets", () => {
+  it("excludes unknown and invalid durations from latency but still counts all outcomes", () => {
+    let buckets: SlidingWindowBucket[] = []
+    for (const latencyMs of [100, undefined, Number.NaN, -1]) {
+      buckets = recordToBuckets(
+        buckets,
+        { providerId: "p", success: latencyMs === 100, latencyMs },
+        config,
+        10
+      )
+    }
+    expect(aggregate("p", buckets)).toMatchObject({
+      totalRequests: 4,
+      totalErrors: 3,
+      latencyAvg: 100,
+      latencyP50: 100,
+      latencySampleCount: 1,
+    })
+  })
   it("folds requests into the bucket for their timestamp", () => {
     let b: SlidingWindowBucket[] = []
     b = recordToBuckets(b, { providerId: "p", success: true, latencyMs: 100 }, config, 500)

@@ -76,6 +76,17 @@ import {
   preparePerformanceRawExport,
 } from "@/lib/perf/capture-portability"
 import { readDecodedCapture } from "@/lib/perf/capture-analysis"
+import {
+  readPerformanceCaptureMetadata,
+  type PerformanceCaptureMetadata,
+} from "@/lib/perf/capture-portability"
+import {
+  associationMatches,
+  resolveExecutionAssociation,
+  type PerformanceExecutionContext,
+} from "@/lib/perf/execution-correlation"
+import { perfDashboardHref } from "@/lib/perf/dashboard-url"
+import Link from "next/link"
 import { PerformanceBudgetService } from "@/lib/perf/budget-service"
 import { PerformanceQuotaManager, PERFORMANCE_ACCOUNT_QUOTA_BYTES } from "@/lib/perf/quota"
 import { formatBytes } from "@/lib/perf/backend/format"
@@ -84,6 +95,7 @@ import { formatDurationShort } from "@/lib/utils"
 import { PERF_INTERVAL_OPTIONS } from "@/hooks/perf/use-perf-stream"
 import { PerfCaptureCompare } from "./perf-capture-compare"
 import { PerfBudgetPanel, type PerfBudgetStore } from "./perf-budget-panel"
+import { PerfBrowserDiagnostics } from "./perf-browser-diagnostics"
 
 const controller = getPerformanceCaptureController()
 const DURATION_OPTIONS = [60_000, 600_000, 1_800_000, 3_600_000] as const
@@ -129,8 +141,17 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const SECTION = "border-y bg-background"
 const SECTION_HEADER = "flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3"
 const SECTION_TITLE = "text-base font-medium"
+const EMPTY_CAPTURE_METADATA: Record<string, PerformanceCaptureMetadata | null> = {}
 
-export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
+export function PerfCapturesTab({
+  hostAvailable,
+  execution,
+  captureId,
+}: {
+  hostAvailable: boolean
+  execution?: PerformanceExecutionContext
+  captureId?: string | null
+}) {
   const t = useTranslations("performance.captures")
   const formatter = useFormatter()
   const state = useSyncExternalStore(
@@ -157,6 +178,152 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
     []
   )
   const scope = getActiveRuntimeTargetContext()
+  const [originResult, setOriginResult] = useState<{
+    accountId: string
+    dbName: string
+    key: string
+    value: Awaited<ReturnType<typeof resolveExecutionAssociation>>
+    failed: boolean
+  } | null>(null)
+  const [metadataResult, setMetadataResult] = useState<{
+    accountId: string
+    dbName: string
+    key: string
+    rows: Record<string, PerformanceCaptureMetadata | null>
+    status: "ready" | "error"
+  } | null>(null)
+  const runId = execution?.runId
+  const traceId = execution?.traceId
+  const scopedExecution = useMemo(
+    () => (runId || traceId ? { runId, traceId } : undefined),
+    [runId, traceId]
+  )
+  const originKey = JSON.stringify([runId ?? null, traceId ?? null])
+  const originMatches = Boolean(
+    localAccountId &&
+    originResult?.accountId === localAccountId &&
+    originResult.dbName === db.name &&
+    originResult.key === originKey
+  )
+  const origin = originMatches ? originResult!.value : null
+  const originFailed = originMatches && originResult!.failed
+  // Sample/chunk updates do not require decrypting immutable metadata again.
+  const metadataKey = JSON.stringify(
+    captures.map((capture) => [capture.id, capture.metadataDigest ?? null])
+  )
+  const metadataMatches = Boolean(
+    localAccountId &&
+    metadataResult?.accountId === localAccountId &&
+    metadataResult.dbName === db.name &&
+    metadataResult.key === metadataKey
+  )
+  const metadata = metadataMatches ? metadataResult!.rows : EMPTY_CAPTURE_METADATA
+  const metadataState = metadataMatches
+    ? metadataResult!.status
+    : !localAccountId || captures.length === 0
+      ? "ready"
+      : "loading"
+
+  useEffect(() => {
+    let cancelled = false
+    const scopedDb = getDb()
+    if (scopedExecution && localAccountId)
+      void resolveExecutionAssociation(scopedDb, scopedExecution).then(
+        (value) => {
+          if (!cancelled)
+            setOriginResult({
+              accountId: localAccountId,
+              dbName: scopedDb.name,
+              key: originKey,
+              value,
+              failed: false,
+            })
+        },
+        () => {
+          if (!cancelled)
+            setOriginResult({
+              accountId: localAccountId,
+              dbName: scopedDb.name,
+              key: originKey,
+              value: null,
+              failed: true,
+            })
+        }
+      )
+    return () => {
+      cancelled = true
+    }
+  }, [db.name, scopedExecution, localAccountId, originKey])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!localAccountId) return
+    const scopedDb = getDb()
+    const captureIds = (JSON.parse(metadataKey) as [string, string | null][]).map(([id]) => id)
+    if (captureIds.length === 0) return
+    void (async () => {
+      const key = await loadOrCreateAccountArtifactKey(localAccountId, "performance")
+      const result: Record<string, PerformanceCaptureMetadata | null> = {}
+      // Read the complete encrypted library in bounded batches. A decryption
+      // failure is an error, never evidence that no associated captures exist.
+      let failed = false
+      for (let offset = 0; offset < captureIds.length; offset += 16) {
+        const batch = captureIds.slice(offset, offset + 16)
+        const values = await Promise.allSettled(
+          batch.map((captureId) =>
+            readPerformanceCaptureMetadata({
+              db: scopedDb,
+              localAccountId,
+              targetDatabase: scopedDb.name,
+              captureId,
+              key,
+            })
+          )
+        )
+        values.forEach((value, index) => {
+          if (value.status === "fulfilled") result[batch[index]] = value.value
+          else failed = true
+        })
+        if (cancelled) return
+      }
+      if (!cancelled) {
+        setMetadataResult({
+          accountId: localAccountId,
+          dbName: scopedDb.name,
+          key: metadataKey,
+          rows: result,
+          status: failed ? "error" : "ready",
+        })
+      }
+    })().catch(() => {
+      if (!cancelled)
+        setMetadataResult({
+          accountId: localAccountId,
+          dbName: scopedDb.name,
+          key: metadataKey,
+          rows: {},
+          status: "error",
+        })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [metadataKey, localAccountId, db.name])
+
+  const visibleCaptures = useMemo(
+    () =>
+      captures.filter(
+        (capture) =>
+          (!captureId || capture.id === captureId) &&
+          (!scopedExecution ||
+            (capture.importedAt === undefined &&
+              (associationMatches(metadata[capture.id]?.executionAssociation, scopedExecution) ||
+                (!scopedExecution.runId &&
+                  origin?.association.runId &&
+                  metadata[capture.id]?.executionAssociation?.runId === origin.association.runId))))
+      ),
+    [captures, metadata, scopedExecution, captureId, origin]
+  )
   // The empty branch and the default both need the row type spelled out —
   // otherwise they infer `never[]`, the union collapses, and every field read
   // off a row below fails with "does not exist on type 'never'".
@@ -231,7 +398,12 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
 
   const start = () =>
     run(async () => {
-      await controller.start({ sourceKind, cadenceMs, durationMs })
+      await controller.start({
+        sourceKind,
+        cadenceMs,
+        durationMs,
+        ...(scopedExecution ? { execution: scopedExecution } : {}),
+      })
       setActiveDurationMs(durationMs)
       toast.success(t("toast.started"))
     })
@@ -361,6 +533,33 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
           </div>
         </header>
         <div className="space-y-4 p-4">
+          <p className="text-xs text-muted-foreground">{t("association.scope")}</p>
+          {scopedExecution && (
+            <div className="space-y-1 text-sm">
+              <p>
+                {runId
+                  ? t("association.run", { id: runId })
+                  : t("association.trace", { id: traceId! })}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {originFailed
+                  ? t("association.error")
+                  : origin?.active
+                    ? t("association.fromNow")
+                    : t("association.historical")}
+              </p>
+              <p className="text-xs text-muted-foreground">{t("association.originExpired")}</p>
+              {traceId && (
+                <p className="text-xs text-muted-foreground">{t("association.runScopeEvidence")}</p>
+              )}
+              <Link
+                className="text-primary hover:underline"
+                href={perfDashboardHref({ tab: "captures" })}
+              >
+                {t("association.clear")}
+              </Link>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
               <Label htmlFor="perf-capture-source">{t("controls.source")}</Label>
@@ -428,7 +627,7 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
             ) : (
               <Button
                 onClick={start}
-                disabled={busy || !localAccountId}
+                disabled={busy || !localAccountId || Boolean(scopedExecution && !origin?.active)}
                 data-testid="perf-capture-start"
               >
                 <PlayIcon />
@@ -470,6 +669,8 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
         </div>
       </section>
 
+      {sourceKind === "renderer" && <PerfBrowserDiagnostics />}
+
       <section className={SECTION} aria-labelledby="perf-capture-library-title">
         <header className={SECTION_HEADER}>
           <div className="min-w-0 space-y-1">
@@ -509,7 +710,17 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
           </div>
         </header>
         <div className="space-y-3 p-4">
-          {captures.length === 0 ? (
+          {scopedExecution && metadataState !== "ready" && (
+            <p
+              role={metadataState === "error" ? "alert" : "status"}
+              className="text-sm text-muted-foreground"
+            >
+              {t(`association.${metadataState}`)}
+            </p>
+          )}
+          {visibleCaptures.length === 0 &&
+          scopedExecution &&
+          metadataState !== "ready" ? null : visibleCaptures.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">{t("library.empty")}</p>
           ) : (
             <>
@@ -527,8 +738,12 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
                 />
               ) : null}
               <ul className="divide-y border-y" data-testid="perf-capture-library">
-                {captures.map((capture) => {
+                {visibleCaptures.map((capture) => {
                   const endedAt = capture.stoppedAt ?? capture.updatedAt
+                  const association =
+                    capture.importedAt !== undefined
+                      ? undefined
+                      : metadata[capture.id]?.executionAssociation
                   return (
                     <li
                       key={capture.id}
@@ -569,6 +784,22 @@ export function PerfCapturesTab({ hostAvailable }: { hostAvailable: boolean }) {
                         <p className="truncate font-mono text-[10px] text-muted-foreground/80">
                           {capture.id}
                         </p>
+                        {association?.runId && (
+                          <Link
+                            className="text-xs text-primary hover:underline"
+                            href={`/agent-runs?run=${encodeURIComponent(association.runId)}`}
+                          >
+                            {t("association.openRun")}
+                          </Link>
+                        )}
+                        {association?.traceId && (
+                          <Link
+                            className="ml-2 text-xs text-primary hover:underline"
+                            href={`/logs?channel=traces&traceId=${encodeURIComponent(association.traceId)}`}
+                          >
+                            {t("association.openTrace")}
+                          </Link>
+                        )}
                       </div>
                       <Badge variant={STATUS_TONE[capture.status]}>
                         {t(`status.${capture.status}`)}

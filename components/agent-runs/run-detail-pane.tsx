@@ -31,6 +31,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import Link from "next/link"
 import { buildSessionHref } from "@/lib/chat/message-permalink"
+import { perfDashboardHref } from "@/lib/perf/dashboard-url"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -213,6 +214,15 @@ export function RunDetailPane({ row, actions }: RunDetailPaneProps) {
           className="text-sm text-primary hover:underline"
         >
           {t("actions.openConversation")}
+        </Link>
+      )}
+
+      {row.runId && (
+        <Link
+          className="text-sm text-primary hover:underline"
+          href={perfDashboardHref({ tab: "captures", runId: row.runId })}
+        >
+          {t("actions.performanceEvidence")}
         </Link>
       )}
 

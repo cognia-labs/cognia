@@ -9,6 +9,7 @@
  */
 
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
+import { accountingSpans } from "@cognia/agent-trace/accounting"
 import { bucketBoundaries, type TimeRange } from "./time-range"
 import { percentilesOf } from "./percentiles"
 
@@ -64,7 +65,7 @@ export function costSeries(
   range: TimeRange,
   bucketMs: number
 ): TimeSeries<"costUsd"> {
-  return build(spans, range, bucketMs, (bucket) => ({
+  return build(accountingSpans(spans), range, bucketMs, (bucket) => ({
     costUsd: bucket.reduce((sum, s) => sum + (s.costUsdEstimate ?? 0), 0),
   }))
 }
@@ -75,7 +76,7 @@ export function tokenSeries(
   range: TimeRange,
   bucketMs: number
 ): TimeSeries<"input" | "output" | "cacheRead" | "cacheCreation"> {
-  return build(spans, range, bucketMs, (bucket) => {
+  return build(accountingSpans(spans), range, bucketMs, (bucket) => {
     let input = 0
     let output = 0
     let cacheRead = 0
@@ -126,8 +127,9 @@ export function latencyPercentileSeries(
 ): TimeSeries<"p50" | "p95" | "p99"> {
   return build(spans, range, bucketMs, (bucket) => {
     const durations = bucket
+      .filter((s) => s.metadata?.latencyKnown !== false)
       .map((s) => s.durationMs)
-      .filter((d): d is number => typeof d === "number")
+      .filter((d): d is number => typeof d === "number" && Number.isFinite(d))
     if (durations.length === 0) return { p50: null, p95: null, p99: null }
     const [p50, p95, p99] = percentilesOf(durations, [0.5, 0.95, 0.99])
     return { p50, p95, p99 }
@@ -158,7 +160,7 @@ export function windowKpis(spans: AgentTraceSpan[], range: TimeRange): WindowKpi
   let toolCalls = 0
   let toolFailures = 0
   const durations: number[] = []
-  for (const s of spans) {
+  for (const s of accountingSpans(spans)) {
     totalCost += s.costUsdEstimate ?? 0
     const failed = isError(s)
     if (failed) errors += 1
@@ -172,7 +174,8 @@ export function windowKpis(spans: AgentTraceSpan[], range: TimeRange): WindowKpi
       input += s.usage.inputTokens
       cacheRead += s.usage.cacheReadTokens
     }
-    if (typeof s.durationMs === "number") durations.push(s.durationMs)
+    if (typeof s.durationMs === "number" && s.metadata?.latencyKnown !== false)
+      durations.push(s.durationMs)
   }
   const total = spans.length
   const cacheable = input + cacheRead

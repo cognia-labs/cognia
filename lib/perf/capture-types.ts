@@ -10,6 +10,7 @@ export type PerfCaptureStopReason =
   | "account-locked"
   | "quota-exceeded"
   | "client-terminated"
+  | "write-failed"
 
 export type PerfSignatureTrustState =
   "verified" | "valid-untrusted" | "origin-unverified" | "rejected-invalid"

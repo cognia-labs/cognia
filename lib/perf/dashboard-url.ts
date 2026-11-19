@@ -10,6 +10,7 @@
  */
 
 import { isPerfMetricId, type PerfMetricId } from "./metric-catalog"
+import { executionIdentity } from "./execution-correlation"
 
 export const PERF_DASHBOARD_TABS = ["overview", "diagnose", "resources", "captures"] as const
 export type PerfDashboardTab = (typeof PERF_DASHBOARD_TABS)[number]
@@ -21,6 +22,9 @@ export interface PerfDashboardUrlState {
   tab: PerfDashboardTab
   resource: PerfResourceSection
   metric: PerfMetricId | null
+  runId?: string | null
+  traceId?: string | null
+  captureId?: string | null
 }
 
 export const PERF_TAB_PARAM = "tab"
@@ -52,6 +56,12 @@ export function parsePerfDashboardParams(
     tab: isTab(tab) ? tab : DEFAULT_PERF_DASHBOARD_STATE.tab,
     resource: isResource(resource) ? resource : DEFAULT_PERF_DASHBOARD_STATE.resource,
     metric: metric && isPerfMetricId(metric) ? metric : null,
+    ...Object.fromEntries(
+      ["runId", "traceId", "captureId"].flatMap((key) => {
+        const value = executionIdentity(params?.get(key))
+        return value ? [[key, value]] : []
+      })
+    ),
   }
 }
 
@@ -64,6 +74,12 @@ export function mergePerfDashboardParams(
   state: Partial<PerfDashboardUrlState>
 ): string {
   const params = new URLSearchParams(search)
+  for (const key of ["runId", "traceId", "captureId"] as const) {
+    if (state[key] === undefined) continue
+    const value = executionIdentity(state[key])
+    if (value) params.set(key, value)
+    else params.delete(key)
+  }
   if (state.tab !== undefined) {
     if (state.tab === DEFAULT_PERF_DASHBOARD_STATE.tab) params.delete(PERF_TAB_PARAM)
     else params.set(PERF_TAB_PARAM, state.tab)

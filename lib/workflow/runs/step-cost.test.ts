@@ -1,4 +1,4 @@
-import { stepCostUsd, stepUsageFromPayload } from "./step-cost"
+import { stepCostUsd, stepUsageFromPayload, stepUsageKey } from "./step-cost"
 
 const tokens = { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }
 
@@ -6,6 +6,9 @@ describe("stepCostUsd", () => {
   it("uses the cost the node reported, zero included", () => {
     expect(stepCostUsd({ ...tokens, costUsd: 0.25, modelId: "gpt-4o" })).toBe(0.25)
     expect(stepCostUsd({ ...tokens, costUsd: 0 })).toBe(0)
+    expect(
+      stepCostUsd({ ...tokens, costUsd: 0.1, costKnown: false, modelId: "gpt-4o" })
+    ).toBeUndefined()
   })
 
   it("prices a report without a cost from the model's pricing table", () => {
@@ -31,6 +34,7 @@ describe("stepUsageFromPayload", () => {
     expect(
       stepUsageFromPayload({
         inputTokens: 10,
+        stepExecutionId: "attempt-a",
         outputTokens: 5,
         cacheReadTokens: "x",
         modelId: 3,
@@ -39,6 +43,7 @@ describe("stepUsageFromPayload", () => {
       })
     ).toEqual({
       inputTokens: 10,
+      stepExecutionId: "attempt-a",
       outputTokens: 5,
       totalTokens: 15,
       cacheReadTokens: 0,
@@ -47,6 +52,9 @@ describe("stepUsageFromPayload", () => {
       modelId: undefined,
       costUsd: undefined,
     })
+    expect(stepUsageKey("node", { stepExecutionId: "attempt-a" })).not.toBe(
+      stepUsageKey("node", { stepExecutionId: "attempt-b" })
+    )
   })
 
   it("is null for a payload that is not an object", () => {

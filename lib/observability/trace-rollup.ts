@@ -9,6 +9,7 @@
  */
 
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
+import { accountingSpans } from "@cognia/agent-trace/accounting"
 import type {
   TraceRollupRow,
   Waterfall,
@@ -33,7 +34,7 @@ function spanLabel(span: AgentTraceSpan): string {
 /** One row per trace, newest-first. */
 export function rollupTraces(spans: AgentTraceSpan[]): TraceRollupRow[] {
   const groups = new Map<string, AgentTraceSpan[]>()
-  for (const s of spans) {
+  for (const s of accountingSpans(spans)) {
     const arr = groups.get(s.traceId)
     if (arr) arr.push(s)
     else groups.set(s.traceId, [s])

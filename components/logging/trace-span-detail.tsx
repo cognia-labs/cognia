@@ -23,6 +23,7 @@
  */
 
 import { useMemo } from "react"
+import Link from "next/link"
 import { useTranslations } from "next-intl"
 import { CheckIcon, CopyIcon, ExternalLinkIcon, ScrollTextIcon } from "lucide-react"
 
@@ -34,6 +35,7 @@ import { useCopy } from "@/hooks/ui"
 import { useObservabilityFormatters } from "@/hooks/observability/use-observability-formatters"
 import { useSpanLabels } from "@/hooks/observability/use-span-labels"
 import { cn } from "@/lib/utils"
+import { perfDashboardHref } from "@/lib/perf/dashboard-url"
 import type { AgentTraceSpan, SpanStatus } from "@/types/agent-trace/span"
 
 export interface TraceSpanDetailProps {
@@ -183,7 +185,11 @@ export function TraceSpanDetail({
         </div>
 
         <Section title={t("timing")}>
-          <Row label={t("duration")}>{fmt.duration(span.durationMs ?? 0)}</Row>
+          <Row label={t("duration")}>
+            {span.metadata?.latencyKnown === false || span.durationMs === undefined
+              ? t("durationUnknown")
+              : fmt.duration(span.durationMs)}
+          </Row>
           <Row label={t("startedAt")}>{fmt.time(span.startTime)}</Row>
           <Row label={t("offset")}>
             {t("offsetValue", { value: fmt.duration(Math.max(0, span.startTime - traceStart)) })}
@@ -323,6 +329,12 @@ export function TraceSpanDetail({
         </Section>
 
         <div className="flex flex-col gap-1.5">
+          <Link
+            className="text-xs text-primary hover:underline"
+            href={perfDashboardHref({ tab: "captures", traceId: span.traceId })}
+          >
+            {t("performanceEvidence")}
+          </Link>
           {onOpenInLogs && (
             <Button
               variant="outline"

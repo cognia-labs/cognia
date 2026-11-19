@@ -74,6 +74,89 @@ jest.mock("@/lib/native/native-logging", () => ({
 }))
 
 describe("bootstrapLogger persistence + transport attach/detach", () => {
+  it("persists pending and terminal rows locally without exporting a pending duplicate", async () => {
+    localStorage.setItem(
+      "cognia-logging-transports",
+      JSON.stringify({
+        console: false,
+        indexedDB: false,
+        native: false,
+        remote: false,
+        agentTrace: true,
+        agentTraceOtlp: true,
+        agentTraceOtlpConfig: {
+          preset: "custom",
+          endpoint: "http://127.0.0.1:4318/v1/traces",
+          headers: {},
+          serviceName: "test",
+        },
+      })
+    )
+    const { bootstrapLogger } = await import("./bootstrap")
+    bootstrapLogger()
+    const { getTransport } = await import("@cognia/logging")
+    const { startSpan, endSpan } = await import("@cognia/agent-trace/emitter")
+    const { queryByTrace } = await import("@/lib/db/agent-traces")
+    const handle = startSpan({
+      operationName: "invoke_agent",
+      surface: "chat",
+      providerName: "openai",
+      sessionId: "pending-test",
+    })
+    const local = getTransport("agent-trace") as { flush(): Promise<void> }
+    const remote = getTransport("agent-trace-otlp") as { getHealth(): { queueDepth: number } }
+    await local.flush()
+    expect(await queryByTrace(handle.traceId)).toEqual([
+      expect.objectContaining({ status: "pending" }),
+    ])
+    expect(remote.getHealth().queueDepth).toBe(0)
+    endSpan(handle.spanId)
+    await local.flush()
+    expect(await queryByTrace(handle.traceId)).toEqual([expect.objectContaining({ status: "ok" })])
+    expect(remote.getHealth().queueDepth).toBe(1)
+  })
+  it("exports renderer-owned workflow, MCP and plugin spans even when a Host exists", async () => {
+    mockIsTauri.mockReturnValue(true)
+    localStorage.setItem(
+      "cognia-logging-transports",
+      JSON.stringify({
+        console: false,
+        indexedDB: false,
+        native: false,
+        remote: false,
+        agentTrace: false,
+        agentTraceOtlp: true,
+        agentTraceOtlpConfig: {
+          preset: "custom",
+          endpoint: "http://127.0.0.1:4318/v1/traces",
+          headers: {},
+          serviceName: "test",
+        },
+      })
+    )
+    const { bootstrapLogger } = await import("./bootstrap")
+    bootstrapLogger()
+    const { getTransport } = await import("@cognia/logging")
+    const { emitFinishedSpan } = await import("@cognia/agent-trace/emitter")
+    for (const [operationName, surface] of [
+      ["chat", "workflow"],
+      ["execute_tool", "mcp"],
+      ["execute_tool", "plugin"],
+    ] as const) {
+      emitFinishedSpan({ operationName, surface, providerName: "cognia.plugin", sessionId: "s" })
+    }
+    const transport = getTransport("agent-trace-otlp") as {
+      flush(): Promise<void>
+      getHealth(): { queueDepth: number }
+    }
+    expect(transport.getHealth().queueDepth).toBe(3)
+    await transport.flush()
+    expect(mockPostTauriTelemetryJson).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("execute_tool"),
+      expect.anything()
+    )
+  })
   it("exports ordinary logs independently from Agent Trace through the Rust Host", async () => {
     mockIsTauri.mockReturnValue(true)
     localStorage.setItem("cognia-logging-config", JSON.stringify({ enableConsole: false }))

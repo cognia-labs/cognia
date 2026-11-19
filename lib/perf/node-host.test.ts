@@ -31,6 +31,42 @@ const request = (deviceId = "device-a", purpose: "live" | "capture" = "live") =>
 })
 
 describe("NodePerformanceHost", () => {
+  it("reactivates observers when the last lease is replaced during an in-flight collection", async () => {
+    let resolveCollect!: (value: Awaited<ReturnType<NodePerformanceProvider["collect"]>>) => void
+    const collecting = new Promise<Awaited<ReturnType<NodePerformanceProvider["collect"]>>>(
+      (resolve) => {
+        resolveCollect = resolve
+      }
+    )
+    const setActive = jest.fn()
+    const host = new NodePerformanceHost(
+      { ...provider, setActive, collect: () => collecting },
+      { emit: jest.fn() }
+    )
+    const first = await host.open(request())
+    if (!first.accepted) throw new Error("expected lease")
+    jest.advanceTimersByTime(500)
+    await Promise.resolve()
+    await host.close(first.lease.leaseId, "device-a")
+    wall += 200
+    const next = await host.open(request())
+    expect(next.accepted).toBe(true)
+    expect(setActive).toHaveBeenLastCalledWith(true)
+    resolveCollect(await provider.collect())
+    await Promise.resolve()
+    await host.stop()
+  })
+  it("suspends expensive observers until a lease is accepted and after the final close", async () => {
+    const setActive = jest.fn()
+    const host = new NodePerformanceHost({ ...provider, setActive }, { emit: jest.fn() })
+    expect(setActive).not.toHaveBeenCalledWith(true)
+    const lease = await host.open(request())
+    if (!lease.accepted) throw new Error("expected lease")
+    expect(setActive).toHaveBeenLastCalledWith(true)
+    await host.close(lease.lease.leaseId, "device-a")
+    expect(setActive).toHaveBeenLastCalledWith(false)
+    await host.stop()
+  })
   beforeEach(() => {
     jest.useFakeTimers()
     wall = 1_000

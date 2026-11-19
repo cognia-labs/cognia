@@ -40,6 +40,35 @@ async function flushAsync() {
 }
 
 describe("recordProviderOutcome", () => {
+  it("positions a completed provider span before the observation time", () => {
+    const clock = jest.spyOn(Date, "now").mockReturnValue(20000)
+    try {
+      recordProviderOutcome({
+        providerId: "openai",
+        ok: true,
+        latencyMs: 5000,
+        sessionId: "s",
+        traceId: "a".repeat(32),
+        parentSpanId: "b".repeat(16),
+      })
+      expect(emitFinishedSpan).toHaveBeenCalledWith(
+        expect.objectContaining({ startTime: 15000, endTime: 20000, durationMs: 5000 })
+      )
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it("counts a failed request without inventing a zero-latency sample", () => {
+    recordProviderOutcome({ providerId: "p", ok: true, latencyMs: 10000 })
+    recordProviderOutcome({ providerId: "p", ok: false, errorMessage: "failed" })
+    expect(useHealthMetricsStore.getState().getMetrics("p")).toMatchObject({
+      totalRequests: 2,
+      totalErrors: 1,
+      latencyAvg: 10000,
+      latencySampleCount: 1,
+    })
+  })
   it("counts and warns when a session outcome has no trace id", () => {
     __TESTING__.resetMissingTraceContextCount()
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
@@ -370,7 +399,7 @@ describe("recordProviderOutcome — agent-trace provider child span", () => {
           cacheReadTokens: 200,
         },
         costUsdEstimate: 0.012,
-        metadata: { providerId: "anthropic" },
+        metadata: { providerId: "anthropic", accountingParentSpanId: "b".repeat(16) },
       })
     )
     const span = emitFinishedSpan.mock.calls[0][0]
@@ -391,7 +420,7 @@ describe("recordProviderOutcome — agent-trace provider child span", () => {
       expect.objectContaining({
         providerName: "openai",
         surface: "chat",
-        metadata: { providerId: "openai" },
+        metadata: { providerId: "openai", accountingParentSpanId: "b".repeat(16) },
       })
     )
   })

@@ -48,7 +48,7 @@ import {
   OtlpLogTransport,
 } from "./transports"
 import { setPlatformLoggingConfig } from "@/lib/native/native-logging"
-import { setAgentTraceWriter } from "@cognia/agent-trace/emitter"
+import { setAgentTraceWriter, setAgentTracePendingWriter } from "@cognia/agent-trace/emitter"
 import { spanToLogEntry } from "@cognia/agent-trace/span-to-log-entry"
 import { hasNoLeakingPii } from "@cognia/redact"
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
@@ -219,11 +219,6 @@ const VALID_LOG_LEVELS: ReadonlySet<LogLevel> = new Set([
   "error",
   "fatal",
 ])
-
-/** AI SDK 7 emits these observations from the sidecar's shared OTel runtime. */
-function isNotSidecarAutoObservation(span: AgentTraceSpan): boolean {
-  return span.operationName !== "chat" && span.operationName !== "execute_tool"
-}
 
 let hasBootstrapped = false
 let currentState: LoggingBootstrapState | null = null
@@ -854,7 +849,6 @@ function applyTransportSettings(
         captureModelContent: transports.langfuseConfig.captureModelContent,
         captureToolContent: transports.langfuseConfig.captureToolContent,
         maxPreviewBytes: transports.agentTraceConfig.maxPreviewBytes,
-        spanFilter: isNotSidecarAutoObservation,
         hostIngest: ingestLangfuseTraceBatch,
       })
     )
@@ -949,7 +943,6 @@ function applyTransportSettings(
       // Remote OTLP is metadata-only even when local agent-trace previews are enabled.
       captureContent: false,
       maxPreviewBytes: 0,
-      spanFilter: hasAiExecutionHost ? isNotSidecarAutoObservation : undefined,
       fetchImpl: genericOtlpFetch,
     } as const
     if (otlpExisting && typeof otlpExisting.updateOptions === "function") {
@@ -1018,7 +1011,6 @@ function applyTransportSettings(
       // PostHog's OTLP intake rejects request bodies above 4 MB. The transport
       // recursively splits by serialized UTF-8 size before sending.
       maxRequestBytes: 4 * 1024 * 1024,
-      spanFilter: hasAiExecutionHost ? isNotSidecarAutoObservation : undefined,
       fetchImpl,
     } as const
     if (existing) {
@@ -1037,6 +1029,7 @@ function applyTransportSettings(
   }
 
   const hasPostHogAi = posthogDestinations.some((item) => item.aiObservability)
+  setAgentTracePendingWriter(transports.agentTrace ? persistPendingSpan : null)
   setAgentTraceWriter(
     transports.agentTrace || transports.agentTraceOtlp || langfuseRuntimeEnabled || hasPostHogAi
       ? dispatchSpanToTransports
@@ -1180,11 +1173,22 @@ function dispatchSpanToTransports(span: AgentTraceSpan): void {
   for (const t of getTransports()) {
     try {
       void t.log(entry)
+      if (t.name === "agent-trace") void t.flush?.()
     } catch {
       // Transports report their own diagnostics; the emitter contract
       // forbids throwing back into instrumented code.
     }
   }
+}
+
+function persistPendingSpan(span: AgentTraceSpan): void {
+  const transport = getTransport<AgentTraceTransport>("agent-trace")
+  if (!transport) return
+  transport.log(spanToLogEntry(span))
+  // Queue the IndexedDB transaction immediately. A synchronous start/end call
+  // is not a disk-commit acknowledgement; callers can await transport.flush()
+  // and inspect transport.getHealth() for a persistence failure.
+  void transport.flush()
 }
 
 export function bootstrapLogger(config?: Partial<UnifiedLoggerConfig>): LoggingBootstrapState {

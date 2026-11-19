@@ -344,6 +344,7 @@ function buildSurfaceRow(args: {
   surface: UsageSurface
   usage: SurfaceUsageInput
   at: number
+  allowEmpty?: boolean
 }): SessionUsageRow | null {
   const { usage } = args
   const inputTokens = num(usage.inputTokens)
@@ -371,7 +372,8 @@ function buildSurfaceRow(args: {
     cacheReadTokens === 0 &&
     splitCacheCreation === 0 &&
     unitCount === 0 &&
-    costUsd === 0
+    costUsd === 0 &&
+    !args.allowEmpty
   ) {
     return null
   }
@@ -472,18 +474,32 @@ export async function recordGoalUsage(args: {
 export async function recordWorkflowStepUsage(args: {
   runId: string
   stepId: string
+  stepExecutionId?: string
   usage: SurfaceUsageInput
   at?: number
 }): Promise<SessionUsageRow | null> {
   if (!args.runId || !args.stepId) return null
   const row = buildSurfaceRow({
-    messageId: `wf:${args.runId}:${args.stepId}`,
+    messageId: args.stepExecutionId
+      ? `wf-execution:${JSON.stringify([args.runId, args.stepId, args.stepExecutionId])}`
+      : `wf:${args.runId}:${args.stepId}`,
     sessionId: `wf:${args.runId}`,
     surface: "workflow",
-    usage: args.usage,
+    usage: {
+      ...args.usage,
+      ...(typeof args.usage.costUsd === "number" &&
+      Number.isFinite(args.usage.costUsd) &&
+      args.usage.costUsd >= 0 &&
+      args.usage.costKnown !== false
+        ? { costKnown: true, costSource: args.usage.costSource ?? "sdk" }
+        : {}),
+    },
     at: args.at ?? Date.now(),
+    allowEmpty: Boolean(args.stepExecutionId),
   })
   if (!row) return null
+  row.runId = args.runId
+  if (args.stepExecutionId) row.attemptId = args.stepExecutionId
   await upsertSessionUsage(row)
   return row
 }

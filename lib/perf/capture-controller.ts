@@ -18,7 +18,16 @@ import {
 } from "./capture-service"
 import { PerformanceQuotaManager } from "./quota"
 import { getRendererPerformanceCollector } from "./renderer-collector"
-import { subscribePerformanceSecurityBarrier } from "./security-generation"
+import {
+  subscribePerformanceSecurityBarrier,
+  getPerformanceSecurityGeneration,
+  assertPerformanceSecurityGeneration,
+} from "./security-generation"
+import {
+  resolveExecutionAssociation,
+  type PerformanceExecutionContext,
+} from "./execution-correlation"
+import { getRendererDiagnostics } from "./renderer-diagnostics"
 
 const HEARTBEAT_MS = 5_000
 
@@ -26,6 +35,7 @@ export interface StartPerformanceCaptureInput {
   sourceKind: PerfSourceKind
   cadenceMs: number
   durationMs?: number
+  execution?: PerformanceExecutionContext
 }
 
 export interface PerformanceCaptureControllerState {
@@ -66,6 +76,7 @@ export class PerformanceCaptureController {
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private leaseId: string | null = null
   private session: PerformanceCaptureSession | null = null
+  private starting = false
   private quota: PerformanceQuotaManager | null = null
   private writeQueue: Promise<void> = Promise.resolve()
   private lastSequence: number | null = null
@@ -105,6 +116,23 @@ export class PerformanceCaptureController {
   }
 
   async start(input: StartPerformanceCaptureInput): Promise<string> {
+    if (this.starting || this.state.active || this.session)
+      throw new Error("performance-capture-already-active")
+    this.starting = true
+    try {
+      return await this.startCapture(input)
+    } catch (error) {
+      this.teardownDemand()
+      this.quota?.close()
+      this.quota = null
+      this.accountId = null
+      throw error
+    } finally {
+      this.starting = false
+    }
+  }
+
+  private async startCapture(input: StartPerformanceCaptureInput): Promise<string> {
     if (this.state.active || this.session) throw new Error("performance-capture-already-active")
     if (!Number.isSafeInteger(input.cadenceMs) || input.cadenceMs < 500) {
       throw new Error("performance-capture-cadence-invalid")
@@ -118,7 +146,30 @@ export class PerformanceCaptureController {
     const targetId = scope?.targetId ?? "web-standalone"
     const routingGeneration = scope?.routingGeneration ?? 0
     const db = this.dependencies.getDb()
+    const securityGeneration = getPerformanceSecurityGeneration()
+    const assertStartScope = () => {
+      assertPerformanceSecurityGeneration(securityGeneration)
+      const currentScope = this.dependencies.getScope()
+      if (
+        this.dependencies.getAccountId() !== accountId ||
+        (currentScope?.accountId ?? accountId) !== accountId
+      )
+        throw new Error("performance-capture-account-locked")
+      if (
+        (currentScope?.targetId ?? "web-standalone") !== targetId ||
+        (currentScope?.routingGeneration ?? 0) !== routingGeneration ||
+        this.dependencies.getDb().name !== db.name
+      )
+        throw new Error("performance-capture-target-mismatch")
+    }
+    const execution = input.execution
+      ? await resolveExecutionAssociation(db, input.execution)
+      : null
+    assertStartScope()
+    if (input.execution && !execution?.active)
+      throw new Error("performance-capture-execution-inactive")
     const key = await this.dependencies.loadKey(accountId)
+    assertStartScope()
     const quota = this.dependencies.createQuota()
     this.quota = quota
     this.accountId = accountId
@@ -142,6 +193,7 @@ export class PerformanceCaptureController {
         hardwareConcurrency:
           typeof navigator === "undefined" ? null : navigator.hardwareConcurrency || null,
         platform: typeof navigator === "undefined" ? null : navigator.platform || null,
+        diagnostics: getRendererDiagnostics().getSnapshot(),
       }
     } else {
       this.unsubscribeFrames = subscribePerfFrame((frame) => {
@@ -174,6 +226,7 @@ export class PerformanceCaptureController {
     }
 
     try {
+      assertStartScope()
       this.session = await this.dependencies.coordinator().start({
         accountId,
         targetDatabase: db.name,
@@ -182,13 +235,24 @@ export class PerformanceCaptureController {
         source,
         requestedCadenceMs: input.cadenceMs,
         environmentSnapshot,
+        executionAssociation: execution?.association,
         key,
         db,
         quota,
         durationMs: input.durationMs,
         onDemandEnd: () => this.endDemand(),
-        onStopped: () => this.completeSession(),
+        onStopped: (error) => this.completeSession(error?.message ?? this.state.error),
       })
+      try {
+        assertStartScope()
+      } catch (error) {
+        await this.dependencies
+          .coordinator()
+          .stop("target-switched")
+          .catch(() => undefined)
+        this.session = null
+        throw error
+      }
     } catch (error) {
       this.teardownDemand()
       quota.close()

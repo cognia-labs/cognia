@@ -149,6 +149,29 @@ describe("recordExternalAgentUsage", () => {
 })
 
 describe("recordWorkflowStepUsage", () => {
+  it("retracts a previous execution snapshot when its final bill and tokens become zero", async () => {
+    const args = { runId: "zero", stepId: "n", stepExecutionId: "a" }
+    await recordWorkflowStepUsage({
+      ...args,
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 500,
+        costUsd: 0.1,
+        providerId: "openai",
+        model: "gpt-4o",
+      },
+    })
+    await recordWorkflowStepUsage({
+      ...args,
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, providerId: "openai", model: "gpt-4o" },
+    })
+    expect(await listUsageForSession("wf:zero")).toEqual([
+      expect.objectContaining({ inputTokens: 0, costUsd: 0, costKnown: true }),
+    ])
+    expect(
+      (await getDb().providerCostDaily.toArray()).reduce((sum, row) => sum + row.totalCostUsd, 0)
+    ).toBeCloseTo(0)
+  })
   it("shadow-writes a workflow row with synthetic id + surface", async () => {
     const written = await recordWorkflowStepUsage({
       runId: "run1",
@@ -177,7 +200,28 @@ describe("recordWorkflowStepUsage", () => {
     expect(list).toHaveLength(1)
   })
 
-  it("is idempotent per step — a retry overwrites in place", async () => {
+  it("keeps independent step executions and replaces only snapshots of the same execution", async () => {
+    for (const [stepExecutionId, costUsd] of [
+      ["a", 0.01],
+      ["a", 0.02],
+      ["b", 0.03],
+    ] as const) {
+      await recordWorkflowStepUsage({
+        runId: "r",
+        stepId: "n1",
+        stepExecutionId,
+        usage: { inputTokens: 10, outputTokens: 2, costUsd, providerId: "openai", model: "gpt-4o" },
+      })
+    }
+    const rows = await listUsageForSession("wf:r")
+    expect(rows).toHaveLength(2)
+    expect(rows.reduce((total, row) => total + row.costUsd, 0)).toBeCloseTo(0.05)
+    expect(rows.every((row) => row.runId === "r" && row.attemptId)).toBe(true)
+    const daily = await getDb().providerCostDaily.toArray()
+    expect(daily.reduce((total, row) => total + row.totalCostUsd, 0)).toBeCloseTo(0.05)
+  })
+
+  it("preserves the legacy key when no step execution identity is available", async () => {
     await recordWorkflowStepUsage({
       runId: "r",
       stepId: "n1",

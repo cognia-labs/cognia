@@ -72,6 +72,69 @@ const frame = (sequence: number): PerfFrame => ({
 })
 
 describe("PerformanceCaptureController", () => {
+  it("stops a newly created session when scope changes during the final coordinator await", async () => {
+    let targetId = "target-a"
+    let finishStart!: (session: unknown) => void
+    const pendingSession = new Promise((resolve) => {
+      finishStart = resolve
+    })
+    const start = jest.fn(() => pendingSession)
+    const stop = jest.fn(async () => undefined)
+    const controller = new PerformanceCaptureController({
+      getDb: () => ({ name: `db-${targetId}` }) as never,
+      getScope: () => ({ accountId: "account-a", targetId, routingGeneration: 1 }),
+      getAccountId: () => "account-a",
+      loadKey: async () => new Uint8Array(32),
+      createQuota: () => ({ close: jest.fn() }) as never,
+      coordinator: () => ({ start, stop }) as never,
+      now: Date.now,
+    })
+    const pending = controller.start({ sourceKind: "renderer", cadenceMs: 1000 })
+    await Promise.resolve()
+    expect(start).toHaveBeenCalledTimes(1)
+    targetId = "target-b"
+    finishStart({ id: "late-session" })
+    await expect(pending).rejects.toThrow("target-mismatch")
+    expect(stop).toHaveBeenCalledWith("target-switched")
+    expect(controller.snapshot.active).toBe(false)
+    controller.dispose()
+  })
+  it.each(["account", "target", "lock"])(
+    "rejects pending starts invalidated by a %s transition and blocks concurrent starts",
+    async (transition) => {
+      let accountId = "account-a"
+      let targetId = "target-a"
+      let releaseKey!: (key: Uint8Array) => void
+      const key = new Promise<Uint8Array>((resolve) => {
+        releaseKey = resolve
+      })
+      const start = jest.fn()
+      const controller = new PerformanceCaptureController({
+        getDb: () => ({ name: `db-${targetId}` }) as never,
+        getScope: () => ({ accountId, targetId, routingGeneration: 1 }),
+        getAccountId: () => accountId,
+        loadKey: () => key,
+        createQuota: () => ({ close: jest.fn() }) as never,
+        coordinator: () => ({ start, stop: jest.fn() }) as never,
+        now: Date.now,
+      })
+      const pending = controller.start({ sourceKind: "renderer", cadenceMs: 1000 })
+      await expect(controller.start({ sourceKind: "renderer", cadenceMs: 1000 })).rejects.toThrow(
+        "already-active"
+      )
+      if (transition === "account") accountId = "account-b"
+      if (transition === "target") targetId = "target-b"
+      if (transition === "lock") {
+        const { bumpPerformanceSecurityGeneration } = await import("./security-generation")
+        bumpPerformanceSecurityGeneration(accountId, "account-locked")
+      }
+      releaseKey(new Uint8Array(32))
+      await expect(pending).rejects.toThrow()
+      expect(start).not.toHaveBeenCalled()
+      expect(controller.snapshot.active).toBe(false)
+      controller.dispose()
+    }
+  )
   beforeEach(() => {
     rendererListeners.clear()
     closeDemand.mockClear()

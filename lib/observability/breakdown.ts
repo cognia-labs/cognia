@@ -4,6 +4,7 @@
  */
 
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
+import { accountingSpans } from "@cognia/agent-trace/accounting"
 import { modelKeyOf } from "./model-key"
 
 export type Dimension =
@@ -90,7 +91,7 @@ function isError(span: AgentTraceSpan): boolean {
 /** Group spans by a dimension, sorted by span count descending. */
 export function breakdownBy(spans: AgentTraceSpan[], dim: Dimension): BreakdownRow[] {
   const map = new Map<string, BreakdownRow & { _latencySum: number; _latencyCount: number }>()
-  for (const s of spans) {
+  for (const s of accountingSpans(spans)) {
     const key = dimValue(s, dim)
     if (key === null) continue
     let row = map.get(key)
@@ -115,7 +116,11 @@ export function breakdownBy(spans: AgentTraceSpan[], dim: Dimension): BreakdownR
       row.outputTokens += s.usage.outputTokens
     }
     if (isError(s)) row.errors += 1
-    if (typeof s.durationMs === "number") {
+    if (
+      typeof s.durationMs === "number" &&
+      Number.isFinite(s.durationMs) &&
+      s.metadata?.latencyKnown !== false
+    ) {
       row._latencySum += s.durationMs
       row._latencyCount += 1
     }

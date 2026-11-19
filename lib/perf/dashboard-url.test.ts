@@ -9,6 +9,20 @@ import {
 } from "./dashboard-url"
 
 describe("performance dashboard URL state", () => {
+  it("round-trips explicit run, trace and capture selections without changing scope", () => {
+    const href = perfDashboardHref({
+      tab: "captures",
+      runId: "execution:r/1",
+      traceId: "t",
+      captureId: "c",
+    })
+    expect(parsePerfDashboardParams(new URLSearchParams(href.split("?")[1]))).toEqual(
+      expect.objectContaining({ runId: "execution:r/1", traceId: "t", captureId: "c" })
+    )
+    expect(
+      mergePerfDashboardParams("runId=r&traceId=t&accountId=other", { runId: null, traceId: null })
+    ).toBe("accountId=other")
+  })
   it("parses known values and falls back to defaults for unknown ones", () => {
     expect(
       parsePerfDashboardParams(

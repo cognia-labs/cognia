@@ -66,6 +66,36 @@ function frame(sequence: number): PerfFrame {
 }
 
 describe("PerformanceCaptureSession", () => {
+  it("rejects a security barrier during the final metadata quota commit", async () => {
+    const commit = quota.commit.bind(quota)
+    const spy = jest.spyOn(quota, "commit").mockImplementation(async (...args) => {
+      await commit(...args)
+      bumpPerformanceSecurityGeneration("account-a", "account-locked", 123)
+    })
+    await expect(start()).rejects.toThrow("performance-security-generation-changed")
+    spy.mockRestore()
+    expect(await db.performanceCaptures.toArray()).toEqual([
+      expect.objectContaining({ status: "failed", stopReason: "account-locked" }),
+    ])
+  })
+  it("persists a failed state after a chunk write fails and never finalizes it as ready", async () => {
+    const stopped = jest.fn()
+    const session = await start(jest.fn(), stopped)
+    await session.append(frame(1))
+    const add = jest
+      .spyOn(db.performanceCaptureChunks, "add")
+      .mockRejectedValueOnce(new Error("disk-failure"))
+    await expect(session.flush()).rejects.toThrow("disk-failure")
+    add.mockRestore()
+    expect(session.isActive).toBe(false)
+    expect(await db.performanceCaptures.get(session.id)).toMatchObject({
+      status: "failed",
+      stopReason: "write-failed",
+    })
+    await expect(session.stop()).rejects.toThrow("disk-failure")
+    expect(await db.performanceCaptures.get(session.id)).toMatchObject({ status: "failed" })
+    expect(stopped).toHaveBeenCalledTimes(1)
+  })
   let db: CogniaDB
   let registryDb: CogniaAccountRegistryDB
   let quota: PerformanceQuotaManager
@@ -140,7 +170,7 @@ describe("PerformanceCaptureSession", () => {
     await Promise.resolve()
     expect(await db.performanceCaptureChunks.count()).toBe(0)
     expect(await db.performanceCaptures.get(session.id)).toMatchObject({
-      status: "ready",
+      status: "failed",
       stopReason: "account-locked",
       stoppedAt: 50,
     })

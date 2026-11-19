@@ -5,10 +5,10 @@
  */
 
 import type { StepUsage, WorkflowRunEventRow } from "@/types/workflow/visual"
-import { stepCostUsd, stepUsageFromPayload } from "./step-cost"
+import { stepCostUsd, stepUsageFromPayload, stepUsageKey } from "./step-cost"
 
 export interface RunUsageSummary {
-  /** Latest usage per step (retries overwrite earlier attempts). */
+  /** Sum of independent executions per step; snapshots of one execution replace. */
   perStep: Record<string, StepUsage>
   totalInputTokens: number
   totalOutputTokens: number
@@ -21,26 +21,52 @@ export interface RunUsageSummary {
 
 export function aggregateRunUsage(events: WorkflowRunEventRow[]): RunUsageSummary {
   const perStep: Record<string, StepUsage> = {}
+  const executions = new Map<string, { stepId: string; usage: StepUsage }>()
+  const unpricedSteps = new Set<string>()
   for (const e of events) {
     if (e.type !== "step_usage" || !e.stepId) continue
     const usage = stepUsageFromPayload(e.payload)
-    // Events arrive in ts order; the last usage for a step (latest retry) wins.
-    if (usage) perStep[e.stepId] = usage
+    // Legacy rows retain their last-per-step policy; only identified executions
+    // can distinguish repeated invocations from repeated cumulative snapshots.
+    if (usage)
+      executions.set(JSON.stringify([e.runId, stepUsageKey(e.stepId, usage)]), {
+        stepId: e.stepId,
+        usage,
+      })
   }
 
   let totalInputTokens = 0
   let totalOutputTokens = 0
   let totalCostUsd: number | undefined
   let hasUnknownCost = false
-  for (const usage of Object.values(perStep)) {
+  for (const { stepId, usage } of executions.values()) {
     totalInputTokens += usage.inputTokens
     totalOutputTokens += usage.outputTokens
     // A node that didn't report a cost (the ai-sdk / non-Anthropic path often
     // can't) is priced from the model's pricing table, so runs on priced
     // models still total up. Only truly-unpriced models stay "unknown".
     const cost = stepCostUsd(usage)
-    if (cost === undefined) hasUnknownCost = true
-    else totalCostUsd = (totalCostUsd ?? 0) + cost
+    if (cost === undefined) {
+      hasUnknownCost = true
+      unpricedSteps.add(stepId)
+    } else totalCostUsd = (totalCostUsd ?? 0) + cost
+    const previous = perStep[stepId]
+    perStep[stepId] = {
+      inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
+      outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
+      totalTokens: (previous?.totalTokens ?? 0) + usage.totalTokens,
+      cacheReadTokens: (previous?.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0),
+      cacheCreationTokens: (previous?.cacheCreationTokens ?? 0) + (usage.cacheCreationTokens ?? 0),
+      providerId:
+        !previous || previous.providerId === usage.providerId ? usage.providerId : undefined,
+      modelId: !previous || previous.modelId === usage.modelId ? usage.modelId : undefined,
+      costUsd: cost === undefined ? previous?.costUsd : (previous?.costUsd ?? 0) + cost,
+    }
+  }
+
+  for (const stepId of unpricedSteps) {
+    perStep[stepId].costUsd = undefined
+    perStep[stepId].costKnown = false
   }
 
   return {

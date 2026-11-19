@@ -32,7 +32,9 @@ import type { SpanSurface } from "@/types/agent-trace/span"
 export interface ProviderOutcome {
   providerId: string
   ok: boolean
-  latencyMs: number
+  latencyMs?: number
+  /** Observation boundary; absent means the time this sink received the outcome. */
+  endTime?: number
   errorMessage?: string
   /**
    * Real HTTP status from the failing response (`session_ended.httpStatus`),
@@ -107,6 +109,11 @@ export function recordProviderOutcome(outcome: ProviderOutcome): void {
     retryAfterMs,
   } = outcome
   if (!providerId) return
+  const measuredLatency =
+    typeof latencyMs === "number" && Number.isFinite(latencyMs) && latencyMs >= 0
+      ? latencyMs
+      : undefined
+  const endTime = outcome.endTime ?? Date.now()
   // Effective cost: the SDK figure wins; otherwise estimate from the token
   // breakdown + the model's pricing tables so non-Anthropic turns still feed
   // the budget mirror + daily rollup (which have no read-time back-fill, unlike
@@ -136,7 +143,7 @@ export function recordProviderOutcome(outcome: ProviderOutcome): void {
       providerId,
       modelId,
       success: ok,
-      latencyMs: Number.isFinite(latencyMs) && latencyMs >= 0 ? latencyMs : 0,
+      latencyMs: measuredLatency,
       errorMessage: ok ? undefined : errorMessage,
       estimatedCostUsd: effectiveCostUsd > 0 ? effectiveCostUsd : undefined,
     })
@@ -201,7 +208,9 @@ export function recordProviderOutcome(outcome: ProviderOutcome): void {
         surface: outcome.surface ?? "chat",
         requestModel: modelId,
         responseModel: modelId,
-        durationMs: Number.isFinite(latencyMs) && latencyMs >= 0 ? latencyMs : 0,
+        startTime: endTime - (measuredLatency ?? 0),
+        endTime,
+        durationMs: measuredLatency,
         usage: {
           inputTokens: inputTokens ?? 0,
           outputTokens: outputTokens ?? 0,
@@ -211,7 +220,11 @@ export function recordProviderOutcome(outcome: ProviderOutcome): void {
         costUsdEstimate: effectiveCostUsd > 0 ? effectiveCostUsd : undefined,
         errorType: ok ? undefined : "provider_error",
         errorMessage: ok ? undefined : errorMessage,
-        metadata: { providerId },
+        metadata: {
+          providerId,
+          ...(outcome.parentSpanId ? { accountingParentSpanId: outcome.parentSpanId } : {}),
+          ...(measuredLatency === undefined ? { latencyKnown: false } : {}),
+        },
       })
     } catch {
       // Span emission is best-effort — never break a send.

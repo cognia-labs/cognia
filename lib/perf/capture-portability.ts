@@ -15,6 +15,10 @@ import {
 } from "./package-format"
 import { PerformanceQuotaManager } from "./quota"
 import { getPerformanceSecurityGeneration } from "./security-generation"
+import {
+  parseExecutionAssociation,
+  type PerformanceExecutionAssociation,
+} from "./execution-correlation"
 
 const FRAME_CONTENT_TYPE = "application/vnd.cognia.perf-frames+json" as const
 const METADATA_CONTENT_TYPE = "application/vnd.cognia.perf-metadata+json" as const
@@ -73,6 +77,7 @@ export interface PerformanceCaptureMetadata {
   requestedCadenceMs: number | null
   environment: unknown
   budget: unknown
+  executionAssociation?: PerformanceExecutionAssociation
 }
 
 /**
@@ -129,6 +134,9 @@ export async function readPerformanceCaptureMetadata(input: {
         : null,
     environment: parsed.environment ?? null,
     budget: parsed.budget ?? null,
+    ...(parseExecutionAssociation(parsed.executionAssociation)
+      ? { executionAssociation: parseExecutionAssociation(parsed.executionAssociation)! }
+      : {}),
   }
 }
 

@@ -12,6 +12,7 @@
 
 import type { Character, SendContent, SendContentBlock } from "@cognia/agent-config-types"
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
+import { accountingContributions } from "@cognia/agent-trace/accounting"
 import type { EvalCase, EvalSample, EvalToolCall, EvalRetrievedChunk } from "@/types/eval/eval"
 import type { EvalTarget } from "@cognia/eval-core"
 import type { EvalPersistenceScope } from "@/lib/db/eval-lab"
@@ -174,34 +175,11 @@ export function assembleSampleFromSpans(
   let minStart = Number.POSITIVE_INFINITY
   let maxEnd = Number.NEGATIVE_INFINITY
   let stepCount = 0
-  const isAggregate = (span: AgentTraceSpan) =>
-    span.metadata?.accountingScope === "aggregate" || span.metadata?.role === "squad-run"
-  const bySpanId = new Map(unique.map((span) => [span.spanId ?? span.id, span]))
-  const coveredBy = (child: AgentTraceSpan, aggregate: AgentTraceSpan) => {
-    if (child.traceId !== aggregate.traceId || child === aggregate) return false
-    if (aggregate.metadata?.role === "squad-run") return true
-    const visited = new Set<string>()
-    let parentId = child.parentSpanId
-    while (parentId && !visited.has(parentId)) {
-      if (parentId === (aggregate.spanId ?? aggregate.id)) return true
-      visited.add(parentId)
-      parentId = bySpanId.get(parentId)?.parentSpanId
-    }
-    return false
-  }
-  const usageAccounting = unique.filter(
-    (span) => !isAggregate(span) || !unique.some((child) => coveredBy(child, span) && child.usage)
+  const contributions = new Map(
+    accountingContributions(unique).map((value) => [value.span.id, value])
   )
-  const costAccounting = unique.filter(
-    (span) =>
-      !isAggregate(span) ||
-      !unique.some((child) => coveredBy(child, span) && typeof child.costUsdEstimate === "number")
-  )
-  const usageIds = new Set(usageAccounting.map((span) => span.id))
-  const costIds = new Set(costAccounting.map((span) => span.id))
   let usageRows = 0
   let costRows = 0
-  let billableRows = 0
   let partialUsage = false
   let partialCost = false
   for (const s of unique) {
@@ -211,20 +189,20 @@ export function assembleSampleFromSpans(
     const billable =
       !orchestrationOnly && (s.operationName === "chat" || s.operationName === "invoke_agent")
     if (billable) {
-      billableRows += 1
-      if (s.metadata?.usageKnown === false) partialUsage = true
-      if (s.metadata?.costKnown === false) partialCost = true
+      if (!contributions.get(s.id)?.usageKnown) partialUsage = true
+      if (!contributions.get(s.id)?.costKnown) partialCost = true
     }
-    if (usageIds.has(s.id) && s.usage) {
+    const contribution = contributions.get(s.id)
+    if (contribution?.usage) {
       usageRows += 1
-      usage.inputTokens += s.usage.inputTokens
-      usage.outputTokens += s.usage.outputTokens
-      usage.cacheReadTokens += s.usage.cacheReadTokens
-      usage.cacheCreationTokens += s.usage.cacheCreationTokens
+      usage.inputTokens += contribution.usage.inputTokens
+      usage.outputTokens += contribution.usage.outputTokens
+      usage.cacheReadTokens += contribution.usage.cacheReadTokens
+      usage.cacheCreationTokens += contribution.usage.cacheCreationTokens
     }
-    if (costIds.has(s.id) && typeof s.costUsdEstimate === "number") {
+    if (typeof contribution?.costUsdEstimate === "number") {
       costRows += 1
-      costUsd += s.costUsdEstimate
+      costUsd += contribution.costUsdEstimate
     }
     if (s.startTime < minStart) minStart = s.startTime
     const end = s.endTime ?? s.startTime
@@ -245,18 +223,8 @@ export function assembleSampleFromSpans(
     stepCount,
     degraded: options.degraded ?? false,
     metricAvailability: {
-      usage:
-        usageRows === 0
-          ? "unavailable"
-          : partialUsage || usageRows < billableRows
-            ? "partial"
-            : "known",
-      cost:
-        costRows === 0
-          ? "unavailable"
-          : partialCost || costRows < billableRows
-            ? "partial"
-            : "estimated",
+      usage: usageRows === 0 ? "unavailable" : partialUsage ? "partial" : "known",
+      cost: costRows === 0 ? "unavailable" : partialCost ? "partial" : "estimated",
       latency: options.wallTimeMs !== undefined || knownSpanTime ? "known" : "unavailable",
       steps: unique.length > 0 ? "known" : "unavailable",
     },

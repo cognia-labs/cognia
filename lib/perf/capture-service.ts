@@ -13,6 +13,7 @@ import {
   subscribePerformanceSecurityBarrier,
 } from "./security-generation"
 import { registerRuntimeTargetTransitionParticipant } from "@/lib/runtime/runtime-target-lifecycle"
+import type { PerformanceExecutionAssociation } from "./execution-correlation"
 
 export const PERFORMANCE_CAPTURE_DEFAULT_DURATION_MS = 10 * 60 * 1000
 export const PERFORMANCE_CAPTURE_MAX_DURATION_MS = 60 * 60 * 1000
@@ -35,6 +36,7 @@ export interface PerformanceCaptureSessionOptions {
   requestedCadenceMs: number
   environmentSnapshot?: unknown
   budgetSnapshot?: unknown
+  executionAssociation?: PerformanceExecutionAssociation
   key: Uint8Array
   db: CogniaDB
   quota: PerformanceQuotaManager
@@ -43,7 +45,7 @@ export interface PerformanceCaptureSessionOptions {
   setTimeout?: TimeoutScheduler
   clearTimeout?: typeof globalThis.clearTimeout
   onDemandEnd?: () => void
-  onStopped?: () => void
+  onStopped?: (error?: Error) => void
 }
 
 /**
@@ -91,6 +93,7 @@ export class PerformanceCaptureSession {
   private flushing: Promise<void> = Promise.resolve()
   private unsubscribeSecurity: (() => void) | null = null
   private stoppedNotified = false
+  private failure: Error | null = null
 
   private constructor(private readonly options: PerformanceCaptureSessionOptions) {
     this.now = options.now ?? Date.now
@@ -114,6 +117,9 @@ export class PerformanceCaptureSession {
         environment: options.environmentSnapshot ?? null,
         requestedCadenceMs: options.requestedCadenceMs,
         budget: options.budgetSnapshot ?? null,
+        ...(options.executionAssociation
+          ? { executionAssociation: options.executionAssociation }
+          : {}),
       })
     )
     const metadataEnvelope = await encryptPerformanceArtifact(
@@ -173,24 +179,39 @@ export class PerformanceCaptureSession {
       })
       await options.quota.commit(reservation.id, metadataByteCount)
       session.payloadBytes = metadataByteCount
+      assertPerformanceSecurityGeneration(session.securityGeneration)
     } catch (error) {
       await options.quota.abandon(reservation.id)
+      await options.db.performanceCaptures
+        .update(session.id, {
+          status: "failed",
+          stopReason:
+            getPerformanceSecurityGeneration() !== session.securityGeneration
+              ? "account-locked"
+              : "write-failed",
+          stoppedAt: session.now(),
+          updatedAt: session.now(),
+        })
+        .catch(() => undefined)
       throw error
     }
     session.unsubscribeSecurity = subscribePerformanceSecurityBarrier((event) => {
       if (event.accountId !== options.accountId || session.stopped) return
       session.stopped = true
+      session.unsubscribeSecurity?.()
+      session.unsubscribeSecurity = null
       session.tail = []
       session.tailBytes = 0
       session.clearTimer()
       options.onDemandEnd?.()
       void options.db.performanceCaptures
         .update(session.id, {
-          status: "ready",
+          status: "failed",
           stopReason: "account-locked",
           stoppedAt: event.at,
           updatedAt: event.at,
         })
+        .catch(() => undefined)
         .finally(() => session.notifyStopped())
     })
     session.armTimer()
@@ -233,7 +254,12 @@ export class PerformanceCaptureSession {
   }
 
   async flush(): Promise<void> {
-    this.flushing = this.flushing.then(() => this.flushTail())
+    this.flushing = this.flushing
+      .then(() => this.flushTail())
+      .catch(async (error: unknown) => {
+        if (!this.stopped) await this.finalizeAfterWriteFailure("write-failed")
+        throw error
+      })
     return this.flushing
   }
 
@@ -351,6 +377,9 @@ export class PerformanceCaptureSession {
         attachmentBytes: this.attachmentBytes,
         frameCount: this.frameCount,
       })
+    } catch (error) {
+      await this.finalizeAfterWriteFailure("write-failed")
+      throw error
     } finally {
       this.notifyStopped()
     }
@@ -444,14 +473,21 @@ export class PerformanceCaptureSession {
 
   private async finalizeAfterWriteFailure(reason: PerfCaptureStopReason): Promise<void> {
     this.stopped = true
+    this.unsubscribeSecurity?.()
+    this.unsubscribeSecurity = null
     this.tail = []
     this.tailBytes = 0
     this.clearTimer()
     this.options.onDemandEnd?.()
+    this.failure = new Error(
+      reason === "quota-exceeded"
+        ? "performance-account-quota-exceeded"
+        : "performance-capture-write-failed"
+    )
     try {
       const now = this.now()
       await this.options.db.performanceCaptures.update(this.id, {
-        status: "ready",
+        status: "failed",
         stopReason: reason,
         stoppedAt: now,
         updatedAt: now,
@@ -464,7 +500,7 @@ export class PerformanceCaptureSession {
   private notifyStopped(): void {
     if (this.stoppedNotified) return
     this.stoppedNotified = true
-    this.options.onStopped?.()
+    this.options.onStopped?.(this.failure ?? undefined)
   }
 
   private armTimer(): void {
@@ -473,8 +509,9 @@ export class PerformanceCaptureSession {
     this.timer = this.schedule(
       () => {
         this.timer = null
-        if (this.now() - this.startedAt >= this.durationMs) void this.stop("duration-limit")
-        else void this.flush()
+        if (this.now() - this.startedAt >= this.durationMs)
+          void this.stop("duration-limit").catch(() => undefined)
+        else void this.flush().catch(() => undefined)
       },
       Math.min(PERFORMANCE_CAPTURE_FLUSH_MS, remaining)
     )
@@ -542,6 +579,7 @@ export async function prunePerformanceCaptures(input: {
 
 export class ActivePerformanceCaptureCoordinator {
   private active: PerformanceCaptureSession | null = null
+  private starting = false
 
   constructor() {
     registerRuntimeTargetTransitionParticipant({
@@ -560,9 +598,15 @@ export class ActivePerformanceCaptureCoordinator {
   }
 
   async start(options: PerformanceCaptureSessionOptions): Promise<PerformanceCaptureSession> {
-    if (this.active?.isActive) throw new Error("performance-capture-already-active")
-    this.active = await PerformanceCaptureSession.start(options)
-    return this.active
+    if (this.starting || this.active?.isActive)
+      throw new Error("performance-capture-already-active")
+    this.starting = true
+    try {
+      this.active = await PerformanceCaptureSession.start(options)
+      return this.active
+    } finally {
+      this.starting = false
+    }
   }
 
   async stop(reason: PerfCaptureStopReason = "manual"): Promise<void> {

@@ -8,6 +8,26 @@ import {
 import { makeSpan } from "./fixtures"
 
 describe("breakdown", () => {
+  it("keeps mirror structure but counts its measurement once and ignores unmeasured latency", () => {
+    const root = makeSpan({
+      spanId: "r",
+      traceId: "t",
+      providerName: "openai",
+      durationMs: 100,
+      costUsdEstimate: 1,
+    })
+    const mirror = makeSpan({
+      spanId: "m",
+      traceId: "t",
+      providerName: "openai",
+      durationMs: 0,
+      costUsdEstimate: 1,
+      metadata: { accountingParentSpanId: "r", latencyKnown: false },
+    })
+    expect(breakdownBy([root, mirror], "provider")[0]).toEqual(
+      expect.objectContaining({ spans: 2, costUsd: 1, avgLatencyMs: 100 })
+    )
+  })
   const spans = [
     makeSpan({
       responseModel: "opus",

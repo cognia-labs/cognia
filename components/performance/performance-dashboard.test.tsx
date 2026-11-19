@@ -149,7 +149,21 @@ jest.mock("./perf-source-health", () => ({
   ),
   PerfSourceNotice: () => <div data-testid="source-notice" />,
 }))
-jest.mock("./perf-captures-tab", () => ({ PerfCapturesTab: () => <div data-testid="captures" /> }))
+jest.mock("./perf-captures-tab", () => ({
+  PerfCapturesTab: ({
+    execution,
+    captureId,
+  }: {
+    execution?: { runId?: string; traceId?: string }
+    captureId?: string
+  }) => (
+    <div
+      data-testid="captures"
+      data-execution={JSON.stringify(execution)}
+      data-capture-id={captureId}
+    />
+  ),
+}))
 jest.mock("./perf-renderer-timings-table", () => ({
   PerfRendererTimingsTable: () => <div data-testid="renderer-timings" />,
 }))
@@ -275,6 +289,17 @@ describe("PerformanceDashboard", () => {
     expect(params.get("tab")).toBe("captures")
     expect(params.get("metric")).toBe("renderer.fps")
     expect(screen.getByTestId("captures")).toBeInTheDocument()
+  })
+
+  it("passes explicit execution and capture selection from navigation to the recorder", () => {
+    mockSearch = "tab=captures&runId=r&traceId=t&captureId=c"
+    usePerfStreamMock.mockReturnValue(baseState)
+    render(<PerformanceDashboard />)
+    expect(screen.getByTestId("captures")).toHaveAttribute(
+      "data-execution",
+      JSON.stringify({ runId: "r", traceId: "t" })
+    )
+    expect(screen.getByTestId("captures")).toHaveAttribute("data-capture-id", "c")
   })
 
   it("routes the overview's source-details link to Diagnose, which carries the source card", () => {

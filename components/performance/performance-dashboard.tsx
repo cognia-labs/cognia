@@ -404,7 +404,15 @@ export function PerformanceDashboard() {
           </TabsContent>
 
           <TabsContent value="captures" className="mt-0">
-            <PerfCapturesTab hostAvailable={hostAvailable} />
+            <PerfCapturesTab
+              hostAvailable={hostAvailable}
+              execution={
+                view.runId || view.traceId
+                  ? { runId: view.runId ?? undefined, traceId: view.traceId ?? undefined }
+                  : undefined
+              }
+              captureId={view.captureId}
+            />
           </TabsContent>
         </div>
       </ScrollArea>

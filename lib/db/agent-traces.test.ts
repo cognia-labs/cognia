@@ -49,6 +49,21 @@ function span(over: Partial<AgentTraceSpan>): AgentTraceSpan {
 }
 
 describe("insertSpan", () => {
+  it("uses shared per-measurement accounting and excludes unknown latency", async () => {
+    await bulkInsertSpans([
+      span({ id: "r", costUsdEstimate: 1, durationMs: 100 }),
+      span({
+        id: "m",
+        costUsdEstimate: 1,
+        durationMs: 0,
+        metadata: { accountingParentSpanId: "r", latencyKnown: false },
+      }),
+    ])
+    expect(await aggregateAll()).toEqual(expect.objectContaining({ totalCost: 1 }))
+    expect(await aggregateStatsAll()).toEqual(
+      expect.objectContaining({ totalCost: 1, avgLatencyMs: 100 })
+    )
+  })
   it("writes a span and round-trips", async () => {
     await insertSpan(span({ id: "a", sessionId: "s1", startTime: 100 }))
     const rows = await queryBySession("s1")

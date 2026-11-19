@@ -11,6 +11,29 @@ import { customRange } from "./time-range"
 import { makeSpan } from "./fixtures"
 
 describe("aggregate-series", () => {
+  it("deduplicates mirrored measurements before bucketing and excludes unknown latency from quantiles", () => {
+    const root = makeSpan({
+      spanId: "r",
+      traceId: "t",
+      startTime: 100,
+      durationMs: 100,
+      costUsdEstimate: 1,
+    })
+    const mirror = makeSpan({
+      spanId: "m",
+      traceId: "t",
+      startTime: 1100,
+      durationMs: 0,
+      costUsdEstimate: 1,
+      metadata: { accountingParentSpanId: "r", latencyKnown: false },
+    })
+    expect(
+      costSeries([root, mirror], customRange(0, 2000), 1000).points.map((point) => point.costUsd)
+    ).toEqual([1, 0, 0])
+    expect(latencyPercentileSeries([root, mirror], customRange(0, 2000), 2000).points[0].p50).toBe(
+      100
+    )
+  })
   // 4 buckets of 1s each: [0,1000), [1000,2000), [2000,3000), [3000,4000]
   const range = customRange(0, 3000)
   const bucketMs = 1000

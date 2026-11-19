@@ -10,6 +10,7 @@
  */
 
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
+import { accountingSpans } from "@cognia/agent-trace/accounting"
 import type { AgentTraceSessionAnalyticsSummary } from "@/types/agent/agent-trace"
 import Dexie from "dexie"
 import { getDb } from "./schema"
@@ -218,7 +219,7 @@ export function aggregateStats(spans: AgentTraceSpan[]): AgentTraceStatsSummary 
   let errorCount = 0
   const byModel: AgentTraceStatsSummary["byModel"] = {}
   const bySurface: Record<string, number> = {}
-  for (const s of spans) {
+  for (const s of accountingSpans(spans)) {
     if (s.usage) {
       totalInputTokens += s.usage.inputTokens
       totalOutputTokens += s.usage.outputTokens
@@ -306,7 +307,7 @@ function aggregate(spans: AgentTraceSpan[]): AgentTraceSessionAnalyticsSummary {
   let lastTimestamp = Number.NEGATIVE_INFINITY
   const eventTypeCounts: Record<string, number> = {}
 
-  for (const span of spans) {
+  for (const span of accountingSpans(spans)) {
     if (typeof span.costUsdEstimate === "number") totalCost += span.costUsdEstimate
 
     if (span.operationName === "execute_tool") {
@@ -314,7 +315,11 @@ function aggregate(spans: AgentTraceSpan[]): AgentTraceSessionAnalyticsSummary {
       if (span.errorType || span.errorMessage) toolFailureCount += 1
     }
 
-    if (typeof span.durationMs === "number") {
+    if (
+      typeof span.durationMs === "number" &&
+      Number.isFinite(span.durationMs) &&
+      span.metadata?.latencyKnown !== false
+    ) {
       totalDuration += span.durationMs
       durationSampleCount += 1
     }

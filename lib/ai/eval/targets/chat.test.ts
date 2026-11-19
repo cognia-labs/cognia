@@ -118,6 +118,16 @@ describe("assembleSampleFromSpans", () => {
     const sample = assembleSampleFromSpans([root, child, child], { output: "done" })
     expect(sample.usage.inputTokens).toBe(10)
     expect(sample.costUsd).toBe(0.02)
+    const mirrored = assembleSampleFromSpans(
+      [
+        { ...root, metadata: {} },
+        { ...child, metadata: { accountingParentSpanId: "root" } },
+      ],
+      { output: "done" }
+    )
+    expect(mirrored.usage.inputTokens).toBe(10)
+    expect(mirrored.costUsd).toBe(0.02)
+    expect(mirrored.metricAvailability).toMatchObject({ usage: "known", cost: "estimated" })
   })
 
   it("keeps partial call measurements as lower bounds with explicit availability", () => {

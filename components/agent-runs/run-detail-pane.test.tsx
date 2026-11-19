@@ -428,10 +428,19 @@ describe("RunDetailPane", () => {
     expect(screen.getByText(/Historical exact comment/)).toBeVisible()
   })
   it("links a mirrored run to its conversation without requiring an IM binding", () => {
-    render(<RunDetailPane row={row({ sessionId: "chat-a" })} actions={makeActions()} />)
+    render(
+      <RunDetailPane
+        row={row({ sessionId: "chat-a", runId: "perf-run" })}
+        actions={makeActions()}
+      />
+    )
     expect(screen.getByRole("link", { name: "actions.openConversation" })).toHaveAttribute(
       "href",
       "/?session=chat-a"
+    )
+    expect(screen.getByRole("link", { name: "actions.performanceEvidence" })).toHaveAttribute(
+      "href",
+      "/performance?runId=perf-run&tab=captures"
     )
   })
 

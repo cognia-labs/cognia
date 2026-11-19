@@ -104,6 +104,8 @@ export interface SpanHandle {
 
 const activeSpans = new Map<string, AgentTraceSpan>()
 let writer: AgentTraceWriter | null = null
+let pendingWriter: AgentTraceWriter | null = null
+let staleTimer: ReturnType<typeof setTimeout> | null = null
 let nowSource: () => number = () => Date.now()
 
 const DEFAULT_STALE_SPAN_MAX_AGE_MS = 30 * 60_000
@@ -113,9 +115,35 @@ export function setAgentTraceWriter(fn: AgentTraceWriter | null): void {
   writer = fn
 }
 
+/** Local persistence only. Pending snapshots must never enter remote exporters
+ * whose span-id deduplication would discard the eventual terminal span. */
+export function setAgentTracePendingWriter(fn: AgentTraceWriter | null): void {
+  pendingWriter = fn
+}
+
+function armStaleTimer(): void {
+  if (staleTimer !== null) clearTimeout(staleTimer)
+  staleTimer = null
+  if (activeSpans.size === 0) return
+  const oldest = Math.min(...Array.from(activeSpans.values(), (span) => span.startTime))
+  staleTimer = setTimeout(
+    () => {
+      staleTimer = null
+      reapStaleSpans()
+    },
+    Math.max(1, oldest + DEFAULT_STALE_SPAN_MAX_AGE_MS - nowMs() + 1)
+  )
+  if (typeof staleTimer === "object" && "unref" in staleTimer) staleTimer.unref()
+}
+
 /** Read-only access for tests. */
 export function getAgentTraceWriter(): AgentTraceWriter | null {
   return writer
+}
+
+/** A persisted pending row alone is not proof that its producing process is alive. */
+export function isAgentTraceSpanActive(spanId: string, traceId: string): boolean {
+  return activeSpans.get(spanId)?.traceId === traceId
 }
 
 function nowMs(): number {
@@ -185,6 +213,7 @@ export function reapStaleSpans(maxAgeMs = DEFAULT_STALE_SPAN_MAX_AGE_MS): number
       }
     }
   }
+  armStaleTimer()
   return removed
 }
 
@@ -222,6 +251,12 @@ export function startSpan(input: StartSpanInput): SpanHandle {
     metadata: input.metadata,
   }
   activeSpans.set(spanId, span)
+  armStaleTimer()
+  try {
+    pendingWriter?.({ ...span, metadata: span.metadata ? { ...span.metadata } : undefined })
+  } catch {
+    // Instrumentation never changes the result of the instrumented operation.
+  }
   return { spanId, traceId }
 }
 
@@ -240,6 +275,7 @@ export function endSpan(spanId: string, input: EndSpanInput = {}): AgentTraceSpa
   const span = activeSpans.get(spanId)
   if (!span) return null
   activeSpans.delete(spanId)
+  armStaleTimer()
 
   const endTime = input.endTime ?? nowMs()
   span.endTime = endTime
@@ -323,6 +359,9 @@ export function emitFinishedSpan(span: Partial<AgentTraceSpan>): AgentTraceSpan 
 export function __resetAgentTraceEmitterForTesting(): void {
   activeSpans.clear()
   writer = null
+  pendingWriter = null
+  if (staleTimer !== null) clearTimeout(staleTimer)
+  staleTimer = null
   nowSource = () => Date.now()
 }
 

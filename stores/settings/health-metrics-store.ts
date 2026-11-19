@@ -130,11 +130,14 @@ export const useHealthMetricsStore = create<HealthMetricsStoreState>((set, get) 
     let totalRequests = 0
     let totalCost = 0
     let latencyWeighted = 0
+    let latencySamples = 0
     let totalSuccesses = 0
     for (const m of Object.values(providers)) {
       totalRequests += m.totalRequests
       totalCost += m.totalCost
-      latencyWeighted += m.latencyAvg * m.totalRequests
+      const measured = m.latencySampleCount ?? m.totalRequests
+      latencyWeighted += m.latencyAvg * measured
+      latencySamples += measured
       totalSuccesses += m.totalSuccesses
     }
     return {
@@ -142,7 +145,7 @@ export const useHealthMetricsStore = create<HealthMetricsStoreState>((set, get) 
       global: {
         totalRequests,
         totalCost,
-        avgLatency: totalRequests > 0 ? latencyWeighted / totalRequests : 0,
+        avgLatency: latencySamples > 0 ? latencyWeighted / latencySamples : 0,
         overallSuccessRate: totalRequests > 0 ? totalSuccesses / totalRequests : 1,
       },
       lastRefreshAt: Date.now(),

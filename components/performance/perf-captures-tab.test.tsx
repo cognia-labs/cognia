@@ -42,6 +42,16 @@ jest.mock("@/lib/ai/eval/artifact-crypto", () => ({
   loadOrCreateAccountArtifactKey: jest.fn(async () => new Uint8Array(32)),
 }))
 const deleteMock = jest.fn(async (_input: unknown) => {})
+const mockReadMetadata = jest.fn()
+const mockResolveAssociation = jest.fn()
+jest.mock("@/lib/perf/capture-portability", () => ({
+  ...jest.requireActual("@/lib/perf/capture-portability"),
+  readPerformanceCaptureMetadata: (...args: unknown[]) => mockReadMetadata(...args),
+}))
+jest.mock("@/lib/perf/execution-correlation", () => ({
+  ...jest.requireActual("@/lib/perf/execution-correlation"),
+  resolveExecutionAssociation: (...args: unknown[]) => mockResolveAssociation(...args),
+}))
 jest.mock("@/lib/perf/capture-service", () => ({
   deletePerformanceCapture: (input: unknown) => deleteMock(input),
   PERFORMANCE_CAPTURE_DEFAULT_DURATION_MS: 600_000,
@@ -105,6 +115,8 @@ function row(overrides: Partial<PerformanceCaptureRow> = {}): PerformanceCapture
 }
 
 beforeEach(() => {
+  mockReadMetadata.mockReset().mockResolvedValue(null)
+  mockResolveAssociation.mockReset().mockResolvedValue(null)
   mockCaptures = []
   mockAccountId = "account"
   mockController.snapshot = { ...mockController.snapshot, error: null }
@@ -115,6 +127,41 @@ beforeEach(() => {
 })
 
 describe("PerfCapturesTab", () => {
+  it.each([undefined, 0])(
+    "joins a canonical run-only capture from trace navigation, excluding imported evidence (%s)",
+    async (importedAt) => {
+      mockCaptures = [row({ importedAt, trustState: undefined })]
+      mockReadMetadata.mockResolvedValue({
+        executionAssociation: { version: 1, relationship: "explicit", runId: "r" },
+      })
+      mockResolveAssociation.mockResolvedValue({
+        active: true,
+        association: { version: 1, relationship: "explicit", runId: "r", traceId: "t" },
+      })
+      const { rerender } = render(
+        <PerfCapturesTab hostAvailable={false} execution={{ traceId: "t" }} />
+      )
+      await waitFor(() => expect(mockReadMetadata).toHaveBeenCalled())
+      if (importedAt === undefined) {
+        expect(await screen.findByRole("link", { name: "View run" })).toHaveAttribute(
+          "href",
+          "/agent-runs?run=r"
+        )
+        fireEvent.click(screen.getByTestId("perf-capture-start"))
+        await waitFor(() =>
+          expect(mockController.start).toHaveBeenCalledWith(
+            expect.objectContaining({ execution: { traceId: "t" } })
+          )
+        )
+        mockAccountId = null
+        rerender(<PerfCapturesTab hostAvailable={false} execution={{ traceId: "t" }} />)
+        expect(screen.queryByRole("link", { name: "View run" })).not.toBeInTheDocument()
+      } else {
+        await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument())
+        expect(screen.queryByRole("link", { name: "View run" })).not.toBeInTheDocument()
+      }
+    }
+  )
   it("starts a renderer capture by default", async () => {
     render(<PerfCapturesTab hostAvailable={false} />)
     expect(screen.getByText("No captures are stored for this target.")).toBeInTheDocument()

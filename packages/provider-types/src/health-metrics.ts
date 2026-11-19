@@ -15,6 +15,8 @@ export interface SlidingWindowBucket {
   errorCount: number
   /** Sum of latencies for averaging */
   latencySum: number
+  /** Number of measured durations, including samples beyond the percentile cap. */
+  latencyCount?: number
   /** Individual latencies for percentile calculation (capped at 100 per bucket) */
   latencies: number[]
   /** Estimated cost in USD accumulated in this bucket */
@@ -38,6 +40,8 @@ export interface ProviderHealthMetrics {
   latencyP95: number
   /** Average latency in ms */
   latencyAvg: number
+  /** Absent on legacy callers; zero means no latency was measured. */
+  latencySampleCount?: number
   /** Total estimated cost in USD */
   totalCost: number
   /** Uptime percentage (time since last error / total tracked time) */
@@ -111,7 +115,7 @@ export interface MetricsRecord {
   /** Credential id (multi-key rotation granularity). */
   keyId?: string
   success: boolean
-  latencyMs: number
+  latencyMs?: number
   estimatedCostUsd?: number
   errorMessage?: string
   timestamp?: number

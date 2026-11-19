@@ -2,6 +2,18 @@ import { buildWaterfall, flattenWaterfall, rollupTraces } from "./trace-rollup"
 import { makeSpan } from "./fixtures"
 
 describe("trace-rollup", () => {
+  it("uses one bill for a root and an explicit provider mirror", () => {
+    const root = makeSpan({ spanId: "r", traceId: "t", costUsdEstimate: 1 })
+    const mirror = makeSpan({
+      spanId: "m",
+      traceId: "t",
+      costUsdEstimate: 1,
+      metadata: { accountingParentSpanId: "r" },
+    })
+    expect(rollupTraces([root, mirror])[0]).toEqual(
+      expect.objectContaining({ spanCount: 2, totalCostUsd: 1 })
+    )
+  })
   describe("rollupTraces", () => {
     it("groups spans by trace, newest-first", () => {
       const spans = [

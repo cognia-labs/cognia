@@ -186,4 +186,21 @@ describe(".cognia-perf v1", () => {
       expect.objectContaining({ name: (redacted as { name: string }).name })
     )
   })
+
+  it("pseudonymizes every execution identity in shared performance evidence", async () => {
+    const raw = {
+      runId: "run-private",
+      traceId: "trace-private",
+      spanId: "span-private",
+      sessionId: "session-private",
+      turnId: "turn-private",
+      attemptId: "attempt-private",
+    }
+    const redacted = await redactPerformanceValue({ executionAssociation: raw }, "capture")
+    expect(JSON.stringify(redacted)).not.toContain("private")
+    for (const value of Object.values(
+      (redacted as { executionAssociation: Record<string, string> }).executionAssociation
+    ))
+      expect(value).toMatch(/^perf_/)
+  })
 })

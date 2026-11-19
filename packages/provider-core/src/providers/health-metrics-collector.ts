@@ -53,9 +53,11 @@ export function recordToBuckets(
     requestCount: base.requestCount + 1,
     successCount: base.successCount + (record.success ? 1 : 0),
     errorCount: base.errorCount + (record.success ? 0 : 1),
-    latencySum: base.latencySum + record.latencyMs,
+    latencySum: base.latencySum + (isMeasuredLatency(record.latencyMs) ? record.latencyMs : 0),
+    latencyCount:
+      (base.latencyCount ?? base.requestCount) + (isMeasuredLatency(record.latencyMs) ? 1 : 0),
     latencies:
-      base.latencies.length < config.maxLatenciesPerBucket
+      isMeasuredLatency(record.latencyMs) && base.latencies.length < config.maxLatenciesPerBucket
         ? [...base.latencies, record.latencyMs]
         : base.latencies,
     costSum: base.costSum + (record.estimatedCostUsd ?? 0),
@@ -68,6 +70,10 @@ export function recordToBuckets(
   const cutoff =
     bucketStart(now, config.bucketDurationMs) - config.bucketDurationMs * (config.bucketCount - 1)
   return merged.filter((b) => b.timestamp >= cutoff).sort((a, b) => a.timestamp - b.timestamp)
+}
+
+function isMeasuredLatency(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
 }
 
 export interface HealthMeta {
@@ -97,6 +103,8 @@ export function mergeBucketLists(bucketLists: SlidingWindowBucket[][]): SlidingW
         successCount: existing.successCount + b.successCount,
         errorCount: existing.errorCount + b.errorCount,
         latencySum: existing.latencySum + b.latencySum,
+        latencyCount:
+          (existing.latencyCount ?? existing.requestCount) + (b.latencyCount ?? b.requestCount),
         latencies: [...existing.latencies, ...b.latencies],
         costSum: existing.costSum + b.costSum,
       })
@@ -116,6 +124,7 @@ export function aggregate(
   let totalSuccesses = 0
   let totalErrors = 0
   let latencySum = 0
+  let latencyCount = 0
   let totalCost = 0
   const allLatencies: number[] = []
   const latencyTrend: number[] = []
@@ -126,9 +135,11 @@ export function aggregate(
     totalSuccesses += b.successCount
     totalErrors += b.errorCount
     latencySum += b.latencySum
+    const measured = b.latencyCount ?? b.requestCount
+    latencyCount += measured
     totalCost += b.costSum
     for (const l of b.latencies) allLatencies.push(l)
-    latencyTrend.push(b.requestCount > 0 ? b.latencySum / b.requestCount : 0)
+    latencyTrend.push(measured > 0 ? b.latencySum / measured : 0)
     errorRateTrend.push(b.requestCount > 0 ? b.errorCount / b.requestCount : 0)
   }
 
@@ -143,7 +154,8 @@ export function aggregate(
     successRate,
     latencyP50: percentile(sorted, 0.5),
     latencyP95: percentile(sorted, 0.95),
-    latencyAvg: totalRequests > 0 ? latencySum / totalRequests : 0,
+    latencyAvg: latencyCount > 0 ? latencySum / latencyCount : 0,
+    latencySampleCount: latencyCount,
     totalCost,
     uptimePercent: successRate,
     lastRequestAt: meta?.lastRequestAt ?? null,

@@ -48,6 +48,28 @@ function trace() {
 }
 
 describe("buildTraceTimeline", () => {
+  it("counts an explicit mirrored bill once before zoom and ignores duplicate raw rows", () => {
+    const root = makeSpan({
+      spanId: "r",
+      traceId: "t",
+      startTime: 100,
+      durationMs: 1000,
+      costUsdEstimate: 1,
+    })
+    const mirror = makeSpan({
+      spanId: "m",
+      traceId: "t",
+      parentSpanId: "r",
+      startTime: 200,
+      durationMs: 100,
+      costUsdEstimate: 1,
+      metadata: { accountingParentSpanId: "r" },
+    })
+    expect(buildTraceTimeline([root, root, mirror]).costUsd).toBe(1)
+    expect(buildTraceTimeline([root, mirror], { window: { since: 150, until: 400 } }).costUsd).toBe(
+      1
+    )
+  })
   it("returns an inert timeline for no spans", () => {
     const tl = buildTraceTimeline([])
     expect(tl.lanes).toEqual([])

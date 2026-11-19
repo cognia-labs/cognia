@@ -248,6 +248,7 @@ describe("readPerformanceCaptureMetadata", () => {
       environment: { os: "mac" },
       requestedCadenceMs: 500,
       budget: null,
+      executionAssociation: { version: 1, relationship: "explicit", runId: "r", traceId: "t" },
     })
     await expect(
       readPerformanceCaptureMetadata({
@@ -262,6 +263,7 @@ describe("readPerformanceCaptureMetadata", () => {
       environment: { os: "mac" },
       requestedCadenceMs: 500,
       budget: null,
+      executionAssociation: { version: 1, relationship: "explicit", runId: "r", traceId: "t" },
     })
   })
 
@@ -277,7 +279,11 @@ describe("readPerformanceCaptureMetadata", () => {
       })
     ).resolves.toBeNull()
 
-    const malformed = await seed({ source: "nope", requestedCadenceMs: "fast" })
+    const malformed = await seed({
+      source: "nope",
+      requestedCadenceMs: "fast",
+      executionAssociation: { version: 1, relationship: "explicit", runId: "invalid\nidentity" },
+    })
     await expect(
       readPerformanceCaptureMetadata({
         db: malformed.db,

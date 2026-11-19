@@ -112,6 +112,10 @@ describe("TraceSpanDetail", () => {
     expect(onOpenInLogs).toHaveBeenCalledWith("trace-x")
     fireEvent.click(screen.getByTestId("trace-span-open-session"))
     expect(onOpenSession).toHaveBeenCalledWith("sess-x")
+    expect(screen.getByRole("link", { name: "performanceEvidence" })).toHaveAttribute(
+      "href",
+      "/performance?traceId=trace-x&tab=captures"
+    )
   })
 
   it("labels enum badges and keeps the raw OTel id as their title", () => {

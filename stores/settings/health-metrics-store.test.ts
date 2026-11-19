@@ -1,6 +1,15 @@
 import { useHealthMetricsStore } from "./health-metrics-store"
 
 describe("useHealthMetricsStore", () => {
+  it("weights global latency by measured samples and keeps unknown failures in request totals", () => {
+    const store = useHealthMetricsStore.getState()
+    store.record({ providerId: "a", success: true, latencyMs: 100, timestamp: 1 })
+    store.record({ providerId: "a", success: false, timestamp: 2 })
+    store.record({ providerId: "b", success: true, latencyMs: 300, timestamp: 3 })
+    expect(store.getDashboardData().global).toEqual(
+      expect.objectContaining({ totalRequests: 3, avgLatency: 200 })
+    )
+  })
   beforeEach(() => {
     useHealthMetricsStore.getState().resetAll()
   })

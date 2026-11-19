@@ -6,6 +6,46 @@ function usageEvent(stepId: string, ts: number, payload: unknown): WorkflowRunEv
 }
 
 describe("aggregateRunUsage", () => {
+  it("does not present a partially priced step as an exact bill", () => {
+    const result = aggregateRunUsage([
+      usageEvent("n", 1, { stepExecutionId: "a", inputTokens: 10, costUsd: 0.1 }),
+      usageEvent("n", 2, { stepExecutionId: "b", inputTokens: 20 }),
+    ])
+    expect(result.totalCostUsd).toBe(0.1)
+    expect(result.hasUnknownCost).toBe(true)
+    expect(result.perStep.n).toEqual(
+      expect.objectContaining({ costKnown: false, costUsd: undefined })
+    )
+  })
+  it("adds independent invocations but replaces repeated snapshots before per-step aggregation", () => {
+    const summary = aggregateRunUsage([
+      usageEvent("n1", 1, {
+        stepExecutionId: "a",
+        inputTokens: 10,
+        outputTokens: 1,
+        costUsd: 0.01,
+      }),
+      usageEvent("n1", 2, {
+        stepExecutionId: "a",
+        inputTokens: 20,
+        outputTokens: 2,
+        costUsd: 0.02,
+      }),
+      usageEvent("n1", 3, {
+        stepExecutionId: "b",
+        inputTokens: 30,
+        outputTokens: 3,
+        costUsd: 0.03,
+      }),
+    ])
+    expect(summary.totalCostUsd).toBeCloseTo(0.05)
+    expect(summary.perStep.n1).toMatchObject({
+      inputTokens: 50,
+      outputTokens: 5,
+      totalTokens: 55,
+      costUsd: 0.05,
+    })
+  })
   it("returns an empty summary for no usage events", () => {
     const s = aggregateRunUsage([
       { id: "e1", runId: "r1", ts: 1, type: "step_started", stepId: "n1" },
