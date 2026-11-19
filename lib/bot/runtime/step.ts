@@ -20,7 +20,14 @@
 
 import { beginBotRunStep, completeBotRunStep, failBotRunStep } from "@/lib/db/bot-run-steps"
 import { getBotRunStep } from "@/lib/db/bot-run-steps"
-import { findBotDeliveryByCorrelation } from "@/lib/db/bot-event-deliveries"
+import {
+  botCorrelationKey,
+  closeBotEventWait,
+  openBotEventWait,
+  takeBotEventReply,
+  type BotEventWaiter,
+} from "@/lib/db/bot-event-deliveries"
+import type { BotEventWait } from "@/lib/db/bot-types"
 import { getDb } from "@/lib/db/schema"
 import { runEventJournal, semanticRunEvent } from "@/lib/db/execution-runs"
 import {
@@ -413,26 +420,30 @@ export function createBotStepApi(input: {
 
     const step = await getBotRunStep(runId, name)
     const deadline = (step?.startedAt ?? now()) + waitInput.timeoutMs
-    if (!begun.memoized) {
-      await journal("step.started", name, { waiting: "event", key: waitInput.key })
+    const waiter = await eventWaiter()
+    // Persisted on the run's delivery so the runner hands an arriving reply to
+    // this wait by the very rule `takeBotEventReply` applies below.
+    const wait: BotEventWait = {
+      step: name,
+      key: botCorrelationKey(waiter.installationId, waitInput.key),
+      ...(waitInput.triggerId ? { triggerId: waitInput.triggerId } : {}),
+      deadline,
     }
+    await openBotEventWait(runId, wait, now())
+    await journal("step.started", name, { waiting: "event", key: waitInput.key })
 
     for (;;) {
       assertLive(signal, runId)
-      const origin = await getDb().botEventDeliveries.where("runId").equals(runId).first()
-      const delivery = await findBotDeliveryByCorrelation(
-        waitInput.key,
-        origin?.envelope,
-        waitInput.triggerId
-      )
-      if (delivery) {
-        await completeBotRunStep(runId, name, delivery.envelope, now())
-        await journal("step.completed", name, { eventId: delivery.eventId })
-        return delivery.envelope
+      const reply = await takeBotEventReply(waiter, wait, now())
+      if (reply) {
+        await completeBotRunStep(runId, name, reply, now())
+        await journal("step.completed", name, { eventId: reply.eventId })
+        return reply
       }
       if (now() >= deadline) {
         // Resolving to null rather than throwing: "it never came" is an
         // ordinary branch for a Bot that is watching something.
+        await closeBotEventWait(runId, now())
         await completeBotRunStep(runId, name, null, now())
         await journal("step.completed", name, { timedOut: true })
         return null
@@ -442,6 +453,15 @@ export function createBotStepApi(input: {
       }
       await sleep(pollIntervalMs)
     }
+  }
+
+  /** The run a wait belongs to. Every Bot run's `sourceId` is its installation. */
+  async function eventWaiter(): Promise<BotEventWaiter> {
+    const origin = await getDb().botEventDeliveries.where("runId").equals(runId).first()
+    const installationId =
+      origin?.installationId ?? (await getDb().executionRuns.get(runId))?.sourceId
+    if (!installationId) throw new Error(`Bot run ${runId} has no installation to wait for`)
+    return { runId, installationId, ...(origin ? { origin: origin.envelope } : {}) }
   }
 
   return { run, waitForApproval, waitForEvent }

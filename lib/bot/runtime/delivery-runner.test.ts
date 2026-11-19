@@ -208,7 +208,7 @@ describe("drainBotDeliveries", () => {
       holdConcurrencyWhileWaiting: false,
       now: NOW,
     })
-    await parkBotDelivery("bdl_1", NOW + 1000, "approval", NOW)
+    await parkBotDelivery("bdl_1", NOW + 1000, NOW)
     await enqueueBotDelivery({
       envelope: envelope({ eventId: "bev_2", deliveryId: "bdl_2" }),
       concurrencyKey: "repo",
@@ -225,7 +225,7 @@ describe("drainBotDeliveries", () => {
     const handler = jest.fn().mockResolvedValue({ summary: "approved" })
     await seedInstallation(handler)
     await enqueueBotDelivery({ envelope: envelope(), concurrencyKey: "repo", now: NOW })
-    await parkBotDelivery("bdl_1", NOW, "approval", NOW)
+    await parkBotDelivery("bdl_1", NOW, NOW)
     expect((await drainBotDeliveries({ owner: "host", now }))[0].outcome.status).toBe("completed")
     expect(handler).toHaveBeenCalledTimes(1)
   })
@@ -292,6 +292,51 @@ describe("drainBotDeliveries", () => {
       cancelledAt: expect.any(Number),
       attempts: 0,
     })
+  })
+
+  it("keeps accepted work through a registry gap and runs it once the Bot is back (B10)", async () => {
+    const handler = jest.fn()
+    await seedInstallation(handler)
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    const registered = (await import("@/lib/plugin/registries/bot-registry")).getBot("acme:digest")!
+    // The plugin reloads: its Bots drop out of the registry for a moment.
+    __resetBotsForTesting()
+
+    const first = await drainBotDeliveries({ owner: "host-a", now })
+    expect(first[0].outcome).toEqual({ status: "skipped", reason: "not_ready" })
+    expect(await getDb().botEventDeliveries.get("bdl_1")).toMatchObject({
+      status: "pending",
+      attempts: 0,
+      notReadySince: NOW,
+      nextAttemptAt: NOW + 1_000,
+    })
+
+    registerBot("digest", registered, { pluginId: "acme" })
+    const later = () => NOW + 1_000
+    const second = await drainBotDeliveries({ owner: "host-a", now: later })
+
+    expect(second[0].outcome.status).toBe("completed")
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect((await getDb().botEventDeliveries.get("bdl_1"))?.notReadySince).toBeUndefined()
+  })
+
+  it("dead-letters work whose Bot never registers, so Retry can still run it (B10)", async () => {
+    const { BOT_NOT_READY_WINDOW_MS, replayBotDelivery } =
+      await import("@/lib/db/bot-event-deliveries")
+    await seedInstallation()
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    __resetBotsForTesting()
+
+    await drainBotDeliveries({ owner: "host-a", now })
+    const expired = () => NOW + BOT_NOT_READY_WINDOW_MS
+    const attempts = await drainBotDeliveries({ owner: "host-a", now: expired })
+
+    expect(attempts[0].outcome).toEqual({ status: "skipped", reason: "not_runnable" })
+    expect(await getDb().botEventDeliveries.get("bdl_1")).toMatchObject({
+      status: "deadletter",
+      attempts: 0,
+    })
+    expect(await replayBotDelivery("bdl_1", expired())).toMatchObject({ status: "pending" })
   })
 
   it("serialises deliveries that share a concurrency key", async () => {
@@ -426,7 +471,7 @@ describe("drainBotDeliveries", () => {
     })
     await claimBotDelivery("bdl_1", "host-a", NOW)
     await markBotDeliveryRunning("bdl_1", "run_x", NOW)
-    await parkBotDelivery("bdl_1", NOW + 60_000, undefined, NOW)
+    await parkBotDelivery("bdl_1", NOW + 60_000, NOW)
 
     await drainBotDeliveries({ owner: "host-a", now })
     expect(handler).toHaveBeenCalledTimes(1)
@@ -536,7 +581,12 @@ describe("drainBotDeliveries", () => {
     const handler = jest.fn()
     await seedInstallation(handler)
     await enqueueBotDelivery({ envelope: envelope({ correlation: "boti_1::ci:42" }), now: NOW })
-    await parkBotDelivery("bdl_1", NOW + 20_000, "boti_1::ci:42", NOW)
+    // What `step.waitForEvent` records on the run's delivery when it opens.
+    await getDb().botEventDeliveries.update("bdl_1", {
+      runId: "run_bot_bdl_1",
+      eventWait: { step: "ci", key: "boti_1::ci:42", deadline: NOW + 60_000 },
+    })
+    await parkBotDelivery("bdl_1", NOW + 20_000, NOW)
     await enqueueBotDelivery({
       envelope: envelope({
         eventId: "bev_2",
@@ -553,8 +603,32 @@ describe("drainBotDeliveries", () => {
       reason: "consumed_by_wait",
     })
     // The row survives, because the waiting run reads its envelope on re-entry.
-    expect(await getDb().botEventDeliveries.get("bdl_2")).toBeDefined()
+    expect(await getDb().botEventDeliveries.get("bdl_2")).toMatchObject({
+      consumedBy: { runId: "run_bot_bdl_1", step: "ci" },
+    })
     expect(handler).not.toHaveBeenCalled()
+  })
+
+  it("runs a reply the open wait would refuse on its own, instead of swallowing it (B11)", async () => {
+    const { parkBotDelivery } = await import("@/lib/db/bot-event-deliveries")
+    const handler = jest.fn()
+    await seedInstallation(handler)
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await getDb().botEventDeliveries.update("bdl_1", {
+      runId: "run_bot_bdl_1",
+      eventWait: { step: "ci", key: "boti_1::ci:42", triggerId: "answer", deadline: NOW + 60_000 },
+    })
+    await parkBotDelivery("bdl_1", NOW + 20_000, NOW)
+    // Same key, another trigger: the wait names `answer`, so this is not its reply.
+    await enqueueBotDelivery({
+      envelope: envelope({ eventId: "bev_2", deliveryId: "bdl_2", correlation: "boti_1::ci:42" }),
+      now: NOW,
+    })
+
+    const attempts = await drainBotDeliveries({ owner: "host-a", now })
+
+    expect(attempts.find((a) => a.deliveryId === "bdl_2")?.outcome.status).toBe("completed")
+    expect(handler).toHaveBeenCalledTimes(1)
   })
 
   it("bounds one pass, so one Bot cannot starve the others", async () => {

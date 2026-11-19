@@ -203,15 +203,26 @@ class BotRun:
         return self._settle_or_park(outcome)
 
     async def wait_for_event(
-        self, name: str, key: str, timeout_ms: int
+        self,
+        name: str,
+        key: str,
+        timeout_ms: int,
+        *,
+        trigger_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Wait for a correlated event; ``None`` on timeout.
 
+        ``key`` is the trigger's ``correlationKey`` as interpolated; the host
+        scopes it to the installation the way it stamps deliveries.
+        ``trigger_id`` names the answer trigger when several triggers share the
+        key, so another trigger's event is left to run its own handler.
+
         Raises :class:`BotRunParked` while the event has not arrived.
         """
-        outcome = await self._ctx.bots.waitForEvent(
-            self.run_id, name, {"key": key, "timeoutMs": timeout_ms}
-        )
+        wait: Dict[str, Any] = {"key": key, "timeoutMs": timeout_ms}
+        if trigger_id is not None:
+            wait["triggerId"] = trigger_id
+        outcome = await self._ctx.bots.waitForEvent(self.run_id, name, wait)
         return self._settle_or_park(outcome)
 
     async def log(

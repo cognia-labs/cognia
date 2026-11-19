@@ -386,6 +386,20 @@ class TestBotRun:
             ("bots.waitForEvent", {"args": ["run_1", "ci", {"key": "key-1", "timeoutMs": 60000}]})
         ]
 
+    def test_wait_for_event_names_the_answer_trigger(self, fresh_runtime):
+        calls = _host_recorder(
+            fresh_runtime,
+            {"bots.waitForEvent": {"status": "settled", "value": None}},
+        )
+        run = bot_run(cognia.ctx, SNAPSHOT)
+        assert asyncio.run(run.wait_for_event("ci", "pr-7", 1_000, trigger_id="answer")) is None
+        assert calls == [
+            (
+                "bots.waitForEvent",
+                {"args": ["run_1", "ci", {"key": "pr-7", "timeoutMs": 1000, "triggerId": "answer"}]},
+            )
+        ]
+
     def test_wait_for_event_raises_parked(self, fresh_runtime):
         _host_recorder(
             fresh_runtime,

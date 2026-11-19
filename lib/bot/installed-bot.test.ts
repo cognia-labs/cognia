@@ -9,7 +9,7 @@ import { installBot } from "@/lib/db/bot-installations"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-registry"
 
-import { isRunnableBot, resolveInstalledBot } from "./installed-bot"
+import { awaitsBotRegistration, isRunnableBot, resolveInstalledBot } from "./installed-bot"
 
 const NOW = 1_700_000_000_000
 const manual = [{ id: "run", kind: "manual" as const }]
@@ -208,4 +208,40 @@ it("keeps paused enabled installations resolved but does not admit a new run", a
   expect(isRunnableBot({ ...resolved, installation: { ...installation, paused: false } })).toBe(
     true
   )
+})
+
+describe("awaitsBotRegistration", () => {
+  it("is true only while an enabled local installation's Bot is unregistered (B10)", async () => {
+    const installation = await installPluginBot(pluginDef(), {}, jest.fn())
+    const resolved = (await resolveInstalledBot(installation))!
+    // Registered and bound: nothing to wait for.
+    expect(awaitsBotRegistration(installation, resolved)).toBe(false)
+    // The plugin is loading: no definition at all, or no handler bound yet.
+    expect(awaitsBotRegistration(installation, null)).toBe(true)
+    expect(
+      awaitsBotRegistration(installation, {
+        ...resolved,
+        problems: [{ kind: "handler_missing", definitionId: "acme:digest" }],
+      })
+    ).toBe(true)
+    // Off, paused or someone else's: waiting here would never end.
+    expect(awaitsBotRegistration({ ...installation, status: "disabled" }, null)).toBe(false)
+    expect(awaitsBotRegistration({ ...installation, paused: true }, null)).toBe(false)
+    expect(
+      awaitsBotRegistration(
+        {
+          ...installation,
+          owner: {
+            kind: "remote-host",
+            hostId: "mini",
+            hostLabel: "Mac mini",
+            remoteItemId: "boti_op",
+            operationId: "op",
+            movedAt: 1,
+          },
+        },
+        null
+      )
+    ).toBe(false)
+  })
 })

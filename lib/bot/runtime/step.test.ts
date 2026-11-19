@@ -71,7 +71,9 @@ async function seedRun(): Promise<ExecutionRun> {
   })
 }
 
-function envelope(correlation: string): BotEventEnvelopeV1 {
+/** A reply as the router stamps it: its correlation scoped to the installation. */
+function envelope(key: string): BotEventEnvelopeV1 {
+  const correlation = `boti_1::${key}`
   return {
     eventId: "bev_ci",
     deliveryId: "bdl_ci",
@@ -474,6 +476,47 @@ describe("step.waitForEvent", () => {
     await expect(
       api(controller.signal).waitForEvent("ci", { key: "k", timeoutMs: 1_000 })
     ).rejects.toThrow(BotRunCancelledError)
+  })
+})
+
+describe("step.waitForEvent matches one reply by one rule (B11)", () => {
+  it("matches the short key a handler passes against the installation-scoped delivery", async () => {
+    // `ctx.bots.queue` and the router both scope the key; a wait on the short
+    // key it was declared with used to time out beside its own reply.
+    await enqueueBotDelivery({ envelope: envelope("pr-7"), now: NOW })
+    expect((await api().waitForEvent("ci", { key: "pr-7", timeoutMs: 1_000 }))?.eventId).toBe(
+      "bev_ci"
+    )
+  })
+
+  it("does not take a reply that arrived after the deadline", async () => {
+    await parkingApi()
+      .waitForEvent("ci", { key: "late", timeoutMs: 100 })
+      .catch(() => undefined)
+    await enqueueBotDelivery({ envelope: envelope("late"), now: NOW + 120 })
+    clock = NOW + 130
+
+    expect(await parkingApi().waitForEvent("ci", { key: "late", timeoutMs: 100 })).toBeNull()
+    // It was nobody's answer, so it is left to run its own handler.
+    expect((await getDb().botEventDeliveries.get("bdl_ci"))?.status).toBe("pending")
+  })
+
+  it("takes a reply that arrived in time even when the run reads it after the deadline", async () => {
+    await parkingApi()
+      .waitForEvent("ci", { key: "slow", timeoutMs: 100 })
+      .catch(() => undefined)
+    await enqueueBotDelivery({ envelope: envelope("slow"), now: NOW + 90 })
+    clock = NOW + 130
+
+    expect((await parkingApi().waitForEvent("ci", { key: "slow", timeoutMs: 100 }))?.eventId).toBe(
+      "bev_ci"
+    )
+  })
+
+  it("does not hand a later round the reply an earlier round consumed", async () => {
+    await enqueueBotDelivery({ envelope: envelope("round"), now: NOW })
+    expect(await api().waitForEvent("round-1", { key: "round", timeoutMs: 1_000 })).not.toBeNull()
+    expect(await api().waitForEvent("round-2", { key: "round", timeoutMs: 1_000 })).toBeNull()
   })
 })
 

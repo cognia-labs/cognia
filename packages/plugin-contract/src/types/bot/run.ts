@@ -68,7 +68,13 @@ export interface BotApprovalDecisionV1 {
 export interface BotWaitForEventInput {
   /** Optional answer trigger, when several triggers share a correlation key. */
   triggerId?: string
-  /** Correlation key an inbound envelope must carry to wake this run. */
+  /**
+   * The trigger's `correlationKey`, as interpolated. The host scopes it to the
+   * installation the way it stamps deliveries, so the short key a handler was
+   * declared with matches; an envelope's own (already scoped) `correlation` is
+   * accepted as is. A reply wakes the run only if it was received before the
+   * timeout and no other wait consumed it.
+   */
   key: string
   /** Give up after this long. The host clamps it against the run's budget. */
   timeoutMs: number

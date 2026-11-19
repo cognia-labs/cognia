@@ -818,13 +818,7 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
           )
         )
         .catch(() => undefined)
-      await parkBotDelivery(
-        delivery.id,
-        error.resumeAt,
-        error.waitingFor,
-        endedAt,
-        delivery.leaseOwner
-      )
+      await parkBotDelivery(delivery.id, error.resumeAt, endedAt, delivery.leaseOwner)
       return {
         status: "parked",
         runId,

@@ -11,7 +11,11 @@ import { provenanceForBotOutput } from "@/lib/bot/events/provenance"
 import { projectBotInstallationSnapshot } from "@/lib/bot/installation-snapshot"
 import { resolveOwnedBotAuthority } from "@/lib/bot/policy/run-authority"
 import { getDb } from "@/lib/db/schema"
-import { dismissBotDelivery, isTerminalBotDelivery } from "@/lib/db/bot-event-deliveries"
+import {
+  botCorrelationKey,
+  dismissBotDelivery,
+  isTerminalBotDelivery,
+} from "@/lib/db/bot-event-deliveries"
 import { writeBotTriggerState } from "@/lib/db/bot-installations"
 import { setBotTriggerArmedLocally } from "@/lib/bot/control-writes/local"
 import { cancelBotRun, getLiveBotRunSignal } from "@/lib/bot/runtime/run"
@@ -103,7 +107,7 @@ export function createBotsAPI(
         },
       })
       if (input.correlation)
-        envelope.correlation = `${resolved.installation.id}::${input.correlation}`
+        envelope.correlation = botCorrelationKey(resolved.installation.id, input.correlation)
       const delivery = await dispatchManualBotRun({ resolved, triggerId: trigger.id, envelope })
       return { deliveryId: delivery.id }
     },

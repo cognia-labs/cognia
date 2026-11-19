@@ -1192,7 +1192,6 @@ describe("runBotDelivery when a handler parks", () => {
     expect(row).toMatchObject({
       status: "parked",
       nextAttemptAt: NOW + 20_000,
-      waitingFor: "interrupt-1",
       attempts: 0,
     })
   })

@@ -17,8 +17,9 @@ import {
   claimBotDelivery,
   countActiveBotDeliveriesForKey,
   countRunningBotDeliveriesForInstallation,
+  deferBotDeliveryUntilReady,
   dismissBotDelivery,
-  findParkedBotDeliveryWaitingFor,
+  handBotReplyToWaitingRun,
   listDueBotDeliveries,
   pruneSettledBotDeliveries,
   recoverAbandonedBotDelivery,
@@ -27,7 +28,7 @@ import {
 } from "@/lib/db/bot-event-deliveries"
 import { getBotInstallation } from "@/lib/db/bot-installations"
 import type { BotEventDeliveryRow } from "@/lib/db/bot-types"
-import { isRunnableBot, resolveInstalledBot } from "@/lib/bot/installed-bot"
+import { awaitsBotRegistration, isRunnableBot, resolveInstalledBot } from "@/lib/bot/installed-bot"
 import type { PluginBotPolicyV1 } from "@/types/plugin/plugin-bot"
 
 import { resolveBotInstallationCwd } from "./resolve-cwd"
@@ -81,8 +82,13 @@ export type BotSkipReason =
    * backoff rather than being re-run in the same pass.
    */
   | "recovered"
-  /** The installation is gone, disabled, or its plugin is not loaded. */
+  /** The installation is gone, disabled, paused or owned by another host. */
   | "not_runnable"
+  /**
+   * The installation is enabled here but its Bot has not registered yet. The
+   * delivery went back to the queue without spending an attempt.
+   */
+  | "not_ready"
   /** Another delivery with the same concurrency key is in flight. */
   | "serialised"
   /**
@@ -130,19 +136,11 @@ async function attemptDelivery(
   options: BotDeliveryRunnerOptions,
   now: () => number
 ): Promise<BotRunOutcome | { status: "skipped"; reason: BotSkipReason }> {
-  // A run parked on this correlation is the intended recipient. Checked before
-  // the claim so the row is left exactly as `findBotDeliveryByCorrelation`
-  // expects to find it.
-  if (delivery.correlation) {
-    const waiting = await findParkedBotDeliveryWaitingFor(
-      delivery.installationId,
-      delivery.correlation,
-      delivery.envelope
-    )
-    if (waiting && waiting.id !== delivery.id) {
-      await dismissBotDelivery(delivery.id, "consumed by a waiting run", now())
-      return { status: "skipped", reason: "consumed_by_wait" }
-    }
+  // A run waiting on this correlation is the intended recipient. Checked
+  // before the claim, by the rule the waiting step applies: a reply this hands
+  // over is one the run accepts, and one it would refuse runs on its own.
+  if (delivery.correlation && (await handBotReplyToWaitingRun(delivery.id, now()))) {
+    return { status: "skipped", reason: "consumed_by_wait" }
   }
 
   // Recovery runs BEFORE the claim, for the same reason serialisation does: the
@@ -197,8 +195,16 @@ async function attemptDelivery(
     ...(options.organizationPolicy ? { organizationPolicy: options.organizationPolicy } : {}),
   })
   if (!resolved || (!isRunnableBot(resolved) && !installation.paused)) {
-    // Dismissed rather than retried: a disabled installation or an unloaded
-    // plugin will not become runnable by waiting.
+    // A plugin still loading, or reloading, closes the gap by itself: the work
+    // waits for it, as intake keeps an event for it. A disabled or remotely
+    // owned installation will not become runnable here by waiting.
+    if (awaitsBotRegistration(installation, resolved)) {
+      const deferred = await deferBotDeliveryUntilReady(claimed.id, options.owner, now())
+      return {
+        status: "skipped",
+        reason: deferred?.status === "deadletter" ? "not_runnable" : "not_ready",
+      }
+    }
     await dismissBotDelivery(claimed.id, "installation is not runnable", now())
     return { status: "skipped", reason: "not_runnable" }
   }

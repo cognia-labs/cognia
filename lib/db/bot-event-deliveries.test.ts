@@ -7,6 +7,7 @@ import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 import {
   BOT_DELIVERY_LEASE_MS,
   BOT_DELIVERY_RETENTION_MS,
+  botCorrelationKey,
   botDeliveryDedupKey,
   claimBotDelivery,
   completeBotDelivery,
@@ -15,18 +16,18 @@ import {
   dismissBotDelivery,
   enqueueBotDelivery,
   failBotDelivery,
-  findBotDeliveryByCorrelation,
+  handBotReplyToWaitingRun,
   isTerminalBotDelivery,
   listBotDeliveries,
   listDueBotDeliveries,
   markBotDeliveryRunning,
-  findParkedBotDeliveryWaitingFor,
   parkBotDelivery,
   pruneSettledBotDeliveries,
   recoverAbandonedBotDelivery,
   recoverStaleBotDeliveries,
   renewBotDeliveryLease,
   replayBotDelivery,
+  takeBotEventReply,
   type BotDeadletterSettler,
 } from "./bot-event-deliveries"
 import {
@@ -149,7 +150,7 @@ describe("botEventDeliveries", () => {
     await markBotDeliveryRunning("del_1", "run", NOW + 2)
     await completeBotDelivery("del_1", NOW + 2)
     await failBotDelivery("del_1", new Error("late"), NOW + 2)
-    await parkBotDelivery("del_1", NOW + 100, undefined, NOW + 2)
+    await parkBotDelivery("del_1", NOW + 100, NOW + 2)
     expect(await replayBotDelivery("del_1", NOW + 2)).toBeUndefined()
     expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("dismissed")
   })
@@ -340,7 +341,7 @@ describe("botEventDeliveries", () => {
     ])
     await claimBotDelivery("del_0", "runner", NOW + 10)
     expect((await listDueBotDeliveries(2, NOW + 10, true)).map((row) => row.id)).toEqual(["del_5"])
-    await parkBotDelivery("del_0", NOW + 10, "approval", NOW + 10)
+    await parkBotDelivery("del_0", NOW + 10, NOW + 10)
     expect((await listDueBotDeliveries(2, NOW + 10, true)).map((row) => row.id)).toEqual([
       "del_5",
       "del_0",
@@ -500,12 +501,6 @@ describe("botEventDeliveries", () => {
     // An expired lease is not in flight, or one crashed runner would block the
     // key forever.
     expect(await countActiveBotDeliveriesForKey("repo#1", NOW + BOT_DELIVERY_LEASE_MS + 1)).toBe(0)
-  })
-
-  it("finds a delivery by the correlation key a parked run waits on", async () => {
-    await enqueueBotDelivery({ envelope: envelope({ correlation: "ci:run-42" }), now: NOW })
-    expect((await findBotDeliveryByCorrelation("ci:run-42"))?.id).toBe("del_1")
-    expect(await findBotDeliveryByCorrelation("ci:run-43")).toBeUndefined()
   })
 
   it("lists by installation and status, newest first", async () => {
@@ -791,7 +786,7 @@ describe("botEventDeliveries parked on a question", () => {
   it("is due again at its resume time, and not before", async () => {
     await enqueueBotDelivery({ envelope: envelope(), now: NOW })
     await claimBotDelivery("del_1", "runner-a", NOW)
-    await parkBotDelivery("del_1", NOW + 20_000, "bot-approval:run_1:send", NOW)
+    await parkBotDelivery("del_1", NOW + 20_000, NOW)
 
     expect(await listDueBotDeliveries(10, NOW + 1_000)).toEqual([])
     expect((await listDueBotDeliveries(10, NOW + 20_000)).map((r) => r.id)).toEqual(["del_1"])
@@ -802,7 +797,7 @@ describe("botEventDeliveries parked on a question", () => {
     await failBotDelivery("del_1", new Error("transient"), NOW)
     const before = (await getDb().botEventDeliveries.get("del_1"))?.attempts
 
-    await parkBotDelivery("del_1", NOW + 20_000, undefined, NOW)
+    await parkBotDelivery("del_1", NOW + 20_000, NOW)
 
     expect((await getDb().botEventDeliveries.get("del_1"))?.attempts).toBe(before)
   })
@@ -810,7 +805,7 @@ describe("botEventDeliveries parked on a question", () => {
   it("clears the lease, so any host can resume the run", async () => {
     await enqueueBotDelivery({ envelope: envelope(), now: NOW })
     await claimBotDelivery("del_1", "runner-a", NOW)
-    await parkBotDelivery("del_1", NOW + 20_000, undefined, NOW)
+    await parkBotDelivery("del_1", NOW + 20_000, NOW)
 
     const row = await getDb().botEventDeliveries.get("del_1")
     expect("leaseOwner" in (row ?? {})).toBe(false)
@@ -821,23 +816,14 @@ describe("botEventDeliveries parked on a question", () => {
     // A sibling push must not start while the first one is waiting for a
     // decision. That is the whole reason parked is not a flavour of pending.
     await enqueueBotDelivery({ envelope: envelope(), concurrencyKey: "repo#1", now: NOW })
-    await parkBotDelivery("del_1", NOW + 20_000, undefined, NOW)
+    await parkBotDelivery("del_1", NOW + 20_000, NOW)
 
     expect(await countActiveBotDeliveriesForKey("repo#1", NOW + 60_000)).toBe(1)
   })
 
-  it("finds the run already waiting on a correlation key", async () => {
-    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
-    await parkBotDelivery("del_1", NOW + 20_000, "ci:run-42", NOW)
-
-    expect((await findParkedBotDeliveryWaitingFor("boti_1", "ci:run-42"))?.id).toBe("del_1")
-    expect(await findParkedBotDeliveryWaitingFor("boti_1", "ci:run-99")).toBeUndefined()
-    expect(await findParkedBotDeliveryWaitingFor("boti_other", "ci:run-42")).toBeUndefined()
-  })
-
   it("is retired if it is still parked past the retention window", async () => {
     await enqueueBotDelivery({ envelope: envelope(), now: NOW })
-    await parkBotDelivery("del_1", NOW + 20_000, "ci:never", NOW)
+    await parkBotDelivery("del_1", NOW + 20_000, NOW)
 
     await pruneSettledBotDeliveries(NOW + BOT_DELIVERY_RETENTION_MS + 1)
 
@@ -867,7 +853,7 @@ describe("installation run slots", () => {
     await markBotDeliveryRunning("del_2", "run_2", NOW)
     await claimBotDelivery("del_3", "host", NOW)
     await markBotDeliveryRunning("del_3", "run_3", NOW)
-    await parkBotDelivery("del_3", NOW + 60_000, undefined, NOW)
+    await parkBotDelivery("del_3", NOW + 60_000, NOW)
 
     // leased + running count; parked and pending do not.
     expect(await countRunningBotDeliveriesForInstallation("boti_1", NOW)).toBe(2)
@@ -884,5 +870,96 @@ describe("installation run slots", () => {
     expect(await claimBotDelivery("del_1", "host", NOW, { maxConcurrentRuns: 1 })).toBeDefined()
     expect(await claimBotDelivery("del_2", "host", NOW, { maxConcurrentRuns: 1 })).toBeUndefined()
     expect(await claimBotDelivery("del_2", "host", NOW, { maxConcurrentRuns: 2 })).toBeDefined()
+  })
+})
+
+/**
+ * One rule decides whether a delivery answers a run's `waitForEvent`, and the
+ * waiting step and the runner both apply it (B11).
+ */
+describe("event waits", () => {
+  const KEY = "boti_1::pr-7"
+  const waiter = { runId: "run_bot_del_w", installationId: "boti_1" }
+  const wait = { step: "answer", key: KEY, triggerId: "answer", deadline: NOW + 100 }
+
+  beforeEach(async () => {
+    __resetDbForTesting()
+    await getDb().botEventDeliveries.clear()
+  }, 15_000)
+
+  async function reply(id: string, overrides: Partial<BotEventEnvelopeV1> = {}, now = NOW) {
+    return enqueueBotDelivery({
+      envelope: envelope({
+        eventId: `evt_${id}`,
+        deliveryId: id,
+        triggerId: "answer",
+        correlation: KEY,
+        ...overrides,
+      }),
+      now,
+    })
+  }
+
+  it("scopes a wait key to the installation once, as deliveries carry it", () => {
+    expect(botCorrelationKey("boti_1", "pr-7")).toBe(KEY)
+    expect(botCorrelationKey("boti_1", KEY)).toBe(KEY)
+  })
+
+  it("leaves a reply for another trigger to run on its own", async () => {
+    await reply("other", { triggerId: "other" })
+    expect(await takeBotEventReply(waiter, wait, NOW + 1)).toBeUndefined()
+    expect((await getDb().botEventDeliveries.get("other"))?.status).toBe("pending")
+  })
+
+  it("takes a reply received by the deadline even when it is read later", async () => {
+    await reply("late", {}, NOW + 101)
+    await reply("in-time", {}, NOW + 99)
+    expect((await takeBotEventReply(waiter, wait, NOW + 130))?.deliveryId).toBe("in-time")
+    // A re-entry of the same wait finds what it consumed, never the late one.
+    expect((await takeBotEventReply(waiter, wait, NOW + 131))?.deliveryId).toBe("in-time")
+    // Received after the deadline, it answers nothing and runs on its own.
+    expect(await takeBotEventReply(waiter, { ...wait, step: "again" }, NOW + 132)).toBeUndefined()
+    expect((await getDb().botEventDeliveries.get("late"))?.status).toBe("pending")
+  })
+
+  it("consumes a reply once: a later round does not get the earlier round's answer", async () => {
+    await reply("first")
+    expect((await takeBotEventReply(waiter, wait, NOW + 1))?.deliveryId).toBe("first")
+    expect(await getDb().botEventDeliveries.get("first")).toMatchObject({
+      status: "dismissed",
+      consumedBy: { runId: waiter.runId, step: "answer" },
+    })
+
+    expect(await takeBotEventReply(waiter, { ...wait, step: "answer-2" }, NOW + 2)).toBeUndefined()
+  })
+
+  it("refuses a reply that was cancelled or already ran its own handler", async () => {
+    const cancelled = await reply("cancelled")
+    await getDb().botEventDeliveries.update(cancelled.id, {
+      status: "dismissed",
+      cancelledAt: NOW,
+    })
+    const ran = await reply("ran")
+    await getDb().botEventDeliveries.update(ran.id, { status: "succeeded" })
+
+    expect(await takeBotEventReply(waiter, wait, NOW + 1)).toBeUndefined()
+  })
+
+  it("hands an arriving reply to the open wait and wakes the parked run", async () => {
+    await enqueueBotDelivery({ envelope: envelope({ deliveryId: "del_w" }), now: NOW })
+    await getDb().botEventDeliveries.update("del_w", { runId: waiter.runId, eventWait: wait })
+    await parkBotDelivery("del_w", NOW + 20_000, NOW)
+    await reply("other", { triggerId: "other" })
+    await reply("answer")
+
+    // The wrong trigger is not swallowed: it runs on its own.
+    expect(await handBotReplyToWaitingRun("other", NOW + 5)).toBeUndefined()
+    expect((await getDb().botEventDeliveries.get("other"))?.status).toBe("pending")
+
+    expect((await handBotReplyToWaitingRun("answer", NOW + 5))?.id).toBe("del_w")
+    expect((await getDb().botEventDeliveries.get("del_w"))?.nextAttemptAt).toBe(NOW + 5)
+    // And the run, re-entering its step, accepts exactly what it was handed.
+    expect((await takeBotEventReply(waiter, wait, NOW + 6))?.deliveryId).toBe("answer")
+    expect((await getDb().botEventDeliveries.get("del_w"))?.eventWait).toBeUndefined()
   })
 })

@@ -190,6 +190,24 @@ async function resolveLocalDefinition(
  * the delivery runner, a manual run), so this is where a placeholder for an
  * installation that moved to a paired host is refused (ADR-0224).
  */
+/**
+ * Is this installation only waiting for its Bot to register here?
+ *
+ * True for an enabled, unpaused installation this host owns whose definition
+ * is not registered (`resolved` is null) or whose handler has not bound. That
+ * gap closes by itself (a plugin loading, or reloading), so the work it was
+ * owed is kept for it. A disabled, paused or remotely owned installation is
+ * not waiting for anything here and is not covered.
+ */
+export function awaitsBotRegistration(
+  installation: BotInstallationRow,
+  resolved: InstalledBot | null
+): boolean {
+  if (installation.status !== "enabled" || installation.paused) return false
+  if (!runsHere(installation.owner)) return false
+  return !resolved || resolved.problems.some((problem) => problem.kind === "handler_missing")
+}
+
 export function isRunnableBot(resolved: InstalledBot): boolean {
   if (resolved.installation.status !== "enabled" || resolved.installation.paused) return false
   if (!runsHere(resolved.installation.owner)) return false

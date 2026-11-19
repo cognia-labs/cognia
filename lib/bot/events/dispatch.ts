@@ -14,7 +14,12 @@ import { enqueueBotDelivery, BotIntakePausedError } from "@/lib/db/bot-event-del
 import { defaultsFromConfigSchema } from "@/lib/bot/config/resolve-effective"
 import { isBotTriggerArmed, listBotInstallations } from "@/lib/db/bot-installations"
 import type { BotEventDeliveryRow } from "@/lib/db/bot-types"
-import { resolveInstalledBot, isRunnableBot, type InstalledBot } from "@/lib/bot/installed-bot"
+import {
+  awaitsBotRegistration,
+  resolveInstalledBot,
+  isRunnableBot,
+  type InstalledBot,
+} from "@/lib/bot/installed-bot"
 import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 import type { PluginBotPolicyV1 } from "@/types/plugin/plugin-bot"
 
@@ -118,16 +123,9 @@ export async function dispatchBotEvent(
     const resolved = await resolveInstalledBot(installation, {
       organizationPolicy: input.organizationPolicy,
     })
-    if (!resolved) {
+    if (!resolved || !isRunnableBot(resolved)) {
       unresolved.push(installation.id)
-      retryable.push(installation.id)
-      continue
-    }
-    if (!isRunnableBot(resolved)) {
-      unresolved.push(installation.id)
-      if (resolved.problems.some((problem) => problem.kind === "handler_missing")) {
-        retryable.push(installation.id)
-      }
+      if (awaitsBotRegistration(installation, resolved)) retryable.push(installation.id)
       continue
     }
     bindings.push(...bindingsForInstalledBot(resolved))

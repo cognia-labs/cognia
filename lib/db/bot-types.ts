@@ -276,11 +276,17 @@ export interface BotEventDeliveryRow {
    */
   syncedFromHost?: true
   /**
-   * What a `parked` run is waiting on: an interrupt id, or a correlation key.
-   * Recorded so a delivery carrying the answer can tell that a run is already
-   * waiting for it rather than starting a second one.
+   * The event this delivery's run is waiting for, while a `step.waitForEvent`
+   * is open. Recorded so a delivery carrying the answer can tell that a run is
+   * already waiting for it rather than starting a second one, and matched by
+   * the same rule the waiting step applies (`answersBotEventWait`).
    */
-  waitingFor?: string
+  eventWait?: BotEventWait
+  /**
+   * The wait this delivery answered. A reply is consumed once: by the run
+   * that waited for it, never also by its own handler or by a later wait.
+   */
+  consumedBy?: { runId: string; step: string }
   /** The delivery id. Also `envelope.deliveryId`. */
   id: string
   eventId: string
@@ -339,9 +345,28 @@ export interface BotEventDeliveryRow {
    * the run, so a second dispatch folds onto the first delivery.
    */
   runPublication?: BotRunPublication
+  /**
+   * When this host first found the delivery's Bot unregistered (its plugin
+   * still loading, or its handler not bound yet). The work waits for it,
+   * without spending an attempt, until `BOT_NOT_READY_WINDOW_MS` from here;
+   * cleared when a run is admitted, so a later gap gets a window of its own.
+   */
+  notReadySince?: number
 }
 
 /** A settled run's pending `bot.run.<status>` event. See `runPublication`. */
+/** A run's open `step.waitForEvent`, kept on the run's own delivery row. */
+export interface BotEventWait {
+  /** The waiting step. */
+  step: string
+  /** Installation-scoped, as deliveries carry it (`botCorrelationKey`). */
+  key: string
+  /** The answer trigger, when several triggers share the key. */
+  triggerId?: string
+  /** A reply received after this instant does not answer the wait. */
+  deadline: number
+}
+
 export interface BotRunPublication {
   status: "completed" | "failed"
   /** The settled run's definition id, the event's `actor` and `botId`. */

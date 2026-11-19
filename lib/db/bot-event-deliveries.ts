@@ -15,7 +15,7 @@ import { getDb } from "@/lib/db/schema"
 import { isBotTriggerArmed } from "./bot-installations"
 import { deleteBotRunStepsForRuns } from "./bot-run-steps"
 import { recordTombstones } from "./tombstones"
-import type { BotDeliveryStatus, BotEventDeliveryRow } from "@/lib/db/bot-types"
+import type { BotDeliveryStatus, BotEventDeliveryRow, BotEventWait } from "@/lib/db/bot-types"
 import type { PluginBotRetryPolicy } from "@/types/plugin/plugin-bot"
 import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 import { decideNextAttempt } from "@/lib/queue/retry-policy"
@@ -563,7 +563,7 @@ export async function markBotDeliveryRunning(
       ) {
         const pending = {
           ...row,
-          status: row.waitingFor || row.runId ? ("parked" as const) : ("pending" as const),
+          status: row.runId ? ("parked" as const) : ("pending" as const),
           updatedAt: now,
         }
         delete pending.leaseOwner
@@ -576,7 +576,9 @@ export async function markBotDeliveryRunning(
         (row.envelope.receivedAt ?? row.receivedAt) <= conversation.automationCancelledBefore
       )
         return false
-      await db.botEventDeliveries.put({ ...row, status: "running", runId, updatedAt: now })
+      const running: BotEventDeliveryRow = { ...row, status: "running", runId, updatedAt: now }
+      delete running.notReadySince
+      await db.botEventDeliveries.put(running)
       return true
     }
   )
@@ -656,6 +658,54 @@ export async function failBotDelivery(
   })
 }
 
+/** How long accepted work waits for its Bot's definition and handler to register. */
+export const BOT_NOT_READY_WINDOW_MS = 10 * 60_000
+const BOT_NOT_READY_MIN_RETRY_MS = 1_000
+const BOT_NOT_READY_MAX_RETRY_MS = 60_000
+
+/**
+ * Hand a claimed delivery back because its Bot is not registered here yet.
+ *
+ * A plugin reloading, or a host whose runner started before its plugins
+ * registered, is a gap that closes by itself; dismissing the work then lost
+ * it for good, and a dismissed row cannot be retried. So the delivery goes
+ * back to `pending` without spending an attempt (the handler never ran) and
+ * comes due again after as long as it has already waited, capped at a minute.
+ * Past {@link BOT_NOT_READY_WINDOW_MS} it is dead-lettered: still visible, and
+ * still one Retry away once the plugin is back.
+ */
+export async function deferBotDeliveryUntilReady(
+  id: string,
+  owner: string,
+  now = Date.now()
+): Promise<BotEventDeliveryRow | undefined> {
+  const db = getDb()
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.get(id)
+    if (!row || isTerminalBotDelivery(row.status) || row.leaseOwner !== owner) return undefined
+    const since = row.notReadySince ?? now
+    const waited = now - since
+    const expired = waited >= BOT_NOT_READY_WINDOW_MS
+    const next: BotEventDeliveryRow = {
+      ...row,
+      status: expired ? "deadletter" : "pending",
+      notReadySince: since,
+      nextAttemptAt: expired
+        ? now
+        : now + Math.min(BOT_NOT_READY_MAX_RETRY_MS, Math.max(BOT_NOT_READY_MIN_RETRY_MS, waited)),
+      lastError: expired
+        ? "The Bot's definition or handler did not register in time"
+        : "Waiting for the Bot's definition and handler to register",
+      updatedAt: now,
+      ...(expired ? { settledAt: now } : {}),
+    }
+    delete next.leaseOwner
+    delete next.leaseExpiresAt
+    await db.botEventDeliveries.put(next)
+    return next
+  })
+}
+
 /**
  * Set a delivery aside until `resumeAt`, without spending an attempt.
  *
@@ -666,7 +716,6 @@ export async function failBotDelivery(
 export async function parkBotDelivery(
   id: string,
   resumeAt: number,
-  waitingFor?: string,
   now = Date.now(),
   owner?: string
 ): Promise<void> {
@@ -684,30 +733,11 @@ export async function parkBotDelivery(
       status: "parked",
       nextAttemptAt: resumeAt,
       updatedAt: now,
-      ...(waitingFor ? { waitingFor } : {}),
     }
     delete next.leaseOwner
     delete next.leaseExpiresAt
     await db.botEventDeliveries.put(next)
   })
-}
-
-/** A run parked on this correlation key, if one is already waiting for it. */
-export async function findParkedBotDeliveryWaitingFor(
-  installationId: string,
-  waitingFor: string,
-  incoming?: BotEventEnvelopeV1
-): Promise<BotEventDeliveryRow | undefined> {
-  const rows = await getDb()
-    .botEventDeliveries.where("installationId")
-    .equals(installationId)
-    .toArray()
-  return rows.find(
-    (row) =>
-      row.status === "parked" &&
-      row.waitingFor === waitingFor &&
-      (!incoming || correlatedBotEvents(row.envelope, incoming))
-  )
 }
 
 /**
@@ -897,7 +927,19 @@ export async function listBotDeliveries(query: {
     .slice(0, query.limit ?? 100)
 }
 
-/** Deliveries waiting on a correlation key, for a run parked in `waitForEvent`. */
+/**
+ * A correlation key as deliveries carry it: scoped to the installation, so two
+ * Bots watching one resource cannot consume each other's answers. The router
+ * and `ctx.bots.queue` stamp deliveries with it, and a wait matches on it. A
+ * key already scoped to this installation (an envelope's own `correlation`
+ * handed back by a handler) is returned unchanged rather than scoped twice.
+ */
+export function botCorrelationKey(installationId: string, key: string): string {
+  const prefix = `${installationId}::`
+  return key.startsWith(prefix) ? key : prefix + key
+}
+
+/** Do two envelopes belong to one conversation of one installation? */
 export function correlatedBotEvents(
   origin: BotEventEnvelopeV1,
   reply: BotEventEnvelopeV1
@@ -912,19 +954,153 @@ export function correlatedBotEvents(
   )
 }
 
-export async function findBotDeliveryByCorrelation(
-  correlation: string,
-  origin?: BotEventEnvelopeV1,
-  triggerId?: string
+/** The run a wait belongs to: its id, installation and, when it has one, its own delivery. */
+export interface BotEventWaiter {
+  runId: string
+  installationId: string
+  origin?: BotEventEnvelopeV1
+}
+
+/**
+ * Does `reply` answer this wait? The ONE rule: the waiting step and the
+ * delivery runner both apply it, so a delivery the runner hands to a waiting
+ * run is one the run accepts, and one the run would refuse is left to start
+ * its own handler.
+ *
+ * A reply answers when it carries the wait's key and answer trigger, was
+ * received by the deadline (one that arrived in time but is read later still
+ * counts), belongs to the run's conversation, and is still unclaimed: a reply
+ * that ran its own handler, was cancelled or coalesced away, or was consumed
+ * by a wait already (an earlier round's included) answers nothing more. The
+ * reply this same wait consumed keeps answering it, so a re-entry finds it.
+ */
+export function answersBotEventWait(
+  waiter: BotEventWaiter,
+  wait: BotEventWait,
+  reply: BotEventDeliveryRow
+): boolean {
+  if (reply.syncedFromHost || reply.runId === waiter.runId) return false
+  if (reply.installationId !== waiter.installationId || reply.correlation !== wait.key) return false
+  if (wait.triggerId && reply.triggerId !== wait.triggerId) return false
+  if (reply.receivedAt > wait.deadline) return false
+  if (waiter.origin && !correlatedBotEvents(waiter.origin, reply.envelope)) return false
+  if (reply.consumedBy) {
+    return reply.consumedBy.runId === waiter.runId && reply.consumedBy.step === wait.step
+  }
+  return reply.status === "pending" && reply.cancelledAt === undefined
+}
+
+/** Retire `reply` as consumed by this wait. Inside a transaction over `botEventDeliveries`. */
+async function consumeReply(
+  reply: BotEventDeliveryRow,
+  waiter: BotEventWaiter,
+  wait: BotEventWait,
+  now: number
+): Promise<void> {
+  if (reply.consumedBy) return
+  await getDb().botEventDeliveries.put({
+    ...reply,
+    status: "dismissed",
+    consumedBy: { runId: waiter.runId, step: wait.step },
+    lastError: "consumed by a waiting run",
+    updatedAt: now,
+    settledAt: now,
+  })
+}
+
+/**
+ * Open a wait on the run's own delivery, so the runner can hand an arriving
+ * reply to it. Replaces any wait the run had open: a run waits on one step at
+ * a time. A run without a delivery (a step driven outside the queue) records
+ * nothing, and only its own polling can find a reply.
+ */
+export async function openBotEventWait(
+  runId: string,
+  wait: BotEventWait,
+  now = Date.now()
+): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.where("runId").equals(runId).first()
+    if (!row || isTerminalBotDelivery(row.status)) return
+    await db.botEventDeliveries.put({ ...row, eventWait: wait, updatedAt: now })
+  })
+}
+
+/** Close the run's open wait, when it timed out. */
+export async function closeBotEventWait(runId: string, now = Date.now()): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.where("runId").equals(runId).first()
+    if (!row?.eventWait) return
+    const next: BotEventDeliveryRow = { ...row, updatedAt: now }
+    delete next.eventWait
+    await db.botEventDeliveries.put(next)
+  })
+}
+
+/**
+ * Take the reply that answers a wait, oldest first, and close the wait.
+ *
+ * Consumed in the same transaction it is chosen in, so the runner cannot claim
+ * it for its own handler in between: one arrival answers one wait, once.
+ */
+export async function takeBotEventReply(
+  waiter: BotEventWaiter,
+  wait: BotEventWait,
+  now = Date.now()
+): Promise<BotEventEnvelopeV1 | undefined> {
+  const db = getDb()
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const candidates = await db.botEventDeliveries.where("correlation").equals(wait.key).toArray()
+    const reply = candidates
+      .filter((row) => answersBotEventWait(waiter, wait, row))
+      .sort((a, b) => a.receivedAt - b.receivedAt || a.id.localeCompare(b.id))[0]
+    if (!reply) return undefined
+    await consumeReply(reply, waiter, wait, now)
+    const own = await db.botEventDeliveries.where("runId").equals(waiter.runId).first()
+    if (own?.eventWait?.step === wait.step) {
+      const next: BotEventDeliveryRow = { ...own, updatedAt: now }
+      delete next.eventWait
+      await db.botEventDeliveries.put(next)
+    }
+    return reply.envelope
+  })
+}
+
+/**
+ * Hand a just-arrived delivery to the run already waiting for it, if one is.
+ *
+ * Checked before the delivery is claimed, by the same rule the waiting step
+ * applies. The reply is consumed for that run and a parked run is woken now
+ * rather than at its next interval. Returns the waiting run's delivery, or
+ * undefined when no open wait accepts this reply and it should run on its own.
+ */
+export async function handBotReplyToWaitingRun(
+  replyId: string,
+  now = Date.now()
 ): Promise<BotEventDeliveryRow | undefined> {
-  const rows = await getDb().botEventDeliveries.where("correlation").equals(correlation).toArray()
-  return rows.find(
-    (row) =>
-      !row.syncedFromHost &&
-      row.cancelledAt === undefined &&
-      (!origin || correlatedBotEvents(origin, row.envelope)) &&
-      (!triggerId || row.triggerId === triggerId)
-  )
+  const db = getDb()
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const reply = await db.botEventDeliveries.get(replyId)
+    if (!reply?.correlation) return undefined
+    const rows = await db.botEventDeliveries
+      .where("installationId")
+      .equals(reply.installationId)
+      .toArray()
+    for (const row of rows) {
+      const wait = row.eventWait
+      if (!wait || !row.runId || (row.status !== "parked" && row.status !== "running")) continue
+      const waiter = { runId: row.runId, installationId: row.installationId, origin: row.envelope }
+      if (!answersBotEventWait(waiter, wait, reply)) continue
+      await consumeReply(reply, waiter, wait, now)
+      if (row.status === "parked") {
+        await db.botEventDeliveries.put({ ...row, nextAttemptAt: now, updatedAt: now })
+      }
+      return row
+    }
+    return undefined
+  })
 }
 
 /**

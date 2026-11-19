@@ -531,7 +531,8 @@ describe("cross-process step parity", () => {
       payload: {},
       occurredAt: 1,
     })
-    envelope.correlation = "key-1"
+    // Scoped to the installation, as the router and `ctx.bots.queue` stamp it.
+    envelope.correlation = "install::key-1"
     await enqueueBotDelivery({ envelope })
     const settled = await api.waitForEvent("run", "ci", { key: "key-1", timeoutMs: 60_000 })
     expect(settled).toEqual({ status: "settled", value: envelope })
