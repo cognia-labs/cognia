@@ -1221,6 +1221,8 @@ pub(super) async fn dispatch(
                 return Err(tenant_execution_refusal("execution_isolation_unavailable"));
             }
             let stdin: Option<String> = optional(&args, "stdin")?;
+            let network = optional(&args, "network")?
+                .unwrap_or(cognia_exec_sandbox::types::NetworkPolicy::On);
             let timeout_ms: u64 = required(&args, "timeoutMs")?;
             let denied = |violation: cognia_external_agent::presets::PolicyViolation| {
                 RpcError::forbidden(format!("task shell denied by policy: {violation}"))
@@ -1256,6 +1258,7 @@ pub(super) async fn dispatch(
                     argv,
                     env,
                     stdin,
+                    network,
                     timeout_ms,
                 })
                 .await;

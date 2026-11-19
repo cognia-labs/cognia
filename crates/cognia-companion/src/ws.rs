@@ -749,10 +749,7 @@ fn person_frame_visible(frame: &super::event_bus::EventFrame, tenant_id: Option<
 }
 
 fn frame_visible_to_tenant(frame: &super::event_bus::EventFrame, tenant_id: Option<&str>) -> bool {
-    match frame.payload.get("tenantId").and_then(Value::as_str) {
-        Some(event_tenant) => tenant_id == Some(event_tenant),
-        None => true,
-    }
+    frame.visible_to_tenant(tenant_id)
 }
 
 fn unix_time_secs() -> i64 {

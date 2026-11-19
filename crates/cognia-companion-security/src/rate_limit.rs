@@ -281,6 +281,38 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn retry_after_tracks_fractional_refill_and_rounds_up_to_whole_seconds() {
+        let limiter = RateLimiter::new(RateLimitConfig {
+            capacity: 1.0,
+            refill_per_sec: 0.5,
+        });
+        let t0 = Instant::now();
+        assert!(matches!(
+            limiter.check_at("dev", t0),
+            RateLimitDecision::Accept
+        ));
+        for (elapsed_ms, expected_secs) in [(0, 2), (500, 2), (1000, 1)] {
+            match limiter.check_at("dev", t0 + Duration::from_millis(elapsed_ms)) {
+                RateLimitDecision::Reject { retry_after } => {
+                    assert_eq!(retry_after, Duration::from_secs(expected_secs));
+                }
+                RateLimitDecision::Accept => panic!("accepted after only {elapsed_ms}ms"),
+            }
+        }
+        let refilled = t0 + Duration::from_secs(2);
+        assert!(matches!(
+            limiter.check_at("dev", refilled),
+            RateLimitDecision::Accept
+        ));
+        match limiter.check_at("dev", refilled) {
+            RateLimitDecision::Reject { retry_after } => {
+                assert_eq!(retry_after, Duration::from_secs(2));
+            }
+            RateLimitDecision::Accept => panic!("a successful call must consume its token"),
+        }
+    }
+
     // The regression this class split exists for: a paired client's first
     // act is `runSyncDown`, 25 sync_pull calls back to back (more once a
     // table pages). On the strict bucket everything past the tenth was

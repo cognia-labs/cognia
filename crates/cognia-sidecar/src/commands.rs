@@ -468,7 +468,8 @@ pub async fn claude_interrupt_impl_with_id(
         json!({ "type": "interrupt", "sessionId": session_id }),
         command_id,
     );
-    state.write_command(&msg).await
+    state.write_command(&msg).await?;
+    state.wait_automation_settled(Some(&session_id)).await
 }
 
 pub async fn claude_compact_impl_with_id(
@@ -523,7 +524,8 @@ pub async fn claude_close_session_impl_with_id(
         json!({ "type": "close", "sessionId": session_id }),
         command_id,
     );
-    state.write_command(&msg).await
+    state.write_command(&msg).await?;
+    state.wait_automation_settled(Some(&session_id)).await
 }
 
 pub async fn claude_sidecar_status_impl(state: &SidecarState) -> Result<SidecarStatus, String> {

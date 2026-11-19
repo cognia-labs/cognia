@@ -254,7 +254,7 @@ impl RpcWorkQueue {
     }
 }
 
-fn inbound_is_read_only(bytes: &[u8]) -> bool {
+fn inbound_allows_parallel(bytes: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return false;
     };
@@ -264,10 +264,15 @@ fn inbound_is_read_only(bytes: &[u8]) -> bool {
     ) {
         return true;
     }
-    value
-        .get("method")
-        .and_then(Value::as_str)
-        .and_then(crate::command_manifest::descriptor)
+    let method = value.get("method").and_then(Value::as_str);
+    // An LSP mutation may be suspended waiting for its server callback.
+    // The correlated response must be able to release that same mutation.
+    if method == Some("lsp_host_request")
+        && value.pointer("/params/method").and_then(Value::as_str) == Some("lsp:serverResponse")
+    {
+        return true;
+    }
+    method.and_then(crate::command_manifest::descriptor)
         .is_some_and(|descriptor| {
             descriptor.operation == crate::command_manifest::CommandOperation::Read
         })
@@ -330,6 +335,15 @@ async fn run(
     let mut subscription = crate::event_channels::EventSubscription::defaults_for(
         crate::event_channels::ConnectionScope::Device,
     );
+    // This lane authenticates a device ID. LSP additionally needs the tenant;
+    // an ambiguous ID cannot receive either tenant's private callback stream.
+    let lsp_tenant = security_store()
+        .and_then(|store| store.unambiguous_device_tenant(&device_id).ok().flatten());
+    let visible_to_device = |frame: &EventFrame| {
+        frame.visible_to(&device_id)
+            && (frame.event_type != crate::event_channels::DEVICE_LSP_EVENT
+                || frame.visible_to_tenant(lsp_tenant.as_deref()))
+    };
 
     // Subscribe to EventBus with since=None → start at high-water mark
     // (matches the existing WS subscription default behaviour).
@@ -467,7 +481,7 @@ async fn run(
                                         SubscribeResult::Ok { receiver, replay, replay_cursor } => {
                                             event_rx = crate::event_bus::LiveReceiver::new(state.event_bus.clone(), receiver, replay_cursor);
                                             let _ = peer.send_bytes(serde_json::to_vec(&json!({"kind":"event-watch-ready","cursor":since.unwrap_or(replay_cursor),"channels":outcome.channels,"rejected":[]})).unwrap_or_default()).await;
-                                            let visible: Vec<EventFrame> = replay.into_iter().filter(|frame| frame.visible_to(&device_id)
+                                            let visible: Vec<EventFrame> = replay.into_iter().filter(|frame| visible_to_device(frame)
                                                 && crate::person_chat::person_connection_visible(frame, &device_id, None)
                                                 && crate::person_partition::event_visible(frame, &device_id, None)
                                                 && audience.as_ref().is_some_and(|audience| audience.allows(frame))
@@ -504,7 +518,7 @@ async fn run(
                                             let visible: Vec<EventFrame> = replay
                                                 .into_iter()
                                                 .filter(|frame| {
-                                                    frame.visible_to(&device_id)
+                                                    visible_to_device(frame)
                                                         && crate::person_chat::person_connection_visible(frame, &device_id, None)
                                                         && crate::person_partition::event_visible(frame, &device_id, None)
                                                         && audience.as_ref().is_some_and(|audience| audience.allows(frame))
@@ -583,12 +597,13 @@ async fn run(
                             }
                             continue;
                         }
-                        let read_only = inbound_is_read_only(&bytes);
+                        let read_only = inbound_allows_parallel(&bytes);
                         let peer = peer.clone();
                         let state = state.clone();
                         let device_id = device_id.clone();
+                        let lsp_tenant = lsp_tenant.clone();
                         rpc_work.push(read_only, Box::pin(async move {
-                            handle_inbound(&peer, bytes, &state, &device_id).await
+                            handle_inbound(&peer, bytes, &state, &device_id, lsp_tenant.as_deref()).await
                         }));
                     }
                     ReassemblyResult::Cancel { message_id, reason } => {
@@ -609,7 +624,7 @@ async fn run(
                 use tokio::sync::broadcast::error::RecvError;
                 match recv_result {
                     Ok(frame) => {
-                        if !frame.visible_to(&device_id)
+                        if !visible_to_device(&frame)
                             || !crate::person_chat::person_connection_visible(&frame, &device_id, None)
                             || !crate::person_partition::event_visible(&frame, &device_id, None)
                             || !audience.as_ref().is_some_and(|audience| audience.allows(&frame))
@@ -681,6 +696,7 @@ async fn handle_inbound(
     bytes: Vec<u8>,
     state: &SharedState,
     device_id: &str,
+    lsp_tenant: Option<&str>,
 ) -> Result<(), String> {
     log::debug!(
         "signaling::dispatch: inbound {} bytes for device {device_id}",
@@ -724,11 +740,15 @@ async fn handle_inbound(
     }
 
     let security = security_store().ok_or_else(|| "security store unavailable".to_string())?;
-    let tenant_id = if crate::deployment::deployment_mode() == crate::deployment::DeploymentMode::MultiTenant {
+    let lsp = matches!(rpc.method.as_str(), "lsp_host_ensure" | "lsp_host_request");
+    let tenant_id = if lsp || crate::deployment::deployment_mode() == crate::deployment::DeploymentMode::MultiTenant {
         security.unambiguous_device_tenant(device_id)
     } else { security.active_device_tenant(device_id) }
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "registered device principal unavailable".to_string())?;
+    if lsp && lsp_tenant != Some(tenant_id.as_str()) {
+        return Err("registered LSP device principal changed".into());
+    }
     let principal = DeviceContext {
         device_id: device_id.to_string(),
         tenant_id,
@@ -1236,6 +1256,7 @@ mod tests {
             request("host.operation.get", &operation),
             &state,
             "relay-owner",
+            None,
         )
         .await
         .unwrap();
@@ -1259,6 +1280,7 @@ mod tests {
             request("host.operation.get", &operation),
             &state,
             "relay-owner",
+            None,
         )
         .await
         .unwrap();
@@ -1286,7 +1308,7 @@ mod tests {
                 "operation_not_found",
             ),
         ] {
-            handle_inbound(&carrier, request(method, id), &state, device)
+            handle_inbound(&carrier, request(method, id), &state, device, None)
                 .await
                 .unwrap();
             let refused = relay_json(&mut received).await;
@@ -1311,6 +1333,7 @@ mod tests {
                 request("host.operation.get", &id),
                 &state,
                 "relay-owner",
+                None,
             )
             .await
             .unwrap();
@@ -1437,8 +1460,8 @@ mod tests {
                 crate::rate_limit::RateLimitDecision::Accept
             ));
         }
-        assert!(inbound_is_read_only(br#"{"kind":"binary-resource"}"#));
-        assert!(!inbound_is_read_only(br#"{"method":"unknown-write"}"#));
+        assert!(inbound_allows_parallel(br#"{"kind":"binary-resource"}"#));
+        assert!(!inbound_allows_parallel(br#"{"method":"unknown-write"}"#));
     }
 
     #[test]
@@ -1583,7 +1606,29 @@ mod tests {
 
     #[test]
     fn operation_observation_is_a_read_control_frame() {
-        assert!(inbound_is_read_only(br#"{"kind":"operation-get","method":"host.operation.get","params":{"operationId":"00000000-0000-4000-8000-000000000001"}}"#));
-        assert!(inbound_is_read_only(br#"{"kind":"catalog-get","method":"host.catalog.get","params":{"cursor":0}}"#));
+        assert!(inbound_allows_parallel(br#"{"kind":"operation-get","method":"host.operation.get","params":{"operationId":"00000000-0000-4000-8000-000000000001"}}"#));
+        assert!(inbound_allows_parallel(br#"{"kind":"catalog-get","method":"host.catalog.get","params":{"cursor":0}}"#));
+    }
+
+    #[tokio::test]
+    async fn lsp_callback_responses_can_complete_a_running_mutation() {
+        let response = br#"{"method":"lsp_host_request","params":{"method":"lsp:serverResponse","payloadJson":"{}"}}"#;
+        assert!(inbound_allows_parallel(response));
+        assert!(!inbound_allows_parallel(
+            br#"{"method":"lsp_host_request","params":{"method":"lsp:start","payloadJson":"{}"}}"#
+        ));
+        let mut queue = RpcWorkQueue::default();
+        let (reply, pending) = tokio::sync::oneshot::channel();
+        queue.push(false, Box::pin(async move {
+            pending.await.map_err(|error| error.to_string())
+        }));
+        queue.push(inbound_allows_parallel(response), Box::pin(async move {
+            reply.send(()).map_err(|_| "request was dropped".to_owned())
+        }));
+        for _ in 0..2 {
+            tokio::time::timeout(std::time::Duration::from_secs(1), queue.complete_next())
+                .await.expect("callback must release the in-flight mutation")
+                .expect("queued job").expect("fixture job succeeded");
+        }
     }
 }

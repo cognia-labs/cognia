@@ -3801,6 +3801,8 @@ fn remote_lsp_method_allowed(method: &str) -> bool {
             | "lsp:didClose"
             | "lsp:request"
             | "lsp:cancel"
+            | "lsp:serverResponse"
+            | "lsp:clientNotification"
             | "lsp:list"
             | "lsp:status"
             | "lsp:logs"

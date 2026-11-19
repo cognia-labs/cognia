@@ -98,10 +98,17 @@ mod tests {
         let t0 = Instant::now();
         b.note_failure(t0); // failures = 1
         b.note_failure(t0); // failures = 2 → delay 250ms
-        let inside = b.remaining(t0 + Duration::from_millis(100));
-        assert!(inside.is_some());
-        assert!(inside.unwrap() <= Duration::from_millis(150));
-        assert!(b.remaining(t0 + Duration::from_millis(300)).is_none());
+        assert_eq!(b.remaining(t0), Some(Duration::from_millis(250)));
+        assert_eq!(
+            b.remaining(t0 + Duration::from_millis(100)),
+            Some(Duration::from_millis(150))
+        );
+        assert_eq!(
+            b.remaining(t0 + Duration::from_millis(249)),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(b.remaining(t0 + Duration::from_millis(250)), None);
+        assert_eq!(b.remaining(t0 + Duration::from_millis(300)), None);
     }
 
     #[test]

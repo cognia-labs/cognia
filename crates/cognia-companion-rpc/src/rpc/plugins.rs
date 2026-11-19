@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::*;
 
 use cognia_companion::remote_execution::ExecutionPlane;
@@ -1341,10 +1343,47 @@ pub(super) async fn dispatch(
                 .map_err(RpcError::service_unavailable)
         }
         "lsp_host_ensure" => {
-            cognia_plugin_runtime::vscode::commands::ensure_system_lsp_host_for_state(
-                host.vscode_plugins(),
-            )
-            .await
+            use cognia_plugin_runtime::vscode::commands::{
+                ensure_device_lsp_host, ensure_system_lsp_host_for_state,
+            };
+            if cognia_companion::jwt::is_service_scope(scope) {
+                ensure_system_lsp_host_for_state(host.vscode_plugins()).await
+            } else {
+                let tenant = tenant_id.ok_or_else(|| RpcError::forbidden("device tenant required"))?;
+                let bus = Arc::downgrade(&state.event_bus);
+                let recipient = device_id.to_owned();
+                let event_tenant = tenant.to_owned();
+                ensure_device_lsp_host(
+                    host.vscode_plugins(),
+                    tenant,
+                    device_id,
+                    Arc::new(move |_, frame| {
+                        if let (Some(bus), Ok(Value::Object(mut payload))) =
+                            (bus.upgrade(), serde_json::from_str::<Value>(&frame))
+                        {
+                            let rpc = payload.get("rawFrame").and_then(Value::as_str)
+                                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+                            let allowed = rpc.as_ref().and_then(|rpc| rpc.get("method"))
+                                .and_then(Value::as_str).is_some_and(|method| matches!(
+                                    method,
+                                    "lsp:publishDiagnostics" | "lsp:state" | "lsp:serverRequest"
+                                        | "lsp:serverNotification" | "lsp:installProgress"
+                                        | "protocol:message" | "protocol:state" | "protocol:log"
+                                ));
+                            if !allowed {
+                                return;
+                            }
+                            payload.insert("tenantId".into(), Value::String(event_tenant.clone()));
+                            bus.publish_ephemeral_to(
+                                cognia_companion::event_channels::DEVICE_LSP_EVENT.to_owned(),
+                                Value::Object(payload),
+                                recipient.clone(),
+                            );
+                        }
+                    }),
+                )
+                .await
+            }
             .map(|_| Value::Null)
             .map_err(vscode_rpc_error)
         }
@@ -1360,13 +1399,27 @@ pub(super) async fn dispatch(
                 Some(value) => value.to_string(),
                 None => "null".to_string(),
             };
-            cognia_plugin_runtime::vscode::commands::plugin_invoke_vscode_rpc_for_state(
-                host.vscode_plugins(),
-                cognia_plugin_runtime::vscode::commands::LSP_HOST_KEY.to_string(),
-                method,
-                payload_json,
-            )
-            .await
+            if cognia_companion::jwt::is_service_scope(scope) {
+                cognia_plugin_runtime::vscode::commands::plugin_invoke_vscode_rpc_for_state(
+                    host.vscode_plugins(),
+                    cognia_plugin_runtime::vscode::commands::LSP_HOST_KEY.to_string(),
+                    method,
+                    payload_json,
+                )
+                .await
+            } else {
+                let tenant = tenant_id.ok_or_else(|| RpcError::forbidden("device tenant required"))?;
+                let payload = serde_json::from_str(&payload_json)
+                    .map_err(|_| RpcError::malformed("invalid LSP payload JSON".into()))?;
+                cognia_plugin_runtime::vscode::commands::invoke_device_lsp_host(
+                    host.vscode_plugins(),
+                    tenant,
+                    device_id,
+                    &method,
+                    payload,
+                )
+                .await
+            }
             .map(Value::String)
             .map_err(vscode_rpc_error)
         }
@@ -1747,6 +1800,97 @@ fn codeserver_rpc_error(message: String) -> (StatusCode, Json<RpcError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn paired_lsp_routes_diagnostics_and_callbacks_to_only_the_authenticated_device() {
+        use cognia_companion::event_bus::SubscribeResult;
+        use cognia_companion::event_channels::{ConnectionScope, DEVICE_LSP_EVENT};
+
+        let state = super::super::tests::test_state();
+        let host = crate::headless::HeadlessServices::stub_for_tests();
+        let fixture = tempfile::tempdir().expect("LSP fixture directory");
+        let script = fixture.path().join("host.cjs");
+        std::fs::write(
+            &script,
+            r#"
+const readline = require("node:readline");
+const send = (message) => console.log(JSON.stringify({jsonrpc: "2.0", ...message}));
+const pending = new Set();
+send({method: "sidecar:ready", params: {}});
+readline.createInterface({input: process.stdin}).on("line", (line) => {
+  const {id, method, params} = JSON.parse(line);
+  let result = {ok: true};
+  if (method === "lsp:didOpen") {
+    pending.add(params.requestId);
+    send({method: "lsp:publishDiagnostics", params: {uri: params.uri, diagnostics: []}});
+    send({method: "lsp:serverRequest", params: {requestId: params.requestId, method: "workspace/workspaceFolders"}});
+  }
+  if (method === "lsp:serverResponse") result = {accepted: pending.delete(params.requestId)};
+  send({id, result});
+});
+"#,
+        ).expect("write fixture sidecar");
+        host.vscode_plugins.configure_host(script, None, Arc::new(|_, _| {
+            panic!("device events must never use the local sink");
+        }));
+
+        let SubscribeResult::Ok { mut receiver, .. } = state.event_bus.subscribe(None, 0) else {
+            panic!("fixture subscription failed");
+        };
+        // The outer dispatcher separately verifies admin leases and control
+        // capabilities. Drive the inner RPC with already authenticated IDs.
+        macro_rules! call {
+            ($tenant:expr, $device:expr, $command:expr, $args:expr) => {
+                dispatch($command, $args, &state, &host, $device, Some($tenant), None, ExecutionPlane::Network).await
+            };
+        }
+        for (tenant, device) in [("tenant-a", "browser-a"), ("tenant-a", "browser-b"), ("tenant-b", "browser-a")] {
+            call!(tenant, device, "lsp_host_ensure", json!({"deviceId": "forged", "tenantId": "forged"}))
+                .expect("ensure private LSP host");
+        }
+        assert!(host.vscode_plugins.sidecars.read().is_empty());
+        let request = |method: &str, payload: Value| {
+            json!({"method": method, "payloadJson": payload.to_string()})
+        };
+        call!(
+            "tenant-a",
+            "browser-a",
+            "lsp_host_request",
+            request("lsp:didOpen", json!({
+                "uri": "file:///fixture/a.ts", "requestId": "callback-a", "deviceId": "browser-b"
+            }))
+        ).expect("open fixture document");
+        for method in ["lsp:publishDiagnostics", "lsp:serverRequest"] {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                .await.expect("receive live LSP frame").expect("event bus open");
+            assert_eq!(frame.event_type, DEVICE_LSP_EVENT);
+            assert!(frame.visible_to_connection("browser-a", ConnectionScope::Device));
+            assert!(!frame.visible_to_connection("browser-b", ConnectionScope::Device));
+            assert!(!frame.visible_to_connection("brain-local", ConnectionScope::Service));
+            assert!(frame.visible_to_tenant(Some("tenant-a")));
+            assert!(!frame.visible_to_tenant(Some("tenant-b")));
+            let rpc: Value = serde_json::from_str(frame.payload["rawFrame"].as_str().unwrap()).unwrap();
+            assert_eq!(rpc["method"], method);
+        }
+        for (tenant, device, accepted) in [
+            ("tenant-a", "browser-b", false),
+            ("tenant-b", "browser-a", false),
+            ("tenant-a", "browser-a", true),
+        ] {
+            let response = call!(
+                tenant,
+                device,
+                "lsp_host_request",
+                request("lsp:serverResponse", json!({"requestId": "callback-a"}))
+            ).expect("answer fixture callback");
+            let response: Value = serde_json::from_str(response.as_str().unwrap()).unwrap();
+            assert_eq!(response, json!({"accepted": accepted}));
+        }
+        let SubscribeResult::Ok { replay, .. } = state.event_bus.subscribe(Some(0), 0) else {
+            panic!("fixture replay failed");
+        };
+        assert!(replay.iter().all(|frame| frame.event_type != DEVICE_LSP_EVENT));
+    }
 
     #[test]
     fn loopback_plane_is_what_discloses_the_workbench_port() {

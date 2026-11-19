@@ -108,6 +108,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn multiple_entries_form_a_union_in_either_order() {
+        let entries = ["10.2.0.0/16", "192.168.4.0/24", "203.0.113.9"];
+        for raw in [
+            entries.map(String::from).to_vec(),
+            entries.into_iter().rev().map(String::from).collect(),
+        ] {
+            let list = ParsedAllowlist::parse(&raw).unwrap();
+            for allowed in [
+                "10.2.255.255",
+                "192.168.4.0",
+                "192.168.4.255",
+                "203.0.113.9",
+            ] {
+                assert!(
+                    list.contains(allowed.parse().unwrap()),
+                    "must allow {allowed}"
+                );
+            }
+            for denied in ["10.3.0.0", "192.168.3.255", "192.168.5.0", "203.0.113.8"] {
+                assert!(
+                    !list.contains(denied.parse().unwrap()),
+                    "must deny {denied}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn loopback_default() {
         let list = ParsedAllowlist::parse(&["127.0.0.1/32".to_string()]).unwrap();
         assert!(list.contains(Ipv4Addr::new(127, 0, 0, 1)));

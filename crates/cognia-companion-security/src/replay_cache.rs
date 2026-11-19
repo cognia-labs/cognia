@@ -156,6 +156,24 @@ mod tests {
     }
 
     #[test]
+    fn blocks_replay_until_exact_expiry_without_extending_the_original_window() {
+        let cache = ReplayCache::new();
+        assert_eq!(cache.redeem("edge", EXPIRY, NOW), Redemption::Fresh);
+        // A replay with a later claimed expiry must neither redeem nor extend it.
+        assert_eq!(
+            cache.redeem("edge", EXPIRY + 600, EXPIRY - 1),
+            Redemption::Replayed
+        );
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.redeem("edge", EXPIRY + 60, EXPIRY), Redemption::Fresh);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache.redeem("edge", EXPIRY + 60, EXPIRY + 59),
+            Redemption::Replayed
+        );
+    }
+
+    #[test]
     fn prunes_expired_entries() {
         let cache = ReplayCache::new();
         assert!(cache.mark_redeemed("assertion-1", NOW + 1, NOW));

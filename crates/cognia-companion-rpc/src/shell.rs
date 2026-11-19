@@ -48,7 +48,7 @@ pub(crate) fn shell_exec_with_env(
     timeout_secs: Option<u64>,
     environment: BTreeMap<String, String>,
 ) -> Result<ShellResult, String> {
-    shell_exec_with_env_timeout_cap(cmd, cwd, timeout_secs, environment, MAX_TIMEOUT_SECS)
+    shell_exec_with_env_timeout_cap(cmd, cwd, timeout_secs, environment, MAX_TIMEOUT_SECS, true)
 }
 
 pub(crate) fn shell_exec_with_env_timeout_cap(
@@ -57,6 +57,7 @@ pub(crate) fn shell_exec_with_env_timeout_cap(
     timeout_secs: Option<u64>,
     environment: BTreeMap<String, String>,
     max_timeout_secs: u64,
+    inherit_environment: bool,
 ) -> Result<ShellResult, String> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
@@ -72,6 +73,9 @@ pub(crate) fn shell_exec_with_env_timeout_cap(
 
     let mut command = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
+        if !inherit_environment {
+            c.arg("/D");
+        }
         c.arg("/C").arg(trimmed);
         c
     } else {
@@ -79,6 +83,9 @@ pub(crate) fn shell_exec_with_env_timeout_cap(
         c.arg("-c").arg(trimmed);
         c
     };
+    if !inherit_environment {
+        command.env_clear();
+    }
     command
         .current_dir(&cwd_path)
         .envs(environment)
@@ -189,6 +196,23 @@ mod tests {
         ));
         let _ = std::fs::create_dir_all(&p);
         p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_shell_keeps_explicit_variables_and_clears_the_ambient_environment() {
+        let cwd = tempfile::tempdir().unwrap();
+        let result = shell_exec_with_env_timeout_cap(
+            r#"printf '%s:%s' "${HOME-unset}" "$COGNIA_SHELL_FIXTURE""#.into(),
+            cwd.path().to_string_lossy().into(),
+            Some(5),
+            BTreeMap::from([("COGNIA_SHELL_FIXTURE".into(), "explicit".into())]),
+            MAX_TIMEOUT_SECS,
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.stdout, "unset:explicit");
     }
 
     #[test]

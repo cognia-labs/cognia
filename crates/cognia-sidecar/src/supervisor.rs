@@ -182,6 +182,16 @@ fn apply_managed_proxy_env(
 
 fn handle_active_run_event(state: &SidecarState, generation: u64, value: &Value) {
     let session_id = value.get("sessionId").and_then(Value::as_str);
+    if matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("turn_settled" | "session_ended")
+    ) {
+        if let (Some(session), Some(turn)) =
+            (session_id, value.get("turnId").and_then(Value::as_str))
+        {
+            state.finish_automation_turn(generation, session, turn);
+        }
+    }
     match value.get("type").and_then(Value::as_str) {
         Some("executor_started") => {
             if let (Some(session_id), Some(executor_id)) =
@@ -287,6 +297,8 @@ fn handle_active_run_event(state: &SidecarState, generation: u64, value: &Value)
 /// Shared, mutable state. Cloned cheaply via `Arc`.
 #[derive(Clone, Default)]
 pub struct SidecarState {
+    closing_generation: Arc<std::sync::atomic::AtomicU64>,
+    automation_lifecycle: Arc<ParkingMutex<Option<Arc<dyn super::host::AutomationRunLifecycle>>>>,
     inner: Arc<Mutex<Inner>>,
     active_runs: Arc<ParkingMutex<ActiveRunRegistry>>,
     /// The live child's stdin, kept behind its own lock — separate from
@@ -322,6 +334,8 @@ pub struct SidecarState {
 
 #[derive(Debug)]
 struct ActiveRunHold {
+    automation_epoch: Option<u64>,
+    automation_revoked: bool,
     token_id: u64,
     generation: Option<u64>,
     command_id: Option<String>,
@@ -365,6 +379,86 @@ struct Inner {
 }
 
 impl SidecarState {
+    fn finish_automation_turn(&self, generation: u64, session: &str, turn: &str) {
+        let lifecycle = self.automation_lifecycle.lock();
+        let owners: Vec<_> = self
+            .active_runs
+            .lock()
+            .by_session
+            .get_mut(session)
+            .into_iter()
+            .flatten()
+            .filter(|hold| {
+                hold.generation == Some(generation) && hold.turn_id.as_deref() == Some(turn)
+            })
+            .map(|hold| {
+                hold.automation_revoked = true;
+                format!("sidecar-run:{}", hold.token_id)
+            })
+            .collect();
+        if let Some(lifecycle) = lifecycle.as_ref() {
+            for owner in owners {
+                lifecycle.revoke(&owner);
+            }
+        }
+    }
+    pub async fn wait_automation_settled(&self, session: Option<&str>) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let settled = self
+                .automation_lifecycle
+                .lock()
+                .as_ref()
+                .is_none_or(|lifecycle| lifecycle.settled(session));
+            if settled {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(
+                    "automation is still stopping; execution cleanup is not confirmed".into(),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    pub fn set_automation_lifecycle(
+        &self,
+        lifecycle: Arc<dyn super::host::AutomationRunLifecycle>,
+    ) {
+        *self.automation_lifecycle.lock() = Some(lifecycle);
+    }
+
+    pub fn revoke_automation_session(&self, session: &str) {
+        let lifecycle = self.automation_lifecycle.lock();
+        if let Some(holds) = self.active_runs.lock().by_session.get_mut(session) {
+            for hold in holds {
+                hold.automation_revoked = true;
+            }
+        }
+        if let Some(lifecycle) = lifecycle.as_ref() {
+            lifecycle.revoke_session(session);
+        }
+    }
+
+    pub fn revoke_automation_all(&self) {
+        self.revoke_automation_all_inner(false);
+    }
+
+    fn revoke_automation_all_inner(&self, closing: bool) {
+        let lifecycle = self.automation_lifecycle.lock();
+        if closing {
+            self.closing_generation
+                .fetch_max(self.current_epoch(), std::sync::atomic::Ordering::SeqCst);
+        }
+        for holds in self.active_runs.lock().by_session.values_mut() {
+            for hold in holds {
+                hold.automation_revoked = true;
+            }
+        }
+        if let Some(lifecycle) = lifecycle.as_ref() {
+            lifecycle.revoke_all();
+        }
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -455,25 +549,68 @@ impl SidecarState {
         self.begin_run(session_id, command_id, None)
     }
 
-    fn activate_pending_run(&self, token: &ActiveRunToken, message: &Value) {
-        if let Some(hold) = self
-            .active_runs
-            .lock()
-            .by_session
-            .get_mut(&token.session_id)
-            .and_then(|holds| {
-                holds
-                    .iter_mut()
-                    .find(|hold| hold.token_id == token.token_id)
-            })
-        {
-            hold.generation = Some(self.current_epoch());
-            hold.turn_id = message
+    fn activate_pending_run(&self, token: &ActiveRunToken, message: &Value) -> Result<(), String> {
+        let lifecycle = self.automation_lifecycle.lock();
+        let (turn, automation_epoch, duplicate) = {
+            let mut registry = self.active_runs.lock();
+            let holds = registry
+                .by_session
+                .get_mut(&token.session_id)
+                .ok_or_else(|| "run was revoked before delivery".to_string())?;
+            let turn = message
                 .get("options")
                 .and_then(|options| options.get("turnId"))
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+                .and_then(Value::as_str);
+            let command_id = holds
+                .iter()
+                .find(|hold| hold.token_id == token.token_id)
+                .and_then(|hold| hold.command_id.as_deref());
+            // Only an exact command retry may share an already admitted owner.
+            let duplicate = command_id.is_some()
+                && turn.is_some()
+                && holds.iter().any(|hold| {
+                    hold.token_id != token.token_id
+                        && !hold.automation_revoked
+                        && hold.generation == Some(self.current_epoch())
+                        && hold.command_id.as_deref() == command_id
+                        && hold.turn_id.as_deref() == turn
+                });
+            let hold = holds
+                .iter_mut()
+                .find(|hold| hold.token_id == token.token_id)
+                .ok_or_else(|| "run was revoked before delivery".to_string())?;
+            if hold.automation_revoked {
+                return Err("run was revoked before delivery".into());
+            }
+            if hold.generation.is_some() {
+                return Err(
+                    "run activation was already consumed or its process generation changed".into(),
+                );
+            }
+            if self.current_epoch()
+                <= self
+                    .closing_generation
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err("sidecar generation is closing".into());
+            }
+            hold.generation = Some(self.current_epoch());
+            hold.turn_id = turn.map(str::to_owned);
+            (hold.turn_id.clone(), hold.automation_epoch, duplicate)
+        };
+        if let (Some(turn), Some(epoch), false) = (turn, automation_epoch, duplicate) {
+            if let Some(lifecycle) = lifecycle.as_ref() {
+                if !lifecycle.begin(
+                    epoch,
+                    &format!("sidecar-run:{}", token.token_id),
+                    &token.session_id,
+                    &turn,
+                ) {
+                    return Err("automation run admission was revoked before delivery".into());
+                }
+            }
         }
+        Ok(())
     }
 
     fn begin_run(
@@ -482,6 +619,10 @@ impl SidecarState {
         command_id: Option<&str>,
         generation: Option<u64>,
     ) -> ActiveRunToken {
+        let lifecycle = self.automation_lifecycle.lock();
+        let automation_epoch = lifecycle
+            .as_ref()
+            .and_then(|lifecycle| lifecycle.pending_epoch());
         let mut registry = self.active_runs.lock();
         registry.next_token_id = registry.next_token_id.wrapping_add(1);
         let token_id = registry.next_token_id;
@@ -491,6 +632,8 @@ impl SidecarState {
             .entry(session_id.to_string())
             .or_default()
             .push_back(ActiveRunHold {
+                automation_epoch,
+                automation_revoked: false,
                 token_id,
                 generation,
                 command_id: command_id.map(str::to_string),
@@ -559,6 +702,23 @@ impl SidecarState {
     }
 
     fn finish_generation_active_runs(&self, generation: u64) {
+        let lifecycle = self.automation_lifecycle.lock();
+        self.closing_generation
+            .fetch_max(generation, std::sync::atomic::Ordering::SeqCst);
+        let owners: Vec<_> = self
+            .active_runs
+            .lock()
+            .by_session
+            .values()
+            .flatten()
+            .filter(|hold| hold.generation == Some(generation))
+            .map(|hold| format!("sidecar-run:{}", hold.token_id))
+            .collect();
+        if let Some(lifecycle) = lifecycle.as_ref() {
+            for owner in owners {
+                lifecycle.revoke(&owner);
+            }
+        }
         let releases = {
             let mut registry = self.active_runs.lock();
             let mut releases = Vec::new();
@@ -577,6 +737,7 @@ impl SidecarState {
             });
             releases
         };
+        drop(lifecycle);
         for session_id in releases {
             cognia_power::release(&cognia_power::WakeReason::ActiveRun(session_id));
         }
@@ -603,6 +764,7 @@ impl SidecarState {
         session_id: &str,
         index: impl FnOnce(&VecDeque<ActiveRunHold>) -> Option<usize>,
     ) {
+        let lifecycle = self.automation_lifecycle.lock();
         let removed = {
             let mut registry = self.active_runs.lock();
             let Some(holds) = registry.by_session.get_mut(session_id) else {
@@ -614,6 +776,10 @@ impl SidecarState {
             }
             removed
         };
+        if let (Some(lifecycle), Some(hold)) = (lifecycle.as_ref(), removed.as_ref()) {
+            lifecycle.revoke(&format!("sidecar-run:{}", hold.token_id));
+        }
+        drop(lifecycle);
         if removed.is_some_and(|hold| hold.wake_held) {
             cognia_power::release(&cognia_power::WakeReason::ActiveRun(session_id.to_string()));
         }
@@ -640,6 +806,15 @@ impl SidecarState {
         msg: &Value,
         token: Option<&ActiveRunToken>,
     ) -> Result<(), String> {
+        match msg.get("type").and_then(Value::as_str) {
+            Some("interrupt" | "close") => {
+                if let Some(session) = msg.get("sessionId").and_then(Value::as_str) {
+                    self.revoke_automation_session(session);
+                }
+            }
+            Some("close_all") => self.revoke_automation_all(),
+            _ => {}
+        }
         let line = serde_json::to_string(msg).map_err(|e| e.to_string())?;
         let mut guard = self.stdin.lock().await;
         let stdin = guard
@@ -648,7 +823,7 @@ impl SidecarState {
         // The exit path also needs stdin's lock before generation cleanup.
         // Until this lock is held, a pending writer must survive that cleanup.
         if let Some(token) = token {
-            self.activate_pending_run(token, msg);
+            self.activate_pending_run(token, msg)?;
         }
         stdin
             .write_all(line.as_bytes())
@@ -1086,8 +1261,8 @@ async fn spawn_with_runtime(
             // The sidecar exited. Clear state (incl. orphaned per-session hook
             // state) and record the failure so the next spawn can back off a
             // crash loop. `note_exit` is the single sink for all of that.
-            let unexpected = state.note_exit(Instant::now()).await;
             state.finish_generation_active_runs(my_epoch);
+            let unexpected = state.note_exit(Instant::now()).await;
             if unexpected {
                 // ADR-0102 §4 — three automatic restarts per subsystem, then
                 // the subsystem is held back and the app enters safe mode. The
@@ -1233,18 +1408,20 @@ async fn handle_permission_request(host: Arc<dyn SidecarHost>, value: Value) {
 }
 
 /// Stop the running sidecar (drop stdin, kill the child). The next
-/// `claude_send` will respawn it. Safe to call when no sidecar is running.
+/// `agent_send` will respawn it. Safe to call when no sidecar is running.
 ///
 /// Deliberate by definition — the resulting exit is latched as intentional so
 /// it is not charged against the recovery restart budget. The one caller that
 /// kills because of a *genuine* failure (the ready watchdog) reports that
 /// failure itself before calling this.
 pub async fn shutdown_sidecar(state: SidecarState) -> Result<(), String> {
+    state.revoke_automation_all_inner(true);
     state
         .stop_epoch
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let _spawn_guard = state.spawn_lock.lock().await;
-    shutdown_sidecar_locked(&state).await
+    shutdown_sidecar_locked(&state).await?;
+    state.wait_automation_settled(None).await
 }
 
 async fn shutdown_sidecar_locked(state: &SidecarState) -> Result<(), String> {
@@ -1383,6 +1560,120 @@ pub async fn retire_idle_sidecar_for_proxy(
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct AutomationLifecycleFixture(ParkingMutex<Vec<String>>);
+
+    impl crate::host::AutomationRunLifecycle for AutomationLifecycleFixture {
+        fn pending_epoch(&self) -> Option<u64> {
+            Some(0)
+        }
+        fn begin(&self, _: u64, owner: &str, _: &str, _: &str) -> bool {
+            self.0.lock().push(format!("begin:{owner}"));
+            true
+        }
+        fn revoke(&self, owner: &str) {
+            self.0.lock().push(format!("revoke:{owner}"));
+        }
+        fn revoke_session(&self, session: &str) {
+            self.0.lock().push(format!("session:{session}"));
+        }
+        fn revoke_all(&self) {
+            self.0.lock().push("all".into());
+        }
+        fn settled(&self, _: Option<&str>) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn closing_generation_refuses_waiting_sends_until_a_new_spawn() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let old = state.next_epoch();
+        let waiting = state.begin_pending_run("chat", None);
+        state.finish_generation_active_runs(old);
+        assert!(state
+            .activate_pending_run(&waiting, &serde_json::json!({}))
+            .is_err());
+        state.next_epoch();
+        state
+            .activate_pending_run(&waiting, &serde_json::json!({}))
+            .unwrap();
+        state.cancel_active_run(waiting);
+    }
+
+    #[test]
+    fn exact_command_retry_keeps_one_automation_owner() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let lifecycle = Arc::new(AutomationLifecycleFixture::default());
+        state.set_automation_lifecycle(lifecycle.clone());
+        state.next_epoch();
+        let message = serde_json::json!({ "options": { "turnId": "turn" } });
+        let first = state.begin_pending_run("chat", Some("command"));
+        state.activate_pending_run(&first, &message).unwrap();
+        let retry = state.begin_pending_run("chat", Some("command"));
+        state.activate_pending_run(&retry, &message).unwrap();
+        assert_eq!(
+            lifecycle
+                .0
+                .lock()
+                .iter()
+                .filter(|event| event.starts_with("begin:"))
+                .count(),
+            1
+        );
+        state.cancel_active_run(retry);
+        state.cancel_active_run(first);
+    }
+
+    #[test]
+    fn automation_scope_cannot_be_revived_by_a_pending_send_or_another_turn_event() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let lifecycle = Arc::new(AutomationLifecycleFixture::default());
+        state.set_automation_lifecycle(lifecycle.clone());
+        let generation = state.next_epoch();
+        let revoked = state.begin_pending_run("chat", None);
+        state.revoke_automation_session("chat");
+        let message = serde_json::json!({ "options": { "turnId": "turn" } });
+        assert!(state.activate_pending_run(&revoked, &message).is_err());
+        assert_eq!(*lifecycle.0.lock(), vec!["session:chat"]);
+        state.cancel_active_run(revoked);
+
+        let live = state.begin_pending_run("chat", None);
+        state.activate_pending_run(&live, &message).unwrap();
+        assert!(state.activate_pending_run(&live, &message).is_err());
+        let owner = format!("sidecar-run:{}", live.token_id);
+        assert_eq!(lifecycle.0.lock().last(), Some(&format!("begin:{owner}")));
+        state.finish_automation_turn(generation, "chat", "different-turn");
+        assert_eq!(lifecycle.0.lock().last(), Some(&format!("begin:{owner}")));
+        state.finish_automation_turn(generation, "chat", "turn");
+        assert_eq!(lifecycle.0.lock().last(), Some(&format!("revoke:{owner}")));
+        assert!(state.activate_pending_run(&live, &message).is_err());
+        state.cancel_active_run(live);
+        assert!(state.live_session_ids().is_empty());
+    }
+
+    #[test]
+    fn removing_a_run_revokes_its_automation_owner() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let lifecycle = Arc::new(AutomationLifecycleFixture::default());
+        state.set_automation_lifecycle(lifecycle.clone());
+        state.next_epoch();
+        let live = state.begin_pending_run("chat", None);
+        let owner = format!("sidecar-run:{}", live.token_id);
+        state
+            .activate_pending_run(
+                &live,
+                &serde_json::json!({ "options": { "turnId": "turn" } }),
+            )
+            .unwrap();
+        state.cancel_active_run(live);
+        assert_eq!(lifecycle.0.lock().last(), Some(&format!("revoke:{owner}")));
+    }
 
     #[cfg(unix)]
     struct RuntimeTestHost {
@@ -1998,7 +2289,9 @@ mod tests {
         state.finish_generation_active_runs(old);
         assert_eq!(state.live_session_ids(), vec!["pending-send"]);
         let next = state.next_epoch();
-        state.activate_pending_run(&pending, &serde_json::json!({}));
+        state
+            .activate_pending_run(&pending, &serde_json::json!({}))
+            .unwrap();
         state.finish_generation_active_runs(old);
         assert_eq!(state.live_session_ids(), vec!["pending-send"]);
         handle_active_run_event(

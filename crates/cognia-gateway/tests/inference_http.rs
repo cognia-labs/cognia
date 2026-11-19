@@ -1,7 +1,7 @@
-//! Phase 2 integration tests (ADR-0090): same-protocol parity (R2), route
-//! tickets (frozen candidates, fail-closed auth, sticky affinity — R4), and
-//! semantic header forwarding — all through the REAL axum server against a
-//! REAL mock upstream, asserting wire bytes, not internals.
+//! HTTP integration tests for inference, route-ticket authorization, and
+//! external task isolation. The Axum listener and a loopback upstream exercise
+//! protocol translation, header forwarding, token counting, and stream
+//! cancellation through the Gateway's public endpoints.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};

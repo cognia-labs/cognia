@@ -1204,8 +1204,9 @@ pub fn fs_read_workspace_file_base64(
     root: String,
     rel_path: String,
     max_bytes: Option<usize>,
+    allow_sensitive: Option<bool>,
 ) -> Result<String, String> {
-    read_workspace_file_base64(root, rel_path, max_bytes, true)
+    read_workspace_file_base64(root, rel_path, max_bytes, allow_sensitive.unwrap_or(true))
 }
 
 /// [`fs_read_workspace_file_base64`] with the sensitive-name floor chosen by
@@ -2835,6 +2836,7 @@ mod tests {
             root.to_string_lossy().to_string(),
             "img.png".into(),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2849,12 +2851,14 @@ mod tests {
             root.to_string_lossy().to_string(),
             "img.png".into(),
             Some(bytes.len() - 1),
+            None,
         )
         .is_err());
         assert!(fs_read_workspace_file_base64(
             root.to_string_lossy().to_string(),
             "img.png".into(),
             Some(bytes.len()),
+            None,
         )
         .is_ok());
 
@@ -2864,10 +2868,19 @@ mod tests {
                 root.to_string_lossy().to_string(),
                 "../../etc/hosts".into(),
                 None,
+                None,
             )
             .is_err(),
             "traversal must be rejected"
         );
+        std::fs::write(root.join(".netrc"), b"fixture").unwrap();
+        assert!(fs_read_workspace_file_base64(
+            root.to_string_lossy().to_string(),
+            ".netrc".into(),
+            None,
+            Some(false),
+        )
+        .is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 

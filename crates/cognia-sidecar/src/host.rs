@@ -4,6 +4,16 @@ use serde_json::Value;
 use std::path::PathBuf;
 use tokio::process::Command;
 
+/// Domain-neutral lifecycle port; the desktop Host supplies automation policy.
+pub trait AutomationRunLifecycle: Send + Sync {
+    fn pending_epoch(&self) -> Option<u64>;
+    fn begin(&self, epoch: u64, owner: &str, session: &str, turn: &str) -> bool;
+    fn revoke(&self, owner: &str);
+    fn revoke_session(&self, session: &str);
+    fn revoke_all(&self);
+    fn settled(&self, session: Option<&str>) -> bool;
+}
+
 /// Host-specific pieces of the sidecar supervisor. Everything else (spawn
 /// lock, epochs, backoff, reader loop, hooks) is shared.
 #[async_trait]

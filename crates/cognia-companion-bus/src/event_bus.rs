@@ -101,9 +101,20 @@ const SIDECAR_EVENT_CHANNEL: &str = "claude://message";
 
 impl EventFrame {
     pub fn visible_to(&self, device_id: &str) -> bool {
+        if self.event_type == super::event_channels::DEVICE_LSP_EVENT {
+            return self.target_device_id.as_deref() == Some(device_id);
+        }
         self.target_device_id
             .as_deref()
             .is_none_or(|target| target == device_id)
+    }
+
+    pub fn visible_to_tenant(&self, tenant_id: Option<&str>) -> bool {
+        let event_tenant = self.payload.get("tenantId").and_then(Value::as_str);
+        if self.event_type == super::event_channels::DEVICE_LSP_EVENT {
+            return event_tenant.is_some() && event_tenant == tenant_id;
+        }
+        event_tenant.is_none_or(|tenant| Some(tenant) == tenant_id)
     }
 
     /// Whether one event-stream connection receives this frame.
@@ -120,6 +131,10 @@ impl EventFrame {
         device_id: &str,
         scope: super::event_channels::ConnectionScope,
     ) -> bool {
+        if self.event_type == super::event_channels::DEVICE_LSP_EVENT {
+            return scope == super::event_channels::ConnectionScope::Device
+                && self.visible_to(device_id);
+        }
         self.visible_to(device_id)
             || (scope == super::event_channels::ConnectionScope::Service
                 && self.event_type == SIDECAR_EVENT_CHANNEL)
@@ -247,6 +262,17 @@ impl EventBus {
     }
 
     fn publish_targeted(&self, event_type: String, payload: Value, destination: Option<String>, partition_account_id: Option<String>) -> EventFrame {
+        // This topic is valid only on the authenticated, non-replayed path.
+        if event_type == super::event_channels::DEVICE_LSP_EVENT {
+            return EventFrame {
+                event_type,
+                seq: self.seq_counter.load(Ordering::Relaxed),
+                payload: Value::Null,
+                ts_ms: now_ms(),
+                target_device_id: None,
+                partition_account_id: None,
+            };
+        }
         let mut subscribers = self.person_subscribers.lock();
         let seq = self.seq_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let ts_ms = now_ms();
@@ -1176,6 +1202,44 @@ mod tests {
         let perf = bus.publish_ephemeral_to("perf://frame".into(), json!({}), "device-a".into());
         assert!(!perf.visible_to_connection("service", ConnectionScope::Service));
         assert!(perf.visible_to_connection("device-a", ConnectionScope::Device));
+    }
+
+    #[test]
+    fn device_lsp_events_are_opt_in_targeted_and_never_replayed() {
+        use crate::event_channels::{
+            ConnectionScope, EventSubscription, SubscribeMode, SubscribeRequest, DEVICE_LSP_EVENT,
+        };
+        let bus = EventBus::new();
+        let mut subscription = EventSubscription::defaults_for(ConnectionScope::Device);
+        assert!(!subscription.allows(DEVICE_LSP_EVENT));
+        let subscribed = subscription.apply(&SubscribeRequest {
+            mode: SubscribeMode::Add,
+            channels: vec![DEVICE_LSP_EVENT.to_owned()],
+        });
+        assert!(subscribed.rejected.is_empty());
+        assert!(subscription.allows(DEVICE_LSP_EVENT));
+        assert!(!subscription.allows("vscode://rpc/cognia_lsp-service"));
+
+        let live = bus.publish_ephemeral_to(
+            DEVICE_LSP_EVENT.to_owned(),
+            json!({"tenantId": "tenant-a", "fixture": "diagnostics"}),
+            "device-a".into(),
+        );
+        assert!(live.visible_to_connection("device-a", ConnectionScope::Device));
+        assert!(!live.visible_to_connection("device-b", ConnectionScope::Device));
+        assert!(!live.visible_to_connection("brain-local", ConnectionScope::Service));
+        assert!(!live.visible_to_connection("device-a", ConnectionScope::Service));
+        assert!(live.visible_to_tenant(Some("tenant-a")));
+        assert!(!live.visible_to_tenant(Some("tenant-b")));
+        assert!(!live.visible_to_tenant(None));
+
+        let SubscribeResult::Ok { replay, .. } = bus.subscribe(Some(0), now_ms()) else {
+            panic!("expected replay snapshot");
+        };
+        assert!(replay.is_empty());
+        let untargeted = bus.publish(DEVICE_LSP_EVENT.to_owned(), json!({"fixture": "blocked"}));
+        assert!(!untargeted.visible_to_connection("device-a", ConnectionScope::Device));
+        assert!(untargeted.payload.is_null());
     }
 
     #[test]

@@ -77,6 +77,8 @@ use serde::{Deserialize, Serialize};
 pub enum ChannelAudience {
     /// Paired devices and the loopback brain alike.
     Any,
+    /// Paired-device data with no service renderer audience.
+    DeviceOnly,
     /// The loopback headless brain only (`scope = "service"`).
     ///
     /// Used for channels that are *requests addressed to the renderer* rather
@@ -104,6 +106,9 @@ pub enum ConnectionScope {
     /// Selected only after the internal route verifies a live person fleet.
     PersonBrain,
 }
+
+/// Paired-device LSP events. Only device-targeted live delivery is valid.
+pub const DEVICE_LSP_EVENT: &str = "lsp://rpc";
 
 impl ConnectionScope {
     /// Map a raw JWT scope claim. Anything that is not exactly `"service"` is
@@ -163,6 +168,7 @@ impl EventChannelSpec {
     pub fn permits(&self, scope: ConnectionScope) -> bool {
         match self.audience {
             ChannelAudience::Any => true,
+            ChannelAudience::DeviceOnly => scope == ConnectionScope::Device,
             ChannelAudience::ServiceOnly => scope == ConnectionScope::Service,
             ChannelAudience::ServiceOrPersonBrain => {
                 matches!(scope, ConnectionScope::Service | ConnectionScope::PersonBrain)
@@ -891,6 +897,20 @@ pub static EVENT_CHANNELS: &[EventChannelSpec] = &[
         tauri_forwarded: true,
         note: "content-free snapshot for paired phones' glance; pushed only while a phone \
                holds a lease",
+    },
+    EventChannelSpec {
+        pattern: "lsp://rpc",
+        audience: ChannelAudience::DeviceOnly,
+        default_on: false,
+        tauri_forwarded: false,
+        note: "LSP diagnostics and callbacks from one paired device's private runtime",
+    },
+    EventChannelSpec {
+        pattern: "vscode://rpc/cognia_lsp-service",
+        audience: ChannelAudience::ServiceOnly,
+        default_on: false,
+        tauri_forwarded: false,
+        note: "Local system LSP events for the headless renderer",
     },
     EventChannelSpec {
         pattern: "crash://captured",
