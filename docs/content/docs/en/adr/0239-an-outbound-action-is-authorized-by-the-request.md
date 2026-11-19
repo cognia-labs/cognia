@@ -148,13 +148,13 @@ Phase 2 extends the same engine to two more kinds of recipient. It only narrows:
 | Phase | Scope |
 | --- | --- |
 | 1 | The engine; the outbound list and targets; origin, grant and draft/park order; the instruction epoch; the fence with its receipt fields and index; both chokepoints; `authorizedBy`; the digest responder; hiding "always allow" for outbound tools; the doc corrections |
-| 2a | GitHub writes: the integration broker, raw authenticated requests, Squad stacked delivery and `gh` write commands (plan: `docs/plans/2026-10-25-adr-0239-phase-2.md`) |
+| 2a | GitHub writes: the integration broker, raw authenticated requests, Squad stacked delivery and `gh` write commands (plan: `docs/plans/2026-10-25-adr-0239-github-write-and-browser-submission-authorization.md`) |
 | 2b | Browser form submission, starting with a spike that establishes a submit signal per browser engine |
 | 3 | Model narrowing through `recommendation` |
 
 ## Implementation (phase 1)
 
-Phase 1 shipped in twelve work packages (plan: `docs/plans/2026-10-24-adr-0239-phase-1.md`). The engine runs in **shadow mode** by default: every outbound tool call and connector delivery is planned and the plan recorded on its receipt (`plan.enforced: false`), and no send changes. A person turns on enforcement in Settings → Security (`agentPermissions.outboundAuthorization: "enforce"`), after reviewing what it would change.
+Phase 1 shipped in twelve work packages (plan: `docs/plans/2026-10-24-adr-0239-outbound-message-authorization.md`). The engine runs in **shadow mode** by default: every outbound tool call and connector delivery is planned and the plan recorded on its receipt (`plan.enforced: false`), and no send changes. A person turns on enforcement in Settings → Security (`agentPermissions.outboundAuthorization: "enforce"`), after reviewing what it would change.
 
 ### Where it lives
 
@@ -184,7 +184,7 @@ Phase 1 shipped in twelve work packages (plan: `docs/plans/2026-10-24-adr-0239-p
 
 ## Implementation (phase 2a)
 
-Phase 2a, GitHub writes, shipped in ten work packages (plan: `docs/plans/2026-10-25-adr-0239-phase-2.md`). It has its own switch and starts in **shadow mode**: every GitHub write is planned and recorded, and none changes, until a person turns it on in Settings → Security (`agentPermissions.outboundAuthorizationByCategory.github: "enforce"`). Enforcing messages does not enforce GitHub.
+Phase 2a, GitHub writes, shipped in ten work packages (plan: `docs/plans/2026-10-25-adr-0239-github-write-and-browser-submission-authorization.md`). It has its own switch and starts in **shadow mode**: every GitHub write is planned and recorded, and none changes, until a person turns it on in Settings → Security (`agentPermissions.outboundAuthorizationByCategory.github: "enforce"`). Enforcing messages does not enforce GitHub.
 
 ### Where it lives
 
@@ -214,7 +214,7 @@ Phase 2a, GitHub writes, shipped in ten work packages (plan: `docs/plans/2026-10
 
 ## Implementation (phase 2b)
 
-Phase 2b, browser submissions, shipped in four work packages after a spike (plan: `docs/plans/2026-10-25-adr-0239-phase-2.md`; spike: `docs/research/2026-10-25-browser-submit-signal.md`). It has its own switch and starts in **shadow mode**: every submission is planned and recorded, and none changes, until a person turns it on in Settings → Security (`agentPermissions.outboundAuthorizationByCategory.browser: "enforce"`).
+Phase 2b, browser submissions, shipped in four work packages after a spike (plan: `docs/plans/2026-10-25-adr-0239-github-write-and-browser-submission-authorization.md`; spike: `docs/research/2026-10-25-browser-submit-signal.md`). It has its own switch and starts in **shadow mode**: every submission is planned and recorded, and none changes, until a person turns it on in Settings → Security (`agentPermissions.outboundAuthorizationByCategory.browser: "enforce"`).
 
 ### Where it lives
 

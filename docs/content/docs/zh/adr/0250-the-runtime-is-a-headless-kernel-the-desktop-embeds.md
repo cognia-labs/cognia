@@ -23,7 +23,7 @@ description: "所有长期运行的行为都在同一个内核里，内核按无
 - [ADR-0068](./0068-frontend-package-extraction-and-compile-speed)：其中 S5 的 store 切分按 §14 的设置键归属来切
 - [ADR-0196](./0196-a-library-crate-links-tauri-only-when-asked)：Rust crate 分层，§14 不涉及
 
-**证据：** `docs/research/architecture-convergence-audit-2026-11-01.md`；§14 的证据是 `docs/research/feature-module-analysis-2026-11-04.md`（计数脚本 `scripts/gates/convergence/subsystem-deps.mjs`）。**计划：** `docs/plans/2026-11-01-convergence-phase-0.md`。
+**证据：** `docs/research/architecture-convergence-audit-2026-11-01.md`；§14 的证据是 `docs/research/feature-module-analysis-2026-11-04.md`（计数脚本 `scripts/gates/convergence/subsystem-deps.mjs`）。**计划：** `docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md`。
 
 > **由 ADR-0252 修订（2026-11-05）。** 阶段 3 中多 agent 的部分（子运行进入账本、该区域的统一状态词汇、ADR-0247 承诺）提前交付。其余的小队代码并入 M1 建立的 `squads` 模块。
 
@@ -80,7 +80,7 @@ description: "所有长期运行的行为都在同一个内核里，内核按无
 - **宿主适配器矩阵。** 每个注册条目都说明它在各个宿主上如何组装，矩阵见 `docs/research/`（阶段 0a A5）。brain 的条目不能换个 bridge 就拿到桌面上复用：事件发布器、连接器服务的生命周期和插件适配器都不一样。桌面与 Host 的一致性靠三样东西保证：同一个注册表、这张矩阵和双宿主测试通道（§12）。
 - **大数据量账户的存储预算。** 现有的 WebView 路径在数据量大时很慢。在 20 万条消息的数据集上，冷启动后第一屏侧栏列表要 5.6–6.8 秒才出来，会话列表 p95 是 630–785 ms。阶段 2 要为这条路径单独设定预算。
 
-**暂时否决：桌面运行本地 brain（2a）。** spike S1 按测量前就定下的范围测量了 2a。证据台账是 `spike/local-brain-s1` 分支上的 `docs/evidence/2026-11-01-convergence-s1.md`。
+**暂时否决：桌面运行本地 brain（2a）。** spike S1 按测量前就定下的范围测量了 2a。证据台账是 `spike/local-brain-s1` 分支上的 `docs/evidence/2026-11-01-convergence-local-brain-spike.md`。
 - **存储通过。** brain 存储在每项操作上都比 WebView 快。在大数据集上，会话列表 p95 约 50 ms，WebView 约 700 ms。
 - **启动和内存大幅超出范围，原因是结构性的。**
   - 冷启动增加的时间：普通账户约 +3.0 秒，大账户约 +37 秒，范围是 +0.8 秒和 +2.5 秒。

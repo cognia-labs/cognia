@@ -51,10 +51,44 @@ when the default is absent. Explicit paths stay authoritative. Zen/Go keys can b
 usable Cognia accounts; third-party keys and legacy OAuth entries remain read-only records.
 OpenCode V2 accounts are discovered through its service API rather than its database files.
 
-The V2 adapter's narrow `getAuthClient()` exposes only `integration.list` and
-`integration.oauth` over the same authenticated Host transport. Authentication fields
+The V2 adapter's narrow `getAuthClient()` exposes `integration.list`, `integration.oauth`, read-only
+`model.list`, and event subscriptions over the same authenticated Host transport. Authentication fields
 and codes keep their original bytes; model-bound requests continue through the existing
 outbound PII gate.
+
+## OpenCode 2.2.7 compatibility
+
+The desktop, CLI and sidecar use `@opencode/client` 2.2.7. The status and account
+panels distinguish **loading**, **partial** and **ready**. They subscribe before
+reading capabilities, display already-discovered entries, and refresh on matching
+agent, command, plugin, integration, provider and credential updates. A completed
+`model.list` activation barrier is followed by another catalog read before the
+panels declare readiness. Errors remain retryable; responses and events from an
+old client or another Location cannot replace the current catalog.
+
+Active V2 sessions refresh their model choices when providers, integrations or
+credentials change, including the native Copilot Auto entry when offered by the
+account. Failed model discovery does not cancel a running turn. The adapter keeps
+OpenCode's authoritative session token/cost totals in `opencodeSessionUsage`
+metadata, separate from individual turn usage. This includes server-accounted
+`session.generate` and cache warming; Cognia does not estimate Copilot billing.
+
+For **OpenCode through ACP**, steering is available only when the initialize
+response advertises `_meta.steering.supported: true`. Cognia gates the text,
+requires an executing session and sends `_session/steering`; `promptRequired` is
+reported without creating another prompt or cancelling the original. Steering is
+never automatically replayed. Upstream can still race turn completion and queue
+the input for the next turn; same-turn, exactly-once delivery is not guaranteed.
+
+Cognia does not import `@opencode/ai`, so its removed `ImageResponse.image`
+accessor does not affect this adapter. MCP OAuth refresh rotation, native read and
+shell behavior, Code Mode tool summaries, cache TTL scheduling and background
+compaction are owned by the installed OpenCode runtime. The client dependency
+upgrade does not itself upgrade an external OpenCode executable.
+
+Sources: [official 2.2.7 changelog](https://github.com/anomalyco/opencode/blob/v2.2.7/CHANGELOG.md),
+[ACP steering contract](https://github.com/anomalyco/opencode/blob/v2.2.7/packages/cli/src/acp/agent.ts),
+[ACP turn semantics](https://github.com/anomalyco/opencode/blob/v2.2.7/packages/cli/src/acp/turn.ts).
 
 ## The ProtocolAdapter Contract
 

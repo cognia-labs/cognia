@@ -105,9 +105,13 @@ An unrelated path is refused with a remedy pointing to **Settings → Sandbox �
 Path-component comparison keeps `/work/project-other` outside `/work/project`. Parent/child policy
 inheritance and remote-worker ceilings preserve the same boundary.
 
-This limits the model-selected readable mounts on Linux and the scopes sent to container/microVM
-adapters. It does not turn macOS Seatbelt's existing global file-read permission into a kernel read
-allowlist, nor add filesystem scoping to the Windows runner.
+Linux limits the model-selected readable mounts. macOS Seatbelt scopes content reads for
+nonempty readable lists, with system runtime paths and writable paths also available. Container
+and microVM reads follow the bounds their provider can enforce. Windows still lacks filesystem
+root enforcement.
+
+A Host task shell checks the requested network ceiling against its admitted container egress,
+including operator presets. It refuses an incompatible environment before launching the command.
 
 ## Tier routing — `dispatchSandbox`
 

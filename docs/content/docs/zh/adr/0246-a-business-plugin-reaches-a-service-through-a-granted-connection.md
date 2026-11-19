@@ -161,7 +161,7 @@ Host 用同一张矩阵（`lib/external-services/runtime-support.ts`）推导每
 | 增量同步（ES-31） | 2aa72591dc、d2799a1822、b38620883c、9406caedfb | 按页提交和 tombstone 的共享核心；Issue Sync 和 GitHub 镜像迁到其上；公开的 `ctx.sync`；`feishu-calendar` 使用 Host 游标 |
 | 运行时与发布（ES-33、34） | 07af5f3535、409e2886ec | 每格都有证据测试的运行时支持矩阵；经真实 manager 的飞书发布矩阵 |
 
-行为对照表（ES-32）：`plugins/feishu-calendar/README.md` 和 `docs/evidence/2026-11-02-adr-0246-es32-builtin-migrations.md`。
+行为对照表（ES-32）：`plugins/feishu-calendar/README.md` 和 `docs/evidence/2026-11-02-adr-0246-builtin-connector-migrations.md`。
 
 已知限制：
 

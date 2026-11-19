@@ -44,9 +44,37 @@ Windows 在默认文件不存在时保留历史位置的兼容探测。显式配
 可导入为可用的 Cognia 账号，第三方 key 与旧版 OAuth 条目仅作为只读记录。V2 账号通过服务
 API 发现，不直接读取其数据库文件。
 
-V2 adapter 的窄接口 `getAuthClient()` 仅提供 `integration.list` 和 `integration.oauth`，
+V2 adapter 的窄接口 `getAuthClient()` 提供 `integration.list`、`integration.oauth`、只读 `model.list` 和事件订阅，
 复用相同的服务认证信息和 Host transport。认证信息及授权码保持原始内容，模型请求继续经过
 现有的出站 PII gate。
+
+## OpenCode 2.2.7 兼容性
+
+桌面、CLI 和 sidecar 使用 `@opencode/client` 2.2.7。状态与账号面板区分
+**loading / partial / ready**：先订阅事件再读取目录，展示已发现的内容，并随 Agent、
+Command、Plugin、Integration、Provider 和 Credential 更新事件刷新。等待插件激活的
+`model.list` 完成后，还会重读目录，随后才声明 ready。错误允许重试；旧客户端和其他
+Location 的事件或响应不会覆盖当前目录。
+
+V2 会话在 Provider、Integration 或凭据变化后刷新模型选项，包括账号实际提供的
+Copilot Auto。模型发现失败不会取消正在执行的 Turn。adapter 将 OpenCode 权威的
+会话累计 tokens/cost 保存到 `opencodeSessionUsage` metadata，与单次 Turn 用量分开。
+服务端已计入的 `session.generate` 和缓存预热费用包含在其中，Cognia 不重新估算 Copilot 账单。
+
+通过 **ACP 连接 OpenCode** 时，仅在 initialize 响应声明
+`_meta.steering.supported: true` 后启用 Steering。Cognia 对文本执行 PII gate，要求会话
+正在执行，再发送 `_session/steering`；收到 `promptRequired` 会报告失败，不另起 Prompt，
+也不取消原 Turn。Steering 不自动重试。上游仍可能在 Turn 结束的竞态中将输入留到下次
+Turn，因此不承诺严格的同 Turn、恰好一次投递。
+
+Cognia 没有导入 `@opencode/ai`，其移除 `ImageResponse.image` 的变更不影响本 adapter。
+MCP OAuth 旋转刷新、原生 read/shell 行为、Code Mode 工具变化摘要、缓存 TTL 调度和
+后台 Compaction 均由安装的 OpenCode Runtime 管理。升级客户端依赖不会自动升级外部
+OpenCode 可执行文件。
+
+来源：[官方 2.2.7 changelog](https://github.com/anomalyco/opencode/blob/v2.2.7/CHANGELOG.md)、
+[ACP Steering 契约](https://github.com/anomalyco/opencode/blob/v2.2.7/packages/cli/src/acp/agent.ts)、
+[ACP Turn 语义](https://github.com/anomalyco/opencode/blob/v2.2.7/packages/cli/src/acp/turn.ts)。
 
 ## ProtocolAdapter 契约
 

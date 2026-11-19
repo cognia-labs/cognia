@@ -237,7 +237,9 @@ NetworkPolicy::Allowlist { hosts: _ } => match proxy_port {
 
 - `health().backend == "macos-sandbox-exec"`，`version == "system"`。
 - Edit/Write/TextEditor 仅允许 `(literal "<file>")` 写入 —— 单个文件，永不针对整个子树。
-- **读被全局放行，随后凭据库作为最后匹配的规则被重新拒绝。** 这不是谁选择的放宽，而是沙盒能不能用的前提。把 `file-read*` 限定到一串系统前缀的 profile，会让当前 macOS 上的每一个受限二进制在 exec 之前就 abort——`/bin/echo` 在完整前缀集下同样死于 `SIGABRT`——因为 dyld 会读取一些位置随版本迁移的运行时文件。一次性后端曾长期带着这份窄清单，于是 `sandbox_bash` 返回 exit `-1` 且没有任何输出，`sandbox_health_check` 报告 `confined: false`，而便宜探针还在显示"Active"。现在 `sbpl.rs` 同时为一次性 profile 和交互式 profile 拥有这组规则，两者不会再各走各的；`push_baseline_secret_read_denies` 把拒绝集锚在 `$HOME` 和应用数据目录上，而不是锚在调用方恰好声明的 readable 根上。
+- **显式可读根会限制文件内容读取。** 单次执行允许读取声明的可读和可写路径、调用专用临时目录以及系统工具链路径。
+  `sbpl.rs` 为单次执行和交互式 launcher 共享加载规则，使 dyld 可以查询根目录元数据。可读根为空时沿用旧的宽读策略。
+  两种模式均拒绝受保护的凭据路径。
 - **allowlist 由内核强制执行。** `run_confined` 启动过滤代理（`net_proxy.rs`），把 `HTTP(S)_PROXY` / `ALL_PROXY` 指向它，并通过 `COGNIA_SANDBOX_PROXY_PORT` 传递其端口。profile 随后只放行发往 `localhost:<port>` 的出站 TCP（`sbpl.rs:282-286`），由代理套用主机 allowlist 并自己完成 DNS 与出站，因此绕开代理直连的命令会被 `(deny default)` 拦下。代理绑定失败时，这次调用以 `BackendFailed` 失败。
 - **注意事项：** 资源上限在 macOS 上只应用 `RLIMIT_CPU`（经由共享的 `pre_exec` hook），另有墙钟看门狗。`RLIMIT_AS` 在那里不可靠，`RLIMIT_NPROC` 会把登录用户名下的所有进程都算进去，所以两者都只在 Linux 上生效。
 
@@ -343,6 +345,10 @@ tool-host 端口各一次，从不与 `--network` 同用）：代理直接连接
 本地外部 Agent 进程，不会在无沙箱状态下运行。两个策略字段会被保存但不生效，编辑器会
 明确说明并禁用这些控件。上文的 Windows 单次执行 runner 是独立执行路径，不会启用外部
 Agent 进程启动。
+
+项目环境中的 Agent 仍受自身配置的出网上限约束。Host 会用包含管理员预设的有效出网策略做准入检查。
+远程 provider 暂时只以可证明的离线环境承接严格请求，直到能同时证明域名和 DNS 约束。
+Windows 例外授权只在 Host 实际实现对应启动能力时提供。
 
 ## 实现状态汇总
 

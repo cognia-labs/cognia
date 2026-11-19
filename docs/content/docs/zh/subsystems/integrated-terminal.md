@@ -25,7 +25,7 @@ description: 应用内的真实 PTY：桌面 / 移动 / 远程主机的传输选
   <Stat label="传输方式" value="3 + 1" hint="tauri-channel · ws · webrtc（规划中）· unsupported" />
 </StatGrid>
 
-设计动机见 [ADR-0031](../adr/0031-integrated-terminal) 与 [ADR-0033](../adr/0033-integrated-terminal-phase-3)。本页描述**当前实现**。
+设计动机见 [ADR-0031](../adr/0031-integrated-terminal) 与 [ADR-0033](../adr/0033-integrated-terminal-desktop-ux)。本页描述**当前实现**。
 
 ## 传输选择
 
@@ -88,7 +88,7 @@ Agent 触达终端要过两道门。`headless-exec.ts` 是独立的非交互接�
 
 <Cards>
   <Card title="ADR-0031" href="../adr/0031-integrated-terminal" description="终端最初的决策记录" />
-  <Card title="ADR-0033" href="../adr/0033-integrated-terminal-phase-3" description="第三阶段 —— 补全、quick-fix、粘性滚动" />
+  <Card title="ADR-0033" href="../adr/0033-integrated-terminal-desktop-ux" description="第三阶段 —— 补全、quick-fix、粘性滚动" />
   <Card title="CLI ↔ App 桥" href="./cli-app-bridge" description="Shell 与应用相遇的另一处" />
   <Card title="Companion API" href="./companion-api" description="移动端与远程路径所走的 ws 传输" />
 </Cards>

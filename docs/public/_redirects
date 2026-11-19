@@ -3,3 +3,13 @@
 / /zh/ 302
 /docs /zh/docs 302
 /docs/* /zh/docs/:splat 302
+
+# Previous URLs for renamed documentation pages and their Markdown exports.
+/en/docs/adr/0033-integrated-terminal-phase-3 /en/docs/adr/0033-integrated-terminal-desktop-ux 301
+/md/en/adr/0033-integrated-terminal-phase-3.md /md/en/adr/0033-integrated-terminal-desktop-ux.md 301
+/zh/docs/adr/0033-integrated-terminal-phase-3 /zh/docs/adr/0033-integrated-terminal-desktop-ux 301
+/md/zh/adr/0033-integrated-terminal-phase-3.md /md/zh/adr/0033-integrated-terminal-desktop-ux.md 301
+/zh/docs/connectors/phase-1-ship-gate /zh/docs/connectors/release-verification 301
+/md/zh/connectors/phase-1-ship-gate.md /md/zh/connectors/release-verification.md 301
+/en/docs/connectors/phase-1-ship-gate /en/docs/connectors/release-verification 301
+/md/en/connectors/phase-1-ship-gate.md /md/en/connectors/release-verification.md 301

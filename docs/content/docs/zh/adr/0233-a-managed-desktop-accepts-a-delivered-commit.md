@@ -5,7 +5,7 @@ description: "由 Host 持有的 E2B 桌面复用 computer-server 生命周期�
 
 # ADR 0233 — 托管桌面验收已交付的提交
 
-第一阶段实现说明（2026-10-15）：首个 operator smoke harness 仅支持验证网络 `Off`；`On` / `Allowlist` 在类型、UI 和测试中均保持明确的未资格化状态。非空区域选择在 placement 能真正执行前会被拒绝。真实 provider smoke 尚未授权或运行。原生编译因磁盘不足中断，并按用户要求跳过。验证记录及剩余门槛位于 `docs/plans/2026-10-15-managed-cloud-desktop-phase1-verification.md`。
+第一阶段实现说明（2026-10-15）：首个 operator smoke harness 仅支持验证网络 `Off`；`On` / `Allowlist` 在类型、UI 和测试中均保持明确的未资格化状态。非空区域选择在 placement 能真正执行前会被拒绝。真实 provider smoke 尚未授权或运行。原生编译因磁盘不足中断，并按用户要求跳过。验证记录及剩余门槛位于 `docs/plans/2026-10-15-managed-cloud-desktop-lifecycle-verification.md`。
 
 **状态：** 已接受——用户于 2026-10-15 批准 ADR-0233、第一至四阶段及可信来源前置依赖的实施。真实 provider smoke 仍须另行提供凭据并明确授权，通过资格验证前生产能力保持休眠。完成修订 A1–A10 于 2026-10-29 接受。  
 **日期：** 2026-10-15  
@@ -174,7 +174,7 @@ P2 检查点（2026-10-16）：已实现 manifest v2 的 Host 源码绑定、受
 验收期限回收。Host 库编译通过；本检查点未运行 Rust 测试，也未运行完整原生
 Host 交接链路。版本化 Host 资格及完整生命周期／控制资格仍是前置条件。准确
 镜像身份、失败／未触发的尝试及资源清理证据见
-`docs/plans/2026-10-16-managed-desktop-mmds-p2-verification.md`。
+`docs/plans/2026-10-16-managed-desktop-source-import-and-acceptance-isolation.md`。
 
 P3 实现（2026-10-16）：资格证据 version 2、隔离 revision 1 绑定准确配置、
 owner/Host、模板、provider 资源及实测 guest generation。旧回执仍可读取，但不能
@@ -183,7 +183,7 @@ owner/Host、模板、provider 资源及实测 guest generation。旧回执仍�
 验收进程的准入观察；准入观察不等同于 socket 探测结果。Provider root 网络观察
 与工作负载隔离证据始终分开。仅生命周期 smoke 的结果作为诊断保存，不能启用
 生产。Recipe 6 使旧镜像资格失效。原生 Host 交接验证及证据边界见
-`docs/plans/2026-10-16-managed-desktop-mmds-p3-verification.md`。原生 macOS Host
+`docs/plans/2026-10-16-managed-desktop-host-boundary-and-native-handoff-verification.md`。原生 macOS Host
 operator 已在 recipe 6 上通过真实 E2B 生命周期、commit 与 recovery bundle 交接，
 包括日志重新打开、受保护回执关联和可见的私有预览截图。4 个桌面及模板均已删除。
 预置 delivery 是诊断夹具；完整 P4 控制／工作负载资格验证仍是前置条件。
@@ -198,7 +198,7 @@ agent delegation。固定 collector 在测试 supervisor 死亡前断开 envd �
 篡改观测。已接受的计划还要求真实弱化 profile 的负向对照：固定、仅 root 可调用、
 不接触项目数据的 importer 诊断仅省略 seccomp，运行不可变的等待进程，必须被
 拒绝并完全终止。生产 importer 仍强制 seccomp，不提供降级路径。验证结果及剩余缺口见
-`docs/plans/2026-10-16-managed-desktop-mmds-p4-verification.md`。
+`docs/plans/2026-10-16-managed-desktop-native-qualification.md`。
 已授权的新诊断在计费创建前使该类别的旧证据及组合资格失效；失败不能回退到旧成功。其他类别证据及清理记录保留。
 完整验证通过前，后端、API、UI 三层仍保持 dormant。
 
@@ -215,7 +215,7 @@ Host 重启必须重新验证边界；缺少能力、generation 不明确或探�
 
 用户于 2026-10-16 批准本修订及实施。先在 E2B 内验证必需的内核隔离和固定 GUI 传输；失败时 provider 继续阻断。生产保持 dormant，dev 合并暂停，按用户要求跳过 Rust 测试。已接受的实施计划及证据门禁见 `docs/plans/2026-10-16-managed-desktop-mmds-isolation.md`。
 
-实施检查点（2026-10-16）：P0 内核能力与 P1 实际编译的桌面 guard 已通过有界 E2B 诊断。真实终端探测无法访问 MMDS 和私网 IPv4/IPv6 地址；Chromium 继承完整限制；终止 supervisor 后，观察到的工作负载后代和入站通道均退出。所有诊断桌面及模板已删除。这仅证明桌面边界：受限导入/Git、后续验收进程、版本化 Host 证明以及完整原生生命周期/控制资格验证仍是前置条件。未安装生产资格凭据。准确 digest、失败记录、断言与清理结果见 `docs/plans/2026-10-16-managed-desktop-mmds-p1-verification.md`。
+实施检查点（2026-10-16）：P0 内核能力与 P1 实际编译的桌面 guard 已通过有界 E2B 诊断。真实终端探测无法访问 MMDS 和私网 IPv4/IPv6 地址；Chromium 继承完整限制；终止 supervisor 后，观察到的工作负载后代和入站通道均退出。所有诊断桌面及模板已删除。这仅证明桌面边界：受限导入/Git、后续验收进程、版本化 Host 证明以及完整原生生命周期/控制资格验证仍是前置条件。未安装生产资格凭据。准确 digest、失败记录、断言与清理结果见 `docs/plans/2026-10-16-managed-desktop-mmds-guest-guard-verification.md`。
 
 依据：[固定版本 E2B MMDS 初始化](https://github.com/e2b-dev/runtime/blob/a1899fb840e1eb1ef2c0ffc751c639959ed6a144/packages/envd/internal/host/mmds.go)、[固定版本 MMDS 路由](https://github.com/e2b-dev/runtime/blob/a1899fb840e1eb1ef2c0ffc751c639959ed6a144/packages/envd/internal/host/mmds_route_linux.go)、[Linux 网络命名空间语义](https://man7.org/linux/man-pages/man7/network_namespaces.7.html)，核查日期 2026-10-16。源码行为不代表托管运行环境已通过资格验证。
 
@@ -231,7 +231,7 @@ Git 导入命令运行于独立进程组，在成功、失败、取消或 future
 
 ## 7. 交接是基于不可变来源的一次新验收执行
 
-**依赖 D1：** delivery 提交 `ff3c51c617deb351caf07415d25d4b59467e6fe0` 已合入。用户随后授权先补齐可信来源，再实施第三阶段。原任务的认证准入现持久化 owner／Host／device、conversation／task、由 Host 生成的 coding-run ID、规范化仓库及仅 Host 可解析的凭据引用；delivery 绑定该 source ID。原对话的 run 引用只在准入时记录为 `originRunRef`，与 Host 的权威身份分开，不能成为后续浏览器声明的授权依据。缺少来源的旧记录拒绝交接。来源撤销标记跨重启保留；规范删除路径在丢失持久链接前，向所记录的来源 Host 撤销。实现位于独立第三阶段 worktree，尚未提交；Rust 测试已编写但按用户要求跳过。验证边界见 `docs/plans/2026-10-15-managed-cloud-desktop-phase3-verification.md`。第四阶段在相同休眠发布边界内实现最终历史投影与结果删除。
+**依赖 D1：** delivery 提交 `ff3c51c617deb351caf07415d25d4b59467e6fe0` 已合入。用户随后授权先补齐可信来源，再实施第三阶段。原任务的认证准入现持久化 owner／Host／device、conversation／task、由 Host 生成的 coding-run ID、规范化仓库及仅 Host 可解析的凭据引用；delivery 绑定该 source ID。原对话的 run 引用只在准入时记录为 `originRunRef`，与 Host 的权威身份分开，不能成为后续浏览器声明的授权依据。缺少来源的旧记录拒绝交接。来源撤销标记跨重启保留；规范删除路径在丢失持久链接前，向所记录的来源 Host 撤销。实现位于独立第三阶段 worktree，尚未提交；Rust 测试已编写但按用户要求跳过。验证边界见 `docs/plans/2026-10-15-managed-cloud-desktop-source-handoff-verification.md`。第四阶段在相同休眠发布边界内实现最终历史投影与结果删除。
 
 第三阶段诊断将 `parentRunId` 绑定到 Host coding run，另外保留 `originRunRef` 供后续历史投影；独立记录 child／source／delivery／desktop generation，并计算完整交接 manifest 与传输 manifest 的摘要。生产执行继续禁用。唯一可执行入口是原生 `handoff-smoke`，要求明确计费授权和逐次报价批准，始终请求销毁桌面。元数据准备不会计费。首版启动仅允许在固定仓库根目录明确执行 `npm run <script>`，不隐式安装依赖。镜像配方 3 增加 Git／nodejs／npm，旧配方资格不能复用。传输包含完整 Git 历史；选中文件的排除规则不等于净化仓库历史。
 
@@ -305,7 +305,7 @@ Host 现持有加密验收索引和有界加密检查点／失败截图。绑定
 
 ADR-0213 删除使用 v244 账户本地、无内容的 outbox，以及带确认的原生 prepared／committed／aborted journal。Prepared 冻结证据；被拒绝或回滚的事务执行 abort。Host 离线时保留持久化待清理记录，不谎称远端字节已消失。Committed 永久阻止迟到写入，移除验收投影并重试字节／桌面清理。对话、任务和单次验收删除汇入同一机制；归档保留证据。任务删除的重启重放通过规范 backend，并使用**原始持久化 device 约束**，不把本地 HOME 中不存在文件当作完成证明。多 Host 对话删除在来源撤销后向各所属 Host 获取任务 ID。待清理记录不随普通 sync tombstone 过期。
 
-实现及定向验证记录见 `docs/plans/2026-10-15-managed-cloud-desktop-phase4-verification.md`。Rust 测试已编写，但按用户要求未运行。不声称浏览器／Tauri／provider 端到端资格已通过；所有计费 smoke 仍须用户提供凭据并明确授权。
+实现及定向验证记录见 `docs/plans/2026-10-15-managed-cloud-desktop-acceptance-evidence-verification.md`。Rust 测试已编写，但按用户要求未运行。不声称浏览器／Tauri／provider 端到端资格已通过；所有计费 smoke 仍须用户提供凭据并明确授权。
 
 ## 完成修订（2026-10-29）
 

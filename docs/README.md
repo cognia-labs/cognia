@@ -32,6 +32,7 @@ DeepSeek Harness 的托管启动器与配置归属 `packages/agent-dsh/runtime/`
 - [Development workflow / 开发流程](development/WORKFLOW.md)
 - [CI/CD guide / CI/CD 指南](development/CI_CD.md)
 - [Testing guide / 测试指南](development/TESTING.md)
+- [Storybook guide / 组件预览指南](development/STORYBOOK.md)
 - [Contribution guide / 贡献指南](../CONTRIBUTING.md)
 
 `docs/content/docs/` owns the published bilingual Fumadocs content and ADRs.

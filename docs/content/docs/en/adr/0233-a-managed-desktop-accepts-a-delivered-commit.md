@@ -5,7 +5,7 @@ description: "A Host-owned E2B desktop reuses the computer-server lifecycle and 
 
 # ADR 0233 — A managed desktop accepts a delivered commit
 
-Phase 1 implementation note (2026-10-15): the initial operator smoke harness qualifies network `Off` only. `On`/`Allowlist` remain explicitly unqualified in the contract, UI and tests; non-null region selection refuses until placement can enforce it. Real-provider smoke has not been authorized or run. Native compilation was blocked by disk exhaustion and skipped at the user's direction. See `docs/plans/2026-10-15-managed-cloud-desktop-phase1-verification.md` for the evidence and remaining gates.
+Phase 1 implementation note (2026-10-15): the initial operator smoke harness qualifies network `Off` only. `On`/`Allowlist` remain explicitly unqualified in the contract, UI and tests; non-null region selection refuses until placement can enforce it. Real-provider smoke has not been authorized or run. Native compilation was blocked by disk exhaustion and skipped at the user's direction. See `docs/plans/2026-10-15-managed-cloud-desktop-lifecycle-verification.md` for the evidence and remaining gates.
 
 **Status:** Accepted — user approved ADR-0233, Phases 1–4 and the trusted-source prerequisite on 2026-10-15. Real-provider smoke still requires separate credentials and explicit authorization; production remains dormant until qualification. Completion amendment A1–A10 accepted on 2026-10-29.  
 **Date:** 2026-10-15  
@@ -183,7 +183,7 @@ shared loopback preview, supervisor-death cleanup, live-import cancellation and
 acceptance deadline. The Host library compiled; Rust tests and the complete
 native Host handoff path were not executed in this checkpoint. Versioned Host
 qualification and full lifecycle/control qualification remain required. See
-`docs/plans/2026-10-16-managed-desktop-mmds-p2-verification.md` for exact-image
+`docs/plans/2026-10-16-managed-desktop-source-import-and-acceptance-isolation.md` for exact-image
 identity, failed/inconclusive attempts and cleanup evidence.
 
 P3 implementation (2026-10-16): qualification evidence version 2 and isolation
@@ -196,7 +196,7 @@ observations. These admission observations are not socket-probe results. Provide
 root network observations remain explicitly separate from workload enforcement.
 Lifecycle-only smoke is retained as diagnostic evidence and cannot enable
 production. Recipe 6 invalidates older image qualification. See
-`docs/plans/2026-10-16-managed-desktop-mmds-p3-verification.md` for native Host
+`docs/plans/2026-10-16-managed-desktop-host-boundary-and-native-handoff-verification.md` for native Host
 handoff validation and its evidence limits. The native macOS Host operator passed
 real E2B lifecycle and both commit/recovery-bundle handoffs on recipe 6, including
 journal reopen, protected receipt correlation and visible private preview checkpoints.
@@ -217,7 +217,7 @@ accepted plan additionally requires an actual weakened-profile negative control:
 a fixed, root-only, data-free importer diagnostic omits only seccomp, executes
 an immutable waiting process, and must be rejected and completely terminated.
 The production importer retains mandatory seccomp with no fallback. Verification status and any remaining gaps
-are recorded in `docs/plans/2026-10-16-managed-desktop-mmds-p4-verification.md`.
+are recorded in `docs/plans/2026-10-16-managed-desktop-native-qualification.md`.
 An authorized new diagnostic invalidates that category's prior evidence and the
 composed qualification before paid create; failure cannot fall back to old success.
 Independent categories and cleanup history remain intact.
@@ -239,13 +239,13 @@ Host restart revalidates the boundary; missing support, ambiguous generation or 
 
 The user approved this amendment and implementation on 2026-10-16. First verify the required kernel isolation and fixed GUI transport inside E2B; failure keeps the provider blocked. Production remains dormant and the dev merge is paused. Rust tests are skipped at the user’s instruction. See `docs/plans/2026-10-16-managed-desktop-mmds-isolation.md` for the accepted implementation plan and evidence gates.
 
-Implementation checkpoint, 2026-10-16: P0 kernel primitives and P1's exact compiled desktop guard passed bounded E2B diagnostics. Actual terminal probes could not reach MMDS/private IPv4/IPv6 destinations; Chromium inherited the strict profile; killing the supervisor removed the observed workload descendants and ingress. All diagnostic desktops and templates were deleted. This is desktop-boundary evidence only: confined import/Git, later acceptance launch, versioned Host attestation and complete native lifecycle/control qualification remain required. No production receipt was installed. See `docs/plans/2026-10-16-managed-desktop-mmds-p1-verification.md` for exact digests, failures, assertions and cleanup.
+Implementation checkpoint, 2026-10-16: P0 kernel primitives and P1's exact compiled desktop guard passed bounded E2B diagnostics. Actual terminal probes could not reach MMDS/private IPv4/IPv6 destinations; Chromium inherited the strict profile; killing the supervisor removed the observed workload descendants and ingress. All diagnostic desktops and templates were deleted. This is desktop-boundary evidence only: confined import/Git, later acceptance launch, versioned Host attestation and complete native lifecycle/control qualification remain required. No production receipt was installed. See `docs/plans/2026-10-16-managed-desktop-mmds-guest-guard-verification.md` for exact digests, failures, assertions and cleanup.
 
 Evidence: [pinned E2B MMDS initialization](https://github.com/e2b-dev/runtime/blob/a1899fb840e1eb1ef2c0ffc751c639959ed6a144/packages/envd/internal/host/mmds.go), [pinned MMDS route](https://github.com/e2b-dev/runtime/blob/a1899fb840e1eb1ef2c0ffc751c639959ed6a144/packages/envd/internal/host/mmds_route_linux.go), and [Linux network namespace semantics](https://man7.org/linux/man-pages/man7/network_namespaces.7.html), checked 2026-10-16. Source behavior is not hosted-runtime qualification.
 
 ## 7. A handoff is a new acceptance execution of immutable source
 
-**Dependency D1:** delivery commit `ff3c51c617deb351caf07415d25d4b59467e6fe0` is merged. The user subsequently authorized completing its missing source authority, then Phase 3. Original authenticated admission now persists owner/Host/device, conversation/task, a Host-minted coding-run ID, normalized repository and a Host-only credential reference; each delivery binds that source ID. The conversation's original run reference is captured once as `originRunRef`, separate from the Host-minted authority, and never authorizes a later browser assertion. Legacy source-less records refuse. Source tombstones survive restart; canonical deletion revokes on the recorded source Host before losing its durable link. The implementation is uncommitted in the isolated Phase 3 checkout; native tests are written but skipped by user instruction. See `docs/plans/2026-10-15-managed-cloud-desktop-phase3-verification.md` for evidence. Phase 4 implements the final history projection and result deletion under the same dormant release boundary.
+**Dependency D1:** delivery commit `ff3c51c617deb351caf07415d25d4b59467e6fe0` is merged. The user subsequently authorized completing its missing source authority, then Phase 3. Original authenticated admission now persists owner/Host/device, conversation/task, a Host-minted coding-run ID, normalized repository and a Host-only credential reference; each delivery binds that source ID. The conversation's original run reference is captured once as `originRunRef`, separate from the Host-minted authority, and never authorizes a later browser assertion. Legacy source-less records refuse. Source tombstones survive restart; canonical deletion revokes on the recorded source Host before losing its durable link. The implementation is uncommitted in the isolated Phase 3 checkout; native tests are written but skipped by user instruction. See `docs/plans/2026-10-15-managed-cloud-desktop-source-handoff-verification.md` for evidence. Phase 4 implements the final history projection and result deletion under the same dormant release boundary.
 
 The Phase 3 diagnostic binds `parentRunId` to the Host coding run and preserves `originRunRef` for later history projection. It creates a separate child/source/delivery/desktop-generation record and hashes the full handoff manifest plus the transfer manifest. Production execution remains disabled. Its only executable entry is the native `handoff-smoke` operator, requiring explicit paid permission and per-quote approval, and always requesting desktop destruction. Metadata preparation never spends. The initial launch is an explicit `npm run <script>` at the pinned repository root, with no implicit install. Image recipe 3 adds Git/nodejs/npm and invalidates older recipe qualification. Full Git history is transferred; the selected-file denylist is not a repository-history sanitization filter.
 
@@ -319,7 +319,7 @@ Run detail and source-conversation overview query the owning Host and project a 
 
 ADR-0213 deletion uses a v244 account-local, content-free outbox plus an acknowledged native prepared/committed/aborted journal. A prepared operation freezes evidence; a rejected/rolled-back transaction aborts it. An offline Host leaves durable pending cleanup, not a false claim that remote bytes are already gone. Committed deletion permanently fences late writes, removes acceptance projections and retries physical byte/desktop cleanup. Conversation, task and acceptance-only paths converge on this mechanism; archive retains evidence. Task-only restart replay uses the canonical backend with the **original persisted device constraint**, not absence in local HOME as proof. Multi-Host conversation cleanup obtains task IDs from each owning Host after source revocation. Pending work is retained beyond ordinary sync tombstone expiry.
 
-Implementation and targeted evidence are recorded in `docs/plans/2026-10-15-managed-cloud-desktop-phase4-verification.md`. Rust tests are written but not run at the user's request. Browser/Tauri/provider end-to-end qualification is not claimed; all paid smoke still requires user credentials and explicit authorization.
+Implementation and targeted evidence are recorded in `docs/plans/2026-10-15-managed-cloud-desktop-acceptance-evidence-verification.md`. Rust tests are written but not run at the user's request. Browser/Tauri/provider end-to-end qualification is not claimed; all paid smoke still requires user credentials and explicit authorization.
 
 ## Integrated review boundary (2026-10-16)
 

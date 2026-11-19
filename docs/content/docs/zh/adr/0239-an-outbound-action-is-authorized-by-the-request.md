@@ -148,13 +148,13 @@ ADR-0070 否决了把 IM 绑定的运行当作 `external-send`：从某个线程
 | 期 | 范围 |
 | --- | --- |
 | 1 | 引擎；外发列表与目标；发起线程、授予、草稿/停泊的判定顺序；指令纪元；屏障及其 receipt 字段与索引；两个咽喉点；`authorizedBy`；digest 响应器；对外发工具隐藏“始终允许”；文档更正 |
-| 2a | GitHub 写入：集成 broker、带凭据的原始请求、Squad 堆叠交付、`gh` 写命令（计划：`docs/plans/2026-10-25-adr-0239-phase-2.md`） |
+| 2a | GitHub 写入：集成 broker、带凭据的原始请求、Squad 堆叠交付、`gh` 写命令（计划：`docs/plans/2026-10-25-adr-0239-github-write-and-browser-submission-authorization.md`） |
 | 2b | 浏览器表单提交，先用 spike 逐个浏览器引擎确定提交信号 |
 | 3 | 经由 `recommendation` 的模型收紧 |
 
 ## 实现（第一期）
 
-第一期分十二个工作包落地（计划：`docs/plans/2026-10-24-adr-0239-phase-1.md`）。引擎默认运行在**影子模式**：每次外发工具调用和 connector 投递都会规划，计划记在 receipt 上（`plan.enforced: false`），但不改变任何发送。用户在“设置 → 安全”中查看执行后会改变什么，再开启执行（`agentPermissions.outboundAuthorization: "enforce"`）。
+第一期分十二个工作包落地（计划：`docs/plans/2026-10-24-adr-0239-outbound-message-authorization.md`）。引擎默认运行在**影子模式**：每次外发工具调用和 connector 投递都会规划，计划记在 receipt 上（`plan.enforced: false`），但不改变任何发送。用户在“设置 → 安全”中查看执行后会改变什么，再开启执行（`agentPermissions.outboundAuthorization: "enforce"`）。
 
 ### 代码位置
 
@@ -184,7 +184,7 @@ ADR-0070 否决了把 IM 绑定的运行当作 `external-send`：从某个线程
 
 ## 实现（第二期 2a）
 
-第二期 2a（GitHub 写入）分十个工作包落地（计划：`docs/plans/2026-10-25-adr-0239-phase-2.md`）。它有自己的开关，从**影子模式**开始：每次 GitHub 写入都会规划并记录，但不改变任何结果，直到用户在“设置 → 安全”中开启（`agentPermissions.outboundAuthorizationByCategory.github: "enforce"`）。对消息开启执行不会对 GitHub 开启执行。
+第二期 2a（GitHub 写入）分十个工作包落地（计划：`docs/plans/2026-10-25-adr-0239-github-write-and-browser-submission-authorization.md`）。它有自己的开关，从**影子模式**开始：每次 GitHub 写入都会规划并记录，但不改变任何结果，直到用户在“设置 → 安全”中开启（`agentPermissions.outboundAuthorizationByCategory.github: "enforce"`）。对消息开启执行不会对 GitHub 开启执行。
 
 ### 代码位置
 
@@ -214,7 +214,7 @@ ADR-0070 否决了把 IM 绑定的运行当作 `external-send`：从某个线程
 
 ## 实现（第二期 2b）
 
-第二期 2b（浏览器提交）先做一次 spike，再分四个工作包实现（计划：`docs/plans/2026-10-25-adr-0239-phase-2.md`；spike：`docs/research/2026-10-25-browser-submit-signal.md`）。它有自己的开关，从**影子模式**起步：每次提交都会规划并记录，结果不变，直到有人在“设置 → 安全”里开启（`agentPermissions.outboundAuthorizationByCategory.browser: "enforce"`）。
+第二期 2b（浏览器提交）先做一次 spike，再分四个工作包实现（计划：`docs/plans/2026-10-25-adr-0239-github-write-and-browser-submission-authorization.md`；spike：`docs/research/2026-10-25-browser-submit-signal.md`）。它有自己的开关，从**影子模式**起步：每次提交都会规划并记录，结果不变，直到有人在“设置 → 安全”里开启（`agentPermissions.outboundAuthorizationByCategory.browser: "enforce"`）。
 
 ### 代码位置
 

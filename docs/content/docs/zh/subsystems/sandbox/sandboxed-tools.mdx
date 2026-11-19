@@ -99,8 +99,11 @@ socket 而不可用。
 **设置 → 沙盒 → 可读根目录** 调整配置。比较按路径组件进行，`/work/project-other` 不属于
 `/work/project`。父子策略继承与 remote worker 上限也保留这一边界。
 
-这限制了 Linux 上模型选择的只读挂载，以及发往 container/microVM adapter 的路径范围；不会把
-macOS Seatbelt 现有的全局文件读取许可变成内核级读取白名单，也不会给 Windows runner 增加文件系统约束。
+Linux 限制模型选择的只读挂载。macOS Seatbelt 在可读根非空时限制文件内容读取，系统运行时路径和可写路径也可读。
+容器和 microVM 的读范围取决于 provider 的实际能力。Windows runner 目前缺少文件系统根约束。
+
+Host 任务 shell 会把请求的网络上限与已准入容器的出网策略比较，其中包含管理员预设的域名。
+环境无法满足网络上限时，Host 会在执行命令前拒绝。
 
 ## 层级路由 —— `dispatchSandbox`
 

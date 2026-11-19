@@ -271,16 +271,11 @@ NetworkPolicy::Allowlist { hosts: _ } => match proxy_port {
 
 - `health().backend == "macos-sandbox-exec"`, `version == "system"`.
 - Edit/Write/TextEditor allow `(literal "<file>")` writes only — a single file, never a subtree.
-- **Reads are allowed globally, then credential stores are denied again as the last matching
-  rules.** This is not a loosening someone chose; it is what makes the sandbox work at all. A
-  profile that scopes `file-read*` to a list of system prefixes aborts every confined binary on
-  current macOS before it execs — `/bin/echo` under the full prefix set dies with `SIGABRT` —
-  because dyld consults runtime files whose locations move across releases. The one-shot backend
-  shipped with the narrow list for a while, so `sandbox_bash` returned exit `-1` with no output and
-  `sandbox_health_check` reported `confined: false` while the cheap probe still said "Active".
-  `sbpl.rs` now owns those rules for both the one-shot and interactive profiles so they cannot
-  disagree again, and `push_baseline_secret_read_denies` anchors the deny set at `$HOME` and the app
-  data directory rather than at whatever the caller declared readable.
+- **Explicit readable roots constrain content reads.** The one-shot profile allows the
+  declared readable and writable paths, its own scratch directory and system toolchain paths.
+  It shares the scoped loader rules in `sbpl.rs` with the interactive launcher so dyld
+  can inspect root-directory metadata. An empty readable list retains the legacy broad read
+  policy. Both modes deny protected credential paths.
 - **An allowlist is kernel-enforced.** `run_confined` starts the filtering proxy (`net_proxy.rs`),
   points `HTTP(S)_PROXY` / `ALL_PROXY` at it and passes its port as `COGNIA_SANDBOX_PROXY_PORT`. The
   profile then allows outbound TCP only to `localhost:<port>` (`sbpl.rs:282-286`), and the proxy
@@ -387,6 +382,12 @@ needed; `off` also prevents online model calls and package downloads.
 external-agent processes on Windows; it does not run them unsandboxed. Both policy fields are saved
 but inert, and the editor labels and disables them there. The Windows one-shot runner described
 above is a separate execution path and does not enable external-agent launches.
+
+Placed agents retain their configured network ceiling. The Host compares it with the
+environment's admitted egress, including operator presets, before launch. Strict remote requests
+require an attested offline environment until provider allowlist and DNS enforcement can be
+verified together. The lifecycle offers a Windows launch exception only on a Host that actually
+implements that capability.
 
 ## The second door — `cognia-sandbox-exec`
 

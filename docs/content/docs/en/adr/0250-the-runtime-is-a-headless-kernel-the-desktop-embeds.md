@@ -23,7 +23,7 @@ description: "Every long-running behaviour lives in one kernel, designed for an 
 - [ADR-0068](./0068-frontend-package-extraction-and-compile-speed): its S5 store slicing follows §14's settings-key ownership
 - [ADR-0196](./0196-a-library-crate-links-tauri-only-when-asked): Rust crate layering, which §14 leaves alone
 
-**Evidence:** `docs/research/architecture-convergence-audit-2026-11-01.md`; for §14, `docs/research/feature-module-analysis-2026-11-04.md` (counter: `scripts/gates/convergence/subsystem-deps.mjs`). **Plan:** `docs/plans/2026-11-01-convergence-phase-0.md`.
+**Evidence:** `docs/research/architecture-convergence-audit-2026-11-01.md`; for §14, `docs/research/feature-module-analysis-2026-11-04.md` (counter: `scripts/gates/convergence/subsystem-deps.mjs`). **Plan:** `docs/plans/2026-11-01-convergence-baseline-and-local-brain-spike.md`.
 
 > **Amended by ADR-0252 (2026-11-05).** The multi-agent part of phase 3 (child runs in the ledger, one status vocabulary in that area, ADR-0247 commitments) is delivered ahead of order. The rest of the Squad code moves into the `squads` module that M1 created.
 
@@ -80,7 +80,7 @@ The **kernel** is every long-running behaviour: schedulers, delivery runners, re
 - **A host adapter matrix.** Each registry entry states how it is assembled on each host; the matrix lives in `docs/research/` (phase 0a A5). A brain entry cannot be reused on the desktop by swapping the bridge, because the event publisher, the connector server lifecycle and the plugin adapters differ. Parity between the desktop and a Host is held by the one registry, this matrix, and the dual-host lane (§12).
 - **A storage budget for heavy accounts.** Today's WebView path is slow at scale. On a 200,000-message dataset, the first sidebar list arrives 5.6–6.8 s after a cold open, and the session-list p95 is 630–785 ms. Phase 2 carries its own budget for that path.
 
-**Rejected for now: the desktop runs a local brain (2a).** Spike S1 measured 2a against ranges fixed before any measurement. The evidence ledger is `docs/evidence/2026-11-01-convergence-s1.md` on branch `spike/local-brain-s1`.
+**Rejected for now: the desktop runs a local brain (2a).** Spike S1 measured 2a against ranges fixed before any measurement. The evidence ledger is `docs/evidence/2026-11-01-convergence-local-brain-spike.md` on branch `spike/local-brain-s1`.
 - **Storage passed.** The brain store was faster than the WebView on every operation. On the heavy dataset, the session-list p95 was about 50 ms, against about 700 ms for the WebView.
 - **Startup and memory failed by a wide margin, for structural reasons.**
   - Added cold start was about +3.0 s on a real-sized account and about +37 s on the heavy one. The ranges were +0.8 s and +2.5 s.

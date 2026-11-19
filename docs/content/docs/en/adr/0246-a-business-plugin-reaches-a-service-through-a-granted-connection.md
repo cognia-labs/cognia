@@ -161,7 +161,7 @@ Steps 1–5 and the ledger items they carry (ES-07–12, 15, 16, 23–34, 36) ar
 | Incremental sync (ES-31) | 2aa72591dc, d2799a1822, b38620883c, 9406caedfb | Shared core with per-page commits and tombstones; Issue Sync and the GitHub mirror on it; public `ctx.sync`; `feishu-calendar` on Host cursors |
 | Runtime and release (ES-33, 34) | 07af5f3535, 409e2886ec | Runtime support matrix with per-cell evidence tests; Feishu release matrix through the real manager |
 
-Behaviour tables (ES-32): `plugins/feishu-calendar/README.md` and `docs/evidence/2026-11-02-adr-0246-es32-builtin-migrations.md`.
+Behaviour tables (ES-32): `plugins/feishu-calendar/README.md` and `docs/evidence/2026-11-02-adr-0246-builtin-connector-migrations.md`.
 
 Known limits:
 
