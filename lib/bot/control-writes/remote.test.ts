@@ -13,10 +13,16 @@ const enqueue = jest.fn(
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({
   enqueue: (input: { command: string; idempotencyKey: string; payload: Record<string, unknown> }) =>
     enqueue(input),
+  enqueueOnChannel: (input: {
+    command: string
+    idempotencyKey: string
+    payload: Record<string, unknown>
+  }) => enqueue(input),
 }))
 
 import { BOT_WRITE_COMMANDS } from "./route"
 import {
+  botTriggerChannel,
   botWriteIdempotencyKey,
   normalizeLegacyBotWriteKey,
   replayBotDeliveryRemotely,
@@ -176,19 +182,28 @@ describe("setBotTriggerArmedRemotely", () => {
     expect(enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
         command: BOT_WRITE_COMMANDS.setTriggerArmed,
+        // One channel per trigger: its switches reach the Host in order.
+        channel: botTriggerChannel("boti_1", "nightly"),
         idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
         payload: { installationId: "boti_1", triggerId: "nightly", armed: true },
       })
     )
   })
 
-  it("flips the local mirror so the switch settles immediately", async () => {
+  async function mirrored(overrides: { triggerOverrides?: Record<string, boolean> } = {}) {
     const row = await installBot({
       definitionId: "acme:digest",
       definitionSource: "plugin",
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
+      ...overrides,
     })
+    await getDb().botInstallations.update(row.id, { syncedFromHost: true })
+    return row
+  }
+
+  it("flips the local mirror so the switch settles immediately", async () => {
+    const row = await mirrored()
     await setBotTriggerArmedRemotely({
       installationId: row.id,
       triggerId: "nightly",
@@ -199,16 +214,36 @@ describe("setBotTriggerArmedRemotely", () => {
   })
 
   it("leaves the other overrides alone", async () => {
+    const row = await mirrored({ triggerOverrides: { weekly: true } })
+    await setBotTriggerArmedRemotely({ installationId: row.id, triggerId: "nightly", armed: true })
+    const stored = await getDb().botInstallations.get(row.id)
+    expect(stored?.triggerOverrides).toEqual({ weekly: true, nightly: true })
+  })
+
+  it.each(["disabled", "needs_setup"] as const)(
+    "queues and mirrors a switch on a %s mirror without running host-side effects (B26)",
+    async (status) => {
+      const row = await mirrored()
+      await getDb().botInstallations.update(row.id, { status })
+      await expect(
+        setBotTriggerArmedRemotely({ installationId: row.id, triggerId: "nightly", armed: true })
+      ).resolves.toMatchObject({ id: "job_1" })
+      expect(await getDb().botInstallations.get(row.id)).toMatchObject({
+        status,
+        triggerOverrides: { nightly: true },
+      })
+    }
+  )
+
+  it("does not touch a row this device owns itself", async () => {
     const row = await installBot({
       definitionId: "acme:digest",
       definitionSource: "plugin",
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
-      triggerOverrides: { weekly: true },
     })
-    await setBotTriggerArmedRemotely({ installationId: row.id, triggerId: "nightly", armed: true })
-    const stored = await getDb().botInstallations.get(row.id)
-    expect(stored?.triggerOverrides).toEqual({ weekly: true, nightly: true })
+    await setBotTriggerArmedRemotely({ installationId: row.id, triggerId: "nightly", armed: false })
+    expect((await getDb().botInstallations.get(row.id))?.triggerOverrides).toBeUndefined()
   })
 
   it("writes nothing locally when the installation is not mirrored here", async () => {

@@ -70,16 +70,44 @@ it("pins the original install intent across enabled changes and subsequent edits
   })
 })
 
-it("preserves legacy replay checks for rows without an installation fingerprint", async () => {
+it("reads a succeeded install's receipt back after the plugin upgraded (B27)", async () => {
   const installed = await mutateBotInstallationOnHost(input)
-  await getDb().botInstallations.update(installed.id, { installOperationFingerprint: undefined })
+  registerBot(
+    "monitor",
+    {
+      id: "bot:monitor",
+      handler: async () => ({}),
+      definition: {
+        id: "monitor",
+        name: "Monitor",
+        version: "2.0.0",
+        executor: "handler",
+        triggers: [{ id: "manual", kind: "manual" }],
+        configSchema: {
+          type: "object",
+          properties: { repository: { type: "string", default: "acme/other" } },
+          additionalProperties: false,
+        },
+      },
+    },
+    { pluginId: "bot" }
+  )
+  // The same request, replayed: the receipt, not "the catalog changed".
   await expect(mutateBotInstallationOnHost(input)).resolves.toMatchObject({ id: installed.id })
+  // The same operation id with a different request is still a conflict.
   await expect(mutateBotInstallationOnHost({ ...input, paused: true })).rejects.toThrow(
     /already belongs/
   )
+  // A NEW install against the upgraded catalog is still checked against it.
   await expect(
-    mutateBotInstallationOnHost({ ...input, triggerInputSlots: { manual: "github" } })
-  ).rejects.toThrow(/already belongs/)
+    mutateBotInstallationOnHost({ ...input, operationId: "123e4567-e89b-42d3-a456-426614174009" })
+  ).rejects.toThrow(/missing or changed/)
+})
+
+it("refuses an operation id whose row carries no request fingerprint", async () => {
+  const installed = await mutateBotInstallationOnHost(input)
+  await getDb().botInstallations.update(installed.id, { installOperationFingerprint: undefined })
+  await expect(mutateBotInstallationOnHost(input)).rejects.toThrow(/already belongs/)
 })
 
 it("requires an explicit valid host grant and preserves unrelated installation ceilings", async () => {
@@ -155,7 +183,18 @@ it("installs the host catalog default once and remains needs_setup without crede
   await expect(
     mutateBotInstallationOnHost({ ...input, config: { repository: "other/repo" } })
   ).rejects.toThrow("another definition")
-  await expect(mutateBotInstallationOnHost({ ...input, version: "2" })).rejects.toThrow("changed")
+  // The same operation id asking for another version is another request.
+  await expect(mutateBotInstallationOnHost({ ...input, version: "2" })).rejects.toThrow(
+    "another definition"
+  )
+  // A new install naming a version the catalog does not offer is refused by it.
+  await expect(
+    mutateBotInstallationOnHost({
+      ...input,
+      operationId: "123e4567-e89b-42d3-a456-426614174002",
+      version: "2",
+    })
+  ).rejects.toThrow("changed")
   await expect(mutateBotInstallationOnHost({ ...input, slots: [] })).rejects.toThrow()
 })
 it("receives a whole installation in one operation: switched off, triggers and grant included", async () => {

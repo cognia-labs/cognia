@@ -11,12 +11,12 @@ import {
   getBotDelivery,
   listBotDeliveries,
 } from "@/lib/db/bot-event-deliveries"
-import { runBotDelivery, cancelAcceptedBotDeliveries } from "@/lib/bot/runtime/run"
+import { botRunId, runBotDelivery, cancelAcceptedBotDeliveries } from "@/lib/bot/runtime/run"
 import { resolveInstalledBot } from "@/lib/bot/installed-bot"
 import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createExecutionRun, getExecutionRun } from "@/lib/db/execution-runs"
-import { completeBotRunStep, getBotRunStep } from "@/lib/db/bot-run-steps"
+import { BOT_RUN_RESULT_STEP, completeBotRunStep, getBotRunStep } from "@/lib/db/bot-run-steps"
 import {
   __resetBotsForTesting,
   registerBot,
@@ -156,6 +156,26 @@ it("re-resolves plugin readiness at the admission transaction boundary", async (
 })
 
 describe("setBotTriggerArmedLocally", () => {
+  it("keeps both of two concurrent switches of different triggers (B04)", async () => {
+    const row = await install(
+      def({
+        triggers: [
+          { id: "run", kind: "manual" },
+          { id: "nightly", kind: "schedule", cron: "0 9 * * *" },
+          { id: "weekly", kind: "schedule", cron: "0 9 * * 1" },
+        ],
+      })
+    )
+    await Promise.all([
+      setBotTriggerArmedLocally({ installationId: row.id, triggerId: "nightly", armed: false }),
+      setBotTriggerArmedLocally({ installationId: row.id, triggerId: "weekly", armed: false }),
+    ])
+    expect((await getBotInstallation(row.id))?.triggerOverrides).toEqual({
+      nightly: false,
+      weekly: false,
+    })
+  })
+
   it("keeps the first activation watermark across disable and rearm", async () => {
     const row = await install()
     const first = await setBotTriggerArmedLocally({
@@ -505,10 +525,15 @@ describe("replayBotDeliveryLocally", () => {
       executors: { handler: async () => ({ summary: "recovered" }) },
     })
     expect(success.status).toBe("completed")
-    expect((await getBotRunStep(blocked.runId, "__host:result"))?.output).toMatchObject({
+    expect((await getBotRunStep(blocked.runId, BOT_RUN_RESULT_STEP))?.output).toMatchObject({
       summary: "invalid_result_report",
     })
     expect(await listBotDeliveries({ installationId: installation.id })).toHaveLength(3)
+    // Bounded: a retry of a retry is no longer than the first retry (B20), and
+    // still names the event it retries in its causation chain.
+    expect(newest.id.length).toBe(successor.id.length)
+    expect(botRunId(newest.id).length).toBeLessThanOrEqual(256)
+    expect(newest.envelope.provenance.causationEventIds?.[0]).toBe(successor.eventId)
   })
 
   it.each(["running", "waiting", "paused", "recovery_required"] as const)(

@@ -253,14 +253,7 @@ export async function enqueueHostStateIntentIfAvailable(
 
     const existingClientId = rows.find((row) => row.clientId)?.clientId
     const clientId = existingClientId ?? preferredClientId
-    const clientSeq =
-      rows.reduce(
-        (highest, row) =>
-          row.clientId === clientId && typeof row.clientSeq === "number"
-            ? Math.max(highest, row.clientSeq)
-            : highest,
-        0
-      ) + 1
+    const clientSeq = highestClientSeq(rows.filter((row) => row.clientId === clientId)) + 1
     const action: HostStateAction = {
       channel,
       accountId: scope.accountId,
@@ -338,6 +331,28 @@ export async function enqueue(input: EnqueueInput): Promise<MobileOutboundJobRow
   const row = buildQueueRow(input)
   await getDb().mobileOutboundQueue.put(row)
   return row
+}
+
+/**
+ * Enqueue a standalone command that must reach the Host in order with the
+ * other commands on its `channel`.
+ *
+ * Stamped with the next `clientSeq` of the channel's outstanding rows, inside
+ * the transaction that inserts it. {@link claimNext} dispatches only a
+ * channel's lowest outstanding sequence, so a later command waits behind an
+ * earlier one that is backing off instead of overtaking it, and an earlier
+ * command retried late can no longer land after, and undo, the later one.
+ */
+export async function enqueueOnChannel(
+  input: EnqueueInput & { channel: string }
+): Promise<MobileOutboundJobRow> {
+  const db = getDb()
+  return db.transaction("rw", db.mobileOutboundQueue, async () => {
+    const outstanding = await outstandingOnChannel(input.channel, input.clientId)
+    const row = buildQueueRow({ ...input, clientSeq: highestClientSeq(outstanding) + 1 })
+    await db.mobileOutboundQueue.put(row)
+    return row
+  })
 }
 
 export interface OutboundQueueScope extends Readonly<RuntimeTargetScope> {
@@ -538,7 +553,7 @@ export async function enqueueCollabMutation(
           row.channel === channel
       )
       .toArray()
-    const clientSeq = rows.reduce((highest, row) => Math.max(highest, row.clientSeq ?? 0), 0) + 1
+    const clientSeq = highestClientSeq(rows) + 1
     const row: MobileOutboundJobRow = {
       id: operationId,
       accountId: localAccountId,
@@ -1514,19 +1529,31 @@ export async function retryDeadletter(id: string, nowMs: number = Date.now()): P
  * sequence from, so a retry and a new send now agree on where the tail is.
  */
 async function nextClientSeqForChannel(row: MobileOutboundJobRow): Promise<number | undefined> {
-  if (typeof row.clientSeq !== "number") return undefined
-  const outstanding = await getDb()
+  if (typeof row.clientSeq !== "number" || !row.channel) return undefined
+  const outstanding = await outstandingOnChannel(row.channel, row.clientId)
+  // The row being retried is terminal, so it is not in `outstanding`; seeding
+  // with its own sequence keeps the result strictly increasing even when the
+  // channel has drained completely.
+  return highestClientSeq(outstanding, row.clientSeq) + 1
+}
+
+/** The highest `clientSeq` among `rows`, or `floor` when none is higher. */
+function highestClientSeq(rows: readonly MobileOutboundJobRow[], floor = 0): number {
+  return rows.reduce(
+    (highest, row) =>
+      typeof row.clientSeq === "number" ? Math.max(highest, row.clientSeq) : highest,
+    floor
+  )
+}
+
+/** A channel's outstanding rows for one client, through the `status` index. */
+function outstandingOnChannel(
+  channel: string,
+  clientId: string | undefined
+): Promise<MobileOutboundJobRow[]> {
+  return getDb()
     .mobileOutboundQueue.where("status")
     .anyOf(IN_FLIGHT_STATUSES as MobileOutboundStatus[])
-    .filter((candidate) => candidate.channel === row.channel && candidate.clientId === row.clientId)
+    .filter((candidate) => candidate.channel === channel && candidate.clientId === clientId)
     .toArray()
-  const highest = outstanding.reduce(
-    (best, candidate) =>
-      typeof candidate.clientSeq === "number" ? Math.max(best, candidate.clientSeq) : best,
-    // The row being retried is terminal, so it is not in `outstanding`; seeding
-    // with its own sequence keeps the result strictly increasing even when the
-    // channel has drained completely.
-    row.clientSeq
-  )
-  return highest + 1
 }

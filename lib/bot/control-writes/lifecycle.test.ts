@@ -29,7 +29,11 @@ import {
   uninstallBotInstallation,
   updateBotConfig,
 } from "./lifecycle"
-import { BotControlTargetMissingError } from "./local"
+import {
+  BotControlTargetMissingError,
+  BotManualRunUnavailableError,
+  runBotManuallyLocally,
+} from "./local"
 import { __setBotWriteRouteDepsForTests } from "./route"
 
 const mockRelay = jest.fn()
@@ -655,6 +659,26 @@ describe("human revision (ADR-0239 instruction epoch)", () => {
   })
 })
 
+it("keeps a config saved concurrently with a disable, and counts both edits (B04)", async () => {
+  register(
+    definition({
+      configSchema: { type: "object", properties: { channel: { type: "string" } } },
+    })
+  )
+  const installed = await installBotFromCatalog({
+    entry: entry(),
+    scope: { kind: "account" },
+    config: { channel: "#old" },
+  })
+  await Promise.all([
+    updateBotConfig(installed.id, { channel: "#new" }),
+    setBotInstallationEnabled(installed.id, false),
+  ])
+  const stored = await getBotInstallation(installed.id)
+  expect(stored).toMatchObject({ status: "disabled", config: { channel: "#new" } })
+  expect(stored?.humanRevision).toBe((installed.humanRevision ?? 0) + 2)
+})
+
 describe("uninstallBotInstallation", () => {
   it("removes the row", async () => {
     register()
@@ -969,6 +993,31 @@ describe("plugin lifecycle hooks", () => {
     await uninstallBotInstallation(installed.id)
     expect(onUninstall).toHaveBeenCalledTimes(1)
     expect(onUninstall.mock.calls[0][0].installation.id).toBe(installed.id)
+    expect(await getBotInstallation(installed.id)).toBeUndefined()
+  })
+
+  it("stops accepting work before onUninstall runs (B16)", async () => {
+    let attempted: Promise<unknown> | undefined
+    let statusSeen: string | undefined
+    const onUninstall = jest.fn(async (ctx: { installation: { id: string; status: string } }) => {
+      statusSeen = ctx.installation.status
+      // A manual run pressed while the hook is still being awaited.
+      attempted = runBotManuallyLocally({
+        installationId: ctx.installation.id,
+        idempotencyKey: "press-during-uninstall",
+      }).catch((error: unknown) => error)
+      await attempted
+    })
+    registerWithHooks({ onUninstall })
+    const installed = await installBotFromCatalog({ entry: entry(), scope: { kind: "account" } })
+
+    await uninstallBotInstallation(installed.id)
+
+    expect(statusSeen).toBe("disabled")
+    expect(await attempted).toBeInstanceOf(BotManualRunUnavailableError)
+    expect(
+      await getDb().botEventDeliveries.where("installationId").equals(installed.id).count()
+    ).toBe(0)
     expect(await getBotInstallation(installed.id)).toBeUndefined()
   })
 

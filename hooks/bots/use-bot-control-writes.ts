@@ -142,8 +142,15 @@ export function useBotControlActions(): BotControlActions {
     async (installationId: string, triggerId: string, armed: boolean) => {
       await withPending(`trigger:${triggerId}`, async () => {
         try {
-          await setBotTriggerArmed({ installationId, triggerId, armed })
-          toast.success(t(armed ? "write.armed" : "write.disarmed"))
+          const applied = await setBotTriggerArmed({ installationId, triggerId, armed })
+          // `undefined` is a relayed write still on its way to the Host. Saying
+          // "armed" for it would report as done what the Host has not applied
+          // and may yet refuse.
+          toast.success(
+            applied === undefined
+              ? t("write.submitted")
+              : t(armed ? "write.armed" : "write.disarmed")
+          )
         } catch (error) {
           report(error)
         }

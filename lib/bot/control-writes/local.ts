@@ -21,6 +21,7 @@ import { getBotDelivery, replayBotDelivery } from "@/lib/db/bot-event-deliveries
 import { getExecutionRun } from "@/lib/db/execution-runs"
 import type { BotInstallationRow } from "@/lib/db/bot-types"
 import { getDb } from "@/lib/db/schema"
+import { sha256Hex } from "@/lib/share/hash"
 import { runBotLifecycleHook } from "./lifecycle-hooks"
 import { getBot } from "@/lib/plugin/registries/bot-registry"
 
@@ -100,16 +101,18 @@ export async function setBotTriggerArmedLocally(
     })
   }
 
-  const next = await updateBotInstallation(input.installationId, {
-    ...(input.armed && installation.activatedAt === undefined ? { activatedAt: Date.now() } : {}),
-    triggerOverrides: { ...(installation.triggerOverrides ?? {}), [input.triggerId]: input.armed },
+  // Derived from the latest row: a concurrent switch of ANOTHER trigger must
+  // survive this one, which a map spread from the read above would drop.
+  const next = await updateBotInstallation(input.installationId, (latest) => ({
+    ...(input.armed && latest.activatedAt === undefined ? { activatedAt: Date.now() } : {}),
+    triggerOverrides: { ...(latest.triggerOverrides ?? {}), [input.triggerId]: input.armed },
     // Re-evaluated so a Bot that was `needs_setup` does not silently become
     // `enabled` just because a trigger moved. `updateBotInstallation` only
     // re-runs the status when it is handed the slots to check against.
     ...(resolved?.definition.requires?.credentials
       ? { requiredCredentials: resolved.definition.requires.credentials }
       : {}),
-  })
+  }))
   if (!next) throw new BotControlTargetMissingError("installation", input.installationId)
   return next
 }
@@ -240,6 +243,12 @@ export async function runBotManuallyLocally(
  * A dead letter whose execution is still resumable keeps its original identity.
  */
 export async function replayBotDeliveryLocally(deliveryId: string): Promise<boolean> {
+  // The successor's source record is a fixed-length digest of the delivery it
+  // retries, so a retry of a retry does not carry its whole ancestry in its
+  // id: those used to grow with every press until the run detail refused to
+  // open one. The ancestry is the envelope's causation chain instead.
+  // Computed before the transaction, which must await nothing but the store.
+  const successorRecordId = `retry:${await sha256Hex(deliveryId)}`
   const db = getDb()
   return db.transaction(
     "rw",
@@ -271,7 +280,7 @@ export async function replayBotDeliveryLocally(deliveryId: string): Promise<bool
       if (run && (run.status === "failed" || run.status === "cancelled")) {
         const envelope = buildBotEventEnvelope({
           ...row.envelope,
-          sourceRecordId: `retry:${row.id}`,
+          sourceRecordId: successorRecordId,
           triggerId: row.triggerId,
           installationId: installation.id,
           actor: { kind: "human" },

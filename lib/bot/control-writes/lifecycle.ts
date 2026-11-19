@@ -325,11 +325,11 @@ export async function updateBotConfigLocally(
   })
   const updated = await updateBotInstallation(
     installationId,
-    {
+    (latest) => ({
       config,
       requiredCredentials,
-      ...(grant ? { policyGrant: { ...installation.policyGrant, ...grant } } : {}),
-    },
+      ...(grant ? { policyGrant: { ...latest.policyGrant, ...grant } } : {}),
+    }),
     { humanEdit: true }
   )
   if (!updated) throw new BotControlTargetMissingError("installation", installationId)
@@ -380,9 +380,9 @@ export async function setBotExecutionRouteLocally(
   const { cancelLiveBotInstallation } = await import("@/lib/bot/runtime/run")
   cancelLiveBotInstallation(installationId)
   if (updated.monitor?.lastError) {
-    const cleared = await updateBotInstallation(installationId, {
-      monitor: { ...updated.monitor, lastError: null },
-    })
+    const cleared = await updateBotInstallation(installationId, (latest) => ({
+      monitor: { ...latest.monitor, lastError: null },
+    }))
     if (cleared) return cleared
   }
   return updated
@@ -437,24 +437,27 @@ export async function bindBotCredentialLocally(
     requiredCredentials.find((slot) => slot.id === slotId),
     binding
   )
-  const next = { ...installation.credentialBindings }
-  if (binding && (binding.integrationAccountId || binding.adapterId)) {
-    next[slotId] = {
-      ...(binding.integrationAccountId
-        ? { integrationAccountId: binding.integrationAccountId }
-        : {}),
-      ...(binding.adapterId ? { adapterId: binding.adapterId } : {}),
-    }
-  } else {
-    // Deleted rather than set to `{}`. An empty object under a slot id is what
-    // `unboundCredentialSlots` had to be written to see through, and leaving
-    // one behind makes the row lie about what a reader can find in it.
-    delete next[slotId]
-  }
-
   const updated = await updateBotInstallation(
     installationId,
-    { credentialBindings: next, requiredCredentials },
+    (latest) => {
+      // From the latest row, so binding one slot cannot undo a concurrent
+      // binding of another.
+      const next = { ...latest.credentialBindings }
+      if (binding && (binding.integrationAccountId || binding.adapterId)) {
+        next[slotId] = {
+          ...(binding.integrationAccountId
+            ? { integrationAccountId: binding.integrationAccountId }
+            : {}),
+          ...(binding.adapterId ? { adapterId: binding.adapterId } : {}),
+        }
+      } else {
+        // Deleted rather than set to `{}`. An empty object under a slot id is
+        // what `unboundCredentialSlots` had to be written to see through, and
+        // leaving one behind makes the row lie about what a reader can find.
+        delete next[slotId]
+      }
+      return { credentialBindings: next, requiredCredentials }
+    },
     { humanEdit: true }
   )
   if (!updated) throw new BotControlTargetMissingError("installation", installationId)
@@ -502,13 +505,24 @@ export async function uninstallBotInstallationLocally(installationId: string): P
   if (!installation) throw new BotControlTargetMissingError("installation", installationId)
   if (installation.syncedFromHost)
     throw new BotLifecycleUnavailableError({ state: "unsupported", reason: "requires-companion" })
+  const resolved = await resolveInstalledBot(installation)
+  // Stop accepting work FIRST, durably. Switching the installation off is
+  // what every intake path (events, timed triggers, a manual run, a retry)
+  // and every run's completion re-check, and the write itself cancels the
+  // work already accepted. Cancelling the backlog while the row still read
+  // `enabled` left the wait for `onUninstall` open to new work that then ran,
+  // and committed success, against an installation already gone.
+  const fenced =
+    installation.status === "disabled"
+      ? installation
+      : await updateBotInstallation(installationId, { status: "disabled" })
+  if (!fenced) throw new BotControlTargetMissingError("installation", installationId)
+  const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
+  await cancelAcceptedBotDeliveries(installationId)
   // Schedules come down before the hook runs — `onUninstall` must never see
   // a still-armed Bot — and its failure is advisory, so removal proceeds
   // either way. An orphan (`resolved` null) is removable too: there is no
   // hook to run when there is no definition.
-  const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
-  await cancelAcceptedBotDeliveries(installationId)
-  const resolved = await resolveInstalledBot(installation)
   try {
     const { removeBotTriggerSchedules } =
       await import("@/lib/bot/schedule/reconcile-timed-triggers")
@@ -518,7 +532,7 @@ export async function uninstallBotInstallationLocally(installationId: string): P
   }
   if (resolved) {
     await runBotLifecycleHook({
-      installation,
+      installation: fenced,
       definition: resolved.definition,
       phase: "onUninstall",
     })
@@ -801,12 +815,14 @@ export async function setBotInputSlotLocally(
     throw new BotControlTargetMissingError("trigger", triggerId)
   if (slotId && !resolved?.definition.requires?.credentials?.some((slot) => slot.id === slotId))
     throw new BotCredentialBindingError("invalidInput", "Bot input slot is not declared")
-  const triggerInputSlots = { ...installation.triggerInputSlots }
-  if (slotId) triggerInputSlots[triggerId] = slotId
-  else delete triggerInputSlots[triggerId]
   const row = await updateBotInstallation(
     installationId,
-    { triggerInputSlots },
+    (latest) => {
+      const triggerInputSlots = { ...latest.triggerInputSlots }
+      if (slotId) triggerInputSlots[triggerId] = slotId
+      else delete triggerInputSlots[triggerId]
+      return { triggerInputSlots }
+    },
     { humanEdit: true }
   )
   if (!row) throw new BotControlTargetMissingError("installation", installationId)

@@ -169,6 +169,32 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
     throw new Error("Bot lifecycle mutation must execute on its owning host")
   const input = botLifecycleMutationSchema.parse(withoutApprovalToken(raw))
   if (input.operation === "install") {
+    // The request's own fingerprint, never one derived from the catalog: a
+    // replay of an install that succeeded must read back its receipt after the
+    // plugin upgraded, and catalog defaults folded into it would change it.
+    const installOperationFingerprint = await sha256Hex(
+      canonicalIntegrationValue({
+        definitionId: input.definitionId,
+        version: input.version,
+        scope: input.scope,
+        config: input.config ?? {},
+        credentialBindings: input.credentialBindings ?? {},
+        enabled: input.enabled ?? true,
+        paused: input.paused ?? false,
+        triggerInputSlots: input.triggerInputSlots ?? {},
+        triggerOverrides: input.triggerOverrides ?? {},
+        policyGrant: input.policyGrant ?? null,
+      })
+    )
+    const installationId = `boti_${input.operationId}`
+    // The receipt first. What the catalog says NOW decides whether a new
+    // install may proceed, not whether one that already succeeded did.
+    const existing = await getBotInstallation(installationId)
+    if (existing) {
+      if (existing.installOperationFingerprint !== installOperationFingerprint)
+        throw new Error("Bot installation operation already belongs to another definition")
+      return projectBotInstallationRow(existing)
+    }
     const entry = (await readHostBotCatalog()).find(
       (item) => item.definitionId === input.definitionId
     )
@@ -183,51 +209,11 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
     if (scopedId && !(await getDb().projects.get(scopedId)))
       throw new Error("Bot installation scope does not exist on this host")
     const config = validateConfig(entry.configSchema, input.config ?? {})
-    const installOperationFingerprint = await sha256Hex(
-      canonicalIntegrationValue({
-        definitionId: input.definitionId,
-        version: input.version,
-        scope: input.scope,
-        config,
-        credentialBindings: input.credentialBindings ?? {},
-        enabled: input.enabled ?? true,
-        paused: input.paused ?? false,
-        triggerInputSlots: input.triggerInputSlots ?? {},
-        triggerOverrides: input.triggerOverrides ?? {},
-        policyGrant: input.policyGrant ?? null,
-      })
-    )
     for (const [slotId, value] of Object.entries(input.credentialBindings ?? {}))
       await validateBotCredentialBinding(
         entry.slots.find((slot) => slot.id === slotId),
         value
       )
-    const installationId = `boti_${input.operationId}`
-    const existing = await getBotInstallation(installationId)
-    if (existing) {
-      if (existing.installOperationFingerprint) {
-        if (existing.installOperationFingerprint !== installOperationFingerprint)
-          throw new Error("Bot installation operation already belongs to another definition")
-        return projectBotInstallationRow(existing)
-      }
-      if (
-        existing.definitionId !== entry.definitionId ||
-        existing.pinnedVersion !== entry.version ||
-        (existing.paused ?? false) !== (input.paused ?? false) ||
-        canonicalIntegrationValue(existing.triggerInputSlots ?? {}) !==
-          canonicalIntegrationValue(input.triggerInputSlots ?? {}) ||
-        canonicalIntegrationValue(existing.config) !== canonicalIntegrationValue(config) ||
-        canonicalIntegrationValue(existing.scope) !== canonicalIntegrationValue(input.scope) ||
-        canonicalIntegrationValue(existing.credentialBindings) !==
-          canonicalIntegrationValue(input.credentialBindings ?? {}) ||
-        canonicalIntegrationValue(existing.triggerOverrides ?? {}) !==
-          canonicalIntegrationValue(input.triggerOverrides ?? {}) ||
-        canonicalIntegrationValue(existing.policyGrant ?? null) !==
-          canonicalIntegrationValue(input.policyGrant ?? null)
-      )
-        throw new Error("Bot installation operation already belongs to another definition")
-      return projectBotInstallationRow(existing)
-    }
     const row = await installBotFromCatalogLocally(
       {
         entry,

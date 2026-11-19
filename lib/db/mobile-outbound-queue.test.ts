@@ -12,6 +12,8 @@ import {
   CLAIM_ABANDONED_AFTER_MS,
   captureOutboundQueueScope,
   claimNext,
+  enqueueOnChannel,
+  markSent,
   discardCollabConflict,
   enqueue,
   enqueueInScope,
@@ -386,6 +388,53 @@ describe("mobile outbound queue target isolation", () => {
       rejectionCode: "host_state_revision_conflict",
       currentRevision: 2,
     })
+  })
+
+  it("keeps a later command on a channel behind an earlier one that is backing off (B17)", async () => {
+    // Switch on, a network error backs it off, then switch off. The off must
+    // not reach the Host first and then be undone by the on's late retry.
+    const on = await enqueueOnChannel({
+      command: "bot_trigger_set_armed",
+      channel: "bot-trigger:boti_1:nightly",
+      payload: { armed: true },
+      ...scope,
+      nowMs: 1,
+    })
+    await expect(claimNext(1, scope)).resolves.toMatchObject({ id: on.id })
+    await recordFailure({ id: on.id, error: new Error("host unreachable"), nowMs: 2 })
+    const off = await enqueueOnChannel({
+      command: "bot_trigger_set_armed",
+      channel: "bot-trigger:boti_1:nightly",
+      payload: { armed: false },
+      ...scope,
+      nowMs: 3,
+    })
+    expect([on.clientSeq, off.clientSeq]).toEqual([1, 2])
+
+    // The off is due, but the on is still the channel's head.
+    await expect(claimNext(4, scope)).resolves.toBeNull()
+    const retried = await claimNext(Number.MAX_SAFE_INTEGER, scope)
+    expect(retried).toMatchObject({ id: on.id })
+    await markSent(on.id)
+    await expect(claimNext(Number.MAX_SAFE_INTEGER, scope)).resolves.toMatchObject({ id: off.id })
+  })
+
+  it("does not order unrelated channels against each other", async () => {
+    await enqueueOnChannel({
+      command: "bot_trigger_set_armed",
+      channel: "bot-trigger:boti_1:a",
+      payload: {},
+      ...scope,
+      nowMs: 1,
+    })
+    const other = await enqueueOnChannel({
+      command: "bot_trigger_set_armed",
+      channel: "bot-trigger:boti_1:b",
+      payload: {},
+      ...scope,
+      nowMs: 2,
+    })
+    expect(other.clientSeq).toBe(1)
   })
 
   it("withdraws a standalone action that has not started sending", async () => {

@@ -3,7 +3,11 @@
 import { act, renderHook } from "@testing-library/react"
 
 const setBotTriggerArmed = jest.fn(
-  async (_input: { installationId: string; triggerId: string; armed: boolean }) => undefined
+  async (_input: {
+    installationId: string
+    triggerId: string
+    armed: boolean
+  }): Promise<{ id: string } | undefined> => undefined
 )
 const runBotManually = jest.fn(
   async (_input: {
@@ -120,7 +124,8 @@ describe("useBotControlActions", () => {
       })
     )
   })
-  it("routes an arm through the facade and reports it", async () => {
+  it("routes an arm through the facade and reports an applied one as armed", async () => {
+    setBotTriggerArmed.mockResolvedValue({ id: "boti_1" })
     const { result } = renderHook(() => useBotControlActions())
     await act(() => result.current.setTriggerArmed("boti_1", "n", true))
     expect(setBotTriggerArmed).toHaveBeenCalledWith({
@@ -129,6 +134,13 @@ describe("useBotControlActions", () => {
       armed: true,
     })
     expect(success).toHaveBeenCalledWith("Trigger armed")
+  })
+
+  it("reports a relayed arm as queued, not as done, until the Host applies it", async () => {
+    const { result } = renderHook(() => useBotControlActions())
+    await act(() => result.current.setTriggerArmed("boti_1", "n", true))
+    expect(success).toHaveBeenCalledWith("Request queued for the Host.")
+    expect(success).not.toHaveBeenCalledWith("Trigger armed")
   })
 
   it("mints a fresh idempotency key per press, because two presses are two runs", async () => {

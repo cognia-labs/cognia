@@ -200,51 +200,116 @@ function nextHumanRevision(
   return options.humanEdit ? { humanRevision: (existing.humanRevision ?? 0) + 1 } : {}
 }
 
-export async function updateBotInstallation(
+/**
+ * Read the LATEST row, derive the next one from it, and write it, in one
+ * transaction. Every whole-row writer of this table goes through here.
+ *
+ * A whole-row `put` built from a row read earlier is a lost update waiting for
+ * a second writer: two control writes that both return success, and the row
+ * keeps only the second (a saved config overwritten by a concurrent disable,
+ * one trigger's switch reverted by another trigger's). IndexedDB serialises
+ * read-write transactions on a store, so a derivation made in here always
+ * starts from what the previous writer committed.
+ */
+async function mutateBotInstallationRow(
   id: string,
-  patch: BotInstallationPatch,
-  options: BotInstallationWriteOptions = {}
+  derive: (existing: BotInstallationRow) => BotInstallationRow
 ): Promise<BotInstallationRow | undefined> {
   const db = getDb()
-  const existing = await db.botInstallations.get(id)
-  if (!existing) return undefined
-  // A placeholder records where the installation went (ADR-0224). An edit here
-  // would not reach the host, and enabling it would run the Bot twice.
-  assertRunsHere("bot-installation", existing.owner)
+  return db.transaction("rw", db.botInstallations, async () => {
+    const existing = await db.botInstallations.get(id)
+    if (!existing) return undefined
+    const next = derive(existing)
+    await db.botInstallations.put(next)
+    return next
+  })
+}
 
-  const { now, requiredCredentials, ...fields } = patch
-  // The type keeps the recipient list out of a patch; a caller that casts
-  // past it is not a person either (ADR-0239).
-  delete (fields as { outboundRecipients?: unknown }).outboundRecipients
-  const merged: BotInstallationRow = {
-    ...existing,
-    ...fields,
-    ...nextHumanRevision(existing, options),
-    updatedAt: now ?? Date.now(),
-  }
-  if (fields.scope) {
-    // The denormalized copies exist only so the index can answer per-workspace
-    // queries. Letting them drift from `scope` would hide an installation from
-    // the workspace that owns it.
-    delete merged.workspaceId
-    delete merged.projectId
-    if (fields.scope.workspaceId) merged.workspaceId = fields.scope.workspaceId
-    if (fields.scope.projectId) merged.projectId = fields.scope.projectId
-  }
-  if (requiredCredentials || fields.credentialBindings || fields.status) {
-    merged.status = resolveInstallationStatus({
-      requested: merged.status,
-      requiredCredentials,
-      credentialBindings: merged.credentialBindings,
-    })
-  }
-  await db.botInstallations.put(merged)
+/**
+ * A patch, or a function deriving one from the latest row. The function form
+ * is for a write that changes one key of a map (`triggerOverrides`,
+ * `triggerInputSlots`, `credentialBindings`): spreading a map read before the
+ * write would drop whatever another writer put there in between.
+ */
+export type BotInstallationPatchInput =
+  BotInstallationPatch | ((latest: BotInstallationRow) => BotInstallationPatch)
+
+export async function updateBotInstallation(
+  id: string,
+  patch: BotInstallationPatchInput,
+  options: BotInstallationWriteOptions = {}
+): Promise<BotInstallationRow | undefined> {
+  const merged = await mutateBotInstallationRow(id, (existing) => {
+    // A placeholder records where the installation went (ADR-0224). An edit
+    // here would not reach the host, and enabling it would run the Bot twice.
+    assertRunsHere("bot-installation", existing.owner)
+
+    const { now, requiredCredentials, ...fields } =
+      typeof patch === "function" ? patch(existing) : patch
+    // The type keeps the recipient list out of a patch; a caller that casts
+    // past it is not a person either (ADR-0239).
+    delete (fields as { outboundRecipients?: unknown }).outboundRecipients
+    const next: BotInstallationRow = {
+      ...existing,
+      ...fields,
+      ...nextHumanRevision(existing, options),
+      updatedAt: now ?? Date.now(),
+    }
+    if (fields.scope) {
+      // The denormalized copies exist only so the index can answer
+      // per-workspace queries. Letting them drift from `scope` would hide an
+      // installation from the workspace that owns it.
+      delete next.workspaceId
+      delete next.projectId
+      if (fields.scope.workspaceId) next.workspaceId = fields.scope.workspaceId
+      if (fields.scope.projectId) next.projectId = fields.scope.projectId
+    }
+    if (requiredCredentials || fields.credentialBindings || fields.status) {
+      next.status = resolveInstallationStatus({
+        requested: next.status,
+        requiredCredentials,
+        credentialBindings: next.credentialBindings,
+      })
+    }
+    return next
+  })
+  if (!merged) return undefined
   if (merged.status !== "enabled") {
     const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
     await cancelAcceptedBotDeliveries(id)
   }
   await syncSchedules(merged)
   return merged
+}
+
+/**
+ * Flip one trigger's override on a MIRRORED row: the optimistic half of a
+ * switch relayed to the Host that owns the installation.
+ *
+ * A mirror write and nothing else. No status re-derivation (the mirror holds
+ * no credential bindings to derive one from), no cancellation of accepted
+ * work and no schedule reconcile: all of that belongs to the owning Host and
+ * happens there when the queued command lands. Running them here is what made
+ * a switch on a `disabled` or `needs_setup` mirror throw an ownership error
+ * after the command had already been queued. Returns undefined for a row that
+ * is missing or not a mirror.
+ */
+export async function setMirroredBotTriggerOverride(
+  id: string,
+  triggerId: string,
+  armed: boolean
+): Promise<BotInstallationRow | undefined> {
+  const db = getDb()
+  return db.transaction("rw", db.botInstallations, async () => {
+    const existing = await db.botInstallations.get(id)
+    if (!existing || existing.syncedFromHost !== true) return undefined
+    const next: BotInstallationRow = {
+      ...existing,
+      triggerOverrides: { ...(existing.triggerOverrides ?? {}), [triggerId]: armed },
+    }
+    await db.botInstallations.put(next)
+    return next
+  })
 }
 
 /** Pause preserves accepted work and lets active attempts finish. */
@@ -299,21 +364,21 @@ export async function setBotInstallationOwner(
     now?: number
   } = {}
 ): Promise<BotInstallationRow | undefined> {
-  const db = getDb()
-  const existing = await db.botInstallations.get(id)
-  if (!existing) return undefined
   const now = options.now ?? Date.now()
-  const next: BotInstallationRow = { ...existing, updatedAt: now }
-  if (owner) next.owner = owner
-  else delete next.owner
-  next.status = isOwnedElsewhere(owner)
-    ? "disabled"
-    : resolveInstallationStatus({
-        requested: options.status ?? existing.status,
-        requiredCredentials: options.requiredCredentials,
-        credentialBindings: existing.credentialBindings,
-      })
-  await db.botInstallations.put(next)
+  const next = await mutateBotInstallationRow(id, (existing) => {
+    const derived: BotInstallationRow = { ...existing, updatedAt: now }
+    if (owner) derived.owner = owner
+    else delete derived.owner
+    derived.status = isOwnedElsewhere(owner)
+      ? "disabled"
+      : resolveInstallationStatus({
+          requested: options.status ?? existing.status,
+          requiredCredentials: options.requiredCredentials,
+          credentialBindings: existing.credentialBindings,
+        })
+    return derived
+  })
+  if (!next) return undefined
   if (next.status !== "enabled") {
     const { cancelLiveBotInstallation } = await import("@/lib/bot/runtime/run")
     cancelLiveBotInstallation(id)
@@ -334,21 +399,19 @@ export async function setBotInstallationExecutionRoute(
   now = Date.now(),
   options: BotInstallationWriteOptions = {}
 ): Promise<BotInstallationRow | undefined> {
-  const db = getDb()
-  const existing = await db.botInstallations.get(id)
-  if (!existing) return undefined
-  assertRunsHere("bot-installation", existing.owner)
   if (route?.mode === "gateway" && (!route.providerId.trim() || !route.modelId.trim()))
     throw new Error("A gateway route names a provider and a model")
-  const next: BotInstallationRow = {
-    ...existing,
-    ...nextHumanRevision(existing, options),
-    updatedAt: now,
-  }
-  if (route) next.executionRoute = route
-  else delete next.executionRoute
-  await db.botInstallations.put(next)
-  return next
+  return mutateBotInstallationRow(id, (existing) => {
+    assertRunsHere("bot-installation", existing.owner)
+    const next: BotInstallationRow = {
+      ...existing,
+      ...nextHumanRevision(existing, options),
+      updatedAt: now,
+    }
+    if (route) next.executionRoute = route
+    else delete next.executionRoute
+    return next
+  })
 }
 
 /**
@@ -364,19 +427,17 @@ export async function setBotInstallationOutboundRecipients(
 ): Promise<BotInstallationRow | undefined> {
   const errors = validateOutboundRecipientGrants(recipients)
   if (errors.length > 0) throw new Error(`Invalid outbound recipients: ${errors.join("; ")}`)
-  const db = getDb()
-  const existing = await db.botInstallations.get(id)
-  if (!existing) return undefined
-  assertRunsHere("bot-installation", existing.owner)
-  const next: BotInstallationRow = {
-    ...existing,
-    ...nextHumanRevision(existing, { humanEdit: true }),
-    updatedAt: now,
-  }
-  if (recipients.length > 0) next.outboundRecipients = recipients.map((grant) => ({ ...grant }))
-  else delete next.outboundRecipients
-  await db.botInstallations.put(next)
-  return next
+  return mutateBotInstallationRow(id, (existing) => {
+    assertRunsHere("bot-installation", existing.owner)
+    const next: BotInstallationRow = {
+      ...existing,
+      ...nextHumanRevision(existing, { humanEdit: true }),
+      updatedAt: now,
+    }
+    if (recipients.length > 0) next.outboundRecipients = recipients.map((grant) => ({ ...grant }))
+    else delete next.outboundRecipients
+    return next
+  })
 }
 
 export async function getBotInstallation(id: string): Promise<BotInstallationRow | undefined> {

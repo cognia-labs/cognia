@@ -14,6 +14,9 @@
  *
  *  * Arming uses a fresh UUID per explicit command. Queue retries preserve it,
  *    while arm/disarm/arm cannot reuse a cached response from the first arm.
+ *    The keys tell two gestures apart; their ORDER is the trigger's channel
+ *    (`botTriggerChannel`), so a switch retried after a later one cannot
+ *    overtake it and turn the trigger back.
  *  * Manual runs use a fresh UUID per press and carry it in their event payload.
  *  * Retry presses also use fresh UUIDs so a completed transient failure is
  *    not replayed forever. The Host deduplicates the successor by delivery.
@@ -27,10 +30,10 @@
  * inventing one would put a delivery on screen that no queue anywhere holds.
  */
 
-import { enqueue } from "@/lib/db/mobile-outbound-queue"
+import { enqueue, enqueueOnChannel } from "@/lib/db/mobile-outbound-queue"
 import { sha256Hex } from "@/lib/share/hash"
 import type { MobileOutboundJobRow } from "@/lib/db/mobile-outbound-types"
-import { getBotInstallation, updateBotInstallation } from "@/lib/db/bot-installations"
+import { setMirroredBotTriggerOverride } from "@/lib/db/bot-installations"
 
 import { markPendingBotInstallationMutation } from "./pending-installations"
 import { BOT_WRITE_COMMANDS, type BotWriteCommand } from "./route"
@@ -92,6 +95,16 @@ export async function normalizeLegacyBotWriteKey(
   return row.idempotencyKey
 }
 
+/**
+ * The queue channel one trigger's switch commands share.
+ *
+ * Per trigger, not per installation: two triggers' switches are independent,
+ * and ordering them against each other would only make one wait for nothing.
+ */
+export function botTriggerChannel(installationId: string, triggerId: string): string {
+  return `bot-trigger:${installationId}:${triggerId}`
+}
+
 export interface SetTriggerArmedRemotelyInput {
   installationId: string
   triggerId: string
@@ -116,8 +129,9 @@ export async function setBotTriggerArmedRemotely(
       triggerId: input.triggerId,
       armed: input.armed,
     }
-    const queueRow = await enqueue({
+    const queueRow = await enqueueOnChannel({
       command: BOT_WRITE_COMMANDS.setTriggerArmed,
+      channel: botTriggerChannel(input.installationId, input.triggerId),
       idempotencyKey: await botWriteIdempotencyKey(
         BOT_WRITE_COMMANDS.setTriggerArmed,
         payload,
@@ -126,19 +140,12 @@ export async function setBotTriggerArmedRemotely(
       ...(options.label ? { label: options.label } : {}),
       payload,
     })
-    const installation = await getBotInstallation(input.installationId)
-    if (installation) {
-      // The override only. Status is re-derived from the credential slots, and
-      // this client has none of them: `credentialBindings` is emptied by the
-      // projection, so deriving here would answer `enabled` for a Bot the Host
-      // knows is `needs_setup`.
-      await updateBotInstallation(input.installationId, {
-        triggerOverrides: {
-          ...(installation.triggerOverrides ?? {}),
-          [input.triggerId]: input.armed,
-        },
-      })
-    }
+    // The override only, and on the mirror only. Status is re-derived from the
+    // credential slots, and this client has none of them: `credentialBindings`
+    // is emptied by the projection, so deriving here would answer `enabled`
+    // for a Bot the Host knows is `needs_setup`. Cancelling accepted work and
+    // reconciling schedules are the Host's to do when the command lands.
+    await setMirroredBotTriggerOverride(input.installationId, input.triggerId, input.armed)
     return queueRow
   } finally {
     release()
