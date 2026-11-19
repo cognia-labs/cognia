@@ -716,11 +716,21 @@ mod tests {
     use crate::python::discover::discover_interpreter;
     use std::path::PathBuf;
 
-    fn host_script() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("python")
-            .join("host.py")
+    /// A rendered host script that lives as long as the value: the child reads
+    /// it at startup, after `spawn` has already returned.
+    struct HostScript {
+        _dir: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    /// The host script exactly as `apply_initialize` writes it. The source
+    /// `host.py` is a template (its embedded `cognia.bot` is a placeholder), so
+    /// spawning it directly would test a script that never ships.
+    fn host_script() -> HostScript {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("host.py");
+        std::fs::write(&path, super::super::commands::rendered_host_script()).unwrap();
+        HostScript { _dir: dir, path }
     }
 
     #[test]
@@ -920,7 +930,8 @@ mod tests {
         let Some(interp) = interpreter_or_skip("spawn_and_ping_roundtrips") else {
             return;
         };
-        let host = PluginHost::spawn("t-ping", &interp, &host_script(), HostOptions::default())
+        let script = host_script();
+        let host = PluginHost::spawn("t-ping", &interp, &script.path, HostOptions::default())
             .await
             .unwrap();
         assert!(host.ping().await);
@@ -932,7 +943,8 @@ mod tests {
         let Some(interp) = interpreter_or_skip("unknown_method_returns_python_host_error") else {
             return;
         };
-        let host = PluginHost::spawn("t-unknown", &interp, &host_script(), HostOptions::default())
+        let script = host_script();
+        let host = PluginHost::spawn("t-unknown", &interp, &script.path, HostOptions::default())
             .await
             .unwrap();
         let err = host
@@ -949,10 +961,11 @@ mod tests {
         let Some(interp) = interpreter_or_skip("concurrent_requests_correlate") else {
             return;
         };
+        let script = host_script();
         let host = PluginHost::spawn(
             "t-concurrent",
             &interp,
-            &host_script(),
+            &script.path,
             HostOptions::default(),
         )
         .await
@@ -996,10 +1009,11 @@ mod tests {
             argv_prefix: vec!["cognia-no-such-python".into()],
             version: Some("3.99.0".into()),
         };
+        let script = host_script();
         match PluginHost::spawn(
             "t-spawn-fail",
             &interp,
-            &host_script(),
+            &script.path,
             HostOptions::default(),
         )
         .await
@@ -1107,7 +1121,8 @@ for line in sys.stdin:
         let Some(interp) = interpreter_or_skip("idle_ms_tracks_request_activity") else {
             return;
         };
-        let host = PluginHost::spawn("t-idle", &interp, &host_script(), HostOptions::default())
+        let script = host_script();
+        let host = PluginHost::spawn("t-idle", &interp, &script.path, HostOptions::default())
             .await
             .unwrap();
         // Backdate activity, confirm idle_ms sees it, then a request resets it.
@@ -1240,10 +1255,11 @@ for line in sys.stdin:
         let sink: HostRequestSink = Arc::new(move |request| {
             let _ = tx.send(request);
         });
+        let script = host_script();
         let host = PluginHost::spawn(
             "t-hostcall",
             &interp,
-            &host_script(),
+            &script.path,
             HostOptions {
                 host_request_sink: Some(sink),
                 generation: "gen-1".into(),
@@ -1323,7 +1339,8 @@ for line in sys.stdin:
         )
         .unwrap();
 
-        let host = PluginHost::spawn("t-nosink", &interp, &host_script(), HostOptions::default())
+        let script = host_script();
+        let host = PluginHost::spawn("t-nosink", &interp, &script.path, HostOptions::default())
             .await
             .unwrap();
         host.request(

@@ -27,9 +27,10 @@ object whose ``run`` method the host dispatches into this process::
 ``run`` receives a :class:`BotRun`: the serialisable half of the run
 (``runId``, ``installationId``, ``botId``, ``event``, ``config``) plus the
 durable-step surface the TypeScript ``ctx.step`` provides, driven over
-``ctx.bots.*`` host calls keyed by ``runId``. The reference runtime wraps the
-snapshot automatically when the contribution id matches a ``define_bot`` id;
-on a host that cannot know the contribution is a Bot, wrap it by hand::
+``ctx.bots.*`` host calls keyed by ``runId``. The app's embedded host and the
+reference runtime both wrap the snapshot when the contribution id was passed
+to ``define_bot`` while the plugin module imported. A Bot declared only in
+``manifest.json`` reaches ``run`` as the snapshot dict; wrap it by hand::
 
     async def run(self, snapshot):
         run = cognia.bot.bot_run(cognia.ctx, snapshot)

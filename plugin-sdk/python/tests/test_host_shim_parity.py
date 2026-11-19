@@ -10,6 +10,8 @@ test). Skips when the repo host file is not reachable (standalone SDK checkout).
 
 from __future__ import annotations
 
+import ast
+import json
 import re
 from pathlib import Path
 
@@ -18,6 +20,37 @@ import pytest
 import cognia
 
 _HOST_REL = Path("crates/cognia-plugin-runtime/src/python/host.py")
+_BOT_REL = Path("plugin-sdk/python/src/cognia/bot.py")
+#: Replaced by `rendered_host_script` in `crates/cognia-plugin-runtime/src/python/commands.rs`.
+_BOT_PLACEHOLDER = '"__COGNIA_BOT_MODULE_SOURCE__"'
+
+
+def _repo_root() -> Path:
+    root = next((parent for parent in Path(__file__).resolve().parents
+                 if (parent / _HOST_REL).is_file()), None)
+    if root is None:
+        pytest.skip("repo host.py not reachable from the SDK directory")
+    return root
+
+
+def _rendered_host(directory: Path) -> Path:
+    """The embedded host as the app writes it, so the tests run what ships.
+
+    Mirrors the one code substitution `rendered_host_script` makes: the SDK's
+    `cognia.bot` source, as a JSON (hence Python) string literal, in place of
+    its placeholder. The version placeholders are plain data and stay.
+    """
+    root = _repo_root()
+    source = (root / _HOST_REL).read_text(encoding="utf-8")
+    assert source.count(_BOT_PLACEHOLDER) == 1
+    bot = (root / _BOT_REL).read_text(encoding="utf-8")
+    host_dir = directory / "_host"
+    host_dir.mkdir()
+    host = host_dir / "host.py"
+    host.write_text(
+        source.replace(_BOT_PLACEHOLDER, json.dumps(bot, ensure_ascii=False)), encoding="utf-8"
+    )
+    return host
 
 
 def _shim_names() -> list[str]:
@@ -38,6 +71,25 @@ def test_every_host_shim_name_exists_on_the_sdk_root():
     assert missing == [], f"the host offers {missing}, which the SDK root lacks"
 
 
+def test_host_bot_re_exports_match_the_sdk_root():
+    # The shim sets `cognia.<name>` from its `cognia.bot` for every name in
+    # `_BOT_TOP_LEVEL_NAMES`; the SDK root re-exports the same set from `.bot`.
+    import cognia.bot
+
+    tree = ast.parse((_repo_root() / _HOST_REL).read_text(encoding="utf-8"))
+    names = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and getattr(node.targets[0], "id", None) == "_BOT_TOP_LEVEL_NAMES"
+    )
+    sdk_root = {
+        name for name in cognia.bot.__all__
+        if getattr(cognia, name, None) is getattr(cognia.bot, name)
+    }
+    assert set(names) == sdk_root
+
+
 def test_host_call_error_is_the_one_ctx_raises_offline(fresh_runtime):
     import asyncio
 
@@ -45,15 +97,11 @@ def test_host_call_error_is_the_one_ctx_raises_offline(fresh_runtime):
         asyncio.run(cognia.ctx.logger.info("no host attached"))
 
 
-def test_embedded_host_nested_ipc_emits_the_same_wire_shape():
-    import json
+def test_embedded_host_nested_ipc_emits_the_same_wire_shape(tmp_path):
     import subprocess
     import sys
 
-    host = next((parent / _HOST_REL for parent in Path(__file__).resolve().parents
-                 if (parent / _HOST_REL).is_file()), None)
-    if host is None:
-        pytest.skip("repo host.py not reachable from the SDK directory")
+    host = _rendered_host(tmp_path)
     # Import the actual embedded host in an isolated interpreter: it redirects
     # stdout and owns process-global executors, which must not leak into pytest.
     script = r'''
@@ -98,14 +146,10 @@ host._WORK_POOL.shutdown(wait=False)
 def test_embedded_host_reports_only_actual_public_callables(
     tmp_path, handler_definition, expected
 ):
-    import json
     import subprocess
     import sys
 
-    host = next((parent / _HOST_REL for parent in Path(__file__).resolve().parents
-                 if (parent / _HOST_REL).is_file()), None)
-    if host is None:
-        pytest.skip("repo host.py not reachable from the SDK directory")
+    host = _rendered_host(tmp_path)
     (tmp_path / "main.py").write_text(
         handler_definition + "\ndef _private():\n    pass\n", encoding="utf-8"
     )
@@ -131,14 +175,10 @@ finally:
 
 
 def test_embedded_host_async_startup_completes_before_callable_discovery(tmp_path):
-    import json
     import subprocess
     import sys
 
-    host = next((parent / _HOST_REL for parent in Path(__file__).resolve().parents
-                 if (parent / _HOST_REL).is_file()), None)
-    if host is None:
-        pytest.skip("repo host.py not reachable from the SDK directory")
+    host = _rendered_host(tmp_path)
     (tmp_path / "main.py").write_text('''
 from cognia import ctx
 async def on_startup():

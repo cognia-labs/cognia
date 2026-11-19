@@ -107,15 +107,26 @@ CONTRIBUTION_DISPATCH = "__cognia_dispatch_contribution__"
 #: `lib/plugin/bridge/_shared/python-backed-proxy.ts`.
 CONTRIBUTION_RELEASE = "__release__"
 
-# camelCase manifest hook name -> snake_case Python method. Mirrors
-# `BOT_LIFECYCLE_PY_METHODS` in plugin-sdk/python/src/cognia/bot.py — the SDK
-# is not importable inside this shim, so the table is duplicated here.
-_BOT_LIFECYCLE_METHODS = {
-    "onInstall": "on_install",
-    "onConfigure": "on_configure",
-    "onArm": "on_arm",
-    "onUninstall": "on_uninstall",
-}
+#: Source of the SDK's `cognia.bot` module (plugin-sdk/python/src/cognia/bot.py),
+#: embedded by the Rust renderer. It is stdlib-only, so the shim executes the
+#: SDK's own copy instead of keeping a second implementation of `BotRun`,
+#: `define_bot` and the lifecycle-name table.
+_BOT_MODULE_SOURCE = "__COGNIA_BOT_MODULE_SOURCE__"
+#: The `cognia.bot` module of the current import, built by `_install_cognia_shim`.
+_BOT_MODULE = None
+#: The SDK's top-level `cognia.*` re-exports of `cognia.bot`, so `cognia.define_bot`
+#: works here as it does against the installed SDK.
+_BOT_TOP_LEVEL_NAMES = (
+    "BOT_EVENT_SOURCES",
+    "BOT_EXECUTORS",
+    "BOT_TRIGGER_KINDS",
+    "Bot",
+    "BotRun",
+    "BotRunParked",
+    "BotStepAttempt",
+    "bot_run",
+    "define_bot",
+)
 _MAIN_MODULE = None
 _CONFIG = {}  # persisted plugin config, pushed by the host app
 _CONFIG_LISTENERS = []  # cognia.on_config_changed(fn) subscribers, fired on push_config
@@ -492,8 +503,30 @@ class _HostCtx:
 _CTX = _HostCtx()
 
 
+def _load_bot_module():
+    """Execute the embedded SDK `cognia.bot` source as the `cognia.bot` module.
+
+    Registered in `sys.modules` before its body runs: `dataclasses` resolves
+    the module's (postponed) annotations through `sys.modules[cls.__module__]`.
+    """
+    module = types.ModuleType("cognia.bot")
+    module.__package__ = "cognia"
+    module.__file__ = "<cognia host>/cognia/bot.py"
+    sys.modules["cognia.bot"] = module
+    try:
+        exec(compile(_BOT_MODULE_SOURCE, module.__file__, "exec"), module.__dict__)
+    except BaseException:
+        del sys.modules["cognia.bot"]
+        raise
+    return module
+
+
 def _install_cognia_shim():
+    global _BOT_MODULE
     shim = types.ModuleType("cognia")
+    # A package, so `cognia.bot` is its submodule and an unknown submodule
+    # import fails with ModuleNotFoundError rather than "not a package".
+    shim.__path__ = []
     shim.tool = _tool
     shim.hook = _hook
     shim.progress = _progress
@@ -505,6 +538,11 @@ def _install_cognia_shim():
     shim.ctx = _CTX
     shim.HostCallError = HostCallError
     sys.modules["cognia"] = shim
+    # Fresh per import, so a reloaded plugin starts with no `define_bot` ids.
+    _BOT_MODULE = _load_bot_module()
+    shim.bot = _BOT_MODULE
+    for name in _BOT_TOP_LEVEL_NAMES:
+        setattr(shim, name, getattr(_BOT_MODULE, name))
 
 
 def _module_name_from(main_module):
@@ -773,17 +811,24 @@ async def _dispatch_contribution(args):
     else:
         entry = await _instance_methods(contribution_id, instance_id)
     fn = entry.get(method)
-    if fn is None and method in _BOT_LIFECYCLE_METHODS:
+    lifecycle_methods = _BOT_MODULE.BOT_LIFECYCLE_PY_METHODS
+    if fn is None and method in lifecycle_methods:
         # Bot lifecycle hooks: the manifest declares camelCase names, the
         # Python author implements the snake_case method of the same name.
         # Exact-name lookup wins, so a contribution that literally defines
         # `onInstall` keeps working.
-        fn = entry.get(_BOT_LIFECYCLE_METHODS[method])
+        fn = entry.get(lifecycle_methods[method])
     if fn is None or not callable(fn):
         raise RuntimeError(f"contribution '{contribution_id}' has no method '{method}'")
 
     label = f"contribution '{contribution_id}.{method}'"
-    result = await _invoke(fn, *(call_args or []))
+    call_args = list(call_args or [])
+    if method == "run" and call_args and _BOT_MODULE.is_bot_contribution(contribution_id):
+        # A Bot handler's `run` is handed the run snapshot; give it the SDK's
+        # `BotRun`, exactly as the SDK's reference runtime does, so the
+        # documented `run.run_id` / `run.step_run(...)` surface is what arrives.
+        call_args[0] = _BOT_MODULE.BotRun(_CTX, call_args[0])
+    result = await _invoke(fn, *call_args)
     if stream_id is None or not _is_stream(result):
         return _ensure_serializable(result, label)
 

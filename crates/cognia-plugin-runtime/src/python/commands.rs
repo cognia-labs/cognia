@@ -35,6 +35,11 @@ use crate::{PluginError, PluginRuntimeState, Result};
 /// Embedded host script, written to `<python_dir>/host.py` at initialize.
 const HOST_SCRIPT: &str = include_str!("host.py");
 
+/// The Python SDK's `cognia.bot` module, which the host script executes as
+/// `cognia.bot` so an embedded plugin gets the SDK's own `define_bot` and
+/// `BotRun` rather than a second copy of them.
+const BOT_MODULE_SOURCE: &str = include_str!("../../../../plugin-sdk/python/src/cognia/bot.py");
+
 /// Host-owned dispatcher that routes python-backed module-bridge contributions
 /// (`lib/plugin/bridge/_shared/python-backed-proxy.ts`). Must stay in lockstep
 /// with `CONTRIBUTION_DISPATCH` in `host.py`; a parity test pins the pair.
@@ -129,7 +134,9 @@ pub struct PythonPluginInfo {
     pub hook_count: usize,
 }
 
-fn rendered_host_script() -> String {
+/// The host script as `apply_initialize` writes it: versions filled in and the
+/// SDK's `cognia.bot` source embedded. Never run `host.py` unrendered.
+pub(crate) fn rendered_host_script() -> String {
     HOST_SCRIPT
         .replace("__COGNIA_SDK_VERSION__", crate::contract::sdk_version())
         .replace(
@@ -139,6 +146,11 @@ fn rendered_host_script() -> String {
         .replace(
             "__COGNIA_CONTRACT_VERSION__",
             crate::contract::contract_version(),
+        )
+        // A JSON string literal is a valid Python string literal, quotes included.
+        .replace(
+            r#""__COGNIA_BOT_MODULE_SOURCE__""#,
+            &serde_json::to_string(BOT_MODULE_SOURCE).expect("a str always serializes"),
         )
 }
 
@@ -2998,6 +3010,139 @@ class Tesseract:
         assert!(private.is_err());
 
         unload_inner(&state, "contrib").await.unwrap();
+    }
+
+    /// B18: a Python Bot written as the author guide shows runs in the embedded
+    /// host. `from cognia.bot import define_bot` resolves to the SDK's own
+    /// module, and a `define_bot` id's `run` is handed a `BotRun`, not the raw
+    /// snapshot dict; a contribution that is not a Bot keeps the dict.
+    #[tokio::test]
+    async fn python_bot_handler_gets_the_sdk_bot_run_with_real_python() {
+        let Some(interp) = super::super::discover::discover_interpreter(None) else {
+            eprintln!("skipping bot handler test: no python interpreter found");
+            return;
+        };
+
+        let tmp = TempDir::new().unwrap();
+        let state = py_state(&tmp);
+        let plugins = plugins_state(&tmp);
+        grant_execute(&plugins, "botty");
+        apply_initialize(&state, Some(interp)).unwrap();
+
+        let plugin_dir = tmp.path().join("bot-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("main.py"),
+            r#"
+import cognia
+from cognia.bot import BotRun, define_bot
+
+DIGEST = define_bot(
+    id="digest",
+    name="Digest",
+    version="1.0.0",
+    executor="handler",
+    triggers=[{"id": "go", "kind": "manual"}],
+)
+
+@cognia.contribution("digest")
+class Digest:
+    async def run(self, run):
+        return {
+            "type": type(run).__name__,
+            "is_sdk_bot_run": isinstance(run, BotRun) and run.__class__ is cognia.bot.BotRun,
+            "top_level_define_bot": cognia.define_bot is define_bot,
+            "run_id": run.run_id,
+            "bot_id": run.bot_id,
+            "event_id": run.event["eventId"],
+            "config": dict(run.config),
+        }
+
+    def on_install(self, ctx):
+        return "installed:" + ctx["installation"]["id"]
+
+@cognia.contribution("plain")
+class Plain:
+    def run(self, snapshot):
+        return {"type": type(snapshot).__name__}
+"#,
+        )
+        .unwrap();
+
+        load_inner(
+            &state,
+            &plugins,
+            "botty".into(),
+            plugin_dir.to_string_lossy().into_owned(),
+            "main.py".into(),
+            None,
+            PythonHostSettings::default(),
+        )
+        .await
+        .unwrap();
+
+        let snapshot = json!({
+            "runId": "run_1",
+            "installationId": "inst_1",
+            "botId": "digest",
+            "event": { "eventId": "bev_1" },
+            "config": { "channel": "#ops" },
+        });
+        let ran = dispatch_contribution(
+            &state,
+            &plugins,
+            "botty",
+            "digest",
+            "run",
+            json!([snapshot.clone()]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            ran,
+            json!({
+                "type": "BotRun",
+                "is_sdk_bot_run": true,
+                "top_level_define_bot": true,
+                "run_id": "run_1",
+                "bot_id": "digest",
+                "event_id": "bev_1",
+                "config": { "channel": "#ops" },
+            })
+        );
+
+        // The lifecycle-name table now comes from the SDK module.
+        let installed = dispatch_contribution(
+            &state,
+            &plugins,
+            "botty",
+            "digest",
+            "onInstall",
+            json!([{ "installation": { "id": "inst_1" } }]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(installed, json!("installed:inst_1"));
+
+        let plain = dispatch_contribution(
+            &state,
+            &plugins,
+            "botty",
+            "plain",
+            "run",
+            json!([snapshot]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(plain, json!({ "type": "dict" }));
+
+        unload_inner(&state, "botty").await.unwrap();
     }
 
     /// One `__cognia_dispatch_contribution__` round-trip, optionally carrying
