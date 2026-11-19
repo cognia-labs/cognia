@@ -6335,6 +6335,7 @@
       "description": "What this installation passes to every run.",
       "emptyBody": "This Bot ships no settings form. Everything it needs comes from its triggers and credentials.",
       "emptyTitle": "Nothing to configure",
+      "missing": "{count, plural, =1 {1 required setting is empty} other {# required settings are empty}}",
       "orphanBody": "The definition is gone, so there is no form to render. Whatever this installation stored is still on the row.",
       "orphanTitle": "No settings to show",
       "permissionProfileHint": "What this Bot's unattended runs may do without asking. A request that needs you pauses the run and sends an approval to your phone; nobody answering within 30 minutes denies it.",
@@ -6439,7 +6440,7 @@
       "status": {
         "disabled": "Bot disabled",
         "enabled": "Bot enabled",
-        "needs_setup": "Still needs a credential, so it stays off"
+        "needs_setup": "Still needs a credential or a required setting, so it stays off"
       },
       "unavailable": "That change cannot be made from here",
       "unbound": "Credential cleared",

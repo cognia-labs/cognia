@@ -76,7 +76,10 @@ export interface BotWaitForEventInput {
    * timeout and no other wait consumed it.
    */
   key: string
-  /** Give up after this long. The host clamps it against the run's budget. */
+  /**
+   * Give up this long after the wait first parked. Waiting does not spend the
+   * run's `maxRunDurationMs`, which counts execution time only.
+   */
   timeoutMs: number
 }
 

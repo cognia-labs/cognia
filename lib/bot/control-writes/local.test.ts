@@ -12,7 +12,7 @@ import {
   listBotDeliveries,
 } from "@/lib/db/bot-event-deliveries"
 import { botRunId, runBotDelivery, cancelAcceptedBotDeliveries } from "@/lib/bot/runtime/run"
-import { resolveInstalledBot } from "@/lib/bot/installed-bot"
+import { botSetupRequirements, resolveInstalledBot } from "@/lib/bot/installed-bot"
 import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createExecutionRun, getExecutionRun } from "@/lib/db/execution-runs"
@@ -95,6 +95,16 @@ it.each(["disabled", "paused", "mirrored"])(
     expect(await listBotDeliveries({ installationId: installed.id })).toEqual([])
   }
 )
+
+it("starts a manual run on the version that exists after the plugin moved on (B12)", async () => {
+  // A press is a trigger like any other: drift stops none of them.
+  const installed = await install(def({ version: "2.0.0" }), { pinnedVersion: "1.0.0" })
+  const result = await runBotManuallyLocally({
+    installationId: installed.id,
+    idempotencyKey: "after-update",
+  })
+  expect(result.created).toBe(true)
+})
 
 it("retains a prior manual creation receipt after disable while refusing a new gesture", async () => {
   const installed = await install()
@@ -233,7 +243,7 @@ describe("setBotTriggerArmedLocally", () => {
   it("keeps a needs_setup installation from silently becoming enabled", async () => {
     const row = await install(
       def({ requires: { credentials: [{ id: "token", label: "Token" }] } }),
-      { requiredCredentials: [{ id: "token", label: "Token" }] }
+      { requirements: botSetupRequirements([{ id: "token", label: "Token" }], undefined) }
     )
     expect(row.status).toBe("needs_setup")
 
@@ -334,6 +344,13 @@ describe("replayBotDeliveryLocally", () => {
     const id = await deadLetter(install1.id)
     expect((await getBotDelivery(id))?.status).toBe("deadletter")
 
+    expect(await replayBotDeliveryLocally(id)).toBe(true)
+    expect((await getBotDelivery(id))?.status).toBe("pending")
+  })
+
+  it("replays a dead letter after the plugin moved on (B12)", async () => {
+    const installed = await install(def({ version: "2.0.0" }), { pinnedVersion: "1.0.0" })
+    const id = await deadLetter(installed.id)
     expect(await replayBotDeliveryLocally(id)).toBe(true)
     expect((await getBotDelivery(id))?.status).toBe("pending")
   })

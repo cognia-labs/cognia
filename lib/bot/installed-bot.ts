@@ -9,8 +9,10 @@
  */
 
 import { getBotDefinition } from "@/lib/db/bot-definitions"
+import type { BotSetupRequirements } from "@/lib/db/bot-installations"
 import { runsHere } from "@/lib/placement/ownership"
 import type { BotInstallationRow } from "@/lib/db/bot-types"
+import { missingRequiredBotConfig } from "@/lib/bot/config/resolve-effective"
 import { getBot } from "@/lib/plugin/registries/bot-registry"
 import {
   resolveBotPolicy,
@@ -20,6 +22,7 @@ import {
 import type { BotHandlerV1 } from "@/types/bot/run"
 import type {
   PluginBotCompositionRequestV1,
+  PluginBotCredentialSlot,
   PluginBotExecutor,
   PluginBotPolicyV1,
   PluginBotRequirementsV1,
@@ -212,4 +215,24 @@ export function isRunnableBot(resolved: InstalledBot): boolean {
   if (resolved.installation.status !== "enabled" || resolved.installation.paused) return false
   if (!runsHere(resolved.installation.owner)) return false
   return !resolved.problems.some((problem) => problem.kind === "handler_missing")
+}
+
+/**
+ * What an installation of this definition must have before it runs: its
+ * credential slots and its `configSchema`'s required settings, as one value so
+ * every status derivation checks both. A catalog entry spells the same two
+ * things as `slots` and `configSchema`.
+ */
+export function botSetupRequirements(
+  credentials: readonly PluginBotCredentialSlot[],
+  configSchema: Record<string, unknown> | undefined
+): BotSetupRequirements {
+  return {
+    credentials,
+    missingConfig: (config) => missingRequiredBotConfig(configSchema, config),
+  }
+}
+
+export function setupRequirementsOf(definition: ResolvedBotDefinition): BotSetupRequirements {
+  return botSetupRequirements(definition.requires?.credentials ?? [], definition.configSchema)
 }

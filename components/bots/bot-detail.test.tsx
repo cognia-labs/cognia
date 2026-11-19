@@ -147,6 +147,26 @@ describe("BotDetail", () => {
     expect(screen.getByTestId("console-section-credentials")).toHaveTextContent("1/2")
   })
 
+  it("counts empty required settings on the settings header (B13)", () => {
+    const configSchema = {
+      type: "object",
+      required: ["repo", "label", "branch"],
+      properties: {
+        repo: { type: "string" },
+        label: { type: "string" },
+        branch: { type: "string", default: "main" },
+      },
+    }
+    const { rerender } = render(
+      <BotDetail row={row({ status: "needs_setup", configSchema, config: {} })} />
+    )
+    expect(screen.getByTestId("console-section-config")).toHaveTextContent(
+      "2 required settings are empty"
+    )
+    rerender(<BotDetail row={row({ configSchema, config: { repo: "acme/app", label: "x" } })} />)
+    expect(screen.getByTestId("console-section-config")).not.toHaveTextContent("required setting")
+  })
+
   it("states each resolution problem separately, not as one unavailable line", () => {
     // The three kinds need three different actions: reinstall the plugin,
     // accept a version that moved, or fix a handler that never loaded.

@@ -85,6 +85,26 @@ export function defaultsFromConfigSchema(
 }
 
 /**
+ * The `configSchema`'s top-level `required` keys that neither `config` nor a
+ * schema default supplies: what an installation still needs before it runs.
+ *
+ * Presence, as JSON Schema `required` means it, read the way `resolveBotConfig`
+ * reads a layer: `undefined` is no value, `null` is one. Whether a present
+ * value is VALID is a separate question, answered when the config is written.
+ */
+export function missingRequiredBotConfig(
+  schema: Record<string, unknown> | undefined,
+  config: Record<string, unknown>
+): string[] {
+  const required = Array.isArray(schema?.required)
+    ? schema.required.filter((key): key is string => typeof key === "string")
+    : []
+  if (required.length === 0) return []
+  const effective = { ...defaultsFromConfigSchema(schema), ...config }
+  return required.filter((key) => effective[key] === undefined)
+}
+
+/**
  * `undefined` means "this layer has no opinion". A layer that wants to clear a
  * value sets `null`, which wins like any other value, because otherwise there
  * is no way to unset something an outer layer supplied.

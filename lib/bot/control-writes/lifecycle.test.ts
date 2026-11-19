@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import { botSetupRequirements } from "@/lib/bot/installed-bot"
 import {
   registerIntegrationDefinitions,
   __resetIntegrationRegistryForTesting,
@@ -14,6 +15,7 @@ import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-registry"
 
 import {
+  BotConfigInvalidError,
   BotDefinitionMissingError,
   BotLifecycleUnavailableError,
   BotNotInstallableError,
@@ -78,6 +80,13 @@ function register(def: PluginBotDef = definition()) {
       pluginId: "acme",
     }
   )
+}
+
+/** One required setting with no default. */
+const REPO_SCHEMA = {
+  type: "object",
+  required: ["repo"],
+  properties: { repo: { type: "string" } },
 }
 
 function entry(overrides: Partial<BotCatalogEntry> = {}): BotCatalogEntry {
@@ -192,6 +201,37 @@ describe("installBotFromCatalog", () => {
       scope: { kind: "account" },
     })
     expect(row.status).toBe("needs_setup")
+  })
+
+  it("opens `needs_setup` when a required setting is empty, and enables once it is saved (B13)", async () => {
+    // An install that sends no config (a paired device's panel sends none)
+    // succeeds, and the detail pane asks for the rest.
+    register(definition({ configSchema: REPO_SCHEMA }))
+    const row = await installBotFromCatalog({
+      entry: entry({ configSchema: REPO_SCHEMA }),
+      scope: { kind: "account" },
+    })
+    expect(row.status).toBe("needs_setup")
+    const saved = await updateBotConfig(row.id, { repo: "acme/app" })
+    expect(saved.status).toBe("enabled")
+  })
+
+  it("refuses a setting the schema rejects, at install and at save (B13)", async () => {
+    register(definition({ configSchema: REPO_SCHEMA }))
+    const before = await getDb().botInstallations.count()
+    await expect(
+      installBotFromCatalog({
+        entry: entry({ configSchema: REPO_SCHEMA }),
+        scope: { kind: "account" },
+        config: { repo: 7 },
+      })
+    ).rejects.toBeInstanceOf(BotConfigInvalidError)
+    expect(await getDb().botInstallations.count()).toBe(before)
+    const row = await installBotFromCatalog({
+      entry: entry({ configSchema: REPO_SCHEMA }),
+      scope: { kind: "account" },
+    })
+    await expect(updateBotConfig(row.id, { repo: 7 })).rejects.toBeInstanceOf(BotConfigInvalidError)
   })
 
   it("opens enabled when every required slot arrives bound", async () => {
@@ -324,7 +364,7 @@ describe("updateBotConfig", () => {
       definitionSource: "plugin",
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
-      requiredCredentials: [{ id: "gh", label: "GitHub" }],
+      requirements: botSetupRequirements([{ id: "gh", label: "GitHub" }], undefined),
       now: NOW,
     })
     expect(installed.status).toBe("needs_setup")
@@ -501,10 +541,32 @@ describe("bindBotCredential", () => {
       definitionSource: "plugin",
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
-      requiredCredentials: [{ id: "gh", label: "GitHub" }],
+      requirements: botSetupRequirements([{ id: "gh", label: "GitHub" }], undefined),
       now: NOW,
     })
   }
+
+  it("keeps a Bot with an empty required setting off when its last slot is bound (B13)", async () => {
+    register(
+      definition({
+        requires: { credentials: [{ id: "gh", label: "GitHub" }] },
+        configSchema: REPO_SCHEMA,
+      })
+    )
+    const installed = await installBot({
+      definitionId: "acme:digest",
+      definitionSource: "plugin",
+      pinnedVersion: "1.0.0",
+      scope: { kind: "account" },
+      requirements: botSetupRequirements([{ id: "gh", label: "GitHub" }], REPO_SCHEMA),
+      now: NOW,
+    })
+    const bound = await bindBotCredential(installed.id, "gh", { integrationAccountId: "iacc_1" })
+    expect(bound.status).toBe("needs_setup")
+    await expect(setBotInstallationEnabled(installed.id, true)).resolves.toMatchObject({
+      status: "needs_setup",
+    })
+  })
 
   it("binds an integration account and clears the setup state", async () => {
     const installed = await installNeedingGithub()
@@ -563,10 +625,13 @@ describe("bindBotCredential", () => {
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
       credentialBindings: { slack: { adapterId: "adp_slack" } },
-      requiredCredentials: [
-        { id: "gh", label: "GitHub" },
-        { id: "slack", label: "Slack" },
-      ],
+      requirements: botSetupRequirements(
+        [
+          { id: "gh", label: "GitHub" },
+          { id: "slack", label: "Slack" },
+        ],
+        undefined
+      ),
       now: NOW,
     })
     const updated = await bindBotCredential(installed.id, "gh", {
@@ -585,7 +650,7 @@ describe("bindBotCredential", () => {
       definitionSource: "plugin",
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
-      requiredCredentials: [{ id: "gh", label: "GitHub" }],
+      requirements: botSetupRequirements([{ id: "gh", label: "GitHub" }], undefined),
       now: NOW,
     })
     expect(installed.status).toBe("needs_setup")
@@ -616,7 +681,7 @@ describe("setBotInstallationEnabled", () => {
       definitionSource: "plugin",
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
-      requiredCredentials: [{ id: "gh", label: "GitHub" }],
+      requirements: botSetupRequirements([{ id: "gh", label: "GitHub" }], undefined),
       now: NOW,
     })
     await setBotInstallationEnabled(installed.id, false)
@@ -632,7 +697,7 @@ describe("human revision (ADR-0239 instruction epoch)", () => {
       definitionSource: "plugin",
       pinnedVersion: "1.0.0",
       scope: { kind: "account" },
-      requiredCredentials: [{ id: "gh", label: "GitHub" }],
+      requirements: botSetupRequirements([{ id: "gh", label: "GitHub" }], undefined),
       now: NOW,
     })
     expect(row.humanRevision).toBeUndefined()

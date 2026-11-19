@@ -6,9 +6,11 @@ import { enqueueBotDelivery, listBotDeliveries } from "@/lib/db/bot-event-delive
 import { installBot } from "@/lib/db/bot-installations"
 import {
   BOT_RUN_RESULT_STEP,
+  addBotRunExecutionMs,
   completeBotRunStep,
   getBotRunStep,
   putBotRunResult,
+  readBotRunExecutionMs,
 } from "@/lib/db/bot-run-steps"
 import type { BotEventDeliveryRow, BotInstallationRow } from "@/lib/db/bot-types"
 import { getExecutionRun, runEventJournal } from "@/lib/db/execution-runs"
@@ -607,6 +609,37 @@ describe("runBotDelivery", () => {
     expect(await getBotRunStep(outcome.runId, BOT_RUN_RESULT_STEP)).toBeUndefined()
   })
 
+  it("sums execution time across resumed segments instead of restarting the budget (B14)", async () => {
+    const { delivery, resolved } = await seed()
+    resolved.policy.maxRunDurationMs = 70
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+    let entries = 0
+    const handler = async (ctx: BotExecutorContext) => {
+      entries += 1
+      await sleep(50)
+      if (entries === 1) throw new BotRunParkedError(ctx.runId, "publish", NOW + 20_000)
+      return { summary: "finished" }
+    }
+    const parked = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(parked.status).toBe("parked")
+    expect(await readBotRunExecutionMs(parked.runId)).toBeGreaterThanOrEqual(45)
+
+    // 50 ms of the 70 are spent: the second 50 ms segment runs out first.
+    const resumed = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(resumed.status).toBe("cancelled")
+    expect(entries).toBe(2)
+  })
+
+  it("cancels an entry whose budget is already spent without running it", async () => {
+    const { delivery, resolved } = await seed()
+    resolved.policy.maxRunDurationMs = 1_000
+    await addBotRunExecutionMs(botRunId(delivery.id), 1_000)
+    const handler = jest.fn(async () => ({ summary: "should not run" }))
+    const outcome = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(outcome.status).toBe("cancelled")
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   it("does not consume execution time while approval is parked", async () => {
     const { delivery, resolved } = await seed()
     resolved.policy.maxRunDurationMs = 25
@@ -1083,6 +1116,51 @@ describe("runBotDelivery", () => {
  * resumption unable to write to it.
  */
 describe("runBotDelivery when a handler parks", () => {
+  it("stops a run resumed on another definition version instead of mixing checkpoints (B12)", async () => {
+    const { delivery, resolved } = await seed()
+    const handler = jest.fn(async (ctx: BotExecutorContext) => {
+      await ctx.step.run("fetch", () => ({ items: 3 }))
+      throw new BotRunParkedError(ctx.runId, "publish", NOW + 20_000)
+    })
+    const parked = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(parked.status).toBe("parked")
+
+    // The plugin updates while the run waits.
+    const updated = { ...resolved, definition: { ...resolved.definition, version: "2.0.0" } }
+    const resumed = await runBotDelivery({
+      delivery,
+      resolved: updated,
+      now,
+      executors: { handler },
+    })
+
+    expect(resumed.status).toBe("unavailable")
+    expect(resumed).toMatchObject({ error: expect.stringContaining("started on version 1.0.0") })
+    // v2's handler never saw v1's `fetch` checkpoint.
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect((await getExecutionRun(resumed.runId))?.status).toBe("failed")
+    // Dismissed, which a replay accepts; it starts a fresh run on 2.0.0.
+    expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("dismissed")
+  })
+
+  it("runs a new delivery on the version that exists despite the installation's pin", async () => {
+    const { delivery, resolved } = await seed()
+    const drifted = {
+      ...resolved,
+      definition: { ...resolved.definition, version: "2.0.0" },
+      problems: [{ kind: "version_drift" as const, pinned: "1.0.0", available: "2.0.0" }],
+    }
+    const handler = jest.fn(async () => ({ summary: "ran" }))
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved: drifted,
+      now,
+      executors: { handler },
+    })
+    expect(outcome.status).toBe("completed")
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
   it("does not journal a waiting transition after its delivery lease expires", async () => {
     const { delivery, resolved } = await seed()
     const outcome = await runBotDelivery({

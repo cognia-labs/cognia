@@ -11,7 +11,7 @@
 
 import { dispatchManualBotRun } from "@/lib/bot/events/dispatch"
 import { buildBotEventEnvelope, botEventId } from "@/lib/bot/events/envelope"
-import { isRunnableBot, resolveInstalledBot } from "@/lib/bot/installed-bot"
+import { isRunnableBot, resolveInstalledBot, setupRequirementsOf } from "@/lib/bot/installed-bot"
 import {
   getBotInstallation,
   isBotTriggerArmed,
@@ -106,11 +106,12 @@ export async function setBotTriggerArmedLocally(
   const next = await updateBotInstallation(input.installationId, (latest) => ({
     ...(input.armed && latest.activatedAt === undefined ? { activatedAt: Date.now() } : {}),
     triggerOverrides: { ...(latest.triggerOverrides ?? {}), [input.triggerId]: input.armed },
-    // Re-evaluated so a Bot that was `needs_setup` does not silently become
-    // `enabled` just because a trigger moved. `updateBotInstallation` only
-    // re-runs the status when it is handed the slots to check against.
-    ...(resolved?.definition.requires?.credentials
-      ? { requiredCredentials: resolved.definition.requires.credentials }
+    // Re-evaluated against what the definition declares, so a definition that
+    // now requires a slot or setting the row lacks stops reading `enabled`.
+    // Only then: a definition that declares neither has nothing to check, and
+    // re-deriving would clear a `needs_setup` recorded for a runtime reason.
+    ...(resolved && (resolved.definition.requires?.credentials || resolved.definition.configSchema)
+      ? { requirements: setupRequirementsOf(resolved.definition) }
       : {}),
   }))
   if (!next) throw new BotControlTargetMissingError("installation", input.installationId)
@@ -190,7 +191,10 @@ export async function runBotManuallyLocally(
       const registeredHandler = registration?.handler
       const resolved = await resolveInstalledBot(installation)
       if (!resolved) throw new BotControlTargetMissingError("installation", input.installationId)
-      if (installation.syncedFromHost || !isRunnableBot(resolved) || resolved.problems.length)
+      // `version_drift` does not stop a press, as it stops no other trigger:
+      // the Bot runs on the version that exists. `isRunnableBot` refuses the
+      // problems that do stop it.
+      if (installation.syncedFromHost || !isRunnableBot(resolved))
         throw new BotManualRunUnavailableError(installation.id)
 
       // The named trigger, or the definition's own manual one. Falling back to
@@ -273,7 +277,7 @@ export async function replayBotDeliveryLocally(deliveryId: string): Promise<bool
       if (!installation || installation.syncedFromHost)
         throw new BotDeliveryReplayUnavailableError(deliveryId)
       const resolved = await resolveInstalledBot(installation)
-      if (!resolved || !isRunnableBot(resolved) || resolved.problems.length)
+      if (!resolved || !isRunnableBot(resolved))
         throw new BotDeliveryReplayUnavailableError(deliveryId)
       if (!resolved.definition.triggers.some((trigger) => trigger.id === row.triggerId))
         throw new BotControlTargetMissingError("trigger", row.triggerId)

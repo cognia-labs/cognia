@@ -830,15 +830,17 @@ export async function setLocalOwner(
     return
   }
   if (kind === "bot-installation") {
-    const [{ setBotInstallationOwner, getBotInstallation }, { resolveInstalledBot }] =
-      await Promise.all([import("@/lib/db/bot-installations"), import("@/lib/bot/installed-bot")])
+    const [
+      { setBotInstallationOwner, getBotInstallation },
+      { resolveInstalledBot, setupRequirementsOf },
+    ] = await Promise.all([import("@/lib/db/bot-installations"), import("@/lib/bot/installed-bot")])
     const installation = await getBotInstallation(id)
     if (!installation)
       throw new Error(`item_missing: Bot installation ${id} is gone from this machine`)
     const resolved = await resolveInstalledBot(installation).catch(() => undefined)
     await setBotInstallationOwner(id, owner, {
       ...(status ? { status: botStatusFrom(status) } : {}),
-      ...(resolved ? { requiredCredentials: resolved.definition.requires?.credentials ?? [] } : {}),
+      ...(resolved ? { requirements: setupRequirementsOf(resolved.definition) } : {}),
     })
     return
   }

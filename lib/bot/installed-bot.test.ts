@@ -9,7 +9,13 @@ import { installBot } from "@/lib/db/bot-installations"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-registry"
 
-import { awaitsBotRegistration, isRunnableBot, resolveInstalledBot } from "./installed-bot"
+import {
+  awaitsBotRegistration,
+  botSetupRequirements,
+  isRunnableBot,
+  resolveInstalledBot,
+  setupRequirementsOf,
+} from "./installed-bot"
 
 const NOW = 1_700_000_000_000
 const manual = [{ id: "run", kind: "manual" as const }]
@@ -243,5 +249,36 @@ describe("awaitsBotRegistration", () => {
         null
       )
     ).toBe(false)
+  })
+})
+
+describe("setup requirements (B13)", () => {
+  const configSchema = {
+    type: "object",
+    required: ["repo", "branch"],
+    properties: { repo: { type: "string" }, branch: { type: "string", default: "main" } },
+  }
+
+  it("carries the slots and checks the config against the schema's required settings", () => {
+    const slots = [{ id: "gh", label: "GitHub" }]
+    const requirements = botSetupRequirements(slots, configSchema)
+    expect(requirements.credentials).toBe(slots)
+    expect(requirements.missingConfig({})).toEqual(["repo"])
+    expect(requirements.missingConfig({ repo: "acme/app" })).toEqual([])
+  })
+
+  it("reads both from a resolved definition, and asks for nothing it does not declare", () => {
+    const definition = {
+      id: "acme:digest",
+      name: "Digest",
+      version: "1.0.0",
+      executor: "handler" as const,
+      triggers: [],
+      source: "plugin" as const,
+    }
+    const bare = setupRequirementsOf(definition)
+    expect(bare.credentials).toEqual([])
+    expect(bare.missingConfig({})).toEqual([])
+    expect(setupRequirementsOf({ ...definition, configSchema }).missingConfig({})).toEqual(["repo"])
   })
 })

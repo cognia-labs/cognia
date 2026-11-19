@@ -14,19 +14,34 @@ import { getRegisteredIntegration } from "@/lib/integrations/registry"
  *
  * ## The status trap
  *
- * `updateBotInstallation` re-derives status whenever `credentialBindings` or
- * `status` is in the patch, and it does that against whatever
- * `requiredCredentials` it was handed. Handed nothing, `unboundCredentialSlots`
- * sees an empty requirement list, concludes nothing is unbound, and promotes a
- * `needs_setup` installation to `enabled` while its slots are still empty.
+ * `updateBotInstallation` re-derives status whenever `credentialBindings`,
+ * `config` or `status` is in the patch, and it does that against whatever
+ * `requirements` it was handed. Handed nothing, it has no slots or settings to
+ * check, and promotes a `needs_setup` installation to `enabled` while its slots
+ * or its required settings are still empty.
  *
- * So every mutator below resolves the definition first and passes the slots
- * through, and refuses outright when the definition is gone, because there is
- * no third answer that leaves the row honest. That is the whole reason these
- * are not one-line wrappers.
+ * So every mutator below resolves the definition first and passes its setup
+ * requirements through, and refuses outright when the definition is gone,
+ * because there is no third answer that leaves the row honest. That is the
+ * whole reason these are not one-line wrappers.
+ *
+ * ## Config: a gap is setup, a wrong value is an error
+ *
+ * A required setting that is absent leaves the installation `needs_setup`, the
+ * way an unbound credential does, so an install that did not send a config
+ * (a paired device's install panel does not) succeeds and the detail pane asks
+ * for the rest. A value the schema rejects is refused at the write. Both rules
+ * live here, in the functions the local path and the Host's admin mutation
+ * both call, so the two cannot answer the same input differently.
  */
 
-import { resolveInstalledBot } from "@/lib/bot/installed-bot"
+import {
+  botSetupRequirements,
+  resolveInstalledBot,
+  setupRequirementsOf,
+} from "@/lib/bot/installed-bot"
+import { defaultsFromConfigSchema } from "@/lib/bot/config/resolve-effective"
+import { validateAgainstJsonSchema } from "@/lib/workflow/nodes/ai/schema-validate"
 import {
   buildBotInstallationRow,
   getBotInstallation,
@@ -36,6 +51,7 @@ import {
   setBotInstallationOutboundRecipients,
   uninstallBot,
   updateBotInstallation,
+  type BotSetupRequirements,
   type InstallBotInput,
 } from "@/lib/db/bot-installations"
 import { runBotLifecycleHook } from "./lifecycle-hooks"
@@ -190,7 +206,7 @@ function assertAvailable(): void {
 }
 
 /**
- * The slots this installation's definition declares.
+ * What this installation's definition requires: its slots and its settings.
  *
  * Throws for an orphan rather than answering `[]` or `undefined`. Neither is
  * safe: `[]` says "this Bot needs no credentials" and would promote the row to
@@ -199,14 +215,39 @@ function assertAvailable(): void {
  * `status` is in the patch regardless of whether a requirement list came with
  * it. Refusing is the only answer that leaves the row telling the truth.
  */
-async function requiredSlotsFor(
+async function setupRequirementsFor(
   installation: BotInstallationRow
-): Promise<readonly PluginBotCredentialSlot[]> {
+): Promise<BotSetupRequirements> {
   const resolved = await resolveInstalledBot(installation)
   if (!resolved) {
     throw new BotDefinitionMissingError(installation.id, installation.definitionId)
   }
-  return resolved.definition.requires?.credentials ?? []
+  return setupRequirementsOf(resolved.definition)
+}
+
+export class BotConfigInvalidError extends Error {
+  readonly code = "bot_config_invalid"
+  constructor(readonly errors: readonly string[]) {
+    super(`Invalid Bot configuration: ${errors.join("; ")}`)
+  }
+}
+
+/**
+ * Refuse a config the definition's schema rejects. An absent required setting
+ * is not checked here: it is a setup gap, which the status reports.
+ */
+function assertBotConfigValues(
+  schema: Record<string, unknown> | undefined,
+  config: Record<string, unknown>
+): void {
+  if (!schema) return
+  const shape = { ...schema }
+  delete shape.required
+  const result = validateAgainstJsonSchema(shape, {
+    ...defaultsFromConfigSchema(schema),
+    ...config,
+  })
+  if (!result.ok) throw new BotConfigInvalidError(result.errors)
 }
 
 export interface InstallBotFromCatalogInput {
@@ -239,6 +280,7 @@ export async function installBotFromCatalogLocally(
 ): Promise<BotInstallationRow> {
   assertAvailable()
   if (input.entry.unresolvedHandler) throw new BotNotInstallableError(input.entry.definitionId)
+  assertBotConfigValues(input.entry.configSchema, input.config ?? {})
   for (const [slotId, binding] of Object.entries(input.credentialBindings ?? {}))
     await validateBotCredentialBinding(
       input.entry.slots.find((slot) => slot.id === slotId),
@@ -262,7 +304,7 @@ export async function installBotFromCatalogLocally(
     definitionSource: input.entry.source,
     pinnedVersion: input.entry.version,
     scope: input.scope,
-    requiredCredentials: input.entry.slots,
+    requirements: botSetupRequirements(input.entry.slots, input.entry.configSchema),
     ...(input.config ? { config: input.config } : {}),
     ...(input.credentialBindings ? { credentialBindings: input.credentialBindings } : {}),
     ...(input.enabled === false ? { requestedStatus: "disabled" as const } : {}),
@@ -313,7 +355,8 @@ export async function updateBotConfigLocally(
   if (!resolved) {
     throw new BotDefinitionMissingError(installation.id, installation.definitionId)
   }
-  const requiredCredentials = resolved.definition.requires?.credentials ?? []
+  assertBotConfigValues(resolved.definition.configSchema, config)
+  const requirements = setupRequirementsOf(resolved.definition)
   const grant = policyGrant === undefined ? undefined : botPolicyGrantSchema.parse(policyGrant)
   // The snapshot reflects the NEW config — that is the state the hook is
   // being asked to accept — while `previousConfig` is what it replaces.
@@ -327,7 +370,7 @@ export async function updateBotConfigLocally(
     installationId,
     (latest) => ({
       config,
-      requiredCredentials,
+      requirements,
       ...(grant ? { policyGrant: { ...latest.policyGrant, ...grant } } : {}),
     }),
     { humanEdit: true }
@@ -432,9 +475,9 @@ export async function bindBotCredentialLocally(
   if (installation.syncedFromHost)
     throw new BotLifecycleUnavailableError({ state: "unsupported", reason: "requires-companion" })
 
-  const requiredCredentials = await requiredSlotsFor(installation)
+  const requirements = await setupRequirementsFor(installation)
   await validateBotCredentialBinding(
-    requiredCredentials.find((slot) => slot.id === slotId),
+    requirements.credentials.find((slot) => slot.id === slotId),
     binding
   )
   const updated = await updateBotInstallation(
@@ -456,7 +499,7 @@ export async function bindBotCredentialLocally(
         // leaving one behind makes the row lie about what a reader can find.
         delete next[slotId]
       }
-      return { credentialBindings: next, requiredCredentials }
+      return { credentialBindings: next, requirements }
     },
     { humanEdit: true }
   )
@@ -470,8 +513,8 @@ export async function bindBotCredentialLocally(
  * Enable or disable an installation by hand.
  *
  * `enabled` is a REQUEST, not a result: `resolveInstallationStatus` answers
- * `needs_setup` instead when a required slot is still unbound, so this can
- * never switch a half-configured Bot on.
+ * `needs_setup` instead when a required slot or setting is still empty, so
+ * this can never switch a half-configured Bot on.
  */
 export async function setBotInstallationEnabledLocally(
   installationId: string,
@@ -482,10 +525,10 @@ export async function setBotInstallationEnabledLocally(
   if (!installation) throw new BotControlTargetMissingError("installation", installationId)
   if (installation.syncedFromHost)
     throw new BotLifecycleUnavailableError({ state: "unsupported", reason: "requires-companion" })
-  const requiredCredentials = await requiredSlotsFor(installation)
+  const requirements = await setupRequirementsFor(installation)
   const updated = await updateBotInstallation(
     installationId,
-    { status: enabled ? "enabled" : "disabled", requiredCredentials },
+    { status: enabled ? "enabled" : "disabled", requirements },
     { humanEdit: true }
   )
   if (!updated) throw new BotControlTargetMissingError("installation", installationId)

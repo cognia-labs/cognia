@@ -17,6 +17,7 @@ A declaration therefore gives TypeScript and Python plugins the same capability.
 Each entry in `manifest.bots[]` requires `id`, `name`, `version`, `executor`, and at least one `triggers[]` entry.
 The host namespaces plugin Bot ids as `<pluginId>:<botId>`.
 Installations pin that namespaced `definitionId` and a `pinnedVersion`.
+When your plugin ships a new `version`, installations keep running on it and the console notes the drift. A run that was waiting or retrying when the update landed stops with a failure the user can replay, because its completed steps were written by the old code.
 
 ### Executors
 
@@ -79,7 +80,7 @@ The console renders these as badges on the trigger row.
 
 ### `requires` and `policy`
 
-`requires.credentials[]` declares credential slots (`{ id, label, optional?, integration?, strategy? }`); unbound required slots hold the installation at `needs_setup`. `policy` is the definition-layer ceiling — `maxAuthority`, `maxAutonomy`, `requireApprovalForWrites` — intersected (never widened) with organization, plugin, installation, and per-request layers.
+`requires.credentials[]` declares credential slots (`{ id, label, optional?, integration?, strategy? }`). Unbound required slots hold the installation at `needs_setup`, and so do `configSchema` `required` settings that neither the installation nor a schema default supplies. An install that sends no config therefore succeeds and waits for the settings form; a value the schema rejects is refused at install or save. `policy` is the definition-layer ceiling — `maxAuthority`, `maxAutonomy`, `requireApprovalForWrites`, `maxRunDurationMs` and the rest — intersected (never widened) with organization, plugin, installation, and per-request layers. `maxRunDurationMs` counts execution time, summed over every attempt and every segment resumed after a wait; parked waits do not spend it.
 
 ### `lifecycle`
 

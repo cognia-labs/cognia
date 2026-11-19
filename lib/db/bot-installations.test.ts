@@ -18,6 +18,7 @@ import {
   unboundCredentialSlots,
   updateBotInstallation,
   writeBotTriggerState,
+  type BotSetupRequirements,
 } from "./bot-installations"
 import { __resetDbForTesting, getDb } from "./schema"
 
@@ -27,6 +28,11 @@ const NOW = 1_700_000_000_000
 
 const REPO_SLOT: PluginBotCredentialSlot = { id: "repo", label: "Repository" }
 const OPTIONAL_SLOT: PluginBotCredentialSlot = { id: "chat", label: "Chat", optional: true }
+
+/** Requirements with credential slots and no required settings. */
+function slotsOnly(...credentials: PluginBotCredentialSlot[]): BotSetupRequirements {
+  return { credentials, missingConfig: () => [] }
+}
 
 function input(overrides: Record<string, unknown> = {}) {
   return {
@@ -69,22 +75,46 @@ describe("unboundCredentialSlots", () => {
 describe("resolveInstallationStatus", () => {
   it("reports needs_setup while a required slot is unbound", () => {
     expect(
-      resolveInstallationStatus({ requested: "enabled", requiredCredentials: [REPO_SLOT] })
+      resolveInstallationStatus({ requested: "enabled", requirements: slotsOnly(REPO_SLOT) })
     ).toBe("needs_setup")
   })
 
   it("lets a deliberate disable outrank a missing credential", () => {
     // Turning something off is an answer, not a gap.
     expect(
-      resolveInstallationStatus({ requested: "disabled", requiredCredentials: [REPO_SLOT] })
+      resolveInstallationStatus({ requested: "disabled", requirements: slotsOnly(REPO_SLOT) })
     ).toBe("disabled")
+  })
+
+  it("keeps needs_setup while a required setting is empty, slots bound or not (B13)", () => {
+    const requirements: BotSetupRequirements = {
+      credentials: [REPO_SLOT],
+      missingConfig: (config) => (config.repo === undefined ? ["repo"] : []),
+    }
+    const credentialBindings = { repo: { integrationAccountId: "acct" } }
+    expect(
+      resolveInstallationStatus({
+        requested: "enabled",
+        requirements,
+        credentialBindings,
+        config: {},
+      })
+    ).toBe("needs_setup")
+    expect(
+      resolveInstallationStatus({
+        requested: "enabled",
+        requirements,
+        credentialBindings,
+        config: { repo: "acme/app" },
+      })
+    ).toBe("enabled")
   })
 
   it("enables once every required slot is bound", () => {
     expect(
       resolveInstallationStatus({
         requested: "enabled",
-        requiredCredentials: [REPO_SLOT],
+        requirements: slotsOnly(REPO_SLOT),
         credentialBindings: { repo: { integrationAccountId: "acct" } },
       })
     ).toBe("enabled")
@@ -123,7 +153,7 @@ describe("botInstallations", () => {
   })
 
   it("installs as needs_setup when a required slot is unbound", async () => {
-    const row = await installBot(input({ requiredCredentials: [REPO_SLOT] }))
+    const row = await installBot(input({ requirements: slotsOnly(REPO_SLOT) }))
     expect(row.status).toBe("needs_setup")
   })
 
@@ -134,10 +164,10 @@ describe("botInstallations", () => {
   })
 
   it("re-evaluates status when a binding lands", async () => {
-    const row = await installBot(input({ requiredCredentials: [REPO_SLOT] }))
+    const row = await installBot(input({ requirements: slotsOnly(REPO_SLOT) }))
     const updated = await updateBotInstallation(row.id, {
       credentialBindings: { repo: { integrationAccountId: "acct" } },
-      requiredCredentials: [REPO_SLOT],
+      requirements: slotsOnly(REPO_SLOT),
       now: NOW + 1,
     })
     expect(updated?.status).toBe("enabled")
@@ -349,7 +379,7 @@ describe("setBotInstallationOwner (ADR-0224)", () => {
     await setBotInstallationOwner(row.id, moved)
     const unbound = await setBotInstallationOwner(row.id, undefined, {
       status: "enabled",
-      requiredCredentials: [REPO_SLOT],
+      requirements: slotsOnly(REPO_SLOT),
     })
     expect(unbound?.status).toBe("needs_setup")
   })

@@ -4,6 +4,7 @@ import "fake-indexeddb/auto"
 
 import {
   BOT_RUN_RESULT_STEP,
+  addBotRunExecutionMs,
   beginBotRunStep,
   botRunStepId,
   completeBotRunStep,
@@ -12,6 +13,7 @@ import {
   getBotRunStep,
   listBotRunSteps,
   putBotRunResult,
+  readBotRunExecutionMs,
 } from "./bot-run-steps"
 import { __resetDbForTesting, getDb } from "./schema"
 
@@ -152,5 +154,30 @@ describe("bot run steps", () => {
       startedAt: NOW,
       updatedAt: NOW + 1,
     })
+  })
+})
+
+describe("run execution time (B14)", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+
+  it("reads zero before the first segment and sums every segment after", async () => {
+    expect(await readBotRunExecutionMs("run_1")).toBe(0)
+    expect(await addBotRunExecutionMs("run_1", 40, NOW)).toBe(40)
+    expect(await addBotRunExecutionMs("run_1", 25, NOW + 1)).toBe(65)
+    expect(await readBotRunExecutionMs("run_1")).toBe(65)
+    // Per run: another run's time is its own.
+    expect(await readBotRunExecutionMs("run_2")).toBe(0)
+  })
+
+  it("counts two segments that end together, and never a negative one", async () => {
+    await Promise.all([
+      addBotRunExecutionMs("run_1", 30, NOW),
+      addBotRunExecutionMs("run_1", 20, NOW),
+    ])
+    await addBotRunExecutionMs("run_1", -5, NOW)
+    expect(await readBotRunExecutionMs("run_1")).toBe(50)
   })
 })

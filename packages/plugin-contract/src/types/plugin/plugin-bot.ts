@@ -283,7 +283,12 @@ export interface PluginBotPolicyV1 {
    * broker would have classified as low risk.
    */
   requireApprovalForWrites?: boolean
-  /** Wall-clock ceiling for one run. */
+  /**
+   * Execution-time ceiling for one run: the time it spends running, summed
+   * over every attempt and every segment resumed after a wait. A parked wait
+   * (an approval, an awaited event, a retry backoff) does not spend it, so an
+   * approval that takes a day still fits a budget of minutes.
+   */
   maxRunDurationMs?: number
   /** Cost ceiling for one run, declared on its run tree's ledger. */
   maxRunCostUsd?: number

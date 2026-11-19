@@ -9,13 +9,11 @@ import { listBotDeliveries } from "@/lib/db/bot-event-deliveries"
 import { listAllIntegrationAccounts } from "@/lib/db/integrations"
 import { listAdapterInstances } from "@/lib/db/adapter-instances"
 import { buildBotCatalog } from "@/lib/bot/console/catalog"
-import { defaultsFromConfigSchema } from "@/lib/bot/config/resolve-effective"
 import { listBotDefinitions } from "@/lib/db/bot-definitions"
 import { getBotInstallation, listBotInstallations } from "@/lib/db/bot-installations"
 import { getDb } from "@/lib/db/schema"
 import { resolveInstalledBot } from "@/lib/bot/installed-bot"
 import { listBotEntries } from "@/lib/plugin/registries/bot-registry"
-import { validateAgainstJsonSchema } from "@/lib/workflow/nodes/ai/schema-validate"
 import { projectBotInstallationRow } from "@/lib/sync/desktop-sync-source"
 import {
   installBotFromCatalogLocally,
@@ -136,18 +134,6 @@ export async function readHostBotCatalog() {
   return buildBotCatalog({ registry: listBotEntries(), local, installations })
 }
 
-function validateConfig(
-  schema: Record<string, unknown> | undefined,
-  value: Record<string, unknown>
-) {
-  const effective = { ...defaultsFromConfigSchema(schema), ...value }
-  if (schema) {
-    const result = validateAgainstJsonSchema(schema, effective)
-    if (!result.ok) throw new Error(`Invalid Bot configuration: ${result.errors.join("; ")}`)
-  }
-  return effective
-}
-
 /**
  * The mutation without its approval token. `bot_installation_mutate` is
  * `approval: interactive` (ADR-0224 A6), so a paired device sends an
@@ -208,7 +194,9 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
     const scopedId = input.scope.workspaceId ?? input.scope.projectId
     if (scopedId && !(await getDb().projects.get(scopedId)))
       throw new Error("Bot installation scope does not exist on this host")
-    const config = validateConfig(entry.configSchema, input.config ?? {})
+    // The config is checked where the local path checks it, in
+    // `installBotFromCatalogLocally`: a missing required setting installs as
+    // `needs_setup` on either side, a wrong value is refused on either side.
     for (const [slotId, value] of Object.entries(input.credentialBindings ?? {}))
       await validateBotCredentialBinding(
         entry.slots.find((slot) => slot.id === slotId),
@@ -219,7 +207,7 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
         entry,
         installOperationFingerprint,
         scope: input.scope,
-        config,
+        ...(input.config ? { config: input.config } : {}),
         credentialBindings: input.credentialBindings,
         ...(input.triggerInputSlots ? { triggerInputSlots: input.triggerInputSlots } : {}),
         ...(input.paused !== undefined ? { paused: input.paused } : {}),
@@ -264,9 +252,8 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
   const resolved = await resolveInstalledBot(installation)
   if (!resolved) throw new Error("Bot installation definition is missing")
   if (input.operation === "config") {
-    const config = validateConfig(resolved.definition.configSchema, input.config)
     return projectBotInstallationRow(
-      await updateBotConfigLocally(input.installationId, config, input.policyGrant)
+      await updateBotConfigLocally(input.installationId, input.config, input.policyGrant)
     )
   }
   if (input.operation === "bind") {

@@ -33,7 +33,13 @@ import {
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
-import { completeBotRunStep, getBotRunStep, putBotRunResult } from "@/lib/db/bot-run-steps"
+import {
+  addBotRunExecutionMs,
+  completeBotRunStep,
+  getBotRunStep,
+  putBotRunResult,
+  readBotRunExecutionMs,
+} from "@/lib/db/bot-run-steps"
 import { BOT_RUN_POLICY_STEP } from "@/lib/bot/policy/run-authority"
 import { NEEDS_APPROVAL_STATUS } from "@/lib/ai/agent/execution/permissions/unattended-responder"
 import { expireRunInterruptFromSource } from "@/lib/execution/run-control"
@@ -414,6 +420,34 @@ async function persistTimedTriggerState(
 /** The host step a poll or derivedState slot's trigger state is pinned under. */
 const BOT_RUN_TRIGGER_STATE_STEP = "__host:trigger-state"
 
+/** The host step a run's definition version is pinned under. */
+const BOT_RUN_DEFINITION_STEP = "__host:definition"
+
+/**
+ * The definition version this run started on.
+ *
+ * A run's memoized steps mean something only to the code that wrote them. A
+ * plugin update between a park (or a retry) and the next entry would hand the
+ * new handler the old one's checkpoints under the same names, so the caller
+ * stops a run whose pinned version is no longer the one that exists. New runs
+ * follow the version that exists, which is what `version_drift` promises.
+ * Pinned on the run's first entry, beside the policy checkpoint.
+ */
+async function pinnedDefinitionVersion(
+  runId: string,
+  version: string,
+  ts: number
+): Promise<string> {
+  if ((await getBotRunStep(runId, BOT_RUN_DEFINITION_STEP))?.status !== "completed") {
+    await completeBotRunStep(runId, BOT_RUN_DEFINITION_STEP, { version }, ts)
+  }
+  // Re-read rather than trusting the write: the step keeps the first value.
+  const pinned = (await getBotRunStep(runId, BOT_RUN_DEFINITION_STEP))?.output as {
+    version: string
+  }
+  return pinned.version
+}
+
 /**
  * The event a poll or derivedState slot runs against: its envelope plus the
  * trigger state (`cursor`, `previousEdgeValue`, `lastFiredAt`) it is pinned to.
@@ -546,6 +580,7 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     }
   }
 
+  const startedOnVersion = await pinnedDefinitionVersion(runId, resolved.definition.version, ts)
   const checkpoint = await getBotRunStep(runId, BOT_RUN_POLICY_STEP)
   if (
     checkpoint?.status === "completed" &&
@@ -595,9 +630,16 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
   const abort = () => controller.abort()
   input.signal?.addEventListener("abort", abort, { once: true })
   if (input.signal?.aborted) controller.abort()
-  const executionTimer = resolved.policy.maxRunDurationMs
-    ? setTimeout(abort, resolved.policy.maxRunDurationMs)
-    : undefined
+  // The budget is execution time summed over every attempt and resumed
+  // segment. A parked wait does not spend it, and a run that parks does not
+  // start a fresh budget on each entry. Measured on the clock `setTimeout`
+  // runs on, not the injectable `now`.
+  const budgetMs = resolved.policy.maxRunDurationMs
+  const segmentStartedAt = Date.now()
+  const remainingMs = budgetMs ? budgetMs - (await readBotRunExecutionMs(runId)) : undefined
+  if (remainingMs !== undefined && remainingMs <= 0) controller.abort()
+  const executionTimer =
+    remainingMs !== undefined && remainingMs > 0 ? setTimeout(abort, remainingMs) : undefined
 
   const config = resolveBotConfig({
     installation: resolved.installation.config,
@@ -656,6 +698,14 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
   try {
     if (controller.signal.aborted || !(await stillOwnsDelivery()))
       throw new BotRunCancelledError(runId)
+    if (startedOnVersion !== resolved.definition.version) {
+      // Stopped, not retried: every later attempt meets the same mismatch.
+      // A replay mints a fresh run, which starts on the version that exists.
+      throw new BotExecutorUnavailableError(
+        resolved.definition.executor,
+        `This run started on version ${startedOnVersion} and the Bot is now version ${resolved.definition.version}; replay it to run on the new version`
+      )
+    }
     const executionComposition = resolveBotExecutionComposition(
       composition.selection,
       resolved.policy
@@ -905,5 +955,8 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     clearPendingPark(runId)
     if (executionTimer) clearTimeout(executionTimer)
     input.signal?.removeEventListener("abort", abort)
+    if (budgetMs) {
+      await addBotRunExecutionMs(runId, Date.now() - segmentStartedAt).catch(() => undefined)
+    }
   }
 }

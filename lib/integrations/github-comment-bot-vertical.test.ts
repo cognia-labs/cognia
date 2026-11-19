@@ -14,6 +14,7 @@
  */
 
 import "fake-indexeddb/auto"
+import { botSetupRequirements } from "@/lib/bot/installed-bot"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createIntegrationAccount } from "@/lib/db/integrations"
 import { installBot, updateBotInstallation } from "@/lib/db/bot-installations"
@@ -319,7 +320,10 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
       publicationMode: options.publicationMode ?? "automatic",
     },
     credentialBindings: { github: { integrationAccountId: account.id } },
-    requiredCredentials: definition.requires?.credentials,
+    requirements: botSetupRequirements(
+      definition.requires?.credentials ?? [],
+      definition.configSchema
+    ),
     triggerOverrides: { github: true },
     ...(options.grant === false
       ? {}

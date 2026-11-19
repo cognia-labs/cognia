@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { BotConsoleRow } from "@/lib/bot/console/bot-rows"
+import { missingRequiredBotConfig } from "@/lib/bot/config/resolve-effective"
 
 import { BotHero } from "./bot-hero"
 import { BotConfigSection } from "./sections/config-section"
@@ -150,6 +151,8 @@ export function BotDetail({
       </Empty>
     )
   }
+
+  const missingConfig = missingRequiredBotConfig(row.configSchema, row.config)
 
   return (
     <div className="@container/console-pane flex h-full min-h-0 flex-col" data-testid="bot-detail">
@@ -251,6 +254,13 @@ export function BotDetail({
             title={t("config.title")}
             icon={SlidersHorizontalIcon}
             description={t("config.description")}
+            // The same check the status runs: an install that sent no config
+            // reads `needs_setup` until these are filled in.
+            meta={
+              missingConfig.length > 0
+                ? t("config.missing", { count: missingConfig.length })
+                : undefined
+            }
           >
             <BotConfigSection row={row} />
           </ConsoleSection>

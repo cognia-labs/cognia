@@ -152,6 +152,51 @@ export async function putBotRunResult(
   await writeCompletedStep(runId, BOT_RUN_RESULT_STEP, output, now, true)
 }
 
+/** The host step a run's spent execution time accumulates under. */
+export const BOT_RUN_EXECUTION_TIME_STEP = "__host:execution-time"
+
+/**
+ * Execution time this run has spent, in ms, over every attempt and resumed
+ * segment. What `maxRunDurationMs` is measured against; a parked wait is not
+ * in it.
+ */
+export async function readBotRunExecutionMs(runId: string): Promise<number> {
+  const step = await getBotRunStep(runId, BOT_RUN_EXECUTION_TIME_STEP)
+  const usedMs = (step?.output as { usedMs?: unknown } | undefined)?.usedMs
+  return typeof usedMs === "number" ? usedMs : 0
+}
+
+/**
+ * Add one segment's execution time and return the run's new total.
+ *
+ * Read-modify-write in one transaction, so two segments that end close
+ * together (a lease recovery and the attempt it replaced) both count.
+ */
+export async function addBotRunExecutionMs(
+  runId: string,
+  ms: number,
+  now = Date.now()
+): Promise<number> {
+  const db = getDb()
+  const id = botRunStepId(runId, BOT_RUN_EXECUTION_TIME_STEP)
+  return db.transaction("rw", db.botRunSteps, async () => {
+    const existing = await db.botRunSteps.get(id)
+    const previous = (existing?.output as { usedMs?: unknown } | undefined)?.usedMs
+    const usedMs = (typeof previous === "number" ? previous : 0) + Math.max(0, ms)
+    await db.botRunSteps.put({
+      id,
+      runId,
+      name: BOT_RUN_EXECUTION_TIME_STEP,
+      status: "completed",
+      output: { usedMs },
+      attempt: (existing?.attempt ?? 0) + 1,
+      startedAt: existing?.startedAt ?? now,
+      updatedAt: now,
+    })
+    return usedMs
+  })
+}
+
 export async function getBotRunStep(
   runId: string,
   name: string

@@ -43,8 +43,8 @@ export interface InstallBotInput {
   policyGrant?: PluginBotPolicyV1
   /** `disabled` installs it switched off. Default: enabled, if its slots allow. */
   requestedStatus?: "enabled" | "disabled"
-  /** Slots the definition requires, so the initial status is honest. */
-  requiredCredentials?: readonly PluginBotCredentialSlot[]
+  /** What the definition requires, so the initial status is honest. */
+  requirements?: BotSetupRequirements
   now?: number
 }
 
@@ -71,26 +71,49 @@ export function unboundCredentialSlots(
 }
 
 /**
+ * What an installation must have before it may run.
+ *
+ * The credential slots and the required settings travel together so no write
+ * can re-derive the status from one and forget the other: binding the last
+ * credential must not switch on a Bot whose required settings are still empty.
+ * Build it with `botSetupRequirements` (`lib/bot/installed-bot.ts`).
+ */
+export interface BotSetupRequirements {
+  /** The definition's credential slots. */
+  credentials: readonly PluginBotCredentialSlot[]
+  /**
+   * The required settings a config leaves unset, after the definition's
+   * defaults. A function because the schema rules live with the Bot module,
+   * which this table sits below, and because the status is derived inside the
+   * write's transaction, from the config of the row being written.
+   */
+  missingConfig: (config: Record<string, unknown>) => readonly string[]
+}
+
+/**
  * The status an installation should carry.
  *
  * `needs_setup` outranks a requested `enabled`: an installation missing a
- * credential cannot run, and saying "enabled" would put the failure at the
- * first external call instead of on the row the user is looking at.
+ * credential or a required setting cannot run, and saying "enabled" would put
+ * the failure at the first run instead of on the row the user is looking at.
  * A deliberate `disabled` outranks everything, because turning something off
  * is an answer, not a gap.
  */
 export function resolveInstallationStatus(input: {
   requested: BotInstallationStatus
-  requiredCredentials?: readonly PluginBotCredentialSlot[]
+  requirements?: BotSetupRequirements
   credentialBindings?: Record<string, BotCredentialBinding>
+  config?: Record<string, unknown>
 }): BotInstallationStatus {
   if (input.requested === "disabled") return "disabled"
-  // Runtime readiness may fail independently of credential slots (for example
-  // an old host without the isolated agent launcher). Preserve that diagnosis
-  // until the caller explicitly re-evaluates setup or enables the installation.
-  if (input.requested === "needs_setup" && input.requiredCredentials === undefined)
-    return "needs_setup"
-  return unboundCredentialSlots(input.requiredCredentials, input.credentialBindings).length > 0
+  // Runtime readiness may fail independently of the setup requirements (for
+  // example an old host without the isolated agent launcher). Preserve that
+  // diagnosis until the caller explicitly re-evaluates setup or enables it.
+  if (input.requested === "needs_setup" && input.requirements === undefined) return "needs_setup"
+  if (!input.requirements) return "enabled"
+  const { credentials, missingConfig } = input.requirements
+  return unboundCredentialSlots(credentials, input.credentialBindings).length > 0 ||
+    missingConfig(input.config ?? {}).length > 0
     ? "needs_setup"
     : "enabled"
 }
@@ -135,8 +158,9 @@ export function buildBotInstallationRow(input: InstallBotInput): BotInstallation
     scope: input.scope,
     status: resolveInstallationStatus({
       requested: input.requestedStatus ?? "enabled",
-      requiredCredentials: input.requiredCredentials,
+      requirements: input.requirements,
       credentialBindings,
+      config: input.config ?? {},
     }),
     config: input.config ?? {},
     credentialBindings,
@@ -184,8 +208,8 @@ export type BotInstallationPatch = Partial<
     | "outboundRecipients"
   >
 > & {
-  /** Re-evaluated against the merged row when bindings or status change. */
-  requiredCredentials?: readonly PluginBotCredentialSlot[]
+  /** Re-evaluated against the merged row when bindings, config or status change. */
+  requirements?: BotSetupRequirements
   now?: number
 }
 
@@ -245,8 +269,7 @@ export async function updateBotInstallation(
     // here would not reach the host, and enabling it would run the Bot twice.
     assertRunsHere("bot-installation", existing.owner)
 
-    const { now, requiredCredentials, ...fields } =
-      typeof patch === "function" ? patch(existing) : patch
+    const { now, requirements, ...fields } = typeof patch === "function" ? patch(existing) : patch
     // The type keeps the recipient list out of a patch; a caller that casts
     // past it is not a person either (ADR-0239).
     delete (fields as { outboundRecipients?: unknown }).outboundRecipients
@@ -265,11 +288,12 @@ export async function updateBotInstallation(
       if (fields.scope.workspaceId) next.workspaceId = fields.scope.workspaceId
       if (fields.scope.projectId) next.projectId = fields.scope.projectId
     }
-    if (requiredCredentials || fields.credentialBindings || fields.status) {
+    if (requirements || fields.credentialBindings || fields.config || fields.status) {
       next.status = resolveInstallationStatus({
         requested: next.status,
-        requiredCredentials,
+        requirements,
         credentialBindings: next.credentialBindings,
+        config: next.config,
       })
     }
     return next
@@ -354,14 +378,14 @@ export async function setBotInstallationPaused(
  * Moving it to a paired host fences the local row: `disabled`, live runs
  * cancelled, timed-trigger schedules removed. The host runs it now. Clearing
  * the owner or pinning it here (take-back, manual pin) restores
- * `options.status`, re-checked against the credential slots like any enable.
+ * `options.status`, re-checked against the setup requirements like any enable.
  */
 export async function setBotInstallationOwner(
   id: string,
   owner: ItemOwner | undefined,
   options: {
     status?: BotInstallationStatus
-    requiredCredentials?: readonly PluginBotCredentialSlot[]
+    requirements?: BotSetupRequirements
     now?: number
   } = {}
 ): Promise<BotInstallationRow | undefined> {
@@ -374,8 +398,9 @@ export async function setBotInstallationOwner(
       ? "disabled"
       : resolveInstallationStatus({
           requested: options.status ?? existing.status,
-          requiredCredentials: options.requiredCredentials,
+          requirements: options.requirements,
           credentialBindings: existing.credentialBindings,
+          config: existing.config,
         })
     return derived
   })

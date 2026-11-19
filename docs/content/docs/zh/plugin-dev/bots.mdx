@@ -9,7 +9,7 @@ Bot 将已有执行器与触发器绑定，并为该绑定设置策略上限。�
 
 ## Manifest
 
-`manifest.bots[]` 中每条都要求 `id`、`name`、`version`、`executor`，以及至少一个 `triggers[]` 条目。插件 Bot id 由宿主命名空间化为 `<pluginId>:<botId>`；安装会固定这个带命名空间的 `definitionId` 和 `pinnedVersion`。
+`manifest.bots[]` 中每条都要求 `id`、`name`、`version`、`executor`，以及至少一个 `triggers[]` 条目。插件 Bot id 由宿主命名空间化为 `<pluginId>:<botId>`；安装会固定这个带命名空间的 `definitionId` 和 `pinnedVersion`。插件发布新 `version` 后，已有安装会继续以新版本运行，控制台会标出版本漂移。更新落地时仍在等待或重试的运行会以可重放的失败结束，因为它已完成的 step 是旧代码写下的。
 
 ### 执行器
 
@@ -69,7 +69,7 @@ Bot 将已有执行器与触发器绑定，并为该绑定设置策略上限。�
 
 ### `requires` 与 `policy`
 
-`requires.credentials[]` 声明凭据槽位（`{ id, label, optional?, integration?, strategy? }`）；未绑定的必需槽位会把安装停在 `needs_setup`。`policy` 是定义层的上限——`maxAuthority`、`maxAutonomy`、`requireApprovalForWrites`——与组织、插件、安装、单次请求各层取交集（绝不放宽）。
+`requires.credentials[]` 声明凭据槽位（`{ id, label, optional?, integration?, strategy? }`）。未绑定的必需槽位会把安装停在 `needs_setup`；`configSchema` 中 `required` 的设置，如果安装没有提供、schema 也没有默认值，同样如此。因此没有提交配置的安装也能成功，之后等用户在设置表单里补齐；schema 拒绝的值会在安装或保存时被拒。`policy` 是定义层的上限——`maxAuthority`、`maxAutonomy`、`requireApprovalForWrites`、`maxRunDurationMs` 等——与组织、插件、安装、单次请求各层取交集（绝不放宽）。`maxRunDurationMs` 计的是执行时间，累加每次尝试以及每段等待后恢复的执行；挂起等待不消耗它。
 
 ### `lifecycle`
 

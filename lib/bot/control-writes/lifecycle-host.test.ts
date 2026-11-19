@@ -1,13 +1,14 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
-import { registerBot, __resetBotsForTesting } from "@/lib/plugin/registries/bot-registry"
+import { getBot, registerBot, __resetBotsForTesting } from "@/lib/plugin/registries/bot-registry"
 import {
   registerIntegrationDefinitions,
   __resetIntegrationRegistryForTesting,
 } from "@/lib/integrations/registry"
 import { __setBotWriteRouteDepsForTests } from "./route"
 import { mutateBotInstallationOnHost, readBotConsoleOnHost } from "./lifecycle-host"
+import { defaultsFromConfigSchema, resolveBotConfig } from "@/lib/bot/config/resolve-effective"
 
 jest.mock("@/lib/bot/runtime/run", () => {
   const actual = jest.requireActual("@/lib/bot/runtime/run")
@@ -177,9 +178,16 @@ it("installs the host catalog default once and remains needs_setup without crede
   })
   expect(await mutateBotInstallationOnHost(input)).toEqual(first)
   expect(await getDb().botInstallations.count()).toBe(1)
-  expect((await getDb().botInstallations.get(first.id))?.config.repository).toBe(
-    "NJUPT-SAST/sast-approval-next"
-  )
+  // Stored as sent, as a local install stores it (B13). The default stays the
+  // definition's layer, which a run (and the form) resolves on top.
+  const stored = await getDb().botInstallations.get(first.id)
+  expect(stored?.config).toEqual({})
+  expect(
+    resolveBotConfig({
+      installation: stored?.config,
+      definitionDefaults: defaultsFromConfigSchema(getBot("bot:monitor")?.definition.configSchema),
+    }).values.repository
+  ).toBe("NJUPT-SAST/sast-approval-next")
   await expect(
     mutateBotInstallationOnHost({ ...input, config: { repository: "other/repo" } })
   ).rejects.toThrow("another definition")
@@ -238,7 +246,7 @@ it("returns host form values but never auth session handles or runtime functions
   expect(result).toMatchObject({
     rows: [
       {
-        config: { repository: "NJUPT-SAST/sast-approval-next" },
+        config: {},
         credentials: [{ integrationAccountId: "account" }],
       },
     ],
@@ -634,5 +642,49 @@ it("sets and clears a declared input slot through the host route", async () => {
   })
   expect(await mutateBotInstallationOnHost({ ...mapping, slotId: null })).toMatchObject({
     triggerInputSlots: {},
+  })
+})
+
+describe("a required setting on the Host leg (B13)", () => {
+  beforeEach(() => {
+    registerBot(
+      "devin",
+      {
+        id: "bot:devin",
+        handler: async () => ({}),
+        definition: {
+          id: "devin",
+          name: "Devin",
+          version: "1.0.0",
+          executor: "handler",
+          triggers: [{ id: "manual", kind: "manual" }],
+          configSchema: {
+            type: "object",
+            properties: { repository: { type: "string" } },
+            required: ["repository"],
+          },
+        },
+      },
+      { pluginId: "bot" }
+    )
+  })
+  const devin = {
+    ...input,
+    operationId: "123e4567-e89b-42d3-a456-426614174042",
+    definitionId: "bot:devin",
+  }
+
+  it("installs as needs_setup when a paired panel sends no config, as a local install does", async () => {
+    await expect(mutateBotInstallationOnHost(devin)).resolves.toMatchObject({
+      status: "needs_setup",
+      config: {},
+    })
+  })
+
+  it("still refuses a value the schema rejects", async () => {
+    await expect(
+      mutateBotInstallationOnHost({ ...devin, config: { repository: 7 } })
+    ).rejects.toThrow(/Invalid Bot configuration/)
+    expect(await getDb().botInstallations.count()).toBe(0)
   })
 })

@@ -6335,6 +6335,7 @@
       "description": "该安装每次运行时传入的配置。",
       "emptyBody": "这个 Bot 没有设置表单。它需要的一切都来自触发器和凭据。",
       "emptyTitle": "无需配置",
+      "missing": "{count, plural, other {# 项必填设置未填写}}",
       "orphanBody": "定义已不存在，无法渲染表单。该安装此前存下的内容仍留在记录里。",
       "orphanTitle": "没有可显示的设置",
       "permissionProfileHint": "此 Bot 在无人值守运行中无需询问即可执行的操作。需要你确认的请求会暂停运行并向你的手机发送审批；30 分钟内无人回应则拒绝。",
@@ -6439,7 +6440,7 @@
       "status": {
         "disabled": "Bot 已停用",
         "enabled": "Bot 已启用",
-        "needs_setup": "仍缺少凭据，因此保持关闭"
+        "needs_setup": "仍缺少凭据或必填设置，因此保持关闭"
       },
       "unavailable": "无法从这里进行该更改",
       "unbound": "凭据已解除绑定",

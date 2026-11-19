@@ -1,4 +1,8 @@
-import { defaultsFromConfigSchema, resolveBotConfig } from "./resolve-effective"
+import {
+  defaultsFromConfigSchema,
+  missingRequiredBotConfig,
+  resolveBotConfig,
+} from "./resolve-effective"
 
 describe("defaultsFromConfigSchema", () => {
   it("is empty without a schema", () => {
@@ -31,6 +35,31 @@ describe("defaultsFromConfigSchema", () => {
         properties: { nested: { type: "object", properties: { a: { default: 1 } } } },
       })
     ).toEqual({})
+  })
+})
+
+describe("missingRequiredBotConfig", () => {
+  const schema = {
+    type: "object",
+    required: ["repo", "branch", "label"],
+    properties: {
+      repo: { type: "string" },
+      branch: { type: "string", default: "main" },
+      label: { type: ["string", "null"] },
+    },
+  }
+
+  it("names the required keys nothing supplies (B13)", () => {
+    expect(missingRequiredBotConfig(schema, {})).toEqual(["repo", "label"])
+  })
+
+  it("counts a schema default and an explicit null as supplied", () => {
+    expect(missingRequiredBotConfig(schema, { repo: "acme/app", label: null })).toEqual([])
+  })
+
+  it("asks for nothing when the schema requires nothing", () => {
+    expect(missingRequiredBotConfig(undefined, {})).toEqual([])
+    expect(missingRequiredBotConfig({ type: "object", properties: {} }, {})).toEqual([])
   })
 })
 
