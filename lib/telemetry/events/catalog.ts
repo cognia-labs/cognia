@@ -74,13 +74,16 @@ export interface TelemetryEventCatalog {
     /** True when the content index reported more history than it searched. */
     truncated: boolean
   }
-  /** A row was dragged to a new position inside a section. */
+  /**
+   * A row was moved to a new position inside a section: dragged by pointer or
+   * keyboard, or stepped one place from its menu (Move up / Move down).
+   */
   "chat.list.reordered": {
     section: ConversationListSectionKind
     from: number
     to: number
     size: number
-    via: "pointer" | "keyboard"
+    via: "pointer" | "keyboard" | "menu"
   }
   /** A per-row or bulk action from the row menu / selection toolbar. */
   "chat.list.row.action": {

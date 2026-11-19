@@ -79,7 +79,11 @@ jest.mock("@/hooks/chat/use-session-model-lanes", () => ({
   recordedRuntimeRef: () => undefined,
 }))
 
-let mockContentResults: { sessionId: string }[] = []
+let mockContentResults: {
+  sessionId: string
+  messageId?: string
+  snippet?: { text: string; positions: number[] }
+}[] = []
 const mockHistorySearch = jest.fn()
 jest.mock("@/hooks/chat/use-chat-history-search", () => ({
   useChatHistorySearch: (query: string, options: unknown) => {
@@ -267,6 +271,20 @@ describe("useConversationManager", () => {
     )
     expect(result.current.rows.map((row) => row.id)).toEqual(["alpha", "gamma"])
     expect([...result.current.model.contentOnlyIds]).toEqual(["gamma"])
+  })
+
+  it("opens a conversation found by its messages at the message that matched (audit item 6)", () => {
+    mockContentResults = [
+      { sessionId: "gamma", messageId: "m-7", snippet: { text: "…alpine route", positions: [1] } },
+    ]
+    useConversationManagerStore.getState().setSearchContent(true)
+    const { result } = render("alp")
+    expect(result.current.contentHits.get("gamma")?.snippet.text).toBe("…alpine route")
+    act(() => result.current.openConversation("gamma"))
+    expect(mockPush).toHaveBeenLastCalledWith(`/${buildSessionHref("gamma", "m-7")}`)
+    // A title hit opens at the conversation, as before.
+    act(() => result.current.openConversation("alpha"))
+    expect(mockPush).toHaveBeenLastCalledWith(`/${buildSessionHref("alpha")}`)
   })
 
   it("says when a content query is too short to search", () => {

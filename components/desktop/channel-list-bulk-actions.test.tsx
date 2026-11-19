@@ -430,3 +430,106 @@ it("routes each verb to the rows it applies to in a mixed selection", async () =
   )
   expect(screen.getByTestId("channel-list-bulk-toolbar")).toHaveAttribute("data-layout", "bar")
 })
+
+describe("moving a selection to another workspace (sidebar audit item 10)", () => {
+  const targets = [
+    { id: "p1", name: "One" },
+    { id: "p2", name: "Two" },
+  ]
+
+  it("moves the active rows, named, and lets the selection go once they moved", async () => {
+    const user = userEvent.setup()
+    const onMoveToWorkspace = jest.fn(async () => true)
+    const onClear = jest.fn()
+    const live = { ...session("a", "Plan"), projectId: "p1" } as ChatSession
+    const archived = { ...session("b", "Old"), projectId: "p1", archivedAt: 3 } as ChatSession
+    render(
+      <ChannelListBulkActions
+        visible
+        selected={new Set(["a"])}
+        orderedIds={["a", "b"]}
+        sessions={[live, archived]}
+        archived={false}
+        workspaceTargets={targets}
+        onMoveToWorkspace={onMoveToWorkspace}
+        onClear={onClear}
+      />
+    )
+    await user.click(screen.getByTestId("channel-list-bulk-move-to-workspace"))
+    // The workspace the whole selection is in is listed, checked and inert.
+    expect(screen.getByTestId("channel-list-bulk-workspace-p1")).toHaveAttribute("data-disabled")
+    await user.click(screen.getByTestId("channel-list-bulk-workspace-p2"))
+    expect(onMoveToWorkspace).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: "a", title: "Plan" })],
+      "p2"
+    )
+    expect(onClear).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps the selection when some rows did not move", async () => {
+    const user = userEvent.setup()
+    const onClear = jest.fn()
+    render(
+      <ChannelListBulkActions
+        visible
+        selected={new Set(["a"])}
+        orderedIds={["a"]}
+        sessions={[{ ...session("a", "Plan"), projectId: "p1" } as ChatSession]}
+        archived={false}
+        workspaceTargets={targets}
+        onMoveToWorkspace={async () => false}
+        onClear={onClear}
+      />
+    )
+    await user.click(screen.getByTestId("channel-list-bulk-move-to-workspace"))
+    await user.click(screen.getByTestId("channel-list-bulk-workspace-p2"))
+    expect(onClear).not.toHaveBeenCalled()
+  })
+
+  it("is not offered for archived rows, nor without anywhere else to go", () => {
+    const { rerender } = render(
+      <ChannelListBulkActions
+        visible
+        selected={new Set(["b"])}
+        orderedIds={["b"]}
+        sessions={[{ ...session("b", "Old"), projectId: "p1", archivedAt: 3 } as ChatSession]}
+        archived
+        workspaceTargets={targets}
+        onMoveToWorkspace={jest.fn()}
+        onClear={jest.fn()}
+      />
+    )
+    expect(screen.queryByTestId("channel-list-bulk-move-to-workspace")).toBeNull()
+    rerender(
+      <ChannelListBulkActions
+        visible
+        selected={new Set(["a"])}
+        orderedIds={["a"]}
+        sessions={[{ ...session("a", "Plan"), projectId: "p1" } as ChatSession]}
+        archived={false}
+        workspaceTargets={[targets[0]!]}
+        onMoveToWorkspace={jest.fn()}
+        onClear={jest.fn()}
+      />
+    )
+    expect(screen.queryByTestId("channel-list-bulk-move-to-workspace")).toBeNull()
+  })
+})
+
+it("says Select all reaches only the rows shown, where the list folds them (audit item 15)", () => {
+  render(
+    <ChannelListBulkActions
+      visible
+      selected={new Set(["a"])}
+      orderedIds={["a", "b"]}
+      sessions={[session("a", "A"), session("b", "B")]}
+      archived={false}
+      onSelectAll={jest.fn()}
+      selectAllCovers="shown"
+      onClear={jest.fn()}
+    />
+  )
+  const button = screen.getByTestId("channel-list-bulk-select-all")
+  expect(button).toHaveTextContent("selectAllShown")
+  expect(button).toHaveAttribute("title", "selectAllShownHint")
+})

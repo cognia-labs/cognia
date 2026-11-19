@@ -36,6 +36,14 @@ export interface RowDecorationSources {
   workspaceNameById: ReadonlyMap<string, string>
   /** Which metadata fields the row shows, in order. */
   metadataFields: readonly ConversationSidebarMetadata[]
+  /**
+   * The workspace the list browses (`null` = every workspace is on screen as
+   * its own section, or there is only one). A row of another workspace only
+   * reaches such a list through a search across workspaces, and opening it
+   * switches the workspace — so it names its workspace whatever
+   * `metadataFields` says, before the click rather than after.
+   */
+  browseWorkspaceId?: string | null
   /** Settings → Conversation → "custom icons". Off = no avatars at all. */
   showCustomIcons: boolean
   /**
@@ -111,8 +119,16 @@ export function createRowDecorations(sources: RowDecorationSources): RowDecorati
     return accent
   }
 
+  const isForeign = (session: ChatSession): boolean =>
+    Boolean(
+      sources.browseWorkspaceId &&
+      session.projectId &&
+      session.projectId !== sources.browseWorkspaceId
+    )
+
   const computeMetadata = (session: ChatSession): SessionRowMetadataItem[] => {
-    if (sources.metadataFields.length === 0) return EMPTY_METADATA
+    const foreign = isForeign(session)
+    if (sources.metadataFields.length === 0 && !foreign) return EMPTY_METADATA
     const character = session.characterId
       ? sources.characterById.get(session.characterId)
       : undefined
@@ -140,6 +156,11 @@ export function createRowDecorations(sources: RowDecorationSources): RowDecorati
       if (sources.merged && kind === "agent" && session.kind === "team") continue
       const value = valueOf(kind)
       if (value) items.push({ kind, value })
+    }
+    if (foreign && !sources.metadataFields.includes("workspace")) {
+      const value = valueOf("workspace")
+      // First: it is the fact that decides what opening the row does.
+      if (value) items.unshift({ kind: "workspace", value })
     }
     if (items.length === 0) return EMPTY_METADATA
     // Intern by content: two rows (or two reads of one row) that say the same

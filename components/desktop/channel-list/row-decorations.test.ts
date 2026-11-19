@@ -97,6 +97,41 @@ describe("createRowDecorations", () => {
       const workspaceOnly = createRowDecorations(sources({ metadataFields: ["workspace"] }))
       expect(workspaceOnly.metadataFor(session("a"))).toBe(none.metadataFor(session("a")))
     })
+    it("names another workspace on a row from it, whatever the fields say", () => {
+      const { metadataFor } = createRowDecorations(
+        sources({
+          metadataFields: ["agent"],
+          workspaceNameById: new Map([
+            ["w1", "Alpha"],
+            ["w2", "Beta"],
+          ]),
+          browseWorkspaceId: "w1",
+        })
+      )
+      // A search across workspaces brought it here; opening it switches.
+      expect(metadataFor(session("far", { characterId: "c1", projectId: "w2" }))).toEqual([
+        { kind: "workspace", value: "Beta" },
+        { kind: "agent", value: "Alice" },
+      ])
+      // The browsed workspace's own rows, and the shared ones, say nothing extra.
+      expect(metadataFor(session("near", { characterId: "c1", projectId: "w1" }))).toEqual([
+        { kind: "agent", value: "Alice" },
+      ])
+      expect(metadataFor(session("shared", { characterId: "c1" }))).toEqual([
+        { kind: "agent", value: "Alice" },
+      ])
+      // With no field configured at all, the foreign row still names it.
+      const bare = createRowDecorations(
+        sources({
+          metadataFields: [],
+          workspaceNameById: new Map([["w2", "Beta"]]),
+          browseWorkspaceId: "w1",
+        })
+      )
+      expect(bare.metadataFor(session("far", { projectId: "w2" }))).toEqual([
+        { kind: "workspace", value: "Beta" },
+      ])
+    })
   })
 
   describe("iconFor", () => {

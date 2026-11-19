@@ -79,6 +79,13 @@ export interface UseConversationListModelParams {
   contentMatchIds?: ReadonlySet<string>
   /** Let a query reach past the archive split (search only, never browsing). */
   searchIncludesArchived?: boolean
+  /**
+   * The workspace the list browses when `sessions` spans every workspace for a
+   * search's sake. See `BuildSectionsOptions.browseWorkspaceId`.
+   */
+  browseWorkspaceId?: string | null
+  /** Let a query reach every workspace (search only, never browsing). */
+  searchIncludesAllWorkspaces?: boolean
   /** Order inside each section. Defaults to `"recent"` (the model's default). */
   sortBy?: ConversationSortBy
   /** Quick filters AND-ed on top of the archive view. Defaults to unfiltered. */
@@ -135,6 +142,8 @@ export function useConversationListModel({
   dateRunsInGroups = false,
   contentMatchIds,
   searchIncludesArchived = false,
+  browseWorkspaceId = null,
+  searchIncludesAllWorkspaces = false,
   sortBy = "recent",
   filters,
   unreadIds,
@@ -163,6 +172,8 @@ export function useConversationListModel({
         dateRunsInGroups,
         contentMatchIds,
         searchIncludesArchived,
+        browseWorkspaceId,
+        searchIncludesAllWorkspaces,
         sortBy,
         filters,
         unreadIds,
@@ -187,6 +198,8 @@ export function useConversationListModel({
       dateRunsInGroups,
       contentMatchIds,
       searchIncludesArchived,
+      browseWorkspaceId,
+      searchIncludesAllWorkspaces,
       sortBy,
       filters,
       unreadIds,

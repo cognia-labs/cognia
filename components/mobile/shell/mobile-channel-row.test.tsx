@@ -420,6 +420,32 @@ describe("resolveMobileRowMetadata", () => {
     ).toEqual([{ kind: "workspace", value: "Alpha" }])
   })
 
+  it("names another workspace on a row a search across workspaces brought in", () => {
+    expect(
+      resolveMobileRowMetadata({
+        session: { ...session, projectId: "w2" },
+        character,
+        workspaceName: "Beta",
+        fields: ["agent"],
+        groupAxis: null,
+        foreignWorkspace: true,
+      })
+    ).toEqual([
+      { kind: "workspace", value: "Beta" },
+      { kind: "agent", value: "Octopus" },
+    ])
+    // A row of the browsed workspace keeps the configured fields only.
+    expect(
+      resolveMobileRowMetadata({
+        session,
+        character,
+        workspaceName: "Alpha",
+        fields: ["agent"],
+        groupAxis: null,
+      })
+    ).toEqual([{ kind: "agent", value: "Octopus" }])
+  })
+
   it("names a dated catalog model by its display name, not its raw id", () => {
     const [item] = resolveMobileRowMetadata({
       session: { ...baseSession, model: "claude-haiku-4-5-20251001" },

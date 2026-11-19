@@ -9586,6 +9586,13 @@
           "overrides": "{count, plural, one {# override} other {# overrides}}"
         },
         "workspaceMove": {
+          "bulk": {
+            "more": "{count, plural, one {and # more} other {and # more}}",
+            "rowFailed": "{title}: could not move it ({error})",
+            "rowRefused": "{title}: {reason}",
+            "summary": "{moved, plural, one {# conversation moved} other {# conversations moved}}{sentToHost, plural, =0 {} other {, # sent to your Host}}{refused, plural, =0 {} other {, # not moved}}",
+            "untitled": "Untitled conversation"
+          },
           "failed": "Could not move the conversation: {error}",
           "hint": "The conversation is re-bound to the new workspace. Anything it left in the old worktree stays on disk.",
           "label": "Workspace",
@@ -14555,12 +14562,15 @@
         "markUnread": "Mark as unread",
         "moveSuccess": "{count, plural, one {Moved # conversation} other {Moved # conversations}}",
         "moveToFolder": "Move to folder",
+        "moveToWorkspace": "Move to workspace",
         "newFolder": "New folder…",
         "pin": "Pin",
         "pinSuccess": "{count, plural, one {Pinned # conversation} other {Pinned # conversations}}",
         "removeFromFolder": "Remove from folder",
         "removeFromFolderSuccess": "{count, plural, one {Took # conversation out of its folder} other {Took # conversations out of their folders}}",
         "selectAll": "Select all ({count})",
+        "selectAllShown": "Select all shown ({count})",
+        "selectAllShownHint": "Selects the conversations on screen. Folded groups and rows behind “Show more” are left out: select a group from its menu, or open Manage conversations to select every match.",
         "selectHint": "None selected",
         "selectedCount": "{count, plural, one {# selected} other {# selected}}",
         "share": "Share",
@@ -14627,6 +14637,12 @@
       "newConversation": "New conversation",
       "newConversationIn": "New conversation in {name}",
       "newFolder": "New folder",
+      "newFolderDialog": {
+        "confirm": "Create and move",
+        "description": "{count, plural, one {The conversation moves into it once it is created.} other {# conversations move into it once it is created.}}",
+        "nameLabel": "Folder name",
+        "title": "Name the new folder"
+      },
       "newFolderName": "New folder",
       "openSessions": "Open sessions",
       "pinDropZone": "Drop here to pin",
@@ -15167,8 +15183,10 @@
       "lockedMenuNote": "Read-only while handed off to another device",
       "markRead": "Mark as read",
       "markUnread": "Mark as unread",
+      "moveDown": "Move down",
       "moveToFolder": "Move to folder",
       "moveToWorkspace": "Move to workspace",
+      "moveUp": "Move up",
       "newFolder": "New folder…",
       "openInCodexApp": "Open in Codex app",
       "openInCodexAppFailed": "Couldn't open this task in the Codex app.",

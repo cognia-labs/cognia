@@ -31,6 +31,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useNow, useTranslations } from "next-intl"
+import { useBulkMoveSessionWorkspace } from "@/hooks/workspace/use-move-session-workspace"
 import {
   ArchiveIcon,
   CheckSquareIcon,
@@ -74,7 +75,7 @@ import { useAppShortcut } from "@/hooks/shortcuts/use-app-shortcut"
 import { useSessionUsageSummaries } from "@/hooks/usage/use-session-usage-summaries"
 import { useRangeSelection } from "@/hooks/ui/use-range-selection"
 import { useDebouncedCallback } from "@/hooks/workflow/use-debounced-callback"
-import { paletteQueryForView } from "@/lib/chat/conversation-archive-view"
+import { everywhereSearchQuery } from "@/lib/chat/conversation-archive-view"
 import { CONTENT_SEARCH_MIN_QUERY } from "@/lib/chat/conversation-search-scope"
 import {
   CONVERSATION_MANAGER_PAGE_SIZE,
@@ -114,6 +115,8 @@ export function ConversationManager() {
   }
 
   const manager = useConversationManager({ query })
+  // "Move to workspace" for a selection (sidebar audit item 10).
+  const workspaceMove = useBulkMoveSessionWorkspace()
   const {
     tab,
     setTab,
@@ -142,6 +145,7 @@ export function ConversationManager() {
     exportSession,
     closeExport,
     openConversation,
+    contentHits,
     startConversation,
   } = manager
 
@@ -218,7 +222,10 @@ export function ConversationManager() {
 
   const clearSearch = () => updateField("")
   const searchEverywhere = () =>
-    requestCommandPalette({ query: paletteQueryForView(query, tab), scope: "chats" })
+    requestCommandPalette({
+      query: everywhereSearchQuery(query, { multipleWorkspaces: workspaceNameById.size > 1 }),
+      scope: "chats",
+    })
   // The tabs split the archive from the active list, so the other tab is the
   // way out of a search that found nothing in this one — offered only when it
   // holds anything to search.
@@ -406,6 +413,7 @@ export function ConversationManager() {
     runStatusById,
     unreadCountById,
     contentOnlyIds: model.contentOnlyIds,
+    contentHits,
     goals,
     now,
     rowActions,
@@ -418,7 +426,7 @@ export function ConversationManager() {
         <Skeleton key={index} className="h-11 w-full rounded-md" />
       ))}
     </div>
-  ) : model.total === 0 ? (
+  ) : model.viewEmpty ? (
     <ConversationListEmptyState
       archived={tab === "archived"}
       team={false}
@@ -564,6 +572,9 @@ export function ConversationManager() {
               unreadIds={manager.unreadIds}
               folders={folders}
               onMoveToFolder={rowActions.onBulkAssignToFolder}
+              workspaceTargets={workspaceMove.workspaceTargets}
+              onMoveToWorkspace={workspaceMove.offered ? workspaceMove.moveMany : undefined}
+              movingWorkspace={workspaceMove.busy}
               onSelectAll={selection.selectAll}
               onDeselectAll={clearSelection}
               onClear={compact ? stopSelecting : clearSelection}

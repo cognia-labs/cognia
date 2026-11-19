@@ -48,6 +48,7 @@ import { useOrderedTeams } from "@/hooks/shell/use-ordered-teams"
 import { inFlightIdSet } from "@/lib/chat/aggregate-run-state"
 import { branchWholeConversation } from "@/lib/chat/branch-whole-conversation"
 import { CONTENT_SEARCH_MIN_QUERY } from "@/lib/chat/conversation-search-scope"
+import { contentHitsBySession, NO_CONTENT_HITS } from "@/lib/chat/search/content-hits"
 import { buildSessionHref } from "@/lib/chat/message-permalink"
 import { resolveSessionModelIdentity, sessionModelLabels } from "@/lib/chat/session-model-identity"
 import {
@@ -205,6 +206,12 @@ export function useConversationManager({ query }: { query: string }) {
     if (!searchContent || trimmed.length < CONTENT_SEARCH_MIN_QUERY) return undefined
     return new Set(contentSearch.results.map((result) => result.sessionId))
   }, [searchContent, trimmed, contentSearch.results])
+  // Where each conversation's content matched: a content-only row shows the
+  // excerpt and opens at that message (sidebar audit item 6).
+  const contentHits = useMemo(
+    () => (contentMatchIds ? contentHitsBySession(contentSearch.results) : NO_CONTENT_HITS),
+    [contentMatchIds, contentSearch.results]
+  )
 
   const timeZone = useTimeZone()
   const dayNow = useConversationDayClock(timeZone)
@@ -266,10 +273,18 @@ export function useConversationManager({ query }: { query: string }) {
     []
   )
 
+  const contentJumpRef = useRef({ hits: contentHits, onlyIds: model.contentOnlyIds })
+  useEffect(() => {
+    contentJumpRef.current = { hits: contentHits, onlyIds: model.contentOnlyIds }
+  }, [contentHits, model.contentOnlyIds])
   const openConversation = useCallback(
     (id: string) => {
-      log.info("conversation manager open conversation")
-      router.push(`/${buildSessionHref(id)}`)
+      const { hits, onlyIds } = contentJumpRef.current
+      // A row found only through its messages opens at the one that matched:
+      // the permalink route does the jump once the conversation hydrates.
+      const messageId = onlyIds.has(id) ? hits.get(id)?.messageId : undefined
+      log.info("conversation manager open conversation", { atMessage: Boolean(messageId) })
+      router.push(`/${buildSessionHref(id, messageId)}`)
     },
     [router]
   )
@@ -378,6 +393,7 @@ export function useConversationManager({ query }: { query: string }) {
     exportSession: exportSessionId ? (sessionsById.get(exportSessionId) ?? null) : null,
     closeExport,
     openConversation,
+    contentHits,
     startConversation,
   }
 }

@@ -2,8 +2,9 @@ import {
   ARCHIVED_COLLAPSE_PREFIX,
   collapseKeyForView,
   collapseOverridesForView,
-  paletteQueryForView,
+  everywhereSearchQuery,
 } from "./conversation-archive-view"
+import { parseGlobalSearchQuery } from "@/lib/global-search/query-parser"
 
 describe("collapseKeyForView", () => {
   it("stores the active view's folds under the plain section key", () => {
@@ -39,14 +40,30 @@ describe("collapseOverridesForView", () => {
   })
 })
 
-describe("paletteQueryForView", () => {
-  it("passes the active view's words through, and nothing for an empty field", () => {
-    expect(paletteQueryForView("  deploy  ", "active")).toBe("deploy")
-    expect(paletteQueryForView("   ", "active")).toBeUndefined()
+describe("everywhereSearchQuery", () => {
+  it("hands the archive and every workspace on with the words, as the button promises", () => {
+    expect(everywhereSearchQuery("  deploy  ", { multipleWorkspaces: true })).toBe(
+      "is:archived workspace:all deploy"
+    )
   })
 
-  it("tells the palette to search the archive from the archive", () => {
-    expect(paletteQueryForView("deploy", "archived")).toBe("is:archived deploy")
-    expect(paletteQueryForView("", "archived")).toBe("is:archived")
+  it("leaves the workspace token out when there is only one workspace", () => {
+    expect(everywhereSearchQuery("deploy", { multipleWorkspaces: false })).toBe(
+      "is:archived deploy"
+    )
+  })
+
+  it("still states the reach for an empty field, so the palette opens wide", () => {
+    expect(everywhereSearchQuery("   ", { multipleWorkspaces: true })).toBe(
+      "is:archived workspace:all"
+    )
+  })
+
+  it("parses to the reach it names in the palette", () => {
+    const parsed = parseGlobalSearchQuery(
+      everywhereSearchQuery("deploy", { multipleWorkspaces: true })
+    )
+    expect(parsed.filters).toMatchObject({ archived: true, workspace: "all" })
+    expect(parsed.text).toBe("deploy")
   })
 })

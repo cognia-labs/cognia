@@ -131,6 +131,7 @@ function data(over: Record<string, unknown> = {}) {
       sections: [{ key: "recent", sessions: rows }],
       orderedIds: rows.map((row) => row.id),
       total: rows.length,
+      viewEmpty: rows.length === 0,
       filteredCount: rows.length,
       activeFilterCount: 0,
       contentOnlyIds: new Set<string>(),
@@ -154,6 +155,7 @@ function data(over: Record<string, unknown> = {}) {
     exportSession: null,
     closeExport: jest.fn(),
     openConversation: jest.fn(),
+    contentHits: new Map(),
     startConversation: jest.fn(),
     ...over,
   }

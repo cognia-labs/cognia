@@ -1,7 +1,8 @@
 /**
  * What a conversation list's Archived view changes about the list's own state
- * (ADR-0213) — the desktop sidebar, the phone drawer and the conversation
- * manager share these. Pure, so the rules are pinned without mounting a list.
+ * (ADR-0213), and the reach its "Search everywhere" hands on — the desktop
+ * sidebar, the phone drawer and the conversation manager share these. Pure, so
+ * the rules are pinned without mounting a list.
  */
 
 import type { ChannelListView } from "@/stores/ui/ui-store"
@@ -39,13 +40,21 @@ export function collapseOverridesForView(
 }
 
 /**
- * The query "Search everywhere" hands the command palette. From the archive
- * the palette is told to look there too (`is:archived`): it leaves archived
- * conversations out by default, and the archive's own hint promises they stay
- * searchable.
+ * The query "Search everywhere" hands the command palette (ADR-0129).
+ *
+ * The button promises every conversation ("Search every conversation, command
+ * and file with these words"), so the hand-off carries that reach as tokens the
+ * palette shows as chips: `is:archived`, because the palette leaves the archive
+ * out by default, and — with more than one workspace — `workspace:all`,
+ * because its default is the active workspace (ADR-0144). Opening ⌘K by itself
+ * keeps both defaults; only this explicit hand-off widens them. The same from
+ * the active list and from the archive: "everywhere" is not a view.
  */
-export function paletteQueryForView(query: string, view: ChannelListView): string | undefined {
+export function everywhereSearchQuery(
+  query: string,
+  { multipleWorkspaces }: { multipleWorkspaces: boolean }
+): string {
+  const scope = multipleWorkspaces ? "is:archived workspace:all" : "is:archived"
   const words = query.trim()
-  if (view === "archived") return words ? `is:archived ${words}` : "is:archived"
-  return words || undefined
+  return words ? `${scope} ${words}` : scope
 }

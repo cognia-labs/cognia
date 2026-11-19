@@ -27,6 +27,9 @@
  * it does over the table.
  */
 
+import type { ContentHit } from "@/lib/chat/search/content-hits"
+import type { Snippet } from "@/lib/chat/search/snippet"
+import { MatchHighlight } from "@/components/chat/completion/match-highlight"
 import { memo, useRef, useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import type { ChatSession, SessionFolder } from "@cognia/agent-config-types"
@@ -90,6 +93,8 @@ export interface ConversationManagerListProps {
   runStatusById: ReadonlyMap<string, ChatStatus>
   unreadCountById: ReadonlyMap<string, number>
   contentOnlyIds: ReadonlySet<string>
+  /** Where each content hit matched — the excerpt a content-only row shows. */
+  contentHits: ReadonlyMap<string, ContentHit>
   goals: SessionGoalMap
   now: Date
   rowActions: ConversationRowActions
@@ -109,6 +114,7 @@ export function ConversationManagerList({
   runStatusById,
   unreadCountById,
   contentOnlyIds,
+  contentHits,
   goals,
   now,
   rowActions,
@@ -133,6 +139,9 @@ export function ConversationManagerList({
             runStatus={runStatusById.get(session.id)}
             unread={session.archivedAt != null ? 0 : (unreadCountById.get(session.id) ?? 0)}
             contentMatch={contentOnlyIds.has(session.id)}
+            contentSnippet={
+              contentOnlyIds.has(session.id) ? contentHits.get(session.id)?.snippet : undefined
+            }
             goal={goals.get(session.id)}
             now={now}
             rowActions={rowActions}
@@ -157,6 +166,8 @@ interface ListRowProps {
   runStatus: ChatStatus | undefined
   unread: number
   contentMatch: boolean
+  /** The excerpt a content-only row matched in. */
+  contentSnippet?: Snippet
   goal: Goal | undefined
   now: Date
   rowActions: ConversationRowActions
@@ -176,6 +187,7 @@ const ConversationManagerListRow = memo(function ConversationManagerListRow({
   runStatus,
   unread,
   contentMatch,
+  contentSnippet,
   goal,
   now,
   rowActions,
@@ -336,7 +348,18 @@ const ConversationManagerListRow = memo(function ConversationManagerListRow({
                 {contentMatch ? (
                   <>
                     <Dot />
-                    <span className="shrink-0">{t("contentMatch")}</span>
+                    {contentSnippet ? (
+                      <span className="min-w-0 truncate" title={t("contentMatch")}>
+                        <span className="sr-only">{t("contentMatch")}</span>
+                        <MatchHighlight
+                          text={contentSnippet.text}
+                          positions={contentSnippet.positions}
+                          markClassName="bg-transparent font-medium text-foreground"
+                        />
+                      </span>
+                    ) : (
+                      <span className="shrink-0">{t("contentMatch")}</span>
+                    )}
                   </>
                 ) : null}
                 <span className="ml-auto flex shrink-0 items-center gap-1.5">

@@ -5,7 +5,9 @@ import { useTranslations } from "next-intl"
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
+  CheckIcon,
   FolderIcon,
+  FolderKanbanIcon,
   FolderInputIcon,
   FolderPlusIcon,
   Link2Icon,
@@ -118,7 +120,24 @@ export interface ChannelListBulkToolbarProps {
    * active workspace).
    */
   onNewFolder?: () => void | Promise<unknown>
+  /**
+   * Workspaces the selection can move to (archived workspaces excluded). The
+   * menu is offered only with somewhere else to go.
+   */
+  workspaceTargets?: readonly { id: string; name: string }[]
+  /** The workspace every selected row already belongs to, listed checked and inert. */
+  sharedWorkspaceId?: string | null
+  /** Move the selection to another workspace (`useBulkMoveSessionWorkspace`). */
+  onMoveToWorkspace?: (workspaceId: string) => void | Promise<unknown>
+  /** A workspace move is still running: the menu waits for it. */
+  movingWorkspace?: boolean
   onSelectAll?: () => void
+  /**
+   * What "Select all" reaches: the rows on screen (`"shown"`, a list that folds
+   * groups and caps them behind "Show more") or every row of the result
+   * (`"all"`, the conversation manager). The label says which.
+   */
+  selectAllCovers?: "shown" | "all"
   /** Empty the selection but stay in it — the counterpart of "Select all". */
   onDeselectAll?: () => void
   /** Leave the selection altogether ("Done", or Escape on the list). */
@@ -141,6 +160,7 @@ export interface ChannelListBulkToolbarProps {
 const DELETE_CONFIRM_TITLE_LIMIT = 5
 
 const NO_BLOCKED_FOLDERS: ReadonlySet<string> = new Set()
+const NO_WORKSPACES: readonly { id: string; name: string }[] = []
 const NO_SESSION_IDS: readonly string[] = []
 
 /**
@@ -179,7 +199,12 @@ export function ChannelListBulkToolbar({
   blockedFolderIds = NO_BLOCKED_FOLDERS,
   onMoveToFolder,
   onNewFolder,
+  workspaceTargets = NO_WORKSPACES,
+  sharedWorkspaceId = null,
+  onMoveToWorkspace,
+  movingWorkspace = false,
   onSelectAll,
+  selectAllCovers = "all",
   onDeselectAll,
   onClear,
   selectedTitles = [],
@@ -232,6 +257,11 @@ export function ChannelListBulkToolbar({
         : null
   const moveVisible =
     onMoveToFolder != null && !frozen && (folders.length > 0 || anyInFolder || onNewFolder != null)
+  // Archived rows keep their place, workspace included (ADR-0213).
+  const workspaceMoveVisible =
+    onMoveToWorkspace != null &&
+    !frozen &&
+    workspaceTargets.some((workspace) => workspace.id !== sharedWorkspaceId)
 
   const countLabel = (
     <span
@@ -262,9 +292,12 @@ export function ChannelListBulkToolbar({
         size="xs"
         className={linkClass}
         onClick={onSelectAll}
+        title={selectAllCovers === "shown" ? t("selectAllShownHint") : undefined}
         data-testid="channel-list-bulk-select-all"
       >
-        {t("selectAll", { count: total })}
+        {selectAllCovers === "shown"
+          ? t("selectAllShown", { count: total })
+          : t("selectAll", { count: total })}
       </Button>
     ) : null
   const doneButton = (
@@ -348,6 +381,41 @@ export function ChannelListBulkToolbar({
                 </DropdownMenuItem>
               </>
             ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+      {workspaceMoveVisible ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild disabled={empty || movingWorkspace}>
+            <Button
+              size={bar ? "sm" : "icon"}
+              variant="ghost"
+              className={bar ? "h-7 gap-1.5 px-2 text-xs" : "size-7"}
+              aria-label={t("moveToWorkspace")}
+              title={t("moveToWorkspace")}
+              disabled={empty || movingWorkspace}
+              data-testid="channel-list-bulk-move-to-workspace"
+            >
+              <FolderKanbanIcon className="size-3.5" />
+              {bar ? t("moveToWorkspace") : null}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-72 w-56 overflow-y-auto">
+            {workspaceTargets.map((workspace) => {
+              const current = workspace.id === sharedWorkspaceId
+              return (
+                <DropdownMenuItem
+                  key={workspace.id}
+                  disabled={current}
+                  aria-current={current ? "true" : undefined}
+                  onSelect={() => void onMoveToWorkspace!(workspace.id)}
+                  data-testid={`channel-list-bulk-workspace-${workspace.id}`}
+                >
+                  {current ? <CheckIcon className="size-4" /> : <FolderIcon className="size-4" />}
+                  <span className="truncate">{workspace.name}</span>
+                </DropdownMenuItem>
+              )
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}

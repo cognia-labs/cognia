@@ -82,7 +82,7 @@ export function trackConversationReordered(input: {
   sectionKey: string
   before: readonly string[]
   after: readonly string[]
-  via: "pointer" | "keyboard"
+  via: TelemetryEventCatalog["chat.list.reordered"]["via"]
 }): Promise<boolean> {
   const section = conversationSectionKindOf(input.sectionKey)
   if (!section) return Promise.resolve(false)

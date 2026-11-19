@@ -1605,6 +1605,13 @@
           "session-locked": "该会话已移交给另一台主机，在此为只读。",
           "session-running": "请先停止正在进行的回合再迁移会话。",
           "unknown-workspace": "该工作区已不存在。"
+        },
+        "bulk": {
+          "summary": "已移动 {moved} 个会话{sentToHost, plural, =0 {} other {，# 个已交给你的 Host}}{refused, plural, =0 {} other {，# 个未移动}}",
+          "rowRefused": "{title}：{reason}",
+          "rowFailed": "{title}：移动失败（{error}）",
+          "more": "另有 {count} 个",
+          "untitled": "未命名会话"
         }
       }
     },

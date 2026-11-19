@@ -78,11 +78,14 @@
       "unpinSuccess": "{count, plural, one {Unpinned # conversation} other {Unpinned # conversations}}",
       "selectHint": "None selected",
       "selectAll": "Select all ({count})",
+      "selectAllShown": "Select all shown ({count})",
+      "selectAllShownHint": "Selects the conversations on screen. Folded groups and rows behind “Show more” are left out: select a group from its menu, or open Manage conversations to select every match.",
       "deselectAll": "Deselect all",
       "done": "Done",
       "markUnread": "Mark as unread",
       "newFolder": "New folder…",
-      "deleteConfirmMore": "{count, plural, one {and # more} other {and # more}}"
+      "deleteConfirmMore": "{count, plural, one {and # more} other {and # more}}",
+      "moveToWorkspace": "Move to workspace"
     },
     "cancel": "Cancel",
     "chatsEmpty": "No chats yet — start one",
@@ -140,6 +143,12 @@
     "newConversationIn": "New conversation in {name}",
     "newFolder": "New folder",
     "newFolderName": "New folder",
+    "newFolderDialog": {
+      "title": "Name the new folder",
+      "description": "{count, plural, one {The conversation moves into it once it is created.} other {# conversations move into it once it is created.}}",
+      "nameLabel": "Folder name",
+      "confirm": "Create and move"
+    },
     "openSessions": "Open sessions",
     "pinDropZone": "Drop here to pin",
     "pinSidebar": "Keep open",
@@ -703,7 +712,9 @@
     "unarchive": "Unarchive",
     "unpin": "Unpin",
     "untitled": "(untitled)",
-    "newFolder": "New folder…"
+    "newFolder": "New folder…",
+    "moveUp": "Move up",
+    "moveDown": "Move down"
   },
   "shell": {
     "desktopOnlyBodyMiddle": " rather than ",

@@ -9586,6 +9586,13 @@
           "overrides": "{count} 项覆盖"
         },
         "workspaceMove": {
+          "bulk": {
+            "more": "另有 {count} 个",
+            "rowFailed": "{title}：移动失败（{error}）",
+            "rowRefused": "{title}：{reason}",
+            "summary": "已移动 {moved} 个会话{sentToHost, plural, =0 {} other {，# 个已交给你的 Host}}{refused, plural, =0 {} other {，# 个未移动}}",
+            "untitled": "未命名会话"
+          },
           "failed": "迁移会话失败：{error}",
           "hint": "会话会重新绑定到新工作区。它在旧工作树里留下的内容仍保留在磁盘上。",
           "label": "工作区",
@@ -14555,12 +14562,15 @@
         "markUnread": "标为未读",
         "moveSuccess": "已移动 {count} 个会话",
         "moveToFolder": "移动到文件夹",
+        "moveToWorkspace": "移动到工作区",
         "newFolder": "新建文件夹…",
         "pin": "置顶",
         "pinSuccess": "已置顶 {count} 个会话",
         "removeFromFolder": "移出文件夹",
         "removeFromFolderSuccess": "已将 {count} 个会话移出文件夹",
         "selectAll": "全选（{count}）",
+        "selectAllShown": "全选已显示（{count}）",
+        "selectAllShownHint": "只选中当前显示的会话，不含已折叠的分组和“显示更多”之后的会话。要选中整组，请使用分组菜单；要选中全部匹配项，请打开会话管理。",
         "selectHint": "未选择会话",
         "selectedCount": "已选 {count} 项",
         "share": "分享",
@@ -14627,6 +14637,12 @@
       "newConversation": "新建会话",
       "newConversationIn": "在「{name}」中新建会话",
       "newFolder": "新建文件夹",
+      "newFolderDialog": {
+        "confirm": "创建并移入",
+        "description": "创建后，{count} 个会话将移入其中。",
+        "nameLabel": "文件夹名称",
+        "title": "为新文件夹命名"
+      },
       "newFolderName": "新建文件夹",
       "openSessions": "打开会话列表",
       "pinDropZone": "拖到这里置顶",
@@ -15167,8 +15183,10 @@
       "lockedMenuNote": "已交接到另一台设备，期间为只读",
       "markRead": "标为已读",
       "markUnread": "标为未读",
+      "moveDown": "下移",
       "moveToFolder": "移动到文件夹",
       "moveToWorkspace": "移动到工作区",
+      "moveUp": "上移",
       "newFolder": "新建文件夹…",
       "openInCodexApp": "在 Codex App 中打开",
       "openInCodexAppFailed": "无法在 Codex App 中打开此任务。",

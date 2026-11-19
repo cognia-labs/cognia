@@ -53,6 +53,7 @@ function setup(over: Partial<ConversationManagerTableProps> = {}) {
       ["b", 4],
     ]),
     contentOnlyIds: new Set(["b"]),
+    contentHits: new Map([["b", { messageId: "m-b", snippet: { text: "…in b", positions: [4] } }]]),
     now: new Date(0),
     rowActions: {} as ConversationManagerTableProps["rowActions"],
     extraActions: {},
@@ -84,7 +85,10 @@ describe("ConversationManagerTable", () => {
       workspaceName: undefined,
       unread: 0,
       contentMatch: true,
+      // Where it matched, so the row can say so (audit item 6).
+      contentSnippet: { text: "…in b", positions: [4] },
     })
+    expect(a.contentSnippet).toBeUndefined()
   })
 
   it("marks the sorted column and toggles activity between newest and oldest", () => {

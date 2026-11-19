@@ -11,6 +11,7 @@ import {
   DATE_BUCKET_ORDER,
   assignableFolders,
   folderAcceptsSession,
+  inBrowsedWorkspace,
   shareUnchangedSessions,
   UNGROUPED_ID,
   type BuildSectionsOptions,
@@ -576,6 +577,141 @@ describe("date buckets follow the sort axis", () => {
       })
     )
     expect(sections.map((s) => conversationSectionKey(s))).toEqual(["workspace:w1"])
+  })
+})
+
+describe("browseWorkspaceId / searchIncludesAllWorkspaces", () => {
+  const here = session("here", { title: "deploy here", projectId: "w1" })
+  const shared = session("shared", { title: "deploy shared" })
+  const there = session("there", { title: "deploy there", projectId: "w2" })
+  const thereArchived = session("there-old", {
+    title: "deploy there old",
+    projectId: "w2",
+    archivedAt: NOW - DAY,
+  })
+  const rows = [here, shared, there, thereArchived]
+
+  it("browses only its workspace and the shared rows, whatever the search reach", () => {
+    const model = buildConversationSections(
+      rows,
+      [],
+      opts({ browseWorkspaceId: "w1", searchIncludesAllWorkspaces: true })
+    )
+    expect(model.orderedIds.sort()).toEqual(["here", "shared"])
+    expect(model.total).toBe(2)
+  })
+
+  it("lets a query reach every workspace, inside the view", () => {
+    const model = buildConversationSections(
+      rows,
+      [],
+      opts({ query: "deploy", browseWorkspaceId: "w1", searchIncludesAllWorkspaces: true })
+    )
+    expect(model.orderedIds.sort()).toEqual(["here", "shared", "there"])
+    // `total` still describes the browsed view.
+    expect(model.total).toBe(2)
+  })
+
+  it("keeps a query in the workspace without the reach", () => {
+    const model = buildConversationSections(
+      rows,
+      [],
+      opts({ query: "deploy", browseWorkspaceId: "w1" })
+    )
+    expect(model.orderedIds.sort()).toEqual(["here", "shared"])
+  })
+
+  it("combines both reaches: every workspace, both sides of the archive split", () => {
+    const model = buildConversationSections(
+      rows,
+      [],
+      opts({
+        query: "deploy",
+        browseWorkspaceId: "w1",
+        searchIncludesAllWorkspaces: true,
+        searchIncludesArchived: true,
+      })
+    )
+    expect(model.orderedIds.sort()).toEqual(["here", "shared", "there", "there-old"])
+  })
+
+  it("counts the archive of the browsed workspace only", () => {
+    const model = buildConversationSections(
+      rows,
+      [],
+      opts({ view: "archived", browseWorkspaceId: "w1", searchIncludesAllWorkspaces: true })
+    )
+    expect(model.total).toBe(0)
+    expect(model.orderedIds).toEqual([])
+  })
+
+  it("browses everything with no workspace to browse", () => {
+    const model = buildConversationSections(rows, [], opts({ browseWorkspaceId: null }))
+    expect(model.orderedIds.sort()).toEqual(["here", "shared", "there"])
+  })
+})
+
+describe("viewEmpty", () => {
+  const active = session("active", { title: "deploy notes", projectId: "w1" })
+  const otherArchived = session("other", {
+    title: "deploy other",
+    projectId: "w2",
+    archivedAt: NOW - DAY,
+  })
+
+  it("is the view's empty state while browsing an empty view", () => {
+    const model = buildConversationSections([active], [], opts({ view: "archived" }))
+    expect(model.viewEmpty).toBe(true)
+  })
+
+  it("is off when a query reaches past the archive split, hit or miss", () => {
+    const hit = buildConversationSections(
+      [active],
+      [],
+      opts({ view: "archived", query: "deploy", searchIncludesArchived: true })
+    )
+    expect(hit.viewEmpty).toBe(false)
+    expect(hit.orderedIds).toEqual(["active"])
+    const miss = buildConversationSections(
+      [active],
+      [],
+      opts({ view: "archived", query: "zzz", searchIncludesArchived: true })
+    )
+    expect(miss.viewEmpty).toBe(false)
+    expect(miss.filteredCount).toBe(0)
+  })
+
+  it("is off when a query reaches another workspace from an empty one", () => {
+    const model = buildConversationSections(
+      [active, otherArchived],
+      [],
+      opts({
+        view: "archived",
+        query: "deploy",
+        browseWorkspaceId: "w1",
+        searchIncludesAllWorkspaces: true,
+      })
+    )
+    expect(model.viewEmpty).toBe(false)
+    expect(model.orderedIds).toEqual(["other"])
+  })
+
+  it("stays on for a query that can only see the empty view", () => {
+    const model = buildConversationSections(
+      [active],
+      [],
+      opts({ view: "archived", query: "deploy" })
+    )
+    expect(model.viewEmpty).toBe(true)
+  })
+})
+
+describe("inBrowsedWorkspace", () => {
+  it("keeps the workspace's rows and the shared ones, and everything for no workspace", () => {
+    expect(inBrowsedWorkspace({ projectId: "w1" }, "w1")).toBe(true)
+    expect(inBrowsedWorkspace({ projectId: undefined }, "w1")).toBe(true)
+    expect(inBrowsedWorkspace({ projectId: "w2" }, "w1")).toBe(false)
+    expect(inBrowsedWorkspace({ projectId: "w2" }, null)).toBe(true)
   })
 })
 

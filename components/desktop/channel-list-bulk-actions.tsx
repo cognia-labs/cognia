@@ -71,8 +71,18 @@ export interface ChannelListBulkActionsProps {
    */
   onNewFolder?: (ids: readonly string[]) => Promise<boolean>
   newFolderProjectId?: string | null
+  /**
+   * Where a selection can move to (non-archived workspaces). With a mover,
+   * the bar offers "Move to workspace" for the active rows selected.
+   */
+  workspaceTargets?: readonly { id: string; name: string }[]
+  /** Move these conversations to a workspace; `false` keeps the selection. */
+  onMoveToWorkspace?: (sessions: readonly ChatSession[], workspaceId: string) => Promise<boolean>
+  movingWorkspace?: boolean
   /** Grow the selection to every row on screen. */
   onSelectAll?: () => void
+  /** What "Select all" reaches — see `ChannelListBulkToolbarProps.selectAllCovers`. */
+  selectAllCovers?: "shown" | "all"
   /** Empty the selection without leaving it. */
   onDeselectAll?: () => void
   onClear: () => void
@@ -96,7 +106,11 @@ export function ChannelListBulkActions({
   onMoveToFolder,
   onNewFolder,
   newFolderProjectId,
+  workspaceTargets,
+  onMoveToWorkspace,
+  movingWorkspace = false,
   onSelectAll,
+  selectAllCovers,
   onDeselectAll,
   onClear,
 }: ChannelListBulkActionsProps) {
@@ -167,6 +181,12 @@ export function ChannelListBulkActions({
     }
     return { archivedIds: archivedOut, activeIds: activeOut }
   }, [sessions, selectedIds, archived])
+  // The one workspace every selected row is in, when there is one: the menu
+  // lists it checked and inert. Rows of no workspace count as none.
+  const sharedWorkspaceId = useMemo(() => {
+    const ids = new Set(selectedSessions.map((session) => session.projectId ?? null))
+    return ids.size === 1 ? [...ids][0] : null
+  }, [selectedSessions])
   // A folder made from here lands in the active workspace; it is only offered
   // when that folder could hold every selected row.
   const newFolderFits = selectedSessions.every((session) =>
@@ -240,7 +260,28 @@ export function ChannelListBulkActions({
                   ? () => runAndClear(() => onNewFolder(selectedIds))
                   : undefined
               }
+              workspaceTargets={workspaceTargets}
+              sharedWorkspaceId={sharedWorkspaceId}
+              onMoveToWorkspace={
+                onMoveToWorkspace
+                  ? (workspaceId) =>
+                      runAndClear(() =>
+                        onMoveToWorkspace(
+                          // In list order, named as the rows name themselves:
+                          // the outcome toast lists the ones that did not move.
+                          shareSessions.flatMap((session, index) =>
+                            session.archivedAt == null
+                              ? [{ ...session, title: selectedTitles[index] }]
+                              : []
+                          ),
+                          workspaceId
+                        )
+                      )
+                  : undefined
+              }
+              movingWorkspace={movingWorkspace}
               onSelectAll={onSelectAll}
+              selectAllCovers={selectAllCovers}
               onDeselectAll={onDeselectAll}
               selectedTitles={selectedTitles}
               selectedSessionIds={selectedIds}

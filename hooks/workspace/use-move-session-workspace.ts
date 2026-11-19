@@ -78,6 +78,107 @@ export function useMoveSessionWorkspace(): MoveSessionWorkspace {
   return { move, busy }
 }
 
+/** A conversation of a bulk move, with what its outcome line calls it. */
+export type BulkMovableSession = MovableSession & { title?: string }
+
+export interface BulkMoveSessionWorkspace {
+  /**
+   * Move every conversation to workspace `targetId`, one routed write each,
+   * then say in one toast how many moved, how many went to the Host and which
+   * ones were refused or failed (and why). Conversations already there are
+   * skipped. Resolves true only when every one moved or was handed to the
+   * Host — a selection with refusals survives for a retry.
+   */
+  moveMany: (sessions: readonly BulkMovableSession[], targetId: string) => Promise<boolean>
+  busy: boolean
+  /** The Host (if any) takes this move from this caller at all. */
+  offered: boolean
+  /** Non-archived workspaces — the destinations a selection is offered. */
+  workspaceTargets: readonly { id: string; name: string }[]
+}
+
+/** Refused / failed rows the summary names before it counts the rest. */
+const BULK_MOVE_NAMED_ROWS = 5
+
+/**
+ * Move a selection to another workspace — the bulk twin of
+ * {@link useMoveSessionWorkspace} (sidebar audit item 10). Each conversation
+ * goes through the same routed writer as a single move, so the planner's
+ * refusals (running, archived, handed off) and the Host hand-over apply row by
+ * row; the rows run one after another, because each move rewrites both
+ * workspaces' rosters in the project store.
+ */
+export function useBulkMoveSessionWorkspace(): BulkMoveSessionWorkspace {
+  const t = useTranslations("chat.header.sheet.workspaceMove")
+  const [busy, setBusy] = useState(false)
+  const offered = useHostStateActionOffered("session.workspace")
+  const projects = useProjectStore((s) => s.projects)
+  const workspaceTargets = useMemo(
+    () =>
+      projects
+        .filter((workspace) => !workspace.isArchived)
+        .map((workspace) => ({ id: workspace.id, name: workspace.name })),
+    [projects]
+  )
+
+  const moveMany = useCallback(
+    async (sessions: readonly BulkMovableSession[], targetId: string) => {
+      const pending = sessions.filter((session) => session.projectId !== targetId)
+      if (pending.length === 0) return true
+      setBusy(true)
+      let moved = 0
+      let sentToHost = 0
+      const problems: string[] = []
+      try {
+        const { moveSessionWorkspaceRouted } =
+          await import("@/lib/chat/session-workspace-move-writes")
+        for (const session of pending) {
+          const name = session.title?.trim() || t("bulk.untitled")
+          try {
+            const result = await moveSessionWorkspaceRouted(session, targetId)
+            if (result.status === "moved") moved += 1
+            else if (result.status === "sent-to-host") sentToHost += 1
+            else {
+              problems.push(
+                t("bulk.rowRefused", { title: name, reason: t(`refused.${result.reason}`) })
+              )
+            }
+          } catch (error) {
+            problems.push(
+              t("bulk.rowFailed", {
+                title: name,
+                error: error instanceof Error ? error.message : String(error),
+              })
+            )
+          }
+        }
+      } finally {
+        setBusy(false)
+      }
+      const summary = t("bulk.summary", {
+        moved,
+        sentToHost,
+        refused: problems.length,
+      })
+      const named = problems.slice(0, BULK_MOVE_NAMED_ROWS)
+      const rest = problems.length - named.length
+      const description =
+        problems.length > 0
+          ? [...named, ...(rest > 0 ? [t("bulk.more", { count: rest })] : [])].join("\n")
+          : undefined
+      // One line per named row.
+      const options = { description, classNames: { description: "whitespace-pre-line" } }
+      if (problems.length === 0) toast.success(summary)
+      else if (moved + sentToHost > 0) toast.warning(summary, options)
+      else toast.error(summary, options)
+      return problems.length === 0
+    },
+    [t]
+  )
+
+  return { moveMany, busy, offered, workspaceTargets }
+}
+
 export interface SessionWorkspaceMoveMenu {
   /** Non-archived workspaces; the conversation's own is listed checked and inert. */
   workspaceTargets: readonly { id: string; name: string }[]

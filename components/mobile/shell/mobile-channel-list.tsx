@@ -51,6 +51,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react"
 import { useTimeZone, useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
+import { useBulkMoveSessionWorkspace } from "@/hooks/workspace/use-move-session-workspace"
 import {
   ArchiveIcon,
   ChevronRightIcon,
@@ -106,6 +107,7 @@ import {
 } from "@/lib/chat/conversation-grouping"
 import {
   conversationSectionKey,
+  inBrowsedWorkspace,
   UNGROUPED_ID,
   type ConversationGroupAxis,
   type DateBucket,
@@ -115,7 +117,7 @@ import {
   resolveConversationSearchOptions,
   type ResolvedConversationSearchOptions,
 } from "@/lib/chat/conversation-search-scope"
-import { paletteQueryForView } from "@/lib/chat/conversation-archive-view"
+import { everywhereSearchQuery } from "@/lib/chat/conversation-archive-view"
 import { conversationManagerHref } from "@/lib/conversations/conversation-manager"
 import { requestCommandPalette } from "@/lib/shell/command-palette-request"
 import { trackConversationViewChanged } from "@/lib/telemetry/conversation-list-events"
@@ -266,6 +268,7 @@ function MobileChannelListBody({
   // List vocabulary shared with the desktop sidebar, and the archive's own.
   const tList = useTranslations("desktop.channelList")
   const tArchive = useTranslations("conversations.archive.empty")
+  const tArchiveScope = useTranslations("conversations.archive")
   const router = useRouter()
   const {
     characters,
@@ -403,22 +406,33 @@ function MobileChannelListBody({
   // one controller over the same settings blob and UI-store slice — so a phone
   // and a desktop looking at the same profile agree about which conversations
   // exist and in what order.
+  // What the list *browses*, as on the desktop sidebar: the active workspace,
+  // unless the grouping is by workspace. A search told to reach every
+  // workspace loads them all (`needsCrossWorkspaceSessions`), but that reach is
+  // the query's — with nothing typed the list and its counts stay here.
+  const browseWorkspaceId = groupBy === "workspace" ? null : (activeProjectId ?? null)
+  const browsedSessions = useMemo(
+    () =>
+      browseWorkspaceId
+        ? exposedSessions.filter((s) => inBrowsedWorkspace(s, browseWorkspaceId))
+        : exposedSessions,
+    [exposedSessions, browseWorkspaceId]
+  )
   const viewSessions = useMemo(
     () =>
-      exposedSessions.filter((s) =>
+      browsedSessions.filter((s) =>
         view === "archived" ? s.archivedAt != null : s.archivedAt == null
       ),
-    [exposedSessions, view]
+    [browsedSessions, view]
   )
-  // Every archived conversation of the list's scope (the rows `sessions`
-  // holds — the active workspace, or every workspace when the list reaches
-  // across them): the Archived tab's count and what "Empty archive…" deletes.
-  // Counted before search and filters, and not from the rendered rows: a
-  // collapsed group or the window must not make "everything" mean "what is on
-  // screen".
+  // Every archived conversation the list browses (the active workspace, or
+  // every workspace when the list is grouped by them): the Archived tab's
+  // count and what "Empty archive…" deletes. Counted before search and
+  // filters, and not from the rendered rows: a collapsed group or the window
+  // must not make "everything" mean "what is on screen".
   const archivedSessions = useMemo(
-    () => exposedSessions.filter((s) => s.archivedAt != null && s.kind !== "subagent"),
-    [exposedSessions]
+    () => browsedSessions.filter((s) => s.archivedAt != null && s.kind !== "subagent"),
+    [browsedSessions]
   )
   const filterController = useConversationFilterController({
     sessions: viewSessions,
@@ -439,6 +453,7 @@ function MobileChannelListBody({
   const {
     sections,
     total,
+    viewEmpty,
     filteredCount,
     visibleCount,
     activeFilterCount,
@@ -468,6 +483,8 @@ function MobileChannelListBody({
     groupCollapseOverrides,
     contentMatchIds: searchOptions.content ? contentMatchIds : undefined,
     searchIncludesArchived: searchOptions.includeArchived,
+    browseWorkspaceId,
+    searchIncludesAllWorkspaces: searchOptions.workspace === "all",
   })
 
   // Same contract as the desktop sidebar: a conversation that was just created
@@ -487,8 +504,12 @@ function MobileChannelListBody({
           section.collapsed &&
           section.sessions.some((session) => session.id === id)
       )
+      // The view the row lives in: a conversation reached from ⌘K may be
+      // archived (a new one never is).
+      const targetView: ChannelListView =
+        sessionsById.get(id)?.archivedAt != null ? "archived" : "active"
       return [
-        { active: view !== "active", undo: () => setView("active") },
+        { active: view !== targetView, undo: () => setView(targetView) },
         { active: hasSearchText, undo: clearSearch },
         { active: activeFilterCount > 0, undo: resetConversationFilters },
         {
@@ -503,6 +524,7 @@ function MobileChannelListBody({
     },
     [
       sections,
+      sessionsById,
       view,
       setView,
       hasSearchText,
@@ -525,8 +547,11 @@ function MobileChannelListBody({
   // The words go to the command palette, which searches every conversation's
   // history. From the archive they stay in the archive (`is:archived`).
   const searchEverywhere = useCallback(() => {
-    requestCommandPalette({ query: paletteQueryForView(query, view), scope: "chats" })
-  }, [query, view])
+    requestCommandPalette({
+      query: everywhereSearchQuery(query, { multipleWorkspaces: projects.length > 1 }),
+      scope: "chats",
+    })
+  }, [query, projects.length])
   const widenSearch = useCallback(
     (patch: Partial<ResolvedConversationSearchOptions>) => {
       saveSidebarSettings({
@@ -552,11 +577,12 @@ function MobileChannelListBody({
   // A search that reaches past the archive split lists both kinds; the
   // archived rows are marked then.
   const mixedKinds = searching && searchOptions.includeArchived
-  // The workspace "Empty archive…" is limited to, when the list is limited to
-  // one (the shell loads the same reach through `needsCrossWorkspaceSessions`).
-  const archiveScopeLabel =
-    !needsCrossWorkspaceSessions(groupBy, searchOptions) && activeProjectId
-      ? workspaceNameById.get(activeProjectId)
+  // Where "Empty archive…" reaches: the workspace the list browses, or every
+  // workspace when the list is grouped by them.
+  const archiveScopeLabel = browseWorkspaceId
+    ? workspaceNameById.get(browseWorkspaceId)
+    : needsCrossWorkspaceSessions(groupBy, searchOptions)
+      ? tArchiveScope("scopeAllWorkspaces")
       : undefined
 
   const items = useMemo(
@@ -587,6 +613,8 @@ function MobileChannelListBody({
   const [handoffId, setHandoffId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [emptyArchiveOpen, setEmptyArchiveOpen] = useState(false)
+  // "Move to workspace" for a selection, as the desktop sidebar offers it.
+  const workspaceMove = useBulkMoveSessionWorkspace()
   const actionsSession = actionsId ? (sessionsById.get(actionsId) ?? null) : null
   const deleteSession = deleteId ? (sessionsById.get(deleteId) ?? null) : null
   const handoffSession = handoffId ? (sessionsById.get(handoffId) ?? null) : null
@@ -850,9 +878,9 @@ function MobileChannelListBody({
             <div
               className="[&_button]:min-h-11"
               data-testid="mobile-channel-empty"
-              data-empty-kind={total === 0 ? "view" : "narrowed"}
+              data-empty-kind={viewEmpty ? "view" : "narrowed"}
             >
-              {total === 0 ? (
+              {viewEmpty ? (
                 <ConversationListEmptyState
                   archived={archived}
                   team={false}
@@ -904,6 +932,7 @@ function MobileChannelListBody({
               character={session.characterId ? characterById.get(session.characterId) : undefined}
               team={session.teamId ? teamById.get(session.teamId) : undefined}
               workspaceName={session.projectId ? workspaceNameById.get(session.projectId) : undefined}
+              foreignWorkspace={!inBrowsedWorkspace(session, browseWorkspaceId)}
               runtimeRef={recordedRuntimeRef(sessionRuntimeRefs, session.id)}
               settings={rowSettings}
               markArchived={mixedKinds}
@@ -925,7 +954,7 @@ function MobileChannelListBody({
     [
       t,
       query,
-      total,
+      viewEmpty,
       activeFilters,
       archived,
       onNewDirect,
@@ -948,6 +977,7 @@ function MobileChannelListBody({
       characterById,
       teamById,
       workspaceNameById,
+      browseWorkspaceId,
       sessionRuntimeRefs,
       rowSettings,
       renaming,
@@ -1119,7 +1149,12 @@ function MobileChannelListBody({
             unreadIds={unreadIds}
             folders={folders}
             onMoveToFolder={rowActions.onBulkAssignToFolder}
+            workspaceTargets={workspaceMove.workspaceTargets}
+            onMoveToWorkspace={workspaceMove.offered ? workspaceMove.moveMany : undefined}
+            movingWorkspace={workspaceMove.busy}
             onSelectAll={selectAll}
+            // Folded sections stay out of it: the rows on screen.
+            selectAllCovers="shown"
             onDeselectAll={deselectAll}
             onClear={clearSelection}
           />

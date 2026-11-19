@@ -899,6 +899,18 @@ describe("row chrome", () => {
     setup({ contentMatch: false })
     expect(screen.queryByTestId("session-row-content-match")).toBeNull()
   })
+
+  it("shows the matched excerpt instead of the generic line when it has one (audit item 6)", () => {
+    setup({
+      contentMatch: true,
+      contentSnippet: { text: "…ship the deploy plan", positions: [10, 11] },
+    })
+    const line = screen.getByTestId("session-row-content-match")
+    expect(line).toHaveTextContent("…ship the deploy plan")
+    expect(line.querySelectorAll("mark")).toHaveLength(1)
+    expect(line).toHaveAttribute("title", "contentMatch")
+    expect(screen.getByText("contentMatch")).toHaveClass("sr-only")
+  })
 })
 
 test("choosing a folder from the submenu assigns the session to it", async () => {

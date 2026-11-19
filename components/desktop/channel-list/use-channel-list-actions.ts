@@ -72,27 +72,29 @@ export function useChannelListActions(options: UseChannelListActionsOptions) {
   // created, they are filed into it, and only then does its name open for
   // editing — the same in-place rename a folder made from the ⋯ menu gets. One
   // trip instead of three (make a folder, name it, come back and file the
-  // rows). Resolves `false` when either write was refused or failed, so a bulk
-  // selection survives for a retry.
+  // rows). Given a `name` (asked for up front, where no folder header can open
+  // for renaming — a search's flat result list), the folder is made under it
+  // and nothing opens. Resolves `false` when either write was refused or
+  // failed, so a bulk selection survives for a retry.
   const { onBulkAssignToFolder } = rowBundle.rowActions
   const canCreateFolder = Boolean(options.onCreateFolder)
   const handleNewFolderWith = useMemo(
     () =>
       canCreateFolder && onBulkAssignToFolder
-        ? async (ids: readonly string[]): Promise<boolean> => {
+        ? async (ids: readonly string[], name?: string): Promise<boolean> => {
             const { onCreateFolder } = latest.current.options
             if (!onCreateFolder || ids.length === 0) return false
             let created: unknown
             const ok = await runWrite("folderCreate", [], async () => {
-              created = await onCreateFolder(latest.current.options.newFolderName)
+              created = await onCreateFolder(name ?? latest.current.options.newFolderName)
             })
             const id = ok ? (created as SessionFolder | undefined)?.id : undefined
             if (!id) return false
-            log.info("channel-list new folder from rows", { count: ids.length })
+            log.info("channel-list new folder from rows", { count: ids.length, named: !!name })
             // Asked to be named as soon as it exists — and either way: a folder
             // left under its placeholder name is exactly what this path exists
             // to avoid. The rows file in while the name is being typed.
-            setRenamingFolderId(id)
+            if (name === undefined) setRenamingFolderId(id)
             const moved = await onBulkAssignToFolder([...ids], id)
             return moved !== false
           }

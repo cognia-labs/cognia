@@ -44,8 +44,10 @@ jest.mock("@/hooks/data/use-host-state-action-offered", () => ({
 import { getExecutionBroker } from "@/lib/execution/broker"
 import { useProjectStore } from "@/stores/project/project-store"
 import {
+  useBulkMoveSessionWorkspace,
   useMoveSessionWorkspace,
   useSessionWorkspaceMoveMenu,
+  type BulkMovableSession,
   type MovableSession,
 } from "./use-move-session-workspace"
 
@@ -284,5 +286,82 @@ describe("useSessionWorkspaceMoveMenu", () => {
     const { result } = renderHook(() => useSessionWorkspaceMoveMenu({ ...session, archivedAt: 1 }))
     expect(result.current.workspaceTargets).toHaveLength(2)
     expect(result.current.canMoveWorkspace).toBe(false)
+  })
+})
+
+describe("useBulkMoveSessionWorkspace (sidebar audit item 10)", () => {
+  const rows = [
+    { id: "s1", projectId: "project-a", title: "Plan" },
+    { id: "s2", projectId: "project-a", title: "Locked", handoffLock: { ticketId: "t" } },
+    { id: "s3", projectId: "project-b", title: "Already there" },
+  ] as unknown as BulkMovableSession[]
+
+  it("moves each row through the routed writer and says what happened to the rest", async () => {
+    seed()
+    const toastWarning = jest.fn()
+    jest.requireMock<{ toast: Record<string, unknown> }>("sonner").toast.warning = toastWarning
+    const { result } = renderHook(() => useBulkMoveSessionWorkspace())
+    expect(result.current.workspaceTargets.map((target) => target.id)).toEqual([
+      "project-a",
+      "project-b",
+    ])
+
+    let ok = true
+    await act(async () => {
+      ok = await result.current.moveMany(rows, "project-b")
+    })
+
+    // The row already there is skipped; the locked one is refused, named.
+    expect(updateSession).toHaveBeenCalledTimes(1)
+    expect(updateSession.mock.calls[0]![0]).toBe("s1")
+    expect(ok).toBe(false)
+    expect(toastWarning).toHaveBeenCalledTimes(1)
+    const [summary, options] = toastWarning.mock.calls[0] as [string, { description: string }]
+    // One summary, then one line per row that did not move, naming it and why.
+    expect(summary).toContain("not moved")
+    expect(options.description).toBe(
+      "Locked: This conversation was handed off to another host and is read-only here."
+    )
+  })
+
+  it("hands every row to the Host when one takes them, and counts them", async () => {
+    seed()
+    enqueue.mockResolvedValue({ id: "intent" })
+    const { result } = renderHook(() => useBulkMoveSessionWorkspace())
+    let ok = false
+    await act(async () => {
+      ok = await result.current.moveMany([rows[0]!], "project-b")
+    })
+    expect(ok).toBe(true)
+    expect(updateSession).not.toHaveBeenCalled()
+    expect(enqueue).toHaveBeenCalledWith({
+      sessionId: "s1",
+      action: { kind: "session.workspace", projectId: "project-b" },
+    })
+    expect(toastSuccess).toHaveBeenCalledTimes(1)
+  })
+
+  it("fails loudly, row by row, when nothing moved", async () => {
+    seed()
+    updateSession.mockRejectedValue(new Error("disk"))
+    const { result } = renderHook(() => useBulkMoveSessionWorkspace())
+    await act(async () => {
+      await result.current.moveMany([rows[0]!], "project-b")
+    })
+    expect(toastError).toHaveBeenCalledTimes(1)
+    const [, options] = toastError.mock.calls[0] as [string, { description: string }]
+    expect(options.description).toBe("Plan: could not move it (disk)")
+  })
+
+  it("does nothing for a selection already in the workspace", async () => {
+    seed()
+    const { result } = renderHook(() => useBulkMoveSessionWorkspace())
+    let ok = false
+    await act(async () => {
+      ok = await result.current.moveMany([rows[2]!], "project-b")
+    })
+    expect(ok).toBe(true)
+    expect(updateSession).not.toHaveBeenCalled()
+    expect(toastSuccess).not.toHaveBeenCalled()
   })
 })

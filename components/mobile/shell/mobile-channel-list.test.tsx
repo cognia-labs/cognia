@@ -1160,10 +1160,15 @@ describe("<MobileChannelList />", () => {
       renderList()
       await user.type(screen.getByTestId("mobile-channel-search"), "zzz")
       await user.click(await screen.findByTestId("channel-list-empty-search-everywhere"))
-      expect(requestCommandPaletteMock).toHaveBeenCalledWith({ query: "zzz", scope: "chats" })
+      // "Everywhere" includes the archive, which the palette leaves out by
+      // default; with one workspace there is no workspace token to add.
+      expect(requestCommandPaletteMock).toHaveBeenCalledWith({
+        query: "is:archived zzz",
+        scope: "chats",
+      })
     })
 
-    it("keeps a search from the archive inside the archive", async () => {
+    it("hands on the same reach from the archive", async () => {
       channelListView = "archived"
       const user = userEvent.setup()
       renderList({

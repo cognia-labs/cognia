@@ -120,6 +120,8 @@ export interface MobileChannelRowProps {
   character?: Character
   team?: Team
   workspaceName?: string
+  /** Of another workspace than the list browses — names it on the row. */
+  foreignWorkspace?: boolean
   /** The lane this device recorded for the conversation, if any. */
   runtimeRef?: AgentRuntimeRef
   settings: MobileChannelRowSettings
@@ -181,6 +183,7 @@ export function resolveMobileRowMetadata({
   defaultRuntimeRef,
   agentNameOf,
   groupAxis,
+  foreignWorkspace = false,
 }: {
   session: ChatSession
   character?: Character
@@ -193,6 +196,12 @@ export function resolveMobileRowMetadata({
   defaultRuntimeRef?: AgentRuntimeRef
   agentNameOf?: (agentId: string) => string | undefined
   groupAxis: ConversationGroupAxis | null
+  /**
+   * The row belongs to another workspace than the one the list browses — it
+   * is here only through a search across workspaces, and opening it switches
+   * the workspace. It names that workspace whatever `fields` says.
+   */
+  foreignWorkspace?: boolean
 }): MobileChannelRowMetadataItem[] {
   const labels = sessionModelLabels(
     resolveSessionModelIdentity(session, {
@@ -210,7 +219,11 @@ export function resolveMobileRowMetadata({
     provider: labels.provider,
     workspace: workspaceName,
   }
-  return fields.flatMap((kind) => {
+  const shown =
+    foreignWorkspace && workspaceName && !fields.includes("workspace")
+      ? (["workspace", ...fields] as const)
+      : fields
+  return shown.flatMap((kind) => {
     // The section header above already names it.
     if (kind === "workspace" && groupAxis === "workspace") return []
     if (
@@ -233,6 +246,7 @@ function MobileChannelRowImpl({
   character,
   team,
   workspaceName,
+  foreignWorkspace = false,
   runtimeRef,
   settings,
   markArchived = false,
@@ -329,8 +343,9 @@ function MobileChannelRowImpl({
         defaultRuntimeRef: settings.defaultRuntimeRef,
         agentNameOf: settings.agentNameOf,
         groupAxis: settings.groupAxis,
+        foreignWorkspace,
       }),
-    [session, character, team, workspaceName, runtimeRef, settings]
+    [session, character, team, workspaceName, foreignWorkspace, runtimeRef, settings]
   )
 
   if (renaming) {

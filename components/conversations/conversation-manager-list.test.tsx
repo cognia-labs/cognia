@@ -115,6 +115,7 @@ function setup(over: Partial<ConversationManagerListProps> = {}) {
     runStatusById: new Map(),
     unreadCountById: new Map(),
     contentOnlyIds: new Set(),
+    contentHits: new Map(),
     goals: new Map(),
     now: NOW,
     rowActions: rowActions(),
@@ -184,6 +185,20 @@ describe("ConversationManagerList", () => {
     expect(screen.getByText("Matched in the messages")).toBeInTheDocument()
     expect(screen.getByTestId("conversation-list-run-s1-streaming")).toBeInTheDocument()
     expect(screen.getByTestId("conversation-list-unread-s1")).toBeInTheDocument()
+  })
+
+  it("shows where a content-only row matched (audit item 6)", () => {
+    setup({
+      rows: [session("s1")],
+      contentOnlyIds: new Set(["s1"]),
+      contentHits: new Map([
+        ["s1", { messageId: "m1", snippet: { text: "…the deploy plan", positions: [5, 6] } }],
+      ]),
+    })
+    const row = screen.getByTestId("conversation-list-row-s1")
+    expect(row).toHaveTextContent("…the deploy plan")
+    // The words stay for screen readers.
+    expect(within(row).getByText("Matched in the messages")).toHaveClass("sr-only")
   })
 
   it("shows no unread on an archived row", () => {

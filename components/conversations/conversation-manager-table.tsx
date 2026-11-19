@@ -24,6 +24,7 @@
  * stop claiming theirs.
  */
 
+import type { ContentHit } from "@/lib/chat/search/content-hits"
 import { useTranslations } from "next-intl"
 import { ArrowDownIcon, ArrowUpIcon, ArrowUpDownIcon } from "lucide-react"
 import type { ChatSession, ConversationSortBy, SessionFolder } from "@cognia/agent-config-types"
@@ -84,6 +85,8 @@ export interface ConversationManagerTableProps {
   /** Unread messages per conversation (archived rows show none). */
   unreadCountById: ReadonlyMap<string, number>
   contentOnlyIds: ReadonlySet<string>
+  /** Where each content hit matched — the excerpt a content-only row shows. */
+  contentHits: ReadonlyMap<string, ContentHit>
   now: Date
   rowActions: ConversationRowActions
   extraActions: ConversationRowExtraActions
@@ -111,6 +114,7 @@ export function ConversationManagerTable({
   runStatusById,
   unreadCountById,
   contentOnlyIds,
+  contentHits,
   now,
   rowActions,
   extraActions,
@@ -229,6 +233,9 @@ export function ConversationManagerTable({
               runStatus={runStatusById.get(session.id)}
               unread={session.archivedAt != null ? 0 : (unreadCountById.get(session.id) ?? 0)}
               contentMatch={contentOnlyIds.has(session.id)}
+              contentSnippet={
+                contentOnlyIds.has(session.id) ? contentHits.get(session.id)?.snippet : undefined
+              }
               now={now}
               rowActions={rowActions}
               extraActions={extraActions}

@@ -1605,6 +1605,13 @@
           "session-locked": "This conversation was handed off to another host and is read-only here.",
           "session-running": "Stop the running turn before moving the conversation.",
           "unknown-workspace": "That workspace no longer exists."
+        },
+        "bulk": {
+          "summary": "{moved, plural, one {# conversation moved} other {# conversations moved}}{sentToHost, plural, =0 {} other {, # sent to your Host}}{refused, plural, =0 {} other {, # not moved}}",
+          "rowRefused": "{title}: {reason}",
+          "rowFailed": "{title}: could not move it ({error})",
+          "more": "{count, plural, one {and # more} other {and # more}}",
+          "untitled": "Untitled conversation"
         }
       }
     },

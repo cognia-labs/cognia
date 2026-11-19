@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { HoverScrollText } from "@/components/chat/ui/hover-scroll-text"
+import { MatchHighlight } from "@/components/chat/completion/match-highlight"
 import { JumpFlash } from "@/components/chat/jump-flash"
 import { ThreadHandoffSourceDialog } from "@/components/thread-handoff/thread-handoff-source-dialog"
 import { PlatformBadge } from "@/components/inbox/platform-badge"
@@ -28,6 +29,7 @@ import { useInlineRename } from "@/hooks/ui/use-inline-rename"
 import { useAppShortcutLabel } from "@/hooks/shortcuts/use-app-shortcut-label"
 import type { ConversationRowExtraActions } from "@/hooks/chat/use-conversation-row-actions"
 import { sessionDisplayTitle } from "@/lib/chat/placeholder-title"
+import type { Snippet } from "@/lib/chat/search/snippet"
 import { cn } from "@/lib/utils"
 import { CountPill } from "@/components/shared/count-pill"
 import { HOVER_REVEAL_CONTROL_CLASS, HOVER_REVEAL_GROUP_CLASS } from "@/lib/ui/hover-reveal"
@@ -169,6 +171,14 @@ interface SessionRowProps {
   onRename: (id: string, title: string) => void | Promise<unknown>
   /** Toggle the pinned state for this row. */
   onTogglePinned?: (id: string, pinned: boolean) => void | Promise<unknown>
+  /**
+   * Move this row one place inside its section's hand-set order: the menu's
+   * Move up / Move down, offered where `canMoveUp` / `canMoveDown` say there is
+   * a place to go (the list decides: hand order only, never under a search).
+   */
+  onMoveInSection?: (id: string, delta: -1 | 1) => void
+  canMoveUp?: boolean
+  canMoveDown?: boolean
   /** Archive this session (hides it from the active list). */
   onArchive?: (id: string) => void | Promise<unknown>
   /** Restore this session from the Archived view back to the active list. */
@@ -201,6 +211,13 @@ interface SessionRowProps {
    * query reads as a broken search rather than a deeper one.
    */
   contentMatch?: boolean
+  /**
+   * The message excerpt that matched, for a {@link contentMatch} row: the line
+   * shows where the words were instead of only saying they were somewhere,
+   * and opening the row goes to that message (the list does the jump). The
+   * list keeps one object per hit, so the memoized row compares it by identity.
+   */
+  contentSnippet?: Snippet
   /**
    * Show the trailing activity timestamp ("14:32", "Tue", "Aug 3"). Off by
    * default so surfaces that don't want the column don't pay for it.
@@ -290,6 +307,9 @@ function SessionRowImpl({
   onDelete,
   onRename,
   onTogglePinned,
+  onMoveInSection,
+  canMoveUp = false,
+  canMoveDown = false,
   onArchive,
   onUnarchive,
   folders,
@@ -302,6 +322,7 @@ function SessionRowImpl({
   titleMotion = "hover",
   searchQuery,
   contentMatch = false,
+  contentSnippet,
   showTimestamp = false,
   now,
   virtualIndex,
@@ -524,6 +545,8 @@ function SessionRowImpl({
     onToggleSelection: onToggleSelection ? () => onToggleSelection(session.id) : undefined,
     onRename: requestRenameFromMenu,
     onTogglePinned: onTogglePinned ? handleTogglePinned : undefined,
+    onMoveUp: onMoveInSection && canMoveUp ? () => onMoveInSection(session.id, -1) : undefined,
+    onMoveDown: onMoveInSection && canMoveDown ? () => onMoveInSection(session.id, 1) : undefined,
     onMarkRead: extraActions?.onMarkRead ? () => extraActions.onMarkRead!(session.id) : undefined,
     onMarkUnread: extraActions?.onMarkUnread
       ? () => extraActions.onMarkUnread!(session.id)
@@ -791,9 +814,22 @@ function SessionRowImpl({
                   <span
                     className="flex min-w-0 items-center gap-1 text-[10px] leading-4 text-muted-foreground"
                     data-testid="session-row-content-match"
+                    title={contentSnippet ? t("contentMatch") : undefined}
                   >
                     <MessageSquareTextIcon className="size-2.5 shrink-0" aria-hidden />
-                    <span className="truncate">{t("contentMatch")}</span>
+                    {contentSnippet ? (
+                      <>
+                        <span className="sr-only">{t("contentMatch")}</span>
+                        <MatchHighlight
+                          text={contentSnippet.text}
+                          positions={contentSnippet.positions}
+                          className="min-w-0 truncate"
+                          markClassName="bg-transparent font-medium text-foreground"
+                        />
+                      </>
+                    ) : (
+                      <span className="truncate">{t("contentMatch")}</span>
+                    )}
                   </span>
                 ) : null}
                 {metadata.length > 0 ? (

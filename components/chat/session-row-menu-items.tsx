@@ -29,7 +29,9 @@ import { useTranslations } from "next-intl"
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
+  ArrowDownIcon,
   ArrowRightLeftIcon,
+  ArrowUpIcon,
   CheckIcon,
   ExternalLinkIcon,
   FolderIcon,
@@ -70,6 +72,15 @@ export interface SessionRowMenuItemsProps {
   onToggleSelection?: () => void
   onRename: () => void
   onTogglePinned?: () => void
+  /**
+   * Move the row one place up / down inside its section's hand-set order —
+   * the menu's equivalent of dragging it (WCAG 2.5.7), and the only way to
+   * reorder a section long enough to be windowed, where rows cannot be
+   * dragged. Absent where the order is not the user's (another sort, a
+   * search, the archive) or at that end of the section.
+   */
+  onMoveUp?: () => void
+  onMoveDown?: () => void
   onMarkRead?: () => void
   onMarkUnread?: () => void
   onBranch?: () => void
@@ -115,6 +126,8 @@ export function SessionRowMenuItems({
   onToggleSelection,
   onRename,
   onTogglePinned,
+  onMoveUp,
+  onMoveDown,
   onMarkRead,
   onMarkUnread,
   onBranch,
@@ -176,6 +189,18 @@ export function SessionRowMenuItems({
             <PinIcon className="mr-2 size-4" />
           )}
           {session.pinned ? t("unpin") : t("pin")}
+        </Item>
+      ) : null}
+      {onMoveUp && !isArchived ? (
+        <Item onSelect={onMoveUp} disabled={locked} data-testid={testId("move-up")}>
+          <ArrowUpIcon className="mr-2 size-4" />
+          {t("moveUp")}
+        </Item>
+      ) : null}
+      {onMoveDown && !isArchived ? (
+        <Item onSelect={onMoveDown} disabled={locked} data-testid={testId("move-down")}>
+          <ArrowDownIcon className="mr-2 size-4" />
+          {t("moveDown")}
         </Item>
       ) : null}
       {readStateAction ? (

@@ -50,12 +50,19 @@ import { EmptyArchiveDialog } from "@/components/chat/empty-archive-dialog"
 import {
   collapseKeyForView,
   collapseOverridesForView,
-  paletteQueryForView,
+  everywhereSearchQuery,
 } from "@/lib/chat/conversation-archive-view"
 import { conversationManagerHref } from "@/lib/conversations/conversation-manager"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { useIsNarrow, useMediaQuery, useRangeSelection, useEdgeResize } from "@/hooks/ui"
 import { useEdgeSwipe } from "@/hooks/ui/use-edge-swipe"
+import { useBulkMoveSessionWorkspace } from "@/hooks/workspace/use-move-session-workspace"
+import { jumpToSessionMessage } from "@/lib/chat/cross-session-jump"
+import {
+  contentHitsBySession,
+  NO_CONTENT_HITS,
+  type ContentHit,
+} from "@/lib/chat/search/content-hits"
 import { useDebouncedCallback } from "@/hooks/workflow/use-debounced-callback"
 import {
   useConversationDayClock,
@@ -176,6 +183,7 @@ import type {
 import {
   conversationSectionKey,
   dateBucketOrderFor,
+  inBrowsedWorkspace,
   owningGroupSectionKey,
   UNGROUPED_ID,
 } from "@/lib/chat/conversation-list-model"
@@ -268,6 +276,7 @@ import {
 } from "react"
 import { ChannelListBulkActions } from "./channel-list-bulk-actions"
 import { useChannelListActions } from "./channel-list/use-channel-list-actions"
+import { NewFolderNameDialog } from "./channel-list/new-folder-name-dialog"
 import type { ConversationRowExtraActions } from "@/hooks/chat/use-conversation-row-actions"
 import { ConversationExportDialog } from "@/components/chat/conversation-export-dialog"
 import { CountPill } from "@/components/shared/count-pill"
@@ -405,6 +414,12 @@ function estimateRowHeight(
 }
 
 /** What the windowed list hands a row so it can place and measure itself. */
+/** A row with no hand order to step through offers no Move up / Move down. */
+const NO_SECTION_MOVES = { onMoveInSection: undefined, canMoveUp: false, canMoveDown: false }
+
+/** What ↓ / Enter in the search field asks of the results: reach the first, or open it. */
+type SearchResultsIntent = "focus" | "open"
+
 interface RowPositioning {
   nodeRef: (el: HTMLElement | null) => void
   nodeStyle: CSSProperties
@@ -1323,14 +1338,26 @@ function ChannelListBodyImpl({
   // about which conversations exist.
   const crossWorkspaceReach = needsCrossWorkspaceSessions(effectiveGroupBy, searchOptions)
   const scopeProjectId = crossWorkspaceReach ? undefined : (activeProjectId ?? undefined)
-  // The same reach as a guild-unread scope, for the scope headers' "mark all
-  // read" — it clears exactly what these rows could show.
+  // What the list *browses*: the active workspace, unless the grouping is by
+  // workspace. A search told to reach every workspace loads them all, but that
+  // reach is the query's — with nothing typed the list, its counts, "mark all
+  // read" and "Empty archive…" stay in this workspace.
+  const browseWorkspaceId = effectiveGroupBy === "workspace" ? null : (activeProjectId ?? null)
+  const browsed = useMemo(
+    () =>
+      browseWorkspaceId
+        ? filtered.filter((session) => inBrowsedWorkspace(session, browseWorkspaceId))
+        : filtered,
+    [filtered, browseWorkspaceId]
+  )
+  // The browsing reach as a guild-unread scope, for the scope headers' "mark
+  // all read" — it clears exactly what these rows could show.
   const listUnreadScope = useMemo<GuildUnreadScope>(
     () =>
-      crossWorkspaceReach
+      browseWorkspaceId === null && crossWorkspaceReach
         ? ALL_WORKSPACES_SCOPE
         : { kind: "workspace", projectId: activeProjectId ?? null },
-    [crossWorkspaceReach, activeProjectId]
+    [browseWorkspaceId, crossWorkspaceReach, activeProjectId]
   )
   const contentSearch = useChatHistorySearch(query, {
     enabled: searchOptions.content,
@@ -1345,6 +1372,13 @@ function ChannelListBodyImpl({
     if (!searchOptions.content || query.trim().length < CONTENT_SEARCH_MIN_QUERY) return undefined
     return new Set(contentSearch.results.map((result) => result.sessionId))
   }, [searchOptions.content, query, contentSearch.results])
+  // The message each conversation matched in (`collapseBySession`: its best
+  // hit). A content-only row shows that excerpt and opens at that message
+  // (sidebar audit item 6) — the same snippet and jump ⌘K's message hits use.
+  const contentHits = useMemo(
+    () => (contentMatchIds ? contentHitsBySession(contentSearch.results) : NO_CONTENT_HITS),
+    [contentMatchIds, contentSearch.results]
+  )
   // Message search needs two characters (`useChatHistorySearch`'s
   // `minQueryLength`); titles match from one. Without saying so, a one-character
   // query silently degrades to title-only and reads as a broken index.
@@ -1403,8 +1437,8 @@ function ChannelListBodyImpl({
   // chip row below keeps a narrowed list from ever looking like a lost one.
   const viewSessions = useMemo(
     () =>
-      filtered.filter((s) => (view === "archived" ? s.archivedAt != null : s.archivedAt == null)),
-    [filtered, view]
+      browsed.filter((s) => (view === "archived" ? s.archivedAt != null : s.archivedAt == null)),
+    [browsed, view]
   )
   const filterController = useConversationFilterController({
     sessions: viewSessions,
@@ -1436,7 +1470,7 @@ function ChannelListBodyImpl({
 
   // Grouping/filtering/sorting/search now live in the shared headless model
   // (pinned → folders → the chosen axis, or a flat result list while searching).
-  const { sections, total, filteredCount, contentOnlyIds, activeFilterCount } =
+  const { sections, total, viewEmpty, filteredCount, contentOnlyIds, activeFilterCount } =
     useConversationListModel({
       sessions: filtered,
       folders: modelFolders,
@@ -1467,6 +1501,8 @@ function ChannelListBodyImpl({
       dateRunsInGroups: dateRunsOn,
       contentMatchIds: searchOptions.content ? contentMatchIds : undefined,
       searchIncludesArchived: searchOptions.includeArchived,
+      browseWorkspaceId,
+      searchIncludesAllWorkspaces: searchOptions.workspace === "all",
     })
 
   // "Show more" previews on the scope tree: every group opens capped
@@ -1539,8 +1575,14 @@ function ChannelListBodyImpl({
           section.collapsed &&
           section.sessions.some((session) => session.id === id)
       )
+      // First rung: the view the row lives in. A new conversation is always
+      // active; a conversation reached from ⌘K or the Control Center may be
+      // archived, and switching to the active view for it would only lead the
+      // ladder on to clear the search and filters for a row they never hid.
+      const target = filtered.find((session) => session.id === id)
+      const targetView: ChannelListView = target?.archivedAt != null ? "archived" : "active"
       return [
-        { active: view !== "active", undo: () => setView("active") },
+        { active: view !== targetView, undo: () => setView(targetView) },
         {
           active: query.length > 0,
           undo: () => {
@@ -1564,6 +1606,7 @@ function ChannelListBodyImpl({
     },
     [
       sections,
+      filtered,
       view,
       setView,
       query,
@@ -1620,6 +1663,7 @@ function ChannelListBodyImpl({
         teamById,
         workspaceNameById: workspaceById,
         metadataFields,
+        browseWorkspaceId,
         showCustomIcons,
         // In the merged rail a team session already sits under its squad's
         // section header, which carries the squad's avatar and name —
@@ -1644,6 +1688,7 @@ function ChannelListBodyImpl({
       teamById,
       workspaceById,
       metadataFields,
+      browseWorkspaceId,
       showCustomIcons,
       merged,
       defaultModel,
@@ -1654,6 +1699,8 @@ function ChannelListBodyImpl({
     ]
   )
 
+  // "Move to workspace" for a selection (sidebar audit item 10).
+  const workspaceMove = useBulkMoveSessionWorkspace()
   const selection = useRangeSelection(renderedOrderedIds)
   const {
     selected,
@@ -1795,19 +1842,72 @@ function ChannelListBodyImpl({
     onBranch,
     onFolderDeleted: forgetFolderCollapse,
   })
+  // "Move to folder → New folder…" while a search holds the list asks for the
+  // name first: the flat result list has no folder header to rename it in
+  // (sidebar audit item 11). Otherwise the folder opens for renaming in place.
+  // Resolves like `handleNewFolderWith`, so a cancelled dialog keeps a bulk
+  // selection for another try.
+  const searching = query.trim().length > 0
+  const [folderNameRequest, setFolderNameRequest] = useState<{
+    ids: readonly string[]
+    resolve: (ok: boolean) => void
+  } | null>(null)
+  const newFolderWith = useMemo(
+    () =>
+      handleNewFolderWith
+        ? (ids: readonly string[]): Promise<boolean> =>
+            searching
+              ? new Promise<boolean>((resolve) => setFolderNameRequest({ ids, resolve }))
+              : handleNewFolderWith(ids)
+        : undefined,
+    [handleNewFolderWith, searching]
+  )
+  const confirmFolderName = useCallback(
+    (name: string) => {
+      const request = folderNameRequest
+      if (!request || !handleNewFolderWith) return
+      setFolderNameRequest(null)
+      void handleNewFolderWith(request.ids, name).then(request.resolve)
+    },
+    [folderNameRequest, handleNewFolderWith]
+  )
+  const cancelFolderName = useCallback(() => {
+    folderNameRequest?.resolve(false)
+    setFolderNameRequest(null)
+  }, [folderNameRequest])
   // A row's "Move to folder → New folder…". Archived rows stay in date
   // buckets (folders only group the active view), so it is not offered there.
   const handleRowNewFolder = useMemo(
     () =>
-      handleNewFolderWith && view === "active"
-        ? (sessionId: string) => void handleNewFolderWith([sessionId])
+      newFolderWith && view === "active"
+        ? (sessionId: string) => void newFolderWith([sessionId])
         : undefined,
-    [handleNewFolderWith, view]
+    [newFolderWith, view]
   )
   // The export / share-link dialog's row, resolved while it is open.
   const exportSession = exportSessionId
     ? (sessions.find((session) => session.id === exportSessionId) ?? null)
     : null
+
+  // Opening a row. One that surfaced only through its message content opens
+  // at the message it matched (sidebar audit item 6); the conversation itself
+  // opens either way, so a jump that cannot land costs nothing but the scroll.
+  const contentHitsRef = useRef({ hits: contentHits, onlyIds: contentOnlyIds })
+  useEffect(() => {
+    contentHitsRef.current = { hits: contentHits, onlyIds: contentOnlyIds }
+  }, [contentHits, contentOnlyIds])
+  const openRow = useCallback(
+    (id: string) => {
+      onSelect(id)
+      const { hits, onlyIds } = contentHitsRef.current
+      const hit = onlyIds.has(id) ? hits.get(id) : undefined
+      if (!hit?.messageId) return
+      void jumpToSessionMessage(id, hit.messageId, { align: "center" }).then((landed) => {
+        if (!landed) log.warn("channel-list content hit jump did not land")
+      })
+    },
+    [onSelect]
+  )
 
   const handleSessionSelect = useCallback(
     (id: string, e: ReactMouseEvent) => {
@@ -1823,10 +1923,10 @@ function ChannelListBodyImpl({
       // clicks only mutate the selection. This mirrors Explorer / Finder.
       if (!modified) {
         void trackConversationOpened(id, "click")
-        onSelect(id)
+        openRow(id)
       }
     },
-    [handleClick, onSelect]
+    [handleClick, openRow]
   )
   // The row menu's "Select" and Space on a row: a deliberate selection, so it
   // enters the mode as well as toggling the row.
@@ -1942,7 +2042,18 @@ function ChannelListBodyImpl({
         setFocusedId(next)
       }
       if (e.key === "ArrowDown" || e.key === "j") focusAt(current < 0 ? 0 : current + 1)
-      else if (e.key === "ArrowUp" || e.key === "k")
+      else if (
+        e.key === "ArrowUp" &&
+        !e.shiftKey &&
+        current === 0 &&
+        query.trim().length > 0 &&
+        searchInputRef.current
+      ) {
+        // Above the first hit is the field that produced them: ↑ goes back
+        // to it, the way ↓ came down (`handleSearchResultsKey`).
+        e.preventDefault()
+        searchInputRef.current.focus()
+      } else if (e.key === "ArrowUp" || e.key === "k")
         focusAt(current < 0 ? renderedOrderedIds.length - 1 : current - 1)
       else if (e.key === "Home") focusAt(0)
       else if (e.key === "End") focusAt(renderedOrderedIds.length - 1)
@@ -1951,7 +2062,7 @@ function ChannelListBodyImpl({
         // row through `handleSessionSelect`; only the bare container needs it.
         e.preventDefault()
         void trackConversationOpened(focusedId, "keyboard")
-        onSelect(focusedId)
+        openRow(focusedId)
       }
     },
     [
@@ -1961,9 +2072,10 @@ function ChannelListBodyImpl({
       selectAll,
       selected.size,
       focusedId,
-      onSelect,
+      openRow,
       openSearch,
       handleClick,
+      query,
     ]
   )
 
@@ -1973,6 +2085,63 @@ function ChannelListBodyImpl({
   // The single tab stop among the rows: where the ring is, else the open
   // conversation, else the first row — so tabbing in lands on something
   // meaningful and the rest of the list is one arrow key away.
+  // ↓ / Enter in the search field (sidebar audit item 7): the field keeps
+  // focus while it types, and without a hand-over the only ways from the words
+  // to a hit were Tab or ⌘Enter, which leaves for the palette. The field has
+  // already flushed its debounced query; when the list has not rendered that
+  // query yet, the intent waits here for it (and for message hits still on
+  // their way), so the first result is the first result of what was typed.
+  const pendingResultsIntentRef = useRef<{ intent: SearchResultsIntent; query: string } | null>(
+    null
+  )
+  const latestSearchRef = useRef({ query, ids: renderedOrderedIds, pending: false })
+  useEffect(() => {
+    latestSearchRef.current = { query, ids: renderedOrderedIds, pending: contentPending }
+  }, [query, renderedOrderedIds, contentPending])
+  const actOnFirstResult = useCallback(
+    (intent: SearchResultsIntent, ids: readonly string[]) => {
+      const first = ids[0]
+      if (!first) return
+      if (intent === "open") {
+        log.info("channel-list open first search result")
+        void trackConversationOpened(first, "keyboard")
+        openRow(first)
+        return
+      }
+      // The row's own focus handler moves the ring (`handleRowFocus`). A row
+      // windowed out of the DOM gets the ring first, which scrolls it in.
+      const button = Array.from(
+        containerRef.current?.querySelectorAll<HTMLElement>("[data-session-row-select]") ?? []
+      ).find((element) => element.dataset.sessionRowSelect === first)
+      if (button) button.focus()
+      else setFocusedId(first)
+    },
+    [openRow]
+  )
+  const handleSearchResultsKey = useCallback(
+    (intent: SearchResultsIntent, value: string) => {
+      const latest = latestSearchRef.current
+      if (latest.query === value && !(latest.ids.length === 0 && latest.pending)) {
+        actOnFirstResult(intent, latest.ids)
+        return
+      }
+      pendingResultsIntentRef.current = { intent, query: value }
+    },
+    [actOnFirstResult]
+  )
+  useEffect(() => {
+    const pending = pendingResultsIntentRef.current
+    if (!pending) return
+    // Typed on since: that intent was for words no longer in the field.
+    if (pending.query !== query) {
+      pendingResultsIntentRef.current = null
+      return
+    }
+    if (renderedOrderedIds.length === 0 && contentPending) return
+    pendingResultsIntentRef.current = null
+    actOnFirstResult(pending.intent, renderedOrderedIds)
+  }, [query, renderedOrderedIds, contentPending, actOnFirstResult])
+
   const tabStopId =
     focusedId && renderedOrderedIds.includes(focusedId)
       ? focusedId
@@ -2185,6 +2354,44 @@ function ChannelListBodyImpl({
     },
     [sectionIdsBySession]
   )
+  // Write a section's new hand order and show it until the store catches up.
+  const persistSectionOrder = useCallback(
+    (
+      section: { key: string; ids: readonly string[] },
+      ids: string[],
+      movedId: string,
+      via: "keyboard" | "pointer" | "menu"
+    ) => {
+      if (!rowActions.onReorderSessions) return
+      void trackConversationReordered({
+        sectionKey: section.key,
+        before: [...section.ids],
+        after: ids,
+        via,
+      })
+      // Snapshot the *store's* order for this section (not the displayed one):
+      // the projection overrides exactly that snapshot and steps aside the
+      // moment the live query moves. Persist first so a synchronous throw
+      // never leaves a projection with nothing behind it.
+      const stored = cappedSections
+        .flatMap(conversationReorderUnits)
+        .find((unit) => unit.key === section.key)
+      const baseIds = stored ? stored.sessions.map((s) => s.id) : [...section.ids]
+      const pending: PendingReorder = { sectionKey: section.key, baseIds, ids }
+      const persisted = rowActions.onReorderSessions(ids, section.key)
+      setPendingReorder(pending)
+      flashSettled(movedId)
+      // A refused or failed write (already toasted by the action boundary)
+      // means the store will never catch up — let go rather than keep showing
+      // an order that does not exist.
+      void persisted.then((ok) => {
+        if (ok) return
+        log.warn("channel-list reorder persist failed")
+        setPendingReorder((current) => (current === pending ? null : current))
+      })
+    },
+    [cappedSections, rowActions, flashSettled]
+  )
   const handleDragEnd = useCallback(
     (e: DragEndEvent) => {
       setActiveDragId(null)
@@ -2229,35 +2436,42 @@ function ChannelListBodyImpl({
         void rowActions.onTogglePinned?.(action.sessionId, true)
         return
       }
-      if (!overSection || !rowActions.onReorderSessions) return
-      void trackConversationReordered({
-        sectionKey: overSection.key,
-        before: overSection.ids,
-        after: action.ids,
-        via: e.activatorEvent instanceof KeyboardEvent ? "keyboard" : "pointer",
-      })
-      // Snapshot the *store's* order for this section (not the displayed one):
-      // the projection overrides exactly that snapshot and steps aside the
-      // moment the live query moves. Persist first so a synchronous throw
-      // never leaves a projection with nothing behind it.
-      const stored = cappedSections
-        .flatMap(conversationReorderUnits)
-        .find((unit) => unit.key === overSection.key)
-      const baseIds = stored ? stored.sessions.map((s) => s.id) : overSection.ids
-      const pending: PendingReorder = { sectionKey: overSection.key, baseIds, ids: action.ids }
-      const persisted = rowActions.onReorderSessions(action.ids, overSection.key)
-      setPendingReorder(pending)
-      flashSettled(String(e.active.id))
-      // A refused or failed write (already toasted by the action boundary)
-      // means the store will never catch up — let go rather than keep showing
-      // an order that does not exist.
-      void persisted.then((ok) => {
-        if (ok) return
-        log.warn("channel-list reorder persist failed")
-        setPendingReorder((current) => (current === pending ? null : current))
-      })
+      if (!overSection) return
+      persistSectionOrder(
+        overSection,
+        action.ids,
+        String(e.active.id),
+        e.activatorEvent instanceof KeyboardEvent ? "keyboard" : "pointer"
+      )
     },
-    [sectionIdsBySession, cappedSections, rowActions, flashSettled, teamIds, reorderTeams]
+    [sectionIdsBySession, rowActions, persistSectionOrder, teamIds, reorderTeams]
+  )
+  // The row menu's Move up / Move down (sidebar audit item 12): the same
+  // reorder a drop makes, one place at a time, so a section's hand order can
+  // be changed without a pointer drag — and in a section long enough to be
+  // windowed, where rows cannot be dragged at all.
+  const moveInSection = useCallback(
+    (id: string, delta: -1 | 1) => {
+      const unit = sectionIdsBySession.get(id)
+      if (!unit) return
+      const index = unit.ids.indexOf(id)
+      const target = index + delta
+      if (index < 0 || target < 0 || target >= unit.ids.length) return
+      const next = [...unit.ids]
+      next.splice(target, 0, ...next.splice(index, 1))
+      persistSectionOrder(unit, next, id, "menu")
+    },
+    [sectionIdsBySession, persistSectionOrder]
+  )
+  // Handed to every row through a ref: the section map is rebuilt on every
+  // list change, and a fresh callback would re-render each memoized row.
+  const moveInSectionRef = useRef(moveInSection)
+  useEffect(() => {
+    moveInSectionRef.current = moveInSection
+  }, [moveInSection])
+  const handleMoveInSection = useCallback(
+    (id: string, delta: -1 | 1) => moveInSectionRef.current(id, delta),
+    []
   )
 
   // Toolbar visibility: always in selection mode; otherwise when ≥2 are
@@ -2312,8 +2526,8 @@ function ChannelListBodyImpl({
   // a header now counts exactly the unread conversations that sit under it,
   // never one from a workspace the tree is not showing.
   const scopeUnread = useMemo(
-    () => (merged ? aggregateGuildUnread(filtered, unreadById) : null),
-    [merged, filtered, unreadById]
+    () => (merged ? aggregateGuildUnread(browsed, unreadById) : null),
+    [merged, browsed, unreadById]
   )
   const mutedTeamIds = useMutedTeamIds()
   // One object per change, not per render — it is a prop of the memoized list.
@@ -2375,9 +2589,13 @@ function ChannelListBodyImpl({
     setQuery("")
     setSearchResetToken((token) => token + 1)
   }, [setQuery, setSearchResetToken])
+  const multipleWorkspaces = projects.length > 1
   const searchEverywhere = useCallback(() => {
-    requestCommandPalette({ query: paletteQueryForView(query, view), scope: "chats" })
-  }, [query, view])
+    requestCommandPalette({
+      query: everywhereSearchQuery(query, { multipleWorkspaces }),
+      scope: "chats",
+    })
+  }, [query, multipleWorkspaces])
   // Merged against the optimistic settings, not the rendered ones: two
   // widenings clicked before the store echoes the first must both stick.
   const widenSearch = useCallback(
@@ -2392,7 +2610,7 @@ function ChannelListBodyImpl({
     view === "active" || (query.trim().length > 0 && searchOptions.includeArchived)
   // Every archived conversation in the list's scope — not the rendered ones:
   // the count on the way in and "Empty archive" both mean all of it.
-  const archivedInScope = useMemo(() => filtered.filter((s) => s.archivedAt != null), [filtered])
+  const archivedInScope = useMemo(() => browsed.filter((s) => s.archivedAt != null), [browsed])
   const [emptyArchiveOpen, setEmptyArchiveOpen] = useState(false)
   const tArchiveScope = useTranslations("conversations.archive")
   const router = useRouter()
@@ -2470,7 +2688,8 @@ function ChannelListBodyImpl({
       onQueryChange={setQuery}
       onExpandedChange={setSearchExpanded}
       compact={merged}
-      view={view}
+      multipleWorkspaces={projects.length > 1}
+      onResultsKey={handleSearchResultsKey}
       onRequestClose={merged ? closeSearch : undefined}
     />
   )
@@ -2624,9 +2843,14 @@ function ChannelListBodyImpl({
         unreadIds={unreadIds}
         folders={modelFolders}
         onMoveToFolder={view === "active" ? rowActions.onBulkAssignToFolder : undefined}
-        onNewFolder={view === "active" ? handleNewFolderWith : undefined}
+        onNewFolder={view === "active" ? newFolderWith : undefined}
         newFolderProjectId={activeProjectId}
+        workspaceTargets={workspaceMove.workspaceTargets}
+        onMoveToWorkspace={workspaceMove.offered ? workspaceMove.moveMany : undefined}
+        movingWorkspace={workspaceMove.busy}
         onSelectAll={selectAll}
+        // The rows on screen: folded groups and "Show more" cuts stay out.
+        selectAllCovers="shown"
         onDeselectAll={deselectAll}
         onClear={exitSelection}
       />
@@ -2766,7 +2990,7 @@ function ChannelListBodyImpl({
           ) : null}
           {loading && total === 0 ? (
             <SessionListLoading />
-          ) : total === 0 && (!merged || view === "archived") ? (
+          ) : viewEmpty && (!merged || view === "archived") ? (
             <ConversationListEmptyState
               archived={view === "archived"}
               team={chatGuild.kind === "team"}
@@ -2832,7 +3056,10 @@ function ChannelListBodyImpl({
                 rowEstimate={rowEstimate}
                 searchQuery={query.trim()}
                 contentOnlyIds={contentOnlyIds}
+                contentHits={contentHits}
                 reorderable={reorderable}
+                reorderUnits={sectionIdsBySession}
+                onMoveInSection={rowActions.onReorderSessions ? handleMoveInSection : undefined}
                 metadataFor={decorations.metadataFor}
                 titleMotion={titleMotion}
                 unreadById={unreadById}
@@ -2922,15 +3149,21 @@ function ChannelListBodyImpl({
             utilities. With a bar, its own toggle segment does the job. */}
         {merged ? <SidebarFooter collapseToggle={headerOutlet === null} /> : null}
         <ConversationExportDialog session={exportSession} onClose={closeExport} />
+        <NewFolderNameDialog
+          count={folderNameRequest?.ids.length ?? 0}
+          defaultName={t("newFolderName")}
+          onConfirm={confirmFolderName}
+          onCancel={cancelFolderName}
+        />
         <EmptyArchiveDialog
           open={emptyArchiveOpen}
           onOpenChange={setEmptyArchiveOpen}
           sessions={archivedInScope}
           scopeLabel={
-            crossWorkspaceReach
-              ? tArchiveScope("scopeAllWorkspaces")
-              : activeProjectId
-                ? workspaceById.get(activeProjectId)
+            browseWorkspaceId
+              ? workspaceById.get(browseWorkspaceId)
+              : crossWorkspaceReach
+                ? tArchiveScope("scopeAllWorkspaces")
                 : undefined
           }
         />
@@ -2974,7 +3207,8 @@ function ChannelListSearch({
   onExpandedChange,
   onRequestClose,
   compact = false,
-  view = "active",
+  multipleWorkspaces = false,
+  onResultsKey,
 }: {
   inputRef: React.RefObject<HTMLInputElement | null>
   onQueryChange: (query: string) => void
@@ -3000,8 +3234,17 @@ function ChannelListSearch({
    * shrinking its text would walk into the iOS auto-zoom rule below.
    */
   compact?: boolean
-  /** The view the field narrows — the global search it hands off to looks there too. */
-  view?: ChannelListView
+  /**
+   * More than one workspace exists: "Search everywhere" then names every one
+   * of them in the query it hands on (`everywhereSearchQuery`).
+   */
+  multipleWorkspaces?: boolean
+  /**
+   * ↓ and Enter from a field holding a query: carry on into the results —
+   * move to the first one, or open it. Handed the field's value, which the
+   * list may not have caught up with yet (the query is debounced).
+   */
+  onResultsKey?: (intent: SearchResultsIntent, value: string) => void
 }) {
   const t = useTranslations("desktop.channelList")
   const [value, setValue] = useState("")
@@ -3019,8 +3262,11 @@ function ChannelListSearch({
   const openGlobalSearch = useCallback(() => {
     // Land on the *Chats* tab: the words came from a conversation search, so
     // that is the scope they were meant for (ADR-0129).
-    requestCommandPalette({ query: paletteQueryForView(value, view), scope: "chats" })
-  }, [value, view])
+    requestCommandPalette({
+      query: everywhereSearchQuery(value, { multipleWorkspaces }),
+      scope: "chats",
+    })
+  }, [value, multipleWorkspaces])
   const { call: debouncedQueryChange, cancel: cancelQueryChange } = useDebouncedCallback(
     onQueryChange,
     150
@@ -3098,6 +3344,24 @@ function ChannelListSearch({
               // ⌘/Ctrl+Enter from the field: take this query global.
               event.preventDefault()
               openGlobalSearch()
+            } else if (
+              onResultsKey &&
+              (event.key === "ArrowDown" || event.key === "Enter") &&
+              !event.shiftKey &&
+              !event.altKey &&
+              !event.metaKey &&
+              !event.ctrlKey &&
+              // An IME composition owns its own Enter and arrows.
+              !event.nativeEvent.isComposing &&
+              value.trim().length > 0
+            ) {
+              // From the words to the hits: ↓ lands on the first result, Enter
+              // opens it. The debounced query is flushed first, so the list
+              // answers for exactly what is in the field.
+              event.preventDefault()
+              cancelQueryChange()
+              onQueryChange(value)
+              onResultsKey(event.key === "Enter" ? "open" : "focus", value)
             }
           }}
           placeholder={t("searchPlaceholder")}
@@ -3823,7 +4087,10 @@ function ConversationSectionsImpl({
   rowEstimate,
   searchQuery,
   contentOnlyIds,
+  contentHits,
   reorderable,
+  reorderUnits,
+  onMoveInSection,
   metadataFor,
   titleMotion,
   unreadById,
@@ -3884,8 +4151,14 @@ function ConversationSectionsImpl({
   searchQuery: string
   /** Hits that matched message content only; they get an explanatory marker. */
   contentOnlyIds: ReadonlySet<string>
+  /** Where each content hit matched — the excerpt a content-only row shows. */
+  contentHits: ReadonlyMap<string, ContentHit>
   /** False under a non-recency sort: no grip handles, no sortable contexts. */
   reorderable: boolean
+  /** Each row's hand-ordered unit (search results have none). */
+  reorderUnits: ReadonlyMap<string, { ids: string[]; key: string }>
+  /** The row menu's Move up / Move down — offered where `reorderable`. */
+  onMoveInSection?: (id: string, delta: -1 | 1) => void
   metadataFor: (session: ChatSession) => SessionRowMetadataItem[]
   titleMotion: ConversationSidebarTitleMotion
   unreadById: Map<string, number>
@@ -3983,6 +4256,16 @@ function ConversationSectionsImpl({
     return ids
   }, [sections])
 
+  // Where a row can step to inside its hand-ordered unit, for its menu.
+  const moveProps = (id: string) => {
+    const unit = reorderable && onMoveInSection ? reorderUnits.get(id) : undefined
+    if (!unit || unit.ids.length < 2) return NO_SECTION_MOVES
+    return {
+      onMoveInSection,
+      canMoveUp: unit.ids[0] !== id,
+      canMoveDown: unit.ids[unit.ids.length - 1] !== id,
+    }
+  }
   const rowProps = (s: ChatSession): ComponentProps<typeof SessionRow> => ({
     session: s,
     active: s.id === activeSessionId,
@@ -3997,7 +4280,9 @@ function ConversationSectionsImpl({
     showTimestamp: showTimestamps,
     now,
     searchQuery: searchQuery || undefined,
+    ...moveProps(s.id),
     contentMatch: contentOnlyIds.has(s.id),
+    contentSnippet: contentOnlyIds.has(s.id) ? contentHits.get(s.id)?.snippet : undefined,
     metadata: metadataFor(s),
     titleMotion,
     accentColor: accentFor(s),

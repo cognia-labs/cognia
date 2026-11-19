@@ -78,11 +78,14 @@
       "unpinSuccess": "已取消置顶 {count} 个会话",
       "selectHint": "未选择会话",
       "selectAll": "全选（{count}）",
+      "selectAllShown": "全选已显示（{count}）",
+      "selectAllShownHint": "只选中当前显示的会话，不含已折叠的分组和“显示更多”之后的会话。要选中整组，请使用分组菜单；要选中全部匹配项，请打开会话管理。",
       "deselectAll": "取消全选",
       "done": "完成",
       "markUnread": "标为未读",
       "newFolder": "新建文件夹…",
-      "deleteConfirmMore": "以及另外 {count} 个"
+      "deleteConfirmMore": "以及另外 {count} 个",
+      "moveToWorkspace": "移动到工作区"
     },
     "cancel": "取消",
     "chatsEmpty": "还没有对话——发起一个",
@@ -140,6 +143,12 @@
     "newConversationIn": "在「{name}」中新建会话",
     "newFolder": "新建文件夹",
     "newFolderName": "新建文件夹",
+    "newFolderDialog": {
+      "title": "为新文件夹命名",
+      "description": "创建后，{count} 个会话将移入其中。",
+      "nameLabel": "文件夹名称",
+      "confirm": "创建并移入"
+    },
     "openSessions": "打开会话列表",
     "pinDropZone": "拖到这里置顶",
     "pinSidebar": "固定",
@@ -703,7 +712,9 @@
     "unarchive": "取消归档",
     "unpin": "取消置顶",
     "untitled": "（无标题）",
-    "newFolder": "新建文件夹…"
+    "newFolder": "新建文件夹…",
+    "moveUp": "上移",
+    "moveDown": "下移"
   },
   "shell": {
     "desktopOnlyBodyMiddle": " 启动应用，而不是 ",

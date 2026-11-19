@@ -25,6 +25,8 @@
  * everyday action, not something to dig for in a menu.
  */
 
+import type { Snippet } from "@/lib/chat/search/snippet"
+import { MatchHighlight } from "@/components/chat/completion/match-highlight"
 import { memo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import type { ChatSession, SessionFolder } from "@cognia/agent-config-types"
@@ -102,6 +104,8 @@ export interface ConversationManagerRowProps {
   unread: number
   /** The row surfaced only because its message content matched the search. */
   contentMatch: boolean
+  /** The excerpt it matched in; opening the row goes to that message. */
+  contentSnippet?: Snippet
   /** The list's clock, for relative times. */
   now: Date
   rowActions: ConversationRowActions
@@ -123,6 +127,7 @@ function ConversationManagerRowImpl({
   runStatus,
   unread,
   contentMatch,
+  contentSnippet,
   now,
   rowActions,
   extraActions,
@@ -289,9 +294,25 @@ function ConversationManagerRowImpl({
                   />
                 ) : null}
                 {contentMatch ? (
-                  <span className="inline-flex min-w-0 items-center gap-1">
+                  <span
+                    className="inline-flex min-w-0 items-center gap-1"
+                    title={contentSnippet ? t("contentMatch") : undefined}
+                    data-testid={`conversation-row-content-match-${id}`}
+                  >
                     <MessageSquareTextIcon className="size-3 shrink-0" aria-hidden />
-                    <span className="truncate">{t("contentMatch")}</span>
+                    {contentSnippet ? (
+                      <>
+                        <span className="sr-only">{t("contentMatch")}</span>
+                        <MatchHighlight
+                          text={contentSnippet.text}
+                          positions={contentSnippet.positions}
+                          className="truncate"
+                          markClassName="bg-transparent font-medium text-foreground"
+                        />
+                      </>
+                    ) : (
+                      <span className="truncate">{t("contentMatch")}</span>
+                    )}
                   </span>
                 ) : null}
                 <SessionRunIndicator

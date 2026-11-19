@@ -217,6 +217,25 @@ export interface BuildSectionsOptions {
    */
   searchIncludesArchived?: boolean
   /**
+   * The workspace the list browses. When set, rows of another workspace stay
+   * out of the browsing list, out of `total`, and out of every count derived
+   * from them; a conversation of no workspace is shared, so it stays in
+   * ({@link inBrowsedWorkspace}). `null` / omitted = no restriction — the rows
+   * were loaded for one workspace already, or the list groups by workspace and
+   * every one of them is a section.
+   *
+   * Set it whenever `sessions` may span workspaces for a *search*'s sake
+   * (`needsCrossWorkspaceSessions`): the search scope decides what a query can
+   * find, never what the list holds while nothing is typed.
+   */
+  browseWorkspaceId?: string | null
+  /**
+   * Let a query reach rows of every workspace, past `browseWorkspaceId`. The
+   * workspace twin of {@link searchIncludesArchived}, and like it applies only
+   * while `query` is non-empty.
+   */
+  searchIncludesAllWorkspaces?: boolean
+  /**
    * Order applied inside every section. Defaults to `"recent"` — the historical
    * behavior, and the only mode that honors a drag-reordered `manualOrder`.
    */
@@ -288,6 +307,13 @@ export interface ConversationListModel {
    * matched nothing".
    */
   total: number
+  /**
+   * The view's own empty state applies: the view holds nothing AND no query
+   * is reaching past it. A query that may reach the other side of the archive
+   * split, or another workspace, is a search over more than this view — its
+   * hits (or its miss) say more than "nothing archived here" does.
+   */
+  viewEmpty: boolean
   /**
    * Sessions that survived the quick filters *and* search — whether or not the
    * section holding them is folded open.
@@ -761,6 +787,19 @@ export function folderAcceptsSession(
   return !folder.projectId || !session.projectId || folder.projectId === session.projectId
 }
 
+/**
+ * Whether the list browsing `workspaceId` shows `session`. A conversation of no
+ * workspace is shared, not foreign: the scoped session read keeps it in every
+ * workspace (`listWorkspaceSessions`), so the browse filter must too. A `null`
+ * workspace browses everything.
+ */
+export function inBrowsedWorkspace(
+  session: Pick<ChatSession, "projectId">,
+  workspaceId: string | null | undefined
+): boolean {
+  return !workspaceId || !session.projectId || session.projectId === workspaceId
+}
+
 /** The folders `session` may be filed into — the "Move to folder" choices. */
 export function assignableFolders<F extends Pick<SessionFolder, "projectId">>(
   session: Pick<ChatSession, "projectId">,
@@ -886,6 +925,8 @@ export function buildConversationSections(
     dateRunsInGroups = false,
     contentMatchIds,
     searchIncludesArchived = false,
+    browseWorkspaceId = null,
+    searchIncludesAllWorkspaces = false,
     sortBy = "recent",
     filters,
     unreadIds,
@@ -905,21 +946,33 @@ export function buildConversationSections(
   // transcripts — never listed, bucketed, or matched by search on any surface
   // (desktop + mobile both flow through here).
   const listable = dedupeSessionsById(sessions).filter((s) => s.kind !== "subagent")
-  const viewed = listable.filter((s) =>
+  const inView = (s: ChatSession) =>
     view === "archived" ? s.archivedAt != null : s.archivedAt == null
-  )
+  // Browsing stays in its workspace even when the rows were loaded across all
+  // of them for a search's sake — the same split the archive gets below.
+  const browsable = browseWorkspaceId
+    ? listable.filter((s) => inBrowsedWorkspace(s, browseWorkspaceId))
+    : listable
+  const viewed = browsable.filter(inView)
   // `total` counts the *view*, deliberately before quick filters: it is what
   // separates "you have no archived conversations" from "your filters matched
   // nothing", and those need different empty states. It stays the view's own
-  // count even when a query reaches past the archive split — a hit from the
-  // other side is not evidence that this view has something in it.
+  // count even when a query reaches past the archive split or the workspace —
+  // a hit from the other side is not evidence that this view has something in
+  // it.
   const total = viewed.length
 
-  // A query may reach past the archive split; browsing never does. Keeping the
-  // two apart is what stops the archived *view* and the search *reach* from
-  // being two controls for one thing: one decides what you are looking at, the
-  // other decides what a query is allowed to find.
-  const pool = needle && searchIncludesArchived ? listable : viewed
+  // A query may reach past the archive split and past the workspace; browsing
+  // never does. Keeping the two apart is what stops the archived *view* and
+  // the search *reach* from being two controls for one thing: one decides what
+  // you are looking at, the other decides what a query is allowed to find.
+  const reachesArchive = Boolean(needle) && searchIncludesArchived
+  // Only a list that browses one workspace has another one to reach.
+  const reachesOtherWorkspaces =
+    Boolean(needle) && searchIncludesAllWorkspaces && Boolean(browseWorkspaceId)
+  const reach = reachesOtherWorkspaces ? listable : browsable
+  const pool = reachesArchive ? reach : reachesOtherWorkspaces ? reach.filter(inView) : viewed
+  const viewEmpty = total === 0 && !reachesArchive && !reachesOtherWorkspaces
 
   // Quick filters narrow everything downstream — search, buckets, and the
   // section counts alike — so a count on screen always describes what is on
@@ -959,6 +1012,7 @@ export function buildConversationSections(
     return {
       sections: matched.length ? [{ kind: "search", sessions: matched }] : [],
       total,
+      viewEmpty,
       filteredCount: matched.length,
       visibleCount: matched.length,
       orderedIds: matched.map((s) => s.id),
@@ -972,6 +1026,7 @@ export function buildConversationSections(
     return {
       sections: ordered.length ? [{ kind: "recent", sessions: ordered }] : [],
       total,
+      viewEmpty,
       filteredCount: ordered.length,
       visibleCount: ordered.length,
       orderedIds: ordered.map((s) => s.id),
@@ -1133,6 +1188,7 @@ export function buildConversationSections(
   return {
     sections,
     total,
+    viewEmpty,
     filteredCount: candidates.length,
     visibleCount: orderedIds.length,
     orderedIds,

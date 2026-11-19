@@ -291,7 +291,11 @@ jest.mock("@/stores/settings", () => ({
 
 const useChatHistorySearch = jest.fn()
 let historySearchState = {
-  results: [] as Array<{ sessionId: string }>,
+  results: [] as Array<{
+    sessionId: string
+    messageId?: string
+    snippet?: { text: string; positions: number[] }
+  }>,
   moreOlderHistory: false,
   indexIncomplete: false,
   loading: false,
@@ -299,6 +303,11 @@ let historySearchState = {
 }
 jest.mock("@/hooks/chat/use-chat-history-search", () => ({
   useChatHistorySearch: (...args: unknown[]) => useChatHistorySearch(...args),
+}))
+
+const mockJumpToSessionMessage = jest.fn(async (..._args: unknown[]) => true)
+jest.mock("@/lib/chat/cross-session-jump", () => ({
+  jumpToSessionMessage: (...args: unknown[]) => mockJumpToSessionMessage(...args),
 }))
 
 let isNarrow = false
@@ -431,7 +440,17 @@ function baseSession(id: string, overrides: Partial<ChatSession> = {}): ChatSess
   } as unknown as ChatSession
 }
 
+// The workspace store is real here, and several tests point it at their own
+// workspaces; the list browses the active one, so a leftover choice would
+// hide the next test's rows.
+const initialProjectState = useProjectStore.getState()
+
 beforeEach(() => {
+  useProjectStore.setState({
+    projects: initialProjectState.projects,
+    activeProjectId: initialProjectState.activeProjectId,
+    loaded: initialProjectState.loaded,
+  })
   logInfo.mockReset()
   logWarn.mockReset()
   jest.mocked(listTelemetry.trackConversationCreated).mockClear()
@@ -576,6 +595,66 @@ test("persists a drag-end reorder for the section that contains both conversatio
   })
 
   expect(onReorderSessions).toHaveBeenCalledWith(["second", "first"], "date:today")
+})
+
+test("moves a conversation one place from its menu, the drag-free reorder (audit item 12)", async () => {
+  conversationSidebar = { groupBy: "date" }
+  for (let i = 0; i < 6; i++) callQueue.push(characters, [], undefined)
+  const onReorderSessions = jest.fn(async () => true)
+  const now = Date.now()
+  const user = userEvent.setup()
+  render(
+    <ChannelList
+      sessions={[
+        baseSession("first", { title: "First", updatedAt: now }),
+        baseSession("second", { title: "Second", updatedAt: now - 1 }),
+      ]}
+      activeSessionId={null}
+      onSelect={jest.fn()}
+      onNewDirect={jest.fn()}
+      onNewTeamConversation={jest.fn()}
+      onDelete={jest.fn()}
+      onRename={jest.fn()}
+      onReorderSessions={onReorderSessions}
+    />
+  )
+  // The top row has nowhere higher to go.
+  await user.click(screen.getAllByRole("button", { name: "actionsMenu" })[0]!)
+  expect(screen.queryByTestId("session-row-dropdown-move-up-first")).toBeNull()
+  expect(await screen.findByTestId("session-row-dropdown-move-down-first")).toBeInTheDocument()
+  await user.keyboard("{Escape}")
+  await user.click(screen.getAllByRole("button", { name: "actionsMenu" })[1]!)
+  expect(screen.queryByTestId("session-row-dropdown-move-down-second")).toBeNull()
+  await user.click(await screen.findByTestId("session-row-dropdown-move-up-second"))
+  expect(onReorderSessions).toHaveBeenCalledWith(["second", "first"], "date:today")
+  expect(listTelemetry.trackConversationReordered).toHaveBeenCalledWith(
+    expect.objectContaining({ via: "menu", sectionKey: "date:today" })
+  )
+})
+
+test("offers no menu reorder where the order is not the user's", async () => {
+  conversationSidebar = { groupBy: "date", sortBy: "title" }
+  for (let i = 0; i < 6; i++) callQueue.push(characters, [], undefined)
+  const now = Date.now()
+  const user = userEvent.setup()
+  render(
+    <ChannelList
+      sessions={[
+        baseSession("first", { title: "First", updatedAt: now }),
+        baseSession("second", { title: "Second", updatedAt: now - 1 }),
+      ]}
+      activeSessionId={null}
+      onSelect={jest.fn()}
+      onNewDirect={jest.fn()}
+      onNewTeamConversation={jest.fn()}
+      onDelete={jest.fn()}
+      onRename={jest.fn()}
+      onReorderSessions={jest.fn()}
+    />
+  )
+  await user.click(screen.getAllByRole("button", { name: "actionsMenu" })[1]!)
+  await screen.findByTestId("session-row-dropdown-rename-second")
+  expect(screen.queryByTestId("session-row-dropdown-move-up-second")).toBeNull()
 })
 
 test("dropping an unpinned conversation on the Pinned header pins it", async () => {
@@ -1990,6 +2069,51 @@ describe("revealing a freshly created conversation", () => {
     expect(channelListView).toBe("active")
   })
 
+  it("goes to the archive for an archived conversation reached from elsewhere (audit item 8)", async () => {
+    callQueue.push(characters, [], undefined)
+    conversationFilters = { unread: false, pinned: true, branched: false, kind: "all" }
+    pendingConversationReveal = "old"
+    render(
+      <ChannelList
+        sessions={[
+          baseSession("live", { title: "Live one", pinned: true }),
+          baseSession("old", { title: "Archived one", archivedAt: 50 }),
+        ]}
+        activeSessionId="old"
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+        onArchive={jest.fn()}
+        onUnarchive={jest.fn()}
+      />
+    )
+    // The archived view, not the active one: switching to active would only
+    // have led the ladder on to drop filters that never hid it there.
+    await waitFor(() => expect(channelListView).toBe("archived"))
+  })
+
+  it("unfolds the folder a conversation opened from ⌘K sits in", async () => {
+    callQueue.push(characters, [], undefined)
+    collapsedFolderIds = ["f-work"]
+    pendingConversationReveal = "filed"
+    const work = { id: "f-work", name: "Work", order: 0, createdAt: 0, updatedAt: 0 }
+    render(
+      <ChannelList
+        sessions={[baseSession("filed", { title: "Filed one", folderId: "f-work" })]}
+        folders={[work]}
+        activeSessionId="filed"
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    await waitFor(() => expect(collapsedFolderIds).toEqual([]))
+  })
+
   it("clears a search that is hiding the new conversation", async () => {
     callQueue.push(characters, [], undefined)
     pendingConversationReveal = "new"
@@ -2632,6 +2756,41 @@ describe("interaction upgrades", () => {
     )
     expect(await screen.findByText("Bravo")).toBeInTheDocument()
     expect(screen.queryByText("Alpha")).toBeNull()
+  })
+
+  test("a body-only hit shows where it matched and opens at that message (audit item 6)", async () => {
+    conversationSidebar = { search: { content: true } }
+    historySearchState = {
+      ...historySearchState,
+      results: [
+        {
+          sessionId: "s-b",
+          messageId: "m-9",
+          snippet: { text: "…the zzz deploy", positions: [5, 6, 7] },
+        },
+      ],
+    }
+    mockJumpToSessionMessage.mockClear()
+    callQueue.push(characters, [], undefined)
+    const onSelect = jest.fn()
+    const user = userEvent.setup()
+    render(
+      <ChannelList
+        sessions={[dmA, dmB]}
+        activeSessionId={null}
+        onSelect={onSelect}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    await user.type(screen.getByLabelText("searchAria"), "zzz")
+    const line = await screen.findByTestId("session-row-content-match")
+    expect(line).toHaveTextContent("…the zzz deploy")
+    await user.click(screen.getByRole("button", { name: /Bravo/ }))
+    expect(onSelect).toHaveBeenCalledWith("s-b")
+    expect(mockJumpToSessionMessage).toHaveBeenCalledWith("s-b", "m-9", { align: "center" })
   })
 
   test("does not claim 'no results' while the message index is still answering", async () => {
@@ -4241,7 +4400,8 @@ describe("title-bar projection", () => {
       fireEvent.change(input, { target: { value: "budget" } })
       fireEvent.click(screen.getByTestId("channel-list-global-search"))
       // …and lands on the Chats scope, where those words belong (ADR-0129).
-      expect(requests).toEqual([{ query: "budget", scope: "chats" }])
+      // "Everywhere" is the archive too, which the palette leaves out by default.
+      expect(requests).toEqual([{ query: "is:archived budget", scope: "chats" }])
       // ⌘Enter is the keyboard route to the same place.
       fireEvent.keyDown(input, { key: "Enter", metaKey: true })
       expect(requests).toHaveLength(2)
@@ -5694,6 +5854,58 @@ describe("managing conversations", () => {
     expect(onCreateFolder).toHaveBeenCalledWith("newFolderName")
   })
 
+  it("asks for the name first when a search holds the list (audit item 11)", async () => {
+    const user = userEvent.setup()
+    const made = { id: "f-row", name: "Launch", order: 0, createdAt: 0, updatedAt: 0 }
+    const onCreateFolder = jest.fn(async () => made)
+    const onBulkAssignToFolder = jest.fn(async () => {})
+    renderList({ folders: [], onCreateFolder, onAssignToFolder: jest.fn(), onBulkAssignToFolder })
+    fireEvent.change(screen.getByLabelText("searchAria"), { target: { value: "bravo" } })
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: "actionsMenu" })).toHaveLength(1)
+    )
+    await user.click(screen.getByRole("button", { name: "actionsMenu" }))
+    fireEvent.keyDown(await screen.findByTestId("session-row-dropdown-move-folder-s-b"), {
+      key: "ArrowRight",
+    })
+    await user.click(await screen.findByTestId("session-row-dropdown-folder-new-s-b"))
+    // Nothing is made until it has a name: the flat results have no folder
+    // header to rename it in afterwards.
+    const input = await screen.findByTestId("new-folder-name-input")
+    expect(onCreateFolder).not.toHaveBeenCalled()
+    expect(input).toHaveValue("newFolderName")
+    await user.clear(input)
+    await user.type(input, "Launch")
+    await user.click(screen.getByTestId("new-folder-name-confirm"))
+    await waitFor(() => expect(onBulkAssignToFolder).toHaveBeenCalledWith(["s-b"], "f-row"))
+    expect(onCreateFolder).toHaveBeenCalledWith("Launch")
+    expect(screen.queryByTestId("new-folder-name-dialog")).toBeNull()
+  })
+
+  it("makes nothing when the name is cancelled", async () => {
+    const user = userEvent.setup()
+    const onCreateFolder = jest.fn()
+    renderList({
+      folders: [],
+      onCreateFolder,
+      onAssignToFolder: jest.fn(),
+      onBulkAssignToFolder: jest.fn(),
+    })
+    fireEvent.change(screen.getByLabelText("searchAria"), { target: { value: "bravo" } })
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: "actionsMenu" })).toHaveLength(1)
+    )
+    await user.click(screen.getByRole("button", { name: "actionsMenu" }))
+    fireEvent.keyDown(await screen.findByTestId("session-row-dropdown-move-folder-s-b"), {
+      key: "ArrowRight",
+    })
+    await user.click(await screen.findByTestId("session-row-dropdown-folder-new-s-b"))
+    await screen.findByTestId("new-folder-name-input")
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByTestId("new-folder-name-dialog")).toBeNull())
+    expect(onCreateFolder).not.toHaveBeenCalled()
+  })
+
   it("keeps folder-making out of the archived view, for a row and for a selection", async () => {
     const user = userEvent.setup()
     channelListView = "archived"
@@ -5933,7 +6145,7 @@ describe("managing conversations", () => {
         renderList()
         await searchFor("zzz")
         fireEvent.click(screen.getByTestId("channel-list-empty-search-everywhere"))
-        expect(requests).toEqual([{ query: "zzz", scope: "chats" }])
+        expect(requests).toEqual([{ query: "is:archived zzz", scope: "chats" }])
       } finally {
         window.removeEventListener("cognia:command-palette:request", onRequest)
       }
@@ -6118,6 +6330,185 @@ describe("archive view entry points and archived rows (ADR-0213)", () => {
     await user.click(await screen.findByTestId("session-row-dropdown-archive-s-act"))
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith("s-next"))
     expect(screen.getByRole("dialog", { name: "conversationsTitle" })).toBeInTheDocument()
+  })
+})
+
+describe("from the search field into its results (sidebar audit 7)", () => {
+  const rows = [
+    baseSession("s-a", { title: "Alpha plan", updatedAt: 30 }),
+    baseSession("s-b", { title: "Bravo plan", updatedAt: 20 }),
+    baseSession("s-c", { title: "Charlie", updatedAt: 10 }),
+  ]
+  function renderList(onSelect = jest.fn()) {
+    for (let i = 0; i < 6; i++) callQueue.push(characters, [], undefined)
+    render(
+      <ChannelList
+        sessions={rows}
+        activeSessionId={null}
+        onSelect={onSelect}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    return { onSelect, input: screen.getByLabelText("searchAria") }
+  }
+
+  it("moves ↓ onto the first hit and ↑ back to the field", async () => {
+    const { input } = renderList()
+    act(() => input.focus())
+    // Typed and handed over at once, before the debounce has settled.
+    fireEvent.change(input, { target: { value: "plan" } })
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+    const first = await screen.findByRole("button", { name: /Alpha plan/ })
+    await waitFor(() => expect(first).toHaveFocus())
+    fireEvent.keyDown(first, { key: "ArrowUp" })
+    expect(input).toHaveFocus()
+  })
+
+  it("opens the first hit on Enter", async () => {
+    const { input, onSelect } = renderList()
+    act(() => input.focus())
+    fireEvent.change(input, { target: { value: "bravo" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("s-b"))
+    expect(listTelemetry.trackConversationOpened).toHaveBeenCalledWith("s-b", "keyboard")
+  })
+
+  it("leaves Enter to an IME composition and opens nothing for a miss", async () => {
+    const { input, onSelect } = renderList()
+    act(() => input.focus())
+    fireEvent.change(input, { target: { value: "plan" } })
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true })
+    fireEvent.change(input, { target: { value: "zzz" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await screen.findByTestId("channel-list-empty-narrowed")
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(input).toHaveFocus()
+  })
+})
+
+describe("search reach is the query's, browsing stays in the workspace (sidebar audit 1, 2, 4)", () => {
+  const projects = [
+    { id: "w1", name: "Alpha" },
+    { id: "w2", name: "Beta" },
+  ] as unknown as Project[]
+  const here = baseSession("s-here", { title: "Here plan", projectId: "w1", updatedAt: 30 })
+  const shared = baseSession("s-shared", { title: "Shared plan", updatedAt: 20 })
+  const there = baseSession("s-there", { title: "There plan", projectId: "w2", updatedAt: 10 })
+  const thereArchived = baseSession("s-there-old", {
+    title: "There archived",
+    projectId: "w2",
+    archivedAt: 5,
+    updatedAt: 5,
+  })
+
+  function renderList(sessions: ChatSession[] = [here, shared, there, thereArchived]) {
+    for (let i = 0; i < 6; i++) callQueue.push(characters, [], undefined)
+    return render(
+      <ChannelList
+        sessions={sessions}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+        onArchive={jest.fn()}
+        onUnarchive={jest.fn()}
+      />
+    )
+  }
+
+  beforeEach(() => {
+    useProjectStore.setState({ projects, activeProjectId: "w1", loaded: true })
+    // The search reaches every workspace — the rows arrive loaded across them.
+    conversationSidebar = { groupBy: "none", search: { workspace: "all" } }
+  })
+
+  afterEach(() => {
+    useProjectStore.setState({ projects: [], activeProjectId: null, loaded: false })
+  })
+
+  it("lists only this workspace (and shared rows) while nothing is typed", () => {
+    renderList()
+    expect(screen.getByText("Here plan")).toBeInTheDocument()
+    expect(screen.getByText("Shared plan")).toBeInTheDocument()
+    expect(screen.queryByText("There plan")).toBeNull()
+    // The archive count is this workspace's: the other one's archived row is
+    // not something this list would empty.
+    expect(screen.getByTestId("channel-list-archived-toggle")).toHaveAttribute(
+      "title",
+      "viewArchived"
+    )
+  })
+
+  it("lets a query reach the other workspace, and names it on that row", async () => {
+    renderList()
+    fireEvent.change(screen.getByLabelText("searchAria"), { target: { value: "plan" } })
+    // The title is split by the match highlight, so find the row by name.
+    const row = (await screen.findByRole("button", { name: /There plan/ })).closest("li")!
+    const metadata = within(row).getByTestId("session-row-metadata")
+    expect(metadata.querySelector('[data-metadata-kind="workspace"]')).toHaveTextContent("Beta")
+    // This workspace's rows do not repeat their own workspace.
+    const ownRow = screen.getByRole("button", { name: /Here plan/ }).closest("li")!
+    expect(within(ownRow).queryByText("Alpha")).toBeNull()
+  })
+
+  it("empties only this workspace's archive, and says so", async () => {
+    const user = userEvent.setup()
+    channelListView = "archived"
+    const hereArchived = baseSession("s-here-old", {
+      title: "Here archived",
+      projectId: "w1",
+      archivedAt: 6,
+      updatedAt: 6,
+    })
+    renderList([here, there, hereArchived, thereArchived])
+    expect(screen.queryByText("There archived")).toBeNull()
+    await user.click(screen.getByTestId("channel-list-actions-menu"))
+    await user.click(await screen.findByTestId("channel-list-empty-archive"))
+    const dialog = await screen.findByTestId("empty-archive-dialog")
+    expect(within(dialog).getByText('title:{"count":1}')).toBeInTheDocument()
+    expect(within(dialog).getByTestId("empty-archive-titles")).toHaveTextContent("Here archived")
+    expect(within(dialog).getByTestId("empty-archive-titles")).not.toHaveTextContent(
+      "There archived"
+    )
+    expect(dialog).toHaveTextContent('scope:{"scope":"Alpha"}')
+  })
+
+  it("shows the hits of a search that reaches past an empty archive", async () => {
+    channelListView = "archived"
+    conversationSidebar = { groupBy: "none", search: { includeArchived: true } }
+    renderList([here, shared])
+    expect(await screen.findByText("emptyArchivedTitle")).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText("searchAria"), { target: { value: "Here plan" } })
+    expect(await screen.findByText("Here plan")).toBeInTheDocument()
+    expect(screen.queryByText("emptyArchivedTitle")).toBeNull()
+  })
+
+  it("says a search past an empty archive found nothing, instead of the archive being empty", async () => {
+    channelListView = "archived"
+    conversationSidebar = { groupBy: "none", search: { includeArchived: true } }
+    renderList([here, shared])
+    fireEvent.change(screen.getByLabelText("searchAria"), { target: { value: "zzz" } })
+    expect(await screen.findByTestId("channel-list-empty-narrowed")).toBeInTheDocument()
+    expect(screen.queryByText("emptyArchivedTitle")).toBeNull()
+  })
+
+  it("hands Search everywhere every workspace and the archive", async () => {
+    const requests: unknown[] = []
+    const onRequest = (event: Event) => requests.push((event as CustomEvent).detail)
+    window.addEventListener("cognia:command-palette:request", onRequest)
+    try {
+      renderList()
+      fireEvent.change(screen.getByLabelText("searchAria"), { target: { value: "zzz" } })
+      fireEvent.click(await screen.findByTestId("channel-list-empty-search-everywhere"))
+      expect(requests).toEqual([{ query: "is:archived workspace:all zzz", scope: "chats" }])
+    } finally {
+      window.removeEventListener("cognia:command-palette:request", onRequest)
+    }
   })
 })
 
