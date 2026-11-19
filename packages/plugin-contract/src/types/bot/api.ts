@@ -18,9 +18,18 @@ export type BotInstallationStatus = "enabled" | "disabled" | "needs_setup"
 
 export type BotScopeKind = "account" | "workspace" | "project"
 
+/**
+ * A monitoring Bot's last observation. `recordMonitor` merges writes so a late
+ * one from an older run cannot undo a newer one: `lastSuccessAt` (the time the
+ * successful scan observed) only moves forward, the `cursor` with it, and a
+ * success clears only an error recorded before it was observed.
+ */
 export interface BotMonitorState {
   lastSuccessAt?: number
+  /** `null` clears a recorded error. */
   lastError?: string | null
+  /** When the host recorded `lastError`. Set by the host; a write's own value is ignored. */
+  lastErrorAt?: number
   retryAt?: number
   cursor?: string
 }
@@ -136,9 +145,22 @@ export type BotWaitOutcome<T> =
 export interface PluginBotsAPI {
   getInstallation(runId: string): Promise<BotInstallationSnapshot>
   enqueue(runId: string, input: BotEnqueueInput): Promise<{ deliveryId: string }>
+  /**
+   * Cancel this installation's unsettled deliveries about one resource.
+   * `resourceKind` and `resourceScope` narrow the match, since a resource id
+   * is unique only within its kind and scope (pull request 7 of two
+   * repositories). `exceptEventId` keeps one event: the id `listDeliveries`
+   * returns, or the record id it was enqueued with.
+   */
   cancelResource(
     runId: string,
-    input: { resourceId: string; exceptEventId?: string; exceptRevision?: string }
+    input: {
+      resourceId: string
+      resourceKind?: string
+      resourceScope?: string
+      exceptEventId?: string
+      exceptRevision?: string
+    }
   ): Promise<number>
   recordMonitor(runId: string, patch: BotMonitorState): Promise<void>
   /**

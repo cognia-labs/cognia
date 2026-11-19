@@ -1,4 +1,4 @@
-import type { BotDeliverySummary, PluginBotsAPI } from "@/types/bot/api"
+import type { BotDeliverySummary, BotMonitorState, PluginBotsAPI } from "@/types/bot/api"
 import type { BotHandlerResultV1 } from "@/types/bot/run"
 import { requireOwnedBotRun } from "@/lib/bot/runtime/owned-run"
 import { dispatchBotEvent, dispatchManualBotRun } from "@/lib/bot/events/dispatch"
@@ -44,6 +44,49 @@ import { canonicalIntegrationValue } from "./bot-integration-binding"
 const BOT_LOG_LEVELS = new Set(["debug", "info", "warn", "error"])
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * Fold one monitor observation into the stored state, so that a late write
+ * from an older run can never undo a newer one.
+ *
+ * A success carries the time it observed (`lastSuccessAt`, a scan's start),
+ * an error the time the host recorded it (`lastErrorAt`, stamped here). The
+ * success time only moves forward and its cursor moves with it; a success
+ * clears only an error recorded before it was observed. Applied in either
+ * completion order, two runs leave the same state.
+ */
+export function mergeBotMonitor(
+  current: BotMonitorState | undefined,
+  patch: BotMonitorState,
+  now: number
+): BotMonitorState {
+  const next: BotMonitorState = { ...current }
+  if (patch.lastSuccessAt !== undefined) {
+    const newest = next.lastSuccessAt === undefined || patch.lastSuccessAt >= next.lastSuccessAt
+    if (newest) {
+      next.lastSuccessAt = patch.lastSuccessAt
+      if (patch.cursor !== undefined) next.cursor = patch.cursor
+    }
+    // JSON/Python callers omit undefined fields, so a success clears a
+    // failure by itself, across that serialized boundary too.
+    if (next.lastErrorAt === undefined || patch.lastSuccessAt >= next.lastErrorAt) {
+      delete next.lastError
+      delete next.lastErrorAt
+      delete next.retryAt
+    }
+  } else if (patch.cursor !== undefined) {
+    next.cursor = patch.cursor
+  }
+  if (patch.lastError === null) {
+    delete next.lastError
+    delete next.lastErrorAt
+  } else if (patch.lastError !== undefined) {
+    next.lastError = patch.lastError
+    next.lastErrorAt = now
+  }
+  if (patch.retryAt !== undefined) next.retryAt = patch.retryAt
+  return next
+}
 
 export function createBotsAPI(
   pluginId: string,
@@ -117,16 +160,28 @@ export function createBotsAPI(
         .botEventDeliveries.where("installationId")
         .equals(installation.id)
         .toArray()
-      const affected = rows.filter(
-        (row) =>
+      // The id `listDeliveries` returns is the canonical event id; the record
+      // id `enqueue` was given becomes `bev_bot_<id>`. Either names the event
+      // to keep, so a read's output can be handed straight back.
+      const kept = input.exceptEventId
+        ? new Set([input.exceptEventId, botEventId("bot", input.exceptEventId)])
+        : undefined
+      const affected = rows.filter((row) => {
+        const resource = row.envelope.resource
+        return (
           row.runId !== runId &&
           !isTerminalBotDelivery(row.status) &&
-          row.envelope.resource?.id === input.resourceId &&
+          resource?.id === input.resourceId &&
+          // Resource ids are only unique within a kind and a scope: PR #7 of
+          // two repositories is two resources.
+          (input.resourceKind === undefined || resource.kind === input.resourceKind) &&
+          (input.resourceScope === undefined || resource.scope === input.resourceScope) &&
           (!input.exceptRevision ||
             (row.envelope.payload as { revision?: unknown } | null)?.revision !==
               input.exceptRevision) &&
-          (!input.exceptEventId || row.eventId !== botEventId("bot", input.exceptEventId))
-      )
+          !kept?.has(row.eventId)
+        )
+      })
       for (const row of affected) {
         if (row.runId) {
           await cancelBotRun(row.runId)
@@ -145,17 +200,10 @@ export function createBotsAPI(
       await db.transaction("rw", db.botInstallations, async () => {
         const current = await db.botInstallations.get(installation.id)
         if (!current) throw new Error("Bot installation was removed")
+        const now = Date.now()
         await db.botInstallations.update(current.id, {
-          monitor: {
-            ...current.monitor,
-            // JSON/Python callers omit undefined fields. A successful sync
-            // clears a previous failure even across that serialized boundary.
-            ...(patch.lastSuccessAt !== undefined
-              ? { lastError: undefined, retryAt: undefined }
-              : {}),
-            ...patch,
-          },
-          updatedAt: Date.now(),
+          monitor: mergeBotMonitor(current.monitor, patch, now),
+          updatedAt: now,
         })
       })
     },
@@ -359,9 +407,16 @@ export function createBotsAPI(
       const envelope = buildBotEventEnvelope({
         source: "bot",
         // Deterministic: a re-entered handler emitting the same thing lands on
-        // the same event id, and arrival-dedup collapses the repeat.
+        // the same event id, and arrival-dedup collapses the repeat. The
+        // resource is part of what "the same thing" means: one payload about
+        // pull request A and about B is two events, not a repeat of one.
         sourceRecordId: await sha256Hex(
-          JSON.stringify([runId, input.type, canonicalIntegrationValue(input.payload)])
+          JSON.stringify([
+            runId,
+            input.type,
+            canonicalIntegrationValue(input.payload),
+            canonicalIntegrationValue(input.resource ?? null),
+          ])
         ),
         type: input.type,
         installationId: "",
@@ -383,14 +438,17 @@ export function createBotsAPI(
         query: { source: "bot", type: input.type },
         now,
       })
+      // One installation may take an event on several of its triggers: a
+      // delivery each, but still one installation.
+      const matchedInstallations = new Set(result.enqueued.map((row) => row.installationId)).size
       if (getLiveBotRunSignal(runId)) {
         appendBotRunProgress(
           runId,
-          { emitted: input.type, matched: result.enqueued.length },
+          { emitted: input.type, matched: matchedInstallations },
           Date.now
         )
       }
-      return { matchedInstallations: result.enqueued.length }
+      return { matchedInstallations }
     },
   }
 }

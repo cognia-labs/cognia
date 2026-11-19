@@ -146,27 +146,58 @@ it("queues only declared manual work with stable identity and correlation", asyn
 })
 it("merges monitor state and rejects invalid timestamps and removed installations", async () => {
   const api = createBotsAPI("p", () => true)
-  await api.recordMonitor("run", { lastSuccessAt: 100, cursor: "next" })
-  await api.recordMonitor("run", { lastError: "offline", retryAt: 200 })
-  expect((await getDb().botInstallations.get("install"))?.monitor).toEqual({
-    lastSuccessAt: 100,
-    cursor: "next",
-    lastError: "offline",
-    retryAt: 200,
-  })
-  await api.recordMonitor(
-    "run",
-    JSON.parse(JSON.stringify({ lastSuccessAt: 300, lastError: undefined, retryAt: undefined }))
-  )
-  expect((await getDb().botInstallations.get("install"))?.monitor).toEqual({
-    lastSuccessAt: 300,
-    cursor: "next",
-    lastError: undefined,
-    retryAt: undefined,
-  })
+  const clock = jest.spyOn(Date, "now")
+  try {
+    clock.mockReturnValue(1_000)
+    await api.recordMonitor("run", { lastSuccessAt: 900, cursor: "next" })
+    clock.mockReturnValue(1_100)
+    await api.recordMonitor("run", { lastError: "offline", retryAt: 2_000 })
+    expect((await getDb().botInstallations.get("install"))?.monitor).toEqual({
+      lastSuccessAt: 900,
+      cursor: "next",
+      lastError: "offline",
+      lastErrorAt: 1_100,
+      retryAt: 2_000,
+    })
+    // A scan that started after the failure clears it, even across JSON.
+    clock.mockReturnValue(1_300)
+    await api.recordMonitor(
+      "run",
+      JSON.parse(JSON.stringify({ lastSuccessAt: 1_200, lastError: undefined, retryAt: undefined }))
+    )
+    expect((await getDb().botInstallations.get("install"))?.monitor).toEqual({
+      lastSuccessAt: 1_200,
+      cursor: "next",
+    })
+  } finally {
+    clock.mockRestore()
+  }
   await expect(api.recordMonitor("run", { retryAt: NaN })).rejects.toThrow("timestamp")
   await getDb().botInstallations.delete("install")
   await expect(api.recordMonitor("run", {})).rejects.toThrow("removed")
+})
+
+it("never lets a late write from an older run undo a newer observation (B30)", async () => {
+  const api = createBotsAPI("p", () => true)
+  const clock = jest.spyOn(Date, "now")
+  try {
+    clock.mockReturnValue(2_100)
+    await api.recordMonitor("run", { lastSuccessAt: 2_100, cursor: "newer" })
+    clock.mockReturnValue(2_400)
+    await api.recordMonitor("run", { lastError: "rate limited", retryAt: 2_400 })
+    // The older run's scan started at 1750 and only now reports success.
+    clock.mockReturnValue(2_450)
+    await api.recordMonitor("run", { lastSuccessAt: 1_750, cursor: "older" })
+  } finally {
+    clock.mockRestore()
+  }
+  expect((await getDb().botInstallations.get("install"))?.monitor).toEqual({
+    lastSuccessAt: 2_100,
+    cursor: "newer",
+    lastError: "rate limited",
+    lastErrorAt: 2_400,
+    retryAt: 2_400,
+  })
 })
 it("keeps monitor key paths inside the monitor value instead of patching the installation", async () => {
   const api = createBotsAPI("p", () => true)
@@ -193,7 +224,8 @@ it("keeps monitor key paths inside the monitor value instead of patching the ins
 
   const stored = await getDb().botInstallations.get("install")
   expect(stored).toMatchObject(protectedFields)
-  expect(stored?.monitor).toEqual(patch)
+  // Only the monitor's own fields are kept; the rest of the patch is dropped.
+  expect(stored?.monitor).toEqual({ lastSuccessAt: 100 })
   expect(Object.keys(stored ?? {}).some((key) => key.includes("."))).toBe(false)
 })
 it("cancels obsolete resource runs and approval while preserving the current revision", async () => {
@@ -234,6 +266,45 @@ it("cancels obsolete resource runs and approval while preserving the current rev
   expect((await getDb().executionRuns.get("old"))?.status).toBe("cancelled")
   expect((await getDb().executionRunInterrupts.get("approval"))?.status).toBe("expired")
   expect((await getDb().executionRuns.get("current"))?.status).toBe("waiting")
+})
+
+it("keeps the event named by the id listDeliveries returned, and only its own repository's PR (B28)", async () => {
+  const api = createBotsAPI("p", () => true)
+  for (const [record, scope] of [
+    ["report-7", "acme/web"],
+    ["report-7-old", "acme/web"],
+    ["other-repo-7", "acme/api"],
+  ]) {
+    await enqueueBotDelivery({
+      envelope: buildBotEventEnvelope({
+        source: "bot",
+        sourceRecordId: record,
+        installationId: "install",
+        triggerId: "work",
+        type: "review",
+        payload: {},
+        resource: { id: "7", kind: "pull_request", scope },
+        occurredAt: 1,
+      }),
+    })
+  }
+  const listed = await api.listDeliveries("monitor", { resourceId: "7" })
+  const keep = listed.find((row) => row.eventId.endsWith("_report-7"))!.eventId
+  expect(keep).toBe("bev_bot_report-7")
+
+  expect(
+    await api.cancelResource("monitor", {
+      resourceId: "7",
+      resourceKind: "pull_request",
+      resourceScope: "acme/web",
+      exceptEventId: keep,
+    })
+  ).toBe(1)
+  const status = async (record: string) =>
+    (await getDb().botEventDeliveries.where("eventId").equals(`bev_bot_${record}`).first())?.status
+  expect(await status("report-7")).toBe("pending")
+  expect(await status("report-7-old")).toBe("dismissed")
+  expect(await status("other-repo-7")).toBe("pending")
 })
 
 it("projects only owned, completed publication checkpoints with matching snapshots", async () => {
@@ -814,7 +885,12 @@ describe("plane read/write", () => {
       startedAt: 1,
       updatedAt: 1,
     })
-    dispatchEvent.mockResolvedValue({ enqueued: [{ id: "d1" }, { id: "d2" }] })
+    dispatchEvent.mockResolvedValue({
+      enqueued: [
+        { id: "d1", installationId: "a" },
+        { id: "d2", installationId: "b" },
+      ],
+    })
 
     const api = createBotsAPI("acme.bot", () => true)
     const first = await api.emit("run", {
@@ -842,9 +918,32 @@ describe("plane read/write", () => {
       type: "acme.bot.review.ready",
     })
 
+    // A re-entered handler emitting the same event lands on the same id. The
+    // same payload about another resource is another event (B29).
     dispatchEvent.mockClear()
-    await api.emit("run", { type: "acme.bot.review.ready", payload: { pr: 7 } })
+    await api.emit("run", {
+      type: "acme.bot.review.ready",
+      payload: { pr: 7 },
+      resource: { kind: "pr", id: "7" },
+    })
+    await api.emit("run", {
+      type: "acme.bot.review.ready",
+      payload: { pr: 7 },
+      resource: { kind: "pr", id: "8" },
+    })
     expect(dispatchEvent.mock.calls[0][0].envelope.eventId).toBe(envelope.eventId)
+    expect(dispatchEvent.mock.calls[1][0].envelope.eventId).not.toBe(envelope.eventId)
+
+    // Two triggers of one installation: two deliveries, one installation.
+    dispatchEvent.mockResolvedValueOnce({
+      enqueued: [
+        { id: "d1", installationId: "a" },
+        { id: "d2", installationId: "a" },
+      ],
+    })
+    expect(await api.emit("run", { type: "acme.bot.review.merged", payload: { pr: 7 } })).toEqual({
+      matchedInstallations: 1,
+    })
 
     await new Promise((resolve) => setTimeout(resolve, 10))
     const progress = (await runEventJournal.replay("run")).find(
