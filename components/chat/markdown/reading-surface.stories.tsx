@@ -1,5 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 import type { UIMessage } from "ai"
+import { useState } from "react"
+import { useTranslations } from "next-intl"
+import { expect, waitFor } from "storybook/test"
+import { Button } from "@/components/ui/button"
+import { StreamingTextPart } from "@/components/chat/streaming-text-part"
 
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { MessageShell } from "@/components/chat/message-shell"
@@ -70,7 +75,16 @@ function ReadingSurfaceStory({ overrides, content = SAMPLE }: ReadingSurfaceStor
 const meta = {
   title: "Chat/ReadingSurface",
   component: ReadingSurfaceStory,
-  parameters: { layout: "padded" },
+  parameters: {
+    layout: "padded",
+    docs: {
+      description: {
+        component:
+          "Composed reading-surface demonstrations with real MessageShell and MarkdownRenderer. The older examples include links, diagrams and charts and remain manual previews. The individually tagged code parity examples use only synthetic code and the actual Streamdown/finalized engines, with local phase state and no model, host or settings persistence.",
+      },
+    },
+  },
+  argTypes: { overrides: { control: "object" }, content: { control: "text" } },
 } satisfies Meta<typeof ReadingSurfaceStory>
 
 export default meta
@@ -97,4 +111,71 @@ export const ComfortableBlocksGithubTheme: Story = {
 
 export const FlushBlocks: Story = {
   args: { overrides: { markdown: { blockBorder: false, blockHeader: false } } },
+}
+
+const CODE_SOURCE = '// Synthetic comment\nexport const marker = "你好"\nconst total = 42'
+function CodeParitySurface({ theme = "one" }: { theme?: "one" | "github" }) {
+  const [finished, setFinished] = useState(false)
+  const t = useTranslations("common")
+  const display = resolveMessageDisplayOptions({
+    preset: "balanced",
+    overrides: { markdown: { codeTheme: theme } },
+  })
+  const content = `\`\`\`typescript\n${CODE_SOURCE}\n\`\`\``
+  const message: UIMessage = {
+    id: "storybook-code-parity",
+    role: "assistant",
+    parts: [{ type: "text", text: content }],
+  }
+  return (
+    <div className="w-[48rem] max-w-full space-y-3">
+      <Button onClick={() => setFinished(!finished)}>{t(finished ? "cancel" : "confirm")}</Button>
+      <div data-code-phase={finished ? "finalized" : "streaming"}>
+        <MessageShell message={message} display={display}>
+          {finished ? (
+            <MarkdownRenderer content={content} markdown={display.markdown} />
+          ) : (
+            <StreamingTextPart text={content} isStreaming markdown={display.markdown} />
+          )}
+        </MessageShell>
+      </div>
+    </div>
+  )
+}
+
+export const DefaultCodeParity: Story = {
+  tags: ["quality"],
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "Real Streamdown starts with a complete synthetic fence while the turn is still streaming. Confirm finalizes it through the actual MarkdownRenderer; Cancel returns to streaming. Both use the default One pair and shared accessible registrations. The browser compares actual token colours and source text across the swap, not the plain CodeBlock fallback.",
+      },
+    },
+  },
+  render: () => <CodeParitySurface />,
+  play: async ({ canvasElement }) => {
+    await waitFor(
+      () =>
+        expect(
+          canvasElement.querySelector(
+            '[data-streamdown="code-block-body"] code span[style*="--shiki-dark"]'
+          )
+        ).toBeInTheDocument(),
+      { timeout: 10000 }
+    )
+  },
+}
+export const GithubCodeParity: Story = {
+  ...DefaultCodeParity,
+  tags: ["quality"],
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "The same real stream/final swap under the supported GitHub pair. Its registration also receives the shared readable-ink correction; the logical selected theme remains GitHub. Tags are explicit because the static story index does not inherit them from a spread story object.",
+      },
+    },
+  },
+  render: () => <CodeParitySurface theme="github" />,
 }

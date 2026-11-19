@@ -1,0 +1,135 @@
+import { Meta } from "@storybook/addon-docs/blocks"
+
+<Meta title="Documentation/Overview" />
+
+# Cognia component workshop / 组件预览指南
+
+Storybook is a browser workshop for isolated UI states. A story is a preview;
+its presence does not establish passing unit tests, native integration, or a
+working provider connection.
+
+Storybook 用于在浏览器中预览独立的 UI 状态。存在 story 不代表单元测试已通过、
+桌面或移动端集成已验收，也不代表真实模型连接正常。
+
+## Start here / 从这里开始
+
+1. Choose a component in the sidebar. Use the **Locale** and **Theme** toolbar
+   menus on its Canvas to compare English / 简体中文 and light / dark.
+2. Open **Shared → StatusBadge → Docs** for an example with an explicit
+   component contract, prop descriptions, controls, and state variants.
+3. Use **Chat → ChatPane** for composed conversation, empty, thinking, streaming,
+   tool, reasoning, and error previews. Its runtime actions are spies; the
+   header is disabled because its context indicator needs a native host.
+4. Use **Chat → MessageList → JitterProbe** for the reading-area layout probe
+   described in ADR-0138. It is a focused browser measurement, not a general
+   screenshot regression suite.
+
+先选组件，在 Canvas 工具栏切换语言和主题；`StatusBadge` 展示文档与控件的写法。
+`ChatPane` 展示组合页面，但运行时动作是 spy；`JitterProbe` 是布局诊断探针。
+
+## What the preview supplies / 预览提供什么
+
+<table>
+  <thead>
+    <tr>
+      <th scope="col">Included / 已提供</th>
+      <th scope="col">Boundary / 边界</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Real app CSS and public assets / 真实样式与静态资源</td>
+      <td>Browser rendering only / 仅浏览器渲染</td>
+    </tr>
+    <tr>
+      <td>Translation, theme and tooltips / 翻译、主题、提示框</td>
+      <td>English and Chinese messages; UTC / 英中双语、UTC</td>
+    </tr>
+    <tr>
+      <td>Next App Router mocks / 路由 mock</td>
+      <td>Does not start the exported app / 不启动完整应用</td>
+    </tr>
+    <tr>
+      <td>Follow-up suggestion mock / 后续建议 mock</td>
+      <td>Does not request a model / 不请求模型</td>
+    </tr>
+    <tr>
+      <td>Chat runtime action spies / 聊天运行动作 spy</td>
+      <td>Does not start the production chat controller / 不启动生产控制器</td>
+    </tr>
+  </tbody>
+</table>
+
+Other components can still use real browser storage or network paths. Inspect
+their effects and adapters before interacting. Native actions need a dedicated
+story adapter and separate shell verification.
+
+其他组件仍可能使用真实浏览器存储或网络路径。交互前检查副作用与 adapter；
+原生操作需要专用 story adapter 和独立的真实外壳验证。
+
+## Reproduce a state / 复现状态
+
+- **Props:** define typed `args`; use `fn()` from `storybook/test` for callbacks.
+- **Stores:** call `resetStore` / `resetStores`, then `seedStore` in `beforeEach`.
+- **IndexedDB:** use `await seedDb(...)` with builders from
+  `lib/storybook/fixtures/`. It deletes and recreates the preview origin's
+  Cognia database. Keep the workshop on its own origin and avoid parallel
+  seeded canvases sharing that database.
+- **Layout:** use `fullscreen` for pages and dialogs, `padded` for panels,
+  and `centered` for compact controls.
+
+通过 props、store 和数据库 fixture 固定状态；不要依赖上一个 story 的操作结果。
+数据库初始化会重建当前预览 origin 的数据库；多个有数据库副作用的预览不要并行运行。
+
+## Add useful information / 补充有用的信息
+
+Write `parameters.docs.description.component` with purpose, required providers,
+fixture setup, side effects, and browser/native limitations. Use
+`parameters.docs.description.story` for the specific state and expected result.
+
+Prop extraction is disabled for compatibility with the large app graph. Add
+manual `argTypes` for meaningful controls. Opt into `tags: ["autodocs"]` only
+when rendering that component's examples together is safe. Keep database-reset
+or heavy runtime stories out of automatic multi-story docs.
+
+组件说明应包含用途、provider、fixture、副作用与平台边界；状态说明应写明触发条件和
+预期结果。当前关闭自动 props 提取，请手写关键 `argTypes`，只对可以安全组合渲染的
+组件开启 `autodocs`。
+
+## Check and contribute / 检查与维护
+
+The **UI**, **AI Elements**, **Bots**, **Creator**, **Files**, **Onboarding** and
+**Agent Runs**, **Devices**, **Issues** and **Chat** groups now include representative controls, approval, empty,
+disabled and host-unavailable states. Component descriptions identify real
+rendering, synthetic inputs and callback spies.
+
+这些区域已补充代表性场景，组件说明区分真实渲染、合成数据和动作 spy。
+表单增加键盘选择、禁用和只读状态；设备列表使用受控筛选，聊天场景在切换时重置状态。
+普通目录保留全部场景，自动检查使用显式选择，不能视为完整业务验收。
+
+Run from the repository root:
+
+```sh
+pnpm storybook
+node scripts/storybook/inventory.mjs
+node scripts/storybook/inventory.mjs --json > .cache/storybook-inventory.json
+pnpm storybook:config:test
+pnpm storybook:quality
+pnpm build-storybook --output-dir .cache/storybook-full
+```
+
+Read `docs/development/STORYBOOK.md` for the authoring recipe, troubleshooting,
+state matrix, and prioritized gaps. The dated assessment and verification live
+in `docs/evidence/2026-11-10-storybook-information-gaps.md`.
+
+开发指南包含编写方法、排障、状态矩阵与缺口优先级；证据记录区分了已验证结果和后续工作。
+Inventory counts are source metadata, not visual or behavioral test coverage.
+
+The selected browser suite waits for render and play assertions, runs WCAG
+checks, exercises keyboard/focus and same-preview store resets, and compares
+loading-primitive screenshots across en/light, zh-CN/dark and a narrow viewport.
+Stories supplement co-located Jest tests and application E2E checks; the selected
+suite does not render every story or exercise native/provider operations.
+
+自动检查包含渲染与交互断言、无障碍、键盘焦点、状态隔离和三种预览配置下的截图；
+它不替代完整应用、原生外壳或真实模型服务验收。

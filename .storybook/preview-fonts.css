@@ -1,0 +1,32 @@
+/* Match the app's local Geist families without executing next/font in preview. */
+@font-face {
+  font-family: "Cognia Storybook Sans";
+  src: url("/fonts/geist/geist-sans/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Cognia Storybook Mono";
+  src: url("/fonts/geist/geist-mono/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  --font-geist-sans: "Cognia Storybook Sans", sans-serif;
+  --font-geist-mono: "Cognia Storybook Mono", monospace;
+}
+
+body {
+  font-family: var(--font-geist-sans);
+}
+
+/* Storybook's centered flex item otherwise takes its contents' intrinsic
+   width. Let responsive panels and horizontal filter scrollers fit the canvas. */
+body.sb-main-centered #storybook-root {
+  min-width: 0;
+  max-width: 100%;
+}

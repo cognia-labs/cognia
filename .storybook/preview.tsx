@@ -1,5 +1,5 @@
 import * as React from "react"
-import type { Preview, Decorator } from "@storybook/nextjs-vite"
+import type { Preview, Decorator } from "@storybook/nextjs"
 import { NextIntlClientProvider } from "next-intl"
 import { ThemeProvider } from "next-themes"
 
@@ -8,6 +8,7 @@ import zhMessages from "../i18n/messages/zh-CN.json"
 import { TooltipProvider } from "../components/ui/tooltip"
 
 import "../app/globals.css"
+import "./preview-fonts.css"
 
 const MESSAGES: Record<string, Record<string, unknown>> = {
   en: enMessages as Record<string, unknown>,
@@ -30,9 +31,10 @@ function Providers({
   // toolbar toggle drives the `&:is(.dark *)` variant in globals.css.
   React.useEffect(() => {
     const root = document.documentElement
+    root.lang = locale
     root.classList.toggle("dark", theme === "dark")
     return () => root.classList.remove("dark")
-  }, [theme])
+  }, [locale, theme])
 
   return (
     <NextIntlClientProvider
@@ -65,6 +67,9 @@ const preview: Preview = {
     // @storybook/nextjs App Router mocks — chat components read `next/navigation`
     // (useRouter/usePathname) and throw without this.
     nextjs: { appDirectory: true },
+    options: {
+      storySort: { order: ["Documentation", ["Overview"], "*"] },
+    },
   },
   initialGlobals: {
     locale: "en",

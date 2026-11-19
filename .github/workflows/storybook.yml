@@ -1,0 +1,134 @@
+name: Storybook
+
+on:
+  pull_request:
+    paths:
+      - .storybook/**
+      - components/**
+      - hooks/**
+      - lib/**
+      - stores/**
+      - i18n/**
+      - app/**/*.css
+      - packages/**
+      - sidecar/**
+      - patches/**
+      - pnpm-workspace.yaml
+      - postcss.config.mjs
+      - tsconfig*.json
+      - public/**
+      - package.json
+      - pnpm-lock.yaml
+      - next.config.ts
+      - playwright*.config.ts
+      - scripts/storybook/**
+      - scripts/build/storybook-config.test.mjs
+      - jest.config.ts
+      - __mocks__/shiki-theme-*.js
+      - scripts/e2e/serve-out.mjs
+      - tests/e2e/storybook/**
+      - .github/workflows/storybook.yml
+  push:
+    branches: [dev, master]
+    paths:
+      - .storybook/**
+      - components/**
+      - hooks/**
+      - lib/**
+      - stores/**
+      - i18n/**
+      - app/**/*.css
+      - packages/**
+      - sidecar/**
+      - patches/**
+      - pnpm-workspace.yaml
+      - postcss.config.mjs
+      - tsconfig*.json
+      - public/**
+      - package.json
+      - pnpm-lock.yaml
+      - next.config.ts
+      - playwright*.config.ts
+      - scripts/storybook/**
+      - scripts/build/storybook-config.test.mjs
+      - jest.config.ts
+      - __mocks__/shiki-theme-*.js
+      - scripts/e2e/serve-out.mjs
+      - tests/e2e/storybook/**
+      - .github/workflows/storybook.yml
+  workflow_dispatch:
+    inputs:
+      full_catalog:
+        description: Also build the full component catalog
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storybook-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Selected scenes, interactions, WCAG and visuals
+    # Baselines are authored on macOS 26 arm64 with the locked Chromium build.
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      STORYBOOK_DISABLE_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - run: pnpm storybook:config:test
+      - run: pnpm exec playwright install chromium
+      - run: pnpm storybook:quality:build
+      - run: pnpm storybook:test
+      - name: Retain test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storybook-quality
+          path: |
+            .cache/storybook-test-results/
+            .cache/storybook-playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  full-catalog:
+    name: Full catalog static build
+    if: github.event_name == 'push' || inputs.full_catalog
+    runs-on: macos-26-intel
+    timeout-minutes: 30
+    env:
+      STORYBOOK_DISABLE_TELEMETRY: "1"
+      NODE_OPTIONS: --max-old-space-size=10240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - run: pnpm exec storybook build --disable-telemetry --output-dir .cache/storybook-full
+      - run: pnpm exec playwright install chromium
+      - run: pnpm storybook:test --project en-light --grep-invert @visual
+        env:
+          STORYBOOK_FULL_CATALOG: "1"
+      - name: Retain full-catalog compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storybook-full-catalog
+          path: |
+            .cache/storybook-test-results/
+            .cache/storybook-playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,4 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
+import { useState, type ComponentProps } from "react"
+
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { buildDeviceRows } from "@/lib/devices/build-device-rows"
 import type { DeviceRow } from "@/lib/devices/types"
@@ -10,8 +13,8 @@ import { DeviceListPane } from "./device-list-pane"
  *
  * A pinned epoch makes every row say "3 years ago" and gets worse each year,
  * which defeats the point of a story you look at to judge how the surface
- * reads. Purity does not apply here: a story is not a render pass and not a
- * test — no suite imports this file.
+ * reads. Relative ages therefore reflect module evaluation time; keyboard,
+ * filtering and accessibility checks do not snapshot the changing age text.
  */
 const NOW = Date.now()
 
@@ -114,25 +117,84 @@ const FLEET: DeviceRow[] = buildDeviceRows({
   now: NOW,
 })
 
+function ControlledPane(args: ComponentProps<typeof DeviceListPane>) {
+  const [search, setSearch] = useState(args.search)
+  const [kindFilter, setKind] = useState(args.kindFilter)
+  const [attentionOnly, setAttention] = useState(args.attentionOnly)
+  const [selectedRef, setSelected] = useState(args.selectedRef)
+  return (
+    <DeviceListPane
+      {...args}
+      search={search}
+      kindFilter={kindFilter}
+      attentionOnly={attentionOnly}
+      selectedRef={selectedRef}
+      onSearchChange={(value) => {
+        args.onSearchChange(value)
+        setSearch(value)
+      }}
+      onKindFilterChange={(value) => {
+        args.onKindFilterChange(value)
+        setKind(value)
+      }}
+      onAttentionOnlyChange={(value) => {
+        args.onAttentionOnlyChange(value)
+        setAttention(value)
+      }}
+      onClearFilters={() => {
+        args.onClearFilters()
+        setSearch("")
+        setKind("all")
+        setAttention(false)
+      }}
+      onSelect={(value) => {
+        args.onSelect(value)
+        setSelected(value)
+      }}
+    />
+  )
+}
+
 const meta = {
   title: "Devices/DeviceListPane",
   component: DeviceListPane,
-  parameters: { layout: "fullscreen" },
+  tags: ["quality"],
+  parameters: {
+    layout: "fullscreen",
+    docs: {
+      description: {
+        component:
+          "The device rail uses real row derivation with synthetic identities, URLs and capabilities. Search, kind, attention and row selection update story-local controlled state and record spies. Loading waits for the real deferred skeleton. Relative ages use module evaluation time; no connection, pairing or host write is performed.",
+      },
+    },
+  },
+  argTypes: {
+    loading: { control: "boolean" },
+    search: { control: "text" },
+    attentionOnly: { control: "boolean" },
+    onSelect: { description: "Updates only the selected fixture row." },
+  },
+  render: (args) => (
+    <ControlledPane
+      key={`${args.search}:${args.kindFilter}:${args.attentionOnly}:${args.selectedRef}`}
+      {...args}
+    />
+  ),
   args: {
     rows: FLEET,
     selectedRef: "local",
     search: "",
     kindFilter: "all" as const,
     attentionOnly: false,
-    onSearchChange: () => {},
-    onKindFilterChange: () => {},
-    onAttentionOnlyChange: () => {},
-    onClearFilters: () => {},
-    onSelect: () => {},
+    onSearchChange: fn(),
+    onKindFilterChange: fn(),
+    onAttentionOnlyChange: fn(),
+    onClearFilters: fn(),
+    onSelect: fn(),
   },
   decorators: [
     (Story) => (
-      <div className="h-[600px] w-[320px] border-r">
+      <div className="h-[600px] w-[320px] max-w-full border-r">
         <Story />
       </div>
     ),
@@ -158,3 +220,47 @@ export const HostsOnly: Story = {
 
 /** Only the rows that need a person, from the header badge or the chip. */
 export const NeedsAttention: Story = { args: { attentionOnly: true } }
+
+/** Initial reads keep empty-state copy out of the pending result. */
+export const InitialLoading: Story = {
+  args: { rows: [], loading: true },
+  play: async ({ canvasElement }) => {
+    await expect(await within(canvasElement).findByRole("status")).toBeVisible()
+  },
+}
+export const LoadingWithLocalDevice: Story = {
+  args: { rows: FLEET.filter((row) => row.kind === "local"), loading: true },
+  play: async ({ canvasElement }) => {
+    await expect(await within(canvasElement).findByRole("status")).toBeVisible()
+    await expect(
+      within(canvasElement).getByRole("button", { name: /Max's MacBook Pro/ })
+    ).toBeVisible()
+  },
+}
+export const ClearFilters: Story = {
+  args: { search: "zzz", kindFilter: "remote-host", attentionOnly: true },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(canvas.getByRole("button", { name: /^(Clear filters|清除筛选)$/ }))
+    await expect(args.onClearFilters).toHaveBeenCalledOnce()
+    await expect(canvas.getByRole("searchbox")).toHaveValue("")
+    await expect(canvas.getByRole("button", { name: /Max's MacBook Pro/ })).toBeVisible()
+  },
+}
+export const KeyboardRows: Story = {
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const group = canvas
+      .getAllByRole("group")
+      .find((entry) => entry.getAttribute("data-testid") === "device-rows")!
+    const rows = within(group).getAllByRole("button")
+    rows[0]!.focus()
+    await userEvent.keyboard("{End}")
+    await expect(rows.at(-1)).toHaveFocus()
+    await userEvent.keyboard("{Home}")
+    await waitFor(() => expect(rows[0]).toHaveFocus())
+    await userEvent.keyboard("{ArrowDown}")
+    await expect(rows[1]).toHaveFocus()
+    await expect(args.onSelect).toHaveBeenCalledWith(rows[1]!.getAttribute("data-row-ref"))
+  },
+}

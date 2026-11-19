@@ -1,7 +1,12 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 import type { ReactNode } from "react"
 import type { UIMessage } from "ai"
-import { fn } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
+import { resetStore } from "@/lib/storybook/seed-stores"
+import { DEFAULTS } from "@/lib/db/settings"
+import { useSettingsStore } from "@/stores/settings/settings-store"
+import { clearHistoryPreview } from "@/lib/chat/history-preview"
+import { acknowledgePendingChatPrompt, peekPendingChatPrompt } from "@/lib/chat/pending-prompt"
 
 import { ChatPane } from "./chat-view"
 import { DataAdapterProvider } from "@/lib/data-hooks/context"
@@ -26,7 +31,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 // adapter (real one is mounted in app/layout.tsx). `showHeader` is off: the
 // header's context-usage indicator calls the sidecar over IPC at mount.
 
-const SID = "demo-session"
+const SID = "storybook-quality-chat-session"
 
 const demoSession: ChatSession = {
   id: SID,
@@ -54,10 +59,29 @@ const msgs = (...m: unknown[]): UIMessage[] => m as unknown as UIMessage[]
 
 // Seed the real store with a full, isolated session state for one story.
 function seed(messages: UIMessage[], opts: { status?: ChatStatus; error?: string } = {}) {
+  resetStore(useChatStore)
+  resetStore(useSettingsStore)
+  useSettingsStore.setState({
+    settings: {
+      ...DEFAULTS,
+      defaultWorkingDir: undefined,
+      activeProjectId: undefined,
+      composerAssistance: {
+        ...DEFAULTS.composerAssistance,
+        suggestions: { starters: false, agentFallback: false },
+      },
+    },
+    loaded: true,
+    loadFailed: false,
+    loadError: null,
+    save: fn(async () => {}),
+  })
+  clearHistoryPreview(SID)
+  const pending = peekPendingChatPrompt(SID)
+  if (pending) acknowledgePendingChatPrompt(SID, pending.id)
   const s = useChatStore.getState()
-  s.closeSession(SID)
   s.setActiveSession(SID)
-  s.replaceSessionMessages(SID, messages)
+  s.setSessionMessages(SID, messages)
   if (opts.error) s.setSessionError(SID, opts.error)
   else if (opts.status && opts.status !== "idle") s.setSessionStatus(SID, opts.status)
 }
@@ -92,7 +116,23 @@ const CONVERSATION = msgs(
 const meta = {
   title: "Chat/ChatPane",
   component: ChatPane,
-  parameters: { layout: "fullscreen" },
+  parameters: {
+    layout: "fullscreen",
+    docs: {
+      description: {
+        component:
+          "The composed message list and composer with a real in-memory chat store. Each scenario resets chat/settings, clears only its fixture session preview/pending prompt, and disables automatic starter/provider fallback. Data writes and runtime actions are spies; the header is hidden to avoid its sidecar effect. Only individually tagged static states run in the quality matrix; Streaming remains a timed visual demonstration. These composed fixtures use the canonical default One code palette with the shared readable registrations. No real model, host or native command is exercised.",
+      },
+    },
+  },
+  argTypes: {
+    showHeader: {
+      control: false,
+      description: "Kept off: the app header requires native runtime context.",
+    },
+    onSend: { description: "Records composer input without generating a response." },
+    onStop: { description: "Records stop without changing the synthetic streaming fixture." },
+  },
   decorators: [withChatPage],
   args: {
     activeSession: demoSession,
@@ -113,10 +153,29 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 /** A live conversation: user + assistant bubbles above the real composer. */
-export const Conversation: Story = {}
+export const Conversation: Story = {
+  tags: ["quality"],
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByRole("log")).toHaveTextContent(
+      "帮我写一个简单的 React 计数器组件。"
+    )
+    await expect(within(canvasElement).getByRole("textbox")).toBeVisible()
+    await waitFor(() =>
+      expect(canvasElement.querySelector("pre.cognia-one-light-aa-v1")).toBeInTheDocument()
+    )
+  },
+}
 
 /** Fresh session with no messages — the welcome / empty state. */
 export const EmptyState: Story = {
+  tags: ["quality"],
+  play: async ({ canvasElement, args }) => {
+    await userEvent.click(
+      within(canvasElement).getByRole("button", { name: /^(New chat|新建会话)$/ })
+    )
+    await expect(args.onCreate).toHaveBeenCalledOnce()
+    await expect(within(canvasElement).queryByRole("log")).not.toBeInTheDocument()
+  },
   args: { activeSession: null },
   beforeEach: () => seed(msgs()),
 }
@@ -125,6 +184,14 @@ export const EmptyState: Story = {
 // the user's, so `shouldShowThinking` (message-list.tsx:390) renders the
 // prominent ChatThinkingIndicator (animated dots) — the clearest streaming cue.
 export const Thinking: Story = {
+  tags: ["quality"],
+  play: async ({ canvasElement, args }) => {
+    await expect(within(canvasElement).getByRole("log")).toHaveTextContent(
+      "帮我把这段代码重构得更易读。"
+    )
+    await userEvent.click(within(canvasElement).getByRole("button", { name: /^(Stop|停止)$/ }))
+    await expect(args.onStop).toHaveBeenCalledOnce()
+  },
   beforeEach: () => seed(msgs(user("u1", "帮我把这段代码重构得更易读。")), { status: "streaming" }),
 }
 
@@ -228,6 +295,10 @@ export const WithReasoning: Story = {
 
 /** Assistant turn that invokes a tool — renders the Tool call card. */
 export const WithToolCall: Story = {
+  tags: ["quality"],
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByRole("log")).toHaveTextContent("app/page.tsx")
+  },
   beforeEach: () =>
     seed(
       msgs(
@@ -248,6 +319,15 @@ export const WithToolCall: Story = {
 
 /** Turn ended in an error — the error surface + retry affordance. */
 export const ErrorState: Story = {
+  tags: ["quality"],
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const alert = canvas.getByRole("alert")
+    await expect(alert).toHaveTextContent("Rate limit exceeded (429)")
+    await userEvent.click(within(alert).getByRole("button", { name: /^(Retry|重试)$/ }))
+    await waitFor(() => expect(args.onRegenerate).toHaveBeenCalledOnce())
+    await expect(canvas.queryByRole("alert")).not.toBeInTheDocument()
+  },
   beforeEach: () =>
     seed(msgs(user("u1", "再帮我跑一次。"), assistant("a1", "正在处理…")), {
       error: "Rate limit exceeded (429). Please retry in a moment.",

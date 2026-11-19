@@ -1,5 +1,15 @@
 import path from "node:path"
 import type { StorybookConfig } from "@storybook/nextjs"
+import { keepModuleIndexOnServer } from "./server-channel.ts"
+import qualityStories from "./quality-stories.json" with { type: "json" }
+
+// A named, explicit PR build selection. Normal dev/build always retains the
+// entire component catalog; the quality suite rejects missing/empty entries.
+export function storybookStories(quality: boolean): string[] {
+  return quality
+    ? [path.resolve(".storybook/overview.mdx"), ...qualityStories.map((file) => path.resolve(file))]
+    : ["./*.mdx", "../components/**/*.stories.@(tsx|ts)"]
+}
 
 // Storybook runs on the WEBPACK framework (`@storybook/nextjs`) — the same
 // bundler as the real Next app — not the Vite/rolldown framework. Rationale:
@@ -12,7 +22,7 @@ import type { StorybookConfig } from "@storybook/nextjs"
 // The webpack framework reads next.config.ts's basics but NOT its custom
 // `webpack()` resolve customizations, so we mirror the browser aliases:
 // Node-only built-ins → false, the pixi single-file collapse, and the shared
-// Monaco runtime. The only story-specific mock is the LLM-backed follow-ups hook.
+// Monaco runtime. Story-specific mocks isolate follow-ups and the chat runtime.
 
 const NODE_ONLY_MODULES = [
   "dns",
@@ -73,6 +83,11 @@ const NODE_ONLY_MODULES = [
   "node:sqlite",
   "worker_threads",
   "node:worker_threads",
+  // silk-wasm's ESM entry imports createRequire behind its Node environment
+  // guard. Webpack must still resolve that chunk in browser previews, just as
+  // next.config.ts does; the guarded Node branch is never run in the iframe.
+  "module",
+  "node:module",
 ]
 
 // Built-in SUBPATHS from the same sidecar graph. These cannot live in
@@ -98,6 +113,20 @@ const CHAT_PANE_RUNTIME_MOCK = path.resolve(
   process.cwd(),
   ".storybook/mocks/use-chat-pane-runtime.ts"
 )
+// Next's SWC path transform may hand webpack an absolute request before
+// enhanced-resolve sees aliases. Cover raw and transformed imports alike.
+const STORY_RUNTIME_MOCKS = new Map(
+  [
+    ["hooks/chat/use-follow-up-suggestions", FOLLOW_UPS_MOCK],
+    ["hooks/chat/use-chat-pane-runtime", CHAT_PANE_RUNTIME_MOCK],
+  ].flatMap(([request, mock]) =>
+    [
+      `@/${request}`,
+      path.resolve(process.cwd(), request!),
+      `${path.resolve(process.cwd(), request!)}.ts`,
+    ].map((specifier) => [specifier, mock!] as const)
+  )
+)
 
 // `@storybook/nextjs` 10.6's App Router mock predates Next 16.4's
 // `LayoutRouterContext.parentRenderTree`, so `useRouter()` in the framework's
@@ -111,7 +140,10 @@ const LAYOUT_ROUTER_CONTEXT_SHIM = path.resolve(
   ".storybook/next-layout-router-context.tsx"
 )
 
-const config: StorybookConfig = {
+const config: StorybookConfig & {
+  experimental_serverChannel: typeof keepModuleIndexOnServer
+} = {
+  experimental_serverChannel: keepModuleIndexOnServer,
   framework: {
     name: "@storybook/nextjs",
     options: {
@@ -130,16 +162,63 @@ const config: StorybookConfig = {
   // addon-mcp serves the local Storybook AI MCP at http://localhost:6006/mcp
   // while `pnpm storybook` is running (registered in .mcp.json).
   addons: ["@storybook/addon-docs", "@storybook/addon-mcp"],
-  // Co-located stories. Pilot is limited to components/ (not app/hooks/lib).
-  stories: ["../components/**/*.stories.@(tsx|ts)"],
+  // Contributor docs plus co-located component previews (not app/hooks/lib).
+  stories: storybookStories(process.env.STORYBOOK_QUALITY === "1"),
   // Serve `public/` at the root like Next does, so stories that reference
   // static assets by absolute path (`/icons/icon-512.png` in the mobile boot
   // screen, brand marks, fixtures) render them instead of a broken image.
-  staticDirs: ["../public"],
+  staticDirs: ["../public", { from: "../node_modules/geist/dist/fonts", to: "/fonts/geist" }],
   // react-docgen recurses infinitely on some store modules pulled into the
   // graph (e.g. lib/platform/viewport-store.ts); preview doesn't need prop tables.
   typescript: { reactDocgen: false },
-  webpackFinal: async (cfg) => {
+  webpackFinal: async (cfg, options) => {
+    // Standalone previews do not need multi-GB production source maps. Dev
+    // retains the framework's debugging setup; minification stays enabled.
+    if (options?.configType === "PRODUCTION") {
+      cfg.devtool = false
+      // Static builds run once per CI job. Keeping their entire app graph for
+      // serialization adds heap/disk pressure, and parallel selections must
+      // never read/write the same persistent cache. Dev keeps fsCache above.
+      cfg.cache = false
+    }
+    // PR assertions exercise the real render/play graph without paying for
+    // minification of the transitive app runtime. Normal full builds still
+    // test production minification in their separate CI lane.
+    if (process.env.STORYBOOK_QUALITY === "1") {
+      cfg.optimization = { ...cfg.optimization, minimize: false }
+    }
+    // The default JS minifier exhausts a 10 GiB heap on the full graph. Reuse
+    // the framework's installed native SWC minifier with one bounded worker.
+    for (const minimizer of cfg.optimization?.minimizer ?? []) {
+      const plugin = minimizer as {
+        constructor?: { name?: string; swcMinify?: unknown }
+        options?: {
+          parallel?: boolean | number
+          minimizer?: { implementation?: unknown; options: Record<string, unknown> }
+        }
+      }
+      const parallel = plugin?.options?.parallel
+      if (
+        plugin?.constructor?.name === "TerserPlugin" &&
+        plugin.options &&
+        (parallel === true || (typeof parallel === "number" && parallel > 1))
+      ) {
+        plugin.options.parallel = 1
+      }
+      if (plugin?.constructor?.name === "TerserPlugin" && plugin.options?.minimizer) {
+        if (typeof plugin.constructor.swcMinify !== "function") {
+          throw new Error("Unsupported Storybook minifier: review the SWC compatibility setup")
+        }
+        plugin.options.minimizer.implementation = plugin.constructor.swcMinify
+        plugin.options.minimizer.options = {
+          ...plugin.options.minimizer.options,
+          compress: true,
+          // Storybook injects an ESM mocker runtime with import.meta/export.
+          // SWC parses it strictly; all webpack assets can use module parsing.
+          module: true,
+        }
+      }
+    }
     // `storybook dev` crashes in webpack's watcher after a compile:
     // `FileSystemInfo._resolveContextTimestamp` hashes a snapshotted directory
     // (context) whose nested-symlink entry resolves to an `undefined`
@@ -247,6 +326,8 @@ const config: StorybookConfig = {
       apply(compiler) {
         compiler.hooks.normalModuleFactory.tap("CogniaLayoutRouterContextShim", (factory) => {
           factory.hooks.beforeResolve.tap("CogniaLayoutRouterContextShim", (data) => {
+            const runtimeMock = STORY_RUNTIME_MOCKS.get(data.request)
+            if (runtimeMock) data.request = runtimeMock
             if (
               APP_ROUTER_CONTEXT_REQUEST.test(data.request) &&
               STORYBOOK_NEXTJS_DIST.test(data.contextInfo.issuer ?? "")
@@ -282,6 +363,10 @@ const config: StorybookConfig = {
       ),
     }
     cfg.resolve.alias = {
+      // Specific mocks must precede Next's broad `@` alias: enhanced-resolve
+      // uses the first match, otherwise the real controller wins silently.
+      "@/hooks/chat/use-follow-up-suggestions$": FOLLOW_UPS_MOCK,
+      "@/hooks/chat/use-chat-pane-runtime$": CHAT_PANE_RUNTIME_MOCK,
       ...(cfg.resolve.alias ?? {}),
       // Built-in subpaths — alias, not fallback (see NODE_ONLY_SUBPATHS).
       ...Object.fromEntries(NODE_ONLY_SUBPATHS.map((m) => [m, false])),
@@ -295,10 +380,6 @@ const config: StorybookConfig = {
       ),
       // Replace the LLM-backed follow-ups hook with a controllable mock so the
       // follow-up-suggestions story never calls a model.
-      "@/hooks/chat/use-follow-up-suggestions$": FOLLOW_UPS_MOCK,
-      // ChatPane reads the app-wide chat controller through this hook, which
-      // needs the bootstrap-only ClaudeChatRuntimeProvider; see the mock.
-      "@/hooks/chat/use-chat-pane-runtime$": CHAT_PANE_RUNTIME_MOCK,
     }
     return cfg
   },
