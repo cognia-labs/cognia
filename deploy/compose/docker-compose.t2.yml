@@ -32,7 +32,13 @@
 services:
   docker-proxy:
     profiles: [server]
-    image: ${COGNIA_DOCKER_PROXY_IMAGE:-ghcr.io/maxqian888/cognia-docker-proxy:latest}
+    image: ${COGNIA_DOCKER_PROXY_IMAGE:-ghcr.io/cognia-labs/cognia-docker-proxy:latest}
+    # Without a pull_policy, compose pulls the image and builds it from this
+    # checkout only when the registry has none, so a host never fails to
+    # start the proxy cognia-server depends on.
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.docker-proxy
     environment:
       COGNIA_DOCKER_PROXY_LISTEN: tcp://0.0.0.0:2375
       COGNIA_DOCKER_PROXY_UPSTREAM: unix:///var/run/docker.sock
@@ -56,7 +62,11 @@ services:
         condition: service_started
     environment:
       COGNIA_EXEC_BACKEND: container
-      COGNIA_RUNNER_IMAGE: ${COGNIA_RUNNER_IMAGE:-ghcr.io/maxqian888/cognia-runner:latest}
+      # Pulled on the first spawn that finds it missing, with credentials from
+      # COGNIA_REGISTRY_AUTH_FILE when set. A tag is never pulled again while
+      # the daemon has an image for it: pin a digest
+      # (`cognia-runner:vX.Y.Z@sha256:…`) or `docker pull` it to move on.
+      COGNIA_RUNNER_IMAGE: ${COGNIA_RUNNER_IMAGE:-ghcr.io/cognia-labs/cognia-runner:latest}
       # Agent bundle for project runtime environments (ADR-0183). Blank means
       # none; read only while the sandbox pool is on, and only a digest-pinned
       # bundle admits sandboxes.
@@ -66,9 +76,11 @@ services:
       # baseline file is mounted (docker-compose.runtime-environment.yml).
       # On by default (ADR-0224 A8): dispatched work runs in a container per
       # task. Sandboxes start only once COGNIA_AGENT_BUNDLE_IMAGE names a
-      # digest-pinned bundle; until then a run that does not require
-      # isolation falls back to the server process. Set it to false to keep
-      # every run in the server process.
+      # digest-pinned bundle. Until then, and with this set to false, an
+      # external agent whose project does not require isolation runs in a
+      # cognia-runner container (COGNIA_EXEC_BACKEND / COGNIA_RUNNER_IMAGE
+      # above), never in the server process, and a built-in turn's Bash, Edit
+      # and Write are refused.
       COGNIA_SANDBOX_POOL_ENABLED: ${COGNIA_SANDBOX_POOL_ENABLED:-true}
       DOCKER_HOST: tcp://docker-proxy:2375
       # Workspaces live on a named volume shared with the runners. BOTH vars
@@ -88,15 +100,19 @@ services:
       COGNIA_REMOTE_BROWSER_ENABLED: ${COGNIA_REMOTE_BROWSER_ENABLED:-false}
       COGNIA_WORKSPACE_RUNTIME_URL_TEMPLATE: http://workspace-runtime-{workspace_id}:27910
       COGNIA_WORKSPACE_RUNTIME_SECRET_DIR: /runtime-secrets
-      COGNIA_WORKSPACE_RUNTIME_WORKSPACES: ${COGNIA_WORKSPACE_RUNTIME_WORKSPACES:-default}
+      # Workspaces whose agents run in their persistent workspace runtime
+      # instead. Empty by default: the runtime service below exists only with
+      # the remote-browser profile, and a workspace routed to a runtime that
+      # is not running fails every run. Set it to `default` together with
+      # that profile.
+      COGNIA_WORKSPACE_RUNTIME_WORKSPACES: ${COGNIA_WORKSPACE_RUNTIME_WORKSPACES:-}
     volumes:
       - cognia_workspaces:/workspaces
-      - cognia_workspace_default:/workspaces/default
       - cognia_runtime_secrets:/runtime-secrets:ro
 
   workspace-runtime-default:
     profiles: [remote-browser]
-    image: ${COGNIA_WORKSPACE_RUNTIME_IMAGE:-ghcr.io/maxqian888/cognia-workspace-runtime:latest}
+    image: ${COGNIA_WORKSPACE_RUNTIME_IMAGE:-ghcr.io/cognia-labs/cognia-workspace-runtime:latest}
     build:
       context: ../../
       dockerfile: services/workspace-runtime/Dockerfile
@@ -107,8 +123,19 @@ services:
       # even with the remote-browser profile off. The runtime itself refuses
       # to start on a secret shorter than 32 characters (src/main.mjs).
       COGNIA_WORKSPACE_RUNTIME_SECRET: ${COGNIA_WORKSPACE_RUNTIME_SECRET:-}
+    # The runtime mounts the `default` subdirectory of the workspaces volume,
+    # so it, cognia-server (/workspaces/default) and a runner given that
+    # workspace all see the same files, and it still sees no other workspace.
+    # cognia-server's image seeds that directory into the volume.
+    depends_on:
+      cognia-server:
+        condition: service_started
     volumes:
-      - cognia_workspace_default:/workspace
+      - type: volume
+        source: cognia_workspaces
+        target: /workspace
+        volume:
+          subpath: default
       - cognia_browser_profiles_default:/profiles
       - cognia_runtime_secrets:/runtime-secrets
     healthcheck:
@@ -139,6 +166,5 @@ volumes:
     # gets its own workspaces volume instead of sharing this one. Using
     # `docker compose -p` alone does NOT rename it: set COGNIA_INSTANCE.
     name: ${COGNIA_INSTANCE:-cognia}_workspaces
-  cognia_workspace_default:
   cognia_browser_profiles_default:
   cognia_runtime_secrets:

@@ -34,7 +34,7 @@ git clone https://github.com/cognia-labs/cognia.git && cd cognia/deploy/compose
 cp .env.example .env
 # 编辑 .env：设置 SHARE_UPLOAD_SECRET（openssl rand -hex 32），并把 COGNIA_AGENT_BUNDLE_IMAGE
 # 设为按摘要固定的智能体工具包镜像，可用下面的命令得到：
-#   docker buildx imagetools inspect ghcr.io/maxqian888/cognia-agent-bundle:latest \
+#   docker buildx imagetools inspect ghcr.io/cognia-labs/cognia-agent-bundle:latest \
 #     --format '{{.Name}}@{{.Manifest.Digest}}'
 
 export COMPOSE_FILE=docker-compose.yml:docker-compose.t2.yml:compose.host-updates.yaml
@@ -54,8 +54,9 @@ docker compose exec cognia-server cognia-server pair
 
 `docker-compose.t2.yml` 让 host 在容器里执行任务（见[host 在哪里执行任务](#host-在哪里执行任务)）。
 服务器只能通过 Cognia 自己的代理访问 Docker，只能创建和运行自己的加固容器。
-在 `COGNIA_AGENT_BUNDLE_IMAGE` 指向按摘要固定的工具包之前，容器无法启动，
-不要求隔离的任务会改在服务器进程中执行。
+在 `COGNIA_AGENT_BUNDLE_IMAGE` 指向按摘要固定的工具包之前，运行环境容器无法启动。
+在此之前，不要求隔离的项目，其外部智能体会改在 `cognia-runner` 容器中运行，不会进入服务器进程；
+对话中的 Bash、Edit 和 Write 会被拒绝。
 
 ## 用 host 安装包运行在 Mac 上
 
@@ -298,8 +299,9 @@ Bot 和定时任务在 host 上运行时无人看守。每个 Bot 和任务都�
 外部智能体则在 host 上的智能体沙箱中运行。项目也可以选择不使用容器：在项目的工作区页面打开 **环境** 标签页，
 进入运行环境的运行时设置，开启 **在常驻主机上以主机进程运行**。其他设备会忽略这个开关。
 
-没有沙箱池的 host（启动时未使用 `docker-compose.t2.yml`，或设置了 `COGNIA_SANDBOX_POOL_ENABLED=false`）
-无法提供容器。在这样的 host 上，对话中的 Bash、Edit 和 Write 会被拒绝，外部智能体在 host 上的智能体沙箱中运行。
+没有沙箱池的 host 无法提供运行环境容器，对话中的 Bash、Edit 和 Write 会被拒绝。外部智能体在哪里运行取决于启动方式：
+未使用 `docker-compose.t2.yml` 时，在 host 上的智能体沙箱中运行；使用了 `docker-compose.t2.yml` 并设置
+`COGNIA_SANDBOX_POOL_ENABLED=false` 时，在 `cognia-runner` 容器中运行。
 如需在这样的 host 上以主机进程运行项目的工具，请让该项目选择不使用容器。
 
 对话不再使用的容器会被移除。服务器上一次运行遗留的容器会在启动时移除。

@@ -89,7 +89,7 @@ describe("DeploymentTarget renderer", () => {
     const overlay = parse(rendered.files["kustomization.yaml"])
     expect(overlay.namespace).toBe("cognia-production")
     expect(overlay.images[0]).toMatchObject({
-      name: "ghcr.io/maxqian888/cognia-server",
+      name: "ghcr.io/cognia-labs/cognia-server",
       newName: "ghcr.io/owner/cognia-server",
       digest: `sha256:${"a".repeat(64)}`,
     })

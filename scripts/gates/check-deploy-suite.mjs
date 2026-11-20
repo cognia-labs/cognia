@@ -26,7 +26,10 @@
  *      that satisfies `engines.node` and pins the `packageManager` pnpm.
  *   3. Every `ghcr.io/<owner>/<name>` a compose file defaults to is published
  *      by `images.yml`, or is a service image cognia-labs/cognia-services
- *      publishes under `ghcr.io/cognia-labs/`.
+ *      publishes under `ghcr.io/cognia-labs/`. Every such reference anywhere
+ *      under `deploy/`, in the docs or in the deployment renderer names the
+ *      owner that publishes it: the root Cargo.toml repository's owner for
+ *      this repository's images.
  *   4. Every published host port in `docker-compose.yml` is interpolated, so
  *      an instance can remap it without editing the file.
  *   5. The compose project name, the runner ownership label
@@ -230,6 +233,60 @@ export function publishedImageNames(imagesWorkflowText) {
   return names
 }
 
+/**
+ * The GHCR owner `images.yml` publishes this repository's images under: the
+ * owner of the repository the root Cargo.toml names, lowercased as the
+ * workflow lowercases `GITHUB_REPOSITORY_OWNER`.
+ */
+export function appImagesOwner(cargoToml) {
+  const match = String(cargoToml ?? "").match(
+    /^repository\s*=\s*"https:\/\/github\.com\/([A-Za-z0-9-]+)\/[^"]+"/m
+  )
+  return match ? match[1].toLowerCase() : undefined
+}
+
+/**
+ * Every `ghcr.io/<owner>/<name>` written in a deployment file or a doc names
+ * the owner that publishes `<name>`: this repository's owner for what
+ * `images.yml` builds, cognia-labs for the cognia-services images. Image
+ * defaults hide in more places than a service's `image:` (an environment
+ * default such as `COGNIA_RUNNER_IMAGE`, a Kubernetes manifest, a kustomize
+ * `images:` name, a doc's example), and the repository move left every one of
+ * them on the old owner, where nothing new is published.
+ *
+ * The literal owner `owner` is a placeholder, not a stale owner: the
+ * production and staging overlays pair it with an all-zero digest the deploy
+ * agent replaces.
+ */
+export const PLACEHOLDER_IMAGE_OWNER = "owner"
+
+export function checkImageOwners({ files, imagesWorkflow, appOwner }) {
+  if (!appOwner) {
+    return [
+      "Cargo.toml: [workspace.package] repository names no github.com owner to publish images under.",
+    ]
+  }
+  const published = publishedImageNames(imagesWorkflow)
+  const problems = new Set()
+  for (const [rel, text] of Object.entries(files)) {
+    for (const [, owner, name] of String(text).matchAll(
+      /ghcr\.io\/([A-Za-z0-9][A-Za-z0-9-]*)\/([a-z0-9][a-z0-9._-]*)/g
+    )) {
+      if (owner === PLACEHOLDER_IMAGE_OWNER) continue
+      const services = SERVICES_IMAGES.names.has(name)
+      const expected = services ? SERVICES_IMAGES.owner : published.has(name) ? appOwner : undefined
+      if (expected && owner.toLowerCase() !== expected) {
+        problems.add(
+          `${rel}: ghcr.io/${owner}/${name} names the wrong owner; ${
+            services ? "cognia-labs/cognia-services" : IMAGES_WORKFLOW
+          } publishes it as ghcr.io/${expected}/${name}.`
+        )
+      }
+    }
+  }
+  return [...problems]
+}
+
 export function checkComposeImagesPublished({ composeFiles, imagesWorkflow }) {
   const problems = []
   const published = publishedImageNames(imagesWorkflow)
@@ -239,13 +296,8 @@ export function checkComposeImagesPublished({ composeFiles, imagesWorkflow }) {
       const reference = composeDefault(spec?.image)
       const name = ghcrImageName(reference)
       if (!name) continue
-      if (SERVICES_IMAGES.names.has(name)) {
-        if (ghcrImageOwner(reference) !== SERVICES_IMAGES.owner)
-          problems.push(
-            `${rel}: service "${service}" defaults to ghcr.io/${ghcrImageOwner(reference)}/${name}; cognia-labs/cognia-services publishes it as ghcr.io/${SERVICES_IMAGES.owner}/${name}.`
-          )
-        continue
-      }
+      // Their owner is checkImageOwners' concern; they are published elsewhere.
+      if (SERVICES_IMAGES.names.has(name)) continue
       if (!published.has(name)) {
         problems.push(
           `${rel}: service "${service}" defaults to ghcr.io/…/${name}, which no job in ${IMAGES_WORKFLOW} publishes. The profile that needs it can never be satisfied from the registry.`
@@ -456,6 +508,11 @@ export function runChecks(inputs) {
       composeFiles: inputs.composeFiles,
       imagesWorkflow: inputs.imagesWorkflow,
     }),
+    ...checkImageOwners({
+      files: inputs.imageReferenceFiles,
+      imagesWorkflow: inputs.imagesWorkflow,
+      appOwner: inputs.appOwner,
+    }),
     ...checkComposePortsParametrized({ composeText: inputs.composeFiles[COMPOSE_BASE] }),
     ...checkInstanceScoping({
       baseText: inputs.composeFiles[COMPOSE_BASE],
@@ -471,6 +528,26 @@ export function runChecks(inputs) {
       composeText: inputs.composeFiles[COMPOSE_BASE],
     }),
   ]
+}
+
+/** Where image defaults and examples are written: deployment files, the docs, the renderer. */
+export const IMAGE_REFERENCE_ROOTS = ["deploy", "docs/content/docs"]
+export const IMAGE_REFERENCE_FILES = ["lib/server-ops/deployment-renderer.ts"]
+
+function imageReferenceFiles() {
+  const files = [...IMAGE_REFERENCE_FILES]
+  const walk = (rel) => {
+    for (const entry of readdirSync(join(REPO_ROOT, rel), { withFileTypes: true })) {
+      const child = `${rel}/${entry.name}`
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(child)
+      } else if (/\.(ya?ml|md|mdx|example)$/.test(entry.name)) {
+        files.push(child)
+      }
+    }
+  }
+  for (const root of IMAGE_REFERENCE_ROOTS) walk(root)
+  return files.sort()
 }
 
 export function loadRepoInputs() {
@@ -494,6 +571,8 @@ export function loadRepoInputs() {
       PLUGIN_CONSUMER_DOCKERFILES.map((rel) => [rel, read(rel)])
     ),
     imagesWorkflow: read(IMAGES_WORKFLOW),
+    appOwner: appImagesOwner(read("Cargo.toml")),
+    imageReferenceFiles: Object.fromEntries(imageReferenceFiles().map((rel) => [rel, read(rel)])),
     workflows: Object.fromEntries(
       workflowFiles.map((f) => [`${WORKFLOWS_DIR}/${f}`, read(`${WORKFLOWS_DIR}/${f}`)])
     ),

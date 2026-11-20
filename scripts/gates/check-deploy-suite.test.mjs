@@ -5,7 +5,9 @@ import { readFileSync } from "node:fs"
 import {
   COMPOSE_BASE,
   COMPOSE_T2,
+  appImagesOwner,
   checkComposeImagesPublished,
+  checkImageOwners,
   checkComposePluginContexts,
   checkPluginArtifactConsumers,
   checkPluginConsumerDockerfile,
@@ -115,6 +117,12 @@ const GOOD_INPUTS = {
   nodeDockerfiles: GOOD_NODE,
   composeFiles: { [COMPOSE_BASE]: GOOD_BASE, [COMPOSE_T2]: GOOD_T2 },
   imagesWorkflow: GOOD_IMAGES_WORKFLOW,
+  appOwner: "cognia-labs",
+  imageReferenceFiles: {
+    [COMPOSE_BASE]: GOOD_BASE,
+    [COMPOSE_T2]: GOOD_T2,
+    "deploy/k8s/base/cognia-server.yaml": "image: ghcr.io/cognia-labs/cognia-server:latest-full\n",
+  },
   dockerignore: GOOD_DOCKERIGNORE,
   pluginDockerfiles: { "Dockerfile.web": GOOD_PLUGIN_CONSUMER },
   workflows: {
@@ -256,19 +264,82 @@ test("service images resolve to the cognia-services organization, not images.yml
     `services:\n  signaling:\n    image: \${SIGNALING_IMAGE:-ghcr.io/${owner}/cognia-signaling:latest}\n  share:\n    image: ghcr.io/${owner}/cognia-share:latest\n`
   const imagesWorkflow =
     "jobs:\n  fast-images:\n    strategy:\n      matrix:\n        include:\n          - name: cognia-web\n"
+  // Not built here, so not "unpublished" either.
   assert.deepEqual(
     checkComposeImagesPublished({
-      composeFiles: { [COMPOSE_BASE]: compose("cognia-labs") },
+      composeFiles: { [COMPOSE_BASE]: compose("maxqian888") },
       imagesWorkflow,
     }),
     []
   )
-  const stale = checkComposeImagesPublished({
-    composeFiles: { [COMPOSE_BASE]: compose("maxqian888") },
-    imagesWorkflow,
-  })
+  const owners = (owner) =>
+    checkImageOwners({
+      files: { [COMPOSE_BASE]: compose(owner) },
+      imagesWorkflow,
+      appOwner: "app-owner",
+    })
+  assert.deepEqual(owners("cognia-labs"), [])
+  const stale = owners("maxqian888")
   assert.equal(stale.length, 2)
   assert.ok(stale.every((problem) => problem.includes("ghcr.io/cognia-labs/")))
+})
+
+test("the app owner is the root Cargo.toml repository's owner, lowercased", () => {
+  assert.equal(
+    appImagesOwner('[workspace.package]\nrepository = "https://github.com/Cognia-Labs/cognia"\n'),
+    "cognia-labs"
+  )
+  assert.equal(appImagesOwner('[workspace.package]\nedition = "2021"\n'), undefined)
+  assert.match(
+    checkImageOwners({ files: {}, imagesWorkflow: GOOD_IMAGES_WORKFLOW, appOwner: undefined })[0],
+    /names no github\.com owner/
+  )
+})
+
+// The 2026-10-27 repository move left every default on the old owner, where
+// nothing new is published: T2's runner (an environment default, which the
+// service-image check never read), the docker proxy, the Kubernetes base and
+// its kustomize `images:` names, and the docs' examples.
+test("every image reference in deployment files and docs names the publishing owner", () => {
+  const imagesWorkflow = `
+jobs:
+  runner-image:
+    steps:
+      - uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/\${{ needs.vars.outputs.owner }}/cognia-runner
+  fast-images:
+    strategy:
+      matrix:
+        include:
+          - name: cognia-docker-proxy
+`
+  const files = {
+    "deploy/compose/docker-compose.t2.yml": `services:
+  docker-proxy:
+    image: \${COGNIA_DOCKER_PROXY_IMAGE:-ghcr.io/maxqian888/cognia-docker-proxy:latest}
+  cognia-server:
+    environment:
+      COGNIA_RUNNER_IMAGE: \${COGNIA_RUNNER_IMAGE:-ghcr.io/maxqian888/cognia-runner:latest}
+`,
+    "docs/content/docs/en/dev/deployment.mdx":
+      "Pull `ghcr.io/maxqian888/cognia-runner:latest`, or `ghcr.io/<owner>/cognia-runner`.\n",
+    // Placeholders and third-party images are not ours to check.
+    "deploy/k8s/overlays/production/kustomization.yaml":
+      "newName: ghcr.io/owner/cognia-runner\nimage: ghcr.io/drakkan/sftpgo:v2\n",
+  }
+  const problems = checkImageOwners({ files, imagesWorkflow, appOwner: "cognia-labs" })
+  assert.deepEqual(
+    problems.map(
+      (problem) => problem.split(":")[0] + " " + problem.match(/ghcr\.io\/\S+? /)[0].trim()
+    ),
+    [
+      "deploy/compose/docker-compose.t2.yml ghcr.io/maxqian888/cognia-docker-proxy",
+      "deploy/compose/docker-compose.t2.yml ghcr.io/maxqian888/cognia-runner",
+      "docs/content/docs/en/dev/deployment.mdx ghcr.io/maxqian888/cognia-runner",
+    ]
+  )
+  assert.ok(problems.every((problem) => problem.includes("publishes it as ghcr.io/cognia-labs/")))
 })
 
 test("hostPortSide keeps the bind address and drops the protocol", () => {

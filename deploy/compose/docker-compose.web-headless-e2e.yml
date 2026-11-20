@@ -60,7 +60,7 @@ services:
 
   cognia-server-secondary:
     profiles: [web-headless-e2e]
-    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/maxqian888/cognia-server:latest-full}
+    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/cognia-labs/cognia-server:latest-full}
     depends_on:
       signaling:
         condition: service_healthy
@@ -92,7 +92,7 @@ services:
 
   cognia-server-oidc-member:
     profiles: [web-headless-e2e]
-    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/maxqian888/cognia-server:latest-full}
+    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/cognia-labs/cognia-server:latest-full}
     depends_on:
       signaling:
         condition: service_healthy
@@ -126,7 +126,7 @@ services:
 
   cognia-server-oidc-owner:
     profiles: [web-headless-e2e]
-    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/maxqian888/cognia-server:latest-full}
+    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/cognia-labs/cognia-server:latest-full}
     depends_on:
       signaling:
         condition: service_healthy
@@ -165,7 +165,7 @@ services:
   # people of one org into it: each gets their own person-brain partition.
   cognia-server-cloud:
     profiles: [web-headless-e2e]
-    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/maxqian888/cognia-server:latest-full}
+    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/cognia-labs/cognia-server:latest-full}
     depends_on:
       signaling:
         condition: service_healthy

@@ -228,7 +228,9 @@ docker compose -f docker-compose.yml -f docker-compose.t2.yml \
 
 What it adds:
 
-- **`docker-proxy`** (`cognia-docker-proxy`, ADR-0224 A8) — the server never
+- **`docker-proxy`** (`cognia-docker-proxy`, ADR-0224 A8). Compose pulls its
+  image and builds it from this checkout when the registry has none. The
+  server never
   touches the raw Docker socket. Unlike a URL-prefix filter, the proxy reads
   request bodies: a container is created only with this deployment's labels
   (`cognia.owner`, `cognia.deployment=${COGNIA_INSTANCE}`), mounts only the
@@ -245,13 +247,16 @@ What it adds:
   `true` here: dispatched work (Bots, scheduled tasks, phone turns, agent
   teams, plugin agents) runs in a container per task. Containers start only
   once `COGNIA_AGENT_BUNDLE_IMAGE` names a digest-pinned bundle (see
-  [Runtime environments](#runtime-environments-docker-compose-runtime-environmentyml));
-  until then an external agent whose project does not require isolation
-  falls back to the server process, while a built-in turn's Bash, Edit and
-  Write are refused (a headless host never runs them in its own process
-  unless the project opts out with **Run as host processes on an always-on
-  host**). Set the variable to `false` to keep external agents in the server
-  process.
+  [Runtime environments](#runtime-environments-docker-compose-runtime-environmentyml)).
+  Until then, and with the variable set to `false`, an external agent whose
+  project does not require isolation runs in a `cognia-runner` container
+  (`COGNIA_EXEC_BACKEND=container`, see **Runner image** below), never in the
+  server process, while a built-in turn's Bash, Edit and Write are refused (a
+  headless host never runs them in its own process unless the project opts
+  out with **Run as host processes on an always-on host**). The server's
+  `/readyz` reports the control plane only: it does not prove the runner
+  image can be pulled or started, so the first spawn is where a missing image
+  or registry credential shows up.
 - **Task workspace root** — `COGNIA_TASK_WORKSPACE_EXECUTION_ROOT` moves task
   working copies (`executions/`, `scratch/`) to
   `/workspaces/.cognia-task-workspaces`, inside the workspaces volume, so a
@@ -263,8 +268,14 @@ What it adds:
   (fixed via `name:` in the override); without it the backend falls back to
   host-path binds, which cannot work from inside a container.
 - **Runner image** — `COGNIA_RUNNER_IMAGE` (default
-  `ghcr.io/maxqian888/cognia-runner:latest`). Pulled automatically on the
-  first spawn if absent; pre-pull to avoid first-spawn latency.
+  `ghcr.io/cognia-labs/cognia-runner:latest`). Pulled on the first spawn that
+  finds it missing, with credentials from `COGNIA_REGISTRY_AUTH_FILE` when it
+  is set (a Docker `config.json`, the same file the sandbox pool reads);
+  pre-pull to avoid first-spawn latency. A tag is never pulled again while the
+  daemon has an image for it, so a host keeps whatever `latest` it first saw:
+  pin `cognia-runner:vX.Y.Z@sha256:<digest>` to choose the build, or
+  `docker pull` the tag to move on. The runner runs as uid 10001, the uid the
+  server writes workspaces as.
 - **Ownership label** — every runner carries
   `cognia.deployment=${COGNIA_INSTANCE}` (`COGNIA_DEPLOYMENT_ID` on the
   server). The orphan sweep at boot only removes runners with the same
@@ -332,16 +343,32 @@ stay dormant in this release.
 The `remote-browser` profile adds a persistent `workspace-runtime-default`
 container for the `default` workspace. It runs both external-agent children
 and Playwright Chromium behind a private, secret-authenticated protocol; no
-runtime, Playwright, or CDP port is published to the host. The runtime sees a
-dedicated workspace volume, never the host filesystem or Docker socket.
+runtime, Playwright, or CDP port is published to the host. The runtime mounts
+only the `default` subdirectory of `cognia_workspaces` (a volume `subpath`),
+never the whole volume, the host filesystem or the Docker socket, so it,
+cognia-server's `/workspaces/default` and any runner given that workspace see
+the same files.
 
-Set `COGNIA_WORKSPACE_RUNTIME_SECRET` to at least 32 random characters and set
-`COGNIA_REMOTE_BROWSER_ENABLED=true`, then start both `server` and
-`remote-browser` profiles. The runtime writes its per-workspace secret into a
-private named volume mounted read-only by `cognia-server`. Users must still
-enable the experiment in Cognia settings. Add one identically isolated
-service/volume/secret per additional workspace; do not mount the aggregate
+Set `COGNIA_WORKSPACE_RUNTIME_SECRET` to at least 32 random characters, set
+`COGNIA_REMOTE_BROWSER_ENABLED=true` and `COGNIA_WORKSPACE_RUNTIME_WORKSPACES=default`,
+then start both `server` and `remote-browser` profiles. Without that last
+variable the `default` workspace stays on the runner path; with it but without
+the profile, every run in `default` fails, which is why it is empty by default.
+The runtime writes its per-workspace secret into a private named volume
+mounted read-only by `cognia-server`. Users must still enable the experiment
+in Cognia settings. Add one identically isolated service/secret per additional
+workspace, each mounting its own `subpath`; never mount the whole
 `cognia_workspaces` volume into a runtime.
+
+A deployment that ran the profile before this layout kept the `default`
+workspace in its own `<project>_cognia_workspace_default` volume. Copy it into
+the shared volume once, with the stack stopped:
+
+```bash
+docker run --rm -v <project>_cognia_workspace_default:/from \
+  -v ${COGNIA_INSTANCE:-cognia}_workspaces:/to alpine \
+  sh -c 'cp -a /from/. /to/default/'
+```
 
 ### Network drives through SFTPGo (`compose.sftpgo.yaml`)
 

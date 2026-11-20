@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: runtime
-          image: ghcr.io/maxqian888/cognia-workspace-runtime:latest
+          image: ghcr.io/cognia-labs/cognia-workspace-runtime:latest
           env:
             - name: COGNIA_WORKSPACE_ID
               value: ${WORKSPACE_ID}

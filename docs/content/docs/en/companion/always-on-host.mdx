@@ -36,7 +36,7 @@ git clone https://github.com/cognia-labs/cognia.git && cd cognia/deploy/compose
 cp .env.example .env
 # edit .env: set SHARE_UPLOAD_SECRET (openssl rand -hex 32) and COGNIA_AGENT_BUNDLE_IMAGE
 # to the agent bundle pinned by digest, which this prints:
-#   docker buildx imagetools inspect ghcr.io/maxqian888/cognia-agent-bundle:latest \
+#   docker buildx imagetools inspect ghcr.io/cognia-labs/cognia-agent-bundle:latest \
 #     --format '{{.Name}}@{{.Manifest.Digest}}'
 
 export COMPOSE_FILE=docker-compose.yml:docker-compose.t2.yml:compose.host-updates.yaml
@@ -60,8 +60,9 @@ on that exact build until an update replaces it.
 [Where the host runs work](#where-the-host-runs-work)). The server reaches Docker only
 through Cognia's own proxy, which lets it create and run nothing but its own hardened
 containers. Until `COGNIA_AGENT_BUNDLE_IMAGE` names a digest-pinned bundle, no
-container can start, and work that does not require isolation runs in the server
-process instead.
+runtime environment container can start. Until then an external agent whose project
+does not require isolation runs in a `cognia-runner` container instead, never in the
+server process, and a conversation's Bash, Edit and Write are refused.
 
 ## Mac with the host archive
 
@@ -364,10 +365,12 @@ in the agent sandbox on the host. A project can also opt out: on the project's w
 open the **Environments** tab, then the environment's runtime settings, and turn on
 **Run as host processes on an always-on host**. Other devices ignore that switch.
 
-A host without the sandbox pool (started without `docker-compose.t2.yml`, or with
-`COGNIA_SANDBOX_POOL_ENABLED=false`) has no containers to offer. There a conversation's
-Bash, Edit and Write are refused, and external agents run in the agent sandbox on the
-host. Opt a project out to run its tools as host processes on such a host.
+A host without the sandbox pool has no runtime environment containers to offer, and a
+conversation's Bash, Edit and Write are refused there. Where its external agents run
+depends on how it was started. Without `docker-compose.t2.yml` they run in the agent
+sandbox on the host. With `docker-compose.t2.yml` and `COGNIA_SANDBOX_POOL_ENABLED=false`
+they run in `cognia-runner` containers. Opt a project out to run its tools as host
+processes on such a host.
 
 Containers a conversation no longer uses are removed. Ones a previous run of the server
 left behind are removed when it starts.

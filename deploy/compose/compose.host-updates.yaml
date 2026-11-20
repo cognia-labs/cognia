@@ -27,7 +27,7 @@
 services:
   host-updates:
     profiles: [server]
-    image: ${COGNIA_DEPLOY_AGENT_IMAGE:-ghcr.io/maxqian888/cognia-deploy-agent:latest}
+    image: ${COGNIA_DEPLOY_AGENT_IMAGE:-ghcr.io/cognia-labs/cognia-deploy-agent:latest}
     command: ["host-updates", "run"]
     environment:
       COGNIA_HOST_UPDATES_PROJECT: ${COGNIA_INSTANCE:-cognia}

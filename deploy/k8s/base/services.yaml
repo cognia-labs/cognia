@@ -21,7 +21,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: signaling
-          image: ghcr.io/maxqian888/cognia-signaling:latest
+          image: ghcr.io/cognia-labs/cognia-signaling:latest
           ports:
             - containerPort: 7892
           env:
@@ -99,7 +99,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: share
-          image: ghcr.io/maxqian888/cognia-share:latest
+          image: ghcr.io/cognia-labs/cognia-share:latest
           ports:
             - containerPort: 8787
           env:

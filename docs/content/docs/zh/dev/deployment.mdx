@@ -283,16 +283,16 @@ Fumadocs 用 Orama 在浏览器内做全文搜索。索引在构建期由 MDX �
 云端组件 —— `signaling`（WebRTC 会合，7892）、`share`（公开分享链接，8787）、headless 的 `cognia-server` 大脑宿主（**27890**，HTTPS）—— 以 GHCR 镜像发布，由 `images.yml` 在 `v*` tag 上构建：
 
 ```
-ghcr.io/maxqian888/cognia-signaling
-ghcr.io/maxqian888/cognia-share
-ghcr.io/maxqian888/cognia-server            # -slim / -full 两个变体
-ghcr.io/maxqian888/cognia-runner            # T2 每 agent 一容器的 runner 镜像
-ghcr.io/maxqian888/cognia-web               # 静态导出 + Caddy 前门（tls profile）
-ghcr.io/maxqian888/cognia-workspace-runtime # ADR-0085 共享浏览器运行时
-ghcr.io/maxqian888/cognia-collab            # ADR-0149 协作面
-ghcr.io/maxqian888/cognia-diagnostics       # ADR-0135 诊断服务
-ghcr.io/maxqian888/cognia-ops-controller    # ADR-0059 运维控制器
-ghcr.io/maxqian888/cognia-deploy-agent      # ADR-0059 部署 agent
+ghcr.io/cognia-labs/cognia-signaling
+ghcr.io/cognia-labs/cognia-share
+ghcr.io/cognia-labs/cognia-server            # -slim / -full 两个变体
+ghcr.io/cognia-labs/cognia-runner            # T2 每 agent 一容器的 runner 镜像
+ghcr.io/cognia-labs/cognia-web               # 静态导出 + Caddy 前门（tls profile）
+ghcr.io/cognia-labs/cognia-workspace-runtime # ADR-0085 共享浏览器运行时
+ghcr.io/cognia-labs/cognia-collab            # ADR-0149 协作面
+ghcr.io/cognia-labs/cognia-diagnostics       # ADR-0135 诊断服务
+ghcr.io/cognia-labs/cognia-ops-controller    # ADR-0059 运维控制器
+ghcr.io/cognia-labs/cognia-deploy-agent      # ADR-0059 部署 agent
 ```
 
 - **Compose 套件** —— `deploy/compose/`，用 profile 承载阶段阶梯（`server`、`tls` Caddy/ACME 前门、`observability` Prometheus、`logto` 自托管 OIDC IdP），另有把外部 agent 拆到独立 runner 容器的 T2 override。入口见 [`deploy/compose/README.md`](https://github.com/cognia-labs/cognia/blob/master/deploy/compose/README.md)。

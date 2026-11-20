@@ -290,16 +290,16 @@ Fumadocs uses Orama for in-browser full-text search. The index is generated at b
 The cloud footprint — `signaling` (WebRTC rendezvous, 7892), `share` (public share links, 8787), and the headless `cognia-server` brain host (**27890**, HTTPS) — ships as GHCR images built by `images.yml` on `v*` tags:
 
 ```
-ghcr.io/maxqian888/cognia-signaling
-ghcr.io/maxqian888/cognia-share
-ghcr.io/maxqian888/cognia-server            # -slim / -full variants
-ghcr.io/maxqian888/cognia-runner            # T2 per-agent runner image
-ghcr.io/maxqian888/cognia-web               # static export + Caddy front door (tls profile)
-ghcr.io/maxqian888/cognia-workspace-runtime # ADR-0085 shared browser runtime
-ghcr.io/maxqian888/cognia-collab            # ADR-0149 collaboration plane
-ghcr.io/maxqian888/cognia-diagnostics       # ADR-0135 diagnostic service
-ghcr.io/maxqian888/cognia-ops-controller    # ADR-0059 ops controller
-ghcr.io/maxqian888/cognia-deploy-agent      # ADR-0059 deploy agent
+ghcr.io/cognia-labs/cognia-signaling
+ghcr.io/cognia-labs/cognia-share
+ghcr.io/cognia-labs/cognia-server            # -slim / -full variants
+ghcr.io/cognia-labs/cognia-runner            # T2 per-agent runner image
+ghcr.io/cognia-labs/cognia-web               # static export + Caddy front door (tls profile)
+ghcr.io/cognia-labs/cognia-workspace-runtime # ADR-0085 shared browser runtime
+ghcr.io/cognia-labs/cognia-collab            # ADR-0149 collaboration plane
+ghcr.io/cognia-labs/cognia-diagnostics       # ADR-0135 diagnostic service
+ghcr.io/cognia-labs/cognia-ops-controller    # ADR-0059 ops controller
+ghcr.io/cognia-labs/cognia-deploy-agent      # ADR-0059 deploy agent
 ```
 
 - **Compose suite** — `deploy/compose/` with profiles for the phase ladder (`server`, `tls` Caddy/ACME front door, `observability` Prometheus, `logto` self-hosted OIDC IdP) and a T2 override that moves external agents into per-agent runner containers. Start at [`deploy/compose/README.md`](https://github.com/cognia-labs/cognia/blob/master/deploy/compose/README.md).

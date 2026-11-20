@@ -6,13 +6,13 @@ resources:
   - ../../base
   - ../../components/deploy-agent
 images:
-  - name: ghcr.io/maxqian888/cognia-server
+  - name: ghcr.io/cognia-labs/cognia-server
     newName: ghcr.io/owner/cognia-server
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/maxqian888/cognia-signaling
+  - name: ghcr.io/cognia-labs/cognia-signaling
     newName: ghcr.io/owner/cognia-signaling
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/maxqian888/cognia-share
+  - name: ghcr.io/cognia-labs/cognia-share
     newName: ghcr.io/owner/cognia-share
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 configMapGenerator:

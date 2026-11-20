@@ -129,7 +129,7 @@ function renderKubernetesFiles(
     resources: ["namespace.yaml", "../../base"],
     images: [
       {
-        name: "ghcr.io/maxqian888/cognia-server",
+        name: "ghcr.io/cognia-labs/cognia-server",
         newName: serverImage.name,
         digest: `sha256:${serverImage.digest}`,
       },

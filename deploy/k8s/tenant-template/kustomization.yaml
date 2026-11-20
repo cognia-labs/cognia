@@ -11,7 +11,8 @@
 #   5. (external agents) uncomment the `runners/` resource, the runners patch
 #      entry, and the execBackend/runnerImage/workspacesPvc literals — runner
 #      Pods spawn via the k8s exec backend (COGNIA_EXEC_BACKEND=kubernetes)
-#   6. (production) uncomment the gvisor patch entry
+#   6. (production) uncomment the gvisor patch entry; runner pods inherit the
+#      server pod's runtime class
 #   7. (project runtime environments, ADR-0183) uncomment agentBundleImage with
 #      a digest-pinned bundle; it is read only while the sandbox pool is on
 #
@@ -33,9 +34,9 @@ configMapGenerator:
       # - logtoAudience=https://cognia-CHANGE-ME.example.com/api
       # - logtoRequiredScopes=brain:rpc
       # - execBackend=kubernetes
-      # - runnerImage=ghcr.io/maxqian888/cognia-runner:latest
+      # - runnerImage=ghcr.io/cognia-labs/cognia-runner:latest
       # - workspacesPvc=cognia-workspaces
-      # - agentBundleImage=ghcr.io/maxqian888/cognia-agent-bundle:vX.Y.Z@sha256:<digest>
+      # - agentBundleImage=ghcr.io/cognia-labs/cognia-agent-bundle:vX.Y.Z@sha256:<digest>
 generatorOptions:
   disableNameSuffixHash: true
 # patches:

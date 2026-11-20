@@ -89,7 +89,7 @@ services:
 
   collab-server:
     profiles: [collab]
-    image: ${COLLAB_IMAGE:-ghcr.io/maxqian888/cognia-collab:latest}
+    image: ${COLLAB_IMAGE:-ghcr.io/cognia-labs/cognia-collab:latest}
     build:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.collab-server
@@ -144,7 +144,7 @@ services:
 
   collab-bootstrap:
     profiles: [collab-bootstrap]
-    image: ${COLLAB_IMAGE:-ghcr.io/maxqian888/cognia-collab:latest}
+    image: ${COLLAB_IMAGE:-ghcr.io/cognia-labs/cognia-collab:latest}
     build:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.collab-server
@@ -173,7 +173,7 @@ services:
 
   cognia-server:
     profiles: [server]
-    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/maxqian888/cognia-server:latest-full}
+    image: ${COGNIA_SERVER_IMAGE:-ghcr.io/cognia-labs/cognia-server:latest-full}
     build:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.cognia-server
@@ -301,7 +301,7 @@ services:
 
   caddy:
     profiles: [tls]
-    image: ${COGNIA_WEB_IMAGE:-ghcr.io/maxqian888/cognia-web:latest}
+    image: ${COGNIA_WEB_IMAGE:-ghcr.io/cognia-labs/cognia-web:latest}
     build:
       context: ../../
       dockerfile: deploy/compose/Dockerfile.web
