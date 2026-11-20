@@ -16,6 +16,7 @@ import type { ThemeId, ThemeTokens } from "@/lib/export/html/syntax-themes"
 import type { ShareProvenance } from "@/lib/share/types"
 import { enforceExportDisclosure } from "@/lib/export/disclosure"
 import type { ExportLabels } from "@/lib/export/labels"
+import { exportFilenameStem } from "@/lib/files/export-filename"
 
 export type SingleExportFormat =
   "markdown" | "json" | "text" | "html" | "animated" | "jsonl" | "jsonl-chat"
@@ -54,7 +55,7 @@ export interface SingleExportResult {
 
 export function renderSingleExport(opts: SingleExportOptions): SingleExportResult {
   const exportedAt = opts.exportedAt ?? new Date()
-  const slug = slugify(opts.session.title) || "conversation"
+  const slug = exportFilenameStem(opts.session.title, "conversation")
   const finalize = (result: SingleExportResult): SingleExportResult => ({
     ...result,
     content: enforceExportDisclosure(result.content, opts.format, opts.provenance),
@@ -134,12 +135,4 @@ export function renderSingleExport(opts: SingleExportOptions): SingleExportResul
       })
     }
   }
-}
-
-function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60)
 }

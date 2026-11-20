@@ -29,6 +29,7 @@ import type {
 import type { ArtifactExportFailure } from "@/lib/artifacts/export"
 import { getArtifactExportFormats } from "@/components/artifacts/runtime-adapters"
 import { loggers } from "@cognia/logging"
+import { exportFilenameStem } from "@/lib/files/export-filename"
 import { canvasDocumentToArtifact } from "./artifact-projection"
 
 /** Formats serialized straight from the Canvas buffer, with no rendering. */
@@ -102,20 +103,10 @@ export function getCanvasExportFormats(doc: CanvasDocument): ArtifactExportForma
   )
 }
 
-function sanitizeFilenameStem(title: string): string {
-  const stem = title
-    .trim()
-    .replace(/[/\\?%*:|"<>]/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-  return stem || "canvas-document"
-}
-
 /** The filename a given export would produce (pure — used by the UI + tests). */
 export function canvasExportFilename(doc: CanvasDocument, format: ArtifactExportFormat): string {
   const ext = format === "raw" ? extensionForLanguage(doc.language) : format
-  return `${sanitizeFilenameStem(doc.title)}.${ext}`
+  return `${exportFilenameStem(doc.title, "canvas-document")}.${ext}`
 }
 
 function mimeForFormat(format: ArtifactExportFormat): string {

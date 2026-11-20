@@ -275,13 +275,14 @@ describe("exportFilename", () => {
     expect(exportFilename(flow([]), format)).toBe(expected)
   })
 
-  it("slugifies a messy flow name", () => {
-    expect(exportFilename(flow([], { name: "  Log In / Sign-up!  " }), "json")).toBe(
-      "log-in-sign-up.json"
+  it("keeps the flow name readable, in any script, without unsafe characters", () => {
+    expect(exportFilename(flow([], { name: "  Log In / Sign-up  " }), "json")).toBe(
+      "Log-In-Sign-up.json"
     )
+    expect(exportFilename(flow([], { name: "登录 流程" }), "playwright")).toBe("登录-流程.spec.ts")
   })
 
-  it("falls back to a stem when the name slugifies to nothing", () => {
-    expect(exportFilename(flow([], { name: "!!!" }), "json")).toBe("recording.json")
+  it("falls back to a stem when nothing usable is left of the name", () => {
+    expect(exportFilename(flow([], { name: " / : " }), "json")).toBe("recording.json")
   })
 })

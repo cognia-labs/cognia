@@ -120,6 +120,28 @@ describe("exportBatch", () => {
     expect(mockZipFile).toHaveBeenNthCalledWith(2, "noext (2)", "C")
   })
 
+  it("never writes one archive entry over another, whatever the titles are", async () => {
+    // A counter per rendered name let "same (2).md" from a third title land on
+    // the suffixed copy of the second, and "Same.md" / "same.md" extract to one
+    // file on macOS and Windows.
+    mockedList.mockResolvedValue([{ id: "u" }])
+    msgs.sortBy.mockResolvedValue([{ id: "row" }])
+    for (const filename of ["same.md", "same.md", "same (2).md", "Same.md"]) {
+      mockedRender.mockReturnValueOnce({ content: filename, filename, mimeType: "text/markdown" })
+    }
+    await exportBatch({
+      sessions: [session("a", "A"), session("b", "B"), session("c", "C"), session("d", "D")],
+      format: "markdown",
+      labels,
+    })
+    expect(mockZipFile.mock.calls.map(([name]) => name)).toEqual([
+      "same.md",
+      "same (2).md",
+      "same (2) (2).md",
+      "Same (3).md",
+    ])
+  })
+
   it("reconstitutes when DB returns no rows but UIMessage list is non-empty", async () => {
     mockedList.mockResolvedValueOnce([
       { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },

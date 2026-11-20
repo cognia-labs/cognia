@@ -24,7 +24,13 @@
 
 import { isTauri, isCapacitor, type Platform } from "@/lib/platform/detect"
 import { registerDialogPathInRust } from "@/lib/files/allowed-roots-sync"
-import { writeFile as capacitorWriteFile, type Directory } from "@/lib/capacitor/filesystem"
+import {
+  listDir as capacitorListDir,
+  mkdir as capacitorMkdir,
+  writeFile as capacitorWriteFile,
+  type Directory,
+} from "@/lib/capacitor/filesystem"
+import { uniqueFilename } from "@/lib/files/export-filename"
 import { downloadBlob } from "@/lib/files/download"
 import { encodeBase64 } from "@/lib/share/encoding"
 
@@ -108,16 +114,47 @@ async function saveViaTauri(opts: SaveExportOptions): Promise<SaveExportOutcome>
 
 type CapacitorSaveOutcome = SaveExportOutcome | { kind: "unsupported" }
 
+type ExistingNames =
+  { kind: "ok"; names: string[] } | { kind: "unsupported" } | { kind: "error"; message: string }
+
+/**
+ * The names already in the export folder. Listing fails while the folder does
+ * not exist yet, so a failed listing creates the folder and lists again; a
+ * folder that still cannot be listed is an error, since saving blind could
+ * replace a file. (`mkdir` alone proves nothing: with intermediate directories
+ * iOS succeeds on a folder that exists, Android fails on one.)
+ */
+async function existingMobileNames(subdir: string, directory: Directory): Promise<ExistingNames> {
+  const first = await capacitorListDir({ path: subdir, directory })
+  if (first.kind === "ok") return { kind: "ok", names: first.value.map((entry) => entry.name) }
+  if (first.kind === "unsupported") return first
+  const created = await capacitorMkdir({ path: subdir, directory, recursive: true })
+  if (created.kind === "unsupported") return created
+  const second = await capacitorListDir({ path: subdir, directory })
+  if (second.kind === "ok") return { kind: "ok", names: second.value.map((entry) => entry.name) }
+  if (second.kind === "unsupported") return second
+  return { kind: "error", message: `cannot list ${subdir}: ${second.message}` }
+}
+
+/**
+ * The phone's save path is fixed, not chosen in a dialog, and the Filesystem
+ * plugin overwrites, so an export takes the first free `name (n).ext` in the
+ * folder instead of replacing an earlier export with the same title.
+ */
 async function saveViaCapacitor(opts: SaveExportOptions): Promise<CapacitorSaveOutcome> {
   const subdir = opts.mobileSubdir ?? "cognia/exports"
-  const path = `${subdir}/${opts.filename}`
+  const directory = opts.mobileDirectory ?? "documents"
   const base64 = await toBase64(opts.data)
   if (opts.shouldContinue?.() === false) return { kind: "cancelled" }
+  const existing = await existingMobileNames(subdir, directory)
+  if (existing.kind !== "ok") return existing
+  const filename = uniqueFilename(opts.filename, existing.names)
+  if (opts.shouldContinue?.() === false) return { kind: "cancelled" }
   const out = await capacitorWriteFile({
-    path,
+    path: `${subdir}/${filename}`,
     data: base64,
     encoding: "base64",
-    directory: opts.mobileDirectory ?? "documents",
+    directory,
     recursive: true,
   })
   if (out.kind === "ok") {
@@ -126,7 +163,7 @@ async function saveViaCapacitor(opts: SaveExportOptions): Promise<CapacitorSaveO
       platform: "mobile",
       location: out.value.uri,
       uri: out.value.uri,
-      filename: opts.filename,
+      filename,
     }
   }
   if (out.kind === "unsupported") return { kind: "unsupported" }

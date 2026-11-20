@@ -17,9 +17,20 @@ jest.mock("@/lib/files/allowed-roots-sync", () => ({
 }))
 
 const capWriteFileMock = jest.fn()
+const capListDirMock = jest.fn()
+const capMkdirMock = jest.fn()
 jest.mock("@/lib/capacitor/filesystem", () => ({
   writeFile: (opts: unknown) => capWriteFileMock(opts),
+  listDir: (opts: unknown) => capListDirMock(opts),
+  mkdir: (opts: unknown) => capMkdirMock(opts),
 }))
+
+function dirEntries(...names: string[]) {
+  return {
+    kind: "ok",
+    value: names.map((name) => ({ name, type: "file", size: 1, mtime: 0, uri: `file:///${name}` })),
+  }
+}
 
 const downloadBlobMock = jest.fn()
 jest.mock("@/lib/files/download", () => ({
@@ -49,6 +60,8 @@ beforeEach(() => {
   isCapacitorMock.mockReset().mockReturnValue(false)
   registerDialogPathInRustMock.mockClear()
   capWriteFileMock.mockReset()
+  capListDirMock.mockReset().mockResolvedValue(dirEntries())
+  capMkdirMock.mockReset().mockResolvedValue({ kind: "ok", value: null })
   downloadBlobMock.mockReset()
   saveDialogMock.mockReset()
   fsWriteTextFileMock.mockReset().mockResolvedValue(undefined)
@@ -229,6 +242,49 @@ describe("saveExport — Capacitor", () => {
     capWriteFileMock.mockResolvedValueOnce({ kind: "error", message: "disk full" })
     const res = await saveExport({ filename: "x.md", data: "hi", mimeType: "text/markdown" })
     expect(res).toEqual({ kind: "error", message: "disk full" })
+  })
+
+  it("takes the next free name instead of replacing an earlier export (N2)", async () => {
+    // The phone has no save dialog, and the plugin overwrites: two
+    // conversations with the same title used to leave only the second file.
+    capListDirMock.mockResolvedValueOnce(dirEntries("季度报告.md", "季度报告 (2).MD", "other.md"))
+    capWriteFileMock.mockResolvedValueOnce({ kind: "ok", value: { uri: "file:///docs/x" } })
+
+    const res = await saveExport({ filename: "季度报告.md", data: "hi", mimeType: "text/markdown" })
+
+    expect(capListDirMock).toHaveBeenCalledWith({ path: "cognia/exports", directory: "documents" })
+    expect(capWriteFileMock.mock.calls[0][0].path).toBe("cognia/exports/季度报告 (3).md")
+    expect(res).toMatchObject({ kind: "saved", filename: "季度报告 (3).md" })
+  })
+
+  it("creates the folder on the first export and keeps the requested name", async () => {
+    capListDirMock
+      .mockResolvedValueOnce({ kind: "error", message: "Folder does not exist." })
+      .mockResolvedValueOnce(dirEntries())
+    capWriteFileMock.mockResolvedValueOnce({ kind: "ok", value: { uri: "u" } })
+
+    const res = await saveExport({ filename: "x.md", data: "hi", mimeType: "text/markdown" })
+
+    expect(capMkdirMock).toHaveBeenCalledWith({
+      path: "cognia/exports",
+      directory: "documents",
+      recursive: true,
+    })
+    expect(res).toMatchObject({ kind: "saved", filename: "x.md" })
+  })
+
+  it("refuses to save blind when the folder cannot be listed", async () => {
+    capListDirMock.mockResolvedValue({ kind: "error", message: "permission denied" })
+    // iOS creates intermediate directories without complaint on a folder that exists.
+    capMkdirMock.mockResolvedValueOnce({ kind: "ok", value: null })
+
+    const res = await saveExport({ filename: "x.md", data: "hi", mimeType: "text/markdown" })
+
+    expect(capWriteFileMock).not.toHaveBeenCalled()
+    expect(res).toEqual({
+      kind: "error",
+      message: "cannot list cognia/exports: permission denied",
+    })
   })
 
   it("encodes binary blobs to base64", async () => {

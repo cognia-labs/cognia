@@ -14,6 +14,7 @@ import {
   type RecordedStep,
   type RecordedTarget,
 } from "@/lib/browser/recording/protocol"
+import { exportFilenameStem } from "@/lib/files/export-filename"
 
 /** Safely embed an arbitrary string in generated JS/TS source. */
 function quote(value: string): string {
@@ -207,12 +208,7 @@ export function exportFlow(flow: RecordedFlow, format: ExportFormat): string {
 
 /** Suggested download filename per format. */
 export function exportFilename(flow: RecordedFlow, format: ExportFormat): string {
-  const slug = flow.name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-  const stem = slug || "recording"
+  const stem = exportFilenameStem(flow.name, "recording")
   if (format === "playwright") return `${stem}.spec.ts`
   if (format === "json") return `${stem}.json`
   return `${stem}.md`

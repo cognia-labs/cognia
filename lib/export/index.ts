@@ -14,6 +14,8 @@
  * historical capitalisation plugin authors expect.
  */
 
+import { exportFilenameStem } from "@/lib/files/export-filename"
+
 export {
   renderSingleExport,
   type SingleExportFormat,
@@ -42,16 +44,7 @@ export { exportToAnimatedHtml as exportToAnimatedHTML } from "./html/animated-ht
  * stable filename without invoking `renderSingleExport`.
  */
 export function generateFilename(title: string, extension: string): string {
-  const slug = slugify(title) || "conversation"
+  const slug = exportFilenameStem(title, "conversation")
   const ext = extension.startsWith(".") ? extension.slice(1) : extension
   return `${slug}.${ext}`
-}
-
-function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60)
 }

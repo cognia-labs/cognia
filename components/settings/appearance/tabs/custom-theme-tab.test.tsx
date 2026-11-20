@@ -596,9 +596,9 @@ describe("CustomThemeTab", () => {
     expect(screen.getByTestId("custom-theme-edit-dark").textContent).toContain("9")
   })
 
-  it("export from the rail menu creates a download for the theme", () => {
+  it("export from the rail menu creates a download named after the theme", () => {
     storeState.settings = {
-      customThemes: [sampleTheme("ct-x", { name: "Exportable" })],
+      customThemes: [sampleTheme("ct-x", { name: "深色 主题" })],
       activeCustomThemeId: null,
     }
     const createObjectURL = jest.fn().mockReturnValue("blob:fake")
@@ -612,12 +612,14 @@ describe("CustomThemeTab", () => {
       value: revokeObjectURL,
     })
     const click = jest.fn()
+    const anchors: HTMLAnchorElement[] = []
     const realCreate = document.createElement.bind(document)
     const createSpy = jest.spyOn(document, "createElement").mockImplementation((tag: string) => {
       if (tag === "a") {
         // Use a real anchor element so href/download attribute setters work.
         const a = realCreate("a") as HTMLAnchorElement
         a.click = click
+        anchors.push(a)
         return a
       }
       return realCreate(tag)
@@ -628,6 +630,8 @@ describe("CustomThemeTab", () => {
 
     expect(createObjectURL).toHaveBeenCalled()
     expect(click).toHaveBeenCalled()
+    // A Chinese name used to become underscores, one per character (N2).
+    expect(anchors.at(-1)?.download).toBe("深色-主题.cognia-theme.json")
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:fake")
     createSpy.mockRestore()
   })

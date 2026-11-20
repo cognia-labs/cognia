@@ -11,6 +11,7 @@ import type { UIMessage } from "ai"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { resolveSessionTwinProvenance } from "@/lib/twin/export-provenance"
 import type { ExportLabels } from "@/lib/export/labels"
+import { uniqueFilename } from "@/lib/files/export-filename"
 
 export interface BatchExportOptions {
   /** Sessions to export. */
@@ -40,7 +41,7 @@ export async function exportBatch(opts: BatchExportOptions): Promise<BatchExport
   const { default: JSZip } = await import("jszip")
   const zip = new JSZip()
   const exportedAt = new Date()
-  const seen = new Map<string, number>()
+  const used: string[] = []
   let exportedCount = 0
 
   for (let i = 0; i < sessions.length; i++) {
@@ -70,11 +71,10 @@ export async function exportBatch(opts: BatchExportOptions): Promise<BatchExport
       provenance,
     })
 
-    // Disambiguate identical filenames (two sessions called "Hello world").
-    const dupCount = seen.get(rendered.filename) ?? 0
-    seen.set(rendered.filename, dupCount + 1)
-    const filename =
-      dupCount === 0 ? rendered.filename : appendSuffix(rendered.filename, ` (${dupCount + 1})`)
+    // Disambiguate identical filenames (two sessions called "Hello world",
+    // or "Report" and "report", which extract to one file on macOS/Windows).
+    const filename = uniqueFilename(rendered.filename, used)
+    used.push(filename)
 
     zip.file(filename, rendered.content)
     exportedCount++
@@ -99,10 +99,4 @@ function reconstitute(messages: UIMessage[], sessionId: string): StoredMessage[]
     parts: m.parts,
     createdAt: i,
   }))
-}
-
-function appendSuffix(filename: string, suffix: string): string {
-  const dot = filename.lastIndexOf(".")
-  if (dot < 0) return filename + suffix
-  return filename.slice(0, dot) + suffix + filename.slice(dot)
 }

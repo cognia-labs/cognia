@@ -83,6 +83,7 @@ import {
 } from "../components/token-group"
 import { SavedThemesRail } from "../components/saved-themes-rail"
 import { usePreviewDraftPublisher } from "../preview-draft-context"
+import { exportFilenameStem } from "@/lib/files/export-filename"
 
 /**
  * Deep link naming the row to edit. `theme-tab`'s "edit a copy" sets it
@@ -447,7 +448,7 @@ export function CustomThemeTab() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `${theme.name.replace(/[^\w-]/g, "_") || "theme"}.cognia-theme.json`
+      a.download = `${exportFilenameStem(theme.name, "theme")}.cognia-theme.json`
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {

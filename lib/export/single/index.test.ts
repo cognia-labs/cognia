@@ -41,7 +41,7 @@ describe("renderSingleExport", () => {
     expect(out.content).toContain("[AI-generated · Digital Twin]")
   })
 
-  it("renders markdown with slug-derived filename", () => {
+  it("renders markdown with a filename derived from the title", () => {
     const out = renderSingleExport({
       format: "markdown",
       session,
@@ -50,7 +50,7 @@ describe("renderSingleExport", () => {
       exportedAt: date,
     })
     expect(out.content).toBe("MD")
-    expect(out.filename).toBe("my-conversation-with-symbols.md")
+    expect(out.filename).toBe("My-Conversation-With-Symbols!.md")
     expect(out.mimeType).toBe("text/markdown")
     expect(md.exportToRichMarkdown).toHaveBeenCalled()
   })
@@ -185,15 +185,26 @@ describe("renderSingleExport", () => {
     expect(JSON.parse(out.content).messages[0]).toEqual({ role: "user", content: "hi" })
   })
 
-  it("trims slugs longer than 60 chars", () => {
-    const long = "X".repeat(80)
+  it("bounds a long title in bytes", () => {
     const out = renderSingleExport({
       format: "json",
-      session: { id: "x", title: long } as unknown as ChatSession,
+      session: { id: "x", title: "X".repeat(400) } as unknown as ChatSession,
       messages,
       labels,
     })
-    // .slice(0, 60) yields 60 'x' chars
-    expect(out.filename).toBe(`${"x".repeat(60)}.json`)
+    expect(out.filename).toBe(`${"X".repeat(180)}.json`)
+  })
+
+  it("names a conversation titled in Chinese after its title, not 'conversation' (N2)", () => {
+    const named = (title: string) =>
+      renderSingleExport({
+        format: "markdown",
+        session: { id: "x", title } as unknown as ChatSession,
+        messages,
+        labels,
+        exportedAt: date,
+      }).filename
+    expect(named("项目 计划")).toBe("项目-计划.md")
+    expect(named("周会纪要")).toBe("周会纪要.md")
   })
 })
