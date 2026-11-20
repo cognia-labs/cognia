@@ -9,6 +9,7 @@
 
 import type { ChildRunOutcome } from "@/types/execution/child-run"
 import type { SquadLaunchPort } from "@/types/modules/ports/squad-launch"
+import type { SquadRunReport } from "../squad/squad-run-report"
 
 export const port: SquadLaunchPort = {
   async start(input) {
@@ -39,20 +40,21 @@ export const port: SquadLaunchPort = {
     // A fresh launch mints its run id, so it is never a replay.
     if (result.duplicate) return { started: false, reason: "duplicate" }
     const { runId, executionRunId } = result
-    const squadId = input.squadId
 
     const outcome = (async (): Promise<ChildRunOutcome> => {
-      const [{ awaitSquadRunSettlement }, { useAgentTeamStore }] = await Promise.all([
+      const [{ awaitSquadRunSettlement }, { readSquadRunReport }] = await Promise.all([
         import("../squad/watch-squad-run"),
-        import("@/stores/squads/agent-team-store/store"),
+        import("../squad/squad-run-report"),
       ])
       const status = await awaitSquadRunSettlement(executionRunId)
-      const squad = useAgentTeamStore.getState().teams[squadId]
+      // This run's own report, never the Squad's last one: the team record's
+      // `finalResult` belongs to whichever Ultracode run wrote it last.
+      const report: SquadRunReport = await readSquadRunReport(runId).catch(() => ({}))
       if (status === "completed") {
-        return { status: "completed", ...(squad?.finalResult ? { text: squad.finalResult } : {}) }
+        return { status: "completed", ...(report.text ? { text: report.text } : {}) }
       }
       if (status === "failed") {
-        return { status: "failed", error: squad?.error ?? `Squad run ${runId} failed` }
+        return { status: "failed", error: report.error ?? `Squad run ${runId} failed` }
       }
       return { status: "cancelled", error: `Squad run ${runId} was stopped` }
     })()

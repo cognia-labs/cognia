@@ -185,6 +185,20 @@ export default defineHostModule({
         mobile: "./runtime/squad-bootstrap",
       },
     },
+    // A room hand-off whose Squad run ended with no entry for the room (the
+    // host stopped first, or a retry from the run's card) is reported here.
+    {
+      name: "room-handoff-reconcile",
+      criticality: "optional",
+      adapters: {
+        brain: { module: "./room-handoff/runtime-reconcile", hosts: ["brain"] },
+        desktop: "./room-handoff/runtime-reconcile",
+      },
+      absent: {
+        mobile:
+          "A phone never orchestrates a room: its Host runs the room's Squad hand-offs and reports them.",
+      },
+    },
   ],
   // Pinned on the rail by default (`DEFAULT_PINNED_IDS`) and on a fresh
   // phone's grid (`DEFAULT_GLANCE_MOBILE_SHORTCUTS`): both are layouts over

@@ -55,6 +55,8 @@ jest.mock("./workspace/registry-controller", () => ({
     async openDispatch(input: { taskId: string }) {
       return {
         primaryAlias: `/alias/${input.taskId}`,
+        // A single-repository Squad has no other repositories to reach.
+        additionalAliases: [],
         run: { runId: `ws-${input.taskId}` },
         settle: async () => [],
         abort: () => abortWorkspaceMock(),
@@ -752,6 +754,44 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     const result = await runTeamLifecycle("team-1", deps)
     expect(result.status).toBe("completed")
     expect(deps._taskStatuses).toMatchObject({ t1: "completed", t2: "completed" })
+  })
+
+  it("shows this run's own answers as the team's result, never an earlier run's (F04)", async () => {
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "this run's answer",
+      usage: { promptTokens: 5, completionTokens: 3, totalTokens: 8 },
+    })
+    const deps = buildDeps(baseTeam, [task("t1"), task("t2")], [lead, worker("w1"), worker("w2")])
+    const written: Array<string | undefined> = []
+    deps.storeWriter.setFinalResult = (_teamId, result) => {
+      written.push(result)
+    }
+
+    const result = await runTeamLifecycle("team-1", deps)
+
+    expect(result.status).toBe("completed")
+    // Both terminal tasks' answers; before, a task run left the team's field
+    // as whatever an earlier Ultracode run had written.
+    expect(written).toEqual(["this run's answer\n\nthis run's answer"])
+  })
+
+  it("clears the team's result when the run ends without one", async () => {
+    ;(executeAgent as jest.Mock).mockRejectedValue(new Error("provider down"))
+    const deps = buildDeps(
+      { ...baseTeam, config: { ...baseTeam.config, maxRetries: 0 } } as AgentTeam,
+      [task("t1")],
+      [lead, worker("w1")]
+    )
+    const written: Array<string | undefined> = []
+    deps.storeWriter.setFinalResult = (_teamId, result) => {
+      written.push(result)
+    }
+
+    const result = await runTeamLifecycle("team-1", deps)
+
+    expect(result.status).toBe("failed")
+    expect(written).toEqual([undefined])
   })
 
   it("threads an IM triggeredFrom onto the team run row for progress fan-out", async () => {

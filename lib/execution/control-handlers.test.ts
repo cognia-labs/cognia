@@ -19,6 +19,7 @@ import {
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
 import { createRunInterrupt, executeRunControlCommand } from "./run-control"
+import { settleHeldSteer, steerRun } from "./steer"
 import { registerRunRetryHandler } from "./run-retry-registry"
 
 import { __resetRunStopsForTesting, registerRunStop } from "./run-stops"
@@ -66,16 +67,30 @@ jest.mock("@/lib/squads/squad/start-squad-run", () => ({
 }))
 
 const mockGetAgentTeamRun = jest.fn(async (_id: string) => undefined as unknown)
+const mockWithdrawQueuedSteering = jest.fn(
+  async (_ids: readonly string[], _at: number, _reason: string) => [] as string[]
+)
 jest.mock("@/lib/db/agent-team-runtime", () => ({
   getAgentTeamRun: (...args: unknown[]) =>
     mockGetAgentTeamRun(...(args as Parameters<typeof mockGetAgentTeamRun>)),
+  withdrawQueuedAgentTeamSteering: (...args: unknown[]) =>
+    mockWithdrawQueuedSteering(...(args as Parameters<typeof mockWithdrawQueuedSteering>)),
 }))
 
 const mockControlDurableRun = jest.fn(async (_runId: string, _action: string) => undefined)
-const mockSteerDurableRun = jest.fn(async (_runId: string, _message: string) => ({
-  receiptIds: ["receipt-1"],
-  childCount: 1,
-}))
+const mockSteerDurableRun = jest.fn(
+  async (
+    _runId: string,
+    _message: string
+  ): Promise<{
+    receipts: { id: string; status: string }[]
+    childCount: number
+    refused?: "pii_blocked" | "store_failed"
+  }> => ({
+    receipts: [{ id: "receipt-1", status: "delivered" }],
+    childCount: 1,
+  })
+)
 jest.mock("@/lib/squads/durable/durable-control", () => ({
   controlSquadRun: (...args: unknown[]) =>
     mockControlSquadRun(...(args as Parameters<typeof mockControlSquadRun>)),
@@ -878,7 +893,10 @@ describe("steering", () => {
     jest.clearAllMocks()
     mockGetAgentTeamRun.mockResolvedValue(undefined)
     mockSteerSession.mockResolvedValue({ accepted: true as const })
-    mockSteerDurableRun.mockResolvedValue({ receiptIds: ["receipt-1"], childCount: 1 })
+    mockSteerDurableRun.mockResolvedValue({
+      receipts: [{ id: "receipt-1", status: "queued" }],
+      childCount: 1,
+    })
   })
 
   async function seedRun(input: {
@@ -1036,7 +1054,7 @@ describe("steering", () => {
     const handlers = installExecutionRunControlHandlers()
     mockGetAgentTeamRun.mockResolvedValue({ id: "run_team_10", status: "running" })
     await seedRun({ id: "execution:team:run_team_10", kind: "team", sourceId: "run_team_10" })
-    mockSteerDurableRun.mockResolvedValueOnce({ receiptIds: [], childCount: 0 })
+    mockSteerDurableRun.mockResolvedValueOnce({ receipts: [], childCount: 0 })
 
     const result = await executeRunControlCommand({
       runId: "execution:team:run_team_10",
@@ -1050,6 +1068,84 @@ describe("steering", () => {
     expect(result.reason).toBe("steer_degraded")
     expect(result.degradedReason).toBe("no_active_run")
     handlers.dispose()
+  })
+
+  it("never calls a team steer no teammate took a delivery (F06)", async () => {
+    const handlers = installExecutionRunControlHandlers()
+    mockGetAgentTeamRun.mockResolvedValue({ id: "run_team_11", status: "running" })
+    await seedRun({ id: "execution:team:run_team_11", kind: "team", sourceId: "run_team_11" })
+    mockSteerDurableRun.mockResolvedValueOnce({
+      receipts: [],
+      childCount: 2,
+      refused: "pii_blocked",
+    })
+
+    await expect(
+      steerRun({
+        target: { runId: "execution:team:run_team_11" },
+        origin: "person",
+        content: "redirect",
+      })
+    ).resolves.toEqual({ status: "degraded", reason: "pii_blocked" })
+
+    mockSteerDurableRun.mockResolvedValueOnce({ receipts: [], childCount: 2 })
+    await expect(
+      steerRun({
+        target: { runId: "execution:team:run_team_11" },
+        origin: "person",
+        content: "redirect",
+      })
+    ).resolves.toEqual({ status: "degraded", reason: "store_failed" })
+    handlers.dispose()
+  })
+
+  it("reports a team steer every teammate only holds as queued, with its receipts", async () => {
+    const handlers = installExecutionRunControlHandlers()
+    mockGetAgentTeamRun.mockResolvedValue({ id: "run_team_12", status: "running" })
+    await seedRun({ id: "execution:team:run_team_12", kind: "team", sourceId: "run_team_12" })
+    mockSteerDurableRun.mockResolvedValue({
+      receipts: [
+        { id: "held-a", status: "queued" },
+        { id: "held-b", status: "queued" },
+      ],
+      childCount: 2,
+    })
+
+    await expect(
+      steerRun({
+        target: { runId: "execution:team:run_team_12" },
+        origin: "person",
+        content: "redirect",
+      })
+    ).resolves.toEqual({ status: "queued", receiptIds: ["held-a", "held-b"] })
+
+    // The control gate still accepts it and hands back the durable receipts.
+    const result = await executeRunControlCommand({
+      runId: "execution:team:run_team_12",
+      action: "steer",
+      idempotencyKey: "steer-team-held",
+      expectedRevision: 0,
+      actor: { remoteUserId: "operator-1" },
+      steerMessage: "redirect",
+    })
+    expect(result.accepted).toBe(true)
+    expect(result.steerReceiptIds).toEqual(["held-a", "held-b"])
+    handlers.dispose()
+  })
+
+  it("settles held Squad steering: applied when a dispatch took it, withdrawn otherwise", async () => {
+    const handlers = installExecutionRunControlHandlers()
+    mockWithdrawQueuedSteering.mockResolvedValueOnce(["rejected", "applied"])
+    await expect(settleHeldSteer(["held-a", "held-b"])).resolves.toBe("applied")
+    expect(mockWithdrawQueuedSteering).toHaveBeenCalledWith(
+      ["held-a", "held-b"],
+      expect.any(Number),
+      "turn_ended"
+    )
+    mockWithdrawQueuedSteering.mockResolvedValueOnce(["rejected"])
+    await expect(settleHeldSteer(["held-c"])).resolves.toBe("withdrawn")
+    handlers.dispose()
+    await expect(settleHeldSteer(["held-c"])).resolves.toBe("unknown")
   })
 
   it("rejects a steer with no message before it reaches an engine", async () => {

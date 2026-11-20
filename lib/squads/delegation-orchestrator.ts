@@ -70,10 +70,11 @@ function isDelegationQuietGated(sourceTeamId: string, nowMs: number = Date.now()
 /**
  * Non-persisted run params for delegations that may be (re-)dispatched later —
  * notably ones deferred to `awaiting_approval` by quiet hours / approval gates.
- * Kept in memory (NOT in the persisted store) so raw prompts never hit disk;
- * the trade-off is that an approval surviving a reload can no longer auto-run
- * (it stays `awaiting_approval` for the operator to re-issue). Keyed by
- * delegationId.
+ * Kept in memory (NOT in the persisted store) so raw prompts never hit disk.
+ * The trade-off: only the process that created a delegation can run it. The
+ * delegation records are not persisted either, so a reload drops a parked
+ * one outright, and approving one this process holds no params for settles
+ * it `failed` (`DELEGATION_RUN_LOST`). Keyed by delegationId.
  */
 interface PendingRun {
   kind: "background" | "external" | "twin" | "team"
@@ -134,6 +135,48 @@ export function __resetPendingDelegationRunsForTesting(): void {
   pendingRuns.clear()
   runControllers.clear()
 }
+
+const SETTLED_DELEGATION_STATUSES: ReadonlySet<TeamDelegationStatus> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "timeout",
+])
+
+/**
+ * A deferred delegation's record once it settles. Parked for approval is not
+ * done: it is done when the approved run ends, or when it is cancelled or
+ * refused, so a caller waiting for it (a workflow step with
+ * `awaitCompletion`) never continues on the parked record. A record removed
+ * while parked can no longer run, and reads as cancelled.
+ */
+function whenDelegationSettles(
+  delegationId: string,
+  parked: TeamDelegationRecord
+): Promise<TeamDelegationRecord> {
+  return new Promise((resolve) => {
+    let last = parked
+    const settled = (): boolean => {
+      const record = useAgentTeamStore.getState().delegations[delegationId]
+      if (!record) {
+        resolve({ ...last, status: "cancelled", updatedAt: new Date() })
+        return true
+      }
+      last = record
+      if (!SETTLED_DELEGATION_STATUSES.has(record.status)) return false
+      resolve(record)
+      return true
+    }
+    if (settled()) return
+    const unsubscribe = useAgentTeamStore.subscribe(() => {
+      if (settled()) unsubscribe()
+    })
+  })
+}
+
+/** Why an approval could not run: its parameters lived in another process. */
+export const DELEGATION_RUN_LOST =
+  "delegation_run_lost: its run parameters are kept only in the process that created it, which no longer holds them; delegate it again"
 
 /**
  * The run a delegation's child hangs under: the run that asked when it named
@@ -632,11 +675,9 @@ export function delegateToBackground(
   })
 
   const completionPromise = (async (): Promise<TeamDelegationRecord> => {
-    if (deferred) {
-      // The operator transitions out of awaiting_approval via
-      // `approveDelegation` (which re-dispatches) / `cancelDelegation`.
-      return delegation
-    }
+    // The operator moves it out of awaiting_approval with `approveDelegation`
+    // (which runs it) or `cancelDelegation`; it is complete when that settles.
+    if (deferred) return whenDelegationSettles(delegation.id, delegation)
     const settled = await runDelegation(delegation.id, run)
     return settled ?? delegation
   })()
@@ -718,7 +759,7 @@ export function delegateToTwin(
   })
 
   const completionPromise = (async (): Promise<TeamDelegationRecord> => {
-    if (deferred) return delegation
+    if (deferred) return whenDelegationSettles(delegation.id, delegation)
     const settled = await runDelegation(delegation.id, run)
     return settled ?? delegation
   })()
@@ -776,7 +817,7 @@ export function delegateToExternal(
   })
 
   const completionPromise = (async (): Promise<TeamDelegationRecord> => {
-    if (quietDeferred) return delegation
+    if (quietDeferred) return whenDelegationSettles(delegation.id, delegation)
     const settled = await runDelegation(delegation.id, run)
     return settled ?? delegation
   })()
@@ -912,7 +953,7 @@ export function delegateToTeam(input: DelegateToTeamInput): {
         pendingRuns.delete(delegation.id)
         return refuseTeamDelegation(delegation.id, refusal)
       }
-      return useAgentTeamStore.getState().delegations[delegation.id] ?? delegation
+      return whenDelegationSettles(delegation.id, delegation)
     }
     const settled = await runDelegation(delegation.id, run)
     return settled ?? delegation
@@ -953,21 +994,22 @@ function settleTeamDelegation(
 /**
  * Approve a delegation that was created in `awaiting_approval` status.
  * Transitions to `active` and launches the original run (any target) with
- * the run params stashed at create time. When no pending run
- * is found (e.g. the app reloaded and the in-memory params were lost) the
- * status still flips to `active` for an operator to re-issue manually.
+ * the run params stashed at create time. When this process holds no params
+ * for it (another window created it), nothing could run it: it settles
+ * `failed` with `DELEGATION_RUN_LOST` instead of reading `active` with no
+ * run behind it, and whoever waits for it hears so.
  *
- * Returns the record synchronously after flipping to `active`; the re-dispatch
- * settles asynchronously via the same complete hook as the immediate paths.
+ * Returns the record synchronously; the re-dispatch settles asynchronously
+ * via the same complete hook as the immediate paths.
  */
 export function approveDelegation(delegationId: string): TeamDelegationRecord | undefined {
   const store = useAgentTeamStore.getState()
   const current = store.delegations[delegationId]
   if (!current || current.status !== "awaiting_approval") return current
-  store.updateDelegationStatus(delegationId, "active")
-
   const pending = pendingRuns.get(delegationId)
-  if (pending) void runDelegation(delegationId, pending)
+  if (!pending) return settleTeamDelegation(delegationId, "failed", DELEGATION_RUN_LOST)
+  store.updateDelegationStatus(delegationId, "active")
+  void runDelegation(delegationId, pending)
   return useAgentTeamStore.getState().delegations[delegationId]
 }
 

@@ -721,7 +721,7 @@ export function createAgentRpcHostStateDispatcher(
           // A paired device's follow-up is a person's: the one steer entry,
           // live (ADR-0252 §5) — the sidecar's input, or the Squad run the
           // conversation is holding for.
-          const { steerRun } = await import("@/lib/execution/steer")
+          const { isSteerTaken, steerRun } = await import("@/lib/execution/steer")
           const outcome = await steerRun({
             target: { sessionId },
             origin: "person",
@@ -729,7 +729,9 @@ export function createAgentRpcHostStateDispatcher(
             priority,
             commandId: action.actionId,
           })
-          if (outcome.status !== "delivered") {
+          // A Squad's durable hold for its teammates' next dispatch is taken
+          // too: the device's own fallback would hand it the message twice.
+          if (!isSteerTaken(outcome)) {
             throw new Error(
               outcome.status === "degraded"
                 ? `steer degraded: ${outcome.reason}`

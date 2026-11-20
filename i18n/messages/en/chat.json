@@ -2825,6 +2825,7 @@
     "putBack": "Put back",
     "queued": "Queued",
     "queuedHint": "Will be sent when the current turn finishes",
+    "heldHint": "Held by the Squad — the next teammate to take a step picks it up",
     "restoredOnStop": "{count, plural, =1 {Stopped. Your queued follow-up is back in the message box.} other {Stopped. Your # queued follow-ups are back in the message box.}}"
   },
   "subagentPart": {

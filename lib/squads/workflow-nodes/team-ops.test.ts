@@ -55,6 +55,13 @@ jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: jest.fn() },
 }))
 
+const mockReadSquadRunReport = jest.fn(
+  async (_runId: string) => ({}) as { text?: string; error?: string }
+)
+jest.mock("@/lib/squads/squad/squad-run-report", () => ({
+  readSquadRunReport: (runId: string) => mockReadSquadRunReport(runId),
+}))
+
 jest.mock("@/lib/squads/delegation-orchestrator", () => ({
   delegateToTwin: jest.fn(),
   delegateToBackground: jest.fn(),
@@ -208,7 +215,8 @@ describe("runTeamCompose", () => {
   })
 
   it("autoStart runs the Squad as the workflow run's child to its end and surfaces the terminal state", async () => {
-    startMock.mockResolvedValue({ outcome: "completed" })
+    startMock.mockResolvedValue({ outcome: "completed", start: { runId: "run_team_c1" } })
+    mockReadSquadRunReport.mockResolvedValueOnce({ text: "this run's report" })
     const ctx = makeCtx({ objective: "do it", autoStart: true, ultracode: true })
     const result = await runTeamCompose(ctx)
     expect(startMock).toHaveBeenCalledWith(
@@ -222,11 +230,21 @@ describe("runTeamCompose", () => {
       },
       { signal: ctx.signal }
     )
+    // The run's own report, not the team record's field ("done!").
     expect(result.output).toMatchObject({
       started: true,
       status: "completed",
-      finalResult: "done!",
+      finalResult: "this run's report",
     })
+    expect(mockReadSquadRunReport).toHaveBeenCalledWith("run_team_c1")
+  })
+
+  it("autoStart reports no result for a run that produced none, never the team's old one (F04)", async () => {
+    startMock.mockResolvedValue({ outcome: "completed", start: { runId: "run_team_c2" } })
+    mockReadSquadRunReport.mockResolvedValueOnce({})
+    const result = await runTeamCompose(makeCtx({ objective: "do it", autoStart: true }))
+    expect(result.output).toMatchObject({ started: true, status: "completed" })
+    expect(result.output).not.toHaveProperty("finalResult")
   })
 
   it("maps a PII gate rejection to a non-retryable error", async () => {
@@ -360,6 +378,28 @@ describe("runTeamDelegate", () => {
     const store = getStateMock.mock.results[0].value as ReturnType<typeof makeStore>
     expect(store.createTask).not.toHaveBeenCalled()
     expect(result.output).toMatchObject({ delegationId: "d_new", status: "active" })
+  })
+
+  it("waits for a parked delegation, and stops waiting when the step is aborted (F03)", async () => {
+    // A delegation parked for approval settles only when a person acts; the
+    // step waits for that, but a cancelled workflow must not hang on it.
+    delegateToBackgroundMock.mockReturnValue({
+      delegation: { id: "d_parked", status: "awaiting_approval", targetId: "tgt" },
+      completionPromise: new Promise(() => undefined),
+    })
+    const controller = new AbortController()
+    const ctx = { ...makeCtx({ teamId: "team_1", target: "background", prompt: "p" }) }
+    ;(ctx as { signal: AbortSignal }).signal = controller.signal
+    const step = runTeamDelegate(ctx)
+    let done = false
+    void step.then(
+      () => (done = true),
+      () => (done = true)
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(done).toBe(false)
+    controller.abort(new Error("workflow cancelled"))
+    await expect(step).rejects.toThrow("workflow cancelled")
   })
 
   it("delegates to an external agent and to another team", async () => {

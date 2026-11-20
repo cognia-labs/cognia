@@ -110,6 +110,7 @@ import type { ChildRunOutcome } from "@/types/execution/child-run"
 import {
   __resetPendingDelegationRunsForTesting,
   approveDelegation,
+  DELEGATION_RUN_LOST,
   cancelDelegation,
   delegateToBackground,
   delegateToExternal,
@@ -122,6 +123,22 @@ import type { AgentTeam } from "@/types/agent/agent-team"
 
 /** Flush pending microtasks + a macrotask so async launches settle. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+/** Whether `promise` is still unsettled once pending work has run. */
+async function isPending(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false
+  void promise.then(
+    () => {
+      settled = true
+    },
+    () => {
+      settled = true
+    }
+  )
+  await flush()
+  await flush()
+  return !settled
+}
 
 const lastLaunch = () => children[children.length - 1]
 
@@ -340,7 +357,9 @@ describe("delegation-orchestrator", () => {
       expect(settled.result).toBe("background delegation refused: journal_failed (disk full)")
     })
 
-    it("respects awaitingApproval and keeps the delegation in that status", async () => {
+    it("respects awaitingApproval and is not complete while it waits for one (F03)", async () => {
+      // A workflow step with awaitCompletion used to continue on the parked
+      // record, before anything ran.
       const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
@@ -349,8 +368,39 @@ describe("delegation-orchestrator", () => {
         awaitingApproval: true,
       })
       expect(delegation.status).toBe("awaiting_approval")
-      const settled = await completionPromise
-      expect(settled.status).toBe("awaiting_approval")
+      expect(await isPending(completionPromise)).toBe(true)
+      expect(launchMock).not.toHaveBeenCalled()
+      approveDelegation(delegation.id)
+      await expect(completionPromise).resolves.toMatchObject({
+        id: delegation.id,
+        status: "completed",
+      })
+      expect(launchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("completes a parked delegation as cancelled when it is cancelled or removed", async () => {
+      const first = delegateToBackground({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "needs review",
+        awaitingApproval: true,
+      })
+      cancelDelegation(first.delegation.id)
+      await expect(first.completionPromise).resolves.toMatchObject({ status: "cancelled" })
+
+      const second = delegateToBackground({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "needs review",
+        awaitingApproval: true,
+      })
+      useAgentTeamStore.getState().reset()
+      await expect(second.completionPromise).resolves.toMatchObject({
+        id: second.delegation.id,
+        status: "cancelled",
+      })
       expect(launchMock).not.toHaveBeenCalled()
     })
   })
@@ -397,12 +447,11 @@ describe("delegation-orchestrator", () => {
         awaitingApproval: true,
       })
       expect(delegation.status).toBe("awaiting_approval")
-      await completionPromise
+      expect(await isPending(completionPromise)).toBe(true)
       expect(launchMock).not.toHaveBeenCalled()
       approveDelegation(delegation.id)
-      await flush()
+      await expect(completionPromise).resolves.toMatchObject({ status: "completed" })
       expect(lastLaunch().input.target).toMatchObject({ kind: "twin", twinId: "tw1" })
-      expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
     })
   })
 
@@ -516,6 +565,27 @@ describe("delegation-orchestrator", () => {
         prompt: "handoff payload",
       })
       expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
+    })
+
+    it("fails an approval this process holds no run for, instead of reading active (F03)", async () => {
+      // Another window's delegation, or one whose params were dropped: an
+      // approval used to flip it to active with nothing running.
+      const { delegation, completionPromise } = delegateToBackground({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "y",
+        awaitingApproval: true,
+      })
+      __resetPendingDelegationRunsForTesting()
+      const after = approveDelegation(delegation.id)
+      expect(after).toMatchObject({ status: "failed", result: DELEGATION_RUN_LOST })
+      await expect(completionPromise).resolves.toMatchObject({ status: "failed" })
+      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
+        delegationId: delegation.id,
+        status: "failed",
+      })
+      expect(launchMock).not.toHaveBeenCalled()
     })
 
     it("no-ops on non-awaiting delegations", async () => {
@@ -673,7 +743,7 @@ describe("delegation-orchestrator", () => {
       })
       expect(delegation.status).toBe("awaiting_approval")
       expect(delegation.metadata?.quietHoursDeferred).toBe(true)
-      await completionPromise
+      expect(await isPending(completionPromise)).toBe(true)
       expect(launchMock).not.toHaveBeenCalled()
     })
 
@@ -704,7 +774,7 @@ describe("delegation-orchestrator", () => {
       })
       expect(delegation.status).toBe("awaiting_approval")
       expect(delegation.metadata?.quietHoursDeferred).toBe(true)
-      expect((await completionPromise).status).toBe("awaiting_approval")
+      expect(await isPending(completionPromise)).toBe(true)
       expect(launchMock).not.toHaveBeenCalled()
     })
 
@@ -856,13 +926,12 @@ describe("delegateToTeam (team → team)", () => {
       reason: "x",
     })
     expect(delegation.status).toBe("awaiting_approval")
-    expect((await completionPromise).status).toBe("awaiting_approval")
+    expect(await isPending(completionPromise)).toBe(true)
     expect(launchMock).not.toHaveBeenCalled()
 
     approveDelegation(delegation.id)
-    await flush()
+    await expect(completionPromise).resolves.toMatchObject({ status: "completed" })
     expect(lastLaunch().input.target).toMatchObject({ kind: "squad", squadId: "b" })
-    expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
   })
 
   it("cancelDelegation stops the target team run and keeps the record cancelled", async () => {
@@ -1082,7 +1151,10 @@ describe("delegateToTeam (team → team)", () => {
       targetTeamId: "a",
       reason: "later",
     })
-    expect((await deferred.completionPromise).status).toBe("awaiting_approval")
+    expect(await isPending(deferred.completionPromise)).toBe(true)
+    expect(useAgentTeamStore.getState().delegations[deferred.delegation.id]?.status).toBe(
+      "awaiting_approval"
+    )
     isInQuietHoursMock.mockReturnValue(false)
     const { delegation } = delegateToTeam({
       sourceTeamId: "a",

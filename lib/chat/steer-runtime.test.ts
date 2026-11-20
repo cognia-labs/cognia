@@ -81,6 +81,7 @@ import {
   commitPendingSteerEdit,
   discardPendingSteer,
   editPendingSteer,
+  holdSteerMessage,
   isHeldInBackgroundOnly,
   isSessionOpen,
   liveSessionIds,
@@ -89,15 +90,17 @@ import {
   mergeSteerWebSearchIntoLastSend,
   maybeDrainSteer,
   recordLocalPersonSteer,
+  recordSteerOutcome,
   promoteAcceptedSteers,
   queueDerivedSteer,
   sessionExternalLane,
   sessionStatusOf,
   setSessionExternalLane,
   setSteerMessageState,
+  settleHeldSteers,
   steerArmed,
 } from "./steer-runtime"
-import { __resetSteerForTesting, steerRun } from "@/lib/execution/steer"
+import { __resetSteerForTesting, registerHeldSteerSettler, steerRun } from "@/lib/execution/steer"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { steerMetaOf, type SteerState } from "@/lib/chat/steer"
 import {
@@ -362,6 +365,110 @@ describe("markPendingSteersFailed", () => {
     }
     markPendingSteersFailed("s1", "boom")
     expect(statesOf("s1")).toEqual(["failed", "failed", "applied"])
+  })
+})
+
+describe("steers a run holds (F06)", () => {
+  afterEach(() => __resetSteerForTesting())
+
+  function heldMessage(entryId: string, receiptIds: string[]): UIMessage {
+    return {
+      ...steerMessage(entryId, "queued"),
+      metadata: { steer: { entryId, state: "queued", heldReceiptIds: receiptIds } },
+    } as UIMessage
+  }
+
+  it("holds a bubble queued with its receipts, keeping no local copy", () => {
+    state.sessions["s1"] = { steerQueue: [], messages: [steerMessage("a", "queued")] }
+    holdSteerMessage("s1", "a", ["r1", "r2"])
+    expect(steerMetaOf(state.sessions["s1"].messages?.[0]?.metadata)).toEqual({
+      entryId: "a",
+      state: "queued",
+      heldReceiptIds: ["r1", "r2"],
+    })
+    expect(state.sessions["s1"].steerQueue).toEqual([])
+    expect(mockPersistMessages).toHaveBeenCalled()
+  })
+
+  it("records what the live lane did with a person's follow-up", () => {
+    state.sessions["s1"] = {
+      steerQueue: [],
+      messages: [
+        steerMessage("a", "queued"),
+        steerMessage("b", "queued"),
+        steerMessage("c", "queued"),
+      ],
+    }
+    expect(recordSteerOutcome("s1", "a", { status: "delivered", receiptIds: [] })).toBe(true)
+    // A Squad that only holds it never reads as accepted (F06).
+    expect(recordSteerOutcome("s1", "b", { status: "queued", receiptIds: ["r1"] })).toBe(true)
+    expect(recordSteerOutcome("s1", "c", { status: "degraded", reason: "store_failed" })).toBe(
+      false
+    )
+    expect(recordSteerOutcome("s1", "c", { status: "queued", receiptIds: [] })).toBe(false)
+    const metas = (state.sessions["s1"].messages ?? []).map((m) => steerMetaOf(m.metadata))
+    expect(metas).toEqual([
+      { entryId: "a", state: "accepted" },
+      { entryId: "b", state: "queued", heldReceiptIds: ["r1"] },
+      { entryId: "c", state: "queued" },
+    ])
+    expect(state.sessions["s1"].steerQueue).toEqual([])
+  })
+
+  it("settles a held bubble with its run when the turn ends", async () => {
+    const settler = jest.fn(async (ids: readonly string[]) =>
+      ids.includes("taken") ? ("applied" as const) : ("withdrawn" as const)
+    )
+    registerHeldSteerSettler(settler)
+    state.sessions["s1"] = {
+      steerQueue: [],
+      messages: [
+        heldMessage("a", ["taken"]),
+        heldMessage("b", ["never"]),
+        steerMessage("c", "queued"),
+      ],
+    }
+    await settleHeldSteers("s1")
+    // The plain queued one belongs to the session queue's drain, not the run.
+    expect(statesOf("s1")).toEqual(["applied", "failed", "queued"])
+    expect(settler.mock.calls).toEqual([[["taken"]], [["never"]]])
+  })
+
+  it("leaves a held bubble as it is when no settler can answer", async () => {
+    state.sessions["s1"] = { steerQueue: [], messages: [heldMessage("a", ["r1"])] }
+    await settleHeldSteers("s1")
+    expect(statesOf("s1")).toEqual(["queued"])
+  })
+
+  it("settles held bubbles instead of failing them blind when the run ends", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    registerHeldSteerSettler(async () => {
+      await gate
+      return "applied"
+    })
+    state.sessions["s1"] = {
+      steerQueue: [],
+      messages: [heldMessage("a", ["taken"]), steerMessage("b", "queued")],
+    }
+    markPendingSteersFailed("s1", "boom")
+    // The teammate may already have taken the held one; only the run knows.
+    expect(statesOf("s1")).toEqual(["queued", "failed"])
+    release()
+    await gate
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(statesOf("s1")).toEqual(["applied", "failed"])
+  })
+
+  it("settles held bubbles when a turn settles and promotes the accepted ones", async () => {
+    registerHeldSteerSettler(async () => "withdrawn")
+    state.sessions["s1"] = {
+      steerQueue: [],
+      messages: [steerMessage("a", "accepted"), heldMessage("b", ["never"])],
+    }
+    promoteAcceptedSteers("s1")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(statesOf("s1")).toEqual(["applied", "failed"])
   })
 })
 

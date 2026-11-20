@@ -20,10 +20,13 @@ jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
 
 import {
   __resetSteerForTesting,
+  isSteerTaken,
   liveSessionSquadRun,
   registerRemoteSessionSteerLane,
   registerRunSteerEngine,
+  registerHeldSteerSettler,
   registerSessionSteerLane,
+  settleHeldSteer,
   steerRun,
   type SessionSteerLane,
 } from "./steer"
@@ -104,7 +107,7 @@ describe("steerRun: a conversation's turn", () => {
         content: "Wakeup brief",
         derived: { ...WAKEUP, dedupeKey: "k" },
       })
-    ).resolves.toEqual({ status: "queued", entryId: "entry-1" })
+    ).resolves.toEqual({ status: "queued", receiptIds: [], entryId: "entry-1" })
     expect(chat.queued).toEqual([
       {
         sessionId: "s1",
@@ -237,6 +240,43 @@ describe("steerRun: a run row", () => {
     expect(mockSteerSession.mock.calls.map((call) => call[0]).sort()).toEqual(["c1", "c2"])
   })
 
+  it("keeps a delegation's input held when its children only hold it (F06)", async () => {
+    // A queued child receipt promoted to a delivery let the chat call a
+    // message no model had seen "accepted" and skip its fallback.
+    run("execution:delegation:dq", { kind: "delegation" })
+    run("execution:team:tq1", { kind: "team", parentRunId: "execution:delegation:dq" })
+    run("execution:team:tq2", { kind: "team", parentRunId: "execution:delegation:dq" })
+    registerRunSteerEngine("team", async (child) =>
+      child.id === "execution:team:tq1"
+        ? { status: "queued", receiptIds: ["held-1"] }
+        : { status: "degraded", reason: "no_active_run" }
+    )
+    await expect(
+      steerRun({ target: { runId: "execution:delegation:dq" }, origin: "person", content: "x" })
+    ).resolves.toEqual({ status: "queued", receiptIds: ["held-1"] })
+  })
+
+  it("calls a delegation delivered when one child took it live, keeping every receipt", async () => {
+    run("execution:delegation:dm", { kind: "delegation" })
+    run("execution:team:tm1", { kind: "team", parentRunId: "execution:delegation:dm" })
+    run("execution:team:tm2", { kind: "team", parentRunId: "execution:delegation:dm" })
+    registerRunSteerEngine("team", async (child) =>
+      child.id === "execution:team:tm1"
+        ? { status: "queued", receiptIds: ["held-1"] }
+        : { status: "delivered", receiptIds: ["live-2"] }
+    )
+    const outcome = await steerRun({
+      target: { runId: "execution:delegation:dm" },
+      origin: "person",
+      content: "x",
+    })
+    expect(outcome.status).toBe("delivered")
+    expect(outcome.status === "delivered" && [...outcome.receiptIds].sort()).toEqual([
+      "held-1",
+      "live-2",
+    ])
+  })
+
   it("degrades a delegation when no child took it, with the last child's reason", async () => {
     run("execution:delegation:d2", { kind: "delegation" })
     await expect(
@@ -270,5 +310,42 @@ describe("steerRun: a run row", () => {
     await expect(
       steerRun({ target: { runId: "execution:team:t2" }, origin: "person", content: "x" })
     ).resolves.toEqual({ status: "delivered", receiptIds: ["b"] })
+  })
+})
+
+describe("held steer settlement", () => {
+  beforeEach(() => __resetSteerForTesting())
+
+  it("asks the registered settler, and only its own registration unregisters", async () => {
+    const settler = jest.fn(async () => "applied" as const)
+    const unregister = registerHeldSteerSettler(settler)
+    await expect(settleHeldSteer(["r1"])).resolves.toBe("applied")
+    expect(settler).toHaveBeenCalledWith(["r1"])
+    unregister()
+    await expect(settleHeldSteer(["r1"])).resolves.toBe("unknown")
+  })
+
+  it("answers unknown with nothing to settle, no settler, or a settler that threw", async () => {
+    await expect(settleHeldSteer(["r1"])).resolves.toBe("unknown")
+    registerHeldSteerSettler(async () => {
+      throw new Error("store down")
+    })
+    await expect(settleHeldSteer(["r1"])).resolves.toBe("unknown")
+    const settler = jest.fn(async () => "withdrawn" as const)
+    registerHeldSteerSettler(settler)
+    await expect(settleHeldSteer([])).resolves.toBe("unknown")
+    expect(settler).not.toHaveBeenCalled()
+  })
+})
+
+describe("isSteerTaken", () => {
+  it("takes a delivery or a run's durable hold, never a refusal or an empty hold", () => {
+    expect(isSteerTaken({ status: "delivered", receiptIds: [] })).toBe(true)
+    expect(isSteerTaken({ status: "queued", receiptIds: ["r1"] })).toBe(true)
+    // A derived input waiting in the session queue is not a run's hold.
+    expect(isSteerTaken({ status: "queued", receiptIds: [], entryId: "e1" })).toBe(false)
+    expect(isSteerTaken({ status: "degraded", reason: "store_failed" })).toBe(false)
+    expect(isSteerTaken({ status: "unsupported_for_kind", kind: "job" })).toBe(false)
+    expect(isSteerTaken({ status: "run_not_found" })).toBe(false)
   })
 })

@@ -96,9 +96,11 @@ import {
   sessionExternalLane,
   sessionStatusOf,
   setSessionExternalLane,
+  recordSteerOutcome,
   setSteerMessageState,
   steerArmed,
 } from "@/lib/chat/steer-runtime"
+import type { SteerOutcome } from "@/lib/execution/steer"
 
 import {
   invalidateTranscriptRuntime,
@@ -1079,21 +1081,26 @@ export async function runChatSend(
         // so an attachment-only follow-up goes live here too.
         try {
           const handle = getExecutionHandle(sessionId)
-          if (handle) await handle.steer(content)
-          else {
+          let outcome: SteerOutcome
+          if (handle) {
+            await handle.steer(content)
+            outcome = { status: "delivered", receiptIds: [] }
+          } else {
             // The one steer entry (ADR-0252 §5): the sidecar's streaming
             // input, or the Squad run this conversation is holding for.
             const { steerRun } = await import("@/lib/execution/steer")
-            const outcome = await steerRun({
+            outcome = await steerRun({
               target: { sessionId },
               origin: "person",
               content,
             })
-            if (outcome.status !== "delivered") throw new Error(`steer ${outcome.status}`)
           }
-          mergeSteerWebSearchIntoLastSend(sessionId, callOptions?.webSearchContext)
-          setSteerMessageState(sessionId, entryId, "accepted")
-          return true
+          // Delivered reads "accepted"; a Squad's hold for a teammate's next
+          // dispatch reads "queued" and keeps no local copy.
+          if (recordSteerOutcome(sessionId, entryId, outcome, callOptions?.webSearchContext)) {
+            return true
+          }
+          throw new Error(`steer ${outcome.status}`)
         } catch (err) {
           console.warn("live steer failed; queueing instead", err)
         }

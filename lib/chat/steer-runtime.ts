@@ -25,6 +25,7 @@
 import { useChatStore, type ChatStatus, type SteerEntry } from "@/stores/chat"
 import {
   buildSteerPayload,
+  isHeldSteer,
   steerMetaOf,
   stripSteerPrefix,
   type SteerMessageMeta,
@@ -57,7 +58,12 @@ import {
 } from "@/lib/execution/steer-queue"
 import type { AutomatedTurnProducer } from "@cognia/agent-config-types/automated-turn"
 import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
-import { registerSessionSteerLane } from "@/lib/execution/steer"
+import {
+  isSteerTaken,
+  registerSessionSteerLane,
+  settleHeldSteer,
+  type SteerOutcome,
+} from "@/lib/execution/steer"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 
 const localPersonSteers = new Set<string>()
@@ -156,7 +162,7 @@ export function liveSessionIds(
 function patchSteerMessages(
   sessionId: string,
   select: (meta: NonNullable<ReturnType<typeof steerMetaOf>>) => boolean,
-  patch: { state: SteerState; reason?: string }
+  patch: { state: SteerState; reason?: string; heldReceiptIds?: readonly string[] }
 ): void {
   const store = useChatStore.getState()
   const messages = store.sessions[sessionId]?.messages
@@ -165,13 +171,19 @@ function patchSteerMessages(
   let changed = false
   const next = messages.map((message) => {
     const meta = steerMetaOf(message.metadata)
-    if (!meta || !select(meta) || meta.state === patch.state) return message
+    if (!meta || !select(meta)) return message
+    if (meta.state === patch.state && !patch.heldReceiptIds) return message
     changed = true
     return {
       ...message,
       metadata: {
         ...((message.metadata as Record<string, unknown> | undefined) ?? {}),
-        steer: { ...meta, state: patch.state, ...(patch.reason ? { reason: patch.reason } : {}) },
+        steer: {
+          ...meta,
+          state: patch.state,
+          ...(patch.reason ? { reason: patch.reason } : {}),
+          ...(patch.heldReceiptIds ? { heldReceiptIds: [...patch.heldReceiptIds] } : {}),
+        },
       },
     } as UIMessage
   })
@@ -237,26 +249,99 @@ export function setSteerMessageState(
 }
 
 /**
+ * A run's engine took this follow-up for a later boundary, not a live turn
+ * (`steerRun` answered `queued` with durable receipts): the bubble stays
+ * `queued`, carries the receipts, and is settled when its turn ends. No copy
+ * goes into the session queue — the run already holds one, and a replay
+ * would hand it the same message twice.
+ */
+export function holdSteerMessage(
+  sessionId: string,
+  entryId: string,
+  receiptIds: readonly string[]
+): void {
+  patchSteerMessages(sessionId, (meta) => meta.entryId === entryId, {
+    state: "queued",
+    heldReceiptIds: receiptIds,
+  })
+}
+
+/**
+ * Record on a person's follow-up bubble what the live lane did with it.
+ * Returns whether the input was taken: delivered into a running turn
+ * (`accepted`), or held by a run for its next boundary (`queued` with the
+ * run's receipts, settled when the turn ends). Anything else was not taken,
+ * and the caller keeps it in the session queue.
+ */
+export function recordSteerOutcome(
+  sessionId: string,
+  entryId: string,
+  outcome: SteerOutcome,
+  webSearchContext?: SendOptions["webSearchContext"]
+): boolean {
+  if (outcome.status === "delivered") {
+    mergeSteerWebSearchIntoLastSend(sessionId, webSearchContext)
+    setSteerMessageState(sessionId, entryId, "accepted")
+    return true
+  }
+  if (outcome.status === "queued" && isSteerTaken(outcome)) {
+    mergeSteerWebSearchIntoLastSend(sessionId, webSearchContext)
+    holdSteerMessage(sessionId, entryId, outcome.receiptIds)
+    return true
+  }
+  return false
+}
+
+/**
+ * The turn a held follow-up waited for is over: ask the run what became of
+ * it. Applied when a turn took it; failed (with Put back) when none did — the
+ * run withdraws its receipts first, so a later dispatch cannot apply what the
+ * bubble calls failed. Left as it is when no settler can answer here.
+ */
+export async function settleHeldSteers(sessionId: string): Promise<void> {
+  const held = (useChatStore.getState().sessions[sessionId]?.messages ?? []).flatMap((message) => {
+    const meta = steerMetaOf(message.metadata)
+    return meta && meta.state === "queued" && isHeldSteer(meta) ? [meta] : []
+  })
+  for (const meta of held) {
+    const settlement = await settleHeldSteer(meta.heldReceiptIds ?? [])
+    if (settlement === "unknown") continue
+    patchSteerMessages(sessionId, (candidate) => candidate.entryId === meta.entryId, {
+      state: settlement === "applied" ? "applied" : "failed",
+    })
+  }
+}
+
+/**
  * A turn settled: everything the sidecar had *accepted* into that turn's live
  * input is now genuinely part of the conversation. Promotes only `accepted` —
- * a message still `queued` was never handed over and must keep waiting.
+ * a message still `queued` was never handed over and must keep waiting. A
+ * follow-up a run held for this turn is settled with that run.
  */
 export function promoteAcceptedSteers(sessionId: string): void {
   patchSteerMessages(sessionId, (meta) => meta.state === "accepted", { state: "applied" })
+  void settleHeldSteers(sessionId)
 }
 
 /**
  * The run ended without draining and no settle is coming (errored / interrupted
  * / the app restarted). Anything still pending will never arrive on its own, so
- * mark it `failed` — the bubble then offers retry / discard.
+ * mark it `failed` — the bubble then offers retry / discard. A follow-up a run
+ * held may already have reached a teammate, so it is settled with the run
+ * instead of failed blind.
  */
 export function markPendingSteersFailed(sessionId: string, reason?: string): void {
   // The run is gone, and with it any live lane it held.
   setSessionExternalLane(sessionId, null)
-  patchSteerMessages(sessionId, (meta) => meta.state === "queued" || meta.state === "accepted", {
-    state: "failed",
-    ...(reason ? { reason } : {}),
-  })
+  patchSteerMessages(
+    sessionId,
+    (meta) => (meta.state === "queued" && !isHeldSteer(meta)) || meta.state === "accepted",
+    {
+      state: "failed",
+      ...(reason ? { reason } : {}),
+    }
+  )
+  void settleHeldSteers(sessionId)
 }
 
 /** Replace the first text part of a message, leaving every other part alone. */

@@ -2825,6 +2825,7 @@
     "putBack": "放回输入框",
     "queued": "排队中",
     "queuedHint": "会在当前回合结束后发送",
+    "heldHint": "已由 Squad 暂存，下一位开始行动的成员会读到",
     "restoredOnStop": "{count, plural, =1 {已停止。排队的追加消息已放回输入框。} other {已停止。# 条排队的追加消息已放回输入框。}}"
   },
   "subagentPart": {

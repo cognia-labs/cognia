@@ -41,6 +41,7 @@ function world() {
   const entries = new Set<string>()
   const delegations: ExecutionRun[] = []
   const attempts = new Map<string, ExecutionRun[]>()
+  const reports = new Map<string, { text?: string; error?: string }>()
   let messages: UIMessage[] = []
   const deps: RoomHandoffSettleDeps = {
     report: async (record) => {
@@ -49,9 +50,9 @@ function world() {
     },
     hasEntry: async (id) => entries.has(id),
     listHandoffDelegations: async () => delegations,
-    listAttempts: async (id) => attempts.get(id) ?? [],
+    listChildren: async (id) => attempts.get(id) ?? [],
     readMessages: async () => messages,
-    squadResult: () => ({ finalResult: "hello.sh written", completedAt: NOW - 1_000 }),
+    runReport: async (squadRunId) => reports.get(squadRunId) ?? {},
     now: () => NOW,
   }
   __setRoomHandoffSettleDepsForTesting(deps)
@@ -61,6 +62,7 @@ function world() {
     entries,
     delegations,
     attempts,
+    reports,
     setMessages: (next: UIMessage[]) => {
       messages = next
     },
@@ -142,9 +144,17 @@ describe("reconcileRoomHandoffs", () => {
       updatedAt,
     }) as ExecutionRun
   const teamRun = (id: string, status: ExecutionRun["status"], endedAt?: number) =>
-    ({ id, kind: "team", status, startedAt: NOW - 9_000, updatedAt: NOW, endedAt }) as ExecutionRun
+    ({
+      id,
+      kind: "team",
+      sourceId: id.replace("execution:team:", ""),
+      status,
+      startedAt: NOW - 9_000,
+      updatedAt: NOW,
+      endedAt,
+    }) as ExecutionRun
 
-  it("reports each ended attempt without an entry once, the Squad's result only for its own run", async () => {
+  it("reports each ended attempt without an entry once, with that attempt's own report", async () => {
     const w = world()
     w.delegations.push(delegation())
     w.attempts.set("execution:delegation:room-handoff:tu-1", [
@@ -152,16 +162,61 @@ describe("reconcileRoomHandoffs", () => {
       teamRun("execution:team:r1", "failed", NOW - 60 * 60 * 1000),
       teamRun("execution:team:r3", "running"),
     ])
+    w.reports.set("r2", { text: "hello.sh written" })
+    w.reports.set("r1", { error: "tests failed" })
     w.setMessages([proposalReply()])
     await expect(reconcileRoomHandoffs()).resolves.toBe(2)
-    expect(w.reported.map((row) => [row.runId, row.resultText, row.squadHandoff?.outcome])).toEqual(
-      [
-        ["squad-handoff:execution:team:r2", "hello.sh written", "completed"],
-        ["squad-handoff:execution:team:r1", undefined, "failed"],
-      ]
-    )
+    expect(
+      w.reported.map((row) => [row.runId, row.resultText, row.error, row.squadHandoff?.outcome])
+    ).toEqual([
+      ["squad-handoff:execution:team:r2", "hello.sh written", undefined, "completed"],
+      ["squad-handoff:execution:team:r1", undefined, "tests failed", "failed"],
+    ])
     expect(w.reported[0]).toMatchObject({ settledAt: NOW - 1_000, prompt: "Write a hello script" })
     await expect(reconcileRoomHandoffs()).resolves.toBe(0)
+  })
+
+  it("finds a retry under the attempt it replaced and gives each its own report (F05)", async () => {
+    // A retry from the run's card hangs under the Squad run it replaced, not
+    // under the delegation; and two attempts that ended close together must
+    // not borrow each other's report.
+    const w = world()
+    w.delegations.push(delegation())
+    w.attempts.set("execution:delegation:room-handoff:tu-1", [
+      teamRun("execution:team:r1", "failed", NOW - 2_000),
+    ])
+    w.attempts.set("execution:team:r1", [
+      teamRun("execution:team:r1-retry", "completed", NOW - 1_000),
+      { id: "execution:agent:side", kind: "agent", status: "completed" } as unknown as ExecutionRun,
+    ])
+    w.attempts.set("execution:team:r1-retry", [
+      teamRun("execution:team:r1-retry-2", "completed", NOW - 500),
+    ])
+    w.reports.set("r1", { error: "flaky test" })
+    w.reports.set("r1-retry", { text: "first retry's answer" })
+    w.reports.set("r1-retry-2", { text: "second retry's answer" })
+    w.setMessages([proposalReply()])
+    await expect(reconcileRoomHandoffs()).resolves.toBe(3)
+    expect(w.reported.map((row) => [row.runId, row.resultText ?? row.error])).toEqual([
+      ["squad-handoff:execution:team:r1", "flaky test"],
+      ["squad-handoff:execution:team:r1-retry", "first retry's answer"],
+      ["squad-handoff:execution:team:r1-retry-2", "second retry's answer"],
+    ])
+  })
+
+  it("reports an attempt whose run has no report without inventing one", async () => {
+    const w = world()
+    w.delegations.push(delegation())
+    w.attempts.set("execution:delegation:room-handoff:tu-1", [
+      teamRun("execution:team:r1", "completed", NOW - 1_000),
+    ])
+    w.deps.runReport = async () => {
+      throw new Error("row unreadable")
+    }
+    w.setMessages([proposalReply()])
+    await expect(reconcileRoomHandoffs()).resolves.toBe(1)
+    expect(w.reported[0]).toMatchObject({ status: "done", deliveryState: "pending" })
+    expect(w.reported[0]?.resultText).toBeUndefined()
   })
 
   it("skips a hand-off outside the window, one with no started decision, and a room without the proposal", async () => {

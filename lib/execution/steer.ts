@@ -62,13 +62,30 @@ export interface SteerRequest {
 export type SteerOutcome =
   /** The engine took it. `receiptIds` are durable receipts, where the engine writes them. */
   | { status: "delivered"; receiptIds: readonly string[] }
-  /** A derived input is held for the running turn's boundary. */
-  | { status: "queued"; entryId: string }
+  /**
+   * The input is held for the target's next boundary; no model has seen it.
+   * A derived input waiting behind a running turn carries its session queue
+   * `entryId`; a Squad steer no teammate could take live carries the durable
+   * `receiptIds` that teammate's next dispatch consumes.
+   */
+  | { status: "queued"; receiptIds: readonly string[]; entryId?: string }
   /** The kind can steer, this one could not right now; the caller still owns the input. */
   | { status: "degraded"; reason: SteerDegradedReason }
   /** This kind has no steer at all (a `job`, a workflow). */
   | { status: "unsupported_for_kind"; kind: ExecutionRunKind }
   | { status: "run_not_found" }
+
+/**
+ * Whether a person's input was taken: delivered into a live turn, or held by a
+ * run as durable receipts its next boundary consumes. A caller with its own
+ * fallback (an IM job's replay, a device's queue) keeps the input only when it
+ * was not; replaying a held one would hand the run the same message twice.
+ */
+export function isSteerTaken(outcome: SteerOutcome): boolean {
+  return (
+    outcome.status === "delivered" || (outcome.status === "queued" && outcome.receiptIds.length > 0)
+  )
+}
 
 /** Steers one run row of a kind. */
 export type RunSteerEngine = (run: ExecutionRun, request: SteerRequest) => Promise<SteerOutcome>
@@ -101,9 +118,19 @@ export interface RemoteSessionSteerLane {
   steer(sessionId: string, request: SteerRequest): Promise<SteerOutcome | null>
 }
 
+/**
+ * What became of an input an engine held as durable receipts (`queued` with
+ * `receiptIds`), asked once the turn that was to consume them is over:
+ * `applied` when a turn took any of them, `withdrawn` when none was taken —
+ * the settler withdraws each receipt still waiting, so nothing consumes it
+ * after its sender was told it failed.
+ */
+export type HeldSteerSettler = (receiptIds: readonly string[]) => Promise<"applied" | "withdrawn">
+
 const runEngines = new Map<ExecutionRunKind, RunSteerEngine>()
 let sessionLane: SessionSteerLane | undefined
 const remoteLanes = new Set<RemoteSessionSteerLane>()
+let heldSteerSettler: HeldSteerSettler | undefined
 
 /** Register the steer engine for a run kind. Returns its unregister. */
 export function registerRunSteerEngine(kind: ExecutionRunKind, engine: RunSteerEngine): () => void {
@@ -129,11 +156,35 @@ export function registerRemoteSessionSteerLane(lane: RemoteSessionSteerLane): ()
   }
 }
 
+/** Register the settler for held steer receipts (the Squad runtime's). Returns its unregister. */
+export function registerHeldSteerSettler(settler: HeldSteerSettler): () => void {
+  heldSteerSettler = settler
+  return () => {
+    if (heldSteerSettler === settler) heldSteerSettler = undefined
+  }
+}
+
+/**
+ * Settle a held input once its turn is over. `unknown` when this context has
+ * no settler, so the caller keeps the input as it was rather than guessing.
+ */
+export async function settleHeldSteer(
+  receiptIds: readonly string[]
+): Promise<"applied" | "withdrawn" | "unknown"> {
+  if (receiptIds.length === 0 || !heldSteerSettler) return "unknown"
+  try {
+    return await heldSteerSettler(receiptIds)
+  } catch {
+    return "unknown"
+  }
+}
+
 /** Test-only: forget every registration. */
 export function __resetSteerForTesting(): void {
   runEngines.clear()
   sessionLane = undefined
   remoteLanes.clear()
+  heldSteerSettler = undefined
 }
 
 /** Send `request` into its target under the queue rule. Never throws for a refusal. */
@@ -173,9 +224,12 @@ const steerAgentTurn: RunSteerEngine = async (run, request) => {
 }
 
 /**
- * A delegation does not execute: the input goes to every live child, and the
- * delegation counts as steered when any one of them took it. A child that
- * cannot be steered does not stop the ones that can.
+ * A delegation does not execute: the input goes to every live child. It is
+ * delivered when any child's live turn took it, queued when the children only
+ * hold it for their next boundary, and degraded when none took it. A held
+ * input is never promoted to a delivery here: the caller decides what a held
+ * input means for it. A child that cannot be steered does not stop the ones
+ * that can.
  */
 const steerDelegation: RunSteerEngine = async (run, request) => {
   const children = (await listChildExecutionRuns(run.id)).filter((child) =>
@@ -183,7 +237,8 @@ const steerDelegation: RunSteerEngine = async (run, request) => {
   )
   if (children.length === 0) return { status: "degraded", reason: "no_active_run" }
   const receiptIds: string[] = []
-  let taken = false
+  let delivered = false
+  let held = false
   let lastReason: SteerDegradedReason = "no_active_run"
   for (const child of children) {
     const outcome = await steerExecutionRun(child, {
@@ -191,15 +246,18 @@ const steerDelegation: RunSteerEngine = async (run, request) => {
       target: { runId: child.id },
     })
     if (outcome.status === "delivered") {
-      taken = true
+      delivered = true
       receiptIds.push(...outcome.receiptIds)
     } else if (outcome.status === "queued") {
-      taken = true
+      held = true
+      receiptIds.push(...outcome.receiptIds)
     } else if (outcome.status === "degraded") {
       lastReason = outcome.reason
     }
   }
-  return taken ? { status: "delivered", receiptIds } : { status: "degraded", reason: lastReason }
+  if (delivered) return { status: "delivered", receiptIds }
+  if (held) return { status: "queued", receiptIds }
+  return { status: "degraded", reason: lastReason }
 }
 
 /**
@@ -243,7 +301,7 @@ async function steerSessionTurn(sessionId: string, request: SteerRequest): Promi
         producer: request.derived.producer,
         ...(request.derived.dedupeKey ? { dedupeKey: request.derived.dedupeKey } : {}),
       })
-      return { status: "queued", entryId }
+      return { status: "queued", receiptIds: [], entryId }
     }
   }
   return steerSidecarSession(sessionId, request)

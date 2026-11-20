@@ -29,6 +29,7 @@ import {
   renewAgentTeamDispatchLease,
   settleAgentTeamDispatchLease,
   updateAgentTeamSteeringReceipt,
+  withdrawQueuedAgentTeamSteering,
   updateAgentTeamChildRun,
   updateAgentTeamChildRunIfCurrent,
   updateAgentTeamRunIfCurrent,
@@ -339,6 +340,67 @@ describe("durable AgentTeam runtime persistence", () => {
 
     await updateAgentTeamSteeringReceipt("steer-1", "delivered", 22)
     expect((await getDb().agentTeamSteeringReceipts.get("steer-1"))?.status).toBe("delivered")
+  })
+
+  it("withdraws only the steering that still waits for a dispatch", async () => {
+    await createAgentTeamRun({
+      id: "run-w",
+      teamId: "team-1",
+      objective: "Settle held steering",
+      decisionVersion: 0,
+      priority: 1,
+      status: "running",
+      createdAt: 20,
+      updatedAt: 20,
+    })
+    await createAgentTeamChildRun({
+      id: "child-w",
+      runId: "run-w",
+      teamId: "team-1",
+      teammateId: "mate-1",
+      taskId: "task-1",
+      repositoryId: "primary",
+      status: "running",
+      attempt: 1,
+      resourceUsage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        costUsd: 0,
+        wallTimeMs: 0,
+        toolTimeMs: 0,
+        attempts: 1,
+        failures: 0,
+      },
+      createdAt: 20,
+      updatedAt: 20,
+    })
+    for (const id of ["held", "taken"]) {
+      await createAgentTeamSteeringReceipt({
+        id,
+        runId: "run-w",
+        childRunId: "child-w",
+        message: "Check the migration",
+        status: "queued",
+        createdAt: 21,
+        updatedAt: 21,
+      })
+    }
+    await updateAgentTeamSteeringReceipt("taken", "applied", 22)
+    expect((await getAgentTeamChildRun("child-w"))?.pendingSteeringCount).toBe(1)
+
+    await expect(
+      withdrawQueuedAgentTeamSteering(["held", "taken", "missing"], 23, "turn_ended")
+    ).resolves.toEqual(["rejected", "applied", "rejected"])
+
+    expect(await getDb().agentTeamSteeringReceipts.get("held")).toMatchObject({
+      status: "rejected",
+      reason: "turn_ended",
+      updatedAt: 23,
+    })
+    expect((await getDb().agentTeamSteeringReceipts.get("taken"))?.status).toBe("applied")
+    // Withdrawn steering leaves the child's pending set, so no dispatch reads it.
+    expect((await getAgentTeamChildRun("child-w"))?.pendingSteeringCount).toBe(0)
   })
 
   it("uses the child row for lease CAS, renewal, settlement, and event dedupe", async () => {

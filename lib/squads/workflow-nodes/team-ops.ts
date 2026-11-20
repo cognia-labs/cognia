@@ -113,7 +113,7 @@ export async function runTeamCompose(ctx: StepExecutionContext): Promise<StepExe
         import("../squad/run-squad-to-end"),
         import("./workflow-squad-surface"),
       ])
-    await runSquadToEnd(
+    const end = await runSquadToEnd(
       buildSquadStartInput({
         squadId: result.teamId,
         ...(params.ultracode !== undefined ? { ultracode: params.ultracode } : {}),
@@ -126,10 +126,15 @@ export async function runTeamCompose(ctx: StepExecutionContext): Promise<StepExe
       )
     })
     started = true
-    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
+    const [{ useAgentTeamStore }, { readSquadRunReport }] = await Promise.all([
+      import("@/stores/squads/agent-team-store/store"),
+      import("../squad/squad-run-report"),
+    ])
     const team = useAgentTeamStore.getState().getTeam(result.teamId)
     finalStatus = team?.status
-    finalResult = team?.finalResult
+    // The run's own report: only an Ultracode run writes the team's
+    // `finalResult`, so a normal run's answer lives on its run.
+    finalResult = (await readSquadRunReport(end.start.runId).catch(() => undefined))?.text
   }
 
   return {
@@ -347,7 +352,9 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
   })
 
   const record =
-    params.awaitCompletion !== false ? await launched.completionPromise : launched.delegation
+    params.awaitCompletion !== false
+      ? await settledOrAborted(launched.completionPromise, ctx.signal)
+      : launched.delegation
 
   // A delegation the orchestrator itself settled as failed is a step failure
   // (visible to errorPolicy) rather than a silently-successful output.
@@ -406,6 +413,31 @@ export async function runTeamMessage(ctx: StepExecutionContext): Promise<StepExe
       recipientId: message.recipientId,
     },
   }
+}
+
+/**
+ * Wait for a delegation to settle, or stop waiting when the step is aborted.
+ * A delegation parked for approval settles only when a person acts, so a
+ * cancelled or timed-out workflow must not keep the step waiting for it. The
+ * delegation itself is the Squad's and is left as it is.
+ */
+function settledOrAborted<T>(settled: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return settled
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    signal.addEventListener("abort", onAbort, { once: true })
+    settled.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(error)
+      }
+    )
+  })
 }
 
 function nonRetryable(message: string): Error {

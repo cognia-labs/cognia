@@ -35,11 +35,12 @@ export interface TeamStoreWriter {
   setTaskStatus(taskId: string, status: TeamTaskStatus, result?: string, error?: string): void
   updateTeammate(teammateId: string, updates: Partial<AgentTeammate>): void
   /**
-   * Persist the run's final synthesized result onto the team (used by ultracode
-   * runs to write the synthesizer report to `team.finalResult`). Optional so
-   * non-ultracode callers / test fixtures need not provide it.
+   * Set the team's `finalResult` to the run that just ended's own report (an
+   * Ultracode synthesis or a task run's answers), or clear it when that run
+   * produced none, so the team never shows an earlier run's report. Optional
+   * so test fixtures need not provide it.
    */
-  setFinalResult?(teamId: string, result: string): void
+  setFinalResult?(teamId: string, result: string | undefined): void
   /**
    * Create a new task row mid-run (used by adaptive re-planning when a lead
    * checkpoint injects work for a later wave). Returns the created task so the

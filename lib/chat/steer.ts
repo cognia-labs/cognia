@@ -76,6 +76,19 @@ export interface SteerMessageMeta {
   state: SteerState
   /** Why delivery failed / fell back — surfaced in the bubble's tooltip. */
   reason?: string
+  /**
+   * The durable receipts a run holds this input as, when the run's engine
+   * took it for a later boundary instead of a live turn (a Squad whose
+   * teammates were between dispatches). The bubble then stays `queued`
+   * outside the session queue — it cannot be edited or dropped here — until
+   * its turn ends and the receipts are settled.
+   */
+  heldReceiptIds?: readonly string[]
+}
+
+/** Whether a run, not this session's queue, holds the input (`heldReceiptIds`). */
+export function isHeldSteer(meta: SteerMessageMeta): boolean {
+  return (meta.heldReceiptIds?.length ?? 0) > 0
 }
 
 /**
@@ -92,7 +105,8 @@ export interface SteerMessageMeta {
  *  • `accepted` while idle means the turn it rode in has ended (including via a
  *    restart) — the sidecar had taken it, so the model saw it.
  *  • `queued` only survives while the session is still busy AND the entry is
- *    still in the live queue; anything else means no settle is coming.
+ *    still in the live queue, or a run holds it (`heldReceiptIds`, settled
+ *    when that turn ends); anything else means no settle is coming.
  */
 export function resolveSteerDisplayState(
   meta: SteerMessageMeta,
@@ -100,7 +114,7 @@ export function resolveSteerDisplayState(
 ): SteerState {
   if (meta.state === "applied" || meta.state === "failed") return meta.state
   if (meta.state === "accepted") return ctx.sessionBusy ? "accepted" : "applied"
-  return ctx.sessionBusy && ctx.stillQueued ? "queued" : "failed"
+  return ctx.sessionBusy && (ctx.stillQueued || isHeldSteer(meta)) ? "queued" : "failed"
 }
 
 /** Read `metadata.steer` off a message's metadata bag, if it carries one. */

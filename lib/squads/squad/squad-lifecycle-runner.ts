@@ -106,7 +106,7 @@ function bindSquadStoreWriter(): RunTeamLifecycleDeps["storeWriter"] {
       useAgentTeamStore.getState().setTaskStatus(taskId, status, result, error),
     updateTeammate: (teammateId: string, updates: Partial<AgentTeammate>) =>
       useAgentTeamStore.getState().updateTeammate(teammateId, updates),
-    setFinalResult: (teamId: string, result: string) =>
+    setFinalResult: (teamId: string, result: string | undefined) =>
       useAgentTeamStore.getState().updateTeam(teamId, { finalResult: result }),
     addTask: (input) => useAgentTeamStore.getState().createTask(input),
     updateTask: (taskId, updates) => useAgentTeamStore.getState().updateTask(taskId, updates),
@@ -430,7 +430,32 @@ export async function runSquadLifecycle(
   if (input.recovery?.signal?.aborted) return result
   rememberSquadLifecycleResult(result)
   await settleSquadRun(teamId, runId, result)
+  notifySquadRunEnded(runId)
   return result
+}
+
+const squadRunEndListeners = new Set<(runId: string) => void>()
+
+/**
+ * Hear every Squad run that ends in this process, once it is settled. For
+ * work owed to whoever handed the run over that no caller waits for (a retry
+ * launched from the run's card). Returns the unsubscribe.
+ */
+export function onSquadRunEnded(listener: (runId: string) => void): () => void {
+  squadRunEndListeners.add(listener)
+  return () => {
+    squadRunEndListeners.delete(listener)
+  }
+}
+
+function notifySquadRunEnded(runId: string): void {
+  for (const listener of squadRunEndListeners) {
+    try {
+      listener(runId)
+    } catch (error) {
+      console.warn("Squad run end listener failed", error)
+    }
+  }
 }
 
 /**

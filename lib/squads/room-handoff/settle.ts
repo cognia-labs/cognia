@@ -9,9 +9,11 @@
  *
  * Two writers, one entry: the attempt this host launched reports when its
  * outcome settles, and reconciliation finds every attempt that ended with no
- * entry (a host restart while the Squad ran, a retry launched from the run's
- * card). The entry is idempotent by attempt, so both reporting one end
- * delivers it once.
+ * entry (a host that stopped between the run's end and its entry, a retry
+ * launched from the run's card, which hangs under the attempt it replaced).
+ * Either way the text and error are the attempt's own run report, so both
+ * writers report the same end, and the entry is idempotent by attempt, so it
+ * is delivered once.
  */
 
 import type { UIMessage } from "ai"
@@ -21,6 +23,7 @@ import type { ExecutionRun } from "@/types/execution/run"
 import { isTerminalRunStatus } from "@/types/execution/run"
 import type { RoomHandoffAttempt } from "./decide"
 import { findRoomHandoffProposal } from "./proposal"
+import type { SquadRunReport } from "../squad/squad-run-report"
 
 const DELEGATION_PREFIX = "room-handoff:"
 
@@ -31,12 +34,11 @@ export interface RoomHandoffSettleDeps {
   hasEntry: (entryId: string) => Promise<boolean>
   /** Every room hand-off delegation, newest first. */
   listHandoffDelegations: () => Promise<ExecutionRun[]>
-  listAttempts: (delegationRunId: string) => Promise<ExecutionRun[]>
+  /** The runs launched under a run: a delegation's attempts, an attempt's retries. */
+  listChildren: (runId: string) => Promise<ExecutionRun[]>
   readMessages: (roomId: string) => Promise<UIMessage[]>
-  /** The Squad's last result and error, with when its last run completed. */
-  squadResult: (
-    squadId: string
-  ) => { finalResult?: string; error?: string; completedAt?: number } | undefined
+  /** One Squad run's own report, by its Squad run id (the row's `sourceId`). */
+  runReport: (squadRunId: string) => Promise<SquadRunReport>
   now: () => number
 }
 
@@ -46,31 +48,22 @@ async function defaultDeps(): Promise<RoomHandoffSettleDeps> {
     { getBackgroundTaskRecord },
     executionRuns,
     { readRoomHandoffTranscript },
-    { useAgentTeamStore },
+    { readSquadRunReport },
   ] = await Promise.all([
     import("@/lib/background-tasks/result-delivery"),
     import("@/lib/db/background-tasks"),
     import("@/lib/db/execution-runs"),
     import("./transcript"),
-    import("@/stores/squads/agent-team-store/store"),
+    import("../squad/squad-run-report"),
   ])
   return {
     report: onBackgroundJobSettled,
     hasEntry: async (entryId) => Boolean(await getBackgroundTaskRecord(entryId)),
     listHandoffDelegations: () =>
       executionRuns.listExecutionRunsBySourcePrefix("delegation", DELEGATION_PREFIX),
-    listAttempts: (delegationRunId) => executionRuns.listChildExecutionRuns(delegationRunId),
+    listChildren: (runId) => executionRuns.listChildExecutionRuns(runId),
     readMessages: readRoomHandoffTranscript,
-    squadResult: (squadId) => {
-      const squad = useAgentTeamStore.getState().teams[squadId]
-      if (!squad) return undefined
-      const completedAt = squad.completedAt ? new Date(squad.completedAt).getTime() : undefined
-      return {
-        ...(squad.finalResult ? { finalResult: squad.finalResult } : {}),
-        ...(squad.error ? { error: squad.error } : {}),
-        ...(completedAt !== undefined && Number.isFinite(completedAt) ? { completedAt } : {}),
-      }
-    },
+    runReport: readSquadRunReport,
     now: Date.now,
   }
 }
@@ -130,11 +123,37 @@ function outcomeOf(status: ExecutionRun["status"]): ChildRunOutcome["status"] {
 }
 
 /**
+ * Every Squad attempt of a hand-off: the delegation's own `team` children and,
+ * under each, the retries that replaced it (a retry is launched as the child
+ * of the attempt it replaces), however deep the chain.
+ */
+async function listHandoffAttempts(
+  deps: RoomHandoffSettleDeps,
+  delegationRunId: string
+): Promise<ExecutionRun[]> {
+  const attempts: ExecutionRun[] = []
+  const seen = new Set<string>([delegationRunId])
+  let frontier = [delegationRunId]
+  while (frontier.length > 0) {
+    const next: string[] = []
+    for (const parentId of frontier) {
+      for (const child of await deps.listChildren(parentId)) {
+        if (child.kind !== "team" || seen.has(child.id)) continue
+        seen.add(child.id)
+        attempts.push(child)
+        next.push(child.id)
+      }
+    }
+    frontier = next
+  }
+  return attempts
+}
+
+/**
  * Report every ended attempt of a recent hand-off that has no entry yet.
- * Reads the proposal back from the room for whose it was. The Squad's stored
- * result is the attempt's only when the Squad's last run is this attempt
- * (its completion and the attempt's end agree); otherwise the end is reported
- * without text and the Squad run holds it.
+ * Reads the proposal back from the room for whose it was, and each attempt's
+ * text and error from that attempt's own run, so a retry never carries the
+ * report of the run it replaced, nor of the Squad's next run.
  */
 export async function reconcileRoomHandoffs(): Promise<number> {
   const deps = await resolveDeps()
@@ -147,8 +166,8 @@ export async function reconcileRoomHandoffs(): Promise<number> {
     if (delegation.updatedAt < since || !delegation.sessionId) continue
     const roomId = delegation.sessionId
     const toolUseId = delegation.sourceId.slice(DELEGATION_PREFIX.length)
-    const ended = (await deps.listAttempts(delegation.id)).filter(
-      (attempt) => attempt.kind === "team" && isTerminalRunStatus(attempt.status)
+    const ended = (await listHandoffAttempts(deps, delegation.id)).filter((attempt) =>
+      isTerminalRunStatus(attempt.status)
     )
     if (ended.length === 0) continue
     const unreported: ExecutionRun[] = []
@@ -160,10 +179,8 @@ export async function reconcileRoomHandoffs(): Promise<number> {
     const decision = proposal?.decision
     if (!proposal || decision?.status !== "started") continue
     for (const attempt of unreported) {
-      const result = deps.squadResult(decision.squadId)
-      const endedAt = attempt.endedAt ?? attempt.updatedAt
-      const own =
-        result?.completedAt !== undefined && Math.abs(result.completedAt - endedAt) < 60_000
+      const report = await deps.runReport(attempt.sourceId).catch(() => ({}) as SquadRunReport)
+      const status = outcomeOf(attempt.status)
       await settleRoomHandoffAttempt(
         {
           roomId,
@@ -177,11 +194,11 @@ export async function reconcileRoomHandoffs(): Promise<number> {
           startedAt: attempt.startedAt,
         },
         {
-          status: outcomeOf(attempt.status),
-          ...(own && result?.finalResult ? { text: result.finalResult } : {}),
-          ...(own && result?.error ? { error: result.error } : {}),
+          status,
+          ...(status === "completed" && report.text ? { text: report.text } : {}),
+          ...(status !== "completed" && report.error ? { error: report.error } : {}),
         },
-        endedAt
+        attempt.endedAt ?? attempt.updatedAt
       )
       reported += 1
     }

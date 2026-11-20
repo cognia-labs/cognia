@@ -673,17 +673,19 @@ export function installConnectorRuntime(
         throw new PiiGateBlocked("prompt", event.adapterId, event.conversationKey)
       },
       // A person's message into the run this conversation drives: the one
-      // steer entry, live (ADR-0252 §5). Anything but a delivery leaves the
-      // durable job to replay at the FIFO boundary.
+      // steer entry, live (ADR-0252 §5). A delivery, or a Squad's durable
+      // hold for its teammates' next dispatch (a replay would hand the Squad
+      // the same message twice), is taken; anything else leaves the durable
+      // job to replay at the FIFO boundary.
       steer: async (sessionId, event) => {
-        const { steerRun } = await import("@/lib/execution/steer")
+        const { isSteerTaken, steerRun } = await import("@/lib/execution/steer")
         const outcome = await steerRun({
           target: { sessionId },
           origin: "person",
           content: inboundEventToSendContent(event),
           sourceMessageId: event.messageId,
         })
-        if (outcome.status !== "delivered") throw new Error(`live steer ${outcome.status}`)
+        if (!isSteerTaken(outcome)) throw new Error(`live steer ${outcome.status}`)
         return { accepted: true as const }
       },
     })

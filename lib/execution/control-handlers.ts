@@ -30,8 +30,10 @@ import { isLiveRunStatus } from "./run-status"
 import { hasRunStop, stopRegisteredRun } from "./run-stops"
 import { notifyAgentRunResumed } from "./run-resume-listeners"
 import {
+  registerHeldSteerSettler,
   registerRunSteerEngine,
   steerExecutionRun,
+  type HeldSteerSettler,
   type RunSteerEngine,
   type SteerOutcome,
 } from "./steer"
@@ -94,7 +96,8 @@ function outcomeOrThrow(outcome: SteerOutcome, action: string): RunControlHandle
     case "delivered":
       return outcome.receiptIds.length > 0 ? { steerReceiptIds: outcome.receiptIds } : {}
     case "queued":
-      return {}
+      // Held for the target's next boundary; a Squad's are durable receipts.
+      return outcome.receiptIds.length > 0 ? { steerReceiptIds: outcome.receiptIds } : {}
     case "degraded":
       throw new SteerDegradedError(outcome.reason)
     case "unsupported_for_kind":
@@ -107,9 +110,12 @@ function outcomeOrThrow(outcome: SteerOutcome, action: string): RunControlHandle
 /**
  * A Squad run's steer: its durable runtime fans the message out to every live
  * teammate. The coordinator persists a receipt BEFORE attempting live
- * delivery, so "nothing is attached right now" is the durable path working,
- * not a failure; only "no teammate can act at all" is a degradation. A
- * Squad's input is text: content blocks do not reach it.
+ * delivery, so "nothing is attached right now" is the durable path working:
+ * the receipt waits for that teammate's next dispatch, and the outcome says
+ * `queued`, not `delivered`, so a caller never shows a held message as taken.
+ * It is `delivered` only when a teammate's live turn took it, and a
+ * degradation when no teammate can act or none took it at all. A Squad's
+ * input is text: content blocks do not reach it.
  */
 const steerSquadRun: RunSteerEngine = async (run, request) => {
   const { getAgentTeamRun } = await import("@/lib/db/agent-team-runtime")
@@ -119,9 +125,27 @@ const steerSquadRun: RunSteerEngine = async (run, request) => {
   const text = steerTextOf(request.content)
   if (!text) return { status: "degraded", reason: "not_admitted" }
   const { steerDurableRun } = await import("@/lib/squads/durable/durable-control")
-  const { receiptIds, childCount } = await steerDurableRun(run.sourceId, text)
+  const { receipts, childCount, refused } = await steerDurableRun(run.sourceId, text)
   if (childCount === 0) return { status: "degraded", reason: "no_active_run" }
-  return { status: "delivered", receiptIds }
+  if (receipts.length === 0) return { status: "degraded", reason: refused ?? "store_failed" }
+  const receiptIds = receipts.map((receipt) => receipt.id)
+  return receipts.some((receipt) => receipt.status === "delivered")
+    ? { status: "delivered", receiptIds }
+    : { status: "queued", receiptIds }
+}
+
+/**
+ * Settle a Squad steer the person's chat showed as held, once the turn it was
+ * held for is over: applied when any teammate's dispatch took it, otherwise
+ * every receipt still waiting is withdrawn so a later dispatch cannot apply a
+ * message its sender was told failed.
+ */
+const settleSquadHeldSteer: HeldSteerSettler = async (receiptIds) => {
+  const { withdrawQueuedAgentTeamSteering } = await import("@/lib/db/agent-team-runtime")
+  const statuses = await withdrawQueuedAgentTeamSteering(receiptIds, Date.now(), "turn_ended")
+  return statuses.some((status) => status === "delivered" || status === "applied")
+    ? "applied"
+    : "withdrawn"
 }
 
 const agentControllers = new Map<string, AbortController>()
@@ -835,6 +859,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
   )
   const unregisterTeam = registerRunControlHandler("team", team)
   const unregisterTeamSteer = registerRunSteerEngine("team", steerSquadRun)
+  const unregisterHeldSteerSettler = registerHeldSteerSettler(settleSquadHeldSteer)
   const unregisterDelegation = registerRunControlHandler("delegation", delegation)
   const unregisterGoal = registerRunControlHandler("goal", goal)
   const unregisterPlan = registerRunControlHandler("plan", plan)
@@ -880,6 +905,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
       unregisterBot()
       unregisterTeam()
       unregisterTeamSteer()
+      unregisterHeldSteerSettler()
       unregisterDelegation()
       for (const unregister of unregisterWorkflows) unregister()
       unregisterGoal()

@@ -10,9 +10,9 @@ const controlSquadRunMock = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock("../durable/durable-control", () => ({
   controlSquadRun: (...args: unknown[]) => controlSquadRunMock(...args),
 }))
-const teams: Record<string, { finalResult?: string; error?: string }> = {}
-jest.mock("@/stores/squads/agent-team-store/store", () => ({
-  useAgentTeamStore: { getState: () => ({ teams }) },
+const readReportMock = jest.fn(async (_runId: string) => ({}) as { text?: string; error?: string })
+jest.mock("../squad/squad-run-report", () => ({
+  readSquadRunReport: (runId: string) => readReportMock(runId),
 }))
 
 import { port } from "./squad-launch"
@@ -27,7 +27,8 @@ beforeEach(() => {
   startSquadRunMock.mockReset()
   awaitSettlementMock.mockReset()
   controlSquadRunMock.mockClear()
-  for (const key of Object.keys(teams)) delete teams[key]
+  readReportMock.mockReset()
+  readReportMock.mockResolvedValue({})
 })
 
 describe("squad-launch port", () => {
@@ -73,19 +74,35 @@ describe("squad-launch port", () => {
     ).resolves.toEqual({ started: false, reason })
   })
 
-  it("settles completed with the Squad's final result", async () => {
+  it("settles completed with this run's own report", async () => {
     startSquadRunMock.mockResolvedValue(launched)
     awaitSettlementMock.mockResolvedValue("completed")
-    teams["squad-2"] = { finalResult: "shipped" }
+    readReportMock.mockResolvedValue({ text: "shipped" })
     const result = await port.start({ squadId: "squad-2", brief: "", origin: "delegation" })
     if (!result.started) throw new Error("expected a started run")
     await expect(result.outcome).resolves.toEqual({ status: "completed", text: "shipped" })
     expect(awaitSettlementMock).toHaveBeenCalledWith("execution:team:run_team_child")
+    expect(readReportMock).toHaveBeenCalledWith("run_team_child")
   })
 
-  it("settles failed with the Squad's error, and cancelled for a stopped run", async () => {
+  it("never returns another run's report, nor invents one (F04)", async () => {
+    // The Squad's team record may still hold an earlier Ultracode run's
+    // synthesis; only this run's row is read.
     startSquadRunMock.mockResolvedValue(launched)
-    teams["squad-2"] = { error: "lead gave up" }
+    awaitSettlementMock.mockResolvedValue("completed")
+    const quiet = await port.start({ squadId: "squad-2", brief: "current", origin: "delegation" })
+    if (!quiet.started) throw new Error("expected a started run")
+    await expect(quiet.outcome).resolves.toEqual({ status: "completed" })
+
+    readReportMock.mockRejectedValueOnce(new Error("row unreadable"))
+    const unreadable = await port.start({ squadId: "squad-2", brief: "", origin: "delegation" })
+    if (!unreadable.started) throw new Error("expected a started run")
+    await expect(unreadable.outcome).resolves.toEqual({ status: "completed" })
+  })
+
+  it("settles failed with the run's error, and cancelled for a stopped run", async () => {
+    startSquadRunMock.mockResolvedValue(launched)
+    readReportMock.mockResolvedValueOnce({ error: "lead gave up" })
     awaitSettlementMock.mockResolvedValueOnce("failed")
     const failed = await port.start({ squadId: "squad-2", brief: "", origin: "delegation" })
     if (!failed.started) throw new Error("expected a started run")
@@ -95,6 +112,14 @@ describe("squad-launch port", () => {
     const cancelled = await port.start({ squadId: "squad-2", brief: "", origin: "delegation" })
     if (!cancelled.started) throw new Error("expected a started run")
     await expect(cancelled.outcome).resolves.toMatchObject({ status: "cancelled" })
+
+    awaitSettlementMock.mockResolvedValueOnce("failed")
+    const silent = await port.start({ squadId: "squad-2", brief: "", origin: "delegation" })
+    if (!silent.started) throw new Error("expected a started run")
+    await expect(silent.outcome).resolves.toEqual({
+      status: "failed",
+      error: "Squad run run_team_child failed",
+    })
   })
 
   it("stops the run through run control", async () => {

@@ -568,6 +568,44 @@ export async function updateAgentTeamSteeringReceipt(
   })
 }
 
+/**
+ * Withdraw the steering receipts that still wait for a dispatch (`queued`),
+ * as `rejected` with `reason`, and report each receipt's status afterwards. A
+ * receipt a dispatch already took (`delivered`, `applied`) or one already
+ * rejected is left as it is; an unknown id reads as `rejected`. One
+ * transaction, so a receipt is either taken or withdrawn, never both.
+ */
+export async function withdrawQueuedAgentTeamSteering(
+  receiptIds: readonly string[],
+  at: number,
+  reason: string
+): Promise<AgentTeamSteeringStatus[]> {
+  const db = getDb()
+  return db.transaction("rw", db.agentTeamSteeringReceipts, db.agentTeamChildRuns, async () => {
+    const statuses: AgentTeamSteeringStatus[] = []
+    for (const receiptId of receiptIds) {
+      const receipt = await db.agentTeamSteeringReceipts.get(receiptId)
+      if (!receipt) {
+        statuses.push("rejected")
+        continue
+      }
+      if (receipt.status !== "queued") {
+        statuses.push(receipt.status)
+        continue
+      }
+      await db.agentTeamSteeringReceipts.update(
+        receiptId,
+        steeringReceiptPatch("rejected", at, reason)
+      )
+      const child = await db.agentTeamChildRuns.get(receipt.childRunId)
+      const childPatch = child ? steeringResolvedChildPatch(child, "rejected", at) : undefined
+      if (child && childPatch) await db.agentTeamChildRuns.update(child.id, childPatch)
+      statuses.push("rejected")
+    }
+    return statuses
+  })
+}
+
 export async function listPendingAgentTeamSteering(
   childRunId: string
 ): Promise<AgentTeamSteeringReceipt[]> {

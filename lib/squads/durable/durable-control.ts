@@ -43,8 +43,12 @@ import {
 import { getExecutionRun, runEventJournal, semanticRunEvent } from "@/lib/db/execution-runs"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { isTerminalRunStatus } from "@/types/execution/run"
-import type { AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
-import { getDurableTeamCoordinator, type DurableTeamCoordinator } from "./durable-runtime"
+import type { AgentTeamRunStatus, AgentTeamSteeringStatus } from "@/types/agent/agent-team-runtime"
+import {
+  getDurableTeamCoordinator,
+  redactTeamTextForPersistence,
+  type DurableTeamCoordinator,
+} from "./durable-runtime"
 import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
 import { guardSquadRunResume, type SquadResumeGuardDeps } from "../squad/squad-control"
 
@@ -477,6 +481,23 @@ export async function controlSquadRun(
   return { ok: true, status: "cancelled" }
 }
 
+/** What a durable team steer did, child by child. */
+export interface DurableSteerResult {
+  /** Children that could still act when the steer arrived. */
+  childCount: number
+  /**
+   * One per child that took the message, with the status the coordinator gave
+   * it: `delivered` when a live turn took it now, `queued` when the receipt
+   * waits for that child's next dispatch.
+   */
+  receipts: { id: string; status: AgentTeamSteeringStatus }[]
+  /**
+   * Why no child took it, set only when children could act and none did: the
+   * text cannot be stored without leaking PII, or the receipt store refused.
+   */
+  refused?: "pii_blocked" | "store_failed"
+}
+
 /**
  * Redirect a durable team run without stopping it.
  *
@@ -486,15 +507,16 @@ export async function controlSquadRun(
  *
  * The coordinator's own `steer` owns the PII gate and the durable receipt, and
  * it is the receipt that makes this safe to call when nothing is live: an
- * undelivered steer stays `queued` and the next provider turn consumes it at
- * its next safe boundary. So "no live control attached" is not a failure here —
- * it is the durable path working. Only "no child can act at all" is.
+ * undelivered steer stays `queued` and the child's next dispatch consumes it
+ * at its next safe boundary. Each receipt keeps its status here, so a caller
+ * can tell a live delivery from a held one; "no child took it at all" is a
+ * refusal, never a delivery.
  */
 export async function steerDurableRun(
   runId: string,
   message: string,
   options: DurableRunControlOptions = {}
-): Promise<{ receiptIds: string[]; childCount: number }> {
+): Promise<DurableSteerResult> {
   const coordinator = options.coordinator ?? getDurableTeamCoordinator()
   const now = options.now ?? Date.now
   const run = await getAgentTeamRun(runId)
@@ -502,19 +524,28 @@ export async function steerDurableRun(
   const children = (await listAgentTeamChildRuns(runId)).filter(
     (child) => !isTerminalTeamStatus(child.status)
   )
-  if (children.length === 0) return { receiptIds: [], childCount: 0 }
+  if (children.length === 0) return { receipts: [], childCount: 0 }
+  // The coordinator runs this same gate per child and refuses every one of
+  // them for the same text; asking it once first names the refusal.
+  if (redactTeamTextForPersistence(message) === undefined) {
+    return { receipts: [], childCount: children.length, refused: "pii_blocked" }
+  }
 
-  const receipts = await Promise.all(
+  const settled = await Promise.all(
     children.map(async (child) => {
       try {
-        return (await coordinator.steer(child.id, message)).id
+        const receipt = await coordinator.steer(child.id, message)
+        return { id: receipt.id, status: receipt.status }
       } catch {
         // One refusing child must not swallow the correction for the others.
         return undefined
       }
     })
   )
-  const receiptIds = receipts.filter((id): id is string => typeof id === "string")
+  const receipts = settled.filter(
+    (receipt): receipt is { id: string; status: AgentTeamSteeringStatus } => receipt !== undefined
+  )
+  const receiptIds = receipts.map((receipt) => receipt.id)
   await appendAgentTeamTrajectory({
     runId,
     kind: "run_controlled",
@@ -524,5 +555,9 @@ export async function steerDurableRun(
     payload: { action: "steer", childCount: children.length, receiptIds },
     createdAt: now(),
   })
-  return { receiptIds, childCount: children.length }
+  return {
+    receipts,
+    childCount: children.length,
+    ...(receipts.length === 0 ? { refused: "store_failed" as const } : {}),
+  }
 }

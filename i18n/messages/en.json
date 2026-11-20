@@ -10978,6 +10978,7 @@
       "discard": "Discard",
       "failed": "Not delivered",
       "failedHint": "The run ended before this could be sent",
+      "heldHint": "Held by the Squad — the next teammate to take a step picks it up",
       "position": "{index}/{total}",
       "positionHint": "Position in the send order — reorder it in the run panel",
       "putBack": "Put back",

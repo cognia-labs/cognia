@@ -69,6 +69,7 @@ import type { RunTeamLifecycleDeps } from "../agent-team-runtime"
 import {
   __resetAgentTeamRuntimeForTesting,
   configureAgentTeamRuntime,
+  onSquadRunEnded,
   prepareSquadResume,
   resumeTaskFilter,
   runSquadLifecycle,
@@ -520,6 +521,28 @@ describe("runSquadLifecycle", () => {
       { teamId: "t1", status: "completed" },
       "agent-team"
     )
+  })
+
+  it("tells end listeners once the run is settled, and a throwing listener spoils nothing", async () => {
+    useAgentTeamStore.getState().upsertTeam(makeTeam())
+    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const heard: string[] = []
+    const stopThrowing = onSquadRunEnded(() => {
+      throw new Error("listener broke")
+    })
+    const stop = onSquadRunEnded((runId) => {
+      // Settled first: whoever is owed the run reads its terminal row.
+      expect(settleAgentTeamExecutionRun).toHaveBeenCalled()
+      heard.push(runId)
+    })
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+    await runSquadLifecycle({ teamId: "t1", runId: "run-1" }, { run })
+    expect(heard).toEqual(["run-1"])
+    stop()
+    stopThrowing()
+    await runSquadLifecycle({ teamId: "t1", runId: "run-1" }, { run })
+    expect(heard).toEqual(["run-1"])
+    warn.mockRestore()
   })
 
   /** A paused or parked run keeps the status the control plane wrote. */

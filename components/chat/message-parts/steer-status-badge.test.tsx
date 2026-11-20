@@ -79,6 +79,21 @@ describe("SteerStatusBadge", () => {
     expect(screen.getByTestId("steer-status-badge")).toHaveAttribute("data-state", "queued")
   })
 
+  it("shows a steer the Squad holds as queued, with nothing local to edit or drop (F06)", () => {
+    const msg = {
+      ...steerMessage("e1", "queued"),
+      metadata: { steer: { entryId: "e1", state: "queued", heldReceiptIds: ["r1"] } },
+    } as unknown as UIMessage
+    // No session-queue entry: the run holds the only copy.
+    seed({ status: "streaming", steerQueue: [], messages: [msg] })
+    render(<SteerStatusBadge message={msg} sessionId={SID} />)
+    const badge = screen.getByTestId("steer-status-badge")
+    expect(badge).toHaveAttribute("data-state", "queued")
+    expect(screen.getByText("queued")).toHaveAttribute("title", "heldHint")
+    expect(screen.queryByRole("button", { name: "ariaEdit" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "ariaRemove" })).toBeNull()
+  })
+
   it("shows the delivered state for a live-accepted steer", () => {
     const msg = steerMessage("e1", "accepted")
     seed({ status: "streaming", messages: [msg] })

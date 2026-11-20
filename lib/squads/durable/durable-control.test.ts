@@ -8,6 +8,16 @@ import {
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { controlDurableRun, steerDurableRun } from "./durable-control"
 
+const mockLeakCheck = jest.fn<boolean | undefined, [string]>(() => undefined)
+jest.mock("@cognia/redact", () => {
+  const actual = jest.requireActual("@cognia/redact")
+  return {
+    ...actual,
+    // `undefined` defers to the real check; a test forces a verdict.
+    hasNoLeakingPii: (text: string) => mockLeakCheck(text) ?? actual.hasNoLeakingPii(text),
+  }
+})
+
 describe("durable AgentTeam run controls", () => {
   let disableDbRuntime: (() => void) | undefined
 
@@ -238,7 +248,10 @@ describe("steering a durable run", () => {
     await addChild("child-a", "running")
     await addChild("child-b", "running")
     await addChild("child-done", "completed")
-    const steer = jest.fn(async (childRunId: string) => ({ id: `receipt-${childRunId}` }))
+    const steer = jest.fn(async (childRunId: string) => ({
+      id: `receipt-${childRunId}`,
+      status: "delivered" as const,
+    }))
 
     const result = await steerDurableRun("run-s", "prefer the smaller diff", {
       coordinator: { steer } as never,
@@ -247,30 +260,53 @@ describe("steering a durable run", () => {
 
     expect(steer).toHaveBeenCalledTimes(2)
     expect(result.childCount).toBe(2)
-    expect(result.receiptIds.sort()).toEqual(["receipt-child-a", "receipt-child-b"])
+    expect(result.receipts.map((receipt) => receipt.id).sort()).toEqual([
+      "receipt-child-a",
+      "receipt-child-b",
+    ])
   })
 
-  it("records receipt ids on the trajectory and never the message itself", async () => {
+  it("keeps whether each child took the steer live or holds it for its next dispatch", async () => {
+    // F06: a held receipt reported as a delivery let the chat call a message
+    // the model never saw "accepted".
     await addChild("child-a", "running")
-    const steer = jest.fn(async () => ({ id: "receipt-1" }))
+    await addChild("child-b", "running")
+    const steer = jest.fn(async (childRunId: string) => ({
+      id: `receipt-${childRunId}`,
+      status: childRunId === "child-a" ? ("delivered" as const) : ("queued" as const),
+    }))
 
-    await steerDurableRun("run-s", "my email is dana@example.com", {
+    const result = await steerDurableRun("run-s", "prefer the smaller diff", {
       coordinator: { steer } as never,
       now: () => 10,
     })
 
-    const rows = await getDb().agentTeamTrajectory.toArray()
-    const serialized = JSON.stringify(rows)
-    expect(serialized).toContain("receipt-1")
-    expect(serialized).not.toContain("dana@example.com")
+    expect([...result.receipts].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: "receipt-child-a", status: "delivered" },
+      { id: "receipt-child-b", status: "queued" },
+    ])
+    expect(result.refused).toBeUndefined()
   })
 
-  it("lets the other children through when one refuses", async () => {
+  it("names a PII refusal without asking any child", async () => {
+    await addChild("child-a", "running")
+    const steer = jest.fn()
+    mockLeakCheck.mockReturnValueOnce(false)
+
+    const result = await steerDurableRun("run-s", "text that still leaks", {
+      coordinator: { steer } as never,
+      now: () => 10,
+    })
+
+    expect(result).toEqual({ receipts: [], childCount: 1, refused: "pii_blocked" })
+    expect(steer).not.toHaveBeenCalled()
+  })
+
+  it("reports a store refusal when children could act and none took it", async () => {
     await addChild("child-a", "running")
     await addChild("child-b", "running")
-    const steer = jest.fn(async (childRunId: string) => {
-      if (childRunId === "child-a") throw new Error("child is mid-checkpoint")
-      return { id: "receipt-b" }
+    const steer = jest.fn(async () => {
+      throw new Error("receipt store unavailable")
     })
 
     const result = await steerDurableRun("run-s", "go", {
@@ -278,7 +314,38 @@ describe("steering a durable run", () => {
       now: () => 10,
     })
 
-    expect(result.receiptIds).toEqual(["receipt-b"])
+    expect(result).toEqual({ receipts: [], childCount: 2, refused: "store_failed" })
+  })
+
+  it("records receipt ids on the trajectory and never the message itself", async () => {
+    await addChild("child-a", "running")
+    const steer = jest.fn(async () => ({ id: "receipt-1", status: "queued" as const }))
+
+    await steerDurableRun("run-s", "prefer the branch named zebra-crossing", {
+      coordinator: { steer } as never,
+      now: () => 10,
+    })
+
+    const rows = await getDb().agentTeamTrajectory.toArray()
+    const serialized = JSON.stringify(rows)
+    expect(serialized).toContain("receipt-1")
+    expect(serialized).not.toContain("zebra-crossing")
+  })
+
+  it("lets the other children through when one refuses", async () => {
+    await addChild("child-a", "running")
+    await addChild("child-b", "running")
+    const steer = jest.fn(async (childRunId: string) => {
+      if (childRunId === "child-a") throw new Error("child is mid-checkpoint")
+      return { id: "receipt-b", status: "queued" as const }
+    })
+
+    const result = await steerDurableRun("run-s", "go", {
+      coordinator: { steer } as never,
+      now: () => 10,
+    })
+
+    expect(result.receipts).toEqual([{ id: "receipt-b", status: "queued" }])
     expect(result.childCount).toBe(2)
   })
 
@@ -291,7 +358,7 @@ describe("steering a durable run", () => {
       now: () => 10,
     })
 
-    expect(result).toEqual({ receiptIds: [], childCount: 0 })
+    expect(result).toEqual({ receipts: [], childCount: 0 })
     expect(steer).not.toHaveBeenCalled()
   })
 })

@@ -54,6 +54,7 @@ import {
 } from "./durable/rate-limit-resume"
 import { isUltracodeActive, type UltracodeOverride } from "./ultracode/ultracode-trigger"
 import { teamPromptContext } from "./team-prompts"
+import { squadRunReportText } from "./squad/squad-run-report"
 import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 import { isTerminalRunStatus } from "@/types/execution/run"
 import { isTerminalTeamStatus, teamRunOutcome } from "@cognia/agent-orchestration/rules"
@@ -1281,16 +1282,15 @@ export async function runTeamLifecycle(
               ? "cancelled"
               : "failed"
         finalReason = result.error?.message
-        // Ultracode runs end on a single terminal `pattern.synthesize` node;
-        // runWorkflow surfaces its output as `result.output`. Persist the report
-        // to `team.finalResult` so the workspace surfaces the synthesized answer.
-        if (ultracodeActive && finalStatus === "completed") {
-          const report = (result.output as { report?: string } | undefined)?.report
-          if (report && deps.storeWriter.setFinalResult) {
-            deps.storeWriter.setFinalResult(teamId, report)
-          }
-        }
       }
+      // The team shows its latest run's report: an Ultracode run's synthesis
+      // (its one terminal `pattern.synthesize` step) or a task run's answers,
+      // and none when this run produced none, so a run never shows an
+      // earlier run's report as its own.
+      deps.storeWriter.setFinalResult?.(
+        teamId,
+        finalStatus === "completed" ? squadRunReportText(result.output) : undefined
+      )
       lifecycleResult = {
         runId: result.runId,
         status: finalStatus,
@@ -1301,6 +1301,7 @@ export async function runTeamLifecycle(
       return lifecycleResult
     } catch (err) {
       finalReason = err instanceof Error ? err.message : String(err)
+      deps.storeWriter.setFinalResult?.(teamId, undefined)
       throw err
     } finally {
       // The terminal execution-journal event is written for EVERY run.
@@ -1390,8 +1391,12 @@ export async function runTeamLifecycle(
               runId,
               status: finalStatus,
               ...(finalReason ? { reason: finalReason } : {}),
+              // This run's report, not the team's last Ultracode synthesis.
               ...(() => {
-                const finalResult = deps.storeReader.getTeam(teamId)?.finalResult
+                const finalResult =
+                  finalStatus === "completed"
+                    ? squadRunReportText(lifecycleResult?.output)
+                    : undefined
                 return finalResult ? { finalResult } : {}
               })(),
               chainDepth: deps.triggerChainDepth ?? 0,

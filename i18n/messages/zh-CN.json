@@ -10978,6 +10978,7 @@
       "discard": "删除",
       "failed": "未送达",
       "failedHint": "这一轮在它发出前就结束了",
+      "heldHint": "已由 Squad 暂存，下一位开始行动的成员会读到",
       "position": "{index}/{total}",
       "positionHint": "发送顺序中的位置 —— 可在运行面板里调整",
       "putBack": "放回输入框",

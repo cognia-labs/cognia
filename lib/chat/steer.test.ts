@@ -3,6 +3,7 @@ import {
   buildSteerPayload,
   frameSteer,
   frameSteerQueue,
+  isHeldSteer,
   resolveSteerDisplayState,
   steerBlocksOf,
   steerMetaOf,
@@ -149,6 +150,17 @@ describe("resolveSteerDisplayState", () => {
   it("keeps a queued steer waiting only while it can still be delivered", () => {
     expect(resolveSteerDisplayState(meta("queued"), { sessionBusy: true, stillQueued: true })).toBe(
       "queued"
+    )
+  })
+
+  it("keeps a steer a run holds queued while its turn runs, outside the session queue", () => {
+    const held: SteerMessageMeta = { entryId: "e1", state: "queued", heldReceiptIds: ["r1"] }
+    expect(isHeldSteer(held)).toBe(true)
+    expect(isHeldSteer(meta("queued"))).toBe(false)
+    expect(resolveSteerDisplayState(held, { sessionBusy: true, stillQueued: false })).toBe("queued")
+    // A turn that ended without settling it (a restart) leaves nothing to deliver it.
+    expect(resolveSteerDisplayState(held, { sessionBusy: false, stillQueued: false })).toBe(
+      "failed"
     )
   })
 

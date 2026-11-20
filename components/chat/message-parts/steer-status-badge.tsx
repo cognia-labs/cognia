@@ -31,7 +31,12 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { HOVER_REVEAL_CONTROL_BASE_CLASS } from "@/lib/ui/hover-reveal"
-import { resolveSteerDisplayState, steerMetaOf, stripSteerPrefix } from "@/lib/chat/steer"
+import {
+  isHeldSteer,
+  resolveSteerDisplayState,
+  steerMetaOf,
+  stripSteerPrefix,
+} from "@/lib/chat/steer"
 import {
   commitPendingSteerEdit,
   discardPendingSteer,
@@ -73,6 +78,9 @@ export function SteerStatusBadge({
   if (state === "applied") return null
 
   const pending = state === "queued"
+  // A run holds it (a Squad teammate's next dispatch takes it), not this
+  // session's queue: there is no local entry to rewrite or drop.
+  const editable = pending && !isHeldSteer(meta)
 
   const commitEdit = () => {
     const next = draft ?? ""
@@ -131,7 +139,15 @@ export function SteerStatusBadge({
         data-state={state}
       >
         <Icon className="size-3 shrink-0" aria-hidden />
-        <span title={state === "failed" ? (meta.reason ?? t("failedHint")) : t(`${state}Hint`)}>
+        <span
+          title={
+            state === "failed"
+              ? (meta.reason ?? t("failedHint"))
+              : pending && !editable
+                ? t("heldHint")
+                : t(`${state}Hint`)
+          }
+        >
           {t(state)}
         </span>
         {pending && steerQueue.length > 1 && queueIndex >= 0 && (
@@ -144,7 +160,7 @@ export function SteerStatusBadge({
           </span>
         )}
 
-        {pending && (
+        {editable && (
           <>
             <button
               type="button"
