@@ -374,6 +374,43 @@ export async function commitUsageRows(
   return { written: frozen.length, removed }
 }
 
+/**
+ * Delete usage rows and retract what they contributed to the budget
+ * projection, in one transaction: the one door for removing spend (a paired
+ * Host's tombstone, a mirror wipe), so the ledger, the rollup and a later
+ * rebuild still agree afterwards. Ids with no row are ignored.
+ */
+export async function retractUsageRows(
+  messageIds: readonly string[],
+  opts: { now?: number; assertCurrent?: () => void; expectDatabase?: string } = {}
+): Promise<{ removed: number }> {
+  const ids = [...new Set(messageIds.filter((id) => typeof id === "string" && id.length > 0))]
+  if (ids.length === 0) return { removed: 0 }
+  const now = opts.now ?? Date.now()
+  const db = getDb()
+  const dailies = new Map<string, UsageCommitDaily>()
+  let removed = 0
+  await db.transaction("rw", db.sessionUsage, db.providerCostDaily, async () => {
+    assertDatabase(db, opts.expectDatabase)
+    opts.assertCurrent?.()
+    const rows = (await db.sessionUsage.bulkGet(ids)).filter(
+      (row): row is SessionUsageRow => row != null
+    )
+    if (rows.length === 0) return
+    await db.sessionUsage.bulkDelete(rows.map((row) => row.messageId))
+    for (const row of rows) {
+      for (const daily of await moveProjection(db, row, null, now)) {
+        const key = `${daily.providerId}\u0000${daily.day}`
+        const prior = dailies.get(key)
+        dailies.set(key, { ...daily, deltaUsd: (prior?.deltaUsd ?? 0) + daily.deltaUsd })
+      }
+    }
+    removed = rows.length
+  })
+  for (const daily of dailies.values()) pushToMirror(daily)
+  return { removed }
+}
+
 type LedgerDb = ReturnType<typeof getDb>
 
 /** Put one frozen row and move the projection by the difference it makes. */

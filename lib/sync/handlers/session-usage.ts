@@ -14,7 +14,7 @@
 import { getDb } from "@/lib/db/schema"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import type { Transport } from "@/lib/tauri/transport-types"
-import { commitUsageRows } from "@/lib/usage/usage-ledger"
+import { commitUsageRows, retractUsageRows } from "@/lib/usage/usage-ledger"
 
 import type { SyncCursor, SyncOutcome } from "../types"
 import { runSyncHandler } from "./base"
@@ -53,12 +53,28 @@ export async function applySessionUsageRows(
   await commitUsageRows(stored, { assertCurrent })
 }
 
+/**
+ * A Host's usage tombstones, through the ledger: a row the Host removed takes
+ * its contribution out of this device's budget projection in the same
+ * transaction, so the global rollup, the project budget (read off the rows)
+ * and a later rebuild agree. A bare `bulkDelete` left the rollup counting it.
+ */
+export async function applySessionUsageDeletes(
+  ids: string[],
+  assertCurrent: () => void = () => {}
+): Promise<void> {
+  if (ids.length === 0) return
+  assertCurrent()
+  await retractUsageRows(ids, { assertCurrent })
+}
+
 export function syncSessionUsage(transport: Transport, cursor: SyncCursor): Promise<SyncOutcome> {
   return runSyncHandler<SessionUsageWireRow>(
     {
       table: "sessionUsage",
       getTable: () => getDb().sessionUsage as never,
       applyRows: applySessionUsageRows,
+      applyDeletes: applySessionUsageDeletes,
     },
     transport,
     cursor

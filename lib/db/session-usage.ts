@@ -737,11 +737,6 @@ export async function topByCost(
   return entries.slice(0, Math.max(0, Math.floor(limit)))
 }
 
-/** Drop every row for a session — called when the session itself is deleted. */
-export async function deleteUsageForSession(sessionId: string): Promise<void> {
-  await getDb().sessionUsage.where("sessionId").equals(sessionId).delete()
-}
-
 /**
  * Drop usage rows older than the retention window. Defaults to 90 days so the
  * unified usage table does not grow without bound across chat, workflow,

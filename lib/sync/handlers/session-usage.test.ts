@@ -85,7 +85,7 @@ describe("syncSessionUsage", () => {
     expect(buckets[0].totalCostUsd).toBeCloseTo(0.001, 9)
   })
 
-  it("drops a deleted conversation's rows by their message ids", async () => {
+  it("drops the rows a Host removed by their message ids", async () => {
     await getDb().sessionUsage.bulkPut([
       sessionUsageFromWire(usage("assistant-1"))!,
       sessionUsageFromWire(usage("assistant-2"))!,
@@ -94,6 +94,22 @@ describe("syncSessionUsage", () => {
     expect((await getDb().sessionUsage.toArray()).map((row) => row.messageId)).toEqual([
       "assistant-2",
     ])
+  })
+
+  it("takes a removed row out of the budget rollup with it, so every budget agrees (F13)", async () => {
+    const { readCostBudgetSpend } = await import("@/lib/usage/cost-budget-runtime")
+    const { rebuildProviderCostDaily } = await import("@/lib/usage/usage-ledger")
+    const now = Date.now()
+    const row = (id: string, costUsd: number) =>
+      sessionUsageFromWire(usage(id, { at: now, costUsd, costSource: "sdk", projectId: "p1" }))!
+    await commitUsageRow(row("assistant-1", 0.5))
+    await commitUsageRow(row("assistant-2", 0.75))
+    await syncSessionUsage(makeTransport([], ["assistant-1", "assistant-2"]), { since: 0 })
+    const spend = await readCostBudgetSpend(now, ["p1"])
+    expect([spend.dayUsd, spend.byProjectDayUsd?.p1]).toEqual([0, 0])
+    expect(await getDb().providerCostDaily.count()).toBe(0)
+    await rebuildProviderCostDaily(90, { now })
+    expect((await readCostBudgetSpend(now, ["p1"])).dayUsd).toBe(0)
   })
 })
 

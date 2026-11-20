@@ -1437,7 +1437,6 @@ describe("bulkDeleteSessions", () => {
         const reset = db.transaction("rw", [...deletion!.tables, db.settings], async (tx) => {
           await deletion!.deleteInsideTransaction(tx)
           expect(await db.chatGoals.count()).toBe(0)
-          expect(await db.sessionUsage.count()).toBe(0)
           expect(receive).not.toHaveBeenCalled()
           expect(releaseSandboxSessionMock).not.toHaveBeenCalled()
           await db.settings.clear()
@@ -1452,7 +1451,9 @@ describe("bulkDeleteSessions", () => {
           expect(await db.settings.count()).toBe(0)
           expect(await db.sessions.get(session.id)).toBeUndefined()
           expect(await db.syncTombstones.get(["goals", "combined-goal"])).toBeDefined()
-          expect(await db.syncTombstones.get(["sessionUsage", "combined-usage"])).toBeDefined()
+          // Spent money outlives the conversation (F13): kept, never tombstoned.
+          expect(await db.sessionUsage.count()).toBe(1)
+          expect(await db.syncTombstones.get(["sessionUsage", "combined-usage"])).toBeUndefined()
           expect(receive).toHaveBeenCalledWith({ type: "session-deleted", sessionId: session.id })
           expect(releaseSandboxSessionMock).toHaveBeenCalledWith(session.id)
         } else {
@@ -2027,27 +2028,42 @@ describe("deletion tombstones (companion sync v61)", () => {
     expect(markSessionRemovedMock).toHaveBeenCalledWith(s.id)
   })
 
-  it("tombstones the deleted conversation's usage rows, and only those", async () => {
+  it("keeps a deleted conversation's spend in every budget, before and after a rebuild (F13)", async () => {
+    const { commitUsageRow, rebuildProviderCostDaily } = await import("@/lib/usage/usage-ledger")
+    const { readCostBudgetSpend } = await import("@/lib/usage/cost-budget-runtime")
     const s = await createSession({ title: "X" })
-    const other = await createSession({ title: "Y" })
     const db = getDb()
-    const usage = (messageId: string, sessionId: string) => ({
+    const now = Date.now()
+    const usage = (messageId: string, costUsd: number) => ({
       messageId,
-      sessionId,
-      at: 1,
+      sessionId: s.id,
+      projectId: "p-f13",
+      providerId: "acme",
+      model: "m",
+      at: now,
       inputTokens: 1,
       outputTokens: 1,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      costUsd: 0,
+      costUsd,
       durationMs: 0,
     })
-    await db.sessionUsage.bulkPut([usage("a1", s.id), usage("a2", s.id), usage("b1", other.id)])
+    await commitUsageRow(usage("a1", 0.5))
+    await commitUsageRow(usage("a2", 0.75))
     await deleteSession(s.id)
 
-    const usageTombs = await db.syncTombstones.where("table").equals("sessionUsage").toArray()
-    expect(usageTombs.map((t) => t.id).sort()).toEqual(["a1", "a2"])
-    expect((await db.sessionUsage.toArray()).map((row) => row.messageId)).toEqual(["b1"])
+    expect((await db.sessionUsage.toArray()).map((row) => row.messageId).sort()).toEqual([
+      "a1",
+      "a2",
+    ])
+    expect(await db.syncTombstones.where("table").equals("sessionUsage").count()).toBe(0)
+    const before = await readCostBudgetSpend(now, ["p-f13"])
+    expect(before.dayUsd).toBeCloseTo(1.25, 9)
+    expect(before.byProjectDayUsd?.["p-f13"]).toBeCloseTo(1.25, 9)
+    await rebuildProviderCostDaily(90, { now })
+    const after = await readCostBudgetSpend(now, ["p-f13"])
+    expect(after.dayUsd).toBeCloseTo(1.25, 9)
+    expect(after.byProjectDayUsd?.["p-f13"]).toBeCloseTo(1.25, 9)
   })
 
   it("records session tombstones on bulkDeleteSessions", async () => {

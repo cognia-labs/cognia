@@ -717,6 +717,10 @@ async function resetMirrorsForHostChange(
         // mirrored subset is overwritten by the first pull anyway.
         if (table === "settings" || table === "outboundQueue") return
         try {
+          if (table === "sessionUsage") {
+            await resetUsageMirror(db, assertCurrent)
+            return
+          }
           await (db as unknown as Record<string, { clear: () => Promise<void> }>)[table]?.clear()
         } catch {
           // One table failing must not stop the rest.
@@ -731,6 +735,22 @@ async function resetMirrorsForHostChange(
   } catch {
     // See jsdoc.
   }
+}
+
+/**
+ * The usage half of the wipe. Mirrored usage rows go through the ledger, which
+ * takes them out of the budget rollup with them: a bare `clear()` left the
+ * rollup counting spend no row backed. Rows the external usage index scanned
+ * from this machine's own agent logs (`sourceId`) are this device's, never a
+ * Host's, and stay with their source state.
+ */
+async function resetUsageMirror(
+  db: ReturnType<typeof import("@/lib/db/schema").getDb>,
+  assertCurrent: () => void
+): Promise<void> {
+  const { retractUsageRows } = await import("@/lib/usage/usage-ledger")
+  const mirrored = (await db.sessionUsage.filter((row) => !row.sourceId).primaryKeys()) as string[]
+  await retractUsageRows(mirrored, { assertCurrent, expectDatabase: db.name })
 }
 
 /**

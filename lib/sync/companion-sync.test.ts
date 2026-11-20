@@ -1460,6 +1460,51 @@ describe("host isolation (v130)", () => {
     expect(await db.characters.get("from-host-a")).toBeUndefined()
   })
 
+  it("drops the previous host's usage with its budget share, and keeps locally scanned usage (F13)", async () => {
+    await whenSeeded()
+    const db = getDb()
+    const { commitUsageRow } = await import("@/lib/usage/usage-ledger")
+    const now = Date.now()
+    const base = {
+      at: now,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      durationMs: 0,
+    }
+    await commitUsageRow({
+      ...base,
+      messageId: "host-a-turn",
+      sessionId: "s",
+      providerId: "acme",
+      model: "m",
+      costUsd: 0.5,
+      costSource: "sdk",
+      costKnown: true,
+    })
+    await commitUsageRow({
+      ...base,
+      messageId: "scanned",
+      sessionId: "codex:1",
+      sourceId: "codex",
+      imported: true,
+      costUsd: 0,
+    })
+    expect(await db.providerCostDaily.count()).toBe(1)
+
+    const handler = jest.fn().mockResolvedValue(makeOkOutcome("characters", 0, 1))
+    const handlers = [{ table: "characters" as const, run: handler }]
+    await runSyncDown({ transport: makeTransport(), handlers })
+    companionConfig = { deviceId: "device-on-host-b" }
+    await runSyncDown({ transport: makeTransport(), handlers })
+    await new Promise((r) => setTimeout(r, 5))
+
+    expect((await db.sessionUsage.toArray()).map((row) => row.messageId)).toEqual(["scanned"])
+    // No rollup left counting spend that no row backs.
+    expect(await db.providerCostDaily.count()).toBe(0)
+  })
+
   it("keeps device-local settings when the host changes", async () => {
     // `settings` is the one mirrored table the client also writes locally.
     // Clearing it would throw away preferences the host never had.

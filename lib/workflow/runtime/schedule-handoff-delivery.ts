@@ -6,7 +6,15 @@ import {
   type HostDispatchDelivery,
 } from "@/lib/placement/host-dispatch-delivery"
 import type { Transport } from "@/lib/tauri/transport-types"
+import type { HostDispatchJobRow } from "@/types/placement/host-dispatch"
 import type { TriggerEvent } from "@/types/workflow/visual"
+import {
+  isWorkflowAppRunHandoffPayload,
+  parseWorkflowAppHandoffCreateReply,
+  WORKFLOW_APP_RUN_HANDOFF_KIND,
+  type WorkflowAppHandoffCreateRequest,
+  type WorkflowAppRunHandoffPayload,
+} from "./app-run-handoff"
 
 export interface WorkflowScheduleHandoffPayload extends Record<string, unknown> {
   deploymentId: string
@@ -21,6 +29,30 @@ export interface ScheduleHandoffDeliveryDeps {
   }>
   /** Persist the run the target minted. Injected only so tests avoid Dexie. */
   recordRemoteRun?: (dispatchId: string, remoteRunId: string) => Promise<void>
+  /**
+   * The serving App ledger (`lib/workflow/apps/app-run-placement.ts`), reached
+   * lazily so the trigger path never loads the App surface. Injected in tests.
+   */
+  appLedger?: WorkflowAppRunHandoffLedger
+}
+
+/** What a placed App run's delivery tells the serving invocation. */
+export interface WorkflowAppRunHandoffLedger {
+  accepted: (invocationId: string, remoteRunId: string) => Promise<{ cancelRequested: boolean }>
+  refused: (invocationId: string, code: string) => Promise<void>
+}
+
+const defaultAppLedger: WorkflowAppRunHandoffLedger = {
+  async accepted(invocationId, remoteRunId) {
+    const { recordWorkflowAppRunPlacementAccepted } =
+      await import("@/lib/workflow/apps/app-run-placement")
+    return recordWorkflowAppRunPlacementAccepted(invocationId, remoteRunId)
+  },
+  async refused(invocationId, code) {
+    const { recordWorkflowAppRunPlacementRefused, workflowAppRunRefusal } =
+      await import("@/lib/workflow/apps/app-run-placement")
+    await recordWorkflowAppRunPlacementRefused(invocationId, workflowAppRunRefusal(code))
+  },
 }
 
 function isHandoffPayload(value: unknown): value is WorkflowScheduleHandoffPayload {
@@ -47,7 +79,18 @@ export function createScheduleHandoffDelivery(
 ): HostDispatchDelivery {
   const openTarget = deps.openTarget ?? openRemoteHostTarget
   const recordRemoteRun = deps.recordRemoteRun ?? recordHostDispatchRemoteRun
+  const appLedger = deps.appLedger ?? defaultAppLedger
   return async (job) => {
+    if (job.domain === "schedule-handoff" && job.kind === WORKFLOW_APP_RUN_HANDOFF_KIND) {
+      if (!isWorkflowAppRunHandoffPayload(job.payload)) {
+        throw new HostDispatchDeliveryError(
+          "malformed",
+          false,
+          "workflow app-run handoff payload is malformed"
+        )
+      }
+      return deliverAppRunHandoff(job, job.payload, { openTarget, recordRemoteRun, appLedger })
+    }
     if (
       job.domain !== "schedule-handoff" ||
       job.kind !== "workflow.trigger" ||
@@ -94,6 +137,73 @@ export function createScheduleHandoffDelivery(
       target?.close()
     }
   }
+}
+
+/**
+ * Carry one App run the serving Host already admitted to the Host its Run
+ * Policy chose. The target admits the locked version once per job (keyed by
+ * the serving invocation id) and answers with a typed outcome: an acceptance
+ * is recorded on both the job and the serving invocation; a refusal is
+ * terminal and recorded on the invocation, except the target's own run
+ * capacity, which retries with the queue's backoff. Transport failures retry.
+ */
+async function deliverAppRunHandoff(
+  job: HostDispatchJobRow,
+  payload: WorkflowAppRunHandoffPayload,
+  deps: {
+    openTarget: NonNullable<ScheduleHandoffDeliveryDeps["openTarget"]>
+    recordRemoteRun: NonNullable<ScheduleHandoffDeliveryDeps["recordRemoteRun"]>
+    appLedger: WorkflowAppRunHandoffLedger
+  }
+): Promise<"succeeded"> {
+  const request: WorkflowAppHandoffCreateRequest = {
+    ...payload.binding,
+    idempotencyKey: job.idempotencyKey,
+    runId: payload.runId,
+    payload: payload.payload,
+    ...(payload.initiator ? { initiator: payload.initiator } : {}),
+  }
+  let target: Awaited<ReturnType<typeof deps.openTarget>> | undefined
+  let reply: ReturnType<typeof parseWorkflowAppHandoffCreateReply>
+  try {
+    target = await deps.openTarget(job.targetRef)
+    // No transport Idempotency-Key of our own: the Host replays a receipt for a
+    // reused key, which would pin a retryable refusal onto every retry, and it
+    // wants a UUID. Exactly-once is the payload's `idempotencyKey` (the
+    // serving invocation id), which the target's admission ledger dedupes.
+    reply = parseWorkflowAppHandoffCreateReply(
+      await target.transport.call<unknown>("workflow_app_handoff_create", request)
+    )
+    if (!reply) throw new Error("workflow_app_handoff_create returned a malformed reply")
+    if (reply.outcome === "accepted") {
+      await deps.recordRemoteRun(job.id, reply.runId)
+      const { cancelRequested } = await deps.appLedger.accepted(payload.invocationId, reply.runId)
+      // A caller cancelled while this job was in flight: the run exists now,
+      // so it is cancelled where it runs instead of being left orphaned.
+      if (cancelRequested) {
+        await target.transport
+          .call("workflow_handoff_run_cancel", { runId: reply.runId })
+          .catch((error) => {
+            console.warn("workflow app-run handoff: cancel after a late acceptance failed", error)
+          })
+      }
+      return "succeeded"
+    }
+  } catch (error) {
+    throw new HostDispatchDeliveryError(
+      "handoff_failed",
+      true,
+      `workflow app-run handoff failed: ${error instanceof Error ? error.message : String(error)}`
+    )
+  } finally {
+    target?.close()
+  }
+  const { refusal } = reply
+  if (refusal.retryable) {
+    throw new HostDispatchDeliveryError(refusal.code, true, refusal.message)
+  }
+  await deps.appLedger.refused(payload.invocationId, refusal.code)
+  throw new HostDispatchDeliveryError(refusal.code, false, refusal.message)
 }
 
 export function registerScheduleHandoffDelivery(

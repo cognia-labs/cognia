@@ -2493,6 +2493,14 @@ export function activateAccountDatabase(accountId: string, targetId?: string): v
   closeCachedDb()
 }
 
+/**
+ * The database {@link getDb} opens now, by name, without opening it: what a
+ * write started for "the account active at this moment" pins itself to.
+ */
+export function activeDatabaseName(): string {
+  return _activeDatabaseName ?? LEGACY_COGNIA_DB_NAME
+}
+
 export function clearAccountDatabaseSelection(): void {
   // Reset the scope namespace to the legacy db, but PRESERVE the account — a
   // db de-selection changes where rows live, not who owns them, so the last

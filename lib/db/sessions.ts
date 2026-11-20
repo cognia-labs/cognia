@@ -1340,7 +1340,6 @@ export async function prepareBulkDeleteSessions(
     db.chatInputHistory,
     db.chatTurnSummaries,
     db.chatTranscriptIndexState,
-    db.sessionUsage,
     db.sessionPeerMessages,
     db.chatGoals,
     db.chatGoalEvents,
@@ -1441,7 +1440,6 @@ export async function prepareBulkDeleteSessions(
       // before the refs and jobs below go.
       await preserveGeneratedVideoRecords(db, deletedIds)
       const allMessageIds: string[] = []
-      const usageIds: string[] = []
       const mediaRefs = await db.messageMediaRefs.where("sessionId").anyOf(deletedIds).toArray()
       for (const ref of mediaRefs) {
         if (ref.sessionAsset) sessionAssetOrphans.add(ref.hash)
@@ -1457,14 +1455,15 @@ export async function prepareBulkDeleteSessions(
       await db.chatInputHistory.where("sessionId").anyOf(deletedIds).delete()
       await db.chatTurnSummaries.where("sessionId").anyOf(deletedIds).delete()
       await db.chatTranscriptIndexState.bulkDelete(deletedIds)
+      // The conversation's usage rows stay (ids and numbers, no content): the
+      // money was spent, so the day's, month's and workspace's budgets keep
+      // counting it until the usage retention window drops the rows. Deleting
+      // them took the spend out of the project budget but not the global
+      // rollup, and a rebuild then took it out of that too.
       for (const id of deletedIds) {
         const msgIds = (await db.messages.where("sessionId").equals(id).primaryKeys()) as string[]
         allMessageIds.push(...msgIds)
         await db.messages.where("sessionId").equals(id).delete()
-        usageIds.push(
-          ...((await db.sessionUsage.where("sessionId").equals(id).primaryKeys()) as string[])
-        )
-        await db.sessionUsage.where("sessionId").equals(id).delete()
         await db.sessions.delete(id)
       }
       await db.sessionPeerMessages
@@ -1488,9 +1487,6 @@ export async function prepareBulkDeleteSessions(
       // every paired client.
       scope?.assertActive()
       await recordTombstones("goals", goalIds, at)
-      // Usage rows are mirrored too (a member's dashboard reads the Host's).
-      scope?.assertActive()
-      await recordTombstones("sessionUsage", usageIds, at)
       scope?.assertActive()
     },
     async finish(committed: boolean): Promise<void> {

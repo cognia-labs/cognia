@@ -1,7 +1,6 @@
 // Coverage for the session-usage CRUD + aggregator layer.
 
 import {
-  deleteUsageForSession,
   listUsageForSession,
   pruneSessionUsageOlderThan,
   isLocalSpend,
@@ -587,17 +586,6 @@ describe("totalsByAllSessions + topByCost", () => {
     // turns even when one of those turns is $0.
     const top = await topByCost(10)
     expect(top.map((r) => r.sessionId)).toEqual(["a-session", "z-session"])
-  })
-})
-
-describe("deleteUsageForSession", () => {
-  it("removes every row for the session and leaves others alone", async () => {
-    await upsertSessionUsage(row("m1", "s1"))
-    await upsertSessionUsage(row("m2", "s1"))
-    await upsertSessionUsage(row("m3", "s2"))
-    await deleteUsageForSession("s1")
-    expect((await listUsageForSession("s1")).length).toBe(0)
-    expect((await listUsageForSession("s2")).length).toBe(1)
   })
 })
 

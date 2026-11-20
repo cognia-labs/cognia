@@ -254,8 +254,7 @@ export function aggregateStats(spans: AgentTraceSpan[]): AgentTraceStatsSummary 
   }
 }
 
-/** Drop every span for a session — called when the session itself is deleted
- * (mirrors `deleteUsageForSession`). */
+/** Drop every span for a session — called when the session itself is deleted. */
 export async function deleteSpansForSession(sessionId: string): Promise<void> {
   if (!sessionId) return
   await getDb().agentTraces.where("sessionId").equals(sessionId).delete()
