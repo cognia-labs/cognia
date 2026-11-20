@@ -2,6 +2,25 @@ export const PRESENTATION_SCHEMA_VERSION = 1 as const
 export const PRESENTATION_ARTIFACT_KIND = "cognia-presentations/deck"
 export const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
+/**
+ * A stretch of text with its own formatting. A text or shape element carries
+ * runs only when its formatting is mixed ("Alpha" bold at 18 pt, "Beta"
+ * italic at 36 pt); `text` is then exactly the runs' text joined, and a "\n"
+ * inside a run ends a paragraph. A property a run leaves out comes from the
+ * element (its `fontSize`, `bold` and `color`).
+ */
+export interface SlideTextRun {
+  text: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  /** Points. */
+  fontSize?: number
+  /** 6-digit RGB hex. */
+  color?: string
+}
+
 export interface PresentationChartSeries {
   name: string
   values: number[]
@@ -19,6 +38,7 @@ export type SlideElement =
       fontSize?: number
       bold?: boolean
       color?: string
+      runs?: SlideTextRun[]
     }
   | {
       id: string
@@ -31,6 +51,7 @@ export type SlideElement =
       fill?: string
       line?: string
       text?: string
+      runs?: SlideTextRun[]
     }
   | {
       id: string
@@ -168,6 +189,31 @@ function assertImagePayload(label: string, dataBase64: string, mimeType: ImageMi
     )
 }
 
+function assertRunsShape(label: string, runs: unknown): void {
+  if (!Array.isArray(runs) || !runs.length)
+    throw new Error(`Element ${label} runs must be a non-empty array.`)
+  for (const run of runs) {
+    if (!isRecord(run) || typeof run.text !== "string")
+      throw new Error(`Element ${label} runs need a string text each.`)
+    for (const flag of ["bold", "italic", "underline", "strike"] as const) {
+      if (run[flag] !== undefined && typeof run[flag] !== "boolean")
+        throw new Error(`Element ${label} run ${flag} must be a boolean.`)
+    }
+    if (run.fontSize !== undefined && !(isFiniteNumber(run.fontSize) && run.fontSize > 0))
+      throw new Error(`Element ${label} run fontSize must be a positive number.`)
+    if (
+      run.color !== undefined &&
+      (typeof run.color !== "string" || !/^#?[0-9A-Fa-f]{6}$/.test(run.color))
+    )
+      throw new Error(`Element ${label} run color must be a 6-digit hex color.`)
+  }
+}
+
+/** The text an element's runs spell, or undefined when it has none. */
+export function runsText(element: { runs?: SlideTextRun[] }): string | undefined {
+  return element.runs?.map((run) => run.text).join("")
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -201,6 +247,7 @@ export function assertSlideElements(
       if (!isFiniteNumber(element[field]))
         throw new Error(`Element ${label} requires a finite number ${field}.`)
     }
+    if (element.runs !== undefined) assertRunsShape(label, element.runs)
     if (element.type === "text") {
       if (typeof element.text !== "string")
         throw new Error(`Text element ${label} requires a string text.`)
@@ -424,7 +471,25 @@ export function validatePresentation(deck: PresentationDeck) {
           slideId: slide.id,
           elementId: element.id,
         })
-      if (element.type === "text" && (element.fontSize ?? 24) < 14)
+      if (
+        (element.type === "text" || element.type === "shape") &&
+        element.runs !== undefined &&
+        runsText(element) !== (element.text ?? "")
+      )
+        findings.push({
+          severity: "error",
+          code: "text.runs",
+          message: `Element ${element.id}'s runs do not spell its text; set both together.`,
+          slideId: slide.id,
+          elementId: element.id,
+        })
+      if (
+        element.type === "text" &&
+        Math.min(
+          element.fontSize ?? 24,
+          ...(element.runs ?? []).map((run) => run.fontSize ?? element.fontSize ?? 24)
+        ) < 14
+      )
         findings.push({
           severity: "warning",
           code: "text.small",

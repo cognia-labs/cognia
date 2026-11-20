@@ -134,12 +134,12 @@ export function createPresentationsRuntime(ctx: PresentationsPluginContext) {
       const findings = validatePresentation(deck)
       if (!findings.some((finding) => finding.severity === "error")) {
         const bytes = await exportPptx(deck)
-        const reopened = await validatePptxRoundTrip(bytes)
-        if (!reopened.valid || reopened.slideCount !== deck.slides.length)
+        const reopened = await validatePptxRoundTrip(bytes, deck)
+        if (!reopened.valid)
           findings.push({
             severity: "error",
             code: "pptx.roundtrip",
-            message: "Generated PPTX did not reopen with the expected slide count.",
+            message: `Generated PPTX did not reopen as this deck: ${reopened.issues.join(" ")}`,
           })
       }
       return { ok: !findings.some((finding) => finding.severity === "error"), artifactId, findings }
@@ -175,12 +175,14 @@ export function createPresentationsRuntime(ctx: PresentationsPluginContext) {
           error: "The presentation has validation errors; fix them before exporting.",
         }
       const bytes = await exportPptx(deck)
-      const reopened = await validatePptxRoundTrip(bytes)
-      if (!reopened.valid || reopened.slideCount !== deck.slides.length)
+      const reopened = await validatePptxRoundTrip(bytes, deck)
+      if (!reopened.valid)
         return {
           ok: false as const,
           artifactId,
-          error: "The generated PPTX did not reopen with every slide, so nothing was saved.",
+          error: `The generated PPTX did not reopen as this deck, so nothing was saved: ${reopened.issues.join(
+            " "
+          )}`,
         }
       const filename = normalizePptxName(
         suggestedName ?? deck.sourceFilename?.replace(/\.pptx$/i, "") ?? deck.title

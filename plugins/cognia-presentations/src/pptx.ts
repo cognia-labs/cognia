@@ -9,6 +9,7 @@ import {
   type PresentationDeck,
   type PresentationSlide,
   type SlideElement,
+  type SlideTextRun,
 } from "./model"
 
 const EMU = 914400
@@ -181,7 +182,7 @@ async function importSlide(
     const geometry = blockGeometry(block, deck, fallbackY)
     fallbackY = geometry.y + geometry.height + 0.25
     if (tag === "sp") {
-      const element = importShape(block, geometry, nextId())
+      const element = importShape(block, geometry, nextId(), features)
       if (element) elements.push(element)
     } else if (tag === "pic") {
       const element = await importPicture(zip, block, geometry, rels, nextId(), features)
@@ -223,28 +224,39 @@ async function importSlide(
 function importShape(
   block: string,
   geometry: { x: number; y: number; width: number; height: number },
-  id: string
+  id: string,
+  features: Set<string>
 ): SlideElement | null {
-  const paragraphs = blockParagraphs(block)
-  const text = paragraphs.join("\n")
+  const body = textRuns(block)
+  if (body.lost) features.add("text formatting")
+  const text = body.runs.map((run) => run.text).join("")
+  // Runs only when the formatting actually varies. The element then keeps just
+  // what every run shares, so a run never inherits a format it did not have
+  // (a plain "Beta" turning bold because "Alpha" was).
+  const visible = body.runs.filter((run) => run.text.trim())
+  const first = visible[0] ?? body.runs[0]
+  const mixed = visible.some((run) => !sameRunFormat(run, first))
+  const shared = <K extends "fontSize" | "bold" | "color">(key: K): SlideTextRun[K] | undefined =>
+    visible.every((run) => run[key] === first?.[key]) ? first?.[key] : undefined
   const isTextBox = /\btxBox="1"/.test(block) || /<a:noFill\s*\/>/.test(spPrOf(block))
   const preset = block.match(/<a:prstGeom\s+prst="([^"]+)"/)?.[1]
   const fill = shapeFill(block)
   if (isTextBox || (!fill && (!preset || preset === "rect"))) {
     if (!text.trim()) return null
-    const runProps = block.match(/<a:rPr\b[^>]*>/)?.[0] ?? ""
-    const size = numberAttr(runProps, "sz")
     return {
       id,
       type: "text",
       ...geometry,
       text,
-      ...(size ? { fontSize: size / 100 } : {}),
-      ...(/\bb="1"/.test(runProps) ? { bold: true } : {}),
-      ...(runColor(block) ? { color: runColor(block) } : {}),
+      ...(shared("fontSize") ? { fontSize: shared("fontSize") } : {}),
+      ...(shared("bold") ? { bold: true } : {}),
+      ...(shared("color") ? { color: shared("color") } : {}),
+      ...(mixed ? { runs: body.runs } : {}),
     }
   }
   const shape = preset === "ellipse" || preset === "roundRect" ? preset : ("rect" as const)
+  // A shape's text has no element-level format: any explicit run format is kept as runs.
+  const formatted = body.runs.some((run) => run.text.trim() && Object.keys(run).length > 1)
   return {
     id,
     type: "shape",
@@ -253,7 +265,96 @@ function importShape(
     ...(fill ? { fill } : {}),
     ...(shapeLine(block) ? { line: shapeLine(block) } : {}),
     ...(text.trim() ? { text } : {}),
+    ...(text.trim() && formatted ? { runs: body.runs } : {}),
   }
+}
+
+function sameRunFormat(a: SlideTextRun, b: SlideTextRun | undefined): boolean {
+  return (
+    Boolean(a.bold) === Boolean(b?.bold) &&
+    Boolean(a.italic) === Boolean(b?.italic) &&
+    Boolean(a.underline) === Boolean(b?.underline) &&
+    Boolean(a.strike) === Boolean(b?.strike) &&
+    a.fontSize === b?.fontSize &&
+    a.color === b?.color
+  )
+}
+
+/** Theme fonts ("+mn-lt", "+mj-ea") are the deck's own, not a run's formatting. */
+const THEME_TYPEFACE = /^\+m[nj]-/
+
+/**
+ * A text body as runs: text (`a:t` of `a:r` and `a:fld`), soft line breaks
+ * and paragraph ends as "\n", each run with the formatting the model keeps.
+ * `lost` when a run carries formatting it cannot keep (a theme or preset
+ * color, an explicit typeface, a double or wavy underline, a double strike,
+ * sub/superscript, a highlight, a hyperlink, a gradient fill).
+ */
+function textRuns(block: string): { runs: SlideTextRun[]; lost: boolean } {
+  const txBody = block.match(/<p:txBody\b[\s\S]*?<\/p:txBody>/)?.[0] ?? ""
+  const paragraphs = txBody.match(/<a:p\b[^>]*>[\s\S]*?<\/a:p>|<a:p\b[^>]*\/>/g) ?? []
+  const runs: SlideTextRun[] = []
+  let lost = false
+  const push = (run: SlideTextRun) => {
+    const last = runs[runs.length - 1]
+    if (last && sameRunFormat(last, run)) last.text += run.text
+    else runs.push(run)
+  }
+  paragraphs.forEach((paragraph, index) => {
+    if (index > 0) {
+      const last = runs[runs.length - 1]
+      if (last) last.text += "\n"
+      else runs.push({ text: "\n" })
+    }
+    for (const match of paragraph.matchAll(
+      /<a:(r|fld)\b[^>]*>([\s\S]*?)<\/a:\1>|<a:br\b[^>]*?(?:\/>|>[\s\S]*?<\/a:br>)/g
+    )) {
+      if (!match[1]) {
+        const last = runs[runs.length - 1]
+        if (last) last.text += "\n"
+        continue
+      }
+      const content = match[2]
+      const text = [...content.matchAll(/<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g)]
+        .map((part) => decodeXml(part[1]))
+        .join("")
+      if (!text) continue
+      const props = content.match(/<a:rPr\b[^>]*?(?:\/>|>[\s\S]*?<\/a:rPr>)/)?.[0] ?? ""
+      const open = props.match(/^<a:rPr\b[^>]*>/)?.[0] ?? ""
+      const size = numberAttr(open, "sz")
+      const underline = open.match(/\bu="([^"]+)"/)?.[1]
+      const strike = open.match(/\bstrike="([^"]+)"/)?.[1]
+      const fill = props.match(/<a:solidFill>\s*<a:(\w+)\b[^>]*?\bval="([^"]*)"/)
+      const typeface = props.match(/<a:latin\b[^>]*\btypeface="([^"]*)"/)?.[1]
+      if (underline && underline !== "none" && underline !== "sng") lost = true
+      if (strike && strike !== "noStrike" && strike !== "sngStrike") lost = true
+      if (fill && fill[1] !== "srgbClr") lost = true
+      if (
+        /<a:(?:gradFill|pattFill|highlight|hlinkClick)\b/.test(props) ||
+        /\bbaseline="-?[1-9]/.test(open)
+      )
+        lost = true
+      if (typeface && !THEME_TYPEFACE.test(typeface)) lost = true
+      push({
+        text,
+        ...(/\bb="(?:1|true)"/.test(open) ? { bold: true } : {}),
+        ...(/\bi="(?:1|true)"/.test(open) ? { italic: true } : {}),
+        ...(underline === "sng" ? { underline: true } : {}),
+        ...(strike === "sngStrike" ? { strike: true } : {}),
+        ...(size ? { fontSize: size / 100 } : {}),
+        ...(fill?.[1] === "srgbClr" && /^[0-9A-Fa-f]{6}$/.test(fill[2])
+          ? { color: fill[2].toUpperCase() }
+          : {}),
+      })
+    }
+  })
+  // A closing empty paragraph is layout, not text.
+  while (runs.length && /\n$/.test(runs[runs.length - 1].text)) {
+    const last = runs[runs.length - 1]
+    last.text = last.text.replace(/\n+$/, "")
+    if (!last.text) runs.pop()
+  }
+  return { runs, lost }
 }
 
 async function importPicture(
@@ -440,12 +541,6 @@ function shapeLine(block: string): string | undefined {
   return spPr.match(/<a:ln\b[^>]*>[\s\S]*?<a:srgbClr val="([0-9A-Fa-f]{6})"/)?.[1]?.toUpperCase()
 }
 
-function runColor(block: string): string | undefined {
-  return block
-    .match(/<a:rPr\b[^>]*>[\s\S]*?<a:solidFill>\s*<a:srgbClr val="([0-9A-Fa-f]{6})"/)?.[1]
-    ?.toUpperCase()
-}
-
 function cachedPoints(xml: string): Array<{ idx: number; text: string }> {
   return [...xml.matchAll(/<c:pt\s+idx="(\d+)"[^>]*>\s*<c:v>([\s\S]*?)<\/c:v>\s*<\/c:pt>/g)]
     .map((match) => ({ idx: Number(match[1]), text: decodeXml(match[2]) }))
@@ -553,17 +648,84 @@ function base64Encode(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-export async function validatePptxRoundTrip(bytes: Uint8Array) {
+/**
+ * Reopen a generated PPTX: it must be a package with a master, and, given the
+ * deck it was written from (`expected`), every slide's text must come back
+ * with the same formatting. Mixed runs once collapsed into the first run's
+ * style while this still said "valid".
+ */
+export async function validatePptxRoundTrip(
+  bytes: Uint8Array,
+  expected?: PresentationDeck
+): Promise<{ valid: boolean; slideCount: number; issues: string[] }> {
   const zip = await JSZip.loadAsync(bytes)
   const presentation = zip.file("ppt/presentation.xml")
-  if (!presentation) return { valid: false, slideCount: 0 }
+  if (!presentation)
+    return { valid: false, slideCount: 0, issues: ["The package has no presentation part."] }
   const xml = await presentation.async("string")
-  return {
-    valid: Boolean(
-      zip.file("[Content_Types].xml") && zip.file("ppt/slideMasters/slideMaster1.xml")
-    ),
-    slideCount: [...xml.matchAll(/<p:sldId\b/g)].length,
+  const slideCount = [...xml.matchAll(/<p:sldId\b/g)].length
+  const issues: string[] = []
+  if (!zip.file("[Content_Types].xml") || !zip.file("ppt/slideMasters/slideMaster1.xml"))
+    issues.push("The package is missing its content types or slide master.")
+  if (expected) {
+    if (slideCount !== expected.slides.length)
+      issues.push(
+        `The deck has ${expected.slides.length} slides; the file reopens with ${slideCount}.`
+      )
+    else issues.push(...(await textFormattingIssues(bytes, expected)))
   }
+  return { valid: issues.length === 0, slideCount, issues }
+}
+
+/** One element's text and formatting, comparable across a round trip that renumbers ids. */
+function textSignature(element: SlideElement): string | undefined {
+  if (element.type !== "text" && element.type !== "shape") return undefined
+  const text = element.text ?? ""
+  if (!text.trim()) return undefined
+  const base = {
+    fontSize: element.type === "text" ? (element.fontSize ?? 24) : 16,
+    bold: element.type === "text" ? Boolean(element.bold) : false,
+    color: element.type === "text" ? (element.color ?? "0F172A").toUpperCase() : undefined,
+  }
+  // Format per character, so the same look written as different runs compares equal.
+  const characters: string[] = []
+  for (const run of element.runs ?? [{ text }]) {
+    const format = JSON.stringify([
+      run.fontSize ?? base.fontSize,
+      run.bold ?? base.bold,
+      Boolean(run.italic),
+      Boolean(run.underline),
+      Boolean(run.strike),
+      run.color?.toUpperCase() ?? base.color,
+    ])
+    for (const character of run.text)
+      characters.push(character === "\n" ? "\n" : format + character)
+  }
+  return JSON.stringify([element.type, characters])
+}
+
+async function textFormattingIssues(
+  bytes: Uint8Array,
+  expected: PresentationDeck
+): Promise<string[]> {
+  const reopened = await importPptx(bytes, "roundtrip.pptx")
+  const issues: string[] = []
+  expected.slides.forEach((slide, index) => {
+    const back = new Map<string, number>()
+    for (const element of reopened.slides[index]?.elements ?? []) {
+      const signature = textSignature(element)
+      if (signature) back.set(signature, (back.get(signature) ?? 0) + 1)
+    }
+    for (const element of slide.elements) {
+      const signature = textSignature(element)
+      if (!signature) continue
+      const left = back.get(signature) ?? 0
+      if (left > 0) back.set(signature, left - 1)
+      else
+        issues.push(`Text ${element.id} on slide ${slide.id} does not reopen with its formatting.`)
+    }
+  })
+  return issues
 }
 
 function slideXml(
@@ -739,11 +901,54 @@ async function nativeChart(
   return { xml, workbook: new Uint8Array(await workbook.xlsx.writeBuffer()) }
 }
 
+/**
+ * `<a:p>` paragraphs for a text body: a "\n" in the text ends a paragraph, and
+ * each run writes its own properties over the element's `defaults`. (Text
+ * with a "\n" used to go out as one paragraph holding the raw line feed.)
+ */
+function paragraphsXml(
+  runs: readonly SlideTextRun[],
+  defaults: { fontSize: number; bold?: boolean; color?: string }
+): string {
+  const paragraphs: string[][] = [[]]
+  for (const run of runs) {
+    run.text.split("\n").forEach((piece, index) => {
+      if (index > 0) paragraphs.push([])
+      if (!piece) return
+      const size = Math.round((run.fontSize ?? defaults.fontSize) * 100)
+      const fill = run.color ?? defaults.color
+      const attributes = [
+        `lang="en-US"`,
+        `sz="${size}"`,
+        ...((run.bold ?? defaults.bold) ? [`b="1"`] : []),
+        ...(run.italic ? [`i="1"`] : []),
+        ...(run.underline ? [`u="sng"`] : []),
+        ...(run.strike ? [`strike="sngStrike"`] : []),
+      ].join(" ")
+      const solidFill = fill ? `<a:solidFill><a:srgbClr val="${color(fill)}"/></a:solidFill>` : ""
+      paragraphs[paragraphs.length - 1].push(
+        `<a:r><a:rPr ${attributes}>${solidFill}</a:rPr><a:t>${escapeXml(piece)}</a:t></a:r>`
+      )
+    })
+  }
+  return paragraphs
+    .map((runsXml) => `<a:p>${runsXml.join("")}<a:endParaRPr lang="en-US"/></a:p>`)
+    .join("")
+}
+
 function renderTextShape(element: Extract<SlideElement, { type: "text" }>, id: number) {
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXml(element.id)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${transform(element)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="${Math.round((element.fontSize ?? 24) * 100)}"${element.bold ? ' b="1"' : ""}><a:solidFill><a:srgbClr val="${color(element.color ?? "0F172A")}"/></a:solidFill></a:rPr><a:t>${escapeXml(element.text)}</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>`
+  const body = paragraphsXml(element.runs ?? [{ text: element.text }], {
+    fontSize: element.fontSize ?? 24,
+    bold: element.bold,
+    color: element.color ?? "0F172A",
+  })
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXml(element.id)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${transform(element)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>${body}</p:txBody></p:sp>`
 }
 function renderShape(element: Extract<SlideElement, { type: "shape" }>, id: number) {
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXml(element.id)}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${transform(element)}<a:prstGeom prst="${element.shape ?? "rect"}"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${color(element.fill ?? "FFFFFF")}"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="${color(element.line ?? "CBD5E1")}"/></a:solidFill></a:ln></p:spPr>${element.text ? `<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="1600"/><a:t>${escapeXml(element.text)}</a:t></a:r></a:p></p:txBody>` : ""}</p:sp>`
+  const body = element.text
+    ? `<p:txBody><a:bodyPr/><a:lstStyle/>${paragraphsXml(element.runs ?? [{ text: element.text }], { fontSize: 16 })}</p:txBody>`
+    : ""
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXml(element.id)}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${transform(element)}<a:prstGeom prst="${element.shape ?? "rect"}"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${color(element.fill ?? "FFFFFF")}"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="${color(element.line ?? "CBD5E1")}"/></a:solidFill></a:ln></p:spPr>${body}</p:sp>`
 }
 function transform(element: { x: number; y: number; width: number; height: number }) {
   return `<a:xfrm><a:off x="${Math.round(element.x * EMU)}" y="${Math.round(element.y * EMU)}"/><a:ext cx="${Math.round(element.width * EMU)}" cy="${Math.round(element.height * EMU)}"/></a:xfrm>`

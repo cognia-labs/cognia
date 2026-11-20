@@ -7,6 +7,7 @@ import {
   validatePresentation,
   type PresentationDeck,
   type SlideElement,
+  type SlideTextRun,
 } from "./model"
 
 /**
@@ -234,11 +235,54 @@ function renderDeck(
   return root
 }
 
+/**
+ * The element's text, as one span per run when its formatting is mixed. A
+ * run's own property overrides the element's, which the node itself carries.
+ */
+function renderText(
+  node: HTMLElement,
+  text: string,
+  runs: readonly SlideTextRun[] | undefined,
+  deck: PresentationDeck
+): void {
+  if (!runs?.length) {
+    node.textContent = text
+    return
+  }
+  for (const run of runs) {
+    const span = document.createElement("span")
+    span.textContent = run.text
+    if (run.bold !== undefined) span.style.fontWeight = run.bold ? "700" : "400"
+    if (run.italic) span.style.fontStyle = "italic"
+    const decorations = [
+      ...(run.underline ? ["underline"] : []),
+      ...(run.strike ? ["line-through"] : []),
+    ]
+    if (decorations.length) span.style.textDecorationLine = decorations.join(" ")
+    if (run.fontSize !== undefined) {
+      const { points, cqh } = slideHeightShare(run.fontSize, deck)
+      // Points first, for a renderer without container query units.
+      span.style.fontSize = `${points}pt`
+      span.style.setProperty("font-size", `${cqh}cqh`)
+    }
+    if (run.color) span.style.color = `#${normalizeHexColor(run.color, deck.theme.foreground)}`
+    node.appendChild(span)
+  }
+}
+
+/** A point size as a share of the slide height, so text scales with the slide container. */
+function slideHeightShare(
+  fontSize: number,
+  deck: PresentationDeck
+): { points: number; cqh: string } {
+  const points = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 24
+  return { points, cqh: ((points / (deck.height * 72)) * 100).toFixed(3) }
+}
+
 /** fontSize is in points; `cqh` scales it with the slide-height container. */
 function scaledFontSize(fontSize: number, deck: PresentationDeck): string {
-  const points = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 24
-  const cqh = (points / (deck.height * 72)) * 100
-  return `font-size:${points}pt;font-size:${cqh.toFixed(3)}cqh`
+  const { points, cqh } = slideHeightShare(fontSize, deck)
+  return `font-size:${points}pt;font-size:${cqh}cqh`
 }
 
 function renderElement(
@@ -251,10 +295,10 @@ function renderElement(
   )
   node.style.cssText = `position:absolute;left:${(element.x / deck.width) * 100}%;top:${(element.y / deck.height) * 100}%;width:${(element.width / deck.width) * 100}%;height:${(element.height / deck.height) * 100}%;box-sizing:border-box;overflow:hidden`
   if (element.type === "text") {
-    node.textContent = element.text
+    renderText(node, element.text, element.runs, deck)
     node.style.cssText += `;${scaledFontSize(element.fontSize ?? 24, deck)};line-height:1.25;white-space:pre-wrap;font-weight:${element.bold ? "700" : "400"};color:#${normalizeHexColor(element.color, deck.theme.foreground)}`
   } else if (element.type === "shape") {
-    node.textContent = element.text ?? ""
+    renderText(node, element.text ?? "", element.runs, deck)
     node.style.cssText +=
       `;display:flex;align-items:center;justify-content:center;text-align:center;` +
       `${scaledFontSize(14, deck)};padding:0.4em;white-space:pre-wrap;` +

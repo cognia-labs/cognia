@@ -38,6 +38,26 @@ const slideElement = {
     fontSize: { type: "number", minimum: 1, description: "Points (text)" },
     bold: { type: "boolean" },
     color: { type: "string", description: "Hex color without #, e.g. 1F2937" },
+    runs: {
+      type: "array",
+      minItems: 1,
+      description:
+        "Mixed formatting (text/shape): stretches of text with their own format. Their text joined must equal `text`; a \\n in a run ends a paragraph. Omitted properties come from the element.",
+      items: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          bold: { type: "boolean" },
+          italic: { type: "boolean" },
+          underline: { type: "boolean" },
+          strike: { type: "boolean" },
+          fontSize: { type: "number", exclusiveMinimum: 0, description: "Points" },
+          color: { type: "string", pattern: "^#?[0-9A-Fa-f]{6}$" },
+        },
+        required: ["text"],
+        additionalProperties: false,
+      },
+    },
     shape: { enum: ["rect", "roundRect", "ellipse"] },
     fill: { type: "string", description: "Hex fill without # (shape)" },
     line: { type: "string", description: "Hex outline without # (shape)" },

@@ -174,3 +174,49 @@ it("previews every chart series, negative values and series names", () => {
   expect(container.textContent).toContain("去年今年")
   handle.dispose()
 })
+
+it("draws mixed runs with their own size, weight and style (F14)", () => {
+  const deck = applyPresentationOperations(createPresentation("Deck"), [
+    {
+      op: "addSlide",
+      title: "Runs",
+      elements: [
+        {
+          id: "t1",
+          type: "text",
+          x: 1,
+          y: 1,
+          width: 6,
+          height: 1,
+          text: "Alpha Beta",
+          runs: [
+            { text: "Alpha ", bold: true, fontSize: 18 },
+            {
+              text: "Beta",
+              italic: true,
+              underline: true,
+              strike: true,
+              fontSize: 36,
+              color: "FF0000",
+            },
+          ],
+        },
+      ],
+    },
+  ])
+  const container = document.createElement("div")
+  createPresentationRenderer(t, noLocale).mount(
+    { content: JSON.stringify(deck) } as never,
+    container
+  )
+
+  const spans = [...container.querySelectorAll<HTMLElement>(".cpres-canvas span")]
+  const alpha = spans.find((span) => span.textContent === "Alpha ")!
+  const beta = spans.find((span) => span.textContent === "Beta")!
+  expect(alpha.style.fontWeight).toBe("700")
+  expect(alpha.style.fontSize).toMatch(/^(18pt|[\d.]+cqh)$/)
+  expect(beta.style.fontStyle).toBe("italic")
+  expect(beta.style.textDecorationLine).toBe("underline line-through")
+  expect(beta.style.color).toBe("rgb(255, 0, 0)")
+  expect(beta.style.fontWeight).toBe("")
+})

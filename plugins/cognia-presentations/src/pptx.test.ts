@@ -40,7 +40,11 @@ it("exports a native PPTX package and reopens slide text", async () => {
     },
   ])
   const bytes = await exportPptx(deck)
-  await expect(validatePptxRoundTrip(bytes)).resolves.toEqual({ valid: true, slideCount: 1 })
+  await expect(validatePptxRoundTrip(bytes, deck)).resolves.toEqual({
+    valid: true,
+    slideCount: 1,
+    issues: [],
+  })
   const imported = await importPptx(bytes, "launch.pptx")
   // The core-properties title wins over the filename.
   expect(imported.title).toBe("Launch")
@@ -278,4 +282,128 @@ it("rejects empty charts instead of writing invalid workbook ranges", async () =
     },
   ])
   await expect(exportPptx(deck)).rejects.toThrow("non-empty labels")
+})
+
+describe("mixed text formatting (F14)", () => {
+  /** A one-slide package whose single text box holds `paragraphs` (raw `<a:p>` XML). */
+  async function deckWithText(paragraphs: string): Promise<Uint8Array> {
+    const zip = new JSZip()
+    zip.file(
+      "[Content_Types].xml",
+      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>`
+    )
+    zip.file(
+      "ppt/presentation.xml",
+      `<?xml version="1.0"?><p:presentation xmlns:a="${A_NS}" xmlns:r="${R_NS}" xmlns:p="${P_NS}"><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`
+    )
+    zip.file(
+      "ppt/_rels/presentation.xml.rels",
+      `<?xml version="1.0"?><Relationships xmlns="${RELS_NS}"><Relationship Id="rId2" Type="${OFFICE_REL}/slide" Target="slides/slide1.xml"/></Relationships>`
+    )
+    zip.file(
+      "ppt/slides/slide1.xml",
+      `<?xml version="1.0"?><p:sld xmlns:a="${A_NS}" xmlns:r="${R_NS}" xmlns:p="${P_NS}"><p:cSld><p:spTree>` +
+        `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Body"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="457200"/><a:ext cx="7315200" cy="1371600"/></a:xfrm><a:noFill/></p:spPr><p:txBody><a:bodyPr/>${paragraphs}</p:txBody></p:sp>` +
+        `</p:spTree></p:cSld></p:sld>`
+    )
+    return new Uint8Array(await zip.generateAsync({ type: "uint8array" }))
+  }
+
+  const ALPHA_BETA =
+    '<a:p><a:r><a:rPr lang="en-US" sz="1800" b="1"/><a:t>Alpha </a:t></a:r><a:r><a:rPr lang="en-US" sz="3600" i="1"/><a:t>Beta</a:t></a:r></a:p>'
+
+  it("keeps each run's size, weight and style instead of the first run's", async () => {
+    const deck = await importPptx(await deckWithText(ALPHA_BETA))
+    const [text] = deck.slides[0].elements
+    expect(text).toMatchObject({
+      type: "text",
+      text: "Alpha Beta",
+      runs: [
+        { text: "Alpha ", bold: true, fontSize: 18 },
+        { text: "Beta", italic: true, fontSize: 36 },
+      ],
+    })
+    // Nothing is shared, so no element default makes "Beta" bold or 18 pt.
+    expect(text).not.toHaveProperty("bold")
+    expect(text).not.toHaveProperty("fontSize")
+    expect(deck.importedFeatures).toEqual([])
+  })
+
+  it("writes the runs back and reopens them unchanged", async () => {
+    const deck = await importPptx(await deckWithText(ALPHA_BETA))
+    const bytes = await exportPptx(deck)
+    const slide = await (
+      await JSZip.loadAsync(bytes)
+    )
+      .file("ppt/slides/slide1.xml")!
+      .async("string")
+    expect(slide).toMatch(/<a:rPr lang="en-US" sz="1800" b="1">[\s\S]*?<a:t>Alpha <\/a:t>/)
+    expect(slide).toMatch(/<a:rPr lang="en-US" sz="3600" i="1">[\s\S]*?<a:t>Beta<\/a:t>/)
+
+    const reopened = await importPptx(bytes)
+    expect(reopened.slides[0].elements[0]).toMatchObject({
+      runs: [
+        expect.objectContaining({ text: "Alpha ", bold: true, fontSize: 18 }),
+        expect.objectContaining({ text: "Beta", italic: true, fontSize: 36 }),
+      ],
+    })
+    await expect(validatePptxRoundTrip(bytes, deck)).resolves.toMatchObject({ valid: true })
+  })
+
+  it("writes each line as its own paragraph, never a raw line feed in one run", async () => {
+    const deck = applyPresentationOperations(createPresentation("Lines"), [
+      {
+        op: "addSlide",
+        title: "Lines",
+        elements: [{ id: "t1", type: "text", x: 1, y: 1, width: 6, height: 2, text: "One\nTwo" }],
+      },
+    ])
+    const bytes = await exportPptx(deck)
+    const slide = await (
+      await JSZip.loadAsync(bytes)
+    )
+      .file("ppt/slides/slide1.xml")!
+      .async("string")
+    expect(slide.match(/<a:p>/g)).toHaveLength(2)
+    expect(slide).not.toContain("One\nTwo")
+    expect((await importPptx(bytes)).slides[0].elements[0]).toMatchObject({ text: "One\nTwo" })
+  })
+
+  it.each([
+    [
+      "a theme color",
+      '<a:rPr lang="en-US"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:rPr>',
+    ],
+    ["an explicit typeface", '<a:rPr lang="en-US"><a:latin typeface="Georgia"/></a:rPr>'],
+    ["a double underline", '<a:rPr lang="en-US" u="dbl"/>'],
+    ["superscript", '<a:rPr lang="en-US" baseline="30000"/>'],
+    ["a hyperlink", '<a:rPr lang="en-US"><a:hlinkClick r:id="rId9"/></a:rPr>'],
+  ])("reports %s as text formatting it cannot keep", async (_label, props) => {
+    const deck = await importPptx(
+      await deckWithText(`<a:p><a:r>${props}<a:t>Styled</a:t></a:r></a:p>`)
+    )
+    expect(deck.importedFeatures).toEqual(["text formatting"])
+  })
+
+  it("does not report the deck's own theme fonts", async () => {
+    const deck = await importPptx(
+      await deckWithText(
+        '<a:p><a:r><a:rPr lang="en-US"><a:latin typeface="+mn-lt"/></a:rPr><a:t>Body</a:t></a:r></a:p>'
+      )
+    )
+    expect(deck.importedFeatures).toEqual([])
+  })
+
+  it("refuses to call a file valid when its text reopens with other formatting", async () => {
+    const deck = await importPptx(await deckWithText(ALPHA_BETA))
+    const flattened = structuredClone(deck)
+    const [element] = flattened.slides[0].elements
+    if (element.type !== "text") throw new Error("expected a text element")
+    delete element.runs
+    const report = await validatePptxRoundTrip(await exportPptx(flattened), deck)
+    expect(report.valid).toBe(false)
+    expect(report.issues).toEqual([
+      `Text ${element.id} on slide ${deck.slides[0].id} does not reopen with its formatting.`,
+    ])
+  })
 })

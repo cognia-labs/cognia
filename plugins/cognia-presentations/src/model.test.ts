@@ -321,3 +321,58 @@ it("validates all named series and their schema-v1 first-series mirror", () => {
     assertSlideElements([{ ...chart, series: [{ name: "One", values: [1, Number.NaN] }] }])
   ).toThrow("matching its labels")
 })
+
+describe("text runs (F14)", () => {
+  const withText = (element: Record<string, unknown>) =>
+    applyPresentationOperations(createPresentation("Deck"), [
+      {
+        op: "addSlide",
+        title: "S",
+        elements: [
+          { id: "t1", type: "text", x: 1, y: 1, width: 6, height: 1, ...element } as never,
+        ],
+      },
+    ])
+
+  it("accepts runs that spell the element's text", () => {
+    const deck = withText({
+      text: "Alpha Beta",
+      runs: [
+        { text: "Alpha ", bold: true },
+        { text: "Beta", fontSize: 36 },
+      ],
+    })
+    expect(validatePresentation(deck).filter((finding) => finding.code === "text.runs")).toEqual([])
+  })
+
+  it("flags runs that no longer spell the text", () => {
+    const deck = withText({ text: "Alpha Beta", runs: [{ text: "Alpha" }] })
+    expect(validatePresentation(deck)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "text.runs", elementId: "t1" })])
+    )
+  })
+
+  it("warns about a small run even when the element default is large", () => {
+    const deck = withText({
+      text: "Big tiny",
+      fontSize: 32,
+      runs: [{ text: "Big " }, { text: "tiny", fontSize: 9 }],
+    })
+    expect(validatePresentation(deck).map((finding) => finding.code)).toContain("text.small")
+  })
+
+  it.each([
+    [[], "non-empty array"],
+    [[{ bold: true }], "string text"],
+    [[{ text: "x", italic: "yes" }], "italic must be a boolean"],
+    [[{ text: "x", fontSize: 0 }], "positive number"],
+    [[{ text: "x", color: "red" }], "6-digit hex"],
+  ])("refuses malformed runs %j", (runs, message) => {
+    expect(() =>
+      assertSlideElements(
+        [{ id: "t1", type: "text", x: 1, y: 1, width: 1, height: 1, text: "x", runs }],
+        "elements"
+      )
+    ).toThrow(message)
+  })
+})
