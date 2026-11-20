@@ -91,7 +91,14 @@ export function SettingsActionsMenu() {
         return
       }
       await save(result.patch)
-      toast.success(t("importedToast"))
+      toast.success(
+        result.skipped.length > 0
+          ? t("importedSkippedToast", {
+              count: result.skipped.length,
+              keys: result.skipped.join(", "),
+            })
+          : t("importedToast")
+      )
     } catch {
       toast.error(t("importErrors.generic"))
     }

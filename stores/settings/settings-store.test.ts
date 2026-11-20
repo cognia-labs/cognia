@@ -114,6 +114,19 @@ const RESET = {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  // Like the real save: the row last read with the patch applied. A bare mock
+  // resolved `undefined`, which `load()` now keeps when it saves a repair.
+  dbSettings.saveSettings.mockImplementation(async (input: unknown) => {
+    const last = dbSettings.getSettings.mock.results.at(-1)
+    let current: AppSettings = baseSettings()
+    try {
+      if (last?.type === "return") current = (await last.value) as AppSettings
+    } catch {
+      // A failed read: the defaults stand in, as they do for the store.
+    }
+    const patch = typeof input === "function" ? input(current) : input
+    return { ...current, ...(patch as Partial<AppSettings>) }
+  })
   jest.mocked(getWindowRole).mockReturnValue("main")
   jest.spyOn(console, "warn").mockImplementation(() => {})
   jest.spyOn(console, "error").mockImplementation(() => {})
@@ -682,6 +695,22 @@ describe("resetSettings", () => {
     expect(patch).not.toHaveProperty("id")
     expect(patch).not.toHaveProperty("installUuid")
     expect(patch.theme).toBe("system")
+  })
+
+  it("keeps a credential the current row holds when resetting everything", async () => {
+    useSettingsStore.setState({
+      settings: baseSettings({
+        theme: "dark",
+        webdavSync: { enabled: true, baseUrl: "https://dav", password: "pw" },
+      } as never),
+    })
+    dbSettings.saveSettings.mockResolvedValue(baseSettings({ theme: "system" }))
+    await act(async () => {
+      await useSettingsStore.getState().resetSettings()
+    })
+    const patch = dbSettings.saveSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(patch.theme).toBe("system")
+    expect(patch).not.toHaveProperty("webdavSync")
   })
 
   it("resets just the given keys when scoped", async () => {

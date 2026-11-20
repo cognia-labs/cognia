@@ -27,6 +27,12 @@ jest.mock("@/lib/tts/keyring", () => ({
   clearProviderKey: jest.fn(),
 }))
 
+const mockStopFollowing = jest.fn()
+jest.mock("@/stores/settings/follow-stored-settings", () => ({
+  followStoredSettings: jest.fn(() => mockStopFollowing),
+}))
+import { followStoredSettings } from "@/stores/settings/follow-stored-settings"
+
 let mockResolvedTheme: "light" | "dark" | undefined = "dark"
 jest.mock("next-themes", () => ({
   useTheme: () => ({ resolvedTheme: mockResolvedTheme }),
@@ -45,6 +51,15 @@ describe("SettingsHydrator", () => {
     await waitFor(() => {
       expect(useSettingsStore.getState().loaded).toBe(true)
     })
+  })
+
+  it("follows writes other than the store's for as long as it is mounted", async () => {
+    // Account sync, a paired Host pull or write and other windows change the
+    // row; without a follower the loaded store kept the values read at boot.
+    const { unmount } = render(<SettingsHydrator />)
+    expect(followStoredSettings).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(mockStopFollowing).toHaveBeenCalledTimes(1)
   })
 
   it("is idempotent — second mount does not re-call getSettings", async () => {

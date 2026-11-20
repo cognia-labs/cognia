@@ -2159,15 +2159,30 @@ async function issueCreateRpc(payload: Record<string, unknown>): Promise<unknown
   return { id: issue.id, identifier: issue.identifier }
 }
 
+/**
+ * A paired client's settings patch, already allowlisted by the Rust gate.
+ *
+ * The answer is an acknowledgement, never the saved row: `saveSettings`
+ * returns the whole merged settings object with this Host's credentials
+ * joined back in, and the bridge and the idempotency receipt pass a result
+ * through as it is. The client already holds the values it sent and reads
+ * the Host's settings through `sync_pull`, which projects them for it.
+ *
+ * `null` is how a client says it cleared a key (JSON has no `undefined`;
+ * `lib/settings/mirror-to-host.ts`). The nullable keys a client may write
+ * treat `null` and unset alike, so the key is cleared here.
+ */
 async function appSettingsUpdate(
   payload: Record<string, unknown>
-): Promise<{ settings: AppSettings }> {
-  const patch = payload.patch as Partial<AppSettings> | undefined
-  if (!patch || typeof patch !== "object") {
+): Promise<{ updated: string[]; updatedAt: number }> {
+  const patch = payload.patch
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
     throw new Error("app_settings_update.patch is required")
   }
-  const settings = await saveSettings(patch)
-  return { settings }
+  const next: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(patch)) next[key] = value === null ? undefined : value
+  const saved = await saveSettings(next as Partial<AppSettings>)
+  return { updated: Object.keys(next), updatedAt: saved.updatedAt ?? Date.now() }
 }
 
 async function twinProfileGet(payload: Record<string, unknown>): Promise<unknown> {

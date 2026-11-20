@@ -176,7 +176,8 @@
       "contentHint": "Built-in characters and skills, and memories that belong to a project, stay on this device.",
       "settings": "Shared settings",
       "settingsHint": "Preferences meant for every device, such as your profile. Device-specific settings and API keys stay here.",
-      "failed": "Could not change what syncs: {message}"
+      "failed": "Could not change what syncs: {message}",
+      "offHint": "Off: changes stay on this device. They are sent when you turn this back on, and where both sides changed the same item, the newer change wins."
     }
   },
   "joinChoice": {
@@ -189,12 +190,13 @@
       "messages": "{count, plural, one {# message} other {# messages}}",
       "characters": "{count, plural, one {# character} other {# characters}}",
       "skills": "{count, plural, one {# skill} other {# skills}}",
-      "memories": "{count, plural, one {# memory} other {# memories}}"
+      "memories": "{count, plural, one {# memory} other {# memories}}",
+      "settings": "{count, plural, one {# shared setting} other {# shared settings}}"
     },
     "merge": "Merge",
     "mergeHint": "Keep both. Where the same item was changed on both sides, the newer change wins.",
     "replace": "Use the account's data",
-    "replaceHint": "Remove this device's chats, characters, skills and memories, then download the account's. Built-ins stay.",
+    "replaceHint": "Remove this device's chats, characters, skills and memories, then download the account's. Built-ins stay. Shared settings take the account's values where it has them.",
     "continue": "Back up and continue",
     "backingUp": "Backing up…",
     "later": "Later",

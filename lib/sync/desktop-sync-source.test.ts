@@ -708,6 +708,16 @@ describe("readDexieDelta", () => {
     expect(afterChange.next_since).toBe(150)
   })
 
+  it("sends a cleared mirrored key as null so the client drops it too", async () => {
+    // JSON has no `undefined`: a key the Host cleared used to be left out, and
+    // the client kept its old value after receiving a valid newer row.
+    await getDb().settings.put({ id: "singleton", theme: "dark", updatedAt: 100 } as never)
+    const row = (await readDexieDelta("settings", 0)).rows[0] as Record<string, unknown>
+    expect(row.theme).toBe("dark")
+    expect(row).toHaveProperty("colorTheme", null)
+    expect(JSON.parse(JSON.stringify(row))).toHaveProperty("colorTheme", null)
+  })
+
   it("mirrors host-provisioned TURN credentials without exposing the provider secret", async () => {
     const db = getDb()
     await db.settings.put({

@@ -6,8 +6,10 @@
  * database is the profile's own (never a companion mirror of another host).
  * The engine itself elects one window per database to do the work.
  *
- * Remote changes to settings are read back into the settings store; every
- * other synced table is read through live queries and refreshes itself.
+ * Remote changes are announced to the views that keep what they read in a
+ * store (`publishRemoteChanges`). The settings store follows its row by itself
+ * (`stores/settings/follow-stored-settings.ts`), as it must for every other
+ * writer too.
  *
  * Off means off: with `enabled` false nothing is resolved, armed or contacted
  * (`use-account-sync-engine.test.ts`).
@@ -22,9 +24,7 @@ import {
   subscribeDatabaseAuthority,
 } from "@/lib/account-sync/data/own-database"
 import type { CogniaDB } from "@/lib/db/schema"
-import { getSettings } from "@/lib/db/settings"
 import { useAccountSyncStore } from "@/stores/account-sync/account-sync-store"
-import { useSettingsStore } from "@/stores/settings/settings-store"
 
 export interface UseAccountSyncEngineOptions {
   enabled: boolean
@@ -32,15 +32,8 @@ export interface UseAccountSyncEngineOptions {
   start?: typeof startAccountSyncEngine
   ownDatabase?: (localAccountId: string) => CogniaDB | null
   subscribeAuthority?: (listener: () => void) => () => void
-  reloadSettings?: () => Promise<void>
   locks?: AccountSyncEngineDeps["locks"]
   openSocket?: AccountSyncEngineDeps["openSocket"]
-}
-
-/** Reads the settings row back after another device changed a shared key. */
-export async function reloadSettingsFromDatabase(): Promise<void> {
-  const settings = await getSettings()
-  useSettingsStore.setState({ settings })
 }
 
 export function useAccountSyncEngine(options: UseAccountSyncEngineOptions): void {
@@ -79,7 +72,6 @@ export function useAccountSyncEngine(options: UseAccountSyncEngineOptions): void
     const db = own(context.session.localAccountId)
     if (!db || db.name !== databaseName) return
     const start = seams.current.start ?? startAccountSyncEngine
-    const reload = seams.current.reloadSettings ?? reloadSettingsFromDatabase
     const store = () => useAccountSyncStore.getState()
     const engine = start({
       context,
@@ -95,11 +87,8 @@ export function useAccountSyncEngine(options: UseAccountSyncEngineOptions): void
         if (status.kind === "running" && status.error && own(context.session.localAccountId) !== db)
           setGeneration((value) => value + 1)
       },
-      onApplied: (tables) => {
-        if (tables.has("settings")) void reload().catch(() => undefined)
-        // The open chat and other store-held views refresh from what landed.
-        publishRemoteChanges(tables)
-      },
+      // The open chat and other store-held views refresh from what landed.
+      onApplied: (tables) => publishRemoteChanges(tables),
       onRegistryChanged: () => store().requestRefresh(),
     })
     store().setEngine(engine)

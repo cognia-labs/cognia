@@ -1,5 +1,6 @@
 {
   "controls": {
+    "accountSync": "Account sync and recovery key",
     "autoUpdate": "Automatic updates",
     "backgroundTasks": "Background tasks",
     "biometricGuard": "Biometric guard",

@@ -62,6 +62,7 @@ export type {
   UserProviderSettings,
 }
 import { addAlwaysAllow, getSettings, removeAlwaysAllow, saveSettings } from "@/lib/db/settings"
+import { getDb, type CogniaDB } from "@/lib/db/schema"
 import {
   resolveSkillPanelPrefs,
   type PartialLastSkillView,
@@ -196,6 +197,14 @@ interface SettingsState {
   loadError: string | null
   /** Clear `loadFailed` and re-run `load()`. Resolves once the retry settles. */
   retryLoad: () => Promise<void>
+  /**
+   * Read the settings row of `db` back into a loaded store, after another
+   * writer changed it (account sync, a paired Host pull or write, another
+   * window). Nothing is set when `db` stopped being the active database before
+   * the read finished, so a late answer from a database just switched away
+   * from never replaces the current one's settings.
+   */
+  refreshFromDatabase: (db: CogniaDB) => Promise<void>
   load: () => Promise<void>
   save: (patch: Partial<Omit<AppSettings, "id">>) => Promise<void>
   /** Serialize partial updater preference writes so rapid controls cannot overwrite each other. */
@@ -831,6 +840,14 @@ export function resolveSkillBundleMirrors(settings: AppSettings | null | undefin
   }
 }
 
+/** The database a refresh read from is no longer the active one. */
+class SettingsDatabaseChangedError extends Error {
+  constructor() {
+    super("settings database changed")
+    this.name = "SettingsDatabaseChangedError"
+  }
+}
+
 let updateSettingsSaveQueue: Promise<void> = Promise.resolve()
 let providerMutationQueue: Promise<unknown> = Promise.resolve()
 
@@ -845,7 +862,7 @@ function enqueueProviderMutation<T>(task: () => Promise<T>): Promise<T> {
   return next
 }
 
-export const useSettingsStore = create<SettingsState>((rawSet, get) => {
+export const useSettingsStore = create<SettingsState>((rawSet, get, api) => {
   // The initial flat projection — also the baseline the reconciler compares
   // the first `set` against.
   const initialFlat = deriveFlatPluginFields(null)
@@ -876,23 +893,34 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
   // touching the 30+ existing call sites that only know about
   // `set({ settings: next })`.
   type SetArg = Partial<SettingsState> | ((state: SettingsState) => Partial<SettingsState>)
-  const set = (updater: SetArg) => {
-    rawSet((state) => {
-      const partial =
-        typeof updater === "function"
-          ? (updater as (s: SettingsState) => Partial<SettingsState>)(state)
-          : updater
-      if (partial && Object.prototype.hasOwnProperty.call(partial, "settings")) {
-        return {
-          ...partial,
-          ...reconcileFlat(
-            deriveFlatPluginFields((partial.settings ?? state.settings) as AppSettings | null)
-          ),
-        } as Partial<SettingsState>
-      }
-      return partial
-    })
+  const set = (updater: SetArg, replace?: boolean) => {
+    rawSet(
+      (state) => {
+        const partial =
+          typeof updater === "function"
+            ? (updater as (s: SettingsState) => Partial<SettingsState>)(state)
+            : updater
+        if (partial && Object.prototype.hasOwnProperty.call(partial, "settings")) {
+          // Derived first: a flat field the same update names itself (a test or
+          // story seeding a specific state) keeps the value it was given.
+          return {
+            ...reconcileFlat(
+              deriveFlatPluginFields((partial.settings ?? state.settings) as AppSettings | null)
+            ),
+            ...partial,
+          } as Partial<SettingsState>
+        }
+        return partial
+      },
+      replace as false | undefined
+    )
   }
+  // The same interception for writes from outside the store
+  // (`useSettingsStore.setState({ settings })`, as the updater, the
+  // subscription lifecycle and the Claude Code runtime card do). Those went
+  // straight to the raw setter, so the nested settings changed while every
+  // derived field (palette, accent colour, custom themes) kept the old value.
+  api.setState = set as typeof api.setState
   return {
     settings: null,
     loaded: false,
@@ -909,7 +937,7 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         // fresh users so the alias-routing engine activates without manual
         // setup. Idempotent: returns the same object when mappings already
         // exist or no providers are enabled.
-        const s = seedDefaultMappingsIfNeeded(repaired)
+        const seeded = seedDefaultMappingsIfNeeded(repaired)
         // Persist whatever the repair + seed changed so subsequent loads observe
         // it. The repair is purely subtractive (drops orphans / collapses
         // duplicate sourceKey rows) and the seed only fills an empty
@@ -918,15 +946,18 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         if (repaired.importedVscodeThemes !== raw.importedVscodeThemes) {
           patch.importedVscodeThemes = repaired.importedVscodeThemes
         }
-        if (s.modelMappings !== repaired.modelMappings) {
-          patch.modelMappings = s.modelMappings
+        if (seeded.modelMappings !== repaired.modelMappings) {
+          patch.modelMappings = seeded.modelMappings
         }
-        if (Object.keys(patch).length > 0) {
-          // A repair, not an edit — the user never asked for it, so a paired
-          // client must not replay it onto its host (dropping an orphaned
-          // imported-theme row locally should not delete it on the desktop).
-          await saveSettings(patch, { mirrorToHost: false })
-        }
+        // A repair, not an edit — the user never asked for it, so a paired
+        // client must not replay it onto its host (dropping an orphaned
+        // imported-theme row locally should not delete it on the desktop).
+        // The store keeps the row the save stored (its `updatedAt` included),
+        // or the row follower would read it back as someone else's change.
+        const s =
+          Object.keys(patch).length > 0
+            ? await saveSettings(patch, { mirrorToHost: false })
+            : seeded
         const controlsNativeHost = !isSecondaryOverlayRole(getWindowRole())
         set({ settings: s, loaded: true, loadFailed: false, loadError: null })
         // The derived Provider Profile Store is per database and is otherwise
@@ -989,6 +1020,22 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
       await get().load()
     },
 
+    refreshFromDatabase: async (db) => {
+      if (!get().loaded || get().loadFailed) return
+      const assertActive = () => {
+        if (getDb() !== db) throw new SettingsDatabaseChangedError()
+      }
+      try {
+        const settings = await getSettings({ db, assertActive })
+        assertActive()
+        if (!get().loaded || get().loadFailed) return
+        set({ settings })
+      } catch (err) {
+        if (err instanceof SettingsDatabaseChangedError) return
+        console.warn("settings.refresh failed", err)
+      }
+    },
+
     save: async (patch) => {
       const next = await saveSettings(patch)
       set({ settings: next })
@@ -1023,8 +1070,17 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
     },
 
     resetSettings: async (keys) => {
-      const { buildResetPatch } = await import("@/lib/settings/profile-transfer")
-      await get().save(buildResetPatch(keys))
+      const [{ buildResetPatch }, { globalResetKeys }] = await Promise.all([
+        import("@/lib/settings/profile-transfer"),
+        import("@/lib/settings/section-keys"),
+      ])
+      // A section's reset takes its keys; "Reset all" resets every preference
+      // key and keeps the credentials its confirmation promises to keep.
+      await get().save(
+        keys && keys.length > 0
+          ? buildResetPatch(keys)
+          : buildResetPatch(globalResetKeys(), { keepCredentialsOf: get().settings })
+      )
     },
 
     toggleAlwaysAllow: async (toolName, allow) => {

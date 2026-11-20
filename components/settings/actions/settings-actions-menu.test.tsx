@@ -92,6 +92,21 @@ describe("SettingsActionsMenu", () => {
     expect(toastSuccess).toHaveBeenCalled()
   })
 
+  it("saves what a file can use and says which keys it skipped", async () => {
+    const file = fakeFile(
+      JSON.stringify({
+        schema: "cognia-settings",
+        version: 1,
+        settings: { theme: "neon", language: "zh-CN", colorTheme: "ocean" },
+      })
+    )
+    render(<SettingsActionsMenu />)
+    fireEvent.change(screen.getByTestId("settings-import-input"), { target: { files: [file] } })
+    await waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1))
+    expect(saveMock.mock.calls[0][0]).toEqual({ language: "zh-CN", colorTheme: "ocean" })
+    expect(toastSuccess).toHaveBeenCalledWith("importedSkippedToast")
+  })
+
   it("toasts an error on an invalid import file", async () => {
     const file = fakeFile("{not json", "bad.json")
     render(<SettingsActionsMenu />)

@@ -5,6 +5,7 @@ import "fake-indexeddb/auto"
 import Dexie from "dexie"
 
 import { getDb } from "@/lib/db/schema"
+import { getSettings } from "@/lib/db/settings"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { SyncDelta } from "../types"
 
@@ -56,13 +57,38 @@ describe("syncAppSettings", () => {
         }),
         { since: 0 }
       )
+      // The row keeps the Host's shared language as it came; this phone follows
+      // its own system, which a read resolves (`lib/db/settings.ts`).
       expect(await getDb().settings.get("singleton")).toMatchObject({
-        language: "zh-CN",
+        language: "en",
         languageMode: "system",
       })
+      expect((await getSettings()).language).toBe("zh-CN")
     } finally {
       languages.mockRestore()
     }
+  })
+
+  it("drops a key the Host sent as cleared, and keeps one it did not send", async () => {
+    // A Host clears an optional key (an appearance reset drops the colour
+    // preset) by sending `null`: JSON cannot carry `undefined`.
+    await getDb().settings.put({
+      id: "singleton",
+      colorTheme: "ocean",
+      accentColor: "#123456",
+      theme: "dark",
+    } as never)
+    await syncAppSettings(
+      makeTransport({
+        rows: [{ id: "singleton", colorTheme: null, theme: "light", updatedAt: 9 } as never],
+        deleted_ids: [],
+        next_since: 9,
+      }),
+      { since: 0 }
+    )
+    const row = (await getDb().settings.get("singleton")) as unknown as Record<string, unknown>
+    expect(row).not.toHaveProperty("colorTheme")
+    expect(row).toMatchObject({ theme: "light", accentColor: "#123456" })
   })
 
   it("preserves legacy manual mode while accepting a synchronized explicit locale", async () => {
@@ -203,6 +229,32 @@ describe("syncAppSettings", () => {
         expect((await getDb().settings.get("singleton"))?.theme).toBe("light")
       }
     )
+
+    it("holds the cursor below a row it masked, so a refused write is caught up", async () => {
+      // The cursor used to move past the masked row. When the write was then
+      // dead-lettered, a normal pull from the saved cursor answered empty and
+      // the phone kept a value the Host never took.
+      await getDb().settings.put({ id: "singleton", theme: "dark" } as never)
+      await queue("pending", { theme: "dark" })
+      const host = {
+        call: jest.fn(async (_name: string, args: { since: number }) => ({
+          rows: args.since < 20 ? [{ id: "singleton", theme: "light", updatedAt: 20 }] : [],
+          deleted_ids: [],
+          next_since: Math.max(args.since, 20),
+        })),
+        subscribe: jest.fn(() => () => {}),
+      } as unknown as Transport
+      const masked = await syncAppSettings(host, { since: 0 })
+      if (!masked.ok) throw new Error("expected a successful pull")
+      expect(masked.result.nextSince).toBeLessThan(20)
+      expect((await getDb().settings.get("singleton"))?.theme).toBe("dark")
+
+      await getDb().mobileOutboundQueue.update("job-pending-theme", { status: "deadlettered" })
+      const caughtUp = await syncAppSettings(host, { since: masked.result.nextSince })
+      if (!caughtUp.ok) throw new Error("expected a successful pull")
+      expect((await getDb().settings.get("singleton"))?.theme).toBe("light")
+      expect(caughtUp.result.nextSince).toBe(20)
+    })
 
     it("ignores queued jobs that are not settings writes", async () => {
       await getDb().settings.put({ id: "singleton", theme: "dark" } as never)

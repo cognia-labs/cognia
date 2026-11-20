@@ -20,5 +20,6 @@
   "resetTitle": "Reset all settings?",
   "resetToast": "Settings reset to defaults.",
   "reviewChanged": "Review changed settings…",
-  "triggerAria": "Settings actions"
+  "triggerAria": "Settings actions",
+  "importedSkippedToast": "Settings imported. {count, plural, one {# setting was} other {# settings were}} skipped because this version cannot use the value: {keys}."
 }

@@ -4,6 +4,7 @@ import {
   importSettingsProfile,
   buildResetPatch,
   deepStripSecrets,
+  holdsSecret,
   stripSettingsRowSecrets,
   SETTINGS_PROFILE_SCHEMA,
   SETTINGS_PROFILE_VERSION,
@@ -11,7 +12,7 @@ import {
 import { DEFAULTS } from "@/lib/db/settings"
 import type { AppSettings } from "@cognia/agent-config-types"
 import { freshInstallWebReader } from "@/lib/web/reader/reader-settings"
-import { resetKeysForSection } from "./section-keys"
+import { globalResetKeys, resetKeysForSection } from "./section-keys"
 
 const NOW = "2026-06-15T00:00:00.000Z"
 
@@ -246,11 +247,44 @@ describe("profile-transfer import", () => {
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.patch.theme).toBe("dark")
   })
+
+  it("takes back an optional override it exported, such as the color preset", () => {
+    // Import accepted only keys with a default, so an exported Ocean preset was
+    // dropped on the way back in.
+    const profile = exportSettingsProfile({ ...sampleSettings(), colorTheme: "ocean" }, NOW)
+    const r = importSettingsProfile(serializeSettingsProfile(profile))
+    expect(r.ok && r.patch.colorTheme).toBe("ocean")
+    expect(r.ok && r.skipped).toEqual([])
+  })
+
+  it("skips a value its key cannot hold and names it, saving the rest", () => {
+    const r = importSettingsProfile(
+      validJson({
+        theme: "neon",
+        fontScale: 3,
+        colorTheme: "plaid",
+        permissionMode: "root",
+        language: "zh-CN",
+        biometricRequiredFor: "yes",
+      })
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.patch).toEqual({ language: "zh-CN" })
+    expect(r.skipped.sort()).toEqual(
+      ["biometricRequiredFor", "colorTheme", "fontScale", "permissionMode", "theme"].sort()
+    )
+  })
+
+  it("names unknown keys as skipped, but never the secrets it drops by design", () => {
+    const r = importSettingsProfile(validJson({ notARealKey: 1, apiKey: "smuggled" }))
+    expect(r.ok && r.skipped).toEqual(["notARealKey"])
+  })
 })
 
 describe("profile-transfer reset", () => {
   it("resets the search section to the fresh reader recipient policy", () => {
-    const patch = buildResetPatch(resetKeysForSection("search"))
+    const patch = buildResetPatch(resetKeysForSection("search")!)
     expect(patch.webReader).toEqual(freshInstallWebReader())
   })
   // Section → owned keys now lives in `section-keys.ts` (tested there). This
@@ -261,13 +295,82 @@ describe("profile-transfer reset", () => {
     expect(patch.biometricRequiredFor).toEqual(DEFAULTS.biometricRequiredFor)
   })
 
-  it("buildResetPatch() resets all preferences but keeps secrets/identity", () => {
-    const patch = buildResetPatch() as Record<string, unknown>
+  it("a global reset resets all preferences but keeps secrets/identity", () => {
+    const patch = buildResetPatch(globalResetKeys()) as Record<string, unknown>
     expect("apiKey" in patch).toBe(false)
     expect("apiBaseUrl" in patch).toBe(false)
     expect("id" in patch).toBe(false)
     expect("installUuid" in patch).toBe(false)
     expect(patch.theme).toBe(DEFAULTS.theme)
+  })
+
+  it("a global reset clears what a section reset clears, the color preset included", () => {
+    // It walked `DEFAULTS`, which has no `colorTheme`, so Ocean survived
+    // "Reset all" while the appearance section's reset cleared it.
+    const patch = buildResetPatch(globalResetKeys(), {
+      keepCredentialsOf: { ...DEFAULTS, colorTheme: "ocean" },
+    })
+    expect(Object.hasOwn(patch, "colorTheme")).toBe(true)
+    expect(patch.colorTheme).toBeUndefined()
+    for (const key of resetKeysForSection("appearance")!)
+      expect(Object.hasOwn(patch, key)).toBe(true)
+  })
+
+  it("a global reset leaves UI-local state and provider connections alone", () => {
+    const keys = globalResetKeys()
+    for (const key of [
+      "onboardingProgress",
+      "activeProviderId",
+      "pinnedWorkflowIds",
+      "providerSettings",
+      "customProviders",
+    ] as const)
+      expect(keys).not.toContain(key)
+  })
+
+  it("keeps search provider keys and endpoints while resetting their preferences", () => {
+    // The default Tavily entry carries `apiKey: ""`, so "Reset all" emptied the
+    // stored key its confirmation promised to keep.
+    const current = {
+      ...DEFAULTS,
+      searchProviders: {
+        ...DEFAULTS.searchProviders!,
+        tavily: {
+          ...DEFAULTS.searchProviders!.tavily,
+          apiKey: "tvly-synthetic",
+          apiKeys: ["tvly-second"],
+          enabled: true,
+          priority: 99,
+        },
+      },
+    } as AppSettings
+    const patch = buildResetPatch(["searchProviders"], { keepCredentialsOf: current })
+    const tavily = (patch.searchProviders as unknown as Record<string, Record<string, unknown>>)
+      .tavily!
+    expect(tavily.apiKey).toBe("tvly-synthetic")
+    expect(tavily.apiKeys).toEqual(["tvly-second"])
+    expect(tavily.priority).toBe(
+      (DEFAULTS.searchProviders!.tavily as unknown as Record<string, unknown>).priority
+    )
+  })
+
+  it("leaves out a key whose value holds a credential when keeping them", () => {
+    const patch = buildResetPatch(["webdavSync", "theme"], {
+      keepCredentialsOf: {
+        theme: "dark",
+        webdavSync: { enabled: true, baseUrl: "https://dav", password: "pw" } as never,
+      },
+    })
+    expect(patch).toEqual({ theme: DEFAULTS.theme })
+  })
+})
+
+describe("holdsSecret", () => {
+  it("sees a non-empty credential at any depth, not an empty placeholder", () => {
+    expect(holdsSecret({ a: { apiKey: "x" } })).toBe(true)
+    expect(holdsSecret({ a: { apiKey: "", tokens: [] } })).toBe(false)
+    expect(holdsSecret({ headersJson: JSON.stringify({ authorization: "Bearer t" }) })).toBe(true)
+    expect(holdsSecret({ rememberPassphrase: true })).toBe(false)
   })
 })
 

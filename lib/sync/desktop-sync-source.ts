@@ -1414,8 +1414,11 @@ async function projectMirroredSettings(
     id: row.id,
     updatedAt,
   }
+  // Every mirrored key, `null` for an unset one: a key the Host cleared (an
+  // appearance reset drops the optional colour preset) has to reach the client
+  // as a value, or JSON drops it and the client keeps the old one.
   for (const key of CROSS_PLATFORM_SETTING_KEYS) {
-    if (row[key] !== undefined) projected[key] = row[key]
+    projected[key] = row[key] === undefined ? null : row[key]
   }
   const staticTurnServers = row.turnServers
     ? await resolveTurnServerCredentials(row.turnServers)

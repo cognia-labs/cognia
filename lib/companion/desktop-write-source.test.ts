@@ -17,6 +17,7 @@ jest.mock("@/lib/db/session-state", () => ({
 import "fake-indexeddb/auto"
 
 import { getDb } from "@/lib/db/schema"
+import { getSettings, saveSettings } from "@/lib/db/settings"
 import { isConnectorRuntimeOwnedHere } from "@/lib/connectors/bootstrap/install-connector-runtime"
 
 jest.mock("@/lib/thread-handoff/host-dispatch", () => {
@@ -2549,11 +2550,35 @@ describe("dispatchCommand: adapter_update_policy", () => {
 })
 
 describe("dispatchCommand: app_settings_update", () => {
-  it("persists the patch and answers with the merged settings", async () => {
+  it("persists the patch and answers with an acknowledgement only", async () => {
     const res = (await dispatchCommand("app_settings_update", {
       patch: { theme: "dark" },
-    })) as { settings: { theme?: string } }
-    expect(res.settings.theme).toBe("dark")
+    })) as Record<string, unknown>
+    expect(res).toEqual({ updated: ["theme"], updatedAt: expect.any(Number) })
+    expect((await getSettings()).theme).toBe("dark")
+  })
+
+  it("never answers with this Host's credentials", async () => {
+    // The response is returned to the paired caller and kept as its
+    // idempotency receipt. It used to be the whole saved settings object,
+    // with every credential the Host had joined back in.
+    await saveSettings(
+      {
+        searchProviders: {
+          tavily: { providerId: "tavily", apiKey: "fixture-host-secret", enabled: true },
+        },
+      } as never,
+      { mirrorToHost: false }
+    )
+    const res = await dispatchCommand("app_settings_update", { patch: { fontScale: "lg" } })
+    expect(JSON.stringify(res)).not.toContain("fixture-host-secret")
+    expect(Object.keys(res as object).sort()).toEqual(["updated", "updatedAt"])
+  })
+
+  it("reads null as a cleared key", async () => {
+    await saveSettings({ colorTheme: "ocean" } as never, { mirrorToHost: false })
+    await dispatchCommand("app_settings_update", { patch: { colorTheme: null } })
+    expect((await getSettings()).colorTheme).toBeUndefined()
   })
 
   it("rejects a missing or non-object patch", async () => {

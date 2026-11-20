@@ -2044,6 +2044,7 @@
         "content": "聊天、角色、技能和记忆",
         "contentHint": "内置角色和技能，以及属于某个项目的记忆，会留在此设备上。",
         "failed": "无法更改同步内容：{message}",
+        "offHint": "已关闭：更改只保留在此设备上。重新打开后会发送；两边改了同一项时，以较新的更改为准。",
         "settings": "共享设置",
         "settingsHint": "适用于所有设备的偏好，例如你的个人资料。设备专属设置和 API 密钥会留在这里。",
         "title": "同步内容"
@@ -2137,6 +2138,7 @@
         "memories": "{count, plural, other {# 条记忆}}",
         "messages": "{count, plural, other {# 条消息}}",
         "sessions": "{count, plural, other {# 个聊天}}",
+        "settings": "{count, plural, other {# 项共享设置}}",
         "skills": "{count, plural, other {# 个技能}}"
       },
       "description": "你的账号已经保存了来自其他设备的数据，而此设备也有自己的数据。请选择合并方式。系统会先保存此设备的备份，必要时可以恢复。",
@@ -2147,7 +2149,7 @@
       "mergeHint": "两边都保留。同一项目在两边都被修改时，以较新的修改为准。",
       "onDevice": "此设备上",
       "replace": "使用账号中的数据",
-      "replaceHint": "删除此设备上的聊天、角色、技能和记忆，然后下载账号中的数据。内置项目会保留。",
+      "replaceHint": "删除此设备上的聊天、角色、技能和记忆，然后下载账号中的数据。内置项目会保留。账号中已有的共享设置会替换此设备上的值。",
       "title": "要将此设备的数据与你的账号合并吗？"
     },
     "notification": {
@@ -28981,6 +28983,9 @@
         "never": "尚未同步",
         "statusErrors": "存在错误",
         "statusHealthy": "正常",
+        "statusNeverSynced": "尚未同步",
+        "statusNotPaired": "未配对",
+        "statusPartial": "部分已同步",
         "syncAll": "全部同步",
         "syncAllAria": "立即同步所有数据表",
         "syncNowAria": "立即同步 {table}",
@@ -29102,6 +29107,7 @@
         "iceServersHelp": "每行一个 stun: URL。多数家庭网络下公共 STUN 已经够用；NAT 打洞失败时再追加备用。",
         "iceServersLabel": "STUN 服务器",
         "invalidIceServer": "跳过无效 ICE 服务器条目：{value}",
+        "invalidTurnServer": "跳过无效 TURN 服务器条目：{value}",
         "invalidUrl": "信令 URL 必须以 ws:// 或 wss:// 开头",
         "noDevices": "暂无启用 WebRTC 的已配对设备。用最新版移动端重新配对一台手机，这里就会出现。",
         "pollFailed": "无法读取信令枢纽状态（{reason}）。下方设备列表可能过期。",
@@ -29117,7 +29123,9 @@
         "signalingUrlHelp": "公共汇合点的 WebSocket 接入地址。自部署时替换为你自己的 URL。",
         "signalingUrlLabel": "信令服务器 URL",
         "signalingUrlPlaceholder": "wss://signaling.cognia.cn/signaling",
+        "stunInTurnField": "已跳过 {value}：STUN 条目请填写在 STUN 服务器栏。",
         "title": "WebRTC 远程访问",
+        "turnInIceField": "已跳过 {value}：TURN 条目请填写在 TURN 服务器栏，其凭据会存入操作系统钥匙串。",
         "turnProviderAuthTokenLabel": "Twilio Auth Token",
         "turnProviderCloudflare": "Cloudflare Calls",
         "turnProviderHelp": "可选。自动签发短期 TURN 凭据并在过期前轮换，免去在上方手动粘贴静态凭据。供应商 API 密钥存于操作系统钥匙串，绝不明文保存。",
@@ -45760,6 +45768,7 @@
         "versionTooNew": "该档案由更新版本的 Cognia 导出。",
         "wrongSchema": "该文件不是 Cognia 设置档案。"
       },
+      "importedSkippedToast": "设置已导入。有 {count} 项设置的值当前版本无法使用，已跳过：{keys}。",
       "importedToast": "设置已导入。",
       "resetAll": "全部恢复默认…",
       "resetConfirm": "恢复",
@@ -53357,6 +53366,7 @@
     },
     "finder": {
       "controls": {
+        "accountSync": "账号同步与恢复密钥",
         "autoUpdate": "自动更新",
         "backgroundTasks": "后台任务",
         "biometricGuard": "生物识别守卫",

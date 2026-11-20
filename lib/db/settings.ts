@@ -30,6 +30,7 @@ import { DEFAULT_AUTO_ROUTING, type AutoRoutingSettings } from "@cognia/provider
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { DEFAULT_PROVIDER_DIAGNOSTICS_PREFERENCES } from "@cognia/provider-types"
 import { getDb, withDbReopenRetry } from "./schema"
+import { mergeConcurrentSettingsRow } from "./settings-merge"
 import {
   isEmptySecretSet,
   joinSettingsSecrets,
@@ -416,9 +417,12 @@ export async function getSettings(scope?: SettingsScope): Promise<AppSettings> {
   return (await readSettingsWithSecrets(scope)).settings
 }
 
-async function readSettingsWithSecrets(
-  scope?: SettingsScope
-): Promise<{ settings: AppSettings; secrets: ProviderSecretState | null }> {
+async function readSettingsWithSecrets(scope?: SettingsScope): Promise<{
+  settings: AppSettings
+  secrets: ProviderSecretState | null
+  /** The stored row as read, before credentials and defaults were joined in. */
+  persisted: PersistedSettingsRow | undefined
+}> {
   scope?.assertActive()
   // Retried across a connection close: this read is what every window makes at
   // boot, right when the plugin table bridge closes and reopens the shared
@@ -436,12 +440,13 @@ async function readSettingsWithSecrets(
     return {
       settings: { ...DEFAULTS, webReader: freshInstallWebReader(), ...resolveLocalePreference() },
       secrets: null,
+      persisted: undefined,
     }
   }
   const hydrated = await hydrateProviderSecrets(db.name, persisted, scope)
   scope?.assertActive()
   const row = hydrated.row
-  return { settings: normalizeSettingsRow(row), secrets: hydrated.state }
+  return { settings: normalizeSettingsRow(row), secrets: hydrated.state, persisted }
 }
 
 function normalizeSettingsRow(row: AppSettings): AppSettings {
@@ -670,9 +675,11 @@ export async function saveSettings(
   const next = saveQueue.then(() =>
     withDbReopenRetry(async () => {
       options.scope?.assertActive()
-      const { settings: current, secrets: secretState } = await readSettingsWithSecrets(
-        options.scope
-      )
+      const {
+        settings: current,
+        secrets: secretState,
+        persisted: base,
+      } = await readSettingsWithSecrets(options.scope)
       options.scope?.assertActive()
       if (
         options.onlyForCopiedProviderSecrets &&
@@ -681,9 +688,14 @@ export async function saveSettings(
         return current
       }
       const patch = typeof input === "function" ? input(current) : input
-      // Bump `updatedAt` on every write so the companion sync source can tell
-      // when the singleton changed and re-emit it to paired phones (see
-      // `lib/sync/desktop-sync-source.ts:readSettingsDelta`).
+      const locale = resolveLocalePreference({
+        ...current,
+        ...patch,
+        // All existing language-only setters express a manual selection.
+        ...(patch.language !== undefined && patch.languageMode === undefined
+          ? { languageMode: "manual" }
+          : {}),
+      })
       const merged: AppSettings = {
         ...current,
         ...patch,
@@ -695,23 +707,54 @@ export async function saveSettings(
               searchProviders: mergeSearchProviders(patch.searchProviders, current.searchProviders),
             }
           : {}),
-        ...resolveLocalePreference({
-          ...current,
-          ...patch,
-          // All existing language-only setters express a manual selection.
-          ...(patch.language !== undefined && patch.languageMode === undefined
-            ? { languageMode: "manual" }
-            : {}),
-        }),
+        ...locale,
         id: SINGLETON_ID,
-        updatedAt: Date.now(),
       }
       delete (merged as PersistedSettingsRow)[PROVIDER_SECRETS_REF_FIELD]
       const targetDb = options.scope?.db ?? getDb()
       const persisted = await persistableSettingsRow(targetDb.name, merged, secretState)
+      const ours = withStoredLanguage(persisted.row, base, patch, locale.languageMode)
+      // The paired-client mirror is resolved before the transaction: a dynamic
+      // import inside it would let IndexedDB commit under the await.
+      const mirror =
+        options.mirrorToHost === false
+          ? null
+          : (await import("@/lib/settings/mirror-to-host")).prepareSettingsMirror(targetDb)
       options.scope?.assertActive()
-      await (options.scope?.db ?? getDb()).settings.put(persisted.row)
+      const stores = mirror
+        ? [targetDb.settings, targetDb.mobileOutboundQueue]
+        : [targetDb.settings]
+      const written = await targetDb.transaction("rw", stores, async () => {
+        options.scope?.assertActive()
+        // The row as it is now. The account sync applier, a paired Host pull
+        // or another window may have written it since `base` was read; their
+        // keys survive unless this save explicitly changed the same key.
+        const theirs = (await targetDb.settings.get(SINGLETON_ID)) as
+          PersistedSettingsRow | undefined
+        const row = mergeConcurrentSettingsRow<PersistedSettingsRow>({
+          base,
+          ours,
+          theirs,
+          explicit: explicitSettingsKeys(patch, base, ours),
+          oursOnly: new Set(["id", "updatedAt"]),
+        })
+        // Bump `updatedAt` on every write so the companion sync source can
+        // tell when the singleton changed and re-emit it to paired phones
+        // (`lib/sync/desktop-sync-source.ts:readSettingsDelta`). Never behind
+        // what is stored, so a cursor taken from it still moves forward.
+        row.updatedAt = Math.max(Date.now(), Number(theirs?.updatedAt ?? 0) + 1)
+        await targetDb.settings.put(row)
+        // In the same transaction: a paired client's edit either lands
+        // locally together with the job that carries it to its Host, or not
+        // at all. A local value the Host never hears of is a silent split.
+        if (mirror) await mirror.enqueue(patch)
+        return row
+      })
       options.scope?.assertActive()
+      const { [PROVIDER_SECRETS_REF_FIELD]: _ref, ...publicRow } = written
+      const saved = normalizeSettingsRow(
+        joinSettingsSecrets(publicRow as AppSettings, persisted.secrets)
+      )
       options.onlyForCopiedProviderSecrets?.()
       if (persisted.adoptedFrom) {
         // The copied entry belongs to a database that may since have been
@@ -727,29 +770,14 @@ export async function saveSettings(
           const { syncProviderProfilesFromSettings } =
             await import("@/lib/settings/provider-profile-sync")
           options.scope?.assertActive()
-          await syncProviderProfilesFromSettings(merged)
+          await syncProviderProfilesFromSettings(saved)
         } catch {
           // The profile store is a re-derivable projection; a failed sync is
           // recovered by the next provider-touching save.
         }
       }
-      // Mirror the host-writable subset up to the paired host. Outside the
-      // retry's critical section in spirit but inside it in code, because the
-      // enqueue must not happen if the local write never landed. Failures are
-      // swallowed: the local save is the user-visible outcome, and a queue that
-      // could not be written is reported by the offline banner, not by making
-      // the settings save look like it failed.
-      if (options.mirrorToHost !== false) {
-        try {
-          const { mirrorSettingsPatchToHost } = await import("@/lib/settings/mirror-to-host")
-          options.scope?.assertActive()
-          await mirrorSettingsPatchToHost(patch)
-        } catch {
-          // Non-fatal — see above.
-        }
-      }
       options.scope?.assertActive()
-      return merged
+      return saved
     })
   )
   // Swallow rejection on the queue tail so a single failure doesn't poison
@@ -757,6 +785,56 @@ export async function saveSettings(
   // Promise via the `next` reference returned below.
   saveQueue = next.catch(() => undefined)
   return next
+}
+
+/**
+ * The `language` a row stores. It is a shared setting (it syncs between a
+ * person's devices), while following the operating system is this device's
+ * own choice (`languageMode`, device-local). In system mode the language a
+ * read resolves is this machine's, not a choice: storing it turned every
+ * unrelated save on a device that follows English into a change of the shared
+ * language that overwrote another device's manual Chinese. So in system mode
+ * the row keeps the shared value it had, and only an explicit `language` in
+ * the patch replaces it.
+ */
+function withStoredLanguage(
+  row: PersistedSettingsRow,
+  base: PersistedSettingsRow | undefined,
+  patch: Partial<Omit<AppSettings, "id">>,
+  mode: "system" | "manual"
+): PersistedSettingsRow {
+  if (mode !== "system") return row
+  const language = Object.hasOwn(patch, "language") ? patch.language : base?.language
+  const out = { ...row }
+  if (language === undefined) delete out.language
+  else out.language = language
+  return out
+}
+
+/**
+ * Keys this save asked to change, which win over a concurrent writer's change
+ * of the same key: the patch's own keys, the locale pair when the patch set
+ * either half, and the credential pointer when this save wrote new
+ * credentials.
+ */
+function explicitSettingsKeys(
+  patch: Partial<Omit<AppSettings, "id">>,
+  base: PersistedSettingsRow | undefined,
+  ours: PersistedSettingsRow
+): Set<string> {
+  const keys = new Set<string>(Object.keys(patch))
+  if (keys.has("language") || keys.has("languageMode")) {
+    keys.add("language")
+    keys.add("languageMode")
+  }
+  if (!secretRefsEqual(base?.[PROVIDER_SECRETS_REF_FIELD], ours[PROVIDER_SECRETS_REF_FIELD])) {
+    keys.add(PROVIDER_SECRETS_REF_FIELD)
+  }
+  return keys
+}
+
+function secretRefsEqual(a: ProviderSecretsRef | undefined, b: ProviderSecretsRef | undefined) {
+  return a?.db === b?.db && a?.rev === b?.rev
 }
 
 /**
@@ -770,7 +848,7 @@ async function persistableSettingsRow(
   dbName: string,
   merged: AppSettings,
   state: ProviderSecretState | null
-): Promise<{ row: PersistedSettingsRow; adoptedFrom?: string }> {
+): Promise<{ row: PersistedSettingsRow; secrets: SettingsSecretSet; adoptedFrom?: string }> {
   const { publicRow, secrets } = splitSettingsSecrets(merged)
   const resolution: ProviderSecretResolution = state?.resolution ?? { status: "ok", blob: null }
   const stored = resolution.status === "ok" ? resolution.blob : null
@@ -778,7 +856,9 @@ async function persistableSettingsRow(
   // What the row's blob held when it was read. A save whose credentials equal
   // that changed no credential, so when the store cannot take a write it may
   // keep the row's pointer exactly as it was.
-  const keepAsItWas = (cause: unknown): { row: PersistedSettingsRow } => {
+  const keepAsItWas = (
+    cause: unknown
+  ): { row: PersistedSettingsRow; secrets: SettingsSecretSet } => {
     if (!secretSetsEqual(secrets, stored?.secrets)) {
       throw cause instanceof ProviderSecretStoreUnavailableError
         ? cause
@@ -786,7 +866,7 @@ async function persistableSettingsRow(
     }
     const row: PersistedSettingsRow = { ...publicRow }
     if (state?.ref) row[PROVIDER_SECRETS_REF_FIELD] = state.ref
-    return { row }
+    return { row, secrets }
   }
 
   if (resolution.status === "unavailable") return keepAsItWas(resolution.error)
@@ -797,7 +877,7 @@ async function persistableSettingsRow(
   try {
     if (isEmptySecretSet(secrets)) {
       if (ownsStored) await deleteProviderSecrets(dbName)
-      return { row: publicRow, adoptedFrom }
+      return { row: publicRow, secrets, adoptedFrom }
     }
 
     if (
@@ -806,11 +886,11 @@ async function persistableSettingsRow(
       state.ref.rev === stored.rev &&
       secretSetsEqual(stored.secrets, secrets)
     ) {
-      return { row: { ...publicRow, [PROVIDER_SECRETS_REF_FIELD]: state.ref } }
+      return { row: { ...publicRow, [PROVIDER_SECRETS_REF_FIELD]: state.ref }, secrets }
     }
 
     const ref = await writeProviderSecrets(dbName, secrets)
-    return { row: { ...publicRow, [PROVIDER_SECRETS_REF_FIELD]: ref }, adoptedFrom }
+    return { row: { ...publicRow, [PROVIDER_SECRETS_REF_FIELD]: ref }, secrets, adoptedFrom }
   } catch (error) {
     if (!(error instanceof ProviderSecretStoreUnavailableError)) throw error
     return keepAsItWas(error)

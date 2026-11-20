@@ -22,7 +22,7 @@ import type { AppSettings } from "@cognia/agent-config-types"
 import type { SettingsSectionId } from "@/components/settings/settings-nav-config"
 import { DEFAULTS } from "@/lib/db/settings"
 import { hostModules } from "@/lib/modules/registry"
-import { SECRET_KEYS, NON_TRANSFERABLE_KEYS } from "./profile-transfer"
+import { NON_TRANSFERABLE_KEYS, PROVIDER_CONNECTION_KEYS, SECRET_KEYS } from "./profile-transfer"
 
 /**
  * Canonical settings keys that are runtime / UI-local state rather than
@@ -319,6 +319,24 @@ export function resetKeysForSection(
   if (!excluded || excluded.length === 0) return owned
   const filtered = owned.filter((k) => !excluded.includes(k))
   return filtered.length > 0 ? filtered : undefined
+}
+
+/**
+ * The keys "Reset all to defaults" resets: every key a section resets, so a
+ * global reset clears what each section's reset clears (optional overrides such
+ * as `colorTheme` included). Never UI-local state (onboarding progress, the
+ * active provider, pinned lists), secrets, identity or provider connections:
+ * those are not preferences, and the Provider page owns connections.
+ */
+export function globalResetKeys(): (keyof AppSettings)[] {
+  const keys = new Set<keyof AppSettings>()
+  for (const section of Object.keys(SECTION_OWNED_KEYS) as SettingsSectionId[]) {
+    for (const key of resetKeysForSection(section) ?? []) keys.add(key)
+  }
+  return [...keys].filter(
+    (key) =>
+      !isNonPreferenceKey(key) && !(PROVIDER_CONNECTION_KEYS as readonly string[]).includes(key)
+  )
 }
 
 /** Map an AppSettings key back to the section that owns it. */

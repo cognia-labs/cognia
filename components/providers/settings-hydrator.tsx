@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import { useTheme } from "next-themes"
 import { useSettingsStore } from "@/stores/settings"
+import { followStoredSettings } from "@/stores/settings/follow-stored-settings"
 import {
   clearBootMirror,
   writeBootMirror,
@@ -58,6 +59,10 @@ export function SettingsHydrator(): null {
   useEffect(() => {
     void useSettingsStore.getState().load()
   }, [])
+
+  // Writers other than this store (account sync, a paired Host pull or write,
+  // another window) change the row too; follow them once loaded.
+  useEffect(() => followStoredSettings(), [])
 
   // AppSettings is the canonical account-scoped policy. Mirror it into the
   // renderer's synchronous runtime reader so settings sync, companion writes,

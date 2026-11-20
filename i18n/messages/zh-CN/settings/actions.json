@@ -20,5 +20,6 @@
   "resetTitle": "恢复全部设置？",
   "resetToast": "设置已恢复默认。",
   "reviewChanged": "查看已修改的设置…",
-  "triggerAria": "设置操作"
+  "triggerAria": "设置操作",
+  "importedSkippedToast": "设置已导入。有 {count} 项设置的值当前版本无法使用，已跳过：{keys}。"
 }

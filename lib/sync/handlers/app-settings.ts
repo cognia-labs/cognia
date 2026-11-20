@@ -8,7 +8,7 @@ import { CROSS_PLATFORM_SETTING_KEYS } from "@cognia/agent-config-types/settings
 import { resolveLocalePreference } from "@/lib/i18n/locale-preference"
 
 import type { SyncCursor, SyncOutcome } from "../types"
-import { runSyncHandler } from "./base"
+import { runSyncHandler, type SyncApplyHold } from "./base"
 
 /**
  * Settings fields that are safe to mirror from the host onto a paired client.
@@ -72,29 +72,57 @@ async function inFlightSettingKeys(): Promise<Set<string>> {
  * that, editing settings offline looked broken: the phone wrote optimistically,
  * the edits queued, and the first pull after reconnecting overwrote them with
  * the host's older values — so the UI visibly snapped back to the old setting,
- * then changed again once the queue drained.
+ * then changed again once the queue drained. A skipped field holds the cursor
+ * just below the row (the hold below), so the Host's value is pulled again
+ * until the write settles: delivered, the Host's next row carries it; refused
+ * for good, the Host's value lands instead of the phone keeping a value the
+ * Host never took.
+ *
+ * `null` is a key the Host cleared (`desktop-sync-source.ts` sends every
+ * mirrored key, `null` for an unset one, because JSON drops `undefined`). A key
+ * absent from the row is one the Host did not speak for, and stays.
+ *
+ * `language` is stored as it came: in system mode a device resolves its own
+ * language at read time (`lib/db/settings.ts`), so writing the resolved one
+ * here would replace the shared value with this phone's.
  */
-async function applySettingsRows(rows: AppSettings[], assertCurrent: () => void): Promise<void> {
-  const incoming = rows[0]
+async function applySettingsRows(
+  rows: AppSettings[],
+  assertCurrent: () => void
+): Promise<SyncApplyHold | void> {
+  const incoming = rows[0] as unknown as Record<string, unknown> | undefined
   if (!incoming) return
   const db = getDb()
-  const [current, inFlight] = await Promise.all([
-    db.settings.get("singleton"),
-    inFlightSettingKeys(),
-  ])
-  const merged: Record<string, unknown> = {
-    ...(current ?? { id: "singleton" as const }),
-    id: "singleton",
-    // An incoming host locale is not a manual choice on a fresh phone.
-    languageMode: resolveLocalePreference(current).languageMode,
-  }
-  for (const key of CROSS_PLATFORM_SETTING_KEYS) {
-    if (inFlight.has(key)) continue
-    if (incoming[key] !== undefined) merged[key] = incoming[key]
-  }
-  Object.assign(merged, resolveLocalePreference(merged))
-  assertCurrent()
-  await db.settings.put(merged as unknown as AppSettings)
+  // Read and write in one transaction: a local save landing between them used
+  // to be overwritten with the values read before it.
+  const masked = await db.transaction("rw", [db.settings, db.mobileOutboundQueue], async () => {
+    const [current, inFlight] = await Promise.all([
+      db.settings.get("singleton"),
+      inFlightSettingKeys(),
+    ])
+    const merged: Record<string, unknown> = {
+      ...(current ?? { id: "singleton" as const }),
+      id: "singleton",
+      // An incoming host locale is not a manual choice on a fresh phone.
+      languageMode: resolveLocalePreference(current).languageMode,
+    }
+    let held = false
+    for (const key of CROSS_PLATFORM_SETTING_KEYS) {
+      if (!Object.hasOwn(incoming, key)) continue
+      const value = incoming[key]
+      if (inFlight.has(key)) {
+        held = true
+        continue
+      }
+      if (value === null || value === undefined) delete merged[key]
+      else merged[key] = value
+    }
+    assertCurrent()
+    await db.settings.put(merged as unknown as AppSettings)
+    return held
+  })
+  const at = Number(incoming.updatedAt)
+  if (masked && Number.isSafeInteger(at) && at > 0) return { deferred: 1, deferredFrom: at }
 }
 
 /**

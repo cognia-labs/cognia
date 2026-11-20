@@ -2044,6 +2044,7 @@
         "content": "Chats, characters, skills and memories",
         "contentHint": "Built-in characters and skills, and memories that belong to a project, stay on this device.",
         "failed": "Could not change what syncs: {message}",
+        "offHint": "Off: changes stay on this device. They are sent when you turn this back on, and where both sides changed the same item, the newer change wins.",
         "settings": "Shared settings",
         "settingsHint": "Preferences meant for every device, such as your profile. Device-specific settings and API keys stay here.",
         "title": "What syncs"
@@ -2137,6 +2138,7 @@
         "memories": "{count, plural, one {# memory} other {# memories}}",
         "messages": "{count, plural, one {# message} other {# messages}}",
         "sessions": "{count, plural, one {# chat} other {# chats}}",
+        "settings": "{count, plural, one {# shared setting} other {# shared settings}}",
         "skills": "{count, plural, one {# skill} other {# skills}}"
       },
       "description": "Your account already holds data from your other devices, and this device has its own. Choose how to combine them. A backup of this device is saved first, so you can restore it if needed.",
@@ -2147,7 +2149,7 @@
       "mergeHint": "Keep both. Where the same item was changed on both sides, the newer change wins.",
       "onDevice": "On this device",
       "replace": "Use the account's data",
-      "replaceHint": "Remove this device's chats, characters, skills and memories, then download the account's. Built-ins stay.",
+      "replaceHint": "Remove this device's chats, characters, skills and memories, then download the account's. Built-ins stay. Shared settings take the account's values where it has them.",
       "title": "Combine this device's data with your account?"
     },
     "notification": {
@@ -28981,6 +28983,9 @@
         "never": "Never",
         "statusErrors": "Errors",
         "statusHealthy": "Healthy",
+        "statusNeverSynced": "Not synced yet",
+        "statusNotPaired": "Not paired",
+        "statusPartial": "Partly synced",
         "syncAll": "Sync all",
         "syncAllAria": "Sync every table now",
         "syncNowAria": "Sync {table} now",
@@ -29102,6 +29107,7 @@
         "iceServersHelp": "One stun: URL per line. Public STUN is enough for most home networks; add more if NAT traversal stalls.",
         "iceServersLabel": "STUN servers",
         "invalidIceServer": "Skipping invalid ICE server entry: {value}",
+        "invalidTurnServer": "Skipping invalid TURN server entry: {value}",
         "invalidUrl": "Signaling URL must start with ws:// or wss://",
         "noDevices": "No paired devices with WebRTC enabled yet. Pair a phone running the latest mobile build to populate this list.",
         "pollFailed": "Couldn't read the signaling hub status ({reason}). The device list below may be stale.",
@@ -29117,7 +29123,9 @@
         "signalingUrlHelp": "WebSocket endpoint for the public rendezvous. Self-hosted deployments swap this for their own URL.",
         "signalingUrlLabel": "Signaling server URL",
         "signalingUrlPlaceholder": "wss://signaling.cognia.cn/signaling",
+        "stunInTurnField": "Skipping {value}: STUN entries go in the STUN servers field.",
         "title": "WebRTC remote access",
+        "turnInIceField": "Skipping {value}: TURN entries go in the TURN servers field, which keeps their credentials in the OS keyring.",
         "turnProviderAuthTokenLabel": "Twilio Auth Token",
         "turnProviderCloudflare": "Cloudflare Calls",
         "turnProviderHelp": "Optional. Auto-mints short-lived TURN credentials and rotates them before expiry, instead of pasting static ones above. The API secret is stored in the OS keyring, never in plaintext.",
@@ -45760,6 +45768,7 @@
         "versionTooNew": "This profile was exported by a newer version of Cognia.",
         "wrongSchema": "That file is not a Cognia settings profile."
       },
+      "importedSkippedToast": "Settings imported. {count, plural, one {# setting was} other {# settings were}} skipped because this version cannot use the value: {keys}.",
       "importedToast": "Settings imported.",
       "resetAll": "Reset all to defaults…",
       "resetConfirm": "Reset",
@@ -53357,6 +53366,7 @@
     },
     "finder": {
       "controls": {
+        "accountSync": "Account sync and recovery key",
         "autoUpdate": "Automatic updates",
         "backgroundTasks": "Background tasks",
         "biometricGuard": "Biometric guard",

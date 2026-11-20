@@ -4,6 +4,10 @@
 
 import "fake-indexeddb/auto"
 import type { AppSettings } from "@cognia/agent-config-types"
+
+// Off a paired client the real mirror is `null`; tests that need one say so.
+jest.mock("@/lib/settings/mirror-to-host", () => ({ prepareSettingsMirror: jest.fn(() => null) }))
+import { prepareSettingsMirror } from "@/lib/settings/mirror-to-host"
 import { DEFAULT_BACKGROUND_SETTINGS } from "@/types/appearance"
 import { DEFAULT_UPDATE_SETTINGS } from "@cognia/agent-config-types"
 import { DEFAULT_AUTO_ROUTING } from "@cognia/provider-types/auto-router"
@@ -634,6 +638,138 @@ describe("saveSettings", () => {
     expect(fetched.customThemes).toEqual([{ id: "ct-7", name: "Imported" }])
     expect(fetched.importedVscodeThemes).toHaveLength(1)
     expect(fetched.importedVscodeThemes?.[0].customThemeId).toBe("ct-7")
+  })
+})
+
+describe("saveSettings racing another writer", () => {
+  const opts = { mirrorToHost: false } as const
+
+  /** Starts a write the way the account sync applier does, while the save is between read and write. */
+  function writeConcurrently(patch: Record<string, unknown>) {
+    const db = getDb()
+    void db.transaction("rw", db.settings, async () => {
+      await db.settings.update("singleton", patch as Partial<AppSettings>)
+    })
+  }
+
+  it("keeps a key another writer changed after the save read the row", async () => {
+    await getDb().settings.put({ ...DEFAULTS, theme: "light" })
+    const saved = await saveSettings(() => {
+      writeConcurrently({ theme: "dark" })
+      return { selectedMicId: "local-mic" }
+    }, opts)
+    const row = await getDb().settings.get("singleton")
+    expect(row).toMatchObject({ theme: "dark", selectedMicId: "local-mic" })
+    // The save answers with what it stored, not the stale value it read.
+    expect(saved).toMatchObject({ theme: "dark", selectedMicId: "local-mic" })
+  })
+
+  it("lets an explicit edit of the same key win over the concurrent write", async () => {
+    await getDb().settings.put({ ...DEFAULTS, theme: "light" })
+    await saveSettings(() => {
+      writeConcurrently({ theme: "dark" })
+      return { theme: "system" }
+    }, opts)
+    expect((await getDb().settings.get("singleton"))?.theme).toBe("system")
+  })
+
+  it("never moves updatedAt behind what the other writer stored", async () => {
+    await getDb().settings.put({ ...DEFAULTS, updatedAt: 1 })
+    const future = Date.now() + 60_000
+    await saveSettings(() => {
+      writeConcurrently({ updatedAt: future })
+      return { fontScale: "lg" }
+    }, opts)
+    expect((await getDb().settings.get("singleton"))?.updatedAt).toBeGreaterThan(future)
+  })
+})
+
+describe("saveSettings and the shared language", () => {
+  it("keeps the shared language a device that follows the system received", async () => {
+    // Another device chose Chinese by hand and the account delivered it; this
+    // one follows an English system. An unrelated save used to store English
+    // as the shared language, which then overwrote the other device's choice.
+    const languages = jest.spyOn(navigator, "languages", "get").mockReturnValue(["en-US"])
+    try {
+      await getDb().settings.put({ ...DEFAULTS, language: "zh-CN", languageMode: "system" })
+      const saved = await saveSettings({ selectedMicId: "mic" }, { mirrorToHost: false })
+      expect(saved).toMatchObject({ language: "en", languageMode: "system" })
+      expect(await getDb().settings.get("singleton")).toMatchObject({
+        language: "zh-CN",
+        languageMode: "system",
+      })
+    } finally {
+      languages.mockRestore()
+    }
+  })
+
+  it("stores no language for a fresh device that follows the system", async () => {
+    const languages = jest.spyOn(navigator, "languages", "get").mockReturnValue(["zh-CN"])
+    try {
+      await saveSettings({ theme: "dark" }, { mirrorToHost: false })
+      const row = await getDb().settings.get("singleton")
+      expect(row?.languageMode).toBe("system")
+      expect(row && Object.hasOwn(row, "language") ? row.language : undefined).toBeUndefined()
+      expect((await getSettings()).language).toBe("zh-CN")
+    } finally {
+      languages.mockRestore()
+    }
+  })
+
+  it("stores an explicit choice", async () => {
+    const languages = jest.spyOn(navigator, "languages", "get").mockReturnValue(["en-US"])
+    try {
+      await getDb().settings.put({ ...DEFAULTS, language: "en", languageMode: "system" })
+      await saveSettings({ language: "zh-CN" }, { mirrorToHost: false })
+      expect(await getDb().settings.get("singleton")).toMatchObject({
+        language: "zh-CN",
+        languageMode: "manual",
+      })
+    } finally {
+      languages.mockRestore()
+    }
+  })
+})
+
+describe("saveSettings on a paired client", () => {
+  afterEach(() => jest.mocked(prepareSettingsMirror).mockImplementation(() => null))
+
+  it("writes the Host job and the settings row together", async () => {
+    jest.mocked(prepareSettingsMirror).mockImplementation((db) => ({
+      async enqueue(patch) {
+        await db.mobileOutboundQueue.put({
+          id: "job",
+          command: "app_settings_update",
+          payload: { patch },
+          status: "pending",
+          attempts: 0,
+          createdAt: 1,
+          nextAttemptAt: 1,
+          idempotencyKey: "k",
+          accountId: "a",
+          targetId: "t",
+        } as never)
+        return Object.keys(patch)
+      },
+    }))
+    await saveSettings({ theme: "dark" })
+    expect((await getDb().settings.get("singleton"))?.theme).toBe("dark")
+    expect(await getDb().mobileOutboundQueue.count()).toBe(1)
+  })
+
+  it("fails the save, and stores nothing, when the job cannot be queued", async () => {
+    // The enqueue used to be swallowed after the local write committed: the
+    // phone showed the new value, the Host never heard of it, and no queue row
+    // existed for the offline banner to report or a retry to send.
+    await getDb().settings.put({ ...DEFAULTS, theme: "light" })
+    jest.mocked(prepareSettingsMirror).mockImplementation(() => ({
+      async enqueue() {
+        throw new Error("queue unavailable")
+      },
+    }))
+    await expect(saveSettings({ theme: "dark" })).rejects.toThrow("queue unavailable")
+    expect((await getDb().settings.get("singleton"))?.theme).toBe("light")
+    expect(await getDb().mobileOutboundQueue.count()).toBe(0)
   })
 })
 
