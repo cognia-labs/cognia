@@ -797,6 +797,27 @@ test("builtinDefToAiSdkTool returns joined text and throws on isError", async ()
   await assert.rejects(errTool.execute({}), /nope/)
 })
 
+// CM-12: run_code names its nested calls after its own call, so the handler
+// has to see the AI SDK's id for it.
+test("a built-in handler sees the AI SDK's toolCallId", async () => {
+  let seen: unknown
+  const probe = convert(
+    {
+      name: "probe",
+      description: "",
+      inputSchema: {},
+      handler: async (_args: unknown, extra?: { toolCallId?: string }) => {
+        seen = extra?.toolCallId
+        return { content: [{ type: "text", text: "ok" }] }
+      },
+    },
+    null,
+    0
+  )
+  await probe.execute({}, { toolCallId: "call_1", messages: [] })
+  assert.equal(seen, "call_1")
+})
+
 test("runBuiltinHandler bounds a hung read-only tool and rejects on timeout", async () => {
   const { runBuiltinHandler } = __testing__
   // `grep` is a read-only built-in (requiresApproval === false) → gets the net.

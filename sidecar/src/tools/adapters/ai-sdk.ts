@@ -121,10 +121,12 @@ function runBuiltinHandler(
   def: Pick<ToolDefinition, "name" | "handler">,
   effective: unknown,
   timeoutMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolCallId?: string
 ): Promise<unknown> {
   const net = READ_ONLY_TOOL_NAMES.has(def.name) ? timeoutMs : 0
-  const call = () => Promise.resolve(def.handler(effective, { signal }))
+  const call = () =>
+    Promise.resolve(def.handler(effective, { signal, ...(toolCallId ? { toolCallId } : {}) }))
   if (!Number.isFinite(net) || net <= 0) return call()
   let timer: ReturnType<typeof setTimeout> | null = null
   const deadline = new Promise<never>((_, reject) => {
@@ -206,7 +208,13 @@ function builtinDefToAiSdkTool(
       }
       let result: unknown
       try {
-        result = await runBuiltinHandler(def, validated, timeoutMs, options?.abortSignal)
+        result = await runBuiltinHandler(
+          def,
+          validated,
+          timeoutMs,
+          options?.abortSignal,
+          options?.toolCallId
+        )
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         const reviewed = await applyOutputReview(
@@ -538,6 +546,7 @@ export function buildAiSdkTools({
     enabled: sendOptions.builtinTools,
     isToolAllowed,
     isToolDenied: (name) => !passesToolLists(name, SERVER_NAME, null, disallowed),
+    emit,
     authorizeTool: (name, input, extra, validateInput) =>
       gate(name, input, extra?.signal, validateInput),
     executeTool: async (def, input, extra) => {
@@ -551,7 +560,9 @@ export function buildAiSdkTools({
         workerToolAdmission
       )
       return nested.execute!(input, {
-        toolCallId: randomUUID(),
+        // `run_code` names each nested call after itself, so this call's
+        // admission and output review carry the same id as its trace.
+        toolCallId: extra?.toolCallId ?? randomUUID(),
         messages: [],
         abortSignal: extra?.signal,
         context: {},

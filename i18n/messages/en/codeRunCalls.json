@@ -1,0 +1,23 @@
+{
+  "title": "Tool calls from the program",
+  "summary": "{count, plural, one {# tool call} other {# tool calls}} from the program",
+  "rowAria": "Call {ordinal}: {tool}, {status}",
+  "state": {
+    "running": "Running",
+    "succeeded": "Done",
+    "failed": "Failed",
+    "stopped": "Stopped with the program"
+  },
+  "failure": {
+    "invalid-args": "Invalid arguments",
+    "not-found": "Not found",
+    "permission-denied": "Not permitted",
+    "timeout": "Timed out",
+    "aborted": "Cancelled",
+    "user-rejected": "Declined",
+    "resource-exhausted": "Over a limit",
+    "environment": "Environment problem",
+    "backend-unavailable": "Service unavailable",
+    "execution-failed": "Failed"
+  }
+}

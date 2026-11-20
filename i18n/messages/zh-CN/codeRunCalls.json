@@ -1,0 +1,23 @@
+{
+  "title": "程序发起的工具调用",
+  "summary": "程序发起了 {count} 次工具调用",
+  "rowAria": "第 {ordinal} 次调用：{tool}，{status}",
+  "state": {
+    "running": "运行中",
+    "succeeded": "完成",
+    "failed": "失败",
+    "stopped": "随程序停止"
+  },
+  "failure": {
+    "invalid-args": "参数无效",
+    "not-found": "未找到",
+    "permission-denied": "无权限",
+    "timeout": "超时",
+    "aborted": "已取消",
+    "user-rejected": "已拒绝",
+    "resource-exhausted": "超出限额",
+    "environment": "环境问题",
+    "backend-unavailable": "服务不可用",
+    "execution-failed": "执行失败"
+  }
+}

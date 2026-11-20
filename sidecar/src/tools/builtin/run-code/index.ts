@@ -8,6 +8,8 @@
 // apply. There is no path from generated code to a tool implementation that
 // skips them.
 
+import { randomUUID } from "node:crypto"
+
 import { z } from "zod"
 import { tool } from "../../kernel/define.ts"
 import type { ToolHandlerExtra } from "../../kernel/define.ts"
@@ -18,6 +20,8 @@ import type { CodeRunFailurePhase, SandboxProbe } from "./supervisor.ts"
 import type { SdkTool } from "./sdk-declaration.ts"
 import { SandboxUnavailableError, probeSandbox, runCodeProgram } from "./supervisor.ts"
 import { generateSdkDeclaration } from "./sdk-declaration.ts"
+import { nestedToolCallId } from "./trace.ts"
+import type { CodeRunCallReport } from "./trace.ts"
 
 export const RUN_CODE_TOOL_NAME = "run_code"
 
@@ -49,6 +53,12 @@ export interface RunCodeDeps {
    * follows).
    */
   processSignal?: AbortSignal | undefined
+  /**
+   * Where each nested call's state goes (CM-12). Only reported for a call
+   * whose rail named it (`extra.toolCallId`): a trace with no parent to hang
+   * under is one nothing can show.
+   */
+  reportCall?: ((report: CodeRunCallReport) => void) | undefined
 }
 
 /** The failure kind a run's phase reports to the model and to telemetry. */
@@ -74,6 +84,7 @@ export function createRunCodeTool({
   sessionId,
   groupProofSupported,
   processSignal,
+  reportCall,
 }: RunCodeDeps) {
   const description =
     "Run read-only JavaScript against the typed tool SDK. Cannot write, spawn, or reach the network." +
@@ -84,13 +95,30 @@ export function createRunCodeTool({
     description,
     runCodeShape,
     async (args, extra) => {
+      // This call's own id, when the rail knows it. Nested calls are named
+      // after it, so their approvals, reviews and trace all point back here.
+      const parentToolCallId =
+        typeof extra?.toolCallId === "string" && extra.toolCallId.length > 0
+          ? extra.toolCallId
+          : undefined
       try {
         const outcome = await runCodeProgram({
           source: String(args?.source ?? ""),
           // Each nested call carries the run's signal, which the turn's abort
           // and the run's own end both trip, so its approval wait and its
           // handler stop with the program.
-          callTool: (name, input, signal) => callTool(name, input, { ...extra, signal }),
+          callTool: (name, input, signal, ordinal) =>
+            callTool(name, input, {
+              ...extra,
+              signal,
+              toolCallId: parentToolCallId
+                ? nestedToolCallId(parentToolCallId, ordinal)
+                : randomUUID(),
+            }),
+          onCall:
+            parentToolCallId && reportCall
+              ? (call) => reportCall({ parentToolCallId, call })
+              : undefined,
           probe: probe(),
           signal:
             processSignal && extra?.signal

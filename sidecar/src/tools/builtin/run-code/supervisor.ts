@@ -21,6 +21,8 @@ import { runAdmission } from "./admission.ts"
 import type { RunAdmissionGate, RunAdmissionLimit } from "./admission.ts"
 import { checkToolEligibility, programmaticReadOnlyToolNames } from "./eligibility.ts"
 import { CHILD_MESSAGE_KINDS } from "./sandbox-child.ts"
+import { traceableToolName } from "./trace.ts"
+import type { CodeRunCall } from "./trace.ts"
 
 const CHILD_PATH = fileURLToPath(new URL("./sandbox-child.ts", import.meta.url))
 
@@ -259,6 +261,26 @@ export type ExecFileImpl = (
  * blocked that event loop for most of each sample, so one `run_code` call
  * stalled every other session's stream and IPC.
  */
+/**
+ * The pace of the sandbox's memory samples (CM-13). Each sample execs `ps`.
+ * At one every 25 ms, an endpoint-security agent that screens every exec fell
+ * behind, and the sandbox child's own `node` exec queued behind the backlog:
+ * each consecutive run started slower than the last until a three-line program
+ * hit its 30-second wall time. The V8 heap flag already bounds a Node child's
+ * JS heap; the samples are the backstop for memory outside it (and for Bun),
+ * so they slow down while the sandbox is far from its limit and tighten once
+ * it is within half of it.
+ */
+export const RSS_SAMPLE_INTERVAL_MS = 250
+export const RSS_SAMPLE_NEAR_LIMIT_INTERVAL_MS = 25
+
+/** The delay before the next memory sample, given the last one. */
+export function rssSampleDelay(observedBytes: number, maxMemoryBytes: number): number {
+  return observedBytes * 2 >= maxMemoryBytes
+    ? RSS_SAMPLE_NEAR_LIMIT_INTERVAL_MS
+    : RSS_SAMPLE_INTERVAL_MS
+}
+
 export function readProcessGroupRssBytes(
   processGroupId: number | undefined,
   { execFileImpl = execFile as unknown as ExecFileImpl }: { execFileImpl?: ExecFileImpl } = {}
@@ -365,9 +387,11 @@ export async function runCodeProgram({
   groupProofSupported,
   readRss = readProcessGroupRssBytes,
   admit = runAdmission.acquire,
+  onCall,
 }: {
   source: string
-  callTool: (name: string, input: unknown, signal: AbortSignal) => Promise<unknown>
+  /** `ordinal` is the call's 1-based place in the program, as `onCall` reports it. */
+  callTool: (name: string, input: unknown, signal: AbortSignal, ordinal: number) => Promise<unknown>
   probe?: SandboxProbe | undefined
   config?: CodeModeLimits | undefined
   onLog?: ((level: string, text: string) => void) | undefined
@@ -380,6 +404,13 @@ export async function runCodeProgram({
   readRss?: (processGroupId: number | undefined) => Promise<number>
   /** Concurrency admission (CM-11); the sidecar's own table unless injected. */
   admit?: RunAdmissionGate
+  /**
+   * Each nested call's state as it changes (CM-12): `running` when it is
+   * dispatched, then `succeeded` or `failed` once it ends. A call refused at
+   * the boundary is reported once, as `failed`. A throwing reporter never
+   * affects the run.
+   */
+  onCall?: ((call: CodeRunCall) => void) | undefined
 }): Promise<CodeRunResult> {
   const resolvedProbe = probe ?? probeSandbox()
   assertSandboxable(resolvedProbe)
@@ -408,6 +439,7 @@ export async function runCodeProgram({
     let logBytes = 0
     let logsTruncated = false
     let resultBytes = 0
+    let callOrdinal = 0
     const toolNames = programmaticReadOnlyToolNames()
     const standalone = Boolean(
       (globalThis as { Bun?: { isStandaloneExecutable?: boolean } }).Bun?.isStandaloneExecutable
@@ -459,7 +491,7 @@ export async function runCodeProgram({
 
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
-    let memoryTimer: ReturnType<typeof setInterval> | null = null
+    let memoryTimer: ReturnType<typeof setTimeout> | null = null
     // Every nested call gets this signal: settling the run aborts them, and the
     // turn's own abort reaches them through it.
     const runAbort = new AbortController()
@@ -498,7 +530,7 @@ export async function runCodeProgram({
         // is dispatched, whatever the child still has queued.
         settled = true
         if (timer) clearTimeout(timer)
-        if (memoryTimer) clearInterval(memoryTimer)
+        if (memoryTimer) clearTimeout(memoryTimer)
         signal?.removeEventListener("abort", onAbort)
         runAbort.abort(new Error("run_code finished"))
         killGroup()
@@ -528,13 +560,15 @@ export async function runCodeProgram({
         })
       }, config.wallTimeMs)
 
-      // One sample at a time: a slow `ps` skips ticks instead of piling up.
+      // One sample at a time, each scheduled after the last one ends, so a
+      // slow `ps` never piles up behind itself (CM-13).
       let sampling = false
       const enforceMemoryLimit = async () => {
         if (sampling || settled) return
         sampling = true
+        let observed = 0
         try {
-          const observed = await readRss(child.pid)
+          observed = await readRss(child.pid)
           if (observed <= config.maxMemoryBytes) return
           settle({
             ok: false,
@@ -550,11 +584,15 @@ export async function runCodeProgram({
           })
         } finally {
           sampling = false
+          if (!settled) {
+            memoryTimer = setTimeout(
+              () => void enforceMemoryLimit(),
+              rssSampleDelay(observed, config.maxMemoryBytes)
+            )
+            memoryTimer.unref?.()
+          }
         }
       }
-      memoryTimer = setInterval(() => void enforceMemoryLimit(), 25)
-      memoryTimer.unref?.()
-      void enforceMemoryLimit()
 
       child.on("error", (error) => {
         settle({
@@ -584,7 +622,14 @@ export async function runCodeProgram({
 
         switch (message.kind) {
           case CHILD_MESSAGE_KINDS.READY:
-            child.send({ kind: CHILD_MESSAGE_KINDS.START, source, toolNames })
+            // No program code runs before START, so memory is watched from
+            // here: a sample during the child's own exec only delays it. The
+            // program starts once the first sample shows the boundary works
+            // and holds; a `ps` that fails, or a sandbox already over its
+            // limit, ends the run before any of its code runs.
+            void enforceMemoryLimit().then(() => {
+              if (!settled) child.send({ kind: CHILD_MESSAGE_KINDS.START, source, toolNames })
+            })
             return
 
           case CHILD_MESSAGE_KINDS.LOG:
@@ -649,12 +694,27 @@ export async function runCodeProgram({
       }
 
       async function handleToolCall(message: ChildMessage) {
+        callOrdinal += 1
+        const ordinal = callOrdinal
+        const tool = traceableToolName(message.name)
+        const receivedAt = Date.now()
+        const report = (call: Omit<CodeRunCall, "ordinal" | "tool">) => {
+          try {
+            onCall?.({ ordinal, tool, ...call })
+          } catch {
+            // The trace is an observer; it never decides the run.
+          }
+        }
+        const ended = (call: Pick<CodeRunCall, "state" | "failure" | "resultBytes">) =>
+          report({ ...call, durationMs: Date.now() - receivedAt })
         const reply = (patch: { result?: unknown; error?: string; failure?: ToolFailureMeta }) => {
           if (settled) return
           child.send({ kind: CHILD_MESSAGE_KINDS.TOOL_RESULT, id: message.id, ...patch })
         }
-        const refuse = (error: string, failureMeta: ToolFailureMeta) =>
+        const refuse = (error: string, failureMeta: ToolFailureMeta) => {
+          ended({ state: "failed", failure: failureMeta.kind })
           reply({ error, failure: failureMeta })
+        }
 
         // The allowlist is re-checked here even though the child was only handed
         // eligible names. The child is the untrusted side; a name it invents must
@@ -682,6 +742,7 @@ export async function runCodeProgram({
 
         const slot = budget.tryAcquire()
         if (!slot.ok && slot.exceeded) {
+          ended({ state: "failed", failure: "resource-exhausted" })
           settle({
             ok: false,
             error: { name: "CodeLimitExceeded", message: "tool call budget exhausted" },
@@ -698,10 +759,21 @@ export async function runCodeProgram({
           return
         }
 
+        report({ state: "running" })
         try {
-          const result = await callTool(message.name as string, message.input, runAbort.signal)
-          if (settled) return
+          const result = await callTool(
+            message.name as string,
+            message.input,
+            runAbort.signal,
+            ordinal
+          )
           const bytes = Buffer.byteLength(safeStringify(result), "utf8")
+          if (settled) {
+            // The run ended while the call was out; its result reaches no one,
+            // but the call itself still finished.
+            ended({ state: "succeeded", resultBytes: bytes })
+            return
+          }
           if (bytes > config.maxToolResultBytes) {
             refuse(
               `result of "${String(message.name)}" is ${bytes} bytes, over the ${config.maxToolResultBytes}-byte limit for one call; ask for less`,
@@ -711,6 +783,7 @@ export async function runCodeProgram({
           }
           resultBytes += bytes
           if (resultBytes > config.maxTotalToolResultBytes) {
+            ended({ state: "failed", failure: "resource-exhausted" })
             settle({
               ok: false,
               error: { name: "CodeLimitExceeded", message: "tool results too large in total" },
@@ -723,6 +796,7 @@ export async function runCodeProgram({
             })
             return
           }
+          ended({ state: "succeeded", resultBytes: bytes })
           reply({ result })
         } catch (error) {
           const meta =

@@ -123,6 +123,16 @@ jest.mock("@/components/chat/message-parts/mcp-tool-card", () => ({
     ),
 }))
 
+// The list has its own test; here only whether and how it is mounted matters.
+jest.mock("@/components/chat/message-parts/code-run-calls", () => ({
+  CodeRunCallList: ({ calls, settled }: { calls: { ordinal: number }[]; settled: boolean }) =>
+    ReactForMocks.createElement(
+      "ol",
+      { "data-testid": "code-run-calls", "data-settled": String(settled) },
+      calls.map((call) => call.ordinal).join(",")
+    ),
+}))
+
 function part(extra: Record<string, unknown>) {
   return { toolCallId: "call-1", state: "output-available", input: {}, ...extra } as never
 }
@@ -144,6 +154,45 @@ describe("isBashToolPart", () => {
 })
 
 describe("ToolDetailBody", () => {
+  // CM-12: a run_code call lists its program's nested calls above its body.
+  it("lists a run_code program's nested calls above the routed body", () => {
+    const { getByTestId } = render(
+      <ToolDetailBody
+        part={part({
+          type: "tool-run_code",
+          codeRunCalls: [
+            { id: "call-1/2", ordinal: 2, tool: "read", state: "succeeded" },
+            { id: "call-1/1", ordinal: 1, tool: "grep", state: "succeeded" },
+          ],
+        })}
+      />
+    )
+    const list = getByTestId("code-run-calls")
+    expect(list.textContent).toBe("1,2")
+    expect(list.getAttribute("data-settled")).toBe("true")
+    expect(
+      list.compareDocumentPosition(getByTestId("tool-body")) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it("treats a run_code call that is still running as unsettled", () => {
+    const { getByTestId } = render(
+      <ToolDetailBody
+        part={part({
+          type: "tool-run_code",
+          state: "input-available",
+          codeRunCalls: [{ id: "call-1/1", ordinal: 1, tool: "grep", state: "running" }],
+        })}
+      />
+    )
+    expect(getByTestId("code-run-calls").getAttribute("data-settled")).toBe("false")
+  })
+
+  it("lists nothing for a call without nested calls", () => {
+    const { queryByTestId } = render(<ToolDetailBody part={part({ type: "tool-run_code" })} />)
+    expect(queryByTestId("code-run-calls")).toBeNull()
+  })
+
   it("wires a Goose delegate's read-only child link to the owning chat", () => {
     const { getByRole } = render(
       <ToolDetailBody

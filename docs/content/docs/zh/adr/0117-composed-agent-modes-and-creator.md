@@ -133,6 +133,9 @@ engagement}` 是无损可逆的，写进行里就不是。
 - **嵌套失败。** 两个引擎都以名为 `ToolError` 的 `Error` 拒绝程序中的 promise，携带分类后的 `kind` 与 `retryable`。外层结果按阶段分类：`compile` → `invalid-args`，`run` → `execution-failed`，`cancelled` → `aborted`，`limit` → `resource-exhausted`，`sandbox` → `environment`。
 - **停止。** 本轮的中止信号会取消程序。每次运行结束都会先关闭准入，再中止交给嵌套调用和审批等待的信号，杀掉进程组，并等待一秒宽限；无法证明两者都已结束时报告 `stopUnconfirmed`。该进程组登记在会话的前台进程组中，因此 Stop 的收尾与停止证明都覆盖它（ADR-0244）。
 - **字节预算。** 在原有限制之外：每次嵌套调用的输入 64 KiB、结果 1 MiB，每次运行的嵌套结果合计 8 MiB，单条日志 4 KiB，日志合计 64 KiB（`lib/ai/code-mode/limits.json`）。
+- **内存采样。** supervisor 用 `ps` 每 250 ms 读取一次沙箱进程组的 RSS；某次采样超过内存上限的一半后改为每 25 ms 一次。采样从子进程报告 READY 开始，第一次采样成功后程序才开始运行，因此 `ps` 不可用的 Host 不会执行任何程序代码。此前从启动起每 25 ms 一次 `ps`，会压垮逐个审查 exec 的终端安全代理：之后每次运行的子进程 exec 都排在积压之后，直到短程序也撞上墙钟时限。
+- **准入。** 一个会话同时只运行一个程序，一个 Host 最多四个（`maxConcurrentRunsPerSession`、`maxConcurrentRunsPerHost`）。程序最多等待 35 秒拿到名额，按所在会话的发起顺序排队，等待期间跟随本轮的中止信号；拿不到名额时以可重试的 `resource-exhausted` 错误失败，阶段为 `busy`。SDK 声明会写明这些限制。
+- **嵌套调用追踪。** 两个引擎都把 `run_code` 自身的调用 ID 交给它（AI SDK 的 `toolCallId`；Claude SDK 通过请求元数据 `claudecode/toolUseId` 传来的 `tool_use` ID）。嵌套调用的 ID 为 `<run_code ID>/<序号>`，它的审批、输出复核和执行都用这同一个 ID。嵌套调用状态的每次变化都是一个合成的 `system/code_run_call` 事件，写明父调用，带序号、工具、状态（`running`、`succeeded`、`failed`）、失败类型、耗时和结果大小，绝不包含调用的输入或输出。聊天把这些事件并入 `run_code` 部件的 `codeRunCalls` 并在其卡片下逐条列出；agent trace 把每次调用记为 `run_code` span 的子 span；canonical 日志把它记为带 `parentToolCallId` 的 `tool-progress`。嵌套调用不会成为独立的工具部件，因此历史记录不会把它们当作模型发起的调用重放。
 - **范围。** `code` 只替换内建工具面。引擎自带工具、插件工具与 MCP 服务保留各自的入口和权限；Code 预设的权限上限对它们生效。
 
 ## 复用边界

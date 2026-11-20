@@ -39,6 +39,7 @@ import { VIDEO_ATTACHMENT_PART_KEY } from "@/lib/chat/attachments/video/attachme
 import { attachUsageToLastAssistant } from "@/lib/chat/message-run-metadata"
 import type { HookNoticePartData } from "@/lib/ai/agent/execution/hooks/types"
 import { registerUndoSnapshot } from "./compaction-undo"
+import { CODE_RUN_CALL_SUBTYPE, applyCodeRunCall, preserveCodeRunCalls } from "./code-run-calls"
 import { persistOpticalArchive, type OpticalBoundaryMeta } from "./optical-archive-persist"
 import { extractA2UIBlocks } from "@cognia/a2ui-core/parser"
 import {
@@ -684,6 +685,11 @@ function applySystemEvent(
       emitHookAuditSpan(evt, (raw as { session_id?: string }).session_id ?? "")
       return { messages, turnComplete: false }
 
+    // A `run_code` program's nested call (ADR-0117, CM-12), kept on the part
+    // of the run_code call it ran inside.
+    case CODE_RUN_CALL_SUBTYPE:
+      return { messages: applyCodeRunCall(messages, raw), turnComplete: false }
+
     case "compact_boundary":
       return { messages: appendCompactBoundary(messages, evt), turnComplete: false }
 
@@ -745,8 +751,9 @@ function applySystemEvent(
 }
 
 /**
- * The `system` subtypes `applySystemEvent` names — `hook_fire` excluded, since
- * it is synthetic and absent from `SdkSystemSubtype`.
+ * The `system` subtypes `applySystemEvent` names — `hook_fire`, `hook_audit`
+ * and `code_run_call` excluded, since they are synthetic and absent from
+ * `SdkSystemSubtype`.
  */
 type HandledSystemSubtype =
   | "compact_boundary"
@@ -942,7 +949,10 @@ function appendAssistantMessage(messages: UIMessage[], evt: SDKAssistantMessage)
   const idx = messages.findIndex((m) => m.id === id)
   const parts = preserveStepStartParts(
     messages[idx],
-    preserveTerminalToolParts(messages[idx], buildAssistantParts(evt.message))
+    preserveCodeRunCalls(
+      messages[idx],
+      preserveTerminalToolParts(messages[idx], buildAssistantParts(evt.message))
+    )
   )
   const previousMetadata = (messages[idx]?.metadata ?? {}) as Record<string, unknown>
   const incomingMetadata = (evt.message.metadata ?? {}) as Record<string, unknown>

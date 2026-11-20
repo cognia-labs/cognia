@@ -7,6 +7,7 @@ import { classifyToolFailure } from "../kernel/failure.ts"
 import type { ToolFailureMeta } from "../kernel/result.ts"
 import { NestedToolError, RUN_CODE_TOOL_NAME, codeModeToolDefs } from "../builtin/run-code/index.ts"
 import { isProgrammaticReadOnly } from "../builtin/run-code/eligibility.ts"
+import { codeRunCallFrame } from "../builtin/run-code/trace.ts"
 import { bareToolName } from "../../policy/confinement/classify.ts"
 import { BUILTIN_SERVER_NAME } from "../../policy/tool-catalog/catalog.ts"
 
@@ -25,6 +26,11 @@ export interface ToolPresentationOptions {
   groupProofSupported?: boolean | undefined
   /** The session's process admission; aborted once its teardown starts. */
   processSignal?: AbortSignal | undefined
+  /**
+   * The session's frame stream. `run_code` reports its nested calls on it
+   * (CM-12); a surface without one reports nothing.
+   */
+  emit?: ((frame: Record<string, unknown>) => void) | undefined
   authorizeTool?:
     | ((
         name: string,
@@ -132,6 +138,9 @@ export function applyToolPresentation<D extends ToolDefinition>(
         sessionId: options.sessionId,
         groupProofSupported: options.groupProofSupported,
         processSignal: options.processSignal,
+        reportCall: options.emit
+          ? (report) => options.emit!(codeRunCallFrame(options.sessionId, report))
+          : undefined,
       }) as ToolDefinition[])
   return presentation === "code" ? codeDefs : [...permitted, ...codeDefs]
 }

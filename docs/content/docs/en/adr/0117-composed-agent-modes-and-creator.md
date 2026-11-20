@@ -256,6 +256,33 @@ Both selection reached the sidecar as `native`.
 - **Byte budgets.** Besides the earlier limits: 64 KiB input per nested call,
   1 MiB result per nested call, 8 MiB of nested results per run, 4 KiB per log
   entry and 64 KiB of logs per run (`lib/ai/code-mode/limits.json`).
+- **Memory sampling.** The supervisor reads the sandbox process group's RSS
+  with `ps` every 250 ms, and every 25 ms once a sample shows it above half its
+  memory limit. Sampling starts when the child reports READY, and the program
+  starts only after the first sample succeeds, so a Host where `ps` fails never
+  runs program code. The earlier pace, one `ps` every 25 ms from spawn,
+  overwhelmed an endpoint-security agent that screens every exec: each
+  consecutive run's child exec queued behind the backlog until short programs
+  hit their wall time.
+- **Admission.** A session runs one program at a time and a Host at most four
+  (`maxConcurrentRunsPerSession`, `maxConcurrentRunsPerHost`). A program waits
+  up to 35 seconds for a slot, in the order its session asked, and follows the
+  turn's signal while it waits; one that gets no slot fails as a retryable
+  `resource-exhausted` error with phase `busy`. The SDK declaration states the
+  limits.
+- **Nested call trace.** Each engine hands `run_code` its own call id (the AI
+  SDK's `toolCallId`; the Claude SDK's `tool_use` id from the
+  `claudecode/toolUseId` request meta). A nested call is
+  `<run_code id>/<ordinal>`, and that one id is what its approval, its output
+  review and its execution use. Every change in a nested call's state is a
+  synthetic `system/code_run_call` event naming the parent call, with the
+  ordinal, tool, state (`running`, `succeeded`, `failed`), failure kind,
+  duration and result size; never the call's input or output. The chat folds
+  the events into the `run_code` part as `codeRunCalls` and lists them under its
+  card, the agent trace opens each as a child span of the `run_code` span, and
+  the canonical log records it as `tool-progress` with `parentToolCallId`. The
+  nested calls never become tool parts of their own, so history does not replay
+  them as calls the model made.
 - **Scope.** `code` replaces the built-in tool surface only. The engine's own
   tools, plugin tools and MCP servers keep their entry points and their own
   permissions; the Code preset's authority cap applies to them.

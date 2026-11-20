@@ -330,7 +330,9 @@ export function buildAnthropicOptions({
     const candidates = server ? toolNameCandidates(bare, server) : [name]
     const decision = await sessionCanUseTool(name, input as Record<string, unknown>, {
       signal: extra?.signal,
-      toolUseID: randomUUID(),
+      // `run_code` names each nested call after itself, so the approval and
+      // the call's trace carry one id.
+      toolUseID: extra?.toolCallId ?? randomUUID(),
       displayName: name,
       validateInput,
       sdkPreflight: true,

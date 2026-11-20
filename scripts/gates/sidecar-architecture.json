@@ -97,6 +97,7 @@
     "sidecar/src/tools/a2ui/tool-defs.ts",
     "sidecar/src/tools/builtin/ast-grep/binary.ts",
     "sidecar/src/tools/builtin/run-code/sandbox-child.ts",
+    "sidecar/src/tools/builtin/run-code/trace.ts",
     "sidecar/src/runtimes/claude-agent-sdk/executable.ts",
     "sidecar/src/host/feature-call/index.ts",
     "sidecar/pi-extension/cognia-pi-extension.ts",

@@ -14,6 +14,12 @@ export type ToolArgs<S extends z.ZodRawShape> = z.output<z.ZodObject<S>>
 export interface ToolHandlerExtra {
   /** Aborted when the user interrupts the call; long-running handlers stop on it. */
   signal?: AbortSignal | undefined
+  /**
+   * The id of the call being handled, when the rail knows it: the AI SDK's
+   * `toolCallId`, the Claude SDK's `tool_use` id. `run_code` names its nested
+   * calls after it.
+   */
+  toolCallId?: string | undefined
   [field: string]: unknown
 }
 

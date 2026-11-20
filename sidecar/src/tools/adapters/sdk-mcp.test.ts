@@ -3,7 +3,14 @@ import assert from "node:assert/strict"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 
-import { buildCogniaToolsServer, toSdkMcpToolDefinition, wrapNativeToolResults } from "./sdk-mcp.ts"
+import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk/core"
+
+import {
+  buildCogniaToolsServer,
+  toSdkMcpToolDefinition,
+  withSdkToolCallId,
+  wrapNativeToolResults,
+} from "./sdk-mcp.ts"
 import { tool } from "../kernel/define.ts"
 import type { CallableTool } from "../../../test-support/tool-result.ts"
 
@@ -59,7 +66,8 @@ test("real MCP discovery preserves record-valued schemas and rejects invalid val
 })
 
 test("the SDK form writes tool-search presentation as anthropic metadata", async () => {
-  const handler = async () => ({ content: [] })
+  const result = { content: [] }
+  const handler = async () => result
   const def = toSdkMcpToolDefinition(
     tool("file_info", "Stat a path", {}, handler, {
       alwaysLoad: true,
@@ -76,7 +84,8 @@ test("the SDK form writes tool-search presentation as anthropic metadata", async
   })
   assert.equal("alwaysLoad" in def, false)
   assert.equal("searchHint" in def, false)
-  assert.equal(def.handler, handler)
+  // The handler is the def's own, reached through the call-id adapter.
+  assert.equal(await def.handler({}, {} as never), result)
   assert.equal(toSdkMcpToolDefinition(tool("plain", "Plain", {}, handler))._meta, undefined)
   // Existing protocol metadata passes through alongside.
   assert.deepEqual(
@@ -213,4 +222,50 @@ test("SDK MCP registration exposes only the final permitted Code surface", async
     await server.instance.close()
     delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
   }
+})
+
+// CM-12: run_code names its nested calls after its own call, so a handler on
+// this rail has to see the CLI's `tool_use` id, which arrives as MCP request
+// meta.
+test("a handler sees the CLI's tool_use id as its toolCallId, over real MCP", async () => {
+  const seen: unknown[] = []
+  const probe = tool("probe", "Probe", {}, async (_args, extra) => {
+    seen.push(extra?.toolCallId)
+    return { content: [{ type: "text" as const, text: "ok" }] }
+  })
+  const server = createSdkMcpServer({
+    name: "probe-server",
+    version: "1",
+    tools: [toSdkMcpToolDefinition(probe)],
+  })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: "tool-use-id-test", version: "1" })
+  await server.instance.connect(serverTransport)
+  await client.connect(clientTransport)
+  try {
+    await client.callTool({
+      name: "probe",
+      arguments: {},
+      _meta: { "claudecode/toolUseId": "toolu_outer" },
+    })
+    await client.callTool({ name: "probe", arguments: {} })
+  } finally {
+    await client.close()
+    await server.instance.close()
+  }
+  assert.deepEqual(seen, ["toolu_outer", undefined])
+})
+
+test("withSdkToolCallId keeps the rest of the call's extra", () => {
+  const signal = new AbortController().signal
+  assert.deepEqual(withSdkToolCallId({ signal, _meta: { "claudecode/toolUseId": "t" } }), {
+    signal,
+    _meta: { "claudecode/toolUseId": "t" },
+    toolCallId: "t",
+  })
+  assert.deepEqual(withSdkToolCallId({ signal, _meta: { "claudecode/toolUseId": 3 } }), {
+    signal,
+    _meta: { "claudecode/toolUseId": 3 },
+  })
+  assert.deepEqual(withSdkToolCallId(undefined), {})
 })

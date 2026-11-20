@@ -235,6 +235,49 @@ test("Anthropic nested failures reject the program with their kind", async () =>
   }
 })
 
+// CM-12: the nested call's approval and its trace both name it after the
+// run_code call the CLI made, so the chat can hang one under the other.
+test("Anthropic nested calls are named after their run_code call and traced under it", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  const tool = "mcp__cognia-tools__file_info"
+  const runtime = codeRuntime({
+    permissionMode: "bypassPermissions",
+    toolPermissionRules: [{ tool, decision: "ask" }],
+  })
+  try {
+    const resultPromise = runtime.registered.run_code!.handler(
+      { source: 'return await cognia.file_info({path:"."})' },
+      { _meta: { "claudecode/toolUseId": "toolu_run" } }
+    )
+    const pending = await waitForApproval(runtime.session)
+    const request = runtime.events.find((event) => event.type === "permission_request")!
+    assert.equal(request.toolUseID, "toolu_run/1")
+    pending.resolve({ behavior: "allow" })
+    assert.notEqual((await resultPromise).isError, true)
+    const traced = runtime.events
+      .filter(
+        (frame) =>
+          frame.type === "event" &&
+          (frame.event as { subtype?: string } | undefined)?.subtype === "code_run_call"
+      )
+      .map((frame) => {
+        const event = frame.event as {
+          parent_tool_use_id: string
+          call: { id: string; state: string }
+        }
+        return [event.parent_tool_use_id, event.call.id, event.call.state]
+      })
+    assert.deepEqual(traced, [
+      ["toolu_run", "toolu_run/1", "running"],
+      ["toolu_run", "toolu_run/1", "succeeded"],
+    ])
+  } finally {
+    runtime.session.drainPending()
+    runtime.session.closeInput()
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
 test("Anthropic nested calls share namespaced ruleset and per-call approval decisions", async () => {
   process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
   const tool = "mcp__cognia-tools__file_info"

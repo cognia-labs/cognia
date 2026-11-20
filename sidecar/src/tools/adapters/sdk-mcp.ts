@@ -95,9 +95,28 @@ export function buildCogniaToolsServer(options: BuildToolsServerOptions) {
 }
 
 /**
+ * The meta key the Claude Code CLI puts each MCP `tools/call` under: the
+ * `tool_use` block's id.
+ */
+const CLAUDE_TOOL_USE_ID_META = "claudecode/toolUseId"
+
+/** The kernel's view of a call's extra: the CLI's `tool_use` id as `toolCallId`. */
+export function withSdkToolCallId(extra: ToolHandlerExtra | undefined): ToolHandlerExtra {
+  const meta = extra?._meta
+  const toolUseId =
+    meta && typeof meta === "object"
+      ? (meta as Record<string, unknown>)[CLAUDE_TOOL_USE_ID_META]
+      : undefined
+  return typeof toolUseId === "string" && toolUseId.length > 0
+    ? { ...extra, toolCallId: toolUseId }
+    : { ...extra }
+}
+
+/**
  * The SDK MCP form of a kernel definition. Tool-search presentation is
  * neutral in the kernel and becomes the SDK's `anthropic/` metadata here,
- * the only place that vocabulary is written.
+ * the only place that vocabulary is written; the call's `claudecode/` id is
+ * read here for the same reason.
  */
 export function toSdkMcpToolDefinition(definition: ToolDefinition): SdkMcpToolDefinition {
   const { alwaysLoad, searchHint, _meta, ...rest } = definition
@@ -112,7 +131,8 @@ export function toSdkMcpToolDefinition(definition: ToolDefinition): SdkMcpToolDe
     // The kernel's schema is the zod raw shape the SDK expects; the handler's
     // argument type was widened by the middleware.
     inputSchema: (definition.inputSchema ?? {}) as SdkMcpToolDefinition["inputSchema"],
-    handler: definition.handler as SdkMcpToolDefinition["handler"],
+    handler: ((args: unknown, extra?: ToolHandlerExtra) =>
+      definition.handler(args, withSdkToolCallId(extra))) as SdkMcpToolDefinition["handler"],
     ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
   }
 }

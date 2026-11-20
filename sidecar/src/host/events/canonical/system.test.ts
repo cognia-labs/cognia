@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { fromSystem } from "./system.ts"
+import { codeRunCallFrame } from "../../../tools/builtin/run-code/trace.ts"
 
 test("unknown and prototype-named subtypes remain diagnostics", () => {
   for (const subtype of ["__proto__", "toString", "constructor", "future"]) {
@@ -52,5 +53,30 @@ test("task projections retain parentage and distinguish resumed runs", () => {
         ],
       },
     ]
+  )
+})
+
+// CM-12: a run_code program's nested call is progress under the run_code call,
+// built from the frame the sidecar actually emits.
+test("a run_code nested call maps to progress under its parent call", () => {
+  const frame = codeRunCallFrame("s-1", {
+    parentToolCallId: "toolu_outer",
+    call: { ordinal: 2, tool: "grep", state: "succeeded", durationMs: 41.6, resultBytes: 120 },
+  })
+  assert.deepEqual(fromSystem(frame.event), [
+    {
+      kind: "tool-progress",
+      toolCallId: "toolu_outer/2",
+      toolName: "grep",
+      elapsedMs: 42,
+      parentToolCallId: "toolu_outer",
+    },
+  ])
+})
+
+test("a run_code nested call without its ids projects nothing", () => {
+  assert.deepEqual(
+    fromSystem({ type: "system", subtype: "code_run_call", call: { tool: "x" } }),
+    []
   )
 })

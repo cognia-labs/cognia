@@ -13231,6 +13231,29 @@
       "snapshot": "内容快照"
     }
   },
+  "codeRunCalls": {
+    "failure": {
+      "aborted": "已取消",
+      "backend-unavailable": "服务不可用",
+      "environment": "环境问题",
+      "execution-failed": "执行失败",
+      "invalid-args": "参数无效",
+      "not-found": "未找到",
+      "permission-denied": "无权限",
+      "resource-exhausted": "超出限额",
+      "timeout": "超时",
+      "user-rejected": "已拒绝"
+    },
+    "rowAria": "第 {ordinal} 次调用：{tool}，{status}",
+    "state": {
+      "failed": "失败",
+      "running": "运行中",
+      "stopped": "随程序停止",
+      "succeeded": "完成"
+    },
+    "summary": "程序发起了 {count} 次工具调用",
+    "title": "程序发起的工具调用"
+  },
   "collabCapabilities": {
     "action": {
       "credential": {

@@ -323,6 +323,26 @@ function map_hook_fire(evt: Record<string, unknown>): CanonicalEvent[] {
     }),
   ]
 }
+/**
+ * A nested call of a `run_code` program (ADR-0117, CM-12). It is liveness of
+ * a call made inside another tool call, which is what `tool-progress` with a
+ * `parentToolCallId` means; the outer call's own result stays its completion.
+ */
+function map_code_run_call(evt: Record<string, unknown>): CanonicalEvent[] {
+  const call = record(evt.call)
+  const toolCallId = asString(call.id)
+  const parentToolCallId = asString(evt.parent_tool_use_id)
+  if (!toolCallId || !parentToolCallId) return []
+  return [
+    {
+      kind: "tool-progress",
+      toolCallId,
+      toolName: asString(call.tool) ?? "unknown",
+      elapsedMs: Math.max(0, Math.round(asNumber(call.duration_ms) ?? 0)),
+      parentToolCallId,
+    },
+  ]
+}
 const SYSTEM_HANDLERS: Record<
   string,
   ((event: Record<string, unknown>) => CanonicalEvent[]) | undefined
@@ -357,6 +377,7 @@ const SYSTEM_HANDLERS: Record<
   informational: map_informational,
   hook_audit: map_hook_audit,
   hook_fire: map_hook_fire,
+  code_run_call: map_code_run_call,
 }
 export function fromSystem(evt: Record<string, unknown>): CanonicalEvent[] {
   const handler =

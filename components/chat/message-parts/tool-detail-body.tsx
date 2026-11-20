@@ -22,6 +22,9 @@
  *  4. dedicated card → built-in or plugin-contributed `MCPToolCard`
  *  5. A2UI payload   → interactive surface
  *  6. anything else  → MCP content blocks, or the stringified `ToolBody`
+ *
+ * A `run_code` call lists its program's nested calls above whichever body it
+ * routes to, since the list is about the call, not about its payload.
  */
 
 import { useTranslations } from "next-intl"
@@ -42,6 +45,8 @@ import { TerminalToolBody } from "@/components/chat/message-parts/terminal-tool-
 import { FileToolBody, isFileToolPart } from "@/components/chat/message-parts/file-tool-part"
 import { resolveToolPartName } from "@/lib/chat/tool-summary"
 import { GooseChildSessionLink } from "@/components/agent/external-agent/goose-session-controls"
+import { CodeRunCallList } from "@/components/chat/message-parts/code-run-calls"
+import { codeRunCallsOf } from "@/lib/chat/code-run-calls"
 import type { ExternalAgentToolMetadata } from "@cognia/agent-contracts/external-agent"
 
 /**
@@ -65,6 +70,20 @@ export interface ToolDetailBodyProps {
 }
 
 export function ToolDetailBody({ part, sessionId }: ToolDetailBodyProps) {
+  const nested = codeRunCallsOf(part)
+  if (!nested) return <RoutedToolDetailBody part={part} sessionId={sessionId} />
+  return (
+    <>
+      <CodeRunCallList
+        calls={nested}
+        settled={part.state !== "input-available" && part.state !== "input-streaming"}
+      />
+      <RoutedToolDetailBody part={part} sessionId={sessionId} />
+    </>
+  )
+}
+
+function RoutedToolDetailBody({ part, sessionId }: ToolDetailBodyProps) {
   const t = useTranslations("chat.message")
   const native = (part as unknown as { toolMetadata?: ExternalAgentToolMetadata }).toolMetadata
     ?.nativeSubagent

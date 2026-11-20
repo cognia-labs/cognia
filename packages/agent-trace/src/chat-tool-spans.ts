@@ -45,6 +45,32 @@ export interface SdkMessageLike {
    * the `Task` call rather than beneath it.
    */
   parent_tool_use_id?: string | null
+  /** A `system` frame's subtype; `code_run_call` carries a nested call. */
+  subtype?: string
+  /** The nested call of a `code_run_call` frame. */
+  call?: unknown
+}
+
+/** A `run_code` program's nested call, as the sidecar's trace frame names it. */
+interface CodeRunCallLike {
+  id: string
+  tool: string
+  state: "running" | "succeeded" | "failed"
+  failure?: string
+}
+
+/** The nested call a `system/code_run_call` frame carries, or null. */
+function codeRunCallOf(event: SdkMessageLike): CodeRunCallLike | null {
+  if (event.type !== "system" || event.subtype !== "code_run_call") return null
+  const call = event.call as Partial<CodeRunCallLike> | null | undefined
+  if (!call || typeof call.id !== "string" || typeof call.tool !== "string") return null
+  if (call.state !== "running" && call.state !== "succeeded" && call.state !== "failed") return null
+  return {
+    id: call.id,
+    tool: call.tool,
+    state: call.state,
+    ...(typeof call.failure === "string" ? { failure: call.failure } : {}),
+  }
 }
 
 const DEFAULT_STALE_TOOL_SPAN_MAX_AGE_MS = 30 * 60 * 1_000
@@ -86,16 +112,21 @@ export function handleSdkEventForToolSpans(args: {
   event: SdkMessageLike
 }): number {
   if (!args.sessionId || !args.parentSpanId || !args.event) return 0
-  const content = extractContentArray(args.event)
-  if (!content) return 0
 
   // A frame from inside a subagent nests under the `Task` tool call that
-  // spawned it; anything else hangs off the turn root.
+  // spawned it, and a `run_code` program's nested call under that `run_code`
+  // call; anything else hangs off the turn root.
   const parentSpanId = resolveParentSpanId(
     args.sessionId,
     args.event.parent_tool_use_id,
     args.parentSpanId
   )
+
+  const nested = codeRunCallOf(args.event)
+  if (nested) return handleCodeRunCall(args.sessionId, args.traceId, parentSpanId, nested)
+
+  const content = extractContentArray(args.event)
+  if (!content) return 0
 
   let mutated = 0
   if (args.event.type === "assistant") {
@@ -126,6 +157,32 @@ export function handleSdkEventForToolSpans(args: {
     }
   }
   return mutated
+}
+
+/**
+ * One nested call of a `run_code` program: `running` opens its span, the end
+ * closes it. A call refused before it ran reports only its end, so it opens
+ * and closes at once. Only the tool and the failure kind are recorded; the
+ * trace frame never carries the call's input or output.
+ */
+function handleCodeRunCall(
+  sessionId: string,
+  traceId: string,
+  parentSpanId: string,
+  call: CodeRunCallLike
+): number {
+  let mutated = 0
+  if (openToolSpan({ sessionId, traceId, parentSpanId, toolUseId: call.id, toolName: call.tool })) {
+    mutated += 1
+  }
+  if (call.state === "running") return mutated
+  const closed = closeToolSpan({
+    sessionId,
+    toolUseId: call.id,
+    isError: call.state === "failed",
+    resultPreview: call.state === "failed" ? call.failure : undefined,
+  })
+  return closed ? mutated + 1 : mutated
 }
 
 /** Drop any open tool spans for a session. Called when the turn ends so

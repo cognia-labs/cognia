@@ -325,3 +325,45 @@ test("Code calls fail closed when no nested authorizer is supplied", async () =>
     delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
   }
 })
+
+// CM-12: one id from approval to trace. The nested call's authorization and
+// execution see `<run_code id>/<n>`, and the session's stream gets the trace.
+test("a nested call carries its run_code-derived id to authorization and execution, and is traced", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = LAUNCHER
+  const authorized: unknown[] = []
+  const executed: unknown[] = []
+  const frames: Record<string, unknown>[] = []
+  try {
+    const [code] = applyToolPresentation([def("read")], "code", {
+      sessionId: "s-1",
+      emit: (frame) => frames.push(frame),
+      authorizeTool: async (_name, input, extra) => {
+        authorized.push(extra?.toolCallId)
+        return input
+      },
+      executeTool: async (_def, _input, extra) => {
+        executed.push(extra?.toolCallId)
+        return { content: [{ type: "text", text: "ok" }] }
+      },
+    })
+    const result = await code!.handler(
+      { source: "return await cognia.read({})" },
+      { toolCallId: "toolu_run" }
+    )
+    assert.notEqual((result as { isError?: boolean }).isError, true)
+    assert.deepEqual(authorized, ["toolu_run/1"])
+    assert.deepEqual(executed, ["toolu_run/1"])
+    assert.deepEqual(
+      frames.map((frame) => {
+        const event = frame.event as { subtype: string; call: { id: string; state: string } }
+        return [frame.type, frame.sessionId, event.subtype, event.call.id, event.call.state]
+      }),
+      [
+        ["event", "s-1", "code_run_call", "toolu_run/1", "running"],
+        ["event", "s-1", "code_run_call", "toolu_run/1", "succeeded"],
+      ]
+    )
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})

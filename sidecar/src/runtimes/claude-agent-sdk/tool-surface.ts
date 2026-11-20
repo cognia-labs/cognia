@@ -146,6 +146,7 @@ export function buildToolSurface({
     ...toolSession.toolContext(),
     isToolAllowed: (name) => passesToolLists(name, BUILTIN_SERVER_NAME, allowed, denied),
     isToolDenied: (name) => !passesToolLists(name, BUILTIN_SERVER_NAME, null, denied),
+    emit: (frame) => emit(frame),
     authorizeTool: async (name, input, extra, validateInput) => {
       if (!nestedToolAuthorizer) throw new Error(`Nested tool authorization unavailable: ${name}`)
       return nestedToolAuthorizer(name, input, extra, validateInput)

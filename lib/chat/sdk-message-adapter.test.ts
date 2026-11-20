@@ -9,6 +9,8 @@ import { createSdkEventMapper } from "@/lib/ai/chat/sdk-event-mapper"
 import { createEventAdapter } from "@/sidecar/src/runtimes/ai-sdk/events"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { listMessages, persistMessages } from "@/lib/db/messages"
+import { codeRunCallFrame } from "@/sidecar/src/tools/builtin/run-code/trace"
+import { codeRunCallsOf } from "@/lib/chat/code-run-calls"
 
 import {
   applySdkEvent,
@@ -674,6 +676,63 @@ describe("applySdkEvent — compact boundary", () => {
     const { messages } = applySdkEvent([], boundary({ uuid: undefined }))
     expect(messages[0].id).toMatch(/^compact-/)
     expect(messages[0].id.length).toBeGreaterThan("compact-".length)
+  })
+})
+
+// CM-12: the sidecar's own frame, so the wire shape is pinned on both sides.
+describe("applySdkEvent — run_code nested calls", () => {
+  const runCode = (id = "toolu_run") =>
+    asAssistant({
+      id: "msg-run",
+      role: "assistant",
+      content: [{ type: "tool_use", id, name: "run_code", input: { source: "…" } }],
+    } as unknown as BetaMessage)
+  const nested = (ordinal: number, state: "running" | "succeeded" | "failed", extra = {}) =>
+    codeRunCallFrame("s-1", {
+      parentToolCallId: "toolu_run",
+      call: { ordinal, tool: "grep", state, ...extra },
+    }).event as never
+
+  it("keeps each nested call on the run_code part, through snapshots and the result", () => {
+    let messages = applySdkEvent([], runCode()).messages
+    messages = applySdkEvent(messages, nested(1, "running")).messages
+    messages = applySdkEvent(
+      messages,
+      nested(1, "succeeded", { durationMs: 7, resultBytes: 40 })
+    ).messages
+    messages = applySdkEvent(messages, nested(2, "running")).messages
+    // A re-sent snapshot of the still-running call must not empty the list.
+    messages = applySdkEvent(messages, runCode()).messages
+    messages = applySdkEvent(messages, nested(2, "failed", { failure: "not-found" })).messages
+    messages = applySdkEvent(messages, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_run", content: "{}" }],
+      },
+    } as SDKUserMessage).messages
+
+    const part = messages[0]!.parts[0]!
+    expect((part as { state?: string }).state).toBe("output-available")
+    expect(codeRunCallsOf(part)).toEqual([
+      {
+        id: "toolu_run/1",
+        ordinal: 1,
+        tool: "grep",
+        state: "succeeded",
+        durationMs: 7,
+        resultBytes: 40,
+      },
+      { id: "toolu_run/2", ordinal: 2, tool: "grep", state: "failed", failure: "not-found" },
+    ])
+  })
+
+  it("adds no transcript row of its own", () => {
+    const messages = applySdkEvent([], runCode()).messages
+    const next = applySdkEvent(messages, nested(1, "running"))
+    expect(next.turnComplete).toBe(false)
+    expect(next.messages).toHaveLength(1)
+    expect(next.messages[0]!.parts).toHaveLength(1)
   })
 })
 

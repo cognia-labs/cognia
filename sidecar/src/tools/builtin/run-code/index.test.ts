@@ -4,6 +4,7 @@ import assert from "node:assert/strict"
 import { RUN_CODE_TOOL_NAME, codeModeToolDefs, createRunCodeTool } from "./index.ts"
 import { asCallable, firstJson, firstText } from "../../../../test-support/tool-result.ts"
 import { fakeSandboxRss } from "../../../../test-support/sandbox-rss.ts"
+import type { CodeRunCallReport } from "./trace.ts"
 
 const SANDBOXED = () => ({ canSpawnProcess: true, strictSandbox: true, launcher: ["/usr/bin/env"] })
 const UNSANDBOXED = () => ({ canSpawnProcess: true, strictSandbox: false, launcher: null })
@@ -144,6 +145,56 @@ test("run_code forwards call context to nested authorization with the run's sign
   // Not the turn's signal itself: the run's own, which ending the run trips.
   assert.notEqual(seen!.signal, controller.signal)
   assert.equal(seen!.signal!.aborted, true, "the run's end cancels what it started")
+})
+
+// CM-12: nested approvals, reviews and executions used ids unrelated to the
+// run, so nothing could show a call under the run_code that made it.
+test("names nested calls after the run_code call and reports them under it", async () => {
+  const ids: unknown[] = []
+  const reports: CodeRunCallReport[] = []
+  const tool = createRunCodeTool({
+    callTool: async (_name, _input, extra) => {
+      ids.push(extra?.toolCallId)
+      return { ok: true }
+    },
+    probe: SANDBOXED,
+    sdkTools: SDK_TOOLS,
+    reportCall: (report) => reports.push(report),
+  })
+  const result = await tool.handler(
+    { source: 'await cognia.read({ path: "a" }); return await cognia.read({ path: "b" })' },
+    { toolCallId: "toolu_outer" }
+  )
+  assert.notEqual(result.isError, true)
+  assert.deepEqual(ids, ["toolu_outer/1", "toolu_outer/2"])
+  assert.ok(reports.every((report) => report.parentToolCallId === "toolu_outer"))
+  assert.deepEqual(
+    reports.map(({ call }) => [call.ordinal, call.state]),
+    [
+      [1, "running"],
+      [1, "succeeded"],
+      [2, "running"],
+      [2, "succeeded"],
+    ]
+  )
+})
+
+test("reports nothing for a call the rail did not name", async () => {
+  const ids: unknown[] = []
+  const reports: CodeRunCallReport[] = []
+  const tool = createRunCodeTool({
+    callTool: async (_name, _input, extra) => {
+      ids.push(extra?.toolCallId)
+      return null
+    },
+    probe: SANDBOXED,
+    sdkTools: SDK_TOOLS,
+    reportCall: (report) => reports.push(report),
+  })
+  await tool.handler({ source: "return await cognia.read({})" })
+  assert.deepEqual(reports, [])
+  assert.equal(typeof ids[0], "string", "the nested call still gets an id of its own")
+  assert.doesNotMatch(String(ids[0]), /\//)
 })
 
 // CM-10: the supervisor never saw the turn's signal, so Stop left the script

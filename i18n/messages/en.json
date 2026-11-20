@@ -13231,6 +13231,29 @@
       "snapshot": "Content snapshot"
     }
   },
+  "codeRunCalls": {
+    "failure": {
+      "aborted": "Cancelled",
+      "backend-unavailable": "Service unavailable",
+      "environment": "Environment problem",
+      "execution-failed": "Failed",
+      "invalid-args": "Invalid arguments",
+      "not-found": "Not found",
+      "permission-denied": "Not permitted",
+      "resource-exhausted": "Over a limit",
+      "timeout": "Timed out",
+      "user-rejected": "Declined"
+    },
+    "rowAria": "Call {ordinal}: {tool}, {status}",
+    "state": {
+      "failed": "Failed",
+      "running": "Running",
+      "stopped": "Stopped with the program",
+      "succeeded": "Done"
+    },
+    "summary": "{count, plural, one {# tool call} other {# tool calls}} from the program",
+    "title": "Tool calls from the program"
+  },
   "collabCapabilities": {
     "action": {
       "credential": {

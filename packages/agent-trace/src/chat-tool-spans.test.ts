@@ -605,3 +605,58 @@ describe("handleSdkEventForToolSpans — subagent nesting", () => {
     expect(spans.find((s) => s.toolName === "Grep")?.parentSpanId).toBe(taskSpanId)
   })
 })
+
+// CM-12: a run_code program's nested calls are child spans of the run_code
+// call, built from the trace frame's safe facts only.
+describe("handleSdkEventForToolSpans — run_code nested calls", () => {
+  const ROOT = "1111222233334444"
+  const send = (event: Parameters<typeof handleSdkEventForToolSpans>[0]["event"]) =>
+    handleSdkEventForToolSpans({ sessionId: "s1", traceId: "trace-1", parentSpanId: ROOT, event })
+  const nested = (call: Record<string, unknown>) =>
+    send({ type: "system", subtype: "code_run_call", parent_tool_use_id: "toolu_run", call })
+
+  it("opens a nested call under the run_code span and closes it when it ends", () => {
+    const spans = captureWriter()
+    send({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "toolu_run", name: "run_code" }] },
+    })
+    const runSpan = toolSpanIdFor("s1", "toolu_run")
+    expect(nested({ id: "toolu_run/1", tool: "grep", state: "running" })).toBe(1)
+    expect(__pendingToolSpanCountForTesting("s1")).toBe(2)
+    expect(nested({ id: "toolu_run/1", tool: "grep", state: "succeeded" })).toBe(1)
+    const child = spans.find((span) => span.toolName === "grep")!
+    expect(child.parentSpanId).toBe(runSpan)
+    expect(child.errorType).toBeUndefined()
+    expect(child.outputPreview).toBeUndefined()
+  })
+
+  it("records a failed call with its kind and nothing else", () => {
+    const spans = captureWriter()
+    send({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "toolu_run", name: "run_code" }] },
+    })
+    nested({ id: "toolu_run/1", tool: "read", state: "running" })
+    nested({ id: "toolu_run/1", tool: "read", state: "failed", failure: "not-found" })
+    const child = spans.find((span) => span.toolName === "read")!
+    expect(child.errorType).toBe("tool_error")
+    expect(child.errorMessage).toBe("not-found")
+  })
+
+  it("opens and closes a call refused before it ran", () => {
+    const spans = captureWriter()
+    expect(
+      nested({ id: "toolu_run/1", tool: "read", state: "failed", failure: "invalid-args" })
+    ).toBe(2)
+    expect(__pendingToolSpanCountForTesting("s1")).toBe(0)
+    // Its parent is unknown here, so it hangs off the turn root.
+    expect(spans[0]!.parentSpanId).toBe(ROOT)
+  })
+
+  it("ignores a malformed nested call", () => {
+    captureWriter()
+    expect(nested({ tool: "read", state: "running" })).toBe(0)
+    expect(nested({ id: "x/1", tool: "read", state: "maybe" })).toBe(0)
+  })
+})

@@ -11,12 +11,16 @@ import {
   assertSandboxable,
   parseSandboxLauncher,
   probeSandbox,
+  RSS_SAMPLE_INTERVAL_MS,
+  RSS_SAMPLE_NEAR_LIMIT_INTERVAL_MS,
   readProcessGroupRssBytes,
   resolveSandboxSpawn,
+  rssSampleDelay,
   runCodeProgram,
   sandboxEnv,
 } from "./supervisor.ts"
 import type { CodeModeLimits, SandboxProbe } from "./supervisor.ts"
+import type { CodeRunCall } from "./trace.ts"
 import {
   disposeForegroundGroups,
   hasSessionForegroundGroups,
@@ -66,22 +70,34 @@ async function run(
     toolImpl?: (name: string, input: unknown, signal: AbortSignal) => unknown
     signal?: AbortSignal
     sessionId?: string
+    onCall?: (call: CodeRunCall) => void
   } = {}
 ) {
-  const calls: { name: string; input: unknown }[] = []
+  const calls: { name: string; input: unknown; ordinal: number }[] = []
+  const trace: CodeRunCall[] = []
   const result = await runCodeProgram({
     source,
     probe: SANDBOXED,
     config: options.config,
     signal: options.signal,
     sessionId: options.sessionId,
-    callTool: async (name, input, signal) => {
-      calls.push({ name, input })
+    callTool: async (name, input, signal, ordinal) => {
+      calls.push({ name, input, ordinal })
       if (options.toolImpl) return options.toolImpl(name, input, signal)
       return { ok: true, name }
     },
+    onCall:
+      options.onCall ??
+      ((call) => {
+        trace.push(call)
+      }),
   })
-  return { ...result, calls }
+  return {
+    ...result,
+    calls: calls.map(({ name, input }) => ({ name, input })),
+    trace,
+    ordinals: calls.map((c) => c.ordinal),
+  }
 }
 
 test("fails closed when no strict sandbox is available", () => {
@@ -238,6 +254,63 @@ test("process-group RSS sampling does not block the event loop", async () => {
   assert.equal(ticked, true, "the loop ran while the sample was outstanding")
   answer()
   assert.equal(await pending, 1024)
+})
+
+// CM-13: one `ps` every 25 ms from spawn on starved the sandbox child's own
+// exec on a Mac whose endpoint-security agent screens every exec, so each
+// consecutive run started slower than the last until short programs hit the
+// wall time.
+test("memory samples slow down far from the limit and tighten near it", () => {
+  assert.equal(rssSampleDelay(10 * 1024 * 1024, 256 * 1024 * 1024), RSS_SAMPLE_INTERVAL_MS)
+  assert.equal(
+    rssSampleDelay(128 * 1024 * 1024, 256 * 1024 * 1024),
+    RSS_SAMPLE_NEAR_LIMIT_INTERVAL_MS
+  )
+  assert.ok(RSS_SAMPLE_INTERVAL_MS >= 10 * RSS_SAMPLE_NEAR_LIMIT_INTERVAL_MS)
+})
+
+test("a run samples memory from the child's READY at the slow pace", async () => {
+  const sampledAt: number[] = []
+  let started = 0
+  const outcome = await runCodeProgram({
+    source: "for (let i = 0; i < 12; i++) await cognia.read({ i }); return 1",
+    probe: SANDBOXED,
+    config: smallConfig(),
+    callTool: async () => {
+      started ||= Date.now()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      return { ok: true }
+    },
+    readRss: async () => {
+      sampledAt.push(Date.now())
+      return 1024
+    },
+  })
+  assert.ok(outcome.ok)
+  assert.ok(sampledAt.length >= 1, "the sandbox is still watched")
+  assert.ok(sampledAt[0]! <= started, "the program starts only after the first sample")
+  // About 600 ms of program: a handful of samples, not one every 25 ms.
+  assert.ok(sampledAt.length <= 6, `sampled ${sampledAt.length} times`)
+})
+
+test("a run near its memory limit samples at the tight pace", async () => {
+  let samples = 0
+  const config = smallConfig()
+  const outcome = await runCodeProgram({
+    source: "for (let i = 0; i < 8; i++) await cognia.read({ i }); return 1",
+    probe: SANDBOXED,
+    config,
+    callTool: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      return { ok: true }
+    },
+    readRss: async () => {
+      samples += 1
+      return Math.ceil(config.maxMemoryBytes * 0.6)
+    },
+  })
+  assert.ok(outcome.ok)
+  assert.ok(samples >= 8, `sampled ${samples} times in ~400 ms`)
 })
 
 test("runs a program and returns its value", async () => {
@@ -415,6 +488,25 @@ test("kills a program that exceeds its wall time", async () => {
   assert.equal(outcome.limit!.kind, "wall-time")
 })
 
+test("never starts a program whose sandbox cannot report its memory", async () => {
+  let called = false
+  const outcome = await runCodeProgram({
+    source: "await cognia.read({}); return 1",
+    probe: SANDBOXED,
+    config: smallConfig(),
+    callTool: async () => {
+      called = true
+      return null
+    },
+    readRss: async () => {
+      throw new Error("cannot enforce sandbox memory limit: ps failed (ENOENT)")
+    },
+  })
+  assert.equal(outcome.ok, false)
+  assert.equal(outcome.ok === false && outcome.phase, "sandbox")
+  assert.equal(called, false, "no program code ran")
+})
+
 test("kills the sandbox process group when resident memory exceeds the limit", async () => {
   const outcome = await run("return 1", {
     config: { ...smallConfig(), maxMemoryBytes: 1 },
@@ -507,6 +599,79 @@ test("refuses a nested input over the per-call limit before dispatch", async () 
   assert.ok(outcome.ok)
   assert.equal(outcome.result, "invalid-args")
   assert.deepEqual(outcome.calls, [])
+})
+
+// ---- nested call trace (CM-12) ----------------------------------------------
+
+/** A trace without its timings, which depend on the machine. */
+function untimed(trace: readonly CodeRunCall[]) {
+  return trace.map(({ durationMs, ...call }) => {
+    assert.ok(durationMs === undefined || durationMs >= 0)
+    return call
+  })
+}
+
+test("traces each nested call from dispatch to its end, in program order", async () => {
+  const outcome = await run(
+    'await cognia.read({ path: "a" }); try { await cognia.read({ path: "b" }) } catch {} return 1',
+    {
+      toolImpl: (_name, input) => {
+        if ((input as { path?: string }).path === "b") {
+          throw new NestedToolError("no such file: b", { kind: "not-found", retryable: false })
+        }
+        return { text: "aa" }
+      },
+    }
+  )
+  assert.ok(outcome.ok)
+  assert.deepEqual(outcome.ordinals, [1, 2], "the broker is told each call's place")
+  assert.deepEqual(untimed(outcome.trace), [
+    { ordinal: 1, tool: "read", state: "running" },
+    { ordinal: 1, tool: "read", state: "succeeded", resultBytes: 13 },
+    { ordinal: 2, tool: "read", state: "running" },
+    { ordinal: 2, tool: "read", state: "failed", failure: "not-found" },
+  ])
+  assert.ok(
+    outcome.trace
+      .filter((call) => call.state !== "running")
+      .every((call) => call.durationMs !== undefined)
+  )
+})
+
+test("traces a call refused at the boundary once, as failed", async () => {
+  const outcome = await run(
+    'try { await cognia.read({ path: "y".repeat(500) }) } catch {} return await cognia.read({})',
+    { config: { ...smallConfig(), maxToolInputBytes: 100 } }
+  )
+  assert.ok(outcome.ok)
+  assert.deepEqual(untimed(outcome.trace), [
+    { ordinal: 1, tool: "read", state: "failed", failure: "invalid-args" },
+    { ordinal: 2, tool: "read", state: "running" },
+    { ordinal: 2, tool: "read", state: "succeeded", resultBytes: 25 },
+  ])
+})
+
+test("traces the call that exhausted the budget before the run ends", async () => {
+  const outcome = await run("for (let i = 0; i < 5; i++) await cognia.read({ i }); return 1", {
+    config: { ...smallConfig(), maxToolCalls: 2 },
+  })
+  assert.equal(outcome.ok, false)
+  assert.deepEqual(untimed(outcome.trace).at(-1), {
+    ordinal: 3,
+    tool: "read",
+    state: "failed",
+    failure: "resource-exhausted",
+  })
+})
+
+test("a reporter that throws never affects the run", async () => {
+  const outcome = await run("return await cognia.read({})", {
+    onCall: () => {
+      throw new Error("observer broke")
+    },
+  })
+  assert.ok(outcome.ok)
+  assert.deepEqual(outcome.result, { ok: true, name: "read" })
 })
 
 test("bounds console output per entry and in total", async () => {
