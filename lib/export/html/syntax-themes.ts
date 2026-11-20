@@ -2,6 +2,8 @@
 // is a self-contained palette — no Tailwind, no runtime dependencies, all
 // colors inlined into the generated `<style>` block so the file works offline.
 
+import { parse } from "culori"
+
 export interface ThemeTokens {
   /** Page background. */
   bg: string
@@ -280,3 +282,66 @@ export const THEME_LIST: { id: ThemeId; label: string }[] = [
   { id: "solarized", label: "Solarized" },
   { id: "monokai", label: "Monokai" },
 ]
+
+/** Every token a palette has, in the order the editor lists them. */
+export const THEME_TOKEN_KEYS: ReadonlyArray<keyof ThemeTokens> = [
+  "bg",
+  "surface",
+  "text",
+  "muted",
+  "border",
+  "accent",
+  "userBg",
+  "assistantBg",
+  "codeBg",
+  "codeText",
+  "detailBg",
+]
+
+/**
+ * Characters a color value may hold. Every CSS color notation fits in these,
+ * and none of them can end a declaration, a rule or the `<style>` element.
+ */
+const COLOR_CHARACTERS = /^[#a-zA-Z0-9.,%()+\-/ ]+$/
+
+/** Longer than any real color notation (`color(display-p3 … / …)`). */
+const MAX_COLOR_LENGTH = 96
+
+/**
+ * Whether `value` is a CSS color that can be written into a stylesheet as is.
+ *
+ * Theme tokens are inlined verbatim into `<style>` (and into a card's live
+ * `innerHTML`), so a value that is not a color could close the rule or the
+ * element and run as markup. A value passes only if culori parses it as a
+ * color and it holds no character outside {@link COLOR_CHARACTERS}.
+ */
+export function isThemeColor(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_COLOR_LENGTH &&
+    COLOR_CHARACTERS.test(value) &&
+    parse(value) !== undefined
+  )
+}
+
+/** The tokens of `tokens` that are not colors (missing ones included). */
+export function invalidThemeTokenKeys(tokens: Partial<ThemeTokens>): Array<keyof ThemeTokens> {
+  return THEME_TOKEN_KEYS.filter((key) => !isThemeColor(tokens[key]))
+}
+
+/**
+ * The palette an export draws with: the built-in `theme`, or `customTheme`
+ * with any token that is not a color taken from that built-in instead. Every
+ * exporter resolves its tokens here, so no stored or handed-in value reaches a
+ * stylesheet unchecked.
+ */
+export function exportThemeTokens(theme: ThemeId, customTheme?: ThemeTokens): ThemeTokens {
+  const base = THEMES[theme]
+  if (!customTheme) return base
+  const tokens = { ...base }
+  for (const key of THEME_TOKEN_KEYS) {
+    if (isThemeColor(customTheme[key])) tokens[key] = customTheme[key]
+  }
+  return tokens
+}

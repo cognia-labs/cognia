@@ -5,7 +5,7 @@
 // the `chat-quote` kind and rasterizes to PNG via html2canvas-pro. Mirrors the
 // structure of `lib/usage/usage-card.ts`.
 
-import { THEMES, type ThemeId, type ThemeTokens } from "./syntax-themes"
+import { exportThemeTokens, type ThemeId, type ThemeTokens } from "./syntax-themes"
 import { getStylePreset } from "./style-presets"
 import { buildCardWallpaperCss } from "./theme-wallpaper"
 import { renderSafeInlineMarkdown } from "./safe-inline-markdown"
@@ -32,7 +32,7 @@ const MONO_STACK = `"JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consola
 /** Card markup + scoped `<style>`, embeddable in a document or the app DOM. */
 export function renderQuoteCardFragment(options: QuoteCardOptions): string {
   const theme = options.theme ?? "arknights"
-  const t = options.customTheme ?? THEMES[theme]
+  const t = exportThemeTokens(theme, options.customTheme)
   const preset = getStylePreset(theme)
   const author = options.authorName || roleLabel(options.role)
   const sub = [options.model, options.timestamp.toLocaleString()].filter(Boolean).join(" · ")
@@ -66,7 +66,7 @@ export function renderQuoteCardFragment(options: QuoteCardOptions): string {
 /** Full self-contained HTML document for the share pipeline / iframe preview. */
 export function buildQuoteCardHtml(options: QuoteCardOptions): string {
   const theme = options.theme ?? "arknights"
-  const t = options.customTheme ?? THEMES[theme]
+  const t = exportThemeTokens(theme, options.customTheme)
   const title = options.sessionTitle ?? "Cognia message card"
   return `<!DOCTYPE html>
 <html lang="en">

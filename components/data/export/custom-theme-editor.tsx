@@ -1,32 +1,35 @@
 "use client"
 
 // Edit a `ThemeTokens` palette by token. Each color renders as a `<input
-// type="color">` plus a hex text field. Saved themes live in
-// `useCustomThemeStore` (localStorage-backed).
+// type="color">` plus a text field for any CSS color notation. Saved themes
+// live in `useCustomThemeStore` (localStorage-backed). A value that is not a
+// CSS color is marked and blocks saving: the palette is written verbatim into
+// exported stylesheets.
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Trash2Icon } from "lucide-react"
-import { THEMES, THEME_LIST, type ThemeId, type ThemeTokens } from "@/lib/export/html/syntax-themes"
+import {
+  THEMES,
+  THEME_LIST,
+  THEME_TOKEN_KEYS,
+  invalidThemeTokenKeys,
+  type ThemeId,
+  type ThemeTokens,
+} from "@/lib/export/html/syntax-themes"
 import { useCustomThemeStore, seedTokens, type CustomTheme } from "@/stores/theme"
 
-const TOKEN_KEYS: Array<keyof ThemeTokens> = [
-  "bg",
-  "surface",
-  "text",
-  "muted",
-  "border",
-  "accent",
-  "userBg",
-  "assistantBg",
-  "codeBg",
-  "codeText",
-  "detailBg",
-]
+/** The draft as it would be saved: surrounding whitespace is not part of a color. */
+function trimmedTokens(draft: ThemeTokens): ThemeTokens {
+  const tokens = { ...draft }
+  // `?? ""`: a palette persisted without some token shows that token as invalid.
+  for (const key of THEME_TOKEN_KEYS) tokens[key] = (draft[key] ?? "").trim()
+  return tokens
+}
 
 interface Props {
   /** Active custom theme id, or null when editing a fresh draft. */
@@ -45,13 +48,15 @@ export function CustomThemeEditor({ selectedId, builtInBase, onSelect }: Props) 
   const selected = themes.find((th) => th.id === selectedId) ?? null
   const [draft, setDraft] = useState<ThemeTokens>(selected?.tokens ?? seedTokens(builtInBase))
   const [name, setName] = useState(selected?.name ?? "")
+  const tokens = useMemo(() => trimmedTokens(draft), [draft])
+  const invalidKeys = useMemo(() => new Set(invalidThemeTokenKeys(tokens)), [tokens])
 
   const onSave = () => {
-    if (!name.trim()) return
+    if (!name.trim() || invalidKeys.size > 0) return
     const saved = upsert({
       id: selected?.id,
       name: name.trim(),
-      tokens: draft,
+      tokens,
     })
     onSelect(saved.id)
   }
@@ -89,10 +94,15 @@ export function CustomThemeEditor({ selectedId, builtInBase, onSelect }: Props) 
           placeholder={t("namePlaceholder")}
           className="h-8 w-48"
         />
-        <Button size="sm" onClick={onSave} disabled={!name.trim()}>
+        <Button size="sm" onClick={onSave} disabled={!name.trim() || invalidKeys.size > 0}>
           {selected ? t("update") : t("saveNew")}
         </Button>
       </div>
+      {invalidKeys.size > 0 && (
+        <p role="alert" className="text-destructive text-[11px]" data-testid="theme-invalid-tokens">
+          {t("invalidTokens", { tokens: [...invalidKeys].join(", ") })}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-muted-foreground">{t("seedFrom")}:</span>
@@ -110,7 +120,7 @@ export function CustomThemeEditor({ selectedId, builtInBase, onSelect }: Props) 
       </div>
 
       <div className="grid grid-cols-1 gap-2 @xl/theme-editor:grid-cols-2">
-        {TOKEN_KEYS.map((key) => (
+        {THEME_TOKEN_KEYS.map((key) => (
           <div key={key} className="flex items-center gap-2">
             <Label htmlFor={`tk-${key}`} className="w-24 text-[11px] uppercase tracking-wide">
               {key}
@@ -125,7 +135,8 @@ export function CustomThemeEditor({ selectedId, builtInBase, onSelect }: Props) 
             <Input
               value={draft[key]}
               onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-              className="h-7 w-28 font-mono text-[11px]"
+              aria-invalid={invalidKeys.has(key) || undefined}
+              className="h-7 w-28 font-mono text-[11px] aria-invalid:border-destructive"
             />
           </div>
         ))}

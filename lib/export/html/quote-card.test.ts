@@ -123,3 +123,16 @@ describe("inlineMarkdown", () => {
     expect(inlineMarkdown("&lt;b&gt;")).toBe("&lt;b&gt;")
   })
 })
+
+describe("custom palette values (F15)", () => {
+  it("keeps a palette value that is not a color out of the card's live markup", () => {
+    // The fragment is assigned to innerHTML inside the app, not just exported.
+    const frag = renderQuoteCardFragment({
+      ...base,
+      theme: "arknights",
+      customTheme: { ...THEMES.arknights, accent: '#fff;}</style><img src=x onerror="x()">' },
+    })
+    expect(frag).not.toContain("onerror")
+    expect(frag).toContain(THEMES.arknights.accent)
+  })
+})

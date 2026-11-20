@@ -5,6 +5,7 @@ import {
   buildWallpaperBackdropCss,
   buildCardWallpaperCss,
   rgbaFromHex,
+  isInlineWallpaperDataUrl,
 } from "./theme-wallpaper"
 import { THEMES } from "./syntax-themes"
 
@@ -81,5 +82,23 @@ describe("rgbaFromHex", () => {
 
   it("falls back to grey for non-hex input", () => {
     expect(rgbaFromHex("not-a-color", 0.78)).toBe("rgba(128,128,128,0.78)")
+  })
+})
+
+describe("wallpaper data URLs (F15)", () => {
+  it("accepts an inlined raster image", () => {
+    expect(isInlineWallpaperDataUrl(FAKE)).toBe(true)
+    expect(isInlineWallpaperDataUrl("data:image/png;base64,iVBORw0KGgo=")).toBe(true)
+  })
+
+  it.each([
+    'data:image/webp;base64,QQ");}</style><script>x()</script>',
+    "data:image/svg+xml;base64,PHN2Zz4=",
+    "https://example.com/wall.webp",
+    "data:text/html;base64,PGI+",
+  ])("draws no backdrop for %j", (url) => {
+    expect(isInlineWallpaperDataUrl(url)).toBe(false)
+    expect(buildWallpaperBackdropCss(url, THEMES.arknights)).toBe("")
+    expect(buildCardWallpaperCss(url, THEMES.arknights)).toBe("")
   })
 })

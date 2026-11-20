@@ -8,7 +8,7 @@
 
 import html2canvas from "html2canvas-pro"
 import { exportToBeautifulHtml, type BeautifulHtmlOptions } from "./beautiful-html"
-import { THEMES } from "./syntax-themes"
+import { exportThemeTokens } from "./syntax-themes"
 import type { ShareProvenance } from "@/lib/share/types"
 import { enforceExportDisclosure } from "@/lib/export/disclosure"
 import { embedPngTwinProvenance } from "./png-metadata"
@@ -29,7 +29,7 @@ export class ChatPngTooLongError extends Error {
 
 /** Resolve the page background used behind the export (custom theme wins). */
 export function pngBackground(options: BeautifulHtmlOptions): string {
-  return options.customTheme?.bg ?? THEMES[options.theme ?? "light"].bg
+  return exportThemeTokens(options.theme ?? "light", options.customTheme).bg
 }
 
 /**

@@ -1,12 +1,13 @@
 // User-defined custom themes for the beautiful-HTML export. Persisted via
 // Zustand's localStorage middleware so the user's custom palettes survive
-// reloads. Each entry is a full `ThemeTokens` blob plus a label.
+// reloads. Each entry is a full `ThemeTokens` blob plus a label. A palette
+// is written into exported `<style>` blocks, so only CSS colors are stored.
 
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import { persistLocalStorage } from "@/stores/persist-storage"
 import type { ThemeTokens } from "@/lib/export/html/syntax-themes"
-import { THEMES } from "@/lib/export/html/syntax-themes"
+import { THEMES, invalidThemeTokenKeys } from "@/lib/export/html/syntax-themes"
 
 export interface CustomTheme {
   id: string
@@ -22,7 +23,14 @@ interface CustomThemeState {
     theme: Omit<CustomTheme, "id" | "createdAt" | "updatedAt"> & { id?: string }
   ) => CustomTheme
   remove: (id: string) => void
-  clone: (id: string, newName: string) => CustomTheme | null
+}
+
+/** A palette with tokens that are not CSS colors; nothing was saved. */
+export class InvalidThemeTokensError extends Error {
+  constructor(readonly keys: ReadonlyArray<keyof ThemeTokens>) {
+    super(`theme tokens are not CSS colors: ${keys.join(", ")}`)
+    this.name = "InvalidThemeTokensError"
+  }
 }
 
 function newId(): string {
@@ -34,6 +42,8 @@ export const useCustomThemeStore = create<CustomThemeState>()(
     (set, get) => ({
       themes: [],
       upsert: (input) => {
+        const invalid = invalidThemeTokenKeys(input.tokens)
+        if (invalid.length > 0) throw new InvalidThemeTokensError(invalid)
         const now = Date.now()
         const id = input.id ?? newId()
         const existing = get().themes.find((t) => t.id === id)
@@ -52,11 +62,6 @@ export const useCustomThemeStore = create<CustomThemeState>()(
         return next
       },
       remove: (id) => set((state) => ({ themes: state.themes.filter((t) => t.id !== id) })),
-      clone: (id, newName) => {
-        const src = get().themes.find((t) => t.id === id)
-        if (!src) return null
-        return get().upsert({ name: newName, tokens: { ...src.tokens } })
-      },
     }),
     { name: "cognia-custom-themes", storage: persistLocalStorage() }
   )

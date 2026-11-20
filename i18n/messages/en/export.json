@@ -114,6 +114,7 @@
   "theme": {
     "customTitle": "Custom theme",
     "deleteTheme": "Delete theme",
+    "invalidTokens": "Not CSS colors: {tokens}. Fix them before saving.",
     "namePlaceholder": "Theme name",
     "saveNew": "Save",
     "savedThemes": "Saved themes",

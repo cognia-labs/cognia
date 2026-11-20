@@ -18903,6 +18903,7 @@
     "theme": {
       "customTitle": "自定义主题",
       "deleteTheme": "删除主题",
+      "invalidTokens": "不是有效的 CSS 颜色：{tokens}。请先修正再保存。",
       "namePlaceholder": "主题名称",
       "saveNew": "保存",
       "savedThemes": "已保存的主题",

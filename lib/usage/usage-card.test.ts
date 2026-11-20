@@ -173,3 +173,16 @@ describe("buildUsageCardHtml", () => {
     expect(html).toContain(THEMES.arknights.bg)
   })
 })
+
+describe("custom palette values (F15)", () => {
+  it("draws a refused palette value with the base theme's color instead", () => {
+    const html = buildUsageCardHtml({
+      stats: collectUsageCardStats([row({ messageId: "a", model: "opus", inputTokens: 10 })]),
+      generatedAt: new Date(T0),
+      theme: "arknights",
+      customTheme: { ...THEMES.arknights, text: "red;}</style><script>x()</script>" },
+    })
+    expect(html).not.toContain("<script>x()")
+    expect(html).toContain(THEMES.arknights.text)
+  })
+})

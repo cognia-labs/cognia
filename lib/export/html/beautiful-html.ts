@@ -3,7 +3,7 @@
 
 import type { UIMessage } from "ai"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
-import { THEMES, type ThemeId, type ThemeTokens } from "./syntax-themes"
+import { exportThemeTokens, type ThemeId, type ThemeTokens } from "./syntax-themes"
 import { getStylePreset } from "./style-presets"
 import { buildWallpaperBackdropCss } from "./theme-wallpaper"
 import { renderPartHtml, type PartRenderContext } from "@/lib/chat/parts/descriptors"
@@ -48,7 +48,7 @@ export function exportToBeautifulHtml(options: BeautifulHtmlOptions): string {
     expandDetails = true,
     wallpaperDataUrl,
   } = options
-  const tokens = customTheme ?? THEMES[theme]
+  const tokens = exportThemeTokens(theme, customTheme)
   const preset = getStylePreset(theme)
   const banner = preset?.bannerText
     ? `<div class="preset-banner">${escapeHtml(preset.bannerText)}</div>\n`

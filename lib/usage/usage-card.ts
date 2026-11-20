@@ -12,7 +12,7 @@ import {
   topModelByTokens,
 } from "@/lib/usage/session-analytics"
 import { formatDuration, formatTokens } from "@/types/system/usage"
-import { THEMES, type ThemeId, type ThemeTokens } from "@/lib/export/html/syntax-themes"
+import { exportThemeTokens, type ThemeId, type ThemeTokens } from "@/lib/export/html/syntax-themes"
 import { getStylePreset } from "@/lib/export/html/style-presets"
 import { buildCardWallpaperCss } from "@/lib/export/html/theme-wallpaper"
 
@@ -150,7 +150,7 @@ const GENERIC_LABELS: CardLabels = {
  */
 export function renderUsageCardFragment(options: UsageCardOptions): string {
   const theme = options.theme ?? "arknights"
-  const t = options.customTheme ?? THEMES[theme]
+  const t = exportThemeTokens(theme, options.customTheme)
   const preset = getStylePreset(theme)
   const labels = theme === "arknights" ? ARKNIGHTS_LABELS : GENERIC_LABELS
   const s = options.stats
@@ -201,7 +201,7 @@ export function renderUsageCardFragment(options: UsageCardOptions): string {
 /** Full self-contained HTML document for the share pipeline. */
 export function buildUsageCardHtml(options: UsageCardOptions): string {
   const theme = options.theme ?? "arknights"
-  const t = options.customTheme ?? THEMES[theme]
+  const t = exportThemeTokens(theme, options.customTheme)
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

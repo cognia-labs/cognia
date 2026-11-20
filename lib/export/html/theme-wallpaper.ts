@@ -60,6 +60,18 @@ export async function resolveThemeWallpaper(
   }
 }
 
+/**
+ * An inlined raster image (`data:image/<png|jpeg|webp|gif|avif>;base64,…`).
+ * The URL is written into `url("…")` inside a `<style>`, so anything else (a
+ * quote, a parenthesis, a `</style>`) is refused rather than escaped.
+ */
+const INLINE_IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif|avif);base64,[A-Za-z0-9+/]+={0,2}$/
+
+/** Whether `value` is a wallpaper the backdrop CSS can carry. */
+export function isInlineWallpaperDataUrl(value: string): boolean {
+  return INLINE_IMAGE_DATA_URL.test(value)
+}
+
 /** Scrim alpha laid over the photo so body text stays legible. */
 const SCRIM_ALPHA = 0.78
 
@@ -69,9 +81,11 @@ const SCRIM_ALPHA = 0.78
  * `body` goes transparent (so a preset's `body{background-image:<grid>}` layers
  * on top of the photo instead of hiding it). A scrim over the photo keeps the
  * accent heading + muted footer readable; message bubbles keep their opaque
- * backgrounds so body text never sits on the raw image.
+ * backgrounds so body text never sits on the raw image. A `dataUrl` that is
+ * not an inlined image yields no backdrop.
  */
 export function buildWallpaperBackdropCss(dataUrl: string, t: ThemeTokens): string {
+  if (!isInlineWallpaperDataUrl(dataUrl)) return ""
   const scrim = rgbaFromHex(t.bg, SCRIM_ALPHA)
   return `
 html { min-height: 100%; background-color: ${t.bg}; background-image: linear-gradient(${scrim}, ${scrim}), url("${dataUrl}"); background-size: cover; background-position: center; background-attachment: fixed; background-repeat: no-repeat; }
@@ -88,6 +102,7 @@ body { background-color: transparent; }
  * numbers and quoted text readable over the scrimmed photo.
  */
 export function buildCardWallpaperCss(dataUrl: string, t: ThemeTokens): string {
+  if (!isInlineWallpaperDataUrl(dataUrl)) return ""
   const scrim = rgbaFromHex(t.bg, SCRIM_ALPHA)
   return `
 .ucard, .qcard { background-image: linear-gradient(${scrim}, ${scrim}), url("${dataUrl}"); background-size: cover; background-position: center; background-repeat: no-repeat; }

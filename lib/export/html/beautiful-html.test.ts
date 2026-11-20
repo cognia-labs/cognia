@@ -521,3 +521,25 @@ it("renders a reply's block Markdown as blocks, with raw HTML shown as text (D11
   expect(html).not.toContain("<iframe")
   expect(html).toContain('<html lang="en">')
 })
+
+describe("exportToBeautifulHtml — custom palette values (F15)", () => {
+  it("never lets a palette value close the style element", () => {
+    const html = exportToBeautifulHtml({
+      session,
+      messages,
+      exportedAt,
+      labels,
+      theme: "light",
+      customTheme: {
+        ...THEMES.light,
+        accent: "red;}</style><script>window.__pwned=1</script><style>",
+        bg: "#101010",
+      },
+    })
+    expect(html).not.toContain("window.__pwned")
+    expect(html.match(/<\/style>/g)).toHaveLength(1)
+    // The valid custom color stays, the refused one falls back to the base theme's.
+    expect(html).toContain("background: #101010")
+    expect(html).toContain(`color: ${THEMES.light.accent}`)
+  })
+})

@@ -1,6 +1,11 @@
 /** @jest-environment jsdom */
 import { act, renderHook } from "@testing-library/react"
-import { useCustomThemeStore, seedTokens, type CustomTheme } from "./custom-theme-store"
+import {
+  InvalidThemeTokensError,
+  useCustomThemeStore,
+  seedTokens,
+  type CustomTheme,
+} from "./custom-theme-store"
 import { THEMES } from "@/lib/export/html/syntax-themes"
 import * as barrel from "./"
 
@@ -107,33 +112,20 @@ describe("useCustomThemeStore", () => {
     expect(result.current.themes.map((t) => t.id)).toEqual(["b"])
   })
 
-  it("clone returns null for an unknown id", () => {
+  it("refuses tokens that are not CSS colors and saves nothing (F15)", () => {
     const { result } = renderHook(() => useCustomThemeStore())
-    let cloned: CustomTheme | null = {} as CustomTheme
+    const tokens = { ...seedTokens("light"), accent: "red;}</style><script>x()</script>" }
+    let error: unknown
     act(() => {
-      cloned = result.current.clone("missing", "Whatever")
+      try {
+        result.current.upsert({ name: "Bad", tokens })
+      } catch (caught) {
+        error = caught
+      }
     })
-    expect(cloned).toBeNull()
-  })
-
-  it("clone copies tokens by value and assigns a fresh id", () => {
-    const { result } = renderHook(() => useCustomThemeStore())
-    act(() => {
-      result.current.upsert({ id: "src", ...baseInput("Source") })
-    })
-    let cloned: CustomTheme | null = null
-    act(() => {
-      cloned = result.current.clone("src", "Source copy")
-    })
-
-    expect(cloned).not.toBeNull()
-    expect(cloned!.id).not.toBe("src")
-    expect(cloned!.name).toBe("Source copy")
-
-    // Mutating the clone must NOT mutate the source's tokens
-    cloned!.tokens.bg = "#deadbe"
-    const src = result.current.themes.find((t) => t.id === "src")!
-    expect(src.tokens.bg).not.toBe("#deadbe")
+    expect(error).toBeInstanceOf(InvalidThemeTokensError)
+    expect((error as InvalidThemeTokensError).keys).toEqual(["accent"])
+    expect(result.current.themes).toEqual([])
   })
 
   it("persists under the documented localStorage key", () => {
