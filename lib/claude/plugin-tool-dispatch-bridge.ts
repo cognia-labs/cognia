@@ -83,6 +83,14 @@ async function execute(
   let removeAbortListener: (() => void) | undefined
   let signal = controller.signal
   let response: PluginToolExecResponse | undefined
+  // The asking runtime stops waiting at its deadline and tells the model the
+  // call timed out; the call is cancelled then too, never left to finish.
+  const deadline =
+    typeof request.timeoutMs === "number" &&
+    Number.isFinite(request.timeoutMs) &&
+    request.timeoutMs > 0
+      ? setTimeout(() => controller.abort("timed out"), request.timeoutMs)
+      : undefined
   try {
     const prepared = owner.prepareRequest?.(request) ?? request
     signal = AbortSignal.any(
@@ -117,6 +125,7 @@ async function execute(
     response = failure("Plugin tool executor failed")
   } finally {
     removeAbortListener?.()
+    if (deadline) clearTimeout(deadline)
   }
   if (!response || signal.aborted) return
   try {

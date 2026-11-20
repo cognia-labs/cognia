@@ -1,6 +1,12 @@
 import type { MCPClientConfig, MCPTransport } from "@ai-sdk/mcp"
 import type { StdioConfig } from "@ai-sdk/mcp/mcp-stdio"
-import type { McpClientFactory, McpTools, McpTool, McpExecutionOptions } from "./types.ts"
+import type {
+  McpClientFactory,
+  McpTools,
+  McpTool,
+  McpExecutionOptions,
+  McpToolList,
+} from "./types.ts"
 import type { McpLogEntry } from "./log.ts"
 async function execute(
   tool: McpTool | undefined,
@@ -39,6 +45,11 @@ class FakeStdio implements MCPTransport {
   }
 }
 
+/** A fake AI SDK MCP client's discovery: lists no definitions, converts to `tools`. */
+function listed(tools: McpTools) {
+  return { listTools: async () => ({ tools: [] }), toolsFromDefinitions: () => tools }
+}
+
 // A fake AI SDK MCP client: returns a fixed tools map; records close().
 function fakeClientFactory(toolsByServer: Record<string, McpTools>) {
   let callIndex = 0
@@ -49,7 +60,7 @@ function fakeClientFactory(toolsByServer: Record<string, McpTools>) {
       const server = servers[callIndex++]!
       const closedRef = this.closed
       return Promise.resolve({
-        tools: async () => toolsByServer[server]!,
+        ...listed(toolsByServer[server]!),
         close: async () => closedRef.push(server),
         __transport: transport,
       })
@@ -140,7 +151,7 @@ test("buildAiSdkMcpTools wires the guarded fetch and closes its dispatcher", asy
     }),
     createClient: async (config) => {
       transport = config.transport
-      return { tools: async () => ({}), close: async () => undefined }
+      return { ...listed({}), close: async () => undefined }
     },
   })
   assert.ok("url" in transport)
@@ -249,7 +260,7 @@ test("buildAiSdkMcpTools skips a server that fails to connect, keeps the rest", 
     assert.ok("url" in transport)
     attempts[transport.url] = (attempts[transport.url] ?? 0) + 1
     if (transport.url === "https://down") throw new Error("ECONNREFUSED")
-    return { tools: async () => ({ ok: { execute: async () => "ok" } }), close: async () => {} }
+    return { ...listed({ ok: { execute: async () => "ok" } }), close: async () => {} }
   }
   const { tools } = await buildAiSdkMcpTools({
     mcpServers: {
@@ -275,7 +286,7 @@ test("buildAiSdkMcpTools recovers a server that fails once then connects (retry)
   const createClient = async () => {
     attempts++
     if (attempts === 1) throw new Error("cold start")
-    return { tools: async () => ({ ping: { execute: async () => "pong" } }), close: async () => {} }
+    return { ...listed({ ping: { execute: async () => "pong" } }), close: async () => {} }
   }
   const { tools } = await buildAiSdkMcpTools({
     mcpServers: { flaky: { type: "http", url: "https://cold" } },
@@ -291,7 +302,7 @@ test("buildAiSdkMcpTools recovers a server that fails twice then connects (backo
   const createClient = async () => {
     attempts++
     if (attempts <= 2) throw new Error("still cold")
-    return { tools: async () => ({ ping: { execute: async () => "pong" } }), close: async () => {} }
+    return { ...listed({ ping: { execute: async () => "pong" } }), close: async () => {} }
   }
   const { tools } = await buildAiSdkMcpTools({
     mcpServers: { flaky: { type: "http", url: "https://cold" } },
@@ -308,10 +319,7 @@ test("buildAiSdkMcpTools caps a hung connect with connectTimeoutMs and closes th
   // Never-yielding connect that eventually resolves AFTER the timeout.
   const createClient: McpClientFactory = () =>
     new Promise((resolve) =>
-      setTimeout(
-        () => resolve({ tools: async () => ({}), close: async () => (lateClosed = true) }),
-        40
-      )
+      setTimeout(() => resolve({ ...listed({}), close: async () => (lateClosed = true) }), 40)
     )
   const { tools } = await buildAiSdkMcpTools({
     mcpServers: { hung: { type: "http", url: "https://hang" } },
@@ -340,7 +348,7 @@ test("buildAiSdkMcpTools connects servers concurrently (a slow one does not bloc
     const delay = transport.url === "https://slow" ? 30 : 0
     await new Promise((r) => setTimeout(r, delay))
     order.push(`done:${transport.url}`)
-    return { tools: async () => ({ t: { execute: async () => "x" } }), close: async () => {} }
+    return { ...listed({ t: { execute: async () => "x" } }), close: async () => {} }
   }
   const { tools } = await buildAiSdkMcpTools({
     mcpServers: {
@@ -357,9 +365,10 @@ test("buildAiSdkMcpTools connects servers concurrently (a slow one does not bloc
 test("buildAiSdkMcpTools skips a server whose tools() rejects", async () => {
   const warnings: string[] = []
   const createClient = async () => ({
-    tools: async () => {
+    listTools: async () => {
       throw new Error("timeout listing tools")
     },
+    toolsFromDefinitions: () => ({}),
     close: async () => {},
   })
   const { tools } = await buildAiSdkMcpTools({
@@ -469,7 +478,7 @@ test("buildAiSdkMcpTools captures stdio server stderr into emitMcpLog", async ()
     assert.equal(transport.cfg.stderr, "pipe")
     await transport.start()
     capture.stream = transport.process?.stderr // the child's stderr, forwarded into the capture
-    return { tools: async () => ({ ping: { execute: async () => "pong" } }), close: async () => {} }
+    return { ...listed({ ping: { execute: async () => "pong" } }), close: async () => {} }
   }
   const { close } = await buildAiSdkMcpTools({
     mcpServers: { fs: { type: "stdio", command: "node" } },
@@ -554,7 +563,7 @@ test("stdio transport has no stderr stream when no emitMcpLog sink is supplied",
   const createClient: McpClientFactory = async ({ transport }) => {
     assert.ok(transport instanceof FakeStdio)
     capture.cfg = transport.cfg
-    return { tools: async () => ({}), close: async () => {} }
+    return { ...listed({}), close: async () => {} }
   }
   await buildAiSdkMcpTools({
     mcpServers: { fs: { type: "stdio", command: "node" } },
@@ -674,4 +683,134 @@ test("MCP final execution checks the cached deadline without another RPC", async
   await assert.rejects(execute(tool, {}), FenceDeniedError)
   assert.equal(executed, false)
   assert.equal(calls, 1)
+})
+
+test("an MCP result the server marks isError fails the call, through review", async () => {
+  const reviews: [string | undefined, unknown, boolean][] = []
+  const tool = wrapMcpToolWithGate(
+    {
+      execute: async () => ({
+        content: [{ type: "text", text: "Report unavailable" }],
+        isError: true,
+      }),
+    },
+    "mcp__reports__get",
+    undefined,
+    async (_name, id, output, isError) => {
+      reviews.push([id, output, isError])
+      return undefined
+    },
+    false
+  )
+  await assert.rejects(
+    async () => await tool.execute!({}, { toolCallId: "call-1" } as McpExecutionOptions),
+    /Report unavailable/
+  )
+  assert.deepEqual(reviews, [["call-1", "Report unavailable", true]])
+})
+
+test("structuredContent is checked against the declared outputSchema", async () => {
+  const outputSchema = {
+    type: "object",
+    properties: { count: { type: "number" } },
+    required: ["count"],
+  }
+  const returning = (structuredContent: unknown) =>
+    wrapMcpToolWithGate(
+      {
+        execute: async () => ({
+          content: [{ type: "text", text: "Report ready" }],
+          structuredContent,
+        }),
+      },
+      "mcp__reports__count",
+      undefined,
+      undefined,
+      false,
+      undefined,
+      outputSchema
+    )
+  await assert.rejects(
+    async () => await returning({ count: "seven" }).execute!({}, {} as McpExecutionOptions),
+    /does not match its outputSchema/
+  )
+  await assert.rejects(
+    async () => await returning(undefined).execute!({}, {} as McpExecutionOptions),
+    /no structuredContent/
+  )
+  assert.deepEqual(await returning({ count: 7 }).execute!({}, {} as McpExecutionOptions), {
+    content: [
+      { type: "text", text: "Report ready" },
+      { type: "text", text: '{"count":7}' },
+    ],
+    structuredContent: { count: 7 },
+  })
+})
+
+test("structuredContent reaches the model once, even with no schema declared", async () => {
+  const withText = wrapMcpToolWithGate(
+    {
+      execute: async () => ({
+        content: [{ type: "text", text: '{"count":7}' }],
+        structuredContent: { count: 7 },
+      }),
+    },
+    "mcp__reports__count",
+    undefined,
+    undefined,
+    false
+  )
+  // The server already serialized it into a text block: nothing is added.
+  assert.deepEqual(await withText.execute!({}, {} as McpExecutionOptions), {
+    content: [{ type: "text", text: '{"count":7}' }],
+    structuredContent: { count: 7 },
+  })
+})
+
+test("discovery keeps every page's outputSchema and refuses a repeated cursor", async () => {
+  const pages: Record<string, McpToolList> = {
+    first: {
+      tools: [{ name: "count", outputSchema: { type: "object", required: ["count"] } }],
+      nextCursor: "p2",
+    },
+    p2: { tools: [{ name: "plain" }] },
+  }
+  let converted: { name: string }[] = []
+  const { tools } = await buildAiSdkMcpTools({
+    mcpServers: { reports: { type: "http", url: "https://reports" } },
+    createClient: async () => ({
+      listTools: async (options?: { params?: { cursor?: string } }) =>
+        pages[options?.params?.cursor ?? "first"]!,
+      toolsFromDefinitions: (definitions: McpToolList) => {
+        converted = definitions.tools
+        return {
+          count: { execute: async () => ({ content: [], structuredContent: {} }) },
+          plain: { execute: async () => "ok" },
+        }
+      },
+      close: async () => {},
+    }),
+  })
+  assert.deepEqual(
+    converted.map((tool) => tool.name),
+    ["count", "plain"]
+  )
+  // `count` declared a schema on page one; its empty result breaks it.
+  await assert.rejects(
+    async () => await tools["mcp__reports__count"]!.execute!({}, {} as McpExecutionOptions),
+    /does not match its outputSchema/
+  )
+
+  const warnings: string[] = []
+  const looping = await buildAiSdkMcpTools({
+    mcpServers: { loop: { type: "http", url: "https://loop" } },
+    log: (_level: string, message: string) => warnings.push(message),
+    createClient: async () => ({
+      listTools: async () => ({ tools: [{ name: "x" }], nextCursor: "same" }),
+      toolsFromDefinitions: () => ({}),
+      close: async () => {},
+    }),
+  })
+  assert.deepEqual(looping.tools, {})
+  assert.ok(warnings.some((w) => w.includes("repeated a cursor")))
 })

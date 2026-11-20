@@ -35,6 +35,7 @@ import { loggers } from "@cognia/logging"
 
 import type { ClaudeEvent, SendOptions } from "@cognia/agent-config-types"
 import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
+import { pluginToolRelayDeadlineMs } from "@/lib/plugin/bridge/agent-tool-types"
 import { requestLocalToolApproval } from "@/lib/ai/agent/execution/sidecar-client"
 import {
   resolvePermissionDetailed,
@@ -526,19 +527,47 @@ export function buildStandaloneTools(
             throw new Error(`denied by standalone permission policy: ${entry.name}`)
         }
         signal?.throwIfAborted()
-        const response = await handlePluginToolExec({
+        // The same deadline the sidecar gives a call to this entry: past it
+        // the call is cancelled and reported as timed out, whatever the
+        // executor does with the abort.
+        const deadlineMs = pluginToolRelayDeadlineMs(entry.timeoutMs)
+        const deadline = deadlineMs === undefined ? undefined : new AbortController()
+        const timer = deadline
+          ? setTimeout(() => deadline.abort("timed out"), deadlineMs)
+          : undefined
+        const callSignal =
+          deadline && signal
+            ? AbortSignal.any([signal, deadline.signal])
+            : (deadline?.signal ?? signal)
+        const timedOut = deadline
+          ? new Promise<never>((_resolve, reject) =>
+              deadline.signal.addEventListener(
+                "abort",
+                () =>
+                  reject(new Error(`plugin tool '${entry.name}' timed out after ${deadlineMs}ms`)),
+                { once: true }
+              )
+            )
+          : undefined
+        const execution = handlePluginToolExec({
           type: "plugin_tool_exec",
           sessionId,
           toolUseId: options.toolCallId,
           name: entry.name,
           args: input,
-          ...(signal ? { abortSignal: signal } : {}),
+          ...(callSignal ? { abortSignal: callSignal } : {}),
           ...(turnId !== undefined ? { turnId } : {}),
           ...(attemptId !== undefined ? { attemptId } : {}),
           ...(sendOptions.sandboxRuntimeRef
             ? { sandboxRuntimeRef: sendOptions.sandboxRuntimeRef }
             : {}),
         })
+        let response: Awaited<typeof execution>
+        try {
+          response = timedOut ? await Promise.race([execution, timedOut]) : await execution
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
         if (response.error) throw new Error(response.error)
         const result = response.result as { content?: unknown; isError?: unknown } | null
         if (result?.isError === true && Array.isArray(result.content)) {

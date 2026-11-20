@@ -394,3 +394,43 @@ it("does not re-execute a tool when its response transport rejects", async () =>
   expect(h.send).toHaveBeenCalledTimes(1)
   stop()
 })
+
+it("cancels a call at the deadline the asking runtime gave it and sends no late answer", async () => {
+  const h = harness()
+  let seen: AbortSignal | undefined
+  h.handle.mockImplementation(async (req) => {
+    seen = req.abortSignal
+    // A cooperative executor: it stops once told to, answering anyway.
+    await new Promise<void>((resolve) =>
+      req.abortSignal?.addEventListener("abort", () => resolve(), { once: true })
+    )
+    return response
+  })
+  const stop = await subscribePluginToolDispatchBridge(h)
+  h.emit({ ...request, toolUseId: "slow", timeoutMs: 10 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  await flush()
+  expect(seen?.aborted).toBe(true)
+  expect(h.send).not.toHaveBeenCalled()
+  stop()
+})
+
+it("leaves a call without a deadline running", async () => {
+  const h = harness()
+  let finish!: () => void
+  h.handle.mockImplementation(async (req) => {
+    expect(req.abortSignal?.aborted).toBe(false)
+    await new Promise<void>((resolve) => (finish = resolve))
+    return response
+  })
+  const stop = await subscribePluginToolDispatchBridge(h)
+  h.emit({ ...request, toolUseId: "unbounded" })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  finish()
+  await flush()
+  expect(h.send).toHaveBeenCalledWith(
+    expect.objectContaining({ toolUseId: request.toolUseId }),
+    request.remoteExecutionContext
+  )
+  stop()
+})

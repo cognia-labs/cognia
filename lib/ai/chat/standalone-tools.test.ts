@@ -140,6 +140,41 @@ describe("standalone authority and dispatch boundaries", () => {
     controller.abort(new Error("cancelled"))
     await expect(pending).rejects.toThrow("cancelled")
   })
+  it("cuts a call off at the entry's declared deadline and cancels it", async () => {
+    let seen: AbortSignal | undefined
+    // An executor that keeps going until it is told to stop, then ignores it.
+    handlePluginToolExec.mockImplementation(({ abortSignal }) => {
+      seen = abortSignal
+      return new Promise(() => {})
+    })
+    const result = buildStandaloneTools(
+      { permissionMode: "bypassPermissions", pluginTools: [entry("search", { timeoutMs: 20 })] },
+      "s1"
+    )!
+    await expect(
+      executorOf(result.tools.search)({ q: "x" }, { toolCallId: "slow", messages: [] })
+    ).rejects.toThrow("plugin tool 'search' timed out after 20ms")
+    expect(seen?.aborted).toBe(true)
+  })
+
+  it("gives a call no deadline when its entry declares 0", async () => {
+    jest.useFakeTimers()
+    try {
+      let finish!: (value: unknown) => void
+      handlePluginToolExec.mockImplementation(() => new Promise((resolve) => (finish = resolve)))
+      const result = buildStandaloneTools(
+        { permissionMode: "bypassPermissions", pluginTools: [entry("ask", { timeoutMs: 0 })] },
+        "s1"
+      )!
+      const pending = executorOf(result.tools.ask)({ q: "x" }, { toolCallId: "ask", messages: [] })
+      await jest.advanceTimersByTimeAsync(10 * 60_000)
+      finish({ result: "answered" })
+      await expect(pending).resolves.toBe("answered")
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it.each([
     { disallowedTools: ["WebSearch"] },
     { disallowedTools: ["mcp__cognia-plugin-tools__web_search"] },
@@ -869,6 +904,8 @@ describe("buildStandaloneTools", () => {
       toolUseId: "call-9",
       name: "web_search",
       args: { q: "cognia" },
+      // The entry's relay deadline (the 120s default) travels as the signal.
+      abortSignal: expect.any(AbortSignal),
       sandboxRuntimeRef: "sandbox-runtime:standalone",
     })
   })

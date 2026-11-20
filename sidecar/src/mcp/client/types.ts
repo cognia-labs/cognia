@@ -24,8 +24,21 @@ export interface McpTool {
   [key: string]: unknown
 }
 export type McpTools = Record<string, McpTool>
+/** One tool as `tools/list` describes it; the bridge reads its `outputSchema`. */
+export interface McpToolDefinition {
+  name: string
+  outputSchema?: Record<string, unknown>
+  [key: string]: unknown
+}
+/** One page of `tools/list`. */
+export interface McpToolList {
+  tools: McpToolDefinition[]
+  nextCursor?: string
+  [key: string]: unknown
+}
 export interface McpToolClient {
-  tools(): Promise<McpTools>
+  listTools(options?: { params?: { cursor?: string } }): Promise<McpToolList>
+  toolsFromDefinitions(definitions: McpToolList): McpTools
   close(): Promise<unknown>
 }
 export type McpClientFactory = (config: MCPClientConfig) => Promise<McpToolClient>

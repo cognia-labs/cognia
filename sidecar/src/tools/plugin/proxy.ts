@@ -248,11 +248,13 @@ export function buildPluginToolDefinitions({
         try {
           // Honor a per-tool timeout override from the manifest (`t.timeoutMs`);
           // `0` means "no timeout" for human-blocking / long-running tools.
+          const timeoutMs =
+            typeof t.timeoutMs === "number" ? t.timeoutMs : DEFAULT_PLUGIN_TOOL_TIMEOUT_MS
           const pending = awaitPluginToolResponse(
             pendingPluginToolCalls,
             toolUseId,
             t.name,
-            typeof t.timeoutMs === "number" ? t.timeoutMs : undefined
+            timeoutMs
           )
           emit({
             type: "plugin_tool_exec",
@@ -260,6 +262,9 @@ export function buildPluginToolDefinitions({
             toolUseId,
             name: t.name,
             args,
+            // The executor stops at the same deadline this side gives up at, so
+            // a call reported as timed out does not go on to finish its effect.
+            ...(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {}),
             ...(turnId ? { turnId } : {}),
             ...(attemptId ? { attemptId } : {}),
             ...(sandboxRuntimeRef ? { sandboxRuntimeRef } : {}),

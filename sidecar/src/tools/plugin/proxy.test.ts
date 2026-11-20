@@ -185,9 +185,32 @@ test("plugin definitions are engine-neutral and round-trip through the renderer"
     toolUseId: frames[0]!.toolUseId,
     name: "echo",
     args: { value: 1 },
+    // The default deadline travels with the call so the executor stops with it.
+    timeoutMs: 120_000,
     turnId: "turn-1",
   })
   assert.deepEqual(result.content, [{ type: "text", text: '{"said":"hi"}' }])
+})
+
+test("a call carries the entry's own deadline, and none when the entry declares 0", async () => {
+  const pending: PendingPluginToolCalls = new Map()
+  const frames: Record<string, unknown>[] = []
+  const [sized, unbounded] = buildPluginToolDefinitions({
+    tools: [
+      { name: "sized", description: "Sized", jsonSchema: {}, timeoutMs: 45_000 },
+      { name: "unbounded", description: "Unbounded", jsonSchema: {}, timeoutMs: 0 },
+    ],
+    emit: (frame) => {
+      frames.push(frame)
+      answer(pending, frame.toolUseId as string, { result: "ok" })
+    },
+    sessionId: "sess",
+    pendingPluginToolCalls: pending,
+  })!
+  await sized!.handler({})
+  await unbounded!.handler({})
+  assert.equal(frames[0]!.timeoutMs, 45_000)
+  assert.equal("timeoutMs" in frames[1]!, false)
 })
 
 test("server-wide always-load marks every plugin definition resident", () => {

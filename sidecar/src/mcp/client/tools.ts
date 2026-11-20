@@ -1,4 +1,5 @@
 import type { MCPClientConfig, MCPTransport } from "@ai-sdk/mcp"
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv"
 import type { EgressGuard } from "../../platform/net/egress-guard.ts"
 import type { WorkerToolAdmission } from "../../policy/fence/admission.ts"
 import type { McpLogLevel } from "./log.ts"
@@ -7,6 +8,7 @@ import type {
   McpToolsOptions,
   McpTools,
   McpToolClient,
+  McpToolList,
   McpTool,
   McpPermissionGate,
   McpOutputReviewer,
@@ -405,14 +407,15 @@ export async function buildAiSdkMcpTools({
     }
     if (!client) return null
     let serverTools: McpTools
+    let outputSchemas: ReadonlyMap<string, Record<string, unknown>>
     try {
       // Same deadline as connect: a server that connected but never answers
       // `tools/list` (cold remote, wedged stdio child) must not stall the
       // first turn indefinitely.
-      serverTools =
+      const discovered =
         connectTimeoutMs && connectTimeoutMs > 0
           ? await Promise.race([
-              client.tools(),
+              discoverServerTools(client),
               new Promise<never>((_, reject) => {
                 const t = setTimeout(
                   () => reject(new Error(`tools() timed out after ${connectTimeoutMs}ms`)),
@@ -421,7 +424,9 @@ export async function buildAiSdkMcpTools({
                 if (typeof t.unref === "function") t.unref()
               }),
             ])
-          : await client.tools()
+          : await discoverServerTools(client)
+      serverTools = discovered.tools
+      outputSchemas = discovered.outputSchemas
     } catch (err) {
       log?.(
         "warn",
@@ -459,7 +464,8 @@ export async function buildAiSdkMcpTools({
         gate,
         reviewToolOutput,
         contentSafety?.injectionProtection,
-        workerToolAdmission
+        workerToolAdmission,
+        outputSchemas.get(toolName)
       )
     }
     diag(server, "info", `connected · ${Object.keys(collected).length} tool(s) exposed`)
@@ -484,6 +490,98 @@ export async function buildAiSdkMcpTools({
 }
 
 /**
+ * Every tool the server lists, across pages, as AI SDK tools, with the
+ * `outputSchema` each declares. The SDK's own `tools()` drops those schemas
+ * when it discovers tools on its own, so a result was never checked.
+ */
+async function discoverServerTools(client: McpToolClient): Promise<{
+  tools: McpTools
+  outputSchemas: ReadonlyMap<string, Record<string, unknown>>
+}> {
+  let page: McpToolList = await client.listTools()
+  const definitions = [...page.tools]
+  const cursors = new Set<string>()
+  while (page.nextCursor != null) {
+    // A server that hands back a cursor it already gave would page forever.
+    if (cursors.has(page.nextCursor)) throw new Error("tools/list repeated a cursor")
+    cursors.add(page.nextCursor)
+    page = await client.listTools({ params: { cursor: page.nextCursor } })
+    definitions.push(...page.tools)
+  }
+  const outputSchemas = new Map<string, Record<string, unknown>>()
+  for (const definition of definitions) {
+    if (definition.outputSchema && typeof definition.outputSchema === "object") {
+      outputSchemas.set(definition.name, definition.outputSchema)
+    }
+  }
+  return { tools: client.toolsFromDefinitions({ ...page, tools: definitions }), outputSchemas }
+}
+
+const outputValidators = new AjvJsonSchemaValidator()
+
+/** The text an MCP result's content blocks carry, for an error message. */
+function contentText(result: Record<string, unknown>): string {
+  const content = Array.isArray(result.content) ? result.content : []
+  return content
+    .map((part) =>
+      part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
+        ? (part as { text: string }).text
+        : ""
+    )
+    .filter(Boolean)
+    .join("\n")
+}
+
+/**
+ * Hold an MCP `CallToolResult` to the tool's contract before anyone reads it:
+ *
+ * - `isError: true` is the server saying the call failed. It is thrown, so the
+ *   stream reports a tool error (the model, the hooks and the chat all see a
+ *   failure), exactly as a protocol error already was.
+ * - `structuredContent` must match the `outputSchema` the tool declared
+ *   (MCP 2025-06-18 "Structured Content": clients SHOULD validate); a result
+ *   that does not is an error, not data.
+ * - `structuredContent` reaches the model: the SDK hands the model only the
+ *   content blocks, so when none of them carries the serialized JSON it is
+ *   added as a text block.
+ */
+function checkedMcpResult(
+  out: unknown,
+  namespaced: string,
+  outputSchema: Record<string, unknown> | undefined
+): unknown {
+  if (!out || typeof out !== "object" || Array.isArray(out)) return out
+  const result = out as Record<string, unknown>
+  if (result.isError === true) {
+    throw new Error(contentText(result) || `MCP tool ${namespaced} reported an error`)
+  }
+  const structured = result.structuredContent
+  if (outputSchema) {
+    if (structured === undefined || structured === null) {
+      throw new Error(`MCP tool ${namespaced} returned no structuredContent for its outputSchema`)
+    }
+    const verdict = outputValidators.getValidator(outputSchema)(structured)
+    if (!verdict.valid) {
+      throw new Error(
+        `MCP tool ${namespaced} returned structuredContent that does not match its outputSchema` +
+          (verdict.errorMessage ? `: ${verdict.errorMessage}` : "")
+      )
+    }
+  }
+  if (structured === undefined || structured === null) return out
+  const serialized = JSON.stringify(structured)
+  const content = Array.isArray(result.content) ? result.content : []
+  const carried = content.some(
+    (part) =>
+      part &&
+      typeof part === "object" &&
+      (part as { type?: unknown }).type === "text" &&
+      (part as { text?: unknown }).text === serialized
+  )
+  return carried ? out : { ...result, content: [...content, { type: "text", text: serialized }] }
+}
+
+/**
  * Wrap an AI SDK MCP tool so its `execute` first passes the permission gate
  * (mirroring the built-in / plugin tool gating). The gate throws on deny and
  * may rewrite the input; all other tool fields (description / inputSchema) are
@@ -495,7 +593,9 @@ export function wrapMcpToolWithGate(
   gate?: McpPermissionGate,
   reviewToolOutput?: McpOutputReviewer,
   injectionProtection = true,
-  workerToolAdmission?: WorkerToolAdmission
+  workerToolAdmission?: WorkerToolAdmission,
+  /** The `outputSchema` the server declared for this tool, if any. */
+  outputSchema?: Record<string, unknown>
 ): McpTool {
   if (!toolDef || typeof toolDef.execute !== "function") {
     return toolDef
@@ -522,7 +622,7 @@ export function wrapMcpToolWithGate(
       }
       let out
       try {
-        out = await originalExecute(effective, options)
+        out = checkedMcpResult(await originalExecute(effective, options), namespaced, outputSchema)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         const reviewed = prepareModelToolOutput(

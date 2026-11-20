@@ -19,7 +19,32 @@ export interface PluginToolExecRequest {
   sandboxRuntimeRef?: string
   /** Cooperative cancellation for renderer-hosted calls, including the sidecar bridge. */
   abortSignal?: AbortSignal
+  /**
+   * How long the asking runtime waits for this call. Past it the runtime has
+   * already reported a timeout to the model, so the call is cancelled here as
+   * well and its late result never sent. Absent: the runtime waits as long as
+   * the call takes.
+   */
+  timeoutMs?: number
   remoteExecutionContext?: RemoteExecutionContext
+}
+
+/**
+ * The relay deadline a call gets when its manifest entry names none — the
+ * sidecar's own (`DEFAULT_PLUGIN_TOOL_TIMEOUT_MS` in
+ * `sidecar/src/tools/plugin/proxy.ts`), so every runtime cuts a call off at
+ * the same point.
+ */
+export const DEFAULT_PLUGIN_TOOL_RELAY_TIMEOUT_MS = 120_000
+
+/**
+ * How long a call to a manifest entry declaring `timeoutMs` may run: the
+ * entry's own value, the default when it names none, and no deadline for
+ * `0` (a tool that blocks on a person or bounds its own long task).
+ */
+export function pluginToolRelayDeadlineMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) return DEFAULT_PLUGIN_TOOL_RELAY_TIMEOUT_MS
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined
 }
 
 export interface PluginToolExecResponse {

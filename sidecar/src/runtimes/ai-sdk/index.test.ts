@@ -5871,16 +5871,15 @@ for (const kind of ["builtin", "plugin", "mcp", "search"] as const) {
           buildAiSdkMcpTools({
             ...opts,
             createClient: async () => ({
-              async tools() {
-                return {
-                  remote: {
-                    async execute() {
-                      executions++
-                      return "ok"
-                    },
+              listTools: async () => ({ tools: [{ name: "remote" }] }),
+              toolsFromDefinitions: () => ({
+                remote: {
+                  async execute() {
+                    executions++
+                    return "ok"
                   },
-                }
-              },
+                },
+              }),
               async close() {},
             }),
           }),
