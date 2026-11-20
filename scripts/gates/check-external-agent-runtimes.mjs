@@ -29,7 +29,12 @@
  *      security policy's binary allowlist, and every package-runner launch
  *      names a package in the npx allowlist;
  *   7. platform sanity — Windows-eligible runtimes support Windows, and no
- *      runtime claims a platform outside the known set.
+ *      runtime claims a platform outside the known set;
+ *   8. bundle classification — every runtime is either bundled or marked
+ *      unavailable (with a reason) in `deploy/bundle/agent-versions.json`.
+ *      The Runner and agent-bundle image builds refuse an unclassified one,
+ *      so a catalog entry without it fails here, where it is written, rather
+ *      than at release time.
  *
  * What is NOT checked, and why: whether a version listed as certified actually
  * behaves. That is a runtime property no static gate can establish, and a check
@@ -45,6 +50,11 @@ import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 import ts from "typescript"
+
+import {
+  PATHS as BUNDLE_PATHS,
+  unclassifiedCatalogRuntimes,
+} from "../build/bundle-agent-versions.mjs"
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 
@@ -427,14 +437,23 @@ export function checkPlatforms(catalog) {
   return errors
 }
 
+export function checkBundleClassification(catalog, pins) {
+  return unclassifiedCatalogRuntimes(pins, catalog).map(
+    (id) =>
+      `${id}: neither bundled nor marked unavailable in ${BUNDLE_PATHS.pins} ` +
+      "(add a pinned distribution, or an `unavailable` entry that says why)"
+  )
+}
+
 export function runChecks(
   deps = {
     catalog: readJson(CATALOG),
     policy: readJson(SECURITY_POLICY),
     presetsSource: read(PRESETS_TS),
+    pins: readJson(BUNDLE_PATHS.pins),
   }
 ) {
-  const { catalog, policy, presetsSource } = deps
+  const { catalog, policy, presetsSource, pins } = deps
   const schemaErrors = checkSchema(catalog)
   // Later checks read fields the schema check just proved are present, so a
   // schema failure short-circuits rather than producing a cascade of noise.
@@ -447,6 +466,7 @@ export function runChecks(
     ...checkLaunchParity(catalog, policy),
     ...checkProbes(catalog),
     ...checkPlatforms(catalog),
+    ...checkBundleClassification(catalog, pins),
   ]
 }
 
@@ -458,7 +478,8 @@ if (process.argv[1]?.endsWith("check-external-agent-runtimes.mjs")) {
     console.error(
       `\n  ${CATALOG} is the source. Every shipped preset needs an entry, every\n` +
         "  managed distribution needs an exact version plus an approved frozen lock,\n" +
-        "  and every remaining unpinned launch needs a waiver with a written reason.\n"
+        "  every remaining unpinned launch needs a waiver with a written reason, and\n" +
+        `  every runtime is bundled or marked unavailable in ${BUNDLE_PATHS.pins}.\n`
     )
     process.exit(1)
   }

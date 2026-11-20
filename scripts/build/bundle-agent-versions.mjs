@@ -97,6 +97,19 @@ function checkAsset(asset, where, problems) {
 }
 
 /**
+ * Catalog runtimes the pins neither bundle nor mark unavailable, in catalog
+ * order. `scripts/gates/check-external-agent-runtimes.mjs` runs it too, so a
+ * catalog entry added without its bundle classification fails where the
+ * catalog is edited instead of in the image build.
+ */
+export function unclassifiedCatalogRuntimes(pins, catalog) {
+  const listed = new Set((pins?.runtimes ?? []).map((runtime) => runtime?.id))
+  return (catalog?.runtimes ?? [])
+    .map((runtime) => runtime.runtimeId)
+    .filter((id) => !listed.has(id))
+}
+
+/**
  * Every disagreement between the pins and the files that must match them.
  * Pure: the caller reads the files.
  */
@@ -307,10 +320,8 @@ export function validatePins({ pins, packageJson, lock, catalog, dockerfile, lay
     }
     for (const key of actual) checkAsset(download.assets[key], `${runtime.id}.assets.${key}`, problems)
   }
-  for (const id of catalogIds) {
-    if (!seen.has(id)) {
-      problems.push(`${id} from ${PATHS.catalog} is neither bundled nor marked unavailable`)
-    }
+  for (const id of unclassifiedCatalogRuntimes(pins, catalog)) {
+    problems.push(`${id} from ${PATHS.catalog} is neither bundled nor marked unavailable`)
   }
   return problems
 }

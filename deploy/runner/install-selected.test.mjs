@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -406,6 +407,41 @@ test("native npx offline-negation reproduction stays blocked by the installed se
       offline: "true",
       args: ["--offline=false", "--no-offline=true"],
     })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Full installer leaves the unverified Cursor installer off unless asked", () => {
+  const root = mkdtempSync(join(tmpdir(), "cognia-runner-cursor-"))
+  try {
+    const curlLog = join(root, "curl.log")
+    const inherited = Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key]) => !key.endsWith("_VERSION") && key !== "INSTALL_CURSOR_AGENT"
+      )
+    )
+    writeFileSync(join(root, "npm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+    writeFileSync(
+      join(root, "curl"),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COGNIA_TEST_CURL_LOG"\nexit 1\n',
+      {
+        mode: 0o755,
+      }
+    )
+    const result = spawnSync("bash", ["deploy/runner/install-agents.sh"], {
+      encoding: "utf8",
+      env: {
+        ...inherited,
+        PATH: `${root}:${process.env.PATH}`,
+        COGNIA_TEST_CURL_LOG: curlLog,
+        INSTALL_KIRO_CLI: "0",
+        INSTALL_DROID_CLI: "0",
+        COGNIA_AGENT_SHIM_SCRIPT: "/nonexistent",
+      },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(existsSync(curlLog), false, "no download was attempted")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

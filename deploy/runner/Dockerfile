@@ -7,8 +7,13 @@
 #   docker build -f deploy/runner/Dockerfile --target full -t cognia-runner:full .
 # The default final target remains Full for existing callers. New deployments
 # can choose selected; all/full includes every verified distributable runtime,
-# none includes only the execution base. Full additionally retains Cline and
-# the optional unverified Cursor installer for legacy compatibility.
+# none includes only the execution base. Full additionally retains Cline; the
+# unverified Cursor installer runs only with INSTALL_CURSOR_AGENT=1.
+#
+# Both targets run as uid/gid 10001 (`cognia`, HOME=/home/cognia): the uid
+# cognia-server owns the workspace tree as and the sandbox pool's container
+# tier runs agents as, and the non-root user a Kubernetes Restricted namespace
+# admits.
 #
 # RUNTIME_IMAGE customizes the project/toolchain base. Supported custom bases
 # are Debian-derived glibc images with apt-get; selected brings pinned Node.
@@ -43,12 +48,21 @@ RUN node scripts/build/bundle-agent-versions.mjs stage --pins /selection/agent-v
 
 FROM ${RUNTIME_IMAGE} AS base
 USER root
+# The agent runs as 10001, never root. cognia-server creates the workspace
+# tree as uid 10001 (deploy/docker/Dockerfile.cognia-server) and the backend
+# drops every capability, so root here would hold no CAP_DAC_OVERRIDE and
+# could not write a 10001-owned 0755 directory anyway. A custom base that
+# already has uid 10001 or gid 10001 keeps its entries; HOME is set below
+# either way.
 RUN test -f /etc/debian_version \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git libatomic1 libstdc++6 \
-    && rm -rf /var/lib/apt/lists/*
-# Root is deliberate: the server owns the mounted workspace trees as root.
-# The container's locked-down HostConfig is the T2 isolation boundary.
+    && rm -rf /var/lib/apt/lists/* \
+    && { getent group 10001 >/dev/null || groupadd --gid 10001 cognia; } \
+    && { getent passwd 10001 >/dev/null \
+         || useradd --uid 10001 --gid 10001 --home-dir /home/cognia --no-create-home --shell /bin/bash cognia; } \
+    && mkdir -p /home/cognia /workspace \
+    && chown 10001:10001 /home/cognia /workspace
 WORKDIR /workspace
 ENTRYPOINT []
 CMD ["bash"]
@@ -60,7 +74,9 @@ COPY --from=selected-build /cognia /cognia
 RUN COGNIA_NATIVE_NPX="$(command -v npx || true)" \
       /cognia/glibc/node/bin/node /cognia/runner/install-selected.mjs configure-base \
       /cognia/runner/agent-selection.json
-ENV PATH="/cognia/runner/bin:/cognia/glibc/bin:/cognia/glibc/node/bin:${PATH}"
+ENV PATH="/cognia/runner/bin:/cognia/glibc/bin:/cognia/glibc/node/bin:${PATH}" \
+    HOME=/home/cognia
+USER 10001:10001
 LABEL org.opencontainers.image.title="cognia-runner-selected" \
       org.opencontainers.image.description="Selected exact-version Agent runtimes; no npx download fallback"
 
@@ -78,7 +94,8 @@ ARG PI_ACP_VERSION=""
 ARG PI_CODING_AGENT_VERSION=""
 ARG OPENCODE_VERSION=""
 ARG CLINE_VERSION=3.0.73
-ARG INSTALL_CURSOR_AGENT=1
+# Cursor publishes no checksum for its CLI, so its mutable installer is opt-in.
+ARG INSTALL_CURSOR_AGENT=0
 ARG INSTALL_KIRO_CLI=1
 ARG INSTALL_DROID_CLI=1
 COPY deploy/runner/install-agents.sh deploy/runner/install-selected.mjs /tmp/
@@ -96,6 +113,8 @@ RUN COGNIA_AGENT_PACKAGE_JSON=/tmp/agent-packages.json \
     INSTALL_KIRO_CLI=$INSTALL_KIRO_CLI INSTALL_DROID_CLI=$INSTALL_DROID_CLI \
     bash /tmp/install-agents.sh \
     && rm -f /tmp/install-agents.sh /tmp/install-selected.mjs /tmp/agent-versions.json /tmp/agent-packages.json
-ENV PATH="/cognia/runner/bin:${PATH}"
+ENV PATH="/cognia/runner/bin:${PATH}" \
+    HOME=/home/cognia
+USER 10001:10001
 LABEL org.opencontainers.image.title="cognia-runner-full" \
-      org.opencontainers.image.description="Legacy compatibility Agent set; optional unverified Cursor installer"
+      org.opencontainers.image.description="Legacy compatibility Agent set; Cursor only when built with INSTALL_CURSOR_AGENT=1"

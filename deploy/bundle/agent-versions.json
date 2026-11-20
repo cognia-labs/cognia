@@ -239,7 +239,7 @@
     },
     {
       "id": "cline",
-      "unavailable": "The runner image installs it, but no Cognia runtime launches it: it was removed from the launch allowlist."
+      "unavailable": "A system runtime: Cognia ships no distribution of the Cline CLI (its catalog entry has none), so the bundle has no pinned copy to carry. Only the compatibility `full` runner variant installs it, outside the integrity lock."
     },
     {
       "id": "kimi",
@@ -264,6 +264,78 @@
     {
       "id": "minimax-code",
       "unavailable": "A system runtime: Cognia ships no distribution of the MiniMax Code CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "antigravity-acp",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Antigravity ACP server (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "auggie",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Auggie CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "autohand-code",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Autohand Code CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "codebuddy",
+      "unavailable": "A system runtime: Cognia ships no distribution of the CodeBuddy CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "command-code",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Command Code CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "kilocode",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Kilo Code CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "mistral-vibe",
+      "unavailable": "A system runtime: Mistral Vibe is a Python package Cognia does not distribute (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "mimo-code",
+      "unavailable": "A system runtime: Cognia ships no distribution of the MiMo Code CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "hermes-agent",
+      "unavailable": "A system runtime: Hermes Agent is a Python package Cognia does not distribute (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "oh-my-pi",
+      "unavailable": "A system runtime: Cognia ships no distribution of the oh-my-pi CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "muse",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Meta Muse Code ACP adapter (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "amp",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Amp ACP adapter (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "zcode",
+      "unavailable": "A macOS-only system runtime: its catalog entry lists no Linux platform and no distribution, so no copy can run in a Linux sandbox."
+    },
+    {
+      "id": "openclaude",
+      "unavailable": "A system runtime: Cognia ships no distribution of the OpenClaude CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "crush",
+      "unavailable": "A system runtime: Cognia ships no distribution of Crush (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "continue-dev",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Continue CLI (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "rovo-dev",
+      "unavailable": "A system runtime: Cognia ships no distribution of the Atlassian CLI behind Rovo Dev (its catalog entry has none), so the user installs it on the host and the bundle has no pinned copy to carry."
+    },
+    {
+      "id": "codebuff",
+      "unavailable": "A host bridge: Cognia runs its bundled Codebuff SDK bridge with the host's own Node, and the catalog entry has no distribution, so the bundle has no pinned copy to carry."
     }
   ]
 }

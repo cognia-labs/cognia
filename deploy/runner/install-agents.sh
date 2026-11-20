@@ -5,7 +5,8 @@
 #
 # Full compatibility only. npm defaults share the bundle's master pins;
 # selected Runner builds instead install a pruned integrity-locked npm tree.
-# Cursor remains an optional, unverified vendor installer in Full only.
+# Cursor's vendor installer is unverified, so it runs only on request
+# (INSTALL_CURSOR_AGENT=1).
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,9 +34,11 @@ QWEN_CODE_VERSION="$(pin @qwen-code/qwen-code "${QWEN_CODE_VERSION:-}")"
 PI_ACP_VERSION="$(pin pi-acp "${PI_ACP_VERSION:-}")"
 PI_CODING_AGENT_VERSION="$(pin @earendil-works/pi-coding-agent "${PI_CODING_AGENT_VERSION:-}")"
 OPENCODE_VERSION="$(pin opencode-ai "${OPENCODE_VERSION:-}")"
-# Full-only legacy CLI; no runtime selects Cline. npm registry checked 2026-10-21.
+# Cline is a launchable system runtime (protocol/external-agent-runtimes.json)
+# with no distribution in the bundle pins, so only Full installs it, outside
+# the integrity lock. npm registry checked 2026-10-21.
 CLINE_VERSION="$(pin cline "${CLINE_VERSION:-3.0.73}")"
-: "${INSTALL_CURSOR_AGENT:=1}"
+: "${INSTALL_CURSOR_AGENT:=0}"
 : "${INSTALL_KIRO_CLI:=1}"
 : "${INSTALL_DROID_CLI:=1}"
 
@@ -65,17 +68,18 @@ if [ "${#allowed_scripts[@]}" -gt 0 ]; then
 fi
 
 if [ "${INSTALL_CURSOR_AGENT}" = "1" ]; then
-  # Cursor's CLI has no npm distribution; its installer drops `cursor-agent`
-  # into ~/.local/bin. Tolerate failure — the vendor endpoint is outside our
-  # control and every other agent remains usable. The install tree must be
-  # world-readable: the symlink alone is not enough if the image later runs
-  # as a non-root uid.
-  if curl -fsSL https://cursor.com/install | bash; then
-    ln -sf /root/.local/bin/cursor-agent /usr/local/bin/cursor-agent || true
-    chmod -R a+rX /root/.local 2>/dev/null || true
-  else
-    echo "install-agents: cursor-agent installer failed — continuing without it" >&2
-  fi
+  # Cursor's CLI has no npm distribution and no published checksum; its
+  # installer drops `cursor-agent` under $HOME/.local. Install it under a home
+  # of its own in /opt, not /root: /root is 0700, and both images run their
+  # agents as uid 10001. Asked for explicitly, so a failed install fails the
+  # build instead of shipping an image without it.
+  cursor_home=/opt/cognia/vendor/cursor-agent
+  mkdir -p "$cursor_home"
+  curl -fsSL https://cursor.com/install | HOME="$cursor_home" bash
+  test -x "$cursor_home/.local/bin/cursor-agent"
+  chmod -R a+rX "$cursor_home"
+  ln -sf "$cursor_home/.local/bin/cursor-agent" /usr/local/bin/cursor-agent
+  cursor-agent --version
 fi
 
 # Unlike Cursor, Kiro and Droid publish immutable assets with master-pinned

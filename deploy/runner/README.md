@@ -50,9 +50,19 @@ This path requires a Debian-derived image with `apt-get`, a compatible
 architecture and glibc. It brings its own pinned Node and checks the base.
 Native `npx` is detected in the final toolchain base, including installations
 outside `/usr/local/bin`. Bases without npm still run selected Agent shims.
-The image's entrypoint is cleared and execution uses root for compatibility
-with server-owned workspace mounts. Existing backend isolation controls still
-apply. The original base's entrypoint/service is not run.
+The image's entrypoint is cleared and the Agent runs as uid/gid 10001 with
+`HOME=/home/cognia`. That is the uid cognia-server creates workspaces as, the
+uid the sandbox pool's container tier uses, and the non-root user a
+Kubernetes Restricted namespace admits. A base that already defines uid or
+gid 10001 keeps its entries. Tools the base installs under `/root` are not
+reachable by that user. Existing backend isolation controls still apply. The
+original base's entrypoint/service is not run.
+
+The Runner carries Agent CLIs, Git, curl and CA certificates, not project
+toolchains. A project that needs Python, Rust or another toolchain either
+builds a Runner on that base as shown above or, preferably, names its own
+image through the sandbox pool, which injects the Agent bundle into it
+(ADR-0182, ADR-0183).
 
 Selection applies to the Cognia payload; software supplied by `RUNTIME_IMAGE`
 stays in the image. Choose a minimal base to control the complete installed
@@ -83,14 +93,21 @@ The final default target and existing unsuffixed release tags remain Full.
 CI also publishes explicit `latest-full` and selected `latest-codex` aliases
 on version-tag releases, only after their image smoke tests pass.
 
-Full retains the legacy Agent set, including Cline. Its npm Agent versions
-default to the shared exact pins; version overrides must also be exact.
-Kiro and Droid use checksum-verified pinned assets. Full's global npm install
-retains compatibility behavior and does not provide the selected path's
-transitive-lock guarantee. Cursor is the explicit Full-only exception: its
-optional legacy installer is unverified and mutable. Disable it when building
-with `--build-arg INSTALL_CURSOR_AGENT=0`. It is unavailable in selected builds.
+Full retains the legacy Agent set, including Cline. Cline is a launchable
+system runtime with no distribution in the bundle pins, so selected builds
+refuse it and only Full installs it. Its npm Agent versions default to the
+shared exact pins; version overrides must also be exact. Kiro and Droid use
+checksum-verified pinned assets. Full's global npm install retains
+compatibility behavior and does not provide the selected path's
+transitive-lock guarantee.
+
+Cursor is not installed by default. Its vendor installer publishes no
+checksum and changes without notice, so it runs only when the build asks for
+it with `--build-arg INSTALL_CURSOR_AGENT=1`. A failed install then fails the
+build. It is unavailable in selected builds.
 
 These pins do not change Cognia's runtime certification catalog. Smoke checks
-exercise CLI startup and unauthenticated ACP initialization without model
-requests; they do not certify authenticated provider calls.
+run offline without model requests: CLI startup, unauthenticated ACP
+initialization (Codex ACP and, in Full, Cline), the Codex app-server
+`initialize` handshake, and a workspace write as the Runner's user. They do
+not certify authenticated provider calls.

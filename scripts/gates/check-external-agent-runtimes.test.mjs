@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { test } from "node:test"
 
 import {
+  checkBundleClassification,
   checkCoverage,
   checkLaunchParity,
   checkPinning,
@@ -478,6 +479,34 @@ test("probes allow a managed runtime with no command, and reject a system one", 
 
   const system = checkProbes(catalog([runtime({ systemCommand: undefined })]))
   assert.ok(system.some((e) => e.includes("names no command to run it against")))
+})
+
+// --- bundle classification -------------------------------------------------
+
+test("a catalog runtime the bundle pins do not classify fails the catalog gate", () => {
+  // The 2026-10-27 catalog commit added 18 runtimes without bundle entries;
+  // only the Runner and bundle image builds noticed, at release time.
+  const pins = {
+    runtimes: [
+      { id: "codex", version: "1.0.0" },
+      { id: "kimi", unavailable: "A system runtime with no distribution." },
+    ],
+  }
+  const entries = [
+    runtime({ runtimeId: "codex", presetIds: ["codex"] }),
+    runtime({ runtimeId: "kimi", presetIds: ["kimi"] }),
+  ]
+  assert.deepEqual(checkBundleClassification(catalog(entries), pins), [])
+
+  const errors = checkBundleClassification(
+    catalog([...entries, runtime({ runtimeId: "auggie", presetIds: ["auggie"] })]),
+    pins
+  )
+  assert.equal(errors.length, 1)
+  assert.match(
+    errors[0],
+    /^auggie: neither bundled nor marked unavailable in deploy\/bundle\/agent-versions\.json/
+  )
 })
 
 // --- orchestration ---------------------------------------------------------
