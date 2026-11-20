@@ -1,9 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import childProcess from "node:child_process"
-import { syncBuiltinESMExports } from "node:module"
-import { after, mock } from "node:test"
+import { mock } from "node:test"
 import { captureClaudeRuntime } from "../../../test-support/claude-runtime.ts"
 import type { ToolHandlerExtra } from "../../tools/kernel/define.ts"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
@@ -14,27 +12,12 @@ import {
   applySdkToolPermissionPolicies,
   normalizeClaudeToolNames,
 } from "./tool-surface.ts"
+import { fakeSandboxRss } from "../../../test-support/sandbox-rss.ts"
+import { firstJson } from "../../../test-support/tool-result.ts"
 
 // Broker tests exercise dispatch, not OS RSS accounting (which has its own
 // supervisor tests). Keep real child execution while supplying process usage.
-const processGroups = new Set<number>()
-const spawn = childProcess.spawn
-const spawnSync = childProcess.spawnSync
-mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
-  const child = spawn(...args)
-  if (child.pid) processGroups.add(child.pid)
-  return child
-})
-mock.method(childProcess, "spawnSync", (...args: Parameters<typeof spawnSync>) =>
-  args[0] === "ps"
-    ? { status: 0, stdout: [...processGroups].map((pid) => `${pid} ${pid} 1`).join("\n") }
-    : spawnSync(...args)
-)
-syncBuiltinESMExports()
-after(() => {
-  mock.restoreAll()
-  syncBuiltinESMExports()
-})
+fakeSandboxRss()
 
 test("native tool aliases normalize against the installed SDK catalog", () => {
   const entries = Object.entries(LEGACY_TOOL_NAME_ALIASES)
@@ -130,7 +113,18 @@ function codeRuntime(policy: Record<string, unknown> = {}) {
       execution: { composition: { toolPresentation: "both" } },
       ...policy,
     },
-    () => ({ async *[Symbol.asyncIterator]() {}, interrupt() {}, close() {} })
+    // The turn stays open until the test closes input, as a real one does
+    // while the model is calling tools. An iterator that ended at once would
+    // run the turn's teardown, which (rightly) stops a run_code child mid-call.
+    (params) => ({
+      async *[Symbol.asyncIterator]() {
+        for await (const _message of params.prompt as AsyncIterable<unknown>) {
+          // consumed; nothing to answer
+        }
+      },
+      interrupt() {},
+      close() {},
+    })
   )
   const server = captured.options.mcpServers?.["cognia-tools"]
   assert.ok(server && typeof server === "object" && "instance" in server)
@@ -162,7 +156,6 @@ test("Anthropic Code uses the final permitted declaration and reachable surface"
     for (const policy of [
       { disallowedTools: ["file_info"] },
       { disallowedTools: ["mcp__cognia-tools__file_info"] },
-      { allowedTools: ["mcp__cognia-tools__run_code"] },
     ]) {
       const { registered, session } = codeRuntime(policy)
       try {
@@ -175,6 +168,67 @@ test("Anthropic Code uses the final permitted declaration and reachable surface"
       } finally {
         session.closeInput()
       }
+    }
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+// CM-05: the entry and its children passed two lists. Naming only `run_code`
+// registered an executor with no SDK; naming only its children dropped it.
+test("Anthropic Code admits run_code by what it wraps, and never with an empty SDK", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  try {
+    const onlyEntry = captureClaudeRuntime(
+      {
+        toolSurface: "full",
+        builtinTools: { fileExtras: true },
+        execution: { composition: { toolPresentation: "code" } },
+        allowedTools: ["mcp__cognia-tools__run_code"],
+      },
+      () => ({ async *[Symbol.asyncIterator]() {}, interrupt() {}, close() {} })
+    )
+    assert.equal(onlyEntry.options.mcpServers?.["cognia-tools"], undefined)
+    onlyEntry.session.closeInput()
+
+    const onlyChildren = codeRuntime({
+      execution: { composition: { toolPresentation: "code" } },
+      allowedTools: ["mcp__cognia-tools__file_info"],
+    })
+    try {
+      assert.deepEqual(Object.keys(onlyChildren.registered), ["run_code"])
+      assert.ok(onlyChildren.registered.run_code!.description.includes("file_info("))
+    } finally {
+      onlyChildren.session.closeInput()
+    }
+
+    const denied = codeRuntime({ disallowedTools: ["run_code"] })
+    try {
+      assert.equal(denied.registered.run_code, undefined)
+      assert.ok(denied.registered.file_info, "Both keeps the native tools")
+    } finally {
+      denied.session.closeInput()
+    }
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+// CM-08: the same missing file rejected on the AI SDK rail and resolved as an
+// error envelope here; both now reject with the classified kind.
+test("Anthropic nested failures reject the program with their kind", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  try {
+    const { registered, session } = codeRuntime({ permissionMode: "bypassPermissions" })
+    try {
+      const result = await registered.run_code!.handler({
+        source:
+          'try { await cognia.file_hash({path:"definitely-missing-cm08.txt"}); return "resolved" } catch (e) { return [e.name, e.kind] }',
+      })
+      assert.notEqual(result.isError, true, JSON.stringify(result))
+      assert.deepEqual(firstJson<{ result: unknown }>(result).result, ["ToolError", "not-found"])
+    } finally {
+      session.closeInput()
     }
   } finally {
     delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER

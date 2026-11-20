@@ -129,6 +129,10 @@ export function generateSdkDeclaration(
     `  source ${formatBytes(config.maxSourceBytes)} · wall time ${config.wallTimeMs / 1000}s · ` +
       `${config.maxToolCalls} tool calls · concurrency ${config.maxConcurrency} · ` +
       `result ${formatBytes(config.maxResultBytes)}`,
+    `  per call: input ${formatBytes(config.maxToolInputBytes)} · result ${formatBytes(config.maxToolResultBytes)} · ` +
+      `all results ${formatBytes(config.maxTotalToolResultBytes)} · logs ${formatBytes(config.maxLogBytes)}`,
+    "A failed call rejects with an Error whose `kind` (not-found, invalid-args, permission-denied, …)",
+    "and `retryable` say what went wrong; catch it to recover.",
     "",
     "```ts",
     "declare const cognia: {",

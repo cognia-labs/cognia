@@ -378,6 +378,23 @@ test("restartReason: cwd change forces a restart", () => {
   assert.equal(restartReason(existing, { cwd: "/old" }), null, "same cwd keeps the session")
 })
 
+// CM-04: a live loop keeps the surface its first send registered, so a turn
+// that resolved to another presentation must get a fresh loop.
+test("restartReason: a tool presentation change forces a restart", () => {
+  const withPresentation = (toolPresentation?: string) =>
+    ({ execution: { composition: toolPresentation ? { toolPresentation } : undefined } }) as never
+  const code = { multiTurn: true, q: { active: false }, sendOptions: withPresentation("code") }
+  assert.equal(restartReason(code, withPresentation("native")), "tool presentation changed")
+  assert.equal(restartReason(code, withPresentation()), "tool presentation changed")
+  assert.equal(restartReason(code, withPresentation("both")), "tool presentation changed")
+  assert.equal(restartReason(code, withPresentation("code")), null)
+
+  const native = { multiTurn: true, q: { active: false }, sendOptions: withPresentation() }
+  assert.equal(restartReason(native, withPresentation("native")), null, "absent reads as native")
+  assert.equal(restartReason(native, withPresentation("both")), "tool presentation changed")
+  assert.equal(restartReason(native, {}), null, "a send without a spec keeps the loop")
+})
+
 test("restartReason: an in-flight ai-sdk (multiTurn) turn forces a restart", () => {
   const busy = { multiTurn: true, q: { active: true }, sendOptions: { cwd: "/x" } }
   assert.equal(restartReason(busy, { cwd: "/x" }), "turn still active")

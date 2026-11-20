@@ -228,8 +228,17 @@ function builtinDefToAiSdkTool(
           msg,
           true
         )
-        const safe = assertModelSafeToolOutput(reviewed, injectionProtection)
-        throw new Error(String(safe))
+        const safe = String(assertModelSafeToolOutput(reviewed, injectionProtection))
+        // A nested `run_code` call keeps the reviewed error as an envelope with
+        // its `cognia/failure` kind, the shape the Claude SDK rail produces, so
+        // the broker gives the program the same failure on either rail.
+        if (preserveMcpResult) {
+          return {
+            ...(result as Record<string, unknown>),
+            content: [{ type: "text", text: safe }],
+          }
+        }
+        throw new Error(safe)
       }
       // Structured content passes through as the raw MCP object for
       // toModelOutput; text-only results keep the established flattening.
@@ -528,6 +537,7 @@ export function buildAiSdkTools({
       : {}),
     enabled: sendOptions.builtinTools,
     isToolAllowed,
+    isToolDenied: (name) => !passesToolLists(name, SERVER_NAME, null, disallowed),
     authorizeTool: (name, input, extra, validateInput) =>
       gate(name, input, extra?.signal, validateInput),
     executeTool: async (def, input, extra) => {
@@ -570,7 +580,9 @@ export function buildAiSdkTools({
     // ADR-0045 plan authoring — same default as the Anthropic path.
     planTools: sendOptions.planTools !== false,
   })) {
-    if (!def || !def.name || !isToolAllowed(def.name)) continue
+    // The registry already applied the allow and deny lists (and admitted the
+    // Code entry by its own rule); filtering again here dropped `run_code`.
+    if (!def || !def.name) continue
     tools[def.name] = markAiSdkToolSource(
       builtinDefToAiSdkTool(
         def,

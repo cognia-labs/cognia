@@ -7,11 +7,13 @@ import os from "node:os"
 import fsp from "node:fs/promises"
 
 import {
-  createBashTool as rawCreateBashTool,
   hasSessionForegroundGroups,
   hasSessionForegroundProcesses,
   disposeForegroundGroups,
   retireForegroundGroups,
+} from "../../state/foreground-groups.ts"
+import {
+  createBashTool as rawCreateBashTool,
   createBashOutputTool,
   createKillShellTool,
   createListShellsTool,

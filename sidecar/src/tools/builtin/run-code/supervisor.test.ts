@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process"
 
 import {
   CallBudget,
+  NestedToolError,
   SandboxUnavailableError,
   assertSandboxable,
   parseSandboxLauncher,
@@ -16,6 +17,11 @@ import {
   sandboxEnv,
 } from "./supervisor.ts"
 import type { CodeModeLimits, SandboxProbe } from "./supervisor.ts"
+import {
+  disposeForegroundGroups,
+  hasSessionForegroundGroups,
+  retireForegroundGroups,
+} from "../../state/foreground-groups.ts"
 
 // `/usr/bin/env` is a real exec wrapper that passes fds through, so it
 // exercises the launcher path end to end without needing bwrap installed.
@@ -57,7 +63,9 @@ async function run(
   source: string,
   options: {
     config?: CodeModeLimits
-    toolImpl?: (name: string, input: unknown) => unknown
+    toolImpl?: (name: string, input: unknown, signal: AbortSignal) => unknown
+    signal?: AbortSignal
+    sessionId?: string
   } = {}
 ) {
   const calls: { name: string; input: unknown }[] = []
@@ -65,9 +73,11 @@ async function run(
     source,
     probe: SANDBOXED,
     config: options.config,
-    callTool: async (name, input) => {
+    signal: options.signal,
+    sessionId: options.sessionId,
+    callTool: async (name, input, signal) => {
       calls.push({ name, input })
-      if (options.toolImpl) return options.toolImpl(name, input)
+      if (options.toolImpl) return options.toolImpl(name, input, signal)
       return { ok: true, name }
     },
   })
@@ -179,31 +189,55 @@ test("source Bun uses the physical child without a V8-only memory flag", () => {
   assert.equal(target.env.COGNIA_CODE_SANDBOX_CHILD, "1")
 })
 
-test("process-group RSS sums the sandbox wrapper and every descendant", () => {
+test("process-group RSS sums the sandbox wrapper and every descendant", async () => {
   assert.equal(
-    readProcessGroupRssBytes(42, {
-      spawnSyncImpl() {
-        return {
-          status: 0,
-          stdout: " 42 42 1024\n 43 42 2048\n 99 99 4096\n",
-          stderr: "",
-        }
+    await readProcessGroupRssBytes(42, {
+      execFileImpl(_command, _args, _options, callback) {
+        callback(null, " 42 42 1024\n 43 42 2048\n 99 99 4096\n")
       },
     }),
     3 * 1024 * 1024
   )
 })
 
-test("process-group RSS fails closed when the OS measurement is unavailable", () => {
-  assert.throws(
-    () =>
-      readProcessGroupRssBytes(42, {
-        spawnSyncImpl() {
-          return { status: 1, stdout: "", stderr: "ps unavailable" }
-        },
-      }),
+test("process-group RSS fails closed when the OS measurement is unavailable", async () => {
+  await assert.rejects(
+    readProcessGroupRssBytes(42, {
+      execFileImpl(_command, _args, _options, callback) {
+        callback(Object.assign(new Error("ps unavailable"), { code: 1 }), "")
+      },
+    }),
     /cannot enforce sandbox memory limit/
   )
+  await assert.rejects(
+    readProcessGroupRssBytes(42, {
+      execFileImpl(_command, _args, _options, callback) {
+        callback(null, " 99 99 4096\n")
+      },
+    }),
+    /process group RSS is unavailable/
+  )
+})
+
+// CM-13: a synchronous `ps` every 25 ms held the sidecar's event loop, which
+// every session on the Host shares.
+test("process-group RSS sampling does not block the event loop", async () => {
+  let answer: () => void = () => {}
+  const pending = readProcessGroupRssBytes(7, {
+    execFileImpl(_command, _args, _options, callback) {
+      answer = () => callback(null, "7 7 1\n")
+    },
+  })
+  let ticked = false
+  await new Promise<void>((resolve) =>
+    setImmediate(() => {
+      ticked = true
+      resolve()
+    })
+  )
+  assert.equal(ticked, true, "the loop ran while the sample was outstanding")
+  answer()
+  assert.equal(await pending, 1024)
 })
 
 test("runs a program and returns its value", async () => {
@@ -403,6 +437,146 @@ test("reports a program that threw as a failure, not an empty result", async () 
   const outcome = await run('throw new Error("boom")')
   assert.equal(outcome.ok, false)
   assert.match(outcome.error.message, /boom/)
+  assert.equal(outcome.phase, "run")
+})
+
+test("tells a source that does not compile from a program that threw", async () => {
+  const outcome = await run("return )(")
+  assert.equal(outcome.ok, false)
+  assert.equal(outcome.phase, "compile")
+  assert.equal(outcome.error.name, "SyntaxError")
+})
+
+// ---- nested failures (CM-08) ------------------------------------------------
+
+test("hands the program a nested failure's kind and retry hint", async () => {
+  const outcome = await run(
+    "try { await cognia.read({}) } catch (e) { return [e.name, e.kind, e.retryable, e.message] }",
+    {
+      toolImpl: () => {
+        throw new NestedToolError("no such file: a.ts", { kind: "not-found", retryable: false })
+      },
+    }
+  )
+  assert.equal(outcome.ok, true)
+  assert.deepEqual(outcome.result, ["ToolError", "not-found", false, "no such file: a.ts"])
+})
+
+test("classifies a plain thrown error by its errno", async () => {
+  const outcome = await run("try { await cognia.read({}) } catch (e) { return e.kind }", {
+    toolImpl: () => {
+      throw Object.assign(new Error("open failed"), { code: "ENOENT" })
+    },
+  })
+  assert.ok(outcome.ok)
+  assert.equal(outcome.result, "not-found")
+})
+
+// ---- byte budgets (CM-11) ---------------------------------------------------
+
+test("refuses a nested result over the per-call limit without ending the run", async () => {
+  const outcome = await run(
+    "try { await cognia.read({}) } catch (e) { return [e.kind, /over the 64-byte limit/.test(e.message)] }",
+    {
+      config: { ...smallConfig(), maxToolResultBytes: 64 },
+      toolImpl: () => ({ text: "x".repeat(200) }),
+    }
+  )
+  assert.equal(outcome.ok, true)
+  assert.deepEqual(outcome.result, ["resource-exhausted", true])
+})
+
+test("stops the run when nested results exceed the total budget", async () => {
+  const outcome = await run(
+    "for (let i = 0; i < 10; i++) { await cognia.read({ i }) } return 'done'",
+    {
+      config: { ...smallConfig(), maxTotalToolResultBytes: 250 },
+      toolImpl: () => ({ text: "x".repeat(90) }),
+    }
+  )
+  assert.equal(outcome.ok, false)
+  assert.equal(outcome.limit!.kind, "tool-result-bytes")
+  assert.ok(outcome.calls.length < 10)
+})
+
+test("refuses a nested input over the per-call limit before dispatch", async () => {
+  const outcome = await run(
+    'try { await cognia.read({ path: "y".repeat(500) }) } catch (e) { return e.kind }',
+    { config: { ...smallConfig(), maxToolInputBytes: 100 } }
+  )
+  assert.ok(outcome.ok)
+  assert.equal(outcome.result, "invalid-args")
+  assert.deepEqual(outcome.calls, [])
+})
+
+test("bounds console output per entry and in total", async () => {
+  const outcome = await run(
+    'console.log("a".repeat(500)); for (let i = 0; i < 50; i++) console.log("line " + i); return 1',
+    { config: { ...smallConfig(), maxLogEntryBytes: 64, maxLogBytes: 200 } }
+  )
+  assert.equal(outcome.ok, true)
+  assert.equal(outcome.logsTruncated, true)
+  assert.match(outcome.logs[0]!.text, /…\[truncated\]$/)
+  assert.ok(Buffer.byteLength(outcome.logs[0]!.text, "utf8") <= 64)
+  const total = outcome.logs.reduce((sum, log) => sum + Buffer.byteLength(log.text, "utf8"), 0)
+  assert.ok(total <= 200)
+})
+
+// ---- stopping (CM-10) -------------------------------------------------------
+
+test("an aborted turn cancels the program and its in-flight call", async () => {
+  const controller = new AbortController()
+  let nested: AbortSignal | undefined
+  const outcome = await run("return await cognia.read({})", {
+    signal: controller.signal,
+    toolImpl: (_name, _input, signal) => {
+      nested = signal
+      setTimeout(() => controller.abort(), 10)
+      return new Promise(() => {})
+    },
+  })
+  assert.equal(outcome.ok, false)
+  assert.equal(outcome.phase, "cancelled")
+  assert.equal(nested!.aborted, true)
+})
+
+test("hitting the wall time cancels a nested call still in flight", async () => {
+  let nested: AbortSignal | undefined
+  const outcome = await run("return await cognia.read({})", {
+    config: { ...smallConfig(), wallTimeMs: 300 },
+    toolImpl: (_name, _input, signal) => {
+      nested = signal
+      return new Promise(() => {})
+    },
+  })
+  assert.ok(!outcome.ok)
+  assert.equal(outcome.limit!.kind, "wall-time")
+  assert.equal(nested!.aborted, true)
+  // The call never settled within the grace, so the stop is not proven.
+  assert.equal(outcome.stopUnconfirmed, true)
+})
+
+test("a finished run proves its stop", async () => {
+  const outcome = await run("return 1")
+  assert.equal(outcome.ok, true)
+  assert.equal(outcome.stopUnconfirmed, undefined)
+})
+
+test("registers the child with the session so Stop's teardown reaches it", async () => {
+  const sessionId = `run-code-${process.pid}-${Date.now()}`
+  const pending = run("while (true) {}", { sessionId, config: smallConfig() })
+  const deadline = Date.now() + 5_000
+  while (!hasSessionForegroundGroups(sessionId) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(hasSessionForegroundGroups(sessionId), true)
+  const started = Date.now()
+  await disposeForegroundGroups(sessionId)
+  const outcome = await pending
+  assert.equal(outcome.ok, false)
+  assert.ok(Date.now() - started < 5_000, "Stop ended it well before the wall time")
+  assert.equal(hasSessionForegroundGroups(sessionId), false)
+  retireForegroundGroups(sessionId)
 })
 
 test("does not carry a stack trace back across the boundary", async () => {
@@ -450,7 +624,7 @@ function describe_budget() {
   })
 }
 
-function smallConfig() {
+function smallConfig(): CodeModeLimits {
   return {
     maxSourceBytes: 32768,
     wallTimeMs: 10_000,
@@ -458,5 +632,10 @@ function smallConfig() {
     maxConcurrency: 8,
     maxResultBytes: 1048576,
     maxMemoryBytes: 268435456,
+    maxToolInputBytes: 65536,
+    maxToolResultBytes: 1048576,
+    maxTotalToolResultBytes: 8388608,
+    maxLogEntryBytes: 4096,
+    maxLogBytes: 65536,
   }
 }

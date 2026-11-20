@@ -197,10 +197,10 @@ export function collectCogniaToolDefs(context: CollectToolDefsOptions = {}): Too
   }
 
   // Presentation runs over the confined surface so generated code cannot reach
-  // disabled tools or bypass the same confinement as native tool calls.
+  // disabled tools or bypass the same confinement as native tool calls. It
+  // admits its own entry (`run_code`) by the deny list and by what it wraps,
+  // so nothing here filters its output again.
   const permitted = tools.filter((def) => context.isToolAllowed?.(def.name) !== false)
   const confined = wrapDefsWithConfinement(permitted, builtinProcessSandbox, cwd, context)
-  return [...applyToolPresentation(confined, toolPresentation, context)].filter(
-    (def) => context.isToolAllowed?.(def.name) !== false
-  )
+  return [...applyToolPresentation(confined, toolPresentation, context)]
 }

@@ -92,6 +92,10 @@ test("states the run limits alongside the API", () => {
   const out = generateSdkDeclaration([{ name: "read" }])
   assert.match(out, new RegExp(`${limits.maxToolCalls} tool calls`))
   assert.match(out, new RegExp(`${limits.wallTimeMs / 1000}s`))
+  // CM-11: the per-call budgets the supervisor enforces are stated too.
+  assert.match(out, /per call: input 64 KiB · result 1 MiB · all results 8 MiB · logs 64 KiB/)
+  // CM-08: the failure contract the program can rely on.
+  assert.match(out, /`kind`/)
   assert.match(out, /32 KiB/)
   assert.match(out, /1 MiB/)
 })

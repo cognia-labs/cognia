@@ -10,7 +10,6 @@
 
 import os from "node:os"
 import { spawn } from "node:child_process"
-import type { ChildProcess } from "node:child_process"
 import { createWriteStream } from "node:fs"
 import type { WriteStream } from "node:fs"
 import fsp from "node:fs/promises"
@@ -33,7 +32,15 @@ import type { ShellDescriptor } from "../../../platform/process/shell.ts"
 import { detectInteractiveCommand } from "../../../policy/shell/interactive.ts"
 import { resolveToolPath } from "../../../platform/fs/paths.ts"
 import type { CoreFileToolContext } from "./context.ts"
-import { trackChildProcessGroup, type ProcessGroup } from "../../state/process-group.ts"
+import {
+  GROUP_KILL,
+  KILL_GRACE_MS,
+  PIPE_RELEASE_MS,
+  foregroundGroupIsLive,
+  signalForegroundGroup,
+  signalProcessTree,
+  trackForegroundGroup,
+} from "../../state/foreground-groups.ts"
 
 // Re-exported for back-compat: the canonical implementation now lives in
 // src/shared/text/truncate.ts (shared with future tail-keeping tools). bash.test.ts
@@ -45,141 +52,9 @@ export const MAX_TIMEOUT_MS = 600_000
 export const MAX_OUTPUT_CHARS = 30_000
 /** Chars of the head kept for the truncated preview (rest comes from the tail). */
 export const PREVIEW_HEAD_CHARS = 12_000
-/** Grace between SIGTERM and SIGKILL when an interrupt or timeout stops a run. */
-export const KILL_GRACE_MS = 2_000
-/** After the SIGKILL, how long to wait for `close` before giving up on the pipes. */
-const PIPE_RELEASE_MS = 500
-
-// A foreground command runs as the leader of its own process group (POSIX), so
-// stopping it reaches everything the shell started — `sh -c "node job.cjs"`
-// often forks rather than execs, and killing only the shell left the real
-// worker running after Esc. The groups still alive are tracked so a sidecar
-// that exits mid-command takes them down instead of orphaning them.
-const GROUP_KILL = process.platform !== "win32"
-const liveForegroundGroups = new Map<
-  ChildProcess,
-  {
-    sessionId: string | undefined
-    child: ChildProcess
-    groupProofSupported: boolean
-    group: ProcessGroup
-  }
->()
-const unconfirmedForegroundSessions = new Set<string>()
-let exitHookInstalled = false
-
-function trackForegroundGroup(
-  sessionId: string | undefined,
-  child: ChildProcess,
-  groupProofSupported: boolean
-): void {
-  liveForegroundGroups.set(child, {
-    sessionId,
-    child,
-    groupProofSupported,
-    group: trackChildProcessGroup(child, groupProofSupported),
-  })
-  if (!groupProofSupported) {
-    if (sessionId) unconfirmedForegroundSessions.add(sessionId)
-    child.once("exit", () => liveForegroundGroups.delete(child))
-    child.once("error", () => liveForegroundGroups.delete(child))
-  }
-  if (exitHookInstalled) return
-  exitHookInstalled = true
-  process.on("exit", () => {
-    for (const { group } of liveForegroundGroups.values()) group.signal("SIGKILL")
-  })
-}
-
-function foregroundGroupIsLive(groupId: ChildProcess): boolean {
-  const group = liveForegroundGroups.get(groupId)
-  if (!group) return false
-  if (!group.group.isLive()) {
-    liveForegroundGroups.delete(groupId)
-    return false
-  }
-  return true
-}
-
-export function hasSessionForegroundGroups(sessionId: string): boolean {
-  return (
-    unconfirmedForegroundSessions.has(sessionId) ||
-    [...liveForegroundGroups].some(
-      ([id, group]) => group.sessionId === sessionId && foregroundGroupIsLive(id)
-    )
-  )
-}
-
-export function hasSessionForegroundProcesses(sessionId: string): boolean {
-  return [...liveForegroundGroups.values()].some(
-    (group) =>
-      group.sessionId === sessionId &&
-      group.child.exitCode === null &&
-      group.child.signalCode === null
-  )
-}
-
-export async function disposeForegroundGroups(sessionId: string): Promise<void> {
-  const groups = [...liveForegroundGroups].filter(([, group]) => group.sessionId === sessionId)
-  const pending = () =>
-    groups.some(([id, group]) =>
-      group.groupProofSupported
-        ? foregroundGroupIsLive(id)
-        : liveForegroundGroups.has(id) &&
-          group.child.exitCode === null &&
-          group.child.signalCode === null
-    )
-  for (const [id, group] of groups) {
-    if (foregroundGroupIsLive(id)) signalProcessTree(group.child, "SIGTERM")
-  }
-  const deadline = Date.now() + KILL_GRACE_MS
-  while (pending() && Date.now() < deadline)
-    await new Promise<void>((resolve) => setTimeout(resolve, 25))
-  for (const [id, group] of groups) {
-    if (foregroundGroupIsLive(id)) signalProcessTree(group.child, "SIGKILL")
-  }
-  const killDeadline = Date.now() + PIPE_RELEASE_MS
-  while (pending() && Date.now() < killDeadline)
-    await new Promise<void>((resolve) => setTimeout(resolve, 25))
-  if (pending()) throw new Error(`session ${sessionId} still has live foreground process groups`)
-}
-
-export function retireForegroundGroups(sessionId: string): boolean {
-  let confirmed = !unconfirmedForegroundSessions.has(sessionId)
-  for (const [id, entry] of liveForegroundGroups) {
-    if (entry.sessionId !== sessionId) continue
-    if (!entry.group.retire()) confirmed = false
-    liveForegroundGroups.delete(id)
-  }
-  unconfirmedForegroundSessions.delete(sessionId)
-  return confirmed
-}
-
-/**
- * Signal a foreground run and every process it started: the whole process
- * group on POSIX, `taskkill /T` (the tree) on Windows, where `child.kill()`
- * would only end the shell wrapper.
- */
-function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  const pid = child.pid
-  if (!pid) return
-  try {
-    if (GROUP_KILL) {
-      liveForegroundGroups.get(child)?.group.signal(signal)
-    } else if (child.exitCode === null && child.signalCode === null) {
-      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-        windowsHide: true,
-        stdio: "ignore",
-      }).on("error", () => {})
-    }
-  } catch {
-    try {
-      child.kill(signal)
-    } catch {
-      // already gone
-    }
-  }
-}
+// Foreground commands run as the leaders of their own process groups and are
+// tracked per session in `../../state/foreground-groups.ts`, so Stop's
+// teardown and its stop proof reach everything a command started.
 
 export const bashShape = {
   command: z.string().min(1).describe("The shell command line to execute."),
@@ -596,7 +471,7 @@ export function createBashTool({
           {
             // The leader exited on SIGTERM; anything left in its group that
             // ignored the signal goes now rather than outliving the call.
-            if (stopping) liveForegroundGroups.get(child)?.group.signal("SIGKILL")
+            if (stopping) signalForegroundGroup(child, "SIGKILL")
             // Shell exit is independent of descendants, even when all pipes
             // closed. Retain the session's group until ESRCH proves it empty.
             foregroundGroupIsLive(child)

@@ -178,6 +178,15 @@ export function restartReason(existing: HostSession, options?: SendOptions) {
     runtimeFeaturePolicyKey(options) !== runtimeFeaturePolicyKey(existing.sendOptions ?? {})
   )
     return "runtime feature policy changed"
+  // A live loop keeps the tool surface its first send registered (ADR-0117).
+  // A turn resolved to another presentation — the user switched modes, or the
+  // Host can no longer sandbox Code — must not keep a `run_code` its
+  // composition no longer offers, nor miss one it now does (CM-04).
+  if (
+    options?.execution !== undefined &&
+    presentationOf(options) !== presentationOf(existing.sendOptions ?? {})
+  )
+    return "tool presentation changed"
   // Working directory changed — the SDK must respawn to pick up the new cwd.
   if (options?.cwd !== undefined && options.cwd !== existing.sendOptions?.cwd) {
     return "cwd changed"
@@ -213,6 +222,12 @@ export function restartReason(existing: HostSession, options?: SendOptions) {
     return "stale single-turn session"
   }
   return null
+}
+
+/** The turn's tool presentation; an absent composition is `native`. */
+function presentationOf(options: SendOptions): string {
+  const presentation = options.execution?.composition?.toolPresentation
+  return presentation === "code" || presentation === "both" ? presentation : "native"
 }
 
 /** Serialize admission only; a model's streaming response never holds this queue. */

@@ -123,6 +123,18 @@ engagement}` 是无损可逆的，写进行里就不是。
 
 `ConnectorMode` 保留为兼容镜像 —— `InboxSendPolicy.forcedMode` 在定时出站里仍是活路径，插件 SDK 也镜像了该字段。写时同时写两边；读时新轴优先，缺失则由 `mode` 推导。
 
+## 修订（2026-11-20）—— Code 是否可用由执行 Host 回答
+
+此前由渲染端判断 Code 能否运行。它询问 ADR-0028 的通用命令沙箱探测，该探测只在本机执行，回答的也是另一个问题；而发送路径连这个结果都没有传下去，所以每个 Code 或 Both 选择到了 sidecar 都变成 `native`。
+
+- **可用性。** `claude_sidecar_status` 会路由到执行 Host，并携带 `codeSandbox`：当前存活的 sidecar 代际为 `run_code` 拿到了什么（`available` 及其 `backend`，或一个 `reason`：`killed`、`no-backend`、`no-scratch`），并标注该 `generation`。没有 sidecar 运行时，报告下一次启动会拿到什么。不带该字段的 Host（旧版 Host、CLI）视为不可用。发送路径只在选择解析为 `code` 或 `both` 时才询问。选择器在挂载时询问，在切换 Host 或收到 sidecar 的 `ready` / `sidecar_exited` 帧后再次询问，并把 Code 与 Both 列为禁用项、写明原因。
+- **关闭开关。** `NEXT_PUBLIC_CODE_MODE_KILL=1` 在渲染端构建中关闭 Code。Host 进程上的 `COGNIA_CODE_MODE_KILL=1` 让此后启动的每个 sidecar 都拿不到 launcher，对该 Host 的所有客户端生效。某一轮解析出的工具呈现与存活的多轮循环不同时，循环会重启，之前注册的 `run_code` 不会延续下来。
+- **入口。** 至少有一个可编程调用的内建工具获准时才注册 `run_code`；没有任何函数的 SDK 不会提供。允许清单列的是原生工具，所以入口按拒绝清单和它所包含的工具准入。工具搜索开启时它保持常驻。
+- **嵌套失败。** 两个引擎都以名为 `ToolError` 的 `Error` 拒绝程序中的 promise，携带分类后的 `kind` 与 `retryable`。外层结果按阶段分类：`compile` → `invalid-args`，`run` → `execution-failed`，`cancelled` → `aborted`，`limit` → `resource-exhausted`，`sandbox` → `environment`。
+- **停止。** 本轮的中止信号会取消程序。每次运行结束都会先关闭准入，再中止交给嵌套调用和审批等待的信号，杀掉进程组，并等待一秒宽限；无法证明两者都已结束时报告 `stopUnconfirmed`。该进程组登记在会话的前台进程组中，因此 Stop 的收尾与停止证明都覆盖它（ADR-0244）。
+- **字节预算。** 在原有限制之外：每次嵌套调用的输入 64 KiB、结果 1 MiB，每次运行的嵌套结果合计 8 MiB，单条日志 4 KiB，日志合计 64 KiB（`lib/ai/code-mode/limits.json`）。
+- **范围。** `code` 只替换内建工具面。引擎自带工具、插件工具与 MCP 服务保留各自的入口和权限；Code 预设的权限上限对它们生效。
+
 ## 复用边界
 
 本决策不新增第二套 runtime 枚举、路由、事件总线、权限系统、沙箱或 Dexie 表，而是增强 `resolveAgentExecutionSpec()` 及其 fingerprint、`AgentPermissionCeiling`、现有 tool registry 与权限管线、`lib/workflow/runtime/event-log.ts` 的 workflow run event log，以及现有插件 disposable scope、CLI 和 Devtools（用于 Creator 预览与销毁）。Creator 生成的一切以源文件为事实来源。

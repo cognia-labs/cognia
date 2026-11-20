@@ -3,13 +3,28 @@
 
 import type { ToolDefinition, ToolHandlerExtra } from "../kernel/define.ts"
 import { parseToolArgs, toolInputJsonSchema } from "../kernel/args.ts"
-import { codeModeToolDefs } from "../builtin/run-code/index.ts"
+import { classifyToolFailure } from "../kernel/failure.ts"
+import type { ToolFailureMeta } from "../kernel/result.ts"
+import { NestedToolError, RUN_CODE_TOOL_NAME, codeModeToolDefs } from "../builtin/run-code/index.ts"
 import { isProgrammaticReadOnly } from "../builtin/run-code/eligibility.ts"
 import { bareToolName } from "../../policy/confinement/classify.ts"
 import { BUILTIN_SERVER_NAME } from "../../policy/tool-catalog/catalog.ts"
 
 export interface ToolPresentationOptions {
   isToolAllowed?: ((name: string) => boolean) | undefined
+  /**
+   * The deny list alone. `run_code` is admitted by it rather than by
+   * `isToolAllowed`: a palette's allow list names native tools, and the
+   * entry can reach only the allowed ones it wraps, so an allow list that
+   * omits it must not remove the presentation the composition chose (CM-05).
+   * An explicit deny still removes it.
+   */
+  isToolDenied?: ((name: string) => boolean) | undefined
+  /** Owner of `run_code`'s process group, for Stop and its proof. */
+  sessionId?: string | undefined
+  groupProofSupported?: boolean | undefined
+  /** The session's process admission; aborted once its teardown starts. */
+  processSignal?: AbortSignal | undefined
   authorizeTool?:
     | ((
         name: string,
@@ -52,7 +67,10 @@ export function applyToolPresentation<D extends ToolDefinition>(
     if (!def || options.isToolAllowed?.(name) === false) {
       // Reached when the tool is eligible in principle but its category is
       // switched off for this session. Saying so beats a generic failure.
-      throw new Error(`tool "${name}" is not enabled in this session`)
+      throw new NestedToolError(`tool "${name}" is not enabled in this session`, {
+        kind: "permission-denied",
+        retryable: false,
+      })
     }
     // Parse before dispatch, exactly as the Anthropic, ai-sdk and MCP-bridge
     // rails do. Generated code is model-authored, so without this every
@@ -63,7 +81,7 @@ export function applyToolPresentation<D extends ToolDefinition>(
     // on. It also makes the declaration's "the same argument validation still
     // applies" claim true rather than aspirational.
     const parsed = parseToolArgs(def.inputSchema, input)
-    if (!parsed.ok) throw new Error(`invalid arguments for "${name}": ${parsed.message}`)
+    if (!parsed.ok) throw invalidArgs(name, parsed.message)
     if (!options.authorizeTool) throw new Error(`tool "${name}" has no nested-call authorizer`)
     const effective = await options.authorizeTool(
       `mcp__${BUILTIN_SERVER_NAME}__${name}`,
@@ -71,16 +89,26 @@ export function applyToolPresentation<D extends ToolDefinition>(
       extra,
       (input) => {
         const rewritten = parseToolArgs(def.inputSchema, input)
-        if (!rewritten.ok) throw new Error(`invalid arguments for "${name}": ${rewritten.message}`)
+        if (!rewritten.ok) throw invalidArgs(name, rewritten.message)
         return rewritten.value
       }
     )
     const reparsed = parseToolArgs(def.inputSchema, effective)
-    if (!reparsed.ok) throw new Error(`invalid arguments for "${name}": ${reparsed.message}`)
-    if (extra?.signal?.aborted) throw new Error(`tool "${name}" interrupted`)
-    return options.executeTool
+    if (!reparsed.ok) throw invalidArgs(name, reparsed.message)
+    if (extra?.signal?.aborted) {
+      throw new NestedToolError(`tool "${name}" interrupted`, { kind: "aborted", retryable: false })
+    }
+    const result = options.executeTool
       ? await options.executeTool(def, reparsed.value, extra)
       : await def.handler(reparsed.value, extra)
+    // One contract on both rails (CM-08): a failed tool rejects the program's
+    // promise with its classified kind. The AI SDK rail hands back an error
+    // envelope here and the Claude SDK rail used to resolve the program with
+    // the same envelope, so one missing file was a throw on one rail and a
+    // value on the other.
+    const failed = errorEnvelope(result)
+    if (failed) throw new NestedToolError(failed.text || `${name} failed`, failed.failure)
+    return result
   }
 
   // The SDK declaration is rendered from the defs this session actually
@@ -96,6 +124,49 @@ export function applyToolPresentation<D extends ToolDefinition>(
       inputSchema: toolInputJsonSchema(def.inputSchema),
     }))
 
-  const codeDefs = codeModeToolDefs({ callTool, sdkTools }) as ToolDefinition[]
+  const codeDefs = options.isToolDenied?.(RUN_CODE_TOOL_NAME)
+    ? []
+    : (codeModeToolDefs({
+        callTool,
+        sdkTools,
+        sessionId: options.sessionId,
+        groupProofSupported: options.groupProofSupported,
+        processSignal: options.processSignal,
+      }) as ToolDefinition[])
   return presentation === "code" ? codeDefs : [...permitted, ...codeDefs]
+}
+
+function invalidArgs(name: string, message: string): NestedToolError {
+  return new NestedToolError(`invalid arguments for "${name}": ${message}`, {
+    kind: "invalid-args",
+    retryable: false,
+  })
+}
+
+/** The text and classification of an MCP error result, or null for a success. */
+function errorEnvelope(result: unknown): { text: string; failure: ToolFailureMeta } | null {
+  if (!result || typeof result !== "object" || (result as { isError?: unknown }).isError !== true)
+    return null
+  const content = (result as { content?: unknown }).content
+  const text = Array.isArray(content)
+    ? content
+        .map((block) =>
+          block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+            ? String((block as { text?: unknown }).text ?? "")
+            : ""
+        )
+        .filter(Boolean)
+        .join("\n")
+    : ""
+  const meta = (result as { _meta?: { "cognia/failure"?: Partial<ToolFailureMeta> } })._meta?.[
+    "cognia/failure"
+  ]
+  // The tool's own classification wins when it names a known kind; the prose
+  // is classified the same way `toolError` would otherwise.
+  const classified = classifyToolFailure(text, { kind: meta?.kind })
+  const retryable =
+    classified.kind === meta?.kind && typeof meta.retryable === "boolean"
+      ? meta.retryable
+      : classified.retryable
+  return { text, failure: { kind: classified.kind, retryable } }
 }

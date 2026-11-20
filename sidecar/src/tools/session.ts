@@ -17,7 +17,7 @@ import {
   retireForegroundGroups,
   hasSessionForegroundGroups,
   hasSessionForegroundProcesses,
-} from "./builtin/core-files/bash.ts"
+} from "./state/foreground-groups.ts"
 import type { HostRpcCaller } from "./state/host-background-shells.ts"
 import type { BackgroundDelivery, BackgroundJobSettlement } from "./state/background-shells.ts"
 import { randomUUID } from "node:crypto"

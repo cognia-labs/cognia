@@ -33,12 +33,16 @@ export const CHILD_MESSAGE_KINDS = Object.freeze({
   LOG: "log",
 })
 
-/** Hands one tool call to the host; the result or error comes back as text. */
+/**
+ * Hands one tool call to the host; the result or error comes back as text.
+ * A rejection carries the broker's failure kind and retry hint as primitives,
+ * so the program can tell "not found" from "permission denied" (CM-08).
+ */
 type Bridge = (
   name: string,
   input: unknown,
   resolve: (json: string) => void,
-  reject: (message: string) => void
+  reject: (message: string, kind: string, retryable: boolean) => void
 ) => void
 
 type LogBridge = (level: unknown, text: unknown) => void
@@ -55,9 +59,33 @@ interface SupervisorMessage {
   kind?: unknown
   id?: unknown
   error?: unknown
+  failure?: unknown
   result?: unknown
   source?: unknown
   toolNames?: unknown
+}
+
+/**
+ * The program's source did not compile. Host-realm only: it carries the
+ * failure out to the supervisor and never reaches the program.
+ */
+export class ProgramCompileError extends Error {
+  constructor(cause: unknown) {
+    super(String((cause as ThrownLike)?.message ?? cause))
+    this.name = String((cause as ThrownLike)?.name ?? "SyntaxError")
+  }
+}
+
+/** A nested call's failure, as the supervisor reports it. */
+export class NestedCallRejection extends Error {
+  declare kind: string
+  declare retryable: boolean
+
+  constructor(message: string, kind: string, retryable: boolean) {
+    super(message)
+    this.kind = kind
+    this.retryable = retryable
+  }
 }
 
 /** The fields of a thrown value the child reports back. */
@@ -93,8 +121,13 @@ const BOOTSTRAP_SOURCE = `(function (bridge, logBridge, toolNames) {
           // function does.
           bridge(name, input, function (json) {
             try { resolve(JSON.parse(json)) } catch (e) { reject(new Error("bad result")) }
-          }, function (message) {
-            reject(new Error(String(message)))
+          }, function (message, kind, retryable) {
+            // Built here, so the Error and its fields belong to this realm.
+            const error = new Error(String(message))
+            error.name = "ToolError"
+            error.kind = String(kind)
+            error.retryable = retryable === true
+            reject(error)
           })
         })
       },
@@ -153,7 +186,11 @@ export async function runProgram({
     Promise.resolve()
       .then(() => invoke(name, input))
       .then((result) => resolve(JSON.stringify(result ?? null)))
-      .catch((error: unknown) => reject(String((error as ThrownLike)?.message ?? error)))
+      .catch((error: unknown) =>
+        error instanceof NestedCallRejection
+          ? reject(error.message, error.kind, error.retryable)
+          : reject(String((error as ThrownLike)?.message ?? error), "execution-failed", true)
+      )
   }
   const logBridge: LogBridge = (level, text) => onLog?.(String(level), String(text))
 
@@ -167,9 +204,14 @@ export async function runProgram({
   // The program is authored as a module body, so it is wrapped in an async IIFE
   // and its completion value is the run's result. `return` at top level of the
   // model's source therefore works, which is the shape the SDK docs promise.
-  const script = new vm.Script(`(async () => {\n${source}\n})()`, {
-    filename: "program.js",
-  })
+  let script: vm.Script
+  try {
+    script = new vm.Script(`(async () => {\n${source}\n})()`, {
+      filename: "program.js",
+    })
+  } catch (error) {
+    throw new ProgramCompileError(error)
+  }
 
   return (await script.runInContext(context)) as unknown
 }
@@ -201,8 +243,16 @@ export function runSandboxChild() {
       const entry = pending.get(message.id)
       if (!entry) return
       pending.delete(message.id)
-      if (message.error) entry.reject(new Error(String(message.error)))
-      else entry.resolve(message.result)
+      if (message.error) {
+        const failure = (message.failure ?? {}) as { kind?: unknown; retryable?: unknown }
+        entry.reject(
+          new NestedCallRejection(
+            String(message.error),
+            typeof failure.kind === "string" ? failure.kind : "execution-failed",
+            failure.retryable === true
+          )
+        )
+      } else entry.resolve(message.result)
       return
     }
 
@@ -223,10 +273,16 @@ export function runSandboxChild() {
             // Only the message and name cross the boundary. A stack would carry
             // host filesystem paths back into something the model can read.
             error: { name: thrown?.name ?? "Error", message: String(thrown?.message ?? error) },
+            phase: error instanceof ProgramCompileError ? "compile" : "run",
           })
         })
     }
   })
+
+  // The supervisor going away (sidecar exit, crash) closes the channel; a
+  // program waiting on a tool call would otherwise wait for an answer that can
+  // never come. The supervisor also kills the group, this covers its own death.
+  process.on("disconnect", () => process.exit(1))
 
   send({ kind: CHILD_MESSAGE_KINDS.READY })
 }

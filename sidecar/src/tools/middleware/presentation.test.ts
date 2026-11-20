@@ -4,9 +4,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import childProcess from "node:child_process"
-import { syncBuiltinESMExports } from "node:module"
-import { after, mock } from "node:test"
 import { z } from "zod"
 
 // A real exec wrapper that passes fds through — exercises the launcher path
@@ -17,6 +14,7 @@ import { applyToolPresentation } from "./presentation.ts"
 import { firstJson } from "../../../test-support/tool-result.ts"
 import type { CallableTool } from "../../../test-support/tool-result.ts"
 import type { ToolDefinition } from "../kernel/define.ts"
+import { fakeSandboxRss } from "../../../test-support/sandbox-rss.ts"
 
 const CALLS: { name: string; input: unknown }[] = []
 
@@ -55,24 +53,7 @@ function resultOf(result: { content: unknown[] }): unknown {
 
 // Broker tests exercise dispatch, not OS RSS accounting (which has its own
 // supervisor tests). Keep real child execution while supplying process usage.
-const processGroups = new Set<number>()
-const spawn = childProcess.spawn
-const spawnSync = childProcess.spawnSync
-mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
-  const child = spawn(...args)
-  if (child.pid) processGroups.add(child.pid)
-  return child
-})
-mock.method(childProcess, "spawnSync", (...args: Parameters<typeof spawnSync>) =>
-  args[0] === "ps"
-    ? { status: 0, stdout: [...processGroups].map((pid) => `${pid} ${pid} 1`).join("\n") }
-    : spawnSync(...args)
-)
-syncBuiltinESMExports()
-after(() => {
-  mock.restoreAll()
-  syncBuiltinESMExports()
-})
+fakeSandboxRss()
 
 test("native presentation returns the surface untouched", () => {
   const defs = nativeDefs()
@@ -321,7 +302,14 @@ test("nested authorization receives namespaced identity and signal, then rewrite
       { signal: controller.signal }
     )
     assert.match(JSON.stringify(result), /invalid arguments/)
-    assert.deepEqual(calls, [["mcp__cognia-tools__read", { path: "safe" }, controller.signal]])
+    assert.equal(calls.length, 1)
+    const [name, input, signal] = calls[0] as [string, unknown, AbortSignal]
+    assert.equal(name, "mcp__cognia-tools__read")
+    assert.deepEqual(input, { path: "safe" })
+    // The run's own signal, which the turn's abort and the run's end both trip.
+    assert.ok(signal instanceof AbortSignal)
+    assert.notEqual(signal, controller.signal)
+    assert.equal(signal.aborted, true)
   } finally {
     delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
   }

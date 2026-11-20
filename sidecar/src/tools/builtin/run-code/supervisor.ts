@@ -9,11 +9,14 @@
 // warning. "Run it unsandboxed just this once" is the failure this design
 // exists to make unrepresentable.
 
-import { fork, spawn, spawnSync } from "node:child_process"
+import { execFile, fork, spawn } from "node:child_process"
 import type { SpawnOptions } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import limits from "../../../../../lib/ai/code-mode/limits.json" with { type: "json" }
+import { classifyToolFailure } from "../../kernel/failure.ts"
+import type { ToolFailureMeta } from "../../kernel/result.ts"
+import { trackForegroundGroup } from "../../state/foreground-groups.ts"
 import { checkToolEligibility, programmaticReadOnlyToolNames } from "./eligibility.ts"
 import { CHILD_MESSAGE_KINDS } from "./sandbox-child.ts"
 
@@ -45,15 +48,54 @@ export interface CodeRunLog {
   text: string
 }
 
+/**
+ * Where a failed run stopped. `compile`: the source did not parse, so the
+ * program never ran. `run`: the program threw. `cancelled`: the turn was
+ * stopped. `limit`: a budget was hit. `sandbox`: the child or its supervision
+ * failed (crash, OS measurement unavailable).
+ */
+export type CodeRunFailurePhase = "compile" | "run" | "cancelled" | "limit" | "sandbox"
+
+/** What every outcome carries besides its result. */
+interface CodeRunTally {
+  callsUsed: number
+  logs: CodeRunLog[]
+  /** Log output past `maxLogBytes` was dropped. */
+  logsTruncated?: true
+  /**
+   * The process group or a nested call was still alive when the grace ran
+   * out. Its effects are unknown; read-only tools make that "nothing written",
+   * but the run did not prove it stopped.
+   */
+  stopUnconfirmed?: true
+}
+
 export type CodeRunResult =
-  | { ok: true; result: unknown; callsUsed: number; logs: CodeRunLog[] }
-  | {
+  | ({ ok: true; result: unknown } & CodeRunTally)
+  | ({
       ok: false
       error: { name: string; message: string }
+      phase: CodeRunFailurePhase
       limit?: CodeLimit | undefined
-      callsUsed: number
-      logs: CodeRunLog[]
-    }
+    } & CodeRunTally)
+
+/**
+ * A nested call's failure as the broker classified it. Thrown by
+ * `callTool`; the supervisor hands the kind to the program so both rails give
+ * the same tool failure the same shape (CM-08).
+ */
+export class NestedToolError extends Error {
+  declare failure: ToolFailureMeta
+
+  constructor(message: string, failure: ToolFailureMeta) {
+    super(message)
+    this.name = "NestedToolError"
+    this.failure = failure
+  }
+}
+
+/** How long cancelled nested calls and a killed process group get to finish. */
+export const RUN_CODE_STOP_GRACE_MS = 1_000
 
 /** A child message, as far as the supervisor reads it; every field is untrusted. */
 interface ChildMessage {
@@ -65,6 +107,7 @@ interface ChildMessage {
   text?: unknown
   result?: unknown
   error?: unknown
+  phase?: unknown
 }
 
 const errorText = (err: unknown) => String((err as { message?: unknown } | null)?.message ?? err)
@@ -190,6 +233,14 @@ export function resolveSandboxSpawn({
   }
 }
 
+/** The `ps` call RSS sampling makes; injectable so tests need no real process. */
+export type ExecFileImpl = (
+  command: string,
+  args: string[],
+  options: { encoding: "utf8"; timeout: number },
+  callback: (error: (Error & { code?: unknown }) | null, stdout: string) => void
+) => unknown
+
 /**
  * Return resident bytes for the entire sandbox process group.
  *
@@ -198,48 +249,54 @@ export function resolveSandboxSpawn({
  * the trusted supervisor accounts for the wrapper plus every descendant. A
  * missing or unparsable `ps` result fails closed instead of silently dropping
  * the documented memory boundary.
+ *
+ * Asynchronous on purpose (CM-13). The supervisor runs inside the sidecar,
+ * which serves every session on the Host; a synchronous `ps` every 25 ms
+ * blocked that event loop for most of each sample, so one `run_code` call
+ * stalled every other session's stream and IPC.
  */
 export function readProcessGroupRssBytes(
   processGroupId: number | undefined,
-  {
-    spawnSyncImpl = spawnSync,
-  }: {
-    spawnSyncImpl?: (
-      command: string,
-      args: string[],
-      options: { encoding: "utf8"; timeout: number }
-    ) => { status: number | null; signal?: NodeJS.Signals | null; stdout?: unknown }
-  } = {}
-): number {
-  const result = spawnSyncImpl("ps", ["-axo", "pid=,pgid=,rss="], {
-    encoding: "utf8",
-    timeout: 2_000,
-  })
-  if (result.status !== 0) {
-    throw new Error(
-      `cannot enforce sandbox memory limit: ps failed (${result.status ?? result.signal ?? "unknown"})`
+  { execFileImpl = execFile as unknown as ExecFileImpl }: { execFileImpl?: ExecFileImpl } = {}
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    execFileImpl(
+      "ps",
+      ["-axo", "pid=,pgid=,rss="],
+      { encoding: "utf8", timeout: 2_000 },
+      (error, stdout) => {
+        if (error) {
+          reject(
+            new Error(
+              `cannot enforce sandbox memory limit: ps failed (${String(error.code ?? error.message)})`
+            )
+          )
+          return
+        }
+        let rssKilobytes = 0
+        let matched = false
+        for (const line of String(stdout ?? "").split("\n")) {
+          const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/)
+          if (!match || Number(match[2]) !== processGroupId) continue
+          matched = true
+          rssKilobytes += Number(match[3])
+        }
+        if (!matched || !Number.isSafeInteger(rssKilobytes)) {
+          reject(new Error("cannot enforce sandbox memory limit: process group RSS is unavailable"))
+          return
+        }
+        resolve(rssKilobytes * 1024)
+      }
     )
-  }
-
-  let rssKilobytes = 0
-  let matched = false
-  for (const line of String(result.stdout ?? "").split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/)
-    if (!match || Number(match[2]) !== processGroupId) continue
-    matched = true
-    rssKilobytes += Number(match[3])
-  }
-  if (!matched || !Number.isSafeInteger(rssKilobytes)) {
-    throw new Error("cannot enforce sandbox memory limit: process group RSS is unavailable")
-  }
-  return rssKilobytes * 1024
+  })
 }
 
 /**
  * Tracks the two budgets that only exist while a program runs.
  *
- * Mirrors `CodeCallBudget` in `lib/ai/code-mode/limits.ts`; both read the same
- * JSON so the numbers cannot diverge.
+ * The numbers come from `lib/ai/code-mode/limits.json`, which the SDK
+ * declaration also reads, so the ceiling the model is told and the one
+ * enforced here cannot diverge.
  */
 export class CallBudget {
   declare config: Pick<CodeModeLimits, "maxToolCalls" | "maxConcurrency">
@@ -281,6 +338,17 @@ export class CallBudget {
  * touches a tool implementation directly — argument validation, permissions,
  * confinement, and the canonical event log all live behind this call.
  * `config` overrides the limits, for tests.
+ *
+ * Stopping is one path for every reason (CM-10): the program returns or
+ * fails, a budget is hit, the child dies, or the turn's `signal` aborts. Each
+ * closes admission first (a `tool-call` that arrives afterwards is never
+ * dispatched), then aborts the signal every in-flight nested call and its
+ * approval wait were handed, kills the process group, and waits a bounded
+ * grace for both. A run that cannot show both ended says `stopUnconfirmed`.
+ *
+ * With `sessionId` the process group is also registered with the session's
+ * foreground groups, so Stop's process teardown and its stop proof cover a
+ * `run_code` child the same way they cover a foreground `bash` (ADR-0244).
  */
 export async function runCodeProgram({
   source,
@@ -288,12 +356,23 @@ export async function runCodeProgram({
   probe,
   config = limits,
   onLog,
+  signal,
+  sessionId,
+  groupProofSupported,
+  readRss = readProcessGroupRssBytes,
 }: {
   source: string
-  callTool: (name: string, input: unknown) => Promise<unknown>
+  callTool: (name: string, input: unknown, signal: AbortSignal) => Promise<unknown>
   probe?: SandboxProbe | undefined
   config?: CodeModeLimits | undefined
   onLog?: ((level: string, text: string) => void) | undefined
+  /** The turn's abort signal. Aborting it cancels the program. */
+  signal?: AbortSignal | undefined
+  /** Session that owns the process group, for Stop and its proof. */
+  sessionId?: string | undefined
+  groupProofSupported?: boolean | undefined
+  /** RSS sampler; tests inject one. */
+  readRss?: (processGroupId: number | undefined) => Promise<number>
 }): Promise<CodeRunResult> {
   const resolvedProbe = probe ?? probeSandbox()
   assertSandboxable(resolvedProbe)
@@ -302,9 +381,13 @@ export async function runCodeProgram({
   if (sourceBytes > config.maxSourceBytes) {
     return failure("source-too-large", config.maxSourceBytes, sourceBytes)
   }
+  if (signal?.aborted) return cancelledBeforeStart()
 
   const budget = new CallBudget(config)
   const logs: CodeRunLog[] = []
+  let logBytes = 0
+  let logsTruncated = false
+  let resultBytes = 0
   const toolNames = programmaticReadOnlyToolNames()
   const standalone = Boolean(
     (globalThis as { Bun?: { isStandaloneExecutable?: boolean } }).Bun?.isStandaloneExecutable
@@ -346,14 +429,23 @@ export async function runCodeProgram({
       (() => {
         throw new SandboxUnavailableError("no-strict-sandbox")
       })()
+  // Session-owned, so Stop's teardown signals the group and its proof waits
+  // for it; the registry's exit hook also kills it if the sidecar exits first.
+  if (sessionId) trackForegroundGroup(sessionId, child, groupProofSupported ?? true)
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve())
+    child.once("error", () => resolve())
+  })
 
   let settled = false
   let timer: ReturnType<typeof setTimeout> | null = null
   let memoryTimer: ReturnType<typeof setInterval> | null = null
+  // Every nested call gets this signal: settling the run aborts them, and the
+  // turn's own abort reaches them through it.
+  const runAbort = new AbortController()
+  const inFlight = new Set<Promise<void>>()
 
-  const cleanup = () => {
-    if (timer) clearTimeout(timer)
-    if (memoryTimer) clearInterval(memoryTimer)
+  const killGroup = () => {
     try {
       if (spawnOptions.detached && child.pid) process.kill(-child.pid, "SIGKILL")
       else child.kill("SIGKILL")
@@ -365,52 +457,94 @@ export async function runCodeProgram({
   /** A run outcome before the budget and logs are attached. */
   type Outcome =
     | { ok: true; result: unknown }
-    | { ok: false; error: { name: string; message: string }; limit?: CodeLimit }
+    | {
+        ok: false
+        error: { name: string; message: string }
+        phase: CodeRunFailurePhase
+        limit?: CodeLimit
+      }
 
   return await new Promise<CodeRunResult>((resolve) => {
+    const onAbort = () =>
+      settle({
+        ok: false,
+        error: { name: "AbortError", message: "run_code was cancelled" },
+        phase: "cancelled",
+      })
+
     const settle = (value: Outcome) => {
       if (settled) return
+      // Admission closes before anything else: from here no tool-call message
+      // is dispatched, whatever the child still has queued.
       settled = true
-      cleanup()
-      resolve({ ...value, callsUsed: budget.callsUsed, logs })
+      if (timer) clearTimeout(timer)
+      if (memoryTimer) clearInterval(memoryTimer)
+      signal?.removeEventListener("abort", onAbort)
+      runAbort.abort(new Error("run_code finished"))
+      killGroup()
+      void (async () => {
+        const stopped = await settledWithin(
+          Promise.all([exited, Promise.allSettled([...inFlight])]),
+          RUN_CODE_STOP_GRACE_MS
+        )
+        resolve({
+          ...value,
+          callsUsed: budget.callsUsed,
+          logs,
+          ...(logsTruncated ? { logsTruncated: true as const } : {}),
+          ...(stopped ? {} : { stopUnconfirmed: true as const }),
+        })
+      })()
     }
+
+    signal?.addEventListener("abort", onAbort, { once: true })
 
     timer = setTimeout(() => {
       settle({
         ok: false,
         error: { name: "CodeLimitExceeded", message: "wall time exceeded" },
+        phase: "limit",
         limit: { kind: "wall-time", limit: config.wallTimeMs },
       })
     }, config.wallTimeMs)
 
-    const enforceMemoryLimit = () => {
+    // One sample at a time: a slow `ps` skips ticks instead of piling up.
+    let sampling = false
+    const enforceMemoryLimit = async () => {
+      if (sampling || settled) return
+      sampling = true
       try {
-        const observed = readProcessGroupRssBytes(child.pid)
+        const observed = await readRss(child.pid)
         if (observed <= config.maxMemoryBytes) return
         settle({
           ok: false,
           error: { name: "CodeLimitExceeded", message: "memory limit exceeded" },
+          phase: "limit",
           limit: { kind: "memory", limit: config.maxMemoryBytes, observed },
         })
       } catch (error) {
         settle({
           ok: false,
           error: { name: "SandboxError", message: errorText(error) },
+          phase: "sandbox",
         })
+      } finally {
+        sampling = false
       }
     }
-    memoryTimer = setInterval(enforceMemoryLimit, 25)
+    memoryTimer = setInterval(() => void enforceMemoryLimit(), 25)
     memoryTimer.unref?.()
-    enforceMemoryLimit()
+    void enforceMemoryLimit()
 
     child.on("error", (error) => {
       settle({
         ok: false,
         error: { name: "SandboxError", message: errorText(error) },
+        phase: "sandbox",
       })
     })
 
-    child.on("exit", (code, signal) => {
+    child.on("exit", (code, signalName) => {
       // An exit before a DONE/FAILED message means the child died — OOM kill
       // lands here, and reporting it as a crash rather than as a result is the
       // difference between "the limit worked" and "the answer was empty".
@@ -418,13 +552,14 @@ export async function runCodeProgram({
         ok: false,
         error: {
           name: "SandboxError",
-          message: `sandbox exited unexpectedly (code=${code}, signal=${signal})`,
+          message: `sandbox exited unexpectedly (code=${code}, signal=${signalName})`,
         },
+        phase: "sandbox",
       })
     })
 
     child.on("message", (raw: unknown) => {
-      if (!raw || typeof raw !== "object") return
+      if (settled || !raw || typeof raw !== "object") return
       const message = raw as ChildMessage
 
       switch (message.kind) {
@@ -433,13 +568,15 @@ export async function runCodeProgram({
           return
 
         case CHILD_MESSAGE_KINDS.LOG:
-          logs.push({ level: String(message.level), text: String(message.text) })
-          onLog?.(String(message.level), String(message.text))
+          recordLog(String(message.level), String(message.text))
           return
 
-        case CHILD_MESSAGE_KINDS.TOOL_CALL:
-          void handleToolCall(message)
+        case CHILD_MESSAGE_KINDS.TOOL_CALL: {
+          const call = handleToolCall(message)
+          inFlight.add(call)
+          void call.finally(() => inFlight.delete(call))
           return
+        }
 
         case CHILD_MESSAGE_KINDS.DONE: {
           const serialized = safeStringify(message.result)
@@ -447,6 +584,7 @@ export async function runCodeProgram({
             settle({
               ok: false,
               error: { name: "CodeLimitExceeded", message: "result too large" },
+              phase: "limit",
               limit: {
                 kind: "result-too-large",
                 limit: config.maxResultBytes,
@@ -467,6 +605,7 @@ export async function runCodeProgram({
               name: "Error",
               message: "unknown",
             },
+            phase: message.phase === "compile" ? "compile" : "run",
           })
           return
 
@@ -475,20 +614,46 @@ export async function runCodeProgram({
       }
     })
 
+    /** Keep console output bounded per entry and in total. */
+    function recordLog(level: string, text: string) {
+      if (logsTruncated) return
+      const entry = truncateUtf8(text, config.maxLogEntryBytes)
+      const bytes = Buffer.byteLength(entry, "utf8")
+      if (logBytes + bytes > config.maxLogBytes) {
+        logsTruncated = true
+        return
+      }
+      logBytes += bytes
+      logs.push({ level, text: entry })
+      onLog?.(level, entry)
+    }
+
     async function handleToolCall(message: ChildMessage) {
-      const reply = (patch: { result?: unknown; error?: string }) => {
+      const reply = (patch: { result?: unknown; error?: string; failure?: ToolFailureMeta }) => {
         if (settled) return
         child.send({ kind: CHILD_MESSAGE_KINDS.TOOL_RESULT, id: message.id, ...patch })
       }
+      const refuse = (error: string, failureMeta: ToolFailureMeta) =>
+        reply({ error, failure: failureMeta })
 
       // The allowlist is re-checked here even though the child was only handed
       // eligible names. The child is the untrusted side; a name it invents must
       // die at this boundary, not at the registry.
       const eligibility = checkToolEligibility(message.name)
       if (!eligibility.allowed) {
-        reply({
-          error: `tool "${String(message.name)}" is not callable from code (${eligibility.reason})`,
+        refuse(`tool "${String(message.name)}" is not callable from code (${eligibility.reason})`, {
+          kind: "permission-denied",
+          retryable: false,
         })
+        return
+      }
+
+      const inputBytes = Buffer.byteLength(safeStringify(message.input), "utf8")
+      if (inputBytes > config.maxToolInputBytes) {
+        refuse(
+          `input for "${String(message.name)}" is ${inputBytes} bytes, over the ${config.maxToolInputBytes}-byte limit for one call`,
+          { kind: "invalid-args", retryable: false }
+        )
         return
       }
 
@@ -497,20 +662,54 @@ export async function runCodeProgram({
         settle({
           ok: false,
           error: { name: "CodeLimitExceeded", message: "tool call budget exhausted" },
+          phase: "limit",
           limit: slot.exceeded,
         })
         return
       }
       if (!slot.ok) {
-        reply({ error: "too many concurrent tool calls; await earlier calls first" })
+        refuse("too many concurrent tool calls; await earlier calls first", {
+          kind: "resource-exhausted",
+          retryable: true,
+        })
         return
       }
 
       try {
-        const result = await callTool(message.name as string, message.input)
+        const result = await callTool(message.name as string, message.input, runAbort.signal)
+        if (settled) return
+        const bytes = Buffer.byteLength(safeStringify(result), "utf8")
+        if (bytes > config.maxToolResultBytes) {
+          refuse(
+            `result of "${String(message.name)}" is ${bytes} bytes, over the ${config.maxToolResultBytes}-byte limit for one call; ask for less`,
+            { kind: "resource-exhausted", retryable: false }
+          )
+          return
+        }
+        resultBytes += bytes
+        if (resultBytes > config.maxTotalToolResultBytes) {
+          settle({
+            ok: false,
+            error: { name: "CodeLimitExceeded", message: "tool results too large in total" },
+            phase: "limit",
+            limit: {
+              kind: "tool-result-bytes",
+              limit: config.maxTotalToolResultBytes,
+              observed: resultBytes,
+            },
+          })
+          return
+        }
         reply({ result })
       } catch (error) {
-        reply({ error: errorText(error) })
+        const meta =
+          error instanceof NestedToolError
+            ? error.failure
+            : (() => {
+                const classified = classifyToolFailure(error)
+                return { kind: classified.kind, retryable: classified.retryable }
+              })()
+        refuse(errorText(error), meta)
       } finally {
         budget.release()
       }
@@ -518,11 +717,46 @@ export async function runCodeProgram({
   })
 }
 
+/** Resolve true when `work` settles within `ms`, false when the grace runs out. */
+async function settledWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms)
+  })
+  try {
+    return await Promise.race([work.then(() => true as const), expired])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** Cut a UTF-8 string to at most `max` bytes, marking the cut. */
+function truncateUtf8(text: string, max: number): string {
+  if (Buffer.byteLength(text, "utf8") <= max) return text
+  const marker = "…[truncated]"
+  const budget = Math.max(0, max - Buffer.byteLength(marker, "utf8"))
+  let cut = Buffer.from(text, "utf8").subarray(0, budget).toString("utf8")
+  // A cut through a multi-byte character decodes to U+FFFD; drop it.
+  if (cut.endsWith("�")) cut = cut.slice(0, -1)
+  return cut + marker
+}
+
 function failure(kind: string, limit: number, observed: number): CodeRunResult {
   return {
     ok: false,
     error: { name: "CodeLimitExceeded", message: kind },
+    phase: "limit",
     limit: { kind, limit, observed },
+    callsUsed: 0,
+    logs: [],
+  }
+}
+
+function cancelledBeforeStart(): CodeRunResult {
+  return {
+    ok: false,
+    error: { name: "AbortError", message: "run_code was cancelled before it started" },
+    phase: "cancelled",
     callsUsed: 0,
     logs: [],
   }

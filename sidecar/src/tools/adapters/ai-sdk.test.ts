@@ -7,36 +7,17 @@ import { MockLanguageModelV4 } from "ai/test"
 import { createEventAdapter } from "../../runtimes/ai-sdk/events.ts"
 import assert from "node:assert/strict"
 
-import childProcess from "node:child_process"
-import { syncBuiltinESMExports } from "node:module"
-import { after, mock } from "node:test"
 import { buildAiSdkTools, aiSdkToolPolicyName, __testing__ } from "./ai-sdk.ts"
 import { createAiSdkToolSearchController } from "./ai-sdk-tool-search.ts"
 import { createSessionTaskStore } from "../state/tasks.ts"
 import type { ReadTracker } from "../state/read-tracker.ts"
 import { createVerificationBudget } from "../../shared/verification-budget.ts"
 import { createReadTracker } from "../state/read-tracker.ts"
+import { fakeSandboxRss } from "../../../test-support/sandbox-rss.ts"
 
 // Broker tests exercise dispatch, not OS RSS accounting (which has its own
 // supervisor tests). Keep real child execution while supplying process usage.
-const processGroups = new Set<number>()
-const spawn = childProcess.spawn
-const spawnSync = childProcess.spawnSync
-mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
-  const child = spawn(...args)
-  if (child.pid) processGroups.add(child.pid)
-  return child
-})
-mock.method(childProcess, "spawnSync", (...args: Parameters<typeof spawnSync>) =>
-  args[0] === "ps"
-    ? { status: 0, stdout: [...processGroups].map((pid) => `${pid} ${pid} 1`).join("\n") }
-    : spawnSync(...args)
-)
-syncBuiltinESMExports()
-after(() => {
-  mock.restoreAll()
-  syncBuiltinESMExports()
-})
+fakeSandboxRss()
 
 test("production AI SDK tools preserve closed process admission for Bash and PTY", async () => {
   const closed = new AbortController()
@@ -119,6 +100,30 @@ test("buildAiSdkTools keeps always-load built-ins resident under tool search", (
   // file_info is defined with `alwaysLoad`; git_diff is not.
   assert.ok(active.includes("file_info"))
   assert.ok(!active.includes("git_diff"))
+})
+
+// CM-06: with tool search on, a Code turn's first step offered only ToolSearch.
+test("buildAiSdkTools keeps run_code resident under tool search", () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  try {
+    const tools = buildAiSdkTools({
+      sendOptions: {
+        builtinTools: { git: true },
+        execution: { composition: { toolPresentation: "code" } },
+      },
+      emit: () => {},
+      sessionId: "s1",
+    })
+    assert.deepEqual(Object.keys(tools), ["run_code"])
+    const controller = createAiSdkToolSearchController({
+      tools,
+      sendOptions: { toolSearchEnabled: true },
+    })!
+    assert.ok(controller.prepareStep().activeTools.includes("run_code"))
+    assert.deepEqual(controller.deferredToolNames(), [])
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
 })
 
 test("buildAiSdkTools returns no built-in tools when builtinTools is absent", () => {
@@ -1288,7 +1293,10 @@ test("plugin runtime validation rejects invalid inputs before permission or rela
 test("Code declarations and nested calls respect the final allow and deny lists", async () => {
   process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
   try {
-    for (const policy of [{ disallowedTools: ["file_info"] }, { allowedTools: ["run_code"] }]) {
+    for (const policy of [
+      { disallowedTools: ["file_info"] },
+      { disallowedTools: ["mcp__cognia-tools__file_info"] },
+    ]) {
       const tools = build({
         sessionId: "code-policy",
         emit() {},
@@ -1312,6 +1320,62 @@ test("Code declarations and nested calls respect the final allow and deny lists"
       )
       assert.match(result.result, /not enabled|not permitted/)
     }
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+// CM-05: the entry and its children passed two lists. Naming only `run_code`
+// registered an executor with no SDK; naming only its children dropped it.
+test("Code admits run_code by what it wraps, and never with an empty SDK", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  const surface = (policy: Record<string, unknown>, toolPresentation = "code") =>
+    build({
+      sessionId: "code-admission",
+      emit() {},
+      sendOptions: {
+        builtinTools: { fileExtras: true },
+        permissionMode: "bypassPermissions",
+        execution: { composition: { toolPresentation } },
+        ...policy,
+      },
+    })
+  try {
+    assert.deepEqual(Object.keys(surface({ allowedTools: ["run_code"] })), [])
+    const children = surface({ allowedTools: ["file_info"] })
+    assert.deepEqual(Object.keys(children), ["run_code"])
+    assert.ok(children.run_code!.description?.includes("file_info("))
+    const denied = surface({ disallowedTools: ["mcp__cognia-tools__run_code"] }, "both")
+    assert.equal(denied.run_code, undefined)
+    assert.ok(denied.file_info, "Both keeps the native tools")
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+// CM-08: the same missing file rejected here and resolved as an error envelope
+// on the Claude SDK rail; both now reject with the classified kind.
+test("nested failures reject the program with their kind", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  try {
+    const tools = build({
+      sessionId: "nested-kind",
+      emit() {},
+      sendOptions: {
+        builtinTools: { fileExtras: true },
+        permissionMode: "bypassPermissions",
+        execution: { composition: { toolPresentation: "code" } },
+      },
+    })
+    const result = JSON.parse(
+      String(
+        await tools.run_code!.execute({
+          source:
+            'try { await cognia.file_hash({path:"definitely-missing-cm08.txt"}); return "resolved" } catch (e) { return [e.name, e.kind] }',
+        })
+      )
+    )
+    assert.deepEqual(result.result, ["ToolError", "not-found"])
   } finally {
     delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
   }

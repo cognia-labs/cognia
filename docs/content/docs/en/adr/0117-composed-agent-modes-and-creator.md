@@ -217,6 +217,49 @@ at read time is lossless and reversible; writing it into rows is not.
 still a live path in scheduled outbound, and the plugin SDK mirrors the field.
 Writes set both; reads prefer the axes and derive from `mode` when absent.
 
+## Amendment (2026-11-20) — Code availability comes from the execution Host
+
+The renderer used to decide whether Code could run. It asked the generic
+ADR-0028 command-sandbox probe, which is client-local and answers a different
+question, and the send path did not pass even that answer on, so every Code or
+Both selection reached the sidecar as `native`.
+
+- **Availability.** `claude_sidecar_status` is routed to the execution Host and
+  carries `codeSandbox`: what the live sidecar generation was handed for
+  `run_code` (`available` with its `backend`, or a `reason`: `killed`,
+  `no-backend`, `no-scratch`), stamped with that `generation`. With no sidecar
+  running it reports what the next spawn will get. A Host that omits the field
+  (an older Host, the CLI) reads as unavailable. The send path asks only when
+  the selection resolves to `code` or `both`. The pickers ask on mount, again
+  after a Host switch or a sidecar `ready` / `sidecar_exited` frame, and list
+  Code and Both as disabled options that state the reason.
+- **Kill switches.** `NEXT_PUBLIC_CODE_MODE_KILL=1` turns Code off in a renderer
+  build. `COGNIA_CODE_MODE_KILL=1` on the Host process withholds the launcher
+  from every sidecar it spawns afterwards, for all of that Host's clients. A
+  live multi-turn loop restarts when a turn resolves to a different
+  presentation, so an earlier `run_code` registration does not outlive it.
+- **Entry.** `run_code` is registered only when at least one eligible built-in
+  is permitted; an SDK with no functions is not offered. An allow list names
+  native tools, so the entry is admitted by the deny list and by what it wraps.
+  It stays resident under tool search.
+- **Nested failures.** Both engines reject the program's promise with an
+  `Error` named `ToolError` that carries the classified `kind` and `retryable`.
+  The outer result is classified by phase: `compile` → `invalid-args`, `run` →
+  `execution-failed`, `cancelled` → `aborted`, `limit` → `resource-exhausted`,
+  `sandbox` → `environment`.
+- **Stopping.** The turn's abort signal cancels the program. Every end of a run
+  closes admission, aborts the signal its nested calls and approval waits were
+  given, kills the process group, and waits a one-second grace; a run that
+  cannot show both ended reports `stopUnconfirmed`. The group is registered
+  with the session's foreground groups, so Stop's teardown and stop proof cover
+  it (ADR-0244).
+- **Byte budgets.** Besides the earlier limits: 64 KiB input per nested call,
+  1 MiB result per nested call, 8 MiB of nested results per run, 4 KiB per log
+  entry and 64 KiB of logs per run (`lib/ai/code-mode/limits.json`).
+- **Scope.** `code` replaces the built-in tool surface only. The engine's own
+  tools, plugin tools and MCP servers keep their entry points and their own
+  permissions; the Code preset's authority cap applies to them.
+
 ## Reused ownership
 
 This decision adds no second runtime enum, router, event bus, permission
