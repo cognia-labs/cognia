@@ -10,7 +10,9 @@
  * shared expansion budget before they are materialised.
  */
 
+import { columnLetters, mergedGridTable } from "../document-tables"
 import { DEFAULT_DOCUMENT_LIMITS, DocumentBudget, DocumentLimitError } from "../limits"
+import type { DocumentTable } from "../types"
 import type { ExcelParseResult, ExcelSheet, WordParseResult } from "./office-parser"
 import { computeSheetStats, convertSheetToText } from "./office-parser"
 import type {
@@ -42,7 +44,10 @@ export interface OpenDocumentParseOptions {
   maxExpandedCells?: number
 }
 
-export async function parseOpenDocumentText(data: ArrayBuffer): Promise<WordParseResult> {
+export async function parseOpenDocumentText(
+  data: ArrayBuffer,
+  options: OpenDocumentParseOptions = {}
+): Promise<WordParseResult> {
   const zip = await loadOpenDocumentZip(data)
   await assertNotEncrypted(zip)
 
@@ -66,6 +71,8 @@ export async function parseOpenDocumentText(data: ArrayBuffer): Promise<WordPars
       text: block.text,
     }))
 
+  const tables = textTables(content, options)
+
   return {
     text,
     html: blocks.map((block) => `<p>${escapeHtml(block.text)}</p>`).join(""),
@@ -73,7 +80,43 @@ export async function parseOpenDocumentText(data: ArrayBuffer): Promise<WordPars
     images: [],
     metadata,
     headings,
+    ...(tables.length > 0 ? { tables } : {}),
   }
+}
+
+/**
+ * The text document's tables as typed grids, in document order: spans kept,
+ * the rows under `table:table-header-rows` heading them. A table nested in a
+ * cell is a table of its own, after the one holding it (the outer cell keeps
+ * its own paragraphs). The text reads them one paragraph per cell.
+ */
+function textTables(content: XmlNode, options: OpenDocumentParseOptions): DocumentTable[] {
+  const limit = options.maxExpandedCells ?? DEFAULT_DOCUMENT_LIMITS.maxExpandedCells
+  const readBudget = new DocumentBudget("expanded-cells", limit)
+  const gridBudget = new DocumentBudget("expanded-cells", limit)
+  const tablesIn = (node: XmlNode): XmlElement[] =>
+    findElements(node, "table:table").flatMap((table) => [table, ...tablesIn(table)])
+  return tablesIn(findElement(content, "office:text") ?? content).map((table, index) => {
+    const { rows, mergedCells } = readSpreadsheetTable(table, readBudget)
+    const headerRowCount = childElements(table)
+      .filter((child) => child.name === "table:table-header-rows")
+      .flatMap((group) => childElements(group))
+      .filter((row) => row.name === "table:table-row")
+      .reduce(
+        (sum, row) => sum + (positiveInteger(row.attribs["table:number-rows-repeated"]) ?? 1),
+        0
+      )
+    return mergedGridTable(
+      {
+        data: rows,
+        columnCount: rows.reduce((max, row) => Math.max(max, row.length), 0),
+        mergedCells,
+        headerRowCount,
+      },
+      index + 1,
+      gridBudget
+    )
+  })
 }
 
 export async function parseOpenDocumentSpreadsheet(
@@ -421,7 +464,7 @@ function readSpreadsheetTable(
             const start = column + i
             const top = rowIndex + r + 1
             mergedCells.push(
-              `${columnName(start)}${top}:${columnName(start + columnsSpanned - 1)}${
+              `${columnLetters(start)}${top}:${columnLetters(start + columnsSpanned - 1)}${
                 top + rowsSpanned - 1
               }`
             )
@@ -450,18 +493,6 @@ function readSpreadsheetTable(
   }
 
   return { rows, mergedCells }
-}
-
-/** Spreadsheet column letters for a 0-based index (0 → A, 26 → AA). */
-function columnName(index: number): string {
-  let name = ""
-  let current = index + 1
-  while (current > 0) {
-    const remainder = (current - 1) % 26
-    name = String.fromCharCode(65 + remainder) + name
-    current = Math.floor((current - 1) / 26)
-  }
-  return name
 }
 
 function escapeHtml(input: string): string {

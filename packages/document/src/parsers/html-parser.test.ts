@@ -81,14 +81,23 @@ describe("parseHTML", () => {
     ])
     expect(result.tables).toEqual([
       {
+        index: 1,
         caption: "People",
-        headers: ["Name", "Age"],
-        rows: [["Jane", "25"]],
+        rowCount: 2,
+        columnCount: 2,
+        headerRowCount: 1,
+        cells: [
+          { row: 0, column: 0, rowSpan: 1, columnSpan: 1, text: "Name", header: true },
+          { row: 0, column: 1, rowSpan: 1, columnSpan: 1, text: "Age", header: true },
+          { row: 1, column: 0, rowSpan: 1, columnSpan: 1, text: "Jane" },
+          { row: 1, column: 1, rowSpan: 1, columnSpan: 1, text: "25" },
+        ],
       },
     ])
     expect(result.text).toContain("# Test Page")
     expect(result.text).toContain("Visible content")
-    expect(result.text).toContain("Columns: Name, Age")
+    // The table row by row, not just its column names and size (G3).
+    expect(result.text).toContain("| Name | Age |\n| --- | --- |\n| Jane | 25 |")
     expect(result.text).not.toContain("Hidden header")
     expect(result.text).not.toContain("alert")
   })

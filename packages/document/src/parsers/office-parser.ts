@@ -4,7 +4,9 @@
  * Enhanced with image extraction, metadata, style mapping, date/merged cell/formula support
  */
 
+import { formatStoredNumber, htmlTables, sheetHasHeaderRow } from "../document-tables"
 import { DEFAULT_DOCUMENT_LIMITS, DocumentBudget } from "../limits"
+import type { DocumentTable } from "../types"
 
 export interface WordParseResult {
   text: string
@@ -13,6 +15,8 @@ export interface WordParseResult {
   images: WordImage[]
   metadata?: WordMetadata
   headings?: WordHeading[]
+  /** The document's tables as typed grids, merged cells as spans. */
+  tables?: DocumentTable[]
 }
 
 export interface WordMessage {
@@ -125,6 +129,11 @@ export async function parseWord(
   // Extract headings from HTML
   const headings = extractHeadingsFromHtml(result.value)
 
+  // mammoth writes merged cells as colspan / rowspan, so the HTML keeps the
+  // grid the raw text loses (that has one paragraph per cell).
+  const cheerio = await import("cheerio")
+  const tables = htmlTables(cheerio.load(result.value))
+
   // Extract metadata from docx (it's a ZIP containing XML)
   let metadata: WordMetadata | undefined
   if (options.extractMetadata !== false) {
@@ -138,6 +147,7 @@ export async function parseWord(
     images: extractedImages,
     metadata,
     headings,
+    ...(tables.length > 0 ? { tables } : {}),
   }
 }
 
@@ -469,7 +479,7 @@ export function convertSheetToText(
   }
 
   // Use first row as header if it looks like headers
-  const hasHeader = data.length > 1 && data[0].every((cell) => typeof cell === "string")
+  const hasHeader = sheetHasHeaderRow(data)
 
   // Every row is as wide as the widest, so a cell's position in the line is
   // its column whatever the row stored.
@@ -487,17 +497,6 @@ export function convertSheetToText(
   }
 
   return lines.join("\n")
-}
-
-/**
- * A stored number as text. Excel keeps 15 significant digits; cutting there
- * drops binary noise (`0.30000000000000004`) without rounding a real value the
- * way a fixed decimal count would (`0.00012345` is not `0.00`).
- */
-export function formatStoredNumber(value: number): string {
-  if (!Number.isFinite(value)) return String(value)
-  if (Number.isInteger(value)) return value.toString()
-  return String(Number(value.toPrecision(15)))
 }
 
 /**

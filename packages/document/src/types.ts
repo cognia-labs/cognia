@@ -90,12 +90,47 @@ export interface DocumentPageRange {
   bboxUnion?: { x: number; y: number; width: number; height: number }
 }
 
+/** A value a table cell stores: a spreadsheet's typed value, or text. */
+export type DocumentTableValue = string | number | boolean | null
+
+/**
+ * One table cell, anchored at its top-left grid position (0-based). A position
+ * a merge covers holds no cell of its own.
+ */
+export interface DocumentTableCell {
+  row: number
+  column: number
+  rowSpan: number
+  columnSpan: number
+  /** What the cell shows; `"\n"` separates its lines. */
+  text: string
+  /** The value a spreadsheet cell stores; absent where the format holds text only. */
+  value?: DocumentTableValue
+  header?: boolean
+}
+
+/** A table as a typed grid. Markdown and plain text are projections of it. */
+export interface DocumentTable {
+  /** 1-based position among the document's tables. */
+  index: number
+  /** Where the table is: its sheet range, its page, or its span of the content. */
+  locator?: DocumentSourceSegment["locator"]
+  caption?: string
+  rowCount: number
+  columnCount: number
+  /** Leading rows that head the table. */
+  headerRowCount: number
+  cells: DocumentTableCell[]
+}
+
 export interface DocumentStructure {
   version: 1
   contentHash: string
   textLength: number
   nodes: DocumentSection[]
   pages: DocumentPageRange[]
+  /** The document's tables as typed grids, where its format has tables. */
+  tables?: DocumentTable[]
 }
 
 /** Canonical parsed source frozen with a successfully activated index generation. */
@@ -292,6 +327,7 @@ export interface WordParseResult {
   images: WordImage[]
   metadata?: WordMetadata
   headings?: WordHeading[]
+  tables?: DocumentTable[]
 }
 
 export interface WordMessage {
@@ -361,7 +397,7 @@ export interface HTMLParseResult {
   links: HTMLLink[]
   images: HTMLImage[]
   metadata: HTMLMetadata
-  tables: HTMLTable[]
+  tables: DocumentTable[]
 }
 
 export interface HTMLHeading {
@@ -389,12 +425,6 @@ export interface HTMLMetadata {
   ogTitle?: string
   ogDescription?: string
   ogImage?: string
-}
-
-export interface HTMLTable {
-  headers: string[]
-  rows: string[][]
-  caption?: string
 }
 
 export interface PresentationParseResult {
@@ -513,6 +543,7 @@ export type ParseDiagnosticCode =
   | "unsupported_feature"
   | "native_parse_fallback"
   | "sparse_text_layer"
+  | "table_merges_projected"
 
 export interface ParseDiagnostic {
   code: ParseDiagnosticCode

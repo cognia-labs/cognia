@@ -41,6 +41,68 @@ describe("open-document-parser", () => {
     expect(result.metadata?.author).toBe("Alice")
   })
 
+  it("reads a text document's tables as typed grids, spans and header rows kept (G3)", async () => {
+    const buffer = await createOpenDocumentBuffer({
+      "content.xml": `
+        <office:document-content><office:body><office:text>
+          <text:p>Budget</text:p>
+          <table:table table:name="Costs">
+            <table:table-header-rows>
+              <table:table-row>
+                <table:table-cell office:value-type="string"><text:p>Item</text:p></table:table-cell>
+                <table:table-cell office:value-type="string"><text:p>Cost</text:p></table:table-cell>
+              </table:table-row>
+            </table:table-header-rows>
+            <table:table-row>
+              <table:table-cell table:number-rows-spanned="2" office:value-type="string"><text:p>Travel</text:p></table:table-cell>
+              <table:table-cell office:value-type="float" office:value="10"><text:p>10.00</text:p></table:table-cell>
+            </table:table-row>
+            <table:table-row>
+              <table:covered-table-cell/>
+              <table:table-cell office:value-type="float" office:value="20"><text:p>20.00</text:p></table:table-cell>
+            </table:table-row>
+          </table:table>
+        </office:text></office:body></office:document-content>
+      `,
+    })
+
+    const result = await parseOpenDocumentText(buffer)
+
+    expect(result.tables).toEqual([
+      {
+        index: 1,
+        rowCount: 3,
+        columnCount: 2,
+        headerRowCount: 1,
+        cells: [
+          {
+            row: 0,
+            column: 0,
+            rowSpan: 1,
+            columnSpan: 1,
+            text: "Item",
+            value: "Item",
+            header: true,
+          },
+          {
+            row: 0,
+            column: 1,
+            rowSpan: 1,
+            columnSpan: 1,
+            text: "Cost",
+            value: "Cost",
+            header: true,
+          },
+          { row: 1, column: 0, rowSpan: 2, columnSpan: 1, text: "Travel", value: "Travel" },
+          { row: 1, column: 1, rowSpan: 1, columnSpan: 1, text: "10", value: 10 },
+          { row: 2, column: 1, rowSpan: 1, columnSpan: 1, text: "20", value: 20 },
+        ],
+      },
+    ])
+    // The text still reads each cell as a paragraph.
+    expect(result.text).toBe("Budget\n\nItem\n\nCost\n\nTravel\n\n10.00\n\n20.00")
+  })
+
   it("parses sheet content from ods content", async () => {
     const buffer = await createOpenDocumentBuffer({
       "content.xml": `

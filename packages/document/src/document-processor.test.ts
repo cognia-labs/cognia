@@ -1143,3 +1143,154 @@ it("keeps source segments canonical when the Markdown embedding projection remov
   expect(processed.sourceSegments?.[0].text).toBe(content)
   expect(processed.embeddableContent).not.toBe(content)
 })
+
+describe("typed tables (G3)", () => {
+  const salesHtml = `<html><body>
+    <p>North leads the year.</p>
+    <table>
+      <thead><tr><th>Region</th><th>Q1</th><th>Q2</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="2">North</td><td>1</td><td>2</td></tr>
+        <tr><td>3</td><td>4</td></tr>
+      </tbody>
+    </table>
+  </body></html>`
+
+  it("keeps an HTML table's merged cells in the structure and its rows in the text", async () => {
+    const result = await processDocumentAsync("sales", "sales.html", salesHtml)
+
+    // The text is Markdown: the merged region repeats on the row it covers,
+    // and 3 sits under Q1, not under Region.
+    expect(result.content).toContain(
+      "| Region | Q1 | Q2 |\n| --- | --- | --- |\n| North | 1 | 2 |\n| North | 3 | 4 |"
+    )
+    const [table] = result.structure?.tables ?? []
+    expect(table).toMatchObject({
+      index: 1,
+      rowCount: 3,
+      columnCount: 3,
+      headerRowCount: 1,
+    })
+    expect(table.cells).toContainEqual(
+      expect.objectContaining({ row: 1, column: 0, rowSpan: 2, text: "North" })
+    )
+    expect(table.cells).toContainEqual(expect.objectContaining({ row: 2, column: 1, text: "3" }))
+    // The locator spans the table in the text, past the prose mention of North.
+    expect(table.locator).toMatchObject({ type: "text" })
+    const locator = table.locator as { start: number; end: number }
+    expect(result.content.slice(locator.start, locator.end)).toBe(
+      "Region | Q1 | Q2 |\n| --- | --- | --- |\n| North | 1 | 2 |\n| North | 3 | 4"
+    )
+    expect(result.parseDiagnostics).toContainEqual(
+      expect.objectContaining({ code: "table_merges_projected", severity: "info" })
+    )
+  })
+
+  it("reports no projected merges for a table without any", async () => {
+    const result = await processDocumentAsync(
+      "plain",
+      "plain.html",
+      "<table><tr><th>A</th></tr><tr><td>1</td></tr></table>"
+    )
+    expect(result.structure?.tables).toHaveLength(1)
+    expect(result.parseDiagnostics?.map((diagnostic) => diagnostic.code)).not.toContain(
+      "table_merges_projected"
+    )
+  })
+
+  it("gives a delimited file one table headed by its header row", async () => {
+    const result = await processDocumentAsync("people", "people.csv", "name,age\nAda,36\nLin,")
+    expect(result.structure?.tables).toEqual([
+      expect.objectContaining({
+        index: 1,
+        rowCount: 3,
+        columnCount: 2,
+        headerRowCount: 1,
+        cells: [
+          expect.objectContaining({ row: 0, column: 0, text: "name", header: true }),
+          expect.objectContaining({ row: 0, column: 1, text: "age", header: true }),
+          expect.objectContaining({ row: 1, column: 0, text: "Ada" }),
+          expect.objectContaining({ row: 1, column: 1, text: "36" }),
+          expect.objectContaining({ row: 2, column: 0, text: "Lin" }),
+        ],
+      }),
+    ])
+  })
+
+  it("gives each sheet a table located by its range, merges as spans", async () => {
+    jest.mocked(parseExcel).mockResolvedValueOnce({
+      text: "## Sheet: Sales\nRegion Q1",
+      sheets: [
+        {
+          name: "Sales",
+          data: [
+            ["Region", "Q1", null],
+            ["North", 12.5, 3],
+          ],
+          rowCount: 2,
+          columnCount: 3,
+          mergedCells: ["B1:C1"],
+        },
+      ],
+      sheetNames: ["Sales"],
+    })
+    const result = await processDocumentAsync("book", "sales.xlsx", new ArrayBuffer(8))
+    expect(result.structure?.tables).toEqual([
+      expect.objectContaining({
+        index: 1,
+        locator: { type: "sheet", sheet: "Sales", range: "A1:C2" },
+        headerRowCount: 1,
+        cells: expect.arrayContaining([
+          expect.objectContaining({ row: 0, column: 1, columnSpan: 2, text: "Q1", header: true }),
+          expect.objectContaining({ row: 1, column: 1, text: "12.5", value: 12.5 }),
+        ]),
+      }),
+    ])
+  })
+
+  it("refuses a workbook whose merges widen its grids past the shared budget", async () => {
+    jest.mocked(parseExcel).mockResolvedValueOnce({
+      text: "## Sheet: A\nx",
+      sheets: ["A", "B"].map((name) => ({
+        name,
+        data: [["x"]],
+        rowCount: 1,
+        columnCount: 1,
+        // 800 × 1000 positions each: either fits alone, both do not.
+        mergedCells: ["A1:ALL800"],
+      })),
+      sheetNames: ["A", "B"],
+    })
+    await expect(
+      processDocumentAsync("wide", "wide.xlsx", new ArrayBuffer(8))
+    ).rejects.toMatchObject({ name: "DocumentLimitError", scope: "expanded-cells" })
+  })
+
+  it("locates a Word document's tables in its text", async () => {
+    jest.mocked(parseWord).mockResolvedValueOnce({
+      text: "Results\n\nName\n\nScore\n\nAda\n\n9",
+      html: "",
+      messages: [],
+      images: [],
+      headings: [],
+      tables: [
+        {
+          index: 1,
+          rowCount: 2,
+          columnCount: 2,
+          headerRowCount: 1,
+          cells: [
+            { row: 0, column: 0, rowSpan: 1, columnSpan: 1, text: "Name", header: true },
+            { row: 0, column: 1, rowSpan: 1, columnSpan: 1, text: "Score", header: true },
+            { row: 1, column: 0, rowSpan: 1, columnSpan: 1, text: "Ada" },
+            { row: 1, column: 1, rowSpan: 1, columnSpan: 1, text: "9" },
+          ],
+        },
+      ],
+    })
+    const result = await processDocumentAsync("report", "report.docx", new ArrayBuffer(8))
+    const [table] = result.structure?.tables ?? []
+    expect(table.locator).toEqual({ type: "text", start: 9, end: 28 })
+    expect(result.content.slice(9, 28)).toBe("Name\n\nScore\n\nAda\n\n9")
+  })
+})

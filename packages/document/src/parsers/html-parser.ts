@@ -4,7 +4,9 @@
  */
 
 import type { CheerioAPI } from "cheerio"
+import { htmlTable, htmlTables, tableToMarkdown } from "../document-tables"
 import { getDocumentLogger } from "../runtime-adapters"
+import type { DocumentTable } from "../types"
 
 const log = getDocumentLogger()
 
@@ -19,7 +21,7 @@ export interface HTMLParseResult {
   links: HTMLLink[]
   images: HTMLImage[]
   metadata: HTMLMetadata
-  tables: HTMLTable[]
+  tables: DocumentTable[]
 }
 
 export interface HTMLHeading {
@@ -47,12 +49,6 @@ export interface HTMLMetadata {
   ogTitle?: string
   ogDescription?: string
   ogImage?: string
-}
-
-export interface HTMLTable {
-  headers: string[]
-  rows: string[][]
-  caption?: string
 }
 
 export interface HTMLParseOptions {
@@ -97,8 +93,8 @@ export async function parseHTML(
   // Extract images
   const images = opts.includeImages ? extractImages($, opts.baseUrl) : []
 
-  // Extract tables
-  const tables = opts.includeTables ? extractTables($) : []
+  // Tables as typed grids, merged cells at their real columns.
+  const tables = opts.includeTables ? htmlTables($) : []
 
   // Extract main text content
   const text = extractText($, title, headings, tables)
@@ -257,53 +253,13 @@ function extractImages($: CheerioAPI, baseUrl?: string): HTMLImage[] {
 }
 
 /**
- * Extract tables from HTML
- */
-function extractTables($: CheerioAPI): HTMLTable[] {
-  const tables: HTMLTable[] = []
-
-  $("table").each((_, tableEl) => {
-    const $table = $(tableEl)
-    const caption = $table.find("caption").text().trim() || undefined
-
-    // Extract headers
-    const headers: string[] = []
-    $table.find("thead th, thead td, tr:first-child th").each((_, th) => {
-      headers.push($(th).text().trim())
-    })
-
-    // Extract rows
-    const rows: string[][] = []
-    const rowSelector = headers.length > 0 ? "tbody tr, tr:not(:first-child)" : "tr"
-
-    $table.find(rowSelector).each((_, tr) => {
-      const row: string[] = []
-      $(tr)
-        .find("td, th")
-        .each((_, cell) => {
-          row.push($(cell).text().trim())
-        })
-      if (row.length > 0) {
-        rows.push(row)
-      }
-    })
-
-    if (headers.length > 0 || rows.length > 0) {
-      tables.push({ headers, rows, caption })
-    }
-  })
-
-  return tables
-}
-
-/**
  * Extract plain text from HTML
  */
 function extractText(
   $: CheerioAPI,
   title?: string,
   headings?: HTMLHeading[],
-  tables?: HTMLTable[]
+  tables?: DocumentTable[]
 ): string {
   const parts: string[] = []
 
@@ -333,18 +289,14 @@ function extractText(
     parts.push(textContent)
   }
 
-  // Add table summaries
+  // The tables row by row: the body text above runs their cells together,
+  // which loses which value belongs to which row and column.
   if (tables && tables.length > 0) {
     parts.push("")
     parts.push("## Tables")
     for (const table of tables) {
-      if (table.caption) {
-        parts.push(`### ${table.caption}`)
-      }
-      if (table.headers.length > 0) {
-        parts.push(`Columns: ${table.headers.join(", ")}`)
-      }
-      parts.push(`Rows: ${table.rows.length}`)
+      const { markdown } = tableToMarkdown(table)
+      if (markdown) parts.push("", markdown)
     }
   }
 
@@ -417,6 +369,14 @@ export async function htmlToMarkdown(content: string): Promise<string> {
     const src = $(el).attr("src") || $(el).attr("data-src") || ""
     $(el).replaceWith(src ? `![${alt}](${src})` : "")
   })
+  // Tables as GFM pipe tables. Their cells used to run together into one line
+  // of text, and a merged cell shifted every value after it a column left.
+  // Innermost first, so a table inside a cell becomes that cell's text; the
+  // Markdown goes in as text, never parsed back as markup.
+  for (const element of $("table").toArray().reverse()) {
+    const { markdown } = tableToMarkdown(htmlTable($, $(element), 0))
+    $(element).replaceWith($("<div></div>").text(`\n\n${markdown}\n\n`))
+  }
   // Line breaks.
   $("br").each((_, el) => {
     $(el).replaceWith("\n")

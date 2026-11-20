@@ -132,7 +132,18 @@ describe("parse-summary normalization adapters", () => {
         links: [{ text: "Link", href: "http://example.com", isExternal: true }],
         images: [{ src: "img.png", alt: "Image" }],
         metadata: {},
-        tables: [{ headers: ["A"], rows: [["1"]] }],
+        tables: [
+          {
+            index: 1,
+            rowCount: 2,
+            columnCount: 1,
+            headerRowCount: 1,
+            cells: [
+              { row: 0, column: 0, rowSpan: 1, columnSpan: 1, text: "A", header: true },
+              { row: 1, column: 0, rowSpan: 1, columnSpan: 1, text: "1" },
+            ],
+          },
+        ],
       })
 
       expect(result.parser).toBe("html")

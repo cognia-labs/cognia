@@ -57,6 +57,50 @@ beforeEach(() => {
 
 describe("Office Parser", () => {
   describe("parseWord", () => {
+    it("keeps the merged cells mammoth writes as typed tables (G3)", async () => {
+      // mammoth 1.13 writes w:gridSpan / w:vMerge as colspan / rowspan and
+      // header rows as <thead> (lib/document-to-html.js).
+      mammothMock.convertToHtml.mockResolvedValue({
+        value:
+          "<table><thead><tr><th>Item</th><th>Cost</th></tr></thead>" +
+          '<tr><td rowspan="2"><p>Travel</p></td><td><p>10</p></td></tr><tr><td><p>20</p></td></tr></table>',
+        messages: [],
+      })
+      mammothMock.extractRawText.mockResolvedValue({ value: "Item\n\nCost\n\nTravel\n\n10\n\n20" })
+      const zip = new JSZip()
+      zip.file("word/document.xml", "<w:document/>")
+      const docx = await zip.generateAsync({ type: "arraybuffer" })
+
+      const result = await parseWord(docx, { extractMetadata: false })
+
+      expect(result.tables).toEqual([
+        {
+          index: 1,
+          rowCount: 3,
+          columnCount: 2,
+          headerRowCount: 1,
+          cells: [
+            { row: 0, column: 0, rowSpan: 1, columnSpan: 1, text: "Item", header: true },
+            { row: 0, column: 1, rowSpan: 1, columnSpan: 1, text: "Cost", header: true },
+            { row: 1, column: 0, rowSpan: 2, columnSpan: 1, text: "Travel" },
+            { row: 1, column: 1, rowSpan: 1, columnSpan: 1, text: "10" },
+            { row: 2, column: 1, rowSpan: 1, columnSpan: 1, text: "20" },
+          ],
+        },
+      ])
+    })
+
+    it("gives a document without tables no tables field", async () => {
+      mammothMock.convertToHtml.mockResolvedValue({ value: "<p>Body</p>", messages: [] })
+      mammothMock.extractRawText.mockResolvedValue({ value: "Body" })
+      const zip = new JSZip()
+      zip.file("word/document.xml", "<w:document/>")
+      const result = await parseWord(await zip.generateAsync({ type: "arraybuffer" }), {
+        extractMetadata: false,
+      })
+      expect(result).not.toHaveProperty("tables")
+    })
+
     it("extracts raw text, html headings, messages, images, style options, and docx metadata", async () => {
       const metadataXml = `
         <cp:coreProperties>

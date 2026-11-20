@@ -25,13 +25,20 @@ import {
   normalizeHTMLSummary,
 } from "./parse-summary"
 import { buildDocumentStructure } from "./document-structure"
+import { delimitedTable, sheetTable, tableToMarkdown } from "./document-tables"
 import { mapWordMessages, attachDiagnosticToError } from "./parse-diagnostics"
-import { DocumentLimitError, inputByteLength } from "./limits"
+import {
+  DEFAULT_DOCUMENT_LIMITS,
+  DocumentBudget,
+  DocumentLimitError,
+  inputByteLength,
+} from "./limits"
 
 export type { DocumentType, DocumentMetadata, ProcessedDocument } from "./types"
 import type {
   DocumentType,
   DocumentMetadata,
+  DocumentTable,
   ProcessedDocument,
   ParseSummary,
   ParseDiagnostic,
@@ -287,6 +294,29 @@ export function processDocument(
   }
 
   return result
+}
+
+/**
+ * The parse result's tables as typed grids: a spreadsheet's sheets, a
+ * delimited file's rows, and the tables an HTML or Word document holds.
+ */
+function typedTables(
+  type: DocumentType,
+  parseResult: ProcessedDocument["parseResult"]
+): DocumentTable[] {
+  if (!parseResult) return []
+  if ("sheets" in parseResult) {
+    // One budget for the workbook, as its parse had: merges can widen a
+    // sheet's grid past its stored cells.
+    const budget = new DocumentBudget("expanded-cells", DEFAULT_DOCUMENT_LIMITS.maxExpandedCells)
+    return parseResult.sheets.map((sheet, index) => sheetTable(sheet, index + 1, budget))
+  }
+  if (type === "csv" && "headers" in parseResult && "delimiter" in parseResult) {
+    return [delimitedTable(parseResult.headers, parseResult.data, 1)]
+  }
+  if (type === "html" && "tables" in parseResult) return parseResult.tables ?? []
+  if (type === "word" && "tables" in parseResult) return parseResult.tables ?? []
+  return []
 }
 
 /**
@@ -677,6 +707,23 @@ export async function processDocumentAsync(
     metadata = { ...metadata, parseSummary }
   }
 
+  const tables = typedTables(type, parseResult)
+  if (type === "html") {
+    // The text is Markdown, which has no merged cells: say how many values it
+    // repeats into the positions their merges cover.
+    const repeated = tables.reduce((sum, table) => sum + tableToMarkdown(table).repeatedCells, 0)
+    if (repeated > 0) {
+      parseDiagnostics = [
+        ...parseDiagnostics,
+        {
+          code: "table_merges_projected",
+          severity: "info",
+          message: `${repeated} merged table cell position(s) repeat their merged value in the text, which has no merged cells; the document's table structure keeps the merges.`,
+        },
+      ]
+    }
+  }
+
   const result: ProcessedDocument = {
     id,
     filename,
@@ -693,6 +740,7 @@ export async function processDocumentAsync(
       ...(parseResult && "pages" in parseResult
         ? { pdf: parseResult }
         : { markdown: parseMarkdown(content) }),
+      tables,
     }),
   }
 

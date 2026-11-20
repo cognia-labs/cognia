@@ -1,8 +1,10 @@
 /** Canonical navigation ranges reuse parser output rather than embedding projections. */
+import { locateTables } from "./document-tables"
 import type {
   DocumentPageRange,
   DocumentSection,
   DocumentStructure,
+  DocumentTable,
   MarkdownParseResult,
   PDFParseResult,
   PDFOutlineItem,
@@ -22,6 +24,8 @@ export function buildDocumentStructure(input: {
   markdown?: MarkdownParseResult
   pdf?: PDFParseResult
   pages?: DocumentPageRange[]
+  /** Typed tables; one without a locator is located in `content` by its cells. */
+  tables?: readonly DocumentTable[]
 }): DocumentStructure {
   const { content } = input
   const lineOffsets = [0]
@@ -133,6 +137,7 @@ export function buildDocumentStructure(input: {
     textLength: content.length,
     nodes,
     pages,
+    ...(input.tables?.length ? { tables: locateTables(content, input.tables) } : {}),
   }
 }
 

@@ -3,6 +3,14 @@
  * Supports Markdown, HTML, and message content
  */
 
+import {
+  placeTableRows,
+  tableGrid,
+  type SourceRowGroup,
+  type SourceTableCell,
+} from "./document-tables"
+import { DocumentLimitError } from "./limits"
+
 // TableData is inlined here (mirrors `lib/export/document/excel-export.ts`
 // in Cognia). cognia-next does not yet host the Excel export module, so we
 // keep the structural contract local — `extractedTableToTableData` is the
@@ -175,65 +183,85 @@ export function extractHTMLTables(content: string): ExtractedTable[] {
 }
 
 /**
- * Parse HTML table string into ExtractedTable
+ * Parse HTML table string into ExtractedTable. The cells go on the grid the
+ * way the HTML table model places them (`placeTableRows`), so a `colspan` or
+ * `rowspan` no longer shifts every later value a column left; a merged value
+ * is repeated into the positions it covers. The first row is the headers.
  */
 function parseHTMLTable(html: string, startIndex: number, endIndex: number): ExtractedTable | null {
-  const headers: string[] = []
-  const rows: string[][] = []
-
-  // Extract headers from <th> tags
-  const thRegex = /<th[^>]*>([\s\S]*?)<\/th>/gi
-  let thMatch
-  while ((thMatch = thRegex.exec(html)) !== null) {
-    headers.push(stripHtmlTags(thMatch[1]).trim())
+  let placed: ReturnType<typeof placeTableRows>
+  try {
+    placed = placeTableRows(htmlRowGroups(html))
+  } catch (error) {
+    // A table whose spans would lay out a grid past the cell budget is left
+    // out rather than built.
+    if (error instanceof DocumentLimitError) return null
+    throw error
   }
-
-  // Extract rows from <tr> tags
-  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
-  let trMatch
-  let isFirstRow = true
-
-  while ((trMatch = trRegex.exec(html)) !== null) {
-    const rowHtml = trMatch[1]
-
-    // Check if this row contains <th> (header row)
-    if (/<th[^>]*>/i.test(rowHtml)) {
-      // Already extracted headers above
-      continue
-    }
-
-    // Extract cells from <td> tags
-    const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi
-    const row: string[] = []
-    let tdMatch
-
-    while ((tdMatch = tdRegex.exec(rowHtml)) !== null) {
-      row.push(stripHtmlTags(tdMatch[1]).trim())
-    }
-
-    if (row.length > 0) {
-      // If no headers found and this is first data row, use as headers
-      if (headers.length === 0 && isFirstRow) {
-        headers.push(...row)
-        isFirstRow = false
-        continue
-      }
-      rows.push(row)
-    }
-    isFirstRow = false
-  }
-
-  if (headers.length === 0 && rows.length === 0) {
-    return null
-  }
-
+  if (placed.rowCount === 0 || placed.columnCount === 0) return null
+  const { grid } = tableGrid({ index: 0, ...placed })
   return {
-    headers,
-    rows,
+    headers: grid[0],
+    rows: grid.slice(1),
     sourceType: "html",
     startIndex,
     endIndex,
   }
+}
+
+/** A table's rows by section: `<thead>`, each body and loose rows in order, `<tfoot>` last. */
+function htmlRowGroups(html: string): SourceRowGroup[] {
+  const inner = html.replace(/^<table\b[^>]*>/i, "").replace(/<\/table>$/i, "")
+  const groups: SourceRowGroup[] = []
+  const footer: SourceTableCell[][] = []
+  const addLoose = (markup: string) => {
+    const rows = htmlRows(markup)
+    if (rows.length > 0) groups.push({ header: false, rows })
+  }
+  const sectionRegex = /<(thead|tbody|tfoot)\b[^>]*>([\s\S]*?)<\/\1>/gi
+  let last = 0
+  let match
+  while ((match = sectionRegex.exec(inner)) !== null) {
+    addLoose(inner.slice(last, match.index))
+    const rows = htmlRows(match[2])
+    const section = match[1].toLowerCase()
+    if (section === "tfoot") footer.push(...rows)
+    else groups.push({ header: section === "thead", rows })
+    last = match.index + match[0].length
+  }
+  addLoose(inner.slice(last))
+  if (footer.length > 0) groups.push({ header: false, rows: footer })
+  return groups
+}
+
+/** The `<tr>` rows in `markup`, each its `<td>` / `<th>` cells with their span attributes. */
+function htmlRows(markup: string): SourceTableCell[][] {
+  const rows: SourceTableCell[][] = []
+  const trRegex = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi
+  let trMatch
+  while ((trMatch = trRegex.exec(markup)) !== null) {
+    const cells: SourceTableCell[] = []
+    const cellRegex = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi
+    let cellMatch
+    while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
+      cells.push({
+        text: stripHtmlTags(cellMatch[3]).trim(),
+        colspan: htmlAttribute(cellMatch[2], "colspan"),
+        rowspan: htmlAttribute(cellMatch[2], "rowspan"),
+        header: cellMatch[1].toLowerCase() === "th",
+      })
+    }
+    rows.push(cells)
+  }
+  return rows
+}
+
+/** One attribute's value from a tag's attribute text, quoted or not. */
+function htmlAttribute(attributes: string, name: "colspan" | "rowspan"): string | undefined {
+  const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(
+    attributes
+  )
+  return match ? (match[1] ?? match[2] ?? match[3]) : undefined
 }
 
 /**

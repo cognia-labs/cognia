@@ -27,6 +27,19 @@ of any binary source fingerprint. Section IDs derive from parent/title paths
 and repeated-heading occurrences, so body-only edits retain section identity.
 Optional summaries are navigation aids; readers answer from original slices.
 
+`structure.tables` holds a document's tables as typed grids
+(`DocumentTable`): each cell is anchored at its top-left row and column with
+its `rowSpan` / `columnSpan`, its text, whether it heads the table and, from a
+spreadsheet, the value it stores. HTML and DOCX tables (mammoth's
+`colspan` / `rowspan` / `<thead>`) are placed by the HTML table model, so a
+merged cell no longer shifts the cells after it. ODT text tables, XLSX / ODS
+sheets (merges as spans, located by sheet range) and CSV files are read the
+same way. Markdown and plain text are projections: Markdown has no merged
+cells, so `tableToMarkdown` repeats a merged value into the positions it
+covers and the processor reports `table_merges_projected`. Each grid,
+including the positions no cell covers, counts against `maxExpandedCells`.
+Slide tables (PPTX / ODP) and PDF / OCR tables are not typed yet.
+
 `buildTextDocumentStructure` backfills text documents through the existing
 Markdown parser. PDF processing extracts bookmarks by default (override with
 `extractPdfOutline: false`) while retaining native spatial extraction where

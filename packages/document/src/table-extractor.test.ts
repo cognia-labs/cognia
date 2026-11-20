@@ -120,6 +120,40 @@ describe("extractHTMLTables", () => {
     const tables = extractHTMLTables("No tables here")
     expect(tables).toHaveLength(0)
   })
+
+  it("keeps values under their columns past merged cells (G3)", () => {
+    const content = `<table>
+      <thead><tr><th rowspan='2'>Region</th><th colspan=2>Q1</th></tr>
+      <tr><th>Jan</th><th>Feb</th></tr></thead>
+      <tbody><tr><td rowspan="2">North</td><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></tbody>
+      <tfoot><tr><td colspan="3">Total</td></tr></tfoot>
+    </table>`
+    const [table] = extractHTMLTables(content)
+    expect(table.headers).toEqual(["Region", "Q1", "Q1"])
+    expect(table.rows).toEqual([
+      ["Region", "Jan", "Feb"],
+      ["North", "1", "2"],
+      // Read in order, 3 used to land under Region.
+      ["North", "3", "4"],
+      ["Total", "Total", "Total"],
+    ])
+  })
+
+  it("does not read <thead> as a header cell, and keeps the footer last", () => {
+    const [table] = extractHTMLTables(
+      "<table><tfoot><tr><td>sum</td></tr></tfoot><thead><tr><th>h</th></tr></thead><tr><td>v</td></tr></table>"
+    )
+    expect(table.headers).toEqual(["h"])
+    expect(table.rows).toEqual([["v"], ["sum"]])
+  })
+
+  it("leaves out a table whose spans would lay out past the cell budget, and an empty one", () => {
+    const rows = Array.from({ length: 1100 }, () => "<tr><td>x</td></tr>").join("")
+    expect(
+      extractHTMLTables(`<table><tr><td colspan="1000">wide</td></tr>${rows}</table>`)
+    ).toEqual([])
+    expect(extractHTMLTables("<table><tr></tr></table>")).toEqual([])
+  })
 })
 
 describe("hasTable", () => {
