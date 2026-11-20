@@ -15,27 +15,15 @@
  *   recover from a Recharts tree.
  */
 
-import { getArtifactRuntimeAdapter } from "@/components/artifacts/runtime-adapters"
 import { generatePdf } from "@/lib/files/document-writer"
 import { readAsDataUrl, renderArtifactToPngBlob, type RasteriseOptions } from "./raster"
-import { artifactPdfBlocks } from "./document-blocks"
+import { artifactPdfBlocks, pdfNeedsMountedPreview } from "./document-blocks"
 import type { Artifact } from "@/types"
 
 /** A4 at 72dpi in points, matching `document-writer`'s jsPDF unit. */
 const A4_WIDTH_PT = 595.28
 const A4_HEIGHT_PT = 841.89
 const PAGE_MARGIN_PT = 36
-
-/** Artifact types whose PDF is laid-out text rather than a picture. */
-const TEXT_PDF_TYPES = new Set(["document", "code", "jupyter"])
-
-/** Text-layout PDFs read the source directly, without a mounted preview. */
-export function pdfNeedsMountedPreview(artifact: Pick<Artifact, "type">): boolean {
-  return (
-    !TEXT_PDF_TYPES.has(artifact.type) &&
-    getArtifactRuntimeAdapter(artifact.type).transport !== "jupyter"
-  )
-}
 
 function loadImageSize(dataUrl: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {

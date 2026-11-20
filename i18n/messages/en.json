@@ -7634,9 +7634,14 @@
       "formatPng": "PNG image",
       "formatRaw": "Download source",
       "formatSvg": "Download as SVG",
+      "formatUnavailable": "This document can't be exported in that format.",
       "label": "Export document",
+      "pdfFontUnavailable": "The PDF font couldn't be loaded, so this text can't be laid out. Try again, or export another format.",
       "renderFailed": "Couldn't render the document",
-      "saveAsTemplate": "Save as template…"
+      "renderNeedsPreview": "Couldn't render the document. Open the preview, check that it renders, then export again.",
+      "saveAsTemplate": "Save as template…",
+      "saveFailed": "Couldn't save {filename}. Try again, or choose a location you can write to.",
+      "unsupportedCharacters": "This PDF can't include some of the document's characters ({characters}): its fonts have no glyphs for them. Export another format instead."
     },
     "filtered": "filtered",
     "filteredSuffix": "(filtered)",

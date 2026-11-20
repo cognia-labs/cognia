@@ -40,6 +40,20 @@ export function supportsWordExport(artifact: Pick<Artifact, "type">): boolean {
   return WORD_EXPORT_TYPES.has(artifact.type)
 }
 
+/** Artifact types whose PDF is laid-out text rather than a picture. */
+const TEXT_PDF_TYPES: ReadonlySet<ArtifactType> = new Set(["document", "code", "jupyter"])
+
+/**
+ * Whether this artifact's PDF is a picture of its mounted preview. A
+ * text-layout PDF (document, code, notebook) reads the source directly.
+ */
+export function pdfNeedsMountedPreview(artifact: Pick<Artifact, "type">): boolean {
+  return (
+    !TEXT_PDF_TYPES.has(artifact.type) &&
+    getArtifactRuntimeAdapter(artifact.type).transport !== "jupyter"
+  )
+}
+
 function sourceBlocks(artifact: Pick<Artifact, "type" | "content">): DocBlock[] {
   return artifact.type === "code"
     ? [{ kind: "code", text: artifact.content }]

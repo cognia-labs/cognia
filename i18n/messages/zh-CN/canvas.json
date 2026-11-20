@@ -175,9 +175,14 @@
     "formatPng": "PNG 图片",
     "formatRaw": "下载源文件",
     "formatSvg": "下载为 SVG",
+    "formatUnavailable": "此文档无法导出为该格式。",
     "label": "导出文档",
+    "pdfFontUnavailable": "PDF 字体加载失败，无法排版这段文字。请重试，或导出为其他格式。",
     "renderFailed": "无法渲染该文档",
-    "saveAsTemplate": "另存为模板…"
+    "renderNeedsPreview": "无法渲染文档。请打开预览，确认能正常显示后再导出。",
+    "saveAsTemplate": "另存为模板…",
+    "saveFailed": "无法保存 {filename}。请重试，或选择一个可写入的位置。",
+    "unsupportedCharacters": "这个 PDF 无法包含文档中的部分字符（{characters}）：字体里没有这些字形。请改用其他格式导出。"
   },
   "filtered": "已过滤",
   "filteredSuffix": "（已筛选）",

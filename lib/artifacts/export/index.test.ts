@@ -31,6 +31,7 @@ import {
   describeArtifactExportFailure,
   exportArtifact,
   exportArtifactAsWord,
+  exportNeedsMountedPreview,
   renderArtifactExport,
   renderArtifactWordExport,
 } from "./index"
@@ -214,5 +215,21 @@ describe("describeArtifactExportFailure", () => {
     expect(describeArtifactExportFailure(error, { neededPreview: false })).toEqual({
       reason: "failed",
     })
+  })
+})
+
+describe("exportNeedsMountedPreview", () => {
+  it("captures the preview for every PNG and for a picture PDF", () => {
+    expect(exportNeedsMountedPreview({ type: "mermaid" }, "png")).toBe(true)
+    expect(exportNeedsMountedPreview({ type: "mermaid" }, "pdf")).toBe(true)
+    expect(exportNeedsMountedPreview({ type: "chart" }, "pdf")).toBe(true)
+  })
+
+  it("reads the source for a text-layout PDF and for source formats", () => {
+    expect(exportNeedsMountedPreview({ type: "code" }, "pdf")).toBe(false)
+    expect(exportNeedsMountedPreview({ type: "document" }, "pdf")).toBe(false)
+    expect(exportNeedsMountedPreview({ type: "jupyter" }, "pdf")).toBe(false)
+    expect(exportNeedsMountedPreview({ type: "mermaid" }, "raw")).toBe(false)
+    expect(exportNeedsMountedPreview({ type: "svg" }, "svg")).toBe(false)
   })
 })

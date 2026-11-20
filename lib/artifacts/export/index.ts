@@ -24,6 +24,7 @@ import { PdfFontUnavailableError } from "@/lib/files/document-writer/unicode-fon
 import {
   ArtifactNotebookUnreadableError,
   artifactWordBlocks,
+  pdfNeedsMountedPreview,
   supportsWordExport,
 } from "./document-blocks"
 import type { Artifact, ArtifactExportFormat } from "@/types"
@@ -33,7 +34,11 @@ export {
   ArtifactPreviewNotMountedError,
   ArtifactTooLargeToRasteriseError,
 } from "./raster"
-export { ArtifactNotebookUnreadableError, supportsWordExport } from "./document-blocks"
+export {
+  ArtifactNotebookUnreadableError,
+  pdfNeedsMountedPreview,
+  supportsWordExport,
+} from "./document-blocks"
 export { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
 export { PdfFontUnavailableError } from "@/lib/files/document-writer/unicode-font"
 
@@ -43,6 +48,19 @@ export class UnsupportedArtifactExportError extends Error {
     super(`artifact type ${type} cannot be exported as ${format}`)
     this.name = "UnsupportedArtifactExportError"
   }
+}
+
+/**
+ * Whether exporting `artifact` as `format` captures its mounted preview: a PNG
+ * always renders the preview (an SVG draws its source, but through the same
+ * renderer), and a PDF does unless it is laid-out text. A failure of such an
+ * export is explained as "check the preview".
+ */
+export function exportNeedsMountedPreview(
+  artifact: Pick<Artifact, "type">,
+  format: ArtifactExportFormat
+): boolean {
+  return format === "png" || (format === "pdf" && pdfNeedsMountedPreview(artifact))
 }
 
 const MIME_BY_FORMAT: Record<ArtifactExportFormat, string> = {

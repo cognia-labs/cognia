@@ -2,10 +2,11 @@
 
 /**
  * Canvas Export Menu — download / copy the active document. The available file
- * formats are gated by the Artifacts export contract
- * (`getCanvasExportFormats`), so previewable documents can additionally export
- * as HTML / SVG while plain code exports its raw source. Serialization + the
- * download/clipboard side effects live in `lib/canvas/document-export.ts`.
+ * formats come from the same resolver that runs the export
+ * (`getCanvasExportFormats` / `exportCanvasDocument`), so every entry can be
+ * carried out: previewable documents add HTML / SVG / PNG, and plain code
+ * exports its source or a text PDF of it. Serialization and saving live in
+ * `lib/canvas/document-export.ts`, feedback in `useCanvasDocumentExport`.
  *
  * "Save as template…" (ADR-0223, while the template platform is on) keeps the
  * document's current text as a document template Files can start from.
@@ -38,11 +39,8 @@ import {
 } from "@/components/document-templates/save-document-template-dialog"
 import { isUnifiedTemplatePlatformEnabled } from "@/lib/templates/feature-flags"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
-import {
-  copyCanvasDocumentToClipboard,
-  exportCanvasDocument,
-  getCanvasExportFormats,
-} from "@/lib/canvas/document-export"
+import { copyCanvasDocumentToClipboard, getCanvasExportFormats } from "@/lib/canvas/document-export"
+import { useCanvasDocumentExport } from "@/hooks/canvas/use-canvas-document-export"
 import type { ArtifactExportFormat, CanvasDocument } from "@/types/artifact/artifact"
 
 interface CanvasExportMenuProps {
@@ -72,14 +70,9 @@ export function CanvasExportMenu({ documentId, className }: CanvasExportMenuProp
   const [saveRequest, setSaveRequest] = useState<SaveDocumentTemplateRequest | null>(null)
   const templatesEnabled = isUnifiedTemplatePlatformEnabled()
 
-  // `png` / `pdf` render before they save, so this is async now. A `null`
-  // filename means "unsupported, failed, or the user cancelled the save
-  // dialog" — none of which is a success worth a toast.
-  const handleExport = async (target: CanvasDocument, format: ArtifactExportFormat) => {
-    const filename = await exportCanvasDocument(target, format)
-    if (filename) toast.success(t("downloaded", { filename }))
-    else if (format === "png" || format === "pdf") toast.error(t("renderFailed"))
-  }
+  // Says what happened: saved, a render or save failure with its cause, or
+  // nothing for a dismissed save dialog.
+  const exportDocument = useCanvasDocumentExport()
 
   const handleCopy = async (target: CanvasDocument) => {
     const ok = await copyCanvasDocumentToClipboard(target)
@@ -114,7 +107,7 @@ export function CanvasExportMenu({ documentId, className }: CanvasExportMenuProp
                 const meta = FORMAT_META[format]
                 const Icon = meta.icon
                 return (
-                  <DropdownMenuItem key={format} onClick={() => void handleExport(doc, format)}>
+                  <DropdownMenuItem key={format} onClick={() => void exportDocument(doc, format)}>
                     <Icon className="mr-2 size-3.5" />
                     {t(meta.labelKey)}
                   </DropdownMenuItem>

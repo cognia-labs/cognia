@@ -99,15 +99,6 @@ export function getFileExtension(language: string): string {
 }
 
 /**
- * Generate a safe filename from title
- */
-export function generateSafeFilename(title: string, language: string): string {
-  const safeName = title.replace(/[^a-zA-Z0-9]/g, "_")
-  const ext = getFileExtension(language)
-  return `${safeName}.${ext}`
-}
-
-/**
  * Calculate document statistics
  */
 export function calculateDocumentStats(content: string): {
@@ -215,23 +206,6 @@ export function truncateText(text: string, maxLength: number): string {
  */
 export function isDesignerCompatible(language: string): boolean {
   return ["jsx", "tsx", "html", "javascript", "typescript"].includes(language)
-}
-
-/**
- * Export a canvas document as a file download
- */
-export function exportCanvasDocument(title: string, content: string, language: string): void {
-  const ext = getFileExtension(language)
-  const filename = `${title.replace(/[^a-zA-Z0-9]/g, "_")}.${ext}`
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
 }
 
 /**

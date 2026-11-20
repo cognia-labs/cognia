@@ -13,10 +13,21 @@ import {
   HOVER_REVEAL_FORBIDDEN_CLASSES,
   HOVER_REVEAL_REQUIRED_VARIANTS,
 } from "@/lib/ui/hover-reveal"
+import { toast } from "sonner"
+import { exportCanvasDocument } from "@/lib/canvas/document-export"
 import { CanvasDocumentRail } from "./canvas-document-rail"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useCanvasLayoutStore } from "@/stores/canvas/canvas-layout-store"
 import { useProjectStore } from "@/stores/project/project-store"
+
+jest.mock("@/lib/canvas/document-export", () => ({
+  ...jest.requireActual("@/lib/canvas/document-export"),
+  exportCanvasDocument: jest.fn(),
+}))
+jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
+
+const exportMock = exportCanvasDocument as jest.Mock
+const toastMock = toast as unknown as { success: jest.Mock; error: jest.Mock }
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(<TooltipProvider>{ui}</TooltipProvider>)
@@ -132,6 +143,39 @@ describe("CanvasDocumentRail", () => {
     })
     await user.click(screen.getByText("Alpha"))
     expect(useArtifactStore.getState().activeCanvasId).toBe(docId)
+  })
+
+  it("exports a document's source from its context menu and says how it went (F10)", async () => {
+    let docId = ""
+    act(() => {
+      docId = useArtifactStore.getState().createCanvasDocument({
+        createdBy: "user",
+        title: "Alpha",
+        content: "x = 1",
+        language: "python",
+        type: "code",
+      })
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<CanvasDocumentRail />)
+
+    // A failed write used to pass without a word from the rail.
+    exportMock.mockResolvedValueOnce({
+      kind: "save-error",
+      filename: "Alpha.py",
+      message: "EACCES",
+    })
+    fireEvent.contextMenu(screen.getByText("Alpha"))
+    await user.click(await screen.findByRole("menuitem", { name: /export/i }))
+    expect(exportMock).toHaveBeenCalledWith(expect.objectContaining({ id: docId }), "raw")
+    expect(toastMock.error).toHaveBeenCalledWith(
+      "Couldn't save Alpha.py. Try again, or choose a location you can write to."
+    )
+
+    exportMock.mockResolvedValueOnce({ kind: "saved", filename: "Alpha.py", location: "/x" })
+    fireEvent.contextMenu(screen.getByText("Alpha"))
+    await user.click(await screen.findByRole("menuitem", { name: /export/i }))
+    expect(toastMock.success).toHaveBeenCalledWith("Downloaded Alpha.py")
   })
 
   it("removes the document when the delete control is clicked", async () => {

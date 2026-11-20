@@ -11,13 +11,11 @@ import {
   MONACO_LANGUAGE_MAP,
   getMonacoLanguage,
   getFileExtension,
-  generateSafeFilename,
   calculateDocumentStats,
   getCanvasPerformanceProfile,
   isLargeDocument,
   truncateText,
   isDesignerCompatible,
-  exportCanvasDocument,
   getConnectionStatusColor,
   CANVAS_LARGE_DOCUMENT_THRESHOLDS,
 } from "./utils"
@@ -150,18 +148,6 @@ describe("Canvas Utils", () => {
     })
   })
 
-  describe("generateSafeFilename", () => {
-    it("should generate safe filename with correct extension", () => {
-      expect(generateSafeFilename("My File", "javascript")).toBe("My_File.js")
-      expect(generateSafeFilename("test.py", "python")).toBe("test_py.py")
-    })
-
-    it("should replace special characters with underscores", () => {
-      expect(generateSafeFilename("Hello World!", "typescript")).toBe("Hello_World_.ts")
-      expect(generateSafeFilename("test@file#1", "javascript")).toBe("test_file_1.js")
-    })
-  })
-
   describe("calculateDocumentStats", () => {
     it("should return zeros for empty content", () => {
       const stats = calculateDocumentStats("")
@@ -272,41 +258,6 @@ describe("Canvas Utils", () => {
       expect(isDesignerCompatible("json")).toBe(false)
       expect(isDesignerCompatible("markdown")).toBe(false)
       expect(isDesignerCompatible("")).toBe(false)
-    })
-  })
-
-  describe("exportCanvasDocument", () => {
-    it("should create a download link and trigger click", () => {
-      const createObjectURL = jest.fn(() => "blob:test")
-      const revokeObjectURL = jest.fn()
-      const clickSpy = jest.fn()
-      const appendChildSpy = jest
-        .spyOn(document.body, "appendChild")
-        .mockImplementation((node) => node)
-      const removeChildSpy = jest
-        .spyOn(document.body, "removeChild")
-        .mockImplementation((node) => node)
-
-      Object.defineProperty(global, "URL", {
-        value: { createObjectURL, revokeObjectURL },
-        writable: true,
-      })
-
-      const mockAnchor = {
-        href: "",
-        download: "",
-        click: clickSpy,
-      } as unknown as HTMLAnchorElement
-      jest.spyOn(document, "createElement").mockReturnValueOnce(mockAnchor)
-
-      exportCanvasDocument("My Document", 'console.log("hi")', "javascript")
-
-      expect(mockAnchor.download).toBe("My_Document.js")
-      expect(clickSpy).toHaveBeenCalled()
-      expect(revokeObjectURL).toHaveBeenCalledWith("blob:test")
-
-      appendChildSpy.mockRestore()
-      removeChildSpy.mockRestore()
     })
   })
 

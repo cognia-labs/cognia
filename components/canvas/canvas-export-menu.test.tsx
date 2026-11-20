@@ -37,7 +37,11 @@ jest.mock("@/components/ui/tooltip", () => ({
 // Self-contained factories (no outer refs) to avoid the jest.mock hoisting TDZ.
 jest.mock("@/lib/canvas/document-export", () => ({
   getCanvasExportFormats: jest.fn(() => ["raw", "html"]),
-  exportCanvasDocument: jest.fn(async () => "Doc.md"),
+  exportCanvasDocument: jest.fn(async () => ({
+    kind: "saved",
+    filename: "Doc.md",
+    location: "/tmp/Doc.md",
+  })),
   copyCanvasDocumentToClipboard: jest.fn(async () => true),
 }))
 jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
@@ -147,30 +151,52 @@ describe("CanvasExportMenu", () => {
     expect(screen.getByText("PDF")).toBeInTheDocument()
   })
 
-  it("does not toast when the export produces no file", async () => {
-    const user = userEvent.setup()
-    mockExport.mockResolvedValueOnce(null)
-    const id = seedDoc()
-    render(<CanvasExportMenu documentId={id} />)
-    await user.click(screen.getByText("Download source"))
-    expect(mockToast.success).not.toHaveBeenCalled()
-  })
-
-  it("reports a failed render, which a cancelled text save must not do", async () => {
-    // `null` means unsupported / failed / cancelled. For a text format that is
-    // usually "the user closed the save dialog" — no error belongs there. For a
-    // rendered format it means the render itself did not produce a file.
+  it("stays quiet when the user dismisses the save dialog", async () => {
     const user = userEvent.setup()
     mockFormats.mockReturnValue(["raw", "png"])
-    mockExport.mockResolvedValue(null)
+    mockExport.mockResolvedValue({ kind: "cancelled" })
     const id = seedDoc()
     render(<CanvasExportMenu documentId={id} />)
 
     await user.click(screen.getByText("Download source"))
-    expect(mockToast.error).not.toHaveBeenCalled()
-
     await user.click(screen.getByText("PNG image"))
-    expect(mockToast.error).toHaveBeenCalledWith("Couldn't render the document")
+    expect(mockToast.success).not.toHaveBeenCalled()
+    expect(mockToast.error).not.toHaveBeenCalled()
+  })
+
+  it("tells a save failure apart from a render failure (F10)", async () => {
+    // A failed write used to read as nothing for raw and as "couldn't render"
+    // for PNG / PDF, whatever actually went wrong.
+    const user = userEvent.setup()
+    mockFormats.mockReturnValue(["raw", "png", "pdf"])
+    const id = seedDoc()
+    render(<CanvasExportMenu documentId={id} />)
+
+    mockExport.mockResolvedValueOnce({
+      kind: "save-error",
+      filename: "Doc.md",
+      message: "EACCES",
+    })
+    await user.click(screen.getByText("Download source"))
+    expect(mockToast.error).toHaveBeenLastCalledWith(
+      "Couldn't save Doc.md. Try again, or choose a location you can write to."
+    )
+
+    mockExport.mockResolvedValueOnce({ kind: "render-error", failure: { reason: "preview" } })
+    await user.click(screen.getByText("PNG image"))
+    expect(mockToast.error).toHaveBeenLastCalledWith(
+      "Couldn't render the document. Open the preview, check that it renders, then export again."
+    )
+
+    mockExport.mockResolvedValueOnce({
+      kind: "render-error",
+      failure: { reason: "unsupported-characters", characters: "😀" },
+    })
+    await user.click(screen.getByText("PDF"))
+    expect(mockToast.error).toHaveBeenLastCalledWith(
+      expect.stringContaining("can't include some of the document's characters (😀)")
+    )
+    expect(mockToast.success).not.toHaveBeenCalled()
   })
 
   it("saves the document's current text as a template", async () => {

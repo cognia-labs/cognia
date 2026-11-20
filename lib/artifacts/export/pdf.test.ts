@@ -34,8 +34,8 @@ jest.mock("jspdf", () => ({
   },
 }))
 
-import { pdfNeedsMountedPreview, renderArtifactToPdfBlob } from "./pdf"
-import { ArtifactNotebookUnreadableError } from "./document-blocks"
+import { renderArtifactToPdfBlob } from "./pdf"
+import { ArtifactNotebookUnreadableError, pdfNeedsMountedPreview } from "./document-blocks"
 import { ARTIFACT_RUNTIME_ADAPTERS } from "@/components/artifacts/runtime-adapters"
 
 // jsdom does not decode images; stand in for the natural-size read.

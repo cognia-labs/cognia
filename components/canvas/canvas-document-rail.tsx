@@ -65,8 +65,8 @@ import type { CanvasDocument } from "@/types/artifact/artifact"
 import { LANGUAGE_OPTIONS } from "@/lib/canvas/constants"
 import { getFileExtension } from "@/lib/canvas/utils"
 import { STAGGER_CHILD, STAGGER_CONTAINER } from "@/lib/ui/motion"
-import { toast } from "sonner"
-import { exportCanvasDocument, getCanvasExportFormats } from "@/lib/canvas/document-export"
+import { getCanvasExportFormats } from "@/lib/canvas/document-export"
+import { useCanvasDocumentExport } from "@/hooks/canvas/use-canvas-document-export"
 import { RenameDialog } from "./rename-dialog"
 import { CanvasDeleteDocumentDialog } from "./canvas-delete-document-dialog"
 import { CanvasNewDocumentDialog } from "./canvas-new-document-dialog"
@@ -115,7 +115,6 @@ function groupByTime(
 
 export function CanvasDocumentRail() {
   const t = useTranslations("canvas")
-  const tExport = useTranslations("canvas.exportMenu")
   const canvasDocuments = useArtifactStore((s) => s.canvasDocuments)
   // Workspace isolation: the rail lists only the ACTIVE workspace's documents.
   // Read reactively so switching workspace re-filters in the same commit rather
@@ -202,12 +201,12 @@ export function CanvasDocumentRail() {
    * hardcoded to Markdown, so a Python or SVG document downloaded as `.md`, a
    * title containing a path separator went straight into the filename
    * unsanitised, and the anchor silently no-ops inside a mobile WebView, which
-   * is the whole reason `saveExport` exists.
+   * is the whole reason `saveExport` exists. The rail exports the source, the
+   * first format every document offers; the outcome's feedback is the menu's.
    */
+  const exportDocument = useCanvasDocumentExport()
   const handleExport = async (doc: CanvasDocument) => {
-    const format = getCanvasExportFormats(doc)[0] ?? "raw"
-    const filename = await exportCanvasDocument(doc, format)
-    if (filename) toast.success(tExport("downloaded", { filename }))
+    await exportDocument(doc, getCanvasExportFormats(doc)[0] ?? "raw")
   }
 
   // The "+" opens the new-document dialog instead of minting an empty Markdown

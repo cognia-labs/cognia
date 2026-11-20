@@ -48,7 +48,6 @@ import { canPreview, resolveRegisteredArtifactRenderer } from "@/lib/artifacts"
 import { revealCanvasDocument } from "@/lib/artifacts/reveal"
 import { createArtifactTabDocument } from "@/lib/artifacts/open-in-new-tab"
 import { waitForArtifactPreview } from "@/lib/artifacts/capture"
-import { pdfNeedsMountedPreview } from "@/lib/artifacts/export/pdf"
 import {
   isArtifactPreviewRequested,
   onArtifactPreviewRequest,
@@ -64,6 +63,7 @@ import {
   describeArtifactExportFailure,
   exportArtifact,
   exportArtifactAsWord,
+  exportNeedsMountedPreview,
   renderArtifactExport,
   supportsWordExport,
 } from "@/lib/artifacts/export"
@@ -444,9 +444,7 @@ export function useArtifactPanelState() {
   /** Every format the active artifact's adapter actually offers. */
   const exportFormats = activeArtifact
     ? getArtifactExportFormats(activeArtifact, { pluginOwnsContent }).filter(
-        (format) =>
-          isPreviewable ||
-          (format !== "png" && (format !== "pdf" || !pdfNeedsMountedPreview(activeArtifact)))
+        (format) => isPreviewable || !exportNeedsMountedPreview(activeArtifact, format)
       )
     : []
 
@@ -482,8 +480,7 @@ export function useArtifactPanelState() {
   const handleExportAs = async (format: ArtifactExportFormat) => {
     // Only what the menu offers: a plugin-owned artifact exports `raw` alone.
     if (!activeArtifact || !exportFormats.includes(format)) return
-    const neededPreview =
-      format === "png" || (format === "pdf" && pdfNeedsMountedPreview(activeArtifact))
+    const neededPreview = exportNeedsMountedPreview(activeArtifact, format)
     try {
       if (neededPreview) {
         if (!isPreviewable) return
