@@ -89,12 +89,6 @@ export interface PdfGlyph {
   face: PdfFace
 }
 
-/** Consecutive glyphs of one face, drawn by one `text()` call. */
-export interface PdfTextRun {
-  face: PdfFace
-  text: string
-}
-
 /**
  * Whether the embedded unicode face has a glyph for a code point, or `null`
  * when no unicode face is embedded.
@@ -190,17 +184,6 @@ export function pdfGlyphs(text: string, covers: PdfUnicodeCoverage): PdfGlyph[] 
   return glyphs
 }
 
-/** Glyphs grouped into runs of one face, in order. */
-export function pdfTextRuns(glyphs: readonly PdfGlyph[]): PdfTextRun[] {
-  const runs: PdfTextRun[] = []
-  for (const glyph of glyphs) {
-    const last = runs.at(-1)
-    if (last && last.face === glyph.face) last.text += glyph.char
-    else runs.push({ face: glyph.face, text: glyph.char })
-  }
-  return runs
-}
-
 /**
  * Whether a code point is drawn two columns wide in a monospace editor: CJK
  * ideographs and punctuation, kana, Hangul, fullwidth forms. The BMP part of
@@ -238,6 +221,12 @@ const NO_LINE_END = new Set(Array.from("（［｛〔〈《「『【〘〖〝‘�
 const isSpace = (glyph: PdfGlyph) => glyph.char === " "
 
 /**
+ * How far a line may overrun its width by floating-point error alone: a table
+ * column sized to its widest word, less its padding, must still fit the word.
+ */
+const WIDTH_TOLERANCE = 1e-6
+
+/**
  * Break prose into lines no wider than `maxWidth`.
  *
  * Lines break at spaces (a space at a break is dropped) and between wide
@@ -245,28 +234,80 @@ const isSpace = (glyph: PdfGlyph) => glyph.char === " "
  * before closing punctuation or after opening punctuation. A word wider than a
  * whole line is cut between characters. `"\n"` starts a new line.
  */
-export function breakProseLines(
-  glyphs: readonly PdfGlyph[],
+export function breakProseLines<G extends PdfGlyph>(
+  glyphs: readonly G[],
   maxWidth: number,
-  widthOf: (glyph: PdfGlyph) => number
-): PdfGlyph[][] {
-  const lines: PdfGlyph[][] = []
-  let paragraph: PdfGlyph[] = []
+  widthOf: (glyph: G) => number
+): G[][] {
+  return hardLines(glyphs).flatMap((line) => breakParagraph(line, maxWidth, widthOf))
+}
+
+/** Glyphs split at each `"\n"`, which is dropped. */
+function hardLines<G extends PdfGlyph>(glyphs: readonly G[]): G[][] {
+  const lines: G[][] = [[]]
   for (const glyph of glyphs) {
-    if (glyph.char === "\n") {
-      lines.push(...breakParagraph(paragraph, maxWidth, widthOf))
-      paragraph = []
-    } else {
-      paragraph.push(glyph)
-    }
+    if (glyph.char === "\n") lines.push([])
+    else lines.at(-1)!.push(glyph)
   }
-  lines.push(...breakParagraph(paragraph, maxWidth, widthOf))
   return lines
 }
 
+const sumWidths = <G extends PdfGlyph>(glyphs: readonly G[], widthOf: (glyph: G) => number) =>
+  glyphs.reduce((sum, glyph) => sum + widthOf(glyph), 0)
+
+/** How wide the prose is unwrapped: its widest hard line. */
+export function proseNaturalWidth<G extends PdfGlyph>(
+  glyphs: readonly G[],
+  widthOf: (glyph: G) => number
+): number {
+  return Math.max(0, ...hardLines(glyphs).map((line) => sumWidths(line, widthOf)))
+}
+
+/**
+ * The widest piece of the prose that wrapping never breaks inside (a word, a
+ * wide character with its punctuation): the narrowest it can be laid out
+ * without cutting a word.
+ */
+export function proseMinimumWidth<G extends PdfGlyph>(
+  glyphs: readonly G[],
+  widthOf: (glyph: G) => number
+): number {
+  let widest = 0
+  for (const line of hardLines(glyphs)) {
+    for (const unit of breakUnits(line)) {
+      if (!isSpace(unit[0])) widest = Math.max(widest, sumWidths(unit, widthOf))
+    }
+  }
+  return widest
+}
+
+/**
+ * Column widths for a table `width` wide, as a browser lays out an automatic
+ * table: each column at its natural width when they all fit; otherwise every
+ * column gets at least its widest word (but no more than an even share, so
+ * one long URL cannot crowd the others out), and the room left goes to the
+ * columns in proportion to how much more they would take.
+ */
+export function fitTableColumns(
+  natural: readonly number[],
+  minimum: readonly number[],
+  width: number
+): number[] {
+  const total = natural.reduce((sum, value) => sum + value, 0)
+  if (total <= width) return [...natural]
+  const share = width / natural.length
+  const floor = natural.map((value, i) => Math.min(minimum[i] ?? 0, value, share))
+  const extra = width - floor.reduce((sum, value) => sum + value, 0)
+  const flex = natural.map((value, i) => value - floor[i])
+  const flexTotal = flex.reduce((sum, value) => sum + value, 0)
+  return floor.map(
+    (value, i) => value + (flexTotal > 0 ? (extra * flex[i]) / flexTotal : extra / natural.length)
+  )
+}
+
 /** Units that never break inside: a word, one wide character, or a space. */
-function breakUnits(glyphs: readonly PdfGlyph[]): PdfGlyph[][] {
-  const units: PdfGlyph[][] = []
+function breakUnits<G extends PdfGlyph>(glyphs: readonly G[]): G[][] {
+  const units: G[][] = []
   for (const glyph of glyphs) {
     const last = units.at(-1)
     const lastGlyph = last?.at(-1)
@@ -285,13 +326,13 @@ function breakUnits(glyphs: readonly PdfGlyph[]): PdfGlyph[][] {
   return units
 }
 
-function breakParagraph(
-  glyphs: readonly PdfGlyph[],
+function breakParagraph<G extends PdfGlyph>(
+  glyphs: readonly G[],
   maxWidth: number,
-  widthOf: (glyph: PdfGlyph) => number
-): PdfGlyph[][] {
-  const lines: PdfGlyph[][] = []
-  let line: PdfGlyph[] = []
+  widthOf: (glyph: G) => number
+): G[][] {
+  const lines: G[][] = []
+  let line: G[] = []
   let width = 0
   const flush = () => {
     while (line.length > 0 && isSpace(line[line.length - 1])) line.pop()
@@ -309,7 +350,7 @@ function breakParagraph(
       width += unitWidth
       continue
     }
-    if (width + unitWidth <= maxWidth) {
+    if (width + unitWidth <= maxWidth + WIDTH_TOLERANCE) {
       line.push(...unit)
       width += unitWidth
       continue
@@ -319,7 +360,7 @@ function breakParagraph(
       line = []
       width = 0
     }
-    if (unitWidth <= maxWidth) {
+    if (unitWidth <= maxWidth + WIDTH_TOLERANCE) {
       line.push(...unit)
       width = unitWidth
       continue
@@ -327,7 +368,7 @@ function breakParagraph(
     // Wider than a line on its own: cut between characters.
     for (const glyph of unit) {
       const glyphWidth = widthOf(glyph)
-      if (line.length > 0 && width + glyphWidth > maxWidth) flush()
+      if (line.length > 0 && width + glyphWidth > maxWidth + WIDTH_TOLERANCE) flush()
       line.push(glyph)
       width += glyphWidth
     }

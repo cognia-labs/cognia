@@ -15,7 +15,7 @@
  *   recover from a Recharts tree.
  */
 
-import { generatePdf } from "@/lib/files/document-writer"
+import { generatePdf, type WrittenDocument } from "@/lib/files/document-writer"
 import { readAsDataUrl, renderArtifactToPngBlob, type RasteriseOptions } from "./raster"
 import { artifactPdfBlocks, pdfNeedsMountedPreview } from "./document-blocks"
 import type { Artifact } from "@/types"
@@ -34,16 +34,16 @@ function loadImageSize(dataUrl: string): Promise<{ width: number; height: number
   })
 }
 
-export async function renderArtifactToPdfBlob(
+/**
+ * The artifact's PDF, and what a text-layout PDF could not keep (a picture of
+ * the preview keeps what the preview shows, so it reports nothing).
+ */
+export async function renderArtifactToPdf(
   artifact: Pick<Artifact, "id" | "type" | "title" | "content">,
   options: RasteriseOptions = {}
-): Promise<Blob> {
+): Promise<WrittenDocument> {
   if (!pdfNeedsMountedPreview(artifact)) {
-    const doc = await generatePdf({
-      title: artifact.title || "artifact",
-      blocks: artifactPdfBlocks(artifact),
-    })
-    return doc.data
+    return generatePdf({ title: artifact.title, blocks: artifactPdfBlocks(artifact) })
   }
 
   // A rasterised page wants a white sheet regardless of the app theme — a
@@ -80,5 +80,6 @@ export async function renderArtifactToPdfBlob(
     drawWidth,
     drawHeight
   )
-  return doc.output("blob")
+  if (artifact.title) doc.setProperties({ title: artifact.title })
+  return { data: doc.output("blob"), losses: [] }
 }

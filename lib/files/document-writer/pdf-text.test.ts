@@ -3,12 +3,14 @@ import {
   breakProseLines,
   codeColumns,
   expandTabs,
+  fitTableColumns,
   isWideCodePoint,
   needsUnicodePdfFont,
   normalizePdfText,
   PdfUnsupportedCharactersError,
   pdfGlyphs,
-  pdfTextRuns,
+  proseMinimumWidth,
+  proseNaturalWidth,
   unsupportedPdfCharacters,
   wrapCodeLine,
   type PdfGlyph,
@@ -48,14 +50,6 @@ describe("which face draws a character", () => {
 
   it("refuses a character no face draws instead of leaving it out", () => {
     expect(() => pdfGlyphs("ok 한", NOTO_LIKE)).toThrow(PdfUnsupportedCharactersError)
-  })
-
-  it("groups consecutive glyphs of one face into runs", () => {
-    expect(pdfTextRuns(pdfGlyphs("Hi 中文!", NOTO_LIKE))).toEqual([
-      { face: "standard", text: "Hi " },
-      { face: "unicode", text: "中文" },
-      { face: "standard", text: "!" },
-    ])
   })
 })
 
@@ -174,6 +168,57 @@ describe("breakProseLines", () => {
   it("starts a new line at a newline and keeps an empty paragraph as one empty line", () => {
     expect(wrap("a\n\nb", 10)).toEqual(["a", "", "b"])
     expect(wrap("", 10)).toEqual([""])
+  })
+
+  it("fits a word into a width that floating-point arithmetic left a hair short", () => {
+    // A column sized to its widest word, less its padding: (w + 8) - 8 < w.
+    const word = 0.13 + 0.13
+    const width = word + 8 - 8
+    expect(width).toBeLessThan(word)
+    expect(lines(breakProseLines(pdfGlyphs("ab", null), width, () => 0.13))).toEqual(["ab"])
+  })
+
+  it("hands back the glyphs it was given, so styling rides along", () => {
+    const styled = pdfGlyphs("aa bb", null).map((glyph, i) => ({ ...glyph, bold: i < 2 }))
+    const [first, second] = breakProseLines(styled, 2, () => 1)
+    expect(first.map((glyph) => glyph.bold)).toEqual([true, true])
+    expect(second.map((glyph) => glyph.bold)).toEqual([false, false])
+  })
+})
+
+describe("table column widths", () => {
+  const widthOf = (glyph: PdfGlyph) => codeColumns(glyph)
+  const glyphs = (value: string) => pdfGlyphs(value, NOTO_LIKE)
+
+  it("measures prose unwrapped by its widest hard line", () => {
+    expect(proseNaturalWidth(glyphs("ab cd\nabcdefg"), widthOf)).toBe(7)
+    expect(proseNaturalWidth([], widthOf)).toBe(0)
+  })
+
+  it("measures the narrowest layout by the widest word, a wide character counting alone", () => {
+    expect(proseMinimumWidth(glyphs("a bbbb cc"), widthOf)).toBe(4)
+    expect(proseMinimumWidth(glyphs("中文排版"), widthOf)).toBe(2)
+    expect(proseMinimumWidth(glyphs("中文，"), widthOf)).toBe(4)
+    expect(proseMinimumWidth(glyphs("ab\nabc"), widthOf)).toBe(3)
+  })
+
+  it("keeps natural widths when the columns fit", () => {
+    expect(fitTableColumns([10, 20], [5, 5], 40)).toEqual([10, 20])
+  })
+
+  it("gives each column its widest word, then shares the rest by what it would take", () => {
+    // 30 + 90 > 60: floors 10 and 20, then 30 more split 20:70.
+    const widths = fitTableColumns([30, 90], [10, 20], 60)
+    expect(widths.reduce((sum, width) => sum + width, 0)).toBeCloseTo(60)
+    expect(widths[0]).toBeCloseTo(10 + (30 * 20) / 90)
+    expect(widths[1]).toBeCloseTo(20 + (30 * 70) / 90)
+  })
+
+  it("caps a long word at an even share, so it cannot crowd the other columns out", () => {
+    // The URL column is cut between characters; the short column keeps all 40.
+    const widths = fitTableColumns([500, 40], [500, 40], 100)
+    expect(widths[0]).toBeCloseTo(60)
+    expect(widths[1]).toBeCloseTo(40)
   })
 })
 

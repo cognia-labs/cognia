@@ -22,7 +22,7 @@ import {
 import { usePathname, useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
-import { useTranslations } from "next-intl"
+import { useFormatter, useTranslations } from "next-intl"
 import { useMediaQuery } from "@/hooks/ui"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import {
@@ -43,6 +43,7 @@ import { useChatStore } from "@/stores/chat"
 import { getSession } from "@/lib/db/sessions"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import type { DocFormat } from "@/lib/files/document-writer"
+import type { DocumentLoss } from "@/lib/files/document-writer/blocks"
 import { writeText as clipboardWriteText } from "@/lib/capacitor/clipboard"
 import { canPreview, resolveRegisteredArtifactRenderer } from "@/lib/artifacts"
 import { revealCanvasDocument } from "@/lib/artifacts/reveal"
@@ -94,6 +95,7 @@ export type ArtifactViewMode = "code" | "preview" | "edit" | "review" | "split"
 export function useArtifactPanelState() {
   const t = useTranslations("artifacts")
   const tCommon = useTranslations("common")
+  const formatter = useFormatter()
   const router = useRouter()
   const pathname = usePathname()
 
@@ -474,6 +476,17 @@ export function useArtifactPanelState() {
   }
 
   /**
+   * A saved Word or PDF file that could not keep everything (an image it did
+   * not embed, raw HTML written as text) says so, rather than looking like a
+   * faithful copy.
+   */
+  const reportExportLosses = (losses: readonly DocumentLoss[]) => {
+    if (losses.length === 0) return
+    const items = losses.map((loss) => t(`exportLoss.${loss.kind}`, { count: loss.count }))
+    toast.warning(t("exportLosses", { items: formatter.list(items, { type: "conjunction" }) }))
+  }
+
+  /**
    * Explicit "export as <format>" — the menu's path, so png / pdf / svg are
    * reachable here even though `handleDownload` will never pick them.
    */
@@ -489,7 +502,10 @@ export function useArtifactPanelState() {
       }
       const outcome = await exportArtifact(activeArtifact, format)
       if (outcome.kind === "error") throw new Error(outcome.message)
-      if (outcome.kind === "saved" && isDesktop) setLastDownloadPath(outcome.location)
+      if (outcome.kind === "saved") {
+        if (isDesktop) setLastDownloadPath(outcome.location)
+        reportExportLosses(outcome.losses)
+      }
       loggers.ui.info("artifacts.action.export-as", { artifactId: activeArtifact.id, format })
     } catch (error) {
       loggers.ui.error("artifacts.action.export-as-failed", error, {
@@ -514,7 +530,10 @@ export function useArtifactPanelState() {
     try {
       const outcome = await exportArtifactAsWord(activeArtifact)
       if (outcome.kind === "error") throw new Error(outcome.message)
-      if (outcome.kind === "saved" && isDesktop) setLastDownloadPath(outcome.location)
+      if (outcome.kind === "saved") {
+        if (isDesktop) setLastDownloadPath(outcome.location)
+        reportExportLosses(outcome.losses)
+      }
       loggers.ui.info("artifacts.action.download-as", { artifactId: activeArtifact.id, format })
     } catch (error) {
       loggers.ui.error("artifacts.action.download-as-failed", error, {

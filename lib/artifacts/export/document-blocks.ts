@@ -16,11 +16,7 @@
  */
 
 import { getArtifactRuntimeAdapter } from "@/components/artifacts/runtime-adapters"
-import {
-  parseMarkdownBlocks,
-  type DocBlock,
-  type PdfBlock,
-} from "@/lib/files/document-writer/blocks"
+import { parseMarkdownBlocks, type DocBlock } from "@/lib/files/document-writer/blocks"
 import { notebookToDocumentBlocks } from "./notebook-markdown"
 import type { Artifact, ArtifactType } from "@/types"
 
@@ -69,7 +65,7 @@ export function artifactWordBlocks(artifact: Pick<Artifact, "type" | "content">)
  * The blocks of a text-layout PDF. Throws `ArtifactNotebookUnreadableError`
  * for a notebook whose content is not notebook JSON.
  */
-export function artifactPdfBlocks(artifact: Pick<Artifact, "id" | "type" | "content">): PdfBlock[] {
+export function artifactPdfBlocks(artifact: Pick<Artifact, "id" | "type" | "content">): DocBlock[] {
   if (getArtifactRuntimeAdapter(artifact.type).transport === "jupyter") {
     const blocks = notebookToDocumentBlocks(artifact.content)
     if (!blocks) throw new ArtifactNotebookUnreadableError(artifact.id)

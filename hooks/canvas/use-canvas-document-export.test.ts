@@ -2,7 +2,7 @@
 import { renderHook } from "@testing-library/react"
 
 jest.mock("@/lib/canvas/document-export", () => ({ exportCanvasDocument: jest.fn() }))
-jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
+jest.mock("sonner", () => ({ toast: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } }))
 
 import { toast } from "sonner"
 import { exportCanvasDocument, type CanvasExportOutcome } from "@/lib/canvas/document-export"
@@ -10,7 +10,7 @@ import type { CanvasDocument } from "@/types/artifact/artifact"
 import { canvasExportNotice, useCanvasDocumentExport } from "./use-canvas-document-export"
 
 const exportMock = exportCanvasDocument as jest.Mock
-const toastMock = toast as unknown as { success: jest.Mock; error: jest.Mock }
+const toastMock = toast as unknown as { success: jest.Mock; warning: jest.Mock; error: jest.Mock }
 
 const doc = {
   id: "doc-1",
@@ -28,8 +28,22 @@ beforeEach(() => jest.clearAllMocks())
 describe("canvasExportNotice", () => {
   it.each<[CanvasExportOutcome, ReturnType<typeof canvasExportNotice>]>([
     [
-      { kind: "saved", filename: "Doc.md", location: "/x/Doc.md" },
+      { kind: "saved", filename: "Doc.md", location: "/x/Doc.md", losses: [] },
       { tone: "success", key: "downloaded", values: { filename: "Doc.md" } },
+    ],
+    [
+      {
+        kind: "saved",
+        filename: "Doc.pdf",
+        location: "/x/Doc.pdf",
+        losses: [{ kind: "image", count: 2 }],
+      },
+      {
+        tone: "warning",
+        key: "downloadedWithLosses",
+        values: { filename: "Doc.pdf" },
+        losses: [{ kind: "image", count: 2 }],
+      },
     ],
     [{ kind: "cancelled" }, null],
     [
@@ -67,7 +81,7 @@ describe("canvasExportNotice", () => {
 
 describe("useCanvasDocumentExport", () => {
   it("exports, toasts the saved filename and returns the outcome", async () => {
-    const saved = { kind: "saved", filename: "Doc.md", location: "/x/Doc.md" }
+    const saved = { kind: "saved", filename: "Doc.md", location: "/x/Doc.md", losses: [] }
     exportMock.mockResolvedValue(saved)
     const { result } = renderHook(() => useCanvasDocumentExport())
 
@@ -88,5 +102,24 @@ describe("useCanvasDocumentExport", () => {
     exportMock.mockResolvedValueOnce({ kind: "render-error", failure: { reason: "failed" } })
     await result.current(doc, "pdf")
     expect(toastMock.error).toHaveBeenCalledWith("Couldn't render the document")
+  })
+
+  it("warns, naming what the saved file could not keep (F11)", async () => {
+    exportMock.mockResolvedValueOnce({
+      kind: "saved",
+      filename: "Doc.pdf",
+      location: "/x/Doc.pdf",
+      losses: [
+        { kind: "image", count: 2 },
+        { kind: "html", count: 3 },
+      ],
+    })
+    const { result } = renderHook(() => useCanvasDocumentExport())
+    await result.current(doc, "pdf")
+    // The test formatter joins a list with commas.
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      "Downloaded Doc.pdf, but it doesn't keep everything: 2 images are written as their descriptions and addresses, 3 HTML tags are written as text."
+    )
+    expect(toastMock.success).not.toHaveBeenCalled()
   })
 })

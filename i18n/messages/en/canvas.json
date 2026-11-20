@@ -170,6 +170,7 @@
     "copy": "Copy to clipboard",
     "copyFailed": "Couldn't copy to clipboard",
     "downloaded": "Downloaded {filename}",
+    "downloadedWithLosses": "Downloaded {filename}, but it doesn't keep everything: {items}.",
     "formatHtml": "Download as HTML",
     "formatPdf": "PDF",
     "formatPng": "PNG image",
@@ -177,6 +178,10 @@
     "formatSvg": "Download as SVG",
     "formatUnavailable": "This document can't be exported in that format.",
     "label": "Export document",
+    "loss": {
+      "image": "{count, plural, one {# image is written as its description and address} other {# images are written as their descriptions and addresses}}",
+      "html": "{count, plural, one {# HTML tag is written as text} other {# HTML tags are written as text}}"
+    },
     "pdfFontUnavailable": "The PDF font couldn't be loaded, so this text can't be laid out. Try again, or export another format.",
     "renderFailed": "Couldn't render the document",
     "renderNeedsPreview": "Couldn't render the document. Open the preview, check that it renders, then export again.",

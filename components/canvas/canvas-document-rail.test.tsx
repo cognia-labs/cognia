@@ -172,7 +172,12 @@ describe("CanvasDocumentRail", () => {
       "Couldn't save Alpha.py. Try again, or choose a location you can write to."
     )
 
-    exportMock.mockResolvedValueOnce({ kind: "saved", filename: "Alpha.py", location: "/x" })
+    exportMock.mockResolvedValueOnce({
+      kind: "saved",
+      filename: "Alpha.py",
+      location: "/x",
+      losses: [],
+    })
     fireEvent.contextMenu(screen.getByText("Alpha"))
     await user.click(await screen.findByRole("menuitem", { name: /export/i }))
     expect(toastMock.success).toHaveBeenCalledWith("Downloaded Alpha.py")

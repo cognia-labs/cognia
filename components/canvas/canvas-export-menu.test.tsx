@@ -41,6 +41,7 @@ jest.mock("@/lib/canvas/document-export", () => ({
     kind: "saved",
     filename: "Doc.md",
     location: "/tmp/Doc.md",
+    losses: [],
   })),
   copyCanvasDocumentToClipboard: jest.fn(async () => true),
 }))

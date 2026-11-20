@@ -30,8 +30,8 @@ describe("artifact document blocks", () => {
 
   it("reads a document as Markdown", () => {
     expect(artifactPdfBlocks({ id: "a", type: "document", content: "# Title\n\nBody" })).toEqual([
-      { kind: "heading", level: 1, text: "Title" },
-      { kind: "paragraph", text: "Body" },
+      { kind: "heading", level: 1, runs: [{ text: "Title" }] },
+      { kind: "paragraph", runs: [{ text: "Body" }] },
     ])
   })
 
@@ -43,8 +43,8 @@ describe("artifact document blocks", () => {
       ],
     })
     expect(artifactPdfBlocks({ id: "a", type: "jupyter", content })).toEqual([
-      { kind: "heading", level: 1, text: "Analysis" },
-      { kind: "paragraph", text: "In [2] (python)" },
+      { kind: "heading", level: 1, runs: [{ text: "Analysis" }] },
+      { kind: "paragraph", runs: [{ text: "In [2] (python)" }] },
       { kind: "code", text: "print(1)" },
     ])
   })

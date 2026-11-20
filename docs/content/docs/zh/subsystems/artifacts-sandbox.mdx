@@ -303,6 +303,7 @@ interface ArtifactStoreState {
 - **Preview tab** —— `<ArtifactPreview artifact={...} />` 派发到正确的 renderer。
 - **运行时健康徽章** —— iframe 加载中 / 出错 / 就绪三态显示在右上角，方便调试。
 - **复制 / 下载 / 导出为** —— 由 `runtime-adapters.ts:exportFormats` 驱动。`raw` 永远提供；`html`/`svg` 另加自身的源码形式；`png` 与 `pdf` 自 ADR-0158 起是真的（`lib/artifacts/export/`）。`react` 三种都提供，但它的 `png`/`pdf` 需要预览**已挂载**：对未执行的 JSX 做离屏截图就是一个空白矩形，所以导出器改为向仍在运行的帧索取其已渲染 DOM 的快照（`lib/artifacts/frame-capture-registry.ts`）。栅格化 `chart`/`mermaid`/`math` 同样需要其预览已挂载，取不到时抛 `ArtifactPreviewNotMountedError`，而不是返回空图。所有下载都走 `exportArtifact`，取代了此前三条互相矛盾的路径（其中一条把 chart 存成 `chart.chart`）。
+- **Word 与文本 PDF** —— 文档的 Word 文件和 PDF（以及代码、notebook 的 PDF）由客户端写入器 `lib/files/document-writer/` 排版，而不是把 Markdown 原样打印。`parseMarkdownBlocks` 用 `marked` 的 GFM 词法器把源文本读成带类型的块和 run：1–6 级标题、粗体 / 斜体 / 删除线 / 行内代码、http(s) 与 mailto 链接、任意层级的有序 / 无序 / 任务列表、引用、GFM 表格、原样保留的代码、内嵌的 PNG / JPEG data 图片和分隔线。Word 得到原生编号、表头可重复的表格、超链接和图片；PDF 用对应字体绘制（内置中文字体的粗体与斜体为合成样式）、带边框且跨页重复表头的表格以及链接注释。文件装不下的内容写成文字并上报：无法嵌入的图片写为其 alt 文本和地址，原始 HTML 写为字面标签，`documentLosses` 统计这些项，保存时提示用户（`exportLosses`），`action.artifact.export` 节点则以 `losses` 输出。
 - **Plugin 扩展槽** —— `PluginExtensionSlot` 让插件追加自定义操作按钮。
 
 ## 测试

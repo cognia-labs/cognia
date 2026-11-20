@@ -170,6 +170,7 @@
     "copy": "复制到剪贴板",
     "copyFailed": "复制到剪贴板失败",
     "downloaded": "已下载 {filename}",
+    "downloadedWithLosses": "已下载 {filename}，但它没有完整保留原内容：{items}。",
     "formatHtml": "下载为 HTML",
     "formatPdf": "PDF",
     "formatPng": "PNG 图片",
@@ -177,6 +178,10 @@
     "formatSvg": "下载为 SVG",
     "formatUnavailable": "此文档无法导出为该格式。",
     "label": "导出文档",
+    "loss": {
+      "image": "{count} 张图片改为写入其描述和地址",
+      "html": "{count} 个 HTML 标签按原文写入"
+    },
     "pdfFontUnavailable": "PDF 字体加载失败，无法排版这段文字。请重试，或导出为其他格式。",
     "renderFailed": "无法渲染该文档",
     "renderNeedsPreview": "无法渲染文档。请打开预览，确认能正常显示后再导出。",

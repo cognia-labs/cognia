@@ -27,6 +27,7 @@ import type {
   CanvasDocument,
 } from "@/types/artifact/artifact"
 import type { ArtifactExportFailure } from "@/lib/artifacts/export"
+import type { DocumentLoss } from "@/lib/files/document-writer/blocks"
 import { getArtifactExportFormats } from "@/components/artifacts/runtime-adapters"
 import { loggers } from "@cognia/logging"
 import { exportFilenameStem } from "@/lib/files/export-filename"
@@ -137,6 +138,8 @@ export function buildCanvasExportPayload(
  * What became of one export.
  *
  * - `saved`: written under `filename`; `location` is where the saver put it.
+ *   `losses` is what a laid-out PDF could not keep (an image it did not
+ *   embed, raw HTML written as text), empty for every other format.
  * - `cancelled`: the user dismissed the save dialog. Not a failure.
  * - `unsupported`: the document does not offer `format`. A menu built from
  *   `getCanvasExportFormats` never asks for one.
@@ -146,7 +149,7 @@ export function buildCanvasExportPayload(
  * - `save-error`: the file was rendered and the saver could not write it.
  */
 export type CanvasExportOutcome =
-  | { kind: "saved"; filename: string; location: string }
+  | { kind: "saved"; filename: string; location: string; losses: DocumentLoss[] }
   | { kind: "cancelled" }
   | { kind: "unsupported"; format: ArtifactExportFormat }
   | { kind: "render-error"; failure: ArtifactExportFailure }
@@ -179,6 +182,7 @@ export async function exportCanvasDocument(
   const filename = canvasExportFilename(doc, format)
   let data: string | Blob
   let mimeType: string
+  let losses: DocumentLoss[] = []
   if (TEXT_FORMATS.has(format)) {
     const payload = buildCanvasExportPayload(doc, format)
     data = payload.content
@@ -203,6 +207,7 @@ export async function exportCanvasDocument(
       const rendered = await exporter.renderArtifactExport(artifact, format)
       data = rendered.data
       mimeType = rendered.mimeType
+      losses = rendered.losses
     } catch (error) {
       return renderFailed(
         error,
@@ -220,7 +225,7 @@ export async function exportCanvasDocument(
     const { saveExport } = await import("@/lib/files/save-export")
     const outcome = await saveExport({ filename, data, mimeType })
     if (outcome.kind === "saved") {
-      return { kind: "saved", filename: outcome.filename, location: outcome.location }
+      return { kind: "saved", filename: outcome.filename, location: outcome.location, losses }
     }
     if (outcome.kind === "cancelled") return { kind: "cancelled" }
     loggers.canvas.warn("canvas export: save failed", {

@@ -72,6 +72,11 @@
   "exportUnsupportedCharacters": "This PDF can't include some of the artifact's characters ({characters}): its fonts have no glyphs for them. Export another format instead.",
   "exportPdfFontUnavailable": "The PDF font couldn't be loaded, so this text can't be laid out. Try again, or export another format.",
   "exportNotebookUnreadable": "This notebook isn't valid notebook JSON, so it can't be exported cell by cell. Fix the notebook source and export again.",
+  "exportLosses": "Saved, but this file doesn't keep everything: {items}.",
+  "exportLoss": {
+    "image": "{count, plural, one {# image is written as its description and address} other {# images are written as their descriptions and addresses}}",
+    "html": "{count, plural, one {# HTML tag is written as text} other {# HTML tags are written as text}}"
+  },
   "filterByRuntime": "Filter by runtime",
   "filterByType": "Filter by type",
   "fullscreen": "Fullscreen",

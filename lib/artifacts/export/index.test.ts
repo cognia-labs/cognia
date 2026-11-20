@@ -14,7 +14,7 @@ jest.mock("./raster", () => ({
 
 const renderPdfMock = jest.fn()
 jest.mock("./pdf", () => ({
-  renderArtifactToPdfBlob: (...a: unknown[]) => renderPdfMock(...a),
+  renderArtifactToPdf: (...a: unknown[]) => renderPdfMock(...a),
 }))
 
 const generateDocxMock = jest.fn()
@@ -49,12 +49,10 @@ const artifact = (over: Partial<Artifact> = {}) =>
 beforeEach(() => {
   saveExportMock.mockReset().mockResolvedValue({ kind: "saved", location: "/tmp/x" })
   renderPngMock.mockReset().mockResolvedValue(new Blob(["png"], { type: "image/png" }))
-  renderPdfMock.mockReset().mockResolvedValue(new Blob(["pdf"], { type: "application/pdf" }))
-  generateDocxMock.mockReset().mockResolvedValue({
-    data: new Blob(["docx"]),
-    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    filename: "ignored.docx",
-  })
+  renderPdfMock
+    .mockReset()
+    .mockResolvedValue({ data: new Blob(["pdf"], { type: "application/pdf" }), losses: [] })
+  generateDocxMock.mockReset().mockResolvedValue({ data: new Blob(["docx"]), losses: [] })
 })
 
 describe("artifactExportFilename", () => {
@@ -103,6 +101,17 @@ describe("renderArtifactExport", () => {
     const out = await renderArtifactExport(artifact(), "pdf")
     expect(renderPdfMock).toHaveBeenCalled()
     expect(out.mimeType).toBe("application/pdf")
+    expect(out.losses).toEqual([])
+  })
+
+  it("carries what a laid-out PDF could not keep", async () => {
+    const losses = [{ kind: "html", count: 1 }]
+    renderPdfMock.mockResolvedValueOnce({ data: new Blob(["pdf"]), losses })
+    const out = await renderArtifactExport(
+      artifact({ type: "document", content: "<b>x</b>" }),
+      "pdf"
+    )
+    expect(out.losses).toEqual(losses)
   })
 
   it("refuses a format the artifact's adapter does not offer", async () => {
@@ -130,12 +139,15 @@ describe("exportArtifact", () => {
       data: expect.any(Blob),
       mimeType: "image/png",
     })
-    expect(outcome).toEqual({ kind: "saved", location: "/tmp/x" })
+    expect(outcome).toEqual({ kind: "saved", location: "/tmp/x", losses: [] })
   })
 
   it("propagates a cancelled save rather than reporting success", async () => {
     saveExportMock.mockResolvedValue({ kind: "cancelled" })
-    await expect(exportArtifact(artifact(), "raw")).resolves.toEqual({ kind: "cancelled" })
+    await expect(exportArtifact(artifact(), "raw")).resolves.toEqual({
+      kind: "cancelled",
+      losses: [],
+    })
   })
 
   it("does not reach the saver when rendering fails", async () => {
@@ -158,6 +170,7 @@ describe("Word export (A07)", () => {
     await expect(exportArtifactAsWord(code)).resolves.toEqual({
       kind: "saved",
       location: "/tmp/x",
+      losses: [],
     })
     expect(generateDocxMock).toHaveBeenCalledWith({
       title: "main/py",
@@ -175,10 +188,18 @@ describe("Word export (A07)", () => {
     expect(generateDocxMock).toHaveBeenCalledWith({
       title: "Q4 revenue",
       blocks: [
-        { kind: "heading", level: 1, text: "T" },
-        { kind: "paragraph", text: "Body" },
+        { kind: "heading", level: 1, runs: [{ text: "T" }] },
+        { kind: "paragraph", runs: [{ text: "Body" }] },
       ],
     })
+  })
+
+  it("reports what the Word file could not keep with the saved outcome", async () => {
+    const losses = [{ kind: "image", count: 1 }]
+    generateDocxMock.mockResolvedValueOnce({ data: new Blob(["docx"]), losses })
+    await expect(
+      exportArtifactAsWord(artifact({ type: "document", content: "![x](https://x/a.png)" }))
+    ).resolves.toEqual({ kind: "saved", location: "/tmp/x", losses })
   })
 })
 

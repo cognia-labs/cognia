@@ -239,6 +239,7 @@ registerNodeExecutor({
           encoding: "utf-8" as const,
           content: rendered.data,
           byteLength: new TextEncoder().encode(rendered.data).length,
+          losses: rendered.losses,
         },
       }
     }
@@ -252,6 +253,9 @@ registerNodeExecutor({
         encoding: "base64" as const,
         content: base64FromBytes(bytes),
         byteLength: bytes.byteLength,
+        // What a laid-out PDF could not keep, for a later step to act on: an
+        // unattended run has nobody to warn.
+        losses: rendered.losses,
       },
     }
   },

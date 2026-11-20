@@ -12,16 +12,21 @@
  */
 
 import { useCallback } from "react"
-import { useTranslations } from "next-intl"
+import { useFormatter, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { exportCanvasDocument, type CanvasExportOutcome } from "@/lib/canvas/document-export"
+import type { DocumentLoss } from "@/lib/files/document-writer/blocks"
 import type { ArtifactExportFormat, CanvasDocument } from "@/types/artifact/artifact"
 
-/** A message key under `canvas.exportMenu` and its values. */
+/**
+ * A message key under `canvas.exportMenu` and its values. A `warning` names
+ * what the saved file could not keep (`losses`, as the `items` value).
+ */
 export interface CanvasExportNotice {
-  tone: "success" | "error"
+  tone: "success" | "warning" | "error"
   key:
     | "downloaded"
+    | "downloadedWithLosses"
     | "renderFailed"
     | "renderNeedsPreview"
     | "unsupportedCharacters"
@@ -29,6 +34,7 @@ export interface CanvasExportNotice {
     | "saveFailed"
     | "formatUnavailable"
   values?: Record<string, string>
+  losses?: DocumentLoss[]
 }
 
 /**
@@ -38,7 +44,14 @@ export interface CanvasExportNotice {
 export function canvasExportNotice(outcome: CanvasExportOutcome): CanvasExportNotice | null {
   switch (outcome.kind) {
     case "saved":
-      return { tone: "success", key: "downloaded", values: { filename: outcome.filename } }
+      return outcome.losses.length > 0
+        ? {
+            tone: "warning",
+            key: "downloadedWithLosses",
+            values: { filename: outcome.filename },
+            losses: outcome.losses,
+          }
+        : { tone: "success", key: "downloaded", values: { filename: outcome.filename } }
     case "cancelled":
       return null
     case "unsupported":
@@ -72,17 +85,25 @@ export function useCanvasDocumentExport(): (
   format: ArtifactExportFormat
 ) => Promise<CanvasExportOutcome> {
   const t = useTranslations("canvas.exportMenu")
+  const formatter = useFormatter()
   return useCallback(
     async (doc, format) => {
       const outcome = await exportCanvasDocument(doc, format)
       const notice = canvasExportNotice(outcome)
       if (notice) {
-        const message = t(notice.key, notice.values)
+        const items = (notice.losses ?? []).map((loss) =>
+          t(`loss.${loss.kind}`, { count: loss.count })
+        )
+        const message = t(notice.key, {
+          ...notice.values,
+          ...(items.length > 0 ? { items: formatter.list(items, { type: "conjunction" }) } : {}),
+        })
         if (notice.tone === "success") toast.success(message)
+        else if (notice.tone === "warning") toast.warning(message)
         else toast.error(message)
       }
       return outcome
     },
-    [t]
+    [t, formatter]
   )
 }

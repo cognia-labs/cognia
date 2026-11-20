@@ -21,6 +21,7 @@ import { getArtifactExtension } from "@/lib/artifacts/constants"
 import { saveExport, type SaveExportOutcome } from "@/lib/files/save-export"
 import { PdfUnsupportedCharactersError } from "@/lib/files/document-writer/pdf-text"
 import { PdfFontUnavailableError } from "@/lib/files/document-writer/unicode-font"
+import type { DocumentLoss } from "@/lib/files/document-writer/blocks"
 import {
   ArtifactNotebookUnreadableError,
   artifactWordBlocks,
@@ -89,7 +90,12 @@ export interface RenderedArtifactExport {
   data: string | Blob
   mimeType: string
   filename: string
+  /** What the file could not keep: only a laid-out Word or PDF file loses anything. */
+  losses: DocumentLoss[]
 }
+
+/** How the save went, and what the saved file could not keep. */
+export type ArtifactExportOutcome = SaveExportOutcome & { losses: DocumentLoss[] }
 
 /** Produce the bytes for one export format without saving them. */
 export async function renderArtifactExport(
@@ -104,15 +110,16 @@ export async function renderArtifactExport(
 
   if (format === "png") {
     const { renderArtifactToPngBlob } = await import("./raster")
-    return { data: await renderArtifactToPngBlob(artifact), mimeType, filename }
+    return { data: await renderArtifactToPngBlob(artifact), mimeType, filename, losses: [] }
   }
   if (format === "pdf") {
-    const { renderArtifactToPdfBlob } = await import("./pdf")
-    return { data: await renderArtifactToPdfBlob(artifact), mimeType, filename }
+    const { renderArtifactToPdf } = await import("./pdf")
+    const { data, losses } = await renderArtifactToPdf(artifact)
+    return { data, mimeType, filename, losses }
   }
   // raw / html / svg are all the source text; only the extension and the mime
   // differ, and the adapter table already decided which of them are on offer.
-  return { data: artifact.content, mimeType, filename }
+  return { data: artifact.content, mimeType, filename, losses: [] }
 }
 
 /**
@@ -123,13 +130,17 @@ export async function renderArtifactExport(
 export async function exportArtifact(
   artifact: Pick<Artifact, "id" | "type" | "title" | "content" | "language" | "metadata">,
   format: ArtifactExportFormat
-): Promise<SaveExportOutcome> {
-  const rendered = await renderArtifactExport(artifact, format)
-  return saveExport({
+): Promise<ArtifactExportOutcome> {
+  return saveRendered(await renderArtifactExport(artifact, format))
+}
+
+async function saveRendered(rendered: RenderedArtifactExport): Promise<ArtifactExportOutcome> {
+  const outcome = await saveExport({
     filename: rendered.filename,
     data: rendered.data,
     mimeType: rendered.mimeType,
   })
+  return { ...outcome, losses: rendered.losses }
 }
 
 const WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -144,23 +155,20 @@ export async function renderArtifactWordExport(
 ): Promise<RenderedArtifactExport> {
   if (!supportsWordExport(artifact)) throw new UnsupportedArtifactExportError(artifact.type, "docx")
   const { generateDocx } = await import("@/lib/files/document-writer")
-  const doc = await generateDocx({
-    title: artifact.title || "artifact",
-    blocks: artifactWordBlocks(artifact),
-  })
-  return { data: doc.data, mimeType: WORD_MIME, filename: `${safeBase(artifact.title)}.docx` }
+  const doc = await generateDocx({ title: artifact.title, blocks: artifactWordBlocks(artifact) })
+  return {
+    data: doc.data,
+    mimeType: WORD_MIME,
+    filename: `${safeBase(artifact.title)}.docx`,
+    losses: doc.losses,
+  }
 }
 
 /** Render the Word file and save it, like `exportArtifact`. */
 export async function exportArtifactAsWord(
   artifact: Pick<Artifact, "type" | "title" | "content">
-): Promise<SaveExportOutcome> {
-  const rendered = await renderArtifactWordExport(artifact)
-  return saveExport({
-    filename: rendered.filename,
-    data: rendered.data,
-    mimeType: rendered.mimeType,
-  })
+): Promise<ArtifactExportOutcome> {
+  return saveRendered(await renderArtifactWordExport(artifact))
 }
 
 /**

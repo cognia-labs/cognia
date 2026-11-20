@@ -4952,6 +4952,11 @@
     },
     "exportFailed": "导出失败。请打开预览，确认内容正常显示后，重新保存到可写入的位置。",
     "exportFailedSource": "导出失败。请重试，或保存到可写入的位置。",
+    "exportLoss": {
+      "html": "{count} 个 HTML 标签按原文写入",
+      "image": "{count} 张图片改为写入其描述和地址"
+    },
+    "exportLosses": "已保存，但此文件没有完整保留原内容：{items}。",
     "exportNotebookUnreadable": "该 Notebook 不是有效的 Notebook JSON，无法按单元格导出。请修正 Notebook 源码后重新导出。",
     "exportPdfFontUnavailable": "PDF 字体加载失败，无法排版该文本。请重试，或改用其他格式导出。",
     "exportUnsupportedCharacters": "PDF 字体中没有该产物部分字符（{characters}）的字形，无法生成 PDF。请改用其他格式导出。",
@@ -7629,6 +7634,7 @@
       "copy": "复制到剪贴板",
       "copyFailed": "复制到剪贴板失败",
       "downloaded": "已下载 {filename}",
+      "downloadedWithLosses": "已下载 {filename}，但它没有完整保留原内容：{items}。",
       "formatHtml": "下载为 HTML",
       "formatPdf": "PDF",
       "formatPng": "PNG 图片",
@@ -7636,6 +7642,10 @@
       "formatSvg": "下载为 SVG",
       "formatUnavailable": "此文档无法导出为该格式。",
       "label": "导出文档",
+      "loss": {
+        "html": "{count} 个 HTML 标签按原文写入",
+        "image": "{count} 张图片改为写入其描述和地址"
+      },
       "pdfFontUnavailable": "PDF 字体加载失败，无法排版这段文字。请重试，或导出为其他格式。",
       "renderFailed": "无法渲染该文档",
       "renderNeedsPreview": "无法渲染文档。请打开预览，确认能正常显示后再导出。",

@@ -25,11 +25,11 @@ describe("notebookToDocumentBlocks", () => {
         )
       )
     ).toEqual([
-      { kind: "heading", level: 1, text: "Findings" },
-      { kind: "listItem", text: "First" },
-      { kind: "paragraph", text: "In [0] (javascript)" },
+      { kind: "heading", level: 1, runs: [{ text: "Findings" }] },
+      { kind: "listItem", marker: { type: "bullet" }, runs: [{ text: "First" }] },
+      { kind: "paragraph", runs: [{ text: "In [0] (javascript)" }] },
       { kind: "code", text: "const result = `\n```\n`;" },
-      { kind: "paragraph", text: "In [ ] (javascript)" },
+      { kind: "paragraph", runs: [{ text: "In [ ] (javascript)" }] },
       { kind: "code", text: "pending()" },
       { kind: "code", text: "unformatted\ntext" },
     ])
@@ -42,7 +42,7 @@ describe("notebookToDocumentBlocks", () => {
         kernelspec: { language: "python" },
       })
     )
-    expect(blocks?.[0]).toEqual({ kind: "paragraph", text: "In [ ] (julia)" })
+    expect(blocks?.[0]).toEqual({ kind: "paragraph", runs: [{ text: "In [ ] (julia)" }] })
   })
 
   it("keeps output order, flattens text arrays and strips terminal controls", () => {
@@ -75,11 +75,11 @@ describe("notebookToDocumentBlocks", () => {
     )
     expect(blocks?.slice(2)).toEqual([
       { kind: "code", text: "hello\nworld\n" },
-      { kind: "paragraph", text: "Out [2]" },
+      { kind: "paragraph", runs: [{ text: "Out [2]" }] },
       { kind: "code", text: "1\n2" },
       { kind: "code", text: "ValueError: bad input\nline 1\ndetails" },
-      { kind: "heading", level: 2, text: "Result" },
-      { kind: "paragraph", text: "Good." },
+      { kind: "heading", level: 2, runs: [{ text: "Result" }] },
+      { kind: "paragraph", runs: [{ text: "Good." }] },
     ])
   })
 
@@ -106,7 +106,7 @@ describe("notebookToDocumentBlocks", () => {
     expect(blocks?.slice(2)).toEqual([
       { kind: "image", format: "PNG", dataUrl: "data:image/png;base64,cG5ncG5n" },
       { kind: "image", format: "JPEG", dataUrl: "data:image/jpeg;base64,anBlZw==" },
-      { kind: "heading", level: 1, text: "Rich" },
+      { kind: "heading", level: 1, runs: [{ text: "Rich" }] },
     ])
   })
 
@@ -132,7 +132,10 @@ describe("notebookToDocumentBlocks", () => {
         },
       ])
     )
-    expect(blocks?.[2]).toEqual({ kind: "paragraph", text: "A & B bold\n\nNext\n\nline" })
+    expect(blocks?.[2]).toEqual({
+      kind: "paragraph",
+      runs: [{ text: "A & B bold\n\nNext\n\nline" }],
+    })
     expect(document.querySelector("iframe, img, script")).toBeNull()
   })
 
@@ -155,7 +158,7 @@ describe("notebookToDocumentBlocks", () => {
         ])
       )
     ).toEqual([
-      { kind: "paragraph", text: "In [ ] (python)" },
+      { kind: "paragraph", runs: [{ text: "In [ ] (python)" }] },
       { kind: "code", text: "" },
       { kind: "code", text: "" },
     ])

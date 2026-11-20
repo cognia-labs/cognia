@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify"
-import { parseMarkdownBlocks, type PdfBlock } from "@/lib/files/document-writer/blocks"
+import { parseMarkdownBlocks, type DocBlock } from "@/lib/files/document-writer/blocks"
 import type { JupyterNotebook, JupyterOutput } from "@/types"
 
 function notebookText(value: unknown): string {
@@ -56,7 +56,7 @@ function htmlText(html: string): string {
     .trim()
 }
 
-function outputBlocks(output: JupyterOutput): PdfBlock[] {
+function outputBlocks(output: JupyterOutput): DocBlock[] {
   if (output.output_type === "stream") {
     return [{ kind: "code", text: stripAnsi(notebookText(output.text)) }]
   }
@@ -83,13 +83,13 @@ function outputBlocks(output: JupyterOutput): PdfBlock[] {
   const markdown = notebookText(data?.["text/markdown"])
   if (markdown) return parseMarkdownBlocks(markdown)
   const html = notebookText(data?.["text/html"])
-  if (html) return [{ kind: "paragraph", text: htmlText(html) }]
+  if (html) return [{ kind: "paragraph", runs: [{ text: htmlText(html) }] }]
   const text = notebookText(data?.["text/plain"])
   return text ? [{ kind: "code", text: stripAnsi(text) }] : []
 }
 
 /** Convert notebook Markdown, fenced code and output into ordered PDF blocks. */
-export function notebookToDocumentBlocks(content: string): PdfBlock[] | null {
+export function notebookToDocumentBlocks(content: string): DocBlock[] | null {
   let notebook: JupyterNotebook | null
   try {
     notebook = JSON.parse(content) as JupyterNotebook | null
@@ -100,7 +100,7 @@ export function notebookToDocumentBlocks(content: string): PdfBlock[] | null {
   const languageName =
     notebook.metadata?.language_info?.name || notebook.metadata?.kernelspec?.language
   const language = typeof languageName === "string" ? languageName : "python"
-  const blocks: PdfBlock[] = []
+  const blocks: DocBlock[] = []
 
   for (const cell of notebook.cells) {
     if (!cell || typeof cell !== "object") return null
@@ -108,14 +108,17 @@ export function notebookToDocumentBlocks(content: string): PdfBlock[] | null {
     if (cell.cell_type === "markdown") {
       blocks.push(...parseMarkdownBlocks(source))
     } else if (cell.cell_type === "code") {
-      blocks.push({ kind: "paragraph", text: `In [${cell.execution_count ?? " "}] (${language})` })
+      blocks.push({
+        kind: "paragraph",
+        runs: [{ text: `In [${cell.execution_count ?? " "}] (${language})` }],
+      })
       // Keep code as a fenced block directly: literal backticks inside a cell
       // must not close a fence in the Markdown parser.
       blocks.push({ kind: "code", text: source })
       for (const output of Array.isArray(cell.outputs) ? cell.outputs : []) {
         if (!output || typeof output !== "object") continue
         if (output.output_type === "execute_result" && output.execution_count != null) {
-          blocks.push({ kind: "paragraph", text: `Out [${output.execution_count}]` })
+          blocks.push({ kind: "paragraph", runs: [{ text: `Out [${output.execution_count}]` }] })
         }
         blocks.push(...outputBlocks(output))
       }

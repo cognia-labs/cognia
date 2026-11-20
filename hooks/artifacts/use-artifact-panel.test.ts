@@ -5,7 +5,7 @@
 import { renderHook, act, waitFor } from "@testing-library/react"
 import { useEffect } from "react"
 
-jest.mock("sonner", () => ({ toast: { error: jest.fn() } }))
+jest.mock("sonner", () => ({ toast: { error: jest.fn(), warning: jest.fn() } }))
 
 jest.mock("@/lib/artifacts/export/raster", () => ({
   ...jest.requireActual("@/lib/artifacts/export/raster"),
@@ -14,11 +14,21 @@ jest.mock("@/lib/artifacts/export/raster", () => ({
 }))
 jest.mock("@/lib/artifacts/export/pdf", () => ({
   ...jest.requireActual("@/lib/artifacts/export/pdf"),
-  renderArtifactToPdfBlob: jest.fn(async () => new Blob(["pdf"], { type: "application/pdf" })),
+  renderArtifactToPdf: jest.fn(async () => ({
+    data: new Blob(["pdf"], { type: "application/pdf" }),
+    losses: [],
+  })),
 }))
 
+// The key, with the values a loss report is made of.
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: () => (key: string, values?: Record<string, unknown>) =>
+    values && "items" in values
+      ? `${key}(${String(values.items)})`
+      : values && "count" in values
+        ? `${key}#${String(values.count)}`
+        : key,
+  useFormatter: () => ({ list: (items: string[]) => items.join(" + ") }),
 }))
 
 jest.mock("@/lib/tauri", () => ({
@@ -49,11 +59,12 @@ jest.mock("@/lib/capacitor/clipboard", () => ({
   writeText: (v: string) => clipboardWriteTextMock(v),
 }))
 
-const generateDocxMock = jest.fn(async (_o?: unknown) => ({
-  data: new Blob(["docx"]),
-  mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  filename: "Page.docx",
-}))
+const generateDocxMock = jest.fn(
+  async (_o?: unknown): Promise<{ data: Blob; losses: { kind: string; count: number }[] }> => ({
+    data: new Blob(["docx"]),
+    losses: [],
+  })
+)
 jest.mock("@/lib/files/document-writer", () => ({
   ...jest.requireActual("@/lib/files/document-writer"),
   generateDocx: (o: unknown) => generateDocxMock(o),
@@ -74,7 +85,7 @@ import {
   captureArtifactToPngBlob,
   ArtifactPreviewNotMountedError,
 } from "@/lib/artifacts/export/raster"
-import { renderArtifactToPdfBlob } from "@/lib/artifacts/export/pdf"
+import { renderArtifactToPdf } from "@/lib/artifacts/export/pdf"
 import {
   registerArtifactPreviewNode,
   getArtifactPreviewNode,
@@ -90,6 +101,7 @@ import {
 beforeEach(() => {
   localStorage.clear()
   jest.mocked(toast.error).mockClear()
+  jest.mocked(toast.warning).mockClear()
   generateDocxMock.mockClear()
   // The active artifact is bucketed per conversation, so the panel only
   // resolves one once a conversation is on screen.
@@ -178,12 +190,20 @@ describe("useArtifactPanelState", () => {
 
   it.each(["png", "pdf"] as const)("B18 mounts Preview before exporting %s", async (format) => {
     const a = makeArtifact()
-    const render = format === "png" ? renderArtifactToPngBlob : renderArtifactToPdfBlob
+    const render = format === "png" ? renderArtifactToPngBlob : renderArtifactToPdf
     const mountedAtExport: boolean[] = []
-    jest.mocked(render).mockImplementationOnce(async () => {
-      mountedAtExport.push(getArtifactPreviewNode(a.id) !== null)
-      return new Blob([format])
-    })
+    const mounted = () => mountedAtExport.push(getArtifactPreviewNode(a.id) !== null)
+    if (format === "png") {
+      jest.mocked(renderArtifactToPngBlob).mockImplementationOnce(async () => {
+        mounted()
+        return new Blob([format])
+      })
+    } else {
+      jest.mocked(renderArtifactToPdf).mockImplementationOnce(async () => {
+        mounted()
+        return { data: new Blob([format]), losses: [] }
+      })
+    }
     const { result } = renderHook(() => {
       const panel = useArtifactPanelState()
       useEffect(() => {
@@ -234,7 +254,7 @@ describe("useArtifactPanelState", () => {
       const { result } = renderHook(() => useArtifactPanelState())
       const previewRequest = jest.fn()
       window.addEventListener("cognia:artifact-preview:request", previewRequest)
-      jest.mocked(renderArtifactToPdfBlob).mockClear()
+      jest.mocked(renderArtifactToPdf).mockClear()
       try {
         expect(result.current.exportFormats).toContain("pdf")
         expect(result.current.exportFormats).not.toContain("png")
@@ -245,7 +265,7 @@ describe("useArtifactPanelState", () => {
         })
         expect(result.current.viewMode).toBe("code")
         expect(previewRequest).not.toHaveBeenCalled()
-        expect(renderArtifactToPdfBlob).toHaveBeenCalledTimes(2)
+        expect(renderArtifactToPdf).toHaveBeenCalledTimes(2)
         expect(toast.error).not.toHaveBeenCalled()
       } finally {
         window.removeEventListener("cognia:artifact-preview:request", previewRequest)
@@ -552,11 +572,11 @@ describe("useArtifactPanelState", () => {
     const { result } = renderHook(() => useArtifactPanelState())
     expect(result.current.canDownloadAsDocument).toBe(false)
     expect(result.current.exportFormats).toEqual(["raw"])
-    jest.mocked(renderArtifactToPdfBlob).mockClear()
+    jest.mocked(renderArtifactToPdf).mockClear()
     await act(async () => {
       await result.current.handleDownloadAs("pdf")
     })
-    expect(renderArtifactToPdfBlob).not.toHaveBeenCalled()
+    expect(renderArtifactToPdf).not.toHaveBeenCalled()
     expect(toast.error).not.toHaveBeenCalled()
   })
 
@@ -581,6 +601,48 @@ describe("useArtifactPanelState", () => {
     expect(saveExportMock).toHaveBeenCalledWith(expect.objectContaining({ filename: "Page.docx" }))
   })
 
+  it("says what a saved Word file could not keep (F11)", async () => {
+    const a = makeArtifact()
+    act(() => {
+      useArtifactStore.getState().updateArtifact(a.id, { type: "document", content: "x" })
+    })
+    generateDocxMock.mockResolvedValueOnce({
+      data: new Blob(["docx"]),
+      losses: [
+        { kind: "image", count: 2 },
+        { kind: "html", count: 1 },
+      ],
+    })
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await result.current.handleDownloadAs("docx")
+    })
+    expect(toast.warning).toHaveBeenCalledWith(
+      "exportLosses(exportLoss.image#2 + exportLoss.html#1)"
+    )
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it("says what a saved text PDF could not keep, and nothing when the save was cancelled", async () => {
+    const a = makeArtifact()
+    act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "document" }))
+    const losses = [{ kind: "image" as const, count: 1 }]
+    jest.mocked(renderArtifactToPdf).mockResolvedValueOnce({ data: new Blob(["pdf"]), losses })
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await result.current.handleExportAs("pdf")
+    })
+    expect(toast.warning).toHaveBeenCalledWith("exportLosses(exportLoss.image#1)")
+
+    jest.mocked(toast.warning).mockClear()
+    saveExportMock.mockResolvedValueOnce({ kind: "cancelled" })
+    jest.mocked(renderArtifactToPdf).mockResolvedValueOnce({ data: new Blob(["pdf"]), losses })
+    await act(async () => {
+      await result.current.handleExportAs("pdf")
+    })
+    expect(toast.warning).not.toHaveBeenCalled()
+  })
+
   it.each(["html", "chart", "mermaid", "jupyter"] as const)(
     "offers no Word file for a %s artifact, whose source is not its text (A07)",
     async (type) => {
@@ -599,7 +661,7 @@ describe("useArtifactPanelState", () => {
     const a = makeArtifact()
     act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "document" }))
     jest
-      .mocked(renderArtifactToPdfBlob)
+      .mocked(renderArtifactToPdf)
       .mockRejectedValueOnce(new PdfUnsupportedCharactersError(["中", "文"]))
     const { result } = renderHook(() => useArtifactPanelState())
     await act(async () => {
@@ -612,7 +674,7 @@ describe("useArtifactPanelState", () => {
     const a = makeArtifact()
     act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "document" }))
     jest
-      .mocked(renderArtifactToPdfBlob)
+      .mocked(renderArtifactToPdf)
       .mockRejectedValueOnce(new PdfFontUnavailableError(new Error("HTTP 404")))
     const { result } = renderHook(() => useArtifactPanelState())
     await act(async () => {
@@ -625,7 +687,7 @@ describe("useArtifactPanelState", () => {
     const a = makeArtifact()
     act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "jupyter" }))
     jest
-      .mocked(renderArtifactToPdfBlob)
+      .mocked(renderArtifactToPdf)
       .mockRejectedValueOnce(new ArtifactNotebookUnreadableError(a.id))
     const { result } = renderHook(() => useArtifactPanelState())
     await act(async () => {
@@ -637,7 +699,7 @@ describe("useArtifactPanelState", () => {
   it("does not send a code export failure to a Preview the artifact lacks", async () => {
     const a = makeArtifact()
     act(() => useArtifactStore.getState().updateArtifact(a.id, { type: "code" }))
-    jest.mocked(renderArtifactToPdfBlob).mockRejectedValueOnce(new Error("disk full"))
+    jest.mocked(renderArtifactToPdf).mockRejectedValueOnce(new Error("disk full"))
     const { result } = renderHook(() => useArtifactPanelState())
     await act(async () => {
       await result.current.handleExportAs("pdf")

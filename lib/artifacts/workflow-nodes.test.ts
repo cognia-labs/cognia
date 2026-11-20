@@ -193,6 +193,7 @@ describe("action.artifact.export", () => {
       data: "hello",
       mimeType: "text/plain;charset=utf-8",
       filename: "Revenue.json",
+      losses: [],
     })
     const result = await run("action.artifact.export", { artifactId: "art_1", format: "raw" })
     expect(result.output).toMatchObject({
@@ -211,6 +212,7 @@ describe("action.artifact.export", () => {
       },
       mimeType: "image/png",
       filename: "Revenue.png",
+      losses: [],
     })
     const result = await run("action.artifact.export", { artifactId: "art_1", format: "png" })
     expect(result.output).toMatchObject({
@@ -218,7 +220,21 @@ describe("action.artifact.export", () => {
       content: "3q2+7w==",
       mimeType: "image/png",
       byteLength: 4,
+      losses: [],
     })
+  })
+
+  it("passes on what a laid-out PDF could not keep (F11)", async () => {
+    useArtifactStore.setState({ artifacts: { art_1: ARTIFACT } } as never)
+    const losses = [{ kind: "image", count: 1 }]
+    renderArtifactExport.mockResolvedValue({
+      data: { arrayBuffer: async () => new Uint8Array([1]).buffer },
+      mimeType: "application/pdf",
+      filename: "Revenue.pdf",
+      losses,
+    })
+    const result = await run("action.artifact.export", { artifactId: "art_1", format: "pdf" })
+    expect(result.output).toMatchObject({ mimeType: "application/pdf", losses })
   })
 
   it("names the formats this artifact actually offers when refusing", async () => {

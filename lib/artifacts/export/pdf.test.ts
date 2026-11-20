@@ -17,6 +17,7 @@ const outputMock = jest.fn(() => new Blob(["pdf"], { type: "application/pdf" }))
 const jsPDFMock = jest.fn()
 const textMock = jest.fn()
 const addPageMock = jest.fn()
+const setPropertiesMock = jest.fn()
 jest.mock("jspdf", () => ({
   jsPDF: class {
     constructor(opts: unknown) {
@@ -29,12 +30,13 @@ jest.mock("jspdf", () => ({
     addPage = addPageMock
     setFont = jest.fn()
     setFontSize = jest.fn()
+    setProperties = setPropertiesMock
     splitTextToSize = (text: string) => text.split("\n")
     internal = { pageSize: { getHeight: () => 841.89, getWidth: () => 595.28 } }
   },
 }))
 
-import { renderArtifactToPdfBlob } from "./pdf"
+import { renderArtifactToPdf } from "./pdf"
 import { ArtifactNotebookUnreadableError, pdfNeedsMountedPreview } from "./document-blocks"
 import { ARTIFACT_RUNTIME_ADAPTERS } from "@/components/artifacts/runtime-adapters"
 
@@ -55,14 +57,14 @@ beforeAll(() => {
 beforeEach(() => {
   generatePdfMock.mockReset().mockResolvedValue({
     data: new Blob(["doc"], { type: "application/pdf" }),
-    mimeType: "application/pdf",
-    filename: "x.pdf",
+    losses: [],
   })
   renderPngMock.mockReset().mockResolvedValue(new Blob(["png"], { type: "image/png" }))
   addImageMock.mockClear()
   jsPDFMock.mockClear()
   textMock.mockClear()
   addPageMock.mockClear()
+  setPropertiesMock.mockClear()
   imageSize = { width: 800, height: 400 }
   imageShouldFail = false
 })
@@ -85,17 +87,17 @@ describe("text-shaped artifacts", () => {
   })
 
   it("lays a document out from its Markdown", async () => {
-    await renderArtifactToPdfBlob({ id: "a", type: "document", title: "T", content: "# hi" })
+    await renderArtifactToPdf({ id: "a", type: "document", title: "T", content: "# hi" })
     expect(generatePdfMock).toHaveBeenCalledWith({
       title: "T",
-      blocks: [{ kind: "heading", level: 1, text: "hi" }],
+      blocks: [{ kind: "heading", level: 1, runs: [{ text: "hi" }] }],
     })
     expect(renderPngMock).not.toHaveBeenCalled()
   })
 
   it("lays code out verbatim, not as Markdown (A07)", async () => {
     const content = "# comment\nif x:\n    y()"
-    await renderArtifactToPdfBlob({ id: "a", type: "code", title: "T", content })
+    await renderArtifactToPdf({ id: "a", type: "code", title: "T", content })
     expect(generatePdfMock).toHaveBeenCalledWith({
       title: "T",
       blocks: [{ kind: "code", text: content }],
@@ -119,29 +121,42 @@ describe("text-shaped artifacts", () => {
         },
       ],
     })
-    await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
+    await renderArtifactToPdf({ id: "a", type: "jupyter", title: "T", content })
     expect(generatePdfMock.mock.calls[0][0].blocks).toEqual([
-      { kind: "heading", level: 1, text: "Analysis" },
-      { kind: "paragraph", text: "A result." },
-      { kind: "paragraph", text: "In [7] (python)" },
+      { kind: "heading", level: 1, runs: [{ text: "Analysis" }] },
+      { kind: "paragraph", runs: [{ text: "A result." }] },
+      { kind: "paragraph", runs: [{ text: "In [7] (python)" }] },
       { kind: "code", text: "print(42)" },
       { kind: "code", text: "42\n" },
       { kind: "image", dataUrl: "data:image/png;base64,cG5n", format: "PNG" },
-      { kind: "heading", level: 2, text: "Conclusion" },
+      { kind: "heading", level: 2, runs: [{ text: "Conclusion" }] },
     ])
     expect(renderPngMock).not.toHaveBeenCalled()
   })
 
-  it("falls back to a stable title when the artifact has none", async () => {
-    await renderArtifactToPdfBlob({ id: "a", type: "document", title: "", content: "x" })
-    expect(generatePdfMock).toHaveBeenCalledWith(expect.objectContaining({ title: "artifact" }))
+  it("titles the PDF after the artifact, and leaves an untitled one untitled", async () => {
+    await renderArtifactToPdf({ id: "a", type: "document", title: "", content: "x" })
+    expect(generatePdfMock).toHaveBeenCalledWith(expect.objectContaining({ title: "" }))
+  })
+
+  it("hands back what the laid-out PDF could not keep", async () => {
+    const losses = [{ kind: "image", count: 2 }]
+    generatePdfMock.mockResolvedValueOnce({ data: new Blob(["doc"]), losses })
+    await expect(
+      renderArtifactToPdf({
+        id: "a",
+        type: "document",
+        title: "T",
+        content: "![x](https://x/a.png)",
+      })
+    ).resolves.toEqual({ data: expect.any(Blob), losses })
   })
 
   it.each(["{malformed", "null", '{"cells":null}'])(
     "rejects an unreadable notebook %s instead of printing its JSON (C09)",
     async (content) => {
       await expect(
-        renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
+        renderArtifactToPdf({ id: "a", type: "jupyter", title: "T", content })
       ).rejects.toBeInstanceOf(ArtifactNotebookUnreadableError)
       expect(generatePdfMock).not.toHaveBeenCalled()
       expect(jsPDFMock).not.toHaveBeenCalled()
@@ -173,7 +188,12 @@ describe("text-shaped artifacts", () => {
         },
       ],
     })
-    const blob = await renderArtifactToPdfBlob({ id: "a", type: "jupyter", title: "T", content })
+    const { data: blob } = await renderArtifactToPdf({
+      id: "a",
+      type: "jupyter",
+      title: "T",
+      content,
+    })
     const pdf = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => resolve(Buffer.from(reader.result as ArrayBuffer).toString("latin1"))
@@ -201,28 +221,31 @@ describe("visual artifacts", () => {
     (type) => expect(pdfNeedsMountedPreview({ type })).toBe(true)
   )
   it("rasterises on a white sheet — a transparent PNG prints unpredictably", async () => {
-    await renderArtifactToPdfBlob({ id: "a", type: "chart", title: "T", content: "{}" })
+    const out = await renderArtifactToPdf({ id: "a", type: "chart", title: "T", content: "{}" })
     expect(renderPngMock).toHaveBeenCalledWith(expect.objectContaining({ type: "chart" }), {
       background: "#ffffff",
     })
     expect(generatePdfMock).not.toHaveBeenCalled()
+    // A picture of the preview keeps what the preview shows.
+    expect(out.losses).toEqual([])
+    expect(setPropertiesMock).toHaveBeenCalledWith({ title: "T" })
   })
 
   it("turns the page landscape for an image that is wider than tall", async () => {
     imageSize = { width: 1200, height: 400 }
-    await renderArtifactToPdfBlob({ id: "a", type: "chart", title: "T", content: "{}" })
+    await renderArtifactToPdf({ id: "a", type: "chart", title: "T", content: "{}" })
     expect(jsPDFMock).toHaveBeenCalledWith(expect.objectContaining({ orientation: "landscape" }))
   })
 
   it("keeps portrait for a tall image", async () => {
     imageSize = { width: 400, height: 1200 }
-    await renderArtifactToPdfBlob({ id: "a", type: "mermaid", title: "T", content: "graph TD" })
+    await renderArtifactToPdf({ id: "a", type: "mermaid", title: "T", content: "graph TD" })
     expect(jsPDFMock).toHaveBeenCalledWith(expect.objectContaining({ orientation: "portrait" }))
   })
 
   it("never upscales a small image past its natural size", async () => {
     imageSize = { width: 100, height: 50 }
-    await renderArtifactToPdfBlob({ id: "a", type: "chart", title: "T", content: "{}" })
+    await renderArtifactToPdf({ id: "a", type: "chart", title: "T", content: "{}" })
     const [, , , , width, height] = addImageMock.mock.calls[0]
     expect(width).toBe(100)
     expect(height).toBe(50)
@@ -230,7 +253,7 @@ describe("visual artifacts", () => {
 
   it("scales a large image down to fit inside the page margins", async () => {
     imageSize = { width: 4000, height: 2000 }
-    await renderArtifactToPdfBlob({ id: "a", type: "chart", title: "T", content: "{}" })
+    await renderArtifactToPdf({ id: "a", type: "chart", title: "T", content: "{}" })
     const [, , x, y, width, height] = addImageMock.mock.calls[0]
     // Landscape A4 is 841.89 x 595.28pt with a 36pt margin on each side.
     expect(width).toBeLessThanOrEqual(841.89 - 72)

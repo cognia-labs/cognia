@@ -169,6 +169,7 @@ describe("exportCanvasDocument", () => {
       data: new Blob([format]),
       mimeType: format === "pdf" ? "application/pdf" : "image/png",
       filename: `ignored.${format}`,
+      losses: [],
     }))
   })
 
@@ -180,7 +181,12 @@ describe("exportCanvasDocument", () => {
       makeDoc({ title: "Report", language: "markdown" }),
       "raw"
     )
-    expect(outcome).toEqual({ kind: "saved", filename: "Report.md", location: "/tmp/Report.md" })
+    expect(outcome).toEqual({
+      kind: "saved",
+      filename: "Report.md",
+      location: "/tmp/Report.md",
+      losses: [],
+    })
     expect(saveExportMock).toHaveBeenCalledWith({
       filename: "Report.md",
       data: "hello world",
@@ -215,6 +221,23 @@ describe("exportCanvasDocument", () => {
       "pdf"
     )
     expect(outcome).toMatchObject({ kind: "saved", filename: "calc.pdf" })
+  })
+
+  it("carries what a laid-out PDF could not keep into the saved outcome (F11)", async () => {
+    const losses = [{ kind: "image", count: 1 }]
+    renderMock.mockResolvedValueOnce({
+      data: new Blob(["pdf"]),
+      mimeType: "application/pdf",
+      filename: "ignored.pdf",
+      losses,
+    })
+    const outcome = await exportCanvasDocument(makeDoc({ title: "Notes" }), "pdf")
+    expect(outcome).toEqual({
+      kind: "saved",
+      filename: "Notes.pdf",
+      location: "/tmp/Notes.pdf",
+      losses,
+    })
   })
 
   it.each<[ArtifactLanguage, "text" | "code"]>([
