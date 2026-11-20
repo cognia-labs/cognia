@@ -95,6 +95,9 @@ only after their image smoke tests pass. `latest*` tags move on stable release
 tags only (`v2.1.0`, never `v2.1.0-beta.1`); a prerelease gets its version tag.
 Every pushed image carries SBOM and max-level provenance attestations
 (`docker buildx imagetools inspect <image> --format '{{ json .SBOM }}'`).
+Runner images are published for `linux/amd64` only. On an ARM host, build
+the target you need from this Dockerfile; the Agent bundle the sandbox pool
+injects is published for both `linux/amd64` and `linux/arm64`.
 
 Full retains the legacy Agent set, including Cline. Cline is a launchable
 system runtime with no distribution in the bundle pins, so selected builds
