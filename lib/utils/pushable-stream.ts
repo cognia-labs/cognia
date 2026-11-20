@@ -53,6 +53,14 @@ export function createPushableStream(): PushableStream {
             pending = resolve
           })
         },
+        // A consumer that stops early (stop(), a failed fragment) releases the
+        // stream: buffered chunks are dropped and later pushes are ignored, so
+        // a producer that keeps pushing no longer grows a queue nobody reads.
+        return(): Promise<IteratorResult<string>> {
+          queue.length = 0
+          close()
+          return Promise.resolve({ value: undefined as unknown as string, done: true })
+        },
       }
     },
   }

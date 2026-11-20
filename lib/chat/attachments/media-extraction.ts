@@ -4,6 +4,7 @@ import type {
   AttachmentExtractedContent,
 } from "@cognia/agent-config-types/attachment"
 import { formatAttachmentLocator } from "@cognia/agent-config-types/attachment"
+import { buildProviderOperationProfile } from "@cognia/provider-core/operations/capability-matrix"
 import type { ProviderOperationExecutor } from "@/lib/ai/operations/executor"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import { withTimeout } from "@cognia/primitives/with-timeout"
@@ -27,6 +28,25 @@ export interface AttachmentMediaDeps {
   canUseFfmpeg: () => boolean
 }
 
+/**
+ * Whether a provider can serve `transcription.create`, read from the pure
+ * ADR-0163 capability matrix. A built-in provider answers definitively — a
+ * language-only vendor such as Anthropic is `unsupported`, which the model
+ * picker used to offer and the run then failed on a missing SDK factory. A
+ * custom deployment, or an id the catalog does not know, is `unknown` and
+ * stays selectable: only the operation plane can answer for it at run time.
+ */
+export type AttachmentTranscriptionSupport = "supported" | "unsupported" | "unknown"
+
+export function attachmentTranscriptionSupport(providerId: string): AttachmentTranscriptionSupport {
+  if (!providerId.trim()) return "unknown"
+  const cell = buildProviderOperationProfile({ providerId }).cells.find(
+    (candidate) => candidate.operationId === "transcription.create"
+  )
+  if (!cell || cell.support === "unknown") return "unknown"
+  return cell.support === "unsupported" ? "unsupported" : "supported"
+}
+
 function safeText(text: string): string {
   const safe = hasNoLeakingPii(text) ? text : redactText(text).redacted
   if (!hasNoLeakingPii(safe)) throw new Error("attachment_redaction_failed")
@@ -44,6 +64,13 @@ export async function processAttachmentMedia(
   if (!content || !attachment.original) throw new Error("attachment_source_unavailable")
   if (!options.providerId.trim() || !options.modelId.trim())
     throw new Error("attachment_model_required")
+  // The picker filters these out; re-checked here so no caller can spend a
+  // queued run on a provider that has no transcription endpoint.
+  if (
+    options.method === "transcribe" &&
+    attachmentTranscriptionSupport(options.providerId) === "unsupported"
+  )
+    throw new Error("attachment_transcription_unsupported")
   options.signal?.throwIfAborted()
   const deps = injected ?? {
     executor: (await import("@/lib/ai/operations")).getProviderOperationExecutor(),

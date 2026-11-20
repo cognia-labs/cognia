@@ -811,12 +811,16 @@ export function StagedAttachmentsProvider({
               })
             )
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             if (motionRunsRef.current.get(id) !== controller) return
             motionRunsRef.current.delete(id)
-            setResults((prev) =>
-              new Map(prev).set(id, { ...current, processingError: "processing-failed" })
-            )
+            // Keep the typed refusal (e.g. a provider without transcription) so
+            // the dialog can say what to change, instead of "check and retry".
+            const processingError =
+              error instanceof Error && error.message === "attachment_transcription_unsupported"
+                ? error.message
+                : "processing-failed"
+            setResults((prev) => new Map(prev).set(id, { ...current, processingError }))
           })
       },
       cancelProcessing: (id) => {

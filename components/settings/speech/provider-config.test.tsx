@@ -23,15 +23,54 @@ jest.mock("./api-key-input", () => ({
   ApiKeyInput: ({ label }: { label: string }) => <div data-testid="api-key">{label}</div>,
 }))
 
+jest.mock("./tts-voice-selector", () => ({
+  TtsVoiceSelector: ({
+    options,
+  }: {
+    options: readonly { id: string; name: string; description?: string }[]
+  }) => (
+    <ul>
+      {options.map((option) => (
+        <li key={option.id} data-testid={`voice-${option.id}`}>
+          {option.name}
+          {option.description ? ` — ${option.description}` : ""}
+        </li>
+      ))}
+    </ul>
+  ),
+}))
+
 import {
   ElevenLabsConfig,
   LocalOpenAiCompatibleConfig,
   MistralConfig,
   PROVIDER_CONFIG_COMPONENTS,
+  SystemConfig,
 } from "./provider-config"
 
 beforeEach(() => {
   saveMock.mockClear()
+})
+
+describe("SystemConfig", () => {
+  afterEach(() => {
+    delete (window as unknown as { speechSynthesis?: unknown }).speechSynthesis
+  })
+
+  it("labels a voice the platform runs as a network service (F15)", () => {
+    const voices = [
+      { voiceURI: "local", name: "Local", lang: "en-US", localService: true },
+      { voiceURI: "remote", name: "Remote", lang: "en-US", localService: false },
+    ]
+    ;(window as unknown as { speechSynthesis: unknown }).speechSynthesis = {
+      getVoices: () => voices,
+      onvoiceschanged: null,
+    }
+    const { unmount } = render(<SystemConfig />)
+    expect(screen.getByTestId("voice-remote").textContent).toBe("Remote — voiceOnline")
+    expect(screen.getByTestId("voice-local").textContent).toBe("Local")
+    unmount()
+  })
 })
 
 describe("MistralConfig", () => {

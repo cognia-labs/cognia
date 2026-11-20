@@ -8380,7 +8380,8 @@
           "progress": "Processed {processed} of {total}",
           "rejected": "{count} attachment(s) need processing. Retry or remove them before sending.",
           "retry": "Retry extraction",
-          "transcribe": "Transcribe audio"
+          "transcribe": "Transcribe audio",
+          "transcriptionUnsupported": "The selected provider cannot transcribe audio. Choose a model from a provider that offers transcription."
         },
         "rejectReason": {
           "audioUnprocessed": "Transcribe this audio before sending.",
@@ -30925,12 +30926,15 @@
       "autoPlay": "Auto-play replies",
       "autoPlayHelp": "Speak assistant messages aloud as they arrive.",
       "backAria": "Back to Me",
+      "deviceVoice": "This phone's voice",
+      "deviceVoiceHelp": "The system voice this phone reads replies with.",
       "localEndpoint": "Local endpoint",
       "localEndpointHelp": "This device-local address and model are used only in standalone mode.",
       "model": "Model",
       "pitch": "Pitch",
       "provider": "Voice provider",
       "providerHelp": "Cloud-provider API keys stay configured on the desktop.",
+      "providerHostOnly": "This phone always reads replies with its system voice. The provider and its voice apply when your desktop reads aloud.",
       "providers": {
         "cartesia": "Cartesia",
         "deepgram": "Deepgram",
@@ -30946,7 +30950,7 @@
         "xiaomi": "Xiaomi"
       },
       "rate": "Speed",
-      "sttAuto": "Auto-detect",
+      "sttFollowApp": "Follow app language",
       "sttLanguage": "Recognition language",
       "sttLanguageHelp": "Language hint for voice-to-text dictation.",
       "sttTitle": "Speech-to-text",
@@ -58731,8 +58735,6 @@
         "mistralVoiceIdHint": "Enter a Voice Library ID created in the Mistral console.",
         "mistralVoiceIdPlaceholder": "voice_…",
         "model": "Model",
-        "realtimeDesktopOnly": "OpenAI Realtime streams over a WebSocket and only works in the desktop app.",
-        "realtimeIntro": "Low-latency streaming voices that start speaking on the first audio chunk. Uses your OpenAI API key.",
         "speed": "Speed",
         "timeoutSeconds": "Timeout (seconds)",
         "voice": "Voice",
@@ -58741,6 +58743,7 @@
         "voiceInstructions": "Voice instructions (gpt-4o-mini-tts only)",
         "voiceInstructionsPlaceholder": "Speak in a cheerful, encouraging tone.",
         "voiceNoResults": "No matching voices",
+        "voiceOnline": "Online voice · text with sensitive data is read by an on-device voice",
         "voicePausePreview": "Stop voice preview",
         "voicePreview": "Preview voice",
         "voiceSearchPlaceholder": "Search voices…",
@@ -58754,10 +58757,11 @@
         "xiaomiStylePlaceholder": "No style"
       },
       "stt": {
-        "description": "The composer's voice-input button uses your browser's Web Speech API. Pick the language you usually speak and the microphone you want to use.",
+        "description": "The composer's voice-input button uses your browser's Web Speech API. Pick the language you usually speak.",
         "language": "Language",
         "micPermissionHint": "Grant microphone permission once for the device list to populate.",
         "microphone": "Microphone",
+        "microphoneLiveOnly": "Used by live voice. Dictation records from the system default microphone.",
         "notSupported": "Not supported",
         "systemDefault": "System default",
         "title": "Speech-to-text"

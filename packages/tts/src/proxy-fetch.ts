@@ -10,6 +10,12 @@
  * `null` (e.g. web shell) — we fall back to plain browser `fetch` and assume
  * the provider/voice combo is browser-friendly; UI surfaces a warning for
  * the combinations that aren't.
+ *
+ * Neither path follows redirects. The native proxy builds its client with
+ * `redirect::Policy::none()`; the browser path asks for `redirect: "error"`.
+ * A provider URL is validated before the request (the local adapter only
+ * accepts loopback hosts), and a followed 3xx would carry the text to
+ * whatever host the response named.
  */
 
 import { getTtsHost } from "./host"
@@ -83,6 +89,7 @@ async function browserFetch(url: string, init: ProxyFetchInit): Promise<ProxyFet
       method: init.method ?? "POST",
       headers,
       body,
+      redirect: "error",
       signal: timeoutController?.signal ?? init.signal,
     })
     const bytes = await res.arrayBuffer()

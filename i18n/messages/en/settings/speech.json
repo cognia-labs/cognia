@@ -89,8 +89,6 @@
     "mistralVoiceIdHint": "Enter a Voice Library ID created in the Mistral console.",
     "mistralVoiceIdPlaceholder": "voice_…",
     "model": "Model",
-    "realtimeDesktopOnly": "OpenAI Realtime streams over a WebSocket and only works in the desktop app.",
-    "realtimeIntro": "Low-latency streaming voices that start speaking on the first audio chunk. Uses your OpenAI API key.",
     "speed": "Speed",
     "timeoutSeconds": "Timeout (seconds)",
     "voice": "Voice",
@@ -99,6 +97,7 @@
     "voiceInstructions": "Voice instructions (gpt-4o-mini-tts only)",
     "voiceInstructionsPlaceholder": "Speak in a cheerful, encouraging tone.",
     "voiceNoResults": "No matching voices",
+    "voiceOnline": "Online voice · text with sensitive data is read by an on-device voice",
     "voicePausePreview": "Stop voice preview",
     "voicePreview": "Preview voice",
     "voiceSearchPlaceholder": "Search voices…",
@@ -112,10 +111,11 @@
     "xiaomiStylePlaceholder": "No style"
   },
   "stt": {
-    "description": "The composer's voice-input button uses your browser's Web Speech API. Pick the language you usually speak and the microphone you want to use.",
+    "description": "The composer's voice-input button uses your browser's Web Speech API. Pick the language you usually speak.",
     "language": "Language",
     "micPermissionHint": "Grant microphone permission once for the device list to populate.",
     "microphone": "Microphone",
+    "microphoneLiveOnly": "Used by live voice. Dictation records from the system default microphone.",
     "notSupported": "Not supported",
     "systemDefault": "System default",
     "title": "Speech-to-text"

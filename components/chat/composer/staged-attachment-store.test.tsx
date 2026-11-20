@@ -12,6 +12,10 @@ jest.mock("@/lib/chat/attachments/dispatch", () => ({
 jest.mock("@/lib/chat/attachments/video/preprocess", () => ({
   preprocessMotionAttachment: jest.fn(),
 }))
+jest.mock("@/lib/chat/attachments/media-extraction", () => ({
+  ...jest.requireActual("@/lib/chat/attachments/media-extraction"),
+  processAttachmentMedia: jest.fn(),
+}))
 
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { useEffect } from "react"
@@ -29,6 +33,7 @@ import { VideoPreprocessError } from "@/lib/chat/attachments/video/frame-source"
 import { DEFAULT_VIDEO_SETTINGS } from "@/lib/chat/attachments/video/settings"
 import { sha256Blob } from "@/lib/utils/hash"
 import { prepareComposerAttachments } from "@/lib/chat/attachments/prepare"
+import { processAttachmentMedia } from "@/lib/chat/attachments/media-extraction"
 import {
   StagedAttachmentsProvider,
   useStagedAttachments,
@@ -926,4 +931,58 @@ it("keeps File provenance in staged state and the send extraction without giving
   expect(captured.store.byId.get(remote)?.remoteDocument).toEqual(cloudProvenance)
   expect(captured.store.precomputed.get(remote)?.remoteDocument).toEqual(cloudProvenance)
   expect(captured.store.byId.get(local)?.remoteDocument).toBeUndefined()
+})
+
+describe("StagedAttachmentsProvider — explicit media processing", () => {
+  const processMock = processAttachmentMedia as jest.MockedFunction<typeof processAttachmentMedia>
+
+  beforeEach(() => {
+    processMock.mockReset()
+    extractMock.mockResolvedValue({
+      kind: "audio",
+      block: null,
+      tokens: 0,
+      original: new Blob(["pcm"], { type: "audio/wav" }),
+      rejectReason: "audio-unprocessed",
+    })
+  })
+
+  async function stageAudio(): Promise<string> {
+    mount()
+    await act(async () => {
+      captured.addFiles([new File(["pcm"], "meeting.wav", { type: "audio/wav" })])
+    })
+    await waitFor(() => expect(captured.store.order).toHaveLength(1))
+    const id = captured.store.order[0]!
+    await waitFor(() => expect(captured.store.byId.get(id)?.status).not.toBe("extracting"))
+    return id
+  }
+
+  it("keeps a typed transcription refusal so the dialog can name the fix", async () => {
+    processMock.mockRejectedValue(new Error("attachment_transcription_unsupported"))
+    const id = await stageAudio()
+    act(() =>
+      captured.store.processMedia(id, {
+        method: "transcribe",
+        providerId: "anthropic",
+        modelId: "claude",
+      })
+    )
+    await waitFor(() =>
+      expect(captured.store.byId.get(id)?.processingError).toBe(
+        "attachment_transcription_unsupported"
+      )
+    )
+  })
+
+  it("reports any other processing failure generically", async () => {
+    processMock.mockRejectedValue(new Error("network down"))
+    const id = await stageAudio()
+    act(() =>
+      captured.store.processMedia(id, { method: "transcribe", providerId: "openai", modelId: "w" })
+    )
+    await waitFor(() =>
+      expect(captured.store.byId.get(id)?.processingError).toBe("processing-failed")
+    )
+  })
 })

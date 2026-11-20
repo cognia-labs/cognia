@@ -11,8 +11,10 @@
  *  - `isNativeShell` — gates the Tauri-websocket providers (Edge TTS,
  *    OpenAI realtime).
  *  - `allowCloudText` — applies the shared outbound PII gate before text
- *    reaches any cloud adapter; loopback/system paths are filtered by the
- *    orchestrator and never consult this cloud boundary.
+ *    reaches any cloud adapter or a system voice the platform runs as a
+ *    remote service; loopback paths and on-device voices never consult it.
+ *  - `recordSynthesis` — meters each synthesis a provider performed into the
+ *    Usage surface (cloud TTS is billed per character).
  *  - `notify` — surfaces orchestrator failures as sonner toasts.
  */
 
@@ -20,9 +22,45 @@ import { toast } from "sonner"
 import { hasNoLeakingPii } from "@cognia/redact"
 
 import type { ProxyFetchInit, ProxyFetchResult } from "@cognia/tts/proxy-fetch"
-import { setTtsHost } from "@cognia/tts/host"
+import { setTtsHost, type TtsSynthesisRecord } from "@cognia/tts/host"
+import type { TTSProvider } from "@cognia/tts/types"
 
+import { recordSurfaceUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import { isCapacitor, isTauri } from "@/lib/tauri"
+
+/**
+ * Providers that synthesize on this machine and bill nothing. Metering them
+ * would report spend that never happened — worse than reporting none.
+ */
+const FREE_TTS_PROVIDERS: ReadonlySet<TTSProvider> = new Set<TTSProvider>([
+  "system",
+  "local-openai-compatible",
+])
+
+let synthesisCounter = 0
+
+/** Record one provider synthesis as a usage row; quantity only, priced elsewhere. */
+function meterSynthesis({ provider, characters, requestId }: TtsSynthesisRecord): void {
+  if (characters <= 0 || FREE_TTS_PROVIDERS.has(provider)) return
+  synthesisCounter += 1
+  swallowUsageWrite(
+    recordSurfaceUsage({
+      surface: "tts",
+      // One row per generated chunk: a request spans several, and the same
+      // sentence synthesized twice is charged twice.
+      operationId: `${provider}:${requestId}:${synthesisCounter}`,
+      scopeId: provider,
+      usage: {
+        providerId: provider,
+        unitBreakdown: { characters },
+        // Per-character rates live in the pricing catalog; this layer records
+        // the quantity and lets the one pricing authority decide the cost.
+        costSource: "unknown",
+        costKnown: false,
+      },
+    })
+  )
+}
 
 const utf8Decoder = new TextDecoder("utf-8")
 
@@ -103,6 +141,7 @@ setTtsHost({
   isNativeShell: isTauri,
   isMobileShell: isCapacitor,
   allowCloudText: (text) => hasNoLeakingPii(text),
+  recordSynthesis: meterSynthesis,
   notify: {
     message: (text) => {
       toast.message(text)
@@ -113,5 +152,5 @@ setTtsHost({
   },
 })
 
-/** Test seam — re-exported so binding tests can assert against the impl. */
-export { tauriProxyFetch }
+/** Test seams — re-exported so binding tests can assert against the impl. */
+export { tauriProxyFetch, meterSynthesis }

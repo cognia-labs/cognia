@@ -89,8 +89,6 @@
     "mistralVoiceIdHint": "请输入在 Mistral 控制台创建的 Voice Library ID。",
     "mistralVoiceIdPlaceholder": "voice_…",
     "model": "模型",
-    "realtimeDesktopOnly": "OpenAI Realtime 经 WebSocket 流式传输,仅在桌面应用中可用。",
-    "realtimeIntro": "低延迟流式声音,首个音频块到达即开始朗读。使用你的 OpenAI API 密钥。",
     "speed": "语速",
     "timeoutSeconds": "超时（秒）",
     "voice": "声音",
@@ -99,6 +97,7 @@
     "voiceInstructions": "声音风格说明（仅 gpt-4o-mini-tts）",
     "voiceInstructionsPlaceholder": "用愉快、鼓舞人心的语气说话。",
     "voiceNoResults": "没有匹配的声音",
+    "voiceOnline": "在线声音 · 含敏感数据的文本改用本机声音朗读",
     "voicePausePreview": "停止声音试听",
     "voicePreview": "试听声音",
     "voiceSearchPlaceholder": "搜索声音…",
@@ -112,10 +111,11 @@
     "xiaomiStylePlaceholder": "无风格"
   },
   "stt": {
-    "description": "组合输入框的语音输入按钮使用浏览器的 Web Speech API。请选择你常说的语言以及偏好的麦克风。",
+    "description": "组合输入框的语音输入按钮使用浏览器的 Web Speech API。请选择你常说的语言。",
     "language": "语言",
     "micPermissionHint": "需要先授权一次麦克风权限,设备列表才会显示。",
     "microphone": "麦克风",
+    "microphoneLiveOnly": "仅用于实时语音。语音输入使用系统默认麦克风。",
     "notSupported": "不支持",
     "systemDefault": "系统默认",
     "title": "语音转文字"

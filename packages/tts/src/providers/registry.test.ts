@@ -31,9 +31,6 @@ describe("TTS provider registry", () => {
       if (adapter.kind === "http") {
         expect(typeof adapter.generate).toBe("function")
       }
-      if (adapter.kind === "streaming") {
-        expect(typeof adapter.generateStream).toBe("function")
-      }
     }
   })
 

@@ -15,7 +15,10 @@ describe("SentenceStreamSplitter", () => {
     const s = new SentenceStreamSplitter()
     // "Hi, " has a comma but is under 10 chars — hold.
     expect(s.push("Hi, ")).toEqual([])
-    expect(s.push("everyone here.")).toEqual(["Hi, everyone here."])
+    // The full stop is the last character: the next token decides whether it
+    // ends the sentence, so the fragment waits for it (or for flush).
+    expect(s.push("everyone here.")).toEqual([])
+    expect(s.push(" More")).toEqual(["Hi, everyone here."])
   })
 
   it("switches to sentence enders (narrow set) after the first fragment", () => {
@@ -28,8 +31,11 @@ describe("SentenceStreamSplitter", () => {
 
   it("force-emits the first fragment after enough words without a separator", () => {
     const s = new SentenceStreamSplitter({ forceFirstFragmentAfterWords: 5 })
-    // Five words, no separator → forced out so first audio isn't held up.
-    expect(s.push("one two three four five")).toEqual(["one two three four five"])
+    // Five words, no separator → forced out so first audio isn't held up. The
+    // last word may still be growing ("fiv" + "e"), so the cut backs up to
+    // the last whitespace and keeps it buffered.
+    expect(s.push("one two three four five")).toEqual(["one two three four"])
+    expect(s.flush()).toBe("five")
   })
 
   it("force-emits the first fragment by characters for CJK (no spaces)", () => {
@@ -46,7 +52,35 @@ describe("SentenceStreamSplitter", () => {
 
   it("emits multiple fragments from a single push", () => {
     const s = new SentenceStreamSplitter({ minFirstFragmentLength: 1, minSentenceLength: 1 })
-    expect(s.push("One. Two. Three.")).toEqual(["One.", "Two.", "Three."])
+    expect(s.push("One. Two. Three.")).toEqual(["One.", "Two."])
+    expect(s.flush()).toBe("Three.")
+  })
+
+  it("never cuts inside a token on ASCII punctuation", () => {
+    const s = new SentenceStreamSplitter()
+    // An address, a decimal and an abbreviation all carry a full stop with no
+    // whitespace after it. Cutting there would read "3." / "14" aloud and let
+    // half an address pass the per-fragment PII gate on its own.
+    expect(s.push("Write to alice@example.com about pi 3.14 e.g.today")).toEqual([])
+    expect(s.push(". Then")).toEqual(["Write to alice@example.com about pi 3.14 e.g.today."])
+  })
+
+  it("cuts after closing quotes that follow the punctuation", () => {
+    const s = new SentenceStreamSplitter({ minFirstFragmentLength: 1 })
+    expect(s.push('He said "stop." Then left')).toEqual(['He said "stop."'])
+  })
+
+  it("does not force-cut the first fragment through a trailing ASCII run", () => {
+    const s = new SentenceStreamSplitter({ forceFirstFragmentAfterChars: 12 })
+    // Unspaced CJK followed by an address still arriving: cut before the run.
+    expect(s.push("请把文件发给我的邮箱alice@exa")).toEqual(["请把文件发给我的邮箱"])
+    expect(s.push("mple.com")).toEqual([])
+    expect(s.flush()).toBe("alice@example.com")
+  })
+
+  it("does not force-cut a buffer that is one unbroken ASCII run", () => {
+    const s = new SentenceStreamSplitter({ forceFirstFragmentAfterChars: 12 })
+    expect(s.push("https://example.com/a/very/long/path")).toEqual([])
   })
 
   it("flush returns the buffered tail once, then nothing", () => {

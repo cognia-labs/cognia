@@ -25,6 +25,9 @@ jest.mock("@/lib/db/mobile-outbound-queue", () => ({
   enqueue: (arg: unknown) => enqueueMock(arg),
 }))
 
+const platformRef = { current: "web" }
+jest.mock("@/hooks/use-platform", () => ({ usePlatform: () => platformRef.current }))
+
 // Render the Radix Select as a native <select> so `onValueChange` is testable;
 // aria-label rides on SelectTrigger, options come from SelectItem.
 jest.mock("@/components/ui/select", () => {
@@ -112,6 +115,7 @@ beforeEach(() => {
   saveMock.mockReset()
   enqueueMock.mockReset()
   settingsRef.current = { ttsEnabled: false, ttsProvider: "system" }
+  platformRef.current = "web"
 })
 
 describe("MobileSpeechPage", () => {
@@ -277,6 +281,60 @@ describe("MobileSpeechPage", () => {
   it("disables the voice picker until TTS is enabled", () => {
     render(<Page />)
     expect(screen.getByTestId("speech-tts-voice")).toBeDisabled()
+  })
+
+  it("labels the unset recognition language as following the app language", () => {
+    render(<Page />)
+    // Web Speech has no language detection: unset resolves to the app locale.
+    const option = screen.getByTestId("speech-stt-language").querySelector('option[value="auto"]')
+    expect(option).toHaveTextContent("Follow app language")
+    expect(screen.queryByText("Auto-detect")).not.toBeInTheDocument()
+  })
+
+  describe("on the native shell, where the phone always reads with the system voice", () => {
+    beforeEach(() => {
+      platformRef.current = "mobile"
+      ;(window as unknown as { speechSynthesis: unknown }).speechSynthesis = {
+        getVoices: () => [{ voiceURI: "voice-ting", name: "Ting-Ting", lang: "zh-CN" }],
+        onvoiceschanged: null,
+      }
+    })
+    afterEach(() => {
+      delete (window as unknown as { speechSynthesis?: unknown }).speechSynthesis
+    })
+
+    it("keeps the device voice, rate and pitch while a cloud provider is saved", async () => {
+      settingsRef.current = { ttsEnabled: true, ttsProvider: "openai" }
+      render(<Page />)
+      expect(screen.getByTestId("speech-tts-provider-host-only")).toHaveTextContent(
+        "This phone always reads replies with its system voice."
+      )
+      // The cloud voice still configures the desktop's read-aloud.
+      expect(screen.getByTestId("speech-tts-voice")).toBeInTheDocument()
+      expect(screen.getByTestId("speech-tts-rate")).toBeInTheDocument()
+      expect(screen.getByTestId("speech-tts-pitch")).toBeInTheDocument()
+
+      fireEvent.change(screen.getByTestId("speech-tts-device-voice"), {
+        target: { value: "voice-ting" },
+      })
+      await Promise.resolve()
+      expect(saveMock).toHaveBeenCalledWith({ systemVoice: "voice-ting" })
+    })
+
+    it("does not duplicate the voice picker when the system voice is the provider", () => {
+      settingsRef.current = { ttsEnabled: true, ttsProvider: "system" }
+      render(<Page />)
+      expect(screen.getByTestId("speech-tts-voice")).toBeInTheDocument()
+      expect(screen.queryByTestId("speech-tts-device-voice")).not.toBeInTheDocument()
+      expect(screen.getByTestId("speech-tts-provider-host-only")).toBeInTheDocument()
+    })
+  })
+
+  it("shows no device-voice controls off the native shell", () => {
+    settingsRef.current = { ttsEnabled: true, ttsProvider: "openai" }
+    render(<Page />)
+    expect(screen.queryByTestId("speech-tts-device-voice")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("speech-tts-provider-host-only")).not.toBeInTheDocument()
   })
 
   it("selecting an STT language persists it; 'auto' clears the override", async () => {

@@ -45,7 +45,10 @@ import { formatBytesCompact } from "@/lib/observability/format-utils"
 import type { StagedAttachmentState } from "./staged-attachment-store"
 import { VideoPreprocessPanel } from "./video-preprocess-panel"
 import { ModelSelect, type ModelSelectChoice } from "@/components/shared/model-select"
-import type { AttachmentMediaOptions } from "@/lib/chat/attachments/media-extraction"
+import {
+  attachmentTranscriptionSupport,
+  type AttachmentMediaOptions,
+} from "@/lib/chat/attachments/media-extraction"
 import { ContextPreviewDialogContent, ContextPreviewDialogHeader } from "./context-preview-dialog"
 
 export interface PreviewTarget {
@@ -84,6 +87,11 @@ export interface AttachmentPreviewDialogProps {
   videoRoute: NativeVideoVerdict
   /** Re-samples a staged video or animated GIF with new settings. */
   onApplyVideoSettings: (attachmentId: string, settings: VideoPreprocessSettings) => void
+}
+
+/** Module-level so the picker's filter keeps one identity across renders. */
+function canTranscribeWith(providerId: string): boolean {
+  return attachmentTranscriptionSupport(providerId) !== "unsupported"
 }
 
 /** Renders extracted text with the PII gate's substitutions marked. */
@@ -135,6 +143,12 @@ export function AttachmentPreviewDialog(props: AttachmentPreviewDialogProps) {
   const isMotion = isVideo || state?.video !== undefined
   const isAudio =
     state?.extracted?.kind === "audio" || (target?.mediaType ?? "").startsWith("audio/")
+  // A plain audio file offers only "Transcribe"; motion offers both actions.
+  const transcribeOnly = isAudio && !isMotion && !isImage
+  const transcriptionUnsupported = useMemo(
+    () => attachmentTranscriptionSupport(processingModel.providerId) === "unsupported",
+    [processingModel.providerId]
+  )
   const extracted = state?.extracted
   const modelText = extracted?.text
   const redactionCount = modelText ? countRedactions(modelText) : 0
@@ -297,8 +311,19 @@ export function AttachmentPreviewDialog(props: AttachmentPreviewDialogProps) {
                     provider={processingModel.providerId}
                     onSelect={setProcessingModel}
                     disabled={state?.status === "extracting"}
+                    // Audio can only be transcribed, so a provider without a
+                    // transcription endpoint is not a choice at all here.
+                    providerFilter={transcribeOnly ? canTranscribeWith : undefined}
                   />
                   <p className="text-xs text-muted-foreground">{t("processing.cloudNotice")}</p>
+                  {(isAudio || isMotion) && transcriptionUnsupported ? (
+                    <p
+                      className="text-xs text-warning-ink"
+                      data-testid="attachment-transcription-unsupported"
+                    >
+                      {t("processing.transcriptionUnsupported")}
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-2">
                     {isAudio || isMotion ? (
                       <Button
@@ -308,7 +333,8 @@ export function AttachmentPreviewDialog(props: AttachmentPreviewDialogProps) {
                         disabled={
                           state?.status === "extracting" ||
                           !processingModel.modelId ||
-                          !processingModel.providerId
+                          !processingModel.providerId ||
+                          transcriptionUnsupported
                         }
                         onClick={() =>
                           props.onProcessMedia?.(target.id, {
@@ -367,9 +393,11 @@ export function AttachmentPreviewDialog(props: AttachmentPreviewDialogProps) {
               state?.status === "rejected" ? (
                 <div className="mb-2 flex items-center gap-2 text-xs" role="alert">
                   {t(
-                    isAudio && state.extracted?.rejectReason === "audio-unprocessed"
-                      ? "processing.audioRequired"
-                      : "processing.failed"
+                    state.processingError === "attachment_transcription_unsupported"
+                      ? "processing.transcriptionUnsupported"
+                      : isAudio && state.extracted?.rejectReason === "audio-unprocessed"
+                        ? "processing.audioRequired"
+                        : "processing.failed"
                   )}
                   {target && !isAudio ? (
                     <Button

@@ -13,6 +13,8 @@ interface SpeechRecognition extends EventTarget {
   lang: string
   start(): void
   stop(): void
+  /** Stop without delivering pending results; still fires `end`. */
+  abort(): void
   onstart: ((this: SpeechRecognition, ev: Event) => void) | null
   onend: ((this: SpeechRecognition, ev: Event) => void) | null
   onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null
@@ -115,12 +117,19 @@ export const SpeechInput = ({
   const onListeningChangeRef = useRef<SpeechInputProps["onListeningChange"]>(onListeningChange)
   const onErrorRef = useRef<SpeechInputProps["onError"]>(onError)
   const isListeningRef = useRef(false)
+  /**
+   * Whether the caller has disabled the control. Read by the result paths so
+   * a recognizer or recording that outlives the disable cannot write into a
+   * draft the user can no longer stop.
+   */
+  const disabledRef = useRef(disabled === true)
 
   // Keep refs in sync
   onTranscriptionChangeRef.current = onTranscriptionChange
   onAudioRecordedRef.current = onAudioRecorded
   onListeningChangeRef.current = onListeningChange
   onErrorRef.current = onError
+  disabledRef.current = disabled === true
 
   const setIsListening = useCallback((next: boolean) => {
     setIsListeningState(next)
@@ -152,6 +161,7 @@ export const SpeechInput = ({
     }
 
     const handleResult = (event: Event) => {
+      if (disabledRef.current) return
       const speechEvent = event as SpeechRecognitionEvent
       let finalTranscript = ""
 
@@ -189,11 +199,30 @@ export const SpeechInput = ({
       speechRecognition.removeEventListener("end", handleEnd)
       speechRecognition.removeEventListener("result", handleResult)
       speechRecognition.removeEventListener("error", handleError)
-      speechRecognition.stop()
+      // The listeners are gone, so this recognizer's `end` can no longer reset
+      // the listening state. Abort it (a language switch must not deliver a
+      // result recognised under the old language) and reset here, or the
+      // button stays "listening" over a fresh recognizer that never started
+      // and the next click calls stop() instead of start().
+      speechRecognition.abort()
       recognitionRef.current = null
       setIsRecognitionReady(false)
+      setIsListening(false)
     }
   }, [mode, lang, setIsListening])
+
+  // Disabling the control while it records must stop the microphone: the
+  // stop button is disabled with it, so a session left running could neither
+  // be ended by the user nor be trusted not to append to the draft. The
+  // `end` / `stop` event resets the listening state.
+  useEffect(() => {
+    if (disabled !== true || !isListeningRef.current) return
+    if (mode === "speech-recognition") {
+      recognitionRef.current?.abort()
+    } else if (mode === "media-recorder" && mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop()
+    }
+  }, [disabled, mode])
 
   // Cleanup MediaRecorder and stream on unmount
   useEffect(
@@ -233,6 +262,10 @@ export const SpeechInput = ({
           track.stop()
         }
         streamRef.current = null
+        setIsListening(false)
+        // Stopped because the control was disabled: the recording is
+        // discarded rather than transcribed into a draft the user left.
+        if (disabledRef.current) return
 
         const audioBlob = new Blob(audioChunksRef.current, {
           type: "audio/webm",
@@ -242,7 +275,7 @@ export const SpeechInput = ({
           setIsProcessing(true)
           try {
             const transcript = await onAudioRecordedRef.current(audioBlob)
-            if (transcript) {
+            if (transcript && !disabledRef.current) {
               onTranscriptionChangeRef.current?.(transcript)
             }
           } catch {

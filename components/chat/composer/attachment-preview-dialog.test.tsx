@@ -1,10 +1,12 @@
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { DEFAULT_VIDEO_SETTINGS } from "@/lib/chat/attachments/video/settings"
 import type { VideoPreprocessResult } from "@/lib/chat/attachments/video/preprocess"
 import { AttachmentPreviewDialog, type PreviewTarget } from "./attachment-preview-dialog"
 import type { StagedAttachmentState } from "./staged-attachment-store"
+import { PROVIDERS } from "@cognia/provider-types/provider"
+import { useSettingsStore } from "@/stores/settings"
 
 // An open Sheet sets `pointer-events: none` on <body>, and Radix tabs activate
 // on mouseDown rather than click.
@@ -583,6 +585,115 @@ describe("AttachmentPreviewDialog — cancellable media processing", () => {
     await user().click(screen.getByRole("tab", { name: "Processed" }))
     expect(screen.getByRole("button", { name: "Transcribe audio" })).toBeDisabled()
     expect(onProcessMedia).not.toHaveBeenCalled()
+  })
+
+  describe("transcription capability", () => {
+    // Radix Popover + cmdk Command need these pointer/scroll primitives in jsdom.
+    beforeAll(() => {
+      if (!Element.prototype.hasPointerCapture) Element.prototype.hasPointerCapture = () => false
+      if (!Element.prototype.setPointerCapture) Element.prototype.setPointerCapture = () => {}
+      if (!Element.prototype.releasePointerCapture)
+        Element.prototype.releasePointerCapture = () => {}
+      if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
+    })
+
+    const ANTHROPIC_MODEL = PROVIDERS.anthropic.defaultModel
+    const ANTHROPIC_NAME =
+      PROVIDERS.anthropic.models.find((m) => m.id === ANTHROPIC_MODEL)?.name ?? ANTHROPIC_MODEL
+    const OPENAI_MODEL = PROVIDERS.openai.defaultModel
+    const OPENAI_NAME =
+      PROVIDERS.openai.models.find((m) => m.id === OPENAI_MODEL)?.name ?? OPENAI_MODEL
+    const AUDIO: PreviewTarget = {
+      id: "audio",
+      filename: "meeting.wav",
+      mediaType: "audio/wav",
+      url: "blob:audio",
+    }
+    const CLIP: PreviewTarget = {
+      id: "v",
+      filename: "clip.mp4",
+      mediaType: "video/mp4",
+      url: "blob:clip",
+    }
+
+    beforeEach(() => {
+      useSettingsStore.setState({
+        settings: {
+          providerSettings: {
+            anthropic: { enabled: true, defaultModel: ANTHROPIC_MODEL },
+            openai: { enabled: true, defaultModel: OPENAI_MODEL },
+          },
+          customProviders: [],
+        },
+      } as never)
+    })
+
+    const pickerItems = () =>
+      Array.from(document.querySelectorAll('[data-slot="command-item"]')).map(
+        (node) => node.textContent ?? ""
+      )
+    const pick = (name: string) => {
+      fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
+      const item = Array.from(document.querySelectorAll('[data-slot="command-item"]')).find(
+        (node) => node.textContent?.includes(name)
+      )
+      if (!item) throw new Error(`no picker item ${name}`)
+      fireEvent.click(item)
+    }
+
+    it("offers an audio file only providers that can transcribe it", async () => {
+      renderDialog({
+        target: AUDIO,
+        state: ready({ extracted: { kind: "audio", block: null, tokens: 0 } }),
+        onProcessMedia: jest.fn(),
+      })
+      await user().click(screen.getByRole("tab", { name: "Processed" }))
+      fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
+      const items = pickerItems()
+      expect(items.some((text) => text.includes(OPENAI_NAME))).toBe(true)
+      expect(items.some((text) => text.includes(ANTHROPIC_NAME))).toBe(false)
+    })
+
+    it("blocks transcribing a video through a language-only provider but still describes", async () => {
+      const onProcessMedia = jest.fn()
+      renderDialog({
+        target: CLIP,
+        state: { status: "ready", sizeBytes: 10 },
+        onProcessMedia,
+      })
+      await user().click(screen.getByRole("tab", { name: "Processed" }))
+
+      pick(ANTHROPIC_NAME)
+      expect(screen.getByRole("button", { name: "Transcribe audio" })).toBeDisabled()
+      expect(screen.getByTestId("attachment-transcription-unsupported")).toHaveTextContent(
+        "The selected provider cannot transcribe audio."
+      )
+      expect(screen.getByRole("button", { name: "Describe images" })).toBeEnabled()
+
+      pick(OPENAI_NAME)
+      expect(screen.queryByTestId("attachment-transcription-unsupported")).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole("button", { name: "Transcribe audio" }))
+      expect(onProcessMedia).toHaveBeenCalledWith("v", {
+        providerId: "openai",
+        modelId: OPENAI_MODEL,
+        method: "transcribe",
+      })
+    })
+
+    it("explains a run refused for lack of transcription support", async () => {
+      renderDialog({
+        target: AUDIO,
+        state: ready({
+          extracted: { kind: "audio", block: null, tokens: 0 },
+          processingError: "attachment_transcription_unsupported",
+        }),
+        onProcessMedia: jest.fn(),
+      })
+      await user().click(screen.getByRole("tab", { name: "Processed" }))
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The selected provider cannot transcribe audio."
+      )
+    })
   })
 
   it("shows bounded progress and lets the user cancel the current extraction", async () => {

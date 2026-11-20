@@ -20,6 +20,12 @@
  * voice keys are write-up only (NOT mirrored desktop→phone in
  * `CROSS_PLATFORM_SETTING_KEYS`), matching the Wave-2 `composerBehavior`
  * precedent — `systemVoice` in particular is device-specific.
+ *
+ * On the native shell the phone's own read-aloud always uses the system voice
+ * (`@cognia/tts` forces it there), whatever provider is saved. The provider
+ * and its voice then only describe the desktop's read-aloud, so the page says
+ * that and always offers the controls the phone actually uses: the device
+ * voice, rate and pitch.
  */
 
 import { useEffect, useState } from "react"
@@ -40,6 +46,7 @@ import { Switch } from "@/components/ui/switch"
 import { Input } from "@/components/ui/input"
 import { DeferredTextInput } from "@/components/settings/common/deferred-text-input"
 import { useSettingDraft } from "@/hooks/settings/use-setting-draft"
+import { usePlatform } from "@/hooks/use-platform"
 import type { AppSettings } from "@cognia/agent-config-types"
 import { speechSettingsView, useSpeechSettingsView } from "@/lib/speech/settings"
 import {
@@ -62,6 +69,7 @@ function VoiceSelect({
   disabled,
   ariaLabel,
   autoLabel,
+  testid = "speech-tts-voice",
 }: {
   provider: SelectableTTSProvider
   value: string
@@ -69,6 +77,7 @@ function VoiceSelect({
   disabled: boolean
   ariaLabel: string
   autoLabel: string
+  testid?: string
 }) {
   const [systemVoices, setSystemVoices] = useState<{ id: string; name: string }[]>([])
 
@@ -101,7 +110,7 @@ function VoiceSelect({
       onValueChange={(v) => onChange(provider === "system" && v === "auto" ? "" : v)}
       disabled={disabled}
     >
-      <SelectTrigger data-testid="speech-tts-voice" aria-label={ariaLabel} className="mt-1">
+      <SelectTrigger data-testid={testid} aria-label={ariaLabel} className="mt-1">
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="max-h-72">
@@ -115,9 +124,11 @@ function VoiceSelect({
   )
 }
 
-/** STT language presets — `auto` clears the override (provider auto-detect).
- *  Codes come from the canonical `SPEECH_LANGUAGES` list (W18) so this can't
- *  drift from the rest of the subsystem. */
+/** STT language presets — `auto` clears the override, which makes dictation
+ *  follow the app language (`resolveSttLanguage`); Web Speech has no language
+ *  detection, so it is labelled as such. Codes come from the canonical
+ *  `SPEECH_LANGUAGES` list (W18) so this can't drift from the rest of the
+ *  subsystem. */
 const STT_LANGUAGES = ["auto", ...SPEECH_LANGUAGES.map((l) => l.code)] as const
 
 export default function MobileSpeechPage() {
@@ -125,6 +136,8 @@ export default function MobileSpeechPage() {
 
   const settings = useSpeechSettingsView((s) => s)
   const update = speechSettingsView.update
+  // Native mobile read-aloud always runs on the system voice.
+  const nativeShell = usePlatform() === "mobile"
 
   const ttsEnabled = settings?.ttsEnabled ?? false
   const ttsProvider = (settings?.ttsProvider ?? "system") as SelectableTTSProvider
@@ -173,6 +186,14 @@ export default function MobileSpeechPage() {
             <ItemContent>
               <ItemTitle className="text-xs">{t("provider")}</ItemTitle>
               <ItemDescription className="text-[11px]">{t("providerHelp")}</ItemDescription>
+              {nativeShell && (
+                <ItemDescription
+                  className="text-[11px]"
+                  data-testid="speech-tts-provider-host-only"
+                >
+                  {t("providerHostOnly")}
+                </ItemDescription>
+              )}
               <Select
                 value={ttsProvider}
                 onValueChange={(v) => void update({ ttsProvider: v as never })}
@@ -262,9 +283,32 @@ export default function MobileSpeechPage() {
             </Item>
           )}
 
+          {/* On the native shell the phone itself reads with the system
+              voice, so a cloud provider above only describes the desktop:
+              offer the device voice the phone actually uses. */}
+          {nativeShell && ttsProvider !== "system" && (
+            <Item size="sm" className="px-0">
+              <ItemContent>
+                <ItemTitle className="text-xs">{t("deviceVoice")}</ItemTitle>
+                <ItemDescription className="text-[11px]">{t("deviceVoiceHelp")}</ItemDescription>
+                <VoiceSelect
+                  provider="system"
+                  value={settings?.systemVoice ?? ""}
+                  onChange={(v) => void update({ systemVoice: v })}
+                  disabled={!ttsEnabled}
+                  ariaLabel={t("deviceVoice")}
+                  autoLabel={t("voiceAuto")}
+                  testid="speech-tts-device-voice"
+                />
+              </ItemContent>
+            </Item>
+          )}
+
           {/* Rate + pitch only affect the system voice; cloud providers use
-              their own speed field, so these were dead controls for them (W13). */}
-          {ttsProvider === "system" && (
+              their own speed field, so these were dead controls for them (W13).
+              The native shell always plays through the system voice, so it
+              keeps them whatever provider is saved. */}
+          {(ttsProvider === "system" || nativeShell) && (
             <>
               <Item size="sm" className="px-0">
                 <ItemContent>
@@ -364,7 +408,7 @@ export default function MobileSpeechPage() {
                 <SelectContent>
                   {STT_LANGUAGES.map((code) => (
                     <SelectItem key={code} value={code}>
-                      {code === "auto" ? t("sttAuto") : code}
+                      {code === "auto" ? t("sttFollowApp") : code}
                     </SelectItem>
                   ))}
                 </SelectContent>

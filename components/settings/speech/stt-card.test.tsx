@@ -52,6 +52,25 @@ describe("SttCard", () => {
     await waitFor(() => expect(screen.getByText("micPermissionHint")).toBeInTheDocument())
   })
 
+  it("says the microphone choice reaches live voice only, not dictation", async () => {
+    render(<SttCard />)
+    expect(screen.getByTestId("stt-microphone-scope")).toHaveTextContent("microphoneLiveOnly")
+    await waitFor(() => expect(enumerateDevices).toHaveBeenCalled())
+  })
+
+  it.each(["en", "zh-CN"])(
+    "%s copy no longer promises that the picker drives dictation",
+    (locale) => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const stt = require(`@/i18n/messages/${locale}/settings/speech.json`).stt as Record<
+        string,
+        string
+      >
+      expect(stt.microphoneLiveOnly).toBeTruthy()
+      expect(stt.description).not.toMatch(/microphone|麦克风/i)
+    }
+  )
+
   it("stops hinting once a microphone is listed", async () => {
     enumerateDevices.mockResolvedValue([
       { kind: "audioinput", deviceId: "mic-1", label: "Desk mic" },

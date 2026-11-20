@@ -30,13 +30,33 @@ export interface TtsHost {
   isNativeShell?: () => boolean
   /** Mobile playback always uses the device/browser system synthesizer. */
   isMobileShell?: () => boolean
-  /** Fail-closed app policy for text leaving the device for a cloud TTS provider. */
+  /**
+   * Fail-closed app policy for text leaving the device: a cloud TTS provider,
+   * or a system voice the platform reports as a remote service
+   * (`SpeechSynthesisVoice.localService === false`).
+   */
   allowCloudText?: (text: string, provider: TTSProvider) => boolean
+  /**
+   * Called once per synthesis the provider actually performed: a cache hit, a
+   * failed or cancelled request and system-voice playback never call it, and
+   * a retried request calls it once. `characters` is the length of the text
+   * sent. Fires when generation completes, whether or not playback finishes.
+   */
+  recordSynthesis?: (record: TtsSynthesisRecord) => void
   /** Surface a user-visible notification (the app binds sonner toasts). */
   notify?: {
     message: (text: string) => void
     error: (text: string) => void
   }
+}
+
+export interface TtsSynthesisRecord {
+  /** The provider that generated the audio (never `system`). */
+  provider: TTSProvider
+  /** Characters of the (normalized) text sent to the provider. */
+  characters: number
+  /** The orchestrator request the generation belonged to. */
+  requestId: string
 }
 
 let host: TtsHost = {}

@@ -50,18 +50,6 @@ jest.mock("./providers/cartesia", () => ({
 jest.mock("./providers/deepgram", () => ({
   generateDeepgramTTS: jest.fn(),
 }))
-jest.mock("./streaming/pcm-player", () => ({
-  PcmPlayer: jest.fn().mockImplementation((opts: { onEnded?: () => void }) => ({
-    enqueue: jest.fn(),
-    end: jest.fn(() => opts.onEnded?.()),
-    pause: jest.fn(),
-    resume: jest.fn(),
-    stop: jest.fn(),
-    getState: () => "playing",
-  })),
-  pcm16ToFloat32: jest.fn(),
-}))
-
 import { TTSOrchestrator, ttsOrchestrator } from "./tts-orchestrator"
 import { DEFAULT_SPEECH_SETTINGS, type SpeechSettings } from "./types"
 import { getCachedOrGenerate } from "./tts-cache"
@@ -335,7 +323,7 @@ describe("speak with ttsEnabled=false", () => {
 describe("speak — cloud provider happy path", () => {
   it("uses system playback on a mobile shell without changing the saved provider", async () => {
     const synth = setupSpeechSynth()
-    setTtsHost({ isMobileShell: () => true })
+    setTtsHost({ allowCloudText: () => true, isMobileShell: () => true })
     const o = new TTSOrchestrator()
     await o.speak("mobile", {
       speechSettings: {
@@ -830,7 +818,7 @@ describe("pause / resume", () => {
     expect(o.getState().playbackState).toBe("paused")
   })
 
-  it("pauses speechSynthesis when system provider is current", () => {
+  it("pauses speechSynthesis when the system voice is speaking", () => {
     const state = setupSpeechSynth()
     const o = new TTSOrchestrator()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -839,6 +827,8 @@ describe("pause / resume", () => {
       playbackState: "playing",
       currentProvider: "system",
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(o as any).systemSpeaking = true
     o.pause()
     expect(state.pauseCount).toBe(1)
   })
@@ -871,7 +861,7 @@ describe("pause / resume", () => {
     expect(o.getState().playbackState).toBe("playing")
   })
 
-  it("resumes speechSynthesis when system provider is current", () => {
+  it("resumes speechSynthesis when the system voice is speaking", () => {
     const state = setupSpeechSynth()
     const o = new TTSOrchestrator()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -880,6 +870,8 @@ describe("pause / resume", () => {
       playbackState: "paused",
       currentProvider: "system",
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(o as any).systemSpeaking = true
     o.resume()
     expect(state.resumeCount).toBe(1)
   })
@@ -1090,5 +1082,316 @@ describe("speakStream (W7 streaming TTS)", () => {
     // The system voice spoke instead of failing the whole utterance.
     expect(state.utterance).not.toBeNull()
     expect(o.getState().playbackState).toBe("stopped")
+  })
+})
+
+// ── Audit regressions (docs/evidence/2026-11-18-voice-tts-gap-audit.md) ──────
+
+const cloudSettings = (patch: Partial<SpeechSettings> = {}): SpeechSettings => ({
+  ...DEFAULT_SPEECH_SETTINGS,
+  ttsEnabled: true,
+  ttsProvider: "openai",
+  ttsFallbackEnabled: false,
+  ...patch,
+})
+const noAtSign = (text: string) => !text.includes("@")
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+async function* tokensOf(chunks: string[]): AsyncGenerator<string> {
+  for (const c of chunks) yield c
+}
+function voice(name: string, localService: boolean, lang = "en-US", isDefault = false) {
+  return { name, voiceURI: name, lang, localService, default: isDefault } as SpeechSynthesisVoice
+}
+
+/** An `<audio>` that starts playing and never ends on its own. */
+class EndlessAudio {
+  src: string
+  volume = 1
+  currentTime = 0
+  duration = 10
+  onplay: (() => void) | null = null
+  onended: (() => void) | null = null
+  onerror: (() => void) | null = null
+  onpause: (() => void) | null = null
+  ontimeupdate: (() => void) | null = null
+  pause = jest.fn()
+  play = jest.fn(async () => {
+    Promise.resolve().then(() => this.onplay?.())
+  })
+  constructor(src: string) {
+    this.src = src
+  }
+}
+
+describe("F01 — text is screened as written, before normalization", () => {
+  it("never sends an address that normalization would rewrite to 'at'", async () => {
+    setTtsHost({ allowCloudText: noAtSign })
+    const o = new TTSOrchestrator()
+    await expect(
+      o.speak("Contact alice@example.com", {
+        speechSettings: cloudSettings(),
+        providerSettings: { openai: { apiKey: "k" } },
+      })
+    ).rejects.toThrow(/sensitive data/)
+    expect(mockCache).not.toHaveBeenCalled()
+    expect(generateOpenAITTS).not.toHaveBeenCalled()
+  })
+
+  it("reads a blocked text with an on-device system voice when fallback is on", async () => {
+    setTtsHost({ allowCloudText: noAtSign })
+    const synth = setupSpeechSynth()
+    synth.voices = [voice("Remote", false, "en-US", true), voice("Local", true)]
+    const o = new TTSOrchestrator()
+    await o.speak("Contact alice@example.com", {
+      speechSettings: cloudSettings({ ttsFallbackEnabled: true }),
+      providerSettings: { openai: { apiKey: "k" } },
+    })
+    expect(mockCache).not.toHaveBeenCalled()
+    expect(synth.utterance?.voice?.name).toBe("Local")
+  })
+
+  it("screens each streamed fragment as written", async () => {
+    setTtsHost({ allowCloudText: noAtSign })
+    const o = new TTSOrchestrator()
+    await expect(
+      o.speakStream(tokensOf(["Contact alice@example.com", " today. And more."]), {
+        speechSettings: cloudSettings(),
+        providerSettings: { openai: { apiKey: "k" } },
+      })
+    ).rejects.toThrow(/sensitive data/)
+    expect(generateOpenAITTS).not.toHaveBeenCalled()
+  })
+
+  it("screens a streamed fragment together with the one before it", async () => {
+    setTtsHost({ allowCloudText: (text) => !/secret code/.test(text) })
+    mockCache.mockImplementation(async (_key, generate) => generate())
+    ;(generateOpenAITTS as jest.Mock).mockResolvedValue({
+      success: true,
+      audioData: new ArrayBuffer(2),
+      mimeType: "audio/mpeg",
+    })
+    const o = new TTSOrchestrator()
+    await expect(
+      o.speakStream(tokensOf(["one two secret ", "code here."]), {
+        speechSettings: cloudSettings(),
+        providerSettings: { openai: { apiKey: "k" } },
+        // Force the first cut after three words so the pair straddles it.
+        splitterOptions: { firstFragmentSeparators: "", forceFirstFragmentAfterWords: 3 },
+      })
+    ).rejects.toThrow(/sensitive data/)
+    expect(generateOpenAITTS).toHaveBeenCalledTimes(1)
+    expect((generateOpenAITTS as jest.Mock).mock.calls[0][0]).toBe("one two secret")
+  })
+})
+
+describe("F10 — stop settles a buffered speak()", () => {
+  it("resolves the pending speak() and releases the audio when stopped mid-playback", async () => {
+    ;(globalThis as unknown as { Audio: unknown }).Audio = EndlessAudio
+    mockCache.mockResolvedValueOnce({ audioData: new ArrayBuffer(2), mimeType: "audio/mpeg" })
+    const o = new TTSOrchestrator()
+    const pending = o.speak("hello", {
+      speechSettings: cloudSettings(),
+      providerSettings: { openai: { apiKey: "k" } },
+    })
+    await flush()
+    expect(o.getState().playbackState).toBe("playing")
+    o.stop()
+    await expect(pending).resolves.toBeUndefined()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock")
+    expect(o.getState().playbackState).toBe("stopped")
+  })
+})
+
+describe("F11 — pause/resume follow the voice that is actually speaking", () => {
+  it("pauses the system voice after a cloud failure fell back to it", async () => {
+    const synth = setupSpeechSynth()
+    let utterance: SpeechSynthesisUtterance | null = null
+    Object.defineProperty(window.speechSynthesis, "speak", {
+      configurable: true,
+      value: (u: SpeechSynthesisUtterance) => {
+        utterance = u
+        Promise.resolve().then(() => u.onstart?.(new Event("start") as SpeechSynthesisEvent))
+      },
+    })
+    mockCache.mockResolvedValueOnce(null)
+    const o = new TTSOrchestrator()
+    const pending = o.speak("hi there", {
+      speechSettings: cloudSettings({ ttsFallbackEnabled: true }),
+      providerSettings: { openai: { apiKey: "k" } },
+    })
+    await flush()
+    expect(o.getState()).toMatchObject({ playbackState: "playing", currentProvider: "system" })
+    o.pause()
+    expect(synth.pauseCount).toBe(1)
+    o.resume()
+    expect(synth.resumeCount).toBe(1)
+    utterance!.onend?.(new Event("end") as SpeechSynthesisEvent)
+    await pending
+  })
+})
+
+describe("F12 — streamed fragments respect the provider's input limit", () => {
+  it("cuts a long unpunctuated fragment before it reaches the adapter", async () => {
+    mockCache.mockResolvedValue({ audioData: new ArrayBuffer(2), mimeType: "audio/mpeg" })
+    const o = new TTSOrchestrator()
+    const long = "word ".repeat(1000)
+    await o.speakStream(tokensOf(["First sentence here. ", long]), {
+      speechSettings: cloudSettings(),
+      providerSettings: { openai: { apiKey: "k" } },
+    })
+    const sent = mockCache.mock.calls.map((call) => call[3] as string)
+    expect(sent.length).toBeGreaterThan(2)
+    for (const text of sent) expect(text.length).toBeLessThanOrEqual(4096)
+    expect(sent.slice(1).join(" ").split(" ").filter(Boolean)).toHaveLength(1000)
+  })
+})
+
+describe("F15 — remote system voices are a cloud boundary", () => {
+  beforeEach(() => setTtsHost({ allowCloudText: noAtSign }))
+
+  it("keeps sensitive text on an on-device voice even when a remote one is selected", async () => {
+    const synth = setupSpeechSynth()
+    synth.voices = [voice("Remote", false), voice("Local", true)]
+    const o = new TTSOrchestrator()
+    await o.speak("Mail alice@example.com", {
+      speechSettings: { ...DEFAULT_SPEECH_SETTINGS, ttsEnabled: true, systemVoice: "Remote" },
+    })
+    expect(synth.utterance?.voice?.name).toBe("Local")
+  })
+
+  it("keeps the selected remote voice for text that may leave the device", async () => {
+    const synth = setupSpeechSynth()
+    synth.voices = [voice("Remote", false), voice("Local", true)]
+    const o = new TTSOrchestrator()
+    await o.speak("Good morning", {
+      speechSettings: { ...DEFAULT_SPEECH_SETTINGS, ttsEnabled: true, systemVoice: "Remote" },
+    })
+    expect(synth.utterance?.voice?.name).toBe("Remote")
+  })
+
+  it("refuses sensitive text when no on-device voice exists", async () => {
+    const synth = setupSpeechSynth()
+    synth.voices = [voice("Remote", false)]
+    const o = new TTSOrchestrator()
+    await expect(
+      o.speak("Mail alice@example.com", {
+        speechSettings: { ...DEFAULT_SPEECH_SETTINGS, ttsEnabled: true },
+      })
+    ).rejects.toThrow(/sensitive data/)
+    expect(synth.utterance).toBeNull()
+  })
+})
+
+describe("F21 — synthesis is metered at generation", () => {
+  it("records each generated chunk once with its provider, and nothing for a cache hit", async () => {
+    const recordSynthesis = jest.fn()
+    setTtsHost({ allowCloudText: () => true, recordSynthesis })
+    ;(generateOpenAITTS as jest.Mock).mockResolvedValue({
+      success: true,
+      audioData: new ArrayBuffer(2),
+      mimeType: "audio/mpeg",
+    })
+    mockCache.mockImplementationOnce(async (_key, generate) => generate())
+    const o = new TTSOrchestrator()
+    await o.speak("**Hello**", {
+      speechSettings: cloudSettings(),
+      providerSettings: { openai: { apiKey: "k" } },
+    })
+    expect(recordSynthesis).toHaveBeenCalledTimes(1)
+    expect(recordSynthesis).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", characters: 5 })
+    )
+
+    mockCache.mockResolvedValueOnce({ audioData: new ArrayBuffer(2), mimeType: "audio/mpeg" })
+    await o.speak("Hello", {
+      speechSettings: cloudSettings(),
+      providerSettings: { openai: { apiKey: "k" } },
+    })
+    expect(recordSynthesis).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("F22 — audio that arrives after stop is never played", () => {
+  it.each(["speak", "speakStream"] as const)(
+    "%s: a stop while synthesis or the cache write is pending starts no audio",
+    async (method) => {
+      let deliver!: (value: unknown) => void
+      mockCache.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            deliver = resolve
+          })
+      )
+      const o = new TTSOrchestrator()
+      const options = {
+        speechSettings: cloudSettings(),
+        providerSettings: { openai: { apiKey: "k" } },
+      }
+      const pending =
+        method === "speak"
+          ? o.speak("A sentence to read.", options)
+          : o.speakStream(tokensOf(["A sentence to read."]), options)
+      await flush()
+      o.stop()
+      deliver({ success: true, audioData: new ArrayBuffer(2), mimeType: "audio/mpeg" })
+      await pending
+      expect(lastAudio).toBeNull()
+    }
+  )
+})
+
+describe("F23 — a failed streamed fragment ends the request at once", () => {
+  it("rejects and reports while the token source is still open, then releases it", async () => {
+    mockCache.mockResolvedValue(null)
+    const release = jest.fn(async () => ({ value: undefined, done: true as const }))
+    let pulls = 0
+    const openSource: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => ({
+        next: () =>
+          pulls++ === 0
+            ? Promise.resolve({ value: "First sentence here. And", done: false as const })
+            : new Promise<IteratorResult<string>>(() => {}),
+        return: release,
+      }),
+    }
+    const onError = jest.fn()
+    const unhandled = jest.fn()
+    process.on("unhandledRejection", unhandled)
+    try {
+      const o = new TTSOrchestrator()
+      await expect(
+        o.speakStream(openSource, {
+          speechSettings: cloudSettings(),
+          providerSettings: { openai: { apiKey: "k" } },
+          onError,
+        })
+      ).rejects.toThrow(/Failed to generate speech audio/)
+      await flush()
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(o.getState().playbackState).toBe("error")
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off("unhandledRejection", unhandled)
+    }
+  })
+
+  it("stops pulling tokens as soon as stop() is called", async () => {
+    const release = jest.fn(async () => ({ value: undefined, done: true as const }))
+    const neverEnding: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<IteratorResult<string>>(() => {}),
+        return: release,
+      }),
+    }
+    const o = new TTSOrchestrator()
+    const pending = o.speakStream(neverEnding, {
+      speechSettings: cloudSettings(),
+      providerSettings: { openai: { apiKey: "k" } },
+    })
+    await flush()
+    o.stop()
+    await expect(pending).resolves.toBeUndefined()
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })

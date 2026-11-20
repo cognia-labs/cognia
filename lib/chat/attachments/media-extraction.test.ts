@@ -1,4 +1,5 @@
 import {
+  attachmentTranscriptionSupport,
   processAttachmentMedia,
   restoreDerivedAttachment,
   type AttachmentMediaDeps,
@@ -96,6 +97,49 @@ it("does not call a provider without an explicit model", async () => {
     processAttachmentMedia(source(), "a.wav", { ...options, modelId: "" }, services)
   ).rejects.toThrow("attachment_model_required")
   expect(services.executor.execute).not.toHaveBeenCalled()
+})
+
+it("answers transcription support from the provider capability matrix", () => {
+  // Language-only vendors have no transcription endpoint (ADR-0163).
+  expect(attachmentTranscriptionSupport("anthropic")).toBe("unsupported")
+  expect(attachmentTranscriptionSupport("deepseek")).toBe("unsupported")
+  expect(attachmentTranscriptionSupport("openai")).toBe("supported")
+  expect(attachmentTranscriptionSupport("groq")).toBe("supported")
+  // A custom deployment cannot be known statically; the run answers for it.
+  expect(attachmentTranscriptionSupport("custom:my-gateway")).toBe("unknown")
+  expect(attachmentTranscriptionSupport("")).toBe("unknown")
+})
+
+it("refuses to transcribe through a provider without a transcription endpoint", async () => {
+  const services = deps({ text: "hello" })
+  await expect(
+    processAttachmentMedia(
+      source(),
+      "a.wav",
+      { method: "transcribe", providerId: "anthropic", modelId: "claude-sonnet-4-5" },
+      services
+    )
+  ).rejects.toThrow("attachment_transcription_unsupported")
+  expect(services.executor.execute).not.toHaveBeenCalled()
+})
+
+it("still describes images through a language-only provider", async () => {
+  const attachment = {
+    ...source(),
+    kind: "image" as const,
+    block: {
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: "image/png", data: "YQ==" },
+    },
+  }
+  const services = deps({ text: "A chart" })
+  await processAttachmentMedia(
+    attachment,
+    "chart.png",
+    { method: "describe", providerId: "anthropic", modelId: "claude-sonnet-4-5" },
+    services
+  )
+  expect(services.executor.execute).toHaveBeenCalled()
 })
 
 it("cancels before any provider work", async () => {

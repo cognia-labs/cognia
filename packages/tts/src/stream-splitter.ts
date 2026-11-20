@@ -13,6 +13,15 @@
  *  - Every fragment after that uses a NARROW separator set (sentence enders) and
  *    a minimum length, trading a little latency for natural prosody.
  *
+ * A cut never lands inside a token. ASCII punctuation ends a fragment only
+ * when whitespace follows it (closing quotes/brackets in between allowed), so
+ * `example.com`, `3.14` and `e.g.` stay whole, and a forced first cut backs up
+ * to the last whitespace. That matters twice: a fragment is spoken (and
+ * prosody suffers from `3.` / `14`), and each fragment is PII-screened on its
+ * own before it leaves the device, so an e-mail address cut in half would pass
+ * the gate as two harmless-looking pieces. CJK enders and newlines cut at once
+ * because CJK has no spaces to wait for.
+ *
  * Consumer-agnostic: `push()`/`flush()` suit a push source (per-delta callback);
  * `splitStream()` wraps them for a pull source (async iterable of tokens).
  */
@@ -83,15 +92,48 @@ export class SentenceStreamSplitter {
     const minLen = this.isFirst ? this.opts.minFirstFragmentLength : this.opts.minSentenceLength
     const b = this.buffer
     for (let i = Math.max(0, minLen - 1); i < b.length; i++) {
-      if (seps.includes(b[i])) return i + 1
+      if (!seps.includes(b[i])) continue
+      if (IMMEDIATE_SEPARATORS.includes(b[i])) return i + 1
+      // ASCII punctuation: look past closing quotes/brackets for whitespace.
+      let j = i + 1
+      while (j < b.length && CLOSERS.includes(b[j])) j++
+      // The next token decides; wait for it rather than guess.
+      if (j >= b.length) return -1
+      if (WHITESPACE.test(b[j])) return j
     }
     if (this.isFirst) {
       const words = b.trim().split(/\s+/).filter(Boolean).length
-      if (words >= this.opts.forceFirstFragmentAfterWords) return b.length
-      if (b.length >= this.opts.forceFirstFragmentAfterChars) return b.length
+      if (
+        words >= this.opts.forceFirstFragmentAfterWords ||
+        b.length >= this.opts.forceFirstFragmentAfterChars
+      ) {
+        return forcedCut(b)
+      }
     }
     return -1
   }
+}
+
+/** Separators that end a fragment without waiting for whitespace. */
+const IMMEDIATE_SEPARATORS = "\n…。！？；：，"
+/** Characters that may sit between ASCII punctuation and the whitespace after it. */
+const CLOSERS = "\"'”’)]}"
+const WHITESPACE = /\s/
+
+/**
+ * Where a forced first cut may land without splitting a token: after the
+ * last whitespace, else (unspaced CJK) before a trailing run of ASCII
+ * non-space characters. A buffer that is one unbroken ASCII run (a URL, a
+ * key) is not force-cut at all.
+ */
+function forcedCut(buffer: string): number {
+  if (WHITESPACE.test(buffer[buffer.length - 1] ?? "")) return buffer.length
+  for (let i = buffer.length - 1; i > 0; i--) {
+    if (WHITESPACE.test(buffer[i])) return i + 1
+  }
+  const trailingRun = /[\x21-\x7e]+$/.exec(buffer)
+  if (!trailingRun) return buffer.length
+  return trailingRun.index > 0 ? trailingRun.index : -1
 }
 
 /**

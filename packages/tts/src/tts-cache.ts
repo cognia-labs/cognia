@@ -320,6 +320,9 @@ export async function getCachedTtsResponseOrGenerate(
     } catch {
       // Best-effort cache; preserve the successful provider response.
     }
+    // The write is I/O too: a stop that landed while it was pending must not
+    // hand the caller audio to play. The audio stays cached for next time.
+    if (signal?.aborted) return cancelledResponse()
   }
   return response
 }

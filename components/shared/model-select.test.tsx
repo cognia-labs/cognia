@@ -607,3 +607,52 @@ describe("ModelSelect for a surface run by an external agent", () => {
     )
   })
 })
+
+describe("providerFilter", () => {
+  const OPENAI_MODEL = PROVIDERS.openai.defaultModel
+  const OPENAI_NAME = PROVIDERS.openai.models.find((m) => m.id === OPENAI_MODEL)?.name
+
+  beforeEach(() => {
+    useSettingsStore.setState({
+      settings: {
+        providerSettings: {
+          anthropic: { enabled: true, defaultModel: ANTHROPIC_MODEL },
+          openai: { enabled: true, defaultModel: OPENAI_MODEL },
+        },
+        customProviders: [],
+      },
+    } as never)
+  })
+
+  const itemTexts = () =>
+    Array.from(document.querySelectorAll('[data-slot="command-item"]')).map(
+      (node) => node.textContent ?? ""
+    )
+
+  it("drops the configured providers a single-operation surface cannot run", () => {
+    renderSelect({ providerFilter: (providerId) => providerId !== "anthropic" })
+    fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
+    const texts = itemTexts()
+    expect(texts.some((text) => text.includes(OPENAI_NAME ?? OPENAI_MODEL))).toBe(true)
+    expect(texts.some((text) => text.includes(ANTHROPIC_NAME ?? ANTHROPIC_MODEL))).toBe(false)
+  })
+
+  it("never filters the caller's own leading groups", () => {
+    renderSelect({
+      providerFilter: () => false,
+      leadingGroups: [
+        { providerId: "lead", providerName: "Lead", models: [{ id: "x", name: "X" }] },
+      ],
+    })
+    fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
+    expect(itemTexts()).toEqual([expect.stringContaining("X")])
+  })
+
+  it("lists every configured provider without a filter", () => {
+    renderSelect()
+    fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
+    const texts = itemTexts()
+    expect(texts.some((text) => text.includes(OPENAI_NAME ?? OPENAI_MODEL))).toBe(true)
+    expect(texts.some((text) => text.includes(ANTHROPIC_NAME ?? ANTHROPIC_MODEL))).toBe(true)
+  })
+})

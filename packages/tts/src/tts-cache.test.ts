@@ -294,4 +294,31 @@ describe("getCachedTtsResponseOrGenerate", () => {
     expect(setSpy).not.toHaveBeenCalled()
     setSpy.mockRestore()
   })
+
+  it("reports a stop that lands while the cache write is pending as cancelled", async () => {
+    const controller = new AbortController()
+    let finishWrite!: () => void
+    const setSpy = jest.spyOn(ttsCache, "set").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishWrite = resolve
+        })
+    )
+    const pending = getCachedTtsResponseOrGenerate(
+      "cancelled-during-write",
+      async () => ({ success: true, audioData: new ArrayBuffer(2), mimeType: "audio/mpeg" }),
+      "openai",
+      "hello",
+      true,
+      controller.signal
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(setSpy).toHaveBeenCalledTimes(1)
+    controller.abort()
+    finishWrite()
+
+    // Audio is cached for next time, but this caller must not play it.
+    await expect(pending).resolves.toMatchObject({ success: false, errorType: "cancelled" })
+    setSpy.mockRestore()
+  })
 })

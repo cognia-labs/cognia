@@ -47,9 +47,15 @@ interface StreamSession {
   pushable: PushableStream
 }
 
-function lastAssistant(messages: UIMessage[]): UIMessage | null {
+/**
+ * The latest assistant reply of the CURRENT turn: the last assistant message
+ * after the last user message. A turn that has just been sent has none yet,
+ * and looking further back would read the previous turn's answer again.
+ */
+function currentTurnAssistant(messages: UIMessage[]): UIMessage | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "assistant") return messages[i]
+    if (messages[i].role === "user") return null
   }
   return null
 }
@@ -93,30 +99,45 @@ export function useChatAutoPlayTTS({
     const gateOn = ttsEnabled && ttsAutoPlay
     const sess = streamSession.current
 
+    // Feed whatever the session's message grew by since the last render. The
+    // final delta can land in the same render as the turn going idle, so this
+    // runs before a session is closed, not only while streaming.
+    const feedTail = (session: StreamSession) => {
+      const message = messages.find((candidate) => candidate.id === session.id)
+      if (!message) return
+      const text = extractText(message)
+      if (text.length > session.fedLen) {
+        session.pushable.push(text.slice(session.fedLen))
+        session.fedLen = text.length
+      }
+    }
+
     // Terminal / gated-off: flush the tail and end the session. "streaming" and
     // "awaiting_approval" both mean the turn is still in flight — keep feeding.
     if (!gateOn || status === "idle" || status === "error") {
       if (sess) {
+        if (gateOn) feedTail(sess)
         sess.pushable.close()
         streamSession.current = null
       }
       return
     }
 
-    const last = lastAssistant(messages)
+    const last = currentTurnAssistant(messages)
     if (!last || isAudioModality(last)) return
     const text = extractText(last)
 
-    // Close a session that belonged to an earlier message.
+    // Close a session that belonged to an earlier message, after its last words.
     if (sess && sess.id !== last.id) {
+      feedTail(sess)
       sess.pushable.close()
       streamSession.current = null
     }
 
     if (!streamSession.current) {
       // Wait until the reply actually has text — a tool-only message shouldn't
-      // spin up an empty stream.
-      if (!text) return
+      // spin up an empty stream — and never start one for a reply already read.
+      if (!text || lastAutoPlayedId.current === last.id) return
       const pushable = createPushableStream()
       streamSession.current = { id: last.id, fedLen: 0, pushable }
       // Mark spoken up front so the turn-complete effect doesn't re-read it.
@@ -166,7 +187,7 @@ export function useChatAutoPlayTTS({
 
     if (!canAutoPlayTTS({ ttsEnabled, ttsAutoPlay, isLoading: false, isStreaming: false })) return
 
-    const last = lastAssistant(messages)
+    const last = currentTurnAssistant(messages)
     if (!last || isAudioModality(last) || lastAutoPlayedId.current === last.id) return
     const text = extractText(last)
     if (!text.trim()) return

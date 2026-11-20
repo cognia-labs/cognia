@@ -22,8 +22,9 @@ type MicDevice = { deviceId: string; label: string }
 
 /**
  * Speech-to-text card — configures the language used by the composer's
- * voice-input controls and the preferred microphone. Web Speech API
- * support is detected at mount.
+ * voice-input controls and the preferred microphone. The microphone only
+ * reaches live voice: dictation records from the system default input, and
+ * the card says so. Web Speech API support is detected at mount.
  */
 export function SttCard() {
   const t = useTranslations("settings.speech.stt")
@@ -117,6 +118,11 @@ export function SttCard() {
             ))}
           </SelectContent>
         </Select>
+        {/* Dictation runs on the Web Speech API, which has no device
+            parameter: only live voice honours this choice. */}
+        <p className="text-xs text-muted-foreground" data-testid="stt-microphone-scope">
+          {t("microphoneLiveOnly")}
+        </p>
         {mics.length === 0 && (
           <p className="text-xs text-muted-foreground">{t("micPermissionHint")}</p>
         )}

@@ -442,6 +442,7 @@
         "retry": "Retry extraction",
         "failed": "Processing did not complete. Check the selected model and provider, then retry.",
         "audioRequired": "Transcribe this audio before sending.",
+        "transcriptionUnsupported": "The selected provider cannot transcribe audio. Choose a model from a provider that offers transcription.",
         "partial": "This is a partial representation. Unprocessed pages, audio, or unsampled video content are not included.",
         "rejected": "{count} attachment(s) need processing. Retry or remove them before sending."
       },

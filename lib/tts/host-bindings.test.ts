@@ -8,13 +8,19 @@
 jest.mock("@/lib/tauri", () => ({ isCapacitor: jest.fn(), isTauri: jest.fn() }))
 jest.mock("sonner", () => ({ toast: { error: jest.fn(), message: jest.fn() } }))
 
+const recordSurfaceUsageMock = jest.fn<Promise<null>, [Record<string, unknown>]>()
+jest.mock("@/lib/db/session-usage", () => ({
+  recordSurfaceUsage: (args: Record<string, unknown>) => recordSurfaceUsageMock(args),
+  swallowUsageWrite: (p: Promise<unknown>) => void p.catch(() => {}),
+}))
+
 import { toast } from "sonner"
 import * as core from "@tauri-apps/api/core"
 
 import { getTtsHost } from "@cognia/tts/host"
 import { isCapacitor, isTauri } from "@/lib/tauri"
 
-import { tauriProxyFetch } from "./host-bindings"
+import { meterSynthesis, tauriProxyFetch } from "./host-bindings"
 
 const mockIsTauri = isTauri as jest.Mock
 const mockInvoke = core.invoke as unknown as jest.Mock
@@ -22,6 +28,7 @@ const mockInvoke = core.invoke as unknown as jest.Mock
 beforeEach(() => {
   mockIsTauri.mockReset()
   mockInvoke.mockReset()
+  recordSurfaceUsageMock.mockReset().mockResolvedValue(null)
 })
 
 describe("host installation (module side effect)", () => {
@@ -34,6 +41,7 @@ describe("host installation (module side effect)", () => {
     expect(host.allowCloudText?.("email alice@example.com", "openai")).toBe(false)
     expect(typeof host.notify?.message).toBe("function")
     expect(typeof host.notify?.error).toBe("function")
+    expect(host.recordSynthesis).toBe(meterSynthesis)
   })
 
   it("nativeProxyFetch returns null on web (isTauri false) so the package falls through", () => {
@@ -187,5 +195,38 @@ describe("tauriProxyFetch", () => {
         }),
       })
     )
+  })
+})
+
+describe("meterSynthesis (recordSynthesis bridge)", () => {
+  function usageOf(call: number) {
+    return recordSurfaceUsageMock.mock.calls[call]?.[0] as {
+      surface: string
+      operationId: string
+      scopeId: string
+      usage: Record<string, unknown>
+    }
+  }
+
+  it("records the characters a cloud provider synthesized, with unknown cost", () => {
+    meterSynthesis({ provider: "elevenlabs", characters: 11, requestId: "tts_1" })
+    expect(usageOf(0)).toMatchObject({
+      surface: "tts",
+      scopeId: "elevenlabs",
+      usage: { providerId: "elevenlabs", unitBreakdown: { characters: 11 }, costKnown: false },
+    })
+  })
+
+  it("gives every synthesized chunk its own operation id", () => {
+    meterSynthesis({ provider: "openai", characters: 5, requestId: "tts_same" })
+    meterSynthesis({ provider: "openai", characters: 5, requestId: "tts_same" })
+    expect(usageOf(0).operationId).not.toBe(usageOf(1).operationId)
+  })
+
+  it("never bills on-device synthesis or an empty chunk", () => {
+    meterSynthesis({ provider: "system", characters: 5, requestId: "a" })
+    meterSynthesis({ provider: "local-openai-compatible", characters: 5, requestId: "b" })
+    meterSynthesis({ provider: "openai", characters: 0, requestId: "c" })
+    expect(recordSurfaceUsageMock).not.toHaveBeenCalled()
   })
 })

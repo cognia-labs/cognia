@@ -113,6 +113,9 @@ export function SystemConfig() {
             id: voice.voiceURI,
             name: voice.name,
             language: voice.lang,
+            // A platform voice can be a network service; say so, and that the
+            // orchestrator keeps sensitive text off it.
+            ...(voice.localService === false ? { description: t("voiceOnline") } : {}),
           }))}
           getVoiceOverlay={(voiceId) => ({ ttsProvider: "system", systemVoice: voiceId })}
         />

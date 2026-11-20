@@ -180,6 +180,41 @@ describe("useChatAutoPlayTTS — streaming path", () => {
   })
 })
 
+function userMsg(id: string, text: string): UIMessage {
+  return { id, role: "user", parts: [{ type: "text", text }] } as UIMessage
+}
+
+describe("useChatAutoPlayTTS — audit regressions", () => {
+  it("F08: speaks the final tail that lands in the same render as the turn going idle", async () => {
+    const { rerender } = setup({
+      messages: [userMsg("u1", "q"), asstMsg("a1", "Hello")],
+      status: "streaming",
+    })
+    await flush()
+    rerender({ messages: [userMsg("u1", "q"), asstMsg("a1", "Hello final tail")], status: "idle" })
+    await flush()
+    const pushed = pushables[0].push.mock.calls.map((call) => call[0] as string)
+    expect(pushed.join("")).toBe("Hello final tail")
+    // The tail is pushed before the stream is closed.
+    expect(pushables[0].push.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      pushables[0].close.mock.invocationCallOrder[0]!
+    )
+    // The streaming session owned the message; completion does not read it again.
+    expect(speakChatMessage).not.toHaveBeenCalled()
+  })
+
+  it("F09: a new turn with no assistant reply yet never re-reads the previous answer", async () => {
+    const history = [userMsg("u1", "q1"), asstMsg("a1", "Previous answer")]
+    const { rerender } = setup({ messages: history, status: "idle" })
+    rerender({ messages: [...history, userMsg("u2", "q2")], status: "streaming" })
+    await flush()
+    rerender({ messages: [...history, userMsg("u2", "q2")], status: "idle" })
+    await flush()
+    expect(speakChatMessageStream).not.toHaveBeenCalled()
+    expect(speakChatMessage).not.toHaveBeenCalled()
+  })
+})
+
 describe("useChatAutoPlayTTS — turn-complete fallback", () => {
   it("reads the finished message when streaming never ran (message appears at idle)", async () => {
     const user = { id: "u1", role: "user", parts: [{ type: "text", text: "q" }] } as UIMessage

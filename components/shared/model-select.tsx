@@ -152,6 +152,14 @@ export interface ModelSelectProps {
    */
   hideProviderGroups?: boolean
   /**
+   * Keep only the configured providers this returns true for. For a surface
+   * that runs one operation rather than a chat turn: attachment transcription
+   * must not offer a language-only provider whose run would fail on a missing
+   * transcription endpoint. Leading groups are the caller's own and are not
+   * filtered.
+   */
+  providerFilter?: (providerId: string) => boolean
+  /**
    * Trigger text that replaces the resolved model name, for a caller that
    * knows better than the provider catalog what is running (an external
    * agent's own display name, or "Kimi Code · default" before it has said).
@@ -339,6 +347,7 @@ export function ModelSelect({
   onSelectAuto,
   leadingGroups,
   hideProviderGroups = false,
+  providerFilter,
   triggerLabel,
   triggerIcon,
   triggerTitle,
@@ -362,8 +371,11 @@ export function ModelSelect({
   const { options, groups: providerGroups } = useModelOptions()
   const groups = useMemo(() => {
     if (hideProviderGroups) return leadingGroups ?? []
-    return leadingGroups?.length ? [...leadingGroups, ...providerGroups] : providerGroups
-  }, [hideProviderGroups, leadingGroups, providerGroups])
+    const eligible = providerFilter
+      ? providerGroups.filter((group) => providerFilter(group.providerId))
+      : providerGroups
+    return leadingGroups?.length ? [...leadingGroups, ...eligible] : eligible
+  }, [hideProviderGroups, leadingGroups, providerGroups, providerFilter])
   const [open, setOpen] = useState(false)
   const positionedActiveModelRef = useRef(false)
 

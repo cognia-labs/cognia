@@ -323,3 +323,176 @@ describe("VoiceControls", () => {
     expect(screen.queryByTestId("mic-request-access")).not.toBeInTheDocument()
   })
 })
+
+/**
+ * The real `SpeechInput` (the module above is mocked for `VoiceControls`):
+ * its recognizer lifecycle decides whether the composer can be stranded in a
+ * "listening" state it cannot leave.
+ */
+describe("SpeechInput recognizer lifecycle", () => {
+  const { SpeechInput: RealSpeechInput } = jest.requireActual<
+    typeof import("@/components/ai-elements/speech-input")
+  >("@/components/ai-elements/speech-input")
+
+  class FakeRecognition extends EventTarget {
+    static instances: FakeRecognition[] = []
+    continuous = false
+    interimResults = false
+    lang = ""
+    active = false
+    starts = 0
+    stops = 0
+    aborts = 0
+    onstart = null
+    onend = null
+    onresult = null
+    onerror = null
+    constructor() {
+      super()
+      FakeRecognition.instances.push(this)
+    }
+    start() {
+      this.starts++
+      this.active = true
+      this.dispatchEvent(new Event("start"))
+    }
+    stop() {
+      this.stops++
+      this.finish()
+    }
+    abort() {
+      this.aborts++
+      this.finish()
+    }
+    /** Real engines report `end` asynchronously after stop/abort. */
+    private finish() {
+      if (!this.active) return
+      this.active = false
+      queueMicrotask(() => this.dispatchEvent(new Event("end")))
+    }
+    emitFinal(transcript: string) {
+      const event = new Event("result")
+      const result = Object.assign([{ transcript, confidence: 1 }], { isFinal: true })
+      Object.assign(event, { resultIndex: 0, results: [result] })
+      this.dispatchEvent(event)
+    }
+  }
+
+  const win = window as unknown as Record<string, unknown>
+
+  beforeEach(() => {
+    FakeRecognition.instances = []
+    win.SpeechRecognition = FakeRecognition
+  })
+
+  afterEach(() => {
+    delete win.SpeechRecognition
+    delete win.MediaRecorder
+  })
+
+  function renderInput(props: Partial<React.ComponentProps<typeof RealSpeechInput>> = {}) {
+    const onListeningChange = jest.fn()
+    const onTranscriptionChange = jest.fn()
+    const view = render(
+      <RealSpeechInput
+        lang="en-US"
+        onListeningChange={onListeningChange}
+        onTranscriptionChange={onTranscriptionChange}
+        {...props}
+      />
+    )
+    const rerender = (next: Partial<React.ComponentProps<typeof RealSpeechInput>>) =>
+      view.rerender(
+        <RealSpeechInput
+          lang="en-US"
+          onListeningChange={onListeningChange}
+          onTranscriptionChange={onTranscriptionChange}
+          {...props}
+          {...next}
+        />
+      )
+    return { onListeningChange, onTranscriptionChange, rerender }
+  }
+
+  it("resets listening when the language changes mid-dictation, so the next click starts", async () => {
+    const user = userEvent.setup()
+    const { onListeningChange, rerender } = renderInput()
+    await user.click(screen.getByRole("button"))
+    expect(screen.getByRole("button")).toHaveAttribute("data-listening", "true")
+
+    await act(async () => rerender({ lang: "zh-CN" }))
+    const [previous, current] = FakeRecognition.instances
+    expect(previous.aborts).toBe(1)
+    expect(current.lang).toBe("zh-CN")
+    expect(screen.getByRole("button")).not.toHaveAttribute("data-listening")
+    expect(onListeningChange).toHaveBeenLastCalledWith(false)
+
+    await user.click(screen.getByRole("button"))
+    expect(current.starts).toBe(1)
+    expect(current.stops).toBe(0)
+  })
+
+  it("stops recognition when disabled mid-dictation and drops its late results", async () => {
+    const user = userEvent.setup()
+    const { onListeningChange, onTranscriptionChange, rerender } = renderInput()
+    await user.click(screen.getByRole("button"))
+    const [recognition] = FakeRecognition.instances
+
+    await act(async () => rerender({ disabled: true }))
+    expect(recognition.aborts).toBe(1)
+    expect(screen.getByRole("button")).not.toHaveAttribute("data-listening")
+    expect(onListeningChange).toHaveBeenLastCalledWith(false)
+
+    act(() => recognition.emitFinal("late words"))
+    expect(onTranscriptionChange).not.toHaveBeenCalled()
+
+    await act(async () => rerender({ disabled: false }))
+    await user.click(screen.getByRole("button"))
+    expect(recognition.starts).toBe(2)
+    act(() => recognition.emitFinal("fresh words"))
+    expect(onTranscriptionChange).toHaveBeenCalledWith("fresh words")
+  })
+
+  it("discards a recording stopped by a disable instead of transcribing it", async () => {
+    delete win.SpeechRecognition
+    const track = { stop: jest.fn() }
+    const stream = { getTracks: () => [track] }
+    const getUserMedia = jest.fn(async () => stream)
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    })
+    class FakeRecorder extends EventTarget {
+      static last: FakeRecorder | null = null
+      state = "inactive"
+      constructor() {
+        super()
+        FakeRecorder.last = this
+      }
+      start() {
+        this.state = "recording"
+      }
+      stop() {
+        this.state = "inactive"
+        const data = new Event("dataavailable")
+        Object.assign(data, { data: new Blob(["pcm"]) })
+        this.dispatchEvent(data)
+        this.dispatchEvent(new Event("stop"))
+      }
+    }
+    win.MediaRecorder = FakeRecorder
+    const onAudioRecorded = jest.fn(async () => "transcript")
+    const user = userEvent.setup()
+    const { onListeningChange, onTranscriptionChange, rerender } = renderInput({ onAudioRecorded })
+    await user.click(screen.getByRole("button"))
+    expect(FakeRecorder.last?.state).toBe("recording")
+
+    await act(async () => rerender({ disabled: true }))
+    expect(FakeRecorder.last?.state).toBe("inactive")
+    expect(track.stop).toHaveBeenCalled()
+    expect(onAudioRecorded).not.toHaveBeenCalled()
+    expect(onTranscriptionChange).not.toHaveBeenCalled()
+    expect(onListeningChange).toHaveBeenLastCalledWith(false)
+    delete (navigator as unknown as Record<string, unknown>).mediaDevices
+  })
+})

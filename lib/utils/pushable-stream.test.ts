@@ -51,4 +51,13 @@ describe("createPushableStream", () => {
     p.close()
     await expect(it.next()).resolves.toEqual({ value: undefined, done: true })
   })
+
+  it("return() releases the stream: buffered chunks drop and later pushes are ignored", async () => {
+    const p = createPushableStream()
+    const it = p.stream[Symbol.asyncIterator]()
+    p.push("buffered")
+    await expect(it.return?.()).resolves.toEqual({ value: undefined, done: true })
+    p.push("late")
+    await expect(it.next()).resolves.toEqual({ value: undefined, done: true })
+  })
 })

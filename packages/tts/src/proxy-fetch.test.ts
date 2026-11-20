@@ -52,6 +52,15 @@ describe("browser path (no host hook installed)", () => {
     expect(r.status).toBe(200)
   })
 
+  it("refuses redirects, like the native proxy", async () => {
+    const fetchMock = globalThis.fetch as unknown as jest.Mock
+    fetchMock.mockResolvedValueOnce(makeResponse())
+    await proxyFetch("http://127.0.0.1:8880/v1/audio/speech", { json: { input: "hello" } })
+    // A followed 307 would carry the text to whatever host the response named,
+    // past the loopback check the local adapter made on the original URL.
+    expect(fetchMock.mock.calls[0][1].redirect).toBe("error")
+  })
+
   it("preserves caller-provided content-type and method", async () => {
     const fetchMock = globalThis.fetch as unknown as jest.Mock
     fetchMock.mockResolvedValueOnce(makeResponse())
