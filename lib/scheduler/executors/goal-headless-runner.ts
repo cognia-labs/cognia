@@ -58,6 +58,7 @@ import {
 } from "@/lib/ai/agent/execution/capture-types"
 import { buildGoalJudgeClient } from "@/lib/goal/judge-client"
 import { handleTurnComplete } from "@/lib/goal/turn-driver"
+import { getGoalRuntime } from "@/lib/goal/runtime"
 import { gateContinuation } from "@/lib/goal/pacing"
 import {
   createUnattendedPermissionResponder,
@@ -333,6 +334,10 @@ async function driveGoalLoop(
 
     const prompt = nextPrompt ?? goal.safeObjective
     const capturedGenerationId = goal.generationId
+    // A deadline that passed while the loop waited sends no further turn.
+    if (await getGoalRuntime().expireGoal(goalId, capturedGenerationId)) {
+      return { status: "timed_out", turns, lastResponse, exit: "timed_out" }
+    }
 
     const { startToolExecutionRun, finishToolExecutionRun } =
       await import("@/lib/execution/acting-authority")
@@ -378,9 +383,17 @@ async function driveGoalLoop(
     let tokensDelta = 0
     let budgetExceeded = false
     let captureUsage: Awaited<ReturnType<typeof runAndCaptureAssistantReply>>["usage"]
+    // The goal's deadline ends this turn as well, instead of only being read
+    // when the turn settles: a single long turn cannot outrun it.
+    const turnAbort = new AbortController()
+    let pastDeadline = false
+    const releaseDeadline = getGoalRuntime().guardTurnDeadline(goal, () => {
+      pastDeadline = true
+      turnAbort.abort("goal_deadline")
+    })
     try {
       const capture = await sendTurn(sessionId, prompt, resolved, {
-        signal,
+        signal: AbortSignal.any([signal, turnAbort.signal]),
         ...(typeof input.perTurnTimeoutMs === "number"
           ? { timeoutMs: input.perTurnTimeoutMs }
           : {}),
@@ -397,6 +410,7 @@ async function driveGoalLoop(
       budgetExceeded = capture.resultSubtype === "error_max_budget_usd"
     } catch (err) {
       await finishToolExecutionRun(turnRun.id, true)
+      if (pastDeadline) return { status: "timed_out", turns, lastResponse, exit: "timed_out" }
       if (err instanceof RunAndCaptureError && err.code === "aborted") {
         return { status: "paused", turns, lastResponse, error: "aborted" }
       }
@@ -408,10 +422,14 @@ async function driveGoalLoop(
         lastResponse,
         error: err instanceof Error ? err.message : String(err),
       }
+    } finally {
+      releaseDeadline()
     }
 
     await finishToolExecutionRun(turnRun.id)
     turns += 1
+    // The deadline passed as the turn finished: the goal already ended.
+    if (pastDeadline) return { status: "timed_out", turns, lastResponse, exit: "timed_out" }
 
     // Per-turn delivery — the connector driver posts each turn to the IM
     // conversation. The scheduler leaves `onTurn` unset (no delivery).

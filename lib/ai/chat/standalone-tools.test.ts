@@ -22,7 +22,8 @@ jest.mock("@/lib/plugin/bridge/agent-tool-dispatch", () => ({
 import {
   buildStandaloneTools,
   isUsableStandaloneToolName,
-  STANDALONE_MAX_STEPS,
+  STANDALONE_DEFAULT_MAX_STEPS,
+  standaloneStepBudget,
   standalonePermissionDecision,
   standaloneRulesetVerdict,
   sanitizeStandaloneToolName,
@@ -968,7 +969,21 @@ describe("buildStandaloneTools", () => {
   })
 
   it("bounds the loop so a mis-prompted model cannot run away", () => {
-    expect(STANDALONE_MAX_STEPS).toBeGreaterThan(1)
-    expect(STANDALONE_MAX_STEPS).toBeLessThanOrEqual(16)
+    expect(STANDALONE_DEFAULT_MAX_STEPS).toBeGreaterThan(1)
+    expect(STANDALONE_DEFAULT_MAX_STEPS).toBeLessThanOrEqual(16)
+    expect(standaloneStepBudget({})).toBe(STANDALONE_DEFAULT_MAX_STEPS)
+  })
+
+  it("follows a configured step budget, maxTurns first, as the sidecar rail does", () => {
+    expect(standaloneStepBudget({ maxTurns: 30 })).toBe(30)
+    expect(standaloneStepBudget({ aiSdkMaxSteps: 64 })).toBe(64)
+    expect(standaloneStepBudget({ maxTurns: 3, aiSdkMaxSteps: 64 })).toBe(3)
+    // Nothing usable configured: the standalone default.
+    expect(standaloneStepBudget({ maxTurns: 0, aiSdkMaxSteps: Number.NaN })).toBe(
+      STANDALONE_DEFAULT_MAX_STEPS
+    )
+    expect(standaloneStepBudget({ maxTurns: -2, aiSdkMaxSteps: 2.5 })).toBe(
+      STANDALONE_DEFAULT_MAX_STEPS
+    )
   })
 })

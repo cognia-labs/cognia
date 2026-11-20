@@ -367,6 +367,7 @@ const goalRuntimeMock = {
   onManualContinue: jest.fn(() => () => {}),
   requestManualContinue: jest.fn(),
   recordPacingDecision: jest.fn().mockResolvedValue(undefined),
+  guardTurnDeadline: jest.fn(() => () => {}),
 }
 // Real admission; only the cross-window Stop probe can be forced (jsdom has
 // no Web Locks to hold another window's fence).
@@ -796,6 +797,7 @@ interface ChatStateLike {
   setSessionMessages: jest.Mock
   replaceMessages: jest.Mock
   appendMessage: jest.Mock
+  appendMessageToSession: jest.Mock
   setStatus: jest.Mock
   setError: jest.Mock
   replaceSessionMessages: jest.Mock
@@ -885,6 +887,10 @@ const chatState: ChatStateLike = {
   }),
   appendMessage: jest.fn((msg: unknown) => {
     chatState.messages = [...chatState.messages, msg]
+  }),
+  appendMessageToSession: jest.fn((id: string | null, msg: unknown) => {
+    if (!id) return
+    sliceWrite(id, { messages: [...(chatState.sessions[id]?.messages ?? []), msg] })
   }),
   setStatus: jest.fn((s: string) => {
     chatState.status = s
@@ -1350,6 +1356,7 @@ beforeEach(async () => {
   chatState.setMessages.mockClear()
   chatState.replaceMessages.mockClear()
   chatState.appendMessage.mockClear()
+  chatState.appendMessageToSession.mockClear()
   chatState.setStatus.mockClear()
   chatState.setError.mockClear()
   chatState.replaceSessionMessages.mockClear()
@@ -8897,13 +8904,47 @@ describe("useAgentChat — goal loop wiring (ADR-0019)", () => {
     renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
-    expect(chatState.appendMessage).toHaveBeenCalledWith(
+    expect(chatState.appendMessageToSession).toHaveBeenCalledWith(
+      "sess-1",
       expect.objectContaining({
         role: "system",
         parts: [expect.objectContaining({ text: expect.stringContaining("Goal completed") })],
       })
     )
     expect(sendPromptMock).not.toHaveBeenCalled()
+  })
+
+  it("puts a goal's exit card in the goal's own conversation, not the one in front (F21)", async () => {
+    goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal({ id: "g-bg" }))
+    buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
+    handleTurnCompleteMock.mockResolvedValue({
+      kind: "exit",
+      exit: "judge_done",
+      resultingStatus: "completed",
+      reason: "objective satisfied",
+    })
+    renderHook(() => useAgentChat())
+    await flush()
+    // The person moved to another conversation while sess-1's goal turn ran.
+    chatState.otherSlices["sess-1"] = { ...makeSlice(), messages: chatState.messages }
+    chatState.activeSessionId = "sess-2"
+    chatState.messages = []
+    try {
+      await driveTurnComplete()
+      expect(chatState.appendMessageToSession).toHaveBeenCalledWith(
+        "sess-1",
+        expect.objectContaining({
+          parts: [expect.objectContaining({ text: expect.stringContaining("Goal completed") })],
+        })
+      )
+      expect(chatState.appendMessage).not.toHaveBeenCalled()
+      // The card was never added to the conversation in front.
+      expect(chatState.messages).toEqual([])
+    } finally {
+      chatState.activeSessionId = "sess-1"
+      delete chatState.otherSlices["sess-1"]
+      delete chatState.otherSlices["sess-2"]
+    }
   })
 
   it("turnComplete with no judge client warns once and pauses", async () => {
@@ -8914,7 +8955,8 @@ describe("useAgentChat — goal loop wiring (ADR-0019)", () => {
     await driveTurnComplete()
     expect(handleTurnCompleteMock).not.toHaveBeenCalled()
     expect(goalRuntimeMock.pauseGoal).toHaveBeenCalledWith("g-nojudge")
-    expect(chatState.appendMessage).toHaveBeenCalledWith(
+    expect(chatState.appendMessageToSession).toHaveBeenCalledWith(
+      "sess-1",
       expect.objectContaining({
         parts: [expect.objectContaining({ text: expect.stringContaining("no judge model") })],
       })
@@ -8929,6 +8971,7 @@ describe("useAgentChat — goal loop wiring (ADR-0019)", () => {
     await flush()
     await driveTurnComplete()
     expect(chatState.appendMessage).not.toHaveBeenCalled()
+    expect(chatState.appendMessageToSession).not.toHaveBeenCalled()
     expect(sendPromptMock).not.toHaveBeenCalled()
   })
 
@@ -8995,7 +9038,8 @@ describe("useAgentChat — goal loop wiring (ADR-0019)", () => {
     renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
-    expect(chatState.appendMessage).toHaveBeenCalledWith(
+    expect(chatState.appendMessageToSession).toHaveBeenCalledWith(
+      "sess-1",
       expect.objectContaining({
         role: "system",
         parts: [expect.objectContaining({ text: expect.stringContaining("Loop completed") })],

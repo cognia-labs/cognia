@@ -52,6 +52,20 @@ jest.mock("@/lib/ai/agent/execution/run-and-capture", () => {
 jest.mock("@/lib/goal/judge-client", () => ({
   buildGoalJudgeClient: (...a: unknown[]) => buildJudgeMock(...a),
 }))
+// The goal's wall-clock deadline (F21): whether it already passed, and the
+// guard that stops a turn running past it.
+const expireGoalMock = jest.fn(async (..._args: unknown[]) => false)
+const deadlineStops: Array<() => unknown> = []
+const releaseDeadlineMock = jest.fn()
+jest.mock("@/lib/goal/runtime", () => ({
+  getGoalRuntime: () => ({
+    expireGoal: (...a: unknown[]) => expireGoalMock(...a),
+    guardTurnDeadline: (_goal: unknown, stop: () => unknown) => {
+      deadlineStops.push(stop)
+      return releaseDeadlineMock
+    },
+  }),
+}))
 jest.mock("@/lib/goal/turn-driver", () => ({
   handleTurnComplete: (...a: unknown[]) => handleTurnCompleteMock(...a),
 }))
@@ -97,6 +111,9 @@ beforeEach(() => {
   buildJudgeMock.mockReset()
   handleTurnCompleteMock.mockReset()
   getAllProjectsMock.mockReset().mockResolvedValue([])
+  expireGoalMock.mockReset().mockResolvedValue(false)
+  releaseDeadlineMock.mockReset()
+  deadlineStops.length = 0
   isWorkspaceTrustedMock.mockReset().mockResolvedValue(true)
   hostEnforcesTrustMock.mockReset().mockReturnValue(false)
   getSessionMock.mockResolvedValue({ id: "s1" })
@@ -262,6 +279,54 @@ describe("runGoalLoopHeadless", () => {
     const r = await runGoalLoopHeadless(input({ pacing: { enabled: true } }))
     expect(r.status).toBe("completed")
     expect(r.turns).toBe(2)
+  })
+})
+
+describe("runGoalLoopHeadless — wall-clock deadline (F21)", () => {
+  it("sends no turn once the deadline passed while the loop waited", async () => {
+    getGoalMock.mockResolvedValue(activeGoal)
+    expireGoalMock.mockResolvedValue(true)
+    const r = await runGoalLoopHeadless(input())
+    expect(r).toMatchObject({ status: "timed_out", exit: "timed_out", turns: 0 })
+    expect(expireGoalMock).toHaveBeenCalledWith("g1", "gen1")
+    expect(runCaptureMock).not.toHaveBeenCalled()
+  })
+
+  it("aborts a turn that runs past the deadline and reports timed_out, not paused", async () => {
+    getGoalMock.mockResolvedValue(activeGoal)
+    runCaptureMock.mockImplementation(
+      (_session: unknown, _prompt: unknown, _options: unknown, call: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          call.signal.addEventListener("abort", () =>
+            reject(new RunAndCaptureError("aborted", "aborted"))
+          )
+          // The deadline passes mid-turn.
+          deadlineStops[0]!()
+        })
+    )
+    const r = await runGoalLoopHeadless(input())
+    expect(r).toMatchObject({ status: "timed_out", exit: "timed_out" })
+    expect(handleTurnCompleteMock).not.toHaveBeenCalled()
+    expect(releaseDeadlineMock).toHaveBeenCalled()
+  })
+
+  it("does not judge a turn that finished after the deadline ended the goal", async () => {
+    getGoalMock.mockResolvedValue(activeGoal)
+    runCaptureMock.mockImplementation(async () => {
+      deadlineStops[0]!()
+      return { text: "late" }
+    })
+    const r = await runGoalLoopHeadless(input())
+    expect(r).toMatchObject({ status: "timed_out", turns: 1, exit: "timed_out" })
+    expect(handleTurnCompleteMock).not.toHaveBeenCalled()
+  })
+
+  it("an abort from the run's own signal still pauses the goal", async () => {
+    getGoalMock.mockResolvedValue(activeGoal)
+    runCaptureMock.mockRejectedValue(new RunAndCaptureError("aborted", "aborted"))
+    const r = await runGoalLoopHeadless(input())
+    expect(r.status).toBe("paused")
+    expect(releaseDeadlineMock).toHaveBeenCalledTimes(1)
   })
 })
 

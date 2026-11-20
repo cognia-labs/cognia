@@ -2121,7 +2121,7 @@ export async function handleEvent(
               }
               if (!isCurrentEvent()) return
               if (outcome.kind === "exit") {
-                useChatStore.getState().appendMessage({
+                useChatStore.getState().appendMessageToSession(sessionId, {
                   id: `sys-loop-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                   role: "system",
                   parts: [
@@ -2131,11 +2131,9 @@ export async function handleEvent(
                     },
                   ],
                 })
-                await persistMessages(
-                  sessionId,
-                  useChatStore.getState().messages,
-                  writeOptions
-                ).catch(() => {})
+                await persistMessages(sessionId, sliceMessages(sessionId), writeOptions).catch(
+                  () => {}
+                )
               } else if (outcome.kind === "continue") {
                 selfDrivenContinuation = true
                 scheduleLoopContinuation(
@@ -2143,7 +2141,6 @@ export async function handleEvent(
                   sessionId,
                   outcome.userMessage,
                   sendRef,
-                  activeRef,
                   continuationRef
                 )
               }
@@ -2170,7 +2167,7 @@ export async function handleEvent(
                 // once and pause so the loop doesn't appear to silently stall.
                 if (!goalJudgeClientWarned.has(goal.id)) {
                   goalJudgeClientWarned.add(goal.id)
-                  useChatStore.getState().appendMessage({
+                  useChatStore.getState().appendMessageToSession(sessionId, {
                     id: `sys-goal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                     role: "system",
                     parts: [
@@ -2181,11 +2178,9 @@ export async function handleEvent(
                     ],
                   })
                   await getGoalRuntime().pauseGoal(goal.id)
-                  await persistMessages(
-                    sessionId,
-                    useChatStore.getState().messages,
-                    writeOptions
-                  ).catch(() => {})
+                  await persistMessages(sessionId, sliceMessages(sessionId), writeOptions).catch(
+                    () => {}
+                  )
                 }
               } else {
                 const lastAssistant = nextMessages.findLast((m) => m.role === "assistant")
@@ -2221,7 +2216,9 @@ export async function handleEvent(
                 }
                 if (!isCurrentEvent()) return
                 if (outcome.kind === "exit") {
-                  useChatStore.getState().appendMessage({
+                  // Into this goal's own conversation: it may not be the one in
+                  // front, now that its turns go on in the background.
+                  useChatStore.getState().appendMessageToSession(sessionId, {
                     id: `sys-goal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                     role: "system",
                     parts: [
@@ -2231,11 +2228,9 @@ export async function handleEvent(
                       },
                     ],
                   })
-                  await persistMessages(
-                    sessionId,
-                    useChatStore.getState().messages,
-                    writeOptions
-                  ).catch(() => {})
+                  await persistMessages(sessionId, sliceMessages(sessionId), writeOptions).catch(
+                    () => {}
+                  )
                 } else if (outcome.kind === "continue") {
                   // Pacing gate (ADR-0019 Phase 2): dispatch now / hold for a
                   // manual "Continue" / defer past quiet-hours or the interval.
@@ -2252,7 +2247,6 @@ export async function handleEvent(
                     sessionId,
                     outcome.userMessage,
                     sendRef,
-                    activeRef,
                     suggested?.ms,
                     continuationRef
                   )

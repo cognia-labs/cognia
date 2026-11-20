@@ -288,6 +288,9 @@ export function useApplyEffect(deps: ApplyEffectDeps): (effect: CommandEffect) =
           if (next.kind === "goalRun") {
             await startGoalRun(next.objective, {
               ...common,
+              abortTurn: () => {
+                if (drivenJob.current === job) agent.abort()
+              },
               resume,
               firer: createCliLifecycleFirer({ home, osHome }),
             })

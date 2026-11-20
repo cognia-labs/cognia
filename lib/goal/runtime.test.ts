@@ -579,6 +579,104 @@ describe("GoalRuntime — abort controller registry", () => {
   })
 })
 
+describe("GoalRuntime — wall-clock deadline (F21)", () => {
+  const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  async function readGoalRow(id: string) {
+    const { getGoal } = await import("@/lib/db/goals")
+    return getGoal(id)
+  }
+
+  it("ends an active goal as timed_out at its deadline and stops the running turn", async () => {
+    const rt = getGoalRuntime()
+    const g = await rt.createGoal({
+      sessionId: "ses_a",
+      rawObjective: "x",
+      config: { timeoutMs: 40 },
+    })
+    const ac = new AbortController()
+    rt.registerAbortController(g.id, ac)
+    const stopTurn = jest.fn()
+    rt.guardTurnDeadline(g, stopTurn)
+    // The turn is still running: nothing settles it, the deadline alone ends it.
+    await settle(150)
+    const row = await readGoalRow(g.id)
+    expect(row?.status).toBe("timed_out")
+    expect(row?.generationId).not.toBe(g.generationId)
+    expect(row?.endedAt).toBeGreaterThan(0)
+    expect(stopTurn).toHaveBeenCalledTimes(1)
+    expect(ac.signal.aborted).toBe(true)
+    const exit = (await listGoalEvents(g.id)).find((e) => e.kind === "exit_triggered")
+    expect(exit?.payload).toMatchObject({ exit: "timed_out" })
+    expect(onGoalTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: g.id, status: "timed_out" })
+    )
+  })
+
+  it("leaves a goal paused before its deadline alone", async () => {
+    const rt = getGoalRuntime()
+    const g = await rt.createGoal({
+      sessionId: "ses_a",
+      rawObjective: "x",
+      config: { timeoutMs: 40 },
+    })
+    const stopTurn = jest.fn()
+    rt.guardTurnDeadline(g, stopTurn)
+    await rt.pauseGoal(g.id)
+    await settle(150)
+    expect((await readGoalRow(g.id))?.status).toBe("paused")
+    expect(stopTurn).not.toHaveBeenCalled()
+  })
+
+  it("re-arms when the timeout was raised before the deadline", async () => {
+    const rt = getGoalRuntime()
+    const g = await rt.createGoal({
+      sessionId: "ses_a",
+      rawObjective: "x",
+      config: { timeoutMs: 40 },
+    })
+    const stopTurn = jest.fn()
+    const release = rt.guardTurnDeadline(g, stopTurn)
+    await rt.updateConfig(g.id, { timeoutMs: 60_000 })
+    await settle(150)
+    expect((await readGoalRow(g.id))?.status).toBe("active")
+    expect(stopTurn).not.toHaveBeenCalled()
+    release()
+  })
+
+  it("does nothing once released, and arming again replaces the earlier guard", async () => {
+    const rt = getGoalRuntime()
+    const g = await rt.createGoal({
+      sessionId: "ses_a",
+      rawObjective: "x",
+      config: { timeoutMs: 40 },
+    })
+    const first = jest.fn()
+    rt.guardTurnDeadline(g, first)
+    const second = jest.fn()
+    const release = rt.guardTurnDeadline(g, second)
+    release()
+    await settle(150)
+    expect((await readGoalRow(g.id))?.status).toBe("active")
+    expect(first).not.toHaveBeenCalled()
+    expect(second).not.toHaveBeenCalled()
+  })
+
+  it("expireGoal only ends an active goal of the same generation past its deadline", async () => {
+    const rt = getGoalRuntime()
+    const g = await rt.createGoal({ sessionId: "ses_a", rawObjective: "x" })
+    const pastDeadline = g.createdAt + g.config.timeoutMs + 1
+    expect(await rt.expireGoal(g.id, g.generationId, g.createdAt + 1)).toBe(false)
+    expect(await rt.expireGoal(g.id, "another-generation", pastDeadline)).toBe(false)
+    expect((await readGoalRow(g.id))?.status).toBe("active")
+    expect(await rt.expireGoal(g.id, g.generationId, pastDeadline)).toBe(true)
+    expect((await readGoalRow(g.id))?.status).toBe("timed_out")
+    // Already ended: a second expiry is a no-op.
+    expect(await rt.expireGoal(g.id, g.generationId, pastDeadline)).toBe(false)
+    expect(await rt.expireGoal("missing", "gen", pastDeadline)).toBe(false)
+  })
+})
+
 describe("GoalRuntime.requestManualContinue", () => {
   it("reports false when no turn is held for the goal", () => {
     expect(getGoalRuntime().requestManualContinue("g_none")).toBe(false)

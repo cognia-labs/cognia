@@ -27,16 +27,26 @@ jest.mock("@/lib/loop/pacing", () => ({
   gateLoopContinuation: () => ({ kind: "send" }),
 }))
 const getActiveGoalMock = jest.fn()
+const guardTurnDeadlineMock = jest.fn()
 const manualContinueListeners = new Map<string, () => void>()
 jest.mock("@/lib/goal/runtime", () => ({
   getGoalRuntime: () => ({
     getActiveGoalForSession: (...args: unknown[]) => getActiveGoalMock(...args),
     recordPacingDecision: async () => undefined,
+    guardTurnDeadline: (...args: unknown[]) => guardTurnDeadlineMock(...args),
     onManualContinue: (goalId: string, cb: () => void) => {
       manualContinueListeners.set(goalId, cb)
       return () => manualContinueListeners.delete(goalId)
     },
   }),
+}))
+const stopChatTurnMock = jest.fn(async (..._args: unknown[]) => true)
+jest.mock("./chat-control-bridge", () => ({
+  stopChatTurn: (...args: unknown[]) => stopChatTurnMock(...args),
+}))
+const sessionStatusMock = jest.fn((..._args: unknown[]) => "ready")
+jest.mock("@/lib/chat/steer-runtime", () => ({
+  sessionStatusOf: (...args: unknown[]) => sessionStatusMock(...args),
 }))
 const gateContinuationMock = jest.fn((..._args: unknown[]) => ({ kind: "hold" }))
 jest.mock("@/lib/goal/pacing", () => ({
@@ -135,9 +145,7 @@ describe("a refused automated continuation", () => {
     process.on("unhandledRejection", unhandled)
     try {
       const send = jest.fn(() => Promise.reject(new Error("session_turn_busy")))
-      scheduleLoopContinuation("loop-1", "s1", "next iteration", { current: send } as never, {
-        current: "s1",
-      })
+      scheduleLoopContinuation("loop-1", "s1", "next iteration", { current: send } as never)
       await new Promise((resolve) => setTimeout(resolve, 0))
       await new Promise((resolve) => setImmediate(resolve))
       expect(send).toHaveBeenCalledWith("next iteration", undefined, {
@@ -180,19 +188,11 @@ describe("a held goal continuation", () => {
 
   it("goes to its own conversation when Continue is clicked from another", async () => {
     const send = jest.fn(async () => true)
-    const active = { current: "session-a" }
-    scheduleGoalContinuation(
-      "goal-a",
-      "session-a",
-      "keep going",
-      { current: send } as never,
-      active
-    )
+    scheduleGoalContinuation("goal-a", "session-a", "keep going", { current: send } as never)
     await flushAll()
     expect(manualContinueListeners.has("goal-a")).toBe(true)
 
     // The person moved on to conversation B, then clicks A's Continue.
-    active.current = "session-b"
     manualContinueListeners.get("goal-a")!()
     await flushAll()
     expect(send).toHaveBeenCalledWith("keep going", undefined, {
@@ -203,9 +203,7 @@ describe("a held goal continuation", () => {
 
   it("sends nothing when the goal was paused, stopped or replaced since the hold", async () => {
     const send = jest.fn(async () => true)
-    scheduleGoalContinuation("goal-a", "session-a", "keep going", { current: send } as never, {
-      current: "session-a",
-    })
+    scheduleGoalContinuation("goal-a", "session-a", "keep going", { current: send } as never)
     await flushAll()
 
     const click = manualContinueListeners.get("goal-a")!
@@ -218,5 +216,72 @@ describe("a held goal continuation", () => {
     click()
     await flushAll()
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe("a goal or loop whose conversation is not in front (F21)", () => {
+  const flushAll = async () => {
+    for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  beforeEach(() => {
+    guardTurnDeadlineMock.mockClear()
+    gateContinuationMock.mockClear()
+  })
+
+  it("still sends the goal's next turn into its own conversation, under its deadline", async () => {
+    const goal = { id: "goal-bg", generationId: "gen-1", sessionId: "session-a" }
+    getActiveGoalMock.mockReset().mockResolvedValue(goal)
+    gateContinuationMock.mockReturnValueOnce({ kind: "send" })
+    const send = jest.fn(async () => true)
+    // No foreground check is left: the person is looking at another chat.
+    scheduleGoalContinuation("goal-bg", "session-a", "keep going", { current: send } as never)
+    await flushAll()
+    expect(send).toHaveBeenCalledWith("keep going", undefined, {
+      skipUserAppend: true,
+      sessionId: "session-a",
+    })
+    // The next turn runs under the goal's wall-clock deadline.
+    expect(guardTurnDeadlineMock).toHaveBeenCalledWith(goal, expect.any(Function))
+  })
+
+  it("stops the goal's running turn at the deadline through the chat's own Stop", async () => {
+    const goal = { id: "goal-dl", generationId: "gen-1", sessionId: "session-a" }
+    getActiveGoalMock.mockReset().mockResolvedValue(goal)
+    stopChatTurnMock.mockClear()
+    scheduleGoalContinuation("goal-dl", "session-a", "keep going", {
+      current: jest.fn(async () => true),
+    } as never)
+    await flushAll()
+    const stopTurn = guardTurnDeadlineMock.mock.calls[0]![1] as () => Promise<void>
+
+    // Nothing running in the conversation: there is no turn to stop.
+    sessionStatusMock.mockReturnValue("ready")
+    await stopTurn()
+    expect(stopChatTurnMock).not.toHaveBeenCalled()
+
+    sessionStatusMock.mockReturnValue("streaming")
+    await stopTurn()
+    expect(stopChatTurnMock).toHaveBeenCalledWith("session-a")
+  })
+
+  it("arms no deadline and sends nothing for a goal that is no longer active", async () => {
+    getActiveGoalMock.mockReset().mockResolvedValue(undefined)
+    const send = jest.fn(async () => true)
+    scheduleGoalContinuation("goal-gone", "session-a", "keep going", { current: send } as never)
+    await flushAll()
+    expect(send).not.toHaveBeenCalled()
+    expect(guardTurnDeadlineMock).not.toHaveBeenCalled()
+  })
+
+  it("still sends a loop's next iteration into its own conversation", async () => {
+    getActiveLoopMock.mockResolvedValue({ id: "loop-bg" })
+    const send = jest.fn(async () => true)
+    scheduleLoopContinuation("loop-bg", "session-a", "next iteration", { current: send } as never)
+    await flushAll()
+    expect(send).toHaveBeenCalledWith("next iteration", undefined, {
+      skipUserAppend: true,
+      sessionId: "session-a",
+    })
   })
 })

@@ -772,6 +772,16 @@ describe("runStandaloneTurn", () => {
     expect(args.stopWhen.__stopAfterSteps).toBe(8)
   })
 
+  it("runs the loop for the step budget the turn was configured with", async () => {
+    const impl = jest.fn(fakeStream([{ type: "text-delta", text: "hi" }]) as never)
+    const { promise } = run({
+      sendOptions: { pluginTools: manifest, maxTurns: 40 } as SendOptions,
+      streamTextImpl: impl as never,
+    })
+    await promise
+    expect((impl as unknown as jest.Mock).mock.calls[0][0].stopWhen.__stopAfterSteps).toBe(40)
+  })
+
   it("stays single-shot when the turn carries no tools", async () => {
     const impl = jest.fn(fakeStream([{ type: "text-delta", text: "hi" }]) as never)
     const { promise } = run({ streamTextImpl: impl as never })

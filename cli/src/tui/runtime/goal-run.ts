@@ -49,6 +49,11 @@ export interface GoalRunDeps {
   signal: AbortSignal
   /** Drain a queued `btw` steer message (App-owned). */
   takeSteer?: () => string | null
+  /**
+   * End the turn in flight without ending the run (App-owned): the goal's
+   * wall-clock deadline uses it to stop a turn that runs past it.
+   */
+  abortTurn?: () => void
   /** Resume the persisted paused goal instead of creating a new one. */
   resume?: boolean
   getOpenGoal?: typeof getOpenGoalForSession
@@ -68,6 +73,7 @@ export interface GoalRunDeps {
   getSession?: (id: string) => Promise<Awaited<ReturnType<typeof getSession>>>
   handleTurn?: typeof handleTurnComplete
   getGoal?: (id: string) => Promise<Goal | undefined>
+  guardTurnDeadline?: (goal: Goal, stopTurn: () => unknown) => () => void
   /** Lifecycle-hook firer for the judge call (App-owned, CLI runner-backed). */
   firer?: LifecycleHookFirer
 }
@@ -153,6 +159,10 @@ export async function runGoalStreaming(objective: string, deps: GoalRunDeps): Pr
   }): Promise<DrivenAdvance> => {
     const current = await readGoal(goal.id)
     if (!current) return { kind: "stop", status: "error", summary: "Goal removed mid-run." }
+    // The deadline ended the goal while this turn ran, and stopped the turn.
+    if (current.status === "timed_out" && current.generationId !== goal.generationId) {
+      return { kind: "stop", status: "done", summary: "Goal timed_out: wall-clock timeout reached" }
+    }
     const outcome = await handleTurn({
       goalId: goal.id,
       lastResponse,
@@ -189,9 +199,26 @@ export async function runGoalStreaming(objective: string, deps: GoalRunDeps): Pr
     }
   }
 
+  // The goal's wall-clock deadline holds over the whole run: past it, the goal
+  // ends as `timed_out` and the turn in flight stops, instead of the deadline
+  // being read only when a turn settles.
+  let stoppedAtDeadline = false
+  const guardTurnDeadline =
+    deps.guardTurnDeadline ??
+    ((guarded: Goal, stopTurn: () => unknown) =>
+      getGoalRuntime().guardTurnDeadline(guarded, stopTurn))
+  const releaseDeadline = guardTurnDeadline(goal, () => {
+    stoppedAtDeadline = true
+    deps.abortTurn?.()
+  })
+  // A turn the deadline stopped reports no result; it is the goal's end, not
+  // a failed turn, so `advance` reads it and says the goal timed out.
+  const send: GoalRunDeps["send"] = async (prompt) =>
+    (await deps.send(prompt)) ??
+    (stoppedAtDeadline ? { text: "", messageId: "", a2uiSurfaces: {}, a2uiSurfaceOrder: [] } : null)
   try {
     await runDrivenTurns({
-      send: deps.send,
+      send,
       firstPrompt: goal.safeObjective,
       advance,
       dispatch: deps.dispatch,
@@ -202,6 +229,7 @@ export async function runGoalStreaming(objective: string, deps: GoalRunDeps): Pr
       takeSteer: deps.takeSteer,
     })
   } finally {
+    releaseDeadline()
     {
       const current = await readGoal(goal.id)
       if (current?.generationId === goal.generationId && current.status === "active") {

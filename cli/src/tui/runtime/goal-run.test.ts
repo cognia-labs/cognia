@@ -49,6 +49,7 @@ function baseDeps(over: Partial<GoalRunDeps> = {}): {
     getGoal: async () => fakeGoal(),
     pauseGoal: async () => {},
     stopGoal: async () => {},
+    guardTurnDeadline: () => () => {},
     ...over,
   }
   return { deps, actions, sent }
@@ -230,5 +231,58 @@ describe("goal admission and cancellation", () => {
     expect(handleTurn).toHaveBeenCalledWith(
       expect.objectContaining({ capturedGenerationId: "gen-1" })
     )
+  })
+})
+
+describe("the goal's wall-clock deadline (F21)", () => {
+  it("stops the turn in flight at the deadline and ends the run as timed out", async () => {
+    let stopAtDeadline: (() => unknown) | undefined
+    const release = jest.fn()
+    let status: Goal["status"] = "active"
+    const abortTurn = jest.fn()
+    const handleTurn = jest.fn()
+    const { deps, actions } = baseDeps({
+      guardTurnDeadline: (_goal, stop) => {
+        stopAtDeadline = stop
+        return release
+      },
+      abortTurn,
+      getGoal: async () =>
+        status === "active"
+          ? fakeGoal()
+          : fakeGoal({ status: "timed_out", generationId: "gen-after-deadline" }),
+      handleTurn: handleTurn as never,
+      // The deadline passes mid-turn: the goal ends and the turn is aborted, so
+      // the send reports no reply.
+      send: async () => {
+        status = "timed_out"
+        stopAtDeadline?.()
+        return null
+      },
+    })
+    await runGoalStreaming("long task", deps)
+    expect(abortTurn).toHaveBeenCalledTimes(1)
+    // The deadline's end is the goal's, not a failed turn: no judge runs.
+    expect(handleTurn).not.toHaveBeenCalled()
+    expect(actions.at(-1)).toEqual({
+      type: "ACTIVITY_END",
+      status: "done",
+      summary: "Goal timed_out: wall-clock timeout reached",
+    })
+    expect(release).toHaveBeenCalled()
+  })
+
+  it("releases the deadline guard when the run ends normally", async () => {
+    const release = jest.fn()
+    const { deps } = baseDeps({
+      guardTurnDeadline: () => release,
+      handleTurn: (async () => ({
+        kind: "exit",
+        resultingStatus: "completed",
+        reason: "done",
+      })) as never,
+    })
+    await runGoalStreaming("quick task", deps)
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })

@@ -45,7 +45,7 @@ import {
   buildStandaloneTools,
   hasUnsupportedStandalonePolicy,
   sanitizeStandaloneToolName,
-  STANDALONE_MAX_STEPS,
+  standaloneStepBudget,
 } from "./standalone-tools"
 import {
   FINISH_RETRY_MAX_ATTEMPTS,
@@ -317,7 +317,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
         sdkSessionId: globalThis.crypto.randomUUID(),
         model: modelId,
         provider: resolution.providerId,
-        maxSteps: STANDALONE_MAX_STEPS,
+        maxSteps: standaloneStepBudget(sendOptions),
         toolNameAliases: resolvedTools?.aliases,
       })
       mapper.reset()
@@ -362,7 +362,10 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
             return undefined
           },
           ...(resolvedTools
-            ? { tools: resolvedTools.tools, stopWhen: isStepCount(STANDALONE_MAX_STEPS) }
+            ? {
+                tools: resolvedTools.tools,
+                stopWhen: isStepCount(standaloneStepBudget(sendOptions)),
+              }
             : {}),
         })
 

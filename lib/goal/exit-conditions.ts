@@ -64,6 +64,16 @@ export interface ExitConditionsContext {
   now?: number
 }
 
+/** When the goal's wall-clock budget runs out: `createdAt + config.timeoutMs`. */
+export function goalDeadlineAt(goal: Pick<Goal, "createdAt" | "config">): number {
+  return goal.createdAt + goal.config.timeoutMs
+}
+
+/** The `timed_out` reason, as the settle check and the deadline guard record it. */
+export function timedOutReason(goal: Pick<Goal, "createdAt">, now: number): string {
+  return `wall-clock timeout reached after ${Math.round((now - goal.createdAt) / 1000)}s`
+}
+
 /** Pure evaluator — see module docstring. */
 export function evaluateExitConditions(
   goal: Goal,
@@ -95,9 +105,8 @@ export function evaluateExitConditions(
     )
   }
   const now = ctx.now ?? Date.now()
-  const elapsed = now - goal.createdAt
-  if (elapsed >= goal.config.timeoutMs) {
-    return decision("timed_out", `wall-clock timeout reached after ${Math.round(elapsed / 1000)}s`)
+  if (now >= goalDeadlineAt(goal)) {
+    return decision("timed_out", timedOutReason(goal, now))
   }
   if (goal.judgeFailureCount >= goal.config.maxJudgeFailures) {
     return decision(

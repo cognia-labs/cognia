@@ -46,8 +46,27 @@ import {
   splitCommandSegments,
 } from "@cognia/plugin-contract/lib/claude/permissions/command-parse"
 
-/** Keep standalone provider/credit use bounded to the product's eight-step ceiling. */
-export const STANDALONE_MAX_STEPS = 8
+/**
+ * The step ceiling of a standalone turn nothing configured. Standalone runs the
+ * whole loop in one `streamText` leg with no compaction between steps, so an
+ * open-ended default would let one turn grow its context and spend unbounded.
+ */
+export const STANDALONE_DEFAULT_MAX_STEPS = 8
+
+/**
+ * A standalone turn's agentic step budget, with the precedence the sidecar's
+ * AI SDK rail uses: an explicit `maxTurns` (an agent's or the session's
+ * execution policy, a goal, a subagent) wins, then a configured
+ * `aiSdkMaxSteps`, and only then {@link STANDALONE_DEFAULT_MAX_STEPS}.
+ */
+export function standaloneStepBudget(
+  options: Pick<SendOptions, "maxTurns" | "aiSdkMaxSteps">
+): number {
+  for (const value of [options.maxTurns, options.aiSdkMaxSteps]) {
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) return value
+  }
+  return STANDALONE_DEFAULT_MAX_STEPS
+}
 const MAX_TOOL_NAME_LENGTH = 64
 const VALID_TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/
 

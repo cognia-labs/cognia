@@ -39,7 +39,7 @@ import type {
   GoalRunOrigin,
   GoalStatus,
 } from "@/types/goal"
-import { isTerminalGoalStatus } from "@/types/goal"
+import { isTerminalGoalStatus, statusForExit } from "@/types/goal"
 import {
   appendGoalEvent,
   createGoal,
@@ -61,6 +61,7 @@ import { resolveCharacterById } from "@/lib/db/characters"
 import { classifyRisk } from "@/lib/policy/risk/classify-risk"
 import { requiredCeremony } from "@/lib/policy/risk/ceremony"
 import { buildGoalRiskInput } from "./risk-input"
+import { goalDeadlineAt, timedOutReason } from "./exit-conditions"
 import { redactObjective } from "./redact-objective"
 import { decomposeObjective, toSubgoals } from "./subgoals"
 import { onGoalTerminal, toGoalHookPayload } from "./completion-linkage"
@@ -188,6 +189,9 @@ interface AbortRegistration {
   controller: AbortController
 }
 
+/** `setTimeout` fires at once past 2^31 - 1 ms; a farther deadline re-arms. */
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1
+
 class GoalRuntime {
   /** Per-goal active turn-driver abort controllers. */
   private aborters = new Map<string, AbortRegistration>()
@@ -200,6 +204,9 @@ class GoalRuntime {
    * hook; this only signals "go").
    */
   private manualContinueListeners = new Map<string, Set<() => void>>()
+
+  /** Per-goal wall-clock guard over the turn it drives next (`guardTurnDeadline`). */
+  private deadlineGuards = new Map<string, () => void>()
 
   /**
    * Register the AbortController for an in-flight turn driver. The runtime
@@ -219,12 +226,96 @@ class GoalRuntime {
 
   /** Internal helper — abort any in-flight controller for a goal. */
   private fireAbort(goalId: string): void {
+    // The goal is leaving this generation: its deadline guard goes with it.
+    this.deadlineGuards.get(goalId)?.()
     const reg = this.aborters.get(goalId)
     if (!reg) return
     this.aborters.delete(goalId)
     if (!reg.controller.signal.aborted) {
       reg.controller.abort()
     }
+  }
+
+  /**
+   * Hold the turn a goal drives next to the goal's wall-clock deadline. The
+   * exit conditions read the deadline only when a turn settles, so one long
+   * turn, or a continuation deferred past it, could run well beyond it. This
+   * arms a timer for the deadline: when it passes with the goal still active on
+   * the generation it was armed for, the goal exits as `timed_out` and the turn
+   * is stopped with `stopTurn`, the driver's own stop (the chat's Stop, a
+   * headless run's abort). A deadline already past fires at once. Arming again replaces the guard, a
+   * pause, stop or new objective drops it, and the returned release does too.
+   */
+  guardTurnDeadline(goal: Goal, stopTurn: () => unknown, now: number = Date.now()): () => void {
+    this.deadlineGuards.get(goal.id)?.()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      if (timer !== undefined) clearTimeout(timer)
+      if (this.deadlineGuards.get(goal.id) === release) this.deadlineGuards.delete(goal.id)
+    }
+    const onDeadline = async () => {
+      const current = await getGoal(goal.id)
+      if (
+        released ||
+        !current ||
+        current.status !== "active" ||
+        current.generationId !== goal.generationId
+      ) {
+        return release()
+      }
+      // The deadline is read again: a raised `timeoutMs` moves it later.
+      const deadlineAt = goalDeadlineAt(current)
+      if (Date.now() < deadlineAt) return arm(deadlineAt, Date.now())
+      release()
+      if (await this.expireGoal(goal.id, goal.generationId)) {
+        await stopTurn()
+      }
+    }
+    const arm = (deadlineAt: number, from: number) => {
+      timer = setTimeout(
+        () => void onDeadline().catch(() => undefined),
+        Math.min(MAX_TIMER_DELAY_MS, Math.max(0, deadlineAt - from))
+      )
+      // A guard must not keep a headless or CLI process alive on its own.
+      ;(timer as { unref?: () => void }).unref?.()
+    }
+    arm(goalDeadlineAt(goal), now)
+    this.deadlineGuards.set(goal.id, release)
+    return release
+  }
+
+  /**
+   * End an active goal whose wall-clock deadline has passed, as `timed_out`.
+   * A goal paused, stopped or given a new objective since `generationId` is
+   * left alone. Returns whether this call ended it.
+   */
+  async expireGoal(
+    goalId: string,
+    generationId: string,
+    now: number = Date.now()
+  ): Promise<boolean> {
+    const current = await getGoal(goalId)
+    if (!current || current.status !== "active" || current.generationId !== generationId) {
+      return false
+    }
+    if (now < goalDeadlineAt(current)) return false
+    this.fireAbort(goalId)
+    await updateGoal(goalId, {
+      status: statusForExit("timed_out"),
+      generationId: crypto.randomUUID(),
+    })
+    await appendGoalEvent({
+      goalId,
+      kind: "exit_triggered",
+      payload: { kind: "exit_triggered", exit: "timed_out", reason: timedOutReason(current, now) },
+    })
+    const updated = (await getGoal(goalId)) ?? null
+    void emitGoalStatus(updated)
+    if (updated) void onGoalTerminal(updated)
+    return true
   }
 
   /**

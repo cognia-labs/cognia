@@ -27,6 +27,9 @@ import type { UIMessage } from "ai"
 import { stripPromptPreambleFromContent } from "@/lib/chat/prompt-preamble"
 import { extractAssistantText, extractPlainText } from "@/lib/chat/message-text"
 import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
+import { isChatTurnQueued } from "@/lib/execution/chat-lease"
+import { sessionStatusOf } from "@/lib/chat/steer-runtime"
+import { stopChatTurn } from "./chat-control-bridge"
 
 // Moved to a dependency-light module so a Host's brain can read a transcript
 // without loading the chat view; re-exported for the callers that import here.
@@ -277,17 +280,32 @@ export function clearPendingContinuation(goalId: string): void {
 }
 
 /**
+ * Stop the turn a goal past its deadline is running in `sessionId`, as the
+ * composer's Stop would. An idle conversation has none to stop.
+ */
+async function stopGoalTurn(sessionId: string): Promise<void> {
+  const status = sessionStatusOf(sessionId)
+  if (status === "streaming" || status === "awaiting_approval" || isChatTurnQueued(sessionId)) {
+    await stopChatTurn(sessionId)
+  }
+}
+
+/**
  * Schedule (or hold/defer) a goal continuation per the pacing gate
  * (ADR-0019 Phase 2). Re-reads the goal each attempt so a pause/stop between
  * the turn-driver decision and dispatch cancels cleanly. Re-entrant: a defer
  * timer re-invokes this, and a fresh turn supersedes any prior pending one.
+ *
+ * The goal goes on while its conversation is not the one in front: every
+ * continuation names the goal's own session, so it never lands in another.
+ * From here until the next turn settles, the goal's wall-clock deadline is
+ * guarded: a wait or a turn that runs past it ends the goal as `timed_out`.
  */
 export function scheduleGoalContinuation(
   goalId: string,
   sessionId: string,
   userMessage: string,
   sendRef: React.MutableRefObject<SendFn | null>,
-  activeRef: React.MutableRefObject<string | null>,
   suggestedDelayMs?: number,
   /** The settling turn's lease; only an immediate send may join it. */
   ownedRef?: React.MutableRefObject<SendFn | null>
@@ -295,8 +313,9 @@ export function scheduleGoalContinuation(
   clearPendingContinuation(goalId)
   void (async () => {
     const goal = await getGoalRuntime().getActiveGoalForSession(sessionId)
-    // Goal paused/stopped/replaced, or session backgrounded → drop silently.
-    if (!goal || goal.id !== goalId || sessionId !== activeRef.current) return
+    // Goal paused/stopped/replaced → drop silently.
+    if (!goal || goal.id !== goalId) return
+    getGoalRuntime().guardTurnDeadline(goal, () => stopGoalTurn(sessionId))
 
     const gate = gateContinuation(
       goal,
@@ -337,14 +356,7 @@ export function scheduleGoalContinuation(
       const delay = Math.max(0, gate.untilMs - Date.now())
       const timer = setTimeout(() => {
         goalDeferTimers.delete(goalId)
-        scheduleGoalContinuation(
-          goalId,
-          sessionId,
-          userMessage,
-          sendRef,
-          activeRef,
-          suggestedDelayMs
-        )
+        scheduleGoalContinuation(goalId, sessionId, userMessage, sendRef, suggestedDelayMs)
       }, delay)
       goalDeferTimers.set(goalId, timer)
     }
@@ -374,15 +386,15 @@ export function scheduleLoopContinuation(
   sessionId: string,
   userMessage: string,
   sendRef: React.MutableRefObject<SendFn | null>,
-  activeRef: React.MutableRefObject<string | null>,
   /** The settling turn's lease; only an immediate send may join it. */
   ownedRef?: React.MutableRefObject<SendFn | null>
 ): void {
   clearPendingLoopContinuation(loopId)
   void (async () => {
     const loop = await getLoopRuntime().getActiveLoopForSession(sessionId)
-    // Loop paused/stopped/replaced, or session backgrounded → drop silently.
-    if (!loop || loop.id !== loopId || sessionId !== activeRef.current) return
+    // Loop paused/stopped/replaced → drop silently. Like a goal's, its
+    // continuation names its own session, so it goes on in the background.
+    if (!loop || loop.id !== loopId) return
 
     const gate = gateLoopContinuation(loop, Date.now())
     if (gate.kind === "send") {
@@ -393,7 +405,7 @@ export function scheduleLoopContinuation(
       const delay = Math.max(0, gate.untilMs - Date.now())
       const timer = setTimeout(() => {
         loopDeferTimers.delete(loopId)
-        scheduleLoopContinuation(loopId, sessionId, userMessage, sendRef, activeRef)
+        scheduleLoopContinuation(loopId, sessionId, userMessage, sendRef)
       }, delay)
       loopDeferTimers.set(loopId, timer)
     }
