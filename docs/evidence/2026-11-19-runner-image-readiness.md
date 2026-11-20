@@ -3,7 +3,7 @@
 - Status: verifying
 - Lane: deep
 - Created: 2026-11-19
-- Updated: 2026-11-19
+- Updated: 2026-11-20
 - Related: ADR-0059, ADR-0182, ADR-0183, ADR-0224
 
 ## Original request
@@ -70,12 +70,12 @@ Runner 的价值是把指定 Agent 按照部署选择送进正确的容器并完
 
 ## Residual risks
 
-| ID  | Residual                                                                | From  | Why still open                                       | Next action                                                                          | Status |
-| --- | ----------------------------------------------------------------------- | ----- | ---------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ |
-| X1  | 新 Runner 构建仍被共享 catalog 阻断。                                   | V1    | 本轮为审计，错误持续存在。                           | 为 18 项补带依据的分发或 unavailable，保留全量 catalog 校验，复跑两个变体及 bundle。 | open   |
-| X2  | 发布产物及默认引用还无法匹配。                                          | V2    | 新 owner 镜像 manifest 当前不可见，旧默认 tag 缺失。 | 从通过 smoke 的发布生成可访问的 digest，验证干净宿主和既有缓存宿主选择一致。         | open   |
-| X3  | K8s Restricted 下的真实准入、非 root 文件权限、网络及生命周期仍需验收。 | V3,V4 | 现有结果来自声明和源码。                             | 使用预发布集群的 server-side dry-run，再验证工作区读写、配额、协议与删除。           | open   |
-| X4  | 实际架构、大小、冷启动、供应链制品及其他 Agent 兼容性待实测。           | V4,V5 | 现有 smoke 范围有限，当前 digest 未能核验。          | 建立同一 digest 的发布物清单与 CI、E2E 结果，记录冷拉取、启动到握手和错误原因。      | open   |
+| ID  | Residual                                                                | From  | Why still open                                                                          | Next action                                                                     | Status |
+| --- | ----------------------------------------------------------------------- | ----- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------ |
+| X1  | 新 Runner 构建仍被共享 catalog 阻断。                                   | V1    | 49fa03bd9c 已补齐 18 项并加 catalog 门禁；Codex-only `prepare` exit 0，镜像本体未重建。 | 在 CI 上复跑 Full、Codex 和 bundle 的真实镜像构建与 smoke。                     | open   |
+| X2  | 发布产物及默认引用还无法匹配。                                          | V2    | 默认引用已改到 cognia-labs（c163e5aeb0），但新 owner 的制品可见性仍未核验。             | 发布后从干净宿主拉取默认引用并跑一次 T2 任务；需要时改用 digest。               | open   |
+| X3  | K8s Restricted 下的真实准入、非 root 文件权限、网络及生命周期仍需验收。 | V3,V4 | a91b618eb9 让生成的 Pod 满足 Restricted 字段，单测覆盖，集群未实测。                    | 使用预发布集群的 server-side dry-run，再验证工作区读写、配额、协议与删除。      | open   |
+| X4  | 实际架构、大小、冷启动、供应链制品及其他 Agent 兼容性待实测。           | V4,V5 | 现有 smoke 范围有限，当前 digest 未能核验。                                             | 建立同一 digest 的发布物清单与 CI、E2E 结果，记录冷拉取、启动到握手和错误原因。 | open   |
 
 ## Outcome
 
@@ -113,3 +113,22 @@ Runner 的价值是把指定 Agent 按照部署选择送进正确的容器并完
 3. **按部署需求加固和扩展。** 启用 K8s Runner 的环境先达到 Restricted，验证非 root 工作区和 HOME。把 rootfs、出网及私有 registry 当作执行后端合同验收。项目工具链、准备步骤与更长的沙箱生命周期优先复用 sandbox pool。
 
 本轮交付审计记录。真实镜像体积、冷/热启动、K8s 集群行为和经认证的 Provider 执行暂无本轮测量值。
+
+## 修复结果（2026-11-20）
+
+按 `/audit-fix` 逐条核对后修复，提交为 49fa03bd9c、c163e5aeb0、bc4d9832b4、a91b618eb9。
+
+- **F01**：18 个 runtime 写明 `unavailable` 及原因，`audit:external-agent-runtimes` 新增「每个 catalog runtime 必须有分类」的检查。
+- **F02、F12**：Compose、K8s、文档与 deployment renderer 的默认镜像改到 `ghcr.io/cognia-labs`，`:latest` 保留并写明漂移；`docker-proxy` 有本地 `build`。deploy-suite 门禁扫描 owner。
+- **F03**：Runner 镜像以 uid 10001 运行。生成的 Pod 带 `runAsNonRoot`、`RuntimeDefault` seccomp 和 fsGroup。
+- **F04**：Cursor 默认不装，需 `INSTALL_CURSOR_AGENT=1`，安装失败即构建失败。`latest*` 只在正式版 tag 上移动。所有推送镜像带 SBOM 和 max 级 provenance。Full 的 npm 传递锁、base digest、签名与扫描门禁留作后续。
+- **F05**：Legacy Docker 拉取读取 `COGNIA_REGISTRY_AUTH_FILE`。Pod 声明 ephemeral-storage 上限并继承 Server 的 `imagePullSecrets`。出网规则拆成可替换的 `default-egress`。
+- **F06**：smoke 新增 Codex app-server `initialize` 握手、非 root 工作区写入和 Full 的 Cline ACP 初始化。arm64 与经后端的真实任务仍未覆盖。
+- **F07**：文档改为「保留既有后端」，并注明 `/readyz` 的范围。Runner 预检属于功能缺口。
+- **F08**：README 写明 Runner 不带项目工具链，推荐 sandbox pool 搭配项目镜像。
+- **F09**：Cline 的理由改为「系统 runtime，无分发，只有 Full 安装」，Full smoke 校验 Cline ACP。
+- **F10**：未启动的 Pod 报告调度、拉取或容器失败原因；进入 Running 后 attach 失败会立即删除 Pod。
+- **F11、F13**：T2 不再默认把 `default` 路由到 Workspace Runtime。该服务改用共享卷的 `default` 子路径，独立卷已删除，README 写了一次性迁移步骤。
+- **F15**：Runner Pod 在未显式配置时继承 Server Pod 的 RuntimeClass。
+
+未运行：真实镜像构建、T2 冷宿主任务、K8s 集群 dry-run、`docs:build`、`cognia-server` 编译（被 cognia-automation 的既有错误阻断）。
