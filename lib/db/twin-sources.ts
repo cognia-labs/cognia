@@ -10,6 +10,10 @@
 
 import type { TwinSource, TwinSourceKind, TwinSourceStatus } from "@/types/twin"
 import { getDb, withDbReopenRetry } from "./schema"
+import {
+  collectReleasedTwinSourceOriginals,
+  releaseTwinSourceOriginalRefs,
+} from "./twin-source-originals"
 
 function newId(): string {
   return "tws_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)
@@ -39,6 +43,7 @@ export async function createTwinSource(draft: TwinSourceDraft): Promise<TwinSour
     redactionMapEnc: draft.redactionMapEnc,
     speakers: draft.speakers,
     documentSnapshot: draft.documentSnapshot,
+    ...(draft.original ? { original: draft.original } : {}),
   }
   await getDb().twinSources.add(row)
   return row
@@ -99,24 +104,37 @@ export async function deleteTwinSource(id: string): Promise<void> {
   // Cascade-delete chunks for this source. The runtime (vector store side)
   // is responsible for removing remote vectors via `vectorDocId` before
   // calling this — see `lib/twin/ingest/persist.ts` (Phase 4).
-  await withDbReopenRetry(async () => {
+  const released = await withDbReopenRetry(async () => {
     const db = getDb()
-    await db.transaction("rw", db.twinSources, db.twinChunks, async () => {
-      // Keep both IndexedDB requests live in the same transaction. When a
+    return db.transaction("rw", db.twinSources, db.twinChunks, db.messageMediaRefs, async () => {
+      // Keep the IndexedDB requests live in the same transaction. When a
       // source has no chunks, awaiting that empty delete before scheduling the
       // source delete can let stricter IDB implementations auto-commit.
-      await Promise.all([
+      const [, , mediaKeys] = await Promise.all([
         db.twinChunks.where("sourceId").equals(id).delete(),
         db.twinSources.delete(id),
+        releaseTwinSourceOriginalRefs([id]),
       ])
+      return mediaKeys
     })
   })
+  await collectReleasedTwinSourceOriginals(released)
 }
 
 export async function deleteAllTwinSourcesForTwin(twinId: string): Promise<void> {
   const db = getDb()
-  await db.transaction("rw", db.twinSources, db.twinChunks, async () => {
-    await db.twinChunks.where("twinId").equals(twinId).delete()
-    await db.twinSources.where("twinId").equals(twinId).delete()
-  })
+  const released = await db.transaction(
+    "rw",
+    db.twinSources,
+    db.twinChunks,
+    db.messageMediaRefs,
+    async () => {
+      await db.twinChunks.where("twinId").equals(twinId).delete()
+      const ids = (await db.twinSources.where("twinId").equals(twinId).primaryKeys()) as string[]
+      const mediaKeys = await releaseTwinSourceOriginalRefs(ids)
+      await db.twinSources.where("twinId").equals(twinId).delete()
+      return mediaKeys
+    }
+  )
+  await collectReleasedTwinSourceOriginals(released)
 }

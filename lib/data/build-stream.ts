@@ -33,7 +33,7 @@ import {
   exportLibraryAssets,
   exportMessageMediaRecords,
   exportSessionAssetRecords,
-  listLibraryMediaHashes,
+  listOwnedMediaHashes,
 } from "./session-assets-backup"
 
 type RowFilter<T> = (row: T) => boolean | Promise<boolean>
@@ -259,11 +259,11 @@ export async function* buildBackupSections(
     )
   }
 
-  // Transcript media plus whatever Files keeps or owns, in one pass so a hash
+  // Transcript media plus the bytes Files and Twin sources keep, in one pass so a hash
   // shared by both is emitted once (the reader requires contiguous chunks).
-  const libraryMediaHashes = includeCoreData ? await listLibraryMediaHashes() : []
-  if (portableSessionIds.size > 0 || libraryMediaHashes.length > 0) {
-    yield* exportMessageMediaRecords(portableSessionIds, sourceChunkBytes, libraryMediaHashes)
+  const ownedMediaHashes = includeCoreData ? await listOwnedMediaHashes() : []
+  if (portableSessionIds.size > 0 || ownedMediaHashes.length > 0) {
+    yield* exportMessageMediaRecords(portableSessionIds, sourceChunkBytes, ownedMediaHashes)
   }
 
   if (includePlugins) {

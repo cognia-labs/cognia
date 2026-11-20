@@ -423,3 +423,82 @@ describe("Files page backup (ADR-0200)", () => {
     expect(await getDb().libraryItems.count()).toBe(0)
   })
 })
+
+// F1: a Digital Twin source's kept original travels with the core data.
+describe("Digital Twin originals in backups", () => {
+  const coreOnly = { includeSessions: false, includeApiKey: false } as const
+
+  async function seedTwinSource(id: string, body: string) {
+    const { describeTwinSourceOriginal, holdTwinSourceOriginal } =
+      await import("@/lib/db/twin-source-originals")
+    const blob = new Blob([body], { type: "application/pdf" })
+    const original = await describeTwinSourceOriginal(blob, `${id}.pdf`, "application/pdf")
+    const db = getDb()
+    await db.transaction("rw", db.twinSources, db.messageMedia, db.messageMediaRefs, async () => {
+      await db.twinSources.put({
+        id,
+        twinId: "twin-1",
+        kind: "document",
+        format: "pdf",
+        source: "",
+        title: `${id}.pdf`,
+        bytes: blob.size,
+        fingerprint: original.contentHash,
+        chunkCount: 0,
+        status: "parsed",
+        importedAt: 1,
+        redacted: false,
+        original,
+      })
+      await holdTwinSourceOriginal(id, original, blob)
+    })
+    return original
+  }
+
+  it("exports the kept bytes and restores them with their owner rows", async () => {
+    const original = await seedTwinSource("scan", "%PDF-1.7 scanned pages")
+    const backup = JSON.parse(JSON.stringify(await buildBackupPackage(coreOnly)))
+    expect(backup.payload.messageMedia.map((row: { hash: string }) => row.hash)).toEqual([
+      original.mediaKey,
+    ])
+
+    const db = getDb()
+    await db.twinSources.clear()
+    await db.messageMediaRefs.clear()
+    await db.messageMedia.clear()
+    await applyBackupPackage(
+      backup,
+      { ...coreOnly, mergeStrategy: "overwrite" },
+      { storage: null, projectMcp: async () => [] }
+    )
+
+    const restored = (await db.twinSources.get("scan"))!
+    expect(restored.original).toEqual(original)
+    const { readTwinSourceOriginal } = await import("@/lib/db/twin-source-originals")
+    expect(await (await readTwinSourceOriginal(restored))!.text()).toBe("%PDF-1.7 scanned pages")
+    expect(await db.messageMediaRefs.where("messageId").equals("twin-source:scan").count()).toBe(1)
+    const { collectUnreferencedMessageMedia } = await import("@/lib/db/message-media-refs")
+    await collectUnreferencedMessageMedia(undefined, { graceMs: 0 })
+    expect(await db.messageMedia.get(original.mediaKey)).toBeDefined()
+  })
+
+  it("restores a source whose bytes are missing from the package as text only", async () => {
+    await seedTwinSource("scan", "%PDF-1.7 scanned pages")
+    const backup = JSON.parse(JSON.stringify(await buildBackupPackage(coreOnly)))
+    delete backup.payload.messageMedia
+    delete backup.payload.messageMediaChunks
+
+    const db = getDb()
+    await db.twinSources.clear()
+    await db.messageMediaRefs.clear()
+    await db.messageMedia.clear()
+    await applyBackupPackage(
+      backup,
+      { ...coreOnly, mergeStrategy: "overwrite" },
+      { storage: null, projectMcp: async () => [] }
+    )
+
+    expect((await db.twinSources.get("scan"))?.original).toBeUndefined()
+    expect(await db.messageMediaRefs.count()).toBe(0)
+  })
+})

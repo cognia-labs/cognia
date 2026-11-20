@@ -111,6 +111,11 @@ import {
 } from "./session-assets-backup"
 
 import { collectMessageMediaHashes, messageMediaRefRows } from "@/lib/db/message-media-refs"
+import {
+  collectReleasedTwinSourceOriginals,
+  isTwinSourceOriginalKey,
+  reconcileTwinSourceOriginals,
+} from "@/lib/db/twin-source-originals"
 import { putMessageMedia } from "@/lib/db/message-media"
 
 interface BuiltInRow {
@@ -175,11 +180,18 @@ export async function applyBackupPackage(
     ...(env.libraryItems ?? []).flatMap((item) => (item?.mediaHash ? [item.mediaHash] : [])),
     ...libraryAssets.map((asset) => `original:${asset.contentHash}`),
   ])
+  // Digital Twin sources' kept originals ride the media section as well.
+  const twinOriginalHashes = new Set<string>(
+    (env.twinSources ?? []).flatMap((source) =>
+      source?.original && isTwinSourceOriginalKey(source.original) ? [source.original.mediaKey] : []
+    )
+  )
   const allowedMedia = new Set<string>([
     ...(opts.includeSessions
       ? (env.messages ?? []).flatMap((message) => collectMessageMediaHashes(message.parts))
       : []),
     ...libraryMediaHashes,
+    ...twinOriginalHashes,
   ])
   // With transcripts the package's media must all be accounted for, exactly
   // as before Files existed; without them only the Files media is taken.
@@ -256,6 +268,9 @@ export async function applyBackupPackage(
     }
   }
 
+  // Media keys Twin sources stopped holding during the restore; collected
+  // once the restore has committed.
+  let releasedTwinOriginals: string[] = []
   // Select the array overload before binding a deferred transaction scope.
   const transaction: (
     mode: "rw",
@@ -1117,6 +1132,19 @@ export async function applyBackupPackage(
       if (restoredAssets > 0) incrementCounter(summary.added, "libraryAssets")
       if (env.libraryItems?.length || libraryAssets.length) await reconcileLibraryPins()
 
+      // --- Digital Twin originals ----------------------------------------
+      // Bytes first (a transcript import has already put every preview), then
+      // the owner rows rebuilt from the restored sources: a source whose bytes
+      // arrived holds them again, one whose bytes did not becomes text-only.
+      if (!opts.includeSessions) {
+        for (const media of previewMedia) {
+          if (twinOriginalHashes.has(media.hash)) await putMessageMedia(media)
+        }
+      }
+      if (env.twinSources?.length) {
+        releasedTwinOriginals = await reconcileTwinSourceOriginals()
+      }
+
       // --- Video jobs (ADR-0205) ----------------------------------------
       // Settled rows only (see `isPortableVideoJob`). A session-bound job is
       // restored only with its session, pointing at the id the session got.
@@ -1140,6 +1168,7 @@ export async function applyBackupPackage(
       await import("@/stores/squads/agent-team-store/dexie-bridge")
     await withAgentTeamDefinitionRestore(restoreTransaction)
   } else await restoreTransaction()
+  await collectReleasedTwinSourceOriginals(releasedTwinOriginals)
 
   // --- Stage 3: write the localStorage face --------------------------------
   // Dexie has committed. Anything that fails from here on triggers a

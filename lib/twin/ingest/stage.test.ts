@@ -7,6 +7,7 @@
  */
 
 import "fake-indexeddb/auto"
+import JSZip from "jszip"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   commitStagedSources,
@@ -20,7 +21,7 @@ import {
 } from "./stage"
 import { LarkIngestError } from "./lark-doc-fetcher"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
-import { listTwinSourcesByTwin } from "@/lib/db/twin-sources"
+import { deleteTwinSource, listTwinSourcesByTwin } from "@/lib/db/twin-sources"
 import { twinSourceProvenance } from "./source-registration"
 import { resolveKeptCopySource } from "@/lib/docs-providers/kept-copy-source"
 import { tombstoneAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
@@ -90,8 +91,18 @@ const mockParseGitRepo = parseGitRepo as jest.Mock
 
 const TWIN = "twin_alice"
 
-function makeFile(name: string, content: string, mimeType = "text/plain"): File {
+function makeFile(name: string, content: BlobPart, mimeType = "text/plain"): File {
   return new File([content], name, { type: mimeType })
+}
+
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+/** The smallest OOXML package the upload inspection accepts for its extension. */
+async function ooxmlBytes(directory: "xl/" | "word/"): Promise<Uint8Array> {
+  const zip = new JSZip()
+  zip.file("[Content_Types].xml", "<Types/>")
+  zip.file(`${directory}${directory === "xl/" ? "workbook.xml" : "document.xml"}`, "<x/>")
+  return Uint8Array.from(await zip.generateAsync({ type: "uint8array" }))
 }
 
 beforeEach(() => {
@@ -125,7 +136,9 @@ describe("stageFile", () => {
     expect(result.error?.code).toBe("fileEmpty")
   })
 
-  it("stages binary formats through the document processor", async () => {
+  // F1: the file commits with the source, in its real format; the text here
+  // is only the preview.
+  it("stages a binary document in its own format with the file kept", async () => {
     mockProcessDocument.mockResolvedValue({
       id: "tmp",
       filename: "budget.xlsx",
@@ -135,17 +148,27 @@ describe("stageFile", () => {
       metadata: { size: 24, lineCount: 3, wordCount: 4, title: "FY24 Budget" },
       parseDiagnostics: [],
     } as Awaited<ReturnType<typeof processDocumentAsync>>)
-    const result = await stageFile(makeFile("budget.xlsx", "binary-bytes"), TWIN)
+    const bytes = await ooxmlBytes("xl/")
+    const result = await stageFile(makeFile("budget.xlsx", bytes, XLSX_MIME), TWIN)
+
     expect(result.staged[0]).toMatchObject({
       kind: "document",
-      format: "markdown",
+      format: "xlsx",
       title: "FY24 Budget",
-      text: "Q1 100 Q2 120",
-      tags: ["xlsx", "extracted"],
+      text: "Sheet1\nQ1\t100",
+      tags: ["xlsx"],
+      original: { filename: "budget.xlsx", mediaType: XLSX_MIME },
     })
+    expect(result.staged[0].original!.blob.size).toBe(bytes.byteLength)
+    expect(mockProcessDocument).toHaveBeenCalledWith(
+      expect.any(String),
+      "budget.xlsx",
+      expect.any(ArrayBuffer),
+      expect.objectContaining({ maxFileSize: 50 * 1024 * 1024 })
+    )
   })
 
-  it("flags binary files with no extractable text", async () => {
+  it("stages a PDF with no text layer so the worker can OCR it", async () => {
     mockProcessDocument.mockResolvedValue({
       id: "tmp",
       filename: "scan.pdf",
@@ -155,13 +178,44 @@ describe("stageFile", () => {
       metadata: { size: 1, lineCount: 0, wordCount: 0, title: "" },
       parseDiagnostics: [],
     } as Awaited<ReturnType<typeof processDocumentAsync>>)
-    const result = await stageFile(makeFile("scan.pdf", "x"), TWIN)
-    expect(result.error).toEqual({ code: "noTextExtracted", params: { format: "pdf" } })
+    const result = await stageFile(makeFile("scan.pdf", "%PDF-1.7 scanned"), TWIN)
+
+    expect(result.error).toBeUndefined()
+    expect(result.staged[0]).toMatchObject({ format: "pdf", text: "", title: "scan.pdf" })
+    expect(result.staged[0].original).toBeDefined()
+  })
+
+  it("still refuses a non-PDF binary with no text, since nothing could read it later", async () => {
+    mockProcessDocument.mockResolvedValue({
+      id: "tmp",
+      filename: "blank.docx",
+      type: "word",
+      content: "",
+      embeddableContent: "",
+      metadata: { size: 1, lineCount: 0, wordCount: 0 },
+      parseDiagnostics: [],
+    } as Awaited<ReturnType<typeof processDocumentAsync>>)
+    const result = await stageFile(makeFile("blank.docx", await ooxmlBytes("word/")), TWIN)
+    expect(result.error).toEqual({ code: "noTextExtracted", params: { format: "docx" } })
+  })
+
+  it("refuses a file whose bytes contradict its type before parsing it (F7)", async () => {
+    const result = await stageFile(makeFile("budget.xlsx", "not a zip"), TWIN)
+    expect(result.error).toEqual({ code: "fileRejected" })
+    expect(mockProcessDocument).not.toHaveBeenCalled()
+  })
+
+  it("refuses a file over the document input ceiling without reading it", async () => {
+    const file = makeFile("big.pdf", "%PDF-")
+    Object.defineProperty(file, "size", { value: 50 * 1024 * 1024 + 1 })
+    const result = await stageFile(file, TWIN)
+    expect(result.error).toEqual({ code: "fileTooLarge", params: { limitMb: 50 } })
+    expect(mockProcessDocument).not.toHaveBeenCalled()
   })
 
   it("maps a document-processor crash to parseFailed", async () => {
     mockProcessDocument.mockRejectedValue(new Error("corrupt zip"))
-    const result = await stageFile(makeFile("broken.docx", "x"), TWIN)
+    const result = await stageFile(makeFile("broken.docx", await ooxmlBytes("word/")), TWIN)
     expect(result.error).toEqual({
       code: "parseFailed",
       params: { format: "docx", reason: "corrupt zip" },
@@ -311,7 +365,7 @@ describe("stageFile", () => {
 
   it("maps non-Error document-processor crashes to the fallback code", async () => {
     mockProcessDocument.mockRejectedValue("string crash")
-    const result = await stageFile(makeFile("broken.docx", "x"), TWIN)
+    const result = await stageFile(makeFile("broken.docx", await ooxmlBytes("word/")), TWIN)
     expect(result.error).toEqual({ code: "parseFailedFallback", params: { format: "docx" } })
   })
 })
@@ -597,6 +651,45 @@ describe("commitStagedSources", () => {
     expect(one?.source).toBe("body one")
     expect(twinSourceProvenance(one!)).toBeUndefined()
     expect(await resolveKeptCopySource(twinSourceProvenance(one!))).toBe("unknown")
+  })
+
+  // F1: the file commits with its source and goes when the source goes.
+  it("keeps a staged file with its source, identified by its bytes, and releases it on delete", async () => {
+    const blob = new Blob(["%PDF-1.7 scanned"], { type: "application/pdf" })
+    const staged = {
+      kind: "document" as const,
+      format: "pdf" as const,
+      title: "scan.pdf",
+      text: "",
+      bytes: blob.size,
+      origin: "file" as const,
+      original: { blob, filename: "scan.pdf", mediaType: "application/pdf" },
+    }
+
+    expect(await commitStagedSources(TWIN, [staged])).toBe(1)
+    // The same file again is the same source, even though its preview is empty.
+    expect(await commitStagedSources(TWIN, [staged])).toBe(0)
+
+    const [source] = await listTwinSourcesByTwin(TWIN)
+    expect(source).toMatchObject({
+      format: "pdf",
+      fingerprint: source.original!.contentHash,
+      original: { filename: "scan.pdf", byteLength: blob.size, mediaType: "application/pdf" },
+    })
+    // Byte round-trips are pinned in lib/db/twin-source-originals.test.ts (node
+    // environment); jsdom Blobs do not survive fake-indexeddb's clone.
+    expect(await getDb().messageMedia.get(source.original!.mediaKey)).toMatchObject({
+      byteSize: blob.size,
+      mediaType: "application/pdf",
+    })
+    expect(
+      await getDb().messageMediaRefs.where("messageId").equals(`twin-source:${source.id}`).count()
+    ).toBe(1)
+
+    await deleteTwinSource(source.id)
+
+    expect(await getDb().messageMediaRefs.count()).toBe(0)
+    expect(await getDb().messageMedia.get(source.original!.mediaKey)).toBeUndefined()
   })
 
   it("captures a connection-backed Lark commit and retains its chunks and vector pointers on disconnect", async () => {

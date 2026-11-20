@@ -68,6 +68,23 @@ export type TwinSourceStatus = "pending" | "parsing" | "parsed" | "failed" | "de
 export type TwinDocumentSnapshot =
   import("@cognia/document/types").DocumentSnapshot<TwinSourceFormat>
 
+/**
+ * The original file a document source was imported from, kept so the source
+ * can be parsed again: OCR for scanned pages, page structure, a newer parser.
+ * The bytes live in the shared media store (`messageMedia`), held by a
+ * `twin-source:<id>` owner row, and never leave the device with the source.
+ */
+export interface TwinSourceOriginal {
+  /** `messageMedia` key of the bytes: `original:<contentHash>`. */
+  mediaKey: string
+  /** Lowercase hex SHA-256 of the bytes. */
+  contentHash: string
+  byteLength: number
+  mediaType: string
+  /** The file's name at import; its extension selects the parser. */
+  filename: string
+}
+
 export interface TwinSource {
   /** nanoid */
   id: string
@@ -119,6 +136,12 @@ export interface TwinSource {
   speakers?: string[]
   /** Current canonical text/tree; replaced atomically with its active generation. */
   documentSnapshot?: TwinDocumentSnapshot
+  /**
+   * The imported file, for a binary document source. Absent for text sources
+   * and for sources imported before originals were kept: those have only the
+   * text extracted at import, so OCR and page provenance need a re-import.
+   */
+  original?: TwinSourceOriginal
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

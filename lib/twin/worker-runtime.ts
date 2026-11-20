@@ -1,4 +1,5 @@
 import { getTwinSource } from "@/lib/db/twin-sources"
+import { readTwinSourceOriginal } from "@/lib/db/twin-source-originals"
 import { currentRouterFusionGateSettings } from "@/lib/router-fusion/gate/current-settings"
 import { ledgerUtilityCalls } from "@/lib/router-fusion/gate/utility-ledger"
 import { createAnthropicLlmClient } from "@/lib/twin/distill"
@@ -9,16 +10,37 @@ import {
 } from "@/lib/twin/runtime/build-deps"
 import type { TwinRuntimeSettings, TwinSource } from "@/types/twin"
 
-function buildSourceLoader(): SourceLoader {
+/**
+ * Load a source for ingest. A source with a kept original is parsed from the
+ * file (its OCR fallback and page map need the bytes); one without — text
+ * sources, and binary sources imported before originals were kept — from its
+ * stored text. A kept original whose bytes are gone is read from the preview
+ * text as Markdown, which is all that is left of it.
+ */
+export function buildSourceLoader(): SourceLoader {
   return async (source: TwinSource) => {
     const refreshed = await getTwinSource(source.id)
     if (!refreshed) throw new Error(`twin source ${source.id} disappeared mid-load`)
+    const baseMetadata = refreshed.speakers?.length
+      ? { baseMetadata: { speakers: refreshed.speakers } }
+      : {}
+    const original = await readTwinSourceOriginal(refreshed)
+    if (original && refreshed.original) {
+      return {
+        id: refreshed.id,
+        filename: refreshed.original.filename,
+        format: refreshed.format,
+        binary: new Uint8Array(await original.arrayBuffer()),
+        mimeType: refreshed.original.mediaType,
+        ...baseMetadata,
+      }
+    }
     return {
       id: refreshed.id,
       filename: refreshed.title,
-      format: refreshed.format,
+      format: refreshed.original ? "markdown" : refreshed.format,
       text: refreshed.source,
-      ...(refreshed.speakers?.length ? { baseMetadata: { speakers: refreshed.speakers } } : {}),
+      ...baseMetadata,
     }
   }
 }

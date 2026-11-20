@@ -13,7 +13,7 @@ import { getDb } from "@/lib/db/schema"
 import { getSessionsByIds } from "@/lib/db/sessions"
 import { listLibraryItems } from "@/lib/db/files-library-items"
 import { isLibraryItemKept } from "@/lib/db/files-library-types"
-import { LIBRARY_REF_SESSION_ID } from "@/lib/db/message-media-refs"
+import { isConversationRefSession } from "@/lib/db/message-media-refs"
 import {
   listAllSessionAssets,
   listLibraryAssets,
@@ -207,7 +207,7 @@ async function describeImages(
   const sessionsByHash = new Map<string, Set<string>>()
   const firstMessageByHash = new Map<string, string>()
   for (const ref of refs) {
-    if (ref.sessionId === LIBRARY_REF_SESSION_ID) continue
+    if (!isConversationRefSession(ref.sessionId)) continue
     const set = sessionsByHash.get(ref.hash) ?? new Set<string>()
     set.add(ref.sessionId)
     sessionsByHash.set(ref.hash, set)

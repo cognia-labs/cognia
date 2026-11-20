@@ -36,6 +36,27 @@ describe("StagedSourceReview", () => {
     expect(onConfirm).toHaveBeenCalledWith([expect.objectContaining({ title: "One" })])
   })
 
+  it("says a scanned PDF will be read by OCR instead of reporting zero characters", () => {
+    const scan: StagedSource = {
+      ...staged("scan.pdf", ""),
+      format: "pdf",
+      original: { blob: new Blob(["%PDF-"]), filename: "scan.pdf", mediaType: "application/pdf" },
+    }
+    render(
+      <StagedSourceReview
+        staged={[scan, staged("notes.md", "four")]}
+        committing={false}
+        onConfirm={() => {}}
+        onBack={() => {}}
+        renderError={renderError}
+      />
+    )
+
+    expect(screen.getByText("No text layer, read by OCR when processed")).toBeInTheDocument()
+    expect(screen.getByText("4 chars")).toBeInTheDocument()
+    expect(screen.queryByText("0 chars")).not.toBeInTheDocument()
+  })
+
   it("disables confirm when nothing is selected", () => {
     render(
       <StagedSourceReview

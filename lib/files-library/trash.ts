@@ -20,7 +20,7 @@
  *   disk is never touched either way.
  */
 
-import { LIBRARY_REF_SESSION_ID } from "@/lib/db/message-media-refs"
+import { isConversationRefSession } from "@/lib/db/message-media-refs"
 import {
   deleteLibraryItemRows,
   deleteOwnedLibraryItem,
@@ -134,7 +134,7 @@ export async function resolveTrashPurgeTargets(
     : []
   const conversationsByHash = new Map<string, Set<string>>()
   for (const ref of refs) {
-    if (ref.sessionId === LIBRARY_REF_SESSION_ID) continue
+    if (!isConversationRefSession(ref.sessionId)) continue
     const set = conversationsByHash.get(ref.hash) ?? new Set<string>()
     set.add(ref.sessionId)
     conversationsByHash.set(ref.hash, set)

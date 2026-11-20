@@ -17,6 +17,13 @@ export const LIBRARY_OWNER_PREFIX = "library:"
  * GC — which only counts rows by hash — sees the bytes as referenced.
  */
 export const LIBRARY_REF_SESSION_ID = "library:files"
+/**
+ * Twin document source owner: `twin-source:<sourceId>` holds the original
+ * file a Digital Twin source was imported from, so it can be parsed again.
+ */
+export const TWIN_SOURCE_OWNER_PREFIX = "twin-source:"
+/** Session id carried by every `twin-source:` ref row; like the library's, never a session. */
+export const TWIN_SOURCE_REF_SESSION_ID = "twin:sources"
 
 export interface MessageMediaRefRow {
   messageId: string
@@ -30,8 +37,21 @@ export function isLibraryMediaRef(row: Pick<MessageMediaRefRow, "messageId">): b
   return row.messageId.startsWith(LIBRARY_OWNER_PREFIX)
 }
 
+export function isTwinSourceMediaRef(row: Pick<MessageMediaRefRow, "messageId">): boolean {
+  return row.messageId.startsWith(TWIN_SOURCE_OWNER_PREFIX)
+}
+
+/**
+ * Whether a ref row's `sessionId` is a conversation. The Files page and Twin
+ * owners carry sentinel session ids no session has; a walk over refs that
+ * groups media by conversation skips them.
+ */
+export function isConversationRefSession(sessionId: string): boolean {
+  return sessionId !== LIBRARY_REF_SESSION_ID && sessionId !== TWIN_SOURCE_REF_SESSION_ID
+}
+
 export function isMessageOwnedMediaRef(row: MessageMediaRefRow): boolean {
-  return row.sessionAsset === undefined && !isLibraryMediaRef(row)
+  return row.sessionAsset === undefined && !isLibraryMediaRef(row) && !isTwinSourceMediaRef(row)
 }
 
 function visitMediaRefs(value: unknown, hashes: Set<string>, key?: string): void {
@@ -65,6 +85,9 @@ export function messageMediaRefRows(
   }
   if (messageId.startsWith(LIBRARY_OWNER_PREFIX) || sessionId === LIBRARY_REF_SESSION_ID) {
     throw new Error("reserved_library_owner")
+  }
+  if (messageId.startsWith(TWIN_SOURCE_OWNER_PREFIX) || sessionId === TWIN_SOURCE_REF_SESSION_ID) {
+    throw new Error("reserved_twin_source_owner")
   }
   return collectMessageMediaHashes(parts).map((hash) => ({ messageId, sessionId, hash }))
 }

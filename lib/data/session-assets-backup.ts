@@ -13,6 +13,7 @@ import { revokeClaimsForChangedAttachment } from "@/lib/memory/lifecycle/claim-d
 import {
   LIBRARY_OWNER_PREFIX,
   LIBRARY_REF_SESSION_ID,
+  TWIN_SOURCE_OWNER_PREFIX,
   SESSION_ASSET_OWNER_PREFIX,
 } from "@/lib/db/message-media-refs"
 import { libraryAssetOwnerKey } from "@/lib/db/session-assets"
@@ -438,13 +439,18 @@ export async function restoreSessionAssetBackup(
 // Files page (ADR-0200)
 // ---------------------------------------------------------------------------
 
-/** Every `messageMedia` key a Files pin or Files-owned upload holds. */
-export async function listLibraryMediaHashes(): Promise<string[]> {
-  const refs = await getDb()
-    .messageMediaRefs.where("messageId")
-    .startsWith(LIBRARY_OWNER_PREFIX)
-    .toArray()
-  return [...new Set(refs.map((ref) => ref.hash))]
+/**
+ * Every `messageMedia` key held by an owner outside the conversations: a Files
+ * pin or Files-owned upload, or a Digital Twin source's kept original. Their
+ * bytes travel with the core data the owners belong to.
+ */
+export async function listOwnedMediaHashes(): Promise<string[]> {
+  const db = getDb()
+  const [library, twin] = await Promise.all([
+    db.messageMediaRefs.where("messageId").startsWith(LIBRARY_OWNER_PREFIX).toArray(),
+    db.messageMediaRefs.where("messageId").startsWith(TWIN_SOURCE_OWNER_PREFIX).toArray(),
+  ])
+  return [...new Set([...library, ...twin].map((ref) => ref.hash))]
 }
 
 /** Metadata of files uploaded straight into Files; their bytes ride the media section. */

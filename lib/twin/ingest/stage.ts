@@ -15,8 +15,14 @@
  * `twin.sourceUploader.errors.*`.
  */
 
+import { DEFAULT_DOCUMENT_LIMITS } from "@cognia/document/limits"
 import { registerTwinSource, sourceFingerprint, twinSourceProvenance } from "./source-registration"
 import { getDb } from "@/lib/db/schema"
+import { describeTwinSourceOriginal, holdTwinSourceOriginal } from "@/lib/db/twin-source-originals"
+import {
+  inspectUploadContent,
+  UploadContentInspectionError,
+} from "@/lib/security/upload-content-inspection"
 import {
   captureKeptCopyProvenance,
   KeptCopySourceError,
@@ -62,6 +68,8 @@ import type { TwinSourceFormat, TwinSourceKind } from "@/types/twin"
 
 export type IngestErrorCode =
   | "unknownFileType"
+  | "fileTooLarge"
+  | "fileRejected"
   | "noTextExtracted"
   | "parseFailed"
   | "parseFailedFallback"
@@ -113,6 +121,12 @@ export interface StagedSource {
   tags?: string[]
   speakers?: string[]
   origin: StagedSourceOrigin
+  /**
+   * The picked file, for a binary document: committed with the source so the
+   * ingest worker parses the file itself (OCR for scanned pages, page
+   * structure) instead of the preview text extracted here.
+   */
+  original?: { blob: Blob; filename: string; mediaType: string }
 }
 
 export interface StageResult {
@@ -276,36 +290,62 @@ async function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 
 /**
  * Extract one picked file into staged sources. Chat-export JSON fans out per
- * conversation; mbox/eml fan out per message; binary formats keep only the
- * extracted text. `twinId` is needed because the importer layer stamps it
- * into its RawSource envelopes.
+ * conversation; mbox/eml fan out per message. A binary document keeps its
+ * real format and the file itself, which commits with the source; the text
+ * extracted here is only the preview. A PDF with no text layer is staged too:
+ * the ingest worker OCRs it from the kept file. `twinId` is needed because the
+ * importer layer stamps it into its RawSource envelopes.
  */
 export async function stageFile(file: File, twinId: string): Promise<StageResult> {
   const detected = detectSourceFormat(file.name)
   if (!detected) return fail("unknownFileType")
+  if (file.size > DEFAULT_DOCUMENT_LIMITS.maxInputBytes) {
+    return fail("fileTooLarge", { limitMb: DEFAULT_DOCUMENT_LIMITS.maxInputBytes / 1024 / 1024 })
+  }
 
   if (BINARY_TWIN_FORMATS.has(detected)) {
+    let buffer: ArrayBuffer
     try {
-      const buffer = await readFileAsArrayBuffer(file)
+      buffer = await readFileAsArrayBuffer(file)
+      // The admission an attachment upload gets, before any parser runs.
+      inspectUploadContent({
+        name: file.name,
+        declaredMediaType: file.type,
+        bytes: new Uint8Array(buffer),
+      })
+    } catch (err) {
+      if (err instanceof UploadContentInspectionError) return fail("fileRejected")
+      return err instanceof Error
+        ? fail("parseFailed", { format: detected, reason: err.message })
+        : fail("parseFailedFallback", { format: detected })
+    }
+    try {
       const { processDocumentAsync } = await import("@cognia/document/document-processor")
       const tempId = `tws_pre_${twinId}_${Date.now().toString(36)}`
       const processed = await processDocumentAsync(tempId, file.name, buffer, {
         extractEmbeddable: true,
+        maxFileSize: DEFAULT_DOCUMENT_LIMITS.maxInputBytes,
       })
-      const text = processed.embeddableContent || processed.content
-      if (!text.trim()) {
+      const text = processed.content
+      // Only a PDF can still yield text later, through OCR of its pages.
+      if (!text.trim() && detected !== "pdf") {
         return fail("noTextExtracted", { format: detected })
       }
       return {
         staged: [
           {
             kind: inferKind(detected),
-            format: "markdown", // post-parse the body is structured text
+            format: detected,
             title: processed.metadata.title || file.name,
             text,
             bytes: buffer.byteLength,
-            tags: [detected, "extracted"],
+            tags: [detected],
             origin: "file",
+            original: {
+              blob: new Blob([buffer], { type: file.type || "application/octet-stream" }),
+              filename: file.name,
+              mediaType: file.type || "application/octet-stream",
+            },
           },
         ],
       }
@@ -583,13 +623,26 @@ export async function commitStagedSources(
 ): Promise<number> {
   let count = 0
   for (const item of staged) {
-    const fingerprint = await sourceFingerprint(item.text)
+    // A kept file is identified by its bytes: two scanned PDFs both preview as
+    // empty text, and the same file re-picked is the same source.
+    const original = item.original
+      ? await describeTwinSourceOriginal(
+          item.original.blob,
+          item.original.filename,
+          item.original.mediaType
+        )
+      : undefined
+    const fingerprint = original?.contentHash ?? (await sourceFingerprint(item.text))
     const db = getDb()
     const result = await db.transaction(
       "rw",
-      db.twinSources,
-      db.authConnections,
-      db.remoteDocumentConnections,
+      [
+        db.twinSources,
+        db.authConnections,
+        db.remoteDocumentConnections,
+        db.messageMedia,
+        db.messageMediaRefs,
+      ],
       async () => {
         const provenance = item.remoteSource
           ? await captureKeptCopyProvenance(item.remoteSource.content, item.remoteSource.binding)
@@ -607,9 +660,15 @@ export async function commitStagedSources(
           ...(provenance ? { remoteDocument: provenance } : {}),
           ...(item.tags && item.tags.length > 0 ? { tags: item.tags } : {}),
           ...(item.speakers && item.speakers.length > 0 ? { speakers: item.speakers } : {}),
+          ...(original ? { original } : {}),
         })
         if (provenance?.captureId && registered.source.captureId !== provenance.captureId) {
           await db.remoteDocumentConnections.delete(provenance.captureId)
+        }
+        // The bytes and their owner row commit with the source row, or not at
+        // all: a source never points at a file nothing holds.
+        if (original && item.original && (registered.created || registered.revived)) {
+          await holdTwinSourceOriginal(registered.source.id, original, item.original.blob)
         }
         return registered
       }

@@ -65684,6 +65684,7 @@
     "addSource": {
       "added": "Added {count, plural, =1 {1 source} other {# sources}}.",
       "adding": "Adding…",
+      "awaitsOcr": "No text layer, read by OCR when processed",
       "back": "Back",
       "charCount": "{count} chars",
       "confirmAdd": "Add {count, plural, =1 {1 source} other {# sources}}",
@@ -66159,6 +66160,8 @@
         "dingTalkParseFailed": "Failed to parse DingTalk export",
         "dingTalkParseFailedFallback": "Failed to parse DingTalk export (fallback parser also rejected it)",
         "fileEmpty": "File is empty",
+        "fileRejected": "The file was refused: its contents do not match its type, or it carries executable content",
+        "fileTooLarge": "The file is larger than {limitMb} MB",
         "formatUnsupported": "Unsupported file format",
         "gitWalkFailed": "Could not walk the repository: {reason}",
         "importParseFailed": "Failed to parse export",

@@ -44,7 +44,7 @@ import {
   exportLibraryAssets,
   exportMessageMediaRecords,
   exportSessionAssetRecords,
-  listLibraryMediaHashes,
+  listOwnedMediaHashes,
 } from "./session-assets-backup"
 
 const APP_VERSION = "0.1.0"
@@ -145,7 +145,7 @@ export async function buildBackupPackage(
     libraryItems,
     libraryFolders,
     libraryAssets,
-    libraryMediaHashes,
+    ownedMediaHashes,
     mediaGenerationJobs,
   ] = await Promise.all([
     getSettings(),
@@ -211,7 +211,7 @@ export async function buildBackupPackage(
     includeCoreData ? readTable(db.libraryItems) : Promise.resolve([]),
     includeCoreData ? readTable(db.libraryFolders) : Promise.resolve([]),
     includeCoreData ? exportLibraryAssets() : Promise.resolve([]),
-    includeCoreData ? listLibraryMediaHashes() : Promise.resolve([] as string[]),
+    includeCoreData ? listOwnedMediaHashes() : Promise.resolve([] as string[]),
     includeCoreData || opts.includeSessions
       ? readTable(db.mediaGenerationJobs)
       : Promise.resolve([]),
@@ -385,11 +385,11 @@ export async function buildBackupPackage(
   // Emitted whenever the domains that own jobs are exported (the payload
   // carries every portable section, even empty); absent otherwise.
   if (includeCoreData || opts.includeSessions) payload.mediaGenerationJobs = portableJobs
-  if (exportedSessionIds.size > 0 || libraryMediaHashes.length > 0) {
+  if (exportedSessionIds.size > 0 || ownedMediaHashes.length > 0) {
     for await (const record of exportMessageMediaRecords(
       exportedSessionIds,
       48 * 1024,
-      libraryMediaHashes
+      ownedMediaHashes
     )) {
       if (record.section === "messageMedia") (payload.messageMedia ??= []).push(...record.rows)
       else (payload.messageMediaChunks ??= []).push(...record.rows)

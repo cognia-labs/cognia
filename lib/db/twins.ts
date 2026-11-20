@@ -15,6 +15,10 @@
  */
 
 import type { Twin, TwinEmbeddingIndexRecord, TwinEmbeddingOverride } from "@/types/twin"
+import {
+  collectReleasedTwinSourceOriginals,
+  releaseTwinSourceOriginalRefs,
+} from "./twin-source-originals"
 import { isRagEmbeddingProvider } from "@cognia/provider-embedding/embedding-catalog"
 import { getDb } from "./schema"
 import { recordTombstones } from "./tombstones"
@@ -226,6 +230,7 @@ export async function deleteTwin(
     profileDeleted: false,
     detachedCharacterIds: [],
   }
+  let releasedOriginals: string[] = []
   await db.transaction(
     "rw",
     [
@@ -237,9 +242,12 @@ export async function deleteTwin(
       db.twinJobs,
       db.characters,
       db.syncTombstones,
+      db.messageMediaRefs,
     ],
     async () => {
       result.chunks = await db.twinChunks.where("twinId").equals(id).delete()
+      const sourceIds = (await db.twinSources.where("twinId").equals(id).primaryKeys()) as string[]
+      releasedOriginals = await releaseTwinSourceOriginalRefs(sourceIds)
       result.sources = await db.twinSources.where("twinId").equals(id).delete()
       // Read the draft ids before dropping them: `twins` and `twinDrafts` are
       // companion-synced, and without a tombstone a paired phone keeps a
@@ -275,6 +283,8 @@ export async function deleteTwin(
       await recordTombstones("twinProfile", profileIds, at)
     }
   )
+  // The imported files go with their sources: always, not "external" cleanup.
+  await collectReleasedTwinSourceOriginals(releasedOriginals)
 
   if (options.skipExternalCleanup) return result
 

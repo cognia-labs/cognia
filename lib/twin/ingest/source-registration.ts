@@ -85,6 +85,7 @@ export async function registerTwinSource(
         redactionMapEnc: draft.redactionMapEnc,
         tags: draft.tags,
         speakers: draft.speakers,
+        original: draft.original,
         ...(draft.remoteDocument
           ? {
               captureId: draft.remoteDocument.captureId,

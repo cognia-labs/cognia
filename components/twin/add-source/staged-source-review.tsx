@@ -117,7 +117,9 @@ export function StagedSourceReview({
                     {item.format}
                   </Badge>
                   <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
-                    {t("charCount", { count: item.text.length })}
+                    {item.original && !item.text.trim()
+                      ? t("awaitsOcr")
+                      : t("charCount", { count: item.text.length })}
                   </span>
                 </div>
                 {isExpanded ? (

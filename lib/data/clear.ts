@@ -10,7 +10,10 @@ import { clearTemporarySessionAssets } from "@/lib/db/session-assets"
 import { prepareBulkDeleteSessions } from "@/lib/db/sessions"
 import { clearDraft } from "@/lib/db/chat-drafts"
 import { preserveGeneratedVideoRecords } from "@/lib/db/files-library-items"
-import { collectUnreferencedMessageMedia, isLibraryMediaRef } from "@/lib/db/message-media-refs"
+import {
+  collectUnreferencedMessageMedia,
+  isConversationRefSession,
+} from "@/lib/db/message-media-refs"
 import {
   CLEANUP_OWNERSHIP_TABLES,
   readCleanupRowOwnership,
@@ -129,7 +132,9 @@ export async function clearTables(names: ClearableTable[]): Promise<void> {
               videoSessionIds.add(row.sessionId!)
             })
           await preserveGeneratedVideoRecords(db, [...videoSessionIds])
-          const refs = db.messageMediaRefs.filter((row) => isOrphan(row) && !isLibraryMediaRef(row))
+          const refs = db.messageMediaRefs.filter(
+            (row) => isOrphan(row) && isConversationRefSession(row.sessionId)
+          )
           const sourceHashes = new Set<string>()
           for (const ref of await refs.toArray()) {
             orphanCandidates.add(ref.hash)
