@@ -15,6 +15,7 @@ import {
   checkInstanceScoping,
   checkNodeBases,
   checkRustBases,
+  checkSharedWorkspaceUid,
   checkWorkflowPnpmPins,
   composeDefault,
   dockerignoreExcludesPlugins,
@@ -22,10 +23,12 @@ import {
   fromImages,
   ghcrImageName,
   ghcrImageOwner,
+  gosuUser,
   hostPortSide,
   loadRepoInputs,
   publishedImageNames,
   runChecks,
+  stageUsers,
   toolchainChannel,
 } from "./check-deploy-suite.mjs"
 
@@ -107,6 +110,36 @@ FROM caddy:2.10
 COPY --from=web-build /app/out /srv
 `
 
+const GOOD_SERVER_DOCKERFILE = `
+FROM node:26-trixie-slim AS runtime-slim
+RUN useradd --uid 10001 cognia
+USER 10001:10001
+FROM runtime-slim AS runtime-full
+USER root
+RUN apt-get install -y git
+USER 10001:10001
+`
+const GOOD_RUNNER_DOCKERFILE = `
+FROM debian:bookworm-slim AS base
+USER root
+FROM base AS selected
+USER 10001:10001
+FROM base AS full
+USER 10001:10001
+`
+const GOOD_RUNTIME_ENTRYPOINT = `#!/bin/sh
+RUNTIME_USER=10001:10001
+chown "$RUNTIME_USER" /workspace
+exec gosu "$RUNTIME_USER" node /opt/cognia-runtime/src/main.mjs
+`
+const GOOD_WORKSPACE_WRITERS = {
+  dockerfiles: {
+    "deploy/docker/Dockerfile.cognia-server": GOOD_SERVER_DOCKERFILE,
+    "deploy/runner/Dockerfile": GOOD_RUNNER_DOCKERFILE,
+  },
+  entrypoints: { "services/workspace-runtime/entrypoint.sh": GOOD_RUNTIME_ENTRYPOINT },
+}
+
 const GOOD_DOCKERIGNORE = "node_modules\n# source never enters an image\nplugins\n.git\n"
 
 const GOOD_INPUTS = {
@@ -125,6 +158,8 @@ const GOOD_INPUTS = {
   },
   dockerignore: GOOD_DOCKERIGNORE,
   pluginDockerfiles: { "Dockerfile.web": GOOD_PLUGIN_CONSUMER },
+  workspaceWriterDockerfiles: GOOD_WORKSPACE_WRITERS.dockerfiles,
+  workspaceWriterEntrypoints: GOOD_WORKSPACE_WRITERS.entrypoints,
   workflows: {
     "a.yml": "jobs:\n  x:\n    steps:\n      - uses: pnpm/action-setup@v6\n",
     "b.yml":
@@ -552,4 +587,58 @@ test("the image files before the artifact-set change fail the plugin-source chec
   assert.match(problems, /no `plugin-artifacts` stage/)
   assert.match(problems, /never copies/)
   assert.match(problems, /additional_contexts\.plugin-artifacts/)
+})
+
+test("a stage's user is its own last USER, else the stage it builds on", () => {
+  const users = stageUsers(GOOD_SERVER_DOCKERFILE + "FROM runtime-full AS debug\nRUN true\n")
+  assert.equal(users.get("runtime-slim"), "10001:10001")
+  assert.equal(users.get("runtime-full"), "10001:10001")
+  assert.equal(users.get("debug"), "10001:10001")
+  assert.equal(stageUsers("FROM node:26 AS plain\nRUN true\n").get("plain"), null)
+})
+
+test("gosuUser reads a literal spec or the one variable the script assigns", () => {
+  assert.equal(gosuUser(GOOD_RUNTIME_ENTRYPOINT), "10001:10001")
+  assert.equal(gosuUser("exec gosu pwuser node main.mjs\n"), "pwuser")
+  assert.equal(gosuUser("exec node main.mjs\n"), null)
+})
+
+test("the shared workspace writers all run as uid 10001", () => {
+  assert.deepEqual(checkSharedWorkspaceUid(GOOD_WORKSPACE_WRITERS), [])
+})
+
+test("a workspace runtime that drops to pwuser is a problem", () => {
+  // The entrypoint before the fix: it handed /workspace (the shared `default`
+  // workspace) to pwuser, so cognia-server and the runners lost write access.
+  const before = `#!/bin/sh
+chown pwuser:pwuser /workspace /profiles
+exec gosu pwuser node /opt/cognia-runtime/src/main.mjs
+`
+  const problems = checkSharedWorkspaceUid({
+    ...GOOD_WORKSPACE_WRITERS,
+    entrypoints: { "services/workspace-runtime/entrypoint.sh": before },
+  })
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /entrypoint\.sh: drops to `pwuser`, not uid 10001/)
+})
+
+test("an image stage that runs as root or the base user, or is missing, is a problem", () => {
+  const problems = checkSharedWorkspaceUid({
+    ...GOOD_WORKSPACE_WRITERS,
+    dockerfiles: {
+      "deploy/docker/Dockerfile.cognia-server": GOOD_SERVER_DOCKERFILE.replace(
+        /USER 10001:10001\n$/,
+        ""
+      ),
+      "deploy/runner/Dockerfile": "FROM debian:bookworm-slim AS selected\nRUN true\n",
+    },
+  })
+  assert.deepEqual(
+    problems.map((problem) => problem.split(",")[0]),
+    [
+      "deploy/docker/Dockerfile.cognia-server: stage `runtime-full` runs as `root`",
+      "deploy/runner/Dockerfile: stage `selected` runs as the base image's user",
+      "deploy/runner/Dockerfile: no `full` stage",
+    ]
+  )
 })

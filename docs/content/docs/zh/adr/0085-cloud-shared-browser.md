@@ -75,3 +75,8 @@ runtime secret 是 `COGNIA_WORKSPACE_RUNTIME_SECRET_DIR` 下以 workspace id 命
 ## 附录（2026-09-25）——删除命名配置会清除其数据
 
 命名配置是 workspace runtime 上的一个用户数据目录。设置中此前可以创建和选择配置却无法删除，而 `deleteBrowserProfile` 只会删掉客户端的记录，目录会残留在运行时。现在 `browser_profile_delete { workspaceId, profileId }` 会调用 runtime 的 `browser.profile.delete` 操作删除该目录。网关（按账户与工作区）与 runtime 都会在有会话持有该配置时拒绝，runtime 还会拒绝任何会解析到配置根目录之外的 id。客户端先清除 runtime 上的副本，再删除本地记录。删除被拒绝时，配置仍会保留，可以重试。
+
+## 附录（2026-11-20）——runtime 以 uid 10001 运行
+
+runtime 原先以 `pwuser` 运行，它的 root entrypoint 每次启动都会把 `/workspace` 交给这个用户。在 T2 Compose 中，`/workspace` 就是工作区卷的 `default` 子目录，cognia-server 和 Runner 也以 uid 10001 写入这里。runtime 启动后，两者都无法在该工作区根目录新建文件。现在镜像定义了 uid 与 gid 均为 10001 的 `cognia` 用户，`HOME=/home/cognia`。entrypoint 只把工作区目录本身和 runtime 独占的 profiles 卷交给这个用户，然后用 `gosu` 切换过去。`pnpm audit:deploy-suite` 会检查 cognia-server、两个 Runner 目标和这个 entrypoint 使用同一个 uid。
+

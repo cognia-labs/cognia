@@ -45,6 +45,11 @@
  *      fails the build when no context is passed, the set is copied in and
  *      named by `COGNIA_PLUGIN_ARTIFACTS`, and every compose build of such an
  *      image passes the context.
+ *   8. Every image that writes the shared workspace volume (cognia-server,
+ *      the Runner targets, the workspace runtime's entrypoint) runs as the
+ *      one uid cognia-server creates the workspace tree as. The workspace
+ *      runtime handed the `default` workspace to `pwuser`, after which the
+ *      server and the runners (uid 10001) could no longer write it.
  *
  * What is NOT checked, and why: that the images build, that compose brings
  * the stack up, or that two instances actually coexist. Those are runtime
@@ -420,6 +425,70 @@ export function dockerStages(dockerfile) {
   return stages.map((stage) => ({ ...stage, body: stage.body.join("\n") }))
 }
 
+/**
+ * cognia-server creates the workspace tree as this uid, and the runners and
+ * the workspace runtime write the same volume. A directory one uid creates
+ * 0755 is read-only to every other, so all of them run as it.
+ */
+export const SHARED_WORKSPACE_UID = "10001"
+/** Each image that writes the shared workspace, with the stages it ships. */
+export const SHARED_WORKSPACE_IMAGES = {
+  "deploy/docker/Dockerfile.cognia-server": ["runtime-slim", "runtime-full"],
+  "deploy/runner/Dockerfile": ["selected", "full"],
+}
+/** Entrypoints that start as root and drop to the workspace user with `exec gosu`. */
+export const SHARED_WORKSPACE_ENTRYPOINTS = ["services/workspace-runtime/entrypoint.sh"]
+
+/**
+ * Each named stage's effective `USER`: its own last `USER` line, else the one
+ * of the stage it builds on, else `null` (the base image's user).
+ */
+export function stageUsers(dockerfile) {
+  const users = new Map()
+  for (const stage of dockerStages(dockerfile)) {
+    const own = [...stage.body.matchAll(/^\s*USER\s+(\S+)/gim)].at(-1)?.[1]
+    if (stage.name) users.set(stage.name, own ?? users.get(stage.image) ?? null)
+  }
+  return users
+}
+
+/** The user spec an entrypoint's `exec gosu` drops to, resolving one variable the script assigns. */
+export function gosuUser(script) {
+  const spec = script.match(/^\s*exec\s+gosu\s+"?([^"\s]+)"?\s/m)?.[1]
+  if (!spec) return null
+  const variable = spec.match(/^\$\{?(\w+)\}?$/)?.[1]
+  if (!variable) return spec
+  return script.match(new RegExp(`^\\s*${variable}=["']?([^"'\\s]+)`, "m"))?.[1] ?? null
+}
+
+export function checkSharedWorkspaceUid({ dockerfiles, entrypoints }) {
+  const problems = []
+  const uid = SHARED_WORKSPACE_UID
+  const why = `cognia-server creates the workspace tree as uid ${uid}, and a directory one uid creates 0755 is read-only to every other`
+  for (const [rel, stages] of Object.entries(SHARED_WORKSPACE_IMAGES)) {
+    const users = stageUsers(dockerfiles[rel] ?? "")
+    for (const stage of stages) {
+      if (!users.has(stage)) {
+        problems.push(`${rel}: no \`${stage}\` stage, the image that writes the shared workspace.`)
+        continue
+      }
+      const spec = users.get(stage)
+      if (spec?.split(":")[0] !== uid)
+        problems.push(
+          `${rel}: stage \`${stage}\` runs as ${spec ? `\`${spec}\`` : "the base image's user"}, not uid ${uid}; ${why}.`
+        )
+    }
+  }
+  for (const rel of SHARED_WORKSPACE_ENTRYPOINTS) {
+    const spec = gosuUser(entrypoints[rel] ?? "")
+    if (spec?.split(":")[0] !== uid)
+      problems.push(
+        `${rel}: drops to ${spec ? `\`${spec}\`` : "no user (no \`exec gosu\`)"}, not uid ${uid}; ${why}.`
+      )
+  }
+  return problems
+}
+
 /** Problems with one plugin-consuming Dockerfile. */
 export function checkPluginConsumerDockerfile(rel, dockerfile) {
   const problems = []
@@ -527,6 +596,10 @@ export function runChecks(inputs) {
       dockerfiles: inputs.pluginDockerfiles,
       composeText: inputs.composeFiles[COMPOSE_BASE],
     }),
+    ...checkSharedWorkspaceUid({
+      dockerfiles: inputs.workspaceWriterDockerfiles,
+      entrypoints: inputs.workspaceWriterEntrypoints,
+    }),
   ]
 }
 
@@ -570,6 +643,12 @@ export function loadRepoInputs() {
     pluginDockerfiles: Object.fromEntries(
       PLUGIN_CONSUMER_DOCKERFILES.map((rel) => [rel, read(rel)])
     ),
+    workspaceWriterDockerfiles: Object.fromEntries(
+      Object.keys(SHARED_WORKSPACE_IMAGES).map((rel) => [rel, read(rel)])
+    ),
+    workspaceWriterEntrypoints: Object.fromEntries(
+      SHARED_WORKSPACE_ENTRYPOINTS.map((rel) => [rel, read(rel)])
+    ),
     imagesWorkflow: read(IMAGES_WORKFLOW),
     appOwner: appImagesOwner(read("Cargo.toml")),
     imageReferenceFiles: Object.fromEntries(imageReferenceFiles().map((rel) => [rel, read(rel)])),
@@ -590,6 +669,6 @@ if (invokedDirectly) {
     process.exit(1)
   }
   console.log(
-    `deploy-suite: OK — ${ROOT_CONTEXT_RUST_DOCKERFILES.length} Rust images on the toolchain pin, ${ROOT_WORKSPACE_NODE_DOCKERFILES.length} Node images on engines/packageManager, every compose default image published, host ports and instance scoping parametrized, workflow pnpm pins aligned, ${PLUGIN_CONSUMER_DOCKERFILES.length} plugin consumers take the artifact set and never plugin source.`
+    `deploy-suite: OK — ${ROOT_CONTEXT_RUST_DOCKERFILES.length} Rust images on the toolchain pin, ${ROOT_WORKSPACE_NODE_DOCKERFILES.length} Node images on engines/packageManager, every compose default image published, host ports and instance scoping parametrized, workflow pnpm pins aligned, ${PLUGIN_CONSUMER_DOCKERFILES.length} plugin consumers take the artifact set and never plugin source, every shared-workspace writer runs as uid ${SHARED_WORKSPACE_UID}.`
   )
 }

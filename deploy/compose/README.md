@@ -360,14 +360,19 @@ in Cognia settings. Add one identically isolated service/secret per additional
 workspace, each mounting its own `subpath`; never mount the whole
 `cognia_workspaces` volume into a runtime.
 
+The runtime runs as uid 10001, like cognia-server and the runners, and at
+start hands only the workspace directory itself to that uid, never the files
+in it.
+
 A deployment that ran the profile before this layout kept the `default`
-workspace in its own `<project>_cognia_workspace_default` volume. Copy it into
-the shared volume once, with the stack stopped:
+workspace in its own `<project>_cognia_workspace_default` volume, written by
+the runtime's former `pwuser`. Copy it into the shared volume once, with the
+stack stopped, and hand the copy to uid 10001:
 
 ```bash
 docker run --rm -v <project>_cognia_workspace_default:/from \
   -v ${COGNIA_INSTANCE:-cognia}_workspaces:/to alpine \
-  sh -c 'cp -a /from/. /to/default/'
+  sh -c 'cp -a /from/. /to/default/ && chown -R 10001:10001 /to/default'
 ```
 
 ### Network drives through SFTPGo (`compose.sftpgo.yaml`)

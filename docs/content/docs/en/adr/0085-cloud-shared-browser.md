@@ -84,3 +84,16 @@ gateway (per account and workspace) and the runtime refuse while a session holds
 the profile, and the runtime refuses any id that would resolve outside its
 profiles root. The client deletes the runtime's copy before it removes the row.
 If deletion is refused, the profile remains listed so the user can retry.
+
+## Addendum (2026-11-20) — the runtime runs as uid 10001
+
+The runtime ran as `pwuser`, and its root entrypoint handed `/workspace` to
+that user on every start. In the T2 Compose stack `/workspace` is the
+`default` subdirectory of the workspaces volume, which cognia-server and the
+runners also write as uid 10001. After the runtime started, neither could
+create files at the root of that workspace. The image now defines `cognia`
+with uid and gid 10001 and `HOME=/home/cognia`. The entrypoint takes only the
+workspace directory itself and the runtime's own profiles volume for that
+user, then drops to it with `gosu`. `pnpm audit:deploy-suite` checks that
+cognia-server, both Runner targets and this entrypoint run as the same uid.
+

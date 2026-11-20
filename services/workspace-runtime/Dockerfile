@@ -30,8 +30,19 @@ RUN cd /opt/cognia-runtime-root \
 COPY services/workspace-runtime/src ./src
 COPY lib/browser/overlay.injected.js ./src/overlay.injected.js
 COPY services/workspace-runtime/entrypoint.sh /usr/local/bin/cognia-workspace-runtime
+# The runtime runs as uid/gid 10001 (`cognia`), the uid cognia-server creates
+# workspaces as and the Runner image runs as, so all three can write the
+# shared workspace (deploy/compose/README.md). The entrypoint starts as root
+# only to hand the mounts to that user.
 RUN chmod 0755 /usr/local/bin/cognia-workspace-runtime \
-    && install -d -o pwuser -g pwuser /workspace /profiles
+    && groupadd --gid 10001 cognia \
+    && useradd --uid 10001 --gid 10001 --home-dir /home/cognia --create-home \
+        --shell /usr/sbin/nologin cognia \
+    && install -d -o 10001 -g 10001 /workspace /profiles
+# Docker exports the image user's HOME (root's) unless the image sets one, and
+# gosu keeps an inherited HOME, so the runtime and the Agents it starts would
+# otherwise get /root. Set after the build steps, whose caches stay root's.
+ENV HOME=/home/cognia
 
 EXPOSE 27910
 ENTRYPOINT ["/usr/local/bin/cognia-workspace-runtime"]
