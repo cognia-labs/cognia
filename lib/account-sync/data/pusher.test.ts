@@ -6,11 +6,13 @@ import {
   decryptOpPayload,
   opKey,
   type Op,
+  type OpPayload,
 } from "@cognia/sync-protocol"
 
 import { TEST_SPACE } from "../enrollment/test-support"
 import { __clearAccountSyncKeyCache } from "../vault-store"
 import { applyBatches } from "./applier"
+import { markRemoteTransaction } from "./capture-middleware"
 import { createOpOriginChecker } from "./op-origin"
 import { pushOutbox, type PushDeps } from "./pusher"
 import { closeAll, sealedOp, syncedDevices, verifiedKeys, type SyncDevice } from "./test-support"
@@ -19,6 +21,13 @@ beforeEach(() => __clearAccountSyncKeyCache())
 
 const session = (id: string, extra: Record<string, unknown> = {}) =>
   ({ id, title: "Plan", createdAt: 1, updatedAt: 1, ...extra }) as never
+
+/** The fields of the last pushed op, which must be an upsert. */
+async function upsertFields(open: (op: Op) => Promise<OpPayload>, pushed: Op[][]) {
+  const payload = await open(pushed.flat().at(-1)!)
+  if (payload.k !== "upsert") throw new Error("expected an upsert")
+  return payload.f
+}
 
 async function setup() {
   const { devices } = await syncedDevices(["a"])
@@ -70,10 +79,11 @@ describe("pushOutbox", () => {
     expect(byTable.characters).toMatchObject({ id: "c1", k: "delete" })
     expect(byTable.sessions).toMatchObject({ id: "s1", k: "upsert" })
     expect((byTable.sessions as { f: Record<string, [unknown, string]> }).f.title![0]).toBe("Final")
+    // `profile` merges by property: each property in its own field.
     expect(byTable.settings).toMatchObject({
       id: "profile",
       k: "upsert",
-      f: { value: [{ displayName: "Ada" }, expect.any(String)] },
+      f: { "value.displayName": ["Ada", expect.any(String)] },
     })
     expect(ops.find((op) => op.deviceSeq === 3)!.cls).toBe(
       payloads[2]!.t === "settings" ? "s" : "c"
@@ -153,6 +163,50 @@ describe("pushOutbox", () => {
     const titles = await Promise.all(sent.map(titleOf))
     expect(titles).toEqual(["Plan", "Later"])
     expect(await a.db.accountSyncOutbox.count()).toBe(0)
+    closeAll(devices)
+  })
+
+  it("pushes a key merged by property: removed properties as null, a clear as its whole write", async () => {
+    const { a, devices, deps, pushed, open } = await setup()
+    const lastFields = () => upsertFields(open, pushed)
+    await a.db.settings.put({ id: "singleton", profile: { displayName: "Ada", bio: "x" } } as never)
+    await pushOutbox(deps())
+    await a.db.settings.update("singleton", { profile: { displayName: "Ada" } })
+    await pushOutbox(deps())
+    expect(await lastFields()).toEqual({
+      "value.bio": [null, expect.any(String)],
+    })
+    await a.db.settings.update("singleton", { profile: undefined } as never)
+    await pushOutbox(deps())
+    expect(await lastFields()).toEqual({ value: [null, expect.any(String)] })
+    closeAll(devices)
+  })
+
+  it("pushes a whole-write field as the properties it still stands for", async () => {
+    // A whole value from another device landed after this device cleared the
+    // key and before it pushed: the clear goes up as that value, never as a
+    // null that would remove the other device's properties where it has not
+    // arrived yet.
+    const { a, devices, deps, pushed, open } = await setup()
+    const lastFields = () => upsertFields(open, pushed)
+    await a.db.settings.put({ id: "singleton", profile: { displayName: "Ada" } } as never)
+    await a.db.settings.update("singleton", { profile: undefined } as never)
+    const remote = "ffffffffffff0000dev_" + "B".repeat(26)
+    // As the applier writes: in a transaction capture leaves alone.
+    await a.db.transaction("rw", [a.db.settings, a.db.syncFieldClocks], async (tx) => {
+      markRemoteTransaction(tx.idbtrans)
+      await a.db.settings.update("singleton", { profile: { displayName: "Grace" } } as never)
+      await a.db.syncFieldClocks.put({
+        table: "settings",
+        rowId: "profile",
+        fields: { value: remote },
+      })
+    })
+    expect((await a.db.accountSyncOutbox.get(["settings", "profile"]))?.fields).toEqual(["value"])
+    await pushOutbox(deps())
+    expect(await lastFields()).toEqual({
+      value: [{ displayName: "Grace" }, remote],
+    })
     closeAll(devices)
   })
 

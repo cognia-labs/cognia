@@ -42,9 +42,13 @@ import type { SyncApi } from "@/lib/account-sync/sync-api"
 import type { CogniaDB } from "@/lib/db/schema"
 import { DEFAULTS } from "@/lib/db/settings"
 
+import { settingsPropertyField } from "@cognia/sync-protocol"
+
 import { SETTINGS_VALUE_FIELD, markRemoteTransaction } from "./capture-middleware"
+import { ownProperties } from "./settings-properties"
 import { sameValue } from "./stable-json"
 import {
+  SETTINGS_MERGED_BY_PROPERTY,
   SETTINGS_ROW_ID,
   SYNCED_SETTINGS_KEYS,
   SYNCED_TABLES,
@@ -130,10 +134,12 @@ export function isArmedFor(
 
 /**
  * Whether a synced settings key holds a value this device chose, rather than
- * the default every save writes into the row.
+ * the default every save writes into the row. A key merged by property holds
+ * one when any of its properties differs from the default's.
  */
 export function holdsOwnSetting(key: string, value: unknown): boolean {
   if (value === undefined || value === null) return false
+  if (SETTINGS_MERGED_BY_PROPERTY.has(key)) return ownProperties(key, value).length > 0
   return !sameValue(value, (DEFAULTS as unknown as Record<string, unknown>)[key])
 }
 
@@ -312,6 +318,26 @@ async function seedRecords(
   }
 }
 
+/**
+ * The fields to seed for a settings key this device holds a value of: the
+ * key's `value`, or for a key merged by property each own property. A field
+ * that already has a clock keeps it; in a key merged by property, so does
+ * every property its whole-write clock stands for. Empty when nothing is left.
+ */
+function settingSeedFields(
+  key: string,
+  value: unknown,
+  held: SyncFieldClocksRow | undefined
+): string[] {
+  const fields = held?.fields ?? {}
+  if (!SETTINGS_MERGED_BY_PROPERTY.has(key))
+    return fields[SETTINGS_VALUE_FIELD] ? [] : [SETTINGS_VALUE_FIELD]
+  if (fields[SETTINGS_VALUE_FIELD]) return []
+  return ownProperties(key, value)
+    .map(settingsPropertyField)
+    .filter((field) => fields[field] === undefined)
+}
+
 /** Queues the settings keys that hold a value of their own and have no clock yet. */
 async function seedSettings(target: JoinTarget): Promise<void> {
   const { db, deviceId } = target
@@ -330,9 +356,14 @@ async function seedSettings(target: JoinTarget): Promise<void> {
     const outboxRows: AccountSyncOutboxRow[] = []
     keys.forEach((key, index) => {
       const held = clocks[index]
-      if (held?.fields[SETTINGS_VALUE_FIELD]) return
-      clockRows.push({ table: "settings", rowId: key, fields: { [SETTINGS_VALUE_FIELD]: at } })
-      outboxRows.push(resendEntry("settings", key, queued[index], now))
+      const seeded = settingSeedFields(key, row[key], held)
+      if (seeded.length === 0) return
+      const fields = { ...held?.fields }
+      for (const field of seeded) fields[field] = at
+      clockRows.push({ ...held, table: "settings", rowId: key, fields })
+      const entry = resendEntry("settings", key, queued[index], now)
+      const pending = queued[index] && !queued[index]!.deleted ? queued[index]!.fields : []
+      outboxRows.push({ ...entry, fields: [...new Set([...pending, ...seeded])].sort() })
     })
     await db.syncFieldClocks.bulkPut(clockRows)
     await db.accountSyncOutbox.bulkPut(outboxRows)

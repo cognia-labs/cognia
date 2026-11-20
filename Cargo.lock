@@ -3448,7 +3448,7 @@ dependencies = [
 [[package]]
 name = "cognia-signaling-core"
 version = "0.1.0"
-source = "git+https://github.com/cognia-labs/cognia-services?rev=487e9f2d617c9d1b9b648ec510cafcf53b962c2c#487e9f2d617c9d1b9b648ec510cafcf53b962c2c"
+source = "git+https://github.com/cognia-labs/cognia-services?rev=52ec93a316b6d25e81bc9da5206b597d60985f10#52ec93a316b6d25e81bc9da5206b597d60985f10"
 dependencies = [
  "base64 0.23.1",
  "p256 0.14.0",

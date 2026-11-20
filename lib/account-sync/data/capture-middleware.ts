@@ -33,10 +33,17 @@ import Dexie, {
   type Middleware,
 } from "dexie"
 
-import { encodeHlc, sendHlc } from "@cognia/sync-protocol"
+import { SETTINGS_VALUE_FIELD, encodeHlc, sendHlc } from "@cognia/sync-protocol"
 
+import { settingPropertyChange } from "./settings-properties"
 import { sameValue } from "./stable-json"
-import { TABLE_POLICIES, isSyncedTable, syncedFields, type TablePolicy } from "./tables"
+import {
+  SETTINGS_MERGED_BY_PROPERTY,
+  TABLE_POLICIES,
+  isSyncedTable,
+  syncedFields,
+  type TablePolicy,
+} from "./tables"
 import type {
   AccountSyncCaptureState,
   AccountSyncOutboxRow,
@@ -46,8 +53,8 @@ import type {
 
 export const CAPTURE_MIDDLEWARE_LEVEL = 3
 export const SIDE_TABLES = ["accountSyncOutbox", "syncFieldClocks", "accountSyncState"] as const
-/** The field name of a settings key's virtual row. */
-export const SETTINGS_VALUE_FIELD = "value"
+/** The field of a settings key's virtual row holding its whole value (protocol §7.2). */
+export { SETTINGS_VALUE_FIELD }
 
 const remoteTransactions = new WeakSet<object>()
 
@@ -99,6 +106,11 @@ interface RowChange {
   /** Changed synced fields; ignored when `deleted`. */
   fields: string[]
   deleted: boolean
+  /**
+   * A settings key merged by property was cleared: its clocks and queued
+   * fields give way to the clear's one `value` write.
+   */
+  clears?: true
 }
 
 function topLevelField(keyPath: string): string {
@@ -161,8 +173,12 @@ async function changesOf(
   const values = request.values as Record<string, unknown>[]
   const keys =
     request.keys ?? values.map((value) => table.schema.primaryKey.extractKey?.(value) ?? value.id)
+  // Settings always read the row before: a key merged by property sends only
+  // the properties that changed, whatever the write's shape.
   const needPrevious =
-    policy.diff && !(request.type === "put" && (request.updates || request.changeSpec))
+    policy.diff &&
+    (policy.table === "settings" ||
+      !(request.type === "put" && (request.updates || request.changeSpec)))
   const previous = needPrevious
     ? ((await zone(() => table.getMany({ trans: request.trans, keys }))) as (
         Record<string, unknown> | undefined
@@ -181,8 +197,21 @@ async function changesOf(
         ? changedByDiff(previous[index], value, fields)
         : fields.filter((name) => value[name] !== undefined)
     if (policy.table === "settings") {
-      for (const key of changed)
-        changes.push({ index, rowId: key, fields: [SETTINGS_VALUE_FIELD], deleted: false })
+      for (const key of changed) {
+        if (!SETTINGS_MERGED_BY_PROPERTY.has(key)) {
+          changes.push({ index, rowId: key, fields: [SETTINGS_VALUE_FIELD], deleted: false })
+          continue
+        }
+        const property = settingPropertyChange(previous[index]?.[key], value[key])
+        if (!property) continue
+        changes.push({
+          index,
+          rowId: key,
+          fields: property.fields,
+          deleted: false,
+          ...(property.clears ? { clears: true as const } : {}),
+        })
+      }
     } else if (changed.length > 0) {
       changes.push({ index, rowId: String(keys[index]), fields: changed, deleted: false })
     }
@@ -232,7 +261,7 @@ async function record(
       }
       clockRow = { table, rowId: change.rowId, fields: {}, tombstone: at }
     } else {
-      const fields = new Set(before && !before.deleted ? before.fields : [])
+      const fields = new Set(before && !before.deleted && !change.clears ? before.fields : [])
       for (const name of change.fields) fields.add(name)
       queuedRow = {
         table,
@@ -244,7 +273,8 @@ async function record(
         rev: (before?.rev ?? 0) + 1,
         since: before?.since ?? now,
       }
-      const fieldClocks = { ...held?.fields }
+      // A clear is a write of the whole object: no property keeps an older clock.
+      const fieldClocks: Record<string, string> = change.clears ? {} : { ...held?.fields }
       for (const name of change.fields) fieldClocks[name] = at
       clockRow = { ...held, table, rowId: change.rowId, fields: fieldClocks }
     }

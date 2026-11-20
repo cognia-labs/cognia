@@ -104,7 +104,7 @@ describe("replicating data", () => {
         })
       )
       await settleAll(devices)
-      expect(server.batches[0].ops[0].schemaVer).toBe(2)
+      expect(server.batches[0].ops[0].schemaVer).toBe(SYNC_SCHEMA_VERSION)
       const received = await b.db.sessions.get("plugin-root")
       expect(received?.programmaticCreator).toBe("plugin:example")
       expect(received?.agentTurnOwner).toBeUndefined()
@@ -187,6 +187,41 @@ describe("replicating data", () => {
       })
     }
     expect(await syncedView(a, "sessions")).toEqual(await syncedView(b, "sessions"))
+    closeAll(devices)
+  })
+
+  it("keeps both devices' edits to different properties of the profile", async () => {
+    // The profile travelled as one value: one device's name change and the
+    // other's bio edit, made at once, ended with one of them lost everywhere.
+    const { devices } = await syncedDevices(["a", "b"])
+    const [a, b] = devices as [SyncDevice, SyncDevice]
+    await at(1_000, () =>
+      a.db.settings.put({
+        id: "singleton",
+        profile: { displayName: "Original", bio: "Old" },
+      } as never)
+    )
+    await settleAll(devices)
+    const profileOf = async (device: SyncDevice) =>
+      ((await device.db.settings.get("singleton")) as never as { profile: unknown }).profile
+    expect(await profileOf(b)).toEqual({ displayName: "Original", bio: "Old" })
+
+    await at(2_000, async () => {
+      const profile = (await profileOf(a)) as Record<string, unknown>
+      await a.db.settings.update("singleton", { profile: { ...profile, displayName: "New name" } })
+    })
+    await at(3_000, async () => {
+      const profile = (await profileOf(b)) as Record<string, unknown>
+      await b.db.settings.update("singleton", { profile: { ...profile, bio: "New bio" } })
+    })
+    await settleAll(devices)
+    for (const device of devices)
+      expect(await profileOf(device)).toEqual({ displayName: "New name", bio: "New bio" })
+
+    // A clear on one device removes every property the other had seen.
+    await at(4_000, () => a.db.settings.update("singleton", { profile: undefined } as never))
+    await settleAll(devices)
+    for (const device of devices) expect(await profileOf(device)).toBeUndefined()
     closeAll(devices)
   })
 
@@ -441,6 +476,49 @@ function seeded(seed: number) {
 }
 
 describe("random interleavings", () => {
+  it.each([1, 2, 3, 4, 5])("converge on a profile merged by property (seed %i)", async (seed) => {
+    const random = seeded(seed + 100)
+    const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!
+    const { devices } = await syncedDevices(["a", "b", "c"])
+    const properties = ["displayName", "bio", "pronouns", "statusMessage"]
+    let clock = 10_000
+    for (let step = 0; step < 60; step++) {
+      const device = pick(devices)
+      clock += Math.floor(random() * 3)
+      const roll = random()
+      await at(clock, async () => {
+        const row = (await device.db.settings.get("singleton")) as
+          { profile?: Record<string, unknown> } | undefined
+        const profile = { ...row?.profile }
+        if (roll < 0.1) {
+          await device.db.settings.put({ ...row, id: "singleton", profile: undefined } as never)
+        } else if (roll < 0.25) {
+          delete profile[pick(properties)]
+          await device.db.settings.put({ ...row, id: "singleton", profile } as never)
+        } else if (roll < 0.75) {
+          profile[pick(properties)] = `v${step}`
+          await device.db.settings.put({ ...row, id: "singleton", profile } as never)
+        } else {
+          await device.round()
+        }
+      })
+    }
+    await settleAll(devices, 10)
+    const profiles = await Promise.all(
+      devices.map(async (device) => {
+        const profile = (
+          (await device.db.settings.get("singleton")) as never as {
+            profile?: Record<string, unknown>
+          }
+        )?.profile
+        // Key order differs between a local write and a merge; the content may not.
+        return JSON.stringify(profile ? Object.entries(profile).sort() : null)
+      })
+    )
+    expect(new Set(profiles).size).toBe(1)
+    closeAll(devices)
+  })
+
   it.each([1, 2, 3, 4, 5])("converge (seed %i)", async (seed) => {
     const random = seeded(seed)
     const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!

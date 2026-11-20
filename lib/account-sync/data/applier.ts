@@ -23,6 +23,7 @@ import {
   OpError,
   decryptOpPayload,
   mergeDelete,
+  mergeSettingProperties,
   mergeUpsert,
   opKey,
   parseOp,
@@ -41,6 +42,7 @@ import type { CogniaDB } from "@/lib/db/schema"
 import { SETTINGS_VALUE_FIELD, classOn, markRemoteTransaction } from "./capture-middleware"
 import type { OpOriginChecker } from "./op-origin"
 import {
+  SETTINGS_MERGED_BY_PROPERTY,
   SETTINGS_ROW_ID,
   SYNCED_SETTINGS_KEYS,
   SYNCED_TABLES,
@@ -223,6 +225,7 @@ async function applyRecord(db: CogniaDB, payload: OpPayload, now: number): Promi
 
 async function applySetting(db: CogniaDB, payload: OpPayload, now: number): Promise<boolean> {
   if (payload.k !== "upsert" || !SYNCED_SETTINGS_KEYS.has(payload.id)) return false
+  if (SETTINGS_MERGED_BY_PROPERTY.has(payload.id)) return applySettingProperties(db, payload, now)
   const entry = payload.f[SETTINGS_VALUE_FIELD]
   if (!entry) return false
   const held = await db.syncFieldClocks.get(["settings", payload.id])
@@ -235,6 +238,30 @@ async function applySetting(db: CogniaDB, payload: OpPayload, now: number): Prom
   // `updatedAt` moves so the companion data plane re-sends the row to paired phones.
   await db.settings.put(
     rowWith({ ...current, updatedAt: now }, { [payload.id]: entry[0] }) as never
+  )
+  await db.syncFieldClocks.put({ ...result.clocks, table: "settings", rowId: payload.id })
+  return true
+}
+
+/**
+ * A key merged by property (protocol §9): property writes, and whole writes
+ * (from this schema's clears or an older schema's whole values), by clock.
+ */
+async function applySettingProperties(
+  db: CogniaDB,
+  payload: Extract<OpPayload, { k: "upsert" }>,
+  now: number
+): Promise<boolean> {
+  const current = ((await db.settings.get(SETTINGS_ROW_ID)) ?? { id: SETTINGS_ROW_ID }) as Record<
+    string,
+    unknown
+  >
+  const held = await db.syncFieldClocks.get(["settings", payload.id])
+  const result = mergeSettingProperties(current[payload.id], held, payload.f)
+  if (result.kind !== "write") return false
+  // `updatedAt` moves so the companion data plane re-sends the row to paired phones.
+  await db.settings.put(
+    rowWith({ ...current, updatedAt: now }, { [payload.id]: result.value }) as never
   )
   await db.syncFieldClocks.put({ ...result.clocks, table: "settings", rowId: payload.id })
   return true

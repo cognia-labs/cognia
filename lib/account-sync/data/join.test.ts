@@ -137,13 +137,14 @@ describe("armAndSeed", () => {
       fields: [],
       mutationId: expect.any(String),
     })
+    // `profile` merges by property: each own property is seeded.
     expect(await a.db.accountSyncOutbox.get(["settings", "profile"])).toMatchObject({
-      fields: ["value"],
+      fields: ["value.displayName"],
       mutationId: expect.any(String),
     })
-    expect((await a.db.syncFieldClocks.get(["settings", "profile"]))!.fields.value).toBe(
-      encodeHlc({ ms: 3_000, c: 0, deviceId })
-    )
+    expect((await a.db.syncFieldClocks.get(["settings", "profile"]))!.fields).toEqual({
+      "value.displayName": encodeHlc({ ms: 3_000, c: 0, deviceId }),
+    })
     expect(progress).toContain("sessions:2/2")
     expect(progress.at(-1)).toBe("settings:1/1")
 
@@ -344,6 +345,42 @@ describe("joining with settings", () => {
       question: "both-hold-data",
       local: { counts: { settings: 1 }, total: 1 },
     })
+    closeAll(devices)
+  })
+})
+
+describe("seeding a key merged by property", () => {
+  it("seeds each own property without a clock, keeping the ones that have one", async () => {
+    const { devices, a, target } = await unarmedPair()
+    const deviceId = (await a.keys()).deviceId
+    const earlier = encodeHlc({ ms: 500, c: 0, deviceId })
+    await a.db.settings.put({
+      id: "singleton",
+      profile: { displayName: "Ada", bio: "x" },
+      updatedAt: 3_000,
+    } as never)
+    await a.db.syncFieldClocks.put({
+      table: "settings",
+      rowId: "profile",
+      fields: { "value.bio": earlier },
+    })
+    await armAndSeed(await target(a))
+    expect((await a.db.syncFieldClocks.get(["settings", "profile"]))!.fields).toEqual({
+      "value.bio": earlier,
+      "value.displayName": encodeHlc({ ms: 3_000, c: 0, deviceId }),
+    })
+    expect((await a.db.accountSyncOutbox.get(["settings", "profile"]))?.fields).toEqual([
+      "value.displayName",
+    ])
+    closeAll(devices)
+  })
+
+  it("counts a profile of defaults as nothing this device holds", async () => {
+    const { devices, a } = await unarmedPair()
+    await a.db.settings.put({ id: "singleton", profile: {} } as never)
+    expect((await summarizeLocalData(a.db)).counts.settings).toBe(0)
+    await a.db.settings.put({ id: "singleton", profile: { bio: "mine" } } as never)
+    expect((await summarizeLocalData(a.db)).counts.settings).toBe(1)
     closeAll(devices)
   })
 })

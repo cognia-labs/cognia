@@ -12,8 +12,8 @@ import {
 } from "./tables"
 
 describe("account sync table policies", () => {
-  it("syncs creator provenance under schema 2 without transferring plugin ownership", () => {
-    expect(SYNC_SCHEMA_VERSION).toBe(2)
+  it("syncs creator provenance since schema 2 without transferring plugin ownership", () => {
+    expect(SYNC_SCHEMA_VERSION).toBeGreaterThanOrEqual(2)
     expect(TABLE_POLICIES.sessions.fields.programmaticCreator).toBe("sync")
     expect(syncedFields(TABLE_POLICIES.sessions)).toContain("programmaticCreator")
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("agentTurnOwner")
@@ -92,7 +92,7 @@ describe("account sync table policies", () => {
   it("never replicates one Host's proof of retained engine visibility", () => {
     expect(TABLE_POLICIES.sessions.fields.runtimePersonalVisibilityDigest).toBe("local")
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("runtimePersonalVisibilityDigest")
-    expect(SYNC_SCHEMA_VERSION).toBe(2)
+    expect(SYNC_SCHEMA_VERSION).toBeGreaterThanOrEqual(2)
   })
 
   it("keeps Host-attached acceptance run authority device-local", () => {

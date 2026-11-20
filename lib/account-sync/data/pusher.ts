@@ -40,7 +40,9 @@ import type { PushView } from "@/lib/account-sync/sync-api"
 import type { CogniaDB } from "@/lib/db/schema"
 
 import { SETTINGS_VALUE_FIELD, classOn } from "./capture-middleware"
+import { propertyValueToPush, wholeValueToPush } from "./settings-properties"
 import {
+  SETTINGS_MERGED_BY_PROPERTY,
   SETTINGS_ROW_ID,
   SYNCED_TABLES,
   SYNC_SCHEMA_VERSION,
@@ -103,7 +105,21 @@ function payloadFor(
   if (!row || !clocks) return null
   const policy = TABLE_POLICIES[entry.table]
   const f: Record<string, ClockedValue> = {}
-  if (entry.table === "settings") {
+  if (entry.table === "settings" && SETTINGS_MERGED_BY_PROPERTY.has(entry.rowId)) {
+    // Merged by property: each queued property with its own clock, and the
+    // whole-write field as the properties it still stands for.
+    const value = row[entry.rowId]
+    for (const name of entry.fields) {
+      const clock = clocks.fields[name]
+      if (!clock) continue
+      f[name] = [
+        name === SETTINGS_VALUE_FIELD
+          ? wholeValueToPush(value, clocks.fields)
+          : propertyValueToPush(value, name),
+        clock,
+      ]
+    }
+  } else if (entry.table === "settings") {
     const clock = clocks.fields[SETTINGS_VALUE_FIELD]
     if (!clock) return null
     f[SETTINGS_VALUE_FIELD] = [row[entry.rowId] ?? null, clock]

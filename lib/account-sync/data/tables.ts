@@ -36,10 +36,14 @@ export type FieldPolicy = "sync" | "local" | "key"
 
 /**
  * The sync schema version (protocol §9): raise it when a synced field is
- * added or starts syncing. An op from a higher version is parked until this
- * build is updated, so an older build never drops what it cannot read.
+ * added or starts syncing, or a settings key changes how it merges. An op
+ * from a higher version is parked until this build is updated, so an older
+ * build never drops what it cannot read.
+ *
+ * 2: session creator provenance. 3: settings keys merged by property
+ * ({@link SETTINGS_MERGED_BY_PROPERTY}).
  */
-export const SYNC_SCHEMA_VERSION = 2
+export const SYNC_SCHEMA_VERSION = 3
 
 export interface TablePolicy {
   table: SyncedTableName
@@ -374,6 +378,21 @@ export const SYNCED_SETTINGS_KEYS: ReadonlySet<string> = new Set(
     .filter(([, entry]) => entry.category === "shared")
     .map(([key]) => key)
 )
+
+/**
+ * Shared settings keys merged by property (protocol §7.2, §9): each changed
+ * property travels in its own field `value.<property>`, so two devices that
+ * change different properties at once both keep their change. Only for a key
+ * whose value is an object of independent preferences that never hold `null`;
+ * properties that must change together stay a key merged as a whole. Part of
+ * the sync schema: adding or removing a key raises {@link SYNC_SCHEMA_VERSION}.
+ *
+ * - `profile`: name, bio, pronouns, status, avatar and time zone are edited
+ *   one at a time; `updatedAt` follows the latest edit.
+ */
+export const SETTINGS_MERGED_BY_PROPERTY: ReadonlySet<string> = new Set([
+  "profile",
+] satisfies (keyof AppSettings)[])
 
 const SETTINGS_FIELDS: Readonly<Record<string, FieldPolicy>> = Object.fromEntries(
   Object.keys(SETTINGS_SYNC).map((key) => [key, SYNCED_SETTINGS_KEYS.has(key) ? "sync" : "local"])

@@ -158,23 +158,57 @@ describe("capture once armed", () => {
   it("splits the settings row per shared key", async () => {
     const db = await freshDb()
     await arm(db)
-    await db.settings.put({
-      id: "singleton",
-      profile: { displayName: "A" },
-      gitSettings: {},
-    } as never)
+    await db.settings.put({ id: "singleton", theme: "dark", gitSettings: {} } as never)
     expect(
       (await db.accountSyncOutbox.toArray()).map((row) => [row.table, row.rowId, row.fields])
-    ).toEqual([["settings", "profile", [SETTINGS_VALUE_FIELD]]])
+    ).toEqual([["settings", "theme", [SETTINGS_VALUE_FIELD]]])
     await db.accountSyncOutbox.clear()
-    await db.settings.put({
-      id: "singleton",
-      profile: { displayName: "A" },
-      gitSettings: { x: 1 },
-    } as never)
+    await db.settings.put({ id: "singleton", theme: "dark", gitSettings: { x: 1 } } as never)
     expect(await db.accountSyncOutbox.count()).toBe(0)
     await db.settings.clear()
     expect(await db.accountSyncOutbox.count()).toBe(0)
+    db.close()
+  })
+
+  it("records a key merged by property one changed property at a time", async () => {
+    // The whole profile travelled as one value, so two devices editing
+    // different properties at once kept only one of the edits.
+    const db = await freshDb()
+    await arm(db)
+    await db.settings.put({
+      id: "singleton",
+      profile: { displayName: "Ada", bio: "old" },
+    } as never)
+    await db.accountSyncOutbox.clear()
+    await db.syncFieldClocks.clear()
+    await db.settings.update("singleton", { profile: { displayName: "Ada", bio: "new" } })
+    expect((await db.accountSyncOutbox.get(["settings", "profile"]))?.fields).toEqual(["value.bio"])
+    expect(Object.keys((await db.syncFieldClocks.get(["settings", "profile"]))!.fields)).toEqual([
+      "value.bio",
+    ])
+    // A dotted key path changes just that property too.
+    await db.settings.update("singleton", { "profile.pronouns": "she/her" } as never)
+    expect((await db.accountSyncOutbox.get(["settings", "profile"]))?.fields).toEqual([
+      "value.bio",
+      "value.pronouns",
+    ])
+    db.close()
+  })
+
+  it("records clearing a key merged by property as one whole write", async () => {
+    const db = await freshDb()
+    await arm(db)
+    await db.settings.put({ id: "singleton", profile: { displayName: "Ada", bio: "x" } } as never)
+    const before = (await db.syncFieldClocks.get(["settings", "profile"]))!.fields
+    expect(Object.keys(before).sort()).toEqual(["value.bio", "value.displayName"])
+    await db.settings.update("singleton", { profile: undefined } as never)
+    const after = (await db.syncFieldClocks.get(["settings", "profile"]))!.fields
+    // Older property clocks go: the clear stands for every property.
+    expect(Object.keys(after)).toEqual([SETTINGS_VALUE_FIELD])
+    expect(after[SETTINGS_VALUE_FIELD]! > before["value.bio"]!).toBe(true)
+    expect((await db.accountSyncOutbox.get(["settings", "profile"]))?.fields).toEqual([
+      SETTINGS_VALUE_FIELD,
+    ])
     db.close()
   })
 
@@ -185,10 +219,10 @@ describe("capture once armed", () => {
     const db = await freshDb()
     await arm(db, { content: false, settings: false })
     await db.sessions.put(session("s1"))
-    await db.settings.put({ id: "singleton", profile: { displayName: "B" } } as never)
+    await db.settings.put({ id: "singleton", theme: "dark" } as never)
     expect(await db.accountSyncOutbox.get(["sessions", "s1"])).toBeDefined()
-    expect(await db.accountSyncOutbox.get(["settings", "profile"])).toBeDefined()
-    expect((await db.syncFieldClocks.get(["settings", "profile"]))?.fields).toHaveProperty(
+    expect(await db.accountSyncOutbox.get(["settings", "theme"])).toBeDefined()
+    expect((await db.syncFieldClocks.get(["settings", "theme"]))?.fields).toHaveProperty(
       SETTINGS_VALUE_FIELD
     )
     db.close()

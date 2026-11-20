@@ -50,7 +50,10 @@ description: Phase 3a of account sync — chats, messages, characters, skills, m
 
 Every field of every synced row type is classified `sync` or `local` in `tables.ts`, typed
 against the row type, so a new field fails the typecheck until someone decides. Settings travel
-as one virtual row per key. Two switches under **What syncs** turn content and shared settings
+as one virtual row per key. A key whose value is an object of independent preferences merges by
+property (`SETTINGS_MERGED_BY_PROPERTY`, so far `profile`): each changed property travels on its own,
+so a name changed on one device and a bio edited on another at the same time both stay. Two
+switches under **What syncs** turn content and shared settings
 off. A class that is off neither sends nor applies, but its writes are still captured with their
 own clocks and wait in the outbox. Turning it back on sends them, seeds rows that have no clock
 yet and pulls from the start of the log, so where both sides changed the same key the newer

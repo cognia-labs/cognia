@@ -201,6 +201,70 @@ describe("applyBatches", () => {
     closeAll(devices)
   })
 
+  it("merges a key merged by property one property at a time, by clock", async () => {
+    const { a, devices, depsFor, at, fromB, batch } = await setup()
+    const aId = (await a.keys()).deviceId
+    await a.db.settings.put({
+      id: "singleton",
+      profile: { displayName: "Ada", bio: "mine" },
+    } as never)
+    // This device's own bio edit is newer than anything below.
+    await a.db.syncFieldClocks.put({
+      table: "settings",
+      rowId: "profile",
+      fields: {
+        "value.displayName": encodeHlc({ ms: 1_000, c: 0, deviceId: aId }),
+        "value.bio": encodeHlc({ ms: 9_000, c: 0, deviceId: aId }),
+      },
+    })
+    await applyBatches(await depsFor(), [
+      batch([
+        await fromB({
+          t: "settings",
+          id: "profile",
+          k: "upsert",
+          f: {
+            "value.displayName": ["Grace", at(2_000)],
+            "value.bio": ["theirs", at(3_000)],
+            "value.pronouns": ["she/her", at(2_000)],
+          },
+        }),
+      ]),
+    ])
+    const row = (await a.db.settings.get("singleton")) as unknown as Record<string, unknown>
+    expect(row.profile).toEqual({ displayName: "Grace", bio: "mine", pronouns: "she/her" })
+    expect((await a.db.syncFieldClocks.get(["settings", "profile"]))!.fields).toEqual({
+      "value.displayName": at(2_000),
+      "value.bio": encodeHlc({ ms: 9_000, c: 0, deviceId: aId }),
+      "value.pronouns": at(2_000),
+    })
+    // A device on the older schema writes the whole profile: what it lacks is
+    // removed as of its clock, but not this device's newer bio.
+    await applyBatches(await depsFor(), [
+      batch(
+        [
+          await fromB(
+            {
+              t: "settings",
+              id: "profile",
+              k: "upsert",
+              f: { value: [{ displayName: "Old client" }, at(4_000)] },
+            },
+            { schemaVer: 2 }
+          ),
+        ],
+        2
+      ),
+    ])
+    expect(
+      ((await a.db.settings.get("singleton")) as never as { profile: unknown }).profile
+    ).toEqual({
+      displayName: "Old client",
+      bio: "mine",
+    })
+    closeAll(devices)
+  })
+
   it("parks ops from a newer schema or a newer epoch, and replays them once it can", async () => {
     const { a, devices, depsFor, at, fromB, batch } = await setup()
     const before = await depsFor()
