@@ -593,6 +593,7 @@ export type ParseDiagnosticCode =
   | "native_parse_fallback"
   | "sparse_text_layer"
   | "table_merges_projected"
+  | "format_mismatch"
 
 export interface ParseDiagnostic {
   code: ParseDiagnosticCode

@@ -26,6 +26,7 @@ import {
 } from "./parse-summary"
 import { buildDocumentStructure } from "./document-structure"
 import { columnLetters, delimitedTable, sheetTable, tableToMarkdown } from "./document-tables"
+import { checkContainer } from "./format-signature"
 import { DOCUMENT_PROCESSING_VERSION, parseConfigHash } from "./parse-identity"
 import { mapWordMessages, attachDiagnosticToError } from "./parse-diagnostics"
 import {
@@ -385,6 +386,14 @@ export async function processDocumentAsync(
     lineCount: 0,
     wordCount: 0,
   }
+  // The bytes must be the container the extension claims, before any parser
+  // guesses (SheetJS reads plain text as a one-cell workbook).
+  const head = typeof data === "string" ? stringToArrayBuffer(data.slice(0, 4096)) : data
+  const formatWarning = checkContainer(
+    getFileExtension(filename),
+    new Uint8Array(head, 0, Math.min(head.byteLength, 4096))
+  )
+
   let parseResult: ProcessedDocument["parseResult"]
   let parseSummary: ParseSummary | undefined
   let parseDiagnostics: ParseDiagnostic[] = []
@@ -750,6 +759,7 @@ export async function processDocumentAsync(
   if (parseSummary) {
     metadata = { ...metadata, parseSummary }
   }
+  if (formatWarning) parseDiagnostics = [formatWarning, ...parseDiagnostics]
 
   const tables = typedTables(type, parseResult)
   if (type === "html") {

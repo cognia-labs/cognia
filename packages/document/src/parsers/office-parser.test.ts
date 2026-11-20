@@ -90,6 +90,22 @@ describe("Office Parser", () => {
       ])
     })
 
+    it("hands mammoth the bytes in the form its Node build reads, too", async () => {
+      // mammoth's Node build reads only `buffer`; its browser build only
+      // `arrayBuffer`. The CLI runs the Node one.
+      mammothMock.convertToHtml.mockResolvedValue({ value: "<p>x</p>", messages: [] })
+      mammothMock.extractRawText.mockResolvedValue({ value: "x" })
+      const zip = new JSZip()
+      zip.file("word/document.xml", "<w:document/>")
+      const docx = await zip.generateAsync({ type: "arraybuffer" })
+      await parseWord(docx, { extractMetadata: false })
+      const [input] = mammothMock.convertToHtml.mock.calls.at(-1)!
+      expect(input.arrayBuffer).toBe(docx)
+      expect(Buffer.isBuffer(input.buffer)).toBe(true)
+      expect(Buffer.compare(input.buffer, Buffer.from(docx))).toBe(0)
+      expect(mammothMock.extractRawText.mock.calls.at(-1)![0]).toBe(input)
+    })
+
     it("gives a document without tables no tables field", async () => {
       mammothMock.convertToHtml.mockResolvedValue({ value: "<p>Body</p>", messages: [] })
       mammothMock.extractRawText.mockResolvedValue({ value: "Body" })

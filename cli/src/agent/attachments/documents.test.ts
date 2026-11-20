@@ -80,4 +80,23 @@ describe("extractRichDocBlock", () => {
       nodeFs.rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it("reads a real .docx under Node, where mammoth runs its Node build", async () => {
+    const { Document, Packer, Paragraph } = await import("docx")
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), "doc-"))
+    try {
+      const document = new Document({
+        sections: [{ children: [new Paragraph("会议纪要 Minutes")] }],
+      })
+      nodeFs.writeFileSync(nodePath.join(dir, "notes.docx"), await Packer.toBuffer(document))
+      // It failed with "Could not find file in options": the Node build reads
+      // `buffer`, not the `arrayBuffer` the browser build reads.
+      expect(await extractRichDocBlock("notes.docx", dir)).toMatchObject({
+        ok: true,
+        text: '<file path="notes.docx">\n会议纪要 Minutes\n</file>',
+      })
+    } finally {
+      nodeFs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

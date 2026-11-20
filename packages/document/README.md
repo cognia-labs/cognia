@@ -27,6 +27,17 @@ of any binary source fingerprint. Section IDs derive from parent/title paths
 and repeated-heading occurrences, so body-only edits retain section identity.
 Optional summaries are navigation aids; readers answer from original slices.
 
+Before any parser runs, `processDocumentAsync` checks the bytes against the
+extension (`format-signature.ts`): a ZIP-package format (OOXML, ODF, EPUB), a
+legacy Office file or a PDF whose bytes are something else is refused with a
+`format_mismatch` diagnostic naming what they look like. An `.xls` that is
+really HTML, CSV, SYLK or SpreadsheetML (Excel reads those too) and an `.rtf`
+without an RTF header only warn. `acceptance-corpus.test.ts` reads a fixed
+bilingual corpus through the real parsers and checks text, sections, tables,
+locators and parse identity separately; its baseline and what it does not
+cover (PDF, OCR, OLE files) are recorded under
+`docs/evidence/2026-11-18-document-parsing-export-gap-audit.probes/`.
+
 `structure.parse` (`DocumentParseIdentity`) says how the structure was
 produced: the reader (`pdfjs`, `native-pdf`, `mammoth`, `sheetjs`, `odf`,
 `pptx`, `anydoc` with the version it reports, `html`, `csv`, ...), the

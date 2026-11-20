@@ -118,8 +118,9 @@ export async function parseWord(
     convertOptions.styleMap = options.styleMap
   }
 
-  const result = await mammoth.default.convertToHtml({ arrayBuffer: data }, convertOptions)
-  const textResult = await mammoth.default.extractRawText({ arrayBuffer: data })
+  const input = mammothInput(data)
+  const result = await mammoth.default.convertToHtml(input, convertOptions)
+  const textResult = await mammoth.default.extractRawText(input)
 
   const messages: WordMessage[] = result.messages.map((msg) => ({
     type: msg.type as "warning" | "error",
@@ -497,6 +498,23 @@ export function convertSheetToText(
   }
 
   return lines.join("\n")
+}
+
+/**
+ * The document for either of mammoth's builds. The app bundles its browser
+ * build (through the package's `browser` field), which reads `arrayBuffer`;
+ * Node hosts (the CLI's attachments) load its Node build, which reads only
+ * `buffer` or `path` and refuses an `arrayBuffer` with "Could not find file in
+ * options". Where Node's `Buffer` exists both keys are given, over the same
+ * bytes.
+ */
+function mammothInput(data: ArrayBuffer): { arrayBuffer: ArrayBuffer } {
+  if (typeof Buffer === "undefined") return { arrayBuffer: data }
+  const input: { arrayBuffer: ArrayBuffer; buffer: Buffer } = {
+    arrayBuffer: data,
+    buffer: Buffer.from(data),
+  }
+  return input
 }
 
 /**

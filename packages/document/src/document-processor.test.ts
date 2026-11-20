@@ -21,6 +21,20 @@ import {
 } from "./parsers/open-document-parser"
 import { AnyDocParseError, parseLegacyOfficeWithAnyDoc } from "./parsers/anydoc-parser"
 
+/**
+ * Eight bytes that open the way a real file of `filename`'s format does, for
+ * the mocked parsers: the processor checks the container signature first.
+ */
+function fileBytes(filename: string): ArrayBuffer {
+  const extension = filename.split(".").pop()!.toLowerCase()
+  const head = ["doc", "xls", "ppt"].includes(extension)
+    ? [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
+    : extension === "pdf"
+      ? Array.from("%PDF-1.7", (char) => char.charCodeAt(0))
+      : [0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]
+  return Uint8Array.from(head).buffer
+}
+
 jest.mock("./parsers/anydoc-parser", () => ({
   ...jest.requireActual<typeof import("./parsers/anydoc-parser")>("./parsers/anydoc-parser"),
   parseLegacyOfficeWithAnyDoc: jest.fn(),
@@ -423,7 +437,7 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes legacy Word documents as Markdown through AnyDoc", async () => {
-    const input = Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0]).buffer
+    const input = Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer
     mockParseLegacyOfficeWithAnyDoc.mockResolvedValueOnce({
       markdown: "# Legacy Word\n\nReadable body",
       format: "doc",
@@ -462,9 +476,14 @@ describe("processDocumentAsync", () => {
       new AnyDocParseError("The file is actually docx", "formatMismatch", "docx")
     )
 
-    const result = await processDocumentAsync("mislabeled-word", "modern.doc", new ArrayBuffer(8), {
-      anyDoc: { enabled: true },
-    })
+    const result = await processDocumentAsync(
+      "mislabeled-word",
+      "modern.doc",
+      fileBytes("modern.doc"),
+      {
+        anyDoc: { enabled: true },
+      }
+    )
 
     expect(parseWord).toHaveBeenCalled()
     expect(result.content).toContain("Parsed Word content")
@@ -481,7 +500,7 @@ describe("processDocumentAsync", () => {
     mockParseLegacyOfficeWithAnyDoc.mockRejectedValueOnce(mismatch)
 
     await expect(
-      processDocumentAsync("wrong-word", "wrong.doc", new ArrayBuffer(8), {
+      processDocumentAsync("wrong-word", "wrong.doc", fileBytes("wrong.doc"), {
         anyDoc: { enabled: true },
       })
     ).rejects.toBe(mismatch)
@@ -494,7 +513,7 @@ describe("processDocumentAsync", () => {
     mockParseLegacyOfficeWithAnyDoc.mockRejectedValueOnce(cancellation)
 
     await expect(
-      processDocumentAsync("cancelled-word", "cancelled.doc", new ArrayBuffer(8), {
+      processDocumentAsync("cancelled-word", "cancelled.doc", fileBytes("cancelled.doc"), {
         anyDoc: { enabled: true, signal: controller.signal, timeoutMs: 15_000 },
       })
     ).rejects.toBe(cancellation)
@@ -505,18 +524,22 @@ describe("processDocumentAsync", () => {
   })
 
   it("keeps the AnyDoc rollout gate disabled by default", async () => {
-    const word = await processDocumentAsync("gated-word", "legacy.doc", new ArrayBuffer(8))
+    const word = await processDocumentAsync("gated-word", "legacy.doc", fileBytes("legacy.doc"))
 
     expect(word.parseResult).toBeDefined()
     expect(mockParseLegacyOfficeWithAnyDoc).not.toHaveBeenCalled()
     await expect(
-      processDocumentAsync("gated-presentation", "legacy.ppt", new ArrayBuffer(8))
+      processDocumentAsync("gated-presentation", "legacy.ppt", fileBytes("legacy.ppt"))
     ).rejects.toThrow("convert to .pptx")
     expect(mockParseLegacyOfficeWithAnyDoc).not.toHaveBeenCalled()
   })
 
   it("processes macro-enabled word files via office parser", async () => {
-    const result = await processDocumentAsync("doc-async-word", "template.docm", new ArrayBuffer(8))
+    const result = await processDocumentAsync(
+      "doc-async-word",
+      "template.docm",
+      fileBytes("template.docm")
+    )
 
     expect(parseWord).toHaveBeenCalled()
     expect(result.type).toBe("word")
@@ -536,7 +559,7 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes pdf string data through the async parser and generates chunks", async () => {
-    const result = await processDocumentAsync("doc-async-pdf", "report.pdf", "%PDF body", {
+    const result = await processDocumentAsync("doc-async-pdf", "report.pdf", "%PDF-1.7 body", {
       generateChunks: true,
     })
 
@@ -554,7 +577,7 @@ describe("processDocumentAsync", () => {
   })
 
   it("uses raw PDF content when embeddable extraction is disabled", async () => {
-    const result = await processDocumentAsync("doc-async-pdf-raw", "report.pdf", "%PDF body", {
+    const result = await processDocumentAsync("doc-async-pdf-raw", "report.pdf", "%PDF-1.7 body", {
       extractEmbeddable: false,
     })
 
@@ -566,7 +589,7 @@ describe("processDocumentAsync", () => {
     const result = await processDocumentAsync(
       "doc-async-excel",
       "financials.xlsm",
-      new ArrayBuffer(8)
+      fileBytes("financials.xlsm")
     )
 
     expect(parseExcel).toHaveBeenCalled()
@@ -578,7 +601,7 @@ describe("processDocumentAsync", () => {
     const result = await processDocumentAsync(
       "doc-no-word-extract",
       "notes.docx",
-      new ArrayBuffer(8),
+      fileBytes("notes.docx"),
       {
         extractEmbeddable: false,
       }
@@ -592,7 +615,7 @@ describe("processDocumentAsync", () => {
     const result = await processDocumentAsync(
       "doc-no-excel-extract",
       "financials.xlsx",
-      new ArrayBuffer(8),
+      fileBytes("financials.xlsx"),
       {
         extractEmbeddable: false,
       }
@@ -603,7 +626,11 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes presentation files via presentation parser", async () => {
-    const result = await processDocumentAsync("doc-async-1", "slides.pptx", new ArrayBuffer(8))
+    const result = await processDocumentAsync(
+      "doc-async-1",
+      "slides.pptx",
+      fileBytes("slides.pptx")
+    )
 
     expect(result.type).toBe("presentation")
     expect(result.content).toContain("Slide 1 content")
@@ -622,7 +649,7 @@ describe("processDocumentAsync", () => {
     const result = await processDocumentAsync(
       "doc-no-presentation-extract",
       "slides.pptx",
-      new ArrayBuffer(8),
+      fileBytes("slides.pptx"),
       {
         extractEmbeddable: false,
       }
@@ -659,7 +686,7 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes epub files via epub parser", async () => {
-    const result = await processDocumentAsync("doc-async-3", "book.epub", new ArrayBuffer(8))
+    const result = await processDocumentAsync("doc-async-3", "book.epub", fileBytes("book.epub"))
 
     expect(result.type).toBe("epub")
     expect(result.content).toContain("Chapter 1 text")
@@ -671,7 +698,7 @@ describe("processDocumentAsync", () => {
     const result = await processDocumentAsync(
       "doc-no-epub-extract",
       "book.epub",
-      new ArrayBuffer(8),
+      fileBytes("book.epub"),
       {
         extractEmbeddable: false,
       }
@@ -730,7 +757,7 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes open document text files via dedicated parser", async () => {
-    const result = await processDocumentAsync("doc-async-odt", "notes.odt", new ArrayBuffer(8))
+    const result = await processDocumentAsync("doc-async-odt", "notes.odt", fileBytes("notes.odt"))
 
     expect(parseOpenDocumentText).toHaveBeenCalled()
     expect(result.type).toBe("word")
@@ -738,7 +765,11 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes open document spreadsheets via dedicated parser", async () => {
-    const result = await processDocumentAsync("doc-async-ods", "budget.ods", new ArrayBuffer(8))
+    const result = await processDocumentAsync(
+      "doc-async-ods",
+      "budget.ods",
+      fileBytes("budget.ods")
+    )
 
     expect(parseOpenDocumentSpreadsheet).toHaveBeenCalled()
     expect(result.type).toBe("excel")
@@ -746,7 +777,11 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes open document presentations via dedicated parser", async () => {
-    const result = await processDocumentAsync("doc-async-odp", "roadmap.odp", new ArrayBuffer(8))
+    const result = await processDocumentAsync(
+      "doc-async-odp",
+      "roadmap.odp",
+      fileBytes("roadmap.odp")
+    )
 
     expect(parseOpenDocumentPresentation).toHaveBeenCalled()
     expect(result.type).toBe("presentation")
@@ -754,7 +789,7 @@ describe("processDocumentAsync", () => {
   })
 
   it("processes legacy PowerPoint documents as Markdown through AnyDoc", async () => {
-    const input = Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0]).buffer
+    const input = Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer
     mockParseLegacyOfficeWithAnyDoc.mockResolvedValueOnce({
       markdown: "# Legacy deck\n\nSlide body",
       format: "ppt",
@@ -795,7 +830,7 @@ describe("processDocumentAsync", () => {
     const result = await processDocumentAsync(
       "mislabeled-presentation",
       "modern.ppt",
-      new ArrayBuffer(8),
+      fileBytes("modern.ppt"),
       { anyDoc: { enabled: true } }
     )
 
@@ -814,7 +849,7 @@ describe("processDocumentAsync", () => {
     mockParseLegacyOfficeWithAnyDoc.mockRejectedValueOnce(mismatch)
 
     await expect(
-      processDocumentAsync("wrong-presentation", "wrong.ppt", new ArrayBuffer(8), {
+      processDocumentAsync("wrong-presentation", "wrong.ppt", fileBytes("wrong.ppt"), {
         anyDoc: { enabled: true },
       })
     ).rejects.toBe(mismatch)
@@ -825,7 +860,7 @@ describe("processDocumentAsync", () => {
     jest.mocked(parseWord).mockRejectedValueOnce(new Error("zip failure"))
 
     await expect(
-      processDocumentAsync("doc-async-docm-error", "protected.docm", new ArrayBuffer(8))
+      processDocumentAsync("doc-async-docm-error", "protected.docm", fileBytes("protected.docm"))
     ).rejects.toMatchObject({
       message: expect.stringContaining("password protected or corrupted"),
       diagnostic: expect.objectContaining({
@@ -839,7 +874,7 @@ describe("processDocumentAsync", () => {
     jest.mocked(parseWord).mockRejectedValueOnce(new Error("password protected document"))
 
     await expect(
-      processDocumentAsync("doc-protected-word", "protected.docx", new ArrayBuffer(8))
+      processDocumentAsync("doc-protected-word", "protected.docx", fileBytes("protected.docx"))
     ).rejects.toMatchObject({
       message: "password protected document",
       diagnostic: expect.objectContaining({
@@ -853,7 +888,7 @@ describe("processDocumentAsync", () => {
     jest.mocked(parseExcel).mockRejectedValueOnce("zip failure")
 
     await expect(
-      processDocumentAsync("doc-async-xlsx-error", "broken.xlsx", new ArrayBuffer(8))
+      processDocumentAsync("doc-async-xlsx-error", "broken.xlsx", fileBytes("broken.xlsx"))
     ).rejects.toMatchObject({
       message: expect.stringContaining("spreadsheet file"),
       diagnostic: expect.objectContaining({
@@ -867,7 +902,7 @@ describe("processDocumentAsync", () => {
     jest.mocked(parsePresentation).mockRejectedValueOnce(new Error("zip failure"))
 
     await expect(
-      processDocumentAsync("doc-async-pptm-error", "protected.pptm", new ArrayBuffer(8))
+      processDocumentAsync("doc-async-pptm-error", "protected.pptm", fileBytes("protected.pptm"))
     ).rejects.toThrow("password protected or corrupted")
   })
 
@@ -971,7 +1006,7 @@ describe("processDocumentAsync", () => {
       processDocumentAsync("big", "notes.txt", "a".repeat(37), { maxFileSize: 2 })
     ).rejects.toMatchObject({ name: "DocumentLimitError", scope: "file-bytes", limit: 2 })
     await expect(
-      processDocumentAsync("big", "deck.pptx", new ArrayBuffer(8), { maxFileSize: 4 })
+      processDocumentAsync("big", "deck.pptx", fileBytes("deck.pptx"), { maxFileSize: 4 })
     ).rejects.toMatchObject({ scope: "file-bytes", observed: 8 })
     // Three characters, nine bytes.
     expect(() => processDocument("cjk", "notes.txt", "中文字", { maxFileSize: 8 })).toThrow(
@@ -1099,14 +1134,14 @@ describe("new document type detection", () => {
 
 describe("complete source locators", () => {
   it("preserves all PDF page numbers and exact page text", async () => {
-    const result = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8))
+    const result = await processDocumentAsync("pdf", "document.pdf", fileBytes("document.pdf"))
     expect(result.sourceSegments).toEqual([
       { id: "pdf:page:1", text: "PDF page one", locator: { type: "page", page: 1 } },
       { id: "pdf:page:2", text: "PDF page two", locator: { type: "page", page: 2 } },
     ])
   })
   it("preserves spreadsheet sheet names and cell ranges", async () => {
-    const result = await processDocumentAsync("book", "book.xlsx", new ArrayBuffer(8))
+    const result = await processDocumentAsync("book", "book.xlsx", fileBytes("book.xlsx"))
     expect(result.sourceSegments?.[0]).toEqual({
       id: "book:sheet:1",
       text: '"Value"',
@@ -1114,7 +1149,7 @@ describe("complete source locators", () => {
     })
   })
   it("preserves all slide numbers and slide text", async () => {
-    const result = await processDocumentAsync("deck", "deck.pptx", new ArrayBuffer(8))
+    const result = await processDocumentAsync("deck", "deck.pptx", fileBytes("deck.pptx"))
     expect(result.sourceSegments).toEqual([
       { id: "deck:slide:1", text: "Slide 1 content", locator: { type: "slide", slide: 1 } },
       { id: "deck:slide:2", text: "Slide 2 content", locator: { type: "slide", slide: 2 } },
@@ -1130,7 +1165,7 @@ describe("complete source locators", () => {
     const controller = new AbortController()
     controller.abort()
     await expect(
-      processDocumentAsync("cancelled", "document.pdf", new ArrayBuffer(8), {
+      processDocumentAsync("cancelled", "document.pdf", fileBytes("document.pdf"), {
         signal: controller.signal,
       })
     ).rejects.toMatchObject({ name: "AbortError" })
@@ -1236,7 +1271,7 @@ describe("typed tables (G3)", () => {
       ],
       sheetNames: ["Sales"],
     })
-    const result = await processDocumentAsync("book", "sales.xlsx", new ArrayBuffer(8))
+    const result = await processDocumentAsync("book", "sales.xlsx", fileBytes("sales.xlsx"))
     expect(result.structure?.tables).toEqual([
       expect.objectContaining({
         index: 1,
@@ -1264,7 +1299,7 @@ describe("typed tables (G3)", () => {
       sheetNames: ["A", "B"],
     })
     await expect(
-      processDocumentAsync("wide", "wide.xlsx", new ArrayBuffer(8))
+      processDocumentAsync("wide", "wide.xlsx", fileBytes("wide.xlsx"))
     ).rejects.toMatchObject({ name: "DocumentLimitError", scope: "expanded-cells" })
   })
 
@@ -1290,7 +1325,7 @@ describe("typed tables (G3)", () => {
         },
       ],
     })
-    const result = await processDocumentAsync("report", "report.docx", new ArrayBuffer(8))
+    const result = await processDocumentAsync("report", "report.docx", fileBytes("report.docx"))
     const [table] = result.structure?.tables ?? []
     expect(table.locator).toEqual({ type: "text", start: 9, end: 28 })
     expect(result.content.slice(9, 28)).toBe("Name\n\nScore\n\nAda\n\n9")
@@ -1300,7 +1335,7 @@ describe("typed tables (G3)", () => {
 describe("parse identity (G1)", () => {
   it("records the reader, the processing version, the options and when it ran", async () => {
     const before = Date.now()
-    const result = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8))
+    const result = await processDocumentAsync("pdf", "document.pdf", fileBytes("document.pdf"))
     expect(result.structure?.parse).toEqual({
       parser: "pdfjs",
       processingVersion: DOCUMENT_PROCESSING_VERSION,
@@ -1317,18 +1352,23 @@ describe("parse identity (G1)", () => {
   it("names the native PDF reader when it read the file", async () => {
     const pdf = await jest.mocked(parsePDF).getMockImplementation()!(new ArrayBuffer(8))
     jest.mocked(parsePDF).mockResolvedValueOnce({ ...pdf, engine: "native-pdf" })
-    const result = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8))
+    const result = await processDocumentAsync("pdf", "document.pdf", fileBytes("document.pdf"))
     expect(result.structure?.parse?.parser).toBe("native-pdf")
   })
 
   it("gives options that change the output a different config hash", async () => {
-    const outline = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8))
-    const noOutline = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8), {
+    const outline = await processDocumentAsync("pdf", "document.pdf", fileBytes("document.pdf"))
+    const noOutline = await processDocumentAsync("pdf", "document.pdf", fileBytes("document.pdf"), {
       extractPdfOutline: false,
     })
-    const projection = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8), {
-      extractEmbeddable: false,
-    })
+    const projection = await processDocumentAsync(
+      "pdf",
+      "document.pdf",
+      fileBytes("document.pdf"),
+      {
+        extractEmbeddable: false,
+      }
+    )
     expect(noOutline.structure?.parse?.configHash).not.toBe(outline.structure?.parse?.configHash)
     // The embedding projection is not the parse.
     expect(projection.structure?.parse?.configHash).toBe(outline.structure?.parse?.configHash)
@@ -1340,7 +1380,7 @@ describe("parse identity (G1)", () => {
       format: "doc",
       engineVersion: "0.1.9",
     })
-    const result = await processDocumentAsync("legacy", "legacy.doc", new ArrayBuffer(8), {
+    const result = await processDocumentAsync("legacy", "legacy.doc", fileBytes("legacy.doc"), {
       anyDoc: { enabled: true },
     })
     expect(result.structure?.parse).toMatchObject({ parser: "anydoc", parserVersion: "0.1.9" })
@@ -1348,9 +1388,9 @@ describe("parse identity (G1)", () => {
 
   it("names the reader of each format", async () => {
     const readers: Array<[string, string | ArrayBuffer, string]> = [
-      ["report.docx", new ArrayBuffer(8), "mammoth"],
-      ["book.xlsx", new ArrayBuffer(8), "sheetjs"],
-      ["deck.pptx", new ArrayBuffer(8), "pptx"],
+      ["report.docx", fileBytes("report.docx"), "mammoth"],
+      ["book.xlsx", fileBytes("book.xlsx"), "sheetjs"],
+      ["deck.pptx", fileBytes("deck.pptx"), "pptx"],
       ["page.html", "<p>x</p>", "html"],
       ["rows.csv", "a,b\n1,2", "csv"],
       ["notes.md", "# Notes", "markdown"],
@@ -1373,7 +1413,7 @@ describe("parse identity (G1)", () => {
         { level: 1, text: "Risks" },
       ],
     })
-    const result = await processDocumentAsync("plan", "plan.docx", new ArrayBuffer(8))
+    const result = await processDocumentAsync("plan", "plan.docx", fileBytes("plan.docx"))
     expect(result.structure?.nodes.map((node) => node.title)).toEqual(["", "Overview", "Risks"])
   })
 })
