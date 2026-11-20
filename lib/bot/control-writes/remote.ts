@@ -31,7 +31,6 @@
  */
 
 import { enqueue, enqueueOnChannel } from "@/lib/db/mobile-outbound-queue"
-import { sha256Uuid } from "@/lib/share/hash"
 import type { MobileOutboundJobRow } from "@/lib/db/mobile-outbound-types"
 import { setMirroredBotTriggerOverride } from "@/lib/db/bot-installations"
 
@@ -63,35 +62,6 @@ export async function botWriteIdempotencyKey(
       // derived key would fold the second press onto the first.
       return freshId()
   }
-}
-
-/** UUID v8: a namespaced digest, with the complete delivery identity included. */
-function botControlUuid(key: string): Promise<string> {
-  return sha256Uuid(`cognia:bot-control:${key}`)
-}
-
-/** Upgrade only the two exact legacy Bot key formats at dispatch, without rewriting audit rows. */
-export async function normalizeLegacyBotWriteKey(
-  row: Pick<MobileOutboundJobRow, "id" | "command" | "payload" | "idempotencyKey">
-): Promise<string> {
-  if (
-    row.command === BOT_WRITE_COMMANDS.replayDelivery &&
-    typeof row.payload.deliveryId === "string" &&
-    row.idempotencyKey === `bot-replay:${row.payload.deliveryId}`
-  ) {
-    return botControlUuid(`legacy-replay:${row.id}`)
-  }
-  if (
-    row.command === BOT_WRITE_COMMANDS.setTriggerArmed &&
-    typeof row.payload.installationId === "string" &&
-    typeof row.payload.triggerId === "string" &&
-    typeof row.payload.armed === "boolean" &&
-    row.idempotencyKey ===
-      `bot-arm:${row.payload.installationId}:${row.payload.triggerId}:${row.payload.armed ? 1 : 0}`
-  ) {
-    return botControlUuid(`legacy-arm:${row.id}`)
-  }
-  return row.idempotencyKey
 }
 
 /**

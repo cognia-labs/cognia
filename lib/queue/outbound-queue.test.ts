@@ -104,58 +104,6 @@ describe("createOutboundRunner", () => {
     })
   })
 
-  it("dispatches legacy Bot retry receipts with the native UUID contract without rewriting their audit identity", async () => {
-    const call = jest.fn().mockResolvedValue({ replayed: true })
-    const runner = createOutboundRunner({ dispatcher: { call }, enforceMobile: false, scope })
-    const first = await enqueue({
-      command: "bot_delivery_replay",
-      payload: { deliveryId: "failed-delivery" },
-      idempotencyKey: "bot-replay:failed-delivery",
-    })
-    await enqueue({
-      command: "bot_delivery_replay",
-      payload: { deliveryId: "failed-delivery" },
-      idempotencyKey: "bot-replay:failed-delivery",
-    })
-    await enqueue({
-      command: "bot_trigger_set_armed",
-      payload: { installationId: "i", triggerId: "t", armed: true },
-      idempotencyKey: "bot-arm:i:t:1",
-    })
-    await enqueue({
-      command: "bot_trigger_set_armed",
-      payload: { installationId: "i", triggerId: "t", armed: false },
-      idempotencyKey: "bot-arm:i:t:0",
-    })
-    await enqueue({
-      command: "bot_trigger_set_armed",
-      payload: { installationId: "i", triggerId: "t", armed: true },
-      idempotencyKey: "bot-arm:i:t:1",
-    })
-    await runner.kick()
-    expect((await listByStatus("pending")).map((row) => row.lastError)).toEqual([])
-    const keys = call.mock.calls.map((args) => args[2].idempotencyKey as string)
-    expect(keys).toHaveLength(5)
-    for (const key of keys)
-      expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/)
-    const replayKeys = call.mock.calls
-      .filter((args) => args[0] === "bot_delivery_replay")
-      .map((args) => args[2].idempotencyKey)
-    expect(replayKeys[0]).not.toBe(replayKeys[1])
-    expect(
-      new Set(
-        call.mock.calls
-          .filter((args) => args[0] === "bot_trigger_set_armed")
-          .map((args) => args[2].idempotencyKey)
-      ).size
-    ).toBe(3)
-    expect((await getDb().mobileOutboundQueue.get(first.id))?.idempotencyKey).toBe(
-      "bot-replay:failed-delivery"
-    )
-    expect(await listByStatus("sent")).toHaveLength(5)
-    await runner.stop()
-  })
-
   it("passes current UUID and unrelated malformed command keys unchanged", async () => {
     const call = jest.fn().mockResolvedValue({ ok: true })
     const runner = createOutboundRunner({ dispatcher: { call }, enforceMobile: false, scope })

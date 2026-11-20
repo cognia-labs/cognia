@@ -24,7 +24,6 @@ import { BOT_WRITE_COMMANDS } from "./route"
 import {
   botTriggerChannel,
   botWriteIdempotencyKey,
-  normalizeLegacyBotWriteKey,
   replayBotDeliveryRemotely,
   runBotManuallyRemotely,
   setBotTriggerArmedRemotely,
@@ -62,38 +61,6 @@ describe("botWriteIdempotencyKey", () => {
     expect(next).not.toBe(first)
   })
 
-  it("normalizes only exact legacy Bot receipts, preserving unrelated or malformed keys", async () => {
-    const replay = {
-      id: "old-row",
-      command: "bot_delivery_replay" as const,
-      payload: { deliveryId: "bdl_9" },
-      idempotencyKey: "bot-replay:bdl_9",
-    }
-    expect(await normalizeLegacyBotWriteKey(replay)).toMatch(/^[0-9a-f-]{36}$/)
-    expect(await normalizeLegacyBotWriteKey(replay)).toBe(await normalizeLegacyBotWriteKey(replay))
-    expect(await normalizeLegacyBotWriteKey({ ...replay, id: "next-click" })).not.toBe(
-      await normalizeLegacyBotWriteKey(replay)
-    )
-    expect(await normalizeLegacyBotWriteKey({ ...replay, idempotencyKey: "malformed" })).toBe(
-      "malformed"
-    )
-    expect(await normalizeLegacyBotWriteKey({ ...replay, command: "connector_send" })).toBe(
-      replay.idempotencyKey
-    )
-    expect(await normalizeLegacyBotWriteKey({ ...replay, payload: {} })).toBe(replay.idempotencyKey)
-    const arm = {
-      id: "first-arm",
-      command: "bot_trigger_set_armed" as const,
-      payload: { installationId: "i", triggerId: "t", armed: true },
-      idempotencyKey: "bot-arm:i:t:1",
-    }
-    expect(await normalizeLegacyBotWriteKey(arm)).not.toBe(
-      await normalizeLegacyBotWriteKey({ ...arm, id: "last-arm" })
-    )
-    expect(await normalizeLegacyBotWriteKey(arm)).toBe(await normalizeLegacyBotWriteKey(arm))
-    expect(await normalizeLegacyBotWriteKey({ ...arm, payload: {} })).toBe(arm.idempotencyKey)
-  })
-
   it("mints a FRESH key per manual run, because two presses are two runs", async () => {
     // A derived key would fold the second press onto the first, and there is
     // nothing in the payload that distinguishes them.
@@ -113,32 +80,11 @@ describe("botWriteIdempotencyKey", () => {
   })
 })
 
-it("preserves valid UUIDs and malformed legacy argument shapes", async () => {
+it("relays every Bot write under the key its gesture minted, unchanged", async () => {
   const uuid = crypto.randomUUID()
-  const base = {
-    id: "r",
-    command: "bot_trigger_set_armed" as const,
-    payload: { installationId: "i", triggerId: "t", armed: true },
-    idempotencyKey: "bot-arm:i:t:1",
+  for (const command of Object.values(BOT_WRITE_COMMANDS)) {
+    expect(await botWriteIdempotencyKey(command, {}, () => uuid)).toBe(uuid)
   }
-  for (const payload of [
-    { installationId: "i" },
-    { installationId: "i", triggerId: "t" },
-    { installationId: "i", triggerId: "t", armed: "true" },
-  ]) {
-    expect(await normalizeLegacyBotWriteKey({ ...base, payload })).toBe(base.idempotencyKey)
-  }
-  expect(await normalizeLegacyBotWriteKey({ ...base, idempotencyKey: uuid })).toBe(uuid)
-  expect(
-    await normalizeLegacyBotWriteKey({
-      ...base,
-      payload: { ...base.payload, armed: false },
-      idempotencyKey: "bot-arm:i:t:0",
-    })
-  ).toMatch(/^[0-9a-f-]{36}$/)
-  expect(await botWriteIdempotencyKey(BOT_WRITE_COMMANDS.mutateInstallation, {}, () => uuid)).toBe(
-    uuid
-  )
 })
 
 it("carries optional labels, input and trigger on the same durable receipts", async () => {

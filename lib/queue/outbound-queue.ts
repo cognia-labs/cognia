@@ -401,10 +401,6 @@ export function createOutboundRunner(opts: RunnerOptions): OutboundRunner {
         firstHostStateOffer = offer.firstOffer
       }
       let idempotencyKey = row.idempotencyKey
-      if (row.command === "bot_delivery_replay" || row.command === "bot_trigger_set_armed") {
-        const { normalizeLegacyBotWriteKey } = await import("@/lib/bot/control-writes/remote")
-        idempotencyKey = await normalizeLegacyBotWriteKey(row)
-      }
       // Older queue rows minted nanoids, but the host requires a UUID before
       // dispatch. Derive a stable wire key so retries and restarts retain the
       // same operation without changing the row's audit or HostState identity.

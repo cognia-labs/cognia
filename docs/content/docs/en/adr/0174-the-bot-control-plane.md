@@ -122,17 +122,25 @@ Cognia still reports while its own runtimes are torn down, so checking
 capability first would route a write into a process that has nothing to execute
 it.
 
-### The idempotency key encodes what a replay must do
+### One key per gesture, one order per trigger
 
-Arming uses a key naming the VALUE it sets, `bot-arm:<inst>:<trigger>:<0|1>`, so
-arm, disarm and arm again are three distinct rows and replaying the first still
-leaves the host armed. A toggle command could not be made safe at any key, which
-is why the write is absolute rather than relative.
+Every relayed Bot write (arm, manual run, replay, installation change) mints a
+fresh idempotency key once, when the gesture is made, and every retry of that
+gesture reuses it. A key names the gesture, not what it asks for: two presses of
+Run ARE two runs, and arm, disarm and arm again are three gestures.
 
-A manual run mints a fresh key per press, because two presses ARE two runs and
-only a fresh key distinguishes that from a retry of one. A replay derives its
-key and the host arm additionally requires the row to still be dead-lettered, so
-a duplicate finds nothing to do.
+A key alone cannot order two gestures, so arming carries the order separately.
+The write is absolute (it sets the value, it does not toggle), and one
+trigger's arm commands share an ordered outbound channel: a later gesture waits
+behind an earlier one, so an earlier arm retried after a backoff can no longer
+land after, and undo, a later disarm. A replay is additionally refused unless the
+row can still be replayed, so a duplicate finds nothing to do.
+
+> Amended 2026-11-20. Arming used to derive its key from the value it set
+> (`bot-arm:<inst>:<trigger>:<0|1>`); that folded the first and third of
+> arm/disarm/arm onto one key and still left an earlier retry free to overtake a
+> later write (audit B17). The derived keys and their dispatch-time upgrade are
+> gone.
 
 ### A plugin describes its webhook verification, it does not implement it
 
