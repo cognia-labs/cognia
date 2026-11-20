@@ -15,6 +15,9 @@
 #      server pod's runtime class
 #   7. (project runtime environments, ADR-0183) uncomment agentBundleImage with
 #      a digest-pinned bundle; it is read only while the sandbox pool is on
+#   8. (cloud clusters) uncomment the egress-deny-metadata component to keep
+#      pods away from instance metadata; read its header first (self-hosted
+#      Cilium needs the apiserver allowed, link-local identity agents stop)
 #
 # NOTE: both optional patches live in the SINGLE `patches:` block below —
 # YAML rejects (or silently drops) a duplicated `patches:` key.
@@ -24,6 +27,8 @@ namespace: cognia-tenant-CHANGE-ME
 resources:
   - ../base
   # - runners/pvc.yaml
+# components:
+#   - ../components/egress-deny-metadata
 configMapGenerator:
   - name: cognia-config
     literals:

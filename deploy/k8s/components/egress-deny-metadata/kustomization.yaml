@@ -1,0 +1,46 @@
+# Opt-in: keep every pod in the tenant namespace away from cloud instance
+# metadata, which hands out the node's credentials. Enable it from a tenant
+# overlay:
+#
+#   components:
+#     - ../components/egress-deny-metadata
+#
+# It replaces the egress of the base `default-egress` policy (a stricter
+# policy beside it would change nothing, NetworkPolicies only add up):
+#   - DNS to any resolver, NodeLocal DNSCache (169.254.20.10) included;
+#   - every pod in the cluster, by selector: on Cilium (and GKE Dataplane V2)
+#     an ipBlock does not match pods or nodes, so the CIDR rule below alone
+#     would cut cognia-server off from the workspace runtimes and runners;
+#   - any other address except the link-local range (169.254.169.254 on AWS,
+#     GCP and Azure) and the IPv6 metadata endpoints (fd00:ec2::254 on AWS,
+#     fd20:ce::254 on GCP).
+#
+# Before enabling it:
+#   - Self-hosted Cilium cluster (kube-apiserver on host-network nodes): the
+#     ipBlock rule does not reach the apiserver either. Set Cilium's
+#     `policyCIDRMatchMode: nodes`, or allow the `kube-apiserver` entity with
+#     a CiliumNetworkPolicy, or cognia-server cannot create runner pods.
+#   - Workloads that rely on a link-local identity agent (EKS Pod Identity on
+#     169.254.170.23, GKE Workload Identity's metadata server) lose it.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: NetworkPolicy
+      name: default-egress
+    patch: |-
+      - op: replace
+        path: /spec/egress
+        value:
+          - ports:
+              - { port: 53, protocol: UDP }
+              - { port: 53, protocol: TCP }
+          - to:
+              - namespaceSelector: {}
+          - to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+                  except: [169.254.0.0/16]
+              - ipBlock:
+                  cidr: ::/0
+                  except: [fd00:ec2::254/128, fd20:ce::254/128]

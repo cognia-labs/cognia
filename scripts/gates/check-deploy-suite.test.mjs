@@ -7,6 +7,7 @@ import {
   COMPOSE_T2,
   appImagesOwner,
   checkComposeImagesPublished,
+  checkEgressDenyMetadata,
   checkImageOwners,
   checkComposePluginContexts,
   checkPluginArtifactConsumers,
@@ -140,6 +141,46 @@ const GOOD_WORKSPACE_WRITERS = {
   entrypoints: { "services/workspace-runtime/entrypoint.sh": GOOD_RUNTIME_ENTRYPOINT },
 }
 
+const GOOD_GUARDRAILS = `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-egress
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - {}
+`
+const egressComponent = (egress) => `apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: NetworkPolicy
+      name: default-egress
+    patch: |-
+      - op: replace
+        path: /spec/egress
+        value:
+${egress.replace(/^/gm, "          ")}
+`
+const GOOD_EGRESS_RULES = `- ports:
+    - { port: 53, protocol: UDP }
+    - { port: 53, protocol: TCP }
+- to:
+    - namespaceSelector: {}
+- to:
+    - ipBlock: { cidr: 0.0.0.0/0, except: [169.254.0.0/16] }
+    - ipBlock: { cidr: "::/0", except: ["fd00:ec2::254/128", "fd20:ce::254/128"] }`
+const GOOD_EGRESS_COMPONENT = egressComponent(GOOD_EGRESS_RULES)
+
 const GOOD_DOCKERIGNORE = "node_modules\n# source never enters an image\nplugins\n.git\n"
 
 const GOOD_INPUTS = {
@@ -159,6 +200,8 @@ const GOOD_INPUTS = {
   dockerignore: GOOD_DOCKERIGNORE,
   pluginDockerfiles: { "Dockerfile.web": GOOD_PLUGIN_CONSUMER },
   workspaceWriterDockerfiles: GOOD_WORKSPACE_WRITERS.dockerfiles,
+  egressGuardrails: GOOD_GUARDRAILS,
+  egressDenyMetadataComponent: GOOD_EGRESS_COMPONENT,
   workspaceWriterEntrypoints: GOOD_WORKSPACE_WRITERS.entrypoints,
   workflows: {
     "a.yml": "jobs:\n  x:\n    steps:\n      - uses: pnpm/action-setup@v6\n",
@@ -641,4 +684,54 @@ test("an image stage that runs as root or the base user, or is missing, is a pro
       "deploy/runner/Dockerfile: no `full` stage",
     ]
   )
+})
+
+test("the metadata egress component keeps DNS and in-cluster pods and excludes metadata", () => {
+  assert.deepEqual(
+    checkEgressDenyMetadata({
+      guardrailsText: GOOD_GUARDRAILS,
+      componentText: GOOD_EGRESS_COMPONENT,
+    }),
+    []
+  )
+})
+
+test("a CIDR-only egress replacement is a problem: ipBlock does not match pods on Cilium", () => {
+  // The example `guardrails.yaml` carried before the component: DNS plus one
+  // IPv4 ipBlock. On Cilium it blocked cognia-server from every pod and left
+  // the IPv6 metadata endpoints open.
+  const before =
+    egressComponent(`- ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+- to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [169.254.0.0/16] } }]`)
+  const problems = checkEgressDenyMetadata({
+    guardrailsText: GOOD_GUARDRAILS,
+    componentText: before,
+  })
+  assert.equal(problems.length, 2)
+  assert.match(problems[0], /no rule allowing in-cluster pods by selector/)
+  assert.match(problems[1], /no `::\/0` ipBlock/)
+})
+
+test("a catch-all ipBlock missing a metadata address, or an allow-all rule, is a problem", () => {
+  const leaky = egressComponent(GOOD_EGRESS_RULES.replace(', "fd20:ce::254/128"', "") + "\n- {}")
+  const problems = checkEgressDenyMetadata({
+    guardrailsText: GOOD_GUARDRAILS,
+    componentText: leaky,
+  })
+  assert.deepEqual(
+    problems.map((problem) => problem.replace(/^.*?: /, "").split(",")[0]),
+    [
+      "a rule with neither `to` nor `ports` allows everything again.",
+      "the `::/0` ipBlock does not exclude fd20:ce::254/128",
+    ]
+  )
+})
+
+test("the component fails when the base policy it replaces is gone", () => {
+  const problems = checkEgressDenyMetadata({
+    guardrailsText: GOOD_GUARDRAILS.split("---")[0],
+    componentText: GOOD_EGRESS_COMPONENT,
+  })
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /guardrails\.yaml: no `default-egress` Egress policy/)
 })

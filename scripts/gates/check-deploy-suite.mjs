@@ -50,6 +50,12 @@
  *      one uid cognia-server creates the workspace tree as. The workspace
  *      runtime handed the `default` workspace to `pwuser`, after which the
  *      server and the runners (uid 10001) could no longer write it.
+ *   9. The opt-in `egress-deny-metadata` Kubernetes component still targets
+ *      the base `default-egress` policy, keeps DNS and every in-cluster pod
+ *      reachable by selector, and excludes the instance-metadata addresses
+ *      from each catch-all ipBlock. An ipBlock does not match pods or nodes
+ *      on Cilium, so a CIDR-only replacement cut cognia-server off from the
+ *      pods it runs; the example once shipped in `guardrails.yaml` did that.
  *
  * What is NOT checked, and why: that the images build, that compose brings
  * the stack up, or that two instances actually coexist. Those are runtime
@@ -64,7 +70,7 @@ import { readFileSync, readdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 
-import { parse as parseYaml } from "yaml"
+import { parse as parseYaml, parseAllDocuments } from "yaml"
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 
@@ -489,6 +495,70 @@ export function checkSharedWorkspaceUid({ dockerfiles, entrypoints }) {
   return problems
 }
 
+export const EGRESS_GUARDRAILS = "deploy/k8s/base/guardrails.yaml"
+export const EGRESS_DENY_METADATA_COMPONENT =
+  "deploy/k8s/components/egress-deny-metadata/kustomization.yaml"
+/** Each catch-all destination and the instance-metadata addresses it must exclude. */
+export const METADATA_EXCLUSIONS = {
+  "0.0.0.0/0": ["169.254.0.0/16"],
+  "::/0": ["fd00:ec2::254/128", "fd20:ce::254/128"],
+}
+
+export function checkEgressDenyMetadata({ guardrailsText, componentText }) {
+  const rel = EGRESS_DENY_METADATA_COMPONENT
+  const problems = []
+  const policies = parseAllDocuments(guardrailsText).map((doc) => doc.toJS())
+  const target = policies.find(
+    (doc) => doc?.kind === "NetworkPolicy" && doc.metadata?.name === "default-egress"
+  )
+  if (!target?.spec?.policyTypes?.includes("Egress"))
+    problems.push(
+      `${EGRESS_GUARDRAILS}: no \`default-egress\` Egress policy, the one ${rel} replaces.`
+    )
+  const component = parseYaml(componentText) ?? {}
+  if (component.kind !== "Component") problems.push(`${rel}: not a kustomize Component.`)
+  const patch = (component.patches ?? []).find(
+    (entry) => entry?.target?.kind === "NetworkPolicy" && entry.target.name === "default-egress"
+  )
+  const op = patch?.patch
+    ? (parseYaml(patch.patch) ?? []).find(
+        (entry) => entry?.op === "replace" && entry.path === "/spec/egress"
+      )
+    : null
+  if (!Array.isArray(op?.value)) {
+    problems.push(`${rel}: no \`replace /spec/egress\` patch on \`default-egress\`.`)
+    return problems
+  }
+  const rules = op.value
+  const ports = (rule) => (rule.ports ?? []).map((port) => `${port.port}/${port.protocol}`)
+  if (!rules.some((rule) => !rule.to && ["53/UDP", "53/TCP"].every((p) => ports(rule).includes(p))))
+    problems.push(`${rel}: no rule allowing DNS (53/UDP and 53/TCP) to any resolver.`)
+  if (
+    !rules.some((rule) => (rule.to ?? []).some((peer) => peer.namespaceSelector && !peer.ipBlock))
+  )
+    problems.push(
+      `${rel}: no rule allowing in-cluster pods by selector. An ipBlock does not match pods or nodes on Cilium, so without it cognia-server loses the workspace runtimes and runners.`
+    )
+  if (rules.some((rule) => !rule.to && !rule.ports))
+    problems.push(`${rel}: a rule with neither \`to\` nor \`ports\` allows everything again.`)
+  const blocks = rules.flatMap((rule) =>
+    (rule.to ?? []).map((peer) => peer.ipBlock).filter(Boolean)
+  )
+  for (const [cidr, exclusions] of Object.entries(METADATA_EXCLUSIONS)) {
+    const catchAlls = blocks.filter((block) => block.cidr === cidr)
+    if (catchAlls.length === 0)
+      problems.push(`${rel}: no \`${cidr}\` ipBlock for external traffic.`)
+    for (const block of catchAlls) {
+      const missing = exclusions.filter((address) => !(block.except ?? []).includes(address))
+      if (missing.length > 0)
+        problems.push(
+          `${rel}: the \`${cidr}\` ipBlock does not exclude ${missing.join(", ")}, so pods reach instance metadata.`
+        )
+    }
+  }
+  return problems
+}
+
 /** Problems with one plugin-consuming Dockerfile. */
 export function checkPluginConsumerDockerfile(rel, dockerfile) {
   const problems = []
@@ -600,6 +670,10 @@ export function runChecks(inputs) {
       dockerfiles: inputs.workspaceWriterDockerfiles,
       entrypoints: inputs.workspaceWriterEntrypoints,
     }),
+    ...checkEgressDenyMetadata({
+      guardrailsText: inputs.egressGuardrails,
+      componentText: inputs.egressDenyMetadataComponent,
+    }),
   ]
 }
 
@@ -649,6 +723,8 @@ export function loadRepoInputs() {
     workspaceWriterEntrypoints: Object.fromEntries(
       SHARED_WORKSPACE_ENTRYPOINTS.map((rel) => [rel, read(rel)])
     ),
+    egressGuardrails: read(EGRESS_GUARDRAILS),
+    egressDenyMetadataComponent: read(EGRESS_DENY_METADATA_COMPONENT),
     imagesWorkflow: read(IMAGES_WORKFLOW),
     appOwner: appImagesOwner(read("Cargo.toml")),
     imageReferenceFiles: Object.fromEntries(imageReferenceFiles().map((rel) => [rel, read(rel)])),
@@ -669,6 +745,6 @@ if (invokedDirectly) {
     process.exit(1)
   }
   console.log(
-    `deploy-suite: OK — ${ROOT_CONTEXT_RUST_DOCKERFILES.length} Rust images on the toolchain pin, ${ROOT_WORKSPACE_NODE_DOCKERFILES.length} Node images on engines/packageManager, every compose default image published, host ports and instance scoping parametrized, workflow pnpm pins aligned, ${PLUGIN_CONSUMER_DOCKERFILES.length} plugin consumers take the artifact set and never plugin source, every shared-workspace writer runs as uid ${SHARED_WORKSPACE_UID}.`
+    `deploy-suite: OK — ${ROOT_CONTEXT_RUST_DOCKERFILES.length} Rust images on the toolchain pin, ${ROOT_WORKSPACE_NODE_DOCKERFILES.length} Node images on engines/packageManager, every compose default image published, host ports and instance scoping parametrized, workflow pnpm pins aligned, ${PLUGIN_CONSUMER_DOCKERFILES.length} plugin consumers take the artifact set and never plugin source, every shared-workspace writer runs as uid ${SHARED_WORKSPACE_UID}, the metadata egress component keeps in-cluster pods by selector.`
   )
 }

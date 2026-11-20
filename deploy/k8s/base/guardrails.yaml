@@ -32,16 +32,11 @@ spec:
   podSelector: {}
   policyTypes: [Egress]
   egress:
-    # DNS + any external endpoint (agents call provider APIs). To restrict
-    # outbound, replace this policy in the overlay, for example:
-    #   patches:
-    #     - target: { kind: NetworkPolicy, name: default-egress }
-    #       patch: |-
-    #         - op: replace
-    #           path: /spec/egress
-    #           value:
-    #             - ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
-    #             - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [169.254.0.0/16] } }]
+    # DNS + any endpoint (agents call provider APIs). To keep pods away from
+    # cloud instance metadata, enable ../components/egress-deny-metadata; it
+    # replaces this list and says what to check first. A restriction of your
+    # own replaces this list too, and must still allow in-cluster pods by
+    # selector: an ipBlock does not match pods on every CNI.
     - {}
 ---
 apiVersion: v1

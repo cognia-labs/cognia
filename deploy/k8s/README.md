@@ -97,8 +97,15 @@ rotate-master-key --new-key ...`, then update the Secret.
   ServiceAccount and is inert while the backend is off.
 - **Restricting outbound traffic**: NetworkPolicies only add up, so a stricter
   policy beside `default-egress` restricts nothing. Replace or delete
-  `default-egress` in the tenant overlay instead (`guardrails.yaml` shows a
-  patch that keeps DNS and drops the link-local metadata range).
+  `default-egress` in the tenant overlay instead. The opt-in
+  `components/egress-deny-metadata` component does this to keep pods away
+  from cloud instance metadata (169.254.0.0/16, `fd00:ec2::254`,
+  `fd20:ce::254`), while still allowing DNS and every in-cluster pod by
+  selector. Before enabling it on a self-hosted Cilium cluster, set
+  `policyCIDRMatchMode: nodes` or allow the `kube-apiserver` entity: an
+  ipBlock does not match the apiserver's host-network nodes there, and
+  cognia-server could not create runner pods. Workloads that use EKS Pod
+  Identity or GKE Workload Identity lose that link-local agent.
 - **Persistent shared-browser runtimes (experimental)**: create the aggregate
   per-tenant secret first (`kubectl -n <tenant> create secret generic
 workspace-runtime-secrets --from-literal=<workspace-id>=<32+ char secret>`),
