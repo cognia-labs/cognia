@@ -172,6 +172,9 @@ export async function parsePDF(
     docParams.password = options.password
   }
 
+  // An abort while pdf.js loaded (or the native path ran) has no listener to
+  // cancel it: stop before starting a load nothing would cancel.
+  options.signal?.throwIfAborted()
   const loadingTask = pdfjsLib.getDocument(docParams)
   let destruction: Promise<void> | undefined
   const destroy = () => (destruction ??= loadingTask.destroy())
@@ -261,6 +264,11 @@ export async function parsePDF(
 
     options.signal?.throwIfAborted()
     return result
+  } catch (error) {
+    // An abort destroys the loading task, which rejects with pdf.js's own
+    // error: the caller gets the signal's reason instead.
+    options.signal?.throwIfAborted()
+    throw error
   } finally {
     options.signal?.removeEventListener("abort", cancelLoading)
     await destroy()

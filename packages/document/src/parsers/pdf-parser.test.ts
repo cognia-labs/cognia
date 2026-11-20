@@ -387,6 +387,47 @@ describe("PDF cancellation and resource lifetime", () => {
     expect(cleanup).toHaveBeenCalledTimes(1)
     expect(destroy).toHaveBeenCalledTimes(1)
   })
+
+  it("rejects with the signal's reason when an abort tears down the loading task (G5)", async () => {
+    const controller = new AbortController()
+    let rejectLoad: (error: Error) => void = () => undefined
+    // Destroying a pending loading task rejects its promise with pdf.js's own error.
+    const destroy = jest.fn(async () => rejectLoad(new Error("Worker was destroyed")))
+    const reason = new Error("job paused")
+    mockGetDocument.mockImplementation(() => {
+      // The job stops while the document is loading.
+      queueMicrotask(() => controller.abort(reason))
+      return {
+        promise: new Promise((_, reject) => {
+          rejectLoad = reject
+        }),
+        destroy,
+      } as never
+    })
+    await expect(parsePDF(new ArrayBuffer(8), { signal: controller.signal })).rejects.toBe(reason)
+    expect(destroy).toHaveBeenCalled()
+  })
+
+  it("does not start a load when the abort came while pdf.js was being imported", async () => {
+    const controller = new AbortController()
+    const reason = new Error("job cancelled")
+    mockGetDocument.mockClear()
+    const parsing = parsePDF(new ArrayBuffer(8), { signal: controller.signal })
+    // parsePDF is past its entry check, awaiting the pdf.js import.
+    controller.abort(reason)
+    await expect(parsing).rejects.toBe(reason)
+    expect(mockGetDocument).not.toHaveBeenCalled()
+  })
+
+  it("keeps a load failure that no abort caused", async () => {
+    mockGetDocument.mockReturnValue({
+      promise: Promise.reject(new Error("Invalid PDF structure")),
+      destroy: jest.fn(async () => {}),
+    } as never)
+    await expect(
+      parsePDF(new ArrayBuffer(8), { signal: new AbortController().signal })
+    ).rejects.toThrow("Invalid PDF structure")
+  })
 })
 
 it("resolves named destinations and page object references instead of treating object ids as pages", async () => {

@@ -9,7 +9,8 @@
  *
  * The OCR'd text then flows through the unchanged redact → chunk → embed →
  * persist chain (the existing PII redaction gate applies automatically).
- * Best-effort: any failure falls back to whatever the text layer produced.
+ * Best-effort: any failure falls back to whatever the text layer produced,
+ * except a cancellation, which stops the ingest job with the signal's reason.
  */
 
 import type { PdfRouterDeps, PdfRouterInput } from "@cognia/ocr/pdf-router"
@@ -34,6 +35,16 @@ export interface TwinOcrFallbackDeps {
   minTextChars?: number
 }
 
+/** How the OCR fallback may be stopped. */
+export interface TwinOcrFallbackOptions {
+  /**
+   * Stops the OCR: the router checks it between pages and cancels the PDF
+   * load and page rendering. An abort is thrown as the signal's reason, not
+   * read as "OCR failed, keep the text layer".
+   */
+  signal?: AbortSignal
+}
+
 /**
  * Returns OCR'd text to use in place of the parsed text, or null to keep the
  * text layer. Only fires for low-text PDF binaries. Pure w.r.t. injected deps.
@@ -41,8 +52,11 @@ export interface TwinOcrFallbackDeps {
 export async function maybeTwinPdfOcrWithProvenance(
   raw: RawSource,
   parsed: ParsedSource,
-  deps: TwinOcrFallbackDeps
+  deps: TwinOcrFallbackDeps,
+  options: TwinOcrFallbackOptions = {}
 ): Promise<Pick<ParsedSource, "originalText" | "embeddableText" | "pageMap" | "structure"> | null> {
+  const { signal } = options
+  signal?.throwIfAborted()
   if (raw.format !== "pdf" || !raw.binary) return null
   const threshold = deps.minTextChars ?? TWIN_OCR_MIN_TEXT_CHARS
   const sparsePage = parsed.structure?.pages.some(
@@ -51,7 +65,10 @@ export async function maybeTwinPdfOcrWithProvenance(
   if (!sparsePage && nonWhitespaceLength(parsed.originalText) >= threshold) return null
   const bytes = raw.binary instanceof Uint8Array ? raw.binary : new Uint8Array(raw.binary)
   try {
-    const result = await deps.extractPdf({ bytes }, deps.buildPdfRouterDeps())
+    const result = await deps.extractPdf(
+      { bytes },
+      { ...deps.buildPdfRouterDeps(), ...(signal ? { signal } : {}) }
+    )
     const text = result.pages.length
       ? result.pages.map((page) => page.text).join("\n\n")
       : result.combinedText
@@ -108,6 +125,7 @@ export async function maybeTwinPdfOcrWithProvenance(
       structure,
     }
   } catch {
+    signal?.throwIfAborted()
     return null
   }
 }
@@ -120,27 +138,20 @@ export async function maybeTwinPdfOcrWithProvenance(
  */
 export async function runTwinPdfOcrWithProvenance(
   raw: RawSource,
-  parsed: ParsedSource
+  parsed: ParsedSource,
+  options: TwinOcrFallbackOptions = {}
 ): ReturnType<typeof maybeTwinPdfOcrWithProvenance> {
   const ocr = await loadPort("ocr")
   if (!ocr) return null
   // Dexie unavailable reads as the defaults.
   const settings = await ocr.loadSettings()
-  return maybeTwinPdfOcrWithProvenance(raw, parsed, {
-    extractPdf: ocr.extractPdf,
-    buildPdfRouterDeps: () => ocr.pdfDeps({ settings }),
-  })
-}
-
-/** Legacy text-only facade for callers that do not persist source provenance. */
-export async function maybeTwinPdfOcr(
-  raw: RawSource,
-  parsed: ParsedSource,
-  deps: TwinOcrFallbackDeps
-): Promise<string | null> {
-  return (await maybeTwinPdfOcrWithProvenance(raw, parsed, deps))?.originalText ?? null
-}
-
-export async function runTwinPdfOcr(raw: RawSource, parsed: ParsedSource): Promise<string | null> {
-  return (await runTwinPdfOcrWithProvenance(raw, parsed))?.originalText ?? null
+  return maybeTwinPdfOcrWithProvenance(
+    raw,
+    parsed,
+    {
+      extractPdf: ocr.extractPdf,
+      buildPdfRouterDeps: () => ocr.pdfDeps({ settings }),
+    },
+    options
+  )
 }

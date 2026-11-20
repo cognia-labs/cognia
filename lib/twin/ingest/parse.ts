@@ -174,12 +174,27 @@ export function processorFilename(filename: string, format: TwinSourceFormat): s
     : `${filename}.${extension}`
 }
 
+/** How a parse may be stopped. */
+export interface ParseSourceOptions {
+  /**
+   * Stops the parse: the document processor checks it between stages and
+   * pages and cancels its PDF and AnyDoc work, so a paused or cancelled
+   * ingest job does not run a large document to the end first.
+   */
+  signal?: AbortSignal
+}
+
 /**
  * Dispatch + parse. Pure: throws on unknown formats. Importer integrations
  * (slack / lark / mbox / eml / git) are loaded lazily so unused families
  * don't pull their parsers into the bundle.
  */
-export async function parseSource(raw: RawSource): Promise<ParsedSource> {
+export async function parseSource(
+  raw: RawSource,
+  options: ParseSourceOptions = {}
+): Promise<ParsedSource> {
+  const { signal } = options
+  signal?.throwIfAborted()
   const dispatch = dispatchSource(raw.format)
 
   if (dispatch.routesToDocumentProcessor) {
@@ -196,6 +211,7 @@ export async function parseSource(raw: RawSource): Promise<ParsedSource> {
           : raw.binary
       const processed = await processDocumentAsync(raw.id, filename, arrayBuffer, {
         extractEmbeddable: true,
+        ...(signal ? { signal } : {}),
       })
       const embeddableText = processed.content
       const pageMap = computePdfPageMap(raw.format, processed.parseResult, embeddableText)
@@ -219,6 +235,7 @@ export async function parseSource(raw: RawSource): Promise<ParsedSource> {
 
     const processed = await processDocumentAsync(raw.id, filename, raw.text, {
       extractEmbeddable: true,
+      ...(signal ? { signal } : {}),
     })
     return {
       id: processed.id,
@@ -294,6 +311,7 @@ export async function parseSource(raw: RawSource): Promise<ParsedSource> {
     )
   }
 
+  signal?.throwIfAborted()
   if (!produced || !produced.markdown.trim()) {
     // Importer produced nothing usable — fall back to the raw text so the
     // chunker still has something to embed (better than throwing).

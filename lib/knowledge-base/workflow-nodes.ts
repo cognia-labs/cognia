@@ -220,8 +220,9 @@ export async function runKnowledgeParse(ctx: StepExecutionContext): Promise<Step
       ? { binary: base64Bytes(source.content) }
       : { text: source.content }),
   }
-  const document = await parseSource(raw)
-  const ocr = await runTwinPdfOcrWithProvenance(raw, document)
+  // The parse and its OCR stop with the run.
+  const document = await parseSource(raw, { signal: ctx.signal })
+  const ocr = await runTwinPdfOcrWithProvenance(raw, document, { signal: ctx.signal })
   if (ocr) Object.assign(document, ocr)
   const ref = await storeWorkflowKnowledgeArtifact({
     ...artifactScope(ctx),

@@ -12,8 +12,8 @@ jest.mock("@/lib/modules/ports", () => ({
 }))
 
 import {
-  maybeTwinPdfOcr,
-  runTwinPdfOcr,
+  maybeTwinPdfOcrWithProvenance,
+  runTwinPdfOcrWithProvenance,
   TWIN_OCR_MIN_TEXT_CHARS,
   type TwinOcrFallbackDeps,
 } from "./ocr-fallback"
@@ -63,30 +63,42 @@ function deps(over: Partial<TwinOcrFallbackDeps> = {}): TwinOcrFallbackDeps {
   }
 }
 
-describe("maybeTwinPdfOcr", () => {
+describe("maybeTwinPdfOcrWithProvenance", () => {
   it("returns null for non-PDF formats", async () => {
     const ex = jest.fn()
     expect(
-      await maybeTwinPdfOcr(raw({ format: "docx" }), parsed(""), deps({ extractPdf: ex }))
+      await maybeTwinPdfOcrWithProvenance(
+        raw({ format: "docx" }),
+        parsed(""),
+        deps({ extractPdf: ex })
+      )
     ).toBeNull()
     expect(ex).not.toHaveBeenCalled()
   })
 
   it("returns null when there is no binary", async () => {
-    expect(await maybeTwinPdfOcr(raw({ binary: undefined }), parsed(""), deps())).toBeNull()
+    expect(
+      await maybeTwinPdfOcrWithProvenance(raw({ binary: undefined }), parsed(""), deps())
+    ).toBeNull()
   })
 
   it("returns null when the text layer already has enough text", async () => {
     const ex = jest.fn()
     const text = "x".repeat(TWIN_OCR_MIN_TEXT_CHARS + 5)
-    expect(await maybeTwinPdfOcr(raw(), parsed(text), deps({ extractPdf: ex }))).toBeNull()
+    expect(
+      await maybeTwinPdfOcrWithProvenance(raw(), parsed(text), deps({ extractPdf: ex }))
+    ).toBeNull()
     expect(ex).not.toHaveBeenCalled()
   })
 
   it("OCRs a low-text PDF and returns the extracted text", async () => {
     const ex = jest.fn(async () => ocrResult("SCANNED CONTENT"))
-    const out = await maybeTwinPdfOcr(raw(), parsed("  \n "), deps({ extractPdf: ex }))
-    expect(out).toBe("SCANNED CONTENT")
+    const out = await maybeTwinPdfOcrWithProvenance(
+      raw(),
+      parsed("  \n "),
+      deps({ extractPdf: ex })
+    )
+    expect(out?.originalText).toBe("SCANNED CONTENT")
     expect(ex).toHaveBeenCalledWith({ bytes: expect.any(Uint8Array) }, expect.anything())
   })
 
@@ -94,16 +106,48 @@ describe("maybeTwinPdfOcr", () => {
     const ex = jest.fn(async () => {
       throw new Error("pdf boom")
     })
-    expect(await maybeTwinPdfOcr(raw(), parsed(""), deps({ extractPdf: ex }))).toBeNull()
+    expect(
+      await maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf: ex }))
+    ).toBeNull()
   })
 
   it("returns null when OCR yields blank text", async () => {
     const ex = jest.fn(async () => ocrResult("   "))
-    expect(await maybeTwinPdfOcr(raw(), parsed(""), deps({ extractPdf: ex }))).toBeNull()
+    expect(
+      await maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf: ex }))
+    ).toBeNull()
+  })
+
+  it("hands the router the job's signal and stops with its reason (G5)", async () => {
+    const controller = new AbortController()
+    const reason = new Error("job cancelled")
+    const ex = jest.fn(async (_input: unknown, routerDeps: { signal?: AbortSignal }) => {
+      expect(routerDeps.signal).toBe(controller.signal)
+      controller.abort(reason)
+      // The router reports a cancelled run as its own error.
+      throw new Error("PDF OCR cancelled.")
+    })
+    await expect(
+      maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf: ex }), {
+        signal: controller.signal,
+      })
+    ).rejects.toBe(reason)
+  })
+
+  it("does not start for a job already stopped", async () => {
+    const controller = new AbortController()
+    controller.abort(new Error("paused"))
+    const ex = jest.fn()
+    await expect(
+      maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf: ex }), {
+        signal: controller.signal,
+      })
+    ).rejects.toThrow("paused")
+    expect(ex).not.toHaveBeenCalled()
   })
 })
 
-describe("runTwinPdfOcr (production wrapper)", () => {
+describe("runTwinPdfOcrWithProvenance (production wrapper)", () => {
   beforeEach(() => {
     extractPdfMock.mockReset().mockResolvedValue(ocrResult("FROM SETTINGS"))
     loadSettingsMock.mockReset().mockResolvedValue({ defaultProviderId: "auto" })
@@ -112,15 +156,24 @@ describe("runTwinPdfOcr (production wrapper)", () => {
   })
 
   it("runs the OCR fallback for a low-text PDF", async () => {
-    const out = await runTwinPdfOcr(raw(), parsed(""))
-    expect(out).toBe("FROM SETTINGS")
+    const out = await runTwinPdfOcrWithProvenance(raw(), parsed(""))
+    expect(out?.originalText).toBe("FROM SETTINGS")
     expect(extractPdfMock).toHaveBeenCalledTimes(1)
     expect(pdfDepsMock).toHaveBeenCalledWith({ settings: { defaultProviderId: "auto" } })
   })
 
+  it("passes the signal through to the router", async () => {
+    const controller = new AbortController()
+    await runTwinPdfOcrWithProvenance(raw(), parsed(""), { signal: controller.signal })
+    expect(extractPdfMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ signal: controller.signal })
+    )
+  })
+
   it("keeps the text layer where no module provides OCR", async () => {
     mockOcrPort = null
-    const out = await runTwinPdfOcr(raw(), parsed(""))
+    const out = await runTwinPdfOcrWithProvenance(raw(), parsed(""))
     expect(out).toBeNull()
     expect(extractPdfMock).not.toHaveBeenCalled()
   })

@@ -22,7 +22,7 @@ jest.mock("@/lib/workflow/knowledge/artifacts", () => ({
 }))
 
 import { persistKnowledgeBaseChunks } from "@/lib/knowledge-base/ingest/persist"
-import { getKnowledgeBasesByIds } from "@/lib/db/knowledge-bases"
+import { getKnowledgeBasesByIds, getKnowledgeBaseSourcesByIds } from "@/lib/db/knowledge-bases"
 import { getDb } from "@/lib/db/schema"
 import { applyAgentKnowledgeContextFromDb } from "@/lib/knowledge-base/runtime/apply-agent-knowledge-context"
 import { generateSafeEmbedding } from "@/lib/rag/safe-embedding"
@@ -37,6 +37,7 @@ import {
   runKnowledgeTransform,
   runKnowledgeChunk,
   runKnowledgeIndex,
+  runKnowledgeParse,
   runKnowledgePublish,
   runKnowledgeRetrieve,
 } from "./workflow-nodes"
@@ -338,4 +339,25 @@ describe("the module's workflowNodes contribution", () => {
     const { listRegisteredKinds } = await import("@/lib/workflow/nodes/registry")
     expect([...listRegisteredKinds()].sort()).toEqual([...workflowNodeKinds].sort())
   })
+})
+
+it("stops the parse with the run, before storing a parsed artifact (G5)", async () => {
+  jest.mocked(getKnowledgeBaseSourcesByIds).mockResolvedValue([
+    {
+      id: "src_1",
+      knowledgeBaseId: "kb_1",
+      title: "guide.md",
+      format: "markdown",
+      content: "# Guide\nBody",
+      contentEncoding: "utf8",
+      fingerprint: "hash",
+    },
+  ] as never)
+  const controller = new AbortController()
+  const reason = new Error("run cancelled")
+  controller.abort(reason)
+  await expect(
+    runKnowledgeParse({ ...context({ sourceId: "src_1" }), signal: controller.signal })
+  ).rejects.toBe(reason)
+  expect(storeWorkflowKnowledgeArtifact).not.toHaveBeenCalled()
 })

@@ -85,6 +85,36 @@ describe("parseSource — document family", () => {
       /requires .text/
     )
   })
+
+  it("does not parse for a job already stopped, and stops with its reason (G5)", async () => {
+    const controller = new AbortController()
+    const reason = new Error("job paused")
+    controller.abort(reason)
+    const raw: RawSource = { id: "s", filename: "a.md", format: "markdown", text: "body" }
+    await expect(parseSource(raw, { signal: controller.signal })).rejects.toBe(reason)
+    await expect(
+      parseSource(
+        { ...raw, format: "eml", text: "Subject: x\n\nhi" },
+        { signal: controller.signal }
+      )
+    ).rejects.toBe(reason)
+  })
+
+  it("hands the signal to the document processor", async () => {
+    // The first check is parseSource's own; the second is the processor's.
+    const reason = new Error("stopped inside the processor")
+    let checks = 0
+    const signal = {
+      aborted: false,
+      throwIfAborted: () => {
+        checks += 1
+        if (checks === 2) throw reason
+      },
+    } as unknown as AbortSignal
+    await expect(
+      parseSource({ id: "s", filename: "a.md", format: "markdown", text: "body" }, { signal })
+    ).rejects.toBe(reason)
+  })
 })
 
 describe("parseSource — importer family", () => {

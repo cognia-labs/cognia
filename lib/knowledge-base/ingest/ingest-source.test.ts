@@ -21,7 +21,7 @@ import {
   getKnowledgeBaseDocumentSnapshot,
 } from "@/lib/db/knowledge-bases"
 import { __resetTwinEmbeddingCache } from "@/lib/twin/ingest/embed"
-import type { ParsedSource, RawSource } from "@/lib/twin/ingest/parse"
+import { parseSource, type ParsedSource, type RawSource } from "@/lib/twin/ingest/parse"
 import {
   ingestKnowledgeBaseSource,
   rebuildKnowledgeBaseIndex,
@@ -280,6 +280,40 @@ describe("ingestKnowledgeBaseSource", () => {
     ])
   })
 
+  it("hands the job's signal to the parse (G5)", async () => {
+    await seedSource()
+    generateEmbeddingsMock.mockResolvedValue({ embeddings: [[0.1, 0.2]] })
+    const controller = new AbortController()
+    const parse = jest.fn(parseSource)
+    await ingestKnowledgeBaseSource({
+      sourceId: "source-1",
+      deps: { store: createStore(), embedding, vectorBackend: "native" },
+      signal: controller.signal,
+      parse,
+    })
+    expect(parse).toHaveBeenCalledWith(expect.anything(), { signal: controller.signal })
+  })
+
+  it("reads whatever a cancelled parse throws as the cancellation", async () => {
+    await seedSource()
+    const controller = new AbortController()
+    const parse = jest.fn(async () => {
+      controller.abort()
+      // A PDF engine torn down mid-load rejects with its own error.
+      throw new Error("Worker was destroyed")
+    })
+    const result = await ingestKnowledgeBaseSource({
+      sourceId: "source-1",
+      deps: { store: createStore(), embedding, vectorBackend: "native" },
+      signal: controller.signal,
+      parse,
+    })
+    expect(result.status).toBe("cancelled")
+    expect(await listKnowledgeBaseSources("kb-1")).toEqual([
+      expect.objectContaining({ status: "pending" }),
+    ])
+  })
+
   it("removes remote vectors and all locally owned source data", async () => {
     await seedSource()
     const store = createStore()
@@ -400,7 +434,8 @@ describe("ingestKnowledgeBaseSource", () => {
         filename: "guide.pdf",
         format: "pdf",
         binary: expect.any(Uint8Array),
-      })
+      }),
+      { signal: undefined }
     )
     expect(new TextDecoder().decode(parse.mock.calls[0][0].binary)).toBe("binary-pdf")
   })
@@ -583,11 +618,13 @@ describe("ingestKnowledgeBaseSource", () => {
     await seedSource("Cancellation boundary content")
     generateEmbeddingsMock.mockResolvedValue({ embeddings: [[0.1, 0.2]] })
     let reads = 0
+    // Only `aborted` reads mark the stage; the parse's own checks pass.
     const signal = {
       get aborted() {
         return reads++ === abortRead
       },
-    } as AbortSignal
+      throwIfAborted: () => undefined,
+    } as unknown as AbortSignal
 
     const result = await ingestKnowledgeBaseSource({
       sourceId: "source-1",

@@ -229,13 +229,17 @@ export async function runIngestJob(input: RunIngestInput): Promise<RunIngestResu
         (stageBase + 1) / TOTAL_STAGES,
         input.signal
       )
-      let parsed = await parseSource(raw)
+      // The parse and the OCR stop with the job: a pause or cancel no longer
+      // waits for a large document to finish parsing.
+      let parsed = await parseSource(raw, { signal: input.signal })
       throwIfTwinJobInterrupted(input.signal)
 
       // Stage 2.5 — OCR fallback for scanned/image-only PDFs (ADR-0024). When
       // the text layer came back (near-)empty, re-extract via the OCR PDF
       // router and use that text for redaction + chunking. Best-effort.
-      const ocrText = await runTwinPdfOcrWithProvenance(raw, parsed).catch(() => null)
+      const ocrText = await runTwinPdfOcrWithProvenance(raw, parsed, {
+        signal: input.signal,
+      }).catch(() => null)
       throwIfTwinJobInterrupted(input.signal)
       if (ocrText) {
         // OCR publishes a new canonical text and matching per-page ranges.

@@ -224,8 +224,8 @@ export async function ingestKnowledgeBaseSource(
   let phase: IngestPhase = "parsing"
   try {
     const raw = rawSourceFromRow(source)
-    const parsed = await (input.parse ?? parseSource)(raw)
-    const ocr = await runTwinPdfOcrWithProvenance(raw, parsed)
+    const parsed = await (input.parse ?? parseSource)(raw, { signal: input.signal })
+    const ocr = await runTwinPdfOcrWithProvenance(raw, parsed, { signal: input.signal })
     if (ocr) Object.assign(parsed, ocr)
     if (input.signal?.aborted) return cancelled()
 
@@ -308,8 +308,10 @@ export async function ingestKnowledgeBaseSource(
       tokensUsed: embeddingResult.tokensUsed ?? 0,
     }
   } catch (error) {
-    if (input.signal?.aborted && error instanceof DOMException && error.name === "AbortError")
-      return cancelled()
+    // Once the job is cancelled, whatever the cancelled work threw (the
+    // signal's reason, an AbortError, a PDF engine torn down mid-load) is
+    // that cancellation, not a failure of the source.
+    if (input.signal?.aborted) return cancelled()
     const errorCode = failureCode(error, phase)
     const failedAt = Date.now()
     await Promise.all([

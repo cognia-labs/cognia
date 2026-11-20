@@ -185,6 +185,28 @@ describe("runIngestJob — pageMap threading", () => {
     )
   })
 
+  it("hands the job's signal to the parse and the OCR fallback (G5)", async () => {
+    const controller = new AbortController()
+    await runIngestJob({ ...runInput(), signal: controller.signal })
+    expect(mockParseSource).toHaveBeenCalledWith(expect.anything(), { signal: controller.signal })
+    expect(mockRunTwinPdfOcr).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      signal: controller.signal,
+    })
+  })
+
+  it("stops a parse the job interrupts without marking the source failed", async () => {
+    const controller = new AbortController()
+    mockParseSource.mockImplementationOnce(async () => {
+      controller.abort(new Error("job paused"))
+      throw new Error("stopped mid-parse")
+    })
+    await expect(runIngestJob({ ...runInput(), signal: controller.signal })).rejects.toThrow()
+    expect(mockUpdateTwinSource).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: "failed" })
+    )
+  })
+
   it("uses the OCR page map when the fallback replaces the text", async () => {
     mockRunTwinPdfOcr.mockResolvedValue({
       originalText: "OCR REPLACEMENT TEXT FROM THE SCANNED DOCUMENT",
