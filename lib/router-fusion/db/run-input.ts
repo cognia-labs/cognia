@@ -4,12 +4,10 @@
  * `POST /v1/runs` answers 202 and the request is gone. Everything a worker
  * needs to execute the run later — after a reload, on another window, after a
  * crash — is therefore stored with the run as one encrypted artifact: the
- * messages, and the request's own options that change how the run is judged
+ * messages, the request's own options that change how the run is judged
  * (whether a degraded result is acceptable, the structured output it asked
- * for).
- *
- * B2 stored the bare message array; that shape still reads, with the options
- * a B2 request could not have set.
+ * for), and, for a delegate run a person answered, the questions their
+ * answers reply to.
  */
 
 import type { Message } from "@cognia/router-fusion"
@@ -20,6 +18,12 @@ export interface StoredRunInput {
   allowDegraded: boolean
   /** The structured answer a chat-compat caller asked for (`response_format.json_schema`). */
   jsonSchema: Record<string, unknown> | null
+  /**
+   * The questions the run asked a person, one round per resume, oldest first
+   * (a delegate lead's `need_input`). Each round's answers are the user
+   * messages that resume appended. Absent until a person answered once.
+   */
+  clarifications?: string[][]
 }
 
 const ROLES = new Set(["system", "user", "assistant"])
@@ -34,8 +38,16 @@ function isMessage(value: unknown): value is Message {
   )
 }
 
+function clarificationsOf(value: unknown): string[][] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((round): round is unknown[] => Array.isArray(round))
+    .map((round) => round.filter((q): q is string => typeof q === "string" && q.length > 0))
+    .filter((round) => round.length > 0)
+}
+
 export function encodeRunInput(input: StoredRunInput): string {
-  return JSON.stringify({ version: 2, ...input })
+  return JSON.stringify(input)
 }
 
 /** The stored input, or null when there is nothing a run could be sent with. */
@@ -47,15 +59,17 @@ export function decodeRunInput(content: string | null | undefined): StoredRunInp
   } catch {
     return null
   }
-  if (Array.isArray(parsed)) {
-    const messages = parsed.filter(isMessage)
-    return messages.length > 0 ? { messages, allowDegraded: false, jsonSchema: null } : null
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null
+  const record = parsed as {
+    messages?: unknown
+    allowDegraded?: unknown
+    jsonSchema?: unknown
+    clarifications?: unknown
   }
-  if (typeof parsed !== "object" || parsed === null) return null
-  const record = parsed as { messages?: unknown; allowDegraded?: unknown; jsonSchema?: unknown }
   const messages = Array.isArray(record.messages) ? record.messages.filter(isMessage) : []
   if (messages.length === 0) return null
   const schema = record.jsonSchema
+  const clarifications = clarificationsOf(record.clarifications)
   return {
     messages,
     allowDegraded: record.allowDegraded === true,
@@ -63,5 +77,6 @@ export function decodeRunInput(content: string | null | undefined): StoredRunInp
       typeof schema === "object" && schema !== null && !Array.isArray(schema)
         ? (schema as Record<string, unknown>)
         : null,
+    ...(clarifications.length > 0 ? { clarifications } : {}),
   }
 }

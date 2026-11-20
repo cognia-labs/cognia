@@ -848,6 +848,8 @@ export class FusionLedgerStore {
         logicalStepId: string
         summary: Record<string, unknown>
       }
+      /** The questions the run is parked on (`waiting_for_input`). */
+      input?: { questionsArtifactId: string; logicalStepId: string; questionCount: number }
     } = {}
   ): Promise<{ ok: true } | Refusal<"FENCED" | "RUN_NOT_FOUND" | "ILLEGAL_TRANSITION">> {
     const db = this.db
@@ -860,6 +862,25 @@ export class FusionLedgerStore {
       }
       run.pausedAt = this.now()
       await this.transition(run, to)
+      if (extra.input) {
+        run.inputRequest = {
+          questionsArtifactId: extra.input.questionsArtifactId,
+          logicalStepId: extra.input.logicalStepId,
+        }
+        // The questions are model text and stay in their artifact; the
+        // event names it, so a Run API client reads them through the artifact
+        // API like any other content (SSE-02).
+        await this.event(run, "phase.changed", {
+          phase: "waiting_for_input",
+          questions_artifact_id: extra.input.questionsArtifactId,
+          question_count: extra.input.questionCount,
+          logical_step_id: extra.input.logicalStepId,
+        })
+        await this.projectHandoff(run, extra.input.logicalStepId, "DELEGATE_NEEDS_INPUT", {
+          questions_artifact_id: extra.input.questionsArtifactId,
+          question_count: extra.input.questionCount,
+        })
+      }
       if (extra.approval) {
         // The contract's own event type (`approval.required`), so a Run API
         // client reads it as the approval it is rather than as a phase change.
@@ -910,40 +931,53 @@ export class FusionLedgerStore {
         ...(detail.logicalStepId ? { logical_step_id: detail.logicalStepId } : {}),
         ...(detail.sideEffect ? { side_effect: detail.sideEffect } : {}),
       })
-      const origin = projectedOriginOf(run)
-      if (origin) {
-        await this.outbox(
-          run,
-          `projection:${run.runId}:handoff:${detail.logicalStepId ?? detail.code}`,
-          "execution_run_projection",
-          {
-            runId: run.runId,
-            phase: "waiting",
-            origin,
-            title: run.title,
-            sessionId: run.sessionId,
-            actorKeyId: run.actorKeyId,
-            actorKeyName: run.actorKeyName,
-            mode: run.mode,
-            actionId: run.actionId,
-            createdAt: run.createdAt,
-            interrupt: {
-              id: uuidFromName(
-                `${run.runId}\u0000handoff\u0000${detail.logicalStepId ?? detail.code}`
-              ),
-              type: "human_handoff",
-              kind: detail.code,
-              revision: "",
-              logicalStepId: detail.logicalStepId ?? "",
-              summary: { side_effect: detail.sideEffect ?? null },
-              expiresAt: run.deadlineAt,
-            },
-          }
-        )
-      }
+      await this.projectHandoff(run, detail.logicalStepId ?? detail.code, detail.code, {
+        side_effect: detail.sideEffect ?? null,
+      })
       await this.saveRun(run)
       return { ok: true as const }
     })
+  }
+
+  /**
+   * Show a run that waits on a person as a `human_handoff` interrupt on its
+   * cockpit row: a side effect to reconcile, or questions to answer. Keyed by
+   * the step, so a replayed park projects it once.
+   */
+  private async projectHandoff(
+    run: FusionRunRow,
+    stepKey: string,
+    kind: string,
+    summary: Record<string, unknown>
+  ): Promise<void> {
+    const origin = projectedOriginOf(run)
+    if (!origin) return
+    await this.outbox(
+      run,
+      `projection:${run.runId}:handoff:${stepKey}`,
+      "execution_run_projection",
+      {
+        runId: run.runId,
+        phase: "waiting",
+        origin,
+        title: run.title,
+        sessionId: run.sessionId,
+        actorKeyId: run.actorKeyId,
+        actorKeyName: run.actorKeyName,
+        mode: run.mode,
+        actionId: run.actionId,
+        createdAt: run.createdAt,
+        interrupt: {
+          id: uuidFromName(`${run.runId}\u0000handoff\u0000${stepKey}`),
+          type: "human_handoff",
+          kind,
+          revision: "",
+          logicalStepId: stepKey === kind ? "" : stepKey,
+          summary,
+          expiresAt: run.deadlineAt,
+        },
+      }
+    )
   }
 
   /**
@@ -1003,6 +1037,8 @@ export class FusionLedgerStore {
         return { ok: false as const, code: "DEADLINE_EXCEEDED" as const }
       }
       if (options.inputArtifactId) run.inputArtifactId = options.inputArtifactId
+      // Answered: the questions now live in the run's input as a round.
+      if (waitingFor === "input") run.inputRequest = null
       await this.transition(run, "queued", "resumed")
       await this.saveRun(run)
       return { ok: true as const, run }
@@ -1183,8 +1219,14 @@ export class FusionLedgerStore {
             message: "A model call was sent but its outcome and bill are unknown.",
           }
         }
-        if (input.resultArtifactId) run.resultArtifactId = input.resultArtifactId
-        if (input.resultRecordArtifactId) run.resultRecordArtifactId = input.resultRecordArtifactId
+        // The result belongs to a run that succeeded. One the seal downgraded
+        // (a cancel that won the race, an uncertain call) delivered nothing,
+        // so nothing may read an answer off it.
+        if (target === "succeeded") {
+          if (input.resultArtifactId) run.resultArtifactId = input.resultArtifactId
+          if (input.resultRecordArtifactId)
+            run.resultRecordArtifactId = input.resultRecordArtifactId
+        }
         run.terminalAt = now
         run.leaseOwner = null
         await this.billingEvent(run)

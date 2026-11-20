@@ -58,7 +58,7 @@ import { normalizeRouterFusionSettings } from "@cognia/router-fusion/settings/se
 import { createRoleCallExecutor } from "../calls/role-call-executor"
 import { createDelegateApprovalPort } from "./delegate-approvals"
 import type { DelegateHostPorts } from "./delegate-host-ports"
-import type { FusionLedgerStore } from "../db/ledger-store"
+import type { FinalizeOutcome, FusionLedgerStore } from "../db/ledger-store"
 import { drainFusionOutbox, type OutboxAppliers } from "../db/outbox"
 import { decodeRunInput, type StoredRunInput } from "../db/run-input"
 import type { FusionRunRow } from "../db/types"
@@ -149,6 +149,19 @@ export type FusionRunOutcome =
       code: "WAITING_FOR_APPROVAL"
       message: string
       approval: DelegatePendingApproval
+    }
+  /**
+   * The delegate's lead needs answers before it can plan. The run is parked in
+   * `waiting_for_input` (not sealed): a resume carrying the person's answers
+   * plans again as the next round of the same run. The questions are also in
+   * their artifact, which a Run API caller reads.
+   */
+  | {
+      kind: "needs_input"
+      code: "WAITING_FOR_INPUT"
+      message: string
+      questions: string[]
+      questionsArtifactId: string
     }
   /**
    * A side effect was dispatched and its outcome is unknown (REC-06). The run
@@ -442,11 +455,15 @@ export async function executeFusionRun(
 
   const runInput = await runInputFor(store, run, input.messages)
   if (!runInput) {
-    await store.finalizeRun(input.runId, fencingToken, {
+    const sealed = await store.finalizeRun(input.runId, fencingToken, {
       status: "failed",
       error: { code: "RUN_INPUT_MISSING", message: "the run has no input to send" },
     })
-    return { kind: "failed", code: "RUN_INPUT_MISSING", message: `run ${input.runId} has no input` }
+    return outcomeOfSeal(sealed, input.runId, {
+      kind: "failed",
+      code: "RUN_INPUT_MISSING",
+      message: `run ${input.runId} has no input`,
+    })
   }
   const { messages } = runInput
 
@@ -494,9 +511,10 @@ export async function executeFusionRun(
       resultRecordArtifactId?: string
       events?: Array<{ type: string; payload: Record<string, unknown> }>
     } = {}
-  ) => {
-    await store.finalizeRun(input.runId, fencingToken, { status, ...extra })
+  ): Promise<FinalizeOutcome> => {
+    const sealed = await store.finalizeRun(input.runId, fencingToken, { status, ...extra })
     await drainFusionOutbox(store.db, deps.appliers, store.outboxContext())
+    return sealed
   }
 
   try {
@@ -734,6 +752,7 @@ export async function executeFusionRun(
             worker: roleOf(worker),
             ...(reviewer ? { reviewer: roleOf(reviewer) } : {}),
             messages,
+            ...(runInput.clarifications ? { clarifications: runInput.clarifications } : {}),
             acceptanceProfileId: context.acceptanceProfileId,
             outputTokens: {
               lead: outputBound(config, lead, extension.role_output_tokens),
@@ -788,6 +807,35 @@ export async function executeFusionRun(
             approval: outcome.approval,
           }
         }
+        if (outcome.kind === "waiting_for_input") {
+          // Park, as for an approval: the money stays held, the journal stays
+          // replayable, and the worktrees stay with the run.
+          parked = true
+          const paused = await store.pauseRun(input.runId, fencingToken, "waiting_for_input", {
+            input: {
+              questionsArtifactId: outcome.questionsArtifactId,
+              logicalStepId: outcome.logicalStepId,
+              questionCount: outcome.questions.length,
+            },
+          })
+          if (!paused.ok) {
+            parked = false
+            throw new WorkflowError(
+              "RUN_NOT_PARKED",
+              `the run could not be parked for input: ${paused.code}`
+            )
+          }
+          await drainFusionOutbox(store.db, deps.appliers, store.outboxContext()).catch(
+            () => undefined
+          )
+          return {
+            kind: "needs_input",
+            code: "WAITING_FOR_INPUT",
+            message: "the lead needs answers before the work can be planned",
+            questions: outcome.questions,
+            questionsArtifactId: outcome.questionsArtifactId,
+          }
+        }
         await recordDelegatePatchSet(store, input.runId, outcome, now())
         result = outcome.result
         break
@@ -803,12 +851,12 @@ export async function executeFusionRun(
     const recordArtifact = await store
       .artifactStore(input.runId)
       .put(JSON.stringify(record), "application/json", `runs/${input.runId}/result`)
-    await seal("succeeded", {
+    const sealed = await seal("succeeded", {
       resultArtifactId: result.answer_artifact_id,
       resultRecordArtifactId: recordArtifact.artifactId,
       events: answerDeliveryEvents(result, recordArtifact.artifactId),
     })
-    return { kind: "succeeded", result }
+    return outcomeOfSeal(sealed, input.runId, { kind: "succeeded", result })
   } catch (error) {
     if (error instanceof RouterFusionInfrastructureError) {
       // The run is not sealed here: the money and the attempts are still
@@ -839,15 +887,18 @@ export async function executeFusionRun(
     }
     if (error instanceof WorkflowError) {
       if (error.code === "CANCELLED") {
-        await seal("cancelled")
-        return { kind: "cancelled" }
+        return outcomeOfSeal(await seal("cancelled"), input.runId, { kind: "cancelled" })
       }
-      await seal("failed", { error: { code: error.code, message: error.message } })
-      return { kind: "failed", code: error.code, message: error.message }
+      const sealed = await seal("failed", { error: { code: error.code, message: error.message } })
+      return outcomeOfSeal(sealed, input.runId, {
+        kind: "failed",
+        code: error.code,
+        message: error.message,
+      })
     }
     const message = error instanceof Error ? error.message : String(error)
-    await seal("failed", { error: { code: "INTERNAL", message } })
-    return { kind: "failed", code: "INTERNAL", message }
+    const sealed = await seal("failed", { error: { code: "INTERNAL", message } })
+    return outcomeOfSeal(sealed, input.runId, { kind: "failed", code: "INTERNAL", message })
   } finally {
     clearInterval(heartbeat)
     clearInterval(cancelWatch)
@@ -855,6 +906,41 @@ export async function executeFusionRun(
     if (delegateWorkspace && !parked) {
       await delegateWorkspace.dispose().catch(() => undefined)
     }
+  }
+}
+
+/**
+ * What a caller is told after a seal: what the ledger recorded, never what
+ * this worker asked for. A seal only ever downgrades — a cancel that won the
+ * race seals `cancelled`, an uncertain call turns a success into a failure —
+ * and a caller that hands out an answer the ledger says was cancelled tells
+ * a different story than every other reader of the run (REC-04).
+ */
+export function outcomeOfSeal(
+  sealed: FinalizeOutcome,
+  runId: string,
+  asked: FusionRunOutcome
+): FusionRunOutcome {
+  if (!sealed.ok) {
+    // Another worker holds the run now; its seal is the one that counts.
+    if (sealed.code === "FENCED") return { kind: "busy" }
+    return { kind: "failed", code: sealed.code, message: `no run ${runId}` }
+  }
+  const { run } = sealed
+  switch (run.status) {
+    case "succeeded":
+      // Sealed by another worker first when this one did not ask for it: its
+      // result is the one stored, which this worker does not hold.
+      return asked.kind === "succeeded" ? asked : { kind: "busy" }
+    case "cancelled":
+      return { kind: "cancelled" }
+    default:
+      if (asked.kind === "failed" && run.error?.code === asked.code) return asked
+      return {
+        kind: "failed",
+        code: run.error?.code ?? (run.status === "expired" ? "DEADLINE_EXCEEDED" : "RUN_FAILED"),
+        message: run.error?.message ?? `the run ended ${run.status}`,
+      }
   }
 }
 

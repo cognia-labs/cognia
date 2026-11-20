@@ -359,13 +359,20 @@ async function recoverStaleRun(
  * as easily, and a hold nothing will ever release is the one failure that gets
  * worse the longer it is ignored. A run another window is still driving keeps a
  * live lease and is left alone.
+ *
+ * A `reconciling` run is not swept, whatever its lease says. Nothing executes
+ * it: a dispatched side effect's outcome is unknown, its money is held on
+ * purpose and a `human_handoff` interrupt asks a person what happened
+ * (REC-06). Its lease lapsing is the expected state, not a lost window, and
+ * sealing it `RUN_LOST` would end the very check it is waiting for. A person
+ * stopping it moves it to `cancelling`, which this sweep then finishes.
  */
 export async function recoverStaleFusionRuns(deps: ChatRunDeps): Promise<number> {
   const wired = new Set<string>(WIRED_ROUTER_FUSION_SURFACES)
   const store = await deps.store()
   const open = await store.db.fusionRuns
     .where("status")
-    .anyOf("queued", "running", "cancelling", "reconciling")
+    .anyOf("queued", "running", "cancelling")
     .filter((run) => wired.has(run.surface))
     .toArray()
   let recovered = 0

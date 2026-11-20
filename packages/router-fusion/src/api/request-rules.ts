@@ -250,16 +250,24 @@ export function idempotencyRequestHash(
 }
 
 export type IdempotencyDecision =
-  { kind: "new" } | { kind: "replay"; runId: string } | { kind: "conflict" }
+  | { kind: "new" }
+  | { kind: "replay"; runId: string }
+  /** The same request is still being accepted: wait for it, then replay its run (API-01). */
+  | { kind: "in_flight" }
+  | { kind: "conflict" }
 
+/**
+ * What a key's live record says about a request. `runId` is null while the
+ * request that claimed the key has not created its run yet; a second request
+ * with the same body then waits for that one instead of starting its own.
+ */
 export function decideIdempotency(
-  existing: { requestHash: string; runId: string } | undefined,
+  existing: { requestHash: string; runId: string | null } | undefined,
   requestHash: string
 ): IdempotencyDecision {
   if (!existing) return { kind: "new" }
-  return existing.requestHash === requestHash
-    ? { kind: "replay", runId: existing.runId }
-    : { kind: "conflict" }
+  if (existing.requestHash !== requestHash) return { kind: "conflict" }
+  return existing.runId === null ? { kind: "in_flight" } : { kind: "replay", runId: existing.runId }
 }
 
 /** Cognia's documented virtual model names map onto the spec's router models. */

@@ -130,6 +130,13 @@ export const DELEGATE_CORE_STAGE = "delegate:core"
 export const DELEGATE_SNAPSHOT_FILES = 200
 /** Paths one subtask may name. */
 export const DELEGATE_MAX_ALLOWED_PATHS = 32
+/** Questions the lead may put to a person in one round. */
+export const DELEGATE_MAX_QUESTIONS = 10
+
+/** The plan step of a round: the first plan, then one more per answered round. */
+export function planStepIdFor(round: number): string {
+  return round === 0 ? "delegate:plan" : `delegate:plan:${round}`
+}
 
 /** System prompt and framing per call, in every reservation. */
 const OVERHEAD_TOKENS = 1_500
@@ -200,6 +207,13 @@ export interface DelegateRunInput {
   /** Reviews a verified change when set (the optional `reviewer` role). */
   reviewer?: DelegateRole
   messages: Message[]
+  /**
+   * The questions the lead asked in earlier rounds of this run, oldest first,
+   * each round answered by the person's latest messages (`need_input`). The
+   * round count names the plan step, so a plan asked again with the answers
+   * is a new step rather than a replay of the plan that asked.
+   */
+  clarifications?: ReadonlyArray<readonly string[]>
   /** The `.cognia/workspace.json` acceptance profile the sandbox runs. */
   acceptanceProfileId: string
   outputTokens: { lead: number; worker: number; reviewer: number }
@@ -304,6 +318,18 @@ export type DelegateRunOutcome =
       /** A person must decide; the host parks the run and resumes it with the same input. */
       kind: "waiting_for_approval"
       approval: DelegatePendingApproval
+    })
+  | (DelegateRunStats & {
+      /**
+       * The lead needs answers before it can plan. The host parks the run;
+       * a resume with the person's answers plans again, as the next round.
+       */
+      kind: "waiting_for_input"
+      questions: string[]
+      /** The questions, stored for the caller to read (the journal never holds model text). */
+      questionsArtifactId: string
+      /** The plan step that asked. */
+      logicalStepId: string
     })
 
 // ── model-facing output schemas ───────────────────────────────────────────────
@@ -862,11 +888,26 @@ export async function runDelegateWorkflow(
         ...(listing.truncated ? ["… (more files not listed)"] : []),
       ].join("\n") || "(the workspace is empty)"
     : `(the workspace listing is unavailable: ${listing.code})`
+  const clarifications = input.clarifications ?? []
+  const planStepId = planStepIdFor(clarifications.length)
   const planMessages = roleMessages("lead", {
     profile: input.rolePrompts,
     contract,
     material: [
       untrustedBlock("the workspace snapshot", snapshot),
+      ...(clarifications.length > 0
+        ? [
+            untrustedBlock(
+              "the questions you asked before; the person's latest messages in the task contract answer them",
+              clarifications
+                .map(
+                  (round, index) =>
+                    `Round ${index + 1}:\n${round.map((question, n) => `${n + 1}. ${question}`).join("\n")}`
+                )
+                .join("\n\n")
+            ),
+          ]
+        : []),
       [
         "Tool capabilities of the worker:",
         `- policy ${DELEGATE_WORK_POLICY}: ${offered.map((tool) => tool.name).join(", ")}`,
@@ -911,7 +952,7 @@ export async function runDelegateWorkflow(
     const plan = await callForJson(
       "lead",
       input.lead.deploymentId,
-      "delegate:plan",
+      planStepId,
       planMessages,
       DELEGATE_PLAN_SCHEMA,
       LeadPlan,
@@ -927,13 +968,39 @@ export async function runDelegateWorkflow(
         "the lead's plan stayed invalid after the allowed repair"
       )
     }
+    const questions = plan.questions
+      .map((question) => question.trim())
+      .filter((question) => question.length > 0)
+      .slice(0, DELEGATE_MAX_QUESTIONS)
+    if (plan.status === "need_input" && questions.length > 0) {
+      // Ask, do not fail: the run parks on the person, and their answer plans
+      // again in this same run. The questions are model text, so they go to
+      // an artifact the caller reads; the journal names it.
+      const stored = await ports.artifacts.put(
+        JSON.stringify({ questions }),
+        "application/json",
+        `${namespace}/questions/${clarifications.length}`
+      )
+      await phase("waiting_for_input", {
+        questions_artifact_id: stored.artifactId,
+        question_count: questions.length,
+      })
+      return {
+        kind: "waiting_for_input",
+        questions,
+        questionsArtifactId: stored.artifactId,
+        logicalStepId: planStepId,
+        ...stats(),
+      }
+    }
     if (plan.status !== "ready") {
+      // Blocked, or asking nothing a person could answer.
       throw new WorkflowError(
         plan.status === "need_input" ? "DELEGATE_NEEDS_INPUT" : "DELEGATE_BLOCKED",
         plan.status === "need_input"
-          ? "the lead needs more information before the work can be delegated"
+          ? "the lead needs more information but asked no question"
           : "the lead reports the task cannot be delegated as asked",
-        { questions: plan.questions.slice(0, 10) }
+        { questions }
       )
     }
     if (plan.subtasks.length === 0 || plan.subtasks.length > limits.maxSubtasks) {

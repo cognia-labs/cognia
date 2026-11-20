@@ -43,7 +43,7 @@ import {
 import { FusionDB } from "../db/fusion-db"
 import { FusionLedgerStore, type CreateRunInput } from "../db/ledger-store"
 import type { OutboxAppliers } from "../db/outbox"
-import { encodeRunInput } from "../db/run-input"
+import { decodeRunInput, encodeRunInput } from "../db/run-input"
 import { decideFusionApproval } from "./delegate-approvals"
 import { createDelegateStepJournal } from "./delegate-step-journal"
 import type { DelegateHostPorts } from "./delegate-host-ports"
@@ -570,6 +570,148 @@ describe("[ACC:API-08] an approval is bound to the request it was asked for", ()
     // Exactly the parked time, no more: the work budget is unchanged.
     expect(resumed?.deadlineAt).toBe(deadlineWhenParked + (hourLater - pausedAt))
     expect(resumed?.deadlineAt).toBeGreaterThan(hourLater)
+  })
+
+  it("never records a decision without the resume: an interruption between them rolls both back", async () => {
+    const h = harness()
+    await createRun(h)
+    const outcome = await park(h)
+    if (outcome.kind !== "waiting") return
+    const approvalId = outcome.approval.approvalId
+    const before = (await h.store.getRun(RUN_ID))!
+
+    // The process dies after the decision is written and before the run moves.
+    const resume = jest
+      .spyOn(h.store, "resumeRun")
+      .mockRejectedValueOnce(new Error("process exited"))
+    await expect(
+      decideFusionApproval(h.store, {
+        runId: RUN_ID,
+        approvalId,
+        decision: "approve",
+        expectedVersion: before.lastSeq,
+      })
+    ).rejects.toThrow("process exited")
+    resume.mockRestore()
+    // Neither half landed: the request is still the one to answer.
+    expect((await pendingApprovalOf(h.db, RUN_ID))?.id).toBe(approvalId)
+    expect((await h.store.getRun(RUN_ID))?.status).toBe("waiting_for_approval")
+
+    // The same answer, retried, is taken and moves the run.
+    expect(
+      await decideFusionApproval(h.store, {
+        runId: RUN_ID,
+        approvalId,
+        decision: "approve",
+        expectedVersion: before.lastSeq,
+      })
+    ).toMatchObject({ ok: true, decision: "approve", approvalId })
+    expect((await h.store.getRun(RUN_ID))?.status).toBe("queued")
+    expect(await pendingApprovalOf(h.db, RUN_ID)).toBeUndefined()
+  })
+
+  it("keeps the request pending when the run refuses to resume", async () => {
+    const h = harness()
+    await createRun(h)
+    const outcome = await park(h)
+    if (outcome.kind !== "waiting") return
+    const resume = jest
+      .spyOn(h.store, "resumeRun")
+      .mockResolvedValueOnce({ ok: false, code: "DEADLINE_EXCEEDED" })
+    expect(
+      await decideFusionApproval(h.store, {
+        runId: RUN_ID,
+        approvalId: outcome.approval.approvalId,
+        decision: "approve",
+      })
+    ).toMatchObject({ ok: false, code: "DEADLINE_EXCEEDED" })
+    resume.mockRestore()
+    expect((await pendingApprovalOf(h.db, RUN_ID))?.status).toBe("pending")
+    expect((await h.store.getRun(RUN_ID))?.status).toBe("waiting_for_approval")
+  })
+})
+
+// ── a lead that needs answers ─────────────────────────────────────────────────
+
+describe("a lead that asks before it can plan", () => {
+  const QUESTION = "Which list should change?"
+
+  it("parks the run on the question, and an answer plans again as a new step of the same run", async () => {
+    const h = harness()
+    await createRun(h)
+    const { deps: first, requests } = deps(h, {
+      lead: [plan({ status: "need_input", subtasks: [], questions: [QUESTION] })],
+    })
+    const parked = await executeFusionRun(first, { runId: RUN_ID })
+    expect(parked).toMatchObject({
+      kind: "needs_input",
+      code: "WAITING_FOR_INPUT",
+      questions: [QUESTION],
+    })
+    expect(requests.map(({ role }) => role)).toEqual(["lead"])
+
+    const waiting = (await h.store.getRun(RUN_ID))!
+    // Parked, not failed: nothing sealed, the worktrees kept.
+    expect(waiting).toMatchObject({ status: "waiting_for_input", terminalAt: null })
+    expect(waiting.inputRequest?.logicalStepId).toBe("delegate:plan")
+    expect(h.disposed()).toBe(0)
+    // The question is readable, from the artifact the journal names.
+    const questionsArtifactId = waiting.inputRequest!.questionsArtifactId
+    expect(
+      JSON.parse((await h.store.artifactStore(RUN_ID).get(questionsArtifactId))!.content)
+    ).toEqual({ questions: [QUESTION] })
+    const asked = (await h.store.listEvents(RUN_ID)).find(
+      (event) => event.type === "phase.changed" && event.payload.phase === "waiting_for_input"
+    )
+    expect(asked?.payload).toMatchObject({ questions_artifact_id: questionsArtifactId })
+    expect(JSON.stringify(asked?.payload)).not.toContain(QUESTION)
+    const handoff = (appliers.execution_run_projection as jest.Mock).mock.calls
+      .map(([row]) => row as { payload: Record<string, unknown> })
+      .find(
+        (row) =>
+          (row.payload.interrupt as { kind?: string } | undefined)?.kind === "DELEGATE_NEEDS_INPUT"
+      )
+    expect(handoff?.payload).toMatchObject({ phase: "waiting" })
+
+    // The answer, as the Run API's input resume stores it.
+    const stored = decodeRunInput(
+      (await h.store.artifactStore(RUN_ID).get(waiting.inputArtifactId!))!.content
+    )!
+    const answered = await h.store.artifactStore(RUN_ID).put(
+      encodeRunInput({
+        ...stored,
+        messages: [...stored.messages, { role: "user", content: "The users list." }],
+        clarifications: [[QUESTION]],
+      }),
+      "application/json",
+      `runs/${RUN_ID}/input/answer`
+    )
+    expect(
+      await h.store.resumeRun(RUN_ID, { kind: "input", inputArtifactId: answered.artifactId })
+    ).toMatchObject({ ok: true })
+
+    const { deps: second, requests: later } = deps(h, WORKING)
+    const outcome = await executeFusionRun(second, { runId: RUN_ID })
+    expect(outcome.kind).toBe("succeeded")
+    const lead = later.find(({ role }) => role === "lead")!
+    // A new plan step: the plan that asked is not replayed.
+    expect(lead.logicalStepId).toBe("delegate:plan:1")
+    const seen = JSON.stringify(lead.messages)
+    expect(seen).toContain(QUESTION)
+    expect(seen).toContain("The users list.")
+    expect((await h.store.getRun(RUN_ID))?.status).toBe("succeeded")
+  })
+
+  it("still fails a lead that reports need_input without asking anything", async () => {
+    const h = harness()
+    await createRun(h)
+    const { deps: d } = deps(h, {
+      lead: [plan({ status: "need_input", subtasks: [], questions: ["  "] })],
+    })
+    expect(await executeFusionRun(d, { runId: RUN_ID })).toMatchObject({
+      kind: "failed",
+      code: "DELEGATE_NEEDS_INPUT",
+    })
   })
 })
 

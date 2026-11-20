@@ -179,6 +179,19 @@ describe("routeRunRequest", () => {
       expect(route.reasons).toContain("panel_review:PANEL_SAME_REVISION")
   })
 
+  it("finds a distinct panel whatever order the host lists the alias in", async () => {
+    for (const balanced of [
+      [MINI, SONNET],
+      [SONNET, MINI],
+    ]) {
+      const { host } = makeHost({ aliases: { fast: [MINI], balanced, powerful: [GPT] } })
+      expect(await routeRunRequest(host, input())).toMatchObject({
+        kind: "selected",
+        roles: { panel_a: "openai::gpt-5-mini", panel_b: "anthropic::claude-sonnet-5" },
+      })
+    }
+  })
+
   it("offers a schema check only when the caller asked for structured output", async () => {
     const cascade = request({ mode: "cascade", allowed_modes: ["cascade"] })
     const { host } = makeHost()

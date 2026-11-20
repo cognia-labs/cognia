@@ -1376,11 +1376,34 @@ describe("runDelegateWorkflow", () => {
 
   // ── plan review ──
 
-  it("ends explicitly when the lead needs input, and refuses a plan that escapes the workspace", async () => {
+  it("parks on the lead's questions, and refuses a plan that escapes the workspace", async () => {
     const needs = world({ lead: [plan({ status: "need_input", questions: ["Which list?"] })] })
-    const asked = await failure(runDelegateWorkflow(needs.ports, input()))
-    expect(asked.code).toBe("DELEGATE_NEEDS_INPUT")
-    expect(asked.details).toEqual({ questions: ["Which list?"] })
+    const asked = await runDelegateWorkflow(needs.ports, input())
+    expect(asked).toMatchObject({
+      kind: "waiting_for_input",
+      questions: ["Which list?"],
+      logicalStepId: "delegate:plan",
+    })
+    if (asked.kind !== "waiting_for_input") throw new Error("expected a question")
+    expect(JSON.parse((await needs.artifacts.get(asked.questionsArtifactId))!.content)).toEqual({
+      questions: ["Which list?"],
+    })
+    expect(needs.requests.filter((r) => r.role === "worker")).toEqual([])
+
+    // Answered: the next round is its own plan step and the lead sees what it asked.
+    const answered = world({ lead: [plan()] })
+    // Only the plan matters here; the unscripted worker ends the run after it.
+    await runDelegateWorkflow(answered.ports, input({ clarifications: [["Which list?"]] })).catch(
+      () => undefined
+    )
+    const replan = answered.requests.find((r) => r.role === "lead")!
+    expect(replan.logicalStepId).toBe("delegate:plan:1")
+    expect(JSON.stringify(replan.messages)).toContain("Which list?")
+
+    const silent = world({ lead: [plan({ status: "need_input", questions: [" "] })] })
+    expect((await failure(runDelegateWorkflow(silent.ports, input()))).code).toBe(
+      "DELEGATE_NEEDS_INPUT"
+    )
 
     const blocked = world({ lead: [plan({ status: "blocked", questions: [] })] })
     expect((await failure(runDelegateWorkflow(blocked.ports, input()))).code).toBe(

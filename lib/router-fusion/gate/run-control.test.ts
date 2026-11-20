@@ -165,7 +165,17 @@ describe("agentsWorkflows runs in the cockpit", () => {
     const resumeRun = jest.fn()
     const loadHost = async () =>
       ({
-        currentFusionStore: async () => ({ getRun: async () => undefined, resumeRun }),
+        currentFusionStore: async () => ({
+          getRun: async () => undefined,
+          resumeRun,
+          // The decision and the resume share one transaction.
+          db: {
+            transaction: (_mode: string, _tables: unknown, run: () => unknown) => run(),
+            fusionAcceptanceApprovals: {},
+            fusionRuns: {},
+            fusionRunEvents: {},
+          },
+        }),
         drainAccountOutbox,
       }) as unknown as RouterFusionHost
     // The run is gone: the refusal is reported, and nothing is driven.

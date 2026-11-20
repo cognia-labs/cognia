@@ -13,12 +13,22 @@ describe("stored run input", () => {
     expect(decodeRunInput(encodeRunInput(input))).toEqual(input)
   })
 
-  it("still reads the bare message array a B2 build stored", () => {
-    expect(decodeRunInput(JSON.stringify([{ role: "user", content: "hi" }]))).toEqual({
-      messages: [{ role: "user", content: "hi" }],
+  it("round-trips the questions a person answered, round by round", () => {
+    const input = {
+      messages: [
+        { role: "user" as const, content: "fix the list" },
+        { role: "user" as const, content: "the users list" },
+      ],
       allowDegraded: false,
       jsonSchema: null,
-    })
+      clarifications: [["Which list?"]],
+    }
+    expect(decodeRunInput(encodeRunInput(input))).toEqual(input)
+    expect(
+      decodeRunInput(
+        JSON.stringify({ ...input, clarifications: [[], ["", 3, "Which list?"], "nope"] })
+      )?.clarifications
+    ).toEqual([["Which list?"]])
   })
 
   it("keeps only well-formed messages and refuses input with none", () => {
@@ -46,6 +56,8 @@ describe("stored run input", () => {
       "not json",
       "42",
       "[]",
+      // A bare message array is not a stored input.
+      JSON.stringify([{ role: "user", content: "hi" }]),
       JSON.stringify({ messages: [] }),
     ]) {
       expect(decodeRunInput(content)).toBeNull()

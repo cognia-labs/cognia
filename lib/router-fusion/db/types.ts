@@ -188,6 +188,13 @@ export interface FusionRunRow {
    */
   driver?: FusionRunDriver
   /**
+   * What a run parked in `waiting_for_input` asked: the artifact holding the
+   * questions and the step that asked them. A resume with the person's
+   * answers carries the questions into the run's input as the round they
+   * answer, then clears this. Absent whenever the run is not waiting for input.
+   */
+  inputRequest?: { questionsArtifactId: string; logicalStepId: string } | null
+  /**
    * When the run was parked (`waiting_for_input` / `waiting_for_approval`), so
    * the resume can give back the wall time a person spent deciding.
    *
@@ -320,9 +327,21 @@ export interface FusionIdempotencyRow {
   /** `<actorKeyId>\u0000<endpoint>\u0000<key>`. */
   scopedKey: string
   requestHash: string
-  runId: string
+  /**
+   * The run this key replays. Null while the request that claimed the key is
+   * still being accepted: the claim is written before anything else, in one
+   * transaction with the check, so two concurrent requests never both start
+   * a run (API-01).
+   */
+  runId: string | null
+  /** Which acceptance holds the key while `runId` is null; only it may bind or release it. */
+  claimId: string
   createdAt: number
-  /** Keys expire; after that the same key starts a new run. */
+  /**
+   * Keys expire; after that the same key starts a new run. A claim that was
+   * never bound expires much sooner (`IDEMPOTENCY_CLAIM_MS`), so a request
+   * that died mid-acceptance does not hold its key for the whole window.
+   */
   expiresAt: number
 }
 

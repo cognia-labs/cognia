@@ -8,12 +8,17 @@ import {
   type SessionTranscriptDeps,
   type TranscriptMessage,
 } from "./session-transcript"
+import { encodeRunInput } from "./run-input"
 import type { FusionOutboxRow } from "./types"
 
-const INPUT = JSON.stringify([
-  { role: "user", content: "first question" },
-  { role: "user", content: "and a detail" },
-])
+const INPUT = encodeRunInput({
+  messages: [
+    { role: "user", content: "first question" },
+    { role: "user", content: "and a detail" },
+  ],
+  allowDegraded: false,
+  jsonSchema: null,
+})
 
 function effect(payload: Record<string, unknown>): FusionOutboxRow {
   return {

@@ -130,6 +130,11 @@ describe("idempotency", () => {
       runId: "r",
     })
     expect(decideIdempotency({ requestHash: a, runId: "r" }, spaced)).toEqual({ kind: "conflict" })
+    // A key claimed by a request still being accepted.
+    expect(decideIdempotency({ requestHash: a, runId: null }, a)).toEqual({ kind: "in_flight" })
+    expect(decideIdempotency({ requestHash: a, runId: null }, spaced)).toEqual({
+      kind: "conflict",
+    })
   })
 })
 

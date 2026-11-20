@@ -152,6 +152,8 @@ export interface RunApiDeps {
   policy: (input?: RunPolicyInput) => RunRequestPolicy | Promise<RunRequestPolicy>
   now?: () => number
   newId?: () => string
+  /** How a request waiting on an in-flight one with the same key pauses; tests make it instant. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export interface RunPolicyInput {
@@ -331,6 +333,129 @@ async function bindSession(
   return { ok: true, value: { session, sessionVersion: version } }
 }
 
+/** The questions a parked run stored (`{ questions: string[] }`), or none. */
+function questionsOf(content: string | null | undefined): string[] {
+  if (!content) return []
+  try {
+    const parsed = JSON.parse(content) as { questions?: unknown }
+    return Array.isArray(parsed.questions)
+      ? parsed.questions.filter((q): q is string => typeof q === "string" && q.length > 0)
+      : []
+  } catch {
+    return []
+  }
+}
+
+// ── idempotency (API-01, API-02) ──────────────────────────────────────────────
+
+/**
+ * How long an acceptance may hold a key before the key is free again. Ample
+ * for binding a session and creating a run, which are local writes; short
+ * enough that a request that died mid-acceptance does not keep its key, and
+ * the requests waiting on it, for the whole idempotency window.
+ */
+export const IDEMPOTENCY_CLAIM_MS = 120_000
+/** How often a request waiting on an in-flight one looks again. */
+const IDEMPOTENCY_WAIT_POLL_MS = 25
+
+type IdempotencyClaim =
+  | { kind: "claimed"; claimId: string }
+  | { kind: "replay"; run: FusionRunRow }
+  | { kind: "conflict" }
+
+/**
+ * Take `scopedKey` for this request, or learn what already holds it.
+ *
+ * The check and the claim are one transaction, so of two concurrent requests
+ * with the same key exactly one claims it. The other waits while the claim is
+ * live and unbound, then replays the run it was bound to — or claims the key
+ * itself when the first released it (its request was refused) or let it lapse.
+ */
+async function claimIdempotencyKey(
+  store: FusionLedgerStore,
+  scopedKey: string,
+  requestHash: string,
+  deps: RunApiDeps
+): Promise<IdempotencyClaim> {
+  const { now, newId } = clock(deps)
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const db = store.db
+  for (;;) {
+    const decided = await db.transaction("rw", db.fusionIdempotency, async () => {
+      const at = now()
+      const existing = await db.fusionIdempotency.get(scopedKey)
+      const decision = decideIdempotency(
+        existing && existing.expiresAt > at ? existing : undefined,
+        requestHash
+      )
+      if (decision.kind === "new") {
+        const claimId = newId()
+        await db.fusionIdempotency.put({
+          scopedKey,
+          requestHash,
+          runId: null,
+          claimId,
+          createdAt: at,
+          expiresAt: at + IDEMPOTENCY_CLAIM_MS,
+        })
+        return { kind: "claimed" as const, claimId }
+      }
+      return decision
+    })
+    if (decided.kind === "claimed" || decided.kind === "conflict") return decided
+    if (decided.kind === "in_flight") {
+      await sleep(IDEMPOTENCY_WAIT_POLL_MS)
+      continue
+    }
+    const run = await store.getRun(decided.runId)
+    if (run) return { kind: "replay", run }
+    // The run it named was reaped; the key no longer points at anything.
+    await db.transaction("rw", db.fusionIdempotency, async () => {
+      const current = await db.fusionIdempotency.get(scopedKey)
+      if (current?.runId === decided.runId) await db.fusionIdempotency.delete(scopedKey)
+    })
+  }
+}
+
+/** Point a claimed key at its run for the whole window. False when the claim was lost. */
+async function bindIdempotencyKey(
+  store: FusionLedgerStore,
+  scopedKey: string,
+  claimId: string,
+  runId: string,
+  at: number
+): Promise<boolean> {
+  const db = store.db
+  return db.transaction("rw", db.fusionIdempotency, async () => {
+    const current = await db.fusionIdempotency.get(scopedKey)
+    if (!current || current.claimId !== claimId || current.runId !== null) return false
+    await db.fusionIdempotency.put({
+      ...current,
+      runId,
+      createdAt: at,
+      expiresAt: at + IDEMPOTENCY_TTL_MS,
+    })
+    return true
+  })
+}
+
+/** Give back a key this acceptance claimed and never bound (its request was refused, or threw). */
+async function releaseIdempotencyKey(
+  store: FusionLedgerStore,
+  scopedKey: string,
+  claimId: string
+): Promise<void> {
+  const db = store.db
+  await db
+    .transaction("rw", db.fusionIdempotency, async () => {
+      const current = await db.fusionIdempotency.get(scopedKey)
+      if (current?.claimId === claimId && current.runId === null) {
+        await db.fusionIdempotency.delete(scopedKey)
+      }
+    })
+    .catch(() => undefined)
+}
+
 // ── creating runs ─────────────────────────────────────────────────────────────
 
 export interface AcceptRunInput {
@@ -386,13 +511,13 @@ export async function acceptRun(
     ? scopedIdempotencyKey(input.actor, input.endpoint, input.idempotencyKey)
     : null
 
+  // Claim the key before anything else exists, in one transaction with the
+  // check: a second request with the same key and body waits for this one
+  // and replays its run, rather than creating its own (API-01).
+  let claimId: string | null = null
   if (scopedKey) {
-    const existing = await store.db.fusionIdempotency.get(scopedKey)
-    const decision = decideIdempotency(
-      existing && existing.expiresAt > now() ? existing : undefined,
-      requestHash
-    )
-    if (decision.kind === "conflict") {
+    const claim = await claimIdempotencyKey(store, scopedKey, requestHash, deps)
+    if (claim.kind === "conflict") {
       return {
         ok: false,
         error: error(
@@ -402,64 +527,67 @@ export async function acceptRun(
         ),
       }
     }
-    if (decision.kind === "replay") {
-      const run = await store.getRun(decision.runId)
-      if (run) {
-        return {
-          ok: true,
-          value: { accepted: await acceptedOf(store, run, input.actor, deps), replayed: true },
-        }
+    if (claim.kind === "replay") {
+      return {
+        ok: true,
+        value: { accepted: await acceptedOf(store, claim.run, input.actor, deps), replayed: true },
       }
-      // The run it named was reaped; the key no longer points at anything.
-      await store.db.fusionIdempotency.delete(scopedKey)
     }
+    claimId = claim.claimId
   }
 
-  const bound = await bindSession(deps, store, input.actor, input.request, input.messages)
-  if (!bound.ok) return bound
-  const { session, sessionVersion } = bound.value
+  let bound = false
+  let runId: string
+  try {
+    const session = await bindSession(deps, store, input.actor, input.request, input.messages)
+    if (!session.ok) return session
+    const { session: conversation, sessionVersion } = session.value
 
-  // The request is gone once this call answers 202, so the run's input is
-  // stored before the run exists. If creation is refused, the artifact is an
-  // orphan that expires on its own window.
-  const inputArtifact = await store.artifactStore(null).put(
-    encodeRunInput({
+    // The request is gone once this call answers 202, so the run's input is
+    // stored before the run exists. If creation is refused, the artifact is an
+    // orphan that expires on its own window.
+    const inputArtifact = await store.artifactStore(null).put(
+      encodeRunInput({
+        messages: input.messages,
+        allowDegraded: input.request.allow_degraded,
+        jsonSchema: input.jsonSchema,
+      }),
+      "application/json",
+      `api-input/${newId()}`
+    )
+
+    // A request may lower the action's run cap, never raise it (D22).
+    const created = await deps.createRun({
+      request: input.request,
       messages: input.messages,
-      allowDegraded: input.request.allow_degraded,
       jsonSchema: input.jsonSchema,
-    }),
-    "application/json",
-    `api-input/${newId()}`
-  )
-
-  // A request may lower the action's run cap, never raise it (D22).
-  const created = await deps.createRun({
-    request: input.request,
-    messages: input.messages,
-    jsonSchema: input.jsonSchema,
-    actor: input.actor,
-    session,
-    sessionVersion,
-    capMicrousd: usdToMicrousd(input.request.budget.max_cost_usd),
-    inputArtifactId: inputArtifact.artifactId,
-    ...(input.delegateDelivery ? { delegateDelivery: input.delegateDelivery } : {}),
-  })
-  if (!created.ok) return created
-  // Bind the input to its run, so retention and ownership checks see it.
-  await store.db.fusionArtifacts.update(inputArtifact.artifactId, { runId: created.value.runId })
-
-  if (scopedKey) {
-    await store.db.fusionIdempotency.put({
-      scopedKey,
-      requestHash,
-      runId: created.value.runId,
-      createdAt: now(),
-      expiresAt: now() + IDEMPOTENCY_TTL_MS,
+      actor: input.actor,
+      session: conversation,
+      sessionVersion,
+      capMicrousd: usdToMicrousd(input.request.budget.max_cost_usd),
+      inputArtifactId: inputArtifact.artifactId,
+      ...(input.delegateDelivery ? { delegateDelivery: input.delegateDelivery } : {}),
     })
-  }
-  deps.startRun(created.value.runId)
+    if (!created.ok) return created
+    runId = created.value.runId
+    // Bind the input to its run, so retention and ownership checks see it.
+    await store.db.fusionArtifacts.update(inputArtifact.artifactId, { runId })
 
-  const run = await store.getRun(created.value.runId)
+    if (scopedKey && claimId) {
+      bound = await bindIdempotencyKey(store, scopedKey, claimId, runId, now())
+      if (!bound) {
+        // This acceptance outlived its claim and another took the key over:
+        // the run made here is never started, and the key's own run answers.
+        await store.cancelRun(runId)
+        return acceptRun(deps, input)
+      }
+    }
+  } finally {
+    if (scopedKey && claimId && !bound) await releaseIdempotencyKey(store, scopedKey, claimId)
+  }
+  deps.startRun(runId)
+
+  const run = await store.getRun(runId)
   if (!run) {
     return {
       ok: false,
@@ -821,6 +949,13 @@ export async function resumeRunFromApi(
     const artifacts = store.artifactStore(run.runId)
     const previous = run.inputArtifactId ? await artifacts.get(run.inputArtifactId) : null
     const stored = decodeRunInput(previous?.content)
+    // The questions these messages answer join the input as their round, so
+    // the run plans again knowing what it asked (and as a new plan step).
+    const asked =
+      run.status === "waiting_for_input" && run.inputRequest
+        ? questionsOf((await artifacts.get(run.inputRequest.questionsArtifactId))?.content)
+        : []
+    const clarifications = [...(stored?.clarifications ?? []), ...(asked.length > 0 ? [asked] : [])]
     const next = await artifacts.put(
       encodeRunInput({
         messages: [
@@ -832,6 +967,7 @@ export async function resumeRunFromApi(
         ],
         allowDegraded: stored?.allowDegraded ?? false,
         jsonSchema: stored?.jsonSchema ?? null,
+        ...(clarifications.length > 0 ? { clarifications } : {}),
       }),
       "application/json",
       `runs/${run.runId}/input/${resume.expected_run_version}`

@@ -232,17 +232,6 @@ describe("collectRoutingSamples", () => {
     expect(row.features).toEqual(encodeRoutingFeatures(runFeatures(MESSAGES, schema)))
   })
 
-  it("reads the B2 bare-array input shape too", async () => {
-    await seedRun(run("run-a"))
-    const result = await collectRoutingSamples(
-      db,
-      deps({ "input-run-a": JSON.stringify(MESSAGES) })
-    )
-    expect(result.collected).toBe(1)
-    const [row] = await listRoutingSamples(db)
-    expect(row.features).toEqual(encodeRoutingFeatures(runFeatures(MESSAGES, null)))
-  })
-
   it("groups a sessionless run by its own id and never records a negative cost", async () => {
     await seedRun(
       run("run-a", { sessionId: null, budget: { ...run("run-a").budget, spentMicrousd: -50 } })

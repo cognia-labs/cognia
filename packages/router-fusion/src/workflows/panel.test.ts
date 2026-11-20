@@ -1,3 +1,4 @@
+import { chatResponseOf } from "../api/chat-compat"
 import { JudgeReportSchema, RunResultSchema, type EvidenceRef } from "../contracts/schemas"
 import { FakeProvider, type FakeScript, type FakeStep } from "../fake/fake-provider"
 import { MemoryArtifactStore } from "../fake/memory-artifacts"
@@ -398,6 +399,39 @@ describe("runPanel", () => {
     expect(h.ledger.totalSettledMicrousd()).toBe(
       costs.reduce((sum, [, cost]) => sum + (cost as number), 0)
     )
+  })
+
+  it("[ACC:PAN-03] reports a degraded coding panel as degraded on the compat response", async () => {
+    const store = new MemoryArtifactStore()
+    const healthy = healthyScript(await evidence(store))
+    const h = harness(
+      (request) =>
+        request.logicalStepId === "panel:member:panel_b:1"
+          ? { kind: "invalid_json" }
+          : healthy(request),
+      { store }
+    )
+    const outcome = await runPanel(h.ports, input({ task: "code.debug", allowDegraded: true }))
+    expect(outcome.degradedToSingle).toBe(true)
+    expect(outcome.result).toMatchObject({ mode_executed: "direct", quality_status: "degraded" })
+    expect(h.events.some(({ type }) => type === "run.degraded")).toBe(true)
+    const response = chatResponseOf({
+      runId: RUN,
+      model: "cognia/panel",
+      createdAtMs: 0,
+      result: outcome.result,
+      usage: { promptTokens: 0, completionTokens: 0 },
+      billing: {
+        budget_cap_microusd: 100_000,
+        spent_microusd: 0,
+        active_step_reservations_microusd: 0,
+        tenant_hold_microusd: 0,
+        status: "actual",
+        overspend_microusd: 0,
+        model_calls: 0,
+      },
+    })
+    expect(response.routing).toMatchObject({ mode_executed: "direct", degraded: true })
   })
 
   it("[ACC:PAN-04] does not count candidates agreeing on an unsourced claim as support", async () => {

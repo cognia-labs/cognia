@@ -380,6 +380,12 @@ export async function runAgentsWorkflowsFusion(
     case "reconciling":
       // REC-06: a dispatched side effect with no receipt. Never re-run.
       return refused(outcome.code, [outcome.message], runId)
+    case "needs_input":
+      // An Agent, Squad or workflow step has nobody to answer the lead mid-run.
+      // The parked run is cancelled so its money is released, and the
+      // questions go back to the caller, who can ask again with the answers.
+      await cancelParkedRun({ store, appliers, runId })
+      return refused("DELEGATE_NEEDS_INPUT", outcome.questions, runId)
     default:
       return refused(outcome.code, [outcome.message], runId)
   }

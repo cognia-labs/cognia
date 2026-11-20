@@ -87,6 +87,27 @@ describe("acceptance profiles", () => {
     }
   })
 
+  it("[ACC:PAN-03] labels a degraded result degraded even when no profile can verify it", () => {
+    expect(
+      acceptanceClaimFor({
+        verificationStatus: "passed",
+        profile: "text_basic",
+        task: "code.debug",
+        deliversChange: false,
+        degraded: true,
+      })
+    ).toBe("degraded")
+    expect(
+      acceptanceClaimFor({
+        verificationStatus: "passed",
+        profile: "text_basic",
+        task: "code.implement",
+        deliversChange: true,
+        degraded: true,
+      })
+    ).toBe("degraded")
+  })
+
   it("labels a plain chat answer about code as unknown, not accepted", () => {
     expect(
       acceptanceClaimFor({

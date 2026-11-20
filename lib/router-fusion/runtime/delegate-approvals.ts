@@ -122,6 +122,14 @@ export type FusionApprovalOutcome =
  * denial resumes the run too: the workflow has to run to turn "denied" into
  * its own refusal (`SCOPE_EXPANSION_DENIED`), rather than the run being sealed
  * here by something that is not the graph.
+ *
+ * The decision and the resume are ONE transaction. Recorded apart, an
+ * interruption between them left an approved row next to a run still parked
+ * on it: the pending request was gone, so a retry was refused as
+ * `RUN_NOT_WAITING`, and boot recovery does not touch a waiting run, so
+ * nothing ever moved it again. Now either both land or neither does, and a
+ * resume the run refuses (its deadline passed, its version moved) leaves the
+ * request pending for an answer that can.
  */
 export async function decideFusionApproval(
   store: FusionLedgerStore,
@@ -136,58 +144,80 @@ export async function decideFusionApproval(
   }
 ): Promise<FusionApprovalOutcome> {
   const now = input.now ?? (() => Date.now())
-  const run = await store.getRun(input.runId)
-  if (!run) return { ok: false, code: "RUN_NOT_FOUND" }
-  if (run.status !== "waiting_for_approval") {
-    return { ok: false, code: "RUN_NOT_WAITING", version: run.lastSeq }
-  }
-  if (input.expectedVersion !== undefined && input.expectedVersion !== run.lastSeq) {
-    return { ok: false, code: "RUN_VERSION_CONFLICT", version: run.lastSeq }
-  }
-  const pending = await pendingApprovalOf(store.db, input.runId)
-  if (!pending) return { ok: false, code: "RUN_NOT_WAITING", version: run.lastSeq }
-  if (!input.approvalId || input.approvalId !== pending.id) {
-    return {
-      ok: false,
-      code: "APPROVAL_MISMATCH",
-      pendingApprovalId: pending.id,
-      version: run.lastSeq,
-    }
-  }
-  const decided = await decideApproval(store.db, {
-    runId: input.runId,
-    approvalId: input.approvalId,
-    decision: input.decision,
-    reason: input.decision === "deny" ? "denied_by_person" : null,
-    now: now(),
-  })
-  if (!decided.ok) {
-    return decided.code === "APPROVAL_MISMATCH"
-      ? {
-          ok: false,
-          code: "APPROVAL_MISMATCH",
-          pendingApprovalId: decided.pendingId,
-          version: run.lastSeq,
+  const db = store.db
+  try {
+    return await db.transaction(
+      "rw",
+      [db.fusionAcceptanceApprovals, db.fusionRuns, db.fusionRunEvents],
+      async (): Promise<FusionApprovalOutcome> => {
+        const run = await store.getRun(input.runId)
+        if (!run) return { ok: false, code: "RUN_NOT_FOUND" }
+        if (run.status !== "waiting_for_approval") {
+          return { ok: false, code: "RUN_NOT_WAITING", version: run.lastSeq }
         }
-      : { ok: false, code: "RUN_NOT_WAITING", version: run.lastSeq }
+        if (input.expectedVersion !== undefined && input.expectedVersion !== run.lastSeq) {
+          return { ok: false, code: "RUN_VERSION_CONFLICT", version: run.lastSeq }
+        }
+        const pending = await pendingApprovalOf(db, input.runId)
+        if (!pending) return { ok: false, code: "RUN_NOT_WAITING", version: run.lastSeq }
+        if (!input.approvalId || input.approvalId !== pending.id) {
+          return {
+            ok: false,
+            code: "APPROVAL_MISMATCH",
+            pendingApprovalId: pending.id,
+            version: run.lastSeq,
+          }
+        }
+        const decided = await decideApproval(db, {
+          runId: input.runId,
+          approvalId: input.approvalId,
+          decision: input.decision,
+          reason: input.decision === "deny" ? "denied_by_person" : null,
+          now: now(),
+        })
+        if (!decided.ok) {
+          return decided.code === "APPROVAL_MISMATCH"
+            ? {
+                ok: false,
+                code: "APPROVAL_MISMATCH",
+                pendingApprovalId: decided.pendingId,
+                version: run.lastSeq,
+              }
+            : { ok: false, code: "RUN_NOT_WAITING", version: run.lastSeq }
+        }
+        const resumed = await store.resumeRun(input.runId, {
+          kind: "approval",
+          ...(input.expectedVersion !== undefined
+            ? { expectedVersion: input.expectedVersion }
+            : {}),
+        })
+        if (!resumed.ok) {
+          // The run will not move: take the decision back with it, so the
+          // request stays pending for an answer that can resume it.
+          throw new ApprovalNotResumed({
+            ok: false,
+            code: resumed.code === "RUN_NOT_FOUND" ? "RUN_NOT_FOUND" : resumed.code,
+            version: run.lastSeq,
+          })
+        }
+        return {
+          ok: true,
+          decision: input.decision,
+          approvalId: decided.row.id,
+          version: resumed.run.lastSeq,
+        }
+      }
+    )
+  } catch (error) {
+    if (error instanceof ApprovalNotResumed) return error.outcome
+    throw error
   }
-  const resumed = await store.resumeRun(input.runId, {
-    kind: "approval",
-    ...(input.expectedVersion !== undefined ? { expectedVersion: input.expectedVersion } : {}),
-  })
-  if (!resumed.ok) {
-    // The decision stands — a person made it and it is durable — but the run
-    // did not move. A retry finds the approval already recorded and resumes.
-    return {
-      ok: false,
-      code: resumed.code === "RUN_NOT_FOUND" ? "RUN_NOT_FOUND" : resumed.code,
-      version: run.lastSeq,
-    }
-  }
-  return {
-    ok: true,
-    decision: input.decision,
-    approvalId: decided.row.id,
-    version: resumed.run.lastSeq,
+}
+
+/** Aborts the decision's transaction when the run refuses to resume. */
+class ApprovalNotResumed extends Error {
+  constructor(readonly outcome: Extract<FusionApprovalOutcome, { ok: false }>) {
+    super(`approval not resumed: ${outcome.code}`)
+    this.name = "ApprovalNotResumed"
   }
 }

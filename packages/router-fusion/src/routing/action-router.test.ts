@@ -281,6 +281,65 @@ describe("routeAction", () => {
     expect(result.decision.selected_action_id).toBeNull()
   })
 
+  it("chooses a member's next eligible model when the first picks collide", () => {
+    const registry = fakeTierRegistry()
+    const shared = registry.deployments.find((d) => d.id === "fake-economy")!
+    registry.deployments = registry.deployments.map((deployment) =>
+      deployment.id === "fake-independent"
+        ? { ...deployment, modelRevision: shared.modelRevision }
+        : deployment
+    )
+    registry.aliases.balanced = ["fake-independent", "fake-baseline"]
+    const result = routeAction(
+      fakeCompiledConfig({ registry }),
+      fixtureRouteRequest({ requestedMode: "panel", allowedModes: ["panel"] })
+    )
+    expect(result.decision.selected_action_id).toBe("panel_review")
+    expect(result.details.find((d) => d.actionId === "panel_review")?.roles).toMatchObject({
+      panel_a: "fake-economy",
+      panel_b: "fake-baseline",
+    })
+    expect(candidate(result, "panel_review").exclusion_reasons).not.toContain("PANEL_SAME_REVISION")
+  })
+
+  it("moves an earlier member when only that frees a distinct model for a later one", () => {
+    const registry = fakeTierRegistry()
+    const shared = registry.deployments.find((d) => d.id === "fake-economy")!
+    registry.deployments = registry.deployments.map((deployment) =>
+      deployment.id === "fake-independent"
+        ? { ...deployment, modelRevision: shared.modelRevision }
+        : deployment
+    )
+    // panel_a may fall back to the baseline; panel_b has only the shared revision.
+    registry.aliases.fast = ["fake-economy", "fake-baseline"]
+    registry.aliases.balanced = ["fake-independent"]
+    const result = routeAction(
+      fakeCompiledConfig({ registry }),
+      fixtureRouteRequest({ requestedMode: "panel", allowedModes: ["panel"] })
+    )
+    expect(result.decision.selected_action_id).toBe("panel_review")
+    expect(result.details.find((d) => d.actionId === "panel_review")?.roles).toMatchObject({
+      panel_a: "fake-baseline",
+      panel_b: "fake-independent",
+    })
+  })
+
+  it("ignores a configured panel_c beyond the action's panel size", () => {
+    const policy = fakeCompiledConfig().policy
+    const actions = policy.actions.map((a) =>
+      a.id === "panel_review" ? { ...a, roles: { ...a.roles, panel_c: "fast" } } : { ...a }
+    )
+    const result = routeAction(
+      fakeCompiledConfig({ policy: { ...structuredClone(policy), actions } }),
+      fixtureRouteRequest({ requestedMode: "panel", allowedModes: ["panel"] })
+    )
+    // panel_size is 2: panel_c would repeat panel_a's model, but it never runs.
+    expect(result.decision.selected_action_id).toBe("panel_review")
+    expect(result.details.find((d) => d.actionId === "panel_review")?.roles).not.toHaveProperty(
+      "panel_c"
+    )
+  })
+
   it("honours an explicit mode without drifting to another mode", () => {
     const panel = routeAction(
       config,

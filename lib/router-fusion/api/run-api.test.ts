@@ -342,6 +342,56 @@ describe("createRunFromApi", () => {
     expect(started).toEqual([runIdOf(1)])
   })
 
+  it("[ACC:API-01] starts one run for twenty concurrent creates with one key and body", async () => {
+    const { deps, started, createRun, sessions } = harness()
+    const request = { actor: KEY_A, body: body(), idempotencyKey: "k-concurrent" }
+    const outcomes = await Promise.all(
+      Array.from({ length: 20 }, () => createRunFromApi(deps, request))
+    )
+    expect(createRun).toHaveBeenCalledTimes(1)
+    expect(started).toEqual([runIdOf(1)])
+    // One conversation and one stored input: the waiters created nothing.
+    expect(sessions.size).toBe(1)
+    for (const outcome of outcomes) {
+      expect(outcome).toMatchObject({ ok: true, value: { accepted: { run_id: runIdOf(1) } } })
+    }
+    expect(outcomes.filter((o) => o.ok && !o.value.replayed)).toHaveLength(1)
+  })
+
+  it("lets a waiting request take the key when the request holding it is refused", async () => {
+    const { deps, createRun, started } = harness()
+    createRun.mockImplementationOnce(async () => ({
+      ok: false as const,
+      error: {
+        status: 409 as const,
+        code: "SESSION_BUSY" as const,
+        message: "SESSION_BUSY" as const,
+      },
+    }))
+    const request = { actor: KEY_A, body: body(), idempotencyKey: "k-refused" }
+    const [first, second] = await Promise.all([
+      createRunFromApi(deps, request),
+      createRunFromApi(deps, request),
+    ])
+    expect(first).toMatchObject({ ok: false, error: { code: "SESSION_BUSY" } })
+    expect(second).toMatchObject({ ok: true, value: { replayed: false } })
+    expect(createRun).toHaveBeenCalledTimes(2)
+    expect(started).toHaveLength(1)
+  })
+
+  it("takes over a claim left by an acceptance that died before creating its run", async () => {
+    const { deps, store, createRun } = harness()
+    const request = { actor: KEY_A, body: body(), idempotencyKey: "k-stranded" }
+    // A first attempt crashed mid-acceptance: its claim was never bound.
+    const first = await createRunFromApi(deps, request)
+    if (!first.ok) throw new Error("expected a run")
+    const [row] = await store.db.fusionIdempotency.toArray()
+    await store.db.fusionIdempotency.put({ ...row, runId: null, expiresAt: NOW - 1 })
+    const again = await createRunFromApi(deps, request)
+    expect(again).toMatchObject({ ok: true, value: { replayed: false } })
+    expect(createRun).toHaveBeenCalledTimes(2)
+  })
+
   it("[ACC:API-02] reports a reused key with a different body as a conflict", async () => {
     const { deps } = harness()
     await createRunFromApi(deps, { actor: KEY_A, body: body(), idempotencyKey: "k1" })
@@ -1025,6 +1075,37 @@ describe("cancel, resume and feedback", () => {
       { role: "user", content: "the rest" },
     ])
     expect(started).toEqual([run_id, run_id])
+  })
+
+  it("carries the questions a parked run asked into its input as the round the answers reply to", async () => {
+    const { deps, store } = harness()
+    const { run_id } = await accept(deps)
+    const run = (await store.getRun(run_id))!
+    const questions = await store
+      .artifactStore(run_id)
+      .put(JSON.stringify({ questions: ["Which list?"] }), "application/json", "q/0")
+    await store.db.fusionRuns.put({
+      ...run,
+      status: "waiting_for_input",
+      inputRequest: { questionsArtifactId: questions.artifactId, logicalStepId: "delegate:plan" },
+    })
+    const resumed = await resumeRunFromApi(deps, {
+      actor: KEY_A,
+      runId: run_id,
+      body: {
+        kind: "input",
+        expected_run_version: run.lastSeq,
+        input_messages: [{ role: "user", content: "The users list." }],
+      },
+    })
+    expect(resumed).toMatchObject({ ok: true, value: { status: "queued" } })
+    const updated = (await store.getRun(run_id))!
+    expect(updated.inputRequest).toBeNull()
+    const input = decodeRunInput(
+      (await store.artifactStore(run_id).get(updated.inputArtifactId!))?.content
+    )
+    expect(input?.clarifications).toEqual([["Which list?"]])
+    expect(input?.messages.at(-1)).toEqual({ role: "user", content: "The users list." })
   })
 
   it("[ACC:API-06] stores a contract verdict, keeping the caller's words out of the row", async () => {

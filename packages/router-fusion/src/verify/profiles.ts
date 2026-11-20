@@ -131,6 +131,11 @@ export type AcceptanceClaim = "accepted" | "degraded" | "unknown"
  * The quality status a verified result may claim. Only `passed` can be
  * accepted; `inconclusive` is never a pass; a code task answered in plain chat
  * carries `unknown` because no profile verified the code's behaviour.
+ *
+ * A degraded result is `degraded` whatever its verification said (PAN-03): it
+ * came from a smaller topology than the one asked for, and that is the fact
+ * a caller acts on (the compat response's `routing.degraded` reads it). It
+ * never claims `accepted` either way.
  */
 export function acceptanceClaimFor(input: {
   verificationStatus: "passed" | "failed" | "inconclusive" | "not_applicable"
@@ -139,10 +144,11 @@ export function acceptanceClaimFor(input: {
   deliversChange: boolean
   degraded: boolean
 }): AcceptanceClaim {
-  if (input.verificationStatus !== "passed") return input.degraded ? "degraded" : "unknown"
+  if (input.degraded) return "degraded"
+  if (input.verificationStatus !== "passed") return "unknown"
   const minimum = minimumProfileForTask(input.task, input.deliversChange)
   if (!actionSatisfiesProfile(input.profile, minimum)) return "unknown"
   if (input.task.startsWith("code.") && !input.deliversChange && input.profile === "text_basic")
     return "unknown"
-  return input.degraded ? "degraded" : "accepted"
+  return "accepted"
 }

@@ -513,6 +513,7 @@ export async function runLiveSmoke(input: RunLiveSmokeInput): Promise<LiveSmokeR
           // is waiting on a person and a reconciling one on a decision about a
           // side effect, and the smoke runs neither mode.
           waiting: "error",
+          needs_input: "error",
           reconciling: "error",
         }
         const detail =

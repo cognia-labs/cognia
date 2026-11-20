@@ -169,7 +169,11 @@ describe("inputMessagesFor", () => {
 
     const stored = await store
       .artifactStore("run-input")
-      .put(JSON.stringify(MESSAGES), "application/json", "runs/run-input/input")
+      .put(
+        encodeRunInput({ messages: MESSAGES, allowDegraded: false, jsonSchema: null }),
+        "application/json",
+        "runs/run-input/input"
+      )
     const withInput = { ...run, inputArtifactId: stored.artifactId }
     expect(await inputMessagesFor(store, withInput, undefined)).toEqual(MESSAGES)
     expect(await inputMessagesFor(store, withInput, [])).toEqual(MESSAGES)
@@ -211,7 +215,11 @@ describe("executeFusionRun", () => {
     await store.createRun(runInput("run-stored-input"))
     const stored = await store
       .artifactStore("run-stored-input")
-      .put(JSON.stringify(MESSAGES), "application/json", "runs/run-stored-input/input")
+      .put(
+        encodeRunInput({ messages: MESSAGES, allowDegraded: false, jsonSchema: null }),
+        "application/json",
+        "runs/run-stored-input/input"
+      )
     await store.db.fusionRuns.update("run-stored-input", { inputArtifactId: stored.artifactId })
     const outcome = await executeFusionRun(deps(store), { runId: "run-stored-input" })
     expect(outcome).toMatchObject({ kind: "succeeded" })
@@ -904,5 +912,85 @@ describe("executeFusionRun: cascade and panel (B3)", () => {
     expect(attempts[0]).toMatchObject({ state: "UNKNOWN", unknownReason: "worker_lost" })
     // Its money stays held until reconciliation says what it cost.
     expect((await store.getAccount()).activeHoldsMicrousd).toBeGreaterThan(0)
+  })
+})
+
+// ── the seal is the answer (REC-04) ───────────────────────────────────────────
+
+describe("what a caller is told when a cancel wins the seal", () => {
+  it("reports the cancel the ledger recorded, and no answer can be read off the run", async () => {
+    const { readRunResult } = await import("../api/run-api")
+    const { store } = harness()
+    const runId = "seal-cancel-race"
+    expect(await store.createRun(runInput(runId))).toMatchObject({ ok: true })
+    const finalize = store.finalizeRun.bind(store)
+    // The answer artifact is written; a person's Cancel lands before the seal.
+    const boundary = jest.spyOn(store, "finalizeRun").mockImplementationOnce(async (...args) => {
+      expect(args[2].status).toBe("succeeded")
+      expect((await store.cancelRun(runId))?.status).toBe("cancelling")
+      return finalize(...args)
+    })
+    try {
+      const outcome = await executeFusionRun(deps(store, { cancelPollMs: 1_000_000 }), {
+        runId,
+        messages: MESSAGES,
+      })
+      expect(outcome).toEqual({ kind: "cancelled" })
+      const row = (await store.getRun(runId))!
+      expect(row.status).toBe("cancelled")
+      expect(row.resultArtifactId ?? null).toBeNull()
+      expect(row.resultRecordArtifactId ?? null).toBeNull()
+      expect((await store.listEvents(runId)).map(({ type }) => type)).not.toContain(
+        "answer.completed"
+      )
+      expect(await readRunResult(store, row)).toEqual({ result: null, expired: false })
+    } finally {
+      boundary.mockRestore()
+    }
+  })
+})
+
+// ── boot recovery leaves a person's check alone (REC-06) ──────────────────────
+
+describe("boot recovery and a run awaiting reconciliation", () => {
+  it("keeps a reconciling run reconciling after its lease lapses", async () => {
+    const { recoverStaleFusionRuns } = await import("../chat/chat-runs")
+    let now = 1_800_000_000_000
+    const { store } = harness(() => now)
+    const runId = "reconciling-at-boot"
+    expect(
+      await store.createRun(
+        runInput(runId, {
+          driver: "orchestrator",
+          actionId: "delegate_code",
+          roleDeployments: { lead: "fake-baseline", worker: "fake-economy" },
+        })
+      )
+    ).toMatchObject({ ok: true })
+    const lease = await store.acquireLease(runId, "old-worker", 60_000)
+    if (!lease.ok) throw new Error(lease.code)
+    expect(await store.startRun(runId, lease.fencingToken)).toMatchObject({ ok: true })
+    expect(
+      await store.reconcileRun(runId, lease.fencingToken, {
+        code: "SIDE_EFFECT_OUTCOME_UNKNOWN",
+        logicalStepId: "apply-fixture",
+        sideEffect: "apply_patch",
+      })
+    ).toEqual({ ok: true })
+    now += 61_000
+    const resumeOrchestrated = jest.fn(() => true)
+    expect(
+      await recoverStaleFusionRuns({
+        store: async () => store,
+        appliers,
+        leaseOwner: "new-worker",
+        now: () => now,
+        resumeOrchestrated,
+      })
+    ).toBe(0)
+    expect(resumeOrchestrated).not.toHaveBeenCalled()
+    const row = await store.getRun(runId)
+    expect(row).toMatchObject({ status: "reconciling", terminalAt: null })
+    expect(row?.error?.code).not.toBe("RUN_LOST")
   })
 })

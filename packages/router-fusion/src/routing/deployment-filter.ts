@@ -134,6 +134,12 @@ export interface DeploymentSelectorInput {
   switchMargin: number
   /** Expected per-call cost (microusd) for a deployment; null when unpriced. */
   expectedCost: (deployment: FusionDeployment) => number | null
+  /**
+   * Model revisions another role already holds and this one must not repeat
+   * (a panel's members are distinct models). A deployment on one of them is
+   * eligible, just taken: it is skipped, not rejected.
+   */
+  excludeModelRevisions?: readonly string[]
 }
 
 export type DeploymentSelector = (input: DeploymentSelectorInput) => DeploymentSelection
@@ -148,12 +154,13 @@ export const selectDeploymentInAliasOrder: DeploymentSelector = (input) => {
   const ids = input.context.config.registry.aliases[input.alias] ?? []
   const rejected: DeploymentSelection["rejected"] = []
   const eligible: FusionDeployment[] = []
+  const taken = new Set(input.excludeModelRevisions ?? [])
   for (const id of ids) {
     const deployment = input.context.config.deploymentsById[id]
     if (!deployment) continue
     const reasons = deploymentExclusions(deployment, input.requirements, input.context)
     if (reasons.length > 0) rejected.push({ deploymentId: id, reasons })
-    else eligible.push(deployment)
+    else if (!taken.has(deployment.modelRevision)) eligible.push(deployment)
   }
   if (eligible.length === 0) return { deployment: null, rejected, affinityKept: false }
 

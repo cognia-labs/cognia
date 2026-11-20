@@ -40,6 +40,7 @@ import {
   type DataPolicyView,
   type DeploymentExclusion,
   type DeploymentFilterContext,
+  type DeploymentSelection,
   type DeploymentSelector,
   type RoleRequirements,
 } from "./deployment-filter"
@@ -291,6 +292,53 @@ function explicitModeOrder(
   })
 }
 
+/** The roles whose answers a panel fuses, in the order they are filled. */
+const PANEL_MEMBER_ROLES = ["panel_a", "panel_b", "panel_c"] as const satisfies readonly RoleName[]
+
+/** One role's selection, re-checked against the filter. */
+interface RoleResolution {
+  role: RoleName
+  selection: DeploymentSelection
+  /** Why the filter refuses what the selector offered; empty when it accepts it. */
+  recheck: DeploymentExclusion[]
+  /** The request pinned this role to one deployment: there is no alternative. */
+  pinned: boolean
+  /** The deployment the role runs on, when the selector offered one the filter accepts. */
+  chosen: FusionDeployment | null
+}
+
+/**
+ * Give every panel member a distinct model revision, if any assignment can.
+ *
+ * Depth-first in the members' order: each member takes its selector's first
+ * choice among the revisions still free, and a member left with nothing sends
+ * the search back to try the previous member's next choice. A pinned member
+ * has no next choice. Null when no distinct assignment exists. At most three
+ * members and a handful of deployments per alias, so the search is tiny.
+ */
+function choosePanelMembers(
+  memberRoles: readonly RoleName[],
+  resolve: (role: RoleName, taken: readonly string[]) => RoleResolution
+): RoleResolution[] | null {
+  const search = (index: number, taken: readonly string[]): RoleResolution[] | null => {
+    if (index === memberRoles.length) return []
+    const tried: string[] = []
+    for (;;) {
+      const resolution = resolve(memberRoles[index], [...taken, ...tried])
+      const revision = resolution.chosen?.modelRevision
+      // Nothing left, or a selector that ignored the exclusion.
+      if (revision === undefined || taken.includes(revision) || tried.includes(revision)) {
+        return null
+      }
+      const rest = search(index + 1, [...taken, revision])
+      if (rest) return [resolution, ...rest]
+      if (resolution.pinned) return null
+      tried.push(revision)
+    }
+  }
+  return search(0, [])
+}
+
 export function routeAction(
   config: CompiledFusionConfig,
   request: RouteRequest,
@@ -397,7 +445,11 @@ export function routeAction(
     let affinityKept = false
     const webTools =
       cfg.mode === "panel" && extension.web_tools_enabled && request.capabilities.webToolsAvailable
-    for (const [role, alias] of Object.entries(cfg.roles) as Array<[RoleName, string]>) {
+    const resolveRole = (
+      role: RoleName,
+      alias: string,
+      excludeModelRevisions: readonly string[]
+    ): RoleResolution => {
       const needs = roleNeeds(role, cfg.mode, request.features, webTools)
       const requirements: RoleRequirements = {
         inputModalities: needs.readsInput ? request.inputModalities : ["text"],
@@ -426,25 +478,68 @@ export function routeAction(
                 },
                 estimateContext
               ),
+            ...(excludeModelRevisions.length > 0 ? { excludeModelRevisions } : {}),
           })
-      for (const rejected of selection.rejected) rejectedDeployments.push({ role, ...rejected })
       // A selector cannot bypass the filter: re-check what it returned.
-      const chosen = selection.deployment
-      const recheck = chosen ? deploymentExclusionsFor(chosen, requirements, filterContext) : []
-      if (!chosen || recheck.length > 0) {
-        if (chosen) rejectedDeployments.push({ role, deploymentId: chosen.id, reasons: recheck })
+      const offered = selection.deployment
+      const recheck = offered ? deploymentExclusionsFor(offered, requirements, filterContext) : []
+      return {
+        role,
+        selection,
+        recheck,
+        pinned: Boolean(pinnedId),
+        chosen: offered && recheck.length === 0 ? offered : null,
+      }
+    }
+    const apply = (resolution: RoleResolution) => {
+      const { role, selection, recheck, chosen } = resolution
+      for (const rejected of selection.rejected) rejectedDeployments.push({ role, ...rejected })
+      if (!chosen) {
+        if (selection.deployment) {
+          rejectedDeployments.push({
+            role,
+            deploymentId: selection.deployment.id,
+            reasons: recheck,
+          })
+        }
         exclusions.push(`ROLE_UNRESOLVABLE:${role}`)
-        continue
+        return
       }
       roles[role] = chosen
       roleIds[role] = chosen.id
       affinityKept = affinityKept || selection.affinityKept
     }
 
-    if (cfg.mode === "panel") {
-      const members = (["panel_a", "panel_b", "panel_c"] as RoleName[])
-        .map((r) => roles[r])
-        .filter(Boolean) as FusionDeployment[]
+    // A panel runs its first `panel_size` members. A configured member past
+    // that is not part of the run: it is not resolved, priced or deduplicated.
+    const memberRoles =
+      cfg.mode === "panel"
+        ? PANEL_MEMBER_ROLES.filter((role) => role in cfg.roles).slice(
+            0,
+            extension.limits.panel_size
+          )
+        : []
+    for (const [role, alias] of Object.entries(cfg.roles) as Array<[RoleName, string]>) {
+      if ((PANEL_MEMBER_ROLES as readonly RoleName[]).includes(role) && cfg.mode === "panel") {
+        continue
+      }
+      apply(resolveRole(role, alias, []))
+    }
+    if (memberRoles.length > 0) {
+      // The members are chosen together: each in its alias's order, but never
+      // on a revision another member holds, backtracking when an earlier pick
+      // leaves a later member with no distinct model.
+      const joint = choosePanelMembers(memberRoles, (role, taken) =>
+        resolveRole(role, cfg.roles[role] as string, taken)
+      )
+      // No distinct assignment exists: resolve each member on its own, so the
+      // exclusion names the real reason (a member with no eligible model, or
+      // members that can only share one revision).
+      for (const resolution of joint ??
+        memberRoles.map((role) => resolveRole(role, cfg.roles[role] as string, []))) {
+        apply(resolution)
+      }
+      const members = memberRoles.map((role) => roles[role]).filter(Boolean) as FusionDeployment[]
       if (new Set(members.map((d) => d.modelRevision)).size < members.length)
         exclusions.push("PANEL_SAME_REVISION")
     }
