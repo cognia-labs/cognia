@@ -22,6 +22,11 @@ const BOT_EXECUTORS: [&str; 4] = ["workflow", "squad", "agent-turn", "handler"];
 /// belong to the declared executor.
 const BOT_EXECUTOR_FIELDS: [&str; 3] = ["workflow", "team", "prompt"];
 
+/// The longest trigger id, mirroring `PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH`: a
+/// trigger id is part of every delivery and run id its trigger starts, and
+/// the run detail reads ids up to 256 characters.
+const BOT_TRIGGER_ID_MAX_LENGTH: usize = 64;
+
 /// Trigger discriminants, mirroring `PLUGIN_BOT_TRIGGER_KINDS`.
 const BOT_TRIGGER_KINDS: [&str; 6] = [
     "interaction",
@@ -807,19 +812,32 @@ pub fn validate_manifest(manifest: &Value) -> Vec<Diagnostic> {
                     }
                 };
 
-                let has_id = tr
+                let id = tr
                     .get("id")
                     .and_then(Value::as_str)
-                    .map(|v| !v.trim().is_empty())
-                    .unwrap_or(false);
-                if !has_id {
-                    out.push(Diagnostic {
+                    .filter(|v| !v.trim().is_empty());
+                match id {
+                    None => out.push(Diagnostic {
                         severity: Severity::Error,
                         field: format!("{field}.id"),
                         code: "manifest.bots.trigger.id.missing".into(),
                         message: format!("{field} is missing a non-empty \"id\""),
                         hint: None,
-                    });
+                    }),
+                    // Counted in UTF-16 code units, as the TypeScript validator
+                    // counts `string.length`, so both refuse the same ids.
+                    Some(id) if id.encode_utf16().count() > BOT_TRIGGER_ID_MAX_LENGTH => {
+                        out.push(Diagnostic {
+                            severity: Severity::Error,
+                            field: format!("{field}.id"),
+                            code: "manifest.bots.trigger.id.tooLong".into(),
+                            message: format!(
+                                "{field}.id is longer than {BOT_TRIGGER_ID_MAX_LENGTH} characters"
+                            ),
+                            hint: None,
+                        })
+                    }
+                    Some(_) => {}
                 }
 
                 let kind = tr.get("kind").and_then(Value::as_str);
@@ -2271,6 +2289,26 @@ mod tests {
                 "expected {expected}, got {codes:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_trigger_id_is_capped_at_the_run_detail_s_budget() {
+        let trigger = |id: String| {
+            bot_codes(serde_json::json!([{
+                "id": "a", "name": "A", "version": "1.0.0", "executor": "handler",
+                "entry": "dist/a.js", "triggers": [{ "id": id, "kind": "manual" }],
+            }]))
+        };
+        let at_cap = trigger("t".repeat(BOT_TRIGGER_ID_MAX_LENGTH));
+        assert!(
+            !at_cap.contains(&"manifest.bots.trigger.id.tooLong".to_string()),
+            "{at_cap:?}"
+        );
+        let over = trigger("t".repeat(BOT_TRIGGER_ID_MAX_LENGTH + 1));
+        assert!(
+            over.contains(&"manifest.bots.trigger.id.tooLong".to_string()),
+            "{over:?}"
+        );
     }
 
     #[test]

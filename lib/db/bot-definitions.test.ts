@@ -47,6 +47,17 @@ describe("assertBotDefinitionShape", () => {
     ).toThrow(/declared/)
   })
 
+  it("caps a trigger id as the manifest validator does", () => {
+    const shaped = (id: string) =>
+      assertBotDefinitionShape({
+        executor: "workflow",
+        workflow: "wf",
+        triggers: [{ id, kind: "manual" }],
+      })
+    expect(() => shaped("t".repeat(64))).not.toThrow()
+    expect(() => shaped("t".repeat(65))).toThrow(/at most 64 characters/)
+  })
+
   it("requires the executor's own target", () => {
     expect(() => assertBotDefinitionShape({ executor: "squad", triggers: manual })).toThrow(
       BotDefinitionError

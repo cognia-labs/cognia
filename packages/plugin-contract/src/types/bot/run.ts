@@ -143,7 +143,9 @@ export interface BotRunContextV1 {
   event: BotEventEnvelopeV1
   /**
    * Resolved per-installation configuration, already validated against the
-   * definition's `configSchema`.
+   * definition's `configSchema`. Pinned when the run first starts: a re-entry
+   * after a wait or a retry gets the same config its completed steps used, and
+   * a setting changed in between applies from the next run (a replay is one).
    */
   config: Record<string, unknown>
   /**

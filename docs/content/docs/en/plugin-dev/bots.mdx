@@ -67,6 +67,8 @@ Per-trigger retry policy — a narrowing, never above the host ceiling:
 
 ### Config-driven schedules
 
+A poll or derivedState trigger runs one slot at a time. Each slot reads the cursor (or last edge value) the previous slot committed, when it first runs, so a slot that outlasts the interval makes the next one wait rather than read the same page. A declared `concurrencyKey` replaces this per-trigger key.
+
 `cronConfigKey`, `timezoneConfigKey` (schedule only) and `everyMsConfigKey` (poll/derivedState only) name a key in the Bot's `configSchema.properties`. A valid config value wins; the declared value is the fallback. When the host falls back it records why in `triggerState[triggerId].configFallback`:
 
 | Code | Meaning |
@@ -88,7 +90,7 @@ The console renders these as badges on the trigger row.
 
 ## Handler contract
 
-A handler Bot re-enters from the top after a crash or a resumed wait; anything that must not happen twice belongs inside `ctx.step.run` (TypeScript) or `run.step_run` (Python), which memoizes completed steps in `botRunSteps`: once a step's result is checkpointed, a re-entry returns it without calling the callback again. A step runs at least once, not exactly once. The checkpoint is written after the callback returns, so an attempt whose effect happened but whose checkpoint never committed (a crash, a lost lease) runs again. The callback is handed the attempt (`attempt`, and an `idempotencyKey` that is the same for every attempt of that step in that run); pass the key to the service the step writes to, so a repeated attempt lands on the first one's effect. Step names beginning `__host:` are reserved for the host's own bookkeeping (publication checkpoints, snapshots, results).
+A handler Bot re-enters from the top after a crash or a resumed wait; anything that must not happen twice belongs inside `ctx.step.run` (TypeScript) or `run.step_run` (Python), which memoizes completed steps in `botRunSteps`: once a step's result is checkpointed, a re-entry returns it without calling the callback again. A step runs at least once, not exactly once. The checkpoint is written after the callback returns, so an attempt whose effect happened but whose checkpoint never committed (a crash, a lost lease) runs again. The callback is handed the attempt (`attempt`, and an `idempotencyKey` that is the same for every attempt of that step in that run); pass the key to the service the step writes to, so a repeated attempt lands on the first one's effect. Step names beginning `__host:` are reserved for the host's own bookkeeping (publication checkpoints, snapshots, results). A re-entry also sees the run's own inputs as they were when it started: `ctx.config` (`run.config` in Python) is pinned on the first entry, so a setting changed while the run waits applies from the next run, and a run resumed on a different definition version stops with a replayable failure.
 
 <table>
 <tr><th>TypeScript (`BotRunContextV1`)</th><th>Python (`BotRun`)</th></tr>

@@ -52,6 +52,7 @@ import {
   PLUGIN_BOT_EXECUTOR_REQUIRED_FIELD,
   PLUGIN_BOT_EXECUTORS,
   PLUGIN_BOT_LIFECYCLE_HOOKS,
+  PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH,
   PLUGIN_BOT_TRIGGER_KINDS,
   type PluginBotExecutor,
 } from "../../../types/plugin/plugin-bot"
@@ -4552,6 +4553,14 @@ function validateBots(m: PluginManifest, pushError: PushDiagnostic): void {
           `${triggerField}.id`,
           "manifest.bots.trigger.id.missing",
           `${triggerField} is missing a non-empty "id"`
+        )
+      } else if (trigger.id.length > PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH) {
+        // Part of every delivery and run id the trigger starts; longer, and
+        // its first run's id is too long for the run detail to open.
+        pushError(
+          `${triggerField}.id`,
+          "manifest.bots.trigger.id.tooLong",
+          `${triggerField}.id is longer than ${PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH} characters`
         )
       }
 

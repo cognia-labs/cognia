@@ -110,6 +110,23 @@ export interface RoutedBotDelivery {
   coalesce?: "latest" | "all"
 }
 
+/**
+ * The key a `poll` or `derivedState` trigger's slots serialise on when the
+ * trigger declares none.
+ *
+ * Its cursor and last edge value are one register, read by each slot when it
+ * first runs and advanced when it commits. Two slots of the trigger running at
+ * once (a run longer than the interval, a host catching up) would both read
+ * the same cursor and handle the same page twice, so they take turns. A
+ * declared `concurrencyKey` replaces it. In the host's reserved `__host:`
+ * namespace, so no interpolated author key can collide with it.
+ */
+function timedTriggerSlotKey(trigger: PluginBotTriggerDef, prefix: string): string | undefined {
+  return trigger.kind === "poll" || trigger.kind === "derivedState"
+    ? `${prefix}__host:trigger:${trigger.id}`
+    : undefined
+}
+
 /** Shared projection for event, manual and timed trigger producers. */
 export function projectBotDeliveryPolicy(
   trigger: PluginBotTriggerDef,
@@ -122,10 +139,11 @@ export function projectBotDeliveryPolicy(
   const prefix = `${envelope.installationId}::`
   if (trigger.correlationKey)
     envelope.correlation = prefix + interpolateEnvelopeTemplate(trigger.correlationKey, envelope)
+  const concurrencyKey = trigger.concurrencyKey
+    ? prefix + interpolateEnvelopeTemplate(trigger.concurrencyKey, envelope)
+    : timedTriggerSlotKey(trigger, prefix)
   return {
-    ...(trigger.concurrencyKey
-      ? { concurrencyKey: prefix + interpolateEnvelopeTemplate(trigger.concurrencyKey, envelope) }
-      : {}),
+    ...(concurrencyKey ? { concurrencyKey } : {}),
     ...(trigger.holdConcurrencyWhileWaiting !== undefined
       ? { holdConcurrencyWhileWaiting: trigger.holdConcurrencyWhileWaiting }
       : {}),

@@ -92,6 +92,7 @@ export interface PluginBotRetryPolicy {
 interface PluginBotTriggerBase {
   /** Input credential slot; output credentials never constrain this trigger. */
   inputCredentialSlot?: string
+  /** Unique within the definition, at most `PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH` characters. */
   id: string
   conditions?: PluginBotTriggerConditions
   /** Author-facing label. User-facing text is resolved from `labelKey`. */
@@ -105,7 +106,9 @@ interface PluginBotTriggerBase {
   /**
    * Serialisation key, interpolated against the event envelope (for example
    * `"{{resource.id}}"`). Two deliveries with the same key never run at once,
-   * which is what stops two pushes racing on one branch.
+   * which is what stops two pushes racing on one branch. A `poll` or
+   * `derivedState` trigger that declares none still runs one slot at a time:
+   * each slot reads the cursor (or last edge value) the previous one committed.
    */
   concurrencyKey?: string
   /** Defaults to true. Isolated tasks may release their execution slot while parked. */
@@ -447,6 +450,17 @@ export type PluginBotExecutor = (typeof PLUGIN_BOT_EXECUTORS)[number]
  * host's, not the author's.
  */
 export const BOT_TIMED_TRIGGER_MIN_EVERY_MS = 15_000
+
+/**
+ * The longest trigger id a definition may declare.
+ *
+ * A trigger id is part of every delivery id and run id its trigger starts
+ * (`bdl_v2_[installation, trigger, event]`, URI-encoded), and the run detail
+ * reads ids up to 256 characters. Past this length the very first run of the
+ * trigger could not be opened. Short identifiers (`opened`, `poll`) are the
+ * intent; the cap only makes that a rule.
+ */
+export const PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH = 64
 
 /** The trigger discriminants, as a runtime list for validators and pickers. */
 export const PLUGIN_BOT_TRIGGER_KINDS = [

@@ -1182,6 +1182,46 @@ describe("runBotDelivery when a handler parks", () => {
     expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("dismissed")
   })
 
+  it("resumes a run on the config it started with, and starts the next on the new one (B12)", async () => {
+    const { delivery, resolved } = await seed()
+    const seen: unknown[] = []
+    const handler = jest.fn(async (ctx: BotExecutorContext) => {
+      seen.push(ctx.config.channel)
+      const fetched = await ctx.step.run("fetch", () => ({ for: ctx.config.channel }))
+      if (seen.length === 1) throw new BotRunParkedError(ctx.runId, "publish", NOW + 20_000)
+      return { summary: "posted", output: { fetched, postedTo: ctx.config.channel } }
+    })
+    expect((await runBotDelivery({ delivery, resolved, now, executors: { handler } })).status).toBe(
+      "parked"
+    )
+
+    // A person changes the channel while the run waits for its approval.
+    const edited = {
+      ...resolved,
+      installation: { ...resolved.installation, config: { channel: "#release" } },
+    }
+    const resumed = await runBotDelivery({
+      delivery,
+      resolved: edited,
+      now,
+      executors: { handler },
+    })
+    // The second half posts where the first half fetched for: the run's own
+    // config, not a mix of the old and the new.
+    expect(resumed).toMatchObject({
+      status: "completed",
+      result: { output: { fetched: { for: "#ops" }, postedTo: "#ops" } },
+    })
+
+    // The next run starts on the config that exists now.
+    const next = await enqueueBotDelivery({
+      envelope: { ...envelope(), eventId: "bev_2", deliveryId: "bdl_2" },
+      now: NOW,
+    })
+    await runBotDelivery({ delivery: next, resolved: edited, now, executors: { handler } })
+    expect(seen).toEqual(["#ops", "#ops", "#release"])
+  })
+
   it("runs a new delivery on the version that exists despite the installation's pin", async () => {
     const { delivery, resolved } = await seed()
     const drifted = {

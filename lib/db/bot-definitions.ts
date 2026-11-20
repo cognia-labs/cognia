@@ -11,11 +11,12 @@ import { nanoid } from "nanoid"
 
 import { getDb } from "@/lib/db/schema"
 import type { BotDefinitionRow, LocalBotExecutor } from "@/lib/db/bot-types"
-import type {
-  PluginBotCompositionRequestV1,
-  PluginBotPolicyV1,
-  PluginBotRequirementsV1,
-  PluginBotTriggerDef,
+import {
+  PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH,
+  type PluginBotCompositionRequestV1,
+  type PluginBotPolicyV1,
+  type PluginBotRequirementsV1,
+  type PluginBotTriggerDef,
 } from "@/types/plugin/plugin-bot"
 
 export interface CreateBotDefinitionInput {
@@ -82,6 +83,11 @@ export function assertBotDefinitionShape(input: {
   for (const trigger of input.triggers) {
     if (!trigger.id.trim() || triggerIds.has(trigger.id))
       throw new BotDefinitionError("invalid_input_slot", "Trigger IDs must be non-empty and unique")
+    if (trigger.id.length > PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH)
+      throw new BotDefinitionError(
+        "invalid_input_slot",
+        `Trigger IDs must be at most ${PLUGIN_BOT_TRIGGER_ID_MAX_LENGTH} characters`
+      )
     triggerIds.add(trigger.id)
     if (
       trigger.inputCredentialSlot !== undefined &&

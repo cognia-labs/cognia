@@ -56,6 +56,8 @@ Bot 将已有执行器与触发器绑定，并为该绑定设置策略上限。�
 
 ### 配置驱动的调度
 
+poll 和 derivedState 触发器的时隙一次只运行一个。每个时隙在首次运行时读取上一个时隙已提交的游标（或上次的边沿值），所以耗时超过间隔的时隙会让下一个时隙等待，而不是重复读取同一页。声明了 `concurrencyKey` 时，以声明的键代替这个按触发器的键。
+
 `cronConfigKey`、`timezoneConfigKey`（仅 schedule）和 `everyMsConfigKey`（仅 poll/derivedState）命名 Bot `configSchema.properties` 中的一个键。合法配置值胜出；声明值是回退。宿主回退时会把原因记进 `triggerState[triggerId].configFallback`：
 
 | 代码 | 含义 |
@@ -77,7 +79,7 @@ Bot 将已有执行器与触发器绑定，并为该绑定设置策略上限。�
 
 ## Handler 契约
 
-handler Bot 在崩溃或等待恢复后从头重入；任何不得执行两次的工作都必须放进 `ctx.step.run`（TypeScript）或 `run.step_run`（Python），它把已完成的 step 记忆化在 `botRunSteps` 里：step 的结果一旦写入检查点，重入时直接返回，不再调用回调。step 至少执行一次，而不是恰好一次。检查点在回调返回之后才写入，所以副作用已经发生、检查点却没提交的尝试（崩溃、租约丢失）会再跑一遍。回调会拿到本次尝试的信息（`attempt`，以及同一 run 内该 step 每次尝试都相同的 `idempotencyKey`）；把这个键交给 step 写入的服务，重复的尝试就会落到第一次的副作用上。以 `__host:` 开头的 step 名是宿主自留的记账名（发布检查点、快照、结果）。
+handler Bot 在崩溃或等待恢复后从头重入；任何不得执行两次的工作都必须放进 `ctx.step.run`（TypeScript）或 `run.step_run`（Python），它把已完成的 step 记忆化在 `botRunSteps` 里：step 的结果一旦写入检查点，重入时直接返回，不再调用回调。step 至少执行一次，而不是恰好一次。检查点在回调返回之后才写入，所以副作用已经发生、检查点却没提交的尝试（崩溃、租约丢失）会再跑一遍。回调会拿到本次尝试的信息（`attempt`，以及同一 run 内该 step 每次尝试都相同的 `idempotencyKey`）；把这个键交给 step 写入的服务，重复的尝试就会落到第一次的副作用上。以 `__host:` 开头的 step 名是宿主自留的记账名（发布检查点、快照、结果）。重入时，运行看到的也是它开始时的输入：`ctx.config`（Python 中为 `run.config`）在首次进入时固定，运行等待期间修改的设置从下一次运行起生效；在另一个定义版本上恢复的运行会以可重放的失败结束。
 
 <table>
 <tr><th>TypeScript（`BotRunContextV1`）</th><th>Python（`BotRun`）</th></tr>

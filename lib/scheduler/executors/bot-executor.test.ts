@@ -166,6 +166,76 @@ describe("executeBotTask", () => {
     expect(payloads.stale).toEqual({ triggerKind: "derivedState", state: "stale" })
   })
 
+  it("serialises a poll or derivedState trigger's slots when it declares no key (B08)", async () => {
+    await seed([
+      { id: "sweep", kind: "poll", everyMs: 60_000 },
+      { id: "stale", kind: "derivedState", everyMs: 60_000, state: "stale" },
+      { id: "scan", kind: "poll", everyMs: 60_000, concurrencyKey: "monitor" },
+    ])
+    for (const triggerId of ["sweep", "stale", "scan"])
+      await executeBotTask(task({ installationId: "boti_1", triggerId }), execution, live)
+
+    const keys = Object.fromEntries(
+      (await getDb().botEventDeliveries.toArray()).map((row) => [row.triggerId, row.concurrencyKey])
+    )
+    // Per trigger, in the host's reserved namespace; a declared key wins.
+    expect(keys).toEqual({
+      sweep: "boti_1::__host:trigger:sweep",
+      stale: "boti_1::__host:trigger:stale",
+      scan: "boti_1::monitor",
+    })
+  })
+
+  it("runs two due slots of one poll trigger in turn, each on the cursor the last committed (B08)", async () => {
+    const seen: string[] = []
+    const handler = jest.fn(async (ctx: { event: { payload: unknown } }) => {
+      const cursor = (ctx.event.payload as { cursor?: string }).cursor ?? "none"
+      seen.push(cursor)
+      return { output: { cursor: String(Number(cursor) + 1) } }
+    })
+    const definition = {
+      id: "digest",
+      name: "Digest",
+      version: "1.0.0",
+      executor: "handler",
+      triggers: [{ id: "sweep", kind: "poll", everyMs: 60_000 }],
+    } as PluginBotDef
+    registerBot("digest", { id: "acme:digest", definition, handler }, { pluginId: "acme" })
+    await installBot({
+      id: "boti_1",
+      definitionId: "acme:digest",
+      definitionSource: "plugin",
+      pinnedVersion: "1.0.0",
+      scope: { kind: "account" },
+      now: NOW,
+    })
+    await writeBotTriggerState("boti_1", "sweep", { cursor: "0" }, NOW)
+    // Two slots due at once: a host catching up, or a run longer than the
+    // interval. In parallel both read cursor 0 and handled one page twice.
+    for (const minute of [0, 1]) {
+      await executeBotTask(
+        task({ installationId: "boti_1", triggerId: "sweep" }),
+        {
+          triggerSource: "schedule",
+          scheduledFor: new Date(NOW + 60_000 * minute),
+        } as TaskExecution,
+        live
+      )
+    }
+    const { drainBotDeliveries } = await import("@/lib/bot/runtime/delivery-runner")
+    const { readBotTriggerState } = await import("@/lib/db/bot-installations")
+    const host = { owner: "host", now: () => Date.now() }
+
+    expect((await drainBotDeliveries(host)).map((attempt) => attempt.outcome.status)).toEqual([
+      "completed",
+    ])
+    expect((await drainBotDeliveries(host)).map((attempt) => attempt.outcome.status)).toEqual([
+      "completed",
+    ])
+    expect(seen).toEqual(["0", "1"])
+    expect((await readBotTriggerState("boti_1", "sweep"))?.cursor).toBe("2")
+  })
+
   it("enqueues nothing for a trigger disarmed before its tick reached intake (B07)", async () => {
     await seed([{ id: "sweep", kind: "poll", everyMs: 60_000 }])
     await updateBotInstallation("boti_1", { triggerOverrides: { sweep: false } })

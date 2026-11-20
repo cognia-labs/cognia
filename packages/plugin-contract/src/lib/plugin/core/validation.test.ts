@@ -4843,6 +4843,15 @@ describe("manifest.bots validation", () => {
     expect(codesFor([bot({ triggers: undefined })])).toContain("manifest.bots.triggers.missing")
   })
 
+  it("caps a trigger id at what every run id it starts can carry", () => {
+    // The id is part of each delivery and run id; past the cap the trigger's
+    // first run is already too long for the run detail to open.
+    const at = codesFor([bot({ triggers: [{ id: "t".repeat(64), kind: "manual" }] })])
+    expect(at).not.toContain("manifest.bots.trigger.id.tooLong")
+    const over = codesFor([bot({ triggers: [{ id: "t".repeat(65), kind: "manual" }] })])
+    expect(over).toContain("manifest.bots.trigger.id.tooLong")
+  })
+
   it("requires a trigger id and a known kind", () => {
     const codes = codesFor([bot({ triggers: [{ kind: "telepathy" }] })])
     expect(codes).toEqual(

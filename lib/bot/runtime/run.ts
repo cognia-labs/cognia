@@ -454,6 +454,35 @@ async function pinnedDefinitionVersion(
   return pinned.version
 }
 
+/** The host step a run's config is pinned under. */
+const BOT_RUN_CONFIG_STEP = "__host:config"
+
+/**
+ * The config this run started with.
+ *
+ * Its completed steps were computed against it, so a run resumed after a park
+ * or retried after a failed attempt keeps it, every executor alike (`ctx.config`
+ * is what a handler, a workflow, an agent turn and a Squad read). A setting
+ * changed in between applies to the runs that start afterwards, a replay
+ * included, never to the second half of a run whose first half used the old
+ * value. Pinned on the run's first entry, beside the definition version and
+ * the policy checkpoint.
+ */
+async function pinnedRunConfig(
+  runId: string,
+  config: Record<string, unknown>,
+  ts: number
+): Promise<Record<string, unknown>> {
+  if ((await getBotRunStep(runId, BOT_RUN_CONFIG_STEP))?.status !== "completed") {
+    await completeBotRunStep(runId, BOT_RUN_CONFIG_STEP, config, ts)
+  }
+  // Re-read rather than trusting the write: the step keeps the first value.
+  const pinned = (await getBotRunStep(runId, BOT_RUN_CONFIG_STEP))?.output
+  return pinned && typeof pinned === "object" && !Array.isArray(pinned)
+    ? (pinned as Record<string, unknown>)
+    : config
+}
+
 /**
  * The event a poll or derivedState slot runs against: its envelope plus the
  * trigger state (`cursor`, `previousEdgeValue`, `lastFiredAt`) it is pinned to.
@@ -656,10 +685,14 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
   const executionTimer =
     remainingMs !== undefined && remainingMs > 0 ? setTimeout(spendBudget, remainingMs) : undefined
 
-  const config = resolveBotConfig({
-    installation: resolved.installation.config,
-    definitionDefaults: defaultsFromConfigSchema(resolved.definition.configSchema),
-  }).values
+  const config = await pinnedRunConfig(
+    runId,
+    resolveBotConfig({
+      installation: resolved.installation.config,
+      definitionDefaults: defaultsFromConfigSchema(resolved.definition.configSchema),
+    }).values,
+    ts
+  )
 
   const composition = projectBotComposition({
     executor: resolved.definition.executor,
