@@ -98,7 +98,7 @@ function makeFile(name: string, content: BlobPart, mimeType = "text/plain"): Fil
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 /** The smallest OOXML package the upload inspection accepts for its extension. */
-async function ooxmlBytes(directory: "xl/" | "word/"): Promise<Uint8Array> {
+async function ooxmlBytes(directory: "xl/" | "word/"): Promise<Uint8Array<ArrayBuffer>> {
   const zip = new JSZip()
   zip.file("[Content_Types].xml", "<Types/>")
   zip.file(`${directory}${directory === "xl/" ? "workbook.xml" : "document.xml"}`, "<x/>")
