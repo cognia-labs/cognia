@@ -152,13 +152,14 @@ export interface ModelSelectProps {
    */
   hideProviderGroups?: boolean
   /**
-   * Keep only the configured providers this returns true for. For a surface
-   * that runs one operation rather than a chat turn: attachment transcription
-   * must not offer a language-only provider whose run would fail on a missing
-   * transcription endpoint. Leading groups are the caller's own and are not
-   * filtered.
+   * Rewrite each configured provider's group, or drop it with `null`. For a
+   * surface that runs one operation rather than a chat turn: attachment
+   * transcription offers a provider's transcription models, which the chat
+   * catalog does not list, and drops a provider that cannot transcribe at
+   * all. Leading groups are the caller's own and are not adapted. Pass a
+   * stable function: a new one each render rebuilds the list.
    */
-  providerFilter?: (providerId: string) => boolean
+  adaptProviderGroup?: (group: ModelProviderGroup) => ModelProviderGroup | null
   /**
    * Trigger text that replaces the resolved model name, for a caller that
    * knows better than the provider catalog what is running (an external
@@ -347,7 +348,7 @@ export function ModelSelect({
   onSelectAuto,
   leadingGroups,
   hideProviderGroups = false,
-  providerFilter,
+  adaptProviderGroup,
   triggerLabel,
   triggerIcon,
   triggerTitle,
@@ -371,11 +372,11 @@ export function ModelSelect({
   const { options, groups: providerGroups } = useModelOptions()
   const groups = useMemo(() => {
     if (hideProviderGroups) return leadingGroups ?? []
-    const eligible = providerFilter
-      ? providerGroups.filter((group) => providerFilter(group.providerId))
+    const eligible = adaptProviderGroup
+      ? providerGroups.flatMap((group) => adaptProviderGroup(group) ?? [])
       : providerGroups
     return leadingGroups?.length ? [...leadingGroups, ...eligible] : eligible
-  }, [hideProviderGroups, leadingGroups, providerGroups, providerFilter])
+  }, [hideProviderGroups, leadingGroups, providerGroups, adaptProviderGroup])
   const [open, setOpen] = useState(false)
   const positionedActiveModelRef = useRef(false)
 
@@ -405,12 +406,14 @@ export function ModelSelect({
   const activeModelName = useMemo(() => {
     if (triggerLabel) return triggerLabel
     if (autoActive) return t("autoModel")
-    const leading = leadingGroups
-      ?.find((group) => group.providerId === provider)
+    // The drawn groups first: a leading group's model, or one an adapter
+    // added, is not among the configured options.
+    const drawn = groups
+      .find((group) => group.providerId === provider)
       ?.models.find((candidate) => candidate.id === model)
-    if (leading) return leading.name
+    if (drawn) return drawn.name
     return resolveOptionModelName(options, model, provider)
-  }, [options, leadingGroups, model, provider, autoActive, triggerLabel, t])
+  }, [options, groups, model, provider, autoActive, triggerLabel, t])
 
   const visibleModelLabel = activeModelName
     ? compactLabel

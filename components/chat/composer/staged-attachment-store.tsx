@@ -220,6 +220,12 @@ function readBlobBytes(blob: Blob): Promise<Uint8Array> {
 /** How often (as a fraction of the run) progress is written to state. */
 const PROGRESS_STEP = 0.05
 
+/** Refusals `processAttachmentMedia` throws before running, which name their own fix. */
+const TYPED_PROCESSING_REFUSALS = new Set([
+  "attachment_transcription_unsupported",
+  "attachment_describe_unsupported",
+])
+
 /** Read a staged blob URL back into a data URL, which is what extraction needs. */
 async function blobUrlToDataUrl(
   url: string
@@ -814,10 +820,11 @@ export function StagedAttachmentsProvider({
           .catch((error: unknown) => {
             if (motionRunsRef.current.get(id) !== controller) return
             motionRunsRef.current.delete(id)
-            // Keep the typed refusal (e.g. a provider without transcription) so
-            // the dialog can say what to change, instead of "check and retry".
+            // Keep a typed refusal (a model that cannot transcribe, or one that
+            // only transcribes) so the dialog can say what to change, instead
+            // of "check and retry".
             const processingError =
-              error instanceof Error && error.message === "attachment_transcription_unsupported"
+              error instanceof Error && TYPED_PROCESSING_REFUSALS.has(error.message)
                 ? error.message
                 : "processing-failed"
             setResults((prev) => new Map(prev).set(id, { ...current, processingError }))

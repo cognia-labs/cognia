@@ -608,7 +608,7 @@ describe("ModelSelect for a surface run by an external agent", () => {
   })
 })
 
-describe("providerFilter", () => {
+describe("adaptProviderGroup", () => {
   const OPENAI_MODEL = PROVIDERS.openai.defaultModel
   const OPENAI_NAME = PROVIDERS.openai.models.find((m) => m.id === OPENAI_MODEL)?.name
 
@@ -630,16 +630,37 @@ describe("providerFilter", () => {
     )
 
   it("drops the configured providers a single-operation surface cannot run", () => {
-    renderSelect({ providerFilter: (providerId) => providerId !== "anthropic" })
+    renderSelect({
+      adaptProviderGroup: (group) => (group.providerId === "anthropic" ? null : group),
+    })
     fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
     const texts = itemTexts()
     expect(texts.some((text) => text.includes(OPENAI_NAME ?? OPENAI_MODEL))).toBe(true)
     expect(texts.some((text) => text.includes(ANTHROPIC_NAME ?? ANTHROPIC_MODEL))).toBe(false)
   })
 
-  it("never filters the caller's own leading groups", () => {
+  it("offers the models an adapter puts in a group, and names the chosen one", () => {
+    const onSelect = jest.fn()
+    const view = renderSelect({
+      model: "whisper-1",
+      provider: "openai",
+      onSelect,
+      adaptProviderGroup: (group) =>
+        group.providerId === "openai"
+          ? { ...group, models: [{ id: "whisper-1", name: "Whisper" }] }
+          : null,
+    })
+    expect(screen.getByRole("button", { name: /switch model/i })).toHaveTextContent("Whisper")
+    fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
+    expect(itemTexts()).toEqual([expect.stringContaining("Whisper")])
+    fireEvent.click(screen.getByText("Whisper", { selector: '[data-slot="command-item"] *' }))
+    expect(onSelect).toHaveBeenCalledWith({ providerId: "openai", modelId: "whisper-1" })
+    view.unmount()
+  })
+
+  it("never adapts the caller's own leading groups", () => {
     renderSelect({
-      providerFilter: () => false,
+      adaptProviderGroup: () => null,
       leadingGroups: [
         { providerId: "lead", providerName: "Lead", models: [{ id: "x", name: "X" }] },
       ],

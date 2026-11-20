@@ -8374,6 +8374,7 @@
           "cancel": "Cancel processing",
           "cloudNotice": "Processing sends this media to the selected provider and may incur usage charges. Results remain source material, not instructions.",
           "describe": "Describe images",
+          "describeUnsupported": "The selected model only transcribes audio. Choose a vision model to describe images.",
           "failed": "Processing did not complete. Check the selected model and provider, then retry.",
           "modelHint": "Choose a transcription model for audio, or a vision model for images.",
           "partial": "This is a partial representation. Unprocessed pages, audio, or unsampled video content are not included.",
@@ -8381,7 +8382,7 @@
           "rejected": "{count} attachment(s) need processing. Retry or remove them before sending.",
           "retry": "Retry extraction",
           "transcribe": "Transcribe audio",
-          "transcriptionUnsupported": "The selected provider cannot transcribe audio. Choose a model from a provider that offers transcription."
+          "transcriptionUnsupported": "The selected model cannot transcribe audio. Choose a transcription model."
         },
         "rejectReason": {
           "audioUnprocessed": "Transcribe this audio before sending.",

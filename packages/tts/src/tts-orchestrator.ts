@@ -343,7 +343,9 @@ export class TTSOrchestrator {
    *
    * Each fragment is screened as written, together with the fragment before it
    * so an item spanning a boundary is still seen whole, then normalized and cut
-   * to the provider's input limit. A fragment that fails stops the request at
+   * to the provider's input limit. A forced first cut (no punctuation yet) is
+   * only taken once the text around it passes the same gate; otherwise the
+   * first fragment waits for a separator, so a flagged item is never split. A fragment that fails stops the request at
    * once — the token source is released rather than drained — and `stop()`
    * likewise stops consumption immediately.
    *
@@ -463,11 +465,27 @@ export class TTSOrchestrator {
       }
     }
 
+    // Whether `text` may reach every destination this request can send it to:
+    // the provider, and a system voice when that is the provider or the fallback.
+    const mayLeave = (text: string): boolean =>
+      provider === "system"
+        ? allowsRemoteSystemVoiceText(text)
+        : allowsOutboundText(provider, text) &&
+          (!speechSettings.ttsFallbackEnabled || allowsRemoteSystemVoiceText(text))
+    const callerConfirm = options.splitterOptions?.confirmForcedCut
+
     const iterator = tokens[Symbol.asyncIterator]()
     let sourceDone = false
     try {
       options.onStart?.()
-      const splitter = new SentenceStreamSplitter(options.splitterOptions)
+      // A forced first cut that would split an item the gate flags (a spaced
+      // card or phone number) waits for the sentence to end, so neither half
+      // is sent before the whole has been screened.
+      const splitter = new SentenceStreamSplitter({
+        ...options.splitterOptions,
+        confirmForcedCut: (head, lookahead) =>
+          mayLeave(head + lookahead) && callerConfirm?.(head, lookahead) !== false,
+      })
       for (;;) {
         const next = iterator.next()
         // Observed by the race below, or abandoned when consumption halts.

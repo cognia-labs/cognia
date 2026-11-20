@@ -1,10 +1,13 @@
 import {
   attachmentTranscriptionSupport,
+  isTranscriptionOnlyModel,
   processAttachmentMedia,
   restoreDerivedAttachment,
   type AttachmentMediaDeps,
 } from "./media-extraction"
 import type { ExtractedAttachment } from "./dispatch"
+import { buildProviderOperationProfile } from "@cognia/provider-core/operations/capability-matrix"
+import { BUILT_IN_TRANSCRIPTION_MODELS } from "@cognia/provider-types/transcription-models"
 import { estimateFallbackTokens } from "@/lib/ai/tokens/fallback-estimator"
 
 const mockExecute = jest.fn()
@@ -110,6 +113,45 @@ it("answers transcription support from the provider capability matrix", () => {
   expect(attachmentTranscriptionSupport("")).toBe("unknown")
 })
 
+it("answers for the model on a provider whose transcription models are listed", () => {
+  // OpenAI transcribes, but not with a chat model.
+  expect(attachmentTranscriptionSupport("openai", "gpt-transcribe")).toBe("supported")
+  expect(attachmentTranscriptionSupport("openai", "whisper-1")).toBe("supported")
+  expect(attachmentTranscriptionSupport("openai", "gpt-5.6")).toBe("unsupported")
+  expect(attachmentTranscriptionSupport("groq", "openai/gpt-oss-120b")).toBe("unsupported")
+  // A vendor whose transcription no client here reaches lists none.
+  expect(attachmentTranscriptionSupport("togetherai")).toBe("unsupported")
+  expect(attachmentTranscriptionSupport("togetherai", "openai/whisper-large-v3")).toBe(
+    "unsupported"
+  )
+  // A deployment that names its own models stays open to any of them.
+  expect(attachmentTranscriptionSupport("azure", "my-whisper-deployment")).toBe("supported")
+  expect(attachmentTranscriptionSupport("custom:my-gateway", "anything")).toBe("unknown")
+})
+
+it("lists transcription models only for providers the capability matrix lets transcribe", () => {
+  for (const providerId of Object.keys(BUILT_IN_TRANSCRIPTION_MODELS)) {
+    const cell = buildProviderOperationProfile({ providerId }).cells.find(
+      (candidate) => candidate.operationId === "transcription.create"
+    )
+    expect([providerId, cell?.support]).not.toEqual([providerId, "unsupported"])
+    expect(cell).toBeDefined()
+  }
+})
+
+it("refuses to transcribe with a model that cannot, on a provider that can", async () => {
+  const services = deps({ text: "hello" })
+  await expect(
+    processAttachmentMedia(
+      source(),
+      "a.wav",
+      { method: "transcribe", providerId: "openai", modelId: "gpt-5.6" },
+      services
+    )
+  ).rejects.toThrow("attachment_transcription_unsupported")
+  expect(services.executor.execute).not.toHaveBeenCalled()
+})
+
 it("refuses to transcribe through a provider without a transcription endpoint", async () => {
   const services = deps({ text: "hello" })
   await expect(
@@ -121,6 +163,21 @@ it("refuses to transcribe through a provider without a transcription endpoint", 
     )
   ).rejects.toThrow("attachment_transcription_unsupported")
   expect(services.executor.execute).not.toHaveBeenCalled()
+})
+
+it("refuses to describe frames with a model that only transcribes", async () => {
+  const services = deps({ text: "hello" })
+  await expect(
+    processAttachmentMedia(
+      { ...source(), kind: "image" as const },
+      "a.png",
+      { method: "describe", providerId: "openai", modelId: "whisper-1" },
+      services
+    )
+  ).rejects.toThrow("attachment_describe_unsupported")
+  expect(services.executor.execute).not.toHaveBeenCalled()
+  expect(isTranscriptionOnlyModel("openai", "gpt-5.6")).toBe(false)
+  expect(isTranscriptionOnlyModel("azure", "whisper-1")).toBe(false)
 })
 
 it("still describes images through a language-only provider", async () => {

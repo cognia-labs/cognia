@@ -5,6 +5,7 @@ import type {
 } from "@cognia/agent-config-types/attachment"
 import { formatAttachmentLocator } from "@cognia/agent-config-types/attachment"
 import { buildProviderOperationProfile } from "@cognia/provider-core/operations/capability-matrix"
+import { builtInTranscriptionModels } from "@cognia/provider-types/transcription-models"
 import type { ProviderOperationExecutor } from "@/lib/ai/operations/executor"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import { withTimeout } from "@cognia/primitives/with-timeout"
@@ -29,22 +30,46 @@ export interface AttachmentMediaDeps {
 }
 
 /**
- * Whether a provider can serve `transcription.create`, read from the pure
- * ADR-0163 capability matrix. A built-in provider answers definitively — a
- * language-only vendor such as Anthropic is `unsupported`, which the model
- * picker used to offer and the run then failed on a missing SDK factory. A
- * custom deployment, or an id the catalog does not know, is `unknown` and
- * stays selectable: only the operation plane can answer for it at run time.
+ * Whether a provider, and a model on it, can serve `transcription.create`.
+ *
+ * The pure ADR-0163 capability matrix answers for the vendor: a language-only
+ * vendor such as Anthropic is `unsupported`, which the model picker used to
+ * offer and the run then failed on a missing SDK factory. The built-in
+ * transcription model list answers for the model: OpenAI transcribes, but
+ * not with a chat model, and a vendor whose transcription this app cannot
+ * reach lists none. A custom deployment, or an id neither knows, is `unknown`
+ * and stays selectable: only the operation plane can answer for it at run
+ * time. Without `modelId` the answer is for the provider alone.
  */
 export type AttachmentTranscriptionSupport = "supported" | "unsupported" | "unknown"
 
-export function attachmentTranscriptionSupport(providerId: string): AttachmentTranscriptionSupport {
+export function attachmentTranscriptionSupport(
+  providerId: string,
+  modelId?: string
+): AttachmentTranscriptionSupport {
   if (!providerId.trim()) return "unknown"
   const cell = buildProviderOperationProfile({ providerId }).cells.find(
     (candidate) => candidate.operationId === "transcription.create"
   )
+  if (cell?.support === "unsupported") return "unsupported"
+  const listed = builtInTranscriptionModels(providerId)
+  if (listed) {
+    if (listed.length === 0) return "unsupported"
+    const model = modelId?.trim()
+    if (model && !listed.includes(model)) return "unsupported"
+    return "supported"
+  }
   if (!cell || cell.support === "unknown") return "unknown"
-  return cell.support === "unsupported" ? "unsupported" : "supported"
+  return "supported"
+}
+
+/**
+ * Whether `modelId` is one of `providerId`'s listed transcription models. Those
+ * only transcribe, so describing frames with one would fail on a vision request
+ * it cannot take; the video picker offers them beside the chat models.
+ */
+export function isTranscriptionOnlyModel(providerId: string, modelId: string): boolean {
+  return builtInTranscriptionModels(providerId)?.includes(modelId.trim()) === true
 }
 
 function safeText(text: string): string {
@@ -65,12 +90,17 @@ export async function processAttachmentMedia(
   if (!options.providerId.trim() || !options.modelId.trim())
     throw new Error("attachment_model_required")
   // The picker filters these out; re-checked here so no caller can spend a
-  // queued run on a provider that has no transcription endpoint.
+  // queued run on a model that cannot do what it is asked.
   if (
     options.method === "transcribe" &&
-    attachmentTranscriptionSupport(options.providerId) === "unsupported"
+    attachmentTranscriptionSupport(options.providerId, options.modelId) === "unsupported"
   )
     throw new Error("attachment_transcription_unsupported")
+  if (
+    options.method === "describe" &&
+    isTranscriptionOnlyModel(options.providerId, options.modelId)
+  )
+    throw new Error("attachment_describe_unsupported")
   options.signal?.throwIfAborted()
   const deps = injected ?? {
     executor: (await import("@/lib/ai/operations")).getProviderOperationExecutor(),

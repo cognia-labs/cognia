@@ -442,7 +442,8 @@
         "retry": "重试提取",
         "failed": "处理未完成，请检查所选模型和提供商后重试。",
         "audioRequired": "请先转写此音频再发送。",
-        "transcriptionUnsupported": "所选提供商不支持音频转写，请改选支持转写的提供商的模型。",
+        "transcriptionUnsupported": "所选模型不支持音频转写，请改选转写模型。",
+        "describeUnsupported": "所选模型只能转写音频，描述画面请改选视觉模型。",
         "partial": "当前为部分表示，不包含尚未处理的页面、音轨或未采样的视频内容。",
         "rejected": "有 {count} 个附件尚未处理完成，请重试或移除后再发送。"
       },

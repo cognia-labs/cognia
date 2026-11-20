@@ -22,8 +22,14 @@
  * the gate as two harmless-looking pieces. CJK enders and newlines cut at once
  * because CJK has no spaces to wait for.
  *
- * Consumer-agnostic: `push()`/`flush()` suit a push source (per-delta callback);
- * `splitStream()` wraps them for a pull source (async iterable of tokens).
+ * Backing up to whitespace still lets a forced cut fall between the parts of
+ * an item written with spaces in it (`4111 1111 1111 1111`), and the first
+ * half would leave the device before the second half is even generated. So a
+ * forced cut waits for `forcedCutLookahead` more characters and asks
+ * `confirmForcedCut` about the text either side of it; a refusal holds the
+ * fragment until a real separator (or `flush()`) instead. Forced cuts are the
+ * rare no-punctuation case, so the lookahead costs little; only text the
+ * caller's gate flags waits for the sentence to end.
  */
 
 export interface StreamSplitterOptions {
@@ -39,9 +45,20 @@ export interface StreamSplitterOptions {
   sentenceSeparators?: string
   /** Minimum characters before a subsequent fragment may be cut. */
   minSentenceLength?: number
+  /** Characters that must arrive past a forced cut before `confirmForcedCut` is asked. */
+  forcedCutLookahead?: number
+  /**
+   * Whether a forced first cut may land between `head` (the fragment it would
+   * emit, as buffered) and `lookahead` (the `forcedCutLookahead` characters
+   * after it). `false` holds the fragment until a separator or `flush()`.
+   * Absent means every forced cut is taken at once.
+   */
+  confirmForcedCut?: (head: string, lookahead: string) => boolean
 }
 
-const DEFAULTS: Required<StreamSplitterOptions> = {
+type SplitterTuning = Required<Omit<StreamSplitterOptions, "confirmForcedCut">>
+
+const DEFAULTS: SplitterTuning = {
   // Note: the plan lists a bare "-" in the first set; it is intentionally
   // omitted here because it splits hyphenated words mid-token for no real gain.
   firstFragmentSeparators: ".?!;:,\n…)]}。！？；：，",
@@ -50,15 +67,24 @@ const DEFAULTS: Required<StreamSplitterOptions> = {
   forceFirstFragmentAfterChars: 60,
   sentenceSeparators: ".?!\n…。！？",
   minSentenceLength: 10,
+  // Covers a spaced card number, IBAN or phone number straddling the cut.
+  forcedCutLookahead: 40,
 }
 
 export class SentenceStreamSplitter {
   private buffer = ""
   private isFirst = true
-  private readonly opts: Required<StreamSplitterOptions>
+  /** Where the first forced cut would land, fixed while its lookahead arrives. */
+  private pendingForcedCut: number | null = null
+  /** `confirmForcedCut` refused: only a separator or `flush()` ends this fragment. */
+  private forcedCutHeld = false
+  private readonly opts: SplitterTuning
+  private readonly confirmForcedCut?: (head: string, lookahead: string) => boolean
 
   constructor(options: StreamSplitterOptions = {}) {
-    this.opts = { ...DEFAULTS, ...options }
+    const { confirmForcedCut, ...tuning } = options
+    this.opts = { ...DEFAULTS, ...tuning }
+    this.confirmForcedCut = confirmForcedCut
   }
 
   /** Feed more text; return any fragments that completed (possibly none). */
@@ -70,6 +96,8 @@ export class SentenceStreamSplitter {
       if (cut < 0) break
       const fragment = this.buffer.slice(0, cut).trim()
       this.buffer = this.buffer.slice(cut)
+      this.pendingForcedCut = null
+      this.forcedCutHeld = false
       if (fragment) {
         out.push(fragment)
         this.isFirst = false
@@ -82,6 +110,8 @@ export class SentenceStreamSplitter {
   flush(): string | null {
     const tail = this.buffer.trim()
     this.buffer = ""
+    this.pendingForcedCut = null
+    this.forcedCutHeld = false
     if (!tail) return null
     this.isFirst = false
     return tail
@@ -101,15 +131,30 @@ export class SentenceStreamSplitter {
       if (j >= b.length) return -1
       if (WHITESPACE.test(b[j])) return j
     }
-    if (this.isFirst) {
+    if (this.isFirst && !this.forcedCutHeld) return this.forcedFirstCut(b)
+    return -1
+  }
+
+  private forcedFirstCut(b: string): number {
+    if (this.pendingForcedCut === null) {
       const words = b.trim().split(/\s+/).filter(Boolean).length
       if (
-        words >= this.opts.forceFirstFragmentAfterWords ||
-        b.length >= this.opts.forceFirstFragmentAfterChars
+        words < this.opts.forceFirstFragmentAfterWords &&
+        b.length < this.opts.forceFirstFragmentAfterChars
       ) {
-        return forcedCut(b)
+        return -1
       }
+      const cut = forcedCut(b)
+      if (cut < 0 || !this.confirmForcedCut) return cut
+      this.pendingForcedCut = cut
     }
+    const cut = this.pendingForcedCut
+    if (b.length - cut < this.opts.forcedCutLookahead) return -1
+    const head = b.slice(0, cut)
+    const lookahead = b.slice(cut, cut + this.opts.forcedCutLookahead)
+    if (this.confirmForcedCut?.(head, lookahead) !== false) return cut
+    this.pendingForcedCut = null
+    this.forcedCutHeld = true
     return -1
   }
 }
@@ -134,20 +179,4 @@ function forcedCut(buffer: string): number {
   const trailingRun = /[\x21-\x7e]+$/.exec(buffer)
   if (!trailingRun) return buffer.length
   return trailingRun.index > 0 ? trailingRun.index : -1
-}
-
-/**
- * Pull-style wrapper: drive the splitter from an async iterable of text tokens,
- * yielding speakable fragments in order (including the flushed tail).
- */
-export async function* splitStream(
-  tokens: AsyncIterable<string>,
-  options: StreamSplitterOptions = {}
-): AsyncGenerator<string> {
-  const splitter = new SentenceStreamSplitter(options)
-  for await (const token of tokens) {
-    for (const fragment of splitter.push(token)) yield fragment
-  }
-  const tail = splitter.flush()
-  if (tail) yield tail
 }

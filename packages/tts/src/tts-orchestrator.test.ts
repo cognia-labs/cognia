@@ -1163,7 +1163,7 @@ describe("F01 — text is screened as written, before normalization", () => {
   })
 
   it("screens a streamed fragment together with the one before it", async () => {
-    setTtsHost({ allowCloudText: (text) => !/secret code/.test(text) })
+    setTtsHost({ allowCloudText: (text) => !/secret,? code/.test(text) })
     mockCache.mockImplementation(async (_key, generate) => generate())
     ;(generateOpenAITTS as jest.Mock).mockResolvedValue({
       success: true,
@@ -1172,15 +1172,86 @@ describe("F01 — text is screened as written, before normalization", () => {
     })
     const o = new TTSOrchestrator()
     await expect(
-      o.speakStream(tokensOf(["one two secret ", "code here."]), {
+      o.speakStream(tokensOf(["one two secret, ", "code here."]), {
         speechSettings: cloudSettings(),
         providerSettings: { openai: { apiKey: "k" } },
-        // Force the first cut after three words so the pair straddles it.
-        splitterOptions: { firstFragmentSeparators: "", forceFirstFragmentAfterWords: 3 },
       })
     ).rejects.toThrow(/sensitive data/)
     expect(generateOpenAITTS).toHaveBeenCalledTimes(1)
-    expect((generateOpenAITTS as jest.Mock).mock.calls[0][0]).toBe("one two secret")
+    expect((generateOpenAITTS as jest.Mock).mock.calls[0][0]).toBe("one two secret,")
+  })
+})
+
+describe("X4 — a forced first cut never splits a flagged item", () => {
+  const card = /4111 1111 1111 1111/
+  const tokens = () =>
+    tokensOf([
+      "please charge my card 4111 1111",
+      " 1111 1111 for the order and let me know when it went through without any trouble",
+    ])
+  // Force the first cut after five words: it falls inside the card number.
+  const splitterOptions = { forceFirstFragmentAfterWords: 5 }
+
+  it("holds the first fragment until the sentence ends instead of sending half", async () => {
+    setTtsHost({ allowCloudText: (text) => !card.test(text) })
+    mockCache.mockImplementation(async (_key, generate) => generate())
+    const o = new TTSOrchestrator()
+    await expect(
+      o.speakStream(tokens(), {
+        speechSettings: cloudSettings(),
+        providerSettings: { openai: { apiKey: "k" } },
+        splitterOptions,
+      })
+    ).rejects.toThrow(/sensitive data/)
+    expect(generateOpenAITTS).not.toHaveBeenCalled()
+  })
+
+  it("keeps half of it away from a remote system voice too", async () => {
+    setTtsHost({ allowCloudText: (text) => !card.test(text) })
+    const synth = setupSpeechSynth()
+    synth.voices = [voice("Remote", false, "en-US", true)]
+    const spoken: string[] = []
+    const speak = window.speechSynthesis.speak.bind(window.speechSynthesis)
+    Object.defineProperty(window.speechSynthesis, "speak", {
+      configurable: true,
+      value: (u: SpeechSynthesisUtterance) => {
+        spoken.push(u.text)
+        speak(u)
+      },
+    })
+    const o = new TTSOrchestrator()
+    await expect(
+      o.speakStream(tokens(), {
+        speechSettings: cloudSettings({ ttsProvider: "system" }),
+        splitterOptions,
+      })
+    ).rejects.toThrow(/sensitive data/)
+    expect(spoken).toEqual([])
+  })
+
+  it("still cuts early when the text around the cut is clean", async () => {
+    setTtsHost({ allowCloudText: () => true })
+    mockCache.mockImplementation(async (_key, generate) => generate())
+    ;(generateOpenAITTS as jest.Mock).mockResolvedValue({
+      success: true,
+      audioData: new ArrayBuffer(2),
+      mimeType: "audio/mpeg",
+    })
+    const o = new TTSOrchestrator()
+    await o.speakStream(
+      tokensOf([
+        "please read this long line aloud",
+        " and keep going for a while longer without stopping at all",
+      ]),
+      {
+        speechSettings: cloudSettings(),
+        providerSettings: { openai: { apiKey: "k" } },
+        splitterOptions,
+      }
+    )
+    const sent = (generateOpenAITTS as jest.Mock).mock.calls.map((call) => call[0])
+    expect(sent[0]).toBe("please read this long line")
+    expect(sent.length).toBeGreaterThan(1)
   })
 })
 

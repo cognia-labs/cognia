@@ -641,7 +641,7 @@ describe("AttachmentPreviewDialog — cancellable media processing", () => {
       fireEvent.click(item)
     }
 
-    it("offers an audio file only providers that can transcribe it", async () => {
+    it("offers an audio file only the models that transcribe it", async () => {
       renderDialog({
         target: AUDIO,
         state: ready({ extracted: { kind: "audio", block: null, tokens: 0 } }),
@@ -650,11 +650,15 @@ describe("AttachmentPreviewDialog — cancellable media processing", () => {
       await user().click(screen.getByRole("tab", { name: "Processed" }))
       fireEvent.click(screen.getByRole("button", { name: /switch model/i }))
       const items = pickerItems()
-      expect(items.some((text) => text.includes(OPENAI_NAME))).toBe(true)
+      // OpenAI's transcription models, which the chat catalog does not list…
+      expect(items.some((text) => text.includes("gpt-transcribe"))).toBe(true)
+      expect(items.some((text) => text.includes("whisper-1"))).toBe(true)
+      // …and neither its chat model nor a language-only provider.
+      expect(items.some((text) => text.includes(OPENAI_NAME))).toBe(false)
       expect(items.some((text) => text.includes(ANTHROPIC_NAME))).toBe(false)
     })
 
-    it("blocks transcribing a video through a language-only provider but still describes", async () => {
+    it("lets a video transcribe only with a transcription model and describe only with a chat model", async () => {
       const onProcessMedia = jest.fn()
       renderDialog({
         target: CLIP,
@@ -666,16 +670,25 @@ describe("AttachmentPreviewDialog — cancellable media processing", () => {
       pick(ANTHROPIC_NAME)
       expect(screen.getByRole("button", { name: "Transcribe audio" })).toBeDisabled()
       expect(screen.getByTestId("attachment-transcription-unsupported")).toHaveTextContent(
-        "The selected provider cannot transcribe audio."
+        "The selected model cannot transcribe audio."
       )
       expect(screen.getByRole("button", { name: "Describe images" })).toBeEnabled()
 
+      // OpenAI transcribes, but not with its chat model.
       pick(OPENAI_NAME)
+      expect(screen.getByRole("button", { name: "Transcribe audio" })).toBeDisabled()
+      expect(screen.getByRole("button", { name: "Describe images" })).toBeEnabled()
+
+      pick("whisper-1")
       expect(screen.queryByTestId("attachment-transcription-unsupported")).not.toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Describe images" })).toBeDisabled()
+      expect(screen.getByTestId("attachment-describe-unsupported")).toHaveTextContent(
+        "The selected model only transcribes audio."
+      )
       fireEvent.click(screen.getByRole("button", { name: "Transcribe audio" }))
       expect(onProcessMedia).toHaveBeenCalledWith("v", {
         providerId: "openai",
-        modelId: OPENAI_MODEL,
+        modelId: "whisper-1",
         method: "transcribe",
       })
     })
@@ -691,7 +704,23 @@ describe("AttachmentPreviewDialog — cancellable media processing", () => {
       })
       await user().click(screen.getByRole("tab", { name: "Processed" }))
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "The selected provider cannot transcribe audio."
+        "The selected model cannot transcribe audio."
+      )
+    })
+
+    it("explains a run refused for describing with a transcription-only model", async () => {
+      renderDialog({
+        target: CLIP,
+        state: {
+          status: "ready",
+          sizeBytes: 10,
+          processingError: "attachment_describe_unsupported",
+        },
+        onProcessMedia: jest.fn(),
+      })
+      await user().click(screen.getByRole("tab", { name: "Processed" }))
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The selected model only transcribes audio."
       )
     })
   })

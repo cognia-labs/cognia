@@ -1,8 +1,4 @@
-import { SentenceStreamSplitter, splitStream } from "./stream-splitter"
-
-async function* fromChunks(chunks: string[]): AsyncGenerator<string> {
-  for (const c of chunks) yield c
-}
+import { SentenceStreamSplitter } from "./stream-splitter"
 
 describe("SentenceStreamSplitter", () => {
   it("cuts the first fragment on a wide separator once past the minimum length", () => {
@@ -94,28 +90,55 @@ describe("SentenceStreamSplitter", () => {
     const s = new SentenceStreamSplitter()
     expect(s.flush()).toBeNull()
   })
-})
 
-describe("splitStream (pull wrapper)", () => {
-  it("yields fragments in order across token boundaries and flushes the tail", async () => {
-    const out: string[] = []
-    for await (const frag of splitStream(
-      fromChunks(["Hello there", ", I can help. ", "Second sentence here.", " Tail without ender"])
-    )) {
-      out.push(frag)
-    }
-    // First fragment grabbed early on the comma; then sentence enders; tail flushed.
-    expect(out).toEqual([
-      "Hello there,",
-      "I can help.",
-      "Second sentence here.",
-      "Tail without ender",
-    ])
-  })
+  describe("confirmed forced cuts", () => {
+    const opts = { forceFirstFragmentAfterWords: 5, forcedCutLookahead: 10 }
 
-  it("emits nothing for an empty stream", async () => {
-    const out: string[] = []
-    for await (const frag of splitStream(fromChunks([]))) out.push(frag)
-    expect(out).toEqual([])
+    it("waits for the lookahead, then takes the cut where it first fell", () => {
+      const confirm = jest.fn(() => true)
+      const s = new SentenceStreamSplitter({ ...opts, confirmForcedCut: confirm })
+      // The forced cut falls before "five"; the lookahead is still short.
+      expect(s.push("one two three four five")).toEqual([])
+      expect(confirm).not.toHaveBeenCalled()
+      expect(s.push(" six seven")).toEqual(["one two three four"])
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(confirm).toHaveBeenCalledWith("one two three four ", "five six s")
+      expect(s.flush()).toBe("five six seven")
+    })
+
+    it("holds a refused cut until a separator, however long the text grows", () => {
+      // A spaced card number straddles the cut: cutting would send half of it.
+      const confirm = jest.fn(
+        (head: string, lookahead: string) => !`${head}${lookahead}`.includes("4111 1111 1111 1111")
+      )
+      const s = new SentenceStreamSplitter({
+        ...opts,
+        forcedCutLookahead: 20,
+        confirmForcedCut: confirm,
+      })
+      expect(s.push("my card is 4111 1111")).toEqual([])
+      expect(s.push(" 1111 1111 and then many more words follow")).toEqual([])
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(s.push(" without stopping")).toEqual([])
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(s.push(", done")).toEqual([
+        "my card is 4111 1111 1111 1111 and then many more words follow without stopping,",
+      ])
+      expect(s.flush()).toBe("done")
+    })
+
+    it("hands a refused fragment over whole at flush", () => {
+      const s = new SentenceStreamSplitter({ ...opts, confirmForcedCut: () => false })
+      expect(s.push("call me on 415 555 0100 any time you like")).toEqual([])
+      expect(s.flush()).toBe("call me on 415 555 0100 any time you like")
+    })
+
+    it("lets a separator inside the lookahead cut first, without asking", () => {
+      const confirm = jest.fn(() => false)
+      const s = new SentenceStreamSplitter({ ...opts, confirmForcedCut: confirm })
+      expect(s.push("one two three four five")).toEqual([])
+      expect(s.push(" six. Seven")).toEqual(["one two three four five six."])
+      expect(confirm).not.toHaveBeenCalled()
+    })
   })
 })

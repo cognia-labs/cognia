@@ -975,6 +975,21 @@ describe("StagedAttachmentsProvider — explicit media processing", () => {
     )
   })
 
+  it("keeps a typed refusal to describe with a transcription-only model", async () => {
+    processMock.mockRejectedValue(new Error("attachment_describe_unsupported"))
+    const id = await stageAudio()
+    act(() =>
+      captured.store.processMedia(id, {
+        method: "describe",
+        providerId: "openai",
+        modelId: "whisper-1",
+      })
+    )
+    await waitFor(() =>
+      expect(captured.store.byId.get(id)?.processingError).toBe("attachment_describe_unsupported")
+    )
+  })
+
   it("reports any other processing failure generically", async () => {
     processMock.mockRejectedValue(new Error("network down"))
     const id = await stageAudio()
