@@ -11,6 +11,8 @@ import {
   detectEncoding,
 } from "./document-processor"
 import { parseWord, parseExcel } from "./parsers/office-parser"
+import { parsePDF } from "./parsers/pdf-parser"
+import { DOCUMENT_PROCESSING_VERSION } from "./parse-identity"
 import { parsePresentation } from "./parsers/presentation-parser"
 import {
   parseOpenDocumentText,
@@ -1292,5 +1294,86 @@ describe("typed tables (G3)", () => {
     const [table] = result.structure?.tables ?? []
     expect(table.locator).toEqual({ type: "text", start: 9, end: 28 })
     expect(result.content.slice(9, 28)).toBe("Name\n\nScore\n\nAda\n\n9")
+  })
+})
+
+describe("parse identity (G1)", () => {
+  it("records the reader, the processing version, the options and when it ran", async () => {
+    const before = Date.now()
+    const result = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8))
+    expect(result.structure?.parse).toEqual({
+      parser: "pdfjs",
+      processingVersion: DOCUMENT_PROCESSING_VERSION,
+      configHash: expect.any(String),
+      strategy: "native",
+      startedAt: expect.any(Number),
+      completedAt: expect.any(Number),
+    })
+    const parse = result.structure!.parse!
+    expect(parse.startedAt).toBeGreaterThanOrEqual(before)
+    expect(parse.completedAt).toBeGreaterThanOrEqual(parse.startedAt)
+  })
+
+  it("names the native PDF reader when it read the file", async () => {
+    const pdf = await jest.mocked(parsePDF).getMockImplementation()!(new ArrayBuffer(8))
+    jest.mocked(parsePDF).mockResolvedValueOnce({ ...pdf, engine: "native-pdf" })
+    const result = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8))
+    expect(result.structure?.parse?.parser).toBe("native-pdf")
+  })
+
+  it("gives options that change the output a different config hash", async () => {
+    const outline = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8))
+    const noOutline = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8), {
+      extractPdfOutline: false,
+    })
+    const projection = await processDocumentAsync("pdf", "document.pdf", new ArrayBuffer(8), {
+      extractEmbeddable: false,
+    })
+    expect(noOutline.structure?.parse?.configHash).not.toBe(outline.structure?.parse?.configHash)
+    // The embedding projection is not the parse.
+    expect(projection.structure?.parse?.configHash).toBe(outline.structure?.parse?.configHash)
+  })
+
+  it("keeps the version AnyDoc reports about itself", async () => {
+    mockParseLegacyOfficeWithAnyDoc.mockResolvedValueOnce({
+      markdown: "# Legacy\n\nBody",
+      format: "doc",
+      engineVersion: "0.1.9",
+    })
+    const result = await processDocumentAsync("legacy", "legacy.doc", new ArrayBuffer(8), {
+      anyDoc: { enabled: true },
+    })
+    expect(result.structure?.parse).toMatchObject({ parser: "anydoc", parserVersion: "0.1.9" })
+  })
+
+  it("names the reader of each format", async () => {
+    const readers: Array<[string, string | ArrayBuffer, string]> = [
+      ["report.docx", new ArrayBuffer(8), "mammoth"],
+      ["book.xlsx", new ArrayBuffer(8), "sheetjs"],
+      ["deck.pptx", new ArrayBuffer(8), "pptx"],
+      ["page.html", "<p>x</p>", "html"],
+      ["rows.csv", "a,b\n1,2", "csv"],
+      ["notes.md", "# Notes", "markdown"],
+      ["notes.txt", "plain", "text"],
+    ]
+    for (const [filename, data, parser] of readers) {
+      const result = await processDocumentAsync(filename, filename, data)
+      expect([filename, result.structure?.parse?.parser]).toEqual([filename, parser])
+    }
+  })
+
+  it("makes a Word document's styled headings its sections", async () => {
+    jest.mocked(parseWord).mockResolvedValueOnce({
+      text: "Overview\n\nWhat it covers\n\nRisks\n\nWhat could go wrong",
+      html: "",
+      messages: [],
+      images: [],
+      headings: [
+        { level: 1, text: "Overview" },
+        { level: 1, text: "Risks" },
+      ],
+    })
+    const result = await processDocumentAsync("plan", "plan.docx", new ArrayBuffer(8))
+    expect(result.structure?.nodes.map((node) => node.title)).toEqual(["", "Overview", "Risks"])
   })
 })

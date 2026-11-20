@@ -172,10 +172,24 @@ export async function maybeTwinPdfOcrWithProvenance(
         children: outlineChildren(node.id),
       }))
   const outline = outlineChildren("root")
+  // The parse is now the reader's plus OCR: a new identity, so a kept parse
+  // can tell which provider read it.
+  const parse = parsed.structure?.parse
   const structure = buildDocumentStructure({
     content: text,
     title: parsed.title,
     pages,
+    ...(parse
+      ? {
+          parse: {
+            ...parse,
+            strategy: "ocr" as const,
+            ocrProvider: result.providerId,
+            languages: [...result.languages],
+            completedAt: Date.now(),
+          },
+        }
+      : {}),
     ...(outline.length
       ? { pdf: { text, pages: [], pageCount: pages.length, metadata: {}, outline } }
       : {}),

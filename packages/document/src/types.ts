@@ -140,12 +140,42 @@ export interface DocumentTable {
   cells: DocumentTableCell[]
 }
 
+/**
+ * How a document's text and structure were produced (G1). Two parses with
+ * the same `parseIdentityKey` read the same bytes the same way; any other
+ * difference is a new parse, and a kept one says which code produced it.
+ */
+export interface DocumentParseIdentity {
+  /**
+   * The reader: `pdfjs`, `native-pdf`, `mammoth`, `sheetjs`, `odf`, `pptx`,
+   * `anydoc`, `rtf`, `epub`, `csv`, `html`, `markdown`, `code`, `json`, `text`.
+   */
+  parser: string
+  /** The version the reader reports about itself, where it reports one (AnyDoc). */
+  parserVersion?: string
+  /** `DOCUMENT_PROCESSING_VERSION` when the parse ran. */
+  processingVersion: number
+  /** A hash of the options that shape the output. */
+  configHash: string
+  /** Where the text came from: the file's own text, or OCR over its pages. */
+  strategy: "native" | "ocr"
+  /** The OCR provider, when `strategy` is `ocr`. */
+  ocrProvider?: string
+  /** The languages OCR read for. */
+  languages?: string[]
+  /** Epoch milliseconds the parse started and completed (OCR included). */
+  startedAt: number
+  completedAt: number
+}
+
 export interface DocumentStructure {
   version: 1
   contentHash: string
   textLength: number
   nodes: DocumentSection[]
   pages: DocumentPageRange[]
+  /** How this structure was produced. */
+  parse?: DocumentParseIdentity
   /** The document's tables as typed grids, where its format has tables. */
   tables?: DocumentTable[]
 }
@@ -294,6 +324,8 @@ export interface PDFParseResult {
   outline?: PDFOutlineItem[]
   annotations?: PDFAnnotation[]
   diagnostics?: ParseDiagnostic[]
+  /** Which reader produced it: the native (Tauri) parser or pdf.js. */
+  engine?: "native-pdf" | "pdfjs"
 }
 
 export interface PdfTextItem {

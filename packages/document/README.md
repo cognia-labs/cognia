@@ -27,6 +27,18 @@ of any binary source fingerprint. Section IDs derive from parent/title paths
 and repeated-heading occurrences, so body-only edits retain section identity.
 Optional summaries are navigation aids; readers answer from original slices.
 
+`structure.parse` (`DocumentParseIdentity`) says how the structure was
+produced: the reader (`pdfjs`, `native-pdf`, `mammoth`, `sheetjs`, `odf`,
+`pptx`, `anydoc` with the version it reports, `html`, `csv`, ...), the
+package's `DOCUMENT_PROCESSING_VERSION`, a hash of the options that shape the
+output, the strategy (`native`, or `ocr` with the provider and languages once
+the application's OCR fallback has read pages) and when it ran.
+`parseIdentityKey` leaves the timestamps out: a consumer that keeps a parse
+compares keys to decide whether it needs a new generation. Bump
+`DOCUMENT_PROCESSING_VERSION` whenever a parser change alters what a parse
+produces. Word and ODT text is plain text, so its sections come from the
+headings the document's styles mark, each where it stands on its own line.
+
 `structure.tables` holds a document's tables as typed grids
 (`DocumentTable`): each cell is anchored at its top-left row and column with
 its `rowSpan` / `columnSpan`, its text, whether it heads the table and, from a

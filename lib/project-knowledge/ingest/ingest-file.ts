@@ -11,6 +11,7 @@
  */
 
 import { documentContentHash } from "@cognia/document/document-structure"
+import { parseIdentityKey } from "@cognia/document/parse-identity"
 import type { KnowledgeFile } from "@/types"
 import type { ChunkingStrategy } from "@cognia/provider-embedding/chunking"
 import { prepareChunks } from "@/lib/twin/ingest/chunk"
@@ -90,15 +91,24 @@ export function hashContent(text: string): string {
   return documentContentHash(text)
 }
 
-/** Structure and projection changes rebuild derived generations; legacy hashes remain valid. */
+/**
+ * Structure and projection changes rebuild derived generations; legacy hashes
+ * remain valid. The parse counts by its identity key: a different reader,
+ * processing version, configuration or OCR provider is a new generation,
+ * while re-reading the same bytes the same way (a new timestamp) is not.
+ */
 export function hashKnowledgeFile(
   file: Pick<KnowledgeFile, "content" | "structure" | "embeddableContent">
 ): string {
   const content = file.content ?? ""
   if (!file.structure && file.embeddableContent === undefined) return hashContent(content)
-  return hashContent(
-    JSON.stringify([content, file.structure ?? null, file.embeddableContent ?? null])
-  )
+  const structure = file.structure
+    ? {
+        ...file.structure,
+        ...(file.structure.parse ? { parse: parseIdentityKey(file.structure.parse) } : {}),
+      }
+    : null
+  return hashContent(JSON.stringify([content, structure, file.embeddableContent ?? null]))
 }
 
 export async function ingestKnowledgeFile(

@@ -23,6 +23,8 @@ export interface PDFParseResult {
   /** Parser-level diagnostics (e.g. native-parse fallback) merged into
    *  `ProcessedDocument.parseDiagnostics` by the document processor. */
   diagnostics?: ParseDiagnostic[]
+  /** Which reader produced it: the native (Tauri) parser or pdf.js. */
+  engine?: "native-pdf" | "pdfjs"
 }
 
 export interface PDFPage {
@@ -144,7 +146,7 @@ export async function parsePDF(
           await outlineTask?.destroy().catch(() => undefined)
         }
       }
-      return native
+      return { ...native, engine: "native-pdf" }
     } catch (err) {
       options.signal?.throwIfAborted()
       const message = err instanceof Error ? err.message : String(err)
@@ -246,6 +248,7 @@ export async function parsePDF(
     }
 
     const result: PDFParseResult = {
+      engine: "pdfjs",
       text: textParts.join("\n\n"),
       pageCount: pdf.numPages,
       pages,

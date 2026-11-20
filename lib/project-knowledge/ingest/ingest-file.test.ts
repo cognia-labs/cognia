@@ -185,6 +185,36 @@ it("invalidates a generation on structure-only changes while retaining legacy ha
   )
 })
 
+it("counts the parse by its identity key, not its timestamps (G1)", async () => {
+  const { hashKnowledgeFile } = await import("./ingest-file")
+  const parse = {
+    parser: "mammoth",
+    processingVersion: 1,
+    configHash: "cfg",
+    strategy: "native" as const,
+    startedAt: 1,
+    completedAt: 2,
+  }
+  const parsedFile = (identity: typeof parse) =>
+    file({
+      content: "source",
+      structure: {
+        version: 1,
+        contentHash: hashContent("source"),
+        textLength: 6,
+        nodes: [],
+        pages: [],
+        parse: identity,
+      },
+    })
+  const first = hashKnowledgeFile(parsedFile(parse))
+  // Re-reading the same bytes the same way later is the same generation.
+  expect(hashKnowledgeFile(parsedFile({ ...parse, startedAt: 50, completedAt: 60 }))).toBe(first)
+  // Newer parser code, or other options, is a new one.
+  expect(hashKnowledgeFile(parsedFile({ ...parse, processingVersion: 2 }))).not.toBe(first)
+  expect(hashKnowledgeFile(parsedFile({ ...parse, configHash: "other" }))).not.toBe(first)
+})
+
 it("rejects stale page ranges after editing the canonical source", async () => {
   await ingestKnowledgeFile({
     projectId: "p",

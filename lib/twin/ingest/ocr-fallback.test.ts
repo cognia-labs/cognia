@@ -350,3 +350,37 @@ describe("page status, confidence and tables (G2)", () => {
     expect(tables[1]).toMatchObject({ rowCount: 2, columnCount: 2, headerRowCount: 1 })
   })
 })
+
+describe("parse identity after OCR (G1)", () => {
+  it("keeps the reader's identity and records OCR, its provider and languages", async () => {
+    const source = parsed("")
+    source.structure = {
+      version: 1,
+      contentHash: "layer",
+      textLength: 0,
+      nodes: [],
+      pages: [],
+      parse: {
+        parser: "pdfjs",
+        processingVersion: 1,
+        configHash: "cfg",
+        strategy: "native",
+        startedAt: 10,
+        completedAt: 20,
+      },
+    }
+    const extractPdf = jest.fn(async () => ({ ...ocrResult("Scanned"), providerId: "tesseract" }))
+    const out = await maybeTwinPdfOcrWithProvenance(raw(), source, deps({ extractPdf }))
+    expect(out?.structure?.parse).toEqual({
+      parser: "pdfjs",
+      processingVersion: 1,
+      configHash: "cfg",
+      strategy: "ocr",
+      ocrProvider: "tesseract",
+      languages: ["en"],
+      startedAt: 10,
+      completedAt: expect.any(Number),
+    })
+    expect(out?.structure?.parse?.completedAt).toBeGreaterThanOrEqual(20)
+  })
+})

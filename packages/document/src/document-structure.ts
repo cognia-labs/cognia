@@ -2,6 +2,7 @@
 import { locateTables } from "./document-tables"
 import type {
   DocumentPageRange,
+  DocumentParseIdentity,
   DocumentSection,
   DocumentStructure,
   DocumentTable,
@@ -26,6 +27,14 @@ export function buildDocumentStructure(input: {
   pages?: DocumentPageRange[]
   /** Typed tables; one without a locator is located in `content` by its cells. */
   tables?: readonly DocumentTable[]
+  /**
+   * Headings a parser read from the document's own styles (Word / ODT), for
+   * content that is plain text: each becomes a section where its text stands
+   * on a line of its own, in order. One not found that way gets no section.
+   */
+  headings?: readonly { level: number; text: string }[]
+  /** How the structure was produced. */
+  parse?: DocumentParseIdentity
 }): DocumentStructure {
   const { content } = input
   const lineOffsets = [0]
@@ -98,6 +107,26 @@ export function buildDocumentStructure(input: {
     for (const section of input.markdown.sections) {
       add(section.title, section.level, lineOffsets[section.startLine] ?? content.length)
     }
+  } else if (input.headings?.length) {
+    let cursor = 0
+    for (const heading of input.headings) {
+      const text = heading.text.trim()
+      if (!text) continue
+      let at = content.indexOf(text, cursor)
+      // The heading's own line, not the same words inside a paragraph.
+      while (
+        at !== -1 &&
+        !(
+          (at === 0 || content[at - 1] === "\n") &&
+          (at + text.length === content.length || content[at + text.length] === "\n")
+        )
+      ) {
+        at = content.indexOf(text, at + 1)
+      }
+      if (at === -1) continue
+      add(text, Math.max(1, heading.level), at)
+      cursor = at + text.length
+    }
   } else if (input.pdf?.outline?.length) {
     const visit = (items: PDFOutlineItem[], level: number, inheritedPage?: number) => {
       for (const item of items) {
@@ -138,6 +167,7 @@ export function buildDocumentStructure(input: {
     nodes,
     pages,
     ...(input.tables?.length ? { tables: locateTables(content, input.tables) } : {}),
+    ...(input.parse ? { parse: input.parse } : {}),
   }
 }
 

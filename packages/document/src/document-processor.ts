@@ -25,7 +25,8 @@ import {
   normalizeHTMLSummary,
 } from "./parse-summary"
 import { buildDocumentStructure } from "./document-structure"
-import { delimitedTable, sheetTable, tableToMarkdown } from "./document-tables"
+import { columnLetters, delimitedTable, sheetTable, tableToMarkdown } from "./document-tables"
+import { DOCUMENT_PROCESSING_VERSION, parseConfigHash } from "./parse-identity"
 import { mapWordMessages, attachDiagnosticToError } from "./parse-diagnostics"
 import {
   DEFAULT_DOCUMENT_LIMITS,
@@ -179,6 +180,7 @@ export function processDocument(
   content: string,
   options: ProcessingOptions = {}
 ): ProcessedDocument {
+  const startedAt = Date.now()
   const opts = { ...DEFAULT_PROCESSING_OPTIONS, ...options }
   const type = detectDocumentType(filename)
   if (!PLAIN_TEXT_TYPES.has(type)) {
@@ -274,6 +276,14 @@ export function processDocument(
       content,
       title: metadata.title,
       ...(type === "markdown" ? { markdown: parseMarkdown(content) } : {}),
+      parse: {
+        parser: type,
+        processingVersion: DOCUMENT_PROCESSING_VERSION,
+        configHash: parseConfigHash(outputOptions(type, opts)),
+        strategy: "native",
+        startedAt,
+        completedAt: Date.now(),
+      },
     }),
     sourceSegments: [
       {
@@ -294,6 +304,21 @@ export function processDocument(
   }
 
   return result
+}
+
+/**
+ * The options that change what a parse of `type` produces, for its identity's
+ * config hash. `extractEmbeddable` and chunking shape projections of the
+ * parse, not the parse.
+ */
+function outputOptions(type: DocumentType, opts: ProcessingOptions): Record<string, unknown> {
+  return {
+    type,
+    ...(type === "pdf" ? { extractPdfOutline: opts.extractPdfOutline !== false } : {}),
+    ...(type === "word" || type === "presentation"
+      ? { anyDoc: opts.anyDoc?.enabled === true }
+      : {}),
+  }
 }
 
 /**
@@ -329,6 +354,7 @@ export async function processDocumentAsync(
   options: ProcessingOptions = {}
 ): Promise<ProcessedDocument> {
   options.signal?.throwIfAborted()
+  const startedAt = Date.now()
   const opts = {
     ...DEFAULT_PROCESSING_OPTIONS,
     ...options,
@@ -362,6 +388,9 @@ export async function processDocumentAsync(
   let parseResult: ProcessedDocument["parseResult"]
   let parseSummary: ParseSummary | undefined
   let parseDiagnostics: ParseDiagnostic[] = []
+  // The reader each branch ran, for the parse identity.
+  let parser: string = type
+  let parserVersion: string | undefined
 
   switch (type) {
     case "pdf": {
@@ -383,6 +412,7 @@ export async function processDocumentAsync(
         author: parsed.metadata.author,
       }
       parseResult = parsed
+      parser = parsed.engine ?? "pdfjs"
       parseSummary = normalizePDFSummary(parsed)
       if (parsed.diagnostics?.length) {
         parseDiagnostics = [...parsed.diagnostics]
@@ -414,6 +444,8 @@ export async function processDocumentAsync(
           metadata = normalized.metadata
           parseSummary = normalized.parseSummary
           parseDiagnostics = normalized.parseDiagnostics
+          parser = "anydoc"
+          parserVersion = parsed.engineVersion
           break
         } catch (error) {
           if (
@@ -441,6 +473,7 @@ export async function processDocumentAsync(
             language: "word",
           }
           parseResult = parsed
+          parser = "odf"
           parseSummary = normalizeWordSummary(parsed as WordParseResult)
           parseDiagnostics = mapWordMessages((parsed as WordParseResult).messages ?? [])
         } else {
@@ -461,6 +494,7 @@ export async function processDocumentAsync(
             language: "word",
           }
           parseResult = parsed
+          parser = "mammoth"
           parseSummary = normalizeWordSummary(parsed)
           parseDiagnostics = mapWordMessages(parsed.messages)
         }
@@ -489,6 +523,7 @@ export async function processDocumentAsync(
             sheetNames: parsed.sheetNames,
           }
           parseResult = parsed
+          parser = "odf"
           parseSummary = normalizeExcelSummary(parsed)
         } else {
           // Dynamic import to reduce bundle size and memory usage
@@ -508,6 +543,7 @@ export async function processDocumentAsync(
             sheetNames: parsed.sheetNames,
           }
           parseResult = parsed
+          parser = "sheetjs"
           parseSummary = normalizeExcelSummary(parsed)
         }
       } catch (error) {
@@ -544,6 +580,8 @@ export async function processDocumentAsync(
           metadata = normalized.metadata
           parseSummary = normalized.parseSummary
           parseDiagnostics = normalized.parseDiagnostics
+          parser = "anydoc"
+          parserVersion = parsed.engineVersion
           break
         } catch (error) {
           if (
@@ -574,6 +612,7 @@ export async function processDocumentAsync(
             slideCount: parsed.slideCount,
           }
           parseResult = parsed
+          parser = "odf"
           parseSummary = normalizePresentationSummary(parsed)
         } else {
           const { parsePresentation, extractPresentationEmbeddableContent } =
@@ -593,6 +632,7 @@ export async function processDocumentAsync(
             slideCount: parsed.slideCount,
           }
           parseResult = parsed
+          parser = "pptx"
           parseSummary = normalizePresentationSummary(parsed)
         }
         const textless = (parseResult as { slides: { slideNumber: number; text: string }[] }).slides
@@ -628,6 +668,7 @@ export async function processDocumentAsync(
         charset: parsed.metadata.charset,
       }
       parseResult = parsed
+      parser = "rtf"
       parseSummary = normalizeRTFSummary(parsed)
       break
     }
@@ -648,6 +689,7 @@ export async function processDocumentAsync(
         chapterCount: parsed.chapterCount,
       }
       parseResult = parsed
+      parser = "epub"
       parseSummary = normalizeEPUBSummary(parsed)
       break
     }
@@ -669,6 +711,7 @@ export async function processDocumentAsync(
         headers: parsed.headers,
       }
       parseResult = parsed
+      parser = "csv"
       parseSummary = normalizeCSVSummary(parsed)
       break
     }
@@ -694,6 +737,7 @@ export async function processDocumentAsync(
         imageCount: parsed.images.length,
       }
       parseResult = parsed
+      parser = "html"
       parseSummary = normalizeHTMLSummary(parsed)
       break
     }
@@ -724,6 +768,12 @@ export async function processDocumentAsync(
     }
   }
 
+  // Word and ODT text is plain text: its sections are the headings the
+  // document's styles mark (AnyDoc writes Markdown, read as Markdown).
+  const headings =
+    type === "word" && parser !== "anydoc" && parseResult && "headings" in parseResult
+      ? (parseResult.headings ?? [])
+      : []
   const result: ProcessedDocument = {
     id,
     filename,
@@ -739,8 +789,19 @@ export async function processDocumentAsync(
       title: metadata.title,
       ...(parseResult && "pages" in parseResult
         ? { pdf: parseResult }
-        : { markdown: parseMarkdown(content) }),
+        : headings.length > 0
+          ? { headings }
+          : { markdown: parseMarkdown(content) }),
       tables,
+      parse: {
+        parser,
+        ...(parserVersion ? { parserVersion } : {}),
+        processingVersion: DOCUMENT_PROCESSING_VERSION,
+        configHash: parseConfigHash(outputOptions(type, opts)),
+        strategy: "native",
+        startedAt,
+        completedAt: Date.now(),
+      },
     }),
   }
 
@@ -753,13 +814,7 @@ export async function processDocumentAsync(
     }))
   } else if (parseResult && "sheets" in parseResult) {
     result.sourceSegments = parseResult.sheets.map((sheet, index) => {
-      let column = sheet.columnCount
-      let lastColumn = ""
-      while (column > 0) {
-        column -= 1
-        lastColumn = String.fromCharCode(65 + (column % 26)) + lastColumn
-        column = Math.floor(column / 26)
-      }
+      const lastColumn = sheet.columnCount > 0 ? columnLetters(sheet.columnCount - 1) : ""
       return {
         id: `${id}:sheet:${index + 1}`,
         text: sheet.data

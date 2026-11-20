@@ -188,6 +188,53 @@ describe("extractPdf — text-layer fast-path", () => {
   })
 })
 
+describe("extractPdf — the provider it reports", () => {
+  const twoScans = () =>
+    makeFakeDoc([
+      { pageNumber: 1, emptyTextLayer: true },
+      { pageNumber: 2, emptyTextLayer: true },
+    ])
+
+  it("names the providers the auto-router used, not itself (G1)", async () => {
+    const { deps, ocrPage } = makeDeps()
+    const page: OcrResult = {
+      providerId: "",
+      pages: [{ pageNumber: 1, markdown: "x", text: "x" }],
+      combinedMarkdown: "x",
+      combinedText: "x",
+      languages: ["en"],
+      durationMs: 1,
+      cached: false,
+    }
+    ocrPage
+      .mockResolvedValueOnce({ ...page, providerId: "tesseract" })
+      .mockResolvedValueOnce({ ...page, providerId: "azure-di" })
+    const result = await extractPdf(
+      { bytes: new Uint8Array([1]) },
+      { loadPdf: async () => twoScans(), ocrPage, extractDeps: deps }
+    )
+    expect(result.providerId).toBe("azure-di+tesseract")
+  })
+
+  it("keeps a named provider, and reports itself when no page needed OCR", async () => {
+    const { deps, ocrPage } = makeDeps()
+    const named = await extractPdf(
+      { bytes: new Uint8Array([1]) },
+      { loadPdf: async () => twoScans(), ocrPage, extractDeps: deps, ocrProviderId: "mistral-ocr" }
+    )
+    expect(named.providerId).toBe("mistral-ocr")
+    const digital = await extractPdf(
+      { bytes: new Uint8Array([1]) },
+      {
+        loadPdf: async () => makeFakeDoc([{ pageNumber: 1, text: "x".repeat(40) }]),
+        ocrPage,
+        extractDeps: deps,
+      }
+    )
+    expect(digital.providerId).toBe("pdf-router")
+  })
+})
+
 describe("extractPdf — page ranges", () => {
   it("processes every page when no range is supplied", async () => {
     const { deps, ocrPage } = makeDeps()

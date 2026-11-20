@@ -124,6 +124,8 @@ export async function extractPdf(input: PdfRouterInput, deps: PdfRouterDeps): Pr
   }
   deps.signal?.addEventListener("abort", cancelDocument, { once: true })
   const pages: OcrPage[] = []
+  // The providers that read pages, when the caller named none.
+  const usedProviders = new Set<string>()
   let costEstimate: OcrResult["costEstimate"]
   const start = Date.now()
   try {
@@ -171,6 +173,7 @@ export async function extractPdf(input: PdfRouterInput, deps: PdfRouterDeps): Pr
             deps.extractDeps
           )
           checkAborted()
+          usedProviders.add(ocrResult.providerId)
           if (ocrResult.costEstimate) {
             costEstimate = {
               ...ocrResult.costEstimate,
@@ -201,7 +204,12 @@ export async function extractPdf(input: PdfRouterInput, deps: PdfRouterDeps): Pr
       }
     }
     return {
-      providerId: ocrProviderId ?? "pdf-router",
+      // The named provider, else the ones the auto-router picked page by page
+      // ("a+b" when it changed provider between pages), else "pdf-router"
+      // when every page came from the text layer.
+      providerId:
+        ocrProviderId ??
+        (usedProviders.size > 0 ? [...usedProviders].sort().join("+") : "pdf-router"),
       pages,
       combinedMarkdown: combinePageMarkdown(pages),
       combinedText: combinePageText(pages),
