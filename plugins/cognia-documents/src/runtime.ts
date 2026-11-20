@@ -212,12 +212,12 @@ export function createDocumentsRuntime(ctx: DocumentsPluginContext) {
       progress?.reportProgress?.(60, t("progress.generatingDocx"))
       const bytes = await exportDocx(model)
       assertActive(progress?.signal)
-      const reopened = await validateDocxRoundTrip(bytes)
+      const reopened = await validateDocxRoundTrip(bytes, model)
       if (!reopened.valid)
         findings.push({
           severity: "error",
           code: "docx.invalid",
-          message: "Generated DOCX could not be reopened.",
+          message: `Generated DOCX did not reopen as this document: ${reopened.issues.join(" ")}`,
         })
       progress?.reportProgress?.(100)
       return {
@@ -301,13 +301,15 @@ export function createDocumentsRuntime(ctx: DocumentsPluginContext) {
       assertActive(progress?.signal)
       progress?.reportProgress?.(30, t("progress.generatingDocx"))
       const bytes = await exportDocx(model)
-      const reopened = await validateDocxRoundTrip(bytes)
+      const reopened = await validateDocxRoundTrip(bytes, model)
       if (!reopened.valid)
         return {
           ok: false as const,
           artifactId,
           reason: "invalid-package" as const,
-          error: "The generated DOCX did not reopen cleanly, so nothing was saved.",
+          error: `The generated DOCX did not reopen as this document, so nothing was saved: ${reopened.issues.join(
+            " "
+          )}`,
         }
       assertActive(progress?.signal)
       progress?.reportProgress?.(80, t("progress.savingDocx"))

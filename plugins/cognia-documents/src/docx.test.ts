@@ -96,7 +96,7 @@ it("imports Word comments anchored to blocks with resolved state", async () => {
       <w:p><w:r><w:t>Plain</w:t></w:r></w:p>`),
     "word/comments.xml": `<?xml version="1.0"?>
       <w:comments ${W} xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
-        <w:comment w:id="0" w:author="Jane" w14:paraId="ABC123"><w:p><w:r><w:t>Check this</w:t></w:r></w:p></w:comment>
+        <w:comment w:id="0" w:author="Jane"><w:p w14:paraId="0FFF0001"><w:r><w:t>Check</w:t></w:r></w:p><w:p w14:paraId="ABC123" w14:textId="77777777"><w:r><w:t>this</w:t></w:r></w:p></w:comment>
       </w:comments>`,
     "word/commentsExtended.xml": `<?xml version="1.0"?>
       <w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
@@ -105,10 +105,11 @@ it("imports Word comments anchored to blocks with resolved state", async () => {
   })
   const model = await importDocx(bytes, "reviewed.docx")
   expect(model.comments).toHaveLength(1)
+  // Word keys the state by the comment's LAST paragraph id.
   expect(model.comments[0]).toMatchObject({
     blockId: model.blocks[0].id,
     author: "Jane",
-    text: "Check this",
+    text: "Check\nthis",
     resolved: true,
   })
   // Imported comments are real model comments — not loss warnings.
@@ -269,7 +270,7 @@ it("keeps a leading Title paragraph as content when the caller names the documen
   expect(same.blocks.map((block) => block.id)).toEqual(["b1"])
 })
 
-it("keeps a Title-only document's comments on its title", async () => {
+it("keeps a comment on the title as a comment on the whole document", async () => {
   const bytes = await fixture({
     "word/document.xml": documentXml(
       `<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:commentRangeStart w:id="0"/><w:r><w:t>Only a title</w:t></w:r></w:p>`
@@ -278,10 +279,9 @@ it("keeps a Title-only document's comments on its title", async () => {
   })
   const model = await importDocx(bytes, "title-only.docx")
   expect(model.title).toBe("Only a title")
-  expect(model.blocks).toEqual([{ id: "b0", type: "heading", level: 1, text: "Only a title" }])
-  expect(model.comments).toEqual([
-    expect.objectContaining({ blockId: "b0", text: "Check", author: "Jane" }),
-  ])
+  // The title is not duplicated as a heading just to give the comment a block.
+  expect(model.blocks).toEqual([])
+  expect(model.comments).toEqual([{ id: "m1", text: "Check", author: "Jane", resolved: false }])
 })
 
 it("writes the caller's localized labels for empty comments and missing authors", async () => {
@@ -430,10 +430,10 @@ it("reports partial comment anchors and reply metadata", async () => {
   )
 })
 
-it("reports table-cell comment anchors even when they span a complete paragraph", async () => {
+it("keeps a comment on one cell on its table and reports the narrower range as lost", async () => {
   const bytes = await fixture({
     "word/document.xml": documentXml(
-      '<w:tbl><w:tr><w:tc><w:p><w:commentRangeStart w:id="1"/><w:r><w:t>Cell</w:t></w:r><w:commentRangeEnd w:id="1"/></w:p></w:tc></w:tr></w:tbl>'
+      '<w:tbl><w:tr><w:tc><w:p><w:commentRangeStart w:id="1"/><w:r><w:t>Cell</w:t></w:r><w:commentRangeEnd w:id="1"/></w:p></w:tc><w:tc><w:p><w:r><w:t>Other</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
     ),
     "word/comments.xml": `<w:comments ${W}><w:comment w:id="1" w:author="Reviewer"><w:p><w:r><w:t>Note</w:t></w:r></w:p></w:comment></w:comments>`,
   })
@@ -639,4 +639,155 @@ it("keeps a comment on a later line of merged code on that code block", async ()
   expect(model.comments).toEqual([
     expect.objectContaining({ blockId: model.blocks[1].id, author: "Ana", text: "Rename second" }),
   ])
+})
+
+describe("comment anchors (F12)", () => {
+  const tableModel = () =>
+    applyDocumentOperations(createDocument("Review", "Intro"), [
+      {
+        op: "appendTable",
+        rows: [
+          ["Region", "Q3"],
+          ["East", "12"],
+        ],
+      },
+      { op: "appendParagraph", text: "Outro" },
+      { op: "addComment", blockId: "b2", text: "Check the totals", author: "Jane" },
+      { op: "addComment", blockId: "b1", text: "Tighten this", author: "Li" },
+      { op: "addComment", blockId: "b2", text: "Source?", author: "Li" },
+    ])
+
+  it("ranges a table comment over the whole table in Word", async () => {
+    const xml = await readPackageXml(await exportDocx(tableModel()), "word/document.xml")
+    const table = /<w:tbl>[\s\S]*<\/w:tbl>/.exec(xml)![0]
+    const cells = table.match(/<w:p>[\s\S]*?<\/w:p>/g)!
+    expect(cells[0]).toMatch(
+      /^<w:p><w:commentRangeStart w:id="1"\/><w:commentRangeStart w:id="3"\/>/
+    )
+    expect(cells[0]).toContain("Region")
+    expect(cells.at(-1)).toMatch(
+      /12<\/w:t><\/w:r><w:commentRangeEnd w:id="1"\/><w:commentRangeEnd w:id="3"\/>/
+    )
+    expect(cells.at(-1)).toContain('<w:commentReference w:id="3"/>')
+  })
+
+  it("brings every comment back on its own block, with no loss reported", async () => {
+    const model = tableModel()
+    const bytes = await exportDocx(model)
+    const imported = await importDocx(bytes)
+
+    expect(imported.importedFeatures).not.toContain("comment-anchors")
+    const on = (text: string) => imported.comments.find((comment) => comment.text === text)
+    expect(imported.blocks.find((block) => block.id === on("Check the totals")!.blockId)).toEqual(
+      expect.objectContaining({ type: "table" })
+    )
+    expect(on("Source?")!.blockId).toBe(on("Check the totals")!.blockId)
+    expect(imported.blocks.find((block) => block.id === on("Tighten this")!.blockId)).toEqual(
+      expect.objectContaining({ type: "paragraph", text: "Intro" })
+    )
+    await expect(validateDocxRoundTrip(bytes, model)).resolves.toMatchObject({
+      valid: true,
+      issues: [],
+    })
+  })
+
+  it("round-trips a comment on the whole document through the title", async () => {
+    const model = createDocument("Plan", "Body")
+    model.comments.push({ id: "m1", text: "Overall: good", author: "Jane", resolved: true })
+    const bytes = await exportDocx(model)
+    const xml = await readPackageXml(bytes, "word/document.xml")
+    expect(/<w:p>(?:(?!<\/w:p>)[\s\S])*?Title[\s\S]*?<\/w:p>/.exec(xml)![0]).toContain(
+      '<w:commentRangeStart w:id="1"/>'
+    )
+
+    const imported = await importDocx(bytes)
+    expect(imported.comments).toEqual([
+      { id: "m1", text: "Overall: good", author: "Jane", resolved: true },
+    ])
+    expect(imported.importedFeatures).not.toContain("comment-anchors")
+    expect((await validateDocxRoundTrip(bytes, model)).valid).toBe(true)
+  })
+
+  it("keeps a comment with no range on the document, not on the first paragraph", async () => {
+    const bytes = await fixture({
+      "[Content_Types].xml": "<Types/>",
+      "word/document.xml": documentXml(
+        "<w:p><w:r><w:t>Intro</w:t></w:r></w:p><w:p><w:r><w:t>Body</w:t></w:r></w:p>"
+      ),
+      "word/comments.xml": `<w:comments ${W}><w:comment w:id="4" w:author="Jane"><w:p><w:r><w:t>Orphan</w:t></w:r></w:p></w:comment></w:comments>`,
+    })
+    const imported = await importDocx(bytes)
+
+    expect(imported.comments).toEqual([
+      { id: "m1", text: "Orphan", author: "Jane", resolved: false },
+    ])
+    expect(imported.importedFeatures).toContain("comment-anchors")
+    const report = await validateDocxRoundTrip(bytes)
+    expect(report.valid).toBe(false)
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        "Comment 4 has 0 range start marks; it needs exactly one.",
+        "Comment 4 has 0 reference marks; it needs exactly one.",
+      ])
+    )
+  })
+
+  it("refuses to call a file valid when a comment reopens on another block", async () => {
+    const model = tableModel()
+    // The file holds the same text, but its comment sits on the intro.
+    const moved = structuredClone(model)
+    moved.comments = moved.comments.map((comment) => ({ ...comment, blockId: "b1" }))
+    const report = await validateDocxRoundTrip(await exportDocx(moved), model)
+
+    expect(report.valid).toBe(false)
+    expect(report.issues).toEqual([
+      "Comment m4 does not reopen on its block with its text and state.",
+      "Comment m6 does not reopen on its block with its text and state.",
+      "The file reopens with 2 comment(s) the document does not have.",
+    ])
+  })
+
+  it("reports a range mark that names no comment", async () => {
+    const bytes = await fixture({
+      "[Content_Types].xml": "<Types/>",
+      "word/document.xml": documentXml(
+        '<w:p><w:commentRangeStart w:id="9"/><w:r><w:t>x</w:t></w:r><w:commentRangeEnd w:id="9"/></w:p>'
+      ),
+    })
+    expect((await validateDocxRoundTrip(bytes)).issues).toEqual([
+      "A comment range start mark names comment 9, which does not exist.",
+      "A comment range end mark names comment 9, which does not exist.",
+    ])
+  })
+})
+
+describe("comment resolved state", () => {
+  it("writes a resolved comment as resolved and reads it back", async () => {
+    const model = applyDocumentOperations(createDocument("Done", "Body"), [
+      { op: "addComment", blockId: "b1", text: "Fixed", author: "Jane" },
+      { op: "addComment", blockId: "b1", text: "Still open", author: "Li" },
+      { op: "resolveComment", commentId: "m2" },
+    ])
+    const bytes = await exportDocx(model)
+
+    const extended = await readPackageXml(bytes, "word/commentsExtended.xml")
+    expect(extended.match(/w15:done="1"/g)).toHaveLength(1)
+    expect(extended.match(/w15:done="0"/g)).toHaveLength(1)
+    expect(await readPackageXml(bytes, "[Content_Types].xml")).toContain(
+      'PartName="/word/commentsExtended.xml"'
+    )
+    expect(await readPackageXml(bytes, "word/_rels/document.xml.rels")).toContain(
+      'Target="commentsExtended.xml"'
+    )
+    expect(await readPackageXml(bytes, "word/comments.xml")).toMatch(
+      /<w:p w14:paraId="10000001" w14:textId="10000001"/
+    )
+
+    const imported = await importDocx(bytes)
+    expect(imported.comments.map(({ text, resolved }) => ({ text, resolved }))).toEqual([
+      { text: "Fixed", resolved: true },
+      { text: "Still open", resolved: false },
+    ])
+    await expect(validateDocxRoundTrip(bytes, model)).resolves.toMatchObject({ valid: true })
+  })
 })

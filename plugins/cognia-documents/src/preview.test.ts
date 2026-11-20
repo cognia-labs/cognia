@@ -111,6 +111,17 @@ it("renders comment and change cards with actions", async () => {
   ])
 })
 
+it("labels a comment on the whole document and offers no block to jump to", () => {
+  const model = createDocument("Doc", "v1")
+  model.comments.push({ id: "m9", text: "Overall", author: "Jane", resolved: false })
+  const { container } = mount(model)
+
+  const card = container.querySelector(".cdoc-card")!
+  expect(card).toHaveTextContent("Whole document")
+  expect(card).toHaveTextContent("Overall")
+  expect(card.querySelector(".cdoc-btn-anchor")).toBeNull()
+})
+
 it("locks review actions while one is pending and unlocks when it settles", async () => {
   const model = applyDocumentOperations(createDocument("Doc", "v1"), [
     { op: "addComment", blockId: "b1", text: "note" },

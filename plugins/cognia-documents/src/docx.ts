@@ -4,6 +4,7 @@ import {
   DOCX_MIME,
   materializeBlock,
   type DocumentBlock,
+  type DocumentComment,
   type DocumentModel,
   type HeadingLevel,
 } from "./model"
@@ -101,8 +102,8 @@ export async function importDocx(
   // `exportDocx` writes the model title as the body's first paragraph (Word's
   // "Title" style) AND into core.xml. Reading that paragraph back as a heading
   // block duplicated the title on every round trip, so a leading Title
-  // paragraph is the document title, not content. Its comments stay: they
-  // fall through to the first surviving block below.
+  // paragraph is the document title, not content, and a comment on it is a
+  // comment on the whole document.
   const leadingTitle = scanned.titleParagraph
   const leadingText = leadingTitle?.text.trim() ?? ""
   const override = titleOverride?.trim() ?? ""
@@ -112,52 +113,40 @@ export async function importDocx(
   model.sourceFilename = filename
   model.importedFeatures = features
   model.blocks = scanned.blocks
-  // The Title paragraph is dropped only because it becomes the model title.
-  // Kept as content when it would otherwise vanish: a caller-chosen title
-  // replaces it, or it is the only block the file's comments could sit on.
-  // `b0`: parsed block ids start at `b1`.
-  const titleBlock: DocumentBlock | null = leadingText
-    ? { id: "b0", type: "heading", level: 1, text: leadingText }
-    : null
-  const hasUnanchoredComment = [...comments.keys()].some(
-    (commentId) => ![...commentIdsByBlock.values()].some((ids) => ids.includes(commentId))
-  )
-  if (
-    titleBlock &&
-    ((override && override !== leadingText) || (!model.blocks.length && hasUnanchoredComment))
-  ) {
-    model.blocks = [titleBlock, ...model.blocks]
-  }
+  // A caller-chosen title replaces the Title paragraph, which then stays as
+  // content (with its comments). `b0`: parsed block ids start at `b1`.
+  const titleBlock: DocumentBlock | null =
+    leadingText && override && override !== leadingText
+      ? { id: "b0", type: "heading", level: 1, text: leadingText }
+      : null
+  if (titleBlock) model.blocks = [titleBlock, ...model.blocks]
   let commentSequence = 1
-  for (const [blockIndex, commentIds] of commentIdsByBlock) {
-    const block = model.blocks[blockIndex]
-    if (!block) continue
-    for (const commentId of commentIds) {
-      const info = comments.get(commentId)
-      if (!info) continue
-      model.comments.push({
-        id: `m${commentSequence++}`,
-        blockId: block.id,
-        text: info.text || labels.emptyComment,
-        author: info.author || labels.unknownAuthor,
-        resolved: info.paraId ? commentDone.has(info.paraId) : false,
-      })
-    }
-  }
-  // comments.xml entries that never anchored to a paragraph still carry content
-  // the user wrote — surface them on the first block rather than dropping them.
-  const anchored = new Set([...commentIdsByBlock.values()].flat())
-  for (const [commentId, info] of comments) {
-    if (anchored.has(commentId)) continue
-    const blockId = model.blocks[0]?.id
-    if (!blockId) break
+  const addComment = (commentId: number, blockId: string | undefined) => {
+    const info = comments.get(commentId)
+    if (!info) return
     model.comments.push({
       id: `m${commentSequence++}`,
-      blockId,
+      ...(blockId === undefined ? {} : { blockId }),
       text: info.text || labels.emptyComment,
       author: info.author || labels.unknownAuthor,
       resolved: info.paraId ? commentDone.has(info.paraId) : false,
     })
+  }
+  for (const commentId of leadingTitle?.commentIds ?? []) addComment(commentId, titleBlock?.id)
+  for (const [blockIndex, commentIds] of commentIdsByBlock) {
+    const block = scanned.blocks[blockIndex]
+    if (!block) continue
+    for (const commentId of commentIds) addComment(commentId, block.id)
+  }
+  // A comments.xml entry with no range in the body still carries what its
+  // author wrote. It is kept on the whole document, never pinned to whichever
+  // block comes first, and its lost range is reported ("comment-anchors").
+  const anchored = new Set([
+    ...(leadingTitle?.commentIds ?? []),
+    ...[...commentIdsByBlock.values()].flat(),
+  ])
+  for (const commentId of comments.keys()) {
+    if (!anchored.has(commentId)) addComment(commentId, undefined)
   }
   return model
 }
@@ -166,8 +155,19 @@ export async function exportDocx(model: DocumentModel): Promise<Uint8Array> {
   const docx = await import("docx")
   const commentNumber = new Map<string, number>()
   model.comments.forEach((comment, index) => commentNumber.set(comment.id, index + 1))
+  // A comment on the document as a whole sits on the title, the one
+  // paragraph that stands for all of it.
+  const documentComments = model.comments.filter((comment) => comment.blockId === undefined)
   const children: DocxFileChild[] = [
-    new docx.Paragraph({ text: model.title, heading: docx.HeadingLevel.TITLE }),
+    new docx.Paragraph({
+      heading: docx.HeadingLevel.TITLE,
+      children: withCommentRange(
+        [new docx.TextRun(model.title)],
+        documentComments,
+        commentNumber,
+        docx
+      ),
+    }),
   ]
   for (const block of model.blocks) children.push(renderBlock(block, model, commentNumber, docx))
   const document = new docx.Document({
@@ -236,20 +236,195 @@ export async function exportDocx(model: DocumentModel): Promise<Uint8Array> {
     sections: [{ children }],
   })
   const blob = await docx.Packer.toBlob(document)
-  return new Uint8Array(await blob.arrayBuffer())
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  return model.comments.length ? writeCommentStates(bytes, model, commentNumber) : bytes
 }
 
-export async function validateDocxRoundTrip(
-  bytes: Uint8Array
-): Promise<{ valid: boolean; text: string }> {
+const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
+const COMMENTS_EXTENDED_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"
+const COMMENTS_EXTENDED_REL =
+  "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+
+/**
+ * A comment's paragraph id: unique in the package and below 0x80000000, as
+ * [MS-DOCX] requires. Body paragraphs carry none, so comment numbers suffice.
+ */
+function commentParaId(commentNumber: number): string {
+  return (0x10000000 + commentNumber).toString(16).toUpperCase()
+}
+
+/**
+ * Write each comment's resolved state, which Word keeps in
+ * `word/commentsExtended.xml` (`w15:done`) keyed by the paragraph id of the
+ * comment's last paragraph. The `docx` writer emits that part only for reply
+ * threads, so an ordinary resolved comment reopened as open; this adds the
+ * paragraph ids, the part, its content type and its relationship.
+ */
+async function writeCommentStates(
+  bytes: Uint8Array,
+  model: DocumentModel,
+  commentNumber: Map<string, number>
+): Promise<Uint8Array> {
   const JSZip = (await import("jszip")).default
   const zip = await JSZip.loadAsync(bytes)
-  const valid = Boolean(zip.file("[Content_Types].xml") && zip.file("word/document.xml"))
-  if (!valid) return { valid: false, text: "" }
-  const text = extractParagraphText(await zip.file("word/document.xml")!.async("string")).join(
-    "\n\n"
+  if (zip.file("word/commentsExtended.xml")) return bytes
+  let commentsXml = await zip.file("word/comments.xml")!.async("string")
+  if (!/\sxmlns:w14=/.test(commentsXml))
+    commentsXml = commentsXml.replace(/<w:comments\b/, `<w:comments xmlns:w14="${W14_NS}"`)
+  commentsXml = commentsXml.replace(
+    /(<w:comment\b[^>]*\bw:id="(\d+)"[^>]*>)([\s\S]*?)(<\/w:comment>)/g,
+    (_, open: string, id: string, body: string, close: string) => {
+      const paraId = commentParaId(Number(id))
+      const last = Math.max(body.lastIndexOf("<w:p>"), body.lastIndexOf("<w:p "))
+      if (last < 0 || /^<w:p\b[^>]*\bw14:paraId=/.test(body.slice(last))) return open + body + close
+      const tagged = `<w:p w14:paraId="${paraId}" w14:textId="${paraId}"${body.slice(last + 4)}`
+      return open + body.slice(0, last) + tagged + close
+    }
   )
-  return { valid: true, text }
+  zip.file("word/comments.xml", commentsXml)
+  const entries = model.comments
+    .map(
+      (comment) =>
+        `<w15:commentEx w15:paraId="${commentParaId(commentNumber.get(comment.id)!)}" w15:done="${
+          comment.resolved ? "1" : "0"
+        }"/>`
+    )
+    .join("")
+  zip.file(
+    "word/commentsExtended.xml",
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w15:commentsEx xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" ' +
+      'xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" mc:Ignorable="w15">' +
+      `${entries}</w15:commentsEx>`
+  )
+  const types = await zip.file("[Content_Types].xml")!.async("string")
+  zip.file(
+    "[Content_Types].xml",
+    types.replace(
+      "</Types>",
+      `<Override PartName="/word/commentsExtended.xml" ContentType="${COMMENTS_EXTENDED_TYPE}"/></Types>`
+    )
+  )
+  const relsPath = "word/_rels/document.xml.rels"
+  const rels = await zip.file(relsPath)!.async("string")
+  const taken = new Set([...rels.matchAll(/\bId="([^"]+)"/g)].map((match) => match[1]))
+  let n = 1
+  while (taken.has(`rIdCommentsEx${n}`)) n += 1
+  zip.file(
+    relsPath,
+    rels.replace(
+      "</Relationships>",
+      `<Relationship Id="rIdCommentsEx${n}" Type="${COMMENTS_EXTENDED_REL}" Target="commentsExtended.xml"/></Relationships>`
+    )
+  )
+  return zip.generateAsync({ type: "uint8array", compression: "DEFLATE" })
+}
+
+/**
+ * Reopen a generated DOCX and check it is the document it claims to be.
+ *
+ * Reopening and extracting text is not enough: a table comment once came back
+ * with zero anchors, re-imported onto the first paragraph, and this still said
+ * "valid". So the comments are checked too. Every comment in `comments.xml`
+ * needs exactly one range start, one range end and one reference mark in the
+ * body, and no mark may name a comment that does not exist. Given the model
+ * the file was written from (`expected`), each comment must also come back on
+ * the same block (or on the whole document) with the same text, author and
+ * state. Each failure is one entry in `issues`.
+ */
+export async function validateDocxRoundTrip(
+  bytes: Uint8Array,
+  expected?: DocumentModel
+): Promise<{ valid: boolean; text: string; issues: string[] }> {
+  const JSZip = (await import("jszip")).default
+  const zip = await JSZip.loadAsync(bytes)
+  if (!zip.file("[Content_Types].xml") || !zip.file("word/document.xml"))
+    return { valid: false, text: "", issues: ["The package has no document part."] }
+  const documentXml = await zip.file("word/document.xml")!.async("string")
+  const text = extractParagraphText(documentXml).join("\n\n")
+  const commentsXml = (await zip.file("word/comments.xml")?.async("string")) ?? ""
+  const issues = commentRelationIssues(documentXml, commentsXml)
+  if (expected) issues.push(...(await commentPlacementIssues(bytes, expected)))
+  return { valid: issues.length === 0, text, issues }
+}
+
+/** Range and reference marks that do not pair up with `comments.xml`. */
+function commentRelationIssues(documentXml: string, commentsXml: string): string[] {
+  const issues: string[] = []
+  const ids = [...commentsXml.matchAll(/<w:comment\b([^>]*)>/g)].map(
+    (match) => attr(match[1], "w:id") ?? ""
+  )
+  const known = new Set(ids)
+  const marks = (tag: string) =>
+    [...documentXml.matchAll(new RegExp(`<w:${tag}\\b([^>]*)/>`, "g"))].map(
+      (match) => attr(match[1], "w:id") ?? ""
+    )
+  const kinds = {
+    "range start": marks("commentRangeStart"),
+    "range end": marks("commentRangeEnd"),
+    reference: marks("commentReference"),
+  }
+  for (const id of ids) {
+    for (const [kind, found] of Object.entries(kinds)) {
+      const count = found.filter((candidate) => candidate === id).length
+      if (count !== 1)
+        issues.push(`Comment ${id} has ${count} ${kind} marks; it needs exactly one.`)
+    }
+  }
+  for (const [kind, found] of Object.entries(kinds)) {
+    for (const id of new Set(found)) {
+      if (!known.has(id))
+        issues.push(`A comment ${kind} mark names comment ${id}, which does not exist.`)
+    }
+  }
+  return issues
+}
+
+/** What a comment is on, comparable across a round trip that renumbers block ids. */
+function blockSignature(block: DocumentBlock | undefined): string {
+  if (!block) return "document"
+  if (block.type === "table") return `table:${JSON.stringify(block.rows)}`
+  return `${block.type}:${block.text.trim()}`
+}
+
+/**
+ * Comments that came back on another block, or changed, after reopening the
+ * file. Reopening lists comments in document order, not in the model's, so
+ * they are matched as a multiset of (target block, text, author, state).
+ */
+async function commentPlacementIssues(
+  bytes: Uint8Array,
+  expected: DocumentModel
+): Promise<string[]> {
+  const reopened = await importDocx(bytes)
+  const describe = (model: DocumentModel, comment: DocumentComment) =>
+    JSON.stringify([
+      blockSignature(
+        comment.blockId === undefined
+          ? undefined
+          : model.blocks.find((block) => block.id === comment.blockId)
+      ),
+      comment.text,
+      comment.author,
+      comment.resolved,
+    ])
+  const remaining = new Map<string, number>()
+  for (const comment of reopened.comments) {
+    const key = describe(reopened, comment)
+    remaining.set(key, (remaining.get(key) ?? 0) + 1)
+  }
+  const issues: string[] = []
+  for (const comment of expected.comments) {
+    const key = describe(expected, comment)
+    const left = remaining.get(key) ?? 0
+    if (left > 0) remaining.set(key, left - 1)
+    else issues.push(`Comment ${comment.id} does not reopen on its block with its text and state.`)
+  }
+  const extra = [...remaining.values()].reduce((sum, count) => sum + count, 0)
+  if (extra > 0)
+    issues.push(`The file reopens with ${extra} comment(s) the document does not have.`)
+  return issues
 }
 
 // ---------------------------------------------------------------------------
@@ -268,22 +443,8 @@ function renderBlock(
   commentNumber: Map<string, number>,
   docx: typeof import("docx")
 ): DocxFileChild {
-  const { HeadingLevel, Paragraph, Table, TableCell, TableRow, WidthType } = docx
-  if (block.type === "table")
-    return new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: block.rows.map(
-        (row) =>
-          new TableRow({
-            children: row.map(
-              (cell) =>
-                new TableCell({
-                  children: cell.split("\n").map((line) => new Paragraph(line)),
-                })
-            ),
-          })
-      ),
-    })
+  const { HeadingLevel, Paragraph } = docx
+  if (block.type === "table") return renderTable(block, model, commentNumber, docx)
   const runs = paragraphChildren(block, model, commentNumber, docx)
   if (block.type === "heading")
     return new Paragraph({
@@ -321,7 +482,6 @@ function paragraphChildren(
   commentNumber: Map<string, number>,
   docx: typeof import("docx")
 ): DocxParagraphChild[] {
-  const { CommentRangeEnd, CommentRangeStart, CommentReference, TextRun } = docx
   const pending = model.changes.find((change) => change.blockId === block.id && !change.accepted)
   const date = new Date().toISOString()
   const runs: DocxParagraphChild[] = pending
@@ -331,15 +491,83 @@ function paragraphChildren(
       ]
     : textRuns(block.text, docx)
   const comments = model.comments.filter((comment) => comment.blockId === block.id)
-  if (!comments.length) return runs
-  return [
-    ...comments.map((comment) => new CommentRangeStart(commentNumber.get(comment.id)!)),
-    ...runs,
-    ...comments.map((comment) => new CommentRangeEnd(commentNumber.get(comment.id)!)),
-    new TextRun({
-      children: comments.map((comment) => new CommentReference(commentNumber.get(comment.id)!)),
-    }),
-  ]
+  return withCommentRange(runs, comments, commentNumber, docx)
+}
+
+/** The opening and closing halves of a Word comment range over `comments`. */
+function commentRangeParts(
+  comments: readonly DocumentComment[],
+  commentNumber: Map<string, number>,
+  docx: typeof import("docx")
+): { start: DocxParagraphChild[]; end: DocxParagraphChild[] } {
+  const { CommentRangeEnd, CommentRangeStart, CommentReference, TextRun } = docx
+  if (!comments.length) return { start: [], end: [] }
+  const number = (comment: DocumentComment) => commentNumber.get(comment.id)!
+  return {
+    start: comments.map((comment) => new CommentRangeStart(number(comment))),
+    end: [
+      ...comments.map((comment) => new CommentRangeEnd(number(comment))),
+      new TextRun({ children: comments.map((comment) => new CommentReference(number(comment))) }),
+    ],
+  }
+}
+
+/** `runs` inside one comment range per comment, with the comments' reference marks after them. */
+function withCommentRange(
+  runs: DocxParagraphChild[],
+  comments: readonly DocumentComment[],
+  commentNumber: Map<string, number>,
+  docx: typeof import("docx")
+): DocxParagraphChild[] {
+  const { start, end } = commentRangeParts(comments, commentNumber, docx)
+  return [...start, ...runs, ...end]
+}
+
+/**
+ * A table, with each of its comments ranging over the whole table: the range
+ * opens before the first cell's text and closes after the last cell's, which
+ * is how Word itself anchors a comment on a selected table. A comment on a
+ * table with no cells gets one empty cell to sit in; Word has no range for
+ * a table without one.
+ */
+function renderTable(
+  block: Extract<DocumentBlock, { type: "table" }>,
+  model: DocumentModel,
+  commentNumber: Map<string, number>,
+  docx: typeof import("docx")
+): DocxFileChild {
+  const { Paragraph, Table, TableCell, TableRow, TextRun, WidthType } = docx
+  const comments = model.comments.filter((comment) => comment.blockId === block.id)
+  const rows = comments.length && !block.rows.some((row) => row.length) ? [[""]] : block.rows
+  const { start, end } = commentRangeParts(comments, commentNumber, docx)
+  const firstRow = rows.findIndex((row) => row.length > 0)
+  let lastRow = -1
+  rows.forEach((row, index) => {
+    if (row.length > 0) lastRow = index
+  })
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: rows.map(
+      (row, rowIndex) =>
+        new TableRow({
+          children: row.map((cell, cellIndex) => {
+            const lines = cell.split("\n")
+            const opens = rowIndex === firstRow && cellIndex === 0
+            const closes = rowIndex === lastRow && cellIndex === row.length - 1
+            return new TableCell({
+              children: lines.map((line, lineIndex) => {
+                const first = opens && lineIndex === 0
+                const last = closes && lineIndex === lines.length - 1
+                if (!comments.length || (!first && !last)) return new Paragraph(line)
+                return new Paragraph({
+                  children: [...(first ? start : []), new TextRun(line), ...(last ? end : [])],
+                })
+              }),
+            })
+          }),
+        })
+    ),
+  })
 }
 
 /**
@@ -624,6 +852,9 @@ async function hasChangedNumbering(
   const source = (await zip.file("word/numbering.xml")?.async("string")) ?? ""
   const stripId = (xml: string) => normalizeXml(xml.replace(/\bw:abstractNumId="[^"]*"/g, ""))
   const expected = new Set(elements(defaults, "abstractNum").map(stripId))
+  // The restarts our writer emits for a fresh list (`docx` restarts every
+  // level, 0–8, at 1), read from its own output rather than spelled out here.
+  const writerRestarts = new Set(elements(defaults, "lvlOverride").map(normalizeXml))
   const sequences = new Set<string>()
   for (const id of new Set(used)) {
     const num = elements(source, "num").find((xml) => attr(xml, "w:numId") === id)
@@ -634,38 +865,56 @@ async function hasChangedNumbering(
     if (!num || !abstract || !expected.has(stripId(abstract))) return true
     if (sequences.has(stripId(abstract))) return true
     sequences.add(stripId(abstract))
-    // Restarting later lists is lost even when their abstract format matches.
-    if (
-      elements(num, "lvlOverride").some(
-        (xml) =>
-          !/^<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"\/><\/w:lvlOverride>$/.test(
-            normalizeXml(xml)
-          )
-      )
-    )
+    // Any other override (a list continuing at 5, a changed level format) is
+    // lost even when the abstract format matches.
+    if (elements(num, "lvlOverride").some((xml) => !writerRestarts.has(normalizeXml(xml))))
       return true
   }
   return new Set(used).size > 2 || /<w:ilvl\b[^>]*w:val="(?:9|\d{2,})"/.test(documentXml)
 }
 
+/**
+ * Whether a comment's range is one the model cannot keep. The model anchors a
+ * comment on a whole block (a paragraph, a table) or on the whole document
+ * (the Title paragraph), so a range must cover all of its paragraph's text, or
+ * all of a table from before its first cell's text to after its last cell's.
+ * A range over part of a paragraph, a single cell, or nothing at all (a
+ * comment with no range in the body) is reported as lost.
+ */
 function hasChangedCommentAnchors(documentXml: string, commentsXml: string): boolean {
   const paragraphs = elements(documentXml, "p")
+  const tables = elements(documentXml, "tbl")
+  const covers = (paragraph: string, start: RegExpExecArray | null, end: RegExpExecArray | null) =>
+    Boolean(
+      start &&
+      end &&
+      !paragraphText(paragraph.slice(0, start.index)).trim() &&
+      !paragraphText(paragraph.slice(end.index + end[0].length)).trim()
+    )
   for (const match of commentsXml.matchAll(/<w:comment\b([^>]*)>/g)) {
     const id = attr(match[1], "w:id")
     if (!id || !/^\d+$/.test(id)) return true
+    const startTag = new RegExp(`<w:commentRangeStart\\b[^>]*w:id="${id}"[^>]*/>`)
+    const endTag = new RegExp(`<w:commentRangeEnd\\b[^>]*w:id="${id}"[^>]*/>`)
+    const table = tables.find((xml) => startTag.test(xml))
+    if (table) {
+      const cellParagraphs = elements(table, "p")
+      const first = cellParagraphs[0] ?? ""
+      const last = cellParagraphs[cellParagraphs.length - 1] ?? ""
+      const start = startTag.exec(first)
+      const end = endTag.exec(last)
+      if (
+        !start ||
+        !end ||
+        paragraphText(first.slice(0, start.index)).trim() ||
+        paragraphText(last.slice(end.index + end[0].length)).trim()
+      )
+        return true
+      continue
+    }
     const paragraph = paragraphs.find((xml) => commentAnchors(xml).includes(Number(id)))
-    if (!paragraph) return true
-    const start = new RegExp(`<w:commentRangeStart\\b[^>]*w:id="${id}"[^>]*/>`).exec(paragraph)
-    const end = new RegExp(`<w:commentRangeEnd\\b[^>]*w:id="${id}"[^>]*/>`).exec(paragraph)
-    if (
-      !start ||
-      !end ||
-      paragraphText(paragraph.slice(0, start.index)).trim() ||
-      paragraphText(paragraph.slice(end.index + end[0].length)).trim()
-    )
+    if (!paragraph || !covers(paragraph, startTag.exec(paragraph), endTag.exec(paragraph)))
       return true
-    // Table comments cannot retain their cell/range anchor in a string[][] model.
-    for (const table of elements(documentXml, "tbl")) if (table.includes(start[0])) return true
   }
   return false
 }
@@ -742,10 +991,15 @@ async function readComments(zip: ZipLike): Promise<Map<number, ImportedCommentIn
   for (const match of xml.matchAll(/<w:comment\b([^>]*)>([\s\S]*?)<\/w:comment>/g)) {
     const id = Number.parseInt(attr(match[1], "w:id") ?? "", 10)
     if (!Number.isFinite(id)) continue
+    // `commentsExtended.xml` keys a comment by its LAST paragraph's id
+    // ([MS-DOCX] 2.5.3.1), which is where Word and the `docx` writer put it.
+    const paragraphs = [...match[2].matchAll(/<w:p\b([^>]*)>/g)]
     comments.set(id, {
       author: attr(match[1], "w:author") ?? "",
       text: extractParagraphText(match[2]).join("\n"),
-      paraId: attr(match[1], "w14:paraId"),
+      paraId: paragraphs.length
+        ? attr(paragraphs[paragraphs.length - 1][1], "w14:paraId")
+        : undefined,
     })
   }
   return comments
@@ -788,10 +1042,10 @@ function scanBody(
   documentXml: string,
   numbering: NumberingInfo,
   commentIdsByBlock: Map<number, number[]>
-): { blocks: DocumentBlock[]; titleParagraph?: { text: string } } {
+): { blocks: DocumentBlock[]; titleParagraph?: { text: string; commentIds: number[] } } {
   const body = /<w:body\b[^>]*>([\s\S]*)<\/w:body>/.exec(documentXml)?.[1] ?? documentXml
   const blocks: DocumentBlock[] = []
-  let titleParagraph: { text: string } | undefined
+  let titleParagraph: { text: string; commentIds: number[] } | undefined
   let sawContent = false
   let previousWasCode = false
   const scanRegion = (region: string): void => {
@@ -809,7 +1063,7 @@ function scanBody(
           sawContent = true
           const previous = blocks[blocks.length - 1]
           if (leading && block.type !== "table" && isTitleParagraph(slice)) {
-            titleParagraph = { text: block.text }
+            titleParagraph = { text: block.text, commentIds: commentAnchors(slice) }
           } else if (block.type === "code" && !block.text.trim() && !previousWasCode) {
             // A blank code line only matters between code lines.
             previousWasCode = false
@@ -839,6 +1093,10 @@ function scanBody(
         previousWasCode = false
         if (block) {
           sawContent = true
+          // A comment ranging over cells is on the table; whether it covered
+          // all of it is `hasChangedCommentAnchors`'s question.
+          const anchors = commentAnchors(slice)
+          if (anchors.length) commentIdsByBlock.set(blocks.length, anchors)
           blocks.push(block)
         }
       } else if (tag === "sdt") {

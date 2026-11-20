@@ -390,11 +390,20 @@ function renderReview(
       const text = document.createElement("p")
       text.className = "cdoc-card-text"
       text.textContent = comment.text
+      if (comment.blockId === undefined) {
+        // On the document as a whole: there is no block to scroll to.
+        const scope = document.createElement("span")
+        scope.className = "cdoc-chip"
+        scope.textContent = t("preview.documentComment")
+        byline.appendChild(scope)
+      }
       card.append(
         byline,
         text,
         cardActions([
-          anchorButton(t, comment.blockId, `comment:${comment.id}:show`, actions.showBlock),
+          ...(comment.blockId === undefined
+            ? []
+            : [anchorButton(t, comment.blockId, `comment:${comment.id}:show`, actions.showBlock)]),
           mutate(
             t(comment.resolved ? "preview.reopen" : "preview.resolve"),
             `comment:${comment.id}:toggle`,

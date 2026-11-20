@@ -32,7 +32,13 @@ export type DocumentBlockInput =
 
 export interface DocumentComment {
   id: string
-  blockId: string
+  /**
+   * The block the comment is on. Absent for a comment on the document as a
+   * whole: one Word anchored on the title, or one an imported file kept with
+   * no range at all. Such a comment is exported on the title paragraph rather
+   * than pinned to whichever block happens to come first.
+   */
+  blockId?: string
   text: string
   author: string
   resolved: boolean
@@ -178,8 +184,11 @@ export function parseDocument(content: string): DocumentModel {
       throw new Error("Invalid document: comments/changes/importedFeatures must be arrays.")
   }
   for (const comment of parsed.comments) {
-    if (typeof comment?.id !== "string" || typeof comment?.blockId !== "string")
-      throw new Error("Invalid document: comment entries require id and blockId.")
+    if (
+      typeof comment?.id !== "string" ||
+      (comment.blockId !== undefined && typeof comment.blockId !== "string")
+    )
+      throw new Error("Invalid document: comment entries require an id and a string blockId.")
   }
   for (const change of parsed.changes) {
     if (typeof change?.id !== "string" || typeof change?.blockId !== "string")
@@ -737,7 +746,7 @@ export function validateDocument(model: DocumentModel): DocumentFinding[] {
         params: { id: comment.id },
       })
     anchorIds.add(comment.id)
-    if (!ids.has(comment.blockId))
+    if (comment.blockId !== undefined && !ids.has(comment.blockId))
       findings.push({
         severity: "error",
         code: "comment.orphan",

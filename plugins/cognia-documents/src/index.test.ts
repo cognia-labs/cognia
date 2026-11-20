@@ -2,7 +2,7 @@ jest.mock("./docx", () => ({
   importDocx: jest.fn(async () => ({ title: "Imported" })),
   exportTranscriptDocx: jest.fn(async () => new Blob()),
   exportDocx: jest.fn(async () => Uint8Array.from([1, 2, 3])),
-  validateDocxRoundTrip: jest.fn(async () => ({ valid: true, text: "" })),
+  validateDocxRoundTrip: jest.fn(async () => ({ valid: true, text: "", issues: [] })),
 }))
 
 const mockRendererDeps: Array<{

@@ -222,6 +222,22 @@ it("parseDocument validates structure beyond schemaVersion", () => {
   ).toThrow("level must be an integer from 1 to 6")
 })
 
+it("accepts a comment on the whole document and still rejects a malformed block target", () => {
+  const model = createDocument("Doc", "hello")
+  model.comments.push({ id: "m9", text: "Overall", author: "Jane", resolved: false })
+  const parsed = parseDocument(JSON.stringify(model))
+  expect(parsed.comments[0].blockId).toBeUndefined()
+  expect(validateDocument(parsed).filter((finding) => finding.code === "comment.orphan")).toEqual(
+    []
+  )
+
+  const bad = { ...model, comments: [{ id: "m9", blockId: 7, text: "x", author: "A" }] }
+  expect(() => parseDocument(JSON.stringify(bad))).toThrow("a string blockId")
+  const orphan = createDocument("Doc", "hello")
+  orphan.comments.push({ id: "m9", blockId: "gone", text: "x", author: "A", resolved: false })
+  expect(validateDocument(orphan).map((finding) => finding.code)).toContain("comment.orphan")
+})
+
 it("validateDocument catches orphan changes and duplicate review ids", () => {
   const model: DocumentModel = {
     schemaVersion: 1,

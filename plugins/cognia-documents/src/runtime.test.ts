@@ -1,7 +1,7 @@
 jest.mock("./docx", () => ({
   exportDocx: jest.fn(async () => Uint8Array.from([1, 2, 3])),
   importDocx: jest.fn(),
-  validateDocxRoundTrip: jest.fn(async () => ({ valid: true, text: "Hello" })),
+  validateDocxRoundTrip: jest.fn(async () => ({ valid: true, text: "Hello", issues: [] })),
 }))
 
 import type { Artifact, ExportResult } from "@cognia/plugin-sdk"
@@ -376,7 +376,11 @@ it("refuses to save a package that did not reopen, with a locale-neutral reason"
   const { ctx, save } = makeCtx()
   const runtime = createDocumentsRuntime(ctx)
   await runtime.create({ title: "Doc", text: "x" })
-  ;(validateDocxRoundTrip as jest.Mock).mockResolvedValueOnce({ valid: false, text: "" })
+  ;(validateDocxRoundTrip as jest.Mock).mockResolvedValueOnce({
+    valid: false,
+    text: "",
+    issues: ["Comment m1 does not reopen on its block with its text and state."],
+  })
   await expect(runtime.exportDocx("d1")).resolves.toMatchObject({
     ok: false,
     reason: "invalid-package",
