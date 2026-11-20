@@ -1,9 +1,9 @@
 # Runner Full 变体改为从总锁安装
 
-> 状态：方案待确认，未实施。创建：2026-11-20（Asia/Shanghai）。
+> 状态：方案已确认（2026-11-20，D1–D4 均按建议），未实施。创建：2026-11-20（Asia/Shanghai）。
 > 依据：[Runner 镜像审计](../evidence/2026-11-19-runner-image-readiness.md) F04，以及 2026-11-20 的决定「Full 改为从总锁构建」。
 > 范围：`cognia-runner` 的 `full` target 和共用同一安装脚本的 `cognia-server` `runtime-full`。Cursor 的可变安装器、base 镜像 digest、cosign 签名和漏洞扫描门禁不在本方案内。
-> 本文的阶段、默认值和取舍是建议，经确认后才实施。
+> 第 3 节的决策已于 2026-11-20 确认；阶段与默认值按本文执行。
 
 ## 1. 建议与完成定义
 
@@ -28,14 +28,14 @@ Full 比 `--runtimes full` 多出的只有 Cline（`cline@3.0.73`，pins 里标�
 
 Full 还接受按 Agent 的版本覆盖参数（`CLAUDE_CODE_VERSION` 等 build arg）。这些参数会绕过 lock。
 
-## 3. 待你确认的决策
+## 3. 已定决策（2026-11-20）
 
-| 编号 | 问题                                 | 选项                                                                                                                                                                                                                                                           | 建议                                                                                                                                                                                     |
-| ---- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1   | Cline 怎么进锁                       | **A**：作为 npm runtime 写进 `agent-versions.json` 和总锁，Selected 和 sandbox pool 的 bundle 也能选它。**B**：给 Full 单独建一份附加锁（`deploy/runner/full-extras/`），bundle 不变                                                                           | **A**。只有一套锁和一套安装链。F09 里「产品有 preset、启动白名单里也有、Selected 却拒绝」的矛盾就此消除。代价是 bundle 的 `full` 变体多一个 Cline，bundle smoke 要加 Cline 的 ACP 初始化 |
-| D2   | 版本覆盖参数                         | **A**：删除，版本只来自 pins。**B**：保留，但传了覆盖参数的镜像打上 `unlocked` label，smoke 拒绝发布                                                                                                                                                           | **A**。覆盖参数原本就要求精确版本，改版本应当改 pins 并重新生成锁                                                                                                                        |
-| D3   | server `runtime-full` 怎么复用安装链 | **A**：server Dockerfile 复制一份同样的 `agent-build` 阶段，由门禁检查两份逐行一致。**B**：抽出共享的 `deploy/agents/Dockerfile`，两边用 BuildKit 命名构建上下文（`--build-context agent-tree=…`）引入。**C**：server 直接 `COPY --from=` 已发布的 Runner 镜像 | **B**。只有一份实现。缺点是 Compose 的 `build` 和 CI 都要传这个上下文，要像 `plugin-artifacts` 一样提供会报错的占位阶段（`check-deploy-suite.mjs` 第 7 项已有现成模式）                  |
-| D4   | Full 里 Agent 用哪个 Node            | **A**：与 Selected 一样用固定的 `/cognia/glibc/node`。**B**：继续用 base 镜像的 Node                                                                                                                                                                           | **A**。可复现，也和 Selected、bundle 一致；base 镜像自带的 Node 仍留给项目工具使用                                                                                                       |
+| 编号 | 问题                                 | 选项                                                                                                                                                                                                                                                           | 决定与理由                                                                                                                                                                                                                              |
+| ---- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1   | Cline 怎么进锁                       | **A**：作为 npm runtime 写进 `agent-versions.json` 和总锁，Selected 和 sandbox pool 的 bundle 也能选它。**B**：给 Full 单独建一份附加锁（`deploy/runner/full-extras/`），bundle 不变                                                                           | **已定 A：Cline 写进总 pins 和总锁**。只有一套锁和一套安装链。F09 里「产品有 preset、启动白名单里也有、Selected 却拒绝」的矛盾就此消除。代价是 bundle 的 `full` 变体多一个 Cline，bundle smoke 要加 Cline 的 ACP 初始化                 |
+| D2   | 版本覆盖参数                         | **A**：删除，版本只来自 pins。**B**：保留，但传了覆盖参数的镜像打上 `unlocked` label，smoke 拒绝发布                                                                                                                                                           | **已定 A：删除版本覆盖参数**。覆盖参数原本就要求精确版本，改版本应当改 pins 并重新生成锁                                                                                                                                                |
+| D3   | server `runtime-full` 怎么复用安装链 | **A**：server Dockerfile 复制一份同样的 `agent-build` 阶段，由门禁检查两份逐行一致。**B**：抽出共享的 `deploy/agents/Dockerfile`，两边用 BuildKit 命名构建上下文（`--build-context agent-tree=…`）引入。**C**：server 直接 `COPY --from=` 已发布的 Runner 镜像 | **已定 B：共享 `deploy/agents/Dockerfile` + 命名上下文 `agent-tree`**。只有一份实现。缺点是 Compose 的 `build` 和 CI 都要传这个上下文，要像 `plugin-artifacts` 一样提供会报错的占位阶段（`check-deploy-suite.mjs` 第 7 项已有现成模式） |
+| D4   | Full 里 Agent 用哪个 Node            | **A**：与 Selected 一样用固定的 `/cognia/glibc/node`。**B**：继续用 base 镜像的 Node                                                                                                                                                                           | **已定 A：Full 用固定版本 Node**。可复现，也和 Selected、bundle 一致；base 镜像自带的 Node 仍留给项目工具使用                                                                                                                           |
 
 ## 4. 设计
 
