@@ -84,3 +84,48 @@ test("selected Runner binds native npm from its final custom base before publish
   )
   assert.ok(builder.indexOf("COPY deploy/runner/install-selected.mjs") > builder.indexOf("npm ci"))
 })
+
+test("Both Runner targets end as uid 10001 with a home of their own", () => {
+  const dockerfile = readFileSync(
+    new URL("../../deploy/runner/Dockerfile", import.meta.url),
+    "utf8"
+  )
+  for (const target of ["selected", "full"]) {
+    const start = dockerfile.indexOf(`FROM base AS ${target}`)
+    const next = dockerfile.indexOf("\nFROM ", start + 1)
+    const stage = dockerfile.slice(start, next === -1 ? undefined : next)
+    const users = [...stage.matchAll(/^USER (\S+)$/gm)].map((match) => match[1])
+    assert.equal(users.at(-1), "10001:10001", `${target} ends as the Runner user`)
+    assert.match(stage, /HOME=\/home\/cognia/)
+  }
+  assert.match(dockerfile, /useradd --uid 10001 --gid 10001 --home-dir \/home\/cognia/)
+  assert.match(dockerfile, /ARG INSTALL_CURSOR_AGENT=0/)
+})
+
+// A prerelease tag (v2.1.0-beta.1) produced latest, latest-full and
+// latest-codex like a release, so deployments following them got the beta.
+test("Only a stable release tag moves the latest tags", () => {
+  const vars = job("vars")
+  assert.match(vars, /stable_release: \$\{\{ steps\.o\.outputs\.stable_release \}\}/)
+  assert.match(vars, /"\$GITHUB_REF" == refs\/tags\/v\* && "\$GITHUB_REF_NAME" != \*-\*/)
+  const rules = [...workflow.matchAll(/type=raw,value=latest[^\n]*/g)].map((match) => match[0])
+  assert.ok(rules.length >= 8, `found ${rules.length} latest rules`)
+  for (const rule of rules) {
+    assert.match(rule, /needs\.vars\.outputs\.stable_release == 'true'/, rule)
+    assert.doesNotMatch(rule, /startsWith\(github\.ref/, rule)
+  }
+})
+
+test("Every pushed image carries SBOM and max-level provenance attestations", () => {
+  const steps = workflow.split(/\n(?=\s+- (?:name:|uses:|id:))/)
+  const builds = steps.filter(
+    (step) =>
+      step.includes("docker/build-push-action") &&
+      /push: \$\{\{ needs\.vars\.outputs\.should_push|push=true/.test(step)
+  )
+  assert.ok(builds.length >= 6, `found ${builds.length} pushing builds`)
+  for (const step of builds) {
+    assert.match(step, /\n\s+sbom: \$\{\{ needs\.vars\.outputs\.should_push == 'true'/, step)
+    assert.match(step, /\n\s+provenance: \$\{\{ needs\.vars\.outputs\.should_push == 'true'.*'mode=max'/, step)
+  }
+})

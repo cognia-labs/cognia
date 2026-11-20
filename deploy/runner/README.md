@@ -90,8 +90,11 @@ docker build -f deploy/runner/Dockerfile --target full \
 ```
 
 The final default target and existing unsuffixed release tags remain Full.
-CI also publishes explicit `latest-full` and selected `latest-codex` aliases
-on version-tag releases, only after their image smoke tests pass.
+CI also publishes explicit `latest-full` and selected `latest-codex` aliases,
+only after their image smoke tests pass. `latest*` tags move on stable release
+tags only (`v2.1.0`, never `v2.1.0-beta.1`); a prerelease gets its version tag.
+Every pushed image carries SBOM and max-level provenance attestations
+(`docker buildx imagetools inspect <image> --format '{{ json .SBOM }}'`).
 
 Full retains the legacy Agent set, including Cline. Cline is a launchable
 system runtime with no distribution in the bundle pins, so selected builds

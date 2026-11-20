@@ -16,7 +16,9 @@ name: Images
 # The service images (cognia-signaling, cognia-share, cognia-diagnostics) are
 # built and published by cognia-labs/cognia-services under its own owner.
 #
-# Publish happens on version tags (and manual dispatch with push=true).
+# Publish happens on version tags (and manual dispatch with push=true). Only a
+# stable tag (no `-` prerelease part) moves the latest* tags, and every pushed
+# image carries SBOM and max-level provenance attestations.
 # PRs touching the container inputs get a compile check instead:
 #   - the small images + runner build without pushing (gha cache)
 #   - cognia-server builds the `check` stage — cargo check over the cooked
@@ -115,6 +117,7 @@ jobs:
     outputs:
       owner: ${{ steps.o.outputs.owner }}
       should_push: ${{ steps.o.outputs.should_push }}
+      stable_release: ${{ steps.o.outputs.stable_release }}
       cargo-only: ${{ steps.plan.outputs.cargo-only }}
       fast-images: ${{ steps.plan.outputs.fast-images }}
     steps:
@@ -139,6 +142,14 @@ jobs:
       - id: o
         run: |
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          # Only a release tag without a prerelease part (v2.1.0, never
+          # v2.1.0-beta.1) moves the latest* tags: deployments that follow
+          # them must not land on a beta. Same rule as build-tauri.yml.
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != *-* ]]; then
+            echo "stable_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable_release=false" >> "$GITHUB_OUTPUT"
+          fi
           if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.push }}" = "true" ]; then
             echo "should_push=true" >> "$GITHUB_OUTPUT"
           else
@@ -207,7 +218,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ needs.vars.outputs.stable_release == 'true' }}
 
       - uses: docker/build-push-action@v7
         if: steps.ctx.outputs.present == 'true'
@@ -216,6 +227,8 @@ jobs:
           file: ${{ matrix.file }}
           build-contexts: ${{ matrix.pluginArtifacts && format('plugin-artifacts={0}', steps.plugins.outputs.path) || '' }}
           push: ${{ needs.vars.outputs.should_push == 'true' }}
+          sbom: ${{ needs.vars.outputs.should_push == 'true' }}
+          provenance: ${{ needs.vars.outputs.should_push == 'true' && 'mode=max' || 'false' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
@@ -253,8 +266,8 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest-full,enable=${{ matrix.variant == 'full' && startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ needs.vars.outputs.stable_release == 'true' }}
+            type=raw,value=latest-full,enable=${{ matrix.variant == 'full' && needs.vars.outputs.stable_release == 'true' }}
       - name: Build native Runner once
         id: build
         uses: docker/build-push-action@v7
@@ -264,6 +277,8 @@ jobs:
           target: ${{ matrix.variant == 'codex' && 'selected' || 'full' }}
           platforms: linux/amd64
           outputs: ${{ needs.vars.outputs.should_push == 'true' && 'type=image,push-by-digest=true,name-canonical=true,push=true' || 'type=docker' }}
+          sbom: ${{ needs.vars.outputs.should_push == 'true' }}
+          provenance: ${{ needs.vars.outputs.should_push == 'true' && 'mode=max' || 'false' }}
           tags: ${{ needs.vars.outputs.should_push == 'true' && format('ghcr.io/{0}/cognia-runner', needs.vars.outputs.owner) || 'cognia-runner:smoke' }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: AGENT_RUNTIMES=codex-acp,codex-app-server
@@ -355,6 +370,8 @@ jobs:
           file: ${{ runner.temp }}/managed-desktop-image/Dockerfile
           platforms: linux/amd64
           push: ${{ needs.vars.outputs.should_push == 'true' }}
+          sbom: ${{ needs.vars.outputs.should_push == 'true' }}
+          provenance: ${{ needs.vars.outputs.should_push == 'true' && 'mode=max' || 'false' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cognia-managed-desktop-amd64
@@ -430,7 +447,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ needs.vars.outputs.stable_release == 'true' }}
 
       - name: Build native bundle once
         id: build
@@ -447,6 +464,8 @@ jobs:
           # type=docker loads the single native platform for local PR smoke.
           # Publish by digest only: no release tag can point at an untested image.
           outputs: ${{ needs.vars.outputs.cargo-only == 'true' && 'type=cacheonly' || needs.vars.outputs.should_push == 'true' && 'type=image,push-by-digest=true,name-canonical=true,push=true' || 'type=docker' }}
+          sbom: ${{ needs.vars.outputs.should_push == 'true' && needs.vars.outputs.cargo-only != 'true' }}
+          provenance: ${{ needs.vars.outputs.should_push == 'true' && needs.vars.outputs.cargo-only != 'true' && 'mode=max' || 'false' }}
           tags: ${{ needs.vars.outputs.should_push == 'true' && format('ghcr.io/{0}/cognia-agent-bundle', needs.vars.outputs.owner) || 'cognia-agent-bundle:smoke' }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -521,8 +540,8 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest-full,enable=${{ matrix.variant == 'full' && startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ needs.vars.outputs.stable_release == 'true' }}
+            type=raw,value=latest-full,enable=${{ matrix.variant == 'full' && needs.vars.outputs.stable_release == 'true' }}
 
       - name: Assemble tested multi-platform manifest
         env:
@@ -616,7 +635,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=sha
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ needs.vars.outputs.stable_release == 'true' }}
 
       - id: meta-slim
         uses: docker/metadata-action@v6
@@ -627,7 +646,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=sha
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ needs.vars.outputs.stable_release == 'true' }}
 
       # Full is the superset, so its mode=max export holds every stage slim
       # needs too; slim exports nothing, or it would overwrite the ref with a
@@ -641,6 +660,8 @@ jobs:
           target: runtime-full
           build-contexts: plugin-artifacts=${{ steps.plugins.outputs.path }}
           push: ${{ needs.vars.outputs.should_push == 'true' }}
+          sbom: ${{ needs.vars.outputs.should_push == 'true' }}
+          provenance: ${{ needs.vars.outputs.should_push == 'true' && 'mode=max' || 'false' }}
           tags: ${{ steps.meta-full.outputs.tags }}
           labels: ${{ steps.meta-full.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/${{ needs.vars.outputs.owner }}/cognia-server:buildcache
@@ -655,6 +676,8 @@ jobs:
           target: runtime-slim
           build-contexts: plugin-artifacts=${{ steps.plugins.outputs.path }}
           push: ${{ needs.vars.outputs.should_push == 'true' }}
+          sbom: ${{ needs.vars.outputs.should_push == 'true' }}
+          provenance: ${{ needs.vars.outputs.should_push == 'true' && 'mode=max' || 'false' }}
           tags: ${{ steps.meta-slim.outputs.tags }}
           labels: ${{ steps.meta-slim.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/${{ needs.vars.outputs.owner }}/cognia-server:buildcache
