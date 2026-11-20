@@ -2489,6 +2489,15 @@
           "both": "Native and code",
           "code": "As code",
           "native": "Native tools"
+        },
+        "unavailable": {
+          "default": "Unavailable on this Host",
+          "killed": "Turned off for this build or Host",
+          "no-backend": "This Host has no OS sandbox for code (needs macOS sandbox-exec or Linux bwrap)",
+          "no-scratch": "This Host could not create the code sandbox's scratch folder",
+          "not-reported": "This Host does not report code support; update it to use code tools",
+          "probing": "Checking whether this Host can sandbox code…",
+          "unreachable": "No Host to run code on from here"
         }
       }
     },
@@ -2669,7 +2678,7 @@
         "name": "Build"
       },
       "code": {
-        "description": "Compose tool calls as code in a sandbox. Read-only in this release",
+        "description": "Compose built-in tool calls as code in a sandbox. The code SDK is read-only; other tools keep their usual permissions",
         "name": "Code"
       },
       "code-gen": {

@@ -63,7 +63,7 @@ import { cn } from "@/lib/utils"
 import { COMPOSER_TOOLBAR_CHIP } from "@/lib/chat/composer-skin"
 import { CompositionPicker } from "./composition-picker"
 import { usePresetCatalog } from "@/hooks/agent/use-preset-catalog"
-import { useCodeSandboxPresentations } from "@/hooks/agent/use-code-sandbox-presentations"
+import { useCodeHostCapability } from "@/hooks/agent/use-code-host-capability"
 import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import { resolveComposition } from "@/lib/agent/composition/resolve-composition"
@@ -101,7 +101,8 @@ export function CompositionChip({
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const presets = usePresetCatalog()
-  const supportedToolPresentations = useCodeSandboxPresentations()
+  const { presentations: supportedToolPresentations, unavailableReason: codeUnavailableReason } =
+    useCodeHostCapability()
   const developerMode = usePluginStore((s) => s.pluginSettings.developerModeEnabled)
 
   // Subscribed, not read via getState(): the settings sheet writes the same
@@ -281,6 +282,7 @@ export function CompositionChip({
               developerMode={developerMode}
               presetControl={false}
               supportedToolPresentations={supportedToolPresentations}
+              toolPresentationUnavailableReason={codeUnavailableReason}
               supportedOrchestrations={CHAT_SUPPORTED_ORCHESTRATIONS}
             />
           </ResponsivePicker>
@@ -329,6 +331,7 @@ export function CompositionChip({
           advancedOpen={advancedOpen}
           onAdvancedOpenChange={setAdvancedOpen}
           supportedToolPresentations={supportedToolPresentations}
+          toolPresentationUnavailableReason={codeUnavailableReason}
           supportedOrchestrations={CHAT_SUPPORTED_ORCHESTRATIONS}
         />
       </ResponsivePicker>

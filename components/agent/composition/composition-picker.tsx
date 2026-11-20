@@ -44,6 +44,8 @@ import type {
 import { visiblePresets } from "@/lib/agent/composition/preset-catalog"
 import { resolveComposition } from "@/lib/agent/composition/resolve-composition"
 import { chatOrchestrationUnavailableReason } from "@/lib/agent/composition/chat-orchestrations"
+import { isSandboxedPresentation } from "@/lib/ai/code-mode/availability"
+import type { CodeModeUnavailableReason } from "@/lib/ai/code-mode/availability"
 import { presetDisplayName, type PresetNameTranslator } from "@/lib/agent/composition/preset-label"
 import { useHostProfile } from "@/hooks/use-host-profile"
 
@@ -66,6 +68,12 @@ export interface CompositionPickerProps {
   ceiling?: AgentCompositionSelectionV1["authority"]
   /** Absent means the host supports everything. */
   supportedToolPresentations?: readonly ToolPresentationMode[]
+  /**
+   * Why the Host cannot run Code / Both, shown on those options when
+   * `supportedToolPresentations` leaves them out. Listed and disabled, never
+   * hidden: a selection the Host cannot run must not look selectable.
+   */
+  toolPresentationUnavailableReason?: CodeModeUnavailableReason | "probing" | null
   supportedOrchestrations?: readonly AgentOrchestrationPolicy[]
   disabled?: boolean
   className?: string
@@ -108,6 +116,7 @@ export function CompositionPicker({
   onAdvancedOpenChange,
   ceiling,
   supportedToolPresentations,
+  toolPresentationUnavailableReason,
   supportedOrchestrations,
   disabled = false,
   className,
@@ -275,10 +284,23 @@ export function CompositionPicker({
               onValueChange={axisChange("toolPresentation")}
               disabled={disabled}
               inheritLabel={inheritLabel}
-              options={TOOL_PRESENTATION_MODES.map((value) => ({
-                value,
-                label: t(`axis.toolPresentation.options.${value}`),
-              }))}
+              options={TOOL_PRESENTATION_MODES.map((value) => {
+                const offered =
+                  !supportedToolPresentations ||
+                  supportedToolPresentations.includes(value) ||
+                  !isSandboxedPresentation(value)
+                return {
+                  value,
+                  label: t(`axis.toolPresentation.options.${value}`),
+                  ...(offered
+                    ? {}
+                    : {
+                        unavailableHint: t(
+                          `axis.toolPresentation.unavailable.${toolPresentationUnavailableReason ?? "default"}`
+                        ),
+                      }),
+                }
+              })}
             />
 
             <AxisSelect

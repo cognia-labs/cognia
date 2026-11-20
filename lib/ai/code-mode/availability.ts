@@ -5,74 +5,102 @@
  * **when a strict sandbox is unavailable, Code fails closed with no degraded
  * path.** There is deliberately no "run it unsandboxed just this once" branch,
  * and no way for a caller to pass a flag that produces one — the only way to
- * get `available: true` is for the host to actually report a strict sandbox.
+ * reach `available` is for the execution Host to report that the sidecar it
+ * runs was handed an OS confinement launcher for `run_code`.
  *
- * The kill switch is separate from availability so the two reasons a user sees
- * are distinguishable: "this build turned Code off" and "this host cannot
- * sandbox it" call for different responses.
+ * The Host's report is the only evidence that counts. The renderer cannot see
+ * the sandbox (it is a child of the sidecar), and the generic ADR-0028 command
+ * sandbox probe answers a different question: a confined `bash` says nothing
+ * about whether this sidecar got a `run_code` launcher, and on a paired client
+ * it describes the wrong machine. `claude_sidecar_status` is routed to the
+ * execution Host and carries the launcher state of its live sidecar
+ * generation (`cognia_sidecar::code_sandbox::CodeSandboxCapability`).
+ *
+ * The kill switches stay distinguishable from availability so the reasons a
+ * user sees call for different responses: "this build turned Code off", "this
+ * Host turned Code off", and "this Host cannot sandbox it".
  */
 
-import { AGENT_ORCHESTRATION_POLICIES } from "@cognia/agent-config-types/agent-composition"
-import type {
-  AgentOrchestrationPolicy,
-  ToolPresentationMode,
-} from "@cognia/agent-config-types/agent-composition"
+import type { ToolPresentationMode } from "@cognia/agent-config-types/agent-composition"
 
 const BUILD_CODE_MODE_DISABLED = process.env.NEXT_PUBLIC_CODE_MODE_KILL === "1"
 
-/** The kill switch. Set `NEXT_PUBLIC_CODE_MODE_KILL=1` to remove Code entirely. */
+/** The renderer build's kill switch. `NEXT_PUBLIC_CODE_MODE_KILL=1` removes Code. */
 export function isCodeModeKilled(environment?: Record<string, string | undefined>): boolean {
   if (!environment) return BUILD_CODE_MODE_DISABLED
   return environment.NEXT_PUBLIC_CODE_MODE_KILL === "1"
 }
 
 /**
- * What the host reports about its ability to run the sandbox.
- *
- * Every field defaults to the unsafe answer being *absent*: an unknown host
- * produces `available: false`, which is the fail-closed direction.
+ * Why Code cannot run for this turn. Machine-stable; rendered via
+ * `agentComposition.axis.toolPresentation.unavailable.<reason>`.
  */
-export interface CodeSandboxProbe {
-  /**
-   * Whether a Node child process can be spawned. The sandbox is a separate
-   * process, so without this there is no sandbox — browser and Capacitor hosts
-   * land here.
-   */
-  canSpawnProcess: boolean
-  /**
-   * Whether the host can apply the OS-level confinement the runner relies on
-   * (empty/read-only filesystem view, no network, scrubbed environment).
-   * Reported by the sidecar, not assumed from the platform.
-   */
-  strictSandbox: boolean
-}
+export type CodeModeUnavailableReason =
+  /** The renderer build or the Host's `COGNIA_CODE_MODE_KILL` turned Code off. */
+  | "killed"
+  /** The Host has no OS confinement backend (Windows, Linux without `bwrap`). */
+  | "no-backend"
+  /** The Host could not create the scratch directory the policy grants. */
+  | "no-scratch"
+  /** The Host answered without a Code capability: an older Host, or the CLI's. */
+  | "not-reported"
+  /** No Host answered: web and mobile standalone, or the status call failed. */
+  | "unreachable"
 
-export type CodeModeUnavailableReason = "killed" | "no-host-process" | "no-strict-sandbox"
+export const CODE_MODE_UNAVAILABLE_REASONS: readonly CodeModeUnavailableReason[] = Object.freeze([
+  "killed",
+  "no-backend",
+  "no-scratch",
+  "not-reported",
+  "unreachable",
+])
 
-export type CodeModeAvailability =
-  { available: true } | { available: false; reason: CodeModeUnavailableReason }
+/** What the execution Host can do with `run_code`, as far as this renderer knows. */
+export type CodeHostCapability =
+  /** Asked, not answered yet. Offers nothing: a gap is not a yes. */
+  | { state: "probing" }
+  | {
+      state: "available"
+      backend: string
+      /** The Host's sidecar generation the answer belongs to, when one is live. */
+      generation?: number
+    }
+  | { state: "unavailable"; reason: CodeModeUnavailableReason }
 
-export interface ResolveCodeModeAvailabilityInput {
-  /** Absent means the host has not probed yet, which is treated as unavailable. */
-  probe?: CodeSandboxProbe
-  environment?: Record<string, string | undefined>
-}
+export const CODE_HOST_PROBING: CodeHostCapability = Object.freeze({ state: "probing" })
 
-export function resolveCodeModeAvailability(
-  input: ResolveCodeModeAvailabilityInput = {}
-): CodeModeAvailability {
-  if (isCodeModeKilled(input.environment)) {
-    return { available: false, reason: "killed" }
+const HOST_REASONS = new Set<string>(["killed", "no-backend", "no-scratch"])
+
+/**
+ * Read `claude_sidecar_status`'s `codeSandbox` field.
+ *
+ * Every malformed or missing shape is the fail-closed answer. An available
+ * report must name its backend: a bare `available: true` is a claim, not a
+ * launcher.
+ */
+export function parseCodeSandboxReport(status: unknown): CodeHostCapability {
+  const report =
+    status && typeof status === "object"
+      ? (status as { codeSandbox?: unknown }).codeSandbox
+      : undefined
+  if (!report || typeof report !== "object") return { state: "unavailable", reason: "not-reported" }
+  const { available, backend, reason, generation } = report as Record<string, unknown>
+  if (available === true && typeof backend === "string" && backend.length > 0) {
+    return {
+      state: "available",
+      backend,
+      ...(typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0
+        ? { generation }
+        : {}),
+    }
   }
-  // No probe at all is the same answer as a failed probe. An unprobed host is
-  // not a host that "probably works".
-  if (!input.probe?.canSpawnProcess) {
-    return { available: false, reason: "no-host-process" }
+  return {
+    state: "unavailable",
+    reason:
+      typeof reason === "string" && HOST_REASONS.has(reason)
+        ? (reason as CodeModeUnavailableReason)
+        : "not-reported",
   }
-  if (!input.probe.strictSandbox) {
-    return { available: false, reason: "no-strict-sandbox" }
-  }
-  return { available: true }
 }
 
 /** Presentations that are always available, regardless of host. */
@@ -88,24 +116,38 @@ const BASE_PRESENTATIONS: readonly ToolPresentationMode[] = ["native"]
  */
 const SANDBOXED_PRESENTATIONS: readonly ToolPresentationMode[] = ["code", "both"]
 
+/** Presentations that need the sandbox; the picker explains why they are off. */
+export function isSandboxedPresentation(mode: string): boolean {
+  return (SANDBOXED_PRESENTATIONS as readonly string[]).includes(mode)
+}
+
 /**
  * The `supportedToolPresentations` to hand `resolveComposition`.
  *
- * When Code is unavailable the value simply omits `code`, and the composition
- * resolver degrades a `code` selection to `native` with a visible warning. That
- * is the whole fail-closed path: the resolver already knows how to narrow, so
- * this module does not need a second, parallel refusal mechanism.
+ * When Code is unavailable the value simply omits `code` and `both`, and the
+ * composition resolver degrades such a selection to `native` with a visible
+ * warning (ADR-0117). That is the whole fail-closed path: the resolver
+ * already knows how to narrow, so this module does not need a second refusal
+ * mechanism. The build kill switch wins over any Host report.
  */
 export function supportedToolPresentations(
-  input: ResolveCodeModeAvailabilityInput = {}
+  capability: CodeHostCapability,
+  environment?: Record<string, string | undefined>
 ): ToolPresentationMode[] {
-  const availability = resolveCodeModeAvailability(input)
-  return availability.available
+  return capability.state === "available" && !isCodeModeKilled(environment)
     ? [...BASE_PRESENTATIONS, ...SANDBOXED_PRESENTATIONS]
     : [...BASE_PRESENTATIONS]
 }
 
-/** Orchestrations are unaffected by the sandbox; listed for call-site symmetry. */
-export function supportedOrchestrations(): AgentOrchestrationPolicy[] {
-  return [...AGENT_ORCHESTRATION_POLICIES]
+/**
+ * The reason to show next to a disabled Code / Both option, or `"probing"`
+ * while the Host has not answered. `null` when Code is offered.
+ */
+export function codeModeUnavailableReason(
+  capability: CodeHostCapability,
+  environment?: Record<string, string | undefined>
+): CodeModeUnavailableReason | "probing" | null {
+  if (isCodeModeKilled(environment)) return "killed"
+  if (capability.state === "probing") return "probing"
+  return capability.state === "available" ? null : capability.reason
 }

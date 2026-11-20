@@ -129,6 +129,54 @@ describe("resolveTurnComposition", () => {
     expect(resolved.toolPresentation).toBe("code")
   })
 
+  // CM-01: the send path used to resolve without the Host's answer, so every
+  // Code / Both selection reached the sidecar as `native`.
+  it("asks the Host for a code selection and keeps it when the Host can sandbox", async () => {
+    const host = jest.fn().mockResolvedValue(["native", "code", "both"])
+    const resolved = await resolveTurnComposition({
+      presets,
+      selection: { presetId: "standard", toolPresentation: "both" },
+      supportedToolPresentations: host,
+    })
+    expect(host).toHaveBeenCalledTimes(1)
+    expect(resolved.toolPresentation).toBe("both")
+    expect(resolved.warnings).toEqual([])
+  })
+
+  it("degrades with a warning when the Host it asked cannot sandbox", async () => {
+    const resolved = await resolveTurnComposition({
+      presets,
+      selection: { presetId: "standard", toolPresentation: "code" },
+      supportedToolPresentations: async () => ["native"],
+    })
+    expect(resolved.toolPresentation).toBe("native")
+    expect(resolved.warnings).toContainEqual({
+      reason: "presentation-unavailable",
+      requested: "code",
+      applied: "native",
+    })
+  })
+
+  it("never asks the Host for a native turn", async () => {
+    const host = jest.fn()
+    const resolved = await resolveTurnComposition({
+      presets,
+      selection: { presetId: "standard" },
+      supportedToolPresentations: host,
+    })
+    expect(host).not.toHaveBeenCalled()
+    expect(resolved.toolPresentation).toBe("native")
+  })
+
+  // The CLI's agent definitions pass no Host: its sidecar never gets a launcher.
+  it("offers native only when no Host answer is given", async () => {
+    const resolved = await resolveTurnComposition({
+      presets,
+      selection: { presetId: "standard", toolPresentation: "code" },
+    })
+    expect(resolved.toolPresentation).toBe("native")
+  })
+
   it("never lets a child widen past the parent's authority", async () => {
     const resolved = await resolveTurnComposition({
       presets,

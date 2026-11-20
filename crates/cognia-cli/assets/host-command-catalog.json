@@ -13537,7 +13537,7 @@
       "outputSchemaSource": "contract",
       "outputSchema": {
         "type": "object",
-        "x-cognia-wire-source": "cognia_sidecar::commands::SidecarStatus; liveSessionIds is the Rust-owned active turn registry, optional for older hosts.",
+        "x-cognia-wire-source": "cognia_sidecar::commands::SidecarStatus; liveSessionIds is the Rust-owned active turn registry and codeSandbox the run_code launcher state (cognia_sidecar::code_sandbox::CodeSandboxCapability), both optional for older hosts.",
         "required": [
           "ready"
         ],
@@ -13550,6 +13550,33 @@
             "items": {
               "type": "string"
             }
+          },
+          "codeSandbox": {
+            "type": "object",
+            "required": [
+              "available"
+            ],
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "backend": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "killed",
+                  "no-backend",
+                  "no-scratch"
+                ]
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -113957,5 +113984,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "3067c626cf41882f1d7c9d8eb24a4ada0ea2903113ba2161f374eb5c21466556"
+  "catalogHash": "36747bab8d8cc0e1c69c026661b0105c58560c62269edac323821aea0b7d960a"
 }

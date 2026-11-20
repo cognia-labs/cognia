@@ -3199,6 +3199,19 @@ mod tests {
             // `claude::commands::SidecarStatus`, whose serialization is pinned
             // beside it.
             ("claude_sidecar_status", json!({ "ready": true })),
+            // The run_code launcher state a current Host reports (ADR-0117).
+            (
+                "claude_sidecar_status",
+                json!({
+                    "ready": true,
+                    "liveSessionIds": ["s1"],
+                    "codeSandbox": { "available": true, "backend": "macos-sandbox-exec", "generation": 3 },
+                }),
+            ),
+            (
+                "claude_sidecar_status",
+                json!({ "ready": false, "codeSandbox": { "available": false, "reason": "killed" } }),
+            ),
             ("read_agent_config", serde_json::to_value(read_ok).unwrap()),
             (
                 "read_agent_config",

@@ -30,7 +30,7 @@
     },
     "code": {
       "name": "Code",
-      "description": "Compose tool calls as code in a sandbox. Read-only in this release"
+      "description": "Compose built-in tool calls as code in a sandbox. The code SDK is read-only; other tools keep their usual permissions"
     },
     "code-gen": {
       "description": "Generate and explain code in various languages",

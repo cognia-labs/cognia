@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { CompositionPicker } from "@/components/agent/composition/composition-picker"
 import { usePresetCatalog } from "@/hooks/agent/use-preset-catalog"
-import { useCodeSandboxPresentations } from "@/hooks/agent/use-code-sandbox-presentations"
+import { useCodeHostCapability } from "@/hooks/agent/use-code-host-capability"
 import { useAgentRuntimeStore, useRuntimeRefForSession } from "@/stores/agent/agent-runtime-store"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import {
@@ -261,8 +261,8 @@ export function SessionSettingsSheet({
   // Built-ins plus the user's custom modes plus enabled plugin modes. Reactive,
   // so a mode authored in Settings while this sheet is open shows up here.
   const compositionPresets = usePresetCatalog()
-  // Starts native-only and widens once the active confinement probe answers.
-  const hostPresentations = useCodeSandboxPresentations()
+  // Starts native-only and widens once the execution Host reports a launcher.
+  const codeHost = useCodeHostCapability()
   // Reactive per-session selection, falling back to the app default for a
   // session that predates the field.
   const sessionComposition = useAgentRuntimeStore(
@@ -754,10 +754,12 @@ export function SessionSettingsSheet({
                 advancedOpen={compositionAdvancedOpen}
                 onAdvancedOpenChange={setCompositionAdvancedOpen}
                 // Code presentation needs a strict sandbox (ADR-0117 Phase 4).
-                // When the host cannot provide one the axis simply does not offer
-                // it, and a stored `code` selection degrades to `native` with a
-                // visible warning rather than running unsandboxed.
-                supportedToolPresentations={hostPresentations}
+                // When the execution Host cannot provide one the options stay
+                // listed and disabled with its reason, and a stored `code`
+                // selection degrades to `native` with a visible warning rather
+                // than running unsandboxed.
+                supportedToolPresentations={codeHost.presentations}
+                toolPresentationUnavailableReason={codeHost.unavailableReason}
               />
             </SessionSettingsSection>
 

@@ -8,6 +8,11 @@
  * missing composition is "the model gets the tool surface it always got", not
  * "the model gets a surface nobody authorised".
  *
+ * It is also where the send path asks the execution Host whether it can run
+ * `run_code`: a turn whose selection asks for Code or Both resolves against
+ * the Host's own report (`claude_sidecar_status`), so the composition the
+ * sidecar is told matches what that sidecar can register.
+ *
  * Kept out of `build-options.ts` itself so the degradation is directly
  * testable; that file is 3,700 lines and this decision is worth asserting on
  * its own.
@@ -18,9 +23,11 @@ import {
   toolSurfaceFromNames,
 } from "@/lib/agent/composition/resolve-turn-composition"
 import type { PromptSurface } from "@/lib/agent/composition/digest"
+import { readCodeHostToolPresentations } from "@/lib/ai/code-mode/host-capability"
 import type {
   AgentCompositionSelectionV1,
   ResolvedAgentCompositionV1,
+  ToolPresentationMode,
 } from "@cognia/agent-config-types/agent-composition"
 
 export interface SafeTurnCompositionInput {
@@ -36,6 +43,8 @@ export interface SafeTurnCompositionInput {
    * that owns its own configuration (the IM connector).
    */
   selection?: AgentCompositionSelectionV1
+  /** The Host query; tests inject one. Production asks the execution Host. */
+  hostToolPresentations?: () => Promise<readonly ToolPresentationMode[]>
 }
 
 export async function resolveTurnCompositionSafely(
@@ -48,6 +57,7 @@ export async function resolveTurnCompositionSafely(
       tools: toolSurfaceFromNames(input.toolNames ?? []),
       executionFingerprint: input.executionFingerprint,
       selection: input.selection,
+      supportedToolPresentations: input.hostToolPresentations ?? readCodeHostToolPresentations,
     })
   } catch {
     return undefined

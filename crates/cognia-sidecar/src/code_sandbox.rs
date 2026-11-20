@@ -18,12 +18,136 @@
 //! Pure (no spawning, no policy evaluation) so every branch is unit-testable on
 //! any OS, matching how `cognia_exec_sandbox::launcher` is tested.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cognia_exec_sandbox::launcher::LaunchScope;
+use serde::Serialize;
 
 /// Env var the sidecar's `src/tools/builtin/run-code/supervisor.ts` reads.
 pub const CODE_SANDBOX_LAUNCHER_ENV: &str = "COGNIA_CODE_SANDBOX_LAUNCHER";
+
+/// The Host's Code kill switch. `1` on the app process keeps the launcher away
+/// from every sidecar it spawns afterwards, so no client of this Host (desktop,
+/// paired phone, IM connector) can register or run `run_code`. It is read at
+/// spawn: turning it on takes effect when the sidecar next starts, which also
+/// ends every run that was in flight.
+pub const CODE_MODE_KILL_ENV: &str = "COGNIA_CODE_MODE_KILL";
+
+/// Why this Host cannot run `run_code`. Serialized for the renderer, which
+/// shows the reason next to the disabled Code / Both options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeSandboxUnavailable {
+    /// [`CODE_MODE_KILL_ENV`] is set.
+    Killed,
+    /// No OS confinement backend (Windows, Linux without `bwrap`).
+    NoBackend,
+    /// The scratch directory the policy grants could not be created.
+    NoScratch,
+}
+
+/// What a sidecar generation was handed for `run_code`, or — before a sidecar
+/// is running — what the next spawn will be handed.
+///
+/// `generation` is set only for a live sidecar: the renderer re-asks when the
+/// generation it holds is no longer the one running.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeSandboxCapability {
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<CodeSandboxUnavailable>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+}
+
+impl CodeSandboxCapability {
+    pub fn available(backend: &str) -> Self {
+        Self {
+            available: true,
+            backend: Some(backend.to_string()),
+            reason: None,
+            generation: None,
+        }
+    }
+
+    pub fn unavailable(reason: CodeSandboxUnavailable) -> Self {
+        Self {
+            available: false,
+            backend: None,
+            reason: Some(reason),
+            generation: None,
+        }
+    }
+
+    pub fn with_generation(mut self, generation: u64) -> Self {
+        self.generation = Some(generation);
+        self
+    }
+}
+
+/// Whether the kill switch value turns Code off. Only the exact `1` does, the
+/// same spelling the renderer's build flag uses.
+pub fn code_mode_killed(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// The scratch directory every `run_code` child is confined to.
+pub fn code_sandbox_scratch_dir() -> PathBuf {
+    std::env::temp_dir().join("cognia-code-sandbox")
+}
+
+/// The confinement backend this platform would render a launcher with.
+#[cfg(target_os = "macos")]
+pub fn code_sandbox_backend() -> Option<&'static str> {
+    Path::new("/usr/bin/sandbox-exec")
+        .is_file()
+        .then_some("macos-sandbox-exec")
+}
+
+#[cfg(target_os = "linux")]
+pub fn code_sandbox_backend() -> Option<&'static str> {
+    find_on_path("bwrap").map(|_| "linux-bwrap")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn code_sandbox_backend() -> Option<&'static str> {
+    None
+}
+
+/// Everything that decides Code availability before a launcher is rendered,
+/// in the order a user would fix it: the switch, the scratch dir, the backend.
+///
+/// Shared by the spawn path and the status read, so "the next sidecar will get
+/// a launcher" and "this sidecar got one" are answered by the same checks.
+pub fn code_sandbox_precheck(
+    kill: Option<&str>,
+    scratch: &Path,
+    backend: Option<&'static str>,
+) -> Result<&'static str, CodeSandboxUnavailable> {
+    if code_mode_killed(kill) {
+        return Err(CodeSandboxUnavailable::Killed);
+    }
+    if std::fs::create_dir_all(scratch).is_err() {
+        return Err(CodeSandboxUnavailable::NoScratch);
+    }
+    backend.ok_or(CodeSandboxUnavailable::NoBackend)
+}
+
+/// The capability the next sidecar spawn will have, for a status read made
+/// while no sidecar is running.
+pub fn predicted_code_sandbox_capability() -> CodeSandboxCapability {
+    match code_sandbox_precheck(
+        std::env::var(CODE_MODE_KILL_ENV).ok().as_deref(),
+        &code_sandbox_scratch_dir(),
+        code_sandbox_backend(),
+    ) {
+        Ok(backend) => CodeSandboxCapability::available(backend),
+        Err(reason) => CodeSandboxCapability::unavailable(reason),
+    }
+}
 
 /// Build the filesystem/network scope for a `run_code` child.
 ///
@@ -216,6 +340,65 @@ mod tests {
         let encoded = encode_launcher(&prefix).unwrap();
         let decoded: Vec<String> = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, prefix);
+    }
+
+    #[test]
+    fn only_the_exact_one_kills_code_mode() {
+        assert!(code_mode_killed(Some("1")));
+        assert!(!code_mode_killed(Some("true")));
+        assert!(!code_mode_killed(Some("0")));
+        assert!(!code_mode_killed(None));
+    }
+
+    #[test]
+    fn the_kill_switch_wins_over_a_working_backend() {
+        let scratch = tempfile::tempdir().unwrap();
+        assert_eq!(
+            code_sandbox_precheck(Some("1"), scratch.path(), Some("macos-sandbox-exec")),
+            Err(CodeSandboxUnavailable::Killed)
+        );
+    }
+
+    #[test]
+    fn a_missing_backend_is_reported_as_such() {
+        let scratch = tempfile::tempdir().unwrap();
+        assert_eq!(
+            code_sandbox_precheck(None, scratch.path(), None),
+            Err(CodeSandboxUnavailable::NoBackend)
+        );
+    }
+
+    #[test]
+    fn an_uncreatable_scratch_dir_disables_code() {
+        // A regular file cannot become a directory, on every platform.
+        let file = tempfile::NamedTempFile::new().unwrap();
+        assert_eq!(
+            code_sandbox_precheck(None, &file.path().join("scratch"), Some("linux-bwrap")),
+            Err(CodeSandboxUnavailable::NoScratch)
+        );
+    }
+
+    #[test]
+    fn a_working_backend_is_named() {
+        let scratch = tempfile::tempdir().unwrap();
+        assert_eq!(
+            code_sandbox_precheck(None, scratch.path(), Some("linux-bwrap")),
+            Ok("linux-bwrap")
+        );
+    }
+
+    #[test]
+    fn capability_serializes_the_wire_shape_the_renderer_reads() {
+        assert_eq!(
+            serde_json::to_value(CodeSandboxCapability::available("macos-sandbox-exec").with_generation(3))
+                .unwrap(),
+            serde_json::json!({ "available": true, "backend": "macos-sandbox-exec", "generation": 3 })
+        );
+        assert_eq!(
+            serde_json::to_value(CodeSandboxCapability::unavailable(CodeSandboxUnavailable::NoScratch))
+                .unwrap(),
+            serde_json::json!({ "available": false, "reason": "no-scratch" })
+        );
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]

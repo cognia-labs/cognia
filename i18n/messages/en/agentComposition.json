@@ -33,6 +33,15 @@
         "both": "Native and code",
         "code": "As code",
         "native": "Native tools"
+      },
+      "unavailable": {
+        "probing": "Checking whether this Host can sandbox code…",
+        "killed": "Turned off for this build or Host",
+        "no-backend": "This Host has no OS sandbox for code (needs macOS sandbox-exec or Linux bwrap)",
+        "no-scratch": "This Host could not create the code sandbox's scratch folder",
+        "not-reported": "This Host does not report code support; update it to use code tools",
+        "unreachable": "No Host to run code on from here",
+        "default": "Unavailable on this Host"
       }
     }
   },

@@ -120,17 +120,36 @@ impl Drop for StartupProcessGuard {
 /// `bwrap`). Failing the sidecar spawn over it would break chat entirely to
 /// disable one optional mode. The consequence of the variable being unset is
 /// that Code fails closed, which is the whole point.
-fn apply_code_sandbox_env(cmd: &mut Command, node_executable: &Path, sidecar_root: &Path) {
+///
+/// Returns what this spawn was handed, which `claude_sidecar_status` reports so
+/// the renderer offers Code exactly when this sidecar can run it.
+fn apply_code_sandbox_env(
+    cmd: &mut Command,
+    node_executable: &Path,
+    sidecar_root: &Path,
+) -> crate::code_sandbox::CodeSandboxCapability {
     use crate::code_sandbox::{
-        code_sandbox_scope, encode_launcher, render_code_sandbox_launcher,
+        code_sandbox_backend, code_sandbox_precheck, code_sandbox_scope,
+        code_sandbox_scratch_dir, encode_launcher, render_code_sandbox_launcher,
+        CodeSandboxCapability, CodeSandboxUnavailable, CODE_MODE_KILL_ENV,
         CODE_SANDBOX_LAUNCHER_ENV,
     };
 
-    let scratch = std::env::temp_dir().join("cognia-code-sandbox");
-    if let Err(error) = std::fs::create_dir_all(&scratch) {
-        log::warn!("code sandbox scratch dir unavailable, Code mode disabled: {error}");
-        return;
-    }
+    // The child inherits the app's environment; a launcher a previous host
+    // process exported must not survive a check that now fails.
+    cmd.env_remove(CODE_SANDBOX_LAUNCHER_ENV);
+    let scratch = code_sandbox_scratch_dir();
+    let backend = match code_sandbox_precheck(
+        std::env::var(CODE_MODE_KILL_ENV).ok().as_deref(),
+        &scratch,
+        code_sandbox_backend(),
+    ) {
+        Ok(backend) => backend,
+        Err(reason) => {
+            log::info!("Code tool presentation disabled for this sidecar: {reason:?}");
+            return CodeSandboxCapability::unavailable(reason);
+        }
+    };
 
     let node_root = node_executable.parent().unwrap_or(node_executable);
     let scope = code_sandbox_scope(&scratch, node_root, sidecar_root);
@@ -138,9 +157,11 @@ fn apply_code_sandbox_env(cmd: &mut Command, node_executable: &Path, sidecar_roo
     match render_code_sandbox_launcher(&scope).and_then(|prefix| encode_launcher(&prefix)) {
         Some(encoded) => {
             cmd.env(CODE_SANDBOX_LAUNCHER_ENV, encoded);
+            CodeSandboxCapability::available(backend)
         }
         None => {
-            log::info!("no OS sandbox backend on this host; Code tool presentation stays disabled")
+            log::info!("no OS sandbox backend on this host; Code tool presentation stays disabled");
+            CodeSandboxCapability::unavailable(CodeSandboxUnavailable::NoBackend)
         }
     }
 }
@@ -376,6 +397,9 @@ struct Inner {
     /// in `cognia_net::proxy_config::application` for as long as the child
     /// lives. Set and cleared together with `child`.
     proxy_owner: Option<cognia_net::proxy_config::application::OwnerRegistration>,
+    /// What the live child was handed for `run_code`, stamped with its
+    /// generation. Set and cleared together with `child`.
+    code_sandbox: Option<crate::code_sandbox::CodeSandboxCapability>,
 }
 
 impl SidecarState {
@@ -856,6 +880,7 @@ impl SidecarState {
         let mut guard = self.inner.lock().await;
         guard.child = None;
         guard.proxy_owner = None;
+        guard.code_sandbox = None;
         guard.ready = false;
         guard.backoff.note_failure(now);
         !std::mem::take(&mut guard.intentional_stop)
@@ -874,6 +899,24 @@ impl SidecarState {
     /// injecting `now`.
     async fn backoff_remaining(&self, now: Instant) -> Option<Duration> {
         self.inner.lock().await.backoff.remaining(now)
+    }
+
+    /// What `run_code` can do on this Host: the live sidecar's own launcher
+    /// state when one is running, else what the next spawn would be handed.
+    pub async fn code_sandbox_capability(&self) -> crate::code_sandbox::CodeSandboxCapability {
+        let live = self.inner.lock().await.code_sandbox.clone();
+        if let Some(live) = live {
+            return live;
+        }
+        // The prediction touches the filesystem (scratch dir, backend binary);
+        // keep it off the async worker an IPC command runs on.
+        tokio::task::spawn_blocking(crate::code_sandbox::predicted_code_sandbox_capability)
+            .await
+            .unwrap_or_else(|_| {
+                crate::code_sandbox::CodeSandboxCapability::unavailable(
+                    crate::code_sandbox::CodeSandboxUnavailable::NoBackend,
+                )
+            })
     }
 
     pub async fn is_ready(&self) -> bool {
@@ -1002,6 +1045,7 @@ async fn spawn_with_runtime(
     // Read together with the config baked into the child's environment below,
     // so the registration names the policy this process actually carries.
     let mut proxy_revision: u64;
+    let mut code_sandbox: crate::code_sandbox::CodeSandboxCapability;
     let mut startup_guard = StartupProcessGuard(None);
     let (child, stdout, stderr, stdin, mut startup_lines) = loop {
         if state.stop_epoch.load(std::sync::atomic::Ordering::SeqCst) != stop_epoch {
@@ -1046,7 +1090,7 @@ async fn spawn_with_runtime(
         // the `run_code` children it forks. We hand it the OS confinement wrapper
         // to exec through instead. When this host has no backend the variable stays
         // unset, and the sidecar then refuses to register `run_code` at all.
-        apply_code_sandbox_env(&mut cmd, &executable, &cwd);
+        code_sandbox = apply_code_sandbox_env(&mut cmd, &executable, &cwd);
 
         let mut child = match cmd.spawn() {
             Ok(child) => child,
@@ -1161,6 +1205,7 @@ async fn spawn_with_runtime(
             cognia_net::proxy_config::application::OwnerKind::AgentRuntime,
             proxy_revision,
         ));
+        guard.code_sandbox = Some(code_sandbox.with_generation(my_epoch));
         guard.ready = false;
     }
     // ADR-0028 Phase 14 — surface the spawn so Diagnostics can show
@@ -1703,6 +1748,21 @@ mod tests {
         fn kind(&self) -> &'static str {
             "runtime-test"
         }
+    }
+
+    #[tokio::test]
+    async fn code_capability_follows_the_live_generation_and_ends_with_it() {
+        use crate::code_sandbox::{CodeSandboxCapability, CodeSandboxUnavailable};
+        let state = SidecarState::new();
+        let live = CodeSandboxCapability::unavailable(CodeSandboxUnavailable::Killed)
+            .with_generation(7);
+        state.inner.lock().await.code_sandbox = Some(live.clone());
+        assert_eq!(state.code_sandbox_capability().await, live);
+
+        state.note_exit(Instant::now()).await;
+        let after = state.code_sandbox_capability().await;
+        assert_eq!(after.generation, None, "a dead generation must not be reported");
+        assert_eq!(after, crate::code_sandbox::predicted_code_sandbox_capability());
     }
 
     #[cfg(unix)]

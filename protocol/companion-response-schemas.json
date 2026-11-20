@@ -7657,7 +7657,7 @@
     },
     "SidecarStatus": {
       "type": "object",
-      "x-cognia-wire-source": "cognia_sidecar::commands::SidecarStatus; liveSessionIds is the Rust-owned active turn registry, optional for older hosts.",
+      "x-cognia-wire-source": "cognia_sidecar::commands::SidecarStatus; liveSessionIds is the Rust-owned active turn registry and codeSandbox the run_code launcher state (cognia_sidecar::code_sandbox::CodeSandboxCapability), both optional for older hosts.",
       "required": ["ready"],
       "properties": {
         "ready": {
@@ -7668,6 +7668,27 @@
           "items": {
             "type": "string"
           }
+        },
+        "codeSandbox": {
+          "type": "object",
+          "required": ["available"],
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "backend": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string",
+              "enum": ["killed", "no-backend", "no-scratch"]
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

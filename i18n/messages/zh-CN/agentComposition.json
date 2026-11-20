@@ -33,6 +33,15 @@
         "both": "原生与代码并存",
         "code": "以代码调用",
         "native": "原生工具"
+      },
+      "unavailable": {
+        "probing": "正在确认此宿主能否在沙箱中运行代码…",
+        "killed": "此版本或宿主已关闭代码工具",
+        "no-backend": "此宿主没有可用于代码的系统沙箱（需要 macOS sandbox-exec 或 Linux bwrap）",
+        "no-scratch": "此宿主无法创建代码沙箱的临时目录",
+        "not-reported": "此宿主未报告代码工具支持，更新后才能使用",
+        "unreachable": "当前没有可运行代码的宿主",
+        "default": "此宿主不可用"
       }
     }
   },

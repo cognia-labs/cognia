@@ -86,12 +86,15 @@ export const CODE_PRESET: AgentPresetDefinitionV1 = {
   source: "builtin",
   version: BUILT_IN_PRESET_VERSION,
   name: "Code",
-  description: "Compose tool calls as code in a sandbox. Read-only in this release.",
+  description:
+    "Compose built-in tool calls as code in a sandbox. The code SDK is read-only; other tools keep their usual permissions.",
   icon: "Code2",
   recommends: { authority: "default", toolPresentation: "code", orchestration: "direct" },
-  // The code SDK reaches read-only tools only, so nothing here can consume a
-  // write permission. Capping at `default` keeps an escalated selection from
-  // implying an editing capability that does not exist.
+  // The code SDK reaches read-only built-ins only. `code` replaces just the
+  // built-in tool surface: the engine's own tools, plugin tools and MCP servers
+  // keep their entry points, so the cap is a permission ceiling for those, not
+  // a claim that the turn is read-only. Capping at `default` keeps an
+  // escalated selection from skipping their approvals.
   maxAuthority: "default",
   experimental: true,
   outputFormat: "markdown",

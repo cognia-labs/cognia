@@ -1,4 +1,8 @@
 const mockResolve = jest.fn()
+const mockHostPresentations = jest.fn()
+jest.mock("@/lib/ai/code-mode/host-capability", () => ({
+  readCodeHostToolPresentations: () => mockHostPresentations(),
+}))
 jest.mock("@/lib/agent/composition/resolve-turn-composition", () => ({
   resolveTurnComposition: (...args: unknown[]) => mockResolve(...args),
   toolSurfaceFromNames: (names: string[]) =>
@@ -27,7 +31,27 @@ describe("resolveTurnCompositionSafely", () => {
       ],
       executionFingerprint: "fp_1",
       selection: undefined,
+      supportedToolPresentations: expect.any(Function),
     })
+  })
+
+  // CM-01: the send path must hand the resolver the execution Host's answer,
+  // or a Code / Both selection reaches the sidecar as `native`.
+  it("hands the resolver the execution Host query", async () => {
+    mockResolve.mockResolvedValue({ presetId: "standard" })
+    mockHostPresentations.mockResolvedValue(["native", "code", "both"])
+    await resolveTurnCompositionSafely({ sessionId: "s1" })
+    const query = mockResolve.mock.calls[0][0].supportedToolPresentations as () => Promise<string[]>
+    await expect(query()).resolves.toEqual(["native", "code", "both"])
+  })
+
+  it("prefers an injected Host query", async () => {
+    mockResolve.mockResolvedValue({ presetId: "standard" })
+    const injected = jest.fn()
+    await resolveTurnCompositionSafely({ hostToolPresentations: injected })
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({ supportedToolPresentations: injected })
+    )
   })
 
   // The seam that stops an IM turn composing from the desktop's localStorage:

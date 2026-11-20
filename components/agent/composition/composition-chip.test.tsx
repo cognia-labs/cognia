@@ -11,9 +11,13 @@ import agentModeMessages from "@/i18n/messages/en/agentMode.json"
 import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
 import { useCustomModeStore } from "@/stores/agent/custom-mode-store"
 
-// The host probe reaches for a Tauri command; the chip only needs the answer.
-jest.mock("@/hooks/agent/use-code-sandbox-presentations", () => ({
-  useCodeSandboxPresentations: () => ["native"],
+// The Host query reaches for a Tauri command; the chip only needs the answer.
+jest.mock("@/hooks/agent/use-code-host-capability", () => ({
+  useCodeHostCapability: () => ({
+    capability: { state: "unavailable", reason: "no-backend" },
+    presentations: ["native"],
+    unavailableReason: "no-backend",
+  }),
 }))
 
 // The executor reads Dexie; the chip only needs its answer. Mutable so a test

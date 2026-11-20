@@ -268,6 +268,11 @@ pub struct SidecarStatus {
     pub ready: bool,
     #[serde(rename = "liveSessionIds")]
     pub live_session_ids: Vec<String>,
+    /// Whether this Host can run `run_code` (ADR-0117 Code / Both), read from
+    /// the launcher the live sidecar was handed. Optional on the wire: an
+    /// older Host omits it, which the renderer reads as unavailable.
+    #[serde(rename = "codeSandbox")]
+    pub code_sandbox: crate::code_sandbox::CodeSandboxCapability,
 }
 
 /// Execution-spec contract versions this host understands.
@@ -532,6 +537,7 @@ pub async fn claude_sidecar_status_impl(state: &SidecarState) -> Result<SidecarS
     Ok(SidecarStatus {
         ready: state.is_ready().await,
         live_session_ids: state.live_session_ids(),
+        code_sandbox: state.code_sandbox_capability().await,
     })
 }
 
@@ -1150,9 +1156,17 @@ mod tests {
             serde_json::to_value(SidecarStatus {
                 ready: true,
                 live_session_ids: vec!["live".into()],
+                code_sandbox: crate::code_sandbox::CodeSandboxCapability::available(
+                    "macos-sandbox-exec",
+                )
+                .with_generation(2),
             })
             .unwrap(),
-            serde_json::json!({ "ready": true, "liveSessionIds": ["live"] })
+            serde_json::json!({
+                "ready": true,
+                "liveSessionIds": ["live"],
+                "codeSandbox": { "available": true, "backend": "macos-sandbox-exec", "generation": 2 },
+            })
         );
     }
 
@@ -1164,7 +1178,14 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(value, json!({ "ready": false, "liveSessionIds": [] }));
+        assert_eq!(value["ready"], json!(false));
+        assert_eq!(value["liveSessionIds"], json!([]));
+        // No sidecar yet: the answer is the next spawn's, with no generation.
+        assert_eq!(
+            value["codeSandbox"],
+            serde_json::to_value(crate::code_sandbox::predicted_code_sandbox_capability()).unwrap()
+        );
+        assert!(value["codeSandbox"].get("generation").is_none());
     }
 
     fn parse(json_str: &str) -> SendOptions {

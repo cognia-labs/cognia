@@ -328,6 +328,77 @@ describe("CompositionPicker", () => {
     }
   })
 
+  // CM-03: Code and Both used to stay selectable on a Host that cannot run
+  // them, so the choice, the summary and the registered surface disagreed.
+  describe("code tool availability", () => {
+    it("keeps Code and Both listed but disabled with the Host's reason", async () => {
+      const { onChange } = renderPicker(
+        { presetId: "standard" },
+        {
+          advancedOpen: true,
+          supportedToolPresentations: ["native"],
+          toolPresentationUnavailableReason: "no-backend",
+        }
+      )
+      await userEvent.click(screen.getByRole("combobox", { name: /tools/i }))
+      for (const name of [/As code/, /Native and code/]) {
+        const option = await screen.findByRole("option", { name })
+        expect(option).toHaveAttribute("aria-disabled", "true")
+        expect(option).toHaveTextContent(
+          compositionMessages.axis.toolPresentation.unavailable["no-backend"]
+        )
+      }
+      const native = screen.getByRole("option", { name: /Native tools/ })
+      expect(native).not.toHaveAttribute("aria-disabled", "true")
+      await userEvent.click(native)
+      expect(onChange).toHaveBeenCalledWith({ presetId: "standard", toolPresentation: "native" })
+    })
+
+    it("says it is still checking while the Host has not answered", async () => {
+      renderPicker(
+        { presetId: "standard" },
+        {
+          advancedOpen: true,
+          supportedToolPresentations: ["native"],
+          toolPresentationUnavailableReason: "probing",
+        }
+      )
+      await userEvent.click(screen.getByRole("combobox", { name: /tools/i }))
+      expect(await screen.findByRole("option", { name: /As code/ })).toHaveTextContent(
+        compositionMessages.axis.toolPresentation.unavailable.probing
+      )
+    })
+
+    it("enables Code and Both when the Host can sandbox", async () => {
+      renderPicker(
+        { presetId: "standard" },
+        { advancedOpen: true, supportedToolPresentations: ["native", "code", "both"] }
+      )
+      await userEvent.click(screen.getByRole("combobox", { name: /tools/i }))
+      expect(await screen.findByRole("option", { name: /As code/ })).not.toHaveAttribute(
+        "aria-disabled",
+        "true"
+      )
+    })
+
+    it("has every reason in both locales", () => {
+      const en = compositionMessages.axis.toolPresentation.unavailable
+      const zh = zhCompositionMessages.axis.toolPresentation.unavailable
+      for (const reason of [
+        "probing",
+        "killed",
+        "no-backend",
+        "no-scratch",
+        "not-reported",
+        "unreachable",
+        "default",
+      ]) {
+        expect(en).toHaveProperty(reason)
+        expect(zh).toHaveProperty(reason)
+      }
+    })
+  })
+
   describe("independent reviewer availability", () => {
     beforeEach(() => hostProfile.mockReturnValue("desktop"))
 

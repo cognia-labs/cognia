@@ -16,7 +16,7 @@ import { appPresetCatalog } from "./app-preset-catalog"
 import { resolveComposition } from "./resolve-composition"
 import { digestPromptSurface, digestToolSurface, withCompositionDigest } from "./digest"
 import type { PromptSurface, ToolSurfaceEntry } from "./digest"
-import { hostToolPresentations } from "@/lib/ai/code-mode/host-probe"
+import { isSandboxedPresentation } from "@/lib/ai/code-mode/availability"
 // `AgentPermissionMode` is owned by the package root; `agent-composition`
 // imports it as a dependency and does not re-export it.
 import type { AgentPermissionMode } from "@cognia/agent-config-types"
@@ -24,7 +24,11 @@ import type {
   AgentCompositionSelectionV1,
   AgentPresetDefinitionV1,
   ResolvedAgentCompositionV1,
+  ToolPresentationMode,
 } from "@cognia/agent-config-types/agent-composition"
+
+/** What a caller with no Host to ask may offer: the fail-closed answer. */
+const NATIVE_ONLY: readonly ToolPresentationMode[] = Object.freeze(["native"])
 
 export interface ResolveTurnCompositionInput {
   /** Absent for a turn with no session (e.g. a one-shot completion). */
@@ -37,10 +41,18 @@ export interface ResolveTurnCompositionInput {
   ceiling?: AgentPermissionMode
   /** `resolveAgentExecutionSpec()`'s fingerprint, so the two identities pair up. */
   executionFingerprint?: string
-  /** Overrides for tests; production reads the catalog and the host probe. */
+  /** Overrides for tests; production reads the catalog. */
   presets?: readonly AgentPresetDefinitionV1[]
   selection?: AgentCompositionSelectionV1
-  supportedToolPresentations?: ReturnType<typeof hostToolPresentations>
+  /**
+   * What the execution Host can run. A list is used as given. A function is
+   * the Host query, called only when the selection asks for a sandboxed
+   * presentation, so a native turn never pays a Host round trip. Absent means
+   * native only: the fail-closed answer for a caller with no Host to ask (the
+   * CLI's agent definitions, whose sidecar is never handed a launcher).
+   */
+  supportedToolPresentations?:
+    readonly ToolPresentationMode[] | (() => Promise<readonly ToolPresentationMode[]>)
 }
 
 /**
@@ -66,19 +78,33 @@ export async function resolveTurnComposition(
     digestToolSurface(input.tools ?? []),
   ])
 
-  const resolved = resolveComposition({
+  const base = {
     selection,
     presets,
     ceiling: input.ceiling,
-    // The host decides whether `code` is even on the table. Passing the probe
-    // result here is what makes the fail-closed rule reach the wire: an
-    // unsandboxed host resolves a `code` selection down to `native` with a
-    // warning, and the sidecar is then told `native`.
-    supportedToolPresentations: input.supportedToolPresentations ?? hostToolPresentations(),
     promptDigest,
     toolDigest,
     ...(input.executionFingerprint ? { executionFingerprint: input.executionFingerprint } : {}),
-  })
+  }
+  // The Host decides whether `code` is even on the table. Passing its answer
+  // here is what makes the fail-closed rule reach the wire: a Host that cannot
+  // sandbox resolves a `code` selection down to `native` with a warning, and
+  // the sidecar is then told `native`.
+  const supported = input.supportedToolPresentations
+  let resolved: ReturnType<typeof resolveComposition>
+  if (typeof supported === "function") {
+    const requested = resolveComposition(base)
+    if (!isSandboxedPresentation(requested.toolPresentation)) {
+      resolved = requested
+    } else {
+      const offered = await supported()
+      resolved = offered.includes(requested.toolPresentation)
+        ? requested
+        : resolveComposition({ ...base, supportedToolPresentations: offered })
+    }
+  } else {
+    resolved = resolveComposition({ ...base, supportedToolPresentations: supported ?? NATIVE_ONLY })
+  }
 
   return withCompositionDigest(resolved)
 }
