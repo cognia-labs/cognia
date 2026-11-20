@@ -379,9 +379,7 @@ it("uploads scanned PDFs through the shared OCR route and preserves page ranges"
     contentHash: "ocr",
     textLength: 12,
     nodes: [],
-    pages: [
-      { pageNumber: 2, charStart: 0, charEnd: 12, lineStart: 1, lineEnd: 1, provenance: "ocr" },
-    ],
+    pages: [{ pageNumber: 2, charStart: 0, charEnd: 12, lineStart: 1, lineEnd: 1, status: "ocr" }],
   }
   runTwinPdfOcrWithProvenance.mockResolvedValue({
     originalText: "Exact source",
@@ -420,7 +418,7 @@ it("threads native digital-page boxes into mixed PDF OCR without recomputing coo
         charEnd: content.length - 2,
         lineStart: 1,
         lineEnd: 1,
-        provenance: "text-layer",
+        status: "text",
       },
       {
         pageNumber: 2,
@@ -428,7 +426,7 @@ it("threads native digital-page boxes into mixed PDF OCR without recomputing coo
         charEnd: content.length,
         lineStart: 3,
         lineEnd: 3,
-        provenance: "text-layer",
+        status: "text",
       },
     ],
   }

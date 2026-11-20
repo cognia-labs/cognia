@@ -4,12 +4,14 @@
  */
 
 import {
+  delimitedTable,
   placeTableRows,
   tableGrid,
   type SourceRowGroup,
   type SourceTableCell,
 } from "./document-tables"
 import { DocumentLimitError } from "./limits"
+import type { DocumentTable } from "./types"
 
 // TableData is inlined here (mirrors `lib/export/document/excel-export.ts`
 // in Cognia). cognia-next does not yet host the Excel export module, so we
@@ -165,7 +167,7 @@ export function extractHTMLTables(content: string): ExtractedTable[] {
   const tables: ExtractedTable[] = []
 
   // Simple regex-based extraction (for basic tables)
-  const tableRegex = /<table[^>]*>([\s\S]*?)<\/table>/gi
+  const tableRegex = /<table\b[^>]*>([\s\S]*?)<\/table>/gi
   let match
 
   while ((match = tableRegex.exec(content)) !== null) {
@@ -189,24 +191,70 @@ export function extractHTMLTables(content: string): ExtractedTable[] {
  * is repeated into the positions it covers. The first row is the headers.
  */
 function parseHTMLTable(html: string, startIndex: number, endIndex: number): ExtractedTable | null {
-  let placed: ReturnType<typeof placeTableRows>
-  try {
-    placed = placeTableRows(htmlRowGroups(html))
-  } catch (error) {
-    // A table whose spans would lay out a grid past the cell budget is left
-    // out rather than built.
-    if (error instanceof DocumentLimitError) return null
-    throw error
-  }
-  if (placed.rowCount === 0 || placed.columnCount === 0) return null
-  const { grid } = tableGrid({ index: 0, ...placed })
+  const table = htmlGridTable(html)
+  if (!table) return null
+  const { grid } = tableGrid({ index: 0, ...table })
   return {
     headers: grid[0],
     rows: grid.slice(1),
+    ...(table.caption ? { title: table.caption } : {}),
     sourceType: "html",
     startIndex,
     endIndex,
   }
+}
+
+/**
+ * One `<table>`'s markup as a typed grid, or `null` for a table with no
+ * cells or one whose spans would lay out past the cell budget.
+ */
+function htmlGridTable(html: string): Omit<DocumentTable, "index"> | null {
+  let placed: ReturnType<typeof placeTableRows>
+  try {
+    placed = placeTableRows(htmlRowGroups(html))
+  } catch (error) {
+    if (error instanceof DocumentLimitError) return null
+    throw error
+  }
+  if (placed.rowCount === 0 || placed.columnCount === 0) return null
+  const caption = /<caption\b[^>]*>([\s\S]*?)<\/caption>/i.exec(html)
+  const captionText = caption ? stripHtmlTags(caption[1]).replace(/\s+/g, " ").trim() : ""
+  return { ...(captionText ? { caption: captionText } : {}), ...placed }
+}
+
+/**
+ * The tables in Markdown or HTML content as typed grids, in the order they
+ * appear: GFM pipe tables (a header row over a `---` separator) headed by
+ * that row, unless it is empty, and HTML tables with their spans. An OCR
+ * provider writes a page's tables either way (Azure Document Intelligence
+ * as HTML, others as pipe tables).
+ */
+export function extractDocumentTables(content: string): DocumentTable[] {
+  const found: { offset: number; table: Omit<DocumentTable, "index"> }[] = []
+  const lines = content.split("\n")
+  const lineOffsets: number[] = []
+  let offset = 0
+  for (const line of lines) {
+    lineOffsets.push(offset)
+    offset += line.length + 1
+  }
+  for (const table of extractMarkdownTables(content)) {
+    if (!/^\|[\s\-:|]+\|$/.test(lines[table.startIndex + 1]?.trim() ?? "")) continue
+    const headers = table.headers.some((header) => header !== "") ? table.headers : []
+    const { index: _index, ...typed } = delimitedTable(headers, table.rows, 0)
+    if (typed.rowCount > 0 && typed.columnCount > 0) {
+      found.push({ offset: lineOffsets[table.startIndex], table: typed })
+    }
+  }
+  const tableRegex = /<table\b[^>]*>[\s\S]*?<\/table>/gi
+  let match
+  while ((match = tableRegex.exec(content)) !== null) {
+    const table = htmlGridTable(match[0])
+    if (table) found.push({ offset: match.index, table })
+  }
+  return found
+    .sort((a, b) => a.offset - b.offset)
+    .map(({ table }, index) => ({ index: index + 1, ...table }))
 }
 
 /** A table's rows by section: `<thead>`, each body and loose rows in order, `<tfoot>` last. */

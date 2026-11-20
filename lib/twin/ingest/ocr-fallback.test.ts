@@ -111,11 +111,13 @@ describe("maybeTwinPdfOcrWithProvenance", () => {
     ).toBeNull()
   })
 
-  it("returns null when OCR yields blank text", async () => {
+  it("records a page OCR found blank, instead of discarding the run (G2)", async () => {
     const ex = jest.fn(async () => ocrResult("   "))
-    expect(
-      await maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf: ex }))
-    ).toBeNull()
+    const out = await maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf: ex }))
+    expect(out?.originalText).toBe("")
+    expect(out?.structure?.pages).toEqual([
+      expect.objectContaining({ pageNumber: 1, status: "blank" }),
+    ])
   })
 
   it("hands the router the job's signal and stops with its reason (G5)", async () => {
@@ -195,7 +197,7 @@ describe("OCR provenance", () => {
           charEnd: 50,
           lineStart: 1,
           lineEnd: 1,
-          provenance: "text-layer",
+          status: "text",
         },
         {
           pageNumber: 2,
@@ -203,7 +205,7 @@ describe("OCR provenance", () => {
           charEnd: 52,
           lineStart: 3,
           lineEnd: 3,
-          provenance: "text-layer",
+          status: "text",
         },
       ],
     }
@@ -218,7 +220,133 @@ describe("OCR provenance", () => {
     expect(extractPdf).toHaveBeenCalledTimes(1)
     expect(result?.originalText).toBe("Digital page\n\nScanned answer")
     expect(result?.pageMap?.[1]).toMatchObject({ pageNumber: 2, charStart: 14, charEnd: 28 })
-    expect(result?.structure?.pages[1].provenance).toBe("ocr")
-    expect(result?.structure?.pages[0].provenance).toBe("text-layer")
+    expect(result?.structure?.pages[1].status).toBe("ocr")
+    expect(result?.structure?.pages[0].status).toBe("text")
+  })
+})
+
+describe("page status, confidence and tables (G2)", () => {
+  /** A parse whose text layer has `texts[i]` on page i + 1. */
+  function textLayer(texts: string[]): ParsedSource {
+    const source = parsed(texts.join("\n\n"))
+    let cursor = 0
+    source.structure = {
+      version: 1,
+      contentHash: "layer",
+      textLength: source.originalText.length,
+      nodes: [],
+      pages: texts.map((text, index) => {
+        const page = {
+          pageNumber: index + 1,
+          charStart: cursor,
+          charEnd: cursor + text.length,
+          lineStart: 1,
+          lineEnd: 1,
+          status: text.trim() ? ("text" as const) : ("no-text-layer" as const),
+        }
+        cursor += text.length + 2
+        return page
+      }),
+    }
+    source.pageMap = [
+      { pageNumber: 3, charStart: 0, charEnd: 0, bboxUnion: { x: 1, y: 2, width: 3, height: 4 } },
+    ]
+    return source
+  }
+
+  it("keeps the pages around one OCR cannot read, that one with its text-layer text", async () => {
+    const extractPdf = jest.fn(
+      async (
+        _input: unknown,
+        routerDeps: {
+          continueOnPageError?: boolean
+          onPageError?: (error: unknown, page: number, done: number, total: number) => void
+        }
+      ) => {
+        // The router skips a failed page only when told to.
+        expect(routerDeps.continueOnPageError).toBe(true)
+        routerDeps.onPageError?.(new Error("provider timeout"), 3, 3, 3)
+        return {
+          ...ocrResult("ignored"),
+          pages: [
+            { pageNumber: 1, text: "Digital page text", markdown: "", fromTextLayer: true },
+            {
+              pageNumber: 2,
+              text: "Scanned words",
+              markdown: "Scanned words",
+              fromTextLayer: false,
+            },
+          ],
+        }
+      }
+    )
+    const out = await maybeTwinPdfOcrWithProvenance(
+      raw(),
+      textLayer(["Digital page text", "", "pg 3"]),
+      deps({ extractPdf })
+    )
+    expect(out?.originalText).toBe("Digital page text\n\nScanned words\n\npg 3")
+    expect(out?.structure?.pages.map((page) => [page.pageNumber, page.status])).toEqual([
+      [1, "text"],
+      [2, "ocr"],
+      [3, "ocr-failed"],
+    ])
+    // The failed page's text is the text layer's, so its native box still holds.
+    expect(out?.structure?.pages[2].bboxUnion).toEqual({ x: 1, y: 2, width: 3, height: 4 })
+  })
+
+  it("keeps what the text layer had when OCR finds nothing on a page", async () => {
+    const extractPdf = jest.fn(async () => ({
+      ...ocrResult("ignored"),
+      pages: [{ pageNumber: 1, text: " ", markdown: " ", fromTextLayer: false }],
+    }))
+    const out = await maybeTwinPdfOcrWithProvenance(raw(), textLayer(["12"]), deps({ extractPdf }))
+    expect(out?.originalText).toBe("12")
+    expect(out?.structure?.pages[0].status).toBe("text")
+  })
+
+  it("gives a page the mean of its blocks' confidences, and none when no block has one", async () => {
+    const extractPdf = jest.fn(async () => ({
+      ...ocrResult("ignored"),
+      pages: [
+        {
+          pageNumber: 1,
+          text: "Scored",
+          markdown: "Scored",
+          blocks: [{ text: "a", confidence: 0.9 }, { text: "b", confidence: 0.5 }, { text: "c" }],
+        },
+        { pageNumber: 2, text: "Unscored", markdown: "Unscored", blocks: [{ text: "d" }] },
+      ],
+    }))
+    const out = await maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf }))
+    expect(out?.structure?.pages[0].confidence).toBeCloseTo(0.7)
+    expect(out?.structure?.pages[1]).not.toHaveProperty("confidence")
+  })
+
+  it("keeps the tables the provider wrote on its pages, located by page", async () => {
+    const azure =
+      "Intro\n<table><tr><th>Region</th><th>Q1</th></tr>" +
+      "<tr><td rowspan='2'>North</td><td>1</td></tr><tr><td>2</td></tr></table>"
+    const pipe = "| Item | Cost |\n| --- | --- |\n| Pen | 3 |"
+    const extractPdf = jest.fn(async () => ({
+      ...ocrResult("ignored"),
+      pages: [
+        { pageNumber: 1, text: "Intro Region Q1 North 1 2", markdown: azure },
+        { pageNumber: 2, text: "Item Cost Pen 3", markdown: pipe },
+      ],
+    }))
+    const out = await maybeTwinPdfOcrWithProvenance(raw(), parsed(""), deps({ extractPdf }))
+    const tables = out?.structure?.tables ?? []
+    expect(tables.map((table) => [table.index, table.locator])).toEqual([
+      [1, { type: "page", page: 1 }],
+      [2, { type: "page", page: 2 }],
+    ])
+    expect(tables[0].cells).toContainEqual(
+      expect.objectContaining({ row: 1, column: 0, rowSpan: 2, text: "North" })
+    )
+    expect(tables[0].cells).toContainEqual(
+      expect.objectContaining({ row: 2, column: 1, text: "2" })
+    )
+    expect(tables[1]).toMatchObject({ rowCount: 2, columnCount: 2, headerRowCount: 1 })
   })
 })

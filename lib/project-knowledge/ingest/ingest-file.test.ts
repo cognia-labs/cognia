@@ -151,7 +151,7 @@ it("retains original markdown headings and records PDF page locations", async ()
         charEnd: content.length,
         lineStart: 1,
         lineEnd: 2,
-        provenance: "text-layer" as const,
+        status: "text" as const,
       },
     ],
   }
@@ -201,7 +201,7 @@ it("rejects stale page ranges after editing the canonical source", async () => {
             charEnd: 100,
             lineStart: 1,
             lineEnd: 1,
-            provenance: "ocr",
+            status: "ocr",
           },
         ],
       },

@@ -63,7 +63,9 @@ await progress(job.id, `chunking:${raw.filename}`, (stageBase + 3) / TOTAL_STAGE
 
 ### 2 · parse
 
-`parseSource(raw)`（`parse.ts:69`）产出含两份文本的 `ParsedSource`：`originalText`（逐字节、含 PII）与 `embeddableText`（尽力去格式化、进入脱敏的子集）。二进制文档走 `processDocumentAsync`（`mammoth` / `pdfjs-dist`），文本文档走 `processDocument`，导入器族被惰性 `import()` 并由 `collectImporterText`（`parse.ts:203`）归约成一个 markdown 块。
+`parseSource(raw)`（`parse.ts:69`）产出含两份文本的 `ParsedSource`：`originalText`（逐字节、含 PII）与 `embeddableText`（尽力去格式化、进入脱敏的子集）。所有文档（二进制与文本）都走 `processDocumentAsync`，导入器族被惰性 `import()` 并由 `collectImporterText` 归约成一个 markdown 块。任务的 `AbortSignal` 会传入（`parseSource(raw, { signal })`），暂停或取消时 PDF 在页与页之间停下、AnyDoc worker 被取消，而不是先把大文档解析完。
+
+文本层（几乎）为空或有稀疏页的 PDF 随后进入 OCR 回退（`runTwinPdfOcrWithProvenance`，`ocr-fallback.ts`），它同样接收该 signal。结果的每一页在 `structure.pages` 中记录 `status`：`text`（文本层）、`ocr`、`blank`（OCR 未识别到文字）、`ocr-failed`（该页无法读取：保留其文本层文字，其余页照常保留），以及尚未 OCR 时的 `no-text-layer`。OCR 页只有在 provider 给出块置信度时才带 `confidence`（各块置信度的均值）。provider 在页内写出的表格（HTML 或管道表格）以按页定位的类型化网格进入 `structure.tables`。只有路由器完全无法打开的文档才保留纯文本层解析结果。
 
 ### 3 · redact —— 隐私红线
 

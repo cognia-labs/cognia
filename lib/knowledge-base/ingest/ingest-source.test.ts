@@ -109,7 +109,7 @@ describe("ingestKnowledgeBaseSource", () => {
           charEnd: originalText.length,
           lineStart: 1,
           lineEnd: 2,
-          provenance: "ocr",
+          status: "ocr",
         },
       ],
     })

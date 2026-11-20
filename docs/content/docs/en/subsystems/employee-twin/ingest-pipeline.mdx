@@ -73,9 +73,19 @@ file extension to a format for the uploader.
 
 `parseSource(raw)` (`parse.ts:69`) produces a `ParsedSource` with two text fields: `originalText`
 (byte-for-byte, PII-present) and `embeddableText` (the best-effort scrubbed-of-formatting subset that goes
-into redaction). Binary documents route to `processDocumentAsync` (`mammoth` / `pdfjs-dist`), text documents
-to `processDocument`, and importer families are `import()`-ed lazily and reduced to one markdown blob by
-`collectImporterText` (`parse.ts:203`).
+into redaction). Every document goes through `processDocumentAsync` (binary and text alike), and importer
+families are `import()`-ed lazily and reduced to one markdown blob by `collectImporterText`. The job's
+`AbortSignal` is passed in (`parseSource(raw, { signal })`), so a pause or cancel stops a PDF between pages
+and cancels the AnyDoc worker instead of letting a large document finish first.
+
+A PDF whose text layer is (near-)empty, or has a sparse page, then goes through the OCR fallback
+(`runTwinPdfOcrWithProvenance`, `ocr-fallback.ts`), which also takes the signal. Each page of the result
+records its `status` in `structure.pages`: `text` (text layer), `ocr`, `blank` (OCR found nothing),
+`ocr-failed` (that page could not be read: it keeps its text-layer text and the other pages are kept), or,
+before any OCR, `no-text-layer`. An OCR'd page carries `confidence` (the mean of the provider's block
+confidences) only when the provider reports one. Tables the provider wrote on a page, as HTML or pipe
+tables, land in `structure.tables` as typed grids located by page. Only a document the router cannot open at
+all keeps the plain text-layer parse.
 
 ### 3 · redact — the privacy red-line
 

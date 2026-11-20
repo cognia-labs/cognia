@@ -9,15 +9,25 @@
  *
  * The OCR'd text then flows through the unchanged redact → chunk → embed →
  * persist chain (the existing PII redaction gate applies automatically).
- * Best-effort: any failure falls back to whatever the text layer produced,
- * except a cancellation, which stops the ingest job with the signal's reason.
+ * Each page records where its text came from (`DocumentPageStatus`) and,
+ * when the provider reports block confidences, their mean; a page OCR cannot
+ * read keeps its text-layer text and reads `ocr-failed`, and tables the
+ * provider recognised are kept as typed grids located by page (G2).
+ * Best-effort: a document the router cannot read at all keeps the text
+ * layer, except on cancellation, which stops the job with the signal's reason.
  */
 
 import type { PdfRouterDeps, PdfRouterInput } from "@cognia/ocr/pdf-router"
 import { loadPort } from "@/lib/modules/ports"
-import type { OcrResult } from "@/types/ocr"
+import type { OcrBlock, OcrResult } from "@/types/ocr"
 import { buildDocumentStructure } from "@cognia/document/document-structure"
-import type { DocumentPageRange } from "@cognia/document/types"
+import { extractDocumentTables } from "@cognia/document/table-extractor"
+import type {
+  DocumentPageRange,
+  DocumentPageStatus,
+  DocumentTable,
+  PDFOutlineItem,
+} from "@cognia/document/types"
 import type { ParsedSource, RawSource } from "./parse"
 
 /** Below this many non-whitespace chars a PDF is treated as scanned → OCR. */
@@ -64,70 +74,143 @@ export async function maybeTwinPdfOcrWithProvenance(
   )
   if (!sparsePage && nonWhitespaceLength(parsed.originalText) >= threshold) return null
   const bytes = raw.binary instanceof Uint8Array ? raw.binary : new Uint8Array(raw.binary)
+  // A page OCR cannot read is recorded and skipped: the pages around it are
+  // kept, rather than one bad page discarding the whole run.
+  const failedPages = new Set<number>()
+  let result: OcrResult
   try {
-    const result = await deps.extractPdf(
+    result = await deps.extractPdf(
       { bytes },
-      { ...deps.buildPdfRouterDeps(), ...(signal ? { signal } : {}) }
-    )
-    const text = result.pages.length
-      ? result.pages.map((page) => page.text).join("\n\n")
-      : result.combinedText
-    if (!text.trim()) return null
-    let cursor = 0
-    const pages: DocumentPageRange[] = result.pages.map((page) => {
-      const charStart = cursor
-      const charEnd = cursor + page.text.length
-      cursor = charEnd + 2
-      return {
-        pageNumber: page.pageNumber,
-        charStart,
-        charEnd,
-        lineStart: text.slice(0, charStart).split("\n").length,
-        lineEnd: text.slice(0, Math.max(charStart, charEnd - 1)).split("\n").length,
-        provenance: page.fromTextLayer ? "text-layer" : "ocr",
-        ...(page.fromTextLayer &&
-        parsed.pageMap?.find((entry) => entry.pageNumber === page.pageNumber)?.bboxUnion
-          ? {
-              bboxUnion: parsed.pageMap.find((entry) => entry.pageNumber === page.pageNumber)!
-                .bboxUnion,
-            }
-          : {}),
+      {
+        ...deps.buildPdfRouterDeps(),
+        ...(signal ? { signal } : {}),
+        continueOnPageError: true,
+        onPageError: (_error, pageNumber) => {
+          failedPages.add(pageNumber)
+        },
       }
-    })
-    // Preserve bookmarks by mapping their source page into the new canonical text.
-    const outlineNodes = parsed.structure?.nodes ?? []
-    const outlineChildren = (parentId: string): import("@cognia/document/types").PDFOutlineItem[] =>
-      outlineNodes
-        .filter((node) => node.parentId === parentId)
-        .map((node) => ({
-          title: node.title,
-          pageNumber: node.pageStart,
-          children: outlineChildren(node.id),
-        }))
-    const outline = outlineChildren("root")
-    const structure = buildDocumentStructure({
-      content: text,
-      title: parsed.title,
-      pages,
-      ...(outline?.length
-        ? { pdf: { text, pages: [], pageCount: pages.length, metadata: {}, outline } }
-        : {}),
-    })
-    return {
-      originalText: text,
-      embeddableText: text,
-      pageMap: pages.map(({ pageNumber, charStart, charEnd, bboxUnion }) => ({
-        pageNumber,
-        charStart,
-        charEnd,
-        ...(bboxUnion ? { bboxUnion } : {}),
-      })),
-      structure,
-    }
+    )
   } catch {
+    // The document as a whole could not be read: keep the text layer.
     signal?.throwIfAborted()
     return null
   }
+
+  const textLayerPage = (pageNumber: number) =>
+    parsed.structure?.pages.find((page) => page.pageNumber === pageNumber)
+  const textLayerText = (pageNumber: number) => {
+    const range = textLayerPage(pageNumber)
+    return range ? parsed.originalText.slice(range.charStart, range.charEnd) : ""
+  }
+  const ocrPages = new Map(result.pages.map((page) => [page.pageNumber, page]))
+  const pageNumbers = [...new Set([...ocrPages.keys(), ...failedPages])].sort((a, b) => a - b)
+  if (pageNumbers.length === 0) return null
+
+  const read = pageNumbers.map((pageNumber): ReadPage => {
+    const page = ocrPages.get(pageNumber)
+    if (!page) return { pageNumber, text: textLayerText(pageNumber), status: "ocr-failed" }
+    if (page.fromTextLayer) return { pageNumber, text: page.text, status: "text" }
+    if (!page.text.trim()) {
+      // OCR found nothing: what little the text layer had is still the page's.
+      const fallback = textLayerText(pageNumber)
+      return { pageNumber, text: fallback, status: fallback.trim() ? "text" : "blank" }
+    }
+    const confidence = meanConfidence(page.blocks)
+    return {
+      pageNumber,
+      text: page.text,
+      status: "ocr",
+      markdown: page.markdown,
+      ...(confidence !== undefined ? { confidence } : {}),
+    }
+  })
+  const text = read.map((page) => page.text).join("\n\n")
+
+  let cursor = 0
+  const pages: DocumentPageRange[] = read.map((page) => {
+    const charStart = cursor
+    const charEnd = cursor + page.text.length
+    cursor = charEnd + 2
+    // Native boxes hold for text the text layer gave, not for OCR'd text.
+    const bboxUnion =
+      page.status === "ocr" || page.status === "blank"
+        ? undefined
+        : parsed.pageMap?.find((entry) => entry.pageNumber === page.pageNumber)?.bboxUnion
+    return {
+      pageNumber: page.pageNumber,
+      charStart,
+      charEnd,
+      lineStart: text.slice(0, charStart).split("\n").length,
+      lineEnd: text.slice(0, Math.max(charStart, charEnd - 1)).split("\n").length,
+      status: page.status,
+      ...(page.confidence !== undefined ? { confidence: page.confidence } : {}),
+      ...(bboxUnion ? { bboxUnion } : {}),
+    }
+  })
+
+  // Tables the provider recognised on its pages (Azure writes HTML tables,
+  // others pipe tables), located by page.
+  const tables: DocumentTable[] = read
+    .flatMap((page) =>
+      page.markdown
+        ? extractDocumentTables(page.markdown).map((table) => ({
+            ...table,
+            locator: { type: "page" as const, page: page.pageNumber },
+          }))
+        : []
+    )
+    .map((table, index) => ({ ...table, index: index + 1 }))
+
+  // Preserve bookmarks by mapping their source page into the new canonical text.
+  const outlineNodes = parsed.structure?.nodes ?? []
+  const outlineChildren = (parentId: string): PDFOutlineItem[] =>
+    outlineNodes
+      .filter((node) => node.parentId === parentId)
+      .map((node) => ({
+        title: node.title,
+        pageNumber: node.pageStart,
+        children: outlineChildren(node.id),
+      }))
+  const outline = outlineChildren("root")
+  const structure = buildDocumentStructure({
+    content: text,
+    title: parsed.title,
+    pages,
+    ...(outline.length
+      ? { pdf: { text, pages: [], pageCount: pages.length, metadata: {}, outline } }
+      : {}),
+    ...(tables.length > 0 ? { tables } : {}),
+  })
+  return {
+    originalText: text,
+    embeddableText: text,
+    pageMap: pages.map(({ pageNumber, charStart, charEnd, bboxUnion }) => ({
+      pageNumber,
+      charStart,
+      charEnd,
+      ...(bboxUnion ? { bboxUnion } : {}),
+    })),
+    structure,
+  }
+}
+
+/** One page as the fallback read it. */
+interface ReadPage {
+  pageNumber: number
+  text: string
+  status: DocumentPageStatus
+  /** The provider's Markdown, for an OCR'd page: where its tables are. */
+  markdown?: string
+  confidence?: number
+}
+
+/** The mean of the blocks' confidences, or undefined when none reports one. */
+function meanConfidence(blocks: readonly OcrBlock[] | undefined): number | undefined {
+  const values = (blocks ?? [])
+    .map((block) => block.confidence)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+  if (values.length === 0) return undefined
+  return values.reduce((sum, value) => sum + value, 0) / values.length
 }
 
 /**

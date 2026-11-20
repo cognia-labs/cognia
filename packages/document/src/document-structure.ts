@@ -53,7 +53,7 @@ export function buildDocumentStructure(input: {
         charEnd: end,
         lineStart: lineAt(start),
         lineEnd: lineAt(Math.max(start, end - 1)),
-        provenance: "text-layer",
+        status: page.text.trim() ? "text" : "no-text-layer",
       })
       cursor = end + 2
     }

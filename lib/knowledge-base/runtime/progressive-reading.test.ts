@@ -90,20 +90,20 @@ it("validates ranges, page absence, section ids and document version", async () 
 it("uses page provenance and inclusive page selections", async () => {
   const { reader, snapshot } = fixture()
   snapshot.structure!.pages = [
-    { pageNumber: 1, charStart: 0, charEnd: 21, lineStart: 1, lineEnd: 2, provenance: "ocr" },
+    { pageNumber: 1, charStart: 0, charEnd: 21, lineStart: 1, lineEnd: 2, status: "ocr" },
     {
       pageNumber: 2,
       charStart: 21,
       charEnd: text.length,
       lineStart: 3,
       lineEnd: 8,
-      provenance: "text-layer",
+      status: "text",
     },
   ]
   expect(await reader.readRange({ ...identity, pageStart: 2 })).toMatchObject({
     charStart: 21,
     text: text.slice(21),
-    pages: [expect.objectContaining({ provenance: "text-layer" })],
+    pages: [expect.objectContaining({ status: "text" })],
   })
   expect(await reader.locate({ ...identity, pageStart: 1 })).toMatchObject({ pageNumber: 1 })
 })

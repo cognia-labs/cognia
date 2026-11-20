@@ -80,13 +80,30 @@ export interface DocumentSection {
   summary?: string
 }
 
+/**
+ * Where a page's text came from, and how far reading it got:
+ * - `text`: the PDF's own text layer.
+ * - `no-text-layer`: the text layer holds no text and no OCR ran, so whether
+ *   the page is blank or a scan is unknown.
+ * - `ocr`: recognised by OCR.
+ * - `blank`: OCR ran and found no text.
+ * - `ocr-failed`: OCR of the page failed; the page keeps what its text layer
+ *   had, which may be nothing.
+ */
+export type DocumentPageStatus = "text" | "no-text-layer" | "ocr" | "blank" | "ocr-failed"
+
 export interface DocumentPageRange {
   pageNumber: number
   charStart: number
   charEnd: number
   lineStart: number
   lineEnd: number
-  provenance: "text-layer" | "ocr"
+  status: DocumentPageStatus
+  /**
+   * 0–1, the mean confidence of the blocks the OCR provider recognised on the
+   * page. Absent where the provider reports none: unknown, not certain.
+   */
+  confidence?: number
   bboxUnion?: { x: number; y: number; width: number; height: number }
 }
 

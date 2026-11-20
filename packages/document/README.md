@@ -38,7 +38,16 @@ same way. Markdown and plain text are projections: Markdown has no merged
 cells, so `tableToMarkdown` repeats a merged value into the positions it
 covers and the processor reports `table_merges_projected`. Each grid,
 including the positions no cell covers, counts against `maxExpandedCells`.
-Slide tables (PPTX / ODP) and PDF / OCR tables are not typed yet.
+`extractDocumentTables` reads the pipe and HTML tables in Markdown content the
+same way; the application's OCR fallback uses it for the tables an OCR
+provider writes on a page, located by page. Slide tables (PPTX / ODP) and
+tables in a PDF's text layer are not typed yet.
+
+Each page range has a `status`: `text` (the PDF text layer), `no-text-layer`
+(empty text layer, no OCR run: blank or scanned is unknown), `ocr`, `blank`
+(OCR found nothing) or `ocr-failed` (the page keeps its text-layer text). An
+OCR'd page carries `confidence` only when the provider reports block
+confidences; absent means unknown.
 
 `buildTextDocumentStructure` backfills text documents through the existing
 Markdown parser. PDF processing extracts bookmarks by default (override with

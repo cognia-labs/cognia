@@ -5,6 +5,7 @@
 import {
   extractTables,
   extractMarkdownTables,
+  extractDocumentTables,
   extractHTMLTables,
   hasTable,
   extractedTableToTableData,
@@ -145,6 +146,13 @@ describe("extractHTMLTables", () => {
     )
     expect(table.headers).toEqual(["h"])
     expect(table.rows).toEqual([["v"], ["sum"]])
+  })
+
+  it("takes a table's caption as its title", () => {
+    const [table] = extractHTMLTables(
+      "<table><caption> Q1  sales </caption><tr><th>a</th></tr></table>"
+    )
+    expect(table.title).toBe("Q1 sales")
   })
 
   it("leaves out a table whose spans would lay out past the cell budget, and an empty one", () => {
@@ -419,5 +427,58 @@ describe("getTableStats", () => {
     }
     const stats = getTableStats(table)
     expect(stats.numericColumnCount).toBe(1)
+  })
+})
+
+describe("extractDocumentTables", () => {
+  it("reads pipe and HTML tables as typed grids in the order they appear (G2)", () => {
+    const content = [
+      "<table><tr><td colspan='2'>Merged</td></tr><tr><td>a</td><td>b</td></tr></table>",
+      "",
+      "| Item | Cost |",
+      "| --- | --- |",
+      "| Pen | 3 |",
+      "",
+      "| not | a table |",
+      "| without | separator |",
+    ].join("\n")
+    const tables = extractDocumentTables(content)
+    expect(tables).toEqual([
+      {
+        index: 1,
+        rowCount: 2,
+        columnCount: 2,
+        headerRowCount: 0,
+        cells: [
+          { row: 0, column: 0, rowSpan: 1, columnSpan: 2, text: "Merged" },
+          { row: 1, column: 0, rowSpan: 1, columnSpan: 1, text: "a" },
+          { row: 1, column: 1, rowSpan: 1, columnSpan: 1, text: "b" },
+        ],
+      },
+      {
+        index: 2,
+        rowCount: 2,
+        columnCount: 2,
+        headerRowCount: 1,
+        cells: [
+          { row: 0, column: 0, rowSpan: 1, columnSpan: 1, text: "Item", header: true },
+          { row: 0, column: 1, rowSpan: 1, columnSpan: 1, text: "Cost", header: true },
+          { row: 1, column: 0, rowSpan: 1, columnSpan: 1, text: "Pen" },
+          { row: 1, column: 1, rowSpan: 1, columnSpan: 1, text: "3" },
+        ],
+      },
+    ])
+  })
+
+  it("reads an empty pipe header row, as a header-less table projects, as no header", () => {
+    const [table] = extractDocumentTables("|  |  |\n| --- | --- |\n| x | y |")
+    expect(table).toMatchObject({ rowCount: 1, headerRowCount: 0 })
+  })
+
+  it("keeps an HTML table's caption", () => {
+    const [table] = extractDocumentTables(
+      "<table><caption>Totals</caption><tr><td>1</td></tr></table>"
+    )
+    expect(table.caption).toBe("Totals")
   })
 })
