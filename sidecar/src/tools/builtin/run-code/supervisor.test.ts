@@ -562,6 +562,67 @@ test("a finished run proves its stop", async () => {
   assert.equal(outcome.stopUnconfirmed, undefined)
 })
 
+// CM-11: a session runs one program at a time; the next waits for it.
+test("a session's second program waits for the first", async () => {
+  const sessionId = `run-code-queue-${process.pid}-${Date.now()}`
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => (release = resolve))
+  const order: string[] = []
+  const first = run("return await cognia.read({})", {
+    sessionId,
+    toolImpl: async () => {
+      order.push("first-called")
+      await gate
+      return "first"
+    },
+  })
+  // Give the first program time to be admitted and reach its tool call.
+  const deadline = Date.now() + 5_000
+  while (!order.includes("first-called") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  const second = run("return 2", { sessionId }).then((outcome) => {
+    order.push("second-done")
+    return outcome
+  })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.deepEqual(order, ["first-called"], "the second program has not started")
+  release()
+  const [a, b] = await Promise.all([first, second])
+  assert.equal(a.ok && a.result, "first")
+  assert.equal(b.ok && b.result, 2)
+  assert.deepEqual(order, ["first-called", "second-done"])
+})
+
+test("a program refused admission reports busy as retryable work", async () => {
+  const outcome = await runCodeProgram({
+    source: "return 1",
+    probe: SANDBOXED,
+    callTool: async () => null,
+    admit: async () => ({
+      ok: false,
+      reason: "busy",
+      limit: { kind: "concurrent-runs-host", limit: 4 },
+    }),
+  })
+  assert.equal(outcome.ok, false)
+  assert.ok(!outcome.ok)
+  assert.equal(outcome.phase, "busy")
+  assert.deepEqual(outcome.limit, { kind: "concurrent-runs-host", limit: 4 })
+})
+
+test("a program releases its admission when it ends", async () => {
+  let released = 0
+  const outcome = await runCodeProgram({
+    source: 'throw new Error("boom")',
+    probe: SANDBOXED,
+    callTool: async () => null,
+    admit: async () => ({ ok: true, release: () => (released += 1) }),
+  })
+  assert.equal(outcome.ok, false)
+  assert.equal(released, 1)
+})
+
 test("registers the child with the session so Stop's teardown reaches it", async () => {
   const sessionId = `run-code-${process.pid}-${Date.now()}`
   const pending = run("while (true) {}", { sessionId, config: smallConfig() })
@@ -637,5 +698,8 @@ function smallConfig(): CodeModeLimits {
     maxTotalToolResultBytes: 8388608,
     maxLogEntryBytes: 4096,
     maxLogBytes: 65536,
+    maxConcurrentRunsPerSession: 1,
+    maxConcurrentRunsPerHost: 4,
+    maxAdmissionWaitMs: 35000,
   }
 }

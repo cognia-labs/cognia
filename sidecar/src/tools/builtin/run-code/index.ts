@@ -60,6 +60,9 @@ const PHASE_FAILURE: Readonly<Record<CodeRunFailurePhase, ToolFailureMeta>> = Ob
   cancelled: { kind: "aborted", retryable: false },
   // A ceiling, not a mistake in the call: repeating the same program hits it.
   limit: { kind: "resource-exhausted", retryable: false },
+  // Other programs held the slots for longer than this one may wait; the same
+  // program can run once they finish.
+  busy: { kind: "resource-exhausted", retryable: true },
   sandbox: { kind: "environment", retryable: false },
 })
 

@@ -9,5 +9,8 @@
   "maxToolResultBytes": 1048576,
   "maxTotalToolResultBytes": 8388608,
   "maxLogEntryBytes": 4096,
-  "maxLogBytes": 65536
+  "maxLogBytes": 65536,
+  "maxConcurrentRunsPerSession": 1,
+  "maxConcurrentRunsPerHost": 4,
+  "maxAdmissionWaitMs": 35000
 }

@@ -203,6 +203,32 @@ test("classifies a program that threw as an execution failure", async () => {
   assert.deepEqual(failureOf(result), { kind: "execution-failed", retryable: true })
 })
 
+test("classifies a program refused for concurrency as retryable", async () => {
+  const sessionId = `run-code-busy-${process.pid}-${Date.now()}`
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => (release = resolve))
+  const tool = asCallable(
+    createRunCodeTool({
+      callTool: async () => {
+        await held
+        return null
+      },
+      probe: SANDBOXED,
+      sdkTools: SDK_TOOLS,
+      sessionId,
+    })
+  )
+  const first = tool.handler({ source: "return await cognia.read({})" })
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  const controller = new AbortController()
+  const second = tool.handler({ source: "return 1" }, { signal: controller.signal })
+  controller.abort()
+  const cancelled = await second
+  assert.equal(payload(cancelled).phase, "cancelled", "a queued program follows the turn")
+  release()
+  assert.notEqual((await first).isError, true)
+})
+
 test("keeps limits classified as resource exhaustion", async () => {
   const tool = asCallable(
     createRunCodeTool({ callTool: async () => null, probe: SANDBOXED, sdkTools: SDK_TOOLS })
