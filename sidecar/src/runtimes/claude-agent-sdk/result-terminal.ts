@@ -1,3 +1,5 @@
+import { classifyTurnResult } from "@cognia/agent-config-types/turn-outcome"
+
 export interface ResultFrame {
   type?: string
   subtype?: unknown
@@ -28,36 +30,9 @@ export interface ResultFrame {
 // CALLER's own limits, and headless turn-loop drivers (the goal runner, /loop)
 // read them off `RunAndCaptureResult.resultSubtype` to decide whether to keep
 // going. Turning them into a failed turn would break those drivers, so they
-// end the turn cleanly and travel as data on the result payload.
-
-/**
- * `TerminalReason` values that mean the provider leg itself failed, as opposed
- * to a ceiling the caller asked for or a stop the caller initiated. Kept as an
- * explicit allowlist: an unknown future reason must not silently become a
- * failure and start throwing on turns that work today.
- */
-export const PROVIDER_FAILURE_TERMINAL_REASONS = new Set([
-  "api_error",
-  "model_error",
-  "prompt_too_long",
-  "image_error",
-  "turn_setup_failed",
-])
-
-/** Whether this `result` frame reports a genuine provider/transport failure. */
-export function isProviderFailureResult(value: unknown) {
-  const result = value as ResultFrame | null | undefined
-  if (!result || typeof result !== "object") return false
-  if (
-    typeof result.terminal_reason === "string" &&
-    PROVIDER_FAILURE_TERMINAL_REASONS.has(result.terminal_reason)
-  ) {
-    return true
-  }
-  if (result.subtype === "error_during_execution") return true
-  // Last resort: an HTTP status is only ever attached when a request failed.
-  return typeof result.api_error_status === "number" && result.api_error_status >= 400
-}
+// end the turn cleanly and travel as data on the result payload. Which frames
+// are failures, ceilings or finished turns is decided in one place for the
+// sidecar and the app: `@cognia/agent-config-types/turn-outcome`.
 
 /**
  * Human-readable failure message for a `result` frame.
@@ -108,7 +83,9 @@ export function sessionEndedFromResult(
   error?: string
   httpStatus?: number
 } {
-  if (!isProviderFailureResult(result)) {
+  // A failed frame always ends the turn with an error, so no consumer can read
+  // it as a finished turn; a ceiling or a stop is not a failure (see above).
+  if (classifyTurnResult(result).kind !== "failed") {
     return { type: "session_ended", sessionId, result }
   }
   const status = typeof result?.api_error_status === "number" ? result.api_error_status : undefined
@@ -119,20 +96,4 @@ export function sessionEndedFromResult(
     error: providerFailureMessage(result),
     ...(status !== undefined ? { httpStatus: status } : {}),
   }
-}
-
-/**
- * Canonical `failure.code` for a non-successful `result` frame.
- *
- * Never the subtype alone: a 404 arrives with `subtype: "success"`, so
- * `String(evt.subtype)` produced the nonsense code `"success"` on a failure
- * envelope. An explicit error subtype still wins — `error_max_turns` is a more
- * useful code than its `max_turns` terminal reason.
- */
-export function failureCodeFromResult(result: ResultFrame | null | undefined) {
-  const subtype = typeof result?.subtype === "string" ? result.subtype : ""
-  if (subtype && subtype !== "success") return subtype
-  const reason = typeof result?.terminal_reason === "string" ? result.terminal_reason : ""
-  if (reason && reason !== "completed") return reason
-  return "error"
 }

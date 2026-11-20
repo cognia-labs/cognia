@@ -314,39 +314,22 @@ test("a replay carries the id checkpointing needs, not a second user turn", () =
   assert.equal(ev!.preview, "original prompt")
 })
 
-test("a failing result reports the SDK subtype as the failure code", () => {
-  const events = canonicalEventsFromSdkMessage(
+test("a result frame reports usage and never settles the turn", () => {
+  // A steer pushes a second prompt into the same query, so the first prompt's
+  // `result` is not the end of the turn. The rail says the turn ended once, on
+  // `session_ended` (see `terminalEventsFromSessionEnded`); a terminal event
+  // here as well put an early `ended` before the real outcome.
+  for (const frame of [
+    { type: "result", subtype: "success", is_error: false, usage: {} },
     { type: "result", subtype: "error_max_turns", is_error: true, usage: {} },
-    createSdkMappingState()
-  )
-  assert.deepEqual(
-    events.map((e) => e.kind),
-    ["usage", "failure"]
-  )
-  assert.equal(events[1]!.code, "error_max_turns")
-  assert.equal(events[1]!.retryable, undefined, "a turn ceiling is policy, not a transient fault")
-})
-
-test("an upstream 404 riding on subtype:success is not coded 'success'", () => {
-  // A wrong ANTHROPIC_BASE_URL produces exactly this frame: the SDK keeps
-  // `subtype: "success"` and reports the failure through `is_error` +
-  // `api_error_status`, so `String(evt.subtype)` published `code: "success"`
-  // on a failure envelope and the status never appeared anywhere.
-  const events = canonicalEventsFromSdkMessage(
-    {
-      type: "result",
-      subtype: "success",
-      is_error: true,
-      terminal_reason: "api_error",
-      api_error_status: 404,
-      result: "There's an issue with the selected model (claude-sonnet-4-5). It may not exist…",
-      usage: {},
-    },
-    createSdkMappingState()
-  )
-  const failure = events.find((e) => e.kind === "failure")
-  assert.equal(failure!.code, "api_error")
-  assert.match(String(failure!.message), /^HTTP 404: /)
+    { type: "result", subtype: "success", is_error: true, api_error_status: 404, usage: {} },
+  ]) {
+    const events = canonicalEventsFromSdkMessage(frame, createSdkMappingState())
+    assert.deepEqual(
+      events.map((e) => e.kind),
+      ["usage"]
+    )
+  }
 })
 
 // ---- structured output ------------------------------------------------------
@@ -359,13 +342,10 @@ test("a turn with no schema requested emits no structured-output event", () => {
     { type: "result", subtype: "success", is_error: false, structured_output: { a: 1 } },
     createSdkMappingState()
   )
-  assert.deepEqual(
-    events.map((e) => e.kind),
-    ["lifecycle"]
-  )
+  assert.deepEqual(events, [])
 })
 
-test("a satisfied schema rides its own event, before the lifecycle", () => {
+test("a satisfied schema rides its own event", () => {
   const events = structured({
     type: "result",
     subtype: "success",
@@ -376,7 +356,7 @@ test("a satisfied schema rides its own event, before the lifecycle", () => {
   })
   assert.deepEqual(
     events.map((e) => e.kind),
-    ["usage", "structured-output", "lifecycle"]
+    ["usage", "structured-output"]
   )
   assert.deepEqual(events[1]!, { kind: "structured-output", status: "ok", output: { ok: true } })
 })
@@ -394,43 +374,24 @@ test("the raw answer is NOT copied into the structured-output event", () => {
   assert.equal("raw" in ev!, false)
 })
 
-test("a SUCCESSFUL turn with no structured output settles as a failure", () => {
-  // The whole point: the SDK says success, so `lifecycle: ended` would tell
-  // every consumer the turn worked while the caller holds `undefined`.
+test("a missing schema output is reported as missing on the frame", () => {
   const events = structured({ type: "result", subtype: "success", is_error: false, result: "hi" })
-  assert.deepEqual(
-    events.map((e) => e.kind),
-    ["structured-output", "failure"]
-  )
-  assert.equal(events[0]!.status, "missing")
-  assert.equal(events[1]!.code, "structured_output_missing")
-  assert.equal(events[1]!.retryable, true, "prose once does not mean prose again")
+  assert.deepEqual(events, [{ kind: "structured-output", status: "missing" }])
+})
+
+test("exhausted schema retries and budget ceilings keep their own verdicts", () => {
   assert.equal(
-    events.some((e) => e.kind === "lifecycle"),
-    false,
-    "a turn that failed its contract must not also report a clean end"
+    structured({
+      type: "result",
+      subtype: "error_max_structured_output_retries",
+      is_error: true,
+    })[0]!.status,
+    "retries-exhausted"
   )
-})
-
-test("exhausted schema retries keep the SDK's own failure code", () => {
-  const events = structured({
-    type: "result",
-    subtype: "error_max_structured_output_retries",
-    is_error: true,
-  })
-  assert.deepEqual(
-    events.map((e) => e.kind),
-    ["structured-output", "failure"]
+  assert.equal(
+    structured({ type: "result", subtype: "error_max_budget_usd", is_error: true })[0]!.status,
+    "turn-incomplete"
   )
-  assert.equal(events[0]!.status, "retries-exhausted")
-  assert.equal(events[1]!.code, "error_max_structured_output_retries")
-  assert.equal(events[1]!.retryable, undefined, "the SDK already retried to exhaustion")
-})
-
-test("a budget ceiling is reported as incomplete, not as a schema failure", () => {
-  const events = structured({ type: "result", subtype: "error_max_budget_usd", is_error: true })
-  assert.equal(events[0]!.status, "turn-incomplete")
-  assert.equal(events[1]!.code, "error_max_budget_usd")
 })
 
 test("mirror_error is a durability alarm, never a turn failure", () => {

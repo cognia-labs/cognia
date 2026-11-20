@@ -5,6 +5,7 @@
  * request. Event narrowing, accounting and approval code import this leaf
  * instead of the executing runner.
  */
+import { classifyTurnResult, type TurnOutcome } from "@cognia/agent-config-types/turn-outcome"
 import type {
   ApprovalDecision,
   PermissionRequestEvent,
@@ -67,6 +68,15 @@ export interface RunAndCaptureResult {
    * Undefined when no result subtype was seen.
    */
   resultSubtype?: string
+  /**
+   * How the turn ended, classified off its terminal `result` frame
+   * (`@cognia/agent-config-types/turn-outcome`). A caller that accepts the
+   * reply as finished work — a verdict, a candidate, a teammate's answer —
+   * checks `kind === "completed"`: a reply cut at the token limit or refused
+   * is a `success` subtype, and a ceiling is returned rather than thrown.
+   * Undefined when no result frame was seen.
+   */
+  turnOutcome?: TurnOutcome
   /** Bounded tool evidence for an explicitly requested budget-stop continuation. */
   budgetContinuationContext?: string
   /**
@@ -121,6 +131,23 @@ export class RunAndCaptureError extends Error {
     if (typeof meta?.retryAfterMs === "number") this.retryAfterMs = meta.retryAfterMs
     if (meta?.partial) this.partial = meta.partial
   }
+}
+
+/**
+ * Why a captured turn did not finish its work, or `null` when it did.
+ *
+ * For a caller that accepts the reply as done (a candidate, a verdict, an
+ * editor or probe session, a teammate's answer): a ceiling is returned rather
+ * than thrown, and a reply cut at the token limit or refused carries a
+ * `success` subtype, so `resultSubtype.startsWith("error")` let both through.
+ */
+export function capturedTurnUnfinished(
+  result: Pick<RunAndCaptureResult, "turnOutcome" | "resultSubtype">
+): string | null {
+  const outcome =
+    result.turnOutcome ??
+    (result.resultSubtype ? classifyTurnResult({ subtype: result.resultSubtype }) : undefined)
+  return outcome && outcome.kind !== "completed" ? outcome.reason : null
 }
 
 /** See {@link RunAndCaptureError.partial}. */

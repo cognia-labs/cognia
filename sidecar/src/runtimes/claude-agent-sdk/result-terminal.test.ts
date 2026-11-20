@@ -3,9 +3,8 @@ import assert from "node:assert/strict"
 import {
   failureCodeFromResult,
   isProviderFailureResult,
-  providerFailureMessage,
-  sessionEndedFromResult,
-} from "./result-terminal.ts"
+} from "@cognia/agent-config-types/turn-outcome"
+import { providerFailureMessage, sessionEndedFromResult } from "./result-terminal.ts"
 
 /**
  * Captured verbatim from a live Agent SDK run against a loopback server that

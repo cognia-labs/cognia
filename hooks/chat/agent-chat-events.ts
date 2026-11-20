@@ -3,6 +3,7 @@
 import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
 
 import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
+import { classifyTurnResult } from "@cognia/agent-config-types/turn-outcome"
 
 import { hasCaptureResponder } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { mergeInboundMessagesForStream } from "@/lib/db/inbound-stored-parts"
@@ -142,6 +143,7 @@ import {
 } from "@/lib/execution/direct-chat-run"
 import { recordChatCanonicalEvents } from "@/lib/chat/canonical-sink"
 import { settleChatTurnForSession } from "@/lib/work-submission/chat-adapter"
+import { unfinishedSessionEnd } from "@/lib/work-submission/session-end"
 import type { UIMessage } from "ai"
 import {
   chatToolCallsById,
@@ -169,7 +171,7 @@ import { contextSourcesOf } from "@/lib/ai/agent/execution/contributions/context
 async function settleChatTranscript(
   sessionId: string,
   terminalMessages: UIMessage[] | undefined,
-  outcome: "completed" | "failed",
+  outcome: "completed" | "failed" | "cancelled",
   errorCode?: string,
   options?: MessagePersistOptions
 ): Promise<void> {
@@ -180,7 +182,7 @@ async function settleChatTranscript(
   let messages = terminalMessages
     ? mergeInboundMessagesForStream(terminalMessages, sliceMessages(sessionId))
     : undefined
-  if (outcome === "failed" && messages && hasOpenToolParts(messages)) {
+  if (outcome !== "completed" && messages && hasOpenToolParts(messages)) {
     messages = closeOpenToolParts(messages).messages
   }
   if (messages && messages !== terminalMessages && useChatStore.getState().sessions[sessionId]) {
@@ -679,6 +681,9 @@ export async function handleEvent(
       // state or strand an already-queued user turn.
       const sealOpen =
         isSessionOpen(evt.sessionId) || Boolean(useChatStore.getState().sessions[evt.sessionId])
+      // How a clean end ended, from the frame it carries: both built-in rails
+      // attach the turn's `result` (or mark a Stop `interrupted`).
+      const unfinished = unfinishedSessionEnd(evt)
       const sealSession = (sid: string) => {
         registry.get(sid).commit.flush()
         registry.get(sid).persist.cancel()
@@ -801,6 +806,37 @@ export async function handleEvent(
               writeOptions
             )
           }
+        } else if (unfinished) {
+          // A clean end of a turn that did not finish: a ceiling, a reply cut
+          // at the token limit, a refusal, or a Stop. The partial reply stays
+          // visible; the run, its plan handoff and its submission end as
+          // failed (or cancelled), so nothing that waits on the work reads it
+          // as done.
+          sealSession(evt.sessionId)
+          useChatStore.getState().setSessionStatus(evt.sessionId, "idle")
+          chatTurnPerformance.finish(
+            evt.sessionId,
+            unfinished.outcome === "cancelled" ? "cancelled" : "failed"
+          )
+          const cached = useChatStore.getState().lastSendBySession[evt.sessionId]
+          if (cached?.options.spanId) {
+            endSpan(cached.options.spanId, { finishReasons: [unfinished.reason] })
+          }
+          finishBehaviorTurn(evt.sessionId)
+          useChatStore.getState().clearLastSend(evt.sessionId)
+          await finishDirectChatExecutionRun(
+            evt.sessionId,
+            unfinished.outcome,
+            Date.now(),
+            unfinished.reason
+          )
+          await settleChatTranscript(
+            evt.sessionId,
+            terminalMessages,
+            unfinished.outcome,
+            unfinished.reason,
+            writeOptions
+          )
         } else {
           // Clean end without a content-bearing result event (e.g. tool-only
           // turn): flush pending streaming work and drop the mirror.
@@ -854,17 +890,14 @@ export async function handleEvent(
         registry.get(evt.sessionId).persist.cancel()
         registry.release(evt.sessionId)
         messagesMirrorRef.current.delete(evt.sessionId)
-        await finishDirectChatExecutionRun(
-          evt.sessionId,
-          evt.error ? "failed" : "completed",
-          Date.now(),
-          evt.error
-        )
+        const outcome = evt.error ? "failed" : (unfinished?.outcome ?? "completed")
+        const detail = evt.error ?? unfinished?.reason
+        await finishDirectChatExecutionRun(evt.sessionId, outcome, Date.now(), detail)
         await settleChatTranscript(
           evt.sessionId,
           terminalMessages,
-          evt.error ? "failed" : "completed",
-          evt.error ? "turn_error" : undefined,
+          outcome,
+          evt.error ? "turn_error" : unfinished?.reason,
           writeOptions
         )
       }
@@ -1241,6 +1274,16 @@ export async function handleEvent(
         turnComplete,
         result: sdkResult,
       } = applySdkEvent(current, env.event)
+      // A `result` frame ends the stream, not necessarily the work. Only a
+      // finished turn seals as completed here and drives what waits on it (the
+      // plan step, the bus, post-receive hooks, artifacts). A failed frame is
+      // settled by the `session_ended` that follows it with the error; a
+      // ceiling, a truncated reply or a stop keeps its partial output and is
+      // settled there as unfinished, while a goal or loop may still continue.
+      // The adapter hands the frame back as `result`; the event is that frame.
+      const turnOutcome = turnComplete ? classifyTurnResult(sdkResult ?? env.event) : undefined
+      const turnFinished = turnOutcome?.kind === "completed"
+      const turnFailed = turnOutcome?.kind === "failed"
       bindPersonalMessageChanges(
         current,
         appliedMessages,
@@ -1536,13 +1579,20 @@ export async function handleEvent(
             coalesce.commit.cancel()
             coalesce.persist.cancel()
             useChatStore.getState().replaceSessionMessages(sessionId, nextMessages)
-            await settleChatTranscript(
-              sessionId,
-              nextMessages,
-              "completed",
-              undefined,
-              writeOptions
-            )
+            // An unfinished turn keeps its partial output durably but is not
+            // settled: the submission settles once, and its `session_ended`
+            // says how it ended.
+            if (turnFinished) {
+              await settleChatTranscript(
+                sessionId,
+                nextMessages,
+                "completed",
+                undefined,
+                writeOptions
+              )
+            } else {
+              await persistMessages(sessionId, nextMessages, writeOptions)
+            }
             if (!isCurrentEvent()) return
           } else {
             // Mid-stream: coalesce the React commit to ≤1/frame and debounce
@@ -1561,7 +1611,7 @@ export async function handleEvent(
           // synchronously and drops the in-flight state.
           messagesMirrorRef.current.set(sessionId, nextMessages)
           const coalesce = registry.get(sessionId)
-          if (turnComplete) {
+          if (turnComplete && turnFinished) {
             coalesce.persist.cancel()
             chatTurnPerformance.beginFinalPersistence(sessionId)
             await settleChatTranscript(
@@ -1574,6 +1624,11 @@ export async function handleEvent(
             chatTurnPerformance.endFinalPersistence(sessionId)
             messagesMirrorRef.current.delete(sessionId)
             registry.release(sessionId)
+          } else if (turnComplete) {
+            // Kept for the `session_ended` that settles this unfinished turn:
+            // its terminal write reads the mirror.
+            coalesce.persist.cancel()
+            await persistMessages(sessionId, nextMessages, writeOptions)
           } else {
             if (deleteIds.length) {
               coalesce.persist.cancel()
@@ -1631,7 +1686,10 @@ export async function handleEvent(
         // engine reads). Best-effort; recordProviderOutcome never throws.
         const telemetryProvider = lastSendForSpan?.options.provider
         const turnUsage = extractUsage(sdkResult)
-        if (telemetryProvider) {
+        // A failed frame is not a provider success: its `session_ended`
+        // records the failure (and may fall back), so `ok: true` here would
+        // feed the breaker a success and a failure for the same request.
+        if (telemetryProvider && !turnFailed) {
           const r = sdkResult as unknown as { duration_ms?: number; total_cost_usd?: number }
           recordProviderOutcome({
             providerId: telemetryProvider,
@@ -1656,7 +1714,8 @@ export async function handleEvent(
             parentSpanId: lastSendForSpan?.options.spanId,
             surface: "chat",
           })
-          const durationMs = finishBehaviorTurn(sessionId)
+          // An unfinished turn is counted by its `session_ended`.
+          const durationMs = turnFinished ? finishBehaviorTurn(sessionId) : undefined
           if (durationMs !== undefined) {
             void trackEvent("chat.turn.completed", {
               sessionId,
@@ -1678,7 +1737,8 @@ export async function handleEvent(
           })
         }
         const turnSpanId = lastSendForSpan?.options.spanId
-        if (turnSpanId) {
+        // A failed turn's span ends with its error at `session_ended`.
+        if (turnSpanId && !turnFailed) {
           const usage = extractUsage(sdkResult)
           const sdkResultObj = sdkResult as unknown as {
             total_cost_usd?: number
@@ -1710,7 +1770,8 @@ export async function handleEvent(
         )
       }
 
-      if (turnComplete && isOpen) {
+      // A failed turn has nothing to drive; its `session_ended` settles it.
+      if (turnComplete && isOpen && !turnFailed) {
         if (!isCurrentEvent()) return
         // Idle releases the send lock, so retain this turn's target before any await.
         const editTarget = useChatStore.getState().pendingArtifactEditTarget?.[sessionId] ?? null
@@ -1727,20 +1788,24 @@ export async function handleEvent(
         // that case launched an unobserved Dexie promise, so a reload could
         // terminate the page after the full reply appeared but before it was
         // stored.
-        registry.get(sessionId).commit.flush()
-        registry.get(sessionId).persist.cancel()
-        chatTurnPerformance.beginFinalPersistence(sessionId)
-        await settleChatTranscript(sessionId, nextMessages, "completed", undefined, writeOptions)
-        chatTurnPerformance.endFinalPersistence(sessionId)
-        registry.release(sessionId)
-        messagesMirrorRef.current.delete(sessionId)
-        chatTurnPerformance.finish(sessionId, "completed")
+        if (turnFinished) {
+          registry.get(sessionId).commit.flush()
+          registry.get(sessionId).persist.cancel()
+          chatTurnPerformance.beginFinalPersistence(sessionId)
+          await settleChatTranscript(sessionId, nextMessages, "completed", undefined, writeOptions)
+          chatTurnPerformance.endFinalPersistence(sessionId)
+          registry.release(sessionId)
+          messagesMirrorRef.current.delete(sessionId)
+          chatTurnPerformance.finish(sessionId, "completed")
+        }
 
         // Don't immediately flip to idle if this session's approvals are still
         // pending; the store helper handles the precedence. Read the session's
         // own slice so a background pane's approval doesn't gate the focused one.
         const sessionPending = useChatStore.getState().sessions[sessionId]?.pendingApprovals ?? []
-        if (sessionPending.length === 0) {
+        // The bus, the post-receive hooks and the idle flip belong to a sealed
+        // turn; an unfinished one goes idle when its `session_ended` lands.
+        if (turnFinished && sessionPending.length === 0) {
           // Plugin bus: SDK-path agent run sealed successfully (ids only).
           emitSystemBusEvent(SystemEvents.MESSAGE_RECEIVED, { sessionId })
           emitSystemBusEvent(SystemEvents.AGENT_COMPLETED, { sessionId })
@@ -1819,7 +1884,9 @@ export async function handleEvent(
 
         // Artifact routing also handles background sessions. Utility-model jobs
         // and /goal + /loop auto-continuation below remain focused-session work.
-        const completedSession = await getSession(sessionId).catch(() => undefined)
+        const completedSession = turnFinished
+          ? await getSession(sessionId).catch(() => undefined)
+          : undefined
         if (completedSession?.attachedChild) {
           const finalAssistant = nextMessages.findLast((m) => m.role === "assistant")
           const summary = finalAssistant ? (extractAssistantText(finalAssistant) ?? "").trim() : ""
@@ -1835,7 +1902,8 @@ export async function handleEvent(
         // Honors the artifacts settings block; off by default for
         // power-users that flip the toggle.
         // A newer send may own lastSend now; only transcript invalidation cancels this sealed reply.
-        if (capturedWriteOptions?.shouldPersist?.() !== false) {
+        // A partial reply proposes nothing: its artifact would be cut short too.
+        if (turnFinished && capturedWriteOptions?.shouldPersist?.() !== false) {
           try {
             const settings = useSettingsStore.getState().settings
             const artifactsCfg = settings?.artifacts
@@ -2181,7 +2249,9 @@ export async function handleEvent(
           // ORCHESTRATED plan: such a plan also sits at `executing` while the
           // workflow runtime owns its steps, and advancing it here would race
           // the orchestrator writing the same rows.
-          if (!selfDrivenContinuation) {
+          // A plan step is done only when its turn finished: a ceiling, a cut
+          // reply or a stop leaves it running for the chat handoff to pause.
+          if (!selfDrivenContinuation && turnFinished) {
             const lastAssistant = nextMessages.findLast((m) => m.role === "assistant")
             // One implementation for every runtime (`plan-turn-settle.ts`): the
             // external-agent lane settles plan steps through the same call.
@@ -2197,7 +2267,7 @@ export async function handleEvent(
           }
         }
       }
-      if (turnComplete && !isOpen) {
+      if (turnComplete && turnFinished && !isOpen) {
         chatTurnPerformance.finish(sessionId, "completed")
       }
       return

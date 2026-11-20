@@ -1,4 +1,9 @@
-import { RunAndCaptureError, compactBoundaryFromInner, retryFromInner } from "./capture-types"
+import {
+  RunAndCaptureError,
+  capturedTurnUnfinished,
+  compactBoundaryFromInner,
+  retryFromInner,
+} from "./capture-types"
 
 describe("RunAndCaptureError", () => {
   it("carries the capture code and only the metadata it was given", () => {
@@ -110,3 +115,23 @@ describe("retryFromInner", () => {
 // The wrapper funnels every headless leg through the global ExecutionBroker so
 // the four concurrency subsystems share one ceiling and are observable/
 // cancellable as a unit.
+
+describe("capturedTurnUnfinished", () => {
+  it("names a ceiling, a cut reply and a failure, and passes a finished turn", () => {
+    expect(capturedTurnUnfinished({ resultSubtype: "error_max_turns" })).toBe("error_max_turns")
+    // A truncated reply is a `success` subtype: only the outcome says so.
+    expect(
+      capturedTurnUnfinished({
+        resultSubtype: "success",
+        turnOutcome: { kind: "incomplete", reason: "max_tokens" },
+      })
+    ).toBe("max_tokens")
+    expect(capturedTurnUnfinished({ turnOutcome: { kind: "failed", reason: "api_error" } })).toBe(
+      "api_error"
+    )
+    expect(
+      capturedTurnUnfinished({ resultSubtype: "success", turnOutcome: { kind: "completed" } })
+    ).toBeNull()
+    expect(capturedTurnUnfinished({})).toBeNull()
+  })
+})

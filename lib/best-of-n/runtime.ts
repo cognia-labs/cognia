@@ -34,6 +34,7 @@ import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import { claimTurnUsage, trackCaptureUsage } from "@/lib/usage/claimed-turn-usage"
 import { describeBestOfNAgent } from "./agents"
 import { runExternalCandidate } from "./external"
+import { capturedTurnUnfinished } from "@/lib/ai/agent/execution/capture-types"
 import {
   BestOfNAttemptError,
   BestOfNCandidateStoppedError,
@@ -435,11 +436,9 @@ export function createBestOfNExecution(): BestOfNExecution {
                 (reportedCost === 0 && runtimeAdapter !== "claude-agent-sdk")
                   ? null
                   : reportedCost
-              if (result.resultSubtype?.startsWith("error"))
-                throw new BestOfNAttemptError(
-                  `Candidate execution ended: ${result.resultSubtype}`,
-                  costUsd
-                )
+              const unfinished = capturedTurnUnfinished(result)
+              if (unfinished)
+                throw new BestOfNAttemptError(`Candidate execution ended: ${unfinished}`, costUsd)
               text = result.text
             }
             await (executorStop

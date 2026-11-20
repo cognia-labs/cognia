@@ -1,6 +1,6 @@
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 
-import type { SessionContext } from "./runtime-types.ts"
+import type { AnthropicTurnState, SessionContext } from "./runtime-types.ts"
 
 export { drainPendingRoundTrips } from "../common/round-trips.ts"
 import { drainPendingRoundTrips } from "../common/round-trips.ts"
@@ -29,7 +29,7 @@ export function createAnthropicSession({
   // which is what lets a STEER extend the turn: `routeSteer` pushes a second
   // user message into the live query, and ending on the first `result` would
   // close the input before the steered leg ever ran.
-  const state = { outstandingPrompts: 0 }
+  const state: AnthropicTurnState = { outstandingPrompts: 0 }
   const session = {
     _ended: false,
     q,
@@ -78,7 +78,12 @@ export function createAnthropicSession({
     // timeout. See `drainPendingRoundTrips`.
     /** Router + Fusion: resolve a pending envelope check (`call_reserve_decision`). */
     resolveCallReserve: (message: unknown) => ledgerGate.resolveDecision(message),
-    drainPending: (reason?: string) =>
+    drainPending: (reason?: string) => {
+      // Every drain is a stop this process asked for (a host interrupt or
+      // close, an aborted protected query, a fence denial), so a turn that
+      // ends after one without a finished `result` was interrupted. A cause
+      // recorded first (a budget, a fence, a ledger refusal) is kept.
+      state.stopCause ??= "interrupted"
       drainPendingRoundTrips(
         { pendingApprovals, pendingPluginToolCalls, pendingPluginHookCalls, ledgerGate },
         reason,
@@ -89,7 +94,8 @@ export function createAnthropicSession({
             requestId,
             reason: typeof reason === "string" && reason !== "" ? reason : "interrupted",
           })
-      ),
+      )
+    },
     pendingApprovals,
     pendingPluginToolCalls,
     pendingPluginHookCalls,

@@ -16,6 +16,7 @@ import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 import { applyArmedBranchReply, disarmBranchReply } from "@/lib/chat/branch-arming"
 
 import { settleChatTurnForSession } from "./chat-adapter"
+import { unfinishedSessionEnd } from "./session-end"
 import { settleWorkSubmission } from "./service"
 import type { Unsubscribe } from "./outbox-runner"
 
@@ -104,6 +105,9 @@ export function startWorkSubmissionTerminalEvents(
   let ready = false
   const queues = new Map<string, Promise<void>>()
   const mirrors = new Map<string, UIMessage[]>()
+  // The last `result` frame each session's turn reported, for a session end
+  // that does not carry it itself.
+  const results = new Map<string, SDKResultMessage>()
   const activeSessions = new Set<string>()
   const subscribe = deps.subscribe ?? onClaudeMessage
   const settleSession = deps.settleSession ?? settleChatTurnForSession
@@ -216,6 +220,7 @@ export function startWorkSubmissionTerminalEvents(
           toolCallExecutionRunId(event.sessionId, frame.turnId, frame.attemptId)
         )
         mirrors.set(event.sessionId, applied.messages)
+        if (applied.result) results.set(event.sessionId, applied.result)
         if (applied.result) {
           const turnId = (event as { turnId?: unknown }).turnId
           await recordTurnUsage(
@@ -238,9 +243,21 @@ export function startWorkSubmissionTerminalEvents(
         if (!terminal) return
         try {
           const messages = mirrors.get(event.sessionId)
+          // A clean end that did not finish — a step, money or schema-retry
+          // ceiling, a cut or refused reply, a Stop — is not completed work,
+          // whether its frame rode on the end or arrived as the turn's event.
+          const unfinished = unfinishedSessionEnd({
+            error: terminal.error,
+            interrupted: (terminal as { interrupted?: unknown }).interrupted,
+            result: terminal.result ?? results.get(event.sessionId),
+          })
           await settleSession(event.sessionId, {
-            outcome: terminal.error ? "failed" : "completed",
-            ...(terminal.error ? { errorCode: terminal.code ?? "turn_error" } : {}),
+            outcome: terminal.error ? "failed" : (unfinished?.outcome ?? "completed"),
+            ...(terminal.error
+              ? { errorCode: terminal.code ?? "turn_error" }
+              : unfinished
+                ? { errorCode: unfinished.reason }
+                : {}),
             ...(terminal.resetAt !== undefined ? { resetAt: terminal.resetAt } : {}),
             ...(messages
               ? { writeTranscript: () => persistMirror(event.sessionId, messages) }
@@ -248,6 +265,7 @@ export function startWorkSubmissionTerminalEvents(
           })
           mirrors.delete(event.sessionId)
           bases.delete(event.sessionId)
+          results.delete(event.sessionId)
           activeSessions.delete(event.sessionId)
         } finally {
           // Only now is the reply in the history the next queued turn reads.
@@ -256,7 +274,10 @@ export function startWorkSubmissionTerminalEvents(
       })
     } else if (event.type === "sidecar_exited") {
       void Promise.all([...queues.values()].map((queue) => queue.catch(() => undefined)))
-        .then(() => settleSidecarExit(deps, mirrors, load, persistMirror))
+        .then(() => {
+          results.clear()
+          return settleSidecarExit(deps, mirrors, load, persistMirror)
+        })
         .catch((error) => deps.onError?.(error))
         .finally(() => {
           // No turn the runtime held will report its end now.

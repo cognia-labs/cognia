@@ -228,14 +228,14 @@ test("the partial-stream latch is per emitter, so attempts do not leak into each
 })
 
 test("the structured-output expectation reaches the mapper, per emitter", () => {
-  const result = {
-    type: "event",
-    sessionId: "s1",
-    event: { type: "result", subtype: "success", is_error: false, result: "prose" },
-  }
+  const result = { type: "result", subtype: "success", is_error: false, result: "prose" }
+  const frames = [
+    { type: "event", sessionId: "s1", event: result },
+    { type: "session_ended", sessionId: "s1", result },
+  ]
 
   const expecting = collectEmitter({ expectStructuredOutput: true })
-  expecting.emitter(result)
+  for (const frame of frames) expecting.emitter(frame)
   assert.deepEqual(
     expecting.out.filter((m) => m.type === "agent_event").map((m) => m.envelope.event.kind),
     ["structured-output", "failure"],
@@ -245,23 +245,58 @@ test("the structured-output expectation reaches the mapper, per emitter", () => 
   // The default must stay OFF: a session that never asked for a schema would
   // otherwise have every successful turn rewritten into a failure.
   const plain = collectEmitter()
-  plain.emitter(result)
+  for (const frame of frames) plain.emitter(frame)
   assert.deepEqual(
     plain.out.filter((m) => m.type === "agent_event").map((m) => m.envelope.event.kind),
     ["lifecycle"]
   )
 })
 
-test("a session_ended carrying a failed result does not double-report the failure", () => {
-  // The Anthropic rail ends the turn ON the `result` frame, so that frame's
-  // own failure envelope has already gone out with the specific code.
-  const events = canonicalEventsFromWireMessage({
-    type: "session_ended",
-    sessionId: "s1",
-    error: "HTTP 404: model not found",
-    result: { type: "result", subtype: "success", is_error: true, api_error_status: 404 },
-  })
-  assert.deepEqual(events, [{ kind: "lifecycle", phase: "ended" }])
+test("a turn publishes exactly one terminal event, from its end", () => {
+  // The Claude rail emits the `result` frame, then a `session_ended` carrying
+  // it; the AI SDK rail does the same. Settling on both put a `failure` and an
+  // `ended` (or an early `ended` and a late `failure`) on one turn.
+  const terminal = (frames: Record<string, unknown>[]) => {
+    const { out, emitter } = collectEmitter()
+    for (const frame of frames) emitter(frame as Parameters<typeof emitter>[0])
+    return out
+      .filter((m) => m.type === "agent_event")
+      .map((m) => m.envelope.event)
+      .filter((e) => e.kind === "failure" || e.kind === "lifecycle")
+      .map((e) => (e.kind === "failure" ? `failure:${e.code}` : `lifecycle:${e.phase}`))
+  }
+  const failed404 = {
+    type: "result",
+    subtype: "success",
+    is_error: true,
+    terminal_reason: "api_error",
+    api_error_status: 404,
+  }
+  assert.deepEqual(
+    terminal([
+      { type: "event", sessionId: "s1", event: failed404 },
+      { type: "session_ended", sessionId: "s1", error: "HTTP 404", result: failed404 },
+    ]),
+    ["failure:api_error"]
+  )
+  const capped = { type: "result", subtype: "error_max_turns", is_error: true }
+  assert.deepEqual(
+    terminal([
+      { type: "event", sessionId: "s1", event: capped },
+      { type: "session_ended", sessionId: "s1", result: capped },
+    ]),
+    ["failure:error_max_turns"]
+  )
+  // A steer's first answer is not the end of the turn.
+  const answered = { type: "result", subtype: "success", is_error: false }
+  assert.deepEqual(
+    terminal([
+      { type: "event", sessionId: "s1", event: answered },
+      { type: "event", sessionId: "s1", event: { ...failed404 } },
+      { type: "session_ended", sessionId: "s1", error: "HTTP 404", result: failed404 },
+    ]),
+    ["failure:api_error"]
+  )
 })
 
 test("a session_ended with no result still synthesizes the failure", () => {

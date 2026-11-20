@@ -4,7 +4,8 @@ import {
 } from "../../policy/personal-egress.ts"
 import type { PumpContext } from "./runtime-types.ts"
 import { randomUUID } from "node:crypto"
-import { createRunBudgetGuard, type StepUsage } from "../common/run-budget.ts"
+import { createRunBudgetGuard, RunBudgetSpentError, type StepUsage } from "../common/run-budget.ts"
+import { classifyTurnResult } from "@cognia/agent-config-types/turn-outcome"
 
 import { PLUGIN_TOOLS_SERVER_NAME } from "../../policy/tool-catalog/names.ts"
 
@@ -12,6 +13,7 @@ import { restorePluginToolNamesInSdkMessage } from "../../policy/tool-catalog/pl
 
 import { extractHttpErrorMeta } from "../../providers/http-error-meta.ts"
 import { sessionEndedFromResult } from "./result-terminal.ts"
+import type { AnthropicTurnState } from "./runtime-types.ts"
 import { createProviderStreamLogger } from "../../providers/stream-log.ts"
 
 export function startAnthropicPump({
@@ -60,14 +62,22 @@ export function startAnthropicPump({
   // ADR-0243 hold: the SDK sizes its own requests, so a spent hold or a passed
   // deadline interrupts the query before it takes another step.
   const budget = sendOptions.runBudget ? createRunBudgetGuard(sendOptions.runBudget) : undefined
-  const stopForBudget = () =>
+  // The SDK answers this interrupt with the same `aborted_*` frame as a Stop,
+  // so the reason is recorded first: the turn then ends on the spent budget,
+  // as the AI SDK rail's `RunBudgetSpentError` ends it.
+  const stopForBudget = (reason: "budget_exhausted" | "deadline_exceeded") => {
+    state.stopCause ??= { error: new RunBudgetSpentError(reason).message }
     void Promise.resolve()
       .then(() => q.interrupt())
       .catch((error: unknown) => log("warn", `budget interrupt failed: ${String(error)}`))
+  }
   const deadlineTimer =
     sendOptions.runBudget?.deadlineAt === undefined
       ? undefined
-      : setTimeout(stopForBudget, Math.max(0, sendOptions.runBudget.deadlineAt - Date.now()))
+      : setTimeout(
+          () => stopForBudget("deadline_exceeded"),
+          Math.max(0, sendOptions.runBudget.deadlineAt - Date.now())
+        )
   void (async () => {
     try {
       for await (const evt of q) {
@@ -76,7 +86,7 @@ export function startAnthropicPump({
           // carrying its API message's usage.
           const message = evt.message as { id?: string; usage?: StepUsage } | undefined
           budget.observe(message?.usage ?? {}, message?.id)
-          if (budget.spent()) stopForBudget()
+          if (budget.spent()) stopForBudget("budget_exhausted")
         }
         streamLog.onEvent()
         if (!sdkSessionIdSeen && evt && typeof evt.session_id === "string") {
@@ -123,7 +133,7 @@ export function startAnthropicPump({
           // is still to come, so the turn is not over.
           if (state.outstandingPrompts > 0) continue
           streamLog.onEnd()
-          endTurn(sessionEndedFromResult(sessionId, evt))
+          endTurn(endedByResult(sessionId, evt, state))
           // Every prompt has been answered. Context is rebuilt next turn via
           // SDK `resume` (see `restartReason` in agent-host.mjs, which retires
           // an Anthropic session on every `session_ended`), so close the input
@@ -135,7 +145,7 @@ export function startAnthropicPump({
       // closed, or the query was torn down). Already-ended turns skip it.
       if (!turnEnded) {
         streamLog.onEnd()
-        endTurn({ type: "session_ended", sessionId })
+        endTurn(endedWithoutResult(sessionId, state))
       }
     } catch (err) {
       streamLog.onError(err)
@@ -196,4 +206,52 @@ export function startAnthropicPump({
       }
     }
   })()
+}
+
+const ABORTED_TERMINAL_REASONS = new Set(["aborted_streaming", "aborted_tools"])
+
+/**
+ * The `session_ended` for a turn its last `result` frame closes.
+ *
+ * A finished frame ends the turn as reported, even if a stop was asked for
+ * too late to matter. An unfinished one after this process stopped the turn
+ * carries the stop's cause — a spent budget, a fence denial or a ledger
+ * refusal is an error, a Stop is an interruption — and an `aborted_*` frame
+ * nobody here asked for is an interruption too.
+ */
+export function endedByResult(
+  sessionId: string,
+  result: Record<string, unknown>,
+  state: AnthropicTurnState
+): Record<string, unknown> {
+  const ended = sessionEndedFromResult(sessionId, result)
+  if (ended.error || classifyTurnResult(result).kind === "completed") return ended
+  const cause = state.stopCause
+  if (cause && cause !== "interrupted") return { ...ended, ...cause }
+  if (cause === "interrupted" || ABORTED_TERMINAL_REASONS.has(String(result.terminal_reason))) {
+    return { ...ended, interrupted: true }
+  }
+  return ended
+}
+
+/**
+ * The `session_ended` for a turn whose query ended without a `result` frame.
+ *
+ * After a stop this process asked for, that is the stop (interrupted, or its
+ * failure). Without one, the runtime went away without saying how the turn
+ * ended, and calling that a clean end reported unfinished work as done.
+ */
+export function endedWithoutResult(
+  sessionId: string,
+  state: AnthropicTurnState
+): Record<string, unknown> {
+  const cause = state.stopCause
+  if (cause === "interrupted") return { type: "session_ended", sessionId, interrupted: true }
+  if (cause) return { type: "session_ended", sessionId, ...cause }
+  return {
+    type: "session_ended",
+    sessionId,
+    error: "The Claude runtime ended the turn without reporting a result.",
+    code: "runtime_ended_without_result",
+  }
 }

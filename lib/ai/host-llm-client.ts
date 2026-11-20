@@ -10,6 +10,7 @@ import type { ResolvedProvider } from "./provider-consumption"
 import type { LlmClient, LlmClientCallOptions, LlmUsageSnapshot } from "@/lib/twin/distill/llm"
 import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { withHostUtilitySession } from "./host-utility-session"
+import { capturedTurnUnfinished } from "@/lib/ai/agent/execution/capture-types"
 import {
   getRemoteExecutionHost,
   isSameExecutionHost,
@@ -164,9 +165,8 @@ export function createHostLlmClient(
       })
       assertCurrent()
       controller.signal.throwIfAborted()
-      if (result.resultSubtype && result.resultSubtype !== "success") {
-        throw new Error(`Host utility request failed (${result.resultSubtype})`)
-      }
+      const unfinished = capturedTurnUnfinished(result)
+      if (unfinished) throw new Error(`Host utility request failed (${unfinished})`)
       const delta = {
         inputTokens: result.usage?.inputTokens ?? 0,
         outputTokens: result.usage?.outputTokens ?? 0,

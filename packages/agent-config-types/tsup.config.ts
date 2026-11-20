@@ -17,6 +17,7 @@ export default defineConfig({
     "src/agent-composition.ts",
     "src/claude-agent-sdk-options.ts",
     "src/plugin-interception.ts",
+    "src/turn-outcome.ts",
   ],
   format: ["esm"],
   dts: false,

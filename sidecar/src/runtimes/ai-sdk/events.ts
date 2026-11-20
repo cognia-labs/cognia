@@ -679,6 +679,18 @@ export function createEventAdapter(ctx: EventAdapterContext) {
       usage?: unknown
       budgetExhausted?: boolean
       startedAt?: number
+      /**
+       * The turn ended on an error or an abnormal finish, after any partial
+       * output: reported as `error_during_execution` so no consumer reads the
+       * frame as a finished turn while the end event says it failed.
+       */
+      failed?: boolean
+      /** The turn was stopped: `terminal_reason: "aborted_streaming"`. */
+      interrupted?: boolean
+      /** The last leg's AI SDK `finishReason`, kept for diagnostics. */
+      finishReason?: unknown
+      /** Model requests the turn made (every leg's steps), not user turns. */
+      steps?: number
     }) {
       const out: TranslatedEvent[] = []
       emitInitIfNeeded(out)
@@ -686,14 +698,26 @@ export function createEventAdapter(ctx: EventAdapterContext) {
       // One adapter survives multiple turns; a leg reset must not reset the
       // caller's turn clock or include the idle gap since session creation.
       const durationMs = Math.max(0, Date.now() - (info?.startedAt ?? startedAt))
+      // Same precedence as the standalone mapper (`lib/ai/chat/sdk-event-mapper.ts`):
+      // a failure outranks a ceiling, and a length or content-filter stop stays
+      // a `success` whose `stop_reason` says the reply is not finished.
+      const failed = info?.failed === true
+      const budgetExhausted = !failed && info?.budgetExhausted === true
       const result = {
         type: "result",
-        subtype: info?.budgetExhausted ? "error_max_turns" : "success",
+        subtype: failed
+          ? "error_during_execution"
+          : budgetExhausted
+            ? "error_max_turns"
+            : "success",
         session_id: ctx.sdkSessionId,
-        is_error: info?.budgetExhausted === true,
+        is_error: failed || budgetExhausted,
+        stop_reason: lastStopReason ?? (failed || budgetExhausted ? null : "end_turn"),
+        ...(info?.interrupted === true && !failed ? { terminal_reason: "aborted_streaming" } : {}),
+        ...(typeof info?.finishReason === "string" ? { finish_reason: info.finishReason } : {}),
         duration_ms: durationMs,
         duration_api_ms: durationMs,
-        num_turns: 1,
+        num_turns: Math.max(1, Math.floor(info?.steps ?? 1)),
         total_cost_usd: info?.totalCostUsd ?? 0,
         // Alias normalization lives in one place (mirrored at
         // `lib/ai/chat/usage-normalize.ts`, pinned by a parity test) so a new

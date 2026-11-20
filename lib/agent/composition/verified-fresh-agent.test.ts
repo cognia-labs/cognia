@@ -8,6 +8,7 @@ import {
   buildVerificationPrompt,
   newAssistantReply,
   parseVerificationVerdict,
+  verdictOfTurn,
   runVerifiedFreshAgentTurn,
   verificationAvailableOn,
   verificationSessionTitle,
@@ -107,7 +108,45 @@ describe("parseVerificationVerdict", () => {
   })
 })
 
+describe("verdictOfTurn", () => {
+  const PASS = '{"verdict":"pass","summary":"Looks right.","points":[]}'
+
+  it("never accepts a pass from a turn that did not finish", () => {
+    for (const reason of ["error_max_turns", "max_tokens", "error_max_budget_usd"]) {
+      expect(verdictOfTurn(PASS, { kind: "incomplete", reason }).verdict).toBe("unsure")
+    }
+    expect(verdictOfTurn(PASS, { kind: "failed", reason: "api_error" }).verdict).toBe("unsure")
+  })
+
+  it("keeps a finished pass, and a fail either way", () => {
+    expect(verdictOfTurn(PASS, { kind: "completed" }).verdict).toBe("pass")
+    expect(verdictOfTurn(PASS, undefined).verdict).toBe("pass")
+    expect(
+      verdictOfTurn('{"verdict":"fail","summary":"No tests."}', {
+        kind: "incomplete",
+        reason: "error_max_turns",
+      }).verdict
+    ).toBe("fail")
+  })
+})
+
 describe("runVerifiedFreshAgentTurn", () => {
+  it("does not read a pass from a verifier turn that hit its ceiling", async () => {
+    const { deps } = turnDeps({
+      runAndCapture: jest.fn(async () => ({
+        text: '{"verdict":"pass","summary":"All checked.","points":[]}',
+        messageId: "verifier-reply",
+        turnOutcome: { kind: "incomplete" as const, reason: "error_max_turns" },
+      })),
+    })
+    const result = await runVerifiedFreshAgentTurn(
+      { mainSessionId: MAIN_ID, request: "r", reply: "a", cwd: null },
+      deps
+    )
+    expect(result.parsed.verdict).toBe("unsure")
+    expect(result.parsed.summary).toBe("All checked.")
+  })
+
   it("runs in a new session that is not the main one and shares no context", async () => {
     const { deps, calls } = turnDeps()
     const result = await runVerifiedFreshAgentTurn(

@@ -57,6 +57,7 @@ import { visibleTeamDerivedText, visibleTeamTurn } from "../team-run-context"
 import { isTaskReviewEnabled } from "../gates/task-review-policy"
 import type { ClaimOptions } from "./teammate-pool"
 import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
+import { capturedTurnUnfinished } from "@/lib/ai/agent/execution/capture-types"
 import type { AgentChildEnvironmentSession } from "@/lib/ai/agent/execution/local-tauri-environment"
 import { createTeammateProgressReporter } from "./teammate-progress-coalescer"
 import { agendaFingerprint, parseRateLimitCooldown } from "../gates/nudge-guard"
@@ -580,7 +581,7 @@ async function runToolEnabled(
         ? lastError
         : new Error("dispatchTeammate: no routing candidate")
     }
-    executionFailed = Boolean(result.resultSubtype?.startsWith("error"))
+    executionFailed = capturedTurnUnfinished(result) !== null
     return { text: result.text ?? "", usage: readUsage(result) }
   } finally {
     // These sessions belong to one dispatch, not to a continuing conversation.

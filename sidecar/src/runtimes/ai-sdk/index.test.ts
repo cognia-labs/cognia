@@ -2328,6 +2328,161 @@ test("dispatchAiSdk surfaces a provider error that arrives AFTER partial text (k
   assert.match(lastText, /Here is part of the answer/)
 })
 
+/**
+ * Run one turn against scripted legs and return its `result` frame and its
+ * `session_ended`. Each leg is a list of stream parts.
+ */
+async function terminalOf(legs: unknown[][], sendOptions: Record<string, unknown> = {}) {
+  const { events, emit } = captureEmit()
+  let calls = 0
+  const session = startSession({
+    provider: "openai",
+    sessionId: "terminal",
+    firstPrompt: "hi",
+    sendOptions: {
+      model: "gpt-4o-mini",
+      providerCredentials: { apiKey: "sk", protocol: "openai" },
+      ...sendOptions,
+    },
+    emit,
+    log: () => {},
+    streamText: () => {
+      const parts = legs[Math.min(calls, legs.length - 1)]!
+      calls += 1
+      return {
+        fullStream: (async function* () {
+          for (const part of parts) yield part
+        })(),
+        usage: Promise.resolve({ inputTokens: 1, outputTokens: 1 }),
+        response: Promise.resolve({ id: `r${calls}`, messages: [] }),
+        steps: Promise.resolve([{}]),
+      }
+    },
+  })
+  await waitForEvent(events, (e) => e.type === "session_ended")
+  session.closeInput()
+  const result = events.find((e) => e.type === "event" && e.event.type === "result")!.event
+  const ended = events.find((e) => e.type === "session_ended")!
+  return { result, ended, calls }
+}
+
+test("a reply cut at the token limit says so on its result", async () => {
+  const { result, ended } = await terminalOf([
+    [
+      { type: "text-delta", text: "Half an ans" },
+      { type: "finish", finishReason: "length" },
+    ],
+  ])
+  assert.equal(result.subtype, "success")
+  assert.equal(result.stop_reason, "max_tokens")
+  assert.equal(result.finish_reason, "length")
+  // The end carries the frame that decided it, as the Claude rail's does.
+  assert.equal((ended.result as { stop_reason?: string }).stop_reason, "max_tokens")
+  assert.equal(ended.error, undefined)
+})
+
+test("an `error` finish is a failed turn, not a success", async () => {
+  const { result, ended } = await terminalOf([
+    [
+      { type: "text-delta", text: "Partial" },
+      { type: "finish", finishReason: "error" },
+    ],
+  ])
+  assert.equal(result.subtype, "error_during_execution")
+  assert.equal(result.is_error, true)
+  assert.match(String(ended.error), /ended the reply with an error/)
+})
+
+test("unknown finishes that keep producing past the bound fail the turn", async () => {
+  const { result, ended, calls } = await terminalOf([
+    [
+      { type: "text-delta", text: "more" },
+      { type: "finish", finishReason: "other" },
+    ],
+  ])
+  assert.ok(calls > 1, "the bounded continues ran")
+  assert.equal(result.subtype, "error_during_execution")
+  assert.match(String(ended.error), /without a recognized finish reason/)
+})
+
+test("a provider error after partial text fails the result too", async () => {
+  // The end already reports the error; a `success` result before it read as a
+  // finished turn to every consumer that settles on the result.
+  const { result, ended } = await terminalOf([
+    [
+      { type: "text-delta", text: "Partial" },
+      { type: "error", error: new Error("socket hang up") },
+    ],
+  ])
+  assert.equal(result.subtype, "error_during_execution")
+  assert.match(String(ended.error), /socket hang up/)
+})
+
+test("the step cap reports error_max_turns and counts every model request", async () => {
+  const { result, ended } = await terminalOf(
+    [
+      [
+        { type: "start-step" },
+        { type: "tool-call", toolCallId: "c", toolName: "x", input: {} },
+        { type: "finish-step", usage: { inputTokens: 1, outputTokens: 1 } },
+        { type: "finish", finishReason: "tool-calls" },
+      ],
+    ],
+    { maxTurns: 1 }
+  )
+  assert.equal(result.subtype, "error_max_turns")
+  assert.equal(result.num_turns, 1)
+  assert.equal((ended.result as { subtype?: string }).subtype, "error_max_turns")
+  assert.equal(ended.error, undefined)
+})
+
+test("num_turns is the turn's model requests, not one", async () => {
+  const { result } = await terminalOf([
+    [
+      { type: "start-step" },
+      { type: "finish-step", usage: { inputTokens: 1, outputTokens: 1 } },
+      { type: "start-step" },
+      { type: "finish-step", usage: { inputTokens: 1, outputTokens: 1 } },
+      { type: "start-step" },
+      { type: "text-delta", text: "done" },
+      { type: "finish-step", usage: { inputTokens: 1, outputTokens: 1 } },
+      { type: "finish", finishReason: "stop" },
+    ],
+  ])
+  assert.equal(result.subtype, "success")
+  assert.equal(result.num_turns, 3)
+})
+
+test("abnormalFinishReason: a continuation that came back empty converged", () => {
+  const { abnormalFinishReason } = __testing__
+  assert.equal(
+    abnormalFinishReason({
+      finishReason: "other",
+      unknownFinishContinues: 1,
+      lastLegProducedOutput: false,
+    }),
+    null
+  )
+  assert.equal(
+    abnormalFinishReason({
+      finishReason: "stop",
+      unknownFinishContinues: 0,
+      lastLegProducedOutput: true,
+    }),
+    null
+  )
+  assert.match(
+    String(
+      abnormalFinishReason({
+        finishReason: "unknown",
+        unknownFinishContinues: 0,
+        lastLegProducedOutput: false,
+      })
+    ),
+    /unknown/
+  )
+})
+
 test("dispatchAiSdk retries a stalled stream via the idle watchdog, then recovers", async () => {
   // A provider that holds the connection open but stops sending used to park
   // the turn forever. The watchdog bounds the idle gap; the resulting
@@ -2720,6 +2875,10 @@ test("interrupt ends the current turn but keeps the multi-turn session for the n
   await new Promise<void>((r) => setTimeout(r, 20))
   await session.q.interrupt()
   await waitForEvent(events, (e) => e.type === "session_ended")
+  // A Stop ends the turn interrupted, never as a finished turn.
+  const stopped = events.find((e) => e.type === "session_ended")!
+  assert.equal(stopped.interrupted, true)
+  assert.equal(stopped.error, undefined)
   // The interrupt did NOT close the session.
   assert.equal(
     events.some((e) => e.type === "session_closed"),

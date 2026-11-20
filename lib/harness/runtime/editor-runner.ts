@@ -27,6 +27,7 @@ import type {
   CaptureStreamEvent,
   RunAndCaptureResult,
 } from "@/lib/ai/agent/execution/capture-types"
+import { capturedTurnUnfinished } from "@/lib/ai/agent/execution/capture-types"
 import type { HarnessEvolutionRun } from "@/types/harness/evolution"
 import type { HarnessComponentsV1 } from "@/types/harness/snapshot"
 import {
@@ -455,9 +456,10 @@ async function runAgenticEditorTurn(
       throw error
     }
     const usage = await book()
-    if (result.resultSubtype?.startsWith("error")) {
+    const unfinished = capturedTurnUnfinished(result)
+    if (unfinished) {
       // Its spend is already booked; the run's ledger reads it from the usage rows.
-      throw new Error(`The editor session ended with ${result.resultSubtype}`)
+      throw new Error(`The editor session ended with ${unfinished}`)
     }
     return { usage }
   } finally {

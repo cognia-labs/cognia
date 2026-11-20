@@ -680,6 +680,39 @@ describe("runAndCaptureAssistantReply", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1)
   })
 
+  it("hands what streamed before an error to the caller as partial", async () => {
+    // A provider error after partial output used to reject with nothing, while
+    // a ceiling returned the same partial text: the work that reached the
+    // caller was lost on the explicit failure.
+    const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, { timeoutMs: 1_000 })
+    await flushUntilSubscribed()
+    await flushMicrotasks()
+    fire(assistantEvent("half of the findings"))
+    const conversationSnapshot = [{ role: "assistant", content: "half of the findings" }]
+    fire({
+      ...(sessionEnded({ error: "socket hang up" }) as object),
+      conversationSnapshot,
+    } as unknown as ClaudeEvent)
+    await expect(promise).rejects.toMatchObject({
+      code: "session_error",
+      partial: { text: "half of the findings", conversationSnapshot },
+    })
+  })
+
+  it("returns the turn's outcome so a ceiling or a cut reply is never read as done", async () => {
+    const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, { timeoutMs: 1_000 })
+    await flushUntilSubscribed()
+    await flushMicrotasks()
+    fire(assistantEvent("a reply cut short"))
+    fire({
+      ...(sessionEnded() as object),
+      result: { type: "result", subtype: "success", is_error: false, stop_reason: "max_tokens" },
+    } as unknown as ClaudeEvent)
+    const result = await promise
+    expect(result.resultSubtype).toBe("success")
+    expect(result.turnOutcome).toEqual({ kind: "incomplete", reason: "max_tokens" })
+  })
+
   it("preserves semantic policy refusal across the capture boundary", async () => {
     const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, { timeoutMs: 1_000 })
     await Promise.resolve()

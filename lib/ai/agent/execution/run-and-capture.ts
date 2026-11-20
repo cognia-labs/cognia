@@ -27,6 +27,7 @@ import {
  */
 
 import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
+import { classifyTurnResult } from "@cognia/agent-config-types/turn-outcome"
 import { redactText } from "@cognia/redact"
 import {
   bindToolCallRun,
@@ -150,7 +151,13 @@ export async function subscribeCaptureFromEnvelopes(
       const event = captureEventFromCanonical(envelope.event)
       if (event) onEvent(event)
     }
-    if (envelope.event.kind === "lifecycle" && envelope.event.phase === "ended")
+    // A turn's one terminal event: `ended`, `interrupted` or `failure` (the
+    // built-in rails publish exactly one, from `session_ended`).
+    if (
+      envelope.event.kind === "failure" ||
+      (envelope.event.kind === "lifecycle" &&
+        (envelope.event.phase === "ended" || envelope.event.phase === "interrupted"))
+    )
       options?.onTerminal?.()
   }, options?.route)
 }
@@ -797,6 +804,7 @@ async function captureAssistantReplyCore(
     let capturedStructuredOutput: unknown
     let hasCapturedStructuredOutput = false
     let capturedResultSubtype = ""
+    let capturedResultFrame: unknown = undefined
 
     // ── Best-effort typed-event emitter (plugin Agent SDK `runStreamed`). ──
     const emitEvent = (event: CaptureStreamEvent, source: "raw" | "envelope" = "raw") => {
@@ -1360,6 +1368,13 @@ async function captureAssistantReplyCore(
           // caught provider error, `sessionEndedFromResult` on an Agent SDK
           // `result` frame reporting `api_error_status`), and without it every
           // caller has to string-match the message to classify the failure.
+          // What streamed before the failure rides along as `partial`, exactly
+          // as an interrupted turn's does: a host that keeps history saves it
+          // instead of losing the work that reached the caller.
+          const text = assembledText.trim()
+          const snapshot = Array.isArray(evt.conversationSnapshot)
+            ? evt.conversationSnapshot
+            : undefined
           finishErr(
             new RunAndCaptureError(
               evt.error,
@@ -1367,6 +1382,16 @@ async function captureAssistantReplyCore(
               {
                 ...(typeof evt.httpStatus === "number" ? { httpStatus: evt.httpStatus } : {}),
                 ...(typeof evt.retryAfterMs === "number" ? { retryAfterMs: evt.retryAfterMs } : {}),
+                ...(text || snapshot
+                  ? {
+                      partial: {
+                        text,
+                        continuationContext: continuationContext(),
+                        ...(snapshot ? { conversationSnapshot: snapshot } : {}),
+                        ...(capturedSdkSessionId ? { sdkSessionId: capturedSdkSessionId } : {}),
+                      },
+                    }
+                  : {}),
               }
             )
           )
@@ -1387,6 +1412,12 @@ async function captureAssistantReplyCore(
           ? terminalResult?.structured_output
           : capturedStructuredOutput
         const resultSubtype = terminalResult?.subtype ?? capturedResultSubtype
+        // How the turn ended, off the frame that ended it (the end's, else the
+        // last one streamed). A ceiling, a cut or refused reply or a stop is
+        // returned, not thrown — a caller that accepts the turn as done checks
+        // this, not the subtype alone (a truncated reply is a `success`).
+        const outcomeFrame = evt.result ?? capturedResultFrame
+        const turnOutcome = outcomeFrame ? classifyTurnResult(outcomeFrame) : undefined
         const budgetExhausted =
           resultSubtype === "error_max_turns" || resultSubtype === "error_max_budget_usd"
         const budgetContinuationContext = budgetExhausted ? continuationContext() : undefined
@@ -1426,6 +1457,7 @@ async function captureAssistantReplyCore(
           a2uiSurfaceOrder: [...surfaceAcc.order],
           ...(usage ? { usage } : {}),
           ...(resultSubtype ? { resultSubtype } : {}),
+          ...(turnOutcome ? { turnOutcome } : {}),
           ...(budgetContinuationContext ? { budgetContinuationContext } : {}),
           ...(capturedSdkSessionId ? { sdkSessionId: capturedSdkSessionId } : {}),
           ...(Array.isArray(evt.conversationSnapshot)
@@ -1800,6 +1832,7 @@ async function captureAssistantReplyCore(
             structured_output?: unknown
           }
           if (sdkResult.subtype) capturedResultSubtype = sdkResult.subtype
+          capturedResultFrame = sdkResult
           if (Object.prototype.hasOwnProperty.call(sdkResult, "structured_output")) {
             hasCapturedStructuredOutput = true
             capturedStructuredOutput = sdkResult.structured_output

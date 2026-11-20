@@ -460,7 +460,7 @@ export function buildAnthropicOptions({
       }),
       buildLedgerToolHooks({
         gate: ledgerGate,
-        onRefused: () => interruptForLedger(),
+        onRefused: (refusal) => interruptForLedger(refusal),
       }) as unknown as HookMap,
       buildProfileToolHooks({
         sendOptions,

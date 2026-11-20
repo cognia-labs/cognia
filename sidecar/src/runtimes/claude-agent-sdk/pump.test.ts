@@ -196,6 +196,98 @@ test("iterator errors settle the session once and retain the error message", asy
   session.closeInput()
 })
 
+test("a query that ends without a result is not a clean end", async () => {
+  // The CLI went away mid-turn: calling that a clean end reported unfinished
+  // work as done to every consumer.
+  const { events } = captureClaudeRuntime({}, () => ({
+    async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", message: { id: "m", content: [{ type: "text", text: "Part" }] } }
+    },
+    interrupt() {},
+    close() {},
+  }))
+  await flush()
+  const ended = events.filter((event) => event.type === "session_ended")
+  assert.equal(ended.length, 1)
+  assert.equal(ended[0]!.code, "runtime_ended_without_result")
+  assert.match(String(ended[0]!.error), /without reporting a result/)
+})
+
+test("a stopped turn ends interrupted, whether or not the SDK answered first", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { events, session } = captureClaudeRuntime({}, () => ({
+    async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", message: { id: "m", content: [{ type: "text", text: "Part" }] } }
+      await gate
+      yield { type: "result", subtype: "success", terminal_reason: "aborted_streaming" }
+    },
+    interrupt() {},
+    close() {},
+  }))
+  await flush()
+  // The host's interrupt handler drains the session after `q.interrupt()`.
+  session.drainPending("interrupted")
+  release()
+  await flush()
+  const [ended] = events.filter((event) => event.type === "session_ended")
+  assert.equal(ended!.interrupted, true)
+  assert.equal(ended!.error, undefined)
+})
+
+test("a spent run budget ends the turn with the budget error, not as a Stop", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let interrupts = 0
+  const { events } = captureClaudeRuntime({ runBudget: { tokens: 1 } }, () => ({
+    async *[Symbol.asyncIterator]() {
+      yield {
+        type: "assistant",
+        message: { id: "m", usage: { input_tokens: 2 }, content: [{ type: "text", text: "P" }] },
+      }
+      await gate
+      yield { type: "result", subtype: "success", terminal_reason: "aborted_streaming" }
+    },
+    interrupt() {
+      interrupts += 1
+      release()
+    },
+    close() {},
+  }))
+  await flush()
+  await flush()
+  assert.equal(interrupts, 1)
+  const [ended] = events.filter((event) => event.type === "session_ended")
+  assert.match(String(ended!.error), /budget is used up/)
+  assert.equal(ended!.interrupted, undefined)
+})
+
+test("a turn the SDK finished stays finished after a late stop", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { events, session } = captureClaudeRuntime({}, () => ({
+    async *[Symbol.asyncIterator]() {
+      await gate
+      yield { type: "result", subtype: "success", terminal_reason: "completed" }
+    },
+    interrupt() {},
+    close() {},
+  }))
+  await flush()
+  session.drainPending("interrupted")
+  release()
+  await flush()
+  const [ended] = events.filter((event) => event.type === "session_ended")
+  assert.equal(ended!.interrupted, undefined)
+  assert.equal(ended!.error, undefined)
+})
+
 test("G3: a live native background task refuses personal admission", async () => {
   let finish!: () => void
   const done = new Promise<void>((resolve) => {

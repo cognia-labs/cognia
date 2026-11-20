@@ -615,7 +615,7 @@
             "success"
           ]
         },
-        "canonical": ["usage", "structured-output", "lifecycle", "failure"],
+        "canonical": ["usage", "structured-output"],
         "capability": "streaming"
       },
       "SDKSessionStateChangedMessage": {

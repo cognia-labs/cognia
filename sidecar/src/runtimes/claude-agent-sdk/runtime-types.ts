@@ -9,7 +9,7 @@ import type { ToolSessionContext } from "../../tools/session.ts"
 import type { createDoomLoopGuard } from "../../policy/doom-loop.ts"
 import type { createStderrLogSink } from "../../mcp/client/log.ts"
 import type { createMcpAutoReconnector } from "../../mcp/client/auto-reconnect.ts"
-import type { createCallLedgerGate } from "../common/call-ledger-gate.ts"
+import type { CallRefusal, createCallLedgerGate } from "../common/call-ledger-gate.ts"
 import type { buildToolSurface } from "./tool-surface.ts"
 import type { createAnthropicSession } from "./session.ts"
 import type { warmPool } from "./warm-pool.ts"
@@ -60,9 +60,30 @@ export interface OptionsContext extends BaseContext {
   pendingApprovals: Map<string, PendingApproval>
   pendingPluginHookCalls: PendingPluginHooks
   doomGuard: ReturnType<typeof createDoomLoopGuard>
-  interruptForLedger(): void
+  interruptForLedger(refusal?: CallRefusal): void
   surface: ReturnType<typeof buildToolSurface>
 }
+/**
+ * Why this process stopped the turn, when it did: a Stop or teardown
+ * (`"interrupted"`), or a stop that is a failure the turn must report — a
+ * spent run budget, a worker fence, a ledger refusal. The SDK answers every
+ * one of them with the same `aborted_*` result frame, so the pump reads the
+ * cause from here to end the turn honestly (`pump.ts`).
+ */
+export type TurnStopCause =
+  | "interrupted"
+  | {
+      error: string
+      code?: string
+      routerFusionRefusal?: { code: string; message?: string }
+    }
+
+/** Per-query turn state shared by the session, the runtime and the pump. */
+export interface AnthropicTurnState {
+  outstandingPrompts: number
+  stopCause?: TurnStopCause
+}
+
 export interface SessionContext {
   q: RuntimeQuery
   inputStream: InputStream<SDKUserMessage>
@@ -81,7 +102,7 @@ export interface PumpContext extends BaseContext {
   mcpAutoReconnect: ReturnType<typeof createMcpAutoReconnector>
   pluginToolNameAliases: Map<string, string>
   session: ReturnType<typeof createAnthropicSession>["session"]
-  state: { outstandingPrompts: number }
+  state: AnthropicTurnState
   mcpStderrSink: ReturnType<typeof createStderrLogSink>
   toolSession: ToolSessionContext
   waitForProcessExit(): Promise<void>

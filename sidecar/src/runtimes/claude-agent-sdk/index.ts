@@ -21,7 +21,11 @@ import { traceAsyncIterable } from "../../platform/telemetry/index.ts"
 
 import { makeInputStream } from "../../shared/input-stream.ts"
 
-import { createCallLedgerGate } from "../common/call-ledger-gate.ts"
+import {
+  createCallLedgerGate,
+  refusalSessionEnded,
+  type CallRefusal,
+} from "../common/call-ledger-gate.ts"
 
 import { createDoomLoopGuard } from "../../policy/doom-loop.ts"
 import type { FenceDeniedError } from "../../policy/fence/admission.ts"
@@ -98,7 +102,7 @@ export function dispatchAnthropic(
       ? Math.min(sendOptions.maxBudgetUsd ?? Infinity, sendOptions.ledger.envelopeMaxBudgetUsd)
       : sendOptions.maxBudgetUsd
   /** Late-bound so a ledger refusal inside a hook can stop the query built below. */
-  let interruptForLedger = () => {}
+  let interruptForLedger = (_refusal?: CallRefusal) => {}
   let interruptForFence = (_error: FenceDeniedError) => {}
 
   const toolSession = createToolSessionContext({
@@ -134,7 +138,7 @@ export function dispatchAnthropic(
     pendingApprovals,
     pendingPluginHookCalls,
     doomGuard,
-    interruptForLedger: () => interruptForLedger(),
+    interruptForLedger: (refusal) => interruptForLedger(refusal),
     onFenceDenied: (error) => interruptForFence(error),
     surface,
   })
@@ -233,13 +237,22 @@ export function dispatchAnthropic(
 
   // A ledger refusal inside the PreToolUse hook stops the query: the SDK must
   // not make another model call on a run the ledger closed.
-  interruptForLedger = () => {
+  interruptForLedger = (refusal) => {
+    // The turn ends on this refusal, not on the `aborted_*` frame it causes.
+    if (refusal) {
+      const ended = refusalSessionEnded(sessionId, refusal)
+      state.stopCause ??= {
+        error: ended.error,
+        routerFusionRefusal: ended.routerFusionRefusal,
+      }
+    }
     void Promise.resolve()
       .then(() => q.interrupt())
       .catch((err) => log("warn", `ledger interrupt failed: ${err?.message ?? err}`))
   }
   interruptForFence = (error) => {
     log("warn", error.code)
+    state.stopCause ??= { error: error.message, code: error.code }
     drainRuntimePending(error.code)
     void Promise.resolve()
       .then(() => q.interrupt())

@@ -34,6 +34,7 @@ import type {
   RunAndCaptureOptions,
   RunAndCaptureResult,
 } from "@/lib/ai/agent/execution/capture-types"
+import { capturedTurnUnfinished } from "@/lib/ai/agent/execution/capture-types"
 import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { SurfaceUsageInput } from "@/lib/db/session-usage"
 import type {
@@ -307,9 +308,8 @@ export async function runProbe(input: ProbeInput, deps: ProbeRunnerDeps): Promis
           ...(run.projectId ? { projectId: run.projectId } : {}),
         },
       })
-      if (result.resultSubtype?.startsWith("error")) {
-        runError = `The turn ended with ${result.resultSubtype}`
-      }
+      const unfinished = capturedTurnUnfinished(result)
+      if (unfinished) runError = `The turn ended with ${unfinished}`
     } catch (error) {
       if (input.signal.aborted) throw error
       runError = errorMessage(error)

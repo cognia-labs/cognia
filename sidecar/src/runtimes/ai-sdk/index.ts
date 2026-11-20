@@ -163,6 +163,32 @@ import {
 } from "./messages.ts"
 
 /**
+ * Why the turn's last leg ended abnormally, or `null` when it ended normally.
+ *
+ * `error` is the provider saying the reply failed. An unknown reason
+ * (`other`/`unknown`) keeps the loop going while each leg still produces
+ * (`MAX_UNKNOWN_FINISH_CONTINUES`); the turn is abnormal when that budget ran
+ * out while it was still producing, or when its only leg produced nothing. A
+ * continuation that came back empty converged: the model was done.
+ *
+ * Exported via `__testing__`.
+ */
+function abnormalFinishReason({
+  finishReason,
+  unknownFinishContinues,
+  lastLegProducedOutput,
+}: {
+  finishReason: unknown
+  unknownFinishContinues: number
+  lastLegProducedOutput: boolean
+}): string | null {
+  if (finishReason === "error") return "The provider ended the reply with an error."
+  if (finishReason !== "other" && finishReason !== "unknown") return null
+  if (unknownFinishContinues > 0 && !lastLegProducedOutput) return null
+  return `The provider ended the reply without a recognized finish reason (${finishReason}).`
+}
+
+/**
  * How many agentic steps to charge a finished leg against the turn's step
  * budget. `result.steps` is an AI-SDK getter that REJECTS on a partial-error
  * leg, so the real count isn't always available:
@@ -1232,6 +1258,15 @@ export function dispatchAiSdk({
       // Unknown finishReasons keep the loop going — bounded so a provider that
       // always ends "other" can't spin the turn forever (opencode v1.18.21).
       let unknownFinishContinues = 0
+      // How the last model leg ended, for the turn's `result` frame: an
+      // abnormal finish (`error`, or an unknown reason still producing after
+      // the bounded continues) is a failed turn, never a `success`.
+      let lastLegFinishReason: unknown = null
+      let lastLegProducedOutput = false
+      // Model requests across every leg (`num_turns` on the result). The step
+      // budget above is charged per leg and is not a count of requests.
+      let turnStartedSteps = 0
+      let turnFinishedSteps = 0
 
       while (true) {
         currentLegStepInputTokens = 0
@@ -1504,7 +1539,9 @@ export function dispatchAiSdk({
               streamError = evt.error
             }
             if (evt?.type === "finish") finishReason = evt.finishReason ?? finishReason
+            if (evt?.type === "start-step") turnStartedSteps += 1
             if (evt?.type === "finish-step") {
+              turnFinishedSteps += 1
               recordCompletedStepUsage(evt.usage ?? evt.totalUsage)
             }
             // NB: the PostToolUse review no longer intercepts here — it runs at
@@ -1805,6 +1842,8 @@ export function dispatchAiSdk({
         // (or stuck), and continuing would just burn requests. Anything else
         // ends the turn here.
         const unknownFinish = finishReason === "unknown" || finishReason === "other"
+        lastLegFinishReason = finishReason
+        lastLegProducedOutput = legProducedOutput
         if (
           finishReason === "tool-calls" ||
           injectedToolImages ||
@@ -1844,12 +1883,30 @@ export function dispatchAiSdk({
       // Report aborted background side calls before announcing terminal state.
       await settleTurnCompaction()
       const finishUsage = finishUsageSnapshot()
+      const abnormalFinish = abnormalFinishReason({
+        finishReason: lastLegFinishReason,
+        unknownFinishContinues,
+        lastLegProducedOutput,
+      })
+      const endsWithError = Boolean(
+        workerFenceError ||
+        ledgerRefusal ||
+        (turnError && !cancelled) ||
+        (!cancelled && abnormalFinish)
+      )
       const finishEvents = adapter.finish({
         usage: finishUsage,
         budgetExhausted: cappedWhileBusy,
         startedAt: turnStartedAt,
+        failed: endsWithError,
+        interrupted: cancelled,
+        finishReason: lastLegFinishReason,
+        steps: Math.max(turnStartedSteps, turnFinishedSteps),
       })
       flushAdapter(finishEvents)
+      // The end event carries the turn's own `result` frame, exactly as the
+      // Claude rail does, so every consumer settles off one terminal decision.
+      const resultFrame = finishEvents.find((event) => record(event)?.type === "result")
       if (workerFenceError) {
         emit({
           type: "session_ended",
@@ -1857,6 +1914,7 @@ export function dispatchAiSdk({
           error: workerFenceError.message,
           code: workerFenceError.code,
           reason: workerFenceError.code,
+          result: resultFrame,
           conversationSnapshot: conversation,
         })
       } else if (ledgerRefusal) {
@@ -1864,9 +1922,20 @@ export function dispatchAiSdk({
         // was produced so far is kept; the turn ends explicitly, never silently.
         emit({
           ...refusalSessionEnded(sessionId, ledgerRefusal),
+          result: resultFrame,
           conversationSnapshot: conversation,
         })
-      } else if (turnError && !cancelled) {
+      } else if (cancelled) {
+        // A Stop that let the leg drain instead of throwing: the turn was
+        // interrupted, not completed, and is reported as such.
+        emit({
+          type: "session_ended",
+          sessionId,
+          interrupted: true,
+          result: resultFrame,
+          conversationSnapshot: conversation,
+        })
+      } else if (turnError) {
         // A provider error AFTER partial text already streamed (e.g. a 429 /
         // overloaded / connection-reset mid-reply). `finish` above closed the
         // content blocks so the partial is preserved, but we must still report
@@ -1880,11 +1949,28 @@ export function dispatchAiSdk({
           type: "session_ended",
           sessionId,
           error: msg,
+          result: resultFrame,
           conversationSnapshot: conversation,
           ...extractHttpErrorMeta(turnError),
         })
+      } else if (abnormalFinish) {
+        // The provider ended the reply on `error`, or kept ending it on a
+        // reason the SDK cannot map. What streamed is kept, and the turn is a
+        // failure rather than a finished answer.
+        emit({
+          type: "session_ended",
+          sessionId,
+          error: abnormalFinish,
+          result: resultFrame,
+          conversationSnapshot: conversation,
+        })
       } else {
-        emit({ type: "session_ended", sessionId, conversationSnapshot: conversation })
+        emit({
+          type: "session_ended",
+          sessionId,
+          result: resultFrame,
+          conversationSnapshot: conversation,
+        })
       }
     } catch (err) {
       if (err instanceof FenceDeniedError) {
@@ -1915,19 +2001,28 @@ export function dispatchAiSdk({
       // streamText rejects with an AbortError once the signal fires.
       if (cancelled || record(err).name === "AbortError" || record(err).name === "TimeoutError") {
         const partialUsage = finishUsageSnapshot()
-        if (partialUsage)
-          flushAdapter(adapter.finish({ usage: partialUsage, startedAt: turnStartedAt }))
+        const partialEvents = partialUsage
+          ? adapter.finish({
+              usage: partialUsage,
+              startedAt: turnStartedAt,
+              failed: Boolean(workerFenceError),
+              interrupted: !workerFenceError,
+            })
+          : []
+        flushAdapter(partialEvents)
+        const partialResult = partialEvents.find((event) => record(event)?.type === "result")
         emit({
           type: "session_ended",
           sessionId,
           conversationSnapshot: conversation,
+          ...(partialResult ? { result: partialResult } : {}),
           ...(workerFenceError
             ? {
                 error: workerFenceError.message,
                 code: workerFenceError.code,
                 reason: workerFenceError.code,
               }
-            : {}),
+            : { interrupted: true }),
         })
       } else {
         emit({
@@ -2177,6 +2272,7 @@ export const __testing__ = {
   projectToolResultImages,
   sanitizeToolMessagePairs,
   chargeLegSteps,
+  abnormalFinishReason,
   resolveStepChunk,
   measuredPromptOverhead,
 }

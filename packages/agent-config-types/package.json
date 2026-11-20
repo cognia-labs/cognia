@@ -17,6 +17,12 @@
       "node": "./dist/claude-agent-sdk-options.js",
       "default": "./src/claude-agent-sdk-options.ts"
     },
+    "./turn-outcome": {
+      "cognia-source": "./src/turn-outcome.ts",
+      "types": "./src/turn-outcome.ts",
+      "node": "./dist/turn-outcome.js",
+      "default": "./src/turn-outcome.ts"
+    },
     "./plugin-interception": {
       "cognia-source": "./src/plugin-interception.ts",
       "types": "./src/plugin-interception.ts",

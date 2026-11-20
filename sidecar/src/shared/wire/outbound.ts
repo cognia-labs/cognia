@@ -22,7 +22,20 @@ export type OutboundFrame =
   | { type: "ready"; sdkVersion?: string; sidecarVersion?: string }
   | { type: "log"; level: "info" | "warn" | "error"; message: string }
   | { type: "runtime_warning"; sessionId: string; code: string; message: string }
-  | { type: "session_ended"; sessionId: string; turnId?: string; error?: string; result?: unknown }
+  | {
+      type: "session_ended"
+      sessionId: string
+      turnId?: string
+      error?: string
+      /**
+       * The `result` frame that ended the turn. Both built-in rails attach it,
+       * so a consumer settles off one terminal decision
+       * (`@cognia/agent-config-types/turn-outcome`).
+       */
+      result?: unknown
+      /** A Stop ended the turn: neither finished nor failed. */
+      interrupted?: true
+    }
   | {
       type: "control_response"
       sessionId: string

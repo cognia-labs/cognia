@@ -38,6 +38,7 @@
  * companion transport first.
  */
 
+import type { TurnOutcome } from "@cognia/agent-config-types/turn-outcome"
 import type { UIMessage } from "ai"
 import type {
   ChatSession,
@@ -251,6 +252,8 @@ export interface VerifiedFreshAgentTurnDeps {
   ) => Promise<{
     text: string
     messageId?: string
+    /** How the verifier's turn ended; an unfinished one cannot pass. */
+    turnOutcome?: TurnOutcome
   }>
   readDiff: (cwd: string) => Promise<WorkspaceDiffSnapshot>
   persistTranscript: (sessionId: string, messages: UIMessage[]) => Promise<void>
@@ -378,10 +381,24 @@ export async function runVerifiedFreshAgentTurn(
 
   return {
     verificationSessionId,
-    parsed: parseVerificationVerdict(result.text),
+    parsed: verdictOfTurn(result.text, result.turnOutcome),
     diffIncluded: Boolean(diff && diff.text),
     rawText: result.text,
   }
+}
+
+/**
+ * The verdict a verifier turn may be held to.
+ *
+ * A turn that did not finish — a step or money ceiling, a reply cut at the
+ * token limit — can still have produced a well-formed `pass` before it
+ * stopped. That is not a decision the verifier reached, so it reads as
+ * `unsure`; a `fail` stands, since refusing on partial evidence is safe.
+ */
+export function verdictOfTurn(text: string, outcome: TurnOutcome | undefined): ParsedVerdict {
+  const parsed = parseVerificationVerdict(text)
+  if (!outcome || outcome.kind === "completed" || parsed.verdict !== "pass") return parsed
+  return { ...parsed, verdict: "unsure" }
 }
 
 // ---- The follow-up trigger --------------------------------------------------

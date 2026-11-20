@@ -37,6 +37,95 @@ describe("work submission terminal events", () => {
     stop()
   })
 
+  it.each([
+    ["error_max_turns", { type: "result", subtype: "error_max_turns", is_error: true }],
+    ["error_max_budget_usd", { type: "result", subtype: "error_max_budget_usd", is_error: true }],
+    [
+      "error_max_structured_output_retries",
+      { type: "result", subtype: "error_max_structured_output_retries", is_error: true },
+    ],
+    ["max_tokens", { type: "result", subtype: "success", stop_reason: "max_tokens" }],
+  ])("settles a clean end that hit %s as failed, not completed", async (reason, result) => {
+    let handler: ((event: ClaudeEvent) => void) | undefined
+    const settleSession = jest.fn(async () => true)
+    const stop = startWorkSubmissionTerminalEvents({
+      subscribe: async (next) => {
+        handler = next
+        return () => {}
+      },
+      settleSession,
+    })
+    await Promise.resolve()
+
+    handler?.({ type: "session_ended", sessionId: "session-1", result } as ClaudeEvent)
+    await flushEvents()
+
+    expect(settleSession).toHaveBeenCalledWith("session-1", {
+      outcome: "failed",
+      errorCode: reason,
+    })
+    stop()
+  })
+
+  it("reads the ceiling off the turn's own result when the end carries none", async () => {
+    let handler: ((event: ClaudeEvent) => void) | undefined
+    const settleSession = jest.fn(async () => true)
+    const capped = { type: "result", subtype: "error_max_turns", is_error: true } as never
+    const stop = startWorkSubmissionTerminalEvents({
+      subscribe: async (next) => {
+        handler = next
+        return () => {}
+      },
+      loadMessages: async () => [] as never,
+      applyEvent: (messages, event) =>
+        (event as { type: string }).type === "result" ? { messages, result: capped } : { messages },
+      hasOpenSubmission: async () => true,
+      settleSession,
+      recordUsage: jest.fn(async () => null),
+    })
+    await Promise.resolve()
+
+    handler?.({ type: "event", sessionId: "session-1", event: { type: "result" } as never })
+    handler?.({ type: "session_ended", sessionId: "session-1" })
+    for (let tick = 0; tick < 20 && settleSession.mock.calls.length === 0; tick += 1) {
+      await Promise.resolve()
+    }
+
+    expect(settleSession).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ outcome: "failed", errorCode: "error_max_turns" })
+    )
+    stop()
+  })
+
+  it("settles a stopped turn as cancelled and a finished one as completed", async () => {
+    let handler: ((event: ClaudeEvent) => void) | undefined
+    const settleSession = jest.fn(async () => true)
+    const stop = startWorkSubmissionTerminalEvents({
+      subscribe: async (next) => {
+        handler = next
+        return () => {}
+      },
+      settleSession,
+    })
+    await Promise.resolve()
+
+    handler?.({ type: "session_ended", sessionId: "stopped", interrupted: true } as ClaudeEvent)
+    handler?.({
+      type: "session_ended",
+      sessionId: "done",
+      result: { type: "result", subtype: "success", is_error: false },
+    } as ClaudeEvent)
+    await flushEvents()
+
+    expect(settleSession).toHaveBeenCalledWith("stopped", {
+      outcome: "cancelled",
+      errorCode: "interrupted",
+    })
+    expect(settleSession).toHaveBeenCalledWith("done", { outcome: "completed" })
+    stop()
+  })
+
   it("commits recovered output through the exactly-once settlement transaction", async () => {
     let handler: ((event: ClaudeEvent) => void) | undefined
     const initial = [{ id: "user-1", role: "user", parts: [] }] as never
