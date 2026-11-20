@@ -19,8 +19,35 @@ import {
   detectDocumentTypeFromFilename,
   isBinaryDocumentType,
 } from "@cognia/document/support-matrix"
+import { DEFAULT_DOCUMENT_LIMITS } from "@cognia/document/limits"
 import type { DocumentType, ParseDiagnostic } from "@cognia/document/types"
+import {
+  inspectUploadContent,
+  UploadContentInspectionError,
+  type UploadContentInspectionCode,
+} from "@/lib/security/upload-content-inspection"
 import type { ArtifactLanguage } from "@/types"
+
+/**
+ * Largest file Canvas reads: the shared document input ceiling. Past it the
+ * editor would hold a buffer nobody can work in.
+ */
+export const CANVAS_IMPORT_MAX_BYTES = DEFAULT_DOCUMENT_LIMITS.maxInputBytes
+
+/** Why Canvas refused a file before any parser saw it. */
+export type CanvasImportRejection = UploadContentInspectionCode | "too_large"
+
+/**
+ * The file was refused at the door: too large, or failing the same content
+ * inspection an attachment upload goes through (an executable, an unsafe
+ * archive, or bytes that do not match the extension).
+ */
+export class CanvasImportRejectedError extends Error {
+  constructor(readonly reason: CanvasImportRejection) {
+    super(`canvas import rejected: ${reason}`)
+    this.name = "CanvasImportRejectedError"
+  }
+}
 
 /** Why an imported document may not match the file it came from. */
 export type CanvasImportWarningCode =
@@ -160,7 +187,8 @@ export interface CanvasImportDeps {
   processDocument: (
     id: string,
     filename: string,
-    data: ArrayBuffer | string
+    data: ArrayBuffer | string,
+    options: { maxFileSize: number }
   ) => Promise<{
     type: DocumentType
     content: string
@@ -187,16 +215,40 @@ export async function importCanvasDocument(
   file: File,
   deps?: CanvasImportDeps
 ): Promise<CanvasImportResult> {
+  if (file.size > CANVAS_IMPORT_MAX_BYTES) throw new CanvasImportRejectedError("too_large")
   const resolved = deps ?? (await defaultDeps())
   const detectedType = detectDocumentTypeFromFilename(file.name)
+
+  // The admission an attachment upload gets, before a parser touches the
+  // bytes: Canvas used to hand any file straight to the parser.
+  const bytes = await file.arrayBuffer()
+  try {
+    inspectUploadContent({
+      name: file.name,
+      declaredMediaType: file.type,
+      bytes: new Uint8Array(bytes),
+    })
+  } catch (error) {
+    if (error instanceof UploadContentInspectionError) {
+      throw new CanvasImportRejectedError(error.code)
+    }
+    throw error
+  }
 
   // A text or code file is read as text so its bytes survive exactly. Routing
   // it through the binary path would normalise whitespace and line endings.
   const payload: ArrayBuffer | string = isBinaryDocumentType(detectedType)
-    ? await file.arrayBuffer()
-    : await file.text()
+    ? bytes
+    : new TextDecoder().decode(bytes)
 
-  const processed = await resolved.processDocument(`canvas-import:${file.name}`, file.name, payload)
+  const processed = await resolved.processDocument(
+    `canvas-import:${file.name}`,
+    file.name,
+    payload,
+    {
+      maxFileSize: CANVAS_IMPORT_MAX_BYTES,
+    }
+  )
   const { language, type } = resolveImportLanguage(file.name, processed.type)
 
   return {

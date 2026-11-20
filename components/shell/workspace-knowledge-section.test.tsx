@@ -14,6 +14,7 @@ jest.mock("@cognia/document/document-processor", () => ({
   processDocumentAsync: (...args: unknown[]) => processDocumentAsync(...args),
 }))
 jest.mock("@cognia/document/support-matrix", () => ({
+  ...jest.requireActual("@cognia/document/support-matrix"),
   getDocumentAcceptString: () => ".txt,.pdf,.docx",
   inferKnowledgeFileTypeFromFilename: (name: string) => (name.endsWith(".pdf") ? "pdf" : "text"),
   isBinaryFilename: (name: string) => name.endsWith(".pdf"),
@@ -23,6 +24,18 @@ const runTwinPdfOcrWithProvenance = jest.fn()
 jest.mock("@/lib/twin/ingest/ocr-fallback", () => ({
   runTwinPdfOcrWithProvenance: (...args: unknown[]) => runTwinPdfOcrWithProvenance(...args),
 }))
+
+/** jsdom's File reads neither as text nor as bytes; give it both. */
+function readableFile(body: string, name: string, type: string): File {
+  const file = new File([body], name, { type })
+  const encoded = new TextEncoder().encode(body)
+  // An ArrayBuffer of this realm, as the File API would hand back.
+  const buffer = new ArrayBuffer(encoded.byteLength)
+  new Uint8Array(buffer).set(encoded)
+  Object.defineProperty(file, "text", { value: async () => body })
+  Object.defineProperty(file, "arrayBuffer", { value: async () => buffer.slice(0) })
+  return file
+}
 
 const toastError = jest.fn()
 jest.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }))
@@ -220,9 +233,7 @@ describe("WorkspaceKnowledgeSection", () => {
     liveQueryMock.mockReturnValue(new Map())
     const user = userEvent.setup()
     render(<WorkspaceKnowledgeSection project={project()} />)
-    const file = new File(["hello file"], "notes.txt", { type: "text/plain" })
-    // jsdom's File does not implement Blob.text() — polyfill on the instance.
-    Object.defineProperty(file, "text", { value: async () => "hello file" })
+    const file = readableFile("hello file", "notes.txt", "text/plain")
     await user.upload(screen.getByTestId("knowledge-file-input"), file)
     await waitFor(() =>
       expect(addKnowledgeFile).toHaveBeenCalledWith(
@@ -236,9 +247,7 @@ describe("WorkspaceKnowledgeSection", () => {
     liveQueryMock.mockReturnValue(new Map())
     const user = userEvent.setup()
     render(<WorkspaceKnowledgeSection project={project()} />)
-    const file = new File(["binary pdf"], "guide.pdf", { type: "application/pdf" })
-    const buffer = new TextEncoder().encode("binary pdf").buffer
-    Object.defineProperty(file, "arrayBuffer", { value: async () => buffer })
+    const file = readableFile("%PDF-1.7 binary", "guide.pdf", "application/pdf")
 
     await user.upload(screen.getByTestId("knowledge-file-input"), file)
 
@@ -253,9 +262,12 @@ describe("WorkspaceKnowledgeSection", () => {
         })
       )
     )
-    expect(processDocumentAsync).toHaveBeenCalledWith(expect.any(String), "guide.pdf", buffer, {
-      extractEmbeddable: true,
-    })
+    expect(processDocumentAsync).toHaveBeenCalledWith(
+      expect.any(String),
+      "guide.pdf",
+      expect.any(ArrayBuffer),
+      { extractEmbeddable: true, maxFileSize: 50 * 1024 * 1024 }
+    )
   })
 
   it("reports failed file extraction without adding unusable knowledge", async () => {
@@ -263,10 +275,7 @@ describe("WorkspaceKnowledgeSection", () => {
     processDocumentAsync.mockRejectedValue(new Error("corrupt document"))
     const user = userEvent.setup()
     render(<WorkspaceKnowledgeSection project={project()} />)
-    const file = new File(["broken"], "guide.pdf", { type: "application/pdf" })
-    Object.defineProperty(file, "arrayBuffer", {
-      value: async () => new TextEncoder().encode("broken").buffer,
-    })
+    const file = readableFile("%PDF-broken", "guide.pdf", "application/pdf")
 
     await user.upload(screen.getByTestId("knowledge-file-input"), file)
 
@@ -274,6 +283,35 @@ describe("WorkspaceKnowledgeSection", () => {
       expect(toastError).toHaveBeenCalledWith("importFailed:guide.pdf,corrupt document")
     )
     expect(addKnowledgeFile).not.toHaveBeenCalled()
+  })
+
+  // F7: project knowledge used to hand any file straight to the parser.
+  it("refuses a file whose bytes contradict its type before parsing it", async () => {
+    liveQueryMock.mockReturnValue(new Map())
+    render(<WorkspaceKnowledgeSection project={project()} />)
+    const file = readableFile("not a pdf", "guide.pdf", "application/pdf")
+
+    await userEvent.setup().upload(screen.getByTestId("knowledge-file-input"), file)
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("importFailed:guide.pdf,fileRejected")
+    )
+    expect(processDocumentAsync).not.toHaveBeenCalled()
+    expect(addKnowledgeFile).not.toHaveBeenCalled()
+  })
+
+  it("refuses a file over the document input ceiling without reading it", async () => {
+    liveQueryMock.mockReturnValue(new Map())
+    render(<WorkspaceKnowledgeSection project={project()} />)
+    const file = readableFile("%PDF-", "huge.pdf", "application/pdf")
+    Object.defineProperty(file, "size", { value: 50 * 1024 * 1024 + 1 })
+
+    await userEvent.setup().upload(screen.getByTestId("knowledge-file-input"), file)
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("importFailed:huge.pdf,fileTooLarge:50")
+    )
+    expect(processDocumentAsync).not.toHaveBeenCalled()
   })
 
   it("toggling the enable switch persists the setting", async () => {
@@ -300,8 +338,7 @@ it("preserves canonical source text, embedding projection, and structure on uplo
     metadata: {},
   })
   render(<WorkspaceKnowledgeSection project={project()} />)
-  const file = new File(["source"], "guide.txt", { type: "text/plain" })
-  Object.defineProperty(file, "text", { value: async () => "source" })
+  const file = readableFile("source", "guide.txt", "text/plain")
   await userEvent.setup().upload(screen.getByTestId("knowledge-file-input"), file)
   await waitFor(() =>
     expect(addKnowledgeFile).toHaveBeenCalledWith(
@@ -352,8 +389,7 @@ it("uploads scanned PDFs through the shared OCR route and preserves page ranges"
     structure,
   })
   render(<WorkspaceKnowledgeSection project={project()} />)
-  const file = new File(["scan"], "scan.pdf", { type: "application/pdf" })
-  Object.defineProperty(file, "arrayBuffer", { value: async () => new ArrayBuffer(4) })
+  const file = readableFile("%PDF-scan", "scan.pdf", "application/pdf")
   await userEvent.setup().upload(screen.getByTestId("knowledge-file-input"), file)
   await waitFor(() =>
     expect(addKnowledgeFile).toHaveBeenCalledWith(
@@ -418,8 +454,7 @@ it("threads native digital-page boxes into mixed PDF OCR without recomputing coo
     },
   })
   render(<WorkspaceKnowledgeSection project={project()} />)
-  const file = new File(["mixed"], "mixed.pdf", { type: "application/pdf" })
-  Object.defineProperty(file, "arrayBuffer", { value: async () => new ArrayBuffer(4) })
+  const file = readableFile("%PDF-mixed", "mixed.pdf", "application/pdf")
   await userEvent.setup().upload(screen.getByTestId("knowledge-file-input"), file)
   await waitFor(() => expect(runTwinPdfOcrWithProvenance).toHaveBeenCalled())
   expect(runTwinPdfOcrWithProvenance.mock.calls[0][1].pageMap[0].bboxUnion).toEqual({

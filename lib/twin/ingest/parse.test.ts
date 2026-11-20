@@ -11,7 +11,23 @@
  * lives in each importer's own test file.
  */
 
-import { computePdfPageMap, parseSource, type RawSource } from "@/lib/twin/ingest/parse"
+import {
+  computePdfPageMap,
+  parseSource,
+  processorFilename,
+  type RawSource,
+} from "@/lib/twin/ingest/parse"
+
+describe("processorFilename", () => {
+  it("lets the confirmed format choose the parser, keeping a name that already does", () => {
+    expect(processorFilename("report.pdf", "markdown")).toBe("report.pdf.md")
+    expect(processorFilename("Quarterly", "pdf")).toBe("Quarterly.pdf")
+    expect(processorFilename("page.htm", "html")).toBe("page.htm")
+    expect(processorFilename("notes.markdown", "markdown")).toBe("notes.markdown")
+    expect(processorFilename("hello.ts", "code")).toBe("hello.ts")
+    expect(processorFilename("snippet", "code")).toBe("snippet.txt")
+  })
+})
 
 describe("parseSource — document family", () => {
   it("routes markdown through the document processor", async () => {
@@ -26,6 +42,30 @@ describe("parseSource — document family", () => {
     expect(parsed.kind).toBe("document")
     expect(parsed.format).toBe("markdown")
     expect(parsed.originalText).toContain("Some body")
+  })
+
+  // F3 sibling: text sources used the sync processor, which read HTML as text.
+  it("parses an HTML text source with the HTML parser", async () => {
+    const parsed = await parseSource({
+      id: "src_html",
+      filename: "page.html",
+      format: "html",
+      text: "<html><body><h1>Guide</h1><script>track()</script><p>Body</p></body></html>",
+    })
+    expect(parsed.originalText).toContain("# Guide")
+    expect(parsed.originalText).not.toContain("track()")
+    expect(parsed.originalText).not.toContain("<p>")
+  })
+
+  it("reads a legacy Markdown source by its format, whatever its title says", async () => {
+    const parsed = await parseSource({
+      id: "src_legacy",
+      filename: "scan.pdf",
+      format: "markdown",
+      text: "Extracted at import",
+    })
+    expect(parsed.originalText).toBe("Extracted at import")
+    expect(parsed.title).toBe("scan.pdf")
   })
 
   it("routes code through the document processor with kind=code", async () => {

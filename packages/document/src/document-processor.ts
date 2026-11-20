@@ -9,11 +9,7 @@ import {
 } from "./parsers/markdown-parser"
 import { parseCode, extractCodeEmbeddableContent, detectLanguage } from "./parsers/code-parser"
 import { chunkDocument, type ChunkingOptions } from "@cognia/provider-embedding/chunking"
-import {
-  detectDocumentTypeFromFilename,
-  getFilenameExtension,
-  isBinaryDocumentType,
-} from "./support-matrix"
+import { detectDocumentTypeFromFilename, getFilenameExtension } from "./support-matrix"
 import {
   normalizeMarkdownSummary,
   normalizeCodeSummary,
@@ -30,6 +26,7 @@ import {
 } from "./parse-summary"
 import { buildDocumentStructure } from "./document-structure"
 import { mapWordMessages, attachDiagnosticToError } from "./parse-diagnostics"
+import { DocumentLimitError, inputByteLength } from "./limits"
 
 export type { DocumentType, DocumentMetadata, ProcessedDocument } from "./types"
 import type {
@@ -46,6 +43,7 @@ export interface ProcessingOptions {
   extractEmbeddable?: boolean
   generateChunks?: boolean
   chunkingOptions?: Partial<ChunkingOptions>
+  /** Bytes the input may hold (UTF-8 bytes for a string); larger input is refused. */
   maxFileSize?: number
   /** PDF bookmarks default on; native spatial extraction is retained. */
   extractPdfOutline?: boolean
@@ -55,24 +53,6 @@ export interface ProcessingOptions {
     signal?: AbortSignal
     timeoutMs?: number
   }
-}
-
-export interface ValidationOptions {
-  maxFileSize?: number
-  allowedTypes?: DocumentType[]
-}
-
-export interface ValidationResult {
-  valid: boolean
-  errors: string[]
-  warnings: string[]
-}
-
-export interface DocumentDiff {
-  added: string[]
-  removed: string[]
-  modified: { line: number; before: string; after: string }[]
-  similarity: number
 }
 
 const DEFAULT_PROCESSING_OPTIONS: ProcessingOptions = {
@@ -137,6 +117,8 @@ function normalizeAnyDocMarkdown(
 }
 
 function normalizeDocumentParseError(label: string, error: unknown): Error {
+  // A budget refusal already says which limit and by how much.
+  if (error instanceof DocumentLimitError) return error
   const message = error instanceof Error ? error.message : ""
 
   if (
@@ -160,9 +142,29 @@ function normalizeDocumentParseError(label: string, error: unknown): Error {
   })
 }
 
+/** Types whose text IS the document: no parser stands between bytes and content. */
+const PLAIN_TEXT_TYPES: ReadonlySet<DocumentType> = new Set([
+  "markdown",
+  "code",
+  "json",
+  "text",
+  "unknown",
+])
+
+function assertWithinFileSize(data: string | ArrayBuffer, maxFileSize: number | undefined): void {
+  if (maxFileSize === undefined) return
+  const size = inputByteLength(data)
+  if (size > maxFileSize) throw new DocumentLimitError("file-bytes", maxFileSize, size)
+}
+
 /**
- * Process a text-based document (sync version)
- * For binary documents (PDF, Word, Excel, Presentation, EPUB), use processDocumentAsync
+ * Process a plain-text document (Markdown, code, JSON, text) synchronously.
+ *
+ * Every other format has a dedicated parser, and most of them are async:
+ * use `processDocumentAsync`, which routes by format whatever the payload is.
+ * Handing HTML, CSV or a binary format to this function is refused rather than
+ * read as plain text, which is how markup and script source used to land in
+ * retrieval text.
  */
 export function processDocument(
   id: string,
@@ -172,6 +174,12 @@ export function processDocument(
 ): ProcessedDocument {
   const opts = { ...DEFAULT_PROCESSING_OPTIONS, ...options }
   const type = detectDocumentType(filename)
+  if (!PLAIN_TEXT_TYPES.has(type)) {
+    throw new Error(
+      `processDocument reads plain-text formats only; '${type}' needs processDocumentAsync.`
+    )
+  }
+  assertWithinFileSize(content, opts.maxFileSize)
   const lines = content.split("\n")
 
   let embeddableContent = content
@@ -297,14 +305,21 @@ export async function processDocumentAsync(
     anyDoc: { ...DEFAULT_PROCESSING_OPTIONS.anyDoc, ...options.anyDoc },
   }
   const type = detectDocumentType(filename)
+  assertWithinFileSize(data, opts.maxFileSize)
 
-  // For plain text-based formats, use sync processing.
-  // Rich formats with dedicated parsers stay in async path.
-  if (
-    typeof data === "string" &&
-    !["pdf", "word", "excel", "presentation", "epub", "rtf"].includes(type)
-  ) {
-    return processDocument(id, filename, data, options)
+  // The format decides the parser, never the payload's container: an HTML
+  // string and HTML bytes both go through the HTML parser, and a `.txt`
+  // ArrayBuffer is decoded and read as text.
+  if (PLAIN_TEXT_TYPES.has(type)) {
+    if (typeof data === "string") return processDocument(id, filename, data, options)
+    const decoded = decodeTextBytes(data)
+    const processed = processDocument(id, filename, decoded.text, {
+      ...options,
+      maxFileSize: undefined,
+    })
+    return decoded.diagnostics.length
+      ? { ...processed, parseDiagnostics: [...decoded.diagnostics] }
+      : processed
   }
 
   let content = ""
@@ -409,6 +424,8 @@ export async function processDocumentAsync(
             : content
           metadata = {
             ...metadata,
+            ...(parsed.metadata?.title ? { title: parsed.metadata.title } : {}),
+            ...(parsed.metadata?.author ? { author: parsed.metadata.author } : {}),
             lineCount: content.split("\n").length,
             wordCount: countWords(content),
             language: "word",
@@ -548,6 +565,19 @@ export async function processDocumentAsync(
           parseResult = parsed
           parseSummary = normalizePresentationSummary(parsed)
         }
+        const textless = (parseResult as { slides: { slideNumber: number; text: string }[] }).slides
+          .filter((slide) => !slide.text.trim())
+          .map((slide) => slide.slideNumber)
+        if (textless.length) {
+          parseDiagnostics = [
+            ...parseDiagnostics,
+            {
+              code: "unsupported_feature",
+              severity: "warning",
+              message: `Slides ${textless.join(", ")} have no extractable text; pictures, charts and diagrams on them are not read.`,
+            },
+          ]
+        }
       } catch (error) {
         throw normalizeDocumentParseError("presentation", error)
       }
@@ -556,7 +586,7 @@ export async function processDocumentAsync(
 
     case "rtf": {
       const { parseRTF, extractRTFEmbeddableContent } = await import("./parsers/rtf-parser")
-      const text = typeof data === "string" ? data : arrayBufferToString(data)
+      const text = typeof data === "string" ? data : decodeTextPayload(data, parseDiagnostics)
       const parsed = parseRTF(text)
       content = parsed.text
       embeddableContent = opts.extractEmbeddable ? extractRTFEmbeddableContent(parsed) : content
@@ -595,7 +625,7 @@ export async function processDocumentAsync(
     case "csv": {
       // Dynamic import to reduce bundle size and memory usage
       const { parseCSV, extractCSVEmbeddableContent } = await import("./parsers/csv-parser")
-      const text = typeof data === "string" ? data : arrayBufferToString(data)
+      const text = typeof data === "string" ? data : decodeTextPayload(data, parseDiagnostics)
       const parsed = parseCSV(text)
       content = text
       embeddableContent = opts.extractEmbeddable ? extractCSVEmbeddableContent(parsed) : content
@@ -615,13 +645,15 @@ export async function processDocumentAsync(
 
     case "html": {
       // Dynamic import to reduce bundle size and memory usage
-      const { parseHTML, extractHTMLEmbeddableContent } = await import("./parsers/html-parser")
-      const text = typeof data === "string" ? data : arrayBufferToString(data)
+      const { parseHTML, extractHTMLEmbeddableContent, htmlToMarkdown } =
+        await import("./parsers/html-parser")
+      const text = typeof data === "string" ? data : decodeTextPayload(data, parseDiagnostics)
       const parsed = await parseHTML(text)
-      content = text
-      embeddableContent = opts.extractEmbeddable
-        ? extractHTMLEmbeddableContent(parsed)
-        : parsed.text
+      // The readable document, not its markup: scripts, styles and tags are
+      // source, and every consumer (retrieval, Canvas, IM, the CLI) reads
+      // `content` as the document's text.
+      content = await htmlToMarkdown(text)
+      embeddableContent = opts.extractEmbeddable ? extractHTMLEmbeddableContent(parsed) : content
       metadata = {
         ...metadata,
         title: parsed.title,
@@ -637,13 +669,7 @@ export async function processDocumentAsync(
     }
 
     default: {
-      // Only unknown formats should fall back to generic text processing.
-      if (type !== "unknown") {
-        throw new Error(`No parser is configured for recognized document type '${type}'.`)
-      }
-
-      const text = typeof data === "string" ? data : arrayBufferToString(data)
-      return processDocument(id, filename, text, options)
+      throw new Error(`No parser is configured for document type '${type}'.`)
     }
   }
 
@@ -734,52 +760,55 @@ function stringToArrayBuffer(str: string): ArrayBuffer {
 }
 
 /**
- * Convert ArrayBuffer to string
+ * Text from the bytes of a text file.
+ *
+ * A byte-order mark names the encoding (UTF-8, UTF-16 LE/BE) and is dropped;
+ * without one the bytes are read as UTF-8. UTF-32 has no decoder in the
+ * WHATWG Encoding standard, so it is refused instead of being read as UTF-16.
+ * Bytes that are not valid in the chosen encoding are decoded with U+FFFD and
+ * reported, so a mis-encoded file is visibly damaged rather than silently.
  */
-function arrayBufferToString(buffer: ArrayBuffer): string {
-  const decoder = new TextDecoder()
-  return decoder.decode(buffer)
+export function decodeTextBytes(buffer: ArrayBuffer): {
+  text: string
+  encoding: string
+  diagnostics: ParseDiagnostic[]
+} {
+  const encoding = detectEncoding(buffer)
+  if (encoding === "utf-32le" || encoding === "utf-32be") {
+    throw attachDiagnosticToError(new Error("UTF-32 text files are not supported."), {
+      code: "parse_failed",
+      severity: "error",
+      message: "UTF-32 text files are not supported.",
+      suggestion: "Save the file as UTF-8 and retry.",
+    })
+  }
+  try {
+    return {
+      text: new TextDecoder(encoding, { fatal: true }).decode(buffer),
+      encoding,
+      diagnostics: [],
+    }
+  } catch {
+    return {
+      text: new TextDecoder(encoding).decode(buffer),
+      encoding,
+      diagnostics: [
+        {
+          code: "parser_warning",
+          severity: "warning",
+          message: `The file is not valid ${encoding.toUpperCase()}; unreadable bytes were replaced with U+FFFD.`,
+          suggestion: "Save the file as UTF-8 and retry.",
+        },
+      ],
+    }
+  }
 }
 
-/**
- * Process multiple documents
- */
-export function processDocuments(
-  documents: { id: string; filename: string; content: string }[],
-  options: ProcessingOptions = {}
-): ProcessedDocument[] {
-  return documents.map((doc) => processDocument(doc.id, doc.filename, doc.content, options))
-}
-
-/**
- * Extract summary from document (first N characters or sentences)
- */
-export function extractSummary(content: string, maxLength: number = 200): string {
-  const cleaned = content.replace(/\s+/g, " ").trim()
-
-  if (cleaned.length <= maxLength) {
-    return cleaned
-  }
-
-  // Try to break at sentence boundary
-  const truncated = cleaned.slice(0, maxLength)
-  const lastPeriod = truncated.lastIndexOf(".")
-  const lastQuestion = truncated.lastIndexOf("?")
-  const lastExclaim = truncated.lastIndexOf("!")
-
-  const breakPoint = Math.max(lastPeriod, lastQuestion, lastExclaim)
-
-  if (breakPoint > maxLength * 0.5) {
-    return truncated.slice(0, breakPoint + 1)
-  }
-
-  // Break at word boundary
-  const lastSpace = truncated.lastIndexOf(" ")
-  if (lastSpace > maxLength * 0.7) {
-    return truncated.slice(0, lastSpace) + "..."
-  }
-
-  return truncated + "..."
+/** Decode a text payload, appending any decoding diagnostic to `diagnostics`. */
+function decodeTextPayload(buffer: ArrayBuffer, diagnostics: ParseDiagnostic[]): string {
+  const decoded = decodeTextBytes(buffer)
+  diagnostics.push(...decoded.diagnostics)
+  return decoded.text
 }
 
 /**
@@ -787,71 +816,6 @@ export function extractSummary(content: string, maxLength: number = 200): string
  */
 export function getFileExtension(filename: string): string {
   return getFilenameExtension(filename)
-}
-
-/**
- * Check if file is a text-based file that can be processed
- */
-export function isTextFile(filename: string): boolean {
-  const textExtensions = [
-    "txt",
-    "md",
-    "markdown",
-    "mdx",
-    "js",
-    "jsx",
-    "ts",
-    "tsx",
-    "mjs",
-    "cjs",
-    "py",
-    "rb",
-    "java",
-    "kt",
-    "go",
-    "rs",
-    "cpp",
-    "c",
-    "h",
-    "hpp",
-    "cs",
-    "php",
-    "swift",
-    "scala",
-    "r",
-    "sql",
-    "sh",
-    "bash",
-    "zsh",
-    "ps1",
-    "json",
-    "yaml",
-    "yml",
-    "toml",
-    "ini",
-    "cfg",
-    "conf",
-    "xml",
-    "html",
-    "htm",
-    "css",
-    "scss",
-    "less",
-    "sass",
-    "vue",
-    "svelte",
-    "rtf",
-    "env",
-    "gitignore",
-    "dockerignore",
-    "editorconfig",
-    "log",
-    "csv",
-    "tsv",
-  ]
-
-  const ext = getFileExtension(filename)
-  return textExtensions.includes(ext) || ext === ""
 }
 
 /**
@@ -885,64 +849,6 @@ export function estimateTokenCount(content: string): number {
 }
 
 /**
- * Validate a file before processing
- */
-export function validateFile(
-  filename: string,
-  size: number,
-  options: ValidationOptions = {}
-): ValidationResult {
-  const errors: string[] = []
-  const warnings: string[] = []
-  const maxSize = options.maxFileSize ?? 50 * 1024 * 1024 // 50MB default
-
-  // Check file size
-  if (size > maxSize) {
-    errors.push(
-      `File size (${formatFileSize(size)}) exceeds maximum allowed size (${formatFileSize(maxSize)})`
-    )
-  } else if (size > maxSize * 0.8) {
-    warnings.push(
-      `File size (${formatFileSize(size)}) is close to the maximum allowed size (${formatFileSize(maxSize)})`
-    )
-  }
-
-  if (size === 0) {
-    warnings.push("File is empty")
-  }
-
-  // Check file type
-  const type = detectDocumentType(filename)
-  if (type === "unknown") {
-    warnings.push(`Unrecognized file type for '${filename}', will be processed as plain text`)
-  }
-
-  if (options.allowedTypes && options.allowedTypes.length > 0) {
-    if (!options.allowedTypes.includes(type)) {
-      errors.push(
-        `File type '${type}' is not allowed. Allowed types: ${options.allowedTypes.join(", ")}`
-      )
-    }
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
-  }
-}
-
-/**
- * Format file size for display
- */
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
-}
-
-/**
  * Detect BOM encoding from ArrayBuffer
  * Returns encoding name or 'utf-8' as default
  */
@@ -952,6 +858,17 @@ export function detectEncoding(buffer: ArrayBuffer): string {
   // UTF-8 BOM: EF BB BF
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
     return "utf-8"
+  }
+
+  // UTF-32 BE BOM: 00 00 FE FF
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x00 &&
+    bytes[2] === 0xfe &&
+    bytes[3] === 0xff
+  ) {
+    return "utf-32be"
   }
 
   // UTF-32 LE BOM: FF FE 00 00
@@ -977,84 +894,4 @@ export function detectEncoding(buffer: ArrayBuffer): string {
 
   // Default to UTF-8
   return "utf-8"
-}
-
-/**
- * Compare two processed documents and return differences
- */
-export function compareDocuments(docA: ProcessedDocument, docB: ProcessedDocument): DocumentDiff {
-  const linesA = docA.content.split("\n")
-  const linesB = docB.content.split("\n")
-
-  const added: string[] = []
-  const removed: string[] = []
-  const modified: { line: number; before: string; after: string }[] = []
-
-  // Simple line-by-line diff
-  const setA = new Set(linesA.map((l) => l.trim()).filter((l) => l.length > 0))
-  const setB = new Set(linesB.map((l) => l.trim()).filter((l) => l.length > 0))
-
-  // Lines in B but not in A (added)
-  for (const line of setB) {
-    if (!setA.has(line)) {
-      added.push(line)
-    }
-  }
-
-  // Lines in A but not in B (removed)
-  for (const line of setA) {
-    if (!setB.has(line)) {
-      removed.push(line)
-    }
-  }
-
-  // Line-by-line comparison for modifications
-  const maxLines = Math.min(linesA.length, linesB.length)
-  for (let i = 0; i < maxLines; i++) {
-    const lineA = linesA[i].trim()
-    const lineB = linesB[i].trim()
-    if (lineA !== lineB && lineA.length > 0 && lineB.length > 0) {
-      // Check if it's a modification (similar but not identical)
-      const similarity = computeLineSimilarity(lineA, lineB)
-      if (similarity > 0.3 && similarity < 1.0) {
-        modified.push({ line: i + 1, before: lineA, after: lineB })
-      }
-    }
-  }
-
-  // Compute overall similarity using Jaccard coefficient on non-empty lines
-  const intersection = [...setA].filter((line) => setB.has(line)).length
-  const union = new Set([...setA, ...setB]).size
-  const similarity = union > 0 ? intersection / union : 1.0
-
-  return { added, removed, modified, similarity }
-}
-
-/**
- * Compute similarity between two strings (0-1) using bigram overlap
- */
-function computeLineSimilarity(a: string, b: string): number {
-  if (a === b) return 1.0
-  if (a.length === 0 || b.length === 0) return 0
-
-  const bigramsA = new Set<string>()
-  const bigramsB = new Set<string>()
-
-  for (let i = 0; i < a.length - 1; i++) bigramsA.add(a.substring(i, i + 2))
-  for (let i = 0; i < b.length - 1; i++) bigramsB.add(b.substring(i, i + 2))
-
-  let intersection = 0
-  for (const bg of bigramsA) {
-    if (bigramsB.has(bg)) intersection++
-  }
-
-  const union = bigramsA.size + bigramsB.size - intersection
-  return union > 0 ? intersection / union : 0
-}
-
-/**
- * Check if a document type is a binary format requiring async processing
- */
-export function isBinaryType(type: DocumentType): boolean {
-  return isBinaryDocumentType(type)
 }

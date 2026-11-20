@@ -158,6 +158,44 @@ describe("CanvasNewDocumentDialog", () => {
     expect(onCreate).not.toHaveBeenCalled()
   })
 
+  it("explains a file refused at admission in the user's words, not the error code", async () => {
+    const user = userEvent.setup()
+    const { CanvasImportRejectedError } = jest.requireActual<
+      typeof import("@/lib/canvas/document-import")
+    >("@/lib/canvas/document-import")
+    importMock.mockRejectedValue(new CanvasImportRejectedError("type_mismatch"))
+    renderDialog()
+
+    await user.click(screen.getByTestId("canvas-new-tab-import"))
+    await user.upload(
+      screen.getByTestId("canvas-new-file-input"),
+      new File(["x"], "memo.docx", { type: "application/octet-stream" })
+    )
+
+    const error = await screen.findByTestId("canvas-new-import-error")
+    expect(error).toHaveTextContent("do not match its extension")
+    expect(error).not.toHaveTextContent("type_mismatch")
+  })
+
+  it("names the size limit the import enforces when a file is too large", async () => {
+    const user = userEvent.setup()
+    const { CanvasImportRejectedError, CANVAS_IMPORT_MAX_BYTES } = jest.requireActual<
+      typeof import("@/lib/canvas/document-import")
+    >("@/lib/canvas/document-import")
+    importMock.mockRejectedValue(new CanvasImportRejectedError("too_large"))
+    renderDialog()
+
+    await user.click(screen.getByTestId("canvas-new-tab-import"))
+    await user.upload(
+      screen.getByTestId("canvas-new-file-input"),
+      new File(["x"], "big.pdf", { type: "application/pdf" })
+    )
+
+    expect(await screen.findByTestId("canvas-new-import-error")).toHaveTextContent(
+      `larger than ${CANVAS_IMPORT_MAX_BYTES / (1024 * 1024)} MB`
+    )
+  })
+
   it("cannot create from an import before a file has been read", async () => {
     const user = userEvent.setup()
     renderDialog()

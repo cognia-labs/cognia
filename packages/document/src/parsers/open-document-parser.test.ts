@@ -66,6 +66,132 @@ describe("open-document-parser", () => {
     expect(result.text).toContain("Sheet A")
   })
 
+  it("keeps empty, covered and value-only cells in their columns (F5)", async () => {
+    const buffer = await createOpenDocumentBuffer({
+      "content.xml": `
+        <office:document-content>
+          <office:body><office:spreadsheet>
+          <table:table table:name="Typed">
+            <table:table-header-rows>
+              <table:table-row>
+                <table:table-cell><text:p>A1</text:p></table:table-cell>
+                <table:table-cell/>
+                <table:table-cell><text:p>C1</text:p></table:table-cell>
+              </table:table-row>
+            </table:table-header-rows>
+            <table:table-row>
+              <table:table-cell office:value-type="float" office:value="3.14159"/>
+              <table:table-cell office:value-type="percentage" office:value="0.125"><text:p>13%</text:p></table:table-cell>
+              <table:table-cell office:value-type="boolean" office:boolean-value="false"><text:p>FALSE</text:p></table:table-cell>
+              <table:table-cell office:value-type="date" office:date-value="2024-01-15"><text:p>15/01/24</text:p></table:table-cell>
+            </table:table-row>
+            <table:table-row>
+              <table:table-cell table:number-columns-spanned="2" table:number-rows-spanned="2"><text:p>merged</text:p></table:table-cell>
+              <table:covered-table-cell/>
+              <table:table-cell><text:p>two<text:s text:c="2"/>spaces<text:line-break/>next</text:p></table:table-cell>
+            </table:table-row>
+            <table:table-row>
+              <table:covered-table-cell table:number-columns-repeated="2"/>
+              <table:table-cell><text:p>C4 &amp; more</text:p></table:table-cell>
+            </table:table-row>
+          </table:table>
+          </office:spreadsheet></office:body>
+        </office:document-content>
+      `,
+    })
+
+    const result = await parseOpenDocumentSpreadsheet(buffer)
+
+    expect(result.sheets[0].data).toEqual([
+      ["A1", null, "C1"],
+      [3.14159, 0.125, false, "2024-01-15"],
+      ["merged", null, "two  spaces\nnext"],
+      [null, null, "C4 & more"],
+    ])
+    expect(result.sheets[0].mergedCells).toEqual(["A3:B4"])
+    expect(result.text).toContain("A1 |  | C1")
+    expect(result.text).toContain("3.14159 | 0.125 | FALSE | 2024-01-15")
+  })
+
+  it("expands repeats but not the trailing padding office suites write (F7)", async () => {
+    const buffer = await createOpenDocumentBuffer({
+      "content.xml": `
+        <office:document-content><office:body><office:spreadsheet>
+          <table:table table:name="Padded">
+            <table:table-row table:number-rows-repeated="2">
+              <table:table-cell table:number-columns-repeated="2"><text:p>x</text:p></table:table-cell>
+              <table:table-cell table:number-columns-repeated="16380"/>
+            </table:table-row>
+            <table:table-row table:number-rows-repeated="1048574">
+              <table:table-cell table:number-columns-repeated="16384"/>
+            </table:table-row>
+          </table:table>
+        </office:spreadsheet></office:body></office:document-content>
+      `,
+    })
+
+    const result = await parseOpenDocumentSpreadsheet(buffer)
+
+    expect(result.sheets[0].data).toEqual([
+      ["x", "x"],
+      ["x", "x"],
+    ])
+  })
+
+  it("refuses repeats that would expand past the cell budget, and malformed counts", async () => {
+    const bomb = await createOpenDocumentBuffer({
+      "content.xml": `
+        <office:document-content><office:body><office:spreadsheet>
+          <table:table table:name="Bomb">
+            <table:table-row table:number-rows-repeated="10000">
+              <table:table-cell table:number-columns-repeated="100"><text:p>x</text:p></table:table-cell>
+            </table:table-row>
+          </table:table>
+        </office:spreadsheet></office:body></office:document-content>
+      `,
+    })
+    await expect(
+      parseOpenDocumentSpreadsheet(bomb, { maxExpandedCells: 999_999 })
+    ).rejects.toMatchObject({ name: "DocumentLimitError", scope: "expanded-cells" })
+
+    const malformed = await createOpenDocumentBuffer({
+      "content.xml": `
+        <office:document-content><office:body><office:spreadsheet>
+          <table:table table:name="Bad">
+            <table:table-row table:number-rows-repeated="1e400">
+              <table:table-cell><text:p>x</text:p></table:table-cell>
+            </table:table-row>
+          </table:table>
+        </office:spreadsheet></office:body></office:document-content>
+      `,
+    })
+    await expect(parseOpenDocumentSpreadsheet(malformed)).rejects.toThrow("repeat count")
+  })
+
+  it("keeps a textless slide's position and leaves speaker notes out of slide text", async () => {
+    const buffer = await createOpenDocumentBuffer({
+      "content.xml": `
+        <office:document-content>
+          <draw:page draw:name="one"><draw:frame><draw:text-box><text:p>First</text:p></draw:text-box></draw:frame>
+            <presentation:notes><draw:frame><draw:text-box><text:p>Say hello</text:p></draw:text-box></draw:frame></presentation:notes>
+          </draw:page>
+          <draw:page draw:name="picture"/>
+          <draw:page draw:name="three"><text:p>Third</text:p></draw:page>
+        </office:document-content>
+      `,
+    })
+
+    const result = await parseOpenDocumentPresentation(buffer)
+
+    expect(result.slideCount).toBe(3)
+    expect(result.slides.map((slide) => [slide.slideNumber, slide.text])).toEqual([
+      [1, "First"],
+      [2, ""],
+      [3, "Third"],
+    ])
+    expect(result.text).toBe("## Slide 1\nFirst\n\n## Slide 3\nThird")
+  })
+
   it("parses slide text from odp content", async () => {
     const buffer = await createOpenDocumentBuffer({
       "content.xml": `

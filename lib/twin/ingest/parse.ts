@@ -12,8 +12,9 @@
  * for choosing files and passing their contents in.
  */
 
-import { processDocument, processDocumentAsync } from "@cognia/document/document-processor"
+import { processDocumentAsync } from "@cognia/document/document-processor"
 import { buildTextDocumentStructure } from "@cognia/document/document-structure"
+import { detectDocumentTypeFromFilename } from "@cognia/document/support-matrix"
 import type { DocumentStructure } from "@cognia/document/types"
 import type { PDFParseResult } from "@/types/document"
 import type {
@@ -139,6 +140,40 @@ function bytesToString(input: ArrayBuffer | Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes)
 }
 
+/** The extension that makes the document processor pick a format's parser. */
+const PROCESSOR_EXTENSION: Partial<Record<TwinSourceFormat, string>> = {
+  markdown: "md",
+  pdf: "pdf",
+  docx: "docx",
+  xlsx: "xlsx",
+  pptx: "pptx",
+  odt: "odt",
+  odp: "odp",
+  html: "html",
+  csv: "csv",
+  epub: "epub",
+  rtf: "rtf",
+}
+
+/**
+ * The name the document processor sees. The processor routes by extension,
+ * while a twin source's `format` is the user-confirmed one and wins: a source
+ * titled `report.pdf` that holds Markdown must parse as Markdown. A name whose
+ * extension already selects the format's parser is kept, so a `.htm` stays a
+ * `.htm` and code keeps the extension its language is detected from.
+ */
+export function processorFilename(filename: string, format: TwinSourceFormat): string {
+  if (format === "code") {
+    return detectDocumentTypeFromFilename(filename) === "code" ? filename : `${filename}.txt`
+  }
+  const extension = PROCESSOR_EXTENSION[format]
+  if (!extension) return filename
+  return detectDocumentTypeFromFilename(filename) ===
+    detectDocumentTypeFromFilename(`source.${extension}`)
+    ? filename
+    : `${filename}.${extension}`
+}
+
 /**
  * Dispatch + parse. Pure: throws on unknown formats. Importer integrations
  * (slack / lark / mbox / eml / git) are loaded lazily so unused families
@@ -148,7 +183,7 @@ export async function parseSource(raw: RawSource): Promise<ParsedSource> {
   const dispatch = dispatchSource(raw.format)
 
   if (dispatch.routesToDocumentProcessor) {
-    const filename = raw.filename
+    const filename = processorFilename(raw.filename, raw.format)
     const baseMetadata = raw.baseMetadata ?? {}
 
     if (raw.binary) {
@@ -168,7 +203,7 @@ export async function parseSource(raw: RawSource): Promise<ParsedSource> {
         id: processed.id,
         kind: dispatch.kind,
         format: raw.format,
-        title: processed.metadata.title || filename,
+        title: processed.metadata.title || raw.filename,
         originalText: processed.content,
         embeddableText,
         baseMetadata,
@@ -182,14 +217,14 @@ export async function parseSource(raw: RawSource): Promise<ParsedSource> {
       throw new Error(`parseSource: text-based format ${raw.format} requires .text`)
     }
 
-    const processed = processDocument(raw.id, filename, raw.text, {
+    const processed = await processDocumentAsync(raw.id, filename, raw.text, {
       extractEmbeddable: true,
     })
     return {
       id: processed.id,
       kind: dispatch.kind,
       format: raw.format,
-      title: processed.metadata.title || filename,
+      title: processed.metadata.title || raw.filename,
       originalText: processed.content,
       embeddableText: processed.content,
       structure: processed.structure,

@@ -75,6 +75,13 @@ export type MessageSegment =
       dataBase64?: string
       /** OCR text extracted from an image/PDF file attachment (ADR-0024). */
       ocrText?: string
+      /**
+       * Why the document's text could not be read (corrupt, password
+       * protected, over a size budget). Set instead of `ocrText` so the model
+       * is told the file was unreadable, not handed a name that looks like an
+       * empty document.
+       */
+      extractionError?: string
     }
   | {
       type: "mention"
@@ -214,7 +221,13 @@ export function segmentsToPlainText(segments: MessageSegment[]): string {
         out.push(s.transcript ? ` ${s.transcript} ` : " [voice] ")
         break
       case "file":
-        out.push(s.ocrText ? ` [file:${s.name}] ${s.ocrText} ` : ` [file:${s.name}] `)
+        out.push(
+          s.ocrText
+            ? ` [file:${s.name}] ${s.ocrText} `
+            : s.extractionError
+              ? ` [file:${s.name} (unreadable: ${s.extractionError})] `
+              : ` [file:${s.name}] `
+        )
         break
       case "emoji":
         out.push(`[:${s.code}:]`)

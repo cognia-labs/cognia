@@ -27,6 +27,11 @@ import { Spinner } from "@/components/ui/spinner"
 import { ClampedNumberInput } from "@/components/settings/common/clamped-number-input"
 import { StatusBadge } from "@/components/status-badge"
 import { processDocumentAsync } from "@cognia/document/document-processor"
+import { DEFAULT_DOCUMENT_LIMITS } from "@cognia/document/limits"
+import {
+  inspectUploadContent,
+  UploadContentInspectionError,
+} from "@/lib/security/upload-content-inspection"
 import {
   getDocumentAcceptString,
   inferKnowledgeFileTypeFromFilename,
@@ -108,14 +113,30 @@ export function WorkspaceKnowledgeSection({ project }: Props) {
     try {
       for (const file of Array.from(fileList)) {
         try {
-          const data = isBinaryFilename(file.name) ? await file.arrayBuffer() : await file.text()
+          const limitBytes = DEFAULT_DOCUMENT_LIMITS.maxInputBytes
+          if (file.size > limitBytes) {
+            throw new Error(t("fileTooLarge", { limitMb: limitBytes / 1024 / 1024 }))
+          }
+          const bytes = await file.arrayBuffer()
+          // The admission an attachment upload gets, before any parser runs.
+          try {
+            inspectUploadContent({
+              name: file.name,
+              declaredMediaType: file.type,
+              bytes: new Uint8Array(bytes),
+            })
+          } catch (error) {
+            if (error instanceof UploadContentInspectionError) throw new Error(t("fileRejected"))
+            throw error
+          }
+          const data = isBinaryFilename(file.name) ? bytes : new TextDecoder().decode(bytes)
           let processed = await processDocumentAsync(
             `${project.id}:${file.name}:${file.lastModified}`,
             file.name,
             data,
-            { extractEmbeddable: true }
+            { extractEmbeddable: true, maxFileSize: limitBytes }
           )
-          if (processed.type === "pdf" && data instanceof ArrayBuffer) {
+          if (processed.type === "pdf" && typeof data !== "string") {
             const [{ runTwinPdfOcrWithProvenance }, { computePdfPageMap }] = await Promise.all([
               import("@/lib/twin/ingest/ocr-fallback"),
               import("@/lib/twin/ingest/parse"),

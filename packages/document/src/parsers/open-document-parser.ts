@@ -1,14 +1,33 @@
 /**
  * OpenDocument Parser - Extract readable content from ODT/ODS/ODP archives.
- * Uses JSZip to read XML payloads and normalizes them into existing parser contracts.
+ *
+ * `content.xml` is read as an XML tree (`./xml-tree`): the format's meaning
+ * lives in self-closing elements (an empty cell, `<text:s/>` spaces, a
+ * `<text:line-break/>`), in attributes (a cell's `office:value`, its repeat
+ * and span counts) and in nesting, none of which a regular expression over the
+ * markup can see. Spreadsheets keep every cell in its column, typed values
+ * keep the value they store, and repeated rows/cells are counted against the
+ * shared expansion budget before they are materialised.
  */
 
+import { DEFAULT_DOCUMENT_LIMITS, DocumentBudget, DocumentLimitError } from "../limits"
 import type { ExcelParseResult, ExcelSheet, WordParseResult } from "./office-parser"
+import { computeSheetStats, convertSheetToText } from "./office-parser"
 import type {
   PresentationMetadata,
   PresentationParseResult,
   PresentationSlide,
 } from "./presentation-parser"
+import {
+  childElements,
+  findElement,
+  findElements,
+  isElement,
+  parseXmlTree,
+  textContent,
+  type XmlElement,
+  type XmlNode,
+} from "./xml-tree"
 
 interface ZipTextFileLike {
   async: (type: "string") => Promise<string>
@@ -18,12 +37,17 @@ interface ZipLike {
   file: (path: string) => ZipTextFileLike | null
 }
 
+export interface OpenDocumentParseOptions {
+  /** Cells a spreadsheet may expand into (defaults to `DEFAULT_DOCUMENT_LIMITS`). */
+  maxExpandedCells?: number
+}
+
 export async function parseOpenDocumentText(data: ArrayBuffer): Promise<WordParseResult> {
   const zip = await loadOpenDocumentZip(data)
   await assertNotEncrypted(zip)
 
-  const contentXml = await readRequiredText(zip, "content.xml")
-  const blocks = extractOrderedTextBlocks(contentXml, ["text:h", "text:p"])
+  const content = await parseXmlTree(await readRequiredText(zip, "content.xml"))
+  const blocks = textBlocks(content)
   const text = blocks
     .map((block) => block.text)
     .filter(Boolean)
@@ -36,9 +60,9 @@ export async function parseOpenDocumentText(data: ArrayBuffer): Promise<WordPars
 
   const metadata = await extractOpenDocumentMetadata(zip)
   const headings = blocks
-    .filter((block) => block.tag === "text:h")
+    .filter((block) => block.heading)
     .map((block) => ({
-      level: Math.max(Number(block.attributes["text:outline-level"] || 1), 1),
+      level: Math.max(Number(block.outlineLevel || 1), 1),
       text: block.text,
     }))
 
@@ -52,33 +76,47 @@ export async function parseOpenDocumentText(data: ArrayBuffer): Promise<WordPars
   }
 }
 
-export async function parseOpenDocumentSpreadsheet(data: ArrayBuffer): Promise<ExcelParseResult> {
+export async function parseOpenDocumentSpreadsheet(
+  data: ArrayBuffer,
+  options: OpenDocumentParseOptions = {}
+): Promise<ExcelParseResult> {
   const zip = await loadOpenDocumentZip(data)
   await assertNotEncrypted(zip)
 
-  const contentXml = await readRequiredText(zip, "content.xml")
-  const tables = extractTables(contentXml)
+  const content = await parseXmlTree(await readRequiredText(zip, "content.xml"))
+  // Sheets are the spreadsheet body's tables; a table nested in a cell is
+  // part of that cell, not a sheet of its own.
+  const tables = findElements(findElement(content, "office:spreadsheet") ?? content, "table:table")
 
   if (tables.length === 0) {
     throw new Error("No readable spreadsheet content found in OpenDocument file.")
   }
 
-  const sheets: ExcelSheet[] = tables.map((table) => {
-    const rows = extractTableRows(table.innerXml)
+  const budget = new DocumentBudget(
+    "expanded-cells",
+    options.maxExpandedCells ?? DEFAULT_DOCUMENT_LIMITS.maxExpandedCells
+  )
+  const sheets: ExcelSheet[] = tables.map((table, index) => {
+    const { rows, mergedCells } = readSpreadsheetTable(table, budget)
     const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
-
     return {
-      name: table.name,
+      name: table.attribs["table:name"] || `Sheet ${index + 1}`,
       data: rows,
       rowCount: rows.length,
       columnCount,
+      mergedCells: mergedCells.length > 0 ? mergedCells : undefined,
     }
   })
 
   return {
-    text: sheets.map((sheet) => convertSheetToText(sheet)).join("\n\n"),
+    text: sheets
+      .map((sheet) => convertSheetToText(sheet.name, sheet.data, sheet.mergedCells))
+      .join("\n\n"),
     sheets,
     sheetNames: sheets.map((sheet) => sheet.name),
+    sheetStats: sheets.map((sheet) =>
+      computeSheetStats(sheet.name, sheet.data, sheet.columnCount, sheet.mergedCells ?? [])
+    ),
   }
 }
 
@@ -88,17 +126,39 @@ export async function parseOpenDocumentPresentation(
   const zip = await loadOpenDocumentZip(data)
   await assertNotEncrypted(zip)
 
-  const contentXml = await readRequiredText(zip, "content.xml")
-  const slides = extractSlides(contentXml)
+  const content = await parseXmlTree(await readRequiredText(zip, "content.xml"))
+  const pages = findElements(content, "draw:page")
+  if (pages.length > DEFAULT_DOCUMENT_LIMITS.maxSlides) {
+    throw new DocumentLimitError("slides", DEFAULT_DOCUMENT_LIMITS.maxSlides, pages.length)
+  }
+  // Every page keeps its position, text or not: slide N is the user's slide
+  // N, and a picture-only slide is still a slide.
+  const slides: PresentationSlide[] = pages.map((page, index) => {
+    // Speaker notes live inside the page element but are not slide content.
+    const blocks = textBlocks(page, SLIDE_SKIPPED_ELEMENTS)
+    const slideText = blocks
+      .map((block) => block.text)
+      .filter(Boolean)
+      .join("\n")
+      .trim()
+    return {
+      slideNumber: index + 1,
+      ...(blocks[0]?.text ? { title: blocks[0].text } : {}),
+      text: slideText,
+    }
+  })
 
-  if (slides.length === 0) {
+  if (!slides.some((slide) => slide.text)) {
     throw new Error("No readable slide content found in OpenDocument file.")
   }
 
   const metadata = await extractOpenDocumentMetadata(zip)
 
   return {
-    text: slides.map((slide) => `## Slide ${slide.slideNumber}\n${slide.text}`).join("\n\n"),
+    text: slides
+      .filter((slide) => slide.text)
+      .map((slide) => `## Slide ${slide.slideNumber}\n${slide.text}`)
+      .join("\n\n"),
     slideCount: slides.length,
     slides,
     metadata: toPresentationMetadata(metadata),
@@ -146,10 +206,15 @@ async function extractOpenDocumentMetadata(
     return {}
   }
 
-  const xml = await metaFile.async("string")
+  const meta = await parseXmlTree(await metaFile.async("string"))
+  const read = (name: string) => {
+    const element = findElement(meta, name)
+    const value = element ? textContent(element).replace(/\s+/g, " ").trim() : ""
+    return value || undefined
+  }
   return {
-    title: extractTagText(xml, ["dc:title"]),
-    author: extractTagText(xml, ["dc:creator", "meta:initial-creator"]),
+    title: read("dc:title"),
+    author: read("dc:creator") ?? read("meta:initial-creator"),
   }
 }
 
@@ -163,167 +228,240 @@ function toPresentationMetadata(metadata: {
   }
 }
 
-function extractOrderedTextBlocks(xml: string, tags: string[]) {
-  const escapedTags = tags.map(escapeTagName).join("|")
-  const regex = new RegExp(`<(${escapedTags})\\b([^>]*)>([\\s\\S]*?)<\\/\\1>`, "gi")
-  const blocks: Array<{ tag: string; text: string; attributes: Record<string, string> }> = []
-  let match: RegExpExecArray | null
+interface TextBlock {
+  heading: boolean
+  outlineLevel?: string
+  text: string
+}
 
-  while ((match = regex.exec(xml)) !== null) {
-    const text = normalizeXmlText(match[3])
-    if (!text) {
-      continue
+const SLIDE_SKIPPED_ELEMENTS: ReadonlySet<string> = new Set(["presentation:notes"])
+
+/**
+ * Headings and paragraphs below `node`, in document order. A paragraph's
+ * frames and notes are part of that paragraph, not blocks of their own.
+ * Elements named in `skip` are left out with everything inside them.
+ */
+function textBlocks(node: XmlNode, skip: ReadonlySet<string> = new Set()): TextBlock[] {
+  const blocks: TextBlock[] = []
+  const visit = (current: XmlNode) => {
+    for (const child of current.children ?? []) {
+      if (isElement(child) && skip.has(child.name)) continue
+      if (isElement(child, "text:h") || isElement(child, "text:p")) {
+        const text = paragraphText(child).trim()
+        if (text)
+          blocks.push({
+            heading: child.name === "text:h",
+            outlineLevel: child.attribs["text:outline-level"],
+            text,
+          })
+      } else {
+        visit(child)
+      }
     }
-
-    blocks.push({
-      tag: match[1],
-      text,
-      attributes: parseAttributes(match[2]),
-    })
   }
-
+  visit(node)
   return blocks
 }
 
-function extractTables(xml: string): Array<{ name: string; innerXml: string }> {
-  const regex = /<table:table\b([^>]*)>([\s\S]*?)<\/table:table>/gi
-  const tables: Array<{ name: string; innerXml: string }> = []
-  let match: RegExpExecArray | null
-
-  while ((match = regex.exec(xml)) !== null) {
-    const attributes = parseAttributes(match[1])
-    tables.push({
-      name: attributes["table:name"] || `Sheet ${tables.length + 1}`,
-      innerXml: match[2],
-    })
-  }
-
-  return tables
-}
-
-function extractTableRows(tableXml: string): string[][] {
-  const rowRegex = /<table:table-row\b([^>]*)>([\s\S]*?)<\/table:table-row>/gi
-  const rows: string[][] = []
-  let rowMatch: RegExpExecArray | null
-
-  while ((rowMatch = rowRegex.exec(tableXml)) !== null) {
-    const rowRepeat = Math.max(
-      Number(parseAttributes(rowMatch[1])["table:number-rows-repeated"] || 1),
-      1
-    )
-    const row = extractCells(rowMatch[2])
-
-    for (let i = 0; i < rowRepeat; i++) {
-      rows.push([...row])
+/**
+ * The text of one `text:p` / `text:h`, by the ODF rules: runs of white space
+ * in character data collapse to one space, `text:s` is `text:c` spaces,
+ * `text:tab` a tab and `text:line-break` a new line. A note's citation mark is
+ * dropped and its body kept in place, in parentheses.
+ */
+function paragraphText(node: XmlNode): string {
+  let out = ""
+  for (const child of node.children ?? []) {
+    if (child.type === "text") {
+      out += (child.data ?? "").replace(/[ \t\r\n]+/g, " ")
+      continue
+    }
+    if (!isElement(child)) {
+      out += paragraphText(child)
+      continue
+    }
+    switch (child.name) {
+      case "text:s":
+        out += " ".repeat(Math.min(positiveInteger(child.attribs["text:c"]) ?? 1, 1024))
+        break
+      case "text:tab":
+        out += "\t"
+        break
+      case "text:line-break":
+        out += "\n"
+        break
+      case "text:note-citation":
+        break
+      case "text:note": {
+        const body = findElement(child, "text:note-body")
+        const noteText = body
+          ? textBlocks(body)
+              .map((block) => block.text)
+              .join(" ")
+          : ""
+        if (noteText) out += ` (${noteText})`
+        break
+      }
+      case "text:p":
+      case "text:h":
+        // A paragraph inside a frame or text box sits on its own line.
+        out += `${out && !out.endsWith("\n") ? "\n" : ""}${paragraphText(child)}`
+        break
+      default:
+        out += paragraphText(child)
     }
   }
+  return out
+}
 
+type SheetValue = string | number | boolean | null
+
+/** A repeat/span count: a decimal positive integer, or the attribute is malformed. */
+function positiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+  if (!/^\d+$/.test(value.trim())) {
+    throw new Error(`Invalid OpenDocument repeat count: ${JSON.stringify(value)}.`)
+  }
+  const count = Number.parseInt(value, 10)
+  if (count < 1) throw new Error(`Invalid OpenDocument repeat count: ${JSON.stringify(value)}.`)
+  return count
+}
+
+/**
+ * The value a cell stores, by its `office:value-type`. Numbers, percentages
+ * and currency keep `office:value` (what the cell holds, not its display
+ * rounding); dates and times keep their ISO value; strings are the cell's
+ * paragraphs, one per line.
+ */
+function cellValue(cell: XmlElement): SheetValue {
+  const attrs = cell.attribs
+  const type = attrs["office:value-type"] ?? attrs["calcext:value-type"]
+  switch (type) {
+    case "float":
+    case "percentage":
+    case "currency": {
+      const value = Number(attrs["office:value"])
+      if (attrs["office:value"] !== undefined && Number.isFinite(value)) return value
+      break
+    }
+    case "boolean":
+      if (attrs["office:boolean-value"] !== undefined)
+        return attrs["office:boolean-value"] === "true"
+      break
+    case "date":
+      if (attrs["office:date-value"]) return attrs["office:date-value"].replace("T00:00:00", "")
+      break
+    case "time":
+      if (attrs["office:time-value"]) return attrs["office:time-value"]
+      break
+    case "string":
+      if (attrs["office:string-value"] !== undefined) return attrs["office:string-value"]
+      break
+  }
+  const text = childElements(cell)
+    .filter((child) => child.name === "text:p" || child.name === "text:h")
+    .map((paragraph) => paragraphText(paragraph))
+    .join("\n")
+    .trim()
+  return text ? text : null
+}
+
+/** Rows of a spreadsheet table, wherever the format groups them. */
+function tableRows(table: XmlElement): XmlElement[] {
+  const rows: XmlElement[] = []
+  const visit = (node: XmlElement) => {
+    for (const child of childElements(node)) {
+      if (child.name === "table:table-row") rows.push(child)
+      else if (
+        child.name === "table:table-rows" ||
+        child.name === "table:table-header-rows" ||
+        child.name === "table:table-row-group"
+      )
+        visit(child)
+    }
+  }
+  visit(table)
   return rows
 }
 
-function extractCells(rowXml: string): string[] {
-  const cellRegex = /<table:table-cell\b([^>]*)>([\s\S]*?)<\/table:table-cell>/gi
-  const cells: string[] = []
-  let cellMatch: RegExpExecArray | null
+/**
+ * One sheet as A1-anchored rows plus its merged ranges.
+ *
+ * Empty cells and covered (merged-away) cells take their column, so a value is
+ * always at its real coordinate. Repeated rows and cells are expanded, but a
+ * run of empty ones is only materialised once something follows it: office
+ * suites pad every sheet to its full million-row extent with one repeated
+ * empty row, and that padding must not cost a million rows.
+ */
+function readSpreadsheetTable(
+  table: XmlElement,
+  budget: DocumentBudget
+): { rows: SheetValue[][]; mergedCells: string[] } {
+  const rows: SheetValue[][] = []
+  const mergedCells: string[] = []
+  let pendingEmptyRows = 0
 
-  while ((cellMatch = cellRegex.exec(rowXml)) !== null) {
-    const attributes = parseAttributes(cellMatch[1])
-    const repeat = Math.max(Number(attributes["table:number-columns-repeated"] || 1), 1)
-    const paragraphs = extractOrderedTextBlocks(cellMatch[2], ["text:p"]).map((block) => block.text)
-    const value = paragraphs.join("\n").trim()
+  for (const rowElement of tableRows(table)) {
+    const rowRepeat = positiveInteger(rowElement.attribs["table:number-rows-repeated"]) ?? 1
+    const cells: SheetValue[] = []
+    let pendingEmptyCells = 0
+    let column = 0
+    const rowIndex = rows.length + pendingEmptyRows
 
-    for (let i = 0; i < repeat; i++) {
-      cells.push(value)
+    for (const cell of childElements(rowElement)) {
+      if (cell.name !== "table:table-cell" && cell.name !== "table:covered-table-cell") continue
+      const repeat = positiveInteger(cell.attribs["table:number-columns-repeated"]) ?? 1
+      const value = cell.name === "table:covered-table-cell" ? null : cellValue(cell)
+      const columnsSpanned = positiveInteger(cell.attribs["table:number-columns-spanned"]) ?? 1
+      const rowsSpanned = positiveInteger(cell.attribs["table:number-rows-spanned"]) ?? 1
+      if (cell.name === "table:table-cell" && (columnsSpanned > 1 || rowsSpanned > 1)) {
+        budget.take(repeat * rowRepeat)
+        for (let r = 0; r < rowRepeat; r++) {
+          for (let i = 0; i < repeat; i++) {
+            const start = column + i
+            const top = rowIndex + r + 1
+            mergedCells.push(
+              `${columnName(start)}${top}:${columnName(start + columnsSpanned - 1)}${
+                top + rowsSpanned - 1
+              }`
+            )
+          }
+        }
+      }
+      if (value === null) {
+        pendingEmptyCells += repeat
+      } else {
+        budget.take((pendingEmptyCells + repeat) * rowRepeat)
+        for (let i = 0; i < pendingEmptyCells; i++) cells.push(null)
+        for (let i = 0; i < repeat; i++) cells.push(value)
+        pendingEmptyCells = 0
+      }
+      column += repeat
     }
-  }
 
-  return cells
-}
-
-function extractSlides(xml: string): PresentationSlide[] {
-  const pageRegex = /<draw:page\b([^>]*)>([\s\S]*?)<\/draw:page>/gi
-  const slides: PresentationSlide[] = []
-  let match: RegExpExecArray | null
-
-  while ((match = pageRegex.exec(xml)) !== null) {
-    const textBlocks = extractOrderedTextBlocks(match[2], ["text:h", "text:p"])
-    const slideText = textBlocks
-      .map((block) => block.text)
-      .filter(Boolean)
-      .join("\n")
-      .trim()
-    if (!slideText) {
+    if (cells.length === 0) {
+      pendingEmptyRows += rowRepeat
       continue
     }
-
-    const slideNumber = slides.length + 1
-    slides.push({
-      slideNumber,
-      title: textBlocks[0]?.text,
-      text: slideText,
-    })
+    budget.take(pendingEmptyRows)
+    for (let i = 0; i < pendingEmptyRows; i++) rows.push([])
+    pendingEmptyRows = 0
+    for (let i = 0; i < rowRepeat; i++) rows.push(i === 0 ? cells : [...cells])
   }
 
-  return slides
+  return { rows, mergedCells }
 }
 
-function convertSheetToText(sheet: ExcelSheet): string {
-  const lines = [`## Sheet: ${sheet.name}`]
-
-  for (const row of sheet.data) {
-    lines.push(row.join(" | "))
+/** Spreadsheet column letters for a 0-based index (0 → A, 26 → AA). */
+function columnName(index: number): string {
+  let name = ""
+  let current = index + 1
+  while (current > 0) {
+    const remainder = (current - 1) % 26
+    name = String.fromCharCode(65 + remainder) + name
+    current = Math.floor((current - 1) / 26)
   }
-
-  return lines.join("\n")
-}
-
-function parseAttributes(attributes: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  const regex = /([\w:-]+)="([^"]*)"/g
-  let match: RegExpExecArray | null
-
-  while ((match = regex.exec(attributes)) !== null) {
-    result[match[1]] = decodeXmlEntities(match[2])
-  }
-
-  return result
-}
-
-function extractTagText(xml: string, tags: string[]): string | undefined {
-  for (const tag of tags) {
-    const regex = new RegExp(
-      `<${escapeTagName(tag)}[^>]*>([\\s\\S]*?)<\\/${escapeTagName(tag)}>`,
-      "i"
-    )
-    const match = xml.match(regex)
-    if (!match) {
-      continue
-    }
-
-    const text = normalizeXmlText(match[1])
-    if (text) {
-      return text
-    }
-  }
-
-  return undefined
-}
-
-function normalizeXmlText(input: string): string {
-  return decodeXmlEntities(input.replace(/<[^>]+>/g, " "))
-    .replace(/\s+/g, " ")
-    .trim()
-}
-
-function decodeXmlEntities(input: string): string {
-  return input
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+  return name
 }
 
 function escapeHtml(input: string): string {
@@ -333,8 +471,4 @@ function escapeHtml(input: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;")
-}
-
-function escapeTagName(tag: string): string {
-  return tag.replace(":", "\\:")
 }

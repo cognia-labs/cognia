@@ -226,6 +226,12 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
   return bytes.buffer
 }
 
+/** One line, for the model, naming why a document's text could not be read. */
+function describeExtractionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.replace(/\s+/g, " ").trim().slice(0, 200) || "the document could not be parsed"
+}
+
 function defaultExtractor(label: string) {
   return async (data: ArrayBuffer, name: string): Promise<string> => {
     const { processDocumentAsync } = await import("@cognia/document/document-processor")
@@ -403,8 +409,18 @@ export async function enrichInboundMedia(
         continue
       }
 
-      const text = await extractDocText(base64ToArrayBuffer(bytes), seg.name).catch(() => "")
-      if (text.trim()) seg.ocrText = text.trim()
+      // A failed extraction is recorded, not turned into an empty string: the
+      // model must be able to say "I could not open that file" instead of
+      // answering as though the document were blank.
+      const extracted = await extractDocText(base64ToArrayBuffer(bytes), seg.name).then(
+        (text) => ({ text }),
+        (error: unknown) => ({ error })
+      )
+      if ("error" in extracted) {
+        seg.extractionError = describeExtractionError(extracted.error)
+        continue
+      }
+      if (extracted.text.trim()) seg.ocrText = extracted.text.trim()
     } catch {
       // Per-segment best-effort: one unreadable attachment must not cost the
       // others, and never the message.

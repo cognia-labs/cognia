@@ -6,15 +6,9 @@ import {
   detectDocumentType,
   processDocument,
   processDocumentAsync,
-  processDocuments,
-  extractSummary,
   getFileExtension,
-  isTextFile,
   estimateTokenCount,
-  validateFile,
   detectEncoding,
-  compareDocuments,
-  isBinaryType,
 } from "./document-processor"
 import { parseWord, parseExcel } from "./parsers/office-parser"
 import { parsePresentation } from "./parsers/presentation-parser"
@@ -888,95 +882,101 @@ describe("processDocumentAsync", () => {
     expect(result.type).toBe("unknown")
     expect(result.content).toBe("plain buffer body")
   })
-})
 
-describe("processDocuments", () => {
-  it("processes multiple documents", () => {
-    const docs = [
-      { id: "1", filename: "a.md", content: "# A" },
-      { id: "2", filename: "b.ts", content: "const x = 1;" },
-    ]
+  // F4: IM adapters hand every attachment over as an ArrayBuffer.
+  it.each([
+    ["notes.txt", "text", "plain note"],
+    ["readme.md", "markdown", "# Title\n\nBody"],
+    ["config.json", "json", '{"a":1}'],
+    ["main.py", "code", "def main():\n    return 1"],
+    ["feed.xml", "code", "<feed><title>x</title></feed>"],
+  ])("reads a %s ArrayBuffer as %s text", async (filename, type, text) => {
+    const buffer = new TextEncoder().encode(text).buffer
+    const result = await processDocumentAsync("bytes", filename, buffer)
 
-    const results = processDocuments(docs)
-
-    expect(results).toHaveLength(2)
-    expect(results[0].type).toBe("markdown")
-    expect(results[1].type).toBe("code")
+    expect(result.type).toBe(type)
+    expect(result.content).toBe(text)
+    expect(result.parseDiagnostics).toEqual([])
   })
 
-  it("applies options to all documents", () => {
-    const docs = [
-      { id: "1", filename: "a.md", content: "word ".repeat(100) },
-      { id: "2", filename: "b.md", content: "word ".repeat(100) },
-    ]
+  it("decodes UTF-8 and UTF-16 byte-order marks and drops them", async () => {
+    const utf8 = Uint8Array.from([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("中文")]).buffer
+    const utf16le = Uint8Array.from([0xff, 0xfe, 0x2d, 0x4e, 0x87, 0x65]).buffer
+    const utf16be = Uint8Array.from([0xfe, 0xff, 0x4e, 0x2d, 0x65, 0x87]).buffer
 
-    const results = processDocuments(docs, { generateChunks: true })
-
-    results.forEach((result) => {
-      expect(result.chunks).toBeDefined()
-    })
+    for (const buffer of [utf8, utf16le, utf16be]) {
+      expect((await processDocumentAsync("bom", "notes.txt", buffer)).content).toBe("中文")
+    }
   })
 
-  it("handles empty array", () => {
-    const results = processDocuments([])
+  it("reports bytes that are not valid UTF-8 instead of decoding them silently", async () => {
+    const buffer = Uint8Array.from([0x61, 0xff, 0x62]).buffer
+    const result = await processDocumentAsync("bad", "notes.txt", buffer)
 
-    expect(results).toHaveLength(0)
-  })
-})
-
-describe("extractSummary", () => {
-  it("returns full content when shorter than maxLength", () => {
-    const content = "Short content"
-    const result = extractSummary(content, 200)
-
-    expect(result).toBe("Short content")
+    expect(result.content).toBe("a�b")
+    expect(result.parseDiagnostics).toEqual([
+      expect.objectContaining({ code: "parser_warning", severity: "warning" }),
+    ])
   })
 
-  it("truncates at sentence boundary", () => {
-    const content = "First sentence. Second sentence. Third sentence."
-    const result = extractSummary(content, 30)
-
-    expect(result).toContain("First sentence.")
+  it("refuses UTF-32 text rather than reading it as another encoding", async () => {
+    const buffer = Uint8Array.from([0xff, 0xfe, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00]).buffer
+    await expect(processDocumentAsync("u32", "notes.txt", buffer)).rejects.toThrow("UTF-32")
   })
 
-  it("truncates at word boundary with ellipsis", () => {
-    const content = "A long content without sentence markers that needs truncation"
-    const result = extractSummary(content, 30)
+  // F3: the format picks the parser, whether the payload is a string or bytes.
+  it("parses an HTML string with the HTML parser, keeping script and markup out", async () => {
+    const html =
+      "<html><head><title>Guide</title><script>steal()</script><style>p{}</style></head>" +
+      "<body><h1>Install</h1><p>Run <b>setup</b>.</p></body></html>"
+    const fromString = await processDocumentAsync("html-s", "guide.html", html)
+    const fromBytes = await processDocumentAsync(
+      "html-b",
+      "guide.html",
+      new TextEncoder().encode(html).buffer
+    )
 
-    expect(result.endsWith("...")).toBe(true)
+    for (const result of [fromString, fromBytes]) {
+      expect(result.parseSummary?.parser).toBe("html")
+      expect(result.parseResult).toBeDefined()
+      expect(result.content).toContain("# Install")
+      expect(result.content).toContain("**setup**")
+      for (const text of [result.content, result.embeddableContent]) {
+        expect(text).not.toContain("steal()")
+        expect(text).not.toContain("<p>")
+      }
+    }
+    expect(fromString.content).toBe(fromBytes.content)
   })
 
-  it("handles question marks as sentence endings", () => {
-    const content = "Is this a question? Here is more content."
-    const result = extractSummary(content, 25)
+  it("parses a CSV string with the CSV parser", async () => {
+    const csv = 'name,note\nAda,"line one\nline two"\n'
+    const result = await processDocumentAsync("csv-s", "people.csv", csv)
 
-    expect(result).toContain("?")
+    expect(result.parseSummary?.parser).toBe("csv")
+    expect(result.metadata.rowCount).toBe(1)
+    expect(result.metadata.headers).toEqual(["name", "note"])
   })
 
-  it("handles exclamation marks as sentence endings", () => {
-    const content = "Wow! That is amazing. More content here."
-    const result = extractSummary(content, 10)
-
-    expect(result).toContain("!")
+  it("refuses rich formats in the sync processor instead of reading them as text", () => {
+    expect(() => processDocument("x", "page.html", "<p>x</p>")).toThrow("processDocumentAsync")
+    expect(() => processDocument("x", "rows.csv", "a,b")).toThrow("processDocumentAsync")
   })
 
-  it("normalizes whitespace", () => {
-    const content = "Multiple   spaces   and\n\nnewlines"
-    const result = extractSummary(content, 200)
-
-    expect(result).not.toContain("  ")
-    expect(result).not.toContain("\n")
-  })
-
-  it("uses default maxLength of 200", () => {
-    const longContent = "word ".repeat(100)
-    const result = extractSummary(longContent)
-
-    expect(result.length).toBeLessThanOrEqual(203)
-  })
-
-  it("falls back to hard truncation when no sentence or word boundary is available", () => {
-    expect(extractSummary("A".repeat(40), 10)).toBe("A".repeat(10) + "...")
+  // F7: `maxFileSize` was declared and never enforced.
+  it("enforces maxFileSize on strings (as UTF-8 bytes) and on ArrayBuffers", async () => {
+    await expect(
+      processDocumentAsync("big", "notes.txt", "a".repeat(37), { maxFileSize: 2 })
+    ).rejects.toMatchObject({ name: "DocumentLimitError", scope: "file-bytes", limit: 2 })
+    await expect(
+      processDocumentAsync("big", "deck.pptx", new ArrayBuffer(8), { maxFileSize: 4 })
+    ).rejects.toMatchObject({ scope: "file-bytes", observed: 8 })
+    // Three characters, nine bytes.
+    expect(() => processDocument("cjk", "notes.txt", "中文字", { maxFileSize: 8 })).toThrow(
+      "file-bytes"
+    )
+    expect(processDocument("cjk", "notes.txt", "中文字", { maxFileSize: 9 }).content).toBe("中文字")
+    expect(parsePresentation).not.toHaveBeenCalled()
   })
 })
 
@@ -999,99 +999,6 @@ describe("getFileExtension", () => {
 
   it("handles dotfiles", () => {
     expect(getFileExtension(".gitignore")).toBe("")
-  })
-})
-
-describe("isTextFile", () => {
-  describe("text files", () => {
-    it("returns true for .txt", () => {
-      expect(isTextFile("file.txt")).toBe(true)
-    })
-
-    it("returns true for markdown", () => {
-      expect(isTextFile("file.md")).toBe(true)
-      expect(isTextFile("file.markdown")).toBe(true)
-    })
-
-    it("returns true for rtf", () => {
-      expect(isTextFile("file.rtf")).toBe(true)
-    })
-  })
-
-  describe("code files", () => {
-    it("returns true for JavaScript", () => {
-      expect(isTextFile("file.js")).toBe(true)
-      expect(isTextFile("file.jsx")).toBe(true)
-    })
-
-    it("returns true for TypeScript", () => {
-      expect(isTextFile("file.ts")).toBe(true)
-      expect(isTextFile("file.tsx")).toBe(true)
-    })
-
-    it("returns true for Python", () => {
-      expect(isTextFile("file.py")).toBe(true)
-    })
-
-    it("returns true for Go", () => {
-      expect(isTextFile("file.go")).toBe(true)
-    })
-
-    it("returns true for Rust", () => {
-      expect(isTextFile("file.rs")).toBe(true)
-    })
-
-    it("returns true for Java", () => {
-      expect(isTextFile("file.java")).toBe(true)
-    })
-  })
-
-  describe("config files", () => {
-    it("returns true for JSON", () => {
-      expect(isTextFile("package.json")).toBe(true)
-    })
-
-    it("returns true for YAML", () => {
-      expect(isTextFile("config.yaml")).toBe(true)
-      expect(isTextFile("config.yml")).toBe(true)
-    })
-
-    it("returns true for TOML", () => {
-      expect(isTextFile("config.toml")).toBe(true)
-    })
-
-    it("returns true for XML", () => {
-      expect(isTextFile("config.xml")).toBe(true)
-    })
-  })
-
-  describe("dotfiles", () => {
-    it("returns true for env files", () => {
-      expect(isTextFile(".env")).toBe(true)
-    })
-
-    it("returns true for gitignore", () => {
-      expect(isTextFile(".gitignore")).toBe(true)
-    })
-
-    it("returns true for extensionless text-like filenames", () => {
-      expect(isTextFile("README")).toBe(true)
-    })
-  })
-
-  describe("binary files", () => {
-    it("returns false for images", () => {
-      expect(isTextFile("image.png")).toBe(false)
-      expect(isTextFile("image.jpg")).toBe(false)
-    })
-
-    it("returns false for executables", () => {
-      expect(isTextFile("app.exe")).toBe(false)
-    })
-
-    it("returns false for archives", () => {
-      expect(isTextFile("file.zip")).toBe(false)
-    })
   })
 })
 
@@ -1134,68 +1041,6 @@ describe("estimateTokenCount", () => {
   })
 })
 
-describe("validateFile", () => {
-  it("accepts valid file", () => {
-    const result = validateFile("document.pdf", 1024)
-    expect(result.valid).toBe(true)
-    expect(result.errors).toHaveLength(0)
-  })
-
-  it("rejects file exceeding max size", () => {
-    const result = validateFile("large.pdf", 100 * 1024 * 1024) // 100MB
-    expect(result.valid).toBe(false)
-    expect(result.errors[0]).toContain("exceeds")
-  })
-
-  it("warns when file size is close to max", () => {
-    const result = validateFile("big.pdf", 45 * 1024 * 1024) // 45MB (90% of 50MB)
-    expect(result.valid).toBe(true)
-    expect(result.warnings.length).toBeGreaterThan(0)
-  })
-
-  it("warns for empty file", () => {
-    const result = validateFile("empty.txt", 0)
-    expect(result.valid).toBe(true)
-    expect(result.warnings).toContain("File is empty")
-  })
-
-  it("warns for unknown file type", () => {
-    const result = validateFile("file.xyz", 100)
-    expect(result.valid).toBe(true)
-    expect(result.warnings[0]).toContain("Unrecognized")
-  })
-
-  it("rejects disallowed file types", () => {
-    const result = validateFile("file.pdf", 100, {
-      allowedTypes: ["markdown", "text"],
-    })
-    expect(result.valid).toBe(false)
-    expect(result.errors[0]).toContain("not allowed")
-  })
-
-  it("accepts allowed file types", () => {
-    const result = validateFile("readme.md", 100, {
-      allowedTypes: ["markdown", "text"],
-    })
-    expect(result.valid).toBe(true)
-  })
-
-  it("respects custom maxFileSize", () => {
-    const result = validateFile("small.txt", 2000, {
-      maxFileSize: 1000,
-    })
-    expect(result.valid).toBe(false)
-  })
-
-  it("formats byte, kilobyte, and gigabyte size errors", () => {
-    expect(validateFile("tiny.txt", 512, { maxFileSize: 256 }).errors[0]).toContain("512 B")
-    expect(validateFile("small.txt", 2048, { maxFileSize: 1024 }).errors[0]).toContain("2.0 KB")
-    expect(
-      validateFile("huge.txt", 2 * 1024 * 1024 * 1024, { maxFileSize: 1024 * 1024 }).errors[0]
-    ).toContain("2.0 GB")
-  })
-})
-
 describe("detectEncoding", () => {
   it("detects UTF-8 BOM", () => {
     const buffer = new Uint8Array([0xef, 0xbb, 0xbf, 0x41]).buffer
@@ -1220,85 +1065,6 @@ describe("detectEncoding", () => {
   it("defaults to utf-8 for no BOM", () => {
     const buffer = new Uint8Array([0x41, 0x42, 0x43]).buffer
     expect(detectEncoding(buffer)).toBe("utf-8")
-  })
-})
-
-describe("compareDocuments", () => {
-  const makeDoc = (content: string) => ({
-    id: "test",
-    filename: "test.txt",
-    type: "text" as const,
-    content,
-    embeddableContent: content,
-    metadata: { size: content.length, lineCount: content.split("\n").length, wordCount: 0 },
-  })
-
-  it("detects identical documents", () => {
-    const doc = makeDoc("Hello world")
-    const diff = compareDocuments(doc, doc)
-    expect(diff.similarity).toBe(1.0)
-    expect(diff.added).toHaveLength(0)
-    expect(diff.removed).toHaveLength(0)
-  })
-
-  it("detects added lines", () => {
-    const docA = makeDoc("Line 1\nLine 2")
-    const docB = makeDoc("Line 1\nLine 2\nLine 3")
-    const diff = compareDocuments(docA, docB)
-    expect(diff.added).toContain("Line 3")
-  })
-
-  it("detects removed lines", () => {
-    const docA = makeDoc("Line 1\nLine 2\nLine 3")
-    const docB = makeDoc("Line 1\nLine 2")
-    const diff = compareDocuments(docA, docB)
-    expect(diff.removed).toContain("Line 3")
-  })
-
-  it("computes similarity between 0 and 1", () => {
-    const docA = makeDoc("Alpha\nBeta\nGamma")
-    const docB = makeDoc("Alpha\nDelta\nGamma")
-    const diff = compareDocuments(docA, docB)
-    expect(diff.similarity).toBeGreaterThan(0)
-    expect(diff.similarity).toBeLessThan(1)
-  })
-
-  it("records modified lines when similar non-empty lines change", () => {
-    const docA = makeDoc("Alpha\nHello world\nGamma")
-    const docB = makeDoc("Alpha\nHello brave world\nGamma")
-    const diff = compareDocuments(docA, docB)
-
-    expect(diff.modified).toEqual([{ line: 2, before: "Hello world", after: "Hello brave world" }])
-  })
-
-  it("reports full similarity for documents with no non-empty lines", () => {
-    const docA = makeDoc("\n")
-    const docB = makeDoc("")
-    const diff = compareDocuments(docA, docB)
-
-    expect(diff.similarity).toBe(1)
-    expect(diff.added).toEqual([])
-    expect(diff.removed).toEqual([])
-  })
-})
-
-describe("isBinaryType", () => {
-  it("returns true for binary types", () => {
-    expect(isBinaryType("pdf")).toBe(true)
-    expect(isBinaryType("word")).toBe(true)
-    expect(isBinaryType("excel")).toBe(true)
-    expect(isBinaryType("presentation")).toBe(true)
-    expect(isBinaryType("epub")).toBe(true)
-  })
-
-  it("returns false for text types", () => {
-    expect(isBinaryType("markdown")).toBe(false)
-    expect(isBinaryType("code")).toBe(false)
-    expect(isBinaryType("text")).toBe(false)
-    expect(isBinaryType("json")).toBe(false)
-    expect(isBinaryType("csv")).toBe(false)
-    expect(isBinaryType("html")).toBe(false)
-    expect(isBinaryType("rtf")).toBe(false)
   })
 })
 

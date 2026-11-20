@@ -229,6 +229,12 @@
     "create": "创建",
     "description": "从空白文档开始，或从文件导入。",
     "importFailed": "无法读取该文件：{error}",
+    "importRejected": {
+      "too_large": "文件超过 {limitMb} MB，太大，无法作为 Canvas 文档打开。",
+      "malicious_content": "文件包含可执行内容或宏，已拒绝打开。",
+      "unsafe_archive": "文件中的压缩包解压后过大或含有不安全的条目，已拒绝打开。",
+      "type_mismatch": "文件内容与扩展名不符，未打开。"
+    },
     "importedSummary": "已读取 {filename}，将以 {language} 打开。",
     "importing": "正在读取文件…",
     "languageLabel": "语言",

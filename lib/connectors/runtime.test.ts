@@ -5100,6 +5100,25 @@ describe("inboundEventToSendContent", () => {
     expect(inboundEventToSendContent(event)).toBe("[file: archive.zip]")
   })
 
+  it("tells the model a file's text could not be read rather than showing a bare name", () => {
+    const event = makeEvent({
+      segments: [
+        {
+          type: "file",
+          url: "file_k",
+          name: "locked.docx",
+          mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          sizeBytes: 10,
+          extractionError: "password protected",
+        },
+      ],
+      plainText: "",
+    })
+    expect(inboundEventToSendContent(event)).toBe(
+      "[file: locked.docx] (its text could not be read: password protected)"
+    )
+  })
+
   it("hands back a voice transcript when present, else a marker", () => {
     expect(
       inboundEventToSendContent(

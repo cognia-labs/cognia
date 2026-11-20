@@ -87,6 +87,7 @@ export function normalizePresentationSummary(parsed: PresentationParseResult): P
     title: slide.title,
   }))
 
+  const textless = parsed.slides.filter((slide) => !slide.text.trim()).length
   return {
     parser: "presentation",
     structure: {
@@ -94,7 +95,14 @@ export function normalizePresentationSummary(parsed: PresentationParseResult): P
       slideCount: parsed.slideCount,
     },
     segments,
-    quality: { status: "complete" },
+    // A slide with no text is a picture, chart or diagram the text parser
+    // cannot read; the deck's text is not the whole deck.
+    quality: textless
+      ? {
+          status: "degraded",
+          reason: `${textless} of ${parsed.slideCount} slides have no extractable text`,
+        }
+      : { status: "complete" },
   }
 }
 

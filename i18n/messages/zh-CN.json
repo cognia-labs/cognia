@@ -7688,6 +7688,12 @@
       "create": "创建",
       "description": "从空白文档开始，或从文件导入。",
       "importFailed": "无法读取该文件：{error}",
+      "importRejected": {
+        "malicious_content": "文件包含可执行内容或宏，已拒绝打开。",
+        "too_large": "文件超过 {limitMb} MB，太大，无法作为 Canvas 文档打开。",
+        "type_mismatch": "文件内容与扩展名不符，未打开。",
+        "unsafe_archive": "文件中的压缩包解压后过大或含有不安全的条目，已拒绝打开。"
+      },
       "importedSummary": "已读取 {filename}，将以 {language} 打开。",
       "importing": "正在读取文件…",
       "languageLabel": "语言",
@@ -74510,6 +74516,8 @@
         "confirmRemoveFile": "移除文件",
         "emptyFile": "未能从该文件中提取到可读文本。",
         "enableRag": "将知识注入对话",
+        "fileRejected": "文件已被拒绝：内容与类型不符，或包含可执行内容。",
+        "fileTooLarge": "文件超过 {limitMb} MB。",
         "importFailed": "无法导入 {name}。{message}",
         "importing": "正在导入…",
         "listLabel": "知识文件",

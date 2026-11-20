@@ -1,13 +1,23 @@
+import JSZip from "jszip"
 import {
   buildImportWarnings,
+  CANVAS_IMPORT_MAX_BYTES,
   importCanvasDocument,
   resolveImportLanguage,
   titleFromFilename,
   type CanvasImportDeps,
 } from "./document-import"
 
-function fileOf(name: string, body = "hello", type = "text/plain"): File {
+function fileOf(name: string, body: BlobPart = "hello", type = "text/plain"): File {
   return new File([body], name, { type })
+}
+
+async function minimalDocx(extra: Record<string, string> = {}): Promise<Uint8Array> {
+  const zip = new JSZip()
+  zip.file("[Content_Types].xml", "<Types/>")
+  zip.file("word/document.xml", "<w:document/>")
+  for (const [path, body] of Object.entries(extra)) zip.file(path, body)
+  return zip.generateAsync({ type: "uint8array" })
 }
 
 describe("titleFromFilename", () => {
@@ -133,7 +143,8 @@ describe("importCanvasDocument", () => {
 
   it("carries provenance and the conversion warning", async () => {
     const d = deps({ type: "word", content: "# Heading" })
-    const result = await importCanvasDocument(fileOf("memo.docx", "x"), d)
+    const docx = Uint8Array.from(await minimalDocx())
+    const result = await importCanvasDocument(fileOf("memo.docx", docx), d)
     expect(result).toMatchObject({
       language: "markdown",
       type: "text",
@@ -141,5 +152,50 @@ describe("importCanvasDocument", () => {
       sourceFilename: "memo.docx",
     })
     expect(result.warnings.map((w) => w.code)).toContain("converted-to-markdown")
+  })
+
+  // F7: Canvas used to hand any file straight to the parser.
+  it.each([
+    [
+      "a file whose bytes contradict its extension",
+      fileOf("memo.docx", "not a zip"),
+      "type_mismatch",
+    ],
+    [
+      "an executable renamed as text",
+      fileOf("notes.txt", Uint8Array.from([0x4d, 0x5a, 0x90, 0x00])),
+      "malicious_content",
+    ],
+  ])("refuses %s before any parser runs", async (_label, file, reason) => {
+    const d = deps()
+    await expect(importCanvasDocument(file, d)).rejects.toMatchObject({
+      name: "CanvasImportRejectedError",
+      reason,
+    })
+    expect(d.processDocument).not.toHaveBeenCalled()
+  })
+
+  it("refuses a macro-enabled package before any parser runs", async () => {
+    const d = deps()
+    const docx = Uint8Array.from(await minimalDocx({ "word/vbaProject.bin": "macro" }))
+    await expect(importCanvasDocument(fileOf("memo.docx", docx), d)).rejects.toMatchObject({
+      reason: "malicious_content",
+    })
+    expect(d.processDocument).not.toHaveBeenCalled()
+  })
+
+  it("refuses a file over the import ceiling without reading it", async () => {
+    const d = deps()
+    const file = fileOf("huge.md")
+    Object.defineProperty(file, "size", { value: CANVAS_IMPORT_MAX_BYTES + 1 })
+    const read = jest.spyOn(file, "arrayBuffer")
+    await expect(importCanvasDocument(file, d)).rejects.toMatchObject({ reason: "too_large" })
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it("hands the parser the import ceiling as its file-size budget", async () => {
+    const d = deps()
+    await importCanvasDocument(fileOf("notes.md"), d)
+    expect(d.processDocument.mock.calls[0][3]).toEqual({ maxFileSize: CANVAS_IMPORT_MAX_BYTES })
   })
 })

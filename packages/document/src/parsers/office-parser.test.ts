@@ -1,11 +1,14 @@
 /**
  * Tests for Office Parser (Word and Excel)
  *
- * NOTE: Office parsing requires actual binary data which is difficult to mock.
- * These tests focus on utility functions and type checking.
- * For full parsing tests, use e2e tests with real Office files.
+ * Excel runs through the real SheetJS reader on workbooks written by SheetJS,
+ * and Word metadata is read from a real ZIP: the mocked reader is how the
+ * two-decimal rounding and the metadata scan of compressed bytes went
+ * unnoticed. Mammoth stays mocked; its own conversion is not under test.
  */
 
+import JSZip from "jszip"
+import * as XLSX from "xlsx"
 import {
   parseWord,
   parseWordFile,
@@ -37,27 +40,10 @@ jest.mock("mammoth", () => ({
   },
 }))
 
-jest.mock("xlsx", () => ({
-  __esModule: true,
-  read: jest.fn(),
-  utils: {
-    sheet_to_json: jest.fn(),
-    encode_col: jest.fn((index: number) => String.fromCharCode(65 + index)),
-  },
-}))
-
 const mammothMock = jest.requireMock("mammoth").default as {
   images: { imgElement: jest.Mock }
   convertToHtml: jest.Mock
   extractRawText: jest.Mock
-}
-
-const xlsxMock = jest.requireMock("xlsx") as {
-  read: jest.Mock
-  utils: {
-    sheet_to_json: jest.Mock
-    encode_col: jest.Mock
-  }
 }
 
 function utf8ArrayBuffer(text: string): ArrayBuffer {
@@ -101,7 +87,12 @@ describe("Office Parser", () => {
       })
       mammothMock.extractRawText.mockResolvedValue({ value: "Plain document text" })
 
-      const result = await parseWord(utf8ArrayBuffer(metadataXml), {
+      const zip = new JSZip()
+      zip.file("word/document.xml", "<w:document/>")
+      zip.file("docProps/core.xml", metadataXml)
+      const docx = await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" })
+
+      const result = await parseWord(docx, {
         extractImages: true,
         styleMap: ["p[style-name='Title'] => h1:fresh"],
       })
@@ -159,132 +150,144 @@ describe("Office Parser", () => {
   })
 
   describe("parseExcel", () => {
-    it("extracts selected sheets with merges, limits rows, stats, and formatted text", async () => {
-      const dataRows = [
-        ["Name", "Score", "Active", "Started", "Ratio"],
-        ["Ada", 42, true, new Date("2024-02-03T00:00:00.000Z"), 12.345],
-        ["Grace", null, false, "2024-03-04", 7],
-      ] as unknown as (string | number | boolean | null)[][]
-      const emptyRows: (string | number | boolean | null)[][] = []
-      const workbook = {
-        SheetNames: ["Data", "Empty", "Skipped"],
-        Sheets: {
-          Data: {
-            __rows: dataRows,
-            "!merges": [{ s: { c: 0, r: 0 }, e: { c: 1, r: 0 } }],
-          },
-          Empty: { __rows: emptyRows },
-          Skipped: { __rows: [["Should not parse"]] },
-        },
+    function workbookBytes(sheets: Record<string, XLSX.WorkSheet>): ArrayBuffer {
+      const workbook = XLSX.utils.book_new()
+      for (const [name, sheet] of Object.entries(sheets)) {
+        XLSX.utils.book_append_sheet(workbook, sheet, name)
+      }
+      return XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer
+    }
+
+    it("keeps the stored value of every number instead of rounding it (F2)", async () => {
+      const bytes = workbookBytes({
+        Values: XLSX.utils.aoa_to_sheet([
+          ["label", "value"],
+          ["tiny", 0.00012345],
+          ["long", 1.23456789],
+          ["negative", -2.5],
+          ["scientific", 6.02214076e23],
+          ["noise", 0.1 + 0.2],
+          ["integer", 42],
+        ]),
+      })
+
+      const result = await parseExcel(bytes)
+
+      expect(result.sheets[0].data.map((row) => row[1])).toEqual([
+        "value",
+        0.00012345,
+        1.23456789,
+        -2.5,
+        6.02214076e23,
+        0.30000000000000004,
+        42,
+      ])
+      for (const text of ["0.00012345", "1.23456789", "-2.5", "6.02214076e+23", "| 0.3", "42"]) {
+        expect(result.text).toContain(text)
+      }
+      expect(result.text).not.toContain("0.00 ")
+      expect(result.text).not.toContain("1.23 ")
+    })
+
+    it("reads a date-formatted serial as its calendar date, independent of time zone", async () => {
+      const sheet = XLSX.utils.aoa_to_sheet([["when"]])
+      sheet.A2 = { t: "n", v: 45306, z: "yyyy-mm-dd" }
+      sheet.A3 = { t: "n", v: 45292.75, z: "yyyy-mm-dd hh:mm" }
+      sheet["!ref"] = "A1:A3"
+
+      const result = await parseExcel(workbookBytes({ Dates: sheet }))
+
+      expect(result.sheets[0].data).toEqual([["when"], ["2024-01-15"], ["2024-01-01 18:00"]])
+    })
+
+    it("anchors rows at A1 so values keep their coordinates", async () => {
+      const sheet: XLSX.WorkSheet = {
+        C2: { t: "s", v: "late start" },
+        B4: { t: "n", v: 7 },
+        "!ref": "B2:C4",
       }
 
-      xlsxMock.read.mockReturnValue(workbook)
-      xlsxMock.utils.sheet_to_json.mockImplementation(
-        (worksheet: { __rows: (string | number | boolean | null)[][] }) => worksheet.__rows
+      const result = await parseExcel(workbookBytes({ Offset: sheet }))
+
+      expect(result.sheets[0].data).toEqual([[], [null, null, "late start"], [], [null, 7]])
+      expect(result.sheets[0]).toMatchObject({ rowCount: 4, columnCount: 3 })
+    })
+
+    it("sizes the sheet from its stored cells, not the range the file declares", async () => {
+      // Written small, then the package's <dimension> claims the whole grid:
+      // asking SheetJS to write that range would walk all 17 billion cells.
+      const zip = await JSZip.loadAsync(
+        workbookBytes({ Huge: XLSX.utils.aoa_to_sheet([["only"]]) })
+      )
+      const sheetXml = await zip.file("xl/worksheets/sheet1.xml")!.async("string")
+      expect(sheetXml).toContain('<dimension ref="A1"/>')
+      zip.file(
+        "xl/worksheets/sheet1.xml",
+        sheetXml.replace('<dimension ref="A1"/>', '<dimension ref="A1:XFD1048576"/>')
       )
 
-      const result = await parseExcel(utf8ArrayBuffer("xlsx bytes"), {
-        cellDates: true,
-        cellFormula: true,
-        sheetFilter: ["Data", "Empty"],
-        maxRows: 2,
-      })
+      const result = await parseExcel(await zip.generateAsync({ type: "arraybuffer" }))
 
-      expect(xlsxMock.read.mock.calls[0][0]).toHaveProperty("byteLength")
-      expect(xlsxMock.read.mock.calls[0][1]).toEqual({
-        type: "array",
-        cellDates: true,
-        cellFormula: true,
+      expect(result.sheets[0].data).toEqual([["only"]])
+    })
+
+    it("refuses a workbook that would expand past the cell budget (F7)", async () => {
+      const sheet: XLSX.WorkSheet = {
+        A1: { t: "s", v: "a" },
+        Z400: { t: "s", v: "z" },
+        "!ref": "A1:Z400",
+      }
+
+      await expect(
+        parseExcel(workbookBytes({ Wide: sheet }), { maxExpandedCells: 26 * 400 - 1 })
+      ).rejects.toMatchObject({ name: "DocumentLimitError", scope: "expanded-cells" })
+      await expect(
+        parseExcel(workbookBytes({ Wide: sheet }), { maxExpandedCells: 26 * 400 })
+      ).resolves.toMatchObject({ sheets: [{ rowCount: 400, columnCount: 26 }] })
+    })
+
+    it("extracts every sheet with merges, stats, booleans and header formatting", async () => {
+      const data = XLSX.utils.aoa_to_sheet([
+        ["Name", "Score", "Active"],
+        ["Ada", 42, true],
+        ["Grace", null, false],
+        ["Pipe | and\nbreak", 1, true],
+      ])
+      data["!merges"] = [{ s: { c: 0, r: 0 }, e: { c: 1, r: 0 } }]
+
+      const result = await parseExcel(
+        workbookBytes({ Data: data, Empty: XLSX.utils.aoa_to_sheet([]) })
+      )
+
+      expect(result.sheetNames).toEqual(["Data", "Empty"])
+      expect(result.sheets[0]).toMatchObject({
+        name: "Data",
+        rowCount: 4,
+        columnCount: 3,
+        mergedCells: ["A1:B1"],
       })
-      expect(result.sheetNames).toEqual(["Data", "Empty", "Skipped"])
-      expect(result.sheets).toEqual([
-        {
-          name: "Data",
-          data: dataRows.slice(0, 2),
-          rowCount: 2,
-          columnCount: 5,
-          mergedCells: ["A1:B1"],
-        },
-        {
-          name: "Empty",
-          data: [],
-          rowCount: 0,
-          columnCount: 0,
-          mergedCells: undefined,
-        },
-      ])
-      expect(result.sheetStats).toEqual([
-        {
-          name: "Data",
-          rowCount: 2,
-          columnCount: 5,
-          mergedCellCount: 1,
-          emptyRate: 0,
-          columnTypes: {
-            0: "string",
-            1: "mixed",
-            2: "mixed",
-            3: "mixed",
-            4: "mixed",
-          },
-        },
-        {
-          name: "Empty",
-          rowCount: 0,
-          columnCount: 0,
-          mergedCellCount: 0,
-          emptyRate: 0,
-          columnTypes: {},
-        },
-      ])
+      expect(result.sheets[1]).toMatchObject({ name: "Empty", data: [], rowCount: 0 })
+      expect(result.sheetStats?.[0]).toMatchObject({
+        name: "Data",
+        rowCount: 4,
+        columnCount: 3,
+        mergedCellCount: 1,
+        columnTypes: { 0: "string", 1: "mixed", 2: "mixed" },
+      })
       expect(result.text).toContain("Merged cells: A1:B1")
-      expect(result.text).toContain("Name | Score | Active | Started | Ratio")
-      expect(result.text).toContain("Ada | 42 | TRUE |")
-      expect(result.text).toContain("12.35")
+      expect(result.text).toContain("Name | Score | Active\n--- | --- | ---")
+      expect(result.text).toContain("Ada | 42 | TRUE")
+      expect(result.text).toContain("Grace |  | FALSE")
+      // A cell's own pipe and line break do not read as a new column or row.
+      expect(result.text).toContain("Pipe \\| and break | 1 | TRUE")
       expect(result.text).toContain("(empty sheet)")
     })
 
-    it("parses all sheets without row limits and reads File objects", async () => {
-      const workbook = {
-        SheetNames: ["Values"],
-        Sheets: {
-          Values: {
-            __rows: [
-              [1.234, false, null],
-              ["2024-05-06", 3, true],
-            ],
-          },
-        },
-      }
+    it("reads File objects", async () => {
+      const bytes = workbookBytes({ Values: XLSX.utils.aoa_to_sheet([[1]]) })
+      const file = { arrayBuffer: jest.fn().mockResolvedValue(bytes) } as unknown as File
 
-      xlsxMock.read.mockReturnValue(workbook)
-      xlsxMock.utils.sheet_to_json.mockImplementation(
-        (worksheet: { __rows: (string | number | boolean | null)[][] }) => worksheet.__rows
-      )
-
-      const parsed = await parseExcel(utf8ArrayBuffer("xlsx bytes"))
-
-      expect(xlsxMock.read.mock.calls[0][0]).toHaveProperty("byteLength")
-      expect(xlsxMock.read.mock.calls[0][1]).toEqual({ type: "array" })
-      expect(parsed.sheets[0]).toMatchObject({
-        name: "Values",
-        rowCount: 2,
-        columnCount: 3,
-      })
-      expect(parsed.text).toContain("1.23 | FALSE |")
-      expect(parsed.sheetStats?.[0].columnTypes).toEqual({
-        0: "mixed",
-        1: "mixed",
-        2: "boolean",
-      })
-
-      const file = {
-        arrayBuffer: jest.fn().mockResolvedValue(utf8ArrayBuffer("file xlsx bytes")),
-      } as unknown as File
-
-      await expect(parseExcelFile(file)).resolves.toMatchObject({
-        sheetNames: ["Values"],
-      })
+      await expect(parseExcelFile(file)).resolves.toMatchObject({ sheetNames: ["Values"] })
       expect(file.arrayBuffer).toHaveBeenCalledTimes(1)
     })
   })

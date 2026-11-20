@@ -327,6 +327,39 @@ describe("enrichInboundMedia — documents", () => {
     expect((e.segments[0] as { ocrText?: string }).ocrText).toBeUndefined()
   })
 
+  it("records why a document could not be read instead of leaving it looking empty", async () => {
+    const extractDocText = jest
+      .fn()
+      .mockRejectedValue(new Error("Failed to parse word processing file.\n  Retry."))
+    const h = harness()
+    h.readAttachment.mockResolvedValue("QUJD")
+    const e = makeEvent([file("report.docx")])
+
+    await enrichInboundMedia(e, h.plan, { ...h.deps, extractDocText })
+
+    expect(e.segments[0]).toMatchObject({
+      extractionError: "Failed to parse word processing file. Retry.",
+    })
+    expect((e.segments[0] as { ocrText?: string }).ocrText).toBeUndefined()
+  })
+
+  it("reads a plain-text attachment through the default extractor (F4)", async () => {
+    // The real processor: a .txt ArrayBuffer used to throw "No parser is
+    // configured", which this loop then turned into an empty file.
+    const actual = jest.requireActual<typeof import("@cognia/document/document-processor")>(
+      "@cognia/document/document-processor"
+    )
+    mockProcessDoc.mockImplementationOnce(actual.processDocumentAsync)
+    const h = harness()
+    h.readAttachment.mockResolvedValue(btoa("meeting at 3pm"))
+    const e = makeEvent([file("notes.txt")])
+
+    await enrichInboundMedia(e, h.plan, h.deps)
+
+    expect(e.segments[0]).toMatchObject({ ocrText: "meeting at 3pm" })
+    expect((e.segments[0] as { extractionError?: string }).extractionError).toBeUndefined()
+  })
+
   it("uses processDocumentAsync, labelled by the plan, as the default extractor", async () => {
     const h = harness()
     h.readAttachment.mockResolvedValue("QUJD")

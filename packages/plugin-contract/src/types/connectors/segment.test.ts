@@ -49,6 +49,20 @@ describe("MessageSegment", () => {
     expect(segmentsToPlainText(segs)).toBe(" [file:scan.pdf] PAGE ONE ")
   })
 
+  it("marks a file whose text could not be read", () => {
+    const segs: MessageSegment[] = [
+      {
+        type: "file",
+        url: "f://2",
+        name: "locked.docx",
+        mimeType: "application/octet-stream",
+        sizeBytes: 1,
+        extractionError: "password protected",
+      },
+    ]
+    expect(segmentsToPlainText(segs)).toBe(" [file:locked.docx (unreadable: password protected)] ")
+  })
+
   it("retains Matrix encrypted file metadata on media segments", () => {
     const file = {
       url: "mxc://matrix.example/encrypted",

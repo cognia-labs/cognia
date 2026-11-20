@@ -239,28 +239,17 @@ When `ProcessingOptions.generateChunks === true`, `processDocument` calls `chunk
 
 Twin ingest does not call `processDocument` directly for chunk generation — it has its own `prepareChunks` flow (using markdown / code / chat chunkers); but the underlying parser is fully reused from `packages/document/src/`. See [Employee Digital Twin](../subsystems/employee-twin) for details.
 
-## File Validation
+## Input Admission and Budgets
 
-`validateFile()` (in `document-processor.ts`) supports:
+The parser picks its reader by format, never by payload type: an HTML or CSV string goes through the HTML or CSV parser just as its bytes do, and a text file handed over as an `ArrayBuffer` is decoded (UTF-8 by default, UTF-8/UTF-16 byte-order marks honoured, UTF-32 refused, invalid bytes reported as a `parser_warning`). The synchronous `processDocument` reads plain-text formats only and refuses the rest.
 
-- `maxFileSize` — hard size ceiling.
-- `allowedTypes` — whitelist-only type filtering.
-- Returns `{ valid, errors[], warnings[] }`; UI upload components use this for early rejection.
+Budgets live in `packages/document/src/limits.ts` (`DEFAULT_DOCUMENT_LIMITS`):
 
-## Document Diff
+- `maxInputBytes` (50 MiB) — the ceiling Canvas import, Twin staging and project knowledge upload apply before reading a file. `ProcessingOptions.maxFileSize` is enforced on every call (UTF-8 bytes for a string).
+- `maxExpandedCells` (1,000,000) — cells a workbook may materialise. XLSX sheets are sized from their stored cells, not the declared range; OpenDocument repeats are counted before they are expanded, and trailing empty padding is not materialised.
+- `maxSlides` (2,000).
 
-`document-processor.ts` also exports `DocumentDiff`:
-
-```ts
-{
-  added: string[],      // lines only present in after
-  removed: string[],    // lines only present in before
-  modified: { line, before, after }[],
-  similarity: number,   // 0..1
-}
-```
-
-Powers the canvas / editor "compare with previous version" feature.
+Exceeding one throws `DocumentLimitError` (`scope`, `limit`, `observed`, diagnostic code `limit_exceeded`); a budget is never turned into a truncated "complete" result. Entry points that accept user files also run `inspectUploadContent` (`lib/security/upload-content-inspection.ts`) before any parser sees the bytes, the same inspection an attachment upload commit runs.
 
 ## Upstream Integration
 

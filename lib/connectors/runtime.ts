@@ -760,7 +760,9 @@ export function inboundEventToSendContent(event: NormalizedInboundEvent): SendCo
       const text =
         seg.ocrText && seg.ocrText.length > 0
           ? `[file: ${seg.name}]\n${seg.ocrText}`
-          : `[file: ${seg.name}]`
+          : seg.extractionError
+            ? `[file: ${seg.name}] (its text could not be read: ${seg.extractionError})`
+            : `[file: ${seg.name}]`
       blocks.push({ type: "text", text })
       continue
     }

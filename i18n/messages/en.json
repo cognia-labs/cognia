@@ -7688,6 +7688,12 @@
       "create": "Create",
       "description": "Start from a blank document, or bring one in from a file.",
       "importFailed": "Could not read that file: {error}",
+      "importRejected": {
+        "malicious_content": "That file was refused because it contains executable or macro content.",
+        "too_large": "That file is larger than {limitMb} MB, too large to open as a Canvas document.",
+        "type_mismatch": "That file's contents do not match its extension, so it was not opened.",
+        "unsafe_archive": "That file was refused because its archive expands too far or holds unsafe entries."
+      },
       "importedSummary": "Read {filename}. It will open as {language}.",
       "importing": "Reading the file…",
       "languageLabel": "Language",
@@ -74510,6 +74516,8 @@
         "confirmRemoveFile": "Remove file",
         "emptyFile": "No readable text was found in the file.",
         "enableRag": "Inject knowledge into chat",
+        "fileRejected": "The file was refused: its contents do not match its type, or it carries executable content.",
+        "fileTooLarge": "The file is larger than {limitMb} MB.",
         "importFailed": "Could not import {name}. {message}",
         "importing": "Importing…",
         "listLabel": "Knowledge files",

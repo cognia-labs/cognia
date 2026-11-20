@@ -46,6 +46,8 @@ import {
   startersForLanguage,
 } from "@/lib/canvas/document-starters"
 import {
+  CANVAS_IMPORT_MAX_BYTES,
+  CanvasImportRejectedError,
   importCanvasDocument,
   type CanvasImportResult,
   type CanvasImportWarning,
@@ -79,7 +81,11 @@ export function CanvasNewDocumentDialog({
   const [starterId, setStarterId] = useState<string>(EMPTY_STARTER_ID)
   const [imported, setImported] = useState<CanvasImportResult | null>(null)
   const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
+  const [importError, setImportError] = useState<
+    | { kind: "rejected"; reason: CanvasImportRejectedError["reason"] }
+    | { kind: "failed"; message: string }
+    | null
+  >(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const starters = useMemo(() => startersForLanguage(language), [language])
@@ -114,7 +120,11 @@ export function CanvasNewDocumentDialog({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       loggers.canvas.error("canvas import failed", { filename: file.name, error: message })
-      setImportError(message)
+      setImportError(
+        error instanceof CanvasImportRejectedError
+          ? { kind: "rejected", reason: error.reason }
+          : { kind: "failed", message }
+      )
       setImported(null)
     } finally {
       setImporting(false)
@@ -250,7 +260,11 @@ export function CanvasNewDocumentDialog({
             {importError && (
               <Alert variant="destructive" data-testid="canvas-new-import-error">
                 <AlertDescription className="text-xs">
-                  {t("importFailed", { error: importError })}
+                  {importError.kind === "rejected"
+                    ? t(`importRejected.${importError.reason}`, {
+                        limitMb: Math.round(CANVAS_IMPORT_MAX_BYTES / (1024 * 1024)),
+                      })
+                    : t("importFailed", { error: importError.message })}
                 </AlertDescription>
               </Alert>
             )}

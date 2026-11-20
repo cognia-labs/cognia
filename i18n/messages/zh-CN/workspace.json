@@ -144,6 +144,8 @@
       "backendHint": "关键词检索无需嵌入模型。语义与混合检索使用已配置的向量后端和嵌入模型（Twin 设置）。",
       "chunkCount": "{count, plural, other {# 个片段}}",
       "emptyFile": "未能从该文件中提取到可读文本。",
+      "fileRejected": "文件已被拒绝：内容与类型不符，或包含可执行内容。",
+      "fileTooLarge": "文件超过 {limitMb} MB。",
       "enableRag": "将知识注入对话",
       "importFailed": "无法导入 {name}。{message}",
       "importing": "正在导入…",

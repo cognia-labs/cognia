@@ -509,6 +509,7 @@ export type ParseDiagnosticCode =
   | "legacy_format"
   | "empty_content"
   | "content_truncated"
+  | "limit_exceeded"
   | "unsupported_feature"
   | "native_parse_fallback"
   | "sparse_text_layer"

@@ -3,6 +3,17 @@
  * Uses JSZip to read slide XML and metadata.
  */
 
+import { DEFAULT_DOCUMENT_LIMITS, DocumentLimitError } from "../limits"
+import {
+  childElements,
+  findElement,
+  findElements,
+  isElement,
+  parseXmlTree,
+  textContent,
+  type XmlNode,
+} from "./xml-tree"
+
 export interface PresentationParseResult {
   text: string
   slideCount: number
@@ -26,6 +37,13 @@ export interface PresentationMetadata {
 
 /**
  * Parse PPTX data from ArrayBuffer.
+ *
+ * Slides are read in presentation order (`ppt/presentation.xml`'s slide list,
+ * resolved through its relationships), which is what the user sees and what
+ * slide numbers mean; the part names (`slide7.xml`) are storage, and a deck
+ * whose slides were reordered keeps its old part names. A slide with no text
+ * (a picture, a chart) keeps its position with empty text, so slide N is
+ * always the user's slide N.
  */
 export async function parsePresentation(data: ArrayBuffer): Promise<PresentationParseResult> {
   const JSZip = (await import("jszip")).default
@@ -37,46 +55,41 @@ export async function parsePresentation(data: ArrayBuffer): Promise<Presentation
     throw new Error("Failed to parse presentation file. Ensure the file is a valid .pptx.")
   }
 
-  const slidePaths = Object.keys(zip.files)
-    .filter((path) => /^ppt\/slides\/slide\d+\.xml$/i.test(path))
-    .sort((a, b) => getSlideNumber(a) - getSlideNumber(b))
+  const slidePaths = await presentationSlidePaths(zip)
 
   if (slidePaths.length === 0) {
     throw new Error("No slide content found in presentation file.")
   }
+  if (slidePaths.length > DEFAULT_DOCUMENT_LIMITS.maxSlides) {
+    throw new DocumentLimitError("slides", DEFAULT_DOCUMENT_LIMITS.maxSlides, slidePaths.length)
+  }
 
   const slides: PresentationSlide[] = []
 
-  for (const slidePath of slidePaths) {
+  for (const [index, slidePath] of slidePaths.entries()) {
     const slideFile = zip.file(slidePath)
-    if (!slideFile) {
-      continue
-    }
-
-    const xml = await slideFile.async("string")
-    const slideText = extractSlideText(xml)
-
-    if (!slideText) {
-      continue
-    }
-
-    const lines = slideText
+    const xml = slideFile ? await slideFile.async("string") : ""
+    const slideText = xml ? await extractSlideText(xml) : ""
+    const title = slideText
       .split("\n")
       .map((line) => line.trim())
-      .filter(Boolean)
+      .find(Boolean)
     slides.push({
-      slideNumber: getSlideNumber(slidePath),
-      title: lines[0],
+      slideNumber: index + 1,
+      ...(title ? { title } : {}),
       text: slideText,
     })
   }
 
-  if (slides.length === 0) {
+  if (!slides.some((slide) => slide.text)) {
     throw new Error("No readable text content found in presentation file.")
   }
 
   const metadata = await extractPresentationMetadata(zip)
-  const text = slides.map((slide) => `## Slide ${slide.slideNumber}\n${slide.text}`).join("\n\n")
+  const text = slides
+    .filter((slide) => slide.text)
+    .map((slide) => `## Slide ${slide.slideNumber}\n${slide.text}`)
+    .join("\n\n")
 
   return {
     text,
@@ -84,6 +97,49 @@ export async function parsePresentation(data: ArrayBuffer): Promise<Presentation
     slides,
     metadata,
   }
+}
+
+/** Relationship type of a presentation's slide parts. */
+const SLIDE_RELATIONSHIP = /\/relationships\/slide$/
+
+/**
+ * Slide part paths in presentation order. A package without a readable slide
+ * list (not a PowerPoint-written file) falls back to part-number order, the
+ * only order it carries.
+ */
+async function presentationSlidePaths(zip: ZipLike & { files: Record<string, unknown> }) {
+  const partOrder = Object.keys(zip.files)
+    .filter((path) => /^ppt\/slides\/slide\d+\.xml$/i.test(path))
+    .sort((a, b) => getSlideNumber(a) - getSlideNumber(b))
+  const presentationXml = await zip.file("ppt/presentation.xml")?.async("string")
+  const relsXml = await zip.file("ppt/_rels/presentation.xml.rels")?.async("string")
+  if (!presentationXml || !relsXml) return partOrder
+
+  const rels = await parseXmlTree(relsXml)
+  const targets = new Map<string, string>()
+  for (const rel of findElements(rels, "Relationship")) {
+    const { Id: id, Type: type, Target: target, TargetMode: mode } = rel.attribs
+    if (id && target && mode !== "External" && SLIDE_RELATIONSHIP.test(type ?? "")) {
+      targets.set(id, resolvePartPath("ppt", target))
+    }
+  }
+  const presentation = await parseXmlTree(presentationXml)
+  const list = findElement(presentation, "p:sldIdLst")
+  if (!list) return partOrder
+  const ordered = childElements(list, "p:sldId")
+    .map((slide) => targets.get(slide.attribs["r:id"] ?? ""))
+    .filter((path): path is string => Boolean(path && zip.file(path)))
+  return ordered.length > 0 ? ordered : partOrder
+}
+
+/** A relationship target resolved against its source part's folder. */
+function resolvePartPath(baseFolder: string, target: string): string {
+  const segments = target.startsWith("/") ? [] : baseFolder.split("/")
+  for (const segment of target.replace(/^\//, "").split("/")) {
+    if (segment === "..") segments.pop()
+    else if (segment && segment !== ".") segments.push(segment)
+  }
+  return segments.join("/")
 }
 
 /**
@@ -116,22 +172,28 @@ function getSlideNumber(path: string): number {
   return match ? Number(match[1]) : 0
 }
 
-function extractSlideText(xml: string): string {
-  const texts: string[] = []
-  const textRegex = /<a:t>([\s\S]*?)<\/a:t>/gi
-  let match: RegExpExecArray | null
-
-  while ((match = textRegex.exec(xml)) !== null) {
-    const value = decodeXmlEntities(match[1]).trim()
-    if (value) {
-      texts.push(value)
+/**
+ * A slide's text, one line per paragraph (`a:p`), in shape-tree order. Runs
+ * (`a:r`) and fields (`a:fld`) of one paragraph join without a break; `a:br`
+ * is a line break inside it.
+ */
+async function extractSlideText(xml: string): Promise<string> {
+  const tree = await parseXmlTree(xml)
+  const lines: string[] = []
+  for (const paragraph of findElements(tree, "a:p")) {
+    let line = ""
+    const visit = (node: XmlNode) => {
+      for (const child of node.children ?? []) {
+        if (isElement(child, "a:t")) line += textContent(child)
+        else if (isElement(child, "a:br")) line += "\n"
+        else if (isElement(child)) visit(child)
+      }
     }
+    visit(paragraph)
+    const trimmed = line.trim()
+    if (trimmed) lines.push(trimmed)
   }
-
-  return texts
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
+  return lines.join("\n").trim()
 }
 
 interface ZipTextFileLike {

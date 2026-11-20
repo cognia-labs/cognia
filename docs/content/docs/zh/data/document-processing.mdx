@@ -226,28 +226,17 @@ UI 用 `parseSummary` 渲染左侧的目录/分页器；导出到 vector 时按 
 
 Twin ingest 不直接调 `processDocument` 生成 chunks —— 它有自己的 `prepareChunks` 流程（按 markdown / code / chat 三种 chunker）；但底层 parser 完全复用 `lib/document/`。详见 [员工数字孪生](../subsystems/employee-twin)。
 
-## 文件验证
+## 输入准入与预算
 
-`validateFile()`（在 `document-processor.ts`）支持：
+解析器按格式选择读取方式，不看载荷类型：HTML、CSV 字符串和它们的字节一样走 HTML、CSV 解析器；以 `ArrayBuffer` 传入的文本文件会先解码（默认 UTF-8，识别 UTF-8/UTF-16 BOM，拒绝 UTF-32，无效字节以 `parser_warning` 报告）。同步的 `processDocument` 只读取纯文本格式，其他格式直接拒绝。
 
-- `maxFileSize` —— 大小硬上限。
-- `allowedTypes` —— 仅放行白名单类型。
-- 返回 `{ valid, errors[], warnings[] }`，UI 上传组件据此提前拦截。
+预算定义在 `packages/document/src/limits.ts`（`DEFAULT_DOCUMENT_LIMITS`）：
 
-## 文档对比
+- `maxInputBytes`（50 MiB）—— Canvas 导入、Twin 暂存和项目知识库上传在读取文件前检查的上限。`ProcessingOptions.maxFileSize` 在每次调用时都会执行（字符串按 UTF-8 字节计）。
+- `maxExpandedCells`（1,000,000）—— 一个工作簿最多展开的单元格数。XLSX 按实际存储的单元格计算范围，不信任声明的范围；OpenDocument 的重复行列在展开前计数，尾部空白填充不会展开。
+- `maxSlides`（2,000）。
 
-`document-processor.ts` 还导出 `DocumentDiff`：
-
-```ts
-{
-  added: string[],      // 仅在 after 出现的行
-  removed: string[],    // 仅在 before 出现的行
-  modified: { line, before, after }[],
-  similarity: number,   // 0..1
-}
-```
-
-为画板/编辑器的"对比上一版"功能服务。
+超出预算抛出 `DocumentLimitError`（含 `scope`、`limit`、`observed`，诊断码 `limit_exceeded`），不会截断后仍报告"完整"。接收用户文件的入口在解析器读取字节前，还会执行与附件上传提交相同的 `inspectUploadContent`（`lib/security/upload-content-inspection.ts`）。
 
 ## 与上层集成
 

@@ -144,6 +144,8 @@
       "backendHint": "Keyword retrieval is available without an embedding model. Semantic and hybrid retrieval use the configured vector backend and embedding model (Twin settings).",
       "chunkCount": "{count, plural, one {# chunk} other {# chunks}}",
       "emptyFile": "No readable text was found in the file.",
+      "fileRejected": "The file was refused: its contents do not match its type, or it carries executable content.",
+      "fileTooLarge": "The file is larger than {limitMb} MB.",
       "enableRag": "Inject knowledge into chat",
       "importFailed": "Could not import {name}. {message}",
       "importing": "Importing…",

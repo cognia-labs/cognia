@@ -4,6 +4,8 @@
  * Enhanced with image extraction, metadata, style mapping, date/merged cell/formula support
  */
 
+import { DEFAULT_DOCUMENT_LIMITS, DocumentBudget } from "../limits"
+
 export interface WordParseResult {
   text: string
   html: string
@@ -67,10 +69,8 @@ export interface ExcelCell {
 }
 
 export interface ExcelParseOptions {
-  cellDates?: boolean
-  cellFormula?: boolean
-  sheetFilter?: string[]
-  maxRows?: number
+  /** Cells the whole workbook may expand into (defaults to `DEFAULT_DOCUMENT_LIMITS`). */
+  maxExpandedCells?: number
 }
 
 export interface ExcelSheetStats {
@@ -162,54 +162,64 @@ function extractHeadingsFromHtml(html: string): WordHeading[] {
 }
 
 /**
- * Extract metadata from Word docx file (ZIP containing XML)
+ * Metadata from a .docx package's `docProps/core.xml`.
+ *
+ * The part is read out of the ZIP: package members are normally deflated, so
+ * searching the raw archive bytes for `<cp:coreProperties>` finds nothing in a
+ * real Word file. A package without the part (or not a ZIP at all) has no
+ * metadata; that is not a parse failure, since mammoth already read the body.
  */
 async function extractWordMetadata(data: ArrayBuffer): Promise<WordMetadata | undefined> {
+  let coreXml: string | undefined
   try {
-    // docx is a ZIP file; we need to read docProps/core.xml
-    // Use a minimal approach: find the core.xml within the ZIP
-    const uint8 = new Uint8Array(data)
-    const decoder = new TextDecoder("utf-8")
-
-    // Search for core.xml content in the ZIP
-    // The docProps/core.xml contains Dublin Core metadata
-    const fullText = decoder.decode(uint8)
-    const coreXmlMatch =
-      fullText.match(/<cp:coreProperties[\s\S]*?<\/cp:coreProperties>/i) ||
-      fullText.match(/<coreProperties[\s\S]*?<\/coreProperties>/i)
-
-    if (!coreXmlMatch) return undefined
-
-    const coreXml = coreXmlMatch[0]
-
-    const getTag = (xml: string, tag: string): string | undefined => {
-      const regex = new RegExp(`<(?:\\w+:)?${tag}[^>]*>([\\s\\S]*?)<\/(?:\\w+:)?${tag}>`, "i")
-      const m = xml.match(regex)
-      return m ? m[1].trim() : undefined
-    }
-
-    const parseXmlDate = (dateStr?: string): Date | undefined => {
-      if (!dateStr) return undefined
-      const d = new Date(dateStr)
-      return isNaN(d.getTime()) ? undefined : d
-    }
-
-    return {
-      title: getTag(coreXml, "title"),
-      author: getTag(coreXml, "creator"),
-      lastModifiedBy: getTag(coreXml, "lastModifiedBy"),
-      description: getTag(coreXml, "description"),
-      subject: getTag(coreXml, "subject"),
-      keywords: getTag(coreXml, "keywords"),
-      created: parseXmlDate(getTag(coreXml, "created")),
-      modified: parseXmlDate(getTag(coreXml, "modified")),
-      revision: getTag(coreXml, "revision")
-        ? parseInt(getTag(coreXml, "revision")!, 10)
-        : undefined,
-    }
+    const JSZip = (await import("jszip")).default
+    const zip = await JSZip.loadAsync(data)
+    coreXml = await zip.file("docProps/core.xml")?.async("string")
   } catch {
     return undefined
   }
+  if (!coreXml) return undefined
+  const xml = coreXml
+
+  const getTag = (tag: string): string | undefined => {
+    const regex = new RegExp(`<(?:\\w+:)?${tag}\\b[^>]*>([\\s\\S]*?)<\\/(?:\\w+:)?${tag}>`, "i")
+    const m = xml.match(regex)
+    const value = m ? decodeXmlText(m[1]).trim() : ""
+    return value || undefined
+  }
+
+  const parseXmlDate = (dateStr?: string): Date | undefined => {
+    if (!dateStr) return undefined
+    const d = new Date(dateStr)
+    return isNaN(d.getTime()) ? undefined : d
+  }
+
+  const revision = getTag("revision")
+  const metadata: WordMetadata = {
+    title: getTag("title"),
+    author: getTag("creator"),
+    lastModifiedBy: getTag("lastModifiedBy"),
+    description: getTag("description"),
+    subject: getTag("subject"),
+    keywords: getTag("keywords"),
+    created: parseXmlDate(getTag("created")),
+    modified: parseXmlDate(getTag("modified")),
+    revision: revision && /^\d+$/.test(revision) ? Number.parseInt(revision, 10) : undefined,
+  }
+  return Object.values(metadata).some((value) => value !== undefined) ? metadata : undefined
+}
+
+/** XML character data: the five predefined entities and numeric references. */
+function decodeXmlText(input: string): string {
+  return input
+    .replace(/<[^>]+>/g, "")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
 }
 
 /**
@@ -224,7 +234,14 @@ export async function parseWordFile(
 }
 
 /**
- * Parse Excel file from ArrayBuffer
+ * Parse Excel file from ArrayBuffer.
+ *
+ * Rows are anchored at A1 (`data[r][c]` is the cell `encode_cell({ r, c })`),
+ * so a sheet whose first value sits in C5 keeps its coordinates. Numbers keep
+ * the value the workbook stores (to Excel's 15 significant digits), not the
+ * cell's display rounding, and a date-formatted serial becomes its calendar
+ * date. The materialised range is the tight bound of the stored cells, counted
+ * against `maxExpandedCells` before anything is allocated.
  */
 export async function parseExcel(
   data: ArrayBuffer,
@@ -232,41 +249,24 @@ export async function parseExcel(
 ): Promise<ExcelParseResult> {
   const XLSX = await import("xlsx")
 
-  const readOptions: Record<string, unknown> = { type: "array" }
-  if (options.cellDates) {
-    readOptions.cellDates = true
-  }
-  if (options.cellFormula) {
-    readOptions.cellFormula = true
-  }
-
-  const workbook = XLSX.read(data, readOptions)
+  // `cellNF` keeps each cell's number format, which is how a date is told
+  // apart from a number: both are stored as serials.
+  const workbook = XLSX.read(data, { type: "array", cellNF: true })
+  const budget = new DocumentBudget(
+    "expanded-cells",
+    options.maxExpandedCells ?? DEFAULT_DOCUMENT_LIMITS.maxExpandedCells
+  )
   const sheets: ExcelSheet[] = []
   const textParts: string[] = []
   const allStats: ExcelSheetStats[] = []
 
-  const sheetsToProcess =
-    options.sheetFilter && options.sheetFilter.length > 0
-      ? workbook.SheetNames.filter((name) => options.sheetFilter!.includes(name))
-      : workbook.SheetNames
-
-  for (const sheetName of sheetsToProcess) {
+  for (const sheetName of workbook.SheetNames) {
     const worksheet = workbook.Sheets[sheetName]
-
-    // Convert to JSON array
-    const jsonData = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(worksheet, {
-      header: 1,
-      defval: null,
-      rawNumbers: !options.cellDates,
-    })
-
-    // Apply maxRows limit if specified
-    const limitedData =
-      options.maxRows && options.maxRows > 0 ? jsonData.slice(0, options.maxRows) : jsonData
+    const rows = readSheetRows(XLSX, worksheet, budget)
 
     // Calculate dimensions
-    const rowCount = limitedData.length
-    const columnCount = limitedData.reduce((max, row) => Math.max(max, row.length), 0)
+    const rowCount = rows.length
+    const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
 
     // Extract merged cells
     const merges = worksheet["!merges"] || []
@@ -280,18 +280,18 @@ export async function parseExcel(
 
     sheets.push({
       name: sheetName,
-      data: limitedData,
+      data: rows,
       rowCount,
       columnCount,
       mergedCells: mergedCells.length > 0 ? mergedCells : undefined,
     })
 
     // Compute sheet statistics
-    const stats = computeSheetStats(sheetName, limitedData, columnCount, mergedCells)
+    const stats = computeSheetStats(sheetName, rows, columnCount, mergedCells)
     allStats.push(stats)
 
     // Convert to text for embedding
-    const sheetText = convertSheetToText(sheetName, limitedData, mergedCells)
+    const sheetText = convertSheetToText(sheetName, rows, mergedCells)
     textParts.push(sheetText)
   }
 
@@ -303,10 +303,78 @@ export async function parseExcel(
   }
 }
 
+type SheetJs = typeof import("xlsx")
+type SheetCellValue = string | number | boolean | null
+
+/** The stored cells of one sheet as A1-anchored rows, bounded by `budget`. */
+function readSheetRows(
+  XLSX: SheetJs,
+  worksheet: import("xlsx").WorkSheet,
+  budget: DocumentBudget
+): SheetCellValue[][] {
+  // The declared `!ref` comes from the file and can claim a million rows for
+  // one stored cell; the stored addresses are what the sheet really holds.
+  let maxRow = -1
+  let maxCol = -1
+  const addresses: Array<{ key: string; r: number; c: number }> = []
+  for (const key of Object.keys(worksheet)) {
+    if (key.startsWith("!")) continue
+    const { r, c } = XLSX.utils.decode_cell(key)
+    if (r < 0 || c < 0) continue
+    addresses.push({ key, r, c })
+    if (r > maxRow) maxRow = r
+    if (c > maxCol) maxCol = c
+  }
+  if (maxRow < 0) return []
+  budget.take((maxRow + 1) * (maxCol + 1))
+
+  const rows: SheetCellValue[][] = Array.from({ length: maxRow + 1 }, () =>
+    new Array<SheetCellValue>(maxCol + 1).fill(null)
+  )
+  for (const { key, r, c } of addresses) {
+    rows[r][c] = sheetCellValue(XLSX, worksheet[key] as import("xlsx").CellObject)
+  }
+  // A row is as wide as its last stored cell, like `sheet_to_json` reported.
+  return rows.map((row) => {
+    let end = row.length
+    while (end > 0 && row[end - 1] === null) end -= 1
+    return end === row.length ? row : row.slice(0, end)
+  })
+}
+
+/** The value a cell stores, as text the reader can trust. */
+function sheetCellValue(XLSX: SheetJs, cell: import("xlsx").CellObject): SheetCellValue {
+  if (cell.t === "z" || cell.v === undefined || cell.v === null) return null
+  if (cell.t === "e") return cell.w ?? String(cell.v)
+  if (cell.t === "b") return Boolean(cell.v)
+  if (cell.t === "d") return cell.v instanceof Date ? cell.v.toISOString() : String(cell.v)
+  if (cell.t === "n" && typeof cell.v === "number") {
+    const format = typeof cell.z === "string" ? cell.z : ""
+    if (format && XLSX.SSF.is_date(format)) return formatSerialDate(XLSX, cell.v) ?? cell.v
+    return cell.v
+  }
+  return String(cell.v)
+}
+
+/**
+ * A date serial as `YYYY-MM-DD` (plus `HH:MM[:SS]` when it has a time part).
+ * `SSF.parse_date_code` reads the serial's own calendar fields, so the result
+ * does not shift with the machine's time zone the way a `Date` would.
+ */
+function formatSerialDate(XLSX: SheetJs, serial: number): string | null {
+  const parts = XLSX.SSF.parse_date_code(serial) as
+    { y: number; m: number; d: number; H: number; M: number; S: number } | undefined
+  if (!parts) return null
+  const pad = (value: number, width = 2) => String(value).padStart(width, "0")
+  const date = `${pad(parts.y, 4)}-${pad(parts.m)}-${pad(parts.d)}`
+  if (!parts.H && !parts.M && !parts.S) return date
+  return `${date} ${pad(parts.H)}:${pad(parts.M)}${parts.S ? `:${pad(parts.S)}` : ""}`
+}
+
 /**
  * Compute statistics for an Excel sheet
  */
-function computeSheetStats(
+export function computeSheetStats(
   name: string,
   data: (string | number | boolean | null)[][],
   columnCount: number,
@@ -383,7 +451,7 @@ export async function parseExcelFile(
 /**
  * Convert Excel sheet data to readable text
  */
-function convertSheetToText(
+export function convertSheetToText(
   sheetName: string,
   data: (string | number | boolean | null)[][],
   mergedCells?: string[]
@@ -403,25 +471,33 @@ function convertSheetToText(
   // Use first row as header if it looks like headers
   const hasHeader = data.length > 1 && data[0].every((cell) => typeof cell === "string")
 
-  if (hasHeader) {
-    const headers = data[0] as string[]
-    lines.push(headers.join(" | "))
-    lines.push(headers.map(() => "---").join(" | "))
+  // Every row is as wide as the widest, so a cell's position in the line is
+  // its column whatever the row stored.
+  const width = data.reduce((max, row) => Math.max(max, row.length), 0)
+  const line = (row: (string | number | boolean | null)[]) =>
+    Array.from({ length: width }, (_, column) => formatCellValue(row[column] ?? null)).join(" | ")
 
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i]
-      const cells = row.map((cell) => formatCellValue(cell))
-      lines.push(cells.join(" | "))
-    }
+  if (hasHeader) {
+    lines.push(line(data[0]))
+    lines.push(Array.from({ length: width }, () => "---").join(" | "))
+    for (let i = 1; i < data.length; i++) lines.push(line(data[i]))
   } else {
     // No header, just convert rows
-    for (const row of data) {
-      const cells = row.map((cell) => formatCellValue(cell))
-      lines.push(cells.join(" | "))
-    }
+    for (const row of data) lines.push(line(row))
   }
 
   return lines.join("\n")
+}
+
+/**
+ * A stored number as text. Excel keeps 15 significant digits; cutting there
+ * drops binary noise (`0.30000000000000004`) without rounding a real value the
+ * way a fixed decimal count would (`0.00012345` is not `0.00`).
+ */
+export function formatStoredNumber(value: number): string {
+  if (!Number.isFinite(value)) return String(value)
+  if (Number.isInteger(value)) return value.toString()
+  return String(Number(value.toPrecision(15)))
 }
 
 /**
@@ -434,14 +510,9 @@ function formatCellValue(value: string | number | boolean | null): string {
   if (typeof value === "boolean") {
     return value ? "TRUE" : "FALSE"
   }
-  if (typeof value === "number") {
-    // Format numbers with reasonable precision
-    if (Number.isInteger(value)) {
-      return value.toString()
-    }
-    return value.toFixed(2)
-  }
-  return String(value)
+  if (typeof value === "number") return formatStoredNumber(value)
+  // A cell's own line breaks and pipes would read as new rows and columns.
+  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " ")
 }
 
 /**
