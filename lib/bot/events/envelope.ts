@@ -47,11 +47,9 @@ export function assertBotEventPayloadSize(payload: unknown): void {
   }
 }
 
-/** Each matching trigger is an independent recipient. Two-argument calls name legacy IDs. */
-export function botDeliveryId(eventId: string, installationId: string, triggerId?: string): string {
-  return triggerId === undefined
-    ? `bdl_${installationId}_${eventId}`
-    : `bdl_v2_${encodeURIComponent(JSON.stringify([installationId, triggerId, eventId]))}`
+/** Each matching trigger is an independent recipient, so the trigger is part of the id. */
+export function botDeliveryId(eventId: string, installationId: string, triggerId: string): string {
+  return `bdl_v2_${encodeURIComponent(JSON.stringify([installationId, triggerId, eventId]))}`
 }
 
 export interface BuildBotEventInput {

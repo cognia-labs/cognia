@@ -203,6 +203,8 @@ export interface DispatchManualBotRunInput {
   now?: number
   /** Check mutable plugin registration at the actual admission boundary. */
   assertReady?: () => undefined
+  /** The delivery this run is a Retry of. See `BotEventDeliveryRow.retryOf`. */
+  retryOf?: string
 }
 
 export async function dispatchManualBotRun(
@@ -227,6 +229,7 @@ export async function dispatchManualBotRun(
   return enqueueBotDelivery({
     envelope,
     ...(input.assertReady ? { assertReady: input.assertReady } : {}),
+    ...(input.retryOf ? { retryOf: input.retryOf } : {}),
     ...projectBotDeliveryPolicy(trigger, envelope, input.now ?? Date.now()),
     ...(input.now !== undefined ? { now: input.now } : {}),
   })

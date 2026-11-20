@@ -430,6 +430,9 @@ describe("replayBotDeliveryLocally", () => {
         },
       })
       expect(successor.runId).toBeUndefined()
+      // The link the console reads to stop offering a second Retry: the
+      // successor's id is a digest, so it cannot be read back out of that.
+      expect(successor.retryOf).toBe(id)
       expect(successor.envelope.correlation).toBeUndefined()
       expect(successor.envelope.eventId).not.toBe(original.eventId)
       expect(await getBotDelivery(id)).toEqual(before)
@@ -443,6 +446,8 @@ describe("replayBotDeliveryLocally", () => {
       await getDb().botEventDeliveries.update(successor.id, { status: "deadletter" })
       expect(await replayBotDeliveryLocally(successor.id)).toBe(true)
       expect(await listBotDeliveries({ installationId: installation.id })).toHaveLength(2)
+      // A replayed dead letter keeps its own identity and its own link.
+      expect((await getBotDelivery(successor.id))?.retryOf).toBe(id)
     }
   )
 

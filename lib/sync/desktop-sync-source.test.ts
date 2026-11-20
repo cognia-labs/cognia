@@ -1631,6 +1631,13 @@ describe("the Bot control plane projections", () => {
     expect("runId" in projectBotDeliveryRow(delivery({ runId: undefined }))).toBe(false)
   })
 
+  it("keeps a Retry successor's link to the delivery it succeeds", () => {
+    // The paired console hides a second Retry by this link; the shell envelope
+    // carries no event id or causation chain to find it by instead.
+    expect(projectBotDeliveryRow(delivery({ retryOf: "bdl_0" })).retryOf).toBe("bdl_0")
+    expect("retryOf" in projectBotDeliveryRow(delivery())).toBe(false)
+  })
+
   it("re-exports a delivery that arrived before the retention window and settled since (B15)", async () => {
     const db = getDb()
     await db.botEventDeliveries.clear()

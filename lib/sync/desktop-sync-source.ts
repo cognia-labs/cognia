@@ -1048,6 +1048,7 @@ export type BotDeliveryProjectionRow = Pick<
   | "lastError"
   | "cancelledAt"
   | "runId"
+  | "retryOf"
   | "receivedAt"
   | "updatedAt"
   | "settledAt"
@@ -1070,6 +1071,9 @@ export function projectBotDeliveryRow(row: BotEventDeliveryRow): BotDeliveryProj
     attempts: row.attempts,
     ...(row.lastError !== undefined ? { lastError: row.lastError } : {}),
     ...(row.runId !== undefined ? { runId: row.runId } : {}),
+    // A Retry's link to the delivery it succeeds: the console's only way to
+    // tell a retried row from one still waiting for its Retry.
+    ...(row.retryOf !== undefined ? { retryOf: row.retryOf } : {}),
     receivedAt: row.receivedAt,
     updatedAt: row.updatedAt,
     ...(row.settledAt !== undefined ? { settledAt: row.settledAt } : {}),

@@ -287,6 +287,15 @@ export interface BotEventDeliveryRow {
    * that waited for it, never also by its own handler or by a later wait.
    */
   consumedBy?: { runId: string; step: string }
+  /**
+   * The delivery a Retry minted this one to succeed, when it is a successor.
+   *
+   * The successor's id is a fixed-length digest of the retried delivery's, so
+   * the link cannot be read back out of it. Kept on the row, and carried by a
+   * paired client's mirror, so the console offers no second Retry beside the
+   * successor and can open the run it replaces.
+   */
+  retryOf?: string
   /** The delivery id. Also `envelope.deliveryId`. */
   id: string
   eventId: string

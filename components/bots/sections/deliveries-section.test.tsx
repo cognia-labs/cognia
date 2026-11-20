@@ -149,12 +149,17 @@ describe("BotDeliveriesSection", () => {
 
   it("links the successor and previous execution without offering a duplicate retry", () => {
     const original = delivery({ status: "dismissed", runId: "old/run" })
+    // As a paired client's mirror holds it: a digest id and a shell envelope,
+    // so `retryOf` is the only link back.
     const successor = delivery({
       id: "bdl_retry",
-      eventId: "bev_integration_retry:bdl_1",
+      eventId: `bev_integration_retry:${"0".repeat(64)}`,
       status: "pending",
+      retryOf: original.id,
       envelope: {
-        provenance: { causationEventIds: [original.eventId] },
+        deliveryId: "bdl_retry",
+        source: "integration",
+        type: "pull_request.opened",
       } as BotEventDeliveryRow["envelope"],
     })
     deliveries = { rows: [successor, original], loading: false }
@@ -173,6 +178,27 @@ describe("BotDeliveriesSection", () => {
       "href",
       "/agent-runs?run=new%2Frun"
     )
+  })
+
+  it("does not take an event caused by a run for a Retry of it", () => {
+    // A Bot reacting to this run's own `bot.run.failed` names it as the cause,
+    // and is a new event, not the Retry: the original still offers one.
+    const original = delivery({ status: "dismissed", runId: "old/run" })
+    const reaction = delivery({
+      id: "bdl_reaction",
+      eventId: "bev_bot_run_bot_bdl_1:failed",
+      status: "pending",
+      envelope: {
+        provenance: { causationEventIds: [original.eventId] },
+      } as BotEventDeliveryRow["envelope"],
+    })
+    deliveries = { rows: [reaction, original], loading: false }
+    render(<BotDeliveriesSection row={row()} />)
+    expect(
+      within(screen.getByTestId("bot-delivery-bdl_1")).getByRole("button", { name: "Retry" })
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Retry queued")).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Previous run" })).not.toBeInTheDocument()
   })
 
   it("does not replay skipped deliveries or pending requests", () => {

@@ -204,6 +204,8 @@ export interface EnqueueBotDeliveryInput {
   /** The trigger's declared retry policy, snapshotted onto the row. */
   retry?: PluginBotRetryPolicy
   coalesce?: "latest" | "all"
+  /** The delivery a Retry mints this one to succeed. See `BotEventDeliveryRow.retryOf`. */
+  retryOf?: string
   now?: number
 }
 
@@ -272,6 +274,7 @@ export async function enqueueBotDelivery(
     ...(input.coalesce
       ? { coalesce: input.coalesce, coalesceKey: coalesceGroup(envelope, input.concurrencyKey) }
       : {}),
+    ...(input.retryOf ? { retryOf: input.retryOf } : {}),
   }
 
   return db.transaction(

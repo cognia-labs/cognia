@@ -254,8 +254,9 @@ export async function replayBotDeliveryLocally(deliveryId: string): Promise<bool
   // The successor's source record is a fixed-length digest of the delivery it
   // retries, so a retry of a retry does not carry its whole ancestry in its
   // id: those used to grow with every press until the run detail refused to
-  // open one. The ancestry is the envelope's causation chain instead.
-  // Computed before the transaction, which must await nothing but the store.
+  // open one. The link back is the successor row's `retryOf`, which a paired
+  // client's mirror carries too. Computed before the transaction, which must
+  // await nothing but the store.
   const successorRecordId = `retry:${await sha256Hex(deliveryId)}`
   const db = getDb()
   return db.transaction(
@@ -304,7 +305,12 @@ export async function replayBotDeliveryLocally(deliveryId: string): Promise<bool
           },
         })
         if (await getBotDelivery(envelope.deliveryId)) return false
-        await dispatchManualBotRun({ resolved, triggerId: row.triggerId, envelope })
+        await dispatchManualBotRun({
+          resolved,
+          triggerId: row.triggerId,
+          envelope,
+          retryOf: row.id,
+        })
         return true
       }
       if (row.status !== "deadletter") return false

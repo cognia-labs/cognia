@@ -18,7 +18,6 @@ import {
 } from "@/hooks/bots/use-bot-lifecycle-actions"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
-import { botEventId } from "@/lib/bot/events/envelope"
 import { RotateCcwIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -191,10 +190,11 @@ export function BotDeliveriesSection({ row }: { row: BotConsoleRow }) {
     )
   }
 
+  // The link the replay recorded on the successor, which a paired client's
+  // mirror carries as well: a Retry already taken is never offered again
+  // beside the successor it minted.
   const successorFor = (delivery: BotEventDeliveryRow) =>
-    rows.find(
-      (candidate) => candidate.eventId === botEventId(delivery.source, `retry:${delivery.id}`)
-    )
+    rows.find((candidate) => candidate.retryOf === delivery.id)
   const hasRetryable = rows.some(
     (delivery) =>
       !successorFor(delivery) &&
@@ -220,10 +220,9 @@ export function BotDeliveriesSection({ row }: { row: BotConsoleRow }) {
             onReplay={() => void actions.replayDelivery(delivery.id)}
             successor={successorFor(delivery)}
             previousRunId={
-              rows.find(
-                (previous) =>
-                  previous.eventId === delivery.envelope.provenance?.causationEventIds?.[0]
-              )?.runId
+              delivery.retryOf
+                ? rows.find((previous) => previous.id === delivery.retryOf)?.runId
+                : undefined
             }
           />
         ))}
