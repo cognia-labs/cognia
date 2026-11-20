@@ -51,8 +51,10 @@ description: Phase 3a of account sync — chats, messages, characters, skills, m
 Every field of every synced row type is classified `sync` or `local` in `tables.ts`, typed
 against the row type, so a new field fails the typecheck until someone decides. Settings travel
 as one virtual row per key. Two switches under **What syncs** turn content and shared settings
-off. A class that is off neither sends nor applies. Turning it back on seeds it again and pulls
-from the start of the log.
+off. A class that is off neither sends nor applies, but its writes are still captured with their
+own clocks and wait in the outbox. Turning it back on sends them, seeds rows that have no clock
+yet and pulls from the start of the log, so where both sides changed the same key the newer
+change wins on every device.
 
 ## How a change travels
 
@@ -79,12 +81,16 @@ are kept with their clocks and sent back untouched on its next write.
 ## Joining with data already on the device
 
 When a device enrolls, it seeds on its own if either side is empty. Its rows get clocks from
-their own `updatedAt` or `createdAt` and go into the outbox. When both sides hold data, the
-account page asks once:
+their own `updatedAt` or `createdAt` and go into the outbox. A shared setting counts as data only
+when it differs from its default: every save writes the whole row, defaults included, so a device
+whose row holds only defaults seeds nothing and takes the account's settings. A seed that is
+interrupted stays owed in the capture row and runs again on the next start. When both sides hold
+data, the account page asks once:
 
 - **Merge** keeps both, and the newer change wins per field.
 - **Use the account's data** removes this device's synced rows (built-ins stay), then downloads
-  the account's.
+  the account's. Shared settings keep their values until the account's arrive, which replace
+  them where the account has them.
 
 Either way an encrypted backup is saved first and listed in backup history; if it fails or is
 canceled, nothing changes.

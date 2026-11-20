@@ -14,6 +14,10 @@ import type { StoredMessage } from "@cognia/agent-config-types"
  * if the server stored its op: ops under sequence numbers the server already holds (a push
  * whose answer was lost, then rebuilt from newer values) are acknowledged but
  * not stored, so their entries stay and go out again under fresh numbers.
+ *
+ * Entries of a class this device switched off stay where they are: capture
+ * keeps recording them (`capture-middleware.ts`), and they go up once the
+ * class is on again, never before.
  */
 
 import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
@@ -35,7 +39,7 @@ import type { DeviceKeys, EpochKeyChain } from "@/lib/account-sync/crypto"
 import type { PushView } from "@/lib/account-sync/sync-api"
 import type { CogniaDB } from "@/lib/db/schema"
 
-import { SETTINGS_VALUE_FIELD } from "./capture-middleware"
+import { SETTINGS_VALUE_FIELD, classOn } from "./capture-middleware"
 import {
   SETTINGS_ROW_ID,
   SYNCED_TABLES,
@@ -44,6 +48,7 @@ import {
   syncedFields,
 } from "./tables"
 import type {
+  AccountSyncCaptureState,
   AccountSyncCursorState,
   AccountSyncOutboxRow,
   SyncFieldClocksRow,
@@ -258,14 +263,17 @@ export async function pushOutbox(deps: PushDeps): Promise<PushResult> {
   const result: PushResult = { pushed: 0, dropped: 0, tooLarge: [] }
   const skipped = new Set<string>()
   for (;;) {
-    const entries = await deps.db.transaction("rw", deps.db.accountSyncOutbox, async () => {
-      const pending = deps.db.accountSyncOutbox.orderBy("[table+rowId]")
-      // Bound materialization, including when oversized rows must be passed over.
-      const rows = await (
-        skipped.size
-          ? pending.filter((entry) => !skipped.has(`${entry.table}\u0000${entry.rowId}`))
-          : pending
-      )
+    const stores = [deps.db.accountSyncOutbox, deps.db.accountSyncState]
+    const entries = await deps.db.transaction("rw", stores, async () => {
+      const capture = (await deps.db.accountSyncState.get("capture")) as
+        AccountSyncCaptureState | undefined
+      const sends = (entry: AccountSyncOutboxRow) =>
+        !capture || classOn(capture, TABLE_POLICIES[entry.table])
+      // Bound materialization, including when oversized rows (and rows of a
+      // class switched off) must be passed over.
+      const rows = await deps.db.accountSyncOutbox
+        .orderBy("[table+rowId]")
+        .filter((entry) => sends(entry) && !skipped.has(`${entry.table}\u0000${entry.rowId}`))
         .limit(OUTBOX_PAGE)
         .toArray()
       // Adopt legacy entries atomically before sending. A later legacy writer

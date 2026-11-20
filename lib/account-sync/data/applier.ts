@@ -73,6 +73,8 @@ export interface ApplyDeps {
   chain: EpochKeyChain
   origin: OpOriginChecker
   now: () => number
+  /** Called with the tables a batch wrote to, once its transaction committed. */
+  onApplied?: (tables: ReadonlySet<SyncedTableName>) => void
 }
 
 export interface ApplyResult {
@@ -238,7 +240,22 @@ async function applySetting(db: CogniaDB, payload: OpPayload, now: number): Prom
   return true
 }
 
+/** Writes one batch, adds it to `result`, and announces what it changed once committed. */
 async function write(
+  deps: ApplyDeps,
+  prepared: readonly Prepared[],
+  options: { cursorSeq?: number; fromInbox?: readonly number[] },
+  result: ApplyResult
+): Promise<void> {
+  const batch: ApplyResult = { applied: 0, parked: 0, tables: new Set() }
+  await writeBatch(deps, prepared, options, batch)
+  result.applied += batch.applied
+  result.parked += batch.parked
+  for (const table of batch.tables) result.tables.add(table)
+  if (batch.tables.size > 0) deps.onApplied?.(batch.tables)
+}
+
+async function writeBatch(
   deps: ApplyDeps,
   prepared: readonly Prepared[],
   options: { cursorSeq?: number; fromInbox?: readonly number[] },

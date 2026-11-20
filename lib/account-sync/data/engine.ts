@@ -81,12 +81,17 @@ export interface LockManagerLike {
 
 export interface EngineSyncState {
   live: "socket" | "poll" | "connecting"
-  /** Changes waiting to go up. */
+  /** Changes waiting to go up (a class switched off keeps its own here). */
   pending: number
   parked: { schema: number; key: number }
+  /** When a lane last succeeded while neither lane was failing. */
   lastSyncedAt: number | null
-  /** Rows too large to sync as one change. */
+  /** Rows too large to sync as one change, as the last push found them. */
   tooLarge: string[]
+  /**
+   * The failure still standing: pushing first (changes are waiting on it), then
+   * pulling, then joining. One lane's success never clears another's failure.
+   */
   error: string | null
   /** What this device syncs. */
   classes: SyncClasses
@@ -182,15 +187,21 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
     deviceId: device.deviceId,
     now: context.now,
   }
+  const abort = new AbortController()
+  const stopped = () => abort.signal.aborted
   const roundContext = {
     db,
     api: context.api,
     vault: context.vault,
     spaceId: context.session.spaceId,
     now: context.now,
+    // Announced as each batch commits; nothing after the engine stopped (the
+    // window may already be showing another account's database).
+    onApplied: (tables: ReadonlySet<SyncedTableName>) => {
+      if (!stopped()) deps.onApplied?.(tables)
+    },
   }
 
-  const abort = new AbortController()
   const timers = new Set<ReturnType<typeof setTimeout>>()
   let current: EngineStatus = { kind: "starting" }
   let sync: EngineSyncState = {
@@ -208,7 +219,6 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
   let socketFailures = 0
   let mode: "socket" | "poll" | "idle" = "idle"
 
-  const stopped = () => abort.signal.aborted
   const later = (ms: number, run: () => void) => {
     if (stopped()) return
     const timer = setTimeout(() => {
@@ -253,8 +263,12 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
     return true
   }
 
+  type Lane = "push" | "pull" | "join"
+  const laneErrors: Record<Lane, string | null> = { push: null, pull: null, join: null }
+  const standingError = () => laneErrors.push ?? laneErrors.pull ?? laneErrors.join
+
   /** Every lane's failures land here: a proven removal stops the engine, anything else is shown. */
-  async function failed(error: unknown): Promise<void> {
+  async function failed(error: unknown, lane: Lane): Promise<void> {
     if (stopped()) return
     if (
       error instanceof SyncDeviceRemovedError ||
@@ -262,15 +276,19 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
     ) {
       if (await onRemoved().catch(() => false)) return
     }
-    publish({ error: messageOf(error) })
+    laneErrors[lane] = messageOf(error)
+    publish({ error: standingError() })
   }
 
-  function absorb(result: SyncRoundResult): void {
-    if (result.tables.size > 0) deps.onApplied?.(result.tables)
+  /** A lane's round succeeded: its own failure is over, the other lane's is not. */
+  function absorb(result: SyncRoundResult, lane: "push" | "pull"): void {
+    laneErrors[lane] = null
     publish({
-      lastSyncedAt: context.now(),
-      error: null,
-      ...(result.tooLarge.length > 0 ? { tooLarge: result.tooLarge } : {}),
+      error: standingError(),
+      ...(standingError() === null ? { lastSyncedAt: context.now() } : {}),
+      // Only a push learns which rows are too large; it reports all of them,
+      // so a row that went up after shrinking leaves the list.
+      ...(lane === "push" ? { tooLarge: result.tooLarge } : {}),
     })
   }
 
@@ -298,11 +316,11 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
     }
     pushing = true
     try {
-      absorb(await runSyncRound(roundContext, device, { pushOnly: true }))
+      absorb(await runSyncRound(roundContext, device, { pushOnly: true }), "push")
       pushFailures = 0
     } catch (error) {
       pushFailures += 1
-      await failed(error)
+      await failed(error, "push")
       later(delays.retryMs(pushFailures), () => void push())
     } finally {
       pushing = false
@@ -324,7 +342,7 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
         else schedulePush()
         first = false
       },
-      error: (error) => void failed(error),
+      error: (error) => void failed(error, "push"),
     })
   }
 
@@ -338,12 +356,12 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
   async function runPull(waitS: number): Promise<boolean> {
     if (stopped()) return true
     try {
-      absorb(await runSyncRound(roundContext, device, { pullOnly: true, waitS }))
+      absorb(await runSyncRound(roundContext, device, { pullOnly: true, waitS }), "pull")
       pullFailures = 0
       return true
     } catch (error) {
       pullFailures += 1
-      await failed(error)
+      await failed(error, "pull")
       return false
     } finally {
       if (!stopped()) await refreshCounts().catch(() => undefined)
@@ -403,7 +421,7 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
     try {
       ticket = (await context.api.socketTicket(device)).ticket
     } catch (error) {
-      await failed(error)
+      await failed(error, "pull")
       socketFailed()
       return
     }
@@ -471,6 +489,8 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
 
   // ── leading ───────────────────────────────────────────────────────────
   async function startLanes(): Promise<void> {
+    laneErrors.join = null
+    sync = { ...sync, error: standingError() }
     setStatus({ kind: "running", ...sync })
     await refreshCounts()
     watchOutbox()
@@ -516,10 +536,10 @@ export function startAccountSyncEngine(deps: AccountSyncEngineDeps): AccountSync
       await lead()
     } catch (error) {
       if (stopped()) return
-      await failed(error)
+      await failed(error, "join")
       if (current.kind === "removed" || stopped()) return
       // Joining failed (offline): try again later.
-      setStatus({ kind: "running", ...sync, error: messageOf(error) })
+      setStatus({ kind: "running", ...sync, error: standingError() })
       await new Promise<void>((resolve) => later(delays.retryMs(1), resolve))
       if (!stopped()) await leadSafely()
     }

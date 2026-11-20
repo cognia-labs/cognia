@@ -16,6 +16,12 @@
  *   current values, which coalesces a stream of writes into one op.
  * - **Remote writes are not captured.** The applier registers its
  *   transaction with {@link markRemoteTransaction}; anything else is local.
+ * - **A class switched off is still captured.** Its edits keep their own
+ *   clocks and wait in the outbox, and the pusher sends none of them while the
+ *   class is off (`pusher.ts`). Turned back on, they go up and merge with the
+ *   account by clock like any edit: the newer change wins on every device.
+ *   Not capturing them left an edit made while off unsent forever, or let a
+ *   change already queued before the switch carry it out at once.
  */
 
 import Dexie, {
@@ -113,7 +119,10 @@ function changedByDiff(
   return fields.filter((name) => !sameValue(previous[name], next[name]))
 }
 
-/** Whether `policy`'s class syncs on this device (both directions). */
+/**
+ * Whether `policy`'s class syncs on this device: its changes are sent and the
+ * account's are taken. A class that is off is still captured.
+ */
 export function classOn(state: AccountSyncCaptureState, policy: TablePolicy): boolean {
   return policy.cls === "settings" ? state.classes.settings : state.classes.content
 }
@@ -299,8 +308,7 @@ export function createAccountSyncCaptureMiddleware(): Middleware<DBCore> {
                   // Another capture in this transaction may have read (and advanced) it meanwhile.
                   if (stored && !own.state) own.state = stored
                 }
-                if (!own.state || !classOn(own.state, policy))
-                  return zone(() => table.mutate(request))
+                if (!own.state) return zone(() => table.mutate(request))
                 // Read whole-row and range-delete preimages before mutating,
                 // but only stamp operations the source actually accepted.
                 const changes = await changesOf(table, policy, request, zone)

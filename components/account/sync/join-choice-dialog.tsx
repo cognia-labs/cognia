@@ -30,7 +30,7 @@ import { useFullBackup } from "@/hooks/data/use-full-backup"
 import type { JoinChoice } from "@/lib/account-sync/data/join"
 import { useAccountSyncStore } from "@/stores/account-sync/account-sync-store"
 
-const COUNTED = ["sessions", "messages", "characters", "skills", "memories"] as const
+const COUNTED = ["sessions", "messages", "characters", "skills", "memories", "settings"] as const
 
 class BackupCanceled extends Error {}
 

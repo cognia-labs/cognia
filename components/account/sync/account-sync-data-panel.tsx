@@ -188,6 +188,14 @@ function SyncClassSwitches({ classes }: { classes: SyncClasses }) {
           <span>
             <span className="font-medium">{t(cls)}</span>
             <span className="block text-[11px] text-muted-foreground">{t(`${cls}Hint`)}</span>
+            {classes[cls] ? null : (
+              <span
+                className="block text-[11px] text-muted-foreground"
+                data-testid={`account-sync-class-${cls}-off`}
+              >
+                {t("offHint")}
+              </span>
+            )}
           </span>
         </label>
       ))}

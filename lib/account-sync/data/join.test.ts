@@ -289,11 +289,84 @@ describe("summarizeLocalData and disarm", () => {
       { id: "m1", text: "Global", tags: [] },
       { id: "m2", text: "In a project", tags: [], projectId: "p1" },
     ] as never)
-    await a.db.settings.put({ id: "singleton", profile: { displayName: "Ada" } } as never)
+    await a.db.settings.put({
+      id: "singleton",
+      profile: { displayName: "Ada" },
+      // Every save writes defaults too; they are not data this device holds.
+      theme: "system",
+      fontScale: "md",
+    } as never)
     const summary = await summarizeLocalData(a.db)
     expect(summary.counts).toMatchObject({ memories: 1, settings: 1, sessions: 0 })
-    expect(summary.total).toBe(1)
+    // A setting of its own is held data, so a join asks (with a backup).
+    expect(summary.total).toBe(2)
     expect(await a.db.accountSyncOutbox.count()).toBe(0)
+    closeAll(devices)
+  })
+})
+
+describe("joining with settings", () => {
+  it("lets the account's theme land on a device whose row only holds defaults", async () => {
+    // The device picked a microphone (device-local) before joining; the save
+    // wrote the whole row, defaults included, with a fresh time. Seeding every
+    // key with that time turned the account's dark theme into "system" on
+    // every device.
+    const { devices, a, b, target } = await unarmedPair()
+    await a.db.settings.put({ id: "singleton", theme: "dark" } as never)
+    await armAndSeed(await target(a))
+    expect((await a.round({ pushOnly: true })).pushed).toBe(1)
+    await b.db.settings.put({
+      id: "singleton",
+      theme: "system",
+      fontScale: "md",
+      selectedMicId: "local-mic",
+      updatedAt: Date.now() + 60_000,
+    } as never)
+    const keys = await b.keys()
+    expect(await planJoin(await target(b), b.context.api, keys)).toMatchObject({ kind: "seed" })
+    await armAndSeed(await target(b))
+    expect(await b.db.accountSyncOutbox.count()).toBe(0)
+    await settleAll(devices)
+    expect((await a.db.settings.get("singleton"))?.theme).toBe("dark")
+    expect((await b.db.settings.get("singleton"))?.theme).toBe("dark")
+    expect((await b.db.settings.get("singleton"))?.selectedMicId).toBe("local-mic")
+    closeAll(devices)
+  })
+
+  it("asks when this device set a shared setting of its own and the account holds data", async () => {
+    const { devices, a, b, target } = await unarmedPair()
+    await a.db.settings.put({ id: "singleton", theme: "dark" } as never)
+    await armAndSeed(await target(a))
+    await a.round({ pushOnly: true })
+    await b.db.settings.put({ id: "singleton", theme: "light" } as never)
+    expect(await planJoin(await target(b), b.context.api, await b.keys())).toMatchObject({
+      kind: "ask",
+      question: "both-hold-data",
+      local: { counts: { settings: 1 }, total: 1 },
+    })
+    closeAll(devices)
+  })
+})
+
+describe("an interrupted seed", () => {
+  it("resumes on the next start instead of leaving rows it had not reached unsent", async () => {
+    const { devices, a, b, target } = await unarmedPair()
+    await a.db.settings.put({ id: "singleton", theme: "dark" } as never)
+    await a.db.sessions.put(session("s-before-join"))
+    const join = await target(a)
+    const keys = await a.keys()
+    await expect(
+      armAndSeed(join, ({ table }) => {
+        if (table === "sessions") throw new Error("interrupted between seed pages")
+      })
+    ).rejects.toThrow("interrupted between seed pages")
+    // Armed (writes are captured from here on) but the seed is still owed.
+    expect(await planJoin(join, a.context.api, keys)).toMatchObject({ kind: "seed" })
+    await armAndSeed(join)
+    expect(await planJoin(join, a.context.api, keys)).toEqual({ kind: "armed" })
+    await settleAll(devices)
+    expect(await b.db.sessions.get("s-before-join")).toBeDefined()
+    expect((await b.db.settings.get("singleton"))?.theme).toBe("dark")
     closeAll(devices)
   })
 })

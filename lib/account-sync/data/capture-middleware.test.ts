@@ -178,13 +178,19 @@ describe("capture once armed", () => {
     db.close()
   })
 
-  it("leaves a class alone while it is switched off", async () => {
+  it("still records a class while it is switched off, with its own clocks", async () => {
+    // The pusher holds these back until the class is on again. Not capturing
+    // them left an edit made while off unsent forever, or let an entry queued
+    // before the switch carry it out at once.
     const db = await freshDb()
-    await arm(db, { content: false, settings: true })
+    await arm(db, { content: false, settings: false })
     await db.sessions.put(session("s1"))
-    expect(await db.accountSyncOutbox.count()).toBe(0)
     await db.settings.put({ id: "singleton", profile: { displayName: "B" } } as never)
-    expect(await db.accountSyncOutbox.count()).toBe(1)
+    expect(await db.accountSyncOutbox.get(["sessions", "s1"])).toBeDefined()
+    expect(await db.accountSyncOutbox.get(["settings", "profile"])).toBeDefined()
+    expect((await db.syncFieldClocks.get(["settings", "profile"]))?.fields).toHaveProperty(
+      SETTINGS_VALUE_FIELD
+    )
     db.close()
   })
 

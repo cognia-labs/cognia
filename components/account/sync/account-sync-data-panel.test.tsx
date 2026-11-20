@@ -132,6 +132,13 @@ describe("AccountSyncDataPanel", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("failed(not syncing)"))
   })
 
+  it("says what happens to changes while a class is off", () => {
+    render(<AccountSyncDataPanel />)
+    withEngine(running({ classes: { content: true, settings: false } }))
+    expect(screen.getByTestId("account-sync-class-settings-off")).toHaveTextContent("offHint")
+    expect(screen.queryByTestId("account-sync-class-content-off")).toBeNull()
+  })
+
   it("shows nothing more for a removed device", () => {
     render(<AccountSyncDataPanel />)
     withEngine({ kind: "removed", removal: { at: 1, seq: 2, by: "dev_x" } })

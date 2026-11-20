@@ -55,6 +55,8 @@ describe("JoinChoiceDialog", () => {
     expect(counts).toHaveTextContent("counts.sessions(3)")
     expect(counts).toHaveTextContent("counts.messages(40)")
     expect(counts).toHaveTextContent("counts.skills(1)")
+    // Shared settings of this device's own are held data too (a backup is taken first).
+    expect(counts).toHaveTextContent("counts.settings(2)")
     expect(counts).not.toHaveTextContent("counts.characters")
 
     fireEvent.click(screen.getByTestId("account-sync-join-continue"))

@@ -55,6 +55,11 @@ export interface AccountSyncCaptureState {
   classes: SyncClasses
   /** The last clock this database issued or adopted. */
   hlc: HlcTime | null
+  /**
+   * Armed for a seed that has not finished queueing this database's rows
+   * (`join.ts`). The next start resumes it.
+   */
+  seedPending?: true
 }
 
 /** `cursor`: how far this database has pulled and pushed. */

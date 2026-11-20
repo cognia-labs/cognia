@@ -14,7 +14,7 @@ import {
   type SocketLike,
 } from "./engine"
 import { disarm } from "./join"
-import { closeAll, syncedDevices, type SyncDevice } from "./test-support"
+import { closeAll, settleAll, syncedDevices, type SyncDevice } from "./test-support"
 import type { AccountSyncCaptureState } from "./types"
 
 beforeEach(() => __clearAccountSyncKeyCache())
@@ -140,6 +140,41 @@ async function engineFor(
 }
 
 const running = (engine: AccountSyncEngine) => engine.status().kind === "running"
+
+/** Delays long enough that nothing happens unless the test asks for a round. */
+const SLOW = {
+  pushDebounceMs: 60_000,
+  pushMaxDelayMs: 60_000,
+  pingMs: 60_000,
+  longPollWaitS: 1,
+  retryMs: () => 60_000,
+}
+
+function syncState(engine: AccountSyncEngine) {
+  const status = engine.status()
+  return status.kind === "running" ? status : undefined
+}
+
+const themeOf = async (device: SyncDevice) => (await device.db.settings.get("singleton"))?.theme
+
+/** A socket that opens when told to and never announces anything. */
+function quietSocket(): SocketLike & { open(): void } {
+  return {
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    onclose: null,
+    send() {},
+    close() {
+      this.onclose?.({ code: 1000 })
+    },
+    open() {
+      this.onopen?.({})
+    },
+  }
+}
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
 
 describe("startAccountSyncEngine", () => {
   it("carries a write to the other device over the live socket", async () => {
@@ -308,6 +343,170 @@ describe("startAccountSyncEngine", () => {
     await until(async () => (await a.db.sessions.get("b-while-off")) !== undefined)
     first.engine.stop()
     second.engine.stop()
+    closeAll(devices)
+  })
+
+  it("sends nothing of a class switched off, not even through a key queued before", async () => {
+    // The pusher read the row's current value for an entry queued before the
+    // switch, so a theme saved after turning settings off went up at once.
+    const { devices } = await syncedDevices(["a", "b"])
+    const [a, b] = devices as [SyncDevice, SyncDevice]
+    const { engine } = await engineFor(b, { delays: SLOW })
+    await until(() => running(engine) && syncState(engine)?.lastSyncedAt != null)
+    await b.db.settings.put({ id: "singleton", theme: "light" } as never)
+    expect(await b.db.accountSyncOutbox.get(["settings", "theme"])).toBeDefined()
+    await engine.setClasses({ content: true, settings: false })
+    await b.db.settings.update("singleton", { theme: "dark" })
+    const before = syncState(engine)!.lastSyncedAt!
+    await tick()
+    engine.syncNow()
+    await until(() => (syncState(engine)?.lastSyncedAt ?? 0) > before)
+    await a.round({ pullOnly: true })
+    expect(await themeOf(a)).toBeUndefined()
+    expect(syncState(engine)?.pending).toBe(1)
+
+    await engine.setClasses({ content: true, settings: true })
+    engine.syncNow()
+    await until(async () => {
+      await a.round({ pullOnly: true })
+      return (await themeOf(a)) === "dark"
+    })
+    engine.stop()
+    closeAll(devices)
+  })
+
+  it("keeps an edit made while a class was off and sends it once on again", async () => {
+    // Capture stopped while off, so a key that already had a clock was skipped
+    // by the re-seed: with no newer account op the two devices kept different
+    // values for good.
+    const { devices } = await syncedDevices(["a", "b"])
+    const [a, b] = devices as [SyncDevice, SyncDevice]
+    await a.db.settings.put({ id: "singleton", theme: "light" } as never)
+    await settleAll(devices)
+    const { engine } = await engineFor(b, { delays: SLOW })
+    await until(() => running(engine))
+    await engine.setClasses({ content: true, settings: false })
+    await b.db.settings.update("singleton", { theme: "dark" })
+    await engine.setClasses({ content: true, settings: true })
+    engine.syncNow()
+    await until(async () => {
+      await a.round({ pullOnly: true })
+      return (await themeOf(a)) === "dark"
+    })
+    expect(await themeOf(b)).toBe("dark")
+    engine.stop()
+    closeAll(devices)
+  })
+
+  it.each([
+    ["this device's edit while off is newer", "local-newer"],
+    ["the account's edit is newer", "remote-newer"],
+  ] as const)("settles on the newer change after a class is on again: %s", async (_name, order) => {
+    const { devices } = await syncedDevices(["a", "b"])
+    const [a, b] = devices as [SyncDevice, SyncDevice]
+    await a.db.settings.put({ id: "singleton", theme: "light" } as never)
+    await settleAll(devices)
+    const { engine } = await engineFor(b, { delays: SLOW })
+    await until(() => running(engine))
+    await engine.setClasses({ content: true, settings: false })
+    const remoteEdit = async () => {
+      await a.db.settings.update("singleton", { theme: "system" })
+      await a.round({ pushOnly: true })
+    }
+    const localEdit = () => b.db.settings.update("singleton", { theme: "dark" })
+    if (order === "local-newer") {
+      await remoteEdit()
+      await tick()
+      await localEdit()
+    } else {
+      await localEdit()
+      await tick()
+      await remoteEdit()
+    }
+    const expected = order === "local-newer" ? "dark" : "system"
+    await engine.setClasses({ content: true, settings: true })
+    engine.syncNow()
+    await until(async () => (await b.db.accountSyncOutbox.count()) === 0)
+    await until(async () => {
+      await a.round({ pullOnly: true })
+      return (await themeOf(a)) === expected && (await themeOf(b)) === expected
+    })
+    engine.stop()
+    closeAll(devices)
+  })
+
+  it("keeps a push failure standing through a successful pull", async () => {
+    const { devices } = await syncedDevices(["a", "b"])
+    const b = devices[1] as SyncDevice
+    const socket = quietSocket()
+    const { engine } = await engineFor(b, { delays: SLOW, openSocket: () => socket })
+    await until(() => socket.onopen !== null)
+    socket.open()
+    await until(() => syncState(engine)?.lastSyncedAt != null && syncState(engine)?.pending === 0)
+    await b.db.settings.put({ id: "singleton", theme: "dark" } as never)
+    const push = jest
+      .spyOn(b.context.api, "pushOps")
+      .mockRejectedValue(new Error("push unavailable"))
+    const before = syncState(engine)!.lastSyncedAt!
+    await tick()
+    engine.syncNow()
+    await until(() => syncState(engine)?.error === "push unavailable")
+    // A pull on its own, after the push failed.
+    const pulls = jest.spyOn(b.context.api, "pullOps")
+    engine.syncNow()
+    await until(() => pulls.mock.calls.length > 0)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(syncState(engine)).toMatchObject({ error: "push unavailable", pending: 1 })
+    expect(syncState(engine)!.lastSyncedAt).toBe(before)
+
+    push.mockRestore()
+    engine.syncNow()
+    await until(() => syncState(engine)?.error === null && syncState(engine)!.pending === 0)
+    expect(syncState(engine)!.lastSyncedAt!).toBeGreaterThan(before)
+    pulls.mockRestore()
+    engine.stop()
+    closeAll(devices)
+  })
+
+  it("clears a row from the too-large list once it went up", async () => {
+    const { devices } = await syncedDevices(["a"])
+    const a = devices[0] as SyncDevice
+    const { engine } = await engineFor(a, { delays: SLOW })
+    await until(() => running(engine))
+    await a.db.sessions.put(session("big", { title: "x".repeat(600 * 1024) }))
+    engine.syncNow()
+    await until(() => syncState(engine)?.tooLarge.includes("sessions:big") === true)
+    await a.db.sessions.update("big", { title: "short again" })
+    engine.syncNow()
+    await until(() => syncState(engine)?.tooLarge.length === 0 && syncState(engine)?.pending === 0)
+    engine.stop()
+    closeAll(devices)
+  })
+
+  it("announces a committed page's tables even when a later page fails", async () => {
+    // The tables were handed on only after the whole pull; a later page's
+    // error dropped the notice for the first page, which was already written
+    // and past the cursor, so the open settings never heard of it.
+    const { devices } = await syncedDevices(["a", "b"])
+    const [a, b] = devices as [SyncDevice, SyncDevice]
+    await a.db.settings.put({ id: "singleton", theme: "dark" } as never)
+    await a.round({ pushOnly: true })
+    const realPull = b.context.api.pullOps.bind(b.context.api)
+    jest
+      .spyOn(b.context.api, "pullOps")
+      .mockImplementationOnce(async (...args) => ({ ...(await realPull(...args)), more: true }))
+      .mockRejectedValueOnce(new Error("next page unavailable"))
+    const { engine, applied } = await engineFor(b, {
+      delays: SLOW,
+      openSocket: () => quietSocket(),
+    })
+    await until(() => running(engine))
+    engine.syncNow()
+    await until(() => syncState(engine)?.error === "next page unavailable")
+    expect(await themeOf(b)).toBe("dark")
+    expect(applied).toContainEqual(["settings"])
+    engine.stop()
+    jest.restoreAllMocks()
     closeAll(devices)
   })
 

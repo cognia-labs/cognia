@@ -37,6 +37,13 @@ export interface SyncRoundContext {
   vault: AccountSyncVault
   spaceId: string
   now: () => number
+  /**
+   * Remote changes were committed to these tables. Called as each batch
+   * commits (`applier.ts`), not once at the end: a round that fails on a later
+   * batch or page has already applied, and moved the cursor past, the earlier
+   * ones, and nothing would announce them again.
+   */
+  onApplied?: (tables: ReadonlySet<SyncedTableName>) => void
 }
 
 export interface SyncRoundOptions {
@@ -101,6 +108,7 @@ export async function runSyncRound(
     chain: keys.chain,
     origin: keys.origin,
     now: ctx.now,
+    ...(ctx.onApplied ? { onApplied: ctx.onApplied } : {}),
   })
   const result: SyncRoundResult = {
     pushed: 0,
