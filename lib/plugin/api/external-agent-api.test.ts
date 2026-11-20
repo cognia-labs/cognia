@@ -5,7 +5,7 @@ import { pluginHasApiPermission } from "./permission-api"
 import { assertOwnedBotWorkspace } from "../workspace/bot-run"
 import type { PluginWorkspaceHandle } from "../workspace/acquire"
 import { getLiveBotRunSignal } from "@/lib/bot/runtime/run"
-import { updateBotInstallation } from "@/lib/db/bot-installations"
+import { holdBotInstallationForSetup } from "@/lib/db/bot-installations"
 import { agentInvoke } from "@/lib/ai/agent/external/agent-transport"
 import { createBotStepApi } from "@/lib/bot/runtime/step"
 import { expireRunInterruptFromSource } from "@/lib/execution/run-control"
@@ -50,7 +50,7 @@ jest.mock("@/lib/execution/run-ledger", () => ({
   readRunBudget: (...args: unknown[]) => mockReadRunBudget(...args),
 }))
 jest.mock("./permission-api", () => ({ pluginHasApiPermission: jest.fn() }))
-jest.mock("@/lib/db/bot-installations", () => ({ updateBotInstallation: jest.fn() }))
+jest.mock("@/lib/db/bot-installations", () => ({ holdBotInstallationForSetup: jest.fn() }))
 jest.mock("@/lib/ai/agent/external/agent-transport", () => ({ agentInvoke: jest.fn() }))
 jest.mock("../workspace/bot-run", () => ({
   assertOwnedBotWorkspace: jest.fn(),
@@ -426,10 +426,7 @@ it.each([
     ).rejects.toThrow("explicit bypassPermissions and autopilot installation grant")
     expect(mockManager.createSession).not.toHaveBeenCalled()
     expect(mockManager.execute).not.toHaveBeenCalled()
-    expect(updateBotInstallation).toHaveBeenCalledWith(
-      "installation",
-      expect.objectContaining({ status: "needs_setup" })
-    )
+    expect(holdBotInstallationForSetup).toHaveBeenCalledWith("installation", expect.any(String))
   }
 )
 
@@ -938,12 +935,14 @@ it("marks permanently unavailable executables and advertised models needs_setup 
   await expect(runPluginExternalAgent("plugin", "devin", "fix issue", options)).rejects.toThrow(
     "executable is unavailable"
   )
-  expect(updateBotInstallation).toHaveBeenCalledWith("installation", {
-    status: "needs_setup",
-    monitor: { lastSuccessAt: 1, lastError: expect.stringContaining("unavailable") },
-  })
+  // The reason only: the monitor is merged into the row as it is at the
+  // write, not spread from the snapshot this run started with.
+  expect(holdBotInstallationForSetup).toHaveBeenCalledWith(
+    "installation",
+    expect.stringContaining("unavailable")
+  )
   expect(mockManager.execute).not.toHaveBeenCalled()
-  jest.mocked(updateBotInstallation).mockClear()
+  jest.mocked(holdBotInstallationForSetup).mockClear()
   mockManager.getSessionModels.mockReturnValue({
     status: "ok",
     data: { currentModelId: "other", availableModels: [{ modelId: "other", name: "Other" }] },
@@ -951,10 +950,7 @@ it("marks permanently unavailable executables and advertised models needs_setup 
   await expect(runPluginExternalAgent("plugin", "devin", "fix issue", options)).rejects.toThrow(
     "does not offer"
   )
-  expect(updateBotInstallation).toHaveBeenCalledWith(
-    "installation",
-    expect.objectContaining({ status: "needs_setup" })
-  )
+  expect(holdBotInstallationForSetup).toHaveBeenCalledWith("installation", expect.any(String))
   expect(mockManager.setSessionModel).not.toHaveBeenCalled()
 })
 
@@ -963,7 +959,7 @@ it("does not turn transient runtime probe failures into permanent setup state", 
   await expect(runPluginExternalAgent("plugin", "devin", "fix issue", options)).rejects.toThrow(
     "connection interrupted"
   )
-  expect(updateBotInstallation).not.toHaveBeenCalled()
+  expect(holdBotInstallationForSetup).not.toHaveBeenCalled()
 })
 
 it.each(["addAgent", "createSession", "resumeSession"] as const)(
@@ -980,10 +976,7 @@ it.each(["addAgent", "createSession", "resumeSession"] as const)(
     await expect(runPluginExternalAgent("plugin", "devin", "fix issue", options)).rejects.toThrow(
       "needs this host's sandbox"
     )
-    expect(updateBotInstallation).toHaveBeenCalledWith(
-      "installation",
-      expect.objectContaining({ status: "needs_setup" })
-    )
+    expect(holdBotInstallationForSetup).toHaveBeenCalledWith("installation", expect.any(String))
     expect(mockManager.execute).not.toHaveBeenCalled()
     expect(mockSteps.has("run:__host:external-agent:result")).toBe(false)
   }
@@ -994,7 +987,7 @@ it("keeps unrelated session connection failures retryable", async () => {
   await expect(runPluginExternalAgent("plugin", "devin", "fix issue", options)).rejects.toThrow(
     "connection interrupted"
   )
-  expect(updateBotInstallation).not.toHaveBeenCalled()
+  expect(holdBotInstallationForSetup).not.toHaveBeenCalled()
 })
 
 it("preserves transient model-discovery errors without disabling an otherwise configured installation", async () => {
@@ -1005,7 +998,7 @@ it("preserves transient model-discovery errors without disabling an otherwise co
   await expect(runPluginExternalAgent("plugin", "devin", "fix issue", options)).rejects.toThrow(
     "connection lost"
   )
-  expect(updateBotInstallation).not.toHaveBeenCalled()
+  expect(holdBotInstallationForSetup).not.toHaveBeenCalled()
   expect(mockManager.execute).not.toHaveBeenCalled()
 })
 
@@ -1147,10 +1140,7 @@ describe("execution route and cost ceiling", () => {
     await expect(
       runPluginExternalAgent("plugin", "codex", "test", { ...options, model: "gpt-routed" })
     ).rejects.toThrow("Choose a Cognia model")
-    expect(updateBotInstallation).toHaveBeenCalledWith(
-      "installation",
-      expect.objectContaining({ status: "needs_setup" })
-    )
+    expect(holdBotInstallationForSetup).toHaveBeenCalledWith("installation", expect.any(String))
     expect(mockManager.execute).not.toHaveBeenCalled()
   })
 

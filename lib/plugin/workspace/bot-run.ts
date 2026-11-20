@@ -14,7 +14,7 @@ import {
   integrationApiBaseUrl,
 } from "@/lib/integrations/action-runner"
 import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
-import { updateBotInstallation } from "@/lib/db/bot-installations"
+import { holdBotInstallationForSetup } from "@/lib/db/bot-installations"
 import type {
   BotRunWorkspaceSpec,
   BotWorkspaceFile,
@@ -92,10 +92,7 @@ export async function acquireBotWorkspace(
   if (isRemoteHostActive()) {
     const reason =
       "Isolated Bot workspaces must be acquired by their Desktop or Headless execution host; paired clients provide monitoring and approvals."
-    await updateBotInstallation(binding.installation.id, {
-      status: "needs_setup",
-      monitor: { ...binding.installation.monitor, lastError: reason },
-    })
+    await holdBotInstallationForSetup(binding.installation.id, reason)
     throw new Error(reason)
   }
   const saved = (await getBotRunStep(spec.runId, WORKSPACE_STEP))?.output as

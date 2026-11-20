@@ -24,13 +24,13 @@ import { gitReadBlobAtRef, gitLog, gitStatus, gitDiffRefsFiles } from "@/lib/git
 import { readWorkspaceFile, statWorkspaceFile, writeWorkspaceFile } from "@/lib/files/workspace-fs"
 import { authenticatedIntegrationRequest } from "@/lib/integrations/action-runner"
 import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
-import { updateBotInstallation } from "@/lib/db/bot-installations"
+import { holdBotInstallationForSetup } from "@/lib/db/bot-installations"
 import { assertBotPublicationAuthority } from "@/lib/bot/policy/run-authority"
 jest.mock("@/lib/bot/policy/run-authority", () => ({
   assertBotPublicationAuthority: jest.fn(async () => undefined),
 }))
 jest.mock("@/lib/tauri/transport-routing", () => ({ isRemoteHostActive: jest.fn(() => false) }))
-jest.mock("@/lib/db/bot-installations", () => ({ updateBotInstallation: jest.fn() }))
+jest.mock("@/lib/db/bot-installations", () => ({ holdBotInstallationForSetup: jest.fn() }))
 
 const mockSteps = new Map<string, unknown>()
 const mockApproval = jest.fn()
@@ -237,9 +237,9 @@ it("excludes generated package caches through Git while retaining tracked and st
 it("marks an unsupported paired host needs_setup before allocating a cache", async () => {
   jest.mocked(isRemoteHostActive).mockReturnValue(true)
   await expect(acquireBotWorkspace("plugin", spec, deps)).rejects.toThrow("execution host")
-  expect(updateBotInstallation).toHaveBeenCalledWith(
+  expect(holdBotInstallationForSetup).toHaveBeenCalledWith(
     "installation",
-    expect.objectContaining({ status: "needs_setup", monitor: { lastError: expect.any(String) } })
+    expect.stringContaining("execution host")
   )
   expect(deps.repoCacheDir).not.toHaveBeenCalled()
 })

@@ -337,6 +337,28 @@ export async function setMirroredBotTriggerOverride(
   })
 }
 
+/**
+ * Hold an installation at `needs_setup` for a reason a run ran into (an engine
+ * that cannot run privately here, a host that cannot acquire its workspace).
+ *
+ * Derived from the row as it is now, not as the run read it when it started:
+ * the run may have recorded its monitor since (a cursor, a success), and a
+ * monitor spread from that earlier read would put the old one back. The error
+ * is stamped with the host's time, as `ctx.bots.recordMonitor` stamps one, so
+ * a success observed before it cannot clear it.
+ */
+export async function holdBotInstallationForSetup(
+  id: string,
+  reason: string,
+  now = Date.now()
+): Promise<BotInstallationRow | undefined> {
+  return updateBotInstallation(id, (latest) => ({
+    status: "needs_setup",
+    monitor: { ...latest.monitor, lastError: reason, lastErrorAt: now },
+    now,
+  }))
+}
+
 /** Pause preserves accepted work and lets active attempts finish. */
 export async function setBotInstallationPaused(
   id: string,

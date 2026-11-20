@@ -6,6 +6,7 @@ import type { PluginBotCredentialSlot } from "@/types/plugin/plugin-bot"
 
 import {
   getBotInstallation,
+  holdBotInstallationForSetup,
   installBot,
   isBotTriggerArmed,
   listBotInstallations,
@@ -240,6 +241,31 @@ describe("botInstallations", () => {
     const delta = await finalizeDelta("botInstallations", [], since)
     expect(delta.deleted_ids).toEqual([row.id])
     expect(delta.next_since).toBe(since + 5)
+  })
+
+  it("holds an installation for setup without undoing a monitor written since the run read it", async () => {
+    const row = await installBot(input())
+    // What a run read when it started, then what it recorded while it ran.
+    const startedWith = (await getBotInstallation(row.id))!
+    await updateBotInstallation(row.id, {
+      monitor: { lastSuccessAt: 2_100, cursor: "page-2" },
+    })
+
+    await holdBotInstallationForSetup(row.id, "This host cannot confine the engine", 2_400)
+
+    const held = await getBotInstallation(row.id)
+    expect(startedWith.monitor).toBeUndefined()
+    expect(held).toMatchObject({
+      status: "needs_setup",
+      monitor: {
+        lastSuccessAt: 2_100,
+        cursor: "page-2",
+        lastError: "This host cannot confine the engine",
+        // Stamped like `recordMonitor` stamps an error, so a success observed
+        // before it cannot clear it.
+        lastErrorAt: 2_400,
+      },
+    })
   })
 })
 

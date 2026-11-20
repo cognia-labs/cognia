@@ -15,7 +15,7 @@ import {
   ENGINE_PROFILE_ENV,
   engineLaunchProfileEnv,
 } from "@cognia/agent-contracts/engine-launch-profile"
-import { updateBotInstallation } from "@/lib/db/bot-installations"
+import { holdBotInstallationForSetup } from "@/lib/db/bot-installations"
 import { resolveOwnedBotAuthority } from "@/lib/bot/policy/run-authority"
 import {
   BotRunPricingUnknownError,
@@ -269,10 +269,7 @@ async function dispatchPluginExternalAgent(
   const ownedWorkspace = await assertOwnedBotWorkspace(pluginId, workspace)
   const needsSetup = async (message: string): Promise<never> => {
     const owned = await assertOwnedBotWorkspace(pluginId, workspace)
-    await updateBotInstallation(owned.binding.installation.id, {
-      status: "needs_setup",
-      monitor: { ...owned.binding.installation.monitor, lastError: message },
-    })
+    await holdBotInstallationForSetup(owned.binding.installation.id, message)
     throw new Error(message)
   }
   // An engine that cannot run privately, or a host that cannot confine it,
