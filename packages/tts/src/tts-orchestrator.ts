@@ -650,7 +650,13 @@ export class TTSOrchestrator {
           // interrupted read was still generated, and the provider is the one
           // that served this chunk.
           params.onGenerated?.()
-          getTtsHost().recordSynthesis?.({ provider, characters: chunk.length, requestId })
+          const model = runtimeOptions.model
+          getTtsHost().recordSynthesis?.({
+            provider,
+            characters: chunk.length,
+            requestId,
+            ...(typeof model === "string" && model.length > 0 ? { model } : {}),
+          })
         }
         return generated
       },

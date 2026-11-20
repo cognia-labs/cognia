@@ -10,6 +10,7 @@ import {
   normalizeServerToolUse,
   normalizeUsageBlock,
   toLanguageModelUsage,
+  uncachedInputTokens,
 } from "./usage-normalize.ts"
 
 test("normalizeUsageBlock reads every provider's spelling into one snake_case block", () => {
@@ -118,4 +119,23 @@ test("toLanguageModelUsage keeps 'not reported' as undefined, unlike 0", () => {
     }
   )
   assert.equal(toLanguageModelUsage({ promptTokens: 0 }).inputTokens.total, 0)
+})
+
+test("AI SDK v7 inclusive input reaches the result block as its uncached part", () => {
+  // `inputTokens` is the whole prompt; the cache tiers sit beside
+  // `input_tokens` on the block, so the inclusive figure priced them twice.
+  const v7 = {
+    inputTokens: 1_000,
+    inputTokenDetails: { noCacheTokens: 650, cacheReadTokens: 300, cacheWriteTokens: 50 },
+  }
+  assert.equal(uncachedInputTokens(v7), 650)
+  assert.equal(normalizeUsageBlock(v7).input_tokens, 650)
+  assert.equal(normalizeUsageBlock(v7).cache_read_input_tokens, 300)
+  // Without the provider's own uncached figure it is the remainder.
+  assert.equal(
+    uncachedInputTokens({ inputTokens: 1_000, inputTokenDetails: { cacheReadTokens: 300 } }),
+    700
+  )
+  // Anthropic's own spelling already excludes the cache and is left alone.
+  assert.equal(uncachedInputTokens({ input_tokens: 650, cache_read_input_tokens: 300 }), 650)
 })

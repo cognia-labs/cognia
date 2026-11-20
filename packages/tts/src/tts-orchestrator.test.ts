@@ -1372,6 +1372,9 @@ describe("F21 — synthesis is metered at generation", () => {
     expect(recordSynthesis).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", characters: 5 })
     )
+    // The provider's model, so the usage row rolls up under it (F30).
+    expect(recordSynthesis.mock.calls[0][0].model).toEqual(expect.any(String))
+    expect(recordSynthesis.mock.calls[0][0].model).toBe(cloudSettings().openaiModel)
 
     mockCache.mockResolvedValueOnce({ audioData: new ArrayBuffer(2), mimeType: "audio/mpeg" })
     await o.speak("Hello", {

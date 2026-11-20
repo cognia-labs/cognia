@@ -78,33 +78,27 @@ it("carries the provider's own USD projection as an authoritative cost", async (
   expect(usage.costKnown).toBe(true)
 })
 
-it("marks an unpriced extraction unknown rather than free", async () => {
+it("leaves an unpriced extraction for the ledger to price, with a model to roll up under", async () => {
   extractCoreMock.mockResolvedValue(result())
   await extract({ source: {} } as never, {} as never)
   const usage = (recordSurfaceUsageMock.mock.calls[0][0] as { usage: Record<string, unknown> })
     .usage
   expect(usage.costUsd).toBeUndefined()
-  expect(usage.costKnown).toBe(false)
+  // Not frozen here: the ledger prices the pages or marks them unpriced.
+  expect(usage).not.toHaveProperty("costSource")
+  expect(usage).not.toHaveProperty("costKnown")
+  // The budget rollup is keyed on [day, provider, model].
+  expect(usage).toMatchObject({ providerId: "mistral-ocr", model: "mistral-ocr" })
 })
 
-it("gives the same document the same operation id so a re-run overwrites", async () => {
+it("books two paid extractions of the same document as two rows (F30)", async () => {
   extractCoreMock.mockResolvedValue(result())
   await extract({ source: {} } as never, {} as never)
   await extract({ source: {} } as never, {} as never)
   const [first, second] = recordSurfaceUsageMock.mock.calls.map(
     (call) => (call[0] as { operationId: string }).operationId
   )
-  expect(first).toBe(second)
-})
-
-it("gives a different document a different operation id", async () => {
-  extractCoreMock.mockResolvedValue(result())
-  await extract({ source: {} } as never, {} as never)
-  extractCoreMock.mockResolvedValue(result({ combinedText: "totally different" }))
-  await extract({ source: {} } as never, {} as never)
-  const [first, second] = recordSurfaceUsageMock.mock.calls.map(
-    (call) => (call[0] as { operationId: string }).operationId
-  )
+  // A cache miss that reads the document again was billed again.
   expect(first).not.toBe(second)
 })
 

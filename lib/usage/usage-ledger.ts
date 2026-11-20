@@ -31,9 +31,9 @@ import {
   localDayString,
   type ProviderCostDailyRow,
 } from "@/lib/db/provider-cost-daily"
-import type { SessionUsageRow } from "@/lib/db/session-usage"
-import { effectiveCostUsdDetailed, type PricingResolver } from "@/lib/usage/session-analytics"
-import { resolveModelPricingUsd } from "@/lib/usage/pricing"
+import type { SessionUsageRow, UsagePriceSnapshot } from "@/lib/db/session-usage"
+import { priceUsageRow, type PricingResolver } from "@/lib/usage/session-analytics"
+import { resolveModelPricingUsd, type PricingSettings } from "@/lib/usage/pricing"
 
 /** What a committed write did to the budget projection. */
 export interface UsageCommitDaily {
@@ -48,10 +48,35 @@ export interface UsageCommitDaily {
 export interface UsageCommitResult {
   /** The row exactly as persisted, with cost frozen. */
   row: SessionUsageRow
-  /** `null` when the row is imported, unpriceable, or carries no provider. */
-  daily: UsageCommitDaily | null
+  /**
+   * Every provider-day the write moved: the new row's bucket, and the old
+   * row's when a correction moved it to another provider or day. Empty when
+   * neither row counts for the budget.
+   */
+  dailies: UsageCommitDaily[]
   /** True when this write replaced an existing row rather than inserting one. */
   replaced: boolean
+}
+
+/**
+ * A usage write started for one account database found another one active
+ * when it committed (the account switched while the work was in flight). The
+ * write is refused whole rather than booked into the wrong account's ledger.
+ */
+export class UsageLedgerDatabaseChangedError extends Error {
+  constructor(
+    readonly expected: string,
+    readonly actual: string
+  ) {
+    super(`usage write for database ${expected} refused: ${actual} is active`)
+    this.name = "UsageLedgerDatabaseChangedError"
+  }
+}
+
+function assertDatabase(db: { name: string }, expected: string | undefined): void {
+  if (expected !== undefined && db.name !== expected) {
+    throw new UsageLedgerDatabaseChangedError(expected, db.name)
+  }
 }
 
 /**
@@ -62,6 +87,39 @@ export interface UsageCommitResult {
 export type BudgetMirrorSink = (committed: UsageCommitDaily) => void
 
 let mirrorSink: BudgetMirrorSink | null = null
+
+/**
+ * The user's own rates (custom-provider metadata, account-discovered model
+ * pricing), read when a row is frozen. Injected for the same reason as the
+ * mirror sink: the write path stays free of the settings store. Without one,
+ * only the catalog layers price a row.
+ */
+export type UsagePricingSettingsSource = () => PricingSettings | undefined
+
+let pricingSettingsSource: UsagePricingSettingsSource | null = null
+
+/** Install the source of the user's pricing settings. Returns a disposer. */
+export function setUsagePricingSettingsSource(
+  source: UsagePricingSettingsSource | null
+): () => void {
+  const prior = pricingSettingsSource
+  pricingSettingsSource = source
+  return () => {
+    pricingSettingsSource = prior
+  }
+}
+
+/** The resolver a row is frozen against when the caller passes none. */
+export function ledgerPricingResolver(): PricingResolver {
+  let settings: PricingSettings | undefined
+  try {
+    settings = pricingSettingsSource?.()
+  } catch {
+    settings = undefined
+  }
+  return (providerId, modelId) =>
+    resolveModelPricingUsd(providerId, modelId, settings ? { settings } : {})
+}
 
 /**
  * localStorage key marking that the one-time v218 projection rebuild has run.
@@ -91,15 +149,41 @@ const num = (v: number | undefined): number => (typeof v === "number" && Number.
  */
 export function freezeUsageCost(
   row: SessionUsageRow,
-  resolve: PricingResolver = resolveModelPricingUsd
+  resolve: PricingResolver = ledgerPricingResolver()
 ): SessionUsageRow {
   if (row.costSource !== undefined) return row
-  const detail = effectiveCostUsdDetailed(row, resolve)
+  if (row.costUsd > 0) return { ...row, costSource: "sdk", costKnown: true }
+  const priced = priceUsageRow(row, resolve)
+  if (priced.pricing === null)
+    return { ...row, costUsd: 0, costSource: "unknown", costKnown: false }
   return {
     ...row,
-    costUsd: detail.known ? detail.cost : 0,
-    costSource: detail.source === "sdk" ? "sdk" : detail.known ? "derived" : "unknown",
-    costKnown: detail.known,
+    // A billed unit with no rate leaves the figure a lower bound: kept, so the
+    // budget counts what is known, and marked unknown, so no reader calls it
+    // the price.
+    costUsd: priced.cost,
+    costSource: priced.known ? "derived" : "unknown",
+    costKnown: priced.known,
+    priceSnapshot: snapshotOf(priced.pricing, priced.rateMultiplier),
+  }
+}
+
+/** The rates a frozen cost was computed against, so it can be re-derived later. */
+function snapshotOf(
+  pricing: NonNullable<ReturnType<PricingResolver>>,
+  rateMultiplier: number
+): UsagePriceSnapshot {
+  return {
+    ...(pricing.promptPer1M !== undefined ? { promptPer1M: pricing.promptPer1M } : {}),
+    ...(pricing.completionPer1M !== undefined ? { completionPer1M: pricing.completionPer1M } : {}),
+    ...(pricing.cachedInputPer1M !== undefined
+      ? { cachedInputPer1M: pricing.cachedInputPer1M }
+      : {}),
+    ...(pricing.cacheCreationPer1M !== undefined
+      ? { cacheCreationPer1M: pricing.cacheCreationPer1M }
+      : {}),
+    ...(rateMultiplier !== 1 ? { rateMultiplier } : {}),
+    currency: "USD",
   }
 }
 
@@ -131,7 +215,9 @@ function rollupContribution(row: SessionUsageRow | null | undefined): {
   if (!row || !contributesToBudget(row)) {
     return { costUsd: 0, inputTokens: 0, outputTokens: 0, requestCount: 0, key: null }
   }
-  const costUsd = row.costKnown === false ? 0 : Math.max(0, num(row.costUsd))
+  // An unknown cost contributes what was priced of it: 0 when nothing was, a
+  // lower bound when a billed unit had no rate. Never more than is known.
+  const costUsd = Math.max(0, num(row.costUsd))
   return {
     costUsd,
     inputTokens: Math.max(0, num(row.inputTokens)),
@@ -189,19 +275,20 @@ export async function applyRollupDelta(
  */
 export async function commitUsageRow(
   row: SessionUsageRow,
-  opts: { now?: number; resolve?: PricingResolver } = {}
+  opts: { now?: number; resolve?: PricingResolver; expectDatabase?: string } = {}
 ): Promise<UsageCommitResult | null> {
   if (!row.messageId || !row.sessionId) return null
   const now = opts.now ?? Date.now()
   const frozen = freezeUsageCost(row, opts.resolve)
   const db = getDb()
 
-  let committed: Omit<UsageCommitResult, "row"> = { replaced: false, daily: null }
+  let committed: Omit<UsageCommitResult, "row"> = { replaced: false, dailies: [] }
   await db.transaction("rw", db.sessionUsage, db.providerCostDaily, async () => {
+    assertDatabase(db, opts.expectDatabase)
     committed = await putWithProjection(db, frozen, now)
   })
 
-  if (committed.daily) pushToMirror(committed.daily)
+  for (const daily of committed.dailies) pushToMirror(daily)
   return { row: frozen, ...committed }
 }
 
@@ -224,7 +311,15 @@ export async function commitUsageRows(
     now?: number
     resolve?: PricingResolver
     retireSource?: string
+    /**
+     * Retire only these upstream sessions' rows that `rows` does not carry,
+     * instead of every row of `retireSource`. A scan that read some sessions
+     * replaces exactly those, and a session it did not read keeps its rows.
+     */
+    retireSessions?: readonly string[]
     assertCurrent?: () => void
+    /** The account database the rows belong to; another active one refuses the write. */
+    expectDatabase?: string
   } = {}
 ): Promise<{ written: number; removed: number }> {
   const now = opts.now ?? Date.now()
@@ -233,7 +328,8 @@ export async function commitUsageRows(
   for (const row of rows) {
     if (row.messageId && row.sessionId) byId.set(row.messageId, row)
   }
-  const frozen = [...byId.values()].map((row) => freezeUsageCost(row, opts.resolve))
+  const resolve = opts.resolve ?? ledgerPricingResolver()
+  const frozen = [...byId.values()].map((row) => freezeUsageCost(row, resolve))
   if (frozen.length === 0 && opts.retireSource === undefined) return { written: 0, removed: 0 }
   const db = getDb()
 
@@ -246,13 +342,23 @@ export async function commitUsageRows(
   }
   let removed = 0
   await db.transaction("rw", db.sessionUsage, db.providerCostDaily, async () => {
+    assertDatabase(db, opts.expectDatabase)
     opts.assertCurrent?.()
     if (opts.retireSource !== undefined) {
+      const source = opts.retireSource
       const present = new Set(frozen.map((row) => row.messageId))
-      const existing = await db.sessionUsage.where("sourceId").equals(opts.retireSource).toArray()
+      const existing = opts.retireSessions
+        ? (
+            await db.sessionUsage
+              .where("[sourceId+sourceSessionId]")
+              .anyOf(opts.retireSessions.map((session) => [source, session]))
+              .toArray()
+          ).filter((row) => row.sourceId === source)
+        : await db.sessionUsage.where("sourceId").equals(source).toArray()
       const stale = existing.filter((row) => !present.has(row.messageId))
       if (stale.length > 0) await db.sessionUsage.bulkDelete(stale.map((row) => row.messageId))
-      for (const row of stale) keep(await moveProjection(db, row, null, now))
+      for (const row of stale)
+        for (const daily of await moveProjection(db, row, null, now)) keep(daily)
       removed = stale.length
     }
     // Bulk reads and writes: a scan commits thousands of rows, and only the
@@ -260,7 +366,7 @@ export async function commitUsageRows(
     const priors = await db.sessionUsage.bulkGet(frozen.map((row) => row.messageId))
     if (frozen.length > 0) await db.sessionUsage.bulkPut(frozen)
     for (const [index, row] of frozen.entries()) {
-      keep(await moveProjection(db, priors[index], row, now))
+      for (const daily of await moveProjection(db, priors[index], row, now)) keep(daily)
     }
   })
 
@@ -280,23 +386,25 @@ async function putWithProjection(
   await db.sessionUsage.put(frozen)
   return {
     replaced: prior != null,
-    daily: await moveProjection(db, prior, frozen, now),
+    dailies: await moveProjection(db, prior, frozen, now),
   }
 }
 
 /**
  * Move the rollup from `prior`'s contribution to `next`'s, inside the caller's
- * transaction, and read back the provider's committed day total.
+ * transaction, and read back the committed day total of every provider-day it
+ * touched. A correction that moved the row to another provider or day touches
+ * two, and the old one's total must reach the mirror as well: it went down.
  */
 async function moveProjection(
   db: LedgerDb,
   prior: SessionUsageRow | null | undefined,
   next: SessionUsageRow | null,
   now: number
-): Promise<UsageCommitDaily | null> {
+): Promise<UsageCommitDaily[]> {
   const before = rollupContribution(prior)
   const after = rollupContribution(next)
-  if (!before.key && !after.key) return null
+  if (!before.key && !after.key) return []
 
   const sameBucket =
     before.key != null &&
@@ -339,21 +447,37 @@ async function moveProjection(
     )
   }
 
-  // Sum the provider's committed rows for the affected day INSIDE the
+  // Sum each affected provider's committed rows for its day INSIDE the
   // transaction. This is what lets the synchronous budget mirror snap to
   // durable state instead of drifting when a write is lost.
-  const target = after.key ?? before.key
-  if (!target) return null
-  const dayRows = await db.providerCostDaily
-    .where("[providerId+day]")
-    .equals([target.providerId, target.day])
-    .toArray()
-  return {
-    day: target.day,
-    providerId: target.providerId,
-    providerTotalUsd: dayRows.reduce((sum, r) => sum + (r.totalCostUsd ?? 0), 0),
-    deltaUsd: after.costUsd - before.costUsd,
+  const targets: Array<{ key: { day: string; providerId: string }; deltaUsd: number }> = []
+  const movedProviderDay =
+    before.key != null &&
+    after.key != null &&
+    (before.key.providerId !== after.key.providerId || before.key.day !== after.key.day)
+  if (after.key) {
+    targets.push({
+      key: after.key,
+      deltaUsd: movedProviderDay ? after.costUsd : after.costUsd - before.costUsd,
+    })
   }
+  if (before.key && (!after.key || movedProviderDay)) {
+    targets.push({ key: before.key, deltaUsd: -before.costUsd })
+  }
+  const out: UsageCommitDaily[] = []
+  for (const target of targets) {
+    const dayRows = await db.providerCostDaily
+      .where("[providerId+day]")
+      .equals([target.key.providerId, target.key.day])
+      .toArray()
+    out.push({
+      day: target.key.day,
+      providerId: target.key.providerId,
+      providerTotalUsd: dayRows.reduce((sum, r) => sum + (r.totalCostUsd ?? 0), 0),
+      deltaUsd: target.deltaUsd,
+    })
+  }
+  return out
 }
 
 function pushToMirror(daily: UsageCommitDaily): void {
@@ -381,7 +505,11 @@ export async function rebuildProviderCostDaily(
 ): Promise<{ days: number; buckets: number; rows: number }> {
   const now = opts.now ?? Date.now()
   const windowDays = Math.max(1, Math.floor(days))
-  const fromMs = now - windowDays * 86_400_000
+  // The window is whole local days: buckets are deleted by day, so the rows
+  // they are rebuilt from must start at that first day's midnight. Reading
+  // from "now minus N×24h" rebuilt the first day from its afternoon only.
+  const first = new Date(now - windowDays * 86_400_000)
+  const fromMs = new Date(first.getFullYear(), first.getMonth(), first.getDate()).getTime()
   const fromDay = localDayString(fromMs)
   const toDay = localDayString(now)
   const db = getDb()
@@ -391,8 +519,9 @@ export async function rebuildProviderCostDaily(
   await db.transaction("rw", db.sessionUsage, db.providerCostDaily, async () => {
     const ledger = await db.sessionUsage.where("at").aboveOrEqual(fromMs).toArray()
     const next = new Map<string, ProviderCostDailyRow>()
+    const resolve = opts.resolve ?? ledgerPricingResolver()
     for (const raw of ledger) {
-      const contribution = rollupContribution(freezeUsageCost(raw, opts.resolve))
+      const contribution = rollupContribution(freezeUsageCost(raw, resolve))
       if (!contribution.key) continue
       rows += 1
       const { day, providerId, modelId } = contribution.key

@@ -2,9 +2,15 @@ import {
   DEFAULT_CACHE_READ_MULT,
   DEFAULT_CACHE_WRITE_5M_MULT,
   DEFAULT_CACHE_WRITE_1H_MULT,
+  BATCH_RATE_MULT,
+  cacheCreationCostTokens,
   costFromTokensUsd,
+  FAST_MODE_RATE_MULT,
   mergePricingLayers,
   priceTokensForModel,
+  pricingModifierMultiplier,
+  unpricedUnits,
+  US_INFERENCE_RATE_MULT,
   resolveModelPricingUsd,
   tokenAllowanceForUsd,
   type CatalogPricingLookup,
@@ -514,5 +520,98 @@ describe("tokenAllowanceForUsd", () => {
         { catalog: allowanceCatalog }
       )
     ).toBeUndefined()
+  })
+})
+
+describe("request-level pricing modifiers (F15)", () => {
+  // Anthropic's published card for Opus 5.5, 2026-11-09: $4 in / $20 out
+  // standard, $8 / $40 fast, $4.40 / $22 US-only, $2 / $10 batch.
+  const opus = { promptPer1M: 4, completionPer1M: 20 }
+  const turn = { inputTokens: 1_000_000, outputTokens: 1_000_000 }
+
+  it("matches the published fast-mode, US-only and batch prices", () => {
+    expect(costFromTokensUsd(turn, opus)).toBeCloseTo(24, 9)
+    expect(costFromTokensUsd(turn, opus, { modifiers: { speed: "fast" } })).toBeCloseTo(48, 9)
+    expect(costFromTokensUsd(turn, opus, { modifiers: { inferenceGeo: "us" } })).toBeCloseTo(
+      26.4,
+      9
+    )
+    expect(
+      costFromTokensUsd(turn, opus, { modifiers: { speed: "fast", inferenceGeo: "us" } })
+    ).toBeCloseTo(52.8, 9)
+    expect(costFromTokensUsd(turn, opus, { modifiers: { batch: true } })).toBeCloseTo(12, 9)
+  })
+
+  it("scales the cache tiers with the request (US-only batch cache hit $0.11)", () => {
+    const cached = { cacheReadInputTokens: 1_000_000 }
+    expect(
+      costFromTokensUsd(cached, opus, { modifiers: { batch: true, inferenceGeo: "us" } })
+    ).toBeCloseTo(4 * 0.1 * 0.5 * 1.1, 9)
+  })
+
+  it("takes the rate card's explicit batch rates over the flat discount", () => {
+    expect(
+      costFromTokensUsd(
+        turn,
+        { ...opus, batchInputPer1M: 1, batchOutputPer1M: 3 },
+        {
+          modifiers: { batch: true },
+        }
+      )
+    ).toBeCloseTo(4, 9)
+  })
+
+  it("never stacks fast mode on a batch request, which the API does not offer", () => {
+    expect(pricingModifierMultiplier({ speed: "fast", batch: true })).toBe(1)
+    expect(pricingModifierMultiplier({ speed: "fast" })).toBe(FAST_MODE_RATE_MULT)
+    expect(pricingModifierMultiplier({ inferenceGeo: "us" })).toBe(US_INFERENCE_RATE_MULT)
+    expect(BATCH_RATE_MULT).toBe(0.5)
+  })
+})
+
+describe("unpriced billed units (F15)", () => {
+  it("names every billed unit the rate card has no rate for", () => {
+    expect(
+      unpricedUnits(
+        { requests: { web_search: 2, code_execution: 1 }, pages: 3 },
+        { promptPer1M: 1, perRequestUsd: { web_search: 0.01 } }
+      )
+    ).toEqual(["code_execution", "pages"])
+    expect(unpricedUnits({ requests: { web_search: 0 } }, { promptPer1M: 1 })).toEqual([])
+  })
+
+  it("reports a turn with an unpriced tool as not known, with the priced part as its cost", () => {
+    const priced = priceTokensForModel(
+      "anthropic",
+      "claude-sonnet-4-5",
+      {
+        inputTokens: 1_000_000,
+        requests: { mystery_tool: 2 },
+      },
+      { catalog: () => ({ promptPer1M: 1, completionPer1M: 1 }) }
+    )
+    expect(priced).toEqual({ cost: expect.closeTo(1, 9), known: false })
+  })
+})
+
+describe("cacheCreationCostTokens (F04)", () => {
+  it("prices a stored total and its split once: the split, plus what no TTL names", () => {
+    expect(cacheCreationCostTokens(300, 100, 200)).toEqual({
+      cacheCreationInputTokens: 0,
+      cacheCreation5mInputTokens: 100,
+      cacheCreation1hInputTokens: 200,
+    })
+    expect(cacheCreationCostTokens(350, 100, 200).cacheCreationInputTokens).toBe(50)
+    expect(cacheCreationCostTokens(300, undefined, undefined).cacheCreationInputTokens).toBe(300)
+    // A split reported without its total.
+    expect(cacheCreationCostTokens(0, 100, 200).cacheCreationInputTokens).toBe(0)
+  })
+
+  it("turns the audit's $0.900 back into $0.525", () => {
+    // $1/1M input: 300k writes split 100k at 5m (1.25×) and 200k at 1h (2×).
+    const pricing = { promptPer1M: 1, completionPer1M: 1 }
+    expect(
+      costFromTokensUsd({ ...cacheCreationCostTokens(300_000, 100_000, 200_000) }, pricing)
+    ).toBeCloseTo(0.525, 9)
   })
 })

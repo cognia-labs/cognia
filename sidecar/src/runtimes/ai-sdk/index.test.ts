@@ -2419,6 +2419,82 @@ test("a provider error after partial text fails the result too", async () => {
   assert.match(String(ended.error), /socket hang up/)
 })
 
+test("a provider error before any text still reports the steps it billed (F29)", async () => {
+  // A tool-call step finished (and was billed) before the leg broke without
+  // a word of text: the turn used to end with no usage result at all.
+  const { result, ended } = await terminalOf([
+    [
+      { type: "start-step" },
+      { type: "tool-call", toolCallId: "c", toolName: "x", input: {} },
+      { type: "finish-step", usage: { inputTokens: 40, outputTokens: 7 } },
+      { type: "error", error: new Error("socket hang up") },
+    ],
+  ])
+  assert.equal(result.subtype, "error_during_execution")
+  assert.equal(result.usage.input_tokens, 40)
+  assert.equal(result.usage.output_tokens, 7)
+  assert.equal((ended.result as { subtype?: string }).subtype, "error_during_execution")
+  assert.match(String(ended.error), /socket hang up/)
+})
+
+test("reasoning and server-tool counts are the turn's, summed over every step (F29)", async () => {
+  const { result } = await terminalOf([
+    [
+      { type: "start-step" },
+      {
+        type: "finish-step",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 10,
+          outputTokenDetails: { reasoningTokens: 7 },
+          raw: {
+            server_tool_use: { web_search_requests: 2 },
+            cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+          },
+        },
+      },
+      { type: "start-step" },
+      {
+        type: "finish-step",
+        usage: {
+          inputTokens: 200,
+          outputTokens: 15,
+          outputTokenDetails: { reasoningTokens: 3 },
+          raw: { server_tool_use: { web_search_requests: 1 } },
+        },
+      },
+      { type: "text-delta", text: "done" },
+      { type: "finish", finishReason: "stop" },
+    ],
+  ])
+  assert.equal(result.usage.reasoning_tokens, 10)
+  assert.deepEqual(result.usage.server_tool_use, { web_search: 3 })
+})
+
+test("the cache-TTL split under a step's provider block reaches the result (F29)", async () => {
+  const { result } = await terminalOf([
+    [
+      { type: "start-step" },
+      {
+        type: "finish-step",
+        usage: {
+          inputTokens: 130,
+          inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 30 },
+          outputTokens: 5,
+          raw: { cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 20 } },
+        },
+      },
+      { type: "text-delta", text: "ok" },
+      { type: "finish", finishReason: "stop" },
+    ],
+  ])
+  assert.equal(result.usage.cache_creation_input_tokens, 30)
+  assert.deepEqual(result.usage.cache_creation, {
+    ephemeral_5m_input_tokens: 10,
+    ephemeral_1h_input_tokens: 20,
+  })
+})
+
 test("the step cap reports error_max_turns and counts every model request", async () => {
   const { result, ended } = await terminalOf(
     [
@@ -2969,7 +3045,8 @@ test(
     const result = results()[1]!.event
     assert.equal(result.duration_ms, 750)
     assert.equal(result.duration_api_ms, 750)
-    assert.equal(result.usage.input_tokens, 120)
+    // 120 prompt tokens, 40 of them cache reads reported beside it.
+    assert.equal(result.usage.input_tokens, 80)
     assert.equal(result.usage.output_tokens, 30)
     assert.equal(result.usage.context_input_tokens, 120)
     assert.equal(result.usage.cache_read_input_tokens, 40)
@@ -3018,7 +3095,8 @@ test("interrupt preserves usage from completed steps before the abort", async ()
   await waitForEvent(events, (event) => event.type === "session_ended")
 
   const result = events.find((event) => event.type === "event" && event.event?.type === "result")
-  assert.equal(result!.event.usage.input_tokens, 120)
+  // 120 prompt tokens, 40 of them cache reads reported beside it.
+  assert.equal(result!.event.usage.input_tokens, 80)
   assert.equal(result!.event.usage.output_tokens, 30)
   assert.equal(result!.event.usage.context_input_tokens, 120)
   assert.equal(result!.event.usage.cache_read_input_tokens, 40)
@@ -4042,7 +4120,9 @@ test("manual legs sum cache reads, writes and TTL splits without counting step u
   await waitForEvent(events, (e) => e.type === "session_ended")
   const result = events.find((e) => e.type === "event" && e.event.type === "result")!
   assert.equal(calls, 2)
-  assert.equal(result.event.usage.input_tokens, 300)
+  // 300 prompt tokens across both legs, 100 cache reads and 12 cache writes
+  // among them: the uncached remainder.
+  assert.equal(result.event.usage.input_tokens, 188)
   assert.equal(result.event.usage.output_tokens, 20)
   assert.equal(result.event.usage.cache_read_input_tokens, 100)
   assert.equal(result.event.usage.cache_creation_input_tokens, 12)
@@ -4116,7 +4196,8 @@ test("partial final usage preserves step cache fields while explicit zeros stay 
     })
     await waitForEvent(events, (e) => e.type === "session_ended")
     const result = events.find((e) => e.type === "event" && e.event.type === "result")!.event.usage
-    assert.equal(result.input_tokens, 100)
+    // The uncached part of the 100-token prompt.
+    assert.equal(result.input_tokens, 100 - fixture.read - fixture.write)
     assert.equal(result.output_tokens, 10)
     assert.equal(result.cache_read_input_tokens, fixture.read)
     assert.equal(result.cache_creation_input_tokens, fixture.write)
@@ -4184,7 +4265,9 @@ test("interrupt adds current-step cache usage to prior completed legs", async ()
     ephemeral_5m_input_tokens: 5,
     ephemeral_1h_input_tokens: 7,
   })
-  assert.equal(result.event.usage.input_tokens, 300)
+  // 300 prompt tokens across both legs, 100 cache reads and 12 cache writes
+  // among them: the uncached remainder.
+  assert.equal(result.event.usage.input_tokens, 188)
   session.closeInput()
 })
 
@@ -5107,7 +5190,9 @@ test("a multi-step leg reports summed billing but the last call as the window", 
   })
   await waitForEvent(events, (e) => e.type === "session_ended")
   const result = events.find((e) => e.type === "event" && e.event?.type === "result")
-  assert.equal(result!.event.usage.input_tokens, 177_000)
+  // The uncached part of the summed 177,000-token prompt: the 175,500 cache
+  // reads sit beside it on the block, priced once at the cache rate.
+  assert.equal(result!.event.usage.input_tokens, 1_500)
   assert.equal(result!.event.usage.cache_read_input_tokens, 175_500)
   assert.equal(result!.event.usage.context_input_tokens, 60_000)
   assert.equal(result!.event.usage.context_tokens, 60_400)

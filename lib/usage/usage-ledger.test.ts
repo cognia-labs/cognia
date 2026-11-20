@@ -16,6 +16,8 @@ import {
   freezeUsageCost,
   rebuildProviderCostDaily,
   setBudgetMirrorSink,
+  setUsagePricingSettingsSource,
+  UsageLedgerDatabaseChangedError,
   type UsageCommitDaily,
 } from "./usage-ledger"
 
@@ -87,6 +89,67 @@ describe("freezeUsageCost", () => {
   })
 })
 
+describe("freezeUsageCost pricing context (F15)", () => {
+  it("records the rates a derived cost was frozen against", () => {
+    const frozen = freezeUsageCost(row(), flatPricing)
+    expect(frozen.priceSnapshot).toEqual({
+      promptPer1M: 1000,
+      completionPer1M: 2000,
+      currency: "USD",
+    })
+  })
+
+  it("prices against the user's own custom rate when the source is installed", () => {
+    const dispose = setUsagePricingSettingsSource(() => ({
+      customProviders: [
+        {
+          id: "acme",
+          customModelMetadata: {
+            "test-model": { pricing: { promptPer1M: 3000, completionPer1M: 0 } },
+          },
+        },
+      ],
+    }))
+    try {
+      // 1k input at $3/1k: the custom rate, not the catalog's (none here).
+      expect(freezeUsageCost(row({ outputTokens: 0 })).costUsd).toBeCloseTo(3, 9)
+    } finally {
+      dispose()
+    }
+  })
+
+  it("keeps a turn with an unpriced server tool a lower bound, never a settled price", () => {
+    const frozen = freezeUsageCost(
+      row({ unitBreakdown: { requests: { web_search: 2 } } }),
+      flatPricing
+    )
+    expect(frozen).toMatchObject({ costKnown: false, costSource: "unknown" })
+    // The tokens were priced; the searches were not.
+    expect(frozen.costUsd).toBeCloseTo(2, 9)
+  })
+
+  it("applies the row's fast-mode and data-residency modifiers", () => {
+    const frozen = freezeUsageCost(row({ speed: "fast", inferenceGeo: "us" }), flatPricing)
+    expect(frozen.costUsd).toBeCloseTo(2 * 2 * 1.1, 9)
+    expect(frozen.priceSnapshot?.rateMultiplier).toBeCloseTo(2.2, 9)
+  })
+
+  it("prices a cache write carrying its TTL split exactly once (F04)", () => {
+    // $1/1M input: 300 cache writes, 100 at 5m (1.25×) and 200 at 1h (2×).
+    const frozen = freezeUsageCost(
+      row({
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 300_000,
+        cacheCreation5mTokens: 100_000,
+        cacheCreation1hTokens: 200_000,
+      }),
+      () => ({ promptPer1M: 1, completionPer1M: 1 })
+    )
+    expect(frozen.costUsd).toBeCloseTo(0.125 + 0.4, 9)
+  })
+})
+
 describe("contributesToBudget", () => {
   it("excludes imported spend", () => {
     expect(contributesToBudget(row({ imported: true }))).toBe(false)
@@ -110,7 +173,7 @@ describe("commitUsageRow", () => {
   it("writes the ledger row and the projection in one go", async () => {
     const res = await commitUsageRow(row(), { resolve: flatPricing })
     expect(res?.replaced).toBe(false)
-    expect(res?.daily?.providerTotalUsd).toBeCloseTo(2, 6)
+    expect(res?.dailies.map((d) => d.providerTotalUsd)).toEqual([expect.closeTo(2, 6)])
     expect(await ledgerTotal()).toBeCloseTo(await dailyTotal(), 9)
   })
 
@@ -306,6 +369,49 @@ describe("conservation across every surface", () => {
   })
 })
 
+describe("budget mirror after a correction (F06)", () => {
+  it("pushes the old provider's lowered total when a correction moves the row", async () => {
+    const pushed: UsageCommitDaily[] = []
+    const dispose = setBudgetMirrorSink((daily) => pushed.push(daily))
+    try {
+      await commitUsageRow(row({ providerId: "provider-a" }), { resolve: flatPricing })
+      pushed.length = 0
+      await commitUsageRow(row({ providerId: "provider-b" }), { resolve: flatPricing })
+    } finally {
+      dispose()
+    }
+    expect(pushed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "provider-b",
+          providerTotalUsd: expect.closeTo(2, 6),
+        }),
+        expect.objectContaining({
+          providerId: "provider-a",
+          providerTotalUsd: 0,
+          deltaUsd: expect.closeTo(-2, 6),
+        }),
+      ])
+    )
+  })
+})
+
+describe("account database pin (F27)", () => {
+  it("refuses a write meant for another account database", async () => {
+    await expect(
+      commitUsageRow(row(), { resolve: flatPricing, expectDatabase: "some-other-account" })
+    ).rejects.toBeInstanceOf(UsageLedgerDatabaseChangedError)
+    expect(await getDb().sessionUsage.count()).toBe(0)
+    await expect(
+      commitUsageRows([row()], { resolve: flatPricing, expectDatabase: "some-other-account" })
+    ).rejects.toBeInstanceOf(UsageLedgerDatabaseChangedError)
+    expect(await getDb().sessionUsage.count()).toBe(0)
+    // The database the write was started for still takes it.
+    await commitUsageRow(row(), { resolve: flatPricing, expectDatabase: getDb().name })
+    expect(await getDb().sessionUsage.count()).toBe(1)
+  })
+})
+
 describe("applyRollupDelta", () => {
   it("deletes a bucket a retraction empties instead of leaving a zero row", async () => {
     const db = getDb()
@@ -374,6 +480,29 @@ describe("rebuildProviderCostDaily", () => {
     })
     await rebuildProviderCostDaily(7, { now: NOON, resolve: flatPricing })
     expect(await db.providerCostDaily.get("2000-01-01|acme|old")).toBeDefined()
+  })
+
+  it("rebuilds the window's first day whole, morning included (F07)", async () => {
+    const now = new Date(2026, 5, 10, 15, 0, 0).getTime()
+    const firstDay = new Date(2026, 5, 3)
+    const morning = new Date(firstDay).setHours(9, 0, 0, 0)
+    const evening = new Date(firstDay).setHours(20, 0, 0, 0)
+    // $2 in the morning, $3 in the evening of the window's first day.
+    await commitUsageRow(
+      row({ messageId: "am", at: morning, outputTokens: 0, inputTokens: 2000 }),
+      {
+        resolve: flatPricing,
+      }
+    )
+    await commitUsageRow(
+      row({ messageId: "pm", at: evening, outputTokens: 0, inputTokens: 3000 }),
+      {
+        resolve: flatPricing,
+      }
+    )
+    expect(await dailyTotal()).toBeCloseTo(5, 6)
+    await rebuildProviderCostDaily(7, { now, resolve: flatPricing })
+    expect(await dailyTotal()).toBeCloseTo(5, 6)
   })
 
   it("excludes imported rows from the rebuilt projection", async () => {

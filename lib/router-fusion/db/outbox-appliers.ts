@@ -70,7 +70,11 @@ export function usageRowFromOutbox(row: FusionOutboxRow): SessionUsageRow | null
     at: p.settledAt,
     ...(p.modelId ? { model: p.modelId } : {}),
     ...(p.providerId ? { providerId: p.providerId } : {}),
-    inputTokens: uncached + cacheRead + cacheWrite5m + cacheWrite1h,
+    // The ledger's usage splits the prompt into uncached input and cache tiers.
+    // A usage row's `inputTokens` is the uncached part, the cache tiers beside
+    // it: every reader sums the three as the prompt and prices each at its own
+    // rate, so folding the cache into the input counted it twice.
+    inputTokens: uncached,
     outputTokens: output,
     cacheCreationTokens: cacheWrite5m + cacheWrite1h,
     cacheReadTokens: cacheRead,
@@ -85,6 +89,9 @@ export function usageRowFromOutbox(row: FusionOutboxRow): SessionUsageRow | null
     costSource: "ledger",
     // An estimate is a conservative figure the budget must count, not "unknown".
     costKnown: true,
+    // What the figure rests on: the provider's reported usage for this call,
+    // or, when it reported none, the ledger's conservative estimate.
+    usageBasis: p.costStatus === "actual" ? "provider-reported" : "estimated",
   }
 }
 

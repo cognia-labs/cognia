@@ -924,6 +924,27 @@ export function dispatchAiSdk({
     const emptyCacheUsage = () => ({ read: 0, total: 0, ephemeral5m: 0, ephemeral1h: 0 })
     const accCacheUsage = emptyCacheUsage()
     let currentLegStepCacheUsage = emptyCacheUsage()
+    // Reasoning is reported on the leg total like input and output; the
+    // server-tool counters only on each step's provider block (`usage.raw`),
+    // which the leg total does not aggregate, so they are summed per step.
+    let accReasoningTokens = 0
+    let currentLegStepReasoningTokens = 0
+    const turnServerToolUse: Record<string, number> = {}
+    const reasoningOf = (value: unknown) => {
+      const usage = record(value)
+      const n = usage.reasoningTokens ?? record(usage.outputTokenDetails).reasoningTokens
+      return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0
+    }
+    /**
+     * A step's usage with the provider's own block (`usage.raw`, AI SDK v7)
+     * under it: Anthropic's cache-TTL split and `server_tool_use` exist only
+     * there. The SDK's normalized fields win where both spell a value.
+     */
+    const withProviderUsage = (value: unknown): Record<string, unknown> => {
+      const usage = record(value)
+      const provider = record(usage.raw)
+      return Object.keys(provider).length > 0 ? { ...provider, ...usage } : usage
+    }
     const reportedNumber = (...values: unknown[]) =>
       values.some((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)
     const addCacheUsage = (
@@ -931,6 +952,7 @@ export function dispatchAiSdk({
       value: unknown,
       fallback = emptyCacheUsage()
     ) => {
+      value = withProviderUsage(value)
       const raw = record(value)
       const reported = toLanguageModelUsage(value).inputTokens
       const split = record(raw.cache_creation ?? raw.cacheCreation)
@@ -971,6 +993,13 @@ export function dispatchAiSdk({
         turnLastStepOutputTokens = typeof output === "number" && output > 0 ? output : 0
       }
       if (typeof output === "number" && output > 0) currentLegStepOutputTokens += output
+      currentLegStepReasoningTokens += reasoningOf(usage)
+      for (const [tool, count] of Object.entries(
+        record(record(usage.raw).server_tool_use ?? usage.server_tool_use)
+      )) {
+        if (typeof count === "number" && Number.isFinite(count) && count > 0)
+          turnServerToolUse[tool] = (turnServerToolUse[tool] ?? 0) + count
+      }
       currentLegStepUsage = usage
       addCacheUsage(currentLegStepCacheUsage, usage)
     }
@@ -979,10 +1008,35 @@ export function dispatchAiSdk({
       const outputTokens = accOutputTokens + currentLegStepOutputTokens
       const base = lastUsageForFinish ?? currentLegStepUsage
       if (!base && inputTokens <= 0 && outputTokens <= 0) return undefined
+      const cacheRead = accCacheUsage.read + currentLegStepCacheUsage.read
+      const cacheWrite = accCacheUsage.total + currentLegStepCacheUsage.total
+      const reasoning = accReasoningTokens + currentLegStepReasoningTokens
       return {
         ...(base ?? {}),
-        cacheReadInputTokens: accCacheUsage.read + currentLegStepCacheUsage.read,
-        cacheCreationInputTokens: accCacheUsage.total + currentLegStepCacheUsage.total,
+        // The turn's own totals, never the last leg's or step's: the base's
+        // breakdowns would otherwise describe one call of a many-call turn.
+        // AI SDK `inputTokens` includes both cache tiers; the uncached part is
+        // what the row's `input_tokens` carries (the usage normalizer reads
+        // `inputTokenDetails.noCacheTokens`), so a cached token is priced once.
+        inputTokenDetails: {
+          noCacheTokens: Math.max(0, inputTokens - cacheRead - cacheWrite),
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: cacheWrite,
+        },
+        ...(reasoning > 0
+          ? {
+              reasoningTokens: reasoning,
+              outputTokenDetails: {
+                ...record(record(base).outputTokenDetails),
+                reasoningTokens: reasoning,
+              },
+            }
+          : {}),
+        ...(Object.keys(turnServerToolUse).length > 0
+          ? { server_tool_use: { ...turnServerToolUse } }
+          : {}),
+        cacheReadInputTokens: cacheRead,
+        cacheCreationInputTokens: cacheWrite,
         cache_creation: {
           ephemeral_5m_input_tokens:
             accCacheUsage.ephemeral5m + currentLegStepCacheUsage.ephemeral5m,
@@ -1678,9 +1732,19 @@ export function dispatchAiSdk({
             reason: msg,
           })
           await settleTurnCompaction()
+          // Steps that finished before the error were billed (a tool-call
+          // step, an earlier leg): report their usage on a failed `result`,
+          // as the after-partial-text path does, or the turn books nothing.
+          const billedUsage = finishUsageSnapshot()
+          const failedEvents = billedUsage
+            ? adapter.finish({ usage: billedUsage, startedAt: turnStartedAt, failed: true })
+            : []
+          flushAdapter(failedEvents)
+          const failedResult = failedEvents.find((event) => record(event)?.type === "result")
           emit({
             type: "session_ended",
             sessionId,
+            ...(failedResult ? { result: failedResult } : {}),
             error: terminalErrorMessage(streamError),
             // Forward the real HTTP status + Retry-After from the ai-sdk
             // APICallError so the renderer classifies + cools down off
@@ -1765,6 +1829,8 @@ export function dispatchAiSdk({
           }
           const outTok = usage.outputTokens ?? usage.completionTokens ?? currentLegStepOutputTokens
           if (typeof outTok === "number" && outTok > 0) accOutputTokens += outTok
+          const legReasoning = reasoningOf(usage)
+          accReasoningTokens += legReasoning > 0 ? legReasoning : currentLegStepReasoningTokens
           lastUsageForFinish = usage
           addCacheUsage(accCacheUsage, usage, currentLegStepCacheUsage)
           // The resolved leg usage is authoritative and already includes the
@@ -1772,6 +1838,7 @@ export function dispatchAiSdk({
           // both paths on a normal completion.
           currentLegStepInputTokens = 0
           currentLegStepOutputTokens = 0
+          currentLegStepReasoningTokens = 0
           currentLegLastInputTokens = 0
           currentLegStepUsage = null
           currentLegStepCacheUsage = emptyCacheUsage()

@@ -21,10 +21,23 @@ jest.mock("@/lib/db/provider-cost-daily", () => ({
 jest.mock("@/lib/db/session-usage", () => ({
   pruneSessionUsageOlderThan: (...a: unknown[]) => pruneSessionUsageMock(...a),
 }))
+let installedPricing: (() => unknown) | null = null
+const setPricingMock = jest.fn((source: typeof installedPricing) => {
+  installedPricing = source
+  return () => {
+    installedPricing = null
+  }
+})
 jest.mock("@/lib/usage/usage-ledger", () => ({
   rebuildProviderCostDaily: (...a: unknown[]) => rebuildMock(...a),
   setBudgetMirrorSink: (...a: unknown[]) => setSinkMock(...(a as [typeof installedSink])),
+  setUsagePricingSettingsSource: (...a: unknown[]) =>
+    setPricingMock(...(a as [typeof installedPricing])),
   USAGE_LEDGER_RECONCILE_MARKER: "usage.ledger.reconciled.v218",
+}))
+const settingsState = { settings: { customProviders: [{ id: "acme" }] } as unknown }
+jest.mock("@/stores/settings", () => ({
+  useSettingsStore: { getState: () => settingsState },
 }))
 
 import {
@@ -109,6 +122,13 @@ describe("ProviderCostMirrorInitializer", () => {
     await waitFor(() => expect(installedSink).not.toBeNull())
     unmount()
     expect(installedSink).toBeNull()
+    expect(installedPricing).toBeNull()
+  })
+
+  it("prices ledger rows against the user's own rates (F15)", async () => {
+    render(<ProviderCostMirrorInitializer />)
+    await waitFor(() => expect(installedPricing).not.toBeNull())
+    expect(installedPricing?.()).toBe(settingsState.settings)
   })
 
   it("rebuilds the projection once, then marks it done", async () => {

@@ -12,6 +12,7 @@ import {
   recordImportedUsage,
   recordSurfaceUsage,
   recordResultUsage,
+  resultUsageRow,
   recordTeamUsage,
   recordWorkflowStepUsage,
   externalAgentSurfaceUsage,
@@ -815,16 +816,48 @@ describe("v172 frozen cost + identity capture", () => {
     })
   })
 
-  it("marks a zero-cost turn unknown rather than free", () => {
-    // The non-Anthropic dispatch paths always report 0; treating that as "free"
-    // is what made unpriced spend invisible.
-    return recordResultUsage({
-      sessionId: "s1",
-      messageId: "m-zero",
-      result: resultWith({ input_tokens: 10, output_tokens: 5 }, 0),
-    }).then((row) => {
-      expect(row).toMatchObject({ costSource: "unknown", costKnown: false })
-    })
+  it("leaves a reported zero unfrozen so the ledger prices the tokens (F01)", () => {
+    // The AI SDK result adapters write 0 when the provider reported no cost.
+    // Freezing that as `unknown` kept a priceable turn at $0 in every budget.
+    expect(
+      resultUsageRow({
+        sessionId: "s1",
+        messageId: "m-zero",
+        result: resultWith({ input_tokens: 10, output_tokens: 5 }, 0),
+      })
+    ).not.toHaveProperty("costSource")
+  })
+
+  it("prices an AI SDK turn's tokens at the catalog rate when it reported no cost (F01)", async () => {
+    const { getCostRange, localDayString } = await import("@/lib/db/provider-cost-daily")
+    const at = Date.now()
+    const row = resultUsageRow({
+      sessionId: "s-f01",
+      messageId: "m-f01",
+      model: "gpt-4o",
+      providerId: "openai",
+      result: resultWith({ input_tokens: 1_000_000, output_tokens: 0 }, 0),
+    })!
+    const { commitUsageRow } = await import("@/lib/usage/usage-ledger")
+    const committed = await commitUsageRow(
+      { ...row, at },
+      { resolve: () => ({ promptPer1M: 1, completionPer1M: 2 }) }
+    )
+    expect(committed?.row).toMatchObject({ costUsd: 1, costSource: "derived", costKnown: true })
+    const day = localDayString(at)
+    const [bucket] = await getCostRange(day, day)
+    expect(bucket.totalCostUsd).toBeCloseTo(1, 9)
+  })
+
+  it("keeps the cost-computing runtime's zero as a figure", () => {
+    expect(
+      resultUsageRow({
+        sessionId: "s1",
+        messageId: "m-zero-sdk",
+        costAuthority: true,
+        result: resultWith({ input_tokens: 10, output_tokens: 5 }, 0),
+      })
+    ).toMatchObject({ costUsd: 0, costSource: "sdk", costKnown: true })
   })
 
   it("persists the cache-TTL split when the provider reports it", () => {

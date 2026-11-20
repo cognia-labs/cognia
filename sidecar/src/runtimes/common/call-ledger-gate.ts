@@ -55,7 +55,12 @@ export interface RawUsage {
   outputTokens: number
   cacheReadTokens?: number
   cacheWriteTokens?: number
+  /** Cache writes split by TTL, when the provider reports it (Anthropic). */
+  cacheWrite5mTokens?: number
+  cacheWrite1hTokens?: number
   reasoningTokens?: number
+  /** Per-call charges the provider counted, e.g. `{ web_search: 3 }`. */
+  perCall?: Record<string, number>
 }
 export interface CallReport {
   attemptId?: string
@@ -151,12 +156,29 @@ export function rawUsageFromAiSdk(value: unknown): RawUsage | null {
     record(usage.outputTokenDetails).reasoningTokens,
     usage.reasoningTokens
   )
+  // AI SDK v7 keeps the provider's own usage block under `raw`. Only there do
+  // Anthropic's cache-TTL split and server-tool counters survive, and both are
+  // billed: a 1-hour write at 2x input, a web search per request.
+  const provider = record(usage.raw)
+  const split = record(provider.cache_creation)
+  const split5m = firstNumber(split.ephemeral_5m_input_tokens) ?? 0
+  const split1h = firstNumber(split.ephemeral_1h_input_tokens) ?? 0
+  const perCall: Record<string, number> = {}
+  for (const [tool, count] of Object.entries(record(provider.server_tool_use))) {
+    if (typeof count === "number" && Number.isFinite(count) && count > 0)
+      perCall[tool.replace(/_requests$/, "")] = count
+  }
   return {
     inputTokens: input ?? 0,
     outputTokens: output ?? 0,
     ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWriteTokens: cacheWrite } : {}),
+    ...(split5m > 0 || split1h > 0
+      ? { cacheWrite5mTokens: split5m, cacheWrite1hTokens: split1h }
+      : cacheWrite !== undefined
+        ? { cacheWriteTokens: cacheWrite }
+        : {}),
     ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
+    ...(Object.keys(perCall).length > 0 ? { perCall } : {}),
   }
 }
 

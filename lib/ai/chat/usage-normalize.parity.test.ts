@@ -84,6 +84,18 @@ const USAGE_MATRIX: Array<[string, Record<string, unknown>]> = [
       reasoningTokens: 30,
     },
   ],
+  [
+    "ai-sdk v7 inclusive input with its uncached part",
+    {
+      inputTokens: 1_000,
+      inputTokenDetails: { noCacheTokens: 650, cacheReadTokens: 300, cacheWriteTokens: 50 },
+      outputTokens: 40,
+    },
+  ],
+  [
+    "ai-sdk v7 inclusive input without an uncached figure",
+    { inputTokens: 1_000, inputTokenDetails: { cacheReadTokens: 300, cacheWriteTokens: 50 } },
+  ],
   ["deepseek raw cache hit", { promptTokens: 900, prompt_cache_hit_tokens: 640 }],
   ["deepseek camel cache hit", { promptTokens: 900, promptCacheHitTokens: 640 }],
   ["multi-leg context window", { promptTokens: 9000, contextInputTokens: 3000 }],

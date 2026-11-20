@@ -127,6 +127,7 @@ import {
   dispatchOnAssistantMessage as dispatchPluginAssistantMessage,
 } from "@/lib/plugin/messaging/agent-hook-dispatch"
 import { isStandaloneChatMode } from "@/lib/runtime/standalone-mode"
+import { runtimeFromLegacy } from "@/lib/ai/agent/execution/legacy-mapping"
 import type {
   ClaudeEvent,
   PendingApproval,
@@ -1671,12 +1672,20 @@ export async function handleEvent(
         // and run it knows; a second row here would count the spend twice.
         if (lastAssistant && !isTurnUsageClaimed(sessionId, frame.turnId)) {
           const session = await getSession(sessionId).catch(() => undefined)
+          const sentOptions = lastSendForSpan?.options
           await recordResultUsage({
             sessionId,
             messageId: lastAssistant.id,
             characterId: session?.characterId,
-            model: lastSendForSpan?.options.model ?? session?.model,
-            providerId: lastSendForSpan?.options.provider,
+            model: sentOptions?.model ?? session?.model,
+            providerId: sentOptions?.provider,
+            // Only the Claude Agent SDK computes a turn's cost itself, so only
+            // its zero is a figure. The browser engine is the AI SDK mapper
+            // whatever the provider.
+            costAuthority:
+              !isStandaloneChatMode() &&
+              (sentOptions?.execution?.runtimeAdapter ??
+                runtimeFromLegacy({ provider: sentOptions?.provider })) === "claude-agent-sdk",
             // Per-workspace spend (ADR-0204 project budgets) sums on this.
             ...(session?.projectId ? { projectId: session.projectId } : {}),
             result: sdkResult,

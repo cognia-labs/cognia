@@ -18,7 +18,7 @@
 
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import { resolveModelPricingUsd } from "@/lib/usage/pricing"
-import { effectiveCostUsdDetailed, type PricingResolver } from "@/lib/usage/session-analytics"
+import { priceUsageRow, type PricingResolver } from "@/lib/usage/session-analytics"
 import type { ModelPricing } from "@cognia/provider-types/provider"
 import {
   deploymentModelPricingSchema,
@@ -67,16 +67,14 @@ function pricedAt(
   pricing: Partial<ModelPricing>,
   costSource: "custom" | "derived"
 ): SessionUsageRow {
-  // The same token arithmetic every reader uses, against this one price.
-  const { cost } = effectiveCostUsdDetailed(
-    { ...row, costUsd: 0, costSource: undefined, costKnown: undefined },
-    () => pricing
-  )
+  // The same row arithmetic the ledger freezes with, against this one price.
+  // A billed unit the price has no rate for leaves the cost a lower bound.
+  const { cost, known, rateMultiplier } = priceUsageRow(row, () => pricing)
   return {
     ...row,
     costUsd: cost,
-    costKnown: true,
-    costSource,
+    costKnown: known,
+    costSource: known ? costSource : "unknown",
     priceSnapshot: {
       ...(pricing.promptPer1M !== undefined ? { promptPer1M: pricing.promptPer1M } : {}),
       ...(pricing.completionPer1M !== undefined
@@ -88,6 +86,7 @@ function pricedAt(
       ...(pricing.cacheCreationPer1M !== undefined
         ? { cacheCreationPer1M: pricing.cacheCreationPer1M }
         : {}),
+      ...(rateMultiplier !== 1 ? { rateMultiplier } : {}),
       currency: "USD",
     },
   }

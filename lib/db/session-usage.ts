@@ -149,6 +149,13 @@ export interface ResultUsageInput {
   inferenceGeo?: "us" | "global"
   batch?: boolean
   /**
+   * True when the runtime that produced `result` computes the turn's cost
+   * itself (the Claude Agent SDK), so a reported zero is a figure. The AI SDK
+   * result adapters write zero when the provider reported no cost, and that
+   * row is priced by the ledger instead of being frozen as unknown.
+   */
+  costAuthority?: boolean
+  /**
    * Router + Fusion (ADR-0188): the ledger's booking for this turn. The ledger
    * is the one writer of a ledgered turn's money, so its figure replaces the
    * SDK's. Absent for every other turn.
@@ -164,7 +171,21 @@ export function resultUsageRow(args: ResultUsageInput): SessionUsageRow | null {
   // usage (it ended on a refusal before the model answered).
   const usage = extractUsage(result) ?? (ledger ? {} : null)
   if (!usage) return null
-  const costUsd = ledger ? Math.max(0, ledger.costUsd) : (usage.totalCostUsd ?? 0)
+  const reported = usage.totalCostUsd
+  const costUsd = ledger
+    ? Math.max(0, ledger.costUsd)
+    : typeof reported === "number" && Number.isFinite(reported) && reported > 0
+      ? reported
+      : 0
+  // Who the figure is: the ledger's booking, the provider's positive amount,
+  // or the cost-computing runtime's own zero. Anything else is left unfrozen
+  // so the ledger prices the tokens (`freezeUsageCost`); freezing it as
+  // `unknown` here kept a priceable turn at $0 in every budget.
+  const frozen: Pick<SessionUsageRow, "costSource" | "costKnown"> | null = ledger
+    ? { costSource: "ledger", costKnown: true }
+    : costUsd > 0 || (args.costAuthority === true && reported === 0)
+      ? { costSource: "sdk", costKnown: true }
+      : null
   const row: SessionUsageRow = {
     messageId,
     sessionId,
@@ -187,13 +208,10 @@ export function resultUsageRow(args: ResultUsageInput): SessionUsageRow | null {
         ? usage.contextInputTokens
         : undefined,
     surface: "chat",
-    // Frozen at write time. A positive figure came from the provider and is
-    // authoritative; a zero one means this path reported no cost, and the
-    // reader must price it rather than treating 0 as "free". Nothing here is
-    // ever recomputed against a later price table. A ledger figure is known by
-    // construction, including a booked zero (a subscription or free call).
-    costSource: ledger ? "ledger" : costUsd > 0 ? "sdk" : "unknown",
-    costKnown: ledger ? true : costUsd > 0,
+    // Frozen at write time, here or by the ledger, and never recomputed
+    // against a later price table. A ledger figure is known by construction,
+    // including a booked zero (a subscription or free call).
+    ...(frozen ?? {}),
     ...carryFrozenFields({
       cacheCreation5mTokens: usage.cacheCreation5mInputTokens,
       cacheCreation1hTokens: usage.cacheCreation1hInputTokens,

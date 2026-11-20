@@ -38,7 +38,11 @@ export interface RawProviderUsage {
   promptCacheHitTokens?: number
   reasoningTokens?: number
   reasoning_tokens?: number
-  inputTokenDetails?: { cacheWriteTokens?: number; cacheReadTokens?: number }
+  inputTokenDetails?: {
+    noCacheTokens?: number
+    cacheWriteTokens?: number
+    cacheReadTokens?: number
+  }
   outputTokenDetails?: { reasoningTokens?: number }
   server_tool_use?: Record<string, number>
   serverToolUse?: Record<string, number>
@@ -118,13 +122,37 @@ export function normalizeServerToolUse(
   return Object.keys(out).length > 0 ? out : undefined
 }
 
+/**
+ * The prompt tokens NOT served from or written to the cache: what a `result`
+ * block's `input_tokens` carries, matching Anthropic's own field.
+ *
+ * AI SDK v7's `LanguageModelUsage` (recognized by its `inputTokenDetails`)
+ * spells `inputTokens` as the WHOLE prompt, cache reads and writes included,
+ * with `noCacheTokens` beside it. Every pricing and cache-hit reader adds the
+ * cache tiers to `input_tokens` and prices each at its own rate, so passing the
+ * inclusive figure through billed every cached token twice.
+ */
+export function uncachedInputTokens(usage: RawProviderUsage | undefined): number {
+  const u = usage ?? {}
+  const details = u.inputTokenDetails
+  if (details == null || typeof details !== "object") {
+    return firstNumber(u.promptTokens, u.inputTokens, u.input_tokens)
+  }
+  const noCache = details.noCacheTokens
+  if (typeof noCache === "number" && Number.isFinite(noCache) && noCache >= 0) return noCache
+  const total = firstNumber(u.inputTokens, u.promptTokens)
+  const read = firstNumber(details.cacheReadTokens, u.cacheReadInputTokens)
+  const write = firstNumber(details.cacheWriteTokens, u.cacheCreationInputTokens)
+  return Math.max(0, total - read - write)
+}
+
 /** Normalize any provider usage block into the renderer-facing shape. */
 export function normalizeUsageBlock(usage: RawProviderUsage | undefined): NormalizedUsageBlock {
   const u = usage ?? {}
   const cacheCreation = normalizeCacheCreation(u)
   const serverToolUse = normalizeServerToolUse(u)
   return {
-    input_tokens: firstNumber(u.promptTokens, u.inputTokens, u.input_tokens),
+    input_tokens: uncachedInputTokens(u),
     output_tokens: firstNumber(u.completionTokens, u.outputTokens, u.output_tokens),
     ...(typeof u.contextInputTokens === "number"
       ? { context_input_tokens: u.contextInputTokens }

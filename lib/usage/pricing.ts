@@ -313,6 +313,40 @@ export interface CostTokens {
  */
 export interface CostUnits extends CostTokens, CostUnitQuantities {}
 
+/**
+ * Request-level modifiers a provider prices on top of the model's rate card.
+ * Anthropic publishes all three (platform.claude.com/docs/en/about-claude/pricing,
+ * checked 2026-11-20): every published fast-mode price is 2× the model's
+ * standard price in every token category, US-only inference (`inference_geo:
+ * "us"`) is 1.1× in every category, and the Batch API is 50% of standard in
+ * every category. Fast mode and data residency stack; fast mode is not offered
+ * on the Batch API.
+ */
+export interface PricingModifiers {
+  speed?: "fast" | "normal"
+  inferenceGeo?: "us" | "global"
+  batch?: boolean
+}
+
+/** Fast-mode premium over the standard rate card (Anthropic, all fast-mode models). */
+export const FAST_MODE_RATE_MULT = 2
+/** US-only inference premium over global routing (Anthropic, Claude 4.6+). */
+export const US_INFERENCE_RATE_MULT = 1.1
+/** Batch API discount when the rate card carries no explicit batch rate. */
+export const BATCH_RATE_MULT = 0.5
+
+/**
+ * The multiplier the request-level modifiers put on every token category
+ * except the batch discount, which {@link costFromTokensUsd} takes from the
+ * rate card's explicit batch rates when it has them. 1 when none apply.
+ */
+export function pricingModifierMultiplier(modifiers: PricingModifiers | undefined): number {
+  let multiplier = 1
+  if (modifiers?.speed === "fast" && modifiers.batch !== true) multiplier *= FAST_MODE_RATE_MULT
+  if (modifiers?.inferenceGeo === "us") multiplier *= US_INFERENCE_RATE_MULT
+  return multiplier
+}
+
 /** Costing knobs that depend on state the pricing module deliberately lacks. */
 export interface CostOptions {
   /**
@@ -322,6 +356,59 @@ export interface CostOptions {
    * than over-charges a user whose consumption is not being tracked yet.
    */
   freeContainerHoursRemaining?: number
+  /** Fast mode, data residency and batch pricing for this request. */
+  modifiers?: PricingModifiers
+}
+
+/**
+ * The billed non-token units of a turn that `pricing` has no rate for, by
+ * unit name (`web_search`, `pages`, …). A turn with any of these has a cost
+ * that is only a lower bound: the units were charged, at a price nobody here
+ * knows.
+ */
+export function unpricedUnits(
+  units: CostUnitQuantities,
+  pricing: Partial<ModelPricing> | null
+): string[] {
+  const missing: string[] = []
+  const billed = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0
+  for (const [tool, count] of Object.entries(units.requests ?? {})) {
+    if (billed(count) && typeof pricing?.perRequestUsd?.[tool] !== "number") missing.push(tool)
+  }
+  if (billed(units.pages) && typeof pricing?.perPageUsd !== "number") missing.push("pages")
+  if (billed(units.characters) && typeof pricing?.perCharUsd !== "number")
+    missing.push("characters")
+  if (billed(units.containerHours) && typeof pricing?.perContainerHourUsd !== "number")
+    missing.push("containerHours")
+  return missing
+}
+
+/**
+ * The token fields {@link costFromTokensUsd} prices for a cache-creation total
+ * that may also carry its TTL split.
+ *
+ * A stored usage row keeps `cacheCreationTokens` as the WHOLE cache write and
+ * the 5-minute / 1-hour split beside it as parts of that whole. The costing
+ * input instead wants the parts and the remainder whose TTL is unknown, so
+ * passing the row's total next to its split billed every split token twice.
+ */
+export function cacheCreationCostTokens(
+  total: number | undefined,
+  ephemeral5m: number | undefined,
+  ephemeral1h: number | undefined
+): Pick<
+  CostTokens,
+  "cacheCreationInputTokens" | "cacheCreation5mInputTokens" | "cacheCreation1hInputTokens"
+> {
+  const finite = (n: number | undefined) =>
+    typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0
+  const split5m = finite(ephemeral5m)
+  const split1h = finite(ephemeral1h)
+  return {
+    cacheCreationInputTokens: Math.max(0, finite(total) - split5m - split1h),
+    cacheCreation5mInputTokens: split5m,
+    cacheCreation1hInputTokens: split1h,
+  }
 }
 
 /** Sum the USD charge for the non-token units of a turn. */
@@ -378,12 +465,26 @@ export function costFromTokensUsd(
   opts: CostOptions = {}
 ): number {
   if (!pricing) return 0
-  const inRate = pricing.promptPer1M || 0
-  const outRate = pricing.completionPer1M || 0
-  const readRate = pricing.cachedInputPer1M ?? inRate * DEFAULT_CACHE_READ_MULT
-  const write5mRate = pricing.cacheCreationPer1M ?? inRate * DEFAULT_CACHE_WRITE_5M_MULT
+  const standardIn = pricing.promptPer1M || 0
+  const standardOut = pricing.completionPer1M || 0
+  const batch = opts.modifiers?.batch === true
+  // A batch request takes the rate card's own batch rates when it publishes
+  // them, else the published flat discount. Cache tiers follow the input rate
+  // they are multiples of, so they carry the discount through `scale`.
+  const batchIn = batch ? (pricing.batchInputPer1M ?? standardIn * BATCH_RATE_MULT) : standardIn
+  const batchOut = batch ? (pricing.batchOutputPer1M ?? standardOut * BATCH_RATE_MULT) : standardOut
+  const cacheScale = batch ? BATCH_RATE_MULT : 1
+  const scale = pricingModifierMultiplier(opts.modifiers)
+  const inRate = batchIn * scale
+  const outRate = batchOut * scale
+  const readRate =
+    (pricing.cachedInputPer1M ?? standardIn * DEFAULT_CACHE_READ_MULT) * cacheScale * scale
+  const write5mRate =
+    (pricing.cacheCreationPer1M ?? standardIn * DEFAULT_CACHE_WRITE_5M_MULT) * cacheScale * scale
   const write1hRate =
-    inRate > 0 ? inRate * DEFAULT_CACHE_WRITE_1H_MULT : write5mRate * CACHE_WRITE_1H_OVER_5M
+    standardIn > 0
+      ? standardIn * DEFAULT_CACHE_WRITE_1H_MULT * cacheScale * scale
+      : write5mRate * CACHE_WRITE_1H_OVER_5M
   const units = unitCostUsd(tokens, pricing, opts)
   // An all-zero token rate table still bills its non-token units: a $0-token
   // model that charges $10/1k searches is real, and returning 0 here would hide
@@ -416,8 +517,10 @@ export function priceTokensForModel(
   return {
     cost: costFromTokensUsd(tokens, pricing, {
       freeContainerHoursRemaining: opts?.freeContainerHoursRemaining,
+      ...(opts?.modifiers ? { modifiers: opts.modifiers } : {}),
     }),
-    known: pricing !== null,
+    // A billed unit with no rate leaves the figure a lower bound, not a price.
+    known: pricing !== null && unpricedUnits(tokens, pricing).length === 0,
   }
 }
 

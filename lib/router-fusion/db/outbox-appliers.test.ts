@@ -17,6 +17,7 @@ import { createSession, getSession } from "@/lib/db/sessions"
 
 import { __resetFusionStoreForTesting, currentFusionStore } from "../chat/store-provider"
 import { __resetFusionDbForTesting } from "./fusion-db"
+import { encodeRunInput } from "./run-input"
 import { drainFusionOutbox, type OutboxContext } from "./outbox"
 import {
   accountDatabaseAppliers,
@@ -81,13 +82,15 @@ describe("account database outbox appliers", () => {
       sessionId: "rf:run-1",
       providerId: "openai",
       model: "gpt-5-mini",
-      inputTokens: 1000,
+      // F03: the uncached part; the 100 cache reads sit beside it, once.
+      inputTokens: 900,
       cacheReadTokens: 100,
       outputTokens: 300,
       reasoningTokens: 50,
       costUsd: 0.012345,
       costSource: "ledger",
       costKnown: true,
+      usageBasis: "provider-reported",
       surface: "memory",
     })
     // Reasoning reported beside output is added to it, never double counted.
@@ -95,6 +98,25 @@ describe("account database outbox appliers", () => {
       usage: { output_tokens: 300, reasoning_tokens: 50, reasoning_included_in_output: false },
     })
     expect(usageRowFromOutbox(beside)?.outputTokens).toBe(350)
+  })
+
+  it("keeps the 1,300-token prompt a 1,300-token prompt, and a 10% cache hit 10% (F03)", async () => {
+    const { summarizeSpend } = await import("@/lib/usage/usage-report")
+    const row = usageRowFromOutbox(usageEffect())!
+    const totals = summarizeSpend([row])
+    expect(totals.inputTokens + totals.cacheReadTokens + totals.cacheCreationTokens).toBe(1000)
+    expect(totals.inputTokens + totals.cacheReadTokens + totals.outputTokens).toBe(1300)
+    expect(totals.cacheHitRate).toBeCloseTo(0.1, 6)
+  })
+
+  it("says an estimated booking rests on an estimate, not on reported usage (F15)", () => {
+    expect(usageRowFromOutbox(usageEffect({ costStatus: "estimated", usage: null }))).toMatchObject(
+      {
+        costSource: "ledger",
+        costKnown: true,
+        usageBasis: "estimated",
+      }
+    )
   })
 
   it("[ACC:ISO-05] writes the usage row once however often the effect is replayed", async () => {
@@ -212,7 +234,11 @@ describe("account database outbox appliers", () => {
     const artifacts: OutboxContext = {
       readArtifact: async (id) =>
         id === "input"
-          ? JSON.stringify([{ role: "user", content: "what changed in 2025?" }])
+          ? encodeRunInput({
+              messages: [{ role: "user", content: "what changed in 2025?" }],
+              allowDegraded: false,
+              jsonSchema: null,
+            })
           : id === "answer"
             ? "Tariffs rose to 4%."
             : null,

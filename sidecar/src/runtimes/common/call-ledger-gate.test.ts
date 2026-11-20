@@ -185,6 +185,29 @@ test("reports results with usage semantics and drains on close", async () => {
   })
 })
 
+test("keeps the provider's cache-TTL split and server-tool counts for the ledger (F29)", () => {
+  // AI SDK v7 leaves Anthropic's own block under `raw`; both are billed.
+  assert.deepEqual(
+    rawUsageFromAiSdk({
+      inputTokens: 130,
+      outputTokens: 20,
+      inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 30 },
+      raw: {
+        cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 20 },
+        server_tool_use: { web_search_requests: 2 },
+      },
+    }),
+    {
+      inputTokens: 130,
+      outputTokens: 20,
+      cacheReadTokens: 0,
+      cacheWrite5mTokens: 10,
+      cacheWrite1hTokens: 20,
+      perCall: { web_search: 2 },
+    }
+  )
+})
+
 test("normalizes AI SDK usage without inventing unreported fields", () => {
   assert.equal(rawUsageFromAiSdk(null), null)
   assert.equal(rawUsageFromAiSdk({}), null)

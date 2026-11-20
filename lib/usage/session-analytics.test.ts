@@ -524,7 +524,7 @@ describe("analyzeUsageContributors", () => {
 describe("export", () => {
   it("emits a header-only CSV for no rows", () => {
     expect(toUsageCsv([])).toBe(
-      "messageId,sessionId,characterId,surface,at,model,inputTokens,outputTokens,cacheCreationTokens,cacheReadTokens,reasoningTokens,contextInputTokens,costUsd,effectiveCostUsd,durationMs"
+      "messageId,sessionId,characterId,surface,at,providerId,model,projectId,runId,attemptId,inputTokens,outputTokens,cacheCreationTokens,cacheReadTokens,reasoningTokens,contextInputTokens,costUsd,effectiveCostUsd,costKnown,costSource,usageBasis,imported,sourceId,durationMs"
     )
   })
 
@@ -543,14 +543,77 @@ describe("export", () => {
       [row({ model: "test-model", costUsd: 0, inputTokens: 1_000_000, outputTokens: 0 })],
       priceFor
     )
+    const header = csv.split("\n")[0].split(",")
     const cells = csv.split("\n")[1].split(",")
-    expect(cells[12]).toBe("0") // costUsd (raw)
-    expect(Number(cells[13])).toBeCloseTo(3) // effectiveCostUsd (1M input @ $3/1M)
+    expect(cells[header.indexOf("costUsd")]).toBe("0") // raw
+    expect(Number(cells[header.indexOf("effectiveCostUsd")])).toBeCloseTo(3) // 1M input @ $3/1M
+    expect(cells[header.indexOf("costKnown")]).toBe("true")
+  })
+
+  it("tells an unknown cost from a confirmed free one, with source and attribution (F09)", () => {
+    const csv = toUsageCsv([
+      row({
+        messageId: "free",
+        costUsd: 0,
+        costSource: "sdk",
+        costKnown: true,
+        providerId: "local",
+        projectId: "p1",
+        runId: "r1",
+        attemptId: "a1",
+      }),
+      row({ messageId: "unknown", costUsd: 0, costSource: "unknown", costKnown: false }),
+      row({
+        messageId: "imported",
+        costUsd: 1,
+        costSource: "sdk",
+        costKnown: true,
+        imported: true,
+        sourceId: "codex",
+        usageBasis: "derived",
+      }),
+    ])
+    const [header, ...lines] = csv.split("\n").map((line) => line.split(","))
+    const cell = (line: string[], col: string) => line[header.indexOf(col)]
+    const [free, unknown, imported] = lines
+    expect([cell(free, "effectiveCostUsd"), cell(free, "costKnown")]).toEqual(["0", "true"])
+    expect([cell(unknown, "effectiveCostUsd"), cell(unknown, "costKnown")]).toEqual(["0", "false"])
+    expect(cell(unknown, "costSource")).toBe("unknown")
+    expect(["providerId", "projectId", "runId", "attemptId"].map((col) => cell(free, col))).toEqual(
+      ["local", "p1", "r1", "a1"]
+    )
+    expect([
+      cell(imported, "imported"),
+      cell(imported, "sourceId"),
+      cell(imported, "usageBasis"),
+    ]).toEqual(["true", "codex", "derived"])
   })
 
   it("carries the workflow surface through CSV", () => {
     const csv = toUsageCsv([row({ surface: "workflow" })])
     expect(csv.split("\n")[1].split(",")[3]).toBe("workflow")
+  })
+
+  it("prices a legacy row's cache write and its TTL split once (F04)", () => {
+    const out = effectiveCostUsdDetailed(
+      row({
+        model: "test-model",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        cacheCreationTokens: 300_000,
+        cacheCreation5mTokens: 100_000,
+        cacheCreation1hTokens: 200_000,
+      }),
+      () => ({ promptPer1M: 1, completionPer1M: 1 })
+    )
+    expect(out).toEqual({ cost: expect.closeTo(0.525, 9), known: true, source: "priced" })
+  })
+
+  it("reads a frozen unknown cost as the lower bound it holds", () => {
+    expect(
+      effectiveCostUsdDetailed(row({ costUsd: 0.4, costSource: "unknown", costKnown: false }))
+    ).toEqual({ cost: 0.4, known: false, source: "unknown" })
   })
 
   it("augments JSON rows with surface + effectiveCostUsd", () => {

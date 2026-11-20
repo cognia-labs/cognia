@@ -25,8 +25,12 @@ import type { ModelPricing } from "@cognia/provider-types/provider"
 import {
   DEFAULT_CACHE_READ_MULT,
   DEFAULT_CACHE_WRITE_5M_MULT,
+  cacheCreationCostTokens,
   costFromTokensUsd,
+  pricingModifierMultiplier,
   resolveModelPricingUsd,
+  unpricedUnits,
+  type PricingModifiers,
 } from "@/lib/usage/pricing"
 import type {
   ModelUsageRow,
@@ -101,37 +105,73 @@ export function effectiveCostUsdDetailed(
   resolve: PricingResolver = resolveModelPricingUsd
 ): EffectiveCost {
   if (row.costSource !== undefined) {
-    // `unknown` and `backfilled` both mean "this 0 is not a price".
+    // `unknown` and `backfilled` mean "not a settled price". The stored figure
+    // is then what was priced so far: 0 when nothing was, a lower bound when a
+    // billed unit had no rate (ADR-0253 §10).
     const known = row.costKnown === true
     const source: CostSource = row.costSource === "sdk" ? "sdk" : known ? "priced" : "unknown"
-    return { cost: known ? row.costUsd : 0, known, source }
+    const stored = Number.isFinite(row.costUsd) && row.costUsd > 0 ? row.costUsd : 0
+    return { cost: stored, known, source }
   }
 
   if (row.costUsd > 0) return { cost: row.costUsd, known: true, source: "sdk" }
+  const priced = priceUsageRow(row, resolve)
+  if (priced.pricing === null) return { cost: 0, known: false, source: "unknown" }
+  return { cost: priced.cost, known: priced.known, source: priced.known ? "priced" : "unknown" }
+}
+
+/** What {@link priceUsageRow} found for one row. */
+export interface PricedUsageRow {
+  /** USD at the resolved rates; a lower bound when `known` is false. */
+  cost: number
+  /** False when no rate was found, or a billed unit had none. */
+  known: boolean
+  /** The rate card used, or `null` when no pricing layer knew the model. */
+  pricing: Partial<ModelPricing> | null
+  /** The request-level multiplier applied (fast mode, data residency). */
+  rateMultiplier: number
+}
+
+/**
+ * Price one row's billable footprint at `resolve`'s rates: tokens (the cache
+ * write split into its TTL tiers exactly once), non-token units, and the row's
+ * request-level modifiers. The one row-pricing path, shared by the ledger's
+ * freeze and the legacy-row reader so they cannot price a row two ways.
+ */
+export function priceUsageRow(
+  row: SessionUsageRow,
+  resolve: PricingResolver = resolveModelPricingUsd
+): PricedUsageRow {
   const pricing = resolve(row.providerId, row.model)
-  if (pricing === null) return { cost: 0, known: false, source: "unknown" }
-  return {
-    cost: costFromTokensUsd(
-      {
-        inputTokens: row.inputTokens,
-        outputTokens: row.outputTokens,
-        cacheReadInputTokens: row.cacheReadTokens,
-        // Legacy rows never carry the TTL split, but pass it when present so a
-        // row written between the schema bump and full write-site rollout is
-        // still priced with the correct 1-hour rate.
-        cacheCreationInputTokens: row.cacheCreationTokens,
-        cacheCreation5mInputTokens: row.cacheCreation5mTokens,
-        cacheCreation1hInputTokens: row.cacheCreation1hTokens,
-        requests: row.unitBreakdown?.requests,
-        pages: row.unitBreakdown?.pages,
-        characters: row.unitBreakdown?.characters,
-        containerHours: row.unitBreakdown?.containerHours,
-      },
-      pricing
-    ),
-    known: true,
-    source: "priced",
+  const modifiers: PricingModifiers = {
+    ...(row.speed ? { speed: row.speed } : {}),
+    ...(row.inferenceGeo ? { inferenceGeo: row.inferenceGeo } : {}),
+    ...(row.batch === true ? { batch: true } : {}),
   }
+  const rateMultiplier = pricingModifierMultiplier(modifiers)
+  if (pricing === null) return { cost: 0, known: false, pricing: null, rateMultiplier }
+  const units = {
+    requests: row.unitBreakdown?.requests,
+    pages: row.unitBreakdown?.pages,
+    characters: row.unitBreakdown?.characters,
+    containerHours: row.unitBreakdown?.containerHours,
+  }
+  const cost = costFromTokensUsd(
+    {
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      cacheReadInputTokens: row.cacheReadTokens,
+      ...cacheCreationCostTokens(
+        row.cacheCreationTokens,
+        row.cacheCreation5mTokens,
+        row.cacheCreation1hTokens
+      ),
+      ...units,
+    },
+    pricing,
+    { modifiers }
+  )
+  return { cost, known: unpricedUnits(units, pricing).length === 0, pricing, rateMultiplier }
 }
 
 /**
@@ -647,7 +687,11 @@ const CSV_COLUMNS = [
   "characterId",
   "surface",
   "at",
+  "providerId",
   "model",
+  "projectId",
+  "runId",
+  "attemptId",
   "inputTokens",
   "outputTokens",
   "cacheCreationTokens",
@@ -658,6 +702,14 @@ const CSV_COLUMNS = [
   // Cost actually charged: the SDK figure when present, else priced from the
   // model's tokens. Without this column non-Anthropic rows export as $0.
   "effectiveCostUsd",
+  // Whether `effectiveCostUsd` is a price. `false` makes it a lower bound (0
+  // when nothing was priced), which a spreadsheet must not read as free.
+  "costKnown",
+  "costSource",
+  "usageBasis",
+  // Spend paid on another machine or by another tool, and which source.
+  "imported",
+  "sourceId",
   "durationMs",
 ] as const
 
@@ -671,10 +723,22 @@ function csvEscape(value: unknown): string {
 function exportFields(
   r: SessionUsageRow,
   resolve: PricingResolver
-): { surface: string; effectiveCostUsd: number } {
+): {
+  surface: string
+  effectiveCostUsd: number
+  costKnown: boolean
+  costSource: string
+  imported: boolean
+} {
+  const cost = effectiveCostUsdDetailed(r, resolve)
   return {
     surface: r.surface ?? "chat",
-    effectiveCostUsd: effectiveCostUsd(r, resolve),
+    effectiveCostUsd: cost.cost,
+    costKnown: cost.known,
+    // The frozen provenance when the row has one; a legacy row says how it
+    // was read now.
+    costSource: r.costSource ?? cost.source,
+    imported: r.imported === true,
   }
 }
 

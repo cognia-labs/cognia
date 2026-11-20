@@ -32,46 +32,26 @@ export async function extract(input: OcrInput, deps: ExtractDeps): Promise<OcrRe
     swallowUsageWrite(
       recordSurfaceUsage({
         surface: "ocr",
-        // Same provider + languages + output is the same billable extraction,
-        // so a re-run that missed the cache overwrites instead of double-billing.
-        operationId: ocrOperationId(result),
+        // One row per provider call: a cache miss that reads the same document
+        // again was billed again, so keying the row on the produced text (as
+        // this did) folded two paid extractions into one.
+        operationId: `${result.providerId}:${crypto.randomUUID()}`,
         scopeId: result.providerId,
         usage: {
           providerId: result.providerId,
+          // An OCR service sells one product, so it is its own model: the
+          // `[day, provider, model]` budget rollup needs both to count it.
+          model: result.providerId,
           durationMs: result.durationMs,
-          // The provider's own USD projection when it made one. Absent means
-          // unpriced, NOT free — `costSource` says which.
+          // The provider's own USD projection when it made one. Absent, the
+          // ledger prices the pages from the catalog or leaves them unpriced.
           ...(typeof result.costEstimate?.amount === "number"
             ? { costUsd: result.costEstimate.amount, costSource: "sdk", costKnown: true }
-            : { costSource: "unknown", costKnown: false }),
+            : {}),
           unitBreakdown: { pages: result.pages.length },
         },
       })
     )
   }
   return result
-}
-
-/**
- * Stable id for one extraction.
- *
- * `extract` does not return the file digest it computed internally, so the id
- * is derived from what the result does expose: the provider, the language set,
- * the page count, and a digest of the produced text. Two runs over the same
- * document with the same settings produce the same id, which is exactly the
- * idempotency the billing table needs.
- */
-function ocrOperationId(result: OcrResult): string {
-  const digest = fnv1a(`${result.combinedText}`)
-  return `${result.providerId}:${result.languages.join("+")}:${result.pages.length}:${digest}`
-}
-
-/** 32-bit FNV-1a. An opaque correlation ref, not a security digest. */
-function fnv1a(value: string): string {
-  let hash = 0x811c9dc5
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-  return hash.toString(16).padStart(8, "0")
 }

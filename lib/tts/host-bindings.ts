@@ -40,7 +40,7 @@ const FREE_TTS_PROVIDERS: ReadonlySet<TTSProvider> = new Set<TTSProvider>([
 let synthesisCounter = 0
 
 /** Record one provider synthesis as a usage row; quantity only, priced elsewhere. */
-function meterSynthesis({ provider, characters, requestId }: TtsSynthesisRecord): void {
+function meterSynthesis({ provider, characters, requestId, model }: TtsSynthesisRecord): void {
   if (characters <= 0 || FREE_TTS_PROVIDERS.has(provider)) return
   synthesisCounter += 1
   swallowUsageWrite(
@@ -52,11 +52,13 @@ function meterSynthesis({ provider, characters, requestId }: TtsSynthesisRecord)
       scopeId: provider,
       usage: {
         providerId: provider,
+        // The provider's model when it names one, else the provider itself:
+        // the `[day, provider, model]` budget rollup needs both to count it.
+        model: model ?? provider,
         unitBreakdown: { characters },
         // Per-character rates live in the pricing catalog; this layer records
-        // the quantity and lets the one pricing authority decide the cost.
-        costSource: "unknown",
-        costKnown: false,
+        // the quantity and leaves the cost unfrozen, so the ledger prices it
+        // (or marks it unpriced) instead of this freezing it as unknown.
       },
     })
   )

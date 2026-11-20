@@ -57,6 +57,8 @@ export interface TtsSynthesisRecord {
   characters: number
   /** The orchestrator request the generation belonged to. */
   requestId: string
+  /** The provider's model that synthesized it, when the provider has one. */
+  model?: string
 }
 
 let host: TtsHost = {}

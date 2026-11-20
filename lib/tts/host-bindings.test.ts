@@ -208,13 +208,28 @@ describe("meterSynthesis (recordSynthesis bridge)", () => {
     }
   }
 
-  it("records the characters a cloud provider synthesized, with unknown cost", () => {
+  it("records the characters a cloud provider synthesized, leaving the price to the ledger", () => {
     meterSynthesis({ provider: "elevenlabs", characters: 11, requestId: "tts_1" })
     expect(usageOf(0)).toMatchObject({
       surface: "tts",
       scopeId: "elevenlabs",
-      usage: { providerId: "elevenlabs", unitBreakdown: { characters: 11 }, costKnown: false },
+      // The provider stands in for a model it did not name, so the budget
+      // rollup ([day, provider, model]) can count the row.
+      usage: { providerId: "elevenlabs", model: "elevenlabs", unitBreakdown: { characters: 11 } },
     })
+    // Unfrozen: freezing it `unknown` here kept the ledger from ever pricing it.
+    expect(usageOf(0).usage).not.toHaveProperty("costSource")
+    expect(usageOf(0).usage).not.toHaveProperty("costKnown")
+  })
+
+  it("rolls the row up under the model the provider synthesized with (F30)", () => {
+    meterSynthesis({
+      provider: "openai",
+      characters: 7,
+      requestId: "tts_m",
+      model: "gpt-4o-mini-tts",
+    })
+    expect(usageOf(0).usage).toMatchObject({ providerId: "openai", model: "gpt-4o-mini-tts" })
   })
 
   it("gives every synthesized chunk its own operation id", () => {
