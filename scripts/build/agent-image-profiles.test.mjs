@@ -2,6 +2,9 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
 
+import { FULL_COMMANDS } from "../../deploy/runner/smoke.mjs"
+import { commandsFor, downloadsFor, readRepoInputs } from "./bundle-agent-versions.mjs"
+
 const workflow = readFileSync(
   new URL("../../.github/workflows/images.yml", import.meta.url),
   "utf8"
@@ -128,4 +131,54 @@ test("Every pushed image carries SBOM and max-level provenance attestations", ()
     assert.match(step, /\n\s+sbom: \$\{\{ needs\.vars\.outputs\.should_push == 'true'/, step)
     assert.match(step, /\n\s+provenance: \$\{\{ needs\.vars\.outputs\.should_push == 'true'.*'mode=max'/, step)
   }
+})
+
+/** One `FROM … AS <name>` stage of the Runner Dockerfile, up to the next stage. */
+function runnerStage(dockerfile, name) {
+  const start = dockerfile.search(new RegExp(`^FROM \\S+ AS ${name}$`, "m"))
+  assert.ok(start >= 0, `missing stage ${name}`)
+  const next = dockerfile.indexOf("\nFROM ", start + 1)
+  return dockerfile.slice(start, next === -1 ? undefined : next)
+}
+
+// Full used a global `npm install -g` that pinned only the top-level
+// versions, so a rebuild could pull different transitive dependencies.
+test("Full builds the locked tree of every runtime by the selected steps", () => {
+  const dockerfile = readFileSync(
+    new URL("../../deploy/runner/Dockerfile", import.meta.url),
+    "utf8"
+  )
+  const steps = (stage) =>
+    stage
+      .split("\n")
+      .slice(1)
+      .filter((line) => !/^ARG AGENT_RUNTIMES=/.test(line))
+      .join("\n")
+      .replace('--runtimes "$AGENT_RUNTIMES"', "--runtimes <selection>")
+      .replace("--runtimes full", "--runtimes <selection>")
+      .replace("install-selected.mjs install-compat ", "install-selected.mjs install ")
+      .trim()
+  const selected = runnerStage(dockerfile, "selected-build")
+  const full = runnerStage(dockerfile, "full-build")
+  assert.match(full, /--runtimes full /)
+  assert.match(full, /install-selected\.mjs install-compat /)
+  assert.equal(steps(full), steps(selected))
+
+  const target = runnerStage(dockerfile, "full")
+  assert.match(target, /^COPY --from=full-build \/cognia \/cognia$/m)
+  assert.doesNotMatch(dockerfile, /npm install -g|install-agents\.sh/)
+  // Versions come only from the pins (no per-Agent build-arg overrides).
+  assert.doesNotMatch(dockerfile, /^ARG (?!NODE_VERSION=)[A-Z_]+_VERSION=/m)
+  assert.match(
+    target,
+    /if \[ "\$INSTALL_CURSOR_AGENT" = "1" \]; then bash \/tmp\/install-cursor-agent\.sh; fi/
+  )
+  assert.match(target, /PATH="\/cognia\/runner\/bin:\/cognia\/glibc\/bin:/)
+})
+
+test("The Full command list is the pins' glibc commands and vendor binaries", () => {
+  const { pins } = readRepoInputs()
+  const expected = new Set(commandsFor(pins, "glibc").map((command) => command.name))
+  for (const download of downloadsFor(pins, "glibc", "amd64")) expected.add(download.command)
+  assert.deepEqual([...FULL_COMMANDS].sort(), [...expected].sort())
 })

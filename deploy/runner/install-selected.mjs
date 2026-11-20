@@ -204,6 +204,22 @@ try {
   )
 }
 
+/**
+ * What each `install*` mode changes about the shims `installRunnerShims` writes.
+ *   install          a selected runner: project npx runs offline
+ *   install-compat   the Full runner: the same locked tree, with Full's npx,
+ *                    where a project tool may still download
+ *   install-full     cognia-server's runtime-full: Agents from a global npm
+ *                    install under /usr/local
+ */
+export function installModeOptions(mode) {
+  if (mode === "install") return {}
+  if (mode === "install-compat") return { full: true }
+  if (mode === "install-full")
+    return { nodePath: process.execPath, commandsDir: "/usr/local/bin", full: true }
+  throw new Error(`unknown install mode ${mode}`)
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const [mode, pinsPath, packagePath, masterPackagePath, masterPinsPath] = process.argv.slice(2)
@@ -222,7 +238,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         )
         writeFileSync(pinsPath, `${JSON.stringify(input, null, 2)}\n`)
       }
-    } else if (mode === "install" || mode === "install-full") {
+    } else if (mode === "install" || mode === "install-compat" || mode === "install-full") {
       const packageJson = JSON.parse(readFileSync(packagePath, "utf8"))
       if (mode === "install-full") {
         for (const name of Object.keys(packageJson.dependencies)) {
@@ -248,9 +264,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           ...[runtime.archive?.command, runtime.binary?.command].filter(Boolean),
         ]),
         nativeNpx: process.env.COGNIA_NATIVE_NPX ?? "/usr/local/bin/npx",
-        ...(mode === "install-full"
-          ? { nodePath: process.execPath, commandsDir: "/usr/local/bin", full: true }
-          : {}),
+        ...installModeOptions(mode),
       })
     } else throw new Error(`unknown mode ${mode}`)
   } catch (error) {

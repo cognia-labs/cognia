@@ -1,56 +1,38 @@
 #!/usr/bin/env bash
-# Full compatibility installer shared by cognia-server `runtime-full` and
-# cognia-runner `full` (ADR-0059 W6 / D9). Exact default versions are owned by
-# deploy/bundle, also consumed by the selected Runner target.
+# Agent CLIs for cognia-server's `runtime-full` image (ADR-0059 W6 / D9).
 #
-# Full compatibility only. npm defaults share the bundle's master pins;
-# selected Runner builds instead install a pruned integrity-locked npm tree.
-# Cursor's vendor installer is unverified, so it runs only on request
-# (INSTALL_CURSOR_AGENT=1).
+# The Runner images build the locked /cognia tree instead (deploy/runner/
+# Dockerfile). The server still installs globally under /usr/local: it runs
+# its Agents inside bubblewrap, whose read-only roots are the system
+# directories, and moving it onto the locked tree is the plan's P3
+# (docs/plans/2026-11-20-runner-full-locked-install.md). Versions are exactly
+# the master bundle pins (deploy/bundle/npm/package.json); the global install
+# does not carry the lock's transitive pins.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 package_json="${COGNIA_AGENT_PACKAGE_JSON:-${script_dir}/../bundle/npm/package.json}"
 pins_json="${COGNIA_AGENT_PINS_JSON:-${script_dir}/../bundle/agent-versions.json}"
 
-pin() {
-  node -e '
-    const version = process.argv[3] || JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).dependencies[process.argv[2]];
-    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version ?? "")) {
-      console.error("install-agents: " + process.argv[2] + " requires an exact version, found " + version);
+# Every master-pinned npm package at its exact version. A command substitution,
+# not a pipe, so a refused pin stops the script under `set -e`.
+package_specs="$(node -e '
+  const deps = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).dependencies;
+  const specs = [];
+  for (const [name, version] of Object.entries(deps)) {
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+      console.error("install-agents: " + name + " requires an exact version, found " + version);
       process.exit(1);
     }
-    process.stdout.write(version);
-  ' "$package_json" "$1" "${2:-}"
-}
-
-CLAUDE_CODE_VERSION="$(pin @anthropic-ai/claude-code "${CLAUDE_CODE_VERSION:-}")"
-CLAUDE_CODE_ACP_VERSION="$(pin @agentclientprotocol/claude-agent-acp "${CLAUDE_CODE_ACP_VERSION:-}")"
-CODEX_VERSION="$(pin @openai/codex "${CODEX_VERSION:-}")"
-CODEX_ACP_VERSION="$(pin @agentclientprotocol/codex-acp "${CODEX_ACP_VERSION:-}")"
-GEMINI_CLI_VERSION="$(pin @google/gemini-cli "${GEMINI_CLI_VERSION:-}")"
-COPILOT_CLI_VERSION="$(pin @github/copilot "${COPILOT_CLI_VERSION:-}")"
-QWEN_CODE_VERSION="$(pin @qwen-code/qwen-code "${QWEN_CODE_VERSION:-}")"
-PI_ACP_VERSION="$(pin pi-acp "${PI_ACP_VERSION:-}")"
-PI_CODING_AGENT_VERSION="$(pin @earendil-works/pi-coding-agent "${PI_CODING_AGENT_VERSION:-}")"
-OPENCODE_VERSION="$(pin opencode-ai "${OPENCODE_VERSION:-}")"
-CLINE_VERSION="$(pin cline "${CLINE_VERSION:-}")"
-: "${INSTALL_CURSOR_AGENT:=0}"
+    specs.push(name + "@" + version);
+  }
+  process.stdout.write(specs.join(" "));
+' "$package_json")"
+read -r -a packages <<<"$package_specs"
 : "${INSTALL_KIRO_CLI:=1}"
 : "${INSTALL_DROID_CLI:=1}"
 
-npm install -g --ignore-scripts --no-audit --no-fund \
-  "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-  "@agentclientprotocol/claude-agent-acp@${CLAUDE_CODE_ACP_VERSION}" \
-  "@openai/codex@${CODEX_VERSION}" \
-  "@agentclientprotocol/codex-acp@${CODEX_ACP_VERSION}" \
-  "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
-  "@github/copilot@${COPILOT_CLI_VERSION}" \
-  "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
-  "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" \
-  "pi-acp@${PI_ACP_VERSION}" \
-  "opencode-ai@${OPENCODE_VERSION}" \
-  "cline@${CLINE_VERSION}"
+npm install -g --ignore-scripts --no-audit --no-fund "${packages[@]}"
 
 # npm 11 requires an explicit script policy, including global rebuilds.
 # Rebuild only the two native launcher installers owned by the master pins;
@@ -64,23 +46,8 @@ if [ "${#allowed_scripts[@]}" -gt 0 ]; then
   npm rebuild -g --foreground-scripts --allow-scripts="$allow_policy" "${allowed_scripts[@]}"
 fi
 
-if [ "${INSTALL_CURSOR_AGENT}" = "1" ]; then
-  # Cursor's CLI has no npm distribution and no published checksum; its
-  # installer drops `cursor-agent` under $HOME/.local. Install it under a home
-  # of its own in /opt, not /root: /root is 0700, and both images run their
-  # agents as uid 10001. Asked for explicitly, so a failed install fails the
-  # build instead of shipping an image without it.
-  cursor_home=/opt/cognia/vendor/cursor-agent
-  mkdir -p "$cursor_home"
-  curl -fsSL https://cursor.com/install | HOME="$cursor_home" bash
-  test -x "$cursor_home/.local/bin/cursor-agent"
-  chmod -R a+rX "$cursor_home"
-  ln -sf "$cursor_home/.local/bin/cursor-agent" /usr/local/bin/cursor-agent
-  cursor-agent --version
-fi
-
-# Unlike Cursor, Kiro and Droid publish immutable assets with master-pinned
-# SHA256 values. Fail the Full build on a failed verification or download.
+# Kiro and Droid publish immutable assets with master-pinned SHA256 values.
+# Fail the build on a failed verification or download.
 install_vendor() {
   local runtime="$1" kind="$2" arch artifact url checksum executable
   case "$(uname -m)" in
@@ -113,8 +80,8 @@ if [ "${INSTALL_KIRO_CLI}" = "1" ]; then install_vendor kiro-cli archive; fi
 if [ "${INSTALL_DROID_CLI}" = "1" ]; then install_vendor droid binary; fi
 
 # Keep old ACP npx package names working through the canonical frozen binary.
-# The adapter is copied by both Full Dockerfiles; standalone script users may
-# retain native npm's dispatch by omitting that adapter.
+# The server Dockerfile copies the adapter; standalone script users may
+# retain native npm's dispatch by omitting it.
 shim_script="${COGNIA_AGENT_SHIM_SCRIPT:-${script_dir}/install-selected.mjs}"
 if [ -f "$shim_script" ]; then
   COGNIA_GLOBAL_NODE_MODULES="$(npm root -g)" node "$shim_script" install-full "$pins_json" "$package_json"

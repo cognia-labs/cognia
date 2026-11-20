@@ -1,6 +1,6 @@
 # Runner Full 变体改为从总锁安装
 
-> 状态：方案已确认（2026-11-20，D1–D4 均按建议），未实施。创建：2026-11-20（Asia/Shanghai）。
+> 状态：P1、P2 已完成（2026-11-20），P3 推迟到能验证 server 镜像时（见第 7 节），P4 待 CI。决策 D1、D2、D4 按建议，D3 改选 A。创建：2026-11-20（Asia/Shanghai）。
 > 依据：[Runner 镜像审计](../evidence/2026-11-19-runner-image-readiness.md) F04，以及 2026-11-20 的决定「Full 改为从总锁构建」。
 > 范围：`cognia-runner` 的 `full` target 和共用同一安装脚本的 `cognia-server` `runtime-full`。Cursor 的可变安装器、base 镜像 digest、cosign 签名和漏洞扫描门禁不在本方案内。
 > 第 3 节的决策已于 2026-11-20 确认；阶段与默认值按本文执行。
@@ -66,3 +66,13 @@ Full 还接受按 Agent 的版本覆盖参数（`CLAUDE_CODE_VERSION` 等 build 
 - **musl 树里的 Cline**（P1 发现）：bundle 的 glibc 与 musl 两棵树共用同一份 npm 闭包（bundle smoke 也断言这一点），而 Cline 的原生二进制只链接 glibc，所以 `full` bundle 的 musl 树会多装一份用不上的 Cline 二进制，每个架构约 130 MB，且不会生成 musl shim。要去掉它，需要把 bundle 改成按 libc 分别裁剪闭包，这属于 ADR-0183 的流水线改动，本方案不做。
 - **传递依赖变化**（P1 发现）：加入 Cline 后，npm 把提升的 `@opentelemetry/api` 从 1.10.0 解析为 1.9.1。它满足 `@anthropic-ai/sdk` 的 `^1.4.1`，也满足多个 `@opentelemetry/*` peer 的 `<1.10.0`（旧版本反而不满足）。其余已有条目只去掉了 `peer` 标记，版本、地址和 integrity 都未变。
 - **arm64**：本方案不改变架构矩阵，Runner 仍只发布 amd64（2026-11-20 决定暂不扩展）。
+
+## 7. 进展（2026-11-20）
+
+- **P1 完成**（cb8436202e）。Cline 进入总 pins 和总锁，只标 `glibc`。它的原生二进制在 amd64 和 arm64 上最高需要 GLIBC_2.17，launcher 不依赖 postinstall。bundle smoke 新增按 catalog 启动的 Cline ACP 初始化；组织 Agent 策略表把 Cline 列为已打包、但没有代理启动契约。
+- **P2 完成**。Runner `full` 由 `full-build` 阶段生成：与 `selected-build` 的步骤逐行一致，只是选择固定为 `full`、shim 模式为 `install-compat`（保留 Full 的 npx：项目工具可以在线回退到原生 npx）。版本覆盖参数已删除。Cursor 改由独立的 `install-cursor-agent.sh` 安装，只在 `INSTALL_CURSOR_AGENT=1` 时运行。smoke 新增两项检查：npm 根目录的依赖等于总 pins，全局 npm 里没有任何 Agent 包。
+- **P3 推迟**。cognia-server 在 bubblewrap 里运行 Agent，沙箱的只读系统根是 `/usr`、`/lib`、`/bin`、`/sbin`、`/etc`、`/opt`（`crates/cognia-exec-sandbox/src/launcher.rs` 的 `LINUX_RO_SYSTEM`），不含 `/cognia`。直接启动的命令能通过「可执行文件所在前缀」的推导拿到 `/cognia/glibc`。但通过 `/cognia/runner/bin/npx` 分派的启动只拿到 `/cognia/runner`，看不到 `/cognia/glibc/bin` 下的命令。所以 server 的 Agent 树应放在 `/opt/cognia/agents`。前置工作如下：
+  1. 先给 server full 镜像加一个 smoke：在 bwrap 里分别直接启动、经 `npx` 启动一个 Agent，并完成 ACP 初始化。目前 CI 里没有这样的检查。
+  2. `bundle-agent-versions.mjs stage` 的 CLI 支持 `--injection-root`（`stage()` 已有这个参数）。`installRunnerShims` 的根目录也改为可配置。
+  3. server 改用 `/opt/cognia/agents` 后，删除 `install-agents.sh` 和 `install-full` 模式。
+     在此之前，server 的 `runtime-full` 继续用 `install-agents.sh` 做全局安装，版本取自同一份总 pins（每个依赖都按精确版本安装，没有覆盖参数），但不带传递锁。

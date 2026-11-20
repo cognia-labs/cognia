@@ -37,6 +37,27 @@ function docker(args) {
   return result.stdout.trim()
 }
 
+/**
+ * Every command the Full runner puts on PATH: the npm Agent commands and the
+ * vendor binaries of the master pins. The compatibility list a Full image has
+ * always offered; agent-image-profiles.test.mjs holds it to the pins.
+ */
+export const FULL_COMMANDS = [
+  "claude",
+  "claude-agent-acp",
+  "cline",
+  "codex",
+  "codex-acp",
+  "copilot",
+  "droid",
+  "gemini",
+  "kiro-cli",
+  "opencode",
+  "pi",
+  "pi-acp",
+  "qwen",
+]
+
 /** How the runtime catalog starts `runtimeId`: its system command and launch args. */
 export function launch(runtimeId) {
   const runtime = catalog.runtimes.find((entry) => entry.runtimeId === runtimeId)
@@ -331,8 +352,38 @@ export async function smokeRunner(image, variant) {
       "sh",
       image,
       "-c",
-      'for cli in claude claude-agent-acp codex codex-acp gemini copilot qwen pi pi-acp opencode cline; do command -v "$cli" >/dev/null || exit 1; done',
+      `for cli in ${FULL_COMMANDS.join(" ")}; do command -v "$cli" >/dev/null || exit 1; done`,
     ])
+    // Full is the locked tree of every distributable runtime, not a global
+    // npm install: the npm root carries the master pins and global npm holds
+    // no Agent package.
+    const tree = JSON.parse(
+      docker([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "cat",
+        image,
+        "/cognia/glibc/lib/agents/package.json",
+      ])
+    )
+    assert.deepEqual(tree.dependencies, master.dependencies)
+    assert.equal(
+      docker([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "sh",
+        image,
+        "-c",
+        `root="$(npm root -g)"; for pkg in ${Object.keys(master.dependencies).join(" ")}; do test ! -e "$root/$pkg" || exit 1; done; echo none`,
+      ]),
+      "none"
+    )
     const checked = new Set(["codex"])
     for (const runtime of pins.runtimes) {
       for (const command of runtime.commands ?? []) {

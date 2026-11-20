@@ -99,14 +99,20 @@ Runner images are published for `linux/amd64` only. On an ARM host, build
 the target you need from this Dockerfile; the Agent bundle the sandbox pool
 injects is published for both `linux/amd64` and `linux/arm64`.
 
-Full retains the legacy Agent set. Cline is bundled like the other npm
-runtimes, for glibc only because its native binary links glibc, so a
-selected build can name it (`AGENT_RUNTIMES=cline`). Full's npm Agent
-versions default to the shared exact pins; version overrides must also be
-exact. Kiro and Droid use
-checksum-verified pinned assets. Full's global npm install retains
-compatibility behavior and does not provide the selected path's
-transitive-lock guarantee.
+Full is the `full` selection, built by the same locked steps as a selected
+build: every distributable runtime from the master lock with its transitive
+pins, Kiro and Droid from checksum-verified assets, and the pinned Node.
+Cline is bundled like the other npm runtimes, for glibc only because its
+native binary links glibc, so a selected build can also name it
+(`AGENT_RUNTIMES=cline`). Versions come only from the pins; to change one,
+edit the pins and regenerate the lock (`deploy/bundle/README.md`). The
+per-Agent `*_VERSION` build arguments are gone.
+
+Full keeps one compatibility behavior: `npx` resolves the installed Agents to
+their frozen commands, as in a selected build, but a project tool falls back
+to the base image's native `npx` online instead of offline. Its Agent
+commands live in `/cognia/glibc/bin` (on `PATH`), no longer in
+`/usr/local/bin`.
 
 Cursor is not installed by default. Its vendor installer publishes no
 checksum and changes without notice, so it runs only when the build asks for

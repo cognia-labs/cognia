@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process"
 import test from "node:test"
 
 import {
+  installModeOptions,
   installRunnerShims,
   resolveNpx,
   resolveNpxInvocation,
@@ -315,7 +316,7 @@ test("selected npx parses boolean flags before frozen Agent dispatch and blocks 
   )
 })
 
-test("Full installer takes exact canonical versions and rejects mutable overrides", () => {
+test("The server's Full installer installs every master pin exactly, without overrides", () => {
   const root = mkdtempSync(join(tmpdir(), "cognia-runner-full-"))
   try {
     const npmLog = join(root, "npm.log")
@@ -329,29 +330,36 @@ test("Full installer takes exact canonical versions and rejects mutable override
       ...inherited,
       PATH: `${root}:${process.env.PATH}`,
       COGNIA_TEST_NPM_LOG: npmLog,
-      INSTALL_CURSOR_AGENT: "0",
       INSTALL_KIRO_CLI: "0",
       INSTALL_DROID_CLI: "0",
       COGNIA_AGENT_SHIM_SCRIPT: "/nonexistent",
+      // The per-Agent overrides are gone: versions come only from the pins.
+      CODEX_VERSION: "9.9.9",
     }
     const result = spawnSync("bash", ["deploy/runner/install-agents.sh"], { encoding: "utf8", env })
     assert.equal(result.status, 0, result.stderr)
     const log = readFileSync(npmLog, "utf8")
-    assert.match(log, /@openai\/codex@0\.157\.1/)
-    assert.match(log, /@agentclientprotocol\/codex-acp@1\.13\.1/)
-    assert.match(log, /cline@3\.0\.73/)
-    assert.doesNotMatch(log, /@latest/)
+    const master = JSON.parse(readFileSync("deploy/bundle/npm/package.json", "utf8"))
+    for (const [name, version] of Object.entries(master.dependencies)) {
+      assert.ok(log.includes(`${name}@${version}`), `${name}@${version}`)
+    }
+    assert.doesNotMatch(log, /9\.9\.9|@latest/)
     assert.match(log, /install -g --ignore-scripts/)
     assert.match(
       log,
       /rebuild -g --foreground-scripts --allow-scripts=@anthropic-ai\/claude-code,opencode-ai @anthropic-ai\/claude-code opencode-ai/
     )
+    // A mutable pin stops the install before npm runs.
+    const mutable = join(root, "package.json")
+    writeFileSync(mutable, JSON.stringify({ dependencies: { "@openai/codex": "latest" } }))
+    rmSync(npmLog, { force: true })
     const bad = spawnSync("bash", ["deploy/runner/install-agents.sh"], {
       encoding: "utf8",
-      env: { ...env, CODEX_VERSION: "latest" },
+      env: { ...env, COGNIA_AGENT_PACKAGE_JSON: mutable },
     })
     assert.equal(bad.status, 1)
-    assert.match(bad.stderr, /exact version/)
+    assert.match(bad.stderr, /@openai\/codex requires an exact version, found latest/)
+    assert.equal(existsSync(npmLog), false, "npm never ran")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -412,22 +420,18 @@ test("native npx offline-negation reproduction stays blocked by the installed se
   }
 })
 
-test("Full installer leaves the unverified Cursor installer off unless asked", () => {
+test("The server's Full installer never runs the Cursor installer", () => {
   const root = mkdtempSync(join(tmpdir(), "cognia-runner-cursor-"))
   try {
     const curlLog = join(root, "curl.log")
     const inherited = Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([key]) => !key.endsWith("_VERSION") && key !== "INSTALL_CURSOR_AGENT"
-      )
+      Object.entries(process.env).filter(([key]) => !key.endsWith("_VERSION"))
     )
     writeFileSync(join(root, "npm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
     writeFileSync(
       join(root, "curl"),
       '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COGNIA_TEST_CURL_LOG"\nexit 1\n',
-      {
-        mode: 0o755,
-      }
+      { mode: 0o755 }
     )
     const result = spawnSync("bash", ["deploy/runner/install-agents.sh"], {
       encoding: "utf8",
@@ -435,6 +439,8 @@ test("Full installer leaves the unverified Cursor installer off unless asked", (
         ...inherited,
         PATH: `${root}:${process.env.PATH}`,
         COGNIA_TEST_CURL_LOG: curlLog,
+        // Asking changes nothing: only the Runner's Full target installs Cursor.
+        INSTALL_CURSOR_AGENT: "1",
         INSTALL_KIRO_CLI: "0",
         INSTALL_DROID_CLI: "0",
         COGNIA_AGENT_SHIM_SCRIPT: "/nonexistent",
@@ -445,6 +451,60 @@ test("Full installer leaves the unverified Cursor installer off unless asked", (
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("The Cursor installer links a CLI that runs, and fails the build otherwise", () => {
+  const root = mkdtempSync(join(tmpdir(), "cognia-cursor-install-"))
+  try {
+    const bin = join(root, "bin")
+    mkdirSync(bin)
+    const vendorScript = join(root, "vendor-install.sh")
+    writeFileSync(
+      vendorScript,
+      'mkdir -p "$HOME/.local/bin"\nprintf \'#!/bin/sh\\necho cursor-agent 1.2.3\\n\' > "$HOME/.local/bin/cursor-agent"\nchmod +x "$HOME/.local/bin/cursor-agent"\n'
+    )
+    const env = (curl) => {
+      writeFileSync(join(root, "curl"), curl, { mode: 0o755 })
+      return {
+        ...process.env,
+        PATH: `${root}:${process.env.PATH}`,
+        COGNIA_TEST_VENDOR_SCRIPT: vendorScript,
+        COGNIA_CURSOR_HOME: join(root, "home"),
+        COGNIA_CURSOR_BIN_DIR: bin,
+      }
+    }
+    const failed = spawnSync("bash", ["deploy/runner/install-cursor-agent.sh"], {
+      encoding: "utf8",
+      env: env("#!/bin/sh\nexit 22\n"),
+    })
+    assert.notEqual(failed.status, 0, "a failed download fails the build")
+    assert.equal(existsSync(join(bin, "cursor-agent")), false)
+
+    const installed = spawnSync("bash", ["deploy/runner/install-cursor-agent.sh"], {
+      encoding: "utf8",
+      env: env('#!/bin/sh\ncat "$COGNIA_TEST_VENDOR_SCRIPT"\n'),
+    })
+    assert.equal(installed.status, 0, installed.stderr)
+    assert.match(installed.stdout, /cursor-agent 1\.2\.3/)
+    assert.equal(
+      realpathSync(join(bin, "cursor-agent")),
+      realpathSync(join(root, "home", ".local", "bin", "cursor-agent"))
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("each install mode sets the npx semantics its image needs", () => {
+  assert.deepEqual(installModeOptions("install"), {})
+  // The Full runner keeps Full's npx on the locked tree.
+  assert.deepEqual(installModeOptions("install-compat"), { full: true })
+  assert.deepEqual(installModeOptions("install-full"), {
+    nodePath: process.execPath,
+    commandsDir: "/usr/local/bin",
+    full: true,
+  })
+  assert.throws(() => installModeOptions("install-everything"), /unknown install mode/)
 })
 
 test("Full vendor downloads fail closed on a mismatched canonical SHA256", () => {

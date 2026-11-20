@@ -16,8 +16,8 @@
 ##   plugin-node-runtime          pinned Node used only for sandboxed JS plugins.
 ##   runtime-slim                 binary + brain + sidecar (default image).
 ##   runtime-full                 + git + preinstalled external agent CLIs
-##                                (deploy/runner/install-agents.sh — shared with
-##                                the cognia-runner image so versions can't drift).
+##                                (deploy/runner/install-agents.sh, at the master
+##                                bundle pins the cognia-runner image also uses).
 ##
 ## Usage:
 ##   pnpm plugin:builtin:build    # produces the plugin set in .cache/plugin-artifacts
