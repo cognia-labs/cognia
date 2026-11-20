@@ -976,7 +976,7 @@ impl ContainerApi for E2bProvider {
         ))
     }
 
-    async fn pull_image(&self, _image: &str) -> Result<(), String> {
+    async fn pull_image(&self, _image: &str, _auth: Option<RegistryAuth>) -> Result<(), String> {
         Err("E2B pulls images while building templates".into())
     }
 
@@ -1167,14 +1167,6 @@ impl SandboxDockerApi for E2bProvider {
 
     async fn remove_volume(&self, _name: &str) -> Result<VolumeRemoval, String> {
         Ok(VolumeRemoval::Gone)
-    }
-
-    async fn pull_image_with_auth(
-        &self,
-        _image: &str,
-        _auth: Option<RegistryAuth>,
-    ) -> Result<(), String> {
-        Err("E2B pulls images while building templates".into())
     }
 }
 
@@ -2171,8 +2163,7 @@ mod tests {
             .await,
             Err(RunnerRunError::Other(message)) if message.contains("do not run containers")
         ));
-        assert!(provider.pull_image("x").await.is_err());
-        assert!(provider.pull_image_with_auth("x", None).await.is_err());
+        assert!(provider.pull_image("x", None).await.is_err());
         assert!(provider.ensure_volume("v", &BTreeMap::new()).await.is_err());
         assert!(provider.runtimes().await.unwrap().is_empty());
         assert!(provider.list_owned_volumes().await.unwrap().is_empty());

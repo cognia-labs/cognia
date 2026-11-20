@@ -19,7 +19,7 @@ use cognia_environment::registry::{
 };
 use cognia_environment::spec::{EnvironmentSource, EnvironmentSpec, IsolationTier};
 use cognia_environment::store::EnvironmentStore;
-use cognia_external_agent::container_backend::RegistryAuth;
+use cognia_external_agent::container_backend::{RegistryAuth, RegistryAuthSource};
 use cognia_external_agent::sandbox_routing_backend::SandboxSpawnError;
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -417,6 +417,28 @@ impl SandboxAdmission for EnvironmentSandboxAdmission {
     }
 }
 
+/// Pull credentials for the legacy runner image (`COGNIA_RUNNER_IMAGE`), read
+/// from the same `COGNIA_REGISTRY_AUTH_FILE` admission uses, on every pull.
+pub fn runner_registry_auth() -> RegistryAuthSource {
+    RegistryAuthSource::new(|image| registry_auth_for_image(image, |name| std::env::var(name).ok()))
+}
+
+/// The `X-Registry-Auth` for `image`'s registry under the credentials file
+/// `lookup` names, `None` for an anonymous pull. Like admission, a credential
+/// load failure reports only its code, never the file's bytes.
+pub fn registry_auth_for_image(
+    image: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<Option<RegistryAuth>, String> {
+    let reference = ImageReference::parse(image).map_err(|error| error.to_string())?;
+    let credentials = RegistryCredentials::from_lookup(lookup)
+        .map_err(|error| format!("{}: {}", error.code(), credential_load_error(error).message))?;
+    let credential = credentials
+        .credential_for(&reference.registry)
+        .map_err(|error| format!("{}: {error}", error.code()))?;
+    Ok(credential.map(|credential| registry_auth(&reference.registry, credential)))
+}
+
 /// A parsed credential in the shape the daemon's `X-Registry-Auth` takes.
 pub fn registry_auth(registry: &str, credential: RegistryCredential) -> RegistryAuth {
     let server_address = if registry.eq_ignore_ascii_case("docker.io") {
@@ -620,6 +642,46 @@ mod tests {
             admission.offered_bundle_digests(),
             vec!["sha256:".to_string() + &"2".repeat(64)]
         );
+    }
+
+    #[test]
+    fn the_runner_image_pull_reads_the_hosts_registry_auth_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{"auths":{"ghcr.io":{"registrytoken":"runner-secret"}},"credHelpers":{"helper.example":"desktop"}}"#,
+        )
+        .unwrap();
+        let configured = path.display().to_string();
+        let lookup = |name: &str| (name == REGISTRY_AUTH_FILE_ENV).then(|| configured.clone());
+
+        let auth = registry_auth_for_image("ghcr.io/cognia-labs/cognia-runner:latest", lookup)
+            .unwrap()
+            .expect("ghcr.io has a credential");
+        assert_eq!(auth.server_address, "ghcr.io");
+        assert_eq!(auth.registry_token.as_deref(), Some("runner-secret"));
+        // Another registry pulls anonymously; one behind a credential helper
+        // is refused rather than silently tried without credentials.
+        assert_eq!(
+            registry_auth_for_image("docker.io/library/node:26", lookup).unwrap(),
+            None
+        );
+        assert!(registry_auth_for_image("helper.example/r/runner:1", lookup)
+            .unwrap_err()
+            .starts_with("registry_credential_helper_unsupported"));
+        // No auth file configured: anonymous.
+        assert_eq!(
+            registry_auth_for_image("ghcr.io/cognia-labs/cognia-runner:latest", |_| None).unwrap(),
+            None
+        );
+        // A broken file names its code, never its bytes.
+        std::fs::write(&path, r#"{"auths":{"ghcr.io":"private-secret"}}"#).unwrap();
+        let error = registry_auth_for_image("ghcr.io/cognia-labs/cognia-runner:latest", lookup)
+            .unwrap_err();
+        assert!(error.starts_with("registry_auth_file_invalid"), "{error}");
+        assert!(!error.contains("private-secret"), "{error}");
+        assert!(registry_auth_for_image("NOT A REFERENCE", lookup).is_err());
     }
 
     #[test]

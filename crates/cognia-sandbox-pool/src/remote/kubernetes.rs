@@ -2069,7 +2069,7 @@ impl ContainerApi for KubernetesProvider {
         ))
     }
 
-    async fn pull_image(&self, image: &str) -> Result<(), String> {
+    async fn pull_image(&self, image: &str, _auth: Option<RegistryAuth>) -> Result<(), String> {
         Err(format!(
             "a Kubernetes provider does not pull {image} ahead of time; the kubelet pulls \
              while provisioning"
@@ -2224,14 +2224,6 @@ impl SandboxDockerApi for KubernetesProvider {
 
     async fn remove_volume(&self, _name: &str) -> Result<VolumeRemoval, String> {
         Ok(VolumeRemoval::Gone)
-    }
-
-    async fn pull_image_with_auth(
-        &self,
-        image: &str,
-        _auth: Option<RegistryAuth>,
-    ) -> Result<(), String> {
-        self.pull_image(image).await
     }
 }
 
@@ -4371,9 +4363,8 @@ users:
         assert!(p.ensure_volume("v", &BTreeMap::new()).await.is_err());
         assert_eq!(p.list_owned_volumes().await.unwrap(), Vec::new());
         assert_eq!(p.remove_volume("v").await.unwrap(), VolumeRemoval::Gone);
-        assert!(p.pull_image("ghcr.io/acme/env@sha256:x").await.is_err());
         assert!(p
-            .pull_image_with_auth("ghcr.io/acme/env@sha256:x", None)
+            .pull_image("ghcr.io/acme/env@sha256:x", None)
             .await
             .is_err());
         let spec = RunnerSpec {

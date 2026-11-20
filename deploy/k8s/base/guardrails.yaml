@@ -1,4 +1,10 @@
 # Tenant guardrails: default-deny east-west traffic + resource ceilings.
+#
+# NetworkPolicies only ever add up: a pod may send whatever ANY policy that
+# selects it allows. So egress is not part of `default-deny` but its own
+# policy, `default-egress`. A tenant that wants outbound restricted deletes
+# or replaces `default-egress` in its overlay; adding a stricter policy next
+# to it would change nothing.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -15,9 +21,27 @@ spec:
         - namespaceSelector:
             matchLabels:
               cognia.dev/ingress-access: "true"
+  # No egress rule: everything outbound is denied unless another policy here
+  # allows it.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-egress
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
   egress:
-    # DNS + any external endpoint (agents call provider APIs); tighten per
-    # tenant policy in the overlay if outbound should be restricted.
+    # DNS + any external endpoint (agents call provider APIs). To restrict
+    # outbound, replace this policy in the overlay, for example:
+    #   patches:
+    #     - target: { kind: NetworkPolicy, name: default-egress }
+    #       patch: |-
+    #         - op: replace
+    #           path: /spec/egress
+    #           value:
+    #             - ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    #             - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [169.254.0.0/16] } }]
     - {}
 ---
 apiVersion: v1

@@ -49,7 +49,7 @@ use super::process::{ExternalAgentEventSink, ExternalAgentProcessState, External
 
 /// `local-process` (default) | `container`.
 pub const EXEC_BACKEND_ENV: &str = "COGNIA_EXEC_BACKEND";
-/// Runner image, e.g. `ghcr.io/maxqian888/cognia-runner:latest`. Required in
+/// Runner image, e.g. `ghcr.io/cognia-labs/cognia-runner:latest`. Required in
 /// container mode.
 pub const RUNNER_IMAGE_ENV: &str = "COGNIA_RUNNER_IMAGE";
 /// Workspace root as seen by cognia-server (`/workspaces` in compose).
@@ -82,9 +82,45 @@ pub const DEPLOYMENT_ID_ENV: &str = "COGNIA_DEPLOYMENT_ID";
 /// Where the agent's workspace lands inside the runner.
 pub const WORKSPACE_TARGET: &str = "/workspace";
 
+/// Where a legacy runner pull gets its registry credentials: given the image
+/// reference, the `X-Registry-Auth` for its registry, or `None` to pull
+/// anonymously. The Host builds it from `COGNIA_REGISTRY_AUTH_FILE`
+/// (`cognia_sandbox_pool::admission::runner_registry_auth`), the file the
+/// sandbox pool and the kubelet read, so a private Runner image pulls the way
+/// a private project image does.
+#[derive(Clone)]
+pub struct RegistryAuthSource(
+    Arc<dyn Fn(&str) -> Result<Option<RegistryAuth>, String> + Send + Sync>,
+);
+
+impl RegistryAuthSource {
+    pub fn new(
+        resolve: impl Fn(&str) -> Result<Option<RegistryAuth>, String> + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(resolve))
+    }
+
+    /// Every pull anonymous: a desktop, or a test with no registry.
+    pub fn anonymous() -> Self {
+        Self::new(|_| Ok(None))
+    }
+
+    pub fn for_image(&self, image: &str) -> Result<Option<RegistryAuth>, String> {
+        (self.0)(image)
+    }
+}
+
+impl std::fmt::Debug for RegistryAuthSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RegistryAuthSource")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ContainerBackendConfig {
     pub image: String,
+    /// Credentials for pulling [`Self::image`] when the daemon lacks it.
+    pub registry_auth: RegistryAuthSource,
     pub workspaces_dir: PathBuf,
     pub workspaces_volume: Option<String>,
     /// Full profile JSON (file already read), passed as `seccomp=<json>`.
@@ -124,7 +160,10 @@ impl ContainerBackendConfig {
     ///
     /// `default_deployment_id` is what the caller derived for this data
     /// volume. [`DEPLOYMENT_ID_ENV`] overrides it when set.
-    pub fn from_env(default_deployment_id: &str) -> Result<Self, String> {
+    pub fn from_env(
+        default_deployment_id: &str,
+        registry_auth: RegistryAuthSource,
+    ) -> Result<Self, String> {
         let deployment_id = deployment_id_from_env(default_deployment_id)?;
         let image = std::env::var(RUNNER_IMAGE_ENV)
             .ok()
@@ -133,6 +172,7 @@ impl ContainerBackendConfig {
         let host = RunnerHostSettings::from_env()?;
         Ok(Self {
             image,
+            registry_auth,
             workspaces_dir: host.workspaces_dir,
             workspaces_volume: host.workspaces_volume,
             seccomp_json: host.seccomp_json,
@@ -514,9 +554,12 @@ impl RunnerRunError {
 pub trait ContainerApi: Send + Sync + 'static {
     /// Create + attach (before start, so no output is lost) + start.
     async fn run(&self, spec: RunnerSpec) -> Result<RunningRunner, RunnerRunError>;
-    /// Pull `image` from its registry (`/images/create`); resolves when the
-    /// pull stream completes. The T2 socket proxy allows this (IMAGES+POST).
-    async fn pull_image(&self, image: &str) -> Result<(), String>;
+    /// Pull `image` from its registry (`/images/create`) with `auth` as its
+    /// `X-Registry-Auth`, `None` for an anonymous pull; resolves when the pull
+    /// stream completes. The T2 socket proxy allows this (IMAGES+POST). The
+    /// only pull there is: a pull that could not carry credentials made
+    /// every private Runner image a pre-pull chore.
+    async fn pull_image(&self, image: &str, auth: Option<RegistryAuth>) -> Result<(), String>;
     async fn kill(&self, container_id: &str) -> Result<(), String>;
     /// Best-effort cleanup; idempotent.
     async fn remove(&self, container_id: &str) -> Result<(), String>;
@@ -641,11 +684,6 @@ pub trait SandboxDockerApi: ContainerApi {
     ) -> Result<(), String>;
     async fn list_owned_volumes(&self) -> Result<Vec<OwnedVolume>, String>;
     async fn remove_volume(&self, name: &str) -> Result<VolumeRemoval, String>;
-    async fn pull_image_with_auth(
-        &self,
-        image: &str,
-        auth: Option<RegistryAuth>,
-    ) -> Result<(), String>;
 }
 
 /// Retained workspace runtime, reconciled by the sandbox pool after restart.
@@ -1481,6 +1519,7 @@ impl ExecBackend for ContainerBackend {
         };
 
         let api = Arc::clone(&self.api);
+        let registry_auth = self.config.registry_auth.clone();
         let runners = self.runners.clone();
         let mut cancellation = reservation.cancelled.clone();
         let mut cancel_on_drop = CancelCreationOnDrop {
@@ -1501,8 +1540,12 @@ impl ExecBackend for ContainerBackend {
                         }
                         // Pull once, retry once. A second miss (or a pull failure)
                         // is terminal — no loop, no backoff: spawn latency is user-
-                        // visible and the caller can retry.
-                        api.pull_image(&spec.image).await?;
+                        // visible and the caller can retry. Credentials are read
+                        // per pull, so a rotated auth file needs no restart.
+                        let auth = registry_auth
+                            .for_image(&spec.image)
+                            .map_err(|e| format!("registry credentials for {}: {e}", spec.image))?;
+                        api.pull_image(&spec.image, auth).await?;
                         if result_tx.is_closed() || _reservation.is_cancelled() {
                             return Err(format!("Agent {} creation cancelled", config.id));
                         }
@@ -1605,15 +1648,21 @@ impl ExecBackend for ContainerBackend {
 ///
 /// `default_deployment_id` scopes the orphan sweep and every runner label to
 /// the calling deployment (see [`DEPLOYMENT_ID_ENV`]); the local-process
-/// backend has no daemon to share and ignores it.
-pub fn exec_backend_from_env(default_deployment_id: &str) -> Result<Arc<dyn ExecBackend>, String> {
-    // Only the container flavors consume it. A desktop build compiles neither.
-    let _ = default_deployment_id;
+/// backend has no daemon to share and ignores it. `registry_auth` supplies the
+/// Docker flavor's pull credentials; the Kubernetes flavor pulls through the
+/// kubelet with the server pod's image pull secrets instead.
+pub fn exec_backend_from_env(
+    default_deployment_id: &str,
+    registry_auth: RegistryAuthSource,
+) -> Result<Arc<dyn ExecBackend>, String> {
+    // Only the container flavors consume them. A desktop build compiles neither.
+    let _ = (default_deployment_id, &registry_auth);
     let legacy: Arc<dyn ExecBackend> = match std::env::var(EXEC_BACKEND_ENV).ok().as_deref() {
         Some("container") => {
             #[cfg(feature = "container-exec")]
             {
-                let config = ContainerBackendConfig::from_env(default_deployment_id)?;
+                let config =
+                    ContainerBackendConfig::from_env(default_deployment_id, registry_auth)?;
                 let api = bollard_api::BollardContainerApi::connect()?;
                 Ok::<Arc<dyn ExecBackend>, String>(ContainerBackend::new(api, config))
             }
@@ -1627,7 +1676,8 @@ pub fn exec_backend_from_env(default_deployment_id: &str) -> Result<Arc<dyn Exec
         Some("kubernetes") => {
             #[cfg(feature = "k8s-exec")]
             {
-                let config = ContainerBackendConfig::from_env(default_deployment_id)?;
+                let config =
+                    ContainerBackendConfig::from_env(default_deployment_id, registry_auth)?;
                 if config.workspaces_volume.is_none() {
                     return Err(format!(
                         "{WORKSPACES_VOLUME_ENV} must name the workspaces PVC in kubernetes exec mode"
@@ -2301,23 +2351,6 @@ pub mod bollard_api {
                 Err(e) => Err(format!("remove_volume {name} failed: {e}")),
             }
         }
-
-        async fn pull_image_with_auth(
-            &self,
-            image: &str,
-            auth: Option<RegistryAuth>,
-        ) -> Result<(), String> {
-            let options = CreateImageOptionsBuilder::default()
-                .from_image(image)
-                .build();
-            let mut stream = self
-                .docker
-                .create_image(Some(options), None, auth.map(credentials));
-            while let Some(item) = stream.next().await {
-                item.map_err(|e| format!("pull {image} failed: {e}"))?;
-            }
-            Ok(())
-        }
     }
 
     impl BollardContainerApi {
@@ -2483,13 +2516,15 @@ pub mod bollard_api {
             handoff_started_runner(api, async move { worker.run_inner(spec).await }).await
         }
 
-        async fn pull_image(&self, image: &str) -> Result<(), String> {
+        async fn pull_image(&self, image: &str, auth: Option<RegistryAuth>) -> Result<(), String> {
             let options = CreateImageOptionsBuilder::default()
                 .from_image(image)
                 .build();
             // Drain the progress stream to completion; any frame-level error
             // aborts the pull (no partial-success semantics).
-            let mut stream = self.docker.create_image(Some(options), None, None);
+            let mut stream = self
+                .docker
+                .create_image(Some(options), None, auth.map(credentials));
             while let Some(item) = stream.next().await {
                 item.map_err(|e| format!("pull {image} failed: {e}"))?;
             }
@@ -3119,12 +3154,17 @@ pub mod test_support {
             })
         }
 
-        async fn pull_image(&self, image: &str) -> Result<(), String> {
+        async fn pull_image(&self, image: &str, auth: Option<RegistryAuth>) -> Result<(), String> {
+            self.auth_pulls.lock().push((image.to_string(), auth));
             if let Some(err) = self.fail_pull.lock().clone() {
+                return Err(err);
+            }
+            if let Some(err) = self.fail_auth_pull.lock().get(image).cloned() {
                 return Err(err);
             }
             self.pulls.lock().push(image.to_string());
             *self.missing_image.lock() = false;
+            self.missing_images.lock().remove(image);
             Ok(())
         }
 
@@ -3461,19 +3501,6 @@ pub mod test_support {
             }
             Ok(removed)
         }
-
-        async fn pull_image_with_auth(
-            &self,
-            image: &str,
-            auth: Option<RegistryAuth>,
-        ) -> Result<(), String> {
-            self.auth_pulls.lock().push((image.to_string(), auth));
-            if let Some(err) = self.fail_auth_pull.lock().get(image).cloned() {
-                return Err(err);
-            }
-            self.missing_images.lock().remove(image);
-            Ok(())
-        }
     }
 }
 
@@ -3593,6 +3620,7 @@ mod tests {
     fn test_config(volume: Option<&str>) -> ContainerBackendConfig {
         ContainerBackendConfig {
             image: "ghcr.io/example/cognia-runner:test".into(),
+            registry_auth: RegistryAuthSource::anonymous(),
             workspaces_dir: PathBuf::from("/workspaces"),
             workspaces_volume: volume.map(String::from),
             seccomp_json: Some("{\"defaultAction\":\"SCMP_ACT_ALLOW\"}".into()),
@@ -4672,7 +4700,7 @@ mod tests {
             async fn run(&self, _: RunnerSpec) -> Result<RunningRunner, RunnerRunError> {
                 Err(RunnerRunError::Other("unused".into()))
             }
-            async fn pull_image(&self, _: &str) -> Result<(), String> {
+            async fn pull_image(&self, _: &str, _: Option<RegistryAuth>) -> Result<(), String> {
                 Err("unused".into())
             }
             async fn kill(&self, _: &str) -> Result<(), String> {
@@ -4761,6 +4789,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_missing_runner_image_is_pulled_with_its_registry_credentials() {
+        // Before, the legacy pull always went out anonymously, so a private
+        // Runner image only worked when an operator pre-pulled it.
+        let api = FakeContainerApi::new();
+        *api.missing_image.lock() = true;
+        let mut config = test_config(Some("v"));
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&asked);
+        config.registry_auth = RegistryAuthSource::new(move |image| {
+            seen.lock().push(image.to_string());
+            Ok(Some(RegistryAuth {
+                server_address: "ghcr.io".into(),
+                username: Some("bot".into()),
+                password: Some("token".into()),
+                ..RegistryAuth::default()
+            }))
+        });
+        let backend = ContainerBackend::new(api.clone(), config);
+        spawn_with_events(
+            backend.as_ref(),
+            RecordingAgentEmitter::new(),
+            spawn_config("pull-auth"),
+        )
+        .await
+        .expect("spawn after an authenticated pull");
+        assert_eq!(
+            *asked.lock(),
+            vec!["ghcr.io/example/cognia-runner:test".to_string()]
+        );
+        let pulls = api.auth_pulls.lock().clone();
+        assert_eq!(pulls.len(), 1);
+        let auth = pulls[0].1.as_ref().expect("the pull carried credentials");
+        assert_eq!(auth.server_address, "ghcr.io");
+        assert_eq!(auth.username.as_deref(), Some("bot"));
+    }
+
+    #[tokio::test]
+    async fn unreadable_registry_credentials_fail_the_spawn_instead_of_pulling_anonymously() {
+        let api = FakeContainerApi::new();
+        *api.missing_image.lock() = true;
+        let mut config = test_config(Some("v"));
+        config.registry_auth =
+            RegistryAuthSource::new(|_| Err("registry_credential_helper_unsupported".into()));
+        let backend = ContainerBackend::new(api.clone(), config);
+        let err = spawn_with_events(
+            backend.as_ref(),
+            RecordingAgentEmitter::new(),
+            spawn_config("pull-bad-auth"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("registry credentials for ghcr.io/example/cognia-runner:test"),
+            "{err}"
+        );
+        assert!(
+            err.contains("registry_credential_helper_unsupported"),
+            "{err}"
+        );
+        assert!(api.auth_pulls.lock().is_empty(), "nothing was pulled");
+    }
+
+    #[tokio::test]
     async fn failed_pull_fails_the_spawn() {
         let api = FakeContainerApi::new();
         *api.missing_image.lock() = true;
@@ -4842,20 +4933,28 @@ mod tests {
         let _guard = env_lock().await;
         std::env::remove_var(RUNNER_IMAGE_ENV);
         std::env::remove_var(WORKSPACES_DIR_ENV);
-        assert!(ContainerBackendConfig::from_env("deployment-test")
-            .unwrap_err()
-            .contains(RUNNER_IMAGE_ENV));
+        assert!(ContainerBackendConfig::from_env(
+            "deployment-test",
+            RegistryAuthSource::anonymous()
+        )
+        .unwrap_err()
+        .contains(RUNNER_IMAGE_ENV));
         std::env::set_var(RUNNER_IMAGE_ENV, "img");
-        assert!(ContainerBackendConfig::from_env("deployment-test")
-            .unwrap_err()
-            .contains(WORKSPACES_DIR_ENV));
+        assert!(ContainerBackendConfig::from_env(
+            "deployment-test",
+            RegistryAuthSource::anonymous()
+        )
+        .unwrap_err()
+        .contains(WORKSPACES_DIR_ENV));
         std::env::set_var(WORKSPACES_DIR_ENV, "/workspaces");
         std::env::set_var(WORKSPACES_VOLUME_ENV, "vol");
         std::env::set_var(RUNNER_MEMORY_MB_ENV, "1024");
         std::env::set_var(RUNNER_CPUS_ENV, "1.5");
         std::env::set_var(RUNNER_PIDS_ENV, "128");
         std::env::remove_var(RUNNER_SECCOMP_ENV);
-        let config = ContainerBackendConfig::from_env("deployment-test").expect("config");
+        let config =
+            ContainerBackendConfig::from_env("deployment-test", RegistryAuthSource::anonymous())
+                .expect("config");
         assert_eq!(config.image, "img");
         assert_eq!(config.workspaces_volume.as_deref(), Some("vol"));
         assert_eq!(config.memory_bytes, 1024 * 1024 * 1024);
@@ -4867,24 +4966,32 @@ mod tests {
         // and a malformed one is a boot error rather than a mangled label.
         std::env::set_var(DEPLOYMENT_ID_ENV, " tenant-b ");
         assert_eq!(
-            ContainerBackendConfig::from_env("deployment-test")
+            ContainerBackendConfig::from_env("deployment-test", RegistryAuthSource::anonymous())
                 .expect("config")
                 .deployment_id,
             "tenant-b"
         );
         std::env::set_var(DEPLOYMENT_ID_ENV, "tenant b");
-        assert!(ContainerBackendConfig::from_env("deployment-test")
-            .unwrap_err()
-            .contains(DEPLOYMENT_ID_ENV));
+        assert!(ContainerBackendConfig::from_env(
+            "deployment-test",
+            RegistryAuthSource::anonymous()
+        )
+        .unwrap_err()
+        .contains(DEPLOYMENT_ID_ENV));
         std::env::remove_var(DEPLOYMENT_ID_ENV);
-        assert!(ContainerBackendConfig::from_env("")
-            .unwrap_err()
-            .contains("default deployment id"));
+        assert!(
+            ContainerBackendConfig::from_env("", RegistryAuthSource::anonymous())
+                .unwrap_err()
+                .contains("default deployment id")
+        );
         // Unreadable seccomp path fails loudly.
         std::env::set_var(RUNNER_SECCOMP_ENV, "definitely-missing-profile.json");
-        assert!(ContainerBackendConfig::from_env("deployment-test")
-            .unwrap_err()
-            .contains(RUNNER_SECCOMP_ENV));
+        assert!(ContainerBackendConfig::from_env(
+            "deployment-test",
+            RegistryAuthSource::anonymous()
+        )
+        .unwrap_err()
+        .contains(RUNNER_SECCOMP_ENV));
         std::env::remove_var(RUNNER_SECCOMP_ENV);
         std::env::remove_var(RUNNER_IMAGE_ENV);
         std::env::remove_var(WORKSPACES_DIR_ENV);
@@ -4899,20 +5006,20 @@ mod tests {
         let _guard = env_lock().await;
         std::env::remove_var(EXEC_BACKEND_ENV);
         assert_eq!(
-            exec_backend_from_env("deployment-test")
+            exec_backend_from_env("deployment-test", RegistryAuthSource::anonymous())
                 .expect("default")
                 .kind(),
             "local-process"
         );
         std::env::set_var(EXEC_BACKEND_ENV, "local-process");
         assert_eq!(
-            exec_backend_from_env("deployment-test")
+            exec_backend_from_env("deployment-test", RegistryAuthSource::anonymous())
                 .expect("local")
                 .kind(),
             "local-process"
         );
         std::env::set_var(EXEC_BACKEND_ENV, "warp-drive");
-        match exec_backend_from_env("deployment-test") {
+        match exec_backend_from_env("deployment-test", RegistryAuthSource::anonymous()) {
             Err(err) => assert!(err.contains("warp-drive"), "{err}"),
             Ok(_) => panic!("unknown backend value must be rejected"),
         }
@@ -4921,11 +5028,11 @@ mod tests {
         // error (no image env set here) — either way container mode never
         // silently degrades to local processes.
         std::env::remove_var(RUNNER_IMAGE_ENV);
-        assert!(exec_backend_from_env("deployment-test").is_err());
+        assert!(exec_backend_from_env("deployment-test", RegistryAuthSource::anonymous()).is_err());
         // Same contract for the kubernetes flavor (feature `k8s-exec` /
         // missing config): loud failure, no silent local-process fallback.
         std::env::set_var(EXEC_BACKEND_ENV, "kubernetes");
-        assert!(exec_backend_from_env("deployment-test").is_err());
+        assert!(exec_backend_from_env("deployment-test", RegistryAuthSource::anonymous()).is_err());
         std::env::remove_var(EXEC_BACKEND_ENV);
     }
 }
@@ -4947,6 +5054,7 @@ mod docker_integration {
         let tmp = tempfile::tempdir().expect("tempdir");
         let config = ContainerBackendConfig {
             image: std::env::var(RUNNER_IMAGE_ENV).unwrap_or_else(|_| "alpine:3.20".into()),
+            registry_auth: RegistryAuthSource::anonymous(),
             workspaces_dir: tmp.path().to_path_buf(),
             workspaces_volume: None,
             seccomp_json: None,
@@ -5011,6 +5119,7 @@ mod docker_integration {
         let tmp = tempfile::tempdir().expect("tempdir");
         let config = ContainerBackendConfig {
             image: std::env::var(RUNNER_IMAGE_ENV).unwrap_or_else(|_| "alpine:3.20".into()),
+            registry_auth: RegistryAuthSource::anonymous(),
             workspaces_dir: tmp.path().to_path_buf(),
             workspaces_volume: None,
             seccomp_json: None,

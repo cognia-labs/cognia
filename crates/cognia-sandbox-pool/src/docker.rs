@@ -754,7 +754,7 @@ impl DockerSandboxBackend {
                 // Pull once, retry once. No loop and no backoff: spawn latency
                 // is user-visible and the caller can retry.
                 self.api
-                    .pull_image_with_auth(&spec.image, auth)
+                    .pull_image(&spec.image, auth)
                     .await
                     .map_err(RunFailure::Pull)?;
                 self.api

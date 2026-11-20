@@ -231,7 +231,7 @@ impl ContainerApi for FakeRemote {
             "remote providers provision instances; they do not run containers".into(),
         ))
     }
-    async fn pull_image(&self, _image: &str) -> Result<(), String> {
+    async fn pull_image(&self, _image: &str, _auth: Option<RegistryAuth>) -> Result<(), String> {
         Err("a remote provider pulls while provisioning".into())
     }
     async fn kill(&self, id: &str) -> Result<(), String> {
@@ -396,13 +396,6 @@ impl SandboxDockerApi for FakeRemote {
     }
     async fn remove_volume(&self, _name: &str) -> Result<VolumeRemoval, String> {
         Ok(VolumeRemoval::Gone)
-    }
-    async fn pull_image_with_auth(
-        &self,
-        _image: &str,
-        _auth: Option<RegistryAuth>,
-    ) -> Result<(), String> {
-        Err("a remote provider pulls while provisioning".into())
     }
 }
 

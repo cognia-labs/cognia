@@ -2377,7 +2377,7 @@ impl ContainerApi for RemoteSession {
             "session handle cannot create containers".into(),
         ))
     }
-    async fn pull_image(&self, _: &str) -> Result<(), String> {
+    async fn pull_image(&self, _: &str, _: Option<RegistryAuth>) -> Result<(), String> {
         Err("session handle cannot pull images".into())
     }
     async fn kill(&self, id: &str) -> Result<(), String> {

@@ -2694,7 +2694,11 @@ fn configured_exec_backend(
         // No process manager or runtime configuration exists on this path.
         Ok(Arc::new(cognia_external_agent::exec_backend::DisabledExecBackend))
     } else {
-        exec_backend_from_env(deployment_id).map_err(|error| format!("exec backend: {error}"))
+        exec_backend_from_env(
+            deployment_id,
+            cognia_sandbox_pool::admission::runner_registry_auth(),
+        )
+        .map_err(|error| format!("exec backend: {error}"))
     }
 }
 

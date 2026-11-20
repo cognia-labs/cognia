@@ -45,8 +45,8 @@ COGNIA_SMOKE_EXEC="kubectl -n cognia-kind exec -i cognia-server-0 --" \
   `signaling:7892` Service before the `/` fallback to `cognia-server`.
 - **Sandboxed runtime**: apply `cluster/runtimeclass-gvisor.yaml` (or kata)
   and set `runtimeClassName: gvisor` on the cognia-server pod spec via the
-  tenant overlay. Requires containerd + runsc on the nodes — see the gVisor
-  install docs; NOT provisioned by these manifests.
+  tenant overlay. Runner pods inherit it. Requires containerd + runsc on the
+  nodes — see the gVisor install docs; NOT provisioned by these manifests.
 - **TLS/ACME**: terminate at your ingress controller (cert-manager +
   ingress-nginx or Caddy ingress), re-proxying to the cognia-server Service
   over its self-signed HTTPS exactly like `deploy/compose/Caddyfile` does.
@@ -81,11 +81,24 @@ rotate-master-key --new-key ...`, then update the Secret.
   attach), mounting ONLY its workspace as a `subPath` of the shared
   `cognia-workspaces` PVC. Runner pods are pinned to the server's node
   (downward API) so an RWO PVC works; with RWX storage the pinning is
-  unnecessary. Not mapped from the Docker flavor by design: seccomp profile
-  (use the gvisor RuntimeClass), pids limit (kubelet config), network mode
-  (NetworkPolicy in `guardrails.yaml`). The pods-create/attach Role in
+  unnecessary. Runner pods meet the `restricted` Pod Security level: uid/gid
+  10001 with `runAsNonRoot`, the `RuntimeDefault` seccomp profile, no
+  privilege escalation and every capability dropped. A runner pod takes the
+  server pod's `runtimeClassName` (so the gvisor patch covers runners too)
+  unless `COGNIA_RUNNER_RUNTIME_CLASS` names another, and always the server
+  pod's image pull secrets (`COGNIA_SERVER_POD_NAME`, downward API). Each
+  runner pod is limited to 10 GiB of ephemeral storage
+  (`COGNIA_RUNNER_EPHEMERAL_STORAGE_MB`). A pod that does not start is
+  reported with its scheduling or container reason and deleted. Not mapped
+  from the Docker flavor by design: a custom seccomp profile (use the gvisor
+  RuntimeClass), pids limit (kubelet config), network mode (NetworkPolicy in
+  `guardrails.yaml`). The pods-create/attach Role in
   `base/cognia-server-rbac.yaml` is attached via the `cognia-server`
   ServiceAccount and is inert while the backend is off.
+- **Restricting outbound traffic**: NetworkPolicies only add up, so a stricter
+  policy beside `default-egress` restricts nothing. Replace or delete
+  `default-egress` in the tenant overlay instead (`guardrails.yaml` shows a
+  patch that keeps DNS and drops the link-local metadata range).
 - **Persistent shared-browser runtimes (experimental)**: create the aggregate
   per-tenant secret first (`kubectl -n <tenant> create secret generic
 workspace-runtime-secrets --from-literal=<workspace-id>=<32+ char secret>`),

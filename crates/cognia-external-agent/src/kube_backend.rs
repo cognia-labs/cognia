@@ -16,6 +16,17 @@
 //!   the k8s answers are a RuntimeClass (gvisor/kata — see
 //!   `deploy/k8s/cluster/`), kubelet PID limits, and NetworkPolicy
 //!   (`deploy/k8s/base/guardrails.yaml`).
+//! - The pod meets the `restricted` Pod Security level: uid/gid
+//!   [`RUNNER_UID`] with `runAsNonRoot`, the `RuntimeDefault` seccomp profile,
+//!   no privilege escalation, every capability dropped. It carries an
+//!   ephemeral-storage limit beside CPU and memory.
+//! - Unless `COGNIA_RUNNER_RUNTIME_CLASS` names one, a runner pod takes the
+//!   server pod's RuntimeClass, and always its image pull secrets: the server
+//!   reads its own pod once ([`SERVER_POD_NAME_ENV`]), so a server moved onto
+//!   gVisor or a private registry takes its agents with it.
+//! - A pod that does not reach Running is described (phase, scheduling,
+//!   the container's waiting or terminated reason) and deleted, as is one
+//!   whose attach fails after it runs.
 //! - `cap_drop` / `cap_add` / `read_only_rootfs` translate onto the
 //!   container's `securityContext`; `tmpfs` entries become in-memory
 //!   `emptyDir` volumes. `writable_dirs` has no honest k8s analogue (an
@@ -50,21 +61,43 @@ pub const RUNNER_NAMESPACE_ENV: &str = "COGNIA_RUNNER_NAMESPACE";
 /// practice when the workspaces PVC is RWO — runner and server must share
 /// the node to share the volume. Leave unset with RWX storage.
 pub const RUNNER_NODE_NAME_ENV: &str = "COGNIA_RUNNER_NODE_NAME";
-/// Optional runtimeClassName for runner pods (e.g. `gvisor`).
+/// runtimeClassName for runner pods (e.g. `gvisor`). Unset, a runner pod takes
+/// the server pod's own runtime class, so a server moved onto gVisor never
+/// starts its agents outside it.
 pub const RUNNER_RUNTIME_CLASS_ENV: &str = "COGNIA_RUNNER_RUNTIME_CLASS";
 /// Seconds to wait for a runner pod to reach Running (image pull included).
 pub const RUNNER_POD_READY_TIMEOUT_ENV: &str = "COGNIA_RUNNER_POD_READY_TIMEOUT_SECS";
+/// Per-runner ephemeral-storage limit in MiB (default 10240). The writable
+/// root, HOME and `/tmp` of an agent all count against it, so one runaway
+/// agent is evicted instead of filling the node's disk.
+pub const RUNNER_EPHEMERAL_STORAGE_MB_ENV: &str = "COGNIA_RUNNER_EPHEMERAL_STORAGE_MB";
+/// The server pod's own name (downward API `metadata.name`), read to inherit
+/// its runtime class and image pull secrets. Falls back to `HOSTNAME`, which
+/// the kubelet sets to the pod name.
+pub const SERVER_POD_NAME_ENV: &str = "COGNIA_SERVER_POD_NAME";
 
 const DEFAULT_POD_READY_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_EPHEMERAL_STORAGE_MIB: u64 = 10 * 1024;
 /// The single container's name inside a runner pod (attach targets it).
 pub const RUNNER_CONTAINER_NAME: &str = "agent";
+/// The uid and gid a runner pod runs as: the Runner image's user
+/// (deploy/runner/Dockerfile), the uid cognia-server owns workspaces as, and a
+/// non-root user a Kubernetes `restricted` namespace admits.
+pub const RUNNER_UID: i64 = 10001;
 
 #[derive(Clone, Debug)]
 pub struct KubeRunnerOptions {
     pub namespace: Option<String>,
     pub node_name: Option<String>,
+    /// [`RUNNER_RUNTIME_CLASS_ENV`]; when `None`, the server pod's class is
+    /// filled in before a pod is built (see [`inherit_from_server_pod`]).
     pub runtime_class: Option<String>,
     pub pod_ready_timeout_secs: u64,
+    pub ephemeral_storage_mib: u64,
+    /// The server pod's image pull secrets, which a runner pod needs to pull
+    /// a private Runner image from the same registry.
+    pub image_pull_secrets: Vec<String>,
+    pub server_pod: Option<String>,
 }
 
 impl KubeRunnerOptions {
@@ -81,12 +114,166 @@ impl KubeRunnerOptions {
                 .map_err(|e| format!("invalid {RUNNER_POD_READY_TIMEOUT_ENV}: {e}"))?,
             None => DEFAULT_POD_READY_TIMEOUT_SECS,
         };
+        let ephemeral_storage_mib = match non_empty(RUNNER_EPHEMERAL_STORAGE_MB_ENV) {
+            Some(v) => match v.parse::<u64>() {
+                Ok(mib) if mib > 0 => mib,
+                Ok(_) => return Err(format!("{RUNNER_EPHEMERAL_STORAGE_MB_ENV} must be above 0")),
+                Err(e) => return Err(format!("invalid {RUNNER_EPHEMERAL_STORAGE_MB_ENV}: {e}")),
+            },
+            None => DEFAULT_EPHEMERAL_STORAGE_MIB,
+        };
         Ok(Self {
             namespace: non_empty(RUNNER_NAMESPACE_ENV),
             node_name: non_empty(RUNNER_NODE_NAME_ENV),
             runtime_class: non_empty(RUNNER_RUNTIME_CLASS_ENV),
             pod_ready_timeout_secs,
+            ephemeral_storage_mib,
+            image_pull_secrets: Vec::new(),
+            server_pod: non_empty(SERVER_POD_NAME_ENV).or_else(|| non_empty("HOSTNAME")),
         })
+    }
+}
+
+/// Fill in what a runner pod inherits from the server pod, given that pod's
+/// `spec`: its runtime class unless [`RUNNER_RUNTIME_CLASS_ENV`] names one,
+/// and its image pull secrets (which already include the service account's,
+/// since admission copies those onto the pod).
+pub fn inherit_from_server_pod(opts: &KubeRunnerOptions, server_spec: &Value) -> KubeRunnerOptions {
+    let mut inherited = opts.clone();
+    if inherited.runtime_class.is_none() {
+        inherited.runtime_class = server_spec
+            .get("runtimeClassName")
+            .and_then(Value::as_str)
+            .filter(|class| !class.is_empty())
+            .map(str::to_string);
+    }
+    inherited.image_pull_secrets = server_spec
+        .get("imagePullSecrets")
+        .and_then(Value::as_array)
+        .map(|secrets| {
+            secrets
+                .iter()
+                .filter_map(|secret| secret.get("name").and_then(Value::as_str))
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    inherited
+}
+
+/// Where a runner pod stands while it starts, from its `status`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PodStart {
+    Running,
+    /// Terminated before reaching Running: no point waiting further.
+    Ended,
+    /// Pending: scheduling, pulling, or backing off.
+    Waiting,
+}
+
+pub fn pod_start(status: &Value) -> PodStart {
+    match status.get("phase").and_then(Value::as_str) {
+        Some("Running") => PodStart::Running,
+        Some("Succeeded" | "Failed") => PodStart::Ended,
+        _ => PodStart::Waiting,
+    }
+}
+
+/// Why a runner pod has not started, from its `status`: the phase, a false
+/// `PodScheduled` condition, and the runner container's waiting or
+/// terminated state, so an image pull failure, an unschedulable pod and a
+/// crashing agent read differently instead of as one timeout.
+pub fn describe_pod_start(status: &Value) -> String {
+    let mut parts = vec![format!(
+        "phase {}",
+        status
+            .get("phase")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    )];
+    let text = |value: &Value, key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    let with_message = |reason: String, message: Option<String>| match message {
+        Some(message) => format!("{reason}: {message}"),
+        None => reason,
+    };
+    for condition in status
+        .get("conditions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if condition.get("type").and_then(Value::as_str) == Some("PodScheduled")
+            && condition.get("status").and_then(Value::as_str) == Some("False")
+        {
+            let reason = text(condition, "reason").unwrap_or_else(|| "Unschedulable".into());
+            parts.push(format!(
+                "not scheduled: {}",
+                with_message(reason, text(condition, "message"))
+            ));
+        }
+    }
+    let containers = status
+        .get("containerStatuses")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    for container in containers {
+        if container.get("name").and_then(Value::as_str) != Some(RUNNER_CONTAINER_NAME) {
+            continue;
+        }
+        let state = container.get("state").cloned().unwrap_or(Value::Null);
+        if let Some(waiting) = state.get("waiting") {
+            let reason = text(waiting, "reason").unwrap_or_else(|| "Waiting".into());
+            parts.push(format!(
+                "container waiting: {}",
+                with_message(reason, text(waiting, "message"))
+            ));
+        } else if let Some(terminated) = state.get("terminated") {
+            let reason = text(terminated, "reason").unwrap_or_else(|| "Terminated".into());
+            let code = terminated
+                .get("exitCode")
+                .and_then(Value::as_i64)
+                .map(|code| format!(" (exit {code})"))
+                .unwrap_or_default();
+            parts.push(format!(
+                "container terminated: {}{code}",
+                with_message(reason, text(terminated, "message"))
+            ));
+        }
+    }
+    parts.join("; ")
+}
+
+/// Run what follows a successful pod create; if it fails, delete the pod
+/// before returning, so a pod that never became a runner is not left for the
+/// next boot's orphan sweep. A failed delete is part of the returned error.
+pub async fn delete_on_failure<T, Rest, Delete, Deleted>(
+    pod: &str,
+    rest: Rest,
+    delete: Delete,
+) -> Result<T, String>
+where
+    Rest: std::future::Future<Output = Result<T, String>>,
+    Delete: FnOnce() -> Deleted,
+    Deleted: std::future::Future<Output = Result<(), String>>,
+{
+    match rest.await {
+        Ok(value) => Ok(value),
+        Err(error) => match delete().await {
+            Ok(()) => Err(error),
+            Err(delete_error) => Err(format!(
+                "{error}; deleting pod {pod} also failed ({delete_error}), the next boot's orphan \
+                 sweep removes it"
+            )),
+        },
     }
 }
 
@@ -249,17 +436,37 @@ pub fn runner_pod_manifest(spec: &RunnerSpec, opts: &KubeRunnerOptions) -> Resul
                 "limits": {
                     "memory": format!("{memory_mi}Mi"),
                     "cpu": format!("{milli_cpu}m"),
+                    "ephemeral-storage": format!("{}Mi", opts.ephemeral_storage_mib.max(1)),
                 }
             },
             "securityContext": security_context,
         }],
         "volumes": volumes,
+        // What a `restricted` Pod Security namespace requires of the pod
+        // (the container half is allowPrivilegeEscalation=false and
+        // capabilities.drop=[ALL] above). fsGroup makes the workspace volume
+        // group-owned by the same uid cognia-server writes it as.
+        "securityContext": {
+            "runAsNonRoot": true,
+            "runAsUser": RUNNER_UID,
+            "runAsGroup": RUNNER_UID,
+            "fsGroup": RUNNER_UID,
+            "seccompProfile": { "type": "RuntimeDefault" },
+        },
     });
     if let Some(node) = &opts.node_name {
         pod_spec["nodeName"] = json!(node);
     }
     if let Some(rc) = &opts.runtime_class {
         pod_spec["runtimeClassName"] = json!(rc);
+    }
+    if !opts.image_pull_secrets.is_empty() {
+        pod_spec["imagePullSecrets"] = Value::Array(
+            opts.image_pull_secrets
+                .iter()
+                .map(|name| json!({ "name": name }))
+                .collect(),
+        );
     }
 
     // Ownership labels ride on the pod too. Without them the k8s path has the
@@ -324,20 +531,29 @@ pub mod kube_api {
     use async_trait::async_trait;
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::{Api, AttachParams, DeleteParams, ListParams, PostParams};
-    use kube::runtime::wait::{await_condition, conditions};
+    use kube::runtime::wait::await_condition;
+    use serde_json::Value;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, OnceCell};
 
     use super::super::container_backend::{
-        is_owned, ContainerApi, OwnedContainer, RunnerEvent, RunnerRunError, RunnerSpec,
-        RunningRunner, OWNER_LABEL, OWNER_VALUE,
+        is_owned, ContainerApi, OwnedContainer, RegistryAuth, RunnerEvent, RunnerRunError,
+        RunnerSpec, RunningRunner, OWNER_LABEL, OWNER_VALUE,
     };
-    use super::{runner_pod_manifest, KubeRunnerOptions, RUNNER_CONTAINER_NAME};
+    use super::{
+        delete_on_failure, describe_pod_start, inherit_from_server_pod, pod_start,
+        runner_pod_manifest, KubeRunnerOptions, PodStart, RUNNER_CONTAINER_NAME,
+    };
 
     pub struct KubeContainerApi {
         client: kube::Client,
         namespace: String,
+        /// The namespace the server pod itself runs in (the in-cluster
+        /// default), which may differ from the runner namespace.
+        server_namespace: String,
         opts: KubeRunnerOptions,
+        /// `opts` with what the server pod passes on, read once on first use.
+        resolved: OnceCell<KubeRunnerOptions>,
     }
 
     impl KubeContainerApi {
@@ -352,17 +568,107 @@ pub mod kube_api {
                 .namespace
                 .clone()
                 .unwrap_or_else(|| config.default_namespace.clone());
+            let server_namespace = config.default_namespace.clone();
             let client = kube::Client::try_from(config)
                 .map_err(|e| format!("kube client init failed: {e}"))?;
             Ok(Arc::new(Self {
                 client,
                 namespace,
+                server_namespace,
                 opts,
+                resolved: OnceCell::new(),
             }))
         }
 
         fn pods(&self) -> Api<Pod> {
             Api::namespaced(self.client.clone(), &self.namespace)
+        }
+
+        /// The options a runner pod is built from: the configured ones plus
+        /// the server pod's runtime class and image pull secrets. Reading the
+        /// server pod failing is a failed spawn, not a pod started without
+        /// the sandbox runtime the server itself runs under. A failure is
+        /// not cached, so the next spawn reads again.
+        async fn options(&self) -> Result<KubeRunnerOptions, String> {
+            self.resolved
+                .get_or_try_init(|| async {
+                    let Some(name) = self.opts.server_pod.as_deref() else {
+                        return Ok(self.opts.clone());
+                    };
+                    let pods: Api<Pod> =
+                        Api::namespaced(self.client.clone(), &self.server_namespace);
+                    let pod = pods.get(name).await.map_err(|e| {
+                        format!(
+                            "cannot read the server pod {name} to inherit its runtime class and \
+                             image pull secrets: {e}"
+                        )
+                    })?;
+                    let spec = serde_json::to_value(&pod.spec)
+                        .map_err(|e| format!("server pod {name} spec: {e}"))?;
+                    Ok(inherit_from_server_pod(&self.opts, &spec))
+                })
+                .await
+                .cloned()
+        }
+    }
+
+    fn pod_status(pod: Option<&Pod>) -> Value {
+        pod.and_then(|pod| pod.status.as_ref())
+            .and_then(|status| serde_json::to_value(status).ok())
+            .unwrap_or(Value::Null)
+    }
+
+    /// Wait until the pod runs, stops, or the timeout passes, and say why
+    /// it is not running when it is not.
+    async fn wait_until_running(
+        pods: &Api<Pod>,
+        name: &str,
+        timeout_secs: u64,
+    ) -> Result<(), String> {
+        let settled =
+            |pod: Option<&Pod>| pod.is_none() || pod_start(&pod_status(pod)) != PodStart::Waiting;
+        let waited = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            await_condition(pods.clone(), name, settled),
+        )
+        .await;
+        match waited {
+            Ok(Ok(Some(pod))) => {
+                let status = pod_status(Some(&pod));
+                match pod_start(&status) {
+                    PodStart::Running => Ok(()),
+                    _ => Err(format!(
+                        "pod {name} stopped before it ran: {}",
+                        describe_pod_start(&status)
+                    )),
+                }
+            }
+            Ok(Ok(None)) => Err(format!("pod {name} was deleted while it started")),
+            Ok(Err(e)) => Err(format!("pod {name} failed while waiting for Running: {e}")),
+            Err(_) => {
+                let current = pods.get_opt(name).await.ok().flatten();
+                Err(format!(
+                    "pod {name} not Running within {timeout_secs}s: {}",
+                    describe_pod_start(&pod_status(current.as_ref()))
+                ))
+            }
+        }
+    }
+
+    async fn delete_now(pods: &Api<Pod>, name: &str) -> Result<(), String> {
+        match pods
+            .delete(
+                name,
+                &DeleteParams {
+                    grace_period_seconds: Some(0),
+                    ..DeleteParams::default()
+                },
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(status)) if status.code == 404 => Ok(()),
+            Err(e) => Err(e.to_string()),
         }
     }
 
@@ -388,7 +694,8 @@ pub mod kube_api {
     #[async_trait]
     impl ContainerApi for KubeContainerApi {
         async fn run(&self, spec: RunnerSpec) -> Result<RunningRunner, RunnerRunError> {
-            let manifest = runner_pod_manifest(&spec, &self.opts).map_err(RunnerRunError::Other)?;
+            let opts = self.options().await.map_err(RunnerRunError::Other)?;
+            let manifest = runner_pod_manifest(&spec, &opts).map_err(RunnerRunError::Other)?;
             let pod: Pod = serde_json::from_value(manifest)
                 .map_err(|e| RunnerRunError::Other(format!("pod manifest invalid: {e}")))?;
             let name = pod
@@ -398,59 +705,42 @@ pub mod kube_api {
                 .expect("runner_pod_manifest always sets a name");
             let pods = self.pods();
 
+            // An admission refusal (a Pod Security level, a quota) arrives
+            // here with the API server's reason.
             pods.create(&PostParams::default(), &pod)
                 .await
                 .map_err(|e| RunnerRunError::Other(format!("pod create failed: {e}")))?;
 
-            // Wait for Running (covers scheduling + image pull). On failure,
-            // best-effort delete so a wedged pod doesn't leak.
-            let running = await_condition(pods.clone(), &name, conditions::is_pod_running());
-            let wait = tokio::time::timeout(
-                Duration::from_secs(self.opts.pod_ready_timeout_secs),
-                running,
-            )
-            .await;
-            let ready = match wait {
-                Ok(Ok(_)) => Ok(()),
-                Ok(Err(e)) => Err(format!("pod {name} failed while waiting for Running: {e}")),
-                Err(_) => Err(format!(
-                    "pod {name} not Running within {}s (image pull failure or unschedulable — \
-                     kubectl describe pod {name})",
-                    self.opts.pod_ready_timeout_secs
-                )),
+            // From here the pod exists. Whatever fails before it becomes a
+            // runner deletes it: the caller only learns of a runner it got.
+            let started = async {
+                // Covers scheduling and the image pull.
+                wait_until_running(&pods, &name, opts.pod_ready_timeout_secs).await?;
+                let attach_params = AttachParams::default()
+                    .container(RUNNER_CONTAINER_NAME)
+                    .stdin(true)
+                    .stdout(true)
+                    .stderr(true)
+                    .tty(false);
+                let mut attached = pods
+                    .attach(&name, &attach_params)
+                    .await
+                    .map_err(|e| format!("pod {name} attach failed: {e}"))?;
+                let stdin = attached
+                    .stdin()
+                    .ok_or_else(|| format!("pod {name} attach returned no stdin stream"))?;
+                let stdout = attached
+                    .stdout()
+                    .ok_or_else(|| format!("pod {name} attach returned no stdout stream"))?;
+                let stderr = attached
+                    .stderr()
+                    .ok_or_else(|| format!("pod {name} attach returned no stderr stream"))?;
+                Ok((attached, stdin, stdout, stderr))
             };
-            if let Err(msg) = ready {
-                let _ = pods
-                    .delete(
-                        &name,
-                        &DeleteParams {
-                            grace_period_seconds: Some(0),
-                            ..DeleteParams::default()
-                        },
-                    )
-                    .await;
-                return Err(RunnerRunError::Other(msg));
-            }
-
-            let attach_params = AttachParams::default()
-                .container(RUNNER_CONTAINER_NAME)
-                .stdin(true)
-                .stdout(true)
-                .stderr(true)
-                .tty(false);
-            let mut attached = pods
-                .attach(&name, &attach_params)
-                .await
-                .map_err(|e| RunnerRunError::Other(format!("pod attach failed: {e}")))?;
-            let mut stdin_writer = attached.stdin().ok_or_else(|| {
-                RunnerRunError::Other("pod attach returned no stdin stream".into())
-            })?;
-            let mut stdout_reader = attached.stdout().ok_or_else(|| {
-                RunnerRunError::Other("pod attach returned no stdout stream".into())
-            })?;
-            let mut stderr_reader = attached.stderr().ok_or_else(|| {
-                RunnerRunError::Other("pod attach returned no stderr stream".into())
-            })?;
+            let (_attached, mut stdin_writer, mut stdout_reader, mut stderr_reader) =
+                delete_on_failure(&name, started, || delete_now(&pods, &name))
+                    .await
+                    .map_err(RunnerRunError::Other)?;
 
             let (event_tx, event_rx) = mpsc::unbounded_channel::<RunnerEvent>();
             let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -511,9 +801,14 @@ pub mod kube_api {
             })
         }
 
-        async fn pull_image(&self, _image: &str) -> Result<(), String> {
-            // The kubelet pulls declaratively at pod admission; `run` never
-            // reports ImageMissing, so this is unreachable in practice.
+        async fn pull_image(
+            &self,
+            _image: &str,
+            _auth: Option<RegistryAuth>,
+        ) -> Result<(), String> {
+            // The kubelet pulls declaratively at pod admission, with the
+            // image pull secrets the pod inherits from the server pod; `run`
+            // never reports ImageMissing, so this is unreachable in practice.
             Ok(())
         }
 
@@ -665,7 +960,161 @@ mod tests {
             node_name: None,
             runtime_class: None,
             pod_ready_timeout_secs: 120,
+            ephemeral_storage_mib: 10 * 1024,
+            image_pull_secrets: Vec::new(),
+            server_pod: None,
         }
+    }
+
+    #[test]
+    fn runner_pods_meet_the_restricted_pod_security_level() {
+        // A `restricted` namespace (deploy/k8s/overlays/production) refused
+        // the pod before: no runAsNonRoot, no seccomp profile, image user root.
+        let manifest = runner_pod_manifest(
+            &spec(RunnerMount::Volume {
+                volume: "v".into(),
+                subpath: Some("ws".into()),
+            }),
+            &opts(),
+        )
+        .expect("manifest");
+        let pod = &manifest["spec"]["securityContext"];
+        assert_eq!(pod["runAsNonRoot"], true);
+        assert_eq!(pod["runAsUser"], RUNNER_UID);
+        assert_eq!(pod["runAsGroup"], RUNNER_UID);
+        assert_eq!(pod["fsGroup"], RUNNER_UID);
+        assert_eq!(pod["seccompProfile"]["type"], "RuntimeDefault");
+        let container = &manifest["spec"]["containers"][0]["securityContext"];
+        assert_eq!(container["allowPrivilegeEscalation"], false);
+        assert_eq!(container["capabilities"]["drop"][0], "ALL");
+        assert!(container["capabilities"].get("add").is_none());
+        assert_eq!(
+            manifest["spec"]["containers"][0]["resources"]["limits"]["ephemeral-storage"],
+            "10240Mi"
+        );
+        assert!(manifest["spec"].get("imagePullSecrets").is_none());
+    }
+
+    #[test]
+    fn runner_pods_inherit_the_server_pods_runtime_class_and_pull_secrets() {
+        let server = json!({
+            "runtimeClassName": "gvisor",
+            "imagePullSecrets": [{ "name": "ghcr-pull" }, { "name": "" }, { "other": 1 }],
+        });
+        let inherited = inherit_from_server_pod(&opts(), &server);
+        assert_eq!(inherited.runtime_class.as_deref(), Some("gvisor"));
+        assert_eq!(inherited.image_pull_secrets, vec!["ghcr-pull".to_string()]);
+        let manifest = runner_pod_manifest(
+            &spec(RunnerMount::Volume {
+                volume: "v".into(),
+                subpath: None,
+            }),
+            &inherited,
+        )
+        .expect("manifest");
+        assert_eq!(manifest["spec"]["runtimeClassName"], "gvisor");
+        assert_eq!(manifest["spec"]["imagePullSecrets"][0]["name"], "ghcr-pull");
+
+        // An explicit class wins; a server pod with neither passes nothing on.
+        let explicit = KubeRunnerOptions {
+            runtime_class: Some("kata".into()),
+            ..opts()
+        };
+        assert_eq!(
+            inherit_from_server_pod(&explicit, &server)
+                .runtime_class
+                .as_deref(),
+            Some("kata")
+        );
+        let plain = inherit_from_server_pod(&opts(), &json!({}));
+        assert_eq!(plain.runtime_class, None);
+        assert!(plain.image_pull_secrets.is_empty());
+    }
+
+    #[test]
+    fn a_pod_that_does_not_start_says_why() {
+        assert_eq!(pod_start(&json!({ "phase": "Running" })), PodStart::Running);
+        assert_eq!(pod_start(&json!({ "phase": "Failed" })), PodStart::Ended);
+        assert_eq!(pod_start(&json!({ "phase": "Succeeded" })), PodStart::Ended);
+        assert_eq!(pod_start(&json!({ "phase": "Pending" })), PodStart::Waiting);
+        assert_eq!(pod_start(&Value::Null), PodStart::Waiting);
+
+        let pulling = json!({
+            "phase": "Pending",
+            "containerStatuses": [{
+                "name": RUNNER_CONTAINER_NAME,
+                "state": { "waiting": {
+                    "reason": "ImagePullBackOff",
+                    "message": "Back-off pulling image \"ghcr.io/o/cognia-runner:latest\"",
+                } },
+            }],
+        });
+        assert_eq!(
+            describe_pod_start(&pulling),
+            "phase Pending; container waiting: ImagePullBackOff: Back-off pulling image \
+             \"ghcr.io/o/cognia-runner:latest\""
+        );
+        let unschedulable = json!({
+            "phase": "Pending",
+            "conditions": [
+                { "type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+                  "message": "0/3 nodes are available: 3 Insufficient memory." },
+                { "type": "Ready", "status": "False" },
+            ],
+        });
+        assert_eq!(
+            describe_pod_start(&unschedulable),
+            "phase Pending; not scheduled: Unschedulable: 0/3 nodes are available: 3 Insufficient memory."
+        );
+        let crashed = json!({
+            "phase": "Failed",
+            "containerStatuses": [
+                { "name": "sidecar", "state": { "waiting": { "reason": "Ignored" } } },
+                { "name": RUNNER_CONTAINER_NAME,
+                  "state": { "terminated": { "reason": "Error", "exitCode": 127 } } },
+            ],
+        });
+        assert_eq!(
+            describe_pod_start(&crashed),
+            "phase Failed; container terminated: Error (exit 127)"
+        );
+        assert_eq!(describe_pod_start(&Value::Null), "phase unknown");
+    }
+
+    #[tokio::test]
+    async fn a_pod_that_fails_after_create_is_deleted() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let deletes = AtomicUsize::new(0);
+        let delete = || async {
+            deletes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        };
+
+        let ok = delete_on_failure("p", async { Ok::<_, String>(7) }, delete).await;
+        assert_eq!(ok, Ok(7));
+        assert_eq!(
+            deletes.load(Ordering::SeqCst),
+            0,
+            "a pod that became a runner stays"
+        );
+
+        let attach = delete_on_failure(
+            "p",
+            async { Err::<(), _>("pod p attach failed: closed".to_string()) },
+            delete,
+        )
+        .await;
+        assert_eq!(attach, Err("pod p attach failed: closed".to_string()));
+        assert_eq!(deletes.load(Ordering::SeqCst), 1);
+
+        let both = delete_on_failure(
+            "p",
+            async { Err::<(), _>("pod p not Running within 1s: phase Pending".to_string()) },
+            || async { Err("forbidden".to_string()) },
+        )
+        .await
+        .unwrap_err();
+        assert!(both.starts_with("pod p not Running within 1s: phase Pending; deleting pod p also failed (forbidden)"), "{both}");
     }
 
     #[test]
@@ -870,10 +1319,35 @@ mod tests {
         assert!(KubeRunnerOptions::from_env()
             .unwrap_err()
             .contains(RUNNER_POD_READY_TIMEOUT_ENV));
+        std::env::remove_var(RUNNER_POD_READY_TIMEOUT_ENV);
+
+        std::env::remove_var(RUNNER_EPHEMERAL_STORAGE_MB_ENV);
+        assert_eq!(
+            KubeRunnerOptions::from_env().unwrap().ephemeral_storage_mib,
+            10240
+        );
+        std::env::set_var(RUNNER_EPHEMERAL_STORAGE_MB_ENV, "4096");
+        assert_eq!(
+            KubeRunnerOptions::from_env().unwrap().ephemeral_storage_mib,
+            4096
+        );
+        for bad in ["0", "-1", "lots"] {
+            std::env::set_var(RUNNER_EPHEMERAL_STORAGE_MB_ENV, bad);
+            assert!(KubeRunnerOptions::from_env()
+                .unwrap_err()
+                .contains(RUNNER_EPHEMERAL_STORAGE_MB_ENV));
+        }
+        std::env::remove_var(RUNNER_EPHEMERAL_STORAGE_MB_ENV);
+
+        std::env::set_var(SERVER_POD_NAME_ENV, "cognia-server-0");
+        assert_eq!(
+            KubeRunnerOptions::from_env().unwrap().server_pod.as_deref(),
+            Some("cognia-server-0")
+        );
+        std::env::remove_var(SERVER_POD_NAME_ENV);
 
         std::env::remove_var(RUNNER_NAMESPACE_ENV);
         std::env::remove_var(RUNNER_NODE_NAME_ENV);
         std::env::remove_var(RUNNER_RUNTIME_CLASS_ENV);
-        std::env::remove_var(RUNNER_POD_READY_TIMEOUT_ENV);
     }
 }
