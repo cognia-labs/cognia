@@ -59,7 +59,13 @@ import {
   type BotExecutorContext,
   type BotExecutorFn,
 } from "./executors/types"
-import { BotRunCancelledError, BotRunParkedError, createBotStepApi, type BotStepDeps } from "./step"
+import {
+  BotRunBudgetSpentError,
+  BotRunCancelledError,
+  BotRunParkedError,
+  createBotStepApi,
+  type BotStepDeps,
+} from "./step"
 import { appendBotRunLog, appendBotRunProgress } from "./journal"
 import { publishStagedBotRunEvent } from "./run-publication"
 import { unlessAborted } from "@/lib/utils/abort"
@@ -637,9 +643,18 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
   const budgetMs = resolved.policy.maxRunDurationMs
   const segmentStartedAt = Date.now()
   const remainingMs = budgetMs ? budgetMs - (await readBotRunExecutionMs(runId)) : undefined
-  if (remainingMs !== undefined && remainingMs <= 0) controller.abort()
+  // Spending the budget is the run's own outcome, not somebody's cancel: it
+  // fails, so the run says why and a `bot.run.failed` subscriber hears of it.
+  // Only when nothing stopped the run first, so a cancel stays a cancel.
+  let budgetSpent = false
+  const spendBudget = () => {
+    if (controller.signal.aborted) return
+    budgetSpent = true
+    controller.abort()
+  }
+  if (remainingMs !== undefined && remainingMs <= 0) spendBudget()
   const executionTimer =
-    remainingMs !== undefined && remainingMs > 0 ? setTimeout(abort, remainingMs) : undefined
+    remainingMs !== undefined && remainingMs > 0 ? setTimeout(spendBudget, remainingMs) : undefined
 
   const config = resolveBotConfig({
     installation: resolved.installation.config,
@@ -824,17 +839,21 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     publishAfterCommit(delivery.id)
 
     return { status: "completed", runId, ...(result ? { result } : {}) }
-  } catch (error) {
+  } catch (thrown) {
     const endedAt = now()
     // A stopped lease holder must not settle a delivery now owned by another
     // attempt, or undo a cancellation already committed by the control gate.
     if (!(await stillOwnsDelivery())) return { status: "cancelled", runId }
+    // Whatever the handler threw on its way out (its own cancellation error,
+    // or a park it was about to make), the run ended because its budget did.
+    const error = budgetSpent ? new BotRunBudgetSpentError(budgetMs ?? 0) : thrown
     if (
-      error instanceof BotRunCancelledError ||
-      controller.signal.aborted ||
-      (error instanceof Error &&
-        "terminalCancellation" in error &&
-        error.terminalCancellation === true)
+      !budgetSpent &&
+      (error instanceof BotRunCancelledError ||
+        controller.signal.aborted ||
+        (error instanceof Error &&
+          "terminalCancellation" in error &&
+          error.terminalCancellation === true))
     ) {
       await runEventJournal
         .append(
@@ -879,13 +898,17 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
 
     const message = error instanceof Error ? error.message : String(error)
     const unavailable = error instanceof BotExecutorUnavailableError
+    // Neither is retried: an unavailable executor meets the same refusal, and
+    // a spent budget is summed over attempts, so a retry would have none.
+    // Replay mints a fresh run, which starts with a budget of its own.
+    const final = unavailable || error instanceof BotRunBudgetSpentError
     // The attempt's outcome, its journal entries and the event a terminal
     // failure owes commit together: a dead letter whose run still reads
     // `running`, or a failed run nobody subscribed ever hears of, are both one
     // of these writes landing without the others.
     const outcome = await getDb().transaction("rw", terminalStores(), async () => {
       if (!(await stillOwnsDelivery())) return { status: "lost" as const }
-      if (!unavailable) {
+      if (!final) {
         const next = await failBotDelivery(
           delivery.id,
           error,

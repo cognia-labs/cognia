@@ -561,8 +561,9 @@ describe("runBotDelivery", () => {
     expect(liveBotRun("acme", runId)).toBeUndefined()
   })
 
-  it("cancels execution at the policy deadline and releases its timer", async () => {
+  it("fails a run that spends its budget, says why and does not retry it", async () => {
     const { delivery, resolved } = await seed()
+    const source = await import("@/lib/bot/sources/bot-run")
     resolved.policy.maxRunDurationMs = 25
     const outcome = await runBotDelivery({
       delivery,
@@ -577,12 +578,50 @@ describe("runBotDelivery", () => {
           }),
       },
     })
-    expect(outcome.status).toBe("cancelled")
-    expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("dismissed")
+    // Not a cancel: nobody stopped it. A cancel reads like someone did, and
+    // publishes nothing a `bot.run.failed` subscriber would hear.
+    expect(outcome).toMatchObject({
+      status: "failed",
+      error: "The run spent its execution-time budget of 25 ms",
+    })
+    expect(await getDb().botEventDeliveries.get(delivery.id)).toMatchObject({
+      // Settled, not backed off: the budget is summed over attempts, so a
+      // retry would have none. Replay mints a fresh run with its own.
+      status: "dismissed",
+      lastError: "The run spent its execution-time budget of 25 ms",
+    })
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("failed")
     expect(getLiveBotRunSignal(outcome.runId)).toBeUndefined()
+    await settleAsyncWork()
+    expect(source.dispatchBotRunToBots).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: outcome.runId, status: "failed" })
+    )
   })
 
-  it("settles at the deadline even when the handler ignores its signal (B14)", async () => {
+  it("keeps a cancel that lands before the budget a cancel", async () => {
+    const { delivery, resolved } = await seed()
+    resolved.policy.maxRunDurationMs = 40
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: {
+        handler: (ctx) =>
+          new Promise(() => {
+            // Stopped by a person while well inside its budget, by a handler
+            // that never returns. Settling at the cancel must not wait for,
+            // or be relabelled by, the budget that would have run out later.
+            cancelLiveBotRun(ctx.runId)
+          }),
+      },
+    })
+    expect(outcome.status).toBe("cancelled")
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("cancelled")
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("cancelled")
+  })
+
+  it("settles at the budget even when the handler ignores its signal (B14)", async () => {
     const { delivery, resolved } = await seed()
     resolved.policy.maxRunDurationMs = 20
     let finish!: (value: { summary: string }) => void
@@ -598,14 +637,14 @@ describe("runBotDelivery", () => {
           }),
       },
     })
-    expect(outcome.status).toBe("cancelled")
+    expect(outcome.status).toBe("failed")
     expect(Date.now() - started).toBeLessThan(1_000)
     expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("dismissed")
     expect(getLiveBotRunSignal(outcome.runId)).toBeUndefined()
     // The abandoned handler returning later changes nothing.
     finish({ summary: "too late" })
     await settleAsyncWork()
-    expect((await getExecutionRun(outcome.runId))?.status).toBe("cancelled")
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("failed")
     expect(await getBotRunStep(outcome.runId, BOT_RUN_RESULT_STEP)).toBeUndefined()
   })
 
@@ -626,7 +665,7 @@ describe("runBotDelivery", () => {
 
     // 50 ms of the 70 are spent: the second 50 ms segment runs out first.
     const resumed = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
-    expect(resumed.status).toBe("cancelled")
+    expect(resumed.status).toBe("failed")
     expect(entries).toBe(2)
   })
 
@@ -636,7 +675,7 @@ describe("runBotDelivery", () => {
     await addBotRunExecutionMs(botRunId(delivery.id), 1_000)
     const handler = jest.fn(async () => ({ summary: "should not run" }))
     const outcome = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
-    expect(outcome.status).toBe("cancelled")
+    expect(outcome.status).toBe("failed")
     expect(handler).not.toHaveBeenCalled()
   })
 

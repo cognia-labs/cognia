@@ -71,6 +71,20 @@ export class BotRunCancelledError extends Error {
 }
 
 /**
+ * A run that spent its `maxRunDurationMs`: its execution time, summed over
+ * every attempt and resumed segment, reached the policy's budget. A failure,
+ * not a cancel (nobody stopped it), and not retried: a retry would have no
+ * budget left.
+ */
+export class BotRunBudgetSpentError extends Error {
+  readonly code = "bot_run_budget_spent"
+  constructor(readonly budgetMs: number) {
+    super(`The run spent its execution-time budget of ${budgetMs} ms`)
+    this.name = "BotRunBudgetSpentError"
+  }
+}
+
+/**
  * Thrown when a wait cannot be answered yet and the run should leave the queue.
  *
  * The alternative was what this replaces: an in-process poll that held the

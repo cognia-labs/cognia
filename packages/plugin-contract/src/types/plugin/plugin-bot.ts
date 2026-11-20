@@ -287,7 +287,9 @@ export interface PluginBotPolicyV1 {
    * Execution-time ceiling for one run: the time it spends running, summed
    * over every attempt and every segment resumed after a wait. A parked wait
    * (an approval, an awaited event, a retry backoff) does not spend it, so an
-   * approval that takes a day still fits a budget of minutes.
+   * approval that takes a day still fits a budget of minutes. A run that
+   * spends it fails, saying so, and is not retried (a retry would have no
+   * budget left); replaying it starts a fresh run with a budget of its own.
    */
   maxRunDurationMs?: number
   /** Cost ceiling for one run, declared on its run tree's ledger. */

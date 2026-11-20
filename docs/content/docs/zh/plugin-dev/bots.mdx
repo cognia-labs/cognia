@@ -69,7 +69,7 @@ Bot 将已有执行器与触发器绑定，并为该绑定设置策略上限。�
 
 ### `requires` 与 `policy`
 
-`requires.credentials[]` 声明凭据槽位（`{ id, label, optional?, integration?, strategy? }`）。未绑定的必需槽位会把安装停在 `needs_setup`；`configSchema` 中 `required` 的设置，如果安装没有提供、schema 也没有默认值，同样如此。因此没有提交配置的安装也能成功，之后等用户在设置表单里补齐；schema 拒绝的值会在安装或保存时被拒。`policy` 是定义层的上限——`maxAuthority`、`maxAutonomy`、`requireApprovalForWrites`、`maxRunDurationMs` 等——与组织、插件、安装、单次请求各层取交集（绝不放宽）。`maxRunDurationMs` 计的是执行时间，累加每次尝试以及每段等待后恢复的执行；挂起等待不消耗它。
+`requires.credentials[]` 声明凭据槽位（`{ id, label, optional?, integration?, strategy? }`）。未绑定的必需槽位会把安装停在 `needs_setup`；`configSchema` 中 `required` 的设置，如果安装没有提供、schema 也没有默认值，同样如此。因此没有提交配置的安装也能成功，之后等用户在设置表单里补齐；schema 拒绝的值会在安装或保存时被拒。`policy` 是定义层的上限——`maxAuthority`、`maxAutonomy`、`requireApprovalForWrites`、`maxRunDurationMs` 等——与组织、插件、安装、单次请求各层取交集（绝不放宽）。`maxRunDurationMs` 计的是执行时间，累加每次尝试以及每段等待后恢复的执行；挂起等待不消耗它。耗尽预算的运行以此为原因失败（并发布 `bot.run.failed`），不会自动重试，因为重试已没有剩余预算；重放会以新的预算开始一次新运行。
 
 ### `lifecycle`
 
