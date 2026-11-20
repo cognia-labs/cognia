@@ -80,6 +80,12 @@ export interface RoutedPromptInput {
   temperature?: number
   /** Live token deltas (A3 streaming); forwarded when the client can stream. */
   onDelta?: (delta: string) => void
+  /**
+   * Aborts the call in flight and ends the fallback chain: a stopped caller
+   * wants no answer from the next provider either, and an abort is not a
+   * provider failure the health metrics should learn from.
+   */
+  signal?: AbortSignal
   log: (level: "info" | "warn", message: string) => void
 }
 
@@ -290,6 +296,7 @@ export async function runRoutedPrompt(
   let attempts = 0
   let entry = controller.begin()
   while (entry) {
+    input.signal?.throwIfAborted()
     if (deps.getCircuitBreakerState(entry.providerId) === "open") {
       skipped.push(`${entry.providerId} (circuit open)`)
       entry = controller.failAndAdvance()
@@ -349,6 +356,7 @@ export async function runRoutedPrompt(
         routingReason: route.reasonCodes.join(", "),
       }
     } catch (err) {
+      if (input.signal?.aborted) throw input.signal.reason ?? err
       // The run tree's ledger: a spent budget or a passed deadline ends the
       // step for every candidate; an unpriced model leaves the next one to try.
       if (err instanceof RunBudgetError) {
@@ -411,7 +419,11 @@ async function complete(
   input: RoutedPromptInput,
   onCommit: () => void
 ): Promise<string> {
-  const options = { system: input.systemPrompt, temperature: input.temperature }
+  const options = {
+    system: input.systemPrompt,
+    temperature: input.temperature,
+    ...(input.signal ? { abortSignal: input.signal } : {}),
+  }
   if (input.onDelta && client.stream) {
     let full = ""
     for await (const delta of client.stream(input.userPrompt, options)) {

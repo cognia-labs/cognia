@@ -34,7 +34,10 @@ const COUNCIL_SYNTHESIS_SYSTEM = COUNCIL_SYNTHESIS_PROMPT.defaultBody
  *  (identified by the synthesis system prompt) returns a report. */
 function makeDeps(
   overrides: {
-    perAlias?: Record<string, () => Promise<{ completion: string; model?: string }>>
+    perAlias?: Record<
+      string,
+      (input: RunPromptInput) => Promise<{ completion: string; model?: string }>
+    >
     synth?: string
   } = {}
 ): { deps: RunCouncilDeps; calls: RunPromptInput[] } {
@@ -52,7 +55,7 @@ function makeDeps(
         }
       }
       const fn = overrides.perAlias?.[input.modelAlias]
-      if (fn) return fn()
+      if (fn) return fn(input)
       return { completion: `answer from ${input.modelAlias}`, model: input.modelAlias }
     },
   }
@@ -138,12 +141,102 @@ describe("runCouncil", () => {
     expect(res.councillors.find((c) => c.name === "alpha")?.error).toMatch(/empty response/)
   })
 
-  it("times out a hung councillor", async () => {
-    const perAlias = { fast: () => new Promise<{ completion: string }>(() => {}) }
+  it("times out a hung councillor and aborts its call", async () => {
+    let aborted = false
+    const perAlias = {
+      fast: (input: RunPromptInput) =>
+        new Promise<{ completion: string }>((_resolve, reject) => {
+          input.signal?.addEventListener("abort", () => {
+            aborted = true
+            reject(input.signal?.reason)
+          })
+        }),
+    }
     const { deps } = makeDeps({ perAlias })
     const res = await runCouncil({ ...baseOpts, timeoutMs: 20 }, deps)
+    expect(aborted).toBe(true)
     expect(res.councillors.find((c) => c.name === "alpha")?.status).toBe("failed")
     expect(res.councillors.find((c) => c.name === "alpha")?.error).toMatch(/timed out/)
+    expect(res.councillors.find((c) => c.name === "alpha")?.stopUnconfirmed).toBeUndefined()
+  })
+
+  it("keeps a timed-out councillor's slot through its stop grace, then records an unconfirmed stop", async () => {
+    let release!: () => void
+    const hung = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let fastStartedAt = 0
+    let smartStartedAt = 0
+    const perAlias = {
+      fast: async () => {
+        fastStartedAt = Date.now()
+        await hung
+        return { completion: "late" }
+      },
+      smart: async () => {
+        smartStartedAt = Date.now()
+        return { completion: "b" }
+      },
+    }
+    const { deps } = makeDeps({ perAlias })
+    try {
+      const res = await runCouncil(
+        { ...baseOpts, executionMode: "serial", timeoutMs: 10, stopGraceMs: 30 },
+        deps
+      )
+      expect(res.councillors.find((c) => c.name === "alpha")).toMatchObject({
+        status: "failed",
+        stopUnconfirmed: true,
+      })
+      // The next councillor waited for the deadline AND the stop grace.
+      expect(smartStartedAt - fastStartedAt).toBeGreaterThanOrEqual(35)
+      expect(res.respondedCount).toBe(1)
+    } finally {
+      release()
+    }
+  })
+
+  it("rates no consensus when no councillor answered (the synthesizer answers alone)", async () => {
+    const failing = async () => {
+      throw new Error("member unavailable")
+    }
+    const { deps, calls } = makeDeps({
+      perAlias: { fast: failing, smart: failing },
+      synth: "Unsupported synthesis\n\nConfidence: unanimous",
+    })
+    const res = await runCouncil(baseOpts, deps)
+    // The single-model fallback is kept: the synthesizer still answers.
+    expect(calls).toHaveLength(3)
+    expect(res.markdown).toContain("Unsupported synthesis")
+    expect(res).toMatchObject({ respondedCount: 0, totalCount: 2, confidence: "unknown" })
+  })
+
+  it("rates no consensus from a single answer", async () => {
+    const { deps } = makeDeps({
+      perAlias: {
+        smart: async () => {
+          throw new Error("provider down")
+        },
+      },
+      synth: "Confidence: unanimous",
+    })
+    const res = await runCouncil(baseOpts, deps)
+    expect(res).toMatchObject({ respondedCount: 1, confidence: "unknown" })
+  })
+
+  it("starts no councillor or synthesis after the caller stops it", async () => {
+    const controller = new AbortController()
+    const perAlias = {
+      fast: async () => {
+        controller.abort(new Error("step cancelled"))
+        return { completion: "a" }
+      },
+    }
+    const { deps, calls } = makeDeps({ perAlias })
+    await expect(
+      runCouncil({ ...baseOpts, executionMode: "serial", signal: controller.signal }, deps)
+    ).rejects.toThrow("step cancelled")
+    expect(calls.map((c) => c.modelAlias)).toEqual(["fast"])
   })
 
   it("appends extra synthesis guidance to the system prompt", async () => {

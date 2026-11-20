@@ -85,7 +85,7 @@ describe("runEnsemble", () => {
       deps
     )
     expect(r.result).toBe("merged answer")
-    expect(synthesize).toHaveBeenCalledWith(expect.any(Array), "be terse")
+    expect(synthesize).toHaveBeenCalledWith(expect.any(Array), "be terse", undefined)
   })
 
   it("throws when synthesize policy lacks a synthesizer dep", async () => {
@@ -158,5 +158,88 @@ describe("runEnsemble", () => {
     )
     const lenses = runSample.mock.calls.map((c) => c[0].lens)
     expect(lenses).toEqual(["refute", "support", "refute", "support"])
+  })
+
+  it("aborts a timed-out sample and keeps its slot until it stops", async () => {
+    let active = 0
+    let peak = 0
+    const signals: AbortSignal[] = []
+    const outcome = await runEnsemble(
+      {
+        n: 2,
+        iterationConcurrency: 1,
+        timeoutMs: 20,
+        aggregation: { kind: "majority-vote-on-field" },
+      },
+      {
+        runSample: ({ index, signal }) =>
+          new Promise((resolve, reject) => {
+            signals.push(signal)
+            active += 1
+            peak = Math.max(peak, active)
+            const finish = () => {
+              active -= 1
+              if (signal.aborted) reject(signal.reason)
+              else resolve({ text: String(index) })
+            }
+            // The first sample only stops once it is told to.
+            if (index === 0) signal.addEventListener("abort", () => setTimeout(finish, 5))
+            else finish()
+          }),
+      }
+    )
+    expect(outcome.samples.map(({ status }) => status)).toEqual(["failed", "completed"])
+    expect(outcome.samples[0].error).toMatch(/ensemble sample timed out after 20ms/)
+    expect(signals[0].aborted).toBe(true)
+    expect(peak).toBe(1)
+    expect(active).toBe(0)
+  })
+
+  it("records a sample that did not stop within its grace", async () => {
+    let release!: () => void
+    const stuck = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    try {
+      const outcome = await runEnsemble(
+        {
+          n: 1,
+          timeoutMs: 5,
+          stopGraceMs: 10,
+          aggregation: { kind: "majority-vote-on-field" },
+        },
+        {
+          runSample: async () => {
+            await stuck
+            return { text: "late" }
+          },
+        }
+      )
+      expect(outcome.samples[0]).toMatchObject({ status: "failed", stopUnconfirmed: true })
+    } finally {
+      release()
+    }
+  })
+
+  it("stops on the caller's signal without starting more samples or synthesizing", async () => {
+    const controller = new AbortController()
+    const synthesize = jest.fn(async () => ({ text: "never" }))
+    const runSample = jest.fn(async ({ index }: RunEnsembleSampleInput) => {
+      if (index === 0) controller.abort(new Error("step cancelled"))
+      return { text: "x" }
+    })
+    await expect(
+      runEnsemble(
+        {
+          n: 3,
+          iterationConcurrency: 1,
+          signal: controller.signal,
+          aggregation: { kind: "synthesize-by-final-agent" },
+        },
+        { runSample, synthesize }
+      )
+    ).rejects.toThrow("step cancelled")
+    expect(runSample).toHaveBeenCalledTimes(1)
+    expect(synthesize).not.toHaveBeenCalled()
   })
 })

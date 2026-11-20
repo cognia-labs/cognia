@@ -109,6 +109,51 @@ describe("executeAiEnsemble", () => {
     expect(out.samples).toHaveLength(3)
   })
 
+  it("gives each sample its own signal rather than the step's", async () => {
+    const parent = new AbortController()
+    const signals: AbortSignal[] = []
+    const runAgent = jest.fn(async (input: { signal?: AbortSignal }) => {
+      signals.push(input.signal!)
+      return { object: { v: "a" } }
+    })
+    const deps = makeDeps({ runAgent })
+    const ctx = {
+      ...makeCtx({
+        prompt: "judge",
+        n: 2,
+        aggregation: { kind: "majority-vote-on-field", field: "v" },
+      }),
+      signal: parent.signal,
+    } as StepExecutionContext
+    await executeAiEnsemble(ctx, async () => deps)
+    expect(signals).toHaveLength(2)
+    expect(signals[0]).not.toBe(parent.signal)
+    expect(signals[0]).not.toBe(signals[1])
+  })
+
+  it("stops starting samples and skips synthesis once the step is cancelled", async () => {
+    const parent = new AbortController()
+    const runAgent = jest.fn(async () => {
+      parent.abort(new Error("step cancelled"))
+      return { text: "x" }
+    })
+    const runPrompt = jest.fn(async () => ({ completion: "merged" }))
+    const deps = makeDeps({ runAgent, runPrompt })
+    const ctx = {
+      ...makeCtx({
+        prompt: "judge",
+        n: 3,
+        iterationConcurrency: 1,
+        aggregation: { kind: "synthesize-by-final-agent" },
+        synthesizerAlias: "synth",
+      }),
+      signal: parent.signal,
+    } as StepExecutionContext
+    await expect(executeAiEnsemble(ctx, async () => deps)).rejects.toThrow("step cancelled")
+    expect(runAgent).toHaveBeenCalledTimes(1)
+    expect(runPrompt).not.toHaveBeenCalled()
+  })
+
   it("applies a lens by prepending it to each sample prompt", async () => {
     const runAgent = jest.fn(async (_input: Parameters<AiEnsembleDeps["runAgent"]>[0]) => ({
       object: { v: "x" },

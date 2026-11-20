@@ -220,6 +220,38 @@ describe("runRoutedPrompt", () => {
     expect(log).toHaveBeenCalledWith("warn", expect.stringContaining("p1 failed"))
   })
 
+  it("passes the caller's signal to the call and ends the chain when it aborts", async () => {
+    const controller = new AbortController()
+    const first: LlmClient = {
+      complete: jest.fn(async (_prompt: string, options?: { abortSignal?: AbortSignal }) => {
+        expect(options?.abortSignal).toBe(controller.signal)
+        controller.abort(new Error("step cancelled"))
+        throw new Error("aborted mid-call")
+      }),
+      getUsageSnapshot: () => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+    }
+    const second = okClient("must not be asked")
+    const makeClient = jest.fn((cfg: { model: string }) => (cfg.model === "m1" ? first : second))
+    const { deps, outcomes } = makeDeps({ makeClient })
+    await expect(
+      runRoutedPrompt({ ...baseInput, signal: controller.signal }, deps)
+    ).rejects.toThrow("step cancelled")
+    expect(makeClient).toHaveBeenCalledTimes(1)
+    expect(second.complete).not.toHaveBeenCalled()
+    // An abort is not a provider failure.
+    expect(outcomes).toEqual([])
+  })
+
+  it("sends nothing when the caller already stopped", async () => {
+    const controller = new AbortController()
+    controller.abort(new Error("already stopped"))
+    const { deps } = makeDeps()
+    await expect(
+      runRoutedPrompt({ ...baseInput, signal: controller.signal }, deps)
+    ).rejects.toThrow("already stopped")
+    expect(deps.makeClient).not.toHaveBeenCalled()
+  })
+
   it("skips providers with missing credentials instead of aborting the walk", async () => {
     const { deps } = makeDeps({
       resolveCreds: jest.fn(async (id: string) =>

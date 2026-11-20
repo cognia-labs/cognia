@@ -16,9 +16,14 @@
  * What counts as a councillor's answer is the rule every aggregating surface
  * shares (`@cognia/agent-orchestration/aggregate`). The agreement rating is
  * the synthesizer's own, parsed from its report: councillors answer in free
- * text, so there are no ballots to tally.
+ * text, so there are no ballots to tally. Agreement needs at least two
+ * answers, so a council with fewer reports `unknown` whatever the synthesis
+ * says: when every councillor failed, the synthesizer still answers the
+ * prompt itself (the single-model fallback), and that answer agrees with no
+ * one.
  */
 
+import { boundedFanOut, type FanOutOutcome } from "@cognia/primitives/bounded-fan-out"
 import { answerText } from "@cognia/agent-orchestration/aggregate"
 import type { RoutedPromptLedger } from "@/lib/workflow/nodes/ai/ai-prompt-routed"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
@@ -48,6 +53,13 @@ export interface CouncilOptions {
   executionMode?: "parallel" | "serial"
   /** Max concurrent councillors in parallel mode. Default 4. */
   maxConcurrency?: number
+  /** How long a stopped councillor may take to settle before its slot is given back. */
+  stopGraceMs?: number
+  /**
+   * Stops the council: running councillors are aborted, no other one starts
+   * and the synthesizer is never called.
+   */
+  signal?: AbortSignal
 }
 
 export interface CouncillorResult {
@@ -56,6 +68,8 @@ export interface CouncillorResult {
   status: "completed" | "failed"
   text?: string
   error?: string
+  /** Stopped (timed out) and still running when its slot was given back. */
+  stopUnconfirmed?: true
 }
 
 export interface CouncilResult {
@@ -75,6 +89,8 @@ export interface RunPromptInput {
   userPrompt: string
   systemPrompt?: string
   temperature?: number
+  /** Aborts the call: a councillor's deadline, or the council being stopped. */
+  signal?: AbortSignal
 }
 
 export interface RunPromptOutput {
@@ -175,79 +191,45 @@ export function parseConfidence(markdown: string): CouncilConfidence {
   return m ? (m[1].toLowerCase() as CouncilConfidence) : "unknown"
 }
 
-/** Run `fn` over `items` with at most `limit` in flight; failures reject the chain. */
-async function mapLimited<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(items.length)
-  let next = 0
-  const width = Math.max(1, Math.min(limit, items.length || 1))
-  const worker = async () => {
-    for (;;) {
-      const i = next++
-      if (i >= items.length) return
-      results[i] = await fn(items[i] as T, i)
-    }
-  }
-  await Promise.all(Array.from({ length: width }, () => worker()))
-  return results
+/** Fewest answers a consensus rating can describe: agreement is between answers. */
+export const MIN_ANSWERS_FOR_CONSENSUS = 2
+
+/** The council's rating: the synthesizer's, when there were enough answers to agree. */
+export function councilConfidence(markdown: string, respondedCount: number): CouncilConfidence {
+  return respondedCount < MIN_ANSWERS_FOR_CONSENSUS ? "unknown" : parseConfidence(markdown)
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  if (!ms || ms <= 0) return p
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`councillor timed out after ${ms}ms`)), ms)
-    p.then(
-      (v) => {
-        clearTimeout(t)
-        resolve(v)
-      },
-      (e) => {
-        clearTimeout(t)
-        reject(e)
-      }
-    )
-  })
-}
-
-/** Run one councillor, never throwing — failures become a `failed` result. */
-async function runCouncillor(
+/** One councillor's result from its fan-out outcome. */
+function councillorOf(
   spec: CouncillorSpec,
-  prompt: string,
-  timeoutMs: number,
+  outcome: FanOutOutcome<RunPromptOutput>,
   deps: RunCouncilDeps
-): Promise<CouncillorResult> {
-  try {
-    const out = await withTimeout(
-      deps.runPrompt({
-        modelAlias: spec.modelAlias,
-        userPrompt: formatCouncillorPrompt(prompt, spec.systemPrompt),
-      }),
-      timeoutMs
-    )
-    const text = answerText(out.completion)
-    if (!text) {
-      return {
-        name: spec.name,
-        model: out.model ?? spec.modelAlias,
-        status: "failed",
-        error: "empty response",
-      }
-    }
-    return { name: spec.name, model: out.model ?? spec.modelAlias, status: "completed", text }
-  } catch (err) {
-    deps.log?.(
-      "warn",
-      `councillor "${spec.name}" failed: ${err instanceof Error ? err.message : String(err)}`
-    )
-    return {
-      name: spec.name,
-      model: spec.modelAlias,
-      status: "failed",
-      error: err instanceof Error ? err.message : String(err),
-    }
+): CouncillorResult {
+  if (outcome.status === "fulfilled") {
+    const model = outcome.value.model ?? spec.modelAlias
+    const text = answerText(outcome.value.completion)
+    if (!text) return { name: spec.name, model, status: "failed", error: "empty response" }
+    return { name: spec.name, model, status: "completed", text }
+  }
+  const message =
+    outcome.status === "skipped"
+      ? "not started: the council was stopped"
+      : outcome.error instanceof Error
+        ? outcome.error.message
+        : String(outcome.error ?? "aborted")
+  const unconfirmed = outcome.status === "rejected" && !outcome.stopped
+  deps.log?.(
+    "warn",
+    unconfirmed
+      ? `councillor "${spec.name}" failed: ${message}; it had not stopped when its slot was released`
+      : `councillor "${spec.name}" failed: ${message}`
+  )
+  return {
+    name: spec.name,
+    model: spec.modelAlias,
+    status: "failed",
+    error: message,
+    ...(unconfirmed ? { stopUnconfirmed: true as const } : {}),
   }
 }
 
@@ -275,8 +257,26 @@ export async function runCouncil(
     `council: ${opts.councillors.length} councillors (${opts.executionMode ?? "parallel"})`
   )
 
-  const councillors = await mapLimited(opts.councillors, concurrency, (spec) =>
-    runCouncillor(spec, prompt, timeoutMs, deps)
+  const outcomes = await boundedFanOut(
+    opts.councillors,
+    (spec, _index, signal) =>
+      deps.runPrompt({
+        modelAlias: spec.modelAlias,
+        userPrompt: formatCouncillorPrompt(prompt, spec.systemPrompt),
+        signal,
+      }),
+    {
+      concurrency,
+      timeoutMs,
+      timeoutLabel: "councillor",
+      ...(opts.stopGraceMs !== undefined ? { stopGraceMs: opts.stopGraceMs } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    }
+  )
+  // A stopped council starts nothing more: no synthesis over a cut-short panel.
+  opts.signal?.throwIfAborted()
+  const councillors = opts.councillors.map((spec, index) =>
+    councillorOf(spec, outcomes[index], deps)
   )
 
   const respondedCount = councillors.filter((c) => c.status === "completed").length
@@ -291,12 +291,13 @@ export async function runCouncil(
     systemPrompt: synthSystem,
     userPrompt: formatCouncillorResults(prompt, councillors),
     temperature: 0.1,
+    ...(opts.signal ? { signal: opts.signal } : {}),
   })
 
   const markdown = (synth.completion ?? "").trim()
   return {
     markdown,
-    confidence: parseConfidence(markdown),
+    confidence: councilConfidence(markdown, respondedCount),
     councillors,
     respondedCount,
     totalCount: councillors.length,
@@ -327,6 +328,7 @@ export async function defaultCouncilRunPrompt(
         userPrompt: input.userPrompt,
         systemPrompt: input.systemPrompt,
         temperature: input.temperature,
+        ...(input.signal ? { signal: input.signal } : {}),
         log: () => {},
       },
       routedDeps

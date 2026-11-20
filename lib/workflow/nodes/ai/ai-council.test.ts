@@ -69,6 +69,26 @@ describe("executeAiCouncil", () => {
     expect(streamed.join("")).toMatch(/Council Response/)
   })
 
+  it("starts no further councillor or synthesis once the step is cancelled", async () => {
+    const controller = new AbortController()
+    const { ctx } = makeCtx(
+      { ...baseParams, executionMode: "serial" },
+      { signal: controller.signal }
+    )
+    const starts: Array<{ alias: string; aborted: boolean }> = []
+    await expect(
+      executeAiCouncil(ctx, async () => ({
+        async runPrompt({ modelAlias, signal }) {
+          starts.push({ alias: modelAlias, aborted: controller.signal.aborted })
+          expect(signal?.aborted).toBe(false)
+          if (modelAlias === "fast") controller.abort(new Error("step cancelled"))
+          return { completion: "fixture answer" }
+        },
+      }))
+    ).rejects.toThrow("step cancelled")
+    expect(starts).toEqual([{ alias: "fast", aborted: false }])
+  })
+
   it("throws (non-retryable) when no councillors are provided", async () => {
     const { ctx } = makeCtx({ ...baseParams, councillors: [] })
     await expect(executeAiCouncil(ctx, fakeDepsFactory())).rejects.toMatchObject({

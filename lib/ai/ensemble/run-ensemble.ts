@@ -17,6 +17,7 @@
  * `@cognia/agent-orchestration/aggregate`.
  */
 
+import { boundedFanOut, type FanOutOutcome } from "@cognia/primitives/bounded-fan-out"
 import {
   answerText,
   bestByScore,
@@ -41,6 +42,12 @@ export interface EnsembleSampleResult {
   text?: string
   object?: unknown
   error?: string
+  /**
+   * Set when the sample was stopped (its deadline passed, or the run was
+   * cancelled) and had not finished when its stop grace ran out: its slot was
+   * given back while its work may still be going.
+   */
+  stopUnconfirmed?: true
 }
 
 export interface EnsembleResult {
@@ -56,6 +63,12 @@ export interface EnsembleResult {
 export interface RunEnsembleSampleInput {
   index: number
   lens?: string
+  /**
+   * Aborts when this sample's deadline passes or the ensemble is stopped. A
+   * sample keeps its concurrency slot until it settles, so a runner that
+   * honours this signal is what keeps the in-flight count at the limit.
+   */
+  signal: AbortSignal
 }
 
 export interface RunEnsembleSampleOutput {
@@ -68,7 +81,11 @@ export interface RunEnsembleDeps {
   /** Run one sample (the target). May throw — failures become `failed` samples. */
   runSample: (input: RunEnsembleSampleInput) => Promise<RunEnsembleSampleOutput>
   /** Final synthesizer for `synthesize-by-final-agent`. Required for that policy. */
-  synthesize?: (samples: EnsembleSampleResult[], instructions?: string) => Promise<{ text: string }>
+  synthesize?: (
+    samples: EnsembleSampleResult[],
+    instructions: string | undefined,
+    signal: AbortSignal | undefined
+  ) => Promise<{ text: string }>
   log?: (level: "info" | "warn", message: string) => void
 }
 
@@ -82,47 +99,14 @@ export interface EnsembleOptions {
   iterationConcurrency?: number
   /** Per-sample timeout (ms). Default 180000. */
   timeoutMs?: number
+  /** How long a stopped sample may take to settle before its slot is given back. */
+  stopGraceMs?: number
+  /** Stops the ensemble: running samples are aborted, no new one starts, nothing is synthesized. */
+  signal?: AbortSignal
 }
 
 const DEFAULT_TIMEOUT_MS = 180_000
 const DEFAULT_CONCURRENCY = 4
-
-/** Run `fn` over `items` with at most `limit` in flight (lifted from run-council). */
-async function mapLimited<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(items.length)
-  let next = 0
-  const width = Math.max(1, Math.min(limit, items.length || 1))
-  const worker = async () => {
-    for (;;) {
-      const i = next++
-      if (i >= items.length) return
-      results[i] = await fn(items[i] as T, i)
-    }
-  }
-  await Promise.all(Array.from({ length: width }, () => worker()))
-  return results
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  if (!ms || ms <= 0) return p
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`ensemble sample timed out after ${ms}ms`)), ms)
-    p.then(
-      (v) => {
-        clearTimeout(t)
-        resolve(v)
-      },
-      (e) => {
-        clearTimeout(t)
-        reject(e)
-      }
-    )
-  })
-}
 
 /** Read the value a policy votes/scores on: `object[field]`, or the text. */
 function readField(sample: EnsembleSampleResult, field?: string): unknown {
@@ -197,33 +181,22 @@ export async function runEnsemble(
   )
 
   const indices = Array.from({ length: n }, (_, i) => i)
-  const samples = await mapLimited(
+  const outcomes = await boundedFanOut(
     indices,
-    concurrency,
-    async (i): Promise<EnsembleSampleResult> => {
-      const lens = lenses ? lenses[i % lenses.length] : undefined
-      try {
-        const out = await withTimeout(deps.runSample({ index: i, lens }), timeoutMs)
-        const text = answerText(out.text)
-        // A blank reply is a failed sample, not a vote for the empty string.
-        if (!isAnswer({ text, object: out.object })) {
-          deps.log?.("warn", `ensemble sample ${i} failed: empty response`)
-          return { index: i, ...(lens ? { lens } : {}), status: "failed", error: "empty response" }
-        }
-        return {
-          index: i,
-          ...(lens ? { lens } : {}),
-          status: "completed",
-          ...(text !== undefined ? { text } : {}),
-          ...(out.object !== undefined ? { object: out.object } : {}),
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        deps.log?.("warn", `ensemble sample ${i} failed: ${message}`)
-        return { index: i, ...(lens ? { lens } : {}), status: "failed", error: message }
-      }
+    async (i, _position, signal): Promise<RunEnsembleSampleOutput> =>
+      deps.runSample({ index: i, ...lensFor(lenses, i), signal }),
+    {
+      concurrency,
+      timeoutMs,
+      timeoutLabel: "ensemble sample",
+      ...(opts.stopGraceMs !== undefined ? { stopGraceMs: opts.stopGraceMs } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
     }
   )
+  // A stopped ensemble reports nothing: its samples were cut short, and a
+  // synthesis over them would spend a call nobody is waiting for.
+  opts.signal?.throwIfAborted()
+  const samples = outcomes.map((outcome, i) => sampleOf(i, lensFor(lenses, i).lens, outcome, deps))
 
   const respondedCount = samples.filter((s) => s.status === "completed").length
 
@@ -233,7 +206,7 @@ export async function runEnsemble(
     deps.synthesize &&
     respondedCount > 0
   ) {
-    const out = await deps.synthesize(samples, opts.aggregation.instructions)
+    const out = await deps.synthesize(samples, opts.aggregation.instructions, opts.signal)
     synthesized = out.text
   }
 
@@ -243,5 +216,50 @@ export async function runEnsemble(
     samples,
     respondedCount,
     totalCount: samples.length,
+  }
+}
+
+function lensFor(lenses: string[] | undefined, index: number): { lens?: string } {
+  return lenses ? { lens: lenses[index % lenses.length] } : {}
+}
+
+/** One sample's result from its fan-out outcome. A blank reply is a failed sample, not a vote. */
+function sampleOf(
+  index: number,
+  lens: string | undefined,
+  outcome: FanOutOutcome<RunEnsembleSampleOutput>,
+  deps: RunEnsembleDeps
+): EnsembleSampleResult {
+  const base = { index, ...(lens ? { lens } : {}) }
+  if (outcome.status === "skipped") {
+    return { ...base, status: "failed", error: "not started: the ensemble was stopped" }
+  }
+  if (outcome.status === "rejected") {
+    const message =
+      outcome.error instanceof Error ? outcome.error.message : String(outcome.error ?? "aborted")
+    deps.log?.(
+      "warn",
+      outcome.stopped
+        ? `ensemble sample ${index} failed: ${message}`
+        : `ensemble sample ${index} failed: ${message}; it had not stopped when its slot was released`
+    )
+    return {
+      ...base,
+      status: "failed",
+      error: message,
+      ...(outcome.stopped ? {} : { stopUnconfirmed: true as const }),
+    }
+  }
+  const out = outcome.value
+  const text = answerText(out.text)
+  if (!isAnswer({ text, object: out.object })) {
+    deps.log?.("warn", `ensemble sample ${index} failed: empty response`)
+    return { ...base, status: "failed", error: "empty response" }
+  }
+  return {
+    ...base,
+    status: "completed",
+    ...(text !== undefined ? { text } : {}),
+    ...(out.object !== undefined ? { object: out.object } : {}),
   }
 }

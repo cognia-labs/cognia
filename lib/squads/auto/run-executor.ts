@@ -90,11 +90,15 @@ export async function runEnsembleFromProposal(
   const n = Math.max(1, opts?.n ?? DEFAULT_ENSEMBLE_N)
 
   const ensembleDeps: RunEnsembleDeps = {
-    runSample: async () => {
-      const out = await deps.runPrompt({ modelAlias: sampleAlias, userPrompt: proposal.objective })
+    runSample: async ({ signal }) => {
+      const out = await deps.runPrompt({
+        modelAlias: sampleAlias,
+        userPrompt: proposal.objective,
+        signal,
+      })
       return { text: out.completion }
     },
-    synthesize: async (samples, instructions) => {
+    synthesize: async (samples, instructions, signal) => {
       const body = formatSamplesForSynthesis(samples)
       const out = await deps.runPrompt({
         modelAlias: synthAlias,
@@ -102,6 +106,7 @@ export async function runEnsembleFromProposal(
           `Synthesize a single best answer from these ${samples.length} independent samples ` +
           `for the task below.${instructions ? ` ${instructions}` : ""}\n\n` +
           `## Task\n${proposal.objective}\n\n## Samples\n${body}`,
+        ...(signal ? { signal } : {}),
       })
       return { text: out.completion }
     },

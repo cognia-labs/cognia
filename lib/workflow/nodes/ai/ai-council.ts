@@ -84,6 +84,8 @@ export async function executeAiCouncil(
       timeoutMs: params.timeoutMs,
       executionMode: params.executionMode,
       maxConcurrency: params.maxConcurrency,
+      // A cancelled step starts no further councillor and no synthesis.
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     },
     depsWithLog
   )

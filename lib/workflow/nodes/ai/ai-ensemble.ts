@@ -79,6 +79,7 @@ export interface AiEnsembleDeps {
     systemPrompt?: string
     userPrompt: string
     temperature?: number
+    signal?: AbortSignal
   }) => Promise<{ completion: string }>
 }
 
@@ -270,7 +271,10 @@ export async function executeAiEnsemble(
 
   const deps = await depsFactory(ctx)
 
-  const runSample: RunEnsembleDeps["runSample"] = async ({ index, lens }) => {
+  // Each sample runs under its own signal: it aborts at the sample's deadline
+  // and when this step is cancelled, and the sample keeps its concurrency
+  // slot until the work behind it has stopped.
+  const runSample: RunEnsembleDeps["runSample"] = async ({ index, lens, signal }) => {
     if (targetKind === "subworkflow") {
       return deps.runSubworkflow({
         workflowId: target.workflowId!.trim(),
@@ -281,7 +285,7 @@ export async function executeAiEnsemble(
           parentRunId: ctx.runId,
           parentStepId: ctx.stepId,
         },
-        signal: ctx.signal,
+        signal,
         traceId: ctx.traceId,
         lineage: {
           rootRunId: ctx.lineage?.rootRunId ?? ctx.runId,
@@ -302,13 +306,13 @@ export async function executeAiEnsemble(
       toolsEnabled: target.toolsEnabled,
       outputSchema: target.outputSchema,
       timeoutMs: params.timeoutMs,
-      signal: ctx.signal,
+      signal,
     })
   }
 
   const synthesize: RunEnsembleDeps["synthesize"] =
     aggregation.kind === "synthesize-by-final-agent"
-      ? async (samples, instructions) => {
+      ? async (samples, instructions, signal) => {
           const context = ctx.projectId ? { workspaceId: ctx.projectId } : {}
           const base = (await resolvePromptAsync(ENSEMBLE_SYNTHESIZER_PROMPT, { context })).text
           const userPrompt = (
@@ -323,6 +327,7 @@ export async function executeAiEnsemble(
             systemPrompt: system,
             userPrompt,
             temperature: 0.1,
+            ...(signal ? { signal } : {}),
           })
           return { text: (out.completion ?? "").trim() }
         }
@@ -335,6 +340,7 @@ export async function executeAiEnsemble(
       aggregation,
       ...(params.iterationConcurrency ? { iterationConcurrency: params.iterationConcurrency } : {}),
       ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     },
     {
       runSample,
