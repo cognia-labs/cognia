@@ -4,6 +4,7 @@ import {
   assertLiveVoicePayloadPiiSafe,
   classifyLiveVoiceError,
   createInitialLiveVoiceState,
+  liveVoiceTurnId,
   reduceLiveVoiceServerEvent,
   type LiveVoiceState,
 } from "./reducer"
@@ -15,7 +16,10 @@ function event(partial: Record<string, unknown>): RealtimeServerEvent {
 
 /** Fold a sequence of events over the initial state. */
 function fold(...events: RealtimeServerEvent[]): LiveVoiceState {
-  return events.reduce(reduceLiveVoiceServerEvent, createInitialLiveVoiceState())
+  return events.reduce(
+    (state, next) => reduceLiveVoiceServerEvent(state, next),
+    createInitialLiveVoiceState()
+  )
 }
 
 describe("session lifecycle", () => {
@@ -98,6 +102,50 @@ describe("user transcripts", () => {
     )
 
     expect(state.turns).toEqual([{ id: "u1", role: "user", text: "corrected" }])
+  })
+
+  it("keeps same-numbered items from different connections as separate turns", () => {
+    // Gemini numbers items from zero on every socket: `google-input-0` after a
+    // reconnect is a new utterance, not a revision of the first one.
+    let state = reduceLiveVoiceServerEvent(
+      createInitialLiveVoiceState(),
+      event({
+        type: "input-transcription-completed",
+        itemId: "google-input-0",
+        transcript: "before",
+      }),
+      { turnScope: "1" }
+    )
+    state = reduceLiveVoiceServerEvent(
+      state,
+      event({
+        type: "input-transcription-completed",
+        itemId: "google-input-0",
+        transcript: "after",
+      }),
+      { turnScope: "2" }
+    )
+
+    expect(state.turns).toEqual([
+      { id: liveVoiceTurnId("1", "google-input-0"), role: "user", text: "before" },
+      { id: liveVoiceTurnId("2", "google-input-0"), role: "user", text: "after" },
+    ])
+  })
+
+  it("is safe to hand to Array.prototype.reduce, whose third argument is an index", () => {
+    const events = [
+      event({ type: "input-transcription-completed", itemId: "u1", transcript: "first" }),
+      event({ type: "input-transcription-completed", itemId: "u2", transcript: "second" }),
+    ]
+    // Deliberately the bare function: reduce passes the index as a third
+    // argument at runtime, and it must not become a turn scope.
+    const bare = reduceLiveVoiceServerEvent as unknown as (
+      state: LiveVoiceState,
+      next: RealtimeServerEvent
+    ) => LiveVoiceState
+    const state = events.reduce(bare, createInitialLiveVoiceState())
+
+    expect(state.turns.map((turn) => turn.id)).toEqual(["u1", "u2"])
   })
 
   it("ignores an empty transcript", () => {

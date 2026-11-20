@@ -5,6 +5,7 @@ import type {
 } from "@ai-sdk/provider"
 
 import { createLiveVoiceController, type LiveVoiceControllerOptions } from "./controller"
+import { liveVoiceTurnId } from "./reducer"
 import type {
   LiveVoiceCapabilities,
   PreparedEphemeralRealtimeSession,
@@ -584,7 +585,7 @@ describe("barge-in", () => {
       })
     )
     expect(h.controller.getSnapshot().turns).not.toContainEqual(
-      expect.objectContaining({ id: "a1" })
+      expect.objectContaining({ id: liveVoiceTurnId("1", "a1") })
     )
     h.emitServer(event({ type: "audio-done", responseId: "r1", itemId: "a1" }))
     h.playback.drain()
@@ -593,7 +594,7 @@ describe("barge-in", () => {
     h.emitServer(event({ type: "speech-started" }))
 
     expect(h.controller.getSnapshot().turns).toContainEqual({
-      id: "a1",
+      id: liveVoiceTurnId("1", "a1"),
       role: "assistant",
       text: "fully heard",
     })
@@ -614,7 +615,7 @@ describe("barge-in", () => {
     )
 
     expect(h.controller.getSnapshot().turns).not.toContainEqual(
-      expect.objectContaining({ id: "a1" })
+      expect.objectContaining({ id: liveVoiceTurnId("1", "a1") })
     )
   })
 
@@ -647,12 +648,12 @@ describe("barge-in", () => {
     h.emitServer(event({ type: "response-done", responseId: "r2", status: "completed" }))
 
     expect(h.controller.getSnapshot().turns).toContainEqual({
-      id: "a2",
+      id: liveVoiceTurnId("1", "a2"),
       role: "assistant",
       text: "new answer",
     })
     expect(h.controller.getSnapshot().turns).not.toContainEqual(
-      expect.objectContaining({ id: "a1" })
+      expect.objectContaining({ id: liveVoiceTurnId("1", "a1") })
     )
   })
 })
@@ -701,7 +702,7 @@ describe("state store", () => {
     )
 
     expect(h.controller.getSnapshot().turns).toEqual([
-      { id: "u1", role: "user", text: "hello there" },
+      { id: liveVoiceTurnId("1", "u1"), role: "user", text: "hello there" },
     ])
   })
 })
@@ -1302,5 +1303,387 @@ describe("tool calling", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(h.transport.eventsOfType("conversation-item-create")).toHaveLength(0)
+  })
+})
+
+describe("ownership across awaits (hang-up races)", () => {
+  /** A harness whose every transport is recorded, like a real reconnect. */
+  function generationsHarness(overrides: Partial<LiveVoiceControllerOptions> = {}) {
+    const generations: Array<{ hooks: Hooks; transport: FakeTransport }> = []
+    const captures: FakeCapture[] = []
+    const h = harness({
+      sleep: async () => undefined,
+      createTransport: (options) => {
+        const generation = { hooks: options as Hooks, transport: new FakeTransport() }
+        generations.push(generation)
+        return generation.transport as never
+      },
+      createCapture: (options) => {
+        const capture = new FakeCapture(options.onFrame)
+        captures.push(capture)
+        return capture as never
+      },
+      ...overrides,
+    })
+    const ready = async (index: number) => {
+      generations[index].hooks.onOpen?.()
+      generations[index].hooks.onServerEvent?.(
+        event({ type: "session-updated" }) as RealtimeServerEvent
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    return { ...h, generations, captures, ready }
+  }
+
+  it("opens no socket and no microphone when a reconnect token arrives after hang-up", async () => {
+    let releaseToken: (() => void) | undefined
+    const reconnectSession = jest.fn(
+      () =>
+        new Promise<{
+          session: PreparedRealtimeSession
+          adapter: RealtimeModel
+          sessionConfig: Record<string, unknown>
+        }>((resolve) => {
+          releaseToken = () =>
+            resolve({ session: session({ token: "late" }), adapter: adapter(), sessionConfig: {} })
+        })
+    )
+    const h = generationsHarness({ reconnectSession })
+    await h.controller.start()
+    await h.ready(0)
+    h.captures[0].emit([0])
+    h.generations[0].hooks.onClose?.({ code: 1006 })
+    await Promise.resolve()
+    expect(reconnectSession).toHaveBeenCalledTimes(1)
+
+    await h.controller.stop()
+    releaseToken?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(h.generations).toHaveLength(1)
+    expect(h.captures).toHaveLength(1)
+    expect(h.captures[0].disposed).toBe(true)
+    expect(h.controller.getSnapshot().phase).toBe("idle")
+  })
+
+  it("closes the socket a reconnect dialled when the user hangs up before it is ready", async () => {
+    const reconnectSession = jest.fn().mockResolvedValue({
+      session: session({ token: "fresh" }),
+      adapter: adapter(),
+      sessionConfig: {},
+    })
+    const h = generationsHarness({ reconnectSession })
+    await h.controller.start()
+    await h.ready(0)
+    h.captures[0].emit([0])
+    h.generations[0].hooks.onClose?.({ code: 1006 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(h.generations).toHaveLength(2)
+
+    await h.controller.stop()
+    h.generations[1].hooks.onOpen?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(h.generations[1].transport.closed).toEqual({
+      code: 1000,
+      reason: "client ended session",
+    })
+    expect(h.generations[1].transport.eventsOfType("session-update")).toHaveLength(0)
+    expect(h.captures).toHaveLength(1)
+    expect(h.controller.getSnapshot().phase).toBe("idle")
+  })
+
+  it("releases a microphone whose start finishes after hang-up and stays stopped", async () => {
+    let releaseStart: (() => void) | undefined
+    const captures: FakeCapture[] = []
+    const h = harness({
+      createCapture: (options) => {
+        const capture = new FakeCapture(options.onFrame)
+        capture.start = () =>
+          new Promise<void>((resolve) => {
+            releaseStart = () => {
+              capture.started = true
+              resolve()
+            }
+          })
+        captures.push(capture)
+        return capture as never
+      },
+    })
+    await h.controller.start()
+    const ready = h.controller.waitUntilReady()
+    h.hooks.onOpen?.()
+    h.emitServer(event({ type: "session-updated" }))
+    await Promise.resolve()
+    expect(captures).toHaveLength(1)
+
+    await h.controller.stop()
+    releaseStart?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(captures[0].disposed).toBe(true)
+    expect(h.controller.getSnapshot().phase).toBe("idle")
+    expect(h.errors).toEqual([])
+    await expect(ready).rejects.toThrow("cancelled")
+  })
+
+  it("does not report an error when a microphone start rejects because of the hang-up", async () => {
+    let rejectStart: ((error: Error) => void) | undefined
+    const h = harness({
+      createCapture: (options) => {
+        const capture = new FakeCapture(options.onFrame)
+        capture.start = () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectStart = reject
+          })
+        return capture as never
+      },
+    })
+    await h.controller.start()
+    h.hooks.onOpen?.()
+    h.emitServer(event({ type: "session-updated" }))
+    await Promise.resolve()
+
+    await h.controller.stop()
+    rejectStart?.(new Error("MicCapture was disposed while starting"))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(h.errors).toEqual([])
+    expect(h.controller.getSnapshot().phase).toBe("idle")
+  })
+})
+
+describe("tool holds and the user's own mute", () => {
+  type Gate = { suspend(): () => void }
+  const gateOf = (controller: unknown) => (controller as { gate: Gate }).gate
+
+  it("keeps a held microphone muted through a user mute and unmute", async () => {
+    // After approval the hold stays up while a slow tool executes; the mute
+    // button is reachable then and must not reopen the microphone.
+    const h = harness()
+    await h.controller.start()
+    await h.open()
+    const release = gateOf(h.controller).suspend()
+    expect(h.getCapture()?.muted).toBe(true)
+
+    h.controller.setMuted(true)
+    h.controller.setMuted(false)
+
+    expect(h.getCapture()?.muted).toBe(true)
+    release()
+    expect(h.getCapture()?.muted).toBe(false)
+  })
+
+  it("drops frames that reach the controller while a hold is up", async () => {
+    const h = harness()
+    await h.controller.start()
+    await h.open()
+    const release = gateOf(h.controller).suspend()
+
+    h.getCapture()?.emit([0.1, 0.2])
+    expect(h.transport.eventsOfType("input-audio-append")).toHaveLength(0)
+
+    release()
+    h.getCapture()?.emit([0.1, 0.2])
+    expect(h.transport.eventsOfType("input-audio-append")).toHaveLength(1)
+  })
+
+  it("restores the user's own mute when the hold releases", async () => {
+    const h = harness()
+    await h.controller.start()
+    await h.open()
+    h.controller.setMuted(true)
+    const release = gateOf(h.controller).suspend()
+
+    release()
+
+    expect(h.getCapture()?.muted).toBe(true)
+  })
+})
+
+describe("turn identity across reconnects", () => {
+  it("keeps an utterance from before a reconnect when the new socket reuses its item id", async () => {
+    const generations: Array<{ hooks: Hooks; transport: FakeTransport }> = []
+    const reconnectSession = jest.fn().mockResolvedValue({
+      session: session({ provider: "google", token: "fresh" }),
+      adapter: adapter(),
+      sessionConfig: {},
+    })
+    const h = harness({
+      session: session({ provider: "google" }),
+      reconnectSession,
+      sleep: async () => undefined,
+      createTransport: (options) => {
+        const generation = { hooks: options as Hooks, transport: new FakeTransport() }
+        generations.push(generation)
+        return generation.transport as never
+      },
+    })
+    await h.controller.start()
+    generations[0].hooks.onOpen?.()
+    generations[0].hooks.onServerEvent?.(event({ type: "session-created" }) as RealtimeServerEvent)
+    await Promise.resolve()
+    h.getCapture()?.emit([0])
+    generations[0].hooks.onServerEvent?.(
+      event({
+        type: "input-transcription-completed",
+        itemId: "google-input-0",
+        transcript: "before reconnect",
+      }) as RealtimeServerEvent
+    )
+
+    generations[0].hooks.onClose?.({ code: 1006 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    generations[1].hooks.onOpen?.()
+    generations[1].hooks.onServerEvent?.(event({ type: "session-created" }) as RealtimeServerEvent)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    generations[1].hooks.onServerEvent?.(
+      event({
+        type: "input-transcription-completed",
+        itemId: "google-input-0",
+        transcript: "after reconnect",
+      }) as RealtimeServerEvent
+    )
+
+    expect(h.controller.getSnapshot().turns.map((turn) => turn.text)).toEqual([
+      "before reconnect",
+      "after reconnect",
+    ])
+  })
+
+  it("truncates with the provider's own item id while removing the scoped turn", async () => {
+    const h = harness()
+    await h.controller.start()
+    await h.open()
+    h.emitServer(event({ type: "response-created", responseId: "r1" }))
+    h.emitServer(event({ type: "audio-delta", responseId: "r1", itemId: "a1", delta: "AAAA" }))
+    h.playback.played = 300
+
+    h.emitServer(event({ type: "speech-started" }))
+
+    expect(h.transport.eventsOfType("conversation-item-truncate").at(-1)).toMatchObject({
+      itemId: "a1",
+      audioEndMs: 300,
+    })
+  })
+})
+
+describe("conversation seed after a reconnect", () => {
+  async function reconnectedHarness(
+    provider: "openai" | "google",
+    options: { handle?: string; turnsBeforeHandle?: number } = {}
+  ) {
+    const reconnectSession = jest.fn().mockResolvedValue({
+      session: session({ provider, token: "fresh" }),
+      adapter: adapter(),
+      sessionConfig: {},
+    })
+    const h = harness({
+      session: session({ provider }),
+      reconnectSession,
+      sleep: async () => undefined,
+      contextTranscript: "Earlier chat: who won",
+    })
+    const readyEvent = provider === "google" ? "session-created" : "session-updated"
+    await h.controller.start()
+    h.hooks.onOpen?.()
+    h.emitServer(event({ type: readyEvent }))
+    await Promise.resolve()
+    h.getCapture()?.emit([0])
+    const say = (id: string, text: string) =>
+      h.emitServer(event({ type: "input-transcription-completed", itemId: id, transcript: text }))
+    say("u1", "first live turn")
+    if (options.handle) {
+      h.emitServer(
+        event({
+          type: "custom",
+          rawType: "sessionResumptionUpdate",
+          raw: { sessionResumptionUpdate: { resumable: true, newHandle: options.handle } },
+        })
+      )
+    }
+    say("u2", "after the checkpoint")
+    // A non-resumable update must not discard the earlier checkpoint.
+    h.emitServer(
+      event({
+        type: "custom",
+        rawType: "sessionResumptionUpdate",
+        raw: { sessionResumptionUpdate: { resumable: false } },
+      })
+    )
+    const seedsBefore = h.transport.eventsOfType("conversation-item-create").length
+
+    h.hooks.onClose?.({ code: 1006 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    h.hooks.onOpen?.()
+    h.emitServer(event({ type: readyEvent }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const seeds = h.transport
+      .eventsOfType("conversation-item-create")
+      .slice(seedsBefore)
+      .map((seed) => (seed as { item: { text: string } }).item.text)
+    return { h, reconnectSession, seeds }
+  }
+
+  it("re-sends the original chat context and the live turns to a fresh non-Gemini session", async () => {
+    const { seeds } = await reconnectedHarness("openai")
+
+    expect(seeds).toEqual([
+      "Earlier chat: who won",
+      "User: first live turn\nUser: after the checkpoint",
+    ])
+  })
+
+  it("re-sends the original chat context to Gemini when it reconnects without a handle", async () => {
+    const { seeds, reconnectSession } = await reconnectedHarness("google")
+
+    expect(reconnectSession).toHaveBeenCalledWith({ resumptionHandle: undefined })
+    expect(seeds).toEqual([
+      "Earlier chat: who won",
+      "User: first live turn\nUser: after the checkpoint",
+    ])
+  })
+
+  it("replays only the turns newer than the checkpoint when Gemini resumes by handle", async () => {
+    const { seeds, reconnectSession } = await reconnectedHarness("google", { handle: "h-1" })
+
+    expect(reconnectSession).toHaveBeenCalledWith({ resumptionHandle: "h-1" })
+    expect(seeds).toEqual(["User: after the checkpoint"])
+  })
+
+  it("resumes by handle only on the first attempt and reconnects cold after it fails", async () => {
+    const reconnectSession = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("handle refused"))
+      .mockResolvedValue({
+        session: session({ provider: "google", token: "fresh" }),
+        adapter: adapter(),
+        sessionConfig: {},
+      })
+    const h = harness({
+      session: session({ provider: "google" }),
+      reconnectSession,
+      sleep: async () => undefined,
+    })
+    await h.controller.start()
+    h.hooks.onOpen?.()
+    h.emitServer(event({ type: "session-created" }))
+    await Promise.resolve()
+    h.getCapture()?.emit([0])
+    h.emitServer(
+      event({
+        type: "custom",
+        rawType: "sessionResumptionUpdate",
+        raw: { sessionResumptionUpdate: { resumable: true, newHandle: "h-1" } },
+      })
+    )
+
+    h.hooks.onClose?.({ code: 1006 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(reconnectSession.mock.calls).toEqual([
+      [{ resumptionHandle: "h-1" }],
+      [{ resumptionHandle: undefined }],
+    ])
   })
 })

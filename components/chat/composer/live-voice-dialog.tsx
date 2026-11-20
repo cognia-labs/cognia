@@ -46,15 +46,14 @@ import {
 import { buildLiveVoiceRuntimeBindings } from "@/lib/voice/live/runtime-bindings"
 import {
   createLiveVoiceTurnPersister,
-  persistLiveVoiceTurns,
   type LiveVoiceTurnPersister,
-  type LiveVoiceTurnProvenance,
 } from "@/lib/voice/live/persist-turns"
 import {
   classifyLiveVoiceError,
   screenLiveVoiceText,
   type LiveVoiceErrorCode,
   type LiveVoiceErrorInfo,
+  type LiveVoiceTurn,
 } from "@/lib/voice/live/reducer"
 import { DEFAULT_LIVE_VOICE_SETTINGS } from "@cognia/agent-config-types"
 import { useChatStore } from "@/stores/chat/chat-store"
@@ -63,6 +62,7 @@ import { speechSettingsView, useSpeechSettingsView } from "@/lib/speech/settings
 import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
 import { cn } from "@/lib/utils"
 import type { LiveVoiceState } from "@/lib/voice/live/reducer"
+import type { RealtimeToolRecord } from "@/lib/voice/live/tool-runtime"
 
 interface LiveVoiceDialogProps {
   disabled?: boolean
@@ -108,6 +108,13 @@ const ERROR_MESSAGE_KEYS: Record<LiveVoiceErrorCode, string> = {
 
 const LIVE_VOICE_START_CANCELLED = Symbol("live-voice-start-cancelled")
 
+/** What the connected call is missing, so the dialog can say so. */
+interface LiveVoiceDegradation {
+  history: boolean
+  tools: boolean
+  droppedTools: number
+}
+
 export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogProps) {
   const t = useTranslations("chat.composer.voice.live")
   const settings = useSpeechSettingsView((s) => s)
@@ -125,20 +132,16 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
     settings?.selectedMicId
   )
   const [personaFailed, setPersonaFailed] = useState(false)
+  const [degradation, setDegradation] = useState<LiveVoiceDegradation | null>(null)
+  /** A transcript write failed; cleared by the next successful write. */
+  const [saveFailed, setSaveFailed] = useState(false)
   const controllerRef = useRef<LiveVoiceController | null>(null)
-  const deliveredTurns = useRef(new Set<string>())
   const persisterRef = useRef<LiveVoiceTurnPersister | null>(null)
   const switchingMicRef = useRef(false)
   const lastMicSelectionRef = useRef<string | undefined | null>(null)
   const failedMicIdRef = useRef<string | undefined | null>(null)
   const startGenerationRef = useRef(0)
   const startingRef = useRef(false)
-  /** Provenance + wall clock captured at start, so teardown can persist turns. */
-  const sessionMetaRef = useRef<{
-    sessionId: string
-    startedAt: number
-    provenance: LiveVoiceTurnProvenance
-  } | null>(null)
 
   const state = useLiveVoiceState(controller)
   const inputLevel = useLiveVoiceInputLevel(controller)
@@ -202,66 +205,91 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
     [sessionId]
   )
 
-  // Deliver each finalised user turn to the composer exactly once. Screened
-  // again here because the transcript is model output, not the instructions
-  // that were gated at mint time.
+  /**
+   * Reflect one transcript write in the unsaved notice. A failed write is
+   * surfaced (and retried by the next write or the explicit "save again"
+   * action) rather than swallowed: the call goes on, but the user knows the
+   * history has a gap. A later success means every released turn was re-sent.
+   */
+  const trackSave = useCallback((persister: LiveVoiceTurnPersister, write: Promise<void>) => {
+    write.then(
+      () => {
+        if (persisterRef.current === persister) setSaveFailed(false)
+      },
+      () => {
+        if (persisterRef.current === persister) setSaveFailed(true)
+      }
+    )
+  }, [])
+
+  // Archive finalized turns incrementally.
   useEffect(() => {
-    for (const turn of state.turns) {
-      if (turn.role !== "user" || deliveredTurns.current.has(turn.id)) continue
-      deliveredTurns.current.add(turn.id)
-      const safeText = screenLiveVoiceText(turn.text)
-      if (safeText) onUserTranscript?.(safeText)
-    }
-    void persisterRef.current
-      ?.append(state.turns, controller?.getToolRecords() ?? [])
-      .catch(() => undefined)
-  }, [state.turns, onUserTranscript, controller])
+    const persister = persisterRef.current
+    if (!persister) return
+    trackSave(persister, persister.append(state.turns, controller?.getToolRecords() ?? []))
+  }, [state.turns, controller, trackSave])
+
+  const retrySave = useCallback(() => {
+    const persister = persisterRef.current
+    const active = controllerRef.current
+    if (!persister || !active) return
+    trackSave(persister, persister.flush(active.getSnapshot().turns, active.getToolRecords()))
+  }, [trackSave])
+
+  /**
+   * Final archive after the call ended. The dialog is already closed, so a
+   * failure is a toast whose action retries the same flush, as often as the
+   * user asks; the persister re-sends exactly what has not been written yet.
+   */
+  const flushAfterCall = useCallback(
+    (persister: LiveVoiceTurnPersister, turns: LiveVoiceTurn[], tools: RealtimeToolRecord[]) => {
+      const attempt = () => {
+        persister.flush(turns, tools).catch(() => {
+          toast.error(t("errors.saveFailed"), {
+            action: { label: t("retrySave"), onClick: attempt },
+          })
+        })
+      }
+      attempt()
+    },
+    [t]
+  )
 
   const endSession = useCallback(() => {
     startGenerationRef.current++
     startingRef.current = false
     const active = controllerRef.current
-    const meta = sessionMetaRef.current
     const persister = persisterRef.current
     controllerRef.current = null
-    sessionMetaRef.current = null
     persisterRef.current = null
 
     // Read the transcript before stopping — `stop()` resets the state, so the
     // turns are gone by the time the promise settles.
     const turns = active?.getSnapshot().turns ?? []
-    const toolRecords = active?.getToolRecords() ?? []
+    const toolRecords = [...(active?.getToolRecords() ?? [])]
     void active?.stop()
 
-    if (persister) {
-      void persister.flush(turns, toolRecords).catch(() => {
-        // The conversation still happened; failing to archive it must not take
-        // the composer down with it.
-      })
-    } else if (meta && (turns.length > 0 || toolRecords.length > 0)) {
-      void persistLiveVoiceTurns({
-        sessionId: meta.sessionId,
-        turns,
-        provenance: meta.provenance,
-        startedAt: meta.startedAt,
-        toolRecords,
-      })
-        .then((messages) => {
-          useChatStore.getState().upsertSessionMessages(meta.sessionId, messages)
-        })
-        .catch(() => {
-          // The conversation still happened; failing to archive it must not take
-          // the composer down with it.
-        })
+    // Hand the composer what the user said, once, as complete utterances. Mid
+    // call a provider can still revise a turn under the same id (Gemini grows
+    // one input item as the user keeps talking), so delivering per turn would
+    // append the partial and drop the rest. Screened again here because the
+    // transcript is model output, not the instructions gated at mint time.
+    for (const turn of turns) {
+      if (turn.role !== "user") continue
+      const safeText = screenLiveVoiceText(turn.text)
+      if (safeText) onUserTranscript?.(safeText)
     }
+
+    if (persister) flushAfterCall(persister, [...turns], toolRecords)
 
     setController(null)
     setMicrophoneReady(false)
-    deliveredTurns.current.clear()
     setStartFailure(null)
     setStartError(null)
+    setDegradation(null)
+    setSaveFailed(false)
     setOpen(false)
-  }, [])
+  }, [flushAfterCall, onUserTranscript])
 
   useEffect(
     () => () => {
@@ -284,6 +312,8 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
     setStartFailure(null)
     setStartError(null)
     setPersonaFailed(false)
+    setDegradation(null)
+    setSaveFailed(false)
 
     let next: LiveVoiceController | null = null
     let preflightStream: MediaStreamLike | null = null
@@ -302,11 +332,13 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
       preflightStream = await preflightMicrophone(microphoneId)
       assertStartActive()
 
-      // Tools, permissions and the conversation seed, resolved once. A failure
-      // in here degrades the session rather than blocking it.
+      // Tools, permissions and the conversation seed, resolved once for every
+      // candidate: tools are fetched if ANY of them can use them, and each
+      // candidate below receives them only if it can itself. A failure in here
+      // degrades the session (and says so) rather than blocking it.
       const bindings = await buildLiveVoiceRuntimeBindings({
         sessionId: sessionId ?? undefined,
-        capabilities: candidates[0].capabilities,
+        supportsTools: candidates.some((candidate) => candidate.capabilities.supportsTools),
         policy: {
           toolRules: agentPermissions?.toolRules,
           alwaysAllowTools,
@@ -322,10 +354,17 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
       assertStartActive()
 
       let resolved: Awaited<ReturnType<typeof resolveLiveVoiceSession>> | null = null
+      let connectedCandidate: (typeof candidates)[number] | null = null
       let lastError: unknown
-      let connectedStartedAt = Date.now()
+      // One id per call: turn ids restart on every call (and every reconnect),
+      // so the archived rows are keyed by call as well.
+      const callId = crypto.randomUUID()
       for (const [candidateIndex, candidate] of candidates.entries()) {
         let microphoneOpened = false
+        const candidateTools = candidate.capabilities.supportsTools ? bindings.tools : undefined
+        const candidateToolExecution = candidate.capabilities.supportsTools
+          ? bindings.toolExecution
+          : undefined
         const lockedSettings = liveVoiceSettings
           ? {
               ...liveVoiceSettings,
@@ -338,21 +377,21 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
           resolved = await resolveLiveVoiceSession({
             settings: lockedSettings,
             instructions: liveVoiceSettings?.instructions,
-            tools: bindings.tools,
+            tools: candidateTools,
             apiKeys,
           })
           assertStartActive()
           const initial = resolved
-          connectedStartedAt = Date.now()
           const candidatePersister = sessionId
             ? createLiveVoiceTurnPersister({
                 sessionId,
+                callId,
                 provenance: {
                   provider: initial.session.provider,
                   modelOrResource: initial.session.modelOrResource,
                   region: initial.session.region,
                 },
-                startedAt: connectedStartedAt,
+                startedAt: Date.now(),
                 onPersisted: upsertPersistedMessages,
               })
             : null
@@ -364,19 +403,24 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
             initialStream: preflightStream,
             connectTimeoutMs:
               liveVoiceSettings?.connectTimeoutMs ?? DEFAULT_LIVE_VOICE_SETTINGS.connectTimeoutMs,
-            tools: bindings.tools,
-            toolExecution: bindings.toolExecution,
+            tools: candidateTools,
+            toolExecution: candidateToolExecution,
             contextTranscript: bindings.contextTranscript,
             onToolRecord: () => {
-              void candidatePersister
-                ?.append(next?.getSnapshot().turns ?? [], next?.getToolRecords() ?? [])
-                .catch(() => undefined)
+              if (!candidatePersister) return
+              trackSave(
+                candidatePersister,
+                candidatePersister.append(
+                  next?.getSnapshot().turns ?? [],
+                  next?.getToolRecords() ?? []
+                )
+              )
             },
             reconnectSession: async ({ resumptionHandle }) => {
               const refreshed = await resolveLiveVoiceSession({
                 settings: lockedSettings,
                 instructions: liveVoiceSettings?.instructions,
-                tools: bindings.tools,
+                tools: candidateTools,
                 apiKeys,
                 resumptionHandle,
               })
@@ -399,6 +443,7 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
           setMicrophoneReady(true)
           await next.waitUntilFirstAudioFrame()
           assertStartActive()
+          connectedCandidate = candidate
           break
         } catch (error) {
           if (generation !== startGenerationRef.current) throw LIVE_VOICE_START_CANCELLED
@@ -423,19 +468,18 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
           }
         }
       }
-      if (!next || !resolved) throw lastError ?? new Error("No live voice provider connected")
-
-      if (sessionId) {
-        sessionMetaRef.current = {
-          sessionId,
-          startedAt: connectedStartedAt,
-          provenance: {
-            provider: resolved.session.provider,
-            modelOrResource: resolved.session.modelOrResource,
-            region: resolved.session.region,
-          },
-        }
+      if (!next || !resolved || !connectedCandidate) {
+        throw lastError ?? new Error("No live voice provider connected")
       }
+
+      // Tool degradation only matters for a provider that could have used them.
+      const toolsMatter = connectedCandidate.capabilities.supportsTools
+      const missing: LiveVoiceDegradation = {
+        history: bindings.historyUnavailable,
+        tools: toolsMatter && bindings.toolsUnavailable,
+        droppedTools: toolsMatter ? bindings.droppedTools.length : 0,
+      }
+      setDegradation(missing.history || missing.tools || missing.droppedTools > 0 ? missing : null)
     } catch (error) {
       const cancelled = error === LIVE_VOICE_START_CANCELLED
       // Drop a half-built controller: leaving it in the ref would make the next
@@ -470,6 +514,7 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
     agentPermissions,
     alwaysAllowTools,
     t,
+    trackSave,
     upsertPersistedMessages,
   ])
 
@@ -615,6 +660,26 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
                 <p className="text-xs text-muted-foreground">
                   {t("reconnectProgress", state.reconnect)}
                 </p>
+              )}
+              {degradation && (
+                <div className="space-y-0.5 text-center text-xs text-muted-foreground">
+                  {degradation.history && <p>{t("degraded.history")}</p>}
+                  {degradation.tools && <p>{t("degraded.tools")}</p>}
+                  {degradation.droppedTools > 0 && (
+                    <p>{t("degraded.droppedTools", { count: degradation.droppedTools })}</p>
+                  )}
+                </div>
+              )}
+              {saveFailed && (
+                <div
+                  className="flex flex-col items-center gap-2 text-center text-xs text-destructive"
+                  role="status"
+                >
+                  <p>{t("errors.saveFailed")}</p>
+                  <Button onClick={retrySave} size="sm" type="button" variant="outline">
+                    {t("retrySave")}
+                  </Button>
+                </div>
               )}
               {controller && phase !== "connecting" && (
                 <div className="flex w-full max-w-48 items-center gap-2">

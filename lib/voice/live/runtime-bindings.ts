@@ -25,7 +25,6 @@ import type { RealtimeToolPolicy } from "./approval"
 import { buildLiveVoiceContext, type LiveVoiceContextLimits } from "./context"
 import { mapRealtimeTools, type DroppedTool, type PluginToolEntry } from "./tools"
 import type { RealtimeToolExecutionRequest, RealtimeToolExecutionResult } from "./tool-runtime"
-import type { LiveVoiceCapabilities } from "./types"
 import { moduleToolNamesWhere } from "@/lib/modules/tool-declarations"
 
 export interface LiveVoiceRuntimeDeps {
@@ -37,7 +36,13 @@ export interface LiveVoiceRuntimeDeps {
 export interface BuildLiveVoiceRuntimeOptions {
   /** Chat session to seed from and to attribute approvals to. */
   sessionId?: string
-  capabilities: LiveVoiceCapabilities
+  /**
+   * Whether ANY candidate this start may connect to supports tools. The
+   * manifest is resolved once for the whole start; each candidate is then
+   * handed the tools only if it supports them itself, so a fallback from a
+   * tool-less provider (Doubao) to one with tools (Qwen, Baidu) keeps them.
+   */
+  supportsTools: boolean
   policy: RealtimeToolPolicy
   limits: LiveVoiceContextLimits
   deps?: Partial<LiveVoiceRuntimeDeps>
@@ -51,8 +56,12 @@ export interface LiveVoiceRuntimeBindings {
     execute(request: RealtimeToolExecutionRequest): Promise<RealtimeToolExecutionResult>
   }
   contextTranscript?: string
-  /** Tools the manifest offered that could not be advertised, for diagnostics. */
+  /** Tools the manifest offered that could not be advertised. */
   droppedTools: DroppedTool[]
+  /** The chat history could not be read; the call starts without context. */
+  historyUnavailable: boolean
+  /** The tool manifest could not be built; the call starts without tools. */
+  toolsUnavailable: boolean
 }
 
 // These names are routed around invokePluginTool by agent-tool-dispatch. Their
@@ -108,18 +117,24 @@ const defaultDeps: LiveVoiceRuntimeDeps = {
  *
  * Failures are absorbed: a session that cannot read its history or its plugin
  * manifest is still a usable voice session, just without context or tools.
- * Refusing to start would be a worse trade.
+ * Refusing to start would be a worse trade — but the degradation is reported
+ * (`historyUnavailable`, `toolsUnavailable`, `droppedTools`) so the dialog can
+ * tell the user what the model does not have.
  */
 export async function buildLiveVoiceRuntimeBindings(
   options: BuildLiveVoiceRuntimeOptions
 ): Promise<LiveVoiceRuntimeBindings> {
   const deps = { ...defaultDeps, ...options.deps }
-  const bindings: LiveVoiceRuntimeBindings = { droppedTools: [] }
+  const bindings: LiveVoiceRuntimeBindings = {
+    droppedTools: [],
+    historyUnavailable: false,
+    toolsUnavailable: false,
+  }
 
   // ── Tools ────────────────────────────────────────────────────────────
   // A provider whose tool support is dormant gets none, and without a chat
   // session there is nowhere to attribute an approval card to.
-  if (options.capabilities.supportsTools && options.sessionId) {
+  if (options.supportsTools && options.sessionId) {
     try {
       const manifest = await deps.buildPluginToolsManifest()
       const cancellable = manifest.filter(liveVoiceToolIsCancellable)
@@ -134,7 +149,8 @@ export async function buildLiveVoiceRuntimeBindings(
         }
       }
     } catch {
-      // Plugin store unavailable — carry on without tools.
+      // Plugin store unavailable — carry on without tools, and say so.
+      bindings.toolsUnavailable = true
     }
   }
 
@@ -148,7 +164,8 @@ export async function buildLiveVoiceRuntimeBindings(
       const transcript = buildLiveVoiceContext(visible.messages, options.limits)
       if (transcript) bindings.contextTranscript = transcript
     } catch {
-      // History unreadable — start cold rather than not at all.
+      // History unreadable — start cold rather than not at all, and say so.
+      bindings.historyUnavailable = true
     }
   }
 

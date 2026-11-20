@@ -17,6 +17,12 @@
  *   never went through the send path. The flag has to be on the FIRST write —
  *   metadata added later cannot retract a dispatch that already happened.
  *
+ * - **Delta writes only.** A voice call does not own the session's transcript:
+ *   the user can type, a connector can deliver, an agent turn can land while it
+ *   runs. Turns are upserted through `commitMessageDelta`, never by reading the
+ *   whole history and replacing it — a snapshot read before the write queue
+ *   would delete any ordinary message committed in between.
+ *
  * Tool calls ride along as `dynamic-tool` parts on the assistant message.
  * `UIMessage["role"]` has no `"tool"` member, so a tool turn is not its own row.
  */
@@ -34,6 +40,12 @@ export type LiveVoiceTurnProvenance = Pick<
 >
 
 export interface LiveVoiceTurnsToMessagesOptions {
+  /**
+   * Identifies one voice call. Turn ids are only unique within a call — two
+   * calls in the same chat both start their Gemini item counters at zero — so
+   * the row id carries the call as well.
+   */
+  callId: string
   turns: readonly LiveVoiceTurn[]
   toolRecords?: readonly RealtimeToolRecord[]
   provenance: LiveVoiceTurnProvenance
@@ -46,11 +58,18 @@ export interface LiveVoiceTurnsToMessagesOptions {
 }
 
 /**
- * Message ids are derived from the provider's item id so re-persisting the
- * same session updates rows rather than duplicating them.
+ * Message ids are derived from the call and the turn id so re-persisting a
+ * revised turn updates its row rather than duplicating it, while a later call
+ * (or a reconnect, whose turn ids are connection-scoped) never overwrites an
+ * earlier one.
  */
-export function liveVoiceMessageId(sessionId: string, turnId: string): string {
-  return `voice:${sessionId}:${turnId}`
+export function liveVoiceMessageId(sessionId: string, callId: string, turnId: string): string {
+  return `voice:${sessionId}:${callId}:${turnId}`
+}
+
+/** Row id of a call's aggregate tool lifecycle message. */
+export function liveVoiceToolMessageId(sessionId: string, callId: string): string {
+  return liveVoiceMessageId(sessionId, callId, "tools")
 }
 
 function metadataFor(
@@ -91,7 +110,7 @@ export function liveVoiceTurnsToMessages(
     const createdAt = options.startedAt + (options.createdAtOffsets?.[index] ?? index)
 
     messages.push({
-      id: liveVoiceMessageId(sessionId, turn.id),
+      id: liveVoiceMessageId(sessionId, options.callId, turn.id),
       role: turn.role,
       parts: [{ type: "text", text }],
       metadata: metadataFor(sessionId, options.provenance, createdAt),
@@ -100,7 +119,7 @@ export function liveVoiceTurnsToMessages(
 
   if (options.toolRecords?.length) {
     messages.push({
-      id: liveVoiceMessageId(sessionId, "tools"),
+      id: liveVoiceToolMessageId(sessionId, options.callId),
       role: "assistant",
       parts: options.toolRecords.map((record) => ({
         type: "dynamic-tool",
@@ -126,21 +145,40 @@ export function liveVoiceTurnsToMessages(
 export interface PersistLiveVoiceTurnsOptions extends LiveVoiceTurnsToMessagesOptions {
   sessionId: string
   /**
-   * Messages already in the session. `persistMessages` reconciles the FULL
-   * list and deletes anything missing from it, so the prior history must be
-   * carried through or the voice turns would wipe the conversation. Left
-   * unset it is read from Dexie — the default exists precisely so a caller
-   * cannot reach for `[]` and silently delete the thread.
+   * Seam for tests. Defaults to `commitMessageDelta` (upserts only, nothing
+   * the call did not write is ever touched) followed by the session's
+   * last-message stamp, which only the full-transcript writer maintains.
    */
-  existing?: readonly UIMessage[]
-  /** Seam for tests; defaults to `lib/db/messages.listMessages`. */
-  loadExisting?: (sessionId: string) => Promise<UIMessage[]>
-  /** Seam for tests; defaults to `lib/db/messages.persistMessages`. */
-  persist?: (sessionId: string, messages: UIMessage[]) => Promise<void>
+  commit?: (sessionId: string, upserts: UIMessage[]) => Promise<void>
+}
+
+async function commitVoiceUpserts(sessionId: string, upserts: UIMessage[]): Promise<void> {
+  const { commitMessageDelta, stampSessionLastMessage } = await import("@/lib/db/messages")
+  await commitMessageDelta(sessionId, { upserts })
+  // The sidebar and Inbox read the denormalized preview; a delta write does not
+  // refresh it. The stamp only moves forward, so an older revised turn cannot
+  // replace a newer preview.
+  let newest: UIMessage | undefined
+  let newestAt = Number.NEGATIVE_INFINITY
+  for (const message of upserts) {
+    // The tool lifecycle row has no text to preview.
+    if (!message.parts.some((part) => part.type === "text")) continue
+    const createdAt = (message.metadata as { createdAt?: unknown } | undefined)?.createdAt
+    if (typeof createdAt === "number" && createdAt >= newestAt) {
+      newest = message
+      newestAt = createdAt
+    }
+  }
+  if (newest) {
+    await stampSessionLastMessage(sessionId, {
+      parts: newest.parts as Parameters<typeof stampSessionLastMessage>[1]["parts"],
+      createdAt: newestAt,
+    })
+  }
 }
 
 /**
- * Append this session's finished voice turns to its chat history.
+ * Upsert this call's finished voice turns into its chat history.
  *
  * Returns the exact projected voice records written by the successful
  * transaction. A session where nothing was said writes nothing at all.
@@ -151,41 +189,32 @@ export async function persistLiveVoiceTurns(
   const voiceMessages = liveVoiceTurnsToMessages(options.sessionId, options)
   if (voiceMessages.length === 0) return []
 
-  const persist =
-    options.persist ??
-    (async (sessionId, messages) => {
-      const { persistMessages } = await import("@/lib/db/messages")
-      await persistMessages(sessionId, messages)
-    })
-  const loadExisting =
-    options.loadExisting ??
-    (async (sessionId) => {
-      const { listMessages } = await import("@/lib/db/messages")
-      return listMessages(sessionId)
-    })
-
-  const existing = options.existing ?? (await loadExisting(options.sessionId))
-
-  // Re-persisting a turn id replaces the earlier row rather than duplicating it.
-  const byId = new Map<string, UIMessage>()
-  for (const message of [...existing, ...voiceMessages]) byId.set(message.id, message)
-
-  await persist(options.sessionId, [...byId.values()])
+  const commit = options.commit ?? commitVoiceUpserts
+  await commit(options.sessionId, voiceMessages)
   return voiceMessages
 }
 
 export type LiveVoiceTurnPersisterOptions = Omit<
   PersistLiveVoiceTurnsOptions,
-  "turns" | "toolRecords" | "existing" | "createdAtOffsets" | "toolCreatedAtOffset"
+  "turns" | "toolRecords" | "createdAtOffsets" | "toolCreatedAtOffset"
 > & {
   /** Runs only after Dexie accepted the projected records. */
   onPersisted?: (messages: readonly UIMessage[]) => void
 }
 
-/** Serial, incremental writer for finalized turns in one live session. */
+/**
+ * Serial, incremental writer for finalized turns in one live call.
+ *
+ * Revision-aware: a provider can revise a turn it already reported under the
+ * same id (Gemini grows one input transcription item as the user keeps
+ * talking), so a turn is written again whenever its text differs from what was
+ * last written for that id. Re-sending identical text is a no-op.
+ */
 export class LiveVoiceTurnPersister {
-  private readonly persistedTurnIds = new Set<string>()
-  private readonly pendingTurnIds = new Set<string>()
+  /** Text last committed per turn id. */
+  private readonly persistedText = new Map<string, string>()
+  /** Text of the newest queued write per turn id. */
+  private readonly pendingText = new Map<string, string>()
   private persistedToolSignature = JSON.stringify([])
   private readonly pendingToolSignatures = new Set<string>()
   private readonly turnOffsetById = new Map<string, number>()
@@ -199,14 +228,22 @@ export class LiveVoiceTurnPersister {
     turns: readonly LiveVoiceTurn[],
     toolRecords: readonly RealtimeToolRecord[] = []
   ): Promise<void> {
-    const freshTurns = turns.filter((turn) => {
-      if (!this.turnOffsetById.has(turn.id)) {
-        this.turnOffsetById.set(turn.id, this.nextCreatedAtOffset++)
-      }
-      if (this.persistedTurnIds.has(turn.id) || this.pendingTurnIds.has(turn.id)) return false
-      this.pendingTurnIds.add(turn.id)
-      return true
-    })
+    const freshTurns = turns
+      .filter((turn) => {
+        if (!this.turnOffsetById.has(turn.id)) {
+          this.turnOffsetById.set(turn.id, this.nextCreatedAtOffset++)
+        }
+        const text = turn.text
+        const queued = this.pendingText.has(turn.id)
+          ? this.pendingText.get(turn.id)
+          : this.persistedText.get(turn.id)
+        if (queued === text) return false
+        this.pendingText.set(turn.id, text)
+        return true
+      })
+      // The caller's array may be mutated later; the write must carry the text
+      // that was current when it was queued.
+      .map((turn) => ({ ...turn }))
     const nextToolSignature = JSON.stringify(
       toolRecords.map(({ callId, status, durationMs }) => [callId, status, durationMs])
     )
@@ -235,8 +272,9 @@ export class LiveVoiceTurnPersister {
     void operation.then(
       () => {
         for (const turn of freshTurns) {
-          this.pendingTurnIds.delete(turn.id)
-          this.persistedTurnIds.add(turn.id)
+          this.persistedText.set(turn.id, turn.text)
+          // A newer revision may already be queued behind this write.
+          if (this.pendingText.get(turn.id) === turn.text) this.pendingText.delete(turn.id)
         }
         if (toolsChanged) {
           this.pendingToolSignatures.delete(nextToolSignature)
@@ -244,12 +282,14 @@ export class LiveVoiceTurnPersister {
         }
       },
       () => {
-        for (const turn of freshTurns) this.pendingTurnIds.delete(turn.id)
+        for (const turn of freshTurns) {
+          if (this.pendingText.get(turn.id) === turn.text) this.pendingText.delete(turn.id)
+        }
         if (toolsChanged) this.pendingToolSignatures.delete(nextToolSignature)
       }
     )
     // A failed write is observable to its caller but cannot poison later
-    // writes; flush() can therefore retry any ids released above.
+    // writes; flush() can therefore retry any revision released above.
     this.tail = operation.catch(() => undefined)
     return operation
   }

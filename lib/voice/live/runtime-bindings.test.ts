@@ -2,7 +2,6 @@
 import type { UIMessage } from "ai"
 
 import { buildLiveVoiceRuntimeBindings } from "./runtime-bindings"
-import type { LiveVoiceCapabilities } from "./types"
 
 jest.mock("@/lib/execution/personal-visibility", () => ({
   prepareOwnerHistory: async (messages: readonly { id: string }[]) => {
@@ -11,18 +10,6 @@ jest.mock("@/lib/execution/personal-visibility", () => ({
     return withholdForReaders(messages, [{ kind: "local-person" }])
   },
 }))
-
-const CAPABILITIES: LiveVoiceCapabilities = {
-  supportsTools: true,
-  supportsServerVad: true,
-  supportsBargeIn: true,
-  supportsInputTranscript: true,
-  supportsOutputTranscript: true,
-  inputSampleRate: 24_000,
-  outputSampleRate: 24_000,
-  regions: ["global"],
-  transport: "browser",
-}
 
 const LIMITS = { turnLimit: 12, characterLimit: 16_000 }
 
@@ -47,7 +34,7 @@ function deps(overrides: Record<string, unknown> = {}) {
 function options(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "s1",
-    capabilities: CAPABILITIES,
+    supportsTools: true,
     policy: {},
     limits: LIMITS,
     ...overrides,
@@ -121,13 +108,15 @@ describe("buildLiveVoiceRuntimeBindings", () => {
     expect(bindings.toolExecution?.policy).toBe(policy)
   })
 
-  it("offers no tools to a provider whose tool support is dormant", async () => {
-    const bindings = await buildLiveVoiceRuntimeBindings(
-      options({ capabilities: { ...CAPABILITIES, supportsTools: false }, deps: deps() })
-    )
+  it("offers no tools when no candidate provider supports them", async () => {
+    const d = deps()
+    const bindings = await buildLiveVoiceRuntimeBindings(options({ supportsTools: false, deps: d }))
 
     expect(bindings.tools).toBeUndefined()
     expect(bindings.toolExecution).toBeUndefined()
+    expect(d.buildPluginToolsManifest).not.toHaveBeenCalled()
+    // Not a degradation: nothing that could use tools was going to get them.
+    expect(bindings.toolsUnavailable).toBe(false)
   })
 
   it("offers no tools without a chat session to attribute approvals to", async () => {
@@ -267,6 +256,8 @@ describe("buildLiveVoiceRuntimeBindings", () => {
 
     expect(bindings.contextTranscript).toBeUndefined()
     expect(bindings.tools).toHaveLength(1)
+    expect(bindings.historyUnavailable).toBe(true)
+    expect(bindings.toolsUnavailable).toBe(false)
   })
 
   it("still starts when the plugin manifest cannot be built", async () => {
@@ -282,6 +273,18 @@ describe("buildLiveVoiceRuntimeBindings", () => {
 
     expect(bindings.tools).toBeUndefined()
     expect(bindings.contextTranscript).toContain("User: who won")
+    expect(bindings.toolsUnavailable).toBe(true)
+    expect(bindings.historyUnavailable).toBe(false)
+  })
+
+  it("reports no degradation when history and tools both resolved", async () => {
+    const bindings = await buildLiveVoiceRuntimeBindings(options({ deps: deps() }))
+
+    expect(bindings).toMatchObject({
+      historyUnavailable: false,
+      toolsUnavailable: false,
+      droppedTools: [],
+    })
   })
 })
 

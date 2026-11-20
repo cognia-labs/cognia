@@ -9167,6 +9167,11 @@
         "listening": "Listening…",
         "live": {
           "busyHint": "Finish or approve the current text response before starting live voice.",
+          "degraded": {
+            "droppedTools": "{count, plural, one {# tool is} other {# tools are}} not available in live voice.",
+            "history": "Started without the earlier chat history — it could not be read.",
+            "tools": "Tools are unavailable in this call — they could not be loaded."
+          },
           "description": "Talk naturally, interrupt at any time, and keep the conversation moving hands-free.",
           "end": "End live voice",
           "errors": {
@@ -9185,6 +9190,7 @@
             "mintFailed": "Could not start a session with any live voice provider. Check your API key and network, then try again.",
             "noDeployments": "No live voice provider is set up yet. Add one in Settings → Speech.",
             "noneEligible": "None of your live voice providers is available in this region on this device.",
+            "saveFailed": "Part of this voice conversation could not be saved to the chat.",
             "sessionFailed": "The live voice connection was interrupted. End the session and try again.",
             "startFailed": "Could not start live voice. Check your provider key and microphone access."
           },
@@ -9203,6 +9209,7 @@
           },
           "reconnectProgress": "Reconnect attempt {attempt} of {maxAttempts}",
           "retry": "Try again",
+          "retrySave": "Save again",
           "selectMicrophone": "Switch microphone",
           "startLive": "Start live voice",
           "title": "Live voice",

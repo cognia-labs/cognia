@@ -125,6 +125,19 @@ export function classifyLiveVoiceError(error: Error): LiveVoiceErrorInfo {
   return { code: "provider-error", message, retryable: false }
 }
 
+/**
+ * The conversation-unique id of a provider item.
+ *
+ * Provider item ids are only unique within one connection: Gemini's mapper
+ * numbers its items from zero on every socket, so `google-input-0` after a
+ * reconnect is a different utterance from `google-input-0` before it. Keying
+ * turns by the raw id let the second replace the first. The scope is the
+ * connection the item arrived on; without one the raw id is used as-is.
+ */
+export function liveVoiceTurnId(scope: string | undefined, itemId: string): string {
+  return scope ? `${scope}:${itemId}` : itemId
+}
+
 function upsertTurn(turns: LiveVoiceTurn[], next: LiveVoiceTurn): LiveVoiceTurn[] {
   const index = turns.findIndex((turn) => turn.id === next.id)
   if (index < 0) return [...turns, next]
@@ -138,11 +151,19 @@ function upsertTurn(turns: LiveVoiceTurn[], next: LiveVoiceTurn): LiveVoiceTurn[
  *
  * Returns `state` unchanged (same reference) for events that carry no UI
  * meaning — audio deltas, item bookkeeping, tool-call argument streaming.
+ *
+ * `options.turnScope` names the connection the event arrived on (see
+ * {@link liveVoiceTurnId}); the controller passes it so turns from different
+ * connections of one call never share an id. An options object rather than a
+ * bare string, so the function stays safe to hand to `Array.prototype.reduce`
+ * (whose third argument is the index).
  */
 export function reduceLiveVoiceServerEvent(
   state: LiveVoiceState,
-  event: RealtimeServerEvent
+  event: RealtimeServerEvent,
+  options?: { turnScope?: string }
 ): LiveVoiceState {
+  const turnScope = typeof options === "object" ? options?.turnScope : undefined
   switch (event.type) {
     case "session-created":
     case "session-updated":
@@ -175,7 +196,11 @@ export function reduceLiveVoiceServerEvent(
       if (!text) return state
       return {
         ...state,
-        turns: upsertTurn(state.turns, { id: event.itemId, role: "user", text }),
+        turns: upsertTurn(state.turns, {
+          id: liveVoiceTurnId(turnScope, event.itemId),
+          role: "user",
+          text,
+        }),
       }
     }
 
@@ -200,7 +225,11 @@ export function reduceLiveVoiceServerEvent(
       return {
         ...state,
         assistantDraft: "",
-        turns: upsertTurn(state.turns, { id: event.itemId, role: "assistant", text }),
+        turns: upsertTurn(state.turns, {
+          id: liveVoiceTurnId(turnScope, event.itemId),
+          role: "assistant",
+          text,
+        }),
       }
     }
 

@@ -440,6 +440,122 @@ describe("MicCapture.setDevice", () => {
     expect(h.getUserMedia).toHaveBeenCalledTimes(1)
     expect(h.getUserMedia).toHaveBeenCalledWith(buildAudioConstraints("mic-2"))
   })
+
+  /** A getUserMedia whose next call waits until the test releases it. */
+  function deferredGetUserMedia(h: Harness) {
+    let release: (() => void) | undefined
+    const late = new FakeStream()
+    h.getUserMedia.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(late)
+        })
+    )
+    return { late, release: () => release?.() }
+  }
+
+  it("stops a stream that arrives after the capture was disposed", async () => {
+    // Hang up while the switched device is still opening: nothing else owns
+    // the new stream, so a leaked track would keep the OS microphone on.
+    const h = harness()
+    await h.capture.start()
+    const original = h.streams[0]
+    const pending = deferredGetUserMedia(h)
+
+    const switching = h.capture.setDevice("mic-2")
+    await h.capture.dispose()
+    pending.release()
+
+    await expect(switching).resolves.toBeUndefined()
+    expect(original.tracks[0].stopped).toBe(true)
+    expect(pending.late.tracks[0].stopped).toBe(true)
+    expect(h.context.sources).toHaveLength(1)
+  })
+
+  it("stops the stream of a switch that a newer switch overtook", async () => {
+    const h = harness()
+    await h.capture.start()
+    const slow = deferredGetUserMedia(h)
+
+    const first = h.capture.setDevice("mic-slow")
+    await h.capture.setDevice("mic-fast")
+    slow.release()
+    await first
+
+    expect(slow.late.tracks[0].stopped).toBe(true)
+    // The live source is the newer switch's stream, not the late one.
+    expect(h.streams.at(-1)?.tracks[0].stopped).toBe(false)
+    expect(h.context.sources).toHaveLength(2)
+  })
+
+  it("keeps the old source connected and stops the new stream when wiring it fails", async () => {
+    const h = harness()
+    await h.capture.start()
+    const original = h.streams[0]
+    const originalSource = h.context.sources[0]
+    h.context.createMediaStreamSource = () => {
+      throw new Error("source creation failed")
+    }
+
+    await expect(h.capture.setDevice("mic-2")).rejects.toThrow("source creation failed")
+
+    expect(h.streams[1].tracks[0].stopped).toBe(true)
+    expect(original.tracks[0].stopped).toBe(false)
+    expect(originalSource.connected.at(-1)).toBe(h.worklet)
+  })
+})
+
+describe("MicCapture.start ownership", () => {
+  it("releases a microphone granted after the capture was disposed", async () => {
+    let release: ((stream: FakeStream) => void) | undefined
+    const h = harness({
+      getUserMedia: () =>
+        new Promise<MediaStreamLike>((resolve) => {
+          release = resolve
+        }),
+    })
+    const late = new FakeStream()
+
+    const starting = h.capture.start()
+    await h.capture.dispose()
+    release?.(late)
+
+    await expect(starting).rejects.toThrow("disposed while starting")
+    expect(late.tracks[0].stopped).toBe(true)
+    expect(h.context.sources).toHaveLength(0)
+    expect(h.capture.isRunning).toBe(false)
+  })
+
+  it("tears down a graph whose worklet module finished loading after dispose", async () => {
+    const h = harness()
+    let releaseModule: (() => void) | undefined
+    h.context.audioWorklet = {
+      addModule: () =>
+        new Promise<void>((resolve) => {
+          releaseModule = resolve
+        }),
+    }
+
+    const starting = h.capture.start()
+    // Wait until the graph is mid-construction (module load pending).
+    while (!releaseModule) await Promise.resolve()
+    await h.capture.dispose()
+    releaseModule?.()
+
+    await expect(starting).rejects.toThrow("disposed while starting")
+    expect(h.streams[0].tracks[0].stopped).toBe(true)
+    expect(h.context.closed).toBe(true)
+    expect(h.capture.isRunning).toBe(false)
+  })
+
+  it("stops a handed-over preflight stream that start never consumed", async () => {
+    const preflight = new FakeStream()
+    const h = harness({ initialStream: preflight })
+
+    await h.capture.dispose()
+
+    expect(preflight.tracks[0].stopped).toBe(true)
+  })
 })
 
 describe("MicCapture.reset", () => {

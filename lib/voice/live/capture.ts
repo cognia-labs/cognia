@@ -24,6 +24,12 @@
  *   *before* the old one is released, so a failed switch leaves the existing
  *   microphone running rather than killing the session.
  *
+ * - **Every acquired stream has exactly one owner.** `getUserMedia` can resolve
+ *   after the capture was disposed (the user hung up while the permission
+ *   prompt or a device switch was pending) or after a newer switch superseded
+ *   it. Such a stream is stopped on the spot; nothing else holds a reference
+ *   that could release it later, and a live track keeps the OS microphone on.
+ *
  * Every Web Audio and media entry point is injectable, so the whole module is
  * testable in the `node` Jest project without a DOM.
  */
@@ -128,6 +134,14 @@ function defaultCreateWorkletNode(context: CaptureContextLike, name: string): Wo
   return new Ctor(context, name)
 }
 
+function stopTracks(stream: MediaStreamLike | null | undefined): void {
+  for (const track of stream?.getTracks() ?? []) track.stop()
+}
+
+function disposedDuringStart(): Error {
+  return new Error("MicCapture was disposed while starting")
+}
+
 function defaultCreateModuleUrl(source: string): string {
   return URL.createObjectURL(new Blob([source], { type: "text/javascript" }))
 }
@@ -160,6 +174,8 @@ export class MicCapture {
   private worklet: WorkletNodeLike | null = null
   private muted = false
   private disposed = false
+  /** Bumped per device switch so a slower, older switch cannot win. */
+  private deviceSwitch = 0
 
   constructor(options: MicCaptureOptions) {
     this.options = options as MicCapture["options"]
@@ -208,8 +224,16 @@ export class MicCapture {
     // of its ~60s lifetime waiting for the user.
     const stream = initialStream ?? (await getUserMedia(buildAudioConstraints(deviceId)))
     this.options.initialStream = undefined
+    // Disposed while the permission prompt was up: this stream has no other
+    // owner, so release it here instead of building a graph nobody will tear down.
+    if (this.disposed) {
+      stopTracks(stream)
+      throw disposedDuringStart()
+    }
 
     let context: CaptureContextLike | null = null
+    let source: AudioNodeLike | null = null
+    let worklet: WorkletNodeLike | null = null
     try {
       context = audioContextFactory({ sampleRate })
       if (!context.audioWorklet) {
@@ -222,16 +246,18 @@ export class MicCapture {
       } finally {
         revokeModuleUrl(moduleUrl)
       }
+      if (this.disposed) throw disposedDuringStart()
 
-      const worklet = createWorkletNode(context, CAPTURE_PROCESSOR_NAME)
+      worklet = createWorkletNode(context, CAPTURE_PROCESSOR_NAME)
       worklet.port.onmessage = (event) => this.handleWorkletMessage(event.data)
 
-      const source = context.createMediaStreamSource(stream)
+      source = context.createMediaStreamSource(stream)
       source.connect(worklet)
 
       // A suspended context produces no render quanta at all. Resume is safe to
       // call when already running.
       if (context.state === "suspended") await context.resume()
+      if (this.disposed) throw disposedDuringStart()
 
       this.context = context
       this.stream = stream
@@ -240,7 +266,12 @@ export class MicCapture {
       // Re-apply a mute requested before start so state can't silently drop.
       if (this.muted) this.applyMute(true)
     } catch (error) {
-      for (const track of stream.getTracks()) track.stop()
+      if (worklet) {
+        worklet.port.onmessage = null
+        worklet.disconnect()
+      }
+      source?.disconnect()
+      stopTracks(stream)
       if (context) await context.close().catch(() => undefined)
       throw error
     }
@@ -257,23 +288,51 @@ export class MicCapture {
 
   /**
    * Switch input device without dropping the socket or re-adding the worklet
-   * module. The new stream is acquired before the old one is released.
+   * module. The new stream is acquired before the old one is released, and a
+   * stream that arrives after disposal or after a newer switch is stopped
+   * rather than leaked.
    */
   async setDevice(deviceId: string | undefined): Promise<void> {
     this.options.deviceId = deviceId
     if (!this.context || !this.worklet) return
 
+    const token = ++this.deviceSwitch
     const getUserMedia = this.options.getUserMedia ?? defaultGetUserMedia
     const next = await getUserMedia(buildAudioConstraints(deviceId))
-    const previous = this.stream
 
-    this.source?.disconnect()
-    this.source = this.context.createMediaStreamSource(next)
-    this.source.connect(this.worklet)
+    // Hung up (or superseded by a newer selection) while the device was
+    // opening. Nothing to switch any more; the stream must not outlive us.
+    const context = this.context
+    const worklet = this.worklet
+    if (this.disposed || token !== this.deviceSwitch || !context || !worklet) {
+      stopTracks(next)
+      return
+    }
+
+    const previousSource = this.source
+    previousSource?.disconnect()
+    let nextSource: AudioNodeLike | null = null
+    try {
+      nextSource = context.createMediaStreamSource(next)
+      nextSource.connect(worklet)
+    } catch (error) {
+      // Keep the existing microphone live and release the one that failed.
+      try {
+        nextSource?.disconnect()
+      } catch {
+        // A node that never connected has nothing to disconnect.
+      }
+      previousSource?.connect(worklet)
+      stopTracks(next)
+      throw error
+    }
+
+    const previous = this.stream
+    this.source = nextSource
     this.stream = next
     if (this.muted) this.applyMute(true)
 
-    for (const track of previous?.getTracks() ?? []) track.stop()
+    stopTracks(previous)
   }
 
   /** Drop any partially buffered frame — used when re-gating the microphone. */
@@ -284,6 +343,9 @@ export class MicCapture {
   /** Release the microphone and the audio graph. Safe to call repeatedly. */
   async dispose(): Promise<void> {
     this.disposed = true
+    // A preflight stream handed over but never consumed by start() is ours too.
+    stopTracks(this.options.initialStream)
+    this.options.initialStream = undefined
     if (this.worklet) {
       this.worklet.port.onmessage = null
       this.worklet.disconnect()
@@ -291,7 +353,7 @@ export class MicCapture {
     }
     this.source?.disconnect()
     this.source = null
-    for (const track of this.stream?.getTracks() ?? []) track.stop()
+    stopTracks(this.stream)
     this.stream = null
     const context = this.context
     this.context = null

@@ -1120,10 +1120,16 @@
           "mintFailed": "无法与任何实时语音服务商建立会话。请检查 API 密钥与网络后重试。",
           "noDeployments": "尚未配置实时语音服务商。请在「设置 → 语音」中添加。",
           "noneEligible": "当前地区和设备下，没有可用的实时语音服务商。",
+          "saveFailed": "本次语音对话有部分内容未能保存到聊天记录。",
           "sessionFailed": "实时语音连接已中断，请结束会话后重试。",
           "startFailed": "无法启动实时语音。请检查服务商密钥与麦克风权限。"
         },
         "busyHint": "请先完成或批准当前文字回复，再启动实时语音。",
+        "degraded": {
+          "droppedTools": "有 {count} 个工具无法在实时语音中使用。",
+          "history": "无法读取之前的对话记录，本次通话未带入聊天上下文。",
+          "tools": "无法加载工具，本次通话不能调用工具。"
+        },
         "inputLevel": "麦克风输入音量",
         "mute": "麦克风静音",
         "noMicrophone": "未找到麦克风。",
@@ -1139,6 +1145,7 @@
         },
         "reconnectProgress": "正在进行第 {attempt}/{maxAttempts} 次重连",
         "retry": "重新尝试",
+        "retrySave": "重新保存",
         "selectMicrophone": "切换麦克风",
         "startLive": "开始实时语音",
         "title": "实时语音",

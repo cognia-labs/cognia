@@ -28,6 +28,9 @@ const buildBindingsMock = jest.fn()
 const persistTurnsMock = jest.fn()
 const persistAppendMock = jest.fn()
 const persistFlushMock = jest.fn()
+const persisterOptionsMock = jest.fn()
+/** Replaces the real candidate selection when a test needs specific capabilities. */
+let candidatesOverride: unknown[] | undefined
 const saveSettingsMock = jest.fn()
 const ensureProviderKeysMock = jest.fn()
 const stopTTSMock = jest.fn()
@@ -94,6 +97,8 @@ jest.mock("@/lib/voice/live/session", () => {
   return {
     ...actual,
     resolveLiveVoiceSession: (...args: unknown[]) => resolveSessionMock(...args),
+    selectLiveVoiceCandidates: (...args: unknown[]) =>
+      candidatesOverride ?? actual.selectLiveVoiceCandidates(...args),
   }
 })
 
@@ -122,27 +127,29 @@ jest.mock("@/lib/voice/live/runtime-bindings", () => ({
 }))
 
 jest.mock("@/lib/voice/live/persist-turns", () => ({
-  persistLiveVoiceTurns: (...args: unknown[]) => persistTurnsMock(...args),
-  createLiveVoiceTurnPersister: (options: Record<string, unknown>) => ({
-    append: async (turns: unknown, toolRecords: unknown) => {
-      persistAppendMock(turns, toolRecords)
-      return []
-    },
-    flush: async (turns: unknown, toolRecords: unknown) => {
-      persistFlushMock(turns, toolRecords)
-      if (
-        Array.isArray(turns) &&
-        turns.length === 0 &&
-        Array.isArray(toolRecords) &&
-        toolRecords.length === 0
-      ) {
+  createLiveVoiceTurnPersister: (options: Record<string, unknown>) => {
+    persisterOptionsMock(options)
+    return {
+      append: async (turns: unknown, toolRecords: unknown) => {
+        persistAppendMock(turns, toolRecords)
         return []
-      }
-      const written = await persistTurnsMock({ ...options, turns, toolRecords })
-      ;(options.onPersisted as ((messages: unknown[]) => void) | undefined)?.(written)
-      return written
-    },
-  }),
+      },
+      flush: async (turns: unknown, toolRecords: unknown) => {
+        persistFlushMock(turns, toolRecords)
+        if (
+          Array.isArray(turns) &&
+          turns.length === 0 &&
+          Array.isArray(toolRecords) &&
+          toolRecords.length === 0
+        ) {
+          return []
+        }
+        const written = await persistTurnsMock({ ...options, turns, toolRecords })
+        ;(options.onPersisted as ((messages: unknown[]) => void) | undefined)?.(written)
+        return written
+      },
+    }
+  },
 }))
 
 jest.mock("@/lib/speech/settings", () => ({
@@ -177,7 +184,7 @@ jest.mock("next-intl", () => ({
 }))
 
 jest.mock("sonner", () => ({
-  toast: { error: (text: string) => toastErrorMock(text) },
+  toast: { error: (...args: unknown[]) => toastErrorMock(...args) },
 }))
 
 jest.mock("@/components/ai-elements/persona", () => ({
@@ -239,8 +246,14 @@ beforeEach(() => {
   currentToolRecords = []
   currentDeployments = [{ id: "d1", provider: "openai", region: "global", enabled: true }]
   currentProviderKeys = { openai: "sk-user", xai: "xai-user" }
-  buildBindingsMock.mockResolvedValue({ droppedTools: [] })
+  buildBindingsMock.mockResolvedValue({
+    droppedTools: [],
+    historyUnavailable: false,
+    toolsUnavailable: false,
+  })
   persistTurnsMock.mockResolvedValue([])
+  persistAppendMock.mockImplementation(() => undefined)
+  candidatesOverride = undefined
 })
 
 describe("LiveVoiceDialog — starting a session", () => {
@@ -743,7 +756,7 @@ describe("LiveVoiceDialog — live conversation", () => {
     expect(screen.getByTestId("live-voice-persona-fallback")).toBeInTheDocument()
   })
 
-  it("renders transcripts and forwards completed user turns", async () => {
+  it("renders transcripts and hands the user's turns to the composer when the call ends", async () => {
     const user = userEvent.setup()
     const onUserTranscript = jest.fn()
     renderDialog({ onUserTranscript })
@@ -759,28 +772,37 @@ describe("LiveVoiceDialog — live conversation", () => {
 
     expect(await screen.findByText("Check the build")).toBeInTheDocument()
     expect(screen.getByText("Working…")).toBeInTheDocument()
+    expect(onUserTranscript).not.toHaveBeenCalled()
+
+    await user.click(screen.getByLabelText("end"))
     expect(onUserTranscript).toHaveBeenCalledWith("Check the build")
   })
 
-  it("forwards each user turn only once as state keeps updating", async () => {
+  it("delivers the final revision of a user turn once, never its partial", async () => {
+    // Gemini grows one input item as the user keeps talking; delivering the
+    // first partial appended "hello" and lost " world".
     const user = userEvent.setup()
     const onUserTranscript = jest.fn()
     renderDialog({ onUserTranscript })
     await user.click(screen.getByLabelText("startLive"))
 
     act(() => {
-      publish({ turns: [{ id: "u1", role: "user", text: "hello" }] })
+      publish({ turns: [{ id: "1:u1", role: "user", text: "hello" }] })
     })
     act(() => {
       publish({
         turns: [
-          { id: "u1", role: "user", text: "hello" },
-          { id: "a1", role: "assistant", text: "hi" },
+          { id: "1:u1", role: "user", text: "hello world" },
+          { id: "1:a1", role: "assistant", text: "hi" },
+          { id: "1:u2", role: "user", text: "and more" },
         ],
       })
     })
+    expect(onUserTranscript).not.toHaveBeenCalled()
 
-    expect(onUserTranscript).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByLabelText("end"))
+
+    expect(onUserTranscript.mock.calls).toEqual([["hello world"], ["and more"]])
   })
 
   it("screens a user transcript again before forwarding it to the composer", async () => {
@@ -796,6 +818,7 @@ describe("LiveVoiceDialog — live conversation", () => {
         turns: [{ id: "u-sensitive", role: "user", text: "Email me at alex@example.com" }],
       })
     })
+    await user.click(screen.getByLabelText("end"))
 
     expect(onUserTranscript).toHaveBeenCalledWith("Email me at [EMAIL_1]")
     expect(onUserTranscript).not.toHaveBeenCalledWith(expect.stringContaining("alex@example.com"))
@@ -868,13 +891,86 @@ describe("LiveVoiceDialog — tools and context", () => {
     expect(buildBindingsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "chat-1",
-        capabilities: expect.objectContaining({
-          inputSampleRate: 24_000,
-          outputSampleRate: 24_000,
-        }),
+        supportsTools: true,
         limits: { turnLimit: 12, characterLimit: 16_000 },
       })
     )
+  })
+
+  it("hands tools to a fallback provider that supports them after a tool-less one fails", async () => {
+    // Doubao has no tool support; resolving the manifest from the FIRST
+    // candidate's capabilities left Qwen without tools after the fallback.
+    const base = {
+      supportsServerVad: true,
+      supportsBargeIn: true,
+      supportsInputTranscript: true,
+      supportsOutputTranscript: true,
+      inputSampleRate: 16_000,
+      outputSampleRate: 24_000,
+      regions: ["cn"],
+      transport: "relay",
+    }
+    candidatesOverride = [
+      {
+        deployment: { id: "doubao-1", provider: "doubao", region: "cn", enabled: true },
+        capabilities: { ...base, supportsTools: false },
+      },
+      {
+        deployment: { id: "qwen-1", provider: "qwen", region: "cn", enabled: true },
+        capabilities: { ...base, supportsTools: true },
+      },
+    ]
+    currentProviderKeys = { doubao: "host-key", qwen: "host-key" }
+    const tools = [{ type: "function", name: "search_notes", parameters: {} }]
+    const toolExecution = { sessionId: "chat-1", policy: {}, execute: jest.fn() }
+    buildBindingsMock.mockResolvedValue({
+      tools,
+      toolExecution,
+      droppedTools: [],
+      historyUnavailable: false,
+      toolsUnavailable: false,
+    })
+    resolveSessionMock
+      .mockRejectedValueOnce(new Error("doubao refused"))
+      .mockResolvedValueOnce(RESOLVED)
+    const { createLiveVoiceController } = jest.requireMock("@/lib/voice/live/controller")
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.click(screen.getByLabelText("startLive"))
+
+    expect(buildBindingsMock.mock.calls[0][0].supportsTools).toBe(true)
+    expect(resolveSessionMock.mock.calls[0][0].tools).toBeUndefined()
+    expect(resolveSessionMock.mock.calls[1][0].tools).toBe(tools)
+    expect(createLiveVoiceController).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tools, toolExecution })
+    )
+  })
+
+  it("tells the user what the call started without", async () => {
+    buildBindingsMock.mockResolvedValue({
+      droppedTools: [{ name: "bad name", pluginId: "p", reason: "invalid-name" }],
+      historyUnavailable: true,
+      toolsUnavailable: true,
+    })
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.click(screen.getByLabelText("startLive"))
+
+    expect(await screen.findByText("degraded.history")).toBeInTheDocument()
+    expect(screen.getByText("degraded.tools")).toBeInTheDocument()
+    expect(screen.getByText("degraded.droppedTools")).toBeInTheDocument()
+  })
+
+  it("shows no degradation notice for a fully provisioned call", async () => {
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.click(screen.getByLabelText("startLive"))
+
+    expect(screen.queryByText("degraded.history")).not.toBeInTheDocument()
+    expect(screen.queryByText("degraded.tools")).not.toBeInTheDocument()
   })
 
   it("passes the user's tool permissions to the runtime", async () => {
@@ -1019,10 +1115,10 @@ describe("LiveVoiceDialog — archiving the conversation", () => {
     expect(persistTurnsMock).not.toHaveBeenCalled()
   })
 
-  it("still closes the dialog when archiving fails", async () => {
+  it("still closes the dialog when archiving fails, and offers to save again", async () => {
     // The conversation happened; failing to file it must not strand the user
-    // in a dead call UI.
-    persistTurnsMock.mockRejectedValue(new Error("dexie is closed"))
+    // in a dead call UI — nor silently lose it.
+    persistTurnsMock.mockRejectedValueOnce(new Error("dexie is closed"))
     const user = userEvent.setup()
     renderDialog()
     await user.click(screen.getByLabelText("startLive"))
@@ -1032,5 +1128,53 @@ describe("LiveVoiceDialog — archiving the conversation", () => {
 
     expect(stopMock).toHaveBeenCalled()
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "errors.saveFailed",
+        expect.objectContaining({ action: expect.objectContaining({ label: "retrySave" }) })
+      )
+    )
+
+    const action = toastErrorMock.mock.calls.at(-1)?.[1] as { action: { onClick: () => void } }
+    await act(async () => {
+      action.action.onClick()
+    })
+
+    expect(persistFlushMock).toHaveBeenCalledTimes(2)
+    expect(persistFlushMock.mock.calls[1][0]).toEqual(TURNS)
+    expect(toastErrorMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows an unsaved notice during the call and saves again on request", async () => {
+    // Only a write that carries turns can fail; an empty append is a no-op.
+    persistAppendMock.mockImplementation((turns: unknown[]) => {
+      if (turns.length > 0) throw new Error("dexie is closed")
+    })
+    const user = userEvent.setup()
+    renderDialog()
+    await user.click(screen.getByLabelText("startLive"))
+    currentState = { ...currentState, turns: [TURNS[0]] }
+    act(() => publish({ turns: [TURNS[0]] }))
+
+    expect(await screen.findByText("errors.saveFailed")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "retrySave" }))
+
+    expect(persistFlushMock).toHaveBeenCalledWith([TURNS[0]], [])
+    await waitFor(() => expect(screen.queryByText("errors.saveFailed")).not.toBeInTheDocument())
+  })
+
+  it("keys the archive by a per-call id that differs between calls", async () => {
+    const user = userEvent.setup()
+    renderDialog()
+    await user.click(screen.getByLabelText("startLive"))
+    await user.click(screen.getByLabelText("end"))
+    await user.click(screen.getByLabelText("startLive"))
+
+    const [first, second] = persisterOptionsMock.mock.calls.map(
+      ([options]) => (options as { callId: string }).callId
+    )
+    expect(first).toEqual(expect.any(String))
+    expect(second).toEqual(expect.any(String))
+    expect(first).not.toBe(second)
   })
 })

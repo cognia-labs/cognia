@@ -23,6 +23,15 @@
  *   hardware rate instead, frames are resampled rather than shipped at the
  *   wrong pitch.
  *
+ * - **Every await re-checks ownership.** `stop()` bumps a session epoch. Token
+ *   minting, socket dialling, readiness and microphone start all resume after
+ *   an await, and each one bails out once the epoch moved: a hang-up during a
+ *   reconnect token request must not dial a fresh socket or open a microphone.
+ *
+ * - **The microphone is muted when the user muted it OR a tool hold is up.**
+ *   Both inputs feed one computation, so unmuting during an approved tool's
+ *   execution cannot reopen a held microphone.
+ *
  * State is exposed as `subscribe`/`getSnapshot` so React can bind with
  * `useSyncExternalStore`. The reducer's referential stability is what keeps
  * that from re-rendering on every audio delta.
@@ -55,6 +64,7 @@ import {
   assertLiveVoicePayloadPiiSafe,
   classifyLiveVoiceError,
   createInitialLiveVoiceState,
+  liveVoiceTurnId,
   reduceLiveVoiceServerEvent,
   type LiveVoiceState,
 } from "./reducer"
@@ -170,20 +180,29 @@ export class LiveVoiceController {
   private assistantPlaybackEnded = false
   private suppressAssistantOutput = false
   private suppressedResponseId: string | null = null
-  private pendingAssistantFinal: Extract<
-    RealtimeServerEvent,
-    { type: "audio-transcript-done" | "text-done" }
-  > | null = null
+  private pendingAssistantFinal: {
+    event: Extract<RealtimeServerEvent, { type: "audio-transcript-done" | "text-done" }>
+    /** Connection the final arrived on; a later commit must keep its turn id. */
+    scope: string
+  } | null = null
   private started = false
+  /** Bumped by `stop()`; an async step that resumes under an older epoch is stale. */
+  private sessionEpoch = 0
+  /** A capture whose `start()` is still in flight, so `stop()` can release it. */
+  private pendingCapture: MicCapture | null = null
+  /** Whether the current connection resumed a Gemini checkpoint by handle. */
+  private connectionResumed = false
+  /** How many live turns the latest Gemini checkpoint already contains. */
+  private checkpointTurnCount = 0
   /**
    * Reference-counted hold on audio while tool approvals are up. Created once
    * per controller so a release issued during one session can be recognised as
    * stale by the next.
    */
   private readonly gate: LiveVoiceAudioGate = createLiveVoiceAudioGate({
-    // Suspension is separate from the user's own mute: it silences the
-    // microphone without overwriting what they chose.
-    setMicrophoneEnabled: (enabled) => this.capture?.setMuted(!enabled),
+    // Suspension is combined with the user's own mute rather than written over
+    // it, so the capture's mute is always `userMuted || held`.
+    setMicrophoneEnabled: () => this.applyMicrophoneMute(),
     cancelResponse: () => this.transport?.send({ type: "response-cancel" }),
     interruptPlayback: () => this.playback?.interrupt(),
     isUserMuted: () => this.state.muted,
@@ -225,6 +244,8 @@ export class LiveVoiceController {
     this.started = true
     this.connectionCount = 0
     this.resumptionHandle = undefined
+    this.connectionResumed = false
+    this.checkpointTurnCount = 0
     this.lastEndOfUtteranceAt = null
     this.lastInputLevelAt = Number.NEGATIVE_INFINITY
     this.inputLevel = 0
@@ -276,11 +297,11 @@ export class LiveVoiceController {
 
   /** Mute or unmute the microphone. */
   setMuted(muted: boolean): void {
-    this.capture?.setMuted(muted)
+    this.setState({ ...this.state, muted })
+    this.applyMicrophoneMute()
     // Drop whatever partial utterance the server buffered, so unmuting cannot
     // commit half a sentence recorded before the mute.
     if (muted) this.transport?.send({ type: "input-audio-clear" })
-    this.setState({ ...this.state, muted })
     if (muted) this.setInputLevel(0)
   }
 
@@ -300,7 +321,7 @@ export class LiveVoiceController {
     const transport = this.transport
     this.transport = null
     transport?.close(4004, "manual reconnect")
-    await this.reconnect(true)
+    await this.reconnect()
   }
 
   /** Wait until the provider acknowledged config and the microphone is live. */
@@ -316,6 +337,9 @@ export class LiveVoiceController {
   /** Tear the session down. Safe to call repeatedly. */
   async stop(): Promise<void> {
     this.started = false
+    // Everything still awaiting (token mint, dial, readiness, microphone start)
+    // compares against this and stands down instead of resurrecting the call.
+    this.sessionEpoch++
     this.reconnectGeneration++
     this.connectAbort?.abort()
     this.connectAbort = null
@@ -331,16 +355,21 @@ export class LiveVoiceController {
     this.toolRuntime?.reset()
     this.toolRuntime = null
     this.gate.reset()
+    // Detach every resource synchronously, before the first await, so nothing
+    // created while the disposal is pending can slip past this teardown.
     const capture = this.capture
+    const pendingCapture = this.pendingCapture
     this.capture = null
-    await capture?.dispose()
+    this.pendingCapture = null
     this.playback?.stop()
     this.playback = null
-    this.transport?.close(1000, "client ended session")
+    const transport = this.transport
     this.transport = null
+    transport?.close(1000, "client ended session")
     this.reconnecting = null
     this.inputLevel = 0
     this.setState(createInitialLiveVoiceState())
+    await Promise.all([capture?.dispose(), pendingCapture?.dispose()])
   }
 
   // ── Internals ───────────────────────────────────────────────────────
@@ -379,20 +408,30 @@ export class LiveVoiceController {
     // Seed the conversation before the microphone opens, so the model is
     // already oriented on the user's first word rather than a sentence later.
     const { contextTranscript } = this.options
-    if (this.connectionCount === 1 && contextTranscript) {
-      this.transport?.send(buildLiveVoiceContextEvent(contextTranscript))
+    if (this.connectionCount === 1) {
+      if (contextTranscript) this.transport?.send(buildLiveVoiceContextEvent(contextTranscript))
+      return
     }
 
-    if (this.connectionCount > 1 && this.activeSession.provider !== "google") {
-      const completedTranscript = this.state.turns
-        .map((turn) => `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`)
-        .join("\n")
-      if (completedTranscript) {
-        // RealtimeModelV4 only accepts user-authored client text. Send one
-        // explicitly labelled transcript rather than forging assistant items;
-        // drafts and pending tool state never enter `state.turns`.
-        this.transport?.send(buildLiveVoiceContextEvent(completedTranscript))
-      }
+    // A Gemini connection that resumed a checkpoint by handle already holds the
+    // conversation up to that checkpoint — chat history and earlier live turns
+    // included. The checkpoint can be older than the latest turns, though, so
+    // the turns completed after it are replayed. Every other reconnect is a
+    // brand-new provider session that knows nothing: it gets the original chat
+    // seed again plus every completed live turn.
+    const resumed = this.activeSession.provider === "google" && this.connectionResumed
+    if (!resumed && contextTranscript) {
+      this.transport?.send(buildLiveVoiceContextEvent(contextTranscript))
+    }
+    const turns = resumed ? this.state.turns.slice(this.checkpointTurnCount) : this.state.turns
+    const completedTranscript = turns
+      .map((turn) => `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`)
+      .join("\n")
+    if (completedTranscript) {
+      // RealtimeModelV4 only accepts user-authored client text. Send one
+      // explicitly labelled transcript rather than forging assistant items;
+      // drafts and pending tool state never enter `state.turns`.
+      this.transport?.send(buildLiveVoiceContextEvent(completedTranscript))
     }
   }
 
@@ -401,10 +440,19 @@ export class LiveVoiceController {
     if (!readiness || readiness.settled) return
     readiness.settled = true
     clearTimeout(readiness.timer)
+    const epoch = this.sessionEpoch
+    const cancelled = () => new Error("live voice connection was cancelled")
     try {
       this.seedProviderContext()
-      if (!this.capture) await this.openMicrophone()
-      else {
+      if (!this.capture) {
+        await this.openMicrophone()
+        // Hung up while the microphone was starting: the capture was released
+        // by stop(); report nothing and leave the reset state alone.
+        if (epoch !== this.sessionEpoch) {
+          readiness.reject(cancelled())
+          return
+        }
+      } else {
         this.setState({
           ...this.state,
           phase: "listening",
@@ -419,6 +467,10 @@ export class LiveVoiceController {
       })
       readiness.resolve()
     } catch (cause) {
+      if (epoch !== this.sessionEpoch) {
+        readiness.reject(cancelled())
+        return
+      }
       const error = cause instanceof Error ? cause : new Error(String(cause))
       readiness.reject(error)
       this.fail(error)
@@ -429,6 +481,7 @@ export class LiveVoiceController {
     const { deviceId, initialStream, createCapture = createMicCapture } = this.options
     const session = this.activeSession
     const wireRate = session.capabilities.inputSampleRate
+    const epoch = this.sessionEpoch
 
     const capture = createCapture({
       sampleRate: wireRate,
@@ -439,16 +492,36 @@ export class LiveVoiceController {
       onError: (error) => this.fail(error),
     })
 
-    await capture.start()
+    // Visible to stop() while starting: a hang-up during getUserMedia or the
+    // worklet load disposes it, and start() releases what it acquired.
+    this.pendingCapture = capture
+    try {
+      // A failed start releases whatever it acquired itself.
+      await capture.start()
+    } finally {
+      if (this.pendingCapture === capture) this.pendingCapture = null
+    }
+    if (epoch !== this.sessionEpoch || !this.started) {
+      await capture.dispose()
+      return
+    }
     this.capture = capture
-    if (this.state.muted) capture.setMuted(true)
+    this.applyMicrophoneMute()
     this.setState({ ...this.state, phase: "listening", error: undefined })
+  }
+
+  /** The capture is muted while the user muted it or any tool hold is up. */
+  private applyMicrophoneMute(): void {
+    this.capture?.setMuted(this.state.muted || this.gate.suspended)
   }
 
   private sendFrame(frame: CaptureFrame): void {
     const capture = this.capture
     const transport = this.transport
     if (!capture || !transport) return
+    // A frame already in flight when a tool hold went up is not the user's
+    // to send; the hold is enforced at delivery too, not only at the track.
+    if (this.gate.suspended) return
 
     const wireRate = this.activeSession.capabilities.inputSampleRate
     this.publishInputLevel(frame.rms)
@@ -516,7 +589,7 @@ export class LiveVoiceController {
       case "audio-transcript-done":
       case "text-done":
         this.assistantItemId = event.itemId
-        this.pendingAssistantFinal = event
+        this.pendingAssistantFinal = { event, scope: this.turnScope() }
         if (this.assistantPlaybackEnded) this.commitPendingAssistantFinal()
         // A final transcript is not verified until queued audio drains (or a
         // text-only response completes). Do not let the generic reducer persist it yet.
@@ -531,7 +604,12 @@ export class LiveVoiceController {
         break
     }
 
-    this.setState(reduceLiveVoiceServerEvent(this.state, event))
+    this.setState(reduceLiveVoiceServerEvent(this.state, event, { turnScope: this.turnScope() }))
+  }
+
+  /** Turn-id scope of the current connection (see `liveVoiceTurnId`). */
+  private turnScope(): string {
+    return String(this.connectionCount)
   }
 
   /**
@@ -611,7 +689,9 @@ export class LiveVoiceController {
       this.setState({
         ...this.state,
         assistantDraft: "",
-        turns: itemId ? this.state.turns.filter((turn) => turn.id !== itemId) : this.state.turns,
+        turns: itemId
+          ? this.state.turns.filter((turn) => turn.id !== liveVoiceTurnId(this.turnScope(), itemId))
+          : this.state.turns,
       })
     }
     this.assistantItemId = null
@@ -633,7 +713,7 @@ export class LiveVoiceController {
       this.fail(new Error("Realtime connection was lost"))
       return
     }
-    void this.reconnect(false)
+    void this.reconnect()
   }
 
   private fail(error: Error): void {
@@ -714,23 +794,28 @@ export class LiveVoiceController {
     }
   }
 
-  private reconnect(manual: boolean): Promise<void> {
+  private reconnect(): Promise<void> {
     if (this.reconnecting) return this.reconnecting
     const generation = ++this.reconnectGeneration
-    const run = this.runReconnectAttempts(generation, manual).finally(() => {
+    const run = this.runReconnectAttempts(generation).finally(() => {
       if (this.reconnectGeneration === generation) this.reconnecting = null
     })
     this.reconnecting = run
     return run
   }
 
-  private async runReconnectAttempts(generation: number, manual: boolean): Promise<void> {
+  private async runReconnectAttempts(generation: number): Promise<void> {
     const sleep =
       this.options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)))
     let lastError = new Error("Realtime connection was lost")
+    const epoch = this.sessionEpoch
+    // Checked after every await: a hang-up or a newer reconnect owns the
+    // session from then on, and this attempt must not dial or report anything.
+    const current = () =>
+      this.started && generation === this.reconnectGeneration && epoch === this.sessionEpoch
 
     for (let index = 0; index < RECONNECT_DELAYS_MS.length; index++) {
-      if (!this.started || generation !== this.reconnectGeneration) return
+      if (!current()) return
       const attempt = index + 1
       this.setState({
         ...this.state,
@@ -745,13 +830,16 @@ export class LiveVoiceController {
         outcome: "started",
       })
       if (RECONNECT_DELAYS_MS[index] > 0) await sleep(RECONNECT_DELAYS_MS[index])
-      if (!this.started || generation !== this.reconnectGeneration) return
+      if (!current()) return
 
+      // Only the first attempt resumes by handle. If it failed, the handle may
+      // be what the provider refused; later attempts start cold and re-seed
+      // the conversation instead of retrying the same refusal.
+      const resumptionHandle =
+        index === 0 && this.activeSession.provider === "google" ? this.resumptionHandle : undefined
       try {
-        const refreshed = await this.options.reconnectSession?.({
-          resumptionHandle:
-            this.activeSession.provider === "google" ? this.resumptionHandle : undefined,
-        })
+        const refreshed = await this.options.reconnectSession?.({ resumptionHandle })
+        if (!current()) return
         if (!refreshed) throw new Error("Realtime reconnect is unavailable")
         if (refreshed.session.provider !== this.activeSession.provider) {
           throw new Error("Realtime reconnect attempted to switch providers")
@@ -759,8 +847,11 @@ export class LiveVoiceController {
         this.activeSession = refreshed.session
         this.activeAdapter = refreshed.adapter
         this.activeSessionConfig = refreshed.sessionConfig
+        this.connectionResumed = resumptionHandle !== undefined
         await this.connectActiveSession()
+        if (!current()) return
         await this.waitUntilReady()
+        if (!current()) return
         void trackEvent("voice.reconnect", {
           provider: this.activeSession.provider,
           attempt,
@@ -768,6 +859,8 @@ export class LiveVoiceController {
         })
         return
       } catch (cause) {
+        // stop() already closed whatever this attempt opened.
+        if (!current()) return
         lastError = cause instanceof Error ? cause : new Error(String(cause))
         this.transport?.close(4001, "reconnect attempt failed")
         this.transport = null
@@ -779,7 +872,7 @@ export class LiveVoiceController {
       }
     }
 
-    if (manual || this.started) this.fail(lastError)
+    if (current()) this.fail(lastError)
   }
 
   private handleCustomEvent(event: Extract<RealtimeServerEvent, { type: "custom" }>): void {
@@ -797,7 +890,12 @@ export class LiveVoiceController {
     }
     if (event.rawType === "sessionResumptionUpdate") {
       const update = raw?.sessionResumptionUpdate
-      if (update?.resumable && update.newHandle) this.resumptionHandle = update.newHandle
+      // `resumable: false` does not invalidate the previous handle; it only means
+      // the newest state is not checkpointed yet, so the old handle is kept.
+      if (update?.resumable && update.newHandle) {
+        this.resumptionHandle = update.newHandle
+        this.checkpointTurnCount = this.state.turns.length
+      }
       return
     }
     if (event.rawType === "goAway" && this.capture && !this.reconnecting) {
@@ -811,7 +909,7 @@ export class LiveVoiceController {
         this.fail(error)
         return
       }
-      void this.reconnect(false)
+      void this.reconnect()
     }
   }
 
@@ -852,7 +950,9 @@ export class LiveVoiceController {
     const pending = this.pendingAssistantFinal
     if (!pending || this.suppressAssistantOutput) return
     this.pendingAssistantFinal = null
-    this.setState(reduceLiveVoiceServerEvent(this.state, pending))
+    this.setState(
+      reduceLiveVoiceServerEvent(this.state, pending.event, { turnScope: pending.scope })
+    )
   }
 
   private beginFirstAudioFrame(): void {

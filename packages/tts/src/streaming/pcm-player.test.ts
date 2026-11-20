@@ -332,6 +332,53 @@ describe("PcmPlayer.playedSeconds", () => {
 
     expect(player.playedSeconds()).toBe(0)
   })
+
+  it("does not count a network starvation gap inside one response as heard audio", () => {
+    // One second plays, the downlink starves until t=10, then another second
+    // is scheduled. At 10.1 only 1.1 s of audio has been audible; the context
+    // clock alone would claim 2 s (the cap) and over-truncate on barge-in.
+    const ctx = new FakeContext()
+    const player = new PcmPlayer({
+      sampleRate: 24000,
+      audioContextFactory: () => ctx,
+      keepAlive: true,
+    })
+    player.enqueue(pcm(24000))
+    ctx.currentTime = 10
+    player.enqueue(pcm(24000))
+    expect(ctx.sources[1].start).toHaveBeenCalledWith(10)
+
+    ctx.currentTime = 10.1
+
+    expect(player.playedSeconds()).toBeCloseTo(1.1, 6)
+  })
+
+  it("counts back-to-back chunks as one continuous run and nothing still in the future", () => {
+    const ctx = new FakeContext()
+    const player = new PcmPlayer({ sampleRate: 24000, audioContextFactory: () => ctx })
+    player.enqueue(pcm(12000)) // 0.0–0.5
+    player.enqueue(pcm(12000)) // 0.5–1.0, contiguous
+    ctx.currentTime = 2
+    player.enqueue(pcm(24000)) // 2.0–3.0 after a gap, not yet started below
+
+    ctx.currentTime = 1.5
+
+    expect(player.playedSeconds()).toBeCloseTo(1, 6)
+  })
+
+  it("reports progress against heard audio, not the wall clock across a gap", () => {
+    const ctx = new FakeContext()
+    const onProgress = jest.fn()
+    const player = new PcmPlayer({ sampleRate: 24000, audioContextFactory: () => ctx, onProgress })
+    player.enqueue(pcm(24000))
+    ctx.currentTime = 10
+    player.enqueue(pcm(24000))
+    ctx.currentTime = 10.5
+
+    ctx.sources[0].onended?.()
+
+    expect(onProgress).toHaveBeenLastCalledWith(0.75)
+  })
 })
 
 describe("PcmPlayer keepAlive", () => {

@@ -88,6 +88,18 @@ export function pcm16ToFloat32(buffer: ArrayBuffer): Float32Array {
 
 type PlayerState = "idle" | "playing" | "paused" | "ended"
 
+/**
+ * One stretch of back-to-back scheduled audio on the context clock. A chunk
+ * that starts exactly where the previous one ended extends the run; a chunk
+ * that has to start later (the network starved the queue and `currentTime`
+ * overtook the schedule) opens a new run, and the silence between the two is
+ * not audio anyone heard.
+ */
+interface ScheduledRun {
+  start: number
+  duration: number
+}
+
 export class PcmPlayer {
   private readonly sampleRate: number
   private readonly onProgress?: (progress: number) => void
@@ -99,9 +111,8 @@ export class PcmPlayer {
 
   /** Absolute context time where the next chunk should start. */
   private nextStartTime = 0
-  /** Absolute context time the very first chunk started at, for progress. */
-  private firstStartTime = 0
-  private started = false
+  /** Scheduled audio of the current utterance, merged into contiguous runs. */
+  private runs: ScheduledRun[] = []
   /** Total scheduled audio duration (seconds), for progress. */
   private scheduledDuration = 0
   private endedSources = 0
@@ -137,10 +148,10 @@ export class PcmPlayer {
     // Never schedule in the past — if we've fallen behind, start at `currentTime`.
     const startAt = Math.max(this.nextStartTime, ctx.currentTime)
     const duration = samples.length / this.sampleRate
-    if (!this.started) {
-      this.firstStartTime = startAt
-      this.started = true
-    }
+    const lastRun = this.runs.at(-1)
+    // `startAt` exceeds the schedule exactly when the clock overtook it.
+    if (lastRun && startAt <= this.nextStartTime) lastRun.duration += duration
+    else this.runs.push({ start: startAt, duration })
     this.totalSources++
     this.liveSources.add(source)
     source.onended = () => {
@@ -213,12 +224,21 @@ export class PcmPlayer {
    *
    * Barge-in needs this: the provider must be told how much of its own
    * response the user really heard (`conversation.item.truncate`), or its
-   * transcript diverges from the conversation the user experienced.
+   * transcript diverges from the conversation the user experienced. The
+   * context clock is not a counter of samples heard: it keeps running through
+   * a starvation gap between two chunks, and counting that silence would tell
+   * the provider the user heard text that was never played. Only the elapsed
+   * part of each scheduled run counts; future audio counts nothing, and a
+   * suspended context stops the clock.
    */
   playedSeconds(): number {
-    if (!this.ctx || !this.started) return 0
-    const played = this.ctx.currentTime - this.firstStartTime
-    return Math.max(0, Math.min(played, this.scheduledDuration))
+    const ctx = this.ctx
+    if (!ctx) return 0
+    let played = 0
+    for (const run of this.runs) {
+      played += Math.max(0, Math.min(ctx.currentTime - run.start, run.duration))
+    }
+    return played
   }
 
   getState(): PlayerState {
@@ -228,8 +248,7 @@ export class PcmPlayer {
   /** Rewind scheduling state to "nothing queued", keeping the context open. */
   private resetSchedule(): void {
     this.nextStartTime = this.ctx?.currentTime ?? 0
-    this.firstStartTime = 0
-    this.started = false
+    this.runs = []
     this.scheduledDuration = 0
     this.endedSources = 0
     this.totalSources = 0
@@ -250,8 +269,7 @@ export class PcmPlayer {
 
   private emitProgress(): void {
     if (!this.ctx || this.scheduledDuration <= 0) return
-    const played = Math.min(this.ctx.currentTime - this.firstStartTime, this.scheduledDuration)
-    this.onProgress?.(Math.max(0, Math.min(1, played / this.scheduledDuration)))
+    this.onProgress?.(Math.max(0, Math.min(1, this.playedSeconds() / this.scheduledDuration)))
   }
 
   private maybeFinish(): void {
