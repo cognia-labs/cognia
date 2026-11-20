@@ -19,7 +19,7 @@
  * panel itself triggers so feedback is immediate (not up to a tick late).
  */
 
-import { Fragment, useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import { Fragment, useCallback, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
@@ -50,7 +50,7 @@ import { TransportTierIndicator } from "./transport-tier-indicator"
 import { humanizeKey } from "@/lib/plugin/convert/secrets"
 import { runSyncDown, snapshotSyncStates } from "@/lib/sync/companion-sync"
 import type { SyncOutcome } from "@/lib/sync/types"
-import { loadCompanionConfig } from "@/lib/tauri/transport-companion"
+import { useHasSyncHost } from "@/hooks/sync/use-has-sync-host"
 import {
   summarizeSyncSnapshot,
   type SyncOverallStatus,
@@ -73,30 +73,6 @@ function useSyncSnapshot(intervalMs = 15_000): { snapshot: Snapshot; refresh: ()
     return () => clearInterval(id)
   }, [intervalMs, refresh])
   return { snapshot, refresh }
-}
-
-/**
- * Emitted by `notifyCompanionConfigChanged` (lib/tauri/transport-companion) on
- * every pair, unpair and target switch.
- */
-const COMPANION_CONFIG_EVENT = "cognia:companion-config-changed"
-
-function subscribeCompanionConfig(onChange: () => void): () => void {
-  window.addEventListener(COMPANION_CONFIG_EVENT, onChange)
-  return () => window.removeEventListener(COMPANION_CONFIG_EVENT, onChange)
-}
-
-/**
- * Whether this device has a host to pull from. Sync mirrors a paired host, so
- * with none there is nothing any row could do: the panel says so and offers
- * the pairing flow instead of 48 "never synced" rows with live retry buttons.
- */
-function useHasSyncHost(): boolean {
-  return useSyncExternalStore(
-    subscribeCompanionConfig,
-    () => loadCompanionConfig() !== null,
-    () => false
-  )
 }
 
 type OverallKey = SyncOverallStatus | "noHost"

@@ -31,6 +31,9 @@ jest.mock("./account-security-tab", () => ({
 jest.mock("./account-danger-tab", () => ({
   AccountDangerTab: () => <div data-testid="danger-tab" />,
 }))
+jest.mock("./account-identity-tab", () => ({
+  AccountIdentityTab: () => <div data-testid="identity-tab" />,
+}))
 
 import { AccountDetail } from "./account-detail"
 
@@ -117,6 +120,13 @@ describe("AccountDetail", () => {
     expect(screen.getByTestId("profile-tab")).toBeInTheDocument()
     await user.click(screen.getByTestId("account-tab-security"))
     expect(screen.getByTestId("security-tab")).toBeInTheDocument()
+  })
+
+  it("opens on the requested initial tab", () => {
+    renderDetail({ initialTab: "identity" })
+    expect(screen.getByTestId("identity-tab")).toBeInTheDocument()
+    expect(screen.queryByTestId("profile-tab")).not.toBeInTheDocument()
+    expect(screen.getByTestId("account-tab-identity")).toHaveAttribute("data-state", "active")
   })
 
   it("renders a back button when showBack is set", () => {

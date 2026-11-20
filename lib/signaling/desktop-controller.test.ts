@@ -4,9 +4,16 @@
  * command expects, plus the ADR-0021 TURN-provider patch builder + wiring.
  */
 
-jest.mock("@/lib/tauri/transport-instance", () => ({
-  transport: { call: jest.fn(async () => undefined) },
-}))
+// `transport` is the real routing transport over the mocked local one, so a
+// remote Host can be made active and the host-admin guard does its real work.
+jest.mock("@/lib/tauri/transport-instance", () => {
+  const { RoutingTransport } = jest.requireActual("@/lib/tauri/transport-routing")
+  const localTransport = {
+    call: jest.fn(async () => undefined),
+    subscribe: jest.fn(() => () => {}),
+  }
+  return { localTransport, transport: new RoutingTransport(localTransport) }
+})
 
 import {
   buildSignalingConfigPatch,
@@ -15,7 +22,8 @@ import {
   selectSignalingDevices,
 } from "./desktop-controller"
 import type { PairedDeviceRow } from "@/types/mobile/paired-device"
-import { transport } from "@/lib/tauri/transport-instance"
+import { localTransport } from "@/lib/tauri/transport-instance"
+import { __resetRoutingForTests, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 import {
   resetWanWakeOverridesForTests,
   sleepDeviceForWan,
@@ -23,7 +31,7 @@ import {
 } from "./wan-wake-overrides"
 import type { AppSettings } from "@cognia/agent-config-types"
 
-const mockCall = transport.call as jest.Mock
+const mockCall = localTransport.call as jest.Mock
 
 function settings(patch: Partial<AppSettings> = {}): AppSettings {
   return {
@@ -534,5 +542,47 @@ describe("installDesktopSignalingController — waking a dormant device", () => 
     expect(
       mockCall.mock.calls.filter((c) => c[0] === "companion_signaling_sync_devices")
     ).toHaveLength(before)
+  })
+})
+
+describe("installDesktopSignalingController — remote runtime Host active", () => {
+  const settle = () => new Promise((r) => setTimeout(r, 10))
+
+  beforeEach(() => {
+    mockCall.mockClear()
+    mockCall.mockImplementation(async () => undefined)
+  })
+
+  afterEach(() => {
+    __resetRoutingForTests()
+  })
+
+  // Regression (R3): both commands are `host-admin`, which the routing
+  // transport rejects while a remote Host is active, so the controller sent
+  // them nowhere and only logged a warning. It administers this renderer's own
+  // hub and must reach it whichever Host is selected.
+  it("configures this machine's hub and syncs its devices through the local transport", async () => {
+    const remoteCall = jest.fn(async () => undefined)
+    setActiveRemoteTransport({ call: remoteCall, subscribe: () => () => {} } as never)
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+
+    const uninstall = installDesktopSignalingController({
+      isTauriOverride: true,
+      getSettingsOverride: async () =>
+        settings({ webrtcEnabled: true, signalingUrl: "wss://relay.example" }),
+      listPairedDevicesOverride: async () => [deviceRow({ lastSeenAt: Date.now() })],
+    })
+    await settle()
+
+    const commands = mockCall.mock.calls.map((c) => c[0])
+    expect(commands).toContain("companion_signaling_configure")
+    expect(commands).toContain("companion_signaling_sync_devices")
+    const configure = mockCall.mock.calls.find((c) => c[0] === "companion_signaling_configure")!
+    expect(configure[1].patch.signalingUrl).toBe("wss://relay.example")
+    expect(remoteCall).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+
+    uninstall()
+    warn.mockRestore()
   })
 })

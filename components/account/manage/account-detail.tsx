@@ -2,8 +2,8 @@
 
 /**
  * Detail pane of the manage dialog: an identity header with an inline
- * switch/unlock action (shared `useAccountSwitch` flow) over three sub-tabs —
- * Profile / Security / Danger zone. The tab bodies are keyed by `account.id` so
+ * switch/unlock action (shared `useAccountSwitch` flow) over four sub-tabs —
+ * Profile / Security / Identity / Danger zone. The tab bodies are keyed by `account.id` so
  * their drafts reset when the selection changes. On narrow layouts the parent
  * passes `showBack`; the back button hides itself at the `@lg` container width.
  */
@@ -25,6 +25,9 @@ import { AccountSecurityTab } from "./account-security-tab"
 import { AccountDangerTab } from "./account-danger-tab"
 import { AccountIdentityTab } from "./account-identity-tab"
 
+/** The detail pane's sub-tabs. */
+export type AccountDetailTab = "profile" | "security" | "identity" | "danger"
+
 export interface AccountDetailProps {
   account: LocalAccountRecord | null
   accounts: LocalAccountRecord[]
@@ -32,6 +35,11 @@ export interface AccountDetailProps {
   unlockedAccountId: string | null
   onBack?: () => void
   showBack?: boolean
+  /**
+   * The tab the pane opens on (default Profile). The settings finder's
+   * `account-sync` jump opens Identity, where the account sync controls live.
+   */
+  initialTab?: AccountDetailTab
 }
 
 export function AccountDetail({
@@ -41,6 +49,7 @@ export function AccountDetail({
   unlockedAccountId,
   onBack,
   showBack,
+  initialTab = "profile",
 }: AccountDetailProps) {
   const t = useTranslations("account.manage")
   const switcher = useAccountSwitch({ operationFailedLabel: t("operationFailed") })
@@ -149,7 +158,7 @@ export function AccountDetail({
         ) : null}
       </div>
 
-      <Tabs defaultValue="profile" className="min-w-0">
+      <Tabs defaultValue={initialTab} className="min-w-0">
         <TabsList className="w-full">
           <TabsTrigger value="profile" data-testid="account-tab-profile">
             {t("tabProfile")}

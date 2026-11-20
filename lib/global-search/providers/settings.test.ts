@@ -1,6 +1,13 @@
 import { SETTING_CONTROLS } from "@/components/settings/finder/control-registry"
 import { SETTINGS_NAV } from "@/components/settings/settings-nav-config"
+import enFinder from "@/i18n/messages/en/settings/finder.json"
+import enTabs from "@/i18n/messages/en/settings/tabs.json"
+import enDescriptions from "@/i18n/messages/en/settings/descriptions.json"
+import zhFinder from "@/i18n/messages/zh-CN/settings/finder.json"
+import zhTabs from "@/i18n/messages/zh-CN/settings/tabs.json"
+import zhDescriptions from "@/i18n/messages/zh-CN/settings/descriptions.json"
 
+import type { GlobalSearchContext } from "../types"
 import { TEST_SHELL_NAV, makeProviderInput, makeTestContext } from "../testing"
 import { settingsCandidates, settingsProvider } from "./settings"
 
@@ -20,6 +27,26 @@ const ctxAll = () =>
       shellNav: TEST_SHELL_NAV,
     },
   })
+
+/**
+ * A context translating through the real settings bundles of one locale. Keys
+ * outside them (module sections own their labels) fall back to the key.
+ */
+function ctxInLocale(locale: "en" | "zh-CN"): GlobalSearchContext {
+  const settings =
+    locale === "en"
+      ? { finder: enFinder, tabs: enTabs, descriptions: enDescriptions }
+      : { finder: zhFinder, tabs: zhTabs, descriptions: zhDescriptions }
+  const messages: Record<string, unknown> = { settings }
+  const t = (key: string): string => {
+    let node: unknown = messages
+    for (const part of key.split(".")) {
+      node = node && typeof node === "object" ? (node as Record<string, unknown>)[part] : undefined
+    }
+    return typeof node === "string" ? node : key
+  }
+  return { ...ctxAll(), t }
+}
 
 describe("settings provider", () => {
   it("cuts sections and controls to what the host can reach", () => {
@@ -155,6 +182,21 @@ describe("settings provider", () => {
     // `total` still counts everything that matched, not what survived the cut.
     expect(out.total).toBe(SETTINGS_NAV.length + SETTING_CONTROLS.length)
     expect(out.truncated).toBe(true)
+  })
+
+  // Regression (F10): nothing indexed account sync, so neither locale's word
+  // for the recovery key found the controls in the Manage accounts dialog.
+  it.each([
+    ["en", "recovery key", "Account sync and recovery key"],
+    ["zh-CN", "恢复密钥", "账号同步与恢复密钥"],
+  ] as const)("finds account sync for %s %p", async (locale, needle, title) => {
+    const out = await settingsProvider.search(
+      makeProviderInput(needle, { ctx: ctxInLocale(locale), limit: 100 })
+    )
+    const hit = out.items.find((i) => i.id === "settings:control:account-sync")
+    expect(hit).toBeDefined()
+    expect(hit!.title).toBe(title)
+    expect(hit!.action).toEqual({ type: "open-settings", tab: "account", focus: "account-sync" })
   })
 
   it("tolerates a control pointing at a section without a nav entry, and sections without keywords", () => {

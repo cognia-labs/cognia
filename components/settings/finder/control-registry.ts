@@ -28,6 +28,30 @@ export interface SettingControl {
 }
 
 export const SETTING_CONTROLS: SettingControl[] = [
+  // account: the sync controls sit in the Manage accounts dialog's Identity
+  // tab; the overview section opens it there for this id.
+  {
+    id: "account-sync",
+    sectionId: "account",
+    labelKey: "accountSync",
+    keywords: [
+      "sync",
+      "account sync",
+      "recovery key",
+      "recovery",
+      "encryption",
+      "end-to-end",
+      "e2ee",
+      "devices",
+      "同步",
+      "账号同步",
+      "恢复密钥",
+      "恢复",
+      "加密",
+      "端到端",
+      "设备",
+    ],
+  },
   // agent-runtime defaults (formerly the standalone "general" section)
   {
     id: "default-model",

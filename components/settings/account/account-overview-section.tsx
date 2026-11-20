@@ -29,7 +29,7 @@
  */
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -54,7 +54,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { AccountManageDialog } from "@/components/account/account-manage-dialog"
+import {
+  AccountManageDialog,
+  type AccountManageDialogProps,
+} from "@/components/account/account-manage-dialog"
 import {
   SettingsBlock,
   SettingsField,
@@ -69,6 +72,14 @@ import { selectActiveAccount, useAccountStore } from "@/stores/account/account-s
 import { useSettingsStore } from "@/stores/settings"
 
 import { ProfileSection } from "../profile/profile-section"
+
+/**
+ * The settings finder control (`components/settings/finder/control-registry.ts`)
+ * for account sync and the recovery key. Its `data-setting-id` anchor is the
+ * Manage accounts button, and a `?focus=` for it opens the dialog on the
+ * Identity tab, where the sync controls live.
+ */
+const ACCOUNT_SYNC_CONTROL_ID = "account-sync"
 
 /** Format the time until `resetAt` relative to `now`. `now === 0` (pre-mount) → null. */
 function formatResetAt(resetAt: number | undefined, now: number): string | null {
@@ -124,7 +135,32 @@ export function AccountOverviewSection() {
   const lockAccounts = useAccountStore((state) => state.lock)
   const switchAccount = useAccountStore((state) => state.switchAccount)
   const autoLockMinutes = useSettingsStore((state) => state.settings?.accountAutoLockMinutes ?? 0)
-  const [manageOpen, setManageOpen] = useState(false)
+  // A finder jump to account sync opens the manage dialog on Identity. The
+  // focus hook strips `?focus=` once it has highlighted the anchor, so this
+  // reacts to the param arriving (on mount, or on a later search while the
+  // section is already showing) rather than to its presence.
+  const focus = useSearchParams().get("focus")
+  const focusOpensSync = focus === ACCOUNT_SYNC_CONTROL_ID
+  const [manageOpen, setManageOpen] = useState(focusOpensSync)
+  const [manageTab, setManageTab] = useState<AccountManageDialogProps["initialTab"]>(
+    focusOpensSync ? "identity" : undefined
+  )
+  const [handledFocus, setHandledFocus] = useState(focus)
+  if (focus !== handledFocus) {
+    setHandledFocus(focus)
+    if (focusOpensSync) {
+      setManageTab("identity")
+      setManageOpen(true)
+    }
+  }
+  const openManage = () => {
+    setManageTab(undefined)
+    setManageOpen(true)
+  }
+  const onManageOpenChange = (open: boolean) => {
+    setManageOpen(open)
+    if (!open) setManageTab(undefined)
+  }
   const [busy, setBusy] = useState<"refresh" | "signOut" | null>(null)
   // Local accounts are a Tauri-only concept; resolve post-hydration to keep the
   // server + first client render in agreement (mirrors settings-sidebar.tsx).
@@ -211,7 +247,7 @@ export function AccountOverviewSection() {
       await switchAccount(accountId)
     } catch {
       toast.error(t("switchAccountRequiresUnlock"))
-      setManageOpen(true)
+      openManage()
     }
   }
 
@@ -357,8 +393,9 @@ export function AccountOverviewSection() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setManageOpen(true)}
+                  onClick={openManage}
                   data-testid="account-overview-manage-local"
+                  data-setting-id={ACCOUNT_SYNC_CONTROL_ID}
                 >
                   {t("localAccountsManage")}
                 </Button>
@@ -475,7 +512,13 @@ export function AccountOverviewSection() {
         </SettingsBlock>
       </SettingsStack>
 
-      {desktopReady ? <AccountManageDialog open={manageOpen} onOpenChange={setManageOpen} /> : null}
+      {desktopReady ? (
+        <AccountManageDialog
+          open={manageOpen}
+          onOpenChange={onManageOpenChange}
+          initialTab={manageTab}
+        />
+      ) : null}
     </div>
   )
 }

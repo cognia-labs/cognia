@@ -49,3 +49,13 @@ it("makes reading, Jina, distillation and web fetch findable", () => {
     expect.arrayContaining(["reader", "jina", "distill", "web fetch"])
   )
 })
+
+it("makes account sync and the recovery key findable in both languages", () => {
+  const sync = SETTING_CONTROLS.find((c) => c.id === "account-sync")
+  expect(sync).toMatchObject({ sectionId: "account", labelKey: "accountSync" })
+  expect(sync?.keywords).toEqual(
+    expect.arrayContaining(["sync", "recovery key", "e2ee", "同步", "恢复密钥", "端到端"])
+  )
+  expect(enFinder.controls.accountSync).toBe("Account sync and recovery key")
+  expect(zhFinder.controls.accountSync).toBe("账号同步与恢复密钥")
+})

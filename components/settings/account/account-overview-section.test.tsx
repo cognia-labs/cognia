@@ -12,8 +12,10 @@ jest.mock("next-intl", () => ({
 }))
 
 const pushMock = jest.fn()
+let mockSearch = ""
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
+  useSearchParams: () => new URLSearchParams(mockSearch),
 }))
 
 const toastSuccessMock = jest.fn()
@@ -117,8 +119,22 @@ jest.mock("@/stores/settings", () => ({
 }))
 
 jest.mock("@/components/account/account-manage-dialog", () => ({
-  AccountManageDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="stub-manage-dialog" /> : null,
+  AccountManageDialog: ({
+    open,
+    onOpenChange,
+    initialTab,
+  }: {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    initialTab?: string
+  }) =>
+    open ? (
+      <div data-testid="stub-manage-dialog" data-initial-tab={initialTab ?? "default"}>
+        <button data-testid="stub-manage-close" onClick={() => onOpenChange(false)}>
+          close
+        </button>
+      </div>
+    ) : null,
 }))
 
 import { AccountOverviewSection } from "./account-overview-section"
@@ -148,6 +164,7 @@ beforeEach(() => {
   signOutMock.mockReset()
   signOutMock.mockResolvedValue(undefined)
   mockSwitchOnValueChange = null
+  mockSearch = ""
   mockIsTauri = false
   mockAccounts = []
   mockActiveAccountId = null
@@ -336,6 +353,62 @@ describe("AccountOverviewSection", () => {
     expect(screen.queryByTestId("stub-manage-dialog")).not.toBeInTheDocument()
     await user.click(manage)
     expect(screen.getByTestId("stub-manage-dialog")).toBeInTheDocument()
+  })
+
+  it("anchors the account-sync finder control on the manage accounts button", async () => {
+    mockIsTauri = true
+    mockAccounts = [{ id: "acct_alpha", displayName: "Alpha" }]
+    mockActiveAccountId = "acct_alpha"
+    render(<AccountOverviewSection />)
+    const manage = await screen.findByTestId("account-overview-manage-local")
+    expect(manage).toHaveAttribute("data-setting-id", "account-sync")
+  })
+
+  it("opens the manage dialog on the Identity tab for a ?focus=account-sync jump", async () => {
+    mockIsTauri = true
+    mockAccounts = [{ id: "acct_alpha", displayName: "Alpha" }]
+    mockActiveAccountId = "acct_alpha"
+    mockSearch = "section=account&focus=account-sync"
+    render(<AccountOverviewSection />)
+    const dialog = await screen.findByTestId("stub-manage-dialog")
+    expect(dialog).toHaveAttribute("data-initial-tab", "identity")
+  })
+
+  it("opens on Identity when the jump arrives while the section is showing", async () => {
+    mockIsTauri = true
+    mockAccounts = [{ id: "acct_alpha", displayName: "Alpha" }]
+    mockActiveAccountId = "acct_alpha"
+    const { rerender } = render(<AccountOverviewSection />)
+    await screen.findByTestId("account-overview-manage-local")
+    expect(screen.queryByTestId("stub-manage-dialog")).not.toBeInTheDocument()
+
+    mockSearch = "section=account&focus=account-sync"
+    rerender(<AccountOverviewSection />)
+    expect(screen.getByTestId("stub-manage-dialog")).toHaveAttribute("data-initial-tab", "identity")
+  })
+
+  it("opens the plain button on the default tab after a sync jump was closed", async () => {
+    mockIsTauri = true
+    mockAccounts = [{ id: "acct_alpha", displayName: "Alpha" }]
+    mockActiveAccountId = "acct_alpha"
+    mockSearch = "section=account&focus=account-sync"
+    const user = userEvent.setup()
+    render(<AccountOverviewSection />)
+    await user.click(await screen.findByTestId("stub-manage-close"))
+    expect(screen.queryByTestId("stub-manage-dialog")).not.toBeInTheDocument()
+
+    await user.click(screen.getByTestId("account-overview-manage-local"))
+    expect(screen.getByTestId("stub-manage-dialog")).toHaveAttribute("data-initial-tab", "default")
+  })
+
+  it("ignores a focus for another control", async () => {
+    mockIsTauri = true
+    mockAccounts = [{ id: "acct_alpha", displayName: "Alpha" }]
+    mockActiveAccountId = "acct_alpha"
+    mockSearch = "section=account&focus=language"
+    render(<AccountOverviewSection />)
+    await screen.findByTestId("account-overview-manage-local")
+    expect(screen.queryByTestId("stub-manage-dialog")).not.toBeInTheDocument()
   })
 
   it("switches to another local account through the quick-switch dropdown", async () => {

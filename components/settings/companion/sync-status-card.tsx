@@ -30,6 +30,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { SYNC_HANDLER_TABLES, runSyncDown, snapshotSyncStates } from "@/lib/sync/companion-sync"
+import { summarizeSyncSnapshot, type SyncOverallStatus } from "@/lib/sync/sync-status-summary"
+import { useHasSyncHost } from "@/hooks/sync/use-has-sync-host"
 import { formatRelative } from "@cognia/time"
 import { cn } from "@/lib/utils"
 import type { SyncableTable } from "@/lib/sync/types"
@@ -42,6 +44,23 @@ interface SyncRowSnapshot {
 }
 
 const POLL_INTERVAL_MS = 2_000
+
+/**
+ * The badge verdict. It is the `/me/sync` page's (`summarizeSyncSnapshot`)
+ * plus "no host": the scheduler records no per-table error when there is no
+ * host to pull from, so deciding from errors alone showed an unpaired device,
+ * or one whose tables never synced, as "Healthy".
+ */
+type BadgeKey = SyncOverallStatus | "noHost"
+
+const BADGE: Record<BadgeKey, { labelKey: string; className: string }> = {
+  healthy: { labelKey: "statusHealthy", className: "text-emerald-500" },
+  failing: { labelKey: "statusErrors", className: "text-destructive" },
+  partial: { labelKey: "statusPartial", className: "text-amber-500" },
+  never: { labelKey: "statusNeverSynced", className: "text-muted-foreground" },
+  empty: { labelKey: "statusNeverSynced", className: "text-muted-foreground" },
+  noHost: { labelKey: "statusNotPaired", className: "text-muted-foreground" },
+}
 
 function snapshot(): SyncRowSnapshot[] {
   const states = snapshotSyncStates()
@@ -60,6 +79,7 @@ export function SyncStatusCard() {
   const t = useTranslations("mobile.companion.syncStatus")
   const [rows, setRows] = useState<SyncRowSnapshot[]>(() => snapshot())
   const [busy, setBusy] = useState<Set<SyncableTable> | "all" | null>(null)
+  const hasHost = useHasSyncHost()
 
   useEffect(() => {
     let cancelled = false
@@ -137,24 +157,24 @@ export function SyncStatusCard() {
     }
   }, [t])
 
-  const anyError = rows.some((r) => r.lastError !== null)
+  const badgeKey: BadgeKey = hasHost
+    ? summarizeSyncSnapshot(Object.fromEntries(rows.map((r) => [r.table, r]))).overall
+    : "noHost"
+  const badge = BADGE[badgeKey]
 
   return (
     <SettingsBlock
       title={t("title")}
       description={t("description")}
       badge={
-        anyError ? (
-          <span className="flex items-center gap-1 text-[10px] uppercase text-amber-500">
-            <CircleIcon className="h-2 w-2 fill-current" />
-            {t("statusErrors")}
-          </span>
-        ) : (
-          <span className="flex items-center gap-1 text-[10px] uppercase text-emerald-500">
-            <CircleIcon className="h-2 w-2 fill-current" />
-            {t("statusHealthy")}
-          </span>
-        )
+        <span
+          className={cn("flex items-center gap-1 text-[10px] uppercase", badge.className)}
+          data-testid="sync-status-badge"
+          data-sync-overall={badgeKey}
+        >
+          <CircleIcon className="h-2 w-2 fill-current" />
+          {t(badge.labelKey)}
+        </span>
       }
       action={
         <Button

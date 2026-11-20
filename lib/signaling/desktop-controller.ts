@@ -25,19 +25,25 @@
 
 import Dexie, { type Subscription } from "dexie"
 
-// Import `transport` from the leaf module directly so we don't pull
-// `@/lib/tauri` (the barrel) into our import graph. The barrel re-exports
-// `transport` via `export { transport }`, which Jest's CJS compilation
-// turns into a live getter. When `jest.mock("@/lib/tauri", () => ({
-// ...jest.requireActual("@/lib/tauri") }))` is used in a sibling test
-// the spread invokes that getter while the cycle
+// `localTransport`, not the routing `transport`: this controller administers
+// THIS renderer's own Rust hub, and both of its commands are `host-admin`,
+// which the routing transport refuses outright while a remote runtime Host is
+// active. Through it, a save reported "saved" while the local hub never got
+// the change.
+//
+// Imported from the leaf module directly so we don't pull `@/lib/tauri` (the
+// barrel) into our import graph. The barrel re-exports `transport` via
+// `export { transport }`, which Jest's CJS compilation turns into a live
+// getter. When `jest.mock("@/lib/tauri", () => ({
+// ...jest.requireActual("@/lib/tauri") }))` is used in a sibling test the
+// spread invokes that getter while the cycle
 //   lib/tauri.ts → transport-instance → transport-companion → transport-rtc
 //     → lib/signaling/index.ts → lib/signaling/desktop-controller.ts
 // is still mid-evaluation, tripping a TDZ on the underlying
 // `_transportinstance` binding. Importing the leaf bypasses the barrel
 // getter entirely.
 import { isTauri } from "@/lib/platform/detect"
-import { transport } from "@/lib/tauri/transport-instance"
+import { localTransport } from "@/lib/tauri/transport-instance"
 
 function isTauriRenderer(): boolean {
   return isTauri()
@@ -139,7 +145,7 @@ export function installDesktopSignalingController(
 
   const pushDevices = (): void => {
     if (!rowsKnown) return
-    void transport
+    void localTransport
       .call<void>("companion_signaling_sync_devices", {
         devices: selectSignalingDevices(latestRows, {
           // Read per push rather than captured: dormancy is a function of the
@@ -218,7 +224,7 @@ export function installDesktopSignalingController(
     // literals, so serialization is stable for equal inputs.
     const serialized = JSON.stringify(patch)
     if (serialized === lastPushedPatch) return
-    await transport.call<void>("companion_signaling_configure", { patch })
+    await localTransport.call<void>("companion_signaling_configure", { patch })
     // Recorded only after the call resolves: a failed push leaves the hub on
     // the old configuration, and skipping the retry would strand it there. The
     // generation re-check keeps a slow push from overwriting a newer one.

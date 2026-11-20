@@ -47,6 +47,7 @@ jest.mock("./manage/account-detail", () => ({
   AccountDetail: (props: AccountDetailProps) => (
     <div data-testid="stub-detail">
       <span data-testid="stub-detail-account">{props.account?.id ?? "none"}</span>
+      <span data-testid="stub-detail-tab">{props.initialTab ?? "default"}</span>
       <button data-testid="stub-back" onClick={props.onBack}>
         back
       </button>
@@ -137,6 +138,42 @@ describe("AccountManageDialog", () => {
     fireEvent.click(screen.getByTestId("stub-back"))
     expect(listCol().className).not.toMatch(/hidden/)
     expect(detailCol().className).toMatch(/hidden/)
+  })
+
+  it("passes no initial tab by default", () => {
+    renderDialog()
+    expect(screen.getByTestId("stub-detail-tab")).toHaveTextContent("default")
+  })
+
+  it("opens a tab jump on the active account's detail pane", () => {
+    // acct_beta is active but sorts after acct_alpha, the default selection.
+    setState({ activeAccountId: "acct_beta", unlockedAccountId: "acct_beta" })
+    render(<AccountManageDialog open onOpenChange={jest.fn()} initialTab="identity" />)
+    expect(screen.getByTestId("stub-detail-tab")).toHaveTextContent("identity")
+    expect(screen.getByTestId("stub-detail-account")).toHaveTextContent("acct_beta")
+    // Narrow layouts show the detail pane straight away.
+    expect(detailCol().className).not.toMatch(/hidden/)
+    expect(listCol().className).toMatch(/hidden/)
+  })
+
+  it("re-applies a tab jump each time the dialog opens with one", () => {
+    setState({ activeAccountId: "acct_beta", unlockedAccountId: "acct_beta" })
+    const onOpenChange = jest.fn()
+    const { rerender } = render(
+      <AccountManageDialog open onOpenChange={onOpenChange} initialTab="identity" />
+    )
+    fireEvent.click(screen.getByTestId("stub-back"))
+    fireEvent.click(screen.getByTestId("stub-select-beta"))
+    rerender(<AccountManageDialog open={false} onOpenChange={onOpenChange} />)
+    rerender(<AccountManageDialog open onOpenChange={onOpenChange} />)
+    expect(screen.getByTestId("stub-detail-tab")).toHaveTextContent("default")
+    fireEvent.click(screen.getByTestId("stub-back"))
+    expect(detailCol().className).toMatch(/hidden/)
+
+    rerender(<AccountManageDialog open={false} onOpenChange={onOpenChange} />)
+    rerender(<AccountManageDialog open onOpenChange={onOpenChange} initialTab="identity" />)
+    expect(screen.getByTestId("stub-detail-tab")).toHaveTextContent("identity")
+    expect(detailCol().className).not.toMatch(/hidden/)
   })
 
   it("falls back to an empty detail when there are no accounts", () => {

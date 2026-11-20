@@ -3,7 +3,7 @@
 /**
  * Local-account management dialog (desktop-only). A responsive master-detail:
  * a searchable account list on the left and a tabbed detail pane (Profile /
- * Security / Danger zone) on the right, with inline switch/unlock. The dialog
+ * Security / Identity / Danger zone) on the right, with inline switch/unlock. The dialog
  * content is a `@container`, so it lays out two columns at `@lg` and collapses
  * to a single column (list → detail with a back button) on narrow windows.
  *
@@ -28,14 +28,19 @@ import type { LocalAccountRecord } from "@/lib/accounts/account-types"
 import { useAccountStore } from "@/stores/account/account-store"
 
 import { AccountList } from "./manage/account-list"
-import { AccountDetail } from "./manage/account-detail"
+import { AccountDetail, type AccountDetailTab } from "./manage/account-detail"
 
 export interface AccountManageDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * Open on this detail tab for the active account (the settings finder's
+   * `account-sync` jump asks for Identity). Unset: Profile, first account.
+   */
+  initialTab?: AccountDetailTab
 }
 
-export function AccountManageDialog({ open, onOpenChange }: AccountManageDialogProps) {
+export function AccountManageDialog({ open, onOpenChange, initialTab }: AccountManageDialogProps) {
   const t = useTranslations("account.manage")
   const accounts = useAccountStore((state) => state.accounts)
   const activeAccountId = useAccountStore((state) => state.activeAccountId)
@@ -50,6 +55,19 @@ export function AccountManageDialog({ open, onOpenChange }: AccountManageDialogP
   // Narrow (single-column) layout only: which pane is visible. Ignored at `@lg`
   // where both columns render side by side.
   const [narrowView, setNarrowView] = useState<"list" | "detail">("list")
+
+  // Opening on a specific tab is a jump to the active account's detail: select
+  // it and show the detail pane on narrow layouts, once per open. Adjusted
+  // during render (React's "store the previous value" pattern), not in an effect.
+  const jumpTab = open ? (initialTab ?? null) : null
+  const [handledJumpTab, setHandledJumpTab] = useState<AccountDetailTab | null>(null)
+  if (jumpTab !== handledJumpTab) {
+    setHandledJumpTab(jumpTab)
+    if (jumpTab) {
+      setSelectedId(activeAccountId)
+      setNarrowView("detail")
+    }
+  }
 
   const selected: LocalAccountRecord | null =
     sorted.find((account) => account.id === selectedId) ?? sorted[0] ?? null
@@ -104,6 +122,7 @@ export function AccountManageDialog({ open, onOpenChange }: AccountManageDialogP
                 unlockedAccountId={unlockedAccountId}
                 showBack
                 onBack={() => setNarrowView("list")}
+                initialTab={initialTab}
               />
             </div>
           </div>
