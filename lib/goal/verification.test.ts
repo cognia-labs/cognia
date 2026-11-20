@@ -10,8 +10,20 @@ import {
   GOAL_VERIFICATION_INPUT_SCHEMA,
   GOAL_VERIFICATION_OUTPUT_SCHEMA,
   isGoalVerificationWorkflowVersion,
+  reconcilePendingGoalVerifications,
   verifyGoalCompletion,
 } from "./verification"
+
+// The boot scan runs the real executor; tests stand in for the workflow run.
+const mockExecuteDeployedWorkflow = jest.fn()
+jest.mock("@/lib/workflow/runtime/execution-authority", () => ({
+  ...jest.requireActual("@/lib/workflow/runtime/execution-authority"),
+  executeDeployedWorkflow: (...args: unknown[]) => mockExecuteDeployedWorkflow(...args),
+}))
+const mockOnGoalTerminal = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("./completion-linkage", () => ({
+  onGoalTerminal: (...args: unknown[]) => mockOnGoalTerminal(...args),
+}))
 
 const config: GoalConfig = {
   maxTurns: 20,
@@ -57,6 +69,8 @@ function executionResult(output: unknown): ExecuteDeployedWorkflowResult {
 beforeEach(async () => {
   await getDb().delete()
   __resetDbForTesting()
+  mockExecuteDeployedWorkflow.mockReset()
+  mockOnGoalTerminal.mockClear()
 })
 
 it("accepts only published interfaces that satisfy the verifier contract", () => {
@@ -162,5 +176,81 @@ it("pauses after three negative verdicts and immediately on contract errors", as
   expect(await getGoal("goal-1")).toMatchObject({
     status: "paused",
     verification: { status: "error" },
+  })
+})
+
+describe("a Stop wins over a verifier still running", () => {
+  const running = (generationId: string) => ({
+    attempt: 1,
+    status: "running" as const,
+    idempotencyKey: `goal-verification:goal-1:${generationId}:1`,
+    generationId,
+    workflowRunId: "workflow-run-1",
+    failureCount: 0,
+    candidateSummary: "Candidate",
+    updatedAt: 1,
+  })
+
+  it("a verifier error after the person stopped the goal leaves it stopped", async () => {
+    await seedGoal()
+    const outcome = await verifyGoalCompletion(
+      { goalId: "goal-1", candidateSummary: "Candidate", capturedGenerationId: "generation-1" },
+      {
+        execute: async () => {
+          // The person presses Stop while the verifier runs, which then fails.
+          await getDb().chatGoals.update("goal-1", {
+            status: "stopped",
+            generationId: "generation-2",
+          })
+          throw new Error("verifier crashed")
+        },
+      }
+    )
+    expect(outcome).toEqual({ kind: "stale" })
+    expect(await getGoal("goal-1")).toMatchObject({ status: "stopped" })
+  })
+
+  it("the boot scan never runs a stopped goal's verification again", async () => {
+    await seedGoal()
+    await getDb().chatGoals.update("goal-1", {
+      status: "stopped",
+      generationId: "generation-2",
+      verification: running("generation-1"),
+    })
+    mockExecuteDeployedWorkflow.mockResolvedValue(
+      executionResult({ passed: true, summary: "Would have passed" })
+    )
+    await reconcilePendingGoalVerifications()
+    expect(mockExecuteDeployedWorkflow).not.toHaveBeenCalled()
+    expect(await getGoal("goal-1")).toMatchObject({ status: "stopped" })
+    expect(mockOnGoalTerminal).not.toHaveBeenCalled()
+  })
+
+  it("the boot scan finishes an interrupted attempt for its own generation", async () => {
+    await seedGoal()
+    await getDb().chatGoals.update("goal-1", { verification: running("generation-1") })
+    mockExecuteDeployedWorkflow.mockResolvedValue(
+      executionResult({ passed: true, summary: "Recovered" })
+    )
+    await reconcilePendingGoalVerifications()
+    expect(mockExecuteDeployedWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: "goal-verification:goal-1:generation-1:1" })
+    )
+    expect(await getGoal("goal-1")).toMatchObject({ status: "completed" })
+  })
+
+  it("the boot scan completes an active goal whose verification passed before the crash", async () => {
+    await seedGoal()
+    await getDb().chatGoals.update("goal-1", {
+      verification: { ...running("generation-1"), status: "passed", summary: "All good" },
+    })
+    await reconcilePendingGoalVerifications()
+    expect(mockExecuteDeployedWorkflow).not.toHaveBeenCalled()
+    expect(await getGoal("goal-1")).toMatchObject({ status: "completed" })
+    expect(mockOnGoalTerminal).toHaveBeenCalledTimes(1)
+
+    // Run again (a second boot): a completed goal is not ended twice.
+    await reconcilePendingGoalVerifications()
+    expect(mockOnGoalTerminal).toHaveBeenCalledTimes(1)
   })
 })

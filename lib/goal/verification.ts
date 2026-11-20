@@ -332,6 +332,10 @@ export async function verifyGoalCompletion(
     })
     return { kind: "failed", result, failureCount: nextFailureCount, paused }
   } catch (error) {
+    // A verifier that fails after the person stopped, paused or replaced the
+    // goal belongs to a generation that is over: it must not pause it again.
+    const current = await getGoal(goal.id)
+    if (!current || current.generationId !== input.capturedGenerationId) return { kind: "stale" }
     const message = safeSummary(
       error instanceof Error ? error.message : String(error),
       "Verifier error"
@@ -415,17 +419,29 @@ export async function retryPausedGoalVerification(
     candidateSummary: goal.verification.candidateSummary,
     capturedGenerationId: goal.generationId,
   })
-  await finalizeGoalVerificationOutcome(goalId, outcome)
+  await finalizeGoalVerificationOutcome(goalId, outcome, goal.generationId)
   return outcome
+}
+
+/** Whether a goal is still open for a verification of `generationId` to end it. */
+function verificationCanEnd(goal: Goal | undefined, generationId: string): goal is Goal {
+  return (
+    !!goal &&
+    goal.generationId === generationId &&
+    (goal.status === "active" || goal.status === "paused")
+  )
 }
 
 async function finalizeGoalVerificationOutcome(
   goalId: string,
-  outcome: GoalVerificationOutcome
+  outcome: GoalVerificationOutcome,
+  capturedGenerationId: string
 ): Promise<void> {
   if (outcome.kind !== "passed") return
   const goal = await getGoal(goalId)
-  if (!goal) return
+  // A Stop, pause or new objective since the verifier started ends that
+  // generation; its verdict cannot complete the goal the person moved on from.
+  if (!verificationCanEnd(goal, capturedGenerationId)) return
   if (goal.config.requireAcceptance) {
     await updateGoal(goalId, { status: "paused", awaitingAcceptance: true })
     await appendGoalEvent({
@@ -452,23 +468,34 @@ async function finalizeGoalVerificationOutcome(
   }
 }
 
-/** Re-admit only durable requested/running attempts; the idempotency key prevents duplicates. */
+/**
+ * Finish what a restart interrupted, for the generation that asked for it.
+ *
+ * Re-admits a durable requested/running attempt (its idempotency key keeps the
+ * verifier run single), and ends a goal whose verification had already passed
+ * when the process died before the goal was moved on (still `active`). An
+ * attempt whose generation is over — the person stopped, paused or replaced
+ * the goal — is never run again, so its verdict cannot touch the goal.
+ */
 export async function reconcilePendingGoalVerifications(): Promise<void> {
   const goals = await getDb()
-    .chatGoals.filter(
-      (goal) =>
-        Boolean(goal.config.verificationWorkflow) &&
-        (goal.verification?.status === "requested" || goal.verification?.status === "running")
-    )
+    .chatGoals.filter((goal) => {
+      const verification = goal.verification
+      if (!goal.config.verificationWorkflow || !verification) return false
+      if (!verificationCanEnd(goal, verification.generationId)) return false
+      if (verification.status === "passed") return goal.status === "active"
+      return verification.status === "requested" || verification.status === "running"
+    })
     .toArray()
   await Promise.all(
     goals.map(async (goal) => {
+      const generationId = goal.verification!.generationId
       const outcome = await verifyGoalCompletion({
         goalId: goal.id,
         candidateSummary: goal.verification!.candidateSummary,
-        capturedGenerationId: goal.generationId,
+        capturedGenerationId: generationId,
       })
-      await finalizeGoalVerificationOutcome(goal.id, outcome)
+      await finalizeGoalVerificationOutcome(goal.id, outcome, generationId)
     })
   )
 }

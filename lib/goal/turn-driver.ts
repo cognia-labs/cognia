@@ -454,6 +454,12 @@ async function commitExit(
         reason: `${decision.reason} (workflow verification error: ${verification.error})`,
       }
     }
+    // The verifier ran for a while: a Stop or pause meanwhile ends this
+    // generation, and its pass must not complete the goal over it.
+    const verified = await getGoal(goalId)
+    if (!verified || verified.generationId !== capturedGenerationId) {
+      return { kind: "stale", reason: "generationId rotated after workflow verification" }
+    }
   }
   // Acceptance gate (opt-in): a judge-verdict "completed" parks as `paused` +
   // `awaitingAcceptance` instead of going terminal; `resolveGoalAcceptance`

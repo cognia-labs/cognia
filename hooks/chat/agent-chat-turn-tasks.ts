@@ -307,19 +307,27 @@ export function scheduleGoalContinuation(
     // Stamp nextContinuationAt (+ audit on defer) so the pill can show the
     // schedule — best-effort, runs in the background.
     void getGoalRuntime().recordPacingDecision(goalId, gate, suggestedDelayMs)
+    // The continuation is this goal's conversation's, whichever one is in
+    // front when it goes out.
+    const continueGoal = { skipUserAppend: true, sessionId }
     if (gate.kind === "send") {
       goalLastContinuationAt.set(goalId, Date.now())
       void (ownedRef ?? sendRef)
-        .current?.(userMessage, undefined, { skipUserAppend: true })
+        .current?.(userMessage, undefined, continueGoal)
         ?.catch(() => undefined)
     } else if (gate.kind === "hold") {
       // Wait for the user to click "Continue" on the status pill.
+      const heldGeneration = goal.generationId
       const unsub = getGoalRuntime().onManualContinue(goalId, () => {
         clearPendingContinuation(goalId)
-        goalLastContinuationAt.set(goalId, Date.now())
-        void sendRef
-          .current?.(userMessage, undefined, { skipUserAppend: true })
-          ?.catch(() => undefined)
+        void (async () => {
+          // The click can come long after the hold: a pause, Stop or new
+          // objective since then means there is nothing to continue.
+          const current = await getGoalRuntime().getActiveGoalForSession(sessionId)
+          if (!current || current.id !== goalId || current.generationId !== heldGeneration) return
+          goalLastContinuationAt.set(goalId, Date.now())
+          await sendRef.current?.(userMessage, undefined, continueGoal)
+        })().catch(() => undefined)
       })
       goalManualUnsub.set(goalId, unsub)
     } else {
@@ -379,7 +387,7 @@ export function scheduleLoopContinuation(
     const gate = gateLoopContinuation(loop, Date.now())
     if (gate.kind === "send") {
       void (ownedRef ?? sendRef)
-        .current?.(userMessage, undefined, { skipUserAppend: true })
+        .current?.(userMessage, undefined, { skipUserAppend: true, sessionId })
         ?.catch(() => undefined)
     } else {
       const delay = Math.max(0, gate.untilMs - Date.now())
