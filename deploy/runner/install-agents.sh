@@ -34,10 +34,7 @@ QWEN_CODE_VERSION="$(pin @qwen-code/qwen-code "${QWEN_CODE_VERSION:-}")"
 PI_ACP_VERSION="$(pin pi-acp "${PI_ACP_VERSION:-}")"
 PI_CODING_AGENT_VERSION="$(pin @earendil-works/pi-coding-agent "${PI_CODING_AGENT_VERSION:-}")"
 OPENCODE_VERSION="$(pin opencode-ai "${OPENCODE_VERSION:-}")"
-# Cline is a launchable system runtime (protocol/external-agent-runtimes.json)
-# with no distribution in the bundle pins, so only Full installs it, outside
-# the integrity lock. npm registry checked 2026-10-21.
-CLINE_VERSION="$(pin cline "${CLINE_VERSION:-3.0.73}")"
+CLINE_VERSION="$(pin cline "${CLINE_VERSION:-}")"
 : "${INSTALL_CURSOR_AGENT:=0}"
 : "${INSTALL_KIRO_CLI:=1}"
 : "${INSTALL_DROID_CLI:=1}"

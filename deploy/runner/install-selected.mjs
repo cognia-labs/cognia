@@ -238,12 +238,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       installRunnerShims({
         pins,
         packageJson,
-        knownPackages: [
-          ...Object.keys(
-            JSON.parse(readFileSync(masterPackagePath ?? packagePath, "utf8")).dependencies
-          ),
-          "cline",
-        ],
+        knownPackages: Object.keys(
+          JSON.parse(readFileSync(masterPackagePath ?? packagePath, "utf8")).dependencies
+        ),
         knownCommands: JSON.parse(
           readFileSync(masterPinsPath ?? pinsPath, "utf8")
         ).runtimes.flatMap((runtime) => [

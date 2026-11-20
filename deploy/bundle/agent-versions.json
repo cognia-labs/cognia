@@ -239,7 +239,9 @@
     },
     {
       "id": "cline",
-      "unavailable": "A system runtime: Cognia ships no distribution of the Cline CLI (its catalog entry has none), so the bundle has no pinned copy to carry. Only the compatibility `full` runner variant installs it, outside the integrity lock."
+      "version": "3.0.73",
+      "libc": ["glibc"],
+      "commands": [{ "name": "cline", "package": "cline", "bin": "cline", "smoke": "version" }]
     },
     {
       "id": "kimi",

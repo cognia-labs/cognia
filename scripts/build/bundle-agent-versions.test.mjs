@@ -145,6 +145,25 @@ describe("check against the repository", () => {
 describe("manifest and plans", () => {
   const { pins } = readRepoInputs()
 
+  it("bundles Cline as a glibc-only npm runtime, in Full and on its own", () => {
+    // Cline was marked unavailable, so only the Full runner installed it, with
+    // a global npm install outside the lock; selected builds refused it.
+    assert.ok(selectRuntimes(pins, "full").runtimes.some((runtime) => runtime.id === "cline"))
+    assert.deepEqual(
+      selectRuntimes(pins, "cline").runtimes.map((runtime) => runtime.id),
+      ["cline"]
+    )
+    // Its native binary links glibc, so only the glibc tree gets a shim.
+    assert.ok(commandsFor(pins, "glibc").some((command) => command.name === "cline"))
+    assert.ok(!commandsFor(pins, "musl").some((command) => command.name === "cline"))
+    const manifest = buildManifest(pins, { arch: "amd64", releaseTag: "v1.2.0" })
+    assert.deepEqual(manifest.runtimes.find((runtime) => runtime.id === "cline"), {
+      ...manifest.runtimes.find((runtime) => runtime.id === "cline"),
+      libc: ["glibc"],
+      commands: [{ name: "cline", package: "cline" }],
+    })
+  })
+
   it("writes the sandboxd manifest for one architecture", () => {
     const manifest = buildManifest(pins, { arch: "amd64", releaseTag: "v1.2.0" })
     assert.equal(manifest.version, 1)

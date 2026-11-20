@@ -99,10 +99,11 @@ Runner images are published for `linux/amd64` only. On an ARM host, build
 the target you need from this Dockerfile; the Agent bundle the sandbox pool
 injects is published for both `linux/amd64` and `linux/arm64`.
 
-Full retains the legacy Agent set, including Cline. Cline is a launchable
-system runtime with no distribution in the bundle pins, so selected builds
-refuse it and only Full installs it. Its npm Agent versions default to the
-shared exact pins; version overrides must also be exact. Kiro and Droid use
+Full retains the legacy Agent set. Cline is bundled like the other npm
+runtimes, for glibc only because its native binary links glibc, so a
+selected build can name it (`AGENT_RUNTIMES=cline`). Full's npm Agent
+versions default to the shared exact pins; version overrides must also be
+exact. Kiro and Droid use
 checksum-verified pinned assets. Full's global npm install retains
 compatibility behavior and does not provide the selected path's
 transitive-lock guarantee.

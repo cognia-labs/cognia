@@ -37,7 +37,8 @@ function docker(args) {
   return result.stdout.trim()
 }
 
-function launch(runtimeId) {
+/** How the runtime catalog starts `runtimeId`: its system command and launch args. */
+export function launch(runtimeId) {
   const runtime = catalog.runtimes.find((entry) => entry.runtimeId === runtimeId)
   assert.ok(runtime, `${runtimeId} is not in the runtime catalog`)
   return { entrypoint: runtime.systemCommand, args: runtime.launchArgs }

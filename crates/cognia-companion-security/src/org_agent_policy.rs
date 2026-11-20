@@ -26,6 +26,7 @@ const AGENT_PROVIDERS: &[(&str, Option<&str>)] = &[
     ("opencode-acp", Some("opencode")),
     ("kiro-cli", None),
     ("droid", None),
+    ("cline", None),
 ];
 
 /// P6d: reuse the runtime catalog's launch identity and the single bundled

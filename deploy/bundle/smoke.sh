@@ -140,6 +140,25 @@ console.log(`smoke: ${image} ${libc}/codex-acp initialize ok (offline)`)
 NODE
       ;;
   esac
+  # Cline ships a glibc-only native binary behind its npm launcher; start it
+  # the way the runtime catalog launches it, not just --version.
+  case "$libc: $(probe_field runtimes) " in
+    "glibc: "*" cline "*)
+      node --input-type=module - "$repo" "$image" "$injection" "$workspace" <<'NODE'
+import assert from "node:assert/strict"
+import { pathToFileURL } from "node:url"
+const [repo, image, injection, workspace] = process.argv.slice(2)
+const { initializeAcp, launch } = await import(pathToFileURL(`${repo}/deploy/runner/smoke.mjs`))
+const result = await initializeAcp(image, {
+  runArgs: ["-v", `${injection}:/cognia`, "-v", `${workspace}:/workspace`],
+  entrypoint: "/cognia/bin/cognia-sandboxd",
+  args: ["init-agent", "--", "/cognia/glibc/bin/cline", ...launch("cline").args],
+})
+assert.equal(result.agentInfo?.name, "cline", JSON.stringify(result.agentInfo))
+console.log(`smoke: ${image} glibc/cline initialize ok (offline)`)
+NODE
+      ;;
+  esac
   in_image "$image" git --version
   in_image "$image" rg --version >/dev/null
 }
