@@ -885,6 +885,11 @@ export interface HostRestartRecovery {
   resumeEnabled(): Promise<boolean>
   /** End a turn that will not be retried, as `host_restarted`. */
   fail(turn: InterruptedHostStateTurn): Promise<void>
+  /**
+   * End a turn the person had already stopped: the previous Host acknowledged
+   * the Stop and was waiting for the runtime to say so when it went away.
+   */
+  cancel(turn: InterruptedHostStateTurn): Promise<void>
   /** Tell the transcript the turn is being retried, before it is sent again. */
   markRetry(turn: InterruptedHostStateTurn): Promise<void>
   /** Let the dispatcher claim the turn's submission once more, and take that back. */
@@ -905,6 +910,11 @@ interface RestartedChannel {
   queued: HostStateQueuedMessage[]
   /** Every interrupted submission, by action id. */
   submissions: Map<string, InterruptedHostStateTurn>
+  /**
+   * The previous Host had acknowledged a Stop for the running turn. Its
+   * restart finished that Stop, so the turn is never sent again.
+   */
+  stopped: boolean
 }
 
 export interface HostStateService {
@@ -2642,6 +2652,9 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
     const interrupted = await restart.interruptedTurns(session.sessionId)
     const startedBefore = (session.activeTurn?.startedAt ?? Infinity) < restart.bootedAt
     if (interrupted.length === 0 && !startedBefore) return null
+    // A Stop the previous Host acknowledged is finished by its restart: the
+    // turn reads as stopped, not as one the restart broke and may retry.
+    const stopped = turn === "stopping"
     const restartedId = `recovery:${generation}:${channel}:host-restarted`
     await commitHostStateRuntimeProjection({
       hostId: options.hostId,
@@ -2654,12 +2667,15 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
         channel,
         code: HOST_STATE_HOST_RESTARTED,
       }),
-      mutation: (state) => ({
-        kind: "turn.settled",
-        turn: "retryable-error",
-        errorCode: HOST_STATE_HOST_RESTARTED,
-        revision: state.revision + 1,
-      }),
+      mutation: (state) =>
+        stopped
+          ? { kind: "turn.settled", turn: "aborted", revision: state.revision + 1 }
+          : {
+              kind: "turn.settled",
+              turn: "retryable-error",
+              errorCode: HOST_STATE_HOST_RESTARTED,
+              revision: state.revision + 1,
+            },
       now: now(),
     })
     const restartedRow = await getHostStateAction(generation, `runtime:${restartedId}`)
@@ -2671,6 +2687,7 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
       attempted: interrupted.filter((item) => !queuedIds.has(item.actionId)),
       queued: session.queue,
       submissions: new Map(interrupted.map((item) => [item.actionId, item])),
+      stopped,
     }
   }
 
@@ -2714,6 +2731,12 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
     resume: boolean
   ): Promise<void> {
     for (const turn of channel.attempted) {
+      // Whatever the organization chose, a turn the person stopped stays
+      // stopped: sending it again would undo their Stop.
+      if (channel.stopped) {
+        await restart.cancel(turn)
+        continue
+      }
       if (!resume || turn.text === null || turn.messageId === null || turn.attachmentsLost) {
         await restart.fail(turn)
         continue

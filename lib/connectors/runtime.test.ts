@@ -4375,8 +4375,10 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
     const anchor = (changed.at(-1)?.payload.recoveryAnchor ??
       started?.payload.recoveryAnchor) as Record<string, unknown>
     expect(anchor.executionIdentityRunId).toBe(benRunId)
-    // Ben's own native session, never the conversation's.
+    // Ben's own native session, never the conversation's — and the anchor
+    // says so, so crash recovery does not compare it with the conversation's.
     expect(anchor.sdkSessionId).toBe("sdk_ben_1")
+    expect(anchor.memberSessionId).toEqual(expect.stringContaining("c_ben"))
     expect((await getDb().sessions.get("s_room"))?.sdkSessionId).toBe("sdk_previous_voice")
 
     const { calls: replay } = capture(() => "Two.")

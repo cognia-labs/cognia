@@ -2716,6 +2716,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             inboundJobId: routeContext.inboundJobId,
             sessionId: session.id,
             sdkSessionId: resumedSdkSessionId,
+            ...(member ? { memberSessionId: member.sessionId } : {}),
             execution: recoveryExecution,
             journalRunId: executionRunId,
             candidateDeploymentIds: candidateDeploymentIds(sendOptions, recoveryExecution),

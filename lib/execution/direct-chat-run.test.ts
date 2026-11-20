@@ -144,13 +144,96 @@ describe("direct chat execution run", () => {
       endedAt: 2,
     })
 
-    await expect(recoverStaleDirectChatExecutionRuns(5_000)).resolves.toBe(1)
+    await expect(recoverStaleDirectChatExecutionRuns(5_000, 2)).resolves.toBe(1)
     await expect(getDb().executionRuns.get("run:stale")).resolves.toMatchObject({
       status: "recovery_required",
     })
     await expect(getDb().executionRuns.get("run:done")).resolves.toMatchObject({
       status: "completed",
     })
+  })
+
+  it("leaves a turn this load started, or still holds, out of the boot sweep", async () => {
+    const loadedAt = 10_000
+    const row = (id: string, startedAt: number) =>
+      createExecutionRun({
+        id,
+        kind: "agent-turn",
+        sourceId: id,
+        sessionId: `session-${id}`,
+        title: "Chat run",
+        status: "running",
+        currentRevision: 0,
+        startedAt,
+        updatedAt: startedAt,
+      })
+    await row("run:left-behind", 9_000)
+    // Started after this renderer loaded: the sweep running late must not park it.
+    await row("run:after-load", 10_500)
+    // Started before the load was stamped, but this renderer holds its handle.
+    await startDirectChatExecutionRun({
+      sessionId: "session-held",
+      runId: "run:held",
+      startedAt: 9_500,
+    })
+
+    await expect(recoverStaleDirectChatExecutionRuns(20_000, loadedAt)).resolves.toBe(1)
+    await expect(getDb().executionRuns.get("run:left-behind")).resolves.toMatchObject({
+      status: "recovery_required",
+    })
+    await expect(getDb().executionRuns.get("run:after-load")).resolves.toMatchObject({
+      status: "running",
+    })
+    await expect(getDb().executionRuns.get("run:held")).resolves.not.toMatchObject({
+      status: "recovery_required",
+    })
+    await finishDirectChatExecutionRun("session-held", "completed", 21_000)
+  })
+
+  it("holds a run lock while a turn runs, and leaves a turn another tab holds alone", async () => {
+    const held = new Set<string>()
+    const foreign = new Set(["cognia.direct-chat-run:run:other-tab"])
+    const locks = {
+      request: jest.fn((name: string, hold: () => Promise<void>) => {
+        held.add(name)
+        return hold().finally(() => held.delete(name))
+      }),
+      query: jest.fn(async () => ({
+        held: [...held, ...foreign].map((name) => ({ name })),
+        pending: [],
+      })),
+    }
+    Object.defineProperty(navigator, "locks", { value: locks, configurable: true })
+    try {
+      await startDirectChatExecutionRun({
+        sessionId: "session-mine",
+        runId: "run:mine",
+        startedAt: 1,
+      })
+      expect(held.has("cognia.direct-chat-run:run:mine")).toBe(true)
+      await createExecutionRun({
+        id: "run:other-tab",
+        kind: "agent-turn",
+        sourceId: "run:other-tab",
+        sessionId: "session-other-tab",
+        title: "Chat run",
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+      })
+
+      await expect(recoverStaleDirectChatExecutionRuns(20_000, 10_000)).resolves.toBe(0)
+      await expect(getDb().executionRuns.get("run:other-tab")).resolves.toMatchObject({
+        status: "running",
+      })
+
+      await finishDirectChatExecutionRun("session-mine", "completed", 2)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(held.has("cognia.direct-chat-run:run:mine")).toBe(false)
+    } finally {
+      delete (navigator as { locks?: unknown }).locks
+    }
   })
 
   it("projects SDK tool snapshots once and records compaction without content", async () => {

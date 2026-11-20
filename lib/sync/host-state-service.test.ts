@@ -1329,14 +1329,18 @@ describe("HostStateService", () => {
       ]),
       resumeEnabled: jest.fn(async () => false),
       fail: jest.fn(async (_turn: InterruptedHostStateTurn): Promise<void> => {}),
+      cancel: jest.fn(async (_turn: InterruptedHostStateTurn): Promise<void> => {}),
       markRetry: jest.fn(async (_turn: InterruptedHostStateTurn): Promise<void> => {}),
       permit: jest.fn(),
       revoke: jest.fn(),
       ...overrides,
     })
 
-    /** A turn running (`action-1`) with `action-2` queued behind it, then the Host gone. */
-    async function interruptedConversation(): Promise<void> {
+    /**
+     * A turn running (`action-1`) with `action-2` queued behind it, then the
+     * Host gone. `stopped`: the Host had acknowledged a Stop for the turn.
+     */
+    async function interruptedConversation({ stopped = false } = {}): Promise<void> {
       const first = createHostStateService({
         ...scope,
         hostId,
@@ -1364,12 +1368,26 @@ describe("HostStateService", () => {
         runtimeEnvelope({ kind: "lifecycle", phase: "started" }, "evt-start")
       )
       await send("action-2", "m2", "second words")
+      if (stopped) {
+        await first.submit(
+          {
+            ...scope,
+            actions: [
+              action(
+                { kind: "turn.abort", expectedTurnId: "turn-1" },
+                { actionId: "action-stop", clientSeq: 9 }
+              ),
+            ],
+          },
+          owner
+        )
+      }
       await flush()
       const before = (await first.snapshot({ ...scope, channel })).state as {
         turn: string
         queue: { actionId: string }[]
       }
-      expect(before.turn).toBe("running")
+      expect(before.turn).toBe(stopped ? "stopping" : "running")
       expect(before.queue.map((item) => item.actionId)).toEqual(["action-2"])
       await first.stop()
     }
@@ -1449,6 +1467,21 @@ describe("HostStateService", () => {
       })
       // Until the retried turn starts, the member sees why the first one ended.
       expect(state).toMatchObject({ turn: "retryable-error", turnErrorCode: "host_restarted" })
+    })
+
+    it("ends a turn the person had stopped as stopped and never sends it again, even when on", async () => {
+      await interruptedConversation({ stopped: true })
+      const hostRestart = recovery({ resumeEnabled: jest.fn(async () => true) })
+      const dispatchRuntime = jest.fn(async (_sent: HostStateAction) => undefined)
+      const { state } = await restartWith(hostRestart, dispatchRuntime)
+
+      expect(state).toMatchObject({ turn: "aborted" })
+      expect(state.turnErrorCode).toBeUndefined()
+      expect(hostRestart.cancel.mock.calls.map(([item]) => item.actionId)).toEqual(["action-1"])
+      expect(hostRestart.markRetry).not.toHaveBeenCalled()
+      expect(hostRestart.fail).not.toHaveBeenCalled()
+      // Only the message that never started is delivered; the stopped one is not.
+      expect(dispatchRuntime.mock.calls.map(([sent]) => sent.actionId)).toEqual(["action-2"])
     })
 
     it("sends a retried turn again with the files its Host held for it (G25)", async () => {

@@ -13,6 +13,7 @@ import {
   type AgentEventEnvelope,
 } from "@cognia/agent-config-types/agent-execution"
 import { appendEvents, listRunEvents } from "@/lib/workflow/runtime/event-log"
+import { createEnvelopeOrderTracker } from "@/lib/ai/agent/execution/event-envelope"
 import { getDb } from "@/lib/db/schema"
 
 const ENVELOPE_KIND = "agent_envelope"
@@ -198,6 +199,11 @@ export async function pruneCanonicalEnvelopeDetails(
  * concatenated, tool calls collected). A tool call with NO matching result
  * marks the candidate side-effect-ambiguous — the planner then refuses
  * automatic recovery for it (replaying could double-fire the effect).
+ *
+ * So does a hole in an attempt's sequence: the missing envelopes could have
+ * been a tool call, so the log no longer proves nothing ran. A repeated
+ * envelope is folded once. A result closes only a call of its own attempt —
+ * another attempt reusing a call id says nothing about this one's call.
  */
 export function candidateFromEnvelopes(
   envelopes: readonly AgentEventEnvelope[]
@@ -206,9 +212,17 @@ export function candidateFromEnvelopes(
   const order: string[] = []
   const byTurn = new Map<
     string,
-    { text: string; toolCalls: { callId: string; toolName: string; resolved: boolean }[] }
+    {
+      text: string
+      toolCalls: { callId: string; toolName: string; attemptId: string; resolved: boolean }[]
+    }
   >()
+  const sequences = createEnvelopeOrderTracker()
+  let gapped = false
   for (const envelope of envelopes) {
+    const observed = sequences.observe(envelope)
+    if (observed.kind === "duplicate") continue
+    if (observed.kind === "gap") gapped = true
     let turn = byTurn.get(envelope.turnId)
     if (!turn) {
       turn = { text: "", toolCalls: [] }
@@ -222,17 +236,20 @@ export function candidateFromEnvelopes(
       turn.toolCalls.push({
         callId: (event.toolCallId as string) ?? `call-${turn.toolCalls.length}`,
         toolName: (event.toolName as string) ?? "tool",
+        attemptId: envelope.attemptId,
         resolved: false,
       })
     } else if (event.kind === "tool-result") {
       const match = turn.toolCalls.find(
         (call) =>
-          !call.resolved && (event.toolCallId === undefined || call.callId === event.toolCallId)
+          !call.resolved &&
+          call.attemptId === envelope.attemptId &&
+          (event.toolCallId === undefined || call.callId === event.toolCallId)
       )
       if (match) match.resolved = true
     }
   }
-  let ambiguous = false
+  let ambiguous = gapped
   const turns = order.map((turnId) => {
     const turn = byTurn.get(turnId)!
     if (turn.toolCalls.some((call) => !call.resolved)) ambiguous = true

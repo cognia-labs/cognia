@@ -9,6 +9,7 @@ import {
   CanonicalLogCorruptionError,
   __resetCanonicalLogForTesting,
   appendCanonicalEnvelopes,
+  candidateFromEnvelopes,
   projectCanonicalHeader,
   pruneCanonicalEnvelopeDetails,
   readCanonicalEnvelopes,
@@ -155,6 +156,52 @@ describe("canonical envelope log", () => {
     const remaining = await listRunEvents("run-old")
     expect(remaining).toHaveLength(1)
     expect(remaining[0].type).toBe("run_started")
+  })
+})
+
+describe("candidateFromEnvelopes", () => {
+  const at = (
+    sequence: number,
+    event: Record<string, unknown>,
+    attemptId = "a1"
+  ): AgentEventEnvelope => ({
+    ...envelope(sequence, attemptId),
+    event: event as AgentEventEnvelope["event"],
+  })
+  const call = { kind: "tool-call", toolCallId: "call-1", toolName: "Bash", input: {} }
+  const result = { kind: "tool-result", toolCallId: "call-1", result: "ok" }
+
+  it("folds a contiguous attempt with every call answered as clean", () => {
+    const candidate = candidateFromEnvelopes([
+      at(0, { kind: "text-delta", delta: "hi " }),
+      at(1, call),
+      at(2, result),
+    ])
+    expect(candidate?.hasAmbiguousSideEffects).toBeUndefined()
+    expect(candidate?.turns[0]?.text).toBe("hi ")
+  })
+
+  it("treats a hole in an attempt's sequence as possibly hiding a call", () => {
+    const candidate = candidateFromEnvelopes([
+      at(0, { kind: "text-delta", delta: "hi " }),
+      // sequence 1 (whatever it was) never reached the log
+      at(2, { kind: "text-delta", delta: "there" }),
+    ])
+    expect(candidate?.hasAmbiguousSideEffects).toBe(true)
+  })
+
+  it("folds a repeated envelope once", () => {
+    const candidate = candidateFromEnvelopes([
+      at(0, { kind: "text-delta", delta: "once" }),
+      at(0, { kind: "text-delta", delta: "once" }),
+    ])
+    expect(candidate?.turns[0]?.text).toBe("once")
+    expect(candidate?.hasAmbiguousSideEffects).toBeUndefined()
+  })
+
+  it("never lets another attempt's result close this attempt's call", () => {
+    const candidate = candidateFromEnvelopes([at(0, call, "a1"), at(0, result, "a2")])
+    expect(candidate?.hasAmbiguousSideEffects).toBe(true)
   })
 })
 

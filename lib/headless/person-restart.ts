@@ -21,6 +21,7 @@ import { commitMessageDelta } from "@/lib/db/messages"
 import { getDb } from "@/lib/db/schema"
 import type { HostRestartRecovery } from "@/lib/sync/host-state-service"
 import {
+  cancelHostStateTurnAfterRestart,
   failHostStateTurnAfterRestart,
   listHostStateTurnsInterruptedBefore,
   permitHostStateRedispatchAfterRestart,
@@ -36,6 +37,7 @@ export interface PersonHostRestartDeps {
   resumeEnabled?: () => Promise<boolean>
   listInterrupted?: typeof listHostStateTurnsInterruptedBefore
   fail?: typeof failHostStateTurnAfterRestart
+  cancel?: typeof cancelHostStateTurnAfterRestart
   writeNotice?: (sessionId: string, message: UIMessage) => Promise<void>
   /** When the member's message was written, so the notice can follow it. */
   messageCreatedAt?: (sessionId: string, messageId: string) => Promise<number | undefined>
@@ -88,6 +90,7 @@ export function createPersonHostRestartRecovery(
   if (bootedAt === null) return undefined
   const list = deps.listInterrupted ?? listHostStateTurnsInterruptedBefore
   const fail = deps.fail ?? failHostStateTurnAfterRestart
+  const cancel = deps.cancel ?? cancelHostStateTurnAfterRestart
   const writeNotice =
     deps.writeNotice ??
     (async (sessionId: string, message: UIMessage) => {
@@ -103,6 +106,9 @@ export function createPersonHostRestartRecovery(
     resumeEnabled: () => (resume ??= (deps.resumeEnabled ?? readResumeAfterRestart)()),
     fail: async (turn: InterruptedHostStateTurn) => {
       await fail(turn.submissionId)
+    },
+    cancel: async (turn: InterruptedHostStateTurn) => {
+      await cancel(turn.submissionId)
     },
     markRetry: async (turn: InterruptedHostStateTurn) => {
       // Right after the member's message, so the retried reply (which may

@@ -447,6 +447,17 @@ async function readInterruptedTurn(
   }
 }
 
+/**
+ * End an interrupted turn whose Stop its previous Host had acknowledged: the
+ * person stopped it, so it settles cancelled and is never sent again.
+ */
+export async function cancelHostStateTurnAfterRestart(
+  submissionId: string,
+  now = Date.now()
+): Promise<boolean> {
+  return settleWorkSubmissionWithoutTranscript(submissionId, "cancelled", now, HOST_RESTARTED)
+}
+
 /** End an interrupted turn the Host will not retry, as `host_restarted`. */
 export async function failHostStateTurnAfterRestart(
   submissionId: string,

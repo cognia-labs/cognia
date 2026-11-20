@@ -20,6 +20,7 @@ import {
   acceptHostStateChatTurn,
   bindHostStateChatTurnContext,
   claimHostStateChatTurnForDispatch,
+  cancelHostStateTurnAfterRestart,
   failHostStateTurnAfterRestart,
   HOST_RESTARTED,
   hostStateRunId,
@@ -589,6 +590,17 @@ describe("after a Host restart (ADR-0253 §7)", () => {
       loadKey: async () => new Uint8Array(32).fill(7),
     })
     expect(unreadable).toMatchObject({ actionId: "action-1", messageId: null, text: null })
+  }, 30_000)
+
+  it("ends a turn its Host had been told to stop as cancelled, and only once", async () => {
+    expect(await cancelHostStateTurnAfterRestart("work:hoststate:action-1", NOW + 5)).toBe(true)
+    expect(await getWorkSubmission("work:hoststate:action-1")).toMatchObject({
+      dispatchState: "settled",
+      terminalOutcome: "cancelled",
+      errorCode: HOST_RESTARTED,
+    })
+    expect(await cancelHostStateTurnAfterRestart("work:hoststate:action-1", NOW + 6)).toBe(false)
+    expect(await failHostStateTurnAfterRestart("work:hoststate:action-1", NOW + 7)).toBe(false)
   }, 30_000)
 
   it("ends a turn it will not retry as host_restarted, and only once", async () => {

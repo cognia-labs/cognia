@@ -53,6 +53,65 @@ interface ActiveDirectChatRun {
 const activeRuns = new Map<string, ActiveDirectChatRun>()
 const preparedRuns = new Map<string, string>()
 
+/**
+ * A run this renderer is preparing or running holds a Web Lock named for it,
+ * released when the run ends here or the page goes away (unload, reload,
+ * crash). Every window and tab of this origin shares the run table, so the
+ * boot sweep of one must not park a turn another is still running.
+ */
+const RUN_LOCK_PREFIX = "cognia.direct-chat-run:"
+const runLockReleases = new Map<string, () => void>()
+
+function runLocks(): Pick<LockManager, "request" | "query"> | null {
+  try {
+    const locks = (globalThis.navigator as Navigator | undefined)?.locks
+    return locks && typeof locks.request === "function" && typeof locks.query === "function"
+      ? locks
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** Hold the run's lock while this renderer prepares or runs it, and only then. */
+function syncRunLock(runId: string): void {
+  const live =
+    preparedRuns.has(runId) || [...activeRuns.values()].some((active) => active.runId === runId)
+  const release = runLockReleases.get(runId)
+  if (!live) {
+    release?.()
+    runLockReleases.delete(runId)
+    return
+  }
+  if (release) return
+  const locks = runLocks()
+  if (!locks) return
+  let releaseLock!: () => void
+  const held = new Promise<void>((resolve) => (releaseLock = resolve))
+  runLockReleases.set(runId, releaseLock)
+  void locks
+    .request(`${RUN_LOCK_PREFIX}${runId}`, () => held)
+    .catch(() => {
+      if (runLockReleases.get(runId) === releaseLock) runLockReleases.delete(runId)
+    })
+}
+
+/** Run ids whose lock some renderer of this origin holds, or none when it cannot tell. */
+async function runsHeldByLiveRenderers(): Promise<ReadonlySet<string>> {
+  const locks = runLocks()
+  if (!locks) return new Set()
+  try {
+    const snapshot = await locks.query()
+    const held = new Set<string>()
+    for (const lock of [...(snapshot.held ?? []), ...(snapshot.pending ?? [])]) {
+      if (lock.name?.startsWith(RUN_LOCK_PREFIX)) held.add(lock.name.slice(RUN_LOCK_PREFIX.length))
+    }
+    return held
+  } catch {
+    return new Set()
+  }
+}
+
 /** Admit the Host row before option resolution, without opening a stream or journal producer. */
 export async function ensureDirectChatExecutionRun(input: StartDirectChatExecutionRunInput) {
   let run = await getExecutionRun(input.runId)
@@ -97,8 +156,10 @@ export async function ensureDirectChatExecutionRun(input: StartDirectChatExecuti
       if (!run) throw error
     }
   }
-  if (run.status === "queued" && (created || input.ownsDispatch !== false))
+  if (run.status === "queued" && (created || input.ownsDispatch !== false)) {
     preparedRuns.set(run.id, input.sessionId)
+    syncRunLock(run.id)
+  }
   if (input.parentRunId && !parent && !run.parentRunId) {
     await appendRunObservation(run.id, {
       operation: "coordinator_parent_unavailable",
@@ -115,6 +176,7 @@ export async function ensureDirectChatExecutionRun(input: StartDirectChatExecuti
 /** A durable claimant took ownership; this preparer must not settle its row. */
 export function releasePreparedDirectChatExecutionRun(runId: string): void {
   preparedRuns.delete(runId)
+  syncRunLock(runId)
 }
 
 /** Cancel an admitted row when send preparation returned without dispatching it. */
@@ -122,6 +184,7 @@ export async function finishUnstartedDirectChatExecutionRun(runId: string): Prom
   const sessionId = preparedRuns.get(runId)
   if (!sessionId) return false
   preparedRuns.delete(runId)
+  syncRunLock(runId)
   if (activeRuns.get(sessionId)?.runId === runId) return false
   const run = await getExecutionRun(runId)
   if (!run || isTerminalRunStatus(run.status) || run.status !== "queued") return false
@@ -149,7 +212,10 @@ export async function startDirectChatExecutionRun(
   const run = await ensureDirectChatExecutionRun(input)
   preparedRuns.delete(input.runId)
   const startedAt = input.startedAt ?? Date.now()
-  if (isTerminalRunStatus(run.status)) return
+  if (isTerminalRunStatus(run.status)) {
+    syncRunLock(input.runId)
+    return
+  }
 
   const producer = new AgentRunEventProducer(input.runId, undefined, {
     workspaceRoot: input.workspaceRoot,
@@ -161,6 +227,7 @@ export async function startDirectChatExecutionRun(
     toolCalls: new Map(),
     seenToolCalls: new Set(),
   })
+  syncRunLock(input.runId)
   // ADR-0090 canonical event log. Opened on the SAME run id as the execution
   // journal so a cost row, a span and an envelope for one turn share a join
   // key. Before this, a desktop chat turn produced no canonical log at all.
@@ -301,6 +368,7 @@ export async function finishDirectChatExecutionRun(
   const active = activeRuns.get(sessionId)
   if (!active) return
   activeRuns.delete(sessionId)
+  syncRunLock(active.runId)
   // A plan approved in chat was handed to this turn (ADR-0045): its end is the
   // plan's end too — done, or paused for a resume. Every lane's turn ends here.
   void import("@/lib/agent/plan/chat-handoff").then(({ settlePlanChatHandoffAfterTurn }) =>
@@ -323,20 +391,41 @@ export async function finishDirectChatExecutionRun(
 }
 
 /**
+ * When this renderer loaded: the navigation start, else the moment this
+ * module was first evaluated. A turn started after it belongs to this load.
+ */
+const RENDERER_LOADED_AT =
+  typeof performance !== "undefined" && Number.isFinite(performance.timeOrigin)
+    ? Math.floor(performance.timeOrigin)
+    : Date.now()
+
+/**
  * Runs only during renderer boot. A direct-chat turn cannot keep executing
  * across a renderer restart, so an old non-terminal row requires explicit
  * recovery instead of an invented success/failure result.
+ *
+ * Only a turn the previous load left behind is stale. The sweep runs a while
+ * after boot (and twice), so a turn this load already started — one it holds
+ * a run handle for, or any started after it loaded — is live and left alone,
+ * and so is one another open window or tab holds the run lock for.
  */
 export async function recoverStaleDirectChatExecutionRuns(
-  ts: number = Date.now()
+  ts: number = Date.now(),
+  loadedAt: number = RENDERER_LOADED_AT
 ): Promise<number> {
   const runs = await listExecutionRuns({
     kinds: ["agent-turn"],
     statuses: ["queued", "running", "waiting"],
     limit: Number.MAX_SAFE_INTEGER,
   })
+  const held = new Set<string>([
+    ...[...activeRuns.values()].map((active) => active.runId),
+    ...preparedRuns.keys(),
+    ...(await runsHeldByLiveRenderers()),
+  ])
   let recovered = 0
   for (const run of runs) {
+    if (held.has(run.id) || run.startedAt >= loadedAt) continue
     await runEventJournal.append(
       run.id,
       semanticRunEvent(
@@ -353,5 +442,7 @@ export async function recoverStaleDirectChatExecutionRuns(
 export function __resetDirectChatExecutionRunsForTesting(): void {
   activeRuns.clear()
   preparedRuns.clear()
+  for (const release of runLockReleases.values()) release()
+  runLockReleases.clear()
   __resetChatCanonicalSinkForTesting()
 }

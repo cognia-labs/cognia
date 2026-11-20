@@ -40,6 +40,12 @@ export interface AgentRunRecoveryAnchorV1 extends TicketRemintSpec {
   inboundJobId: string
   sessionId: string
   sdkSessionId?: string
+  /**
+   * Set when the run was a room member's step: `sdkSessionId` is then that
+   * member's own native session, which only this anchor keeps, never the
+   * conversation's (`sessionId`).
+   */
+  memberSessionId?: string
   attemptId: string
   executionIdentityRunId?: string
   executionJournalRunId?: string
@@ -57,6 +63,7 @@ export function buildAgentRunRecoveryAnchor(input: {
   inboundJobId: string
   sessionId: string
   sdkSessionId?: string
+  memberSessionId?: string
   execution: AgentExecutionSendSpec
   journalRunId?: string
   candidateDeploymentIds: string[]
@@ -68,6 +75,7 @@ export function buildAgentRunRecoveryAnchor(input: {
     inboundJobId: input.inboundJobId,
     sessionId: input.sessionId,
     ...(input.sdkSessionId ? { sdkSessionId: input.sdkSessionId } : {}),
+    ...(input.memberSessionId ? { memberSessionId: input.memberSessionId } : {}),
     attemptId: input.execution.identity.attemptId,
     executionIdentityRunId: input.execution.identity.runId,
     ...(input.journalRunId ? { executionJournalRunId: input.journalRunId } : {}),
@@ -128,11 +136,24 @@ export function parseAgentRunRecoveryAnchor(value: unknown): AgentRunRecoveryAnc
     (anchor.restoredPermissions !== undefined &&
       !restoredPermissions(anchor.restoredPermissions)) ||
     (anchor.partialOutput !== undefined && typeof anchor.partialOutput !== "string") ||
-    (anchor.sdkSessionId !== undefined && typeof anchor.sdkSessionId !== "string")
+    (anchor.sdkSessionId !== undefined && typeof anchor.sdkSessionId !== "string") ||
+    (anchor.memberSessionId !== undefined && typeof anchor.memberSessionId !== "string")
   ) {
     return undefined
   }
   return anchor as AgentRunRecoveryAnchorV1
+}
+
+/** Earlier attempts' restored decisions, with a later attempt's decision for the same ask winning. */
+function mergeRestoredPermissions(
+  earlier: readonly RestoredPermission[],
+  later: readonly RestoredPermission[]
+): RestoredPermission[] {
+  const byRequest = new Map<string, RestoredPermission>()
+  for (const permission of [...earlier, ...later]) {
+    byRequest.set(permission.requestId, { ...permission })
+  }
+  return [...byRequest.values()]
 }
 
 function latestRecoveryAnchor(
@@ -239,16 +260,32 @@ export async function resumeCrashedAgentRun(
     if (!job || job.id !== anchor.inboundJobId || job.status !== "recovery_required") {
       return { resumed: false, reason: "inbound-job-not-recoverable" }
     }
-    const readSdkSessionId =
-      deps.readSdkSessionId ??
-      (async (sessionId: string) => (await getDb().sessions.get(sessionId))?.sdkSessionId)
-    const sdkSessionId = await readSdkSessionId(anchor.sessionId)
-    if (!anchor.sdkSessionId || sdkSessionId !== anchor.sdkSessionId) {
-      return { resumed: false, reason: "sdk-session-drift" }
+    if (!anchor.sdkSessionId) return { resumed: false, reason: "sdk-session-drift" }
+    // A room member's native session is its step's alone and lives only in
+    // the anchor; the conversation's own session id says nothing about it.
+    if (!anchor.memberSessionId) {
+      const readSdkSessionId =
+        deps.readSdkSessionId ??
+        (async (sessionId: string) => (await getDb().sessions.get(sessionId))?.sdkSessionId)
+      const sdkSessionId = await readSdkSessionId(anchor.sessionId)
+      if (sdkSessionId !== anchor.sdkSessionId) {
+        return { resumed: false, reason: "sdk-session-drift" }
+      }
     }
 
-    const restored = restorePermissionState(permissionEvents(envelopes))
-    const partialOutput = candidate.turns.map((turn) => turn.text).join("")
+    // A run that already continued an earlier crash carries that one's
+    // progress in its anchor: this attempt's log holds only what came after,
+    // so both are kept rather than the newer replacing the older.
+    const restored = mergeRestoredPermissions(
+      anchor.restoredPermissions ?? [],
+      restorePermissionState(permissionEvents(envelopes))
+    )
+    const attemptOutput = candidate.turns.map((turn) => turn.text).join("")
+    const earlierOutput = anchor.partialOutput ?? ""
+    const partialOutput =
+      earlierOutput && !attemptOutput.startsWith(earlierOutput)
+        ? `${earlierOutput}${attemptOutput}`
+        : attemptOutput
     const nextAnchor: AgentRunRecoveryAnchorV1 = {
       ...anchor,
       attemptId: `recovery-${crypto.randomUUID()}`,

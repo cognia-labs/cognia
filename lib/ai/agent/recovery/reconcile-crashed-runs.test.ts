@@ -193,6 +193,73 @@ describe("explicit crashed-run resume", () => {
     })
   })
 
+  it("continues a room member's step on its own native session, not the conversation's", async () => {
+    const memberAnchor = { ...anchor, sdkSessionId: "sdk-member", memberSessionId: "room::char::a" }
+    replayJournal.mockResolvedValueOnce([
+      { type: "run.started", payload: { recoveryAnchor: memberAnchor } },
+    ])
+    await appendCanonicalEnvelopes("run-member", [
+      envelope("run-member", 0, { kind: "text-delta", delta: "member partial" }),
+    ])
+    const continueInboundJob = jest.fn(async () => true)
+    // The conversation's own native session is another one entirely.
+    const readSdkSessionId = jest.fn(async () => "sdk-conversation")
+
+    await expect(
+      resumeCrashedAgentRun("run-member", {
+        findInboundJob: async () => ({ id: "job-1", status: "recovery_required" }) as never,
+        readSdkSessionId,
+        continueInboundJob,
+      })
+    ).resolves.toEqual({ resumed: true, inboundJobId: "job-1" })
+    expect(readSdkSessionId).not.toHaveBeenCalled()
+    expect(continueInboundJob).toHaveBeenCalledWith("job-1", {
+      recoveryAnchor: expect.objectContaining({
+        sdkSessionId: "sdk-member",
+        memberSessionId: "room::char::a",
+      }),
+    })
+  })
+
+  it("keeps an earlier crash's partial reply and decisions when the continuation crashes too", async () => {
+    const continued = {
+      ...anchor,
+      partialOutput: "first part, ",
+      restoredPermissions: [
+        { requestId: "permission-old", toolName: "Bash", state: "denied" as const },
+      ],
+    }
+    replayJournal.mockResolvedValueOnce([
+      { type: "run.started", payload: { recoveryAnchor: continued } },
+    ])
+    await appendCanonicalEnvelopes("run-second-crash", [
+      envelope("run-second-crash", 0, { kind: "text-delta", delta: "second part" }),
+      envelope("run-second-crash", 1, {
+        kind: "permission-request",
+        requestId: "permission-new",
+        toolName: "Write",
+      }),
+    ])
+    const continueInboundJob = jest.fn(async () => true)
+
+    await expect(
+      resumeCrashedAgentRun("run-second-crash", {
+        findInboundJob: async () => ({ id: "job-1", status: "recovery_required" }) as never,
+        readSdkSessionId: async () => "sdk-1",
+        continueInboundJob,
+      })
+    ).resolves.toEqual({ resumed: true, inboundJobId: "job-1" })
+    expect(continueInboundJob).toHaveBeenCalledWith("job-1", {
+      recoveryAnchor: expect.objectContaining({
+        partialOutput: "first part, second part",
+        restoredPermissions: [
+          expect.objectContaining({ requestId: "permission-old", state: "denied" }),
+          expect.objectContaining({ requestId: "permission-new", state: "pending" }),
+        ],
+      }),
+    })
+  })
+
   it("uses the latest persisted SDK-session recovery checkpoint", async () => {
     replayJournal.mockResolvedValueOnce([
       {
