@@ -80,6 +80,39 @@ describe("<ApprovalCard />", () => {
     expect(screen.queryByTestId("decision-allow")).not.toBeInTheDocument()
   })
 
+  it("takes an interrupted card down through its Dismiss", async () => {
+    const user = userEvent.setup()
+    const onDismiss = jest.fn()
+    render(
+      <ApprovalCard
+        approval={{ ...approval, status: "interrupted" }}
+        onRespond={jest.fn().mockResolvedValue(undefined)}
+        onDismiss={onDismiss}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: /dismiss/i }))
+    expect(onDismiss).toHaveBeenCalledTimes(1)
+  })
+
+  it("says how many asks wait behind this one", async () => {
+    const { rerender } = render(
+      <ApprovalCard
+        approval={approval}
+        onRespond={jest.fn().mockResolvedValue(undefined)}
+        waitingBehind={2}
+      />
+    )
+    expect(await screen.findByTestId("remote-approval-waiting-behind")).toBeInTheDocument()
+    rerender(
+      <ApprovalCard
+        approval={approval}
+        onRespond={jest.fn().mockResolvedValue(undefined)}
+        waitingBehind={0}
+      />
+    )
+    expect(screen.queryByTestId("remote-approval-waiting-behind")).not.toBeInTheDocument()
+  })
+
   it("allow forwards 'allow' to onRespond (biometric passes through in test)", async () => {
     const user = userEvent.setup()
     const onRespond = jest.fn().mockResolvedValue(undefined)

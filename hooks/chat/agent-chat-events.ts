@@ -81,10 +81,13 @@ import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import { attachTwinProvenanceToLastAssistant } from "@/lib/twin/export-provenance"
 import {
   armApprovalBackstop,
+  clearApprovalBackstop,
   clearApprovalBackstops,
+  releaseApprovalBackstops,
   isSessionAttached,
 } from "@/lib/companion/remote-attach-registry"
 import { notifyRemoteNeedsInput } from "@/lib/companion/needs-input-notifier"
+import { toolResultCallIds } from "@/lib/chat/canonical-projection"
 import { listMessages, persistMessages, type MessagePersistOptions } from "@/lib/db/messages"
 import { driveInSessionPlanAfterTurn } from "./plan-turn-settle"
 import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
@@ -374,7 +377,12 @@ function pushInteractiveApproval(approval: PendingApproval, ownerSessionId = app
     approval.sessionId,
     approval.requestId,
     () => denyTimedOutApproval(approval, ownerSessionId),
-    isHeldInBackgroundOnly(ownerSessionId) ? HELD_SESSION_APPROVAL_BACKSTOP_MS : undefined
+    {
+      ...(isHeldInBackgroundOnly(ownerSessionId)
+        ? { timeoutMs: HELD_SESSION_APPROVAL_BACKSTOP_MS }
+        : {}),
+      ...(approval.toolUseID ? { toolUseId: approval.toolUseID } : {}),
+    }
   )
 }
 
@@ -910,6 +918,8 @@ export async function handleEvent(
       // sub-session ids are re-bucketed inside the store action (same routing
       // as pushApproval), so this handles direct and team sessions alike.
       useChatStore.getState().markApprovalInterrupted(evt.requestId, evt.sessionId, evt.reason)
+      // Nothing is left to deny once the waiter is gone.
+      clearApprovalBackstop(evt.sessionId, evt.requestId)
       return
     }
     case "explicit_tool_allowed": {
@@ -1117,17 +1127,22 @@ export async function handleEvent(
         // backstop deny that fires only if the remote never answers — the
         // next SDK event for this session (the turn proceeding) cancels it.
         if (isSessionAttached(evt.sessionId)) {
-          armApprovalBackstop(evt.sessionId, evt.requestId, () => {
-            void approveTool(
-              evt.sessionId,
-              evt.requestId,
-              "deny",
-              "auto-denied: remote approval timed out",
-              undefined,
-              undefined,
-              { authority: "timeout" }
-            ).catch((err) => console.error("remote backstop deny failed", err))
-          })
+          armApprovalBackstop(
+            evt.sessionId,
+            evt.requestId,
+            () => {
+              void approveTool(
+                evt.sessionId,
+                evt.requestId,
+                "deny",
+                "auto-denied: remote approval timed out",
+                undefined,
+                undefined,
+                { authority: "timeout" }
+              ).catch((err) => console.error("remote backstop deny failed", err))
+            },
+            evt.toolUseID ? { toolUseId: evt.toolUseID } : {}
+          )
           // Notify a backgrounded (WS-closed) watcher via push so it can come
           // back and decide before the backstop denies.
           // Ids only — the notifier resolves which attached devices to wake and
@@ -1237,10 +1252,11 @@ export async function handleEvent(
       // model calls from the stream. Undefined — no await — for any other turn.
       const observingRouterFusion = observeRouterFusionTurnMessage(sessionId, env.event)
       if (observingRouterFusion) await observingRouterFusion
-      // A proceeding SDK event means any approval that was routed to a remote
-      // device for this session has been answered (or the turn moved past
-      // it) — cancel its backstop deny (Remote Session Control).
-      clearApprovalBackstops(sessionId)
+      // A call with a result is past its approval, however it was answered:
+      // stand its backstop deny down (Remote Session Control). Other progress
+      // is not an answer — parallel calls and subagents keep streaming while
+      // one call waits on a phone.
+      releaseApprovalBackstops(sessionId, toolResultCallIds(env.event))
       const isActive = sessionId === activeRef.current
       // Retained hidden panes keep their runtime slice current too. Visibility
       // controls approval ownership, not the lifetime of an accepted turn.

@@ -8,6 +8,7 @@ import {
   NO_CAPTURE,
   PROMPT_CHAT_EVENT_KINDS,
   RESIDENT_CHAT_EVENT_KINDS,
+  toolResultCallIds,
   type ChatCanonicalCaptureTiers,
 } from "./canonical-projection"
 
@@ -290,5 +291,33 @@ describe("kind sets", () => {
     expect(isResidentChatEventKind("user-input")).toBe(false)
     expect(isResidentChatEventKind("lifecycle")).toBe(true)
     expect(isResidentChatEventKind("usage")).toBe(true)
+  })
+})
+
+describe("toolResultCallIds", () => {
+  it("names every call a user frame carries a result for", () => {
+    const ids = toolResultCallIds(
+      sdk({
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_1", content: "ok" },
+            { type: "text", text: "and" },
+            { type: "tool_result", tool_use_id: "toolu_2", content: "denied", is_error: true },
+          ],
+        },
+      })
+    )
+    expect([...ids]).toEqual(["toolu_1", "toolu_2"])
+  })
+
+  it("finds none in other frames or a malformed one", () => {
+    expect(
+      toolResultCallIds(
+        sdk({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_1" }] } })
+      ).size
+    ).toBe(0)
+    expect(toolResultCallIds(sdk({ type: "user", message: { content: "text" } })).size).toBe(0)
+    expect(toolResultCallIds(sdk({ type: "user" })).size).toBe(0)
   })
 })

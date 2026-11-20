@@ -159,9 +159,10 @@ export type ToolPermissionGate = (
  * pending approval as denied so a renderer that never answers cannot hang the
  * `streamText` leg.
  *
- * The permission mode, confinement, sandbox scope and cwd are read on every
- * call, so a `claude_set_mode` takes effect on the next tool call. The ruleset
- * and the grant lists are the ones the session started with.
+ * The permission mode, confinement, sandbox scope, cwd and the approval TTL
+ * are read on every call, so a `claude_set_mode` or a later turn's TTL takes
+ * effect on the next tool call. The ruleset and the grant lists are the ones
+ * the session started with.
  */
 export function createToolPermissionGate({
   emit,
@@ -193,7 +194,6 @@ export function createToolPermissionGate({
     ? buildPluginClassIndex(sendOptions?.pluginTools)
     : EMPTY_PLUGIN_CLASS_INDEX
   const sandboxAttested = readSandboxAttested(sendOptions?.sandboxAttestation)
-  const ttlMs = readApprovalTtlMs(sendOptions?.approvalTtlMs)
   // Outbound tools (ADR-0239), fixed for the session like the ruleset.
   const explicitTools = readExplicitToolPolicy(
     sendOptions?.alwaysExplicitTools,
@@ -282,7 +282,13 @@ export function createToolPermissionGate({
           : {}),
       },
       signal,
-      ttlMs,
+      // Read per ask, not once: a session's gate outlives its first turn, and
+      // each turn stamps its own TTL on the shared options (`approvalTtlMs`).
+      ttlMs: readApprovalTtlMs(sendOptions?.approvalTtlMs),
+      // The step's abort removes the waiter before any drain sees it; without
+      // this the card that asked never learns its ask is gone.
+      onAbort: () =>
+        emit!({ type: "permission_interrupted", sessionId, requestId, reason: "aborted" }),
       onTimeout: () =>
         emit!({ type: "permission_interrupted", sessionId, requestId, reason: "timeout" }),
     })

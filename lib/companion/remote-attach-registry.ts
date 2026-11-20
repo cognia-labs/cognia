@@ -26,8 +26,11 @@
  * Because the sidecar's `canUseTool` has no timeout of its own (see
  * `sidecar/src/policy/permission/approval.ts`), an un-answered approval would
  * hang the turn forever. `armApprovalBackstop` schedules a renderer-side deny that
- * fires only if the remote never responds; `clearApprovalBackstops` cancels it
- * the moment the turn proceeds (next SDK event) or ends.
+ * fires only if the remote never responds. It stands down when its own call
+ * gets a result (`releaseApprovalBackstops`), when its ask is interrupted
+ * (`clearApprovalBackstop`) or when the session ends (`clearApprovalBackstops`).
+ * Other progress is not an answer: a turn with parallel calls, or a subagent,
+ * keeps streaming while one call waits.
  */
 
 import {
@@ -62,8 +65,14 @@ import {
  */
 export const REMOTE_CONTROL_CAPABILITY = "workspace.write"
 
-/** sessionId → (requestId → backstop timer handle). */
-const backstops = new Map<string, Map<string, ReturnType<typeof setTimeout>>>()
+interface ArmedBackstop {
+  timer: ReturnType<typeof setTimeout>
+  /** The tool call the ask gates; absent for an ask that blocks the whole turn. */
+  toolUseId?: string
+}
+
+/** sessionId → (requestId → armed backstop). */
+const backstops = new Map<string, Map<string, ArmedBackstop>>()
 
 /** Default backstop window. Generous so a human has time to act on the phone;
  *  it only fires when the remote never answers (e.g. the device dropped). */
@@ -224,16 +233,27 @@ export function approvalPushTargets(sessionId: string, now: number = Date.now())
   return presenceNotifiableControllers(sessionId, now)
 }
 
+export interface ApprovalBackstopOptions {
+  /** How long the ask may wait. Defaults to {@link DEFAULT_APPROVAL_BACKSTOP_MS}. */
+  timeoutMs?: number
+  /**
+   * The tool call the ask gates (`permission_request.toolUseID`). Its result
+   * stands the backstop down. Without one the ask blocks the whole turn, so
+   * any progress on the session means it was answered.
+   */
+  toolUseId?: string
+}
+
 /**
  * Schedule a backstop deny for a pending remote approval. Fires `onTimeout`
- * after `timeoutMs` unless `clearApprovalBackstops(sessionId)` cancels it
- * first. Re-arming the same `(sessionId, requestId)` replaces the prior timer.
+ * after the window unless the ask ends first. Re-arming the same
+ * `(sessionId, requestId)` replaces the prior timer.
  */
 export function armApprovalBackstop(
   sessionId: string,
   requestId: string,
   onTimeout: () => void,
-  timeoutMs: number = DEFAULT_APPROVAL_BACKSTOP_MS
+  { timeoutMs = DEFAULT_APPROVAL_BACKSTOP_MS, toolUseId }: ApprovalBackstopOptions = {}
 ): void {
   let perSession = backstops.get(sessionId)
   if (!perSession) {
@@ -241,22 +261,54 @@ export function armApprovalBackstop(
     backstops.set(sessionId, perSession)
   }
   const existing = perSession.get(requestId)
-  if (existing) clearTimeout(existing)
+  if (existing) clearTimeout(existing.timer)
   const timer = setTimeout(() => {
-    const live = backstops.get(sessionId)
-    live?.delete(requestId)
-    if (live && live.size === 0) backstops.delete(sessionId)
+    forget(sessionId, requestId)
     onTimeout()
   }, timeoutMs)
-  perSession.set(requestId, timer)
+  perSession.set(requestId, toolUseId ? { timer, toolUseId } : { timer })
 }
 
-/** Cancel every pending backstop for `sessionId` — the turn proceeded
- *  (remote approved) or ended, so the deny must not fire. */
+function forget(sessionId: string, requestId: string): void {
+  const perSession = backstops.get(sessionId)
+  if (!perSession) return
+  perSession.delete(requestId)
+  if (perSession.size === 0) backstops.delete(sessionId)
+}
+
+/** Cancel one ask's backstop: it was interrupted, so there is nothing to deny. */
+export function clearApprovalBackstop(sessionId: string, requestId: string): void {
+  const armed = backstops.get(sessionId)?.get(requestId)
+  if (!armed) return
+  clearTimeout(armed.timer)
+  forget(sessionId, requestId)
+}
+
+/**
+ * Stand down the backstops progress on `sessionId` has answered: those whose
+ * call now has a result (`settledToolCallIds`), and those for asks that block
+ * the whole turn, which only move on once answered. A backstop for another
+ * call that is still waiting keeps running.
+ */
+export function releaseApprovalBackstops(
+  sessionId: string,
+  settledToolCallIds: ReadonlySet<string>
+): void {
+  const perSession = backstops.get(sessionId)
+  if (!perSession) return
+  for (const [requestId, armed] of perSession) {
+    if (armed.toolUseId && !settledToolCallIds.has(armed.toolUseId)) continue
+    clearTimeout(armed.timer)
+    perSession.delete(requestId)
+  }
+  if (perSession.size === 0) backstops.delete(sessionId)
+}
+
+/** Cancel every pending backstop for `sessionId`: the session's turn ended. */
 export function clearApprovalBackstops(sessionId: string): void {
   const perSession = backstops.get(sessionId)
   if (!perSession) return
-  for (const timer of perSession.values()) clearTimeout(timer)
+  for (const armed of perSession.values()) clearTimeout(armed.timer)
   backstops.delete(sessionId)
 }
 
@@ -269,7 +321,7 @@ export function hasArmedBackstop(sessionId: string): boolean {
 /** Test-only — wipe all attach state and pending timers. */
 export function __resetRemoteAttachForTests(): void {
   for (const perSession of backstops.values()) {
-    for (const timer of perSession.values()) clearTimeout(timer)
+    for (const armed of perSession.values()) clearTimeout(armed.timer)
   }
   backstops.clear()
   __resetDevicePresenceForTests()

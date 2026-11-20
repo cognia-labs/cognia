@@ -121,6 +121,61 @@ describe("reconcileSessionRun", () => {
     expect(slice().status).toBe("awaiting_approval")
   })
 
+  it("probes the Host for a card it projected, and settles it once the Host's turn is gone", async () => {
+    // A card with no run behind it in this realm used to exempt the session
+    // from the probe outright, so a projected approval outlived its turn.
+    useChatStore.getState().pushApproval({
+      sessionId: "s1",
+      requestId: "orphan",
+      toolName: "Bash",
+      input: {},
+    } as unknown as PendingApproval)
+    const probe = jest.fn(async () => "gone" as const)
+    await expect(reconcileSessionRun("s1", deps({ probeHostRun: probe }), store)).resolves.toBe(
+      "settled"
+    )
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(slice().status).toBe("idle")
+    expect(slice().pendingApprovals[0]?.status).toBe("interrupted")
+  })
+
+  it("leaves a newer turn alone when it starts while the old one's transcript is written", async () => {
+    restoreStreaming()
+    const observed = slice().runTiming.startedAt
+    let finishWrite!: () => void
+    const written = new Promise<void>((resolve) => {
+      finishWrite = resolve
+    })
+    let started!: () => void
+    const writing = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const d = deps({
+      probeHostRun: async () => "gone",
+      commitMessages: jest.fn(async () => {
+        started()
+        await written
+      }),
+    })
+    const checking = reconcileSessionRun("s1", d, store, observed)
+    await writing
+    // The old turn settles and a new one starts, waiting on its own approval.
+    useChatStore.getState().setSessionStatus("s1", "idle")
+    useChatStore.getState().setSessionStatus("s1", "streaming", { startedAt: (observed ?? 0) - 50 })
+    useChatStore.getState().pushApproval({
+      sessionId: "s1",
+      requestId: "new-turn",
+      toolName: "Bash",
+      input: {},
+    } as unknown as PendingApproval)
+    finishWrite()
+    await expect(checking).resolves.toBe("not-busy")
+    expect(slice().status).toBe("awaiting_approval")
+    expect(slice().pendingApprovals.find((a) => a.requestId === "new-turn")?.status).not.toBe(
+      "interrupted"
+    )
+  })
+
   it("does not settle when the run gained a handle while the Host was being asked", async () => {
     restoreStreaming()
     let live = false
@@ -230,6 +285,29 @@ describe("installPhantomRunGuard", () => {
     expect(slice().status).toBe("idle")
     expect(slice().pendingApprovals[0]?.status).toBe("interrupted")
     expect(PHANTOM_RUN_APPROVAL_REASON).toBeTruthy()
+    dispose()
+  })
+
+  it("checks a live episode again, and settles it once its run is gone", async () => {
+    // One `alive` per episode used to be final: a Host that died mid-turn left
+    // the session busy with no terminal event ever arriving.
+    let answer: "alive" | "gone" = "alive"
+    const probe = jest.fn(async () => answer)
+    const dispose = installPhantomRunGuard({
+      deps: deps({ probeHostRun: probe }),
+      store,
+      graceMs: 10,
+      recheckMs: 100,
+    })
+    restoreStreaming()
+    await settleTimers(10)
+    expect(slice().status).toBe("streaming")
+    answer = "gone"
+    await settleTimers(100)
+    expect(probe).toHaveBeenCalledTimes(2)
+    expect(slice().status).toBe("idle")
+    await settleTimers(500)
+    expect(probe).toHaveBeenCalledTimes(2)
     dispose()
   })
 

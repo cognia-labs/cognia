@@ -672,7 +672,7 @@ describe("useRemoteSessionStream", () => {
     expect(runSyncDownMock).not.toHaveBeenCalled()
   })
 
-  it("clears a pending approval when a later event advances the turn", async () => {
+  it("clears a pending approval when the turn ends", async () => {
     const { result } = renderHook(() => useRemoteSessionStream("sess-1"))
     await waitFor(() => expect(streamHandler).toBeTruthy())
     act(() => {
@@ -694,6 +694,142 @@ describe("useRemoteSessionStream", () => {
       } as unknown as ClaudeEvent)
     })
     expect(result.current.pendingApproval).toBeNull()
+  })
+
+  describe("approval cards", () => {
+    const ask = (requestId: string, toolUseID = `tu-${requestId}`) =>
+      ({
+        type: "permission_request",
+        sessionId: "sess-1",
+        requestId,
+        toolUseID,
+        toolName: "write",
+        input: {},
+      }) as unknown as ClaudeEvent
+
+    async function attached() {
+      const hook = renderHook(() => useRemoteSessionStream("sess-1"))
+      await waitFor(() => expect(streamHandler).toBeTruthy())
+      return hook
+    }
+
+    it("keeps the card through progress that is not its call's result", async () => {
+      mockAdapterTurnComplete = false
+      const { result } = await attached()
+      act(() => streamHandler?.(ask("req-1")))
+      act(() => {
+        streamHandler?.({
+          type: "event",
+          sessionId: "sess-1",
+          event: { type: "assistant", message: { content: [{ type: "text", text: "…" }] } },
+        } as unknown as ClaudeEvent)
+      })
+      expect(result.current.pendingApproval?.requestId).toBe("req-1")
+    })
+
+    it("takes the card down when its call's result arrives", async () => {
+      mockAdapterTurnComplete = false
+      const { result } = await attached()
+      act(() => streamHandler?.(ask("req-1")))
+      act(() => streamHandler?.(ask("req-2")))
+      act(() => {
+        streamHandler?.({
+          type: "event",
+          sessionId: "sess-1",
+          event: {
+            type: "user",
+            message: {
+              content: [{ type: "tool_result", tool_use_id: "tu-req-1", content: "denied" }],
+            },
+          },
+        } as unknown as ClaudeEvent)
+      })
+      expect(result.current.pendingApproval?.requestId).toBe("req-2")
+      expect(result.current.approvalsWaiting).toBe(0)
+    })
+
+    it("queues a second ask behind the first instead of replacing it", async () => {
+      const { result } = await attached()
+      act(() => streamHandler?.(ask("req-1")))
+      act(() => streamHandler?.(ask("req-2")))
+      expect(result.current.pendingApproval?.requestId).toBe("req-1")
+      expect(result.current.approvalsWaiting).toBe(1)
+
+      await act(async () => {
+        await result.current.respond("allow")
+      })
+      expect(approveToolMock).toHaveBeenCalledWith("sess-1", "req-1", "allow")
+      expect(result.current.pendingApproval?.requestId).toBe("req-2")
+      expect(result.current.approvalsWaiting).toBe(0)
+    })
+
+    it("an answer in flight clears only its own card, not one that arrived meanwhile", async () => {
+      const { result } = await attached()
+      act(() => streamHandler?.(ask("req-old")))
+      let reply!: () => void
+      approveToolMock.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (reply = () => resolve()))
+      )
+      let answering!: Promise<void>
+      act(() => {
+        answering = result.current.respond("allow")
+      })
+      await waitFor(() =>
+        expect(approveToolMock).toHaveBeenCalledWith("sess-1", "req-old", "allow")
+      )
+      act(() => streamHandler?.(ask("req-new")))
+
+      await act(async () => {
+        reply()
+        await answering
+      })
+      expect(result.current.pendingApproval?.requestId).toBe("req-new")
+    })
+
+    it("marks a matching interruption on the card until it is dismissed", async () => {
+      const { result } = await attached()
+      act(() => streamHandler?.(ask("req-1")))
+      act(() => {
+        streamHandler?.({
+          type: "permission_interrupted",
+          sessionId: "sess-1",
+          requestId: "req-1",
+          reason: "expired",
+        } as unknown as ClaudeEvent)
+      })
+      expect(result.current.pendingApproval).toMatchObject({
+        requestId: "req-1",
+        status: "interrupted",
+        interruptReason: "expired",
+      })
+
+      // An answer to it never reaches the Host.
+      await act(async () => {
+        await result.current.respond("allow")
+      })
+      expect(approveToolMock).not.toHaveBeenCalled()
+      expect(result.current.pendingApproval).toBeNull()
+    })
+
+    it("shows a live ask ahead of an interrupted one, and dismisses the dead card", async () => {
+      const { result } = await attached()
+      act(() => streamHandler?.(ask("req-dead")))
+      act(() => streamHandler?.(ask("req-live")))
+      act(() => {
+        streamHandler?.({
+          type: "permission_interrupted",
+          sessionId: "sess-1",
+          requestId: "req-dead",
+          reason: "aborted",
+        } as unknown as ClaudeEvent)
+      })
+      expect(result.current.pendingApproval?.requestId).toBe("req-live")
+      expect(result.current.approvalsWaiting).toBe(1)
+
+      act(() => result.current.dismissApproval("req-dead"))
+      expect(result.current.pendingApproval?.requestId).toBe("req-live")
+      expect(result.current.approvalsWaiting).toBe(0)
+    })
   })
 
   it("resets status to idle and toasts when a send fails", async () => {

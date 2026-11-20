@@ -107,6 +107,8 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
     messages,
     status,
     pendingApproval,
+    approvalsWaiting,
+    dismissApproval,
     canControl,
     attachDowngrade,
     sessionEnded,
@@ -315,9 +317,12 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
         {pendingApproval && !sessionEnded && !notFound ? (
           <div className="shrink-0 p-4 pt-0">
             <ApprovalCard
+              key={pendingApproval.requestId}
               approval={pendingApproval}
               onRespond={respond}
               mode={composable ? "control" : "observe"}
+              waitingBehind={approvalsWaiting}
+              onDismiss={() => dismissApproval(pendingApproval.requestId)}
             />
           </div>
         ) : null}

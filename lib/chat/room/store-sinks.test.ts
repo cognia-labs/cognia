@@ -55,12 +55,15 @@ jest.mock("@/lib/chat/steer-runtime", () => ({
 const attachRegistry = {
   armApprovalBackstop: jest.fn(),
   clearApprovalBackstops: jest.fn(),
+  releaseApprovalBackstops: jest.fn(),
   isSessionAttached: jest.fn(() => false),
 }
 jest.mock("@/lib/companion/remote-attach-registry", () => ({
   armApprovalBackstop: (...args: unknown[]) => attachRegistry.armApprovalBackstop(...(args as [])),
   clearApprovalBackstops: (...args: unknown[]) =>
     attachRegistry.clearApprovalBackstops(...(args as [])),
+  releaseApprovalBackstops: (...args: unknown[]) =>
+    attachRegistry.releaseApprovalBackstops(...(args as [])),
   isSessionAttached: (...args: unknown[]) => attachRegistry.isSessionAttached(...(args as [])),
 }))
 
@@ -69,6 +72,7 @@ jest.mock("@/lib/companion/needs-input-notifier", () => ({
   notifyRemoteNeedsInput: (...args: unknown[]) => notifyRemoteNeedsInput(...(args as [])),
 }))
 
+import type { SDKMessage } from "@cognia/agent-config-types"
 import { createStoreRoomSinks } from "./store-sinks"
 import { clearComposerTyping, noteComposerTyping } from "@/stores/chat/composer-typing-store"
 
@@ -174,7 +178,8 @@ it("hands the decision to the attached device, arms a backstop deny and wakes it
   expect(attachRegistry.armApprovalBackstop).toHaveBeenCalledWith(
     "room-1::char::a::t1",
     "req-1",
-    expect.any(Function)
+    expect.any(Function),
+    {}
   )
   expect(notifyRemoteNeedsInput).toHaveBeenCalledWith({ sessionId: "room-1", requestId: "req-1" })
   expect(deny).not.toHaveBeenCalled()
@@ -192,9 +197,22 @@ it("still reports the decision as routed when the wake-up push fails", () => {
   expect(sinks.approvals.routeRemote("room-1", permission, jest.fn())).toBe(true)
 })
 
-it("stands the backstop down on the member's next event", () => {
+it("stands down only the backstops of the calls a member event has results for", () => {
   const sinks = createStoreRoomSinks()
-  sinks.approvals.onEvent?.("room-1::char::a::t1")
+  sinks.approvals.onEvent?.("room-1::char::a::t1", {
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "tu-1", content: "ok" }] },
+  } as unknown as SDKMessage)
+  expect(attachRegistry.releaseApprovalBackstops).toHaveBeenCalledWith(
+    "room-1::char::a::t1",
+    new Set(["tu-1"])
+  )
+  expect(attachRegistry.clearApprovalBackstops).not.toHaveBeenCalled()
+})
+
+it("stands every backstop down when the member's turn ends", () => {
+  const sinks = createStoreRoomSinks()
+  sinks.approvals.onEnded?.("room-1::char::a::t1")
   expect(attachRegistry.clearApprovalBackstops).toHaveBeenCalledWith("room-1::char::a::t1")
 })
 

@@ -105,19 +105,26 @@ export function createSemanticConsumers(input: {
         signal,
         ttlMs: sendOptions.approvalTtlMs,
         entry: { input: { step }, suppressAlwaysAllowRule: true },
+        // Either way the ask ends unanswered; say so, so its card closes.
+        onAbort: () =>
+          input.emit({ type: "permission_interrupted", sessionId, requestId, reason: "aborted" }),
+        onTimeout: () =>
+          input.emit({ type: "permission_interrupted", sessionId, requestId, reason: "timeout" }),
       })
-      input.emit({
-        type: "permission_request",
-        sessionId,
-        requestId,
-        toolName: "agent.turn.decide",
-        displayName: "agent.turn.decide",
-        input: { step, reason },
-        requiresApproval: true,
-        requiresPerCallApproval: true,
-        suppressAlwaysAllowRule: true,
-        defaultToNo: true,
-      })
+      // An ask the turn already abandoned is not put in front of anyone.
+      if (!signal.aborted)
+        input.emit({
+          type: "permission_request",
+          sessionId,
+          requestId,
+          toolName: "agent.turn.decide",
+          displayName: "agent.turn.decide",
+          input: { step, reason },
+          requiresApproval: true,
+          requiresPerCallApproval: true,
+          suppressAlwaysAllowRule: true,
+          defaultToNo: true,
+        })
       const answer = await approval
       signal.throwIfAborted()
       if (answer.behavior !== "allow")

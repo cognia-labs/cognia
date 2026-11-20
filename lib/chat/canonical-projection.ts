@@ -166,6 +166,21 @@ function summarizeToolResult(content: unknown): Record<string, unknown> {
 }
 
 /**
+ * The tool calls one SDK message carries a result for. A call with a result
+ * is past its approval, however that approval was answered.
+ */
+export function toolResultCallIds(message: SDKMessage): Set<string> {
+  const ids = new Set<string>()
+  if (message?.type !== "user") return ids
+  for (const block of blocksOf(message)) {
+    if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
+      ids.add(block.tool_use_id)
+    }
+  }
+  return ids
+}
+
+/**
  * Narrow one SDK message into canonical events.
  *
  * Returns `[]` for frames that carry nothing durable. Never throws: a

@@ -30,7 +30,9 @@ import {
   armApprovalBackstop,
   clearApprovalBackstops,
   isSessionAttached,
+  releaseApprovalBackstops,
 } from "@/lib/companion/remote-attach-registry"
+import { toolResultCallIds } from "@/lib/chat/canonical-projection"
 import { notifyRemoteNeedsInput } from "@/lib/companion/needs-input-notifier"
 import type { RoomRunnerSinks } from "./runner-deps"
 
@@ -82,13 +84,18 @@ export function createStoreRoomSinks(): RoomRunnerSinks {
       routeRemote: (roomId, evt, deny) => {
         if (!isSessionAttached(roomId)) return false
         // The sidecar's canUseTool has no timeout of its own, so arm a backstop
-        // deny that fires only if the remote never answers. The member's next
-        // event cancels it (`onEvent`).
-        armApprovalBackstop(evt.sessionId, evt.requestId, () => {
-          void deny("auto-denied: remote approval timed out").catch((err) =>
-            console.error("remote backstop deny failed", err)
-          )
-        })
+        // deny that fires only if the remote never answers. The result of the
+        // member's gated call cancels it (`onEvent`).
+        armApprovalBackstop(
+          evt.sessionId,
+          evt.requestId,
+          () => {
+            void deny("auto-denied: remote approval timed out").catch((err) =>
+              console.error("remote backstop deny failed", err)
+            )
+          },
+          evt.toolUseID ? { toolUseId: evt.toolUseID } : {}
+        )
         // Ids only. The notifier resolves which attached devices to wake and
         // never puts the tool name on a push. Targets are attached to the
         // room, the decision is answered on the member sub-session.
@@ -97,7 +104,9 @@ export function createStoreRoomSinks(): RoomRunnerSinks {
         )
         return true
       },
-      onEvent: (subSessionId) => clearApprovalBackstops(subSessionId),
+      onEvent: (subSessionId, message) =>
+        releaseApprovalBackstops(subSessionId, toolResultCallIds(message)),
+      onEnded: (subSessionId) => clearApprovalBackstops(subSessionId),
     },
     settings: {
       read: () => useSettingsStore.getState().settings ?? undefined,

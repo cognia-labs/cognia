@@ -4,10 +4,12 @@ import {
   armApprovalBackstop,
   attachSession,
   attachedDeviceIds,
+  clearApprovalBackstop,
   clearApprovalBackstops,
   detachDevice,
   detachSession,
   hasArmedBackstop,
+  releaseApprovalBackstops,
   isSessionAttached,
 } from "./remote-attach-registry"
 import {
@@ -247,7 +249,7 @@ describe("approval backstop", () => {
 
   it("fires onTimeout after the window when not cleared", () => {
     const onTimeout = jest.fn()
-    armApprovalBackstop("s1", "req-1", onTimeout, 1000)
+    armApprovalBackstop("s1", "req-1", onTimeout, { timeoutMs: 1000 })
     expect(hasArmedBackstop("s1")).toBe(true)
     jest.advanceTimersByTime(999)
     expect(onTimeout).not.toHaveBeenCalled()
@@ -256,9 +258,42 @@ describe("approval backstop", () => {
     expect(hasArmedBackstop("s1")).toBe(false)
   })
 
+  it("another call's result or other progress leaves a waiting call's backstop armed", () => {
+    const waiting = jest.fn()
+    const turnBlocking = jest.fn()
+    armApprovalBackstop("s1", "req-a", waiting, { timeoutMs: 1000, toolUseId: "tu-a" })
+    armApprovalBackstop("s1", "req-turn", turnBlocking, { timeoutMs: 1000 })
+    // Progress with a result for a different, parallel call.
+    releaseApprovalBackstops("s1", new Set(["tu-b"]))
+    jest.advanceTimersByTime(1000)
+    // The turn-blocking ask moved on, so it was answered; the call still waits.
+    expect(turnBlocking).not.toHaveBeenCalled()
+    expect(waiting).toHaveBeenCalledTimes(1)
+  })
+
+  it("its own call's result stands a backstop down", () => {
+    const onTimeout = jest.fn()
+    armApprovalBackstop("s1", "req-a", onTimeout, { timeoutMs: 1000, toolUseId: "tu-a" })
+    releaseApprovalBackstops("s1", new Set(["tu-a"]))
+    expect(hasArmedBackstop("s1")).toBe(false)
+    jest.advanceTimersByTime(5000)
+    expect(onTimeout).not.toHaveBeenCalled()
+  })
+
+  it("an interrupted ask's backstop is cancelled alone", () => {
+    const a = jest.fn()
+    const b = jest.fn()
+    armApprovalBackstop("s1", "req-a", a, { timeoutMs: 1000, toolUseId: "tu-a" })
+    armApprovalBackstop("s1", "req-b", b, { timeoutMs: 1000, toolUseId: "tu-b" })
+    clearApprovalBackstop("s1", "req-a")
+    jest.advanceTimersByTime(1000)
+    expect(a).not.toHaveBeenCalled()
+    expect(b).toHaveBeenCalledTimes(1)
+  })
+
   it("clearApprovalBackstops cancels a pending deny (remote approved)", () => {
     const onTimeout = jest.fn()
-    armApprovalBackstop("s1", "req-1", onTimeout, 1000)
+    armApprovalBackstop("s1", "req-1", onTimeout, { timeoutMs: 1000 })
     clearApprovalBackstops("s1")
     expect(hasArmedBackstop("s1")).toBe(false)
     jest.advanceTimersByTime(5000)
@@ -268,8 +303,8 @@ describe("approval backstop", () => {
   it("re-arming the same request replaces the prior timer", () => {
     const first = jest.fn()
     const second = jest.fn()
-    armApprovalBackstop("s1", "req-1", first, 1000)
-    armApprovalBackstop("s1", "req-1", second, 1000)
+    armApprovalBackstop("s1", "req-1", first, { timeoutMs: 1000 })
+    armApprovalBackstop("s1", "req-1", second, { timeoutMs: 1000 })
     jest.advanceTimersByTime(1000)
     expect(first).not.toHaveBeenCalled()
     expect(second).toHaveBeenCalledTimes(1)
@@ -278,8 +313,8 @@ describe("approval backstop", () => {
   it("tracks independent backstops per request within a session", () => {
     const a = jest.fn()
     const b = jest.fn()
-    armApprovalBackstop("s1", "req-a", a, 1000)
-    armApprovalBackstop("s1", "req-b", b, 2000)
+    armApprovalBackstop("s1", "req-a", a, { timeoutMs: 1000 })
+    armApprovalBackstop("s1", "req-b", b, { timeoutMs: 2000 })
     jest.advanceTimersByTime(1000)
     expect(a).toHaveBeenCalledTimes(1)
     expect(b).not.toHaveBeenCalled()

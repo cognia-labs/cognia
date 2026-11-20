@@ -1855,6 +1855,7 @@ export class RoomRunner {
     switch (evt.type) {
       case "session_ended": {
         this.publishActivity(teamSessionId, characterId, evt.sessionId, null)
+        sinks.approvals.onEnded?.(evt.sessionId)
         const r = this.resolvers.get(evt.sessionId)
         if (r) {
           if (evt.error) r.reject(new Error(evt.error))
@@ -1947,7 +1948,7 @@ export class RoomRunner {
       }
       case "event": {
         const sub = evt.sessionId
-        sinks.approvals.onEvent?.(sub)
+        sinks.approvals.onEvent?.(sub, evt.event)
         const ctx = this.subCtx.get(sub)
         const senderId = ctx?.senderId ?? characterId
 

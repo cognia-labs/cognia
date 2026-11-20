@@ -809,7 +809,11 @@ export function dispatchAiSdk({
   function interruptTurn(reason = "interrupted", error?: FenceDeniedError) {
     cancelled = true
     invalidateCompaction()
-    activeAbortController?.abort(error)
+    // Drain BEFORE the abort: an approval's abort listener takes the waiter
+    // out of `pendingApprovals`, so a drain after it found nothing and every
+    // card went without its `permission_interrupted` and this reason. The
+    // released callers resume only after this synchronous block, by which
+    // time the step is aborted.
     drainPendingRoundTrips(
       {
         pendingApprovals,
@@ -823,6 +827,7 @@ export function dispatchAiSdk({
       reason,
       (requestId) => emit({ type: "permission_interrupted", sessionId, requestId, reason })
     )
+    activeAbortController?.abort(error)
   }
 
   const workerAdmission =

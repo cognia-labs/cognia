@@ -36,6 +36,7 @@ import {
   type HostStateSubmitResponse,
 } from "@cognia/agent-config-types/host-state"
 import {
+  TERMINAL_TURN_STATUSES,
   hostStateIntentRequiresLiveControl,
   isTurnErrorCode,
   reduceHostStateMutation,
@@ -2021,6 +2022,8 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
         mutation: (state) => mutationForRuntimeEnvelope(state, envelope),
         now: now(),
       })
+      // The late end of a superseded turn: nothing to record or broadcast.
+      if (!committed.event && !committed.duplicate) return null
       const row = await getHostStateAction(generation, `runtime:${envelope.eventId}`)
       if (!row) throw new Error("host_state_ledger_missing")
       await processRow(row)
@@ -2902,11 +2905,12 @@ function decisionOrigin(envelope: AgentEventEnvelope): HostStateDecision["origin
 function mutationForRuntimeEnvelope(
   state: HostStateChannelState,
   envelope: AgentEventEnvelope
-): HostStateMutation {
+): HostStateMutation | null {
   if (state.kind !== "session") throw new Error("host_state_channel_mismatch")
   const revision = state.revision + 1
   const event = envelope.event
   const at = parseRuntimeTimestamp(envelope.timestamp)
+  if (settlesAnotherTurn(state, envelope)) return null
   switch (event.kind) {
     case "lifecycle":
       if (event.phase === "started") {
@@ -3010,6 +3014,29 @@ function mutationForRuntimeEnvelope(
     default:
       throw new Error("host_state_runtime_event_not_projectable")
   }
+}
+
+/**
+ * Whether `envelope` would end a turn other than the one this channel is in.
+ *
+ * Every terminal event names the turn it ends. One for a turn that is no
+ * longer active is the late end of a superseded attempt: applied, it aborted
+ * the turn that replaced it and interrupted that turn's pending approvals. A
+ * terminal event after the turn already settled is a second end of the same
+ * turn, and would overwrite its outcome (a failure read back as completed).
+ */
+function settlesAnotherTurn(
+  state: Extract<HostStateChannelState, { kind: "session" }>,
+  envelope: AgentEventEnvelope
+): boolean {
+  const event = envelope.event
+  const terminal =
+    event.kind === "failure" ||
+    (event.kind === "lifecycle" && event.phase !== "started") ||
+    (event.kind === "session-state" && event.state !== "running")
+  if (!terminal) return false
+  if (state.activeTurn) return state.activeTurn.turnId !== envelope.turnId
+  return TERMINAL_TURN_STATUSES.includes(state.turn)
 }
 
 function parseRuntimeTimestamp(value: string): number {

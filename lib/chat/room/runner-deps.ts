@@ -270,8 +270,13 @@ export interface RoomRunnerSinks {
       evt: Extract<ClaudeEvent, { type: "permission_request" }>,
       deny: (reason: string) => Promise<void>
     ) => boolean
-    /** A member event arrived on `subSessionId`, so any armed backstop for it can stand down. */
-    onEvent?: (subSessionId: string) => void
+    /**
+     * A member event arrived on `subSessionId`: the backstops of the calls it
+     * carries a result for (and of asks that block the whole turn) stand down.
+     */
+    onEvent?: (subSessionId: string, message: SDKMessage) => void
+    /** The member's turn on `subSessionId` ended: none of its asks wait any more. */
+    onEnded?: (subSessionId: string) => void
   }
   settings: {
     read: () => AppSettings | undefined

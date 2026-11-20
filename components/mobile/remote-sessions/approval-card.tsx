@@ -44,9 +44,19 @@ export interface ApprovalCardProps {
    * not been taught about attach modes keeps working.
    */
   mode?: "control" | "observe"
+  /** Other asks queued behind this one, answered after it. */
+  waitingBehind?: number
+  /** Takes an interrupted ask's card down; an interrupted ask has no answer. */
+  onDismiss?: () => void
 }
 
-export function ApprovalCard({ approval, onRespond, mode = "control" }: ApprovalCardProps) {
+export function ApprovalCard({
+  approval,
+  onRespond,
+  mode = "control",
+  waitingBehind = 0,
+  onDismiss,
+}: ApprovalCardProps) {
   const t = useTranslations("mobile.remoteSessions.approval")
   const guard = useBiometricGuard()
   const blockReason = useBiometricBlockReason()
@@ -83,7 +93,16 @@ export function ApprovalCard({ approval, onRespond, mode = "control" }: Approval
           mode={mode}
           onApprovalRespond={onRespond}
           confirmAllow={confirmAllow}
+          onDismiss={onDismiss}
         />
+        {waitingBehind > 0 ? (
+          <p
+            className="mt-2 text-xs text-muted-foreground"
+            data-testid="remote-approval-waiting-behind"
+          >
+            {t("waitingBehind", { count: waitingBehind })}
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   )

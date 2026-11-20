@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { RemoteSessionDetail } from "./remote-session-detail"
@@ -139,6 +139,8 @@ function baseStream(overrides: Partial<RemoteSessionStream> = {}): RemoteSession
     messages: [],
     status: "idle",
     pendingApproval: null,
+    approvalsWaiting: 0,
+    dismissApproval: jest.fn(),
     canControl: true,
     attachDowngrade: null,
     sessionEnded: false,
@@ -464,6 +466,28 @@ describe("<RemoteSessionDetail />", () => {
     )
     render(<RemoteSessionDetail sessionId="s1" />)
     expect(screen.getByTestId("remote-approval-card")).toBeInTheDocument()
+  })
+
+  it("dismisses an interrupted card through the stream, by its request", async () => {
+    const dismissApproval = jest.fn()
+    streamMock.mockReturnValue(
+      baseStream({
+        pendingApproval: {
+          sessionId: "s1",
+          requestId: "r-dead",
+          toolUseID: "tu1",
+          toolName: "bash",
+          input: {},
+          status: "interrupted",
+        },
+        approvalsWaiting: 1,
+        dismissApproval,
+      })
+    )
+    render(<RemoteSessionDetail sessionId="s1" />)
+    expect(screen.getByTestId("remote-approval-waiting-behind")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }))
+    expect(dismissApproval).toHaveBeenCalledWith("r-dead")
   })
 
   // Hiding the card from an observer made a run blocked on a decision look

@@ -30698,7 +30698,8 @@
         "description": "The host agent wants to run a tool. Allowing lets it execute on the connected desktop.",
         "heading": "Allow {tool}?",
         "reason": "Confirm allowing the {tool} tool on the desktop",
-        "title": "Approve tool use"
+        "title": "Approve tool use",
+        "waitingBehind": "{count, plural, one {# more request is waiting} other {# more requests are waiting}}"
       },
       "back": "Back to sessions",
       "detail": {

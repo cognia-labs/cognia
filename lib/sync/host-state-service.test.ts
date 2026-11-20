@@ -1594,6 +1594,72 @@ describe("HostStateService", () => {
     await service.stop()
   })
 
+  it("a late end of a superseded turn leaves the new turn and its approval alone", async () => {
+    const service = createHostStateService({
+      ...scope,
+      hostId,
+      ownerId: "brain-a",
+      now: () => 100,
+      publish: jest.fn(async () => undefined),
+    })
+    await service.start({ now: 0, heartbeat: false })
+    const of = (turnId: string, event: AgentEventEnvelope["event"], eventId: string) => ({
+      ...runtimeEnvelope(event, eventId),
+      turnId,
+    })
+    await service.projectRuntimeEnvelope(of("old", { kind: "lifecycle", phase: "started" }, "o1"))
+    await service.projectRuntimeEnvelope(of("new", { kind: "lifecycle", phase: "started" }, "n1"))
+    await service.projectRuntimeEnvelope(
+      of(
+        "new",
+        { kind: "permission-request", requestId: "new-approval", toolName: "Bash", input: {} },
+        "n2"
+      )
+    )
+    await expect(
+      service.projectRuntimeEnvelope(of("old", { kind: "lifecycle", phase: "interrupted" }, "o2"))
+    ).resolves.toBeNull()
+    await service.projectRuntimeEnvelope(
+      of("old", { kind: "failure", code: "error_max_turns", message: "cap" }, "o3")
+    )
+    expect((await service.snapshot({ ...scope, channel })).state).toMatchObject({
+      turn: "awaiting-decision",
+      activeTurn: { turnId: "new" },
+      decisions: [expect.objectContaining({ requestId: "new-approval", status: "pending" })],
+    })
+    await service.stop()
+  })
+
+  it("a second end of a settled turn cannot rewrite its outcome", async () => {
+    // The Agent SDK reports `idle` after the turn's failure; applied, it read
+    // the failed turn back as completed on every replica.
+    const service = createHostStateService({
+      ...scope,
+      hostId,
+      ownerId: "brain-a",
+      now: () => 100,
+      publish: jest.fn(async () => undefined),
+    })
+    await service.start({ now: 0, heartbeat: false })
+    await service.projectRuntimeEnvelope(
+      runtimeEnvelope({ kind: "lifecycle", phase: "started" }, "s1")
+    )
+    await service.projectRuntimeEnvelope(
+      runtimeEnvelope({ kind: "failure", code: "api_error", message: "HTTP 404" }, "s2")
+    )
+    await service.projectRuntimeEnvelope(
+      runtimeEnvelope({ kind: "session-state", state: "idle" }, "s3")
+    )
+    await service.projectRuntimeEnvelope(
+      runtimeEnvelope({ kind: "lifecycle", phase: "ended" }, "s4")
+    )
+    expect((await service.snapshot({ ...scope, channel })).state).toMatchObject({
+      turn: "fatal-error",
+      activeTurn: null,
+    })
+    await service.stop()
+  })
+
   it("reports degraded rather than presenting stale state as fresh", async () => {
     // A broadcast that keeps failing is state replicas never received.
     const publish = jest.fn(async () => {

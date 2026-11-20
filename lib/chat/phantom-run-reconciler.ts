@@ -18,17 +18,25 @@
  *  1. Is there a live run handle in this realm? A local send holds an
  *     execution-broker lease (acquired before the `streaming` flip) or is
  *     queued for one; a direct-chat turn has an open execution run; a paired
- *     client projecting a room's members has them in flight; an approval
- *     still pending in the slice has its resolver in memory. Any of these
+ *     client projecting a room's members has them in flight. Any of these
  *     means the turn is real — left alone.
  *  2. Does a Host own this session's turn? For a HostState-replicated
  *     conversation the Host's confirmed turn (plus this device's still-pending
  *     sends) is the answer: a live Host turn stays running, and the HostState
- *     stream keeps driving it — that IS the reattach. A settled one is gone.
- *  3. Otherwise nothing can be running it — a remote external-agent run that
+ *     stream keeps driving it — that IS the reattach. A settled one is gone,
+ *     and so is every approval card it left: a projected card has no resolver
+ *     once its turn is over, so it never exempts a session from this probe.
+ *  3. With no Host owning the turn, an approval still pending in the slice is
+ *     a prompt this realm raised itself (a live-voice or skill confirmation)
+ *     whose resolver is in memory — left alone.
+ *  4. Otherwise nothing can be running it — a remote external-agent run that
  *     was not started from this realm cannot be re-subscribed after a reload
  *     (its frames are addressed to a run id only the old renderer knew), and
  *     its Host ends an abandoned run when the client disconnects.
+ *
+ * A `live` answer is not final: the evidence can lapse without any terminal
+ * event reaching this realm (a Host that dies mid-turn), so a session that
+ * stays busy in the same episode is checked again every `recheckMs`.
  *
  * Gone or unknown settles the session: open tool parts are closed as
  * interrupted (in the slice and, as a partial write, in Dexie), live
@@ -112,10 +120,9 @@ export async function reconcileSessionRun(
       episodeStartedAt === undefined || (slice.runTiming?.startedAt ?? null) === episodeStartedAt
     )
   }
-  const locallyLive = (): boolean => {
-    const slice = store.getState().sessions[sessionId]
-    return deps.hasLocalRunHandle(sessionId) || hasLiveApproval(slice?.pendingApprovals)
-  }
+  const locallyLive = (): boolean => deps.hasLocalRunHandle(sessionId)
+  const hasPendingApproval = (): boolean =>
+    hasLiveApproval(store.getState().sessions[sessionId]?.pendingApprovals)
 
   if (!sameEpisode()) return "not-busy"
   if (locallyLive()) return "live"
@@ -132,7 +139,18 @@ export async function reconcileSessionRun(
   // handle in the meantime. Only the episode we judged is settled.
   if (!sameEpisode()) return "not-busy"
   if (locallyLive()) return "live"
+  // A Host that settled the turn leaves no resolver behind for its cards; with
+  // no Host (or none reachable) a pending card is this realm's own prompt.
+  if (host !== "gone" && hasPendingApproval()) return "live"
 
+  // Exactly the approvals judged here. A newer turn that starts while the
+  // transcript write below awaits brings its own, which are not this
+  // episode's to interrupt.
+  const judged = new Set(
+    (store.getState().sessions[sessionId]?.pendingApprovals ?? [])
+      .filter((approval) => approval.status !== "interrupted")
+      .map((approval) => approval.requestId)
+  )
   const state = store.getState()
   const slice = state.sessions[sessionId]!
   if (hasOpenToolParts(slice.messages)) {
@@ -141,10 +159,14 @@ export async function reconcileSessionRun(
     await deps.commitMessages(sessionId, changed).catch((error: unknown) => {
       console.warn("phantom run: closing open tool parts failed to persist", error)
     })
+    // The write awaited: a newer turn may own the session now. Its status,
+    // approvals and run are not this episode's to settle.
+    if (!sameEpisode()) return "not-busy"
+    if (locallyLive()) return "live"
   }
   const current = store.getState()
   for (const approval of current.sessions[sessionId]?.pendingApprovals ?? []) {
-    if (approval.status === "interrupted") continue
+    if (approval.status === "interrupted" || !judged.has(approval.requestId)) continue
     current.markApprovalInterrupted(
       approval.requestId,
       approval.sessionId,
@@ -166,10 +188,19 @@ export interface PhantomRunGuardOptions {
    * outbox row committing).
    */
   graceMs?: number
+  /**
+   * How long after a `live` answer the same busy episode is checked again.
+   * The evidence behind `live` can lapse with no terminal event ever reaching
+   * this realm, so one answer per episode left such a session busy for good.
+   */
+  recheckMs?: number
 }
 
 /** Default grace before a newly busy session is checked. */
 export const PHANTOM_RUN_GRACE_MS = 3_000
+
+/** Default interval between checks of a session that stays busy and live. */
+export const PHANTOM_RUN_RECHECK_MS = 30_000
 
 /**
  * Watch the chat store and reconcile every session that becomes busy.
@@ -178,11 +209,12 @@ export const PHANTOM_RUN_GRACE_MS = 3_000
 export function installPhantomRunGuard(options: PhantomRunGuardOptions): () => void {
   const { deps, store } = options
   const graceMs = options.graceMs ?? PHANTOM_RUN_GRACE_MS
+  const recheckMs = options.recheckMs ?? PHANTOM_RUN_RECHECK_MS
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const seen = new Map<string, number | null>()
   let disposed = false
 
-  const schedule = (sessionId: string, episodeStartedAt: number | null) => {
+  const schedule = (sessionId: string, episodeStartedAt: number | null, delayMs = graceMs) => {
     const existing = timers.get(sessionId)
     if (existing) clearTimeout(existing)
     timers.set(
@@ -190,10 +222,21 @@ export function installPhantomRunGuard(options: PhantomRunGuardOptions): () => v
       setTimeout(() => {
         timers.delete(sessionId)
         if (disposed) return
-        void reconcileSessionRun(sessionId, deps, store, episodeStartedAt).catch((error: unknown) =>
-          console.warn("phantom run reconciliation failed", error)
-        )
-      }, graceMs)
+        void reconcileSessionRun(sessionId, deps, store, episodeStartedAt)
+          .then((outcome) => {
+            // Still the episode this check judged: ask again later. A new
+            // episode (or a settled session) has its own schedule from `scan`.
+            if (
+              outcome === "live" &&
+              !disposed &&
+              !timers.has(sessionId) &&
+              seen.get(sessionId) === episodeStartedAt
+            ) {
+              schedule(sessionId, episodeStartedAt, recheckMs)
+            }
+          })
+          .catch((error: unknown) => console.warn("phantom run reconciliation failed", error))
+      }, delayMs)
     )
   }
 

@@ -28,6 +28,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { UIMessage } from "ai"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { toolResultCallIds } from "@/lib/chat/canonical-projection"
 import { applySdkEvent } from "@/lib/chat/sdk-message-adapter"
 import {
   approveTool,
@@ -102,8 +103,15 @@ export interface RemoteSessionStream {
   /** Reconstructed conversation, source-of-truth for the chat renderer. */
   messages: UIMessage[]
   status: RemoteStreamStatus
-  /** A tool-use approval awaiting this watcher's decision, if any. */
+  /**
+   * The tool-use approval to show, if any: the oldest one still answerable,
+   * else the oldest interrupted one (shown so the user sees why it ended).
+   */
   pendingApproval: PendingApproval | null
+  /** How many other asks are queued behind `pendingApproval`. */
+  approvalsWaiting: number
+  /** Take an interrupted approval's card down. */
+  dismissApproval: (requestId: string) => void
   /** False when this device was attached as an observer rather than a
    *  controller — it lacks the capability, or its event stream is not caught
    *  up. `attachDowngrade` says which. */
@@ -204,7 +212,10 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
   const t = useTranslations("mobile.remoteSessions")
   const [messages, setMessages] = useState<UIMessage[]>([])
   const [status, setStatus] = useState<RemoteStreamStatus>("loading")
-  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null)
+  // Every ask the Host routed here, in arrival order. A run with parallel
+  // tool calls can ask more than once at a time; a single slot dropped the
+  // earlier ask, and the answer to it then cleared the later one.
+  const [approvals, setApprovals] = useState<PendingApproval[]>([])
   const [canControl, setCanControl] = useState(true)
   const [attachDowngrade, setAttachDowngrade] = useState<AttachDowngradeReason | null>(null)
   const [sessionEnded, setSessionEnded] = useState(false)
@@ -358,7 +369,7 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
         if (frameType(evt) === "sidecar_exited") {
           setSessionEnded(true)
           setStatusBoth("idle")
-          setPendingApproval(null)
+          setApprovals(NO_APPROVALS)
           return
         }
         if (!isForSession(evt, sessionId)) return
@@ -372,10 +383,32 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
             }
             liveTurnCompleteRef.current = turnComplete
             setStatusBoth(turnComplete ? "idle" : "streaming")
-            // The host blocks the turn on a pending approval; a fresh event
-            // means it advanced, so the host already resolved the approval
-            // (typically via its 120s backstop). Clear our stale card.
-            setPendingApproval((cur) => (cur ? null : cur))
+            // An ask ends when its call does: the call's result (answered on
+            // another device, or denied by the Host's backstop) or the end of
+            // the turn. Any other progress is not an answer — parallel calls
+            // and subagents keep streaming while one call waits.
+            if (turnComplete) {
+              setApprovals(NO_APPROVALS)
+            } else {
+              const settled = toolResultCallIds(env.event)
+              if (settled.size > 0) {
+                setApprovals((cur) => withoutApprovals(cur, (a) => settled.has(a.toolUseID)))
+              }
+            }
+            return
+          }
+          case "permission_interrupted": {
+            // The Host's waiter is gone and the call was already denied. Keep
+            // the card as an honest notice the user dismisses, not an ask.
+            setApprovals((cur) =>
+              cur.some((a) => a.requestId === evt.requestId && a.status !== "interrupted")
+                ? cur.map((a) =>
+                    a.requestId === evt.requestId
+                      ? { ...a, status: "interrupted" as const, interruptReason: evt.reason }
+                      : a
+                  )
+                : cur
+            )
             return
           }
           case "permission_request": {
@@ -389,7 +422,7 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
                 evt.remoteExecutionContext
               )
             }
-            setPendingApproval({
+            const asked: PendingApproval = {
               sessionId: evt.sessionId,
               requestId: evt.requestId,
               toolUseID: evt.toolUseID,
@@ -407,13 +440,19 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
                 ? { suppressAlwaysAllowRule: true }
                 : {}),
               ...(evt.requiresPerCallApproval ? { requiresPerCallApproval: true } : {}),
-            })
+            }
+            // A repeated delivery of the same ask replaces it in place.
+            setApprovals((cur) =>
+              cur.some((a) => a.requestId === asked.requestId)
+                ? cur.map((a) => (a.requestId === asked.requestId ? asked : a))
+                : [...cur, asked]
+            )
             return
           }
           case "session_ended": {
             setSessionEnded(true)
             setStatusBoth("idle")
-            setPendingApproval(null)
+            setApprovals(NO_APPROVALS)
             return
           }
           default:
@@ -596,10 +635,27 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
     }
   }, [sessionId, setStatusBoth, t])
 
+  const pendingApproval = approvals.find((a) => a.status !== "interrupted") ?? approvals[0] ?? null
+  const approvalsWaiting = pendingApproval ? approvals.length - 1 : 0
+
+  const dismissApproval = useCallback((requestId: string) => {
+    setApprovals((cur) => withoutApprovals(cur, (a) => a.requestId === requestId))
+  }, [])
+
   const respond = useCallback(
     async (decision: ApprovalDecision, options?: ApprovalResponseOptions) => {
       const approval = pendingApproval
       if (!approval) return
+      // The answer clears the card it was given for, never one that arrived
+      // while it was in flight.
+      const clearAnswered = () =>
+        setApprovals((cur) => withoutApprovals(cur, (a) => a.requestId === approval.requestId))
+      // An interrupted ask was already denied on the Host; there is nothing
+      // left to answer.
+      if (approval.status === "interrupted") {
+        clearAnswered()
+        return
+      }
       const reason = denialReasonOf(decision, options)
       try {
         const queued = options?.updatedInput
@@ -613,7 +669,7 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
               },
             })
         if (queued) {
-          setPendingApproval(null)
+          clearAnswered()
           if (reason) {
             await enqueueHostStateIntentIfAvailable({
               sessionId: approval.sessionId,
@@ -635,11 +691,11 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
         } else {
           await approveTool(...approvalArgs)
         }
-        setPendingApproval(null)
+        clearAnswered()
       } catch (err) {
         if (isControlForbidden(err)) {
           setCanControl(false)
-          setPendingApproval(null)
+          clearAnswered()
           toast.warning(t("detail.controlLost"))
         } else {
           // Keep the card mounted so the user can retry the decision.
@@ -661,6 +717,8 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
     messages,
     status,
     pendingApproval,
+    approvalsWaiting,
+    dismissApproval,
     canControl,
     attachDowngrade,
     sessionEnded,
@@ -672,4 +730,15 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
     respond,
     reconcileTranscript,
   }
+}
+
+const NO_APPROVALS: PendingApproval[] = []
+
+/** `cur` without the entries `drop` matches; the same array when none do. */
+function withoutApprovals(
+  cur: PendingApproval[],
+  drop: (approval: PendingApproval) => boolean
+): PendingApproval[] {
+  const next = cur.filter((approval) => !drop(approval))
+  return next.length === cur.length ? cur : next.length === 0 ? NO_APPROVALS : next
 }

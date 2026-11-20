@@ -50,6 +50,13 @@ export async function respondToChatApproval(
   if (authorized === null) return
   decision =
     approval.suppressAlwaysAllowRule && authorized === "allow_always" ? "allow" : authorized
+  // An interrupted ask was already denied by its runtime (the turn stopped,
+  // the session closed). Its card stays only so the user sees why; an answer
+  // to it is a dismissal, never a grant, a standing rule or a follow-up.
+  if (isApprovalInterrupted(store.getState(), approval)) {
+    store.getState().clearApproval(approval.requestId, approval.sessionId)
+    return
+  }
   // A deny's reason ("not that — back it up instead"). Runtimes whose
   // refusal carries text get it as the denied call's result; the rest get
   // it as a follow-up to the same turn, right behind the refusal, so the
@@ -76,8 +83,14 @@ export async function respondToChatApproval(
     if (approval.requestId.startsWith(RENDERER_TOOL_HOST_APPROVAL_PREFIX)) {
       const { resolveApproval, grantSessionBypass } =
         await import("@/lib/ai/agent/execution/hitl/approval-registry")
+      // A waiter that is gone (the turn was cancelled, the ask timed out)
+      // already took its answer. A late click only takes the card down.
+      if (!resolveApproval(approval.sessionId, approval.requestId, { decision })) {
+        store.getState().clearApproval(approval.requestId, approval.sessionId)
+        return
+      }
+      // Same tick as the resolve: the released call cannot ask again first.
       if (decision === "allow_always") grantSessionBypass(approval.sessionId, approval.toolName)
-      resolveApproval(approval.sessionId, approval.requestId, { decision })
       await recordChatToolApprovalDecision(approval, decision, outboundGrant)
       store.getState().clearApproval(approval.requestId, approval.sessionId)
       followDenialWithReason()
@@ -93,15 +106,15 @@ export async function respondToChatApproval(
     const { isBuiltInSkillApprovalRequestId, grantDesktopSkillSessionBypass } =
       await import("@/lib/skills/built-in/desktop-hitl")
     if (isBuiltInSkillApprovalRequestId(approval.requestId)) {
-      if (decision === "allow_always") {
-        grantDesktopSkillSessionBypass(approval.sessionId, approval.toolName)
-      }
       const { resolveApproval } = await import("@/lib/ai/agent/execution/hitl/approval-registry")
-      resolveApproval(approval.sessionId, approval.requestId, {
+      const answered = resolveApproval(approval.sessionId, approval.requestId, {
         decision: decision === "deny" ? "deny" : "allow",
       })
+      if (answered && decision === "allow_always") {
+        grantDesktopSkillSessionBypass(approval.sessionId, approval.toolName)
+      }
       store.getState().clearApproval(approval.requestId, approval.sessionId)
-      followDenialWithReason()
+      if (answered) followDenialWithReason()
       return
     }
   }
@@ -118,6 +131,14 @@ export async function respondToChatApproval(
     const { loadPort } = await import("@/lib/modules/ports")
     const speech = await loadPort("speech")
     if (speech?.live.isToolApprovalRequest(approval.requestId)) {
+      const { resolveApproval } = await import("@/lib/ai/agent/execution/hitl/approval-registry")
+      const answered = resolveApproval(approval.sessionId, approval.requestId, {
+        decision: decision === "deny" ? "deny" : "allow",
+      })
+      store.getState().clearApproval(approval.requestId, approval.sessionId)
+      if (!answered) return
+      // After the resolve, so a call that is no longer waiting never leaves
+      // a standing rule behind. The worst a slow save costs is one more ask.
       if (decision === "allow_always") {
         const settingsState = useSettingsStore.getState()
         const ap = settingsState.settings?.agentPermissions ?? {}
@@ -128,11 +149,6 @@ export async function respondToChatApproval(
         )
         await settingsState.save({ agentPermissions: { ...ap, toolRules: nextRules } })
       }
-      const { resolveApproval } = await import("@/lib/ai/agent/execution/hitl/approval-registry")
-      resolveApproval(approval.sessionId, approval.requestId, {
-        decision: decision === "deny" ? "deny" : "allow",
-      })
-      store.getState().clearApproval(approval.requestId, approval.sessionId)
       followDenialWithReason()
       return
     }
@@ -153,6 +169,7 @@ export async function respondToChatApproval(
     const { isExternalAgentApprovalRequestId, resolveExternalApproval, getExternalApprovalTarget } =
       await import("@/lib/ai/agent/external/session/chat-decision-bridge")
     if (isExternalAgentApprovalRequestId(approval.requestId)) {
+      let answered = false
       try {
         // Where the agent actually is decides how the answer travels. A
         // host-run agent has no adapter in this shell to hand a response
@@ -180,7 +197,7 @@ export async function respondToChatApproval(
               const { getExternalAgentManager } = await import("@/lib/ai/agent/external/manager")
               await getExternalAgentManager().respondToPermission(agentId, agentSessionId, response)
             }
-        const answered = await resolveExternalApproval(approval.requestId, decision, respond)
+        answered = await resolveExternalApproval(approval.requestId, decision, respond)
         // An unknown id means the turn already released it (the adapter is
         // gone). Clear the card rather than leaving a dialog the user
         // cannot dismiss.
@@ -201,63 +218,72 @@ export async function respondToChatApproval(
         return
       }
       store.getState().clearApproval(approval.requestId, approval.sessionId)
-      // ACP's permission answer has no text field: the reason follows.
-      followDenialWithReason()
+      // ACP's permission answer has no text field: the reason follows — to
+      // a turn that took the answer, never to one that already moved on.
+      if (answered) followDenialWithReason()
       return
     }
   }
-  // Remember a refusal for the rest of this conversation. Without this a
-  // "Deny" bought nothing: the same call asked again next turn, and any
-  // widening in between (a new always-allow, a broader rule in Settings)
-  // would start auto-approving the very thing the user just refused.
-  //
-  // An enforced outbound refusal is not remembered here: its receipt fences
-  // the recipient for the rest of the requester's instruction, on every
-  // tool and child run (ADR-0239), and a new instruction lifts it.
-  if (decision === "deny" && !approval.outbound?.enforced) {
-    const { rememberDenial } = await import("@/lib/ai/agent/execution/permissions/session-denials")
-    rememberDenial(approval.sessionId, approval.toolName, approval.input)
-  }
-  // Persist the always-allow choice. Prefer a TARGET-SCOPED rule
-  // (`Bash(git status)`, `Read(/path/x)`) so the grant is precise and
-  // future matching calls auto-resolve via the sidecar ruleset — falling
-  // back to a coarse tool-NAME grant only when no useful target can be
-  // extracted.
-  //
-  // The scope is the action the user READ, never its family: the example
-  // here used to say `Bash(git *)`, and so did the derivation, which meant
-  // approving `git status` also bought `git push --force` forever. See
-  // `deriveAllowRuleFromApproval` — a family grant is now something the
-  // user authors deliberately in Settings, not something a click arrives at.
-  if (decision === "allow_always") {
-    const rule = deriveAllowRuleFromApproval(approval.toolName, approval.input)
-    if (rule) {
-      const settingsState = useSettingsStore.getState()
-      const ap = settingsState.settings?.agentPermissions ?? {}
-      const nextRules = setToolRule(ap.toolRules, rule.tool, rule.pattern, "allow")
-      await settingsState.save({ agentPermissions: { ...ap, toolRules: nextRules } })
-    } else {
-      await useSettingsStore.getState().toggleAlwaysAllow(approval.toolName, true)
+  // The standing choices this answer makes. Written only once the runtime
+  // that asked has taken the answer: a dispatch that is refused (a stale or
+  // already-settled ask) must leave no rule, no remembered denial and no
+  // session grant behind.
+  const rememberStandingChoice = async () => {
+    // Remember a refusal for the rest of this conversation. Without this a
+    // "Deny" bought nothing: the same call asked again next turn, and any
+    // widening in between (a new always-allow, a broader rule in Settings)
+    // would start auto-approving the very thing the user just refused.
+    //
+    // An enforced outbound refusal is not remembered here: its receipt fences
+    // the recipient for the rest of the requester's instruction, on every
+    // tool and child run (ADR-0239), and a new instruction lifts it.
+    if (decision === "deny" && !approval.outbound?.enforced) {
+      const { rememberDenial } =
+        await import("@/lib/ai/agent/execution/permissions/session-denials")
+      rememberDenial(approval.sessionId, approval.toolName, approval.input)
+    }
+    // Persist the always-allow choice. Prefer a TARGET-SCOPED rule
+    // (`Bash(git status)`, `Read(/path/x)`) so the grant is precise and
+    // future matching calls auto-resolve via the sidecar ruleset — falling
+    // back to a coarse tool-NAME grant only when no useful target can be
+    // extracted.
+    //
+    // The scope is the action the user READ, never its family: the example
+    // here used to say `Bash(git *)`, and so did the derivation, which meant
+    // approving `git status` also bought `git push --force` forever. See
+    // `deriveAllowRuleFromApproval` — a family grant is now something the
+    // user authors deliberately in Settings, not something a click arrives at.
+    if (decision === "allow_always") {
+      const rule = deriveAllowRuleFromApproval(approval.toolName, approval.input)
+      if (rule) {
+        const settingsState = useSettingsStore.getState()
+        const ap = settingsState.settings?.agentPermissions ?? {}
+        const nextRules = setToolRule(ap.toolRules, rule.tool, rule.pattern, "allow")
+        await settingsState.save({ agentPermissions: { ...ap, toolRules: nextRules } })
+      } else {
+        await useSettingsStore.getState().toggleAlwaysAllow(approval.toolName, true)
+      }
+    }
+    // ADR-0020 W3 — remember the operator's Allow for any computer-use
+    // plugin tool so subsequent turns inside this session skip the chat
+    // modal when the active character's `chatConsentMode ===
+    // "session-grant"`. The Rust ConsentBroker keeps its own
+    // per-tuple session grants for defence-in-depth; this store only
+    // governs the chat-side prompt cadence. Recording unconditionally
+    // is safe because the SEND-side check
+    // (`applyComputerUseTools`) consults `chatConsentMode` before
+    // honouring a grant.
+    if (decision === "allow" || decision === "allow_always") {
+      if (!approval.suppressAlwaysAllowRule && isComputerUsePluginToolName(approval.toolName)) {
+        const { recordSessionGrant } =
+          await import("@/lib/plugin/security/computer-use-session-grants")
+        recordSessionGrant(approval.sessionId, approval.toolName)
+      }
     }
   }
-  // ADR-0020 W3 — remember the operator's Allow for any computer-use
-  // plugin tool so subsequent turns inside this session skip the chat
-  // modal when the active character's `chatConsentMode ===
-  // "session-grant"`. The Rust ConsentBroker keeps its own
-  // per-tuple session grants for defence-in-depth; this store only
-  // governs the chat-side prompt cadence. Recording unconditionally
-  // is safe because the SEND-side check
-  // (`applyComputerUseTools`) consults `chatConsentMode` before
-  // honouring a grant.
-  if (decision === "allow" || decision === "allow_always") {
-    if (!approval.suppressAlwaysAllowRule && isComputerUsePluginToolName(approval.toolName)) {
-      const { recordSessionGrant } =
-        await import("@/lib/plugin/security/computer-use-session-grants")
-      recordSessionGrant(approval.sessionId, approval.toolName)
-    }
-  }
+  let queued: Awaited<ReturnType<typeof enqueueHostStateIntentIfAvailable>> | false = false
   try {
-    const queued = options?.updatedInput
+    queued = options?.updatedInput
       ? false
       : await enqueueHostStateIntentIfAvailable({
           sessionId: approval.sessionId,
@@ -267,13 +293,6 @@ export async function respondToChatApproval(
             decision,
           },
         })
-    if (queued) {
-      store.getState().clearApproval(approval.requestId, approval.sessionId)
-      // The HostState answer is a fixed wire shape every paired Host
-      // validates; the reason travels as the follow-up steer it is.
-      followDenialWithReason()
-      return
-    }
   } catch (error) {
     store.getState().setSessionDiagnostic(
       approval.sessionId,
@@ -285,6 +304,14 @@ export async function respondToChatApproval(
         },
       })
     )
+    return
+  }
+  if (queued) {
+    await rememberStandingChoice()
+    store.getState().clearApproval(approval.requestId, approval.sessionId)
+    // The HostState answer is a fixed wire shape every paired Host
+    // validates; the reason travels as the follow-up steer it is.
+    followDenialWithReason()
     return
   }
   const handle = getExecutionHandle(approval.sessionId)
@@ -324,11 +351,34 @@ export async function respondToChatApproval(
       await approveTool(...approvalArgs)
     }
   }
-  // The receipt asserts the backend received the decision, so it is written
-  // only after either dispatch path succeeds. A failure leaves the approval
-  // mounted and pending, allowing the operator to retry.
+  // The receipt and the standing choice assert the backend received the
+  // decision, so they are written only after either dispatch path succeeds.
+  // A failure leaves the approval mounted and pending, allowing the operator
+  // to retry.
+  await rememberStandingChoice()
   await recordChatToolApprovalDecision(approval, decision, outboundGrant)
   // Scope the clear to the approval's own session so resolving a gate in
   // one pane never disturbs another pane's pending queue.
   store.getState().clearApproval(approval.requestId, approval.sessionId)
+}
+
+/**
+ * Whether the ask this card shows was already ended by its runtime. Read from
+ * the store's live entry, which a `permission_interrupted` marks after the
+ * card was handed to the caller, falling back to the snapshot passed in.
+ */
+function isApprovalInterrupted(
+  state: ReturnType<typeof useChatStore.getState>,
+  approval: PendingApproval
+): boolean {
+  if (approval.status === "interrupted") return true
+  const queues = [
+    ...Object.values(state.sessions ?? {}).map((slice) => slice.pendingApprovals),
+    state.pendingApprovals,
+  ]
+  for (const queue of queues) {
+    const live = queue?.find((entry) => entry.requestId === approval.requestId)
+    if (live) return live.status === "interrupted"
+  }
+  return false
 }

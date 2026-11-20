@@ -7,6 +7,7 @@ import type { TestFrame, TestStreamArgs, TestMessage } from "../../../test-suppo
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { dispatchAiSdk, __testing__ } from "./index.ts"
+import { awaitApproval } from "../../policy/permission/approval.ts"
 import { builtinToModelOutput } from "../../tools/adapters/ai-sdk-output.ts"
 
 function makeFakeStream(
@@ -3677,6 +3678,58 @@ test("interrupt() aborts the in-flight provider request (not just a cooperative 
   await waitForEvent(events, (e) => e.type === "session_ended")
   const ended = events.find((e) => e.type === "session_ended")
   assert.equal(ended!.error, undefined, "an interrupted turn ends cleanly, no error surfaced")
+})
+
+test("a Stop tells every waiting card its ask is gone, once, with the Stop's reason", async () => {
+  const { events, emit } = captureEmit()
+  // Filled once the session exists; the stream only runs after that.
+  const ref: { session?: ReturnType<typeof startSession> } = {}
+  // A gate waiting on the step's abort signal, the way a tool's approval does:
+  // the abort takes the waiter out of the map, so the notice must not depend
+  // on the drain finding it afterwards.
+  const fakeStream = (args: Record<string, unknown>) => {
+    const signal = args.abortSignal as AbortSignal
+    void awaitApproval({
+      pendingApprovals: ref.session!.pendingApprovals,
+      requestId: "req-gate",
+      entry: { input: {} },
+      signal,
+      onAbort: () =>
+        emit({
+          type: "permission_interrupted",
+          sessionId: "s1",
+          requestId: "req-gate",
+          reason: "aborted",
+        }),
+    })
+    return {
+      fullStream: (async function* () {
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")))
+        })
+      })(),
+      usage: Promise.resolve({}),
+    }
+  }
+  const session = startSession({
+    provider: "openai",
+    sessionId: "s1",
+    firstPrompt: "hi",
+    sendOptions: { model: "gpt-x", providerCredentials: { apiKey: "k", protocol: "openai" } },
+    emit,
+    log: () => {},
+    streamText: fakeStream,
+  })
+  ref.session = session
+  await new Promise<void>((r) => setTimeout(r, 20))
+  assert.equal(session.pendingApprovals.size, 1)
+  await session.q.interrupt()
+  const notices = events.filter((e) => e.type === "permission_interrupted")
+  assert.deepEqual(
+    notices.map((e) => [e.requestId, e.reason]),
+    [["req-gate", "interrupted"]]
+  )
+  assert.equal(session.pendingApprovals.size, 0)
 })
 
 test("interrupt() resolves all pending round-trips so a stuck session cleans up", async () => {

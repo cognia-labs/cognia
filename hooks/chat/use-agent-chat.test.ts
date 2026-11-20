@@ -7662,6 +7662,63 @@ describe("useAgentChat — actions", () => {
     chatState.activeSessionId = "sess-1"
   })
 
+  it("a remote ask's backstop outlasts other progress and stands down on its own call's result", async () => {
+    const registry = await import("@/lib/companion/remote-attach-registry")
+    registry.__resetRemoteAttachForTests()
+    registry.attachSession("sess-1", "dev-remote", {
+      eventStreams: [
+        { leaseId: "esl-ready", transport: "ws", state: "ready", openedAt: Date.now() },
+      ],
+      grants: [registry.REMOTE_CONTROL_CAPABILITY],
+    })
+    chatState.activeSessionId = "sess-other"
+    chatState.openSessionIds = ["sess-other"]
+    renderHook(() => useAgentChat())
+    await flush()
+    subscribers.forEach((sub) => sub(chatState))
+    try {
+      await act(async () => {
+        _messageCallback?.({
+          type: "permission_request",
+          sessionId: "sess-1",
+          requestId: "req-remote",
+          toolUseID: "tu-r",
+          toolName: "write",
+          input: {},
+        })
+      })
+      expect(registry.hasArmedBackstop("sess-1")).toBe(true)
+
+      // A parallel call streams and finishes while the phone still decides.
+      await act(async () => {
+        _messageCallback?.({
+          type: "event",
+          sessionId: "sess-1",
+          event: {
+            type: "user",
+            message: { content: [{ type: "tool_result", tool_use_id: "tu-other", content: "ok" }] },
+          },
+        })
+      })
+      expect(registry.hasArmedBackstop("sess-1")).toBe(true)
+
+      await act(async () => {
+        _messageCallback?.({
+          type: "event",
+          sessionId: "sess-1",
+          event: {
+            type: "user",
+            message: { content: [{ type: "tool_result", tool_use_id: "tu-r", content: "done" }] },
+          },
+        })
+      })
+      expect(registry.hasArmedBackstop("sess-1")).toBe(false)
+    } finally {
+      registry.__resetRemoteAttachForTests()
+      chatState.activeSessionId = "sess-1"
+    }
+  })
+
   it("bounds a local approval even when its pane closes before the user answers", async () => {
     renderHook(useAgentChat)
     await flush()

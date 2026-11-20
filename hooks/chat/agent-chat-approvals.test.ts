@@ -30,6 +30,32 @@ jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   approveTool: (...args: unknown[]) => approveTool(...args),
 }))
 
+const rememberDenial = jest.fn()
+jest.mock("@/lib/ai/agent/execution/permissions/session-denials", () => ({
+  rememberDenial: (...args: unknown[]) => rememberDenial(...args),
+}))
+
+const saveSettings = jest.fn(async (..._args: unknown[]) => undefined)
+const toggleAlwaysAllow = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("@/stores/settings", () => ({
+  useSettingsStore: {
+    getState: () => ({
+      settings: { agentPermissions: {} },
+      save: (...args: unknown[]) => saveSettings(...args),
+      toggleAlwaysAllow: (...args: unknown[]) => toggleAlwaysAllow(...args),
+    }),
+  },
+}))
+
+jest.mock("@/lib/db/mobile-outbound-queue", () => ({
+  enqueueHostStateIntentIfAvailable: async () => false,
+}))
+jest.mock("@/lib/chat/canonical-sink", () => ({ recordChatCanonicalEvents: jest.fn() }))
+jest.mock("@/lib/modules/ports", () => ({ loadPort: async () => null }))
+jest.mock("@/lib/ai/agent/external/session/chat-decision-bridge", () => ({
+  isExternalAgentApprovalRequestId: () => false,
+}))
+
 function approval(requestId: string, extra: Partial<PendingApproval> = {}): PendingApproval {
   return {
     sessionId: "chat",
@@ -41,9 +67,16 @@ function approval(requestId: string, extra: Partial<PendingApproval> = {}): Pend
   }
 }
 
-function context() {
+function context(pendingApprovals: PendingApproval[] = []) {
   const clearApproval = jest.fn()
-  const store = { getState: () => ({ clearApproval }) } as unknown as typeof useChatStore
+  const store = {
+    getState: () => ({
+      clearApproval,
+      setSessionDiagnostic: jest.fn(),
+      sessions: { chat: { pendingApprovals } },
+      pendingApprovals: [],
+    }),
+  } as unknown as typeof useChatStore
   const send = jest.fn(async () => true)
   const ctx: AgentChatApprovalContext = {
     store,
@@ -56,6 +89,7 @@ function context() {
 beforeEach(() => {
   jest.clearAllMocks()
   authorizeSharedSessionApproval.mockImplementation(async (_approval, decision) => decision)
+  resolveApproval.mockReturnValue(true)
 })
 
 it("does nothing when a shared session refuses this person's answer", async () => {
@@ -112,4 +146,103 @@ it("denies a built-in skill consent in the renderer and sends the reason as a fo
   expect(clearApproval).toHaveBeenCalledWith("builtin-skill:7", "chat")
   expect(send).toHaveBeenCalledWith("back it up first", undefined, { sessionId: "chat" })
   expect(approveTool).not.toHaveBeenCalled()
+})
+
+describe("an answer that arrives after its ask is gone", () => {
+  it("a late always-allow on a renderer ask grants nothing and only takes the card down", async () => {
+    resolveApproval.mockReturnValue(false)
+    const { ctx, clearApproval } = context()
+
+    await respondToChatApproval(ctx, approval("external-tool-host:late"), "allow_always")
+
+    expect(grantSessionBypass).not.toHaveBeenCalled()
+    expect(recordChatToolApprovalDecision).not.toHaveBeenCalled()
+    expect(clearApproval).toHaveBeenCalledWith("external-tool-host:late", "chat")
+  })
+
+  it("a late denial with a reason sends no follow-up into the next turn", async () => {
+    resolveApproval.mockReturnValue(false)
+    const { ctx, clearApproval, send } = context()
+
+    await respondToChatApproval(ctx, approval("external-tool-host:gone"), "deny", {
+      message: "do it differently",
+    })
+    await respondToChatApproval(ctx, approval("builtin-skill:gone"), "deny", {
+      message: "do it differently",
+    })
+
+    expect(send).not.toHaveBeenCalled()
+    expect(recordChatToolApprovalDecision).not.toHaveBeenCalled()
+    expect(clearApproval).toHaveBeenCalledTimes(2)
+  })
+
+  it("a late always-allow on a built-in skill ask grants no session bypass", async () => {
+    resolveApproval.mockReturnValue(false)
+    const { ctx } = context()
+
+    await respondToChatApproval(ctx, approval("builtin-skill:late"), "allow_always")
+
+    expect(grantDesktopSkillSessionBypass).not.toHaveBeenCalled()
+  })
+
+  it("an interrupted card is dismissed, never dispatched or remembered", async () => {
+    const interrupted = approval("sidecar-1", { status: "interrupted" })
+    const { ctx, clearApproval } = context([interrupted])
+
+    // The caller's snapshot predates the interrupt; the store's entry decides.
+    await respondToChatApproval(ctx, approval("sidecar-1"), "allow_always")
+
+    expect(approveTool).not.toHaveBeenCalled()
+    expect(saveSettings).not.toHaveBeenCalled()
+    expect(toggleAlwaysAllow).not.toHaveBeenCalled()
+    expect(recordChatToolApprovalDecision).not.toHaveBeenCalled()
+    expect(clearApproval).toHaveBeenCalledWith("sidecar-1", "chat")
+  })
+
+  it("a dispatch the runtime refuses leaves no standing rule or remembered denial", async () => {
+    const { ctx, clearApproval } = context()
+    approveTool.mockRejectedValueOnce(new Error("stale request"))
+    await expect(
+      respondToChatApproval(
+        ctx,
+        approval("sidecar-2", { input: { command: "git status" } }),
+        "allow_always"
+      )
+    ).rejects.toThrow("stale request")
+
+    approveTool.mockRejectedValueOnce(new Error("stale request"))
+    await expect(respondToChatApproval(ctx, approval("sidecar-3"), "deny")).rejects.toThrow(
+      "stale request"
+    )
+
+    expect(saveSettings).not.toHaveBeenCalled()
+    expect(toggleAlwaysAllow).not.toHaveBeenCalled()
+    expect(rememberDenial).not.toHaveBeenCalled()
+    expect(recordChatToolApprovalDecision).not.toHaveBeenCalled()
+    expect(clearApproval).not.toHaveBeenCalled()
+  })
+
+  it("an accepted always-allow writes its rule after the runtime took the answer", async () => {
+    const order: string[] = []
+    approveTool.mockImplementationOnce(async () => {
+      order.push("dispatch")
+    })
+    saveSettings.mockImplementationOnce(async () => {
+      order.push("rule")
+    })
+    toggleAlwaysAllow.mockImplementationOnce(async () => {
+      order.push("rule")
+    })
+    const { ctx, clearApproval } = context()
+
+    await respondToChatApproval(
+      ctx,
+      approval("sidecar-4", { input: { command: "git status" } }),
+      "allow_always"
+    )
+
+    expect(order).toEqual(["dispatch", "rule"])
+    expect(approveTool).toHaveBeenCalledWith("chat", "sidecar-4", "allow")
+    expect(clearApproval).toHaveBeenCalledWith("sidecar-4", "chat")
+  })
 })

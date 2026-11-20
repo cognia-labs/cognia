@@ -600,7 +600,7 @@ test("createToolPermissionGate: no channel still honours bypass/suppress/alwaysA
 
 test("gate settles a pending approval as denied when the step aborts", async () => {
   const pendingApprovals = new Map()
-  const emitted = []
+  const emitted: Array<Record<string, unknown>> = []
   const gate = createToolPermissionGate({
     emit: (m) => emitted.push(m),
     sessionId: "s",
@@ -614,6 +614,42 @@ test("gate settles a pending approval as denied when the step aborts", async () 
   assert.equal(pendingApprovals.size, 1)
   ac.abort()
   await assert.rejects(() => p, /aborted/)
+  assert.equal(pendingApprovals.size, 0)
+  // The card that asked hears its ask is gone.
+  const asked = emitted.find((m) => m.type === "permission_request")!
+  assert.deepEqual(
+    emitted.filter((m) => m.type === "permission_interrupted"),
+    [
+      {
+        type: "permission_interrupted",
+        sessionId: "s",
+        requestId: asked.requestId,
+        reason: "aborted",
+      },
+    ]
+  )
+})
+
+test("a reused gate times its ask by the current turn's TTL, not the first turn's", async () => {
+  const pendingApprovals = new Map()
+  const emitted: Array<Record<string, unknown>> = []
+  // The session's first turn asked for a long wait; the gate is built then.
+  const sendOptions = { approvalTtlMs: 60_000 }
+  const gate = createToolPermissionGate({
+    emit: (m) => emitted.push(m),
+    sessionId: "s",
+    pendingApprovals,
+    sendOptions,
+  })
+  // A later turn stamps a short TTL on the same options object.
+  sendOptions.approvalTtlMs = 20
+  const started = Date.now()
+  await assert.rejects(() => gate("mcp__cognia-tools__bash", { command: "ls" }))
+  assert.ok(Date.now() - started < 5_000, "the ask outlived the current turn's TTL")
+  assert.deepEqual(
+    emitted.filter((m) => m.type === "permission_interrupted").map((m) => m.reason),
+    ["timeout"]
+  )
   assert.equal(pendingApprovals.size, 0)
 })
 

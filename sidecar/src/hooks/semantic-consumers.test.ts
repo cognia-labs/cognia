@@ -87,6 +87,14 @@ test("aborting an approval prevents a late answer and drains ownership", async (
   await assert.rejects(waiting, { name: "AbortError" })
   assert.equal(h.pendingApprovals.size, 0)
   assert.equal(h.pendingPluginHookCalls.size, 0)
+  // Its card hears the ask is gone.
+  const asked = h.frames.find((frame) => frame.type === "permission_request")!
+  assert.deepEqual(
+    h.frames
+      .filter((frame) => frame.type === "permission_interrupted")
+      .map((frame) => [frame.requestId, frame.reason]),
+    [[asked.requestId, "aborted"]]
+  )
 })
 
 test("aborting an outstanding projection drains the bridge and rejects late output", async () => {
@@ -109,6 +117,10 @@ test("a bridge timeout requires explicit approval and its TTL denies unattended 
     new Promise((resolve) => setTimeout(resolve, 15)),
   ])
   assert.equal(h.frames.filter((frame) => frame.type === "permission_request").length, 1)
+  assert.deepEqual(
+    h.frames.filter((frame) => frame.type === "permission_interrupted").map((f) => f.reason),
+    ["timeout"]
+  )
   assert.equal(h.pendingApprovals.size, 0)
   assert.equal(h.pendingPluginHookCalls.size, 0)
 })
