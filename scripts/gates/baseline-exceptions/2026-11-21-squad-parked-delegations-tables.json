@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:tables",
+  "allowGrowth": 1,
+  "owner": "lib/squads",
+  "repaymentPhase": "1",
+  "reason": "Delegation audit F03 adds squadParkedDelegations (schema v259): a Squad delegation parked for an approval had only an in-memory record and run parameters, so a reload dropped it. The table keeps it, its texts through the Squad PII gate, until it is approved, cancelled or settled. It is claimed by the squads module manifest, so unclaimedTables does not grow."
+}

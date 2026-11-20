@@ -3663,6 +3663,7 @@
       "cancel": "Cancel",
       "description": "Work handed off to background agents, external agents, or other teams.",
       "empty": "No delegations in this team.",
+      "restoredRedacted": "Restored after a restart. Personal details in its instructions were replaced with placeholders, and it runs with those once approved.",
       "runStatus": {
         "paused": "Paused",
         "queued": "Queued",

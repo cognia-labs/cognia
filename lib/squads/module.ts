@@ -17,7 +17,10 @@ export default defineHostModule({
     "app/agent-teams/",
     "components/settings/agent/agent-team-templates-section",
     "components/settings/squads/",
+    "lib/db/squad-parked-delegations.ts",
   ],
+  // Delegations parked for an approval, kept across a restart (schema v259).
+  tables: ["squadParkedDelegations"],
   // What the Squad screens build on (G4 checks this equals what they import).
   dependsOn: [
     "agent",

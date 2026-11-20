@@ -439,7 +439,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 257
+export const CURRENT_SCHEMA_VERSION = 259
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1117,6 +1117,10 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   // (`lib/db/plugin-data-snapshots.ts`, `lib/plugin/dexie/data-snapshots.ts`).
   pluginDataSnapshots: "&id, pluginId",
   pluginDataSnapshotRows: "[snapshotId+table+chunk], snapshotId",
+  // v259 — Squad delegations parked for an approval, their texts through the
+  // PII gate, so a restart can still approve them
+  // (`lib/db/squad-parked-delegations.ts`, `lib/squads/delegation-orchestrator.ts`).
+  squadParkedDelegations: "&id",
 }
 
 let databaseConnectionSequence = 0
@@ -1755,6 +1759,11 @@ export class CogniaDB extends Dexie {
   pluginDataSnapshotRows!: Table<
     import("./plugin-data-snapshots").PluginDataSnapshotChunk,
     [string, string, number]
+  >
+  // v259 — Squad delegations parked for an approval (ADR-0252 §3).
+  squadParkedDelegations!: Table<
+    import("./squad-parked-delegations").SquadParkedDelegationRow,
+    string
   >
 
   messageSyncClock!: Table<MessageSyncClock, "singleton">

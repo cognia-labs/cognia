@@ -36,8 +36,30 @@ import {
 } from "./schema"
 import type { OutboundJobRow } from "./connector-types"
 
+it("v259 adds an empty parked-delegation store without changing the stores before it", async () => {
+  expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(259)
+  const name = "cognia-squad-parked-delegations-v259-upgrade"
+  const { squadParkedDelegations: _added, ...before } = CURRENT_SCHEMA
+  const previous = new Dexie(name)
+  previous.version(CURRENT_SCHEMA_VERSION - 1).stores(before)
+  await previous.open()
+  await previous.table("agentTeamRuns").put({ id: "run-1", teamId: "squad-1", status: "running" })
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
+    expect(await current.squadParkedDelegations.count()).toBe(0)
+    expect(current.squadParkedDelegations.schema.primKey.keyPath).toBe("id")
+    expect(current.squadParkedDelegations.schema.indexes).toEqual([])
+    expect(await current.agentTeamRuns.get("run-1")).toMatchObject({ teamId: "squad-1" })
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v257 adds empty plugin data snapshot stores without changing v256 data", async () => {
-  expect(CURRENT_SCHEMA_VERSION).toBe(257)
   const name = "cognia-plugin-data-snapshots-v257-upgrade"
   const previous = new Dexie(name)
   previous.version(256).stores({
@@ -56,7 +78,7 @@ it("v257 adds empty plugin data snapshot stores without changing v256 data", asy
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(257)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(await current.pluginDataSnapshots.count()).toBe(0)
     expect(await current.pluginDataSnapshotRows.count()).toBe(0)
     expect(current.pluginDataSnapshots.schema.primKey.keyPath).toBe("id")

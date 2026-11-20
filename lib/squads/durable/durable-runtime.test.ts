@@ -9,7 +9,6 @@ import {
   createDurableTeamCoordinator,
   durableTeamSpec,
   getDurableTeamCoordinator,
-  redactTeamTextForPersistence,
 } from "./durable-runtime"
 import * as runtimeDb from "@/lib/db/agent-team-runtime"
 import {
@@ -160,21 +159,6 @@ describe("durableTeamSpec", () => {
       objective: "Ship",
       maxConcurrentTeammates: 1,
     })
-  })
-})
-
-describe("redactTeamTextForPersistence", () => {
-  afterEach(() => mockLeakCheck.mockReset().mockReturnValue(undefined))
-
-  it("redacts with @cognia/redact", () => {
-    const redacted = redactTeamTextForPersistence("Contact operator@example.com now")
-    expect(redacted).toBeDefined()
-    expect(redacted).not.toContain("operator@example.com")
-  })
-
-  it("refuses text that still leaks after redaction", () => {
-    mockLeakCheck.mockReturnValue(false)
-    expect(redactTeamTextForPersistence("anything")).toBeUndefined()
   })
 })
 

@@ -3,6 +3,7 @@
   "cancel": "取消",
   "description": "委派给后台 Agent、外部 Agent 或其他团队的工作。",
   "empty": "该团队暂无委派。",
+  "restoredRedacted": "重启后已恢复。指令中的个人信息已替换为占位符，批准后将按替换后的内容运行。",
   "runStatus": {
     "paused": "已暂停",
     "queued": "排队中",

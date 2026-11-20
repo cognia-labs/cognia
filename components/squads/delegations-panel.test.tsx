@@ -112,6 +112,29 @@ describe("DelegationsPanel", () => {
     expect(cancelDelegationMock).toHaveBeenCalledWith("d2")
   })
 
+  it("says a delegation restored after a restart runs with redacted instructions (F03)", () => {
+    mockDelegations = [
+      makeDelegation({
+        id: "restored",
+        status: "awaiting_approval",
+        metadata: { restoredRedacted: true },
+      }),
+      makeDelegation({ id: "kept", status: "awaiting_approval", reason: "Kept as written" }),
+    ]
+    render(<DelegationsPanel />)
+    // Only the one whose run text changed says so.
+    expect(screen.getAllByTestId("restored-redacted")).toHaveLength(1)
+    expect(screen.getByText("restoredRedacted")).toBeInTheDocument()
+  })
+
+  it("drops the redaction note once the restored delegation is no longer waiting", () => {
+    mockDelegations = [
+      makeDelegation({ id: "ran", status: "completed", metadata: { restoredRedacted: true } }),
+    ]
+    render(<DelegationsPanel />)
+    expect(screen.queryByTestId("restored-redacted")).not.toBeInTheDocument()
+  })
+
   it("hides action buttons and surfaces the error for a settled delegation", () => {
     mockDelegations = [makeDelegation({ id: "d3", status: "failed", error: "boom" })]
     render(<DelegationsPanel />)

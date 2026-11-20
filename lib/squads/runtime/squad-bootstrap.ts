@@ -22,6 +22,11 @@ export async function start(ctx: Pick<RendererRuntimeContext, "log">): Promise<(
     // A run superseded by its own restart finishes "failed" on purpose.
     if (!outcome.ok && !disposed)
       ctx.log("warn", `agent team bootstrap failed at ${outcome.failedStage ?? "unknown stage"}`)
+    if (outcome.parkedDelegationsFailed && !disposed)
+      ctx.log(
+        "warn",
+        "parked Squad delegations could not be restored; they are kept for the next start"
+      )
   })
   return () => {
     disposed = true

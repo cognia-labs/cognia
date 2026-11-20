@@ -8,7 +8,8 @@
  *   2. adapters      The runtime deps, the review gate and the control plane
  *                    are installed. From here `startSquadRun` can dispatch.
  *   3. recover       Pending interrupts are reconciled, then every durable run
- *                    that was live when the process died is recovered.
+ *                    that was live when the process died is recovered, and
+ *                    every delegation still parked for an approval comes back.
  *   4. ready         The readiness signal flips. Launch seams wait on it.
  *
  * Recovery before hydration would resume runs over definitions that are still
@@ -30,6 +31,7 @@ import {
 } from "@/stores/squads/agent-team-store/dexie-bridge"
 import type { SquadBindingCandidates } from "./definition-contract"
 import type { RecoveryOutcome } from "@cognia/agent-orchestration/coordinator"
+import type { RestoreParkedDelegationsResult } from "./delegation-orchestrator"
 
 export type SquadBootstrapStage = "hydrate" | "adapters" | "recover" | "ready"
 
@@ -41,6 +43,13 @@ export interface SquadBootstrapOutcome {
   failedStage?: SquadBootstrapStage
   recovered?: RecoveryOutcome[]
   recoveries?: { armed: number; alreadyPending: number }
+  /** The parked delegations put back, when reading them succeeded. */
+  parkedDelegations?: RestoreParkedDelegationsResult
+  /**
+   * True when the parked delegations could not be read. Not fatal: Squads run
+   * without them, and the rows stay for the next start.
+   */
+  parkedDelegationsFailed?: boolean
   durationMs: number
 }
 
@@ -59,6 +68,8 @@ export interface SquadBootstrapDeps {
   recoverRuns?: (signal: AbortSignal) => Promise<RecoveryOutcome[]>
   /** Re-raise the `team_recovery` interrupt of every parked run that lacks one. */
   armRecoveries?: () => Promise<{ armed: number; alreadyPending: number }>
+  /** Put the delegations parked for an approval back (`restoreParkedDelegations`). */
+  restoreParkedDelegations?: () => Promise<RestoreParkedDelegationsResult>
   onStage?: (stage: SquadBootstrapStage) => void
   now?: () => number
 }
@@ -172,6 +183,11 @@ async function defaultArmRecoveries() {
   return armPendingTeamRecoveries()
 }
 
+async function defaultRestoreParkedDelegations() {
+  const { restoreParkedDelegations } = await import("./delegation-orchestrator")
+  return restoreParkedDelegations()
+}
+
 /**
  * Run the bootstrap. Calling it again disposes the previous run first, so the
  * account-keyed initializer can simply call it on every key change.
@@ -229,9 +245,25 @@ export function runSquadBootstrap(deps: SquadBootstrapDeps = {}): SquadBootstrap
       // After the coordinator's own pass, so a run it just parked is included.
       const recoveries = await (deps.armRecoveries ?? defaultArmRecoveries)()
       if (stale()) return finish({ ok: false, failedStage: current, recovered })
+      // After hydration, so a parked delegation whose Squad is gone is told
+      // apart, and after the adapters, so approving one can dispatch it.
+      let parkedDelegations: RestoreParkedDelegationsResult | undefined
+      try {
+        parkedDelegations = await (
+          deps.restoreParkedDelegations ?? defaultRestoreParkedDelegations
+        )()
+      } catch {
+        parkedDelegations = undefined
+      }
+      if (stale()) return finish({ ok: false, failedStage: current, recovered })
 
       stage("ready")
-      return finish({ ok: true, recovered, recoveries })
+      return finish({
+        ok: true,
+        recovered,
+        recoveries,
+        ...(parkedDelegations ? { parkedDelegations } : { parkedDelegationsFailed: true }),
+      })
     } catch {
       return finish({ ok: false, failedStage: current })
     }

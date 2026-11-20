@@ -389,6 +389,7 @@ export const CORE_TABLE_NAMES = [
   "skillRecordings",
   "skillResources",
   "skills",
+  "squadParkedDelegations",
   "storageLayout",
   "subscriptionBalance",
   "subscriptionUsage",
@@ -1271,6 +1272,9 @@ const USER_CONTENT_TABLES = new Set<CoreTableName>([
   "agentTeams",
   "agentTeammates",
   "agentTeamTasks",
+  // A delegation parked for an approval keeps the work it hands over: the
+  // prompt and system prompt, redacted, but still the user's instructions.
+  "squadParkedDelegations",
   "sessionList",
   "sessions",
   "sessionState",

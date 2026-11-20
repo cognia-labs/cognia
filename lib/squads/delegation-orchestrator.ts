@@ -17,6 +17,8 @@
  *     launches it with the run params stashed at create time.
  *   - `cancelDelegation`: stops the child through the launcher and flips the
  *     record to `cancelled`.
+ *   - `restoreParkedDelegations`: after a restart, puts every delegation that
+ *     was still awaiting approval back, so it can be approved or cancelled.
  *
  * The record is the Squad's policy view of the delegation (reason, target,
  * approval, the depth it was admitted at, the text handed back). Once
@@ -31,6 +33,8 @@
  */
 
 import { nanoid } from "nanoid"
+import type Dexie from "dexie"
+import { loggers } from "@cognia/logging"
 import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 import {
   validateHandoffEnvelope,
@@ -47,6 +51,15 @@ import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 import { getExecutionRun } from "@/lib/db/execution-runs"
+import { getDb } from "@/lib/db/schema"
+import {
+  claimParkedDelegation,
+  deleteParkedDelegation,
+  listParkedDelegations,
+  putParkedDelegation,
+  type ParkedDelegationRun,
+  type SquadParkedDelegationRow,
+} from "@/lib/db/squad-parked-delegations"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { readRunAncestors } from "@/lib/execution/run-tree"
 import {
@@ -55,6 +68,13 @@ import {
   type LaunchChildRunResult,
 } from "@/lib/execution/launch-child-run"
 import { delegationExecutionRunId } from "./delegation-view"
+import {
+  DELEGATION_RUN_WITHHELD,
+  parkedDelegationRow,
+  restoredDelegationRecord,
+} from "./parked-delegations"
+
+const log = loggers.agent
 
 /**
  * True when the team has a quiet-hours window configured and `now` falls
@@ -68,35 +88,99 @@ function isDelegationQuietGated(sourceTeamId: string, nowMs: number = Date.now()
 }
 
 /**
- * Non-persisted run params for delegations that may be (re-)dispatched later —
- * notably ones deferred to `awaiting_approval` by quiet hours / approval gates.
- * Kept in memory (NOT in the persisted store) so raw prompts never hit disk.
- * The trade-off: only the process that created a delegation can run it. The
- * delegation records are not persisted either, so a reload drops a parked
- * one outright, and approving one this process holds no params for settles
- * it `failed` (`DELEGATION_RUN_LOST`). Keyed by delegationId.
+ * Run params for delegations that may be (re-)dispatched later, notably ones
+ * deferred to `awaiting_approval` by quiet hours / approval gates. Keyed by
+ * delegationId. The originals live only here, in the memory of the process
+ * that created the delegation. A parked one is also written to disk through
+ * the PII gate (`parkDelegation`, `squadParkedDelegations`) so it survives a
+ * restart: `restoreParkedDelegations` puts the redacted copy back here, and an
+ * approval after a restart runs with that.
  */
-interface PendingRun {
-  kind: "background" | "external" | "twin" | "team"
-  /** The work handed over. Unused for a team, which runs its own objective. */
-  prompt: string
-  systemPrompt?: string
-  /**
-   * background/twin: the child's id (its Job Center entry and the record's
-   * `targetId`); external: the target agent id; team: the target team id.
-   */
-  targetId: string
-  /** twin delegations only: the Employee Digital Twin to answer as. */
-  twinId?: string
+interface PendingRun extends ParkedDelegationRun {
   sourceTeamId: string
-  /** The run that asked, when it is not the source team's live run. */
-  parentRunId?: string
-  personalExecutionRunId?: string
-  timeoutMs?: number
-  /** team delegations only: force ultracode orchestration on the target run. */
-  ultracode?: boolean
 }
 const pendingRuns = new Map<string, PendingRun>()
+
+/**
+ * The on-disk copy of each parked delegation this process knows of: the
+ * database it went to (the account's, captured when it was parked) and
+ * whether the write landed. One approval takes the row before running it
+ * (`takeParked`), and cancelling or settling forgets it (`forgetParked`).
+ */
+interface ParkedCopy {
+  db: Dexie
+  written: Promise<boolean>
+}
+const parkedCopies = new Map<string, ParkedCopy>()
+
+/**
+ * Write a deferred delegation down so a restart does not lose it. The write
+ * starts now, before the caller can approve or cancel it, and IndexedDB runs
+ * read-write transactions on one store in the order they were created, so the
+ * claim or delete that follows always sees it.
+ */
+function parkDelegation(record: TeamDelegationRecord, run: PendingRun): void {
+  const { sourceTeamId: _sourceTeamId, ...parked } = run
+  let db: Dexie
+  try {
+    db = getDb()
+  } catch (err) {
+    log.warn("parked delegation not kept: no account database", { delegationId: record.id, err })
+    return
+  }
+  let row: SquadParkedDelegationRow
+  try {
+    row = parkedDelegationRow(record, parked)
+  } catch (err) {
+    log.warn("parked delegation not kept: its row could not be built", {
+      delegationId: record.id,
+      err,
+    })
+    return
+  }
+  const written = putParkedDelegation(db, row).then(
+    () => true,
+    (err: unknown) => {
+      log.warn("parked delegation not kept: write failed", { delegationId: record.id, err })
+      return false
+    }
+  )
+  parkedCopies.set(record.id, { db, written })
+}
+
+/**
+ * Take a parked delegation's row before running it. False when it was written
+ * and is gone: another window of this database approved or cancelled it
+ * first. A delegation that was never written (or could not be) is this
+ * process's alone.
+ */
+async function takeParked(delegationId: string): Promise<boolean> {
+  const copy = parkedCopies.get(delegationId)
+  if (!copy) return true
+  parkedCopies.delete(delegationId)
+  if (!(await copy.written)) return true
+  try {
+    return (await claimParkedDelegation(copy.db, delegationId)) !== undefined
+  } catch (err) {
+    // The approval stands; the row is retried as a plain delete so a restart
+    // does not offer the delegation again.
+    log.warn("parked delegation claim failed; running it", { delegationId, err })
+    void deleteParkedDelegation(copy.db, delegationId).catch(() => undefined)
+    return true
+  }
+}
+
+/** Drop a parked delegation's row once it is cancelled or settled. */
+function forgetParked(delegationId: string): void {
+  const copy = parkedCopies.get(delegationId)
+  if (!copy) return
+  parkedCopies.delete(delegationId)
+  void copy.written
+    .then((written) => (written ? deleteParkedDelegation(copy.db, delegationId) : undefined))
+    .catch((err: unknown) => {
+      log.warn("parked delegation row not deleted", { delegationId, err })
+    })
+}
 
 type HostDelegationContext = { executionRunId?: string }
 
@@ -134,6 +218,7 @@ const runControllers = new Map<string, AbortController>()
 export function __resetPendingDelegationRunsForTesting(): void {
   pendingRuns.clear()
   runControllers.clear()
+  parkedCopies.clear()
 }
 
 const SETTLED_DELEGATION_STATUSES: ReadonlySet<TeamDelegationStatus> = new Set([
@@ -174,9 +259,17 @@ function whenDelegationSettles(
   })
 }
 
-/** Why an approval could not run: its parameters lived in another process. */
+/**
+ * Why an approval could not run: no run parameters stand behind the record,
+ * neither from the process that created it nor from a restored copy (a record
+ * written straight into the store).
+ */
 export const DELEGATION_RUN_LOST =
-  "delegation_run_lost: its run parameters are kept only in the process that created it, which no longer holds them; delegate it again"
+  "delegation_run_lost: no run parameters were kept for it; delegate it again"
+
+/** Why an approval did not run here: another window took it first. */
+export const DELEGATION_TAKEN_ELSEWHERE =
+  "delegation_taken_elsewhere: another window approved or cancelled it first"
 
 /**
  * The run a delegation's child hangs under: the run that asked when it named
@@ -561,8 +654,8 @@ function refuseTeamDelegation(
  * delegation. Both ends are run ids: the run the child hangs under and the
  * child's own row, with the runs above it root→parent as the chain. A
  * delegation with no parent run has no envelope, since there is no parent end
- * to name. The persisted task text is the delegation REASON — raw prompts
- * intentionally never hit disk (see `PendingRun`). Refuses to attach an
+ * to name. The task text is the delegation REASON: a prompt is kept only in
+ * memory, or redacted while it is parked (see `PendingRun`). Refuses to attach an
  * envelope that fails the secret-free validator rather than persisting a
  * leaking one.
  */
@@ -666,6 +759,7 @@ export function delegateToBackground(
     ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
   }
   pendingRuns.set(delegation.id, run)
+  if (deferred) parkDelegation(delegation, run)
   hooks.dispatchOnTeamDelegationStart({
     delegationId: delegation.id,
     sourceTeamId: delegation.sourceTeamId,
@@ -750,6 +844,7 @@ export function delegateToTwin(
     ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
   }
   pendingRuns.set(delegation.id, run)
+  if (deferred) parkDelegation(delegation, run)
   hooks.dispatchOnTeamDelegationStart({
     delegationId: delegation.id,
     sourceTeamId: delegation.sourceTeamId,
@@ -808,6 +903,7 @@ export function delegateToExternal(
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
   }
   pendingRuns.set(delegation.id, run)
+  if (quietDeferred) parkDelegation(delegation, run)
   getPluginLifecycleHooks().dispatchOnTeamDelegationStart({
     delegationId: delegation.id,
     sourceTeamId: delegation.sourceTeamId,
@@ -933,6 +1029,7 @@ export function delegateToTeam(input: DelegateToTeamInput): {
     ...(input.ultracode !== undefined ? { ultracode: input.ultracode } : {}),
   }
   pendingRuns.set(delegation.id, run)
+  if (quietDeferred) parkDelegation(delegation, run)
   hooks.dispatchOnTeamDelegationStart({
     delegationId: delegation.id,
     sourceTeamId: delegation.sourceTeamId,
@@ -985,6 +1082,7 @@ function settleTeamDelegation(
 ): TeamDelegationRecord {
   const store = useAgentTeamStore.getState()
   const existing = store.delegations[delegationId]
+  forgetParked(delegationId)
   if (existing?.status === "cancelled") return existing
   store.updateDelegationStatus(delegationId, status, result)
   getPluginLifecycleHooks().dispatchOnTeamDelegationComplete({ delegationId, status })
@@ -994,10 +1092,12 @@ function settleTeamDelegation(
 /**
  * Approve a delegation that was created in `awaiting_approval` status.
  * Transitions to `active` and launches the original run (any target) with
- * the run params stashed at create time. When this process holds no params
- * for it (another window created it), nothing could run it: it settles
- * `failed` with `DELEGATION_RUN_LOST` instead of reading `active` with no
- * run behind it, and whoever waits for it hears so.
+ * the run params stashed at create time, or the redacted copy a restart
+ * restored. The approval first takes the delegation's row off disk, so when
+ * two windows of one database both show it only the first approval runs it;
+ * the other settles `failed` with `DELEGATION_TAKEN_ELSEWHERE`. A record with
+ * no params behind it settles `failed` with `DELEGATION_RUN_LOST` instead of
+ * reading `active` with no run behind it, and whoever waits for it hears so.
  *
  * Returns the record synchronously; the re-dispatch settles asynchronously
  * via the same complete hook as the immediate paths.
@@ -1009,7 +1109,11 @@ export function approveDelegation(delegationId: string): TeamDelegationRecord | 
   const pending = pendingRuns.get(delegationId)
   if (!pending) return settleTeamDelegation(delegationId, "failed", DELEGATION_RUN_LOST)
   store.updateDelegationStatus(delegationId, "active")
-  void runDelegation(delegationId, pending)
+  void takeParked(delegationId).then((taken) => {
+    if (taken) return runDelegation(delegationId, pending)
+    pendingRuns.delete(delegationId)
+    return settleTeamDelegation(delegationId, "failed", DELEGATION_TAKEN_ELSEWHERE)
+  })
   return useAgentTeamStore.getState().delegations[delegationId]
 }
 
@@ -1028,9 +1132,11 @@ export function cancelDelegation(delegationId: string): TeamDelegationRecord | u
   const current = store.delegations[delegationId]
   if (!current) return undefined
   if (current.status === "completed" || current.status === "failed") return current
-  // Drop any stashed run params so a cancelled (esp. deferred) delegation can
-  // never be re-dispatched by a later approval.
+  // Drop any stashed run params, and the copy on disk, so a cancelled (esp.
+  // deferred) delegation can never be re-dispatched by a later approval or
+  // offered again after a restart.
   pendingRuns.delete(delegationId)
+  forgetParked(delegationId)
   const childRunId = delegationExecutionRunId(current)
   if (childRunId) {
     const abortLaunch = () =>
@@ -1054,4 +1160,51 @@ export function cancelDelegation(delegationId: string): TeamDelegationRecord | u
     status: "cancelled",
   })
   return useAgentTeamStore.getState().delegations[delegationId] ?? current
+}
+
+/** What `restoreParkedDelegations` did with the rows it found. */
+export interface RestoreParkedDelegationsResult {
+  /** Back in the store, awaiting approval, with a run behind them. */
+  restored: number
+  /** Back in the store and settled `failed`: their run was never written. */
+  withheld: number
+  /** Deleted: their source Squad no longer exists. */
+  dropped: number
+}
+
+/**
+ * Put every delegation that was parked for an approval when the process last
+ * stopped back in the store, awaiting approval again, with its redacted run
+ * parameters behind it. Runs once the Squad definitions are hydrated (the
+ * Squad bootstrap's recover stage), so a row whose source Squad is gone can be
+ * told apart and deleted. A delegation the store already holds (this process
+ * parked it) is left alone. One whose run could not be written without
+ * personal data comes back settled `failed` with `DELEGATION_RUN_WITHHELD`, so
+ * the panel says why rather than dropping it. The start hook is not fired
+ * again: it fired when the delegation was created.
+ */
+export async function restoreParkedDelegations(
+  db: Dexie = getDb()
+): Promise<RestoreParkedDelegationsResult> {
+  const result: RestoreParkedDelegationsResult = { restored: 0, withheld: 0, dropped: 0 }
+  const now = new Date()
+  for (const row of await listParkedDelegations(db)) {
+    const state = useAgentTeamStore.getState()
+    if (state.delegations[row.id]) continue
+    if (!state.teams[row.sourceTeamId]) {
+      await deleteParkedDelegation(db, row.id)
+      result.dropped += 1
+      continue
+    }
+    state.upsertDelegation(restoredDelegationRecord(row, now))
+    parkedCopies.set(row.id, { db, written: Promise.resolve(true) })
+    if (!row.run) {
+      settleTeamDelegation(row.id, "failed", DELEGATION_RUN_WITHHELD)
+      result.withheld += 1
+      continue
+    }
+    pendingRuns.set(row.id, { ...row.run, sourceTeamId: row.sourceTeamId })
+    result.restored += 1
+  }
+  return result
 }

@@ -66,6 +66,10 @@ function harness(over: Partial<SquadBootstrapDeps> = {}) {
       calls.push("recoveries")
       return { armed: 1, alreadyPending: 0 }
     },
+    restoreParkedDelegations: async () => {
+      calls.push("parked")
+      return { restored: 1, withheld: 0, dropped: 0 }
+    },
     onStage: (s) => stages.push(s),
     now: () => 1_000,
     ...over,
@@ -220,6 +224,7 @@ describe("runSquadBootstrap", () => {
       ok: true,
       recovered: [{ runId: "r1", status: "recovering" }],
       recoveries: { armed: 1, alreadyPending: 0 },
+      parkedDelegations: { restored: 1, withheld: 0, dropped: 0 },
       durationMs: 0,
     })
     expect(h.calls).toEqual([
@@ -230,6 +235,7 @@ describe("runSquadBootstrap", () => {
       "interrupts",
       "runs",
       "recoveries",
+      "parked",
     ])
     expect(h.stages).toEqual(["hydrate", "adapters", "recover", "ready"])
     expect(getSquadRuntimeState()).toBe("ready")
@@ -250,6 +256,18 @@ describe("runSquadBootstrap", () => {
     hydrated.resolve()
     await expect(waiting).resolves.toBe(true)
     await handle.done
+  })
+
+  it("starts without the parked delegations it could not read, and says so (F03)", async () => {
+    const h = harness({
+      restoreParkedDelegations: async () => {
+        throw new Error("store unreadable")
+      },
+    })
+    const outcome = await runSquadBootstrap(h.deps).done
+    expect(outcome).toMatchObject({ ok: true, parkedDelegationsFailed: true })
+    expect(outcome.parkedDelegations).toBeUndefined()
+    expect(getSquadRuntimeState()).toBe("ready")
   })
 
   it("fails closed: a stage that throws names itself and leaves the runtime refusing", async () => {

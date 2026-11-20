@@ -38,6 +38,7 @@ import type { AgentTeamState } from "@/stores/squads/agent-team-store/types"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { selectTeamDelegations } from "@/stores/squads/agent-team-store/selectors"
 import { approveDelegation, cancelDelegation } from "@/lib/squads/delegation-orchestrator"
+import { isRestoredRedacted } from "@/lib/squads/parked-delegations"
 
 function statusVariant(
   status: TeamDelegationStatus
@@ -152,6 +153,11 @@ export function DelegationsPanel({ teamId }: DelegationsPanelProps = {}) {
                 <p className="text-[10px] text-muted-foreground">
                   {t("target", { type: row.targetType, id: row.targetId ?? "—" })}
                 </p>
+                {row.status === "awaiting_approval" && isRestoredRedacted(row) ? (
+                  <p className="text-[10px] text-muted-foreground" data-testid="restored-redacted">
+                    {t("restoredRedacted")}
+                  </p>
+                ) : null}
                 {row.error ? <p className="text-[10px] text-destructive">{row.error}</p> : null}
                 {isPending(row.status) ? (
                   <div className="flex justify-end gap-2">

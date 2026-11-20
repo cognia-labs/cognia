@@ -44,11 +44,8 @@ import { getExecutionRun, runEventJournal, semanticRunEvent } from "@/lib/db/exe
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { isTerminalRunStatus } from "@/types/execution/run"
 import type { AgentTeamRunStatus, AgentTeamSteeringStatus } from "@/types/agent/agent-team-runtime"
-import {
-  getDurableTeamCoordinator,
-  redactTeamTextForPersistence,
-  type DurableTeamCoordinator,
-} from "./durable-runtime"
+import { getDurableTeamCoordinator, type DurableTeamCoordinator } from "./durable-runtime"
+import { redactTeamTextForPersistence } from "../persisted-text"
 import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
 import { guardSquadRunResume, type SquadResumeGuardDeps } from "../squad/squad-control"
 

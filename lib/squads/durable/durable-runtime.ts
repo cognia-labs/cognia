@@ -13,7 +13,7 @@ import {
  * team spec and holds the shared coordinator every app caller uses.
  */
 
-import { hasNoLeakingPii, redactText } from "@cognia/redact"
+import { redactTeamTextForPersistence } from "../persisted-text"
 import Dexie from "dexie"
 import { getLiveSidecarSessionIds } from "@/lib/native/local-runtime"
 import { getLiveExternalAgentProcessIds } from "@/lib/ai/agent/external/agent-transport"
@@ -98,16 +98,6 @@ export const executionRunTeamJournal: TeamRunJournal = {
       })
     }
   },
-}
-
-/**
- * Redacted text, or `undefined` when it still leaks after redaction.
- *
- * @internal Test seam: exported for its unit tests, not for production callers.
- */
-export function redactTeamTextForPersistence(text: string): string | undefined {
-  const redacted = redactText(text).redacted
-  return hasNoLeakingPii(redacted) ? redacted : undefined
 }
 
 /** @internal Test seam: exported for its unit tests, not for production callers. */

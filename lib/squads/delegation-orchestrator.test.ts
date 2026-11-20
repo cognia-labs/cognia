@@ -31,6 +31,16 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
   })),
 }))
 
+// `undefined` defers to the real PII check; a test forces a verdict.
+const mockLeakCheck = jest.fn<boolean | undefined, [string]>(() => undefined)
+jest.mock("@cognia/redact", () => {
+  const actual = jest.requireActual("@cognia/redact")
+  return {
+    ...actual,
+    hasNoLeakingPii: (text: string) => mockLeakCheck(text) ?? actual.hasNoLeakingPii(text),
+  }
+})
+
 jest.mock("@/lib/notifications/policy/quiet-hours", () => ({
   isInQuietRange: jest.fn(() => false),
 }))
@@ -111,13 +121,23 @@ import {
   __resetPendingDelegationRunsForTesting,
   approveDelegation,
   DELEGATION_RUN_LOST,
+  DELEGATION_TAKEN_ELSEWHERE,
   cancelDelegation,
   delegateToBackground,
   delegateToExternal,
   delegateToTeam,
   delegateToTwin,
+  restoreParkedDelegations,
   wouldCreateTeamCycle,
 } from "./delegation-orchestrator"
+import { DELEGATION_RUN_WITHHELD } from "./parked-delegations"
+import { getDb } from "@/lib/db/schema"
+import {
+  claimParkedDelegation,
+  listParkedDelegations,
+  putParkedDelegation,
+  type SquadParkedDelegationRow,
+} from "@/lib/db/squad-parked-delegations"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
@@ -141,6 +161,34 @@ async function isPending(promise: Promise<unknown>): Promise<boolean> {
 }
 
 const lastLaunch = () => children[children.length - 1]
+
+/** The parked row kept for `id`, read as a restart would. */
+async function parkedRow(id: string): Promise<SquadParkedDelegationRow | undefined> {
+  return (await listParkedDelegations(getDb())).find((row) => row.id === id)
+}
+
+/** Wait until `read` reports what `done` expects; parked writes land asynchronously. */
+async function eventually<T>(read: () => Promise<T> | T, done: (value: T) => boolean): Promise<T> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const value = await read()
+    if (done(value)) return value
+    await flush()
+  }
+  throw new Error("condition never held")
+}
+
+/** What a restart leaves behind: no records in the store, no params in memory, the database. */
+function simulateRestart(): void {
+  useAgentTeamStore.setState({ delegations: {} })
+  __resetPendingDelegationRunsForTesting()
+}
+
+// Parked rows outlive a test in the shared database; start each one clean.
+beforeEach(async () => {
+  await flush()
+  await getDb().squadParkedDelegations.clear()
+  mockLeakCheck.mockReset().mockReturnValue(undefined)
+})
 
 function resetLauncher() {
   launchMock.mockClear()
@@ -230,7 +278,11 @@ describe("delegation-orchestrator", () => {
           readers: [],
         })
       approveDelegation(delegation.id)
-      await flush()
+      // The approval takes the parked row off disk before it launches.
+      await eventually(
+        () => launchMock.mock.calls.length,
+        (count) => count === 1
+      )
       expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(
         undefined,
         [expect.objectContaining({ content: expect.stringContaining("private prompt") })],
@@ -537,12 +589,14 @@ describe("delegation-orchestrator", () => {
       expect(launchMock).not.toHaveBeenCalled()
       const after = approveDelegation(delegation.id)
       expect(after?.status).toBe("active")
-      await flush()
+      await eventually(
+        () => useAgentTeamStore.getState().delegations[delegation.id].status,
+        (status) => status === "completed"
+      )
       expect(lastLaunch().input.target).toMatchObject({
         kind: "agent",
         prompt: "investigate later",
       })
-      expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
     })
 
     it("launches a deferred external run on approval", async () => {
@@ -1177,5 +1231,252 @@ describe("delegateToTeam (team → team)", () => {
     expect(delegation.status).toBe("failed")
     expect(delegation.metadata?.errorCode).toBe("delegation-depth-exceeded")
     expect(delegation.metadata?.maxDepth).toBe(0)
+  })
+})
+
+describe("parked delegations survive a restart (F03)", () => {
+  beforeEach(() => {
+    useAgentTeamStore.getState().reset()
+    __resetPendingDelegationRunsForTesting()
+    dispatchOnTeamDelegationStart.mockReset()
+    dispatchOnTeamDelegationComplete.mockReset()
+    isInQuietHoursMock.mockReturnValue(false)
+    resetLauncher()
+  })
+
+  const squad = () => useAgentTeamStore.getState().createTeam({ name: "Parked", task: "t" }).id
+
+  function park(teamId: string, prompt = "Email ops@example.com the release notes") {
+    return delegateToBackground({
+      sourceTeamId: teamId,
+      sourceTaskId: "task-p",
+      prompt,
+      systemPrompt: "You draft release mail",
+      reason: "Needs a release mail",
+      awaitingApproval: true,
+    })
+  }
+
+  it("keeps a parked delegation on disk with its texts through the PII gate", async () => {
+    const teamId = squad()
+    const { delegation } = park(teamId)
+    const row = await eventually(() => parkedRow(delegation.id), Boolean)
+    expect(row).toMatchObject({
+      sourceTeamId: teamId,
+      sourceTaskId: "task-p",
+      targetType: "background",
+      targetId: delegation.targetId,
+      reason: "Needs a release mail",
+      redacted: true,
+      run: {
+        kind: "background",
+        targetId: delegation.targetId,
+        systemPrompt: "You draft release mail",
+      },
+    })
+    expect(row?.run?.prompt).not.toContain("ops@example.com")
+    expect(row?.run?.prompt).toMatch(/<EMAIL_\d{3,}>/)
+  })
+
+  it("writes nothing for a delegation that runs at once", async () => {
+    const { delegation, completionPromise } = delegateToBackground({
+      sourceTeamId: squad(),
+      sourceTaskId: "task-now",
+      prompt: "now",
+      reason: "immediate",
+    })
+    await completionPromise
+    await flush()
+    expect(await parkedRow(delegation.id)).toBeUndefined()
+  })
+
+  it("comes back awaiting approval after a restart, and approving it runs the redacted copy", async () => {
+    const teamId = squad()
+    const { delegation } = park(teamId)
+    await eventually(() => parkedRow(delegation.id), Boolean)
+    dispatchOnTeamDelegationStart.mockClear()
+
+    simulateRestart()
+    // Before the restore there is nothing to approve: the old behavior.
+    expect(approveDelegation(delegation.id)).toBeUndefined()
+
+    await expect(restoreParkedDelegations()).resolves.toMatchObject({ restored: 1, withheld: 0 })
+    const restored = useAgentTeamStore.getState().delegations[delegation.id]
+    expect(restored).toMatchObject({
+      status: "awaiting_approval",
+      sourceTeamId: teamId,
+      reason: "Needs a release mail",
+      metadata: { restoredRedacted: true },
+    })
+    // It was started before the restart; restoring it is not a second start.
+    expect(dispatchOnTeamDelegationStart).not.toHaveBeenCalled()
+
+    expect(approveDelegation(delegation.id)?.status).toBe("active")
+    await eventually(
+      () => launchMock.mock.calls.length,
+      (count) => count === 1
+    )
+    const target = lastLaunch().input.target as { prompt: string; systemPrompt?: string }
+    expect(target.prompt).not.toContain("ops@example.com")
+    expect(target.prompt).toMatch(/^Email <EMAIL_\d{3,}> the release notes$/)
+    expect(target.systemPrompt).toBe("You draft release mail")
+    expect(lastLaunch().input.childId).toBe(delegation.targetId)
+    await eventually(
+      () => useAgentTeamStore.getState().delegations[delegation.id]?.status,
+      (status) => status === "completed"
+    )
+    // Approved once: the row is taken, so a further restart offers nothing.
+    expect(await parkedRow(delegation.id)).toBeUndefined()
+  })
+
+  it("runs the original text when approved in the process that parked it", async () => {
+    const { delegation } = park(squad())
+    await eventually(() => parkedRow(delegation.id), Boolean)
+    approveDelegation(delegation.id)
+    await eventually(
+      () => launchMock.mock.calls.length,
+      (count) => count === 1
+    )
+    expect(lastLaunch().input.target).toMatchObject({
+      prompt: "Email ops@example.com the release notes",
+    })
+    await eventually(
+      () => parkedRow(delegation.id),
+      (row) => row === undefined
+    )
+  })
+
+  it("forgets the row when the parked delegation is cancelled", async () => {
+    const { delegation } = park(squad())
+    await eventually(() => parkedRow(delegation.id), Boolean)
+    cancelDelegation(delegation.id)
+    await eventually(
+      () => parkedRow(delegation.id),
+      (row) => row === undefined
+    )
+    simulateRestart()
+    await expect(restoreParkedDelegations()).resolves.toMatchObject({ restored: 0 })
+    expect(useAgentTeamStore.getState().delegations[delegation.id]).toBeUndefined()
+  })
+
+  it("parks a quiet-hours team delegation, and forgets it once the tree refuses it", async () => {
+    isInQuietHoursMock.mockReturnValue(true)
+    const source = seedTeamWithQuietHours()
+    const parked = delegateToTeam({
+      sourceTeamId: source,
+      sourceTaskId: "task-t",
+      targetTeamId: "target-squad",
+      reason: "later",
+      ultracode: true,
+    })
+    expect(parked.delegation.status).toBe("awaiting_approval")
+    await expect(eventually(() => parkedRow(parked.delegation.id), Boolean)).resolves.toMatchObject(
+      {
+        targetType: "team",
+        run: { kind: "team", prompt: "", targetId: "target-squad", ultracode: true },
+      }
+    )
+
+    // The target already runs above the source: it can never run.
+    const targetRun = liveRun("loop-target")
+    liveRun(source, targetRun)
+    const refused = delegateToTeam({
+      sourceTeamId: source,
+      sourceTaskId: "task-t",
+      targetTeamId: "loop-target",
+      reason: "loop later",
+    })
+    expect(refused.delegation.status).toBe("awaiting_approval")
+    await expect(refused.completionPromise).resolves.toMatchObject({ status: "failed" })
+    await eventually(
+      () => parkedRow(refused.delegation.id),
+      (row) => row === undefined
+    )
+  })
+
+  it("brings back a delegation whose run could not be kept as failed, saying why", async () => {
+    mockLeakCheck.mockImplementation((text) => (text.includes("secret-code") ? false : undefined))
+    const teamId = squad()
+    const { delegation } = park(teamId, "Use secret-code 7 for the vault")
+    const row = await eventually(() => parkedRow(delegation.id), Boolean)
+    expect(row?.run).toBeUndefined()
+    expect(row?.redacted).toBe(false)
+
+    simulateRestart()
+    await expect(restoreParkedDelegations()).resolves.toMatchObject({ restored: 0, withheld: 1 })
+    expect(useAgentTeamStore.getState().delegations[delegation.id]).toMatchObject({
+      status: "failed",
+      result: DELEGATION_RUN_WITHHELD,
+    })
+    expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
+      delegationId: delegation.id,
+      status: "failed",
+    })
+    expect(launchMock).not.toHaveBeenCalled()
+    await eventually(
+      () => parkedRow(delegation.id),
+      (kept) => kept === undefined
+    )
+  })
+
+  it("still runs a withheld delegation from memory in the process that parked it", async () => {
+    mockLeakCheck.mockImplementation((text) => (text.includes("secret-code") ? false : undefined))
+    const { delegation } = park(squad(), "Use secret-code 7 for the vault")
+    await eventually(() => parkedRow(delegation.id), Boolean)
+    approveDelegation(delegation.id)
+    await eventually(
+      () => launchMock.mock.calls.length,
+      (count) => count === 1
+    )
+    expect(lastLaunch().input.target).toMatchObject({ prompt: "Use secret-code 7 for the vault" })
+  })
+
+  it("drops a parked row whose source Squad is gone", async () => {
+    const db = getDb()
+    await putParkedDelegation(db, {
+      id: "orphan",
+      sourceTeamId: "deleted-squad",
+      sourceTaskId: "t",
+      targetType: "background",
+      targetId: "bg_orphan",
+      reason: "left behind",
+      manual: true,
+      createdAt: 1,
+      run: { kind: "background", prompt: "p", targetId: "bg_orphan" },
+      redacted: false,
+    })
+    await expect(restoreParkedDelegations(db)).resolves.toMatchObject({ dropped: 1 })
+    expect(useAgentTeamStore.getState().delegations.orphan).toBeUndefined()
+    expect(await parkedRow("orphan")).toBeUndefined()
+  })
+
+  it("leaves a delegation this process still holds alone", async () => {
+    const { delegation } = park(squad())
+    await eventually(() => parkedRow(delegation.id), Boolean)
+    await expect(restoreParkedDelegations()).resolves.toMatchObject({ restored: 0 })
+    expect(useAgentTeamStore.getState().delegations[delegation.id].metadata).toBeUndefined()
+    approveDelegation(delegation.id)
+    await eventually(
+      () => launchMock.mock.calls.length,
+      (count) => count === 1
+    )
+    expect(lastLaunch().input.target).toMatchObject({
+      prompt: "Email ops@example.com the release notes",
+    })
+  })
+
+  it("runs only the first of two windows' approvals", async () => {
+    const { delegation, completionPromise } = park(squad())
+    await eventually(() => parkedRow(delegation.id), Boolean)
+    // The other window, which restored the same row, approves it first.
+    await expect(claimParkedDelegation(getDb(), delegation.id)).resolves.toMatchObject({
+      id: delegation.id,
+    })
+    expect(approveDelegation(delegation.id)?.status).toBe("active")
+    await expect(completionPromise).resolves.toMatchObject({
+      status: "failed",
+      result: DELEGATION_TAKEN_ELSEWHERE,
+    })
+    expect(launchMock).not.toHaveBeenCalled()
   })
 })

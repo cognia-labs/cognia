@@ -321,6 +321,7 @@
   "skillRecordings": "metadata-only",
   "skillResources": "metadata-only",
   "skills": "metadata-only",
+  "squadParkedDelegations": "encrypted-content",
   "storageLayout": "metadata-only",
   "subscriptionBalance": "metadata-only",
   "subscriptionUsage": "metadata-only",

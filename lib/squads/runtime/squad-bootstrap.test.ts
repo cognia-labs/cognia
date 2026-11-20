@@ -1,5 +1,9 @@
 const mockDispose = jest.fn()
-let mockResolveDone: (outcome: { ok: boolean; failedStage?: string }) => void = () => {}
+let mockResolveDone: (outcome: {
+  ok: boolean
+  failedStage?: string
+  parkedDelegationsFailed?: boolean
+}) => void = () => {}
 const mockRunSquadBootstrap = jest.fn(() => ({
   done: new Promise((resolve) => {
     mockResolveDone = resolve
@@ -33,6 +37,18 @@ describe("squad bootstrap runtime", () => {
     mockResolveDone({ ok: false, failedStage: "recover" })
     await flush()
     expect(log).toHaveBeenCalledWith("warn", "agent team bootstrap failed at recover")
+  })
+
+  it("reports parked delegations it could not restore, without failing the bootstrap", async () => {
+    const log = jest.fn()
+    await start({ log })
+    mockResolveDone({ ok: true, parkedDelegationsFailed: true })
+    await flush()
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "parked Squad delegations could not be restored; they are kept for the next start"
+    )
+    expect(log).toHaveBeenCalledTimes(1)
   })
 
   it("stays quiet about a run its own restart superseded", async () => {
