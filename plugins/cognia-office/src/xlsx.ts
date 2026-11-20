@@ -2,8 +2,20 @@ import type * as ExcelJS from "exceljs"
 import type JSZipType from "jszip"
 import type { CellObject, WorkBook, WorkSheet } from "xlsx"
 import { encodeColumn, encodeRange } from "./a1"
-import type { WorkbookCell, WorkbookCellStyle, WorkbookDocument, WorkbookSheet } from "./model"
-import { UNSUPPORTED_FEATURES, WORKBOOK_SCHEMA_VERSION } from "./model"
+import type {
+  WorkbookBorderEdge,
+  WorkbookBorderSide,
+  WorkbookCell,
+  WorkbookCellStyle,
+  WorkbookDocument,
+  WorkbookSheet,
+} from "./model"
+import {
+  UNSUPPORTED_FEATURES,
+  WORKBOOK_BORDER_EDGES,
+  WORKBOOK_BORDER_STYLES,
+  WORKBOOK_SCHEMA_VERSION,
+} from "./model"
 
 export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -49,7 +61,9 @@ export async function importWorkbookXlsx(
   const sheets = binary.SheetNames.map((sheetName, index) =>
     importSheet(binary.Sheets[sheetName], sheetName, index)
   )
-  await enrichSheetsFromExcelJs(bytes, sheets)
+  for (const warning of await enrichSheetsFromExcelJs(bytes, sheets)) {
+    if (!unsupportedFeatures.includes(warning)) unsupportedFeatures.push(warning)
+  }
   return {
     schemaVersion: WORKBOOK_SCHEMA_VERSION,
     title: title.trim() || sourceFilename?.replace(/\.xlsx?$/i, "") || fallbackTitle,
@@ -60,16 +74,74 @@ export async function importWorkbookXlsx(
   }
 }
 
-async function enrichSheetsFromExcelJs(bytes: Uint8Array, sheets: WorkbookSheet[]): Promise<void> {
-  const { Workbook } = await loadExcelJs()
+/** The workbook's default font (the first in `xl/styles.xml`), which every styled cell repeats. */
+interface DefaultFont {
+  name?: string
+  size?: number
+  color?: { argb?: string; theme?: number }
+}
+
+/** The package's stylesheet, or undefined when the bytes hold none (CSV, a non-OOXML file). */
+async function readStylesheet(bytes: Uint8Array): Promise<string | undefined> {
   try {
-    const workbook = new Workbook()
+    const JSZip = await loadJsZip()
+    return await (await JSZip.loadAsync(bytes)).file("xl/styles.xml")?.async("string")
+  } catch {
+    return undefined
+  }
+}
+
+function readDefaultFont(styles: string): DefaultFont {
+  const font = /<fonts\b[^>]*>\s*<font\b[^>]*>([\s\S]*?)<\/font>/.exec(styles)?.[1] ?? ""
+  const value = (tag: string) => new RegExp(`<${tag}\\b[^>]*\\bval="([^"]*)"`).exec(font)?.[1]
+  const colorTag = /<color\b([^>]*)\/?>/.exec(font)?.[1] ?? ""
+  const theme = /\btheme="(\d+)"/.exec(colorTag)?.[1]
+  const rgb = /\brgb="([0-9A-Fa-f]{8})"/.exec(colorTag)?.[1]
+  const size = Number(value("sz"))
+  return {
+    ...(value("name") ? { name: value("name") } : {}),
+    ...(Number.isFinite(size) && size > 0 ? { size } : {}),
+    ...(theme !== undefined || rgb
+      ? {
+          color: {
+            ...(rgb ? { argb: rgb.toUpperCase() } : {}),
+            ...(theme !== undefined ? { theme: Number(theme) } : {}),
+          },
+        }
+      : {}),
+  }
+}
+
+/**
+ * Read the cell formatting SheetJS cannot see through ExcelJS, sheet by sheet.
+ * Returns the loss sentences to add to the workbook's unsupported features:
+ * a sheet whose formatting could not be read, or formatting the model has no
+ * place for, is reported, never silently dropped.
+ */
+async function enrichSheetsFromExcelJs(
+  bytes: Uint8Array,
+  sheets: WorkbookSheet[]
+): Promise<string[]> {
+  const stylesheet = await readStylesheet(bytes)
+  // No stylesheet, no formatting: delimited text or a package SheetJS read by
+  // other means. (Whether the package could be inspected is reported apart.)
+  if (stylesheet === undefined) return []
+  const { Workbook } = await loadExcelJs()
+  const workbook = new Workbook()
+  try {
     await workbook.xlsx.load(Uint8Array.from(bytes).buffer)
-    workbook.worksheets.forEach((worksheet, index) => {
-      const sheet = sheets[index]
-      if (!sheet) return
-      const frozen = worksheet.views.find(
-        (view): view is Partial<ExcelJS.WorksheetViewFrozen> => view.state === "frozen"
+  } catch {
+    return [UNSUPPORTED_FEATURES.cellStyles]
+  }
+  const defaults = readDefaultFont(stylesheet)
+  const warnings = new Set<string>()
+  for (const sheet of sheets) {
+    // By name: ExcelJS skips chartsheets, so positions drift from SheetJS's list.
+    const worksheet = workbook.getWorksheet(sheet.title)
+    if (!worksheet) continue
+    try {
+      const frozen = (worksheet.views ?? []).find(
+        (view): view is Partial<ExcelJS.WorksheetViewFrozen> => view?.state === "frozen"
       )
       if (frozen) {
         sheet.freeze = {
@@ -78,51 +150,130 @@ async function enrichSheetsFromExcelJs(bytes: Uint8Array, sheets: WorkbookSheet[
         }
       }
       for (const [ref, target] of Object.entries(sheet.cells)) {
-        const style = importExcelJsStyle(worksheet.getCell(ref))
-        if (style) target.style = style
+        const imported = importExcelJsStyle(worksheet.getCell(ref), defaults)
+        if (imported.lost) warnings.add(UNSUPPORTED_FEATURES.cellFormatting)
+        // ExcelJS read this sheet's formatting, so it replaces SheetJS's guess.
+        if (imported.style) target.style = imported.style
+        else delete target.style
       }
-    })
-  } catch {
-    // SheetJS still imports delimited/non-OOXML input; native style enrichment
-    // is best-effort and intentionally does not turn that compatibility path
-    // into a hard failure.
+    } catch {
+      warnings.add(UNSUPPORTED_FEATURES.cellStyles)
+    }
   }
+  return [...warnings]
 }
 
-function importExcelJsStyle(cell: ExcelJS.Cell): WorkbookCellStyle | undefined {
-  const fontColor = cell.font?.color as { argb?: string } | undefined
-  const fill = cell.fill as { type?: string; fgColor?: { argb?: string } }
-  const horizontal = ["left", "center", "right"].includes(cell.alignment?.horizontal ?? "")
-    ? (cell.alignment.horizontal as "left" | "center" | "right")
-    : undefined
-  const vertical = ["top", "middle", "bottom"].includes(cell.alignment?.vertical ?? "")
-    ? (cell.alignment.vertical as "top" | "middle" | "bottom")
-    : undefined
-  const style: WorkbookCellStyle = {
-    ...(cell.numFmt && cell.numFmt !== "General" ? { numberFormat: cell.numFmt } : {}),
-    ...(cell.font?.bold || cell.font?.italic || fontColor?.argb
-      ? {
-          font: {
-            ...(cell.font.bold ? { bold: true } : {}),
-            ...(cell.font.italic ? { italic: true } : {}),
-            ...(fontColor?.argb ? { color: fontColor.argb } : {}),
-          },
-        }
-      : {}),
-    ...(fill?.type === "pattern" && fill.fgColor?.argb
-      ? { fill: { color: fill.fgColor.argb } }
-      : {}),
-    ...(horizontal || vertical || cell.alignment?.wrapText !== undefined
-      ? {
-          alignment: {
-            ...(horizontal ? { horizontal } : {}),
-            ...(vertical ? { vertical } : {}),
-            ...(cell.alignment.wrapText !== undefined ? { wrapText: cell.alignment.wrapText } : {}),
-          },
-        }
-      : {}),
+type ExcelColor = { argb?: string; theme?: number; indexed?: number; tint?: number } | undefined
+
+/** Whether a font color is just the workbook default's (absent, or the same theme / ARGB, untinted). */
+function isDefaultFontColor(color: ExcelColor, defaults: DefaultFont): boolean {
+  if (!color) return true
+  if (color.tint) return false
+  if (color.argb !== undefined) return color.argb.toUpperCase() === defaults.color?.argb
+  if (color.indexed !== undefined) return false
+  return color.theme === undefined || color.theme === defaults.color?.theme
+}
+
+/** An explicit ARGB color; `lost` when the color is a theme or indexed one the model cannot keep. */
+function explicitColor(color: ExcelColor): { argb?: string; lost: boolean } {
+  if (!color) return { lost: false }
+  if (color.argb) return { argb: color.argb, lost: Boolean(color.tint) }
+  return { lost: color.theme !== undefined || color.indexed !== undefined }
+}
+
+const SUPPORTED_HORIZONTAL = new Set(["left", "center", "right"])
+const SUPPORTED_VERTICAL = new Set(["top", "middle", "bottom"])
+const BORDER_STYLES: ReadonlySet<string> = new Set(WORKBOOK_BORDER_STYLES)
+
+/**
+ * A cell's formatting in the model's terms, and whether it carried more than
+ * the model keeps. Properties equal to the workbook's default font are not
+ * formatting the user applied, so they are neither kept nor reported.
+ */
+function importExcelJsStyle(
+  cell: ExcelJS.Cell,
+  defaults: DefaultFont
+): { style?: WorkbookCellStyle; lost: boolean } {
+  let lost = false
+  const style: WorkbookCellStyle = {}
+  if (cell.numFmt && cell.numFmt !== "General") style.numberFormat = cell.numFmt
+
+  const sourceFont = cell.font as
+    | (Partial<ExcelJS.Font> & { color?: ExcelColor; underline?: unknown; vertAlign?: string })
+    | undefined
+  if (sourceFont) {
+    const font: NonNullable<WorkbookCellStyle["font"]> = {}
+    if (sourceFont.bold) font.bold = true
+    if (sourceFont.italic) font.italic = true
+    if (sourceFont.strike) font.strike = true
+    if (sourceFont.name && sourceFont.name !== defaults.name) font.name = sourceFont.name
+    if (typeof sourceFont.size === "number" && sourceFont.size !== defaults.size)
+      font.size = sourceFont.size
+    const underline = sourceFont.underline
+    if (underline === true || underline === "single") font.underline = "single"
+    else if (underline === "double") font.underline = "double"
+    else if (underline === "singleAccounting" || underline === "doubleAccounting") lost = true
+    if (sourceFont.vertAlign === "superscript" || sourceFont.vertAlign === "subscript") lost = true
+    if (!isDefaultFontColor(sourceFont.color, defaults)) {
+      const fontColor = explicitColor(sourceFont.color)
+      if (fontColor.argb) font.color = fontColor.argb
+      lost ||= fontColor.lost
+    }
+    if (Object.keys(font).length) style.font = font
   }
-  return Object.keys(style).length ? style : undefined
+
+  const fill = cell.fill as { type?: string; pattern?: string; fgColor?: ExcelColor } | undefined
+  if (fill?.type === "gradient") lost = true
+  else if (fill?.type === "pattern" && fill.pattern && fill.pattern !== "none") {
+    const fillColor = explicitColor(fill.fgColor)
+    if (fill.pattern === "solid" && fillColor.argb) style.fill = { color: fillColor.argb }
+    else lost = true
+  }
+
+  const border = cell.border as
+    | Partial<Record<WorkbookBorderSide | "diagonal", { style?: string; color?: ExcelColor }>>
+    | undefined
+  if (border?.diagonal?.style) lost = true
+  const edges: Partial<Record<WorkbookBorderSide, WorkbookBorderEdge>> = {}
+  for (const side of WORKBOOK_BORDER_EDGES) {
+    const edge = border?.[side]
+    if (!edge?.style) continue
+    if (!BORDER_STYLES.has(edge.style)) {
+      lost = true
+      continue
+    }
+    const edgeColor = explicitColor(edge.color)
+    lost ||= edgeColor.lost
+    edges[side] = {
+      style: edge.style as WorkbookBorderEdge["style"],
+      ...(edgeColor.argb ? { color: edgeColor.argb } : {}),
+    }
+  }
+  if (Object.keys(edges).length) style.border = edges
+
+  const source = cell.alignment as Partial<ExcelJS.Alignment> | undefined
+  if (source) {
+    const alignment: NonNullable<WorkbookCellStyle["alignment"]> = {}
+    // OOXML's "general" (the default) is not in ExcelJS's type but can be read.
+    if (source.horizontal && (source.horizontal as string) !== "general") {
+      if (SUPPORTED_HORIZONTAL.has(source.horizontal))
+        alignment.horizontal = source.horizontal as "left" | "center" | "right"
+      else lost = true
+    }
+    if (source.vertical) {
+      if (SUPPORTED_VERTICAL.has(source.vertical))
+        alignment.vertical = source.vertical as "top" | "middle" | "bottom"
+      else lost = true
+    }
+    if (source.wrapText !== undefined) alignment.wrapText = source.wrapText
+    if (source.textRotation === "vertical") alignment.textRotation = "vertical"
+    else if (typeof source.textRotation === "number" && source.textRotation !== 0)
+      alignment.textRotation = source.textRotation
+    if (typeof source.indent === "number" && source.indent > 0) alignment.indent = source.indent
+    if (source.shrinkToFit || source.readingOrder === "rtl") lost = true
+    if (Object.keys(alignment).length) style.alignment = alignment
+  }
+  return { ...(Object.keys(style).length ? { style } : {}), lost }
 }
 
 export async function importDelimitedWorkbook(
@@ -283,15 +434,35 @@ function applyStyle(cell: ExcelJS.Cell, style: WorkbookCellStyle | undefined): v
     cell.font = {
       bold: style.font.bold,
       italic: style.font.italic,
+      ...(style.font.name ? { name: style.font.name } : {}),
+      ...(style.font.size !== undefined ? { size: style.font.size } : {}),
+      ...(style.font.underline ? { underline: style.font.underline } : {}),
+      ...(style.font.strike ? { strike: true } : {}),
       ...(style.font.color ? { color: { argb: color(style.font.color) } } : {}),
     }
   if (style.fill)
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color(style.fill.color) } }
+  if (style.border) {
+    const border: Partial<ExcelJS.Borders> = {}
+    for (const side of WORKBOOK_BORDER_EDGES) {
+      const edge = style.border[side]
+      if (!edge) continue
+      border[side] = {
+        style: edge.style,
+        ...(edge.color ? { color: { argb: color(edge.color) } } : {}),
+      }
+    }
+    cell.border = border
+  }
   if (style.alignment)
     cell.alignment = {
       horizontal: style.alignment.horizontal,
       vertical: style.alignment.vertical === "middle" ? "middle" : style.alignment.vertical,
       wrapText: style.alignment.wrapText,
+      ...(style.alignment.textRotation !== undefined
+        ? { textRotation: style.alignment.textRotation }
+        : {}),
+      ...(style.alignment.indent !== undefined ? { indent: style.alignment.indent } : {}),
     }
 }
 
@@ -320,7 +491,7 @@ function importStyle(cell: CellObject): WorkbookCellStyle | undefined {
       }
     | undefined
   const style: WorkbookCellStyle = {
-    ...(cell.z ? { numberFormat: String(cell.z) } : {}),
+    ...(cell.z && cell.z !== "General" ? { numberFormat: String(cell.z) } : {}),
     ...(source?.font
       ? {
           font: {

@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs"
 import JSZip from "jszip"
 import * as XLSX from "xlsx"
-import { applyWorkbookOperations, createWorkbook } from "./model"
+import { applyWorkbookOperations, createWorkbook, UNSUPPORTED_FEATURES } from "./model"
 import {
   exportWorkbookXlsx,
   importDelimitedWorkbook,
@@ -330,4 +330,162 @@ it("recognizes a package that reopens as XLSX and rejects anything else", async 
   zip.file("xl/workbook.xml", "<workbook/>")
   const noSheets = new Uint8Array(await zip.generateAsync({ type: "arraybuffer" }))
   await expect(validateXlsxPackage(noSheets)).resolves.toBe(false)
+})
+
+describe("cell formatting (F13)", () => {
+  async function excelJsBytes(build: (workbook: ExcelJS.Workbook) => void): Promise<Uint8Array> {
+    const workbook = new ExcelJS.Workbook()
+    build(workbook)
+    return new Uint8Array(await workbook.xlsx.writeBuffer())
+  }
+
+  it("keeps formatting of a workbook whose sheets have no view", async () => {
+    // A sheet with no <sheetViews> reopens with `views = null`; reading
+    // `views.find` threw and the catch dropped every sheet's formatting.
+    const bytes = await excelJsBytes((workbook) => {
+      const sheet = workbook.addWorksheet("Plain")
+      sheet.getCell("A1").value = "Bold"
+      sheet.getCell("A1").font = { bold: true }
+    })
+    const imported = await importWorkbookXlsx(bytes, "No views")
+    expect(imported.sheets[0].cells.A1.style).toEqual({ font: { bold: true } })
+    expect(imported.unsupportedFeatures).toEqual([])
+  })
+
+  it("round-trips font family, size, underline, strike, borders, rotation and indent", async () => {
+    const style = {
+      font: {
+        bold: true,
+        name: "Arial",
+        size: 14,
+        underline: "double",
+        strike: true,
+        color: "FF2563EB",
+      },
+      border: {
+        top: { style: "thin", color: "FFFF0000" },
+        bottom: { style: "double" },
+        left: { style: "mediumDashed", color: "FF000000" },
+      },
+      alignment: { horizontal: "left", vertical: "top", textRotation: 45, indent: 2 },
+    } as const
+    const source = applyWorkbookOperations(createWorkbook("Styles", "S"), [
+      { op: "setCell", sheet: "S", cell: "B2", value: { type: "string", value: "x", style } },
+      {
+        op: "setCell",
+        sheet: "S",
+        cell: "C3",
+        value: { type: "string", value: "y", style: { alignment: { textRotation: "vertical" } } },
+      },
+    ])
+
+    const imported = await importWorkbookXlsx(await exportWorkbookXlsx(source), "Styles")
+
+    expect(imported.sheets[0].cells.B2.style).toEqual(style)
+    expect(imported.sheets[0].cells.C3.style).toEqual({ alignment: { textRotation: "vertical" } })
+    expect(imported.unsupportedFeatures).toEqual([])
+  })
+
+  it("does not keep or report the workbook's default font as formatting", async () => {
+    const bytes = await excelJsBytes((workbook) => {
+      const sheet = workbook.addWorksheet("Fill")
+      sheet.getCell("A1").value = "x"
+      // ExcelJS writes the default Calibri 11 / theme text color into this cell's style.
+      sheet.getCell("A1").fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFFFFF00" },
+      }
+    })
+    const imported = await importWorkbookXlsx(bytes, "Defaults")
+    expect(imported.sheets[0].cells.A1.style).toEqual({ fill: { color: "FFFFFF00" } })
+    expect(imported.unsupportedFeatures).toEqual([])
+  })
+
+  it.each([
+    ["a theme font color", (cell: ExcelJS.Cell) => (cell.font = { color: { theme: 4 } })],
+    [
+      "a gradient fill",
+      (cell: ExcelJS.Cell) =>
+        (cell.fill = {
+          type: "gradient",
+          gradient: "angle",
+          degree: 0,
+          stops: [
+            { position: 0, color: { argb: "FF0000FF" } },
+            { position: 1, color: { argb: "FFFFFFFF" } },
+          ],
+        }),
+    ],
+    [
+      "a patterned fill",
+      (cell: ExcelJS.Cell) =>
+        (cell.fill = { type: "pattern", pattern: "darkGrid", fgColor: { argb: "FF00FF00" } }),
+    ],
+    [
+      "a diagonal border",
+      (cell: ExcelJS.Cell) => (cell.border = { diagonal: { up: true, style: "thin" } }),
+    ],
+    ["justified text", (cell: ExcelJS.Cell) => (cell.alignment = { horizontal: "justify" })],
+    ["superscript", (cell: ExcelJS.Cell) => (cell.font = { vertAlign: "superscript" })],
+    ["shrink to fit", (cell: ExcelJS.Cell) => (cell.alignment = { shrinkToFit: true })],
+  ])("reports %s as formatting it cannot keep", async (_label, format) => {
+    const bytes = await excelJsBytes((workbook) => {
+      const cell = workbook.addWorksheet("S").getCell("A1")
+      cell.value = "x"
+      format(cell)
+    })
+    expect((await importWorkbookXlsx(bytes, "Lossy")).unsupportedFeatures).toEqual([
+      UNSUPPORTED_FEATURES.cellFormatting,
+    ])
+  })
+
+  it("matches sheets by name, so one sheet's styles never land on another", async () => {
+    const bytes = await excelJsBytes((workbook) => {
+      workbook.addWorksheet("First").getCell("A1").value = "plain"
+      const second = workbook.addWorksheet("Second").getCell("A1")
+      second.value = "bold"
+      second.font = { bold: true }
+    })
+    const imported = await importWorkbookXlsx(bytes, "Two")
+    expect(imported.sheets.map((sheet) => [sheet.title, sheet.cells.A1.style])).toEqual([
+      ["First", undefined],
+      ["Second", { font: { bold: true } }],
+    ])
+  })
+
+  it("reports a sheet whose formatting cannot be read and keeps the others", async () => {
+    const bytes = await excelJsBytes((workbook) => {
+      for (const title of ["Good", "Bad"]) {
+        const cell = workbook.addWorksheet(title).getCell("A1")
+        cell.value = title
+        cell.font = { italic: true }
+      }
+    })
+    const getWorksheet = ExcelJS.Workbook.prototype.getWorksheet
+    const spy = jest.spyOn(ExcelJS.Workbook.prototype, "getWorksheet").mockImplementation(function (
+      this: ExcelJS.Workbook,
+      id
+    ) {
+      const worksheet = getWorksheet.call(this, id)
+      if (id === "Bad" && worksheet)
+        worksheet.getCell = () => {
+          throw new Error("corrupt style record")
+        }
+      return worksheet
+    })
+    try {
+      const imported = await importWorkbookXlsx(bytes, "Partial")
+      expect(imported.sheets[0].cells.A1.style).toEqual({ font: { italic: true } })
+      expect(imported.unsupportedFeatures).toEqual([UNSUPPORTED_FEATURES.cellStyles])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("does not report formatting loss for delimited text", async () => {
+    const imported = await importWorkbookXlsx(new TextEncoder().encode("a,b\n1,2"), "CSV")
+    expect(imported.unsupportedFeatures).not.toContain(UNSUPPORTED_FEATURES.cellStyles)
+    expect(imported.unsupportedFeatures).not.toContain(UNSUPPORTED_FEATURES.cellFormatting)
+  })
 })

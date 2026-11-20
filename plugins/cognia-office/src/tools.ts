@@ -1,5 +1,10 @@
 import { definePluginTool, type PluginToolRegistration } from "@cognia/plugin-sdk"
-import { MAX_STYLED_RANGE_CELLS, type WorkbookOperation } from "./model"
+import {
+  MAX_STYLED_RANGE_CELLS,
+  WORKBOOK_BORDER_STYLES,
+  WORKBOOK_STYLE_LIMITS,
+  type WorkbookOperation,
+} from "./model"
 import { DEFAULT_READ_CELLS, MAX_READ_CELLS } from "./read-range"
 import { createOfficeRuntime, type OfficePluginContext } from "./runtime"
 
@@ -327,6 +332,15 @@ const artifactOnlySchema = {
   additionalProperties: false,
 }
 
+const colorSchema = { type: "string", pattern: "^#?([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" } as const
+
+const borderEdgeSchema = {
+  type: "object",
+  properties: { style: { enum: WORKBOOK_BORDER_STYLES }, color: colorSchema },
+  required: ["style"],
+  additionalProperties: false,
+} as const
+
 const styleSchema = {
   type: "object",
   properties: {
@@ -336,14 +350,33 @@ const styleSchema = {
       properties: {
         bold: { type: "boolean" },
         italic: { type: "boolean" },
-        color: { type: "string", pattern: "^#?[0-9A-Fa-f]{6,8}$" },
+        color: colorSchema,
+        name: { type: "string", minLength: 1, maxLength: 31, description: "Font family." },
+        size: {
+          type: "number",
+          minimum: WORKBOOK_STYLE_LIMITS.fontSize.min,
+          maximum: WORKBOOK_STYLE_LIMITS.fontSize.max,
+          description: "Points.",
+        },
+        underline: { enum: ["single", "double"] },
+        strike: { type: "boolean" },
       },
       additionalProperties: false,
     },
     fill: {
       type: "object",
-      properties: { color: { type: "string", pattern: "^#?[0-9A-Fa-f]{6,8}$" } },
+      properties: { color: colorSchema },
       required: ["color"],
+      additionalProperties: false,
+    },
+    border: {
+      type: "object",
+      properties: {
+        top: borderEdgeSchema,
+        right: borderEdgeSchema,
+        bottom: borderEdgeSchema,
+        left: borderEdgeSchema,
+      },
       additionalProperties: false,
     },
     alignment: {
@@ -352,6 +385,22 @@ const styleSchema = {
         horizontal: { enum: ["left", "center", "right"] },
         vertical: { enum: ["top", "middle", "bottom"] },
         wrapText: { type: "boolean" },
+        textRotation: {
+          anyOf: [
+            {
+              type: "integer",
+              minimum: WORKBOOK_STYLE_LIMITS.textRotation.min,
+              maximum: WORKBOOK_STYLE_LIMITS.textRotation.max,
+            },
+            { const: "vertical" },
+          ],
+          description: "Degrees counter-clockwise, or vertical for stacked text.",
+        },
+        indent: {
+          type: "integer",
+          minimum: WORKBOOK_STYLE_LIMITS.indent.min,
+          maximum: WORKBOOK_STYLE_LIMITS.indent.max,
+        },
       },
       additionalProperties: false,
     },

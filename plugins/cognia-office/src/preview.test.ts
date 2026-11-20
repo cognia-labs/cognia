@@ -327,6 +327,48 @@ it("renders merges, dimensions, all basic styles, blank values, and cell locatio
   )
 })
 
+it("draws font family and size, underline, strike, borders, indent and rotated text (F13)", () => {
+  const workbook = applyWorkbookOperations(createWorkbook("Look", "Data"), [
+    {
+      op: "setCell",
+      sheet: "Data",
+      cell: "A1",
+      value: {
+        type: "string",
+        value: "Styled",
+        style: {
+          font: { name: 'Ar"ial', size: 14, underline: "double", strike: true },
+          border: { top: { style: "thick", color: "FFFF0000" }, left: { style: "dashed" } },
+          alignment: { indent: 2, textRotation: 45 },
+        },
+      },
+    },
+    {
+      op: "setCell",
+      sheet: "Data",
+      cell: "B1",
+      value: { type: "string", value: "Down", style: { alignment: { textRotation: "vertical" } } },
+    },
+  ])
+  const container = document.createElement("div")
+  createWorkbookRenderer(translator()).mount(artifact(JSON.stringify(workbook)), container)
+
+  const [first, second] = Array.from(container.querySelectorAll("td")) as HTMLTableCellElement[]
+  expect(first.style.fontFamily).toContain('"Arial"')
+  expect(first.style.fontSize).toBe("14pt")
+  expect(first.style.textDecorationLine).toBe("underline line-through")
+  expect(first.style.textDecorationStyle).toBe("double")
+  expect(first.style.borderTop).toBe("3px solid rgb(255, 0, 0)")
+  expect(first.style.borderLeft).toBe("1px dashed currentcolor")
+  expect(first.style.paddingInlineStart).toContain("6ch")
+  const rotated = first.querySelector<HTMLElement>(".copv-cell-text")!
+  expect(rotated).toHaveTextContent("Styled")
+  expect(rotated.style.transform).toBe("rotate(-45deg)")
+  expect(second.querySelector<HTMLElement>(".copv-cell-text")!.style.writingMode).toBe(
+    "vertical-rl"
+  )
+})
+
 it("marks frozen panes and filtered headers, and badges the sheet tab", () => {
   const workbook = applyWorkbookOperations(createWorkbook("Pinned", "Data"), [
     {

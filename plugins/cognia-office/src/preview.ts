@@ -13,6 +13,8 @@ import {
   unsupportedFeatureId,
   usedRangeAddress,
   validateWorkbook,
+  WORKBOOK_BORDER_EDGES,
+  type WorkbookBorderEdge,
   type WorkbookCell,
   type WorkbookDocument,
   type WorkbookOperation,
@@ -663,10 +665,51 @@ function renderCellContent(td: HTMLElement, cell: WorkbookCell | undefined): voi
     td.title = `=${cell.formula}`
     if (cell.value === undefined) {
       td.textContent = `=${cell.formula}`
+      rotateCellText(td, cell.style)
       return
     }
   }
   td.textContent = displayValue(cell)
+  rotateCellText(td, cell.style)
+}
+
+/**
+ * Rotated or stacked text, as Excel draws it. The text is wrapped in its own
+ * box so the transform turns the text, not the table cell's layout.
+ */
+function rotateCellText(td: HTMLElement, style: WorkbookCell["style"]): void {
+  const rotation = style?.alignment?.textRotation
+  if (rotation === undefined || rotation === 0) return
+  const text = document.createElement("span")
+  text.className = "copv-cell-text"
+  text.textContent = td.textContent
+  text.style.display = "inline-block"
+  if (rotation === "vertical") {
+    text.style.writingMode = "vertical-rl"
+    text.style.textOrientation = "upright"
+  } else {
+    // Excel's angle is counter-clockwise; CSS rotates clockwise.
+    text.style.transform = `rotate(${-rotation}deg)`
+  }
+  td.replaceChildren(text)
+}
+
+/** A border edge in CSS: Excel's thin/medium/thick widths and its dash families. */
+function cssBorder(edge: WorkbookBorderEdge): string {
+  const width = /^medium|^slant/.test(edge.style)
+    ? 2
+    : edge.style === "thick" || edge.style === "double"
+      ? 3
+      : 1
+  const line =
+    edge.style === "double"
+      ? "double"
+      : /dotted|DotDot/.test(edge.style)
+        ? "dotted"
+        : /Dash|dash/.test(edge.style)
+          ? "dashed"
+          : "solid"
+  return `${width}px ${line} ${edge.color ? cssColor(edge.color) : "currentColor"}`
 }
 
 function displayValue(cell: WorkbookCell): string {
@@ -703,6 +746,24 @@ function applyCellStyle(element: HTMLElement, style: WorkbookCell["style"]): voi
   if (style.font?.bold) element.style.fontWeight = "700"
   if (style.font?.italic) element.style.fontStyle = "italic"
   if (style.font?.color) element.style.color = cssColor(style.font.color)
+  if (style.font?.name)
+    element.style.fontFamily = `"${style.font.name.replace(/["\\]/g, "")}", var(--font-sans)`
+  if (style.font?.size !== undefined) element.style.fontSize = `${style.font.size}pt`
+  const decorations = [
+    ...(style.font?.underline ? ["underline"] : []),
+    ...(style.font?.strike ? ["line-through"] : []),
+  ]
+  if (decorations.length) element.style.textDecorationLine = decorations.join(" ")
+  if (style.font?.underline === "double") element.style.textDecorationStyle = "double"
+  for (const side of WORKBOOK_BORDER_EDGES) {
+    const edge = style.border?.[side]
+    if (!edge) continue
+    const property = `border${side[0].toUpperCase()}${side.slice(1)}` as
+      "borderTop" | "borderRight" | "borderBottom" | "borderLeft"
+    element.style[property] = cssBorder(edge)
+  }
+  if (style.alignment?.indent)
+    element.style.paddingInlineStart = `calc(6px + ${style.alignment.indent * 3}ch)`
   if (style.fill?.color) element.style.backgroundColor = cssColor(style.fill.color)
   if (style.alignment?.horizontal) element.style.textAlign = style.alignment.horizontal
   if (style.alignment?.vertical) element.style.verticalAlign = style.alignment.vertical

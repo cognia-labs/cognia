@@ -4,6 +4,7 @@ import {
   parseWorkbook,
   summarizeWorkbook,
   usedRange,
+  cellStyleProblems,
   validateWorkbook,
   WORKBOOK_OPERATION_NAMES,
   type WorkbookOperation,
@@ -786,4 +787,84 @@ const rangeOperationErrors: Array<[string, WorkbookOperation, string]> = [
 
 it.each(rangeOperationErrors)("rejects range operation: %s", (_name, operation, message) => {
   expect(() => applyWorkbookOperations(createWorkbook("x"), [operation])).toThrow(message)
+})
+
+describe("cell style limits (F13)", () => {
+  it("accepts what Excel accepts", () => {
+    expect(
+      cellStyleProblems({
+        font: { name: "Calibri", size: 409, underline: "single", color: "#112233" },
+        border: { top: { style: "slantDashDot", color: "FF000000" } },
+        alignment: { textRotation: -90, indent: 250 },
+      })
+    ).toEqual([])
+    expect(cellStyleProblems({ alignment: { textRotation: "vertical" } })).toEqual([])
+  })
+
+  it("names every property Excel would refuse or repair", () => {
+    expect(
+      cellStyleProblems({
+        numberFormat: " ",
+        font: { name: "x".repeat(32), size: 0, underline: "wavy" as never, color: "red" },
+        fill: { color: "#12" },
+        border: {
+          top: { style: "groove" as never },
+          left: { style: "thin", color: "blue" },
+          diagonal: { style: "thin" },
+        } as never,
+        alignment: { textRotation: 91, indent: 1.5 },
+      })
+    ).toEqual([
+      "numberFormat",
+      "font.color",
+      "font.name",
+      "font.size",
+      "font.underline",
+      "fill.color",
+      "border.top.style",
+      "border.left.color",
+      "border.diagonal",
+      "alignment.textRotation",
+      "alignment.indent",
+    ])
+  })
+
+  it("reports an invalid style as a validation error on its cell", () => {
+    const workbook = createWorkbook("Bad", "S")
+    workbook.sheets[0].cells.A1 = {
+      type: "string",
+      value: "x",
+      style: { font: { size: 500 } },
+    }
+    expect(validateWorkbook(workbook)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "cell.style.invalid",
+          cell: "A1",
+          params: { property: "font.size" },
+        }),
+      ])
+    )
+  })
+
+  it("merges border edges instead of replacing the whole border", () => {
+    const workbook = applyWorkbookOperations(createWorkbook("Edges", "S"), [
+      {
+        op: "setRangeStyle",
+        sheet: "S",
+        range: "A1",
+        style: { border: { top: { style: "thin" } } },
+      },
+      {
+        op: "setRangeStyle",
+        sheet: "S",
+        range: "A1",
+        style: { border: { bottom: { style: "double" } } },
+      },
+    ])
+    expect(workbook.sheets[0].cells.A1.style?.border).toEqual({
+      top: { style: "thin" },
+      bottom: { style: "double" },
+    })
+  })
 })

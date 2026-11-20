@@ -24,14 +24,63 @@ export const MAX_STYLED_RANGE_CELLS = 100_000
 
 export type WorkbookCellType = "string" | "number" | "boolean" | "date" | "blank" | "error"
 
+/** Line styles a cell border can have, as OOXML names them. */
+export const WORKBOOK_BORDER_STYLES = [
+  "thin",
+  "medium",
+  "thick",
+  "hair",
+  "dotted",
+  "dashed",
+  "double",
+  "mediumDashed",
+  "dashDot",
+  "mediumDashDot",
+  "dashDotDot",
+  "mediumDashDotDot",
+  "slantDashDot",
+] as const
+export type WorkbookBorderStyle = (typeof WORKBOOK_BORDER_STYLES)[number]
+
+/** One edge of a cell border; `color` is RGB / ARGB hex. */
+export interface WorkbookBorderEdge {
+  style: WorkbookBorderStyle
+  color?: string
+}
+
+export const WORKBOOK_BORDER_EDGES = ["top", "right", "bottom", "left"] as const
+export type WorkbookBorderSide = (typeof WORKBOOK_BORDER_EDGES)[number]
+
+/** Excel's limits for the numeric style properties. */
+export const WORKBOOK_STYLE_LIMITS = {
+  fontSize: { min: 1, max: 409 },
+  indent: { min: 0, max: 250 },
+  textRotation: { min: -90, max: 90 },
+} as const
+
 export interface WorkbookCellStyle {
   numberFormat?: string
-  font?: { bold?: boolean; italic?: boolean; color?: string }
+  font?: {
+    bold?: boolean
+    italic?: boolean
+    color?: string
+    /** Font family, e.g. "Calibri". */
+    name?: string
+    /** Size in points. */
+    size?: number
+    underline?: "single" | "double"
+    strike?: boolean
+  }
   fill?: { color: string }
+  border?: Partial<Record<WorkbookBorderSide, WorkbookBorderEdge>>
   alignment?: {
     horizontal?: "left" | "center" | "right"
     vertical?: "top" | "middle" | "bottom"
     wrapText?: boolean
+    /** Degrees counter-clockwise (-90 to 90), or text stacked top to bottom. */
+    textRotation?: number | "vertical"
+    /** Indent level (each level is about three characters wide). */
+    indent?: number
   }
 }
 
@@ -141,6 +190,9 @@ export const UNSUPPORTED_FEATURES = {
   hyperlinks: "Cell hyperlinks are present and will not be preserved.",
   sheetProtection: "Sheet protection is present and will not be preserved.",
   legacyDrawings: "Legacy comment drawings are present and will not be preserved.",
+  cellFormatting:
+    "Some cell formatting (theme colors, gradient or patterned fills, diagonal borders, justified text, sub- or superscript, accounting underlines) is present and will not be preserved.",
+  cellStyles: "Cell formatting could not be read and will not be preserved.",
   uninspectable: "The workbook package could not be inspected for unsupported OOXML features.",
 } as const
 export type UnsupportedFeatureId = keyof typeof UNSUPPORTED_FEATURES
@@ -276,6 +328,18 @@ export function validateWorkbook(workbook: WorkbookDocument): WorkbookValidation
             ref
           )
         )
+      }
+      for (const property of cell.style ? cellStyleProblems(cell.style) : []) {
+        findings.push({
+          ...error(
+            "cell.style.invalid",
+            `Invalid cell style: ${property}.`,
+            "Use a hex color, a font size of 1–409 pt, an indent of 0–250, a rotation of -90 to 90 degrees (or vertical), and one of Excel's border styles.",
+            sheet.title,
+            ref
+          ),
+          params: { property },
+        })
       }
       if (cell.formula !== undefined && !cell.formula.trim()) {
         findings.push(
@@ -566,8 +630,58 @@ function mergeStyle(
   if (patch.numberFormat !== undefined) next.numberFormat = patch.numberFormat
   if (patch.font) next.font = { ...next.font, ...patch.font }
   if (patch.fill) next.fill = { ...patch.fill }
+  if (patch.border) next.border = { ...next.border, ...structuredClone(patch.border) }
   if (patch.alignment) next.alignment = { ...next.alignment, ...patch.alignment }
   return next
+}
+
+const HEX_COLOR = /^#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/
+
+/**
+ * What is wrong with a cell style, one entry per property (`font.size`,
+ * `border.top.style`, …), checked against Excel's own limits so an export
+ * never writes a style Excel repairs or refuses.
+ */
+export function cellStyleProblems(style: WorkbookCellStyle): string[] {
+  const problems: string[] = []
+  const inRange = (value: unknown, { min, max }: { min: number; max: number }) =>
+    typeof value === "number" && Number.isFinite(value) && value >= min && value <= max
+  const { font, fill, border, alignment } = style
+  if (style.numberFormat !== undefined && !style.numberFormat.trim()) problems.push("numberFormat")
+  if (font?.color !== undefined && !HEX_COLOR.test(font.color)) problems.push("font.color")
+  if (font?.name !== undefined && (!font.name.trim() || font.name.length > 31))
+    problems.push("font.name")
+  if (font?.size !== undefined && !inRange(font.size, WORKBOOK_STYLE_LIMITS.fontSize))
+    problems.push("font.size")
+  if (font?.underline !== undefined && font.underline !== "single" && font.underline !== "double")
+    problems.push("font.underline")
+  if (fill && !HEX_COLOR.test(fill.color ?? "")) problems.push("fill.color")
+  for (const side of Object.keys(border ?? {})) {
+    const edge = border![side as WorkbookBorderSide]
+    if (!(WORKBOOK_BORDER_EDGES as readonly string[]).includes(side)) {
+      problems.push(`border.${side}`)
+      continue
+    }
+    if (!edge || !(WORKBOOK_BORDER_STYLES as readonly string[]).includes(edge.style))
+      problems.push(`border.${side}.style`)
+    if (edge?.color !== undefined && !HEX_COLOR.test(edge.color))
+      problems.push(`border.${side}.color`)
+  }
+  if (
+    alignment?.textRotation !== undefined &&
+    alignment.textRotation !== "vertical" &&
+    !(
+      Number.isInteger(alignment.textRotation) &&
+      inRange(alignment.textRotation, WORKBOOK_STYLE_LIMITS.textRotation)
+    )
+  )
+    problems.push("alignment.textRotation")
+  if (
+    alignment?.indent !== undefined &&
+    !(Number.isInteger(alignment.indent) && inRange(alignment.indent, WORKBOOK_STYLE_LIMITS.indent))
+  )
+    problems.push("alignment.indent")
+  return problems
 }
 
 function appendRows(sheet: WorkbookSheet, rows: WorkbookCell[][], column = "A"): void {
