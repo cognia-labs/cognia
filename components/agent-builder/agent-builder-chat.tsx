@@ -121,6 +121,9 @@ export function AgentBuilderChat({
           onSend={handleSend}
           onStop={() => claude.stop(sessionId)}
           onRegenerate={() => claude.regenerate(sessionId)}
+          onResumeInterrupted={async () => {
+            await claude.resumeInterrupted(sessionId)
+          }}
           onEditResend={(messageId, content) => claude.editAndResend(messageId, content, sessionId)}
           onCreate={() => undefined}
           onUseSample={(text) => void handleSend(text)}

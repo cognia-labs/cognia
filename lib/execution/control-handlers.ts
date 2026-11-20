@@ -168,6 +168,8 @@ export interface ExecutionRunControlHandlerDeps {
    * different switches, so the origin alone cannot say.
    */
   routerFusionRunSurface?: (runId: string) => Promise<ControlledRunSurface | null>
+  /** End an agent turn parked for a person that nothing runs (`closeParkedAgentTurnRun`). */
+  closeParkedAgentRun?: (runId: string) => Promise<boolean>
 }
 
 /**
@@ -200,9 +202,20 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     if (command.action === "open_details") return
     if (command.action === "stop") {
       const controller = agentControllers.get(command.runId)
-      if (!controller) throw new Error("Agent run is not active in this process")
-      controller.abort("execution_run_stopped")
-      return
+      if (controller) {
+        controller.abort("execution_run_stopped")
+        return
+      }
+      // A turn parked after a restart has nothing running it in any process:
+      // Stop closes it instead of failing for want of a live controller.
+      const closeParked =
+        deps.closeParkedAgentRun ??
+        (async (runId: string) => {
+          const { closeParkedAgentTurnRun } = await import("./direct-chat-run")
+          return closeParkedAgentTurnRun(runId, "Stopped after the turn was interrupted")
+        })
+      if (await closeParked(command.runId)) return
+      throw new Error("Agent run is not active in this process")
     }
     if (command.action === "resume") {
       const resume =

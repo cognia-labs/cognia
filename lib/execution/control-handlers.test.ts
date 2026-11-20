@@ -217,6 +217,27 @@ describe("execution source control handlers", () => {
     installed.dispose()
   })
 
+  it("closes a parked turn on Stop when nothing in this process runs it", async () => {
+    const closeParkedAgentRun = jest.fn(async (runId: string) => runId === "run-parked")
+    const installed = installExecutionRunControlHandlers({ closeParkedAgentRun })
+    const stop = (runId: string) =>
+      installed.agent({
+        runId,
+        action: "stop",
+        idempotencyKey: `stop-${runId}`,
+        expectedRevision: 0,
+        actor: {},
+      })
+    try {
+      await expect(stop("run-parked")).resolves.toBeUndefined()
+      expect(closeParkedAgentRun).toHaveBeenCalledWith("run-parked")
+      // Neither live here nor parked: there is still nothing to stop.
+      await expect(stop("run-elsewhere")).rejects.toThrow("Agent run is not active in this process")
+    } finally {
+      installed.dispose()
+    }
+  })
+
   it("routes agent resume through the canonical crashed-run recovery entry", async () => {
     const resumeAgentRun = jest.fn(async () => ({ resumed: true as const }))
     const installed = installExecutionRunControlHandlers({ resumeAgentRun })

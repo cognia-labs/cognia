@@ -3,9 +3,15 @@
 import "fake-indexeddb/auto"
 
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
-import { createExecutionRun, listExecutionRunEvents } from "@/lib/db/execution-runs"
+import {
+  createExecutionRun,
+  runEventJournal,
+  listExecutionRunEvents,
+  semanticRunEvent,
+} from "@/lib/db/execution-runs"
 import { recordedRunMetadata, LOCAL_PERSON_RUN } from "./acting-authority"
 import {
+  closeParkedAgentTurnRun,
   ensureDirectChatExecutionRun,
   releasePreparedDirectChatExecutionRun,
   finishUnstartedDirectChatExecutionRun,
@@ -16,6 +22,11 @@ import {
   recoverStaleDirectChatExecutionRuns,
   startDirectChatExecutionRun,
 } from "./direct-chat-run"
+
+const anchored = new Set<string>()
+jest.mock("@/lib/ai/agent/recovery/reconcile-crashed-runs", () => ({
+  hasAgentRunRecoveryAnchor: async (runId: string) => anchored.has(runId),
+}))
 
 const settlePlanChatHandoffAfterTurn = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock("@/lib/agent/plan/chat-handoff", () => ({
@@ -151,6 +162,53 @@ describe("direct chat execution run", () => {
     await expect(getDb().executionRuns.get("run:done")).resolves.toMatchObject({
       status: "completed",
     })
+  })
+
+  it("closes a parked turn nothing else can continue, and only that", async () => {
+    const createRun = (id: string) =>
+      createExecutionRun({
+        id,
+        kind: "agent-turn",
+        sourceId: id,
+        sessionId: `session-${id}`,
+        title: "Chat run",
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+      })
+    const park = (id: string) =>
+      runEventJournal.append(
+        id,
+        semanticRunEvent("run.recovery_required", { reason: "renderer-restarted" })
+      )
+    await createRun("run:parked")
+    await park("run:parked")
+    await expect(closeParkedAgentTurnRun("run:parked", "Stopped", 9_000)).resolves.toBe(true)
+    await expect(getDb().executionRuns.get("run:parked")).resolves.toMatchObject({
+      status: "cancelled",
+    })
+    expect((await listExecutionRunEvents("run:parked")).at(-1)).toMatchObject({
+      type: "run.cancelled",
+      payload: { summary: "Stopped" },
+    })
+    // Once closed, there is nothing left to close.
+    await expect(closeParkedAgentTurnRun("run:parked", "Stopped", 9_001)).resolves.toBe(false)
+
+    // A connector's run carries an anchor its inbound job resumes through:
+    // its owner decides, not this.
+    await createRun("run:anchored")
+    await park("run:anchored")
+    anchored.add("run:anchored")
+    await expect(closeParkedAgentTurnRun("run:anchored", "Stopped")).resolves.toBe(false)
+    await expect(getDb().executionRuns.get("run:anchored")).resolves.toMatchObject({
+      status: "recovery_required",
+    })
+
+    // A run that is not parked is not this function's to end.
+    await createRun("run:live")
+    await expect(closeParkedAgentTurnRun("run:live", "Stopped")).resolves.toBe(false)
+    await expect(closeParkedAgentTurnRun("run:missing", "Stopped")).resolves.toBe(false)
   })
 
   it("leaves a turn this load started, or still holds, out of the boot sweep", async () => {

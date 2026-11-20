@@ -359,6 +359,14 @@ export function ResourceWorkbenchChatPanel({
     [claude, resolveResourceContext, resource.kind, sessionId, withArtifactTarget]
   )
 
+  const resumeInterrupted = useCallback(
+    async () =>
+      withArtifactTarget(async () => {
+        await claude.resumeInterrupted(sessionId)
+      }),
+    [claude, sessionId, withArtifactTarget]
+  )
+
   const editAndResend = useCallback(
     async (messageId: string, content: SendContent) =>
       withArtifactTarget(async () => {
@@ -537,6 +545,7 @@ export function ResourceWorkbenchChatPanel({
             onSend={send}
             onStop={() => claude.stop(sessionId)}
             onRegenerate={regenerate}
+            onResumeInterrupted={resumeInterrupted}
             onEditResend={editAndResend}
             onCreate={() => undefined}
             onUseSample={(text) => void send(text).catch(() => undefined)}

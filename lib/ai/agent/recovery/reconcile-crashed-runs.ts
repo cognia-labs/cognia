@@ -166,6 +166,15 @@ function latestRecoveryAnchor(
   return undefined
 }
 
+/**
+ * Whether an owner can resume this run: its journal carries a recovery anchor
+ * (a connector's inbound job wrote one). A parked run without one has nothing
+ * that can continue it on its own; only a person can end or replace it.
+ */
+export async function hasAgentRunRecoveryAnchor(runId: string): Promise<boolean> {
+  return latestRecoveryAnchor(await runEventJournal.replay(runId)) !== undefined
+}
+
 export function validateRecoveryContinuation(
   previous: AgentRunRecoveryAnchorV1,
   next: RecoveryContinuationSpec

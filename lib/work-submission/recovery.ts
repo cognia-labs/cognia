@@ -12,6 +12,13 @@
  * costs an explicit resume. So automatic replay requires positive evidence that
  * nothing happened, not merely the absence of evidence that something did.
  *
+ * Empty records are not that evidence for an attempt a crash cut off: the
+ * journal is written by the renderer as the runtime reports, so a tool the
+ * runtime had already started can be missing from both logs. Only a runner
+ * that watched the runtime decline the work (and released the row) proves the
+ * attempt did nothing; an attempt still `claimed` or `dispatched` stays
+ * unknown and waits for a person.
+ *
  * This does **not** introduce a second recovery machine. It composes the
  * existing zero-replay machinery in `lib/ai/agent/recovery/`:
  * `readCanonicalEnvelopes` + `candidateFromEnvelopes` + `planRecovery` decide
@@ -33,12 +40,20 @@ import type { WorkSubmissionRow } from "@/lib/db/work-submissions"
 /** Run-event types that prove the turn reached a tool. */
 const TOOL_EVENT_TYPES = new Set(["tool.started", "tool.completed", "tool.failed"])
 
+/**
+ * States a runner sets only after `dispatch` reported that the runtime did not
+ * take the work (`releaseWorkSubmission`). Any other state on a row being
+ * planned again means its attempt ended in a crash, mid-flight.
+ */
+const RELEASED_STATES = new Set<WorkSubmissionRow["dispatchState"]>(["pending", "blocked"])
+
 export type WorkRecoveryDecision =
   | {
       action: "redispatch"
       /**
        * `never-dispatched` — the runtime was never handed the work.
-       * `no-observed-effects` — it was, but nothing side-effecting was recorded.
+       * `no-observed-effects` — an earlier attempt was declined by the runtime
+       * and released, and nothing side-effecting was recorded for it.
        */
       reason: "never-dispatched" | "no-observed-effects"
     }
@@ -46,6 +61,8 @@ export type WorkRecoveryDecision =
       action: "recovery_required"
       reason:
         | "observed-tool-activity"
+        /** A crash cut the attempt off and nothing proves it had not started. */
+        | "unconfirmed-attempt"
         | "corrupt-canonical-log"
         | "no-candidates"
         | "forked-history"
@@ -113,14 +130,33 @@ export async function planWorkSubmissionRecovery(
     }
   }
 
-  // An absent canonical log is the common case for a turn that died before the
-  // runtime produced anything. Combined with the tool-event check above, that
-  // is positive evidence of "nothing happened" — not merely missing evidence.
   // (`candidateFromEnvelopes` returns undefined exactly when there are none.)
   const candidate = candidateFromEnvelopes(envelopes)
-  if (!candidate) return { action: "redispatch", reason: "no-observed-effects" }
+  if (candidate) {
+    const plan = planRecovery([candidate])
+    if (plan.action === "recovery_required") {
+      return { action: "recovery_required", reason: plan.reason, detail: plan.detail }
+    }
+    // Replay starts the turn over, so a tool that finished runs a second time:
+    // a resolved call is as disqualifying as an open one.
+    const calls = candidate.turns.flatMap((turn) => turn.toolCalls ?? [])
+    if (calls.length > 0) {
+      return {
+        action: "recovery_required",
+        reason: "observed-tool-activity",
+        detail: [`${calls.length} tool call(s) in the canonical log of run ${row.runId}`],
+      }
+    }
+  }
 
-  const plan = planRecovery([candidate])
-  if (plan.action === "auto") return { action: "redispatch", reason: "no-observed-effects" }
-  return { action: "recovery_required", reason: plan.reason, detail: plan.detail }
+  if (!RELEASED_STATES.has(row.dispatchState)) {
+    return {
+      action: "recovery_required",
+      reason: "unconfirmed-attempt",
+      detail: [
+        `attempt ${row.attemptCount} of run ${row.runId} was cut off while ${row.dispatchState}`,
+      ],
+    }
+  }
+  return { action: "redispatch", reason: "no-observed-effects" }
 }

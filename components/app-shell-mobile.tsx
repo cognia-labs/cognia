@@ -1145,6 +1145,13 @@ export function AppShellMobile() {
                 }
                 onSteerFlush={isTeamSession ? teamChat.flushSteer : directChat.flushSteer}
                 onRegenerate={isTeamSession ? teamChat.regenerate : directChat.regenerate}
+                onResumeInterrupted={
+                  isTeamSession
+                    ? undefined
+                    : async () => {
+                        await directChat.resumeInterrupted()
+                      }
+                }
                 onEditResend={isTeamSession ? teamChat.editAndResend : directChat.editAndResend}
                 onCreate={handleNewDirect}
                 onUseSample={(text) => void handleFirstTurn(text)}

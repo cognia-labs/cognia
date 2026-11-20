@@ -458,6 +458,12 @@ export function DesktopChatWorkspace() {
     (sid: string) => (isTeamSessionId(sid) ? teamChat.regenerate(sid) : directChat.regenerate(sid)),
     [directChat, teamChat, isTeamSessionId]
   )
+  // Only a direct turn is accepted as a durable chat submission, so only a
+  // direct conversation can hold a parked one to continue.
+  const paneResumeInterrupted = useCallback(
+    (sid: string) => (isTeamSessionId(sid) ? undefined : directChat.resumeInterrupted(sid)),
+    [directChat, isTeamSessionId]
+  )
   const paneEditResend = useCallback(
     (messageId: string, content: SendContent, sid: string) =>
       isTeamSessionId(sid)
@@ -748,6 +754,7 @@ export function DesktopChatWorkspace() {
                     steerNow={paneSteer}
                     steerFlush={paneFlush}
                     regenerate={paneRegenerate}
+                    resumeInterrupted={paneResumeInterrupted}
                     editResend={paneEditResend}
                     rewindFiles={directChat.rewindFiles}
                     compact={directChat.compact}

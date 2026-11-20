@@ -260,6 +260,7 @@
   "hooks/browser/use-selection-to-chat.ts | useSelectionToChat | send | 6",
   "hooks/chat/agent-chat-edit-regenerate.ts | runEditAndResend | send | 1",
   "hooks/chat/agent-chat-edit-regenerate.ts | runRegenerate | send | 1",
+  "hooks/chat/agent-chat-edit-regenerate.ts | runResumeInterrupted | send | 1",
   "hooks/chat/agent-chat-events.ts | handleEvent | planOutboundAsk | 1",
   "hooks/chat/agent-chat-events.ts | planOutboundAsk | planOutboundAsk | 1",
   "hooks/chat/use-agent-chat-controller.ts | continueFromLease | send | 1",

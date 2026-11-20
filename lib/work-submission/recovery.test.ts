@@ -57,12 +57,28 @@ describe("planWorkSubmissionRecovery", () => {
     expect(listRunEvents).not.toHaveBeenCalled()
   })
 
-  it("re-dispatches when a claimed attempt recorded nothing at all", async () => {
-    expect(await planWorkSubmissionRecovery(row(), noEvents)).toEqual({
-      action: "redispatch",
-      reason: "no-observed-effects",
-    })
-  })
+  it.each(["claimed", "dispatched"] as const)(
+    "parks a %s attempt a crash cut off, even when it recorded nothing",
+    async (dispatchState) => {
+      // The renderer writes the journal as the runtime reports, so a tool the
+      // runtime had started can be missing from both logs: empty is unknown.
+      expect(await planWorkSubmissionRecovery(row({ dispatchState }), noEvents)).toEqual({
+        action: "recovery_required",
+        reason: "unconfirmed-attempt",
+        detail: [`attempt 1 of run run-1 was cut off while ${dispatchState}`],
+      })
+    }
+  )
+
+  it.each(["pending", "blocked"] as const)(
+    "re-dispatches a %s attempt the runtime declined and that recorded nothing",
+    async (dispatchState) => {
+      expect(await planWorkSubmissionRecovery(row({ dispatchState }), noEvents)).toEqual({
+        action: "redispatch",
+        reason: "no-observed-effects",
+      })
+    }
+  )
 
   it.each(["tool.started", "tool.completed", "tool.failed"])(
     "refuses to replay after a %s event",
@@ -93,7 +109,7 @@ describe("planWorkSubmissionRecovery", () => {
   })
 
   it("ignores non-tool run events", async () => {
-    const decision = await planWorkSubmissionRecovery(row(), {
+    const decision = await planWorkSubmissionRecovery(row({ dispatchState: "pending" }), {
       listRunEvents: async () => [event("run.started"), event("step.started")],
       readEnvelopes: async () => [],
     })
@@ -172,14 +188,22 @@ describe("planWorkSubmissionRecovery", () => {
     })
   })
 
-  it("re-dispatches when the canonical log shows only resolved text", async () => {
-    const decision = await planWorkSubmissionRecovery(row(), {
+  it("does not take a text-only log from a crashed attempt as proof nothing ran", async () => {
+    const textOnly = {
       listRunEvents: async () => [],
       readEnvelopes: async () => [
         { turnId: "turn-1", event: { kind: "text-delta", delta: "partial reply" } } as never,
       ],
+    }
+    // A tool call may have been under way after the text, not yet logged.
+    expect(await planWorkSubmissionRecovery(row(), textOnly)).toMatchObject({
+      action: "recovery_required",
+      reason: "unconfirmed-attempt",
     })
-    expect(decision).toEqual({ action: "redispatch", reason: "no-observed-effects" })
+    expect(await planWorkSubmissionRecovery(row({ dispatchState: "blocked" }), textOnly)).toEqual({
+      action: "redispatch",
+      reason: "no-observed-effects",
+    })
   })
 
   describe("against the real journal (no injected deps)", () => {
@@ -200,9 +224,17 @@ describe("planWorkSubmissionRecovery", () => {
       // exceeds Jest's 5s default hook budget.
     }, 30_000)
 
-    it("re-dispatches a stranded run whose journal records no tools", async () => {
+    it("parks a stranded run whose journal records no tools", async () => {
       await runEventJournal.append("run-1", semanticRunEvent("run.started", {}, { ts: NOW }))
-      expect(await planWorkSubmissionRecovery(row())).toEqual({
+      expect(await planWorkSubmissionRecovery(row())).toMatchObject({
+        action: "recovery_required",
+        reason: "unconfirmed-attempt",
+      })
+    }, 30_000)
+
+    it("re-dispatches a released run whose journal records no tools", async () => {
+      await runEventJournal.append("run-1", semanticRunEvent("run.started", {}, { ts: NOW }))
+      expect(await planWorkSubmissionRecovery(row({ dispatchState: "pending" }))).toEqual({
         action: "redispatch",
         reason: "no-observed-effects",
       })
@@ -221,8 +253,8 @@ describe("planWorkSubmissionRecovery", () => {
     }, 30_000)
   })
 
-  it("re-dispatches when every canonical tool call was resolved", async () => {
-    const decision = await planWorkSubmissionRecovery(row(), {
+  it("refuses to replay a tool call that finished: replay would run it again", async () => {
+    const decision = await planWorkSubmissionRecovery(row({ dispatchState: "pending" }), {
       listRunEvents: async () => [],
       readEnvelopes: async () => [
         {
@@ -232,6 +264,10 @@ describe("planWorkSubmissionRecovery", () => {
         { turnId: "turn-1", event: { kind: "tool-result", toolCallId: "call-1" } } as never,
       ],
     })
-    expect(decision).toEqual({ action: "redispatch", reason: "no-observed-effects" })
+    expect(decision).toEqual({
+      action: "recovery_required",
+      reason: "observed-tool-activity",
+      detail: ["1 tool call(s) in the canonical log of run run-1"],
+    })
   })
 })

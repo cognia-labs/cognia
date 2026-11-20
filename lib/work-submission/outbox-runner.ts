@@ -92,8 +92,12 @@ async function handleOne(
   // Decide replay safety BEFORE claiming, so a submission that must not be
   // replayed is never even marked as attempted again.
   const plan = await planWorkSubmissionRecovery(row, deps)
-  if (plan.action === "recovery_required") {
-    await settleWorkSubmissionWithoutTranscript(row.id, "recovery_required", now, plan.reason)
+  const parkReason = plan.action === "recovery_required" ? plan.reason : undefined
+  // A runtime that accepted the work may still be running it. Parking the row
+  // must not leave that runtime working on a turn nobody owns, so a dispatched
+  // row is taken over and its runtime stopped first, as a replacement would be.
+  if (parkReason && row.dispatchState !== "dispatched") {
+    await settleWorkSubmissionWithoutTranscript(row.id, "recovery_required", now, parkReason)
     result.recoveryRequired += 1
     return
   }
@@ -149,6 +153,13 @@ async function handleOne(
       return
     }
     if (!(await stillOwnsClaim())) return
+  }
+
+  if (parkReason) {
+    stopHeartbeat()
+    await settleWorkSubmissionWithoutTranscript(row.id, "recovery_required", now, parkReason)
+    result.recoveryRequired += 1
+    return
   }
 
   let outcome: WorkDispatchOutcome

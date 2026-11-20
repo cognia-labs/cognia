@@ -3100,8 +3100,17 @@
     "recoveryRequired": {
       "title": "Needs your attention",
       "body": "The app could not safely restore this turn, so it was not retried automatically. Review the conversation and execution details before deciding whether to send it again.",
+      "resume": "Continue from where it stopped",
+      "resuming": "Continuing…",
+      "resumeConfirm": {
+        "title": "Continue this turn?",
+        "body": "This turn may already have run tools before it was cut off. Continuing can repeat their effects, such as writing a file or sending a message again. Check the conversation for what already happened before you continue.",
+        "confirm": "Continue",
+        "cancel": "Cancel"
+      },
       "reasons": {
         "toolActivity": "This turn stopped after it had already started using tools, so it was not retried automatically — repeating it could redo work that cannot be undone. Review what happened before sending it again.",
+        "unconfirmedAttempt": "This turn was cut off before it reported back, and nothing shows whether it had already started working, so it was not retried automatically. Check the conversation before sending it again.",
         "uncertainEffects": "The app could not confirm whether earlier tool operations finished, so it did not retry this turn automatically. Check their results before sending it again to avoid repeating an operation.",
         "corruptLog": "The saved conversation log is damaged, so this turn could not be restored safely. Review the conversation and execution details before deciding whether to send it again.",
         "unreadableJournal": "The app could not read the saved execution log and could not verify what this turn had already done. It was not retried automatically. Review its execution details before sending it again.",

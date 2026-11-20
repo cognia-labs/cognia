@@ -173,6 +173,29 @@ export async function ensureDirectChatExecutionRun(input: StartDirectChatExecuti
   return run
 }
 
+/**
+ * Close an agent turn parked for a person (`recovery_required`) that nothing
+ * else can continue: no handle in this process holds it, and it carries no
+ * recovery anchor through which an owner (a connector's inbound job) resumes
+ * it. A person's Stop ends it here, and so does their choice to continue the
+ * conversation in a new turn. Returns whether this call closed it.
+ */
+export async function closeParkedAgentTurnRun(
+  runId: string,
+  summary: string,
+  ts: number = Date.now()
+): Promise<boolean> {
+  const run = await getExecutionRun(runId)
+  if (!run || run.kind !== "agent-turn" || run.status !== "recovery_required") return false
+  if (preparedRuns.has(runId) || [...activeRuns.values()].some((active) => active.runId === runId))
+    return false
+  const { hasAgentRunRecoveryAnchor } =
+    await import("@/lib/ai/agent/recovery/reconcile-crashed-runs")
+  if (await hasAgentRunRecoveryAnchor(runId)) return false
+  await new AgentRunEventProducer(runId).finish("cancelled", ts, summary)
+  return true
+}
+
 /** A durable claimant took ownership; this preparer must not settle its row. */
 export function releasePreparedDirectChatExecutionRun(runId: string): void {
   preparedRuns.delete(runId)

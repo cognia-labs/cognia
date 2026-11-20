@@ -2901,6 +2901,9 @@ export async function runChatSend(
           sessionId,
           runId: executionRunId,
           messageId: userMsg.id,
+          // A regenerate or continuation reuses the message it answers: a new
+          // turn of its own, not a redelivery of that message's first turn.
+          ...(callOptions?.skipUserAppend === true ? { rerun: true } : {}),
           content: effectiveContent,
           visibleMessageIds: next.map((message) => message.id),
           ...(session?.projectId ? { projectId: session.projectId } : {}),

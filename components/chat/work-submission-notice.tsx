@@ -1,19 +1,40 @@
 "use client"
 
+import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { AlertCircleIcon, CloudOffIcon, ClockIcon } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
 import { useWorkSubmissionStatus } from "@/hooks/work-submission/use-work-submission-status"
+import { interruptedTurnMayRepeatEffects } from "@/lib/chat/interrupted-turn"
 
 interface Props {
   sessionId: string | undefined
+  /**
+   * Continue the parked turn from where it stopped. Offered only for a chat
+   * turn; when the reason says it may already have had effects, the person
+   * confirms first.
+   */
+  onResume?: () => Promise<void> | void
 }
 
 function recoveryBodyKey(errorCode: string | undefined) {
   switch (errorCode) {
     case "observed-tool-activity":
       return "recoveryRequired.reasons.toolActivity"
+    case "unconfirmed-attempt":
+      return "recoveryRequired.reasons.unconfirmedAttempt"
     case "ambiguous-side-effects":
       return "recoveryRequired.reasons.uncertainEffects"
     case "corrupt-canonical-log":
@@ -68,18 +89,62 @@ function recoveryBodyKey(errorCode: string | undefined) {
  * Visual treatment follows `character-missing-banner.tsx` so the chat surface
  * stays homogeneous; no new variant or palette is introduced.
  */
-export function WorkSubmissionNotice({ sessionId }: Props) {
+export function WorkSubmissionNotice({ sessionId, onResume }: Props) {
   const t = useTranslations("chat.workSubmission")
   const { state, submission } = useWorkSubmissionStatus(sessionId)
+  const [confirming, setConfirming] = useState(false)
+  const [resuming, setResuming] = useState(false)
 
   if (state === "idle") return null
 
   if (state === "recoveryRequired") {
+    const resumable = onResume !== undefined && submission?.sourceKind === "chat"
+    const mayRepeat = interruptedTurnMayRepeatEffects(submission?.errorCode)
+    const resume = async () => {
+      setConfirming(false)
+      setResuming(true)
+      try {
+        await onResume?.()
+      } finally {
+        setResuming(false)
+      }
+    }
     return (
       <Alert variant="destructive" data-testid="work-submission-recovery">
         <AlertCircleIcon />
         <AlertTitle>{t("recoveryRequired.title")}</AlertTitle>
-        <AlertDescription>{t(recoveryBodyKey(submission?.errorCode))}</AlertDescription>
+        <AlertDescription>
+          <p>{t(recoveryBodyKey(submission?.errorCode))}</p>
+          {resumable ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2"
+              disabled={resuming}
+              onClick={() => (mayRepeat ? setConfirming(true) : void resume())}
+            >
+              {resuming ? t("recoveryRequired.resuming") : t("recoveryRequired.resume")}
+            </Button>
+          ) : null}
+        </AlertDescription>
+        {resumable ? (
+          <AlertDialog open={confirming} onOpenChange={setConfirming}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t("recoveryRequired.resumeConfirm.title")}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t("recoveryRequired.resumeConfirm.body")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t("recoveryRequired.resumeConfirm.cancel")}</AlertDialogCancel>
+                <AlertDialogAction onClick={() => void resume()}>
+                  {t("recoveryRequired.resumeConfirm.confirm")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        ) : null}
       </Alert>
     )
   }

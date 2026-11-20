@@ -226,6 +226,10 @@ export function WorkflowEditorChatTab({
     await claude.regenerate(effectiveSessionId ?? undefined)
   }, [claude, effectiveSessionId])
 
+  const handleResumeInterrupted = useCallback(async () => {
+    await claude.resumeInterrupted(effectiveSessionId ?? undefined)
+  }, [claude, effectiveSessionId])
+
   const handleEditResend = useCallback(
     async (messageId: string, content: SendContent) => {
       await claude.editAndResend(messageId, content, effectiveSessionId ?? undefined)
@@ -365,6 +369,7 @@ export function WorkflowEditorChatTab({
               onSend={handleSend}
               onStop={handleStop}
               onRegenerate={handleRegenerate}
+              onResumeInterrupted={handleResumeInterrupted}
               onEditResend={handleEditResend}
               onCreate={() => void handleCreateSession()}
               onUseSample={(text) => void handleSend(text)}

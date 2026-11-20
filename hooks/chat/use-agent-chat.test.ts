@@ -1667,6 +1667,26 @@ describe("useAgentChat — actions", () => {
     )
   })
 
+  it("accepts a fresh message keyed on the message alone", async () => {
+    const { result } = renderHook(() => useAgentChat())
+    await flush()
+    await act(async () => {
+      await result.current.send("first")
+    })
+    expect(acceptChatTurnMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("rerun")
+  })
+
+  it("accepts a rerun of an existing message as a turn of its own", async () => {
+    // A continuation (or regenerate) answers a message already in the
+    // transcript: keyed on that message alone it would reuse its old receipt.
+    const { result } = renderHook(() => useAgentChat())
+    await flush()
+    await act(async () => {
+      await result.current.send("carry on", undefined, { skipUserAppend: true })
+    })
+    expect(acceptChatTurnMock.mock.calls.at(-1)?.[0]).toMatchObject({ rerun: true })
+  })
+
   it("does not send when another outbox runner already owns the durable claim", async () => {
     acceptChatTurnMock.mockResolvedValueOnce({ submissionId: "work:run-1" })
     bindChatTurnContextMock.mockResolvedValueOnce(true)

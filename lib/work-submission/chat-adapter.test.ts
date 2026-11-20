@@ -256,6 +256,21 @@ describe("acceptChatTurn", () => {
     expect(await getDb().workSubmissions.count()).toBe(1)
   }, 30_000)
 
+  it("gives a rerun of the same message a turn of its own, deduped per run", async () => {
+    // A regenerate or continuation answers a message that already has a
+    // turn. Keyed on the message alone it would get that turn's receipt back
+    // and run with no submission of its own.
+    const first = await acceptChatTurn(turn, deps())
+    const rerun = { ...turn, runId: "run-2", rerun: true }
+    const second = await acceptChatTurn(rerun, deps())
+    expect(second?.submissionId).toBe(chatSubmissionId("run-2"))
+    expect(second?.submissionId).not.toBe(first?.submissionId)
+    expect(await claimChatTurnForDispatch("run-2", 1, deps())).toBe("claimed")
+    // The same rerun delivered twice is still one turn.
+    expect((await acceptChatTurn(rerun, deps()))?.submissionId).toBe(second?.submissionId)
+    expect(await getDb().workSubmissions.count()).toBe(2)
+  }, 30_000)
+
   it("carries the project id onto the submission", async () => {
     await acceptChatTurn({ ...turn, projectId: "project-1" }, deps())
     expect((await getWorkSubmission("work:run-1"))?.projectId).toBe("project-1")

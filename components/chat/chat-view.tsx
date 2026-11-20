@@ -256,6 +256,12 @@ interface ChatPaneProps {
   /** Replay the queued steer now without a turn boundary (errored/idle queue). */
   onSteerFlush?: () => Promise<void> | void
   onRegenerate: () => Promise<void>
+  /**
+   * Continue a turn a crash or restart cut off and left parked for a person
+   * (`runResumeInterrupted`). Omit where the host's controller cannot: the
+   * recovery notice then explains without offering it.
+   */
+  onResumeInterrupted?: () => Promise<void>
   onEditResend: (messageId: string, newContent: SendContent) => Promise<void>
   onRewindFiles?: (
     sessionId: string,
@@ -433,6 +439,7 @@ function ChatPaneContent({
   onSteerNow,
   onSteerFlush,
   onRegenerate,
+  onResumeInterrupted,
   onEditResend,
   onRewindFiles,
   onCompact,
@@ -817,6 +824,17 @@ function ChatPaneContent({
     await afterFullHistory(() => onRegenerate())
   }, [afterFullHistory, onRegenerate, boundId, restoreIfArchived])
 
+  const handleResumeInterrupted = useMemo(
+    () =>
+      onResumeInterrupted
+        ? async () => {
+            restoreIfArchived()
+            await afterFullHistory(() => onResumeInterrupted())
+          }
+        : undefined,
+    [afterFullHistory, onResumeInterrupted, restoreIfArchived]
+  )
+
   // Re-trigger the Dexie history load after a load failure.
   const handleRetryLoad = useCallback(() => {
     if (boundId) useChatStore.getState().requestSessionMessagesReload(boundId)
@@ -1181,7 +1199,10 @@ function ChatPaneContent({
           held offline, or stopped for human recovery. Renders nothing when a
           turn is streaming normally or the feature is off. */}
         <ChatColumn className="mt-2">
-          <WorkSubmissionNotice sessionId={activeSession.id} />
+          <WorkSubmissionNotice
+            sessionId={activeSession.id}
+            {...(handleResumeInterrupted ? { onResume: handleResumeInterrupted } : {})}
+          />
         </ChatColumn>
         {/* ADR-0204 — a paused project's coordinator and threads refuse sends;
           this says why and offers Resume. Nothing while the project runs. */}

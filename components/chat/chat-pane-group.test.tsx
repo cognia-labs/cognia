@@ -203,6 +203,18 @@ describe("ChatPaneGroup", () => {
     expect(editResend).toHaveBeenCalledWith("m1", "edited", "a")
   })
 
+  it("wires continuing an interrupted turn per session, and only where the host can", async () => {
+    const resumeInterrupted = jest.fn(async () => true)
+    const { unmount } = render(<ChatPaneGroup {...makeProps({ resumeInterrupted })} />)
+    const paneA = paneRenders.find((p) => p.sessionId === "a")!
+    await expect((paneA.onResumeInterrupted as () => Promise<void>)()).resolves.toBeUndefined()
+    expect(resumeInterrupted).toHaveBeenCalledWith("a")
+    unmount()
+    paneRenders.length = 0
+    render(<ChatPaneGroup {...makeProps()} />)
+    expect(paneRenders.find((p) => p.sessionId === "a")?.onResumeInterrupted).toBeUndefined()
+  })
+
   it("keeps a compact exit action when split view is open", () => {
     chatState.splitSessionId = "b"
     render(<ChatPaneGroup {...makeProps()} />)

@@ -417,7 +417,11 @@ describe("HostState redrive of an earlier attempt", () => {
         deps({ listRunEvents, abortPrevious })
       )
     ).toBe("recovery_required")
-    expect(abortPrevious).not.toHaveBeenCalled()
+    // The runtime that took the turn may still be running it: it is stopped
+    // rather than left working on a turn nobody owns any more.
+    expect(abortPrevious).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "work:hoststate:action-1", sessionId: "session-1" })
+    )
     expect(await getWorkSubmission("work:hoststate:action-1")).toMatchObject({
       dispatchState: "settled",
       terminalOutcome: "recovery_required",
@@ -425,7 +429,9 @@ describe("HostState redrive of an earlier attempt", () => {
     })
   }, 30_000)
 
-  it("stops the previous runtime before taking over a turn with no observed effects", async () => {
+  it("stops the previous runtime and parks a turn whose logs are empty", async () => {
+    // Empty logs do not show the runtime had not started: the turn waits for
+    // a person instead of being sent again.
     const abortPrevious = jest.fn(async () => undefined)
     expect(
       await claimHostStateChatTurnForDispatch(
@@ -437,10 +443,15 @@ describe("HostState redrive of an earlier attempt", () => {
           abortPrevious,
         })
       )
-    ).toBe("claimed")
+    ).toBe("recovery_required")
     expect(abortPrevious).toHaveBeenCalledWith(
       expect.objectContaining({ id: "work:hoststate:action-1", sessionId: "session-1" })
     )
+    expect(await getWorkSubmission("work:hoststate:action-1")).toMatchObject({
+      dispatchState: "settled",
+      terminalOutcome: "recovery_required",
+      errorCode: "unconfirmed-attempt",
+    })
   }, 30_000)
 
   it("parks the turn when the previous runtime cannot be stopped", async () => {

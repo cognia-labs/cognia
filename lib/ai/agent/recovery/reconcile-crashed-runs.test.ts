@@ -36,6 +36,7 @@ jest.mock("@/lib/modules/ports", () => ({
 
 import {
   buildAgentRunRecoveryAnchor,
+  hasAgentRunRecoveryAnchor,
   parseAgentRunRecoveryAnchor,
   reconcileCrashedAgentRuns,
   resumeCrashedAgentRun,
@@ -413,6 +414,25 @@ describe("explicit crashed-run resume", () => {
       })
     ).rejects.toThrow("durable queue unavailable")
     expect(releaseLease).toHaveBeenCalledWith("run-error")
+  })
+})
+
+describe("hasAgentRunRecoveryAnchor", () => {
+  it("says whether an owner can resume the run through a recorded anchor", async () => {
+    replayJournal.mockResolvedValueOnce([
+      { payload: {} },
+      { payload: { recoveryAnchor: anchor } },
+      { payload: { reason: "renderer-restarted" } },
+    ])
+    await expect(hasAgentRunRecoveryAnchor("run-anchored")).resolves.toBe(true)
+
+    // A direct chat run never records one; a malformed anchor is no anchor.
+    replayJournal.mockResolvedValueOnce([
+      { payload: { reason: "renderer-restarted" } },
+      { payload: { recoveryAnchor: { ...anchor, version: 2 } } },
+    ])
+    await expect(hasAgentRunRecoveryAnchor("run-direct")).resolves.toBe(false)
+    expect(replayJournal).toHaveBeenLastCalledWith("run-direct")
   })
 })
 

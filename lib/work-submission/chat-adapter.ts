@@ -80,6 +80,13 @@ export interface AcceptChatTurnInput extends ChatTurnIdentity {
   targetAvailable?: boolean
   writeTranscript?: () => Promise<void>
   now?: number
+  /**
+   * The turn runs a message already in the transcript again: a regenerate, a
+   * goal or loop continuation, or continuing an interrupted turn. It is a new
+   * turn someone asked for, not a redelivery of the first, so it is keyed by
+   * its own run ({@link chatRerunIdempotencyKey}).
+   */
+  rerun?: boolean
 }
 
 export interface ChatAdapterDeps extends WorkSubmissionServiceDeps {
@@ -97,6 +104,20 @@ export interface ChatAdapterDeps extends WorkSubmissionServiceDeps {
  */
 export function chatIdempotencyKey(sessionId: string, messageId: string): string {
   return `chat:${sessionId}:${messageId}`
+}
+
+/**
+ * The key of a turn that runs an existing message again. Keyed on the message
+ * alone it would resolve to the first turn's receipt, and the new run would go
+ * out with no submission of its own: untracked if it crashed, and leaving the
+ * first turn's state on screen. A retry of the same run still dedupes.
+ */
+export function chatRerunIdempotencyKey(
+  sessionId: string,
+  messageId: string,
+  runId: string
+): string {
+  return `${chatIdempotencyKey(sessionId, messageId)}:run:${runId}`
 }
 
 export function chatSubmissionId(runId: string): string {
@@ -135,7 +156,9 @@ export async function acceptChatTurn(
         localAuthorization: input.localAuthorization,
         intent: {
           contractVersion: 1,
-          idempotencyKey: chatIdempotencyKey(input.sessionId, input.messageId),
+          idempotencyKey: input.rerun
+            ? chatRerunIdempotencyKey(input.sessionId, input.messageId, input.runId)
+            : chatIdempotencyKey(input.sessionId, input.messageId),
           source: { kind: "chat", sourceId: input.sessionId },
           ...(input.workItemRef ? { workItemRef: input.workItemRef } : {}),
           scope: {

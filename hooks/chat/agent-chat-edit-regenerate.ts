@@ -17,10 +17,13 @@ import { parseLeadingRoute } from "@/lib/chat/turn-route/parse"
 import { resolveRouteLane } from "@/lib/chat/turn-route/resolve"
 import { snapshotRouteContext } from "@/lib/chat/turn-route/snapshot"
 import { isRoutableSession, readTurnRoute, type TurnRoute } from "@/lib/chat/turn-route/types"
+import { interruptedTurnResumeMessage } from "@/lib/chat/interrupted-turn"
 import { persistMessages } from "@/lib/db/messages"
 import { getSession } from "@/lib/db/sessions"
+import { listWorkSubmissions } from "@/lib/db/work-submissions"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { isChatTurnQueued } from "@/lib/execution/chat-lease"
+import { closeParkedAgentTurnRun } from "@/lib/execution/direct-chat-run"
 import { useChatStore } from "@/stores/chat"
 import { type SendContent, type SendOptions } from "@cognia/agent-config-types"
 import { createDiagnostic } from "@cognia/diagnostics"
@@ -275,4 +278,43 @@ export async function runRegenerate(
     regenerateBranch: { anchorId: anchor.id },
     ...(turnRoute ? { turnRoute } : {}),
   })
+}
+
+/**
+ * Continue a turn that a crash or restart cut off and the work outbox parked
+ * for a person (ADR-0123). The conversation already holds the interrupted user
+ * message and whatever reply was saved, so nothing is appended: one silent
+ * turn asks the agent to carry on from there. Once it is sent, the parked run
+ * is closed, so the run list stops offering a turn this one replaced.
+ *
+ * Only the session's newest submission, still parked, is continued: the card
+ * that asked may be stale. Returns whether the continuation was sent.
+ */
+export async function runResumeInterrupted(
+  ctx: Pick<AgentChatEditRegenerateContext, "refuseCapturedTurn" | "send">,
+  targetSessionId?: string
+): Promise<boolean> {
+  const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
+  if (!sessionId) return false
+  if (ctx.refuseCapturedTurn(sessionId)) return false
+  const status = sessionStatusOf(sessionId)
+  if (status === "streaming" || status === "awaiting_approval" || isChatTurnQueued(sessionId))
+    return false
+
+  const [latest] = await listWorkSubmissions({ sessionId, limit: 1 })
+  if (
+    !latest ||
+    latest.sourceKind !== "chat" ||
+    latest.dispatchState !== "settled" ||
+    latest.terminalOutcome !== "recovery_required"
+  )
+    return false
+
+  const sent = await ctx.send(interruptedTurnResumeMessage(), undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+    skipUserAppend: true,
+    sessionId,
+  })
+  if (sent) await closeParkedAgentTurnRun(latest.runId, "Continued in a new turn")
+  return sent
 }

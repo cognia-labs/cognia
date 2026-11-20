@@ -21,6 +21,7 @@
 import { builtinAgents } from "@/lib/agent/builtin-catalog/catalog"
 import { BUILT_IN_MODE_PROMPTS } from "@/lib/agent/modes/built-ins"
 import { BRIEF_MODE_PROMPT } from "@/lib/agent/prompts/brief-mode"
+import { INTERRUPTED_TURN_RESUME_PROMPT } from "@/lib/chat/interrupted-turn"
 import { CLI_BASE_IDENTITY_PROMPT } from "@/lib/agent/prompts/cli-base"
 import { PLAN_MODE_PROMPT, PLAN_MODE_STRUCTURED_STEPS_PROMPT } from "@/lib/agent/prompts/plan-mode"
 import { ASIDE_READ_ONLY_PROMPT, ASIDE_SYSTEM_PROMPT } from "@/lib/agent/prompts/side-chat"
@@ -137,6 +138,7 @@ import type { PromptDefinitionV1 } from "./types"
 export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   // chat
   BRIEF_MODE_PROMPT,
+  INTERRUPTED_TURN_RESUME_PROMPT,
   COMPACT_HANDOFF_PROMPT,
   POST_COMPACTION_RECOVERY_PROMPT,
   CLI_BASE_IDENTITY_PROMPT,

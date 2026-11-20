@@ -11353,10 +11353,19 @@
           "previousRuntime": "The app could not confirm that the previous runtime stopped, so it did not start another attempt. Check whether the turn is still running on its execution host before continuing.",
           "toolActivity": "This turn stopped after it had already started using tools, so it was not retried automatically — repeating it could redo work that cannot be undone. Review what happened before sending it again.",
           "uncertainEffects": "The app could not confirm whether earlier tool operations finished, so it did not retry this turn automatically. Check their results before sending it again to avoid repeating an operation.",
+          "unconfirmedAttempt": "This turn was cut off before it reported back, and nothing shows whether it had already started working, so it was not retried automatically. Check the conversation before sending it again.",
           "unreadableJournal": "The app could not read the saved execution log and could not verify what this turn had already done. It was not retried automatically. Review its execution details before sending it again.",
           "unreadablePayload": "The app could not open the saved message or execution context, so this turn was not retried automatically. Review the conversation and execution details before deciding whether to send it again.",
           "unverifiedHost": "The app could not verify the execution host for this saved conversation, so this turn was not retried automatically. Check the host connection and review the conversation before continuing."
         },
+        "resume": "Continue from where it stopped",
+        "resumeConfirm": {
+          "body": "This turn may already have run tools before it was cut off. Continuing can repeat their effects, such as writing a file or sending a message again. Check the conversation for what already happened before you continue.",
+          "cancel": "Cancel",
+          "confirm": "Continue",
+          "title": "Continue this turn?"
+        },
+        "resuming": "Continuing…",
         "title": "Needs your attention"
       }
     },

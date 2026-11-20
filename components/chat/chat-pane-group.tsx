@@ -43,6 +43,8 @@ export interface ChatPaneGroupProps {
   /** Replay the queued steer now without a turn boundary (errored/idle queue). */
   steerFlush: (sessionId: string) => Promise<void> | void
   regenerate: (sessionId: string) => Promise<void> | void
+  /** Continue a turn a restart cut off and left parked (`ChatPane.onResumeInterrupted`). */
+  resumeInterrupted?: (sessionId: string) => Promise<unknown> | unknown
   editResend: (messageId: string, content: SendContent, sessionId: string) => Promise<void> | void
   rewindFiles?: (
     sessionId: string,
@@ -103,6 +105,7 @@ export function ChatPaneGroup({
   steerNow,
   steerFlush,
   regenerate,
+  resumeInterrupted,
   editResend,
   rewindFiles,
   compact,
@@ -179,6 +182,13 @@ export function ChatPaneGroup({
         onSteerNow={() => Promise.resolve(sessionId ? steerNow(sessionId) : undefined)}
         onSteerFlush={() => Promise.resolve(sessionId ? steerFlush(sessionId) : undefined)}
         onRegenerate={() => Promise.resolve(sessionId ? regenerate(sessionId) : undefined)}
+        onResumeInterrupted={
+          sessionId && resumeInterrupted
+            ? async () => {
+                await resumeInterrupted(sessionId)
+              }
+            : undefined
+        }
         onEditResend={(id, content) =>
           Promise.resolve(sessionId ? editResend(id, content, sessionId) : undefined)
         }

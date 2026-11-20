@@ -145,6 +145,7 @@ import {
   warnMessagesNotResent,
   runEditAndResend,
   runRegenerate,
+  runResumeInterrupted,
 } from "./agent-chat-edit-regenerate"
 
 /** The send pipeline reads the live settings through this, not the store. */
@@ -1282,6 +1283,13 @@ export function useAgentChat() {
     regenerateRef.current = regenerate
   }, [regenerate])
 
+  /** Continue a turn a crash or restart cut off and left parked for a person. */
+  const resumeInterrupted = useCallback(
+    async (targetSessionId?: string) =>
+      runResumeInterrupted({ refuseCapturedTurn, send }, targetSessionId),
+    [send, refuseCapturedTurn]
+  )
+
   const sendFromLocalPerson = useCallback(
     (...args: Parameters<typeof send>) =>
       send(args[0], args[1], { ...args[2], localAuthorization: LOCAL_PERSON_RUN }),
@@ -1301,5 +1309,6 @@ export function useAgentChat() {
     close,
     editAndResend,
     regenerate,
+    resumeInterrupted,
   }
 }

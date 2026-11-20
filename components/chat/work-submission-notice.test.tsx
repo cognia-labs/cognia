@@ -1,7 +1,7 @@
 // ADR-0123 — the notice explains a turn the system accepted but has not
 // answered. Each state exists because the right user response differs.
 
-import { render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 import type { WorkSubmissionStatus } from "@/hooks/work-submission/use-work-submission-status"
 import type { WorkSubmissionRow } from "@/lib/db/work-submissions"
@@ -60,6 +60,7 @@ describe("WorkSubmissionNotice", () => {
 
   it.each([
     ["observed-tool-activity", "This turn stopped after it had already started using tools"],
+    ["unconfirmed-attempt", "nothing shows whether it had already started working"],
     ["ambiguous-side-effects", "could not confirm whether earlier tool operations finished"],
     ["corrupt-canonical-log", "saved conversation log is damaged"],
     ["unreadable-journal", "could not read the saved execution log"],
@@ -107,5 +108,59 @@ describe("WorkSubmissionNotice", () => {
         "after it had already started using tools"
       )
     }
+  })
+
+  describe("continuing a parked chat turn", () => {
+    const parked = (errorCode: string, sourceKind = "chat") => {
+      status = {
+        state: "recoveryRequired",
+        submission: { errorCode, sourceKind } as WorkSubmissionRow,
+      }
+    }
+
+    it("continues at once when the reason says nothing about effects", async () => {
+      parked("corrupt-canonical-log")
+      const onResume = jest.fn(async () => {})
+      render(<WorkSubmissionNotice sessionId="session-1" onResume={onResume} />)
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Continue from where it stopped" }))
+      })
+      expect(onResume).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+    })
+
+    it.each(["observed-tool-activity", "ambiguous-side-effects", "unconfirmed-attempt"])(
+      "asks first when the turn was parked for %s, and only continues on Continue",
+      async (errorCode) => {
+        parked(errorCode)
+        const onResume = jest.fn(async () => {})
+        render(<WorkSubmissionNotice sessionId="session-1" onResume={onResume} />)
+        fireEvent.click(screen.getByRole("button", { name: "Continue from where it stopped" }))
+        const dialog = await screen.findByRole("alertdialog")
+        expect(dialog).toHaveTextContent("Continuing can repeat their effects")
+        expect(onResume).not.toHaveBeenCalled()
+
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
+        expect(onResume).not.toHaveBeenCalled()
+
+        fireEvent.click(screen.getByRole("button", { name: "Continue from where it stopped" }))
+        await screen.findByRole("alertdialog")
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Continue" }))
+        })
+        expect(onResume).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it("offers nothing where the host cannot continue, or for work that is not a chat turn", () => {
+      parked("unconfirmed-attempt")
+      const { unmount } = render(<WorkSubmissionNotice sessionId="session-1" />)
+      expect(screen.queryByRole("button")).not.toBeInTheDocument()
+      unmount()
+      parked("unconfirmed-attempt", "schedule")
+      render(<WorkSubmissionNotice sessionId="session-1" onResume={jest.fn()} />)
+      expect(screen.queryByRole("button")).not.toBeInTheDocument()
+    })
   })
 })

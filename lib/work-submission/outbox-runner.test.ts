@@ -176,7 +176,7 @@ describe("runWorkOutboxPass", () => {
     })
   }, 30_000)
 
-  it("stops an expired dispatched runtime before replacement handoff", async () => {
+  it("stops an expired dispatched runtime, then parks it rather than sending it again", async () => {
     await seedSubmission()
     await getDb().workSubmissions.update("submission-1", {
       dispatchState: "dispatched",
@@ -197,11 +197,18 @@ describe("runWorkOutboxPass", () => {
       includeDispatched: true,
     })
 
-    expect(result.dispatched).toBe(1)
-    expect(order).toEqual(["abort-old", "dispatch-new"])
+    // The runtime had accepted the turn and nothing proves it had not started
+    // working: it is stopped, never left running unowned, and never resent.
+    expect(result).toMatchObject({ dispatched: 0, recoveryRequired: 1 })
+    expect(order).toEqual(["abort-old"])
     expect(startHeartbeatMock.mock.invocationCallOrder[0]).toBeLessThan(
       abort.mock.invocationCallOrder[0]
     )
+    expect(await getWorkSubmission("submission-1")).toMatchObject({
+      dispatchState: "settled",
+      terminalOutcome: "recovery_required",
+      errorCode: "unconfirmed-attempt",
+    })
   }, 30_000)
 
   it("parks an expired dispatched runtime when the old run cannot be stopped", async () => {
@@ -310,10 +317,27 @@ describe("runWorkOutboxPass", () => {
     })
   }, 30_000)
 
-  it("re-dispatches a stranded attempt that recorded no tool activity", async () => {
+  it("parks a stranded attempt that recorded nothing: empty is not proof", async () => {
     await seedSubmission()
     await getDb().workSubmissions.update("submission-1", {
       dispatchState: "claimed",
+      attemptCount: 1,
+    })
+    const dispatch = jest.fn(async () => ({ status: "dispatched" }) as WorkDispatchOutcome)
+
+    const result = await runWorkOutboxPass(deps(dispatch))
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ dispatched: 0, recoveryRequired: 1 })
+    expect(await getWorkSubmission("submission-1")).toMatchObject({
+      terminalOutcome: "recovery_required",
+      errorCode: "unconfirmed-attempt",
+    })
+  }, 30_000)
+
+  it("re-dispatches an attempt the runtime declined and that recorded nothing", async () => {
+    await seedSubmission()
+    await getDb().workSubmissions.update("submission-1", {
+      dispatchState: "blocked",
       attemptCount: 1,
     })
     const dispatch = jest.fn(async () => ({ status: "dispatched" }) as WorkDispatchOutcome)

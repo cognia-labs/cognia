@@ -266,6 +266,7 @@ export async function claimHostStateChatTurnForDispatch(
   // back to an unfenced send: the work outbox owns the row and will decide.
   try {
     if (row.dispatchState === "settled") return "owned_elsewhere"
+    let parkReason: string | undefined
     if (!afterRestart) {
       // A live lease is a live owner. Planning against its row could settle a
       // turn that owner is handing off right now.
@@ -277,13 +278,18 @@ export async function claimHostStateChatTurnForDispatch(
       }
       const plan = await planWorkSubmissionRecovery(row, deps)
       if (plan.action === "recovery_required") {
-        await settleWorkSubmissionWithoutTranscript(
-          submissionId,
-          "recovery_required",
-          now,
-          plan.reason
-        )
-        return "recovery_required"
+        // A runtime that accepted the turn may still be running it: take the
+        // turn over and stop that runtime before parking it, as a resend would.
+        if (row.dispatchState !== "dispatched") {
+          await settleWorkSubmissionWithoutTranscript(
+            submissionId,
+            "recovery_required",
+            now,
+            plan.reason
+          )
+          return "recovery_required"
+        }
+        parkReason = plan.reason
       }
     }
     // After a Host restart the organization chose at-least-once: the turn is
@@ -306,6 +312,15 @@ export async function claimHostStateChatTurnForDispatch(
         )
         return "recovery_required"
       }
+    }
+    if (parkReason) {
+      await settleWorkSubmissionWithoutTranscript(
+        submissionId,
+        "recovery_required",
+        now,
+        parkReason
+      )
+      return "recovery_required"
     }
     return "claimed"
   } catch (error) {
