@@ -195,3 +195,34 @@
 - 复审覆盖模拟进程退出和延迟等时序。真实 Tauri、配对设备、线上 Provider、持久审批跨实际重启、真实工具写入，以及任务耗时和恢复率分布仍待验证。已提供外部跨模型复审选项，本轮采用独立本地 reviewer 与工具复现，仅更新台账和本机忽略的诊断夹具。
 
 优先实施 F01–F03 的统一 terminal outcome，以及 F07–F10 的执行身份和审批回执。止住误报与跨尝试写入后，按 F04–F06、F14、F17 补运行接续和未知效果对账，最后调整工具结果、长任务调度与性能。
+
+## 修复记录（2026-11-20）
+
+按 audit-fix 逐项复核后修复。每项都有在修复前失败的回归测试。
+
+| ID  | 结论     | 修复                                                                                                                                                                                       | 提交       |
+| --- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
+| F01 | 成立     | 未完成的轮次（错误、部分输出后报错、步数/金额/结构化输出上限、截断、拒答）保留部分回复，但不再推进 Plan、不触发 post-receive、不记 Provider 成功，结束时结算为失败（Stop 为取消）。        | 6b353ebe68 |
+| F02 | 成立     | 共享分类器 `@cognia/agent-config-types/turn-outcome`。`result` 帧只发用量与结构化判定，唯一终态由 `session_ended` 发出。AI SDK 报告 length/error/unknown 与步数上限；Claude 不再提前结束。 | 6b353ebe68 |
+| F03 | 成立     | 配对 Host 监听器与 headless capture 对上限结算为失败，五个 `resultSubtype` 消费方共用 `capturedTurnUnfinished`。                                                                           | 6b353ebe68 |
+| F04 | 待决定   | 普通聊天从 `recovery_required` 接续属于产品能力，见下。                                                                                                                                    | —          |
+| F05 | 部分成立 | 已 ACK Stop 的轮次在重启时结算为 aborted 并取消，不再重发（无论 `resumeAfterRestart`）。恢复规划把空日志当作“未执行”的证据属于设计取舍，见下。                                             | ccfb0cf365 |
+| F06 | 成立     | 启动扫描跳过本窗口或其他窗口仍持有（每个运行一把 Web Lock）以及在本 renderer 加载后启动的运行。                                                                                            | ccfb0cf365 |
+| F07 | 成立     | 被取代轮次的晚到结束不再结算 HostState 新轮或中断其审批；renderer 只中断在提交 await 之前判定的审批。                                                                                      | 8b41833877 |
+| F08 | 成立     | 等待项已不存在或卡片已中断的答复只收卡：不建会话授权、常驻规则、决定记录或跟进。常驻规则在运行时接受答复后才写入。                                                                         | 8b41833877 |
+| F09 | 成立     | 代号已轮换（Stop、暂停、替换）的验证不能再暂停或完成 Goal；结算与 turn driver 写入前重读并核对代号。                                                                                       | dde4dccca8 |
+| F10 | 成立     | 等待中的续跑固定发往 Goal 自己的会话，释放时 Goal 仍为同一代号的 active 才发送。                                                                                                           | dde4dccca8 |
+| F11 | 成立     | 手机端按请求排队，答复只清自己的卡，`permission_interrupted` 标记卡片并可关闭，卡片只随自身调用结果或轮次结束关闭。                                                                        | 8b41833877 |
+| F12 | 成立     | AI SDK gate 每次询问读取当轮 TTL；步骤 abort 与语义 gate 发出 `permission_interrupted`；Stop 先 drain 再 abort；兜底计时器只为结果已到的那次调用撤下。                                     | 8b41833877 |
+| F13 | 成立     | 持有审批的投影卡片也会探测 Host；已判定存活的轮次在运行消失前持续复查。                                                                                                                    | 8b41833877 |
+| F14 | 成立     | 恢复锚点记录 Room 成员自己的会话；第二次崩溃合并之前的部分文本与审批；日志解析拒绝序列缺口，工具回执只在同一 attempt 内匹配。                                                              | ccfb0cf365 |
+| F15 | 成立     | `isError` 结果作为失败经过 post-tool 复核，并以失败调用交给模型。                                                                                                                          | b1f2dfbf88 |
+| F16 | 成立     | 发现阶段分页保留每个工具的 `outputSchema`；缺失或不符的 `structuredContent` 被拒绝；有效结果在没有文本块承载时序列化进模型输入。                                                           | b1f2dfbf88 |
+| F17 | 成立     | Sidecar 随调用发送截止时间，renderer 桥在截止时取消调用；Standalone 执行条目声明的超时（默认 120 s，0 为不限）。                                                                           | b1f2dfbf88 |
+| F18 | 成立     | 明确错误交回已流出的部分输出。                                                                                                                                                             | 6b353ebe68 |
+| F19 | 成立     | 来自未完成轮次的 verifier 通过判定读作 unsure。                                                                                                                                            | 6b353ebe68 |
+| F20 | 成立     | 重启扫描完成 Goal 仍为 active 时已经 `passed` 的验证。                                                                                                                                     | dde4dccca8 |
+| F21 | 待决定   | 切走聊天后的续跑、Standalone 固定 8 步、Goal 超时只在结算时检查，见下。                                                                                                                    | —          |
+| F22 | 部分成立 | AI SDK `num_turns` 改为实际步数。跨端质量与性能基线需要真实 Provider 多次运行，本地未做。                                                                                                  | 6b353ebe68 |
+
+验证：只跑受影响的 Jest 与 sidecar 套件（含 standalone 91、dispatch bridge 19、sidecar proxy 23、MCP client 与 ai-sdk runtime 191、HostState 重启 179、恢复 82、connector runtime 262、Goal 50），`pnpm typecheck` 与 `pnpm sidecar:typecheck` 中本轮文件无新增错误。真实 Tauri、配对设备、线上 Provider 与实际重启后的工具副作用仍未验证（X2、X3）。
