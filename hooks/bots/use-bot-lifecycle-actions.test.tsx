@@ -174,12 +174,15 @@ describe("useBotLifecycleActions", () => {
   })
 
   it("reports the status the write RESULTED in, not the one that was asked for", async () => {
-    // Asking to enable a Bot with an unbound slot answers `needs_setup`, and
-    // saying "enabled" there would contradict the row the user is looking at.
+    // Asking to enable a Bot with an unbound slot or an empty required setting
+    // answers `needs_setup`, and saying "enabled" there would contradict the
+    // row the user is looking at.
     setBotInstallationEnabled.mockResolvedValue({ status: "needs_setup" })
     const { result } = renderHook(() => useBotLifecycleActions())
     await act(() => result.current.setEnabled("boti_1", true))
-    expect(success).toHaveBeenCalledWith("Still needs a credential, so it stays off")
+    expect(success).toHaveBeenCalledWith(
+      "Still needs a credential or a required setting, so it stays off"
+    )
   })
 
   it("turns a picked candidate into exactly one id, and a clear into null", async () => {

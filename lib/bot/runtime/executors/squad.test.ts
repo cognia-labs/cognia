@@ -147,6 +147,17 @@ describe("createSquadBotExecutor", () => {
     ).toEqual({ outcome: "reject" })
   })
 
+  it("treats an expired approval as a refusal, not a quiet yes", async () => {
+    const waitForApproval = jest.fn().mockResolvedValue({ outcome: "expired", decidedAt: 1 })
+    const start = jest.fn().mockResolvedValue({ started: true })
+    const blockingStep = () => ({ run: jest.fn(), waitForApproval, waitForEvent: jest.fn() })
+
+    await createSquadBotExecutor({ start, blockingStep, squadRunStatus: () => "completed" })(ctx())
+    expect(
+      await start.mock.calls[0][0].planApprovalDelegate({ planText: "x", revision: 1 })
+    ).toEqual({ outcome: "reject" })
+  })
+
   it("asks through a BLOCKING step, because the delegate runs detached", async () => {
     // `startSquadRun` invokes the delegate from a fire-and-forget lifecycle,
     // after this executor has returned and its delivery is already parked. A
