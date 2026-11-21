@@ -45,7 +45,7 @@ import type { ExecutionRunBinding } from "@/types/execution/run"
 import type { OutboundRequest } from "@/types/connectors/outbound"
 import type { BotDefinitionRow, BotEventDeliveryRow, BotInstallationRow } from "@/lib/db/bot-types"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
-import { getDb } from "@/lib/db/schema"
+import { activeDatabaseName, getDb } from "@/lib/db/schema"
 import { resolveTurnServerCredentials } from "@/lib/credentials/turn-credentials"
 import { getProvisionedTurnSnapshot } from "@/lib/signaling/provisioned-turn-state"
 import { useAccountStore } from "@/stores/account/account-store"
@@ -55,7 +55,8 @@ import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { invoke } from "@tauri-apps/api/core"
 import Dexie from "dexie"
 
-import { readTombstonesSince } from "@/lib/db/tombstones"
+import { readTombstonesFrom } from "@/lib/db/tombstones"
+import { sha256String } from "@/lib/utils/hash"
 import { PAGED_SYNC_TABLES, type SyncDelta, type SyncableTable } from "./types"
 import { excludeLiveKeys, finalizeDelta, type UpdatedAtRow } from "./delta"
 import { portableExecutionContext } from "@/lib/task-workspace/managed-workspace"
@@ -126,6 +127,7 @@ async function respondToSyncRequest(
   const { request_id, table, since } = request
   try {
     assertRequestAccountMatchesActiveAccount(request)
+    const database = activeDatabaseName()
     const delta = await readDexieDelta(
       table,
       since,
@@ -134,6 +136,13 @@ async function respondToSyncRequest(
       request.cursor,
       request.pairedReader
     )
+    // The account, or the database under it, may have switched while the
+    // delta was read: a delta that may hold another account's rows is never
+    // answered as this one's.
+    assertRequestAccountMatchesActiveAccount(request)
+    if (activeDatabaseName() !== database) {
+      throw new Error("sync pull rejected: account switched during the read")
+    }
     await bridge.invoke(RESPONSE_COMMAND, { requestId: request_id, delta, error: null })
   } catch (err: unknown) {
     await bridge.invoke(RESPONSE_COMMAND, {
@@ -393,6 +402,29 @@ interface PagedSyncCursor {
   at: number
   id: string
   deletedAt: number
+  /**
+   * Digest of the tombstone ids already sent AT `deletedAt`. A deletion
+   * recorded in that same millisecond after the pull changes it, and the
+   * boundary is sent again; without it the second one was never sent. Absent
+   * on a cursor from before it existed, which keeps the old exclusive rule
+   * for one pull.
+   */
+  deletedDigest?: string
+}
+
+/** Order-free digest of a set of ids: the SHA-256 of the sorted ids. */
+async function idSetDigest(ids: readonly string[]): Promise<string> {
+  return sha256String([...ids].sort().join("\u0000"))
+}
+
+/** The Dexie store each paged table reads; its primary key is the tombstoned id. */
+const PAGED_STORE: Partial<Record<SyncableTable, string>> = {
+  messages: "messages",
+  executionRuns: "executionRuns",
+  workflowRuns: "workflowRuns",
+  connectorHeartbeats: "connectorHeartbeats",
+  goalEvents: "chatGoalEvents",
+  sessionUsage: "sessionUsage",
 }
 
 function decodeSyncCursor(table: string, since: number, value: string): PagedSyncCursor {
@@ -414,10 +446,53 @@ function decodeSyncCursor(table: string, since: number, value: string): PagedSyn
     cursor.deletedAt < 0 ||
     typeof cursor.id !== "string" ||
     cursor.id.length > 1024 ||
+    (cursor.deletedDigest !== undefined &&
+      (typeof cursor.deletedDigest !== "string" || cursor.deletedDigest.length > 64)) ||
     value.length > 4096
   )
     throw new Error("invalid sync cursor")
   return cursor
+}
+
+/**
+ * The deletions a paged pull sends, read BEFORE its rows from the same
+ * database. In that order a row deleted mid-pull is either absent from the
+ * rows (deleted before they were read) or its tombstone comes next pull
+ * (deleted after the tombstones were read); read the other way round, the
+ * response carried the row, dropped its tombstone as live, and moved the
+ * deletion cursor past it for good.
+ */
+async function readPagedDeletions(
+  db: ReturnType<typeof getDb>,
+  table: SyncableTable,
+  cursor: PagedSyncCursor
+): Promise<{ ids: string[]; deletedAt: number; deletedDigest?: string }> {
+  let tombstones: Awaited<ReturnType<typeof readTombstonesFrom>>
+  try {
+    tombstones = await readTombstonesFrom(db, table, cursor.deletedAt)
+  } catch {
+    // Unreadable tombstones send no deletions and keep the deletion position,
+    // so the next pull sends them; the rows still flow.
+    return { ids: [], deletedAt: cursor.deletedAt, deletedDigest: cursor.deletedDigest }
+  }
+  const boundary = tombstones
+    .filter((row) => row.deletedAt === cursor.deletedAt)
+    .map((row) => row.id)
+  const newer = tombstones.filter((row) => row.deletedAt > cursor.deletedAt)
+  const ids = newer.map((row) => row.id)
+  // Same-millisecond deletions recorded after the last pull change the
+  // boundary's digest: send the boundary again, minus ids live again now.
+  if (
+    cursor.deletedDigest !== undefined &&
+    boundary.length > 0 &&
+    (await idSetDigest(boundary)) !== cursor.deletedDigest
+  ) {
+    const live = await db.table(PAGED_STORE[table] ?? table).bulkGet(boundary)
+    ids.push(...boundary.filter((_, index) => live[index] == null))
+  }
+  const deletedAt = newer.reduce((max, row) => Math.max(max, row.deletedAt), cursor.deletedAt)
+  const atBoundary = tombstones.filter((row) => row.deletedAt === deletedAt).map((row) => row.id)
+  return { ids, deletedAt, deletedDigest: await idSetDigest(atBoundary) }
 }
 
 /** Rows and deletions advance independently; a later deletion cannot skip unsent rows. */
@@ -428,7 +503,10 @@ async function readCursorDelta(
   pairedReader?: unknown
 ): Promise<SyncDelta<unknown>> {
   const cursor = decodeSyncCursor(table, since, token)
+  // One database for both halves of the delta: an account switch between the
+  // reads must not pair one account's rows with another's deletions.
   const db = getDb()
+  const deleted = await readPagedDeletions(db, table, cursor)
   let rows: UpdatedAtRow[] = []
   let hasMore = false
   let cursorOf = (row: UpdatedAtRow) => Number(row.updatedAt ?? row.createdAt ?? 0)
@@ -537,12 +615,12 @@ async function readCursorDelta(
   }
   if (table === "messages")
     rows = (await preparePairedHistory(rows as unknown as StoredMessage[], pairedReader)).messages
-  const deleted = await readTombstonesSince(table, cursor.deletedAt)
   const last = rows.at(-1)
   const next: PagedSyncCursor = {
     ...cursor,
     ...(last && table !== "messages" ? { at: cursorOf(last), id: last.id } : {}),
-    deletedAt: deleted.maxDeletedAt,
+    deletedAt: deleted.deletedAt,
+    deletedDigest: deleted.deletedDigest,
   }
   return {
     rows,
@@ -1161,19 +1239,40 @@ export function sessionUsageWireRow(row: SessionUsageRow): SessionUsageRow & { i
  */
 async function readSessionUsageDelta(since: number): Promise<SyncDelta<unknown>> {
   const floor = since === 0 ? Math.max(0, Date.now() - SESSION_USAGE_FIRST_SYNC_WINDOW_MS) : since
-  const page = await getDb()
-    .sessionUsage.where("at")
+  const db = getDb()
+  let page = await db.sessionUsage
+    .where("at")
     .above(floor)
     .filter(syncsSessionUsage)
     .limit(SESSION_USAGE_PAGE_SIZE)
     .toArray()
+  const full = page.length === SESSION_USAGE_PAGE_SIZE
+  page = await completeLastInstant(db, page, full)
   return finalizeDelta(
     "sessionUsage",
     page.map(sessionUsageWireRow) as unknown as UpdatedAtRow[],
     since,
-    page.length === SESSION_USAGE_PAGE_SIZE,
+    full,
     (row) => (row as unknown as SessionUsageRow).at
   )
+}
+
+/**
+ * A numeric cursor can only say "after this millisecond", so a full page must
+ * end on a whole millisecond: one that ran out mid-millisecond resumed after
+ * it and never sent the rest (500 rows of 501 sharing one `at`, then 0).
+ * Drop the last millisecond's rows for the next page, or, when the whole page
+ * is that one millisecond, send all of it.
+ */
+async function completeLastInstant(
+  db: ReturnType<typeof getDb>,
+  page: SessionUsageRow[],
+  full: boolean
+): Promise<SessionUsageRow[]> {
+  if (!full || page.length === 0) return page
+  const lastAt = page[page.length - 1].at
+  if (page[0].at !== lastAt) return page.filter((row) => row.at !== lastAt)
+  return db.sessionUsage.where("at").equals(lastAt).filter(syncsSessionUsage).toArray()
 }
 
 /** Heartbeats a cold client pulls: the newest hour, then incremental. */

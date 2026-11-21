@@ -10,6 +10,7 @@ import { createRecreatedDbTestFixture } from "@/lib/db/test-fixture"
 import {
   recordTombstones,
   readTombstonesSince,
+  readTombstonesFrom,
   pruneTombstones,
   TOMBSTONE_RETENTION_MS,
 } from "./tombstones"
@@ -87,6 +88,19 @@ describe("tombstones", () => {
       ids: ["later-deletion"],
       maxDeletedAt: 30,
     })
+  })
+
+  it("reads a table's tombstones from a millisecond on, the boundary included", async () => {
+    await recordTombstones("messages", ["before"], 10)
+    await recordTombstones("messages", ["boundary-a", "boundary-b"], 20)
+    await recordTombstones("messages", ["later"], 30)
+    await recordTombstones("sessions", ["other-table"], 25)
+    const rows = await readTombstonesFrom(getDb(), "messages", 20)
+    expect(rows.map((row) => [row.id, row.deletedAt]).sort()).toEqual([
+      ["boundary-a", 20],
+      ["boundary-b", 20],
+      ["later", 30],
+    ])
   })
 
   it("prunes tombstones older than the retention window", async () => {

@@ -93,6 +93,25 @@ export async function readTombstonesSince(
 }
 
 /**
+ * Every tombstone for `table` at or after `from`, in one read of `db`. The
+ * paged sync reader keeps its own position (the boundary millisecond and what
+ * it sent there), so it needs the boundary rows too, not only newer ones.
+ * A read failure is thrown; the caller decides how a delta without its
+ * deletions keeps its position.
+ */
+export async function readTombstonesFrom(
+  db: ReturnType<typeof getDb>,
+  table: SyncableTable,
+  from: number
+): Promise<SyncTombstoneRow[]> {
+  return db.syncTombstones
+    .where("deletedAt")
+    .aboveOrEqual(from)
+    .filter((row) => row.table === table)
+    .toArray()
+}
+
+/**
  * Drop tombstones older than `retentionMs`. Called once at boot from the
  * central storage retention sweeper. Kept bounded so the table doesn't grow without
  * limit on a long-lived desktop install; a phone that has been offline

@@ -18,6 +18,30 @@ jest.mock("@/stores/account/account-store", () => ({
   },
 }))
 
+// A hook that runs as the reader starts reading tombstones, under either
+// reader: a deletion landing mid-pull, between the rows and the tombstones.
+const mockTombstoneRead: { hook: (() => Promise<void>) | null } = { hook: null }
+async function runMockTombstoneHook(): Promise<void> {
+  const hook = mockTombstoneRead.hook
+  mockTombstoneRead.hook = null
+  await hook?.()
+}
+
+jest.mock("@/lib/db/tombstones", () => {
+  const actual = jest.requireActual("@/lib/db/tombstones") as typeof import("@/lib/db/tombstones")
+  return {
+    ...actual,
+    readTombstonesSince: async (...args: Parameters<typeof actual.readTombstonesSince>) => {
+      await runMockTombstoneHook()
+      return actual.readTombstonesSince(...args)
+    },
+    readTombstonesFrom: async (...args: Parameters<typeof actual.readTombstonesFrom>) => {
+      await runMockTombstoneHook()
+      return actual.readTombstonesFrom(...args)
+    },
+  }
+})
+
 jest.mock("@/lib/files/allowed-roots-sync", () => ({
   registerDialogPathInRust: jest.fn(),
 }))
@@ -550,6 +574,81 @@ describe("readDexieDelta", () => {
       expect(second.has_more).toBe(false)
     }
   )
+
+  it("sends a deletion recorded in the millisecond the last pull ended on (F26)", async () => {
+    const db = getDb()
+    await db.syncTombstones.put({ table: "executionRuns", id: "first", deletedAt: 1000 })
+    const first = await readDexieDelta("executionRuns", 1, undefined, undefined, "")
+    expect(first.deleted_ids).toEqual(["first"])
+    // Same millisecond, recorded after that pull; and a row the first
+    // deletion named is live again by now.
+    await db.syncTombstones.put({ table: "executionRuns", id: "second", deletedAt: 1000 })
+    await db.executionRuns.put({ id: "first", kind: "chat", status: "done", updatedAt: 5 } as never)
+    const second = await readDexieDelta(
+      "executionRuns",
+      first.next_since,
+      undefined,
+      undefined,
+      first.next_cursor
+    )
+    expect(second.deleted_ids).toEqual(["second"])
+    const settled = await readDexieDelta(
+      "executionRuns",
+      second.next_since,
+      undefined,
+      undefined,
+      second.next_cursor
+    )
+    expect(settled.deleted_ids).toEqual([])
+  })
+
+  it("keeps the old exclusive rule for a cursor without a boundary digest", async () => {
+    await getDb().syncTombstones.put({ table: "executionRuns", id: "sent", deletedAt: 1000 })
+    const legacyCursor = JSON.stringify({
+      version: 1,
+      table: "executionRuns",
+      at: 1,
+      id: "",
+      deletedAt: 1000,
+    })
+    const delta = await readDexieDelta("executionRuns", 1, undefined, undefined, legacyCursor)
+    expect(delta.deleted_ids).toEqual([])
+    expect(JSON.parse(delta.next_cursor!)).toMatchObject({
+      deletedAt: 1000,
+      deletedDigest: expect.any(String),
+    })
+  })
+
+  it("never loses a deletion that lands while the pull is reading (F26)", async () => {
+    const db = getDb()
+    await db.executionRuns.put({
+      id: "doomed",
+      kind: "chat",
+      status: "done",
+      updatedAt: 50,
+    } as never)
+    const client = new Map<string, unknown>([["doomed", {}]])
+    const apply = (delta: Awaited<ReturnType<typeof readDexieDelta>>) => {
+      for (const row of delta.rows) client.set((row as { id: string }).id, row)
+      for (const id of delta.deleted_ids) client.delete(id)
+    }
+    mockTombstoneRead.hook = async () => {
+      await db.executionRuns.delete("doomed")
+      await db.syncTombstones.put({ table: "executionRuns", id: "doomed", deletedAt: 2000 })
+    }
+    const first = await readDexieDelta("executionRuns", 10, undefined, undefined, "")
+    apply(first)
+    apply(
+      await readDexieDelta(
+        "executionRuns",
+        first.next_since,
+        undefined,
+        undefined,
+        first.next_cursor
+      )
+    )
+    expect(client.has("doomed")).toBe(false)
+  })
 
   it("keeps legacy message clients complete across ties and interleaved deletions", async () => {
     await getDb().messages.bulkPut(
@@ -1370,6 +1469,38 @@ describe("installDesktopSyncSource", () => {
     })
   })
 
+  it("never answers a pull whose account switched while it was read (F27)", async () => {
+    const listenHandler: { ref: ((e: { payload: unknown }) => void) | null } = { ref: null }
+    const listen = jest.fn(async (_event: string, h: (e: { payload: unknown }) => void) => {
+      listenHandler.ref = h
+      return () => {}
+    })
+    const invoke = jest.fn(async () => ({}))
+    await installDesktopSyncSource({ bridge: { listen, invoke }, forceReinstall: true })
+    mockTombstoneRead.hook = async () => {
+      mockAccountStoreState.unlockedAccountId = "local_acct_b"
+    }
+    try {
+      listenHandler.ref!({
+        payload: {
+          request_id: "rid-switched",
+          table: "executionRuns",
+          since: 0,
+          cursor: "",
+          account_id: "local_acct_a",
+        },
+      })
+      await new Promise((r) => setTimeout(r, 20))
+      expect(invoke).toHaveBeenCalledWith("companion_sync_pull_response", {
+        requestId: "rid-switched",
+        delta: null,
+        error: expect.stringContaining("account mismatch"),
+      })
+    } finally {
+      mockAccountStoreState.unlockedAccountId = "local_acct_a"
+    }
+  })
+
   it("rejects accountless and locked sync pulls", async () => {
     const listenHandler: { ref: ((e: { payload: unknown }) => void) | null } = { ref: null }
     const listen = jest.fn(async (_event: string, h: (e: { payload: unknown }) => void) => {
@@ -1992,6 +2123,32 @@ describe("the per-turn usage reader (sessionUsage)", () => {
     const legacy = await readDexieDelta("sessionUsage", 0)
     expect(ids(legacy.rows)).toEqual(["kept"])
     expect(legacy.deleted_ids).toEqual(["gone"])
+  })
+
+  it("hands a legacy client every row of the millisecond its page ends in (F26)", async () => {
+    const tie = now - 1_000
+    await getDb().sessionUsage.bulkPut(
+      Array.from({ length: SESSION_USAGE_PAGE_SIZE + 1 }, (_, i) => row(`same-${i}`, tie))
+    )
+    const first = await readDexieDelta("sessionUsage", 0)
+    expect(first.rows).toHaveLength(SESSION_USAGE_PAGE_SIZE + 1)
+    const second = await readDexieDelta("sessionUsage", first.next_since)
+    expect(second.rows).toEqual([])
+    expect(second.has_more).toBe(false)
+
+    await getDb().sessionUsage.clear()
+    await getDb().sessionUsage.bulkPut([
+      ...Array.from({ length: SESSION_USAGE_PAGE_SIZE - 1 }, (_, i) =>
+        row(`early-${i}`, tie - SESSION_USAGE_PAGE_SIZE + i)
+      ),
+      row("tie-a", tie),
+      row("tie-b", tie),
+    ])
+    const page = await readDexieDelta("sessionUsage", 0)
+    expect(page.rows).toHaveLength(SESSION_USAGE_PAGE_SIZE - 1)
+    expect(page.has_more).toBe(true)
+    const rest = await readDexieDelta("sessionUsage", page.next_since)
+    expect(ids(rest.rows).sort()).toEqual(["tie-a", "tie-b"])
   })
 
   it("never pages a legacy client on scanned rows it filters out", async () => {
