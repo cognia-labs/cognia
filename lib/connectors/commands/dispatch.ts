@@ -35,7 +35,11 @@ import {
   findActiveSessionForConversation,
   createPlatformSession,
   refreshPlatformSessionBinding,
+  listCrossChannelContinuableSessions,
+  rebindConversationToSession,
 } from "@/lib/connectors/session-bindings"
+import { isVerifiedHostOwnerPlatformUser } from "@/lib/db/platform-identities"
+import { redeemHostOwnerBindCode } from "@/lib/connectors/identity-bind-code"
 import { getCharacter, listCharacters } from "@/lib/db/characters"
 import { resolveTeamByNameOrId } from "@/lib/connectors/team-dispatch"
 import { resolveWorkflowByNameOrId } from "@/lib/workflow/library/lookup"
@@ -129,6 +133,10 @@ export interface ControlCommandDeps {
   >
   closeAgentTopic?: typeof closeConnectorConversation
   updateAdapter?: typeof updateAdapterInstance
+  isVerifiedHostOwner?: (event: NormalizedInboundEvent) => Promise<boolean>
+  redeemBindCode?: typeof redeemHostOwnerBindCode
+  listContinuableSessions?: typeof listCrossChannelContinuableSessions
+  rebindCrossChannelSession?: typeof rebindConversationToSession
 }
 
 async function loadAgentTopicStatus(
@@ -232,6 +240,7 @@ export async function maybeHandleControlCommand(
   const vendor = connectorVendor(event.platform)
   const privateThread =
     isVendorPrivateConversation(event) && event.conversationRef.replyInThread === true
+  const isPrivateDm = event.channel.kind === "private" || isVendorPrivateConversation(event)
   const chatSessions = vendor?.conversations?.chatScopedSessions?.(event) === true
   const listSessions = chatSessions
     ? (deps.listChatSessions ?? listSessionsByConversationChat)
@@ -239,6 +248,26 @@ export async function maybeHandleControlCommand(
   const findActiveSession = deps.findActiveSession ?? findActiveSessionForConversation
   const createSession = deps.createSession ?? createPlatformSession
   const refreshSession = deps.refreshSession ?? refreshPlatformSessionBinding
+  const listContinuableSessions =
+    deps.listContinuableSessions ?? listCrossChannelContinuableSessions
+  const rebindCrossChannelSession = deps.rebindCrossChannelSession ?? rebindConversationToSession
+  const redeemBindCode = deps.redeemBindCode ?? redeemHostOwnerBindCode
+  const verifyHostOwner =
+    deps.isVerifiedHostOwner ??
+    (async (inbound: NormalizedInboundEvent) => {
+      const connectedUser = adapterRow.settings?.connectedUser as { openId?: unknown } | undefined
+      const connectedTeam = adapterRow.settings?.connectedTeam as
+        { authedUserId?: unknown } | undefined
+      if (
+        (typeof connectedUser?.openId === "string" &&
+          connectedUser.openId === inbound.sender.remoteUserId) ||
+        (typeof connectedTeam?.authedUserId === "string" &&
+          connectedTeam.authedUserId === inbound.sender.remoteUserId)
+      ) {
+        return true
+      }
+      return isVerifiedHostOwnerPlatformUser(inbound.platform, inbound.sender.remoteUserId)
+    })
   const getCharacterById = deps.getCharacterById ?? getCharacter
   const listAllCharacters = deps.listAllCharacters ?? listCharacters
   const resolveTeam = deps.resolveTeam ?? resolveTeamByNameOrId
@@ -311,8 +340,12 @@ export async function maybeHandleControlCommand(
     return true
   }
   if (name !== "agent" && !isReadonlyCommand(name) && !isCommandAllowed(event, policy)) {
-    await replyFixed(R.renderDenied(), "denied")
-    return true
+    const allowedViaHostOwnerResume =
+      name === "resume" && isPrivateDm && (await verifyHostOwner(event))
+    if (!allowedViaHostOwnerResume) {
+      await replyFixed(R.renderDenied(), "denied")
+      return true
+    }
   }
 
   // Lazily resolve / create the active session — state-changing commands need
@@ -395,6 +428,47 @@ export async function maybeHandleControlCommand(
     case "commands":
       await replyFixed(R.renderHelp(), "applied")
       return true
+
+    case "bind": {
+      if (!isPrivateDm) {
+        await replyFixed(R.denyBindRequiresPrivate(), "denied", { reason: "not_private" })
+        return true
+      }
+      if (!arg.trim()) {
+        await replyFixed(R.denyBindInvalid("missing_code"), "applied")
+        return true
+      }
+      const outcome = await redeemBindCode({
+        code: arg,
+        platform: event.platform,
+        adapterId: event.adapterId,
+        remoteUserId: event.sender.remoteUserId,
+        displayName: event.sender.displayName,
+        isPrivateChannel: isPrivateDm,
+        now: at,
+      })
+      if (!outcome.ok) {
+        await replyFixed(R.denyBindInvalid(outcome.reason, outcome.attemptsRemaining), "denied", {
+          reason: outcome.reason,
+        })
+        return true
+      }
+      await audit({
+        adapterId: event.adapterId,
+        kind: "identity.host_owner_bound",
+        at,
+        conversationKey: event.conversationKey,
+        fields: {
+          identityId: outcome.identity.id,
+          remoteUserId: event.sender.remoteUserId,
+          via: "bind_code",
+        },
+      })
+      await replyFixed(R.confirmHostOwnerBound(event.sender.remoteUserId), "applied", {
+        identityId: outcome.identity.id,
+      })
+      return true
+    }
 
     case "status": {
       const ruleHit = matchDispatchRule(adapterRow.dispatchRules, event)
@@ -533,6 +607,44 @@ export async function maybeHandleControlCommand(
     }
 
     case "sessions": {
+      if (arg.trim().toLowerCase() === "all") {
+        if (!isPrivateDm) {
+          await replyFixed(R.denyCrossChannelRequiresPrivate(), "denied", {
+            reason: "not_private",
+          })
+          return true
+        }
+        if (!(await verifyHostOwner(event))) {
+          await replyFixed(R.denyCrossChannelRequiresHostOwner(), "denied", {
+            reason: "host_owner_required",
+          })
+          return true
+        }
+        const entries = await listContinuableSessions(10)
+        const activeId = active?.id
+        await reply(
+          R.renderCrossChannelSessions(
+            entries.map((entry) => ({
+              title: entry.session.title,
+              idPrefix: idPrefix(entry.session.id),
+              originLabel: entry.originLabel,
+              continuityState: entry.continuityState,
+              active: entry.session.id === activeId,
+            }))
+          ),
+          "applied",
+          { scope: "all", count: entries.length },
+          entries.reduce<personalSinkHost.PersonalSinkContext>(
+            (context, entry) =>
+              personalSinkHost.mergePersonalSinkContexts(
+                context,
+                personalSinkHost.sessionPersonalSinkContext(entry.session.id)
+              ),
+            personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
+          )
+        )
+        return true
+      }
       const sessions = await listSessions(event.conversationKey)
       const activeId = active?.id
       await reply(
@@ -594,8 +706,7 @@ export async function maybeHandleControlCommand(
       return true
     }
 
-    case "switch":
-    case "resume": {
+    case "switch": {
       if (!arg) {
         await replyFixed(R.renderUsage("switch"), "applied")
         return true
@@ -621,6 +732,89 @@ export async function maybeHandleControlCommand(
         "applied",
         undefined,
         personalSinkHost.sessionPersonalSinkContext(target.id)
+      )
+      return true
+    }
+
+    case "resume": {
+      if (!arg) {
+        await replyFixed(R.renderUsage("resume"), "applied")
+        return true
+      }
+      const explicitIndexMatch = /^#(\d+)$/.exec(arg.trim())
+      if (!explicitIndexMatch) {
+        const sessions = await listSessions(event.conversationKey)
+        const sameChatTarget =
+          sessions.find((s) => s.id === arg || s.id.startsWith(arg)) ??
+          sessions.find((s) => s.title.toLowerCase().includes(arg.toLowerCase()))
+        if (sameChatTarget) {
+          if (chatSessions) await refreshSession(sameChatTarget, event)
+          await patchOverride(
+            event.conversationKey,
+            { activeSessionId: sameChatTarget.id },
+            sameChatTarget.id
+          )
+          if (active && active.id !== sameChatTarget.id) clearSessionBypass(active.id)
+          active = sameChatTarget
+          await reply(
+            R.confirmSwitched(sameChatTarget.title, idPrefix(sameChatTarget.id), privateThread),
+            "applied",
+            undefined,
+            personalSinkHost.sessionPersonalSinkContext(sameChatTarget.id)
+          )
+          return true
+        }
+      }
+
+      // Cross-channel continuation (`/resume #1` or cross-channel/Desktop session id).
+      if (!isPrivateDm) {
+        await replyFixed(R.denyCrossChannelRequiresPrivate(), "denied", {
+          reason: "not_private",
+        })
+        return true
+      }
+      if (!(await verifyHostOwner(event))) {
+        await replyFixed(R.denyCrossChannelRequiresHostOwner(), "denied", {
+          reason: "host_owner_required",
+        })
+        return true
+      }
+
+      const entries = await listContinuableSessions(20)
+      const numericMatch = /^#?(\d+)$/.exec(arg.trim())
+      const matchedEntry = numericMatch
+        ? entries[Number(numericMatch[1]) - 1]
+        : (entries.find((e) => e.session.id === arg || e.session.id.startsWith(arg)) ??
+          entries.find((e) => e.session.title.toLowerCase().includes(arg.toLowerCase())))
+      if (!matchedEntry) {
+        await replyFixed(R.renderResumeNotFound(arg), "applied")
+        return true
+      }
+
+      const rebound = await rebindCrossChannelSession(event, matchedEntry.session)
+      await patchOverride(event.conversationKey, { activeSessionId: rebound.id }, rebound.id)
+      if (active && active.id !== rebound.id) clearSessionBypass(active.id)
+      active = rebound
+      await audit({
+        adapterId: event.adapterId,
+        kind: "session.cross_channel_resumed",
+        at,
+        conversationKey: event.conversationKey,
+        fields: {
+          sessionId: rebound.id,
+          originLabel: matchedEntry.originLabel,
+        },
+      })
+      await reply(
+        R.confirmCrossChannelResumed(
+          rebound.title,
+          idPrefix(rebound.id),
+          matchedEntry.originLabel,
+          matchedEntry.continuityState
+        ),
+        "applied",
+        { sessionId: rebound.id, originLabel: matchedEntry.originLabel },
+        personalSinkHost.sessionPersonalSinkContext(rebound.id)
       )
       return true
     }

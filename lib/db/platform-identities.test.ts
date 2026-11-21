@@ -13,6 +13,9 @@ import {
   updateIdentityProfile,
   contactProfileOf,
   findByDisplayName,
+  setIdentityHostOwner,
+  bindPlatformUserAsHostOwner,
+  isVerifiedHostOwnerPlatformUser,
   MAX_RELATIONSHIP_CHARS,
 } from "./platform-identities"
 import { getDb } from "./schema"
@@ -434,6 +437,47 @@ describe("platform-identities", () => {
       await upsertIdentity(baseInput())
       await expect(findByDisplayName("   ")).resolves.toEqual({ kind: "none" })
       await expect(findByDisplayName("Bob")).resolves.toEqual({ kind: "none" })
+    })
+  })
+
+  describe("Host-owner verification (F8)", () => {
+    it("binds and unbinds a primary identity without elevating unverified merged aliases", async () => {
+      const ownerTg = await upsertIdentity({
+        platform: "telegram",
+        adapterId: "tg-1",
+        remoteUserId: "u_owner_tg",
+        displayName: "Owner TG",
+      })
+      const externalDiscord = await upsertIdentity({
+        platform: "discord",
+        adapterId: "dc-1",
+        remoteUserId: "u_external_dc",
+        displayName: "External Contact",
+      })
+
+      const bound = await setIdentityHostOwner(ownerTg.id, true, "manual_operator", 1_000)
+      expect(bound.ok).toBe(true)
+      expect(await isVerifiedHostOwnerPlatformUser("telegram", "u_owner_tg")).toBe(true)
+
+      // Merging an unverified alias into a Host-owner primary MUST NOT elevate the alias!
+      await mergeIdentities(ownerTg.id, externalDiscord.id)
+      expect(await isVerifiedHostOwnerPlatformUser("telegram", "u_owner_tg")).toBe(true)
+      expect(await isVerifiedHostOwnerPlatformUser("discord", "u_external_dc")).toBe(false)
+
+      // Explicitly binding the absorbed alias via bind_code elevates that exact address.
+      await bindPlatformUserAsHostOwner({
+        platform: "discord",
+        adapterId: "dc-1",
+        remoteUserId: "u_external_dc",
+        via: "bind_code",
+        now: 2_000,
+      })
+      expect(await isVerifiedHostOwnerPlatformUser("discord", "u_external_dc")).toBe(true)
+
+      // Unbinding the primary clears the entire tree cleanly.
+      await setIdentityHostOwner(ownerTg.id, false, "manual_operator", 3_000)
+      expect(await isVerifiedHostOwnerPlatformUser("telegram", "u_owner_tg")).toBe(false)
+      expect(await isVerifiedHostOwnerPlatformUser("discord", "u_external_dc")).toBe(false)
     })
   })
 })

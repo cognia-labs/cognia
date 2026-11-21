@@ -381,3 +381,115 @@ export async function getByPlatformUser(
     )
   )
 }
+
+export type HostOwnerBindSource = "manual_operator" | "bind_code"
+
+function clearHostOwnerTree(identity: PlatformIdentityRow): PlatformIdentityRow {
+  const next: PlatformIdentityRow = { ...identity }
+  delete next.isHostOwner
+  delete next.hostOwnerBoundAt
+  delete next.hostOwnerBoundVia
+  if (next.mergedSnapshots) {
+    next.mergedSnapshots = next.mergedSnapshots.map(clearHostOwnerTree)
+  }
+  return next
+}
+
+/**
+ * Bind or unbind a top-level identity as the Host owner's own account (F8).
+ * Unbinding clears the flag across both the primary and any absorbed snapshots
+ * so revoking from `ContactProfileDrawer` leaves no residual grant.
+ */
+export async function setIdentityHostOwner(
+  primaryId: string,
+  isHostOwner: boolean,
+  via: HostOwnerBindSource = "manual_operator",
+  now = Date.now()
+): Promise<IdentityProfileUpdateResult> {
+  const db = getDb()
+  return db.transaction("rw", db.platformIdentities, async () => {
+    const row = await db.platformIdentities.get(primaryId)
+    if (!row) {
+      const rows = await db.platformIdentities.toArray()
+      return { ok: false, reason: findOwnerById(rows, primaryId) ? "absorbed" : "missing" }
+    }
+    const next: PlatformIdentityRow = isHostOwner
+      ? {
+          ...row,
+          isHostOwner: true,
+          hostOwnerBoundAt: now,
+          hostOwnerBoundVia: via,
+          updatedAt: now,
+        }
+      : {
+          ...clearHostOwnerTree(row),
+          updatedAt: now,
+        }
+    await db.platformIdentities.put(next)
+    return { ok: true, primary: next }
+  })
+}
+
+/**
+ * Upsert and mark the exact `(platform, remoteUserId)` node as verified Host
+ * owner (used by one-time `/bind <code>` redemption). Even if this platform
+ * address was previously absorbed into a contact group, only this exact address
+ * node receives `isHostOwner: true`.
+ */
+export async function bindPlatformUserAsHostOwner(input: {
+  platform: PlatformKind
+  adapterId: string
+  remoteUserId: string
+  displayName?: string
+  via: HostOwnerBindSource
+  now?: number
+}): Promise<PlatformIdentityRow> {
+  const now = input.now ?? Date.now()
+  const primary = await upsertIdentity({
+    platform: input.platform,
+    adapterId: input.adapterId,
+    remoteUserId: input.remoteUserId,
+    displayName: input.displayName,
+  })
+  const db = getDb()
+  return db.transaction("rw", db.platformIdentities, async () => {
+    const latest = (await db.platformIdentities.get(primary.id)) ?? primary
+    const updatedTree = updateIdentityTree(
+      latest,
+      (candidate) =>
+        candidate.platform === input.platform && candidate.remoteUserId === input.remoteUserId,
+      (candidate) => ({
+        ...candidate,
+        isHostOwner: true,
+        hostOwnerBoundAt: now,
+        hostOwnerBoundVia: input.via,
+      })
+    )
+    const saved: PlatformIdentityRow = {
+      ...updatedTree.identity,
+      updatedAt: now,
+    }
+    await db.platformIdentities.put(saved)
+    return saved
+  })
+}
+
+/**
+ * Check whether the exact `(platform, remoteUserId)` sender node is verified as
+ * the Host owner. Merging an unverified external alias into a Host-owner
+ * primary does NOT elevate the unverified alias.
+ */
+export async function isVerifiedHostOwnerPlatformUser(
+  platform: PlatformKind,
+  remoteUserId: string
+): Promise<boolean> {
+  const rows = await getDb().platformIdentities.toArray()
+  for (const row of rows) {
+    const match = findInIdentityTree(
+      row,
+      (candidate) => candidate.platform === platform && candidate.remoteUserId === remoteUserId
+    )
+    if (match) return match.isHostOwner === true
+  }
+  return false
+}

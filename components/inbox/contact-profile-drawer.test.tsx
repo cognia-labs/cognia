@@ -246,4 +246,26 @@ describe("ContactProfileDrawer", () => {
     expect(readOnly).toHaveTextContent("Relationship: sister")
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument()
   })
+
+  it("toggles Host-owner binding and issues a one-time /bind code on the local host (F8)", async () => {
+    const primary = await upsertIdentity({
+      platform: "telegram",
+      adapterId: "a1",
+      remoteUserId: "u_me",
+      displayName: "Me",
+    })
+    render(<ContactProfileDrawer open onOpenChange={noop} conversationKey="telegram:a1:u_me" />)
+
+    const toggleBtn = await screen.findByTestId("contact-host-owner-toggle", {}, SETTLE)
+    fireEvent.click(toggleBtn)
+    await waitFor(async () => {
+      const row = await getDb().platformIdentities.get(primary.id)
+      expect(row?.isHostOwner).toBe(true)
+    }, SETTLE)
+    expect(await screen.findByTestId("contact-host-owner-badge", {}, SETTLE)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("contact-generate-bind-code"))
+    const codeEl = await screen.findByTestId("contact-bind-code-value", {}, SETTLE)
+    expect(codeEl.textContent).toMatch(/^\/bind BIND-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+  })
 })

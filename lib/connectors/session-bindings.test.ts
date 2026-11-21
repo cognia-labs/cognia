@@ -13,6 +13,8 @@ import {
   createPlatformSession,
   refreshPlatformSessionBinding,
   listSiblingConversations,
+  listCrossChannelContinuableSessions,
+  rebindConversationToSession,
 } from "./session-bindings"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -612,4 +614,56 @@ it("does not adopt a Bot-only binding through the index or a private Lark overri
     await findActiveSessionForConversation("lark:lark-1:chat:other", { activeSessionId: "bot" })
   ).toBeUndefined()
   expect(await listSiblingConversations("lark:other:chat")).toEqual([])
+})
+
+describe("cross-channel continuation helpers (F8)", () => {
+  it("lists Desktop and IM sessions with active Goal status and rebinds a Desktop session to a private DM", async () => {
+    const db = getDb()
+    const desktopSession: ChatSession = {
+      id: "desk-session-1",
+      title: "Q4 Architecture Review",
+      kind: "direct",
+      createdAt: 100,
+      updatedAt: 500,
+    }
+    const otherImSession = imSession("im-session-2", 300, "discord:dc-1:chan-9")
+    otherImSession.platformBinding = {
+      platform: "discord",
+      adapterId: "dc-1",
+      conversationKey: "discord:dc-1:chan-9",
+      conversationRef: { platform: "discord", adapterId: "dc-1" },
+    }
+    await db.sessions.bulkPut([desktopSession, otherImSession])
+    await db.chatGoals.put({
+      id: "goal-1",
+      sessionId: "desk-session-1",
+      objective: "Finish Q4 review",
+      status: "running",
+      createdAt: 200,
+      updatedAt: 500,
+    } as never)
+
+    const listed = await listCrossChannelContinuableSessions(10)
+    expect(listed.map((e) => e.session.id)).toEqual(["desk-session-1", "im-session-2"])
+    expect(listed[0]).toMatchObject({
+      originKind: "desktop",
+      originLabel: "Desktop",
+      continuityState: "goal:running",
+    })
+    expect(listed[1]).toMatchObject({
+      originKind: "im",
+      originLabel: "discord",
+    })
+
+    const dmEvent = makeEvent()
+    const rebound = await rebindConversationToSession(dmEvent, desktopSession)
+    expect(rebound.platformConversationKey).toBe(KEY)
+    expect(rebound.platformBinding?.conversationKey).toBe(KEY)
+
+    // Subsequent turns on KEY now resolve `desk-session-1` as the active session!
+    const active = await findActiveSessionForConversation(KEY, {
+      activeSessionId: "desk-session-1",
+    })
+    expect(active?.id).toBe("desk-session-1")
+  })
 })

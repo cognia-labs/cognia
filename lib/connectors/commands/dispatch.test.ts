@@ -1462,3 +1462,153 @@ it("classifies fixed command replies separately from retained generated titles",
     receiptAttemptId: undefined,
   })
 })
+
+describe("verified Host-owner cross-channel continuation (F8)", () => {
+  it("redeems /bind <code> in a private DM and denies /bind in group chats", async () => {
+    const redeem = jest.fn(async () => ({
+      ok: true as const,
+      identity: { id: "pid_owner" } as never,
+    }))
+    const groupHarness = harness()
+    await maybeHandleControlCommand(
+      makeEvent({
+        plainText: "/bind BIND-2345-6789-ABCD",
+        channel: { id: "g1", kind: "group", name: "Team" },
+      }),
+      makeAdapter(),
+      undefined,
+      RESOLVED,
+      { ...groupHarness.deps, redeemBindCode: redeem }
+    )
+    expect(redeem).not.toHaveBeenCalled()
+    expect(groupHarness.audits[0].kind).toBe("command.denied")
+    expect(groupHarness.enqueued[0].text).toMatch(/private direct chat|私聊/)
+
+    const dmHarness = harness()
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/bind BIND-2345-6789-ABCD" }),
+      makeAdapter({ controlCommands: { enabled: true, mode: "allowlist", allowedUserIds: [] } }),
+      undefined,
+      RESOLVED,
+      { ...dmHarness.deps, redeemBindCode: redeem }
+    )
+    expect(redeem).toHaveBeenCalledTimes(1)
+    expect(dmHarness.audits.map((a) => a.kind)).toContain("identity.host_owner_bound")
+    expect(dmHarness.enqueued[0].text).toMatch(/Verified as Host-owner/)
+  })
+
+  it("denies /sessions all and cross-channel /resume in group chats and to unverified contacts without leaking sessions", async () => {
+    const secretDesktop = session("desk_secret_99", "Confidential Payroll")
+    const listContinuable = jest.fn(async () => [
+      {
+        session: secretDesktop,
+        originKind: "desktop" as const,
+        originLabel: "Desktop",
+        continuityState: "goal:running",
+      },
+    ])
+
+    // 1. Group chat (even if sender WERE Host owner) -> denied, zero query
+    const groupH = harness()
+    await maybeHandleControlCommand(
+      makeEvent({
+        plainText: "/sessions all",
+        channel: { id: "g1", kind: "group", name: "Public Room" },
+      }),
+      makeAdapter(),
+      undefined,
+      RESOLVED,
+      {
+        ...groupH.deps,
+        isVerifiedHostOwner: async () => true,
+        listContinuableSessions: listContinuable,
+      }
+    )
+    expect(listContinuable).not.toHaveBeenCalled()
+    expect(groupH.audits[0].kind).toBe("command.denied")
+    expect(groupH.enqueued[0].text).not.toContain("Confidential Payroll")
+
+    // 2. Private DM from an external contact (not Host owner) -> denied, zero query
+    const extH = harness()
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/sessions all" }),
+      makeAdapter(),
+      undefined,
+      RESOLVED,
+      {
+        ...extH.deps,
+        isVerifiedHostOwner: async () => false,
+        listContinuableSessions: listContinuable,
+      }
+    )
+    expect(listContinuable).not.toHaveBeenCalled()
+    expect(extH.audits[0].kind).toBe("command.denied")
+    expect(extH.enqueued[0].text).toMatch(/Only verified Host-owner/)
+    expect(extH.enqueued[0].text).not.toContain("Confidential Payroll")
+
+    // 3. External contact guessing `/resume #1` or `/resume desk_secret_99` -> denied, zero query
+    const extResumeH = harness()
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/resume desk_secret_99" }),
+      makeAdapter(),
+      undefined,
+      RESOLVED,
+      {
+        ...extResumeH.deps,
+        isVerifiedHostOwner: async () => false,
+        listContinuableSessions: listContinuable,
+      }
+    )
+    expect(listContinuable).not.toHaveBeenCalled()
+    expect(extResumeH.audits[0].kind).toBe("command.denied")
+    expect(extResumeH.patches).toHaveLength(0)
+  })
+
+  it("allows a verified Host owner in a private DM to list /sessions all and /resume #1 across channels", async () => {
+    const desktopTarget = session("desk_q4_plan", "Q4 Roadmap")
+    const rebind = jest.fn(async (_ev, target: ChatSession) => target)
+    const listContinuable = jest.fn(async () => [
+      {
+        session: desktopTarget,
+        originKind: "desktop" as const,
+        originLabel: "Desktop",
+        continuityState: "goal:running",
+      },
+    ])
+
+    const listH = harness()
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/sessions all" }),
+      makeAdapter(),
+      undefined,
+      RESOLVED,
+      {
+        ...listH.deps,
+        isVerifiedHostOwner: async () => true,
+        listContinuableSessions: listContinuable,
+      }
+    )
+    expect(listH.enqueued[0].text).toContain("#1. [Desktop] Q4 Roadmap (desk_q4_) [goal:running]")
+
+    const resumeH = harness({ active: session("old_dm_session") })
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/resume #1" }),
+      makeAdapter({ controlCommands: { enabled: true, mode: "allowlist", allowedUserIds: [] } }),
+      undefined,
+      RESOLVED,
+      {
+        ...resumeH.deps,
+        isVerifiedHostOwner: async () => true,
+        listContinuableSessions: listContinuable,
+        rebindCrossChannelSession: rebind,
+      }
+    )
+    expect(rebind).toHaveBeenCalledWith(expect.anything(), desktopTarget)
+    expect(resumeH.patches[0]).toEqual({
+      patch: { activeSessionId: "desk_q4_plan" },
+      sessionId: "desk_q4_plan",
+    })
+    expect(resumeH.audits.map((a) => a.kind)).toContain("session.cross_channel_resumed")
+    expect(resumeH.enqueued[0].text).toContain("[Desktop] Q4 Roadmap")
+  })
+})

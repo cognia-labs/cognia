@@ -45,15 +45,21 @@ export const COMMAND_DESCRIPTIONS: Record<ControlCommandName, { zh: string; en: 
   handoff: { zh: "把委派任务交给人", en: "hand a delegated task to a person" },
   delegate: { zh: "把进行中的任务转为委派", en: "promote a running task to a delegation" },
   auth: { zh: "授权或撤销使用你自己的账号", en: "authorize or revoke use of your own account" },
+  bind: {
+    zh: "用一次性绑定码验证为宿主本人账号",
+    en: "verify your own Host-owner account with a one-time bind code",
+  },
 }
 
 /** The commands `/commands` lists, in its order, with their usage. */
 const COMMAND_HELP: Array<{ name: ControlCommandName; usage: string }> = [
   { name: "commands", usage: "/commands" },
   { name: "status", usage: "/status" },
-  { name: "sessions", usage: "/sessions" },
+  { name: "sessions", usage: "/sessions [all]" },
   { name: "new", usage: "/new" },
   { name: "switch", usage: "/switch <id|标题>" },
+  { name: "resume", usage: "/resume <#n|id|标题>" },
+  { name: "bind", usage: "/bind <code>" },
   { name: "model", usage: "/model <名称>" },
   { name: "automation", usage: "/automation pause|resume|cancel|status" },
   { name: "mode", usage: "/mode assistant|delegate|draft|silent|yolo|prompt" },
@@ -423,4 +429,79 @@ export function renderAutomation(
   return paused
     ? "本会话自动化订阅已暂停：保留待处理任务，运行中的任务继续完成 / Subscriptions paused: queued work retained; running work may finish."
     : "本会话自动化订阅已恢复 / Subscriptions active."
+}
+
+export interface CrossChannelSessionLine {
+  title: string
+  idPrefix: string
+  originLabel: string
+  continuityState?: string
+  active: boolean
+}
+
+export function renderCrossChannelSessions(lines: readonly CrossChannelSessionLine[]): string {
+  if (lines.length === 0) {
+    return "暂无可跨渠道续办的会话 / No continuable sessions across channels yet"
+  }
+  const out = [
+    "跨渠道可续办会话（使用 /resume #序号 或会话 ID 在本私聊继续） / Cross-channel continuable sessions (use /resume #<n> or session id):",
+  ]
+  lines.forEach((entry, idx) => {
+    const stateTag = entry.continuityState ? ` [${entry.continuityState}]` : ""
+    const activeTag = entry.active ? "  ← 当前 / active" : ""
+    out.push(
+      `#${idx + 1}. [${entry.originLabel}] ${entry.title} (${entry.idPrefix})${stateTag}${activeTag}`
+    )
+  })
+  return out.join("\n")
+}
+
+export function confirmCrossChannelResumed(
+  title: string,
+  idPrefix: string,
+  originLabel: string,
+  continuityState?: string
+): string {
+  const stateSuffix = continuityState ? ` · ${continuityState}` : ""
+  return `已在本私聊续接跨渠道会话 / Resumed cross-channel session here: [${originLabel}] ${title} (${idPrefix})${stateSuffix}`
+}
+
+export function renderResumeNotFound(query: string): string {
+  return `未找到匹配的可续办会话：${query}（可先发送 /sessions all 查看列表） / No matching session "${query}" (send /sessions all to list)`
+}
+
+export function denyCrossChannelRequiresPrivate(): string {
+  return "跨渠道会话查看与续办仅限一对一私聊使用 / Cross-channel session listing and continuation are only available in private direct chats"
+}
+
+export function denyCrossChannelRequiresHostOwner(): string {
+  return (
+    "仅已验证的宿主本人账号可执行跨渠道续办。请在桌面端「联系人资料」绑定本人账号或生成一次性 /bind 绑定码。 / " +
+    "Only verified Host-owner accounts may access cross-channel sessions. Bind your account in Contact Profile or generate a one-time /bind code."
+  )
+}
+
+export function confirmHostOwnerBound(remoteUserId: string): string {
+  return `已验证并绑定为宿主本人账号（${remoteUserId}）；现在可在本私聊使用 /sessions all 与 /resume / Verified as Host-owner account (${remoteUserId}); /sessions all and /resume are now enabled in private DMs`
+}
+
+export function denyBindRequiresPrivate(): string {
+  return "请在一对一私聊中发送 /bind <code> / Send /bind <code> in a private direct chat"
+}
+
+export function denyBindInvalid(reason: string, attemptsRemaining?: number): string {
+  if (reason === "missing_code") {
+    return "用法 / Usage: /bind <code>"
+  }
+  if (reason === "expired" || reason === "no_active_code") {
+    return "绑定码不存在或已过期，请在桌面端重新生成 / Bind code missing or expired; generate a new code on the Host"
+  }
+  if (reason === "locked_out") {
+    return "错误次数过多，当前绑定码已作废，请在桌面端重新生成 / Too many failed attempts; bind code invalidated"
+  }
+  const suffix =
+    typeof attemptsRemaining === "number"
+      ? `（剩余尝试 ${attemptsRemaining} 次 / ${attemptsRemaining} attempt(s) left）`
+      : ""
+  return `绑定码无效 / Invalid bind code${suffix}`
 }

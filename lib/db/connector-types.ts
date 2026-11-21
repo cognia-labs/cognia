@@ -90,6 +90,17 @@ export interface PlatformIdentityRow extends PlatformIdentity {
   relationship?: string
   /** User-authored note about this contact, same rules as `relationship`. */
   note?: string
+  /**
+   * Explicit Host-owner verification flag (F8). Strictly separate from CRM
+   * `mergedSnapshots`: merging external contact aliases for Reply Copilot notes
+   * never sets this flag, and cross-channel `/sessions all` + `/resume` inspect
+   * the exact `(platform, remoteUserId)` node's `isHostOwner === true`.
+   */
+  isHostOwner?: boolean
+  /** Epoch ms when `isHostOwner` was bound on the Host. */
+  hostOwnerBoundAt?: number
+  /** Provenance of the Host-owner binding (`manual_operator` or `bind_code`). */
+  hostOwnerBoundVia?: "manual_operator" | "bind_code"
 }
 
 /**

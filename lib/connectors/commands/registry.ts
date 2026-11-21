@@ -34,6 +34,7 @@ export type ControlCommandName =
   | "handoff"
   | "delegate"
   | "auth"
+  | "bind"
 
 export interface ControlCommandSpec {
   name: ControlCommandName
@@ -89,6 +90,10 @@ export const CONTROL_COMMAND_SPECS: readonly ControlCommandSpec[] = [
   // Read-only for the gate: it changes only the sender's own authorization,
   // so a person who may not reconfigure the bot can still manage their own.
   { name: "auth", readonly: true, nativeExposed: false, usage: "/auth | /auth revoke" },
+  // Read-only for the general command gate: `/bind <code>` enforces its own
+  // private-DM + CSPRNG single-use Host-owner challenge so an un-allowlisted
+  // channel can complete initial owner verification.
+  { name: "bind", readonly: true, nativeExposed: false, usage: "/bind <code>" },
 ]
 
 /** Specs published to platform-native slash manifests. */

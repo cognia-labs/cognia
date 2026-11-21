@@ -141,6 +141,19 @@
       "snapshot_missing": "该身份已不再与联系人合并。",
       "unexpected": "身份变更失败，请刷新后重试。"
     },
+    "hostOwner": {
+      "bindAction": "绑定为本人账号",
+      "boundToast": "已绑定为宿主本人账号",
+      "codeCopied": "已复制 /bind 命令",
+      "codeHint": "请在 10 分钟内于机器人一对一私聊中发送此一次性命令（最多可尝试 3 次）。",
+      "copyAction": "复制",
+      "generateCodeAction": "生成 /bind 绑定码",
+      "hint": "已验证的本人账号可在私聊中运行 /sessions all 与 /resume 跨渠道续办任务；下方合并外部联系人仅用于回复副驾背景，绝不授予跨会话权限。",
+      "title": "本人账号绑定（宿主所有者）",
+      "unbindAction": "解除本人绑定",
+      "unboundToast": "已解除宿主本人账号绑定",
+      "verifiedBadge": "已验证本人"
+    },
     "lastSeen": "最近出现",
     "merge": "合并",
     "mergedTitle": "已合并的身份",

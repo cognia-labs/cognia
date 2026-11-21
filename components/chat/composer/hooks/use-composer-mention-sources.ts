@@ -4,6 +4,7 @@ import type { ComposerInnerProps } from "../../composer"
 import { type MentionMode } from "../../composer-trigger"
 import { useApplyPreset } from "@/hooks/chat/use-apply-preset"
 import { useMarkdownChatAgents } from "@/hooks/chat/use-markdown-chat-agents"
+import { mergeChatMentionTargets } from "@/lib/chat/mentions/markdown-agent-targets"
 import { useMentionablePresets } from "@/hooks/chat/use-mentionable-presets"
 import { useMentionableSkills } from "@/hooks/chat/use-mentionable-skills"
 import { useMentionableSubagents } from "@/hooks/chat/use-mentionable-subagents"
@@ -49,14 +50,14 @@ export function useComposerMentionSources(input: ComposerMentionSourcesInput) {
   // built-in/plugin/template subagents union with on-disk markdown agents
   // (`.cognia/agents/*.md`) so both surface in the `@` "Agents" section.
   const mentionableSubagents = useMentionableSubagents()
-  const markdownAgents = useMarkdownChatAgents(cwd, isCombinedMention)
+  const markdownAgents = useMarkdownChatAgents(cwd, isCombinedMention, props.session?.projectId)
   const chatAgents = useMemo(() => {
     if (!isCombinedMention) return undefined
-    if (markdownAgents.length === 0) return mentionableSubagents
-    // Dedupe by id; the reactive (built-in/plugin/template) list wins so a
-    // markdown file can't shadow a registered subagent's display metadata.
-    const seen = new Set(mentionableSubagents.map((t) => t.id))
-    return [...mentionableSubagents, ...markdownAgents.filter((t) => !seen.has(t.id))]
+    // Merge with the same precedence `build-options.ts` applies at send time:
+    // a project `.cognia/agents/<id>.md` file overrides a same-id/same-handle
+    // template/plugin entry so the picker's label, description, and model match
+    // the definition that will actually execute.
+    return mergeChatMentionTargets(mentionableSubagents, markdownAgents)
   }, [isCombinedMention, mentionableSubagents, markdownAgents])
   // `@claude` / `@codex` / Squad members as the LEADING token route the turn
   // (`lib/chat/turn-route/`). Only in a conversation that has a lane of its

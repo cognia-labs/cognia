@@ -97,6 +97,7 @@ export default defineHostModule({
     "lib/connectors/effective-config.ts",
     "lib/connectors/escalation/policy.ts",
     "lib/connectors/hitl/plan-approval.ts",
+    "lib/connectors/identity-bind-code.ts",
     "lib/connectors/inbox-writes/index.ts",
     "lib/connectors/inbox-writes/local.ts",
     "lib/connectors/inbox-writes/use-inbox-write-route.ts",

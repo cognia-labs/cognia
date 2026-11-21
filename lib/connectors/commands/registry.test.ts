@@ -8,6 +8,7 @@ describe("control command registry", () => {
         "agent",
         "auth",
         "automation",
+        "bind",
         "character",
         "commands",
         "delegate",
@@ -37,8 +38,9 @@ describe("control command registry", () => {
 
   it("derives the readonly set parse.ts used to hardcode", () => {
     expect([...READONLY_COMMANDS].sort()).toEqual(
-      // `/auth` acts on the sender's own authorization alone (ADR-0243 phase 4).
-      ["auth", "commands", "dir", "help", "sessions", "status", "tasks"].sort()
+      // `/auth` acts on the sender's own authorization alone (ADR-0243 phase 4);
+      // `/bind` validates a single-use Host-owner challenge in private DMs (F8).
+      ["auth", "bind", "commands", "dir", "help", "sessions", "status", "tasks"].sort()
     )
   })
 

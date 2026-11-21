@@ -54,6 +54,7 @@ const ICONS: Record<ControlCommandName, string> = {
   handoff: "raisehand_outlined",
   delegate: "sent_outlined",
   auth: "member_outlined",
+  bind: "member_outlined",
 }
 
 export interface LarkSlashCommandDescription {

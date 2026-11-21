@@ -25,7 +25,8 @@ import {
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/components/ui/item"
-import { UserRoundXIcon } from "lucide-react"
+import { CopyIcon, KeyRoundIcon, ShieldCheckIcon, UserRoundXIcon } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -33,11 +34,16 @@ import {
   MAX_CONTACT_NOTE_CHARS,
   MAX_RELATIONSHIP_CHARS,
   listMergeCandidates,
+  setIdentityHostOwner,
   unmergeIdentity,
   updateIdentityProfile,
   type IdentityUnmergeFailureReason,
 } from "@/lib/db/platform-identities"
 import type { PlatformIdentityRow } from "@/lib/db/connector-types"
+import {
+  issueHostOwnerBindCode,
+  type IssuedHostOwnerBindCode,
+} from "@/lib/connectors/identity-bind-code"
 import { useInboxWriteRoute } from "@/lib/connectors/inbox-writes"
 import { resolveConversationContact } from "@/lib/reply-copilot/resolve-contact"
 import { IdentityMergeDialog } from "@/components/connectors/identity-merge-dialog"
@@ -150,6 +156,145 @@ function ContactProfileNotes({ primary }: { primary: PlatformIdentityRow }) {
   )
 }
 
+function HostOwnerBindingSection({ primary }: { primary: PlatformIdentityRow }) {
+  const t = useTranslations("inbox.contactProfile")
+  const route = useInboxWriteRoute()
+  const [busy, setBusy] = useState(false)
+  const [issuedCode, setIssuedCode] = useState<IssuedHostOwnerBindCode | null>(null)
+  const isHostOwner = primary.isHostOwner === true
+
+  if (route !== "local") {
+    return (
+      <div
+        className="space-y-1 rounded-md border bg-muted/20 p-2.5 text-xs"
+        data-testid="contact-host-owner-readonly"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-medium">{t("hostOwner.title")}</span>
+          {isHostOwner ? (
+            <Badge variant="secondary" className="text-[11px]">
+              {t("hostOwner.verifiedBadge")}
+            </Badge>
+          ) : null}
+        </div>
+        <p className="text-muted-foreground">{t("profileReadOnly")}</p>
+      </div>
+    )
+  }
+
+  async function toggleOwner() {
+    setBusy(true)
+    try {
+      const result = await setIdentityHostOwner(primary.id, !isHostOwner, "manual_operator")
+      if (!result.ok) {
+        toast.error(t(`errors.profile_${result.reason}`))
+      } else {
+        toast.success(
+          result.primary.isHostOwner ? t("hostOwner.boundToast") : t("hostOwner.unboundToast")
+        )
+      }
+    } catch {
+      toast.error(t("errors.unexpected"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleGenerateCode() {
+    setBusy(true)
+    try {
+      const issued = await issueHostOwnerBindCode()
+      setIssuedCode(issued)
+    } catch {
+      toast.error(t("errors.unexpected"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleCopyCommand() {
+    if (!issuedCode) return
+    try {
+      await navigator.clipboard.writeText(issuedCode.commandText)
+      toast.success(t("hostOwner.codeCopied"))
+    } catch {
+      toast.error(t("errors.unexpected"))
+    }
+  }
+
+  return (
+    <div
+      className="space-y-2 rounded-md border bg-muted/20 p-2.5 text-xs"
+      data-testid="contact-host-owner-section"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 font-medium">
+          <ShieldCheckIcon className="size-3.5 text-muted-foreground" aria-hidden />
+          {t("hostOwner.title")}
+        </span>
+        {isHostOwner ? (
+          <Badge variant="secondary" className="text-[11px]" data-testid="contact-host-owner-badge">
+            {t("hostOwner.verifiedBadge")}
+          </Badge>
+        ) : null}
+      </div>
+      <p className="text-muted-foreground">{t("hostOwner.hint")}</p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button
+          type="button"
+          size="sm"
+          variant={isHostOwner ? "outline" : "secondary"}
+          className="h-7 px-2.5 text-xs"
+          disabled={busy}
+          onClick={() => void toggleOwner()}
+          data-testid="contact-host-owner-toggle"
+        >
+          {isHostOwner ? t("hostOwner.unbindAction") : t("hostOwner.bindAction")}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 gap-1 px-2.5 text-xs"
+          disabled={busy}
+          onClick={() => void handleGenerateCode()}
+          data-testid="contact-generate-bind-code"
+        >
+          <KeyRoundIcon className="size-3" aria-hidden />
+          {t("hostOwner.generateCodeAction")}
+        </Button>
+      </div>
+      {issuedCode ? (
+        <div
+          className="space-y-1 rounded border bg-background p-2"
+          data-testid="contact-bind-code-box"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <code
+              className="truncate font-mono text-[11px] font-semibold"
+              data-testid="contact-bind-code-value"
+            >
+              {issuedCode.commandText}
+            </code>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 gap-1 px-2 text-[11px]"
+              onClick={() => void handleCopyCommand()}
+              data-testid="contact-copy-bind-code"
+            >
+              <CopyIcon className="size-3" aria-hidden />
+              {t("hostOwner.copyAction")}
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t("hostOwner.codeHint")}</p>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function ContactProfileDrawer({
   open,
   onOpenChange,
@@ -210,6 +355,11 @@ export function ContactProfileDrawer({
                 </div>
               </dl>
             </div>
+
+            <HostOwnerBindingSection
+              key={`owner:${contact.primary.id}`}
+              primary={contact.primary}
+            />
 
             <ContactProfileNotes key={contact.primary.id} primary={contact.primary} />
 

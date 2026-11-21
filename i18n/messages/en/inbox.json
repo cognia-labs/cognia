@@ -141,6 +141,19 @@
       "snapshot_missing": "This identity is no longer merged with the contact.",
       "unexpected": "The identity change failed. Please refresh and try again."
     },
+    "hostOwner": {
+      "bindAction": "Bind as my own account",
+      "boundToast": "Verified as Host owner account",
+      "codeCopied": "Copied /bind command",
+      "codeHint": "Send this one-time command from your private DM with the bot within 10 minutes (3 attempts max).",
+      "copyAction": "Copy",
+      "generateCodeAction": "Generate /bind code",
+      "hint": "Verified Host-owner accounts may run /sessions all and /resume in private DMs. Merging external contacts below never grants cross-session access.",
+      "title": "My own account (Host owner)",
+      "unbindAction": "Unbind my account",
+      "unboundToast": "Removed Host owner binding",
+      "verifiedBadge": "Verified owner"
+    },
     "lastSeen": "Last seen",
     "merge": "Merge",
     "mergedTitle": "Merged identities",

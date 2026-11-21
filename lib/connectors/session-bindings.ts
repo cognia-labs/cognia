@@ -299,6 +299,95 @@ export async function refreshPlatformSessionBinding(
   return updated
 }
 
+export interface ContinuableSessionEntry {
+  session: ChatSession
+  originKind: "desktop" | "im"
+  originLabel: string
+  continuityState?: string
+}
+
+const ACTIVE_CONTINUITY_GOAL_STATUSES = new Set([
+  "running",
+  "paused",
+  "planning",
+  "step_complete",
+  "budget_limited",
+  "turn_limited",
+])
+
+/**
+ * Enumerate recent non-archived user sessions across Desktop and IM channels
+ * for verified Host-owner continuation (`/sessions all` and `/resume`, F8).
+ */
+export async function listCrossChannelContinuableSessions(
+  limit = 10
+): Promise<ContinuableSessionEntry[]> {
+  const db = getDb()
+  const all = await db.sessions.filter((s) => !s.agentTurnOwner && s.archivedAt == null).toArray()
+  const recent = all
+    .sort((a, b) => (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt))
+    .slice(0, Math.max(1, limit))
+  if (recent.length === 0) return []
+
+  const sessionIds = new Set(recent.map((s) => s.id))
+  const [goals, runs] = await Promise.all([
+    db.chatGoals
+      .filter((g) => sessionIds.has(g.sessionId) && ACTIVE_CONTINUITY_GOAL_STATUSES.has(g.status))
+      .toArray()
+      .catch(() => []),
+    db.executionRuns
+      .filter((r) => Boolean(r.sessionId && sessionIds.has(r.sessionId) && r.status === "running"))
+      .toArray()
+      .catch(() => []),
+  ])
+
+  const goalBySession = new Map<string, string>()
+  for (const goal of goals) {
+    if (!goalBySession.has(goal.sessionId)) goalBySession.set(goal.sessionId, `goal:${goal.status}`)
+  }
+  const runningBySession = new Set<string>()
+  for (const run of runs) {
+    if (run.sessionId) runningBySession.add(run.sessionId)
+  }
+
+  return recent.map((session) => ({
+    session,
+    originKind: session.platformBinding ? "im" : "desktop",
+    originLabel: session.platformBinding ? session.platformBinding.platform : "Desktop",
+    continuityState:
+      goalBySession.get(session.id) ??
+      (runningBySession.has(session.id) ? "run:running" : undefined),
+  }))
+}
+
+/**
+ * Rebind an existing Desktop or cross-channel ChatSession to the current
+ * private IM conversation so subsequent turns continue that exact session (F8).
+ */
+export async function rebindConversationToSession(
+  event: NormalizedInboundEvent,
+  target: ChatSession
+): Promise<ChatSession> {
+  const now = Date.now()
+  const deliveryTarget = deliveryTargetFromEvent(event)
+  const platformBinding: NonNullable<ChatSession["platformBinding"]> = {
+    platform: event.platform,
+    adapterId: event.adapterId,
+    conversationKey: event.conversationKey,
+    conversationRef: event.conversationRef,
+    ...(deliveryTarget ? { deliveryTarget } : {}),
+    scopeKind: event.channel.kind,
+  }
+  const updated: ChatSession = {
+    ...target,
+    platformBinding,
+    platformConversationKey: event.conversationKey,
+    updatedAt: now,
+  }
+  await getDb().sessions.put(updated)
+  return updated
+}
+
 /**
  * Consume legacy Inbox list preferences into the shared session model.
  * Removing consumed fields makes subsequent unpin/unarchive operations stable.
