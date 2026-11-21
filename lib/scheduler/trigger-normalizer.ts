@@ -6,6 +6,7 @@
 
 import type { TaskTrigger } from "@/types/scheduler"
 import { validateCronExpression } from "./cron-parser"
+import { OCCURRENCE_RESOLUTION_MS } from "./occurrence"
 import { SchedulerError } from "./errors"
 
 interface NormalizeTaskTriggerOptions {
@@ -88,6 +89,15 @@ export function normalizeTaskTrigger(
           field: "intervalMs",
           value: trigger.intervalMs,
         })
+      }
+      // A slot is identified to the second (`scheduledOccurrenceExecutionId`),
+      // so two slots closer than that share one identity: both spent the run
+      // budget and only the first ran. Refuse the precision rather than merge.
+      if (intervalMs < OCCURRENCE_RESOLUTION_MS) {
+        throw SchedulerError.invalidTrigger(
+          `Interval trigger requires intervalMs >= ${OCCURRENCE_RESOLUTION_MS}`,
+          { triggerType: "interval", field: "intervalMs", value: trigger.intervalMs }
+        )
       }
 
       return {

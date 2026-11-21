@@ -66,6 +66,56 @@ describe("SchedulerDatabase", () => {
     ...overrides,
   })
 
+  describe("mutateTask", () => {
+    it("writes only the fields it returns, decided against the row as it is now", async () => {
+      await schedulerDb.createTask(createMockTask({ id: "live", runCount: 4, successCount: 4 }))
+      // A writer that read the row earlier changes the status; the counters a
+      // run settled meanwhile are not part of what it writes.
+      await getDb().scheduledTasks.update("live", { runCount: 5, successCount: 5 })
+      const written = await schedulerDb.mutateTask("live", () => ({ status: "paused" }))
+      expect(written).toMatchObject({ status: "paused", runCount: 5, successCount: 5 })
+      expect(await schedulerDb.getTask("live")).toMatchObject({
+        status: "paused",
+        runCount: 5,
+        successCount: 5,
+      })
+    })
+
+    it("counts every concurrent increment", async () => {
+      await schedulerDb.createTask(createMockTask({ id: "count", successCount: 0 }))
+      await Promise.all(
+        Array.from({ length: 5 }, () =>
+          schedulerDb.mutateTask("count", (current) => ({
+            successCount: current.successCount + 1,
+          }))
+        )
+      )
+      expect((await schedulerDb.getTask("count"))?.successCount).toBe(5)
+    })
+
+    it("writes nothing when it declines, and never creates a missing task", async () => {
+      const updatedAt = new Date("2026-01-01T00:00:00Z")
+      await schedulerDb.createTask(createMockTask({ id: "kept", updatedAt }))
+      expect(await schedulerDb.mutateTask("kept", () => null)).toBeNull()
+      expect((await schedulerDb.getTask("kept"))?.updatedAt).toEqual(updatedAt)
+      expect(await schedulerDb.mutateTask("gone", () => ({ status: "paused" }))).toBeNull()
+      expect(await getDb().scheduledTasks.get("gone")).toBeUndefined()
+    })
+
+    it("removes a field set to undefined and keeps a mirrored index column in step", async () => {
+      await schedulerDb.createTask(
+        createMockTask({ id: "cols", nextRunAt: new Date(Date.now() + 60_000) })
+      )
+      await schedulerDb.mutateTask("cols", () => ({
+        nextRunAt: undefined,
+        trigger: { type: "event", eventType: "plugin-sync" },
+      }))
+      const raw = await getDb().scheduledTasks.get("cols")
+      expect(raw).not.toHaveProperty("nextRunAt")
+      expect(raw?.eventType).toBe("plugin-sync")
+    })
+  })
+
   describe("Task Operations", () => {
     it.each(["im-push", "connection:outbound:send"])(
       "strips callback authority before storing %s payloads and updates",

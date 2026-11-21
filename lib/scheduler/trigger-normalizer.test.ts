@@ -97,6 +97,19 @@ describe("trigger-normalizer", () => {
       ).toThrow(SchedulerError)
     })
 
+    it("refuses an interval finer than a slot's identity, and accepts one second", () => {
+      // Two 100 ms slots share one second-aligned occurrence id, so both spent
+      // the run budget while only the first ran.
+      for (const intervalMs of [1, 100, 999, 999.9]) {
+        expect(() => normalizeTaskTrigger({ type: "interval", intervalMs })).toThrow(
+          /intervalMs >= 1000/
+        )
+      }
+      expect(normalizeTaskTrigger({ type: "interval", intervalMs: 1000 })).toMatchObject({
+        intervalMs: 1000,
+      })
+    })
+
     it("normalizes valid one-time trigger", () => {
       const future = new Date(Date.now() + 5 * 60_000)
       const trigger = normalizeTaskTrigger({

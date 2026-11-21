@@ -1,10 +1,29 @@
+import { alignOccurrenceInstant } from "@/lib/workflow/runtime/trigger-idempotency"
 import {
+  OCCURRENCE_RESOLUTION_MS,
   latestElapsedSlot,
   scheduledBotTickRecordId,
   scheduledOccurrenceExecutionId,
 } from "./occurrence"
 
 const SLOT = new Date("2026-10-12T09:00:00.000Z")
+
+describe("OCCURRENCE_RESOLUTION_MS", () => {
+  it("is the alignment an occurrence id uses, so slots that far apart get two ids", () => {
+    for (const ms of [0, 1, 999, 1_000, 1_999, 2_000, SLOT.getTime() + 437]) {
+      expect(alignOccurrenceInstant(ms)).toBe(
+        Math.floor(ms / OCCURRENCE_RESOLUTION_MS) * OCCURRENCE_RESOLUTION_MS
+      )
+    }
+    const id = (offset: number) =>
+      scheduledOccurrenceExecutionId({
+        taskId: "t",
+        triggerSource: "schedule",
+        scheduledFor: new Date(SLOT.getTime() + 999 + offset),
+      })
+    expect(id(0)).not.toBe(id(OCCURRENCE_RESOLUTION_MS))
+  })
+})
 
 describe("scheduledOccurrenceExecutionId", () => {
   it("names a slot's automatic fire the same way whenever it fires", () => {

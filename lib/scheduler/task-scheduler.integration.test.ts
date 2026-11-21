@@ -6,13 +6,14 @@ import { createTaskScheduler, registerTaskExecutor, unregisterTaskExecutor } fro
 import type { ScheduledTask, SchedulerTimingDriver } from "@/types/scheduler"
 import { registerTaskPrewarmer, unregisterTaskPrewarmer } from "./prewarm"
 
-jest.mock("@/lib/db/schema", () => {
-  const actual = jest.requireActual("@/lib/db/schema")
-  const db = new actual.CogniaDB("scheduler-lifecycle-integration", "scheduler-integration")
-  return { ...actual, getDb: () => db }
-})
+// The real account database over this file's own fake IndexedDB. Mocking
+// `@/lib/db/schema` with `requireActual` re-enters the mock factory through the
+// schema's own import graph (account-sync capture → settings → schema) and
+// reads `CogniaDB` before it is initialized, so the suite never loaded.
+// Mutable so a case can lower the host cap; read when the cap refreshes.
+const mockPolicy = { maxConcurrentExecutions: 5 }
 jest.mock("./write-authority", () => ({
-  loadSchedulerPolicy: async () => ({ maxConcurrentExecutions: 5 }),
+  loadSchedulerPolicy: async () => mockPolicy,
 }))
 jest.mock("./task-workspace-binding", () => ({
   resolveTaskWorkspace: async () => undefined,
@@ -91,6 +92,8 @@ beforeEach(async () => {
   await scheduler.initialize()
 })
 afterEach(async () => {
+  jest.restoreAllMocks()
+  mockPolicy.maxConcurrentExecutions = 5
   scheduler.stop()
   unregisterTaskExecutor("test")
   unregisterTaskPrewarmer("test")
@@ -738,4 +741,284 @@ it("does not arm a prewarm after stopping during the main native arm", async () 
     0
   )
   expect(scheduler.getStatus()).toMatchObject({ initialized: false, scheduledCount: 0 })
+})
+
+// ── Audit 2026-11-17 (scheduled-task gap audit F4 F5 F7 F12 F13 F14) ──────────
+// Each case is a counterexample from the audit, kept as a regression.
+
+type Run = import("@/types/scheduler").TaskExecution
+type CorePort = {
+  checkMissedTasks(): Promise<void>
+  executeTask(
+    task: ScheduledTask,
+    retry: number,
+    context: { triggerSource: "schedule"; scheduledFor: Date; scheduledSlotClaimed?: boolean }
+  ): Promise<Run>
+}
+const core = () => scheduler as unknown as CorePort
+const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+function latch() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
+/** A fresh row for the audit cases: a task that has not run yet. */
+function liveDraft(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
+  const now = new Date()
+  return draft({
+    id: "audit-task",
+    nextRunAt: new Date(now.getTime() + 60_000),
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  })
+}
+/**
+ * Hold the first call of `method` made from inside `frame` (matched on the
+ * call stack) until `release`. A read is held after it has read, which is
+ * the window a write computed from that read would have to survive; a
+ * transactional write is held before it starts, so whatever lands meanwhile
+ * is already there when it decides.
+ */
+function holdCall(method: "getTask" | "mutateTask", frame: string) {
+  const entered = latch()
+  const hold = latch()
+  const original = (schedulerDb[method] as (...args: unknown[]) => Promise<unknown>).bind(
+    schedulerDb
+  )
+  let held = false
+  jest.spyOn(schedulerDb, method).mockImplementation((async (...args: unknown[]) => {
+    if (held || !new Error().stack?.includes(frame)) return original(...args)
+    held = true
+    if (method === "getTask") {
+      const row = await original(...args)
+      entered.release()
+      await hold.promise
+      return row
+    }
+    entered.release()
+    await hold.promise
+    return original(...args)
+  }) as never)
+  return { entered: entered.promise, release: hold.release }
+}
+
+it("F4: a run that settles while the user pauses keeps the task paused", async () => {
+  await schedulerDb.createTask(liveDraft())
+  registerTaskExecutor("test", async () => ({ success: true }))
+  const stats = holdCall("mutateTask", "updateTaskStats")
+  const run = scheduler.runTaskNow("audit-task")
+  await stats.entered
+  try {
+    expect(await scheduler.pauseTask("audit-task")).toBe(true)
+  } finally {
+    stats.release()
+  }
+  await run
+  expect(await schedulerDb.getTask("audit-task")).toMatchObject({
+    status: "paused",
+    runCount: 1,
+    successCount: 1,
+  })
+})
+
+it("F4: advancing the schedule after a run does not resume a task paused meanwhile", async () => {
+  await schedulerDb.createTask(liveDraft())
+  registerTaskExecutor("test", async () => ({ success: true }))
+  const nextRun = holdCall("getTask", "updateNextRunTime")
+  const run = scheduler.runTaskNow("audit-task")
+  await nextRun.entered
+  try {
+    await scheduler.pauseTask("audit-task")
+  } finally {
+    nextRun.release()
+  }
+  await run
+  expect((await schedulerDb.getTask("audit-task"))?.status).toBe("paused")
+})
+
+it("F5: two runs that settle together both count", async () => {
+  const task = liveDraft()
+  task.config.overlapPolicy = "allow"
+  await schedulerDb.createTask(task)
+  const both = latch()
+  let entered = 0
+  registerTaskExecutor("test", async () => {
+    entered += 1
+    if (entered === 2) both.release()
+    await both.promise
+    return { success: true }
+  })
+  const runs = await Promise.all([
+    scheduler.runTaskNow("audit-task"),
+    scheduler.runTaskNow("audit-task"),
+  ])
+  expect(runs.map((run) => run?.status)).toEqual(["completed", "completed"])
+  expect(await schedulerDb.getTask("audit-task")).toMatchObject({ runCount: 2, successCount: 2 })
+})
+
+it("F5: an older run's counters never roll back a later slot's maxRuns reservation", async () => {
+  const slot = new Date(Date.now() - 2_000)
+  const next = new Date(slot.getTime() + 1_000)
+  const task = liveDraft({ nextRunAt: slot, trigger: { type: "interval", intervalMs: 1_000 } })
+  task.config.maxRuns = 2
+  task.config.overlapPolicy = "allow"
+  await schedulerDb.createTask(task)
+  registerTaskExecutor("test", async () => ({ success: true }))
+  const firstClaim = await schedulerDb.claimTaskSlot(task.id, slot, next)
+  expect(firstClaim?.runCount).toBe(1)
+  const stats = holdCall("mutateTask", "updateTaskStats")
+  const first = core().executeTask(firstClaim!, 0, {
+    triggerSource: "schedule",
+    scheduledFor: slot,
+    scheduledSlotClaimed: true,
+  })
+  await stats.entered
+  try {
+    const secondClaim = await schedulerDb.claimTaskSlot(
+      task.id,
+      next,
+      new Date(next.getTime() + 1_000)
+    )
+    expect(secondClaim).toMatchObject({ runCount: 2, nextRunAt: undefined })
+    const second = await core().executeTask(secondClaim!, 0, {
+      triggerSource: "schedule",
+      scheduledFor: next,
+      scheduledSlotClaimed: true,
+    })
+    expect(second.status).toBe("completed")
+    expect((await schedulerDb.getTask(task.id))?.status).toBe("expired")
+  } finally {
+    stats.release()
+  }
+  await first
+  expect(await schedulerDb.getTask(task.id)).toMatchObject({
+    runCount: 2,
+    successCount: 2,
+    status: "expired",
+  })
+})
+
+it("F7: cancel-previous starts the replacement once the cancelled run exits, at a cap of one", async () => {
+  mockPolicy.maxConcurrentExecutions = 1
+  scheduler.stop()
+  scheduler = createTaskScheduler(timing())
+  await scheduler.initialize()
+  await settle(10)
+  const task = liveDraft()
+  task.config.overlapPolicy = "cancel-previous"
+  await schedulerDb.createTask(task)
+  const entered = latch()
+  let calls = 0
+  let active = 0
+  let peak = 0
+  const order: string[] = []
+  registerTaskExecutor("test", async (_task, _execution, signal) => {
+    calls += 1
+    active += 1
+    peak = Math.max(peak, active)
+    const first = calls === 1
+    if (first) {
+      entered.release()
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true })
+      )
+    } else {
+      order.push("replacement-started")
+    }
+    active -= 1
+    if (first) {
+      order.push("previous-exited")
+      return { success: false, error: "aborted" }
+    }
+    return { success: true }
+  })
+  const first = scheduler.runTaskNow(task.id)
+  await entered.promise
+  const replacement = await scheduler.runTaskNow(task.id)
+  expect(await first).toMatchObject({ status: "cancelled", terminalReason: "overlap-cancelled" })
+  expect(replacement).toMatchObject({ status: "completed", terminalReason: "completed" })
+  expect(peak).toBe(1)
+  expect(order).toEqual(["previous-exited", "replacement-started"])
+})
+
+it.each(["pause", "delete", "stop"] as const)(
+  "F12: a buffered start the drain already took respects %s during its row read",
+  async (action) => {
+    const task = liveDraft()
+    task.config.overlapPolicy = "queue-all"
+    await schedulerDb.createTask(task)
+    const firstEntered = latch()
+    const firstRelease = latch()
+    let calls = 0
+    registerTaskExecutor("test", async () => {
+      calls += 1
+      if (calls === 1) {
+        firstEntered.release()
+        await firstRelease.promise
+      }
+      return { success: true }
+    })
+    const first = scheduler.runTaskNow(task.id)
+    await firstEntered.promise
+    expect((await scheduler.runTaskNow(task.id))?.status).toBe("pending")
+    const drain = holdCall("getTask", "drainOneBufferedStart")
+    firstRelease.release()
+    await first
+    await drain.entered
+    try {
+      if (action === "pause") await scheduler.pauseTask(task.id)
+      if (action === "delete") await scheduler.deleteTask(task.id)
+      if (action === "stop") scheduler.stop()
+    } finally {
+      drain.release()
+    }
+    await settle(50)
+    expect(calls).toBe(1)
+  }
+)
+
+it("F13: refuses an interval its slot identity cannot tell apart, and keeps one-second slots apart", async () => {
+  await expect(
+    scheduler.createTask({
+      name: "too fine",
+      type: "test",
+      trigger: { type: "interval", intervalMs: 100 },
+    })
+  ).rejects.toThrow(/intervalMs >= 1000/)
+
+  const slot = new Date(Math.floor(Date.now() / 1000) * 1000 - 5_000 + 100)
+  const task = liveDraft({ trigger: { type: "interval", intervalMs: 1_000 }, nextRunAt: slot })
+  await schedulerDb.createTask(task)
+  const executor = jest.fn(async () => ({ success: true }))
+  registerTaskExecutor("test", executor)
+  await core().checkMissedTasks()
+  expect(executor).toHaveBeenCalledTimes(2)
+  expect(await schedulerDb.getTaskExecutions(task.id)).toHaveLength(2)
+})
+
+it("F14: a failure to record a successful run never runs its executor again", async () => {
+  const task = liveDraft()
+  task.config.maxRetries = 1
+  task.config.retryDelay = 10
+  await schedulerDb.createTask(task)
+  const executor = jest.fn(async () => ({ success: true, output: { effectDone: true } }))
+  registerTaskExecutor("test", executor)
+  const original = schedulerDb.mutateTask.bind(schedulerDb)
+  jest.spyOn(schedulerDb, "mutateTask").mockImplementation(async (id, mutate) => {
+    if (new Error().stack?.includes("updateTaskStats")) {
+      throw new Error("synthetic statistics persistence failure")
+    }
+    return original(id, mutate)
+  })
+  const run = await scheduler.runTaskNow(task.id)
+  expect(run).toMatchObject({ status: "completed", output: { effectDone: true } })
+  expect(run?.logs.some((log) => /Could not update the task's statistics/.test(log.message))).toBe(
+    true
+  )
+  await settle(100)
+  expect(executor).toHaveBeenCalledTimes(1)
+  expect((await schedulerDb.getExecution(run!.id))?.status).toBe("completed")
 })

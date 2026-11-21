@@ -1,6 +1,6 @@
 /**
  * `/tasks` controller — browse and control the scheduler's tasks, reusing
- * `schedulerDb` (`getAllTasks` / `getTask` / `updateTask`) against the CLI-local
+ * `schedulerDb` (`getAllTasks` / `getTask` / `mutateTask`) against the CLI-local
  * Dexie. List opens the generic select overlay; show renders a notice; pause /
  * resume flip the status. Triggering a run is desktop-only (the executors need
  * the Tauri runtime), so it is intentionally not exposed here.
@@ -17,7 +17,8 @@ export interface TasksDeps {
   ensureDb?: () => Promise<unknown>
   getAll?: () => Promise<ScheduledTask[]>
   get?: (id: string) => Promise<ScheduledTask | null>
-  update?: (task: ScheduledTask) => Promise<void>
+  /** Writes only the status, so counters a run settled meanwhile are kept. */
+  setStatus?: (id: string, status: ScheduledTask["status"]) => Promise<unknown>
 }
 
 const dbOf = (d: TasksDeps) => d.ensureDb ?? (() => ensureCliDb())
@@ -86,7 +87,11 @@ async function setStatus(
     deps.dispatch({ type: "NOTICE", message: `Task ${key} not found.` })
     return
   }
-  await (deps.update ?? ((t: ScheduledTask) => schedulerDb.updateTask(t)))({ ...task, status })
+  await (
+    deps.setStatus ??
+    ((taskId: string, next: ScheduledTask["status"]) =>
+      schedulerDb.mutateTask(taskId, () => ({ status: next })))
+  )(task.id, status)
   deps.dispatch({ type: "NOTICE", message: `${verb} task ${key}.` })
 }
 

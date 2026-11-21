@@ -125,10 +125,54 @@ class SchedulerDatabase {
   }
 
   /**
-   * Update an existing task
+   * Update an existing task with a whole row.
+   *
+   * Only for a row the caller owns outright (an import, a test seed). Anything
+   * that changes a LIVE task goes through {@link mutateTask}: a whole row
+   * written back from an earlier read undoes whatever landed in between, which
+   * is how a completing run used to resume a task the user had just paused and
+   * how two completions used to count as one.
    */
   async updateTask(task: ScheduledTask): Promise<void> {
     await this.tasks.update(task.id, serializeTask(task))
+  }
+
+  /**
+   * Change some fields of one task, decided against the row as it is now.
+   *
+   * `mutate` sees the current row inside a read-write transaction and returns
+   * the fields to change, or `null` to change nothing. Only those fields (and
+   * `updatedAt`) are written, so a counter, a status or a cursor another writer
+   * changed is never rolled back to what an older read saw. `mutate` must be
+   * synchronous: awaiting anything that is not this table would commit the
+   * transaction under it. Returns the row as written, or `null` when the task
+   * does not exist or `mutate` declined.
+   */
+  async mutateTask(
+    taskId: string,
+    mutate: (current: ScheduledTask) => Partial<ScheduledTask> | null
+  ): Promise<ScheduledTask | null> {
+    return this.transaction("rw", [this.tasks], async () => {
+      const stored = await this.tasks.get(taskId)
+      if (!stored) return null
+      const current = deserializeTask(stored)
+      const patch = mutate(current)
+      if (!patch) return null
+      const updated: ScheduledTask = { ...current, ...patch, id: taskId }
+      if (patch.updatedAt === undefined) updated.updatedAt = new Date()
+      const serialized = serializeTask(updated)
+      const changes: Record<string, unknown> = { updatedAt: serialized.updatedAt }
+      for (const field of Object.keys(patch) as (keyof ScheduledTask)[]) {
+        if (field === "id") continue
+        for (const column of TASK_FIELD_COLUMNS[field] ?? [field]) {
+          // An `undefined` value removes the column, as the absent key of a
+          // whole-row write would.
+          changes[column] = serialized[column as keyof DBScheduledTask]
+        }
+      }
+      await this.tasks.update(taskId, changes as Partial<DBScheduledTask>)
+      return updated
+    })
   }
 
   /** Atomically patch only promotion metadata, preserving live task state. */
@@ -609,6 +653,17 @@ class SchedulerDatabase {
 }
 
 // ========== Serialization Helpers ==========
+
+/**
+ * Task fields that `serializeTask` stores in more than one column. Every other
+ * field is stored under its own name. `mutateTask` writes each column of a
+ * field it changes, so the denormalized index columns never drift from the
+ * blob they mirror.
+ */
+const TASK_FIELD_COLUMNS: Partial<Record<keyof ScheduledTask, readonly string[]>> = {
+  trigger: ["trigger", "eventType"],
+  createdBy: ["createdBy", "createdBySource"],
+}
 
 function serializeTask(task: ScheduledTask): DBScheduledTask {
   return {

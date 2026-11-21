@@ -18,6 +18,15 @@ import { alignOccurrenceInstant } from "@/lib/workflow/runtime/trigger-idempoten
 import type { TaskExecutionTriggerSource } from "@/types/scheduler"
 
 /**
+ * The finest distinction an occurrence id can make: slot instants are aligned
+ * to this before they name a run (`alignOccurrenceInstant`). Two slots closer
+ * than this would share one id, so a trigger must not produce them
+ * (`trigger-normalizer.ts` refuses a shorter interval). `occurrence.test.ts`
+ * pins it to the alignment.
+ */
+export const OCCURRENCE_RESOLUTION_MS = 1_000
+
+/**
  * Trigger sources that fire a slot on their own. A run-now, a backfill, a
  * retry or an event is a start somebody asked for, and two of them are two
  * runs.

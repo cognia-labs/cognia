@@ -284,14 +284,13 @@ export async function pauseIssueWakeupFor(
   await (await scheduler()).pauseTask(taskId)
   const table = await schedulerTable()
   await withWakeupLock(taskId, async () => {
-    const latest = await table.getTask(taskId)
-    if (!latest) return
-    await table.updateTask({
-      ...latest,
+    // Only the reason is written: the pause above, and a run settling at the
+    // same time, own the rest of the row.
+    await table.mutateTask(taskId, () => ({
       lastTerminalReason: ISSUE_WAKEUP_PAUSE_TERMINAL_REASONS[reason],
       lastTerminalAt: now,
       updatedAt: now,
-    })
+    }))
   })
 }
 
@@ -322,13 +321,14 @@ export async function setIssueWakeupDeferred(
 ): Promise<void> {
   const table = await schedulerTable()
   await withWakeupLock(taskId, async () => {
-    const latest = await table.getTask(taskId)
-    const payload = readWakeupPayload(latest?.payload)
-    if (!latest || !payload) return
-    const next = { ...payload }
-    if (deferred.length > 0) next.deferred = [...deferred]
-    else delete next.deferred
-    await table.updateTask({ ...latest, payload: next, updatedAt: new Date() })
+    await table.mutateTask(taskId, (latest) => {
+      const payload = readWakeupPayload(latest.payload)
+      if (!payload) return null
+      const next = { ...payload }
+      if (deferred.length > 0) next.deferred = [...deferred]
+      else delete next.deferred
+      return { payload: next }
+    })
   })
 }
 
@@ -339,13 +339,10 @@ export async function holdIssueWakeupInputs(
 ): Promise<void> {
   const table = await schedulerTable()
   await withWakeupLock(taskId, async () => {
-    const latest = await table.getTask(taskId)
-    const payload = readWakeupPayload(latest?.payload)
-    if (!latest || !payload) return
-    await table.updateTask({
-      ...latest,
-      payload: { ...payload, deferred: append(payload.deferred ?? []) },
-      updatedAt: new Date(),
+    await table.mutateTask(taskId, (latest) => {
+      const payload = readWakeupPayload(latest.payload)
+      if (!payload) return null
+      return { payload: { ...payload, deferred: append(payload.deferred ?? []) } }
     })
   })
 }
@@ -482,13 +479,14 @@ export async function setChildrenDoneInstruction(
   const id = childrenDoneWakeupId(parentId)
   const table = await schedulerTable()
   await withWakeupLock(id, async () => {
-    const latest = await table.getTask(id)
-    const payload = readWakeupPayload(latest?.payload)
-    if (!latest || !payload) return
-    const next = { ...payload }
-    if (text) next.instructionOverride = text
-    else delete next.instructionOverride
-    await table.updateTask({ ...latest, payload: next, updatedAt: new Date() })
+    await table.mutateTask(id, (latest) => {
+      const payload = readWakeupPayload(latest.payload)
+      if (!payload) return null
+      const next = { ...payload }
+      if (text) next.instructionOverride = text
+      else delete next.instructionOverride
+      return { payload: next }
+    })
   })
   return requireWakeup(id)
 }

@@ -16,6 +16,7 @@ import {
   waitForTaskExecutor,
   resolveDefaultTimingDriver,
   EXECUTOR_REGISTRATION_GRACE_MS,
+  CANCEL_PREVIOUS_EXIT_TIMEOUT_MS,
   TaskSchedulerImpl,
   subscribeToTaskExecutions,
 } from "./task-scheduler"
@@ -71,6 +72,7 @@ jest.mock("./scheduler-db", () => ({
     getOverdueActiveTasks: jest.fn().mockResolvedValue([]),
     createTask: jest.fn().mockResolvedValue(undefined),
     updateTask: jest.fn().mockResolvedValue(undefined),
+    mutateTask: jest.fn(),
     setTaskPromotion: jest.fn(),
     claimTaskSlot: jest.fn().mockResolvedValue(null),
     advanceTaskSchedule: jest.fn().mockResolvedValue(null),
@@ -238,6 +240,18 @@ describe("TaskScheduler", () => {
     jest.clearAllMocks()
     mockScheduledTaskHooks.hasAnyHook.mockReturnValue(false)
     mockScheduledTaskHooks.dispatchScheduledTaskBeforeRun.mockResolvedValue(true)
+    // The real write is one transaction over the current row; here it is the
+    // same read-decide-write over the mocked row, so assertions on the row
+    // `updateTask` received keep describing what was written.
+    mockSchedulerDb.mutateTask.mockImplementation(async (id, mutate) => {
+      const current = await mockSchedulerDb.getTask(id)
+      if (!current) return null
+      const patch = mutate(current)
+      if (!patch) return null
+      const updated = { ...current, ...patch, updatedAt: patch.updatedAt ?? new Date() }
+      await mockSchedulerDb.updateTask(updated)
+      return updated
+    })
     mockSchedulerDb.setTaskPromotion.mockImplementation(async (id, promotion, accepts) => {
       const current = await mockSchedulerDb.getTask(id)
       if (!current || !accepts(current)) return null
@@ -807,17 +821,17 @@ describe("TaskScheduler", () => {
         expect(scheduler.getStatus().scheduledCount).toBe(0)
       })
       it("advances humanRevision only for a person's edit", async () => {
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...ownedTask("rev"), humanRevision: 2 })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...ownedTask("rev"), humanRevision: 2 })
         const byUser = await scheduler.updateTask("rev", { name: "a" }, { source: "user" })
         expect(byUser?.humanRevision).toBe(3)
 
         for (const source of [undefined, "agent", "plugin", "system"] as const) {
-          mockSchedulerDb.getTask.mockResolvedValueOnce({ ...ownedTask("rev"), humanRevision: 2 })
+          mockSchedulerDb.getTask.mockResolvedValue({ ...ownedTask("rev"), humanRevision: 2 })
           const other = await scheduler.updateTask("rev", { name: "b" }, source ? { source } : {})
           expect(other?.humanRevision).toBe(2)
         }
 
-        mockSchedulerDb.getTask.mockResolvedValueOnce(ownedTask("fresh"))
+        mockSchedulerDb.getTask.mockResolvedValue(ownedTask("fresh"))
         const first = await scheduler.updateTask("fresh", { name: "c" }, { source: "user" })
         expect(first?.humanRevision).toBe(1)
       })
@@ -829,7 +843,7 @@ describe("TaskScheduler", () => {
           conversationKey: "telegram:bot:chat",
           senderId: "alice",
         }
-        mockSchedulerDb.getTask.mockResolvedValueOnce({
+        mockSchedulerDb.getTask.mockResolvedValue({
           ...ownedTask("im"),
           payload: { prompt: "old", scheduleProvenance: stored },
         })
@@ -841,7 +855,7 @@ describe("TaskScheduler", () => {
         })
         expect(updated?.payload).toEqual({ prompt: "new", scheduleProvenance: stored })
 
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...ownedTask("desk"), payload: {} })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...ownedTask("desk"), payload: {} })
         const added = await scheduler.updateTask("desk", {
           payload: { scheduleProvenance: stored },
         })
@@ -875,7 +889,7 @@ describe("TaskScheduler", () => {
           createdAt: new Date(),
           updatedAt: new Date(),
         }
-        mockSchedulerDb.getTask.mockResolvedValueOnce(existingTask)
+        mockSchedulerDb.getTask.mockResolvedValue(existingTask)
 
         const result = await scheduler.updateTask("task-1", { name: "Updated" })
 
@@ -1172,7 +1186,7 @@ describe("TaskScheduler", () => {
         const paused = await scheduler.pauseTask(created.id)
         expect(paused).toBe(true)
 
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...created, status: "paused" })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...created, status: "paused" })
         const resumed = await scheduler.resumeTask(created.id)
         expect(resumed).toBe(true)
 
@@ -3024,7 +3038,7 @@ describe("TaskScheduler", () => {
       await expect(sched.pauseTask(task.id)).resolves.toBe(true)
       expect(driver.disarm).toHaveBeenCalledWith(task.id)
 
-      mockSchedulerDb.getTask.mockResolvedValueOnce({ ...task, status: "paused" })
+      mockSchedulerDb.getTask.mockResolvedValue({ ...task, status: "paused" })
       const armsBeforeResume = (driver.arm as jest.Mock).mock.calls.length
       await expect(sched.resumeTask(task.id)).resolves.toBe(true)
       const resumedArms = (driver.arm as jest.Mock).mock.calls.slice(armsBeforeResume)
@@ -3065,7 +3079,7 @@ describe("TaskScheduler", () => {
 
         const fireAt = Date.now() + 60 * 60_000
         const task = prewarmTask({ nextRunAt: new Date(fireAt) })
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...task, status: "paused" })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...task, status: "paused" })
         await sched.resumeTask(task.id)
 
         expect(driver.arm).toHaveBeenCalledWith(task.id, expect.any(Number))
@@ -3084,7 +3098,7 @@ describe("TaskScheduler", () => {
         const sched = createTaskScheduler(driver)
         await sched.initialize()
         const task = prewarmTask({ nextRunAt: new Date(Date.now() + 60 * 60_000) })
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...task, status: "paused" })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...task, status: "paused" })
         await sched.resumeTask(task.id)
 
         expect(driver.arm).toHaveBeenCalledWith(task.id, expect.any(Number))
@@ -3101,7 +3115,7 @@ describe("TaskScheduler", () => {
         const sched = createTaskScheduler(driver)
         await sched.initialize()
         const task = prewarmTask({ nextRunAt: new Date(Date.now() + 60 * 60_000) })
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...task, status: "paused" })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...task, status: "paused" })
         await sched.resumeTask(task.id)
 
         mockSchedulerDb.getTask.mockResolvedValue(task)
@@ -3125,7 +3139,7 @@ describe("TaskScheduler", () => {
         const sched = createTaskScheduler(driver)
         await sched.initialize()
         const task = prewarmTask({ nextRunAt: new Date(Date.now() + 60 * 60_000) })
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...task, status: "paused" })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...task, status: "paused" })
         await sched.resumeTask(task.id)
 
         mockSchedulerDb.getTask.mockResolvedValue(task)
@@ -3148,7 +3162,7 @@ describe("TaskScheduler", () => {
         const sched = createTaskScheduler(driver)
         await sched.initialize()
         const task = prewarmTask({ nextRunAt: new Date(Date.now() + 60 * 60_000) })
-        mockSchedulerDb.getTask.mockResolvedValueOnce({ ...task, status: "paused" })
+        mockSchedulerDb.getTask.mockResolvedValue({ ...task, status: "paused" })
         await sched.resumeTask(task.id)
         mockSchedulerDb.getTask.mockResolvedValue(task)
         driver.fire(prewarmAlarmId(task.id), Date.now())
@@ -3721,8 +3735,29 @@ describe("TaskScheduler", () => {
         expect(executor).toHaveBeenCalledTimes(2)
       })
 
-      it("cancel-previous: aborts the running execution and starts the new one", async () => {
-        const { executor } = makeBlockingExecutor()
+      it("cancel-previous: aborts the running execution and starts the new one once it stopped", async () => {
+        // The first run honours its abort signal, as an executor should.
+        let calls = 0
+        const order: string[] = []
+        const executor = jest.fn(
+          (_task: ScheduledTask, _execution: TaskExecution, signal: AbortSignal) => {
+            calls += 1
+            if (calls > 1) {
+              order.push("replacement-started")
+              return Promise.resolve({ success: true })
+            }
+            return new Promise<{ success: boolean; error?: string }>((resolve) =>
+              signal.addEventListener(
+                "abort",
+                () => {
+                  order.push("previous-exited")
+                  resolve({ success: false, error: "aborted" })
+                },
+                { once: true }
+              )
+            )
+          }
+        )
         registerTaskExecutor("test", executor)
         const task = makePolicyTask({
           id: "cancel-prev-task",
@@ -3731,18 +3766,81 @@ describe("TaskScheduler", () => {
         mockSchedulerDb.getTask.mockResolvedValue(task)
 
         const first = scheduler.runTaskNow(task.id)
-        await Promise.resolve()
+        await jest.advanceTimersByTimeAsync(0)
         const second = await scheduler.runTaskNow(task.id)
         const firstExec = await first
 
         expect(firstExec?.status).toBe("cancelled")
         expect(firstExec?.terminalReason).toBe("overlap-cancelled")
         expect(second?.status).toBe("completed")
-        // Cancelled runs are terminal: no retry of the first execution.
+        expect(order).toEqual(["previous-exited", "replacement-started"])
+        // Cancelled runs are terminal: no retry of the first execution, even
+        // though its executor answered the abort with a failure.
         // Cover the full retry window without reaching the task's next
         // legitimate 60-second interval fire now that early writes lazily
         // initialize and arm the scheduler.
         await jest.advanceTimersByTimeAsync(10_000)
+        expect(executor).toHaveBeenCalledTimes(2)
+      })
+
+      it("cancel-previous: does not start beside a cancelled run that will not stop", async () => {
+        const { executor, release } = makeBlockingExecutor()
+        registerTaskExecutor("test", executor)
+        const task = makePolicyTask({
+          id: "cancel-prev-stuck",
+          config: { ...makePolicyTask().config, overlapPolicy: "cancel-previous" },
+        })
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+
+        const first = scheduler.runTaskNow(task.id)
+        await jest.advanceTimersByTimeAsync(0)
+        const second = scheduler.runTaskNow(task.id)
+        // The wrapper of the first run gives up at once; its executor does not.
+        expect(await first).toMatchObject({
+          status: "cancelled",
+          terminalReason: "overlap-cancelled",
+        })
+        await jest.advanceTimersByTimeAsync(CANCEL_PREVIOUS_EXIT_TIMEOUT_MS)
+
+        expect(await second).toMatchObject({
+          status: "skipped",
+          terminalReason: "overlap-skipped",
+        })
+        expect((await second)?.logs.some((l) => /did not stop within 10s/.test(l.message))).toBe(
+          true
+        )
+        expect(executor).toHaveBeenCalledTimes(1)
+        release()
+      })
+
+      it("cancel-previous: only the newest of two waiting replacements starts", async () => {
+        let calls = 0
+        const executor = jest.fn(
+          (_task: ScheduledTask, _execution: TaskExecution, signal: AbortSignal) => {
+            calls += 1
+            if (calls > 1) return Promise.resolve({ success: true })
+            return new Promise<{ success: boolean }>((resolve) =>
+              signal.addEventListener("abort", () => resolve({ success: true }), { once: true })
+            )
+          }
+        )
+        registerTaskExecutor("test", executor)
+        const task = makePolicyTask({
+          id: "cancel-prev-two",
+          config: { ...makePolicyTask().config, overlapPolicy: "cancel-previous" },
+        })
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+
+        const first = scheduler.runTaskNow(task.id)
+        await jest.advanceTimersByTimeAsync(0)
+        const [older, newer] = await Promise.all([
+          scheduler.runTaskNow(task.id),
+          scheduler.runTaskNow(task.id),
+        ])
+        await first
+
+        expect(older).toMatchObject({ status: "skipped", terminalReason: "overlap-skipped" })
+        expect(newer?.status).toBe("completed")
         expect(executor).toHaveBeenCalledTimes(2)
       })
     })
@@ -4173,9 +4271,10 @@ describe("TaskScheduler", () => {
 
       it("does not count a task whose bound has passed; it expires instead", async () => {
         registerTaskExecutor("test", jest.fn().mockResolvedValue({ success: true }))
-        mockSchedulerDb.getActiveEventTasks.mockResolvedValueOnce([
-          eventTask("ended", { endAt: new Date(Date.now() - 1000) }),
-        ])
+        const ended = eventTask("ended", { endAt: new Date(Date.now() - 1000) })
+        mockSchedulerDb.getActiveEventTasks.mockResolvedValueOnce([ended])
+        // The expiry is decided again against the stored row.
+        mockSchedulerDb.getTask.mockResolvedValue(ended)
         await expect(scheduler.fireEventTasks("plugin-sync")).resolves.toBe(0)
         expect(mockSchedulerDb.updateTask).toHaveBeenCalledWith(
           expect.objectContaining({ id: "ended", status: "expired" })
@@ -4283,6 +4382,7 @@ describe("TaskScheduler", () => {
           endAt: new Date(Date.now() - 1000),
         })
         mockSchedulerDb.getActiveEventTasks.mockResolvedValueOnce([task])
+        mockSchedulerDb.getTask.mockResolvedValue(task)
         await scheduler.triggerEventTask("late")
         await jest.advanceTimersByTimeAsync(10)
         expect(executor).not.toHaveBeenCalled()
@@ -5092,6 +5192,10 @@ describe("TaskScheduler", () => {
       mockSchedulerDb.getTasksByType.mockImplementation(async (type: string) =>
         type === "sync" ? [deprecated] : type === "ai-generation" ? [alreadyPaused] : []
       )
+      // The pause is decided again against the stored row.
+      mockSchedulerDb.getTask.mockImplementation(async (id: string) =>
+        id === deprecated.id ? deprecated : id === alreadyPaused.id ? alreadyPaused : null
+      )
       const driver = makeMockDriver()
       const sched = createTaskScheduler(driver)
       await sched.initialize()
@@ -5114,6 +5218,8 @@ describe("TaskScheduler", () => {
       )
       sched.stop()
       mockSchedulerDb.getTasksByType.mockResolvedValue([])
+      mockSchedulerDb.getTask.mockReset()
+      mockSchedulerDb.getTask.mockResolvedValue(null)
     })
 
     it("refuses to create or resume deprecated task types", async () => {

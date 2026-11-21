@@ -69,30 +69,37 @@ describe("tasksShow", () => {
 describe("tasksPause / tasksResume", () => {
   it("pauses a task by flipping its status", async () => {
     const { dispatch, actions } = recorder()
-    const update = jest.fn(async () => {})
-    await tasksPause("t1", { dispatch, ensureDb: noDb, get: async () => task("t1", "x"), update })
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: "t1", status: "paused" }))
+    const setStatus = jest.fn(async () => {})
+    await tasksPause("t1", {
+      dispatch,
+      ensureDb: noDb,
+      get: async () => task("t1", "x"),
+      setStatus,
+    })
+    // The id and the status only: a whole row from this read would undo the
+    // counters of a run that settled since.
+    expect(setStatus).toHaveBeenCalledWith("t1", "paused")
     expect((actions[0] as { message: string }).message).toContain("Paused task t1")
   })
 
   it("resumes a task by flipping its status", async () => {
     const { dispatch, actions } = recorder()
-    const update = jest.fn(async () => {})
+    const setStatus = jest.fn(async () => {})
     await tasksResume("t1", {
       dispatch,
       ensureDb: noDb,
       get: async () => task("t1", "x", "paused"),
-      update,
+      setStatus,
     })
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "active" }))
+    expect(setStatus).toHaveBeenCalledWith("t1", "active")
     expect((actions[0] as { message: string }).message).toContain("Resumed task t1")
   })
 
   it("notices a missing task on pause", async () => {
     const { dispatch, actions } = recorder()
-    const update = jest.fn()
-    await tasksPause("x", { dispatch, ensureDb: noDb, get: async () => null, update })
-    expect(update).not.toHaveBeenCalled()
+    const setStatus = jest.fn()
+    await tasksPause("x", { dispatch, ensureDb: noDb, get: async () => null, setStatus })
+    expect(setStatus).not.toHaveBeenCalled()
     expect((actions[0] as { message: string }).message).toContain("not found")
   })
 })
