@@ -30,7 +30,15 @@ from repowiki.core.wiki_store import WikiStore
 from repowiki.export.html import export_html
 from repowiki.export.json_export import export_json
 from repowiki.export.markdown import export_markdown
-from repowiki.host import LLMClient, configure_paths, get_host, release_workspace
+from repowiki.host import (
+    LLMClient,
+    configure_paths,
+    forget_registered_prompts,
+    get_host,
+    prompt_label_keys,
+    register_prompts,
+    release_workspace,
+)
 from repowiki.ingest.filters import build_path_filter
 from repowiki.llm.prompts import (
     build_chat_prompt,
@@ -72,6 +80,10 @@ _LOCALE_TO_LANGUAGE = {"en": "en", "zh-CN": "zh", "zh-TW": "zh", "ja": "ja", "ko
 #: be worse than one that is consistently the language it started in.
 _LOCALE: str = ""
 _LABELS: dict[str, str] = dict(DEFAULT_LABELS)
+
+#: The locale the Prompt Center slots were last titled in; ``None`` until a
+#: registration succeeds, so a failed one is retried at the next chance.
+_PROMPTS_LOCALE: str | None = None
 
 
 def _config() -> Config:
@@ -117,6 +129,35 @@ async def _resolve_locale_and_labels() -> None:
             _LABELS[key] = value
 
 
+async def _register_prompts() -> None:
+    """Make the prompts' system wording editable in the Prompt Center.
+
+    Titled in the app's language through this plugin's own bundle, key by key
+    like the panel labels, and registered again only when that language
+    changed (the host replaces slots with the same ids). A failed registration
+    is not fatal: until one succeeds every call sends the shipped wording, and
+    the next panel open tries again.
+    """
+    global _PROMPTS_LOCALE
+    if _PROMPTS_LOCALE == _LOCALE:
+        return
+    labels: dict[str, str] = {}
+    for key in prompt_label_keys():
+        try:
+            value = await cognia.ctx.i18n.t(key)
+        except Exception as exc:  # noqa: BLE001 — an English title beats no slot
+            logger.info("i18n.t(%s) failed: %s", key, exc)
+            continue
+        if isinstance(value, str) and value and value != key:
+            labels[key] = value
+    try:
+        await register_prompts(labels)
+    except Exception as exc:  # noqa: BLE001 — the shipped wording still works
+        logger.warning("prompt registration failed (%s); sending the shipped wording", exc)
+        return
+    _PROMPTS_LOCALE = _LOCALE
+
+
 async def on_startup() -> None:
     """Point storage at the plugin's own data directory.
 
@@ -130,6 +171,7 @@ async def on_startup() -> None:
     configure_paths(await cognia.ctx.fs.getDataDir())
     await _rehydrate_scans()
     await _resolve_locale_and_labels()
+    await _register_prompts()
 
 
 async def _rehydrate_scans() -> None:
@@ -162,6 +204,7 @@ def on_config_updated(config: dict) -> None:
 
 async def on_shutdown() -> None:
     """Release every checkout we cloned; leave the user's own folders alone."""
+    global _PROMPTS_LOCALE
     # A panel rescan still running would write into stores this is about to
     # abandon; cancel it rather than let it outlive the plugin.
     for task in list(_RESCANS.values()):
@@ -176,6 +219,9 @@ async def on_shutdown() -> None:
                 pass
     _SCANS.clear()
     _INDEXES.clear()
+    # The host drops the plugin's prompt slots with the plugin.
+    _PROMPTS_LOCALE = None
+    forget_registered_prompts()
 
 
 def _require_scan(project_id: str) -> ScanResult:
@@ -1366,6 +1412,7 @@ async def repowiki_build_panel(surfaceId: str, resource: dict | None = None) -> 
     if not state["projectId"]:
         state["projectId"] = _project_for_resource(resource)
     await _resolve_locale_and_labels()
+    await _register_prompts()
     await _refresh_freshness(state["projectId"])
     return await _push_panel(surfaceId, create=True)
 

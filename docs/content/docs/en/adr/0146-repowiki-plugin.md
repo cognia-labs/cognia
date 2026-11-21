@@ -42,6 +42,16 @@ Three layers changed, all of them behind one module (`repowiki/host.py`), so
 | **Storage** | two SQLite files under `~/.repowiki` | the plugin's own data directory, from `ctx.fs.getDataDir()` | A plugin has no business in the user's home directory, and uninstalling should reclaim what it wrote. |
 | **IO** | `os.walk` and four `git` subprocesses | `ctx.workspace.acquire` / `walk` / `changedSince` | Enumeration is where containment lives. |
 
+Amendment (2026-11-21): the system wording of the nine analysis and question
+prompts is registered with the Prompt Center through `ctx.prompts`
+(`EDITABLE_PROMPTS` in `repowiki/llm/prompts.py`) and resolved in
+`LLMClient.complete` before each call. With no override the model sees
+upstream's text byte for byte. An override replaces only the wording: the JSON
+shapes, the protocol sentences a parser relies on (the line-counting rule, the
+one-term-per-line format, the fields enrichment must keep) and the language
+instruction stay fixed in code. A failed read of an override fails the call
+rather than sending the shipped text over the user's edit.
+
 ### Enumerate through the host, read locally
 
 The host decides *which* paths — `.gitignore` semantics from the `ignore` crate,

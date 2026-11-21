@@ -24,6 +24,11 @@ Three layers were replaced, all of them behind `repowiki/host.py`:
 Reading file _contents_ stays local. The host has already ruled on the paths;
 re-fetching a thousand files over RPC would buy latency, not safety.
 
+The system wording of the analysis and question prompts is a Prompt Center
+slot (`ctx.prompts`), resolved before every model call. Without an override
+the text is upstream's; an override never changes the JSON shapes, the
+protocol sentences or the language instruction, which stay in code.
+
 ## Not ported
 
 - The Click CLI and the FastAPI server, with its Vite frontend. Cognia is the

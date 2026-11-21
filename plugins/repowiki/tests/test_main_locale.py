@@ -12,6 +12,9 @@ from __future__ import annotations
 import pytest
 
 import main
+from repowiki import host as host_module
+from repowiki.host import HostBridge, forget_registered_prompts, prompt_label_keys, set_host
+from repowiki.llm.prompts import EDITABLE_PROMPTS
 from repowiki.panel import DEFAULT_LABELS
 
 
@@ -45,11 +48,29 @@ class FakeCognia:
         self.ctx = FakeCtx(i18n)
 
 
+class FakePromptHost(HostBridge):
+    """Stands in for ``ctx.prompts.register``; nothing here reaches a host."""
+
+    def __init__(self, raises=None):
+        self.raises = raises
+        self.registrations: list[list[dict]] = []
+
+    async def prompts_register(self, declarations):
+        if self.raises:
+            raise self.raises
+        self.registrations.append(declarations)
+        return {"promptIds": [f"plugin:cognia-repowiki/{entry['id']}" for entry in declarations]}
+
+
 @pytest.fixture(autouse=True)
 def reset_module_state(monkeypatch):
     monkeypatch.setattr(main, "_LOCALE", "", raising=False)
     monkeypatch.setattr(main, "_LABELS", dict(DEFAULT_LABELS), raising=False)
+    monkeypatch.setattr(main, "_PROMPTS_LOCALE", None, raising=False)
+    set_host(FakePromptHost())
     yield
+    forget_registered_prompts()
+    set_host(None)
 
 
 def _install(i18n, monkeypatch):
@@ -126,8 +147,11 @@ async def test_the_panel_re_asks_the_locale_because_it_cannot_subscribe(monkeypa
 
     monkeypatch.setattr(main, "_push_panel", _noop)
 
+    def panel_asks():
+        return [key for key in i18n.asked if key in DEFAULT_LABELS]
+
     await main.repowiki_build_panel("cognia-repowiki:session:s1")
-    first = len(i18n.asked)
+    first = len(panel_asks())
     assert first == len(DEFAULT_LABELS)
 
     i18n._locale = "zh-CN"
@@ -135,4 +159,70 @@ async def test_the_panel_re_asks_the_locale_because_it_cannot_subscribe(monkeypa
     await main.repowiki_build_panel("cognia-repowiki:session:s1")
 
     assert main._LABELS["panel.rescan"] == "重新扫描"
-    assert len(i18n.asked) == first * 2
+    assert len(panel_asks()) == first * 2
+
+
+# -- Prompt Center slots -----------------------------------------------------
+
+
+async def test_prompt_slots_are_titled_in_the_app_language(monkeypatch):
+    fake = FakePromptHost()
+    set_host(fake)
+    i18n = _install(
+        FakeI18n(locale="zh-CN", table={"prompt.chat.title": "向百科提问"}), monkeypatch
+    )
+    await main._resolve_locale_and_labels()
+    await main._register_prompts()
+
+    assert len(fake.registrations) == 1
+    titles = {entry["id"]: entry["title"] for entry in fake.registrations[0]}
+    assert titles["chat"] == "向百科提问"
+    # An untranslated key keeps the English title, never the raw key.
+    assert titles["overview"] == EDITABLE_PROMPTS["overview"].title
+    assert set(prompt_label_keys()) <= set(i18n.asked)
+    assert main._PROMPTS_LOCALE == "zh-CN"
+
+
+async def test_prompt_slots_are_registered_again_only_when_the_language_changes(monkeypatch):
+    fake = FakePromptHost()
+    set_host(fake)
+    i18n = _install(FakeI18n(locale="en"), monkeypatch)
+
+    await main._resolve_locale_and_labels()
+    await main._register_prompts()
+    await main._register_prompts()
+    assert len(fake.registrations) == 1
+
+    i18n._locale = "zh-CN"
+    await main._resolve_locale_and_labels()
+    await main._register_prompts()
+    assert len(fake.registrations) == 2
+
+
+async def test_a_failed_registration_is_retried_at_the_next_chance(monkeypatch):
+    fake = FakePromptHost(raises=RuntimeError("no prompts namespace"))
+    set_host(fake)
+    _install(FakeI18n(locale="en"), monkeypatch)
+
+    await main._resolve_locale_and_labels()
+    await main._register_prompts()
+    assert main._PROMPTS_LOCALE is None
+
+    fake.raises = None
+    await main._register_prompts()
+    assert len(fake.registrations) == 1
+    assert main._PROMPTS_LOCALE == "en"
+
+
+async def test_shutdown_forgets_the_slots(monkeypatch):
+    fake = FakePromptHost()
+    set_host(fake)
+    _install(FakeI18n(locale="en"), monkeypatch)
+    monkeypatch.setattr(main, "_SCANS", {}, raising=False)
+    await main._resolve_locale_and_labels()
+    await main._register_prompts()
+
+    await main.on_shutdown()
+
+    assert main._PROMPTS_LOCALE is None
+    assert host_module._REGISTERED_PROMPTS == set()

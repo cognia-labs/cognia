@@ -1,9 +1,185 @@
-"""prompt templates for repowiki analysis pipeline."""
+"""prompt templates for repowiki analysis pipeline.
+
+Each builder's system message is the one part a user may want to reword: who
+the model is and how it writes. That wording is an :class:`EditablePrompt`,
+registered with Cognia's Prompt Center (``repowiki.host.register_prompts``) and
+resolved before every model call (``repowiki.host.LLMClient.complete``), so an
+override applies from the next call. Everything a parser depends on stays fixed
+here and is never part of what a user edits: the JSON shapes in the user
+messages, a system message's ``protocol`` sentences (line counting, output
+format, fields to keep) and the language instruction.
+
+With no override the messages are exactly what they were before this split.
+"""
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class EditablePrompt:
+    """One system message's editable wording and the fixed text sent after it."""
+
+    #: Local id under the plugin's namespace (``plugin:cognia-repowiki/<id>``).
+    id: str
+    #: Prompt Center title and description in English; the plugin bundle's
+    #: ``prompt.<id>.title`` / ``prompt.<id>.description`` translate them.
+    title: str
+    description: str
+    #: The shipped wording, exactly as sent with no override.
+    default: str
+    #: Sentences a parser relies on, sent after the wording and never edited.
+    protocol: str = ""
+    #: Text an override must keep, because the protocol or parser names it.
+    required_fragments: tuple[str, ...] = ()
+    #: Whether the builder follows the wording with the language instruction.
+    localized: bool = True
+
+
+EDITABLE_PROMPTS: dict[str, EditablePrompt] = {
+    prompt.id: prompt
+    for prompt in (
+        EditablePrompt(
+            id="overview",
+            title="Project overview",
+            description="System wording for the project overview page of a wiki scan.",
+            default=(
+                "You are a senior software engineer explaining a project to a new team member. "
+                "Be direct, specific, and concrete. "
+                "Do NOT use filler phrases like 'leveraging', 'utilizing', 'cutting-edge', "
+                "'robust', or 'comprehensive'. Just describe what things do."
+            ),
+        ),
+        EditablePrompt(
+            id="module",
+            title="Module documentation",
+            description="System wording for each module page of a wiki scan.",
+            default=(
+                "You are a senior engineer documenting your own code. "
+                "Be direct and specific. No filler. "
+                "Explain what each file does, how files relate to each other, "
+                "and what the key functions/classes are."
+            ),
+            # The pipeline re-anchors these numbers on the file's leading blank
+            # lines (`pipeline.anchor_symbol_lines`); the counting rule is that
+            # contract, not wording.
+            protocol=(
+                "When you mention a function or class, include the line "
+                "number it is defined on (counted from the file's first "
+                "non-blank line shown in the snippet, 1-based)."
+            ),
+        ),
+        EditablePrompt(
+            id="architecture",
+            title="Architecture analysis",
+            description="System wording for the architecture page and its Mermaid diagrams.",
+            default=(
+                "You are a software architect analyzing a codebase. "
+                "Identify the architecture pattern and generate Mermaid diagrams. "
+                "Mermaid syntax must be valid. Use simple node names (no special chars). "
+                "Components MUST be derived from the module summaries provided; "
+                "do not invent components that aren't represented by a module."
+            ),
+        ),
+        EditablePrompt(
+            id="reading-guide",
+            title="Reading guide",
+            description="System wording for the wiki's step-by-step reading guide.",
+            default=(
+                "You are a mentor helping a developer understand a new codebase. "
+                "Create a reading guide: which files to read, in what order, and why. "
+                "Start from entry points and configuration, then core logic, then utilities. "
+                "Each step should say WHAT to look for, not just WHICH files."
+            ),
+        ),
+        EditablePrompt(
+            id="chat",
+            title="Ask the wiki",
+            description="System wording for answers to questions about the repository.",
+            default=(
+                "You are a knowledgeable developer answering questions about a codebase. "
+                "Answer based on the actual code shown below, not general knowledge. "
+                "Reference specific files and line numbers when relevant. "
+                "Be direct -- answer the question, don't give a lecture."
+            ),
+        ),
+        EditablePrompt(
+            id="query-expansion",
+            title="Search term expansion",
+            description="System wording that turns a question into code search terms.",
+            default=(
+                "You rewrite natural-language code questions into search terms for a "
+                "lexical code index."
+            ),
+            # `main._expand_query` reads one term per line and keeps twelve.
+            protocol=(
+                "Output ONLY the terms — identifiers, filenames, "
+                "concepts — one per line, at most 12 lines. No numbering, no "
+                "commentary, no full sentences."
+            ),
+            # Search terms are identifiers; they stay in the code's language.
+            localized=False,
+        ),
+        EditablePrompt(
+            id="deep-research",
+            title="Deep research",
+            description="System wording for each round of a multi-round investigation.",
+            default=(
+                "You are an expert code analyst conducting a focused, multi-round "
+                "investigation of a codebase. Stay strictly on the question's topic — "
+                "no drifting to adjacent subjects. Answer from the code shown, cite "
+                "files and line numbers, and never fabricate paths."
+            ),
+        ),
+        EditablePrompt(
+            id="codemap-skeleton",
+            title="Codemap outline",
+            description="System wording for the cited step-by-step outline of a codemap.",
+            default=(
+                "You build codemaps: step-by-step guides that answer a how-it-works "
+                "question about a codebase, where every step is grounded in real "
+                "source code."
+            ),
+        ),
+        EditablePrompt(
+            id="codemap-enrich",
+            title="Codemap guides and diagrams",
+            description="System wording that writes each codemap section's guide and diagram.",
+            default=(
+                "You enrich codemap skeletons: for each section write 'guide' "
+                "(2-4 sentences of prose) and 'diagram' (a Mermaid source string "
+                "illustrating that section's flow — e.g. 'flowchart TD')."
+            ),
+            # The reply replaces the verified skeleton wholesale.
+            protocol="Keep every other field exactly as given; add or remove nothing.",
+            required_fragments=("'guide'", "'diagram'"),
+        ),
+    )
+}
+
+
+def compose_system(wording: str, prompt_id: str, tail: str = "") -> str:
+    """``wording``, then the prompt's protocol, then ``tail``, space-joined."""
+    protocol = EDITABLE_PROMPTS[prompt_id].protocol
+    return " ".join(part for part in (wording.strip(), protocol, tail) if part)
+
+
+def _system(prompt_id: str, tail: str = "") -> dict:
+    """A system message carrying the shipped wording.
+
+    ``prompt_id`` and ``prompt_tail`` let the host swap in the resolved wording
+    without re-running the builder; ``split_messages`` reads only role and
+    content, so the extra keys never reach the model.
+    """
+    return {
+        "role": "system",
+        "content": compose_system(EDITABLE_PROMPTS[prompt_id].default, prompt_id, tail),
+        "prompt_id": prompt_id,
+        "prompt_tail": tail,
+    }
 
 
 def _lang_instruction(language: str) -> str:
@@ -25,16 +201,7 @@ def _json_instruction() -> str:
 
 def build_overview_prompt(file_tree: str, key_files: str, language: str = "en") -> list[dict]:
     return [
-        {
-            "role": "system",
-            "content": (
-                "You are a senior software engineer explaining a project to a new team member. "
-                "Be direct, specific, and concrete. "
-                "Do NOT use filler phrases like 'leveraging', 'utilizing', 'cutting-edge', "
-                "'robust', or 'comprehensive'. Just describe what things do. "
-                f"{_lang_instruction(language)}"
-            ),
-        },
+        _system("overview", _lang_instruction(language)),
         {
             "role": "user",
             "content": (
@@ -63,19 +230,7 @@ def build_module_prompt(
     language: str = "en",
 ) -> list[dict]:
     return [
-        {
-            "role": "system",
-            "content": (
-                "You are a senior engineer documenting your own code. "
-                "Be direct and specific. No filler. "
-                "Explain what each file does, how files relate to each other, "
-                "and what the key functions/classes are. "
-                "When you mention a function or class, include the line "
-                "number it is defined on (counted from the file's first "
-                "non-blank line shown in the snippet, 1-based). "
-                f"{_lang_instruction(language)}"
-            ),
-        },
+        _system("module", _lang_instruction(language)),
         {
             "role": "user",
             "content": (
@@ -114,17 +269,7 @@ def build_architecture_prompt(
     # any analyzed module.
     del file_tree  # explicit no-op to make the intent obvious
     return [
-        {
-            "role": "system",
-            "content": (
-                "You are a software architect analyzing a codebase. "
-                "Identify the architecture pattern and generate Mermaid diagrams. "
-                "Mermaid syntax must be valid. Use simple node names (no special chars). "
-                "Components MUST be derived from the module summaries provided; "
-                "do not invent components that aren't represented by a module. "
-                f"{_lang_instruction(language)}"
-            ),
-        },
+        _system("architecture", _lang_instruction(language)),
         {
             "role": "user",
             "content": (
@@ -152,16 +297,7 @@ def build_reading_guide_prompt(
     language: str = "en",
 ) -> list[dict]:
     return [
-        {
-            "role": "system",
-            "content": (
-                "You are a mentor helping a developer understand a new codebase. "
-                "Create a reading guide: which files to read, in what order, and why. "
-                "Start from entry points and configuration, then core logic, then utilities. "
-                "Each step should say WHAT to look for, not just WHICH files. "
-                f"{_lang_instruction(language)}"
-            ),
-        },
+        _system("reading-guide", _lang_instruction(language)),
         {
             "role": "user",
             "content": (
@@ -199,16 +335,7 @@ def build_chat_prompt(
     messages) so multi-turn coherence works without unbounded token growth.
     """
     messages: list[dict] = [
-        {
-            "role": "system",
-            "content": (
-                "You are a knowledgeable developer answering questions about a codebase. "
-                "Answer based on the actual code shown below, not general knowledge. "
-                "Reference specific files and line numbers when relevant. "
-                "Be direct -- answer the question, don't give a lecture. "
-                f"{_lang_instruction(language)}"
-            ),
-        }
+        _system("chat", _lang_instruction(language))
     ]
 
     if history:
@@ -297,15 +424,7 @@ def build_query_expansion_prompt(question: str, language: str = "en") -> list[di
     closest this index gets to a semantic query without embeddings.
     """
     return [
-        {
-            "role": "system",
-            "content": (
-                "You rewrite natural-language code questions into search terms for a "
-                "lexical code index. Output ONLY the terms — identifiers, filenames, "
-                "concepts — one per line, at most 12 lines. No numbering, no "
-                "commentary, no full sentences."
-            ),
-        },
+        _system("query-expansion"),
         {
             "role": "user",
             "content": (
@@ -356,16 +475,7 @@ def build_deep_research_prompt(
         )
 
     messages: list[dict] = [
-        {
-            "role": "system",
-            "content": (
-                "You are an expert code analyst conducting a focused, multi-round "
-                "investigation of a codebase. Stay strictly on the question's topic — "
-                "no drifting to adjacent subjects. Answer from the code shown, cite "
-                "files and line numbers, and never fabricate paths. "
-                f"{_lang_instruction(language)}"
-            ),
-        }
+        _system("deep-research", _lang_instruction(language))
     ]
     if prior_rounds:
         digest = "\n\n".join(
@@ -402,14 +512,7 @@ def build_codemap_skeleton_prompt(
     snippet against the chunks it sent before believing it.
     """
     return [
-        {
-            "role": "system",
-            "content": (
-                "You build codemaps: step-by-step guides that answer a how-it-works "
-                "question about a codebase, where every step is grounded in real "
-                "source code. " + _lang_instruction(language)
-            ),
-        },
+        _system("codemap-skeleton", _lang_instruction(language)),
         {
             "role": "user",
             "content": (
@@ -455,16 +558,7 @@ def build_codemap_enrich_prompt(
     the model cannot quietly re-ground a step it did not verify in phase 1.
     """
     return [
-        {
-            "role": "system",
-            "content": (
-                "You enrich codemap skeletons: for each section write 'guide' "
-                "(2-4 sentences of prose) and 'diagram' (a Mermaid source string "
-                "illustrating that section's flow — e.g. 'flowchart TD'). Keep every "
-                "other field exactly as given; add or remove nothing. "
-                + _lang_instruction(language)
-            ),
-        },
+        _system("codemap-enrich", _lang_instruction(language)),
         {
             "role": "user",
             "content": (

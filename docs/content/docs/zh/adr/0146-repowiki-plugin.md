@@ -27,6 +27,8 @@ description: "完整引入一个既有 MIT wiki 生成器，只替换模型调�
 | **存储** | `~/.repowiki` 下两个 SQLite 文件 | 插件自己的数据目录，来自 `ctx.fs.getDataDir()` | 插件没有理由动用户的家目录，而卸载时应该能把它写的东西收回去。 |
 | **IO** | `os.walk` 与四个 `git` 子进程 | `ctx.workspace.acquire` / `walk` / `changedSince` | **枚举正是包容性所在之处。** |
 
+补充（2026-11-21）：九个分析与问答提示词的系统措辞通过 `ctx.prompts` 登记到 Prompt Center（`repowiki/llm/prompts.py` 中的 `EDITABLE_PROMPTS`），每次调用前在 `LLMClient.complete` 中解析。没有覆盖时，模型收到的仍是上游原文，逐字节一致。覆盖只替换措辞：JSON 结构、解析依赖的协议句（行号计数规则、每行一个搜索词的格式、补全阶段必须保留的字段）和语言指令仍固定在代码中。读取覆盖失败时调用直接失败，而不是用内置文本顶替用户的修改。
+
 ### 枚举走宿主，读取留本地
 
 宿主决定*哪些*路径——来自 `ignore` crate 的 `.gitignore` 语义、对凭据文件的直接拒绝、以及克隆护栏（仅 https、主机白名单、浅克隆、限时、限大小），这些护栏对每个插件都生效，而不是只对碰巧记得写它们的那一个生效。

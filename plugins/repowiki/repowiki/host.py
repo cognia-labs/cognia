@@ -6,7 +6,9 @@ Cognia, and all three route through here:
 
 * **LLM** — :class:`LLMClient` speaks ``ctx.agent`` instead of litellm, so
   every model call goes through the host's provider routing, PII gate, cost
-  accounting and trace spans. Upstream's prompts are untouched.
+  accounting and trace spans. The system wording of upstream's prompts is
+  registered with the Prompt Center (:func:`register_prompts`) and resolved
+  before each call, so a user's edit applies; with none the text is upstream's.
 * **Storage** — upstream wrote two SQLite files under ``~/.repowiki``. A plugin
   has no business writing to the user's home directory, so the paths are
   injected by the host at startup and land in the plugin's own data directory.
@@ -27,6 +29,8 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from repowiki.llm.prompts import EDITABLE_PROMPTS, compose_system
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,18 @@ class HostBridge:
 
         return await cognia.ctx.ai.embed(texts, options or {})
 
+    async def prompts_register(self, declarations: list[dict[str, Any]]) -> dict[str, Any]:
+        """``ctx.prompts.register`` — the declarations become Prompt Center slots."""
+        import cognia
+
+        return await cognia.ctx.prompts.register(declarations)
+
+    async def prompts_resolve(self, prompt_id: str) -> dict[str, Any]:
+        """``ctx.prompts.resolve`` — the published override, else the default."""
+        import cognia
+
+        return await cognia.ctx.prompts.resolve(prompt_id)
+
 
 _host: HostBridge = HostBridge()
 
@@ -165,6 +181,119 @@ def configure_paths(data_dir: str | Path | None) -> HostPaths:
 
 
 # --------------------------------------------------------------------------
+# Prompts
+# --------------------------------------------------------------------------
+
+#: Budget for one prompt's wording; the shipped ones are a few hundred chars.
+PROMPT_MAX_CHARS = 4_000
+
+#: Local ids the host accepted at the last registration. Empty until
+#: :func:`register_prompts` succeeds (offline, or a host without
+#: ``ctx.prompts``): then no slot exists an override could live in, so the
+#: shipped wording is the only text there is.
+_REGISTERED_PROMPTS: set[str] = set()
+
+
+def prompt_label_keys() -> list[str]:
+    """The bundle keys that title and describe each editable prompt."""
+    return [
+        f"prompt.{prompt_id}.{field}"
+        for prompt_id in EDITABLE_PROMPTS
+        for field in ("title", "description")
+    ]
+
+
+def prompt_declarations(labels: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """One ``ctx.prompts`` declaration per editable system wording.
+
+    ``labels`` holds the bundle's translations (``prompt.<id>.title`` and
+    ``prompt.<id>.description``); a key it lacks keeps the English text. The
+    output contract names the fixed text sent after the wording, so the
+    Prompt Center shows what an edit cannot change.
+    """
+    text = labels or {}
+    declarations: list[dict[str, Any]] = []
+    for prompt in EDITABLE_PROMPTS.values():
+        contract = ["Sent as the system message of a RepoWiki model call."]
+        if prompt.protocol:
+            contract.append(f"Sent after it, unchanged: {prompt.protocol}")
+        if prompt.localized:
+            contract.append("Then the instruction to answer in the wiki's language.")
+        declaration: dict[str, Any] = {
+            "id": prompt.id,
+            "title": text.get(f"prompt.{prompt.id}.title") or prompt.title,
+            "description": text.get(f"prompt.{prompt.id}.description") or prompt.description,
+            "defaultBody": prompt.default,
+            "group": "knowledge",
+            "maxChars": PROMPT_MAX_CHARS,
+            "outputContract": " ".join(contract),
+        }
+        if prompt.required_fragments:
+            declaration["requiredFragments"] = list(prompt.required_fragments)
+        declarations.append(declaration)
+    return declarations
+
+
+async def register_prompts(labels: dict[str, str] | None = None) -> list[str]:
+    """Declare the editable wording as Prompt Center slots; returns their ids.
+
+    Idempotent: the host replaces slots with the same ids, which is how a
+    locale change re-titles them. Raises when the host refuses or answers
+    with something other than one slot per declaration; until a registration
+    succeeds every call sends the shipped wording.
+    """
+    declarations = prompt_declarations(labels)
+    result = await get_host().prompts_register(declarations)
+    prompt_ids = result.get("promptIds") if isinstance(result, dict) else None
+    if not isinstance(prompt_ids, list) or len(prompt_ids) != len(declarations):
+        raise HostUnavailableError(
+            f"prompts.register answered {result!r} for {len(declarations)} declarations"
+        )
+    _REGISTERED_PROMPTS.clear()
+    _REGISTERED_PROMPTS.update(declaration["id"] for declaration in declarations)
+    return [str(prompt_id) for prompt_id in prompt_ids]
+
+
+def forget_registered_prompts() -> None:
+    """Drop the registration state (plugin shutdown, tests)."""
+    _REGISTERED_PROMPTS.clear()
+
+
+async def resolve_system_prompts(messages: list[dict]) -> list[dict]:
+    """Swap each registered system message's wording for the resolved text.
+
+    The resolved text replaces only the wording: the protocol sentences and
+    the language instruction the builder put after it stay as built. A
+    prompt id named twice in one message list is resolved once.
+    """
+    if not _REGISTERED_PROMPTS:
+        return messages
+    resolved: dict[str, str] = {}
+    out: list[dict] = []
+    for message in messages:
+        prompt_id = message.get("prompt_id") if isinstance(message, dict) else None
+        if not isinstance(prompt_id, str) or prompt_id not in _REGISTERED_PROMPTS:
+            out.append(message)
+            continue
+        if prompt_id not in resolved:
+            answer = await get_host().prompts_resolve(prompt_id)
+            text = answer.get("text") if isinstance(answer, dict) else None
+            if not isinstance(text, str):
+                raise LLMError(f"prompts.resolve({prompt_id!r}) returned no text: {answer!r}")
+            resolved[prompt_id] = text
+        tail = message.get("prompt_tail")
+        out.append(
+            {
+                **message,
+                "content": compose_system(
+                    resolved[prompt_id], prompt_id, tail if isinstance(tail, str) else ""
+                ),
+            }
+        )
+    return out
+
+
+# --------------------------------------------------------------------------
 # LLM
 # --------------------------------------------------------------------------
 
@@ -195,6 +324,18 @@ class LLMClient:
         max_tokens: int = 4096,
         response_format: dict | None = None,
     ) -> str:
+        # Read on every call: an override published since the last one applies
+        # to this one. A failed read fails the call rather than silently
+        # sending the shipped wording over the user's edit.
+        try:
+            messages = await resolve_system_prompts(messages)
+        except LLMError:
+            raise
+        except Exception as exc:
+            logger.error("prompt resolution failed: %s", exc)
+            raise LLMError(
+                f"prompt resolution failed: {type(exc).__name__}: {exc}", cause=exc
+            ) from exc
         prompt, system = split_messages(messages)
         options: dict[str, Any] = {
             "temperature": temperature,
