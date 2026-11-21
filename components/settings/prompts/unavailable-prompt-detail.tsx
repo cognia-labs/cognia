@@ -26,7 +26,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { usePromptSlots } from "@/hooks/prompts/use-prompt-slots"
-import type { PromptOverrideBindingRow } from "@/lib/db/prompt-overrides"
+import {
+  isPromptOverrideAccountChanged,
+  type PromptOverrideBindingRow,
+} from "@/lib/db/prompt-overrides"
 import { parsePluginPromptId } from "@/lib/prompts/plugin-prompts"
 import { removePromptBinding } from "@/lib/prompts/service"
 import { usePromptLabels } from "./use-prompt-labels"
@@ -43,12 +46,16 @@ export function UnavailablePromptDetail({ promptId }: UnavailablePromptDetailPro
 
   const remove = async (binding: PromptOverrideBindingRow) => {
     try {
-      await removePromptBinding(binding)
+      // Pinned to the account the list was read from (F17).
+      const database = slots?.find((slot) => slot.binding?.id === binding.id)?.database
+      await removePromptBinding(binding, { database })
       toast.success(t("unavailable.removed"))
     } catch (error) {
-      toast.error(
-        t("toast.failed", { message: error instanceof Error ? error.message : String(error) })
-      )
+      if (isPromptOverrideAccountChanged(error)) toast.error(t("toast.accountChanged"))
+      else
+        toast.error(
+          t("toast.failed", { message: error instanceof Error ? error.message : String(error) })
+        )
     } finally {
       setRemoving(null)
     }

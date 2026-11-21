@@ -130,6 +130,7 @@ describe("listAgentConfigSurfaces", () => {
         },
       ],
       failed: ["preset" as const],
+      failedModules: [],
     }))
     const discoverAgentFiles = jest.fn(async () => [
       {
@@ -163,7 +164,7 @@ describe("listAgentConfigSurfaces", () => {
 
   it("reports agent files as failed instead of dropping them silently", async () => {
     const listing = await listAgentConfigSurfaces(undefined, {
-      listResources: async () => ({ resources: [], failed: [] }),
+      listResources: async () => ({ resources: [], failed: [], failedModules: [] }),
       discoverAgentFiles: async () => {
         throw new Error("fs down")
       },
@@ -174,7 +175,7 @@ describe("listAgentConfigSurfaces", () => {
   it("does not look for agent files without a workspace", async () => {
     const discoverAgentFiles = jest.fn()
     const listing = await listAgentConfigSurfaces(null, {
-      listResources: async () => ({ resources: [], failed: [] }),
+      listResources: async () => ({ resources: [], failed: [], failedModules: [] }),
       discoverAgentFiles,
     })
     expect(listing.workspaceId).toBeNull()

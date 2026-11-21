@@ -37,13 +37,27 @@ jest.mock("@/components/ui/select", () => ({
     <option value={value}>{children}</option>
   ),
 }))
+/** Modules the catalog loader reports as failed, then forgets (a retry loads them). */
+let mockCatalogFailures: string[] = []
+jest.mock("@/lib/prompts/catalog", () => {
+  const actual = jest.requireActual("@/lib/prompts/catalog")
+  return {
+    ...actual,
+    loadPromptCatalog: async (...args: unknown[]) => {
+      const loaded = await actual.loadPromptCatalog(...args)
+      const failures = mockCatalogFailures.map((module) => ({ module, error: new Error(module) }))
+      mockCatalogFailures = []
+      return { failures: [...loaded.failures, ...failures] }
+    },
+  }
+})
 let mockDensity: "split" | "stacked" = "split"
 jest.mock("@/components/settings/common/settings-master-detail", () => ({
   ...jest.requireActual("@/components/settings/common/settings-master-detail"),
   useSettingsListDensity: () => mockDensity,
 }))
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { BRIEF_MODE_PROMPT } from "@/lib/agent/prompts/brief-mode"
 import { createPreset } from "@/lib/db/prompt-presets"
@@ -201,6 +215,18 @@ it("names an owner that could not be read and keeps the rest", async () => {
   await renderSection()
   expect(await screen.findByText("Could not read: Default prompt")).toBeInTheDocument()
   expect(rail()).toHaveTextContent("Brief mode")
+})
+
+// F09: a module whose prompts failed to load is named, and a retry reloads it.
+it("names built-in prompt modules that did not load and retries them", async () => {
+  mockCatalogFailures = ["twin"]
+  await renderSection()
+  const banner = await screen.findByTestId("prompt-center-modules-failed")
+  expect(banner).toHaveTextContent("Some built-in prompts could not load: twin")
+  await userEvent.click(within(banner).getByRole("button", { name: "Retry" }))
+  await waitFor(() =>
+    expect(screen.queryByTestId("prompt-center-modules-failed")).not.toBeInTheDocument()
+  )
 })
 
 it("swaps the list for a picker when the pane is narrow", async () => {

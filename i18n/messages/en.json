@@ -56412,16 +56412,19 @@
         "loading": "Loading prompts…",
         "modified": "Modified",
         "modifiedOnly": "Modified only",
+        "modulesFailed": "Some built-in prompts could not load: {modules}",
         "noMatches": "No prompts match.",
         "noWorkspace": "No workspace",
         "profiles": "Profiles",
         "readOnly": "Read only",
+        "retry": "Retry",
         "search": "Search prompts",
         "sourceFilter": "Source",
         "unavailable": "Unavailable",
         "workspace": "Workspace for instruction files"
       },
       "resetDialog": {
+        "accountSkipped": "The account override is not used ({reason}), so the shipped text below applies.",
         "bodyAccount": "The account override is removed and the shipped text below applies again. History is kept and can be restored.",
         "bodyScoped": "This override is removed. Without it the slot falls back to the text below (an account override, or the shipped text); a conversation may still meet a narrower workspace or agent override. History is kept.",
         "title": "Reset this override?"
@@ -56517,6 +56520,7 @@
         "target": "Target"
       },
       "toast": {
+        "accountChanged": "The active account changed, so nothing was written. Open this prompt again to edit it in the account now active.",
         "conflict": "This prompt changed elsewhere. Your text is kept; load the latest to continue.",
         "customSaved": "Saved as your own version.",
         "draftDiscarded": "Draft discarded.",

@@ -139,6 +139,62 @@ it("resets to inherited after showing the text that will apply", async () => {
   expect((await readPromptSlot(BRIEF_MODE_PROMPT.id, account)).active).toBeUndefined()
 })
 
+// F12: the dialog used to show an account override the resolver would skip,
+// promising text that would not apply after the reset.
+it("shows the shipped text a reset falls back to when the account override is skipped", async () => {
+  await publishPromptOverride({
+    promptId: BRIEF_MODE_PROMPT.id,
+    target: account,
+    body: "INCOMPATIBLE ACCOUNT TEXT.",
+    contractVersion: BRIEF_MODE_PROMPT.contractVersion + 1,
+    baseDigest: "old",
+    expectedRev: 0,
+    mutationId: "acct-old",
+    origin: "import",
+  })
+  const workspace = { scope: "workspace" as const, targetId: "ws-1" }
+  await publishPromptBody({
+    def: BRIEF_MODE_PROMPT,
+    target: workspace,
+    body: "Workspace text.",
+    expectedRev: 0,
+  })
+  await renderDetail(BRIEF_MODE_PROMPT)
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "workspace" } })
+  fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "ws-1" } })
+  await waitFor(() => expect(editor().value).toBe("Workspace text."))
+  await userEvent.click(screen.getByRole("button", { name: "Reset to inherited" }))
+  const dialog = await screen.findByRole("alertdialog")
+  expect(dialog).toHaveTextContent(
+    "The account override is not used (the override was written for an older contract)"
+  )
+  expect(dialog).toHaveTextContent(BRIEF_MODE_PROMPT.defaultBody)
+  expect(dialog).not.toHaveTextContent("INCOMPATIBLE ACCOUNT TEXT.")
+})
+
+it("shows a valid account override as what a narrower reset falls back to", async () => {
+  await publishPromptBody({
+    def: BRIEF_MODE_PROMPT,
+    target: account,
+    body: "Account text.",
+    expectedRev: 0,
+  })
+  await publishPromptBody({
+    def: BRIEF_MODE_PROMPT,
+    target: { scope: "workspace", targetId: "ws-1" },
+    body: "Workspace text.",
+    expectedRev: 0,
+  })
+  await renderDetail(BRIEF_MODE_PROMPT)
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "workspace" } })
+  fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "ws-1" } })
+  await waitFor(() => expect(editor().value).toBe("Workspace text."))
+  await userEvent.click(screen.getByRole("button", { name: "Reset to inherited" }))
+  const dialog = await screen.findByRole("alertdialog")
+  expect(dialog).toHaveTextContent("Account text.")
+  expect(screen.queryByTestId("reset-account-skipped")).toBeNull()
+})
+
 it("needs an explicit workspace before it can write a workspace override", async () => {
   await renderDetail(BRIEF_MODE_PROMPT)
   const [scope] = screen.getAllByRole("combobox")

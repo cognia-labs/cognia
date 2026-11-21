@@ -56412,16 +56412,19 @@
         "loading": "正在加载提示词…",
         "modified": "已修改",
         "modifiedOnly": "仅显示已修改",
+        "modulesFailed": "部分内置提示词未能加载：{modules}",
         "noMatches": "没有匹配的提示词。",
         "noWorkspace": "不选工作区",
         "profiles": "配置",
         "readOnly": "只读",
+        "retry": "重试",
         "search": "搜索提示词",
         "sourceFilter": "来源",
         "unavailable": "不可用",
         "workspace": "指令文件所属的工作区"
       },
       "resetDialog": {
+        "accountSkipped": "账户级覆盖不会被使用（{reason}），因此下方的内置文本生效。",
         "bodyAccount": "将移除账户级覆盖，下方的内置文本重新生效。历史会保留，可以恢复。",
         "bodyScoped": "将移除此覆盖。移除后该位置会回退到下方文本（账户级覆盖或内置文本）；具体对话中仍可能遇到更具体的工作区或 Agent 覆盖。历史会保留。",
         "title": "重置此覆盖？"
@@ -56517,6 +56520,7 @@
         "target": "目标"
       },
       "toast": {
+        "accountChanged": "当前账户已切换，未写入任何内容。请重新打开此提示词，在当前账户中编辑。",
         "conflict": "此提示词已在别处被修改。你的文本已保留，请载入最新版本后继续。",
         "customSaved": "已另存为你自己的版本。",
         "draftDiscarded": "草稿已丢弃。",

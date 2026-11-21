@@ -277,12 +277,15 @@
     "search": "搜索提示词",
     "sourceFilter": "来源",
     "workspace": "指令文件所属的工作区",
-    "unavailable": "不可用"
+    "unavailable": "不可用",
+    "modulesFailed": "部分内置提示词未能加载：{modules}",
+    "retry": "重试"
   },
   "resetDialog": {
     "bodyAccount": "将移除账户级覆盖，下方的内置文本重新生效。历史会保留，可以恢复。",
     "bodyScoped": "将移除此覆盖。移除后该位置会回退到下方文本（账户级覆盖或内置文本）；具体对话中仍可能遇到更具体的工作区或 Agent 覆盖。历史会保留。",
-    "title": "重置此覆盖？"
+    "title": "重置此覆盖？",
+    "accountSkipped": "账户级覆盖不会被使用（{reason}），因此下方的内置文本生效。"
   },
   "risk": {
     "approval-sensitive": "涉及审批",
@@ -386,7 +389,8 @@
     "reset": "已重置，继承的文本重新生效。",
     "restored": "已恢复为新的修订版本。",
     "saved": "已保存。",
-    "scope": "此提示词不能在该范围覆盖。"
+    "scope": "此提示词不能在该范围覆盖。",
+    "accountChanged": "当前账户已切换，未写入任何内容。请重新打开此提示词，在当前账户中编辑。"
   },
   "unavailable": {
     "title": "当前不可用",

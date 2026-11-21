@@ -42,7 +42,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useLastPromptResolution } from "@/hooks/prompts/use-last-prompt-resolution"
 import { usePromptSlot, usePromptSlots } from "@/hooks/prompts/use-prompt-slots"
 import { computeDiff } from "@/lib/artifacts/diff"
-import { isPromptOverrideConflict, type PromptOverrideRevisionRow } from "@/lib/db/prompt-overrides"
+import {
+  isPromptOverrideAccountChanged,
+  isPromptOverrideConflict,
+  type PromptOverrideRevisionRow,
+} from "@/lib/db/prompt-overrides"
 import {
   discardPromptDraft,
   PromptScopeError,
@@ -53,6 +57,8 @@ import {
   savePromptDraft,
   shippedBodyDigest,
 } from "@/lib/prompts/service"
+import { resolvePrompt } from "@/lib/prompts/resolve"
+import { buildPromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import { validatePromptBody } from "@/lib/prompts/template"
 import type { PromptDefinitionV1, PromptTargetRef } from "@/lib/prompts/types"
 import { issueMessage, PromptBodyEditor } from "./prompt-body-editor"
@@ -84,17 +90,26 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
   const savedText = slot?.draft?.body ?? slot?.active?.body ?? def.defaultBody
   const slotRev = slot?.binding?.rev ?? 0
   const seedKey = `${target.scope}:${target.targetId}`
+  // The account database the slot was read from: every write names it, so an
+  // edit begun before an account switch is refused instead of landing in the
+  // account that is active by then.
+  const slotDatabase = slot?.database
   const [text, setText] = useState(savedText)
-  const [seed, setSeed] = useState<{ key: string; rev: number; text: string } | null>(null)
+  const [seed, setSeed] = useState<{
+    key: string
+    rev: number
+    text: string
+    database?: string
+  } | null>(null)
   const loaded = !targetChosen || data !== undefined
   if (loaded && (seed === null || seed.key !== seedKey)) {
-    setSeed({ key: seedKey, rev: slotRev, text: savedText })
+    setSeed({ key: seedKey, rev: slotRev, text: savedText, database: slotDatabase })
     setText(savedText)
   }
   const dirty = seed !== null && text !== seed.text
   // A write elsewhere moved the slot: follow it unless the user has edits.
   if (seed && seed.key === seedKey && slotRev !== seed.rev && !dirty) {
-    setSeed({ key: seedKey, rev: slotRev, text: savedText })
+    setSeed({ key: seedKey, rev: slotRev, text: savedText, database: slotDatabase })
     setText(savedText)
   }
   const stale = seed !== null && seed.key === seedKey && slotRev !== seed.rev && dirty
@@ -125,9 +140,35 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
   // What the slot falls back to without its own override: the account
   // override for a narrower scope, else the shipped body. A conversation may
   // still meet a narrower workspace or agent override; the dialog says so.
+  // Resolved by the resolver itself, so an account override it would skip (an
+  // older contract, a body that no longer validates) is shown as skipped and
+  // the dialog names the shipped text that would actually apply.
   const accountSlot = slots?.find((candidate) => candidate.binding?.scope === "account")
-  const inheritedText =
-    target.scope !== "account" && accountSlot?.active ? accountSlot.active.body : def.defaultBody
+  const inherited = useMemo(() => {
+    const accountActive = accountSlot?.active
+    if (target.scope === "account" || !accountActive || !accountSlot?.binding) {
+      return { text: def.defaultBody, skipped: undefined }
+    }
+    const resolved = resolvePrompt(def, {
+      record: false,
+      snapshot: buildPromptOverrideSnapshot(accountSlot.database, [
+        {
+          bindingId: accountSlot.binding.id,
+          promptId: def.id,
+          scope: "account",
+          targetId: "",
+          revisionId: accountActive.id,
+          body: accountActive.body,
+          contractVersion: accountActive.contractVersion,
+        },
+      ]),
+    })
+    return {
+      text: resolved.body,
+      skipped: resolved.source.kind === "default" ? resolved.source.fallback : undefined,
+    }
+  }, [accountSlot, def, target.scope])
+  const inheritedText = inherited.text
 
   const run = async (action: () => Promise<unknown>, success: string) => {
     setBusy(true)
@@ -141,6 +182,7 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
       setSeed((previous) => (previous ? { ...previous, text: written } : previous))
     } catch (error) {
       if (isPromptOverrideConflict(error)) toast.error(t("toast.conflict"))
+      else if (isPromptOverrideAccountChanged(error)) toast.error(t("toast.accountChanged"))
       else if (error instanceof PromptValidationError) {
         toast.error(error.issues.map((issue) => issueMessage(t, issue)).join(" "))
       } else if (error instanceof PromptScopeError) toast.error(t("toast.scope"))
@@ -154,17 +196,24 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
   }
 
   const expectedRev = seed?.rev ?? slotRev
+  const database = seed?.database ?? slotDatabase
   const publish = () =>
-    run(() => publishPromptBody({ def, target, body: text, expectedRev }), t("toast.published"))
+    run(
+      () => publishPromptBody({ def, target, body: text, expectedRev, database }),
+      t("toast.published")
+    )
   const saveDraft = () =>
-    run(() => savePromptDraft({ def, target, body: text, expectedRev }), t("toast.draftSaved"))
+    run(
+      () => savePromptDraft({ def, target, body: text, expectedRev, database }),
+      t("toast.draftSaved")
+    )
   const discard = () =>
-    run(() => discardPromptDraft({ def, target, expectedRev }), t("toast.draftDiscarded"))
+    run(() => discardPromptDraft({ def, target, expectedRev, database }), t("toast.draftDiscarded"))
   const reset = () =>
-    run(() => resetPromptToInherited({ def, target, expectedRev }), t("toast.reset"))
+    run(() => resetPromptToInherited({ def, target, expectedRev, database }), t("toast.reset"))
   const restore = (revision: PromptOverrideRevisionRow) =>
     run(
-      () => restorePromptRevision({ def, target, revisionId: revision.id, expectedRev }),
+      () => restorePromptRevision({ def, target, revisionId: revision.id, expectedRev, database }),
       t("toast.restored")
     )
 
@@ -477,6 +526,11 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
                 : t("resetDialog.bodyScoped")}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {inherited.skipped ? (
+            <p className="text-xs text-muted-foreground" data-testid="reset-account-skipped">
+              {t("resetDialog.accountSkipped", { reason: t(`fallback.${inherited.skipped}`) })}
+            </p>
+          ) : null}
           <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-transparent bg-muted/70 p-2 font-mono text-[11px]">
             {inheritedText}
           </pre>

@@ -47,6 +47,7 @@ import {
   type PromptProfileV1,
 } from "@/lib/prompts/profile"
 import { PROMPT_SCOPE_SPECIFICITY, type PromptScope } from "@/lib/prompts/types"
+import { isPromptOverrideAccountChanged } from "@/lib/db/prompt-overrides"
 import { usePromptTargetOptions } from "./prompt-target-picker"
 import { usePromptLabels } from "./use-prompt-labels"
 
@@ -222,9 +223,11 @@ function ImportPane({ onDone }: { onDone(): void }) {
       }
       onDone()
     } catch (error) {
-      toast.error(
-        t("toast.failed", { message: error instanceof Error ? error.message : String(error) })
-      )
+      if (isPromptOverrideAccountChanged(error)) toast.error(t("toast.accountChanged"))
+      else
+        toast.error(
+          t("toast.failed", { message: error instanceof Error ? error.message : String(error) })
+        )
     } finally {
       setBusy(false)
     }

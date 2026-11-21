@@ -324,6 +324,20 @@ export function PromptsSection() {
           })}
         </p>
       ) : null}
+      {listing?.failedModules.length ? (
+        <div
+          className="mx-2 my-1.5 flex items-start gap-1.5 text-[11px] text-destructive"
+          data-testid="prompt-center-modules-failed"
+        >
+          <AlertTriangleIcon className="mt-0.5 size-3 shrink-0" />
+          <span className="min-w-0 flex-1">
+            {t("rail.modulesFailed", { modules: listing.failedModules.join(", ") })}
+          </span>
+          <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[11px]" onClick={reload}>
+            {t("rail.retry")}
+          </Button>
+        </div>
+      ) : null}
       {state.status === "error" ? (
         <p className="mx-2 my-1.5 text-[11px] text-destructive">
           {t("rail.loadFailed", { message: state.error })}

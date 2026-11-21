@@ -5,7 +5,7 @@
  */
 
 import { listPromptOverrideBindings } from "@/lib/db/prompt-overrides"
-import { listPromptDefinitions, loadPromptCatalog } from "../catalog"
+import { listPromptDefinitions, loadPromptCatalog, type PromptCatalogFailure } from "../catalog"
 import {
   parseResourceKey,
   resourceKey,
@@ -47,13 +47,30 @@ export function ownerAdapterFor(key: string): OwnerPromptAdapter | undefined {
   return BY_SOURCE.get(parseResourceKey(key).source)
 }
 
+export interface CodePromptListingOptions {
+  /** Loads the module-contributed prompts; the catalog's own loader by default. */
+  loadCatalog?: () => Promise<{ failures: readonly PromptCatalogFailure[] }>
+}
+
+export interface CodePromptListing {
+  resources: PromptResourceSummary[]
+  /** Modules whose prompts did not load, so their slots are missing from `resources`. */
+  failedModules: string[]
+}
+
 /**
  * Code-owned slots (shipped and those enabled plugins registered) with whether
  * any scope overrides them, then every slot that still holds overrides but has
- * no definition here, as unavailable.
+ * no definition here, as unavailable. A module whose prompts did not load is
+ * named rather than silently missing; the next listing retries it.
  */
-export async function listCodePromptResources(): Promise<PromptResourceSummary[]> {
-  const [bindings] = await Promise.all([listPromptOverrideBindings(), loadPromptCatalog()])
+export async function listCodePromptResources(
+  options: CodePromptListingOptions = {}
+): Promise<CodePromptListing> {
+  const [bindings, catalog] = await Promise.all([
+    listPromptOverrideBindings(),
+    (options.loadCatalog ?? loadPromptCatalog)(),
+  ])
   const overridden = new Set(
     bindings.filter((binding) => binding.activeRevisionId).map((binding) => binding.promptId)
   )
@@ -84,20 +101,27 @@ export async function listCodePromptResources(): Promise<PromptResourceSummary[]
       edit: "owner-only",
       unavailable: true,
     }))
-  return [...available, ...orphaned]
+  return {
+    resources: [...available, ...orphaned],
+    failedModules: catalog.failures.map((failure) => failure.module),
+  }
 }
 
 export interface PromptResourceListing {
   resources: PromptResourceSummary[]
   /** Sources whose owner could not be read, so the UI can say so instead of showing an empty list. */
   failed: PromptResourceSource[]
+  /** Modules whose built-in prompts did not load; their slots are missing until a retry. */
+  failedModules: string[]
 }
 
 /** The whole Prompt Center list. One failing owner never hides the others. */
 export async function listPromptResources(
-  ctx: PromptResourceContext
+  ctx: PromptResourceContext,
+  options: CodePromptListingOptions = {}
 ): Promise<PromptResourceListing> {
   const failed: PromptResourceSource[] = []
+  let failedModules: string[] = []
   const settle = async (
     source: PromptResourceSource,
     load: () => Promise<PromptResourceSummary[]>
@@ -110,8 +134,12 @@ export async function listPromptResources(
     }
   }
   const groups = await Promise.all([
-    settle("code", listCodePromptResources),
+    settle("code", async () => {
+      const listing = await listCodePromptResources(options)
+      failedModules = listing.failedModules
+      return listing.resources
+    }),
     ...OWNER_PROMPT_ADAPTERS.map((adapter) => settle(adapter.source, () => adapter.list(ctx))),
   ])
-  return { resources: groups.flat(), failed }
+  return { resources: groups.flat(), failed, failedModules }
 }

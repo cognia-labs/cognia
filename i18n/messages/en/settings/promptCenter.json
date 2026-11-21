@@ -277,12 +277,15 @@
     "search": "Search prompts",
     "sourceFilter": "Source",
     "workspace": "Workspace for instruction files",
-    "unavailable": "Unavailable"
+    "unavailable": "Unavailable",
+    "modulesFailed": "Some built-in prompts could not load: {modules}",
+    "retry": "Retry"
   },
   "resetDialog": {
     "bodyAccount": "The account override is removed and the shipped text below applies again. History is kept and can be restored.",
     "bodyScoped": "This override is removed. Without it the slot falls back to the text below (an account override, or the shipped text); a conversation may still meet a narrower workspace or agent override. History is kept.",
-    "title": "Reset this override?"
+    "title": "Reset this override?",
+    "accountSkipped": "The account override is not used ({reason}), so the shipped text below applies."
   },
   "risk": {
     "approval-sensitive": "Approval-sensitive",
@@ -386,7 +389,8 @@
     "reset": "Reset. The inherited text applies again.",
     "restored": "Restored as a new revision.",
     "saved": "Saved.",
-    "scope": "This prompt cannot be overridden at that scope."
+    "scope": "This prompt cannot be overridden at that scope.",
+    "accountChanged": "The active account changed, so nothing was written. Open this prompt again to edit it in the account now active."
   },
   "unavailable": {
     "title": "Not available right now",

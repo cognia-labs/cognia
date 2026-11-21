@@ -46,7 +46,7 @@ describe("listCodePromptResources", () => {
       body: "Short.",
       expectedRev: 0,
     })
-    const listed = await listCodePromptResources()
+    const { resources: listed } = await listCodePromptResources()
     expect(listed).toHaveLength(listPromptDefinitions().length)
     const brief = listed.find((entry) => entry.promptId === BRIEF_MODE_PROMPT.id)
     expect(brief).toMatchObject({
@@ -74,7 +74,7 @@ describe("plugin slots in listCodePromptResources", () => {
       "plugins/deep-research/src/engine/prompts.ts"
     )
     const slot = "plugin:deep-research/outline"
-    expect(await listCodePromptResources()).toContainEqual(
+    expect((await listCodePromptResources()).resources).toContainEqual(
       expect.objectContaining({ promptId: slot, group: "knowledge", edit: "publish" })
     )
     await publishPromptBody({
@@ -85,7 +85,7 @@ describe("plugin slots in listCodePromptResources", () => {
     })
     dispose()
 
-    const listed = await listCodePromptResources()
+    const { resources: listed } = await listCodePromptResources()
     expect(listed.filter((entry) => entry.promptId === slot)).toEqual([
       {
         key: resourceKey("code", slot),
@@ -109,6 +109,21 @@ describe("listPromptResources", () => {
     expect(failed).toEqual([])
     expect(resources.some((entry) => entry.source === "code")).toBe(true)
     expect(resources.some((entry) => entry.source === "app-setting")).toBe(true)
+  })
+
+  // F09: a module whose prompts failed to load used to vanish from the list
+  // with nothing reporting it.
+  it("names a module whose prompts did not load, and clears it once a retry loads them", async () => {
+    const shipped = listPromptDefinitions().length
+    const failing = await listPromptResources(
+      {},
+      { loadCatalog: async () => ({ failures: [{ module: "twin", error: new Error("chunk") }] }) }
+    )
+    expect(failing.failedModules).toEqual(["twin"])
+    expect(failing.failed).toEqual([])
+    expect(failing.resources.filter((entry) => entry.source === "code")).toHaveLength(shipped)
+    const retried = await listPromptResources({}, { loadCatalog: async () => ({ failures: [] }) })
+    expect(retried.failedModules).toEqual([])
   })
 
   it("reports a failing owner without hiding the others", async () => {
