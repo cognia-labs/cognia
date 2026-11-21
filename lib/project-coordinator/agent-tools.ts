@@ -18,7 +18,8 @@ import type { CreateThreadInput } from "./thread-session"
 import type { StartThreadResult } from "./thread-runtime"
 import type { ParsedPreference } from "./preferences"
 import { PROJECT_PREFERENCE_KEYS } from "./preferences"
-import { PROJECT_COORDINATOR_PROTOCOL, PROJECT_THREAD_PROTOCOL } from "./protocol"
+import { PROJECT_COORDINATOR_PROTOCOL_PROMPT, PROJECT_THREAD_PROTOCOL_PROMPT } from "./protocol"
+import { resolvePrompt } from "@/lib/prompts/resolve"
 
 /**
  * The project coordination agent tools (ADR-0204), contributed through the
@@ -29,8 +30,8 @@ import { PROJECT_COORDINATOR_PROTOCOL, PROJECT_THREAD_PROTOCOL } from "./protoco
  * {@link ProjectCoordinatorToolDeps}, wired in `./tool-deps.ts`.
  *
  * A coordinator of an enabled project is offered the coordinator tools and
- * {@link PROJECT_COORDINATOR_PROTOCOL}; a thread is offered
- * `report_to_coordinator` and {@link PROJECT_THREAD_PROTOCOL}. The project
+ * {@link PROJECT_COORDINATOR_PROTOCOL_PROMPT}; a thread is offered
+ * `report_to_coordinator` and {@link PROJECT_THREAD_PROTOCOL_PROMPT}. The project
  * goal and the per-turn project status are the context contribution
  * (`./context.ts`). The
  * runner re-checks the caller's role, so a tool reaching the wrong session is
@@ -551,11 +552,14 @@ export const toolFamily: ModuleToolFamily = {
     const { session, activeProject } = ctx
     if (!session || !activeProject || !projectRoleToolsApply(session, activeProject)) return null
     if (session.projectRole === "thread") {
-      return { tools: buildProjectThreadManifestEntries(), instructions: PROJECT_THREAD_PROTOCOL }
+      return {
+        tools: buildProjectThreadManifestEntries(),
+        instructions: resolvePrompt(PROJECT_THREAD_PROTOCOL_PROMPT).text,
+      }
     }
     return {
       tools: buildProjectCoordinatorManifestEntries(),
-      instructions: PROJECT_COORDINATOR_PROTOCOL,
+      instructions: resolvePrompt(PROJECT_COORDINATOR_PROTOCOL_PROMPT).text,
     }
   },
   async run(name, args, call) {

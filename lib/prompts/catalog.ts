@@ -22,6 +22,10 @@ import { builtinAgents } from "@/lib/agent/builtin-catalog/catalog"
 import { BUILT_IN_MODE_PROMPTS } from "@/lib/agent/modes/built-ins"
 import { BRIEF_MODE_PROMPT } from "@/lib/agent/prompts/brief-mode"
 import { INTERRUPTED_TURN_RESUME_PROMPT } from "@/lib/chat/interrupted-turn"
+import {
+  ROOM_HANDOFF_PROTOCOL_PROMPT,
+  ROOM_TRANSCRIPT_GUIDE_PROMPT,
+} from "@/lib/chat/team-transcript"
 import { CLI_BASE_IDENTITY_PROMPT } from "@/lib/agent/prompts/cli-base"
 import { PLAN_MODE_PROMPT, PLAN_MODE_STRUCTURED_STEPS_PROMPT } from "@/lib/agent/prompts/plan-mode"
 import { ASIDE_READ_ONLY_PROMPT, ASIDE_SYSTEM_PROMPT } from "@/lib/agent/prompts/side-chat"
@@ -170,6 +174,9 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   VERIFICATION_REQUEST_PROMPT,
   SUBAGENT_CONTRACT_PROMPT,
   EXECUTOR_FALLBACK_PROMPT,
+  // team rooms
+  ROOM_TRANSCRIPT_GUIDE_PROMPT,
+  ROOM_HANDOFF_PROTOCOL_PROMPT,
   RUN_RETROSPECTIVE_PROMPT,
   RUN_RETROSPECTIVE_REPLY_FORMAT_PROMPT,
   PLAN_APPROVED_PROMPT,

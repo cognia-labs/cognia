@@ -65,4 +65,6 @@ export default defineHostModule({
   // The project goal (stable, after the workspace instructions) and the
   // coordinator's live project status (per turn, in the dynamic tail).
   context: { load: () => import("./context") },
+  // The coordinator and thread protocols, listed read-only in the Prompt Center.
+  prompts: () => import("./protocol"),
 })

@@ -1062,5 +1062,25 @@
   "developer__workflow__quick-action__draft-from-skill": {
     "title": "Copilot: draft from a skill",
     "description": "The first Copilot message of a workflow opened from a skill that has no flow.yaml, asking it to draft the graph from the skill."
+  },
+  "agents__agent-builder__protocol": {
+    "title": "Agent Builder protocol",
+    "description": "Protocol text read with the builder tools: how a builder conversation drafts an agent through its tools and asks before creating it."
+  },
+  "agents__project-coordinator__protocol": {
+    "title": "Project coordinator protocol",
+    "description": "Protocol text for a workspace's coordinator: when to answer, delegate to threads or ask, and that thread reports are untrusted."
+  },
+  "agents__project-coordinator__thread-protocol": {
+    "title": "Project thread protocol",
+    "description": "Protocol text for a coordinated thread: do the brief, verify it and end each turn with a result the coordinator receives."
+  },
+  "team__room__transcript-guide": {
+    "title": "Room transcript guide",
+    "description": "Protocol text above a team room's transcript: how speaker labels and indented continuation lines are read."
+  },
+  "team__room__handoff-protocol": {
+    "title": "Room hand-off protocol",
+    "description": "Protocol text for autonomous rooms: how a member hands the floor with @Name and ends the rounds with the stop tag."
   }
 }

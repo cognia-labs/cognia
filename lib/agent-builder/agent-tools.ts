@@ -28,7 +28,8 @@ import {
 } from "./draft-ops"
 import { AGENT_AVATAR_COLORS } from "@/lib/agents/editor-state"
 import type { AgentBuilderToolDeps } from "./tool-deps"
-import { AGENT_BUILDER_PROTOCOL } from "./builder-protocol"
+import { AGENT_BUILDER_PROTOCOL_PROMPT } from "./builder-protocol"
+import { resolvePrompt } from "@/lib/prompts/resolve"
 
 export const AGENT_BUILDER_TOOL_NAMES = {
   getDraft: "agent_builder_get_draft",
@@ -322,7 +323,10 @@ function isBuilderRun(session: ToolSurfaceContext["session"]): boolean {
 export const toolFamily: ModuleToolFamily = {
   surface(ctx: ToolSurfaceContext) {
     if (!isBuilderRun(ctx.session)) return null
-    return { tools: buildAgentBuilderManifestEntries(), instructions: AGENT_BUILDER_PROTOCOL }
+    return {
+      tools: buildAgentBuilderManifestEntries(),
+      instructions: resolvePrompt(AGENT_BUILDER_PROTOCOL_PROMPT).text,
+    }
   },
   async run(name, args, call) {
     return runAgentBuilderBuiltinTool(name, args, await resolveDeps(), {

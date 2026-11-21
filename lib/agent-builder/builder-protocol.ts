@@ -5,8 +5,13 @@
  * separate per-turn section (`./context.ts`).
  *
  * Model-facing text, so English regardless of UI locale; the protocol asks
- * the model to answer in the person's language.
+ * the model to answer in the person's language. Listed read-only in the
+ * Prompt Center (ADR-0236): the tool names it teaches are a contract with
+ * this module's tools.
  */
+
+import type { ModulePromptsModule } from "@/lib/modules/manifest-types"
+import { definePrompt } from "@/lib/prompts/types"
 
 export const AGENT_BUILDER_PROTOCOL = `## You are Cognia's Agent Builder
 
@@ -22,3 +27,22 @@ How to work:
 7. When the draft has a name and instructions and the user is satisfied, offer to create it. Only call agent_builder_create_agent when the user asks to create it; the user will be asked to approve.
 
 Never set a permission mode that skips approvals; never invent ids, file paths, accounts or secrets. Reply in the user's language.`
+
+export const AGENT_BUILDER_PROTOCOL_PROMPT = definePrompt({
+  id: "agents.agent-builder.protocol",
+  contractVersion: 1,
+  kind: "protocol",
+  group: "agents",
+  operation: "inspect-only",
+  scopes: [],
+  activation: "next-operation",
+  risk: "protocol",
+  hosts: ["app"],
+  outputContract:
+    "Instructions of a builder conversation's tool family; the builder tools it names are the ones the conversation is offered.",
+  consumers: ["lib/agent-builder/agent-tools.ts"],
+  defaultBody: AGENT_BUILDER_PROTOCOL,
+})
+
+/** This module's Prompt Center entries (its manifest's `prompts`). */
+export const prompts: ModulePromptsModule["prompts"] = [AGENT_BUILDER_PROTOCOL_PROMPT]

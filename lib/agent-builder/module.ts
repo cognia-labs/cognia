@@ -33,4 +33,6 @@ export default defineHostModule({
   },
   // The live draft, a turn section in the dynamic tail.
   context: { load: () => import("./context") },
+  // The builder protocol, listed read-only in the Prompt Center.
+  prompts: () => import("./builder-protocol"),
 })

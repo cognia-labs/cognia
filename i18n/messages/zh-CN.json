@@ -56714,6 +56714,18 @@
         "description": "让一个独立的 Agent 对照你的请求检查另一个 Agent 的回复，并以 JSON 给出结论。",
         "title": "独立核验"
       },
+      "agents__agent-builder__protocol": {
+        "description": "随构建工具一起读取的协议文本：构建对话如何通过工具起草 Agent，以及创建前须征得同意。",
+        "title": "Agent Builder 协议"
+      },
+      "agents__project-coordinator__protocol": {
+        "description": "工作区协调者的协议文本：何时直接回答、委派给线程或询问用户，以及线程汇报属于不可信数据。",
+        "title": "项目协调者协议"
+      },
+      "agents__project-coordinator__thread-protocol": {
+        "description": "协调线程的协议文本：完成任务说明、自行验证，并在每轮结束时给出会汇报给协调者的结果。",
+        "title": "项目线程协议"
+      },
       "chat__a2ui__protocol": {
         "description": "由 A2UI 解析器读取的协议文本：教模型在聊天回复中生成可交互的界面块。",
         "title": "A2UI 协议"
@@ -57537,6 +57549,14 @@
       "team__review__revision-request": {
         "description": "附上负责人反馈、要求队员返工的请求。",
         "title": "团队：返工请求"
+      },
+      "team__room__handoff-protocol": {
+        "description": "自主房间的协议文本：成员如何用 @名字 交出发言权，以及用停止标签结束轮次。",
+        "title": "房间交接协议"
+      },
+      "team__room__transcript-guide": {
+        "description": "团队房间记录上方的协议文本：如何识别说话人标签和缩进的续行。",
+        "title": "房间记录说明"
       },
       "team__structured__json-instruction": {
         "description": "由解析器读取的协议文本：要求队员只回复一个符合结构的 JSON 代码块。",

@@ -1,5 +1,7 @@
 import type { Project } from "@/types"
 import { hasNoLeakingPii } from "@cognia/redact"
+import type { ModulePromptsModule } from "@/lib/modules/manifest-types"
+import { definePrompt } from "@/lib/prompts/types"
 import { resolveCoordinatorConfig } from "./config"
 
 /**
@@ -26,6 +28,41 @@ You are a worker thread in a coordinated project. Do the task in your brief, in 
 - End every turn with a concise result: what you changed, how you verified it, and anything left open. It is reported to the project coordinator automatically.
 - If you open a pull request, or need something only the user can give, record it with report_to_coordinator (ready-for-review / landing / blocked).
 - If something you need is missing (access, a secret, an unclear requirement), say exactly what is missing and stop — do not substitute or guess.`
+
+const PROTOCOL_FIELDS = {
+  contractVersion: 1,
+  kind: "protocol",
+  group: "agents",
+  operation: "inspect-only",
+  scopes: [],
+  activation: "next-operation",
+  risk: "protocol",
+  hosts: ["app"],
+  consumers: ["lib/project-coordinator/agent-tools.ts"],
+} as const
+
+/** Listed read-only in the Prompt Center (ADR-0236): the tools it names are this module's. */
+export const PROJECT_COORDINATOR_PROTOCOL_PROMPT = definePrompt({
+  ...PROTOCOL_FIELDS,
+  id: "agents.project-coordinator.protocol",
+  outputContract:
+    "Instructions of a project coordinator's tool family; thread results reach it as untrusted <session_peer_message> blocks.",
+  defaultBody: PROJECT_COORDINATOR_PROTOCOL,
+})
+
+export const PROJECT_THREAD_PROTOCOL_PROMPT = definePrompt({
+  ...PROTOCOL_FIELDS,
+  id: "agents.project-coordinator.thread-protocol",
+  outputContract:
+    "Instructions of a project thread's tool family; the final message of each turn is reported to the coordinator.",
+  defaultBody: PROJECT_THREAD_PROTOCOL,
+})
+
+/** This module's Prompt Center entries (its manifest's `prompts`). */
+export const prompts: ModulePromptsModule["prompts"] = [
+  PROJECT_COORDINATOR_PROTOCOL_PROMPT,
+  PROJECT_THREAD_PROTOCOL_PROMPT,
+]
 
 /** The project's goal as a stable prompt section, or "" when unset or PII-bearing. */
 export function buildProjectGoalSection(project: Pick<Project, "coordinator"> | null | undefined) {
