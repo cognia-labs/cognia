@@ -1,9 +1,12 @@
 import { PET_PROMPTS, buildPetSystemPrompt } from "./persona"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 import type { PetBones, PetSoul } from "@/types/pet"
 import { MEMORY_RECALL_PREAMBLE } from "@cognia/memory/runtime/recall-framing"
 
@@ -143,5 +146,43 @@ describe("buildPetSystemPrompt", () => {
       )
       expect(out).toBe(`${legacyPrompt()}\n\nMood tired, level 3.`)
     })
+  })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("a published pet prompt reaches the system prompt (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  const layers = Object.entries(PET_PROMPTS) as [keyof typeof PET_PROMPTS, PromptDefinitionV1][]
+
+  it.each(layers)("the %s layer sends its account override, not the shipped text", (key, def) => {
+    const body = sentinelBody(def)
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    // Every layer on; the chat panel's persona only in conversational mode.
+    const out = buildPetSystemPrompt({
+      soul,
+      bones,
+      persona: "a night-owl dev",
+      state: { mood: "happy", energy: 72, bond: 44, level: 5 },
+      historyText: "User: hi\nYou: hey!",
+      locale: "zh-CN",
+      conversational: key === "conversation",
+    })
+
+    expect(out).toContain(`SENTINEL-${def.id}`)
+    expect(out).not.toContain(shippedMarker(def))
   })
 })

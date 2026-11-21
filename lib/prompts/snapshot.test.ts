@@ -12,6 +12,8 @@ import {
 import { resolvePromptAsync } from "./resolve"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
   invalidatePromptOverrideSnapshot,
   loadPromptOverrideSnapshot,
@@ -170,5 +172,25 @@ describe("account switches (F14)", () => {
     mockAfterRead.next = () => switchToAccount(ACCOUNT_B)
     const resolved = await resolvePromptAsync(TITLE_CHAT_PROMPT, { record: false })
     expect(resolved.text).toBe("B text")
+  })
+})
+
+describe("__overridePromptsForTests", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it("publishes each body as the account override until cleared", async () => {
+    __overridePromptsForTests([[TITLE_CHAT_PROMPT, "SENTINEL-TITLE one line."]])
+    const resolved = await resolvePromptAsync(TITLE_CHAT_PROMPT, { record: false })
+    expect(resolved.text).toBe("SENTINEL-TITLE one line.")
+    expect(resolved.source).toMatchObject({ kind: "override", scope: "account" })
+
+    // A second body for the same slot is a new revision, never a cached verdict.
+    __overridePromptsForTests([[TITLE_CHAT_PROMPT, "SECOND-TITLE one line."]])
+    expect((await resolvePromptAsync(TITLE_CHAT_PROMPT, { record: false })).text).toBe(
+      "SECOND-TITLE one line."
+    )
+
+    __setPromptOverrideSnapshotForTests(null)
+    expect(peekPromptOverrideSnapshot()).toBeNull()
   })
 })

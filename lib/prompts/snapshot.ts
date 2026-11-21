@@ -16,7 +16,7 @@
 
 import { getDb } from "@/lib/db/schema"
 import { onPromptOverridesChanged, readActivePromptOverrides } from "@/lib/db/prompt-overrides"
-import type { PromptScope } from "./types"
+import type { PromptDefinitionV1, PromptScope } from "./types"
 
 export interface ActivePromptOverride {
   bindingId: string
@@ -189,4 +189,35 @@ export function __setPromptOverrideSnapshotForTests(snapshot: PromptOverrideSnap
   current = snapshot
   inflight = null
   testDatabaseName = snapshot?.databaseName ?? null
+}
+
+let testRevision = 0
+
+/**
+ * Test seam: publish `body` as the account override of each definition, under
+ * its current contract version, in place of any snapshot. A consumer test uses
+ * it to show the user's text, not the shipped one, reaches the send boundary.
+ * Each call mints fresh revision ids, so no cached verdict of an earlier body
+ * applies. Clear with `__setPromptOverrideSnapshotForTests(null)`.
+ */
+export function __overridePromptsForTests(
+  overrides: ReadonlyArray<readonly [def: PromptDefinitionV1, body: string]>
+): void {
+  __setPromptOverrideSnapshotForTests(
+    buildPromptOverrideSnapshot(
+      "prompt-overrides-test",
+      overrides.map(([def, body]) => {
+        testRevision += 1
+        return {
+          bindingId: `pob-test-${def.id}`,
+          promptId: def.id,
+          scope: "account",
+          targetId: "",
+          revisionId: `por-test-${testRevision}`,
+          body,
+          contractVersion: def.contractVersion,
+        }
+      })
+    )
+  )
 }

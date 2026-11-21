@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import {
@@ -52,14 +53,25 @@ function withoutDeclarations(source: string): string {
     .replace(/\b(?:export\s+)?(?:const|let|var|function)\s+[A-Za-z_$][\w$]*/g, "")
 }
 
-function usesHandle(source: string, handle: string): boolean {
+function usesHandle(
+  source: string,
+  handle: string,
+  options: { wholeCollection?: boolean } = {}
+): boolean {
   const escaped = handle.replace(/[.$]/g, "\\$&")
   if (new RegExp(`(?<![\\w$.])${escaped}(?![\\w$])`).test(source)) return true
   // A whole collection consumed by computed key or spread binds its members.
   const [collection, ...rest] = handle.split(".")
   if (rest.length === 0) return false
   const name = collection.replace(/\$/g, "\\$")
-  return new RegExp(`(?<![\\w$.])${name}\\s*\\[|\\.\\.\\.\\s*${name}(?![\\w$])`).test(source)
+  if (new RegExp(`(?<![\\w$.])${name}\\s*\\[|\\.\\.\\.\\s*${name}(?![\\w$])`).test(source))
+    return true
+  // A test iterating the collection (`Object.entries(X)`, `keyof typeof X`)
+  // names it without a member: that covers every member.
+  return (
+    options.wholeCollection === true &&
+    new RegExp(`(?<![\\w$.])${name}(?![\\w$])(?!\\s*(?:\\.|\\?\\.|\\[))`).test(source)
+  )
 }
 
 function moduleFile(specifier: string): string {
@@ -107,6 +119,10 @@ async function loadPromptHolders(): Promise<Array<[string, unknown]>> {
   return holders
 }
 
+/** How a test publishes an override; a test using none of these sends only shipped text. */
+const OVERRIDE_MECHANISM =
+  /__overridePromptsForTests|__setPromptOverrideSnapshotForTests|buildPromptOverrideSnapshot|publishPromptBody|publishPromptOverride/
+
 /**
  * Families a consumer picks through an accessor at run time instead of by
  * name. `reaches` calls the accessor, so a pin that stops returning the slot
@@ -115,6 +131,8 @@ async function loadPromptHolders(): Promise<Array<[string, unknown]>> {
 const ACCESSOR_BINDINGS: ReadonlyArray<{
   consumer: string
   use: RegExp
+  /** How a test iterates the family through the same accessor, when it does. */
+  test?: RegExp
   reaches: (def: PromptDefinitionV1) => boolean
 }> = [
   {
@@ -128,6 +146,7 @@ const ACCESSOR_BINDINGS: ReadonlyArray<{
   {
     consumer: "lib/agent/builtin-catalog/catalog.ts",
     use: /\bresolvePrompt\(entry\.identity\)/,
+    test: /\bbuiltinAgents\(\)/,
     reaches: (def) => builtinAgents().some((entry) => entry.identity === def),
   },
   {
@@ -241,6 +260,43 @@ describe("prompt catalog", () => {
     }
   })
 
+  // A consumer that names its slot can still send something else. Every
+  // editable slot needs a test that publishes an override for it, so that some
+  // test drives a consumer with the user's text (X6). Matched like the binding
+  // check above: the test names the slot by id, a holding name or a collection
+  // it iterates, and installs an override.
+  it("has a test that sends an override of every editable slot", async () => {
+    const holders = await loadPromptHolders()
+    const overrideTests = execFileSync(
+      "git",
+      ["ls-files", "--cached", "--others", "--exclude-standard", "*.test.ts", "*.test.tsx"],
+      { cwd: repoRoot, encoding: "utf8" }
+    )
+      .split("\n")
+      // This file names the mechanisms and slots without sending anything.
+      .filter((file) => file && file !== path.relative(repoRoot, __filename))
+      .filter((file) => existsSync(path.join(repoRoot, file)))
+      .map((file) => readFileSync(path.join(repoRoot, file), "utf8"))
+      .filter((source) => OVERRIDE_MECHANISM.test(source))
+      .map((source) => ({ raw: source, body: withoutDeclarations(source) }))
+    const untested = defs
+      .filter((def) => def.operation !== "inspect-only")
+      .filter((def) => {
+        const handles = holders.flatMap(([name, value]) => handlesOf(value, def, name))
+        const accessors = ACCESSOR_BINDINGS.filter(
+          (binding) => binding.test !== undefined && binding.reaches(def)
+        )
+        return !overrideTests.some(
+          (test) =>
+            test.raw.includes(`"${def.id}"`) ||
+            handles.some((handle) => usesHandle(test.body, handle, { wholeCollection: true })) ||
+            accessors.some((binding) => binding.test!.test(test.body))
+        )
+      })
+      .map((def) => def.id)
+    expect(untested).toEqual([])
+  })
+
   it("gives every editable entry at least one scope and inspect-only entries none", () => {
     for (const def of defs) {
       if (def.operation === "inspect-only") expect(def.scopes).toEqual([])
@@ -274,6 +330,15 @@ describe("slot binding guard", () => {
     expect(usesHandle("resolvePrompt(PROMPTS[key])", "PROMPTS.bubble")).toBe(true)
     expect(usesHandle("const all = { ...PROMPTS }", "PROMPTS.bubble")).toBe(true)
     expect(usesHandle("resolvePrompt(OTHER_PROMPTS.bubble)", "PROMPTS.bubble")).toBe(false)
+  })
+
+  it("counts a test's whole-collection iteration only when asked", () => {
+    const whole = { wholeCollection: true }
+    expect(usesHandle("it.each(Object.entries(PROMPTS))", "PROMPTS.bubble", whole)).toBe(true)
+    expect(usesHandle("Record<keyof typeof PROMPTS, Driver>", "PROMPTS.bubble", whole)).toBe(true)
+    expect(usesHandle("it.each(Object.entries(PROMPTS))", "PROMPTS.bubble")).toBe(false)
+    expect(usesHandle("override(PROMPTS.other.id)", "PROMPTS.bubble", whole)).toBe(false)
+    expect(usesHandle("override(PROMPTS?.other)", "PROMPTS.bubble", whole)).toBe(false)
   })
 
   it("finds the handles that hold a definition", () => {

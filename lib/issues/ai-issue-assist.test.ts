@@ -8,11 +8,15 @@ import {
   ISSUE_METADATA_PROMPT,
   ISSUE_RELATIONS_PROMPT,
 } from "./ai-issue-assist"
+import * as issueAssist from "./ai-issue-assist"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 
 function stubClient(reply: string | ((prompt: string) => string) | Error): {
   client: LlmClient
@@ -294,4 +298,72 @@ describe("customized issue-assist prompts (ADR-0236)", () => {
       '"duplicates"',
     ])
   })
+})
+
+describe("issue-assist overrides reach the model call (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  // Every prompt definition the module exports, so a new one needs a driver.
+  const definitions = Object.values(issueAssist).filter(
+    (value): value is PromptDefinitionV1 =>
+      typeof value === "object" &&
+      value !== null &&
+      typeof (value as Partial<PromptDefinitionV1>).id === "string" &&
+      typeof (value as Partial<PromptDefinitionV1>).defaultBody === "string"
+  )
+
+  // Each prompt's public entry point, with inputs that reach the model call.
+  const drive: Record<string, (client: LlmClient) => Promise<unknown>> = {
+    "developer.issues.draft": (client) =>
+      draftIssueDescription("Fix login redirect", { client, isPiiSafe: safe }),
+    "developer.issues.improve": (client) =>
+      improveIssueDescription("it broke on save", { client, isPiiSafe: safe }),
+    "developer.issues.metadata": (client) =>
+      suggestIssueMetadata(
+        { title: "Crash on save", description: "", labelNames: ["bug"] },
+        { client, isPiiSafe: safe }
+      ),
+    "developer.issues.title": (client) =>
+      suggestIssueTitle("## Steps\n\nOpen login", { client, isPiiSafe: safe }),
+    "developer.issues.relations": (client) =>
+      suggestIssueRelations(
+        {
+          title: "Login loop",
+          description: "",
+          candidates: [{ id: "i1", identifier: "DEMO-1", title: "Auth refactor" }],
+        },
+        { client, isPiiSafe: safe }
+      ),
+  }
+
+  it("finds every issue-assist prompt", () => {
+    expect(definitions.map((def) => def.id).sort()).toEqual(Object.keys(drive).sort())
+  })
+
+  it.each(definitions.map((def) => [def.id, def] as const))(
+    "sends the published %s override as the system prompt",
+    async (id, def) => {
+      const send = drive[id]
+      expect(send).toBeDefined()
+
+      // Without an override the call carries the shipped text.
+      __overridePromptsForTests([])
+      const shipped = stubClient("{}")
+      await send(shipped.client)
+      expect(shipped.calls[0].system).toBe(def.defaultBody)
+
+      const body = [
+        `SENTINEL-${def.id}`,
+        ...def.variables.filter((spec) => spec.required).map((spec) => `{{${spec.name}}}`),
+        ...def.requiredFragments,
+      ].join(" ")
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+      const { client, calls } = stubClient("{}")
+      await send(client)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].system).toContain(`SENTINEL-${def.id}`)
+      expect(calls[0].system).not.toContain(def.defaultBody)
+    }
+  )
 })

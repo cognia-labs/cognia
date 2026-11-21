@@ -1,6 +1,12 @@
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import { SELECTION_SUMMARY_PROMPT, packSegments, summarizeMaterial } from "./summarize-material"
 import { CONVERSATION_SUMMARY_PROMPT } from "./summarizer"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 
 jest.mock("@cognia/redact", () => ({ hasNoLeakingPii: () => true }))
 
@@ -156,5 +162,50 @@ describe("summarizeMaterial", () => {
     await expect(
       summarizeMaterial({ segments: ["a"], purpose: "selection", client: llm })
     ).rejects.toThrow("quota")
+  })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("a published summary prompt reaches the model (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  // Every purpose, so each prompt the summarizer can pick is covered.
+  it.each([
+    ["branch-seed", CONVERSATION_SUMMARY_PROMPT.id, CONVERSATION_SUMMARY_PROMPT],
+    ["selection", SELECTION_SUMMARY_PROMPT.id, SELECTION_SUMMARY_PROMPT],
+    ["handoff", SELECTION_SUMMARY_PROMPT.id, SELECTION_SUMMARY_PROMPT],
+  ] as const)("the %s purpose sends the %s override on every pass", async (purpose, _id, def) => {
+    const body = sentinelBody(def)
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+    const llm = client((prompt) =>
+      prompt.includes("Combine these partial summaries") ? "whole" : "part"
+    )
+
+    // Two chunks plus the combining pass: three calls, one system prompt.
+    const out = await summarizeMaterial({
+      segments: ["seg1", "seg2"],
+      purpose,
+      client: llm,
+      chunkChars: 5,
+    })
+
+    expect(out).toEqual({ kind: "summary", text: "whole", chunks: 2 })
+    expect(llm.complete).toHaveBeenCalledTimes(3)
+    for (const [, options] of llm.complete.mock.calls) {
+      expect(options.system).toContain(`SENTINEL-${def.id}`)
+      expect(options.system).not.toContain(shippedMarker(def))
+    }
   })
 })

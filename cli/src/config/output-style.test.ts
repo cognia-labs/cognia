@@ -1,10 +1,12 @@
 import { OUTPUT_STYLES } from "./schema"
 import { composeSystemPrompt, outputStyleInstruction } from "./output-style"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { validatePromptBody } from "@/lib/prompts/template"
 import type { PromptDefinitionV1, PromptScope } from "@/lib/prompts/types"
 import { CLI_OUTPUT_STYLE_PROMPTS } from "@/lib/agent/prompts/cli-prompts"
 
@@ -93,5 +95,40 @@ describe("output style Prompt Center overrides", () => {
     expect(outputStyleInstruction("learning", { workspaceId: "ws-2" })).toBe(
       CLI_OUTPUT_STYLE_PROMPTS.learning.defaultBody
     )
+  })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("a published output style reaches the system prompt (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  // Every style that appends an instruction; `default` has no prompt.
+  const styled = OUTPUT_STYLES.filter((style) => style !== "default")
+
+  it("has a prompt for every non-default style", () => {
+    expect(Object.keys(CLI_OUTPUT_STYLE_PROMPTS).sort()).toEqual([...styled].sort())
+  })
+
+  it.each(styled)("the %s style sends its account override, not the shipped text", (style) => {
+    const def = CLI_OUTPUT_STYLE_PROMPTS[style as keyof typeof CLI_OUTPUT_STYLE_PROMPTS]
+    const body = sentinelBody(def)
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    const system = composeSystemPrompt("Base.", style)
+
+    expect(system).toBe(`Base.\n\n${body}`)
+    expect(system).not.toContain(shippedMarker(def))
   })
 })

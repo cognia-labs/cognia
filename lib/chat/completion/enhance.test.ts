@@ -8,9 +8,12 @@ import {
   type EnhanceMode,
 } from "./enhance"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 
 function stubClient(reply: string | ((prompt: string) => string)): {
@@ -195,4 +198,42 @@ describe("customized enhance prompts (ADR-0236)", () => {
     })
     expect(detailed.calls[0].prompt).toContain(ENHANCE_STYLE_PROMPTS.detailed.defaultBody)
   })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("a published style prompt reaches the model (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  const styles = Object.entries(ENHANCE_STYLE_PROMPTS) as [
+    Exclude<EnhanceMode, "variants">,
+    PromptDefinitionV1,
+  ][]
+
+  it.each(styles)(
+    "the %s mode sends its account override, not the shipped style",
+    async (mode, def) => {
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+      const { client, calls } = stubClient("A rewritten draft.")
+
+      const res = await enhancePrompt("make it better", mode, { client, isPiiSafe: safe })
+
+      expect(res).toEqual({ kind: "rewrite", text: "A rewritten draft." })
+      expect(calls).toHaveLength(1)
+      expect(calls[0].prompt).toContain(`Requested style: SENTINEL-${def.id}`)
+      expect(calls[0].prompt).not.toContain(shippedMarker(def))
+    }
+  )
 })

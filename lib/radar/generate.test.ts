@@ -1,6 +1,12 @@
 import { normalizeRadarOutput, generateRadarReport } from "./generate"
+import { RADAR_SYSTEM_PROMPT } from "./prompts"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import type { RadarDataItem } from "@/types/radar"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 
 describe("normalizeRadarOutput", () => {
   it("keeps only valid source indexes while preserving legacy text actions", () => {
@@ -54,5 +60,28 @@ describe("generateRadarReport", () => {
     expect(client.complete).toHaveBeenCalled()
     expect(out.verdict).toBe("ok")
     expect(out.actions).toEqual(["do x"])
+  })
+})
+
+describe("generateRadarReport (published prompt reaches the model, ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it("sends the published knowledge.radar system prompt, not the shipped one", async () => {
+    const def = RADAR_SYSTEM_PROMPT
+    const body =
+      'SENTINEL-knowledge.radar Reply with {"verdict":"","atAGlance":[],"actions":[],"topicCloud":[]}.'
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    const complete = jest.fn<Promise<string>, Parameters<LlmClient["complete"]>>(
+      async () => '{"verdict":"ok"}'
+    )
+    await generateRadarReport(
+      { complete },
+      { items: [{ id: "a", text: "rust ownership", source: "memory", at: 0 }] }
+    )
+    const system = complete.mock.calls[0]?.[1]?.system ?? ""
+    expect(system).toContain("SENTINEL-knowledge.radar")
+    expect(system).not.toContain(def.defaultBody.slice(0, 80))
   })
 })

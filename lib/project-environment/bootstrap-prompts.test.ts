@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
   type ActivePromptOverride,
 } from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 import type { ProjectEnvironmentBootstrapAgent } from "@/types/project-environment"
 import {
   BOOTSTRAP_PROMPT_SOURCES,
@@ -131,5 +133,31 @@ describe("resolveBootstrapSystemPrompt", () => {
     await expect(
       resolveBootstrapSystemPrompt(agent({ systemPrompt: "" }), "project-1")
     ).resolves.toBe("")
+  })
+})
+
+describe("bootstrap overrides reach the launch's system prompt (ADR-0236)", () => {
+  it.each(
+    Object.entries(BOOTSTRAP_SYSTEM_PROMPTS) as [
+      BootstrapRuntime,
+      (typeof BOOTSTRAP_SYSTEM_PROMPTS)[BootstrapRuntime],
+    ][]
+  )("passes the published %s override instead of the shipped text", async (runtime, def) => {
+    // Without an override the launcher passes nothing: the runtime's own text applies.
+    __overridePromptsForTests([])
+    await expect(resolveBootstrapSystemPrompt(agent({ runtime }), "project-1")).resolves.toBe(
+      undefined
+    )
+
+    const body = [
+      `SENTINEL-${def.id}`,
+      ...def.variables.filter((spec) => spec.required).map((spec) => `{{${spec.name}}}`),
+      ...def.requiredFragments,
+    ].join(" ")
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+    const sent = await resolveBootstrapSystemPrompt(agent({ runtime }), "project-1")
+    expect(sent).toContain(`SENTINEL-${def.id}`)
+    expect(sent).not.toContain(def.defaultBody)
   })
 })

@@ -2,10 +2,13 @@
  * @jest-environment jsdom
  */
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 import {
   WORKFLOW_COPILOT_DISPATCH_EVENT,
   WORKFLOW_SLASH_COMMANDS,
@@ -280,6 +283,64 @@ describe("workflow slash Prompt Center entries (ADR-0236)", () => {
       "/refactor add retry\nUse workflow-refactorer; keep behavior."
     )
   })
+})
+
+/** A contract-valid override body, unique to the slot. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  return [
+    `SENTINEL-${def.id}`,
+    ...def.variables.filter((spec) => spec.required).map((spec) => `{{${spec.name}}}`),
+    ...def.requiredFragments,
+  ].join(" ")
+}
+
+/** The longest literal line of the shipped body, placeholders cut out. */
+function shippedSnippet(def: PromptDefinitionV1): string {
+  return def.defaultBody
+    .split(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}|\n/)
+    .map((part) => part.trim())
+    .reduce((longest, part) => (part.length > longest.length ? part : longest), "")
+}
+
+describe("workflow slash overrides reach the Copilot message (ADR-0236)", () => {
+  afterEach(() => {
+    __setPromptOverrideSnapshotForTests(null)
+    __resetPromptVerdictsForTests()
+  })
+
+  // Each member's action, as the chat-tab listener hands it to the builder.
+  const actions = {
+    run: { kind: "run" },
+    runFromStep: { kind: "run", stepId: "n_step_7" },
+    debug: { kind: "debug" },
+    refactor: { kind: "refactor", description: "add retry" },
+    delegate: { kind: "delegate", alias: "debugger", task: "why does the cron skip" },
+  } satisfies Record<
+    keyof typeof WORKFLOW_SLASH_PROMPTS,
+    Parameters<typeof buildWorkflowSlashPrompt>[0]
+  >
+
+  it.each(Object.entries(WORKFLOW_SLASH_PROMPTS))(
+    "sends the published %s override instead of the shipped text",
+    (key, def) => {
+      const action = (actions as Record<string, Parameters<typeof buildWorkflowSlashPrompt>[0]>)[
+        key
+      ]
+      expect(action).toBeDefined()
+
+      // Without an override the builder sends this slot's shipped text.
+      __overridePromptsForTests([])
+      const snippet = shippedSnippet(def)
+      expect(buildWorkflowSlashPrompt(action)).toContain(snippet)
+
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+      const sent = buildWorkflowSlashPrompt(action)
+      expect(sent).toContain(`SENTINEL-${def.id}`)
+      expect(sent).not.toContain(snippet)
+    }
+  )
 })
 
 describe("parseDelegateArgs", () => {

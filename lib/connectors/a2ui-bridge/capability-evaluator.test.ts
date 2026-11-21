@@ -1,10 +1,12 @@
 import { buildCapabilityPromptSection, CONNECTOR_CAPABILITY_PROMPTS } from "./capability-evaluator"
-import { buildA2UICapabilityMatrix } from "@/types/connectors/capability"
+import { buildA2UICapabilityMatrix, componentKindsByLevel } from "@/types/connectors/capability"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { validatePromptBody } from "@/lib/prompts/template"
 
 describe("buildCapabilityPromptSection", () => {
   it("includes native + fallback + unsupported sections", () => {
@@ -114,4 +116,53 @@ describe("capability section wording (ADR-0236)", () => {
     expect(lines).toHaveLength(2)
     expect(lines[1]).toMatch(/^- Degrades to plain text on this channel: /)
   })
+
+  // One kind per level plus a skill family, so every line renders.
+  const everyLineMatrix = buildA2UICapabilityMatrix({
+    Text: "native",
+    TextField: "simulated",
+    Card: "fallback",
+    Chart: "unsupported",
+  })
+  const everyLineSkills = [{ family: "lark.calendar", mutations: ["read", "write"] }] as const
+  const lineValue = (line: keyof typeof CONNECTOR_CAPABILITY_PROMPTS): string => {
+    switch (line) {
+      case "header":
+        return "Telegram"
+      case "skills":
+        return "lark.calendar (read+write)"
+      default:
+        return componentKindsByLevel(everyLineMatrix, line).join(", ")
+    }
+  }
+
+  // Every member, so a line added later is covered too.
+  it.each(
+    Object.entries(CONNECTOR_CAPABILITY_PROMPTS).map(
+      ([line, def]) => [def.id, line as keyof typeof CONNECTOR_CAPABILITY_PROMPTS] as const
+    )
+  )("sends the published %s wording, not the shipped one", (slotId, line) => {
+    const def = CONNECTOR_CAPABILITY_PROMPTS[line]
+    const sentinel = `SENTINEL-${slotId}`
+    const body = `${sentinel} {{${def.variables[0].name}}}`
+    expect(validatePromptBody(def, body)).toEqual([])
+    // Baseline: with no override, this input renders the line's shipped wording.
+    expect(
+      buildCapabilityPromptSection("Telegram", everyLineMatrix, [...everyLineSkills])
+    ).toContain(shippedWording(def.defaultBody))
+    __overridePromptsForTests([[def, body]])
+
+    const section = buildCapabilityPromptSection("Telegram", everyLineMatrix, [...everyLineSkills])
+    expect(lineValue(line).length).toBeGreaterThan(0)
+    expect(section.split("\n")).toContain(`${sentinel} ${lineValue(line)}`)
+    expect(section).not.toContain(shippedWording(def.defaultBody))
+  })
 })
+
+/** The longest placeholder-free run of a shipped body, as a "not sent" probe. */
+function shippedWording(body: string): string {
+  const pieces = body.split(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}/).map((piece) => piece.trim())
+  const longest = pieces.reduce((a, b) => (b.length > a.length ? b : a), "")
+  expect(longest.length).toBeGreaterThan(0)
+  return longest.slice(0, 80)
+}

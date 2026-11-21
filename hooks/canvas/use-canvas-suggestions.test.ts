@@ -63,11 +63,14 @@ jest.mock("@cognia/logging", () => ({
 }))
 
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
-import { CANVAS_REVIEW_PROMPT } from "@/lib/canvas/ai/suggestion-prompts"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
+import { CANVAS_REVIEW_PROMPT, CANVAS_SUGGESTIONS_PROMPT } from "@/lib/canvas/ai/suggestion-prompts"
 import {
   useCanvasSuggestions,
   normalizeConfidence,
@@ -361,6 +364,43 @@ If no useful suggestion exists, return an empty list.`
     expect(suggestions).toEqual([])
     expect(generateObjectMock).not.toHaveBeenCalled()
     expect(result.current.error).toContain("PII gate")
+  })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("a published suggestion prompt reaches the model (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  // Every mode the hook offers, each with the prompt it resolves.
+  it.each([
+    ["assist", CANVAS_SUGGESTIONS_PROMPT.id, CANVAS_SUGGESTIONS_PROMPT],
+    ["review", CANVAS_REVIEW_PROMPT.id, CANVAS_REVIEW_PROMPT],
+  ] as const)("%s mode sends the %s override, not the shipped body", async (mode, _id, def) => {
+    const body = sentinelBody(def)
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+    generateObjectMock.mockResolvedValueOnce({ object: { suggestions: [] } })
+
+    const { result } = renderHook(() => useCanvasSuggestions())
+    await act(async () => {
+      await result.current.generate({ documentId: "doc", language: "ts", content: "x" }, { mode })
+    })
+
+    expect(generateObjectMock).toHaveBeenCalledTimes(1)
+    const { system } = generateObjectMock.mock.calls[0][0] as { system: string }
+    expect(system).toContain(`SENTINEL-${def.id}`)
+    expect(system).not.toContain(shippedMarker(def))
   })
 })
 

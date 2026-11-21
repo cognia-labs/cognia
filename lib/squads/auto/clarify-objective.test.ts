@@ -1,6 +1,16 @@
-import { applyClarifications, clarifyObjective, DEFAULT_MAX_QUESTIONS } from "./clarify-objective"
+import {
+  applyClarifications,
+  CLARIFY_OBJECTIVE_PROMPT,
+  clarifyObjective,
+  DEFAULT_MAX_QUESTIONS,
+} from "./clarify-objective"
 import { AutoOrchestrationPiiError } from "./auto-orchestrate"
 import type { LlmClient } from "@/lib/twin/distill/llm"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 
 const client = (text: string): LlmClient => ({ complete: async () => text })
 const throwingClient = (): LlmClient => ({
@@ -155,5 +165,30 @@ describe("applyClarifications", () => {
   it("returns the objective unchanged when nothing was answered", () => {
     expect(applyClarifications("obj", [])).toBe("obj")
     expect(applyClarifications("obj", [{ question: "Q?", answer: "" }])).toBe("obj")
+  })
+})
+
+describe("clarifyObjective (published prompt reaches the model, ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it("sends the published team.auto.clarify system prompt, not the shipped one", async () => {
+    const def = CLARIFY_OBJECTIVE_PROMPT
+    const body = 'SENTINEL-team.auto.clarify Ask up to {{max}} questions. Reply {"questions":[]}.'
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    let seenSystem = ""
+    await clarifyObjective({
+      objective: "x",
+      max: 2,
+      client: {
+        complete: async (_prompt, opts) => {
+          seenSystem = opts?.system ?? ""
+          return '{"questions":[]}'
+        },
+      },
+    })
+    expect(seenSystem).toContain("SENTINEL-team.auto.clarify Ask up to 2 questions.")
+    expect(seenSystem).not.toContain(def.defaultBody.slice(0, 80))
   })
 })

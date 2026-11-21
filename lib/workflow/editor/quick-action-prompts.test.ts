@@ -6,10 +6,13 @@ import {
   buildSkillDraftPrompt,
 } from "./quick-action-prompts"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 
 function makeState(overrides: Partial<EditorState> = {}): EditorState {
   return {
@@ -219,6 +222,70 @@ describe("quick-action Prompt Center entries (ADR-0236)", () => {
       ].join("\n")
     )
   })
+})
+
+/** A contract-valid override body, unique to the slot. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  return [
+    `SENTINEL-${def.id}`,
+    ...def.variables.filter((spec) => spec.required).map((spec) => `{{${spec.name}}}`),
+    ...def.requiredFragments,
+  ].join(" ")
+}
+
+/** The longest literal line of the shipped body, placeholders cut out. */
+function shippedSnippet(def: PromptDefinitionV1): string {
+  return def.defaultBody
+    .split(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}|\n/)
+    .map((part) => part.trim())
+    .reduce((longest, part) => (part.length > longest.length ? part : longest), "")
+}
+
+describe("quick-action overrides reach the Copilot message (ADR-0236)", () => {
+  afterEach(() => {
+    __setPromptOverrideSnapshotForTests(null)
+    __resetPromptVerdictsForTests()
+  })
+
+  const picked = makeState({
+    nodes: [makeNode("n1", "ai.prompt", "Summarize"), makeNode("n2", "email.send", "Notify")],
+    selectedNodeIds: ["n1"],
+  })
+  // Each member's builder call, with inputs that reach that member's branch.
+  const drive = {
+    selectionReference: () => buildSelectionReferencePrompt(picked),
+    validateClean: () => buildQuickActionPrompt("validate", makeState()),
+    validateIssues: () =>
+      buildQuickActionPrompt(
+        "validate",
+        makeState({ nodes: [makeNode("n_a", "trigger.cron", "Daily", { cron: "" })] })
+      ),
+    explainEmpty: () => buildQuickActionPrompt("explain", makeState()),
+    explain: () => buildQuickActionPrompt("explain", picked),
+    suggest: () => buildQuickActionPrompt("suggest", picked),
+    suggestUnselected: () => buildQuickActionPrompt("suggest", makeState({ nodes: picked.nodes })),
+    draftFromSkill: () => buildSkillDraftPrompt({ name: "Release notes", content: "1. Read." }),
+  } satisfies Record<keyof typeof WORKFLOW_QUICK_ACTION_PROMPTS, () => string | null>
+
+  it.each(Object.entries(WORKFLOW_QUICK_ACTION_PROMPTS))(
+    "sends the published %s override instead of the shipped text",
+    (key, def) => {
+      const send = (drive as Record<string, (() => string | null) | undefined>)[key]
+      expect(send).toBeDefined()
+
+      // Without an override the builder sends this slot's shipped text.
+      __overridePromptsForTests([])
+      const snippet = shippedSnippet(def)
+      expect(send!()).toContain(snippet)
+
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+      const sent = send!()
+      expect(sent).toContain(`SENTINEL-${def.id}`)
+      expect(sent).not.toContain(snippet)
+    }
+  )
 })
 
 describe("buildSkillDraftPrompt", () => {

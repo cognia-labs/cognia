@@ -6,6 +6,12 @@
 import { __TESTING__, assembleArticle, runModuleArticleAgent } from "./module-article-agent"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import type { CodeChunk, ModuleStat } from "../types"
+import { WIKI_SYSTEM_VOICE_PROMPT } from "../prompts"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 
 function stat(overrides: Partial<ModuleStat> = {}): ModuleStat {
   return {
@@ -172,5 +178,27 @@ describe("internal parsers", () => {
     expect(body).toContain("## A")
     expect(body).toContain("a body")
     expect(body).toContain("## B")
+  })
+})
+
+describe("runModuleArticleAgent (published wiki voice reaches the model, ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it("sends the published knowledge.wiki.voice system prompt, not the shipped one", async () => {
+    const def = WIKI_SYSTEM_VOICE_PROMPT
+    const body = "SENTINEL-knowledge.wiki.voice-module-article Write terse Markdown for agents."
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    let seenSystem = ""
+    const llm: LlmClient = {
+      async complete(_prompt, options) {
+        seenSystem = options?.system ?? ""
+        return SAMPLE_BODY
+      },
+    }
+    await runModuleArticleAgent({ llm }, { stat: stat(), chunks: [chunk()], fileHashes: {} })
+    expect(seenSystem).toContain("SENTINEL-knowledge.wiki.voice-module-article")
+    expect(seenSystem).not.toContain(def.defaultBody.slice(0, 80))
   })
 })

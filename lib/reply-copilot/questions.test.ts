@@ -3,11 +3,13 @@ import { join } from "node:path"
 import { validateDecisionQuestions } from "@/lib/decisions/validate"
 import type { DecisionQuestion } from "@/types/decisions"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
 import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 import {
   ACTION_KEYS,
   BACKGROUND_NOTE,
@@ -19,6 +21,8 @@ import {
   chooseQuestionVariant,
   judgeQuestions,
   rankQuestion,
+  type CopilotQuestionId,
+  type QuestionVariant,
 } from "./questions"
 
 /** Options exactly as laya renders them (laya/common.py render_options). */
@@ -166,4 +170,49 @@ describe("question instruction prompts (ADR-0236)", () => {
       "Which candidate is the best next message for what the other person needs?"
     )
   })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("a published question wording reaches the decision request (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  // Every question of both variants, the ranking included.
+  const cases = (["full", "compact"] as const).flatMap((variant: QuestionVariant) =>
+    (
+      Object.entries(COPILOT_QUESTION_PROMPTS[variant]) as [CopilotQuestionId, PromptDefinitionV1][]
+    ).map(([questionId, def]) => [def.id, variant, questionId, def] as const)
+  )
+
+  it.each(cases)(
+    "sends the %s override as the question's instructions",
+    (_id, variant, questionId, def) => {
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+
+      // The payload the decision provider receives for this question.
+      const questions =
+        questionId === "best_reply"
+          ? rankQuestion(["a", "b", "c"], variant)
+          : judgeQuestions(variant)
+
+      expect(validateDecisionQuestions(questions)).toBeNull()
+      expect(questions[questionId].instructions).toBe(body)
+      const sent = Object.values(questions)
+        .map((question) => question.instructions)
+        .join("\n")
+      expect(sent).not.toContain(shippedMarker(def))
+    }
+  )
 })

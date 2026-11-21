@@ -6,6 +6,7 @@
 
 import { applySystemPromptTemplate, TWIN_SYSTEM_TEMPLATE_PROMPTS } from "./system-prompt-template"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
   type ActivePromptOverride,
@@ -386,4 +387,66 @@ describe("editable scaffolding (ADR-0236)", () => {
     })
     expect(out.systemPrompt).toBe("You are Alice.")
   })
+
+  // Data that makes every section render, each with a marker only that section carries.
+  const everySection = {
+    twinName: "Alice",
+    voiceSummary: "voice-marker",
+    entities: [{ name: "Bob", aliases: [], role: "person", firstSeenChunkId: "c1" }],
+    playbooks: [makePlaybook({ trigger: "playbook-marker" })],
+    decisions: [
+      {
+        id: "d1",
+        context: "decision-marker",
+        choice: "ship",
+        rationale: "",
+        sourceChunkIds: [],
+        timestamp: 1,
+      },
+    ],
+    retrievedChunks: [{ chunk: makeChunk("c1", "chunk-marker"), score: 0.9 }],
+    styleSamples: [makeSample("ss_1", "reply", "sample-marker")],
+  } satisfies Parameters<typeof applySystemPromptTemplate>[0]
+  const sectionMarker: Record<keyof typeof TWIN_SYSTEM_TEMPLATE_PROMPTS, string> = {
+    identity: "Alice",
+    voice: "voice-marker",
+    entities: "Person: Bob",
+    playbooks: "playbook-marker",
+    decisions: "decision-marker",
+    retrieved: "chunk-marker",
+    style: "sample-marker",
+  }
+
+  // Every member, so a section added later is covered too.
+  it.each(
+    Object.entries(TWIN_SYSTEM_TEMPLATE_PROMPTS).map(
+      ([section, def]) => [def.id, section as keyof typeof TWIN_SYSTEM_TEMPLATE_PROMPTS] as const
+    )
+  )("sends the published %s wording, not the shipped one", (slotId, section) => {
+    const def = TWIN_SYSTEM_TEMPLATE_PROMPTS[section]
+    const sentinel = `SENTINEL-${slotId}`
+    const body = `${sentinel} {{${def.variables[0].name}}}`
+    expect(validatePromptBody(def, body)).toEqual([])
+    // Baseline: with no override, this input renders the section's shipped wording.
+    expect(applySystemPromptTemplate(everySection).systemPrompt).toContain(
+      shippedWording(def.defaultBody)
+    )
+    __overridePromptsForTests([[def, body]])
+
+    const { systemPrompt } = applySystemPromptTemplate(everySection)
+    expect(systemPrompt).toContain(sentinel)
+    // The section's data still arrives, rendered into the published wording.
+    expect(systemPrompt.indexOf(sectionMarker[section])).toBeGreaterThan(
+      systemPrompt.indexOf(sentinel)
+    )
+    expect(systemPrompt).not.toContain(shippedWording(def.defaultBody))
+  })
 })
+
+/** The longest placeholder-free run of a shipped body, as a "not sent" probe. */
+function shippedWording(body: string): string {
+  const pieces = body.split(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}/).map((piece) => piece.trim())
+  const longest = pieces.reduce((a, b) => (b.length > a.length ? b : a), "")
+  expect(longest.length).toBeGreaterThan(0)
+  return longest.slice(0, 80)
+}

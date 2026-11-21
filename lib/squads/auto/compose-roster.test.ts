@@ -1,4 +1,14 @@
-import { composeRoster, heuristicRoster, DEFAULT_MAX_ROSTER } from "./compose-roster"
+import {
+  COMPOSE_ROSTER_PROMPT,
+  composeRoster,
+  heuristicRoster,
+  DEFAULT_MAX_ROSTER,
+} from "./compose-roster"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 import type { CapabilityCatalog, TwinRosterEntry } from "./types"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import type { TeamRoutingAssessment } from "@/types/agent/agent-team"
@@ -264,5 +274,31 @@ describe("heuristicRoster", () => {
 describe("DEFAULT_MAX_ROSTER", () => {
   it("is a sane default", () => {
     expect(DEFAULT_MAX_ROSTER).toBe(6)
+  })
+})
+
+describe("composeRoster (published prompt reaches the model, ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it("sends the published team.auto.compose-roster system prompt, not the shipped one", async () => {
+    const def = COMPOSE_ROSTER_PROMPT
+    const body =
+      'SENTINEL-team.auto.compose-roster Staff at most {{max}} people. Reply {"teammates":[{"role":"lead"}]}.'
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    let seenSystem = ""
+    await composeRoster({
+      ...base,
+      maxRoster: 4,
+      client: {
+        complete: async (_prompt, opts) => {
+          seenSystem = opts?.system ?? ""
+          return JSON.stringify({ teammates: [{ name: "Sec", description: "s" }] })
+        },
+      },
+    })
+    expect(seenSystem).toContain("SENTINEL-team.auto.compose-roster Staff at most 4 people.")
+    expect(seenSystem).not.toContain(def.defaultBody.slice(0, 80))
   })
 })

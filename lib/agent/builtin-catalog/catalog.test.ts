@@ -13,9 +13,11 @@ import {
 import { isNamedAgentColor, normalizeAgentColor } from "@/lib/agents/agent-color"
 import { SUBAGENT_CONTRACT_TAG } from "@/lib/agent/prompts/subagent-frame"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 
 describe("the built-in catalog", () => {
   it("lets every built-in inherit the unified execution budget", () => {
@@ -199,4 +201,22 @@ describe("customized built-in identities (ADR-0236)", () => {
     expect(def.prompt).toBe("You are a terse scout. Report paths only.")
     expect(def.tools).toEqual(resolveBuiltinToolPolicy(explore.toolPolicy))
   })
+})
+
+describe("published identity reaches the SDK agent definition (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  // Every entry, so a newly shipped built-in is covered without editing this test.
+  it.each(builtinAgents().map((entry) => [entry.identity.id, entry] as const))(
+    "sends the published %s instead of the shipped identity",
+    (slotId, entry) => {
+      const body = `SENTINEL-${slotId} Answer with the shortest correct report.`
+      expect(validatePromptBody(entry.identity, body)).toEqual([])
+      __overridePromptsForTests([[entry.identity, body]])
+
+      const prompt = builtinAgentDefinition(entry).prompt
+      expect(prompt).toContain(`SENTINEL-${slotId}`)
+      expect(prompt).not.toContain(entry.identity.defaultBody.trim().slice(0, 80))
+    }
+  )
 })

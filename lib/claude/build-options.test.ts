@@ -439,6 +439,16 @@ import {
 import { _resetImPromptMemosForTest, resolveSendOptions } from "./build-options"
 import type { BuildOptionsContext } from "./build-options"
 import {
+  COMPACT_HANDOFF_PROMPT,
+  POST_COMPACTION_RECOVERY_PROMPT,
+} from "@/lib/ai/agent/execution/compact-instructions"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
+import {
   EXTERNAL_AGENT_PROVIDER_ID,
   externalAgentProviderId,
 } from "@/lib/ai/agent/external/session/session-models"
@@ -2212,6 +2222,45 @@ describe("resolveSendOptions — compaction config", () => {
     })
     expect(opts.appendSystemPrompt ?? "").not.toContain("Post-compaction recovery")
   })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("resolveSendOptions — published compaction prompts reach the turn (ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  // Both compaction fragments the resolver appends: the handoff on every
+  // compacting turn, the recovery on the first turn after a boundary.
+  it.each([
+    ["handoff", COMPACT_HANDOFF_PROMPT.id, COMPACT_HANDOFF_PROMPT],
+    ["recovery", POST_COMPACTION_RECOVERY_PROMPT.id, POST_COMPACTION_RECOVERY_PROMPT],
+  ] as const)(
+    "the %s fragment sends the %s override, not the shipped body",
+    async (_kind, _id, def) => {
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+
+      const opts = await resolveSendOptions({
+        character: makeChar({ id: "c1" }),
+        appSettings: { compaction: { enabled: true } } as unknown as AppSettings,
+        postCompaction: { phaseNumber: 1, durableInstructions: "Keep the kanban in sync" },
+      })
+
+      expect(opts.appendSystemPrompt).toContain(`SENTINEL-${def.id}`)
+      expect(opts.appendSystemPrompt).not.toContain(shippedMarker(def))
+    }
+  )
 })
 
 describe("resolveSendOptions — visual output routing (ADR-0139)", () => {

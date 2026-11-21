@@ -23,9 +23,12 @@ import {
 } from "./canvas-actions"
 import { generateText, streamText } from "ai"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 import { getProviderModel } from "@cognia/provider-core/core/client"
 import {
   abortableStreamModel,
@@ -181,6 +184,68 @@ describe("customized action prompts (ADR-0236)", () => {
       expect.objectContaining({ system: CANVAS_ACTION_PROMPTS.improve.defaultBody })
     )
   })
+})
+
+/** A body that meets `def`'s contract and cannot be mistaken for the shipped text. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  const placeholders = def.variables.filter((v) => v.required).map((v) => `{{${v.name}}}`)
+  return [`SENTINEL-${def.id}`, ...placeholders, ...def.requiredFragments].join(" ")
+}
+
+/** The longest placeholder-free run of the shipped body: seeing it means the default was sent. */
+function shippedMarker(def: PromptDefinitionV1): string {
+  const runs = def.defaultBody.split(/\{\{[^}]*\}\}/).map((run) => run.trim())
+  return runs.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60)
+}
+
+describe("a published action prompt reaches the model (ADR-0236)", () => {
+  const model = { model: "stub" } as never
+  const actions = Object.entries(CANVAS_ACTION_PROMPTS) as [CanvasActionType, PromptDefinitionV1][]
+  // Language and target language on, so every host-owned prefix is in play.
+  const options = { language: "markdown", targetLanguage: "French" }
+
+  beforeEach(() => {
+    ;(generateText as jest.Mock).mockReset().mockResolvedValue({ text: "ok" })
+    ;(streamText as jest.Mock).mockReset()
+  })
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it.each(actions)(
+    "runCanvasAction sends the %s override, not the shipped body",
+    async (action, def) => {
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+
+      await runCanvasAction(model, action, "doc body", options)
+
+      expect(generateText).toHaveBeenCalledTimes(1)
+      const { system } = (generateText as jest.Mock).mock.calls[0][0]
+      expect(system).toContain(`SENTINEL-${def.id}`)
+      expect(system).not.toContain(shippedMarker(def))
+    }
+  )
+
+  it.each(actions)(
+    "streamCanvasAction sends the %s override, not the shipped body",
+    async (action, def) => {
+      ;(streamText as jest.Mock).mockReturnValue({
+        textStream: (async function* () {
+          yield "ok"
+        })(),
+      })
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+
+      await streamCanvasAction(model, action, "doc body", () => {}, options)
+
+      expect(streamText).toHaveBeenCalledTimes(1)
+      const { system } = (streamText as jest.Mock).mock.calls[0][0]
+      expect(system).toContain(`SENTINEL-${def.id}`)
+      expect(system).not.toContain(shippedMarker(def))
+    }
+  )
 })
 
 describe("the shared execution path", () => {

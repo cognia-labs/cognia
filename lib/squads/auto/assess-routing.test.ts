@@ -1,6 +1,11 @@
-import { assessRouting, heuristicAssessment } from "./assess-routing"
+import { ASSESS_ROUTING_PROMPT, assessRouting, heuristicAssessment } from "./assess-routing"
 import { EMPTY_CAPABILITY_CATALOG } from "./capability-catalog"
 import type { LlmClient } from "@/lib/twin/distill/llm"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 
 const NOW = new Date("2026-06-14T00:00:00Z")
 const now = () => NOW
@@ -160,5 +165,31 @@ describe("heuristicAssessment", () => {
     )
     expect(a.factors.taskComplexity).toBe("moderate")
     expect(a.recommendedPattern).toBe("manager_worker")
+  })
+})
+
+describe("assessRouting (published prompt reaches the model, ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it("sends the published team.auto.assess-routing system prompt, not the shipped one", async () => {
+    const def = ASSESS_ROUTING_PROMPT
+    const body =
+      'SENTINEL-team.auto.assess-routing Reply {"recommendedPattern":"manager_worker"} only.'
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    let seenSystem = ""
+    await assessRouting({
+      ...base,
+      objective: "x",
+      client: {
+        complete: async (_prompt, opts) => {
+          seenSystem = opts?.system ?? ""
+          return '{"recommendedPattern":"manager_worker"}'
+        },
+      },
+    })
+    expect(seenSystem).toContain("SENTINEL-team.auto.assess-routing")
+    expect(seenSystem).not.toContain(def.defaultBody.slice(0, 80))
   })
 })

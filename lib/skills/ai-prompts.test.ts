@@ -4,12 +4,16 @@ import {
   SKILL_AI_SYSTEM_PROMPT,
   buildAiSystemPrompt,
   buildAiUserPrompt,
+  type AiIntent,
 } from "./ai-prompts"
 import {
+  __overridePromptsForTests,
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { validatePromptBody } from "@/lib/prompts/template"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 
 describe("buildAiSystemPrompt", () => {
   it("returns a non-empty editor framing prompt", async () => {
@@ -138,4 +142,76 @@ describe("authoring prompts (ADR-0236)", () => {
       "Deploy: Halve the length.\nRun it."
     )
   })
+})
+
+/** A contract-valid override body, unique to the slot. */
+function sentinelBody(def: PromptDefinitionV1): string {
+  return [
+    `SENTINEL-${def.id}`,
+    ...def.variables.filter((spec) => spec.required).map((spec) => `{{${spec.name}}}`),
+    ...def.requiredFragments,
+  ].join(" ")
+}
+
+/** The longest literal line of the shipped body, placeholders cut out. */
+function shippedSnippet(def: PromptDefinitionV1): string {
+  return def.defaultBody
+    .split(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}|\n/)
+    .map((part) => part.trim())
+    .reduce((longest, part) => (part.length > longest.length ? part : longest), "")
+}
+
+describe("authoring overrides reach the rewrite request (ADR-0236)", () => {
+  afterEach(() => {
+    __setPromptOverrideSnapshotForTests(null)
+    __resetPromptVerdictsForTests()
+  })
+
+  const input = {
+    name: "Deploy",
+    description: "Ship it",
+    content: "Run the deploy script.",
+    validationErrors: [{ code: "missing-name" as const, message: "Name is required." }],
+  }
+
+  it.each(Object.entries(SKILL_AI_INTENT_PROMPTS) as [AiIntent, PromptDefinitionV1][])(
+    "sends the published %s instruction instead of the shipped one",
+    async (intent, def) => {
+      // Without an override the request carries this intent's shipped text.
+      __overridePromptsForTests([])
+      const snippet = shippedSnippet(def)
+      expect(await buildAiUserPrompt(intent, input)).toContain(snippet)
+
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+      const sent = await buildAiUserPrompt(intent, input)
+      expect(sent).toContain(`SENTINEL-${def.id}`)
+      expect(sent).not.toContain(snippet)
+    }
+  )
+
+  // The framing and the request layout around the instruction.
+  it.each([
+    [SKILL_AI_SYSTEM_PROMPT.id, SKILL_AI_SYSTEM_PROMPT, () => buildAiSystemPrompt()],
+    [
+      SKILL_AI_REQUEST_PROMPT.id,
+      SKILL_AI_REQUEST_PROMPT,
+      () => buildAiUserPrompt("optimize", input),
+    ],
+  ] as const)(
+    "sends the published %s override instead of the shipped text",
+    async (_id, def, send) => {
+      __overridePromptsForTests([])
+      const snippet = shippedSnippet(def)
+      expect(await send()).toContain(snippet)
+
+      const body = sentinelBody(def)
+      expect(validatePromptBody(def, body)).toEqual([])
+      __overridePromptsForTests([[def, body]])
+      const sent = await send()
+      expect(sent).toContain(`SENTINEL-${def.id}`)
+      expect(sent).not.toContain(snippet)
+    }
+  )
 })

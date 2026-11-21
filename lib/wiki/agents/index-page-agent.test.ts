@@ -10,6 +10,12 @@ import {
   type ArticleSummary,
 } from "./index-page-agent"
 import type { LlmClient } from "@/lib/twin/distill/llm"
+import { WIKI_SYSTEM_VOICE_PROMPT } from "../prompts"
+import {
+  __overridePromptsForTests,
+  __setPromptOverrideSnapshotForTests,
+} from "@/lib/prompts/snapshot"
+import { validatePromptBody } from "@/lib/prompts/template"
 
 const ARTICLES: ArticleSummary[] = [
   { slug: "lib-twin", module: "lib/twin", summary: "twin runtime", pageRank: 0.9 },
@@ -92,5 +98,27 @@ describe("internal helpers", () => {
 
   it("MAX_OUTPUT_TOKENS is exposed", () => {
     expect(__TESTING__.MAX_OUTPUT_TOKENS).toBeGreaterThan(500)
+  })
+})
+
+describe("runIndexPageAgent (published wiki voice reaches the model, ADR-0236)", () => {
+  afterEach(() => __setPromptOverrideSnapshotForTests(null))
+
+  it("sends the published knowledge.wiki.voice system prompt, not the shipped one", async () => {
+    const def = WIKI_SYSTEM_VOICE_PROMPT
+    const body = "SENTINEL-knowledge.wiki.voice-index-page Write terse Markdown for agents."
+    expect(validatePromptBody(def, body)).toEqual([])
+    __overridePromptsForTests([[def, body]])
+
+    let seenSystem = ""
+    const llm: LlmClient = {
+      async complete(_prompt, options) {
+        seenSystem = options?.system ?? ""
+        return SAMPLE_INDEX
+      },
+    }
+    await runIndexPageAgent({ llm }, ARTICLES)
+    expect(seenSystem).toContain("SENTINEL-knowledge.wiki.voice-index-page")
+    expect(seenSystem).not.toContain(def.defaultBody.slice(0, 80))
   })
 })
