@@ -11,9 +11,45 @@
 //! per-call work is then a cheap in-memory prefix filter.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+/// Append standard system and user CLI install directories that GUI-launched
+/// processes (macOS `launchd`, Linux desktop sessions) frequently omit from
+/// their inherited `PATH` so command completion matches interactive shells (T08).
+pub fn augmented_user_path(raw_path: &str) -> String {
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(raw_path)
+        .filter(|d| !d.as_os_str().is_empty())
+        .collect();
+    let mut push_if_exists = |candidate: PathBuf| {
+        if !candidate.as_os_str().is_empty() && !dirs.contains(&candidate) && candidate.is_dir() {
+            dirs.push(candidate);
+        }
+    };
+    #[cfg(not(windows))]
+    {
+        for sys in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"] {
+            push_if_exists(PathBuf::from(sys));
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        for rel in [
+            ".cargo/bin",
+            ".local/bin",
+            ".bun/bin",
+            ".deno/bin",
+            "Library/pnpm",
+            ".local/share/pnpm",
+        ] {
+            push_if_exists(home.join(rel));
+        }
+    }
+    std::env::join_paths(dirs)
+        .ok()
+        .and_then(|joined| joined.into_string().ok())
+        .unwrap_or_else(|| raw_path.to_string())
+}
 
 /// Hard ceiling regardless of the caller-requested limit.
 const MAX_LIMIT: usize = 200;
@@ -148,7 +184,7 @@ pub fn terminal_list_path_executables(
 ) -> Result<cognia_problem::paging::Page<String>, String> {
     let page = cognia_problem::paging::PageRequest::from_parts(page_size, page_token.as_deref())
         .map_err(|error| error.to_string())?;
-    let path_value = std::env::var("PATH").unwrap_or_default();
+    let path_value = augmented_user_path(&std::env::var("PATH").unwrap_or_default());
     let all = list_path_executables_inner(
         &path_value,
         &prefix,

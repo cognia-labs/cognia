@@ -25,7 +25,7 @@ use crate::session::{
     SessionOrigin, SpawnRequest, TerminalEvent,
 };
 use crate::sftp::{SftpCall, SftpEntry, SftpError, SftpRegistry, SftpSessionInfo};
-use crate::ssh::{spawn_hosted_ssh, SshSpawnRequest};
+use crate::ssh::{spawn_hosted_ssh_with_updates, SshSpawnRequest};
 use crate::ssh_forward::ForwardStatus;
 
 pub const DEFAULT_MAX_SESSIONS: usize = 32;
@@ -562,6 +562,15 @@ impl CommandCapture {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SpawnRequestKey {
+    local: bool,
+    device_id: Option<String>,
+    request_id: String,
+}
+
+const MAX_RECENT_SPAWN_REQUESTS: usize = 256;
+
 struct HostState {
     clients: HashMap<Uuid, ClientRecord>,
     sessions: HashMap<String, HostedSession>,
@@ -582,6 +591,12 @@ struct HostState {
     /// profiles into it would erase the desktop user's on every sync. Per
     /// device, replace stays the right verb and cannot reach anyone else.
     device_profiles: HashMap<String, HashMap<String, SpawnRequest>>,
+    /// Cross-transport idempotency map for `Spawn` retries (T15): when a LAN
+    /// WebSocket creates a PTY and drops before its `SessionSnapshot` reply
+    /// reaches the client, the WebRTC fallback carrying the same `request_id`
+    /// reattaches to that session instead of spawning a duplicate process.
+    spawn_requests: HashMap<SpawnRequestKey, String>,
+    spawn_request_order: VecDeque<SpawnRequestKey>,
     audit: VecDeque<HostAuditEvent>,
 }
 
@@ -670,6 +685,8 @@ impl TerminalHost {
                     profiles: HashMap::new(),
                     ssh_profiles: HashMap::new(),
                     device_profiles: HashMap::new(),
+                    spawn_requests: HashMap::new(),
+                    spawn_request_order: VecDeque::new(),
                     audit: VecDeque::new(),
                 }),
                 sftp: SftpRegistry::new(),
@@ -679,6 +696,87 @@ impl TerminalHost {
 
     pub fn host_id(&self) -> &str {
         &self.inner.host_id
+    }
+
+    /// Reattach to an already-spawned session if this caller previously sent a
+    /// `Spawn` with the same `request_id` (for example over LAN WebSocket before
+    /// falling back to WebRTC after a lost ACK — T15).
+    pub fn claim_existing_spawn_request(
+        &self,
+        connection_id: &str,
+        request_id: &str,
+    ) -> Result<Option<HostSessionInfo>, HostError> {
+        let trimmed = request_id.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let connection = parse_connection_id(connection_id)?;
+        let identity = self.identity(connection)?;
+        let key = SpawnRequestKey {
+            local: identity.local,
+            device_id: identity.device_id.clone(),
+            request_id: trimmed.to_owned(),
+        };
+        let existing_id = {
+            let mut state = self.inner.state.lock();
+            let Some(session_id) = state.spawn_requests.get(&key).cloned() else {
+                return Ok(None);
+            };
+            let Some(session) = state.sessions.get_mut(&session_id) else {
+                state.spawn_requests.remove(&key);
+                return Ok(None);
+            };
+            // Transfer the controller lease from the abandoned stream of this
+            // same client identity even if the old TCP/WS half-close has not
+            // completed yet.
+            let should_claim_controller = match session.controller.as_ref() {
+                None => true,
+                Some(controller) => {
+                    controller.client_id == identity.client_id
+                        || controller.disconnected_at.is_some()
+                }
+            };
+            if should_claim_controller {
+                session.controller = Some(ControllerLease {
+                    connection_id: connection,
+                    client_id: identity.client_id.clone(),
+                    disconnected_at: None,
+                });
+            }
+            session_id
+        };
+        self.attach(connection_id, &existing_id, 0).map(Some)
+    }
+
+    /// Record the session created for `request_id` under the caller's device scope.
+    pub fn record_spawn_request(
+        &self,
+        connection_id: &str,
+        request_id: &str,
+        session_id: &str,
+    ) -> Result<(), HostError> {
+        let trimmed = request_id.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let connection = parse_connection_id(connection_id)?;
+        let identity = self.identity(connection)?;
+        let key = SpawnRequestKey {
+            local: identity.local,
+            device_id: identity.device_id,
+            request_id: trimmed.to_owned(),
+        };
+        let mut state = self.inner.state.lock();
+        if !state.spawn_requests.contains_key(&key) {
+            while state.spawn_request_order.len() >= MAX_RECENT_SPAWN_REQUESTS {
+                if let Some(evicted) = state.spawn_request_order.pop_front() {
+                    state.spawn_requests.remove(&evicted);
+                }
+            }
+            state.spawn_request_order.push_back(key.clone());
+        }
+        state.spawn_requests.insert(key, session_id.to_owned());
+        Ok(())
     }
 
     pub fn update_config(
@@ -1026,21 +1124,57 @@ impl TerminalHost {
         let session_id = Uuid::new_v4().to_string();
         let replay_bytes_per_session = self.inner.config.lock().replay_bytes_per_session;
         let replay = Arc::new(ReplayBuffer::durable(replay_bytes_per_session));
+        let first_integration_event = Arc::new(OnceLock::new());
+        let current_readiness_event = Arc::new(Mutex::new(Arc::clone(&first_integration_event)));
+        let sink_readiness_event = Arc::clone(&current_readiness_event);
         let weak = Arc::downgrade(&self.inner);
         let callback_session_id = session_id.clone();
         let sink: EventSink = Arc::new(move |sequence, event| {
+            if matches!(event, TerminalEvent::Integration { .. }) {
+                sink_readiness_event.lock().get_or_init(Instant::now);
+            }
             if let Some(inner) = weak.upgrade() {
                 publish_terminal_event(&inner, &callback_session_id, sequence, event);
             }
         });
-        let hosted = spawn_hosted_ssh(
+        let weak_caps = Arc::downgrade(&self.inner);
+        let caps_session_id = session_id.clone();
+        let caps_readiness_slot = Arc::clone(&current_readiness_event);
+        let on_capabilities_changed =
+            Arc::new(move |enabled: bool, degraded_reason: Option<String>| {
+                let fresh_event = Arc::new(OnceLock::new());
+                *caps_readiness_slot.lock() = Arc::clone(&fresh_event);
+                if let Some(inner) = weak_caps.upgrade() {
+                    {
+                        let mut state = inner.state.lock();
+                        if let Some(session) = state.sessions.get_mut(&caps_session_id) {
+                            session.capabilities = IntegrationCapabilities {
+                                osc633: enabled,
+                                command_status: enabled,
+                                cwd_tracking: enabled,
+                                degraded_reason,
+                            };
+                            session.integration_readiness =
+                                enabled.then(|| IntegrationReadiness::new(fresh_event));
+                        } else {
+                            return;
+                        }
+                    }
+                    broadcast_participants(&inner, &caps_session_id);
+                }
+            });
+        let hosted = spawn_hosted_ssh_with_updates(
             request.clone(),
             known_hosts_path.to_path_buf(),
             replay,
             sink,
+            Some(on_capabilities_changed),
         )
         .await
         .map_err(HostError::Process)?;
+        let readiness = hosted
+            .integration_enabled
+            .then(|| IntegrationReadiness::new(first_integration_event));
         let process: Arc<dyn HostedTerminalProcess> = Arc::new(hosted.process);
         let result = self.register_process(
             connection,
@@ -1057,7 +1191,7 @@ impl TerminalHost {
                 cwd_tracking: hosted.integration_enabled,
                 degraded_reason: hosted.integration_degraded_reason.clone(),
             },
-            None,
+            readiness,
             Some(hosted.host_key_status),
             Some(hosted.host_key_fingerprint),
             Arc::clone(&process),

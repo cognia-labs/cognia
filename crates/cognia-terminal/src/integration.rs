@@ -145,11 +145,35 @@ pub fn build_with_profile(
     force_utf8: bool,
     skip_user_profile: bool,
 ) -> io::Result<IntegrationSetup> {
+    build_with_env(
+        kind,
+        script_dir,
+        nonce,
+        enable_integration,
+        force_utf8,
+        skip_user_profile,
+        None,
+    )
+}
+
+/// Full integration builder accepting optional caller-supplied environment
+/// overrides so Zsh's `ZDOTDIR` / `HOME` resolution honors per-profile env.
+pub fn build_with_env(
+    kind: ShellKind,
+    script_dir: &Path,
+    nonce: &str,
+    enable_integration: bool,
+    force_utf8: bool,
+    skip_user_profile: bool,
+    caller_env: Option<&HashMap<String, String>>,
+) -> io::Result<IntegrationSetup> {
     match kind {
         // POSIX shells: integration is the only reason to touch argv; when
         // disabled they spawn untouched (no codepage concept to fix).
         ShellKind::Bash if enable_integration => build_bash(script_dir, nonce),
-        ShellKind::Zsh if enable_integration => build_zsh(script_dir, nonce),
+        ShellKind::Zsh if enable_integration => {
+            build_zsh(script_dir, nonce, skip_user_profile, caller_env)
+        }
         ShellKind::Fish if enable_integration => build_fish(script_dir, nonce),
         ShellKind::Nu if enable_integration => build_nu(script_dir, nonce),
         ShellKind::Bash | ShellKind::Zsh | ShellKind::Fish | ShellKind::Nu => {
@@ -173,6 +197,51 @@ pub fn build_with_profile(
     }
 }
 
+/// Strip `-l` / `--login` from Bash's argv when `--rcfile` integration is active.
+///
+/// GNU Bash ignores `--rcfile` whenever launched as a login shell (`-l` /
+/// `--login`). Stripping the login flag while setting `COGNIA_BASH_LOGIN=1` lets
+/// `shell-integration.bash` source `/etc/profile` and `~/.bash_profile` /
+/// `~/.bash_login` / `~/.profile` in Bash's exact login order AND still install
+/// the OSC 633 prompt hooks (T07).
+pub fn normalize_shell_args(
+    kind: ShellKind,
+    args: &[String],
+    integration_active: bool,
+) -> (Vec<String>, bool) {
+    if kind != ShellKind::Bash || !integration_active {
+        return (args.to_vec(), false);
+    }
+    let mut out = Vec::with_capacity(args.len());
+    let mut login = false;
+    let mut passthrough = false;
+    for arg in args {
+        if passthrough {
+            out.push(arg.clone());
+            continue;
+        }
+        if arg == "--" || arg == "-c" {
+            passthrough = true;
+            out.push(arg.clone());
+            continue;
+        }
+        if arg == "--login" || arg == "-l" {
+            login = true;
+            continue;
+        }
+        if arg.starts_with('-') && !arg.starts_with("--") && arg.len() > 2 && arg.contains('l') {
+            let rest: String = arg[1..].chars().filter(|&c| c != 'l').collect();
+            login = true;
+            if !rest.is_empty() {
+                out.push(format!("-{rest}"));
+            }
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    (out, login)
+}
+
 fn build_bash(script_dir: &Path, nonce: &str) -> io::Result<IntegrationSetup> {
     let script = script_dir.join("shell-integration.bash");
     if !script.exists() {
@@ -191,35 +260,147 @@ fn build_bash(script_dir: &Path, nonce: &str) -> io::Result<IntegrationSetup> {
     })
 }
 
-fn build_zsh(script_dir: &Path, nonce: &str) -> io::Result<IntegrationSetup> {
+fn build_zsh(
+    script_dir: &Path,
+    nonce: &str,
+    skip_user_profile: bool,
+    caller_env: Option<&HashMap<String, String>>,
+) -> io::Result<IntegrationSetup> {
     let script = script_dir.join("shell-integration.zsh");
     if !script.exists() {
         return Ok(IntegrationSetup::empty());
     }
-    // zsh has no --rcfile. We create a temp ZDOTDIR containing a tiny
-    // .zshrc that re-sources the user's original config (via the
-    // exported USER_ZDOTDIR) and then sources our integration script.
+    // zsh has no `--rcfile`: it reads `.zshenv`, `.zprofile` (login), `.zshrc`
+    // (interactive), and `.zlogin` (login) from `$ZDOTDIR`. Write shims for all
+    // four files so neither `.zshenv` nor login `.zprofile`/`.zlogin` are
+    // skipped, and restore/unset `ZDOTDIR` once startup finishes (T07).
     let tempdir = std::env::temp_dir().join(format!("cognia-zdot-{nonce}"));
     fs::create_dir_all(&tempdir)?;
-    let zshrc = tempdir.join(".zshrc");
-    let script_str = script.to_string_lossy();
-    let body = format!(
-        r#"# Cognia zsh integration ZDOTDIR shim — auto-generated, do not edit
-if [[ -n "$USER_ZDOTDIR" && -f "$USER_ZDOTDIR/.zshrc" ]]; then
-  ZDOTDIR="$USER_ZDOTDIR" source "$USER_ZDOTDIR/.zshrc"
+    let script_escaped = script.to_string_lossy().replace('\'', "'\\''");
+
+    let zshenv_body = if skip_user_profile {
+        "# Cognia headless zsh .zshenv shim\n".to_string()
+    } else {
+        r#"# Cognia zsh integration .zshenv shim — auto-generated, do not edit
+typeset __cognia_shim_zdotdir="$ZDOTDIR"
+if [[ -n "$COGNIA_HAD_ZDOTDIR" ]]; then
+  export ZDOTDIR="$USER_ZDOTDIR"
+else
+  unset ZDOTDIR
 fi
-source "{script}"
+if [[ -n "$USER_ZDOTDIR" && -f "$USER_ZDOTDIR/.zshenv" ]]; then
+  builtin source "$USER_ZDOTDIR/.zshenv"
+fi
+if [[ -n "${ZDOTDIR:-}" && "$ZDOTDIR" != "$__cognia_shim_zdotdir" ]]; then
+  export USER_ZDOTDIR="$ZDOTDIR"
+  export COGNIA_HAD_ZDOTDIR=1
+fi
+ZDOTDIR="$__cognia_shim_zdotdir"
+unset __cognia_shim_zdotdir
+"#
+        .to_string()
+    };
+    fs::write(tempdir.join(".zshenv"), zshenv_body)?;
+
+    let zprofile_body = if skip_user_profile {
+        "# Cognia headless zsh .zprofile shim\n".to_string()
+    } else {
+        r#"# Cognia zsh integration .zprofile shim — auto-generated, do not edit
+typeset __cognia_shim_zdotdir="$ZDOTDIR"
+if [[ -n "$COGNIA_HAD_ZDOTDIR" ]]; then
+  export ZDOTDIR="$USER_ZDOTDIR"
+else
+  unset ZDOTDIR
+fi
+if [[ -n "$USER_ZDOTDIR" && -f "$USER_ZDOTDIR/.zprofile" ]]; then
+  builtin source "$USER_ZDOTDIR/.zprofile"
+fi
+if [[ -n "${ZDOTDIR:-}" && "$ZDOTDIR" != "$__cognia_shim_zdotdir" ]]; then
+  export USER_ZDOTDIR="$ZDOTDIR"
+  export COGNIA_HAD_ZDOTDIR=1
+fi
+ZDOTDIR="$__cognia_shim_zdotdir"
+unset __cognia_shim_zdotdir
+"#
+        .to_string()
+    };
+    fs::write(tempdir.join(".zprofile"), zprofile_body)?;
+
+    let zshrc_user_block = if skip_user_profile {
+        ""
+    } else {
+        r#"if [[ -z "$COGNIA_TERM_HEADLESS" && -n "$USER_ZDOTDIR" && -f "$USER_ZDOTDIR/.zshrc" ]]; then
+  builtin source "$USER_ZDOTDIR/.zshrc"
+fi
+if [[ -n "${ZDOTDIR:-}" && "$ZDOTDIR" != "$__cognia_shim_zdotdir" ]]; then
+  export USER_ZDOTDIR="$ZDOTDIR"
+  export COGNIA_HAD_ZDOTDIR=1
+fi
+"#
+    };
+    let zshrc_body = format!(
+        r#"# Cognia zsh integration .zshrc shim — auto-generated, do not edit
+typeset __cognia_shim_zdotdir="$ZDOTDIR"
+if [[ -n "$COGNIA_HAD_ZDOTDIR" ]]; then
+  export ZDOTDIR="$USER_ZDOTDIR"
+else
+  unset ZDOTDIR
+fi
+{user_block}builtin source '{script}'
+if [[ -o login ]]; then
+  ZDOTDIR="$__cognia_shim_zdotdir"
+else
+  if [[ -n "$COGNIA_HAD_ZDOTDIR" ]]; then
+    export ZDOTDIR="$USER_ZDOTDIR"
+  else
+    unset ZDOTDIR
+  fi
+  unset USER_ZDOTDIR COGNIA_HAD_ZDOTDIR
+fi
+unset __cognia_shim_zdotdir
 "#,
-        script = script_str
+        user_block = zshrc_user_block,
+        script = script_escaped,
     );
-    fs::write(&zshrc, body)?;
+    fs::write(tempdir.join(".zshrc"), zshrc_body)?;
+
+    let zlogin_body = if skip_user_profile {
+        r#"# Cognia headless zsh .zlogin shim
+unset ZDOTDIR USER_ZDOTDIR COGNIA_HAD_ZDOTDIR
+"#
+        .to_string()
+    } else {
+        r#"# Cognia zsh integration .zlogin shim — auto-generated, do not edit
+if [[ -n "$COGNIA_HAD_ZDOTDIR" ]]; then
+  export ZDOTDIR="$USER_ZDOTDIR"
+else
+  unset ZDOTDIR
+fi
+if [[ -z "$COGNIA_TERM_HEADLESS" && -n "$USER_ZDOTDIR" && -f "$USER_ZDOTDIR/.zlogin" ]]; then
+  builtin source "$USER_ZDOTDIR/.zlogin"
+fi
+unset USER_ZDOTDIR COGNIA_HAD_ZDOTDIR
+"#
+        .to_string()
+    };
+    fs::write(tempdir.join(".zlogin"), zlogin_body)?;
 
     let mut env = HashMap::new();
     env.insert("COGNIA_TERM_NONCE".to_string(), nonce.to_string());
-    // Preserve the user's ZDOTDIR (if any) so the shim above can resource it.
-    if let Ok(prior) = std::env::var("ZDOTDIR") {
+    let explicit_zdotdir = caller_env
+        .and_then(|map| map.get("ZDOTDIR"))
+        .filter(|v| !v.is_empty())
+        .cloned()
+        .or_else(|| std::env::var("ZDOTDIR").ok().filter(|v| !v.is_empty()));
+    if let Some(prior) = explicit_zdotdir {
         env.insert("USER_ZDOTDIR".to_string(), prior);
-    } else if let Ok(home) = std::env::var("HOME") {
+        env.insert("COGNIA_HAD_ZDOTDIR".to_string(), "1".to_string());
+    } else if let Some(home) = caller_env
+        .and_then(|map| map.get("HOME"))
+        .filter(|v| !v.is_empty())
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok().filter(|v| !v.is_empty()))
+    {
         env.insert("USER_ZDOTDIR".to_string(), home);
     }
     env.insert(
@@ -561,16 +742,56 @@ mod tests {
         let _ = fs::create_dir_all(&tempdir);
         let script = tempdir.join("shell-integration.zsh");
         fs::write(&script, "# stub").unwrap();
-        let setup = build(ShellKind::Zsh, &tempdir, "zsh-nonce", true, true).unwrap();
-        let zdot = setup.env_overrides.get("ZDOTDIR").expect("ZDOTDIR set");
-        let shim_path = PathBuf::from(zdot).join(".zshrc");
-        let shim = fs::read_to_string(&shim_path).unwrap();
+        let mut custom_env = HashMap::new();
+        custom_env.insert("ZDOTDIR".into(), "/custom/zdot".into());
+        let setup = build_with_env(
+            ShellKind::Zsh,
+            &tempdir,
+            "zsh-nonce",
+            true,
+            true,
+            false,
+            Some(&custom_env),
+        )
+        .unwrap();
+        let zdot = PathBuf::from(setup.env_overrides.get("ZDOTDIR").expect("ZDOTDIR set"));
+        assert_eq!(
+            setup.env_overrides.get("USER_ZDOTDIR").map(String::as_str),
+            Some("/custom/zdot")
+        );
+        assert_eq!(
+            setup
+                .env_overrides
+                .get("COGNIA_HAD_ZDOTDIR")
+                .map(String::as_str),
+            Some("1")
+        );
+        for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] {
+            assert!(zdot.join(name).is_file(), "missing {name}");
+        }
+        let shim = fs::read_to_string(zdot.join(".zshrc")).unwrap();
         assert!(shim.contains("USER_ZDOTDIR"));
         assert!(shim.contains("shell-integration.zsh"));
         assert!(setup.tempdir.is_some());
         // Cleanup
         let _ = fs::remove_dir_all(setup.tempdir.unwrap());
         let _ = fs::remove_file(script);
+    }
+
+    #[test]
+    fn normalize_shell_args_strips_bash_login_flags_when_integrated() {
+        let (args, login) = normalize_shell_args(
+            ShellKind::Bash,
+            &["--login".into(), "-li".into(), "--".into(), "-l".into()],
+            true,
+        );
+        assert!(login);
+        assert_eq!(args, vec!["-i", "--", "-l"]);
+
+        let (untouched, disabled_login) =
+            normalize_shell_args(ShellKind::Bash, &["--login".into()], false);
+        assert!(!disabled_login);
+        assert_eq!(untouched, vec!["--login"]);
     }
 
     #[test]

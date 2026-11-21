@@ -1672,25 +1672,65 @@ async fn handle_session_command(
     }
 }
 
+/// Drain queued input commands (`Write`) that were typed before or during a
+/// disconnect so they are never replayed into a freshly opened remote shell on
+/// reconnect; `Resize` is coalesced to the latest geometry and `Kill` aborts (T11).
+fn discard_queued_writes(
+    commands: &mut mpsc::Receiver<SessionCommand>,
+    pending: &mut VecDeque<SessionCommand>,
+) -> (bool, bool) {
+    let mut dropped_writes = false;
+    let mut latest_resize: Option<(u16, u16)> = None;
+    while let Some(cmd) = pending.pop_front() {
+        match cmd {
+            SessionCommand::Kill => return (true, dropped_writes),
+            SessionCommand::Write(_) => dropped_writes = true,
+            SessionCommand::Resize { rows, cols } => latest_resize = Some((rows, cols)),
+        }
+    }
+    loop {
+        match commands.try_recv() {
+            Ok(SessionCommand::Kill) => return (true, dropped_writes),
+            Ok(SessionCommand::Write(_)) => dropped_writes = true,
+            Ok(SessionCommand::Resize { rows, cols }) => latest_resize = Some((rows, cols)),
+            Err(mpsc::error::TryRecvError::Empty) => break,
+            Err(mpsc::error::TryRecvError::Disconnected) => return (true, dropped_writes),
+        }
+    }
+    if let Some((rows, cols)) = latest_resize {
+        pending.push_back(SessionCommand::Resize { rows, cols });
+    }
+    (false, dropped_writes)
+}
+
 async fn wait_before_reconnect(
     delay: Duration,
     commands: &mut mpsc::Receiver<SessionCommand>,
     pending: &mut VecDeque<SessionCommand>,
-) -> bool {
+) -> (bool, bool) {
     let sleep = tokio::time::sleep(delay);
     tokio::pin!(sleep);
+    let mut dropped_writes = false;
     loop {
         tokio::select! {
-            _ = &mut sleep => return false,
+            _ = &mut sleep => return (false, dropped_writes),
             command = commands.recv() => {
                 match command {
-                    Some(SessionCommand::Kill) | None => return true,
-                    Some(command) => pending.push_back(command),
+                    Some(SessionCommand::Kill) | None => return (true, dropped_writes),
+                    Some(SessionCommand::Write(_)) => {
+                        dropped_writes = true;
+                    }
+                    Some(SessionCommand::Resize { rows, cols }) => {
+                        pending.retain(|item| !matches!(item, SessionCommand::Resize { .. }));
+                        pending.push_back(SessionCommand::Resize { rows, cols });
+                    }
                 }
             }
         }
     }
 }
+
+pub type SshCapabilitiesCallback = Arc<dyn Fn(bool, Option<String>) + Send + Sync + 'static>;
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ssh_session(
@@ -1724,10 +1764,15 @@ async fn run_ssh_session(
             ConnectionEnd::Killed => break None,
             ConnectionEnd::Normal(code) => break code,
             ConnectionEnd::Lost => {
+                let (killed_immediately, mut dropped_writes) =
+                    discard_queued_writes(&mut commands, &mut pending);
+                if killed_immediately {
+                    break None;
+                }
                 emit_notice(
                     &output.replay,
                     &output.sink,
-                    "[SSH connection lost; reconnecting]",
+                    "[SSH connection lost; reconnecting to a new remote shell — running processes on the previous connection were detached]",
                 );
                 // Park the tunnels before the first retry: local listeners stay
                 // bound and queue their callers, remote forwards are gone until
@@ -1736,7 +1781,10 @@ async fn run_ssh_session(
                 forwards.connection_lost();
                 let mut reconnected = None;
                 for (attempt, delay) in RECONNECT_DELAYS.into_iter().enumerate() {
-                    if wait_before_reconnect(delay, &mut commands, &mut pending).await {
+                    let (killed, dropped_during_wait) =
+                        wait_before_reconnect(delay, &mut commands, &mut pending).await;
+                    dropped_writes |= dropped_during_wait;
+                    if killed {
                         output.alive.store(false, Ordering::Release);
                         emit_event(
                             &output.replay,
@@ -1755,12 +1803,39 @@ async fn run_ssh_session(
                     .await
                     {
                         Ok((next, _, integration)) => {
+                            let (killed_after_connect, dropped_after_connect) =
+                                discard_queued_writes(&mut commands, &mut pending);
+                            dropped_writes |= dropped_after_connect;
+                            if killed_after_connect {
+                                let _ = next
+                                    .handle
+                                    .disconnect(Disconnect::ByApplication, "closed by user", "en")
+                                    .await;
+                                output.alive.store(false, Ordering::Release);
+                                emit_event(
+                                    &output.replay,
+                                    &output.sink,
+                                    TerminalEvent::Exit { code: None },
+                                );
+                                return;
+                            }
                             parser = integration
                                 .enabled
                                 .then(|| Osc633Parser::new(integration_nonce.clone()));
+                            if let Some(on_capabilities) = output.on_capabilities_changed.as_ref() {
+                                on_capabilities(
+                                    integration.enabled,
+                                    integration.degraded_reason.clone(),
+                                );
+                            }
                             let _ = connection_tx.send(Some(Arc::clone(&next.handle)));
                             reconnected = Some(next);
-                            emit_notice(&output.replay, &output.sink, "[SSH reconnected]");
+                            let reconnect_msg = if dropped_writes {
+                                "[SSH reconnected: opened a new remote shell (buffered input typed while disconnected was discarded)]"
+                            } else {
+                                "[SSH reconnected: opened a new remote shell]"
+                            };
+                            emit_notice(&output.replay, &output.sink, reconnect_msg);
                             break;
                         }
                         Err(error) if attempt + 1 < RECONNECT_DELAYS.len() => {
@@ -1804,6 +1879,7 @@ struct SshSessionOutput {
     sink: EventSink,
     replay: Arc<ReplayBuffer>,
     alive: Arc<AtomicBool>,
+    on_capabilities_changed: Option<SshCapabilitiesCallback>,
 }
 
 pub struct HostedSshSpawn {
@@ -1822,6 +1898,16 @@ pub async fn spawn_hosted_ssh(
     known_hosts_path: PathBuf,
     replay: Arc<ReplayBuffer>,
     sink: EventSink,
+) -> Result<HostedSshSpawn, String> {
+    spawn_hosted_ssh_with_updates(req, known_hosts_path, replay, sink, None).await
+}
+
+pub async fn spawn_hosted_ssh_with_updates(
+    req: SshSpawnRequest,
+    known_hosts_path: PathBuf,
+    replay: Arc<ReplayBuffer>,
+    sink: EventSink,
+    on_capabilities_changed: Option<SshCapabilitiesCallback>,
 ) -> Result<HostedSshSpawn, String> {
     req.validate()?;
     let credential_request = req.clone();
@@ -1878,6 +1964,7 @@ pub async fn spawn_hosted_ssh(
             sink,
             replay,
             alive,
+            on_capabilities_changed,
         },
         integration_nonce,
         integration.enabled,
@@ -2607,11 +2694,12 @@ mod tests {
     use russh::keys::{parse_public_key_base64, ssh_key};
 
     use super::{
-        classify_remote_shell, forget_host_key, learn_known_hosts_path, load_stored_credential,
-        open_hosted_exec, parse_stored_credential, spawn_hosted_ssh, ssh_integration_command,
-        verify_or_learn_host_key, Arc, ForwardStatus, HostKeyChange, HostKeyStatus, HostKeyVerdict,
-        HostedSshExec, HostedSshSpawn, HostedTerminalProcess, LocalForward, PathBuf, ShellKind,
-        SshAuthMethod, SshExecError, SshJumpHop, SshSpawnRequest, SshTerminalSession,
+        classify_remote_shell, discard_queued_writes, forget_host_key, learn_known_hosts_path,
+        load_stored_credential, mpsc, open_hosted_exec, parse_stored_credential, spawn_hosted_ssh,
+        ssh_integration_command, verify_or_learn_host_key, wait_before_reconnect, Arc,
+        ForwardStatus, HostKeyChange, HostKeyStatus, HostKeyVerdict, HostedSshExec, HostedSshSpawn,
+        HostedTerminalProcess, LocalForward, PathBuf, SessionCommand, ShellKind, SshAuthMethod,
+        SshExecError, SshJumpHop, SshSpawnRequest, SshTerminalSession, VecDeque,
         HOST_KEY_CHANGED_CODE, MAX_JUMP_DEPTH,
     };
 
@@ -3657,5 +3745,64 @@ mod tests {
             Ok(_) => panic!("a server that never completes key exchange cannot be dialled"),
             Err(error) => assert!(error.contains("failed"), "{error}"),
         }
+    }
+
+    #[tokio::test]
+    async fn reconnect_barriers_discard_queued_writes_and_coalesce_resize() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut pending = VecDeque::from([
+            SessionCommand::Write(b"rm -rf stale\n".to_vec()),
+            SessionCommand::Resize { rows: 24, cols: 80 },
+        ]);
+        tx.send(SessionCommand::Write(b"queued\n".to_vec()))
+            .await
+            .unwrap();
+        tx.send(SessionCommand::Resize {
+            rows: 40,
+            cols: 120,
+        })
+        .await
+        .unwrap();
+
+        let (killed, dropped) = discard_queued_writes(&mut rx, &mut pending);
+        assert!(!killed);
+        assert!(dropped, "pre-disconnect writes must be reported as dropped");
+        assert_eq!(pending.len(), 1);
+        assert!(matches!(
+            pending.front(),
+            Some(SessionCommand::Resize {
+                rows: 40,
+                cols: 120
+            })
+        ));
+
+        let wait_sender = tx.clone();
+        tokio::spawn(async move {
+            let _ = wait_sender
+                .send(SessionCommand::Write(b"during-backoff\n".to_vec()))
+                .await;
+            let _ = wait_sender
+                .send(SessionCommand::Resize {
+                    rows: 52,
+                    cols: 160,
+                })
+                .await;
+        });
+
+        let (killed_in_wait, dropped_in_wait) =
+            wait_before_reconnect(StdDuration::from_millis(40), &mut rx, &mut pending).await;
+        assert!(!killed_in_wait);
+        assert!(
+            dropped_in_wait,
+            "writes typed during reconnect backoff must not survive into the new shell"
+        );
+        assert_eq!(pending.len(), 1);
+        assert!(matches!(
+            pending.front(),
+            Some(SessionCommand::Resize {
+                rows: 52,
+                cols: 160
+            })
+        ));
     }
 }

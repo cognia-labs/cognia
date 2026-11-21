@@ -103,7 +103,9 @@ pub(super) async fn dispatch(
             let prefix: String = required(&args, "prefix")?;
             let page = page_request(&args)?;
             tokio::task::spawn_blocking(move || {
-                let path_value = std::env::var("PATH").unwrap_or_default();
+                let path_value = cognia_terminal::path_scan::augmented_user_path(
+                    &std::env::var("PATH").unwrap_or_default(),
+                );
                 let all = cognia_terminal::path_scan::list_path_executables_inner(
                     &path_value,
                     &prefix,
@@ -117,6 +119,7 @@ pub(super) async fn dispatch(
             .and_then(to_json)
         }
         "terminal_kill_port" => {
+            ensure_terminal_rpc_authorized(device_id).await?;
             let port: u16 = required(&args, "port")?;
             // netstat/lsof + kill shell out — keep them off the async runtime.
             tokio::task::spawn_blocking(move || cognia_terminal::commands::terminal_kill_port(port))

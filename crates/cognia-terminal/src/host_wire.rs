@@ -24,6 +24,8 @@ const MAX_WIRE_FRAME: usize = HEADER_LEN + MAX_FRAME_PAYLOAD;
 #[serde(rename_all = "camelCase")]
 struct SpawnPayload {
     profile_id: String,
+    #[serde(default)]
+    request_id: Option<String>,
     request: Option<SpawnRequest>,
     ssh_request: Option<SshSpawnRequest>,
     workspace_env: Option<crate::session::WorkspaceEnvResolution>,
@@ -89,6 +91,7 @@ const PROTOCOL_FEATURES: &[&str] = &[
     "history",
     "sshForwarding",
     "workspaceEnvBridge",
+    "idempotentSpawn",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -363,6 +366,21 @@ async fn dispatch_workspace_spawn<S: AsyncRead + AsyncWrite + Unpin>(
     let session_id = frame.session_id;
     let failure = |error| (sequence, session_id, error);
     let payload = parse_json::<SpawnPayload>(&frame.payload).map_err(failure)?;
+    if let Some(request_id) = payload.request_id.as_deref() {
+        if let Some(existing) = host
+            .claim_existing_spawn_request(connection_id, request_id)
+            .map_err(failure)?
+        {
+            let response = json_frame(
+                FrameKind::SessionSnapshot,
+                Uuid::parse_str(&existing.id).unwrap_or(Uuid::nil()),
+                sequence,
+                &existing,
+            )
+            .map_err(|reason| failure(HostError::InvalidRequest(reason)))?;
+            return Ok(vec![response]);
+        }
+    }
     if payload.request.is_some() || payload.ssh_request.is_some() || payload.workspace_env.is_some()
     {
         return dispatch_command(host, connection_id, frame, script_dir, known_hosts_path).await;
@@ -413,6 +431,7 @@ async fn dispatch_workspace_spawn<S: AsyncRead + AsyncWrite + Unpin>(
     let spawn_host = host.clone();
     let spawn_connection = connection_id.to_owned();
     let spawn_scripts = script_dir.to_owned();
+    let request_id = payload.request_id.clone();
     let session = tokio::task::spawn_blocking(move || {
         spawn_host.spawn_resolved_remote_profile(
             &spawn_connection,
@@ -428,6 +447,9 @@ async fn dispatch_workspace_spawn<S: AsyncRead + AsyncWrite + Unpin>(
         )))
     })?
     .map_err(failure)?;
+    if let Some(request_id) = request_id.as_deref() {
+        let _ = host.record_spawn_request(connection_id, request_id, &session.id);
+    }
     let response = json_frame(
         FrameKind::SessionSnapshot,
         Uuid::parse_str(&session.id).unwrap_or(Uuid::nil()),
@@ -520,31 +542,58 @@ async fn dispatch_command(
             .map_err(HostError::InvalidRequest)
         }),
         FrameKind::Spawn => match parse_json::<SpawnPayload>(&frame.payload) {
-            Ok(payload) => match (payload.request, payload.ssh_request) {
-                (Some(request), None) => {
-                    let host = host.clone();
-                    let connection_id = connection_id.to_owned();
-                    let script_dir = script_dir.to_owned();
-                    tokio::task::spawn_blocking(move || {
-                        host.spawn_local_with_workspace_env(
-                            &connection_id,
-                            payload.profile_id,
-                            request,
-                            &script_dir,
-                            payload.workspace_env,
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|error| {
-                        Err(HostError::Process(format!(
-                            "terminal spawn task failed: {error}"
-                        )))
-                    })
-                }
-                (None, Some(request)) => {
-                    match host.sync_ssh_profile(connection_id, payload.profile_id.clone(), request)
-                    {
-                        Ok(()) => {
+            Ok(payload) => {
+                let request_id = payload.request_id.clone();
+                let existing = match request_id.as_deref() {
+                    Some(req_id) => host.claim_existing_spawn_request(connection_id, req_id),
+                    None => Ok(None),
+                };
+                match existing {
+                    Ok(Some(session)) => Ok(session),
+                    Err(error) => Err(error),
+                    Ok(None) => match (payload.request, payload.ssh_request) {
+                        (Some(request), None) => {
+                            let host = host.clone();
+                            let connection_id = connection_id.to_owned();
+                            let script_dir = script_dir.to_owned();
+                            tokio::task::spawn_blocking(move || {
+                                host.spawn_local_with_workspace_env(
+                                    &connection_id,
+                                    payload.profile_id,
+                                    request,
+                                    &script_dir,
+                                    payload.workspace_env,
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|error| {
+                                Err(HostError::Process(format!(
+                                    "terminal spawn task failed: {error}"
+                                )))
+                            })
+                        }
+                        (None, Some(request)) => {
+                            match host.sync_ssh_profile(
+                                connection_id,
+                                payload.profile_id.clone(),
+                                request,
+                            ) {
+                                Ok(()) => {
+                                    host.spawn_synchronized_profile(
+                                        connection_id,
+                                        payload.profile_id,
+                                        script_dir,
+                                        known_hosts_path,
+                                    )
+                                    .await
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        (None, None) if payload.workspace_env.is_some() => {
+                            Err(HostError::PermissionDenied)
+                        }
+                        (None, None) => {
                             host.spawn_synchronized_profile(
                                 connection_id,
                                 payload.profile_id,
@@ -553,32 +602,26 @@ async fn dispatch_command(
                             )
                             .await
                         }
-                        Err(error) => Err(error),
+                        (Some(_), Some(_)) => Err(HostError::InvalidRequest(
+                            "spawn accepts either a local PTY request or an SSH request".into(),
+                        )),
                     }
+                    .inspect(|session| {
+                        if let Some(req_id) = request_id.as_deref() {
+                            let _ = host.record_spawn_request(connection_id, req_id, &session.id);
+                        }
+                    }),
                 }
-                (None, None) if payload.workspace_env.is_some() => Err(HostError::PermissionDenied),
-                (None, None) => {
-                    host.spawn_synchronized_profile(
-                        connection_id,
-                        payload.profile_id,
-                        script_dir,
-                        known_hosts_path,
+                .and_then(|session| {
+                    json_frame(
+                        FrameKind::SessionSnapshot,
+                        Uuid::parse_str(&session.id).unwrap_or(Uuid::nil()),
+                        sequence,
+                        &session,
                     )
-                    .await
-                }
-                (Some(_), Some(_)) => Err(HostError::InvalidRequest(
-                    "spawn accepts either a local PTY request or an SSH request".into(),
-                )),
+                    .map_err(HostError::InvalidRequest)
+                })
             }
-            .and_then(|session| {
-                json_frame(
-                    FrameKind::SessionSnapshot,
-                    Uuid::parse_str(&session.id).unwrap_or(Uuid::nil()),
-                    sequence,
-                    &session,
-                )
-                .map_err(HostError::InvalidRequest)
-            }),
             Err(error) => Err(error),
         },
         FrameKind::Attach => parse_json::<AttachPayload>(&frame.payload).and_then(|payload| {
@@ -1243,7 +1286,8 @@ mod tests {
                 "flowControl",
                 "history",
                 "sshForwarding",
-                "workspaceEnvBridge"
+                "workspaceEnvBridge",
+                "idempotentSpawn"
             ])
         );
 
@@ -1563,5 +1607,115 @@ mod tests {
         assert_eq!(payload["closed"], 0);
         drop(client);
         serve.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn duplicate_spawn_request_id_reattaches_instead_of_spawning_second_pty() {
+        let host = TerminalHost::new("host-test", test_config()).unwrap();
+        let shell = host_capabilities().default_shell.clone();
+        let local_admin = host.connect(ClientIdentity::local("desktop")).unwrap();
+        host.replace_device_profiles(
+            &local_admin.connection_id,
+            "phone-a",
+            std::collections::HashMap::from([(
+                "launch-1".to_string(),
+                SpawnRequest {
+                    shell,
+                    args: Vec::new(),
+                    cwd: None,
+                    env: std::collections::HashMap::new(),
+                    rows: 24,
+                    cols: 80,
+                    project_id: None,
+                    extension_id: None,
+                    enable_shell_integration: false,
+                    force_utf8: true,
+                    origin: crate::session::SessionOrigin::Remote,
+                    skip_user_profile: false,
+                    sandboxed: false,
+                    sandbox_network: Some(true),
+                },
+            )]),
+        )
+        .unwrap();
+
+        let (mut client_ws, server_ws) = tokio::io::duplex(16 * 1024);
+        let serve_ws = tokio::spawn(serve_host_stream(
+            server_ws,
+            host.clone(),
+            ClientIdentity::remote("Phone A", "phone-a", true),
+            PathBuf::from("."),
+            PathBuf::from("known_hosts"),
+        ));
+
+        let spawn_payload = serde_json::to_vec(&serde_json::json!({
+            "profileId": "launch-1",
+            "requestId": "req-dedup-1",
+        }))
+        .unwrap();
+        write_frame(
+            &mut client_ws,
+            &TerminalFrame::command(FrameKind::Spawn, Uuid::nil(), 1, spawn_payload.clone()),
+        )
+        .await
+        .unwrap();
+        let first_resp = read_frame(&mut client_ws).await.unwrap().unwrap();
+        assert_eq!(first_resp.kind, FrameKind::SessionSnapshot);
+        let first_info: serde_json::Value = serde_json::from_slice(&first_resp.payload).unwrap();
+        let first_session_id = first_info["id"].as_str().unwrap().to_string();
+
+        // Simulate lost ACK / WebSocket drop before client processed the reply.
+        drop(client_ws);
+        serve_ws.await.unwrap().unwrap();
+
+        // Fallback transport (e.g. WebRTC) retries with the exact same `requestId`.
+        let (mut client_wan, server_wan) = tokio::io::duplex(16 * 1024);
+        let serve_wan = tokio::spawn(serve_host_stream(
+            server_wan,
+            host.clone(),
+            ClientIdentity::remote("Phone A", "phone-a", true),
+            PathBuf::from("."),
+            PathBuf::from("known_hosts"),
+        ));
+        write_frame(
+            &mut client_wan,
+            &TerminalFrame::command(FrameKind::Spawn, Uuid::nil(), 1, spawn_payload),
+        )
+        .await
+        .unwrap();
+        let second_resp = read_frame(&mut client_wan).await.unwrap().unwrap();
+        assert_eq!(second_resp.kind, FrameKind::SessionSnapshot);
+        let second_info: serde_json::Value = serde_json::from_slice(&second_resp.payload).unwrap();
+        assert_eq!(second_info["id"].as_str().unwrap(), first_session_id);
+        assert_eq!(second_info["currentController"], "Phone A");
+
+        write_frame(
+            &mut client_wan,
+            &TerminalFrame::command(FrameKind::List, Uuid::nil(), 2, Vec::new()),
+        )
+        .await
+        .unwrap();
+        let mut list_resp = read_frame(&mut client_wan).await.unwrap().unwrap();
+        while list_resp.kind != FrameKind::HostSnapshot {
+            list_resp = read_frame(&mut client_wan).await.unwrap().unwrap();
+        }
+        let snapshot: serde_json::Value = serde_json::from_slice(&list_resp.payload).unwrap();
+        assert_eq!(snapshot["sessions"].as_array().unwrap().len(), 1);
+
+        // Clean up the spawned PTY.
+        write_frame(
+            &mut client_wan,
+            &TerminalFrame::command(
+                FrameKind::Kill,
+                Uuid::parse_str(&first_session_id).unwrap(),
+                3,
+                Vec::new(),
+            ),
+        )
+        .await
+        .unwrap();
+        let _ = read_frame(&mut client_wan).await;
+        drop(client_wan);
+        let _ = serve_wan.await;
     }
 }

@@ -73,6 +73,8 @@
       "resources/terminal/shell-integration.bash",
       "resources/terminal/shell-integration.zsh",
       "resources/terminal/shell-integration.ps1",
+      "resources/terminal/shell-integration.fish",
+      "resources/terminal/shell-integration.nu",
       "resources/plugin-node/**/*",
       "resources/plugins/**/*",
       "resources/browser-runtime/**/*",

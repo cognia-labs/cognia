@@ -656,26 +656,28 @@ fn prepare_integration(
     nonce: &str,
 ) -> (integration::IntegrationSetup, IntegrationCapabilities) {
     let kind = ShellKind::from_shell_path(&req.shell);
-    let result = integration::build_with_profile(
+    let result = integration::build_with_env(
         kind,
         script_dir,
         nonce,
         req.enable_shell_integration,
         req.force_utf8,
         req.skip_user_profile,
+        Some(&req.env),
     );
     let capabilities =
         IntegrationCapabilities::from_local_setup(kind, req.enable_shell_integration, &result);
     let setup = result.unwrap_or_else(|_| {
         // Integration is optional for interactive use. Retain independent
         // encoding setup even when writing a startup shim failed.
-        integration::build_with_profile(
+        integration::build_with_env(
             kind,
             script_dir,
             nonce,
             false,
             req.force_utf8,
             req.skip_user_profile,
+            Some(&req.env),
         )
         .unwrap_or_else(|_| integration::IntegrationSetup::empty())
     });
@@ -732,7 +734,13 @@ pub(crate) fn spawn_session_with_resolved_identity(
         // but fall back to the bare shell rather than panicking on a slice.
         _ => CommandBuilder::new(&req.shell),
     };
-    for arg in &req.args {
+    let shell_kind = ShellKind::from_shell_path(&req.shell);
+    let (normalized_args, bash_login) = integration::normalize_shell_args(
+        shell_kind,
+        &req.args,
+        req.enable_shell_integration && !setup.extra_args.is_empty(),
+    );
+    for arg in &normalized_args {
         cmd.arg(arg);
     }
     for arg in &setup.extra_args {
@@ -749,6 +757,9 @@ pub(crate) fn spawn_session_with_resolved_identity(
     cmd.env("COLORTERM", "truecolor");
     for (k, v) in sandbox_scrub_env(req.sandboxed, &req.env) {
         cmd.env(k, v);
+    }
+    if bash_login {
+        cmd.env("COGNIA_BASH_LOGIN", "1");
     }
     for (k, v) in &setup.env_overrides {
         cmd.env(k, v);

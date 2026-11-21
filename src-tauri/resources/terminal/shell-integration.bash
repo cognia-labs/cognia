@@ -13,12 +13,28 @@
 # traps can emit their own output or replace the integration hooks. Visible
 # terminal sessions still retain the user's normal interactive setup.
 if [ -z "$COGNIA_TERM_HEADLESS" ]; then
-  if [ -f /etc/bash.bashrc ]; then
-    . /etc/bash.bashrc
+  if [ -n "$COGNIA_BASH_LOGIN" ]; then
+    unset COGNIA_BASH_LOGIN
+    if [ -r /etc/profile ]; then
+      . /etc/profile
+    fi
+    if [ -r "$HOME/.bash_profile" ]; then
+      . "$HOME/.bash_profile"
+    elif [ -r "$HOME/.bash_login" ]; then
+      . "$HOME/.bash_login"
+    elif [ -r "$HOME/.profile" ]; then
+      . "$HOME/.profile"
+    fi
+  else
+    if [ -f /etc/bash.bashrc ]; then
+      . /etc/bash.bashrc
+    fi
+    if [ -f "$HOME/.bashrc" ]; then
+      . "$HOME/.bashrc"
+    fi
   fi
-  if [ -f "$HOME/.bashrc" ]; then
-    . "$HOME/.bashrc"
-  fi
+else
+  unset COGNIA_BASH_LOGIN
 fi
 
 # No nonce → nothing to gate sequences on; bail silently. The user still
