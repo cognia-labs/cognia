@@ -258,7 +258,8 @@ export async function startChatFusionTurn(
     )
   const tenantRemaining = await tightestTenantLimit(
     input.appSettings.costBudget,
-    Object.values(selected.roles) as string[]
+    Object.values(selected.roles) as string[],
+    { projectId: selected.projectId }
   )
   const created = await store.createRun({
     runId,
@@ -282,6 +283,8 @@ export async function startChatFusionTurn(
     task: selected.task,
     acceptanceProfile: selected.acceptanceProfile,
     dataClass: selected.dataClass,
+    // The project the turn spends for: its usage rows count toward its budget.
+    ...(selected.projectId ? { projectId: selected.projectId } : {}),
     ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
     driver: "orchestrator",
   })

@@ -109,6 +109,13 @@ describe("account database outbox appliers", () => {
     expect(totals.cacheHitRate).toBeCloseTo(0.1, 6)
   })
 
+  it("files a run's usage under its project, for that project's budget (F24)", () => {
+    expect(usageRowFromOutbox(usageEffect({ projectId: "alpha" }))).toMatchObject({
+      projectId: "alpha",
+    })
+    expect(usageRowFromOutbox(usageEffect())).not.toHaveProperty("projectId")
+  })
+
   it("says an estimated booking rests on an estimate, not on reported usage (F15)", () => {
     expect(usageRowFromOutbox(usageEffect({ costStatus: "estimated", usage: null }))).toMatchObject(
       {

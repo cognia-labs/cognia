@@ -257,6 +257,35 @@ describe("admitPairedChatTurn", () => {
     })
   }, 30_000)
 
+  it("refuses an owner turn on this Host's spent limit, and writes nothing (F24)", async () => {
+    await getDb().sessions.update("session-1", { projectId: "alpha" } as never)
+    const exhausted = jest.fn(async () => true)
+    await expect(
+      admitPairedChatTurn(
+        request({ options: { provider: "openai" } }),
+        deps({ isCostBudgetExhausted: exhausted })
+      )
+    ).resolves.toMatchObject({ admitted: false, refusal: { code: "cost_budget_exceeded" } })
+    expect(exhausted).toHaveBeenCalledWith({ providerId: "openai", projectId: "alpha" })
+    expect(await getDb().messages.count()).toBe(0)
+    expect(await getDb().workSubmissions.count()).toBe(0)
+
+    // A Host without work submissions still holds its owner to the limit.
+    clearActiveRuntimeTargetContext()
+    await expect(
+      admitPairedChatTurn(request(), deps({ isCostBudgetExhausted: exhausted }))
+    ).resolves.toMatchObject({ admitted: false, refusal: { code: "cost_budget_exceeded" } })
+    setActiveRuntimeTargetContext("account-1", "target-1")
+
+    // A member's turn has its own usage cap; the Host owner's limit is not it.
+    exhausted.mockClear()
+    await admitPairedChatTurn(
+      request({ pairedReader: "member" }),
+      deps({ isCostBudgetExhausted: exhausted })
+    )
+    expect(exhausted).not.toHaveBeenCalled()
+  }, 30_000)
+
   it("refuses a message id that belongs to another conversation", async () => {
     await getDb().messages.put({
       id: "user-message-1",

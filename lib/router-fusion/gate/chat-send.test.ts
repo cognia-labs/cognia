@@ -51,7 +51,12 @@ describe("prepareRouterFusionSend", () => {
       loadHost: host({ startRouterFusionChatTurn }),
     })
     expect(outcome).toEqual({ kind: "send", options: stamped })
-    expect(startRouterFusionChatTurn).toHaveBeenCalledWith({ sessionId: "s1", options: stamped })
+    // The send's workspace goes with it: its own ceiling binds the run (F24).
+    expect(startRouterFusionChatTurn).toHaveBeenCalledWith({
+      sessionId: "s1",
+      options: stamped,
+      workspaceId: base.workspaceId,
+    })
   })
 
   it("routes reused options again before creating the new run", async () => {

@@ -284,7 +284,8 @@ export async function runAgentsWorkflowsFusion(
   )
   const tenantRemaining = await tightestTenantLimit(
     input.appSettings.costBudget,
-    Object.values(route.roles) as string[]
+    Object.values(route.roles) as string[],
+    { projectId: route.projectId }
   )
   const created = await store.createRun({
     runId,

@@ -149,13 +149,17 @@ export type StartTurnOutcome =
 export async function startRouterFusionChatTurn(input: {
   sessionId: string
   options: SendOptions
+  /** The project the turn spends for: its own ceiling binds the run too. */
+  workspaceId?: string | null
   signal?: AbortSignal
   /** Test seam; defaults to the pending-gate dialog. */
   requestGrant?: (request: GrantRequest, signal?: AbortSignal) => Promise<boolean>
 }): Promise<StartTurnOutcome> {
   const stamp = input.options.routerFusion as RouterFusionTurnStamp
   const deps = depsFor(input.sessionId)
-  const tenant = await tenantLimitFor(currentSettings()?.costBudget, stamp.providerId)
+  const tenant = await tenantLimitFor(currentSettings()?.costBudget, stamp.providerId, {
+    projectId: input.workspaceId,
+  })
   const prepared = preparedChatRoute(stamp.runId)
   let outcome = await beginChatRun(
     stamp.runId,
@@ -335,6 +339,7 @@ export async function rerouteRouterFusionTurn(input: {
     const started = await startRouterFusionChatTurn({
       sessionId: input.sessionId,
       options: resealed.options,
+      workspaceId: input.workspaceId,
       ...(input.signal ? { signal: input.signal } : {}),
     })
     if (started.kind !== "started") return { kind: "refused", code: started.code }

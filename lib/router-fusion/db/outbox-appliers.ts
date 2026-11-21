@@ -48,6 +48,8 @@ export function usageRowFromOutbox(row: FusionOutboxRow): SessionUsageRow | null
     attemptId: string
     origin: FusionRunOrigin
     sessionId: string | null
+    /** The run's project, when it named one. */
+    projectId?: string | null
     providerId: string | null
     modelId: string | null
     costMicrousd: number
@@ -70,6 +72,8 @@ export function usageRowFromOutbox(row: FusionOutboxRow): SessionUsageRow | null
     at: p.settledAt,
     ...(p.modelId ? { model: p.modelId } : {}),
     ...(p.providerId ? { providerId: p.providerId } : {}),
+    // Per-project budgets (ADR-0204) sum on this.
+    ...(p.projectId ? { projectId: p.projectId } : {}),
     // The ledger's usage splits the prompt into uncached input and cache tiers.
     // A usage row's `inputTokens` is the uncached part, the cache tiers beside
     // it: every reader sums the three as the prompt and prices each at its own

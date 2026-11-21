@@ -53,6 +53,8 @@ export interface UtilityCallBinding {
   origin: FusionRunOrigin
   /** Stable id of the feature making the call, e.g. `conversation-title`. */
   featureId: string
+  /** The project the call spends for; its usage row counts toward that project's budget. */
+  projectId?: string | null
   /** Everything the request is made of, hashed for the attempt's request hash. */
   requestDigestInput: string
 }
@@ -107,6 +109,7 @@ export async function beginUtilityCall(
     deadlineMs: route.deadlineMs,
     budgetMode: route.budgetMode,
     tenantLimitRemainingMicrousd: deps.tenantLimitRemainingMicrousd,
+    ...(binding.projectId ? { projectId: binding.projectId } : {}),
   })
   if (!created.ok) return { kind: "refused", code: created.code }
 

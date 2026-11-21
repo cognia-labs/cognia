@@ -105,6 +105,7 @@ export async function prepareRouterFusionSend(
       const started = await host.startRouterFusionChatTurn({
         sessionId: input.sessionId,
         options,
+        workspaceId: input.workspaceId,
         ...(input.signal ? { signal: input.signal } : {}),
       })
       if (started.kind === "started") return { kind: "send", options }

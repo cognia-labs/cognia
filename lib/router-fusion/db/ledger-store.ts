@@ -1761,6 +1761,7 @@ export class FusionLedgerStore {
             attemptId,
             origin: run.origin,
             sessionId: run.sessionId,
+            projectId: run.projectId ?? null,
             deploymentId: attempt.deploymentId,
             providerId: deployment?.providerId ?? null,
             modelId: deployment?.modelRevision ?? null,

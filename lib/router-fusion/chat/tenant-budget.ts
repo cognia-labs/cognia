@@ -1,8 +1,9 @@
 /**
  * The tenant level of the two-level budget (ADR-0188 D22): what the existing
  * cost-budget ceilings still allow. Every configured scope that applies to the
- * provider counts — daily and monthly, global and per-provider — and the
- * tightest one is the limit. No configured scope means no tenant limit.
+ * provider and the run's project counts — daily and monthly, global,
+ * per-provider and per-project — and the tightest one is the limit. No
+ * configured scope means no tenant limit.
  *
  * Spend is read from the durable rollup the budget gate already uses, so a
  * Router + Fusion run and an ordinary send see the same number.
@@ -11,10 +12,22 @@
 import type { AppSettings } from "@cognia/agent-config-types"
 import {
   evaluateCostBudget,
+  projectHasCostCeiling,
   type CostBudgetSpend,
   type CostBudgetVerdict,
 } from "@/lib/usage/cost-budget"
 import { readCostBudgetSpend } from "@/lib/usage/cost-budget-runtime"
+
+export interface TenantLimitOptions {
+  /**
+   * The app project (workspace) the run spends for. Its own ceiling binds the
+   * run like the global one: an ordinary send in a project that spent its
+   * ceiling is refused, so a ledgered run there is too.
+   */
+  projectId?: string | null
+  /** Reads the spend, with the shares of `projectIds`; defaults to the durable rollup. */
+  readSpend?: (projectIds: readonly string[]) => Promise<CostBudgetSpend>
+}
 
 export interface TenantLimit {
   /** Remaining microusd under the tightest applicable scope; null = no limit. */
@@ -26,12 +39,32 @@ export interface TenantLimit {
 export async function tenantLimitFor(
   costBudget: AppSettings["costBudget"],
   providerId: string,
-  readSpend: () => Promise<CostBudgetSpend> = () => readCostBudgetSpend()
+  options: TenantLimitOptions = {}
 ): Promise<TenantLimit> {
   if (!costBudget) return { remainingMicrousd: null, binding: null }
-  const probe = evaluateCostBudget(costBudget, { dayUsd: 0, monthUsd: 0 }, providerId)
+  const projectId = options.projectId ?? undefined
+  const projectIds = projectId && projectHasCostCeiling(costBudget, projectId) ? [projectId] : []
+  const probe = evaluateCostBudget(
+    costBudget,
+    {
+      dayUsd: 0,
+      monthUsd: 0,
+      ...(projectIds.length > 0
+        ? { byProjectDayUsd: { [projectIds[0]]: 0 }, byProjectMonthUsd: { [projectIds[0]]: 0 } }
+        : {}),
+    },
+    providerId,
+    projectId
+  )
   if (probe.length === 0) return { remainingMicrousd: null, binding: null }
-  const verdicts = evaluateCostBudget(costBudget, await readSpend(), providerId)
+  const readSpend =
+    options.readSpend ?? ((ids: readonly string[]) => readCostBudgetSpend(undefined, ids))
+  const verdicts = evaluateCostBudget(
+    costBudget,
+    await readSpend(projectIds),
+    providerId,
+    projectId
+  )
   let binding: CostBudgetVerdict | null = null
   let remaining = Number.POSITIVE_INFINITY
   for (const verdict of verdicts) {
@@ -58,7 +91,7 @@ export async function tenantLimitFor(
 export async function tightestTenantLimit(
   costBudget: AppSettings["costBudget"],
   deploymentIds: readonly string[],
-  readSpend: () => Promise<CostBudgetSpend> = () => readCostBudgetSpend()
+  options: TenantLimitOptions = {}
 ): Promise<number | null> {
   const providers = [
     ...new Set(
@@ -69,7 +102,7 @@ export async function tightestTenantLimit(
   ]
   let tightest: number | null = null
   for (const providerId of providers) {
-    const limit = await tenantLimitFor(costBudget, providerId, readSpend)
+    const limit = await tenantLimitFor(costBudget, providerId, options)
     if (limit.remainingMicrousd === null) continue
     tightest =
       tightest === null ? limit.remainingMicrousd : Math.min(tightest, limit.remainingMicrousd)

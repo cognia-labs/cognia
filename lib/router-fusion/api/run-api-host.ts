@@ -225,7 +225,8 @@ export async function createRoutedRun(
   // The tenant limit is the tightest budget scope over every provider the run may call.
   const tenantRemaining = await tightestTenantLimit(
     appSettings.costBudget,
-    Object.values(route.roles)
+    Object.values(route.roles),
+    { projectId: route.projectId }
   )
   const created = await store.createRun({
     runId,

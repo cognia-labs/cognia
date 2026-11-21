@@ -75,10 +75,13 @@ export interface PairedTurnAdapterDeps extends WorkSubmissionServiceDeps {
         | "externalAgentGatewaySessions"
         | "activeBranchByGroup"
         | "projectThread"
+        | "projectId"
       >
     | undefined
   >
   getMessage?: (messageId: string) => Promise<{ sessionId: string } | undefined>
+  /** Whether the Host's own spending limit is spent; defaults to the cost budget gate. */
+  isCostBudgetExhausted?: (input: { providerId?: string; projectId?: string }) => Promise<boolean>
   commitUserMessage?: (sessionId: string, message: UIMessage) => Promise<void>
   startHeartbeat?: (submissionId: string) => () => void
 }
@@ -94,6 +97,25 @@ function stringField(payload: Record<string, unknown>, key: string): string | un
 
 function isSendContent(value: unknown): value is SendContent {
   return typeof value === "string" || Array.isArray(value)
+}
+
+async function ownerSpendingLimitReached(
+  payload: Record<string, unknown>,
+  deps: PairedTurnAdapterDeps
+): Promise<boolean> {
+  const sessionId = stringField(payload, "sessionId") as string
+  const session = deps.getSession
+    ? await deps.getSession(sessionId)
+    : await (await import("@/lib/db/sessions")).getSession(sessionId)
+  const projectId = session?.projectId
+  const provider = (payload.options as SendOptions | undefined)?.provider
+  const scope = {
+    ...(provider ? { providerId: provider } : {}),
+    ...(projectId ? { projectId } : {}),
+  }
+  if (deps.isCostBudgetExhausted) return deps.isCostBudgetExhausted(scope)
+  const gate = await import("@/lib/usage/cost-budget-gate")
+  return gate.isCostBudgetConfigured() && gate.isCostBudgetExhausted(scope)
 }
 
 /** The run id the server minted from this turn's remote execution context. */
@@ -112,6 +134,15 @@ export async function admitPairedChatTurn(
     throw new Error("paired_turn_invalid_request")
   }
   const messageId = stringField(payload, "messageId") ?? `${runId}:user`
+
+  // The owner's turn runs on this Host's provider keys, so this Host's own
+  // spending limit applies, as it does to a send typed here — with or without
+  // work submissions. Nobody is at the Host to approve an overrun, so a spent
+  // limit (or one that cannot be read) refuses the turn, as it holds back a
+  // background wake.
+  if (payload.pairedReader === "owner" && (await ownerSpendingLimitReached(payload, deps))) {
+    return refusal("cost_budget_exceeded", "This Host's spending limit has been reached.")
+  }
 
   const active = getActiveRuntimeTargetContext()
   if (!active)

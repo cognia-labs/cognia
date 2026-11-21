@@ -81,7 +81,9 @@ export async function beginLedgeredUtilityCall(
   if (route.kind === "refused") {
     return { kind: "refused", code: route.code, reasons: route.reasons }
   }
-  const tenant = await tenantLimitFor(appSettings.costBudget, input.providerId)
+  const tenant = await tenantLimitFor(appSettings.costBudget, input.providerId, {
+    projectId: input.workspaceId,
+  })
   const started = await beginUtilityCall(
     {
       store: () => currentFusionStore(),
@@ -93,6 +95,7 @@ export async function beginLedgeredUtilityCall(
       surface: input.surface,
       origin: input.origin,
       featureId: input.featureId,
+      projectId: input.workspaceId ?? null,
       requestDigestInput: [
         input.featureId,
         `${input.providerId}::${input.modelId}`,
