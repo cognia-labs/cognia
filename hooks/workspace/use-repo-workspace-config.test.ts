@@ -37,6 +37,10 @@ import {
 } from "./use-repo-workspace-config"
 import { parseWorkspaceConfig } from "@/lib/project-environment/workspace-config"
 import { workspaceConfigDigest } from "@/lib/project-environment/workspace-config-trust"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 const CONFIG = { version: 1, setup: { default: "pnpm install" } }
 
@@ -55,6 +59,7 @@ function deps(over: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  clearActiveRuntimeTargetContext()
   trustEnabled = true
   mockUpdateProject.mockClear()
 })
@@ -319,5 +324,24 @@ describe("another repository of the workspace (ADR-0147, 2026-11-08 amendment)",
     })
     expect(multi.result.current).toBe(false)
     expect(single.result.current).toBe(false)
+  })
+
+  it("re-evaluates workspace config when the execution Host switches at the same path (F9)", async () => {
+    setActiveRuntimeTargetContext("acct-01", "host-a", 1)
+    const readFile = jest
+      .fn<Promise<string>, []>()
+      .mockResolvedValueOnce(JSON.stringify(CONFIG))
+      .mockRejectedValueOnce(new Error("no such file or directory"))
+    const { result } = renderHook(() =>
+      useRepoWorkspaceConfig("p1", "/repos/app", deps({ readFile }))
+    )
+    await waitFor(() => expect(result.current.verdict.kind).toBe("unapproved"))
+
+    act(() => {
+      setActiveRuntimeTargetContext("acct-01", "host-b", 2)
+    })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(readFile).toHaveBeenCalledTimes(2)
+    expect(result.current.verdict.kind).toBe("absent")
   })
 })

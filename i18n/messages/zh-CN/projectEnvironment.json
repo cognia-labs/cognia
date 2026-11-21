@@ -6,6 +6,9 @@
   "addSecret": "添加钥匙串引用",
   "addVariable": "添加变量",
   "bypass": "仅本次跳过",
+  "cancelRun": "取消运行",
+  "cancelled": "环境命令已取消。",
+  "clearOutput": "收起输出",
   "create": "新建环境",
   "default": "设为项目默认环境",
   "delete": "删除环境",
@@ -18,6 +21,12 @@
   "name": "环境名称",
   "none": "不使用环境",
   "osOverrides": "操作系统专用脚本",
+  "outputExitCode": "退出码 {code}",
+  "outputStderr": "标准错误",
+  "outputStdout": "标准输出",
+  "outputTimedOut": "已超时",
+  "outputTitle": "命令输出",
+  "outputTruncated": "输出已按主机上限截断",
   "outcome": {
     "fallback": {
       "bundleUnavailable": "没有可用的 Agent 运行时包，本次运行改用标准执行路径。",

@@ -1,4 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { selectOption } from "@/lib/testing/select-option"
+import {
+  __resetRoutingForTests,
+  setActiveRemoteEndpoint,
+  setActiveRemoteTransport,
+} from "@/lib/tauri/transport-routing"
+import type { Transport } from "@/lib/tauri/transport-types"
 
 const listMock = jest.fn()
 const putMock = jest.fn()
@@ -79,6 +86,7 @@ import { act } from "react"
 import { ProjectEnvironmentManager } from "./project-environment-manager"
 
 beforeEach(() => {
+  __resetRoutingForTests()
   listMock.mockReset().mockResolvedValue([])
   putMock.mockReset().mockResolvedValue(undefined)
   deleteMock.mockReset().mockResolvedValue(undefined)
@@ -365,9 +373,7 @@ describe("bootstrap Agent settings", () => {
     ])
     render(<ProjectEnvironmentManager projectId="project-1" executionRoot="/repo" scope="local" />)
     await screen.findByLabelText("Initialization recipe")
-    fireEvent.change(screen.getByLabelText("Initialization recipe"), {
-      target: { value: "node-pnpm" },
-    })
+    await selectOption(screen.getByLabelText("Initialization recipe"), "node-pnpm")
     fireEvent.click(screen.getByRole("button", { name: "Apply recipe" }))
     expect(executeMock).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }))
@@ -406,7 +412,7 @@ describe("bootstrap Agent settings", () => {
     ])
     render(<ProjectEnvironmentManager projectId="project-1" executionRoot="/repo" scope="local" />)
     await screen.findByLabelText("Provider preset")
-    fireEvent.change(screen.getByLabelText("Provider preset"), { target: { value: "ollama" } })
+    await selectOption(screen.getByLabelText("Provider preset"), "ollama")
     fireEvent.click(screen.getByRole("button", { name: "Apply provider" }))
     fireEvent.change(screen.getByLabelText("Bootstrap model"), {
       target: { value: "installed-model" },
@@ -501,7 +507,7 @@ describe("bootstrap Agent settings", () => {
     fireEvent.change(screen.getByLabelText("Model API endpoint"), {
       target: { value: "http://localhost:11434/v1" },
     })
-    fireEvent.change(screen.getByLabelText("Authentication"), { target: { value: "none" } })
+    await selectOption(screen.getByLabelText("Authentication"), "none")
     fireEvent.change(screen.getByLabelText("Maximum response tokens"), {
       target: { value: "2048" },
     })
@@ -822,5 +828,147 @@ describe("an approved repository configuration", () => {
     await screen.findByDisplayValue("Node")
     expect(screen.queryByTestId("project-environment-repo-replaces-setup")).not.toBeInTheDocument()
     expect(screen.queryByTestId("project-environment-missing-secrets")).not.toBeInTheDocument()
+  })
+})
+
+describe("command diagnostics, cancellation and Host-scoped status (F5, F9)", () => {
+  const stored = (overrides: Record<string, unknown> = {}) => ({
+    id: "env-1",
+    projectId: "project-1",
+    name: "Node",
+    isEnabled: true,
+    setupScript: { default: "pnpm install" },
+    actions: [],
+    variables: {},
+    keyringReferences: [],
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  })
+
+  it("renders redacted stdout/stderr, truncation and timeout badges, and lets the user dismiss them", async () => {
+    listMock.mockResolvedValue([stored()])
+    executeMock.mockResolvedValueOnce({
+      success: false,
+      bypassed: false,
+      exitCode: 124,
+      stdout: "installing [REDACTED]",
+      stderr: "network timeout",
+      stdoutTruncated: true,
+      timedOut: true,
+      error: "Project environment setup timed out",
+    })
+    render(<ProjectEnvironmentManager projectId="project-1" executionRoot="/repo" scope="local" />)
+    await screen.findByDisplayValue("Node")
+
+    fireEvent.click(screen.getByRole("button", { name: "Run setup" }))
+    const output = await screen.findByTestId("project-environment-run-output")
+    expect(screen.getByTestId("project-environment-stdout")).toHaveTextContent(
+      "installing [REDACTED]"
+    )
+    expect(screen.getByTestId("project-environment-stderr")).toHaveTextContent("network timeout")
+    expect(output).toHaveTextContent("Exit code 124")
+    expect(output).toHaveTextContent("Timed out")
+    expect(output).toHaveTextContent("Output truncated by host limit")
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss output" }))
+    expect(screen.queryByTestId("project-environment-run-output")).not.toBeInTheDocument()
+  })
+
+  it("offers Cancel run while setup is executing and aborts the executor signal", async () => {
+    listMock.mockResolvedValue([stored()])
+    let capturedSignal: AbortSignal | undefined
+    let finish!: (value: unknown) => void
+    executeMock.mockImplementationOnce((input: { signal?: AbortSignal }) => {
+      capturedSignal = input.signal
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    render(<ProjectEnvironmentManager projectId="project-1" executionRoot="/repo" scope="local" />)
+    await screen.findByDisplayValue("Node")
+
+    fireEvent.click(screen.getByRole("button", { name: "Run setup" }))
+    const cancelButton = await screen.findByTestId("project-environment-cancel-run")
+    expect(capturedSignal?.aborted).toBe(false)
+
+    fireEvent.click(cancelButton)
+    expect(capturedSignal?.aborted).toBe(true)
+
+    await act(async () => {
+      finish({
+        success: false,
+        bypassed: false,
+        cancelled: true,
+        stderr: "terminated",
+        error: "Project environment setup was cancelled",
+      })
+    })
+    expect(await screen.findByRole("alert")).toHaveTextContent("Environment command cancelled.")
+    expect(screen.queryByTestId("project-environment-cancel-run")).not.toBeInTheDocument()
+  })
+
+  it("scopes last-run status to the active Host and clears transient output on Host switch", async () => {
+    const remoteA: Transport = { call: jest.fn(), subscribe: jest.fn(() => () => undefined) }
+    const remoteB: Transport = { call: jest.fn(), subscribe: jest.fn(() => () => undefined) }
+    setActiveRemoteEndpoint({
+      remoteHost: { id: "host-a", label: "Host A" },
+      baseUrl: "https://a.example",
+      deviceId: "d-a",
+      devicePrivateKeyJwk: { kty: "EC" },
+      deviceKeyThumbprint: "t-a",
+      serverVersion: "4",
+    })
+    setActiveRemoteTransport(remoteA)
+    listMock.mockResolvedValue([
+      stored({
+        lastInitialization: {
+          status: "failed",
+          scope: "local",
+          executionRoot: "/repo",
+          hostKey: "remote:host-a",
+          startedAt: 1,
+          completedAt: 2,
+          error: "host-a failure",
+        },
+        initializationHistory: [
+          {
+            status: "failed",
+            scope: "local",
+            executionRoot: "/repo",
+            hostKey: "remote:host-a",
+            startedAt: 1,
+            completedAt: 2,
+            error: "host-a failure",
+          },
+        ],
+      }),
+    ])
+    executeMock.mockResolvedValueOnce({ success: true, bypassed: false, stdout: "host-a log" })
+
+    render(<ProjectEnvironmentManager projectId="project-1" executionRoot="/repo" scope="local" />)
+    expect(await screen.findByTestId("project-environment-last-run")).toHaveTextContent(
+      "host-a failure"
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }))
+    expect(await screen.findByTestId("project-environment-stdout")).toHaveTextContent("host-a log")
+
+    act(() => {
+      setActiveRemoteTransport(remoteB)
+      setActiveRemoteEndpoint({
+        remoteHost: { id: "host-b", label: "Host B" },
+        baseUrl: "https://b.example",
+        deviceId: "d-b",
+        devicePrivateKeyJwk: { kty: "EC" },
+        deviceKeyThumbprint: "t-b",
+        serverVersion: "4",
+      })
+    })
+
+    expect(screen.queryByTestId("project-environment-run-output")).not.toBeInTheDocument()
+    expect(screen.getByTestId("project-environment-last-run")).toHaveTextContent(
+      "Setup has not run in this workspace yet."
+    )
   })
 })

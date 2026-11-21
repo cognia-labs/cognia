@@ -33,12 +33,16 @@
  * nothing; a listing that was tried and failed is `failed`, with a retry.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 
 import {
   useWorkspaceCommandGate,
   type WorkspaceCommandGate,
 } from "@/hooks/workspace/use-workspace-command-gate"
+import {
+  currentEnvironmentHostScopeKey,
+  subscribeEnvironmentHostChange,
+} from "@/lib/project-environment/host-route"
 
 import {
   EMPTY_CONSENT,
@@ -122,9 +126,14 @@ export function useProvisioningOffer(
   )
   const consent = project?.workspaceProvisioning ?? EMPTY_CONSENT
 
+  const hostScopeKey = useSyncExternalStore(
+    subscribeEnvironmentHostChange,
+    currentEnvironmentHostScopeKey,
+    () => "local"
+  )
   const [nonce, setNonce] = useState(0)
   const root = executionRoot?.trim() ?? ""
-  const requestKey = `${root}|${nonce}`
+  const requestKey = `${hostScopeKey}|${root}|${nonce}`
   const [settled, setSettled] = useState<Probed | null>(null)
   const gate = useWorkspaceCommandGate()
   const readGate = deps?.readGate ?? gate("fs_list_workspace_dir")

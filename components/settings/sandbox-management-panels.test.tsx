@@ -1,15 +1,23 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import { SandboxManagementPanels } from "./sandbox-management-panels"
 import { sandboxPreviewContext } from "@/lib/sandbox/previews"
 import { listWorkspaceEnvironments } from "@/lib/task-workspace/client"
 import { isTauri } from "@/lib/tauri"
-import { getActiveRemoteEndpoint } from "@/lib/tauri/transport-routing"
+import {
+  __resetRoutingForTests,
+  getActiveRemoteEndpoint,
+  setActiveRemoteTransport,
+} from "@/lib/tauri/transport-routing"
+import type { Transport } from "@/lib/tauri/transport-types"
 import en from "@/i18n/messages/en/sandboxManagement.json"
 
 jest.mock("@/lib/sandbox/previews", () => ({ sandboxPreviewContext: jest.fn() }))
 jest.mock("@/lib/task-workspace/client", () => ({ listWorkspaceEnvironments: jest.fn() }))
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn() }))
-jest.mock("@/lib/tauri/transport-routing", () => ({ getActiveRemoteEndpoint: jest.fn() }))
+jest.mock("@/lib/tauri/transport-routing", () => ({
+  ...jest.requireActual("@/lib/tauri/transport-routing"),
+  getActiveRemoteEndpoint: jest.fn(),
+}))
 const snapshots = jest.fn()
 jest.mock("./sandbox-snapshots-panel", () => ({
   SandboxSnapshotsPanel: (props: unknown) => {
@@ -26,6 +34,7 @@ jest.mock("./shared-sandbox-previews-panel", () => ({
   ),
 }))
 beforeEach(() => {
+  __resetRoutingForTests()
   jest.clearAllMocks()
   jest.mocked(isTauri).mockReturnValue(true)
   jest.mocked(getActiveRemoteEndpoint).mockReturnValue(null)
@@ -74,5 +83,21 @@ it("fails closed when the Host inventory cannot be read", async () => {
   jest.mocked(sandboxPreviewContext).mockRejectedValue(new Error("private diagnostic"))
   render(<SandboxManagementPanels projectId="p" />)
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(en.contextError))
+  expect(screen.queryByText("snapshots-child")).not.toBeInTheDocument()
+})
+
+it("switches reactively from local panels to remote shared previews when the Host changes (F9)", async () => {
+  render(<SandboxManagementPanels projectId="p" />)
+  expect(await screen.findByText("snapshots-child")).toBeInTheDocument()
+
+  const remoteTransport: Transport = {
+    call: jest.fn(),
+    subscribe: jest.fn(() => () => undefined),
+  }
+  act(() => {
+    jest.mocked(getActiveRemoteEndpoint).mockReturnValue({ id: "remote-a" } as never)
+    setActiveRemoteTransport(remoteTransport)
+  })
+  expect(screen.getByText("shared-child:p")).toBeInTheDocument()
   expect(screen.queryByText("snapshots-child")).not.toBeInTheDocument()
 })

@@ -16,6 +16,10 @@ jest.mock("@/stores/project/project-store", () => ({
 }))
 
 import { useProvisioningOffer } from "./use-provisioning-offer"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 /** The repository root as the file bridge reports it, ignored entries included. */
 const ALL = [
@@ -41,6 +45,7 @@ function deps(over: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  clearActiveRuntimeTargetContext()
   mockProjects = [{ id: "p1" }]
   mockUpdateProject.mockClear()
 })
@@ -168,5 +173,26 @@ describe("useProvisioningOffer", () => {
     await waitFor(() => expect(result.current.loading).toBe(false))
     act(() => result.current.decide(["cacheLink:node_modules"], true))
     expect(mockUpdateProject).not.toHaveBeenCalled()
+  })
+
+  it("invalidates and re-probes provisioning candidates when the active Host switches (F9)", async () => {
+    setActiveRuntimeTargetContext("acct-01", "host-a", 1)
+    const listRoot = jest
+      .fn()
+      .mockResolvedValueOnce(ALL)
+      .mockResolvedValueOnce(VISIBLE)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    const { result } = renderHook(() =>
+      useProvisioningOffer("p1", "/repos/app", deps({ listRoot }))
+    )
+    await waitFor(() => expect(result.current.candidates).toHaveLength(2))
+
+    act(() => {
+      setActiveRuntimeTargetContext("acct-01", "host-b", 2)
+    })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(listRoot).toHaveBeenCalledTimes(4)
+    expect(result.current.candidates).toEqual([])
   })
 })

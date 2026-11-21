@@ -57,11 +57,14 @@ const putMock = jest.fn()
 jest.mock("@/lib/db/project-environments", () => ({
   putProjectEnvironment: (...args: unknown[]) => putMock(...args),
 }))
-jest.mock("@/lib/sandbox/run-environment", () => ({
-  readRepositoryCoordinates: async () => ({
+const readRepoMock = jest.fn<Promise<{ remote: string; commitSha: string } | undefined>, [string]>(
+  async () => ({
     remote: "git@github.com:acme/app.git",
     commitSha: "c".repeat(40),
-  }),
+  })
+)
+jest.mock("@/lib/sandbox/run-environment", () => ({
+  readRepositoryCoordinates: (root: string) => readRepoMock(root),
 }))
 jest.mock("@/stores/project/project-store", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) =>
@@ -69,6 +72,10 @@ jest.mock("@/stores/project/project-store", () => ({
 }))
 
 import { compactSelection, ProjectEnvironmentRuntime } from "./project-environment-runtime"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 const DIGEST = `sha256:${"a".repeat(64)}`
 
@@ -156,10 +163,15 @@ const stored: ProjectEnvironment = {
 }
 
 beforeEach(() => {
+  clearActiveRuntimeTargetContext()
   lastInput = undefined
   hookState = state()
   setDraft.mockClear()
   putMock.mockReset().mockResolvedValue(undefined)
+  readRepoMock.mockReset().mockResolvedValue({
+    remote: "git@github.com:acme/app.git",
+    commitSha: "c".repeat(40),
+  })
 })
 
 function renderPanel(over: Partial<Parameters<typeof ProjectEnvironmentRuntime>[0]> = {}) {
@@ -540,6 +552,22 @@ describe("ProjectEnvironmentRuntime", () => {
     hookState = state({ error: "approval_authority_insufficient" })
     renderPanel()
     expect(screen.getByRole("alert")).toHaveTextContent("approval_authority_insufficient")
+  })
+
+  it("re-reads repository coordinates when the active execution Host switches (F9)", async () => {
+    setActiveRuntimeTargetContext("acct-01", "host-a", 1)
+    renderPanel()
+    await waitFor(() => expect(lastInput?.repository?.commitSha).toBe("c".repeat(40)))
+
+    readRepoMock.mockResolvedValueOnce({
+      remote: "git@github.com:acme/app.git",
+      commitSha: "d".repeat(40),
+    })
+    act(() => {
+      setActiveRuntimeTargetContext("acct-01", "host-b", 2)
+    })
+    await waitFor(() => expect(lastInput?.repository?.commitSha).toBe("d".repeat(40)))
+    expect(readRepoMock).toHaveBeenCalledTimes(2)
   })
 })
 

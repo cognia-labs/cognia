@@ -6,6 +6,9 @@
   "addSecret": "Add keyring reference",
   "addVariable": "Add variable",
   "bypass": "Bypass once",
+  "cancelRun": "Cancel run",
+  "cancelled": "Environment command cancelled.",
+  "clearOutput": "Dismiss output",
   "create": "New environment",
   "default": "Use as project default",
   "delete": "Delete environment",
@@ -18,6 +21,12 @@
   "name": "Environment name",
   "none": "No environment",
   "osOverrides": "OS-specific overrides",
+  "outputExitCode": "Exit code {code}",
+  "outputStderr": "Standard error",
+  "outputStdout": "Standard output",
+  "outputTimedOut": "Timed out",
+  "outputTitle": "Command output",
+  "outputTruncated": "Output truncated by host limit",
   "outcome": {
     "fallback": {
       "bundleUnavailable": "No agent bundle is available, so this run is using the standard execution path.",

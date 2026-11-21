@@ -444,3 +444,16 @@ it("reads durable deliveries from the routed Host with all supported filters", a
     pageToken: "previous",
   })
 })
+
+it("routes pinned environment commands through an explicit transport override", async () => {
+  const pinnedCall = jest
+    .fn()
+    .mockResolvedValue({ jobId: "j1", projectId: "p", status: "cancelled" })
+  const pinned = { call: pinnedCall }
+  await environmentBuildCancel("p", "j1", pinned)
+  expect(pinnedCall).toHaveBeenCalledWith("environment_build_cancel", {
+    projectId: "p",
+    jobId: "j1",
+  })
+  expect(call).not.toHaveBeenCalled()
+})

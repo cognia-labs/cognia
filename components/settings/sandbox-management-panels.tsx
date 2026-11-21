@@ -1,8 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import {
+  currentEnvironmentHostScopeKey,
+  subscribeEnvironmentHostChange,
+} from "@/lib/project-environment/host-route"
 import { sandboxPreviewContext, type SandboxPreviewContext } from "@/lib/sandbox/previews"
 import { listWorkspaceEnvironments } from "@/lib/task-workspace/client"
 import type { WorkspaceEnvironmentSummary } from "@/lib/task-workspace/types"
@@ -15,13 +19,19 @@ import { SharedSandboxPreviewsPanel } from "./shared-sandbox-previews-panel"
 /** Shared Settings/workspace entry point; all runtime identities come from the Host. */
 export function SandboxManagementPanels({ projectId }: { projectId: string }) {
   const t = useTranslations("sandboxManagement")
+  const hostScopeKey = useSyncExternalStore(
+    subscribeEnvironmentHostChange,
+    currentEnvironmentHostScopeKey,
+    () => "local"
+  )
   const [context, setContext] = useState<SandboxPreviewContext | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceEnvironmentSummary[]>([])
   const [failed, setFailed] = useState(false)
   const epoch = useRef(0)
-  const [scope, setScope] = useState(projectId)
-  if (scope !== projectId) {
-    setScope(projectId)
+  const scopeKey = `${projectId}:${hostScopeKey}`
+  const [scope, setScope] = useState(scopeKey)
+  if (scope !== scopeKey) {
+    setScope(scopeKey)
     setContext(null)
     setWorkspaces([])
     setFailed(false)
@@ -55,13 +65,13 @@ export function SandboxManagementPanels({ projectId }: { projectId: string }) {
     return () => {
       epoch.current += 1
     }
-  }, [refresh, local])
+  }, [refresh, local, hostScopeKey])
 
   if (remote)
     return (
-      <div className="space-y-3">
+      <div className="space-y-3" key={scopeKey}>
         <p className="border-t pt-3 text-xs text-muted-foreground">{t("localRequired")}</p>
-        <SharedSandboxPreviewsPanel endpoint={remote} projectId={projectId} />
+        <SharedSandboxPreviewsPanel key={scopeKey} endpoint={remote} projectId={projectId} />
       </div>
     )
   if (!local)
@@ -92,7 +102,7 @@ export function SandboxManagementPanels({ projectId }: { projectId: string }) {
       </p>
     )
   return (
-    <div className="space-y-3" key={projectId}>
+    <div className="space-y-3" key={scopeKey}>
       <SandboxSnapshotsPanel
         projectId={projectId}
         context={context}

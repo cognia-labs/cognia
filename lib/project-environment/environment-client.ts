@@ -30,6 +30,7 @@
 import { parseInvokeError } from "@/lib/tauri/command-error"
 import { collectPages, type Page, type PageRequest } from "@/lib/tauri/companion-paging"
 import { transport } from "@/lib/tauri/transport-instance"
+import type { Transport } from "@/lib/tauri/transport-types"
 import type {
   EgressTier,
   IsolationTier,
@@ -150,8 +151,11 @@ export interface EnvironmentRuntimePort {
   path: string
 }
 
-export async function environmentPortsList(projectId: string): Promise<EnvironmentRuntimePort[]> {
-  const result = await transport.call<{ ports: EnvironmentRuntimePort[] }>(
+export async function environmentPortsList(
+  projectId: string,
+  callTransport?: Pick<Transport, "call">
+): Promise<EnvironmentRuntimePort[]> {
+  const result = await (callTransport ?? transport).call<{ ports: EnvironmentRuntimePort[] }>(
     "environment_ports_list",
     { projectId }
   )
@@ -192,24 +196,29 @@ export interface EnvironmentBuildRequest {
 }
 
 export function environmentBuildStart(
-  request: EnvironmentBuildRequest
+  request: EnvironmentBuildRequest,
+  callTransport?: Pick<Transport, "call">
 ): Promise<EnvironmentBuildStatus> {
-  return transport.call("environment_build_start", { request })
+  return (callTransport ?? transport).call("environment_build_start", { request })
 }
 
-export function environmentBuildGet(query: {
-  projectId: string
-  jobId?: string
-  buildKey?: string
-}): Promise<EnvironmentBuildStatus> {
-  return transport.call("environment_build_get", query)
+export function environmentBuildGet(
+  query: {
+    projectId: string
+    jobId?: string
+    buildKey?: string
+  },
+  callTransport?: Pick<Transport, "call">
+): Promise<EnvironmentBuildStatus> {
+  return (callTransport ?? transport).call("environment_build_get", query)
 }
 
 export function environmentBuildCancel(
   projectId: string,
-  jobId: string
+  jobId: string,
+  callTransport?: Pick<Transport, "call">
 ): Promise<EnvironmentBuildStatus> {
-  return transport.call("environment_build_cancel", { projectId, jobId })
+  return (callTransport ?? transport).call("environment_build_cancel", { projectId, jobId })
 }
 
 export type ApprovalAuthority = "workspaceMaintainer" | "orgAdmin" | "hostOwner"
@@ -337,8 +346,11 @@ export function isPoolDisabled(error: unknown): boolean {
   return parseInvokeError(error).code === POOL_DISABLED_CODE
 }
 
-export function environmentCatalogList(request: PageRequest = {}): Promise<CatalogPage> {
-  return transport.call<CatalogPage>("environment_catalog_list", { ...request })
+export function environmentCatalogList(
+  request: PageRequest = {},
+  callTransport?: Pick<Transport, "call">
+): Promise<CatalogPage> {
+  return (callTransport ?? transport).call<CatalogPage>("environment_catalog_list", { ...request })
 }
 
 export function environmentCatalogGet(id: string): Promise<CatalogEntryRow | null> {
@@ -358,8 +370,13 @@ export function environmentCatalogDelete(id: string): Promise<CatalogEntryRecord
   return transport.call<CatalogEntryRecord>("environment_catalog_delete", { id })
 }
 
-export function environmentDeclarationRead(workspaceRoot: string): Promise<DeclarationReadResult> {
-  return transport.call<DeclarationReadResult>("environment_declaration_read", { workspaceRoot })
+export function environmentDeclarationRead(
+  workspaceRoot: string,
+  callTransport?: Pick<Transport, "call">
+): Promise<DeclarationReadResult> {
+  return (callTransport ?? transport).call<DeclarationReadResult>("environment_declaration_read", {
+    workspaceRoot,
+  })
 }
 
 export function environmentSpecResolvePreview(spec: unknown): Promise<SpecPreview> {
@@ -367,20 +384,29 @@ export function environmentSpecResolvePreview(spec: unknown): Promise<SpecPrevie
 }
 
 export function environmentApprovalList(
-  options: PageRequest & { projectId?: string; includeRevoked?: boolean } = {}
+  options: PageRequest & { projectId?: string; includeRevoked?: boolean } = {},
+  callTransport?: Pick<Transport, "call">
 ): Promise<Page<ApprovalRecord>> {
-  return transport.call<Page<ApprovalRecord>>("environment_approval_list", { ...options })
+  return (callTransport ?? transport).call<Page<ApprovalRecord>>("environment_approval_list", {
+    ...options,
+  })
 }
 
 /** Read the complete project ledger; partial authority data cannot resolve a run. */
-export function fetchEnvironmentApprovals(projectId: string): Promise<ApprovalRecord[]> {
+export function fetchEnvironmentApprovals(
+  projectId: string,
+  callTransport?: Pick<Transport, "call">
+): Promise<ApprovalRecord[]> {
   return collectPages(
     (pageToken) =>
-      environmentApprovalList({
-        projectId,
-        pageSize: 200,
-        ...(pageToken === undefined ? {} : { pageToken }),
-      }),
+      environmentApprovalList(
+        {
+          projectId,
+          pageSize: 200,
+          ...(pageToken === undefined ? {} : { pageToken }),
+        },
+        callTransport
+      ),
     { requireComplete: true }
   )
 }
@@ -389,16 +415,29 @@ export function environmentApprovalGet(id: string): Promise<ApprovalRecord | nul
   return transport.call<ApprovalRecord | null>("environment_approval_get", { id })
 }
 
-export function environmentApprovalApprove(approval: ApprovalRequest): Promise<ApprovalRecord> {
-  return transport.call<ApprovalRecord>("environment_approval_approve", { approval })
+export function environmentApprovalApprove(
+  approval: ApprovalRequest,
+  callTransport?: Pick<Transport, "call">
+): Promise<ApprovalRecord> {
+  return (callTransport ?? transport).call<ApprovalRecord>("environment_approval_approve", {
+    approval,
+  })
 }
 
-export function environmentApprovalRevoke(id: string): Promise<ApprovalRecord> {
-  return transport.call<ApprovalRecord>("environment_approval_revoke", { id })
+export function environmentApprovalRevoke(
+  id: string,
+  callTransport?: Pick<Transport, "call">
+): Promise<ApprovalRecord> {
+  return (callTransport ?? transport).call<ApprovalRecord>("environment_approval_revoke", { id })
 }
 
-export function environmentEgressGrantCreate(grant: EgressGrantRequest): Promise<EgressGrant> {
-  return transport.call<EgressGrant>("environment_egress_grant_create", { grant })
+export function environmentEgressGrantCreate(
+  grant: EgressGrantRequest,
+  callTransport?: Pick<Transport, "call">
+): Promise<EgressGrant> {
+  return (callTransport ?? transport).call<EgressGrant>("environment_egress_grant_create", {
+    grant,
+  })
 }
 
 export function environmentEgressGrantDelete(id: string): Promise<EgressGrant> {
@@ -415,8 +454,10 @@ export function environmentProbeGet(
   })
 }
 
-export function environmentDriverStatus(): Promise<DriverStatus> {
-  return transport.call<DriverStatus>("environment_driver_status", {})
+export function environmentDriverStatus(
+  callTransport?: Pick<Transport, "call">
+): Promise<DriverStatus> {
+  return (callTransport ?? transport).call<DriverStatus>("environment_driver_status", {})
 }
 
 /** One platform an image offers, and what its config declares. */
@@ -447,8 +488,13 @@ export interface ImageMetadata {
  * what runs, and a tag the registry later moves must not change it. Only a
  * registry on the deployment's allowlist is contacted.
  */
-export function environmentImageInspect(reference: string): Promise<ImageMetadata> {
-  return transport.call<ImageMetadata>("environment_image_inspect", { reference })
+export function environmentImageInspect(
+  reference: string,
+  callTransport?: Pick<Transport, "call">
+): Promise<ImageMetadata> {
+  return (callTransport ?? transport).call<ImageMetadata>("environment_image_inspect", {
+    reference,
+  })
 }
 
 /**
@@ -505,14 +551,19 @@ export interface CatalogRows {
  * A bounded loop rather than a `while (token)` — a Host that kept issuing the
  * same token would otherwise spin forever in the run path.
  */
-export async function fetchEnvironmentCatalogRows(pageSize = 200): Promise<CatalogRows> {
+export async function fetchEnvironmentCatalogRows(
+  pageSize = 200,
+  callTransport?: Pick<Transport, "call">
+): Promise<CatalogRows> {
   const rejected: CatalogRejectionRow[] = []
-  const first = await environmentCatalogList({ pageSize })
+  const first = await environmentCatalogList({ pageSize }, callTransport)
   const { items: _items, nextPageToken: _token, rejected: _rejected, ...facts } = first
   const rows = await collectPages(
     async (pageToken) => {
       const page =
-        pageToken === undefined ? first : await environmentCatalogList({ pageSize, pageToken })
+        pageToken === undefined
+          ? first
+          : await environmentCatalogList({ pageSize, pageToken }, callTransport)
       rejected.push(...page.rejected)
       return page
     },
@@ -527,8 +578,15 @@ export async function fetchEnvironmentCatalogRows(pageSize = 200): Promise<Catal
  * Pages until the Host stops issuing tokens, because resolution needs *every*
  * entry: the project's own may be on any page, and so may the default.
  */
-export async function fetchEnvironmentCatalog(pageSize = 200): Promise<EnvironmentCatalogView> {
-  const { facts: first, rows, rejected } = await fetchEnvironmentCatalogRows(pageSize)
+export async function fetchEnvironmentCatalog(
+  pageSize = 200,
+  callTransport?: Pick<Transport, "call">
+): Promise<EnvironmentCatalogView> {
+  const {
+    facts: first,
+    rows,
+    rejected,
+  } = await fetchEnvironmentCatalogRows(pageSize, callTransport)
   const entries: EnvironmentCatalogEntryView[] = rows.map((row) => ({
     id: row.entry.id,
     scope: row.entry.scope,

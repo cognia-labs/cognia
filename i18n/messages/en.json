@@ -39063,6 +39063,9 @@
       }
     },
     "bypass": "Bypass once",
+    "cancelRun": "Cancel run",
+    "cancelled": "Environment command cancelled.",
+    "clearOutput": "Dismiss output",
     "create": "New environment",
     "default": "Use as project default",
     "defaultBadge": "Default",
@@ -39172,6 +39175,12 @@
         "workspaceRemoteRequired": "A remote sandbox clones the repository from its remote, and this checkout has none it can clone over HTTPS ({reason, select, no_checkout {no checkout} no_remote {no remote} remote_not_https {the remote is not HTTPS or SSH} no_base_branch {no branch on the remote to start from} other {{reason}}})."
       }
     },
+    "outputExitCode": "Exit code {code}",
+    "outputStderr": "Standard error",
+    "outputStdout": "Standard output",
+    "outputTimedOut": "Timed out",
+    "outputTitle": "Command output",
+    "outputTruncated": "Output truncated by host limit",
     "plainWarning": "Do not place secrets in plain variables. Store only an OS-keyring reference below.",
     "provisioning": {
       "accept": "Use it",

@@ -52,6 +52,12 @@ jest.mock("@/lib/codeserver/remote-relay", () => ({
 import { isTauri } from "@/lib/tauri"
 import { openExternal } from "@/lib/tauri/opener"
 import { ensureLocalPortRelay, stopRemotePortRelay } from "@/lib/codeserver/remote-relay"
+import { __resetRoutingForTests, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
+import type { Transport } from "@/lib/tauri/transport-types"
 
 import { act, renderHook, waitFor } from "@testing-library/react"
 
@@ -129,6 +135,8 @@ function input(
 }
 
 beforeEach(() => {
+  __resetRoutingForTests()
+  clearActiveRuntimeTargetContext()
   ;(isTauri as jest.Mock).mockReturnValue(false)
   ;(ensureLocalPortRelay as jest.Mock).mockReset()
   ;(stopRemotePortRelay as jest.Mock).mockClear()
@@ -569,4 +577,145 @@ it("opens an admitted local port through the native relay and disposes it on clo
   await act(() => result.current.closePort(port.path))
   expect(stopRemotePortRelay).toHaveBeenCalledWith(expect.stringMatching(/^environment-port:/))
   expect(result.current.openedPorts).toEqual({})
+})
+
+describe("Host switching (F9)", () => {
+  function fakeRemote(): Transport {
+    return { call: jest.fn(), subscribe: jest.fn(() => () => undefined) }
+  }
+
+  it("clears Host A state, discards delayed Host A reload responses, and reloads on Host B", async () => {
+    const hostA = fakeRemote()
+    const hostB = fakeRemote()
+    setActiveRemoteTransport(hostA)
+    client.environmentDriverStatus.mockResolvedValueOnce({
+      driver: "docker-host-a",
+      deploymentId: "dep-a",
+      instanceId: "inst-a",
+      multiTenant: false,
+      isolationFloor: "container",
+      availableTiers: ["container"],
+      reachable: true,
+      bundles: [],
+    })
+
+    const { result } = renderHook(() => useProjectRuntimeEnvironment(input(), sources))
+    await waitFor(() => expect(result.current.driver?.driver).toBe("docker-host-a"))
+
+    let resolveHostB!: (value: EnvironmentCatalogView) => void
+    client.fetchEnvironmentCatalog.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveHostB = resolve
+        })
+    )
+    client.environmentDriverStatus.mockResolvedValueOnce({
+      driver: "k8s-host-b",
+      deploymentId: "dep-b",
+      instanceId: "inst-b",
+      multiTenant: true,
+      isolationFloor: "gvisor",
+      availableTiers: ["gvisor"],
+      reachable: true,
+      bundles: [],
+    })
+
+    act(() => {
+      setActiveRemoteTransport(hostB)
+    })
+
+    // Host A state is cleared immediately while Host B is loading.
+    expect(result.current.loading).toBe(true)
+    expect(result.current.driver).toBeUndefined()
+    expect(result.current.catalog).toBeUndefined()
+
+    await act(async () => {
+      resolveHostB(catalog({ defaultEntryId: "host-b-default" }))
+    })
+    await waitFor(() => expect(result.current.driver?.driver).toBe("k8s-host-b"))
+    expect(result.current.catalog?.defaultEntryId).toBe("host-b-default")
+  })
+
+  it("cancels an in-flight build on Host A's pinned transport rather than Host B when switching Hosts", async () => {
+    const hostA = fakeRemote()
+    const hostB = fakeRemote()
+    setActiveRemoteTransport(hostA)
+    const contents = JSON.stringify({ build: { dockerfile: "Dockerfile" } })
+    client.environmentDeclarationRead.mockResolvedValue({
+      files: [
+        {
+          relativePath: ".devcontainer.json",
+          path: "/repo/.devcontainer.json",
+          file: "devcontainer",
+          contents,
+          bytesSha256: "b".repeat(64),
+        },
+      ],
+      searched: [],
+    })
+    client.environmentBuildCancel.mockResolvedValue({
+      jobId: "job-a",
+      projectId: "prj1",
+      status: "cancelled",
+    })
+    let resolveStart!: (value: unknown) => void
+    client.environmentBuildStart.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = resolve
+        })
+    )
+
+    const { result } = renderHook(() => useProjectRuntimeEnvironment(input(), sources))
+    await waitFor(() => expect(result.current.declaration.kind).toBe("declared"))
+
+    let pendingBuild!: Promise<void>
+    act(() => {
+      pendingBuild = result.current.buildEnvironment()
+    })
+
+    act(() => {
+      setActiveRemoteTransport(hostB)
+    })
+
+    await act(async () => {
+      resolveStart({ projectId: "prj1", jobId: "job-a", status: "building" })
+      await pendingBuild
+    })
+
+    // Must pass Host A's pinned transport so cancel reaches Host A, not Host B.
+    expect(client.environmentBuildCancel).toHaveBeenCalledWith("prj1", "job-a", hostA)
+  })
+
+  it("aborts approval if a paired client switches Hosts between image inspect and approve", async () => {
+    setActiveRuntimeTargetContext("acct-01", "tgt-a", 1)
+    client.environmentDeclarationRead.mockResolvedValue({
+      files: [
+        {
+          path: "/repo/.devcontainer.json",
+          relativePath: ".devcontainer.json",
+          file: "devcontainer",
+          contents: DEVCONTAINER,
+          bytesSha256: "b".repeat(64),
+        },
+      ],
+      searched: [".devcontainer.json"],
+    })
+    client.environmentImageInspect.mockImplementationOnce(async () => {
+      setActiveRuntimeTargetContext("acct-01", "tgt-b", 2)
+      return {
+        registry: "docker.io",
+        repository: "library/python",
+        digest: DIGEST,
+        mediaType: "application/vnd.oci.image.index.v1+json",
+        platforms: [],
+      }
+    })
+
+    const { result } = renderHook(() => useProjectRuntimeEnvironment(input(), sources))
+    await waitFor(() => expect(result.current.declaration.kind).toBe("declared"))
+
+    await act(() => result.current.approve())
+    expect(client.environmentApprovalApprove).not.toHaveBeenCalled()
+  })
 })

@@ -42,7 +42,7 @@
  * the runtime's, so it is not mistaken for the editor's.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
@@ -65,6 +65,10 @@ import {
 } from "@/hooks/sandbox/use-project-runtime-environment"
 import { putProjectEnvironment } from "@/lib/db/project-environments"
 import { detectHostProfile } from "@/lib/platform/capabilities"
+import {
+  currentEnvironmentHostScopeKey,
+  subscribeEnvironmentHostChange,
+} from "@/lib/project-environment/host-route"
 import {
   readRepositoryCoordinates,
   type RunEnvironmentSources,
@@ -122,18 +126,28 @@ export function ProjectEnvironmentRuntime({
   const project = useProjectStore((state) =>
     state.projects.find((candidate) => candidate.id === projectId)
   )
-  const [repository, setRepository] = useState<{ remote: string; commitSha: string }>()
+  const hostScopeKey = useSyncExternalStore(
+    subscribeEnvironmentHostChange,
+    currentEnvironmentHostScopeKey,
+    () => "local"
+  )
+  const [repositoryState, setRepositoryState] = useState<{
+    key: string
+    value?: { remote: string; commitSha: string }
+  } | null>(null)
   const [saved, setSaved] = useState(false)
+  const repoKey = `${executionRoot}|${hostScopeKey}`
+  const repository = repositoryState?.key === repoKey ? repositoryState.value : undefined
 
   useEffect(() => {
     let cancelled = false
     void readRepositoryCoordinates(executionRoot).then((coordinates) => {
-      if (!cancelled) setRepository(coordinates)
+      if (!cancelled) setRepositoryState({ key: repoKey, value: coordinates })
     })
     return () => {
       cancelled = true
     }
-  }, [executionRoot])
+  }, [executionRoot, repoKey])
 
   const onSave = useCallback(
     async (runtime: ProjectRuntimeSelection | undefined) => {
@@ -593,7 +607,9 @@ export function ProjectEnvironmentRuntime({
 
       <ProjectEnvironmentRuntimeTrace preview={state.preview} catalog={catalog} />
 
-      {state.poolEnabled ? <SandboxManagementPanels projectId={projectId} /> : null}
+      {state.poolEnabled ? (
+        <SandboxManagementPanels key={hostScopeKey} projectId={projectId} />
+      ) : null}
 
       {state.ports && state.ports.length > 0 ? (
         <div className="space-y-2 border-t pt-3" data-testid="runtime-ports">

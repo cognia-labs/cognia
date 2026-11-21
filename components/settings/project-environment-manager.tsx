@@ -49,9 +49,25 @@
  * values override the repository's and which required secrets are unbound.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { useFormatter, useNow, useTranslations } from "next-intl"
-import { ChevronRightIcon, PlusIcon, Trash2Icon, TriangleAlertIcon, Undo2Icon } from "lucide-react"
+import {
+  ChevronRightIcon,
+  PlusIcon,
+  SquareIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+  Undo2Icon,
+  XIcon,
+} from "lucide-react"
 
 import { CapabilityGate } from "@/components/platform/capability-gate"
 import {
@@ -78,6 +94,11 @@ import {
   putProjectEnvironment,
 } from "@/lib/db/project-environments"
 import { executeProjectEnvironment } from "@/lib/project-environment/executor"
+import {
+  currentEnvironmentHostKey,
+  currentEnvironmentHostScopeKey,
+  subscribeEnvironmentHostChange,
+} from "@/lib/project-environment/host-route"
 import {
   assertBootstrapEnvironment,
   BootstrapAgentValidationError,
@@ -287,6 +308,36 @@ function SettingLine({
 
 type PendingSwitch = { kind: "select"; id: string } | { kind: "create" } | { kind: "discard-new" }
 
+interface CommandDiagnosticOutput {
+  stdout?: string
+  stderr?: string
+  exitCode?: number
+  timedOut?: boolean
+  cancelled?: boolean
+  stdoutTruncated?: boolean
+  stderrTruncated?: boolean
+}
+
+function selectLastRunForHost(
+  draft: ProjectEnvironment | null,
+  hostKey: string
+): ProjectEnvironment["lastInitialization"] {
+  if (!draft) return undefined
+  const history = draft.initializationHistory ?? []
+  let matched: ProjectEnvironment["lastInitialization"]
+  for (const entry of history) {
+    if (entry.hostKey !== hostKey) continue
+    const at = entry.completedAt ?? entry.startedAt
+    const prevAt = matched ? (matched.completedAt ?? matched.startedAt) : -Infinity
+    if (at >= prevAt) matched = entry
+  }
+  if (matched) return matched
+  const last = draft.lastInitialization
+  if (!last) return undefined
+  if (last.hostKey === undefined || last.hostKey === hostKey) return last
+  return undefined
+}
+
 export function ProjectEnvironmentManager({
   projectId,
   executionRoot,
@@ -308,6 +359,16 @@ export function ProjectEnvironmentManager({
   const now = useNow({ updateInterval: 60_000 })
   const ids = useId()
 
+  const hostScopeKey = useSyncExternalStore(
+    subscribeEnvironmentHostChange,
+    currentEnvironmentHostScopeKey,
+    () => "local"
+  )
+  const currentHostKey = useMemo(() => {
+    void hostScopeKey
+    return currentEnvironmentHostKey()
+  }, [hostScopeKey])
+
   const [environments, setEnvironments] = useState<ProjectEnvironment[]>([])
   const [loadState, setLoadState] = useState<{
     status: "loading" | "ready" | "error"
@@ -321,9 +382,24 @@ export function ProjectEnvironmentManager({
   /** The snapshot the working copy was loaded from; dirty is "differs from this". */
   const [baseline, setBaseline] = useState("")
   const [busy, setBusy] = useState(false)
+  const [runningCommand, setRunningCommand] = useState(false)
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null)
+  const [runOutput, setRunOutput] = useState<CommandDiagnosticOutput | null>(null)
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const runAbortRef = useRef<AbortController | null>(null)
+  const [seenHostScope, setSeenHostScope] = useState(hostScopeKey)
+  if (seenHostScope !== hostScopeKey) {
+    setSeenHostScope(hostScopeKey)
+    setMessage(null)
+    setRunOutput(null)
+  }
+  useEffect(
+    () => () => {
+      runAbortRef.current?.abort()
+    },
+    []
+  )
   const defaultEnvironmentId = useProjectStore(
     (state) => state.projects.find((project) => project.id === projectId)?.defaultEnvironmentId
   )
@@ -355,6 +431,7 @@ export function ProjectEnvironmentManager({
       setIsDefault(nextDefault)
       setBaseline(editorSnapshot(hydrated, nextVariables, nextSecrets, nextDefault))
       setMessage(null)
+      setRunOutput(null)
     },
     [defaultEnvironmentId]
   )
@@ -530,10 +607,19 @@ export function ProjectEnvironmentManager({
     }
   }
 
+  const cancelExecution = () => {
+    runAbortRef.current?.abort()
+  }
+
   const execute = async (actionId?: string, bypassOnFailure = false) => {
     if (!draft) return
+    const startScope = currentEnvironmentHostScopeKey()
+    const controller = new AbortController()
+    runAbortRef.current = controller
     setBusy(true)
+    setRunningCommand(true)
     setMessage(null)
+    setRunOutput(null)
     try {
       const result = await executeProjectEnvironment({
         environment: {
@@ -549,19 +635,43 @@ export function ProjectEnvironmentManager({
         // Pressing "Run setup" means run it: never answered by a reused or
         // in-flight setup, and it records a fresh success for later reuse.
         force: actionId === undefined,
+        signal: controller.signal,
       })
-      setMessage(
-        result.success
-          ? { kind: "success", text: t("success") }
-          : {
-              kind: "error",
-              text: t("failure", {
-                message: result.bootstrapValidationCode
-                  ? t(`bootstrap.validation.${result.bootstrapValidationCode}`)
-                  : (result.error ?? "unknown"),
-              }),
-            }
-      )
+      const sameHost = currentEnvironmentHostScopeKey() === startScope
+      if (sameHost) {
+        if (
+          result.stdout ||
+          result.stderr ||
+          result.timedOut ||
+          result.cancelled ||
+          result.stdoutTruncated ||
+          result.stderrTruncated
+        ) {
+          setRunOutput({
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            cancelled: result.cancelled,
+            stdoutTruncated: result.stdoutTruncated,
+            stderrTruncated: result.stderrTruncated,
+          })
+        }
+        setMessage(
+          result.cancelled
+            ? { kind: "error", text: t("cancelled") }
+            : result.success
+              ? { kind: "success", text: t("success") }
+              : {
+                  kind: "error",
+                  text: t("failure", {
+                    message: result.bootstrapValidationCode
+                      ? t(`bootstrap.validation.${result.bootstrapValidationCode}`)
+                      : (result.error ?? "unknown"),
+                  }),
+                }
+        )
+      }
       // A run records its result on the stored row. Refresh the list (its
       // status dots) and, when nothing is being edited, the working copy; an
       // edited one keeps the user's edits and only the list moves.
@@ -570,15 +680,40 @@ export function ProjectEnvironmentManager({
           const rows = await listProjectEnvironments(projectId)
           setEnvironments(rows)
         } else {
-          await load(draft.id)
+          const rows = await listProjectEnvironments(projectId)
+          setEnvironments(rows)
+          setLoadState({ status: "ready" })
+          const selected = rows.find((row) => row.id === draft.id) ?? rows[0] ?? null
+          if (selected) {
+            const hydrated = hydrateProjectEnvironment(structuredClone(selected))
+            const nextVariables = Object.entries(hydrated.variables ?? {}).map(([name, value]) => ({
+              name,
+              value,
+            }))
+            const nextSecrets = (hydrated.keyringReferences ?? []).map((reference) => ({
+              ...reference,
+            }))
+            const nextDefault = hydrated.id === defaultEnvironmentId
+            setDraft(hydrated)
+            setVariables(nextVariables)
+            setSecrets(nextSecrets)
+            setIsDefault(nextDefault)
+            setBaseline(editorSnapshot(hydrated, nextVariables, nextSecrets, nextDefault))
+          }
         }
       }
     } catch (cause) {
-      setMessage({
-        kind: "error",
-        text: t("failure", { message: cause instanceof Error ? cause.message : String(cause) }),
-      })
+      if (currentEnvironmentHostScopeKey() === startScope) {
+        setMessage({
+          kind: "error",
+          text: t("failure", { message: cause instanceof Error ? cause.message : String(cause) }),
+        })
+      }
     } finally {
+      if (runAbortRef.current === controller) {
+        runAbortRef.current = null
+      }
+      setRunningCommand(false)
       setBusy(false)
     }
   }
@@ -614,7 +749,7 @@ export function ProjectEnvironmentManager({
   )
 
   const storedDraft = draft ? environments.find((row) => row.id === draft.id) : undefined
-  const lastRun = draft?.lastInitialization
+  const lastRun = selectLastRunForHost(draft, currentHostKey)
   const draftLabel = draft?.name.trim() || t("unnamed")
 
   // ---------------------------------------------------------------- view
@@ -1102,6 +1237,17 @@ export function ProjectEnvironmentManager({
                     </Button>
                   ) : null}
                   <div className="ml-auto flex items-center gap-1.5">
+                    {runningCommand ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={cancelExecution}
+                        data-testid="project-environment-cancel-run"
+                      >
+                        <SquareIcon className="size-3" />
+                        {t("cancelRun")}
+                      </Button>
+                    ) : null}
                     {lastRun?.status === "failed" ? (
                       <Button
                         size="sm"
@@ -1130,6 +1276,65 @@ export function ProjectEnvironmentManager({
                   </div>
                 </div>
               </div>
+              {runOutput ? (
+                <div
+                  className="mt-2 space-y-1.5 border-t pt-2"
+                  data-testid="project-environment-run-output"
+                >
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    <span className="font-medium text-foreground">{t("outputTitle")}</span>
+                    {runOutput.exitCode !== undefined ? (
+                      <span className="font-mono tabular-nums">
+                        {t("outputExitCode", { code: runOutput.exitCode })}
+                      </span>
+                    ) : null}
+                    {runOutput.timedOut ? (
+                      <span className="text-destructive">{t("outputTimedOut")}</span>
+                    ) : null}
+                    {runOutput.stdoutTruncated || runOutput.stderrTruncated ? (
+                      <span className="text-amber-700 dark:text-amber-400">
+                        {t("outputTruncated")}
+                      </span>
+                    ) : null}
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      className="ml-auto size-5"
+                      aria-label={t("clearOutput")}
+                      title={t("clearOutput")}
+                      onClick={() => setRunOutput(null)}
+                    >
+                      <XIcon className="size-3" />
+                    </Button>
+                  </div>
+                  {runOutput.stdout ? (
+                    <div className="space-y-0.5">
+                      <p className="text-[10px] font-medium text-muted-foreground">
+                        {t("outputStdout")}
+                      </p>
+                      <pre
+                        className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-2 font-mono text-[11px]"
+                        data-testid="project-environment-stdout"
+                      >
+                        {runOutput.stdout}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {runOutput.stderr ? (
+                    <div className="space-y-0.5">
+                      <p className="text-[10px] font-medium text-destructive">
+                        {t("outputStderr")}
+                      </p>
+                      <pre
+                        className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-destructive/10 p-2 font-mono text-[11px] text-destructive"
+                        data-testid="project-environment-stderr"
+                      >
+                        {runOutput.stderr}
+                      </pre>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
         ) : loadState.status === "ready" && (environments.length > 0 || message) ? (

@@ -39063,6 +39063,9 @@
       }
     },
     "bypass": "仅本次跳过",
+    "cancelRun": "取消运行",
+    "cancelled": "环境命令已取消。",
+    "clearOutput": "收起输出",
     "create": "新建环境",
     "default": "设为项目默认环境",
     "defaultBadge": "默认",
@@ -39172,6 +39175,12 @@
         "workspaceRemoteRequired": "远程沙箱会从仓库的远端克隆代码，但当前检出没有可通过 HTTPS 克隆的远端（{reason, select, no_checkout {没有检出} no_remote {没有远端} remote_not_https {远端既不是 HTTPS 也不是 SSH} no_base_branch {远端上没有可作为起点的分支} other {{reason}}}）。"
       }
     },
+    "outputExitCode": "退出码 {code}",
+    "outputStderr": "标准错误",
+    "outputStdout": "标准输出",
+    "outputTimedOut": "已超时",
+    "outputTitle": "命令输出",
+    "outputTruncated": "输出已按主机上限截断",
     "plainWarning": "请勿将密钥写入明文变量；下方只保存系统钥匙串引用。",
     "provisioning": {
       "accept": "启用",

@@ -1,7 +1,7 @@
 "use client"
 
 import { builtEnvironmentDeclaration } from "@/lib/project-environment/devcontainer"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 
 import {
   declarationReader,
@@ -25,6 +25,13 @@ import {
   type DriverStatus,
 } from "@/lib/project-environment/environment-client"
 import { declarationRuntimeFieldsDigest } from "@/lib/project-environment/environment-spec-digest"
+import {
+  captureEnvironmentHostRoute,
+  currentEnvironmentHostScopeKey,
+  ExecutionRouteChangedError,
+  subscribeEnvironmentHostChange,
+  type EnvironmentHostRoute,
+} from "@/lib/project-environment/host-route"
 import { isTauri } from "@/lib/tauri"
 import { openExternal } from "@/lib/tauri/opener"
 import { getActiveRemoteEndpoint } from "@/lib/tauri/transport-routing"
@@ -122,11 +129,50 @@ export function defaultRuntimeSelection(): ProjectRuntimeSelection {
   return { source: { kind: "auto" }, updatedAt: Date.now() }
 }
 
+function cancelAndReleaseBuildOwner(owner: {
+  projectId: string
+  jobId?: string
+  route?: EnvironmentHostRoute
+}): void {
+  const { jobId, route } = owner
+  owner.jobId = undefined
+  owner.route = undefined
+  if (!jobId) {
+    route?.release()
+    return
+  }
+  // If a paired client switched away from the Host that started this build,
+  // its single transport now points at Host B — never send Host A's cancel there.
+  if (route && !route.reachableAfterSwitch && !route.isCurrent()) {
+    route.release()
+    return
+  }
+  const pinnedTransport = route && !route.isCurrent() ? route.transport : undefined
+  const cancelCall = pinnedTransport
+    ? environmentBuildCancel(owner.projectId, jobId, pinnedTransport)
+    : environmentBuildCancel(owner.projectId, jobId)
+  void cancelCall
+    .catch(() => undefined)
+    .finally(() => {
+      route?.release()
+    })
+}
+
 export function useProjectRuntimeEnvironment(
   input: UseProjectRuntimeEnvironmentInput,
   sources?: RunEnvironmentSources
 ): ProjectRuntimeEnvironmentState & ProjectRuntimeEnvironmentActions {
   const { projectId, executionRoot, policy, saved } = input
+  // Reactive Host scope key (F9): switching desktop remote Hosts or paired
+  // runtime targets invalidates Host-owned state and reloads against the new Host.
+  const hostScopeKey = useSyncExternalStore(
+    subscribeEnvironmentHostChange,
+    currentEnvironmentHostScopeKey,
+    () => "local"
+  )
+  const hostScopeRef = useRef(hostScopeKey)
+  hostScopeRef.current = hostScopeKey
+  const loadedHostScopeRef = useRef<string | null>(null)
   // The latest input and sources, read at call time. Every callback below
   // would otherwise capture the project's roots, its remote and `onSave` from
   // the render that created it, and a parent re-rendering with new ones would
@@ -159,10 +205,16 @@ export function useProjectRuntimeEnvironment(
         void stopRemotePortRelay(id).catch(() => undefined)
       portOwners.current.clear()
     },
-    [projectId, executionRoot]
+    [projectId, executionRoot, hostScopeKey]
   )
 
-  const buildOwner = useRef<{ epoch: number; projectId: string; jobId?: string }>({
+  const buildOwner = useRef<{
+    epoch: number
+    projectId: string
+    jobId?: string
+    starting?: boolean
+    route?: EnvironmentHostRoute
+  }>({
     epoch: 0,
     projectId,
   })
@@ -170,10 +222,14 @@ export function useProjectRuntimeEnvironment(
     () => () => {
       const owner = buildOwner.current
       buildOwner.current = { epoch: owner.epoch + 1, projectId: inputRef.current.projectId }
-      if (owner.jobId)
-        void environmentBuildCancel(owner.projectId, owner.jobId).catch(() => undefined)
+      // If `environmentBuildStart` has not resolved yet, leave `owner.route`
+      // intact so the resolving promise can cancel the returned `jobId` on its
+      // original Host before releasing the retained transport.
+      if (!owner.starting) {
+        cancelAndReleaseBuildOwner(owner)
+      }
     },
-    [projectId, executionRoot]
+    [projectId, executionRoot, hostScopeKey]
   )
 
   // The saved value is the form's origin. Re-seeding on every change would
@@ -190,102 +246,136 @@ export function useProjectRuntimeEnvironment(
   const reloadEpoch = useRef(0)
   const reload = useCallback(async () => {
     const epoch = ++reloadEpoch.current
+    const activeScope = hostScopeRef.current
+    const route = captureEnvironmentHostRoute()
     const current = inputRef.current
     const from = sourcesRef.current
-    setState((prev) => ({ ...prev, loading: true, error: undefined }))
-    let poolEnabled = false
-    let catalog: EnvironmentCatalogView | undefined
-    let error: string | undefined
+    const switchingHost =
+      loadedHostScopeRef.current !== null && loadedHostScopeRef.current !== activeScope
+    if (switchingHost) {
+      loadedHostScopeRef.current = null
+      setLoadError(undefined)
+      setPreview(undefined)
+    }
+    setState((prev) =>
+      switchingHost
+        ? {
+            loading: true,
+            poolEnabled: false,
+            approvals: [],
+            declaration: { kind: "absent" },
+            busy: false,
+            portsAvailable: isTauri(),
+          }
+        : { ...prev, loading: true, error: undefined }
+    )
     try {
-      catalog = await fetchEnvironmentCatalog()
-      poolEnabled = catalog.poolEnabled
-    } catch (cause) {
-      // The pool being off is the ordinary state of a deployment that never
-      // opted in, not a failure to report.
-      if (!isPoolDisabled(cause)) error = messageOf(cause)
-    }
-
-    // Independent of the catalog: a declaration is worth showing even where
-    // nothing can be admitted, and the driver answers for itself.
-    const [files, driver, approvals, ports] = await Promise.all([
-      current.executionRoot
-        ? environmentDeclarationRead(current.executionRoot).catch((cause) => {
-            if (!isPoolDisabled(cause)) error ??= messageOf(cause)
-            return undefined
-          })
-        : undefined,
-      poolEnabled ? environmentDriverStatus().catch(() => undefined) : undefined,
-      poolEnabled
-        ? fetchEnvironmentApprovals(current.projectId).catch((): ApprovalRecord[] => [])
-        : [],
-      poolEnabled ? environmentPortsList(current.projectId).catch(() => []) : [],
-    ])
-
-    let declaration: EnvironmentDeclarationVerdict = { kind: "absent" }
-    if (files) {
+      let poolEnabled = false
+      let catalog: EnvironmentCatalogView | undefined
+      let error: string | undefined
       try {
-        const request = panelRequest(current)
-        const readFile = declarationReader(files)
-        declaration = await readEnvironmentDeclaration(
-          {
-            root: current.executionRoot,
-            workspaceConfig: await from.workspaceConfig(request, readFile),
-            restricted: await from.restricted(request),
-          },
-          { readFile }
-        )
+        catalog = await fetchEnvironmentCatalog()
+        poolEnabled = catalog.poolEnabled
       } catch (cause) {
-        error ??= messageOf(cause)
+        // The pool being off is the ordinary state of a deployment that never
+        // opted in, not a failure to report.
+        if (!isPoolDisabled(cause)) error = messageOf(cause)
       }
-    }
+      if (reloadEpoch.current !== epoch || !route.isCurrent()) return
 
-    let approvedBuild: EnvironmentBuildStatus | undefined
-    if (declaration.kind === "declared" && declaration.declaration.build) {
-      const approved = approvals.find(
-        (record) =>
-          !record.revokedAt &&
-          record.buildKey &&
-          record.path === declaration.declaration.path &&
-          record.declarationDigest === declaration.digest
-      )
-      if (approved?.buildKey) {
-        const found = await environmentBuildGet({
-          projectId: current.projectId,
-          buildKey: approved.buildKey,
-        }).catch(() => undefined)
-        if (
-          found?.record?.commitSha === current.repository?.commitSha.toLowerCase() &&
-          found?.record?.declarationDigest === declaration.digest &&
-          found?.record?.projectId === current.projectId
-        )
-          approvedBuild = found
+      // Independent of the catalog: a declaration is worth showing even where
+      // nothing can be admitted, and the driver answers for itself.
+      const [files, driver, approvals, ports] = await Promise.all([
+        current.executionRoot
+          ? environmentDeclarationRead(current.executionRoot).catch((cause) => {
+              if (!isPoolDisabled(cause)) error ??= messageOf(cause)
+              return undefined
+            })
+          : undefined,
+        poolEnabled ? environmentDriverStatus().catch(() => undefined) : undefined,
+        poolEnabled
+          ? fetchEnvironmentApprovals(current.projectId).catch((): ApprovalRecord[] => [])
+          : [],
+        poolEnabled ? environmentPortsList(current.projectId).catch(() => []) : [],
+      ])
+      if (reloadEpoch.current !== epoch || !route.isCurrent()) return
+
+      let declaration: EnvironmentDeclarationVerdict = { kind: "absent" }
+      if (files) {
+        try {
+          const request = panelRequest(current)
+          const readFile = declarationReader(files)
+          declaration = await readEnvironmentDeclaration(
+            {
+              root: current.executionRoot,
+              workspaceConfig: await from.workspaceConfig(request, readFile),
+              restricted: await from.restricted(request),
+            },
+            { readFile }
+          )
+        } catch (cause) {
+          error ??= messageOf(cause)
+        }
       }
+      if (reloadEpoch.current !== epoch || !route.isCurrent()) return
+
+      let approvedBuild: EnvironmentBuildStatus | undefined
+      if (declaration.kind === "declared" && declaration.declaration.build) {
+        const approved = approvals.find(
+          (record) =>
+            !record.revokedAt &&
+            record.buildKey &&
+            record.path === declaration.declaration.path &&
+            record.declarationDigest === declaration.digest
+        )
+        if (approved?.buildKey) {
+          const found = await environmentBuildGet({
+            projectId: current.projectId,
+            buildKey: approved.buildKey,
+          }).catch(() => undefined)
+          if (
+            found?.record?.commitSha === current.repository?.commitSha.toLowerCase() &&
+            found?.record?.declarationDigest === declaration.digest &&
+            found?.record?.projectId === current.projectId
+          )
+            approvedBuild = found
+        }
+      }
+      if (
+        reloadEpoch.current !== epoch ||
+        !route.isCurrent() ||
+        hostScopeRef.current !== activeScope
+      ) {
+        return
+      }
+      loadedHostScopeRef.current = activeScope
+      setLoadError(error)
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        poolEnabled,
+        catalog,
+        driver,
+        files,
+        declaration,
+        approvals,
+        ports,
+        portsAvailable: isTauri(),
+        build:
+          approvedBuild ??
+          (prev.build?.projectId === current.projectId &&
+          (!prev.build.record ||
+            (prev.build.record.commitSha === current.repository?.commitSha.toLowerCase() &&
+              declaration.kind === "declared" &&
+              prev.build.record.declarationDigest === declaration.digest))
+            ? prev.build
+            : undefined),
+        error,
+        busy: false,
+      }))
+    } finally {
+      route.release()
     }
-    if (reloadEpoch.current !== epoch) return
-    setLoadError(error)
-    setState((prev) => ({
-      ...prev,
-      loading: false,
-      poolEnabled,
-      catalog,
-      driver,
-      files,
-      declaration,
-      approvals,
-      ports,
-      portsAvailable: isTauri(),
-      build:
-        approvedBuild ??
-        (prev.build?.projectId === current.projectId &&
-        (!prev.build.record ||
-          (prev.build.record.commitSha === current.repository?.commitSha.toLowerCase() &&
-            declaration.kind === "declared" &&
-            prev.build.record.declarationDigest === declaration.digest))
-          ? prev.build
-          : undefined),
-      error,
-      busy: false,
-    }))
   }, [])
 
   useEffect(() => {
@@ -293,7 +383,7 @@ export function useProjectRuntimeEnvironment(
     return () => {
       reloadEpoch.current += 1
     }
-  }, [reload, projectId, executionRoot, input.repository?.commitSha])
+  }, [reload, projectId, executionRoot, input.repository?.commitSha, hostScopeKey])
 
   // Resolve the draft through the real resolver, with the unsaved selection
   // substituted for the stored one and the reads this panel already made
@@ -330,13 +420,18 @@ export function useProjectRuntimeEnvironment(
   }, [draft, policy, loading, loadError, catalog, files, approvals])
 
   const run = useCallback(async (action: () => Promise<void>) => {
+    const startScope = hostScopeRef.current
     setState((prev) => ({ ...prev, busy: true, error: undefined }))
     try {
       await action()
     } catch (cause) {
-      setState((prev) => ({ ...prev, error: messageOf(cause) }))
+      if (hostScopeRef.current === startScope) {
+        setState((prev) => ({ ...prev, error: messageOf(cause) }))
+      }
     } finally {
-      setState((prev) => ({ ...prev, busy: false }))
+      if (hostScopeRef.current === startScope) {
+        setState((prev) => ({ ...prev, busy: false }))
+      }
     }
   }, [])
 
@@ -351,7 +446,14 @@ export function useProjectRuntimeEnvironment(
   const openPort = useCallback(
     (port: EnvironmentRuntimePort) =>
       run(async () => {
-        if (!isTauri() || port.projectId !== inputRef.current.projectId) return
+        const startScope = hostScopeRef.current
+        if (
+          !isTauri() ||
+          port.projectId !== inputRef.current.projectId ||
+          loadedHostScopeRef.current !== startScope
+        ) {
+          return
+        }
         const epoch = portEpoch.current
         const existing = portOwners.current.get(port.path)
         if (existing) {
@@ -369,7 +471,7 @@ export function useProjectRuntimeEnvironment(
                 { projectId: port.projectId, containerId: port.containerId, port: port.port },
                 relayId
               )
-          if (portEpoch.current !== epoch) {
+          if (portEpoch.current !== epoch || hostScopeRef.current !== startScope) {
             await stopRemotePortRelay(relayId)
             return
           }
@@ -406,15 +508,25 @@ export function useProjectRuntimeEnvironment(
   const { declaration } = state
   const buildEnvironment = useCallback(async () => {
     if (declaration.kind !== "declared" || !declaration.declaration.build) return
+    if (loadedHostScopeRef.current !== hostScopeRef.current) return
     const current = inputRef.current
     const file = state.files?.files.find(
       (file) => file.relativePath === declaration.declaration.path
     )
     if (!file || !current.repository?.commitSha) return
-    const owner = {
+    const route = captureEnvironmentHostRoute()
+    const owner: {
+      epoch: number
+      projectId: string
+      jobId?: string
+      starting?: boolean
+      route?: EnvironmentHostRoute
+    } = {
       epoch: buildOwner.current.epoch + 1,
       projectId: current.projectId,
-      jobId: undefined as string | undefined,
+      jobId: undefined,
+      starting: true,
+      route,
     }
     buildOwner.current = owner
     setState((prev) => ({ ...prev, busy: true, error: undefined, build: undefined }))
@@ -427,35 +539,50 @@ export function useProjectRuntimeEnvironment(
         declarationBytesSha256: file.bytesSha256,
         commitSha: current.repository.commitSha,
       })
+      owner.starting = false
       owner.jobId = progress.jobId
-      if (buildOwner.current !== owner) {
-        await environmentBuildCancel(owner.projectId, progress.jobId)
+      if (buildOwner.current !== owner || !route.isCurrent()) {
+        cancelAndReleaseBuildOwner(owner)
         return
       }
       while (true) {
         setState((prev) => ({ ...prev, build: progress }))
         if (progress.status !== "queued" && progress.status !== "building") break
         await new Promise((resolve) => setTimeout(resolve, 1000))
-        if (buildOwner.current !== owner) return
+        if (buildOwner.current !== owner || !route.isCurrent()) return
         progress = await environmentBuildGet({
           projectId: current.projectId,
           jobId: progress.jobId,
         })
-        if (buildOwner.current !== owner) return
+        if (buildOwner.current !== owner || !route.isCurrent()) return
       }
       owner.jobId = undefined
     } catch (cause) {
+      owner.starting = false
       if (buildOwner.current === owner) setState((prev) => ({ ...prev, error: messageOf(cause) }))
     } finally {
-      if (buildOwner.current === owner) setState((prev) => ({ ...prev, busy: false }))
+      owner.starting = false
+      if (buildOwner.current === owner) {
+        owner.route = undefined
+        route.release()
+        setState((prev) => ({ ...prev, busy: false }))
+      } else if (!owner.jobId && owner.route) {
+        owner.route = undefined
+        route.release()
+      }
     }
   }, [declaration, state.files])
 
   const cancelBuild = useCallback(async () => {
     const owner = buildOwner.current
     if (!owner.jobId) return
+    const route = owner.route
+    if (route && !route.reachableAfterSwitch && !route.isCurrent()) return
+    const pinnedTransport = route && !route.isCurrent() ? route.transport : undefined
     try {
-      const progress = await environmentBuildCancel(owner.projectId, owner.jobId)
+      const progress = pinnedTransport
+        ? await environmentBuildCancel(owner.projectId, owner.jobId, pinnedTransport)
+        : await environmentBuildCancel(owner.projectId, owner.jobId)
       if (buildOwner.current === owner) setState((prev) => ({ ...prev, build: progress }))
     } catch (cause) {
       if (buildOwner.current === owner) setState((prev) => ({ ...prev, error: messageOf(cause) }))
@@ -465,60 +592,71 @@ export function useProjectRuntimeEnvironment(
   const approve = useCallback(
     () =>
       run(async () => {
-        if (declaration.kind !== "declared") return
+        const startScope = hostScopeRef.current
+        if (declaration.kind !== "declared" || loadedHostScopeRef.current !== startScope) return
         const declared = declaration.declaration
         const current = inputRef.current
-        // What the person approves is what runs: a tag is resolved to the
-        // digest it names right now, and a later push to that tag does not
-        // change what this approval authorizes. A declaration that already
-        // names a digest is verified against the registry's bytes instead.
-        const record = state.build?.status === "succeeded" ? state.build.record : undefined
-        if (
-          declared.build &&
-          (!record ||
-            record.projectId !== current.projectId ||
-            record.declarationDigest !== declaration.digest ||
-            record.declarationPath !== declared.path ||
-            record.commitSha !== current.repository?.commitSha.toLowerCase())
-        )
-          return
-        const metadata = declared.build
-          ? undefined
-          : declared.image
-            ? await environmentImageInspect(canonicalImageReference(declared.image))
-            : undefined
-        if (!record && !metadata) return
-        const effective = declared.build
-          ? builtEnvironmentDeclaration(record!.runtimeConfiguration, declared)
-          : undefined
-        if (effective && !effective.ok)
-          throw new Error(
-            effective.problems.map((problem) => `${problem.field}: ${problem.code}`).join("; ")
+        const route = captureEnvironmentHostRoute()
+        try {
+          // What the person approves is what runs: a tag is resolved to the
+          // digest it names right now, and a later push to that tag does not
+          // change what this approval authorizes. A declaration that already
+          // names a digest is verified against the registry's bytes instead.
+          const record = state.build?.status === "succeeded" ? state.build.record : undefined
+          if (
+            declared.build &&
+            (!record ||
+              record.projectId !== current.projectId ||
+              record.declarationDigest !== declaration.digest ||
+              record.declarationPath !== declared.path ||
+              record.commitSha !== current.repository?.commitSha.toLowerCase())
           )
-        await environmentApprovalApprove({
-          id: `env-approval:${crypto.randomUUID()}`,
-          projectId: current.projectId,
-          // Sent as the checkout reports it; the Host states the canonical
-          // form, which is what a run looks the approval up by.
-          normalizedRemote: current.repository?.remote ?? "",
-          path: declared.path,
-          // Keyed on the declaration's own digest, so an edited file needs a
-          // new approval rather than inheriting this one.
-          declarationDigest: declaration.digest,
-          ...(declared.build
-            ? { buildKey: record!.buildKey }
-            : {
-                resolvedImage: {
-                  registry: metadata!.registry,
-                  repository: metadata!.repository,
-                  digest: metadata!.digest,
-                },
-              }),
-          runtimeFieldsDigest: await declarationRuntimeFieldsDigest(
-            effective?.ok ? effective.declaration : declared
-          ),
-        })
-        await reload()
+            return
+          const metadata = declared.build
+            ? undefined
+            : declared.image
+              ? await environmentImageInspect(canonicalImageReference(declared.image))
+              : undefined
+          if (!record && !metadata) return
+          if (!route.isCurrent() || hostScopeRef.current !== startScope) {
+            throw new ExecutionRouteChangedError(route.hostKey)
+          }
+          const effective = declared.build
+            ? builtEnvironmentDeclaration(record!.runtimeConfiguration, declared)
+            : undefined
+          if (effective && !effective.ok)
+            throw new Error(
+              effective.problems.map((problem) => `${problem.field}: ${problem.code}`).join("; ")
+            )
+          await environmentApprovalApprove({
+            id: `env-approval:${crypto.randomUUID()}`,
+            projectId: current.projectId,
+            // Sent as the checkout reports it; the Host states the canonical
+            // form, which is what a run looks the approval up by.
+            normalizedRemote: current.repository?.remote ?? "",
+            path: declared.path,
+            // Keyed on the declaration's own digest, so an edited file needs a
+            // new approval rather than inheriting this one.
+            declarationDigest: declaration.digest,
+            ...(declared.build
+              ? { buildKey: record!.buildKey }
+              : {
+                  resolvedImage: {
+                    registry: metadata!.registry,
+                    repository: metadata!.repository,
+                    digest: metadata!.digest,
+                  },
+                }),
+            runtimeFieldsDigest: await declarationRuntimeFieldsDigest(
+              effective?.ok ? effective.declaration : declared
+            ),
+          })
+          if (hostScopeRef.current === startScope) {
+            await reload()
+          }
+        } finally {
+          route.release()
+        }
       }),
     [declaration, state.build, reload, run]
   )
@@ -526,8 +664,12 @@ export function useProjectRuntimeEnvironment(
   const revoke = useCallback(
     (approvalId: string) =>
       run(async () => {
+        const startScope = hostScopeRef.current
+        if (loadedHostScopeRef.current !== startScope) return
         await environmentApprovalRevoke(approvalId)
-        await reload()
+        if (hostScopeRef.current === startScope) {
+          await reload()
+        }
       }),
     [reload, run]
   )
@@ -535,13 +677,17 @@ export function useProjectRuntimeEnvironment(
   const grantEgress = useCallback(
     (tier: "off" | "allowlist" | "on", domains: string[]) =>
       run(async () => {
+        const startScope = hostScopeRef.current
+        if (loadedHostScopeRef.current !== startScope) return
         await environmentEgressGrantCreate({
           id: `egress-grant:${crypto.randomUUID()}`,
           projectId: inputRef.current.projectId,
           tier,
           domains,
         })
-        await reload()
+        if (hostScopeRef.current === startScope) {
+          await reload()
+        }
       }),
     [reload, run]
   )

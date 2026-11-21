@@ -23,7 +23,7 @@
  * about the file.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 
 import {
   useWorkspaceCommandGate,
@@ -36,6 +36,10 @@ import {
   recordSeededDeclarations,
   type TrustedWorkspace,
 } from "@/lib/db/trusted-workspaces"
+import {
+  currentEnvironmentHostScopeKey,
+  subscribeEnvironmentHostChange,
+} from "@/lib/project-environment/host-route"
 import {
   approvalKeyFor,
   evaluateWorkspaceConfig,
@@ -106,6 +110,11 @@ export function useRepoWorkspaceConfig(
     [projects, projectId]
   )
 
+  const hostScopeKey = useSyncExternalStore(
+    subscribeEnvironmentHostChange,
+    currentEnvironmentHostScopeKey,
+    () => "local"
+  )
   const [nonce, setNonce] = useState(0)
   const approvalRoot = options?.approvalRoot?.trim() || null
   const approvalKey = useMemo(() => approvalKeyFor(project, approvalRoot), [project, approvalRoot])
@@ -120,13 +129,14 @@ export function useRepoWorkspaceConfig(
   const requestKey = useMemo(
     () =>
       [
+        hostScopeKey,
         executionRoot ?? "",
         approvalRoot ?? "",
         trustEnabled ? "1" : "0",
         (project?.roots ?? []).map((root) => root.path).join(","),
         nonce,
       ].join("|"),
-    [executionRoot, approvalRoot, trustEnabled, project, nonce]
+    [hostScopeKey, executionRoot, approvalRoot, trustEnabled, project, nonce]
   )
 
   const [settled, setSettled] = useState<{ key: string; verdict: WorkspaceConfigVerdict } | null>(
@@ -247,14 +257,22 @@ export function useOtherRepositoriesNeedAttention(
     () => projects.find((candidate) => candidate.id === projectId) ?? null,
     [projects, projectId]
   )
+  const hostScopeKey = useSyncExternalStore(
+    subscribeEnvironmentHostChange,
+    currentEnvironmentHostScopeKey,
+    () => "local"
+  )
   // Every other root may be a repository with a file of its own; one with
   // none reads as absent and asks for nothing.
   const repositories = useMemo(() => (project ? additionalDirsOf(project) : []), [project])
   const gate = useWorkspaceCommandGate()
   const readable = (deps?.readGate ?? gate("fs_read_workspace_file")).available
   const requestKey = useMemo(
-    () => [repositories.join(","), trustEnabled ? "1" : "0", readable ? "1" : "0"].join("|"),
-    [repositories, trustEnabled, readable]
+    () =>
+      [hostScopeKey, repositories.join(","), trustEnabled ? "1" : "0", readable ? "1" : "0"].join(
+        "|"
+      ),
+    [hostScopeKey, repositories, trustEnabled, readable]
   )
   const [settled, setSettled] = useState<{ key: string; attention: boolean } | null>(null)
 
