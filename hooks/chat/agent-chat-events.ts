@@ -2204,7 +2204,8 @@ export async function handleEvent(
                     goalId: goal.id,
                     lastResponse,
                     tokensDelta,
-                    usage: usage ?? undefined,
+                    // Its usage is this conversation's chat row above; the
+                    // goal books nothing of its own (F02).
                     budgetExceeded:
                       (sdkResult as unknown as { subtype?: string } | null)?.subtype ===
                       "error_max_budget_usd",

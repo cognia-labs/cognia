@@ -175,6 +175,39 @@ describe("buildRunSamples", () => {
     expect(s.stoppedEarly).toBe(false)
   })
 
+  it("reads an interactive goal from its conversation's rows over the goal's lifetime", () => {
+    const [s] = buildRunSamples(
+      sources({
+        goals: [goal({})],
+        usageRows: [
+          row({
+            sessionId: "chat1",
+            model: "claude-sonnet-4-5",
+            providerId: "anthropic",
+            inputTokens: 700,
+            at: T0 + 1,
+          }),
+          row({ sessionId: "chat1", inputTokens: 99_999, at: T0 + 999_999 }),
+        ],
+      })
+    )
+    expect(s).toMatchObject({ surface: "goal", modelFamily: "claude-sonnet" })
+    expect(s.tokens?.input).toBe(700)
+  })
+
+  it("names a headless goal's model from its own rows", () => {
+    const [s] = buildRunSamples(
+      sources({
+        goals: [goal({})],
+        usageRows: [
+          row({ sessionId: "goal:g1", model: "claude-sonnet-4-5", providerId: "anthropic" }),
+        ],
+      })
+    )
+    expect(s.modelFamily).toBe("claude-sonnet")
+    expect(s.harness).toBe("builtin")
+  })
+
   it("skips open goals and goals with no usage", () => {
     expect(
       buildRunSamples(

@@ -10,6 +10,11 @@ import type { GoalPermissionResponder, RunGoalLoopInput } from "./goal-headless-
 import type { Project } from "@/types"
 
 const getGoalMock = jest.fn()
+const recordGoalUsageMock = jest.fn(async (..._args: unknown[]) => null)
+jest.mock("@/lib/db/session-usage", () => ({
+  recordGoalUsage: (...a: unknown[]) => recordGoalUsageMock(...a),
+  swallowUsageWrite: (p: Promise<unknown>) => void p.catch(() => {}),
+}))
 const getSessionMock = jest.fn()
 const resolveSendOptionsMock = jest.fn()
 const runCaptureMock = jest.fn()
@@ -83,6 +88,10 @@ jest.mock("@/lib/scheduler/host-support", () => ({
 }))
 
 import { runGoalLoopHeadless } from "./goal-headless-runner"
+import {
+  __resetClaimedTurnUsageForTesting,
+  isTurnUsageClaimed,
+} from "@/lib/usage/claimed-turn-usage"
 import { RunAndCaptureError } from "@/lib/ai/agent/execution/capture-types"
 
 const activeGoal = {
@@ -110,6 +119,8 @@ beforeEach(() => {
   runCaptureMock.mockReset()
   buildJudgeMock.mockReset()
   handleTurnCompleteMock.mockReset()
+  recordGoalUsageMock.mockClear()
+  __resetClaimedTurnUsageForTesting()
   getAllProjectsMock.mockReset().mockResolvedValue([])
   expireGoalMock.mockReset().mockResolvedValue(false)
   releaseDeadlineMock.mockReset()
@@ -172,12 +183,76 @@ describe("runGoalLoopHeadless", () => {
     expect(runCaptureMock.mock.calls[1][1]).toBe("keep going")
     // Each turn registers a "goal" execution leg with the broker.
     expect(runCaptureMock.mock.calls[0][3]).toMatchObject({ execution: { kind: "goal" } })
-    // tokensDelta from usage is forwarded to the driver.
+    // tokensDelta from usage is forwarded to the driver, which books nothing.
     expect(handleTurnCompleteMock.mock.calls[0][0].tokensDelta).toBe(7)
-    expect(handleTurnCompleteMock.mock.calls[0][0].usage).toEqual({
-      inputTokens: 3,
-      outputTokens: 4,
+    expect(handleTurnCompleteMock.mock.calls[0][0]).not.toHaveProperty("usage")
+  })
+
+  it("books each turn once, under the goal, naming who served it (F02)", async () => {
+    getGoalMock.mockResolvedValue(activeGoal)
+    getSessionMock.mockResolvedValue({ id: "s1", projectId: "proj-1" })
+    resolveSendOptionsMock.mockResolvedValue({
+      model: "claude-sonnet-5-5",
+      provider: "anthropic",
+      execution: { runtimeAdapter: "claude-agent-sdk" },
     })
+    const usage = { inputTokens: 3, outputTokens: 4, totalCostUsd: 0.01 }
+    runCaptureMock.mockResolvedValueOnce({ text: "r1", usage })
+    handleTurnCompleteMock.mockResolvedValueOnce({
+      kind: "exit",
+      resultingStatus: "completed",
+      exit: "judge_done",
+      reason: "done",
+    })
+
+    await runGoalLoopHeadless(input())
+    const sent = runCaptureMock.mock.calls[0][2] as { turnId?: string }
+    // The desktop chat runtime must not book a second, provider-less row.
+    expect(sent.turnId).toEqual(expect.any(String))
+    expect(isTurnUsageClaimed("s1", sent.turnId)).toBe(true)
+    expect(recordGoalUsageMock).toHaveBeenCalledTimes(1)
+    expect(recordGoalUsageMock).toHaveBeenCalledWith({
+      goalId: "g1",
+      turnId: "admitted-child",
+      usage,
+      providerId: "anthropic",
+      model: "claude-sonnet-5-5",
+      projectId: "proj-1",
+      runId: "admitted-child",
+      costAuthority: true,
+    })
+  })
+
+  it("books a failed turn's billed usage from what the capture streamed", async () => {
+    getGoalMock.mockResolvedValue(activeGoal)
+    resolveSendOptionsMock.mockResolvedValue({ model: "m", provider: "openai" })
+    const streamed = { inputTokens: 50, outputTokens: 2 }
+    runCaptureMock.mockImplementationOnce(
+      async (_s: string, _p: unknown, _o: unknown, cap: { onEvent?: (e: unknown) => void }) => {
+        cap.onEvent?.({ type: "usage", usage: streamed })
+        throw new RunAndCaptureError("sidecar exited", "sidecar_exited")
+      }
+    )
+    await runGoalLoopHeadless(input())
+    expect(recordGoalUsageMock).toHaveBeenCalledWith(
+      expect.objectContaining({ goalId: "g1", usage: streamed, providerId: "openai" })
+    )
+    expect(handleTurnCompleteMock).not.toHaveBeenCalled()
+  })
+
+  it("leaves the booking to an injected sender, which books its own row", async () => {
+    getGoalMock.mockResolvedValue(activeGoal)
+    const sendTurn = jest.fn(async () => ({ text: "r1", usage: { inputTokens: 1 } }))
+    handleTurnCompleteMock.mockResolvedValueOnce({
+      kind: "exit",
+      resultingStatus: "completed",
+      exit: "judge_done",
+      reason: "done",
+    })
+    await runGoalLoopHeadless(input({ sendTurn: sendTurn as never }))
+    expect(recordGoalUsageMock).not.toHaveBeenCalled()
+    const sent = (sendTurn.mock.calls[0] as unknown[])[2] as { turnId?: string }
+    expect(sent.turnId).toBeUndefined()
   })
 
   it("stops driving when the goal is already terminal", async () => {

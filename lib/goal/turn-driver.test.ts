@@ -146,36 +146,16 @@ describe("handleTurnComplete — turn delta persistence", () => {
     }
   })
 
-  it("records full goal usage when the caller provides SDK usage", async () => {
+  it("books no usage of its own: the turn's own writer already did (F02)", async () => {
     await createGoal(buildGoal({ id: "g1" }))
     await handleTurnComplete({
       goalId: "g1",
       lastResponse: "x",
       tokensDelta: 31,
-      usage: {
-        inputTokens: 20,
-        outputTokens: 11,
-        cacheReadInputTokens: 4,
-        cacheCreationInputTokens: 2,
-        totalCostUsd: 0.006,
-        durationMs: 900,
-      },
       judgeClient: mockClient(() => '{"done": false, "reason": "x"}'),
       capturedGenerationId: "gen-1",
     })
-
-    const rows = await listUsageForSession("goal:g1")
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({
-      messageId: "goal:g1:1",
-      surface: "goal",
-      inputTokens: 20,
-      outputTokens: 11,
-      cacheReadTokens: 4,
-      cacheCreationTokens: 2,
-      costUsd: 0.006,
-      durationMs: 900,
-    })
+    expect(await listUsageForSession("goal:g1")).toEqual([])
   })
 
   it("clamps negative tokensDelta to 0", async () => {

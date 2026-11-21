@@ -158,20 +158,23 @@ function goalSamples(
   const out: RunSample[] = []
   for (const goal of goals) {
     if (!GOAL_TERMINAL.has(goal.status) || goal.endedAt === undefined) continue
-    const summary = summarizeRows(bySession.get(`goal:${goal.id}`) ?? [])
-    if (!summary) continue
     const endedAt = goal.endedAt
     const chat = summarizeRows(
       (bySession.get(goal.sessionId) ?? []).filter(
         (row) => !row.imported && row.at >= goal.createdAt && row.at <= endedAt
       )
     )
+    // A headless goal books its turns under the goal; an interactive goal's
+    // turns are its conversation's own rows over the goal's lifetime.
+    const summary = summarizeRows(bySession.get(`goal:${goal.id}`) ?? []) ?? chat
+    if (!summary) continue
+    const served = chat?.model ? chat : summary
     out.push({
       surface: "goal",
-      harness: chat?.model ? harnessFromProvider(chat.providerId, resolvePreset) : null,
-      modelFamily: modelFamilyOf(chat?.model),
-      ...(chat?.model ? { model: chat.model } : {}),
-      ...(chat?.providerId ? { providerId: chat.providerId } : {}),
+      harness: served.model ? harnessFromProvider(served.providerId, resolvePreset) : null,
+      modelFamily: modelFamilyOf(served.model),
+      ...(served.model ? { model: served.model } : {}),
+      ...(served.providerId ? { providerId: served.providerId } : {}),
       endedAt,
       durationMs: Math.max(0, endedAt - goal.createdAt),
       tokens: summary.tokens,

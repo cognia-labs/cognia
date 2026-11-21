@@ -48,6 +48,8 @@ import type {
 import { isTerminalGoalStatus, type ExitReason, type Goal, type GoalStatus } from "@/types/goal"
 import { getGoal } from "@/lib/db/goals"
 import { getSession } from "@/lib/db/sessions"
+import { recordGoalUsage, swallowUsageWrite } from "@/lib/db/session-usage"
+import { claimTurnUsage, trackCaptureUsage } from "@/lib/usage/claimed-turn-usage"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import {
@@ -391,8 +393,39 @@ async function driveGoalLoop(
       pastDeadline = true
       turnAbort.abort("goal_deadline")
     })
+    // The runner books each turn its own sender runs, under the goal, naming
+    // who served it so it reaches the provider and workspace budgets. The
+    // desktop chat runtime books every `result` it sees as a `chat` row naming
+    // no provider, so the turn is claimed and counts once (F02). An injected
+    // sender (the connector's `safeSendPrompt`) books its own row instead.
+    const runnerBooks = input.sendTurn === undefined
+    const usageTracker = trackCaptureUsage()
+    if (runnerBooks) {
+      resolved.turnId ??= crypto.randomUUID()
+      claimTurnUsage(sessionId, resolved.turnId)
+    }
+    const bookTurn = () => {
+      const usage = usageTracker.resolve(captureUsage)
+      if (!runnerBooks || !usage || !turnRun) return
+      const projectId = session.projectId ?? activeProject?.id
+      swallowUsageWrite(
+        recordGoalUsage({
+          goalId,
+          // Keyed by the turn's run: a failed or stale turn was billed too,
+          // and has no turn number.
+          turnId: turnRun.id,
+          usage,
+          ...(resolved.provider ? { providerId: resolved.provider } : {}),
+          ...(resolved.model ? { model: resolved.model } : {}),
+          ...(projectId ? { projectId } : {}),
+          runId: turnRun.id,
+          costAuthority: resolved.execution?.runtimeAdapter === "claude-agent-sdk",
+        })
+      )
+    }
     try {
       const capture = await sendTurn(sessionId, prompt, resolved, {
+        onEvent: usageTracker.observe,
         signal: AbortSignal.any([signal, turnAbort.signal]),
         ...(typeof input.perTurnTimeoutMs === "number"
           ? { timeoutMs: input.perTurnTimeoutMs }
@@ -409,6 +442,7 @@ async function driveGoalLoop(
       tokensDelta = (capture.usage?.inputTokens ?? 0) + (capture.usage?.outputTokens ?? 0)
       budgetExceeded = capture.resultSubtype === "error_max_budget_usd"
     } catch (err) {
+      bookTurn()
       await finishToolExecutionRun(turnRun.id, true)
       if (pastDeadline) return { status: "timed_out", turns, lastResponse, exit: "timed_out" }
       if (err instanceof RunAndCaptureError && err.code === "aborted") {
@@ -426,6 +460,7 @@ async function driveGoalLoop(
       releaseDeadline()
     }
 
+    bookTurn()
     await finishToolExecutionRun(turnRun.id)
     turns += 1
     // The deadline passed as the turn finished: the goal already ended.
@@ -439,7 +474,6 @@ async function driveGoalLoop(
       goalId,
       lastResponse: captureText,
       tokensDelta,
-      usage: captureUsage,
       budgetExceeded,
       judgeClient,
       signal,

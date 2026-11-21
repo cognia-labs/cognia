@@ -437,32 +437,53 @@ function buildSurfaceRow(args: {
 }
 
 /**
+ * Who served a turn and what it belongs to, for a surface row: without a
+ * provider and model a row has no place in the `[day, provider, model]`
+ * rollup the global and provider budgets read, and without a workspace no
+ * workspace limit counts it (F02).
+ */
+export interface SurfaceTurnAttribution {
+  providerId?: string
+  model?: string
+  projectId?: string
+  runId?: string
+  /** The runtime computes the turn's cost itself (the Claude Agent SDK), so its zero is a figure. */
+  costAuthority?: boolean
+}
+
+function attributedSurfaceUsage(
+  usage: UsageInfo,
+  attribution: SurfaceTurnAttribution
+): SurfaceUsageInput {
+  return {
+    ...surfaceUsageFromUsageInfo(usage, { costAuthority: attribution.costAuthority }),
+    ...(attribution.providerId ? { providerId: attribution.providerId } : {}),
+    ...(attribution.model ? { model: attribution.model } : {}),
+    ...(attribution.projectId ? { projectId: attribution.projectId } : {}),
+    ...(attribution.runId ? { runId: attribution.runId } : {}),
+  }
+}
+
+/**
  * Shadow-write connector auto-mode usage. Idempotency is scoped to the
  * adapter/conversation/timestamp tuple because connector retries can produce
  * multiple distinct auto replies for the same platform thread.
  */
-export async function recordConnectorUsage(args: {
-  adapterId: string
-  conversationKey: string
-  usage: UsageInfo
-  at?: number
-}): Promise<SessionUsageRow | null> {
+export async function recordConnectorUsage(
+  args: {
+    adapterId: string
+    conversationKey: string
+    usage: UsageInfo
+    at?: number
+  } & SurfaceTurnAttribution
+): Promise<SessionUsageRow | null> {
   if (!args.adapterId || !args.conversationKey) return null
   const at = args.at ?? Date.now()
   const row = buildSurfaceRow({
     messageId: `conn:${args.adapterId}:${args.conversationKey}:${at}`,
     sessionId: `conn:${args.adapterId}`,
     surface: "connector",
-    usage: {
-      inputTokens: args.usage.inputTokens,
-      outputTokens: args.usage.outputTokens,
-      cacheReadTokens: args.usage.cacheReadInputTokens,
-      cacheCreationTokens: args.usage.cacheCreationInputTokens,
-      costUsd: args.usage.totalCostUsd,
-      durationMs: args.usage.durationMs,
-      reasoningTokens: args.usage.reasoningTokens,
-      contextInputTokens: args.usage.contextInputTokens,
-    },
+    usage: attributedSurfaceUsage(args.usage, args),
     at,
   })
   if (!row) return null
@@ -471,32 +492,27 @@ export async function recordConnectorUsage(args: {
 }
 
 /**
- * Shadow-write scheduled or renderer-driven goal turn usage. The turn driver
- * owns the monotonically increasing turn number, so callers pass the resolved
- * turn id after the goal row has accepted the turn.
+ * Shadow-write a goal turn's usage when nothing else booked it: the headless
+ * goal runner's turns. An interactive goal turn is the conversation's own
+ * turn and its chat row already holds it. The turn driver owns the
+ * monotonically increasing turn number, so callers pass the resolved turn id
+ * after the goal row has accepted the turn.
  */
-export async function recordGoalUsage(args: {
-  goalId: string
-  turnId: string | number
-  usage: UsageInfo
-  at?: number
-}): Promise<SessionUsageRow | null> {
+export async function recordGoalUsage(
+  args: {
+    goalId: string
+    turnId: string | number
+    usage: UsageInfo
+    at?: number
+  } & SurfaceTurnAttribution
+): Promise<SessionUsageRow | null> {
   if (!args.goalId || args.turnId === "") return null
   const turnId = String(args.turnId)
   const row = buildSurfaceRow({
     messageId: `goal:${args.goalId}:${turnId}`,
     sessionId: `goal:${args.goalId}`,
     surface: "goal",
-    usage: {
-      inputTokens: args.usage.inputTokens,
-      outputTokens: args.usage.outputTokens,
-      cacheReadTokens: args.usage.cacheReadInputTokens,
-      cacheCreationTokens: args.usage.cacheCreationInputTokens,
-      costUsd: args.usage.totalCostUsd,
-      durationMs: args.usage.durationMs,
-      reasoningTokens: args.usage.reasoningTokens,
-      contextInputTokens: args.usage.contextInputTokens,
-    },
+    usage: attributedSurfaceUsage(args.usage, args),
     at: args.at ?? Date.now(),
   })
   if (!row) return null

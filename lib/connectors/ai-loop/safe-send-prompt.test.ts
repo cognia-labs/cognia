@@ -79,6 +79,13 @@ import { appendAudit } from "@/lib/connectors/audit"
 import { recordProviderOutcome } from "@/lib/claude/provider-telemetry"
 import { recordConnectorUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import {
+  __resetClaimedTurnUsageForTesting,
+  isTurnUsageClaimed,
+} from "@/lib/usage/claimed-turn-usage"
+
+/** Let the gate's deferred usage write run. */
+const settleWrites = () => new Promise((resolve) => setTimeout(resolve, 0))
+import {
   acquireWorkspaceBundle,
   ensureSessionScratchWorkspaceBundle,
 } from "@/lib/task-workspace/client"
@@ -118,6 +125,7 @@ beforeEach(() => {
   mockAudit.mockClear()
   mockRecordConnectorUsage.mockClear()
   mockSwallowUsageWrite.mockClear()
+  __resetClaimedTurnUsageForTesting()
   mockRecordProviderOutcome.mockClear()
   mockAcquireWorkspaceBundle.mockReset()
   mockOpenWorkspaceBundleTurnLease.mockReset()
@@ -421,8 +429,12 @@ describe("safeSendPrompt", () => {
       "sess_1",
       "clean",
       undefined,
-      expect.objectContaining({ onPermissionRequest, onEvent })
+      expect.objectContaining({ onPermissionRequest, onEvent: expect.any(Function) })
     )
+    // The gate also watches the stream for billed usage; the caller still sees every event.
+    const forwarded = mockRun.mock.calls[0][3] as { onEvent: (event: unknown) => void }
+    forwarded.onEvent({ type: "text", text: "hi" })
+    expect(onEvent).toHaveBeenCalledWith({ type: "text", text: "hi" })
   })
 
   it("forwards onSdkSessionId so IM recovery learns the SDK session id", async () => {
@@ -479,20 +491,34 @@ describe("safeSendPrompt", () => {
       usage,
     })
 
+    jest.mocked(getSession).mockResolvedValueOnce({ id: "sess_1", projectId: "proj-1" } as never)
     const result = await safeSendPrompt(
       "sess_1",
       "clean",
-      { provider: "openai", model: "gpt-4o" },
+      {
+        provider: "openai",
+        model: "gpt-4o",
+        execution: { runtimeAdapter: "claude-agent-sdk" },
+      } as never,
       auditCtx
     )
 
     expect(result.usage).toBe(usage)
+    await settleWrites()
+    // Who served it and whose workspace it is, or no budget can count it (F02).
     expect(mockRecordConnectorUsage).toHaveBeenCalledWith({
       adapterId: "adp_1",
       conversationKey: "telegram:adp_1:c1",
       usage,
+      providerId: "openai",
+      model: "gpt-4o",
+      projectId: "proj-1",
+      costAuthority: true,
     })
     expect(mockSwallowUsageWrite).toHaveBeenCalledWith(expect.any(Promise))
+    // The desktop chat runtime must not book this turn a second time.
+    const sent = mockRun.mock.calls[0][2] as { turnId?: string }
+    expect(isTurnUsageClaimed("sess_1", sent.turnId)).toBe(true)
     expect(mockRecordProviderOutcome).toHaveBeenCalledWith({
       providerId: "openai",
       ok: true,
@@ -566,13 +592,42 @@ describe("safeSendPrompt", () => {
     })
 
     await safeSendPrompt("sess_1", "clean", undefined, auditCtx)
+    await settleWrites()
 
     expect(mockRecordConnectorUsage).toHaveBeenCalledWith({
       adapterId: "adp_1",
       conversationKey: "telegram:adp_1:c1",
       usage,
+      costAuthority: false,
     })
     expect(mockRecordProviderOutcome).not.toHaveBeenCalled()
+  })
+
+  it("books a failed turn's billed usage from what the capture streamed (F02)", async () => {
+    const streamed = { inputTokens: 40, outputTokens: 2 }
+    mockRun.mockImplementationOnce(async (...args: unknown[]) => {
+      const cap = args[3] as { onEvent?: (event: unknown) => void }
+      cap.onEvent?.({ type: "usage", usage: streamed })
+      throw new Error("timed out")
+    })
+    await expect(
+      safeSendPrompt("sess_1", "clean", { provider: "openai", model: "gpt-4o" }, auditCtx)
+    ).rejects.toThrow("timed out")
+    await settleWrites()
+    expect(mockRecordConnectorUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ usage: streamed, providerId: "openai", model: "gpt-4o" })
+    )
+  })
+
+  it("claims nothing for an unnamed adapter, which books no row", async () => {
+    await safeSendPrompt(
+      "sess_1",
+      "clean",
+      { provider: "openai", model: "gpt-4o" },
+      { ...auditCtx, adapterId: "" }
+    )
+    const sent = mockRun.mock.calls[0][2] as { turnId?: string }
+    expect(isTurnUsageClaimed("sess_1", sent.turnId)).toBe(false)
   })
 
   it("routes every unique writable root through one managed Bundle Turn", async () => {

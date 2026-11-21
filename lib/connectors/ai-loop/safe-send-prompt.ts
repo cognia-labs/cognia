@@ -31,6 +31,7 @@ import type { SendContent, SendOptions } from "@cognia/agent-config-types"
 import { appendAudit } from "@/lib/connectors/audit"
 import { recordProviderOutcome } from "@/lib/claude/provider-telemetry"
 import { recordConnectorUsage, swallowUsageWrite } from "@/lib/db/session-usage"
+import { claimTurnUsage, trackCaptureUsage } from "@/lib/usage/claimed-turn-usage"
 import { groundSendOptionsAnswer } from "@/lib/rag/chat-grounding"
 import {
   acquireWorkspaceBundle,
@@ -365,9 +366,21 @@ export async function safeSendPrompt(
   // the primary inbound ai-run wires `onPermissionRequest` (IM tool-approval
   // HITL) and `onEvent` (live-activity card). Dropping them here would
   // silently disable both when the inbound turn is routed through this gate.
-  let result: RunAndCaptureResult
+  //
+  // This call books the turn's usage itself, naming the provider, model and
+  // workspace. The desktop chat runtime books every `result` it sees as a
+  // `chat` row naming none of them, so the turn is claimed and counts once
+  // (F02). Only a call that will book claims (an unnamed adapter writes no
+  // row), and only a turn whose id it chose can be claimed.
+  const books = Boolean(opts.adapterId && opts.conversationKey)
+  const turnOptions = sendOptions
+    ? { ...sendOptions, turnId: sendOptions.turnId ?? crypto.randomUUID() }
+    : undefined
+  if (books && turnOptions) claimTurnUsage(sessionId, turnOptions.turnId)
+  const usageTracker = trackCaptureUsage()
+  let result: RunAndCaptureResult | undefined
   try {
-    result = await runAndCaptureAssistantReply(sessionId, prompt, sendOptions, {
+    result = await runAndCaptureAssistantReply(sessionId, prompt, turnOptions, {
       beforeSend: opts.beforeSend,
       signal: opts.signal,
       timeoutMs: opts.timeoutMs,
@@ -380,7 +393,10 @@ export async function safeSendPrompt(
       ...(opts.pauseTimeoutWhileAwaitingPermission
         ? { pauseTimeoutWhileAwaitingPermission: true }
         : {}),
-      onEvent: opts.onEvent,
+      onEvent: (event) => {
+        usageTracker.observe(event)
+        opts.onEvent?.(event)
+      },
       onSdkSessionId: opts.onSdkSessionId,
       execution: {
         kind: "connector",
@@ -407,16 +423,33 @@ export async function safeSendPrompt(
   } catch (error) {
     if (workspaceTurn) await workspaceTurn.lease.abort().catch(() => undefined)
     throw error
+  } finally {
+    // Also for a turn that failed, timed out or was blocked: its calls were billed.
+    const billed = usageTracker.resolve(result?.usage)
+    if (books && billed) {
+      swallowUsageWrite(
+        (async () => {
+          let projectId: string | undefined
+          try {
+            projectId = (await getSession(sessionId))?.projectId
+          } catch {
+            // Booked without a workspace rather than not at all.
+          }
+          return recordConnectorUsage({
+            adapterId: opts.adapterId,
+            conversationKey: opts.conversationKey,
+            usage: billed,
+            ...(turnOptions?.provider ? { providerId: turnOptions.provider } : {}),
+            ...(turnOptions?.model ? { model: turnOptions.model } : {}),
+            ...(projectId ? { projectId } : {}),
+            costAuthority: turnOptions?.execution?.runtimeAdapter === "claude-agent-sdk",
+          })
+        })()
+      )
+    }
   }
   if (result.usage) {
     const usage = result.usage
-    swallowUsageWrite(
-      recordConnectorUsage({
-        adapterId: opts.adapterId,
-        conversationKey: opts.conversationKey,
-        usage,
-      })
-    )
     if (sendOptions?.provider) {
       recordProviderOutcome({
         providerId: sendOptions.provider,

@@ -437,6 +437,24 @@ describe("recordConnectorUsage", () => {
   })
 })
 
+describe("recordConnectorUsage attribution", () => {
+  it("names who served the reply, so the provider budget and workspace limit count it (F02)", async () => {
+    await recordConnectorUsage({
+      adapterId: "lark",
+      conversationKey: "chat-1",
+      providerId: "openai",
+      model: "gpt-4o",
+      projectId: "project-1",
+      usage: { inputTokens: 100, outputTokens: 20, totalCostUsd: 0.01 },
+      at: 1000,
+    })
+    expect(await getDb().providerCostDaily.toArray()).toEqual([
+      expect.objectContaining({ providerId: "openai", modelId: "gpt-4o" }),
+    ])
+    expect(await listLocalUsageForProjectSince("project-1", 0)).toHaveLength(1)
+  })
+})
+
 describe("recordGoalUsage", () => {
   it("shadow-writes goal usage with a stable goal turn id and goal surface", async () => {
     const written = await recordGoalUsage({
@@ -466,6 +484,51 @@ describe("recordGoalUsage", () => {
     })
     const list = await listUsageForSession("goal:goal-1")
     expect(list).toHaveLength(1)
+  })
+
+  it("lands an attributed goal turn in the provider rollup and the workspace's spend (F02)", async () => {
+    await recordGoalUsage({
+      goalId: "goal-1",
+      turnId: "run-1",
+      providerId: "anthropic",
+      model: "claude-sonnet-5-5",
+      projectId: "project-1",
+      runId: "run-1",
+      usage: {
+        inputTokens: 20,
+        outputTokens: 11,
+        cacheCreationInputTokens: 10,
+        cacheCreation5mInputTokens: 4,
+        cacheCreation1hInputTokens: 6,
+        serverToolUse: { web_search: 2 },
+        totalCostUsd: 0.006,
+      },
+    })
+    const daily = await getDb().providerCostDaily.toArray()
+    expect(daily).toEqual([
+      expect.objectContaining({ providerId: "anthropic", modelId: "claude-sonnet-5-5" }),
+    ])
+    expect(daily[0].totalCostUsd).toBeCloseTo(0.006)
+    const [row] = await listLocalUsageForProjectSince("project-1", 0)
+    expect(row).toMatchObject({
+      runId: "run-1",
+      // The shared converter keeps what the hand-rolled one dropped.
+      cacheCreation5mTokens: 4,
+      cacheCreation1hTokens: 6,
+      unitBreakdown: { requests: { web_search: 2 } },
+    })
+  })
+
+  it("takes an SDK runtime's reported zero as the price, not a gap", async () => {
+    const written = await recordGoalUsage({
+      goalId: "goal-1",
+      turnId: "run-2",
+      providerId: "anthropic",
+      model: "claude-sonnet-5-5",
+      costAuthority: true,
+      usage: { inputTokens: 5, outputTokens: 1, totalCostUsd: 0 },
+    })
+    expect(written).toMatchObject({ costUsd: 0, costKnown: true, costSource: "sdk" })
   })
 
   it("records a cost-only goal turn that reported no tokens", async () => {
