@@ -88,8 +88,8 @@ describe("useCanvasActions", () => {
   })
 
   it("sends the shared prompt pair, attachments included", async () => {
-    // The plugin path already composed attachments into the system prompt; the
-    // hook did not, because it used a second builder. One builder now.
+    // One builder for the hook and the plugin path. Attachments are fenced data
+    // in the user turn, never system instructions (F08).
     generateTextMock.mockResolvedValueOnce({ text: "ok" })
     const { result } = renderHook(() => useCanvasActions())
     await act(async () => {
@@ -112,8 +112,9 @@ describe("useCanvasActions", () => {
     const args = generateTextMock.mock.calls[0][0]
     expect(args.system).toContain("Language: typescript")
     expect(args.system).toContain("be terse")
-    expect(args.system).toContain("snapshot text")
-    expect(args.prompt).toBe("body")
+    expect(args.system).not.toContain("snapshot text")
+    expect(args.prompt).toContain("<untrusted_content>\nsnapshot text\n</untrusted_content>")
+    expect(args.prompt.endsWith("\n\nbody")).toBe(true)
   })
 
   it("uses a low temperature for the deterministic actions", async () => {
