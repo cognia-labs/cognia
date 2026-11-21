@@ -8,7 +8,7 @@
  */
 
 /** Where an analyzed item came from. */
-export type RadarDataSource = "memory" | "capture"
+export type RadarDataSource = "memory" | "capture" | "obligation"
 
 /** One normalized item fed to the analyzer. */
 export interface RadarDataItem {

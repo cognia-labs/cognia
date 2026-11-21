@@ -58,6 +58,56 @@ describe("collectRadarItems", () => {
     const out = await collectRadarItems({ windowDays: 14, now: NOW, extra })
     expect(out.map((i) => i.id)).toEqual(["cap1"])
   })
+
+  it("applies standard recall governance: excludes expired, quarantined, conflict, and unverified procedural memories (B2)", async () => {
+    mockList.mockResolvedValue([
+      mem("valid", "verified architecture note", NOW),
+      { ...mem("expired-ts", "expired by timestamp", NOW), expiresAt: NOW - 1 },
+      { ...mem("expired-state", "marked stale expired", NOW), staleness: "expired" },
+      { ...mem("quarantined", "untrusted injection", NOW), trustState: "quarantined" },
+      { ...mem("conflict", "conflicting claim", NOW), reviewStatus: "conflict" },
+      {
+        ...mem("proc-unverified", "unverified runbook", NOW),
+        type: "procedural",
+        reviewStatus: "pending",
+      },
+      {
+        ...mem("proc-verified", "verified release checklist", NOW),
+        type: "procedural",
+        reviewStatus: "verified",
+      },
+    ])
+    const out = await collectRadarItems({ windowDays: 14, now: NOW })
+    expect(out.map((i) => i.id)).toEqual(["valid", "proc-verified"])
+  })
+
+  it("includes local high-value obligations and PII-filters them (F6)", async () => {
+    mockList.mockResolvedValue([])
+    const out = await collectRadarItems({
+      windowDays: 14,
+      now: NOW,
+      loadObligations: async () => [
+        {
+          id: "draft:d1",
+          text: "Pending outbound draft awaiting approval: Q4 launch update",
+          source: "obligation",
+          at: NOW - 1000,
+          importance: 8,
+          kind: "pending-draft",
+        },
+        {
+          id: "draft:pii",
+          text: "Pending outbound draft to secret@example.com",
+          source: "obligation",
+          at: NOW - 500,
+          importance: 8,
+          kind: "pending-draft",
+        },
+      ],
+    })
+    expect(out.map((i) => i.id)).toEqual(["draft:d1"])
+    expect(out[0]?.source).toBe("obligation")
+  })
 })
 
 describe("computeHeatmap", () => {

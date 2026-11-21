@@ -15,11 +15,17 @@
 
 import { listMemories } from "@/lib/db/memories"
 import { listCapturedItemsSince } from "@/lib/db/captured-items"
+import { getDb } from "@/lib/db/schema"
+import {
+  applyStableKeyPrecedence,
+  isMemoryEligibleForRetrieval,
+} from "@cognia/memory/retrieve/retriever"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { smartPreFilter } from "./prefilter"
 import type { RadarDataItem } from "@/types/radar"
 
 const DAY_MS = 86_400_000
+const BLOCKED_GOAL_STATUSES = new Set(["paused", "budget_limited", "turn_limited", "timed_out"])
 
 export interface CollectRadarOptions {
   /** Activity window in days. Default 14. */
@@ -30,6 +36,10 @@ export interface CollectRadarOptions {
   now?: number
   /** Extra pre-normalized items (e.g. Phase 4 captured items). */
   extra?: RadarDataItem[]
+  /** Include local high-value obligations (pending drafts, overdue SLAs, blocked goals, failed tasks). Default true. */
+  includeObligations?: boolean
+  /** Optional seam for obligation loading in unit tests. */
+  loadObligations?: (cutoff: number, now: number) => Promise<RadarDataItem[]>
   /** Optional cancellation signal checked across async reads. */
   signal?: AbortSignal
 }
@@ -44,6 +54,152 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw err
 }
 
+function summarizeDraftSegments(segments: unknown): string {
+  if (!Array.isArray(segments)) return ""
+  return segments
+    .flatMap((seg) => {
+      if (!seg || typeof seg !== "object") return []
+      const text = (seg as { text?: unknown }).text
+      return typeof text === "string" && text.trim() ? [text.trim()] : []
+    })
+    .join(" ")
+    .slice(0, 200)
+}
+
+export async function collectLocalObligations(
+  cutoff: number,
+  now: number,
+  signal?: AbortSignal
+): Promise<RadarDataItem[]> {
+  if (typeof indexedDB === "undefined") return []
+  let db: ReturnType<typeof getDb>
+  try {
+    db = getDb()
+  } catch {
+    return []
+  }
+  const items: RadarDataItem[] = []
+  try {
+    const [pendingDrafts, overrides, goals, tasks] = await Promise.all([
+      db.connectorDrafts.where("status").equals("pending").toArray(),
+      db.conversationOverrides.toArray(),
+      db.chatGoals.toArray(),
+      db.scheduledTasks.toArray(),
+    ])
+    throwIfAborted(signal)
+
+    for (const draft of pendingDrafts) {
+      if (draft.expiresAt !== undefined && draft.expiresAt <= now) continue
+      const at = draft.updatedAt ?? draft.createdAt
+      if (at < cutoff) continue
+      const preview = summarizeDraftSegments(draft.segments)
+      items.push({
+        id: `draft:${draft.id}`,
+        text: preview
+          ? `Pending outbound draft awaiting approval: ${preview}`
+          : "Pending outbound draft awaiting approval",
+        source: "obligation",
+        at,
+        importance: 8,
+        kind: "pending-draft",
+      })
+    }
+
+    for (const row of overrides) {
+      if (
+        !row.nextResponseDueAt ||
+        row.status === "resolved" ||
+        row.nextResponseDueAt >= now ||
+        row.nextResponseDueAt < cutoff
+      ) {
+        continue
+      }
+      const overdueMin = Math.max(1, Math.round((now - row.nextResponseDueAt) / 60_000))
+      items.push({
+        id: `sla:${row.id}`,
+        text: `Conversation response SLA overdue by ${overdueMin} minutes`,
+        source: "obligation",
+        at: row.nextResponseDueAt,
+        importance: 9,
+        kind: "overdue-sla",
+      })
+    }
+
+    for (const goal of goals) {
+      if (!BLOCKED_GOAL_STATUSES.has(goal.status)) continue
+      const at = goal.updatedAt ?? goal.createdAt
+      if (at < cutoff) continue
+      const summary = (goal.safeObjective ?? goal.objective ?? "").trim().slice(0, 200)
+      if (!summary) continue
+      items.push({
+        id: `goal:${goal.id}`,
+        text: `Goal requires attention (${goal.status}): ${summary}`,
+        source: "obligation",
+        at,
+        importance: 8,
+        kind: `goal-${goal.status}`,
+      })
+    }
+
+    for (const task of tasks) {
+      const updatedMs =
+        task.updatedAt instanceof Date ? task.updatedAt.getTime() : Number(task.updatedAt ?? 0)
+      const failedRecently =
+        task.status === "error" || (task.failureCount > 0 && task.lastRunStatus === "failed")
+      if (!failedRecently || updatedMs < cutoff) continue
+      items.push({
+        id: `task:${task.id}`,
+        text: `Scheduled task failed (${task.name}): ${task.lastError ?? "requires review"}`.slice(
+          0,
+          240
+        ),
+        source: "obligation",
+        at: updatedMs || now,
+        importance: 8,
+        kind: "failed-task",
+      })
+    }
+  } catch (err) {
+    if ((err as { name?: string } | null)?.name === "AbortError") throw err
+    return []
+  }
+  return items
+}
+
+/** Resolve current text for a persisted `obligation` Radar source reference, or null when cleared. */
+export async function describeRadarObligationSource(id: string): Promise<string | null> {
+  if (typeof indexedDB === "undefined") return null
+  try {
+    const db = getDb()
+    if (id.startsWith("draft:")) {
+      const draft = await db.connectorDrafts.get(id.slice("draft:".length))
+      if (!draft || draft.status !== "pending") return null
+      const preview = summarizeDraftSegments(draft.segments)
+      return preview
+        ? `Pending outbound draft awaiting approval: ${preview}`
+        : "Pending outbound draft awaiting approval"
+    }
+    if (id.startsWith("sla:")) {
+      const row = await db.conversationOverrides.get(id.slice("sla:".length))
+      if (!row?.nextResponseDueAt || row.status === "resolved") return null
+      return "Conversation response SLA requires attention"
+    }
+    if (id.startsWith("goal:")) {
+      const goal = await db.chatGoals.get(id.slice("goal:".length))
+      if (!goal || !BLOCKED_GOAL_STATUSES.has(goal.status)) return null
+      return `Goal (${goal.status}): ${(goal.safeObjective ?? goal.objective ?? "").slice(0, 240)}`
+    }
+    if (id.startsWith("task:")) {
+      const task = await db.scheduledTasks.get(id.slice("task:".length))
+      if (!task) return null
+      return `Scheduled task (${task.status}): ${task.name}`
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export async function collectRadarItems(opts: CollectRadarOptions = {}): Promise<RadarDataItem[]> {
   throwIfAborted(opts.signal)
   const windowDays = opts.windowDays ?? 14
@@ -53,7 +209,13 @@ export async function collectRadarItems(opts: CollectRadarOptions = {}): Promise
 
   const memories = await listMemories({ status: "active" })
   throwIfAborted(opts.signal)
-  const memItems: RadarDataItem[] = memories
+  // Align Radar memory intake with standard recall governance (B2): exclude
+  // expired, quarantined, conflict, and unverified procedural rows, then apply
+  // stable-key precedence before slicing by the time window.
+  const governedMemories = applyStableKeyPrecedence(
+    memories.filter((m) => isMemoryEligibleForRetrieval(m, now))
+  )
+  const memItems: RadarDataItem[] = governedMemories
     .filter((m) => m.updatedAt >= cutoff)
     .map((m) => ({
       id: m.id,
@@ -76,10 +238,18 @@ export async function collectRadarItems(opts: CollectRadarOptions = {}): Promise
     kind: c.kind,
   }))
 
+  const obligationItems =
+    opts.includeObligations === false
+      ? []
+      : await (opts.loadObligations
+          ? opts.loadObligations(cutoff, now)
+          : collectLocalObligations(cutoff, now, opts.signal))
+  throwIfAborted(opts.signal)
+
   const extra = (opts.extra ?? []).filter((i) => i.at >= cutoff)
 
   // Belt-and-suspenders PII gate before anything reaches the model.
-  const safe = [...memItems, ...capItems, ...extra].filter(
+  const safe = [...memItems, ...capItems, ...obligationItems, ...extra].filter(
     (i) => i.text.trim().length > 0 && hasNoLeakingPii(i.text)
   )
 

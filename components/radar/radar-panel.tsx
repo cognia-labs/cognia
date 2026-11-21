@@ -122,38 +122,45 @@ export function RadarPanel() {
     }
   }, [])
 
-  const onRun = useCallback(async () => {
-    runAbortRef.current?.abort()
-    const controller = new AbortController()
-    runAbortRef.current = controller
-    const scope = captureDatabaseScope()
-    setBusy(true)
-    try {
-      const r = await runRadarReport({ force: true, signal: controller.signal })
-      if (!mountedRef.current || !scope.isActive() || controller.signal.aborted) return
-      toast.success(r ? t("toast.generated") : t("toast.skipped"))
-    } catch (err) {
-      if (
-        !mountedRef.current ||
-        !scope.isActive() ||
-        isExpectedRadarCancellation(err, controller.signal)
-      ) {
-        return
+  const onRun = useCallback(
+    async (fresh = false) => {
+      runAbortRef.current?.abort()
+      const controller = new AbortController()
+      runAbortRef.current = controller
+      const scope = captureDatabaseScope()
+      setBusy(true)
+      try {
+        const r = await runRadarReport({
+          force: true,
+          ...(fresh ? { fresh: true } : {}),
+          signal: controller.signal,
+        })
+        if (!mountedRef.current || !scope.isActive() || controller.signal.aborted) return
+        toast.success(r ? t("toast.generated") : t("toast.skipped"))
+      } catch (err) {
+        if (
+          !mountedRef.current ||
+          !scope.isActive() ||
+          isExpectedRadarCancellation(err, controller.signal)
+        ) {
+          return
+        }
+        if (err instanceof NoRadarModelError) toast.error(t("toast.noModel"))
+        else
+          toast.error(
+            t("toast.failed", { message: err instanceof Error ? err.message : String(err) })
+          )
+      } finally {
+        if (runAbortRef.current === controller) {
+          runAbortRef.current = null
+        }
+        if (mountedRef.current && scope.isActive()) {
+          setBusy(false)
+        }
       }
-      if (err instanceof NoRadarModelError) toast.error(t("toast.noModel"))
-      else
-        toast.error(
-          t("toast.failed", { message: err instanceof Error ? err.message : String(err) })
-        )
-    } finally {
-      if (runAbortRef.current === controller) {
-        runAbortRef.current = null
-      }
-      if (mountedRef.current && scope.isActive()) {
-        setBusy(false)
-      }
-    }
-  }, [t])
+    },
+    [t]
+  )
 
   const onSaveSettings = useCallback(async () => {
     const scope = captureDatabaseScope()
@@ -203,14 +210,25 @@ export function RadarPanel() {
           <SparklesIcon className="h-4 w-4" />
           {t("panel.title")}
         </h2>
-        <Button
-          size="sm"
-          onClick={() => void onRun()}
-          disabled={busy}
-          aria-label={t("panel.runAria")}
-        >
-          {busy ? <Loader2Icon className="h-3.5 w-3.5 animate-spin" /> : t("panel.run")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void onRun(true)}
+            aria-label={t("panel.forceRunAria")}
+            data-testid="radar-force-regenerate"
+          >
+            {t("panel.forceRun")}
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void onRun(false)}
+            disabled={busy}
+            aria-label={t("panel.runAria")}
+          >
+            {busy ? <Loader2Icon className="h-3.5 w-3.5 animate-spin" /> : t("panel.run")}
+          </Button>
+        </div>
       </div>
 
       <SettingsStack>

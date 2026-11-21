@@ -103,6 +103,20 @@ describe("RadarPanel", () => {
     expect(toast.success).toHaveBeenCalled()
   })
 
+  it("passes fresh: true when Force regenerate is clicked (B3)", async () => {
+    mockRun.mockResolvedValue(report())
+    render(<RadarPanel />)
+    await userEvent.click(screen.getByTestId("radar-force-regenerate"))
+    await waitFor(() =>
+      expect(mockRun).toHaveBeenCalledWith({
+        force: true,
+        fresh: true,
+        signal: expect.any(AbortSignal),
+      })
+    )
+    expect(toast.success).toHaveBeenCalled()
+  })
+
   it("aborts an in-flight manual run and suppresses toasts when the active database switches (F11, F22)", async () => {
     const { activateAccountDatabase, clearAccountDatabaseSelection } =
       await import("@/lib/db/schema")

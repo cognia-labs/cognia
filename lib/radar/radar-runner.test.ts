@@ -149,4 +149,78 @@ describe("runRadarReport", () => {
     expect(mockSave).not.toHaveBeenCalled()
     expect(mockPrune).not.toHaveBeenCalled()
   })
+
+  it("coalesces overlapping cron and manual runs into a single flight, while fresh: true supersedes it (B3)", async () => {
+    mockCollect.mockResolvedValue(items(6))
+    let releaseFirst!: (value: unknown) => void
+    let firstSignal: AbortSignal | undefined
+    mockGenerate.mockImplementationOnce(
+      (_client, args) =>
+        new Promise((resolve) => {
+          firstSignal = args.signal
+          releaseFirst = resolve
+        })
+    )
+
+    const cronPromise = runRadarReport({ now: NOW })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const joinManualPromise = runRadarReport({ now: NOW, force: true })
+
+    releaseFirst({
+      verdict: "shared-flight",
+      atAGlance: [],
+      infoDiet: "",
+      subconscious: "",
+      graveyard: [],
+      blindSpots: "",
+      actions: [],
+      topicCloud: [],
+    })
+
+    const [cronRes, manualRes] = await Promise.all([cronPromise, joinManualPromise])
+    expect(mockGenerate).toHaveBeenCalledTimes(1)
+    expect(cronRes?.id).toBe(manualRes?.id)
+    expect(firstSignal?.aborted).toBe(false)
+
+    // Now start an in-flight run and supersede it with `fresh: true`.
+    let supersededSignal: AbortSignal | undefined
+    mockGenerate
+      .mockImplementationOnce(
+        (_client, args) =>
+          new Promise((_resolve, reject) => {
+            supersededSignal = args.signal
+            args.signal?.addEventListener(
+              "abort",
+              () => reject(Object.assign(new Error("superseded"), { name: "AbortError" })),
+              { once: true }
+            )
+          })
+      )
+      .mockResolvedValueOnce({
+        verdict: "fresh-report",
+        atAGlance: [],
+        infoDiet: "",
+        subconscious: "",
+        graveyard: [],
+        blindSpots: "",
+        actions: [],
+        topicCloud: [],
+      })
+
+    const staleFlight = runRadarReport({ now: NOW, force: true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const freshFlight = runRadarReport({ now: NOW, force: true, fresh: true })
+    await expect(staleFlight).rejects.toThrow()
+    expect(supersededSignal?.aborted).toBe(true)
+    const freshRes = await freshFlight
+    expect(freshRes?.verdict).toBe("fresh-report")
+  })
+
+  it("discards the report without pruning when verifyLiveSources drops all deleted sources at commit (B1)", async () => {
+    mockCollect.mockResolvedValue(items(6))
+    mockSave.mockResolvedValueOnce(null)
+    const res = await runRadarReport({ now: NOW, force: true })
+    expect(res).toBeNull()
+    expect(mockPrune).not.toHaveBeenCalled()
+  })
 })

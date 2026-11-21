@@ -5,6 +5,7 @@
  */
 
 import Dexie from "dexie"
+import { isMemoryEligibleForRetrieval } from "@cognia/memory/retrieve/retriever"
 import type { RadarReport } from "@/types/radar"
 import { activeDatabaseEpoch, activeDatabaseName, getDb } from "./schema"
 
@@ -22,6 +23,14 @@ export class RadarAccountChangedError extends Error {
 export interface RadarDatabaseGuard {
   expectDatabase?: string
   expectEpoch?: number
+  /**
+   * Re-verify `report.sources` inside the commit transaction (B1): drop sources
+   * that were deleted, tombstoned, or rendered ineligible while the model ran,
+   * remap `graveyard` and `actionEvidence` indexes, and discard the report
+   * (`return null`) when every source vanished before commit.
+   */
+  verifyLiveSources?: boolean
+  now?: number
 }
 
 function assertRadarDatabase(db: { name: string }, guard?: RadarDatabaseGuard): void {
@@ -46,16 +55,98 @@ function hasRetainedSuggestion(row: RadarReport): boolean {
 export async function saveRadarReport(
   report: RadarReport,
   guard?: RadarDatabaseGuard
-): Promise<void> {
+): Promise<RadarReport | null> {
   if (guard) {
     assertRadarDatabase({ name: activeDatabaseName() }, guard)
   }
   const db = getDb()
   assertRadarDatabase(db, guard)
-  await db.transaction("rw", db.radarReports, async () => {
-    assertRadarDatabase(db, guard)
-    await db.radarReports.put(report)
-  })
+  if (!guard?.verifyLiveSources || !report.sources || report.sources.length === 0) {
+    await db.transaction("rw", db.radarReports, async () => {
+      assertRadarDatabase(db, guard)
+      await db.radarReports.put(report)
+    })
+    return report
+  }
+
+  const now = guard.now ?? Date.now()
+  return db.transaction(
+    "rw",
+    [db.radarReports, db.memories, db.syncTombstones, db.capturedItems],
+    async () => {
+      assertRadarDatabase(db, guard)
+      const sources = report.sources ?? []
+      const memoryIds = sources.filter((s) => s.source === "memory").map((s) => s.id)
+      const captureIds = sources.filter((s) => s.source === "capture").map((s) => s.id)
+      const [memoryRows, tombstoneRows, captureRows] = await Promise.all([
+        memoryIds.length > 0 ? db.memories.bulkGet(memoryIds) : Promise.resolve([]),
+        memoryIds.length > 0
+          ? db.syncTombstones.bulkGet(memoryIds.map((id) => ["memories", id] as [string, string]))
+          : Promise.resolve([]),
+        captureIds.length > 0 ? db.capturedItems.bulkGet(captureIds) : Promise.resolve([]),
+      ])
+
+      const liveMemoryIds = new Set<string>()
+      memoryIds.forEach((id, idx) => {
+        const mem = memoryRows[idx]
+        const tombstoned = tombstoneRows[idx] !== undefined
+        if (mem && !tombstoned && isMemoryEligibleForRetrieval(mem, now)) {
+          liveMemoryIds.add(id)
+        }
+      })
+      const liveCaptureIds = new Set<string>()
+      captureIds.forEach((id, idx) => {
+        if (captureRows[idx] !== undefined) {
+          liveCaptureIds.add(id)
+        }
+      })
+
+      const indexMap = new Map<number, number>()
+      const survivingSources: NonNullable<RadarReport["sources"]> = []
+      sources.forEach((source, oldIndex) => {
+        const alive =
+          source.source === "memory"
+            ? liveMemoryIds.has(source.id)
+            : source.source === "capture"
+              ? liveCaptureIds.has(source.id)
+              : true
+        if (alive) {
+          indexMap.set(oldIndex, survivingSources.length)
+          survivingSources.push(source)
+        }
+      })
+
+      if (survivingSources.length === 0) {
+        return null
+      }
+
+      const prunedReport: RadarReport =
+        survivingSources.length === sources.length
+          ? report
+          : {
+              ...report,
+              itemCount: survivingSources.length,
+              sources: survivingSources,
+              graveyard: report.graveyard.flatMap((entry) => {
+                const mapped = indexMap.get(entry.index)
+                return mapped !== undefined ? [{ ...entry, index: mapped }] : []
+              }),
+              ...(report.actionEvidence
+                ? {
+                    actionEvidence: report.actionEvidence.map((indexes) =>
+                      indexes.flatMap((oldIdx) => {
+                        const mapped = indexMap.get(oldIdx)
+                        return mapped !== undefined ? [mapped] : []
+                      })
+                    ),
+                  }
+                : {}),
+            }
+
+      await db.radarReports.put(prunedReport)
+      return prunedReport
+    }
+  )
 }
 
 export async function getRadarReport(id: string): Promise<RadarReport | undefined> {

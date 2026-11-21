@@ -7,6 +7,8 @@
 // a renderer-side LLM client, both of which exist in web mode too.
 
 import type { ScheduledTask, TaskExecution } from "@/types/scheduler"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
+import { notify as centerNotify } from "@/lib/notifications/runtime"
 import { runRadarReport, NoRadarModelError } from "@/lib/radar/radar-runner"
 import { loggers } from "@cognia/logging"
 
@@ -40,6 +42,33 @@ export async function executeRadarReportTask(
       executionId: execution.id,
       itemCount: report.itemCount,
     })
+    // Actionable-only notification (F6): surface a notification when scheduled
+    // Radar generation discovers concrete suggestions, while keeping empty or
+    // skipped runs silent (`notification.onComplete` stays false).
+    const actionCount = Array.isArray(report.actions) ? report.actions.length : 0
+    if (actionCount > 0) {
+      try {
+        await centerNotify(
+          {
+            source: "scheduler",
+            level: "info",
+            title: `Attention Radar: ${actionCount} new suggestion${actionCount === 1 ? "" : "s"}`,
+            body:
+              report.verdict?.trim() || report.actions[0] || "New suggestions ready for review.",
+            dedupeKey: `radar-report:actionable:${report.id}`,
+            groupKey: `task:${task.id}`,
+            sourceRef: { kind: "task", id: task.id },
+          },
+          { personalContext: explicitHostPersonalSinkContext("fixed-notice") }
+        )
+      } catch (notifyErr) {
+        log.error("Failed to dispatch actionable radar notification", {
+          taskId: task.id,
+          reportId: report.id,
+          error: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+        })
+      }
+    }
     return { success: true, output: { itemCount: report.itemCount, reportId: report.id } }
   } catch (err) {
     const error =

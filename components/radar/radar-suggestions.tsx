@@ -7,6 +7,7 @@ import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { getMemory } from "@/lib/db/memories"
 import { getCapturedItem } from "@/lib/db/captured-items"
+import { describeRadarObligationSource } from "@/lib/radar/collect"
 import { decideRadarSuggestion, radarSuggestions } from "@/lib/radar/suggestions"
 import type { RadarReport } from "@/types/radar"
 import { schedulerDb } from "@/lib/scheduler/scheduler-db"
@@ -40,6 +41,9 @@ export function RadarSource({ source }: { source: NonNullable<RadarReport["sourc
       if (source.source === "memory") {
         const memory = await getMemory(source.id)
         return memory?.status === "active" ? memory.text : null
+      }
+      if (source.source === "obligation") {
+        return describeRadarObligationSource(source.id)
       }
       const capture = await getCapturedItem(source.id)
       return capture

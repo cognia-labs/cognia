@@ -119,4 +119,84 @@ describe("radar-reports CRUD", () => {
       clearAccountDatabaseSelection()
     }
   })
+
+  it("scrubs deleted or tombstoned sources at commit, remaps evidence indexes, and drops reports whose sources all vanished (B1)", async () => {
+    const db = getDb()
+    await db.memories.clear()
+    await db.syncTombstones.clear()
+    await db.memories.bulkPut([
+      {
+        id: "m-deleted-tombstone",
+        scope: "global",
+        type: "semantic",
+        text: "tombstoned",
+        tags: [],
+        importance: 5,
+        createdAt: 100,
+        updatedAt: 100,
+        lastAccessedAt: 100,
+        accessCount: 0,
+        version: 1,
+        status: "active",
+        pinned: false,
+        provenance: "distilled",
+      } as never,
+      {
+        id: "m-live",
+        scope: "global",
+        type: "semantic",
+        text: "still active",
+        tags: [],
+        importance: 5,
+        createdAt: 100,
+        updatedAt: 100,
+        lastAccessedAt: 100,
+        accessCount: 0,
+        version: 1,
+        status: "active",
+        pinned: false,
+        provenance: "distilled",
+      } as never,
+    ])
+    await db.syncTombstones.put({ table: "memories", id: "m-deleted-tombstone", deletedAt: 150 })
+
+    // Report 1: m-missing (deleted) + m-deleted-tombstone (tombstoned) + m-live → keeps only m-live at index 0.
+    const partial = await saveRadarReport(
+      {
+        ...report("partial", 200),
+        itemCount: 3,
+        sources: [
+          { id: "m-missing", source: "memory", at: 100 },
+          { id: "m-deleted-tombstone", source: "memory", at: 100 },
+          { id: "m-live", source: "memory", at: 100 },
+        ],
+        graveyard: [
+          { index: 0, reason: "gone" },
+          { index: 2, reason: "revisit live" },
+        ],
+        actions: ["Act on live"],
+        actionEvidence: [[0, 1, 2]],
+      },
+      { verifyLiveSources: true, now: 200 }
+    )
+    expect(partial?.sources).toEqual([{ id: "m-live", source: "memory", at: 100 }])
+    expect(partial?.itemCount).toBe(1)
+    expect(partial?.graveyard).toEqual([{ index: 0, reason: "revisit live" }])
+    expect(partial?.actionEvidence).toEqual([[0]])
+
+    // Report 2: all sources deleted before commit → discarded (`null`) and never persisted.
+    const empty = await saveRadarReport(
+      {
+        ...report("all-gone", 300),
+        itemCount: 2,
+        sources: [
+          { id: "m-missing", source: "memory", at: 100 },
+          { id: "m-deleted-tombstone", source: "memory", at: 100 },
+        ],
+      },
+      { verifyLiveSources: true, now: 300 }
+    )
+    expect(empty).toBeNull()
+    expect(await getRadarReport("all-gone")).toBeUndefined()
+  })
 })
