@@ -112,7 +112,7 @@ import {
 } from "@cognia/plugin-contract/lib/connectors/circuit-breaker"
 import { createTokenBucket, type TokenBucket } from "./rate-limit"
 import { recordDeliveredMessage } from "./delivered-messages"
-import { createDraft, prepareDraftRow } from "@/lib/db/connector-drafts"
+import { prepareDraftRow } from "@/lib/db/connector-drafts"
 import type {
   DeliveryDecision,
   DeliveryPlanInput,
@@ -268,6 +268,13 @@ export class ConversationLane {
   }
 }
 
+class RunnerAbortedError extends Error {
+  constructor() {
+    super("Outbound runner aborted")
+    this.name = "RunnerAbortedError"
+  }
+}
+
 class PlatformSendSemaphore {
   private active = 0
   private readonly waiters: Array<() => void> = []
@@ -277,9 +284,22 @@ class PlatformSendSemaphore {
     private readonly onChange: (active: number) => void
   ) {}
 
-  async run<T>(work: () => Promise<T>): Promise<T> {
+  async run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw new RunnerAbortedError()
     if (this.active >= this.limit) {
-      await new Promise<void>((resolve) => this.waiters.push(resolve))
+      await new Promise<void>((resolve, reject) => {
+        const grant = () => {
+          signal?.removeEventListener("abort", onAbort)
+          resolve()
+        }
+        const onAbort = () => {
+          const idx = this.waiters.indexOf(grant)
+          if (idx >= 0) this.waiters.splice(idx, 1)
+          reject(new RunnerAbortedError())
+        }
+        this.waiters.push(grant)
+        signal?.addEventListener("abort", onAbort, { once: true })
+      })
     }
     this.active += 1
     this.onChange(this.active)
@@ -307,6 +327,12 @@ export interface OutboundRunnerOptions {
    * Map snapshotted at boot time delivers through stale instances forever.
    */
   adapters: { get(adapterId: string): PlatformAdapter | undefined }
+  /**
+   * Optional runtime ownership fence verified immediately before invoking the
+   * platform adapter on the wire (e.g. lease still held and adapter still
+   * enabled on this host).
+   */
+  ownsAdapter?: (adapterId: string) => boolean | Promise<boolean>
   /**
    * Idle-sleep ceiling in ms (default 60 000). The loop is event-driven —
    * it wakes on enqueue and at each retry deadline — so this only caps the
@@ -990,6 +1016,24 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     return false
   }
 
+  function raceRunnerSignal<T>(promise: Promise<T>): Promise<T> {
+    if (opts.signal.aborted) return Promise.reject(new RunnerAbortedError())
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(new RunnerAbortedError())
+      opts.signal.addEventListener("abort", onAbort, { once: true })
+      promise.then(
+        (value) => {
+          opts.signal.removeEventListener("abort", onAbort)
+          resolve(value)
+        },
+        (error) => {
+          opts.signal.removeEventListener("abort", onAbort)
+          reject(error)
+        }
+      )
+    })
+  }
+
   /**
    * Process a single outbound job. Called inside a conversation lane so
    * ordering is guaranteed within each conversation.
@@ -1004,13 +1048,16 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     // change (mute / quiet-hours toggle) lands on the next drain. Omitted by
     // any non-drain caller, which then reads fresh every time (current behaviour).
     adapterCache?: Map<string, AdapterInstanceRow | undefined>,
-    overrideCache?: Map<string, ConversationOverrideRow | null>
+    overrideCache?: Map<string, ConversationOverrideRow | null>,
+    onEnteredWire?: () => void
   ): Promise<void> {
+    if (opts.signal.aborted) return
     const now = clock()
 
     // Re-fetch the job by id to get the latest state (attempts may have been
     // incremented by a prior lane execution for this same job).
     const job = await getDb().outboundQueue.get(jobId)
+    if (opts.signal.aborted) return
     if (!job) return // already processed or deleted
     if (job.status !== "pending" && job.status !== "failed") return
 
@@ -1244,9 +1291,8 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         } catch {
           platform = ""
         }
-        const decision = await getPluginEventHooks().dispatchConnectorDecision(
-          "onConnectorOutbound",
-          {
+        const decision = await raceRunnerSignal(
+          getPluginEventHooks().dispatchConnectorDecision("onConnectorOutbound", {
             adapterId,
             conversationKey,
             platform,
@@ -1256,8 +1302,9 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             // Terminal-card marker a producer may stamp so result-card
             // middleware can find "the" card without parsing segment JSON.
             ...(request.metadata.resultCard ? { resultCard: request.metadata.resultCard } : {}),
-          }
+          })
         )
+        if (opts.signal.aborted) return
         if (decision.action === "block") {
           await deleteOutboundJob(job.id)
           await appendAudit({
@@ -1297,6 +1344,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
           }
         }
       } catch (err) {
+        if (err instanceof RunnerAbortedError || opts.signal.aborted) return
         console.error("[outbound-runner] onConnectorOutbound dispatch failed", err)
       }
     }
@@ -1391,11 +1439,18 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
 
     // Check capacity without spending a token before planning. Deferred jobs
     // must not mint a new authorization receipt every runner cycle.
+    if (opts.signal.aborted) return
     if (bucket.snapshot().available < 1) {
       await deferRateLimit(false)
       return
     }
-    if (!(await authorizeJob(job, request))) return
+    try {
+      if (!(await raceRunnerSignal(authorizeJob(job, request)))) return
+    } catch (err) {
+      if (err instanceof RunnerAbortedError || opts.signal.aborted) return
+      throw err
+    }
+    if (opts.signal.aborted) return
 
     // ── Send ──────────────────────────────────────────────────────────────
     // Atomic claim: if another runner already moved this job out of
@@ -1404,6 +1459,10 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     // rate-limit token.
     const claimed = await markSending(job.id, now)
     if (!claimed) {
+      return
+    }
+    if (opts.signal.aborted) {
+      await unclaimSending(job.id, "runner_stopped", "Outbound runner stopped before send", clock())
       return
     }
 
@@ -1479,10 +1538,35 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     }
 
     for (const pointer of pendingPlacement) {
-      const placement = await placeMessage(
-        { ...pointer, adapterId, conversationKey, conversationRef: request.conversationRef },
-        { getAdapter: () => adapter }
-      )
+      let placement: Awaited<ReturnType<typeof placeMessage>>
+      try {
+        placement = await raceRunnerSignal(
+          placeMessage(
+            { ...pointer, adapterId, conversationKey, conversationRef: request.conversationRef },
+            { getAdapter: () => opts.adapters.get(adapterId) ?? adapter }
+          )
+        )
+      } catch (err) {
+        if (err instanceof RunnerAbortedError || opts.signal.aborted) {
+          await unclaimSending(
+            job.id,
+            "runner_stopped",
+            "Outbound runner stopped before send",
+            clock()
+          )
+          return
+        }
+        throw err
+      }
+      if (opts.signal.aborted) {
+        await unclaimSending(
+          job.id,
+          "runner_stopped",
+          "Outbound runner stopped before send",
+          clock()
+        )
+        return
+      }
       if (placement === "within") continue
       if (placement === "unavailable") {
         await deferPlacement(pointer, adapter.meta.type)
@@ -1665,20 +1749,62 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     // platform can't do it".
     let result: Awaited<ReturnType<PlatformAdapter["send"]>>
     const editTargetId = request.editTargetMessageId
+    let wireStarted = false
+    let preWireAbort: "stopped" | "adapter_removed" | "adapter_rotated" | "not_owned" | null = null
+    const verifyReadyForWire = async (): Promise<boolean> => {
+      if (opts.signal.aborted) {
+        preWireAbort = "stopped"
+        return false
+      }
+      const liveAdapter = opts.adapters.get(adapterId)
+      if (!liveAdapter) {
+        preWireAbort = "adapter_removed"
+        return false
+      }
+      if (liveAdapter !== adapter) {
+        preWireAbort = "adapter_rotated"
+        return false
+      }
+      if (opts.ownsAdapter) {
+        const owned = await raceRunnerSignal(Promise.resolve(opts.ownsAdapter(adapterId)))
+        if (!owned || opts.signal.aborted) {
+          preWireAbort = opts.signal.aborted ? "stopped" : "not_owned"
+          return false
+        }
+        const postCheckAdapter = opts.adapters.get(adapterId)
+        if (!postCheckAdapter) {
+          preWireAbort = "adapter_removed"
+          return false
+        }
+        if (postCheckAdapter !== adapter) {
+          preWireAbort = "adapter_rotated"
+          return false
+        }
+      }
+      return true
+    }
+    const abortedPlaceholderResult: Awaited<ReturnType<PlatformAdapter["send"]>> = {
+      ok: false,
+      error: { code: "runner_stopped", message: "Outbound runner stopped", retryable: true },
+    }
     try {
       if (editTargetId && typeof adapter.edit === "function") {
-        result = await sendSemaphore.run(async () =>
-          (await recheckBeforeWire())
-            ? adapter.edit!(editTargetId, request)
-            : {
-                ok: false,
-                error: {
-                  code: "personal_withheld",
-                  message: "Personal content withheld",
-                  retryable: false,
-                },
-              }
-        )
+        result = await sendSemaphore.run(async () => {
+          if (!(await raceRunnerSignal(recheckBeforeWire()))) {
+            return {
+              ok: false,
+              error: {
+                code: "personal_withheld",
+                message: "Personal content withheld",
+                retryable: false,
+              },
+            }
+          }
+          if (!(await verifyReadyForWire())) return abortedPlaceholderResult
+          wireStarted = true
+          onEnteredWire?.()
+          return adapter.edit!(editTargetId, request)
+        }, opts.signal)
       } else {
         if (editTargetId) {
           await appendAudit({
@@ -1691,29 +1817,42 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             message: `${adapterId} adapter has no edit() — falling back to send()`,
           })
         }
-        result = await sendSemaphore.run(async () =>
-          !(await recheckBeforeWire())
-            ? {
-                ok: false,
-                error: {
-                  code: "personal_withheld",
-                  message: "Personal content withheld",
-                  retryable: false,
+        result = await sendSemaphore.run(async () => {
+          if (!(await raceRunnerSignal(recheckBeforeWire()))) {
+            return {
+              ok: false,
+              error: {
+                code: "personal_withheld",
+                message: "Personal content withheld",
+                retryable: false,
+              },
+            }
+          }
+          if (!(await verifyReadyForWire())) return abortedPlaceholderResult
+          wireStarted = true
+          onEnteredWire?.()
+          return adapter.meta.capabilities.includes("events.delivery-status")
+            ? adapter.send(request, {
+                ...identityOptions,
+                onPendingReceipt: async (receipt) => {
+                  await markAwaitingDeliveryReceipt(job.id, receipt)
                 },
-              }
-            : adapter.meta.capabilities.includes("events.delivery-status")
-              ? adapter.send(request, {
-                  ...identityOptions,
-                  onPendingReceipt: async (receipt) => {
-                    await markAwaitingDeliveryReceipt(job.id, receipt)
-                  },
-                })
-              : identityOptions
-                ? adapter.send(request, identityOptions)
-                : adapter.send(request)
-        )
+              })
+            : identityOptions
+              ? adapter.send(request, identityOptions)
+              : adapter.send(request)
+        }, opts.signal)
       }
     } catch (err: unknown) {
+      if (!wireStarted && (err instanceof RunnerAbortedError || opts.signal.aborted)) {
+        await unclaimSending(
+          job.id,
+          "runner_stopped",
+          "Outbound runner stopped before send",
+          clock()
+        )
+        return
+      }
       const msg = err instanceof Error ? err.message : String(err)
       if (ephemeral || adapter.runtimeCapabilities?.ambiguousDelivery !== "remote_idempotent") {
         await markDeliveryUnknown(job.id, "delivery_unknown", msg)
@@ -1757,6 +1896,43 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         outcome: "failed",
         errorCode: err instanceof Error ? err.name : "Error",
       })
+      return
+    }
+
+    if (preWireAbort !== null) {
+      if (preWireAbort === "adapter_removed" && !opts.signal.aborted) {
+        if (pendingPlacement.length > 0) {
+          await deferPlacement(pendingPlacement[0]!, "unknown")
+          return
+        }
+        if (ephemeral) {
+          await unclaimSending(
+            job.id,
+            "adapter_not_found",
+            "Lark adapter is not registered yet",
+            clock() + 1_000
+          )
+          return
+        }
+        await markDeadlettered(job.id, "adapter_not_found", `Adapter ${adapterId} not registered`)
+        await appendAudit({
+          adapterId,
+          kind: "delivery.deadlettered",
+          at: now,
+          conversationKey,
+          idempotencyKey,
+          reason: "adapter_not_found",
+        })
+        return
+      }
+      await unclaimSending(
+        job.id,
+        preWireAbort === "adapter_rotated" ? "adapter_reloaded" : "runner_stopped",
+        preWireAbort === "adapter_rotated"
+          ? "Adapter instance rotated before wire send"
+          : "Outbound runner stopped before wire send",
+        clock()
+      )
       return
     }
 
@@ -1868,6 +2044,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       }
       if (err.code === "identity_reauthorization_required") {
         const resolution = await readForResolution(conversationKey).catch(() => null)
+        let draft: Awaited<ReturnType<typeof prepareDraftRow>> | undefined
         if (resolution?.sessionId) {
           const localDraft = await checkPersonalSink(
             personalContext,
@@ -1884,14 +2061,26 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             await sendPersonalNotice(false)
             return
           }
-          const draft = await createDraft({
+          draft = await prepareDraftRow({
             personalExecutionRunId: `execution:job:outbound:${job.id}`,
             conversationKey,
             sessionId: resolution.sessionId,
             segments: request.segments,
             sourceMessageId: request.metadata.sourceMessageId,
-            outboundPreview: request,
+            outboundPreview: {
+              ...request,
+              conversationRef: { ...request.conversationRef, adapterId },
+            },
           })
+        }
+        const held = await holdOutboundForAuthorization(job.id, {
+          errorCode: err.code,
+          message: err.message,
+          ...(draft ? { draft } : {}),
+          claimed: true,
+        })
+        if (!held) return
+        if (draft) {
           await appendAudit({
             adapterId,
             kind: "draft.prepared",
@@ -1903,7 +2092,6 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             fields: { draftId: draft.id },
           })
         }
-        await markDeadlettered(job.id, err.code, err.message)
         await appendAudit({
           adapterId,
           kind: "delivery.deadlettered",
@@ -2029,6 +2217,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
   // Wake on every enqueue (any of the ai-run / manual / workflow / draft
   // paths). Unsubscribed in the `finally` below.
   const unsubscribeEnqueue = subscribeOutboundEnqueued(wake)
+  const preWireTasks = new Set<Promise<void>>()
 
   // ── Wake-driven loop ──────────────────────────────────────────────────────
   try {
@@ -2042,23 +2231,21 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
 
       // Stale-claim recovery (startup + every five minutes): flip `sending` rows
       // orphaned by a crashed/reloaded runner (claimed > 5 min ago, never
-      // settled) back to `failed` so this drain can retry them. Best-effort;
-      // audited per recovered row. `inFlight` jobs are claimed seconds ago
-      // and sit safely inside the grace window.
+      // settled) back to `failed` (or directly to `delivery_unknown` when the
+      // adapter is not remotely idempotent) in a single transaction.
       if (clock() >= nextStaleRecoveryAt) {
         try {
-          const recoveredRows = await recoverStaleSendingJobs(clock())
-          for (const row of recoveredRows) {
-            const recoveredAdapter = opts.adapters.get(row.adapterId)
-            if (
-              row.request.metadata.larkEphemeral !== undefined ||
-              recoveredAdapter?.runtimeCapabilities?.ambiguousDelivery !== "remote_idempotent"
-            ) {
-              await markDeliveryUnknown(
-                row.id,
-                "stale_sending_delivery_unknown",
-                "The runner stopped while delivery was in flight; reconcile before retrying"
+          const recoveredRows = await recoverStaleSendingJobs(clock(), undefined, {
+            canRetry: (row) => {
+              const recoveredAdapter = opts.adapters.get(row.adapterId)
+              return (
+                row.request.metadata.larkEphemeral === undefined &&
+                recoveredAdapter?.runtimeCapabilities?.ambiguousDelivery === "remote_idempotent"
               )
+            },
+          })
+          for (const row of recoveredRows) {
+            if (row.status === "delivery_unknown") {
               await appendAudit({
                 adapterId: row.adapterId,
                 kind: "delivery.error",
@@ -2132,27 +2319,54 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
           })
         )
         for (const job of resolvedHeads) {
-          if (!job) continue
+          if (!job || opts.signal.aborted) continue
           if (inFlight.has(job.id)) continue
           inFlight.add(job.id)
           const { conversationKey } = job
+          let resolvePreWire!: () => void
+          const preWirePromise = new Promise<void>((resolve) => {
+            resolvePreWire = resolve
+          })
+          preWireTasks.add(preWirePromise)
+          void preWirePromise.finally(() => {
+            preWireTasks.delete(preWirePromise)
+          })
           getLane(conversationKey).enqueue(async () => {
             let current: OutboundJobRow | undefined = job
             let processed = 0
             try {
-              while (current && processed < OUTBOUND_DUE_BATCH_SIZE) {
+              while (current && processed < OUTBOUND_DUE_BATCH_SIZE && !opts.signal.aborted) {
                 const currentId: string = current.id
-                await processJob(currentId, current.adapterId, adapterCache, overrideCache)
+                let currentWireRelease: (() => void) | undefined
+                const currentWirePromise = new Promise<void>((resolve) => {
+                  currentWireRelease = resolve
+                })
+                preWireTasks.add(currentWirePromise)
+                try {
+                  await processJob(
+                    currentId,
+                    current.adapterId,
+                    adapterCache,
+                    overrideCache,
+                    currentWireRelease
+                  )
+                } finally {
+                  currentWireRelease?.()
+                  preWireTasks.delete(currentWirePromise)
+                }
                 inFlight.delete(currentId)
                 processed += 1
+                if (opts.signal.aborted) break
 
                 const settled: OutboundJobRow | undefined =
                   await getDb().outboundQueue.get(currentId)
+                if (opts.signal.aborted) break
                 if (!settled || !isOutboundTerminal(settled.status, settled.pendingReceipt)) break
                 const next: OutboundJobRow | undefined = await findNextActiveOutboundSibling(
                   settled
                 ).catch(() => undefined)
                 if (
+                  opts.signal.aborted ||
                   !next ||
                   next.status === "sending" ||
                   next.status === "delivery_unknown" ||
@@ -2165,6 +2379,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
                 current = next
               }
             } finally {
+              resolvePreWire()
               if (current) inFlight.delete(current.id)
               // Re-evaluate: the job may have been rescheduled to a sooner
               // deadline than the loop is currently sleeping for.
@@ -2211,6 +2426,9 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     }
   } finally {
     unsubscribeEnqueue()
+    if (preWireTasks.size > 0) {
+      await Promise.allSettled(Array.from(preWireTasks))
+    }
     // Surrender ownership of the runtime-state registry only if we still own
     // it. A second runner instance (test scenarios) may have replaced us
     // while we were running; in that case the registry already points at

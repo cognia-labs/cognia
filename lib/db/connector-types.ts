@@ -775,6 +775,8 @@ export interface ConnectorDraftRow {
   sourceMessageId?: string
   /** Pre-built OutboundRequest the user can fire on approve (idempotencyKey already issued). */
   outboundPreview?: OutboundRequest
+  /** Outbound queue job id produced when this draft was approved. */
+  approvedJobId?: string
 }
 
 /**

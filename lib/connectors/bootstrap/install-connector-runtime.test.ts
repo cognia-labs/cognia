@@ -1931,5 +1931,36 @@ describe("installConnectorRuntime", () => {
       for (const dispose of disposers.splice(0)) dispose()
       expect(unsub).toHaveBeenCalledTimes(1)
     })
+
+    it("wires ownsAdapter into startOutboundRunner and awaits runner exit before releasing adapters (F20)", async () => {
+      let runnerExited = false
+      let releaseRunner!: () => void
+      mockStartOutboundRunner.mockImplementationOnce(
+        ({ signal }: { signal: AbortSignal }) =>
+          new Promise<void>((resolve) => {
+            releaseRunner = () => {
+              runnerExited = true
+              resolve()
+            }
+            signal.addEventListener("abort", () => {
+              setTimeout(releaseRunner, 15)
+            })
+          })
+      )
+      const rowA = makeTelegramRow("cai_A")
+      mockGetAdapterInstance.mockResolvedValue(rowA)
+      await installWithWatch([rowA])
+      await waitFor(() => expect(mockStartOutboundRunner).toHaveBeenCalledTimes(1))
+      const runnerOpts = mockStartOutboundRunner.mock.calls[0][0] as {
+        ownsAdapter?: (adapterId: string) => Promise<boolean>
+      }
+      expect(typeof runnerOpts.ownsAdapter).toBe("function")
+
+      const teardown = disposers.pop()!
+      const done = teardown()
+      expect(runnerExited).toBe(false)
+      await done
+      expect(runnerExited).toBe(true)
+    })
   })
 })

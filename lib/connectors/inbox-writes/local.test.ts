@@ -398,6 +398,101 @@ describe("approveDraftLocally", () => {
     expect(second.alreadyApproved).toBe(true)
     expect(second.jobId).toBe(first.jobId)
   })
+
+  it("enqueues a fresh sendable job when approving a draft held from a deadlettered authorization job (F13)", async () => {
+    const { holdOutboundForAuthorization } = await import("@/lib/db/outbound-jobs")
+    const { prepareDraftRow } = await import("@/lib/db/connector-drafts")
+    const heldKey = "idem-held-auth-1"
+    const now = Date.now()
+    await getDb().outboundQueue.add({
+      id: "oqj_held_1",
+      adapterId: ADAPTER,
+      conversationKey: KEY,
+      request: {
+        conversationRef: REF,
+        segments: [{ type: "text", text: "held body" }],
+        metadata: { idempotencyKey: heldKey },
+      },
+      status: "pending",
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+      nextAttemptAt: now,
+      idempotencyKey: heldKey,
+      source: "ai-run",
+    })
+    const preparedDraft = await prepareDraftRow({
+      personalExecutionRunId: "execution:job:outbound:oqj_held_1",
+      conversationKey: KEY,
+      sessionId: SESSION,
+      segments: [{ type: "text", text: "held body" }],
+      outboundPreview: {
+        conversationRef: REF,
+        segments: [{ type: "text", text: "held body" }],
+        metadata: { idempotencyKey: heldKey },
+      },
+    })
+    const held = await holdOutboundForAuthorization("oqj_held_1", {
+      errorCode: "authorization",
+      message: "Held for human approval",
+      draft: preparedDraft,
+    })
+    expect(held).toBe(true)
+    expect((await getDb().outboundQueue.get("oqj_held_1"))?.status).toBe("deadlettered")
+
+    const approved = await approveDraftLocally(preparedDraft.id)
+    expect(approved.alreadyApproved).toBe(false)
+    expect(approved.jobId).toBeDefined()
+    expect(approved.jobId).not.toBe("oqj_held_1")
+
+    const sendableJobs = await getDb().outboundQueue.where("status").equals("pending").toArray()
+    expect(sendableJobs).toHaveLength(1)
+    expect(sendableJobs[0]).toMatchObject({
+      id: approved.jobId,
+      source: "draft-approved",
+      idempotencyKey: draftApprovalIdempotencyKey(preparedDraft),
+    })
+
+    // Idempotent replay returns the newly created sendable job without creating a third row.
+    const replay = await approveDraftLocally(preparedDraft.id)
+    expect(replay).toEqual({
+      draftId: preparedDraft.id,
+      jobId: approved.jobId,
+      alreadyApproved: true,
+    })
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("never overwrites a rejection committed while approveDraftLocally was awaiting enqueue, rolling back the queued job (F14)", async () => {
+    const draft = await seedDraft()
+    let releaseEnqueue!: () => void
+    let enteredEnqueue!: () => void
+    const entered = new Promise<void>((resolve) => {
+      enteredEnqueue = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      releaseEnqueue = resolve
+    })
+    const realImpl = enqueueMock.getMockImplementation()!
+    enqueueMock.mockImplementationOnce(async (...args: unknown[]) => {
+      enteredEnqueue()
+      await gate
+      return realImpl(...args)
+    })
+
+    const approving = approveDraftLocally(draft.id, {
+      binding: { adapterId: ADAPTER, conversationKey: KEY, conversationRef: REF },
+    })
+    await entered
+    await rejectDraftLocally(draft.id)
+    expect((await getDb().connectorDrafts.get(draft.id))?.status).toBe("rejected")
+
+    releaseEnqueue()
+    const result = await approving
+    expect(result).toEqual({ draftId: draft.id, jobId: undefined, alreadyApproved: false })
+    expect((await getDb().connectorDrafts.get(draft.id))?.status).toBe("rejected")
+    expect(await getDb().outboundQueue.count()).toBe(0)
+  })
 })
 
 describe("rejectDraftLocally", () => {

@@ -352,6 +352,7 @@ export function installConnectorRuntime(
   let stopExecutionRunPresentationRunner: (() => void) | null = null
   let stopNotificationWorker: (() => void) | null = null
   let stopWorkflowApprovalRecovery: (() => void) | null = null
+  let outboundRunnerPromise: Promise<void> | null = null
   let disposeExecutionRunControlHandlers: (() => void) | null = null
   let stopResumeOnRunResumed: (() => void) | null = null
   let stopImRoomDelivery: (() => void) | null = null
@@ -518,9 +519,16 @@ export function installConnectorRuntime(
       stopResumeOnRunResumed = null
       stopImRoomDelivery?.()
       stopImRoomDelivery = null
+      const pendingOutboundRunner = outboundRunnerPromise
+      outboundRunnerPromise = null
       // A window that never acquired the singleton runtime owns none of the
       // shared adapter transports below.
-      if (!ownsRuntime) return
+      if (!ownsRuntime) {
+        if (pendingOutboundRunner) {
+          await Promise.resolve(pendingOutboundRunner).catch(() => undefined)
+        }
+        return
+      }
       ownsRuntime = false
       runtimeOwnerCount = Math.max(0, runtimeOwnerCount - 1)
       // Plugin adapters are contribution-owned, but must stop while a remote
@@ -532,9 +540,13 @@ export function installConnectorRuntime(
         return supervisor.removeDefinition(adapterId, "runtime_teardown")
       })
       managedAdapterIds.clear()
-      // Preserve the supervisor's stop → Rust unregister order, then stop the
-      // shared inbound server before ownership can move to another runtime.
-      await Promise.allSettled(removals)
+      // Preserve the supervisor's stop → Rust unregister order, and wait for
+      // any in-flight outbound runner exit before stopping the shared inbound
+      // server or releasing runtime ownership.
+      await Promise.allSettled([
+        ...(pendingOutboundRunner ? [Promise.resolve(pendingOutboundRunner)] : []),
+        ...removals,
+      ])
       serverAdapterIds.clear()
       await connectorsStopServer().catch(() => undefined)
       // ADR-0131 §2.7 — the lease moved to another process while jobs were
@@ -810,15 +822,6 @@ export function installConnectorRuntime(
       // up immediately; a boot-time Map snapshot kept delivering through the
       // stale instance forever.
       const adapters = { get: (adapterId: string) => bus.getAdapter(adapterId) }
-      // `onDelivered` feeds the bus's `cooldown-after-bot-reply` bookkeeping —
-      // the delivery choke point is the only place every reply path (ai-run /
-      // team / workflow / digest) converges, so recording here makes the
-      // default group-chat cooldown blocker actually fire.
-      void startOutboundRunner({
-        adapters,
-        signal: ac.signal,
-        onDelivered: (conversationKey) => bus.recordBotReply(conversationKey),
-      })
       const ownsAutomationAdapter = async (adapterId: string) => {
         if (
           !ownsRuntime ||
@@ -830,6 +833,19 @@ export function installConnectorRuntime(
         const row = await getAdapterInstance(adapterId)
         return !!row?.enabled && runsOnThisHost(row) && ownsRuntime && !cancelled
       }
+      // `onDelivered` feeds the bus's `cooldown-after-bot-reply` bookkeeping —
+      // the delivery choke point is the only place every reply path (ai-run /
+      // team / workflow / digest) converges, so recording here makes the
+      // default group-chat cooldown blocker actually fire.
+      outboundRunnerPromise = Promise.resolve(
+        startOutboundRunner({
+          adapters,
+          ownsAdapter: ownsAutomationAdapter,
+          signal: ac.signal,
+          onDelivered: (conversationKey) => bus.recordBotReply(conversationKey),
+        })
+      )
+      void outboundRunnerPromise.catch(() => undefined)
       stopWorkflowApprovalRecovery = startWorkflowApprovalRecovery({
         recoverObservers: () => bus.resumeAutomationFanOuts(ownsAutomationAdapter),
         signal: ac.signal,

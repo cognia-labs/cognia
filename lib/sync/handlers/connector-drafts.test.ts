@@ -83,6 +83,19 @@ describe("syncConnectorDrafts", () => {
     await syncConnectorDrafts(tx, { since: 0 })
     expect(await getDb().connectorDrafts.get("d4")).toBeUndefined()
   })
+
+  it("merges inside a single rw transaction so local decisions are not clobbered (F14)", async () => {
+    await getDb().connectorDrafts.put(draft("d5", { status: "pending", updatedAt: 1 }))
+    const applyPromise = applyConnectorDraftRows([draft("d5", { status: "pending", updatedAt: 5 })])
+    const localReject = getDb().connectorDrafts.put(
+      draft("d5", { status: "rejected", updatedAt: 10 })
+    )
+    await Promise.all([applyPromise, localReject])
+    // Whichever transaction ran second saw the other's committed state: if localReject
+    // ran first, applyConnectorDraftRows kept `rejected` (10 >= 5); if apply ran first,
+    // localReject wrote `rejected` after it.
+    expect((await getDb().connectorDrafts.get("d5"))?.status).toBe("rejected")
+  })
 })
 
 it("rejects cancellation after asynchronous merge preparation", async () => {

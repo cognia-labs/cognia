@@ -733,8 +733,10 @@ export async function deleteOutboundJob(id: string): Promise<void> {
  */
 export async function recoverStaleSendingJobs(
   now: number,
-  graceMs: number = STALE_SENDING_GRACE_MS
+  graceMs: number = STALE_SENDING_GRACE_MS,
+  options?: { canRetry?: (row: OutboundJobRow) => boolean }
 ): Promise<OutboundJobRow[]> {
+  const canRetry = options?.canRetry ?? (() => true)
   const db = getDb()
   const cutoff = now - graceMs
   const sending = (
@@ -746,28 +748,63 @@ export async function recoverStaleSendingJobs(
   ).filter(isLocallyDispatchable)
   const recovered: OutboundJobRow[] = []
   for (const row of sending) {
-    // Transactional re-check: the in-flight send may have settled between
-    // the scan and this write; only flip rows that are STILL `sending`.
-    const flipped = await db.transaction("rw", db.outboundQueue, async () => {
-      const fresh = await db.outboundQueue.get(row.id)
-      if (!fresh || fresh.status !== "sending") return false
-      await db.outboundQueue.update(row.id, {
-        status: "failed",
-        lastErrorCode: "stale_sending_recovered",
-        lastError: "Recovered from a stale sending claim (runner interrupted mid-send)",
-        nextAttemptAt: now,
-        updatedAt: now,
-      })
-      return true
-    })
-    if (flipped) {
+    // Transactional re-check: the in-flight send may have settled or been
+    // re-claimed since the scan. Classify retryability inside the same
+    // transaction so non-idempotent rows transition directly to
+    // `delivery_unknown` without exposing an intermediate retryable `failed` state.
+    const nextRow = await db.transaction(
+      "rw",
+      [db.outboundQueue, ...jobExecutionTables(db)],
+      async () => {
+        const fresh = await db.outboundQueue.get(row.id)
+        if (
+          !fresh ||
+          fresh.status !== "sending" ||
+          fresh.pendingReceipt ||
+          fresh.claimedAt !== row.claimedAt ||
+          fresh.attempts !== row.attempts
+        ) {
+          return undefined
+        }
+        if (!canRetry(fresh)) {
+          const message =
+            "The runner stopped while delivery was in flight; reconcile before retrying"
+          await db.outboundQueue.update(row.id, {
+            status: "delivery_unknown",
+            lastErrorCode: "stale_sending_delivery_unknown",
+            lastError: message,
+            updatedAt: now,
+          })
+          await settleOutboundJobExecution(db, row.id)
+          return {
+            ...fresh,
+            status: "delivery_unknown" as const,
+            lastErrorCode: "stale_sending_delivery_unknown",
+            lastError: message,
+            updatedAt: now,
+          }
+        }
+        const message = "Recovered from a stale sending claim (runner interrupted mid-send)"
+        await db.outboundQueue.update(row.id, {
+          status: "failed",
+          lastErrorCode: "stale_sending_recovered",
+          lastError: message,
+          nextAttemptAt: now,
+          updatedAt: now,
+        })
+        return {
+          ...fresh,
+          status: "failed" as const,
+          lastErrorCode: "stale_sending_recovered",
+          lastError: message,
+          nextAttemptAt: now,
+          updatedAt: now,
+        }
+      }
+    )
+    if (nextRow) {
       invalidate(row.conversationKey)
-      recovered.push({
-        ...row,
-        status: "failed",
-        lastErrorCode: "stale_sending_recovered",
-        nextAttemptAt: now,
-      })
+      recovered.push(nextRow)
     }
   }
   return recovered
@@ -1053,9 +1090,11 @@ export async function markFailed(
   message: string,
   nextAttemptAt: number
 ): Promise<void> {
-  await getDb().transaction("rw", getDb().outboundQueue, async () => {
-    if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
-    await getDb().outboundQueue.update(jobId, {
+  const db = getDb()
+  await db.transaction("rw", db.outboundQueue, async () => {
+    const row = await db.outboundQueue.get(jobId)
+    if (!row || row.pendingReceipt || isOutboundTerminal(row.status, row.pendingReceipt)) return
+    await db.outboundQueue.update(jobId, {
       status: "failed",
       lastErrorCode: errorCode,
       lastError: message,
@@ -1103,8 +1142,9 @@ export async function markDeliveryUnknown(
 ): Promise<void> {
   const db = getDb()
   await db.transaction("rw", [db.outboundQueue, ...jobExecutionTables(db)], async () => {
-    if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
-    await getDb().outboundQueue.update(jobId, {
+    const row = await db.outboundQueue.get(jobId)
+    if (!row || row.pendingReceipt || isOutboundTerminal(row.status, row.pendingReceipt)) return
+    await db.outboundQueue.update(jobId, {
       status: "delivery_unknown",
       lastErrorCode: errorCode,
       lastError: message,
@@ -1386,8 +1426,9 @@ export async function markDeadlettered(
 ): Promise<void> {
   const db = getDb()
   await db.transaction("rw", [db.outboundQueue, ...jobExecutionTables(db)], async () => {
-    if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
-    await getDb().outboundQueue.update(jobId, {
+    const row = await db.outboundQueue.get(jobId)
+    if (!row || row.pendingReceipt || isOutboundTerminal(row.status, row.pendingReceipt)) return
+    await db.outboundQueue.update(jobId, {
       status: "deadlettered",
       lastErrorCode: errorCode,
       lastError: message,

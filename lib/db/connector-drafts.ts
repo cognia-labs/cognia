@@ -96,38 +96,64 @@ export async function getDraft(id: string): Promise<ConnectorDraftRow | undefine
   return getDb().connectorDrafts.get(id)
 }
 
-async function transition(id: string, status: ConnectorDraftRow["status"]): Promise<void> {
+async function transition(
+  id: string,
+  status: Exclude<ConnectorDraftRow["status"], "pending">,
+  patch?: Pick<ConnectorDraftRow, "approvedJobId">
+): Promise<boolean> {
   const db = getDb()
-  await db.connectorDrafts.update(id, { status, updatedAt: Date.now() })
-  const row = await db.connectorDrafts.get(id)
-  invalidate(row?.conversationKey)
+  let conversationKey: string | undefined
+  const transitioned = await db.transaction("rw", db.connectorDrafts, async () => {
+    const row = await db.connectorDrafts.get(id)
+    if (!row || row.status !== "pending") return false
+    conversationKey = row.conversationKey
+    await db.connectorDrafts.update(id, {
+      status,
+      ...(patch?.approvedJobId ? { approvedJobId: patch.approvedJobId } : {}),
+      updatedAt: Date.now(),
+    })
+    return true
+  })
+  if (transitioned) invalidate(conversationKey)
+  return transitioned
 }
 
-/** Approve a draft — transitions status to "approved". */
-export async function approveDraft(id: string): Promise<void> {
-  await transition(id, "approved")
+/** Approve a pending draft — transitions status to "approved" iff still pending. */
+export async function approveDraft(
+  id: string,
+  patch?: { approvedJobId?: string }
+): Promise<boolean> {
+  return transition(id, "approved", patch)
 }
 
-/** Reject a draft — transitions status to "rejected". */
-export async function rejectDraft(id: string): Promise<void> {
-  await transition(id, "rejected")
+/** Reject a pending draft — transitions status to "rejected" iff still pending. */
+export async function rejectDraft(id: string): Promise<boolean> {
+  return transition(id, "rejected")
 }
 
 /**
  * Sweep pending drafts whose `expiresAt < now`, set their status to "expired".
- * Returns the count of rows swept.
+ * Runs inside one transaction and re-verifies each row is still `pending` so a
+ * concurrent approval or rejection is never overwritten by a stale snapshot.
  */
 export async function sweepExpired(now = Date.now()): Promise<number> {
   const db = getDb()
-  const expired = await db.connectorDrafts
-    .where("status")
-    .equals("pending")
-    .filter((r) => r.expiresAt !== undefined && r.expiresAt < now)
-    .toArray()
-  if (expired.length === 0) return 0
-  await db.connectorDrafts.bulkPut(
-    expired.map((r) => ({ ...r, status: "expired" as const, updatedAt: now }))
-  )
-  invalidate()
-  return expired.length
+  const swept = await db.transaction("rw", db.connectorDrafts, async () => {
+    const expired = await db.connectorDrafts
+      .where("status")
+      .equals("pending")
+      .filter((r) => r.expiresAt !== undefined && r.expiresAt < now)
+      .toArray()
+    let count = 0
+    for (const row of expired) {
+      const fresh = await db.connectorDrafts.get(row.id)
+      if (!fresh || fresh.status !== "pending") continue
+      if (fresh.expiresAt === undefined || fresh.expiresAt >= now) continue
+      await db.connectorDrafts.update(row.id, { status: "expired", updatedAt: now })
+      count += 1
+    }
+    return count
+  })
+  if (swept > 0) invalidate()
+  return swept
 }

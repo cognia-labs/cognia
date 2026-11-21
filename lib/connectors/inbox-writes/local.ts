@@ -25,6 +25,7 @@ import type { StoredMessage, MessageReplyTo } from "@cognia/agent-config-types"
 import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
 import { approveDraft, getDraft, rejectDraft } from "@/lib/db/connector-drafts"
 import type { ConnectorDraftRow, OutboundJobRow } from "@/lib/db/connector-types"
+import { deleteOutboundJob } from "@/lib/db/outbound-jobs"
 import { getDb } from "@/lib/db/schema"
 import { publishSyncInvalidate } from "@/lib/sync/host-invalidate"
 import type { ConversationReference } from "@/types/connectors/event"
@@ -326,33 +327,101 @@ async function resolveApprovalRequest(
   }
 }
 
+async function findApprovedDraftJob(
+  draft: ConnectorDraftRow,
+  previewKey?: string
+): Promise<OutboundJobRow | undefined> {
+  const db = getDb()
+  if (draft.approvedJobId) {
+    const byId = await db.outboundQueue.get(draft.approvedJobId)
+    if (byId) return byId
+  }
+  const candidateKeys = Array.from(
+    new Set([draftApprovalIdempotencyKey(draft), ...(previewKey ? [previewKey] : [])])
+  )
+  for (const key of candidateKeys) {
+    const rows = await db.outboundQueue.where("idempotencyKey").equals(key).toArray()
+    const match = rows.find(
+      (row) => row.source === "draft-approved" && row.status !== "deadlettered"
+    )
+    if (match) return match
+  }
+  return undefined
+}
+
+async function hasOccupyingOutboundRow(idempotencyKey: string): Promise<boolean> {
+  return (await getDb().outboundQueue.where("idempotencyKey").equals(idempotencyKey).count()) > 0
+}
+
+const draftApprovalWrites = new Map<string, Promise<ApproveDraftResult>>()
+
 /**
  * Approve a pending draft: enqueue the governed outbound job FIRST (a failed
- * enqueue leaves the draft pending), then flip the draft to `approved`.
- * Idempotent: an already-approved draft, or an approval whose idempotency
- * key already produced a job, returns the existing job without a second send.
+ * enqueue leaves the draft pending), then atomically transition the draft from
+ * `pending` to `approved`. If a concurrent rejection or expiry settled the
+ * draft while the enqueue was in flight, the newly created outbound job is
+ * rolled back so the operator's rejection/expiry wins cleanly.
  */
 export async function approveDraftLocally(
   draftId: string,
   options: ApproveDraftLocallyOptions = {},
   localAuthorization?: LocalPersonRun
 ): Promise<ApproveDraftResult> {
+  const previous = draftApprovalWrites.get(draftId)
+  const write = (previous ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(() => persistDraftApprovalLocally(draftId, options, localAuthorization))
+  draftApprovalWrites.set(draftId, write)
+  try {
+    return await write
+  } finally {
+    if (draftApprovalWrites.get(draftId) === write) {
+      draftApprovalWrites.delete(draftId)
+    }
+  }
+}
+
+async function persistDraftApprovalLocally(
+  draftId: string,
+  options: ApproveDraftLocallyOptions,
+  localAuthorization?: LocalPersonRun
+): Promise<ApproveDraftResult> {
   const draft = await getDraft(draftId)
   if (!draft) throw new DraftNotFoundError(draftId)
   const resolved = await resolveApprovalRequest(draft, options)
-  const idempotencyKey = resolved?.request.metadata.idempotencyKey
-  const existingJob = idempotencyKey ? await findJobByIdempotencyKey(idempotencyKey) : undefined
+  const previewKey = resolved?.request.metadata.idempotencyKey
+  const existingApprovedJob = await findApprovedDraftJob(draft, previewKey)
 
   if (draft.status !== "pending") {
-    return { draftId, jobId: existingJob?.id, alreadyApproved: draft.status === "approved" }
+    return {
+      draftId,
+      jobId: existingApprovedJob?.id,
+      alreadyApproved: draft.status === "approved",
+    }
   }
-  let jobId = existingJob?.id
-  if (resolved && !existingJob) {
+
+  let jobId = existingApprovedJob?.id
+  let createdNewJob = false
+  if (resolved && !existingApprovedJob) {
+    // Authorization holds (`holdOutboundForAuthorization`, reauth holds) leave a
+    // `deadlettered` row occupying the original `outboundPreview` idempotency key.
+    // Mint the approval-specific key when the preview key is already occupied so
+    // the approved delivery queues a fresh sendable job while unoccupied previews
+    // preserve their caller-supplied key.
+    const approvalKey = draftApprovalIdempotencyKey(draft)
+    const request =
+      previewKey && previewKey !== approvalKey && (await hasOccupyingOutboundRow(previewKey))
+        ? {
+            ...resolved.request,
+            metadata: { ...resolved.request.metadata, idempotencyKey: approvalKey },
+          }
+        : resolved.request
+
     const job = await enqueueGoverned(
       {
         adapterId: resolved.adapterId,
         conversationKey: draft.conversationKey,
-        request: resolved.request,
+        request,
         source: "draft-approved",
         // The persisted Host execution survives edits and operator approval.
         // A legacy draft without this provenance is unverified, never a new
@@ -370,8 +439,25 @@ export async function approveDraftLocally(
       }
     )
     jobId = job.id
+    createdNewJob = true
   }
-  await approveDraft(draftId)
+
+  const transitioned = await approveDraft(draftId, jobId ? { approvedJobId: jobId } : undefined)
+  if (!transitioned) {
+    const latest = await getDraft(draftId)
+    if (latest?.status === "approved") {
+      const winnerJob = await findApprovedDraftJob(latest, previewKey)
+      if (createdNewJob && jobId && winnerJob && winnerJob.id !== jobId) {
+        await deleteOutboundJob(jobId)
+      }
+      return { draftId, jobId: winnerJob?.id ?? jobId, alreadyApproved: true }
+    }
+    if (createdNewJob && jobId) {
+      await deleteOutboundJob(jobId)
+    }
+    return { draftId, jobId: undefined, alreadyApproved: false }
+  }
+
   return { draftId, jobId, alreadyApproved: false }
 }
 

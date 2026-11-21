@@ -1466,6 +1466,48 @@ describe("outbound-jobs", () => {
       expect(recovered).toHaveLength(0)
       expect((await getDb().outboundQueue.get(row.id))?.status).toBe("sending")
     })
+
+    it("transitions non-retryable stale sending rows directly to delivery_unknown without an intermediate failed state, and guards terminal rows (F21)", async () => {
+      const { markDeliveryUnknown } = await import("./outbound-jobs")
+      const now = Date.now()
+      await getDb().outboundQueue.add({
+        id: "stale-non-idem",
+        adapterId: "adp_1",
+        conversationKey: "conv_stale_non_idem",
+        request: makeRequest("k_non_idem"),
+        status: "sending",
+        attempts: 1,
+        createdAt: now - 60 * 60_000,
+        nextAttemptAt: now - 60 * 60_000,
+        idempotencyKey: "k_non_idem",
+        source: "ai-run",
+        claimedAt: now - STALE_SENDING_GRACE_MS - 1_000,
+      } as never)
+
+      const recovered = await recoverStaleSendingJobs(now, STALE_SENDING_GRACE_MS, {
+        canRetry: () => false,
+      })
+      expect(recovered).toHaveLength(1)
+      expect(recovered[0]?.status).toBe("delivery_unknown")
+      expect(recovered[0]?.lastErrorCode).toBe("stale_sending_delivery_unknown")
+      expect((await getDb().outboundQueue.get("stale-non-idem"))?.status).toBe("delivery_unknown")
+      expect(await pickNextDue()).toBeUndefined()
+
+      // Late stale recovery or error writers must never overwrite a row already settled `sent`.
+      const sentRow = await enqueue({
+        adapterId: "adp_1",
+        conversationKey: "conv_sent_guard",
+        request: makeRequest("k_sent_guard"),
+      })
+      await markSent(sentRow.id, "pm_already_sent")
+      await markDeliveryUnknown(sentRow.id, "stale_sending_delivery_unknown", "late recovery")
+      await markFailed(sentRow.id, "network", "late failure", now + 1_000)
+      await markDeadlettered(sentRow.id, "fatal", "late deadletter")
+      expect(await getDb().outboundQueue.get(sentRow.id)).toMatchObject({
+        status: "sent",
+        platformMessageId: "pm_already_sent",
+      })
+    })
   })
 
   // ── P3 — post-claim rate-limit unclaim ───────────────────────────────

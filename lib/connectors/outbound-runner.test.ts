@@ -3565,4 +3565,78 @@ describe("round 5: personal outbound producer identity", () => {
       ).toMatchObject({ status: "failed" })
     }
   )
+
+  it("stops cleanly when aborted during pre-wire plugin decision and never calls adapter.send afterwards (F20)", async () => {
+    const job = await enqueue("stop-plugin", "telegram:stop-plugin:chat", "k-stop-plugin")
+    let pluginEntered!: () => void
+    let releasePlugin!: () => void
+    const entered = new Promise<void>((resolve) => {
+      pluginEntered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      releasePlugin = resolve
+    })
+    mockConnectorDecision.mockImplementationOnce(async () => {
+      pluginEntered()
+      await gate
+      return { action: "allow" }
+    })
+
+    const send = jest.fn(async () => ({ ok: true, platformMessageId: "late-msg" }))
+    const adapter = makeAdapter("stop-plugin", send)
+    const ac = new AbortController()
+    const runnerPromise = startOutboundRunner({
+      adapters: new Map([[adapter.id, adapter]]),
+      signal: ac.signal,
+      pollIntervalMs: 20,
+    })
+
+    await entered
+    ac.abort()
+    await runnerPromise
+    releasePlugin()
+    await new Promise((resolve) => setTimeout(resolve, 40))
+
+    expect(send).not.toHaveBeenCalled()
+    expect((await getDb().outboundQueue.get(job.id))?.status).toBe("pending")
+  })
+
+  it("never calls a captured adapter.send when aborted or unregistered during pre-wire checks, or when ownsAdapter returns false (F20)", async () => {
+    const job = await enqueue("stop-prewire", "telegram:stop-prewire:chat", "k-stop-prewire")
+    const send = jest.fn(async () => ({ ok: true, platformMessageId: "never" }))
+    const adapter = makeAdapter("stop-prewire", send)
+    const adapters = new Map<string, PlatformAdapter>([[adapter.id, adapter]])
+
+    let ownsEntered!: () => void
+    let releaseOwns!: (owned: boolean) => void
+    const entered = new Promise<void>((resolve) => {
+      ownsEntered = resolve
+    })
+    const ownsGate = new Promise<boolean>((resolve) => {
+      releaseOwns = resolve
+    })
+
+    const ac = new AbortController()
+    const runnerPromise = startOutboundRunner({
+      adapters,
+      ownsAdapter: async () => {
+        ownsEntered()
+        return ownsGate
+      },
+      signal: ac.signal,
+      pollIntervalMs: 20,
+    })
+
+    await entered
+    adapters.delete(adapter.id)
+    ac.abort()
+    releaseOwns(false)
+    await runnerPromise
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(send).not.toHaveBeenCalled()
+    const stored = await getDb().outboundQueue.get(job.id)
+    expect(stored?.status).toBe("failed")
+    expect(stored?.attempts).toBe(0)
+  })
 })

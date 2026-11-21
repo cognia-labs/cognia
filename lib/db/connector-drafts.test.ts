@@ -119,6 +119,38 @@ describe("connector-drafts", () => {
     expect(updated?.status).toBe("approved")
   })
 
+  it("approveDraft and rejectDraft enforce compare-and-set from pending (F14)", async () => {
+    const d1 = await createDraft(baseInput())
+    expect(await rejectDraft(d1.id)).toBe(true)
+    expect(await approveDraft(d1.id, { approvedJobId: "job-late" })).toBe(false)
+    expect((await getDb().connectorDrafts.get(d1.id))?.status).toBe("rejected")
+    expect((await getDb().connectorDrafts.get(d1.id))?.approvedJobId).toBeUndefined()
+
+    const d2 = await createDraft(baseInput())
+    expect(await approveDraft(d2.id, { approvedJobId: "job-ok" })).toBe(true)
+    expect(await rejectDraft(d2.id)).toBe(false)
+    expect((await getDb().connectorDrafts.get(d2.id))?.status).toBe("approved")
+    expect((await getDb().connectorDrafts.get(d2.id))?.approvedJobId).toBe("job-ok")
+  })
+
+  it("sweepExpired never overwrites a draft approved concurrently (F14)", async () => {
+    const pastAt = Date.now() - 5_000
+    const draft = await createDraft({ ...baseInput(), expiresAt: pastAt })
+    const [approved, swept] = await Promise.all([
+      approveDraft(draft.id, { approvedJobId: "job-1" }),
+      sweepExpired(),
+    ])
+    const stored = await getDb().connectorDrafts.get(draft.id)
+    if (approved) {
+      expect(swept).toBe(0)
+      expect(stored?.status).toBe("approved")
+      expect(stored?.approvedJobId).toBe("job-1")
+    } else {
+      expect(swept).toBe(1)
+      expect(stored?.status).toBe("expired")
+    }
+  })
+
   describe("workspace (project) scoping", () => {
     it("stamps a draft with the session's projectId", async () => {
       await getDb().sessions.put({

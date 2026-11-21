@@ -22,21 +22,26 @@ export async function applyConnectorDraftRows(
   rows: ConnectorDraftRow[],
   assertCurrent: () => void = () => {}
 ): Promise<void> {
-  const table = getDb().connectorDrafts
-  const existing = await table.bulkGet(rows.map((row) => row.id))
-  const toWrite: ConnectorDraftRow[] = []
-  rows.forEach((row, index) => {
-    const local = existing[index]
-    if (local && local.status !== "pending" && row.status === "pending") {
-      const localAt = local.updatedAt ?? local.createdAt
-      const remoteAt = row.updatedAt ?? row.createdAt
-      // Optimistic local decision newer than what the host has told us so far.
-      if (localAt >= remoteAt) return
-    }
-    toWrite.push(row)
+  if (rows.length === 0) return
+  const db = getDb()
+  const table = db.connectorDrafts
+  await db.transaction("rw", table, async () => {
+    assertCurrent()
+    const existing = await table.bulkGet(rows.map((row) => row.id))
+    const toWrite: ConnectorDraftRow[] = []
+    rows.forEach((row, index) => {
+      const local = existing[index]
+      if (local && local.status !== "pending" && row.status === "pending") {
+        const localAt = local.updatedAt ?? local.createdAt
+        const remoteAt = row.updatedAt ?? row.createdAt
+        // Optimistic local decision newer than what the host has told us so far.
+        if (localAt >= remoteAt) return
+      }
+      toWrite.push(row)
+    })
+    assertCurrent()
+    if (toWrite.length > 0) await table.bulkPut(toWrite)
   })
-  assertCurrent()
-  if (toWrite.length > 0) await table.bulkPut(toWrite)
 }
 
 export function syncConnectorDrafts(
