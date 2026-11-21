@@ -26,6 +26,7 @@
 import { resolveNodeApiKey } from "../shared/executor-support"
 import { budgetedLlmClient } from "@/lib/execution/run-budget-rail"
 import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
+import type { HostStepUsage } from "@/lib/workflow/runs/step-cost"
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
 import type { ApiFlavor } from "@cognia/provider-types/provider"
 import type { PiiGateMode } from "./pii-gate"
@@ -228,6 +229,8 @@ export async function executeAiPrompt(ctx: StepExecutionContext): Promise<StepEx
     // Sum usage/cost across the auto-fix retry so `step_usage` reflects what
     // the node actually spent, not just the last call.
     const totals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+    // What Router + Fusion booked of it as its own rows (F28).
+    const booked = { inputTokens: 0, outputTokens: 0 }
     let totalCostUsd: number | undefined
     const callOnce = async (fix?: string): Promise<PromptOutcome> => {
       const result = await runRoutedPrompt(
@@ -244,6 +247,8 @@ export async function executeAiPrompt(ctx: StepExecutionContext): Promise<StepEx
       totals.inputTokens += result.usage.inputTokens
       totals.outputTokens += result.usage.outputTokens
       totals.totalTokens += result.usage.totalTokens
+      booked.inputTokens += result.ledgerBookedUsage?.inputTokens ?? 0
+      booked.outputTokens += result.ledgerBookedUsage?.outputTokens ?? 0
       if (typeof result.costUsd === "number") {
         totalCostUsd = (totalCostUsd ?? 0) + result.costUsd
       }
@@ -261,12 +266,14 @@ export async function executeAiPrompt(ctx: StepExecutionContext): Promise<StepEx
     try {
       const out = await runWithSchema(callOnce)
       finishSpan({ ...out, usage: { ...out.usage, ...totals } })
-      ctx.reportUsage?.({
+      const report: HostStepUsage = {
         ...totals,
         providerId: out.provider,
         modelId: out.model,
         costUsd: totalCostUsd,
-      })
+        ...(booked.inputTokens + booked.outputTokens > 0 ? { bookedElsewhere: booked } : {}),
+      }
+      ctx.reportUsage?.(report)
       return finalize(out)
     } catch (err) {
       failSpan(err)
@@ -383,11 +390,18 @@ export async function executeAiPrompt(ctx: StepExecutionContext): Promise<StepEx
   })
   out = { ...out, usage, costUsd }
   finishSpan(out)
-  ctx.reportUsage?.({
+  // The calls Router + Fusion reserved it books itself: the step's own row
+  // books only the rest (F28).
+  const ledgerBooked = client.getLedgerBookedUsage?.()
+  const report: HostStepUsage = {
     ...usage,
     providerId: params.provider,
     modelId: params.model,
     costUsd,
-  })
+    ...(ledgerBooked && ledgerBooked.totalTokens + (ledgerBooked.cacheReadTokens ?? 0) > 0
+      ? { bookedElsewhere: ledgerBooked }
+      : {}),
+  }
+  ctx.reportUsage?.(report)
   return finalize(out)
 }

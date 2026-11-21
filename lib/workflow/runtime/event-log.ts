@@ -9,7 +9,7 @@ import { nanoid } from "nanoid"
 import { getDb } from "@/lib/db/schema"
 import { recordWorkflowStepUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import { trackEvent } from "@/lib/telemetry/events/track-event"
-import { stepCostUsd } from "@/lib/workflow/runs/step-cost"
+import { stepCostUsd, unbookedStepUsage, type HostStepUsage } from "@/lib/workflow/runs/step-cost"
 import type { StepErrorDetail } from "./step-event-payload"
 import type { StepRouting } from "@/lib/durable/idempotency"
 import type {
@@ -353,31 +353,30 @@ export function createRunLogger(runId: string) {
         payload: { delta, seq, ...meta },
       }),
     /** Token/cost usage snapshot for one step (payload = StepUsage). */
-    stepUsage: (stepId: string, usage: StepUsage, meta?: StepEventMeta) => {
+    stepUsage: (stepId: string, reported: StepUsage, meta?: StepEventMeta) => {
+      const { bookedElsewhere: _booked, ...usage } = reported as HostStepUsage
       const cost = stepCostUsd(usage)
       const snapshot = { ...usage, costUsd: cost, costKnown: cost !== undefined }
       // Shadow-write into the unified billing table so workflow spend reaches
-      // the Subscription → Usage tab. Fire-and-forget: never block or fail the
-      // durable event append on the billing mirror.
-      swallowUsageWrite(
-        recordWorkflowStepUsage({
-          runId,
-          stepId,
-          stepExecutionId: usage.stepExecutionId,
-          usage: {
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cacheReadTokens: usage.cacheReadTokens,
-            cacheCreationTokens: usage.cacheCreationTokens,
-            costUsd: cost,
-            costKnown: cost !== undefined,
-            costSource:
-              cost === undefined ? "unknown" : usage.costUsd !== undefined ? "sdk" : "derived",
-            model: usage.modelId,
-            providerId: usage.providerId,
-          },
-        })
-      )
+      // the Subscription → Usage tab — only the part no ledger booked as its
+      // own rows. A node's `costUsd` is its estimate (StepUsage), not a bill,
+      // so the row carries tokens and the usage ledger prices them against
+      // the user's rates; nothing here is frozen as a provider figure.
+      // Fire-and-forget: never block or fail the durable event append.
+      const billable = unbookedStepUsage(reported as HostStepUsage)
+      if (billable)
+        swallowUsageWrite(
+          recordWorkflowStepUsage({
+            runId,
+            stepId,
+            stepExecutionId: usage.stepExecutionId,
+            usage: {
+              ...billable,
+              model: usage.modelId,
+              providerId: usage.providerId,
+            },
+          })
+        )
       return enqueueRunEvent({
         runId,
         type: "step_usage",

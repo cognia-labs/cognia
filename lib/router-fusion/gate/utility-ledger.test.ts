@@ -209,6 +209,24 @@ describe("ledgeredLlmClient", () => {
     expect(booked).toEqual([{ kind: "succeeded", usage: { inputTokens: 100, outputTokens: 20 } }])
   })
 
+  it("says how much of its usage the ledger booked, leaving out bypassed calls (F28)", async () => {
+    const { client } = fakeClient()
+    const { handle } = fakeHandle()
+    let grant = true
+    const wrapped = ledgeredLlmClient(client, BINDING, {
+      begin: async () => (grant ? { kind: "granted", handle } : null),
+    })
+    await wrapped.complete("one")
+    grant = false
+    await wrapped.complete("two")
+    // Two calls of 100/20 each; the ledger booked only the first.
+    expect(wrapped.getLedgerBookedUsage?.()).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+    })
+  })
+
   it("leaves an output bound the caller set alone", async () => {
     const { client, calls } = fakeClient()
     const { handle } = fakeHandle()

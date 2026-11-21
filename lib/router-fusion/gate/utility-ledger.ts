@@ -205,6 +205,20 @@ export function ledgeredLlmClient(
 
   const snapshot = () => inner.getUsageSnapshot?.()
 
+  // What the ledger booked as its own rows: every granted call's usage,
+  // whatever its outcome (an unknown one stays held as the ledger's charge).
+  const booked: LlmUsageSnapshot = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+  const addBooked = (usage: RawUsage | null) => {
+    if (!usage) return
+    booked.inputTokens += usage.inputTokens
+    booked.outputTokens += usage.outputTokens
+    booked.totalTokens += usage.inputTokens + usage.outputTokens
+    if (usage.cacheReadTokens)
+      booked.cacheReadTokens = (booked.cacheReadTokens ?? 0) + usage.cacheReadTokens
+    if (usage.cacheWriteTokens)
+      booked.cacheCreationTokens = (booked.cacheCreationTokens ?? 0) + usage.cacheWriteTokens
+  }
+
   /**
    * What one granted call reads its usage from: the per-call report, or the
    * snapshot's movement since it started (only sound under the lock).
@@ -236,6 +250,7 @@ export function ledgeredLlmClient(
     ...(inner.model !== undefined ? { model: inner.model } : {}),
     ...(perCall ? { reportsCallUsage: true } : {}),
     ...(inner.getUsageSnapshot ? { getUsageSnapshot: () => inner.getUsageSnapshot!() } : {}),
+    getLedgerBookedUsage: () => ({ ...booked }),
 
     async complete(prompt, options) {
       // Reserve under the lock too, so a queued call's reservation is taken
@@ -254,6 +269,7 @@ export function ledgeredLlmClient(
           text = await inner.complete(prompt, metered.callOptions)
         } catch (error) {
           const errorClass = classifyUtilityFailure(error)
+          addBooked(metered.usage())
           await bookOutcome(() =>
             errorClass === "cancelled"
               ? handle.unknown("aborted_before_answer")
@@ -261,6 +277,7 @@ export function ledgeredLlmClient(
           )
           throw error
         }
+        addBooked(metered.usage())
         await bookOutcome(() => handle.succeeded(metered.usage()))
         return text
       } finally {
@@ -286,9 +303,11 @@ export function ledgeredLlmClient(
               try {
                 yield* streamInner(prompt, metered.callOptions)
                 settled = true
+                addBooked(metered.usage())
                 await bookOutcome(() => handle.succeeded(metered.usage()))
               } catch (error) {
                 settled = true
+                addBooked(metered.usage())
                 const errorClass = classifyUtilityFailure(error)
                 // A stream that broke after it started had already been sent, so
                 // its bill is unknowable; only a connect failure is provably unsent.
@@ -302,7 +321,10 @@ export function ledgeredLlmClient(
                 // The consumer stopped reading before the stream ended: the
                 // request was sent and its bill never arrived, so the money
                 // stays held rather than the reservation being left open.
-                if (!settled) await bookOutcome(() => handle.unknown("stream_abandoned"))
+                if (!settled) {
+                  addBooked(metered.usage())
+                  await bookOutcome(() => handle.unknown("stream_abandoned"))
+                }
               }
             } finally {
               release()

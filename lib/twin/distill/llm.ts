@@ -156,6 +156,13 @@ export interface LlmClient {
    */
   getUsageSnapshot?(): LlmUsageSnapshot
   /**
+   * The part of {@link getUsageSnapshot} a ledger booked as its own usage rows
+   * (Router + Fusion's ledgered utility calls). A caller that writes its own
+   * row from the snapshot books only the rest, or the same tokens are counted
+   * twice. Absent means nothing was booked elsewhere.
+   */
+  getLedgerBookedUsage?(): LlmUsageSnapshot
+  /**
    * True when `complete()` and `stream()` call `options.onUsage` with each
    * call's own usage once the provider answered. Absent means the client only
    * keeps the cumulative snapshot, and a caller that needs one call's tokens

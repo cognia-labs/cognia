@@ -33,6 +33,7 @@
  * resumes when it is.
  */
 
+import type { HostStepUsage } from "@/lib/workflow/runs/step-cost"
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
 import { guardWorkflowEgress } from "@/lib/workflow/runtime/egress-guard"
 import {
@@ -205,7 +206,14 @@ export async function runAiPromptFusionAction(
     totalTokens: outcome.usage.totalTokens,
   }
   ctx.emitStream?.(outcome.text)
-  ctx.reportUsage?.({ ...usage, costUsd: outcome.spentMicrousd / 1_000_000 })
+  // The Fusion run books its calls as its own usage rows: the step reports
+  // them for the Runs UI and books none itself (F28).
+  const report: HostStepUsage = {
+    ...usage,
+    costUsd: outcome.spentMicrousd / 1_000_000,
+    bookedElsewhere: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+  }
+  ctx.reportUsage?.(report)
   const trace: FusionNodeOutputTrace = {
     runId: outcome.runId,
     mode: outcome.mode,

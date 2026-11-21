@@ -196,6 +196,7 @@ describe("recordWorkflowStepUsage", () => {
         outputTokens: 40,
         cacheReadTokens: 60,
         costUsd: 0.02,
+        costSource: "sdk",
         model: "gpt-4o",
         providerId: "openai",
       },
@@ -225,7 +226,14 @@ describe("recordWorkflowStepUsage", () => {
         runId: "r",
         stepId: "n1",
         stepExecutionId,
-        usage: { inputTokens: 10, outputTokens: 2, costUsd, providerId: "openai", model: "gpt-4o" },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 2,
+          costUsd,
+          costSource: "sdk",
+          providerId: "openai",
+          model: "gpt-4o",
+        },
       })
     }
     const rows = await listUsageForSession("wf:r")
@@ -234,6 +242,23 @@ describe("recordWorkflowStepUsage", () => {
     expect(rows.every((row) => row.runId === "r" && row.attemptId)).toBe(true)
     const daily = await getDb().providerCostDaily.toArray()
     expect(daily.reduce((total, row) => total + row.totalCostUsd, 0)).toBeCloseTo(0.05)
+  })
+
+  it("never freezes a bare cost as the provider's: the ledger prices the tokens (F28)", async () => {
+    const written = await recordWorkflowStepUsage({
+      runId: "r-est",
+      stepId: "n1",
+      stepExecutionId: "e1",
+      usage: {
+        inputTokens: 1_000,
+        outputTokens: 0,
+        costUsd: 99,
+        model: "gpt-4o",
+        providerId: "openai",
+      },
+    })
+    expect(written?.costSource).not.toBe("sdk")
+    expect(written?.costUsd).not.toBe(99)
   })
 
   it("preserves the legacy key when no step execution identity is available", async () => {

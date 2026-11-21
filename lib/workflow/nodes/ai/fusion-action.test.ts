@@ -186,8 +186,15 @@ describe("runAiPromptFusionAction", () => {
       stub: false,
       fusion: { runId: "run-node-1", mode: "panel", spentMicrousd: 12_500 },
     })
+    // The Fusion run books these calls itself: the step books none (F28).
     expect(usage).toEqual([
-      { inputTokens: 200, outputTokens: 60, totalTokens: 260, costUsd: 0.0125 },
+      {
+        inputTokens: 200,
+        outputTokens: 60,
+        totalTokens: 260,
+        costUsd: 0.0125,
+        bookedElsewhere: { inputTokens: 200, outputTokens: 60 },
+      },
     ])
     expect(streamed).toEqual(["the checked answer"])
     expect(calls[0]).toMatchObject({

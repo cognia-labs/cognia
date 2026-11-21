@@ -1,4 +1,4 @@
-import { stepCostUsd, stepUsageFromPayload, stepUsageKey } from "./step-cost"
+import { stepCostUsd, stepUsageFromPayload, stepUsageKey, unbookedStepUsage } from "./step-cost"
 
 const tokens = { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }
 
@@ -60,5 +60,30 @@ describe("stepUsageFromPayload", () => {
   it("is null for a payload that is not an object", () => {
     expect(stepUsageFromPayload(null)).toBeNull()
     expect(stepUsageFromPayload("usage")).toBeNull()
+  })
+})
+
+describe("unbookedStepUsage", () => {
+  const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cacheReadTokens: 10 }
+
+  it("bills the whole step when nothing was booked elsewhere", () => {
+    expect(unbookedStepUsage(usage)).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 10,
+      cacheCreationTokens: 0,
+    })
+  })
+
+  it("bills only what a ledger left, and nothing once it booked it all (F28)", () => {
+    expect(
+      unbookedStepUsage({ ...usage, bookedElsewhere: { inputTokens: 60, outputTokens: 50 } })
+    ).toMatchObject({ inputTokens: 40, outputTokens: 0, cacheReadTokens: 10 })
+    expect(
+      unbookedStepUsage({
+        ...usage,
+        bookedElsewhere: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 10 },
+      })
+    ).toBeNull()
   })
 })

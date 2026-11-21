@@ -3,6 +3,7 @@ jest.mock("@/lib/telemetry/events/track-event", () => ({
   trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
 }))
 
+import type { HostStepUsage } from "@/lib/workflow/runs/step-cost"
 import {
   appendEvent,
   appendEvents,
@@ -191,7 +192,7 @@ describe("createRunLogger().stepUsage", () => {
       modelId: "gpt-4o",
       providerId: "openai",
     })
-    // Durable event and ledger share the same frozen zero-cost snapshot.
+    // The durable event keeps the node's own figure for the Runs UI.
     const events = await listRunEvents("run_x")
     expect(events).toHaveLength(1)
     expect(events[0].type).toBe("step_usage")
@@ -212,8 +213,48 @@ describe("createRunLogger().stepUsage", () => {
       surface: "workflow",
       model: "gpt-4o",
       cacheReadTokens: 30,
-      costUsd: 0,
-      costKnown: true,
     })
+    // A node's figure is its estimate, not a provider's bill: the row is
+    // priced from its tokens, never frozen as an SDK amount (F28).
+    expect(rows[0].costSource).not.toBe("sdk")
+  })
+
+  async function billingRows(runId: string, expected: number) {
+    let rows = await listUsageForSession(`wf:${runId}`)
+    for (let i = 0; i < 10 && rows.length < expected; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      rows = await listUsageForSession(`wf:${runId}`)
+    }
+    return rows
+  }
+
+  it("books nothing a ledger already booked, and only the rest of a partly booked step (F28)", async () => {
+    const logger = createRunLogger("run_booked")
+    const whole: HostStepUsage = {
+      stepExecutionId: "all",
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+      modelId: "gpt-4o",
+      providerId: "openai",
+      bookedElsewhere: { inputTokens: 100, outputTokens: 50 },
+    }
+    const part: HostStepUsage = {
+      ...whole,
+      stepExecutionId: "part",
+      bookedElsewhere: { inputTokens: 60, outputTokens: 50 },
+    }
+    await logger.stepUsage("n1", whole)
+    await logger.stepUsage("n2", part)
+    const rows = await billingRows("run_booked", 1)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ inputTokens: 40, outputTokens: 0 })
+    // The Runs UI still sees the whole step, without the host-only field.
+    const events = await listRunEvents("run_booked")
+    expect(events.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ inputTokens: 100, outputTokens: 50 }),
+      expect.objectContaining({ inputTokens: 100, outputTokens: 50 }),
+    ])
+    expect(events[0].payload).not.toHaveProperty("bookedElsewhere")
   })
 })

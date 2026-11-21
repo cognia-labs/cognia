@@ -55,3 +55,41 @@ export function stepUsageFromPayload(payload: unknown): StepUsage | null {
 export function stepUsageKey(stepId: string, usage: Pick<StepUsage, "stepExecutionId">): string {
   return JSON.stringify([stepId, usage.stepExecutionId ?? null])
 }
+
+/** The token part of a step's usage, as a billing row books it. */
+export interface StepUsageTokens {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+}
+
+/**
+ * A node's usage report as the host runtime reads it. `bookedElsewhere` is the
+ * part a ledger already wrote as its own rows (Router + Fusion's ledgered
+ * calls, a Fusion run): the step's billing row books only the rest, so the
+ * same call is never counted twice (F28). The run's own `step_usage` event
+ * still carries the whole usage for the Runs UI.
+ */
+export interface HostStepUsage extends StepUsage {
+  bookedElsewhere?: StepUsageTokens
+}
+
+/** `usage` less what a ledger booked, or `null` when nothing is left to book. */
+export function unbookedStepUsage(usage: HostStepUsage): StepUsageTokens | null {
+  const booked = usage.bookedElsewhere
+  const left: StepUsageTokens = {
+    inputTokens: Math.max(0, usage.inputTokens - (booked?.inputTokens ?? 0)),
+    outputTokens: Math.max(0, usage.outputTokens - (booked?.outputTokens ?? 0)),
+    cacheReadTokens: Math.max(0, (usage.cacheReadTokens ?? 0) - (booked?.cacheReadTokens ?? 0)),
+    cacheCreationTokens: Math.max(
+      0,
+      (usage.cacheCreationTokens ?? 0) - (booked?.cacheCreationTokens ?? 0)
+    ),
+  }
+  if (!booked) return left
+  return left.inputTokens + left.outputTokens + left.cacheReadTokens! + left.cacheCreationTokens! >
+    0
+    ? left
+    : null
+}

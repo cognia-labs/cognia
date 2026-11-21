@@ -173,6 +173,46 @@ describe("executeAiPrompt — explicit mode", () => {
     expect(booked).toHaveLength(2)
   })
 
+  it("tells the step's billing row which calls Router + Fusion booked itself (F28)", async () => {
+    mockGateSettings.current = {
+      routerFusion: { enabled: true, surfaces: { agentsWorkflows: true } },
+    }
+    mockBeginLedgeredUtilityCall.mockImplementation(async () => ({
+      kind: "granted",
+      handle: {
+        runId: "r",
+        maxOutputTokens: 512,
+        succeeded: async () => {},
+        failed: async () => {},
+        unknown: async () => {},
+      },
+    }))
+    const snapshot = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+    mockCreateLlmClient.mockImplementationOnce(() => ({
+      complete: jest.fn(async () => {
+        snapshot.inputTokens += 100
+        snapshot.outputTokens += 50
+        snapshot.totalTokens += 150
+        return "answer"
+      }),
+      stream: mockStream,
+      getUsageSnapshot: () => ({ ...snapshot }),
+    }))
+    const reportUsage = jest.fn()
+    const ctx = makeCtx(
+      { provider: "openai", model: "gpt-x", apiKey: "k", userPrompt: "hi" },
+      { reportUsage }
+    )
+    await executeAiPrompt(ctx)
+    expect(reportUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputTokens: 100,
+        outputTokens: 50,
+        bookedElsewhere: expect.objectContaining({ inputTokens: 100, outputTokens: 50 }),
+      })
+    )
+  })
+
   it("sends the explicit call untouched while the switch is off", async () => {
     const ctx = makeCtx({ provider: "openai", model: "gpt-x", apiKey: "k", userPrompt: "hi" })
     await executeAiPrompt(ctx)

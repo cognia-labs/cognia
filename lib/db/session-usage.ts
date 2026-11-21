@@ -503,15 +503,20 @@ export async function recordWorkflowStepUsage(args: {
       : `wf:${args.runId}:${args.stepId}`,
     sessionId: `wf:${args.runId}`,
     surface: "workflow",
-    usage: {
-      ...args.usage,
-      ...(typeof args.usage.costUsd === "number" &&
-      Number.isFinite(args.usage.costUsd) &&
-      args.usage.costUsd >= 0 &&
-      args.usage.costKnown !== false
-        ? { costKnown: true, costSource: args.usage.costSource ?? "sdk" }
-        : {}),
-    },
+    // A cost is frozen only under the source its caller names; a bare figure
+    // is no provider's bill, so the usage ledger prices the tokens instead.
+    usage:
+      args.usage.costSource === undefined
+        ? { ...args.usage, costUsd: undefined }
+        : {
+            ...args.usage,
+            ...(typeof args.usage.costUsd === "number" &&
+            Number.isFinite(args.usage.costUsd) &&
+            args.usage.costUsd >= 0 &&
+            args.usage.costKnown !== false
+              ? { costKnown: true }
+              : {}),
+          },
     at: args.at ?? Date.now(),
     allowEmpty: Boolean(args.stepExecutionId),
   })

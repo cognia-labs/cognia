@@ -23,6 +23,7 @@
  * about the provider's health.
  */
 
+import type { StepUsageTokens } from "@/lib/workflow/runs/step-cost"
 import type { LlmClient, LlmConfig } from "@/lib/twin/distill/llm"
 import type { ModelMappingEntry } from "@cognia/provider-types/model-mapping"
 import type { ProviderOutcome } from "@/lib/claude/provider-telemetry"
@@ -101,6 +102,11 @@ export interface RoutedPromptOutput {
     cacheCreationTokens?: number
   }
   costUsd?: number
+  /**
+   * The part of `usage` Router + Fusion booked as its own rows (ledgered
+   * attempts). A caller writing its own usage row books only the rest.
+   */
+  ledgerBookedUsage?: StepUsageTokens
   /** Providers attempted (in order) before one succeeded. */
   attempts: number
   routingReason: string
@@ -346,12 +352,16 @@ export async function runRoutedPrompt(
       if (skipped.length > 0) {
         input.log("warn", `ai.prompt (routed): skipped ${skipped.join(", ")}`)
       }
+      const booked = client.getLedgerBookedUsage?.()
       return {
         provider: entry.providerId,
         model: entry.modelId,
         completion,
         usage,
         costUsd,
+        ...(booked && booked.totalTokens + (booked.cacheReadTokens ?? 0) > 0
+          ? { ledgerBookedUsage: booked }
+          : {}),
         attempts,
         routingReason: route.reasonCodes.join(", "),
       }
