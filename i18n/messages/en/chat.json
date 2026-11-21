@@ -1644,7 +1644,13 @@
     "unreadArtifacts": "New artifacts — open panel",
     "untitledSession": "(untitled)",
     "workingDirLabel": "Working directory",
-    "workingDirPlaceholder": "/path/to/project"
+    "workingDirPlaceholder": "/path/to/project",
+    "modeToggle": {
+      "inheritOn": "Inherit (on)",
+      "inheritOff": "Inherit (off)",
+      "on": "On",
+      "off": "Off"
+    }
   },
   "history": {
     "loadError": "Couldn't load this conversation.",

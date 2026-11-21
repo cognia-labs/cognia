@@ -9601,6 +9601,12 @@
       "memoryOff": "关闭",
       "memoryOn": "开启",
       "memoryUse": "在此对话使用记忆",
+      "modeToggle": {
+        "inheritOff": "继承（关闭）",
+        "inheritOn": "继承（开启）",
+        "off": "关闭",
+        "on": "开启"
+      },
       "noApiKey": "未配置 API Key",
       "openBrowser": "打开浏览器面板",
       "openInCodexApp": "在 Codex App 中打开",

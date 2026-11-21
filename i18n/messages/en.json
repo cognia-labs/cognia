@@ -9601,6 +9601,12 @@
       "memoryOff": "Off",
       "memoryOn": "On",
       "memoryUse": "Use memories in this chat",
+      "modeToggle": {
+        "inheritOff": "Inherit (off)",
+        "inheritOn": "Inherit (on)",
+        "off": "Off",
+        "on": "On"
+      },
       "noApiKey": "No API key",
       "openBrowser": "Open browser panel",
       "openInCodexApp": "Open in Codex app",

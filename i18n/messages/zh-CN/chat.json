@@ -1644,7 +1644,13 @@
     "unreadArtifacts": "有新产物 · 展开面板",
     "untitledSession": "（未命名）",
     "workingDirLabel": "工作目录",
-    "workingDirPlaceholder": "/path/to/project"
+    "workingDirPlaceholder": "/path/to/project",
+    "modeToggle": {
+      "inheritOn": "继承（开启）",
+      "inheritOff": "继承（关闭）",
+      "on": "开启",
+      "off": "关闭"
+    }
   },
   "history": {
     "loadError": "无法加载此对话。",

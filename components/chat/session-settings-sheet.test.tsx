@@ -136,6 +136,7 @@ import { DataAdapterProvider } from "@/lib/data-hooks/context"
 import type { DataAdapter } from "@/lib/data-hooks/types"
 import type { ChatSession, Character, SystemPromptPreset, Skill } from "@cognia/agent-config-types"
 import { useProjectStore } from "@/stores/project/project-store"
+import { useSettingsStore } from "@/stores/settings"
 import type { Project } from "@/types"
 
 const mockCredentialStatus = useCredentialStatus as unknown as jest.Mock
@@ -955,9 +956,10 @@ describe("SessionSettingsSheet", () => {
         <SessionSettingsSheet session={mkSession({ id: "ses_m" })} open onOpenChange={jest.fn()} />
       </DataAdapterProvider>
     )
-    fireEvent.click(screen.getByRole("switch", { name: /bare mode/i }))
-    fireEvent.click(screen.getByRole("switch", { name: /debug mode/i }))
-    fireEvent.click(screen.getByRole("switch", { name: /brief output/i }))
+    for (const id of ["session-bare-mode", "session-debug-mode", "session-brief-mode"]) {
+      fireEvent.click(document.getElementById(id)!)
+      fireEvent.click(await screen.findByRole("option", { name: /^on$/i }))
+    }
     fireEvent.click(document.getElementById("session-perm")!)
     fireEvent.click(await screen.findByRole("option", { name: /^plan$/i }))
     await act(async () => {
@@ -970,6 +972,56 @@ describe("SessionSettingsSheet", () => {
       briefMode: true,
       permissionMode: "plan",
     })
+  })
+
+  // F03: an explicit off was read back as "not set" and saved as undefined,
+  // so a parent layer's "on" came back after a plain open-and-save.
+  it("keeps a session's explicit off through a save, and inherits only when asked to", async () => {
+    const updateSession = jest.fn(async (_id: string, _patch: unknown) => undefined)
+    render(
+      <DataAdapterProvider adapter={makeAdapter({ updateSession })}>
+        <SessionSettingsSheet
+          session={mkSession({
+            id: "ses_off",
+            bareMode: false,
+            debugMode: false,
+            briefMode: false,
+          })}
+          open
+          onOpenChange={jest.fn()}
+        />
+      </DataAdapterProvider>
+    )
+    expect(document.getElementById("session-bare-mode")).toHaveTextContent(/^off$/i)
+    fireEvent.click(document.getElementById("session-brief-mode")!)
+    fireEvent.click(await screen.findByRole("option", { name: /^inherit/i }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /save/i }))
+    })
+    await waitFor(() => expect(updateSession).toHaveBeenCalledTimes(1))
+    const patch = updateSession.mock.calls[0][1] as Record<string, unknown>
+    expect(patch).toMatchObject({ bareMode: false, debugMode: false })
+    expect(patch.briefMode).toBeUndefined()
+    expect("briefMode" in patch).toBe(true)
+  })
+
+  it("shows what an inheriting mode resolves to from the app settings", async () => {
+    useSettingsStore.setState((state) => ({
+      settings: { ...(state.settings ?? {}), bareMode: true } as never,
+    }))
+    try {
+      render(
+        <DataAdapterProvider adapter={makeAdapter()}>
+          <SessionSettingsSheet session={mkSession()} open onOpenChange={jest.fn()} />
+        </DataAdapterProvider>
+      )
+      expect(document.getElementById("session-bare-mode")).toHaveTextContent("Inherit (on)")
+      expect(document.getElementById("session-debug-mode")).toHaveTextContent("Inherit (off)")
+    } finally {
+      useSettingsStore.setState((state) => ({
+        settings: { ...(state.settings ?? {}), bareMode: undefined } as never,
+      }))
+    }
   })
 
   // This sheet became the ONLY per-session permission picker when the status

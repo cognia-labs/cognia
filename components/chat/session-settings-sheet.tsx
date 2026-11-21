@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/input-group"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
+import { useShallow } from "zustand/react/shallow"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
@@ -162,9 +162,14 @@ interface FormState {
   systemPrompt: string
   workingDir: string
   permissionMode: AppSettings["permissionMode"]
-  bareMode: boolean
-  debugMode: boolean
-  briefMode: boolean
+  /**
+   * The session's own value: `undefined` inherits (agent, then app), `false`
+   * is an explicit off. The send path reads `session ?? agent ?? app`, so an
+   * explicit off must survive a save even when a parent layer turns it on.
+   */
+  bareMode: boolean | undefined
+  debugMode: boolean | undefined
+  briefMode: boolean | undefined
   executionEffort: NonNullable<ChatSession["effort"]> | "inherit"
   executionMaxTurns: string
   executionEnvBindings: AgentEnvBinding[]
@@ -337,11 +342,22 @@ export function SessionSettingsSheet({
     systemPrompt: session.systemPrompt ?? "",
     workingDir: session.workingDir ?? "",
     permissionMode: session.permissionMode,
-    bareMode: Boolean(session.bareMode),
-    debugMode: Boolean(session.debugMode),
-    briefMode: Boolean(session.briefMode),
+    bareMode: session.bareMode,
+    debugMode: session.debugMode,
+    briefMode: session.briefMode,
     ...executionFormState(session),
   })
+  // What each mode inherits when the session sets none: the agent's value,
+  // then the app's — the chain `resolveSendOptions` reads.
+  const appModes = useSettingsStore(
+    useShallow((s) => ({
+      bareMode: s.settings?.bareMode,
+      debugMode: s.settings?.debugMode,
+      briefMode: s.settings?.briefMode,
+    }))
+  )
+  const inheritedMode = (key: "bareMode" | "debugMode" | "briefMode"): boolean =>
+    Boolean(character?.[key] ?? appModes[key])
   const [envSecretValues, setEnvSecretValues] = useState<Record<string, string>>({})
   const [executionEffortDirty, setExecutionEffortDirty] = useState(false)
   const [presetId, setPresetId] = useState<string>("")
@@ -382,9 +398,9 @@ export function SessionSettingsSheet({
       systemPrompt: session.systemPrompt ?? "",
       workingDir: session.workingDir ?? "",
       permissionMode: session.permissionMode,
-      bareMode: Boolean(session.bareMode),
-      debugMode: Boolean(session.debugMode),
-      briefMode: Boolean(session.briefMode),
+      bareMode: session.bareMode,
+      debugMode: session.debugMode,
+      briefMode: session.briefMode,
       ...executionFormState(session),
     })
     setEnvSecretValues({})
@@ -554,9 +570,9 @@ export function SessionSettingsSheet({
         systemPrompt: form.systemPrompt.trim() || undefined,
         workingDir: newWorkingDir || undefined,
         permissionMode: form.permissionMode,
-        bareMode: form.bareMode || undefined,
-        debugMode: form.debugMode || undefined,
-        briefMode: form.briefMode || undefined,
+        bareMode: form.bareMode,
+        debugMode: form.debugMode,
+        briefMode: form.briefMode,
         activePresetId: presetId || undefined,
         effort,
         thinkingLevel: executionEffortDirty ? effort : session.thinkingLevel,
@@ -661,14 +677,10 @@ export function SessionSettingsSheet({
   // Per-section override counts, derived from the *draft* form so the badges
   // update live as the user edits (before Save).
   const overrideCounts = {
-    behavior: [
-      form.systemPrompt.trim(),
-      form.workingDir.trim(),
-      form.permissionMode,
-      form.bareMode,
-      form.debugMode,
-      form.briefMode,
-    ].filter(Boolean).length,
+    behavior:
+      [form.systemPrompt.trim(), form.workingDir.trim(), form.permissionMode].filter(Boolean)
+        .length +
+      [form.bareMode, form.debugMode, form.briefMode].filter((value) => value !== undefined).length,
     execution:
       (form.executionEffort !== "inherit" ? 1 : 0) +
       (form.executionMaxTurns.trim() ? 1 : 0) +
@@ -984,22 +996,25 @@ export function SessionSettingsSheet({
                   id="session-bare-mode"
                   label={t("bareMode")}
                   hint={t("bareModeHint")}
-                  checked={form.bareMode}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, bareMode: v }))}
+                  value={form.bareMode}
+                  inherited={inheritedMode("bareMode")}
+                  onValueChange={(v) => setForm((f) => ({ ...f, bareMode: v }))}
                 />
                 <SessionModeToggle
                   id="session-debug-mode"
                   label={t("debugMode")}
                   hint={t("debugModeHint")}
-                  checked={form.debugMode}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, debugMode: v }))}
+                  value={form.debugMode}
+                  inherited={inheritedMode("debugMode")}
+                  onValueChange={(v) => setForm((f) => ({ ...f, debugMode: v }))}
                 />
                 <SessionModeToggle
                   id="session-brief-mode"
                   label={t("briefMode")}
                   hint={t("briefModeHint")}
-                  checked={form.briefMode}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, briefMode: v }))}
+                  value={form.briefMode}
+                  inherited={inheritedMode("briefMode")}
+                  onValueChange={(v) => setForm((f) => ({ ...f, briefMode: v }))}
                 />
               </div>
             </SessionSettingsSection>
@@ -1566,19 +1581,32 @@ function ExecutionSummaryItem({ label, value }: { label: string; value: string }
   )
 }
 
+/** Select value for "follow the agent / app". */
+const INHERIT_MODE = "inherit"
+
+/**
+ * A per-session mode with three states: follow the layer below (showing what
+ * that resolves to), or set it on or off for this session only.
+ */
 function SessionModeToggle({
   id,
   label,
   hint,
-  checked,
-  onCheckedChange,
+  value,
+  inherited,
+  onValueChange,
 }: {
   id: string
   label: string
   hint?: string
-  checked: boolean
-  onCheckedChange: (v: boolean) => void
+  /** The session's own value; `undefined` inherits. */
+  value: boolean | undefined
+  /** What the session gets while it inherits. */
+  inherited: boolean
+  onValueChange: (v: boolean | undefined) => void
 }) {
+  const t = useTranslations("chat.header.modeToggle")
+  const selected = value === undefined ? INHERIT_MODE : value ? "on" : "off"
   return (
     <div className="flex items-center justify-between gap-3 py-2">
       <div className="min-w-0 space-y-0.5">
@@ -1587,7 +1615,30 @@ function SessionModeToggle({
         </Label>
         {hint && <p className="text-[11px] leading-4 text-muted-foreground">{hint}</p>}
       </div>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} aria-label={label} />
+      <Select
+        value={selected}
+        onValueChange={(next) => onValueChange(next === INHERIT_MODE ? undefined : next === "on")}
+      >
+        <SelectTrigger
+          id={id}
+          size="sm"
+          className="h-7 w-[132px] shrink-0 text-xs"
+          aria-label={label}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={INHERIT_MODE} className="text-xs">
+            {inherited ? t("inheritOn") : t("inheritOff")}
+          </SelectItem>
+          <SelectItem value="on" className="text-xs">
+            {t("on")}
+          </SelectItem>
+          <SelectItem value="off" className="text-xs">
+            {t("off")}
+          </SelectItem>
+        </SelectContent>
+      </Select>
     </div>
   )
 }
