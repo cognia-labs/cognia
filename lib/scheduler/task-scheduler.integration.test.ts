@@ -1267,3 +1267,44 @@ it("F3: a pause settles the starts it drops from the buffer", async () => {
     terminalReason: "user-cancelled",
   })
 })
+
+it("queue-one: every start a newer one displaces is recorded, even when they arrive together", async () => {
+  const task = liveDraft()
+  task.config.overlapPolicy = "queue-one"
+  await schedulerDb.createTask(task)
+  const entered = latch()
+  const hold = latch()
+  let calls = 0
+  registerTaskExecutor("test", async () => {
+    calls += 1
+    if (calls === 1) {
+      entered.release()
+      await hold.promise
+    }
+    return { success: true }
+  })
+  const first = scheduler.runTaskNow(task.id)
+  await entered.promise
+  const a = await scheduler.runTaskNow(task.id)
+  const [b, c] = await Promise.all([scheduler.runTaskNow(task.id), scheduler.runTaskNow(task.id)])
+  hold.release()
+  await first
+  await until(() => calls === 2, "the newest buffered start runs")
+  await until(
+    async () =>
+      (await Promise.all([a, b].map((run) => schedulerDb.getExecution(run!.id)))).every(
+        (row) => row?.status === "skipped"
+      ),
+    "both displaced starts are recorded"
+  )
+  for (const displaced of [a, b]) {
+    expect(await schedulerDb.getExecution(displaced!.id)).toMatchObject({
+      status: "skipped",
+      terminalReason: "overlap-skipped",
+    })
+  }
+  await until(
+    async () => (await schedulerDb.getExecution(c!.id))?.status === "completed",
+    "the newest start completes"
+  )
+})

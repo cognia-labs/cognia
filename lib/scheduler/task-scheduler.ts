@@ -3820,7 +3820,12 @@ class TaskSchedulerImpl {
     }
 
     if (overlapPolicy === "queue-one") {
-      // Newest wins: any displaced pending start is dropped as skipped.
+      // Newest wins: any displaced pending start is dropped as skipped. The
+      // buffer is replaced before anything is awaited, so starts arriving
+      // together each displace exactly what was there when they arrived:
+      // every displaced start is recorded once, and none is overwritten
+      // without a record.
+      this.queues.set(task.id, [queuedStart])
       for (const displaced of queue) {
         // The displaced start's placeholder id was handed to whoever asked for
         // it, so its skipped row reuses that id: the caller's id resolves to a
@@ -3833,7 +3838,6 @@ class TaskSchedulerImpl {
           message: "Skipped: displaced by a newer buffered start (queue-one)",
         })
       }
-      this.queues.set(task.id, [queuedStart])
       log.debug(`Task ${task.name} start buffered (queue-one, blocked by ${blockedBy})`)
       return this.persistBufferedStart(task, executionId, queuedStart)
     }
