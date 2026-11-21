@@ -16,7 +16,7 @@
 import type { TeamNotifier } from "../team-notifier"
 import type { ConcurrencyController } from "@/lib/workflow/runtime/concurrency-controller"
 import type { ModelPreferenceController } from "@/lib/workflow/runtime/model-preference-controller"
-import type { TeamBudgetEscalationAction } from "@/types/agent/agent-team"
+import type { AgentTeamConfig, TeamBudgetEscalationAction } from "@/types/agent/agent-team"
 import type { SubAgentTokenUsage } from "@/types/agent/sub-agent"
 
 export type BudgetEventName =
@@ -26,6 +26,8 @@ export interface BudgetGuardOptions {
   runId: string
   /** Token budget; 0 = unlimited. */
   limit: number
+  /** Tokens already consumed by earlier attempts of the same durable run. */
+  initialUsed?: number
   /** Warning threshold ratio (0–1). Default 0.80. */
   warnAt?: number
   /** Critical threshold ratio (0–1). Default 0.95. */
@@ -35,6 +37,59 @@ export interface BudgetGuardOptions {
   notifier: TeamNotifier
   concurrencyCtrl?: ConcurrencyController
   modelCtrl?: ModelPreferenceController
+}
+
+export interface EffectiveSquadBudget {
+  limit: number
+  warnAt: number
+  critAt: number
+  onCritical: TeamBudgetEscalationAction
+  /** Present when pre-existing `tokenBudget` and `governancePolicy.budget.tokenBudget` disagree (> 0). */
+  conflict?: {
+    legacyTokenBudget: number
+    governanceTokenBudget: number
+  }
+}
+
+function clampRatio(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  return Math.max(0, Math.min(1, value))
+}
+
+/**
+ * Resolve the single effective budget policy for a Squad config.
+ *
+ * When both legacy `config.tokenBudget` (> 0) and `governancePolicy.budget.tokenBudget`
+ * (> 0) exist and disagree on an un-migrated row, the non-zero legacy cap wins
+ * so an existing budget is never silently raised or zeroed, and `conflict` is
+ * reported for settings surfaces.
+ */
+export function resolveEffectiveSquadBudget(
+  config: Partial<AgentTeamConfig> | undefined
+): EffectiveSquadBudget {
+  const legacyRaw =
+    typeof config?.tokenBudget === "number" && Number.isFinite(config.tokenBudget)
+      ? Math.max(0, Math.trunc(config.tokenBudget))
+      : 0
+  const govBudget = config?.governancePolicy?.budget
+  const govRaw =
+    typeof govBudget?.tokenBudget === "number" && Number.isFinite(govBudget.tokenBudget)
+      ? Math.max(0, Math.trunc(govBudget.tokenBudget))
+      : 0
+  const hasConflict = legacyRaw > 0 && govRaw > 0 && legacyRaw !== govRaw
+  const limit = hasConflict ? legacyRaw : govRaw > 0 ? govRaw : legacyRaw
+  const warnAt = clampRatio(govBudget?.warningThreshold, 0.8)
+  const critAt = Math.max(warnAt, clampRatio(govBudget?.criticalThreshold, 0.95))
+  const onCritical = govBudget?.onCritical ?? "notify"
+  return {
+    limit,
+    warnAt,
+    critAt,
+    onCritical,
+    ...(hasConflict
+      ? { conflict: { legacyTokenBudget: legacyRaw, governanceTokenBudget: govRaw } }
+      : {}),
+  }
 }
 
 export interface BudgetGuardStatus {
@@ -59,12 +114,15 @@ interface InternalListeners {
 }
 
 export function createBudgetGuard(opts: BudgetGuardOptions): BudgetGuard {
-  const warnAt = opts.warnAt ?? 0.8
-  const critAt = opts.critAt ?? 0.95
-  let limit = opts.limit
-  let used = 0
-  let warned = false
-  let critical = false
+  const warnAt = clampRatio(opts.warnAt, 0.8)
+  const critAt = Math.max(warnAt, clampRatio(opts.critAt, 0.95))
+  let limit = Math.max(0, opts.limit)
+  let used =
+    typeof opts.initialUsed === "number" && Number.isFinite(opts.initialUsed)
+      ? Math.max(0, opts.initialUsed)
+      : 0
+  let warned = limit > 0 && used / limit >= warnAt
+  let critical = limit > 0 && used / limit >= critAt
 
   const listeners: InternalListeners = {
     warning_crossed: new Set(),

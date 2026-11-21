@@ -278,6 +278,26 @@ describe("orchestrator entry points", () => {
     expect(() => castVote({ consensusId: c2.id, voterId: "v1", optionIndex: 5 })).toThrow(
       /out of range/
     )
+
+    // Cross-team consensus and cross-team voter are rejected without mutating votes.
+    const teamA = setupTeam(1)
+    const teamB = setupTeam(1)
+    const voterB = Object.values(useAgentTeamStore.getState().teammates).find(
+      (t) => t.teamId === teamB && t.role === "teammate"
+    )!
+    const cA = createConsensus({
+      teamId: teamA,
+      initiatorId: "lead",
+      question: "A only?",
+      options: ["yes", "no"],
+    })
+    expect(() =>
+      castVote({ teamId: teamB, consensusId: cA.id, voterId: voterB.id, optionIndex: 0 })
+    ).toThrow(`consensus ${cA.id} not found`)
+    expect(() =>
+      castVote({ teamId: teamA, consensusId: cA.id, voterId: voterB.id, optionIndex: 0 })
+    ).toThrow(`teammate ${voterB.id} not found`)
+    expect(useAgentTeamStore.getState().consensus[cA.id].votes).toHaveLength(0)
   })
 
   it("resolveConsensus forces a winner and fires onConsensusResolved", () => {

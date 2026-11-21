@@ -90,7 +90,9 @@ export function createDeadlockHandler(deps: DeadlockGateDeps): () => void {
       teamId: deps.teamId,
       dedupeKey,
     })
-    deps.concurrency.reduceTo(0)
+    const releaseHold = deps.concurrency.holdGate
+      ? deps.concurrency.holdGate()
+      : (deps.concurrency.reduceTo(0), () => {})
     void openReview({
       runId: deps.runId,
       teamId: deps.teamId,
@@ -102,6 +104,7 @@ export function createDeadlockHandler(deps: DeadlockGateDeps): () => void {
           deps.pool.forceUnquarantine(
             decision.resetAll ? { resetAll: true } : { teammateIds: decision.teammateIds ?? [] }
           )
+          releaseHold()
         } else {
           deps.abort(new Error("deadlock_aborted_by_operator"))
         }

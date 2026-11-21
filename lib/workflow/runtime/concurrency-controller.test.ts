@@ -82,4 +82,26 @@ describe("ConcurrencyController", () => {
     c.reduceTo(0)
     expect(c.get()).toBe(0)
   })
+
+  it("holdGate freezes concurrency at 0 and restores the monotone cap on release", () => {
+    const c = createConcurrencyController(4)
+    const events: number[] = []
+    c.subscribe((n) => events.push(n))
+
+    const release1 = c.holdGate!()
+    expect(c.get()).toBe(0)
+    expect(events).toEqual([0])
+
+    const release2 = c.holdGate!()
+    // Permanent downshift while held must be remembered when the hold lifts.
+    c.reduceTo(1)
+    expect(c.get()).toBe(0)
+
+    release1()
+    expect(c.get()).toBe(0)
+    release2()
+    release2() // idempotent
+    expect(c.get()).toBe(1)
+    expect(events).toEqual([0, 1])
+  })
 })

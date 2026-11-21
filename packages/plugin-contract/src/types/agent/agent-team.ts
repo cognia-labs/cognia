@@ -1372,6 +1372,7 @@ export interface CreateConsensusInput {
  * Input for casting a vote
  */
 export interface CastVoteInput {
+  teamId?: string
   consensusId: string
   voterId: string
   optionIndex: number
@@ -1686,6 +1687,7 @@ export interface CreateTaskInput {
  * resolves `authorName`. Attachments omit their `id` (the store mints it).
  */
 export interface AddTaskCommentInput {
+  teamId?: string
   taskId: string
   authorId: string
   /**

@@ -375,22 +375,72 @@ export const createAgentTeamActionsSlice = (
       const team = state.teams[teamId]
       if (!team) return state
       const executionModeChanged = config.executionMode !== team.config.executionMode
-      const legacyGovernanceChanged =
-        config.requirePlanApproval !== team.config.requirePlanApproval ||
-        config.tokenBudget !== team.config.tokenBudget
+      const prevPlanApproval = team.config.requirePlanApproval
+      const prevTokenBudget = team.config.tokenBudget
+      const prevGovernance = team.config.governancePolicy
+
+      let nextPlanApproval = config.requirePlanApproval
+      let nextTokenBudget = config.tokenBudget
+      let nextGovernance = config.governancePolicy
+
+      if (nextGovernance) {
+        if (config.governancePolicy === prevGovernance) {
+          // Legacy Overview fields changed while governancePolicy was untouched:
+          // sync into governancePolicy instead of wiping thresholds/onCritical.
+          const planChanged = config.requirePlanApproval !== prevPlanApproval
+          const budgetChanged = config.tokenBudget !== prevTokenBudget
+          if (planChanged || budgetChanged) {
+            nextGovernance = {
+              ...nextGovernance,
+              ...(planChanged
+                ? {
+                    approval: {
+                      ...nextGovernance.approval,
+                      requirePlanApproval: Boolean(config.requirePlanApproval),
+                    },
+                  }
+                : {}),
+              ...(budgetChanged
+                ? {
+                    budget: {
+                      ...nextGovernance.budget,
+                      tokenBudget: Math.max(0, Math.trunc(config.tokenBudget ?? 0)),
+                    },
+                  }
+                : {}),
+            }
+          }
+        } else {
+          // GovernanceSection updated governancePolicy: mirror canonical fields
+          // onto top-level requirePlanApproval / tokenBudget so all readers agree.
+          if (
+            config.requirePlanApproval === prevPlanApproval &&
+            nextGovernance.approval.requirePlanApproval !==
+              prevGovernance?.approval.requirePlanApproval
+          ) {
+            nextPlanApproval = nextGovernance.approval.requirePlanApproval
+          }
+          if (
+            config.tokenBudget === prevTokenBudget &&
+            nextGovernance.budget.tokenBudget !== prevGovernance?.budget.tokenBudget
+          ) {
+            nextTokenBudget = Math.max(0, Math.trunc(nextGovernance.budget.tokenBudget))
+          }
+        }
+      }
+
       const normalizedConfig = guardDeliveryConsent(
         team.config,
         normalizeAgentTeamConfig({
           ...config,
+          requirePlanApproval: nextPlanApproval,
+          tokenBudget: nextTokenBudget,
           preferredExecutionPattern:
             executionModeChanged &&
             config.preferredExecutionPattern === team.config.preferredExecutionPattern
               ? undefined
               : config.preferredExecutionPattern,
-          governancePolicy:
-            legacyGovernanceChanged && config.governancePolicy === team.config.governancePolicy
-              ? undefined
-              : config.governancePolicy,
+          governancePolicy: nextGovernance,
         })
       )
       return {
@@ -900,31 +950,83 @@ export const createAgentTeamActionsSlice = (
     })
   },
 
+  claimTaskForDispatch: (teamId, taskId, options) => {
+    let outcome: import("../types").ClaimTaskForDispatchResult = {
+      ok: false,
+      reason: "not_found",
+    }
+    set((state) => {
+      const current = state.tasks[taskId]
+      if (!current || current.teamId !== teamId) {
+        outcome = { ok: false, reason: "not_found" }
+        return state
+      }
+      if (current.status === "cancelled") {
+        outcome = { ok: false, reason: "cancelled", status: "cancelled" }
+        return state
+      }
+      if (current.status === "completed" || current.status === "review") {
+        outcome = { ok: false, reason: "already_terminal", status: current.status }
+        return state
+      }
+      if (current.status === "in_progress" || current.status === "claimed") {
+        if (
+          options?.allowSameClaimant &&
+          options.claimantId &&
+          current.claimedBy === options.claimantId
+        ) {
+          outcome = { ok: true, task: current }
+          return state
+        }
+        outcome = { ok: false, reason: "already_active", status: current.status }
+        return state
+      }
+      const nextTask: AgentTeamTask = {
+        ...current,
+        status: "in_progress",
+        claimedBy: options?.claimantId ?? current.claimedBy,
+        startedAt: current.startedAt ?? new Date(),
+        completedAt: undefined,
+        actualDuration: undefined,
+        error: undefined,
+      }
+      outcome = { ok: true, task: nextTask }
+      return {
+        tasks: {
+          ...state.tasks,
+          [taskId]: nextTask,
+        },
+      }
+    })
+    return outcome
+  },
+
   addTaskComment: (input) => {
-    const task = get().tasks[input.taskId]
-    if (!task) return null
     const text = typeof input.text === "string" ? input.text.trim() : ""
     if (!text) return null
-    const author = get().teammates[input.authorId]
-    const authorName =
-      input.authorName ||
-      (input.authorId === "user"
-        ? "You"
-        : author?.name || (input.authorId === "system" ? "System" : "Unknown"))
-    const comment: AgentTaskComment = {
-      id: nanoid(),
-      taskId: input.taskId,
-      authorId: input.authorId,
-      authorName,
-      text,
-      createdAt: new Date(),
-      ...(input.attachments && input.attachments.length > 0
-        ? { attachments: input.attachments.map((a) => ({ ...a, id: nanoid() })) }
-        : {}),
-    }
+    let created: AgentTaskComment | null = null
     set((state) => {
       const current = state.tasks[input.taskId]
       if (!current) return state
+      if (input.teamId !== undefined && current.teamId !== input.teamId) return state
+      const author = state.teammates[input.authorId]
+      const authorName =
+        input.authorName ||
+        (input.authorId === "user"
+          ? "You"
+          : author?.name || (input.authorId === "system" ? "System" : "Unknown"))
+      const comment: AgentTaskComment = {
+        id: nanoid(),
+        taskId: input.taskId,
+        authorId: input.authorId,
+        authorName,
+        text,
+        createdAt: new Date(),
+        ...(input.attachments && input.attachments.length > 0
+          ? { attachments: input.attachments.map((a) => ({ ...a, id: nanoid() })) }
+          : {}),
+      }
+      created = comment
       return {
         tasks: {
           ...state.tasks,
@@ -932,7 +1034,7 @@ export const createAgentTeamActionsSlice = (
         },
       }
     })
-    return comment
+    return created
   },
 
   attachTaskFile: (taskId, attachment) => {
@@ -955,7 +1057,9 @@ export const createAgentTeamActionsSlice = (
 
   addMessage: (input) => {
     const sender = get().teammates[input.senderId]
-    const recipient = input.recipientId ? get().teammates[input.recipientId] : undefined
+    const rawRecipient = input.recipientId ? get().teammates[input.recipientId] : undefined
+    const recipient =
+      rawRecipient && rawRecipient.teamId === input.teamId ? rawRecipient : undefined
 
     const message: AgentTeamMessage = {
       id: nanoid(),

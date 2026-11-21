@@ -168,8 +168,12 @@ export function createConsensus(input: CreateConsensusInput): ConsensusRequest {
 export function castVote(input: CastVoteInput): ConsensusRequest {
   const store = useAgentTeamStore.getState()
   const current = store.consensus[input.consensusId]
-  if (!current) {
+  if (!current || (input.teamId !== undefined && current.teamId !== input.teamId)) {
     throw new Error(`consensus ${input.consensusId} not found`)
+  }
+  const voter = store.teammates[input.voterId]
+  if (input.teamId !== undefined && (!voter || voter.teamId !== current.teamId)) {
+    throw new Error(`teammate ${input.voterId} not found`)
   }
   if (current.status !== "open") {
     throw new Error(`consensus ${input.consensusId} is not open (status=${current.status})`)
@@ -179,7 +183,6 @@ export function castVote(input: CastVoteInput): ConsensusRequest {
       `optionIndex ${input.optionIndex} out of range for consensus ${input.consensusId}`
     )
   }
-  const voter = store.teammates[input.voterId]
   const newVote: ConsensusVote = {
     voterId: input.voterId,
     voterName: voter?.name ?? input.voterId,

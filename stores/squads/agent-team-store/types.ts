@@ -141,6 +141,16 @@ export interface AgentTeamState {
   /** Same-column reorder: place the task at `targetIndex` and renumber. */
   reorderTask: (taskId: string, targetIndex: number) => void
   assignTask: (taskId: string, teammateId: string) => void
+  /**
+   * Atomically claim a task for dispatch (`pending | failed -> in_progress`).
+   * Rejects missing/cross-team tasks, cancelled/completed/review tasks, and
+   * tasks already active under another claimant.
+   */
+  claimTaskForDispatch: (
+    teamId: string,
+    taskId: string,
+    options?: ClaimTaskForDispatchOptions
+  ) => ClaimTaskForDispatchResult
   addTaskComment: (input: AddTaskCommentInput) => AgentTaskComment | null
   attachTaskFile: (taskId: string, attachment: Omit<TaskCommentAttachment, "id">) => void
 
@@ -217,3 +227,16 @@ export interface AgentTeamState {
 /** Why `setSquadLead` did or did not change the lead. */
 export type SetSquadLeadResult =
   { ok: true } | { ok: false; reason: "not_found" | "already_lead" | "run_active" }
+
+export interface ClaimTaskForDispatchOptions {
+  claimantId?: string
+  allowSameClaimant?: boolean
+}
+
+export type ClaimTaskForDispatchResult =
+  | { ok: true; task: AgentTeamTask }
+  | {
+      ok: false
+      reason: "not_found" | "cancelled" | "already_terminal" | "already_active"
+      status?: TeamTaskStatus
+    }

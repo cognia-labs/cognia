@@ -215,12 +215,105 @@ describe("useAgentTeamStore updateTeamConfig", () => {
     expect(useAgentTeamStore.getState().teams[team.id].selectedExecutionPattern).toBeUndefined()
   })
 
-  it("clears governancePolicy when legacy fields changed but policy was unchanged", () => {
+  it("syncs legacy governance fields into governancePolicy without wiping thresholds", () => {
     const team = useAgentTeamStore.getState().createTeam({ name: "C", task: "t" })
-    const config = { ...team.config, requirePlanApproval: !team.config.requirePlanApproval }
-    useAgentTeamStore.getState().updateTeamConfig(team.id, config)
-    // governancePolicy should now be undefined because legacy fields changed
-    expect(useAgentTeamStore.getState().teams[team.id].config.governancePolicy).toBeUndefined()
+    const policy = {
+      approval: { requirePlanApproval: false, requireDelegationApproval: true },
+      budget: {
+        tokenBudget: 10_000,
+        warningThreshold: 0.65,
+        criticalThreshold: 0.9,
+        onCritical: "pause_for_review" as const,
+      },
+      escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: true },
+    }
+    useAgentTeamStore.getState().updateTeamConfig(team.id, {
+      ...team.config,
+      governancePolicy: policy,
+    })
+    expect(useAgentTeamStore.getState().teams[team.id].config.tokenBudget).toBe(10_000)
+
+    const current = useAgentTeamStore.getState().teams[team.id].config
+    useAgentTeamStore.getState().updateTeamConfig(team.id, {
+      ...current,
+      requirePlanApproval: true,
+      tokenBudget: 25_000,
+    })
+    const updated = useAgentTeamStore.getState().teams[team.id].config
+    expect(updated.requirePlanApproval).toBe(true)
+    expect(updated.tokenBudget).toBe(25_000)
+    expect(updated.governancePolicy).toMatchObject({
+      approval: { requirePlanApproval: true, requireDelegationApproval: true },
+      budget: {
+        tokenBudget: 25_000,
+        warningThreshold: 0.65,
+        criticalThreshold: 0.9,
+        onCritical: "pause_for_review",
+      },
+    })
+  })
+
+  it("enforces atomic task claim and team ownership on comments and direct messages", () => {
+    const store = useAgentTeamStore.getState()
+    const teamA = store.createTeam({ name: "Alpha", task: "a" })
+    const teamB = store.createTeam({ name: "Beta", task: "b" })
+    const mateB = store.addTeammate({ teamId: teamB.id, name: "SecretBeta", role: "teammate" })
+    const taskA = store.createTask({ teamId: teamA.id, title: "A1", description: "" })
+    const taskCancelled = store.createTask({ teamId: teamA.id, title: "A2", description: "" })
+    store.moveTask(taskCancelled.id, "cancelled")
+
+    // Cross-team comment is rejected with null and zero mutation.
+    expect(
+      store.addTaskComment({
+        teamId: teamB.id,
+        taskId: taskA.id,
+        authorId: mateB.id,
+        text: "intrude",
+      })
+    ).toBeNull()
+    expect(useAgentTeamStore.getState().tasks[taskA.id].comments ?? []).toHaveLength(0)
+
+    // Cross-team direct message never resolves another squad's recipientName.
+    const msg = store.addMessage({
+      teamId: teamA.id,
+      senderId: teamA.leadId,
+      recipientId: mateB.id,
+      content: "probe",
+    })
+    expect(msg.recipientName).toBeUndefined()
+
+    // Cancelled task cannot be claimed; pending task claims once and blocks competing claimant.
+    expect(store.claimTaskForDispatch(teamA.id, taskCancelled.id)).toEqual({
+      ok: false,
+      reason: "cancelled",
+      status: "cancelled",
+    })
+    expect(store.claimTaskForDispatch(teamB.id, taskA.id)).toEqual({
+      ok: false,
+      reason: "not_found",
+    })
+    const claimed = store.claimTaskForDispatch(teamA.id, taskA.id, {
+      claimantId: "scheduler:r1:a1",
+      allowSameClaimant: true,
+    })
+    expect(claimed.ok).toBe(true)
+    expect(useAgentTeamStore.getState().tasks[taskA.id].status).toBe("in_progress")
+    expect(
+      store.claimTaskForDispatch(teamA.id, taskA.id, {
+        claimantId: "scheduler:r1:a1",
+        allowSameClaimant: true,
+      }).ok
+    ).toBe(true)
+    expect(
+      store.claimTaskForDispatch(teamA.id, taskA.id, {
+        claimantId: "other-claimant",
+        allowSameClaimant: true,
+      })
+    ).toEqual({
+      ok: false,
+      reason: "already_active",
+      status: "in_progress",
+    })
   })
 })
 

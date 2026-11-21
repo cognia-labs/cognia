@@ -722,5 +722,36 @@ describe("GovernanceSection", () => {
         })
       )
     })
+
+    it("surfaces conflicting legacy vs governance token budgets and clamps critical >= warning", () => {
+      const team = makeTeam(
+        {
+          budget: {
+            tokenBudget: 30_000,
+            warningThreshold: 0.75,
+            criticalThreshold: 0.9,
+            onCritical: "notify",
+          },
+        },
+        { tokenBudget: 12_000 }
+      )
+      render(<GovernanceSection team={team} />)
+      expect(screen.getByDisplayValue("12000")).toBeInTheDocument()
+      expect(screen.getByTestId("budget-conflict-note")).toBeInTheDocument()
+
+      const critInput = screen.getByDisplayValue("0.9")
+      fireEvent.change(critInput, { target: { value: "0.4" } })
+      expect(updateTeamConfigMock).toHaveBeenCalledWith(
+        "t1",
+        expect.objectContaining({
+          governancePolicy: expect.objectContaining({
+            budget: expect.objectContaining({
+              warningThreshold: 0.75,
+              criticalThreshold: 0.75,
+            }),
+          }),
+        })
+      )
+    })
   })
 })

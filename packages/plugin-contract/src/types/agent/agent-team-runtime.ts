@@ -23,6 +23,7 @@ export const AGENT_TEAM_SECURITY_CONFIG_KEYS = [
   "sandboxEnabled",
   "sandboxPolicy",
   "requirePlanApproval",
+  "tokenBudget",
   "riskGating",
   "governancePolicy",
   "taskReview",

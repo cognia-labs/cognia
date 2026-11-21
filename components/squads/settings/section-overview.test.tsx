@@ -388,4 +388,25 @@ describe("OverviewSection", () => {
       expect.objectContaining({ tokenBudget: 0 })
     )
   })
+
+  it("displays governancePolicy.budget.tokenBudget when top-level tokenBudget is 0", () => {
+    render(
+      <OverviewSection
+        team={makeTeam({
+          tokenBudget: 0,
+          governancePolicy: {
+            approval: { requirePlanApproval: false, requireDelegationApproval: false },
+            budget: {
+              tokenBudget: 42_000,
+              warningThreshold: 0.8,
+              criticalThreshold: 0.95,
+              onCritical: "notify",
+            },
+            escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
+          },
+        })}
+      />
+    )
+    expect(screen.getByDisplayValue("42000")).toBeInTheDocument()
+  })
 })

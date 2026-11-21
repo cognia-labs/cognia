@@ -146,12 +146,33 @@ describe("recoverSquadRuns", () => {
     expect(runSquadLifecycle).not.toHaveBeenCalled()
   })
 
+  it("pauses a restored budget_extension approved with zero extraTokens", async () => {
+    recover.mockResolvedValueOnce([{ runId: "run-1", status: "recovering" as never }])
+    listPendingSquadReviews.mockResolvedValueOnce([
+      { id: "review-1", reviewKind: "budget_extension" },
+    ])
+    openSquadReview.mockResolvedValueOnce({
+      kind: "budget_extension",
+      outcome: "approve",
+      extraTokens: 0,
+    })
+    await recoverSquadRuns()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(controlSquadRun).toHaveBeenCalledWith({ runId: "run-1" }, "pause")
+    expect(guardSquadResume).not.toHaveBeenCalled()
+    expect(runSquadLifecycle).not.toHaveBeenCalled()
+  })
+
   it("honors a pause during the restored run's readiness check", async () => {
     recover.mockResolvedValueOnce([{ runId: "run-1", status: "recovering" as never }])
     listPendingSquadReviews.mockResolvedValueOnce([
       { id: "review-1", reviewKind: "budget_extension" },
     ])
-    openSquadReview.mockResolvedValueOnce({ kind: "budget_extension", outcome: "approve" })
+    openSquadReview.mockResolvedValueOnce({
+      kind: "budget_extension",
+      outcome: "approve",
+      extraTokens: 5_000,
+    })
     let finishGuard!: (result: { blocked: boolean; blockers: Array<{ code: string }> }) => void
     guardSquadResume.mockReturnValueOnce(
       new Promise((resolve) => {
@@ -178,7 +199,11 @@ describe("recoverSquadRuns", () => {
       if (failure === "review")
         openSquadReview.mockRejectedValueOnce(new Error("review read failed"))
       else {
-        openSquadReview.mockResolvedValueOnce({ kind: "budget_extension", outcome: "approve" })
+        openSquadReview.mockResolvedValueOnce({
+          kind: "budget_extension",
+          outcome: "approve",
+          extraTokens: 5_000,
+        })
         guardSquadResume.mockRejectedValueOnce(new Error("readiness read failed"))
       }
       await recoverSquadRuns()

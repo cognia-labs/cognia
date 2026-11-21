@@ -121,9 +121,13 @@ export async function recoverSquadRuns(
             if (options.signal?.aborted) return
             const current = await getAgentTeamRun(outcome.runId)
             if (!current || current.status !== "recovering") return
-            if (decision.outcome !== "approve") {
-              // No lifecycle survived to handle a refusal. Keep the decision
-              // durable and pause; only a new operator gesture may resume work.
+            const invalidBudgetApproval =
+              decision.outcome === "approve" &&
+              decision.kind === "budget_extension" &&
+              !(decision.extraTokens > 0)
+            if (decision.outcome !== "approve" || invalidBudgetApproval) {
+              // No lifecycle survived to handle a refusal or zero-token grant.
+              // Keep the decision durable and pause; only a new operator gesture may resume work.
               const { controlSquadRun } = await import("./durable-control")
               if (!(await stillRecovering())) return
               await controlSquadRun({ runId: outcome.runId }, "pause")

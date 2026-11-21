@@ -1,4 +1,4 @@
-import { createBudgetGuard } from "./budget-guard"
+import { createBudgetGuard, resolveEffectiveSquadBudget } from "./budget-guard"
 import type { TeamNotifier } from "../team-notifier"
 import type { ConcurrencyController } from "@/lib/workflow/runtime/concurrency-controller"
 import type { ModelPreferenceController } from "@/lib/workflow/runtime/model-preference-controller"
@@ -212,5 +212,71 @@ describe("BudgetGuard", () => {
     unsub()
     g.add({ promptTokens: 81, completionTokens: 0, totalTokens: 81 })
     expect(fn).not.toHaveBeenCalled()
+  })
+
+  it("hydrates initialUsed without re-firing already-crossed thresholds", () => {
+    const notifier = fakeNotifier()
+    const g = createBudgetGuard({
+      runId: "r-resume",
+      limit: 200,
+      initialUsed: 96,
+      warnAt: 0.4,
+      critAt: 0.9,
+      onCritical: "notify",
+      notifier,
+    })
+    expect(g.status()).toEqual({ used: 96, limit: 200, level: "warning" })
+    expect(notifier.calls).toHaveLength(0)
+
+    const warn = jest.fn()
+    const crit = jest.fn()
+    g.on("warning_crossed", warn)
+    g.on("critical_crossed", crit)
+    g.add({ promptTokens: 90, completionTokens: 0, totalTokens: 90 })
+    expect(warn).not.toHaveBeenCalled()
+    expect(crit).toHaveBeenCalledTimes(1)
+    expect(g.status()).toEqual({ used: 186, limit: 200, level: "critical" })
+  })
+
+  it("resolves effective Squad budget across Overview and Governance with conflict detection", () => {
+    expect(
+      resolveEffectiveSquadBudget({
+        tokenBudget: 0,
+        governancePolicy: {
+          approval: { requirePlanApproval: false, requireDelegationApproval: false },
+          budget: {
+            tokenBudget: 50_000,
+            warningThreshold: 0.85,
+            criticalThreshold: 0.7,
+            onCritical: "pause_for_review",
+          },
+          escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
+        },
+      })
+    ).toEqual({
+      limit: 50_000,
+      warnAt: 0.85,
+      critAt: 0.85,
+      onCritical: "pause_for_review",
+    })
+
+    expect(
+      resolveEffectiveSquadBudget({
+        tokenBudget: 12_000,
+        governancePolicy: {
+          approval: { requirePlanApproval: false, requireDelegationApproval: false },
+          budget: {
+            tokenBudget: 30_000,
+            warningThreshold: 0.8,
+            criticalThreshold: 0.95,
+            onCritical: "notify",
+          },
+          escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
+        },
+      })
+    ).toMatchObject({
+      limit: 12_000,
+      conflict: { legacyTokenBudget: 12_000, governanceTokenBudget: 30_000 },
+    })
   })
 })

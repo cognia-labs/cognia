@@ -921,6 +921,17 @@ export async function dispatchTeammate(
     // Retryable — workflow runStep backs off; the pool may free up.
     throw new Error("dispatchTeammate: no available teammate")
   }
+  if (args.recordToStore) {
+    if (teamCtx.storeWriter.getTaskStatus?.(teamCtx.teamId, args.taskId) === "cancelled") {
+      throw Object.assign(new Error(`dispatchTeammate: task "${args.taskId}" was cancelled`), {
+        retryable: false,
+      })
+    }
+    teamCtx.storeWriter.updateTask?.(args.taskId, {
+      status: "in_progress",
+      claimedBy: teammate.id,
+    })
+  }
   if (requiresSandbox)
     teammate = { ...teammate, config: { ...teammate.config, sandboxEnabled: true } }
 
@@ -2382,12 +2393,15 @@ export async function dispatchTeammate(
         // unblocks dependents, so this never stalls the run itself.
         const requireReview =
           teamCtx.team?.config?.governancePolicy?.approval?.requireResultReview === true
-        const projectSuccess = () =>
+        const projectSuccess = () => {
+          if (teamCtx.storeWriter.getTaskStatus?.(teamCtx.teamId, args.taskId) === "cancelled")
+            return
           teamCtx.storeWriter.setTaskStatus(
             args.taskId,
             requireReview ? "review" : "completed",
             text
           )
+        }
         if (durableDispatch) await durableDispatch.projectIfCurrent(projectSuccess)
       }
     }
@@ -2439,13 +2453,15 @@ export async function dispatchTeammate(
       budgetAccount?.recordFailure()
     }
     if (args.recordToStore && !(err instanceof RemoteWorkerWaitingError)) {
-      const projectFailure = () =>
+      const projectFailure = () => {
+        if (teamCtx.storeWriter.getTaskStatus?.(teamCtx.teamId, args.taskId) === "cancelled") return
         teamCtx.storeWriter.setTaskStatus(
           args.taskId,
           "failed",
           undefined,
           err instanceof Error ? err.message : String(err)
         )
+      }
       if (durableDispatch) await durableDispatch.projectIfCurrent(projectFailure)
     }
     const original = err instanceof Error ? err : new Error(String(err))

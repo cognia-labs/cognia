@@ -34,6 +34,18 @@ export interface TeamStoreWriter {
   addMessage(input: SendMessageInput): void
   setTaskStatus(taskId: string, status: TeamTaskStatus, result?: string, error?: string): void
   updateTeammate(teammateId: string, updates: Partial<AgentTeammate>): void
+  /** Read live board task status before claiming or projecting completion/failure. */
+  getTaskStatus?(teamId: string, taskId: string): TeamTaskStatus | undefined
+  /** Atomically claim a task for dispatch (`pending | failed -> in_progress`). */
+  claimTaskForDispatch?(
+    teamId: string,
+    taskId: string,
+    options?: { claimantId?: string; allowSameClaimant?: boolean }
+  ): {
+    ok: boolean
+    reason?: "not_found" | "cancelled" | "already_terminal" | "already_active"
+    status?: TeamTaskStatus
+  }
   /**
    * Set the team's `finalResult` to the run that just ended's own report (an
    * Ultracode synthesis or a task run's answers), or clear it when that run
@@ -202,6 +214,10 @@ export interface TeamRunContext {
    * dispatch fails closed instead of writing to the live checkout.
    */
   readonly workspaceController?: AgentTeamRegistryWorkspaceController
+  /** Task IDs observed cancelled before or during this run (never dispatched). */
+  readonly cancelledTaskIds?: Set<string>
+  /** Task IDs blocked because a required upstream dependency was cancelled. */
+  readonly blockedByCancelledTaskIds?: Set<string>
 }
 
 const registry = new Map<string, TeamRunContext>()

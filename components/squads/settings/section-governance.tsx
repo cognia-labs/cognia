@@ -40,6 +40,7 @@ import {
   DEFAULT_TASK_REVIEW_MAX_REVISIONS,
   MAX_TASK_REVIEW_REVISIONS,
 } from "@/lib/squads/gates/task-review-policy"
+import { resolveEffectiveSquadBudget } from "@/lib/squads/gates/budget-guard"
 import { markSettingsSaved } from "./settings-save-indicator"
 import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 
@@ -79,20 +80,31 @@ export function GovernanceSection({ team }: GovernanceSectionProps) {
   const updateTeamConfig = useAgentTeamStore((s) => s.updateTeamConfig)
   const [pendingCritical, setPendingCritical] = useState<TeamBudgetEscalationAction | null>(null)
 
-  const policy: TeamGovernancePolicy = useMemo(
-    () =>
-      team.config.governancePolicy ?? {
-        approval: { requirePlanApproval: false, requireDelegationApproval: false },
-        budget: {
-          tokenBudget: 0,
-          warningThreshold: 0.8,
-          criticalThreshold: 0.95,
-          onCritical: "notify",
-        },
-        escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
+  const effectiveBudget = useMemo(() => resolveEffectiveSquadBudget(team.config), [team.config])
+  const policy: TeamGovernancePolicy = useMemo(() => {
+    const raw = team.config.governancePolicy
+    return {
+      approval: {
+        requirePlanApproval:
+          raw?.approval.requirePlanApproval ?? Boolean(team.config.requirePlanApproval),
+        requireDelegationApproval: raw?.approval.requireDelegationApproval ?? false,
+        ...(raw?.approval.requireResultReview !== undefined
+          ? { requireResultReview: raw.approval.requireResultReview }
+          : {}),
       },
-    [team.config.governancePolicy]
-  )
+      budget: {
+        tokenBudget: effectiveBudget.limit,
+        warningThreshold: effectiveBudget.warnAt,
+        criticalThreshold: effectiveBudget.critAt,
+        onCritical: effectiveBudget.onCritical,
+      },
+      escalation: raw?.escalation ?? {
+        allowOperatorPatternOverride: true,
+        pauseOnHighRisk: false,
+      },
+      ...(raw?.delivery ? { delivery: raw.delivery } : {}),
+    }
+  }, [effectiveBudget, team.config.governancePolicy, team.config.requirePlanApproval])
 
   const patchConfig = useCallback(
     (patch: Partial<AgentTeamConfig>) => {
@@ -254,15 +266,17 @@ export function GovernanceSection({ team }: GovernanceSectionProps) {
               max={1}
               step={0.05}
               value={policy.budget.warningThreshold}
-              onChange={(e) =>
+              onChange={(e) => {
+                const nextWarn = clamp(parseFloat(e.target.value), 0, 1)
                 patchPolicy({
                   ...policy,
                   budget: {
                     ...policy.budget,
-                    warningThreshold: clamp(parseFloat(e.target.value), 0, 1),
+                    warningThreshold: nextWarn,
+                    criticalThreshold: Math.max(nextWarn, policy.budget.criticalThreshold),
                   },
                 })
-              }
+              }}
               className="h-8 text-xs"
             />
           </div>
@@ -279,7 +293,11 @@ export function GovernanceSection({ team }: GovernanceSectionProps) {
                   ...policy,
                   budget: {
                     ...policy.budget,
-                    criticalThreshold: clamp(parseFloat(e.target.value), 0, 1),
+                    criticalThreshold: clamp(
+                      parseFloat(e.target.value),
+                      policy.budget.warningThreshold,
+                      1
+                    ),
                   },
                 })
               }
@@ -287,6 +305,17 @@ export function GovernanceSection({ team }: GovernanceSectionProps) {
             />
           </div>
         </div>
+        {effectiveBudget.conflict ? (
+          <p
+            className="text-[11px] text-amber-600 dark:text-amber-400"
+            data-testid="budget-conflict-note"
+          >
+            {t("budget.legacyConflictHint", {
+              active: effectiveBudget.conflict.legacyTokenBudget,
+              governance: effectiveBudget.conflict.governanceTokenBudget,
+            })}
+          </p>
+        ) : null}
         <div className="space-y-1">
           <Label className="text-xs">{t("budget.onCritical")}</Label>
           <Select value={policy.budget.onCritical} onValueChange={handleOnCriticalChange}>

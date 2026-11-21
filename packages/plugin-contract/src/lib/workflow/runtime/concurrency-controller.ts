@@ -17,6 +17,14 @@ export interface ConcurrencyController {
   get(): number
   /** Lower the cap to `n`. No-op when `n >= current`. */
   reduceTo(n: number): void
-  /** Fire `fn(newValue)` on each successful reduction. Returns unsubscribe. */
+  /**
+   * Temporarily freeze scheduling (`get() === 0`) while an HITL gate is open.
+   * Releasing the last active hold restores the monotone `current` cap
+   * (preserving any permanent `reduceTo` downshift) and wakes subscribers.
+   */
+  holdGate?(): () => void
+  /** True while at least one active `holdGate()` freeze is open. */
+  isHeld?(): boolean
+  /** Fire `fn(newValue)` on each effective concurrency change. Returns unsubscribe. */
   subscribe(fn: (n: number) => void): () => void
 }

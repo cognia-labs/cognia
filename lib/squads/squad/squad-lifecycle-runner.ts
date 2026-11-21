@@ -106,6 +106,12 @@ function bindSquadStoreWriter(): RunTeamLifecycleDeps["storeWriter"] {
       useAgentTeamStore.getState().setTaskStatus(taskId, status, result, error),
     updateTeammate: (teammateId: string, updates: Partial<AgentTeammate>) =>
       useAgentTeamStore.getState().updateTeammate(teammateId, updates),
+    getTaskStatus: (teamId: string, taskId: string) => {
+      const row = useAgentTeamStore.getState().tasks[taskId]
+      return row && row.teamId === teamId ? row.status : undefined
+    },
+    claimTaskForDispatch: (teamId, taskId, options) =>
+      useAgentTeamStore.getState().claimTaskForDispatch(teamId, taskId, options),
     setFinalResult: (teamId: string, result: string | undefined) =>
       useAgentTeamStore.getState().updateTeam(teamId, { finalResult: result }),
     addTask: (input) => useAgentTeamStore.getState().createTask(input),

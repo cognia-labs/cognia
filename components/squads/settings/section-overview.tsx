@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
+import { resolveEffectiveSquadBudget } from "@/lib/squads/gates/budget-guard"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
 import { EditableSettingRow } from "./editable-setting-row"
@@ -189,8 +190,8 @@ export function OverviewSection({ team }: OverviewSectionProps) {
           />
           <EditableSettingRow<string>
             label={t("tokenBudget")}
-            value={String(team.config.tokenBudget ?? 0)}
-            onCommit={(v) => patchConfig({ tokenBudget: parseInt(v, 10) || 0 })}
+            value={String(resolveEffectiveSquadBudget(team.config).limit)}
+            onCommit={(v) => patchConfig({ tokenBudget: Math.max(0, parseInt(v, 10) || 0) })}
             render={({ value, setValue, commit }) => (
               <Input
                 type="number"

@@ -2780,4 +2780,27 @@ describe("runWorkflow — re-entry replays recorded routing", () => {
     )
     expect(await completedSteps("scope-reentry")).not.toContain("n_other")
   })
+
+  it("parks when concurrency is held at 0 with inflight=0 and resumes when released (F04)", async () => {
+    const { createConcurrencyController } = await import("./concurrency-controller")
+    const concurrency = createConcurrencyController(2)
+    const release = concurrency.holdGate!()
+    const workflow = buildWorkflow(
+      [triggerNode(), setNode("n_after_hold", "resumed")],
+      [{ id: "e1", source: "n_start", target: "n_after_hold" }]
+    )
+    const running = runWorkflow({
+      workflow,
+      trigger,
+      runId: "concurrency-gate-hold",
+      concurrency,
+    })
+    await new Promise((r) => setTimeout(r, 25))
+    // Must remain parked (not failed with orchestration_stalled) until the hold releases.
+    expect(await completedSteps("concurrency-gate-hold")).toHaveLength(0)
+    release()
+    const res = await running
+    expect(res.status).toBe("succeeded")
+    expect(await completedSteps("concurrency-gate-hold")).toContain("n_after_hold")
+  })
 })

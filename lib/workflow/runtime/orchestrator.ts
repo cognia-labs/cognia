@@ -1149,9 +1149,34 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
 
     if (inflight.size === 0) {
       // Nothing scheduled and nothing in flight while work remains means the
-      // execution graph is stalled. Never persist a partial run as succeeded:
-      // surface the unresolved nodes as a structured orchestration failure.
+      // execution graph is stalled — UNLESS a gate temporarily holds
+      // concurrency at 0 with ready work waiting for approval or abort.
       if (scheduledThisTick === 0) {
+        if (
+          concurrency.isHeld?.() === true &&
+          concurrency.get() === 0 &&
+          !ac.signal.aborted &&
+          !(ac.signal.reason instanceof RunBudgetError) &&
+          order.some(isReady)
+        ) {
+          await new Promise<void>((resolve) => {
+            let unsub: () => void = () => {}
+            const finish = () => {
+              unsub()
+              ac.signal.removeEventListener("abort", finish)
+              resolve()
+            }
+            unsub = concurrency.subscribe(() => {
+              if (!concurrency.isHeld?.() || concurrency.get() > 0) finish()
+            })
+            if (!concurrency.isHeld?.() || concurrency.get() > 0 || ac.signal.aborted) {
+              finish()
+              return
+            }
+            ac.signal.addEventListener("abort", finish, { once: true })
+          })
+          continue
+        }
         const pendingStepIds = order.filter(
           (stepId) => !completed.has(stepId) && !skipped.has(stepId)
         )

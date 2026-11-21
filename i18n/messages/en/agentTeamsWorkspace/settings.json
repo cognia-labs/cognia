@@ -99,6 +99,7 @@
     "budget": {
       "criticalThreshold": "Critical threshold (0–1)",
       "heading": "Token budget",
+      "legacyConflictHint": "Active cap is {active} tokens from Overview (Governance had {governance}). Saving syncs both fields.",
       "onCritical": "On critical",
       "tokenBudget": "Token budget (0 = unlimited)",
       "warningThreshold": "Warning threshold (0–1)"

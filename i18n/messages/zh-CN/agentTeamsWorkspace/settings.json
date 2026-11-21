@@ -99,6 +99,7 @@
     "budget": {
       "criticalThreshold": "严重阈值（0–1）",
       "heading": "Token 预算",
+      "legacyConflictHint": "当前生效上限为概览中的 {active} tokens（治理中为 {governance}），保存后将自动同步两处配置。",
       "onCritical": "触发严重时",
       "tokenBudget": "Token 预算（0 = 无限）",
       "warningThreshold": "警告阈值（0–1）"
