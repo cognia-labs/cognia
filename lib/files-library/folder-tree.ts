@@ -62,3 +62,21 @@ export function flattenLibraryFolders(folders: readonly LibraryFolder[]): FlatLi
   walk(ROOT_LIBRARY_FOLDER_ID, 0)
   return out
 }
+
+/** Every folder id strictly inside `folderId`'s subtree, cycle-guarded. */
+export function libraryFolderDescendants(
+  folders: readonly LibraryFolder[],
+  folderId: string
+): Set<string> {
+  const out = new Set<string>()
+  const walk = (parentId: string, depth: number) => {
+    if (depth >= MAX_DEPTH) return
+    for (const child of folders) {
+      if (child.parentFolderId !== parentId || out.has(child.id) || child.id === folderId) continue
+      out.add(child.id)
+      walk(child.id, depth + 1)
+    }
+  }
+  walk(folderId, 0)
+  return out
+}

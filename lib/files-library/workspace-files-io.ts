@@ -32,7 +32,10 @@ const log = loggers.store
 
 /** Why a workspace file could not be read or opened; `files.errors.<code>`. */
 export type FilesWorkspaceFileErrorCode =
-  "files_workspace_missing" | "files_workspace_unavailable" | "files_workspace_too_large"
+  | "files_workspace_missing"
+  | "files_workspace_unavailable"
+  | "files_workspace_too_large"
+  | "files_workspace_changed"
 
 export class FilesWorkspaceFileError extends Error {
   constructor(readonly code: FilesWorkspaceFileErrorCode) {
@@ -188,6 +191,17 @@ async function readSourceChunk(
   }
 }
 
+function sourceVersionOf(
+  source: WorkspaceFileSource,
+  chunk: WorkspaceFileChunk | ResourceCaptureChunk
+): string {
+  if (source.from === "disk") {
+    const token = (chunk as Partial<WorkspaceFileChunk>).version
+    return `disk:${source.root}:${token && token.length > 0 ? token : `size:${chunk.size}`}`
+  }
+  return `ledger:${source.runId}:${chunk.size}`
+}
+
 /**
  * A slice of the file's bytes, from where it is now. Throws
  * `files_workspace_missing` when it is gone.
@@ -197,16 +211,25 @@ export async function readWorkspaceFileSlice(
   offset: number,
   length: number,
   deps: WorkspaceFileIoDeps = {}
-): Promise<{ bytes: Uint8Array<ArrayBuffer>; size: number; eof: boolean }> {
+): Promise<{ bytes: Uint8Array<ArrayBuffer>; size: number; eof: boolean; version: string }> {
   const found = await locateWorkspaceFile(location, deps)
   if (!found) throw new FilesWorkspaceFileError("files_workspace_missing")
   const chunk = await readSourceChunk(found, offset, length, deps)
-  return { bytes: decodeBase64(chunk.dataBase64), size: chunk.size, eof: chunk.eof }
+  return {
+    bytes: decodeBase64(chunk.dataBase64),
+    size: chunk.size,
+    eof: chunk.eof,
+    version: sourceVersionOf(found, chunk),
+  }
 }
 
+/** How many attempts `readWorkspaceFileBytes` makes when a file changes mid-read. */
+const WORKSPACE_READ_ATTEMPTS = 2
+
 /**
- * The whole file, read a chunk at a time. Throws `files_workspace_missing`
- * when it is gone and `files_workspace_too_large` over `maxBytes`.
+ * The whole file, read a chunk at a time under one version token. Throws
+ * `files_workspace_missing` when it is gone, `files_workspace_too_large` over
+ * `maxBytes`, and `files_workspace_changed` if it keeps changing mid-read.
  */
 export async function readWorkspaceFileBytes(
   location: LibraryItemWorkspaceLocation,
@@ -214,27 +237,48 @@ export async function readWorkspaceFileBytes(
   deps: WorkspaceFileIoDeps = {}
 ): Promise<Uint8Array<ArrayBuffer>> {
   const maxBytes = options.maxBytes ?? FILES_WORKSPACE_READ_MAX_BYTES
-  const found = await locateWorkspaceFile(location, deps)
-  if (!found) throw new FilesWorkspaceFileError("files_workspace_missing")
-  if (found.size > maxBytes) throw new FilesWorkspaceFileError("files_workspace_too_large")
-  const parts: Uint8Array[] = []
-  let offset = 0
-  for (;;) {
-    const chunk = await readSourceChunk(found, offset, WORKSPACE_CHUNK_READ_MAX_BYTES, deps)
-    const bytes = decodeBase64(chunk.dataBase64)
-    offset += bytes.byteLength
-    // A file that grew while it was read past the ceiling stops here.
-    if (offset > maxBytes) throw new FilesWorkspaceFileError("files_workspace_too_large")
-    if (bytes.byteLength > 0) parts.push(bytes)
-    if (chunk.eof || bytes.byteLength === 0) break
+  for (let attempt = 0; attempt < WORKSPACE_READ_ATTEMPTS; attempt += 1) {
+    const found = await locateWorkspaceFile(location, deps)
+    if (!found) throw new FilesWorkspaceFileError("files_workspace_missing")
+    if (found.size > maxBytes) throw new FilesWorkspaceFileError("files_workspace_too_large")
+    const parts: Uint8Array[] = []
+    let offset = 0
+    let expectedSize: number | undefined
+    let expectedVersion: string | undefined
+    let changed = false
+    for (;;) {
+      const chunk = await readSourceChunk(found, offset, WORKSPACE_CHUNK_READ_MAX_BYTES, deps)
+      if (chunk.size > maxBytes) throw new FilesWorkspaceFileError("files_workspace_too_large")
+      const chunkVersion = sourceVersionOf(found, chunk)
+      if (
+        (expectedSize !== undefined && chunk.size !== expectedSize) ||
+        (expectedVersion !== undefined && chunkVersion !== expectedVersion)
+      ) {
+        changed = true
+        break
+      }
+      expectedSize = chunk.size
+      expectedVersion = chunkVersion
+      const bytes = decodeBase64(chunk.dataBase64)
+      offset += bytes.byteLength
+      // A file that grew while it was read past the ceiling stops here.
+      if (offset > maxBytes) throw new FilesWorkspaceFileError("files_workspace_too_large")
+      if (bytes.byteLength > 0) parts.push(bytes)
+      if (chunk.eof || bytes.byteLength === 0) {
+        if (offset !== expectedSize) changed = true
+        break
+      }
+    }
+    if (changed) continue
+    const whole = new Uint8Array(offset)
+    let at = 0
+    for (const part of parts) {
+      whole.set(part, at)
+      at += part.byteLength
+    }
+    return whole
   }
-  const whole = new Uint8Array(offset)
-  let at = 0
-  for (const part of parts) {
-    whole.set(part, at)
-    at += part.byteLength
-  }
-  return whole
+  throw new FilesWorkspaceFileError("files_workspace_changed")
 }
 
 function joinHostPath(root: string, relPath: string): string {

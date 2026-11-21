@@ -123,7 +123,13 @@ function FilesLibraryBody() {
   const setLens = useFilesLibraryStore((s) => s.setLens)
   const placeTitle = useFilesPlaceTitle(folders)
 
-  const onKeyDown = useFilesKeyboard({ entries, selection, trash, actions })
+  const onKeyDown = useFilesKeyboard({
+    entries,
+    selection,
+    trash,
+    actions,
+    ensureRendered: files.ensureRendered,
+  })
 
   const visible = view.visible
   const previewed = files.previewed
@@ -188,7 +194,7 @@ function FilesLibraryBody() {
       // "New" is a menu with a hidden upload input and a template submenu,
       // which the typed `primaryAction.menu` cannot carry, so it stays a
       // custom control.
-      actions={trash ? undefined : <FilesNewMenu actions={actions} />}
+      actions={trash ? undefined : <FilesNewMenu actions={actions} folders={folders} />}
       testId="files-header"
     />
   )
@@ -253,7 +259,12 @@ function FilesLibraryBody() {
           actions={actions}
           onClear={selection.clear}
         />
-        <FilesDropZone actions={actions} disabled={trash} className="flex min-h-0 flex-1 flex-col">
+        <FilesDropZone
+          actions={actions}
+          folders={folders}
+          disabled={trash}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           <div
             className="flex h-full min-h-0 flex-col overflow-y-auto"
             onKeyDown={onKeyDown}
@@ -262,6 +273,10 @@ function FilesLibraryBody() {
             <FilesRemoteNotice
               error={files.error}
               refresh={files.refresh}
+              searchError={files.searchError}
+              retrySearch={files.retrySearch}
+              searchTruncated={files.searchTruncated}
+              searchBounded={files.searchBounded}
               className="mx-4 mt-4 w-auto"
             />
             {showTemplates ? (
@@ -287,6 +302,8 @@ function FilesLibraryBody() {
                 lens={lens}
                 filtered={view.filtered}
                 onClear={resetFilters}
+                searchError={files.searchError}
+                onRetrySearch={files.retrySearch}
               />
             ) : viewMode === "grid" ? (
               <div className="flex flex-col gap-4 p-4">

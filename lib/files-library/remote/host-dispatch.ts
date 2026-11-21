@@ -235,11 +235,12 @@ async function search(
   const { query, limit } = parseSearchRequest(payload)
   const { entries } = await d.loadLibrary(parseImageLimit(payload, FILES_IMAGE_PAGE_SIZE))
   // The same rule as the page: trashed and removed items are not found.
-  const hits = entries
+  const matched = entries
     .filter((entry) => entry.trashedAt === undefined && !entry.hidden)
     .filter((entry) => matchesSearch(entry, query))
     .sort((a, b) => b.updatedAt - a.updatedAt || (a.key < b.key ? -1 : 1))
-    .slice(0, limit)
+  const truncated = matched.length > limit
+  const hits = matched.slice(0, limit)
   return {
     ok: true,
     items: hits.map((entry) => ({
@@ -250,14 +251,15 @@ async function search(
       updatedAt: entry.updatedAt,
       projectIds: entry.projectIds,
     })),
+    ...(truncated ? { truncated: true } : {}),
   }
 }
 
 /**
- * One slice of a workspace file, read off the host's disk where the file is
- * now (ADR-0223 §8). Only for a workspace file the host itself lists, so the
- * device never names a path; only under the paired ceiling, so a preview is
- * refused up front rather than streamed past what the device would show.
+ * One slice of a workspace file off the host's disk (ADR-0223 §8), or one
+ * UTF-8 slice of an artifact / canvas document that exceeded
+ * `FILES_REMOTE_TEXT_MAX` in `files_library_get`. Only for entries the host
+ * itself lists, and only up to `FILES_REMOTE_MAX_BYTES`.
  */
 async function readChunk(
   d: Resolved,
@@ -266,17 +268,34 @@ async function readChunk(
   const request = parseReadChunkRequest(payload)
   const entry = await resolveEntry(d, payload)
   if (!entry) return refused("files_remote_not_found")
-  if (entry.kind !== "workspace-file" || !entry.workspace) {
-    return refused("files_remote_invalid_request")
+  if (entry.kind === "workspace-file" && entry.workspace) {
+    const slice = await readWorkspaceFileSlice(entry.workspace, request.offset, request.length)
+    if (slice.size > FILES_REMOTE_MAX_BYTES) return refused("files_remote_too_large")
+    return {
+      ok: true,
+      dataBase64: bytesToBase64(slice.bytes),
+      size: slice.size,
+      eof: slice.eof,
+      version: slice.version,
+    }
   }
-  const slice = await readWorkspaceFileSlice(entry.workspace, request.offset, request.length)
-  if (slice.size > FILES_REMOTE_MAX_BYTES) return refused("files_remote_too_large")
-  return {
-    ok: true,
-    dataBase64: bytesToBase64(slice.bytes),
-    size: slice.size,
-    eof: slice.eof,
+  if (entry.kind === "artifact" || entry.kind === "canvas") {
+    const text = d.readDocumentText(entry)
+    if (text === null) return refused("files_remote_not_found")
+    const encoded = new TextEncoder().encode(text)
+    if (encoded.byteLength > FILES_REMOTE_MAX_BYTES) return refused("files_remote_too_large")
+    const start = Math.min(request.offset, encoded.byteLength)
+    const slice = encoded.subarray(start, Math.min(start + request.length, encoded.byteLength))
+    const hash = (await sha256Hex(text)).slice(0, 16)
+    return {
+      ok: true,
+      dataBase64: bytesToBase64(slice),
+      size: encoded.byteLength,
+      eof: start + slice.byteLength >= encoded.byteLength,
+      version: `doc:${entry.updatedAt}:${encoded.byteLength}:${hash}`,
+    }
   }
+  return refused("files_remote_invalid_request")
 }
 
 async function get(

@@ -31,6 +31,7 @@ jest.mock("@/lib/db/files-library-folders", () => {
   }
   return {
     LibraryFolderError,
+    createLibraryFolder: jest.fn(async ({ name }: { name: string }) => ({ id: `lbf_${name}` })),
     moveLibraryFolder: jest.fn(async () => {}),
     setLibraryFolderStyle: jest.fn(async () => {}),
   }
@@ -602,6 +603,42 @@ describe("upload", () => {
     await hook().upload([])
     expect(uploadFileToLibrary).not.toHaveBeenCalled()
     expect(toast.loading).not.toHaveBeenCalled()
+  })
+
+  it("uploadTree creates missing nested folders, reuses existing ones, and uploads clean leaf files (G04)", async () => {
+    const { createLibraryFolder } = jest.requireMock("@/lib/db/files-library-folders") as {
+      createLibraryFolder: jest.Mock
+    }
+    const existing: LibraryFolder[] = [
+      { id: "lbf_docs", name: "docs", parentFolderId: "root", createdAt: 1, updatedAt: 1 },
+    ]
+    await hook().uploadTree(
+      {
+        entries: [
+          { file: new File(["a"], "readme.md"), folderPath: ["docs"] },
+          { file: new File(["b"], "v1.md"), folderPath: ["docs", "api"] },
+          { file: new File(["c"], "v2.md"), folderPath: ["docs", "api"] },
+        ],
+        emptyDirectories: [["empty-dir"]],
+      },
+      { existingFolders: existing }
+    )
+    expect(createLibraryFolder).toHaveBeenCalledTimes(2)
+    expect(createLibraryFolder).toHaveBeenCalledWith({ name: "empty-dir", parentFolderId: "root" })
+    expect(createLibraryFolder).toHaveBeenCalledWith({ name: "api", parentFolderId: "lbf_docs" })
+    expect(uploadFileToLibrary).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "readme.md" }),
+      {
+        folderId: "lbf_docs",
+      }
+    )
+    expect(uploadFileToLibrary).toHaveBeenCalledWith(expect.objectContaining({ name: "v1.md" }), {
+      folderId: "lbf_api",
+    })
+    expect(uploadFileToLibrary).toHaveBeenCalledWith(expect.objectContaining({ name: "v2.md" }), {
+      folderId: "lbf_api",
+    })
+    expect(success).toHaveBeenLastCalledWith("Uploaded 3 files.")
   })
 })
 

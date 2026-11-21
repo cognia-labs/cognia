@@ -5,22 +5,27 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 jest.mock("@/lib/chat/drop-entries", () => ({
   MAX_DROPPED_DIR_FILES: 200,
-  collectDroppedFiles: jest.fn(),
+  collectDroppedFileTree: jest.fn(),
 }))
 jest.mock("sonner", () => ({ toast: { warning: jest.fn() } }))
 
 import { toast } from "sonner"
-import { collectDroppedFiles } from "@/lib/chat/drop-entries"
+import { collectDroppedFileTree } from "@/lib/chat/drop-entries"
 import { useFilesLibraryStore } from "@/stores/files-library"
 import { carriesFiles, FilesDropZone } from "./files-drop-zone"
 
-const collect = collectDroppedFiles as jest.Mock
+const collect = collectDroppedFileTree as jest.Mock
 const file = new File(["x"], "a.md")
 const transfer = { types: ["Files"], files: [file], items: [], dropEffect: "none" }
 
 beforeEach(() => {
   collect.mockReset()
-  collect.mockResolvedValue({ files: [file], directories: 0, truncated: false })
+  collect.mockResolvedValue({
+    entries: [{ file, folderPath: [] }],
+    emptyDirectories: [],
+    directories: 0,
+    truncated: false,
+  })
   useFilesLibraryStore.setState({ section: { kind: "all" } })
 })
 
@@ -45,19 +50,35 @@ it("shows a hint while files hover and uploads what is dropped", async () => {
   await waitFor(() => expect(upload).toHaveBeenCalledWith([file], undefined))
 })
 
-it("files drops in the folder in view and warns when a directory was cut short", async () => {
+it("files dropped directories as folder hierarchies and warns when cut short (G04)", async () => {
   useFilesLibraryStore.setState({ section: { kind: "folder", folderId: "lbf_1" } })
-  collect.mockResolvedValue({ files: [file], directories: 1, truncated: true })
+  const tree = {
+    entries: [{ file, folderPath: ["docs", "api"] }],
+    emptyDirectories: [],
+    directories: 1,
+    truncated: true,
+  }
+  collect.mockResolvedValue(tree)
   const upload = jest.fn(async () => {})
+  const uploadTree = jest.fn(async () => {})
+  const folders = [
+    { id: "lbf_1", name: "Specs", parentFolderId: "root", createdAt: 1, updatedAt: 1 },
+  ]
   render(
-    <FilesDropZone actions={{ upload }}>
+    <FilesDropZone actions={{ upload, uploadTree }} folders={folders}>
       <p>body</p>
     </FilesDropZone>
   )
   await act(async () => {
     fireEvent.drop(screen.getByTestId("files-drop-zone"), { dataTransfer: transfer })
   })
-  await waitFor(() => expect(upload).toHaveBeenCalledWith([file], "lbf_1"))
+  await waitFor(() =>
+    expect(uploadTree).toHaveBeenCalledWith(tree, {
+      folderId: "lbf_1",
+      existingFolders: folders,
+    })
+  )
+  expect(upload).not.toHaveBeenCalled()
   expect(toast.warning).toHaveBeenCalled()
 })
 

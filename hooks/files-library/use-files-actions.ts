@@ -16,12 +16,14 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { loggers } from "@cognia/logging"
 
+import type { DroppedFileEntry } from "@/lib/chat/drop-entries"
 import { LibraryItemError } from "@/lib/db/files-library-items"
 import { LibraryFolderError } from "@/lib/db/files-library-folders"
-import type {
-  LibraryFolder,
-  LibraryFolderColor,
-  LibraryFolderIcon,
+import {
+  ROOT_LIBRARY_FOLDER_ID,
+  type LibraryFolder,
+  type LibraryFolderColor,
+  type LibraryFolderIcon,
 } from "@/lib/db/files-library-types"
 import { deleteDocumentTemplate, DocumentTemplateError } from "@/lib/db/document-templates"
 import { SessionAssetError } from "@/lib/db/session-assets"
@@ -87,6 +89,14 @@ export interface FilesActions {
   goToConversation: (sessionId: string) => Promise<void>
   /** Into Files; into `folderId` when a folder is in view. */
   upload: (files: readonly File[], folderId?: string) => Promise<void>
+  /** Upload dropped/picked files while creating or reusing nested folder hierarchies. */
+  uploadTree: (
+    tree: {
+      entries: readonly DroppedFileEntry[]
+      emptyDirectories?: readonly (readonly string[])[]
+    },
+    options?: { folderId?: string; existingFolders?: readonly LibraryFolder[] }
+  ) => Promise<void>
   newCanvasDocument: () => void
   /** A new canvas document from a template, opened on the canvas. */
   newFromTemplate: (template: DocumentTemplateOption) => void
@@ -434,6 +444,89 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
     [ops, maxBytes, t, message]
   )
 
+  const uploadTree = useCallback(
+    async (
+      tree: {
+        entries: readonly DroppedFileEntry[]
+        emptyDirectories?: readonly (readonly string[])[]
+      },
+      options: { folderId?: string; existingFolders?: readonly LibraryFolder[] } = {}
+    ) => {
+      const emptyDirs = tree.emptyDirectories ?? []
+      if (tree.entries.length === 0 && emptyDirs.length === 0) return
+      const projectId = useProjectStore.getState().activeProjectId ?? undefined
+      const toastId =
+        tree.entries.length > 0
+          ? toast.loading(t("toasts.uploading", { count: tree.entries.length }))
+          : undefined
+      const folderCache = new Map<string, string>()
+      for (const existing of options.existingFolders ?? []) {
+        const cacheKey = `${existing.parentFolderId}\0${existing.name}`
+        if (!folderCache.has(cacheKey)) folderCache.set(cacheKey, existing.id)
+      }
+      let createdFolders = 0
+      const ensureFolderChain = async (
+        segments: readonly string[]
+      ): Promise<string | undefined> => {
+        let parentId = options.folderId ?? ROOT_LIBRARY_FOLDER_ID
+        for (const raw of segments) {
+          const name = raw.trim()
+          if (!name) continue
+          const cacheKey = `${parentId}\0${name}`
+          let folderId = folderCache.get(cacheKey)
+          if (!folderId) {
+            folderId = await ops.createFolder(name, parentId)
+            folderCache.set(cacheKey, folderId)
+            createdFolders += 1
+          }
+          parentId = folderId
+        }
+        return parentId === ROOT_LIBRARY_FOLDER_ID ? undefined : parentId
+      }
+
+      try {
+        for (const emptyChain of emptyDirs) {
+          try {
+            await ensureFolderChain(emptyChain)
+          } catch (error) {
+            fail("create-folder", error)
+          }
+        }
+        let stored = 0
+        for (const { file, folderPath } of tree.entries) {
+          if (maxBytes !== undefined && file.size > maxBytes) {
+            toast.error(
+              t("toasts.uploadFailed", {
+                name: file.name,
+                reason: t("errors.files_remote_too_large"),
+              })
+            )
+            continue
+          }
+          try {
+            const targetFolderId =
+              folderPath.length > 0 ? await ensureFolderChain(folderPath) : options.folderId
+            await ops.upload(file, {
+              ...(projectId ? { projectId } : {}),
+              ...(targetFolderId ? { folderId: targetFolderId } : {}),
+            })
+            stored += 1
+          } catch (error) {
+            log.warn("files upload failed", { name: file.name, error: String(error) })
+            toast.error(t("toasts.uploadFailed", { name: file.name, reason: message(error) }))
+          }
+        }
+        if (stored > 0) toast.success(t("toasts.uploaded", { count: stored }))
+        else if (createdFolders > 0 && tree.entries.length === 0) {
+          toast.success(t("toasts.foldersCreated", { count: createdFolders }))
+        }
+      } finally {
+        if (toastId !== undefined) toast.dismiss(toastId)
+      }
+    },
+    [ops, maxBytes, t, message, fail]
+  )
+
   const openOnCanvas = useCallback(
     (id: string) => {
       useArtifactStore.getState().setActiveCanvas(id)
@@ -535,6 +628,7 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
     useInChat,
     goToConversation,
     upload,
+    uploadTree,
     newCanvasDocument,
     newFromTemplate,
     deleteTemplate,

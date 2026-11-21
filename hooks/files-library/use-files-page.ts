@@ -16,9 +16,12 @@
 import { useCallback, useMemo, useState } from "react"
 
 import type { LibraryFolder } from "@/lib/db/files-library-types"
+import { FILES_BODY_EXCERPT_CHARS } from "@/lib/files-library/aggregate"
+import { matchesLens, matchesProject, matchesSection } from "@/lib/files-library/filter"
 import type { FilesOps } from "@/lib/files-library/ops"
 import type { FilesEntry, FilesLens, FilesSection } from "@/lib/files-library/types"
 import { useFilesLibraryStore } from "@/stores/files-library"
+import { useProjectStore } from "@/stores/project/project-store"
 
 import { useFilesBackendContext, useLocalFilesBackend, type FilesSource } from "./files-backend"
 import { useFilesActions, type FilesActions } from "./use-files-actions"
@@ -44,6 +47,8 @@ export interface FilesPage {
   /** More of the view is waiting behind "Show more". */
   hasMore: boolean
   showMore: () => void
+  /** Expand the rendered slice if needed so `key` is mounted in the DOM. */
+  ensureRendered: (key: string) => void
   /** Older images exist beyond the loaded page and this place lists images. */
   showImagesMore: boolean
   loadMoreImages: () => void
@@ -64,6 +69,17 @@ export interface FilesPage {
   refresh?: () => Promise<void>
   /** The last read of a remote library failed (a `files.errors.*` code). */
   error?: string
+  /** The last remote body search failed (`files.errors.*` code). */
+  searchError?: string
+  /** Re-run a failed remote body search. */
+  retrySearch?: () => void
+  /** True when the remote body search hit its result cap. */
+  searchTruncated?: boolean
+  /**
+   * True while searching a place that contains path-only workspace files,
+   * unextracted binary uploads, or bodies longer than the 20k-char excerpt cap.
+   */
+  searchBounded: boolean
 }
 
 /**
@@ -90,8 +106,10 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
   const lens = useFilesLibraryStore((s) => s.lens)
   const sort = useFilesLibraryStore((s) => s.sort)
   const filters = useFilesLibraryStore((s) => s.filters)
+  const projectScope = useFilesLibraryStore((s) => s.projectScope)
   const search = useFilesLibraryStore((s) => s.search)
   const selectedKey = useFilesLibraryStore((s) => s.selectedKey)
+  const activeProjectId = useProjectStore((s) => s.activeProjectId)
 
   const visible = view.visible
   // "Show more" lasts until the view changes, not until an item is trashed.
@@ -103,6 +121,33 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
     () => setLimit({ for: viewKey, count: shown + FILES_PAGE_SIZE }),
     [viewKey, shown]
   )
+  const ensureRendered = useCallback(
+    (key: string) => {
+      if (!visible) return
+      const index = visible.findIndex((entry) => entry.key === key)
+      if (index < 0) return
+      setLimit((current) => {
+        const activeShown = current.for === viewKey ? current.count : FILES_PAGE_SIZE
+        if (index < activeShown) return current
+        const nextCount = Math.ceil((index + 1) / FILES_PAGE_SIZE) * FILES_PAGE_SIZE
+        return { for: viewKey, count: nextCount }
+      })
+    },
+    [visible, viewKey]
+  )
+
+  const searchBounded = useMemo(() => {
+    if (!entries || !search.trim()) return false
+    return entries.some(
+      (entry) =>
+        matchesSection(entry, section, lens) &&
+        (section.kind === "trash" || matchesLens(entry, lens)) &&
+        matchesProject(entry, projectScope, activeProjectId) &&
+        (entry.kind === "workspace-file" ||
+          ((entry.kind === "upload" || entry.kind === "session-upload") && !entry.excerpt) ||
+          entry.searchText.length >= FILES_BODY_EXCERPT_CHARS)
+    )
+  }, [entries, search, section, lens, projectScope, activeProjectId])
 
   const folderItemCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -131,6 +176,7 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
     page,
     hasMore,
     showMore,
+    ensureRendered,
     // Offered once the loaded items are all on screen, so the two never stack.
     showImagesMore: imagesTruncated && listsImages && !hasMore,
     loadMoreImages,
@@ -144,7 +190,11 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
     folderItemCounts,
     previewed: entries?.find((entry) => entry.key === selectedKey),
     ops,
+    searchBounded,
     ...(source.refresh ? { refresh: source.refresh } : {}),
     ...(source.error ? { error: source.error } : {}),
+    ...(source.searchError ? { searchError: source.searchError } : {}),
+    ...(source.retrySearch ? { retrySearch: source.retrySearch } : {}),
+    ...(source.searchTruncated ? { searchTruncated: source.searchTruncated } : {}),
   }
 }

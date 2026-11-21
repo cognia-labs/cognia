@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { useState } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 
 import type { FilesEntry } from "@/lib/files-library/types"
@@ -216,4 +217,55 @@ it("prevents the default only for a command", () => {
   expect(handled).toBe(false)
   const ignored = fireEvent.keyDown(item("canvas:b"), { key: "x" })
   expect(ignored).toBe(true)
+})
+
+it("expands a paged list on ArrowDown/End via ensureRendered, and never selects an unrendered item (F04)", () => {
+  function PagedList({ expandable }: { expandable: boolean }) {
+    const [shown, setShown] = useState(2)
+    const selection = useFilesSelection(ENTRIES)
+    const onKeyDown = useFilesKeyboard({
+      entries: ENTRIES,
+      selection,
+      trash: false,
+      actions,
+      ...(expandable
+        ? {
+            ensureRendered: (key: string) => {
+              const idx = ENTRIES.findIndex((e) => e.key === key)
+              if (idx >= shown) setShown(idx + 1)
+            },
+          }
+        : {}),
+    })
+    return (
+      <div>
+        <div data-testid="list" onKeyDown={onKeyDown}>
+          {ENTRIES.slice(0, shown).map((e) => (
+            <div key={e.key} {...{ [FILES_ITEM_KEY_ATTR]: e.key }} tabIndex={0}>
+              <span>{e.title}</span>
+            </div>
+          ))}
+        </div>
+        <output data-testid="selected">{[...selection.entries.map((e) => e.key)].join(",")}</output>
+      </div>
+    )
+  }
+
+  // Without ensureRendered: selection/preview stay on canvas:b instead of drifting to invisible image:c.
+  const { unmount } = render(<PagedList expandable={false} />)
+  item("canvas:b").focus()
+  press(item("canvas:b"), { key: "ArrowDown" })
+  expect(document.activeElement).toBe(item("canvas:b"))
+  expect(selected()).toBe("")
+  expect(actions.preview).not.toHaveBeenCalled()
+  unmount()
+
+  // With ensureRendered: ArrowDown past the slice mounts image:c synchronously and focuses it.
+  render(<PagedList expandable />)
+  item("canvas:b").focus()
+  press(item("canvas:b"), { key: "ArrowDown" })
+  expect(item("image:c")).toBeInTheDocument()
+  expect(document.activeElement).toBe(item("image:c"))
+  expect(selected()).toBe("image:c")
+  expect(actions.preview).toHaveBeenLastCalledWith(expect.objectContaining({ key: "image:c" }))
 })

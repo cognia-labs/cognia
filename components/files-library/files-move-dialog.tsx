@@ -23,7 +23,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import type { FilesActions } from "@/hooks/files-library/use-files-actions"
 import { ROOT_LIBRARY_FOLDER_ID, type LibraryFolder } from "@/lib/db/files-library-types"
-import { flattenLibraryFolders } from "@/lib/files-library/folder-tree"
+import { flattenLibraryFolders, libraryFolderDescendants } from "@/lib/files-library/folder-tree"
 import type { FilesEntry } from "@/lib/files-library/types"
 import { useFilesLibraryStore } from "@/stores/files-library"
 
@@ -111,6 +111,7 @@ function FolderOption({
   depth,
   icon,
   folder,
+  prefix = "files-move",
 }: {
   id: string
   label: string
@@ -118,15 +119,16 @@ function FolderOption({
   icon: "root" | "folder" | "none"
   /** Drawn in its own color and glyph. */
   folder?: LibraryFolder
+  prefix?: string
 }) {
   const Icon = icon === "root" ? HomeIcon : icon === "none" ? FolderMinusIcon : FolderIcon
-  const inputId = `files-move-${id}`
+  const inputId = `${prefix}-${id}`
   return (
     <div
       className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 hover:bg-accent/50"
       style={{ paddingLeft: `min(${0.5 + depth}rem, 40%)` }}
     >
-      <RadioGroupItem value={id} id={inputId} data-testid={`files-move-option-${id}`} />
+      <RadioGroupItem value={id} id={inputId} data-testid={`${prefix}-option-${id}`} />
       <Label
         htmlFor={inputId}
         className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-normal"
@@ -139,5 +141,89 @@ function FolderOption({
         <span className="truncate">{label}</span>
       </Label>
     </div>
+  )
+}
+
+export interface FilesMoveFolderDialogProps {
+  folders: readonly LibraryFolder[]
+  actions: Pick<FilesActions, "moveFolder">
+}
+
+/**
+ * Re-parent a folder via menu/keyboard or touch without requiring desktop pointer drag.
+ * Excludes the folder itself and all of its descendants so cycles are impossible.
+ */
+export function FilesMoveFolderDialog({ folders, actions }: FilesMoveFolderDialogProps) {
+  const t = useTranslations("files")
+  const targetId = useFilesLibraryStore((s) => s.moveFolderTarget)
+  const close = useFilesLibraryStore((s) => s.closeMoveFolder)
+  const setFolderExpanded = useFilesLibraryStore((s) => s.setFolderExpanded)
+  const moving = targetId ? folders.find((folder) => folder.id === targetId) : undefined
+  const initial = moving?.parentFolderId ?? ROOT_LIBRARY_FOLDER_ID
+  const [choice, setChoice] = useState<{ for: string; value: string } | null>(null)
+  const key = targetId ?? ""
+  const value = choice?.for === key ? choice.value : initial
+  const excluded = moving ? libraryFolderDescendants(folders, moving.id) : new Set<string>()
+  if (moving) excluded.add(moving.id)
+  const eligible = flattenLibraryFolders(folders).filter(({ folder }) => !excluded.has(folder.id))
+
+  return (
+    <Dialog open={targetId !== null} onOpenChange={(next) => (next ? undefined : close())}>
+      <DialogContent
+        className="max-h-[85vh] overflow-y-auto"
+        data-testid="files-move-folder-dialog"
+      >
+        <DialogHeader>
+          <DialogTitle>{t("moveFolderDialog.title")}</DialogTitle>
+          <DialogDescription>
+            {t("moveFolderDialog.description", { name: moving?.name ?? "" })}
+          </DialogDescription>
+        </DialogHeader>
+        <RadioGroup
+          value={value}
+          onValueChange={(next) => setChoice({ for: key, value: next })}
+          className="max-h-72 gap-1 overflow-y-auto"
+        >
+          <FolderOption
+            id={ROOT_LIBRARY_FOLDER_ID}
+            label={t("moveFolderDialog.root")}
+            depth={0}
+            icon="root"
+            prefix="files-move-folder"
+          />
+          {eligible.map(({ folder, depth }) => (
+            <FolderOption
+              key={folder.id}
+              id={folder.id}
+              label={folder.name}
+              depth={depth + 1}
+              icon="folder"
+              folder={folder}
+              prefix="files-move-folder"
+            />
+          ))}
+          {eligible.length === 0 ? (
+            <p className="px-2 py-1 text-xs text-muted-foreground">{t("moveFolderDialog.empty")}</p>
+          ) : null}
+        </RadioGroup>
+        <DialogFooter>
+          <Button variant="outline" onClick={close}>
+            {t("moveFolderDialog.cancel")}
+          </Button>
+          <Button
+            disabled={!moving}
+            onClick={() => {
+              if (!moving) return
+              close()
+              if (value !== ROOT_LIBRARY_FOLDER_ID) setFolderExpanded(value, true)
+              void actions.moveFolder(moving.id, value)
+            }}
+            data-testid="files-move-folder-confirm"
+          >
+            {t("moveFolderDialog.confirm")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -138,7 +138,7 @@ export interface FilesOps {
   artifactFor(entry: FilesEntry): Promise<Artifact | null>
   /** Put the item into a conversation's next message (or bind it to the conversation). */
   useInChat(entry: FilesEntry, newTitle: string): Promise<FilesUseInChatOutcome>
-  createFolder(name: string, parentId: string): Promise<void>
+  createFolder(name: string, parentId: string): Promise<string>
   renameFolder(folderId: string, name: string): Promise<void>
   moveFolder(folderId: string, parentId: string): Promise<void>
   setFolderStyle(
@@ -198,7 +198,7 @@ export function createLocalFilesOps(): FilesOps {
       return { sessionId: session.id, how: how === "bound" ? "bound" : "attached" }
     },
     createFolder: (name, parentId) =>
-      createLibraryFolder({ name, parentFolderId: parentId }).then(() => undefined),
+      createLibraryFolder({ name, parentFolderId: parentId }).then((folder) => folder.id),
     renameFolder: renameLibraryFolder,
     moveFolder: moveLibraryFolder,
     setFolderStyle: (folderId, style) => setLibraryFolderStyle(folderId, style),

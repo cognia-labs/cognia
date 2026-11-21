@@ -74,8 +74,19 @@ export function createRemoteFilesOps({
     }
   }
   const documentText = async (entry: FilesEntry): Promise<string | null> => {
-    const detail = await client.get(entry.key, imageLimit())
-    return detail.text ?? null
+    const limit = imageLimit()
+    const detail = await client.get(entry.key, limit)
+    if (!detail.textTruncated) return detail.text ?? null
+    if (!client.readDocumentBytes) throw new FilesRemoteError("files_remote_text_truncated")
+    try {
+      const bytes = await client.readDocumentBytes(entry, limit)
+      return new TextDecoder("utf-8").decode(bytes)
+    } catch (error) {
+      if (error instanceof FilesRemoteError && error.code === "files_remote_invalid_request") {
+        throw new FilesRemoteError("files_remote_text_truncated")
+      }
+      throw error
+    }
   }
 
   return {
@@ -136,20 +147,25 @@ export function createRemoteFilesOps({
     },
     artifactFor: async (entry) => {
       if (entry.kind !== "artifact") return null
-      const text = await documentText(entry)
-      if (text === null) return null
-      // A read-only stand-in with the host's text, for the artifact preview.
-      return {
-        id: entry.sourceId,
-        sessionId: entry.originSessionId ?? "",
-        messageId: "",
-        type: (entry.subtype ?? "code") as ArtifactType,
-        title: entry.sourceTitle,
-        content: text,
-        ...(entry.language ? { language: entry.language as never } : {}),
-        version: 1,
-        createdAt: new Date(entry.createdAt),
-        updatedAt: new Date(entry.updatedAt),
+      try {
+        const text = await documentText(entry)
+        if (text === null) return null
+        // A read-only stand-in with the host's text, for the artifact preview.
+        return {
+          id: entry.sourceId,
+          sessionId: entry.originSessionId ?? "",
+          messageId: "",
+          type: (entry.subtype ?? "code") as ArtifactType,
+          title: entry.sourceTitle,
+          content: text,
+          ...(entry.language ? { language: entry.language as never } : {}),
+          version: 1,
+          createdAt: new Date(entry.createdAt),
+          updatedAt: new Date(entry.updatedAt),
+        }
+      } catch (error) {
+        if (isGone(error)) return null
+        throw error
       }
     },
     useInChat: async (entry, newTitle) => {
@@ -175,8 +191,7 @@ export function createRemoteFilesOps({
       }
       return { sessionId: result.sessionId, how: result.how }
     },
-    createFolder: (name, parentId) =>
-      changed(client.createFolder(name, parentId)).then(() => undefined),
+    createFolder: (name, parentId) => changed(client.createFolder(name, parentId)),
     renameFolder: (folderId, name) => changed(client.renameFolder(folderId, name)),
     moveFolder: (folderId, parentId) => changed(client.moveFolder(folderId, parentId)),
     setFolderStyle: (folderId, style) => changed(client.setFolderStyle(folderId, style)),

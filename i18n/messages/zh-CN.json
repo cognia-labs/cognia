@@ -20849,9 +20849,14 @@
         "description": "你最近打开或修改的内容会显示在这里。",
         "title": "没有最近内容"
       },
+      "retrySearch": "重试搜索",
       "search": {
         "description": "没有符合搜索和筛选条件的内容。",
         "title": "没有匹配项"
+      },
+      "searchFailed": {
+        "description": "本地文件名无匹配项，且桌面端正文检索失败。",
+        "title": "无法检索文件内容"
       },
       "shared": {
         "description": "别人分享给你的协作对话中的内容会显示在这里。",
@@ -20895,11 +20900,13 @@
       "files_remote_media_unavailable": "当前连接无法传输文件内容。",
       "files_remote_not_found": "该项目已不在桌面端的文件库中。",
       "files_remote_session_unwritable": "该会话无法接收来自此设备的文件。",
+      "files_remote_text_truncated": "此连接下该文档过大，无法完整读取。请在桌面端打开或下载。",
       "files_remote_too_large": "超过 10 MB。请在桌面端打开。",
       "files_remote_unreachable": "无法连接到桌面端。",
       "files_remote_zip_too_large": "“{name}”{more, plural, =0 {} other {等另外 # 项}}超过 10 MB。请在桌面端下载。",
       "files_source_empty": "此项没有可用的内容。",
       "files_source_missing": "此项内容已不在本设备上。",
+      "files_workspace_changed": "读取过程中磁盘上的文件一直在变化。请重试。",
       "files_workspace_missing": "这个文件已不在磁盘上。",
       "files_workspace_too_large": "这个文件太大，无法在这里读取。",
       "files_workspace_unavailable": "暂时无法访问这个文件所在的工作区。",
@@ -20989,6 +20996,7 @@
       },
       "itemCount": "{count} 项",
       "menu": "文件夹「{name}」的操作",
+      "move": "移动文件夹…",
       "newFolder": "新建文件夹",
       "newSubfolder": "新建子文件夹",
       "open": "打开文件夹「{name}」",
@@ -21055,12 +21063,22 @@
       "root": "全部文件夹（顶层）",
       "title": "移到文件夹"
     },
+    "moveFolderDialog": {
+      "cancel": "取消",
+      "confirm": "移动",
+      "description": "选择「{name}」的位置，其中的内容和子文件夹会一起移动。",
+      "empty": "没有其他可选文件夹。",
+      "root": "全部文件夹（顶层）",
+      "title": "移动文件夹"
+    },
     "new": {
       "canvas": "画布文档",
       "folder": "文件夹",
       "fromTemplate": "从模板新建",
       "label": "新建",
       "upload": "上传文件",
+      "uploadFolder": "上传文件夹",
+      "uploadFolderInputAria": "选择要上传的文件夹",
       "uploadInputAria": "选择要上传的文件"
     },
     "newChatTitle": "关于 {title}",
@@ -21120,6 +21138,7 @@
       "createOnDesktopHint": "画布文档和模板需在桌面端编辑。",
       "loadFailed": "无法读取桌面端的文件库",
       "onDesktop": "需在桌面端",
+      "previewTruncated": "该文档在传输中被截断，无法在此完整显示。请在桌面端打开。",
       "readOnly": "此处为只读。请在桌面端编辑。",
       "retry": "重试",
       "shareOnDesktopHint": "分享链接需在桌面端创建。",
@@ -21140,7 +21159,11 @@
     },
     "search": {
       "aria": "按名称或内容搜索文件",
-      "placeholder": "搜索文件"
+      "bodyFailed": "无法在桌面端检索文件内容",
+      "bodyFailedHint": "当前仅匹配文件名和路径：{reason}",
+      "boundedNotice": "搜索会匹配文件名、路径以及最多 20,000 个字符的已索引文本。",
+      "placeholder": "搜索文件",
+      "truncatedNotice": "仅显示来自桌面端的前 200 条正文匹配项。请缩小搜索范围。"
     },
     "selection": {
       "select": "选择「{title}」",
@@ -21153,6 +21176,15 @@
       "aria": "文件位置",
       "noRecents": "还没有打开过内容",
       "showMore": "显示更多"
+    },
+    "sort": {
+      "asc": "升序",
+      "button": "排序",
+      "default": "默认排序",
+      "desc": "降序",
+      "direction": "顺序",
+      "label": "排序",
+      "labelActive": "按{column}排序（{direction}）"
     },
     "templates": {
       "collapse": "隐藏模板",
@@ -21177,6 +21209,7 @@
       "favorited": "已收藏「{title}」。",
       "favoritedMany": "已将 {count} 项加入收藏。",
       "folderMoved": "已移动文件夹。",
+      "foldersCreated": "已创建 {count} 个文件夹。",
       "moved": "已移动 {count} 项。",
       "referenced": "「{title}」已作为引用加入下一条消息。",
       "renamed": "已重命名为「{title}」。",

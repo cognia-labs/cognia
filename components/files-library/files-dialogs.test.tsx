@@ -11,7 +11,10 @@ function mockStub(name: string) {
   }
   return Stub
 }
-jest.mock("./files-move-dialog", () => ({ FilesMoveDialog: mockStub("move") }))
+jest.mock("./files-move-dialog", () => ({
+  FilesMoveDialog: mockStub("move"),
+  FilesMoveFolderDialog: mockStub("moveFolder"),
+}))
 jest.mock("./files-rename-dialog", () => ({ FilesRenameDialog: mockStub("rename") }))
 jest.mock("./files-save-template-dialog", () => ({ FilesSaveTemplateDialog: mockStub("template") }))
 jest.mock("./files-share-dialog", () => ({ FilesShareDialog: mockStub("share") }))
@@ -35,10 +38,20 @@ it("mounts every Files dialog once, each with what it reads", () => {
     <FilesDialogs entries={entries} folders={folders} actions={actions} onDeleted={onDeleted} />
   )
 
-  for (const name of ["move", "rename", "template", "share", "trash", "folder", "deleteFolder"]) {
+  for (const name of [
+    "move",
+    "moveFolder",
+    "rename",
+    "template",
+    "share",
+    "trash",
+    "folder",
+    "deleteFolder",
+  ]) {
     expect(screen.getAllByTestId(`dialog-${name}`)).toHaveLength(1)
   }
   expect(mockReceived.move).toMatchObject({ entries, folders, actions })
+  expect(mockReceived.moveFolder).toMatchObject({ folders, actions })
   expect(mockReceived.rename).toMatchObject({ entries, actions })
   expect(mockReceived.template).toMatchObject({ entries })
   expect(mockReceived.share).toMatchObject({ entries, folders })

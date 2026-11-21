@@ -1,4 +1,9 @@
-import { collectDroppedFiles, MAX_DROPPED_DIR_FILES } from "./drop-entries"
+import {
+  collectDroppedFiles,
+  collectDroppedFileTree,
+  entriesFromRelativeFiles,
+  MAX_DROPPED_DIR_FILES,
+} from "./drop-entries"
 
 type Entry =
   | { isFile: true; isDirectory: false; name: string; file: (ok: (f: File) => void) => void }
@@ -126,5 +131,41 @@ describe("collectDroppedFiles", () => {
 
     expect(result.files).toEqual([])
     expect(result.directories).toBe(1)
+  })
+})
+
+describe("collectDroppedFileTree & entriesFromRelativeFiles", () => {
+  it("preserves nested folder paths, clean leaf filenames, and empty directories", async () => {
+    const dt = dataTransfer([
+      fileEntry("top.txt"),
+      dirEntry("docs", [
+        fileEntry("readme.md"),
+        dirEntry("api", [fileEntry("v1.md")]),
+        dirEntry("empty-sub", []),
+      ]),
+      dirEntry("empty-root", []),
+    ])
+
+    const tree = await collectDroppedFileTree(dt)
+    expect(tree.entries.map((e) => ({ name: e.file.name, folderPath: e.folderPath }))).toEqual([
+      { name: "top.txt", folderPath: [] },
+      { name: "readme.md", folderPath: ["docs"] },
+      { name: "v1.md", folderPath: ["docs", "api"] },
+    ])
+    expect(tree.emptyDirectories).toEqual([["docs", "empty-sub"], ["empty-root"]])
+    expect(tree.directories).toBe(2)
+    expect(tree.truncated).toBe(false)
+  })
+
+  it("extracts folder chains from webkitRelativePath files", () => {
+    const nested = new File(["a"], "v1.md", { type: "text/markdown" })
+    Object.defineProperty(nested, "webkitRelativePath", { value: "docs/api/v1.md" })
+    const root = new File(["b"], "notes.md", { type: "text/markdown" })
+
+    const parsed = entriesFromRelativeFiles([nested, root])
+    expect(parsed.map((e) => ({ name: e.file.name, folderPath: e.folderPath }))).toEqual([
+      { name: "v1.md", folderPath: ["docs", "api"] },
+      { name: "notes.md", folderPath: [] },
+    ])
   })
 })

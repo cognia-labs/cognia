@@ -38,6 +38,7 @@ function Menu({ setFolderStyle }: { setFolderStyle: jest.Mock }) {
 beforeEach(() =>
   useFilesLibraryStore.setState({
     folderDialog: null,
+    moveFolderTarget: null,
     deleteFolderTarget: null,
     expandedFolderIds: [],
   })
@@ -59,7 +60,7 @@ it("creates a subfolder inside it, opening it in the tree", async () => {
   })
 })
 
-it("renames and asks before deleting", async () => {
+it("renames, moves, and asks before deleting (G02)", async () => {
   render(<Menu setFolderStyle={jest.fn()} />)
   let user = await open()
   await user.click(screen.getByRole("menuitem", { name: "Rename folder" }))
@@ -68,6 +69,9 @@ it("renames and asks before deleting", async () => {
     folderId: "lbf_a",
     name: "Specs",
   })
+  user = await open()
+  await user.click(screen.getByRole("menuitem", { name: "Move folder…" }))
+  expect(useFilesLibraryStore.getState().moveFolderTarget).toBe("lbf_a")
   user = await open()
   await user.click(screen.getByRole("menuitem", { name: "Delete folder" }))
   expect(useFilesLibraryStore.getState().deleteFolderTarget).toBe("lbf_a")

@@ -43,6 +43,8 @@ export type FilesRemoteErrorCode =
   | "files_remote_invalid_request"
   /** Larger than a paired device may move in one piece (10 MiB). */
   | "files_remote_too_large"
+  /** A document whose `files_library_get` preview was truncated and could not be streamed whole. */
+  | "files_remote_text_truncated"
   /** The conversation to use the item in no longer accepts messages. */
   | "files_remote_session_unwritable"
   /** One of the host's own write errors (`files.errors.*`). */
@@ -102,6 +104,8 @@ export interface FilesRemoteSearchHit {
 
 export interface FilesRemoteSearch {
   items: FilesRemoteSearchHit[]
+  /** True when more body matches existed on the host than `limit` returned. */
+  truncated?: boolean
 }
 
 /** `files_library_get`: the entry, and for a document its text for a read-only preview. */
@@ -113,14 +117,17 @@ export interface FilesRemoteDetail {
 }
 
 /**
- * `files_library_read_chunk`: one slice of a workspace file's bytes, read off
- * the host's disk (ADR-0223 §8). Other kinds' bytes travel as session media.
+ * `files_library_read_chunk`: one slice of a workspace file's or large
+ * document's UTF-8 bytes, read off the host (ADR-0223 §8–§9). Other kinds'
+ * bytes travel as session media.
  */
 export interface FilesRemoteReadChunk {
   dataBase64: string
-  /** The file's size when the slice was read; a change between slices restarts the read. */
+  /** The byte length when the slice was read; a change between slices restarts the read. */
   size: number
   eof: boolean
+  /** Version token of the file or document when the slice was read. */
+  version: string
 }
 
 export interface FilesRemoteDuplicate {

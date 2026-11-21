@@ -113,10 +113,11 @@ it("widens the image window and asks the host for the same entries", async () =>
   await waitFor(() => expect(c.list.mock.calls.at(-1)![0]).toBeGreaterThan(first))
 })
 
-it("asks the host which items match inside their bodies, after a pause", async () => {
+it("asks the host which items match inside their bodies, re-runs on refresh, and surfaces search errors (F05, F06)", async () => {
   jest.useFakeTimers()
   const c = client()
   const { result } = renderHook(() => useRemoteFilesBackend({ client: c }))
+  await act(async () => {})
   act(() => useFilesLibraryStore.setState({ search: "revenue" }))
   expect(c.search).not.toHaveBeenCalled()
   await act(async () => {
@@ -124,6 +125,29 @@ it("asks the host which items match inside their bodies, after a pause", async (
   })
   expect(c.search).toHaveBeenCalledWith("revenue", expect.any(Number), 200)
   expect([...result.current.source.contentMatches!]).toEqual(["artifact:b"])
+
+  // F05: refreshing the host list while search is active re-queries body matches.
+  c.search.mockResolvedValueOnce([
+    { key: "artifact:b", kind: "artifact" as const, title: "b", updatedAt: 1, projectIds: [] },
+    { key: "artifact:c", kind: "artifact" as const, title: "c", updatedAt: 2, projectIds: [] },
+  ])
+  await act(() => result.current.source.refresh!())
+  expect([...result.current.source.contentMatches!]).toEqual(["artifact:b", "artifact:c"])
+
+  // F06: a failed body search surfaces searchError instead of pretending 0 matches, and retrySearch recovers.
+  c.search.mockRejectedValueOnce(new FilesRemoteError("files_remote_unreachable"))
+  await act(() => result.current.source.refresh!())
+  expect(result.current.source.contentMatches).toBeUndefined()
+  expect(result.current.source.searchError).toBe("files_remote_unreachable")
+  c.search.mockResolvedValueOnce([
+    { key: "artifact:d", kind: "artifact" as const, title: "d", updatedAt: 3, projectIds: [] },
+  ])
+  await act(async () => {
+    result.current.source.retrySearch!()
+  })
+  expect(result.current.source.searchError).toBeUndefined()
+  expect([...result.current.source.contentMatches!]).toEqual(["artifact:d"])
+
   // A new query drops the old matches at once.
   act(() => useFilesLibraryStore.setState({ search: "other" }))
   expect(result.current.source.contentMatches).toBeUndefined()

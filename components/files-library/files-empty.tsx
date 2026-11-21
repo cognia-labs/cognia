@@ -9,6 +9,7 @@
 
 import { useTranslations } from "next-intl"
 import {
+  AlertCircleIcon,
   BotIcon,
   ClockIcon,
   FolderOpenIcon,
@@ -35,6 +36,7 @@ import type { FilesLens, FilesSection } from "@/lib/files-library/types"
 
 export type FilesEmptyCopy =
   | "search"
+  | "searchFailed"
   | "trash"
   | "favorites"
   | "mine"
@@ -49,6 +51,7 @@ export type FilesEmptyCopy =
 
 const ICONS: Record<FilesEmptyCopy, LucideIcon> = {
   search: SearchXIcon,
+  searchFailed: AlertCircleIcon,
   trash: Trash2Icon,
   favorites: StarIcon,
   mine: UserIcon,
@@ -63,15 +66,17 @@ const ICONS: Record<FilesEmptyCopy, LucideIcon> = {
 }
 
 /**
- * Which copy an empty view gets: filters first, then the Trash, a Workspace
- * files group this device lists none for, a lens, the place.
+ * Which copy an empty view gets: failed search first, filters next, then the
+ * Trash, a Workspace files group this device lists none for, a lens, the place.
  */
 export function filesEmptyCopy(
   section: FilesSection,
   lens: FilesLens,
   filtered: boolean,
-  workspaceHeldBack = false
+  workspaceHeldBack = false,
+  searchFailed = false
 ): FilesEmptyCopy {
+  if (filtered && searchFailed) return "searchFailed"
   if (filtered) return "search"
   if (section.kind === "trash") return "trash"
   const workspace = section.kind === "group" && section.group === "workspace"
@@ -85,18 +90,23 @@ export function FilesEmpty({
   lens,
   filtered,
   onClear,
+  searchError,
+  onRetrySearch,
   touch = false,
 }: {
   section: FilesSection
   lens: FilesLens
   filtered: boolean
   onClear: () => void
+  /** Set when a remote body search failed, so an empty state never claims "No matches". */
+  searchError?: string
+  onRetrySearch?: () => void
   /** The phone layout: nothing drags there, so an empty folder says how to fill it by tap. */
   touch?: boolean
 }) {
   const t = useTranslations("files.empty")
   const heldBack = useFilesOps().capabilities.workspaceFiles !== true
-  const copy = filesEmptyCopy(section, lens, filtered, heldBack)
+  const copy = filesEmptyCopy(section, lens, filtered, heldBack, Boolean(searchError))
   const Icon = ICONS[copy]
   return (
     <Empty className="border-0 py-16" data-testid={`files-empty-${copy}`}>
@@ -110,7 +120,17 @@ export function FilesEmpty({
         </EmptyDescription>
       </EmptyHeader>
       {filtered ? (
-        <EmptyContent>
+        <EmptyContent className="flex flex-wrap justify-center gap-2">
+          {searchError && onRetrySearch ? (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={onRetrySearch}
+              data-testid="files-empty-retry-search"
+            >
+              {t("retrySearch")}
+            </Button>
+          ) : null}
           <Button variant="outline" size="sm" onClick={onClear} data-testid="files-empty-clear">
             {t("clear")}
           </Button>

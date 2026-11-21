@@ -13819,6 +13819,10 @@
                 },
                 "additionalProperties": false
               }
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "Present and true when more body matches existed than limit returned."
             }
           },
           "additionalProperties": false
@@ -13943,7 +13947,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["ok", "dataBase64", "size", "eof"],
+          "required": ["ok", "dataBase64", "size", "eof", "version"],
           "properties": {
             "ok": {
               "const": true
@@ -13958,6 +13962,11 @@
             },
             "eof": {
               "type": "boolean"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Version token of the file or document when the slice was read."
             }
           },
           "additionalProperties": false

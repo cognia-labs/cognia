@@ -67,6 +67,7 @@ function client(over: Partial<FilesRemoteClient> = {}): jest.Mocked<FilesRemoteC
     upload: jest.fn(async () => "upload:new"),
     readMedia: jest.fn(async () => ({ bytes: new Uint8Array([1, 2]), mediaType: "image/png" })),
     readWorkspaceFile: jest.fn(async () => new Uint8Array()),
+    readDocumentBytes: jest.fn(async () => new TextEncoder().encode("# Full Plan\nTail")),
     ...over,
   } as unknown as jest.Mocked<FilesRemoteClient>
 }
@@ -230,6 +231,61 @@ describe("remote ops", () => {
     const ops = createRemoteFilesOps({ client: c, imageLimit: () => 60, onChanged: jest.fn() })
     await expect(ops.useInChat(entry(), "Chat")).rejects.toMatchObject({
       code: "files_source_empty",
+    })
+  })
+
+  it("streams full bytes when files_library_get truncates a large document, and refuses silent truncation", async () => {
+    const fullText = `${"x".repeat(200_000)}\nFINAL_TAIL`
+    const c = client({
+      get: jest.fn(async () => ({
+        entry: entry(),
+        text: fullText.slice(0, 128 * 1024),
+        textTruncated: true,
+      })),
+      readDocumentBytes: jest.fn(async () => new TextEncoder().encode(fullText)),
+      attach: jest.fn(async () => ({
+        sessionId: "s-phone",
+        created: false,
+        how: "referenced" as const,
+      })),
+    })
+    const ops = createRemoteFilesOps({ client: c, imageLimit: () => 60, onChanged: jest.fn() })
+    const downloaded = await ops.payloadFor(entry())
+    expect(downloaded!.blob.size).toBe(fullText.length)
+    expect((await ops.artifactFor(entry()))?.content).toBe(fullText)
+    await ops.useInChat(entry(), "Chat")
+    expect(c.readDocumentBytes).toHaveBeenCalledTimes(3)
+    expect(mockAddContextSelection.mock.calls.at(-1)![0]).toMatchObject({
+      kind: "entity",
+      entityId: "a1",
+      snapshot: expect.stringContaining("xxxxx"),
+    })
+
+    // Legacy host that refuses document chunks: never silently export/attach truncated text.
+    const legacy = client({
+      get: jest.fn(async () => ({ entry: entry(), text: "cut", textTruncated: true })),
+      readDocumentBytes: jest.fn(async () =>
+        Promise.reject(new FilesRemoteError("files_remote_invalid_request"))
+      ),
+      attach: jest.fn(async () => ({
+        sessionId: "s-phone",
+        created: false,
+        how: "referenced" as const,
+      })),
+    })
+    const legacyOps = createRemoteFilesOps({
+      client: legacy,
+      imageLimit: () => 60,
+      onChanged: jest.fn(),
+    })
+    await expect(legacyOps.payloadFor(entry())).rejects.toMatchObject({
+      code: "files_remote_text_truncated",
+    })
+    await expect(legacyOps.artifactFor(entry())).rejects.toMatchObject({
+      code: "files_remote_text_truncated",
+    })
+    await expect(legacyOps.useInChat(entry(), "Chat")).rejects.toMatchObject({
+      code: "files_remote_text_truncated",
     })
   })
 })

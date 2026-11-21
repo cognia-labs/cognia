@@ -32,6 +32,7 @@ import type { FilesEntry } from "@/lib/files-library/types"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { FilesBackendProvider, type FilesBackend } from "@/hooks/files-library/files-backend"
 import type { FilesOps } from "@/lib/files-library/ops"
+import { FilesRemoteError } from "@/lib/files-library/remote/client"
 import { PAIRED_FILES_CAPABILITIES } from "@/lib/files-library/remote/remote-ops"
 import { FilesPreviewPane } from "./files-preview-pane"
 
@@ -407,6 +408,48 @@ describe("on a paired device (ADR-0223 §9)", () => {
     )
     expect(screen.queryByTestId("files-preview-open-conversation")).toBeNull()
     expect(screen.queryByTestId("files-preview-open")).toBeNull()
+  })
+
+  it("explains truncated or oversized remote documents instead of calling them missing (F01)", async () => {
+    const truncated = remote({
+      artifactFor: jest.fn(async () =>
+        Promise.reject(new FilesRemoteError("files_remote_text_truncated"))
+      ),
+    })
+    const { unmount } = render(
+      <FilesPreviewPane
+        entry={entry({
+          key: "artifact:big",
+          kind: "artifact",
+          sourceId: "big",
+          byteSize: undefined,
+        })}
+        actions={actions()}
+        onClose={jest.fn()}
+      />,
+      { wrapper: truncated.wrapper }
+    )
+    expect(await screen.findByTestId("files-preview-truncated")).toHaveTextContent(
+      "truncated on transfer"
+    )
+    unmount()
+
+    const tooLarge = remote({
+      payloadFor: jest.fn(async () =>
+        Promise.reject(new FilesRemoteError("files_remote_too_large"))
+      ),
+    })
+    render(
+      <FilesPreviewPane
+        entry={entry({ key: "canvas:huge", kind: "canvas", sourceId: "huge", byteSize: undefined })}
+        actions={actions()}
+        onClose={jest.fn()}
+      />,
+      { wrapper: tooLarge.wrapper }
+    )
+    expect(await screen.findByTestId("files-preview-too-large")).toHaveTextContent(
+      "Too large to open here."
+    )
   })
 })
 

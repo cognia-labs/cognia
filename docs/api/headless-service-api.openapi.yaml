@@ -74935,6 +74935,7 @@ paths:
                       - dataBase64
                       - size
                       - eof
+                      - version
                     properties:
                       ok:
                         const: true
@@ -74946,6 +74947,10 @@ paths:
                         description: The file's size when the slice was read.
                       eof:
                         type: boolean
+                      version:
+                        type: string
+                        minLength: 1
+                        description: Version token of the file or document when the slice was read.
                     additionalProperties: false
                   - type: object
                     description: "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no
@@ -75591,6 +75596,9 @@ paths:
                               items:
                                 type: string
                           additionalProperties: false
+                      truncated:
+                        type: boolean
+                        description: Present and true when more body matches existed than limit returned.
                     additionalProperties: false
                   - type: object
                     description: "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no

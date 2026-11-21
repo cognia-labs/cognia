@@ -98,9 +98,14 @@
       "description": "What you opened or changed lately shows up here.",
       "title": "Nothing recent"
     },
+    "retrySearch": "Retry search",
     "search": {
       "description": "Nothing matches the search and filters.",
       "title": "No matches"
+    },
+    "searchFailed": {
+      "description": "No file names matched here, and content search failed on the desktop.",
+      "title": "Couldn’t search file contents"
     },
     "shared": {
       "description": "Items from collaboration conversations others shared with you show up here.",
@@ -144,11 +149,13 @@
     "files_remote_media_unavailable": "This connection can’t carry file contents.",
     "files_remote_not_found": "That item is no longer in the desktop’s library.",
     "files_remote_session_unwritable": "That conversation can’t take new files from this device.",
+    "files_remote_text_truncated": "This document is too large to read without truncation on this connection. Open or download it on the desktop.",
     "files_remote_too_large": "Larger than 10 MB. Open it on the desktop.",
     "files_remote_unreachable": "Couldn’t reach the desktop.",
     "files_remote_zip_too_large": "“{name}” {more, plural, =0 {is} other {and # more are}} larger than 10 MB. Download {more, plural, =0 {it} other {them}} on the desktop.",
     "files_source_empty": "This item has no content to use.",
     "files_source_missing": "This item’s content is no longer stored on this device.",
+    "files_workspace_changed": "This file kept changing on disk while it was being read. Try again.",
     "files_workspace_missing": "This file is no longer on disk.",
     "files_workspace_too_large": "This file is too large to read here.",
     "files_workspace_unavailable": "The workspace this file is in can't be reached right now.",
@@ -238,6 +245,7 @@
     },
     "itemCount": "{count, plural, one {# item} other {# items}}",
     "menu": "Folder actions for {name}",
+    "move": "Move folder…",
     "newFolder": "New folder",
     "newSubfolder": "New subfolder",
     "open": "Open folder {name}",
@@ -304,12 +312,22 @@
     "root": "All folders (top level)",
     "title": "Move to folder"
   },
+  "moveFolderDialog": {
+    "cancel": "Cancel",
+    "confirm": "Move",
+    "description": "Choose where “{name}” should live. Its items and subfolders move with it.",
+    "empty": "No other folders available.",
+    "root": "All folders (top level)",
+    "title": "Move folder"
+  },
   "new": {
     "canvas": "Canvas document",
     "folder": "Folder",
     "fromTemplate": "From template",
     "label": "New",
     "upload": "Upload files",
+    "uploadFolder": "Upload folder",
+    "uploadFolderInputAria": "Choose a folder to upload",
     "uploadInputAria": "Choose files to upload"
   },
   "newChatTitle": "About {title}",
@@ -369,6 +387,7 @@
     "createOnDesktopHint": "Canvas documents and templates are edited on the desktop app.",
     "loadFailed": "Couldn’t read the desktop’s library",
     "onDesktop": "On the desktop",
+    "previewTruncated": "This document was truncated on transfer and can’t be shown in full here. Open it on the desktop.",
     "readOnly": "Read-only here. Edit it on the desktop.",
     "retry": "Retry",
     "shareOnDesktopHint": "Share links are made on the desktop app.",
@@ -389,7 +408,11 @@
   },
   "search": {
     "aria": "Search files by name or content",
-    "placeholder": "Search files"
+    "bodyFailed": "Couldn’t search file contents on the desktop",
+    "bodyFailedHint": "Only file names and paths are matched right now: {reason}",
+    "boundedNotice": "Search matches file names, paths, and up to 20,000 characters of indexed text.",
+    "placeholder": "Search files",
+    "truncatedNotice": "Showing the first 200 content matches from the desktop. Refine your search to narrow further."
   },
   "selection": {
     "select": "Select {title}",
@@ -402,6 +425,15 @@
     "aria": "Files places",
     "noRecents": "Nothing opened yet",
     "showMore": "Show more"
+  },
+  "sort": {
+    "asc": "Ascending",
+    "button": "Sort",
+    "default": "Default order",
+    "desc": "Descending",
+    "direction": "Direction",
+    "label": "Sort",
+    "labelActive": "Sort by {column} ({direction})"
   },
   "templates": {
     "collapse": "Hide templates",
@@ -426,6 +458,7 @@
     "favorited": "Added “{title}” to favorites.",
     "favoritedMany": "Added {count, plural, one {# item} other {# items}} to favorites.",
     "folderMoved": "Moved the folder.",
+    "foldersCreated": "Created {count, plural, one {# folder} other {# folders}}.",
     "moved": "Moved {count, plural, one {# item} other {# items}}.",
     "referenced": "“{title}” is referenced in your next message.",
     "renamed": "Renamed to “{title}”.",

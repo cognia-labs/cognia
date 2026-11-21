@@ -1,5 +1,10 @@
 import type { LibraryFolder } from "@/lib/db/files-library-types"
-import { childLibraryFolders, flattenLibraryFolders, libraryFolderPath } from "./folder-tree"
+import {
+  childLibraryFolders,
+  flattenLibraryFolders,
+  libraryFolderDescendants,
+  libraryFolderPath,
+} from "./folder-tree"
 
 function folder(id: string, name: string, parentFolderId = "root"): LibraryFolder {
   return { id, name, parentFolderId, createdAt: 1, updatedAt: 1 }
@@ -32,5 +37,7 @@ describe("folder-tree", () => {
     expect(
       flattenLibraryFolders(folders).map(({ folder: f, depth }) => `${f.id}:${depth}`)
     ).toEqual(["a:0", "a1:1", "a2:1", "b:0"])
+    expect([...libraryFolderDescendants(folders, "a")].sort()).toEqual(["a1", "a2"])
+    expect([...libraryFolderDescendants(folders, "b")]).toEqual([])
   })
 })

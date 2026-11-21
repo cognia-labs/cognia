@@ -25,11 +25,31 @@ it("explains an empty Trash", () => {
   expect(screen.queryByRole("button")).toBeNull()
 })
 
-it("offers to clear a search that hid everything", async () => {
+it("offers to clear a search that hid everything, and distinguishes a failed body search (F06)", async () => {
   const onClear = jest.fn()
-  render(<FilesEmpty section={{ kind: "all" }} lens="mine" filtered onClear={onClear} />)
+  const onRetrySearch = jest.fn()
+  const { rerender } = render(
+    <FilesEmpty section={{ kind: "all" }} lens="mine" filtered onClear={onClear} />
+  )
   await userEvent.setup().click(screen.getByRole("button", { name: "Clear filters" }))
   expect(onClear).toHaveBeenCalled()
+
+  expect(filesEmptyCopy({ kind: "all" }, "suggested", true, false, true)).toBe("searchFailed")
+  rerender(
+    <FilesEmpty
+      section={{ kind: "all" }}
+      lens="suggested"
+      filtered
+      onClear={onClear}
+      searchError="files_remote_unreachable"
+      onRetrySearch={onRetrySearch}
+    />
+  )
+  expect(screen.getByTestId("files-empty-searchFailed")).toHaveTextContent(
+    "Couldn’t search file contents"
+  )
+  await userEvent.setup().click(screen.getByTestId("files-empty-retry-search"))
+  expect(onRetrySearch).toHaveBeenCalledTimes(1)
 })
 
 it("says how to fill an empty folder by tap on the phone, and by drag elsewhere", () => {

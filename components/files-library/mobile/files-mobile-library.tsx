@@ -54,6 +54,7 @@ import { FilesPreviewPane } from "../files-preview-pane"
 import { FilesRemoteNotice } from "../files-remote-notice"
 import { FilesSidebar } from "../files-sidebar"
 import { FilesTemplateStrip } from "../files-template-strip"
+import { FilesSortMenu } from "../files-toolbar"
 import { FilesMobileBulkBar } from "./files-mobile-bulk-bar"
 import { FilesMobileFolderRow } from "./files-mobile-folder-row"
 import { FilesMobileRow } from "./files-mobile-row"
@@ -175,7 +176,7 @@ export function FilesMobileLibrary() {
               {t("trash.empty")}
             </Button>
           ) : (
-            <FilesNewMenu actions={actions} compact />
+            <FilesNewMenu actions={actions} folders={folders} compact />
           )}
         </div>
         {section.kind === "folder" ? (
@@ -202,6 +203,7 @@ export function FilesMobileLibrary() {
               data-testid="files-search"
             />
           </InputGroup>
+          <FilesSortMenu compact />
           <FilesFilterPopover compact />
         </div>
       </header>
@@ -210,6 +212,10 @@ export function FilesMobileLibrary() {
         <FilesRemoteNotice
           error={files.error}
           refresh={files.refresh}
+          searchError={files.searchError}
+          retrySearch={files.retrySearch}
+          searchTruncated={files.searchTruncated}
+          searchBounded={files.searchBounded}
           touch
           className="mx-3 mt-3 w-auto"
         />
@@ -232,6 +238,8 @@ export function FilesMobileLibrary() {
             lens={lens}
             filtered={view.filtered}
             onClear={resetFilters}
+            searchError={files.searchError}
+            onRetrySearch={files.retrySearch}
             touch
           />
         ) : (

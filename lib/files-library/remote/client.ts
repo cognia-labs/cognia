@@ -142,6 +142,8 @@ export interface FilesRemoteClient {
   list(imageLimit: number): Promise<FilesRemoteLibrary>
   folders(): Promise<LibraryFolder[]>
   search(query: string, imageLimit: number, limit?: number): Promise<FilesRemoteSearchHit[]>
+  /** Full search response including whether more body matches existed past `limit`. */
+  searchQuery?(query: string, imageLimit: number, limit?: number): Promise<FilesRemoteSearch>
   get(key: string, imageLimit: number): Promise<FilesRemoteDetail>
   favorite(keys: readonly string[], favorite: boolean, imageLimit: number): Promise<void>
   move(keys: readonly string[], folderId: string | null, imageLimit: number): Promise<void>
@@ -180,9 +182,14 @@ export interface FilesRemoteClient {
   /**
    * A workspace file's bytes off the host's disk, a slice at a time (ADR-0223
    * §8), at most `FILES_REMOTE_MAX_BYTES`. Starts over once if the file
-   * changes size mid-read.
+   * changes size or version mid-read.
    */
   readWorkspaceFile(entry: FilesEntry, imageLimit: number): Promise<Uint8Array<ArrayBuffer>>
+  /**
+   * Full UTF-8 bytes of a large artifact or canvas document whose `get`
+   * preview was cut at `FILES_REMOTE_TEXT_MAX`, up to `FILES_REMOTE_MAX_BYTES`.
+   */
+  readDocumentBytes?(entry: FilesEntry, imageLimit: number): Promise<Uint8Array<ArrayBuffer>>
 }
 
 /**
@@ -214,6 +221,60 @@ export function createFilesRemoteClient(
         { idempotencyKey: key }
       )
     )
+  }
+
+  const readChunkedBytes = async (
+    entry: FilesEntry,
+    imageLimit: number
+  ): Promise<Uint8Array<ArrayBuffer>> => {
+    if (entry.byteSize !== undefined && entry.byteSize > FILES_REMOTE_MAX_BYTES) {
+      throw new FilesRemoteError("files_remote_too_large")
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const parts: Uint8Array<ArrayBuffer>[] = []
+      let offset = 0
+      let size: number | undefined
+      let version: string | undefined
+      let changed = false
+      for (;;) {
+        const chunk = await read<FilesRemoteReadChunk>(FILES_REMOTE_COMMANDS.readChunk, {
+          key: entry.key,
+          offset,
+          length: FILES_REMOTE_READ_CHUNK_MAX,
+          imageLimit,
+        })
+        if (typeof chunk.version !== "string" || chunk.version.length === 0) {
+          throw new FilesRemoteError("files_remote_invalid_answer")
+        }
+        if (
+          (size !== undefined && chunk.size !== size) ||
+          (version !== undefined && chunk.version !== version)
+        ) {
+          changed = true
+          break
+        }
+        size = chunk.size
+        version = chunk.version
+        const bytes = base64ToBytes(chunk.dataBase64)
+        if (!bytes) throw new FilesRemoteError("files_remote_invalid_answer")
+        if (bytes.byteLength > 0) parts.push(bytes)
+        offset += bytes.byteLength
+        if (offset > FILES_REMOTE_MAX_BYTES) throw new FilesRemoteError("files_remote_too_large")
+        if (chunk.eof || bytes.byteLength === 0) {
+          if (offset !== size) changed = true
+          break
+        }
+      }
+      if (changed) continue
+      const whole = new Uint8Array(offset)
+      let at = 0
+      for (const part of parts) {
+        whole.set(part, at)
+        at += part.byteLength
+      }
+      return whole
+    }
+    throw new FilesRemoteError("files_remote_busy")
   }
 
   return {
@@ -269,6 +330,9 @@ export function createFilesRemoteClient(
       return (
         await read<FilesRemoteSearch>(FILES_REMOTE_COMMANDS.search, { query, imageLimit, limit })
       ).items
+    },
+    searchQuery(query, imageLimit, limit = 50) {
+      return read<FilesRemoteSearch>(FILES_REMOTE_COMMANDS.search, { query, imageLimit, limit })
     },
     get(key, imageLimit) {
       return read<FilesRemoteDetail>(FILES_REMOTE_COMMANDS.get, { key, imageLimit })
@@ -385,44 +449,11 @@ export function createFilesRemoteClient(
         throw error
       }
     },
-    async readWorkspaceFile(entry, imageLimit) {
-      if (entry.byteSize !== undefined && entry.byteSize > FILES_REMOTE_MAX_BYTES) {
-        throw new FilesRemoteError("files_remote_too_large")
-      }
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const parts: Uint8Array<ArrayBuffer>[] = []
-        let offset = 0
-        let size: number | undefined
-        let changed = false
-        for (;;) {
-          const chunk = await read<FilesRemoteReadChunk>(FILES_REMOTE_COMMANDS.readChunk, {
-            key: entry.key,
-            offset,
-            length: FILES_REMOTE_READ_CHUNK_MAX,
-            imageLimit,
-          })
-          if (size !== undefined && chunk.size !== size) {
-            changed = true
-            break
-          }
-          size = chunk.size
-          const bytes = base64ToBytes(chunk.dataBase64)
-          if (!bytes) throw new FilesRemoteError("files_remote_invalid_answer")
-          if (bytes.byteLength > 0) parts.push(bytes)
-          offset += bytes.byteLength
-          if (offset > FILES_REMOTE_MAX_BYTES) throw new FilesRemoteError("files_remote_too_large")
-          if (chunk.eof || bytes.byteLength === 0) break
-        }
-        if (changed) continue
-        const whole = new Uint8Array(offset)
-        let at = 0
-        for (const part of parts) {
-          whole.set(part, at)
-          at += part.byteLength
-        }
-        return whole
-      }
-      throw new FilesRemoteError("files_remote_busy")
+    readWorkspaceFile(entry, imageLimit) {
+      return readChunkedBytes(entry, imageLimit)
+    },
+    readDocumentBytes(entry, imageLimit) {
+      return readChunkedBytes(entry, imageLimit)
     },
     async readMedia(entry, variant) {
       const resources = mediaResourcesFor(entry, variant)

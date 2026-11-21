@@ -9,6 +9,7 @@
  */
 
 import { useCallback, type KeyboardEvent } from "react"
+import { flushSync } from "react-dom"
 
 import type { FilesActions } from "@/hooks/files-library/use-files-actions"
 import { isEditableTarget, resolveFilesKey } from "@/lib/files-library/keyboard"
@@ -33,11 +34,14 @@ export function useFilesKeyboard({
   selection,
   trash,
   actions,
+  ensureRendered,
 }: {
   entries: readonly FilesEntry[] | undefined
   selection: FilesSelection
   trash: boolean
   actions: Pick<FilesActions, "trash" | "preview">
+  /** Mounts paged-out items synchronously so focus and selection never split. */
+  ensureRendered?: (key: string) => void
 }) {
   const { order, selected, anchorId, handleClick, selectAll, clear } = selection
 
@@ -81,15 +85,21 @@ export function useFilesKeyboard({
           if (!trash) store.openRename(command.key)
           break
         case "move": {
+          const container = event.currentTarget
+          const selector = `[${FILES_ITEM_KEY_ATTR}="${CSS.escape(command.key)}"]`
+          let node = container.querySelector<HTMLElement>(selector)
+          if (!node && ensureRendered) {
+            flushSync(() => {
+              ensureRendered(command.key)
+            })
+            node = container.querySelector<HTMLElement>(selector)
+          }
+          if (!node) break
           handleClick(command.key, { ctrlKey: false, metaKey: false, shiftKey: command.extend })
           const entry = byKey(command.key)
           if (entry && !command.extend) actions.preview(entry)
-          const container = event.currentTarget
-          const node = container.querySelector<HTMLElement>(
-            `[${FILES_ITEM_KEY_ATTR}="${CSS.escape(command.key)}"]`
-          )
-          node?.focus()
-          node?.scrollIntoView?.({ block: "nearest" })
+          node.focus()
+          node.scrollIntoView?.({ block: "nearest" })
           break
         }
         case "clear-selection":
@@ -100,6 +110,17 @@ export function useFilesKeyboard({
           break
       }
     },
-    [order, selected, anchorId, handleClick, selectAll, clear, entries, trash, actions]
+    [
+      order,
+      selected,
+      anchorId,
+      handleClick,
+      selectAll,
+      clear,
+      entries,
+      trash,
+      actions,
+      ensureRendered,
+    ]
   )
 }

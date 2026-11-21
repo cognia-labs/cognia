@@ -14,8 +14,8 @@ import { toast } from "sonner"
 import { UploadIcon } from "lucide-react"
 
 import type { FilesActions } from "@/hooks/files-library/use-files-actions"
-import { collectDroppedFiles, MAX_DROPPED_DIR_FILES } from "@/lib/chat/drop-entries"
-import { ROOT_LIBRARY_FOLDER_ID } from "@/lib/db/files-library-types"
+import { collectDroppedFileTree, MAX_DROPPED_DIR_FILES } from "@/lib/chat/drop-entries"
+import { ROOT_LIBRARY_FOLDER_ID, type LibraryFolder } from "@/lib/db/files-library-types"
 import { cn } from "@/lib/utils"
 import { useFilesLibraryStore } from "@/stores/files-library"
 
@@ -26,11 +26,13 @@ export function carriesFiles(dataTransfer: Pick<DataTransfer, "types"> | null): 
 
 export function FilesDropZone({
   actions,
+  folders,
   disabled = false,
   className,
   children,
 }: {
-  actions: Pick<FilesActions, "upload">
+  actions: Pick<FilesActions, "upload"> & Partial<Pick<FilesActions, "uploadTree">>
+  folders?: readonly LibraryFolder[]
   /** The Trash takes no uploads. */
   disabled?: boolean
   className?: string
@@ -76,9 +78,24 @@ export function FilesDropZone({
           section.kind === "folder" && section.folderId !== ROOT_LIBRARY_FOLDER_ID
             ? section.folderId
             : undefined
-        void collectDroppedFiles(event.dataTransfer).then(({ files, truncated }) => {
-          if (truncated) toast.warning(t("toasts.dropTruncated", { count: MAX_DROPPED_DIR_FILES }))
-          return actions.upload(files, folderId)
+        void collectDroppedFileTree(event.dataTransfer).then((tree) => {
+          if (tree.truncated) {
+            toast.warning(t("toasts.dropTruncated", { count: MAX_DROPPED_DIR_FILES }))
+          }
+          const hasFolders =
+            tree.directories > 0 ||
+            tree.emptyDirectories.length > 0 ||
+            tree.entries.some((entry) => entry.folderPath.length > 0)
+          if (hasFolders && actions.uploadTree) {
+            return actions.uploadTree(tree, {
+              ...(folderId ? { folderId } : {}),
+              ...(folders ? { existingFolders: folders } : {}),
+            })
+          }
+          return actions.upload(
+            tree.entries.map((entry) => entry.file),
+            folderId
+          )
         })
       }}
     >

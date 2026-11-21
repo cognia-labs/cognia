@@ -44,6 +44,14 @@ interface ListState {
   entries?: FilesEntry[]
   imagesTruncated: boolean
   folders: LibraryFolder[]
+  listRevision: number
+  error?: string
+}
+
+interface RemoteSearchState {
+  for: string
+  keys?: ReadonlySet<string>
+  truncated?: boolean
   error?: string
 }
 
@@ -61,7 +69,11 @@ export function useRemoteFilesBackend(
   const client = useMemo(() => injected ?? liveFilesRemoteClient(), [injected])
   const [imageLimit, setImageLimit] = useState(FILES_IMAGE_PAGE_SIZE)
   const imageLimitRef = useRef(imageLimit)
-  const [state, setState] = useState<ListState>({ imagesTruncated: false, folders: NO_FOLDERS })
+  const [state, setState] = useState<ListState>({
+    imagesTruncated: false,
+    folders: NO_FOLDERS,
+    listRevision: 0,
+  })
   const generation = useRef(0)
 
   useEffect(() => {
@@ -76,7 +88,12 @@ export function useRemoteFilesBackend(
         client.folders(),
       ])
       if (run !== generation.current) return
-      setState({ entries: library.entries, imagesTruncated: library.imagesTruncated, folders })
+      setState((previous) => ({
+        entries: library.entries,
+        imagesTruncated: library.imagesTruncated,
+        folders,
+        listRevision: previous.listRevision + 1,
+      }))
     } catch (error) {
       if (run !== generation.current) return
       // Keep what was shown: a failed refresh is a notice, not an empty page.
@@ -106,27 +123,63 @@ export function useRemoteFilesBackend(
 
   // Content matches for the current search, from the host.
   const search = useFilesLibraryStore((s) => s.search)
-  const [matches, setMatches] = useState<{ for: string; keys: ReadonlySet<string> } | null>(null)
+  const searchRef = useRef(search)
+  const settledQueryRef = useRef("")
+  const searchGenRef = useRef(0)
+  const [searchAttempt, setSearchAttempt] = useState(0)
+  const [matches, setMatches] = useState<RemoteSearchState | null>(null)
+
+  useEffect(() => {
+    searchRef.current = search
+  }, [search])
+
+  const executeSearch = useCallback(
+    (rawSearch: string, query: string) => {
+      const run = ++searchGenRef.current
+      const ask = client.searchQuery
+        ? client.searchQuery(query, imageLimitRef.current, 200)
+        : client.search(query, imageLimitRef.current, 200).then((items) => ({ items }))
+      void ask
+        .then((answer) => {
+          if (run !== searchGenRef.current) return
+          setMatches({
+            for: rawSearch,
+            keys: new Set(answer.items.map((hit) => hit.key)),
+            ...(answer.truncated ? { truncated: true } : {}),
+          })
+        })
+        .catch((error: unknown) => {
+          if (run !== searchGenRef.current) return
+          setMatches({ for: rawSearch, error: codeOf(error) })
+        })
+    },
+    [client]
+  )
+
   useEffect(() => {
     const query = search.trim()
-    if (!query) return
-    let cancelled = false
+    if (!query) {
+      settledQueryRef.current = ""
+      searchGenRef.current += 1
+      return
+    }
     const timer = setTimeout(() => {
-      void client
-        .search(query, imageLimitRef.current, 200)
-        .then((hits) => {
-          if (!cancelled) setMatches({ for: search, keys: new Set(hits.map((hit) => hit.key)) })
-        })
-        .catch(() => {
-          // Titles still match locally; a failed body search narrows nothing.
-          if (!cancelled) setMatches({ for: search, keys: new Set() })
-        })
+      settledQueryRef.current = query
+      executeSearch(search, query)
     }, FILES_REMOTE_SEARCH_DEBOUNCE_MS)
     return () => {
-      cancelled = true
       clearTimeout(timer)
     }
-  }, [client, search])
+  }, [client, search, executeSearch])
+
+  useEffect(() => {
+    const rawSearch = searchRef.current
+    const query = rawSearch.trim()
+    if (!query || settledQueryRef.current !== query) return
+    executeSearch(rawSearch, query)
+  }, [state.listRevision, imageLimit, searchAttempt, executeSearch])
+
+  const retrySearch = useCallback(() => setSearchAttempt((n) => n + 1), [])
 
   const loadMoreImages = useCallback(
     () => setImageLimit((limit) => limit + FILES_IMAGE_PAGE_SIZE),
@@ -145,7 +198,10 @@ export function useRemoteFilesBackend(
     (entry: FilesEntry) => createRemoteMediaLoader(client, entry),
     [client]
   )
-  const contentMatches = matches && matches.for === search ? matches.keys : undefined
+  const currentSearch = matches && matches.for === search ? matches : undefined
+  const contentMatches = currentSearch?.keys
+  const searchTruncated = currentSearch?.truncated
+  const searchError = currentSearch?.error
 
   return useMemo(
     () => ({
@@ -155,12 +211,25 @@ export function useRemoteFilesBackend(
         loadMoreImages,
         folders: state.folders,
         refresh,
+        retrySearch,
         ...(contentMatches ? { contentMatches } : {}),
+        ...(searchTruncated ? { searchTruncated } : {}),
+        ...(searchError ? { searchError } : {}),
         ...(state.error ? { error: state.error } : {}),
       },
       ops,
       mediaLoaderFor,
     }),
-    [state, loadMoreImages, refresh, contentMatches, ops, mediaLoaderFor]
+    [
+      state,
+      loadMoreImages,
+      refresh,
+      retrySearch,
+      contentMatches,
+      searchTruncated,
+      searchError,
+      ops,
+      mediaLoaderFor,
+    ]
   )
 }

@@ -35,6 +35,7 @@ import { getSessionsByIds } from "@/lib/db/sessions"
 import { goToSession } from "@/lib/files-library/open"
 import { getProviderDisplayName } from "@/lib/ai/icons"
 import type { FilesOps } from "@/lib/files-library/ops"
+import { FilesRemoteError } from "@/lib/files-library/remote/client"
 import { entryKindLabelKey, type FilesEntry } from "@/lib/files-library/types"
 import { formatBytes } from "@/lib/storage/usage"
 import { cn } from "@/lib/utils"
@@ -394,22 +395,35 @@ function LocalArtifactPreview({ entry }: { entry: FilesEntry }) {
   )
 }
 
+function classifyPreviewError(error: unknown): "too-large" | "truncated" | "missing" {
+  if (error instanceof FilesRemoteError) {
+    if (error.code === "files_remote_too_large") return "too-large"
+    if (error.code === "files_remote_text_truncated") return "truncated"
+  }
+  return "missing"
+}
+
 /** The host's artifact, read once per version of the entry. */
 function RemoteArtifactPreview({ entry, ops }: { entry: FilesEntry; ops: FilesOps }) {
   const t = useTranslations("files.preview")
   const sourceKey = `${entry.key}|${entry.updatedAt}`
-  const [state, setState] = useState<{ key: string; artifact: Artifact | null } | null>(null)
+  const [state, setState] = useState<
+    | { key: string; artifact: Artifact }
+    | { key: string; failed: "too-large" | "truncated" | "missing" }
+    | null
+  >(null)
   useEffect(() => {
     let cancelled = false
     void ops
       .artifactFor(entry)
       .then((artifact) => {
-        if (!cancelled) setState({ key: sourceKey, artifact })
+        if (cancelled) return
+        setState(artifact ? { key: sourceKey, artifact } : { key: sourceKey, failed: "missing" })
       })
       .catch((error: unknown) => {
         if (cancelled) return
         loggers.store.warn("files preview failed", { key: entry.key, error: String(error) })
-        setState({ key: sourceKey, artifact: null })
+        setState({ key: sourceKey, failed: classifyPreviewError(error) })
       })
     return () => {
       cancelled = true
@@ -424,11 +438,12 @@ function RemoteArtifactPreview({ entry, ops }: { entry: FilesEntry; ops: FilesOp
       </p>
     )
   }
-  return state.artifact ? (
-    <ArtifactPreview artifact={state.artifact} className="max-h-[60vh]" />
-  ) : (
-    <Unavailable />
-  )
+  if ("failed" in state) {
+    if (state.failed === "too-large") return <TooLarge />
+    if (state.failed === "truncated") return <PreviewTruncated />
+    return <Unavailable />
+  }
+  return <ArtifactPreview artifact={state.artifact} className="max-h-[60vh]" />
 }
 
 /** Canvas documents and uploads: the bytes as an object URL, rendered by the chat file preview. */
@@ -439,7 +454,7 @@ function BlobPreview({ entry, ops }: { entry: FilesEntry; ops: FilesOps }) {
   )
   const [state, setState] = useState<
     | { key: string; url: string; filename: string; mediaType: string }
-    | { key: string; missing: true }
+    | { key: string; failed: "too-large" | "truncated" | "missing" }
     | null
   >(null)
   const sourceKey = `${entry.key}|${entry.updatedAt}|${canvas?.content.length ?? ""}`
@@ -452,7 +467,7 @@ function BlobPreview({ entry, ops }: { entry: FilesEntry; ops: FilesOps }) {
       .then((payload) => {
         if (cancelled) return
         if (!payload) {
-          setState({ key: sourceKey, missing: true })
+          setState({ key: sourceKey, failed: "missing" })
           return
         }
         url = URL.createObjectURL(payload.blob)
@@ -468,7 +483,7 @@ function BlobPreview({ entry, ops }: { entry: FilesEntry; ops: FilesOps }) {
       .catch((error: unknown) => {
         if (cancelled) return
         loggers.store.warn("files preview failed", { key: entry.key, error: String(error) })
-        setState({ key: sourceKey, missing: true })
+        setState({ key: sourceKey, failed: classifyPreviewError(error) })
       })
     return () => {
       cancelled = true
@@ -485,7 +500,11 @@ function BlobPreview({ entry, ops }: { entry: FilesEntry; ops: FilesOps }) {
       </p>
     )
   }
-  if ("missing" in state) return <Unavailable />
+  if ("failed" in state) {
+    if (state.failed === "too-large") return <TooLarge />
+    if (state.failed === "truncated") return <PreviewTruncated />
+    return <Unavailable />
+  }
   return <FilePartPreview url={state.url} mediaType={state.mediaType} filename={state.filename} />
 }
 
@@ -494,6 +513,15 @@ function TooLarge() {
   return (
     <p className="text-sm text-muted-foreground" data-testid="files-preview-too-large">
       {t("tooLarge")}
+    </p>
+  )
+}
+
+function PreviewTruncated() {
+  const t = useTranslations("files.remote")
+  return (
+    <p className="text-sm text-muted-foreground" data-testid="files-preview-truncated">
+      {t("previewTruncated")}
     </p>
   )
 }

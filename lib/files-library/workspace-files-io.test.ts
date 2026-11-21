@@ -32,6 +32,9 @@ const absent: WorkspaceStat = { exists: false, isDir: false, size: 0, mtimeMs: 0
 
 /** A disk whose files are the given byte arrays, keyed by `<root>|<relPath>`. */
 function disk(files: Record<string, Uint8Array>, chunk = 4) {
+  const versions: Record<string, number> = {}
+  const versionOf = (key: string, bytes: Uint8Array) =>
+    `v${versions[key] ?? 1}:${bytes.byteLength}:${Array.from(bytes.slice(0, 16)).join(",")}`
   const stat = jest.fn(async (root: string, relPath: string) => {
     if (root === "/broken") throw new Error("root refused")
     const bytes = files[`${root}|${relPath}`]
@@ -39,7 +42,8 @@ function disk(files: Record<string, Uint8Array>, chunk = 4) {
   })
   const readChunk = jest.fn(
     async (root: string, relPath: string, offset: number, length: number) => {
-      const bytes = files[`${root}|${relPath}`]!
+      const key = `${root}|${relPath}`
+      const bytes = files[key]!
       const slice = bytes.slice(offset, offset + Math.min(length, chunk))
       return {
         dataBase64: btoa(String.fromCharCode(...slice)),
@@ -47,10 +51,18 @@ function disk(files: Record<string, Uint8Array>, chunk = 4) {
         bytesRead: slice.byteLength,
         size: bytes.byteLength,
         eof: offset + slice.byteLength >= bytes.byteLength,
+        version: versionOf(key, bytes),
       } satisfies WorkspaceFileChunk
     }
   )
-  return { stat, readChunk }
+  return {
+    stat,
+    readChunk,
+    replace(key: string, next: Uint8Array) {
+      files[key] = next
+      versions[key] = (versions[key] ?? 1) + 1
+    },
+  }
 }
 
 describe("where workspace files are listed", () => {
@@ -155,6 +167,7 @@ describe("a pending file whose run root is gone", () => {
       bytes: new Uint8Array([70]),
       size: 7,
       eof: true,
+      version: "ledger:run-1:7",
     })
     await expect(readWorkspaceFileBytes(pending, { maxBytes: 6 }, deps)).rejects.toMatchObject({
       code: "files_workspace_too_large",
@@ -255,7 +268,37 @@ describe("reading a workspace file", () => {
       bytes: new Uint8Array([9, 10]),
       size: 10,
       eof: true,
+      version: expect.stringMatching(/^disk:\/repo:v1:/),
     })
+  })
+
+  it("restarts on an equal-size replacement mid-read instead of splicing versions, and fails if restless", async () => {
+    const v1 = new Uint8Array([1, 1, 1, 1, 1, 1])
+    const v2 = new Uint8Array([2, 2, 2, 2, 2, 2])
+    const d = disk({ "/repo|docs/plan.md": v1 }, 4)
+    let swapped = false
+    const orig = d.readChunk.getMockImplementation()!
+    d.readChunk.mockImplementation(async (root, relPath, offset, length) => {
+      if (offset === 4 && !swapped) {
+        swapped = true
+        d.replace("/repo|docs/plan.md", v2)
+      }
+      return orig(root, relPath, offset, length)
+    })
+    await expect(readWorkspaceFileBytes(location, {}, d)).resolves.toEqual(v2)
+
+    // Keeps changing on every slice: refuses with files_workspace_changed.
+    let counter = 0
+    const restless = disk({ "/repo|docs/plan.md": v1 }, 4)
+    const restlessOrig = restless.readChunk.getMockImplementation()!
+    restless.readChunk.mockImplementation(async (root, relPath, offset, length) => {
+      counter += 1
+      restless.replace("/repo|docs/plan.md", new Uint8Array(6).fill(counter))
+      return restlessOrig(root, relPath, offset, length)
+    })
+    await expect(readWorkspaceFileBytes(location, {}, restless)).rejects.toEqual(
+      new FilesWorkspaceFileError("files_workspace_changed")
+    )
   })
 })
 

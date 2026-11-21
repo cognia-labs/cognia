@@ -33,6 +33,12 @@ export interface FilesSource {
    * the host. Absent where the entries carry their bodies.
    */
   contentMatches?: ReadonlySet<string>
+  /** True when the host's body search stopped at its hit ceiling (`limit`). */
+  searchTruncated?: boolean
+  /** The last host body search failed (`files.errors.*` code). */
+  searchError?: string
+  /** Re-run a failed host body search. */
+  retrySearch?: () => void
   /** Read the library again (pull to refresh, Retry). Absent where it is live. */
   refresh?: () => Promise<void>
   /** The last read failed; the page offers Retry. */

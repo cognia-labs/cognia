@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event"
 import type { LibraryFolder } from "@/lib/db/files-library-types"
 import type { FilesEntry } from "@/lib/files-library/types"
 import { useFilesLibraryStore } from "@/stores/files-library"
-import { FilesMoveDialog } from "./files-move-dialog"
+import { FilesMoveDialog, FilesMoveFolderDialog } from "./files-move-dialog"
 
 function entry(key: string, folderId?: string): FilesEntry {
   return {
@@ -86,4 +86,23 @@ it("bounds a deep folder picker and keeps confirmation reachable in short viewpo
   expect(screen.getByTestId("files-move-option-lbf_b").parentElement).toHaveStyle({
     paddingLeft: "min(2.5rem, 40%)",
   })
+})
+
+it("moves a folder while hiding itself and its descendants from valid destinations (G02)", async () => {
+  const moveFolder = jest.fn(async () => {})
+  const tree: LibraryFolder[] = [
+    ...folders,
+    { id: "lbf_c", name: "Archive", parentFolderId: "root", createdAt: 1, updatedAt: 1 },
+  ]
+  useFilesLibraryStore.setState({ moveFolderTarget: "lbf_a", expandedFolderIds: [] })
+  const user = userEvent.setup()
+  render(<FilesMoveFolderDialog folders={tree} actions={{ moveFolder }} />)
+  // Neither Specs (self) nor Drafts (child of Specs) may appear as targets.
+  expect(screen.queryByLabelText("Specs")).toBeNull()
+  expect(screen.queryByLabelText("Drafts")).toBeNull()
+  await user.click(screen.getByLabelText("Archive"))
+  await user.click(screen.getByTestId("files-move-folder-confirm"))
+  expect(moveFolder).toHaveBeenCalledWith("lbf_a", "lbf_c")
+  expect(useFilesLibraryStore.getState().moveFolderTarget).toBeNull()
+  expect(useFilesLibraryStore.getState().expandedFolderIds).toContain("lbf_c")
 })

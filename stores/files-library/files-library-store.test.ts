@@ -2,7 +2,6 @@ import {
   FILES_SIDEBAR_DEFAULT_PX,
   FILES_SIDEBAR_MAX_PX,
   FILES_SIDEBAR_MIN_PX,
-  migrateFilesLibraryPrefs,
   useFilesLibraryStore,
 } from "./files-library-store"
 
@@ -78,6 +77,7 @@ describe("files library store", () => {
     s.openDeleteForever(["a"])
     s.setEmptyTrashOpen(true)
     s.openFolderDialog({ mode: "create", parentId: "root" })
+    s.openMoveFolder("lbf_b")
     s.openDeleteFolder("lbf_a")
     s.openSaveTemplate("canvas:c1")
     s.openShare(["canvas:c1", "image:h"])
@@ -87,6 +87,7 @@ describe("files library store", () => {
       deleteForeverTarget: ["a"],
       emptyTrashOpen: true,
       folderDialog: { mode: "create", parentId: "root" },
+      moveFolderTarget: "lbf_b",
       deleteFolderTarget: "lbf_a",
       saveTemplateTarget: "canvas:c1",
       shareTarget: ["canvas:c1", "image:h"],
@@ -96,6 +97,7 @@ describe("files library store", () => {
     s.closeDeleteForever()
     s.setEmptyTrashOpen(false)
     s.closeFolderDialog()
+    s.closeMoveFolder()
     s.closeDeleteFolder()
     s.closeSaveTemplate()
     s.closeShare()
@@ -105,32 +107,10 @@ describe("files library store", () => {
       deleteForeverTarget: null,
       emptyTrashOpen: false,
       folderDialog: null,
+      moveFolderTarget: null,
       deleteFolderTarget: null,
       saveTemplateTarget: null,
       shareTarget: null,
     })
-  })
-})
-
-describe("migrateFilesLibraryPrefs", () => {
-  it("keeps v1's layout and scope and drops its sort and type filter", () => {
-    expect(
-      migrateFilesLibraryPrefs(
-        { viewMode: "list", sort: "updated", type: "image", projectScope: "all" },
-        1
-      )
-    ).toEqual({
-      viewMode: "list",
-      sort: null,
-      projectScope: "all",
-      sidebarWidthPx: FILES_SIDEBAR_DEFAULT_PX,
-      expandedFolderIds: [],
-      templatesCollapsed: false,
-    })
-  })
-
-  it("ignores garbage and fills defaults", () => {
-    expect(migrateFilesLibraryPrefs(null, 1)).toMatchObject({ viewMode: "grid", sort: null })
-    expect(migrateFilesLibraryPrefs({ viewMode: "tiles" }, 1)).toMatchObject({ viewMode: "grid" })
   })
 })

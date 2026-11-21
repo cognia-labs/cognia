@@ -33,3 +33,27 @@ it("reads an unknown code as the generic failure", () => {
   render(<FilesRemoteNotice error="something_new" refresh={jest.fn(async () => {})} />)
   expect(screen.getByText("Something went wrong. Try again.")).toBeInTheDocument()
 })
+
+it("surfaces failed body search with Retry, and truncated or bounded search scope notices (F06, G01)", () => {
+  const retrySearch = jest.fn()
+  const { rerender } = render(
+    <FilesRemoteNotice
+      error={undefined}
+      refresh={undefined}
+      searchError="files_remote_unreachable"
+      retrySearch={retrySearch}
+      searchBounded
+    />
+  )
+  expect(screen.getByTestId("files-search-error-notice")).toHaveTextContent(
+    "Couldn’t search file contents on the desktop"
+  )
+  fireEvent.click(screen.getByTestId("files-search-retry"))
+  expect(retrySearch).toHaveBeenCalledTimes(1)
+  expect(screen.getByTestId("files-search-bounded-notice")).toHaveTextContent("20,000 characters")
+
+  rerender(<FilesRemoteNotice error={undefined} refresh={undefined} searchTruncated />)
+  expect(screen.getByTestId("files-search-truncated-notice")).toHaveTextContent(
+    "first 200 content matches"
+  )
+})

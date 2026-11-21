@@ -49,13 +49,30 @@ it("uploads the chosen files at the top level", () => {
   expect(a.upload).toHaveBeenCalledWith([file], undefined)
 })
 
-it("files uploads in the folder in view", () => {
+it("files uploads in the folder in view, including nested folder uploads (G04)", () => {
   useFilesLibraryStore.setState({ section: { kind: "folder", folderId: "lbf_1" } })
-  const a = actions()
+  const a = { ...actions(), uploadTree: jest.fn(async () => {}) }
   render(<FilesNewMenu actions={a} />)
   const file = new File(["x"], "a.md")
   fireEvent.change(screen.getByLabelText("Choose files to upload"), { target: { files: [file] } })
   expect(a.upload).toHaveBeenCalledWith([file], "lbf_1")
+
+  const nested = new File(["y"], "v1.md")
+  Object.defineProperty(nested, "webkitRelativePath", { value: "docs/api/v1.md" })
+  fireEvent.change(screen.getByLabelText("Choose a folder to upload"), {
+    target: { files: [nested] },
+  })
+  expect(a.uploadTree).toHaveBeenCalledWith(
+    {
+      entries: [
+        expect.objectContaining({
+          folderPath: ["docs", "api"],
+          file: expect.objectContaining({ name: "v1.md" }),
+        }),
+      ],
+    },
+    { folderId: "lbf_1" }
+  )
 })
 
 it("starts a canvas document and opens a top-level new-folder dialog", async () => {

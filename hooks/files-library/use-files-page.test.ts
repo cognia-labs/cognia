@@ -88,18 +88,20 @@ it("reads the URL and reports a first load as nothing yet, not empty", () => {
   expect(result.current.actions).toBe(actions)
 })
 
-it("pages the view and keeps Show more until the view changes", () => {
+it("pages the view, expands on ensureRendered, and keeps Show more until the view changes", () => {
   entriesState.entries = Array.from({ length: FILES_PAGE_SIZE + 5 }, (_, i) =>
     entry(`artifact:${String(i).padStart(3, "0")}`)
   )
   const { result } = renderHook(() => useFilesPage())
   expect(result.current.page).toHaveLength(FILES_PAGE_SIZE)
   expect(result.current.hasMore).toBe(true)
-  act(() => result.current.showMore())
+  act(() => result.current.ensureRendered("artifact:060"))
   expect(result.current.page).toHaveLength(FILES_PAGE_SIZE + 5)
   expect(result.current.hasMore).toBe(false)
   act(() => useFilesLibraryStore.getState().setLens("mine"))
   expect(result.current.page).toHaveLength(FILES_PAGE_SIZE)
+  act(() => result.current.showMore())
+  expect(result.current.page).toHaveLength(FILES_PAGE_SIZE + 5)
 })
 
 it("offers older images only where images are listed, after the loaded page", () => {
@@ -209,6 +211,7 @@ describe("over a mounted backend (ADR-0223 §9)", () => {
   })
 
   it("finds the host's body matches the entries' own titles miss", () => {
+    const retrySearch = jest.fn()
     const backend: FilesBackend = {
       source: {
         entries: [
@@ -219,12 +222,26 @@ describe("over a mounted backend (ADR-0223 §9)", () => {
         loadMoreImages: jest.fn(),
         folders: [],
         contentMatches: new Set(["artifact:b"]),
+        searchTruncated: true,
+        searchError: "files_remote_busy",
+        retrySearch,
       },
       ops: remoteOps,
     }
     const { result } = renderHook(() => useFilesPage(), { wrapper: mounted(backend) })
     act(() => useFilesLibraryStore.getState().setSearch("revenue"))
     expect(result.current.page.map((e) => e.key)).toEqual(["artifact:b"])
+    expect(result.current.searchTruncated).toBe(true)
+    expect(result.current.searchError).toBe("files_remote_busy")
+    expect(result.current.retrySearch).toBe(retrySearch)
+  })
+
+  it("flags bounded search scope when searching a place with workspace files or unextracted uploads", () => {
+    entriesState.entries = [entry("upload:u1", { kind: "upload", searchText: "report.pdf" })]
+    const { result } = renderHook(() => useFilesPage())
+    expect(result.current.searchBounded).toBe(false)
+    act(() => useFilesLibraryStore.getState().setSearch("report"))
+    expect(result.current.searchBounded).toBe(true)
   })
 
   it("is this device's own library without a provider, with no refresh to offer", () => {

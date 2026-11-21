@@ -74,6 +74,8 @@ interface FilesLibraryState {
   deleteForeverTarget: string[] | null
   emptyTrashOpen: boolean
   folderDialog: FilesFolderDialog
+  /** Folder id the move-folder dialog acts on. */
+  moveFolderTarget: string | null
   /** Folder id the delete-folder confirmation acts on. */
   deleteFolderTarget: string | null
   /** Entry key the "Save as template" dialog saves. */
@@ -103,18 +105,14 @@ interface FilesLibraryState {
   setEmptyTrashOpen: (open: boolean) => void
   openFolderDialog: (dialog: Exclude<FilesFolderDialog, null>) => void
   closeFolderDialog: () => void
+  openMoveFolder: (folderId: string) => void
+  closeMoveFolder: () => void
   openDeleteFolder: (folderId: string) => void
   closeDeleteFolder: () => void
   openSaveTemplate: (key: string) => void
   closeSaveTemplate: () => void
   openShare: (keys: string[]) => void
   closeShare: () => void
-}
-
-/** What a v1 persisted blob (ADR-0200) carried. */
-interface PersistedV1 {
-  viewMode?: FilesViewMode
-  projectScope?: FilesProjectScope
 }
 
 type Persisted = Pick<
@@ -126,34 +124,6 @@ type Persisted = Pick<
   | "expandedFolderIds"
   | "templatesCollapsed"
 >
-
-/**
- * v1 → v2: the layout and workspace scope carry over. v1's sort was a
- * dropdown value ("recent", "updated", …) and its type filter a tab-like
- * choice; neither has a v2 equivalent, so both start fresh.
- */
-export function migrateFilesLibraryPrefs(state: unknown, version: number): Persisted {
-  const base: Persisted = {
-    viewMode: "grid",
-    sort: null,
-    projectScope: "current",
-    sidebarWidthPx: FILES_SIDEBAR_DEFAULT_PX,
-    expandedFolderIds: [],
-    templatesCollapsed: false,
-  }
-  if (!state || typeof state !== "object") return base
-  if (version < 2) {
-    const v1 = state as PersistedV1
-    return {
-      ...base,
-      ...(v1.viewMode === "grid" || v1.viewMode === "list" ? { viewMode: v1.viewMode } : {}),
-      ...(v1.projectScope === "current" || v1.projectScope === "all"
-        ? { projectScope: v1.projectScope }
-        : {}),
-    }
-  }
-  return { ...base, ...(state as Partial<Persisted>) }
-}
 
 export const useFilesLibraryStore = create<FilesLibraryState>()(
   persist(
@@ -175,6 +145,7 @@ export const useFilesLibraryStore = create<FilesLibraryState>()(
       deleteForeverTarget: null,
       emptyTrashOpen: false,
       folderDialog: null,
+      moveFolderTarget: null,
       deleteFolderTarget: null,
       saveTemplateTarget: null,
       shareTarget: null,
@@ -209,6 +180,8 @@ export const useFilesLibraryStore = create<FilesLibraryState>()(
       setEmptyTrashOpen: (emptyTrashOpen) => set({ emptyTrashOpen }),
       openFolderDialog: (folderDialog) => set({ folderDialog }),
       closeFolderDialog: () => set({ folderDialog: null }),
+      openMoveFolder: (moveFolderTarget) => set({ moveFolderTarget }),
+      closeMoveFolder: () => set({ moveFolderTarget: null }),
       openDeleteFolder: (deleteFolderTarget) => set({ deleteFolderTarget }),
       closeDeleteFolder: () => set({ deleteFolderTarget: null }),
       openSaveTemplate: (saveTemplateTarget) => set({ saveTemplateTarget }),
@@ -220,7 +193,6 @@ export const useFilesLibraryStore = create<FilesLibraryState>()(
       name: "files-library-prefs",
       version: 2,
       storage: persistLocalStorage(),
-      migrate: migrateFilesLibraryPrefs,
       partialize: (s): Persisted => ({
         viewMode: s.viewMode,
         sort: s.sort,

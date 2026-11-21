@@ -292,10 +292,11 @@ it("shows more of a long view on a full-width button", async () => {
   expect(screen.getAllByTestId(/^files-mobile-row-/)).toHaveLength(70)
 })
 
-it("searches from its own full-width field", async () => {
+it("searches from its own full-width field and offers cross-layout sorting (G05)", async () => {
   const user = userEvent.setup()
   entriesState.entries = [entry("artifact:alpha"), entry("artifact:beta")]
   render(<FilesMobileLibrary />)
+  expect(screen.getByTestId("files-sort-menu")).toHaveClass("h-10")
   await user.type(screen.getByTestId("files-search"), "beta")
   expect(useFilesLibraryStore.getState().search).toBe("beta")
 })

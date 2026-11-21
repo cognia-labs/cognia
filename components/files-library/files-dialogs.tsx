@@ -13,7 +13,7 @@ import type { FilesEntry } from "@/lib/files-library/types"
 
 import { FilesDeleteFolderDialog } from "./files-delete-folder-dialog"
 import { FilesFolderDialog } from "./files-folder-dialog"
-import { FilesMoveDialog } from "./files-move-dialog"
+import { FilesMoveDialog, FilesMoveFolderDialog } from "./files-move-dialog"
 import { FilesRenameDialog } from "./files-rename-dialog"
 import { FilesSaveTemplateDialog } from "./files-save-template-dialog"
 import { FilesShareDialog } from "./files-share-dialog"
@@ -36,6 +36,7 @@ export function FilesDialogs({ entries, folders, actions, onDeleted }: FilesDial
       <FilesShareDialog entries={entries} folders={folders} />
       <FilesTrashDialogs entries={entries} actions={actions} onDeleted={onDeleted} />
       <FilesFolderDialog />
+      <FilesMoveFolderDialog folders={folders} actions={actions} />
       <FilesDeleteFolderDialog folders={folders} />
     </>
   )

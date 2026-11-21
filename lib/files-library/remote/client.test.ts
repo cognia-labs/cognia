@@ -309,16 +309,17 @@ describe("readWorkspaceFile (ADR-0223 §8)", () => {
     sourceId: "w1",
     byteSize: 5,
   })
-  const slice = (bytes: number[], size: number, eof: boolean) => ({
+  const slice = (bytes: number[], size: number, eof: boolean, version = `v:${size}`) => ({
     ok: true,
     dataBase64: btoa(String.fromCharCode(...bytes)),
     size,
     eof,
+    version,
   })
 
   it("reads the file a slice at a time to its end", async () => {
     const t = transport({
-      files_library_read_chunk: [slice([1, 2, 3], 5, false), slice([4, 5], 5, true)],
+      files_library_read_chunk: [slice([1, 2, 3], 5, false, "v1"), slice([4, 5], 5, true, "v1")],
     })
     const bytes = await createFilesRemoteClient({ call: t.call as never }).readWorkspaceFile(
       file,
@@ -329,18 +330,40 @@ describe("readWorkspaceFile (ADR-0223 §8)", () => {
     expect(t.calls[0]!.args).toMatchObject({ key: "workspace-file:w1", imageLimit: 60 })
   })
 
-  it("starts over once when the file changes size mid-read, then gives up", async () => {
+  it("starts over once when the file changes size or equal-size version mid-read, then gives up", async () => {
     const t = transport({
       files_library_read_chunk: [slice([1], 5, false), slice([2], 6, false), slice([9], 1, true)],
     })
     await expect(
       createFilesRemoteClient({ call: t.call as never }).readWorkspaceFile(file, 60)
     ).resolves.toEqual(new Uint8Array([9]))
-    let size = 0
-    const restless = transport({ files_library_read_chunk: () => slice([1], ++size, false) })
+
+    const sameSize = transport({
+      files_library_read_chunk: [
+        slice([1, 1], 4, false, "v1"),
+        slice([2, 2], 4, true, "v2"),
+        slice([2, 2], 4, false, "v2"),
+        slice([2, 2], 4, true, "v2"),
+      ],
+    })
+    await expect(
+      createFilesRemoteClient({ call: sameSize.call as never }).readWorkspaceFile(file, 60)
+    ).resolves.toEqual(new Uint8Array([2, 2, 2, 2]))
+
+    let rev = 0
+    const restless = transport({
+      files_library_read_chunk: () => slice([1, 2], 4, false, `v${++rev}`),
+    })
     await expect(
       createFilesRemoteClient({ call: restless.call as never }).readWorkspaceFile(file, 60)
     ).rejects.toMatchObject({ code: "files_remote_busy" })
+
+    const noVersion = transport({
+      files_library_read_chunk: [{ ok: true, dataBase64: "AQ==", size: 1, eof: true }],
+    })
+    await expect(
+      createFilesRemoteClient({ call: noVersion.call as never }).readWorkspaceFile(file, 60)
+    ).rejects.toMatchObject({ code: "files_remote_invalid_answer" })
   })
 
   it("refuses what is over the paired ceiling, and raises the host's refusal", async () => {

@@ -174,14 +174,18 @@ describe("reads", () => {
     expect(page.imagesTruncated).toBe(true)
   })
 
-  it("searches bodies but never the Trash or removed items", async () => {
+  it("searches bodies but never the Trash or removed items, and flags truncated results", async () => {
     library = [
-      entry("artifact:a1", { searchText: "quarterly revenue" }),
+      entry("artifact:a1", { searchText: "quarterly revenue", updatedAt: 3 }),
+      entry("artifact:a4", { searchText: "annual revenue", updatedAt: 2 }),
       entry("artifact:a2", { searchText: "revenue", trashedAt: 5 }),
       entry("artifact:a3", { searchText: "revenue", hidden: true }),
     ]
-    const result = await call("files_library_search", { query: "revenue" })
+    const result = await call("files_library_search", { query: "revenue", limit: 1 })
     expect((result.items as { key: string }[]).map((hit) => hit.key)).toEqual(["artifact:a1"])
+    expect(result.truncated).toBe(true)
+    const full = await call("files_library_search", { query: "revenue", limit: 10 })
+    expect(full.truncated).toBeUndefined()
   })
 
   it("answers a document's text, cut at the ceiling", async () => {
@@ -240,11 +244,51 @@ describe("a workspace file's bytes (ADR-0223 §8)", () => {
       bytes: new Uint8Array([104, 105]),
       size: 2,
       eof: true,
+      version: "disk:/repo:v1",
     })
     await expect(
       call("files_library_read_chunk", { key: "workspace-file:w1", offset: 0, length: 4 })
-    ).resolves.toEqual({ ok: true, dataBase64: "aGk=", size: 2, eof: true })
+    ).resolves.toEqual({
+      ok: true,
+      dataBase64: "aGk=",
+      size: 2,
+      eof: true,
+      version: "disk:/repo:v1",
+    })
     expect(readWorkspaceFileSlice).toHaveBeenCalledWith(workspace, 0, 4)
+  })
+
+  it("streams full UTF-8 slices of large artifact and canvas documents with a content version", async () => {
+    library = [entry("artifact:a1", { updatedAt: 7 }), entry("canvas:c1", { updatedAt: 9 })]
+    texts["artifact:a1"] = "hello world"
+    const first = await call("files_library_read_chunk", {
+      key: "artifact:a1",
+      offset: 0,
+      length: 5,
+    })
+    const second = await call("files_library_read_chunk", {
+      key: "artifact:a1",
+      offset: 5,
+      length: 10,
+    })
+    expect(first).toMatchObject({
+      ok: true,
+      dataBase64: btoa("hello"),
+      size: 11,
+      eof: false,
+      version: expect.stringMatching(/^doc:7:11:[0-9a-f]{16}$/),
+    })
+    expect(second).toMatchObject({
+      ok: true,
+      dataBase64: btoa(" world"),
+      size: 11,
+      eof: true,
+      version: first.version,
+    })
+    texts["canvas:c1"] = null
+    await expect(
+      call("files_library_read_chunk", { key: "canvas:c1", offset: 0, length: 5 })
+    ).resolves.toEqual({ ok: false, code: "files_remote_not_found" })
   })
 
   it("never reads a path the device names, nor another kind's bytes", async () => {

@@ -15,6 +15,7 @@ import { useTranslations } from "next-intl"
 import {
   ChevronDownIcon,
   FolderPlusIcon,
+  FolderUpIcon,
   LayoutTemplateIcon,
   PenLineIcon,
   PlusIcon,
@@ -36,24 +37,35 @@ import { DocumentTemplateGlyph } from "@/components/document-templates/document-
 import { useDocumentTemplates } from "@/hooks/document-templates/use-document-templates"
 import { useFilesOps } from "@/hooks/files-library/files-backend"
 import type { FilesActions } from "@/hooks/files-library/use-files-actions"
-import { ROOT_LIBRARY_FOLDER_ID } from "@/lib/db/files-library-types"
+import { entriesFromRelativeFiles } from "@/lib/chat/drop-entries"
+import { ROOT_LIBRARY_FOLDER_ID, type LibraryFolder } from "@/lib/db/files-library-types"
 import { useFilesLibraryStore } from "@/stores/files-library"
+
+const DIRECTORY_INPUT_ATTRS: Record<string, string> = {
+  webkitdirectory: "",
+  directory: "",
+}
 
 export function FilesNewMenu({
   actions,
+  folders,
   compact = false,
 }: {
-  actions: Pick<FilesActions, "upload" | "newCanvasDocument" | "newFromTemplate">
+  actions: Pick<FilesActions, "upload" | "newCanvasDocument" | "newFromTemplate"> &
+    Partial<Pick<FilesActions, "uploadTree">>
+  folders?: readonly LibraryFolder[]
   /** The phone layout: a 40px "+" instead of the labelled button. */
   compact?: boolean
 }) {
   const templates = useDocumentTemplates()
   const t = useTranslations("files")
   const inputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
   const section = useFilesLibraryStore((s) => s.section)
   const openFolderDialog = useFilesLibraryStore((s) => s.openFolderDialog)
   const folderId = section.kind === "folder" ? section.folderId : ROOT_LIBRARY_FOLDER_ID
   const createHeldBack = useFilesOps().capabilities.createDocuments !== true
+  const targetFolderId = folderId === ROOT_LIBRARY_FOLDER_ID ? undefined : folderId
 
   return (
     <>
@@ -67,7 +79,31 @@ export function FilesNewMenu({
         onChange={(event) => {
           const files = Array.from(event.target.files ?? [])
           event.target.value = ""
-          void actions.upload(files, folderId === ROOT_LIBRARY_FOLDER_ID ? undefined : folderId)
+          void actions.upload(files, targetFolderId)
+        }}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        {...DIRECTORY_INPUT_ATTRS}
+        className="hidden"
+        aria-label={t("new.uploadFolderInputAria")}
+        data-testid="files-upload-folder-input"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? [])
+          event.target.value = ""
+          if (actions.uploadTree) {
+            void actions.uploadTree(
+              { entries: entriesFromRelativeFiles(files) },
+              {
+                ...(targetFolderId ? { folderId: targetFolderId } : {}),
+                ...(folders ? { existingFolders: folders } : {}),
+              }
+            )
+            return
+          }
+          void actions.upload(files, targetFolderId)
         }}
       />
       <DropdownMenu>
@@ -96,6 +132,13 @@ export function FilesNewMenu({
           >
             <UploadIcon aria-hidden />
             {t("new.upload")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => folderInputRef.current?.click()}
+            data-testid="files-new-upload-folder"
+          >
+            <FolderUpIcon aria-hidden />
+            {t("new.uploadFolder")}
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => actions.newCanvasDocument()}

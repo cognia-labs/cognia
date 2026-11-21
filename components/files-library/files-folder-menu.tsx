@@ -7,7 +7,14 @@
  */
 
 import { useTranslations } from "next-intl"
-import { FolderPlusIcon, PaletteIcon, PencilIcon, ShapesIcon, Trash2Icon } from "lucide-react"
+import {
+  FolderInputIcon,
+  FolderPlusIcon,
+  PaletteIcon,
+  PencilIcon,
+  ShapesIcon,
+  Trash2Icon,
+} from "lucide-react"
 
 import {
   LIBRARY_FOLDER_COLORS,
@@ -27,6 +34,7 @@ export function useFilesFolderMenu(
 ): FilesMenuNode[] {
   const t = useTranslations("files")
   const openFolderDialog = useFilesLibraryStore((s) => s.openFolderDialog)
+  const openMoveFolder = useFilesLibraryStore((s) => s.openMoveFolder)
   const openDeleteFolder = useFilesLibraryStore((s) => s.openDeleteFolder)
   const setFolderExpanded = useFilesLibraryStore((s) => s.setFolderExpanded)
 
@@ -47,6 +55,13 @@ export function useFilesFolderMenu(
       label: t("folders.rename"),
       icon: PencilIcon,
       onSelect: () => openFolderDialog({ mode: "rename", folderId: folder.id, name: folder.name }),
+    },
+    {
+      type: "item",
+      id: "move",
+      label: t("folders.move"),
+      icon: FolderInputIcon,
+      onSelect: () => openMoveFolder(folder.id),
     },
     {
       type: "submenu",

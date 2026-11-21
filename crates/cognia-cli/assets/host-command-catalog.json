@@ -35932,7 +35932,8 @@
               "ok",
               "dataBase64",
               "size",
-              "eof"
+              "eof",
+              "version"
             ],
             "properties": {
               "ok": {
@@ -35948,6 +35949,11 @@
               },
               "eof": {
                 "type": "boolean"
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Version token of the file or document when the slice was read."
               }
             },
             "additionalProperties": false
@@ -36233,6 +36239,10 @@
                   },
                   "additionalProperties": false
                 }
+              },
+              "truncated": {
+                "type": "boolean",
+                "description": "Present and true when more body matches existed than limit returned."
               }
             },
             "additionalProperties": false
@@ -114586,5 +114596,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "e247550402f90269517e65618e8ef29eebd8504cb61883236233abcabb5dab26"
+  "catalogHash": "b9966de5c313c8d7f78ef4df831e926ab1ff54b147e9541e5c28fdf26da1eb80"
 }

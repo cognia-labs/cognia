@@ -105,7 +105,7 @@ describe("local Files ops", () => {
     expect((purgeTrashedItems as jest.Mock).mock.calls[0][0][0]).toMatchObject({
       ownedByFiles: true,
     })
-    await ops.createFolder("New", "root")
+    expect(await ops.createFolder("New", "root")).toBe("lbf_new")
     expect(createLibraryFolder).toHaveBeenCalledWith({ name: "New", parentFolderId: "root" })
     await ops.deleteFolder("lbf_1", "reparent")
     expect(deleteLibraryFolder).toHaveBeenCalledWith("lbf_1", "reparent")
