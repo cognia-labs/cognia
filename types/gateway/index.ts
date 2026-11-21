@@ -661,6 +661,13 @@ export interface GatewayRequestOutcome extends GatewayAccountScope {
   /** Gateway-derived affinity session key (W1.3) — a successful outcome pins
    * this deployment; a permanent failure releases the pin. */
   sessionId?: string | null
+  /** The request this outcome answers: the key its usage row is booked under. */
+  requestId?: string | null
+  /**
+   * The Passthrough Ledger books this request's usage itself (ADR-0188); the
+   * renderer writes no row of its own for it.
+   */
+  ledgered?: boolean
 }
 
 /** One cooling / permanently-disabled upstream key (from

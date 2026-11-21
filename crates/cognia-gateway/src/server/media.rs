@@ -471,6 +471,8 @@ async fn dispatch_create(
                     Some(message),
                     None,
                     None,
+                    Some(&ctx.request_id),
+                    false,
                 );
                 // Creating media may have succeeded before the connection died.
                 // Never duplicate a billable job after an ambiguous delivery.
@@ -513,6 +515,8 @@ async fn dispatch_create(
                     Some(&message),
                     None,
                     None,
+                    Some(&ctx.request_id),
+                    false,
                 );
                 return logged_error(
                     state,
@@ -550,6 +554,8 @@ async fn dispatch_create(
                 Some(&message),
                 cooldown,
                 None,
+                Some(&ctx.request_id),
+                false,
             );
             // Only a definite refusal is safe to move to another media account.
             let safe_to_retry = matches!(status.as_u16(), 404 | 405 | 429);
@@ -685,6 +691,8 @@ async fn dispatch_create(
             None,
             None,
             None,
+            Some(&ctx.request_id),
+            false,
         );
         log_success_status(
             state,
@@ -811,6 +819,8 @@ fn failed_response(
         Some(message),
         None,
         None,
+        Some(&ctx.request_id),
+        false,
     );
     logged_error(
         state,
@@ -1272,6 +1282,8 @@ fn video_followup_terminal(
         error,
         None,
         None,
+        Some(&ctx.request_id),
+        false,
     );
     emit_request_log_ctx(
         state.host.as_ref(),

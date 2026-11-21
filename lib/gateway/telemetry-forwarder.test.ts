@@ -100,6 +100,15 @@ describe("gatewayUsageOperationId", () => {
   it("falls back to an anonymous scope when the gateway reports no session", () => {
     expect(gatewayUsageOperationId(base, 1000)).toContain(":anon:")
   })
+
+  it("keys a request by its own id, whatever millisecond it lands in (F16)", () => {
+    const a = gatewayUsageOperationId({ ...base, requestId: "req-a" }, 1000)
+    const b = gatewayUsageOperationId({ ...base, requestId: "req-b" }, 1000)
+    expect(a).toBe("gw:req-a")
+    expect(a).not.toBe(b)
+    // A redelivered outcome for the same request lands on the same row.
+    expect(gatewayUsageOperationId({ ...base, requestId: "req-a" }, 9999)).toBe(a)
+  })
 })
 
 describe("forwardGatewayOutcome", () => {
@@ -132,9 +141,34 @@ describe("forwardGatewayOutcome", () => {
     )
   })
 
-  it("bills nothing for a failed request", () => {
-    forwardGatewayOutcome({ ...base, ok: false, errorMessage: "boom" })
+  it("bills nothing for a failed request that reported no tokens", () => {
+    forwardGatewayOutcome({
+      ...base,
+      ok: false,
+      errorMessage: "boom",
+      inputTokens: null,
+      outputTokens: null,
+    })
     expect(recordSurfaceUsage).not.toHaveBeenCalled()
+  })
+
+  it("books a failed request that still reported tokens: the provider billed them (F16)", () => {
+    forwardGatewayOutcome({ ...base, ok: false, errorMessage: "stream stalled", requestId: "r" })
+    expect(recordSurfaceUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationId: "gw:r",
+        usage: expect.objectContaining({ inputTokens: 10, outputTokens: 5 }),
+      })
+    )
+  })
+
+  it("leaves a request the Passthrough Ledger booked to the ledger (F20)", () => {
+    forwardGatewayOutcome({ ...base, requestId: "r", ledgered: true })
+    expect(recordSurfaceUsage).not.toHaveBeenCalled()
+    // Its health still trains the breaker.
+    expect(recordProviderOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "openai", ok: true })
+    )
   })
 
   it("skips a success that reported no tokens at all", () => {

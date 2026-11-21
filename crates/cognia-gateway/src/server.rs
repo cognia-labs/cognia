@@ -2299,6 +2299,8 @@ async fn anthropic_count_tokens(
                 Some(&message),
                 None,
                 None,
+                Some(&ctx.request_id),
+                false,
             );
             return logged_error(
                 &state,
@@ -2719,6 +2721,7 @@ async fn openai_embeddings(
                 );
             }
         };
+        let ledgered_booked = ledgered.is_some();
         attempts_made += 1;
 
         let resp = match req.send().await {
@@ -2747,6 +2750,8 @@ async fn openai_embeddings(
                     Some(&message),
                     None,
                     None,
+                    Some(&ctx.request_id),
+                    ledgered_booked,
                 );
                 wait_before_retry(
                     &cfg,
@@ -2817,6 +2822,8 @@ async fn openai_embeddings(
                 Some(&message),
                 retry_after_ms,
                 None,
+                Some(&ctx.request_id),
+                ledgered_booked,
             );
             if will_retry {
                 wait_before_retry(
@@ -2874,6 +2881,8 @@ async fn openai_embeddings(
                     Some(&message),
                     None,
                     None,
+                    Some(&ctx.request_id),
+                    ledgered_booked,
                 );
                 let response = logged_error(
                     &state,
@@ -2937,6 +2946,8 @@ async fn openai_embeddings(
             None,
             None,
             None,
+            Some(&ctx.request_id),
+            ledgered_booked,
         );
         log_success(
             &state,
@@ -4291,6 +4302,7 @@ async fn handle_chat_once(
                 );
             }
         };
+        let ledgered_booked = ledgered.is_some();
         attempts_made += 1;
 
         let resp = match req.send().await {
@@ -4316,6 +4328,8 @@ async fn handle_chat_once(
                     Some(&message),
                     None,
                     Some(&session_id),
+                    Some(&ctx.request_id),
+                    ledgered_booked,
                 );
                 wait_before_retry(
                     &cfg,
@@ -4383,6 +4397,8 @@ async fn handle_chat_once(
                 Some(&message),
                 retry_after_ms,
                 Some(&session_id),
+                Some(&ctx.request_id),
+                ledgered_booked,
             );
             // R4: authentication failures never switch credentials/providers
             // unless a verified route ticket explicitly allows auth failover.
@@ -4624,6 +4640,9 @@ async fn buffered_response(
     ledger_bridge: std::sync::Arc<dyn crate::brain_bridge::BrainBridge>,
     ledgered: Option<crate::passthrough_ledger::LedgeredAttempt>,
 ) -> Response {
+    // Whether the Passthrough Ledger books this request: then it, not the
+    // outcome's listener, writes the usage row (F20).
+    let ledgered_booked = ledgered.is_some();
     let upstream_headers_snapshot = resp.headers().clone();
     let upstream: Value = match resp.json().await {
         Ok(v) => v,
@@ -4648,6 +4667,8 @@ async fn buffered_response(
                 Some(&message),
                 None,
                 Some(session_id),
+                Some(&ctx.request_id),
+                ledgered_booked,
             );
             return logged_error(
                 &state,
@@ -4693,6 +4714,8 @@ async fn buffered_response(
             None,
             None,
             Some(session_id),
+            Some(&ctx.request_id),
+            ledgered_booked,
         );
         log_success(
             &state,
@@ -4743,6 +4766,8 @@ async fn buffered_response(
                 None,
                 None,
                 Some(session_id),
+                Some(&ctx.request_id),
+                ledgered_booked,
             );
             log_success(
                 &state,
@@ -4777,6 +4802,8 @@ async fn buffered_response(
                 Some(&err.reason),
                 None,
                 Some(session_id),
+                Some(&ctx.request_id),
+                ledgered_booked,
             );
             logged_error(
                 &state,
@@ -4847,6 +4874,9 @@ async fn stream_response(
     ledger_bridge: std::sync::Arc<dyn crate::brain_bridge::BrainBridge>,
     ledgered: Option<crate::passthrough_ledger::LedgeredAttempt>,
 ) -> Response {
+    // Whether the Passthrough Ledger books this request: then it, not the
+    // outcome's listener, writes the usage row (F20).
+    let ledgered_booked = ledgered.is_some();
     // Resolved here, not inside the pump tasks: the guard is a parking_lot read
     // lock and must never be held across an `.await`.
     let idle_timeout = state.config.read().stream_idle_timeout();
@@ -4930,6 +4960,8 @@ async fn stream_response(
                 stall_error.as_deref(),
                 None,
                 Some(&session_id),
+                Some(&ctx.request_id),
+                ledgered_booked,
             );
             log_success(
                 &task_state,
@@ -5049,6 +5081,8 @@ async fn stream_response(
             stall_error.as_deref(),
             None,
             Some(&session_id),
+            Some(&ctx.request_id),
+            ledgered_booked,
         );
         log_success(
             &task_state,
@@ -5148,17 +5182,35 @@ fn emit_outcome(
     // the session to this deployment; a permanent failure releases the pin.
     retry_after_ms: Option<i64>,
     session_id: Option<&str>,
+    // `request_id`: the request's own id, the one key a redelivered or
+    // same-millisecond outcome cannot collide on (F16). `ledgered`: the
+    // Passthrough Ledger books this request's usage itself, so the renderer
+    // must not write a second row for it (F20).
+    request_id: Option<&str>,
+    ledgered: bool,
 ) {
-    let payload = outcome_payload(
-        candidate,
-        ok,
-        started.elapsed().as_millis() as u64,
-        usage,
-        error,
-        retry_after_ms,
-        session_id,
+    let payload = with_outcome_identity(
+        outcome_payload(
+            candidate,
+            ok,
+            started.elapsed().as_millis() as u64,
+            usage,
+            error,
+            retry_after_ms,
+            session_id,
+        ),
+        request_id,
+        ledgered,
     );
     let _ = host.emit(REQUEST_OUTCOME_EVENT, payload);
+}
+
+/// Stamp an outcome with the request it answers and whether its usage is the
+/// Passthrough Ledger's to book.
+fn with_outcome_identity(mut payload: Value, request_id: Option<&str>, ledgered: bool) -> Value {
+    payload["requestId"] = json!(request_id);
+    payload["ledgered"] = json!(ledgered);
+    payload
 }
 
 /// The `gateway://request-outcome` body. Split out from [`emit_outcome`] so the
@@ -6343,6 +6395,22 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("stalled"));
+    }
+
+    #[test]
+    fn an_outcome_names_its_request_and_who_books_its_usage() {
+        let candidate = crate::execute::resolve_candidates(&models_snapshot(), "llama-3.3-70b")
+            .into_iter()
+            .next()
+            .expect("groq candidate");
+        let base = outcome_payload(&candidate, true, 5, Some((Some(8), Some(2))), None, None, None);
+        let ledgered = with_outcome_identity(base.clone(), Some("req-1"), true);
+        assert_eq!(ledgered["requestId"], "req-1");
+        assert_eq!(ledgered["ledgered"], true);
+        assert_eq!(ledgered["inputTokens"], 8);
+        let plain = with_outcome_identity(base, None, false);
+        assert!(plain["requestId"].is_null());
+        assert_eq!(plain["ledgered"], false);
     }
 
     #[test]

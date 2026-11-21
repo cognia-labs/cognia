@@ -39,16 +39,13 @@ export function gatewayOutcomeToProviderOutcome(o: GatewayRequestOutcome): Provi
 }
 
 /**
- * Deterministic ledger key for one gateway outcome.
- *
- * The gateway emits an outcome exactly once per served request and carries no
- * request id of its own, so the key is built from the identity it does carry
- * plus the arrival clock. Two outcomes for the same deployment in the same
- * millisecond would collapse into one row, which is the correct failure
- * direction for a billing ledger: under-count a pathological tie rather than
- * double-count every ordinary request.
+ * Ledger key for one gateway outcome: the request it answers. Two requests in
+ * the same millisecond stay two rows, and a redelivered outcome lands on the
+ * row it already wrote (F16). An outcome that names no request (none this
+ * Host's gateway sends) falls back to its identity and arrival clock.
  */
 export function gatewayUsageOperationId(o: GatewayRequestOutcome, at: number): string {
+  if (o.requestId) return `gw:${o.requestId}`
   const session = o.sessionId ?? "anon"
   return `gw:${o.providerId}:${o.modelId}:${session}:${at}`
 }
@@ -60,11 +57,16 @@ export function gatewayUsageOperationId(o: GatewayRequestOutcome, at: number): s
  * Before ADR-0165 this path reached `providerCostDaily` through the telemetry
  * sink's own rollup, which no longer exists: `sessionUsage` is the money and
  * the rollup is derived from it, so a turn that writes no ledger row is a turn
- * that does not exist. Failed requests bill nothing and write nothing.
+ * that does not exist.
+ *
+ * A request the Passthrough Ledger booked is its row, not this one: writing
+ * both counted the request twice, at two price tables (F20). A failed request
+ * that still reports tokens (a stream that stalled after the provider started
+ * answering) was billed for them, so it is booked like a success.
  */
 export function forwardGatewayOutcome(o: GatewayRequestOutcome, now: number = Date.now()): void {
   recordProviderOutcome(gatewayOutcomeToProviderOutcome(o))
-  if (!o.ok) return
+  if (o.ledgered) return
   const inputTokens = o.inputTokens ?? 0
   const outputTokens = o.outputTokens ?? 0
   if (inputTokens === 0 && outputTokens === 0) return
