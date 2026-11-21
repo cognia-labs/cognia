@@ -2637,6 +2637,14 @@ export interface ExternalAgentUsageUpdateEvent extends ExternalAgentEventBase {
   size: number
   cost?: { amount: number; currency: string } | null
   /**
+   * When `"session_context"`, `used`/`size` report live context-window occupancy
+   * and `cost` reports cumulative session spend rather than per-turn accounting.
+   * Turn meters must not backfill `totalTokens` or `providerCost` from those
+   * fields; only an explicit `tokenUsage` or terminal `done.tokenUsage` counts
+   * as turn spend. Absent preserves legacy folding.
+   */
+  usageScope?: "session_context"
+  /**
    * Per-turn-so-far prompt/completion accounting, when the agent reports
    * cumulative token counters (Devin's `cognition.ai/*` usage meta). The
    * adapter converts the wire's "across all turns" figures into turn-relative

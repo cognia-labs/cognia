@@ -11,6 +11,9 @@ import {
   PI_SYSTEM_PROMPT_ENV,
   buildPiSystemPrompt,
   PiResourceLimitError,
+  PiSessionNotFoundError,
+  PI_TURN_DELIVERY_UNCERTAIN_ERROR_CODE,
+  PiTurnDeliveryUncertainError,
   PiVersionError,
   isCogniaHandshake,
   PI_CERTIFIED_VERSION,
@@ -389,6 +392,14 @@ const AUTO_REPLY = new Map<string, unknown>([
   ["get_commands", { commands: [] }],
   ["clear_queue", { steering: [], followUp: [] }],
   ["get_session_stats", { tokens: { input: 1, output: 1, total: 2 } }],
+  [
+    "get_entries",
+    {
+      entries: [
+        { id: "e-persisted", type: "message", message: { role: "user", content: "earlier turn" } },
+      ],
+    },
+  ],
 ])
 
 /**
@@ -1744,6 +1755,7 @@ describe("PiRpcClientAdapter — streaming", () => {
         { tokens: { input: 130, output: 25, total: 155 }, cost: 1.5 },
       ],
     })
+    host.setListedSessions([{ id: "persisted", cwd: "/w" }])
     const adapter = await connected(host)
     await adapter.resumeSession("persisted", { cwd: "/w" })
     const collecting = (async () => {
@@ -1920,6 +1932,222 @@ describe("PiRpcClientAdapter — streaming", () => {
     await expect(reentry).rejects.toThrow("is closing")
     releaseKill()
     await failed
+  })
+
+  it("retires the process after a prompt ACK timeout so late frames never enter the next turn", async () => {
+    const host = createFakeHost()
+    const adapter = await connected(host)
+    await adapter.createSession({ cwd: "/w" })
+
+    const firstResult = await adapter.execute("sess-1", message, { timeout: 20 })
+    expect(firstResult.success).toBe(false)
+    expect(firstResult.error).toContain("Pi RPC command timed out: prompt")
+    expect(firstResult.errorCode).toBe(PI_TURN_DELIVERY_UNCERTAIN_ERROR_CODE)
+    expect(host.killed).toContain("agent-1:sess-1")
+
+    // Late frames from turn A after retirement must be dropped completely.
+    host.emitStdout(
+      "agent-1:sess-1",
+      [
+        JSON.stringify({ type: "agent_start" }),
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "Late text from turn A" },
+        }),
+        JSON.stringify({ type: "agent_settled" }),
+      ].join("\n") + "\n"
+    )
+
+    // Direct prompt without explicit resume is refused after retirement.
+    await expect(adapter.prompt("sess-1", message)[Symbol.asyncIterator]().next()).rejects.toThrow(
+      "Unknown Pi session"
+    )
+
+    // Explicit resume opens a fresh process; turn B sees zero frames from turn A.
+    const spawnsBeforeResume = host.spawns.length
+    await adapter.resumeSession("sess-1")
+    expect(host.spawns).toHaveLength(spawnsBeforeResume + 1)
+
+    const turnB = adapter.execute("sess-1", {
+      ...message,
+      id: "m2",
+      content: [{ type: "text", text: "turn B" }],
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    replyTo(host, "prompt", { disposition: "started" })
+    host.emitStdout(
+      "agent-1:sess-1",
+      [
+        JSON.stringify({ type: "agent_start" }),
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "Fresh answer for turn B" },
+        }),
+        JSON.stringify({ type: "agent_settled" }),
+      ].join("\n") + "\n"
+    )
+    const resultB = await turnB
+    expect(resultB.success).toBe(true)
+    expect(resultB.finalResponse).toBe("Fresh answer for turn B")
+    expect(resultB.finalResponse).not.toContain("Late text from turn A")
+  })
+
+  it("blocks new turns and retains the slot when retirement kill fails until cleanup succeeds", async () => {
+    const host = createFakeHost()
+    const adapter = await connected(host)
+    await adapter.createSession({ cwd: "/w" })
+
+    const baseInvoke = host.invoke.bind(host)
+    let failKill = true
+    host.invoke = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
+      if (name === "kill_external_agent" && failKill) {
+        throw new Error("host kill failed")
+      }
+      return baseInvoke<T>(name, args)
+    }
+
+    const first = adapter.prompt("sess-1", message, { timeout: 20 })[Symbol.asyncIterator]().next()
+    await expect(first).rejects.toBeInstanceOf(PiTurnDeliveryUncertainError)
+
+    // While retirement failed, turn B, steering, and late frames are all blocked.
+    await expect(adapter.prompt("sess-1", message)[Symbol.asyncIterator]().next()).rejects.toThrow(
+      /could not be retired/i
+    )
+    await expect(adapter.steerTurn("sess-1", "late steer")).rejects.toThrow(/could not be retired/i)
+
+    // Once host kill recovers and cleanup succeeds, explicit resume opens one fresh process.
+    failKill = false
+    await adapter.closeSession("sess-1")
+    const resumed = await adapter.resumeSession("sess-1")
+    expect(resumed.id).toBe("sess-1")
+  })
+
+  it("rejects non-zero version probe exit even when stdout prints a certified version (#04)", async () => {
+    const host = createFakeHost()
+    const adapter = new PiRpcClientAdapter(piDeps(host))
+    const connecting = adapter.connect(config)
+    await Promise.resolve()
+    const probeId = host.spawns[0].id
+    host.emitStdoutLines(probeId, PI_CERTIFIED_VERSION)
+    host.emitExit(probeId, 2)
+    await expect(connecting).rejects.toBeInstanceOf(PiVersionError)
+    expect(adapter.versionStatus).toEqual({
+      status: "unsupported",
+      version: null,
+      reason: "version_probe_failed",
+    })
+    expect(adapter.connectionStatus).toBe("error")
+  })
+
+  it("kills a timed-out CLI probe and gives concurrent probes distinct ids (#05)", async () => {
+    const host = createFakeHost()
+    const adapter = await connected(host)
+    const runCliProbe = Reflect.get(adapter, "runCliProbe").bind(adapter) as (
+      cfg: ExternalAgentConfig,
+      args: string[],
+      label: string,
+      timeoutMs: number
+    ) => Promise<{ stdout: string; exitCode: number | null; timedOut: boolean }>
+    const [first, second] = await Promise.all([
+      runCliProbe(config, ["--version"], "version", 20),
+      runCliProbe(config, ["--version"], "version", 20),
+    ])
+    expect(first.timedOut).toBe(true)
+    expect(second.timedOut).toBe(true)
+    const probeIds = host.spawns.slice(-2).map((s) => s.id)
+    expect(probeIds[0]).not.toBe(probeIds[1])
+    expect(host.killed).toEqual(expect.arrayContaining(probeIds))
+  })
+
+  it("enforces maxProcesses across concurrent session starts without overshoot (#06)", async () => {
+    const host = createFakeHost()
+    const adapter = await connected(host)
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => adapter.createSession({ cwd: "/w" }))
+    )
+    const fulfilled = results.filter((r) => r.status === "fulfilled")
+    const rejected = results.filter((r) => r.status === "rejected")
+    expect(fulfilled).toHaveLength(4)
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(PiResourceLimitError)
+    expect(adapter.getSessions()).toHaveLength(4)
+  })
+
+  it("cancels and cleans up in-flight session starts when disconnect races with createSession (#07)", async () => {
+    const host = createFakeHost({ autoHandshake: false })
+    const adapter = await connected(host)
+    const opening = adapter.createSession({ cwd: "/w" })
+    // Wait until spawn has been invoked, then disconnect before handshake arrives.
+    for (let i = 0; i < 10 && host.spawns.length < 2; i++) {
+      await Promise.resolve()
+    }
+    await adapter.disconnect()
+    await expect(opening).rejects.toThrow(/closed during startup/i)
+    expect(adapter.connectionStatus).toBe("disconnected")
+    expect(adapter.getSessions()).toHaveLength(0)
+    expect(host.killed).toContain("agent-1:sess-1")
+  })
+
+  it("refuses to resume a missing Pi session id instead of silently opening an empty session (#08)", async () => {
+    const host = createFakeHost()
+    host.setListedSessions([])
+    const adapter = await connected(host)
+    const spawnsBefore = host.spawns.length
+    await expect(adapter.resumeSession("missing-uuid", { cwd: "/w" })).rejects.toBeInstanceOf(
+      PiSessionNotFoundError
+    )
+    // Default session store catches missing id before spawning a phantom file.
+    expect(host.spawns).toHaveLength(spawnsBefore)
+
+    // Even when a session was listed (or PI_CODING_AGENT_DIR is overridden) and its
+    // history file vanished before spawn, empty entries (only thinking_level_change) fail closed.
+    const host2 = createFakeHost()
+    host2.setListedSessions([{ id: "vanished-uuid", cwd: "/w" }])
+    const baseInvoke = host2.invoke.bind(host2)
+    host2.invoke = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
+      if (name === "send_to_external_agent") {
+        const frame = JSON.parse(String(args.message)) as { type: string; id: string }
+        if (frame.type === "get_entries") {
+          queueMicrotask(() =>
+            host2.emitStdout(
+              String(args.agentId),
+              JSON.stringify({
+                id: frame.id,
+                type: "response",
+                command: "get_entries",
+                success: true,
+                data: {
+                  entries: [{ id: "e1", type: "thinking_level_change", thinkingLevel: "low" }],
+                },
+              }) + "\n"
+            )
+          )
+          return undefined as T
+        }
+      }
+      return baseInvoke<T>(name, args)
+    }
+    const adapter2 = await connected(host2)
+    await expect(adapter2.resumeSession("vanished-uuid", { cwd: "/w" })).rejects.toBeInstanceOf(
+      PiSessionNotFoundError
+    )
+    expect(host2.killed).toContain("agent-1:vanished-uuid")
+    expect(adapter2.getSessions()).toHaveLength(0)
+  })
+
+  it("blocks resumeSession configuration replacement while a native background run is active (#09)", async () => {
+    const host = createFakeHost()
+    const adapter = await connected(host)
+    const session = await adapter.createSession({ cwd: "/w" })
+    // Simulate a background native run (nativeRunning=true, busy=false).
+    host.emitStdout(`agent-1:${session.id}`, JSON.stringify({ type: "agent_start" }) + "\n")
+    expect(adapter.getSession(session.id)?.status).toBe("executing")
+    const killsBefore = host.killed.length
+    await expect(
+      adapter.resumeSession(session.id, { cwd: "/w", systemPrompt: "Revised instructions" })
+    ).rejects.toThrow("Cannot replace Pi session configuration during an active turn")
+    expect(host.killed).toHaveLength(killsBefore)
   })
 
   it("completes a handled prompt without waiting for agent_settled", async () => {
@@ -3132,6 +3360,7 @@ describe("Pi session recovery and host defaults", () => {
     "can %s a persisted id before any session has been opened",
     async (operation) => {
       const host = createFakeHost()
+      host.setListedSessions([{ id: "persisted" }])
       const adapter = await connected(host)
       const result =
         operation === "resume"

@@ -45,6 +45,39 @@ export class PiFrameError extends FrameError {
   }
 }
 
+/** Raised when a command was not written because the peer was already closed. */
+export class PiRpcCommandNotSentError extends Error {
+  readonly command: string
+  constructor(command: string) {
+    super(`Pi RPC peer is closed (command: ${command})`)
+    this.name = "PiRpcCommandNotSentError"
+    this.command = command
+  }
+}
+
+/** Raised when Pi explicitly replied `{ success: false }` to a command. */
+export class PiRpcCommandRejectedError extends Error {
+  readonly command: string
+  readonly detail: string
+  constructor(command: string, detail: string) {
+    super(`Pi RPC command failed: ${command}: ${detail}`)
+    this.name = "PiRpcCommandRejectedError"
+    this.command = command
+    this.detail = detail
+  }
+}
+
+/** Raised when a command ACK timed out after the frame was submitted for write. */
+export class PiRpcCommandTimeoutError extends Error {
+  readonly command: string
+  readonly deliveryUncertain = true
+  constructor(command: string) {
+    super(`Pi RPC command timed out: ${command}`)
+    this.name = "PiRpcCommandTimeoutError"
+    this.command = command
+  }
+}
+
 /**
  * Pi's strict LF-only JSONL decoder: the shared byte-level
  * {@link LfFrameDecoder} with Pi's limits and error type.
@@ -204,7 +237,7 @@ export class PiRpcPeer {
     timeout: number = this.defaultTimeout
   ): Promise<T> {
     if (this.closed) {
-      return Promise.reject(new Error(`Pi RPC peer is closed (command: ${type})`))
+      return Promise.reject(new PiRpcCommandNotSentError(type))
     }
 
     const id = `cognia-${++this.commandSeq}`
@@ -213,7 +246,7 @@ export class PiRpcPeer {
     return new Promise<T>((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Pi RPC command timed out: ${type}`))
+        reject(new PiRpcCommandTimeoutError(type))
       }, timeout)
 
       this.pending.set(id, {
@@ -368,7 +401,7 @@ export class PiRpcPeer {
       pending.resolve(response.data)
     } else {
       const detail = response.error ?? "unknown error"
-      pending.reject(new Error(`Pi RPC command failed: ${pending.command}: ${detail}`))
+      pending.reject(new PiRpcCommandRejectedError(pending.command, detail))
     }
   }
 

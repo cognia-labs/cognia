@@ -1577,11 +1577,15 @@ export class ExternalAgentManager {
       throw new Error("Gateway sessions cannot be cloned natively")
     const target = this.sessionOperationTarget(agentId, sessionId)
     if (!target.adapter.cloneSession) throw new Error("Agent does not support session cloning")
-    await this.ensureSessionCapacity(target.agentId)
-    const cloned = await target.adapter.cloneSession(target.sessionId, options)
-    target.instance.sessions.set(cloned.id, cloned)
-    this.attachSessionEvents(target.agentId, cloned.id)
-    return cloned
+    const releaseCapacity = await this.ensureSessionCapacity(target.agentId)
+    try {
+      const cloned = await target.adapter.cloneSession(target.sessionId, options)
+      target.instance.sessions.set(cloned.id, cloned)
+      this.attachSessionEvents(target.agentId, cloned.id)
+      return cloned
+    } finally {
+      releaseCapacity()
+    }
   }
 
   async renameSession(agentId: string, sessionId: string, name: string): Promise<void> {
@@ -2317,9 +2321,14 @@ export class ExternalAgentManager {
     }
 
     try {
-      await this.ensureSessionCapacity(agentId)
-      const forked = await adapter.forkSession(sessionId, options)
-      instance.sessions.set(forked.id, forked)
+      const releaseCapacity = await this.ensureSessionCapacity(agentId)
+      let forked: ExternalAgentSession
+      try {
+        forked = await adapter.forkSession(sessionId, options)
+        instance.sessions.set(forked.id, forked)
+      } finally {
+        releaseCapacity()
+      }
       this.attachSessionEvents(agentId, forked.id)
       this.setSessionExtensionSupport(agentId, instance, "session/fork", "supported", "ok")
       return forked
@@ -2748,6 +2757,13 @@ export class ExternalAgentManager {
       return false
     }
 
+    // Delivery uncertainty (e.g. a prompt ACK timeout after the frame may
+    // already have reached the agent process) must NEVER auto-replay, even if
+    // the message mentions "timed out" or a custom retry pattern matches it.
+    if (this.isNonRetryableDeliveryFailure(error)) {
+      return false
+    }
+
     const message = this.normalizeErrorMessage(error).toLowerCase()
     if (!message) {
       return false
@@ -2809,6 +2825,35 @@ export class ExternalAgentManager {
       "process exited",
     ]
     return retryablePatterns.some((pattern) => message.includes(pattern))
+  }
+
+  private isNonRetryableDeliveryFailure(error: unknown): boolean {
+    if (typeof error === "string") {
+      return error.toLowerCase().includes("turn_delivery_uncertain")
+    }
+    if (!error || typeof error !== "object") {
+      return false
+    }
+    const candidate = error as {
+      retryable?: unknown
+      deliveryUncertain?: unknown
+      errorCode?: unknown
+      code?: unknown
+      message?: unknown
+    }
+    if (candidate.retryable === false || candidate.deliveryUncertain === true) {
+      return true
+    }
+    if (
+      candidate.errorCode === "turn_delivery_uncertain" ||
+      candidate.code === "turn_delivery_uncertain"
+    ) {
+      return true
+    }
+    return (
+      typeof candidate.message === "string" &&
+      candidate.message.toLowerCase().includes("turn_delivery_uncertain")
+    )
   }
 
   private isTimeoutErrorMessage(message: string): boolean {
@@ -3992,8 +4037,13 @@ export class ExternalAgentManager {
           "The isolated gateway task could not resume its saved session; no new session was created"
         )
       }
-      await this.ensureSessionCapacity(instance.config.id)
-      session = await adapter.createSession(sessionOptions)
+      const releaseCapacity = await this.ensureSessionCapacity(instance.config.id)
+      try {
+        session = await adapter.createSession(sessionOptions)
+        instance.sessions.set(session.id, session)
+      } finally {
+        releaseCapacity()
+      }
       if (preferredSessionId) {
         const latestReasonCode = instance.validity?.lastBranchReasonCode
         const latestReason = instance.validity?.lastBranchReason
@@ -4307,12 +4357,15 @@ export class ExternalAgentManager {
       throw new Error(`Agent not connected: ${agentId}`)
     }
 
-    await this.ensureSessionCapacity(agentId)
-    const session = await adapter.createSession(options)
-    instance.sessions.set(session.id, session)
-    this.attachSessionEvents(agentId, session.id)
-
-    return session
+    const releaseCapacity = await this.ensureSessionCapacity(agentId)
+    try {
+      const session = await adapter.createSession(options)
+      instance.sessions.set(session.id, session)
+      this.attachSessionEvents(agentId, session.id)
+      return session
+    } finally {
+      releaseCapacity()
+    }
   }
 
   /**
@@ -4350,33 +4403,61 @@ export class ExternalAgentManager {
    * Gateway task sessions are not native sessions of this process and do not
    * count.
    */
-  private async ensureSessionCapacity(agentId: string): Promise<void> {
-    const instance = this.instances.get(agentId)
-    const limit = positiveInteger(instance?.config.maxConcurrentSessions)
-    if (!instance || limit === undefined) return
+  private pendingSessionCreates = new Map<string, number>()
+  private sessionCapacityLocks = new Map<string, Promise<void>>()
 
-    const open = this.liveSessions(agentId).filter(
-      (session) => !session.id.startsWith("cognia-gateway:")
-    )
-    const excess = open.length - limit + 1
-    if (excess <= 0) return
+  private async ensureSessionCapacity(agentId: string): Promise<() => void> {
+    const previous = this.sessionCapacityLocks.get(agentId) ?? Promise.resolve()
+    let releaseLock!: () => void
+    const currentLock = new Promise<void>((resolve) => {
+      releaseLock = resolve
+    })
+    this.sessionCapacityLocks.set(agentId, currentLock)
+    await previous
+    try {
+      const instance = this.instances.get(agentId)
+      const limit = positiveInteger(instance?.config.maxConcurrentSessions)
+      if (!instance || limit === undefined) return () => {}
 
-    const activity = (session: ExternalAgentSession): number => {
-      const time = session.lastActivityAt ? new Date(session.lastActivityAt).getTime() : NaN
-      return Number.isFinite(time) ? time : -Infinity
-    }
-    const idle = open
-      .filter((session) => session.status !== "executing")
-      .sort((left, right) => activity(left) - activity(right))
-    if (idle.length < excess) {
-      throw new ExternalAgentLifecycleError(
-        "session_limit_reached",
-        `agent ${agentId} already has ${open.length} sessions open (limit ${limit}) and none is idle`,
-        { agentId, limit }
+      const pending = this.pendingSessionCreates.get(agentId) ?? 0
+      const open = this.liveSessions(agentId).filter(
+        (session) => !session.id.startsWith("cognia-gateway:")
       )
-    }
-    for (const session of idle.slice(0, excess)) {
-      await this.closeSession(agentId, session.id)
+      const excess = open.length + pending - limit + 1
+      if (excess > 0) {
+        const activity = (session: ExternalAgentSession): number => {
+          const time = session.lastActivityAt ? new Date(session.lastActivityAt).getTime() : NaN
+          return Number.isFinite(time) ? time : -Infinity
+        }
+        const idle = open
+          .filter((session) => session.status !== "executing")
+          .sort((left, right) => activity(left) - activity(right))
+        if (idle.length < excess) {
+          throw new ExternalAgentLifecycleError(
+            "session_limit_reached",
+            `agent ${agentId} already has ${open.length + pending} sessions open (limit ${limit}) and none is idle`,
+            { agentId, limit }
+          )
+        }
+        for (const session of idle.slice(0, excess)) {
+          await this.closeSession(agentId, session.id)
+        }
+      }
+
+      this.pendingSessionCreates.set(agentId, pending + 1)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        const next = (this.pendingSessionCreates.get(agentId) ?? 1) - 1
+        if (next <= 0) this.pendingSessionCreates.delete(agentId)
+        else this.pendingSessionCreates.set(agentId, next)
+      }
+    } finally {
+      if (this.sessionCapacityLocks.get(agentId) === currentLock) {
+        this.sessionCapacityLocks.delete(agentId)
+      }
+      releaseLock()
     }
   }
 
@@ -5513,6 +5594,7 @@ export class ExternalAgentManager {
             attempt < maxExecutionRetries &&
             !authoritySteps.reason &&
             !sawExecutionActivity &&
+            attemptResult.errorCode !== "turn_delivery_uncertain" &&
             !attemptResult.toolCalls?.length &&
             !attemptResult.messages?.some((message) => message.role === "assistant") &&
             !attemptResult.finalResponse &&

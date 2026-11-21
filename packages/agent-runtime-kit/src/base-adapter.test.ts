@@ -893,6 +893,53 @@ describe("foldUsageUpdate", () => {
     })
     expect(withStandard).toMatchObject({ providerCost: { amount: 1.6, currency: "ACU" } })
   })
+
+  it("keeps session_context occupancy and cumulative cost out of turn tokens and spend", () => {
+    const folded = foldUsageUpdate(undefined, {
+      used: 5000,
+      size: 128000,
+      cost: { amount: 0.42, currency: "USD" },
+      usageScope: "session_context",
+    })
+    expect(folded).toEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      contextTokens: 5000,
+      modelContextWindow: 128000,
+    })
+    expect(folded.providerCost).toBeUndefined()
+
+    const tracker = createTurnUsageTracker()
+    const changed = tracker.observe({
+      type: "usage_update",
+      sessionId: "s1",
+      timestamp: new Date(),
+      used: 5000,
+      size: 128000,
+      cost: { amount: 0.42, currency: "USD" },
+      usageScope: "session_context",
+    })
+    expect(changed).toBe(false)
+    // With only occupancy + cumulative cost and no turn usage, turn spend stays unknown.
+    expect(tracker.current()).toBeUndefined()
+
+    // Once real turn usage arrives on done, occupancy attaches without leaking cumulative cost.
+    tracker.observe({
+      type: "done",
+      sessionId: "s1",
+      timestamp: new Date(),
+      success: true,
+      tokenUsage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    })
+    expect(tracker.current()).toEqual({
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+      contextTokens: 5000,
+      modelContextWindow: 128000,
+    })
+  })
 })
 
 describe("mergeTurnUsage", () => {
@@ -930,6 +977,41 @@ describe("mergeTurnUsage", () => {
       providerCost: { amount: 1.5 },
     })
   })
+})
+
+it("preserves structured errorCode on execute failures from throws and error events", async () => {
+  const adapter = new TestAdapter()
+  adapter.prompt = async function* () {
+    throw Object.assign(new Error("Pi RPC command timed out: prompt"), {
+      errorCode: "turn_delivery_uncertain",
+    })
+  }
+  const thrown = await adapter.execute("s1", {
+    id: "m1",
+    role: "user",
+    content: [{ type: "text", text: "hi" }],
+    timestamp: new Date(),
+  })
+  expect(thrown.success).toBe(false)
+  expect(thrown.errorCode).toBe("turn_delivery_uncertain")
+
+  adapter.prompt = async function* () {
+    yield {
+      type: "error",
+      sessionId: "s1",
+      timestamp: new Date(),
+      error: "Pi process exited with code 1",
+      code: "turn_delivery_uncertain",
+    }
+  }
+  const errored = await adapter.execute("s1", {
+    id: "m2",
+    role: "user",
+    content: [{ type: "text", text: "hi" }],
+    timestamp: new Date(),
+  })
+  expect(errored.success).toBe(false)
+  expect(errored.errorCode).toBe("turn_delivery_uncertain")
 })
 
 it("keeps new session operations optional for existing protocol implementations", () => {

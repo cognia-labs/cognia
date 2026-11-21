@@ -69,13 +69,11 @@ is mid-turn the request fails with `resource_limit` rather than killing someone'
 
 ## Version policy
 
-`0.84.1` is the certified version.
+`1.0.2` is the certified version (minimum supported: `0.85.1`).
 
-- **exactly certified** — runs normally
-- **newer** — runs, reported as unverified, and emits a signal. A Pi upgrade degrades to a warning
-  rather than an outage.
-- **older or unparseable** — refused with `runtime_version_unsupported`. Pi has renamed fields
-  between releases, and a missing field reads as an empty turn rather than as an error.
+- **exactly certified (`1.0.2`)** — runs normally
+- **within the supported range (`>= 0.85.1`, not `1.0.2`)** — runs, reported as unverified, and emits a signal. A Pi upgrade degrades to a warning rather than an outage.
+- **below `0.85.1`, non-zero exit, timed out, or unparseable** — refused with `runtime_version_unsupported`. Pi has renamed fields between releases, and a missing field reads as an empty turn rather than as an error.
 
 The version is probed by running `pi --version` through the same sandboxed spawn path a session
 uses, not inferred from a handshake: `get_state` reports the session-format version, not the release.

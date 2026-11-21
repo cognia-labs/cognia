@@ -1,6 +1,9 @@
 import {
   PiFrameDecoder,
   PiFrameError,
+  PiRpcCommandNotSentError,
+  PiRpcCommandRejectedError,
+  PiRpcCommandTimeoutError,
   PiRpcPeer,
   frameHint,
   isCompleteFrame,
@@ -305,7 +308,26 @@ describe("PiRpcPeer", () => {
   it("refuses new commands after close", async () => {
     const { peer } = makePeer({})
     peer.close()
-    await expect(peer.sendCommand("get_state")).rejects.toThrow("closed")
+    await expect(peer.sendCommand("get_state")).rejects.toBeInstanceOf(PiRpcCommandNotSentError)
+  })
+
+  it("distinguishes timeout from explicit command rejection", async () => {
+    const { peer, written } = makePeer({})
+    const timedOut = peer.sendCommand("prompt", { message: "a" }, 15)
+    await expect(timedOut).rejects.toBeInstanceOf(PiRpcCommandTimeoutError)
+
+    const rejected = peer.sendCommand("prompt", { message: "b" }, 1000)
+    const id = JSON.parse(written.at(-1)!).id
+    peer.ingest(
+      JSON.stringify({
+        type: "response",
+        id,
+        command: "prompt",
+        success: false,
+        error: "invalid prompt",
+      }) + "\n"
+    )
+    await expect(rejected).rejects.toBeInstanceOf(PiRpcCommandRejectedError)
   })
 
   it("is idempotent on close", async () => {

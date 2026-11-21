@@ -57,6 +57,7 @@ export function foldUsageUpdate(
     used: number
     size: number
     cost?: { amount: number; currency: string } | null
+    usageScope?: "session_context"
     tokenUsage?: ExternalAgentTokenUsage
   }
 ): ExternalAgentTokenUsage {
@@ -66,20 +67,23 @@ export function foldUsageUpdate(
     totalTokens: 0,
   }
   const live = event.tokenUsage
+  const sessionContextOnly = event.usageScope === "session_context"
   const totalTokens = live?.totalTokens ?? base.totalTokens
   return {
     ...base,
     promptTokens: live?.promptTokens ?? base.promptTokens,
     completionTokens: live?.completionTokens ?? base.completionTokens,
-    totalTokens: totalTokens === 0 ? event.used : totalTokens,
+    totalTokens: !sessionContextOnly && totalTokens === 0 ? event.used : totalTokens,
     ...(live?.reasoningTokens === undefined ? {} : { reasoningTokens: live.reasoningTokens }),
     ...(live?.cacheReadTokens === undefined ? {} : { cacheReadTokens: live.cacheReadTokens }),
     ...(live?.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: live.cacheWriteTokens }),
     contextTokens: event.used,
     ...(event.size > 0 ? { modelContextWindow: event.size } : {}),
     // `event.cost` is the CUMULATIVE session figure; a per-turn delta carried
-    // by the vendor tokenUsage wins over it for turn accounting.
-    ...(event.cost
+    // by the vendor tokenUsage wins over it for turn accounting. When the
+    // producer marks `usageScope: "session_context"`, cumulative session cost
+    // stays out of turn spend altogether.
+    ...(!sessionContextOnly && event.cost
       ? { providerCost: { amount: event.cost.amount, currency: event.cost.currency } }
       : {}),
     ...(live?.providerCost === undefined ? {} : { providerCost: live.providerCost }),
@@ -134,10 +138,20 @@ export interface TurnUsageTracker {
 export function createTurnUsageTracker(): TurnUsageTracker {
   let finalUsage: ExternalAgentTokenUsage | undefined
   let streamedUsage: ExternalAgentTokenUsage | undefined
+  let sessionContext: { contextTokens: number; modelContextWindow?: number } | undefined
   return {
     observe(event) {
       switch (event.type) {
         case "usage_update":
+          if (event.usageScope === "session_context" && !event.tokenUsage) {
+            // Occupancy & cumulative session cost stay in the session gauge and
+            // must not fabricate turn token or cost spend.
+            sessionContext = {
+              contextTokens: event.used,
+              ...(event.size > 0 ? { modelContextWindow: event.size } : {}),
+            }
+            return false
+          }
           // A context-window report. It carries occupancy rather than a
           // prompt/completion split, so it can only FILL what nothing else
           // has said — never overwrite a real breakdown with zeros.
@@ -159,7 +173,20 @@ export function createTurnUsageTracker(): TurnUsageTracker {
           return false
       }
     },
-    current: () => mergeTurnUsage(finalUsage, streamedUsage),
+    current() {
+      const resolved = mergeTurnUsage(finalUsage, streamedUsage)
+      if (!resolved || !sessionContext) return resolved
+      return {
+        ...resolved,
+        ...(resolved.contextTokens === undefined
+          ? { contextTokens: sessionContext.contextTokens }
+          : {}),
+        ...(resolved.modelContextWindow === undefined &&
+        sessionContext.modelContextWindow !== undefined
+          ? { modelContextWindow: sessionContext.modelContextWindow }
+          : {}),
+      }
+    },
   }
 }
 
@@ -312,6 +339,7 @@ export abstract class BaseProtocolAdapter
     const artifacts = new Map<string, AcpContentBlock[]>()
     let success = true
     let error: string | undefined
+    let errorCode: string | undefined
     // Reading only `done` (which is what this used to do) meant every adapter
     // that reports usage mid-stream and settles without repeating it —
     // OpenCode, and any ACP agent that sends `usage_update` — returned a
@@ -394,6 +422,7 @@ export abstract class BaseProtocolAdapter
           case "error":
             success = false
             error = event.error
+            if (event.code) errorCode = event.code
             break
 
           case "done":
@@ -445,10 +474,17 @@ export abstract class BaseProtocolAdapter
         duration: Date.now() - startTime,
         tokenUsage: usage.current(),
         error,
+        ...(errorCode ? { errorCode } : {}),
       }
     } catch (err) {
       // A turn that throws mid-stream has still spent what it reported.
       const spent = usage.current()
+      const caughtErrorCode =
+        err &&
+        typeof err === "object" &&
+        typeof (err as { errorCode?: unknown }).errorCode === "string"
+          ? (err as { errorCode: string }).errorCode
+          : undefined
       return {
         success: false,
         sessionId,
@@ -459,6 +495,7 @@ export abstract class BaseProtocolAdapter
         duration: Date.now() - startTime,
         ...(spent ? { tokenUsage: spent } : {}),
         error: err instanceof Error ? err.message : String(err),
+        ...(caughtErrorCode ? { errorCode: caughtErrorCode } : {}),
       }
     }
   }

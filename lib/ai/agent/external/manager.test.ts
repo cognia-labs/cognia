@@ -3393,6 +3393,84 @@ describe("execute / cancel", () => {
       expect(currentMock.executeImpl).toHaveBeenCalledTimes(1)
     })
 
+    it("does not replay an uncertain-delivery turn on either result or throw branch even when retryOnErrors matches timeout", async () => {
+      const manager = freshManager()
+      await manager.addAgent(
+        buildBaseConfig({
+          retryConfig: {
+            ...retryConfig,
+            retryOnErrors: ["timeout", "timed out"],
+          },
+        })
+      )
+      currentMock.executeImpl = jest.fn(async () => ({
+        success: false,
+        sessionId: "s_1",
+        finalResponse: "",
+        error: "Pi RPC command timed out: prompt",
+        errorCode: "turn_delivery_uncertain",
+        messages: [],
+        steps: [],
+        toolCalls: [],
+        duration: 1,
+      }))
+
+      const result = await manager.execute("agent-1", "perform work")
+      expect(result.success).toBe(false)
+      expect(result.errorCode).toBe("turn_delivery_uncertain")
+      expect(currentMock.executeImpl).toHaveBeenCalledTimes(1)
+
+      currentMock.executeImpl = jest.fn(async () => {
+        throw Object.assign(new Error("Pi RPC command timed out: prompt"), {
+          errorCode: "turn_delivery_uncertain",
+          retryable: false,
+        })
+      })
+
+      await expect(manager.execute("agent-1", "perform work again")).rejects.toThrow(
+        "Pi RPC command timed out: prompt"
+      )
+      expect(currentMock.executeImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it("enforces maxConcurrentSessions across concurrent createSession calls", async () => {
+      const manager = freshManager()
+      await manager.addAgent(buildBaseConfig({ maxConcurrentSessions: 2 }))
+      let seq = 0
+      const baseCreate = currentMock.createSession.bind(currentMock)
+      currentMock.createSession = jest.fn(async (opts) => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        const session = await baseCreate(opts)
+        session.id = `s_concurrent_${++seq}`
+        return session
+      })
+      const results = await Promise.allSettled([
+        manager.createSession("agent-1"),
+        manager.createSession("agent-1"),
+        manager.createSession("agent-1"),
+      ])
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2)
+      expect(results.filter((r) => r.status === "rejected")).toHaveLength(1)
+    })
+
+    it("accumulates per-turn usage accurately across equal turns (12 + 12 = 24)", async () => {
+      const manager = freshManager()
+      await manager.addAgent(buildBaseConfig())
+      currentMock.executeImpl = jest.fn(async () => ({
+        success: true,
+        sessionId: "s_1",
+        finalResponse: "ok",
+        messages: [],
+        steps: [],
+        toolCalls: [],
+        duration: 1,
+        tokenUsage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+      }))
+      await manager.execute("agent-1", "turn 1")
+      await manager.execute("agent-1", "turn 2")
+      expect(manager.getAgent("agent-1")?.stats.totalTokensUsed).toBe(24)
+    })
+
     it("preserves the configured retry behavior for other adapters", async () => {
       const manager = freshManager()
       await manager.addAgent(buildBaseConfig({ retryConfig }))

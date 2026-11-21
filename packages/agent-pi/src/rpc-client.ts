@@ -89,7 +89,12 @@ import {
   encodePiToolPolicy,
   resolvePiToolPolicy,
 } from "./permission"
-import { PiRpcPeer, type PiFrameError } from "./rpc-peer"
+import {
+  PiRpcCommandNotSentError,
+  PiRpcCommandRejectedError,
+  PiRpcPeer,
+  type PiFrameError,
+} from "./rpc-peer"
 import { spawnReclaimingOrphan } from "@cognia/agent-runtime-kit/spawn-reclaim"
 import type { SessionCreateOptions, SessionListOptions } from "@cognia/agent-contracts/adapter"
 import type {
@@ -494,7 +499,9 @@ interface PiProcess {
   streamState: PiStreamState
   usageBaseline?: ExternalAgentTokenUsage
   busy: boolean
+  starting?: boolean
   cancelling?: boolean
+  retiring?: boolean
   closing?: Promise<void>
   spawning?: Promise<unknown>
   lastUsedAt: number
@@ -596,6 +603,12 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   private readonly newSessionId: () => string
   private readonly resolvePiPackages: PiPackageResolver
   private readonly processes = new Map<string, PiProcess>()
+  private probeSeq = 0
+  private connectionGeneration = 0
+  private reservedSlots = 0
+  private slotQueue: Promise<void> = Promise.resolve()
+  private readonly inFlightStarts = new Set<Promise<unknown>>()
+  private readonly unpersistedSessions = new Set<string>()
 
   private versionVerdict?: PiVersionVerdict
   private extensionVerdict?: PiExtensionVerdict
@@ -641,10 +654,14 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   // --------------------------------------------------------------- lifecycle
 
   async connect(config: ExternalAgentConfig): Promise<void> {
+    const generation = ++this.connectionGeneration
     this._config = config
     this._connectionStatus = "connecting"
     try {
       const verdict = await this.probeVersion(config)
+      if (generation !== this.connectionGeneration) {
+        throw new Error("Pi connection interrupted")
+      }
       this.versionVerdict = verdict
       if (verdict.status === "unsupported") {
         this._connectionStatus = "error"
@@ -659,10 +676,16 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
       // test) leaves the verdict undefined; `assertExtensionReady` then falls
       // back to whatever a host-side resolver already put on the config, and
       // refuses if there is nothing.
-      this.extensionVerdict = await this.resolveExtension()
+      const extensionVerdict = await this.resolveExtension()
+      if (generation !== this.connectionGeneration) {
+        throw new Error("Pi connection interrupted")
+      }
+      this.extensionVerdict = extensionVerdict
       this._connectionStatus = "connected"
     } catch (error) {
-      this._connectionStatus = "error"
+      if (generation === this.connectionGeneration) {
+        this._connectionStatus = "error"
+      }
       throw error
     }
   }
@@ -676,9 +699,17 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   }
 
   async disconnect(): Promise<void> {
-    await Promise.all([...this.processes.keys()].map((id) => this.closeSession(id)))
-    this.sessionOptions.clear()
+    this.connectionGeneration++
     this._connectionStatus = "disconnected"
+    await Promise.allSettled([...this.processes.keys()].map((id) => this.closeSession(id)))
+    if (this.inFlightStarts.size > 0) {
+      await Promise.allSettled([...this.inFlightStarts])
+    }
+    if (this.processes.size > 0) {
+      await Promise.allSettled([...this.processes.keys()].map((id) => this.closeSession(id)))
+    }
+    this.sessionOptions.clear()
+    this.unpersistedSessions.clear()
   }
 
   /**
@@ -689,7 +720,22 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
    * be caught before it can start a session.
    */
   private async probeVersion(config: ExternalAgentConfig): Promise<PiVersionVerdict> {
-    const { stdout } = await this.runCliProbe(config, ["--version"], "version", 15000)
+    const { stdout, exitCode, timedOut, cleanupFailed } = await this.runCliProbe(
+      config,
+      ["--version"],
+      "version",
+      15000
+    )
+    if (timedOut) {
+      return {
+        status: "unsupported",
+        version: null,
+        reason: cleanupFailed ? "version_probe_cleanup_failed" : "version_probe_timed_out",
+      }
+    }
+    if (exitCode !== 0) {
+      return { status: "unsupported", version: null, reason: "version_probe_failed" }
+    }
     return classifyPiVersion(stdout.trim().split("\n").filter(Boolean).pop() ?? null)
   }
 
@@ -714,11 +760,19 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     args: string[],
     label: string,
     timeoutMs: number
-  ): Promise<{ stdout: string; exitCode: number | null }> {
+  ): Promise<{
+    stdout: string
+    exitCode: number | null
+    timedOut: boolean
+    cleanupFailed: boolean
+  }> {
     const command = config.process?.command ?? "pi"
-    const probeId = `${config.id}:${label}-probe:${Date.now()}`
+    const probeId = `${config.id}:${label}-probe:${Date.now()}:${++this.probeSeq}`
     let stdout = ""
     let exitCode: number | null = null
+    let didExit = false
+    let timedOut = false
+    let cleanupFailed = false
 
     const offStdout = await this.processHost.onStdoutLine((payload) => {
       if (payload.processId === probeId) stdout += `${payload.data}\n`
@@ -736,10 +790,12 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     // adapter's callers are entitled not to have shift under them.
     const exitHandle = this.processHost.onExit((payload) => {
       if (payload.processId !== probeId) return
+      didExit = true
       exitCode = payload.code ?? null
       resolveExit()
     })
 
+    let spawned = false
     try {
       await this.processHost.spawn({
         id: probeId,
@@ -753,9 +809,25 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
         // credential verdict that no real session would ever see.
         env: config.process?.env,
       })
-      await withTimeout(exited, timeoutMs, undefined)
-      return { stdout, exitCode }
+      spawned = true
+      const outcome = await withTimeout(
+        exited.then(() => "exited" as const),
+        timeoutMs,
+        "timed_out" as const
+      )
+      if (outcome === "timed_out" && !didExit) {
+        timedOut = true
+        try {
+          await this.processHost.kill(probeId)
+        } catch {
+          if (!didExit) cleanupFailed = true
+        }
+      }
+      return { stdout, exitCode, timedOut, cleanupFailed }
     } finally {
+      if (spawned && !didExit && !timedOut) {
+        await this.processHost.kill(probeId).catch(() => undefined)
+      }
       offStdout()
       // Await the handle rather than reading it out of a shared array. The
       // original pushed the unsubscribe from inside a `.then()`, so a probe
@@ -767,8 +839,20 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
 
   // ---------------------------------------------------------------- sessions
 
+  private isProcessActive(record: PiProcess): boolean {
+    return Boolean(record.busy || record.nativeRunning || record.shellRunning)
+  }
+
+  private hasCustomSessionDirOverride(): boolean {
+    const env = this._config?.process?.env
+    return Boolean(env?.PI_CODING_AGENT_DIR?.trim() || env?.PI_CODING_AGENT_SESSION_DIR?.trim())
+  }
+
   async createSession(options: SessionCreateOptions = {}): Promise<ExternalAgentSession> {
-    return this.startSession(this.newSessionId(), options)
+    const sessionId = this.newSessionId()
+    const session = await this.startSession(sessionId, options)
+    this.unpersistedSessions.add(session.id)
+    return session
   }
 
   /**
@@ -776,7 +860,9 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
    *
    * Pi treats that flag as "use this exact id, creating it if missing", so the
    * persisted link needs nothing but the id — no absolute session-file path
-   * ever has to cross a device boundary.
+   * ever has to cross a device boundary. To avoid silently creating a fresh
+   * empty session when history is missing, persisted resumes are verified
+   * against the host's stored sessions and the reopened session's entries.
    */
   async resumeSession(
     sessionId: string,
@@ -792,21 +878,48 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     const existing = this.processes.get(sessionId)
     const options =
       suppliedOptions ?? existing?.createOptions ?? this.sessionOptions.get(sessionId) ?? {}
-    if (existing && !existing.exited && !existing.cancelling) {
+    if (existing && !existing.exited && !existing.cancelling && !existing.retiring) {
       if (
         suppliedOptions === undefined ||
         JSON.stringify(existing.createOptions) === JSON.stringify(options)
       )
         return this.requireSession(sessionId)
-      if (existing.busy || existing.shellRunning)
+      if (this.isProcessActive(existing))
         throw new Error("Cannot replace Pi session configuration during an active turn")
     }
     buildPiSystemPrompt(options, this.outboundGate)
+    const allowEmptyUnpersisted = this.unpersistedSessions.has(sessionId)
+    const cwd = options.cwd ?? this._config?.process?.cwd
+    if (!existing && !allowEmptyUnpersisted && !this.hasCustomSessionDirOverride()) {
+      const records = await this.services.listSessions(cwd)
+      if (Array.isArray(records) && !records.some((record) => record?.id === sessionId)) {
+        throw new PiSessionNotFoundError(sessionId)
+      }
+    }
     const restart = (async () => {
       // Retire the dead peer/listeners before reusing its host process id.
       if (existing) await this.closeSession(sessionId)
       try {
-        return await this.startSession(sessionId, options, { resumed: true })
+        const resumed = await this.startSession(sessionId, options, { resumed: true })
+        if (
+          !allowEmptyUnpersisted &&
+          compareVersions(this.versionVerdict?.version ?? "0", PI_CERTIFIED_VERSION) >= 0
+        ) {
+          const entries = await this.getSessionEntries(resumed.id)
+          const hasPersistedHistory = entries.some(
+            (entry) =>
+              entry.type === "message" ||
+              entry.type === "compaction" ||
+              entry.type === "branch_summary" ||
+              entry.type === "custom_message" ||
+              entry.type === "session_info"
+          )
+          if (!hasPersistedHistory) {
+            await this.closeSession(resumed.id)
+            throw new PiSessionNotFoundError(sessionId)
+          }
+        }
+        return resumed
       } catch (error) {
         await this.closeSession(sessionId)
         throw error
@@ -875,287 +988,338 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     options: SessionCreateOptions,
     extra: { forkFrom?: string; resumed?: boolean } = {}
   ): Promise<ExternalAgentSession> {
-    if (!this._config) throw new Error("Pi adapter is not connected")
-    assertNativeToolDeniesExpressible("pi-rpc", options.nativePolicy?.tools)
-    // Checked per session rather than at connect: an operator flipping the
-    // switch should stop the next session, not require a restart.
-    if (this.isDisabled()) throw new PiDisabledError()
-
-    // Refuse before anything is spawned or reclaimed. A session that cannot
-    // intercept Pi's native tools must not reach the point of having a process.
-    const extension = this.assertExtensionReady()
-
-    // Resolve plugin Pi packages BEFORE reclaiming capacity: a package that
-    // cannot load must fail the start without first evicting an idle session.
-    // No references → not even an `await`, so an agent that never opted in
-    // takes exactly the pre-ADR-0210 path.
-    const restrictDiscovery = Boolean(
-      options.nativePolicy?.tools ||
-      options.nativePolicy?.skills ||
-      options.nativePolicy?.subagents ||
-      options.nativePolicy?.mcpServers
-    )
-    const packageRefs = restrictDiscovery ? [] : piPackageRefsFromMetadata(this._config.metadata)
-    let packages =
-      packageRefs.length > 0
-        ? await this.resolveSessionPackages(packageRefs, options.cwd ?? this._config.process?.cwd)
-        : EMPTY_SESSION_PACKAGES
-
-    const managed = this._config.metadata?.cogniaPiSubagents as
-      { family: string; version: string; extensions: string[]; packageDir: string } | undefined
-    if (managed && !restrictDiscovery && this._config.metadata?.cogniaGatewayTask) {
-      if (
-        !(
-          (managed.family === "nico" && managed.version === "0.80.0") ||
-          (managed.family === "gotgenes" && managed.version === "19.2.2")
-        ) ||
-        !Array.isArray(managed.extensions)
-      )
-        throw new Error("Unsupported Pi subagent package")
-      packages = {
-        ...packages,
-        extensions: [...new Set([...packages.extensions, ...managed.extensions])],
-        tools: [
-          ...new Set([...packages.tools, "subagent", "get_subagent_result", "steer_subagent"]),
-        ],
-        readableRoots: [...new Set([...packages.readableRoots, managed.packageDir])],
+    if (!this._config || !this.isConnected()) throw new Error("Pi adapter is not connected")
+    const generation = this.connectionGeneration
+    const config = this._config
+    const ensureConnected = () => {
+      if (generation !== this.connectionGeneration || !this.isConnected()) {
+        throw new Error("Pi session closed during startup")
       }
     }
+    const startPromise = (async () => {
+      assertNativeToolDeniesExpressible("pi-rpc", options.nativePolicy?.tools)
+      // Checked per session rather than at connect: an operator flipping the
+      // switch should stop the next session, not require a restart.
+      if (this.isDisabled()) throw new PiDisabledError()
 
-    await this.reclaimCapacity()
+      // Refuse before anything is spawned or reclaimed. A session that cannot
+      // intercept Pi's native tools must not reach the point of having a process.
+      const extension = this.assertExtensionReady()
 
-    // Gate BEFORE the value can reach the process env — once it is in the
-    // spawn config it has already crossed the boundary. Mirrors
-    // `cli/src/agent/external-agent-session.ts`.
-    const systemPrompt = buildPiSystemPrompt(options, this.outboundGate)
-    const cwd = options.cwd ?? this._config.process?.cwd
-    const additionalDirectories = options.additionalDirectories ?? []
-    if (additionalDirectories.some((entry) => !/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(entry)))
-      throw new Error("Pi additionalDirectories must be absolute paths")
-    const mcpServers = options.mcpServers ?? []
-    if (mcpServers.some((server) => "serverId" in server))
-      throw new Error("Pi cannot mount ACP-channel MCP; use stdio, HTTP, or SSE transport")
+      // Resolve plugin Pi packages BEFORE reclaiming capacity: a package that
+      // cannot load must fail the start without first evicting an idle session.
+      // No references → not even an `await`, so an agent that never opted in
+      // takes exactly the pre-ADR-0210 path.
+      const restrictDiscovery = Boolean(
+        options.nativePolicy?.tools ||
+        options.nativePolicy?.skills ||
+        options.nativePolicy?.subagents ||
+        options.nativePolicy?.mcpServers
+      )
+      const packageRefs = restrictDiscovery ? [] : piPackageRefsFromMetadata(config.metadata)
+      let packages =
+        packageRefs.length > 0
+          ? await this.resolveSessionPackages(packageRefs, options.cwd ?? config.process?.cwd)
+          : EMPTY_SESSION_PACKAGES
+      ensureConnected()
 
-    const agentId = `${this._config.id}:${piSessionId}`
-    const args = this.buildArgs(piSessionId, options, extra, extension, packages)
+      const managed = config.metadata?.cogniaPiSubagents as
+        { family: string; version: string; extensions: string[]; packageDir: string } | undefined
+      if (managed && !restrictDiscovery && config.metadata?.cogniaGatewayTask) {
+        if (
+          !(
+            (managed.family === "nico" && managed.version === "0.80.0") ||
+            (managed.family === "gotgenes" && managed.version === "19.2.2")
+          ) ||
+          !Array.isArray(managed.extensions)
+        )
+          throw new Error("Unsupported Pi subagent package")
+        packages = {
+          ...packages,
+          extensions: [...new Set([...packages.extensions, ...managed.extensions])],
+          tools: [
+            ...new Set([...packages.tools, "subagent", "get_subagent_result", "steer_subagent"]),
+          ],
+          readableRoots: [...new Set([...packages.readableRoots, managed.packageDir])],
+        }
+      }
 
-    const peer = new PiRpcPeer({
-      writeRaw: (frame) => this.processHost.send(agentId, frame).then(() => undefined),
-      onEvent: (event) => this.dispatchEvent(record.piSessionId, event as PiEvent),
-      onOrphanResponse: (response) => {
-        // Pi rejecting our own input. Never fails a pending command (it has
-        // no id), but it means a frame we wrote was malformed.
-        if (response.command === "parse") {
-          this.dispatchError(
-            record.piSessionId,
-            `Pi rejected a malformed command: ${response.error ?? ""}`
+      // Gate BEFORE the value can reach the process env — once it is in the
+      // spawn config it has already crossed the boundary. Mirrors
+      // `cli/src/agent/external-agent-session.ts`.
+      const systemPrompt = buildPiSystemPrompt(options, this.outboundGate)
+      const cwd = options.cwd ?? config.process?.cwd
+      const additionalDirectories = options.additionalDirectories ?? []
+      if (additionalDirectories.some((entry) => !/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(entry)))
+        throw new Error("Pi additionalDirectories must be absolute paths")
+      const mcpServers = options.mcpServers ?? []
+      if (mcpServers.some((server) => "serverId" in server))
+        throw new Error("Pi cannot mount ACP-channel MCP; use stdio, HTTP, or SSE transport")
+
+      const releaseSlot = await this.acquireProcessSlot(generation)
+      let registered = false
+      try {
+        ensureConnected()
+        const agentId = `${config.id}:${piSessionId}`
+        const args = this.buildArgs(piSessionId, options, extra, extension, packages)
+
+        const peer = new PiRpcPeer({
+          writeRaw: (frame) => this.processHost.send(agentId, frame).then(() => undefined),
+          onEvent: (event) => this.dispatchEvent(record, event as PiEvent),
+          onOrphanResponse: (response) => {
+            // Pi rejecting our own input. Never fails a pending command (it has
+            // no id), but it means a frame we wrote was malformed.
+            if (response.command === "parse") {
+              this.dispatchError(record, `Pi rejected a malformed command: ${response.error ?? ""}`)
+            }
+          },
+          onProtocolError: (error: PiFrameError) => {
+            this.dispatchError(record, error.message)
+            void this.closeSession(record.piSessionId)
+          },
+        })
+
+        const record: PiProcess = {
+          createOptions: structuredClone(options),
+          agentId,
+          piSessionId,
+          peer,
+          cwd,
+          unlisten: [],
+          framing: "unknown",
+          queues: new Set(),
+          listeners: new Set(),
+          extensionUi: createExternalAgentUiState(),
+          streamState: { toolCallsByIndex: new Map(), startedToolCalls: new Set() },
+          usageBaseline:
+            extra.resumed || extra.forkFrom
+              ? undefined
+              : {
+                  promptTokens: 0,
+                  completionTokens: 0,
+                  totalTokens: 0,
+                },
+          busy: false,
+          starting: true,
+          lastUsedAt: Date.now(),
+          exited: false,
+          handshake: Promise.resolve(),
+        }
+        record.handshake = new Promise<void>((resolve) => {
+          record.settleHandshake = resolve
+        })
+        this.processes.set(piSessionId, record)
+        this.sessionOptions.set(piSessionId, record.createOptions)
+        registered = true
+        releaseSlot()
+
+        // Two hosts, two framings, one codec.
+        //
+        // The Node/CLI backend honours `framing: "raw"` and emits base64 chunks on
+        // `stdout-raw`. The Rust host (desktop and headless) reads with
+        // `BufReader::lines()` and emits `\n`-stripped lines on `stdout`; its
+        // `ExternalAgentSpawnConfig` has no `framing` field, so the flag below is
+        // simply ignored there. Subscribing to only `stdout-raw` is why the desktop
+        // received nothing at all: the process started, the version probe (which
+        // listens on `stdout`) succeeded, and then every frame fell on the floor.
+        //
+        // The two are mutually exclusive per host today. The latch makes that a
+        // property of the data rather than an assumption: once a raw frame arrives,
+        // line events for this session are ignored, so a host that later emitted
+        // both cannot double-feed the decoder.
+        record.unlisten.push(
+          await this.processHost.onStdoutRaw((payload) => {
+            if (
+              payload.processId !== agentId ||
+              this.processes.get(record.piSessionId) !== record ||
+              record.retiring
+            )
+              return
+            record.framing = "raw"
+            peer.ingest(base64ToBytes(payload.data))
+          })
+        )
+        ensureConnected()
+        record.unlisten.push(
+          await this.processHost.onStdoutLine((payload) => {
+            if (
+              payload.processId !== agentId ||
+              this.processes.get(record.piSessionId) !== record ||
+              record.retiring
+            )
+              return
+            if (record.framing === "raw") return
+            record.framing = "line"
+            // Re-append exactly the one byte the line reader stripped, so the
+            // strict LF codec sees the frame Pi actually wrote. Safe because the
+            // Rust reader splits on the `\n` BYTE only: U+2028/U+2029 do not
+            // split there (that is a Node `readline` defect, ADR-0119), and a raw
+            // `\r` cannot occur inside a Pi frame because `JSON.stringify`
+            // escapes it as `\\r`.
+            peer.ingest(textToBytes(`${payload.data}\n`))
+          })
+        )
+        ensureConnected()
+        record.unlisten.push(
+          await this.processHost.onExit((payload) => {
+            if (payload.processId !== agentId) return
+            const isCurrent = this.processes.get(record.piSessionId) === record
+            const hadInFlightTurn = record.busy && !record.terminalDelivered
+            record.exited = true
+            record.exitCode = payload.code
+            record.settleHandshake?.()
+            if (isCurrent && !record.retiring) {
+              peer.endOfStream()
+            }
+            this.cancelPendingDialogs(record.piSessionId, record)
+            peer.rejectAll(`Pi process exited (code ${payload.code})`)
+            if (isCurrent && !record.retiring && !record.shellStopped)
+              this.dispatchError(
+                record,
+                `Pi process exited with code ${payload.code}`,
+                hadInFlightTurn ? PI_TURN_DELIVERY_UNCERTAIN_ERROR_CODE : undefined
+              )
+            this.finishQueues(record)
+          })
+        )
+
+        ensureConnected()
+        if (record.cancelling) throw new Error("Pi session closed during startup")
+        const spawnConfig: { config: AgentProcessSpawnSpec } = {
+          config: {
+            id: agentId,
+            sandboxPolicy: config.sandboxPolicy,
+            command: config.process?.command ?? "pi",
+            args,
+            cwd,
+            env: {
+              // The package-roots request is set ONLY from resolved packages
+              // below — a value typed into the agent's own env is discarded.
+              ...withPiSubagentExtensions(
+                withoutKey(config.process?.env, PI_PACKAGE_ROOTS_ENV),
+                managed?.extensions ?? [],
+                extension
+              ),
+              // Plugin package values (`COGNIA_PIPKG_*`) go before every
+              // Cognia-owned key, so nothing a package declares can shadow one.
+              ...packages.env,
+              COGNIA_TOOLHOST_PI_MCP_SERVERS: JSON.stringify(mcpServers),
+              COGNIA_TOOLHOST_PI_MCP_TOOL_POLICY: JSON.stringify(options.nativePolicy?.tools ?? {}),
+              COGNIA_TOOLHOST_PI_ADDITIONAL_DIRECTORIES: JSON.stringify(additionalDirectories),
+              ...(packages.readableRoots.length > 0
+                ? { [PI_PACKAGE_ROOTS_ENV]: JSON.stringify(packages.readableRoots) }
+                : {}),
+              // The extension owns no policy: it applies this table. Computing it
+              // here keeps the matrix in tested app code (`pi-permission.ts`).
+              [PI_TOOL_POLICY_ENV]: encodePiToolPolicy(
+                applyConfiguredApprovalToPiPolicy(
+                  resolvePiToolPolicy(options.permissionMode, options.allowedTools, packages.tools),
+                  config,
+                  this.matchToolPattern,
+                  [...PI_BUILTIN_TOOLS, ...packages.tools]
+                )
+              ),
+              ...(systemPrompt ? { [PI_SYSTEM_PROMPT_ENV]: systemPrompt } : {}),
+            },
+            // The whole reason this adapter exists on a separate framing path.
+            framing: "raw",
+          },
+        }
+        // The Rust process manager outlives this realm. A reload (watchdog, Fast
+        // Refresh, a restarted renderer) forgets the Pi process it started while
+        // the host keeps it registered, and every later resume of this
+        // conversation was refused with "Agent <id> is already running" — a
+        // lease held by a process with no owner left. The other adapters reclaim
+        // that orphan already; Pi never did. It is safe for the same reason:
+        // `resumeSession` retires any process THIS adapter still owns for the id
+        // before it gets here, so whatever the host still has registered is dead
+        // weight. A second collision after the reclaim is a live holder and
+        // surfaces as a typed conflict, never as a generic spawn failure.
+        record.spawning = spawnReclaimingOrphan({
+          id: agentId,
+          spawn: () => this.processHost.spawn(spawnConfig.config),
+          kill: (id) => this.processHost.kill(id),
+        }).catch((error: unknown) => {
+          throw this.classifySpawnConflict(error) ?? error
+        })
+
+        await record.spawning
+        ensureConnected()
+
+        // Unconditional: `assertExtensionReady` above already refused the session
+        // if no verified extension exists, so reaching here means one was loaded
+        // and must prove it. The budget follows the policy, because `session_start`
+        // waits for every OTHER loaded extension too and only `isolated` bounds
+        // that set.
+        const settled = await withTimeout(
+          record.handshake.then(() => true),
+          piHandshakeTimeoutMs(
+            this.extensionPolicy(),
+            mcpServers.length,
+            packages.extensions.length
+          ),
+          false
+        )
+        ensureConnected()
+        if (record.exited) throw new PiProcessExitedError(record.exitCode)
+        if (record.cancelling) throw new Error("Pi session closed during startup")
+        if (!settled) {
+          await this.closeSession(piSessionId)
+          throw new PiExtensionHandshakeError(
+            piSessionId,
+            this.extensionPolicy(),
+            mcpServers.length,
+            packages.extensions.length
           )
         }
-      },
-      onProtocolError: (error: PiFrameError) => {
-        this.dispatchError(record.piSessionId, error.message)
-        void this.closeSession(record.piSessionId)
-      },
-    })
 
-    const record: PiProcess = {
-      createOptions: structuredClone(options),
-      agentId,
-      piSessionId,
-      peer,
-      cwd,
-      unlisten: [],
-      framing: "unknown",
-      queues: new Set(),
-      listeners: new Set(),
-      extensionUi: createExternalAgentUiState(),
-      streamState: { toolCallsByIndex: new Map(), startedToolCalls: new Set() },
-      usageBaseline:
-        extra.resumed || extra.forkFrom
-          ? undefined
-          : {
-              promptTokens: 0,
-              completionTokens: 0,
-              totalTokens: 0,
-            },
-      busy: false,
-      lastUsedAt: Date.now(),
-      exited: false,
-      handshake: Promise.resolve(),
-    }
-    record.handshake = new Promise<void>((resolve) => {
-      record.settleHandshake = resolve
-    })
-    this.processes.set(piSessionId, record)
-    this.sessionOptions.set(piSessionId, record.createOptions)
-
-    try {
-      // Two hosts, two framings, one codec.
-      //
-      // The Node/CLI backend honours `framing: "raw"` and emits base64 chunks on
-      // `stdout-raw`. The Rust host (desktop and headless) reads with
-      // `BufReader::lines()` and emits `\n`-stripped lines on `stdout`; its
-      // `ExternalAgentSpawnConfig` has no `framing` field, so the flag below is
-      // simply ignored there. Subscribing to only `stdout-raw` is why the desktop
-      // received nothing at all: the process started, the version probe (which
-      // listens on `stdout`) succeeded, and then every frame fell on the floor.
-      //
-      // The two are mutually exclusive per host today. The latch makes that a
-      // property of the data rather than an assumption: once a raw frame arrives,
-      // line events for this session are ignored, so a host that later emitted
-      // both cannot double-feed the decoder.
-      record.unlisten.push(
-        await this.processHost.onStdoutRaw((payload) => {
-          if (payload.processId !== agentId) return
-          record.framing = "raw"
-          peer.ingest(base64ToBytes(payload.data))
-        })
-      )
-      record.unlisten.push(
-        await this.processHost.onStdoutLine((payload) => {
-          if (payload.processId !== agentId) return
-          if (record.framing === "raw") return
-          record.framing = "line"
-          // Re-append exactly the one byte the line reader stripped, so the
-          // strict LF codec sees the frame Pi actually wrote. Safe because the
-          // Rust reader splits on the `\n` BYTE only: U+2028/U+2029 do not
-          // split there (that is a Node `readline` defect, ADR-0119), and a raw
-          // `\r` cannot occur inside a Pi frame because `JSON.stringify`
-          // escapes it as `\\r`.
-          peer.ingest(textToBytes(`${payload.data}\n`))
-        })
-      )
-      record.unlisten.push(
-        await this.processHost.onExit((payload) => {
-          if (payload.processId !== agentId) return
-          record.exited = true
-          record.exitCode = payload.code
-          record.settleHandshake?.()
-          peer.endOfStream()
-          this.cancelPendingDialogs(record.piSessionId, record)
-          peer.rejectAll(`Pi process exited (code ${payload.code})`)
-          if (!record.shellStopped)
-            this.dispatchError(record.piSessionId, `Pi process exited with code ${payload.code}`)
-          this.finishQueues(record)
-        })
-      )
-
-      if (record.cancelling) throw new Error("Pi session closed during startup")
-      const spawnConfig: { config: AgentProcessSpawnSpec } = {
-        config: {
-          id: agentId,
-          sandboxPolicy: this._config.sandboxPolicy,
-          command: this._config.process?.command ?? "pi",
-          args,
-          cwd,
-          env: {
-            // The package-roots request is set ONLY from resolved packages
-            // below — a value typed into the agent's own env is discarded.
-            ...withPiSubagentExtensions(
-              withoutKey(this._config.process?.env, PI_PACKAGE_ROOTS_ENV),
-              managed?.extensions ?? [],
-              extension
-            ),
-            // Plugin package values (`COGNIA_PIPKG_*`) go before every
-            // Cognia-owned key, so nothing a package declares can shadow one.
-            ...packages.env,
-            COGNIA_TOOLHOST_PI_MCP_SERVERS: JSON.stringify(mcpServers),
-            COGNIA_TOOLHOST_PI_MCP_TOOL_POLICY: JSON.stringify(options.nativePolicy?.tools ?? {}),
-            COGNIA_TOOLHOST_PI_ADDITIONAL_DIRECTORIES: JSON.stringify(additionalDirectories),
-            ...(packages.readableRoots.length > 0
-              ? { [PI_PACKAGE_ROOTS_ENV]: JSON.stringify(packages.readableRoots) }
-              : {}),
-            // The extension owns no policy: it applies this table. Computing it
-            // here keeps the matrix in tested app code (`pi-permission.ts`).
-            [PI_TOOL_POLICY_ENV]: encodePiToolPolicy(
-              applyConfiguredApprovalToPiPolicy(
-                resolvePiToolPolicy(options.permissionMode, options.allowedTools, packages.tools),
-                this._config,
-                this.matchToolPattern,
-                [...PI_BUILTIN_TOOLS, ...packages.tools]
-              )
-            ),
-            ...(systemPrompt ? { [PI_SYSTEM_PROMPT_ENV]: systemPrompt } : {}),
+        const session: ExternalAgentSession = {
+          id: piSessionId,
+          agentId: config.id,
+          status: "active",
+          permissionMode: options.permissionMode,
+          allowedTools: options.allowedTools,
+          context: options.context as ExternalAgentSession["context"],
+          createdAt: new Date(),
+          lastActivityAt: new Date(),
+          metadata: {
+            piSessionId,
+            extensionUi: record.extensionUi,
+            piVersion: this.versionVerdict?.version,
+            piVersionStatus: this.versionVerdict?.status,
+            cwd,
+            additionalDirectories,
+            forkedFrom: extra.forkFrom,
+            ...(packages.refs.length > 0 ? { piPackages: packages.refs } : {}),
           },
-          // The whole reason this adapter exists on a separate framing path.
-          framing: "raw",
-        },
+        }
+        this._sessions.set(piSessionId, session)
+        await this.refreshSessionCommands(piSessionId)
+        ensureConnected()
+        // Persisted sessions already contain paid work. Establish the baseline
+        // before the first new prompt so historical usage is never charged twice.
+        if (extra.resumed || extra.forkFrom) await this.readSessionUsage(piSessionId)
+        ensureConnected()
+        record.starting = false
+        return session
+      } catch (error) {
+        if (!registered) {
+          releaseSlot()
+          throw error
+        }
+        try {
+          await this.closeSession(piSessionId)
+        } catch (cleanup) {
+          throw new AggregateError([error, cleanup], "Pi startup and process cleanup failed")
+        }
+        throw error
       }
-      // The Rust process manager outlives this realm. A reload (watchdog, Fast
-      // Refresh, a restarted renderer) forgets the Pi process it started while
-      // the host keeps it registered, and every later resume of this
-      // conversation was refused with "Agent <id> is already running" — a
-      // lease held by a process with no owner left. The other adapters reclaim
-      // that orphan already; Pi never did. It is safe for the same reason:
-      // `resumeSession` retires any process THIS adapter still owns for the id
-      // before it gets here, so whatever the host still has registered is dead
-      // weight. A second collision after the reclaim is a live holder and
-      // surfaces as a typed conflict, never as a generic spawn failure.
-      record.spawning = spawnReclaimingOrphan({
-        id: agentId,
-        spawn: () => this.processHost.spawn(spawnConfig.config),
-        kill: (id) => this.processHost.kill(id),
-      }).catch((error: unknown) => {
-        throw this.classifySpawnConflict(error) ?? error
-      })
-
-      await record.spawning
-
-      // Unconditional: `assertExtensionReady` above already refused the session
-      // if no verified extension exists, so reaching here means one was loaded
-      // and must prove it. The budget follows the policy, because `session_start`
-      // waits for every OTHER loaded extension too and only `isolated` bounds
-      // that set.
-      const settled = await withTimeout(
-        record.handshake.then(() => true),
-        piHandshakeTimeoutMs(this.extensionPolicy(), mcpServers.length, packages.extensions.length),
-        false
-      )
-      if (record.exited) throw new PiProcessExitedError(record.exitCode)
-      if (record.cancelling) throw new Error("Pi session closed during startup")
-      if (!settled) {
-        await this.closeSession(piSessionId)
-        throw new PiExtensionHandshakeError(
-          piSessionId,
-          this.extensionPolicy(),
-          mcpServers.length,
-          packages.extensions.length
-        )
-      }
-
-      const session: ExternalAgentSession = {
-        id: piSessionId,
-        agentId: this._config.id,
-        status: "active",
-        permissionMode: options.permissionMode,
-        allowedTools: options.allowedTools,
-        context: options.context as ExternalAgentSession["context"],
-        createdAt: new Date(),
-        lastActivityAt: new Date(),
-        metadata: {
-          piSessionId,
-          extensionUi: record.extensionUi,
-          piVersion: this.versionVerdict?.version,
-          piVersionStatus: this.versionVerdict?.status,
-          cwd,
-          additionalDirectories,
-          forkedFrom: extra.forkFrom,
-          ...(packages.refs.length > 0 ? { piPackages: packages.refs } : {}),
-        },
-      }
-      this._sessions.set(piSessionId, session)
-      await this.refreshSessionCommands(piSessionId)
-      // Persisted sessions already contain paid work. Establish the baseline
-      // before the first new prompt so historical usage is never charged twice.
-      if (extra.resumed || extra.forkFrom) await this.readSessionUsage(piSessionId)
-      return session
-    } catch (error) {
-      try {
-        await this.closeSession(piSessionId)
-      } catch (cleanup) {
-        throw new AggregateError([error, cleanup], "Pi startup and process cleanup failed")
-      }
-      throw error
+    })()
+    this.inFlightStarts.add(startPromise)
+    try {
+      return await startPromise
+    } finally {
+      this.inFlightStarts.delete(startPromise)
     }
   }
 
@@ -1367,19 +1531,48 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   }
 
   /**
-   * Make room for another process, closing the least-recently-used idle one.
-   * A host where every process is mid-turn reports `resource_limit` instead of
-   * killing someone else's live work.
+   * Atomically reserve one process slot, closing the least-recently-used idle
+   * process when at capacity. Serialized so concurrent starts cannot overshoot
+   * `maxProcesses` or evict the same idle process twice.
    */
-  private async reclaimCapacity(): Promise<void> {
-    if (this.processes.size < this.maxProcesses) return
-    const idle = [...this.processes.values()]
-      .filter((record) => !record.busy && !record.nativeRunning && !record.shellRunning)
-      .sort((a, b) => a.lastUsedAt - b.lastUsedAt)
-    if (idle.length === 0) {
-      throw new PiResourceLimitError(this.maxProcesses)
+  private async acquireProcessSlot(generation: number): Promise<() => void> {
+    const previous = this.slotQueue
+    let releaseQueue!: () => void
+    this.slotQueue = new Promise<void>((resolve) => {
+      releaseQueue = resolve
+    })
+    await previous
+    try {
+      for (;;) {
+        if (generation !== this.connectionGeneration || !this.isConnected()) {
+          throw new Error("Pi session closed during startup")
+        }
+        if (this.processes.size + this.reservedSlots < this.maxProcesses) {
+          this.reservedSlots++
+          let released = false
+          return () => {
+            if (released) return
+            released = true
+            this.reservedSlots = Math.max(0, this.reservedSlots - 1)
+          }
+        }
+        const idle = [...this.processes.values()]
+          .filter(
+            (record) =>
+              !record.starting &&
+              !this.isProcessActive(record) &&
+              !record.closing &&
+              !record.retiring
+          )
+          .sort((a, b) => a.lastUsedAt - b.lastUsedAt)
+        if (idle.length === 0) {
+          throw new PiResourceLimitError(this.maxProcesses)
+        }
+        await this.closeSession(idle[0].piSessionId)
+      }
+    } finally {
+      releaseQueue()
     }
-    await this.closeSession(idle[0].piSessionId)
   }
 
   async closeSession(sessionId: string): Promise<void> {
@@ -1405,12 +1598,14 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     await record.spawning?.catch(() => undefined)
     if (!record.exited) {
       // Ask Pi to stop cleanly first; a hard kill mid-tool-call can leave a
-      // half-written file behind.
+      // half-written file behind. Use a tighter grace budget when retiring a
+      // process whose prompt ACK already timed out.
+      const graceMs = record.retiring ? 500 : 5000
       try {
-        const cleared = record.peer.sendCommand("clear_queue", {}, 5000)
-        const aborted = record.peer.sendCommand("abort", {}, 5000)
+        const cleared = record.peer.sendCommand("clear_queue", {}, graceMs)
+        const aborted = record.peer.sendCommand("abort", {}, graceMs)
         this.cancelPendingDialogs(sessionId, record)
-        await withTimeout(Promise.all([cleared, aborted]), 5000, undefined)
+        await withTimeout(Promise.all([cleared, aborted]), graceMs, undefined)
       } catch {
         // Already gone, or refused — the kill below is the real guarantee.
       }
@@ -1440,8 +1635,11 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     if (!promptInputPassesGate(message, this.outboundGate, { sessionId })) {
       throw new PiOutboundBlockedError()
     }
-    const currentOptions =
-      this.processes.get(sessionId)?.createOptions ?? this.sessionOptions.get(sessionId)
+    const existingRecord = this.processes.get(sessionId)
+    if (existingRecord?.retiring) {
+      this.requireProcess(sessionId)
+    }
+    const currentOptions = existingRecord?.createOptions ?? this.sessionOptions.get(sessionId)
     if (currentOptions && options) {
       const nextOptions = { ...currentOptions }
       for (const key of [
@@ -1465,7 +1663,10 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     }
     // Recovery is only before a new turn. Never replay a prompt whose tool
     // effects may already have reached the host before an unexpected exit.
-    if (this.processes.get(sessionId)?.exited || this.sessionRestarts.has(sessionId)) {
+    if (
+      (this.processes.get(sessionId)?.exited && !this.processes.get(sessionId)?.retiring) ||
+      this.sessionRestarts.has(sessionId)
+    ) {
       await this.resumeSession(sessionId)
     }
     const record = this.requireProcess(sessionId)
@@ -1489,6 +1690,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
         disposition?: "started" | "queued" | "handled"
       } | null>("prompt", prompt, options?.timeout ?? 60000)
       .then((response) => {
+        if (this.processes.get(sessionId) !== record || record.retiring) return
         // Consumed commands have no agent_settled. Older versions omit data.
         if (response?.disposition === "handled" && (record.nativeRunCount ?? 0) === runCount) {
           // A handled command has no model usage of its own. Release its
@@ -1504,15 +1706,29 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
         }
       })
     let acceptanceCleanup: Promise<void> | undefined
+    let uncertainFailure: PiTurnDeliveryUncertainError | undefined
     void accepted.catch((error: unknown) => {
-      // A preflight dialog can still be running when acceptance times out.
-      // Abort alone cannot stop an extension that has not started its agent run;
-      // retire the process before permitting a retry or a late dialog answer.
-      if ([...this.pendingDialogs.values()].some((dialog) => dialog.sessionId === sessionId)) {
+      const confirmedNotStarted =
+        error instanceof PiRpcCommandRejectedError || error instanceof PiRpcCommandNotSentError
+      const hasPendingDialog = [...this.pendingDialogs.values()].some(
+        (dialog) => dialog.sessionId === sessionId
+      )
+      // Once a prompt may have been written to Pi without a confirmed rejection,
+      // late frames from that turn have no per-turn id and would bleed into a
+      // subsequent turn on the same process. Retire the process immediately.
+      if (!confirmedNotStarted || hasPendingDialog) {
+        record.retiring = true
+        this.cancelPendingDialogs(sessionId, record)
         acceptanceCleanup = this.closeSession(sessionId)
-        // The finally block propagates a failed cleanup and retains the busy
+        // The finally block propagates a failed cleanup and retains the retiring
         // guard. Attach a handler immediately while a consumer is still yielding.
         void acceptanceCleanup.catch(() => undefined)
+      }
+      if (!confirmedNotStarted) {
+        const detail = error instanceof Error ? error.message : String(error)
+        uncertainFailure = new PiTurnDeliveryUncertainError(sessionId, detail, { cause: error })
+        queue.end(uncertainFailure)
+        return
       }
       queue.end(error instanceof Error ? error : new Error(String(error)))
     })
@@ -1525,20 +1741,43 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
         if (event.type === "done") return
       }
     } finally {
-      await acceptanceCleanup
-      record.busy = false
-      const session = this._sessions.get(sessionId)
-      if (session && session.status !== "closed")
-        session.status = record.exited ? "error" : record.nativeRunning ? "executing" : "active"
-      if (!record.nativeRunning) record.queuedInputs = undefined
-      record.queues.delete(queue)
-      record.lastUsedAt = Date.now()
+      let cleanupError: unknown
+      try {
+        await acceptanceCleanup
+      } catch (error) {
+        cleanupError = error
+      } finally {
+        record.busy = false
+        const session = this._sessions.get(sessionId)
+        if (session && session.status !== "closed")
+          session.status =
+            record.exited || record.retiring
+              ? "error"
+              : record.nativeRunning
+                ? "executing"
+                : "active"
+        if (!record.nativeRunning) record.queuedInputs = undefined
+        record.queues.delete(queue)
+        record.lastUsedAt = Date.now()
+      }
+      if (cleanupError !== undefined) {
+        if (uncertainFailure) {
+          throw new PiTurnDeliveryUncertainError(
+            sessionId,
+            `${uncertainFailure.message} (process retirement failed: ${
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+            })`,
+            { cause: new AggregateError([uncertainFailure, cleanupError], "Pi retirement failed") }
+          )
+        }
+        throw cleanupError
+      }
     }
   }
 
-  private dispatchEvent(sessionId: string, event: PiEvent): void {
-    const record = this.processes.get(sessionId)
-    if (!record) return
+  private dispatchEvent(record: PiProcess, event: PiEvent): void {
+    const sessionId = record.piSessionId
+    if (this.processes.get(sessionId) !== record || record.retiring) return
 
     if (
       event.type === "extension_ui_request" &&
@@ -1699,6 +1938,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     done: ExternalAgentEvent & { type: "done" }
   ): Promise<void> {
     const tokenUsage = await this.readSessionUsage(sessionId)
+    if (record.retiring) return
     // A canonical `usage_update` before `done` as well, so a streaming consumer
     // that never inspects the terminal event still sees the turn's cost.
     if (tokenUsage) {
@@ -1711,6 +1951,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
       })
     }
     const settled = tokenUsage ? { ...done, tokenUsage } : done
+    this.unpersistedSessions.delete(sessionId)
     this.publishSessionEvent(record, settled)
     record.terminalDelivered = true
     // Release anything that arrived behind the held `done`, in arrival order.
@@ -1731,12 +1972,18 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     }
   }
 
-  private dispatchError(sessionId: string, error: string): void {
-    const record = this.processes.get(sessionId)
-    if (!record) return
+  private dispatchError(record: PiProcess, error: string, code?: string): void {
+    const sessionId = record.piSessionId
+    if (this.processes.get(sessionId) !== record || record.retiring) return
     const session = this._sessions.get(sessionId)
     if (session && record.exited) session.status = "error"
-    this.publishSessionEvent(record, { type: "error", error, sessionId, timestamp: new Date() })
+    this.publishSessionEvent(record, {
+      type: "error",
+      error,
+      ...(code ? { code } : {}),
+      sessionId,
+      timestamp: new Date(),
+    })
   }
 
   private finishQueues(record: PiProcess): void {
@@ -1897,8 +2144,16 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
       await this.refreshSessionCommands(sessionId)
       return { disposition: "handled", mode: "steer" }
     } catch (error) {
-      if ([...this.pendingDialogs.values()].some((dialog) => dialog.sessionId === sessionId))
+      const confirmedNotStarted =
+        error instanceof PiRpcCommandRejectedError || error instanceof PiRpcCommandNotSentError
+      if (
+        !confirmedNotStarted ||
+        [...this.pendingDialogs.values()].some((dialog) => dialog.sessionId === sessionId)
+      ) {
+        record.retiring = true
+        this.cancelPendingDialogs(sessionId, record)
         await this.closeSession(sessionId)
+      }
       throw error
     }
   }
@@ -2439,7 +2694,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     if (!pending || pending.sessionId !== sessionId) return
     const record = this.processes.get(sessionId)
     this.pendingDialogs.delete(requestId)
-    if (!record || record.exited || record.cancelling) return
+    if (!record || record.exited || record.cancelling || record.retiring) return
     if (pending.expiresAt !== undefined && Date.now() >= pending.expiresAt) return
     const { method } = pending
 
@@ -2520,12 +2775,15 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   async checkProviderAuth(provider: string): Promise<PiAuthVerdict> {
     const config = this._config
     if (!config) return { status: "unreadable", provider: null, unreadableReason: "no_output" }
-    const { stdout, exitCode } = await this.runCliProbe(
+    const { stdout, exitCode, timedOut } = await this.runCliProbe(
       config,
       buildPiAuthCheckArgs({ provider }),
       "auth",
       15000
     )
+    if (timedOut) {
+      return { status: "unreadable", provider, unreadableReason: "no_output" }
+    }
     const verdict = classifyPiAuthProbe({ stdout, exitCode })
     // Pi echoes the provider it resolved; when it answered without one, keep
     // the id we asked about so the caller can still label the row.
@@ -2545,7 +2803,13 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   async listModelProviders(): Promise<PiProviderListing> {
     const config = this._config
     if (!config) return { status: "unreadable" }
-    const { stdout } = await this.runCliProbe(config, this.listModelsArgs(), "models", 20000)
+    const { stdout, exitCode, timedOut } = await this.runCliProbe(
+      config,
+      this.listModelsArgs(),
+      "models",
+      20000
+    )
+    if (timedOut || exitCode !== 0) return { status: "unreadable" }
     return parsePiModelProviders(stdout)
   }
 
@@ -2560,7 +2824,13 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   async listAgentModels(): Promise<PiModelListing> {
     const config = this._config
     if (!config) return { status: "unreadable" }
-    const { stdout } = await this.runCliProbe(config, this.listModelsArgs(), "models", 20000)
+    const { stdout, exitCode, timedOut } = await this.runCliProbe(
+      config,
+      this.listModelsArgs(),
+      "models",
+      20000
+    )
+    if (timedOut || exitCode !== 0) return { status: "unreadable" }
     return parsePiModelListing(stdout)
   }
 
@@ -2595,7 +2865,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   async listAgentModelsViaRpc(): Promise<AcpSessionModelState | null> {
     const config = this._config
     if (!config) return null
-    const probeId = `${config.id}:models-rpc-probe:${Date.now()}`
+    const probeId = `${config.id}:models-rpc-probe:${Date.now()}:${++this.probeSeq}`
     const peer = new PiRpcPeer({
       writeRaw: (frame) => this.processHost.send(probeId, frame).then(() => undefined),
       // A discovery process is asked one question and answers it. Pi still
@@ -2720,6 +2990,12 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
   private requireProcess(sessionId: string): PiProcess {
     const record = this.processes.get(sessionId)
     if (!record) throw new Error(`Unknown Pi session: ${sessionId}`)
+    if (record.retiring) {
+      if (record.closing) throw new Error(`Pi session ${sessionId} is closing`)
+      throw new Error(
+        `Pi session ${sessionId} could not be retired after an uncertain turn; close the session before retrying`
+      )
+    }
     if (record.exited) throw new Error(`Pi session ${sessionId} is no longer running`)
     if (record.closing || record.cancelling) throw new Error(`Pi session ${sessionId} is closing`)
     return record
@@ -3006,6 +3282,38 @@ export class PiProcessExitedError extends Error {
     )
     this.name = "PiProcessExitedError"
     this.exitCode = typeof exitCode === "number" ? exitCode : null
+  }
+}
+
+/** Structured error code preventing automatic prompt replay after uncertain delivery. */
+export const PI_TURN_DELIVERY_UNCERTAIN_ERROR_CODE = "turn_delivery_uncertain"
+
+/**
+ * Raised when a Pi prompt may already have reached the process, so its
+ * delivery outcome is unknown. The process is retired to prevent late frames
+ * from bleeding into a later turn, and callers must never auto-retry it.
+ */
+export class PiTurnDeliveryUncertainError extends Error {
+  readonly errorCode = PI_TURN_DELIVERY_UNCERTAIN_ERROR_CODE
+  readonly reasonCode = "execution_failed"
+  readonly retryable = false
+  readonly deliveryUncertain = true
+  constructor(
+    readonly sessionId: string,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options)
+    this.name = "PiTurnDeliveryUncertainError"
+  }
+}
+
+/** Raised when resuming a Pi session whose persisted history is missing on this host. */
+export class PiSessionNotFoundError extends Error {
+  readonly reasonCode = "session_resolution_failed"
+  constructor(readonly sessionId: string) {
+    super(`Pi session "${sessionId}" was not found on this host`)
+    this.name = "PiSessionNotFoundError"
   }
 }
 
