@@ -40,8 +40,9 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { useActiveCharacterId } from "@/hooks/pet/use-active-character-id"
 import { cn } from "@/lib/utils"
-import { seedMainChat } from "@/lib/pet/chat/seed-main-chat"
+import { formatPetHandoffSeed, seedMainChat } from "@/lib/pet/chat/seed-main-chat"
 import { PetChatTranscript } from "../pet-chat-transcript"
 import { PetTalkComposer } from "../pet-talk-composer"
 import { usePetConsoleActions } from "./pet-console-actions-context"
@@ -54,6 +55,7 @@ export interface ChatTabProps {
 export function ChatTab({ petName }: ChatTabProps) {
   const t = useTranslations("pet")
   const router = useRouter()
+  const activeCharacterId = useActiveCharacterId()
   const actions = usePetConsoleActions()
   const { chat } = actions
   const [enabling, setEnabling] = useState(false)
@@ -84,8 +86,22 @@ export function ChatTab({ petName }: ChatTabProps) {
 
   const openFullChat = () => {
     const turns = chat.turns ?? []
-    const seed = chat.pending ?? turns[turns.length - 1]?.userText ?? ""
-    void seedMainChat(seed).then(() => router.push("/"))
+    const seed = formatPetHandoffSeed({
+      pending: chat.pending,
+      recentTurns: turns,
+      petName,
+      labels: {
+        contextHeader: t("chat.handoffHeader", {
+          name: petName?.trim() || t("chat.petFallbackName"),
+        }),
+        userLabel: t("chat.you"),
+        petFallbackName: t("chat.petFallbackName"),
+      },
+    })
+    const promise = activeCharacterId
+      ? seedMainChat(seed, { sessionOptions: { characterId: activeCharacterId } })
+      : seedMainChat(seed)
+    void promise.then(() => router.push("/"))
   }
 
   if (presentationLoading) return <PetTabSkeleton testId="pet-chat-loading" count={4} />

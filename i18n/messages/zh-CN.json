@@ -33922,6 +33922,7 @@
       "useSvg": "内置矢量吉祥物"
     },
     "bubbleAction": {
+      "openAttention": "立即查看",
       "openConsole": "打开{tab}"
     },
     "bubbles": {
@@ -34120,6 +34121,7 @@
         "failed": "未能开启宠物聊天，请重试。",
         "title": "开启宠物聊天"
       },
+      "handoffHeader": "来自宠物对话的上下文（{name}）：",
       "openFullChat": "打开完整对话",
       "petFallbackName": "宠物",
       "scrollToBottom": "滚动到最新宠物消息",
@@ -34129,9 +34131,12 @@
     "commands": {
       "clean": "给宠物清洁",
       "feed": "喂宠物",
+      "openPopup": "打开宠物快捷菜单",
       "pet": "抚摸宠物",
       "play": "和宠物玩耍",
+      "resetPosition": "重置桌宠位置",
       "sleep": "哄宠物睡觉",
+      "toggleClickThrough": "切换桌宠鼠标穿透",
       "toggleWindow": "切换桌宠",
       "treat": "给宠物吃零食",
       "unavailable": {
@@ -34407,6 +34412,16 @@
       "title": "道具"
     },
     "journal": {
+      "attention": {
+        "open": "前往处理",
+        "sources": {
+          "chat": "对话",
+          "fleet": "智能体",
+          "run": "运行任务",
+          "team": "团队"
+        },
+        "title": "待你处理的事项（{count}）"
+      },
       "dayTotals": "{count} 条 · +{xp} XP",
       "empty": "日记还是空的——照顾你的宠物，它的每一天都会记录在这里。",
       "kinds": {
@@ -56025,6 +56040,8 @@
           "invalid": "这不是有效的 Codex 兼容 v2 宠物包。请检查清单、图片格式与图集尺寸。",
           "tooLarge": "精灵图超过 25 MiB 限制，请压缩或重新导出。"
         },
+        "hatchSkillMissing": "未在本地技能库检测到 hatch-pet 技能。请确认所选对话智能体支持 $hatch-pet，并在生成后于下方导入产出的 pet.json 与精灵图。",
+        "hatchSkillReady": "已检测到本地 hatch-pet 技能。生成完成后请在下方导入产出的 pet.json 与精灵图。",
         "import": "导入 v2 精灵图宠物",
         "importHint": "同时选择 pet.json 与对应的 spritesheet.webp 或 spritesheet.png。安装前 Cognia 会校验 v2 清单和 1536×2288 图集。",
         "installed": "精灵图宠物已安装并启用。",
@@ -58551,9 +58568,12 @@
       "notSet": "未设置",
       "petClean": "宠物：清洁",
       "petFeed": "宠物：喂食",
+      "petOpenPopup": "宠物：打开快捷菜单",
       "petPet": "宠物：抚摸",
       "petPlay": "宠物：玩耍",
+      "petResetPosition": "宠物：重置位置",
       "petSleep": "宠物：哄睡",
+      "petToggleClickThrough": "宠物：切换鼠标穿透",
       "petToggleWindow": "切换桌宠",
       "petTreat": "宠物：零食",
       "pressKey": "按下任意键…",

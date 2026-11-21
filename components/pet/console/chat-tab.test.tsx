@@ -17,8 +17,13 @@ jest.mock("next-intl", () => ({
     vars ? `${key}:${JSON.stringify(vars)}` : key,
 }))
 const push = jest.fn()
+const mockActiveCharacterId = jest.fn<string | undefined, []>(() => undefined)
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
+jest.mock("@/hooks/pet/use-active-character-id", () => ({
+  useActiveCharacterId: () => mockActiveCharacterId(),
+}))
 jest.mock("@/lib/pet/chat/seed-main-chat", () => ({
+  ...jest.requireActual("@/lib/pet/chat/seed-main-chat"),
   seedMainChat: jest.fn().mockResolvedValue("s1"),
 }))
 
@@ -64,7 +69,11 @@ function renderTab(value: PetConsoleActions) {
   return render(<ChatTab petName="Boba" />, { wrapper })
 }
 
-beforeEach(() => push.mockClear())
+beforeEach(() => {
+  push.mockClear()
+  jest.mocked(seedMainChat).mockClear()
+  mockActiveCharacterId.mockReset().mockReturnValue(undefined)
+})
 
 describe("ChatTab", () => {
   it("shows the enable CTA and turns chat on through the console", async () => {
@@ -99,11 +108,15 @@ describe("ChatTab", () => {
     expect(c.send).toHaveBeenCalledWith("hello")
   })
 
-  it("opens the full chat seeded with the latest user message", async () => {
+  it("opens the full chat seeded with recent pet conversation context and bound character (F7)", async () => {
+    mockActiveCharacterId.mockReturnValue("char-9")
     const user = userEvent.setup()
     renderTab(actions(chat({ turns: [{ id: "1", at: 1, userText: "explain X", reply: "ok" }] })))
     await user.click(screen.getByText("chat.openFullChat"))
-    expect(seedMainChat).toHaveBeenCalledWith("explain X")
+    expect(seedMainChat).toHaveBeenCalledWith(expect.stringContaining("explain X"), {
+      sessionOptions: { characterId: "char-9" },
+    })
+    expect(jest.mocked(seedMainChat).mock.calls[0][0]).toContain("Boba: ok")
     await waitFor(() => expect(push).toHaveBeenCalledWith("/"))
   })
 

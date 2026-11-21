@@ -5,7 +5,11 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { KeyboardIcon, RotateCcwIcon } from "lucide-react"
 import { isTauri } from "@/lib/tauri"
-import { PET_INTERACTION_COMMAND_IDS, PET_WINDOW_COMMAND_ID } from "@/lib/pet/command-ids"
+import {
+  PET_INTERACTION_COMMAND_IDS,
+  PET_WINDOW_ACTION_COMMAND_IDS,
+  PET_WINDOW_COMMAND_ID,
+} from "@/lib/pet/command-ids"
 import { CHAT_COPILOT_COMMAND_ID } from "@/lib/reply-copilot/screen/overlay-client"
 import { Button } from "@/components/ui/button"
 import { useShortcutStore } from "@/lib/shortcuts/registry"
@@ -100,6 +104,7 @@ const SELECTION_SHORTCUT_DEFAULTS = [
  */
 const OPTIONAL_SHORTCUT_IDS = [
   PET_WINDOW_COMMAND_ID,
+  ...PET_WINDOW_ACTION_COMMAND_IDS,
   ...PET_INTERACTION_COMMAND_IDS,
   // Registered by `ChatCopilotInitializer` in the main desktop window.
   CHAT_COPILOT_COMMAND_ID,
@@ -211,6 +216,11 @@ export function ShortcutsSection() {
 
   const optionalLabels: Record<(typeof OPTIONAL_SHORTCUT_IDS)[number], string> = {
     "pet.toggle-window": t("petToggleWindow", { fallback: "Toggle desktop pet" }),
+    "pet.open-popup": t("petOpenPopup", { fallback: "Pet: open quick menu" }),
+    "pet.toggle-click-through": t("petToggleClickThrough", {
+      fallback: "Pet: toggle click-through",
+    }),
+    "pet.reset-position": t("petResetPosition", { fallback: "Pet: reset position" }),
     "pet.feed": t("petFeed", { fallback: "Pet: feed" }),
     "pet.play": t("petPlay", { fallback: "Pet: play" }),
     "pet.pet": t("petPet", { fallback: "Pet: pet" }),

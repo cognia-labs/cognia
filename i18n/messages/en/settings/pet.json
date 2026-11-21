@@ -343,6 +343,8 @@
     "create": "Continue in chat",
     "createDescription": "Prepare an agent task draft using the installed hatch-pet skill. Review and send it in chat to continue generation and QA.",
     "createTitle": "AI Hatch Studio",
+    "hatchSkillMissing": "No local hatch-pet skill was detected. Make sure the chat agent you pick supports $hatch-pet, then import the generated pet.json and spritesheet below.",
+    "hatchSkillReady": "Local hatch-pet skill detected. After generation finishes, import the resulting pet.json and spritesheet below.",
     "delete": "Delete {name}",
     "empty": "No v2 sprite pets installed yet.",
     "error": {

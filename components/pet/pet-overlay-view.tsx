@@ -41,7 +41,10 @@ import { usePetLookTarget } from "@/hooks/pet/use-pet-look-target"
 import { usePetLocomotion } from "@/hooks/pet/use-pet-locomotion"
 import { usePetDragGesture } from "@/hooks/pet/use-pet-drag-gesture"
 import { usePetStore } from "@/stores/pet/pet-store"
-import { startOverlayPetBridge } from "@/lib/pet/events/cross-window-bridge"
+import {
+  startOverlayPetBridge,
+  type PetOpenAttentionTarget,
+} from "@/lib/pet/events/cross-window-bridge"
 import { startPetSettingsFollower, updateDesktopPetSettings } from "@/lib/pet/settings-sync"
 import { scheduleOverlayWindowReveal } from "@/lib/tauri/overlay-reveal"
 import {
@@ -203,9 +206,10 @@ export function PetOverlayView() {
   const sendInteractionRef = useRef<
     (kind: "fed" | "played" | "petted" | "talked", text?: string) => void
   >(() => {})
-  // A bubble action (e.g. "Open Insights") routes to the main window, which
-  // owns the router, exactly the way the popup's "open console" does.
+  // A bubble action (e.g. "Open Insights" or "Review now") routes to the main
+  // window, which owns the router, exactly the way the popup's "open console" does.
   const sendOpenConsoleRef = useRef<(tab: PetConsoleTab) => void>(() => {})
+  const sendOpenAttentionRef = useRef<(target: PetOpenAttentionTarget) => void>(() => {})
   useEffect(() => {
     const bridge = startOverlayPetBridge({
       // Smart-Moving: main-window activity counts as "interaction" for the
@@ -221,22 +225,16 @@ export function PetOverlayView() {
       else bridge.sendInteraction(kind, text)
     }
     sendOpenConsoleRef.current = (tab) => bridge.sendOpenConsole(tab)
+    sendOpenAttentionRef.current = (target) => bridge.sendOpenAttention?.(target)
     return () => {
       sendInteractionRef.current = () => {}
       sendOpenConsoleRef.current = () => {}
+      sendOpenAttentionRef.current = () => {}
       bridge.dispose()
     }
   }, [])
 
-  // Right-click opens the click popup in its own "pet-popup" window (the menu +
-  // interaction panel + talk composer live there). The sprite window never
-  // resizes or shifts for a menu. The popup is anchored to the pet's own box
-  // (desktop units, its insets scaled by the monitor this window is on); the native
-  // side places it above the pet (below when there is no room), clamps it to
-  // that monitor's work area, and re-places it whenever it fits itself to its
-  // card. Left-click (pet/drag) and the bubble are untouched.
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault()
+  const openAnchoredPopup = () => {
     void (async () => {
       const [pos, workArea] = await Promise.all([getPetWindowPosition(), getPetWorkArea()])
       if (!pos) return
@@ -250,6 +248,46 @@ export function PetOverlayView() {
         height: POPUP_INITIAL_HEIGHT,
         anchor: petBoxScreenRect(pos, size, scale),
       })
+    })()
+  }
+
+  // Right-click opens the click popup in its own "pet-popup" window (the menu +
+  // interaction panel + talk composer live there). The sprite window never
+  // resizes or shifts for a menu. The popup is anchored to the pet's own box
+  // (desktop units, its insets scaled by the monitor this window is on); the native
+  // side places it above the pet (below when there is no room), clamps it to
+  // that monitor's work area, and re-places it whenever it fits itself to its
+  // card. Left-click (pet/drag) and the bubble are untouched.
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    openAnchoredPopup()
+  }
+
+  // Keyboard fallback when focus reaches the overlay (F11): Enter/Space opens
+  // the quick menu; Arrow keys nudge the pet position without a pointer.
+  const handlePetKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault()
+      openAnchoredPopup()
+      return
+    }
+    const step = e.shiftKey ? 48 : 16
+    const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0
+    const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0
+    if (dx === 0 && dy === 0) return
+    e.preventDefault()
+    void (async () => {
+      const [pos, workArea] = await Promise.all([getPetWindowPosition(), getPetWorkArea()])
+      if (!pos) return
+      const scale = resolveCssToDesktopScale(
+        workArea?.scaleFactor,
+        window.devicePixelRatio,
+        isMacOs()
+      )
+      const nextX = Math.round(pos.x + dx * scale)
+      const nextY = Math.round(pos.y + dy * scale)
+      await setPetWindowPosition(nextX, nextY)
+      await persistRef.current(nextX, nextY)
     })()
   }
 
@@ -433,7 +471,11 @@ export function PetOverlayView() {
             // widget or the pet console remain the way in.
             onAction={(action) => {
               void showMainWindow()
-              sendOpenConsoleRef.current(action.tab)
+              if (action.kind === "open-attention") {
+                sendOpenAttentionRef.current(action)
+              } else {
+                sendOpenConsoleRef.current(action.tab)
+              }
               usePetStore.getState().setBubble(null)
             }}
           />
@@ -444,9 +486,11 @@ export function PetOverlayView() {
           ref={petBoxRef}
           data-testid="pet-overlay-pet"
           role="img"
+          tabIndex={0}
           aria-label={t("petLabel")}
-          className="shrink-0 cursor-grab touch-none active:cursor-grabbing"
+          className="shrink-0 cursor-grab touch-none rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
           style={containerStyle}
+          onKeyDown={handlePetKeyDown}
           onPointerDown={handlePointerDown}
           onPointerMove={dragGesture.onPointerMove}
           onPointerUp={dragGesture.onPointerUp}

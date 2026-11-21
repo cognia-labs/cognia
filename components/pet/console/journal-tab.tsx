@@ -12,14 +12,17 @@
 
 "use client"
 
-import { useState } from "react"
+import { useState, useSyncExternalStore } from "react"
+import { useRouter } from "next/navigation"
 import { useLocale, useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import { toast } from "sonner"
 import {
   AwardIcon,
   BellIcon,
+  BellRingIcon,
   CakeIcon,
+  ExternalLinkIcon,
   HandIcon,
   EggIcon,
   FlameIcon,
@@ -59,6 +62,8 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item"
+import { getAttentionSnapshot, subscribeAttention } from "@/lib/attention/attention-store"
+import type { AttentionItem } from "@/lib/attention/types"
 import { listPetActivityPage, listPetActivitySince } from "@/lib/db/pet"
 import { localDayKey } from "@/lib/pet/economy/streak"
 import type { PetActivityRow } from "@/types/pet"
@@ -126,9 +131,18 @@ export function groupByLocalDay(rows: PetActivityRow[]): DayGroup[] {
   return groups
 }
 
+const EMPTY_ATTENTION: readonly AttentionItem[] = []
+
 export function JournalTab() {
   const t = useTranslations("pet")
   const locale = useLocale()
+  const router = useRouter()
+  const attentionItems = useSyncExternalStore(
+    subscribeAttention,
+    getAttentionSnapshot,
+    () => EMPTY_ATTENTION
+  )
+  const pendingAttention = attentionItems.filter((item) => !item.stale)
   // Older pages, appended by "Load older"; immutable once read.
   const [older, setOlder] = useState<PetActivityRow[]>([])
   // Set on the first "Load older": the live head becomes "this id and up".
@@ -143,15 +157,83 @@ export function JournalTab() {
     [floorId]
   )
 
+  const openAttentionItem = (item: AttentionItem) => {
+    if (item.source === "chat" && item.sessionId) {
+      const sessionId = item.sessionId
+      void import("@/lib/chat/focus-session").then(({ CHAT_ROUTE, focusSessionInItsWorkspace }) =>
+        focusSessionInItsWorkspace(sessionId).then(() => router.push(CHAT_ROUTE))
+      )
+      return
+    }
+    if (item.source === "run" && item.runId) {
+      router.push(`/agent-runs?run=${encodeURIComponent(item.runId)}`)
+      return
+    }
+    if (item.source === "team") {
+      router.push(item.teamId ? `/squads?id=${encodeURIComponent(item.teamId)}` : "/squads")
+      return
+    }
+    router.push("/agent-runs")
+  }
+
+  const attentionSection =
+    pendingAttention.length > 0 ? (
+      <section
+        data-testid="pet-attention-list"
+        className="flex flex-col gap-2 rounded-lg border bg-card/60 p-3"
+      >
+        <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+          <BellRingIcon className="size-3.5 text-primary" aria-hidden />
+          <span>{t("journal.attention.title", { count: pendingAttention.length })}</span>
+        </div>
+        <ItemGroup>
+          {pendingAttention.map((item) => (
+            <Item
+              key={item.id}
+              data-testid={`pet-attention-item-${item.id}`}
+              size="sm"
+              className="min-w-0 px-0"
+            >
+              <ItemContent className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <Badge variant="outline" className="shrink-0 text-[10px]">
+                    {t(`journal.attention.sources.${item.source}`)}
+                  </Badge>
+                  <ItemTitle className="max-w-full truncate">{item.title}</ItemTitle>
+                </div>
+                {item.detail ? (
+                  <p className="truncate text-xs text-muted-foreground">{item.detail}</p>
+                ) : null}
+              </ItemContent>
+              <ItemActions className="shrink-0">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openAttentionItem(item)}
+                >
+                  <ExternalLinkIcon className="size-3.5" aria-hidden />
+                  {t("journal.attention.open")}
+                </Button>
+              </ItemActions>
+            </Item>
+          ))}
+        </ItemGroup>
+      </section>
+    ) : null
+
   if (!head) {
     return <PetTabSkeleton testId="pet-journal-loading" />
   }
   const rows = [...head, ...older]
   if (rows.length === 0) {
     return (
-      <Empty data-testid="pet-journal-empty" className="py-8">
-        <EmptyDescription>{t("journal.empty")}</EmptyDescription>
-      </Empty>
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+        {attentionSection}
+        <Empty data-testid="pet-journal-empty" className="py-8">
+          <EmptyDescription>{t("journal.empty")}</EmptyDescription>
+        </Empty>
+      </div>
     )
   }
 
@@ -179,6 +261,7 @@ export function JournalTab() {
 
   return (
     <div data-testid="pet-journal" className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+      {attentionSection}
       {groupByLocalDay(rows).map((group) => (
         <section key={group.day} data-journal-day={group.day} className="flex flex-col gap-1.5">
           <div className="flex items-baseline justify-between gap-2">

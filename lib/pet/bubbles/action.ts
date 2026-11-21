@@ -10,11 +10,33 @@ import { isPetConsoleTab, type PetConsoleTab } from "@/lib/pet/console-tabs"
 import type { PetEventKind } from "@/types/pet"
 
 /**
- * What clicking a bubble's action does. One variant today: open the `/pet`
- * console at a tab. A union so a later action cannot be added without every
- * handler (widget, overlay) deciding what it means.
+ * What clicking a bubble's action does:
+ *  - `open-console`: open the pet console at a tab (e.g. radar Insights).
+ *  - `open-attention`: jump directly to a pending attention item (chat
+ *    approval, team HITL gate, durable run interrupt, or fleet session) (F6).
  */
-export type PetBubbleAction = { kind: "open-console"; tab: PetConsoleTab }
+export type PetBubbleAttentionSource = "chat" | "team" | "run" | "fleet"
+
+export type PetBubbleAction =
+  | { kind: "open-console"; tab: PetConsoleTab }
+  | {
+      kind: "open-attention"
+      source: PetBubbleAttentionSource
+      sessionId?: string
+      teamId?: string
+      runId?: string
+    }
+
+const ATTENTION_SOURCES: ReadonlySet<string> = new Set<PetBubbleAttentionSource>([
+  "chat",
+  "team",
+  "run",
+  "fleet",
+])
+
+function boundedId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= 200 ? value : undefined
+}
 
 /**
  * Validate an action from an untrusted source (another window's broadcast).
@@ -25,9 +47,24 @@ export type PetBubbleAction = { kind: "open-console"; tab: PetConsoleTab }
 export function decodePetBubbleAction(value: unknown): PetBubbleAction | null {
   if (!value || typeof value !== "object") return null
   const raw = value as Record<string, unknown>
-  if (raw.kind !== "open-console") return null
-  if (!isPetConsoleTab(raw.tab)) return null
-  return { kind: "open-console", tab: raw.tab }
+  if (raw.kind === "open-console") {
+    if (!isPetConsoleTab(raw.tab)) return null
+    return { kind: "open-console", tab: raw.tab }
+  }
+  if (raw.kind === "open-attention") {
+    if (typeof raw.source !== "string" || !ATTENTION_SOURCES.has(raw.source)) return null
+    const sessionId = boundedId(raw.sessionId)
+    const teamId = boundedId(raw.teamId)
+    const runId = boundedId(raw.runId)
+    return {
+      kind: "open-attention",
+      source: raw.source as PetBubbleAttentionSource,
+      ...(sessionId ? { sessionId } : {}),
+      ...(teamId ? { teamId } : {}),
+      ...(runId ? { runId } : {}),
+    }
+  }
+  return null
 }
 
 /** The follow-up a bubble for this event kind offers, if any. */

@@ -20,7 +20,11 @@ import type {
 import type { PetProfileSyncRow } from "@/lib/pet/sync/pet-sync"
 import { ALL_PET_SPECIES } from "@/lib/pet/skins/species-traits"
 import { isPetConsoleTab, type PetConsoleTab } from "@/lib/pet/console-tabs"
-import { decodePetBubbleAction, type PetBubbleAction } from "@/lib/pet/bubbles/action"
+import {
+  decodePetBubbleAction,
+  type PetBubbleAction,
+  type PetBubbleAttentionSource,
+} from "@/lib/pet/bubbles/action"
 
 /** Bridge wire text for a speech bubble — already localized by the main side. */
 export interface PetBridgeBubble {
@@ -143,9 +147,17 @@ export type PetBridgeMessage =
   | { v: 1; t: "bubble"; bubble: PetBridgeBubble | null }
   | { v: 1; t: "interaction"; kind: PetBridgeInteractionKind; text?: string }
   | { v: 1; t: "request-state" }
-  // Popup → main: open the pet console at a tab. The main window owns the
-  // router; the popup only shows/raises the main window before sending.
+  // Popup/overlay → main: open the pet console at a tab, or jump straight to a
+  // pending attention item (F6). The main window owns the router.
   | { v: 1; t: "open-console"; tab: PetConsoleTab }
+  | {
+      v: 1
+      t: "open-attention"
+      source: PetBubbleAttentionSource
+      sessionId?: string
+      teamId?: string
+      runId?: string
+    }
   // Throttled main-window user-activity ping (Smart-Moving). `at` is epoch ms
   // for ordering only — receivers stamp their OWN clock (the overlay's wander
   // gate runs on performance.now(), a different clock domain).
@@ -293,6 +305,24 @@ export function decodePetBridgeMessage(raw: unknown): PetBridgeMessage | null {
       return { v: 1, t: "request-state" }
     case "open-console":
       return isPetConsoleTab(raw.tab) ? { v: 1, t: "open-console", tab: raw.tab } : null
+    case "open-attention": {
+      const action = decodePetBubbleAction({
+        kind: "open-attention",
+        source: raw.source,
+        sessionId: raw.sessionId,
+        teamId: raw.teamId,
+        runId: raw.runId,
+      })
+      if (!action || action.kind !== "open-attention") return null
+      return {
+        v: 1,
+        t: "open-attention",
+        source: action.source,
+        ...(action.sessionId ? { sessionId: action.sessionId } : {}),
+        ...(action.teamId ? { teamId: action.teamId } : {}),
+        ...(action.runId ? { runId: action.runId } : {}),
+      }
+    }
     case "activity":
       return typeof raw.at === "number" && Number.isFinite(raw.at)
         ? { v: 1, t: "activity", at: raw.at }

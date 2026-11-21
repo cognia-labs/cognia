@@ -74,4 +74,31 @@ describe("createAttentionSource", () => {
       meta: { pendingCount: 1 },
     })
   })
+
+  it("includes attentionTarget routing metadata when the primary pending item carries task identity (F6)", () => {
+    const emit = jest.fn()
+    const wire = createAttentionSource({
+      subscribe: () => () => {},
+      getSnapshot: () => [
+        {
+          ...attentionItem("chat:req-1"),
+          source: "chat",
+          kind: "tool-approval",
+          sessionId: "session-42",
+        },
+      ],
+    })
+
+    wire(emit)
+
+    expect(emit).toHaveBeenCalledWith({
+      source: "attention",
+      kind: "waiting",
+      xp: 0,
+      meta: {
+        pendingCount: 1,
+        attentionTarget: { source: "chat", sessionId: "session-42" },
+      },
+    })
+  })
 })

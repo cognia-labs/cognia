@@ -110,8 +110,11 @@ describe("ShortcutsSection", () => {
     it("renders 'Not set' with no Clear button until the user records one", () => {
       render(<ShortcutsSection />)
       expect(screen.getByText("Toggle desktop pet")).toBeInTheDocument()
-      // The window toggle, the six nurture commands and the chat copilot.
-      expect(screen.getAllByText("Not set")).toHaveLength(8)
+      // The window toggle, 3 window actions, 6 nurture commands, and the chat copilot.
+      expect(screen.getAllByText("Not set")).toHaveLength(11)
+      expect(screen.getByText("Pet: open quick menu")).toBeInTheDocument()
+      expect(screen.getByText("Pet: toggle click-through")).toBeInTheDocument()
+      expect(screen.getByText("Pet: reset position")).toBeInTheDocument()
       expect(screen.queryByLabelText("Clear")).toBeNull()
     })
 
@@ -133,7 +136,7 @@ describe("ShortcutsSection", () => {
       invoke.mockResolvedValue(undefined)
       useShortcutStore.setState({ bindings: { "pet.feed": "ctrl+alt+f" }, hydrated: true })
       render(<ShortcutsSection />)
-      expect(screen.getAllByText("Not set")).toHaveLength(7)
+      expect(screen.getAllByText("Not set")).toHaveLength(10)
       fireEvent.click(screen.getByLabelText("Clear"))
       await act(async () => {
         await Promise.resolve()
@@ -164,8 +167,8 @@ describe("ShortcutsSection", () => {
         hydrated: true,
       })
       render(<ShortcutsSection />)
-      // Only the six unbound nurture rows and the chat copilot still say so.
-      expect(screen.getAllByText("Not set")).toHaveLength(7)
+      // Only the 3 window actions, 6 nurture rows, and the chat copilot still say so.
+      expect(screen.getAllByText("Not set")).toHaveLength(10)
       const clearButton = screen.getByLabelText("Clear")
       fireEvent.click(clearButton)
       await act(async () => {

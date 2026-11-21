@@ -18,8 +18,7 @@ import {
   enqueuePetWork,
   notifyPetResetCompleted,
   type PetScopeToken,
-} from "@/lib/pet/runtime/pet-scope"
-import { usePetStore } from "@/stores/pet/pet-store"
+} from "./pet-scope"
 import type {
   PetAchievementRecord,
   PetActivityRow,
@@ -303,17 +302,6 @@ export async function resetPet(): Promise<void> {
         ])
       }
     )
-  })
-
-  // Clear transient runtime UI state from the old pet before re-seeding.
-  usePetStore.setState({
-    visualState: "idle",
-    oneShotQueue: [],
-    bubble: null,
-    lastGrewStats: [],
-    careAlert: null,
-    interactionRefusal: null,
-    profileSnapshot: null,
   })
 
   // The activity log needs no tombstones: the phone drops its copy when the

@@ -199,14 +199,15 @@ describe("consumeItem", () => {
   })
 
   it("merges decor cosmetics without wiping existing palette or eyes", async () => {
+    const palette = { primary: "#111111", secondary: "#222222", accent: "#333333" }
     await upsertPetProfile({
       ...(await seedProfile(50)),
-      cosmetic: { palette: "sunset", eyes: "star" },
+      cosmetic: { palette, eyes: "star" },
     })
     await purchaseItem("star-charm")
     expect(await consumeItem("star-charm")).toEqual({ ok: true })
     expect((await getPetProfile())?.cosmetic).toEqual({
-      palette: "sunset",
+      palette,
       eyes: "star",
       hat: "crown",
     })

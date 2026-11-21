@@ -375,6 +375,26 @@ describe("PetMount", () => {
     expect(routerPush).toHaveBeenLastCalledWith("/settings?section=pet&petView=appearance")
   })
 
+  it("routes overlay open-attention bubble actions straight to the target run or team (F6)", () => {
+    settingsValue = ENABLED_SETTINGS
+    getWindowRole.mockReturnValue("main")
+    isTauri.mockReturnValue(true)
+    render(<PetMount />)
+    const deps = startMainPetBridge.mock.calls[0][0] as {
+      onOpenAttention?: (target: {
+        kind: "open-attention"
+        source: "chat" | "team" | "run" | "fleet"
+        sessionId?: string
+        teamId?: string
+        runId?: string
+      }) => void
+    }
+    deps.onOpenAttention?.({ kind: "open-attention", source: "run", runId: "run_7" })
+    expect(routerPush).toHaveBeenLastCalledWith("/agent-runs?run=run_7")
+    deps.onOpenAttention?.({ kind: "open-attention", source: "team", teamId: "team_3" })
+    expect(routerPush).toHaveBeenLastCalledWith("/squads?id=team_3")
+  })
+
   it("registers the window + interaction commands while enabled on the main desktop window, disposing on unmount", () => {
     settingsValue = ENABLED_SETTINGS
     getWindowRole.mockReturnValue("main")

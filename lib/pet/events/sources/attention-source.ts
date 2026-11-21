@@ -27,8 +27,19 @@ export function createAttentionSource(
     let active = false
 
     const sync = () => {
-      const pendingCount = getSnapshot().filter((item) => !item.stale).length
+      const actionable = getSnapshot().filter((item) => !item.stale)
+      const pendingCount = actionable.length
       const nextActive = pendingCount > 0
+      const primary = actionable[0]
+      const attentionTarget =
+        primary && (primary.sessionId || primary.teamId || primary.runId)
+          ? {
+              source: primary.source,
+              ...(primary.sessionId ? { sessionId: primary.sessionId } : {}),
+              ...(primary.teamId ? { teamId: primary.teamId } : {}),
+              ...(primary.runId ? { runId: primary.runId } : {}),
+            }
+          : undefined
 
       if (!initialized) {
         initialized = true
@@ -38,7 +49,10 @@ export function createAttentionSource(
             source: "attention",
             kind: "waiting",
             xp: 0,
-            meta: { pendingCount },
+            meta: {
+              pendingCount,
+              ...(attentionTarget ? { attentionTarget } : {}),
+            },
           })
         }
         return
@@ -50,7 +64,10 @@ export function createAttentionSource(
         source: "attention",
         kind: active ? "waiting" : "review",
         xp: 0,
-        meta: { pendingCount },
+        meta: {
+          pendingCount,
+          ...(active && attentionTarget ? { attentionTarget } : {}),
+        },
       })
     }
 

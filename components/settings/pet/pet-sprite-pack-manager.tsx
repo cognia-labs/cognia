@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
@@ -33,6 +33,7 @@ import {
   getPetSpritePackStorageUsage,
   listPetSpritePacks,
 } from "@/lib/db/pet-sprite-packs"
+import { listSkills } from "@/lib/db/skills"
 import {
   validateSpriteV2Import,
   SpriteV2ImportError,
@@ -84,6 +85,29 @@ export function PetSpritePackManager({ settings, onPatch }: PetSpritePackManager
   const [concept, setConcept] = useState("")
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<SpriteImportStatus>("idle")
+  const [hatchSkillDetected, setHatchSkillDetected] = useState<boolean | null>(null)
+  const desktop = isTauri()
+
+  useEffect(() => {
+    if (!desktop) return
+    let cancelled = false
+    void listSkills()
+      .then((skills) => {
+        if (cancelled) return
+        const found = skills.some(
+          (skill) =>
+            skill.status !== "disabled" &&
+            (skill.slug?.toLowerCase() === "hatch-pet" || skill.name?.toLowerCase() === "hatch-pet")
+        )
+        setHatchSkillDetected(found)
+      })
+      .catch(() => {
+        if (!cancelled) setHatchSkillDetected(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [desktop])
 
   async function importFiles(files: FileList | File[]) {
     const selected = Array.from(files)
@@ -149,12 +173,25 @@ export function PetSpritePackManager({ settings, onPatch }: PetSpritePackManager
 
   return (
     <FieldGroup data-testid="pet-sprite-pack-manager">
-      {isTauri() && (
+      {desktop && (
         <Field>
           <FieldTitle className="gap-2">
             <SparklesIcon className="size-4" aria-hidden /> {t("createTitle")}
           </FieldTitle>
           <FieldDescription>{t("createDescription")}</FieldDescription>
+          {hatchSkillDetected === true ? (
+            <FieldDescription role="status" data-testid="pet-hatch-skill-status">
+              {t("hatchSkillReady")}
+            </FieldDescription>
+          ) : hatchSkillDetected === false ? (
+            <FieldDescription
+              role="status"
+              data-testid="pet-hatch-skill-status"
+              className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+            >
+              {t("hatchSkillMissing")}
+            </FieldDescription>
+          ) : null}
           <FieldLabel htmlFor="pet-sprite-concept">{t("conceptLabel")}</FieldLabel>
           <Textarea
             id="pet-sprite-concept"

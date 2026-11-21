@@ -18,6 +18,22 @@ describe("decodePetBubbleAction", () => {
     expect(decoded).not.toHaveProperty("href")
   })
 
+  it("accepts an open-attention action and strips untrusted fields (F6)", () => {
+    const decoded = decodePetBubbleAction({
+      kind: "open-attention",
+      source: "chat",
+      sessionId: "s_123",
+      extra: "ignored",
+    })
+    expect(decoded).toEqual({
+      kind: "open-attention",
+      source: "chat",
+      sessionId: "s_123",
+    })
+    expect(decoded).not.toHaveProperty("extra")
+    expect(decodePetBubbleAction({ kind: "open-attention", source: "unknown" })).toBeNull()
+  })
+
   it.each([
     ["an unknown kind", { kind: "navigate", tab: "insights" }],
     ["an unknown tab", { kind: "open-console", tab: "settings" }],

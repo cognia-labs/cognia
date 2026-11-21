@@ -508,6 +508,32 @@ describe("open-console routing", () => {
     expect(channel.msgs()).toContainEqual({ v: 1, t: "open-console", tab: "achievements" })
   })
 
+  it("routes open-attention between overlay and main bridge (F6)", () => {
+    const channel = new FakeChannel()
+    const store = makeStore()
+    const onOpenAttention = jest.fn()
+    startMainPetBridge({ channel, store: store as never, emit: jest.fn(), onOpenAttention })
+    channel.deliver({ v: 1, t: "open-attention", source: "chat", sessionId: "s_42" })
+    expect(onOpenAttention).toHaveBeenCalledWith({
+      kind: "open-attention",
+      source: "chat",
+      sessionId: "s_42",
+    })
+
+    const overlayChannel = new FakeChannel()
+    const { sendOpenAttention } = startOverlayPetBridge({
+      channel: overlayChannel,
+      store: makeStore() as never,
+    })
+    sendOpenAttention({ kind: "open-attention", source: "run", runId: "run_9" })
+    expect(overlayChannel.msgs()).toContainEqual({
+      v: 1,
+      t: "open-attention",
+      source: "run",
+      runId: "run_9",
+    })
+  })
+
   it("overlay sendOpenConsole is inert without BroadcastChannel", () => {
     const real = (globalThis as Record<string, unknown>).BroadcastChannel
     delete (globalThis as Record<string, unknown>).BroadcastChannel

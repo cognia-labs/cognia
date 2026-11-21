@@ -33922,6 +33922,7 @@
       "useSvg": "Built-in vector mascot"
     },
     "bubbleAction": {
+      "openAttention": "Review now",
       "openConsole": "Open {tab}"
     },
     "bubbles": {
@@ -34120,6 +34121,7 @@
         "failed": "Couldn't turn on pet chat. Try again.",
         "title": "Turn on pet chat"
       },
+      "handoffHeader": "Context from pet chat ({name}):",
       "openFullChat": "Open full chat",
       "petFallbackName": "Pet",
       "scrollToBottom": "Scroll to the latest pet message",
@@ -34129,9 +34131,12 @@
     "commands": {
       "clean": "Clean the pet",
       "feed": "Feed the pet",
+      "openPopup": "Open pet quick menu",
       "pet": "Pet the pet",
       "play": "Play with the pet",
+      "resetPosition": "Reset desktop pet position",
       "sleep": "Put the pet to sleep",
+      "toggleClickThrough": "Toggle pet click-through",
       "toggleWindow": "Toggle desktop pet",
       "treat": "Give the pet a treat",
       "unavailable": {
@@ -34407,6 +34412,16 @@
       "title": "Items"
     },
     "journal": {
+      "attention": {
+        "open": "Open",
+        "sources": {
+          "chat": "Chat",
+          "fleet": "Agent",
+          "run": "Run",
+          "team": "Team"
+        },
+        "title": "Waiting for your attention ({count})"
+      },
       "dayTotals": "{count} events · +{xp} XP",
       "empty": "Nothing in the diary yet — care for your pet and its days will show up here.",
       "kinds": {
@@ -56025,6 +56040,8 @@
           "invalid": "This is not a valid Codex-compatible v2 pet package. Check the manifest, image format, and atlas dimensions.",
           "tooLarge": "The spritesheet exceeds the 25 MiB limit. Compress or re-export it."
         },
+        "hatchSkillMissing": "No local hatch-pet skill was detected. Make sure the chat agent you pick supports $hatch-pet, then import the generated pet.json and spritesheet below.",
+        "hatchSkillReady": "Local hatch-pet skill detected. After generation finishes, import the resulting pet.json and spritesheet below.",
         "import": "Import v2 sprite pet",
         "importHint": "Select pet.json and its spritesheet.webp or spritesheet.png together. Cognia validates the v2 manifest and 1536×2288 atlas before installing.",
         "installed": "Sprite pet installed and activated.",
@@ -58551,9 +58568,12 @@
       "notSet": "Not set",
       "petClean": "Pet: clean",
       "petFeed": "Pet: feed",
+      "petOpenPopup": "Pet: open quick menu",
       "petPet": "Pet: pet",
       "petPlay": "Pet: play",
+      "petResetPosition": "Pet: reset position",
       "petSleep": "Pet: sleep",
+      "petToggleClickThrough": "Pet: toggle click-through",
       "petToggleWindow": "Toggle desktop pet",
       "petTreat": "Pet: treat",
       "pressKey": "Press any key…",

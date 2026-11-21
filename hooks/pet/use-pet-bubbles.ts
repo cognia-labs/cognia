@@ -7,6 +7,8 @@
 
 import { useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
+import { getAttentionSnapshot } from "@/lib/attention/attention-store"
+import { decodePetBubbleAction, type PetBubbleAction } from "@/lib/pet/bubbles/action"
 import { getPetEventBus } from "@/lib/pet/events/pet-event-bus"
 import { pickBubbleKey, pickCustomBubble } from "@/lib/pet/bubbles/templates"
 import { isClaimed } from "@/lib/pet/llm/proactive/claim-registry"
@@ -40,7 +42,35 @@ export function usePetBubbles(enabled: boolean, snark = 0): void {
       // Numeric meta rides into the template ({days} in streakDay pools);
       // next-intl ignores values a template doesn't reference.
       const days = typeof event.meta?.days === "number" ? event.meta.days : 0
-      const bubble = { text: custom ?? t(key, { days }), origin: "template" as const }
+      let action: PetBubbleAction | undefined
+      if (event.source === "attention" && event.kind === "waiting") {
+        const metaTarget =
+          event.meta?.attentionTarget && typeof event.meta.attentionTarget === "object"
+            ? decodePetBubbleAction({
+                kind: "open-attention",
+                ...(event.meta.attentionTarget as Record<string, unknown>),
+              })
+            : null
+        if (metaTarget) {
+          action = metaTarget
+        } else {
+          const primary = getAttentionSnapshot().find((item) => !item.stale)
+          if (primary) {
+            action = {
+              kind: "open-attention",
+              source: primary.source,
+              ...(primary.sessionId ? { sessionId: primary.sessionId } : {}),
+              ...(primary.teamId ? { teamId: primary.teamId } : {}),
+              ...(primary.runId ? { runId: primary.runId } : {}),
+            }
+          }
+        }
+      }
+      const bubble = {
+        text: custom ?? t(key, { days }),
+        origin: "template" as const,
+        ...(action ? { action } : {}),
+      }
       setBubble(bubble)
       const version = usePetStore.getState().bubbleVersion
       if (timer.current) clearTimeout(timer.current)

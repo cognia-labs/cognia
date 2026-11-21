@@ -1,33 +1,32 @@
 ---
 title: Desktop Pet
-description: A Shimeji-style companion living in transparent overlay windows — five window roles, three governed renderers, explicit model compatibility, local gaze tracking, and bounded real-time resources.
+description: A Shimeji-style companion living in transparent overlay windows — five window roles, four governed renderers, explicit model compatibility, local gaze tracking, paired remote care, and bounded real-time resources.
 ---
 
 # Desktop Pet
 
-<Status variant="beta">Beta · ADR-0058 · Dexie (no schema bump)</Status>
+<Status variant="beta">Beta · ADR-0058 · ADR-0219 · Dexie</Status>
 
 <TLDR>
-  The pet is not a widget inside the app window — it lives in its own transparent, always-on-top Tauri
-  windows, and `WindowRole` (`lib/platform/window-role.ts`) determines which of five roles
+  The pet has no in-app floating widget (ADR-0058 D14) — on desktop it lives in its own transparent, always-on-top Tauri
+  windows (`overlay` and `popup`), while `WindowRole` (`lib/platform/window-role.ts`) determines which of five roles
   the bundle uses at startup. Rust creates those windows `visible(false)` and never shows them on the create path:
   on Windows a `transparent(true)` window shown before its WebView commits a first paint renders as an
   opaque black rectangle. The renderer calls the shared reveal (`lib/tauri/overlay-reveal.ts`) after mount, waiting
   **two rAFs** — layout, then post-commit — so the transparent frame is on screen before the window
-  appears. The pet simulation includes: needs decay, care condition, coins and a shop, XP and
-  levelling, achievements, and a locomotion FSM with ballistics.
+  appears. Paired Web and Mobile clients reach the desktop pet through the remote care console (ADR-0219).
+  The simulation includes needs decay, care condition, coins and a shop, XP and levelling, achievements, and a
+  locomotion FSM with ballistics.
 </TLDR>
 
 <StatGrid>
-  <Stat label="Source files" value="195" hint="lib/pet — incl. tests" />
-  <Stat label="UI components" value="25+" hint="components/pet + console/ settings/ skins/" />
-  <Stat label="React hooks" value="20" hint="hooks/pet" />
   <Stat label="Window roles" value="5" hint="main · overlay · popup · island · web" />
-  <Stat label="Domain modules" value="12" hint="soul · needs · care · economy · xp · achievements · behavior · live2d · sprite-v2 · bones · runtime · state" />
+  <Stat label="Governed renderers" value="4" hint="svg · live2d · sprite-v2 · media" />
+  <Stat label="Console surfaces" value="2" hint="/settings?section=pet (desktop) · /me/pet (paired)" />
+  <Stat label="Domain modules" value="14" hint="soul · needs · care · economy · xp · achievements · behavior · live2d · sprite-v2 · media-packs · bones · runtime · state · remote" />
 </StatGrid>
 
-Design rationale: [ADR-0058](../adr/0058-desktop-pet-subsystem). Pet state persists in Dexie without its
-own schema bump.
+Design rationale: [ADR-0058](../adr/0058-desktop-pet-subsystem) and [ADR-0219](../adr/0219-pet-console-remote-care).
 
 ## Five window roles, one bundle
 
@@ -38,8 +37,8 @@ type WindowRole = "main" | "overlay" | "popup" | "island" | "web"
 The same static export boots into every role; `getWindowRole()` (`lib/platform/window-role.ts`) resolves
 which one from the Tauri webview label — `PET_WINDOW_LABEL` (`"pet"`), `PET_POPUP_WINDOW_LABEL`
 (`"pet-popup"`), `ISLAND_WINDOW_LABEL` (`"island"`). `isSecondaryOverlayRole()` and `isMainAppWindow()`
-are the guards that keep main-window-only work — bootstrapping, migrations, singletons — from running
-three extra times in the overlay windows.
+are the guards that keep main-window-only work — bootstrapping, migrations, singletons, and account database
+reads — from running extra times in the overlay windows.
 
 ## The reveal contract exists because of a real bug
 
@@ -61,15 +60,16 @@ in, and neither window appears in Alt-Tab. An OS close routes through the same c
 
 | Concern | Owner |
 | --- | --- |
-| Which monitor a window is on | `work_area_for` probes the window centre against `available_monitors` physical rects (`pet_window/mod.rs`) |
+| Which monitor a window is on | `work_area_for` probes the window centre against `available_monitors` desktop rects (`pet_window/mod.rs`) |
 | Monitor or scale changes | `ScaleFactorChanged` and a cross-monitor `Moved` emit `pet://work-area-changed` |
 | Live size changes | `pet_window_set_size`, anchored at the bottom centre and clamped to the work area |
-| Popup placement | `resolve_popup_placement` (`pet_window/popup.rs`), from the pet's physical rect on its own monitor; re-placed on every content resize |
-| CSS → physical pointer deltas | `resolveCssToPhysicalScale` / `petBoxScreenRect` (`lib/pet/overlay-geometry.ts`) |
+| Popup placement | `resolve_popup_placement` (`pet_window/popup.rs`), from the pet's rect on its own monitor; re-placed on every content resize |
+| CSS → desktop-unit pointer deltas | `resolveCssToDesktopScale` / `petBoxScreenRect` (`lib/pet/overlay-geometry.ts`) |
 | Pet settings writes from any window | `updatePetSettings` (`lib/pet/settings-sync.ts`): a Web Lock, a fresh read, then a broadcast that every pet window follows |
+| Account-owned asset projection | `lib/pet/live2d/asset-bridge.ts`, `lib/pet/sprite-v2/asset-bridge.ts`, and `lib/pet/media-packs/asset-bridge.ts` project only the active skin from `main` to `overlay` / `popup` in memory without sharing account keys |
 
-While the desktop pet is out, the in-app widget is hidden. `PetMainRuntime` keeps the pet's voice and
-appearance running in the main window either way (ADR-0058 D12).
+`PetMount` never renders an in-app pet widget; `PetMainRuntime` stays headless in the main window to run the
+controller, event sources, voice/bubble hooks, and cross-window projection bridges (ADR-0058 D12, D14).
 
 ## Perchable surfaces degrade by platform
 
@@ -102,26 +102,29 @@ lib/pet/
   soul/generate-soul.ts        # the generated personality
   bones/generate.ts  palettes.ts  prng.ts  account-id.ts   # deterministic procedural look
   state/reducer.ts             # the state machine
-  runtime/pet-controller.ts  pet-view.ts  init-pet.ts  apply-event.ts
+  runtime/pet-controller.ts  pet-scope.ts  pet-view.ts  init-pet.ts  apply-event.ts
+  remote/host-dispatch.ts  idempotency.ts  transport.ts    # ADR-0219 paired remote care
   overlay-geometry.ts  popup-geometry.ts
 ```
 
-`bones/prng.ts` seeded from `account-id.ts` is what makes a pet's generated appearance stable for a given
-account instead of re-rolling on every boot.
+`bones/prng.ts` seeded from `account-id.ts` makes a pet's generated appearance stable for a given
+account instead of re-rolling on every boot. `pet-controller.ts` commits progression, inventory consumption,
+activity ledger entries, and achievement unlocks atomically inside a serialized queue fenced by
+`pet-scope.ts` (account epoch + reset generation).
 
-## Three governed renderers
+## Four governed renderers
 
-`types/pet/skin.ts` defines the common contract for built-in SVG, Live2D Cubism 3–5, and Sprite v2:
-typed asset selection, capabilities, render mode, gaze target, and structured diagnostics. Unknown or
-deleted selections normalize to SVG with a diagnostic; they never produce an empty render or a silent
-permanent fallback.
+`types/pet/skin.ts` defines the common contract for built-in **SVG**, **Live2D Cubism 3–5**, **Sprite v2**,
+and **Media** (DSH WebM video packs and WebP/PNG frame-animation packs): typed asset selection, capabilities,
+render mode, gaze target, and structured diagnostics. Unknown or deleted selections normalize to SVG with a
+diagnostic; they never produce an empty render or a silent permanent fallback.
 
 `lib/pet/skin-runtime.ts` is the single expensive-resource owner in each WebView JavaScript realm. It
 arbitrates one live renderer using `configuration > interactive > console > thumbnail` priority, keeps
-neutral snapshots for losing previews, caches Sprite object URLs per asset, counts renderer/WebGL/ticker/
-timer/URL/load/context-loss/fallback resources, and revokes them on invalidation or teardown. Hidden,
-suspended, reduced-motion, and click-through-paused surfaces stop update callbacks. Live2D runs at 60 fps
-normally, 30 fps in low-power mode, and 12 fps while quiescent.
+neutral snapshots for losing previews, caches asset handles and object URLs per asset, counts
+renderer/WebGL/ticker/timer/URL/load/context-loss/fallback resources, and revokes them on invalidation or
+teardown. Hidden, suspended, reduced-motion, and click-through-paused surfaces stop update callbacks. Live2D
+runs at 60 fps normally, 30 fps in low-power mode, and 12 fps while quiescent.
 
 `lib/pet/live2d/` owns Cubism discovery, manifest parsing, import validation, plugin registration,
 parameter/emotion/gaze mapping, lip-sync, and URL replacement. Compatibility is classified as `ready`,
@@ -131,59 +134,66 @@ normalized duplicates, case-insensitive ambiguity, corrupt images, Cubism 2, and
 before persistence. The official Hiyori and Haru corpus is revision- and SHA-256-pinned in
 `test-fixtures/pet/live2d-public-corpus.json`; binaries are fetched into `.cache`, not committed.
 
-`lib/pet/sprite-v2/import.ts` validates the fixed atlas contract. Its final two rows provide 16 clockwise
-gaze directions in 22.5° buckets with a dead zone, hysteresis, and stale-input return to idle. SVG moves
-its existing face artwork; Live2D maps standard head/eye/body/mouth parameters. Gaze yields to suspension,
-held pose, one-shots, locomotion, and semantic state. The in-app widget and previews follow the page-local
-pointer; the overlay uses Tauri's least-privilege cursor command, sampled at no more than 10 Hz and never
-persisted or transmitted.
+`lib/pet/sprite-v2/import.ts` validates the fixed 1536×2288 atlas contract, and `lib/pet/sprite-v2/asset-bridge.ts`
+projects the active pack from `main` to `overlay`/`popup` windows. Its final two rows provide 16 clockwise
+gaze directions in 22.5° buckets with a dead zone, hysteresis, and stale-input return to idle.
 
-Character bindings may inherit the global selection or choose SVG, a Live2D model, or a Sprite pack.
-Legacy `live2dModelId` rows are interpreted lazily as typed Live2D selections, and deleting an asset clears
-both global and character references transactionally before SVG takes over.
+`lib/pet/media-packs/` validates and prepares DSH video packs (`config.jsonc` + WebM clips) and frame packs
+(`pet-manifest.json` + WebP/PNG frames), projecting the selected pack to secondary overlay windows via
+`lib/pet/media-packs/asset-bridge.ts`.
 
-## Reaching the pet
+Character bindings may inherit the global selection or choose SVG, a Live2D model, a Sprite v2 pack, or a
+Media pack. Legacy `live2dModelId` rows are interpreted lazily as typed Live2D selections. Deleting an asset
+transactionally clears matching references and falls back to SVG only when that skin type is currently active.
 
-The pet runs only in the desktop app's main window (ADR-0058 D9); on the web and mobile the rail, ⌘K and
-Settings never offer it, `/pet` explains itself, and `/pet feed` says where the pet lives. On the desktop
-every summon path, the global hotkey, the tray toggle, ⌘K "Toggle desktop pet", the Settings overlay
-switch and the agent's `pet_show`, runs `openDesktopPetWindow()` (`lib/pet/commands.ts`), which opens at
-the saved geometry and switches a disabled pet on. The six nurture commands are bindable in Settings →
-Shortcuts and stay registered while the pet is off, answering with a "pet is off" notification rather than
-nothing. A fresh Attention Radar report arrives as a `radarReport` event whose bubble offers "Open
-Insights" (D10).
+## Reaching the pet and paired remote care
+
+On the desktop, every summon path — the global hotkey, the tray toggle, ⌘K "Toggle desktop pet", the Settings
+overlay switch, and the agent's `pet_show` — runs `openDesktopPetWindow()` (`lib/pet/commands.ts`), which
+opens at the saved geometry and switches a disabled pet on. The six nurture commands plus desktop window
+actions (`pet.open-popup`, `pet.toggle-click-through`, `pet.reset-position`) are bindable in Settings →
+Shortcuts and stay registered while the pet is off. Work attention bubbles carry a direct "Review now"
+action into the blocking chat, team, or run, and fresh Attention Radar reports arrive as `radarReport`
+bubbles offering "Open Insights" (D10).
+
+On **Web and Mobile** (ADR-0219), the pet console opens at `/me/pet` and pairs with a desktop host over the
+companion RPC transport:
+
+- **Available remotely**: read-only pet snapshot (simplified vector look from mirrored bones), care actions,
+  backpack item use, shop purchases, cosmetic decor application, pet rename, egg hatch, and private pet chat
+  (dispatched to the desktop host under `CommandReceiptPolicy::HostSemantic` so private chat text is never
+  written to plaintext companion SQLite receipts).
+- **Desktop-only**: Appearance & settings (`appearance`), Attention Radar capture settings (`insights`),
+  and desktop plugin tabs (`plugins`) display an honest desktop-only explanation and remain editable on the
+  desktop host.
 
 ## Console and customization workspace
 
-`/pet` renders on the shared `FeaturePageShell` + `FeaturePageHeader`, like `/memory` and
-`/conversations` (ADR-0058 D15). The header draws the pet in its identity tile, carries the editable
-name with a level · stage · coins line, and offers "Appearance & settings" and the desktop toggle. Its
-second row is the navigation: Home, Chat, Shop, Collection (dex, achievements), Activity (journal,
-insights), and a Plugins tab while a plugin registers one.
+On desktop, the pet console lives inside Settings at `/settings?section=pet` (ADR-0058 D15–D16), while paired
+Web/Mobile clients visit `/me/pet`; every link is built via `petConsoleHref` (`lib/pet/console-tabs.ts`),
+which maps legacy tab ids (`nurture`, `customize`, `binding`) onto their current destinations. The header draws the pet in its identity tile, carries the editable name with
+a level · stage · coins line, and offers "Appearance & settings" and the desktop toggle. Navigation covers
+Home, Chat, Shop, Collection (dex, achievements), Activity (live attention list, journal, insights), and
+Extensions while a plugin registers a tab.
 
 Home opens on "Most needed now": the lowest need and the care that restores it most
 (`lib/pet/care/suggest-care.ts`, ranked from the controller's effect table), as the page's primary button.
 Below it come the care actions with the `pet.panel.actions` plugin slot, the backpack with coins and the
-way to the shop, a quick-talk field with the way to the full conversation, and the pet's stats. The pet
-itself sits on the console's one accent surface beside them.
+way to the shop, a quick-talk field with the way to the full conversation, and the pet's stats.
 
-Appearance & settings is a sub-page (`/pet?view=appearance`) with a breadcrumb back. It holds
-`PetCustomizationWorkspace`, the only owner that reads `DEFAULT_PET_SETTINGS` and persists merged settings
-through `updatePetSettings()`, and the per-character looks, with a section index on a wide pane.
-Settings → Pet and the "pet is off" notification point to it. Every `/pet` link is built with
-`petConsoleHref` from `lib/pet/console-tabs.ts`, which also keeps the earlier ids (`nurture`, `customize`,
-`binding`) landing on the place they now mean.
+Appearance & settings (`/settings?section=pet&petView=appearance`) holds `PetCustomizationWorkspace` — the
+owner that reads `DEFAULT_PET_SETTINGS` and persists merged settings through `updatePetSettings()` — plus
+per-character look overrides.
 
 The desktop popup is a mini Home: stat card, needs, "Most needed now", care actions and quick talk, then
-click-through, put away, open the pet page, and appearance & settings. Every "put away" (console header,
+click-through, put away, open pet settings, and appearance & settings. Every "put away" (console header,
 title bar, popup, tray, hotkey) persists `desktopPet.enabled = false` through `hideDesktopPetWindow`.
-None of this changes `PetSettings`, `PetProfile`, asset records, Dexie versions, progression, economy,
-interactions, or Tauri window protocols.
 
 ## Related
 
 <Cards>
   <Card title="ADR-0058" href="../adr/0058-desktop-pet-subsystem" description="The Desktop Pet decision record" />
+  <Card title="ADR-0219" href="../adr/0219-pet-console-remote-care" description="Paired remote care console decision record" />
   <Card title="Characters" href="../chat/characters" description="Where a pet's character and skins come from" />
   <Card title="Voice / TTS" href="./misc-subsystems" description="The TTS stack use-pet-speak drives" />
   <Card title="Scheduler" href="./scheduler" description="What fires the pet's scheduled reminders" />

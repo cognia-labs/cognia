@@ -86,7 +86,18 @@ export function resetPetControllerRuntimeState(): void {
   activeWorkStates.clear()
 }
 
-onPetReset(resetPetControllerRuntimeState)
+onPetReset(() => {
+  resetPetControllerRuntimeState()
+  usePetStore.setState({
+    visualState: "idle",
+    oneShotQueue: [],
+    bubble: null,
+    lastGrewStats: [],
+    careAlert: null,
+    interactionRefusal: null,
+    profileSnapshot: null,
+  })
+})
 onActiveDatabaseChange(resetPetControllerRuntimeState)
 
 function updateActiveWorkState(event: PetEvent): void {

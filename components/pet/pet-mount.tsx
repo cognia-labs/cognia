@@ -124,6 +124,29 @@ export function PetMount() {
     if (!petEnabled || !isTauri()) return
     const dispose = startMainPetBridge({
       onOpenConsole: (tab) => router.push(petConsoleHref(tab)),
+      onOpenAttention: (target) => {
+        if (target.source === "chat" && target.sessionId) {
+          const sessionId = target.sessionId
+          void import("@/lib/chat/focus-session").then(
+            ({ CHAT_ROUTE, focusSessionInItsWorkspace }) =>
+              focusSessionInItsWorkspace(sessionId).then(() => router.push(CHAT_ROUTE))
+          )
+          return
+        }
+        if (target.source === "run" && target.runId) {
+          router.push(`/agent-runs?run=${encodeURIComponent(target.runId)}`)
+          return
+        }
+        if (target.source === "team") {
+          router.push(target.teamId ? `/squads?id=${encodeURIComponent(target.teamId)}` : "/squads")
+          return
+        }
+        if (target.source === "fleet") {
+          router.push("/agent-runs")
+          return
+        }
+        router.push(petConsoleHref("journal"))
+      },
     })
     return dispose
   }, [petEnabled, router])
@@ -143,6 +166,11 @@ export function PetMount() {
     if (!isMainDesktopWindow) return
     return registerPetCommands({
       windowTitle: t("commands.toggleWindow"),
+      windowActionTitles: {
+        "pet.open-popup": t("commands.openPopup"),
+        "pet.toggle-click-through": t("commands.toggleClickThrough"),
+        "pet.reset-position": t("commands.resetPosition"),
+      },
       titles: {
         "pet.feed": t("commands.feed"),
         "pet.play": t("commands.play"),

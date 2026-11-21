@@ -143,6 +143,7 @@
     "mediaOption": "Animation: {name}"
   },
   "bubbleAction": {
+    "openAttention": "Review now",
     "openConsole": "Open {tab}"
   },
   "bubbles": {
@@ -237,6 +238,7 @@
       "title": "Turn on pet chat",
       "failed": "Couldn't turn on pet chat. Try again."
     },
+    "handoffHeader": "Context from pet chat ({name}):",
     "openFullChat": "Open full chat",
     "petFallbackName": "Pet",
     "scrollToBottom": "Scroll to the latest pet message",
@@ -246,9 +248,12 @@
   "commands": {
     "clean": "Clean the pet",
     "feed": "Feed the pet",
+    "openPopup": "Open pet quick menu",
     "pet": "Pet the pet",
     "play": "Play with the pet",
+    "resetPosition": "Reset desktop pet position",
     "sleep": "Put the pet to sleep",
+    "toggleClickThrough": "Toggle pet click-through",
     "toggleWindow": "Toggle desktop pet",
     "treat": "Give the pet a treat",
     "unavailable": {
@@ -524,6 +529,16 @@
     "title": "Items"
   },
   "journal": {
+    "attention": {
+      "open": "Open",
+      "sources": {
+        "chat": "Chat",
+        "fleet": "Agent",
+        "run": "Run",
+        "team": "Team"
+      },
+      "title": "Waiting for your attention ({count})"
+    },
     "dayTotals": "{count} events · +{xp} XP",
     "empty": "Nothing in the diary yet — care for your pet and its days will show up here.",
     "kinds": {

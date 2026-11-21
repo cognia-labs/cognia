@@ -7,8 +7,10 @@
 import { registerCommand } from "@/lib/plugin/commands/registry"
 import {
   PET_INTERACTION_COMMAND_IDS,
+  PET_WINDOW_ACTION_COMMAND_IDS,
   PET_WINDOW_COMMAND_ID,
   type PetInteractionCommandId,
+  type PetWindowActionCommandId,
 } from "@/lib/pet/command-ids"
 import {
   requestPetInteraction,
@@ -16,14 +18,37 @@ import {
   type PetInteractionKind,
   type PetRefusal,
 } from "@/lib/pet/access/gate"
-import { closePetWindow, isPetWindowOpen, openPetWindow } from "@/lib/tauri/pet-window"
-import { overlayWindowSize } from "@/lib/pet/overlay-geometry"
+import {
+  closePetWindow,
+  getPetWindowPosition,
+  getPetWorkArea,
+  isPetWindowOpen,
+  openPetPopup,
+  openPetWindow,
+  setPetClickThrough,
+  setPetWindowPosition,
+} from "@/lib/tauri/pet-window"
+import {
+  overlayWindowSize,
+  petBoxScreenRect,
+  resolveCssToDesktopScale,
+  resolveGroundTop,
+  walkBoundsX,
+} from "@/lib/pet/overlay-geometry"
+import { POPUP_INITIAL_HEIGHT, POPUP_INITIAL_WIDTH } from "@/lib/pet/popup-geometry"
 import { isTauri } from "@/lib/platform/detect"
+import { isMacOs } from "@/lib/platform/os"
 import { petSettingsView } from "@/lib/pet/settings"
 import { updatePetSettings } from "@/lib/pet/settings-sync"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS } from "@/types/pet"
 
-export { PET_INTERACTION_COMMAND_IDS, PET_WINDOW_COMMAND_ID, type PetInteractionCommandId }
+export {
+  PET_INTERACTION_COMMAND_IDS,
+  PET_WINDOW_ACTION_COMMAND_IDS,
+  PET_WINDOW_COMMAND_ID,
+  type PetInteractionCommandId,
+  type PetWindowActionCommandId,
+}
 
 /**
  * Open/close the desktop-pet overlay window, persisting the flip into
@@ -229,19 +254,143 @@ export function registerPetInteractionCommands(
 }
 
 /**
- * Convenience: register all pet commands (window toggle + interactions) at once.
- * Returns a single bulk-unregister handle. Takes the same localization and
- * refusal options as the two registrations it combines, so a caller using it
- * never falls back to the English titles.
+ * Keyboard equivalent for right-clicking the pet: opens the desktop pet popup
+ * anchored to the overlay's current screen rect (F11). Summons the overlay if
+ * it is currently hidden so the popup always has an anchor.
+ */
+export async function openDesktopPetPopup(): Promise<boolean> {
+  if (!isTauri()) return false
+  if (!(await isPetWindowOpen())) {
+    const opened = await openDesktopPetWindow()
+    if (!opened) return false
+  }
+  const desktop = petSettingsView.get()?.petSettings?.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY
+  const [pos, workArea] = await Promise.all([getPetWindowPosition(), getPetWorkArea()])
+  const scale = resolveCssToDesktopScale(
+    workArea?.scaleFactor,
+    typeof window !== "undefined" ? window.devicePixelRatio : 1,
+    isMacOs()
+  )
+  const fallbackPos = workArea
+    ? {
+        x: walkBoundsX(workArea, overlayWindowSize(desktop.size).width * scale).maxX,
+        y: resolveGroundTop(workArea, overlayWindowSize(desktop.size).height * scale),
+      }
+    : { x: 0, y: 0 }
+  const anchor = petBoxScreenRect(pos ?? fallbackPos, desktop.size, scale)
+  return openPetPopup({
+    width: POPUP_INITIAL_WIDTH,
+    height: POPUP_INITIAL_HEIGHT,
+    anchor,
+  })
+}
+
+/**
+ * Keyboard equivalent for toggling overlay click-through (F11): updates the
+ * persisted preference and reconciles the live overlay window when open.
+ */
+export async function toggleDesktopPetClickThrough(): Promise<boolean> {
+  if (!isTauri()) return false
+  let nextClickThrough = false
+  await updatePetSettings((latest) => {
+    const desktop = latest.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY
+    nextClickThrough = !desktop.clickThrough
+    return {
+      ...latest,
+      desktopPet: { ...desktop, clickThrough: nextClickThrough },
+    }
+  })
+  if (await isPetWindowOpen()) {
+    await setPetClickThrough(nextClickThrough)
+  }
+  return nextClickThrough
+}
+
+/**
+ * Keyboard equivalent for moving the pet back home (F11): clears any saved
+ * custom coordinate and parks an open overlay on the monitor's default
+ * bottom-right ground spot.
+ */
+export async function resetDesktopPetPosition(): Promise<boolean> {
+  if (!isTauri()) return false
+  const desktop = petSettingsView.get()?.petSettings?.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY
+  await updatePetSettings((latest) => ({
+    ...latest,
+    desktopPet: { ...(latest.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY), position: null },
+  }))
+  if (await isPetWindowOpen()) {
+    const workArea = await getPetWorkArea()
+    if (workArea) {
+      const scale = resolveCssToDesktopScale(
+        workArea.scaleFactor,
+        typeof window !== "undefined" ? window.devicePixelRatio : 1,
+        isMacOs()
+      )
+      const size = overlayWindowSize(desktop.size)
+      const x = walkBoundsX(workArea, size.width * scale).maxX
+      const y = resolveGroundTop(workArea, size.height * scale)
+      await setPetWindowPosition(x, y)
+    }
+  }
+  return true
+}
+
+export interface RegisterPetWindowActionCommandsOptions {
+  titles?: Partial<Record<PetWindowActionCommandId, string>>
+}
+
+const WINDOW_ACTION_COMMANDS: ReadonlyArray<{
+  id: PetWindowActionCommandId
+  title: string
+  handler: () => Promise<boolean>
+}> = [
+  { id: "pet.open-popup", title: "Open pet quick menu", handler: openDesktopPetPopup },
+  {
+    id: "pet.toggle-click-through",
+    title: "Toggle pet click-through",
+    handler: toggleDesktopPetClickThrough,
+  },
+  {
+    id: "pet.reset-position",
+    title: "Reset desktop pet position",
+    handler: resetDesktopPetPosition,
+  },
+]
+
+export function registerPetWindowActionCommands(
+  opts: RegisterPetWindowActionCommandsOptions = {}
+): () => void {
+  const disposers = WINDOW_ACTION_COMMANDS.map(({ id, title, handler }) =>
+    registerCommand({
+      id,
+      title: opts.titles?.[id] ?? title,
+      category: "Pet",
+      pluginId: null,
+      handler,
+    })
+  )
+  return () => {
+    for (const dispose of disposers) dispose()
+  }
+}
+
+/**
+ * Convenience: register all pet commands (window toggle + window actions +
+ * interactions) at once. Returns a single bulk-unregister handle.
  */
 export function registerPetCommands(
-  opts: { windowTitle?: string } & RegisterPetInteractionCommandsOptions = {}
+  opts: {
+    windowTitle?: string
+    windowActionTitles?: Partial<Record<PetWindowActionCommandId, string>>
+  } & RegisterPetInteractionCommandsOptions = {}
 ): () => void {
-  const { windowTitle, ...interactionOpts } = opts
+  const { windowTitle, windowActionTitles, ...interactionOpts } = opts
   const disposeWindow = registerPetWindowCommand({ title: windowTitle })
+  const disposeWindowActions = registerPetWindowActionCommands({ titles: windowActionTitles })
   const disposeInteractions = registerPetInteractionCommands(interactionOpts)
   return () => {
     disposeWindow()
+    disposeWindowActions()
     disposeInteractions()
   }
 }

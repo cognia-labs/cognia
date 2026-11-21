@@ -87,4 +87,24 @@ describe("usePetBubbles", () => {
     act(() => jest.advanceTimersByTime(3000))
     expect(usePetStore.getState().bubble).toBeNull()
   })
+
+  it("attaches an open-attention action to attention waiting bubbles (F6)", () => {
+    renderHook(() => usePetBubbles(true))
+    act(() =>
+      emitPetEvent({
+        source: "attention",
+        kind: "waiting",
+        at: 10,
+        meta: {
+          pendingCount: 1,
+          attentionTarget: { source: "chat", sessionId: "session-99" },
+        },
+      })
+    )
+    expect(usePetStore.getState().bubble?.action).toEqual({
+      kind: "open-attention",
+      source: "chat",
+      sessionId: "session-99",
+    })
+  })
 })

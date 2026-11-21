@@ -9,6 +9,15 @@
 /** The window toggle's command id (global hotkey, tray, ⌘K). */
 export const PET_WINDOW_COMMAND_ID = "pet.toggle-window"
 
+/** Keyboard-accessible desktop pet window control command ids (F11). */
+export const PET_WINDOW_ACTION_COMMAND_IDS = [
+  "pet.open-popup",
+  "pet.toggle-click-through",
+  "pet.reset-position",
+] as const
+
+export type PetWindowActionCommandId = (typeof PET_WINDOW_ACTION_COMMAND_IDS)[number]
+
 /** The nurture command ids, in their canonical order (the shortcut sheet lists them so). */
 export const PET_INTERACTION_COMMAND_IDS = [
   "pet.feed",

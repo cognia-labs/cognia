@@ -54,7 +54,9 @@ export function PetBubbleView({
             "hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           )}
         >
-          {t("bubbleAction.openConsole", { tab: t(`console.tabs.${action.tab}`) })}
+          {action.kind === "open-console"
+            ? t("bubbleAction.openConsole", { tab: t(`console.tabs.${action.tab}`) })
+            : t("bubbleAction.openAttention")}
         </button>
       ) : null}
     </div>

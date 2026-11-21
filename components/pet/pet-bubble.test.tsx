@@ -63,4 +63,25 @@ describe("PetBubbleView", () => {
     render(<PetBubbleView bubble={{ text: "hi", origin: "template" }} onAction={jest.fn()} />)
     expect(screen.queryByRole("button")).toBeNull()
   })
+
+  it("renders a Review now button for an open-attention bubble action (F6)", () => {
+    const onAction = jest.fn()
+    render(
+      <PetBubbleView
+        bubble={{
+          text: "Your call!",
+          origin: "template",
+          action: { kind: "open-attention", source: "chat", sessionId: "s_1" },
+        }}
+        onAction={onAction}
+      />
+    )
+    const button = screen.getByRole("button", { name: "Review now" })
+    fireEvent.click(button)
+    expect(onAction).toHaveBeenCalledWith({
+      kind: "open-attention",
+      source: "chat",
+      sessionId: "s_1",
+    })
+  })
 })

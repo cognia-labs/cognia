@@ -2,8 +2,15 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 
 // Reactive ledger read — a controllable snapshot instead of a live Dexie.
 let rowsValue: unknown
+const push = jest.fn()
+const mockAttentionItems = jest.fn(() => [] as unknown[])
 jest.mock("dexie-react-hooks", () => ({
   useLiveQuery: () => rowsValue,
+}))
+jest.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
+jest.mock("@/lib/attention/attention-store", () => ({
+  getAttentionSnapshot: () => mockAttentionItems(),
+  subscribeAttention: () => () => {},
 }))
 jest.mock("sonner", () => ({ toast: { error: jest.fn() } }))
 jest.mock("@/lib/db/pet", () => ({
@@ -29,6 +36,8 @@ function row(over: Partial<PetActivityRow>): PetActivityRow {
 
 beforeEach(() => {
   rowsValue = []
+  push.mockReset()
+  mockAttentionItems.mockReset().mockReturnValue([])
   pageMock.mockReset()
   ;(toast.error as jest.Mock).mockClear()
 })
@@ -131,5 +140,50 @@ describe("JournalTab", () => {
     })
     expect(toast.error).toHaveBeenCalled()
     expect(screen.getByTestId("pet-journal-load-older")).not.toBeDisabled()
+  })
+
+  it("lists active pending attention items with direct jump actions (F6)", () => {
+    rowsValue = []
+    mockAttentionItems.mockReturnValue([
+      {
+        id: "run:r1",
+        source: "run",
+        kind: "run-approval",
+        title: "Deploy review",
+        detail: "Waiting for approval",
+        openedAt: 1,
+        stale: false,
+        runId: "run_42",
+      },
+      {
+        id: "team:t1",
+        source: "team",
+        kind: "hitl-gate",
+        title: "Squad gate",
+        openedAt: 2,
+        stale: false,
+        teamId: "team_9",
+      },
+      {
+        id: "chat:stale",
+        source: "chat",
+        kind: "tool-approval",
+        title: "Stale item",
+        openedAt: 3,
+        stale: true,
+        sessionId: "s_old",
+      },
+    ])
+    render(<JournalTab />)
+    expect(screen.getByTestId("pet-attention-list")).toBeInTheDocument()
+    expect(screen.getByText("Deploy review")).toBeInTheDocument()
+    expect(screen.getByText("Squad gate")).toBeInTheDocument()
+    expect(screen.queryByText("Stale item")).toBeNull()
+
+    const buttons = screen.getAllByRole("button", { name: "Open" })
+    fireEvent.click(buttons[0])
+    expect(push).toHaveBeenCalledWith("/agent-runs?run=run_42")
+    fireEvent.click(buttons[1])
+    expect(push).toHaveBeenCalledWith("/squads?id=team_9")
   })
 })

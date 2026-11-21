@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 const listPetSpritePacks = jest.fn()
 const addPetSpritePack = jest.fn()
 const deletePetSpritePack = jest.fn()
+const listSkills = jest.fn()
 const validateSpriteV2Import = jest.fn()
 const seedMainChat = jest.fn()
 const push = jest.fn()
@@ -12,6 +13,9 @@ jest.mock("@/lib/db/pet-sprite-packs", () => ({
   listPetSpritePacks: () => listPetSpritePacks(),
   addPetSpritePack: (...args: unknown[]) => addPetSpritePack(...args),
   deletePetSpritePack: (...args: unknown[]) => deletePetSpritePack(...args),
+}))
+jest.mock("@/lib/db/skills", () => ({
+  listSkills: () => listSkills(),
 }))
 jest.mock("@/lib/pet/sprite-v2/import", () => ({
   ...jest.requireActual("@/lib/pet/sprite-v2/import"),
@@ -41,6 +45,7 @@ describe("PetSpritePackManager", () => {
     listPetSpritePacks.mockReset().mockReturnValue([])
     addPetSpritePack.mockReset()
     deletePetSpritePack.mockReset()
+    listSkills.mockReset().mockResolvedValue([])
     validateSpriteV2Import.mockReset()
     seedMainChat.mockReset().mockResolvedValue("session-1")
     push.mockReset()
@@ -196,5 +201,20 @@ describe("PetSpritePackManager", () => {
     render(<PetSpritePackManager settings={{} as never} onPatch={jest.fn()} />)
     expect(screen.queryByLabelText("conceptLabel")).toBeNull()
     expect(screen.getByLabelText("import")).toBeInTheDocument()
+  })
+
+  it("reports whether the local hatch-pet skill is installed before launching chat (F12)", async () => {
+    listSkills.mockResolvedValueOnce([])
+    const { unmount } = render(<PetSpritePackManager settings={{} as never} onPatch={jest.fn()} />)
+    expect(await screen.findByTestId("pet-hatch-skill-status")).toHaveTextContent(
+      "hatchSkillMissing"
+    )
+    unmount()
+
+    listSkills.mockResolvedValueOnce([
+      { id: "s1", slug: "hatch-pet", name: "hatch-pet", status: "active" },
+    ])
+    render(<PetSpritePackManager settings={{} as never} onPatch={jest.fn()} />)
+    expect(await screen.findByTestId("pet-hatch-skill-status")).toHaveTextContent("hatchSkillReady")
   })
 })

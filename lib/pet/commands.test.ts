@@ -11,18 +11,31 @@ jest.mock("@/lib/pet/events/pet-event-bus", () => ({
 const closePetWindow = jest.fn()
 const isPetWindowOpen = jest.fn()
 const openPetWindow = jest.fn()
+const openPetPopup = jest.fn()
+const getPetWindowPosition = jest.fn()
+const getPetWorkArea = jest.fn()
+const setPetClickThrough = jest.fn()
+const setPetWindowPosition = jest.fn()
 jest.mock("@/lib/tauri/pet-window", () => ({
   closePetWindow: () => closePetWindow(),
   isPetWindowOpen: () => isPetWindowOpen(),
   openPetWindow: (opts: unknown) => openPetWindow(opts),
+  openPetPopup: (opts: unknown) => openPetPopup(opts),
+  getPetWindowPosition: () => getPetWindowPosition(),
+  getPetWorkArea: () => getPetWorkArea(),
+  setPetClickThrough: (ignore: boolean) => setPetClickThrough(ignore),
+  setPetWindowPosition: (x: number, y: number) => setPetWindowPosition(x, y),
 }))
 
-let mockIsTauriValue = true
-jest.mock("@/lib/platform/detect", () => ({
-  isTauri: () => mockIsTauriValue,
-  // The access gate resolves availability from the platform too.
-  detectPlatform: () => (mockIsTauriValue ? "tauri" : "web"),
-}))
+jest.mock("@/lib/platform/detect", () => {
+  const isTauri = jest.fn(() => true)
+  return {
+    isTauri,
+    // The access gate resolves availability from the platform too.
+    detectPlatform: () => (isTauri() ? "tauri" : "web"),
+  }
+})
+jest.mock("@/lib/platform/os", () => ({ isMacOs: () => true }))
 
 const save = jest.fn()
 let settingsValue: unknown = {}
@@ -45,14 +58,20 @@ jest.mock("@/lib/pet/settings-sync", () => ({
   },
 }))
 
+import { isTauri } from "@/lib/platform/detect"
 import {
   hideDesktopPetWindow,
+  openDesktopPetPopup,
   openDesktopPetWindow,
   PET_INTERACTION_COMMAND_IDS,
+  PET_WINDOW_ACTION_COMMAND_IDS,
   PET_WINDOW_COMMAND_ID,
   registerPetCommands,
   registerPetInteractionCommands,
+  registerPetWindowActionCommands,
   registerPetWindowCommand,
+  resetDesktopPetPosition,
+  toggleDesktopPetClickThrough,
   toggleDesktopPetWindow,
 } from "./commands"
 
@@ -63,7 +82,14 @@ beforeEach(() => {
   closePetWindow.mockReset()
   isPetWindowOpen.mockReset()
   openPetWindow.mockReset().mockResolvedValue(true)
-  mockIsTauriValue = true
+  openPetPopup.mockReset().mockResolvedValue(true)
+  getPetWindowPosition.mockReset().mockResolvedValue({ x: 100, y: 200 })
+  getPetWorkArea
+    .mockReset()
+    .mockResolvedValue({ x: 0, y: 0, width: 1440, height: 900, scaleFactor: 1 })
+  setPetClickThrough.mockReset().mockResolvedValue(true)
+  setPetWindowPosition.mockReset().mockResolvedValue(true)
+  jest.mocked(isTauri).mockReturnValue(true)
   save.mockReset().mockResolvedValue(undefined)
   settingsValue = { petSettings: { enabled: true, anchor: "bottom-right", size: 96 } }
 })
@@ -82,7 +108,7 @@ describe("hideDesktopPetWindow", () => {
   })
 
   it("is a no-op off Tauri", async () => {
-    mockIsTauriValue = false
+    jest.mocked(isTauri).mockReturnValue(false)
     await hideDesktopPetWindow()
     expect(closePetWindow).not.toHaveBeenCalled()
     expect(save).not.toHaveBeenCalled()
@@ -91,7 +117,7 @@ describe("hideDesktopPetWindow", () => {
 
 describe("toggleDesktopPetWindow", () => {
   it("is a no-op off Tauri", async () => {
-    mockIsTauriValue = false
+    jest.mocked(isTauri).mockReturnValue(false)
     const result = await toggleDesktopPetWindow()
     expect(result).toBe(false)
     expect(isPetWindowOpen).not.toHaveBeenCalled()
@@ -268,18 +294,21 @@ describe("openDesktopPetWindow (summon ⇒ enable, ADR-0058 D9)", () => {
   })
 
   it("is a no-op off Tauri", async () => {
-    mockIsTauriValue = false
+    jest.mocked(isTauri).mockReturnValue(false)
     expect(await openDesktopPetWindow()).toBe(false)
     expect(save).not.toHaveBeenCalled()
   })
 })
 
 describe("registerPetCommands", () => {
-  it("registers the seven pet commands under the Pet category", () => {
+  it("registers all ten pet commands under the Pet category", () => {
     registerPetCommands()
     const ids = registerCommand.mock.calls.map(([reg]) => reg.id)
     expect(ids).toEqual([
       "pet.toggle-window",
+      "pet.open-popup",
+      "pet.toggle-click-through",
+      "pet.reset-position",
       "pet.feed",
       "pet.play",
       "pet.pet",
@@ -340,13 +369,71 @@ describe("registerPetCommands", () => {
     expect(byId["pet.feed"]).toBe("喂宠物")
   })
 
-  it("returns a dispose function that unregisters all seven commands", () => {
-    const disposeFns = Array.from({ length: 7 }, () => jest.fn())
+  it("returns a dispose function that unregisters all ten commands", () => {
+    const disposeFns = Array.from({ length: 10 }, () => jest.fn())
     let call = 0
     registerCommand.mockImplementation(() => disposeFns[call++])
     const disposeAll = registerPetCommands()
     disposeAll()
     for (const fn of disposeFns) expect(fn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("keyboard desktop pet window actions (F11)", () => {
+  it("openDesktopPetPopup opens the popup anchored to the live pet overlay", async () => {
+    isPetWindowOpen.mockResolvedValue(true)
+    expect(await openDesktopPetPopup()).toBe(true)
+    expect(openPetPopup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        anchor: expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
+      })
+    )
+  })
+
+  it("toggleDesktopPetClickThrough flips persisted click-through and updates open window", async () => {
+    isPetWindowOpen.mockResolvedValue(true)
+    settingsValue = {
+      petSettings: {
+        enabled: true,
+        desktopPet: { enabled: true, clickThrough: true, size: 128, position: null },
+      },
+    }
+    expect(await toggleDesktopPetClickThrough()).toBe(false)
+    expect(setPetClickThrough).toHaveBeenCalledWith(false)
+    expect(save).toHaveBeenCalledWith({
+      petSettings: expect.objectContaining({
+        desktopPet: expect.objectContaining({ clickThrough: false }),
+      }),
+    })
+  })
+
+  it("resetDesktopPetPosition clears saved coordinates and moves an open overlay back to ground", async () => {
+    isPetWindowOpen.mockResolvedValue(true)
+    settingsValue = {
+      petSettings: {
+        enabled: true,
+        desktopPet: {
+          enabled: true,
+          clickThrough: false,
+          size: 128,
+          position: { x: 10, y: 20, space: "desktop" },
+        },
+      },
+    }
+    expect(await resetDesktopPetPosition()).toBe(true)
+    expect(save).toHaveBeenCalledWith({
+      petSettings: expect.objectContaining({
+        desktopPet: expect.objectContaining({ position: null }),
+      }),
+    })
+    expect(setPetWindowPosition).toHaveBeenCalledWith(1440 - (128 + 96), 900 - (128 + 160))
+  })
+
+  it("registerPetWindowActionCommands registers the three action ids in canonical order", () => {
+    registerPetWindowActionCommands()
+    expect(registerCommand.mock.calls.map(([reg]) => reg.id)).toEqual([
+      ...PET_WINDOW_ACTION_COMMAND_IDS,
+    ])
   })
 })
 

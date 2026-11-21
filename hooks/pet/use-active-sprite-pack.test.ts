@@ -4,7 +4,7 @@ const useLiveQuery = jest.fn()
 const getPetSpritePack = jest.fn()
 const isSpriteAssetMirror = jest.fn(() => false)
 const getMirroredSpriteMeta = jest.fn()
-const subscribeSpriteMirror = jest.fn(() => () => {})
+const subscribeSpriteMirror = jest.fn((..._args: unknown[]) => () => {})
 
 jest.mock("dexie-react-hooks", () => ({
   useLiveQuery: (...args: unknown[]) => useLiveQuery(...args),

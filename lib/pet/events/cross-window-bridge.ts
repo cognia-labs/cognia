@@ -25,6 +25,7 @@ import {
   type PetBridgeMessage,
 } from "./cross-window-protocol"
 import type { PetConsoleTab } from "@/lib/pet/console-tabs"
+import type { PetBubbleAction } from "@/lib/pet/bubbles/action"
 import { liveQuery } from "dexie"
 import { getPetModel } from "@/lib/db/pet-models"
 import { getPetSpritePack } from "@/lib/db/pet-sprite-packs"
@@ -64,13 +65,17 @@ function toBridgeBubble(bubble: PetBubble | null): PetBridgeBubble | null {
   }
 }
 
+export type PetOpenAttentionTarget = Extract<PetBubbleAction, { kind: "open-attention" }>
+
 export interface MainPetBridgeDeps {
   channel?: BroadcastChannelLike
   store?: PetStoreApi
   /** DI seam for the user-event replay (defaults to the real pet event bus). */
   emit?: typeof emitPetEvent
-  /** Popup asked to open the pet console at a tab (main window routes). */
+  /** Popup/overlay asked to open the pet console at a tab (main window routes). */
   onOpenConsole?: (tab: PetConsoleTab) => void
+  /** Overlay bubble asked to open a specific pending attention item (F6). */
+  onOpenAttention?: (target: PetOpenAttentionTarget) => void
 }
 
 /**
@@ -186,6 +191,14 @@ export function startMainPetBridge(deps: MainPetBridgeDeps = {}): () => void {
       broadcastSnapshot()
     } else if (msg.t === "open-console") {
       deps.onOpenConsole?.(msg.tab)
+    } else if (msg.t === "open-attention") {
+      deps.onOpenAttention?.({
+        kind: "open-attention",
+        source: msg.source,
+        ...(msg.sessionId ? { sessionId: msg.sessionId } : {}),
+        ...(msg.teamId ? { teamId: msg.teamId } : {}),
+        ...(msg.runId ? { runId: msg.runId } : {}),
+      })
     }
   }
 
@@ -221,6 +234,8 @@ export interface OverlayPetBridge {
   sendInteraction: (kind: PetBridgeInteractionKind, text?: string) => void
   /** Ask the main window to open the pet console at `tab`. */
   sendOpenConsole: (tab: PetConsoleTab) => void
+  /** Ask the main window to jump directly to a pending attention target (F6). */
+  sendOpenAttention: (target: PetOpenAttentionTarget) => void
 }
 
 /**
@@ -231,7 +246,12 @@ export interface OverlayPetBridge {
 export function startOverlayPetBridge(deps: OverlayPetBridgeDeps = {}): OverlayPetBridge {
   const channel = createChannel(deps.channel)
   if (!channel) {
-    return { dispose: () => {}, sendInteraction: () => {}, sendOpenConsole: () => {} }
+    return {
+      dispose: () => {},
+      sendInteraction: () => {},
+      sendOpenConsole: () => {},
+      sendOpenAttention: () => {},
+    }
   }
   const store = deps.store ?? usePetStore
 
@@ -294,5 +314,14 @@ export function startOverlayPetBridge(deps: OverlayPetBridgeDeps = {}): OverlayP
         ...(text && text.trim() ? { text: text.slice(0, 500) } : {}),
       }),
     sendOpenConsole: (tab) => post(channel, { v: 1, t: "open-console", tab }),
+    sendOpenAttention: (target) =>
+      post(channel, {
+        v: 1,
+        t: "open-attention",
+        source: target.source,
+        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+        ...(target.teamId ? { teamId: target.teamId } : {}),
+        ...(target.runId ? { runId: target.runId } : {}),
+      }),
   }
 }

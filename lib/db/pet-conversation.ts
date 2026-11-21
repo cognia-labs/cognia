@@ -21,7 +21,7 @@ import {
   assertPetConversationScopeCurrent,
   bumpPetConversationGeneration,
   type PetScopeToken,
-} from "@/lib/pet/runtime/pet-scope"
+} from "./pet-scope"
 import type { PetConversationRow } from "@/types/pet"
 
 /** Newest-N turns kept. Older rows are pruned on append. */

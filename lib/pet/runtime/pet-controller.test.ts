@@ -576,7 +576,9 @@ describe("atomicity, reset fencing, automation allowance, and concurrent rename 
       }),
     ])
     expect((await getPetProfile())?.xp).toBe(XP_AWARD.fed)
-    expect(remainingPetAllowance({ kind: "agent" }).xp).toBe(PET_DAILY_XP_BUDGET - XP_AWARD.fed)
+    expect(remainingPetAllowance({ kind: "agent" }).xp).toBe(
+      PET_DAILY_XP_BUDGET - (XP_AWARD.fed ?? 0)
+    )
   })
 
   it("rolls back profile progression and inventory when activity ledger write fails (F18)", async () => {

@@ -343,6 +343,8 @@
     "create": "前往聊天继续",
     "createDescription": "使用已安装的 hatch-pet skill 准备智能体任务草稿；请在聊天中确认并发送，以继续生成和质量检查。",
     "createTitle": "AI 外观孵化室",
+    "hatchSkillMissing": "未在本地技能库检测到 hatch-pet 技能。请确认所选对话智能体支持 $hatch-pet，并在生成后于下方导入产出的 pet.json 与精灵图。",
+    "hatchSkillReady": "已检测到本地 hatch-pet 技能。生成完成后请在下方导入产出的 pet.json 与精灵图。",
     "delete": "删除 {name}",
     "empty": "还没有安装 v2 精灵图宠物。",
     "error": {
