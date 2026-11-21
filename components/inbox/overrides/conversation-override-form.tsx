@@ -54,7 +54,9 @@ import type {
   TriggerPolicy,
 } from "@/types/connectors/policy"
 import { resolveBinding } from "@/lib/connectors/policy-resolve"
+import { useAdapterHealth } from "@/hooks/connectors/use-adapter-health"
 import { useAdapterInstance } from "@/hooks/connectors/use-adapter-instance"
+import { useInboundRecoveryJobs } from "@/hooks/connectors/use-inbound-recovery-jobs"
 import { ConversationBehaviorEditor } from "@/components/settings/connections/forms/conversation-behavior-editor"
 import { QuietHoursAndMute } from "@/components/settings/connections/forms/quiet-hours-and-mute"
 import { AdapterFormSections } from "@/components/settings/connections/forms/_shared/adapter-form-sections"
@@ -279,6 +281,9 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
   // with the character layer applied, resolved by the SAME function the bus
   // uses so the screen cannot describe a policy the conversation does not run.
   const adapterRow = useAdapterInstance(adapterId)
+  const isDelegateSelected =
+    engagement === "background" ||
+    (engagement === undefined && initialRow?.engagement === "background")
   const inheritedTrigger: TriggerPolicy | undefined = useMemo(() => {
     if (!adapterRow) return undefined
     const boundCharacterId =
@@ -675,6 +680,13 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
                       setA2ui(next.a2ui)
                     }}
                   />
+                  {isDelegateSelected && (
+                    <DelegationReadinessStrip
+                      adapterId={adapterId}
+                      conversationKey={conversationKey}
+                      adapterRow={adapterRow}
+                    />
+                  )}
                 </div>
 
                 {/* Whether this chat answers at all. The editor itself needs the bot's
@@ -1300,6 +1312,60 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
         <AlertDescription>{t("fields.advancedJsonHelp")}</AlertDescription>
       </Alert>
       {promotionDialog}
+    </div>
+  )
+}
+
+function DelegationReadinessStrip({
+  adapterId,
+  conversationKey,
+  adapterRow,
+}: {
+  adapterId: string
+  conversationKey: string
+  adapterRow: AdapterInstanceRow | undefined
+}) {
+  const t = useTranslations("inbox.conversationOverride")
+  const [mountNow] = useState(() => Date.now())
+  const adapterHealth = useAdapterHealth(adapterId, { now: () => mountNow })
+  const recoveryJobs = useInboundRecoveryJobs(conversationKey)
+
+  return (
+    <div
+      data-testid="delegation-readiness-strip"
+      className="mt-3 rounded-md border bg-muted/30 px-3 py-2.5 text-xs"
+    >
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-foreground">
+        <InfoIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span>{t("delegationReadiness.title")}</span>
+      </div>
+      <ul className="space-y-1 text-muted-foreground">
+        <li data-testid="delegation-readiness-host">
+          {adapterRow?.owner?.kind === "remote-host"
+            ? t("delegationReadiness.hostRemote", {
+                host: adapterRow.owner.hostLabel?.trim() || adapterRow.owner.hostId,
+              })
+            : t("delegationReadiness.hostLocal")}
+        </li>
+        <li data-testid="delegation-readiness-adapter">
+          {!adapterRow
+            ? t("delegationReadiness.adapterMissing")
+            : !adapterRow.enabled
+              ? t("delegationReadiness.adapterDisabled")
+              : adapterHealth.reauthRequired
+                ? t("delegationReadiness.reauthRequired")
+                : adapterHealth.current === "down" || adapterHealth.current === "degraded"
+                  ? t("delegationReadiness.adapterDegraded")
+                  : t("delegationReadiness.adapterReady")}
+        </li>
+        <li data-testid="delegation-readiness-recovery">
+          {recoveryJobs.length > 0
+            ? t("delegationReadiness.recoveryPending", {
+                count: recoveryJobs.length,
+              })
+            : t("delegationReadiness.recoveryClean")}
+        </li>
+      </ul>
     </div>
   )
 }

@@ -111,6 +111,23 @@ describe("createDeadlockHandler", () => {
     expect(forceUnquarantine).toHaveBeenCalledWith({ resetAll: true })
   })
 
+  it("holds concurrency during review and releases the hold upon approval", async () => {
+    const { createConcurrencyController } =
+      await import("@/lib/workflow/runtime/concurrency-controller")
+    const concurrency = createConcurrencyController(3)
+    const { deps, forceUnquarantine, resolveDecision } = makeDeps({
+      recovery: true,
+      concurrency,
+    })
+    createDeadlockHandler(deps)()
+    expect(concurrency.get()).toBe(0)
+    resolveDecision({ kind: "deadlock", outcome: "approve", resetAll: true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(forceUnquarantine).toHaveBeenCalledWith({ resetAll: true })
+    expect(concurrency.get()).toBe(3)
+  })
+
   it("aborts the run when the operator denies", async () => {
     const { deps, abort, resolveDecision } = makeDeps({ recovery: true })
     createDeadlockHandler(deps)()

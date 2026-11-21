@@ -44,6 +44,7 @@
   "shadow": {
     "badge": "Observe only",
     "browser": "Browser submission enforcement is off in Settings → Security. Unlisted sites are recorded in the shadow report, not blocked yet.",
+    "enable": "Enable enforcement",
     "github": "GitHub write enforcement is off in Settings → Security. Unlisted repositories are recorded in the shadow report, not held yet.",
     "integration": "Integration write enforcement is off in Settings → Security. Unlisted targets are recorded in the shadow report, not held yet.",
     "messaging": "Messaging recipient enforcement is off in Settings → Security. Unlisted recipients are recorded in the shadow report, not drafted or held yet."

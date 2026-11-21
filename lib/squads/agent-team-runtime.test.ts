@@ -173,10 +173,13 @@ type FakeControllerSurface = Pick<
   | "reconcile"
 >
 
+const openWorkspaceDispatchMock = jest.fn()
+
 jest.mock("./workspace/registry-controller", () => ({
   AgentTeamRegistryWorkspaceController: class FakeController implements FakeControllerSurface {
     constructor(public readonly options: AgentTeamRegistryWorkspaceControllerOptions) {}
     async openDispatch(input: OpenAgentTeamWorkspaceDispatch): Promise<WorkspaceBundleTurnLease> {
+      openWorkspaceDispatchMock(input)
       return buildTypedWorkspaceLeaseFixture(this.options, input)
     }
     recordDispatchResult(): void {}
@@ -462,6 +465,7 @@ beforeEach(async () => {
       jest.requireActual("@/lib/db/agent-team-runtime").settleAgentTeamRunIfCurrent
     )
   abortWorkspaceMock.mockReset().mockResolvedValue(undefined)
+  openWorkspaceDispatchMock.mockReset()
   executeEnvironmentMock.mockReset().mockResolvedValue({ success: true })
   await dbFixture.restore()
   await getDb().workflowRuns.clear()
@@ -2254,5 +2258,404 @@ describe("runTeamLifecycle — Employee Digital Twin runtime gating", () => {
       buildDeps: false,
       listAvailable: false,
     })
+  })
+})
+
+describe("runTeamLifecycle — task cancellation & atomic dispatch boundary (F02, T01)", () => {
+  const seedStoreForTeam = (team: AgentTeam, tasks: AgentTeamTask[], members: AgentTeammate[]) => {
+    useAgentTeamStore.setState({
+      teams: { [team.id]: { ...team, taskIds: tasks.map((t) => t.id) } },
+      teammates: Object.fromEntries(members.map((m) => [m.id, m])),
+      tasks: Object.fromEntries(tasks.map((t) => [t.id, t])),
+    })
+  }
+
+  it("never synthesizes, leases workspaces, or calls models for pre-start cancelled tasks, and settles all-cancelled runs", async () => {
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "independent done",
+      usage: { promptTokens: 2, completionTokens: 2, totalTokens: 4 },
+    })
+    const cancelledTask = { ...task("t-cancelled"), status: "cancelled" as const }
+    const activeTask = task("t-active")
+    const members = [lead, worker("w1")]
+    seedStoreForTeam(baseTeam, [cancelledTask, activeTask], members)
+
+    await createSquadRunRecords({
+      runId: "run-prestart-cancel",
+      teamId: baseTeam.id,
+      objective: baseTeam.task,
+      origin: "chat",
+      startedAt: Date.now(),
+      executionConstraints: {
+        version: 1,
+        teamConfig: baseTeam.config,
+        origin: "chat",
+        triggeredFrom: { source: "ui" },
+        requirePlanApprovalFloor: false,
+      },
+    })
+    const res = await runSquadLifecycle(
+      { teamId: baseTeam.id, runId: "run-prestart-cancel" },
+      { runtimeDeps: buildDeps(baseTeam, [cancelledTask, activeTask], members) }
+    )
+    expect(res.status).toBe("completed")
+    expect(executeAgent).toHaveBeenCalledTimes(1)
+    expect(openWorkspaceDispatchMock.mock.calls.map(([i]) => i.taskId)).toEqual(["t-active"])
+    expect(useAgentTeamStore.getState().tasks["t-cancelled"].status).toBe("cancelled")
+    expect(useAgentTeamStore.getState().tasks["t-active"].status).toBe("completed")
+
+    // All-cancelled run settles cleanly as cancelled with 0 workspace leases and 0 model calls.
+    ;(executeAgent as jest.Mock).mockClear()
+    openWorkspaceDispatchMock.mockClear()
+    const onlyCancelled = [{ ...task("t-only"), status: "cancelled" as const }]
+    seedStoreForTeam(baseTeam, onlyCancelled, members)
+    await createSquadRunRecords({
+      runId: "run-all-cancelled",
+      teamId: baseTeam.id,
+      objective: baseTeam.task,
+      origin: "chat",
+      startedAt: Date.now(),
+      executionConstraints: {
+        version: 1,
+        teamConfig: baseTeam.config,
+        origin: "chat",
+        triggeredFrom: { source: "ui" },
+        requirePlanApprovalFloor: false,
+      },
+    })
+    const allCancelledRes = await runSquadLifecycle(
+      { teamId: baseTeam.id, runId: "run-all-cancelled" },
+      { runtimeDeps: buildDeps(baseTeam, onlyCancelled, members) }
+    )
+    expect(allCancelledRes).toMatchObject({ runId: "run-all-cancelled", status: "cancelled" })
+    expect(await getDb().agentTeamRuns.get("run-all-cancelled")).toMatchObject({
+      status: "cancelled",
+    })
+    expect(executeAgent).not.toHaveBeenCalled()
+    expect(openWorkspaceDispatchMock).not.toHaveBeenCalled()
+  })
+
+  it("blocks tasks depending on a cancelled upstream while still running independent tasks", async () => {
+    ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
+      text: "independent sibling ok",
+      usage: { promptTokens: 2, completionTokens: 2, totalTokens: 4 },
+    })
+    const tUpstream = { ...task("t-upstream"), status: "cancelled" as const }
+    const tDependent = task("t-dependent", ["t-upstream"])
+    const tIndependent = task("t-independent")
+    const members = [lead, worker("w1")]
+    seedStoreForTeam(baseTeam, [tUpstream, tDependent, tIndependent], members)
+
+    await createSquadRunRecords({
+      runId: "run-cancelled-dep",
+      teamId: baseTeam.id,
+      objective: baseTeam.task,
+      origin: "chat",
+      startedAt: Date.now(),
+      executionConstraints: {
+        version: 1,
+        teamConfig: baseTeam.config,
+        origin: "chat",
+        triggeredFrom: { source: "ui" },
+        requirePlanApprovalFloor: false,
+      },
+    })
+    const res = await runSquadLifecycle(
+      { teamId: baseTeam.id, runId: "run-cancelled-dep" },
+      { runtimeDeps: buildDeps(baseTeam, [tUpstream, tDependent, tIndependent], members) }
+    )
+    expect(res.status).toBe("failed")
+    expect(res.reason).toContain("t-dependent")
+    expect(executeAgent).toHaveBeenCalledTimes(1)
+    expect(openWorkspaceDispatchMock.mock.calls.map(([i]) => i.taskId)).toEqual(["t-independent"])
+    expect(useAgentTeamStore.getState().tasks["t-independent"].status).toBe("completed")
+    expect(useAgentTeamStore.getState().tasks["t-upstream"].status).toBe("cancelled")
+    expect(useAgentTeamStore.getState().tasks["t-dependent"].status).toBe("pending")
+  })
+
+  it("handles mid-run cancel-vs-claim races deterministically in both directions", async () => {
+    const serialTeam: AgentTeam = {
+      ...baseTeam,
+      config: { ...baseTeam.config, maxConcurrentTeammates: 1 },
+    }
+    const t1 = task("t1-first")
+    const t2 = task("t2-cancel-wins")
+    const members = [lead, worker("w1")]
+    seedStoreForTeam(serialTeam, [t1, t2], members)
+
+    let enteredFirst!: () => void
+    let releaseFirst!: () => void
+    const firstStarted = new Promise<void>((resolve) => {
+      enteredFirst = resolve
+    })
+    ;(executeAgent as jest.Mock).mockImplementation(async () => {
+      enteredFirst()
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve
+      })
+      return {
+        channel: "text",
+        text: "t1 completed",
+        usage: { promptTokens: 2, completionTokens: 2, totalTokens: 4 },
+      }
+    })
+
+    await createSquadRunRecords({
+      runId: "run-cancel-race",
+      teamId: serialTeam.id,
+      objective: serialTeam.task,
+      origin: "chat",
+      startedAt: Date.now(),
+      executionConstraints: {
+        version: 1,
+        teamConfig: serialTeam.config,
+        origin: "chat",
+        triggeredFrom: { source: "ui" },
+        requirePlanApprovalFloor: false,
+      },
+    })
+    const running = runSquadLifecycle(
+      { teamId: serialTeam.id, runId: "run-cancel-race" },
+      { runtimeDeps: buildDeps(serialTeam, [t1, t2], members) }
+    )
+    await firstStarted
+
+    // Direction 1 (claim won race on t1): t1 is in_progress, so board moveTask to cancelled is refused.
+    expect(useAgentTeamStore.getState().tasks["t1-first"].status).toBe("in_progress")
+    expect(useAgentTeamStore.getState().moveTask("t1-first", "cancelled")).toEqual({
+      ok: false,
+      reason: "runtime-owned",
+    })
+
+    // Direction 2 (cancel wins race on t2 after DAG synthesis, before t2 claims):
+    expect(useAgentTeamStore.getState().moveTask("t2-cancel-wins", "cancelled")).toEqual({
+      ok: true,
+    })
+
+    releaseFirst()
+    const res = await running
+    expect(res.status).toBe("completed")
+    expect(executeAgent).toHaveBeenCalledTimes(1)
+    expect(openWorkspaceDispatchMock.mock.calls.map(([i]) => i.taskId)).toEqual(["t1-first"])
+    expect(useAgentTeamStore.getState().tasks["t1-first"].status).toBe("completed")
+    expect(useAgentTeamStore.getState().tasks["t2-cancel-wins"].status).toBe("cancelled")
+  })
+})
+
+describe("runTeamLifecycle — budget governance, extension & restart preservation (F03, F04, T03)", () => {
+  it("pauses on Governance budget critical without stalling, resumes next task on extension, and preserves spent+extended budget across re-entry", async () => {
+    const governedTeam: AgentTeam = {
+      ...baseTeam,
+      config: {
+        ...baseTeam.config,
+        maxConcurrentTeammates: 1,
+        tokenBudget: 0,
+        governancePolicy: {
+          approval: { requirePlanApproval: false, requireDelegationApproval: false },
+          budget: {
+            tokenBudget: 100,
+            warningThreshold: 0.5,
+            criticalThreshold: 0.85,
+            onCritical: "pause_for_review",
+          },
+          escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
+        },
+      },
+    }
+    const tasks = [task("b1"), task("b2", ["b1"]), task("b3", ["b2"])]
+    const members = [lead, worker("w1")]
+    useAgentTeamStore.setState({
+      teams: { [governedTeam.id]: { ...governedTeam, taskIds: tasks.map((t) => t.id) } },
+      teammates: Object.fromEntries(members.map((m) => [m.id, m])),
+      tasks: Object.fromEntries(tasks.map((t) => [t.id, t])),
+    })
+
+    let calls = 0
+    const runId = "run-budget-resume-t03"
+    ;(executeAgent as jest.Mock).mockImplementation(async () => {
+      calls += 1
+      if (calls === 1) {
+        // 90 / 100 crosses 0.85 critical -> opens crossing-1 while inflight drains to 0!
+        return {
+          channel: "text",
+          text: "b1 done",
+          usage: { promptTokens: 45, completionTokens: 45, totalTokens: 90 },
+        }
+      }
+      if (calls === 2) {
+        // After +150 extension (limit = 250, used = 90 + 60 = 150 < 212.5): b2 finishes!
+        return {
+          channel: "text",
+          text: "b2 done",
+          usage: { promptTokens: 30, completionTokens: 30, totalTokens: 60 },
+        }
+      }
+      // Leg 2 (re-entry on same runId): used starts at 150 against limit 250 (NOT 100 and NOT 400!).
+      // Spending +70 brings total to 220 / 250 (0.88 >= 0.85) -> opens crossing-2!
+      return {
+        channel: "text",
+        text: "b3 done",
+        usage: { promptTokens: 35, completionTokens: 35, totalTokens: 70 },
+      }
+    })
+
+    await createSquadRunRecords({
+      runId,
+      teamId: governedTeam.id,
+      objective: governedTeam.task,
+      origin: "chat",
+      startedAt: Date.now(),
+      executionConstraints: {
+        version: 1,
+        teamConfig: governedTeam.config,
+        origin: "chat",
+        triggeredFrom: { source: "ui" },
+        requirePlanApprovalFloor: false,
+      },
+    })
+
+    let pauseDone: Promise<unknown> | undefined
+    const makeLiveDeps = (
+      taskFilter?: (t: AgentTeamTask) => boolean,
+      pauseBeforeCompletion = false
+    ): RunTeamLifecycleDeps => ({
+      ...buildDeps(governedTeam, Object.values(useAgentTeamStore.getState().tasks), members),
+      runId,
+      ...(taskFilter ? { taskFilter } : {}),
+      ...(pauseBeforeCompletion
+        ? {
+            beforeCompletion: async () => {
+              await pauseDone
+            },
+          }
+        : {}),
+      storeReader: {
+        getTeam: () => governedTeam,
+        getTeammates: () => members,
+        getTeamTasks: () => Object.values(useAgentTeamStore.getState().tasks),
+      },
+      storeWriter: {
+        addMessage: () => {},
+        setTaskStatus: (id, status, res, err) => {
+          useAgentTeamStore.getState().setTaskStatus(id, status, res, err)
+          if (id === "b2" && status === "completed" && !pauseDone) {
+            // Operator pause via canonical control plane after b2 completes!
+            pauseDone = controlSquadRun({ runId }, "pause")
+          }
+        },
+        updateTeammate: (id, u) => useAgentTeamStore.getState().updateTeammate(id, u),
+        updateTask: (id, u) => useAgentTeamStore.getState().updateTask(id, u),
+        getTaskStatus: (tid, id) => {
+          const row = useAgentTeamStore.getState().tasks[id]
+          return row && row.teamId === tid ? row.status : undefined
+        },
+        claimTaskForDispatch: (tid, id, opts) =>
+          useAgentTeamStore.getState().claimTaskForDispatch(tid, id, opts),
+      },
+    })
+
+    // Leg 1: execute b1 (90 tokens -> crossing-1), approve +150 tokens, verify b2 ACTUALLY executes, then pause!
+    const firstLeg = runTeamLifecycle(
+      governedTeam.id,
+      makeLiveDeps((t) => t.id !== "b3", true)
+    )
+
+    await answerPendingReview("budget_extension", "approve", { extraTokens: 150 })
+    await firstLeg
+    await pauseDone
+    expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({ status: "paused" })
+    expect(useAgentTeamStore.getState().tasks.b1.status).toBe("completed")
+    expect(useAgentTeamStore.getState().tasks.b2.status).toBe("completed")
+    expect(useAgentTeamStore.getState().tasks.b3.status).toBe("pending")
+
+    // Unpause via canonical control plane and re-enter on the SAME runId for remaining work (b3):
+    const resumeCtrl = await controlSquadRun({ runId }, "resume", {
+      isLive: () => false,
+      readiness: async () => ({ ready: true, blockers: [] }),
+      reenter: async () => undefined,
+    })
+    expect(resumeCtrl).toMatchObject({ ok: true, status: "running" })
+    const { getDurableTeamCoordinator } = await import("./durable/durable-runtime")
+    getDurableTeamCoordinator().setRunPaused(runId, false)
+    const { prepareSquadResume, resumeTaskFilter } = await import("./squad/squad-lifecycle-runner")
+    await prepareSquadResume(governedTeam.id)
+    const secondLeg = runTeamLifecycle(governedTeam.id, makeLiveDeps(resumeTaskFilter))
+
+    // b3 spends 70 -> 150 + 70 = 220 / 250 (0.88 >= 0.85) -> opens crossing-2!
+    const deadline = Date.now() + 4_000
+    let secondInterruptId: string | undefined
+    let secondSubject: { used?: number; limit?: number } | undefined
+    while (!secondInterruptId && Date.now() < deadline) {
+      const pending = await pendingReviews("budget_extension")
+      if (pending[0]) {
+        secondInterruptId = pending[0].id
+        secondSubject = pending[0].subject as { used?: number; limit?: number }
+      } else {
+        await new Promise((r) => setTimeout(r, 10))
+      }
+    }
+    expect(secondInterruptId).toMatch(/:crossing-2$/)
+    // Proves initialUsed=150 (+70 = 220) AND +150 extension was applied ONCE (limit=250, not 100 or 400)!
+    expect(secondSubject).toEqual({ used: 220, limit: 250 })
+
+    await answerPendingReview("budget_extension", "approve", { extraTokens: 100 })
+    const secondResult = await secondLeg
+    expect(secondResult.status).toBe("completed")
+    expect(calls).toBe(3)
+    expect(useAgentTeamStore.getState().tasks.b3.status).toBe("completed")
+  })
+
+  it("resumes pending tasks after deadlock gate approval instead of stalling at concurrency 0 (F04)", async () => {
+    const deadlockTeam: AgentTeam = {
+      ...baseTeam,
+      config: {
+        ...baseTeam.config,
+        maxConcurrentTeammates: 1,
+        enableDeadlockRecovery: true,
+        nudges: { enabled: false },
+        // Allow enough step attempts so runStep retries d1 once w1 is unquarantined.
+        enableTaskRetry: true,
+        maxRetries: 4,
+      },
+    }
+    const tasks = [task("d1"), task("d2", ["d1"])]
+    const members = [lead, worker("w1")]
+    let attempts = 0
+    ;(executeAgent as jest.Mock).mockImplementation(async () => {
+      attempts += 1
+      if (attempts <= 2) {
+        // Empty text returns normally from executeAgent (recording local stop-proof)
+        // and throws EMPTY_OUTPUT in dispatchTeammate; 2 failures trip w1's breaker
+        // (`minEvents: 2, failureThresholdPct: 50`) -> pool.onAllUnavailable fires!
+        return {
+          channel: "text",
+          text: "",
+          usage: { promptTokens: 1, completionTokens: 0, totalTokens: 1 },
+        }
+      }
+      return {
+        channel: "text",
+        text: `recovered-${attempts}`,
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      }
+    })
+
+    const runId = "run-deadlock-resume-f04"
+    await createSquadRunRecords({
+      runId,
+      teamId: deadlockTeam.id,
+      objective: deadlockTeam.task,
+      origin: "chat",
+      startedAt: Date.now(),
+    })
+    const deps = { ...buildDeps(deadlockTeam, tasks, members), runId }
+    const running = runTeamLifecycle(deadlockTeam.id, deps)
+
+    await answerPendingReview("deadlock", "approve", { resetAll: true })
+    const res = await running
+    expect(res.status).toBe("completed")
+    expect(deps._taskStatuses).toMatchObject({ d1: "completed", d2: "completed" })
   })
 })

@@ -35,7 +35,7 @@ const ORIGIN = conversationTarget(ORIGIN_KEY)!
 const OTHER = conversationTarget(OTHER_KEY)!
 
 const enforce = { agentPermissions: { outboundAuthorization: "enforce" } }
-const shadow = { agentPermissions: {} }
+const shadow = { agentPermissions: { outboundAuthorization: "shadow" } }
 
 function deps(
   settings: object,

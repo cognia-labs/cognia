@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input"
 import type { KnownConversation } from "@/hooks/outbound/use-known-conversations"
 import type { KnownRepository } from "@/hooks/outbound/use-known-repositories"
 import { getDb } from "@/lib/db/schema"
-import { getSettings } from "@/lib/db/settings"
+import { getSettings, saveSettings } from "@/lib/db/settings"
 import { listsRecipient, recipientGrant } from "@/lib/policy/action-review/configured-grants"
 import {
   conversationTarget,
@@ -39,7 +39,10 @@ import {
   type OutboundTarget,
 } from "@/lib/policy/action-review/outbound-targets"
 import type { OutboundSettingsLike } from "@/lib/policy/action-review/plan-context"
-import { readOutboundAuthorizationMode } from "@/lib/policy/action-review/policy"
+import {
+  readOutboundAuthorizationMode,
+  resolveMessagingOutboundMode,
+} from "@/lib/policy/action-review/policy"
 import { cn } from "@/lib/utils"
 import type {
   OutboundRecipientGrant,
@@ -73,6 +76,8 @@ export interface OutboundRecipientsEditorProps {
   kindNotes?: Partial<Record<OutboundRecipientKind, string>>
   /** Optional settings snapshot for authorization mode display; live-queried when omitted. */
   settings?: OutboundSettingsLike
+  /** Optional handler to upgrade the active category from observe-only (`shadow`) to `enforce`. */
+  onEnableEnforcement?: (category: OutboundCategory) => Promise<void>
   disabled?: boolean
   testId?: string
 }
@@ -102,6 +107,7 @@ export function OutboundRecipientsEditor({
   repositoryHost,
   kindNotes,
   settings: providedSettings,
+  onEnableEnforcement,
   disabled = false,
   testId = "outbound-recipients",
 }: OutboundRecipientsEditorProps) {
@@ -110,6 +116,9 @@ export function OutboundRecipientsEditor({
   const [text, setText] = useState("")
   const [error, setError] = useState<AddError | null>(null)
   const [saving, setSaving] = useState(false)
+  const [upgradedCategories, setUpgradedCategories] = useState<ReadonlySet<OutboundCategory>>(
+    () => new Set()
+  )
   const locked = disabled || saving
   const liveSettings = useLiveQuery(async () => {
     if (providedSettings !== undefined || typeof window === "undefined") return undefined
@@ -122,7 +131,38 @@ export function OutboundRecipientsEditor({
   }, [providedSettings !== undefined])
   const effectiveSettings = providedSettings !== undefined ? providedSettings : liveSettings
   const activeCategory = categoryForRecipientKind(kind)
-  const authorizationMode = readOutboundAuthorizationMode(effectiveSettings, activeCategory)
+  const authorizationMode = upgradedCategories.has(activeCategory)
+    ? "enforce"
+    : activeCategory === "messaging"
+      ? resolveMessagingOutboundMode(effectiveSettings, { unattended: true })
+      : readOutboundAuthorizationMode(effectiveSettings, activeCategory)
+
+  async function enableEnforcement() {
+    setSaving(true)
+    try {
+      if (onEnableEnforcement) {
+        await onEnableEnforcement(activeCategory)
+      } else {
+        const current = await getSettings()
+        const permissions = current.agentPermissions ?? {}
+        await saveSettings({
+          agentPermissions:
+            activeCategory === "messaging"
+              ? { ...permissions, outboundAuthorization: "enforce" }
+              : {
+                  ...permissions,
+                  outboundAuthorizationByCategory: {
+                    ...(permissions.outboundAuthorizationByCategory ?? {}),
+                    [activeCategory]: "enforce",
+                  },
+                },
+        })
+      }
+      setUpgradedCategories((prev) => new Set([...prev, activeCategory]))
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const titles = useMemo(
     () => new Map(knownConversations.map((known) => [known.target.recipient, known.title])),
@@ -196,6 +236,17 @@ export function OutboundRecipientsEditor({
             {t("shadow.badge")}
           </Badge>
           <span className="min-w-0 flex-1">{t(`shadow.${activeCategory}`)}</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-6 shrink-0 px-2 text-xs"
+            disabled={locked}
+            data-testid={`${testId}-enable-enforce`}
+            onClick={() => void enableEnforcement()}
+          >
+            {t("shadow.enable")}
+          </Button>
         </div>
       ) : null}
       {value.length === 0 ? (

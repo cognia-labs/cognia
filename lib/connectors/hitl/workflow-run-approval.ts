@@ -81,6 +81,12 @@ export interface HoldWorkflowDispatchInput {
   deliveryTarget?: ConversationDeliveryTarget
   /** remoteUserId of the person whose message would have started the run. */
   initiatorUserId?: string
+  /**
+   * When true (Draft/suggest mode, F4), restrict workflow launch approval to
+   * configured operators (`actorScope: { mode: "operators" }`) rather than
+   * letting the external IM requester self-approve.
+   */
+  operatorOnly?: boolean
   /** The triggering message, quoted on the card so the ask is reviewable. */
   requestText?: string
   ttlMs?: number
@@ -124,11 +130,17 @@ function excerpt(raw: string | undefined): string {
 export function buildWorkflowHoldSummary(input: {
   workflowDescription?: string
   requestText?: string
+  operatorOnly?: boolean
 }): string {
   const request = excerpt(input.requestText)
   const description = (input.workflowDescription ?? "").trim()
   return [
     "此会话为建议模式，工作流需批准后才会运行。 / This conversation is in suggest mode, so the workflow runs only after approval.",
+    ...(input.operatorOnly
+      ? [
+          "仅操作员可批准启动工作流；外部提问方无法自行批准。 / Only an operator may approve starting this workflow; the external requester cannot self-approve.",
+        ]
+      : []),
     ...(description.length > 0 ? [description] : []),
     ...(request.length > 0 ? [`触发消息 / Request: ${request}`] : []),
   ].join("\n")
@@ -185,14 +197,17 @@ export async function holdWorkflowDispatchForApproval(
     summary: buildWorkflowHoldSummary({
       ...(row?.description ? { workflowDescription: row.description } : {}),
       ...(input.requestText ? { requestText: input.requestText } : {}),
+      ...(input.operatorOnly ? { operatorOnly: true } : {}),
     }),
   })
 
-  // Same actor rule as the tool and plan cards: the person who asked answers,
-  // or a configured operator when the platform gave us no stable user id.
-  const actorScope = input.initiatorUserId
-    ? { mode: "initiator" as const, allowedUserIds: [input.initiatorUserId] }
-    : { mode: "operators" as const }
+  // Draft/suggest mode (`operatorOnly`) restricts workflow launch approval to
+  // operators (`runOperatorUserIds` or local Inbox); otherwise the requester
+  // (or an operator when no stable user id exists) may answer.
+  const actorScope =
+    input.operatorOnly || !input.initiatorUserId
+      ? { mode: "operators" as const }
+      : { mode: "initiator" as const, allowedUserIds: [input.initiatorUserId] }
 
   // The whole dispatch, frozen. `handleWorkflowApprovalCallback` re-reads this
   // and nothing else, so a conversation that is re-bound while the card waits

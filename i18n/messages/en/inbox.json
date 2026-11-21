@@ -271,6 +271,18 @@
     "loadFailed": "Couldn't load conversations. Try again."
   },
   "conversationOverride": {
+    "delegationReadiness": {
+      "adapterDegraded": "Adapter health: degraded or offline — check Settings → Connections before relying on unattended runs.",
+      "adapterDisabled": "Adapter health: disabled — enable the connection in Settings → Connections.",
+      "adapterMissing": "Adapter health: connection record not loaded on this device.",
+      "adapterReady": "Adapter & credentials: enabled and healthy.",
+      "hostLocal": "Runtime host: local window — background delegation runs only while this desktop app stays open.",
+      "hostRemote": "Runtime host: always-on host ({host}).",
+      "reauthRequired": "Adapter & credentials: credential rejected — re-authenticate in Settings → Connections.",
+      "recoveryClean": "Recovery queue: no stalled inbound jobs awaiting recovery.",
+      "recoveryPending": "Recovery queue: {count, plural, =1 {1 stalled inbound job needs} other {# stalled inbound jobs need}} recovery before unattended delegation is clean.",
+      "title": "Delegation readiness"
+    },
     "deleteOverride": "Remove override",
     "deleteOverrideConfirm": "Remove the override for this conversation? It will fall back to the adapter defaults.",
     "dialogTitle": "Conversation settings",

@@ -63,6 +63,7 @@ import {
 import { annotateChatToolReview } from "./chat-tool-channel"
 import {
   extractOutboundTargets,
+  originMatchFingerprint,
   outboundFingerprint,
   toReviewTarget,
   type OutboundTarget,
@@ -83,6 +84,7 @@ import {
   humanOutboundGrant,
   planActionReview,
   readOutboundAuthorizationMode,
+  resolveMessagingOutboundMode,
   type ActionReviewPlanResult,
 } from "./policy"
 import { outboundReview } from "./outbound-receipt"
@@ -172,10 +174,12 @@ async function fallbackMode(
   options: OutboundToolPlannerOptions
 ) {
   const settings = await (options.settings ?? readAppSettings)()
-  return readOutboundAuthorizationMode(
-    settings,
-    isOutboundToolId(request.toolName) ? "messaging" : "github"
-  )
+  return isOutboundToolId(request.toolName)
+    ? resolveMessagingOutboundMode(settings, {
+        unattended: options.unattended,
+        crossConversation: true,
+      })
+    : readOutboundAuthorizationMode(settings, "github")
 }
 
 async function defaultAccountHost(
@@ -337,11 +341,30 @@ async function planCall(
         ? await (options.githubGrants ?? configuredGithubGrants)(github.grantContext)
         : []),
   ]
+  const resolvedSettings = await (options.settings ?? readAppSettings)()
+  const originThreadFp = origin.originThread
+    ? originMatchFingerprint(origin.originThread)
+    : undefined
+  const crossConversation = messaging
+    ? targets.length === 0 ||
+      targets.some((target) => {
+        const match = originMatchFingerprint(target)
+        return match === undefined || match !== originThreadFp
+      })
+    : false
   const context = await buildActionReviewPlanContext({
     origin: { ...origin, rootSessionId, instructionEpoch },
     unattended: options.unattended,
     via: "tool",
-    settings: await (options.settings ?? readAppSettings)(),
+    settings: resolvedSettings,
+    ...(messaging
+      ? {
+          modeOverride: resolveMessagingOutboundMode(resolvedSettings, {
+            unattended: options.unattended,
+            crossConversation,
+          }),
+        }
+      : {}),
     ...(policyGrants.length > 0 ? { policyGrants } : {}),
     ...(options.now ? { now: options.now() } : {}),
   })

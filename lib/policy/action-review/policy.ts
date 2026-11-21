@@ -93,6 +93,31 @@ export function readOutboundAuthorizationMode(
   return mode === "enforce" ? "enforce" : "shadow"
 }
 
+/**
+ * Risk-stratified messaging authorization mode (F2):
+ * - Explicit `outboundAuthorization: "enforce"` enforces all messaging checks.
+ * - Explicit non-enforce values (e.g. `"shadow"`, `"on"`, `"off"`) preserve
+ *   observe-only behavior for accounts that explicitly chose it.
+ * - Unset (`outboundAuthorization === undefined`): defaults to `"enforce"` for
+ *   unattended runs and cross-conversation sends while keeping in-thread
+ *   replies unblocked.
+ */
+export function resolveMessagingOutboundMode(
+  settings: { agentPermissions?: unknown } | null | undefined,
+  risk: { unattended?: boolean; crossConversation?: boolean }
+): OutboundAuthorizationMode {
+  // `null` means no settings store is hydrated in this shell (`readAppSettings`).
+  if (settings === null) return "shadow"
+  const permissions = settings?.agentPermissions
+  const raw =
+    permissions && typeof permissions === "object"
+      ? (permissions as { outboundAuthorization?: unknown }).outboundAuthorization
+      : undefined
+  if (raw === "enforce") return "enforce"
+  if (raw !== undefined) return "shadow"
+  return risk.unattended || risk.crossConversation ? "enforce" : "shadow"
+}
+
 function readCategoryMode(byCategory: unknown, category: OutboundCategory): unknown {
   if (!byCategory || typeof byCategory !== "object") return undefined
   return (byCategory as Record<string, unknown>)[category]

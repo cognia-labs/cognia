@@ -175,6 +175,19 @@ describe("holdWorkflowDispatchForApproval", () => {
     expect(record.mock.calls[0][0].actorScope).toEqual({ mode: "operators" })
   })
 
+  it("scopes workflow launch approval to operators only in Draft mode even when initiatorUserId is present (F4)", async () => {
+    const args = input({ initiatorUserId: "ou-external-requester", operatorOnly: true })
+    const res = await holdWorkflowDispatchForApproval(args)
+    expect(res.held).toBe(true)
+    const record = args.recordBinding as unknown as jest.Mock
+    for (const call of record.mock.calls) {
+      expect(call[0].actorScope).toEqual({ mode: "operators" })
+    }
+    if (res.held) {
+      expect(res.surface.widget?.fallbackText).toContain("Only an operator may approve")
+    }
+  })
+
   it("expires the buttons well before the binding table's 30-day default", async () => {
     const args = input()
     await holdWorkflowDispatchForApproval(args)

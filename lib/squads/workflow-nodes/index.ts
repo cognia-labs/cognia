@@ -209,6 +209,52 @@ export async function dispatchTeamTask(ctx: StepExecutionContext): Promise<StepE
   const depIds = Array.isArray(params.dependencies)
     ? params.dependencies.filter((d): d is string => typeof d === "string" && d.length > 0)
     : []
+  for (const depId of depIds) {
+    const depUpstream = ctx.upstream[depId] as
+      { cancelled?: boolean; blockedByCancelledDependency?: string } | undefined
+    const depCancelled =
+      depUpstream?.cancelled === true ||
+      typeof depUpstream?.blockedByCancelledDependency === "string" ||
+      teamCtx.cancelledTaskIds?.has(depId) === true ||
+      teamCtx.blockedByCancelledTaskIds?.has(depId) === true ||
+      teamCtx.storeWriter.getTaskStatus?.(teamId, depId) === "cancelled"
+    if (depCancelled) {
+      teamCtx.blockedByCancelledTaskIds?.add(taskId)
+      return {
+        output: {
+          blockedByCancelledDependency: depId,
+          taskId,
+        },
+      }
+    }
+  }
+
+  // Atomic live-status claim BEFORE opening workspace leases or calling a model:
+  // a task cancelled mid-run (or already claimed by another actor) must never
+  // execute, while claiming transitions pending -> in_progress (`runtime-owned`).
+  const schedulerClaimId = `scheduler:${ctx.runId}:${taskId}`
+  if (teamCtx.storeWriter.claimTaskForDispatch) {
+    const claim = teamCtx.storeWriter.claimTaskForDispatch(teamId, taskId, {
+      claimantId: schedulerClaimId,
+      allowSameClaimant: true,
+    })
+    if (!claim.ok) {
+      if (claim.reason === "cancelled") {
+        teamCtx.cancelledTaskIds?.add(taskId)
+        return { output: { cancelled: true, taskId } }
+      }
+      if (claim.reason === "already_terminal") {
+        return { output: { skipped: true, status: claim.status, taskId } }
+      }
+      throw nonRetryable(
+        `action.team.task.dispatch: task "${taskId}" unavailable (${claim.reason})`
+      )
+    }
+  } else if (teamCtx.storeWriter.getTaskStatus?.(teamId, taskId) === "cancelled") {
+    teamCtx.cancelledTaskIds?.add(taskId)
+    return { output: { cancelled: true, taskId } }
+  }
+
   const upstream = await readDependencyResultsForRun(teamCtx, depIds)
   // One snapshot for the step (ADR-0236): the upstream heading and the
   // teammate prompt (built later, inside the claim callback) read the same
@@ -370,8 +416,18 @@ export async function reviewTeamTask(ctx: StepExecutionContext): Promise<StepExe
         teammateName?: string
         access?: unknown
         taskKind?: unknown
+        cancelled?: boolean
+        skipped?: boolean
+        blockedByCancelledDependency?: string
       }
     | undefined
+  if (
+    upstream?.cancelled === true ||
+    upstream?.skipped === true ||
+    typeof upstream?.blockedByCancelledDependency === "string"
+  ) {
+    return { output: upstream }
+  }
   if (!upstream || typeof upstream.text !== "string") {
     throw nonRetryable(
       `action.team.task.review: no output from dispatch node "${params.dispatchNodeId}"`
@@ -633,6 +689,9 @@ export async function reconcileTeamRun(ctx: StepExecutionContext): Promise<StepE
   }
   if (!teamCtx.workspaceController) {
     return { output: { reconciled: false } }
+  }
+  if ((teamCtx.blockedByCancelledTaskIds?.size ?? 0) > 0) {
+    return { output: { reconciled: false, reason: "blocked_by_cancelled_dependency" } }
   }
   const mode = params.mode ?? teamCtx.team.config.workspaceIsolation?.reconcile ?? "manual"
   if (mode === "merge-all") {

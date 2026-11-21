@@ -357,7 +357,12 @@ describe("runTeamTool", () => {
   })
 
   it("team_send_message broadcasts when no recipient, direct otherwise", async () => {
-    const { deps, calls } = makeDeps()
+    const { deps, calls } = makeDeps({
+      listMembers: () => [
+        { id: "tm-a", name: "Ada", role: "lead" },
+        { id: "tm-b", name: "Bob", role: "teammate" },
+      ],
+    })
     expect(await runTeamTool(TEAM_TOOL_NAMES.sendMessage, { content: "hi" }, caller, deps)).toMatch(
       /broadcast/
     )
@@ -630,6 +635,12 @@ describe("runTeamTool", () => {
 
   it("falls back to the default store-backed deps when none are injected", async () => {
     useAgentTeamStore.getState().reset()
+    useAgentTeamStore.setState({
+      teams: { "team-1": { id: "team-1", name: "T", config: {} } } as never,
+      teammates: {
+        "tm-a": { id: "tm-a", teamId: "team-1", name: "Ada", role: "lead", status: "idle" },
+      } as never,
+    })
     const r = await runTeamTool(TEAM_TOOL_NAMES.listMembers, {}, caller)
     expect(Array.isArray(r)).toBe(true)
   })
@@ -813,17 +824,183 @@ describe("defaultTeamToolDeps (real store-backed orchestrators)", () => {
     const recent = deps.recentMessages(team.id)
     expect(recent.some((m) => m.content === "hello team")).toBe(true)
     const added = deps.addTaskComment({
+      teamId: team.id,
       taskId: task.id,
       authorId: "tm-a",
       text: "found the bug",
       attachments: [{ name: "log", kind: "file", ref: "logs/a.txt" }],
     })
     expect(added?.id).toBeTruthy()
-    const fetched = deps.getTask(task.id)
+    const fetched = deps.getTask(task.id, team.id)
     expect(fetched?.comments).toHaveLength(1)
     expect(fetched?.comments[0].text).toBe("found the bug")
-    expect(deps.addTaskComment({ taskId: "ghost", authorId: "tm-a", text: "x" })).toBeNull()
-    expect(deps.getTask("ghost")).toBeNull()
+    expect(
+      deps.addTaskComment({ teamId: team.id, taskId: "ghost", authorId: "tm-a", text: "x" })
+    ).toBeNull()
+    expect(deps.getTask("ghost", team.id)).toBeNull()
+  })
+
+  it("enforces same-Squad ownership, provenance filtering, indistinguishable not-found errors, and mid-run revocation across two real Squads (T02)", async () => {
+    const { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } =
+      await import("@/lib/db/schema")
+    const disableDb = __enableDbRuntimeForTesting()
+    __resetDbForTesting()
+    const store = useAgentTeamStore.getState()
+    const squadA = store.createTeam({ name: "Squad A", task: "alpha" })
+    const squadB = store.createTeam({ name: "Squad B", task: "beta" })
+    const mateA = store.addTeammate({ teamId: squadA.id, name: "Alice", role: "teammate" })
+    const mateB = store.addTeammate({ teamId: squadB.id, name: "Mallory", role: "teammate" })
+    const taskA = store.createTask({
+      teamId: squadA.id,
+      title: "Alpha secret task",
+      description: "sensitive alpha plan",
+    })
+    const taskB = store.createTask({
+      teamId: squadB.id,
+      title: "Beta confidential task",
+      description: "do not leak",
+    })
+    const consensusB = (await defaultTeamToolDeps()).createConsensus({
+      teamId: squadB.id,
+      initiatorId: squadB.leadId,
+      question: "Beta vote?",
+      options: ["approve", "reject"],
+    })
+
+    registerTeamDispatchContext("sess-squad-a", {
+      teamId: squadA.id,
+      teammateId: mateA.id,
+      teammateName: mateA.name,
+      runId: "run-squad-a",
+    })
+    const callA: ToolCallContext = {
+      sessionId: "sess-squad-a",
+      toolUseId: "tu-a",
+      executionRunId: "execution:team:run-squad-a",
+      outboundAuthorization: { kind: "tool-call", sessionId: "sess-squad-a", toolUseId: "tu-a" },
+    }
+    try {
+      // 1. Authorized same-Squad task comment + task_get succeed on real Host store.
+      const ownComment = await teamToolFamily.run(
+        TEAM_TOOL_NAMES.addTaskComment,
+        { taskId: taskA.id, content: "Verified alpha invariant" },
+        callA
+      )
+      expect(ownComment).toMatch(new RegExp(`Comment added to ${taskA.id}`))
+      const ownTask = await teamToolFamily.run(TEAM_TOOL_NAMES.getTask, { taskId: taskA.id }, callA)
+      expect(ownTask).toMatchObject({
+        id: taskA.id,
+        title: "Alpha secret task",
+        comments: [expect.objectContaining({ text: "Verified alpha invariant" })],
+      })
+
+      // 2. Same-Squad task_get withholds personal content when provenance check marks withheld.
+      const withheldPlaceholder = "[Withheld: personal content of Host owner]"
+      jest
+        .mocked(preparePersonalDerivedHistory<{ id: string; content: string }>)
+        .mockResolvedValueOnce({
+          messages: [{ id: `team-tool:${squadA.id}`, content: withheldPlaceholder }],
+          withheldMessageIds: [`team-tool:${squadA.id}`],
+          visibilityDigest: "withheld-t02",
+          readers: [],
+        })
+      expect(await teamToolFamily.run(TEAM_TOOL_NAMES.getTask, { taskId: taskA.id }, callA)).toBe(
+        withheldPlaceholder
+      )
+
+      // 3. Cross-Squad task_get & task_add_comment return indistinguishable not-found errors and 0 writes.
+      const crossGet = String(
+        await teamToolFamily.run(TEAM_TOOL_NAMES.getTask, { taskId: taskB.id }, callA)
+      )
+      const missingGet = String(
+        await teamToolFamily.run(TEAM_TOOL_NAMES.getTask, { taskId: "task-missing" }, callA)
+      )
+      expect(crossGet).toBe(`Error: task ${taskB.id} not found.`)
+      expect(crossGet.replace(taskB.id, "<id>")).toBe(missingGet.replace("task-missing", "<id>"))
+
+      const crossComment = String(
+        await teamToolFamily.run(
+          TEAM_TOOL_NAMES.addTaskComment,
+          { taskId: taskB.id, content: "cross-team write attempt" },
+          callA
+        )
+      )
+      const missingComment = String(
+        await teamToolFamily.run(
+          TEAM_TOOL_NAMES.addTaskComment,
+          { taskId: "task-missing", content: "cross-team write attempt" },
+          callA
+        )
+      )
+      expect(crossComment).toBe(`Error: could not add comment — task ${taskB.id} not found.`)
+      expect(crossComment.replace(taskB.id, "<id>")).toBe(
+        missingComment.replace("task-missing", "<id>")
+      )
+      expect(useAgentTeamStore.getState().tasks[taskB.id].comments ?? []).toHaveLength(0)
+
+      // 4. Cross-Squad team_vote & team_send_message are refused with zero writes.
+      const crossVote = String(
+        await teamToolFamily.run(
+          TEAM_TOOL_NAMES.vote,
+          { consensusId: consensusB.id, optionIndex: 0 },
+          callA
+        )
+      )
+      expect(crossVote).toBe(`Error: consensus ${consensusB.id} not found`)
+      expect(useAgentTeamStore.getState().consensus[consensusB.id].votes).toHaveLength(0)
+
+      const crossMsg = String(
+        await teamToolFamily.run(
+          TEAM_TOOL_NAMES.sendMessage,
+          { to: mateB.id, content: "cross-squad ping with details" },
+          callA
+        )
+      )
+      expect(crossMsg).toBe(`Error: teammate ${mateB.id} not found.`)
+      expect(useAgentTeamStore.getState().getTeamMessages(squadA.id)).toHaveLength(0)
+      expect(useAgentTeamStore.getState().getTeamMessages(squadB.id)).toHaveLength(0)
+
+      // 5. Mid-run revocation (run cancelled or teammate shut down) blocks further writes.
+      await getDb().agentTeamRuns.put({
+        id: "run-squad-a",
+        teamId: squadA.id,
+        objective: "alpha",
+        status: "cancelled",
+        priority: 0,
+        decisionVersion: 0,
+        createdAt: 1,
+        completedAt: 2,
+        updatedAt: 2,
+      })
+      const afterCancel = String(
+        await teamToolFamily.run(
+          TEAM_TOOL_NAMES.addTaskComment,
+          { taskId: taskA.id, content: "post-cancel write" },
+          callA
+        )
+      )
+      expect(afterCancel).toMatch(/squad run is no longer active/)
+      expect(useAgentTeamStore.getState().tasks[taskA.id].comments).toHaveLength(1)
+
+      await getDb().agentTeamRuns.delete("run-squad-a")
+      useAgentTeamStore.getState().updateTeammate(mateA.id, { status: "shutdown" })
+      const afterShutdown = String(
+        await teamToolFamily.run(
+          TEAM_TOOL_NAMES.addTaskComment,
+          { taskId: taskA.id, content: "post-shutdown write" },
+          callA
+        )
+      )
+      expect(afterShutdown).toMatch(/no longer an active member/)
+      expect(useAgentTeamStore.getState().tasks[taskA.id].comments).toHaveLength(1)
+    } finally {
+      clearTeamDispatchContext("sess-squad-a")
+      await getDb()
+        .agentTeamRuns.delete("run-squad-a")
+        .catch(() => undefined)
+      __resetDbForTesting()
+      disableDb()
+    }
   })
 })
 

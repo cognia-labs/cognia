@@ -9,6 +9,7 @@
     "noEvidence": "No verified source reference was provided for this suggestion.",
     "memory": "Memory",
     "capture": "Capture",
+    "obligation": "Obligation",
     "loading": "Loading source…",
     "unavailable": "Source was deleted, archived, or is unavailable.",
     "viewSource": "Show current source",
@@ -22,6 +23,8 @@
   },
   "panel": {
     "empty": "No report yet. Run the radar to analyze your recent info diet.",
+    "forceRun": "Force regenerate",
+    "forceRunAria": "Supersede any in-flight radar run and regenerate from fresh data",
     "loading": "Loading the radar report…",
     "meta": "{count} items analyzed · {days}-day window",
     "run": "Run now",

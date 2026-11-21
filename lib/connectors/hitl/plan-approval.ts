@@ -58,6 +58,8 @@ export interface PlanApprovalSurfaceInput {
   planText: string
   /** Present only when risk — not an operator switch — is what raised the gate. */
   riskReason?: string
+  /** True when Draft/suggest mode restricts plan approval to operators only (F4). */
+  operatorOnly?: boolean
   revision: number
 }
 
@@ -73,9 +75,12 @@ export function buildPlanApprovalSurface(input: PlanApprovalSurfaceInput): A2UIS
   const reject = PLAN_REJECT_PREFIX + input.bindingId
   const objective = sanitizeActivityLabel(input.objective, "Team run")
   const title = `计划待批准 / Plan awaiting approval: ${objective}`
-  const why = input.riskReason
+  const baseWhy = input.riskReason
     ? `此运行涉及 ${input.riskReason}，需要批准。 / This run touches ${input.riskReason}, so approval is required.`
     : "负责人提出了计划。 / The lead proposed a plan."
+  const why = input.operatorOnly
+    ? `${baseWhy}\n此会话处于草稿审批模式，仅操作员可批准此计划。 / Draft mode requires an operator to approve this plan.`
+    : baseWhy
   const truncated = input.planText.length > PLAN_EXCERPT_LIMIT
   const excerpt = truncated
     ? `${input.planText.slice(0, PLAN_EXCERPT_LIMIT)}\n…（已截断，完整计划见详情 / truncated, see details）`
@@ -129,6 +134,12 @@ export interface ImPlanApprovalContext {
    * answer — the same rule the tool card uses.
    */
   initiatorUserId?: string
+  /**
+   * When true (Draft/suggest mode, F4), restrict card button approval to
+   * configured operators (`actorScope: { mode: "operators" }`) rather than
+   * letting the external IM requester self-approve.
+   */
+  operatorOnly?: boolean
   ttlMs?: number
   // Injectable for tests.
   enqueue?: typeof enqueueOutbound
@@ -169,12 +180,14 @@ export function makeImPlanApprovalDelegate(
       objective: ctx.objective,
       planText: request.planText,
       ...(request.riskReason ? { riskReason: request.riskReason } : {}),
+      ...(ctx.operatorOnly ? { operatorOnly: true } : {}),
       revision: request.revision,
     })
 
-    const actorScope = ctx.initiatorUserId
-      ? { mode: "initiator" as const, allowedUserIds: [ctx.initiatorUserId] }
-      : { mode: "operators" as const }
+    const actorScope =
+      ctx.operatorOnly || !ctx.initiatorUserId
+        ? { mode: "operators" as const }
+        : { mode: "initiator" as const, allowedUserIds: [ctx.initiatorUserId] }
     const buttons: Array<{
       actionId: string
       componentId: string

@@ -94,7 +94,7 @@ import {
 } from "./plan-context"
 import {
   planActionReview,
-  readOutboundAuthorizationMode,
+  resolveMessagingOutboundMode,
   type OutboundAuthorizationMode,
 } from "./policy"
 import { jobAuthorizationOf, outboundReceipt, type OutboundReceipt } from "./outbound-receipt"
@@ -450,6 +450,7 @@ async function planUnattended(
       unattended: true,
       via: "delivery",
       settings: env.settings,
+      modeOverride: env.mode,
       ...(policyGrants.length > 0 ? { policyGrants } : {}),
       now: env.now,
       ...(env.deps.listAuthKeys ? { listAuthKeys: env.deps.listAuthKeys } : {}),
@@ -551,7 +552,7 @@ export async function planUnplannedStream(
   )
   if (personal.outcome !== "allow") return { stream: false, personalWithheld: true }
   const settings = await (deps.settings ?? readAppSettings)()
-  const mode = readOutboundAuthorizationMode(settings)
+  const mode = resolveMessagingOutboundMode(settings, { unattended: true })
   if (mode === "enforce") return { stream: false }
   const planInput: DeliveryPlanInput = {
     personalContext: input.personalContext,
@@ -598,13 +599,24 @@ export async function planDelivery(
 ): Promise<DeliveryDecision> {
   const auth = input.authorization
   const settings = await (deps.settings ?? readAppSettings)()
+  const isInThreadExemptOrSameChat =
+    (!auth && HUMAN_SOURCES.has(input.source)) ||
+    auth?.kind === "human" ||
+    ((auth?.kind === "origin-reply" || auth?.kind === "system-notice") &&
+      sameChat(auth.inboundConversationKey, input.conversationKey)) ||
+    (auth?.kind === "rerouted" && sameChat(auth.from.conversationKey, input.conversationKey))
   const env: PlanningEnv = {
     input,
     targets: deliveryTargets(input),
     mode:
       input.deliveryMode && input.deliveryMode !== "reply"
         ? "enforce"
-        : readOutboundAuthorizationMode(settings),
+        : isInThreadExemptOrSameChat
+          ? resolveMessagingOutboundMode(settings, {})
+          : resolveMessagingOutboundMode(settings, {
+              unattended: true,
+              crossConversation: true,
+            }),
     settings,
     now: deps.now?.() ?? Date.now(),
     deps,

@@ -68,7 +68,10 @@ describe("ConversationOverrideForm", () => {
     fireEvent.change(screen.getByTestId("conv-override-quiet-to"), {
       target: { value: "07:00" },
     })
-    fireEvent.change(screen.getByTestId("conv-override-quiet-tz"), {
+    const tzSelect = screen
+      .getByTestId("conv-override-quiet-tz")
+      .parentElement!.querySelector<HTMLSelectElement>('select[data-slot="native-select"]')!
+    fireEvent.change(tzSelect, {
       target: { value: "Asia/Shanghai" },
     })
     fireEvent.click(screen.getByTestId("conv-override-save"))
@@ -1213,7 +1216,7 @@ describe("ConversationOverrideForm: quiet-hours timezone", () => {
     )
     fireEvent.click(screen.getByTestId("conv-override-quiet-enabled"))
     const tz = await screen.findByTestId("conv-override-quiet-tz")
-    expect(tz.tagName).toBe("SELECT")
+    expect(tz).toHaveAttribute("role", "combobox")
     expect(screen.queryByTestId("conv-override-tz-custom-input")).not.toBeInTheDocument()
   })
 
@@ -1226,7 +1229,11 @@ describe("ConversationOverrideForm: quiet-hours timezone", () => {
       />
     )
     fireEvent.click(screen.getByTestId("conv-override-quiet-enabled"))
-    fireEvent.change(await screen.findByTestId("conv-override-quiet-tz"), {
+    const tzTrigger = await screen.findByTestId("conv-override-quiet-tz")
+    const tzSelect = tzTrigger.parentElement!.querySelector<HTMLSelectElement>(
+      'select[data-slot="native-select"]'
+    )!
+    fireEvent.change(tzSelect, {
       target: { value: "__custom__" },
     })
     const custom = await screen.findByTestId("conv-override-tz-custom-input")
@@ -1282,5 +1289,57 @@ describe("ConversationOverrideForm: sections", () => {
     )
     expect(screen.getByTestId("conv-override-save")).toBeInTheDocument()
     expect(screen.getByTestId("conv-override-cancel")).toBeInTheDocument()
+  })
+
+  it("surfaces the delegation readiness strip with host, credential, and recovery checks when Delegate is active (F9)", async () => {
+    await getDb().adapterInstances.put({
+      id: "lark-1",
+      type: "lark",
+      name: "Ops Bot",
+      enabled: true,
+      config: {},
+      owner: { kind: "remote-host", hostId: "host-mac-mini", hostLabel: "Mac mini Host" },
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+    await getDb().connectorInboundJobs.put({
+      id: "job_stalled_1",
+      adapterId: "lark-1",
+      conversationKey: "lark:lark-1:oc_delegate",
+      status: "recovery_required",
+      createdAt: 10,
+      updatedAt: 10,
+    } as never)
+
+    render(
+      <ConversationOverrideForm
+        adapterId="lark-1"
+        conversationKey="lark:lark-1:oc_delegate"
+        sessionId="s_delegate"
+        effectiveTargetKind="team"
+        initialRow={{
+          id: "co_del",
+          conversationKey: "lark:lark-1:oc_delegate",
+          sessionId: "s_delegate",
+          mode: "auto",
+          autonomy: "act",
+          engagement: "background",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+      />
+    )
+
+    const strip = await screen.findByTestId("delegation-readiness-strip")
+    expect(strip).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByTestId("delegation-readiness-host")).toHaveTextContent("Mac mini Host")
+      expect(screen.getByTestId("delegation-readiness-adapter")).toHaveTextContent(
+        "enabled and healthy"
+      )
+      expect(screen.getByTestId("delegation-readiness-recovery")).toHaveTextContent(
+        "1 stalled inbound job"
+      )
+    })
   })
 })

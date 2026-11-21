@@ -62,11 +62,10 @@ const OTHER_KEY = "lark:bot-a:oc_other"
 const ORIGIN = conversationTarget(ORIGIN_KEY)!
 
 const ENFORCE = { agentPermissions: { outboundAuthorization: "enforce" } }
+const UNSET_SETTINGS = [{}, { agentPermissions: {} }]
 const SHADOW_SETTINGS = [
-  {},
-  { agentPermissions: {} },
   { agentPermissions: { outboundAuthorization: "shadow" } },
-  // Anything but exactly `enforce` observes.
+  // Explicit non-enforce values continue to observe.
   { agentPermissions: { outboundAuthorization: "on" } },
 ]
 
@@ -132,7 +131,7 @@ const DELIVERIES: [string, DeliveryPlanInput][] = [
 
 describe("shadow mode changes no send result (ADR-0239)", () => {
   it("reads every setting but exactly `enforce` as shadow", () => {
-    for (const settings of SHADOW_SETTINGS) {
+    for (const settings of [...UNSET_SETTINGS, ...SHADOW_SETTINGS]) {
       expect(readOutboundAuthorizationMode(settings)).toBe("shadow")
     }
     expect(readOutboundAuthorizationMode(ENFORCE)).toBe("enforce")
@@ -334,6 +333,51 @@ describe("shadow mode changes no browser submission (ADR-0239 phase 2b)", () => 
           expect(observed.receipt?.request.plan).toMatchObject({ enforced: false })
         }
       }
+    }
+  })
+})
+
+describe("risk-stratified default enforcement when outboundAuthorization is unset (F2)", () => {
+  it.each(DELIVERIES)("enforces %s when outboundAuthorization is unset", async (_name, input) => {
+    for (const settings of UNSET_SETTINGS) {
+      const decision = await planDelivery(input, deps(settings))
+      expect(decision.action).not.toBe("send")
+    }
+  })
+
+  it("keeps in-thread origin replies allowed while enforcing cross-conversation tool calls on unset accounts", async () => {
+    for (const settings of UNSET_SETTINGS) {
+      const sameThreadReply = await planDelivery(
+        {
+          personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+          adapterId: "bot-a",
+          conversationKey: ORIGIN_KEY,
+          source: "ai-run",
+          authorization: { kind: "origin-reply", inboundConversationKey: ORIGIN_KEY },
+        },
+        deps(settings)
+      )
+      expect(sameThreadReply.action).toBe("send")
+
+      const origin = {
+        rootSessionId: "chat",
+        instructionEpoch: "msg:u1",
+        originThread: ORIGIN,
+      }
+      const crossChatCall = await planOutboundToolCall(
+        {
+          sessionId: "chat",
+          requestId: `cross-${JSON.stringify(settings)}`,
+          toolName: "mcp__cognia-plugin-tools__connectors_send_message",
+          input: { conversationKey: OTHER_KEY, text: "hello" },
+        },
+        { unattended: false, settings: () => settings, origin }
+      )
+      expect(
+        crossChatCall && outboundToolDecision(crossChatCall, "connectors_send_message")
+      ).toEqual({
+        kind: "ask",
+      })
     }
   })
 })

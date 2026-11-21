@@ -31,6 +31,7 @@ import {
   readOutboundAuthorizationMode,
   readOutboundCategoryModes,
   type ActionReviewPlanContext,
+  type OutboundAuthorizationMode,
   type OutboundReviewVia,
 } from "./policy"
 import { botInstructionEpoch, taskInstructionEpoch, taskOriginThread } from "./request-origin"
@@ -74,6 +75,8 @@ export interface BuildActionReviewPlanContextArgs {
   via: OutboundReviewVia
   /** App settings; only `agentPermissions.outboundAuthorization` is read. */
   settings?: { agentPermissions?: unknown } | null
+  /** Optional resolved messaging mode override (e.g. risk-stratified default). */
+  modeOverride?: OutboundAuthorizationMode
   policyGrants?: readonly OutboundPolicyGrantList[]
   now?: number
   /** Test seam for the receipt query. */
@@ -159,7 +162,7 @@ export async function buildActionReviewPlanContext(
   const thread = args.origin.originThread
   const origin = thread ? originMatchFingerprint(thread) : undefined
   return {
-    mode: readOutboundAuthorizationMode(args.settings),
+    mode: args.modeOverride ?? readOutboundAuthorizationMode(args.settings),
     modes: readOutboundCategoryModes(args.settings),
     unattended: args.unattended,
     via: args.via,

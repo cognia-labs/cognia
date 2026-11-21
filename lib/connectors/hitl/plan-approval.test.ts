@@ -180,6 +180,35 @@ describe("plan approval delegate", () => {
       outcome: "reject",
     })
   })
+
+  it("restricts button actorScope to operators and states operator-only approval in Draft mode (F4)", async () => {
+    const recordBinding = jest.fn(async () => undefined)
+    const enqueue = jest.fn(async () => undefined)
+    const delegate = makeImPlanApprovalDelegate(
+      ctx({
+        initiatorUserId: "ou-external-requester",
+        operatorOnly: true,
+        recordBinding: recordBinding as never,
+        enqueue: enqueue as never,
+      })
+    )
+    const pending = delegate({ planText: "draft-gated plan", revision: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(recordBinding).toHaveBeenCalledTimes(2)
+    for (const call of recordBinding.mock.calls as unknown as Array<[Record<string, unknown>]>) {
+      expect(call[0].actorScope).toEqual({ mode: "operators" })
+    }
+    const enqueuedSurface = (
+      enqueue.mock.calls[0] as unknown as [
+        { request: { segments: Array<{ content: { components: { why: { text: string } } } }> } },
+      ]
+    )[0].request.segments[0].content
+    expect(enqueuedSurface.components.why.text).toContain("requires an operator")
+
+    resolveApproval("run_team_1", "plan-approval:run_team_1:0", { decision: "allow" })
+    await expect(pending).resolves.toEqual({ outcome: "approve" })
+  })
 })
 
 describe("plan approval callback", () => {

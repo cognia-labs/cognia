@@ -965,16 +965,25 @@ it("cancels a voice delivery while planning and keeps the signal outside the dur
 })
 
 describe("gateway atomic authorization provenance", () => {
-  const makeGateway = () =>
+  const makeGateway = (
+    settings: object = { agentPermissions: { outboundAuthorization: "shadow" } }
+  ) =>
     new ConnectorDeliveryGateway({
       planDelivery: (value) =>
         planDelivery(value, {
-          settings: () => ({}),
+          settings: () => settings,
           configuredGrants: async () => [],
           listAuthKeys: async () => [],
         }),
       now: () => 2_000,
     })
+
+  it("holds an unattended delivery as a draft by default when outboundAuthorization is unset (F2)", async () => {
+    const result = await makeGateway({}).enqueueAuthorized(input("workflow"))
+    expect(result.kind).toBe("drafted")
+    expect(await getDb().outboundQueue.count()).toBe(0)
+    expect(await getDb().connectorDrafts.count()).toBe(1)
+  })
 
   it("persists a shadow draft decision and the caller authorization with its receipt", async () => {
     const result = await makeGateway().enqueueAuthorized(input("workflow"))

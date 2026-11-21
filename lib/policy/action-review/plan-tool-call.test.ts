@@ -53,6 +53,7 @@ jest.mock("@/lib/collab/shared-run-coordinator", () => ({
 const THREAD_KEY = "lark:bot-a:oc_thread"
 const OTHER_KEY = "lark:bot-a:oc_other"
 const ENFORCE = { agentPermissions: { outboundAuthorization: "enforce" } }
+const SHADOW = { agentPermissions: { outboundAuthorization: "shadow" } }
 
 function options(extra: Partial<OutboundToolPlannerOptions> = {}): OutboundToolPlannerOptions {
   return {
@@ -129,7 +130,7 @@ describe("planOutboundToolCall", () => {
   })
 
   it("only records in shadow mode", async () => {
-    const plan = await planOutboundToolCall(send(OTHER_KEY), options({ settings: () => ({}) }))
+    const plan = await planOutboundToolCall(send(OTHER_KEY), options({ settings: () => SHADOW }))
     expect(plan?.result.plan).toEqual({ outcome: "ask", enforced: false })
     expect(plan && outboundToolDecision(plan, "send")).toEqual({ kind: "unchanged" })
   })
@@ -352,7 +353,7 @@ describe("answerWithOutboundPolicy", () => {
     await answerWithOutboundPolicy(write, options(), respond)
     expect(respond).toHaveBeenLastCalledWith(write)
     const request = send(OTHER_KEY)
-    await answerWithOutboundPolicy(request, options({ settings: () => ({}) }), respond)
+    await answerWithOutboundPolicy(request, options({ settings: () => SHADOW }), respond)
     expect(respond).toHaveBeenLastCalledWith(request)
   })
 
@@ -395,7 +396,7 @@ describe("planOutboundAsk", () => {
   it("changes nothing in shadow mode", async () => {
     const ask = await planOutboundAsk(
       send(OTHER_KEY),
-      options({ settings: () => ({}) }),
+      options({ settings: () => SHADOW }),
       async () => {}
     )
     expect(ask).toMatchObject({ answered: false, personOnly: false, review: { enforced: false } })
@@ -411,7 +412,7 @@ describe("recordOutboundShadowObservation", () => {
         toolName: "mcp__cognia-plugin-tools__connectors_send_message",
         input: { conversationKey: OTHER_KEY, text: "hi" },
       },
-      options({ settings: () => ({}) })
+      options({ settings: () => SHADOW })
     )
     const [row] = await receipts()
     expect(row.id).toBe("explicit:tu-1")
@@ -726,6 +727,34 @@ describe("GitHub writes (ADR-0239 phase 2)", () => {
     ).resolves.toMatchObject({
       action: "proceed",
       authorizedBy: { receiptId: "r1", authority: "human", grantScope: "once" },
+    })
+  })
+
+  it("defaults unset outboundAuthorization to enforce for unattended or cross-conversation messaging while keeping same-thread interactive calls unchanged (F2)", async () => {
+    const unsetOptions = (unattended: boolean) =>
+      options({
+        unattended,
+        settings: () => ({ agentPermissions: {} }),
+      })
+
+    // Same-thread interactive call: unchanged when outboundAuthorization is unset.
+    const sameThread = await planOutboundToolCall(
+      send(`${THREAD_KEY}:om_reply`, "r-same"),
+      unsetOptions(false)
+    )
+    expect(sameThread && outboundToolDecision(sameThread, "send")).toEqual({ kind: "unchanged" })
+
+    // Cross-conversation interactive call: enforced (`ask`) even when outboundAuthorization is unset.
+    const crossThread = await planOutboundToolCall(send(OTHER_KEY, "r-cross"), unsetOptions(false))
+    expect(crossThread && outboundToolDecision(crossThread, "send")).toEqual({ kind: "ask" })
+
+    // Unattended call to an unlisted conversation: enforced (`ask` for headless responder) when unset.
+    const unattendedCross = await planOutboundToolCall(
+      send(OTHER_KEY, "r-unattended"),
+      unsetOptions(true)
+    )
+    expect(unattendedCross && outboundToolDecision(unattendedCross, "send")).toEqual({
+      kind: "ask",
     })
   })
 })

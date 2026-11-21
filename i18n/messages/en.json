@@ -23599,6 +23599,18 @@
       "shortcuts": "Keyboard shortcuts"
     },
     "conversationOverride": {
+      "delegationReadiness": {
+        "adapterDegraded": "Adapter health: degraded or offline — check Settings → Connections before relying on unattended runs.",
+        "adapterDisabled": "Adapter health: disabled — enable the connection in Settings → Connections.",
+        "adapterMissing": "Adapter health: connection record not loaded on this device.",
+        "adapterReady": "Adapter & credentials: enabled and healthy.",
+        "hostLocal": "Runtime host: local window — background delegation runs only while this desktop app stays open.",
+        "hostRemote": "Runtime host: always-on host ({host}).",
+        "reauthRequired": "Adapter & credentials: credential rejected — re-authenticate in Settings → Connections.",
+        "recoveryClean": "Recovery queue: no stalled inbound jobs awaiting recovery.",
+        "recoveryPending": "Recovery queue: {count, plural, =1 {1 stalled inbound job needs} other {# stalled inbound jobs need}} recovery before unattended delegation is clean.",
+        "title": "Delegation readiness"
+      },
       "deleteOverride": "Remove override",
       "deleteOverrideConfirm": "Remove the override for this conversation? It will fall back to the adapter defaults.",
       "dialogTitle": "Conversation settings",
@@ -32823,6 +32835,7 @@
     "shadow": {
       "badge": "Observe only",
       "browser": "Browser submission enforcement is off in Settings → Security. Unlisted sites are recorded in the shadow report, not blocked yet.",
+      "enable": "Enable enforcement",
       "github": "GitHub write enforcement is off in Settings → Security. Unlisted repositories are recorded in the shadow report, not held yet.",
       "integration": "Integration write enforcement is off in Settings → Security. Unlisted targets are recorded in the shadow report, not held yet.",
       "messaging": "Messaging recipient enforcement is off in Settings → Security. Unlisted recipients are recorded in the shadow report, not drafted or held yet."
@@ -41778,6 +41791,7 @@
       "loading": "Loading source…",
       "memory": "Memory",
       "noEvidence": "No verified source reference was provided for this suggestion.",
+      "obligation": "Obligation",
       "openSource": "Open memory",
       "retry": "Retry dispatch",
       "track": "View task, results, and retry controls",
@@ -41786,6 +41800,8 @@
     },
     "panel": {
       "empty": "No report yet. Run the radar to analyze your recent info diet.",
+      "forceRun": "Force regenerate",
+      "forceRunAria": "Supersede any in-flight radar run and regenerate from fresh data",
       "loading": "Loading the radar report…",
       "meta": "{count} items analyzed · {days}-day window",
       "run": "Run now",

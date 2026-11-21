@@ -55,6 +55,12 @@ export interface StartTeamRunFromIMInput {
    * lifecycle; it can raise a gate, never lower one.
    */
   requirePlanApprovalFloor?: boolean
+  /**
+   * When true (Draft/suggest mode, F4), restrict plan approval cards to
+   * configured operators rather than allowing the external IM requester to
+   * self-approve.
+   */
+  operatorOnlyPlanApproval?: boolean
 }
 
 export interface StartTeamRunFromIMResult {
@@ -125,6 +131,7 @@ export async function startTeamRunFromIM(
             conversationRef,
             deliveryTarget,
             ...(input.initiatorUserId ? { initiatorUserId: input.initiatorUserId } : {}),
+            ...(input.operatorOnlyPlanApproval ? { operatorOnly: true } : {}),
           })(request)
         }
       : undefined

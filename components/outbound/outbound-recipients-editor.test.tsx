@@ -257,25 +257,26 @@ describe("OutboundRecipientsEditor", () => {
     expect(screen.getByLabelText("Search, or paste a conversation key")).toBeDisabled()
   })
 
-  it("shows an observe-only notice while the active category is in shadow mode and hides it when enforced (F2)", () => {
+  it("shows an observe-only notice while the active category is in shadow mode and hides it when enforced (F2)", async () => {
+    const onEnableEnforcement = jest.fn(async () => undefined)
     const { unmount } = render(
       <OutboundRecipientsEditor
         value={[]}
         onSave={jest.fn(async () => true)}
         kinds={["conversation", "repository", "site"]}
         knownConversations={KNOWN}
+        onEnableEnforcement={onEnableEnforcement}
         settings={{
           agentPermissions: {
-            outboundAuthorization: "enforce",
             outboundAuthorizationByCategory: { github: "shadow", browser: "enforce" },
           },
         }}
       />
     )
-    // Messaging is enforced → no shadow notice on Conversation.
+    // Unset messaging defaults to enforce on unattended recipient lists → no shadow notice.
     expect(screen.queryByTestId("outbound-recipients-shadow-notice")).not.toBeInTheDocument()
 
-    // GitHub is in shadow mode → switching to Repository surfaces the observe-only notice.
+    // GitHub is in shadow mode → switching to Repository surfaces the observe-only notice + upgrade button.
     fireEvent.click(screen.getByRole("button", { name: "Repository" }))
     expect(screen.getByTestId("outbound-recipients-shadow-notice")).toHaveTextContent(
       "Observe only"
@@ -283,10 +284,37 @@ describe("OutboundRecipientsEditor", () => {
     expect(screen.getByTestId("outbound-recipients-shadow-notice")).toHaveTextContent(
       "GitHub write enforcement is off in Settings → Security."
     )
+    fireEvent.click(screen.getByTestId("outbound-recipients-enable-enforce"))
+    await waitFor(() => expect(onEnableEnforcement).toHaveBeenCalledWith("github"))
+    await waitFor(() =>
+      expect(screen.queryByTestId("outbound-recipients-shadow-notice")).not.toBeInTheDocument()
+    )
 
-    // Browser is enforced → switching to Site hides it again.
+    // Browser is enforced → switching to Site keeps it hidden.
     fireEvent.click(screen.getByRole("button", { name: "Site" }))
     expect(screen.queryByTestId("outbound-recipients-shadow-notice")).not.toBeInTheDocument()
     unmount()
+  })
+
+  it("shows the upgrade action when a legacy account explicitly configured messaging in shadow mode (F2)", async () => {
+    const onEnableEnforcement = jest.fn(async () => undefined)
+    render(
+      <OutboundRecipientsEditor
+        value={[]}
+        onSave={jest.fn(async () => true)}
+        kinds={["conversation"]}
+        knownConversations={KNOWN}
+        onEnableEnforcement={onEnableEnforcement}
+        settings={{ agentPermissions: { outboundAuthorization: "shadow" } }}
+      />
+    )
+    expect(screen.getByTestId("outbound-recipients-shadow-notice")).toHaveTextContent(
+      "Messaging recipient enforcement is off in Settings → Security."
+    )
+    fireEvent.click(screen.getByTestId("outbound-recipients-enable-enforce"))
+    await waitFor(() => expect(onEnableEnforcement).toHaveBeenCalledWith("messaging"))
+    await waitFor(() =>
+      expect(screen.queryByTestId("outbound-recipients-shadow-notice")).not.toBeInTheDocument()
+    )
   })
 })

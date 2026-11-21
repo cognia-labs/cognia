@@ -108,6 +108,12 @@ export interface TeamToolCaller {
  * Zustand store or the heavy delegation runtime.
  */
 export interface TeamToolDeps {
+  verifyCaller?: (
+    caller: TeamToolCaller
+  ) =>
+    | Promise<{ ok: true } | { ok: false; error: string }>
+    | { ok: true }
+    | { ok: false; error: string }
   addMessage: (input: {
     teamId: string
     senderId: string
@@ -146,6 +152,7 @@ export interface TeamToolDeps {
   /** Recent team messages (epoch-ms `createdAt`), windowed by the default impl. */
   recentMessages: (teamId: string) => RecentMessage[]
   addTaskComment: (input: {
+    teamId?: string
     taskId: string
     authorId: string
     text: string
@@ -157,7 +164,10 @@ export interface TeamToolDeps {
       sizeBytes?: number
     }>
   }) => { id: string } | null
-  getTask: (taskId: string) => {
+  getTask: (
+    taskId: string,
+    teamId?: string
+  ) => {
     id: string
     title: string
     status: string
@@ -496,6 +506,45 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
     import("@/lib/squads/delegation-orchestrator"),
   ])
   return {
+    verifyCaller: async (caller) => {
+      const state = useAgentTeamStore.getState()
+      const team = state.teams[caller.teamId]
+      const teammate = state.teammates[caller.teammateId]
+      if (
+        !team ||
+        !teammate ||
+        teammate.teamId !== caller.teamId ||
+        teammate.status === "shutdown"
+      ) {
+        return { ok: false, error: "caller is no longer an active member of this squad." }
+      }
+      if (caller.runId) {
+        const [{ getAgentTeamRun }, { isTerminalTeamStatus }] = await Promise.all([
+          import("@/lib/db/agent-team-runtime"),
+          import("@cognia/agent-orchestration/rules"),
+        ])
+        const run = await getAgentTeamRun(caller.runId).catch(() => undefined)
+        if (
+          run &&
+          (run.teamId !== caller.teamId ||
+            isTerminalTeamStatus(run.status) ||
+            run.stop?.state === "requested")
+        ) {
+          return { ok: false, error: "squad run is no longer active." }
+        }
+      }
+      if (caller.executionRunId) {
+        const [{ getExecutionRun }, { isTerminalRunStatus }] = await Promise.all([
+          import("@/lib/db/execution-runs"),
+          import("@/types/execution/run"),
+        ])
+        const execRun = await getExecutionRun(caller.executionRunId).catch(() => undefined)
+        if (execRun && isTerminalRunStatus(execRun.status)) {
+          return { ok: false, error: "squad run is no longer active." }
+        }
+      }
+      return { ok: true }
+    },
     addMessage: (input) =>
       void useAgentTeamStore.getState().addMessage({
         teamId: input.teamId,
@@ -583,6 +632,7 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
     },
     addTaskComment: (input) => {
       const comment = useAgentTeamStore.getState().addTaskComment({
+        ...(input.teamId !== undefined ? { teamId: input.teamId } : {}),
         taskId: input.taskId,
         authorId: input.authorId,
         text: input.text,
@@ -592,9 +642,9 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
       })
       return comment ? { id: comment.id } : null
     },
-    getTask: (taskId) => {
+    getTask: (taskId, teamId) => {
       const task = useAgentTeamStore.getState().tasks[taskId]
-      if (!task) return null
+      if (!task || (teamId !== undefined && task.teamId !== teamId)) return null
       return {
         id: task.id,
         title: task.title,
@@ -733,6 +783,10 @@ export async function runTeamTool(
 ): Promise<unknown> {
   if (!isTeamTool(name)) return `Error: unknown team tool: ${name}`
   const d = deps ?? (await defaultTeamToolDeps())
+  if (d.verifyCaller) {
+    const auth = await d.verifyCaller(caller)
+    if (!auth.ok) return `Error: ${auth.error}`
+  }
   const writer = { id: caller.teammateId, name: caller.teammateName }
   try {
     switch (name) {
@@ -740,6 +794,9 @@ export async function runTeamTool(
         const content = asString(args.content).trim()
         if (!content) return "Error: team_send_message requires non-empty `content`."
         const to = asString(args.to).trim()
+        if (to && !d.listMembers(caller.teamId).some((m) => m.id === to)) {
+          return `Error: teammate ${to} not found.`
+        }
         // Anti-storm guard: drop idle/ack-only chatter, duplicates, ping-pong, and
         // rate-floods before they reach the mailbox. The store is the source of truth
         // for the recent-message window. result_share deliverables never come here.
@@ -815,6 +872,7 @@ export async function runTeamTool(
           return "Error: team_vote requires `consensusId` and an integer `optionIndex`."
         }
         const after = d.castVote({
+          teamId: caller.teamId,
           consensusId,
           voterId: caller.teammateId,
           optionIndex,
@@ -912,6 +970,7 @@ export async function runTeamTool(
               .filter((a) => a.ref)
           : undefined
         const res = d.addTaskComment({
+          teamId: caller.teamId,
           taskId,
           authorId: caller.teammateId,
           text: content,
@@ -924,7 +983,7 @@ export async function runTeamTool(
       case TEAM_TOOL_NAMES.getTask: {
         const taskId = asString(args.taskId).trim()
         if (!taskId) return "Error: task_get requires a `taskId`."
-        const task = d.getTask(taskId)
+        const task = d.getTask(taskId, caller.teamId)
         return task ? await visibleTeamToolResult(caller, task) : `Error: task ${taskId} not found.`
       }
       case TEAM_TOOL_NAMES.postToChat: {

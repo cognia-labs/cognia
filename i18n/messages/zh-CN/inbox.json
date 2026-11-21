@@ -271,6 +271,18 @@
     "loadFailed": "无法加载会话，请重试。"
   },
   "conversationOverride": {
+    "delegationReadiness": {
+      "adapterDegraded": "连接与凭据：当前连接处于降级或离线状态，建议先在「设置 → 连接」中排查。",
+      "adapterDisabled": "连接与凭据：当前适配器已禁用，请先在「设置 → 连接」中启用。",
+      "adapterMissing": "连接与凭据：本设备尚未加载到该适配器记录。",
+      "adapterReady": "连接与凭据：已启用且健康。",
+      "hostLocal": "运行宿主：本地窗口——后台委托仅在当前桌面端保持打开期间持续运行。",
+      "hostRemote": "运行宿主：常驻宿主（{host}）。",
+      "reauthRequired": "连接与凭据：凭据已被平台拒绝，请前往「设置 → 连接」重新认证。",
+      "recoveryClean": "恢复队列：无待恢复的阻塞入站任务。",
+      "recoveryPending": "恢复队列：当前有 {count} 个中断入站任务待恢复处理。",
+      "title": "后台委托就绪检查"
+    },
     "deleteOverride": "删除覆盖",
     "deleteOverrideConfirm": "删除该会话的覆盖？该会话将回退到适配器默认配置。",
     "dialogTitle": "会话覆盖设置",

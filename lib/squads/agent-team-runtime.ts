@@ -39,6 +39,7 @@ import {
   type TeamStoreWriter,
 } from "./team-run-context"
 import { synthesizeTeamWorkflow } from "./synthesize-workflow"
+import { resolveEffectiveSquadBudget } from "./gates/budget-guard"
 import { applyGateBehavior, resolveGatePolicy, type TeamRunOrigin } from "./gates/gate-policy"
 import { buildTeamRiskInput } from "./risk-input"
 import { isTaskReviewEnabled } from "./gates/task-review-policy"
@@ -364,12 +365,47 @@ export async function runTeamLifecycle(
   inflightControllers.set(teamId, { controller: ac, runId, settled })
 
   try {
+    const finishEarlyExit = async (
+      status: "failed" | "cancelled",
+      reason: string
+    ): Promise<RunTeamLifecycleResult> => {
+      const durableStatus = await settleDurableRunStatus(runId, status, reason).catch(
+        () => undefined
+      )
+      if (durableStatus) {
+        const resolved = isTerminalTeamStatus(durableStatus)
+          ? teamRunOutcome(durableStatus)
+          : status
+        const { getExecutionRun, runEventJournal } = await import("@/lib/db/execution-runs")
+        const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
+        const executionRunId = agentTeamExecutionRunId(runId)
+        const executionRun = await getExecutionRun(executionRunId).catch(() => undefined)
+        if (
+          executionRun &&
+          !isTerminalRunStatus(executionRun.status) &&
+          isTerminalTeamStatus(durableStatus)
+        ) {
+          await runEventJournal
+            .append(executionRunId, {
+              id: `execution-event:${runId}:team-terminal:${durableStatus}`,
+              ts: Date.now(),
+              type: executionEventForSettledTeamRun(durableStatus),
+              visibility: "summary",
+              payload: { summary: `Agent team run ${resolved}: ${reason}` },
+            })
+            .catch(() => undefined)
+        }
+        return { runId, status: resolved, reason }
+      }
+      return { runId: deps.runId ?? "", status, reason }
+    }
+
     if (ac.signal.aborted) {
-      return { runId: "", status: "cancelled", reason: "Aborted before start" }
+      return await finishEarlyExit("cancelled", "Aborted before start")
     }
     const storedTeam = deps.storeReader.getTeam(teamId)
     if (!storedTeam) {
-      return { runId: "", status: "failed", reason: `Team ${teamId} not found` }
+      return await finishEarlyExit("failed", `Team ${teamId} not found`)
     }
     if (storedTeam.config.defaultTimeout && storedTeam.config.defaultTimeout > 0) {
       deadlineTimer = setTimeout(() => {
@@ -394,13 +430,39 @@ export async function runTeamLifecycle(
     const allMembers = deps.storeReader.getTeammates(teamId)
     const workers = allMembers.filter((m) => m.role === "teammate")
     if (workers.length === 0) {
-      return { runId: "", status: "failed", reason: "No teammates available" }
+      return await finishEarlyExit("failed", "No teammates available")
     }
     const allTasks = deps.storeReader.getTeamTasks(teamId)
-    // Resume support: `taskFilter` drops already-done tasks; their ids become
-    // externally-satisfied dependencies for synthesis (the wave runner treats
-    // absent ids as satisfied natively — see team-wave-runner.ts ready-set).
-    const tasks = deps.taskFilter ? allTasks.filter(deps.taskFilter) : allTasks
+    // Fresh start AND resume both skip terminal/dropped tasks (`cancelled`,
+    // `completed`, `review`). Only `completed` tasks count as satisfied
+    // upstream dependencies; tasks depending on a `cancelled` task are blocked.
+    const defaultTaskFilter = (t: AgentTeamTask): boolean =>
+      t.status !== "cancelled" && t.status !== "completed" && t.status !== "review"
+    const candidateTasks = allTasks.filter((t) =>
+      deps.taskFilter ? deps.taskFilter(t) && t.status !== "cancelled" : defaultTaskFilter(t)
+    )
+    const cancelledTaskIds = new Set(
+      allTasks.filter((t) => t.status === "cancelled").map((t) => t.id)
+    )
+    const blockedByCancelledTaskIds = new Set<string>()
+    if (cancelledTaskIds.size > 0) {
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const t of candidateTasks) {
+          if (blockedByCancelledTaskIds.has(t.id)) continue
+          if (
+            t.dependencies.some(
+              (dep) => cancelledTaskIds.has(dep) || blockedByCancelledTaskIds.has(dep)
+            )
+          ) {
+            blockedByCancelledTaskIds.add(t.id)
+            changed = true
+          }
+        }
+      }
+    }
+    const tasks = candidateTasks.filter((t) => !blockedByCancelledTaskIds.has(t.id))
     const externallySatisfiedIds =
       tasks.length === allTasks.length
         ? undefined
@@ -412,7 +474,20 @@ export async function runTeamLifecycle(
     // require pre-seeded tasks. Flat runs still do.
     const ultracodeActive = isUltracodeActive(team, deps.ultracodeOverride)
     if (!ultracodeActive && tasks.length === 0) {
-      return { runId: "", status: "failed", reason: "No tasks to dispatch" }
+      if (blockedByCancelledTaskIds.size > 0) {
+        return await finishEarlyExit(
+          "failed",
+          `Tasks blocked by cancelled dependencies: ${[...blockedByCancelledTaskIds].join(", ")}`
+        )
+      }
+      if (
+        allTasks.length > 0 &&
+        cancelledTaskIds.size > 0 &&
+        allTasks.every((t) => t.status === "cancelled" || t.status === "completed")
+      ) {
+        return await finishEarlyExit("cancelled", "All tasks are cancelled")
+      }
+      return await finishEarlyExit("failed", "No tasks to dispatch")
     }
 
     // ── Allocate runId early so the onTeamStart hook can carry it ──
@@ -638,11 +713,10 @@ export async function runTeamLifecycle(
           }))
         ).catch(() => ({ outcome: "reject" as const }))
         if (decision.outcome !== "approve") {
-          return {
-            runId: "",
-            status: "cancelled",
-            reason: "Operator declined to run with stale capabilities",
-          }
+          return await finishEarlyExit(
+            "cancelled",
+            "Operator declined to run with stale capabilities"
+          )
         }
       }
     }
@@ -659,15 +733,16 @@ export async function runTeamLifecycle(
     const riskAssessment = classifyRisk(buildTeamRiskInput({ team, workers, tasks }))
     const riskRaisedGate =
       (team.config.riskGating ?? true) && requiredCeremony(riskAssessment).requirePlanApproval
-    const requirePlanApproval =
+    const operatorPlanApproval =
       Boolean(team.config.requirePlanApproval) ||
-      riskRaisedGate ||
-      deps.requirePlanApprovalFloor === true
+      Boolean(team.config.governancePolicy?.approval?.requirePlanApproval)
+    const requirePlanApproval =
+      operatorPlanApproval || riskRaisedGate || deps.requirePlanApprovalFloor === true
     // Only explain the gate by its risk when risk is the SOLE cause. An
     // operator who set `requirePlanApproval` already knows why the gate is
     // there; telling them it's the risk assessment would be a lie.
     const gateIsRiskOnly =
-      riskRaisedGate && !team.config.requirePlanApproval && deps.requirePlanApprovalFloor !== true
+      riskRaisedGate && !operatorPlanApproval && deps.requirePlanApprovalFloor !== true
 
     // ── Plan-approval gate (synthesizer-local; never enters workflow) ──
     if (requirePlanApproval) {
@@ -688,18 +763,17 @@ export async function runTeamLifecycle(
           teamId,
           dedupeKey: `plan-approval-headless:${runId}`,
         })
-        return { runId: "", status: "failed", reason }
+        return await finishEarlyExit("failed", reason)
       }
       const lead = allMembers.find((m) => m.id === team.leadId)
       if (!lead) {
-        return { runId: "", status: "failed", reason: "Lead teammate not found" }
+        return await finishEarlyExit("failed", "Lead teammate not found")
       }
       if (!deps.runLeadPlanning) {
-        return {
-          runId: "",
-          status: "failed",
-          reason: "requirePlanApproval=true but runLeadPlanning dep not provided",
-        }
+        return await finishEarlyExit(
+          "failed",
+          "requirePlanApproval=true but runLeadPlanning dep not provided"
+        )
       }
       const maxRev = Math.max(1, team.config.maxPlanRevisions ?? 1)
       let approved = false
@@ -728,7 +802,7 @@ export async function runTeamLifecycle(
             teamId,
             dedupeKey: `plan-failed:${runId}`,
           })
-          return { runId: "", status: "failed", reason }
+          return await finishEarlyExit("failed", reason)
         }
         // Publish the plan before waiting: the coordination panel renders
         // the proposed plan while the lead is `awaiting_approval`, and the
@@ -813,13 +887,10 @@ export async function runTeamLifecycle(
         feedback = decision.feedback
       }
       if (!approved) {
-        return {
-          runId: "",
-          status: ac.signal.aborted ? "cancelled" : "failed",
-          reason: ac.signal.aborted
-            ? "Aborted during plan approval"
-            : "Plan rejected after max revisions",
-        }
+        return await finishEarlyExit(
+          ac.signal.aborted ? "cancelled" : "failed",
+          ac.signal.aborted ? "Aborted during plan approval" : "Plan rejected after max revisions"
+        )
       }
     }
 
@@ -829,15 +900,70 @@ export async function runTeamLifecycle(
       resolveCheapModel: cheapModelHintFromSettings,
     })
     const pool = createTeammatePool({ teammates: workers, teamId, runId })
-    // ADR-0090 Phase 7: one budget authority per run tree. The governor owns
-    // the root guard (same thresholds/escalations as before); dispatches draw
-    // through `governor.allocate(childRunId)` so attempts and failures ledger
-    // per child. `budget` stays the guard for existing consumers.
+    // ADR-0090 Phase 7: one budget authority per run tree. Hydrate from
+    // `resolveEffectiveSquadBudget` + durable child usage + settled
+    // `budget_extension` interrupts so re-entry/restart keeps spent tokens and
+    // applies each approved extension once without colliding on `crossing-N`.
+    const effectiveBudget = resolveEffectiveSquadBudget(team.config)
+    let initialUsedTokens = 0
+    let approvedExtraTokens = 0
+    let initialBudgetCrossings = 0
+    {
+      const [
+        { aggregateAgentTeamRunUsage, getAgentTeamRun },
+        { getDb },
+        { agentTeamExecutionRunId },
+      ] = await Promise.all([
+        import("@/lib/db/agent-team-runtime"),
+        import("@/lib/db/schema"),
+        import("@/lib/execution/agent-team-bridge"),
+      ])
+      const persistedRun = await getAgentTeamRun(runId).catch(() => undefined)
+      if (persistedRun) {
+        const usage = await aggregateAgentTeamRunUsage(runId).catch(
+          () => persistedRun.resourceUsage
+        )
+        initialUsedTokens = Math.max(
+          0,
+          usage?.totalTokens ?? persistedRun.resourceUsage?.totalTokens ?? 0
+        )
+      }
+      const interrupts = await getDb()
+        .executionRunInterrupts.where("runId")
+        .equals(agentTeamExecutionRunId(runId))
+        .toArray()
+        .catch(() => [])
+      const seenExtensions = new Set<string>()
+      for (const row of interrupts) {
+        if (row.reviewKind !== "budget_extension") continue
+        const match = /:crossing-(\d+)$/.exec(row.id)
+        if (match) {
+          initialBudgetCrossings = Math.max(
+            initialBudgetCrossings,
+            Number.parseInt(match[1]!, 10) || 0
+          )
+        }
+        if (row.status === "approved" && !seenExtensions.has(row.id)) {
+          seenExtensions.add(row.id)
+          const dec = row.decision as { kind?: string; extraTokens?: number } | undefined
+          if (
+            dec?.kind === "budget_extension" &&
+            typeof dec.extraTokens === "number" &&
+            dec.extraTokens > 0
+          ) {
+            approvedExtraTokens += dec.extraTokens
+          }
+        }
+      }
+    }
     const { createRunBudgetGovernor } = await import("@/lib/ai/agent/execution/run-budget-governor")
     const governor = createRunBudgetGovernor({
       runId,
-      limit: team.config.tokenBudget ?? 0,
-      onCritical: team.config.governancePolicy?.budget?.onCritical ?? "notify",
+      limit: effectiveBudget.limit > 0 ? effectiveBudget.limit + approvedExtraTokens : 0,
+      initialUsed: initialUsedTokens,
+      warnAt: effectiveBudget.warnAt,
+      critAt: effectiveBudget.critAt,
+      onCritical: effectiveBudget.onCritical,
       notifier,
       concurrencyCtrl: concurrency,
       modelCtrl: modelPref,
@@ -990,7 +1116,7 @@ export async function runTeamLifecycle(
     )
 
     let budgetResolverActive = false
-    let budgetCrossings = 0
+    let budgetCrossings = initialBudgetCrossings
     subs.push(
       budget.on("pause_for_review", () => {
         if (ac.signal.aborted || budgetResolverActive) return
@@ -1002,7 +1128,9 @@ export async function runTeamLifecycle(
         }
         budgetResolverActive = true
         budgetCrossings += 1
-        concurrency.reduceTo(0)
+        const releaseHold = concurrency.holdGate
+          ? concurrency.holdGate()
+          : (concurrency.reduceTo(0), () => {})
         const budgetStatus = budget.status()
         void openSquadReview({
           runId,
@@ -1015,8 +1143,12 @@ export async function runTeamLifecycle(
         })
           .then((decision) => {
             if (decision.outcome === "approve" && decision.kind === "budget_extension") {
-              if (decision.extraTokens > 0) budget.extendLimit(decision.extraTokens)
-              else ac.abort(new Error("budget_extension_declined"))
+              if (decision.extraTokens > 0) {
+                budget.extendLimit(decision.extraTokens)
+                releaseHold()
+              } else {
+                ac.abort(new Error("budget_extension_declined"))
+              }
             } else {
               ac.abort(new Error("budget_extension_declined"))
             }
@@ -1135,6 +1267,8 @@ export async function runTeamLifecycle(
       // teammates — see `lib/squads/resolve-external-backing.ts`.
       externalAgentInstances: new Map(),
       ...(workspaceController ? { workspaceController } : {}),
+      cancelledTaskIds,
+      blockedByCancelledTaskIds,
     })
 
     // ── Synthesize the VisualWorkflow (ultracode patterns vs. flat task DAG) ──
@@ -1147,30 +1281,6 @@ export async function runTeamLifecycle(
       !ultracodeActive &&
       (team.config.adaptiveReplan?.enabled === true || team.config.progressLedger?.enabled === true)
     let workflow: VisualWorkflow | undefined
-    if (ultracodeActive) {
-      // Side-effect import registers the pattern.* node executors.
-      await import("./patterns/index")
-      const [{ planUltracodeWorkflow }, { synthesizeUltracodeWorkflow }] = await Promise.all([
-        import("./ultracode/ultracode-planner"),
-        import("./ultracode/synthesize-ultracode"),
-      ])
-      const teamCtx = getTeamRunContext(runId)!
-      const plan = await planUltracodeWorkflow(teamCtx, { signal: ac.signal })
-      ;({ workflow } = synthesizeUltracodeWorkflow({
-        team,
-        plan,
-        initialConcurrency: concurrency.get(),
-        wallClockTimeoutMs: team.config.defaultTimeout,
-      }))
-    } else if (!adaptiveFlat) {
-      ;({ workflow } = synthesizeTeamWorkflow({
-        team,
-        tasks,
-        initialConcurrency: concurrency.get(),
-        wallClockTimeoutMs: team.config.defaultTimeout,
-        ...(externallySatisfiedIds ? { satisfiedDependencyIds: externallySatisfiedIds } : {}),
-      }))
-    }
 
     // Run one synthesized workflow with the stable runId + trigger binding.
     // Reused per-wave by the adaptive path so every wave overwrites the same
@@ -1179,8 +1289,36 @@ export async function runTeamLifecycle(
     // runs through its port: make sure this host has the implementations
     // installed even when no composition root ran (tests, scripts).
     installTeamWorkflowNodeRuntime()
-    const runOneWorkflow = (wf: VisualWorkflow, signal: AbortSignal = ac.signal) =>
-      runWorkflow({
+    const runOneWorkflow = async (wf: VisualWorkflow, signal: AbortSignal = ac.signal) => {
+      // A resumed/recovered Squad run reuses its `runId`; if the prior leg's
+      // workflow row settled when the leg paused or crashed, reopen it so
+      // `runWorkflow`'s terminal guard admits the remaining tasks.
+      const { getDb } = await import("@/lib/db/schema")
+      const existingWf = await getDb()
+        .workflowRuns.get(runId)
+        .catch(() => undefined)
+      if (
+        existingWf &&
+        (existingWf.status === "succeeded" ||
+          existingWf.status === "failed" ||
+          existingWf.status === "cancelled")
+      ) {
+        await getDb()
+          .workflowRuns.update(runId, {
+            status: "running",
+            completedAt: undefined,
+            error: undefined,
+            cancelRequestedAt: undefined,
+          })
+          .catch(() => undefined)
+        await getDb()
+          .executionRuns.update(`execution:workflow:${runId}`, {
+            status: "running",
+            endedAt: undefined,
+          })
+          .catch(() => undefined)
+      }
+      return runWorkflow({
         workflow: wf,
         trigger: {
           workflowId: wf.id,
@@ -1210,6 +1348,7 @@ export async function runTeamLifecycle(
         // that lights up team → IM result delivery; UI/API runs omit it.
         ...(deps.triggeredFrom ? { triggeredBy: deps.triggeredFrom } : {}),
       })
+    }
 
     // Track final status so the finally block can fire onTeamComplete
     // with a meaningful payload even when runWorkflow throws.
@@ -1218,6 +1357,44 @@ export async function runTeamLifecycle(
     let suppressCompletionFanout = false
     let lifecycleResult: RunTeamLifecycleResult | undefined
     try {
+      if (ultracodeActive) {
+        // Side-effect import registers the pattern.* node executors.
+        await import("./patterns/index")
+        const [{ planUltracodeWorkflow }, { synthesizeUltracodeWorkflow }] = await Promise.all([
+          import("./ultracode/ultracode-planner"),
+          import("./ultracode/synthesize-ultracode"),
+        ])
+        const teamCtx = getTeamRunContext(runId)!
+        const plan = await planUltracodeWorkflow(teamCtx, { signal: ac.signal })
+        ;({ workflow } = synthesizeUltracodeWorkflow({
+          team,
+          plan,
+          initialConcurrency: concurrency.get(),
+          wallClockTimeoutMs: team.config.defaultTimeout,
+        }))
+      } else if (!adaptiveFlat) {
+        try {
+          ;({ workflow } = synthesizeTeamWorkflow({
+            team,
+            tasks,
+            initialConcurrency: concurrency.get(),
+            wallClockTimeoutMs: team.config.defaultTimeout,
+            ...(externallySatisfiedIds ? { satisfiedDependencyIds: externallySatisfiedIds } : {}),
+          }))
+        } catch (err) {
+          finalStatus = "failed"
+          finalReason = err instanceof Error ? err.message : String(err)
+          deps.storeWriter.setFinalResult?.(teamId, undefined)
+          lifecycleResult = {
+            runId,
+            status: "failed",
+            reason: finalReason,
+            ...(deps.traceId ? { traceId: deps.traceId } : {}),
+          }
+          return lifecycleResult
+        }
+      }
+
       let result: Awaited<ReturnType<typeof runWorkflow>>
       if (adaptiveFlat) {
         const waveCtx = getTeamRunContext(runId)!
@@ -1282,6 +1459,15 @@ export async function runTeamLifecycle(
               ? "cancelled"
               : "failed"
         finalReason = result.error?.message
+      }
+      if (finalStatus === "completed" && !ultracodeActive) {
+        if (blockedByCancelledTaskIds.size > 0) {
+          finalStatus = "failed"
+          finalReason = `Tasks blocked by cancelled dependencies: ${[...blockedByCancelledTaskIds].join(", ")}`
+        } else if (tasks.length > 0 && tasks.every((t) => cancelledTaskIds.has(t.id))) {
+          finalStatus = "cancelled"
+          finalReason = "All tasks were cancelled"
+        }
       }
       // The team shows its latest run's report: an Ultracode run's synthesis
       // (its one terminal `pattern.synthesize` step) or a task run's answers,

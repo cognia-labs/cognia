@@ -2146,7 +2146,9 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               // autonomy: the decision is what routing already concluded, and a
               // second derivation can disagree with it (a recovery replay hands
               // the handler a decision whose conversation row has since changed).
-              ...(requireAcceptance ? { requirePlanApprovalFloor: true } : {}),
+              ...(requireAcceptance
+                ? { requirePlanApprovalFloor: true, operatorOnlyPlanApproval: true }
+                : {}),
             })
           )
           if (!started) break
@@ -2254,6 +2256,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               conversationRef: event.conversationRef,
               deliveryTarget: deliveryTargetFromEvent(event),
               ...(event.sender.remoteUserId ? { initiatorUserId: event.sender.remoteUserId } : {}),
+              operatorOnly: true,
               requestText: event.plainText,
             })
             if (held.held) {

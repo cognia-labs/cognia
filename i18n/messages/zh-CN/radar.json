@@ -9,6 +9,7 @@
     "noEvidence": "此建议未提供经过校验的来源引用。",
     "memory": "记忆",
     "capture": "收集项",
+    "obligation": "待办事项",
     "loading": "正在加载来源…",
     "unavailable": "来源已删除、归档或不可用。",
     "viewSource": "显示当前来源",
@@ -22,6 +23,8 @@
   },
   "panel": {
     "empty": "还没有报告。运行雷达以分析你近期的信息饮食。",
+    "forceRun": "强制重算",
+    "forceRunAria": "中断在途雷达任务并基于最新数据重新生成",
     "loading": "正在加载雷达报告…",
     "meta": "已分析 {count} 项 · {days} 天窗口",
     "run": "立即运行",
