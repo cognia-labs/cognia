@@ -497,6 +497,7 @@ type SchedulerChannelMessage = ExecutionStatusEvent | ExecutionCancelRequest
 interface ExecuteTaskContext {
   triggerSource?: TaskExecutionTriggerSource
   scheduledFor?: Date
+  originExecutionId?: string
   deferNextRunUpdate?: boolean
   scheduledSlotClaimed?: boolean
   /**
@@ -594,6 +595,23 @@ class TaskSchedulerImpl {
   private catchupVersions = new Map<string, number>()
   /** Retry timers must not outlive pause/delete/stop lifecycle transitions. */
   private retryTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map()
+  /** Retries armed in the timing driver, keyed by taskId (`retry:<taskId>`). */
+  private armedRetries: Map<
+    string,
+    {
+      fireAtMs: number
+      retryAttempt: number
+      scheduledFor: Date
+      originExecutionId?: string
+      deferNextRunUpdate?: boolean
+      scheduledSlotClaimed?: boolean
+      lifecycleVersion: number
+      taskLifecycleVersion: number
+      executionId: string
+      timer?: ReturnType<typeof setTimeout>
+      consume: () => boolean
+    }
+  > = new Map()
   /** Invalidates async work from an older pause/delete lifecycle for one task. */
   private taskLifecycleVersions: Map<string, number> = new Map()
   private isInitialized = false
@@ -822,6 +840,15 @@ class TaskSchedulerImpl {
           )
           return
         }
+        if (alarmId.startsWith("retry:")) {
+          const retryTaskId = alarmId.slice("retry:".length)
+          if (this.armedRetries.has(retryTaskId)) {
+            void this.handleRetryDue(retryTaskId, firedAtMs, version).catch((error) =>
+              log.error(`Error handling due retry for ${retryTaskId}:`, error)
+            )
+            return
+          }
+        }
         void this.handleTaskDue(alarmId, firedAtMs, version).catch((error) =>
           log.error(`Error handling due task ${alarmId}:`, error)
         )
@@ -842,6 +869,7 @@ class TaskSchedulerImpl {
           if (version !== this.lifecycleVersion) return
           if (isLeader) {
             log.info("This tab became leader — scheduling all active tasks")
+            this.pendingStartsRecovered = false
             this.scheduleAllActiveTasks(version).catch((err) => {
               log.error("Error scheduling tasks after becoming leader:", err)
             })
@@ -1013,21 +1041,28 @@ class TaskSchedulerImpl {
     }
 
     await reconcileMaintenanceNotifications(this, () => version === this.lifecycleVersion)
+    if (version !== this.lifecycleVersion) return
+
+    // Recover accepted slot claims and scheduled retries BEFORE arming/expiring
+    // active tasks: a `once` or `maxRuns: 1` task whose slot was already claimed
+    // has `runCount === maxRuns` while its retry is still pending, so running
+    // `scheduleTask` first would expire the task and discard the promised retry.
+    if (!this.pendingStartsRecovered) {
+      this.pendingStartsRecovered = true
+      try {
+        await this.recoverPendingStarts(version)
+      } catch (err) {
+        log.error("Failed to recover pending scheduled starts on boot:", err)
+      }
+      if (version !== this.lifecycleVersion) return
+    }
+
     const tasks = await schedulerDb.getTasksByStatus("active")
     if (version !== this.lifecycleVersion) return
     log.info(`Found ${tasks.length} active tasks to schedule`)
     for (const task of tasks) {
       if (version !== this.lifecycleVersion) return
       await this.scheduleTask(task, version)
-    }
-
-    // Starts an earlier process accepted and never began: once per start-up,
-    // after the schedule is armed, without holding up the boot.
-    if (!this.pendingStartsRecovered) {
-      this.pendingStartsRecovered = true
-      void this.recoverPendingStarts(version).catch((err) => {
-        log.error("Failed to recover pending scheduled starts on boot:", err)
-      })
     }
   }
 
@@ -1043,7 +1078,7 @@ class TaskSchedulerImpl {
       for (const start of pending) {
         if (version !== this.lifecycleVersion) return
         try {
-          if (start.kind === "retry") this.recoverPendingRetry(task, start, version)
+          if (start.kind === "retry") await this.recoverPendingRetry(task, start, version)
           else await this.recoverClaimedSlot(task, start, version)
         } catch (error) {
           log.error(`Could not recover the pending start ${start.executionId}:`, error)
@@ -1060,23 +1095,50 @@ class TaskSchedulerImpl {
   }
 
   /** Arm a scheduled retry again, at its time or at once if that has passed. */
-  private recoverPendingRetry(task: ScheduledTask, retry: PendingRetry, version: number): void {
-    if (!this.takesRunsHere(task)) {
-      this.forgetPendingRetry(task.id, retry.executionId)
+  private async recoverPendingRetry(
+    task: ScheduledTask,
+    retry: PendingRetry,
+    version: number
+  ): Promise<void> {
+    if (await schedulerDb.getExecution(retry.executionId)) {
+      await schedulerDb.removePendingStarts(
+        task.id,
+        (start) => start.executionId === retry.executionId
+      )
+      return
+    }
+    if (version !== this.lifecycleVersion) return
+    if (task.status !== "active" || isOwnedElsewhere(task.owner)) {
+      await this.createSettledExecution(task, {
+        id: retry.executionId,
+        status: "cancelled",
+        triggerSource: "retry",
+        retryAttempt: retry.attempt,
+        scheduledFor: retry.scheduledFor ?? retry.availableAt,
+        terminalReason: task.status === "active" ? "owned-elsewhere" : withdrawnStartReason(task),
+        message: "Not started: the task stopped taking runs here before this scheduled retry began",
+      })
+      return
+    }
+    if (!this.isTimingAuthorityFor(task)) {
+      // Another tab/host temporarily holds execution authority: keep the
+      // durable pending entry intact for whoever holds or regains authority.
       return
     }
     log.info(`Re-arming retry ${retry.attempt} of ${task.name} after a restart`)
     this.retryChains.add(task.id)
-    this.scheduleRetry(
+    await this.scheduleRetry(
       task,
       retry.attempt,
+      retry.scheduledFor ?? retry.availableAt,
       retry.availableAt,
       retry.deferNextRunUpdate,
       retry.scheduledSlotClaimed,
       Math.max(0, retry.availableAt.getTime() - Date.now()),
       version,
       this.getTaskLifecycleVersion(task.id),
-      retry.executionId
+      retry.executionId,
+      retry.originExecutionId ?? retry.failedExecutionId
     )
   }
 
@@ -1098,7 +1160,7 @@ class TaskSchedulerImpl {
       return
     }
     if (version !== this.lifecycleVersion) return
-    if (!this.takesRunsHere(task)) {
+    if (task.status !== "active" || isOwnedElsewhere(task.owner)) {
       await this.createSettledExecution(task, {
         id: claim.executionId,
         status: "cancelled",
@@ -1107,6 +1169,9 @@ class TaskSchedulerImpl {
         terminalReason: task.status === "active" ? "owned-elsewhere" : withdrawnStartReason(task),
         message: "Not started: the task stopped taking runs here before this claimed slot began",
       })
+      return
+    }
+    if (!this.isTimingAuthorityFor(task)) {
       return
     }
     const decision = decideRecoveredSlot({
@@ -1131,11 +1196,14 @@ class TaskSchedulerImpl {
     log.info(
       `Starting ${task.name}'s claimed slot ${claim.scheduledFor.toISOString()} after a restart`
     )
-    await this.executeTask(task, 0, {
+    // Dispatch without holding up `initialize()` on long-running executors.
+    void this.executeTask(task, 0, {
       triggerSource: claim.triggerSource,
       scheduledFor: claim.scheduledFor,
       scheduledSlotClaimed: true,
       ...(claim.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
+    }).catch((err) => {
+      log.error(`Error executing recovered claimed slot for ${task.name}:`, err)
     })
   }
 
@@ -1183,6 +1251,14 @@ class TaskSchedulerImpl {
     for (const taskId of Array.from(this.armedTaskIds)) {
       this.unscheduleTask(taskId)
     }
+    for (const taskId of Array.from(this.armedRetries.keys())) {
+      this.disarmRetry(taskId)
+    }
+    for (const timers of this.retryTimers.values()) {
+      for (const timer of timers) clearTimeout(timer)
+    }
+    this.retryTimers.clear()
+    this.retryChains.clear()
   }
 
   /**
@@ -1717,6 +1793,7 @@ class TaskSchedulerImpl {
     this.armedTaskIds.clear()
     this.armedSlots.clear()
     this.armedPrewarms.clear()
+    this.armedRetries.clear()
 
     // Clear periodic check
     if (this.checkInterval) {
@@ -2670,9 +2747,13 @@ class TaskSchedulerImpl {
    * instant. The driver (renderer timers or the Rust alarm daemon) invokes
    * `handleTaskDue` when the instant elapses; overdue instants fire promptly.
    */
-  private async scheduleTask(task: ScheduledTask, expectedVersion?: number): Promise<void> {
+  private async scheduleTask(
+    task: ScheduledTask,
+    expectedVersion?: number,
+    expectedTaskVersion?: number
+  ): Promise<void> {
     const version = expectedVersion ?? this.lifecycleVersion
-    const taskVersion = this.getTaskLifecycleVersion(task.id)
+    const taskVersion = expectedTaskVersion ?? this.getTaskLifecycleVersion(task.id)
     const isCurrent = () =>
       version === this.lifecycleVersion && taskVersion === this.getTaskLifecycleVersion(task.id)
     if (!isCurrent()) return
@@ -2686,8 +2767,10 @@ class TaskSchedulerImpl {
     // deep-link handler runs the task — arming it here too would double-fire.
     if (task.promotion) return
 
-    // Lazy lifecycle check: never arm a task that has crossed its bounds.
-    if (isPastEndAt(task, new Date()) || isAtMaxRuns(task)) {
+    // Lazy lifecycle check: never arm a task that has crossed its bounds unless
+    // an already-claimed slot is still finishing its retry chain (`finalizeClaimedScheduledRun`
+    // / `updateNextRunTime` expires it once the retry chain settles).
+    if (!this.retryChains.has(task.id) && (isPastEndAt(task, new Date()) || isAtMaxRuns(task))) {
       await this.expireTask(task, isAtMaxRuns(task) ? "max-runs-reached" : "ended")
       return
     }
@@ -2695,7 +2778,9 @@ class TaskSchedulerImpl {
     const nextRun =
       task.trigger.type === "event" ? task.endAt : task.nextRunAt || this.calculateNextRunTime(task)
     if (!nextRun) {
-      log.warn(`Could not calculate next run time for task: ${task.name}`)
+      if (!this.retryChains.has(task.id)) {
+        log.warn(`Could not calculate next run time for task: ${task.name}`)
+      }
       return
     }
 
@@ -2826,6 +2911,14 @@ class TaskSchedulerImpl {
       log.error(`Failed to disarm task ${taskId}:`, error)
     )
     this.disarmPrewarm(taskId)
+  }
+
+  private disarmRetry(taskId: string): void {
+    if (this.armedRetries.delete(taskId)) {
+      void Promise.resolve(this.driver?.disarm(`retry:${taskId}`)).catch((error) =>
+        log.error(`Failed to disarm retry for ${taskId}:`, error)
+      )
+    }
   }
 
   /**
@@ -3163,6 +3256,8 @@ class TaskSchedulerImpl {
     const hooks = getPluginEventHooks()
     const hasPreRunGate = hooks.hasAnyHook("onScheduledTaskBeforeRun")
     // Reserve the host/task slot while a bounded plugin pre-run gate is pending.
+    const originExecutionId =
+      context.originExecutionId ?? (retryAttempt === 0 ? executionId : undefined)
     const execution: TaskExecution = {
       id: executionId,
       taskId: task.id,
@@ -3171,6 +3266,7 @@ class TaskSchedulerImpl {
       status: hasPreRunGate ? "pending" : "running",
       input: task.payload,
       retryAttempt,
+      ...(originExecutionId ? { originExecutionId } : {}),
       scheduledFor: context.scheduledFor,
       triggerSource,
       startedAt: startTime,
@@ -3380,12 +3476,16 @@ class TaskSchedulerImpl {
         )
         this.retryChains.add(task.id)
         const retryExecutionId = nanoid()
+        const retryOriginId = originExecutionId ?? executionId
+        const retryScheduledSlot = context.scheduledFor ?? nextRetryAt
         await this.persistPendingRetry(
           execution,
           {
             kind: "retry",
             executionId: retryExecutionId,
             failedExecutionId: executionId,
+            originExecutionId: retryOriginId,
+            ...(context.scheduledFor ? { scheduledFor: context.scheduledFor } : {}),
             attempt: retryAttempt + 1,
             availableAt: nextRetryAt,
             ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
@@ -3395,16 +3495,18 @@ class TaskSchedulerImpl {
         )
         // Armed only for the account that recorded it.
         if (!atHome()) return execution
-        this.scheduleRetry(
+        await this.scheduleRetry(
           task,
           retryAttempt + 1,
+          retryScheduledSlot,
           nextRetryAt,
           context.deferNextRunUpdate,
           context.scheduledSlotClaimed,
           delay,
           executionLifecycleVersion,
           taskLifecycleVersion,
-          retryExecutionId
+          retryExecutionId,
+          retryOriginId
         )
       }
 
@@ -3541,12 +3643,16 @@ class TaskSchedulerImpl {
         )
         this.retryChains.add(task.id)
         const retryExecutionId = nanoid()
+        const retryOriginId = originExecutionId ?? executionId
+        const retryScheduledSlot = context.scheduledFor ?? nextRetryAt
         await this.persistPendingRetry(
           execution,
           {
             kind: "retry",
             executionId: retryExecutionId,
             failedExecutionId: executionId,
+            originExecutionId: retryOriginId,
+            ...(context.scheduledFor ? { scheduledFor: context.scheduledFor } : {}),
             attempt: retryAttempt + 1,
             availableAt: nextRetryAt,
             ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
@@ -3556,16 +3662,18 @@ class TaskSchedulerImpl {
         )
         // Armed only for the account that recorded it.
         if (!atHome()) return execution
-        this.scheduleRetry(
+        await this.scheduleRetry(
           task,
           retryAttempt + 1,
+          retryScheduledSlot,
           nextRetryAt,
           context.deferNextRunUpdate,
           context.scheduledSlotClaimed,
           delay,
           executionLifecycleVersion,
           taskLifecycleVersion,
-          retryExecutionId
+          retryExecutionId,
+          retryOriginId
         )
       }
 
@@ -3641,7 +3749,9 @@ class TaskSchedulerImpl {
               await this.updateNextRunTime(
                 task,
                 { fromDate: referenceDate, intervalBase: referenceDate },
-                db
+                db,
+                executionLifecycleVersion,
+                taskLifecycleVersion
               )
             }
           } catch (error) {
@@ -3750,23 +3860,21 @@ class TaskSchedulerImpl {
       .catch((error) => log.warn(`Could not forget the retry ${executionId} of ${taskId}:`, error))
   }
 
-  private scheduleRetry(
+  private async scheduleRetry(
     task: ScheduledTask,
     retryAttempt: number,
     scheduledFor: Date,
+    availableAt: Date,
     deferNextRunUpdate: boolean | undefined,
     scheduledSlotClaimed: boolean | undefined,
     delay: number,
     lifecycleVersion: number,
     taskLifecycleVersion: number,
     /** The id the retry's run takes, as recorded in its pending entry. */
-    executionId: string
-  ): void {
-    const timer = setTimeout(() => {
-      const timers = this.retryTimers.get(task.id)
-      timers?.delete(timer)
-      if (timers?.size === 0) this.retryTimers.delete(task.id)
-
+    executionId: string,
+    originExecutionId?: string
+  ): Promise<void> {
+    const fireRetry = () => {
       // A stopped scheduler keeps the retry for the next start-up.
       if (lifecycleVersion !== this.lifecycleVersion) {
         this.retryChains.delete(task.id)
@@ -3794,9 +3902,14 @@ class TaskSchedulerImpl {
             if (latest) this.forgetPendingRetry(task.id, executionId)
             return
           }
+          if (!this.isTimingAuthorityFor(latest)) {
+            this.retryChains.delete(task.id)
+            return
+          }
           return this.executeTask(latest, retryAttempt, {
             triggerSource: "retry",
             scheduledFor,
+            ...(originExecutionId ? { originExecutionId } : {}),
             deferNextRunUpdate,
             scheduledSlotClaimed,
             executionId,
@@ -3806,11 +3919,117 @@ class TaskSchedulerImpl {
           this.retryChains.delete(task.id)
           log.error(`Retry failed for task ${task.name}:`, err)
         })
+    }
+
+    let consumed = false
+    const consume = (): boolean => {
+      if (consumed) return false
+      consumed = true
+      return true
+    }
+
+    const timer = setTimeout(() => {
+      const timers = this.retryTimers.get(task.id)
+      timers?.delete(timer)
+      if (timers?.size === 0) this.retryTimers.delete(task.id)
+      if (this.armedRetries.get(task.id)?.executionId === executionId) {
+        this.disarmRetry(task.id)
+      }
+      if (!consume()) return
+      fireRetry()
     }, delay)
+    unrefTimer(timer as unknown as ReturnType<typeof setInterval>)
 
     const timers = this.retryTimers.get(task.id) ?? new Set()
     timers.add(timer)
     this.retryTimers.set(task.id, timers)
+
+    const driver = this.driver
+    if (driver && this.driverReady && this.isTimingAuthorityFor(task)) {
+      const fireAtMs = availableAt.getTime()
+      const entry = {
+        fireAtMs,
+        retryAttempt,
+        scheduledFor,
+        ...(originExecutionId ? { originExecutionId } : {}),
+        deferNextRunUpdate,
+        scheduledSlotClaimed,
+        lifecycleVersion,
+        taskLifecycleVersion,
+        executionId,
+        timer,
+        consume,
+      }
+      this.armedRetries.set(task.id, entry)
+      try {
+        await driver.arm(`retry:${task.id}`, fireAtMs)
+      } catch (error) {
+        if (this.armedRetries.get(task.id) === entry) {
+          this.armedRetries.delete(task.id)
+        }
+        log.warn(`Timing driver could not arm retry for ${task.name}; falling back to timer:`, {
+          error,
+        })
+      }
+    }
+  }
+
+  private async handleRetryDue(taskId: string, firedAtMs: number, version: number): Promise<void> {
+    if (version !== this.lifecycleVersion) return
+    const armed = this.armedRetries.get(taskId)
+    if (!armed || armed.fireAtMs !== firedAtMs) return
+    this.armedRetries.delete(taskId)
+    if (armed.timer) {
+      clearTimeout(armed.timer)
+      const timers = this.retryTimers.get(taskId)
+      timers?.delete(armed.timer)
+      if (timers?.size === 0) this.retryTimers.delete(taskId)
+    }
+    if (!armed.consume()) return
+
+    if (armed.lifecycleVersion !== this.lifecycleVersion) {
+      this.retryChains.delete(taskId)
+      return
+    }
+    if (armed.taskLifecycleVersion !== this.getTaskLifecycleVersion(taskId)) {
+      this.retryChains.delete(taskId)
+      this.forgetPendingRetry(taskId, armed.executionId)
+      return
+    }
+
+    const latest = await schedulerDb.getTask(taskId)
+    if (version !== this.lifecycleVersion || armed.lifecycleVersion !== this.lifecycleVersion) {
+      this.retryChains.delete(taskId)
+      return
+    }
+    if (
+      !latest ||
+      latest.status !== "active" ||
+      armed.taskLifecycleVersion !== this.getTaskLifecycleVersion(taskId)
+    ) {
+      this.retryChains.delete(taskId)
+      if (latest) this.forgetPendingRetry(taskId, armed.executionId)
+      return
+    }
+    if (!this.isTimingAuthorityFor(latest)) {
+      this.retryChains.delete(taskId)
+      return
+    }
+
+    try {
+      await this.executeTask(latest, armed.retryAttempt, {
+        triggerSource: "retry",
+        scheduledFor: armed.scheduledFor,
+        ...(armed.originExecutionId ? { originExecutionId: armed.originExecutionId } : {}),
+        deferNextRunUpdate: armed.deferNextRunUpdate,
+        scheduledSlotClaimed: armed.scheduledSlotClaimed,
+        armedAtMs: firedAtMs,
+        executionId: armed.executionId,
+      })
+    } catch (err) {
+      this.retryChains.delete(taskId)
+      log.error(`Retry failed for task ${latest.name}:`, err)
+    }
   }
 
   private getTaskLifecycleVersion(taskId: string): number {
@@ -3866,6 +4085,7 @@ class TaskSchedulerImpl {
    * does not bring back a retry a pause or an edit already called off.
    */
   private clearTaskRetries(taskId: string): void {
+    this.disarmRetry(taskId)
     const timers = this.retryTimers.get(taskId)
     if (timers) {
       for (const timer of timers) clearTimeout(timer)
@@ -4261,7 +4481,9 @@ class TaskSchedulerImpl {
   private async updateNextRunTime(
     task: ScheduledTask,
     options: { fromDate?: Date; intervalBase?: Date } = {},
-    db: SchedulerDatabase = schedulerDb
+    db: SchedulerDatabase = schedulerDb,
+    expectedVersion?: number,
+    expectedTaskVersion?: number
   ): Promise<void> {
     // Re-fetch the latest row: `task` may be a pre-execution snapshot.
     const latest = await db.getTask(task.id)
@@ -4286,7 +4508,7 @@ class TaskSchedulerImpl {
       return null
     })
     if (written?.status === "active" && written.nextRunAt && db.isActive()) {
-      await this.scheduleTask(written)
+      await this.scheduleTask(written, expectedVersion, expectedTaskVersion)
     }
   }
 
@@ -4877,9 +5099,12 @@ class TaskSchedulerImpl {
     for (const perTask of this.runningByTask.values()) {
       runningCount += perTask.size
     }
+    const scheduledIds = new Set<string>(this.armedTaskIds)
+    for (const taskId of this.armedRetries.keys()) scheduledIds.add(taskId)
+    for (const taskId of this.retryTimers.keys()) scheduledIds.add(taskId)
     return {
       initialized: this.isInitialized,
-      scheduledCount: this.armedTaskIds.size,
+      scheduledCount: scheduledIds.size,
       runningCount,
     }
   }

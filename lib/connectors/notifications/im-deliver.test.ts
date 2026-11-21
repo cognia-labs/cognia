@@ -270,4 +270,14 @@ describe("deliverNotificationToConversation: action buttons", () => {
     await deliver(rec(), h.deps)
     expect(h.enqueued[0].segments[0]).toMatchObject({ type: "text" })
   })
+
+  it("mints a per-occurrence idempotency key for coalesced bumps so recurring tasks deliver subsequent results (F19)", async () => {
+    const h = harness({ proactivePush: true })
+    await deliver(rec({ id: "recurring-1", count: 1, body: "Monday" }), h.deps)
+    await deliver(rec({ id: "recurring-1", count: 2, body: "Tuesday" }), h.deps)
+    expect(h.enqueued.map((e) => e.idempotencyKey)).toEqual([
+      "notify:recurring-1",
+      "notify:recurring-1:2",
+    ])
+  })
 })

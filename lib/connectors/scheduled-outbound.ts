@@ -41,6 +41,7 @@ import {
   type ActionReviewPlanOrigin,
 } from "@/lib/policy/action-review/plan-context"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
+import { getDb } from "@/lib/db/schema"
 import { readForResolution } from "@/lib/db/conversation-overrides"
 import { resolveCharacterById } from "@/lib/db/characters"
 import { getSettings } from "@/lib/db/settings"
@@ -160,6 +161,9 @@ async function handleOutboundSend(
   const now = Date.now()
 
   const deliveryTarget = (await getConnectorConversationState(conversationKey))?.deliveryTarget
+  if (signal?.aborted) {
+    return { success: false, error: "Outbound send aborted" }
+  }
   if (!deliveryTarget || deliveryTarget.address.adapterId !== adapterId) {
     return {
       success: false,
@@ -167,7 +171,24 @@ async function handleOutboundSend(
     }
   }
 
+  const logicalId = execution.originExecutionId ?? execution.id
+  const resolvedIdempotencyKey = idempotencyKey ?? `${task.id}:${logicalId}`
   try {
+    const existingRows = await getDb()
+      .outboundQueue.where("idempotencyKey")
+      .equals(resolvedIdempotencyKey)
+      .toArray()
+    const existing = existingRows.find(
+      (row) =>
+        row.syncedFromHost !== true &&
+        row.adapterId === adapterId &&
+        row.conversationKey === conversationKey &&
+        row.status !== "deadlettered"
+    )
+    if (existing) {
+      return { success: true, output: { jobId: existing.id, reused: true } }
+    }
+
     const result = await enqueueAuthorized(
       {
         adapterId,
@@ -177,7 +198,7 @@ async function handleOutboundSend(
           deliveryTarget,
           segments: sanitizeOutboundSegments(segments),
           metadata: {
-            idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+            idempotencyKey: resolvedIdempotencyKey,
           },
         },
         source: payload.source ?? "manual",
@@ -190,7 +211,10 @@ async function handleOutboundSend(
         },
         personalContext: { executionRunId: execution.id },
       },
-      { executionContext: { executionRunId: execution.id } }
+      {
+        ...(signal ? { signal } : {}),
+        executionContext: { executionRunId: execution.id },
+      }
     )
     if (result.kind === "drafted") {
       // Held for a person to approve: the task did what it can, so it is not
@@ -205,7 +229,7 @@ async function handleOutboundSend(
       at: now,
       conversationKey,
       message: `scheduler:outbound:send jobId=${job.id}`,
-    })
+    }).catch(() => undefined)
 
     return { success: true, output: { jobId: job.id } }
   } catch (err) {
@@ -720,6 +744,10 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
   // Re-derive the platform from the conversationKey rather than trusting
   // a payload field — the conversationKey format is the single source of
   // truth (it round-trips through `buildConversationKey`).
+  if (input.signal?.aborted) {
+    await replyStream?.cancel()
+    return { success: false, error: "Scheduled digest aborted before delivery" }
+  }
   try {
     const delivered = await enqueueAuthorized(
       {
@@ -744,7 +772,10 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         },
         personalContext,
       },
-      { executionContext: personalContext }
+      {
+        ...(input.signal ? { signal: input.signal } : {}),
+        executionContext: personalContext,
+      }
     )
     if (delivered.kind === "drafted") {
       await replyStream?.cancel()
@@ -771,7 +802,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         scheduledTaskId: sourceTaskId,
         a2uiSurfaceCount: captured.a2uiSurfaceOrder?.length ?? 0,
       },
-    })
+    }).catch(() => undefined)
 
     return settle({
       success: true,

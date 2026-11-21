@@ -152,9 +152,12 @@ export async function deliverNotificationToConversation(
         conversationRef: binding.conversationRef,
         deliveryTarget: binding.deliveryTarget,
         segments: [segment],
-        // Idempotency keyed on the record id → a coalesce bump re-delivering
-        // the same record is deduped by the outbound runner.
-        metadata: { idempotencyKey: `notify:${rec.id}` },
+        // Idempotency keyed on `(id, count)` → retries of one notification
+        // occurrence dedupe, while coalesced recurring task occurrences
+        // (`count >= 2`) still deliver their new result.
+        metadata: {
+          idempotencyKey: rec.count > 1 ? `notify:${rec.id}:${rec.count}` : `notify:${rec.id}`,
+        },
       },
       source: "ai-run",
       // The conversation is the one the record's session is bound to, so it is

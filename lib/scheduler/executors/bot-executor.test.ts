@@ -300,4 +300,23 @@ describe("executeBotTask", () => {
     expect(result.success).toBe(false)
     expect(await getDb().botEventDeliveries.count()).toBe(0)
   })
+
+  it("shares one eventKey across retry executions via originExecutionId (F18)", async () => {
+    await seed([{ id: "morning", kind: "schedule", cron: "0 9 * * *" }])
+    const payload = task({ installationId: "boti_1", triggerId: "morning" })
+
+    const first = await executeBotTask(
+      payload,
+      { ...execution, id: "exec_occ_1", originExecutionId: "exec_occ_1" },
+      live
+    )
+    const retry = await executeBotTask(
+      payload,
+      { ...execution, id: "exec_retry_2", retryAttempt: 1, originExecutionId: "exec_occ_1" },
+      live
+    )
+    expect(first.success).toBe(true)
+    expect(retry.success).toBe(true)
+    expect(await getDb().botEventDeliveries.count()).toBe(1)
+  })
 })

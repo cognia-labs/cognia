@@ -610,9 +610,28 @@ describe("connection:outbound:send executor", () => {
     const [job] = await getDb()
       .outboundQueue.filter((j) => j.conversationKey === conversationKey)
       .toArray()
-    // No idempotencyKey in the payload → one is generated so a retry cannot
-    // double-post.
-    expect(job.idempotencyKey).toMatch(/[0-9a-f-]{36}/)
+    // No idempotencyKey in the payload → deterministic `<taskId>:<logicalOccurrenceId>`
+    // is synthesized so a retry of the same occurrence deduplicates instead of
+    // double-posting (F18).
+    expect(job.idempotencyKey).toBe("t1:e1")
+
+    // Retrying the same logical occurrence (`originExecutionId: "e1"`) reuses
+    // the exact same outbound job rather than enqueueing a duplicate.
+    const retryResult = await callExecutor(
+      "connection:outbound:send",
+      makeTask({
+        adapterId: "adp_d",
+        conversationKey,
+        segments: [{ type: "text", text: "from the task row" }],
+      }),
+      { ...makeExecution(), id: "e1-retry", retryAttempt: 1, originExecutionId: "e1" }
+    )
+    expect(retryResult.success).toBe(true)
+    const jobsAfterRetry = await getDb()
+      .outboundQueue.filter((j) => j.conversationKey === conversationKey)
+      .toArray()
+    expect(jobsAfterRetry).toHaveLength(1)
+    expect(jobsAfterRetry[0]!.id).toBe(job.id)
   })
 
   it.each([

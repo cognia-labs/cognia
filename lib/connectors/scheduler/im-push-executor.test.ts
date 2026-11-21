@@ -4,11 +4,10 @@ beforeAll(dbFixture.initialize)
 afterAll(dbFixture.dispose)
 import type { ScheduledTask, TaskExecution } from "@/types/scheduler"
 
-let platformValue: "tauri" | "headless" | "web" = "tauri"
 jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),
-  detectPlatform: () => platformValue,
-  isTauri: () => platformValue === "tauri",
+  detectPlatform: jest.fn(() => "tauri"),
+  isTauri: jest.fn(() => true),
 }))
 
 // The default deps are lazily imported; stub the modules so the executor can
@@ -25,6 +24,7 @@ jest.mock("@cognia/logging", () => {
 })
 
 import { createImPushExecutor, executeImPushTask } from "./im-push-executor"
+import { detectPlatform, isTauri } from "@/lib/platform/detect"
 import { getConnectorConversationState } from "@/lib/db/connector-conversation-state"
 import { readForResolution } from "@/lib/db/conversation-overrides"
 import { enqueueAuthorized } from "@/lib/connectors/delivery-gateway"
@@ -79,13 +79,18 @@ function makeDeps(overrides: Partial<Parameters<typeof createImPushExecutor>[0]>
   } as unknown as Required<NonNullable<Parameters<typeof createImPushExecutor>[0]>>
 }
 
+function setMockPlatform(next: "tauri" | "headless" | "web"): void {
+  jest.mocked(detectPlatform).mockReturnValue(next)
+  jest.mocked(isTauri).mockReturnValue(next === "tauri")
+}
+
 beforeEach(() => {
-  platformValue = "tauri"
+  setMockPlatform("tauri")
 })
 
 describe("executeImPushTask", () => {
   it("is refused on hosts without the connector runtime", async () => {
-    platformValue = "web"
+    setMockPlatform("web")
     const deps = makeDeps()
     const r = await createImPushExecutor(deps)(
       makeTask({ conversationKey: "c1", text: "hi" }),
@@ -157,7 +162,10 @@ describe("executeImPushTask", () => {
           origin: { rootSessionId: "task:task-im", instructionEpoch: expect.any(String) },
         },
       },
-      { executionContext: { executionRunId: "exec-im", automation: "schedule" } }
+      {
+        signal: expect.any(AbortSignal),
+        executionContext: { executionRunId: "exec-im", automation: "schedule" },
+      }
     )
     expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ kind: "notify.im_pushed" }))
     expect(r.output).toMatchObject({ jobId: "job-1", adapterId: "lark-1", segments: 1 })
@@ -179,7 +187,10 @@ describe("executeImPushTask", () => {
         conversationKey: "c2",
         request: expect.objectContaining({ segments, metadata: { idempotencyKey: "k9" } }),
       }),
-      { executionContext: { executionRunId: "exec-im", automation: "schedule" } }
+      {
+        signal: expect.any(AbortSignal),
+        executionContext: { executionRunId: "exec-im", automation: "schedule" },
+      }
     )
   })
 
@@ -293,6 +304,66 @@ describe("executeImPushTask", () => {
     expect(deps.audit).not.toHaveBeenCalledWith(
       expect.objectContaining({ kind: "notify.im_pushed" })
     )
+  })
+
+  it("cancels during async target lookup without enqueuing outbound delivery (F17)", async () => {
+    let entered!: () => void
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const deps = makeDeps({
+      getConversationState: jest.fn(async () => {
+        entered()
+        await blocked
+        return { deliveryTarget } as never
+      }),
+    })
+    const controller = new AbortController()
+    const pending = createImPushExecutor(deps)(
+      makeTask({ conversationKey: "c1", text: "reminder" }),
+      makeExecution(),
+      controller.signal
+    )
+    await waiting
+    controller.abort("user-cancelled")
+    release()
+    const result = await pending
+    expect(result.success).toBe(false)
+    expect(deps.enqueue).not.toHaveBeenCalled()
+  })
+
+  it("keeps an already-enqueued push successful when post-enqueue audit throws and shares idempotency across retry attempts (F18)", async () => {
+    const audit = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("audit storage unavailable"))
+      .mockResolvedValue({})
+    const deps = makeDeps({ audit })
+    const executor = createImPushExecutor(deps)
+    const task = makeTask({ conversationKey: "c1", text: "reminder" })
+
+    const first = await executor(
+      task,
+      makeExecution({ id: "occ-slot-1", originExecutionId: "occ-slot-1" }),
+      new AbortController().signal
+    )
+    expect(first.success).toBe(true)
+
+    // Even if enqueue itself had failed earlier and retried with a new execution.id,
+    // `originExecutionId` preserves one delivery identity for the occurrence.
+    const retry = await executor(
+      task,
+      makeExecution({ id: "retry-2", retryAttempt: 1, originExecutionId: "occ-slot-1" }),
+      new AbortController().signal
+    )
+    expect(retry.success).toBe(true)
+    const keys = jest
+      .mocked(deps.enqueue)
+      .mock.calls.map(([input]) => input.request.metadata?.idempotencyKey)
+    expect(keys).toEqual(["task-im:occ-slot-1", "task-im:occ-slot-1"])
   })
 })
 

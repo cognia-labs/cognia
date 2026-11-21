@@ -1046,3 +1046,20 @@ it("forwards opaque Host execution proof outside the cloned request", async () =
   expect(deps.persistOne).toHaveBeenCalledWith(expect.any(Object), { executionContext })
   expect(jest.mocked(deps.persistOne).mock.calls[0][0]).not.toHaveProperty("executionContext")
 })
+
+it("aborts enqueueAuthorized before persisting when signal aborts during delivery planning (F17)", async () => {
+  const controller = new AbortController()
+  const { gateway, deps } = gatewayWith({
+    planDelivery: jest.fn(async () => {
+      controller.abort("cancelled")
+      return {
+        action: "send" as const,
+        provenance: { mode: "shadow" as const, plan: "allow" as const },
+      }
+    }),
+  })
+  await expect(
+    gateway.enqueueAuthorized(input("skill"), { signal: controller.signal })
+  ).rejects.toBe("cancelled")
+  expect(deps.persistOne).not.toHaveBeenCalled()
+})

@@ -62,7 +62,9 @@ export async function executeBotTask(
     import("@/lib/bot/installed-bot"),
   ])
 
+  if (signal.aborted) return { success: false, error: "Bot task aborted" }
   const installation = await getBotInstallation(installationId)
+  if (signal.aborted) return { success: false, error: "Bot task aborted" }
   if (!installation) {
     // Terminal: the installation is gone, and every future tick would fail the
     // same way. Saying so lets the scheduler stop firing it.
@@ -74,6 +76,7 @@ export async function executeBotTask(
   }
 
   const resolved = await resolveInstalledBot(installation)
+  if (signal.aborted) return { success: false, error: "Bot task aborted" }
   if (!resolved || !isRunnableBot(resolved)) {
     return { success: false, error: `Bot installation ${installationId} is not runnable` }
   }
@@ -95,18 +98,33 @@ export async function executeBotTask(
   }
 
   const now = Date.now()
-  const slot = execution.scheduledFor?.getTime()
+  const originSlotPrefix = `occ-${task.id}-`
+  const parsedOriginSlot = execution.originExecutionId?.startsWith(originSlotPrefix)
+    ? Number(execution.originExecutionId.slice(originSlotPrefix.length))
+    : NaN
+  const originSlotMs = Number.isFinite(parsedOriginSlot) ? parsedOriginSlot : undefined
+  const effectiveSlotDate =
+    originSlotMs !== undefined ? new Date(originSlotMs) : execution.scheduledFor
+  const effectiveTriggerSource =
+    originSlotMs !== undefined && execution.triggerSource === "retry"
+      ? "schedule"
+      : (execution.triggerSource ?? "schedule")
+  const slot = effectiveSlotDate?.getTime()
   const envelope = buildBotEventEnvelope({
     source: "schedule",
     // Every slot is its own event, keyed on the slot and not on when this host
     // got to it: two slots are two deliveries, and the same slot fired twice
-    // lands on one. A tick started by hand is always its own (ADR-0224 A9).
+    // (or retried under the same `originExecutionId`) lands on one. A tick
+    // started by hand is always its own across separate manual starts (ADR-0224 A9).
     sourceRecordId: scheduledBotTickRecordId({
       installationId,
       triggerId,
-      triggerSource: execution.triggerSource ?? "schedule",
-      ...(execution.scheduledFor ? { scheduledFor: execution.scheduledFor } : {}),
-      oneOff: oneOffSourceRecordId,
+      triggerSource: effectiveTriggerSource,
+      ...(effectiveSlotDate ? { scheduledFor: effectiveSlotDate } : {}),
+      oneOff: (prefix) => {
+        const logicalId = execution.originExecutionId ?? execution.id
+        return logicalId ? `${prefix}:${logicalId}` : oneOffSourceRecordId(prefix)
+      },
     }),
     type: `bot.${trigger.kind}`,
     installationId,

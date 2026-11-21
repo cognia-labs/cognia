@@ -146,8 +146,11 @@ const recentlyPublished = new Set<string>()
  */
 export async function publishRemoteNotification(record: NotificationRecord): Promise<void> {
   // A record can resolve to both `toast` and `push` on headless (both map
-  // here); publish once per record so companions do not see it twice.
-  if (recentlyPublished.has(record.id)) return
+  // here); publish once per occurrence (`id:count`) so companions do not see
+  // one call twice, while coalesced subsequent occurrences (`count = 2, 3, ...`)
+  // still reach paired companions.
+  const occurrenceKey = `${record.id}:${record.count ?? 1}`
+  if (recentlyPublished.has(occurrenceKey)) return
   const payload = {
     id: record.id,
     title: record.title.slice(0, 160),
@@ -172,7 +175,7 @@ export async function publishRemoteNotification(record: NotificationRecord): Pro
     { sink: "companion-notification", channel: "remote" }
   )
   await transport.call("remote_notification_publish", payload)
-  recentlyPublished.add(record.id)
+  recentlyPublished.add(occurrenceKey)
   if (recentlyPublished.size > 256) {
     const first = recentlyPublished.values().next().value
     if (first !== undefined) recentlyPublished.delete(first)

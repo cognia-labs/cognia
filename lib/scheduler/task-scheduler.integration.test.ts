@@ -3,7 +3,12 @@ import "fake-indexeddb/auto"
 import { getDb } from "@/lib/db/schema"
 import { SchedulerDatabase, schedulerDb } from "./scheduler-db"
 import { createTaskScheduler, registerTaskExecutor, unregisterTaskExecutor } from "./task-scheduler"
-import type { ScheduledTask, SchedulerTimingDriver } from "@/types/scheduler"
+import type {
+  ScheduledTask,
+  SchedulerTimingDriver,
+  TaskExecution,
+  TaskExecutionResult,
+} from "@/types/scheduler"
 import { registerTaskPrewarmer, unregisterTaskPrewarmer } from "./prewarm"
 
 // The real account database over this file's own fake IndexedDB. Mocking
@@ -1401,4 +1406,114 @@ it("account switch: a switch waits for a run that is recording its outcome", asy
   // Released only once the run's row was written.
   expect(await schedulerDb.getExecution((await run)!.id)).toMatchObject({ status: "completed" })
   expect(flushPendingAccountWrites()).toBeUndefined()
+})
+
+it("F15: pausing while updateNextRunTime resolves never re-arms a paused task in the timing driver", async () => {
+  const task = liveDraft()
+  await schedulerDb.createTask(task)
+  registerTaskExecutor("test", async () => ({ success: true }))
+  const realMutate = SchedulerDatabase.prototype.mutateTask
+  let nextRunMutateEntered = false
+  const entered = latch()
+  const hold = latch()
+  const spy = jest
+    .spyOn(SchedulerDatabase.prototype, "mutateTask")
+    .mockImplementation(async function (this: SchedulerDatabase, taskId, mutate) {
+      const out = await realMutate.call(this, taskId, mutate)
+      if (!nextRunMutateEntered && out?.nextRunAt && out.runCount === 1) {
+        nextRunMutateEntered = true
+        entered.release()
+        await hold.promise
+      }
+      return out
+    })
+  try {
+    const run = scheduler.runTaskNow(task.id)
+    await entered.promise
+    await scheduler.pauseTask(task.id)
+    hold.release()
+    await run
+    expect((await schedulerDb.getTask(task.id))?.status).toBe("paused")
+    expect(scheduler.getStatus().scheduledCount).toBe(0)
+  } finally {
+    hold.release()
+    spy.mockRestore()
+  }
+})
+
+it("F16: a one-shot task with maxRuns: 1 keeps its scheduled retry armed in the timing driver across a restart", async () => {
+  const slot = new Date(Date.now() - 1_000)
+  const task = liveDraft({
+    id: "once-retry-restart",
+    trigger: { type: "once", runAt: slot },
+    nextRunAt: slot,
+  })
+  task.config.maxRuns = 1
+  task.config.maxRetries = 1
+  task.config.retryDelay = 60_000
+  task.config.maxRetryDelay = 60_000
+  await schedulerDb.createTask(task)
+
+  const executor = jest
+    .fn<Promise<TaskExecutionResult>, [ScheduledTask, TaskExecution]>(async (_t, exec) => ({
+      success: true,
+      output: { origin: exec.originExecutionId },
+    }))
+    .mockImplementationOnce(async () => ({ success: false, error: "transient failure" }))
+  registerTaskExecutor("test", executor)
+
+  const runtime = scheduler as unknown as {
+    lifecycleVersion: number
+    handleTaskDue(id: string, slotMs: number, version: number): Promise<void>
+    executeTask(...args: unknown[]): Promise<unknown>
+  }
+  const executeSpy = jest.spyOn(runtime, "executeTask")
+  let onDueCallback: ((alarmId: string, firedAtMs: number) => void) | undefined
+  try {
+    await runtime.handleTaskDue(task.id, slot.getTime(), runtime.lifecycleVersion)
+    await Promise.all(executeSpy.mock.results.map((r) => r.value))
+  } finally {
+    executeSpy.mockRestore()
+  }
+
+  const before = await schedulerDb.getTaskExecutions(task.id)
+  expect(before[0]).toMatchObject({
+    status: "failed",
+    terminalReason: "retry-scheduled",
+    retryScheduledAt: expect.any(Date),
+  })
+
+  scheduler.stop()
+  const baseDriver = timing()
+  const armSpy = jest.fn(baseDriver.arm.bind(baseDriver))
+  const driver = {
+    ...baseDriver,
+    arm: armSpy,
+    onDue(cb: (alarmId: string, firedAtMs: number) => void) {
+      onDueCallback = cb
+      baseDriver.onDue(cb)
+    },
+  }
+  scheduler = createTaskScheduler(driver)
+  await scheduler.initialize()
+
+  expect(armSpy).toHaveBeenCalledWith(`retry:${task.id}`, expect.any(Number))
+  expect(scheduler.getStatus().scheduledCount).toBe(1)
+  expect((await schedulerDb.getTask(task.id))?.status).toBe("active")
+
+  const armedCall = armSpy.mock.calls.find(([id]) => id === `retry:${task.id}`)!
+  onDueCallback!(`retry:${task.id}`, armedCall[1] as number)
+  await until(() => executor.mock.calls.length === 2, "the recovered one-shot retry executes")
+  await until(
+    async () => (await schedulerDb.getTask(task.id))?.status === "expired",
+    "the one-shot task expires once its retry settles"
+  )
+  const runs = await schedulerDb.getTaskExecutions(task.id)
+  const retryRow = runs.find((r) => r.retryAttempt === 1)
+  expect(retryRow).toMatchObject({
+    status: "completed",
+    triggerSource: "retry",
+    originExecutionId: before[0]!.id,
+    scheduledFor: slot,
+  })
 })

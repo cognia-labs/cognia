@@ -846,6 +846,8 @@ export interface TaskExecution {
   error?: string
   /** Retry attempt number (0 = first attempt) */
   retryAttempt: number
+  /** Execution id of attempt 0 in this logical occurrence / retry chain */
+  originExecutionId?: string
   /** Execution duration in milliseconds */
   duration?: number
   /** Scheduled execution slot (if execution was schedule-bound) */

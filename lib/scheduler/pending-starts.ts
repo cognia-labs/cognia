@@ -41,6 +41,10 @@ export interface PendingRetry {
   /** Chosen when the retry is scheduled, so the run it becomes is known. */
   executionId: string
   failedExecutionId: string
+  /** Execution id of attempt 0 in this logical occurrence / retry chain. */
+  originExecutionId?: string
+  /** Original scheduled slot of attempt 0 when schedule-bound. */
+  scheduledFor?: Date
   /** The retry's own attempt number (the failed one's plus one). */
   attempt: number
   availableAt: Date
@@ -70,6 +74,8 @@ interface StoredRetry {
   kind: "retry"
   executionId: string
   failedExecutionId: string
+  originExecutionId?: string
+  scheduledFor?: string
   attempt: number
   availableAt: string
   scheduledSlotClaimed?: boolean
@@ -90,6 +96,7 @@ function parseEntry(raw: unknown): PendingStart | null {
     deferNextRunUpdate?: unknown
     claimedAt?: unknown
     failedExecutionId?: unknown
+    originExecutionId?: unknown
     attempt?: unknown
     availableAt?: unknown
     scheduledSlotClaimed?: unknown
@@ -111,12 +118,15 @@ function parseEntry(raw: unknown): PendingStart | null {
   }
   if (entry.kind === "retry") {
     const availableAt = new Date(String(entry.availableAt))
+    const scheduledFor =
+      typeof entry.scheduledFor === "string" ? new Date(entry.scheduledFor) : undefined
     if (
       typeof entry.failedExecutionId !== "string" ||
       typeof entry.attempt !== "number" ||
       !Number.isInteger(entry.attempt) ||
       entry.attempt < 1 ||
-      !isDate(availableAt)
+      !isDate(availableAt) ||
+      (scheduledFor !== undefined && !isDate(scheduledFor))
     ) {
       return null
     }
@@ -124,6 +134,10 @@ function parseEntry(raw: unknown): PendingStart | null {
       kind: "retry",
       executionId: entry.executionId,
       failedExecutionId: entry.failedExecutionId,
+      ...(typeof entry.originExecutionId === "string" && entry.originExecutionId.length > 0
+        ? { originExecutionId: entry.originExecutionId }
+        : {}),
+      ...(scheduledFor ? { scheduledFor } : {}),
       attempt: entry.attempt,
       availableAt,
       ...(entry.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
@@ -165,6 +179,8 @@ export function serializePendingStarts(starts: readonly PendingStart[]): string 
             kind: "retry",
             executionId: start.executionId,
             failedExecutionId: start.failedExecutionId,
+            ...(start.originExecutionId ? { originExecutionId: start.originExecutionId } : {}),
+            ...(start.scheduledFor ? { scheduledFor: start.scheduledFor.toISOString() } : {}),
             attempt: start.attempt,
             availableAt: start.availableAt.toISOString(),
             ...(start.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),

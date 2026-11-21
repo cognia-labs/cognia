@@ -368,3 +368,29 @@ it("falls back to default preferences when none are stored", async () => {
   expect(toastFns.info).toHaveBeenCalled()
   expect(DEFAULT_NOTIFICATION_PREFERENCES.globalDefaultChannels).toEqual(["center", "toast"])
 })
+
+it("broadcasts every coalesced recurring occurrence to paired companions on headless while keeping single-call toast+push collapsed (F19)", async () => {
+  mockPlatform.mockReturnValue("headless")
+  mockStoredPrefs = { globalDefaultChannels: ["center", "toast", "push"] }
+  mockTransportCall.mockResolvedValue({ id: "n" })
+  const common = {
+    source: "scheduler" as const,
+    level: "warning" as const,
+    dedupeKey: "task:daily-report:complete",
+    coalesceWindowMs: Infinity,
+  }
+  const host = {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+  }
+
+  const first = await notify({ ...common, title: "Daily report", body: "Monday result" }, host)
+  const second = await notify({ ...common, title: "Daily report", body: "Tuesday result" }, host)
+
+  expect(second).toBe(first)
+  expect(rows.get(second)?.count).toBe(2)
+  const publishes = mockTransportCall.mock.calls.filter(
+    ([command]) => command === "remote_notification_publish"
+  )
+  expect(publishes).toHaveLength(2)
+  expect(publishes.map(([, payload]) => payload.body)).toEqual(["Monday result", "Tuesday result"])
+})

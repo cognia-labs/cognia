@@ -128,6 +128,7 @@ export function createImPushExecutor(deps: ImPushExecutorDeps = {}) {
     const now = Date.now()
 
     const deliveryTarget = (await getConversationState(conversationKey))?.deliveryTarget
+    if (signal.aborted) return { success: false, error: "IM push aborted" }
     if (!deliveryTarget) {
       return {
         success: false,
@@ -137,6 +138,7 @@ export function createImPushExecutor(deps: ImPushExecutorDeps = {}) {
     const adapterId = deliveryTarget.address.adapterId
 
     const override = await readOverride(conversationKey).catch(() => undefined)
+    if (signal.aborted) return { success: false, error: "IM push aborted" }
     if (override?.proactivePush !== true) {
       await audit({
         adapterId,
@@ -171,9 +173,11 @@ export function createImPushExecutor(deps: ImPushExecutorDeps = {}) {
       }
     }
 
-    const idempotencyKey = normalized.idempotencyKey ?? `${task.id}:${execution.id}`
+    const logicalId = execution.originExecutionId ?? execution.id
+    const idempotencyKey = normalized.idempotencyKey ?? `${task.id}:${logicalId}`
     try {
       const { taskPlanOrigin } = await import("@/lib/policy/action-review/plan-context")
+      if (signal.aborted) return { success: false, error: "IM push aborted" }
       const delivered = await enqueue(
         {
           adapterId,
@@ -192,7 +196,10 @@ export function createImPushExecutor(deps: ImPushExecutorDeps = {}) {
             origin: taskPlanOrigin(task),
           },
         },
-        { executionContext: { executionRunId: execution.id, automation: "schedule" } }
+        {
+          signal,
+          executionContext: { executionRunId: execution.id, automation: "schedule" },
+        }
       )
       if (delivered.kind === "drafted") {
         log.info("Scheduler im-push held as a draft", {
@@ -215,14 +222,25 @@ export function createImPushExecutor(deps: ImPushExecutorDeps = {}) {
         }
       }
       const job = delivered.job
-      await audit({
-        adapterId,
-        kind: "notify.im_pushed",
-        at: now,
-        conversationKey,
-        message: `scheduler:im-push jobId=${job.id}`,
-        fields: { taskId: task.id, executionId: execution.id },
-      })
+      try {
+        await audit({
+          adapterId,
+          kind: "notify.im_pushed",
+          at: now,
+          conversationKey,
+          message: `scheduler:im-push jobId=${job.id}`,
+          fields: { taskId: task.id, executionId: execution.id },
+        })
+      } catch (auditErr) {
+        // Outbound job is already durably enqueued; never fail the execution
+        // (which would schedule a retry) on a diagnostic audit write error.
+        log.warn("Scheduler im-push enqueued, but notify.im_pushed audit failed", {
+          taskId: task.id,
+          executionId: execution.id,
+          jobId: job.id,
+          error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+        })
+      }
       log.info("Scheduler im-push enqueued", {
         taskId: task.id,
         executionId: execution.id,

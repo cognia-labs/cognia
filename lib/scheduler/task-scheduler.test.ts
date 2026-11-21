@@ -139,7 +139,6 @@ jest.mock("./executors", () => ({ registerBuiltInExecutors: jest.fn() }))
 
 const mockProjectsGet = jest.fn(async (_id: string): Promise<unknown> => undefined)
 jest.mock("@/lib/db/schema", () => ({
-  ...jest.requireActual("@/lib/db/schema"),
   getDb: () => ({ projects: { get: (id: string) => mockProjectsGet(id) } }),
 }))
 
@@ -3648,7 +3647,13 @@ describe("TaskScheduler", () => {
     let scheduler: TaskSchedulerImpl
 
     beforeEach(() => {
+      mockSchedulerDb.getTasksByStatus.mockResolvedValue([])
+      mockSchedulerDb.getOverdueActiveTasks.mockResolvedValue([])
       scheduler = createTaskScheduler()
+    })
+
+    afterEach(() => {
+      scheduler.stop()
     })
 
     describe("overlap policies", () => {

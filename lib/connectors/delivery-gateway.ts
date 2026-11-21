@@ -859,7 +859,7 @@ export class ConnectorDeliveryGateway {
             original.request,
             { request: original.request, adapter }
           )
-        await this.deliver([noticeInput])
+        await this.deliver([noticeInput], options)
         throw new ConnectorDeliveryDeniedError(original.source, "personal")
       }
       prepared.push({
@@ -985,6 +985,7 @@ export class ConnectorDeliveryGateway {
         )
         throw new ConnectorDeliveryDeniedError(original.source, "personal")
       }
+      options?.signal?.throwIfAborted()
       const draft = await this.dependencies.createDraft({
         personalExecutionRunId: input.personalContext?.executionRunId,
         conversationKey: input.conversationKey,

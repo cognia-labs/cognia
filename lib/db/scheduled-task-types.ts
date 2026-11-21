@@ -29,6 +29,7 @@ export interface DBTaskExecution {
   output?: string // JSON serialized
   error?: string
   retryAttempt: number
+  originExecutionId?: string
   duration?: number
   scheduledFor?: string // ISO date string
   triggerSource?: string
