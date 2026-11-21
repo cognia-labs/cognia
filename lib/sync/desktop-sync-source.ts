@@ -410,6 +410,14 @@ interface PagedSyncCursor {
    * for one pull.
    */
   deletedDigest?: string
+  /**
+   * `sessionUsage` version 1 only: the usage change clock read when this walk
+   * by `at` began. When the walk ends the cursor turns into version 2 at this
+   * revision, so every row written or corrected during the walk, however old
+   * its `at`, still comes once. A version 1 cursor without it predates the
+   * clock and walks the window again.
+   */
+  clock?: number
 }
 
 /** Order-free digest of a set of ids: the SHA-256 of the sorted ids. */
@@ -438,7 +446,9 @@ function decodeSyncCursor(table: string, since: number, value: string): PagedSyn
   }
   if (
     !cursor ||
-    (cursor.version !== 1 && !(table === "messages" && cursor.version === 2)) ||
+    (cursor.version !== 1 &&
+      !((table === "messages" || table === "sessionUsage") && cursor.version === 2)) ||
+    (cursor.clock !== undefined && (!Number.isSafeInteger(cursor.clock) || cursor.clock < 0)) ||
     cursor.table !== table ||
     !Number.isSafeInteger(cursor.at) ||
     cursor.at < 0 ||
@@ -509,6 +519,8 @@ async function readCursorDelta(
   const deleted = await readPagedDeletions(db, table, cursor)
   let rows: UpdatedAtRow[] = []
   let hasMore = false
+  // Set when a branch places the cursor itself rather than at its last row.
+  let positioned = table === "messages"
   let cursorOf = (row: UpdatedAtRow) => Number(row.updatedAt ?? row.createdAt ?? 0)
   const after = (row: UpdatedAtRow) =>
     cursorOf(row) > cursor.at || (cursorOf(row) === cursor.at && row.id > cursor.id)
@@ -586,22 +598,10 @@ async function readCursorDelta(
     hasMore = page.length > HEARTBEAT_PAGE_SIZE
     rows = page.slice(0, HEARTBEAT_PAGE_SIZE)
   } else if (table === "sessionUsage") {
-    // `at` is the position and the message id breaks ties (the `at` index
-    // orders equal keys by primary key), as for goal events.
-    cursorOf = (row) => (row as unknown as SessionUsageRow).at
-    if (!token && since === 0) {
-      cursor.at = Math.max(0, Date.now() - SESSION_USAGE_FIRST_SYNC_WINDOW_MS)
-    }
-    const page = await db.sessionUsage
-      .where("at")
-      .aboveOrEqual(cursor.at)
-      .filter((row) => syncsSessionUsage(row) && after(sessionUsageWireRow(row)))
-      .limit(SESSION_USAGE_PAGE_SIZE + 1)
-      .toArray()
-    hasMore = page.length > SESSION_USAGE_PAGE_SIZE
-    rows = page
-      .slice(0, SESSION_USAGE_PAGE_SIZE)
-      .map(sessionUsageWireRow) as unknown as UpdatedAtRow[]
+    const usage = await readSessionUsagePage(db, cursor, !token && since === 0)
+    rows = usage.rows
+    hasMore = usage.hasMore
+    positioned = true
   } else {
     cursorOf = (row) => runActivityAt(row as unknown as WorkflowRunRow)
     if (!token && since === 0) cursor.at = Math.max(0, Date.now() - RUN_FIRST_SYNC_WINDOW_MS)
@@ -618,7 +618,7 @@ async function readCursorDelta(
   const last = rows.at(-1)
   const next: PagedSyncCursor = {
     ...cursor,
-    ...(last && table !== "messages" ? { at: cursorOf(last), id: last.id } : {}),
+    ...(last && !positioned ? { at: cursorOf(last), id: last.id } : {}),
     deletedAt: deleted.deletedAt,
     deletedDigest: deleted.deletedDigest,
   }
@@ -629,6 +629,80 @@ async function readCursorDelta(
     next_cursor: JSON.stringify(next),
     has_more: hasMore,
   }
+}
+
+/**
+ * One page of usage rows for a paged client; moves `cursor` to the next one.
+ *
+ * Version 1 walks the 90-day window by `at` (the message id breaks ties) with
+ * the usage change clock it read first; version 2 walks the revision index
+ * from that clock on. `at` alone is when the money was spent, not when the row
+ * was written, so a walk by `at` never sees a late row behind it or a row
+ * corrected after it was sent (F14); the revision walk sees both. Rows
+ * written before the revision existed carry none and are only in the first
+ * walk, which is why a cursor from before the clock walks the window again.
+ */
+async function readSessionUsagePage(
+  db: ReturnType<typeof getDb>,
+  cursor: PagedSyncCursor,
+  cold: boolean
+): Promise<{ rows: UpdatedAtRow[]; hasMore: boolean }> {
+  if (cursor.version === 2) {
+    const page = await db.sessionUsage
+      .where("[syncRevision+messageId]")
+      .above([cursor.at, Dexie.maxKey])
+      .limit(SESSION_USAGE_PAGE_SIZE + 1)
+      .toArray()
+    const sent = page.slice(0, SESSION_USAGE_PAGE_SIZE)
+    const last = sent.at(-1) as (SessionUsageRow & { syncRevision?: number }) | undefined
+    if (last?.syncRevision !== undefined) {
+      cursor.at = last.syncRevision
+      cursor.id = last.messageId
+    }
+    return {
+      rows: sent.filter(syncsSessionUsage).map(sessionUsageWireRow) as unknown as UpdatedAtRow[],
+      hasMore: page.length > SESSION_USAGE_PAGE_SIZE,
+    }
+  }
+  let page: SessionUsageRow[] = []
+  if (cold || cursor.clock === undefined) {
+    cursor.at = Math.max(0, Date.now() - SESSION_USAGE_FIRST_SYNC_WINDOW_MS)
+    cursor.id = ""
+  }
+  const after = (row: SessionUsageRow) =>
+    row.at > cursor.at || (row.at === cursor.at && row.messageId > cursor.id)
+  const readPage = () =>
+    db.sessionUsage
+      .where("at")
+      .aboveOrEqual(cursor.at)
+      .filter((row) => syncsSessionUsage(row) && after(row))
+      .limit(SESSION_USAGE_PAGE_SIZE + 1)
+      .toArray()
+  if (cursor.clock === undefined) {
+    // The clock and the first page in one read: a write after it carries a
+    // later revision, so the revision walk picks it up.
+    await db.transaction("r", db.sessionUsage, db.messageSyncClock, async () => {
+      page = await readPage()
+      cursor.clock = (await db.messageSyncClock.get("sessionUsage"))?.revision ?? 0
+    })
+  } else {
+    page = await readPage()
+  }
+  const sent = page.slice(0, SESSION_USAGE_PAGE_SIZE)
+  const last = sent.at(-1)
+  if (last) {
+    cursor.at = last.at
+    cursor.id = last.messageId
+  }
+  if (page.length > SESSION_USAGE_PAGE_SIZE) {
+    return { rows: sent.map(sessionUsageWireRow) as unknown as UpdatedAtRow[], hasMore: true }
+  }
+  // The window is sent: from here on, every change since the clock.
+  cursor.version = 2
+  cursor.at = cursor.clock ?? 0
+  cursor.id = ""
+  delete cursor.clock
+  return { rows: sent.map(sessionUsageWireRow) as unknown as UpdatedAtRow[], hasMore: true }
 }
 
 async function readWorkflowsDelta(since: number): Promise<SyncDelta<unknown>> {
@@ -1243,9 +1317,14 @@ function syncsSessionUsage(row: SessionUsageRow): boolean {
   return !row.sourceId
 }
 
-/** A usage row on the wire: keyed by `id`, its reply's message id. */
+/**
+ * A usage row on the wire: keyed by `id`, its reply's message id. Its change
+ * revision is this Host's own position, not the row's: the receiver stamps its
+ * own.
+ */
 export function sessionUsageWireRow(row: SessionUsageRow): SessionUsageRow & { id: string } {
-  return { ...row, id: row.messageId }
+  const { syncRevision: _revision, ...wire } = row as SessionUsageRow & { syncRevision?: number }
+  return { ...wire, id: row.messageId }
 }
 
 /**

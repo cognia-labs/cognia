@@ -434,7 +434,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 260
+export const CURRENT_SCHEMA_VERSION = 261
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1120,6 +1120,11 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   // PII gate, so a restart can still approve them
   // (`lib/db/squad-parked-delegations.ts`, `lib/squads/delegation-orchestrator.ts`).
   squadParkedDelegations: "&id",
+  // v261 — a usage row's change revision (`syncRevision`, stamped by the sync
+  // revision middleware from the `sessionUsage` clock), so a paired pull sees
+  // a late row or a corrected one however old its `at`.
+  sessionUsage:
+    "&messageId, sessionId, [sessionId+at], at, model, characterId, surface, providerId, projectId, [projectId+at], runId, sourceId, [sourceId+sourceSessionId], [syncRevision+messageId]",
 }
 
 let databaseConnectionSequence = 0
@@ -1763,7 +1768,7 @@ export class CogniaDB extends Dexie {
     string
   >
 
-  messageSyncClock!: Table<MessageSyncClock, "singleton">
+  messageSyncClock!: Table<MessageSyncClock, MessageSyncClock["id"]>
 
   // v212 — user-started history backfill runs (project-context mining).
   projectMiningRuns!: Table<import("@/types/memory/governance").ProjectMiningRun, string>

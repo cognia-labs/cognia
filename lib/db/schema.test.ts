@@ -36,8 +36,39 @@ import {
 } from "./schema"
 import type { OutboundJobRow } from "./connector-types"
 
+it("v261 indexes usage rows by change revision; old rows stay, new ones are stamped", async () => {
+  expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(261)
+  const name = "cognia-session-usage-revision-v261-upgrade"
+  const previous = new Dexie(name)
+  previous.version(260).stores({
+    ...CURRENT_SCHEMA,
+    sessionUsage:
+      "&messageId, sessionId, [sessionId+at], at, model, characterId, surface, providerId, projectId, [projectId+at], runId, sourceId, [sourceId+sourceSessionId]",
+  })
+  await previous.open()
+  await previous.table("sessionUsage").put({ messageId: "old", sessionId: "s", at: 1 })
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
+    expect(await current.sessionUsage.get("old")).toMatchObject({ sessionId: "s", at: 1 })
+    const byRevision = () => current.sessionUsage.where("[syncRevision+messageId]")
+    // No backfill: a row from before the revision carries none.
+    expect(await byRevision().above([0, ""]).count()).toBe(0)
+    await current.sessionUsage.bulkPut([
+      { messageId: "turn", sessionId: "s", at: 2 },
+      { messageId: "scan", sessionId: "s", at: 3, sourceId: "codex" },
+    ] as never[])
+    expect(await byRevision().above([0, ""]).primaryKeys()).toEqual(["turn"])
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v260 drops the unused workflowTriggers store without touching the workflow tables", async () => {
-  expect(CURRENT_SCHEMA_VERSION).toBe(260)
+  expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(260)
   const name = "cognia-workflow-triggers-v260-drop"
   const previous = new Dexie(name)
   previous.version(259).stores({
@@ -51,7 +82,7 @@ it("v260 drops the unused workflowTriggers store without touching the workflow t
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(260)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(current.tables.map((table) => table.name)).not.toContain("workflowTriggers")
     expect(await current.workflows.get("w1")).toMatchObject({ name: "kept" })
   } finally {

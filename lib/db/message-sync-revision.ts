@@ -6,13 +6,30 @@ import Dexie, {
 } from "dexie"
 
 export interface MessageSyncClock {
-  id: "singleton"
+  /** `singleton` counts message changes; `sessionUsage` counts usage-row changes. */
+  id: "singleton" | "sessionUsage"
   revision: number
 }
 
+/** The clock each revision-stamped table claims its revisions from. */
+const CLOCK_OF: Record<string, MessageSyncClock["id"]> = {
+  messages: "singleton",
+  sessionUsage: "sessionUsage",
+}
+
 /**
- * Stamp every message write, including imports and streaming updates. The
- * durable clock shares the message transaction, so rollbacks, concurrent tabs,
+ * Whether a usage row reaches paired clients (`syncsSessionUsage` in
+ * `lib/sync/desktop-sync-source.ts`): an imported external-agent scan stays
+ * local, so it carries no revision and stays out of the revision index.
+ */
+function usageRowSyncs(row: { sourceId?: unknown }): boolean {
+  return !row.sourceId
+}
+
+/**
+ * Stamp every message write, including imports and streaming updates, and
+ * every write of a usage row that syncs (a late row, a re-priced one). The
+ * durable clock shares the write's transaction, so rollbacks, concurrent tabs,
  * equal wall-clock timestamps and deleting the newest row cannot lose changes.
  * Runs below content encryption: syncRevision is indexed, non-content metadata.
  */
@@ -30,7 +47,7 @@ export function createMessageSyncRevisionMiddleware(): Middleware<DBCore> {
         transaction(stores, mode, options) {
           return down.transaction(
             mode === "readwrite" &&
-              stores.includes("messages") &&
+              stores.some((store) => store in CLOCK_OF) &&
               !stores.includes("messageSyncClock")
               ? [...stores, "messageSyncClock"]
               : stores,
@@ -59,7 +76,8 @@ export function createMessageSyncRevisionMiddleware(): Middleware<DBCore> {
                 return table.mutate(forwarded)
               },
             }
-          if (name !== "messages") return table
+          const clockId = CLOCK_OF[name]
+          if (!clockId) return table
           const clock = down.table("messageSyncClock")
           return {
             ...table,
@@ -70,10 +88,16 @@ export function createMessageSyncRevisionMiddleware(): Middleware<DBCore> {
               // transaction. Serialize only this transaction's clock claims.
               const previous = writes.get(request.trans) ?? Dexie.Promise.resolve()
               const work = previous.then(async () => {
-                const saved = (await clock.get({ trans: request.trans, key: "singleton" })) as
+                const saved = (await clock.get({ trans: request.trans, key: clockId })) as
                   MessageSyncClock | undefined
                 let revision = saved?.revision ?? 0
-                const values = request.values.map((row) => ({ ...row, syncRevision: ++revision }))
+                const values = request.values.map((row) => {
+                  if (name === "sessionUsage" && !usageRowSyncs(row)) {
+                    const { syncRevision: _local, ...unstamped } = row
+                    return unstamped
+                  }
+                  return { ...row, syncRevision: ++revision }
+                })
                 const forwarded = { ...request, values }
                 if (forwarded.type === "put") {
                   delete forwarded.changeSpec
@@ -83,7 +107,7 @@ export function createMessageSyncRevisionMiddleware(): Middleware<DBCore> {
                 const persisted = await clock.mutate({
                   type: "put",
                   trans: request.trans,
-                  values: [{ id: "singleton", revision }],
+                  values: [{ id: clockId, revision }],
                 })
                 if (persisted.numFailures > 0) {
                   request.trans.abort()

@@ -2125,12 +2125,72 @@ describe("the per-turn usage reader (sessionUsage)", () => {
       undefined,
       first.next_cursor
     )
+    // The window is sent; the next pull turns to the revision walk.
+    expect(second.has_more).toBe(true)
+    const third = await readDexieDelta(
+      "sessionUsage",
+      second.next_since,
+      undefined,
+      undefined,
+      second.next_cursor
+    )
+    expect(third.rows).toEqual([])
+    expect(third.has_more).toBe(false)
     const seen = [...ids(first.rows), ...ids(second.rows)]
     expect(seen).toHaveLength(SESSION_USAGE_PAGE_SIZE + 1)
     expect(seen).toEqual(expect.arrayContaining(["tie-1", "tie-2"]))
     expect(seen).not.toContain("scanned")
     expect(seen).not.toContain("expired")
-    expect(second.has_more).toBe(false)
+  })
+
+  /** Pull until the Host says there is no more, from `cursor`. */
+  async function drain(cursor: string, since = 0) {
+    const pulled: Array<Record<string, unknown>> = []
+    for (let i = 0; i < 10; i += 1) {
+      const delta = await readDexieDelta("sessionUsage", since, undefined, undefined, cursor)
+      pulled.push(...(delta.rows as Array<Record<string, unknown>>))
+      cursor = delta.next_cursor!
+      since = delta.next_since
+      if (!delta.has_more) break
+    }
+    return { pulled, cursor, since }
+  }
+
+  it("sends a late row and a corrected one the walk by `at` already passed (F14)", async () => {
+    await getDb().sessionUsage.bulkPut([row("first", now - 5_000), row("second", now - 1_000)])
+    const synced = await drain("")
+    expect(ids(synced.pulled).sort()).toEqual(["first", "second"])
+
+    // Booked late with an older `at`, and a re-priced row already sent.
+    await getDb().sessionUsage.put(row("late", now - 9_000))
+    await getDb().sessionUsage.update("second", { costUsd: 0.75 })
+    const delta = await drain(synced.cursor, synced.since)
+    expect(ids(delta.pulled).sort()).toEqual(["late", "second"])
+    expect(delta.pulled.find((r) => r.id === "second")).toMatchObject({ costUsd: 0.75 })
+    expect(delta.pulled[0]).not.toHaveProperty("syncRevision")
+    // Settled: nothing changed since.
+    expect((await drain(delta.cursor, delta.since)).pulled).toEqual([])
+  })
+
+  it("walks the window again for a cursor from before the usage clock", async () => {
+    await getDb().sessionUsage.bulkPut([row("kept", now - 5_000)])
+    const old = JSON.stringify({
+      version: 1,
+      table: "sessionUsage",
+      at: now,
+      id: "zzz",
+      deletedAt: 0,
+    })
+    expect(ids((await drain(old, now)).pulled)).toEqual(["kept"])
+  })
+
+  it("keeps scanned rows out of the revision walk", async () => {
+    const synced = await drain("")
+    await getDb().sessionUsage.bulkPut([
+      row("turn", now - 10),
+      row("scan", now - 10, { sourceId: "claude-code", sourceSessionId: "x" }),
+    ])
+    expect(ids((await drain(synced.cursor, synced.since)).pulled)).toEqual(["turn"])
   })
 
   it("carries a deleted conversation's tombstoned rows to a cursor client and a legacy one", async () => {

@@ -259,3 +259,33 @@ it("aborts the message transaction if persisting its clock fails", async () => {
     db.close()
   }
 })
+
+it("stamps synced usage rows from their own clock, and never a scanned one (F14)", async () => {
+  const db = new Dexie(name)
+  db.version(1).stores({
+    messages: "id,[syncRevision+id]",
+    sessionUsage: "&messageId,[syncRevision+messageId]",
+    messageSyncClock: "id",
+  })
+  db.use(createMessageSyncRevisionMiddleware())
+  await db.open()
+  await db.table("messages").put({ id: "m1" })
+  await db.table("sessionUsage").bulkPut([
+    { messageId: "turn-a", costUsd: 1 },
+    { messageId: "scan", sourceId: "codex", syncRevision: 99 },
+  ])
+  // A correction of an already-written row moves it to the end.
+  await db.table("sessionUsage").update("turn-a", { costUsd: 2 })
+  await db.table("sessionUsage").put({ messageId: "turn-b" })
+  const rows = await db.table("sessionUsage").toArray()
+  expect(Object.fromEntries(rows.map((row) => [row.messageId, row.syncRevision]))).toEqual({
+    "turn-a": 2,
+    scan: undefined,
+    "turn-b": 3,
+  })
+  expect(await db.table("messageSyncClock").toArray()).toEqual([
+    { id: "sessionUsage", revision: 3 },
+    { id: "singleton", revision: 1 },
+  ])
+  db.close()
+})
