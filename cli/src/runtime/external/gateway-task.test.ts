@@ -201,22 +201,39 @@ describe("gateway task host state", () => {
     expect(fs.existsSync(env.HOME)).toBe(false)
   })
 
-  it("admits the Kimi, Goose, Copilot and Aider runtimes with task-owned homes", () => {
-    for (const runtime of ["kimi", "goose", "copilot", "aider"]) {
+  it("admits the Kimi, Goose, Copilot, Aider and oh-my-pi runtimes with task-owned homes", () => {
+    for (const runtime of ["kimi", "goose", "copilot", "aider", "oh-my-pi"]) {
       const input = config(`${runtime}-task`)
       const payload = JSON.parse(input.env.COGNIA_GATEWAY_TASK_CONFIG)
       payload.runtime = runtime
-      payload.files = {}
+      payload.files =
+        runtime === "oh-my-pi"
+          ? {
+              "omp/models.yml": '{"providers":{"cognia":{"apiKey":"COGNIA_GATEWAY_TOKEN"}}}',
+              "omp/config.yml": '{"models":{"default":"cognia/m"}}',
+            }
+          : {}
       input.env.COGNIA_GATEWAY_TASK_CONFIG = JSON.stringify(payload)
       const prepared = prepareGatewayTask(input, home)
       const env = prepared.config.env!
       expect(env.KIMI_CODE_HOME).toBe(path.join(env.HOME, "kimi"))
       expect(env.COPILOT_HOME).toBe(path.join(env.HOME, "copilot"))
+      expect(env.PI_CODING_AGENT_DIR).toBe(
+        path.join(env.HOME, runtime === "oh-my-pi" ? "omp" : "pi")
+      )
       expect(fs.statSync(env.KIMI_CODE_HOME).isDirectory()).toBe(true)
+      if (runtime === "oh-my-pi") {
+        expect(fs.existsSync(path.join(env.HOME, "omp/models.yml"))).toBe(true)
+        expect(fs.existsSync(path.join(env.HOME, "omp/config.yml"))).toBe(true)
+      }
       expect(JSON.parse(fs.readFileSync(path.join(env.HOME, "binding.json"), "utf8")).runtime).toBe(
         runtime
       )
       prepared.cleanup()
+      if (runtime === "oh-my-pi") {
+        expect(fs.existsSync(path.join(env.HOME, "omp/models.yml"))).toBe(false)
+        expect(fs.existsSync(path.join(env.HOME, "omp/config.yml"))).toBe(false)
+      }
     }
   })
 

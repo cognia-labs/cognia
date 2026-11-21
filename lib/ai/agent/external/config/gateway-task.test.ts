@@ -2074,6 +2074,7 @@ describe("isolated gateway task configuration", () => {
       ["claude-code", "acp", "stdio", "claude"],
       ["deepseek-harness-readonly", "dsh-sdk", "stdio", "dsh-sdk"],
       ["deepseek-harness-acp", "acp", "stdio", "dsh"],
+      ["oh-my-pi", "acp", "stdio", "oh-my-pi"],
     ])("supports %s as %s/%s with traits for %s", (preset, protocol, transport, runtime) => {
       const source = config(preset, protocol, transport)
       expect(cogniaGatewaySupport(source)).toEqual({ supported: true, runtime })
@@ -2086,7 +2087,16 @@ describe("isolated gateway task configuration", () => {
         continuity: "native-resume",
       })
       expect(GATEWAY_RUNTIME_TRAITS.claude.ingress).toBe("anthropic")
-      for (const runtime of ["kimi", "goose", "copilot", "opencode", "pi", "qwen", "dsh"])
+      for (const runtime of [
+        "kimi",
+        "goose",
+        "copilot",
+        "opencode",
+        "pi",
+        "qwen",
+        "dsh",
+        "oh-my-pi",
+      ])
         expect(GATEWAY_RUNTIME_TRAITS[runtime]).toEqual({
           ingress: "openai-chat",
           continuity: "native-resume",
@@ -2143,6 +2153,49 @@ describe("isolated gateway task configuration", () => {
       expect(
         cogniaGatewaySupport({ ...config("pi-rpc", "pi-rpc"), process: { command: "" } })
       ).toEqual({ supported: false, reason: "no-process" })
+    })
+
+    it("projects oh-my-pi models.yml and config.yml while stripping OMP/PI profile overrides (#21)", () => {
+      const prepared = build({
+        ...config("oh-my-pi", "acp", "stdio"),
+        process: {
+          command: "omp",
+          args: ["acp"],
+          env: {
+            OMP_PROFILE: "work",
+            OMP_CUSTOM_URL: "https://evil.example",
+            PI_CONFIG_DIR: ".custom-omp",
+            PI_CODING_AGENT_DIR: "/tmp/outside",
+            PI_CODING_AGENT_SESSION_DIR: "/tmp/outside-sessions",
+          },
+        },
+      })
+      const payload = payloadOf(prepared)
+      expect(payload.runtime).toBe("oh-my-pi")
+      expect(prepared.model).toBe("cognia/model")
+      expect(prepared.config.process?.env?.OMP_PROFILE).toBeUndefined()
+      expect(prepared.config.process?.env?.OMP_CUSTOM_URL).toBeUndefined()
+      expect(prepared.config.process?.env?.PI_CONFIG_DIR).toBeUndefined()
+      expect(prepared.config.process?.env?.PI_CODING_AGENT_DIR).toBeUndefined()
+      expect(prepared.config.process?.env?.PI_CODING_AGENT_SESSION_DIR).toBeUndefined()
+      expect(prepared.config.process?.env?.COGNIA_GATEWAY_TOKEN).toBe("lease-only")
+      expect(JSON.stringify(payload.files)).not.toContain("lease-only")
+      expect(JSON.parse(payload.files["omp/models.yml"])).toMatchObject({
+        providers: {
+          cognia: {
+            baseUrl: "http://127.0.0.1:9000/v1",
+            api: "openai-completions",
+            apiKey: "COGNIA_GATEWAY_TOKEN",
+          },
+        },
+      })
+      expect(JSON.parse(payload.files["omp/config.yml"])).toEqual({
+        models: {
+          default: "cognia/model",
+          smol: "cognia/model",
+          slow: "cognia/model",
+        },
+      })
     })
   })
 })

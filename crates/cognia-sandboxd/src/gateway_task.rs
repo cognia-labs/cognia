@@ -29,8 +29,9 @@ pub struct TaskPayload {
 
 /// Runtimes with a reviewed task-owned launch contract
 /// (`lib/ai/agent/external/config/gateway-task.ts`, `cli/src/runtime/external/gateway-task.ts`).
-pub const RUNTIMES: [&str; 10] = [
+pub const RUNTIMES: [&str; 11] = [
     "codex", "opencode", "pi", "claude", "qwen", "dsh", "kimi", "goose", "copilot", "aider",
+    "oh-my-pi",
 ];
 
 /// A retained task may change model only when everything that owns its native
@@ -66,6 +67,8 @@ fn payload(env: &HashMap<String, String>) -> Result<Option<TaskPayload>, String>
                 "codex/config.toml",
                 "pi/models.json",
                 "pi/settings.json",
+                "omp/models.yml",
+                "omp/config.yml",
                 "qwen/settings.json",
                 "claude/settings.json",
             ]
@@ -555,7 +558,14 @@ fn prepare_inner(
         ("XDG_CACHE_HOME", "cache"),
         ("XDG_STATE_HOME", "state"),
         ("CODEX_HOME", "codex"),
-        ("PI_CODING_AGENT_DIR", "pi"),
+        (
+            "PI_CODING_AGENT_DIR",
+            if value.runtime == "oh-my-pi" {
+                "omp"
+            } else {
+                "pi"
+            },
+        ),
         ("CLAUDE_CONFIG_DIR", "claude"),
         ("OPENCODE_CONFIG_DIR", "config/opencode"),
         ("KIMI_CODE_HOME", "kimi"),
@@ -989,7 +999,7 @@ mod tests {
     #[test]
     fn admits_new_runtimes_with_task_owned_state_homes() {
         let dir = tempfile::tempdir().unwrap();
-        for runtime in ["kimi", "goose", "copilot", "aider"] {
+        for runtime in ["kimi", "goose", "copilot", "aider", "oh-my-pi"] {
             let task = format!("{runtime}-task");
             let mut input = payload_env(&task, serde_json::json!({ "runtime": runtime }));
             let root = task_home(&input, dir.path()).unwrap().unwrap();
@@ -1000,9 +1010,31 @@ mod tests {
                 "{runtime}"
             );
             assert_eq!(PathBuf::from(&input["COPILOT_HOME"]), root.join("copilot"));
+            assert_eq!(
+                PathBuf::from(&input["PI_CODING_AGENT_DIR"]),
+                root.join(if runtime == "oh-my-pi" { "omp" } else { "pi" }),
+                "{runtime}"
+            );
             assert!(root.join("kimi").is_dir() && root.join("copilot").is_dir());
             assert_eq!(saved_binding(&input)["runtime"], runtime);
         }
+        let mut omp_files = payload_env(
+            "omp-files-task",
+            serde_json::json!({
+                "runtime": "oh-my-pi",
+                "files": {
+                    "omp/models.yml": "{\"providers\":{\"cognia\":{\"apiKey\":\"COGNIA_GATEWAY_TOKEN\"}}}",
+                    "omp/config.yml": "{\"models\":{\"default\":\"cognia/m\"}}"
+                }
+            }),
+        );
+        let omp_root = task_home(&omp_files, dir.path()).unwrap().unwrap();
+        let guard = prepare(&mut omp_files, dir.path()).unwrap();
+        assert!(omp_root.join("omp/models.yml").is_file());
+        assert!(omp_root.join("omp/config.yml").is_file());
+        drop(guard);
+        assert!(!omp_root.join("omp/models.yml").exists());
+        assert!(!omp_root.join("omp/config.yml").exists());
         let mut unknown = payload_env("gemini-task", serde_json::json!({ "runtime": "gemini" }));
         assert!(prepare(&mut unknown, dir.path()).is_err());
     }

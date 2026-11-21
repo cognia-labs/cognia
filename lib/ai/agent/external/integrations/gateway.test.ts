@@ -14,6 +14,7 @@ it.each([
   ["goose", "acp", "goose"],
   ["copilot-cli", "acp", "copilot"],
   ["aider", "aider-cli", "aider"],
+  ["oh-my-pi", "acp", "oh-my-pi"],
 ])("binds the %s package recipe through the production registry", (preset, protocol, runtime) => {
   const config = {
     ...getPresetConfig(preset),

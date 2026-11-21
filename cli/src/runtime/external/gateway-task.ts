@@ -18,11 +18,14 @@ const RUNTIMES = new Set([
   "goose",
   "copilot",
   "aider",
+  "oh-my-pi",
 ])
 const ALLOWED_FILES = new Set([
   "codex/config.toml",
   "pi/models.json",
   "pi/settings.json",
+  "omp/models.yml",
+  "omp/config.yml",
   "qwen/settings.json",
   "claude/settings.json",
 ])
@@ -164,7 +167,7 @@ export function prepareGatewayTask(
       XDG_CACHE_HOME: "cache",
       XDG_STATE_HOME: "state",
       CODEX_HOME: "codex",
-      PI_CODING_AGENT_DIR: "pi",
+      PI_CODING_AGENT_DIR: payload.runtime === "oh-my-pi" ? "omp" : "pi",
       CLAUDE_CONFIG_DIR: "claude",
       OPENCODE_CONFIG_DIR: "config/opencode",
       KIMI_CODE_HOME: "kimi",

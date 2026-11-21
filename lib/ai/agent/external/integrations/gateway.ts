@@ -9,6 +9,7 @@ import { qwenGatewayProfile } from "@cognia/agent-acp/vendors/qwen-gateway"
 import { kimiGatewayProfile } from "@cognia/agent-acp/vendors/kimi-gateway"
 import { gooseGatewayProfile } from "@cognia/agent-acp/vendors/goose-gateway"
 import { copilotGatewayProfile } from "@cognia/agent-acp/vendors/copilot-gateway"
+import { ohMyPiGatewayProfile } from "@cognia/agent-acp/vendors/oh-my-pi-gateway"
 export const gatewayRuntimeProfiles = [
   codexGatewayProfile,
   opencodeGatewayProfile,
@@ -20,4 +21,5 @@ export const gatewayRuntimeProfiles = [
   gooseGatewayProfile,
   copilotGatewayProfile,
   aiderGatewayProfile,
+  ohMyPiGatewayProfile,
 ] as const

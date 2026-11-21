@@ -9,7 +9,17 @@ export type GatewayRuntimeConfig = Pick<
 >
 
 export type CogniaGatewayRuntime =
-  "codex" | "opencode" | "pi" | "claude" | "qwen" | "dsh" | "kimi" | "goose" | "copilot" | "aider"
+  | "codex"
+  | "opencode"
+  | "pi"
+  | "claude"
+  | "qwen"
+  | "dsh"
+  | "kimi"
+  | "goose"
+  | "copilot"
+  | "aider"
+  | "oh-my-pi"
 
 export type CogniaGatewayUnsupportedReason =
   "unsupported-runtime" | "remote-server" | "no-process" | "network-endpoint"
