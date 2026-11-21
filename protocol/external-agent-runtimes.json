@@ -780,11 +780,16 @@
         "timeoutMs": 15000
       },
       "distributions": [],
+      "supportedRange": ">=18.22.2 <19.0.0",
+      "certifiedVersions": ["18.22.2"],
       "sandbox": {
         "required": true,
         "windowsExceptionEligible": false
       },
-      "docsUrl": "https://github.com/can1357/oh-my-pi"
+      "docsUrl": "https://github.com/can1357/oh-my-pi",
+      "notes": {
+        "certification": "Official 18.22.2 macOS ARM64 binary verified against Cognia ACP initialize, session new/list/load/resume/fork/close, native plan mode, per-turn PromptResponse.usage, _omp/compaction/* notifications, and _session/steering promptRequired handling. Independent of the unregistered packages/agent-omp RPC package pinned to 18.6.1."
+      }
     },
     {
       "runtimeId": "muse",

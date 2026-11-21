@@ -75,7 +75,6 @@ describe("catalog shape", () => {
     "mistral-vibe",
     "mimo-code",
     "hermes-agent",
-    "oh-my-pi",
     "muse",
     "amp",
     "zcode",
@@ -97,6 +96,30 @@ describe("catalog shape", () => {
     expect(runtimeSupportsPlatform(runtime, "win32")).toBe(false)
     expect(deriveRuntimeBinding({ protocol: "acp", metadata: { preset: id } })).toEqual({
       runtimeId: id,
+      ownership: "system",
+    })
+  })
+
+  it("records oh-my-pi ACP 18.22.2 certification separately from the unregistered 18.6.1 RPC package (#13)", () => {
+    const preset = getPresetForCatalogTest("oh-my-pi")!
+    const runtime = findRuntimeByPresetId("oh-my-pi")!
+    expect(runtime).toMatchObject({
+      runtimeId: "oh-my-pi",
+      ownership: "system",
+      protocol: "acp",
+      transport: "stdio",
+      systemCommand: preset.process!.command,
+      launchArgs: preset.process!.args,
+      distributions: [],
+      supportedRange: ">=18.22.2 <19.0.0",
+      certifiedVersions: ["18.22.2"],
+      sandbox: { required: true, windowsExceptionEligible: false },
+    })
+    expect(runtimeSupportsPlatform(runtime, "darwin")).toBe(true)
+    expect(runtimeSupportsPlatform(runtime, "linux")).toBe(true)
+    expect(runtimeSupportsPlatform(runtime, "win32")).toBe(false)
+    expect(deriveRuntimeBinding({ protocol: "acp", metadata: { preset: "oh-my-pi" } })).toEqual({
+      runtimeId: "oh-my-pi",
       ownership: "system",
     })
   })

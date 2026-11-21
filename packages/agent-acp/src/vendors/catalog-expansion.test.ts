@@ -140,6 +140,71 @@ describe("audited ACP integrations", () => {
     ).toBeUndefined()
   })
 
+  it("extracts structured oh-my-pi promptFailure without guessing prose (#10)", () => {
+    const promptFailure = ohMyPiAcpProfile.promptFailure!
+    expect(promptFailure({ stopReason: "end_turn" })).toBeUndefined()
+    expect(promptFailure({ stopReason: "end_turn", _meta: {} })).toBeUndefined()
+    expect(promptFailure({ stopReason: "error" })).toBe("oh-my-pi reported a prompt error")
+    expect(promptFailure({ stopReason: "end_turn", _meta: { error: "model_not_supported" } })).toBe(
+      "model_not_supported"
+    )
+    expect(
+      promptFailure({
+        stopReason: "end_turn",
+        _meta: { omp: { error: { message: "HTTP 400 invalid model" } } },
+      })
+    ).toBe("HTTP 400 invalid model")
+  })
+
+  it("projects _omp/compaction/start and _omp/compaction/end notifications (#18)", () => {
+    const notify = ohMyPiAcpProfile.notification!
+    const ts = new Date("2026-11-21T00:00:00.000Z")
+    expect(
+      notify(
+        "_omp/compaction/start",
+        { sessionId: "s1", reason: "threshold", action: "compact" },
+        ts
+      )
+    ).toEqual({
+      type: "compaction_update",
+      sessionId: "s1",
+      timestamp: ts,
+      compaction: {
+        sessionUpdate: "compaction_update",
+        compactionId: "omp-auto-compaction",
+        status: "in_progress",
+        error: null,
+        _meta: { source: "oh-my-pi", reason: "threshold", action: "compact" },
+      },
+    })
+    expect(
+      notify(
+        "_omp/compaction/end",
+        { sessionId: "s1", action: "compact", aborted: false, skipped: false, tokensBefore: 96000 },
+        ts
+      )
+    ).toMatchObject({
+      type: "compaction_update",
+      compaction: {
+        status: "completed",
+        error: null,
+        _meta: { source: "oh-my-pi", tokensBefore: 96000 },
+      },
+    })
+    expect(notify("_omp/compaction/end", { sessionId: "s1", aborted: true }, ts)).toMatchObject({
+      type: "compaction_update",
+      compaction: { status: "cancelled" },
+    })
+    expect(
+      notify("_omp/compaction/end", { sessionId: "s1", errorMessage: "context overflow" }, ts)
+    ).toMatchObject({
+      type: "compaction_update",
+      compaction: { status: "failed", error: "context overflow" },
+    })
+    expect(notify("_omp/compaction/start", {}, ts)).toBeNull()
+    expect(notify("_omp/unknown", { sessionId: "s1" }, ts)).toBeNull()
+  })
+
   it("does not expose strict policy ceilings for native pre-approved tools", () => {
     for (const id of [
       "auggie",

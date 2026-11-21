@@ -5,12 +5,107 @@
  */
 import type {
   AcpPermissionMode,
+  ExternalAgentEvent,
   ExternalAgentTokenUsage,
 } from "@cognia/agent-contracts/external-agent"
 import type { AcpVendorProfile } from "../vendor-profile"
 
 function safeNonNegativeInt(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+function structuredErrorMessage(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) return value.trim()
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>
+    if (typeof obj.message === "string" && obj.message.trim().length > 0) return obj.message.trim()
+    if (typeof obj.code === "string" && obj.code.trim().length > 0) return obj.code.trim()
+  }
+  return undefined
+}
+
+/**
+ * Structured prompt failure boundary for oh-my-pi (#10).
+ *
+ * OMP 18.22.2 flattens non-refusal provider errors into plain assistant text
+ * plus `stopReason: "end_turn"` with no wire error field; Cognia deliberately
+ * never guesses failure from prose. When a newer OMP release emits a structured
+ * `stopReason: "error"` or `_meta.error` / `_meta.omp.error`, surface it here.
+ */
+function ohMyPiPromptFailure(result: {
+  stopReason?: string
+  _meta?: Record<string, unknown> | null
+}): string | undefined {
+  const meta = result._meta
+  const ompMeta =
+    meta && typeof meta.omp === "object" && meta.omp !== null && !Array.isArray(meta.omp)
+      ? (meta.omp as Record<string, unknown>)
+      : undefined
+  const fromMeta = structuredErrorMessage(meta?.error) ?? structuredErrorMessage(ompMeta?.error)
+  if (fromMeta) return fromMeta
+  if (result.stopReason === "error") return "oh-my-pi reported a prompt error"
+  return undefined
+}
+
+const OMP_AUTO_COMPACTION_ID = "omp-auto-compaction"
+
+/**
+ * Project OMP's `_omp/compaction/start` and `_omp/compaction/end` notifications
+ * onto canonical `compaction_update` events (#18).
+ */
+function ohMyPiNotification(
+  method: string,
+  params: Record<string, unknown>,
+  timestamp: Date
+): ExternalAgentEvent | null {
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId : ""
+  if (!sessionId) return null
+  if (method === "_omp/compaction/start") {
+    return {
+      type: "compaction_update",
+      sessionId,
+      timestamp,
+      compaction: {
+        sessionUpdate: "compaction_update",
+        compactionId: OMP_AUTO_COMPACTION_ID,
+        status: "in_progress",
+        error: null,
+        _meta: {
+          source: "oh-my-pi",
+          ...(typeof params.reason === "string" ? { reason: params.reason } : {}),
+          ...(typeof params.action === "string" ? { action: params.action } : {}),
+        },
+      },
+    }
+  }
+  if (method === "_omp/compaction/end") {
+    const errorMessage =
+      typeof params.errorMessage === "string" && params.errorMessage.trim().length > 0
+        ? params.errorMessage.trim()
+        : undefined
+    const status = params.aborted === true ? "cancelled" : errorMessage ? "failed" : "completed"
+    return {
+      type: "compaction_update",
+      sessionId,
+      timestamp,
+      compaction: {
+        sessionUpdate: "compaction_update",
+        compactionId: OMP_AUTO_COMPACTION_ID,
+        status,
+        error: errorMessage ?? null,
+        _meta: {
+          source: "oh-my-pi",
+          ...(typeof params.action === "string" ? { action: params.action } : {}),
+          ...(typeof params.skipped === "boolean" ? { skipped: params.skipped } : {}),
+          ...(typeof params.willRetry === "boolean" ? { willRetry: params.willRetry } : {}),
+          ...(typeof params.tokensBefore === "number" && Number.isFinite(params.tokensBefore)
+            ? { tokensBefore: params.tokensBefore }
+            : {}),
+        },
+      },
+    }
+  }
+  return null
 }
 
 /**
@@ -298,6 +393,8 @@ export const ohMyPiAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile
   reapplySessionMode: true,
   requiresGuardedClientPorts: true,
   promptUsage: ohMyPiPromptUsage,
+  promptFailure: ohMyPiPromptFailure,
+  notification: ohMyPiNotification,
   usageUpdateScope: "session_context",
 })
 export const museAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({

@@ -7693,6 +7693,7 @@ describe("AcpClientAdapter — oh-my-pi plan mode, approval ceilings, and per-tu
     setStatus(adapter, "connected")
     const internal = adapter as unknown as {
       sendRequest: jest.Mock
+      emitEvent: (event: ExternalAgentEvent) => void
       handlePermissionRequest: (params: Record<string, unknown>) => Promise<unknown>
     }
     internal.sendRequest = jest.fn()
@@ -7816,12 +7817,13 @@ describe("AcpClientAdapter — oh-my-pi plan mode, approval ceilings, and per-tu
 
     // Turn 1: 12 tokens + session_context usage_update with occupancy 5000 & cumulative $0.42
     internal.sendRequest.mockImplementationOnce(async () => {
-      handleUpdate(adapter, "s-usage", {
+      const event = handleUpdate(adapter, "s-usage", {
         sessionUpdate: "usage_update",
         used: 5000,
         size: 128000,
         cost: { amount: 0.42, currency: "USD" },
-      })
+      }) as ExternalAgentEvent | null
+      if (event) internal.emitEvent(event)
       return {
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
@@ -7874,12 +7876,13 @@ describe("AcpClientAdapter — oh-my-pi plan mode, approval ceilings, and per-tu
 
     // Turn with ONLY occupancy/cumulative cost and no prompt usage: turn tokens & cost stay unknown.
     internal.sendRequest.mockImplementationOnce(async () => {
-      handleUpdate(adapter, "s-usage", {
+      const event = handleUpdate(adapter, "s-usage", {
         sessionUpdate: "usage_update",
         used: 9000,
         size: 128000,
         cost: { amount: 0.99, currency: "USD" },
-      })
+      }) as ExternalAgentEvent | null
+      if (event) internal.emitEvent(event)
       return { stopReason: "cancelled" }
     })
     const noUsage = await adapter.execute("s-usage", userMsg("cancelled"))
@@ -7889,5 +7892,97 @@ describe("AcpClientAdapter — oh-my-pi plan mode, approval ceilings, and per-tu
       size: 128000,
       cost: { amount: 0.99, currency: "USD" },
     })
+  })
+
+  it("projects OMP _omp/compaction/* notifications into session metadata and surfaces structured promptFailure (#10, #18)", async () => {
+    const { adapter, internal } = ompAdapter()
+    internal.sendRequest
+      .mockResolvedValueOnce({ sessionId: "s-ext", configOptions: ompModeOptions("default") })
+      .mockResolvedValueOnce({ configOptions: ompModeOptions("default") })
+    await adapter.createSession({ cwd: "/work" })
+
+    const notify = (
+      adapter as unknown as {
+        notificationToEvent: (n: {
+          method: string
+          params: Record<string, unknown>
+        }) => ExternalAgentEvent | null
+      }
+    ).notificationToEvent.bind(adapter)
+
+    const started = notify({
+      method: "_omp/compaction/start",
+      params: { sessionId: "s-ext", reason: "threshold", action: "compact" },
+    })
+    expect(started).toMatchObject({
+      type: "compaction_update",
+      compaction: { compactionId: "omp-auto-compaction", status: "in_progress" },
+    })
+    expect(adapter.getSession("s-ext")?.metadata?.compactions).toMatchObject({
+      "omp-auto-compaction": { status: "in_progress" },
+    })
+
+    const failed = notify({
+      method: "_omp/compaction/end",
+      params: { sessionId: "s-ext", errorMessage: "compaction backend error" },
+    })
+    expect(failed).toMatchObject({
+      type: "compaction_update",
+      compaction: { status: "failed", error: "compaction backend error" },
+    })
+    expect(adapter.getSession("s-ext")?.metadata?.compactions).toMatchObject({
+      "omp-auto-compaction": { status: "failed", error: "compaction backend error" },
+    })
+
+    // Structured _meta.error turns done.success false and emits an error event;
+    // plain end_turn without structured error stays successful (no prose guessing).
+    const seenEvents: ExternalAgentEvent[] = []
+    internal.sendRequest.mockImplementationOnce(async () => {
+      const event = handleUpdate(adapter, "s-ext", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Upstream error detail" },
+      }) as ExternalAgentEvent | null
+      if (event) internal.emitEvent(event)
+      return { stopReason: "end_turn", _meta: { error: "model_not_supported" } }
+    })
+    const failedTurn = await adapter.execute(
+      "s-ext",
+      {
+        id: "m-err",
+        role: "user",
+        content: [{ type: "text", text: "trigger" }],
+        timestamp: new Date(),
+      },
+      { onEvent: (e) => seenEvents.push(e) }
+    )
+    expect(failedTurn.success).toBe(false)
+    expect(failedTurn.error).toBe("model_not_supported")
+    expect(seenEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message_delta",
+          content: { type: "text", text: "Upstream error detail" },
+        }),
+        expect.objectContaining({ type: "error", error: "model_not_supported" }),
+        expect.objectContaining({ type: "done", success: false }),
+      ])
+    )
+
+    internal.sendRequest.mockImplementationOnce(async () => {
+      const event = handleUpdate(adapter, "s-ext", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "HTTP 400 Bad Request" },
+      }) as ExternalAgentEvent | null
+      if (event) internal.emitEvent(event)
+      return { stopReason: "end_turn" }
+    })
+    const proseOnlyTurn = await adapter.execute("s-ext", {
+      id: "m-ok",
+      role: "user",
+      content: [{ type: "text", text: "trigger prose" }],
+      timestamp: new Date(),
+    })
+    expect(proseOnlyTurn.success).toBe(true)
+    expect(proseOnlyTurn.finalResponse).toBe("HTTP 400 Bad Request")
   })
 })

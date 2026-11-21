@@ -141,6 +141,16 @@ export interface AcpVendorProfile {
    * token or cost accounting.
    */
   usageUpdateScope?: "session_context"
+  /**
+   * Structured failure extracted from a settled `session/prompt` response
+   * (e.g. vendor `_meta.error` or a non-standard `stopReason: "error"`). Never
+   * infer failure from assistant prose; return `undefined` when the wire carries
+   * no structured error signal.
+   */
+  promptFailure?(result: {
+    stopReason?: string
+    _meta?: Record<string, unknown> | null
+  }): string | undefined
   /** Vendor reverse requests projected through the host's existing elicitation lifecycle. */
   elicitationExtensions?: Readonly<
     Record<

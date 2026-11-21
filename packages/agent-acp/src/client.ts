@@ -3123,11 +3123,24 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
                     : {}),
               }
             : tokenUsage
+        const structuredFailure = this.vendor?.promptFailure?.(result)
+        if (structuredFailure) {
+          this.emitEvent({
+            type: "error",
+            sessionId,
+            timestamp: new Date(),
+            error: structuredFailure,
+            recoverable: false,
+          })
+        }
         this.emitEvent({
           type: "done",
           sessionId,
           timestamp: new Date(),
-          success: result.stopReason !== "cancelled" && result.stopReason !== "refusal",
+          success:
+            !structuredFailure &&
+            result.stopReason !== "cancelled" &&
+            result.stopReason !== "refusal",
           ...(enrichedUsage ? { tokenUsage: enrichedUsage } : {}),
           durationMs: Date.now() - promptStartedAt,
           stopReason: result.stopReason,
@@ -5885,6 +5898,33 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
             ...session.metadata,
             usage: { used: event.used, size: event.size, cost: event.cost },
           }
+        if (event.type === "compaction_update") {
+          const update = event.compaction
+          const compactions = {
+            ...((session.metadata?.compactions as
+              Record<string, Record<string, unknown>> | undefined) ?? {}),
+          }
+          const previous = compactions[update.compactionId] ?? {}
+          const next: Record<string, unknown> = {
+            ...previous,
+            compactionId: update.compactionId,
+            status: update.status,
+          }
+          if ("summary" in update) {
+            if (update.summary === null || update.summary?.length === 0) delete next.summary
+            else next.summary = update.summary
+          }
+          if ("error" in update) {
+            if (update.error === null) delete next.error
+            else next.error = update.error
+          }
+          if ("_meta" in update) {
+            if (update._meta === null) delete next._meta
+            else next._meta = update._meta
+          }
+          compactions[update.compactionId] = next
+          session.metadata = { ...session.metadata, compactions }
+        }
         return event
       }
     }
