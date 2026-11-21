@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
 import { getDb } from "@/lib/db/schema"
-import { schedulerDb } from "./scheduler-db"
+import { SchedulerDatabase, schedulerDb } from "./scheduler-db"
 import { createTaskScheduler, registerTaskExecutor, unregisterTaskExecutor } from "./task-scheduler"
 import type { ScheduledTask, SchedulerTimingDriver } from "@/types/scheduler"
 import { registerTaskPrewarmer, unregisterTaskPrewarmer } from "./prewarm"
@@ -782,26 +782,35 @@ function liveDraft(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
  * transactional write is held before it starts, so whatever lands meanwhile
  * is already there when it decides.
  */
+/**
+ * Hold the first `method` call made from `frame`. Spied on the prototype: a
+ * run writes through its own facade pinned to its account database
+ * (`SchedulerDatabase.pinned`), not through the `schedulerDb` instance.
+ */
 function holdCall(method: "getTask" | "mutateTask", frame: string) {
   const entered = latch()
   const hold = latch()
-  const original = (schedulerDb[method] as (...args: unknown[]) => Promise<unknown>).bind(
-    schedulerDb
-  )
+  const original = SchedulerDatabase.prototype[method] as (
+    this: SchedulerDatabase,
+    ...args: unknown[]
+  ) => Promise<unknown>
   let held = false
-  jest.spyOn(schedulerDb, method).mockImplementation((async (...args: unknown[]) => {
-    if (held || !new Error().stack?.includes(frame)) return original(...args)
+  jest.spyOn(SchedulerDatabase.prototype, method).mockImplementation(async function (
+    this: SchedulerDatabase,
+    ...args: unknown[]
+  ) {
+    if (held || !new Error().stack?.includes(frame)) return original.apply(this, args)
     held = true
     if (method === "getTask") {
-      const row = await original(...args)
+      const row = await original.apply(this, args)
       entered.release()
       await hold.promise
       return row
     }
     entered.release()
     await hold.promise
-    return original(...args)
-  }) as never)
+    return original.apply(this, args)
+  } as never)
   return { entered: entered.promise, release: hold.release }
 }
 
@@ -1006,12 +1015,16 @@ it("F14: a failure to record a successful run never runs its executor again", as
   await schedulerDb.createTask(task)
   const executor = jest.fn(async () => ({ success: true, output: { effectDone: true } }))
   registerTaskExecutor("test", executor)
-  const original = schedulerDb.mutateTask.bind(schedulerDb)
-  jest.spyOn(schedulerDb, "mutateTask").mockImplementation(async (id, mutate) => {
+  const original = SchedulerDatabase.prototype.mutateTask
+  jest.spyOn(SchedulerDatabase.prototype, "mutateTask").mockImplementation(async function (
+    this: SchedulerDatabase,
+    id,
+    mutate
+  ) {
     if (new Error().stack?.includes("updateTaskStats")) {
       throw new Error("synthetic statistics persistence failure")
     }
-    return original(id, mutate)
+    return original.call(this, id, mutate)
   })
   const run = await scheduler.runTaskNow(task.id)
   expect(run).toMatchObject({ status: "completed", output: { effectDone: true } })
@@ -1307,4 +1320,85 @@ it("queue-one: every start a newer one displaces is recorded, even when they arr
     async () => (await schedulerDb.getExecution(c!.id))?.status === "completed",
     "the newest start completes"
   )
+})
+
+it("account switch: a run whose account database closed while it ran records nothing in the next one", async () => {
+  const { activateAccountDatabase, activeDatabaseName, clearAccountDatabaseSelection } =
+    await import("@/lib/db/schema")
+  const { flushPendingAccountWrites } = await import("@/lib/accounts/pending-write-flush")
+  const { default: Dexie } = await import("dexie")
+  const { notifyTaskEvent } = jest.requireMock("./notification-integration") as {
+    notifyTaskEvent: jest.Mock
+  }
+  notifyTaskEvent.mockClear()
+  const home = activeDatabaseName()
+  const task = liveDraft({ notification: { onStart: false, onComplete: true, onError: false } })
+  await schedulerDb.createTask(task)
+  const entered = latch()
+  const hold = latch()
+  registerTaskExecutor("test", async () => {
+    entered.release()
+    await hold.promise
+    return { success: true, output: { secret: "account A output" } }
+  })
+  const run = scheduler.runTaskNow(task.id)
+  await entered.promise
+  // A run still working holds no switch: only recording an outcome does.
+  expect(flushPendingAccountWrites()).toBeUndefined()
+  activateAccountDatabase("scheduler-switch-probe")
+  const away = activeDatabaseName()
+  expect(away).not.toBe(home)
+  let execution: Awaited<typeof run>
+  try {
+    hold.release()
+    execution = await run
+    await settle(30)
+    // The next account's database was never opened, let alone written to,
+    // and nobody there heard about the run.
+    expect(await Dexie.exists(away)).toBe(false)
+    expect(notifyTaskEvent).not.toHaveBeenCalled()
+  } finally {
+    clearAccountDatabaseSelection()
+  }
+  expect(activeDatabaseName()).toBe(home)
+  // The account it started in keeps the row as the run left it...
+  expect(await schedulerDb.getExecution(execution!.id)).toMatchObject({ status: "running" })
+  expect(await schedulerDb.getTask(task.id)).toMatchObject({ successCount: 0 })
+  // ...and settles it when its scheduler next starts.
+  await restartScheduler()
+  expect(await schedulerDb.getExecution(execution!.id)).toMatchObject({
+    status: "cancelled",
+    terminalReason: "interrupted-on-restart",
+  })
+})
+
+it("account switch: a switch waits for a run that is recording its outcome", async () => {
+  const { flushPendingAccountWrites } = await import("@/lib/accounts/pending-write-flush")
+  const { notifyTaskEvent } = jest.requireMock("./notification-integration") as {
+    notifyTaskEvent: jest.Mock
+  }
+  const task = liveDraft({ notification: { onStart: false, onComplete: true, onError: false } })
+  await schedulerDb.createTask(task)
+  const notifying = latch()
+  const notified = latch()
+  notifyTaskEvent.mockImplementationOnce(async () => {
+    notifying.release()
+    await notified.promise
+  })
+  registerTaskExecutor("test", async () => ({ success: true }))
+  const run = scheduler.runTaskNow(task.id)
+  await notifying.promise
+  const flushing = flushPendingAccountWrites()
+  expect(flushing).toBeDefined()
+  let flushed = false
+  void flushing!.then(() => {
+    flushed = true
+  })
+  await settle(30)
+  expect(flushed).toBe(false)
+  notified.release()
+  await flushing
+  // Released only once the run's row was written.
+  expect(await schedulerDb.getExecution((await run)!.id)).toMatchObject({ status: "completed" })
+  expect(flushPendingAccountWrites()).toBeUndefined()
 })

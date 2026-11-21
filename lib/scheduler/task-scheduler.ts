@@ -35,7 +35,9 @@ import { describeOverrun, selectOverrunJobs, taskRuntimeLimitMs } from "./proces
 import { loadSchedulerPolicy, type TaskWriteSource } from "./write-authority"
 import { getNextCronTime } from "./cron-parser"
 import { enumerateBackfillSlots } from "./backfill"
-import { schedulerDb } from "./scheduler-db"
+import { schedulerDb, type SchedulerDatabase } from "./scheduler-db"
+import { registerPendingAccountWriteFlusher } from "@/lib/accounts/pending-write-flush"
+import { unlessAborted } from "@/lib/utils/abort"
 import {
   applyJitter,
   isAtMaxRuns,
@@ -519,6 +521,12 @@ interface ExecuteTaskContext {
   payloadOverride?: Record<string, unknown>
   /** Called once with the execution as soon as the scheduler has decided what this start is. */
   onAccepted?: (execution: TaskExecution) => void
+  /**
+   * The scheduler database pinned to the account database this start began
+   * in (`SchedulerDatabase.pinned`). Set by `executeTask`, so a switch while
+   * it looks the slot up cannot move the run into the next account.
+   */
+  home?: SchedulerDatabase
 }
 
 /**
@@ -2827,14 +2835,15 @@ class TaskSchedulerImpl {
    */
   private async expireTask(
     task: ScheduledTask,
-    reason: "ended" | "max-runs-reached"
+    reason: "ended" | "max-runs-reached",
+    db: SchedulerDatabase = schedulerDb
   ): Promise<void> {
     const now = new Date()
     // The bound is checked again against the row as it is now. The caller read
     // it a moment ago, and a pause or an edit that raised `maxRuns` since then
     // must win over an expiry decided on the older row.
     let settledReason = reason
-    const expired = await schedulerDb.mutateTask(task.id, (current) => {
+    const expired = await db.mutateTask(task.id, (current) => {
       if (current.status !== "active") return null
       if (isAtMaxRuns(current)) settledReason = "max-runs-reached"
       else if (isPastEndAt(current, now)) settledReason = "ended"
@@ -2847,7 +2856,7 @@ class TaskSchedulerImpl {
         updatedAt: now,
       }
     })
-    if (!expired) return
+    if (!expired || !db.isActive()) return
     this.unscheduleTask(task.id)
     this.dropQueuedStarts(task.id, {
       reason: settledReason,
@@ -2878,6 +2887,10 @@ class TaskSchedulerImpl {
     // restart) finds the first one instead of running again.
     const version = this.lifecycleVersion
     const taskVersion = this.getTaskLifecycleVersion(task.id)
+    // The run belongs to the account database the task was read from, the
+    // one active now. Everything it writes goes there or nowhere.
+    const home = context.home ?? schedulerDb.pinned()
+    context = { ...context, home }
     const occurrenceId = context.executionId
       ? undefined
       : scheduledOccurrenceExecutionId({
@@ -2893,7 +2906,7 @@ class TaskSchedulerImpl {
     }
     this.occurrenceClaims.add(occurrenceId)
     try {
-      const recorded = await schedulerDb.getExecution(occurrenceId)
+      const recorded = await home.getExecution(occurrenceId)
       if (
         version !== this.lifecycleVersion ||
         taskVersion !== this.getTaskLifecycleVersion(task.id)
@@ -2918,7 +2931,7 @@ class TaskSchedulerImpl {
         // A claim on a slot that another path already ran is answered by
         // that row.
         if (context.scheduledSlotClaimed) {
-          await schedulerDb
+          await home
             .removePendingStarts(task.id, (start) => start.executionId === occurrenceId)
             .catch((error) => log.warn(`Could not clear the claim on ${occurrenceId}:`, error))
         }
@@ -2967,6 +2980,28 @@ class TaskSchedulerImpl {
     const executionId = context.executionId ?? nanoid()
     const startTime = new Date()
     const triggerSource = context.triggerSource ?? (retryAttempt > 0 ? "retry" : "schedule")
+    // Everything this run records goes to the account database it started in,
+    // or nowhere: a switch or a lock while it runs must not land its outcome,
+    // its statistics or its follow-ups in the next account. The pinned facade
+    // refuses the writes themselves; `atHome` is asked before every step, so a
+    // run that lost its database settles nothing and says so once. Its row,
+    // left `running` there, is settled `interrupted-on-restart` when that
+    // account's scheduler next starts (`interruptStaleExecutions`).
+    const db = context.home ?? schedulerDb.pinned()
+    let leftHome = false
+    const atHome = (): boolean => {
+      if (leftHome) return false
+      if (db.isActive()) return true
+      leftHome = true
+      log.warn(
+        `Task ${task.name} (${executionId}): its account database closed while it ran. Its outcome is not recorded; the run is settled when that account's scheduler next starts`
+      )
+      return false
+    }
+    let releaseSwitch: (() => void) | undefined
+    const holdSwitch = () => {
+      releaseSwitch ??= this.holdAccountSwitch()
+    }
     // Every run path ends here, so a placeholder for a task that moved to a
     // paired host (ADR-0224) is refused here once, whichever path asked: a
     // retry armed before the move, a workflow node, a chained follow-up. The
@@ -3158,7 +3193,7 @@ class TaskSchedulerImpl {
     })
     this.executionReleases.set(executionId, released)
     try {
-      await schedulerDb.createExecution(execution)
+      await db.createExecution(execution)
       const allowed =
         !hasPreRunGate || (await hooks.dispatchScheduledTaskBeforeRun(task.id, executionId))
       const stale =
@@ -3181,12 +3216,12 @@ class TaskSchedulerImpl {
         return execution
       }
       execution.status = "running"
-      if (hasPreRunGate) await schedulerDb.updateExecution(execution)
+      if (hasPreRunGate) await db.updateExecution(execution)
       this.broadcastExecutionStatus(task, execution)
       context.onAccepted?.(execution)
 
       // Notify start
-      if (task.notification.onStart) {
+      if (task.notification.onStart && atHome()) {
         await notifyTaskEvent(task, execution, "start")
       }
 
@@ -3280,6 +3315,8 @@ class TaskSchedulerImpl {
       if (!result.success && controller.signal.aborted) {
         throw this.abortErrorFor(controller, task.config.timeout)
       }
+      // The executor has answered; from here the run records what it did.
+      holdSwitch()
 
       // Update execution
       execution.status = result.success ? "completed" : "failed"
@@ -3306,6 +3343,8 @@ class TaskSchedulerImpl {
               : `Task failed: ${execution.error}`
         )
       )
+
+      if (!atHome()) return execution
 
       const retriesLeft = retryAttempt < task.config.maxRetries
       const retryable = isRetryableTerminalReason(result.terminalReason)
@@ -3341,15 +3380,21 @@ class TaskSchedulerImpl {
         )
         this.retryChains.add(task.id)
         const retryExecutionId = nanoid()
-        await this.persistPendingRetry(execution, {
-          kind: "retry",
-          executionId: retryExecutionId,
-          failedExecutionId: executionId,
-          attempt: retryAttempt + 1,
-          availableAt: nextRetryAt,
-          ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
-          ...(context.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
-        })
+        await this.persistPendingRetry(
+          execution,
+          {
+            kind: "retry",
+            executionId: retryExecutionId,
+            failedExecutionId: executionId,
+            attempt: retryAttempt + 1,
+            availableAt: nextRetryAt,
+            ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
+            ...(context.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
+          },
+          db
+        )
+        // Armed only for the account that recorded it.
+        if (!atHome()) return execution
         this.scheduleRetry(
           task,
           retryAttempt + 1,
@@ -3369,8 +3414,9 @@ class TaskSchedulerImpl {
       // an executor that already succeeded (or already failed and scheduled
       // its retry) a second time.
       await this.settleQuietly(execution, "update the task's statistics", () =>
-        this.updateTaskStats(task, execution, context.scheduledSlotClaimed === true)
+        this.updateTaskStats(task, execution, context.scheduledSlotClaimed === true, db)
       )
+      if (!atHome()) return execution
 
       // Notify completion
       if (result.success && task.notification.onComplete) {
@@ -3382,6 +3428,7 @@ class TaskSchedulerImpl {
           notifyTaskEvent(task, execution, needsApproval ? "needs-approval" : "error")
         )
       }
+      if (!atHome()) return execution
 
       // Emit scheduler events for event-triggered task chaining
       const eventType = result.success ? (`${task.type}:completed` as const) : undefined
@@ -3448,8 +3495,10 @@ class TaskSchedulerImpl {
       execution.logs.push(
         this.createLog(isCancelled ? "warn" : "error", `Execution error: ${errorMessage}`)
       )
+      holdSwitch()
 
       log.error(`Task ${task.name} failed with error:`, error)
+      if (!atHome()) return execution
 
       // Dispatch plugin hook for error
       try {
@@ -3468,6 +3517,7 @@ class TaskSchedulerImpl {
           notifyTaskEvent(task, execution, "error")
         )
       }
+      if (!atHome()) return execution
 
       // Handle retry with exponential backoff + jitter.
       // Timeouts and overlap-cancellations are terminal — never retried.
@@ -3491,15 +3541,21 @@ class TaskSchedulerImpl {
         )
         this.retryChains.add(task.id)
         const retryExecutionId = nanoid()
-        await this.persistPendingRetry(execution, {
-          kind: "retry",
-          executionId: retryExecutionId,
-          failedExecutionId: executionId,
-          attempt: retryAttempt + 1,
-          availableAt: nextRetryAt,
-          ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
-          ...(context.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
-        })
+        await this.persistPendingRetry(
+          execution,
+          {
+            kind: "retry",
+            executionId: retryExecutionId,
+            failedExecutionId: executionId,
+            attempt: retryAttempt + 1,
+            availableAt: nextRetryAt,
+            ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
+            ...(context.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
+          },
+          db
+        )
+        // Armed only for the account that recorded it.
+        if (!atHome()) return execution
         this.scheduleRetry(
           task,
           retryAttempt + 1,
@@ -3515,78 +3571,90 @@ class TaskSchedulerImpl {
 
       // Update task statistics
       await this.settleQuietly(execution, "update the task's statistics", () =>
-        this.updateTaskStats(task, execution, context.scheduledSlotClaimed === true)
+        this.updateTaskStats(task, execution, context.scheduledSlotClaimed === true, db)
       )
     } finally {
-      const timing = summarizePhases(execution.phases)
-      if (timing) execution.logs.push(this.createLog("info", `Timing: ${timing}`))
-      this.untrackRunning(execution)
-      this.executionControllers.delete(executionId)
-      // Released when the executor itself has returned too, which for one that
-      // ignored its abort signal is later than now.
-      void Promise.resolve(executorWork)
-        .catch(() => undefined)
-        .then(() => {
-          release()
-          if (this.executionReleases.get(executionId) === released) {
-            this.executionReleases.delete(executionId)
-          }
-        })
+      holdSwitch()
       try {
-        await schedulerDb.updateExecution(execution)
-      } catch (error) {
-        // The run is over whatever its row says. Keep settling it: the next
-        // slot, the drain and the follow-ups below must not wait on a write
-        // that failed. A row left `running` is reconciled on the next boot.
-        log.error(`Could not record the outcome of ${task.name} (${executionId}):`, error)
-      }
-      this.broadcastExecutionStatus(task, execution)
-
-      if (!shouldRetry) {
-        this.retryChains.delete(task.id)
-
-        if (executionLifecycleVersion !== this.lifecycleVersion) {
+        const timing = summarizePhases(execution.phases)
+        if (timing) execution.logs.push(this.createLog("info", `Timing: ${timing}`))
+        this.untrackRunning(execution)
+        this.executionControllers.delete(executionId)
+        // Released when the executor itself has returned too, which for one that
+        // ignored its abort signal is later than now.
+        void Promise.resolve(executorWork)
+          .catch(() => undefined)
+          .then(() => {
+            release()
+            if (this.executionReleases.get(executionId) === released) {
+              this.executionReleases.delete(executionId)
+            }
+          })
+        if (!atHome()) {
+          this.retryChains.delete(task.id)
           return execution
         }
-
-        // Forward failure chain fires only on a *terminal* failure (cancelled
-        // runs were displaced, not failed — they trigger nothing).
-        if (execution.status === "failed") {
-          this.triggerDependentTasks(task, "failure").catch((err) => {
-            log.error("Failed to trigger failure-chain tasks:", err)
-          })
-        }
-
-        // Workflow fan-out for `trigger.scheduler.taskCompleted`. This is the
-        // settle chokepoint: the row is committed, retries are excluded, and
-        // every task type and every terminal status passes through here.
-        // `emitSchedulerEvent` cannot stand in for it, because that one fires
-        // only on success and collapses the type into a hard-coded subset, so
-        // a failed task emits nothing at all.
-        void import("./task-completion-linkage")
-          .then(({ dispatchScheduledTaskSettled }) => dispatchScheduledTaskSettled(task, execution))
-          .catch((err) => {
-            log.warn?.("Failed to fan a settled task out to workflows:", err)
-          })
-
         try {
-          if (context.scheduledSlotClaimed) {
-            await this.finalizeClaimedScheduledRun(task)
-          } else if (!context.deferNextRunUpdate) {
-            const referenceDate = execution.scheduledFor ?? execution.startedAt
-            await this.updateNextRunTime(task, {
-              fromDate: referenceDate,
-              intervalBase: referenceDate,
+          await db.updateExecution(execution)
+        } catch (error) {
+          // The run is over whatever its row says. Keep settling it: the next
+          // slot, the drain and the follow-ups below must not wait on a write
+          // that failed. A row left `running` is reconciled on the next boot.
+          log.error(`Could not record the outcome of ${task.name} (${executionId}):`, error)
+        }
+        if (atHome()) this.broadcastExecutionStatus(task, execution)
+
+        if (!shouldRetry) {
+          this.retryChains.delete(task.id)
+
+          if (executionLifecycleVersion !== this.lifecycleVersion || !atHome()) {
+            return execution
+          }
+
+          // Forward failure chain fires only on a *terminal* failure (cancelled
+          // runs were displaced, not failed — they trigger nothing).
+          if (execution.status === "failed") {
+            this.triggerDependentTasks(task, "failure").catch((err) => {
+              log.error("Failed to trigger failure-chain tasks:", err)
             })
           }
-        } catch (error) {
-          // The minute sweep re-reads the row and arms whatever is due.
-          log.error(`Could not advance the schedule of ${task.name} after a run:`, error)
-        }
 
-        // Drain one buffered start (queue-one / queue-all). A retry chain is a
-        // continuation of the same logical run, so draining waits for it.
-        this.drainQueuedStart(task.id)
+          // Workflow fan-out for `trigger.scheduler.taskCompleted`. This is the
+          // settle chokepoint: the row is committed, retries are excluded, and
+          // every task type and every terminal status passes through here.
+          // `emitSchedulerEvent` cannot stand in for it, because that one fires
+          // only on success and collapses the type into a hard-coded subset, so
+          // a failed task emits nothing at all.
+          void import("./task-completion-linkage")
+            .then(({ dispatchScheduledTaskSettled }) =>
+              atHome() ? dispatchScheduledTaskSettled(task, execution) : undefined
+            )
+            .catch((err) => {
+              log.warn?.("Failed to fan a settled task out to workflows:", err)
+            })
+
+          try {
+            if (context.scheduledSlotClaimed) {
+              await this.finalizeClaimedScheduledRun(task, db)
+            } else if (!context.deferNextRunUpdate) {
+              const referenceDate = execution.scheduledFor ?? execution.startedAt
+              await this.updateNextRunTime(
+                task,
+                { fromDate: referenceDate, intervalBase: referenceDate },
+                db
+              )
+            }
+          } catch (error) {
+            // The minute sweep re-reads the row and arms whatever is due.
+            log.error(`Could not advance the schedule of ${task.name} after a run:`, error)
+          }
+
+          // Drain one buffered start (queue-one / queue-all). A retry chain is a
+          // continuation of the same logical run, so draining waits for it.
+          if (atHome()) this.drainQueuedStart(task.id)
+        }
+      } finally {
+        releaseSwitch?.()
       }
     }
 
@@ -3638,10 +3706,41 @@ class TaskSchedulerImpl {
    * again (`recoverPendingStarts`). The in-memory timer still runs it in this
    * process; a failure to record it costs only the restart guarantee.
    */
-  private async persistPendingRetry(execution: TaskExecution, retry: PendingRetry): Promise<void> {
+  private async persistPendingRetry(
+    execution: TaskExecution,
+    retry: PendingRetry,
+    db: SchedulerDatabase = schedulerDb
+  ): Promise<void> {
     await this.settleQuietly(execution, "record the scheduled retry", () =>
-      schedulerDb.addPendingStart(execution.taskId, retry)
+      db.addPendingStart(execution.taskId, retry)
     )
+  }
+
+  /**
+   * Hold account switches and locks while a run records its outcome.
+   *
+   * Registered as a pending account write (`lib/accounts/pending-write-flush.ts`):
+   * a switch or a lock first waits for every registered writer, within one
+   * budget they share, so a run that answered just before it records its
+   * outcome in its own account instead of losing it. Only the recording is
+   * waited for, never the executor: a run still working when the switch comes
+   * is settled by its account's next start-up (`interruptStaleExecutions`).
+   * Returns the release, called once the run has recorded all it will.
+   */
+  private holdAccountSwitch(): () => void {
+    let release!: () => void
+    const recorded = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const unregister = registerPendingAccountWriteFlusher((signal) =>
+      // Past the budget the switch goes ahead without this run, whose pinned
+      // database then refuses whatever it still tries to write.
+      unlessAborted(recorded, signal).catch(() => undefined)
+    )
+    return () => {
+      unregister()
+      release()
+    }
   }
 
   /** Forget a scheduled retry that will not run. */
@@ -4092,14 +4191,15 @@ class TaskSchedulerImpl {
   private async updateTaskStats(
     task: ScheduledTask,
     execution: TaskExecution,
-    runBudgetReserved: boolean = false
+    runBudgetReserved: boolean = false,
+    db: SchedulerDatabase = schedulerDb
   ): Promise<void> {
     // Counted against the row as it is at write time, inside one transaction:
     // two runs settling together both count, a later slot's reservation is
     // never rolled back, and a status somebody else set (a pause, an expiry)
     // is never overwritten. Deletion is terminal: no row, nothing written.
     let autoPaused = false
-    const updatedTask = await schedulerDb.mutateTask(task.id, (current) => {
+    const updatedTask = await db.mutateTask(task.id, (current) => {
       autoPaused = false
       const updates: Partial<ScheduledTask> = {
         lastRunAt: execution.startedAt,
@@ -4139,7 +4239,7 @@ class TaskSchedulerImpl {
       }
       return updates
     })
-    if (!updatedTask) return
+    if (!updatedTask || !db.isActive()) return
 
     if (autoPaused) {
       this.unscheduleTask(task.id)
@@ -4160,23 +4260,24 @@ class TaskSchedulerImpl {
    */
   private async updateNextRunTime(
     task: ScheduledTask,
-    options: { fromDate?: Date; intervalBase?: Date } = {}
+    options: { fromDate?: Date; intervalBase?: Date } = {},
+    db: SchedulerDatabase = schedulerDb
   ): Promise<void> {
     // Re-fetch the latest row: `task` may be a pre-execution snapshot.
-    const latest = await schedulerDb.getTask(task.id)
+    const latest = await db.getTask(task.id)
     if (!latest) return
 
     // Lifecycle bounds: a task that just consumed its maxRuns budget (or whose
     // endAt passed) expires instead of re-arming.
     if (latest.status === "active" && (isPastEndAt(latest, new Date()) || isAtMaxRuns(latest))) {
-      await this.expireTask(latest, isAtMaxRuns(latest) ? "max-runs-reached" : "ended")
+      await this.expireTask(latest, isAtMaxRuns(latest) ? "max-runs-reached" : "ended", db)
       return
     }
 
     // Only the cursor (or a one-shot's expiry) is written, and only while the
     // task is still active: a task paused while this run settled stays paused,
     // and `resumeTask` computes its next slot when it is resumed.
-    const written = await schedulerDb.mutateTask(task.id, (current) => {
+    const written = await db.mutateTask(task.id, (current) => {
       if (current.status !== "active") return null
       const nextRunAt = this.calculateNextRunTime(current, options)
       if (nextRunAt) return { nextRunAt }
@@ -4184,7 +4285,7 @@ class TaskSchedulerImpl {
       if (current.trigger.type === "once") return { status: "expired", nextRunAt: undefined }
       return null
     })
-    if (written?.status === "active" && written.nextRunAt) {
+    if (written?.status === "active" && written.nextRunAt && db.isActive()) {
       await this.scheduleTask(written)
     }
   }
@@ -4195,15 +4296,18 @@ class TaskSchedulerImpl {
    * lifecycle rules; recalculating from the old slot could move a task
    * backwards after a later overlapping slot has already been claimed.
    */
-  private async finalizeClaimedScheduledRun(task: ScheduledTask): Promise<void> {
-    const latest = await schedulerDb.getTask(task.id)
+  private async finalizeClaimedScheduledRun(
+    task: ScheduledTask,
+    db: SchedulerDatabase = schedulerDb
+  ): Promise<void> {
+    const latest = await db.getTask(task.id)
     if (!latest || latest.status !== "active") return
     if (latest.trigger.type === "once") {
       // An executor may have re-armed its one-shot subscription while running.
       // Completing the claimed old slot must not expire that new slot. Decided
       // again inside the write, so a pause or a re-arm that lands after the
       // read above is not overwritten.
-      await schedulerDb.mutateTask(task.id, (current) =>
+      await db.mutateTask(task.id, (current) =>
         current.status === "active" &&
         current.trigger.type === "once" &&
         current.trigger.runAt?.getTime() === task.trigger.runAt?.getTime()
@@ -4213,7 +4317,7 @@ class TaskSchedulerImpl {
       return
     }
     if (isPastEndAt(latest, new Date()) || isAtMaxRuns(latest)) {
-      await this.expireTask(latest, isAtMaxRuns(latest) ? "max-runs-reached" : "ended")
+      await this.expireTask(latest, isAtMaxRuns(latest) ? "max-runs-reached" : "ended", db)
     }
   }
 

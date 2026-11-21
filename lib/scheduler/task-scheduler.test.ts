@@ -68,6 +68,11 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
 // Mock dependencies
 jest.mock("./scheduler-db", () => ({
   schedulerDb: {
+    // A run pins the facade to its account database; this suite has one.
+    pinned() {
+      return this
+    },
+    isActive: () => true,
     getTasksByStatus: jest.fn().mockResolvedValue([]),
     getOverdueActiveTasks: jest.fn().mockResolvedValue([]),
     createTask: jest.fn().mockResolvedValue(undefined),

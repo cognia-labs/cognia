@@ -5,8 +5,18 @@
 
 // Mock IndexedDB for tests
 import "fake-indexeddb/auto"
-import { getDb } from "@/lib/db/schema"
-import { SCHEDULER_SNAPSHOT_EXCLUDED_TABLES, schedulerDb } from "./scheduler-db"
+import Dexie from "dexie"
+import {
+  activateAccountDatabase,
+  activeDatabaseName,
+  clearAccountDatabaseSelection,
+  getDb,
+} from "@/lib/db/schema"
+import {
+  SCHEDULER_SNAPSHOT_EXCLUDED_TABLES,
+  SchedulerDatabaseMovedError,
+  schedulerDb,
+} from "./scheduler-db"
 import type { ScheduledTask, TaskExecution } from "@/types/scheduler"
 
 describe("SchedulerDatabase", () => {
@@ -113,6 +123,53 @@ describe("SchedulerDatabase", () => {
       const raw = await getDb().scheduledTasks.get("cols")
       expect(raw).not.toHaveProperty("nextRunAt")
       expect(raw?.eventType).toBe("plugin-sync")
+    })
+  })
+
+  describe("pinned to an account database", () => {
+    afterEach(() => {
+      clearAccountDatabaseSelection()
+    })
+
+    it("serves its database while it is active and refuses every access after", async () => {
+      await schedulerDb.createTask(createMockTask({ id: "home" }))
+      const pinned = schedulerDb.pinned()
+      expect(pinned.isActive()).toBe(true)
+      expect(await pinned.getTask("home")).toMatchObject({ id: "home" })
+
+      activateAccountDatabase("scheduler-pin-probe")
+      const away = activeDatabaseName()
+      expect(pinned.isActive()).toBe(false)
+      expect(schedulerDb.isActive()).toBe(true)
+      await expect(
+        pinned.updateExecution(createMockExecution("home", { id: "late" }))
+      ).rejects.toBeInstanceOf(SchedulerDatabaseMovedError)
+      await expect(pinned.mutateTask("home", () => ({ status: "paused" }))).rejects.toThrow(
+        SchedulerDatabaseMovedError
+      )
+      // Refused before the next account's database was even opened.
+      expect(await Dexie.exists(away)).toBe(false)
+
+      clearAccountDatabaseSelection()
+      expect(pinned.isActive()).toBe(true)
+      expect(await schedulerDb.getTask("home")).toMatchObject({ status: "active" })
+      expect(await schedulerDb.getExecution("late")).toBeNull()
+    })
+
+    it("aborts a transaction the switch lands in, instead of finishing it in the next database", async () => {
+      await schedulerDb.createTask(createMockTask({ id: "mid", status: "active" }))
+      const pinned = schedulerDb.pinned()
+      let away = ""
+      await expect(
+        pinned.mutateTask("mid", () => {
+          activateAccountDatabase("scheduler-pin-midway")
+          away = activeDatabaseName()
+          return { status: "paused" }
+        })
+      ).rejects.toThrow()
+      expect(await Dexie.exists(away)).toBe(false)
+      clearAccountDatabaseSelection()
+      expect(await schedulerDb.getTask("mid")).toMatchObject({ status: "active" })
     })
   })
 

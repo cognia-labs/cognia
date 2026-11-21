@@ -179,6 +179,11 @@ A slot the scheduler claimed but had not started runs after the restart, or is s
 A retry that was scheduled runs at its time, or at once if that time has passed.
 Pausing, editing or deleting the task calls a pending retry off for good.
 
+A run is recorded in the account it started in, and nowhere else.
+If that account is locked, or another one is opened, while the handler is still working, nothing the run produces is written and it is not retried.
+Its row stays `running` until that account's scheduler next starts, which settles it `cancelled` with `terminalReason: "interrupted-on-restart"`.
+A lock or switch that comes while a run is recording its result waits for it, within the 1.5 seconds it gives all pending writes.
+
 Under `overlapPolicy: "cancel-previous"`, the new start waits for the cancelled handler to return before it starts.
 A handler that ignores its `signal` for 10 seconds keeps running, and the new start is recorded as `skipped`.
 A handler that returns a failure after its `signal` aborted settles as `cancelled` and is not retried.

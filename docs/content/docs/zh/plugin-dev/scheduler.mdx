@@ -179,6 +179,11 @@ handler 运行在 JavaScript 运行时中。
 已安排的重试会按时运行；时间已过则立即运行。
 暂停、编辑或删除任务会永久取消待执行的重试。
 
+运行只记录在它启动时所在的账户里，不会写到别处。
+handler 仍在执行时，如果该账户被锁定或切换到了另一个账户，这次运行产生的内容都不会写入，也不会重试。
+它的行会保持 `running`，直到该账户的调度器下次启动，再以 `cancelled`、`terminalReason: "interrupted-on-restart"` 结束。
+运行正在记录结果时到来的锁定或切换会等它写完，最多等锁定留给所有待写入内容的 1.5 秒。
+
 在 `overlapPolicy: "cancel-previous"` 策略下，新启动会等被取消的 handler 返回后才开始。
 handler 若 10 秒内都不理会 `signal`，它会继续运行，新启动记为 `skipped`。
 handler 在 `signal` 中止后返回失败的，以 `cancelled` 结束，不会重试。

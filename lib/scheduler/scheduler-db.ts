@@ -34,7 +34,7 @@ import type {
 } from "@/types/scheduler"
 import { isTaskExecutionPhaseName } from "@/types/scheduler/execution-phases"
 import type { DBScheduledTask, DBTaskExecution } from "@/lib/db/scheduled-task-types"
-import { getDb } from "@/lib/db/schema"
+import { activeDatabaseName, getDb } from "@/lib/db/schema"
 import { parseItemOwner } from "@/lib/placement/ownership"
 import { loggers } from "@cognia/logging"
 import {
@@ -77,6 +77,22 @@ const log = loggers.app
 export const SCHEDULER_SNAPSHOT_EXCLUDED_TABLES: readonly string[] = ["scheduledTaskRuns"]
 
 /**
+ * Thrown by a pinned facade ({@link SchedulerDatabase.pinned}) when the account
+ * database it was pinned to is no longer the active one. Nothing was read or
+ * written: the database the work belongs to is closed, and the one open now
+ * belongs to another account.
+ */
+export class SchedulerDatabaseMovedError extends Error {
+  readonly databaseName: string
+
+  constructor(databaseName: string) {
+    super(`The account database ${databaseName} is no longer the active one`)
+    this.name = "SchedulerDatabaseMovedError"
+    this.databaseName = databaseName
+  }
+}
+
+/**
  * Facade over the account database's two scheduler stores.
  *
  * Not a Dexie subclass. `tasks` / `executions` are getters that resolve
@@ -85,17 +101,54 @@ export const SCHEDULER_SNAPSHOT_EXCLUDED_TABLES: readonly string[] = ["scheduled
  * (`activateAccountDatabase` / `closeCachedDb` in `lib/db/schema.ts`). A
  * captured handle would keep serving the previous account's rows.
  *
+ * Resolving on every access is also what makes a late write dangerous: work
+ * that began in one account and finishes after a switch would land in the
+ * next account's database. Work that outlives a moment (a run, from its start
+ * to its settlement) writes through {@link SchedulerDatabase.pinned}, which
+ * refuses every access once its database is no longer the active one. The
+ * check runs at each table access, inside transactions too, so a switch in
+ * the middle of one aborts it rather than finishing it elsewhere.
+ *
  * Both getters are `private`: a caller outside this module that reaches for a
  * raw table handle bypasses the (de)serialization below and would read the
  * stored shape, not a `ScheduledTask`. Use the methods, or add one.
  */
 class SchedulerDatabase {
+  /** The account database this facade is pinned to; none follows the active one. */
+  private readonly pinnedTo: string | undefined
+
+  constructor(pinnedTo?: string) {
+    this.pinnedTo = pinnedTo
+  }
+
+  /**
+   * A facade bound to `databaseName` (the active one by default): it serves
+   * that database while it is the active one and throws
+   * {@link SchedulerDatabaseMovedError} after.
+   */
+  pinned(databaseName: string = activeDatabaseName()): SchedulerDatabase {
+    return new SchedulerDatabase(databaseName)
+  }
+
+  /** Whether this facade serves its database now: always, unless pinned to one no longer active. */
+  isActive(): boolean {
+    return this.pinnedTo === undefined || activeDatabaseName() === this.pinnedTo
+  }
+
+  private db(): ReturnType<typeof getDb> {
+    const pinned = this.pinnedTo
+    if (pinned !== undefined && activeDatabaseName() !== pinned) {
+      throw new SchedulerDatabaseMovedError(pinned)
+    }
+    return getDb()
+  }
+
   private get tasks(): EntityTable<DBScheduledTask, "id"> {
-    return getDb().scheduledTasks as unknown as EntityTable<DBScheduledTask, "id">
+    return this.db().scheduledTasks as unknown as EntityTable<DBScheduledTask, "id">
   }
 
   private get executions(): EntityTable<DBTaskExecution, "id"> {
-    return getDb().scheduledTaskRuns as unknown as EntityTable<DBTaskExecution, "id">
+    return this.db().scheduledTaskRuns as unknown as EntityTable<DBTaskExecution, "id">
   }
 
   /**
@@ -111,7 +164,7 @@ class SchedulerDatabase {
     tables: unknown,
     scope: () => PromiseLike<T> | T
   ): PromiseLike<T> {
-    return getDb().transaction(
+    return this.db().transaction(
       mode as "rw",
       tables as Parameters<ReturnType<typeof getDb>["transaction"]>[1],
       scope as () => Promise<T>
@@ -1025,8 +1078,10 @@ function safeDeserializeExecution(dbExecution: DBTaskExecution): TaskExecution |
 }
 
 /**
- * The one facade instance. Stateless, so a single module-level value is safe
- * even though the database underneath it is swapped on account switch.
+ * The facade that follows the active account database. Stateless, so a single
+ * module-level value is safe even though the database underneath it is
+ * swapped on account switch. Pin it (`schedulerDb.pinned()`) for work that
+ * must not follow a switch.
  */
 export const schedulerDb = new SchedulerDatabase()
 
