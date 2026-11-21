@@ -82,7 +82,8 @@ export function wireTwinActivitySource(
     let lastBusy = false
     // Milestones DO suppress their first emission — otherwise re-opening the
     // app replays a "happy" one-shot for a job that finished yesterday.
-    let lastMilestoneId: string | null = null
+    const seenMilestoneIds = new Set<string>()
+    let milestoneWatermark = -Infinity
     let milestoneStarted = false
 
     const offActive = observeActive((rows) => {
@@ -97,18 +98,29 @@ export function wireTwinActivitySource(
     })
 
     const offCompleted = observeCompleted((rows) => {
-      const newest = newestMilestone(rows)
+      const milestones = rows.filter(isMilestoneJob)
       if (!milestoneStarted) {
         // The baseline is the first callback, even when no milestone exists
         // yet. Returning before marking it would swallow the twin's first
         // distill ever, which is the milestone most worth celebrating.
         milestoneStarted = true
-        lastMilestoneId = newest?.id ?? null
+        for (const m of milestones) {
+          seenMilestoneIds.add(m.id)
+          const completedAt = m.completedAt ?? 0
+          if (completedAt > milestoneWatermark) milestoneWatermark = completedAt
+        }
         return
       }
-      if (!newest || newest.id === lastMilestoneId) return
-      lastMilestoneId = newest.id
-      emit({ source: "twin", kind: "twinMilestone", meta: { twinId, jobKind: newest.kind } })
+      const preWatermark = milestoneWatermark
+      const fresh = milestones
+        .filter((m) => (m.completedAt ?? 0) >= preWatermark && !seenMilestoneIds.has(m.id))
+        .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0))
+      for (const m of fresh) {
+        seenMilestoneIds.add(m.id)
+        const completedAt = m.completedAt ?? 0
+        if (completedAt > milestoneWatermark) milestoneWatermark = completedAt
+        emit({ source: "twin", kind: "twinMilestone", meta: { twinId, jobKind: m.kind } })
+      }
     })
 
     return () => {

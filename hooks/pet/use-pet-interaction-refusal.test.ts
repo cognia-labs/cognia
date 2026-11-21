@@ -1,5 +1,5 @@
 /** @jest-environment jsdom */
-import { renderHook } from "@testing-library/react"
+import { act, renderHook } from "@testing-library/react"
 import { usePetStore } from "@/stores/pet/pet-store"
 import en from "@/i18n/messages/en/pet.json"
 import zh from "@/i18n/messages/zh-CN/pet.json"
@@ -69,6 +69,37 @@ describe("usePetInteractionRefusal", () => {
     usePetStore.setState({ bubble: null })
     rerender()
     expect(usePetStore.getState().bubble).toBeNull()
+  })
+
+  it("auto-clears its own refusal bubble without disturbing a newer bubble (F29)", () => {
+    jest.useFakeTimers()
+    try {
+      usePetStore.setState({
+        interactionRefusal: { kind: "fed", reason: "cooldown", at: 1000 },
+      })
+      const { rerender } = renderHook(() => usePetInteractionRefusal(true))
+      expect(usePetStore.getState().bubble).not.toBeNull()
+      jest.advanceTimersByTime(4000)
+      expect(usePetStore.getState().bubble).toBeNull()
+
+      // A newer bubble posted before 4s survives the refusal timer.
+      act(() => {
+        usePetStore.setState({
+          interactionRefusal: { kind: "fed", reason: "cooldown", at: 2000 },
+        })
+      })
+      rerender()
+      expect(usePetStore.getState().bubble).not.toBeNull()
+      act(() => {
+        usePetStore.getState().setBubble({ text: "newer message", origin: "llm" })
+      })
+      act(() => {
+        jest.advanceTimersByTime(4000)
+      })
+      expect(usePetStore.getState().bubble?.text).toBe("newer message")
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })
 

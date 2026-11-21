@@ -40,9 +40,13 @@ export function usePetBubbles(enabled: boolean, snark = 0): void {
       // Numeric meta rides into the template ({days} in streakDay pools);
       // next-intl ignores values a template doesn't reference.
       const days = typeof event.meta?.days === "number" ? event.meta.days : 0
-      setBubble({ text: custom ?? t(key, { days }), origin: "template" })
+      const bubble = { text: custom ?? t(key, { days }), origin: "template" as const }
+      setBubble(bubble)
+      const version = usePetStore.getState().bubbleVersion
       if (timer.current) clearTimeout(timer.current)
-      timer.current = setTimeout(() => setBubble(null), BUBBLE_VISIBLE_MS)
+      timer.current = setTimeout(() => {
+        usePetStore.getState().clearBubbleIfOwner(version, bubble)
+      }, BUBBLE_VISIBLE_MS)
     })
     return () => {
       off()

@@ -124,9 +124,13 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
 
       const show = (text: string, origin: PetBubble["origin"], visibleMs: number) => {
         if (disposed) return
-        setBubble({ text, origin })
+        const bubble: PetBubble = { text, origin }
+        setBubble(bubble)
+        const version = usePetStore.getState().bubbleVersion
         if (timer.current) clearTimeout(timer.current)
-        timer.current = setTimeout(() => setBubble(null), visibleMs)
+        timer.current = setTimeout(() => {
+          usePetStore.getState().clearBubbleIfOwner(version, bubble)
+        }, visibleMs)
       }
       const fallback = () => show(t(pickTalkedBubbleKey(event.at)), "template", TEMPLATE_BUBBLE_MS)
 

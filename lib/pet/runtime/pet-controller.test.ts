@@ -638,4 +638,52 @@ describe("atomicity, reset fencing, automation allowance, and concurrent rename 
     expect(profile?.xp).toBe(XP_AWARD.fed)
     expect(profile?.coins).toBe(102)
   })
+
+  it("keeps waiting state across periodic idle heartbeats until attention clears (F3)", async () => {
+    await seedHatched(100)
+    await handlePetEvent({
+      source: "attention",
+      kind: "waiting",
+      at: 1000,
+      meta: { pendingCount: 1 },
+    })
+    await whenPetEventsSettled()
+    expect(usePetStore.getState().visualState).toBe("waiting")
+
+    // Periodic heartbeat tick and unrelated capture-clear must NOT overwrite waiting.
+    await handlePetEvent({ source: "system", kind: "idle", at: 1000 + 15 * 60_000 })
+    await handlePetEvent({ source: "capture", kind: "idle", at: 1000 + 16 * 60_000 })
+    await whenPetEventsSettled()
+    expect(usePetStore.getState().visualState).toBe("waiting")
+
+    // Once attention clears, a subsequent heartbeat returns the pet to idle.
+    await handlePetEvent({
+      source: "attention",
+      kind: "review",
+      at: 1000 + 17 * 60_000,
+      meta: { pendingCount: 0 },
+    })
+    await handlePetEvent({ source: "system", kind: "idle", at: 1000 + 18 * 60_000 })
+    await whenPetEventsSettled()
+    expect(usePetStore.getState().visualState).toBe("idle")
+  })
+
+  it("keeps thinking state across idle heartbeat while chat session is streaming (F3)", async () => {
+    await seedHatched(100)
+    await handlePetEvent({ source: "chat", kind: "thinking", at: 1000, meta: { sessionId: "s1" } })
+    await handlePetEvent({ source: "system", kind: "idle", at: 2000 })
+    await whenPetEventsSettled()
+    expect(usePetStore.getState().visualState).toBe("thinking")
+
+    await handlePetEvent({
+      source: "chat",
+      kind: "review",
+      xp: 2,
+      at: 3000,
+      meta: { sessionId: "s1" },
+    })
+    await handlePetEvent({ source: "system", kind: "idle", at: 4000 })
+    await whenPetEventsSettled()
+    expect(usePetStore.getState().visualState).toBe("idle")
+  })
 })

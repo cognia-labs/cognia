@@ -152,4 +152,66 @@ describe("wireGoalSource", () => {
 
     expect(events.map((e) => e.kind)).toEqual(["goalProgress", "goalProgress"])
   })
+
+  it("emits every goal event in a multi-row batch and never replays older rows after deletion (F23)", () => {
+    let push: (rows: GoalEvent[]) => void = () => {}
+    const observe: RowObserver<GoalEvent> = (onRows) => {
+      push = onRows
+      return () => {}
+    }
+    const events: PetEvent[] = []
+    wireGoalSource((e) => events.push({ ...e, at: 0 }), observe)
+
+    // Baseline has one old event at ts=100.
+    push([
+      {
+        id: "old",
+        goalId: "g0",
+        kind: "turn_completed",
+        ts: 100,
+        payload: { kind: "turn_completed", turnNumber: 1, tokensDelta: 1 },
+      },
+    ])
+
+    // Two events land before liveQuery fires (returned newest-first).
+    const turnRow: GoalEvent = {
+      id: "e1",
+      goalId: "g1",
+      kind: "turn_completed",
+      ts: 200,
+      payload: { kind: "turn_completed", turnNumber: 2, tokensDelta: 5 },
+    }
+    const doneRow: GoalEvent = {
+      id: "e2",
+      goalId: "g1",
+      kind: "exit_triggered",
+      ts: 201,
+      payload: exitPayload("judge_done"),
+    }
+    const doneRow2: GoalEvent = {
+      id: "e3",
+      goalId: "g2",
+      kind: "exit_triggered",
+      ts: 201,
+      payload: exitPayload("judge_done"),
+    }
+    push([doneRow2, doneRow, turnRow])
+    expect(events.map((e) => [e.kind, e.meta?.goalId])).toEqual([
+      ["goalProgress", "g1"],
+      ["goalComplete", "g1"],
+      ["goalComplete", "g2"],
+    ])
+
+    // Deleting the newest rows exposes an older row (ts=50) — must NOT replay.
+    push([
+      {
+        id: "ancient",
+        goalId: "g0",
+        kind: "exit_triggered",
+        ts: 50,
+        payload: exitPayload("judge_done"),
+      },
+    ])
+    expect(events).toHaveLength(3)
+  })
 })

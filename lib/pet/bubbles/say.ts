@@ -78,14 +78,27 @@ export function sayAsPet(text: string, opts: SayOptions = {}, deps: SayDeps = {}
     deps.enqueueOneShot ?? ((s: PetOneShot) => usePetStore.getState().enqueueOneShot(s))
   const schedule = deps.schedule ?? ((fn: () => void, ms: number) => void setTimeout(fn, ms))
 
-  setBubble({
+  const bubble: PetBubble = {
     text: clean,
     origin: opts.origin ?? "llm",
     ...(opts.action ? { action: opts.action } : {}),
-  })
+  }
+  setBubble(bubble)
+  const after = usePetStore.getState()
+  const ownsStoreBubble = after.bubble === bubble
+  const ownerVersion = after.bubbleVersion
   if (opts.emotion) enqueue(opts.emotion)
   schedule(() => {
-    // Only clear if it is still ours: a newer bubble must not be cut short.
+    // Only clear if the store still holds our exact published bubble token, so
+    // an older timer never cuts short a newer bubble — even one with identical
+    // text (F29).
+    if (ownsStoreBubble) {
+      const current = usePetStore.getState()
+      if (current.bubbleVersion === ownerVersion && current.bubble === bubble) {
+        setBubble(null)
+      }
+      return
+    }
     const current = usePetStore.getState().bubble
     if (current?.text === clean) setBubble(null)
   }, durationMs)

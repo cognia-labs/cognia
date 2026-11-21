@@ -7,10 +7,16 @@
 // Bubbles are intentionally NOT handled here — the widget subscribes to the bus
 // separately for ephemeral bubble display (it needs the React i18n context).
 
-import type { PetActivityRow, PetEvent, PetEventKind, PetProfile } from "@/types/pet"
+import type {
+  PetActivityRow,
+  PetEvent,
+  PetEventKind,
+  PetProfile,
+  PetVisualState,
+} from "@/types/pet"
 import { effectiveStats } from "@/types/pet"
 import { PET_ACTIVITY_CAP } from "@/lib/db/pet"
-import { getDb } from "@/lib/db/schema"
+import { getDb, onActiveDatabaseChange } from "@/lib/db/schema"
 import { recordTombstones } from "@/lib/db/tombstones"
 import { generateBones } from "@/lib/pet/bones/generate"
 import { reducePetVisualState, restingWithCare } from "@/lib/pet/state/reducer"
@@ -60,6 +66,12 @@ const LIFECYCLE_EMIT_KINDS = new Set<PetEventKind>(["levelUp", "evolved", "unwel
 /** Last processed non-passive event kind — drives the error→success "recovered" signal. */
 let lastEventKind: PetEventKind | null = null
 
+/**
+ * Unresolved work channels whose active state must survive passive heartbeats
+ * and unrelated sources returning to `idle` (F3). Priority: waiting > thinking.
+ */
+const activeWorkStates = new Map<string, "waiting" | "thinking">()
+
 let nextOperationSeq = 0
 
 /**
@@ -69,9 +81,94 @@ let nextOperationSeq = 0
  */
 const committedBusEvents = new WeakSet<PetEvent>()
 
-onPetReset(() => {
+export function resetPetControllerRuntimeState(): void {
   lastEventKind = null
-})
+  activeWorkStates.clear()
+}
+
+onPetReset(resetPetControllerRuntimeState)
+onActiveDatabaseChange(resetPetControllerRuntimeState)
+
+function updateActiveWorkState(event: PetEvent): void {
+  switch (event.source) {
+    case "attention": {
+      if (event.kind === "waiting") activeWorkStates.set("attention", "waiting")
+      else if (event.kind === "review" || event.kind === "idle" || event.kind === "success") {
+        activeWorkStates.delete("attention")
+      }
+      return
+    }
+    case "capture": {
+      if (event.kind === "waiting") activeWorkStates.set("capture", "waiting")
+      else if (event.kind === "idle" || event.kind === "success") {
+        activeWorkStates.delete("capture")
+      }
+      return
+    }
+    case "chat": {
+      const key =
+        typeof event.meta?.sessionId === "string" ? `chat:${event.meta.sessionId}` : "chat"
+      if (event.kind === "waiting") activeWorkStates.set(key, "waiting")
+      else if (event.kind === "thinking") activeWorkStates.set(key, "thinking")
+      else if (
+        event.kind === "review" ||
+        event.kind === "idle" ||
+        event.kind === "error" ||
+        event.kind === "success"
+      ) {
+        activeWorkStates.delete(key)
+      }
+      return
+    }
+    case "background-task": {
+      if (event.kind === "thinking") activeWorkStates.set("background-task", "thinking")
+      else if (event.kind === "success" || event.kind === "error" || event.kind === "idle") {
+        activeWorkStates.delete("background-task")
+      }
+      return
+    }
+    case "terminal": {
+      if (event.kind === "thinking") activeWorkStates.set("terminal", "thinking")
+      else if (event.kind === "success" || event.kind === "error" || event.kind === "idle") {
+        activeWorkStates.delete("terminal")
+      }
+      return
+    }
+    case "agent-team": {
+      if (event.kind === "teamRun") activeWorkStates.set("agent-team", "thinking")
+      else if (event.kind === "success" || event.kind === "error" || event.kind === "idle") {
+        activeWorkStates.delete("agent-team")
+      }
+      return
+    }
+    case "twin": {
+      const key = typeof event.meta?.twinId === "string" ? `twin:${event.meta.twinId}` : "twin"
+      if (event.kind === "twinBusy") activeWorkStates.set(key, "thinking")
+      else if (event.kind === "idle") activeWorkStates.delete(key)
+      return
+    }
+    case "workflow": {
+      const key =
+        typeof event.meta?.runId === "string" ? `workflow:${event.meta.runId}` : "workflow"
+      if (event.kind === "workflowRun") activeWorkStates.set(key, "thinking")
+      else if (event.kind === "success" || event.kind === "error" || event.kind === "idle") {
+        activeWorkStates.delete(key)
+      }
+      return
+    }
+    default:
+      return
+  }
+}
+
+function resolveActiveWorkVisualState(): PetVisualState | null {
+  let hasThinking = false
+  for (const state of activeWorkStates.values()) {
+    if (state === "waiting") return "waiting"
+    if (state === "thinking") hasThinking = true
+  }
+  return hasThinking ? "thinking" : null
+}
 
 export type PetCommitFailureReason =
   | "uninitialized"
@@ -350,11 +447,15 @@ async function runCommittedEvent(
     void hooks.dispatchPetAchievementUnlocked({ achievementId: id, at: now })
   }
 
-  // Drive the renderer. Passive/idle events honor a persistent unwell condition;
-  // interactions and milestones keep their expressive states.
+  updateActiveWorkState(event)
+
+  // Drive the renderer. Passive/idle events preserve unresolved waiting or
+  // active work states first (F3), then honor a persistent unwell condition;
+  // expressive interactions and milestones keep their own states.
   const store = usePetStore.getState()
   const visual = PASSIVE_KINDS.has(event.kind)
-    ? restingWithCare(persistProfile.needs, persistProfile.care.condition)
+    ? (resolveActiveWorkVisualState() ??
+      restingWithCare(persistProfile.needs, persistProfile.care.condition))
     : reducePetVisualState(event, persistProfile.needs)
   store.setVisualState(visual)
   for (const shot of oneShots) store.enqueueOneShot(shot)

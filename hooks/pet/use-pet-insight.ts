@@ -69,11 +69,14 @@ export function usePetInsight(enabled: boolean): void {
         // no gate), keeping the action so the report is one click away.
         const text = t(`insight.fallback.${Math.abs(Math.trunc(event.at)) % FALLBACK_VARIANTS}`)
         const store = usePetStore.getState()
-        store.setBubble({ text, origin: "template", ...(action ? { action } : {}) })
+        const bubble = { text, origin: "template" as const, ...(action ? { action } : {}) }
+        store.setBubble(bubble)
+        const version = usePetStore.getState().bubbleVersion
         const timer = setTimeout(() => {
           fallbackTimers.delete(timer)
-          // Only clear our own bubble; a newer one must not be cut short.
-          if (usePetStore.getState().bubble?.text === text) usePetStore.getState().setBubble(null)
+          // Only clear our own bubble version/reference; a newer one (even with
+          // identical text) must not be cut short (F29).
+          usePetStore.getState().clearBubbleIfOwner(version, bubble)
         }, INSIGHT_BUBBLE_MS)
         fallbackTimers.add(timer)
       })()

@@ -52,4 +52,34 @@ describe("wireWorkflowSource", () => {
 
     expect(events.map((e) => e.kind)).toEqual(["workflowRun", "success"])
   })
+
+  it("emits completion of an earlier run after a newer run starts and ignores deleted-window replays (F23)", () => {
+    let push: (rows: WorkflowRunRow[]) => void = () => {}
+    const observe: RowObserver<WorkflowRunRow> = (onRows) => {
+      push = onRows
+      return () => {}
+    }
+    const events: PetEvent[] = []
+    wireWorkflowSource((e) => events.push({ ...e, at: 0 }), observe)
+
+    const at = (id: string, status: RunStatus, startedAt: number): WorkflowRunRow =>
+      ({ id, status, startedAt }) as WorkflowRunRow
+
+    push([at("r0", "succeeded", 50)]) // baseline
+    push([at("rA", "running", 100), at("r0", "succeeded", 50)])
+    push([at("rB", "running", 200), at("rA", "running", 100), at("r0", "succeeded", 50)])
+    // Older concurrent run rA finishes while newer run rB is still running.
+    push([at("rB", "running", 200), at("rA", "succeeded", 100), at("r0", "succeeded", 50)])
+    // Then rB finishes.
+    push([at("rB", "failed", 200), at("rA", "succeeded", 100), at("r0", "succeeded", 50)])
+    // Deleting newer runs pulls an older historical run into the window — no replay.
+    push([at("rAncient", "succeeded", 10)])
+
+    expect(events.map((e) => [e.kind, e.meta?.runId])).toEqual([
+      ["workflowRun", "rA"],
+      ["workflowRun", "rB"],
+      ["success", "rA"],
+      ["error", "rB"],
+    ])
+  })
 })

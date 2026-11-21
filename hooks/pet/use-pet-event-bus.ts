@@ -8,7 +8,7 @@ import { useEffect } from "react"
 import { getPetEventBus } from "@/lib/pet/events/pet-event-bus"
 import { DEFAULT_PET_SOURCES, wirePetSources } from "@/lib/pet/events/wire-sources"
 import { wireTwinActivitySource } from "@/lib/pet/events/sources/twin-activity-source"
-import { handlePetEvent } from "@/lib/pet/runtime/pet-controller"
+import { handlePetEvent, resetPetControllerRuntimeState } from "@/lib/pet/runtime/pet-controller"
 import { markPetControllerPresent } from "@/lib/pet/runtime/controller-presence"
 import type { PetTwinAwarenessSettings } from "@/types/pet"
 
@@ -29,6 +29,7 @@ export function usePetEventBus(enabled: boolean, twinAwareness?: PetTwinAwarenes
       offController()
       releasePresence()
       offSources()
+      resetPetControllerRuntimeState()
     }
   }, [enabled, twinId])
 }

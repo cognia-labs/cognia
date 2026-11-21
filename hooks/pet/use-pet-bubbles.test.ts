@@ -5,6 +5,8 @@ import {
   emitPetEvent,
   __resetPetEventBusForTesting,
 } from "@/lib/pet/events/pet-event-bus"
+import { sayAsPet } from "@/lib/pet/bubbles/say"
+import { __resetSpeakLimiterForTesting } from "@/lib/pet/bubbles/speak-limiter"
 import { __resetProactiveClaims, claimKinds } from "@/lib/pet/llm/proactive/claim-registry"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { useSettingsStore } from "@/stores/settings"
@@ -12,6 +14,7 @@ import { useSettingsStore } from "@/stores/settings"
 beforeEach(() => {
   jest.useFakeTimers()
   __resetPetEventBusForTesting()
+  __resetSpeakLimiterForTesting()
   usePetStore.setState({ bubble: null })
   useSettingsStore.setState({ settings: { petSettings: {} } } as never)
 })
@@ -62,5 +65,26 @@ describe("usePetBubbles", () => {
     // at=6 → 6 % 3 === 0 → the custom phrase is chosen over the template.
     act(() => emitPetEvent({ source: "user", kind: "fed", at: 6 }))
     expect(usePetStore.getState().bubble?.text).toBe("meow meow")
+  })
+
+  it("never clears a newer authored bubble when an earlier template timer expires (F29)", () => {
+    renderHook(() => usePetBubbles(true))
+    act(() => emitPetEvent({ source: "user", kind: "fed", at: 5 }))
+    expect(usePetStore.getState().bubble?.origin).toBe("template")
+
+    // 1s later, an authored 6s bubble replaces the template bubble.
+    act(() => jest.advanceTimersByTime(1000))
+    act(() => {
+      sayAsPet("Build succeeded!", { durationMs: 6000 })
+    })
+    expect(usePetStore.getState().bubble?.text).toBe("Build succeeded!")
+
+    // At t=4s the old template timer fires — must NOT cut short the new 6s bubble.
+    act(() => jest.advanceTimersByTime(3000))
+    expect(usePetStore.getState().bubble?.text).toBe("Build succeeded!")
+
+    // At t=7s (full 6s after authored bubble) it clears cleanly.
+    act(() => jest.advanceTimersByTime(3000))
+    expect(usePetStore.getState().bubble).toBeNull()
   })
 })

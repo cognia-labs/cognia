@@ -60,6 +60,21 @@ describe("usePetStore", () => {
     expect(usePetStore.getState().bubble).toBeNull()
   })
 
+  it("clearBubbleIfOwner only clears when the version and bubble reference match (F29)", () => {
+    const first = { text: "same", origin: "template" as const }
+    const second = { text: "same", origin: "llm" as const }
+    usePetStore.getState().setBubble(first)
+    const v1 = usePetStore.getState().bubbleVersion
+    usePetStore.getState().setBubble(second)
+    const v2 = usePetStore.getState().bubbleVersion
+
+    usePetStore.getState().clearBubbleIfOwner(v1, first)
+    expect(usePetStore.getState().bubble).toBe(second)
+
+    usePetStore.getState().clearBubbleIfOwner(v2, second)
+    expect(usePetStore.getState().bubble).toBeNull()
+  })
+
   it("tracks the last grown stats", () => {
     usePetStore.getState().setLastGrewStats(["debugging", "wisdom"])
     expect(usePetStore.getState().lastGrewStats).toEqual(["debugging", "wisdom"])

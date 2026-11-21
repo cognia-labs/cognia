@@ -133,6 +133,21 @@ describe("wireTwinActivitySource", () => {
     expect(events).toHaveLength(0)
   })
 
+  it("emits batched milestones without replaying older rows when the newest is deleted (F23)", () => {
+    const { pushCompleted, events } = setup()
+    pushCompleted([job({ id: "old", completedAt: 100 })])
+    pushCompleted([
+      job({ id: "old", completedAt: 100 }),
+      job({ id: "m1", completedAt: 200, kind: "distill" }),
+      job({ id: "m2", completedAt: 201, kind: "re-distill" }),
+    ])
+    expect(events.map((e) => e.meta?.jobKind)).toEqual(["distill", "re-distill"])
+
+    // Deleting m1/m2 leaves only older rows — must not re-emit.
+    pushCompleted([job({ id: "ancient", completedAt: 50, kind: "distill" })])
+    expect(events).toHaveLength(2)
+  })
+
   it("dispose tears down both observers", () => {
     const { dispose, disposeActive, disposeCompleted } = setup()
     dispose()

@@ -111,4 +111,19 @@ describe("sayAsPet", () => {
     scheduled[0].fn()
     expect(usePetStore.getState().bubble).toBeNull()
   })
+
+  it("does not clear a newer bubble with identical text when the first timer expires (F29)", () => {
+    const realStoreDeps = deps({ setBubble: (b) => usePetStore.getState().setBubble(b) })
+    sayAsPet("same line", { durationMs: 2000 }, realStoreDeps)
+    sayAsPet("same line", { durationMs: 6000 }, realStoreDeps)
+    expect(scheduled).toHaveLength(2)
+
+    // First timer fires — must NOT clear the second bubble.
+    scheduled[0].fn()
+    expect(usePetStore.getState().bubble?.text).toBe("same line")
+
+    // Second timer fires — clears its own bubble.
+    scheduled[1].fn()
+    expect(usePetStore.getState().bubble).toBeNull()
+  })
 })

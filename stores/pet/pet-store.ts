@@ -62,6 +62,8 @@ interface PetStoreState {
   oneShotQueue: PetOneShot[]
   /** Currently displayed speech bubble, or null. */
   bubble: PetBubble | null
+  /** Monotonic token bumped on every bubble write so stale timers never clear newer bubbles (F29). */
+  bubbleVersion: number
   /** Stat keys that grew on the most recent event (drives the "grew" pulse). */
   lastGrewStats: PetStatKey[]
   /** Pending "became unwell" signal, or null. Set by the controller, drained
@@ -83,6 +85,8 @@ interface PetStoreState {
   dequeueOneShot: () => PetOneShot | null
   clearOneShots: () => void
   setBubble: (bubble: PetBubble | null) => void
+  /** Clear `bubble` only when the store still holds the exact published version/reference (F29). */
+  clearBubbleIfOwner: (version: number, expected?: PetBubble) => void
   setLastGrewStats: (keys: PetStatKey[]) => void
   setCareAlert: (alert: PetCareAlert | null) => void
   setInteractionRefusal: (refusal: PetInteractionRefusalSignal | null) => void
@@ -95,6 +99,7 @@ export const usePetStore = create<PetStoreState>()((set, get) => ({
   visualState: "idle",
   oneShotQueue: [],
   bubble: null,
+  bubbleVersion: 0,
   lastGrewStats: [],
   careAlert: null,
   interactionRefusal: null,
@@ -111,7 +116,13 @@ export const usePetStore = create<PetStoreState>()((set, get) => ({
     return head
   },
   clearOneShots: () => set({ oneShotQueue: [] }),
-  setBubble: (bubble) => set({ bubble }),
+  setBubble: (bubble) => set((s) => ({ bubble, bubbleVersion: s.bubbleVersion + 1 })),
+  clearBubbleIfOwner: (version, expected) => {
+    const state = get()
+    if (state.bubbleVersion !== version) return
+    if (expected !== undefined && state.bubble !== expected) return
+    set({ bubble: null, bubbleVersion: state.bubbleVersion + 1 })
+  },
   setLastGrewStats: (lastGrewStats) => set({ lastGrewStats }),
   setCareAlert: (careAlert) => set({ careAlert }),
   setInteractionRefusal: (interactionRefusal) => set({ interactionRefusal }),

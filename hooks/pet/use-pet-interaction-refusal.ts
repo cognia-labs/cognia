@@ -27,6 +27,8 @@ export const REFUSAL_VARIANTS: Record<string, number> = {
   notHatched: 2,
 }
 
+const REFUSAL_BUBBLE_MS = 4000
+
 /** i18n key segment for a refusal reason. */
 function reasonKey(reason: string): string {
   return reason === "not-hatched" ? "notHatched" : reason
@@ -38,6 +40,13 @@ export function usePetInteractionRefusal(enabled: boolean): void {
   const setInteractionRefusal = usePetStore((s) => s.setInteractionRefusal)
   const setBubble = usePetStore((s) => s.setBubble)
   const handledAtRef = useRef<number | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!enabled || !refusal) return
@@ -53,7 +62,13 @@ export function usePetInteractionRefusal(enabled: boolean): void {
     // Deterministic from the refusal time so the renderer never calls
     // Math.random, matching how the template bubbles pick a variant.
     const pick = Math.abs(refusal.at) % variants
-    setBubble({ text: t(`bubbles.refused.${key}.${pick}`), origin: "template" })
+    const bubble = { text: t(`bubbles.refused.${key}.${pick}`), origin: "template" as const }
+    setBubble(bubble)
+    const version = usePetStore.getState().bubbleVersion
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      usePetStore.getState().clearBubbleIfOwner(version, bubble)
+    }, REFUSAL_BUBBLE_MS)
     setInteractionRefusal(null)
   }, [enabled, refusal, setBubble, setInteractionRefusal, t])
 }

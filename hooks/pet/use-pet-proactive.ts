@@ -112,9 +112,13 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
 
       const show = (text: string, origin: "template" | "llm", visibleMs: number) => {
         if (!mountedRef.current || !latest.current.proactiveOn) return
-        setBubble({ text, origin })
+        const bubble = { text, origin } as const
+        setBubble(bubble)
+        const version = usePetStore.getState().bubbleVersion
         if (timer.current) clearTimeout(timer.current)
-        timer.current = setTimeout(() => setBubble(null), visibleMs)
+        timer.current = setTimeout(() => {
+          usePetStore.getState().clearBubbleIfOwner(version, bubble)
+        }, visibleMs)
       }
 
       if (!soul || !current.view || !llmSpeak?.enabled) {
@@ -267,9 +271,13 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
           event.at
         )
         const days = typeof event.meta?.days === "number" ? event.meta.days : 0
-        setBubble({ text: custom ?? t(key, { days }), origin: "template" })
+        const bubble = { text: custom ?? t(key, { days }), origin: "template" as const }
+        setBubble(bubble)
+        const version = usePetStore.getState().bubbleVersion
         if (timer.current) clearTimeout(timer.current)
-        timer.current = setTimeout(() => setBubble(null), TEMPLATE_BUBBLE_MS)
+        timer.current = setTimeout(() => {
+          usePetStore.getState().clearBubbleIfOwner(version, bubble)
+        }, TEMPLATE_BUBBLE_MS)
       }
       void utter.current(decision, fallback)
     })
