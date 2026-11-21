@@ -143,9 +143,28 @@ export async function readEvalTargetDependency(
     variant,
     executionSettings,
     definition,
+    // What the target runs, never the editing state around it: a saved draft,
+    // the binding's concurrency counter or its timestamps change nothing a
+    // call sends, so they must not mark the manifest's target as changed.
     prompts: bindings
-      .map((binding, index) => ({ binding, revision: revisions[index] }))
-      .sort((a, b) => a.binding.id.localeCompare(b.binding.id)),
+      .map((binding, index) => {
+        const revision = revisions[index]
+        return {
+          promptId: binding.promptId,
+          scope: binding.scope,
+          targetId: binding.targetId,
+          published:
+            revision?.kind === "published"
+              ? { contractVersion: revision.contractVersion, body: revision.body }
+              : null,
+        }
+      })
+      .sort(
+        (a, b) =>
+          a.promptId.localeCompare(b.promptId) ||
+          a.scope.localeCompare(b.scope) ||
+          a.targetId.localeCompare(b.targetId)
+      ),
   }
 }
 

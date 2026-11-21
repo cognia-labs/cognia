@@ -10,6 +10,7 @@ import {
 } from "./project-service"
 import { getSettings } from "@/lib/db/settings"
 import { saveEvalProject } from "@/lib/db/eval-lab"
+import { publishPromptOverride, savePromptOverrideDraft } from "@/lib/db/prompt-overrides"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 
 const project = (): EvalProject => ({
@@ -252,6 +253,41 @@ describe("EvalProjectService v2", () => {
       repetitions: 3,
       outerConcurrency: 1,
     })
+  })
+
+  // F06: saving a draft changed the digest of a target whose published text
+  // had not changed, and the executor refused to run the experiment.
+  it("keeps a target's digest across a draft and changes it when published text does", async () => {
+    const variant = { ...project().variants[0], kind: "chat" as const, targetId: "agent-1" }
+    const target = { scope: "account" as const, targetId: "" }
+    const base = {
+      promptId: "generation.title.chat",
+      target,
+      contractVersion: 1,
+      baseDigest: "sha256:base",
+      origin: "editor" as const,
+    }
+    const published = await publishPromptOverride({
+      ...base,
+      body: "Published.",
+      expectedRev: 0,
+      mutationId: "pub-1",
+    })
+    const before = await digestEvalDependency(await readEvalTargetDependency(variant))
+    const drafted = await savePromptOverrideDraft({
+      ...base,
+      body: "Unpublished draft.",
+      expectedRev: published.rev,
+      mutationId: "draft-1",
+    })
+    expect(await digestEvalDependency(await readEvalTargetDependency(variant))).toBe(before)
+    await publishPromptOverride({
+      ...base,
+      body: "Published again.",
+      expectedRev: drafted.rev,
+      mutationId: "pub-2",
+    })
+    expect(await digestEvalDependency(await readEvalTargetDependency(variant))).not.toBe(before)
   })
 
   it("fingerprints execution settings without persisting their contents in a manifest", async () => {
