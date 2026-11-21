@@ -23,7 +23,7 @@ from repowiki.config import Config
 from repowiki.core.analyzer import Analyzer
 from repowiki.core.cache import Cache
 from repowiki.core.graph import DependencyGraph
-from repowiki.core.models import ProjectContext
+from repowiki.core.models import ProjectContext, WikiData
 from repowiki.core.rag import SimpleRAG
 from repowiki.core.rag_store import RagStore
 from repowiki.core.wiki_builder import Wiki, WikiBuilder
@@ -263,6 +263,7 @@ async def _scan_acquired(
         wiki_data = await analyzer.analyze(project, on_progress=report, rankings=rankings)
     finally:
         await cache.close()
+    anchor_symbol_lines(wiki_data, project)
 
     report("Assembling pages")
     builder = WikiBuilder()
@@ -424,3 +425,34 @@ async def _embed_missing(
 def reading_order(result: ScanResult, *, top: int = 25) -> list[dict[str, Any]]:
     """The map the panel opens on: most-depended-upon files first."""
     return result.map_entries[:top]
+
+
+def _leading_blank_lines(text: str) -> int:
+    count = 0
+    for line in text.splitlines():
+        if line.strip():
+            break
+        count += 1
+    return count
+
+
+def anchor_symbol_lines(wiki_data: WikiData, project: ProjectContext) -> None:
+    """Turn the analyzer's symbol lines into the file's own line numbers.
+
+    The module prompt asks the model to count a symbol's line from the first
+    non-blank line of the snippet it was shown, and the snippet starts at the
+    top of the file, blank lines included. A page cites ``path:line`` against
+    the file itself, so a file that opens with blank lines would be cited that
+    many lines too early. Shift each known line (``0`` stays "unknown") by the
+    file's leading blank lines. Runs once per scan, after the analyzer: what the
+    analyzer caches stays in the prompt's own numbering.
+    """
+    leading = {f.path: _leading_blank_lines(f.content or f.preview) for f in project.files}
+    for module in wiki_data.modules:
+        for doc in module.files:
+            offset = leading.get(doc.path, 0)
+            if not offset:
+                continue
+            for symbol in doc.key_symbols:
+                if symbol.line > 0:
+                    symbol.line += offset
