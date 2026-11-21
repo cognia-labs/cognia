@@ -56782,6 +56782,10 @@
         "description": "列出该平台完全不支持的 A2UI 类型，要求模型不要输出。",
         "title": "IM 渠道：不支持"
       },
+      "chat__interrupted-turn__resume": {
+        "description": "仅可查看：应用续写被中断的回复时发送的说明，要求从中断处继续，并在重复操作前先检查当前状态。",
+        "title": "中断回合续写"
+      },
       "chat__peer-delivery__frame": {
         "description": "由宿主读取的协议文本：把其他会话发来的消息标为不可信内容，不当作你的授权。",
         "title": "来自其他会话的消息"

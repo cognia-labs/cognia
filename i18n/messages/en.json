@@ -56782,6 +56782,10 @@
         "description": "Lists A2UI kinds the platform cannot show at all, so the model never emits them.",
         "title": "IM channel: unsupported kinds"
       },
+      "chat__interrupted-turn__resume": {
+        "description": "Inspect-only text sent when the app continues a reply that was cut off: pick up where it stopped and check state before repeating an action.",
+        "title": "Interrupted turn resume"
+      },
       "chat__peer-delivery__frame": {
         "description": "Protocol text read by the host: wraps a message from another session as untrusted, never as your consent.",
         "title": "Message from another session"
