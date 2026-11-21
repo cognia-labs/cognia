@@ -170,6 +170,18 @@ handler 运行在 JavaScript 运行时中。
 调度器一旦决定了这次启动的去向，它就返回真实执行行的 id。
 这次启动可能正在运行、被重叠策略缓冲，或被跳过。
 它不会等待 handler 结束。
+被缓冲的启动从进入缓冲起，就以这个 id 留有一条 `pending` 行。
+如果任务在它运行前被暂停、停用、到期或迁走，这一行会以 `cancelled` 结束。
+如果应用先重启了，这一行会以 `cancelled`、`terminalReason: "interrupted-on-restart"` 结束，之后也不会再运行。
+
+有两类已接受的工作会跨重启保留。
+调度器已领取但尚未开始的槽位，会在重启后运行；若任务的漏跑策略本会跳过它，则记为跳过。
+已安排的重试会按时运行；时间已过则立即运行。
+暂停、编辑或删除任务会永久取消待执行的重试。
+
+在 `overlapPolicy: "cancel-previous"` 策略下，新启动会等被取消的 handler 返回后才开始。
+handler 若 10 秒内都不理会 `signal`，它会继续运行，新启动记为 `skipped`。
+handler 在 `signal` 中止后返回失败的，以 `cancelled` 结束，不会重试。
 
 `cancelExecution(executionId)` 走调度器自己的取消路径。
 运行会以 `cancelled` 结束，`terminalReason` 为 `"user-cancelled"`，handler 的 `signal` 会中止。

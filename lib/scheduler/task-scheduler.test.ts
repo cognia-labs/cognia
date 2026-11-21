@@ -81,6 +81,10 @@ jest.mock("./scheduler-db", () => ({
     getAllTasks: jest.fn().mockResolvedValue([]),
     getActiveEventTasks: jest.fn().mockResolvedValue([]),
     createExecution: jest.fn().mockResolvedValue(undefined),
+    recordBufferedStart: jest.fn().mockResolvedValue(undefined),
+    addPendingStart: jest.fn().mockResolvedValue(undefined),
+    removePendingStarts: jest.fn().mockResolvedValue(undefined),
+    listTasksWithPendingStarts: jest.fn().mockResolvedValue([]),
     updateExecution: jest.fn().mockResolvedValue(undefined),
     getTaskExecutions: jest.fn().mockResolvedValue([]),
     getTasksByType: jest.fn().mockResolvedValue([]),
@@ -3563,10 +3567,15 @@ describe("TaskScheduler", () => {
         driver.fire(task.id, slot)
         await jest.advanceTimersByTimeAsync(10)
 
+        // The claim names the slot's start, so it is recorded with the cursor.
         expect(mockSchedulerDb.claimTaskSlot).toHaveBeenCalledWith(
           task.id,
           new Date(slot),
-          new Date(slot + intervalMs)
+          new Date(slot + intervalMs),
+          {
+            executionId: `occ-on-time-task-${Math.floor(slot / 1000) * 1000}`,
+            triggerSource: "schedule",
+          }
         )
         expect(executor).toHaveBeenCalledTimes(1)
         sched.stop()

@@ -581,6 +581,10 @@ export async function applyBackupPackage(
           // everything the archive slept through. Let the scheduler recompute
           // it when the user resumes the task.
           nextRunAt: undefined,
+          // Claimed slots and scheduled retries belong to the scheduler that
+          // made them on the source machine; replaying them here would run
+          // its work again.
+          pendingStarts: undefined,
         })),
         table: db.scheduledTasks,
         kind: "scheduledTasks",

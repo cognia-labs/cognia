@@ -1233,6 +1233,16 @@ describe("applyBackupPackage — learned memory", () => {
           failureCount: 0,
           createdAt: date,
           updatedAt: date,
+          // The source machine's claimed slot: never replayed after a restore.
+          pendingStarts: JSON.stringify([
+            {
+              kind: "slot",
+              executionId: "occ-portable-schedule-0",
+              scheduledFor: date,
+              triggerSource: "schedule",
+              claimedAt: date,
+            },
+          ]),
         },
       ],
     })
@@ -1261,6 +1271,10 @@ describe("applyBackupPackage — learned memory", () => {
     expect(
       (await db.scheduledTasks.toArray()).find((row) => row.id !== "portable-schedule")?.projectId
     ).toBe(project.id)
+    expect((await db.scheduledTasks.toArray()).map((row) => row.pendingStarts)).toEqual([
+      undefined,
+      undefined,
+    ])
   })
 
   function memorySnapshot(): BackupPayloadV3 {

@@ -37,6 +37,13 @@ import type { DBScheduledTask, DBTaskExecution } from "@/lib/db/scheduled-task-t
 import { getDb } from "@/lib/db/schema"
 import { parseItemOwner } from "@/lib/placement/ownership"
 import { loggers } from "@cognia/logging"
+import {
+  parsePendingStarts,
+  withPendingStart,
+  withoutPendingStarts,
+  type PendingSlotClaim,
+  type PendingStart,
+} from "./pending-starts"
 
 const log = loggers.app
 
@@ -51,6 +58,13 @@ const log = loggers.app
  * does not need across restarts: failures are already durable in
  * `connectorAudit` and the Notification Center, and `interruptStaleExecutions()`
  * has nothing to reconcile when the table starts empty.
+ *
+ * Work the scheduler has accepted but not begun does NOT live in the runs
+ * table for exactly this reason: claimed slots and scheduled retries are kept
+ * on the task row (`DBScheduledTask.pendingStarts`), so a brain restart still
+ * runs them. What a brain restart does lose is the placeholder row of a start
+ * buffered behind a running one (`recordBufferedStart`), which elsewhere a
+ * restart settles as `interrupted-on-restart`; there it leaves no row at all.
  *
  * This is intentional dormancy, so it is labelled on all three axes: here at
  * the type, in the snapshot source that consumes it, and pinned by
@@ -227,11 +241,17 @@ class SchedulerDatabase {
    * execution starts, so a short interval cannot admit several overlapping
    * runs against the same remaining budget. Exactly one renderer/process
    * callback can win for a given `(taskId, expectedRunAt)` pair.
+   *
+   * With `claim`, the slot is also recorded as a pending start on the task
+   * (`pending-starts.ts`) in the same write, so the work the cursor just moved
+   * past stays known until the row of its start is written, even if this
+   * process stops first.
    */
   async claimTaskSlot(
     taskId: string,
     expectedRunAt: Date,
-    nextRunAt?: Date
+    nextRunAt?: Date,
+    claim?: Pick<PendingSlotClaim, "executionId" | "triggerSource" | "deferNextRunUpdate">
   ): Promise<ScheduledTask | null> {
     return this.transaction("rw", this.tasks, async () => {
       const dbTask = await this.tasks.get(taskId)
@@ -250,13 +270,26 @@ class SchedulerDatabase {
       }
       const runCount = dbTask.runCount + 1
       const exhaustedBudget = typeof maxRuns === "number" && maxRuns > 0 && runCount >= maxRuns
+      const now = new Date()
       const claimed: DBScheduledTask = {
         ...dbTask,
         runCount,
         // Do not expose another slot once this reservation consumes the final
         // budget. The in-flight run finalizes the task as expired.
         nextRunAt: exhaustedBudget ? undefined : nextRunAt?.toISOString(),
-        updatedAt: new Date().toISOString(),
+        updatedAt: now.toISOString(),
+        ...(claim
+          ? {
+              pendingStarts: withPendingStart(dbTask.pendingStarts, {
+                kind: "slot",
+                executionId: claim.executionId,
+                scheduledFor: expectedRunAt,
+                triggerSource: claim.triggerSource,
+                ...(claim.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
+                claimedAt: now,
+              }),
+            }
+          : {}),
       }
       await this.tasks.put(claimed)
       return deserializeTask(claimed)
@@ -468,10 +501,86 @@ class SchedulerDatabase {
   // ========== Execution Operations ==========
 
   /**
-   * Create an execution record
+   * Create the row a start produced: the run that began, or the row of a start
+   * settled without running (skipped, cancelled, refused).
+   *
+   * It may replace only the placeholder of a buffered start with the same id
+   * (`recordBufferedStart`); any other existing row is refused, as a plain
+   * insert would be. In the same transaction it consumes the start's pending
+   * entry on its task (a claimed slot or a scheduled retry), so from the
+   * moment this row exists a restart reads it instead of starting the work
+   * again.
    */
   async createExecution(execution: TaskExecution): Promise<void> {
-    await this.executions.add(serializeExecution(execution))
+    await this.transaction("rw", [this.tasks, this.executions], async () => {
+      const existing = await this.executions.get(execution.id)
+      if (existing && existing.dispatch !== "queued") {
+        // What a plain insert of a taken key raises.
+        throw Object.assign(new Error(`Execution ${execution.id} already exists`), {
+          name: "ConstraintError",
+        })
+      }
+      await this.executions.put(serializeExecution(execution))
+      const task = await this.tasks.get(execution.taskId)
+      if (task?.pendingStarts) {
+        const remaining = withoutPendingStarts(
+          task.pendingStarts,
+          (start) => start.executionId === execution.id
+        )
+        if (remaining !== task.pendingStarts) {
+          await this.tasks.update(execution.taskId, { pendingStarts: remaining })
+        }
+      }
+    })
+  }
+
+  /**
+   * Write the placeholder row of a start an overlap policy or the host cap is
+   * holding back, so the id its caller was handed names a row at once. Does
+   * nothing when a row with that id already exists (the start may already
+   * have run). The row is replaced when the start runs or is dropped; a
+   * restart settles one left behind (`interruptStaleExecutions`).
+   */
+  async recordBufferedStart(execution: TaskExecution): Promise<void> {
+    await this.transaction("rw", [this.executions], async () => {
+      if (await this.executions.get(execution.id)) return
+      await this.executions.add({ ...serializeExecution(execution), dispatch: "queued" })
+    })
+  }
+
+  // ========== Pending starts (claimed slots, scheduled retries) ==========
+
+  /** Record a start promised for a task, replacing one with the same id. */
+  async addPendingStart(taskId: string, start: PendingStart): Promise<void> {
+    await this.transaction("rw", [this.tasks], async () => {
+      const row = await this.tasks.get(taskId)
+      if (!row) return
+      await this.tasks.update(taskId, { pendingStarts: withPendingStart(row.pendingStarts, start) })
+    })
+  }
+
+  /** Forget the pending starts of a task that `drop` selects. */
+  async removePendingStarts(taskId: string, drop: (start: PendingStart) => boolean): Promise<void> {
+    await this.transaction("rw", [this.tasks], async () => {
+      const row = await this.tasks.get(taskId)
+      if (!row?.pendingStarts) return
+      const remaining = withoutPendingStarts(row.pendingStarts, drop)
+      if (remaining !== row.pendingStarts) {
+        await this.tasks.update(taskId, { pendingStarts: remaining })
+      }
+    })
+  }
+
+  /** Every task that has pending starts, with them. Read once at start-up. */
+  async listTasksWithPendingStarts(): Promise<
+    Array<{ task: ScheduledTask; pending: PendingStart[] }>
+  > {
+    const rows = await this.tasks.filter((row) => Boolean(row.pendingStarts)).toArray()
+    return rows.flatMap((row) => {
+      const task = safeDeserializeTask(row)
+      const pending = parsePendingStarts(row.pendingStarts)
+      return task && pending.length > 0 ? [{ task, pending }] : []
+    })
   }
 
   /**
@@ -573,6 +682,9 @@ class SchedulerDatabase {
       terminalReason: "interrupted-on-restart" as const,
       error: e.error ?? "Interrupted by app restart",
       completedAt: e.completedAt ?? nowIso,
+      // A buffered start left behind is settled, not resumed: what it was
+      // waiting for ended with the process that queued it.
+      dispatch: undefined,
     }))
     await this.executions.bulkPut(patched)
     return patched.length

@@ -1022,3 +1022,248 @@ it("F14: a failure to record a successful run never runs its executor again", as
   expect(executor).toHaveBeenCalledTimes(1)
   expect((await schedulerDb.getExecution(run!.id))?.status).toBe("completed")
 })
+
+// ── Audit 2026-11-17 F1 F2 F3: accepted work outlives the process ─────────────
+
+async function restartScheduler(driver: SchedulerTimingDriver = timing()) {
+  scheduler.stop()
+  scheduler = createTaskScheduler(driver)
+  await scheduler.initialize()
+}
+async function until(check: () => boolean | Promise<boolean>, what: string) {
+  const deadline = Date.now() + 3_000
+  while (!(await check())) {
+    if (Date.now() >= deadline) throw new Error(`Did not settle: ${what}`)
+    await settle(5)
+  }
+}
+async function rawPendingStarts(taskId: string): Promise<string | undefined> {
+  return (await getDb().scheduledTasks.get(taskId))?.pendingStarts
+}
+function controlledTiming() {
+  let due: ((id: string, at: number) => void) | undefined
+  const driver: SchedulerTimingDriver = {
+    supportsLeaderElection: false,
+    async start() {},
+    stop() {},
+    onDue(callback) {
+      due = callback
+    },
+    arm() {},
+    disarm() {},
+  }
+  return {
+    driver,
+    fire(id: string, at: number) {
+      if (!due) throw new Error("No due callback registered")
+      due(id, at)
+    },
+  }
+}
+
+it("F2: a slot claimed with its cursor still runs when the process stopped before it started", async () => {
+  const clock = controlledTiming()
+  await restartScheduler(clock.driver)
+  const executor = jest.fn(async () => ({ success: true }))
+  registerTaskExecutor("test", executor)
+  const slot = new Date(Date.now() + 100)
+  const task = await scheduler.createTask({
+    name: "claimed once",
+    type: "test",
+    trigger: { type: "once", runAt: slot },
+    payload: {},
+    config: { maxRetries: 0 },
+    notification: { onStart: false, onComplete: false, onError: false },
+  })
+  const claimed = latch()
+  const hold = latch()
+  const original = schedulerDb.claimTaskSlot.bind(schedulerDb)
+  jest.spyOn(schedulerDb, "claimTaskSlot").mockImplementationOnce(async (...args) => {
+    const result = await original(...args)
+    claimed.release()
+    await hold.promise
+    return result
+  })
+  await settle(Math.max(0, slot.getTime() - Date.now()) + 5)
+  clock.fire(task.id, slot.getTime())
+  await claimed.promise
+  // The exact boundary: cursor and budget committed, no run row yet.
+  expect(await schedulerDb.getTask(task.id)).toMatchObject({ runCount: 1, nextRunAt: undefined })
+  expect(await schedulerDb.getTaskExecutions(task.id)).toHaveLength(0)
+  expect(await rawPendingStarts(task.id)).toContain('"kind":"slot"')
+  try {
+    await restartScheduler()
+  } finally {
+    hold.release()
+  }
+  await until(
+    async () =>
+      (await schedulerDb.getTaskExecutions(task.id)).some((run) => run.status === "completed"),
+    "the recovered slot completes"
+  )
+  expect(executor).toHaveBeenCalledTimes(1)
+  const [run] = await schedulerDb.getTaskExecutions(task.id)
+  expect(run).toMatchObject({ scheduledFor: slot, triggerSource: "schedule" })
+  expect(await rawPendingStarts(task.id)).toBeUndefined()
+  await until(
+    async () => (await schedulerDb.getTask(task.id))?.status === "expired",
+    "the one-shot expires"
+  )
+})
+
+it("F2: a recovered claim the schedule has moved past follows the missed-run policy", async () => {
+  const slot = new Date(Date.now() - 10 * 60_000)
+  const task = liveDraft({ nextRunAt: slot })
+  task.config.runMissedOnStartup = false
+  await schedulerDb.createTask(task)
+  const executor = jest.fn(async () => ({ success: true }))
+  registerTaskExecutor("test", executor)
+  const occurrence = `occ-${task.id}-${Math.floor(slot.getTime() / 1000) * 1000}`
+  expect(
+    await schedulerDb.claimTaskSlot(task.id, slot, new Date(Date.now() + 60_000), {
+      executionId: occurrence,
+      triggerSource: "schedule",
+    })
+  ).not.toBeNull()
+  await restartScheduler()
+  await until(
+    async () => (await schedulerDb.getExecution(occurrence)) !== null,
+    "a row for the slot"
+  )
+  expect(await schedulerDb.getExecution(occurrence)).toMatchObject({
+    status: "skipped",
+    terminalReason: "missed-run-skipped",
+    scheduledFor: slot,
+  })
+  expect(executor).not.toHaveBeenCalled()
+  expect(await rawPendingStarts(task.id)).toBeUndefined()
+})
+
+it("F2: a claim whose task was paused before the restart is settled, not run", async () => {
+  const slot = new Date(Date.now() - 1_000)
+  const task = liveDraft({ nextRunAt: slot })
+  await schedulerDb.createTask(task)
+  const executor = jest.fn(async () => ({ success: true }))
+  registerTaskExecutor("test", executor)
+  const occurrence = `occ-${task.id}-${Math.floor(slot.getTime() / 1000) * 1000}`
+  await schedulerDb.claimTaskSlot(task.id, slot, new Date(Date.now() + 60_000), {
+    executionId: occurrence,
+    triggerSource: "schedule",
+  })
+  await schedulerDb.mutateTask(task.id, () => ({ status: "paused" }))
+  await restartScheduler()
+  await until(
+    async () => (await schedulerDb.getExecution(occurrence)) !== null,
+    "a row for the slot"
+  )
+  expect(await schedulerDb.getExecution(occurrence)).toMatchObject({
+    status: "cancelled",
+    terminalReason: "user-cancelled",
+  })
+  expect(executor).not.toHaveBeenCalled()
+})
+
+it("F1: a scheduled retry runs after a restart, once, under the id it was given", async () => {
+  const task = liveDraft()
+  task.config.maxRetries = 1
+  task.config.retryDelay = 60
+  task.config.maxRetryDelay = 60
+  await schedulerDb.createTask(task)
+  const executor = jest
+    .fn(async () => ({ success: true }))
+    .mockImplementationOnce(async () => ({ success: false, error: "transient" }))
+  registerTaskExecutor("test", executor)
+  const first = await scheduler.runTaskNow(task.id)
+  expect(first).toMatchObject({ status: "failed", terminalReason: "retry-scheduled" })
+  const pending = JSON.parse((await rawPendingStarts(task.id)) ?? "[]") as Array<{
+    executionId: string
+    attempt: number
+  }>
+  expect(pending).toEqual([expect.objectContaining({ kind: "retry", attempt: 1 })])
+  await restartScheduler()
+  await until(() => executor.mock.calls.length === 2, "the retry runs")
+  await until(
+    async () => (await schedulerDb.getExecution(pending[0].executionId))?.status === "completed",
+    "the retry's row completes"
+  )
+  expect(await schedulerDb.getExecution(pending[0].executionId)).toMatchObject({
+    triggerSource: "retry",
+    retryAttempt: 1,
+  })
+  expect(await rawPendingStarts(task.id)).toBeUndefined()
+  await settle(150)
+  expect(executor).toHaveBeenCalledTimes(2)
+})
+
+it("F1: a retry a pause called off stays off across a restart", async () => {
+  const task = liveDraft()
+  task.config.maxRetries = 1
+  task.config.retryDelay = 60
+  task.config.maxRetryDelay = 60
+  await schedulerDb.createTask(task)
+  const executor = jest.fn(async () => ({ success: false, error: "transient" }))
+  registerTaskExecutor("test", executor)
+  expect((await scheduler.runTaskNow(task.id))?.terminalReason).toBe("retry-scheduled")
+  await scheduler.pauseTask(task.id)
+  await until(async () => (await rawPendingStarts(task.id)) === undefined, "the retry is forgotten")
+  await scheduler.resumeTask(task.id)
+  await restartScheduler()
+  await settle(200)
+  expect(executor).toHaveBeenCalledTimes(1)
+})
+
+it("F3: a buffered start has a row at once, and a restart settles it instead of losing it", async () => {
+  const task = liveDraft()
+  task.config.overlapPolicy = "queue-all"
+  await schedulerDb.createTask(task)
+  const entered = latch()
+  const hold = latch()
+  const executor = jest.fn(async () => {
+    entered.release()
+    await hold.promise
+    return { success: true }
+  })
+  registerTaskExecutor("test", executor)
+  const first = scheduler.runTaskNow(task.id)
+  await entered.promise
+  const queued = await scheduler.runTaskNow(task.id)
+  expect(queued?.status).toBe("pending")
+  expect(await schedulerDb.getExecution(queued!.id)).toMatchObject({ status: "pending" })
+  scheduler.stop()
+  hold.release()
+  await first
+  scheduler = createTaskScheduler(timing())
+  await scheduler.initialize()
+  await settle(30)
+  expect(await schedulerDb.getExecution(queued!.id)).toMatchObject({
+    status: "cancelled",
+    terminalReason: "interrupted-on-restart",
+  })
+  expect(executor).toHaveBeenCalledTimes(1)
+})
+
+it("F3: a pause settles the starts it drops from the buffer", async () => {
+  const task = liveDraft()
+  task.config.overlapPolicy = "queue-all"
+  await schedulerDb.createTask(task)
+  const entered = latch()
+  const hold = latch()
+  registerTaskExecutor("test", async () => {
+    entered.release()
+    await hold.promise
+    return { success: true }
+  })
+  const first = scheduler.runTaskNow(task.id)
+  await entered.promise
+  const queued = await scheduler.runTaskNow(task.id)
+  await scheduler.pauseTask(task.id)
+  hold.release()
+  await first
+  await until(
+    async () => (await schedulerDb.getExecution(queued!.id))?.status === "cancelled",
+    "the dropped start is settled"
+  )
+  expect(await schedulerDb.getExecution(queued!.id)).toMatchObject({
+    terminalReason: "user-cancelled",
+  })
+})

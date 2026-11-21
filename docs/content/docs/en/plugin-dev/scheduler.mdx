@@ -170,6 +170,18 @@ Any other value is rejected.
 It resolves with the id of the real execution row as soon as the scheduler has decided what the start is.
 That start can be running, buffered by the overlap policy, or skipped.
 It does not wait for the handler.
+A buffered start has a `pending` row under that id from the moment it is buffered.
+If the task is paused, disabled, expired or moved before the start runs, the row settles `cancelled`.
+If the app restarts first, it settles `cancelled` with `terminalReason: "interrupted-on-restart"` and does not run later.
+
+Two kinds of accepted work do survive a restart.
+A slot the scheduler claimed but had not started runs after the restart, or is skipped when the task's missed-run policy would have skipped it.
+A retry that was scheduled runs at its time, or at once if that time has passed.
+Pausing, editing or deleting the task calls a pending retry off for good.
+
+Under `overlapPolicy: "cancel-previous"`, the new start waits for the cancelled handler to return before it starts.
+A handler that ignores its `signal` for 10 seconds keeps running, and the new start is recorded as `skipped`.
+A handler that returns a failure after its `signal` aborted settles as `cancelled` and is not retried.
 
 `cancelExecution(executionId)` uses the scheduler's own cancel path.
 The run settles as `cancelled` with `terminalReason: "user-cancelled"`, and its handler's `signal` aborts.

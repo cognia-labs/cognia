@@ -130,6 +130,12 @@ import { normalizeConversationalTaskPayload } from "./conversational-task-author
 import { resolveCatchupDefaults } from "./catchup-policy"
 import { latestElapsedSlot, scheduledOccurrenceExecutionId } from "./occurrence"
 import {
+  decideRecoveredSlot,
+  withdrawnStartReason,
+  type PendingRetry,
+  type PendingSlotClaim,
+} from "./pending-starts"
+import {
   promoteToSystemTask,
   promotionTokenMatches,
   type SystemSchedulerPlatform,
@@ -515,6 +521,13 @@ interface ExecuteTaskContext {
   onAccepted?: (execution: TaskExecution) => void
 }
 
+/**
+ * What becomes of buffered starts when their task stops taking runs: each is
+ * settled `cancelled` with this reason and message. `"deleted"` writes
+ * nothing, because the task's rows were deleted with it.
+ */
+type QueueDropDisposition = "deleted" | { reason: TaskExecutionTerminalReason; message: string }
+
 /** A buffered start waiting for the running execution to finish (queue-one / queue-all). */
 interface QueuedStart {
   triggerSource: TaskExecutionTriggerSource
@@ -560,6 +573,8 @@ class TaskSchedulerImpl {
    * across its row read instead.
    */
   private queueEpochs: Map<string, number> = new Map()
+  /** Why each task's buffer was last dropped, for a start the drain was holding. */
+  private queueDrops: Map<string, QueueDropDisposition> = new Map()
   /**
    * Slot occurrences a start is deciding on right now (see `executeTask`).
    * Held from before the row lookup until the start is running, buffered or
@@ -582,6 +597,8 @@ class TaskSchedulerImpl {
   private driverReady = false
   /** Epoch-ms when the driver started; anchors the executor-registration grace. */
   private startedAtMs = 0
+  /** Guards the one-shot recovery of pending starts per start-up (`recoverPendingStarts`). */
+  private pendingStartsRecovered = false
   /** Guards the one-shot deprecated-type sweep per process (see `pauseDeprecatedTasks`). */
   private deprecatedTasksSwept = false
   /** Guards the one-shot orphaned `connection:*` sweep per process. */
@@ -866,7 +883,14 @@ class TaskSchedulerImpl {
           const message = event.data
           if (message?.type !== "execution-cancel-request") return
           const controller = this.executionControllers.get(message.executionId)
-          if (!controller) return
+          if (!controller) {
+            // A buffered start held here has a pending row the asking context
+            // can see, so it was told the request went out; withdraw it.
+            void this.withdrawQueuedStart(message.executionId).catch((error) =>
+              log.warn(`Could not withdraw buffered start ${message.executionId}:`, error)
+            )
+            return
+          }
           log.info(`Execution ${message.executionId} cancelled on request from another context`)
           controller.abort("user-cancelled")
         }
@@ -988,6 +1012,123 @@ class TaskSchedulerImpl {
       if (version !== this.lifecycleVersion) return
       await this.scheduleTask(task, version)
     }
+
+    // Starts an earlier process accepted and never began: once per start-up,
+    // after the schedule is armed, without holding up the boot.
+    if (!this.pendingStartsRecovered) {
+      this.pendingStartsRecovered = true
+      void this.recoverPendingStarts(version).catch((err) => {
+        log.error("Failed to recover pending scheduled starts on boot:", err)
+      })
+    }
+  }
+
+  /**
+   * Answer every start the task rows say was accepted and never began
+   * (`pending-starts.ts`): a slot claimed with its cursor, a retry scheduled
+   * by a failed attempt. A row in the run history means the start began, so it
+   * is never repeated here; only work that never reached its executor is.
+   */
+  private async recoverPendingStarts(version: number): Promise<void> {
+    const rows = await schedulerDb.listTasksWithPendingStarts()
+    for (const { task, pending } of rows) {
+      for (const start of pending) {
+        if (version !== this.lifecycleVersion) return
+        try {
+          if (start.kind === "retry") this.recoverPendingRetry(task, start, version)
+          else await this.recoverClaimedSlot(task, start, version)
+        } catch (error) {
+          log.error(`Could not recover the pending start ${start.executionId}:`, error)
+        }
+      }
+    }
+  }
+
+  /** Whether this host still runs a task's work: active, here, and its timing authority. */
+  private takesRunsHere(task: ScheduledTask): boolean {
+    return (
+      task.status === "active" && !isOwnedElsewhere(task.owner) && this.isTimingAuthorityFor(task)
+    )
+  }
+
+  /** Arm a scheduled retry again, at its time or at once if that has passed. */
+  private recoverPendingRetry(task: ScheduledTask, retry: PendingRetry, version: number): void {
+    if (!this.takesRunsHere(task)) {
+      this.forgetPendingRetry(task.id, retry.executionId)
+      return
+    }
+    log.info(`Re-arming retry ${retry.attempt} of ${task.name} after a restart`)
+    this.retryChains.add(task.id)
+    this.scheduleRetry(
+      task,
+      retry.attempt,
+      retry.availableAt,
+      retry.deferNextRunUpdate,
+      retry.scheduledSlotClaimed,
+      Math.max(0, retry.availableAt.getTime() - Date.now()),
+      version,
+      this.getTaskLifecycleVersion(task.id),
+      retry.executionId
+    )
+  }
+
+  /**
+   * Run, skip or withdraw a slot that was claimed and never began, deciding
+   * exactly as a missed slot is decided (`decideRecoveredSlot`).
+   */
+  private async recoverClaimedSlot(
+    task: ScheduledTask,
+    claim: PendingSlotClaim,
+    version: number
+  ): Promise<void> {
+    if (await schedulerDb.getExecution(claim.executionId)) {
+      // Its start wrote a row, so it began; the claim only outlived it.
+      await schedulerDb.removePendingStarts(
+        task.id,
+        (start) => start.executionId === claim.executionId
+      )
+      return
+    }
+    if (version !== this.lifecycleVersion) return
+    if (!this.takesRunsHere(task)) {
+      await this.createSettledExecution(task, {
+        id: claim.executionId,
+        status: "cancelled",
+        triggerSource: claim.triggerSource,
+        scheduledFor: claim.scheduledFor,
+        terminalReason: task.status === "active" ? "owned-elsewhere" : withdrawnStartReason(task),
+        message: "Not started: the task stopped taking runs here before this claimed slot began",
+      })
+      return
+    }
+    const decision = decideRecoveredSlot({
+      task,
+      claim,
+      now: new Date(),
+      nextAfter: (slot) => this.getNextRunAfter(task.trigger, slot),
+    })
+    if (!decision.run) {
+      await this.createSkippedExecution(task, {
+        id: claim.executionId,
+        triggerSource: claim.triggerSource,
+        scheduledFor: claim.scheduledFor,
+        terminalReason: decision.terminalReason,
+        message: decision.message,
+      })
+      // The claim spent the run budget and the cursor; settle the bounds as a
+      // finished run of the slot would.
+      await this.finalizeClaimedScheduledRun(task)
+      return
+    }
+    log.info(
+      `Starting ${task.name}'s claimed slot ${claim.scheduledFor.toISOString()} after a restart`
+    )
+    await this.executeTask(task, 0, {
+      triggerSource: claim.triggerSource,
+      scheduledFor: claim.scheduledFor,
+      scheduledSlotClaimed: true,
+      ...(claim.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
+    })
   }
 
   /**
@@ -1118,7 +1259,26 @@ class TaskSchedulerImpl {
       await this.reconcileMissedRecurringTask(task, now, version)
       return
     }
-    const claimedTask = await schedulerDb.claimTaskSlot(taskId, scheduledFor, nextRunAt)
+    const occurrenceId = scheduledOccurrenceExecutionId({
+      taskId,
+      triggerSource: "schedule",
+      scheduledFor,
+    })
+    const claimedTask = await schedulerDb.claimTaskSlot(
+      taskId,
+      scheduledFor,
+      nextRunAt,
+      occurrenceId ? { executionId: occurrenceId, triggerSource: "schedule" } : undefined
+    )
+    if (claimedTask && occurrenceId && !isCurrent()) {
+      await this.withdrawClaimedSlot(taskId, {
+        executionId: occurrenceId,
+        triggerSource: "schedule",
+        scheduledFor,
+        version,
+      })
+      return
+    }
     if (!isCurrent()) return
     if (!claimedTask) return
     if (claimedTask.nextRunAt) {
@@ -1392,8 +1552,31 @@ class TaskSchedulerImpl {
           return
         }
         const nextRunAt = dueSlots[index + 1] ?? nextFutureSlot
-        const claimed = await schedulerDb.claimTaskSlot(task.id, expectedRunAt, nextRunAt)
-        if (!claimed || !isCurrent() || !this.isTimingAuthorityFor(claimed)) return
+        const occurrenceId = scheduledOccurrenceExecutionId({
+          taskId: task.id,
+          triggerSource: "catch-up",
+          scheduledFor: dueSlots[index],
+        })
+        const claimed = await schedulerDb.claimTaskSlot(
+          task.id,
+          expectedRunAt,
+          nextRunAt,
+          occurrenceId
+            ? { executionId: occurrenceId, triggerSource: "catch-up", deferNextRunUpdate: true }
+            : undefined
+        )
+        if (!claimed) return
+        if (!isCurrent() || !this.isTimingAuthorityFor(claimed)) {
+          if (occurrenceId) {
+            await this.withdrawClaimedSlot(task.id, {
+              executionId: occurrenceId,
+              triggerSource: "catch-up",
+              scheduledFor: dueSlots[index],
+              version,
+            })
+          }
+          return
+        }
         try {
           await this.executeTask(claimed, 0, {
             triggerSource: "catch-up",
@@ -1445,6 +1628,44 @@ class TaskSchedulerImpl {
       "expired"
     )
     if (expired && isCurrent()) this.unscheduleTask(task.id)
+  }
+
+  /**
+   * Settle a slot this host claimed and will not start, so its pending claim
+   * is answered now rather than at the next start-up. A scheduler that has
+   * stopped since leaves it alone: the claim is exactly what the next
+   * start-up decides (`recoverPendingStarts`).
+   */
+  private async withdrawClaimedSlot(
+    taskId: string,
+    claim: {
+      executionId: string
+      triggerSource: "schedule" | "catch-up"
+      scheduledFor: Date
+      version: number
+    }
+  ): Promise<void> {
+    if (claim.version !== this.lifecycleVersion) return
+    const latest = await schedulerDb.getTask(taskId).catch(() => null)
+    // Deleted: its rows and its claims went with it.
+    if (!latest) return
+    try {
+      await this.createSettledExecution(latest, {
+        id: claim.executionId,
+        status: "cancelled",
+        triggerSource: claim.triggerSource,
+        scheduledFor: claim.scheduledFor,
+        terminalReason: isOwnedElsewhere(latest.owner)
+          ? "owned-elsewhere"
+          : !this.isTimingAuthorityFor(latest)
+            ? "owned-elsewhere"
+            : withdrawnStartReason(latest),
+        message: "Not started: the task changed or stopped taking runs after this slot was claimed",
+      })
+    } catch (error) {
+      // The start wrote its own row first; that row is the answer.
+      log.debug(`Claimed slot ${claim.executionId} already has a row`, { error: String(error) })
+    }
   }
 
   /**
@@ -1513,6 +1734,7 @@ class TaskSchedulerImpl {
     this.driverReady = false
     // A stop → start cycle is a fresh boot; reconcile orphaned executions again.
     this.staleExecutionsReconciled = false
+    this.pendingStartsRecovered = false
     log.info("Task scheduler stopped")
   }
 
@@ -1668,11 +1890,17 @@ class TaskSchedulerImpl {
       (input.status !== undefined && input.status !== "active")
     ) {
       this.invalidateTaskLifecycle(taskId)
+      // A pending retry would be dropped by the lifecycle check when its timer
+      // fires; cancel it now so a restart in between cannot revive it either.
+      this.clearTaskRetries(taskId)
     }
     if (input.status !== undefined && input.status !== "active") {
       this.unscheduleTask(taskId)
       this.clearTaskRetries(taskId)
-      this.dropQueuedStarts(taskId)
+      this.dropQueuedStarts(taskId, {
+        reason: "user-cancelled",
+        message: `Not started: the task was set to ${input.status} before this buffered start ran`,
+      })
     }
     const task = await schedulerDb.getTask(taskId)
     if (version !== this.lifecycleVersion) return null
@@ -1777,7 +2005,10 @@ class TaskSchedulerImpl {
     this.unscheduleTask(taskId)
     if (updatedTask.status !== "active") {
       this.clearTaskRetries(taskId)
-      this.dropQueuedStarts(taskId)
+      this.dropQueuedStarts(taskId, {
+        reason: "user-cancelled",
+        message: `Not started: the task was set to ${updatedTask.status} before this buffered start ran`,
+      })
     }
     if (updatedTask.status === "active") {
       await this.scheduleTask(updatedTask, version)
@@ -1793,7 +2024,7 @@ class TaskSchedulerImpl {
     this.invalidateTaskLifecycle(taskId)
     this.unscheduleTask(taskId)
     this.clearTaskRetries(taskId)
-    this.dropQueuedStarts(taskId)
+    this.dropQueuedStarts(taskId, "deleted")
     const running = this.runningByTask.get(taskId)
     for (const executionId of running ? Array.from(running.keys()) : []) {
       this.executionControllers.get(executionId)?.abort("task-deleted")
@@ -2105,7 +2336,10 @@ class TaskSchedulerImpl {
     this.invalidateTaskLifecycle(taskId)
     this.unscheduleTask(taskId)
     this.clearTaskRetries(taskId)
-    this.dropQueuedStarts(taskId)
+    this.dropQueuedStarts(taskId, {
+      reason: "user-cancelled",
+      message: "Not started: the task was paused before this buffered start ran",
+    })
     let previous: ScheduledTask | undefined
     const task = await schedulerDb.mutateTask(taskId, (current) => {
       previous = current
@@ -2204,7 +2438,10 @@ class TaskSchedulerImpl {
       this.invalidateTaskLifecycle(taskId)
       this.unscheduleTask(taskId)
       this.clearTaskRetries(taskId)
-      this.dropQueuedStarts(taskId)
+      this.dropQueuedStarts(taskId, {
+        reason: "owned-elsewhere",
+        message: `Not started: the task moved to ${owner.hostLabel} before this buffered start ran`,
+      })
       const fenced = await schedulerDb.mutateTask(taskId, () => ({
         owner,
         status: "disabled",
@@ -2227,7 +2464,10 @@ class TaskSchedulerImpl {
     if (status !== "active") {
       this.invalidateTaskLifecycle(taskId)
       this.clearTaskRetries(taskId)
-      this.dropQueuedStarts(taskId)
+      this.dropQueuedStarts(taskId, {
+        reason: "user-cancelled",
+        message: `Not started: the task was set to ${status} before this buffered start ran`,
+      })
     }
     const next = await schedulerDb.mutateTask(taskId, (current) => ({
       owner,
@@ -2310,30 +2550,11 @@ class TaskSchedulerImpl {
       return { cancelled: true }
     }
 
-    // A start the overlap policy or the concurrency cap is holding has no row
-    // and no controller yet, only a queue entry, so it was answered
-    // "not-found" while its caller held its id and watched it run later.
-    // Withdrawing it is the cancel: the entry leaves the queue and a cancelled
-    // row is written under the same id, so the id resolves to what happened.
-    for (const [taskId, queue] of this.queues) {
-      const index = queue.findIndex((start) => start.executionId === executionId)
-      if (index < 0) continue
-      const [start] = queue.splice(index, 1)
-      if (queue.length === 0) this.queues.delete(taskId)
-      const task = await schedulerDb.getTask(taskId)
-      if (task) {
-        await this.createSettledExecution(task, {
-          id: executionId,
-          status: "cancelled",
-          triggerSource: start.triggerSource,
-          scheduledFor: start.scheduledFor,
-          terminalReason: "user-cancelled",
-          message: "Cancelled before it started: the buffered start was withdrawn",
-        })
-      }
-      log.info(`Buffered start ${executionId} withdrawn on request`)
-      return { cancelled: true }
-    }
+    // A start the overlap policy or the concurrency cap is holding has no
+    // controller yet, only a queue entry (and its pending row). Withdrawing it
+    // is the cancel: the entry leaves the queue and its row is settled
+    // cancelled under the same id, so the id resolves to what happened.
+    if (await this.withdrawQueuedStart(executionId)) return { cancelled: true }
 
     const execution = await schedulerDb.getExecution(executionId)
     if (!execution) return { cancelled: false, reason: "not-found" }
@@ -2357,10 +2578,35 @@ class TaskSchedulerImpl {
     return { cancelled: false, reason: "not-owned-here" }
   }
 
+  /** Take one buffered start out of its queue and settle it cancelled. */
+  private async withdrawQueuedStart(executionId: string): Promise<boolean> {
+    for (const [taskId, queue] of this.queues) {
+      const index = queue.findIndex((start) => start.executionId === executionId)
+      if (index < 0) continue
+      const [start] = queue.splice(index, 1)
+      if (queue.length === 0) this.queues.delete(taskId)
+      const task = await schedulerDb.getTask(taskId)
+      if (task) {
+        await this.createSettledExecution(task, {
+          id: executionId,
+          status: "cancelled",
+          triggerSource: start.triggerSource,
+          scheduledFor: start.scheduledFor,
+          terminalReason: "user-cancelled",
+          message: "Cancelled before it started: the buffered start was withdrawn",
+        })
+      }
+      log.info(`Buffered start ${executionId} withdrawn on request`)
+      return true
+    }
+    return false
+  }
+
   /**
    * The task a buffered start belongs to, when `executionId` names one that
-   * is still waiting in this context's queue. A buffered start has no row
-   * until it runs, so this is the only way to tell whose it is.
+   * is still waiting in this context's queue. Its pending row says the same,
+   * but this answers without a database read and for a buffered claimed slot,
+   * which has no row until it runs.
    */
   getQueuedStartTaskId(executionId: string): string | undefined {
     for (const [taskId, queue] of this.queues) {
@@ -2603,7 +2849,10 @@ class TaskSchedulerImpl {
     })
     if (!expired) return
     this.unscheduleTask(task.id)
-    this.dropQueuedStarts(task.id)
+    this.dropQueuedStarts(task.id, {
+      reason: settledReason,
+      message: `Not started: the task expired (${settledReason}) before this buffered start ran`,
+    })
     log.info(`Task ${task.name} expired (${settledReason})`)
     const handler = taskExpiryHandlers.get(task.type)
     if (handler) {
@@ -2649,6 +2898,16 @@ class TaskSchedulerImpl {
         version !== this.lifecycleVersion ||
         taskVersion !== this.getTaskLifecycleVersion(task.id)
       ) {
+        // A slot this fire claimed is answered here when only the task
+        // changed; a stopped scheduler leaves it to the next start-up.
+        if (context.scheduledSlotClaimed && !recorded) {
+          await this.withdrawClaimedSlot(task.id, {
+            executionId: occurrenceId,
+            triggerSource: context.triggerSource === "catch-up" ? "catch-up" : "schedule",
+            scheduledFor: context.scheduledFor ?? new Date(),
+            version,
+          })
+        }
         throw SchedulerError.executionCancelled(
           task.name,
           version !== this.lifecycleVersion ? "scheduler-stopped" : "user-cancelled"
@@ -2656,6 +2915,13 @@ class TaskSchedulerImpl {
       }
       if (recorded?.id === occurrenceId && recorded.taskId === task.id) {
         log.info(`Task ${task.name}: slot already ran (${occurrenceId}); not running it again`)
+        // A claim on a slot that another path already ran is answered by
+        // that row.
+        if (context.scheduledSlotClaimed) {
+          await schedulerDb
+            .removePendingStarts(task.id, (start) => start.executionId === occurrenceId)
+            .catch((error) => log.warn(`Could not clear the claim on ${occurrenceId}:`, error))
+        }
         return recorded
       }
       return await this.startTask(task, retryAttempt, { ...context, executionId: occurrenceId })
@@ -3074,6 +3340,16 @@ class TaskSchedulerImpl {
           )
         )
         this.retryChains.add(task.id)
+        const retryExecutionId = nanoid()
+        await this.persistPendingRetry(execution, {
+          kind: "retry",
+          executionId: retryExecutionId,
+          failedExecutionId: executionId,
+          attempt: retryAttempt + 1,
+          availableAt: nextRetryAt,
+          ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
+          ...(context.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
+        })
         this.scheduleRetry(
           task,
           retryAttempt + 1,
@@ -3082,7 +3358,8 @@ class TaskSchedulerImpl {
           context.scheduledSlotClaimed,
           delay,
           executionLifecycleVersion,
-          taskLifecycleVersion
+          taskLifecycleVersion,
+          retryExecutionId
         )
       }
 
@@ -3213,6 +3490,16 @@ class TaskSchedulerImpl {
           )
         )
         this.retryChains.add(task.id)
+        const retryExecutionId = nanoid()
+        await this.persistPendingRetry(execution, {
+          kind: "retry",
+          executionId: retryExecutionId,
+          failedExecutionId: executionId,
+          attempt: retryAttempt + 1,
+          availableAt: nextRetryAt,
+          ...(context.scheduledSlotClaimed ? { scheduledSlotClaimed: true } : {}),
+          ...(context.deferNextRunUpdate ? { deferNextRunUpdate: true } : {}),
+        })
         this.scheduleRetry(
           task,
           retryAttempt + 1,
@@ -3221,7 +3508,8 @@ class TaskSchedulerImpl {
           context.scheduledSlotClaimed,
           delay,
           executionLifecycleVersion,
-          taskLifecycleVersion
+          taskLifecycleVersion,
+          retryExecutionId
         )
       }
 
@@ -3345,6 +3633,24 @@ class TaskSchedulerImpl {
     }
   }
 
+  /**
+   * Record a scheduled retry on its task, so a restart before it runs arms it
+   * again (`recoverPendingStarts`). The in-memory timer still runs it in this
+   * process; a failure to record it costs only the restart guarantee.
+   */
+  private async persistPendingRetry(execution: TaskExecution, retry: PendingRetry): Promise<void> {
+    await this.settleQuietly(execution, "record the scheduled retry", () =>
+      schedulerDb.addPendingStart(execution.taskId, retry)
+    )
+  }
+
+  /** Forget a scheduled retry that will not run. */
+  private forgetPendingRetry(taskId: string, executionId: string): void {
+    void schedulerDb
+      .removePendingStarts(taskId, (start) => start.executionId === executionId)
+      .catch((error) => log.warn(`Could not forget the retry ${executionId} of ${taskId}:`, error))
+  }
+
   private scheduleRetry(
     task: ScheduledTask,
     retryAttempt: number,
@@ -3353,31 +3659,40 @@ class TaskSchedulerImpl {
     scheduledSlotClaimed: boolean | undefined,
     delay: number,
     lifecycleVersion: number,
-    taskLifecycleVersion: number
+    taskLifecycleVersion: number,
+    /** The id the retry's run takes, as recorded in its pending entry. */
+    executionId: string
   ): void {
     const timer = setTimeout(() => {
       const timers = this.retryTimers.get(task.id)
       timers?.delete(timer)
       if (timers?.size === 0) this.retryTimers.delete(task.id)
 
-      if (
-        lifecycleVersion !== this.lifecycleVersion ||
-        taskLifecycleVersion !== this.getTaskLifecycleVersion(task.id)
-      ) {
+      // A stopped scheduler keeps the retry for the next start-up.
+      if (lifecycleVersion !== this.lifecycleVersion) {
         this.retryChains.delete(task.id)
+        return
+      }
+      if (taskLifecycleVersion !== this.getTaskLifecycleVersion(task.id)) {
+        this.retryChains.delete(task.id)
+        this.forgetPendingRetry(task.id, executionId)
         return
       }
 
       void schedulerDb
         .getTask(task.id)
         .then((latest) => {
+          if (lifecycleVersion !== this.lifecycleVersion) {
+            this.retryChains.delete(task.id)
+            return
+          }
           if (
             !latest ||
             latest.status !== "active" ||
-            lifecycleVersion !== this.lifecycleVersion ||
             taskLifecycleVersion !== this.getTaskLifecycleVersion(task.id)
           ) {
             this.retryChains.delete(task.id)
+            if (latest) this.forgetPendingRetry(task.id, executionId)
             return
           }
           return this.executeTask(latest, retryAttempt, {
@@ -3385,6 +3700,7 @@ class TaskSchedulerImpl {
             scheduledFor,
             deferNextRunUpdate,
             scheduledSlotClaimed,
+            executionId,
           })
         })
         .catch((err) => {
@@ -3406,12 +3722,50 @@ class TaskSchedulerImpl {
     this.taskLifecycleVersions.set(taskId, this.getTaskLifecycleVersion(taskId) + 1)
   }
 
-  /** Drop every start buffered for a task, including one the drain is holding. */
-  private dropQueuedStarts(taskId: string): void {
+  /**
+   * Drop every start buffered for a task, including one the drain is holding,
+   * and settle each one's row under `disposition`. A deleted task's rows went
+   * with it, so nothing is written for one.
+   */
+  private dropQueuedStarts(taskId: string, disposition: QueueDropDisposition): void {
     this.queueEpochs.set(taskId, (this.queueEpochs.get(taskId) ?? 0) + 1)
+    this.queueDrops.set(taskId, disposition)
+    const dropped = this.queues.get(taskId) ?? []
     this.queues.delete(taskId)
+    if (dropped.length > 0) void this.settleDroppedStarts(taskId, dropped, disposition)
   }
 
+  /** Write what became of starts that left a buffer without running. */
+  private async settleDroppedStarts(
+    taskId: string,
+    starts: readonly QueuedStart[],
+    disposition: QueueDropDisposition
+  ): Promise<void> {
+    if (disposition === "deleted") return
+    const task = await schedulerDb.getTask(taskId).catch(() => null)
+    if (!task) return
+    for (const start of starts) {
+      try {
+        await this.createSettledExecution(task, {
+          id: start.executionId,
+          status: "cancelled",
+          triggerSource: start.triggerSource,
+          scheduledFor: start.scheduledFor,
+          terminalReason: disposition.reason,
+          message: disposition.message,
+        })
+      } catch (error) {
+        log.warn(`Could not settle the dropped start ${start.executionId}:`, {
+          error: String(error),
+        })
+      }
+    }
+  }
+
+  /**
+   * Cancel a task's scheduled retries, in memory and on its row, so a restart
+   * does not bring back a retry a pause or an edit already called off.
+   */
   private clearTaskRetries(taskId: string): void {
     const timers = this.retryTimers.get(taskId)
     if (timers) {
@@ -3419,6 +3773,9 @@ class TaskSchedulerImpl {
       this.retryTimers.delete(taskId)
     }
     this.retryChains.delete(taskId)
+    void schedulerDb
+      .removePendingStarts(taskId, (start) => start.kind === "retry")
+      .catch((error) => log.warn(`Could not cancel the scheduled retries of ${taskId}:`, error))
   }
 
   /**
@@ -3478,7 +3835,7 @@ class TaskSchedulerImpl {
       }
       this.queues.set(task.id, [queuedStart])
       log.debug(`Task ${task.name} start buffered (queue-one, blocked by ${blockedBy})`)
-      return this.createQueuedPlaceholderExecution(task, executionId, queuedStart)
+      return this.persistBufferedStart(task, executionId, queuedStart)
     }
 
     const maxQueueSize = Math.max(
@@ -3502,7 +3859,33 @@ class TaskSchedulerImpl {
     log.debug(
       `Task ${task.name} start buffered (queue-all, ${queue.length} pending, blocked by ${blockedBy})`
     )
-    return this.createQueuedPlaceholderExecution(task, executionId, queuedStart)
+    return this.persistBufferedStart(task, executionId, queuedStart)
+  }
+
+  /**
+   * The placeholder a buffered start is answered with, written as a row so its
+   * id resolves at once and a restart can say what became of it. A claimed
+   * slot is not written here: its claim is already durable on the task, and a
+   * restart decides it by the task's missed-run policy instead
+   * (`recoverPendingStarts`).
+   */
+  private async persistBufferedStart(
+    task: ScheduledTask,
+    executionId: string,
+    queued: QueuedStart
+  ): Promise<TaskExecution> {
+    const placeholder = this.createQueuedPlaceholderExecution(task, executionId, queued)
+    if (!queued.scheduledSlotClaimed) {
+      try {
+        await schedulerDb.recordBufferedStart(placeholder)
+      } catch (error) {
+        // The start still waits in memory; only its record is missing.
+        log.warn(`Could not record the buffered start ${executionId} of ${task.name}:`, {
+          error: String(error),
+        })
+      }
+    }
+    return placeholder
   }
 
   /**
@@ -3574,7 +3957,11 @@ class TaskSchedulerImpl {
         return undefined
       })
       if (version !== this.lifecycleVersion) return
-      if (epoch !== (this.queueEpochs.get(taskId) ?? 0)) continue
+      if (epoch !== (this.queueEpochs.get(taskId) ?? 0)) {
+        // Dropped with the rest of its buffer; settled the same way.
+        void this.settleDroppedStarts(taskId, [next], this.queueDrops.get(taskId) ?? "deleted")
+        continue
+      }
       // A task deleted while its start sat in the buffer drops that start and
       // moves on to the next candidate, rather than consuming the freed slot.
       if (!latest) continue
@@ -3621,9 +4008,9 @@ class TaskSchedulerImpl {
   }
 
   /**
-   * Synthetic (non-persisted) execution returned to the caller when a start is
-   * buffered by a queue overlap policy. A real execution record is created
-   * when the buffered start actually runs.
+   * The pending execution a buffered start is answered with. `persistBufferedStart`
+   * writes it as the start's placeholder row; the run (or the row of a start
+   * dropped before it ran) replaces it under the same id.
    */
   private createQueuedPlaceholderExecution(
     task: ScheduledTask,
@@ -3752,7 +4139,11 @@ class TaskSchedulerImpl {
 
     if (autoPaused) {
       this.unscheduleTask(task.id)
-      this.dropQueuedStarts(task.id)
+      this.dropQueuedStarts(task.id, {
+        reason: "auto-paused",
+        message:
+          "Not started: the task was paused after repeated failures before this buffered start ran",
+      })
       log.warn(
         `Task ${task.name} auto-paused after ${updatedTask.consecutiveFailures} consecutive failures`
       )
