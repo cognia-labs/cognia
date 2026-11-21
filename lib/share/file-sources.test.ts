@@ -67,4 +67,27 @@ describe("workspaceShareSource", () => {
     })
     await expect(source.read(4, 3)).rejects.toBeInstanceOf(ShareFileChangedError)
   })
+
+  it("refuses an equal-size replacement whose version token changed mid-read", async () => {
+    const source = workspaceShareSource("/repo", "a.bin", 6, "/workspace/a.bin")
+    readChunk
+      .mockResolvedValueOnce({
+        dataBase64: "AQID",
+        offset: 0,
+        bytesRead: 3,
+        size: 6,
+        eof: false,
+        version: "v1",
+      })
+      .mockResolvedValueOnce({
+        dataBase64: "BAUG",
+        offset: 3,
+        bytesRead: 3,
+        size: 6,
+        eof: true,
+        version: "v2",
+      })
+    expect(Array.from(await source.read(0, 3))).toEqual([1, 2, 3])
+    await expect(source.read(3, 3)).rejects.toBeInstanceOf(ShareFileChangedError)
+  })
 })

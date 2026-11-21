@@ -240,6 +240,10 @@ export interface WorkspaceFileChunk {
   /** The file's size when this slice was read — compare across slices to notice a file changing. */
   size: number
   eof: boolean
+  /** File mtime in milliseconds when this slice was read, if available. */
+  mtimeMs?: number | null
+  /** Host file-version fingerprint (`size` + `mtime` + inode/file-id metadata). */
+  version?: string
 }
 
 /**
@@ -369,20 +373,30 @@ export async function renameWorkspaceEntry(
   await transport.call<null>("fs_rename_workspace_entry", { root, fromRelPath, toRelPath })
 }
 
+export interface WorkspaceCopyResult {
+  skippedSymlinks: number
+  skippedPaths: string[]
+}
+
 /**
  * Copy an entry within `root`. A directory needs `recursive: true`. Refuses to
- * clobber an existing dest.
+ * clobber an existing dest or copy a directory into itself/descendants, and
+ * reports any nested symlinks that were skipped.
  */
 export async function copyWorkspaceEntry(
   root: string,
   fromRelPath: string,
   toRelPath: string,
   recursive?: boolean
-): Promise<void> {
-  await transport.call<null>("fs_copy_workspace_entry", {
+): Promise<WorkspaceCopyResult> {
+  const result = await transport.call<WorkspaceCopyResult | null>("fs_copy_workspace_entry", {
     root,
     fromRelPath,
     toRelPath,
     recursive,
   })
+  return {
+    skippedSymlinks: result?.skippedSymlinks ?? 0,
+    skippedPaths: Array.isArray(result?.skippedPaths) ? result.skippedPaths : [],
+  }
 }

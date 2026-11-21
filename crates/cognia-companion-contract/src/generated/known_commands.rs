@@ -18,7 +18,7 @@ use super::{
 pub const CONTRACT_VERSION: u32 = 4;
 
 /// The sha256 of the Headless command catalog rendered from this contract.
-pub const CATALOG_HASH: &str = "f6718c4608dbd06102c892d3ea353f5b958a385cde199e7c8b9cf4c3456b9e9a";
+pub const CATALOG_HASH: &str = "e247550402f90269517e65618e8ef29eebd8504cb61883236233abcabb5dab26";
 
 /// Every command in the contract, in contract order.
 #[rustfmt::skip]

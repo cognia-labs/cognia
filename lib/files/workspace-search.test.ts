@@ -11,6 +11,12 @@ jest.mock("@/lib/platform/web-companion", () => ({
 }))
 
 import { transport } from "@/lib/tauri"
+import {
+  __resetRoutingForTests,
+  setActiveRemoteEndpoint,
+  setActiveRemoteTransport,
+} from "@/lib/tauri/transport-routing"
+import type { Transport } from "@/lib/tauri/transport-types"
 import { detectPlatform } from "@/lib/platform/detect"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
 import {
@@ -20,6 +26,7 @@ import {
 } from "./workspace-search"
 
 beforeEach(() => {
+  __resetRoutingForTests()
   __resetWorkspaceSearchCache()
   jest.restoreAllMocks()
 })
@@ -69,6 +76,62 @@ describe("searchWorkspace", () => {
   it("propagates errors from the transport", async () => {
     jest.spyOn(transport, "call").mockRejectedValueOnce(new Error("root is not a directory"))
     await expect(searchWorkspace("/bogus", "", 5)).rejects.toThrow("root is not a directory")
+  })
+
+  it("isolates cached entries per active Host and invalidates on Host switch", async () => {
+    const callSpy = jest
+      .spyOn(transport, "call")
+      .mockResolvedValueOnce([
+        { rel_path: "local.ts", absolute_path: "/workspace/local.ts", is_dir: false, size: 1 },
+      ])
+      .mockResolvedValueOnce([
+        {
+          rel_path: "remote-a.ts",
+          absolute_path: "/workspace/remote-a.ts",
+          is_dir: false,
+          size: 2,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          rel_path: "remote-b.ts",
+          absolute_path: "/workspace/remote-b.ts",
+          is_dir: false,
+          size: 3,
+        },
+      ])
+
+    const localRes = await searchWorkspace("/workspace", "ts", 10)
+    expect(localRes.map((e) => e.relPath)).toEqual(["local.ts"])
+
+    const remoteA = { call: jest.fn(), subscribe: () => () => {} } as unknown as Transport
+    setActiveRemoteEndpoint({
+      remoteHost: { id: "host-a", label: "Host A" },
+      baseUrl: "https://host-a.example",
+      deviceId: "dev-1",
+      devicePrivateKeyJwk: {},
+      deviceKeyThumbprint: "tp",
+      serverVersion: "1.0.0",
+    })
+    setActiveRemoteTransport(remoteA)
+
+    const remoteARes = await searchWorkspace("/workspace", "ts", 10)
+    expect(remoteARes.map((e) => e.relPath)).toEqual(["remote-a.ts"])
+
+    const remoteB = { call: jest.fn(), subscribe: () => () => {} } as unknown as Transport
+    setActiveRemoteEndpoint({
+      remoteHost: { id: "host-b", label: "Host B" },
+      baseUrl: "https://host-b.example",
+      deviceId: "dev-1",
+      devicePrivateKeyJwk: {},
+      deviceKeyThumbprint: "tp",
+      serverVersion: "1.0.0",
+    })
+    setActiveRemoteTransport(remoteB)
+
+    const remoteBRes = await searchWorkspace("/workspace", "ts", 10)
+    expect(remoteBRes.map((e) => e.relPath)).toEqual(["remote-b.ts"])
+    expect(callSpy).toHaveBeenCalledTimes(3)
   })
 })
 

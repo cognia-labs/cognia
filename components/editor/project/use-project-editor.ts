@@ -1376,55 +1376,66 @@ export function useProjectEditor({
       setTreeRefreshToken((n) => n + 1)
     }, 250)
   }, [])
+  const [watchDegradedFor, setWatchDegradedFor] = useState<string | null>(null)
+  const watchScope = rootPath ? `${rootPath}#${hostRevision}` : null
+  const watchDegraded = watchScope !== null && watchDegradedFor === watchScope
+
   useEffect(() => {
     if (!rootPath) return
-    const dispose = d.watch(rootPath, (change) => {
-      bumpTreeRefresh()
-      const file = openFilesRef.current.find((f) => f.absolutePath === change.path)
-      if (change.kind === "delete") {
-        // A recursive watcher may emit only the removed directory's path, so
-        // match children by prefix too. Keep the buffer — a dirty draft may
-        // be the last surviving copy — but the tab must say the file is gone.
-        const under = (abs: string) => abs === change.path || abs.startsWith(`${change.path}/`)
-        if (!file && !openFilesRef.current.some((f) => under(f.absolutePath))) return
-        setOpenFiles((prev) =>
-          prev.map((f) =>
-            under(f.absolutePath) && !f.deletedOnDisk
-              ? { ...f, deletedOnDisk: true, externallyChanged: false }
-              : f
-          )
-        )
-        return
-      }
-      if (!file) return
-      // The echo of our own save — the write still in flight, or one that
-      // landed inside the grace window — is not an external change.
-      if (pendingSaves.current.has(change.path)) return
-      const stamp = recentSelfWrites.current.get(change.path)
-      if (stamp !== undefined && Date.now() - stamp < SELF_WRITE_GRACE_MS) return
-      if (file.draftContent !== file.savedContent) {
-        // A draft is unsaved work; surface the conflict rather than silently
-        // swapping whichever side the user didn't mean to drop.
-        setOpenFiles((prev) =>
-          prev.map((f) =>
-            f.absolutePath === change.path && !f.externallyChanged
-              ? { ...f, externallyChanged: true, deletedOnDisk: false }
-              : f
-          )
-        )
-      } else {
-        // A clean buffer mirrors the disk write directly — this is the
-        // dock's main purpose: watching what the agent just changed.
-        // `preserveIfDirty` covers the user typing while the read flies.
-        void reloadFile(file.relPath, { preserveIfDirty: true }).catch(() => {
-          // A failed auto-reload still owes the user the signal that the
-          // buffer went stale.
+    const currentScope = `${rootPath}#${hostRevision}`
+    const dispose = d.watch(
+      rootPath,
+      (change) => {
+        bumpTreeRefresh()
+        const file = openFilesRef.current.find((f) => f.absolutePath === change.path)
+        if (change.kind === "delete") {
+          // A recursive watcher may emit only the removed directory's path, so
+          // match children by prefix too. Keep the buffer — a dirty draft may
+          // be the last surviving copy — but the tab must say the file is gone.
+          const under = (abs: string) => abs === change.path || abs.startsWith(`${change.path}/`)
+          if (!file && !openFilesRef.current.some((f) => under(f.absolutePath))) return
           setOpenFiles((prev) =>
-            prev.map((f) => (f.relPath === file.relPath ? { ...f, externallyChanged: true } : f))
+            prev.map((f) =>
+              under(f.absolutePath) && !f.deletedOnDisk
+                ? { ...f, deletedOnDisk: true, externallyChanged: false }
+                : f
+            )
           )
-        })
+          return
+        }
+        if (!file) return
+        // The echo of our own save — the write still in flight, or one that
+        // landed inside the grace window — is not an external change.
+        if (pendingSaves.current.has(change.path)) return
+        const stamp = recentSelfWrites.current.get(change.path)
+        if (stamp !== undefined && Date.now() - stamp < SELF_WRITE_GRACE_MS) return
+        if (file.draftContent !== file.savedContent) {
+          // A draft is unsaved work; surface the conflict rather than silently
+          // swapping whichever side the user didn't mean to drop.
+          setOpenFiles((prev) =>
+            prev.map((f) =>
+              f.absolutePath === change.path && !f.externallyChanged
+                ? { ...f, externallyChanged: true, deletedOnDisk: false }
+                : f
+            )
+          )
+        } else {
+          // A clean buffer mirrors the disk write directly — this is the
+          // dock's main purpose: watching what the agent just changed.
+          // `preserveIfDirty` covers the user typing while the read flies.
+          void reloadFile(file.relPath, { preserveIfDirty: true }).catch(() => {
+            // A failed auto-reload still owes the user the signal that the
+            // buffer went stale.
+            setOpenFiles((prev) =>
+              prev.map((f) => (f.relPath === file.relPath ? { ...f, externallyChanged: true } : f))
+            )
+          })
+        }
+      },
+      {
+        onError: () => setWatchDegradedFor(currentScope),
       }
-    })
+    )
     return () => {
       if (treeBumpTimer.current !== null) {
         clearTimeout(treeBumpTimer.current)
@@ -1434,7 +1445,9 @@ export function useProjectEditor({
     }
   }, [d, rootPath, hostRevision, reloadFile, bumpTreeRefresh])
 
-  // Remote hosts cannot use plugin_fs_watch (it is explicitly client-local).
+  // Remote hosts cannot use plugin_fs_watch (it is explicitly client-local),
+  // and a local desktop whose OS watch registration failed (`watchDegraded`)
+  // also needs fallback polling so external writes/deletions are still noticed.
   // Probe only metadata for open documents, with one request in flight and no
   // hidden/offline work. Never replace a draft with bytes fetched behind it.
   useEffect(() => {
@@ -1449,7 +1462,8 @@ export function useProjectEditor({
       const epoch = operationEpoch.current
       try {
         if (!available()) return
-        if (isTauri() && !isRemoteHostActive()) return
+        if (isTauri() && !isRemoteHostActive() && !watchDegraded) return
+        if (watchDegraded && rootPath) bumpTreeRefresh()
         for (const file of openFilesRef.current) {
           if (disposed || epoch !== operationEpoch.current) break
           if (!available()) break
@@ -1512,7 +1526,7 @@ export function useProjectEditor({
       document.removeEventListener("visibilitychange", resume)
       window.removeEventListener("online", resume)
     }
-  }, [d, rootPath, reloadFile])
+  }, [d, rootPath, reloadFile, watchDegraded, bumpTreeRefresh])
 
   const renameOpenFile = useCallback(
     async (from: string, to: string) => {
@@ -1620,6 +1634,8 @@ export function useProjectEditor({
     previewPath: tabState.previewPath,
     dirtyCount,
     treeRefreshToken,
+    /** True when native local filesystem watching failed to register and degraded to polling. */
+    watchDegraded,
     selectRoot,
     openFile,
     pinFile,

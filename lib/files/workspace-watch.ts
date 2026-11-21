@@ -6,13 +6,21 @@
 // watcher is a no-op and the file tree relies on manual refresh.
 
 import { invoke } from "@tauri-apps/api/core"
+import { createLogger } from "@cognia/logging"
 import { isTauri } from "@/lib/tauri"
 import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
+
+const log = createLogger("workspace-watch")
 
 export interface WorkspaceFsChange {
   kind: "create" | "modify" | "delete" | "any"
   /** Absolute path of the changed entry. */
   path: string
+}
+
+export interface WatchWorkspaceOptions {
+  /** Fired if native watcher registration fails so callers can degrade to polling. */
+  onError?: (error: unknown) => void
 }
 
 /** Reserved owner id — `plugin_fs_watch` only uses it for log namespacing. */
@@ -27,7 +35,8 @@ let watchCounter = 0
  */
 export function watchWorkspace(
   root: string,
-  onChange: (change: WorkspaceFsChange) => void
+  onChange: (change: WorkspaceFsChange) => void,
+  options?: WatchWorkspaceOptions
 ): () => void {
   if (!isTauri() || isRemoteHostActive() || typeof window === "undefined") return () => {}
 
@@ -54,7 +63,16 @@ export function watchWorkspace(
   // for registration: unwatching first can otherwise leak a late-created watch.
   const started = invoke("plugin_fs_watch", { pluginId: WATCH_OWNER, path: root, watchId }).then(
     () => true,
-    () => false
+    (error: unknown) => {
+      window.removeEventListener(`plugin-fs-watch:${watchId}`, handler as EventListener)
+      if (!disposed) {
+        log.warn("workspace fs watch registration failed; degrading to polling", {
+          error: String(error),
+        })
+        options?.onError?.(error)
+      }
+      return false
+    }
   )
 
   return () => {

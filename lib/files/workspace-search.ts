@@ -7,6 +7,18 @@
 // lifecycle so non-component code (e.g. unit tests) can call it directly.
 
 import { transport } from "@/lib/tauri"
+import { getCompanionConfigGeneration, loadCompanionConfig } from "@/lib/tauri/transport-companion"
+import { onTransportChange } from "@/lib/tauri/transport-instance"
+import {
+  getActiveRemoteEndpoint,
+  getActiveRemoteTransport,
+  subscribeActiveRemoteEndpoint,
+  subscribeActiveRemoteTransport,
+} from "@/lib/tauri/transport-routing"
+import {
+  getActiveRuntimeTargetContext,
+  subscribeRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 import { detectPlatform } from "@/lib/platform/detect"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
 import {
@@ -22,11 +34,76 @@ interface CacheEntry {
 
 const CACHE_LIMIT = 32
 const CACHE_TTL_MS = 30_000
+const COMPANION_CONFIG_EVENT = "cognia:companion-config-changed"
 
 const cache = new Map<string, CacheEntry>()
+const remoteTransportIds = new WeakMap<object, number>()
+let nextRemoteTransportId = 1
+let invalidationWired = false
 
-function cacheKey(root: string, query: string, limit: number): string {
-  return `${root}\u0000${query.toLowerCase()}\u0000${limit}`
+function remoteTransportId(remote: object): number {
+  let id = remoteTransportIds.get(remote)
+  if (!id) {
+    id = nextRemoteTransportId++
+    remoteTransportIds.set(remote, id)
+  }
+  return id
+}
+
+function normalizeBaseUrl(url: string): string {
+  return url.trim().replace(/\/+$/, "")
+}
+
+/**
+ * Scope key identifying the execution Host `transport.call("fs_search_workspace")`
+ * currently targets, using foundation-layer transport/runtime primitives only.
+ * Prevents two Hosts sharing a `root` path (e.g. `/workspace`) from colliding.
+ */
+function currentHostScopeKey(): string {
+  const remote = typeof getActiveRemoteTransport === "function" ? getActiveRemoteTransport() : null
+  if (remote) {
+    const endpoint =
+      typeof getActiveRemoteEndpoint === "function" ? getActiveRemoteEndpoint() : null
+    const tid = remoteTransportId(remote)
+    if (endpoint?.remoteHost?.id) return `remote:${endpoint.remoteHost.id}#t${tid}`
+    if (endpoint?.baseUrl) {
+      return `remote-endpoint:${normalizeBaseUrl(endpoint.baseUrl)}:${endpoint.deviceId}:${endpoint.accountId ?? ""}#t${tid}`
+    }
+    return `remote-ephemeral:#t${tid}`
+  }
+  const context =
+    typeof getActiveRuntimeTargetContext === "function" ? getActiveRuntimeTargetContext() : null
+  const cgen =
+    typeof getCompanionConfigGeneration === "function" ? getCompanionConfigGeneration() : 0
+  if (context) {
+    return `paired:${context.accountId}:${context.targetId}#g${context.routingGeneration}:c${cgen}`
+  }
+  try {
+    const config = typeof loadCompanionConfig === "function" ? loadCompanionConfig() : null
+    if (config?.baseUrl) {
+      return `paired-endpoint:${normalizeBaseUrl(config.baseUrl)}:${config.deviceId}:${config.targetId ?? ""}:${config.accountId ?? ""}#c${cgen}`
+    }
+  } catch {
+    // Ignore unavailable storage during headless/node tests.
+  }
+  return "local"
+}
+
+function ensureHostInvalidationSubscribed(): void {
+  if (invalidationWired) return
+  invalidationWired = true
+  const clear = () => cache.clear()
+  if (typeof subscribeActiveRemoteTransport === "function") subscribeActiveRemoteTransport(clear)
+  if (typeof subscribeActiveRemoteEndpoint === "function") subscribeActiveRemoteEndpoint(clear)
+  if (typeof subscribeRuntimeTargetContext === "function") subscribeRuntimeTargetContext(clear)
+  if (typeof onTransportChange === "function") onTransportChange(clear)
+  if (typeof window !== "undefined") {
+    window.addEventListener(COMPANION_CONFIG_EVENT, clear)
+  }
+}
+
+function cacheKey(hostScope: string, root: string, query: string, limit: number): string {
+  return `${hostScope}\u0000${root}\u0000${query.toLowerCase()}\u0000${limit}`
 }
 
 /**
@@ -61,7 +138,9 @@ export async function searchWorkspace(
   query: string,
   limit = 50
 ): Promise<WorkspaceEntry[]> {
-  const key = cacheKey(root, query, limit)
+  ensureHostInvalidationSubscribed()
+  const hostScope = currentHostScopeKey()
+  const key = cacheKey(hostScope, root, query, limit)
   const hit = cache.get(key)
   const now = Date.now()
   if (hit && now - hit.ts < CACHE_TTL_MS) {
@@ -73,11 +152,14 @@ export async function searchWorkspace(
     limit,
   })
   const results = raw.map(fromRawWorkspaceEntry)
-  cache.set(key, { ts: now, results })
-  if (cache.size > CACHE_LIMIT) {
-    // drop the oldest entry — Map preserves insertion order
-    const oldestKey = cache.keys().next().value
-    if (oldestKey !== undefined) cache.delete(oldestKey)
+  // Drop cache write if the active Host switched while the RPC was in flight.
+  if (currentHostScopeKey() === hostScope) {
+    cache.set(key, { ts: Date.now(), results })
+    if (cache.size > CACHE_LIMIT) {
+      // drop the oldest entry — Map preserves insertion order
+      const oldestKey = cache.keys().next().value
+      if (oldestKey !== undefined) cache.delete(oldestKey)
+    }
   }
   return results
 }

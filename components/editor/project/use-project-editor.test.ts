@@ -39,7 +39,7 @@ jest.mock("@cognia/logging", () => {
   }
   const ns = { ...child, child: () => child }
   return {
-    loggers: { agent: ns, plugin: ns, canvas: ns },
+    loggers: { app: ns, agent: ns, plugin: ns, canvas: ns },
     createLogger: () => ns,
     logger: ns,
   }
@@ -1037,6 +1037,64 @@ describe("useProjectEditor", () => {
       // be suppressed, not flagged.
       act(() => fire({ kind: "modify", path: "/repo/src/a.ts" }))
       expect(result.current.openFiles[0]?.externallyChanged).toBeFalsy()
+    })
+
+    it("degrades to metadata polling on local desktop when native watcher registration fails", async () => {
+      jest.useFakeTimers()
+      try {
+        let content = "v1\n"
+        let mtimeMs = 100
+        const watch = jest.fn(
+          (
+            _root: string,
+            _cb: (c: WorkspaceFsChange) => void,
+            opts?: { onError?: (err: unknown) => void }
+          ) => {
+            void Promise.resolve().then(() =>
+              opts?.onError?.(new Error("watch registration failed"))
+            )
+            return () => {}
+          }
+        )
+        const deps = makeDeps({
+          watch: watch as ProjectEditorDeps["watch"],
+          readFileVersioned: jest.fn(async () => ({
+            content,
+            sha256: hash(content),
+            size: Buffer.byteLength(content),
+            mtimeMs,
+          })),
+          statFile: jest.fn(async () => ({
+            exists: true,
+            isDir: false,
+            size: Buffer.byteLength(content),
+            mtimeMs,
+          })),
+        })
+        const { result } = renderHook(() =>
+          useProjectEditor({ scopeKey: "team:watch-fallback", workingDir: "/repo", deps })
+        )
+        await act(async () => {
+          await Promise.resolve()
+        })
+        expect(result.current.watchDegraded).toBe(true)
+
+        await act(async () => {
+          await result.current.openFile("src/a.ts")
+        })
+        expect(result.current.openFiles[0]?.savedContent).toBe("v1\n")
+
+        content = "v2-via-fallback-poll\n"
+        mtimeMs = 200
+        await act(async () => {
+          jest.advanceTimersByTime(5_100)
+          await Promise.resolve()
+          await Promise.resolve()
+        })
+        expect(result.current.openFiles[0]?.savedContent).toBe("v2-via-fallback-poll\n")
+      } finally {
+        jest.useRealTimers()
+      }
     })
 
     it("marks an open file deletedOnDisk on a delete event", async () => {

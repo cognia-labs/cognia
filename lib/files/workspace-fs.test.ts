@@ -331,9 +331,14 @@ describe("mutating wrappers", () => {
     })
   })
 
-  it("copyWorkspaceEntry forwards from/to/recursive", async () => {
-    const callSpy = jest.spyOn(transport, "call").mockResolvedValueOnce(null)
-    await copyWorkspaceEntry("/repo", "d", "d-copy", true)
+  it("copyWorkspaceEntry forwards from/to/recursive and normalizes skipped symlink metadata", async () => {
+    const callSpy = jest
+      .spyOn(transport, "call")
+      .mockResolvedValueOnce({ skippedSymlinks: 2, skippedPaths: ["d/link1", "d/link2"] })
+    await expect(copyWorkspaceEntry("/repo", "d", "d-copy", true)).resolves.toEqual({
+      skippedSymlinks: 2,
+      skippedPaths: ["d/link1", "d/link2"],
+    })
     expect(callSpy).toHaveBeenCalledWith("fs_copy_workspace_entry", {
       root: "/repo",
       fromRelPath: "d",

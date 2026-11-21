@@ -79725,7 +79725,23 @@ paths:
           content:
             application/json:
               schema:
-                type: "null"
+                type: object
+                x-cognia-wire-source: crates/cognia-files/src/files.rs WorkspaceCopyResult
+                description: Outcome of `fs_copy_workspace_entry`. Symlinks inside a recursively copied directory are intentionally
+                  skipped so a link cannot redirect a copy out of the workspace; `skippedSymlinks` and bounded
+                  `skippedPaths` report what was not copied.
+                required:
+                  - skippedSymlinks
+                  - skippedPaths
+                properties:
+                  skippedSymlinks:
+                    type: integer
+                    minimum: 0
+                  skippedPaths:
+                    type: array
+                    items:
+                      type: string
+                additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
           content:
@@ -80787,14 +80803,15 @@ paths:
                 x-cognia-wire-source: crates/cognia-files/src/files.rs WorkspaceFileChunk
                 description: One slice of a workspace file, read to upload it chunk by chunk (ADR-0222). `bytesRead` is below the
                   requested length only at the end of the file, and a read at or past the end is an empty slice with
-                  `eof`, not an error. `size` is the file's length when this slice was read, so a caller can notice the
-                  file changing under it.
+                  `eof`, not an error. `size` and `version` describe the file when this slice was read, so a caller
+                  notices even equal-size replacements mid-read.
                 required:
                   - dataBase64
                   - offset
                   - bytesRead
                   - size
                   - eof
+                  - version
                 properties:
                   dataBase64:
                     type: string
@@ -80810,6 +80827,14 @@ paths:
                     minimum: 0
                   eof:
                     type: boolean
+                  mtimeMs:
+                    type:
+                      - integer
+                      - "null"
+                    minimum: 0
+                  version:
+                    type: string
+                    minLength: 1
                 additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.

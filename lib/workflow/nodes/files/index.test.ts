@@ -310,13 +310,23 @@ describe("the mutating pass-throughs", () => {
     routeCalls({
       fs_create_workspace_dir: () => null,
       fs_rename_workspace_entry: () => null,
-      fs_copy_workspace_entry: () => null,
+      fs_copy_workspace_entry: () => ({ skippedSymlinks: 1, skippedPaths: ["a/link"] }),
       fs_delete_workspace_entry: () => null,
     })
     await run("action.fs.mkdir", { relPath: "out" })
     await run("action.fs.move", { fromRelPath: "a", toRelPath: "b" })
-    await run("action.fs.copy", { fromRelPath: "a", toRelPath: "c", recursive: true })
+    const copyRes = await run("action.fs.copy", {
+      fromRelPath: "a",
+      toRelPath: "c",
+      recursive: true,
+    })
     await run("action.fs.delete", { relPath: "b", recursive: true })
+    expect(copyRes.output).toMatchObject({
+      copied: true,
+      partial: true,
+      skippedSymlinks: 1,
+      skippedPaths: ["a/link"],
+    })
 
     expect(commandsCalled()).toEqual([
       "fs_create_workspace_dir",

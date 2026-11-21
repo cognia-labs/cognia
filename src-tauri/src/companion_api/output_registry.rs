@@ -835,7 +835,7 @@ mod tests {
         ("fs_create_workspace_dir", OutputShape::Scalar(ScalarShape::Null)),
         ("fs_delete_workspace_entry", OutputShape::Scalar(ScalarShape::Null)),
         ("fs_rename_workspace_entry", OutputShape::Scalar(ScalarShape::Null)),
-        ("fs_copy_workspace_entry", OutputShape::Scalar(ScalarShape::Null)),
+        ("fs_copy_workspace_entry", OutputShape::Declared(RootType::Object)),
 
         // ── terminal (rpc/terminal.rs) ───────────────────────────────────────
         ("terminal_list_all", OutputShape::Declared(RootType::Array)),

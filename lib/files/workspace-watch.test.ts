@@ -111,4 +111,23 @@ describe("watchWorkspace", () => {
     expect(onChange).toHaveBeenCalledTimes(1)
     dispose()
   })
+
+  it("notifies onError and skips unwatch when native watch registration rejects", async () => {
+    const boom = new Error("ENOSPC: inotify watch limit reached")
+    mockInvoke.mockRejectedValueOnce(boom)
+    const onChange = jest.fn()
+    const onError = jest.fn()
+    const dispose = watchWorkspace("/repo", onChange, { onError })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onError).toHaveBeenCalledWith(boom)
+
+    const watchId = (mockInvoke.mock.calls[0][1] as { watchId: string }).watchId
+    fireChange(watchId, { kind: "modify", path: "/repo/src/a.ts" })
+    expect(onChange).not.toHaveBeenCalled()
+
+    dispose()
+    await Promise.resolve()
+    expect(mockInvoke).not.toHaveBeenCalledWith("plugin_fs_unwatch", expect.anything())
+  })
 })

@@ -44,8 +44,8 @@ export function blobShareSource(blob: Blob): ShareBlobSource {
 
 /**
  * A file on a workspace disk. `size` is what the selection saw; a slice that
- * reports another size, or comes back short, means the file changed under
- * the share and is refused rather than shared torn.
+ * reports another size or version, or comes back short, means the file changed
+ * under the share and is refused rather than shared torn.
  */
 export function workspaceShareSource(
   root: string,
@@ -53,13 +53,23 @@ export function workspaceShareSource(
   size: number,
   path: string
 ): ShareBlobSource {
+  let observedVersion: string | undefined
   return {
     size,
     async read(offset, length, signal) {
       if (signal?.aborted) throw abortError()
+      // Starting a new full pass (e.g. Pass 2 upload after Pass 1 hash) resets
+      // `observedVersion` only if no prior version was recorded; keeping it across
+      // passes also catches equal-size replacement between Pass 1 and Pass 2.
       const chunk = await readWorkspaceFileChunk(root, relPath, offset, length)
       if (signal?.aborted) throw abortError()
       if (chunk.size !== size || chunk.bytesRead !== length) throw new ShareFileChangedError(path)
+      if (chunk.version !== undefined) {
+        if (observedVersion !== undefined && chunk.version !== observedVersion) {
+          throw new ShareFileChangedError(path)
+        }
+        observedVersion = chunk.version
+      }
       return decodeBase64(chunk.dataBase64)
     },
   }

@@ -378,12 +378,27 @@ registerNodeExecutor({
     const fromRelPath = requireRelPath(p, "fromRelPath", "action.fs.copy")
     const toRelPath = requireRelPath(p, "toRelPath", "action.fs.copy")
     const recursive = boolOf(p, "recursive")
+    let skippedSymlinks = 0
+    let skippedPaths: string[] = []
     try {
-      await copyWorkspaceEntry(root, fromRelPath, toRelPath, recursive)
+      const result = await copyWorkspaceEntry(root, fromRelPath, toRelPath, recursive)
+      skippedSymlinks = result.skippedSymlinks
+      skippedPaths = result.skippedPaths
     } catch (err) {
       translateHostRefusal(err, "action.fs.copy")
     }
-    return { output: { root, rootMode: mode, fromRelPath, toRelPath, copied: true } }
+    return {
+      output: {
+        root,
+        rootMode: mode,
+        fromRelPath,
+        toRelPath,
+        copied: true,
+        partial: skippedSymlinks > 0,
+        skippedSymlinks,
+        skippedPaths,
+      },
+    }
   },
 })
 

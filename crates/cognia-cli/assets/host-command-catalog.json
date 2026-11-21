@@ -37507,7 +37507,26 @@
       },
       "outputSchemaSource": "contract",
       "outputSchema": {
-        "type": "null"
+        "type": "object",
+        "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceCopyResult",
+        "description": "Outcome of `fs_copy_workspace_entry`. Symlinks inside a recursively copied directory are intentionally skipped so a link cannot redirect a copy out of the workspace; `skippedSymlinks` and bounded `skippedPaths` report what was not copied.",
+        "required": [
+          "skippedSymlinks",
+          "skippedPaths"
+        ],
+        "properties": {
+          "skippedSymlinks": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skippedPaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "outputTyped": true
     },
@@ -37773,13 +37792,14 @@
       "outputSchema": {
         "type": "object",
         "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceFileChunk",
-        "description": "One slice of a workspace file, read to upload it chunk by chunk (ADR-0222). `bytesRead` is below the requested length only at the end of the file, and a read at or past the end is an empty slice with `eof`, not an error. `size` is the file's length when this slice was read, so a caller can notice the file changing under it.",
+        "description": "One slice of a workspace file, read to upload it chunk by chunk (ADR-0222). `bytesRead` is below the requested length only at the end of the file, and a read at or past the end is an empty slice with `eof`, not an error. `size` and `version` describe the file when this slice was read, so a caller notices even equal-size replacements mid-read.",
         "required": [
           "dataBase64",
           "offset",
           "bytesRead",
           "size",
-          "eof"
+          "eof",
+          "version"
         ],
         "properties": {
           "dataBase64": {
@@ -37800,6 +37820,17 @@
           },
           "eof": {
             "type": "boolean"
+          },
+          "mtimeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "additionalProperties": false
@@ -83872,6 +83903,13 @@
           "chunkBytes": {
             "type": "integer",
             "minimum": 1
+          },
+          "modified": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -114548,5 +114586,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "f6718c4608dbd06102c892d3ea353f5b958a385cde199e7c8b9cf4c3456b9e9a"
+  "catalogHash": "e247550402f90269517e65618e8ef29eebd8504cb61883236233abcabb5dab26"
 }

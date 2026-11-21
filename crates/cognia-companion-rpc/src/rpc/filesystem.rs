@@ -1730,8 +1730,8 @@ pub(super) async fn dispatch(
             })
             .await
             .map_err(|e| RpcError::internal(e.to_string()))?
-            .map(|_| Value::Null)
             .map_err(RpcError::internal)
+            .and_then(to_json)
         }
         unknown => Err(RpcError::unknown_command(unknown)),
     };

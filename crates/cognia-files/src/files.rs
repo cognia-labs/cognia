@@ -770,6 +770,52 @@ fn mtime_ms_of(meta: &std::fs::Metadata) -> Option<u64> {
         .map(|d| d.as_millis() as u64)
 }
 
+/// Deterministic version token of an open file's metadata so chunked readers
+/// detect both size changes and equal-size replacements (including atomic
+/// renames within the same millisecond).
+fn file_version_token(meta: &std::fs::Metadata) -> String {
+    let size = meta.len();
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        format!(
+            "u:{size}:{mtime_ns}:{}:{}:{}:{}",
+            meta.dev(),
+            meta.ino(),
+            meta.ctime(),
+            meta.ctime_nsec()
+        )
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        format!(
+            "w:{size}:{mtime_ns}:{}:{}:{}",
+            meta.creation_time(),
+            meta.last_write_time(),
+            meta.file_attributes()
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        format!("g:{size}:{mtime_ns}")
+    }
+}
+
+/// Verify `dir` can actually be opened for directory reading so `WalkBuilder`
+/// callers never turn `EACCES` / `EIO` into a successful empty listing.
+fn ensure_readable_dir(dir: &Path) -> Result<(), String> {
+    std::fs::read_dir(dir)
+        .map(|_| ())
+        .map_err(|e| format!("read_dir {}: {}", dir.display(), e))
+}
+
 /// Sort workspace entries for a file-tree listing: directories first, then by
 /// case-insensitive basename.
 fn sort_dir_listing(entries: &mut [WorkspaceEntry]) {
@@ -803,6 +849,21 @@ fn resolve_workspace_target(
     rel_path: &str,
     must_exist: bool,
 ) -> Result<(PathBuf, PathBuf), String> {
+    if !rel_path.is_empty() {
+        let rel_candidate = Path::new(rel_path);
+        if rel_candidate.is_absolute()
+            || rel_path.starts_with('/')
+            || rel_path.starts_with('\\')
+            || rel_candidate.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::Prefix(_) | std::path::Component::RootDir
+                )
+            })
+        {
+            return Err(format!("not a relative workspace path: {rel_path}"));
+        }
+    }
     let root_path = PathBuf::from(root)
         .canonicalize()
         .map_err(|e| format!("canonicalize root {}: {}", root, e))?;
@@ -871,6 +932,7 @@ pub fn fs_search_workspace(
     if !root_path.is_dir() {
         return Err(format!("root is not a directory: {}", root));
     }
+    ensure_readable_dir(&root_path)?;
     let cap = limit.unwrap_or(50).min(SEARCH_HARD_LIMIT);
     if cap == 0 {
         return Ok(Vec::new());
@@ -1028,6 +1090,7 @@ pub fn search_workspace_content(
     if !root_path.is_dir() {
         return Err(format!("root is not a directory: {}", root));
     }
+    ensure_readable_dir(&root_path)?;
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -1130,8 +1193,70 @@ pub fn read_workspace_file(
     max_bytes: Option<usize>,
     allow_sensitive: bool,
 ) -> Result<String, String> {
-    read_workspace_file_versioned(root, rel_path, max_bytes, allow_sensitive)
-        .map(|result| result.content)
+    let Some(limit) = max_bytes else {
+        return read_workspace_file_versioned(root, rel_path, None, allow_sensitive)
+            .map(|result| result.content);
+    };
+    let root_path = PathBuf::from(&root)
+        .canonicalize()
+        .map_err(|e| format!("canonicalize root {}: {}", root, e))?;
+    let (_, target) = resolve_workspace_target(&root, &rel_path, true)?;
+    let canonical = target
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {}: {}", target.display(), e))?;
+    if !canonical.starts_with(&root_path) {
+        return Err(format!(
+            "path escapes workspace: {} (root {})",
+            canonical.display(),
+            root_path.display()
+        ));
+    }
+    refuse_sensitive_read(&root_path, &rel_path, &canonical, allow_sensitive)?;
+    let mut file =
+        std::fs::File::open(&canonical).map_err(|e| format!("read {}: {}", rel_path, e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("stat {}: {}", rel_path, e))?;
+    if metadata.is_dir() {
+        return Err(format!("read {}: is a directory", rel_path));
+    }
+    // Read at most `limit + 4` bytes so disk I/O and memory stay O(limit), while
+    // capturing any multi-byte UTF-8 codepoint starting below `limit` and detecting
+    // whether the file exceeds `limit`.
+    let window = limit.saturating_add(4);
+    let mut prefix = Vec::with_capacity(window.min(64 * 1024));
+    (&mut file)
+        .take(window as u64)
+        .read_to_end(&mut prefix)
+        .map_err(|e| format!("read {}: {}", rel_path, e))?;
+    truncate_utf8_preview_bytes(&prefix, limit, prefix.len() > limit, &rel_path)
+}
+
+fn truncate_utf8_preview_bytes(
+    prefix: &[u8],
+    limit: usize,
+    exceeded_limit: bool,
+    rel_path: &str,
+) -> Result<String, String> {
+    if !exceeded_limit {
+        return String::from_utf8(prefix.to_vec())
+            .map_err(|e| format!("read {}: {}", rel_path, e));
+    }
+    let valid_str = match std::str::from_utf8(prefix) {
+        Ok(s) => s,
+        Err(e) if e.error_len().is_none() && e.valid_up_to() >= limit => {
+            std::str::from_utf8(&prefix[..e.valid_up_to()])
+                .map_err(|err| format!("read {}: {}", rel_path, err))?
+        }
+        Err(e) => return Err(format!("read {}: {}", rel_path, e)),
+    };
+    let mut boundary = limit.min(valid_str.len());
+    while !valid_str.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    let mut out = valid_str[..boundary].to_owned();
+    out.push_str("\n... (truncated)");
+    Ok(out)
 }
 
 /// Read text and its raw-byte version from the same open file. `max_bytes`
@@ -1156,7 +1281,7 @@ pub fn read_workspace_file_versioned(
     let root_path = PathBuf::from(&root)
         .canonicalize()
         .map_err(|e| format!("canonicalize root {}: {}", root, e))?;
-    let target = root_path.join(&rel_path);
+    let (_, target) = resolve_workspace_target(&root, &rel_path, true)?;
     let canonical = target
         .canonicalize()
         .map_err(|e| format!("canonicalize {}: {}", target.display(), e))?;
@@ -1168,25 +1293,87 @@ pub fn read_workspace_file_versioned(
         ));
     }
     refuse_sensitive_read(&root_path, &rel_path, &canonical, allow_sensitive)?;
-    let mut file = std::fs::File::open(&canonical)
-        .map_err(|e| format!("read {}: {}", rel_path, e))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|e| format!("read {}: {}", rel_path, e))?;
-    let metadata = file.metadata().map_err(|e| format!("stat {}: {}", rel_path, e))?;
-    let sha256 = workspace_file_sha256(&bytes);
-    let size = bytes.len() as u64;
-    let mut content = String::from_utf8(bytes).map_err(|e| format!("read {}: {}", rel_path, e))?;
-    if let Some(limit) = max_bytes {
-        if content.len() > limit {
-            let mut boundary = limit.min(content.len());
-            while !content.is_char_boundary(boundary) {
-                boundary = boundary.saturating_sub(1);
+    let mut file =
+        std::fs::File::open(&canonical).map_err(|e| format!("read {}: {}", rel_path, e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("stat {}: {}", rel_path, e))?;
+    if metadata.is_dir() {
+        return Err(format!("read {}: is a directory", rel_path));
+    }
+    let Some(limit) = max_bytes else {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|e| format!("read {}: {}", rel_path, e))?;
+        let sha256 = workspace_file_sha256(&bytes);
+        let size = bytes.len() as u64;
+        let content =
+            String::from_utf8(bytes).map_err(|e| format!("read {}: {}", rel_path, e))?;
+        return Ok(WorkspaceVersionedRead {
+            content,
+            sha256,
+            size,
+            mtime_ms: mtime_ms_of(&metadata),
+        });
+    };
+
+    // Stream in 64 KiB chunks when `max_bytes` is bounded: compute full-file
+    // SHA-256, size, and UTF-8 validity without buffering the entire file in RAM.
+    let prefix_cap = limit.saturating_add(4);
+    let mut prefix = Vec::with_capacity(prefix_cap.min(64 * 1024));
+    let mut hasher = Sha256::new();
+    let mut size = 0u64;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut carry = [0u8; 4];
+    let mut carry_len = 0usize;
+    let mut combined = Vec::with_capacity(64 * 1024 + 4);
+
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("read {}: {}", rel_path, e))?;
+        if n == 0 {
+            break;
+        }
+        let slice = &buf[..n];
+        hasher.update(slice);
+        size = size.saturating_add(n as u64);
+        if prefix.len() < prefix_cap {
+            let need = prefix_cap - prefix.len();
+            prefix.extend_from_slice(&slice[..need.min(n)]);
+        }
+        combined.clear();
+        if carry_len > 0 {
+            combined.extend_from_slice(&carry[..carry_len]);
+        }
+        combined.extend_from_slice(slice);
+        match std::str::from_utf8(&combined) {
+            Ok(_) => {
+                carry_len = 0;
             }
-            content.truncate(boundary);
-            content.push_str("\n... (truncated)");
+            Err(e) if e.error_len().is_none() => {
+                let tail = &combined[e.valid_up_to()..];
+                carry_len = tail.len();
+                carry[..carry_len].copy_from_slice(tail);
+            }
+            Err(e) => return Err(format!("read {}: {}", rel_path, e)),
         }
     }
-    Ok(WorkspaceVersionedRead { content, sha256, size, mtime_ms: mtime_ms_of(&metadata) })
+    if carry_len > 0 {
+        return Err(format!("read {}: incomplete UTF-8 byte sequence at EOF", rel_path));
+    }
+    let sha256: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let content = truncate_utf8_preview_bytes(&prefix, limit, size > limit as u64, &rel_path)?;
+    Ok(WorkspaceVersionedRead {
+        content,
+        sha256,
+        size,
+        mtime_ms: mtime_ms_of(&metadata),
+    })
 }
 
 /// Hard ceiling for a base64 read when the caller passes no `max_bytes` —
@@ -1255,6 +1442,10 @@ pub struct WorkspaceFileChunk {
     pub size: u64,
     /// Whether this slice reaches the end of the file.
     pub eof: bool,
+    /// File mtime in milliseconds when opened for this read, if available.
+    pub mtime_ms: Option<u64>,
+    /// Deterministic metadata version token of the open file.
+    pub version: String,
 }
 
 /// Read `length` bytes of a workspace file starting at `offset` — the
@@ -1304,12 +1495,16 @@ pub fn read_workspace_file_chunk(
         file.read_exact(&mut buffer)
             .map_err(|e| format!("read {}: {}", rel_path, e))?;
     }
+    let mtime_ms = mtime_ms_of(&metadata);
+    let version = file_version_token(&metadata);
     Ok(WorkspaceFileChunk {
         data_base64: base64::engine::general_purpose::STANDARD.encode(&buffer),
         offset,
         bytes_read: take,
         size,
         eof: offset.saturating_add(take) >= size,
+        mtime_ms,
+        version,
     })
 }
 
@@ -1513,6 +1708,7 @@ pub fn fs_list_workspace_dir(
     if !dir.is_dir() {
         return Err(format!("not a directory: {}", dir.display()));
     }
+    ensure_readable_dir(&dir)?;
     let respect_ignore = !include_ignored.unwrap_or(false);
     let walker = WalkBuilder::new(&dir)
         .hidden(false)
@@ -1526,7 +1722,16 @@ pub fn fs_list_workspace_dir(
         .build();
 
     let mut out: Vec<WorkspaceEntry> = Vec::new();
-    for dent in walker.flatten() {
+    for result in walker {
+        let dent = match result {
+            Ok(dent) => dent,
+            Err(err) => {
+                if err.io_error().is_some() {
+                    return Err(format!("list {}: {}", dir.display(), err));
+                }
+                continue;
+            }
+        };
         if dent.depth() == 0 {
             // The starting directory itself.
             continue;
@@ -1537,13 +1742,14 @@ pub fn fs_list_workspace_dir(
             Err(_) => continue,
         };
         let is_dir = dent.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let meta = dent.metadata().ok();
-        let size = if is_dir {
-            0
-        } else {
-            meta.as_ref().map(|m| m.len()).unwrap_or(0)
+        let meta = match dent.metadata() {
+            Ok(m) => m,
+            Err(_) if dent.path_is_symlink() => std::fs::symlink_metadata(path)
+                .map_err(|e| format!("stat {}: {}", path.display(), e))?,
+            Err(e) => return Err(format!("stat {}: {}", path.display(), e)),
         };
-        let mtime_ms = meta.as_ref().and_then(mtime_ms_of);
+        let size = if is_dir { 0 } else { meta.len() };
+        let mtime_ms = mtime_ms_of(&meta);
         out.push(WorkspaceEntry {
             rel_path: rel_to_root,
             absolute_path: path.to_string_lossy().to_string(),
@@ -1734,6 +1940,7 @@ pub fn fs_walk_workspace(
     if !dir.is_dir() {
         return Err(format!("not a directory: {}", dir.display()));
     }
+    ensure_readable_dir(&dir)?;
     let respect_ignore = !include_ignored.unwrap_or(false);
     let want_dirs = include_dirs.unwrap_or(false);
     let cap = max_entries
@@ -1920,12 +2127,44 @@ pub fn fs_stat_workspace_file(root: String, rel_path: String) -> Result<Workspac
 /// to the workspace. The `root` + `rel_path` counterpart to `ensure_dir_confined`
 /// (which takes an absolute path + allowed roots). Re-verifies the created path
 /// stays inside `root` to guard a symlinked ancestor.
+fn has_dot_final_component(rel_path: &str) -> bool {
+    let trimmed = rel_path.trim().trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return true;
+    }
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|seg| seg == "." || seg == "..")
+}
+
+fn resolve_target_canonical_even_if_missing(target: &Path) -> Result<PathBuf, String> {
+    if target.exists() {
+        return target
+            .canonicalize()
+            .map_err(|e| format!("canonicalize {}: {}", target.display(), e));
+    }
+    let ancestor = canonicalize_deepest_existing_ancestor(target)?;
+    let existing = target
+        .ancestors()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| format!("path has no existing ancestor: {}", target.display()))?;
+    let relative = target
+        .strip_prefix(existing)
+        .map_err(|e| format!("resolve {}: {}", target.display(), e))?;
+    Ok(ancestor.join(relative))
+}
+
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub fn fs_create_workspace_dir(root: String, rel_path: String) -> Result<(), String> {
-    if rel_path.trim().is_empty() {
-        return Err("rel_path is empty".into());
+    if rel_path.trim().is_empty() || has_dot_final_component(&rel_path) {
+        return Err("rel_path is empty or targets the workspace root".into());
     }
-    let (root_path, target) = resolve_workspace_target(&root, &rel_path, false)?;
+    let clean_rel = rel_path.trim_end_matches(['/', '\\']);
+    let (root_path, target) = resolve_workspace_target(&root, clean_rel, false)?;
+    if resolve_target_canonical_even_if_missing(&target)? == root_path {
+        return Err("refusing to recreate the workspace root".into());
+    }
     std::fs::create_dir_all(&target).map_err(|e| format!("mkdir {}: {}", target.display(), e))?;
     let canonical = target
         .canonicalize()
@@ -1944,22 +2183,29 @@ pub fn fs_create_workspace_dir(root: String, rel_path: String) -> Result<(), Str
 /// A directory is removed only when `recursive = Some(true)` (otherwise it must
 /// be empty). A symlinked final component is unlinked (never followed), so a
 /// symlinked directory can't let removal traverse outside the workspace.
-/// Deleting the root itself (empty `rel_path`) is refused.
+/// Deleting the root itself (empty `rel_path` or any canonical/dot alias) is refused.
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub fn fs_delete_workspace_entry(
     root: String,
     rel_path: String,
     recursive: Option<bool>,
 ) -> Result<(), String> {
-    if rel_path.trim().is_empty() {
+    if rel_path.trim().is_empty() || has_dot_final_component(&rel_path) {
         return Err("refusing to delete the workspace root".into());
     }
-    let (_root_path, target) = resolve_workspace_target(&root, &rel_path, true)?;
+    let clean_rel = rel_path.trim_end_matches(['/', '\\']);
+    let (root_path, target) = resolve_workspace_target(&root, clean_rel, true)?;
     let meta =
         std::fs::symlink_metadata(&target).map_err(|e| format!("stat {}: {}", rel_path, e))?;
     if meta.file_type().is_symlink() {
         return std::fs::remove_file(&target)
             .map_err(|e| format!("remove symlink {}: {}", rel_path, e));
+    }
+    let canonical = target
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {}: {}", target.display(), e))?;
+    if canonical == root_path {
+        return Err("refusing to delete the workspace root".into());
     }
     if meta.is_dir() {
         if recursive.unwrap_or(false) {
@@ -1974,52 +2220,106 @@ pub fn fs_delete_workspace_entry(
 
 /// Rename/move `from_rel_path` → `to_rel_path` within the workspace. Both
 /// endpoints are sandbox-checked against `root`; the destination parent is
-/// created as needed. Refuses to clobber an existing destination or to write
-/// through a symlinked destination.
+/// created as needed. Refuses to clobber an existing destination, write
+/// through a symlinked destination, rename the workspace root, or move a
+/// directory into itself or its own descendant.
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub fn fs_rename_workspace_entry(
     root: String,
     from_rel_path: String,
     to_rel_path: String,
 ) -> Result<(), String> {
-    if from_rel_path.trim().is_empty() || to_rel_path.trim().is_empty() {
-        return Err("rename requires a non-empty source and destination".into());
+    if from_rel_path.trim().is_empty()
+        || to_rel_path.trim().is_empty()
+        || has_dot_final_component(&from_rel_path)
+        || has_dot_final_component(&to_rel_path)
+    {
+        return Err("rename requires non-root relative source and destination paths".into());
     }
-    let (root_path, from) = resolve_workspace_target(&root, &from_rel_path, true)?;
-    let (_, to) = resolve_workspace_target(&root, &to_rel_path, false)?;
+    let clean_from = from_rel_path.trim_end_matches(['/', '\\']);
+    let clean_to = to_rel_path.trim_end_matches(['/', '\\']);
+    let (root_path, from) = resolve_workspace_target(&root, clean_from, true)?;
+    let (_, to) = resolve_workspace_target(&root, clean_to, false)?;
     if to.exists() {
         return Err(format!("destination already exists: {}", to_rel_path));
     }
     reject_symlinked_final(&to)?;
+    let canonical_to = resolve_target_canonical_even_if_missing(&to)?;
+    if canonical_to == root_path {
+        return Err("refusing to overwrite the workspace root".into());
+    }
+    let from_meta = std::fs::symlink_metadata(&from)
+        .map_err(|e| format!("stat {}: {}", from_rel_path, e))?;
+    if !from_meta.file_type().is_symlink() {
+        let canonical_from = from
+            .canonicalize()
+            .map_err(|e| format!("canonicalize {}: {}", from.display(), e))?;
+        if canonical_from == root_path {
+            return Err("refusing to rename the workspace root".into());
+        }
+        if from_meta.is_dir()
+            && (canonical_to == canonical_from || canonical_to.starts_with(&canonical_from))
+        {
+            return Err(format!(
+                "cannot move directory {} into itself or its descendant {}",
+                from_rel_path, to_rel_path
+            ));
+        }
+    }
     prepare_dest_parent(&root_path, &to)?;
     std::fs::rename(&from, &to)
         .map_err(|e| format!("rename {} -> {}: {}", from_rel_path, to_rel_path, e))
 }
 
+const COPY_SKIPPED_PATHS_MAX: usize = 50;
+
+/// Result of [`fs_copy_workspace_entry`].
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCopyResult {
+    /// Count of nested symlinks intentionally skipped during recursive copy.
+    pub skipped_symlinks: usize,
+    /// Up to 50 workspace-relative paths of skipped symlinks.
+    pub skipped_paths: Vec<String>,
+}
+
 /// Copy `from_rel_path` → `to_rel_path` within the workspace. A directory is
 /// copied only when `recursive = Some(true)`. Both endpoints are sandbox-checked;
 /// the destination parent is created as needed; refuses to clobber an existing
-/// destination or to write through a symlinked destination. Symlinks inside a
-/// recursively-copied tree are skipped (never followed out of the workspace).
+/// destination, write through a symlinked destination, or copy a directory into
+/// itself or its descendant. Symlinks inside a recursively-copied tree are
+/// skipped (never followed out of the workspace) and reported in [`WorkspaceCopyResult`].
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub fn fs_copy_workspace_entry(
     root: String,
     from_rel_path: String,
     to_rel_path: String,
     recursive: Option<bool>,
-) -> Result<(), String> {
-    if from_rel_path.trim().is_empty() || to_rel_path.trim().is_empty() {
-        return Err("copy requires a non-empty source and destination".into());
+) -> Result<WorkspaceCopyResult, String> {
+    if from_rel_path.trim().is_empty()
+        || to_rel_path.trim().is_empty()
+        || has_dot_final_component(&from_rel_path)
+        || has_dot_final_component(&to_rel_path)
+    {
+        return Err("copy requires non-root relative source and destination paths".into());
     }
-    let (root_path, from) = resolve_workspace_target(&root, &from_rel_path, true)?;
-    let (_, to) = resolve_workspace_target(&root, &to_rel_path, false)?;
+    let clean_from = from_rel_path.trim_end_matches(['/', '\\']);
+    let clean_to = to_rel_path.trim_end_matches(['/', '\\']);
+    let (root_path, from) = resolve_workspace_target(&root, clean_from, true)?;
+    let (_, to) = resolve_workspace_target(&root, clean_to, false)?;
     if to.exists() {
         return Err(format!("destination already exists: {}", to_rel_path));
     }
     reject_symlinked_final(&to)?;
-    prepare_dest_parent(&root_path, &to)?;
+    let canonical_to = resolve_target_canonical_even_if_missing(&to)?;
+    if canonical_to == root_path {
+        return Err("refusing to overwrite the workspace root".into());
+    }
     let meta =
         std::fs::symlink_metadata(&from).map_err(|e| format!("stat {}: {}", from_rel_path, e))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("refusing to copy symlink: {}", from_rel_path));
+    }
     if meta.is_dir() {
         if !recursive.unwrap_or(false) {
             return Err(format!(
@@ -2027,10 +2327,26 @@ pub fn fs_copy_workspace_entry(
                 from_rel_path
             ));
         }
-        copy_dir_recursive(&from, &to)
+        let canonical_from = from
+            .canonicalize()
+            .map_err(|e| format!("canonicalize {}: {}", from.display(), e))?;
+        if canonical_to == canonical_from || canonical_to.starts_with(&canonical_from) {
+            return Err(format!(
+                "cannot copy directory {} into itself or its descendant {}",
+                from_rel_path, to_rel_path
+            ));
+        }
+        prepare_dest_parent(&root_path, &to)?;
+        let mut outcome = WorkspaceCopyResult::default();
+        if let Err(err) = copy_dir_recursive(&root_path, &from, &to, &mut outcome) {
+            let _ = std::fs::remove_dir_all(&to);
+            return Err(err);
+        }
+        Ok(outcome)
     } else {
+        prepare_dest_parent(&root_path, &to)?;
         std::fs::copy(&from, &to)
-            .map(|_| ())
+            .map(|_| WorkspaceCopyResult::default())
             .map_err(|e| format!("copy {} -> {}: {}", from_rel_path, to_rel_path, e))
     }
 }
@@ -2059,8 +2375,13 @@ fn prepare_dest_parent(root_path: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// Recursively copy `from` → `to`, skipping symlinks so a link inside the tree
-/// can't redirect the copy outside the workspace.
-fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), String> {
+/// can't redirect the copy outside the workspace, and recording skipped links.
+fn copy_dir_recursive(
+    root_path: &Path,
+    from: &Path,
+    to: &Path,
+    outcome: &mut WorkspaceCopyResult,
+) -> Result<(), String> {
     std::fs::create_dir_all(to).map_err(|e| format!("mkdir {}: {}", to.display(), e))?;
     for entry in
         std::fs::read_dir(from).map_err(|e| format!("read_dir {}: {}", from.display(), e))?
@@ -2070,9 +2391,17 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), String> {
         let src = entry.path();
         let dst = to.join(entry.file_name());
         if file_type.is_symlink() {
+            outcome.skipped_symlinks += 1;
+            if outcome.skipped_paths.len() < COPY_SKIPPED_PATHS_MAX {
+                let rel = src
+                    .strip_prefix(root_path)
+                    .map(|r| r.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| src.to_string_lossy().replace('\\', "/"));
+                outcome.skipped_paths.push(rel);
+            }
             continue;
         } else if file_type.is_dir() {
-            copy_dir_recursive(&src, &dst)?;
+            copy_dir_recursive(root_path, &src, &dst, outcome)?;
         } else {
             std::fs::copy(&src, &dst).map_err(|e| format!("copy {}: {}", src.display(), e))?;
         }
@@ -4862,5 +5191,190 @@ mod tests {
         // still succeeds on a machine that has none.
         let found = slash_commands_scan(None).unwrap();
         assert!(found.iter().all(|f| f.scope == "user"));
+    }
+
+    #[test]
+    fn delete_and_rename_refuse_every_workspace_root_alias() {
+        let root = make_sandbox("root-alias-guard");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("keep.txt"), "precious").unwrap();
+        let root_str = root.to_string_lossy().to_string();
+
+        for alias in ["", "   ", ".", "./", "./.", "sub/..", root_str.as_str()] {
+            assert!(
+                fs_delete_workspace_entry(root_str.clone(), alias.into(), Some(true)).is_err(),
+                "delete alias {alias:?} must be refused"
+            );
+            assert!(
+                fs_rename_workspace_entry(root_str.clone(), alias.into(), "moved".into()).is_err(),
+                "rename source alias {alias:?} must be refused"
+            );
+            assert!(
+                fs_create_workspace_dir(root_str.clone(), alias.into()).is_err(),
+                "mkdir alias {alias:?} must be refused"
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&root, root.join("link_to_root")).unwrap();
+            for alias in ["link_to_root/.", "link_to_root/.."] {
+                assert!(
+                    fs_delete_workspace_entry(root_str.clone(), alias.into(), Some(true)).is_err(),
+                    "symlink dot alias {alias:?} must be refused"
+                );
+            }
+            // Removing the symlink itself (without trailing dot) unlinks only the symlink.
+            fs_delete_workspace_entry(root_str.clone(), "link_to_root".into(), Some(true))
+                .unwrap();
+            assert!(!root.join("link_to_root").exists());
+        }
+
+        assert!(root.exists(), "workspace root must survive");
+        assert_eq!(
+            std::fs::read_to_string(root.join("keep.txt")).unwrap(),
+            "precious"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn copy_and_rename_refuse_directory_into_self_or_descendant_without_creating_dirs() {
+        let root = make_sandbox("self-descendant-guard");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("index.ts"), "export const x = 1;\n").unwrap();
+        let root_str = root.to_string_lossy().to_string();
+
+        for dest in ["src", "src/child", "src/deep/nested/child"] {
+            assert!(
+                fs_copy_workspace_entry(
+                    root_str.clone(),
+                    "src".into(),
+                    dest.into(),
+                    Some(true),
+                )
+                .is_err(),
+                "copy src -> {dest} must be refused"
+            );
+            assert!(
+                fs_rename_workspace_entry(root_str.clone(), "src".into(), dest.into()).is_err(),
+                "rename src -> {dest} must be refused"
+            );
+        }
+        assert!(
+            !root.join("src").join("child").exists() && !root.join("src").join("deep").exists(),
+            "no partial destination directories may be created inside source"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_reports_skipped_nested_symlinks_and_refuses_top_level_symlink() {
+        use std::os::unix::fs::symlink;
+        let root = make_sandbox("copy-symlinks");
+        std::fs::create_dir_all(root.join("pkg").join("sub")).unwrap();
+        std::fs::write(root.join("pkg").join("real.txt"), "hello").unwrap();
+        std::fs::write(root.join(".env"), "SECRET=1").unwrap();
+        symlink(root.join(".env"), root.join("pkg").join("sub").join("leak.txt")).unwrap();
+        symlink(root.join(".env"), root.join("top_link.txt")).unwrap();
+        let root_str = root.to_string_lossy().to_string();
+
+        let result = fs_copy_workspace_entry(
+            root_str.clone(),
+            "pkg".into(),
+            "pkg-copy".into(),
+            Some(true),
+        )
+        .unwrap();
+        assert_eq!(result.skipped_symlinks, 1);
+        assert_eq!(result.skipped_paths, vec!["pkg/sub/leak.txt".to_string()]);
+        assert!(root.join("pkg-copy").join("real.txt").exists());
+        assert!(!root.join("pkg-copy").join("sub").join("leak.txt").exists());
+
+        assert!(
+            fs_copy_workspace_entry(
+                root_str,
+                "top_link.txt".into(),
+                "copied_link.txt".into(),
+                None,
+            )
+            .is_err(),
+            "top-level symlink copy must be refused"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn chunk_version_changes_on_same_size_atomic_replacement_and_streaming_preview_matches() {
+        let root = make_sandbox("chunk-version-and-preview");
+        let root_str = root.to_string_lossy().to_string();
+
+        // F02: equal-size atomic replacement changes `version`.
+        std::fs::write(root.join("same.bin"), b"AAAA").unwrap();
+        let first =
+            fs_read_workspace_file_chunk(root_str.clone(), "same.bin".into(), 0, 2).unwrap();
+        std::fs::write(root.join("same.tmp"), b"BBBB").unwrap();
+        std::fs::rename(root.join("same.tmp"), root.join("same.bin")).unwrap();
+        let second =
+            fs_read_workspace_file_chunk(root_str.clone(), "same.bin".into(), 2, 2).unwrap();
+        assert_eq!(first.size, second.size);
+        assert_ne!(
+            first.version, second.version,
+            "atomic equal-size replacement must change chunk version"
+        );
+
+        // F09: multi-chunk (> 64 KiB) UTF-8 file with 4-byte codepoints across boundaries.
+        let body = "😀".repeat(20_000); // 80,000 bytes (> 64 KiB chunk buffer)
+        std::fs::write(root.join("big.txt"), body.as_bytes()).unwrap();
+        let expected_sha = workspace_file_sha256(body.as_bytes());
+
+        let preview = fs_read_workspace_file(root_str.clone(), "big.txt".into(), Some(10)).unwrap();
+        assert_eq!(preview, "😀😀\n... (truncated)");
+
+        let versioned =
+            fs_read_workspace_file_versioned(root_str, "big.txt".into(), Some(10)).unwrap();
+        assert_eq!(versioned.content, "😀😀\n... (truncated)");
+        assert_eq!(versioned.size, body.len() as u64);
+        assert_eq!(versioned.sha256, expected_sha);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_and_walk_propagate_unreadable_directory_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        // Skip if running as root in a container where chmod 000 is still readable.
+        let root = make_sandbox("unreadable-dir");
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("secret.txt"), "x").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let root_str = root.to_string_lossy().to_string();
+        let can_bypass = std::fs::read_dir(&locked).is_ok();
+        if !can_bypass {
+            assert!(
+                fs_list_workspace_dir(root_str.clone(), Some("locked".into()), None).is_err(),
+                "unreadable directory must return Err, not empty Vec"
+            );
+            assert!(
+                fs_walk_workspace(
+                    root_str,
+                    Some("locked".into()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .is_err(),
+                "unreadable walk root must return Err"
+            );
+        }
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
