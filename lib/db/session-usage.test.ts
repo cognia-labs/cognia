@@ -149,6 +149,66 @@ describe("recordExternalAgentUsage", () => {
     })
   })
 
+  it("books no money for a turn on a Cognia model: the gateway's rows hold it (F02)", async () => {
+    await recordExternalAgentUsage({
+      sessionId: "gw-chat",
+      messageId: "assistant-gw",
+      model: "deepseek-chat",
+      providerId: "cognia:external-agent:codex",
+      projectId: "project-1",
+      payer: "cognia",
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 200,
+        totalTokens: 1200,
+        // An agent that prices its own calls still reports a figure.
+        providerCost: { amount: 0.4, currency: "USD" },
+      },
+    })
+    const [row] = await listUsageForSession("gw-chat")
+    expect(row).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 200,
+      projectId: "project-1",
+      costUsd: 0,
+      costKnown: true,
+      costSource: "derived",
+    })
+    expect(row).not.toHaveProperty("providerId")
+    expect(row).not.toHaveProperty("imported")
+    // Not in the budget rollup, and nothing for the workspace limit to count.
+    expect(await getDb().providerCostDaily.count()).toBe(0)
+    expect(isUnpricedUsageRow(row)).toBe(false)
+  })
+
+  it("keeps a turn on the agent's own account out of Cognia's budgets (F02)", async () => {
+    await recordExternalAgentUsage({
+      sessionId: "own-chat",
+      messageId: "assistant-own",
+      model: "claude-sonnet-5-5",
+      providerId: "cognia:external-agent:claude-code",
+      projectId: "project-1",
+      payer: "agent",
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 200,
+        totalTokens: 1200,
+        providerCost: { amount: 2, currency: "USD" },
+      },
+    })
+    const [row] = await listUsageForSession("own-chat")
+    expect(row).toMatchObject({
+      providerId: "cognia:external-agent:claude-code",
+      projectId: "project-1",
+      costUsd: 2,
+      costSource: "sdk",
+      imported: true,
+      surface: "chat",
+    })
+    expect(await getDb().providerCostDaily.count()).toBe(0)
+    expect(await listLocalUsageForProjectSince("project-1", 0)).toEqual([])
+  })
+
   it("does not turn unlabelled provider currency into dollars", async () => {
     await recordExternalAgentUsage({
       sessionId: "s",

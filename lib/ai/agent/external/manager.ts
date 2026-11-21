@@ -108,6 +108,7 @@ import {
   type SessionListOptions,
 } from "./protocol-adapter"
 import { isHeadlessHost } from "@/lib/platform/detect"
+import { registerGatewayTaskAttribution } from "@/lib/gateway/task-attribution"
 import { clampThinkingLevel } from "@cognia/agent-runtime-kit/thinking-levels"
 import { createTurnUsageTracker } from "@cognia/agent-runtime-kit/base-adapter"
 import { AgentConnectionCoordinator } from "@cognia/agent-runtime-kit/connection-coordinator"
@@ -1018,6 +1019,12 @@ export class ExternalAgentManager {
     }
     let releasePromise: Promise<boolean> | undefined
     let childAdapter: ProtocolAdapter | undefined
+    // The gateway books each of this task's requests; this is how those rows
+    // find the conversation's workspace (F02).
+    const releaseAttribution =
+      typeof custom?.chatSessionId === "string" && custom.chatSessionId
+        ? registerGatewayTaskAttribution(taskId, { chatSessionId: custom.chatSessionId })
+        : undefined
     // Resolves true once the ticket is revoked: nothing can spend on it after.
     const release = (): Promise<boolean> =>
       (releasePromise ??= (async () => {
@@ -1034,6 +1041,7 @@ export class ExternalAgentManager {
             return false
           }
         )
+        releaseAttribution?.()
         const child = this.instances.get(childId)
         for (const session of child?.sessions.values() ?? []) {
           publishSession(

@@ -25,6 +25,7 @@ import { externalAgentPresetIdOf } from "@/lib/ai/agent/external/config/preset-i
 import { isCogniaProjectedTool } from "@/lib/ai/agent/external/policy/tool-preapproval"
 import { type RemoteAttachmentsWithheld } from "@/lib/ai/agent/external/runtimes/remote/remote-execute"
 import {
+  externalAgentProviderId,
   externalAgentRouteKey,
   isGatewaySessionLink,
   rememberGatewaySession,
@@ -1547,11 +1548,18 @@ export async function runExternalAgentTurn(ctx: ExternalAgentTurnContext): Promi
     chatTurnPerformance.beginFinalPersistence(sessionId)
     await persistMessages(sessionId, finalMessages, externalFence)
     if (result.tokenUsage) {
+      // On a Cognia model the gateway booked every request it served, in this
+      // conversation's workspace; this row keeps the agent's own token count.
+      // On the agent's own models Cognia paid nothing (F02).
+      const usageProjectId = session?.projectId ?? executionContext?.projectId
       await recordExternalAgentUsage({
         sessionId,
         messageId: assistantId,
         usage: result.tokenUsage,
         model: externalModel ?? cogniaModel?.modelId,
+        payer: managedGatewayTask ? "cognia" : "agent",
+        providerId: externalAgentProviderId(extAgentId),
+        ...(usageProjectId ? { projectId: usageProjectId } : {}),
         durationMs: result.duration,
         at: completedAt,
       }).catch((error) => console.warn("recordExternalAgentUsage failed", error))

@@ -3,6 +3,18 @@ jest.mock("@/lib/db/messages", () => ({
   persistMessages: jest.fn().mockResolvedValue(undefined),
   persistStreamingMessages: jest.fn().mockResolvedValue(undefined),
 }))
+const mockRecordExternalAgentUsage = jest.fn().mockResolvedValue(undefined)
+jest.mock("@/lib/db/session-usage", () => ({
+  ...jest.requireActual("@/lib/db/session-usage"),
+  recordExternalAgentUsage: (...args: unknown[]) => mockRecordExternalAgentUsage(...args),
+}))
+const mockSessionProjects = new Map<string, string>()
+jest.mock("@/lib/db/sessions", () => ({
+  ...jest.requireActual("@/lib/db/sessions"),
+  getSession: jest.fn(async (id: string) =>
+    mockSessionProjects.has(id) ? { id, projectId: mockSessionProjects.get(id) } : undefined
+  ),
+}))
 
 import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
@@ -398,6 +410,56 @@ describe("autonomous external turns", () => {
       registry.release("idle-chat")
     }
   })
+  it.each([
+    ["native-own", "agent"],
+    ["cognia-gateway:task-x", "cognia"],
+  ] as const)(
+    "books a runtime-owned turn on %s as paid by %s, in the conversation's workspace (F02)",
+    async (nativeSessionId, payer) => {
+      const { useChatStore } = await import("@/stores/chat/chat-store")
+      const { SessionCoalescingRegistry } = await import("@/lib/chat/stream-coalescing")
+      mockRecordExternalAgentUsage.mockClear()
+      mockSessionProjects.set("usage-chat", "proj-usage")
+      useAgentRuntimeStore.setState({
+        runtimeRef: { kind: "external", agentId: "pi" },
+        sessionRuntimeRefs: {},
+        sessionExternalLinks: {},
+      })
+      useAgentRuntimeStore
+        .getState()
+        .setSessionExternalLink("usage-chat", { agentId: "pi", sessionId: nativeSessionId })
+      useChatStore.getState().replaceSessionMessages("usage-chat", [])
+      const registry = new SessionCoalescingRegistry({
+        onCommit: (id, messages) => useChatStore.getState().replaceSessionMessages(id, messages),
+        onPersist: () => {},
+        persistDelayMs: 0,
+      })
+      const consume = createExternalIdleEventConsumer("usage-chat", "pi", nativeSessionId, registry)
+      const base = {
+        sessionId: nativeSessionId,
+        timestamp: new Date(),
+        delivery: "out_of_band" as const,
+      }
+      const tokenUsage = { promptTokens: 10, completionTokens: 4, totalTokens: 14 }
+      try {
+        await consume({ ...base, type: "session_start" })
+        await consume({ ...base, type: "message_delta", delta: { type: "text", text: "hi" } })
+        await consume({ ...base, type: "done", success: true, tokenUsage })
+        expect(mockRecordExternalAgentUsage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionId: "usage-chat",
+            usage: tokenUsage,
+            payer,
+            providerId: "cognia:external-agent:pi",
+            projectId: "proj-usage",
+          })
+        )
+      } finally {
+        mockSessionProjects.clear()
+        registry.release("usage-chat")
+      }
+    }
+  )
   it("flushes a detached autonomous reply and refuses late events", async () => {
     const { useChatStore } = await import("@/stores/chat/chat-store")
     const { SessionCoalescingRegistry } = await import("@/lib/chat/stream-coalescing")

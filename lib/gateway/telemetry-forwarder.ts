@@ -8,8 +8,11 @@
  */
 
 import { recordProviderOutcome, type ProviderOutcome } from "@/lib/claude/provider-telemetry"
+import { activeDatabaseName } from "@/lib/db/schema"
 import { recordSurfaceUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import type { GatewayRequestOutcome } from "@/types/gateway"
+
+import { gatewayTaskProjectId } from "./task-attribution"
 
 /** Map a gateway outcome onto the chat-plane `ProviderOutcome` shape. */
 export function gatewayOutcomeToProviderOutcome(o: GatewayRequestOutcome): ProviderOutcome {
@@ -63,6 +66,11 @@ export function gatewayUsageOperationId(o: GatewayRequestOutcome, at: number): s
  * both counted the request twice, at two price tables (F20). A failed request
  * that still reports tokens (a stream that stalled after the provider started
  * answering) was billed for them, so it is booked like a success.
+ *
+ * A request an external agent made on a Cognia model is that conversation's
+ * spend, and this row is its money (the agent's own turn row carries tokens
+ * only), so it takes the conversation's workspace for per-workspace limits
+ * (F02).
  */
 export function forwardGatewayOutcome(o: GatewayRequestOutcome, now: number = Date.now()): void {
   recordProviderOutcome(gatewayOutcomeToProviderOutcome(o))
@@ -70,22 +78,31 @@ export function forwardGatewayOutcome(o: GatewayRequestOutcome, now: number = Da
   const inputTokens = o.inputTokens ?? 0
   const outputTokens = o.outputTokens ?? 0
   if (inputTokens === 0 && outputTokens === 0) return
+  const operationId = gatewayUsageOperationId(o, now)
+  // The event was accepted for the account open now; reading the workspace
+  // must not let the row land in another one opened meanwhile.
+  const database = activeDatabaseName()
   swallowUsageWrite(
-    recordSurfaceUsage({
-      surface: "gateway",
-      operationId: gatewayUsageOperationId(o, now),
-      scopeId: o.sessionId ?? o.providerId,
-      usage: {
-        inputTokens,
-        outputTokens,
-        durationMs: o.latencyMs,
-        model: o.modelId,
-        providerId: o.providerId,
-        // The gateway reports tokens the upstream returned but never a cost,
-        // so the ledger prices them locally and says so.
-        usageBasis: "provider-reported",
-      },
-      at: now,
-    })
+    (async () => {
+      const projectId = await gatewayTaskProjectId(o.sessionId)
+      if (activeDatabaseName() !== database) return null
+      return recordSurfaceUsage({
+        surface: "gateway",
+        operationId,
+        scopeId: o.sessionId ?? o.providerId,
+        usage: {
+          inputTokens,
+          outputTokens,
+          durationMs: o.latencyMs,
+          model: o.modelId,
+          providerId: o.providerId,
+          ...(projectId ? { projectId } : {}),
+          // The gateway reports tokens the upstream returned but never a cost,
+          // so the ledger prices them locally and says so.
+          usageBasis: "provider-reported",
+        },
+        at: now,
+      })
+    })()
   )
 }

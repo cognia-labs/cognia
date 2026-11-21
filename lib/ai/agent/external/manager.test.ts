@@ -5108,6 +5108,34 @@ describe("Cognia gateway task lifecycle", () => {
     }
   })
 
+  it("lets the gateway book a task's requests to the conversation that started it (F02)", async () => {
+    const { gatewayTaskConversation, resetGatewayTaskAttributions } =
+      await import("@/lib/gateway/task-attribution")
+    const { manager, restorePlane } = prepare()
+    try {
+      await manager.addAgent(managedConfig())
+      let duringTurn: string | undefined
+      mockGatewayRevoke.mockImplementationOnce(async () => {
+        duringTurn = gatewayTaskConversation(mockGatewayMint.mock.calls[0][0].sessionId)
+      })
+      const first = await manager.execute("managed", "first", {
+        context: { custom: { chatSessionId: "chat-one" } },
+      })
+      const { taskId } = parseGatewaySessionId(first.sessionId)!
+      expect(duringTurn).toBe("chat-one")
+      // Released with the ticket, but kept for the outcomes still in flight.
+      expect(gatewayTaskConversation(taskId)).toBe("chat-one")
+
+      const unbound = await manager.execute("managed", "second")
+      expect(gatewayTaskConversation(parseGatewaySessionId(unbound.sessionId)!.taskId)).toBe(
+        undefined
+      )
+    } finally {
+      resetGatewayTaskAttributions()
+      restorePlane()
+    }
+  })
+
   it.each([false, true])(
     "continues SDK gateway tasks with preserved Cognia history (stream=%s)",
     async (stream) => {

@@ -6,6 +6,7 @@ import {
 import { recordProviderOutcome } from "@/lib/claude/provider-telemetry"
 import { recordSurfaceUsage } from "@/lib/db/session-usage"
 import type { GatewayRequestOutcome } from "@/types/gateway"
+import { registerGatewayTaskAttribution, resetGatewayTaskAttributions } from "./task-attribution"
 
 jest.mock("@/lib/claude/provider-telemetry", () => ({
   recordProviderOutcome: jest.fn(),
@@ -15,6 +16,17 @@ jest.mock("@/lib/db/session-usage", () => ({
   recordSurfaceUsage: jest.fn(async () => null),
   swallowUsageWrite: (p: Promise<unknown>) => void p.catch(() => {}),
 }))
+
+const mockSessions = new Map<string, { projectId?: string }>()
+jest.mock("@/lib/db/sessions", () => ({
+  getSession: jest.fn(async (id: string) => mockSessions.get(id)),
+}))
+
+let mockDatabase = "cognia-account-a"
+jest.mock("@/lib/db/schema", () => ({ activeDatabaseName: () => mockDatabase }))
+
+/** Let the forwarder's deferred ledger write run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 const base: GatewayRequestOutcome = {
   providerId: "openai",
@@ -115,6 +127,9 @@ describe("forwardGatewayOutcome", () => {
   beforeEach(() => {
     ;(recordProviderOutcome as jest.Mock).mockClear()
     ;(recordSurfaceUsage as jest.Mock).mockClear()
+    resetGatewayTaskAttributions()
+    mockSessions.clear()
+    mockDatabase = "cognia-account-a"
   })
 
   it("records the mapped outcome into the telemetry sink", () => {
@@ -124,8 +139,9 @@ describe("forwardGatewayOutcome", () => {
     )
   })
 
-  it("writes a canonical ledger row so gateway traffic reaches the budget", () => {
+  it("writes a canonical ledger row so gateway traffic reaches the budget", async () => {
     forwardGatewayOutcome(base, 1000)
+    await settle()
     expect(recordSurfaceUsage).toHaveBeenCalledWith(
       expect.objectContaining({
         surface: "gateway",
@@ -141,7 +157,7 @@ describe("forwardGatewayOutcome", () => {
     )
   })
 
-  it("bills nothing for a failed request that reported no tokens", () => {
+  it("bills nothing for a failed request that reported no tokens", async () => {
     forwardGatewayOutcome({
       ...base,
       ok: false,
@@ -149,11 +165,13 @@ describe("forwardGatewayOutcome", () => {
       inputTokens: null,
       outputTokens: null,
     })
+    await settle()
     expect(recordSurfaceUsage).not.toHaveBeenCalled()
   })
 
-  it("books a failed request that still reported tokens: the provider billed them (F16)", () => {
+  it("books a failed request that still reported tokens: the provider billed them (F16)", async () => {
     forwardGatewayOutcome({ ...base, ok: false, errorMessage: "stream stalled", requestId: "r" })
+    await settle()
     expect(recordSurfaceUsage).toHaveBeenCalledWith(
       expect.objectContaining({
         operationId: "gw:r",
@@ -162,8 +180,9 @@ describe("forwardGatewayOutcome", () => {
     )
   })
 
-  it("leaves a request the Passthrough Ledger booked to the ledger (F20)", () => {
+  it("leaves a request the Passthrough Ledger booked to the ledger (F20)", async () => {
     forwardGatewayOutcome({ ...base, requestId: "r", ledgered: true })
+    await settle()
     expect(recordSurfaceUsage).not.toHaveBeenCalled()
     // Its health still trains the breaker.
     expect(recordProviderOutcome).toHaveBeenCalledWith(
@@ -171,8 +190,43 @@ describe("forwardGatewayOutcome", () => {
     )
   })
 
-  it("skips a success that reported no tokens at all", () => {
+  it("skips a success that reported no tokens at all", async () => {
     forwardGatewayOutcome({ ...base, inputTokens: null, outputTokens: null })
+    await settle()
+    expect(recordSurfaceUsage).not.toHaveBeenCalled()
+  })
+
+  it("books an external agent's Cognia-model request to its conversation's workspace (F02)", async () => {
+    mockSessions.set("chat-1", { projectId: "proj-1" })
+    registerGatewayTaskAttribution("task-1", { chatSessionId: "chat-1" })
+    // A desktop ticket's session is the task id; a Host lease scopes it.
+    forwardGatewayOutcome({ ...base, sessionId: "task-1", requestId: "a" })
+    forwardGatewayOutcome({
+      ...base,
+      sessionId: JSON.stringify(["host-task", "device-1", "task-1"]),
+      requestId: "b",
+    })
+    await settle()
+    const usages = (recordSurfaceUsage as jest.Mock).mock.calls.map(([args]) => args.usage)
+    expect(usages).toEqual([
+      expect.objectContaining({ projectId: "proj-1", providerId: "openai" }),
+      expect.objectContaining({ projectId: "proj-1", providerId: "openai" }),
+    ])
+  })
+
+  it("leaves a request no task claims without a workspace", async () => {
+    forwardGatewayOutcome({ ...base, sessionId: "affinity-hash", requestId: "a" })
+    await settle()
+    const [[args]] = (recordSurfaceUsage as jest.Mock).mock.calls
+    expect(args.usage).not.toHaveProperty("projectId")
+  })
+
+  it("drops the write when another account opened before it landed (F27)", async () => {
+    mockSessions.set("chat-1", { projectId: "proj-1" })
+    registerGatewayTaskAttribution("task-1", { chatSessionId: "chat-1" })
+    forwardGatewayOutcome({ ...base, sessionId: "task-1", requestId: "a" })
+    mockDatabase = "cognia-account-b"
+    await settle()
     expect(recordSurfaceUsage).not.toHaveBeenCalled()
   })
 })

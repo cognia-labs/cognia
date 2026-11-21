@@ -5,6 +5,7 @@ import {
   captureEventFromCanonical,
 } from "@/lib/ai/agent/execution/event-envelope"
 import {
+  externalAgentProviderId,
   externalAgentRouteKey,
   isGatewaySessionLink,
 } from "@/lib/ai/agent/external/session/session-models"
@@ -614,14 +615,22 @@ export function createExternalIdleEventConsumer(
     useChatStore.getState().replaceSessionMessages(chatSessionId, messages)
     await persistMessages(chatSessionId, messages)
     if (disposed || !run) return
-    if (run.usage)
+    if (run.usage) {
+      // A turn the runtime ran on its own: on the agent's own models Cognia
+      // paid nothing; on a Cognia task the gateway booked the money (F02).
+      const { getSession } = await import("@/lib/db/sessions")
+      const projectId = (await getSession(chatSessionId).catch(() => undefined))?.projectId
       await recordExternalAgentUsage({
         sessionId: chatSessionId,
         messageId: run.id,
         usage: run.usage,
+        payer: isGatewaySessionLink(nativeSessionId) ? "cognia" : "agent",
+        providerId: externalAgentProviderId(agentId),
+        ...(projectId ? { projectId } : {}),
         durationMs: event.durationMs,
         at: Date.now(),
       }).catch((error) => console.warn("recordExternalAgentUsage failed", error))
+    }
     run = undefined
     registry.release(chatSessionId)
     useChatStore.getState().setSessionStatus(chatSessionId, event.success ? "idle" : "error")

@@ -71,6 +71,22 @@ export async function upsertSessionUsage(row: SessionUsageRow): Promise<void> {
   await commitUsageRow(row)
 }
 
+/**
+ * Who paid for an external agent's turn, which decides what its row books:
+ *
+ * - `cognia`: the agent ran on a Cognia model through the gateway, which
+ *   books every request it served (`surface: "gateway"`, priced, in the
+ *   conversation's workspace). This row keeps the agent's token accounting
+ *   and books no money and no provider, or the spend would count twice.
+ * - `agent`: the agent ran on its own account or subscription. Cognia paid
+ *   nothing, so the row is external spend (`imported`), like a scanned
+ *   transcript: shown with external tools, never in a Cognia budget.
+ *
+ * Absent for a turn whose payer the caller settles itself (the Host's member
+ * runs price it at the deployment's rate).
+ */
+export type ExternalAgentUsagePayer = "cognia" | "agent"
+
 /** The usage row an external assistant turn's reported accounting makes. */
 export function externalAgentUsageRow(args: {
   sessionId: string
@@ -81,16 +97,18 @@ export function externalAgentUsageRow(args: {
   providerId?: string
   /** Owning workspace, for per-workspace spend (ADR-0204). */
   projectId?: string
+  payer?: ExternalAgentUsagePayer
   durationMs?: number
   at?: number
 }): SessionUsageRow {
   const usage = externalTokenUsageToUsageInfo(args.usage)
-  const costKnown = usage.totalCostUsd !== undefined
+  const tokensOnly = args.payer === "cognia"
+  const costKnown = tokensOnly || usage.totalCostUsd !== undefined
   return {
     sessionId: args.sessionId,
     messageId: args.messageId,
     model: args.model,
-    ...(args.providerId ? { providerId: args.providerId } : {}),
+    ...(args.providerId && !tokensOnly ? { providerId: args.providerId } : {}),
     ...(args.projectId ? { projectId: args.projectId } : {}),
     at: args.at ?? Date.now(),
     inputTokens: usage.inputTokens ?? 0,
@@ -98,12 +116,15 @@ export function externalAgentUsageRow(args: {
     cacheReadTokens: usage.cacheReadInputTokens ?? 0,
     cacheCreationTokens: usage.cacheCreationInputTokens ?? 0,
     reasoningTokens: usage.reasoningTokens,
-    costUsd: usage.totalCostUsd ?? 0,
+    costUsd: tokensOnly ? 0 : (usage.totalCostUsd ?? 0),
     costKnown,
-    costSource: costKnown ? "sdk" : "unknown",
+    // `derived` at zero: the ledger settled this row at nothing because the
+    // gateway's rows hold the money. `sdk` only when the agent reported one.
+    costSource: tokensOnly ? "derived" : costKnown ? "sdk" : "unknown",
     durationMs: args.durationMs ?? 0,
     surface: "chat",
     usageBasis: "provider-reported",
+    ...(args.payer === "agent" ? { imported: true } : {}),
   }
 }
 
