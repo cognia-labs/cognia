@@ -196,8 +196,11 @@ describe("collaboration tool entries", () => {
   })
 
   it("every entry is named and described, and every name is routable", () => {
-    // With the twin knowledge tool enabled, the manifest covers every canonical name.
-    const entries = buildTeamToolEntries({ includeTwinKnowledgeSearch: true })
+    // With optional twin-knowledge and task-self-claim tools enabled, the manifest covers every canonical name.
+    const entries = buildTeamToolEntries({
+      includeTwinKnowledgeSearch: true,
+      includeTaskSelfClaim: true,
+    })
     const names = entries.map((e) => e.name).sort()
     expect(names).toEqual(Object.values(TEAM_TOOL_NAMES).sort())
     for (const e of entries) {
@@ -206,11 +209,18 @@ describe("collaboration tool entries", () => {
     }
   })
 
-  it("gates twin_knowledge_search behind includeTwinKnowledgeSearch", () => {
+  it("gates twin_knowledge_search and task_list/task_claim behind their feature flags", () => {
     const without = buildTeamToolEntries().map((e) => e.name)
     expect(without).not.toContain(TEAM_TOOL_NAMES.twinKnowledgeSearch)
-    const withTool = buildTeamToolEntries({ includeTwinKnowledgeSearch: true }).map((e) => e.name)
+    expect(without).not.toContain(TEAM_TOOL_NAMES.listTasks)
+    expect(without).not.toContain(TEAM_TOOL_NAMES.claimTask)
+    const withTool = buildTeamToolEntries({
+      includeTwinKnowledgeSearch: true,
+      includeTaskSelfClaim: true,
+    }).map((e) => e.name)
     expect(withTool).toContain(TEAM_TOOL_NAMES.twinKnowledgeSearch)
+    expect(withTool).toContain(TEAM_TOOL_NAMES.listTasks)
+    expect(withTool).toContain(TEAM_TOOL_NAMES.claimTask)
   })
 })
 
@@ -1467,5 +1477,223 @@ describe("teamHasKnowledgeTwins", () => {
     } finally {
       useAgentTeamStore.setState({ teams: previousTeams, teammates: previousTeammates })
     }
+  })
+})
+
+describe("F09 durable teammate messaging & opt-in atomic task self-claim", () => {
+  afterEach(async () => {
+    const { __resetDurableTeamCoordinatorForTesting } =
+      await import("@/lib/squads/durable/durable-runtime")
+    __resetDurableTeamCoordinatorForTesting()
+    const { getDb } = await import("@/lib/db/schema")
+    const db = getDb()
+    await Promise.all([
+      db.agentTeamRuns.clear(),
+      db.agentTeamChildRuns.clear(),
+      db.agentTeamSteeringReceipts.clear(),
+      db.agentTeamTrajectoryEvents?.clear(),
+    ])
+  })
+
+  it("records queued/delivered durable steering receipts for team_send_message, deduplicates retries, and reports no_active_target on settled peers", async () => {
+    const { getDurableTeamCoordinator, __resetDurableTeamCoordinatorForTesting } =
+      await import("@/lib/squads/durable/durable-runtime")
+    const { listAgentTeamSteeringReceipts } = await import("@/lib/db/agent-team-runtime")
+    __resetDurableTeamCoordinatorForTesting()
+
+    const store = useAgentTeamStore.getState()
+    const team = store.createTeam({
+      name: "F09 Squad",
+      task: "Coordinate",
+      config: { workingDir: "/repo" },
+    })
+    const bob = store.addTeammate({ teamId: team.id, name: "Bob", description: "Worker B" })
+    const cara = store.addTeammate({ teamId: team.id, name: "Cara", description: "Worker C" })
+    const freshTeam = useAgentTeamStore.getState().getTeam(team.id)!
+
+    const runId = `f09-run-${Date.now()}`
+    const coordinator = getDurableTeamCoordinator()
+    await coordinator.prepareRun(freshTeam, runId)
+    // Bob is queued/running without an instant live handler → receipt lands `queued`
+    await coordinator.registerChild({
+      runId,
+      childRunId: `${runId}:bob`,
+      teammateId: bob.id,
+      taskId: "t-bob",
+      repositoryId: "primary",
+      access: "read",
+      runtime: "claude",
+    })
+    // Cara already completed → must NOT receive a steer or start a new turn
+    await coordinator.registerChild({
+      runId,
+      childRunId: `${runId}:cara`,
+      teammateId: cara.id,
+      taskId: "t-cara",
+      repositoryId: "primary",
+      access: "read",
+      runtime: "claude",
+    })
+    await coordinator.store.updateChild(`${runId}:cara`, {
+      status: "completed",
+      completedAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+
+    const realDeps = await defaultTeamToolDeps()
+    const leadCaller: TeamToolCaller = {
+      teamId: team.id,
+      teammateId: team.leadId,
+      teammateName: "Ada",
+      runId,
+    }
+
+    // 1. Direct message to Bob → durable `queued` receipt + stored delivery metadata
+    const toBob = await runTeamTool(
+      TEAM_TOOL_NAMES.sendMessage,
+      { to: bob.id, content: "Check the auth token expiry boundary." },
+      leadCaller,
+      realDeps
+    )
+    expect(String(toBob)).toContain("status=queued")
+    const receiptsAfterBob = await listAgentTeamSteeringReceipts(runId)
+    expect(receiptsAfterBob).toHaveLength(1)
+    expect(receiptsAfterBob[0].status).toBe("queued")
+
+    // Replaying deliverPeerMessage with the same messageId is idempotent (still 1 receipt!)
+    const storedMsg = useAgentTeamStore.getState().getTeamMessages(team.id)[0]!
+    expect(storedMsg.metadata?.delivery).toMatchObject({ runId, status: "queued" })
+    const replay = await realDeps.deliverPeerMessage!({
+      runId,
+      teamId: team.id,
+      senderId: team.leadId,
+      senderName: "Ada",
+      messageId: storedMsg.id,
+      recipientId: bob.id,
+      content: "Check the auth token expiry boundary.",
+    })
+    expect(replay.receipts).toHaveLength(1)
+    expect(await listAgentTeamSteeringReceipts(runId)).toHaveLength(1)
+
+    // 2. Direct message to settled Cara → honest `no_active_target` (0 new receipts)
+    const toCara = await runTeamTool(
+      TEAM_TOOL_NAMES.sendMessage,
+      { to: cara.id, content: "Review the schema diff before merge." },
+      leadCaller,
+      realDeps
+    )
+    expect(String(toCara)).toContain("status=no_active_target")
+    expect(await listAgentTeamSteeringReceipts(runId)).toHaveLength(1)
+  })
+
+  it("gates task_list/task_claim behind allowTaskSelfClaim and enforces single-winner atomic claiming, idempotent reuse, and dependency checks", async () => {
+    const store = useAgentTeamStore.getState()
+    const teamDisabled = store.createTeam({
+      name: "Locked Squad",
+      task: "Work",
+      config: { allowTaskSelfClaim: false },
+    })
+    const w1Disabled = store.addTeammate({
+      teamId: teamDisabled.id,
+      name: "Worker1",
+      description: "W1",
+    })
+    const lockedTask = store.createTask({
+      teamId: teamDisabled.id,
+      title: "Locked task",
+      description: "Do not self-claim",
+    })
+    const realDeps = await defaultTeamToolDeps()
+
+    // Disabled by default (Q3) → refused with self_claim_disabled, task stays pending
+    const refused = await runTeamTool(
+      TEAM_TOOL_NAMES.claimTask,
+      { taskId: lockedTask.id },
+      { teamId: teamDisabled.id, teammateId: w1Disabled.id, teammateName: "Worker1" },
+      realDeps
+    )
+    expect(String(refused)).toContain("self_claim_disabled")
+    expect(useAgentTeamStore.getState().tasks[lockedTask.id].status).toBe("pending")
+
+    // Enabled Squad → competing claims, dependency check, and idempotent re-claim
+    const teamEnabled = store.createTeam({
+      name: "Open Squad",
+      task: "Work",
+      config: { allowTaskSelfClaim: true },
+    })
+    const alice = store.addTeammate({ teamId: teamEnabled.id, name: "Alice", description: "A" })
+    const bob = store.addTeammate({ teamId: teamEnabled.id, name: "Bob", description: "B" })
+
+    const openTask = store.createTask({
+      teamId: teamEnabled.id,
+      title: "Claimable task",
+      description: "Unassigned ready work",
+    })
+    const blockedTask = store.createTask({
+      teamId: teamEnabled.id,
+      title: "Downstream task",
+      description: "Depends on openTask",
+      dependencies: [openTask.id],
+    })
+    const cancelledTask = store.createTask({
+      teamId: teamEnabled.id,
+      title: "Cancelled task",
+      description: "Already cancelled",
+    })
+    store.setTaskStatus(cancelledTask.id, "cancelled")
+
+    // Dependency-unmet task is refused with 0 side effects
+    const unmetRes = await runTeamTool(
+      TEAM_TOOL_NAMES.claimTask,
+      { taskId: blockedTask.id },
+      { teamId: teamEnabled.id, teammateId: alice.id, teammateName: "Alice" },
+      realDeps
+    )
+    expect(String(unmetRes)).toContain("dependencies_unmet")
+    expect(useAgentTeamStore.getState().tasks[blockedTask.id].status).toBe("pending")
+
+    // Cancelled task is refused
+    const cancelledRes = await runTeamTool(
+      TEAM_TOOL_NAMES.claimTask,
+      { taskId: cancelledTask.id },
+      { teamId: teamEnabled.id, teammateId: alice.id, teammateName: "Alice" },
+      realDeps
+    )
+    expect(String(cancelledRes)).toContain("cancelled")
+
+    // Concurrent race between Alice and Bob → exactly ONE wins, ONE gets already_active!
+    const [claimA, claimB] = await Promise.all([
+      runTeamTool(
+        TEAM_TOOL_NAMES.claimTask,
+        { taskId: openTask.id },
+        { teamId: teamEnabled.id, teammateId: alice.id, teammateName: "Alice" },
+        realDeps
+      ),
+      runTeamTool(
+        TEAM_TOOL_NAMES.claimTask,
+        { taskId: openTask.id },
+        { teamId: teamEnabled.id, teammateId: bob.id, teammateName: "Bob" },
+        realDeps
+      ),
+    ])
+    const successes = [claimA, claimB].filter((r) => typeof r === "object" && r !== null)
+    const failures = [claimA, claimB].filter((r) => typeof r === "string")
+    expect(successes).toHaveLength(1)
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toContain("already_active")
+
+    // Idempotent repeat claim by the winner reuses the existing claim (`reused: true`)
+    const winnerId = (successes[0] as { claimedBy: string }).claimedBy
+    const repeat = await runTeamTool(
+      TEAM_TOOL_NAMES.claimTask,
+      { taskId: openTask.id },
+      { teamId: teamEnabled.id, teammateId: winnerId, teammateName: "Winner" },
+      realDeps
+    )
+    expect(repeat).toMatchObject({
+      taskId: openTask.id,
+      claimedBy: winnerId,
+      reused: true,
+    })
   })
 })

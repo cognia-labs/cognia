@@ -31,6 +31,7 @@ export const AGENT_TEAM_SECURITY_CONFIG_KEYS = [
   "githubDeliveryPolicy",
   "resourcePolicy",
   "userConstraints",
+  "allowTaskSelfClaim",
 ] as const satisfies readonly (keyof import("./agent-team").AgentTeamConfig)[]
 
 /** Serializable launch authority. Missing snapshots must never resume with wider defaults. */

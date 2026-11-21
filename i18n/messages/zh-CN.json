@@ -2817,6 +2817,10 @@
       "resync": "已重新同步"
     },
     "coordination": {
+      "receiptsDelivered": "已送达 {count}",
+      "receiptsExpired": "已过期／拒绝 {count}",
+      "receiptsLabel": "消息与改令回执",
+      "receiptsQueued": "排队中 {count}",
       "unavailable": "本设备没有协同记录。小队运行记录没有同步到这里。"
     },
     "degraded": {
@@ -2945,6 +2949,10 @@
       "run_not_found": "该运行已不存在。",
       "source_rejected": "执行引擎拒绝了这个命令。",
       "steer_degraded": "消息没有送达，内容仍然保留在你这里。",
+      "steer_delivered": "新指示已实时送达正在执行的轮次。",
+      "steer_partial": "新指示已实时送达 {total} 名活跃成员中的 {delivered} 名（另有 {queued} 名已排队等待下一个安全边界）。",
+      "steer_queued": "新指示已排队，将在下一个安全边界生效。",
+      "steer_unconfirmed": "宿主已接收该指示（当前宿主未报告具体投递回执状态）。",
       "unsupported": "没有任何处理器可以控制这种运行。",
       "unsupported_for_kind": "这种运行不支持该操作。"
     },
@@ -3809,6 +3817,8 @@
         "steer": "发送引导",
         "steerPlaceholder": "在下一个安全边界引导该子任务",
         "steered": "引导已记录。",
+        "steeredDelivered": "引导已实时送达当前执行轮次。",
+        "steeredQueued": "引导已排队，将在下一个安全边界生效。",
         "takeover": "开始接管",
         "takeoverCompleted": "人工接管已创建检查点。",
         "takeoverStarted": "子任务已暂停，可人工接管。",
@@ -12526,6 +12536,7 @@
       "configuredNotLoaded": "目录与加载方式仅代表配置，不能证明 Skill 已加载，也不能据此推断上下文成本；请以可用的 SDK 清单为准。",
       "cwd": "工作目录：{path}",
       "defaultModel": "Agent 默认模型",
+      "effectivePolicy": "当前模式：{mode} · 生效权限：{permission}",
       "estimatedThreshold": "配置阈值估算：{percent}% · {tokens}",
       "externalCompact": "此处没有外部 Agent 上报的压缩策略。已知窗口大小不代表已知其压缩阈值或启用状态。",
       "fresh": "最近提示词中的新增输入：{tokens}",
@@ -14542,6 +14553,8 @@
     "outputFormat": "输出格式",
     "outputLabel": "输出：",
     "outputSettings": "输出",
+    "permissionInherit": "继承会话策略",
+    "permissionMode": "权限模式",
     "previewLabel": "实时预览：",
     "recommended": "推荐",
     "removeTag": "移除 {tag}",
@@ -63388,6 +63401,12 @@
       "steer": "发送",
       "steerLabel": "给小队的消息",
       "steerPlaceholder": "给小队补充一句…",
+      "steerStatus": {
+        "delivered": "已实时送达小队当前执行轮次。",
+        "partial": "已实时送达 {total} 名活跃成员中的 {delivered} 名（另有 {queued} 名排队中）。",
+        "queued": "已加入队列，将在小队下一个安全边界生效。",
+        "unconfirmed": "Host 已接收消息（未报告具体回执状态）。"
+      },
       "stop": "停止小队",
       "title": "交给小队"
     },

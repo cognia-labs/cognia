@@ -3,15 +3,19 @@
 import { render, screen } from "@testing-library/react"
 
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
+    vars ? `${key}:${JSON.stringify(vars)}` : key,
 }))
 
 let teamRun: { id: string; teamId: string } | undefined
+let receipts: Array<{ id: string; status: string }> = []
 jest.mock("@/hooks/data", () => ({
-  useClientLiveQuery: () => teamRun,
+  useClientLiveQuery: (_fn: unknown, _deps: unknown, fallback: unknown) =>
+    Array.isArray(fallback) ? receipts : teamRun,
 }))
 jest.mock("@/lib/db/agent-team-runtime", () => ({
   getAgentTeamRun: jest.fn(),
+  listAgentTeamSteeringReceipts: jest.fn(),
 }))
 
 const consensusTeamIds: (string | undefined)[] = []
@@ -56,6 +60,7 @@ describe("RunCoordinationTab", () => {
     consensusTeamIds.length = 0
     delegationTeamIds.length = 0
     teamRun = { id: "atr-1", teamId: "team-9" }
+    receipts = []
   })
 
   /**
@@ -79,5 +84,18 @@ describe("RunCoordinationTab", () => {
     render(<RunCoordinationTab row={row()} />)
     expect(screen.getByTestId("run-coordination-unavailable")).toBeInTheDocument()
     expect(screen.queryByTestId("consensus-panel")).not.toBeInTheDocument()
+  })
+
+  it("renders durable message & steer receipt counts when receipts exist (F09/F12)", () => {
+    receipts = [
+      { id: "sr-1", status: "delivered" },
+      { id: "sr-2", status: "queued" },
+      { id: "sr-3", status: "expired" },
+    ]
+    render(<RunCoordinationTab row={row()} />)
+    const banner = screen.getByTestId("run-coordination-receipts")
+    expect(banner.textContent).toContain('coordination.receiptsDelivered:{"count":1}')
+    expect(banner.textContent).toContain('coordination.receiptsQueued:{"count":1}')
+    expect(banner.textContent).toContain('coordination.receiptsExpired:{"count":1}')
   })
 })

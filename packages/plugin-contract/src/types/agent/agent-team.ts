@@ -505,6 +505,12 @@ export interface AgentTeamConfig {
   enableMessaging?: boolean
   /** Enable shared task list */
   enableSharedTaskList?: boolean
+  /**
+   * Opt-in peer task self-claiming (`task_list` + atomic `task_claim`).
+   * Default `false` (Q3): Lead/DAG assignment remains authoritative unless the
+   * operator explicitly enables teammate self-claiming for the Squad.
+   */
+  allowTaskSelfClaim?: boolean
   /** Maximum retries for failed tasks (0 = no retry) */
   maxRetries?: number
   /** Maximum plan revision rounds before auto-approve (1-5) */
@@ -771,6 +777,7 @@ export const DEFAULT_TEAM_CONFIG: AgentTeamConfig = {
   autoShutdown: true,
   enableMessaging: true,
   enableSharedTaskList: true,
+  allowTaskSelfClaim: false,
   maxRetries: 1,
   maxPlanRevisions: 3,
   enableTaskRetry: true,

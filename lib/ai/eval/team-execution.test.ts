@@ -110,6 +110,14 @@ it("applies the same durable admission barrier to final synthesis and releases w
     }
   )
   expect(next.status).toBe("completed")
+  expect(next.evidenceSummary).toMatchObject({
+    admittedCalls: 3,
+    settledCalls: 3,
+    completedTasks: 3,
+    totalTasks: 3,
+    dependencyEdgesDelivered: 2,
+    stopConfirmed: true,
+  })
 })
 
 it("awaits already-dispatched parallel work and refuses new admission after persistence aborts", async () => {
@@ -381,7 +389,7 @@ it.each(["cost", "tokens"])(
   }
 )
 
-it.each(["external", "tools", "execution", "plugin", "approval"])(
+it.each(["external", "tools", "execution", "plugin", "approval", "selfClaim"])(
   "refuses the %s capability profile before model spend",
   async (kind) => {
     const source = definition()
@@ -393,6 +401,7 @@ it.each(["external", "tools", "execution", "plugin", "approval"])(
       >
     if (kind === "plugin") source.team.config.capabilities = { skillIds: ["fixture-skill"] }
     if (kind === "approval") source.team.config.requirePlanApproval = true
+    if (kind === "selfClaim") source.team.config.allowTaskSelfClaim = true
     const runMember = jest.fn(async () => result("never"))
     const run = await runIsolatedTeamEval(
       { teamId: "source", prompt: "goal", traceId: "capability" },

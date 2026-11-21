@@ -2817,6 +2817,10 @@
       "resync": "Resynced"
     },
     "coordination": {
+      "receiptsDelivered": "{count} delivered",
+      "receiptsExpired": "{count} expired/refused",
+      "receiptsLabel": "Message & steer receipts",
+      "receiptsQueued": "{count} queued",
       "unavailable": "Coordination is not available on this device. The squad run record is not synced here."
     },
     "degraded": {
@@ -2945,6 +2949,10 @@
       "run_not_found": "That run no longer exists.",
       "source_rejected": "The engine refused the command.",
       "steer_degraded": "The message was not delivered and is still yours to send.",
+      "steer_delivered": "Instruction delivered to live execution.",
+      "steer_partial": "Instruction reached {delivered} of {total} active members ({queued} queued for the next boundary).",
+      "steer_queued": "Instruction queued for the next safe boundary.",
+      "steer_unconfirmed": "The Host accepted the instruction (delivery receipt status is not reported by this Host).",
       "unsupported": "Nothing is registered to control this kind of run.",
       "unsupported_for_kind": "This kind of run cannot take that action."
     },
@@ -3809,6 +3817,8 @@
         "steer": "Send steering",
         "steerPlaceholder": "Steer this child at the next safe boundary",
         "steered": "Steering recorded.",
+        "steeredDelivered": "Steering delivered to live execution.",
+        "steeredQueued": "Steering queued for the next safe boundary.",
         "takeover": "Begin takeover",
         "takeoverCompleted": "Manual takeover checkpointed.",
         "takeoverStarted": "Child paused for takeover.",
@@ -12526,6 +12536,7 @@
       "configuredNotLoaded": "Directories and loading mode are configuration only. They do not prove a skill is loaded or quantify its context cost; see SDK inventory when available.",
       "cwd": "Working directory: {path}",
       "defaultModel": "agent default",
+      "effectivePolicy": "Active mode: {mode} · Effective permission: {permission}",
       "estimatedThreshold": "Estimated configured threshold: {percent}% · {tokens}",
       "externalCompact": "The external agent has not reported its compaction policy here. A known window does not establish its threshold or enabled state.",
       "fresh": "Latest prompt fresh input: {tokens}",
@@ -14542,6 +14553,8 @@
     "outputFormat": "Output Format",
     "outputLabel": "Output:",
     "outputSettings": "Output",
+    "permissionInherit": "Inherit session policy",
+    "permissionMode": "Permission Mode",
     "previewLabel": "Preview:",
     "recommended": "Recommended",
     "removeTag": "Remove {tag}",
@@ -63388,6 +63401,12 @@
       "steer": "Send",
       "steerLabel": "Message to the Squad",
       "steerPlaceholder": "Tell the Squad something…",
+      "steerStatus": {
+        "delivered": "Delivered to the Squad's live turn.",
+        "partial": "Delivered to {delivered} of {total} active members ({queued} queued).",
+        "queued": "Queued for the Squad's next safe boundary.",
+        "unconfirmed": "Accepted by the Host (delivery receipt status not reported)."
+      },
       "stop": "Stop the Squad",
       "title": "Hand off to a Squad"
     },

@@ -52,6 +52,10 @@
     "resync": "已重新同步"
   },
   "coordination": {
+    "receiptsDelivered": "已送达 {count}",
+    "receiptsExpired": "已过期／拒绝 {count}",
+    "receiptsLabel": "消息与改令回执",
+    "receiptsQueued": "排队中 {count}",
     "unavailable": "本设备没有协同记录。小队运行记录没有同步到这里。"
   },
   "degraded": {

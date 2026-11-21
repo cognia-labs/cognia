@@ -68,6 +68,16 @@ export interface TeamEvalExecutionDeps {
   loadDefinition(teamId: string, scope?: EvalPersistenceScope): Promise<TeamEvalDefinition>
   runMember(input: TeamEvalMemberInput): Promise<EvalSample>
 }
+export interface IsolatedTeamEvalEvidenceSummary {
+  admittedCalls: number
+  settledCalls: number
+  completedTasks: number
+  totalTasks: number
+  dependencyEdgesDelivered: number
+  steeringReceiptsConsumed: number
+  stopConfirmed: boolean
+}
+
 export interface IsolatedTeamEvalResult {
   runId: string
   status: "completed" | "failed" | "cancelled" | "timed_out" | "blocked"
@@ -78,6 +88,7 @@ export interface IsolatedTeamEvalResult {
   wallTimeMs: number
   costKnown: boolean
   executionProfile: "isolated-text"
+  evidenceSummary: IsolatedTeamEvalEvidenceSummary
 }
 
 const MAX_TASKS = 32
@@ -191,7 +202,8 @@ function unsupported(definition: TeamEvalDefinition): string | undefined {
     approval?.requireDelegationApproval ||
     team.config.taskReview?.enabled ||
     team.config.adaptiveReplan?.enabled ||
-    team.config.progressLedger?.enabled
+    team.config.progressLedger?.enabled ||
+    team.config.allowTaskSelfClaim
   )
     return "unsupported_evaluation_interactive_or_adaptive_profile"
   const capabilities = team.config.capabilities
@@ -233,6 +245,12 @@ export async function runIsolatedTeamEval(
   const runId = `eval-team-${crypto.randomUUID()}`
   const spans: AgentTraceSpan[] = []
   let costKnown = true
+  let admittedCalls = 0
+  let settledCalls = 0
+  let dependencyEdgesDelivered = 0
+  let completedTasks = 0
+  let totalTasks = 0
+  let steeringReceiptsConsumed = 0
   const answer = (
     status: IsolatedTeamEvalResult["status"],
     reason?: string,
@@ -247,6 +265,15 @@ export async function runIsolatedTeamEval(
     wallTimeMs: Math.max(0, performance.now() - began),
     costKnown,
     executionProfile: "isolated-text",
+    evidenceSummary: {
+      admittedCalls,
+      settledCalls,
+      completedTasks,
+      totalTasks,
+      dependencyEdgesDelivered,
+      steeringReceiptsConsumed,
+      stopConfirmed: status === "completed" || status === "cancelled" || status === "timed_out",
+    },
   })
   input.scope?.assertActive()
   input.signal?.throwIfAborted()
@@ -301,6 +328,7 @@ export async function runIsolatedTeamEval(
   const teamId = `${runId}:team`
   const team: AgentTeam = { ...frozen.team, id: teamId, task: input.prompt }
   const tasks = frozen.tasks.map((task) => ({ ...task, teamId, status: "pending" as const }))
+  totalTasks = tasks.length
   const members = frozen.members
     .filter((member) => member.role === "teammate")
     .map((member) => ({ ...member, teamId }))
@@ -490,6 +518,10 @@ export async function runIsolatedTeamEval(
                               admittedSignal
                             )
                             admitted = true
+                            admittedCalls += 1
+                            dependencyEdgesDelivered += task.dependencies.filter((id) =>
+                              outputs.has(id)
+                            ).length
                             admittedSignal.throwIfAborted()
                             sample = await deps.runMember({
                               team,
@@ -570,7 +602,8 @@ export async function runIsolatedTeamEval(
                             } as AgentTraceSpan
                             if (admitted) spans.push(span)
                             try {
-                              if (admitted)
+                              if (admitted) {
+                                settledCalls += 1
                                 await input.onCall?.({
                                   state: "settled",
                                   callId: spanId,
@@ -586,6 +619,7 @@ export async function runIsolatedTeamEval(
                                       }
                                     : {}),
                                 })
+                              }
                               if (admitted) input.onSpan?.(span)
                             } finally {
                               free.add(member.id)
@@ -651,6 +685,10 @@ export async function runIsolatedTeamEval(
   const terminalTasks = tasks.filter(
     (task) => !tasks.some((other) => other.dependencies.includes(task.id))
   )
+  completedTasks = outputs.size
+  steeringReceiptsConsumed = (await store.listSteeringReceipts(runId)).filter(
+    (r) => r.status === "delivered"
+  ).length
   const output =
     terminalTasks.length === 1
       ? (outputs.get(terminalTasks[0]!.id) ?? "")

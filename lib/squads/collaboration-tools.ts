@@ -75,6 +75,8 @@ export const TEAM_TOOL_NAMES = {
   listMembers: "team_list_members",
   addTaskComment: "task_add_comment",
   getTask: "task_get",
+  listTasks: "task_list",
+  claimTask: "task_claim",
   twinKnowledgeSearch: "twin_knowledge_search",
   postToChat: "team_post_to_chat",
   proposeDecision: "team_propose_decision",
@@ -120,7 +122,61 @@ export interface TeamToolDeps {
     type: "direct" | "broadcast"
     content: string
     recipientId?: string
-  }) => void
+    metadata?: Record<string, unknown>
+  }) => { id: string } | void
+  deliverPeerMessage?: (input: {
+    runId: string
+    teamId: string
+    senderId: string
+    senderName: string
+    messageId?: string
+    recipientId?: string
+    content: string
+  }) => Promise<{
+    status: "delivered" | "queued" | "partial" | "no_active_target" | "pii_blocked"
+    receipts: Array<{ id: string; recipientId: string; status: "delivered" | "queued" }>
+  }>
+  listClaimableTasks?: (
+    teamId: string,
+    claimantId: string
+  ) => Array<{
+    id: string
+    title: string
+    status: string
+    assignedTo?: string
+    claimedBy?: string
+    dependencies: string[]
+    claimable: boolean
+  }>
+  claimTask?: (input: { teamId: string; taskId: string; claimantId: string; runId?: string }) =>
+    | Promise<
+        | { ok: true; taskId: string; title: string; reused: boolean }
+        | {
+            ok: false
+            reason:
+              | "self_claim_disabled"
+              | "not_found"
+              | "cancelled"
+              | "already_terminal"
+              | "already_active"
+              | "assigned_to_other"
+              | "dependencies_unmet"
+            detail?: string
+          }
+      >
+    | { ok: true; taskId: string; title: string; reused: boolean }
+    | {
+        ok: false
+        reason:
+          | "self_claim_disabled"
+          | "not_found"
+          | "cancelled"
+          | "already_terminal"
+          | "already_active"
+          | "assigned_to_other"
+          | "dependencies_unmet"
+        detail?: string
+      }
   publishEntry: (input: {
     teamId: string
     key: string
@@ -360,6 +416,27 @@ const GET_TASK_SCHEMA = {
   required: ["taskId"],
 } as const
 
+const LIST_TASKS_SCHEMA = {
+  type: "object",
+  properties: {
+    claimableOnly: {
+      type: "boolean",
+      description: "When true, return only tasks currently eligible for task_claim.",
+    },
+  },
+} as const
+
+const CLAIM_TASK_SCHEMA = {
+  type: "object",
+  properties: {
+    taskId: {
+      type: "string",
+      description: "The unassigned, dependency-ready task id to atomically claim.",
+    },
+  },
+  required: ["taskId"],
+} as const
+
 const POST_TO_CHAT_SCHEMA = {
   type: "object",
   properties: {
@@ -420,6 +497,11 @@ export interface BuildTeamToolEntriesOptions {
    * ({@link teamHasKnowledgeTwins}).
    */
   includeTwinKnowledgeSearch?: boolean
+  /**
+   * Append `task_list` and atomic `task_claim` when the Squad operator enabled
+   * `config.allowTaskSelfClaim === true` (Q3 / F09).
+   */
+  includeTaskSelfClaim?: boolean
 }
 
 /** The collaboration tools a team dispatch session is offered. */
@@ -485,6 +567,20 @@ export function buildTeamToolEntries(opts: BuildTeamToolEntriesOptions = {}): Mo
       "Submit an evidence-backed durable decision proposal for Lead review.",
       PROPOSE_DECISION_SCHEMA as unknown as Record<string, unknown>
     ),
+    ...(opts.includeTaskSelfClaim
+      ? [
+          entry(
+            TEAM_TOOL_NAMES.listTasks,
+            "List Squad tasks and their claimability status before calling task_claim.",
+            LIST_TASKS_SCHEMA as unknown as Record<string, unknown>
+          ),
+          entry(
+            TEAM_TOOL_NAMES.claimTask,
+            "Atomically claim an unassigned, dependency-ready task on this Squad.",
+            CLAIM_TASK_SCHEMA as unknown as Record<string, unknown>
+          ),
+        ]
+      : []),
     ...(opts.includeTwinKnowledgeSearch
       ? [
           entry(
@@ -545,14 +641,231 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
       }
       return { ok: true }
     },
-    addMessage: (input) =>
-      void useAgentTeamStore.getState().addMessage({
+    addMessage: (input) => {
+      const created = useAgentTeamStore.getState().addMessage({
         teamId: input.teamId,
         senderId: input.senderId,
         type: input.type,
         content: input.content,
         ...(input.recipientId ? { recipientId: input.recipientId } : {}),
-      }),
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      })
+      return { id: created.id }
+    },
+    deliverPeerMessage: async (input) => {
+      if (input.messageId) {
+        const prior = useAgentTeamStore.getState().messages[input.messageId]?.metadata?.delivery as
+          | {
+              runId?: string
+              status?: "delivered" | "queued" | "partial" | "no_active_target" | "pii_blocked"
+              receipts?: Array<{ id: string; recipientId: string; status: "delivered" | "queued" }>
+            }
+          | undefined
+        if (
+          prior &&
+          prior.runId === input.runId &&
+          prior.status &&
+          Array.isArray(prior.receipts) &&
+          prior.receipts.length > 0
+        ) {
+          return { status: prior.status, receipts: prior.receipts }
+        }
+      }
+
+      const [
+        { listAgentTeamChildRuns },
+        { getDurableTeamCoordinator },
+        { redactTeamTextForPersistence },
+        { isChildSettled },
+        { isTerminalTeamStatus },
+      ] = await Promise.all([
+        import("@/lib/db/agent-team-runtime"),
+        import("@/lib/squads/durable/durable-runtime"),
+        import("@/lib/squads/persisted-text"),
+        import("@cognia/agent-orchestration/replay"),
+        import("@cognia/agent-orchestration/rules"),
+      ])
+      if (redactTeamTextForPersistence(input.content) === undefined) {
+        if (input.messageId) {
+          useAgentTeamStore.setState((state) => {
+            const existing = state.messages[input.messageId!]
+            if (!existing) return state
+            return {
+              messages: {
+                ...state.messages,
+                [input.messageId!]: {
+                  ...existing,
+                  metadata: {
+                    ...(existing.metadata ?? {}),
+                    delivery: { runId: input.runId, status: "pii_blocked", receipts: [] },
+                  },
+                },
+              },
+            }
+          })
+        }
+        return { status: "pii_blocked", receipts: [] }
+      }
+
+      const children = await listAgentTeamChildRuns(input.runId)
+      const latestActiveByTeammate = new Map<string, (typeof children)[number]>()
+      for (const child of children) {
+        if (isChildSettled(child) || isTerminalTeamStatus(child.status)) continue
+        if (input.recipientId) {
+          if (child.teammateId !== input.recipientId) continue
+        } else if (child.teammateId === input.senderId) {
+          continue
+        }
+        const prev = latestActiveByTeammate.get(child.teammateId)
+        if (!prev || (child.dispatchEpoch ?? 0) >= (prev.dispatchEpoch ?? 0)) {
+          latestActiveByTeammate.set(child.teammateId, child)
+        }
+      }
+
+      if (latestActiveByTeammate.size === 0) {
+        if (input.messageId) {
+          useAgentTeamStore.setState((state) => {
+            const existing = state.messages[input.messageId!]
+            if (!existing) return state
+            return {
+              messages: {
+                ...state.messages,
+                [input.messageId!]: {
+                  ...existing,
+                  metadata: {
+                    ...(existing.metadata ?? {}),
+                    delivery: { runId: input.runId, status: "no_active_target", receipts: [] },
+                  },
+                },
+              },
+            }
+          })
+        }
+        return { status: "no_active_target", receipts: [] }
+      }
+
+      const coordinator = getDurableTeamCoordinator()
+      const framed = `[Teammate message from ${input.senderName} (${input.senderId})]: ${input.content}`
+      const receipts: Array<{ id: string; recipientId: string; status: "delivered" | "queued" }> =
+        []
+      for (const [recipientId, child] of latestActiveByTeammate.entries()) {
+        try {
+          const receipt = await coordinator.steer(child.id, framed)
+          if (receipt.status === "delivered" || receipt.status === "queued") {
+            receipts.push({ id: receipt.id, recipientId, status: receipt.status })
+          }
+        } catch {
+          // Settled/refused child between read and steer: omit from receipts so
+          // partial or zero-receipt outcomes are reported honestly.
+        }
+      }
+
+      const deliveredCount = receipts.filter((r) => r.status === "delivered").length
+      const status: "delivered" | "queued" | "partial" | "no_active_target" =
+        receipts.length === 0
+          ? "no_active_target"
+          : deliveredCount === receipts.length && receipts.length === latestActiveByTeammate.size
+            ? "delivered"
+            : deliveredCount === 0 && receipts.length === latestActiveByTeammate.size
+              ? "queued"
+              : "partial"
+
+      if (input.messageId) {
+        useAgentTeamStore.setState((state) => {
+          const existing = state.messages[input.messageId!]
+          if (!existing) return state
+          return {
+            messages: {
+              ...state.messages,
+              [input.messageId!]: {
+                ...existing,
+                read: deliveredCount > 0,
+                metadata: {
+                  ...(existing.metadata ?? {}),
+                  delivery: { runId: input.runId, status, receipts },
+                },
+              },
+            },
+          }
+        })
+      }
+      return { status, receipts }
+    },
+    listClaimableTasks: (teamId, claimantId) => {
+      const state = useAgentTeamStore.getState()
+      const team = state.teams[teamId]
+      const selfClaimEnabled = team?.config.allowTaskSelfClaim === true
+      return Object.values(state.tasks)
+        .filter((t) => t.teamId === teamId)
+        .map((t) => {
+          const depsReady = (t.dependencies ?? []).every(
+            (depId) => state.tasks[depId]?.status === "completed"
+          )
+          const assigneeOk = !t.assignedTo || t.assignedTo === claimantId
+          const claimable =
+            selfClaimEnabled &&
+            (t.status === "pending" ||
+              ((t.status === "in_progress" || t.status === "claimed") &&
+                t.claimedBy === claimantId)) &&
+            assigneeOk &&
+            depsReady
+          return {
+            id: t.id,
+            title: t.title,
+            status: t.status,
+            ...(t.assignedTo ? { assignedTo: t.assignedTo } : {}),
+            ...(t.claimedBy ? { claimedBy: t.claimedBy } : {}),
+            dependencies: t.dependencies ?? [],
+            claimable,
+          }
+        })
+    },
+    claimTask: ({ teamId, taskId, claimantId }) => {
+      const state = useAgentTeamStore.getState()
+      const team = state.teams[teamId]
+      if (!team || team.config.allowTaskSelfClaim !== true) {
+        return { ok: false, reason: "self_claim_disabled" }
+      }
+      const task = state.tasks[taskId]
+      if (!task || task.teamId !== teamId) {
+        return { ok: false, reason: "not_found" }
+      }
+      if (
+        (task.status === "in_progress" || task.status === "claimed") &&
+        task.claimedBy === claimantId
+      ) {
+        return { ok: true, taskId: task.id, title: task.title, reused: true }
+      }
+      if (task.assignedTo && task.assignedTo !== claimantId) {
+        return {
+          ok: false,
+          reason: "assigned_to_other",
+          detail: `assigned to ${task.assignedTo}`,
+        }
+      }
+      const unmet = (task.dependencies ?? []).filter(
+        (depId) => state.tasks[depId]?.status !== "completed"
+      )
+      if (unmet.length > 0) {
+        return {
+          ok: false,
+          reason: "dependencies_unmet",
+          detail: `waiting on ${unmet.join(", ")}`,
+        }
+      }
+      const claimed = state.claimTaskForDispatch(teamId, taskId, {
+        claimantId,
+        allowSameClaimant: true,
+      })
+      if (!claimed.ok) {
+        return {
+          ok: false,
+          reason: claimed.reason,
+          ...(claimed.status ? { detail: `status=${claimed.status}` } : {}),
+        }
+      }
+      return { ok: true, taskId: claimed.task.id, title: claimed.task.title, reused: false }
+    },
     publishEntry: (input) => sharedMemory.publishEntry(input),
     listMemory: (teamId, readerId) =>
       sharedMemory.selectSharedMemoryEntriesForReader(
@@ -810,13 +1123,38 @@ export async function runTeamTool(
         if (!decision.allow) {
           return describeSuppressedMessage(decision.reason as Exclude<typeof decision.reason, "ok">)
         }
-        d.addMessage({
+        const stored = d.addMessage({
           teamId: caller.teamId,
           senderId: caller.teammateId,
           type: to ? "direct" : "broadcast",
           content,
           ...(to ? { recipientId: to } : {}),
         })
+        if (caller.runId && d.deliverPeerMessage) {
+          const delivery = await d.deliverPeerMessage({
+            runId: caller.runId,
+            teamId: caller.teamId,
+            senderId: caller.teammateId,
+            senderName: caller.teammateName,
+            ...(stored && typeof stored === "object" && "id" in stored
+              ? { messageId: stored.id }
+              : {}),
+            ...(to ? { recipientId: to } : {}),
+            content,
+          })
+          if (delivery.status === "pii_blocked") {
+            return "Error: teammate message blocked by the PII redaction gate before delivery."
+          }
+          if (delivery.status === "no_active_target") {
+            return to
+              ? `Message stored for ${to} (status=no_active_target — recipient has no active turn in this run; use task_add_comment for durable board handoff).`
+              : "Message broadcast stored on board (status=no_active_target — no active peer turns in this run)."
+          }
+          const receiptIds = delivery.receipts.map((r) => r.id).join(",")
+          return to
+            ? `Message sent to ${to} (status=${delivery.status}, receipt=${receiptIds}).`
+            : `Message broadcast to the team (status=${delivery.status}, receipts=${delivery.receipts.length}).`
+        }
         return to ? `Message sent to ${to}.` : "Message broadcast to the team."
       }
       case TEAM_TOOL_NAMES.publishMemory: {
@@ -986,6 +1324,33 @@ export async function runTeamTool(
         const task = d.getTask(taskId, caller.teamId)
         return task ? await visibleTeamToolResult(caller, task) : `Error: task ${taskId} not found.`
       }
+      case TEAM_TOOL_NAMES.listTasks: {
+        if (!d.listClaimableTasks) return "Error: task_list is unavailable."
+        const rows = d.listClaimableTasks(caller.teamId, caller.teammateId)
+        const filtered = args.claimableOnly === true ? rows.filter((r) => r.claimable) : rows
+        return await visibleTeamToolResult(caller, filtered)
+      }
+      case TEAM_TOOL_NAMES.claimTask: {
+        const taskId = asString(args.taskId).trim()
+        if (!taskId) return "Error: task_claim requires a `taskId`."
+        if (!d.claimTask) return "Error: task_claim is unavailable."
+        const outcome = await d.claimTask({
+          teamId: caller.teamId,
+          taskId,
+          claimantId: caller.teammateId,
+          ...(caller.runId ? { runId: caller.runId } : {}),
+        })
+        if (!outcome.ok) {
+          return `Error: cannot claim task ${taskId} (${outcome.reason}${outcome.detail ? `: ${outcome.detail}` : ""}).`
+        }
+        return await visibleTeamToolResult(caller, {
+          taskId: outcome.taskId,
+          title: outcome.title,
+          claimedBy: caller.teammateId,
+          reused: outcome.reused,
+          status: "in_progress",
+        })
+      }
       case TEAM_TOOL_NAMES.postToChat: {
         const conversationKey = asString(args.conversationKey).trim()
         const message = asString(args.message).trim()
@@ -1120,6 +1485,17 @@ export async function teamHasKnowledgeTwins(
   }
 }
 
+export async function teamAllowsTaskSelfClaim(sessionId: string): Promise<boolean> {
+  try {
+    const teamId = getTeamDispatchContext(sessionId)?.teamId
+    if (!teamId) return false
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
+    return useAgentTeamStore.getState().teams[teamId]?.config.allowTaskSelfClaim === true
+  } catch {
+    return false
+  }
+}
+
 let depsOverride: (() => Promise<TeamToolDeps> | TeamToolDeps) | null = null
 
 /** Inject collaboration-tool deps (tests). Pass `null` to restore the default. */
@@ -1147,12 +1523,12 @@ export const teamToolFamily: ModuleToolFamily = {
     if (ctx.settings?.selfInvokeTools?.teamCollaboration !== true) return null
     // Registered by `dispatchTeammate` before it resolves the run's options.
     if (!getTeamDispatchContext(ctx.session.id)) return null
-    const includeTwinKnowledgeSearch = await teamHasKnowledgeTwins(
-      ctx.session.id,
-      ctx.agent?.twinId
-    )
+    const [includeTwinKnowledgeSearch, includeTaskSelfClaim] = await Promise.all([
+      teamHasKnowledgeTwins(ctx.session.id, ctx.agent?.twinId),
+      teamAllowsTaskSelfClaim(ctx.session.id),
+    ])
     return {
-      tools: buildTeamToolEntries({ includeTwinKnowledgeSearch }),
+      tools: buildTeamToolEntries({ includeTwinKnowledgeSearch, includeTaskSelfClaim }),
       instructions: TEAM_MESSAGING_PROTOCOL,
     }
   },

@@ -26,10 +26,11 @@
 
 import { useTranslations } from "next-intl"
 
+import { Badge } from "@/components/ui/badge"
 import { ConsensusPanel } from "@/components/squads/consensus-panel"
 import { DelegationsPanel } from "@/components/squads/delegations-panel"
 import { useClientLiveQuery } from "@/hooks/data"
-import { getAgentTeamRun } from "@/lib/db/agent-team-runtime"
+import { getAgentTeamRun, listAgentTeamSteeringReceipts } from "@/lib/db/agent-team-runtime"
 import type { UnifiedExecutionRow } from "@/lib/execution/monitor-model"
 
 /** Whether a row is a Squad run at all. Nothing else has coordination. */
@@ -49,6 +50,11 @@ export function RunCoordinationTab({ row }: RunCoordinationTabProps) {
     [row.sourceId],
     undefined
   )
+  const steeringReceipts = useClientLiveQuery(
+    () => (teamRun?.id ? listAgentTeamSteeringReceipts(teamRun.id) : Promise.resolve([])),
+    [teamRun?.id],
+    []
+  )
 
   // `undefined` while the query is in flight AND when the record is genuinely
   // absent. Both read the same to a user, and both mean "nothing to show yet"
@@ -64,8 +70,34 @@ export function RunCoordinationTab({ row }: RunCoordinationTabProps) {
     )
   }
 
+  const receiptsList = Array.isArray(steeringReceipts) ? steeringReceipts : []
+  const deliveredCount = receiptsList.filter((r) => r.status === "delivered").length
+  const queuedCount = receiptsList.filter((r) => r.status === "queued").length
+  const undeliveredCount = receiptsList.length - deliveredCount - queuedCount
+
   return (
     <div className="flex flex-col gap-3" data-testid="run-coordination">
+      {receiptsList.length > 0 ? (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs"
+          data-testid="run-coordination-receipts"
+        >
+          <span className="font-medium">{t("coordination.receiptsLabel")}</span>
+          <Badge variant="secondary" className="text-[10px]">
+            {t("coordination.receiptsDelivered", { count: deliveredCount })}
+          </Badge>
+          {queuedCount > 0 ? (
+            <Badge variant="outline" className="text-[10px]">
+              {t("coordination.receiptsQueued", { count: queuedCount })}
+            </Badge>
+          ) : null}
+          {undeliveredCount > 0 ? (
+            <Badge variant="outline" className="text-[10px] text-muted-foreground">
+              {t("coordination.receiptsExpired", { count: undeliveredCount })}
+            </Badge>
+          ) : null}
+        </div>
+      ) : null}
       <ConsensusPanel teamId={teamRun.teamId} />
       <DelegationsPanel teamId={teamRun.teamId} />
     </div>
