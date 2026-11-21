@@ -615,6 +615,12 @@ export async function recordSurfaceUsage(args: {
   sessionId?: string
   usage: SurfaceUsageInput
   at?: number
+  /**
+   * Keep a row that reports no quantity this ledger can carry: a call that was
+   * billed by a unit it has no field for (a transcription, per audio minute)
+   * is booked at an unknown price rather than left out.
+   */
+  allowEmpty?: boolean
 }): Promise<SessionUsageRow | null> {
   if (!args.surface || !args.operationId) return null
   const row = buildSurfaceRow({
@@ -623,6 +629,7 @@ export async function recordSurfaceUsage(args: {
     surface: args.surface,
     usage: args.usage,
     at: args.at ?? Date.now(),
+    ...(args.allowEmpty ? { allowEmpty: true } : {}),
   })
   if (!row) return null
   await upsertSessionUsage(row)

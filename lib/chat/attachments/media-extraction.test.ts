@@ -56,10 +56,85 @@ const videoPayload = (): NonNullable<ExtractedAttachment["video"]> => ({
   native: null,
   poster: { mediaType: "image/jpeg", base64: "YQ==", width: 1, height: 1 },
 })
+const recordUsage = jest.fn(async () => null)
 const deps = (output: unknown): AttachmentMediaDeps => ({
   executor: { execute: jest.fn().mockResolvedValue({ ok: true, output }) },
   canUseFfmpeg: () => false,
   openVideo: jest.fn(),
+  recordUsage,
+})
+
+beforeEach(() => recordUsage.mockClear())
+
+it("books each paid transcription at an unknown price, naming who served it (F30)", async () => {
+  await processAttachmentMedia(
+    source(),
+    "meeting.wav",
+    options,
+    deps({ text: "We chose B", segments: [{ text: "We chose B", start: 2, end: 6 }] })
+  )
+  expect(recordUsage).toHaveBeenCalledTimes(1)
+  expect(recordUsage).toHaveBeenCalledWith({
+    surface: "chat",
+    operationId: expect.stringMatching(/^attachment:/),
+    scopeId: "attachments",
+    // Billed per audio minute, a unit the ledger has no field for yet.
+    usage: {
+      providerId: "configured",
+      model: "transcriber",
+      costUsd: 0,
+      costSource: "unknown",
+      costKnown: false,
+    },
+    allowEmpty: true,
+  })
+})
+
+it("books a description's reported tokens, for the ledger to price (F30)", async () => {
+  const attachment = {
+    ...source(),
+    kind: "image" as const,
+    block: {
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: "image/png", data: "YQ==" },
+    },
+  }
+  await processAttachmentMedia(
+    attachment,
+    "chart.png",
+    { method: "describe", providerId: "anthropic", modelId: "claude-sonnet-4-5" },
+    deps({ text: "A chart", usage: { inputTokens: 1200, outputTokens: 80 } })
+  )
+  expect(recordUsage).toHaveBeenCalledWith(
+    expect.objectContaining({
+      usage: {
+        providerId: "anthropic",
+        model: "claude-sonnet-4-5",
+        inputTokens: 1200,
+        outputTokens: 80,
+      },
+    })
+  )
+  expect(recordUsage.mock.calls[0]).not.toContainEqual(
+    expect.objectContaining({ allowEmpty: true })
+  )
+})
+
+it("books nothing for a call the provider refused", async () => {
+  const services: AttachmentMediaDeps = {
+    executor: {
+      execute: jest.fn().mockResolvedValue({
+        ok: false,
+        availability: "unavailable",
+        failure: { code: "network" },
+      }),
+    } as never,
+    canUseFfmpeg: () => false,
+    openVideo: jest.fn(),
+    recordUsage,
+  }
+  await processAttachmentMedia(source(), "a.wav", options, services).catch(() => undefined)
+  expect(recordUsage).not.toHaveBeenCalled()
 })
 
 it("transcribes through the operation boundary and retains source timestamps", async () => {

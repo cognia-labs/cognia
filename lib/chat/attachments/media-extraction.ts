@@ -7,6 +7,7 @@ import { formatAttachmentLocator } from "@cognia/agent-config-types/attachment"
 import { buildProviderOperationProfile } from "@cognia/provider-core/operations/capability-matrix"
 import { builtInTranscriptionModels } from "@cognia/provider-types/transcription-models"
 import type { ProviderOperationExecutor } from "@/lib/ai/operations/executor"
+import { recordSurfaceUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import { withTimeout } from "@cognia/primitives/with-timeout"
 import { readBlobAsArrayBuffer } from "@cognia/ocr/blob-utils"
@@ -27,6 +28,8 @@ export interface AttachmentMediaDeps {
   executor: ProviderOperationExecutor
   openVideo: typeof openFfmpegVideoSource
   canUseFfmpeg: () => boolean
+  /** Books each paid call. Defaults to the usage ledger. */
+  recordUsage?: typeof recordSurfaceUsage
 }
 
 /**
@@ -114,6 +117,35 @@ export async function processAttachmentMedia(
   options.signal?.addEventListener("abort", abort, { once: true })
   // The executor import may have yielded after the first cancellation check.
   if (options.signal?.aborted) abort()
+  // Every successful call was paid for, and nothing below this entry books it
+  // (F30). A description reports the tokens it used, which the ledger prices.
+  // A transcription is billed per audio minute, a unit the ledger has no field
+  // for, so its row says the spend happened at an unknown price.
+  const record = injected?.recordUsage ?? recordSurfaceUsage
+  const meter = (operationId: "transcription.create" | "language.generate", output: unknown) => {
+    const reported =
+      operationId === "language.generate"
+        ? (output as { usage?: { inputTokens?: number; outputTokens?: number } } | undefined)?.usage
+        : undefined
+    const inputTokens = reported?.inputTokens ?? 0
+    const outputTokens = reported?.outputTokens ?? 0
+    const counted = inputTokens + outputTokens > 0
+    swallowUsageWrite(
+      record({
+        surface: "chat",
+        operationId: `attachment:${crypto.randomUUID()}`,
+        scopeId: "attachments",
+        usage: {
+          providerId: options.providerId,
+          model: options.modelId,
+          ...(counted
+            ? { inputTokens, outputTokens }
+            : { costUsd: 0, costSource: "unknown" as const, costKnown: false }),
+        },
+        ...(counted ? {} : { allowEmpty: true }),
+      })
+    )
+  }
   const invoke = async <T>(
     operationId: "transcription.create" | "language.generate",
     input: unknown
@@ -135,6 +167,8 @@ export async function processAttachmentMedia(
         90_000,
         "attachment-media"
       )
+      // Booked before the cancellation check: the provider answered, so it billed.
+      if (result.ok) meter(operationId, result.output)
       controller.signal.throwIfAborted()
       if (!result.ok) throw new Error(`attachment_${result.availability}:${result.failure.code}`)
       return result.output
