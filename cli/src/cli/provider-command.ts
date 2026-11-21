@@ -156,6 +156,7 @@ export interface ProviderCommandDeps {
   ensureDb?: ReadUsageDeps["ensureDb"]
   fsx?: ReadUsageDeps["fsx"]
   modelCatalog?: ReadUsageDeps["modelCatalog"]
+  readLocalUsage?: ReadUsageDeps["readLocalUsage"]
   /**
    * External-agent scan diagnostics for `provider usage`.
    *
@@ -419,7 +420,6 @@ export async function providerCommand(
       const to = now()
       const report = await readProviderUsage({
         config,
-        executor,
         home,
         ...(providerId ? { providerId } : {}),
         from: to - days * 24 * 60 * 60 * 1000,
@@ -428,6 +428,7 @@ export async function providerCommand(
         ...(deps.ensureDb ? { ensureDb: deps.ensureDb } : {}),
         ...(deps.fsx ? { fsx: deps.fsx } : {}),
         ...(deps.modelCatalog ? { modelCatalog: deps.modelCatalog } : {}),
+        ...(deps.readLocalUsage ? { readLocalUsage: deps.readLocalUsage } : {}),
       })
       // Filters are applied to the REPORT, not inside the reader, so the
       // `--json` payload and the printed table are the same rows and cannot
@@ -461,6 +462,11 @@ export async function providerCommand(
       out.write(
         `\nCLI sessions (${report2.sessions.scanned} in window, ${report2.sessions.withoutUsage} without usage)\n`
       )
+      if (report2.sessions.spanning > 0) {
+        out.write(
+          `  ${report2.sessions.spanning} session(s) began before the window or ran past it; their cumulative usage is not split by time, so it is not counted\n`
+        )
+      }
       if (report2.sessions.rows.length === 0) out.write(`  (no rows)\n`)
       for (const row of report2.sessions.rows) out.write(`  ${formatUsageRow(row)}\n`)
       if (sources.length > 0) {

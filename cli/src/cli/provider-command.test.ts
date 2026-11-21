@@ -105,6 +105,8 @@ const executor: CliProviderExecutor = {
   }) as CliProviderExecutor["execute"],
 }
 
+const readLocalUsage = jest.fn(async () => [])
+
 const NO_HOST: HostResolution = {
   skipped: [
     { leg: "saved host", reason: "no active host is configured" },
@@ -171,6 +173,7 @@ function run(argv: string[], extra: Parameters<typeof providerCommand>[1] = {}) 
     now: () => NOW,
     env: { COGNIA_HOME: "/home/u/.cognia" },
     ensureDb: async () => undefined,
+    readLocalUsage,
     fsx: emptyFs,
     ...extra,
   })
@@ -339,10 +342,9 @@ describe("providerCommand", () => {
   it("usage: reads the ledger over the given window and says how rows were attributed", async () => {
     const r = run(["provider", "usage", "--days", "3"])
     expect(await r.code).toBe(0)
-    expect(executor.execute).toHaveBeenCalledWith("usage.local.read", "openai", {
+    expect(readLocalUsage).toHaveBeenCalledWith("openai", {
       from: NOW - 3 * 86_400_000,
       to: NOW,
-      providerId: "openai",
     })
     expect(r.stdout()).toContain("Usage 2026-08-30 to 2026-09-02")
     expect(r.stdout()).toContain("Recorded ledger (exact attribution)")

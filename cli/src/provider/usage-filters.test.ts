@@ -24,6 +24,7 @@ function row(over: Partial<FilterableRow> = {}): FilterableRow {
     outputTokens: 5,
     costUsd: 1,
     costKnown: true,
+    unpricedTurns: 0,
     sessionId: "chat-1",
     ...over,
   }

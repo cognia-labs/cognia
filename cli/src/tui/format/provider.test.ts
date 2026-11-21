@@ -110,6 +110,18 @@ describe("formatUsageDocument", () => {
             outputTokens: 2_000_000,
             costUsd: 0.5,
             costKnown: true,
+            unpricedTurns: 0,
+          },
+          {
+            providerId: "openai",
+            model: "gpt-mixed",
+            attribution: "exact",
+            turns: 3,
+            inputTokens: 10,
+            outputTokens: 1,
+            costUsd: 0.25,
+            costKnown: false,
+            unpricedTurns: 1,
           },
         ],
         failures: [
@@ -134,10 +146,12 @@ describe("formatUsageDocument", () => {
             outputTokens: 5,
             costUsd: 0,
             costKnown: false,
+            unpricedTurns: 2,
           },
         ],
         scanned: 3,
         withoutUsage: 1,
+        spanning: 1,
         catalogAttributed: 0,
         approximate: 1,
       },
@@ -148,6 +162,9 @@ describe("formatUsageDocument", () => {
     expect(doc).toContain("- groq: bad window")
     expect(doc).toContain("## CLI sessions (3 in window, 1 without usage)")
     expect(doc).toContain("| ? | `mystery` | approximate | 10 | 5 | unknown |")
+    // Partly priced: a lower bound, never the price (F11).
+    expect(doc).toContain("| openai | `gpt-mixed` | exact | 10 | 1 | ≥ $0.2500 |")
+    expect(doc).toContain("1 session(s) began before the window or ran past it.")
     expect(doc).toContain("`approximate` rows are aliases")
     expect(doc).toContain("It is not free.")
   })
@@ -157,7 +174,14 @@ describe("formatUsageDocument", () => {
       from: 0,
       to: 1,
       ledger: { rows: [], failures: [], unavailable: "snapshot corrupt" },
-      sessions: { rows: [], scanned: 0, withoutUsage: 0, catalogAttributed: 0, approximate: 0 },
+      sessions: {
+        rows: [],
+        scanned: 0,
+        withoutUsage: 0,
+        spanning: 0,
+        catalogAttributed: 0,
+        approximate: 0,
+      },
     })
     expect(doc).toContain("Local database unavailable: snapshot corrupt")
     expect(doc).toContain("_(no rows)_")

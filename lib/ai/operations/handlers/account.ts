@@ -333,7 +333,15 @@ interface UsageEndpoint {
   baseURL?: string
   path(window: { from: number; to: number }): string
   parse(json: unknown): Array<UsageRow & { start: number }>
+  /**
+   * The documented `has_more` / `next_page` cursor, passed back as `page`.
+   * Absent for an endpoint that answers in one response.
+   */
+  paged?: true
 }
+
+/** Daily buckets one page of a paged usage report holds (`limit` max for `1d`). */
+const USAGE_PAGE_BUCKETS = 31
 
 function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
@@ -354,8 +362,17 @@ function bucketed(
     const results = Array.isArray(bucket.results)
       ? (bucket.results as Array<Record<string, unknown>>)
       : []
+    // A dotted key reads one level down (`cache_creation.ephemeral_5m_input_tokens`).
+    const field = (row: Record<string, unknown>, key: string): number => {
+      const dot = key.indexOf(".")
+      if (dot < 0) return num(row[key])
+      const nested = row[key.slice(0, dot)]
+      return nested && typeof nested === "object"
+        ? num((nested as Record<string, unknown>)[key.slice(dot + 1)])
+        : 0
+    }
     const sum = (keys: string[]) =>
-      results.reduce((acc, row) => acc + keys.reduce((inner, key) => inner + num(row[key]), 0), 0)
+      results.reduce((acc, row) => acc + keys.reduce((inner, key) => inner + field(row, key), 0), 0)
     const raw = bucket[fields.start]
     const start = typeof raw === "string" ? Date.parse(raw) : num(raw) * timeScale
     return {
@@ -372,33 +389,38 @@ const USAGE_ENDPOINTS: UsageEndpoint[] = [
     providerId: "openai",
     baseURL: "https://api.openai.com/v1",
     path: ({ from, to }) =>
-      `organization/usage/completions?start_time=${Math.floor(from / 1000)}&end_time=${Math.floor(to / 1000)}&bucket_width=1d&limit=31`,
+      `organization/usage/completions?start_time=${Math.floor(from / 1000)}&end_time=${Math.floor(to / 1000)}&bucket_width=1d&limit=${USAGE_PAGE_BUCKETS}`,
     parse: (json) =>
       bucketed(
         json,
         { start: "start_time", input: ["input_tokens"], output: "output_tokens" },
         1000
       ),
+    paged: true,
   },
   {
     providerId: "anthropic",
     baseURL: "https://api.anthropic.com/v1",
     path: ({ from, to }) =>
-      `organizations/usage_report/messages?starting_at=${new Date(from).toISOString()}&ending_at=${new Date(to).toISOString()}&bucket_width=1d&limit=31`,
+      `organizations/usage_report/messages?starting_at=${new Date(from).toISOString()}&ending_at=${new Date(to).toISOString()}&bucket_width=1d&limit=${USAGE_PAGE_BUCKETS}`,
     parse: (json) =>
       bucketed(
         json,
         {
           start: "starting_at",
+          // Cache writes arrive split by TTL under `cache_creation`; the
+          // report has no flat `cache_creation_input_tokens`.
           input: [
             "uncached_input_tokens",
-            "cache_creation_input_tokens",
+            "cache_creation.ephemeral_5m_input_tokens",
+            "cache_creation.ephemeral_1h_input_tokens",
             "cache_read_input_tokens",
           ],
           output: "output_tokens",
         },
         1000
       ),
+    paged: true,
   },
   {
     providerId: "openrouter",
@@ -433,13 +455,37 @@ function usageHandler(
     support: "native",
     async handler({ provider, request, signal }) {
       const window = windowOf(request.input)
-      const { json } = await providerRequest(provider, {
-        path: endpoint.path(window),
-        ...(endpoint.baseURL ? { baseURL: endpoint.baseURL } : {}),
-        signal,
-      })
-      const usageRows = endpoint
-        .parse(json)
+      const parsed: Array<UsageRow & { start: number }> = []
+      // Every day of the window, not the first page of it (F10): a page holds
+      // at most a month of daily buckets. The cap is what the window needs,
+      // plus slack, so a vendor that never stops paging cannot loop us.
+      const maxPages = Math.ceil((window.to - window.from) / DAY_MS / USAGE_PAGE_BUCKETS) + 2
+      const seen = new Set<string>()
+      let page: string | undefined
+      for (let fetched = 0; ; fetched += 1) {
+        const path = endpoint.path(window)
+        const { json } = await providerRequest(provider, {
+          path: page ? `${path}&page=${encodeURIComponent(page)}` : path,
+          ...(endpoint.baseURL ? { baseURL: endpoint.baseURL } : {}),
+          signal,
+        })
+        parsed.push(...endpoint.parse(json))
+        if (!endpoint.paged) break
+        const body = json as { has_more?: unknown; next_page?: unknown } | undefined
+        if (body?.has_more !== true) break
+        const next = typeof body.next_page === "string" ? body.next_page : ""
+        if (!next || seen.has(next) || fetched + 1 >= maxPages) {
+          // A short report would read as low spend; refuse it instead.
+          throw new ProviderOperationFailureError({
+            code: "invalid-response",
+            retryable: false,
+            message: "the provider's usage report did not finish paging",
+          })
+        }
+        seen.add(next)
+        page = next
+      }
+      const usageRows = parsed
         .filter((row) => row.start + DAY_MS > window.from && row.start < window.to)
         .map(({ start: _start, ...row }) => row)
       return { rows: usageRows, capturedAt: Date.now() }
@@ -448,6 +494,48 @@ function usageHandler(
 }
 
 // ---- local usage ------------------------------------------------------------------
+
+/** One model's spend this install booked with one provider in a window. */
+export interface LocalProviderUsage {
+  model: string
+  turns: number
+  inputTokens: number
+  outputTokens: number
+  /** The priced part: a lower bound when `unpricedTurns` is above zero. */
+  costUsd: number
+  /** Turns no rate priced. Their spend is unknown, not free. */
+  unpricedTurns: number
+}
+
+/**
+ * The local ledger read `usage.local.read` answers from, with what its output
+ * drops: how many turns no rate priced. The CLI reads this directly, so an
+ * unpriced model prints as unknown rather than `$0.0000` (F11).
+ */
+export async function readLocalProviderUsage(
+  providerId: string,
+  window: { from: number; to: number }
+): Promise<LocalProviderUsage[]> {
+  const ledger = await getDb()
+    .sessionUsage.where("providerId")
+    .equals(providerId)
+    // IMPORTED rows are excluded (ADR-0165). Since the external usage index
+    // shipped, `sessionUsage` also holds turns another coding agent paid
+    // for, stamped with the provider ITS transcript named. This read is
+    // "what this install spent", and it is what the CLI's `provider usage`
+    // prints, so blending in another tool's bill would silently inflate the
+    // one number a person checks against their invoice.
+    .and((row) => row.at >= window.from && row.at < window.to && row.imported !== true)
+    .toArray()
+  return aggregateByModel(ledger).map((row) => ({
+    model: row.model,
+    turns: row.turns,
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    costUsd: row.costUsd,
+    unpricedTurns: row.unpricedTurns,
+  }))
+}
 
 export const usageLocalReadHandler: ProviderOperationHandlerRegistration<
   UsageLocalReadInput,
@@ -459,20 +547,9 @@ export const usageLocalReadHandler: ProviderOperationHandlerRegistration<
   async handler({ provider, request }) {
     const window = windowOf(request.input)
     const providerId = request.input?.providerId ?? provider.providerId
-    const ledger = await getDb()
-      .sessionUsage.where("providerId")
-      .equals(providerId)
-      // IMPORTED rows are excluded (ADR-0165). Since the external usage index
-      // shipped, `sessionUsage` also holds turns another coding agent paid
-      // for, stamped with the provider ITS transcript named. This operation is
-      // documented as "what this install spent", and it is what the CLI's
-      // `provider usage` prints, so blending in another tool's bill would
-      // silently inflate the one number a person checks against their invoice.
-      .and((row) => row.at >= window.from && row.at < window.to && row.imported !== true)
-      .toArray()
     // Every row carries the provider that served it, so attribution is exact.
     return {
-      rows: aggregateByModel(ledger).map((row) => ({
+      rows: (await readLocalProviderUsage(providerId, window)).map((row) => ({
         model: row.model,
         providerId,
         attribution: "exact" as const,

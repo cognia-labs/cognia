@@ -16,7 +16,7 @@ import type { ProviderLimits } from "@/types/subscription"
 import type { ProviderCapabilitiesReport } from "../../provider/capabilities"
 import type { ProviderModelsReport } from "../../provider/models"
 import { probePassed, type ProviderProbeReport } from "../../provider/probe"
-import type { ProviderUsageReport } from "../../provider/usage"
+import { formatUsageCost, type ProviderUsageReport } from "../../provider/usage"
 import { meterLabel, meterResetText, meterRightLabel } from "./limits"
 
 function cellDetail(cell: ProviderOperationCell): string {
@@ -99,7 +99,7 @@ function usageTable(rows: ProviderUsageReport["ledger"]["rows"]): string[] {
     "| --- | --- | --- | --- | --- | --- |",
   ]
   for (const row of rows) {
-    const cost = row.costKnown ? `$${row.costUsd.toFixed(4)}` : "unknown"
+    const cost = formatUsageCost(row, "unknown")
     lines.push(
       `| ${row.providerId ?? "?"} | \`${row.model}\` | ${row.attribution} | ${tokens(row.inputTokens)} | ${tokens(row.outputTokens)} | ${cost} |`
     )
@@ -125,13 +125,22 @@ export function formatUsageDocument(report: ProviderUsageReport): string {
     "",
     ...usageTable(report.sessions.rows)
   )
+  if (report.sessions.spanning > 0) {
+    out.push(
+      "",
+      `${report.sessions.spanning} session(s) began before the window or ran past it. Their cumulative usage is not split by time, so it is not counted.`
+    )
+  }
   if (report.sessions.catalogAttributed + report.sessions.approximate > 0) {
     out.push(
       "",
       "`catalog` rows were attributed from the model catalog. `approximate` rows are aliases several providers share, or models no configured provider lists."
     )
   }
-  out.push("", "An unknown cost means no pricing layer knew the model. It is not free.")
+  out.push(
+    "",
+    "An unknown cost means no pricing layer knew the model. It is not free. A `≥` cost is a lower bound: some turns had no price."
+  )
   return out.join("\n")
 }
 

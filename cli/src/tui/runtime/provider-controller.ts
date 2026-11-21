@@ -96,6 +96,7 @@ export interface ProviderControllerDeps {
   ensureDb?: ReadUsageDeps["ensureDb"]
   fsx?: ReadUsageDeps["fsx"]
   modelCatalog?: ReadUsageDeps["modelCatalog"]
+  readLocalUsage?: ReadUsageDeps["readLocalUsage"]
   modelOptions?: (config: ResolvedConfig) => string[]
 }
 
@@ -320,13 +321,13 @@ export async function runProvider(deps: ProviderControllerDeps): Promise<void> {
       try {
         const report = await readProviderUsage({
           config,
-          executor,
           home: deps.home,
           ...(providerId ? { providerId } : {}),
           now,
           ...(deps.ensureDb ? { ensureDb: deps.ensureDb } : {}),
           ...(deps.fsx ? { fsx: deps.fsx } : {}),
           ...(deps.modelCatalog ? { modelCatalog: deps.modelCatalog } : {}),
+          ...(deps.readLocalUsage ? { readLocalUsage: deps.readLocalUsage } : {}),
         })
         if (!isCurrent()) return
         dispatch({

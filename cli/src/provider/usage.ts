@@ -3,26 +3,30 @@
  * the two ledgers the CLI actually has.
  *
  *   1. The Dexie `sessionUsage` ledger (the same table the desktop keeps,
- *      restored from `~/.cognia/db.json`), read through the shared
- *      `usage.local.read` operation. Every row names the provider that served
- *      it, so attribution is exact.
+ *      restored from `~/.cognia/db.json`), read by the reader the shared
+ *      `usage.local.read` operation answers from, which also says how many
+ *      turns no rate priced. Every row names the provider that served it, so
+ *      attribution is exact.
  *   2. The canonical session store (`~/.cognia/sessions/<id>/manifest.json`),
  *      which carries cumulative usage per session and, when the runtime
  *      recorded one, the provider it was bound to. A manifest without a
  *      provider is attributed through the model catalog, which is exact for a
  *      model only one configured provider lists and APPROXIMATE for an alias
- *      several providers share. The report says which.
+ *      several providers share. The report says which. Usage is cumulative,
+ *      so only a session that ran wholly inside the window is counted; one
+ *      that began before it or ran past it is reported, not split.
  *
- * Costs are priced by `effectiveCostUsd`, the one pricing path, and an
- * unpriced row is reported as unknown rather than as free.
+ * Costs are priced by `effectiveCostUsd`, the one pricing path. A row no rate
+ * priced is unknown rather than free, and a partly priced one a lower bound.
  */
 
 import type { z } from "zod"
 import type { ProviderOperationFailure, usageLocalReadOutput } from "@cognia/provider-types"
 
 import { catalogModelIds } from "@/lib/ai/model-options"
+import { readLocalProviderUsage } from "@/lib/ai/operations/handlers/account"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
-import { aggregateByModel, effectiveCostUsd } from "@/lib/usage/session-analytics"
+import { aggregateByModel } from "@/lib/usage/session-analytics"
 
 import { parseManifest, type SessionManifest } from "../agent/session-store/manifest"
 import {
@@ -32,7 +36,7 @@ import {
   type SessionStoreFs,
 } from "../agent/session-store/paths"
 import type { ResolvedConfig } from "../config/schema"
-import { configuredProviderIds, type CliProviderExecutor } from "./local"
+import { configuredProviderIds } from "./local"
 
 export type UsageLedgerOutput = z.infer<typeof usageLocalReadOutput>
 export type UsageAttribution = UsageLedgerOutput["rows"][number]["attribution"]
@@ -44,9 +48,12 @@ export interface ProviderUsageRow {
   turns: number
   inputTokens: number
   outputTokens: number
+  /** The priced part: a lower bound when `unpricedTurns` is above zero. */
   costUsd: number
-  /** False when no pricing layer knew the model. `costUsd` is then 0, not free. */
+  /** True only when every turn was priced. */
   costKnown: boolean
+  /** Turns no rate priced. Their spend is unknown, not free. */
+  unpricedTurns: number
 }
 
 export interface ProviderUsageReport {
@@ -61,9 +68,15 @@ export interface ProviderUsageReport {
   }
   sessions: {
     rows: ProviderUsageRow[]
+    /** Manifests whose session overlapped the window. */
     scanned: number
     /** Manifests inside the window that recorded no usage. */
     withoutUsage: number
+    /**
+     * Sessions that began before the window or ran past it. Their usage is a
+     * cumulative total that cannot be split by time, so none of it is counted.
+     */
+    spanning: number
     /** Rows whose provider came from the catalog, not the session. */
     catalogAttributed: number
     approximate: number
@@ -72,7 +85,6 @@ export interface ProviderUsageReport {
 
 export interface ReadUsageDeps {
   config: ResolvedConfig
-  executor: CliProviderExecutor
   home: string
   providerId?: string
   from?: number
@@ -83,6 +95,8 @@ export interface ReadUsageDeps {
   fsx?: SessionStoreFs
   /** Model catalog per provider (tests). Defaults to the shared catalog. */
   modelCatalog?: (providerId: string) => string[]
+  /** One provider's local ledger. Defaults to the reader `usage.local.read` uses. */
+  readLocalUsage?: typeof readLocalProviderUsage
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -110,28 +124,42 @@ async function readLedger(
     return { rows: [], failures: [], unavailable: (error as Error).message }
   }
   const ids = deps.providerId ? [deps.providerId] : configuredProviderIds(deps.config)
+  const read = deps.readLocalUsage ?? readLocalProviderUsage
   const rows: ProviderUsageRow[] = []
   const failures: ProviderUsageReport["ledger"]["failures"] = []
   for (const providerId of ids) {
-    const result = await deps.executor.execute<UsageLedgerOutput>("usage.local.read", providerId, {
-      from: window.from,
-      to: window.to,
-      providerId,
-    })
-    if (!result.ok) {
-      failures.push({ providerId, failure: result })
+    let usage: Awaited<ReturnType<typeof readLocalProviderUsage>>
+    try {
+      usage = await read(providerId, window)
+    } catch (error) {
+      failures.push({
+        providerId,
+        failure: {
+          ok: false,
+          operationId: "usage.local.read",
+          providerId,
+          availability: "unavailable",
+          failure: {
+            code: "unknown",
+            retryable: false,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        },
+      })
       continue
     }
-    for (const row of result.output.rows) {
+    for (const row of usage) {
       rows.push({
-        providerId: row.providerId ?? providerId,
+        providerId,
         model: row.model,
-        attribution: row.attribution,
-        turns: 0,
+        attribution: "exact",
+        turns: row.turns,
         inputTokens: row.inputTokens,
         outputTokens: row.outputTokens,
         costUsd: row.costUsd,
-        costKnown: true,
+        // An unpriced model's $0 is not free (F11).
+        costKnown: row.unpricedTurns === 0,
+        unpricedTurns: row.unpricedTurns,
       })
     }
   }
@@ -184,13 +212,28 @@ function sessionRows(
 ): ProviderUsageReport["sessions"] {
   const fsx = deps.fsx ?? realSessionStoreFs
   const catalog = deps.modelCatalog ?? catalogModelIds
+  // Overlapping the window by the session's whole span: picking by the last
+  // update alone counted a long session's entire history in this window (F11).
   const manifests = readSessionManifests(deps.home, fsx).filter((manifest) => {
-    const at = Date.parse(manifest.updatedAt)
-    return Number.isFinite(at) && at >= window.from && at < window.to
+    const created = Date.parse(manifest.createdAt)
+    const updated = Date.parse(manifest.updatedAt)
+    return (
+      Number.isFinite(created) &&
+      Number.isFinite(updated) &&
+      created < window.to &&
+      updated >= window.from
+    )
   })
   let withoutUsage = 0
+  let spanning = 0
   const synthetic: Array<SessionUsageRow & { attribution: UsageAttribution }> = []
   for (const manifest of manifests) {
+    const began = Date.parse(manifest.createdAt)
+    const lastRan = Date.parse(manifest.updatedAt)
+    if (began < window.from || lastRan >= window.to) {
+      spanning += 1
+      continue
+    }
     const usage = manifest.usage
     if (!usage || ((usage.inputTokens ?? 0) === 0 && (usage.outputTokens ?? 0) === 0)) {
       withoutUsage += 1
@@ -235,9 +278,6 @@ function sessionRows(
   for (const group of groups.values()) {
     const first = group[0]!
     for (const bucket of aggregateByModel(group)) {
-      const priced = group
-        .filter((row) => row.model === bucket.model)
-        .some((row) => effectiveCostUsd(row) > 0 || row.costUsd > 0)
       const row: ProviderUsageRow = {
         ...(first.providerId ? { providerId: first.providerId } : {}),
         model: bucket.model,
@@ -246,7 +286,8 @@ function sessionRows(
         inputTokens: bucket.inputTokens,
         outputTokens: bucket.outputTokens,
         costUsd: bucket.costUsd,
-        costKnown: priced || bucket.unpricedTurns === 0,
+        costKnown: bucket.unpricedTurns === 0,
+        unpricedTurns: bucket.unpricedTurns,
       }
       if (row.attribution === "catalog") catalogAttributed += 1
       if (row.attribution === "approximate") approximate += 1
@@ -259,7 +300,14 @@ function sessionRows(
       b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens) ||
       a.model.localeCompare(b.model)
   )
-  return { rows, scanned: manifests.length, withoutUsage, catalogAttributed, approximate }
+  return {
+    rows,
+    scanned: manifests.length,
+    withoutUsage,
+    spanning,
+    catalogAttributed,
+    approximate,
+  }
 }
 
 export async function readProviderUsage(deps: ReadUsageDeps): Promise<ProviderUsageReport> {
@@ -275,11 +323,22 @@ function tokens(n: number): string {
   return String(n)
 }
 
+/**
+ * A row's cost: the price when every turn was priced, a lower bound when some
+ * were, unknown when none were. The rule `formatBucketCost` applies in the app,
+ * at the CLI's precision.
+ */
+export function formatUsageCost(row: ProviderUsageRow, unknown = "cost unknown"): string {
+  if (row.costKnown) return `$${row.costUsd.toFixed(4)}`
+  if (row.turns > 0 && row.unpricedTurns >= row.turns) return unknown
+  return `≥ $${row.costUsd.toFixed(4)}`
+}
+
 /** One line per row. The first column marks how the provider was attributed. */
 export function formatUsageRow(row: ProviderUsageRow): string {
   const provider = (row.providerId ?? "?").padEnd(16)
   const model = row.model.padEnd(32)
-  const cost = row.costKnown ? `$${row.costUsd.toFixed(4)}` : "cost unknown"
+  const cost = formatUsageCost(row)
   const mark = row.attribution === "exact" ? " " : row.attribution === "catalog" ? "c" : "~"
   const input = tokens(row.inputTokens).padStart(7)
   const output = tokens(row.outputTokens).padStart(7)

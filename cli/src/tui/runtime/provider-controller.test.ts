@@ -105,6 +105,7 @@ function deps(
     createExecutor: () => fakeExecutor(),
     selectTarget: () => ({ ok: true, target: { kind: "local", why: "nothing-selected" } }),
     ensureDb: async () => undefined,
+    readLocalUsage: async () => [],
     fsx: emptyFs,
     modelOptions: () => ["gpt-4o"],
     actions,

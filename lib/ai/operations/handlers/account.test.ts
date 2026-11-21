@@ -32,7 +32,8 @@ jest.mock("@/lib/usage/session-analytics", () => ({
       turns: 1,
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
-      costUsd: 0.5,
+      costUsd: row.model === "local-model" ? 0 : 0.5,
+      unpricedTurns: row.model === "local-model" ? 1 : 0,
     })),
 }))
 jest.mock("./http", () => ({ providerRequest: jest.fn() }))
@@ -59,6 +60,7 @@ import {
   quotaOf,
   quotaReadHandler,
   rateLimitsReadHandler,
+  readLocalProviderUsage,
   registryProviderKey,
   usageLocalReadHandler,
 } from "./account"
@@ -283,6 +285,84 @@ describe("account handlers", () => {
     ])
   })
 
+  it("reads every page of a vendor's usage report, not only the first (F10)", async () => {
+    const registry = new ProviderOperationHandlerRegistry()
+    for (const handler of ACCOUNT_HANDLERS) registry.register(handler)
+    const anthropic = registry.resolve("usage.provider.read", "anthropic", "anthropic")!
+    const day = (n: number) => new Date(Date.UTC(2026, 0, n)).toISOString()
+    http.providerRequest
+      .mockResolvedValueOnce({
+        json: {
+          data: [
+            {
+              starting_at: day(1),
+              ending_at: day(2),
+              results: [
+                {
+                  uncached_input_tokens: 10,
+                  cache_read_input_tokens: 5,
+                  // The report nests cache writes by TTL; there is no flat key.
+                  cache_creation: { ephemeral_5m_input_tokens: 3, ephemeral_1h_input_tokens: 2 },
+                  output_tokens: 7,
+                },
+              ],
+            },
+          ],
+          has_more: true,
+          next_page: "page_2",
+        },
+      })
+      .mockResolvedValueOnce({
+        json: {
+          data: [
+            {
+              starting_at: day(2),
+              ending_at: day(3),
+              results: [{ uncached_input_tokens: 100, output_tokens: 1 }],
+            },
+          ],
+          has_more: false,
+          next_page: null,
+        },
+      })
+    const output = (await anthropic.handler(
+      ctx(
+        "usage.provider.read",
+        { from: Date.UTC(2026, 0, 1), to: Date.UTC(2026, 0, 3) },
+        { ...provider, providerId: "anthropic", protocol: "anthropic" }
+      )
+    )) as { rows: unknown[] }
+    expect(http.providerRequest).toHaveBeenCalledTimes(2)
+    expect(http.providerRequest.mock.calls[1][1]).toMatchObject({
+      path: expect.stringMatching(/&page=page_2$/),
+    })
+    expect(usageProviderReadOutput.parse(output).rows).toEqual([
+      { day: "2026-01-01", inputTokens: 20, outputTokens: 7 },
+      { day: "2026-01-02", inputTokens: 100, outputTokens: 1 },
+    ])
+  })
+
+  it("refuses a usage report that never stops paging rather than answer short", async () => {
+    const registry = new ProviderOperationHandlerRegistry()
+    for (const handler of ACCOUNT_HANDLERS) registry.register(handler)
+    const openai = registry.resolve("usage.provider.read", "openai", "openai")!
+    http.providerRequest.mockResolvedValue({
+      json: { data: [], has_more: true, next_page: "page_same" },
+    })
+    await expect(
+      openai.handler(
+        ctx(
+          "usage.provider.read",
+          { from: 1_700_000_000_000, to: 1_700_200_000_000 },
+          { ...provider, providerId: "openai", protocol: "openai" }
+        )
+      )
+    ).rejects.toMatchObject({ failure: { code: "invalid-response" } })
+    // The repeated cursor stops it on the second page.
+    expect(http.providerRequest).toHaveBeenCalledTimes(2)
+    http.providerRequest.mockReset()
+  })
+
   it("reads local usage from the session ledger scoped to the provider and window", async () => {
     usageRows.push(
       { providerId: "deepseek-anthropic", at: 50, model: "a", inputTokens: 1, outputTokens: 2 },
@@ -307,6 +387,32 @@ describe("account handlers", () => {
     ).rejects.toMatchObject({
       failure: { code: "schema" },
     })
+  })
+
+  it("hands the CLI the unpriced turns the operation's output leaves out (F11)", async () => {
+    usageRows.push(
+      { providerId: "openai", at: 50, model: "local-model", inputTokens: 3, outputTokens: 1 },
+      { providerId: "openai", at: 50, model: "gpt-4o", inputTokens: 1, outputTokens: 1 }
+    )
+    const rows = await readLocalProviderUsage("openai", { from: 0, to: 100 })
+    expect(rows).toEqual([
+      {
+        model: "local-model",
+        turns: 1,
+        inputTokens: 3,
+        outputTokens: 1,
+        costUsd: 0,
+        unpricedTurns: 1,
+      },
+      {
+        model: "gpt-4o",
+        turns: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0.5,
+        unpricedTurns: 0,
+      },
+    ])
   })
 
   it("excludes another agent's imported spend from what this install spent", async () => {

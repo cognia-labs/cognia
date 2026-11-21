@@ -8,8 +8,8 @@ import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 import { serializeManifest, type SessionManifest } from "../agent/session-store/manifest"
 import { manifestPath, sessionsRoot, type SessionStoreFs } from "../agent/session-store/paths"
 import type { ResolvedConfig } from "../config/schema"
-import type { CliProviderExecutor } from "./local"
 import { attributeModel, formatUsageRow, readProviderUsage, readSessionManifests } from "./usage"
+import type { ReadUsageDeps } from "./usage"
 
 const HOME = "/home/u/.cognia"
 const NOW = Date.parse("2026-09-02T12:00:00Z")
@@ -95,39 +95,24 @@ const MANIFESTS: SessionManifest[] = [
   }),
 ]
 
-const executor: CliProviderExecutor = {
-  execute: jest.fn(async (operationId, providerId) => {
-    if (providerId === "groq") {
-      return {
-        ok: false as const,
-        operationId,
-        availability: "needs-config" as const,
-        failure: { code: "schema" as const, retryable: false, message: "bad window" },
-      }
-    }
-    return {
-      ok: true as const,
-      operationId,
-      providerId,
-      support: "derived" as const,
-      output: {
-        rows:
-          providerId === "openai"
-            ? [
-                {
-                  model: "gpt-4o",
-                  providerId: "openai",
-                  attribution: "exact" as const,
-                  inputTokens: 300,
-                  outputTokens: 30,
-                  costUsd: 0.003,
-                },
-              ]
-            : [],
-      },
-    }
-  }) as CliProviderExecutor["execute"],
-}
+/** The local ledger per provider, as `readLocalProviderUsage` answers it. */
+const readLocalUsage: NonNullable<ReadUsageDeps["readLocalUsage"]> = jest.fn(
+  async (providerId: string) => {
+    if (providerId === "groq") throw new Error("ledger read failed")
+    return providerId === "openai"
+      ? [
+          {
+            model: "gpt-4o",
+            turns: 3,
+            inputTokens: 300,
+            outputTokens: 30,
+            costUsd: 0.003,
+            unpricedTurns: 0,
+          },
+        ]
+      : []
+  }
+)
 
 describe("readSessionManifests", () => {
   it("walks the sessions root and skips corrupt or empty entries", () => {
@@ -164,7 +149,7 @@ describe("readProviderUsage", () => {
     const ensureDb = jest.fn(async () => undefined)
     const report = await readProviderUsage({
       config: CONFIG,
-      executor,
+      readLocalUsage,
       home: HOME,
       now: () => NOW,
       ensureDb,
@@ -180,14 +165,16 @@ describe("readProviderUsage", () => {
         providerId: "openai",
         model: "gpt-4o",
         attribution: "exact",
-        turns: 0,
+        turns: 3,
         inputTokens: 300,
         outputTokens: 30,
         costUsd: 0.003,
         costKnown: true,
+        unpricedTurns: 0,
       },
     ])
     expect(report.ledger.failures.map((f) => f.providerId)).toEqual(["groq"])
+    expect(report.ledger.failures[0]!.failure.failure.message).toBe("ledger read failed")
 
     expect(report.sessions.scanned).toBe(4)
     expect(report.sessions.withoutUsage).toBe(1)
@@ -215,10 +202,76 @@ describe("readProviderUsage", () => {
     expect(byModel["shared-alias"]!.costKnown).toBe(false)
   })
 
+  it("reports an unpriced ledger model as unknown and a partly priced one as a lower bound (F11)", async () => {
+    const report = await readProviderUsage({
+      config: CONFIG,
+      readLocalUsage: async (providerId) =>
+        providerId === "openai"
+          ? [
+              {
+                model: "local-model",
+                turns: 2,
+                inputTokens: 10,
+                outputTokens: 1,
+                costUsd: 0,
+                unpricedTurns: 2,
+              },
+              {
+                model: "gpt-4o",
+                turns: 2,
+                inputTokens: 10,
+                outputTokens: 1,
+                costUsd: 0.25,
+                unpricedTurns: 1,
+              },
+            ]
+          : [],
+      home: HOME,
+      now: () => NOW,
+      ensureDb: async () => undefined,
+      fsx: fakeFs([]),
+      modelCatalog: catalog,
+    })
+    const byModel = Object.fromEntries(report.ledger.rows.map((r) => [r.model, r]))
+    expect(byModel["local-model"]).toMatchObject({ costKnown: false, unpricedTurns: 2 })
+    expect(formatUsageRow(byModel["local-model"]!)).toMatch(/cost unknown$/)
+    expect(formatUsageRow(byModel["gpt-4o"]!)).toMatch(/≥ \$0\.2500$/)
+  })
+
+  it("counts only sessions that ran inside the window, and reports the ones that span it (F11)", async () => {
+    const report = await readProviderUsage({
+      config: CONFIG,
+      readLocalUsage: async () => [],
+      home: HOME,
+      now: () => NOW,
+      ensureDb: async () => undefined,
+      fsx: fakeFs([
+        manifest("s-inside", NOW - DAY, {
+          runtimeBinding: { backend: "builtin", model: "gpt-4o", provider: "openai" },
+          usage: { inputTokens: 10, outputTokens: 1, costUsd: 0.01 },
+        }),
+        // Began a month ago, last ran yesterday: its total is mostly old spend.
+        {
+          ...manifest("s-long", NOW - DAY, {
+            runtimeBinding: { backend: "builtin", model: "gpt-4o", provider: "openai" },
+            usage: { inputTokens: 99_999, outputTokens: 99_999, costUsd: 50 },
+          }),
+          createdAt: new Date(NOW - 30 * DAY).toISOString(),
+        },
+      ]),
+      modelCatalog: catalog,
+    })
+    expect(report.sessions.scanned).toBe(2)
+    expect(report.sessions.spanning).toBe(1)
+    expect(report.sessions.rows).toEqual([
+      expect.objectContaining({ model: "gpt-4o", inputTokens: 10, costUsd: 0.01 }),
+    ])
+  })
+
   it("scopes both ledgers to --provider", async () => {
     const report = await readProviderUsage({
       config: CONFIG,
-      executor,
+      readLocalUsage,
       home: HOME,
       providerId: "deepseek",
       now: () => NOW,
@@ -234,7 +287,7 @@ describe("readProviderUsage", () => {
   it("keeps the session ledger when the database cannot open", async () => {
     const report = await readProviderUsage({
       config: CONFIG,
-      executor,
+      readLocalUsage,
       home: HOME,
       now: () => NOW,
       ensureDb: async () => {
@@ -252,7 +305,7 @@ describe("readProviderUsage", () => {
     await expect(
       readProviderUsage({
         config: CONFIG,
-        executor,
+        readLocalUsage,
         home: HOME,
         from: NOW,
         to: NOW - 1,
@@ -275,6 +328,7 @@ describe("formatUsageRow", () => {
         outputTokens: 2_000_000,
         costUsd: 0.5,
         costKnown: true,
+        unpricedTurns: 0,
       })
     ).toBe("  openai           gpt-4o                           in    1.5k  out    2.0M  $0.5000")
     expect(
@@ -286,6 +340,7 @@ describe("formatUsageRow", () => {
         outputTokens: 5,
         costUsd: 0,
         costKnown: false,
+        unpricedTurns: 1,
       })
     ).toMatch(/^~ \?\s+mystery\s+in\s+5\s+out\s+5\s+cost unknown$/)
   })
