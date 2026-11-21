@@ -16,6 +16,7 @@ import {
   recordTeamUsage,
   recordWorkflowStepUsage,
   externalAgentSurfaceUsage,
+  externalAgentUsageRow,
   surfaceUsageFromUsageInfo,
   swallowUsageWrite,
   topByCost,
@@ -102,6 +103,7 @@ describe("recordExternalAgentUsage", () => {
       sessionId: "pi-chat",
       messageId: "assistant-1",
       model: "commandcode/model",
+      payer: "agent" as const,
       durationMs: 2000,
       usage: {
         promptTokens: 267000,
@@ -129,27 +131,34 @@ describe("recordExternalAgentUsage", () => {
         costKnown: true,
         durationMs: 2000,
         surface: "chat",
+        imported: true,
       }),
     ])
   })
 
   it("keeps the provider and workspace a Host-run agent turn names", async () => {
-    await recordExternalAgentUsage({
-      sessionId: "member-chat",
-      messageId: "assistant-a1",
-      model: "ark-deepseek-v4.1-flash",
+    // The Host's member runs build the row themselves and price it at the
+    // deployment's rate: Cognia paid, so it is not external spend.
+    await upsertSessionUsage(
+      externalAgentUsageRow({
+        sessionId: "member-chat",
+        messageId: "assistant-a1",
+        model: "ark-deepseek-v4.1-flash",
+        providerId: "deepseek",
+        projectId: "project-1",
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      })
+    )
+    const [row] = await listUsageForSession("member-chat")
+    expect(row).toMatchObject({
       providerId: "deepseek",
       projectId: "project-1",
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-    })
-    expect((await listUsageForSession("member-chat"))[0]).toMatchObject({
-      providerId: "deepseek",
-      projectId: "project-1",
       model: "ark-deepseek-v4.1-flash",
     })
+    expect(row).not.toHaveProperty("imported")
   })
 
-  it("books no money for a turn on a Cognia model: the gateway's rows hold it (F02)", async () => {
+  it("books nothing for a turn on a Cognia model: the gateway's rows are its spend (F02)", async () => {
     await recordExternalAgentUsage({
       sessionId: "gw-chat",
       messageId: "assistant-gw",
@@ -165,20 +174,9 @@ describe("recordExternalAgentUsage", () => {
         providerCost: { amount: 0.4, currency: "USD" },
       },
     })
-    const [row] = await listUsageForSession("gw-chat")
-    expect(row).toMatchObject({
-      inputTokens: 1000,
-      outputTokens: 200,
-      projectId: "project-1",
-      costUsd: 0,
-      costKnown: true,
-      costSource: "derived",
-    })
-    expect(row).not.toHaveProperty("providerId")
-    expect(row).not.toHaveProperty("imported")
-    // Not in the budget rollup, and nothing for the workspace limit to count.
+    // Neither its money nor its tokens: the gateway booked both per request.
+    expect(await listUsageForSession("gw-chat")).toEqual([])
     expect(await getDb().providerCostDaily.count()).toBe(0)
-    expect(isUnpricedUsageRow(row)).toBe(false)
   })
 
   it("keeps a turn on the agent's own account out of Cognia's budgets (F02)", async () => {
@@ -213,6 +211,7 @@ describe("recordExternalAgentUsage", () => {
     await recordExternalAgentUsage({
       sessionId: "s",
       messageId: "m",
+      payer: "agent",
       usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3, providerCost: { amount: 19 } },
     })
     expect((await listUsageForSession("s"))[0]).toMatchObject({

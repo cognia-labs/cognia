@@ -12,7 +12,7 @@ import { activeDatabaseName } from "@/lib/db/schema"
 import { recordSurfaceUsage, swallowUsageWrite } from "@/lib/db/session-usage"
 import type { GatewayRequestOutcome } from "@/types/gateway"
 
-import { gatewayTaskProjectId } from "./task-attribution"
+import { gatewayTaskConversation, gatewayTaskProjectId } from "./task-attribution"
 
 /** Map a gateway outcome onto the chat-plane `ProviderOutcome` shape. */
 export function gatewayOutcomeToProviderOutcome(o: GatewayRequestOutcome): ProviderOutcome {
@@ -68,9 +68,9 @@ export function gatewayUsageOperationId(o: GatewayRequestOutcome, at: number): s
  * answering) was billed for them, so it is booked like a success.
  *
  * A request an external agent made on a Cognia model is that conversation's
- * spend, and this row is its money (the agent's own turn row carries tokens
- * only), so it takes the conversation's workspace for per-workspace limits
- * (F02).
+ * spend, and this row is the only record of it (the agent's own turn books no
+ * row), so it is filed under the conversation and takes its workspace for
+ * per-workspace limits (F02).
  */
 export function forwardGatewayOutcome(o: GatewayRequestOutcome, now: number = Date.now()): void {
   recordProviderOutcome(gatewayOutcomeToProviderOutcome(o))
@@ -84,12 +84,14 @@ export function forwardGatewayOutcome(o: GatewayRequestOutcome, now: number = Da
   const database = activeDatabaseName()
   swallowUsageWrite(
     (async () => {
+      const conversation = gatewayTaskConversation(o.sessionId)
       const projectId = await gatewayTaskProjectId(o.sessionId)
       if (activeDatabaseName() !== database) return null
       return recordSurfaceUsage({
         surface: "gateway",
         operationId,
         scopeId: o.sessionId ?? o.providerId,
+        ...(conversation ? { sessionId: conversation } : {}),
         usage: {
           inputTokens,
           outputTokens,

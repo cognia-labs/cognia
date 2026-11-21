@@ -63,6 +63,17 @@ it("groups requests by opaque session ids and links only identified groups to th
   ])
 })
 
+it("links an external agent's task group to the conversation its usage is filed under (F02)", () => {
+  const groups = groupGatewayRequestsBySession([
+    row("late", "2", { sessionId: "task-1", conversationId: "chat-1" }),
+    // Stored before the task was attributed: the group still links to its chat.
+    row("early", "1", { sessionId: "task-1" }),
+  ])
+  expect(groups).toEqual([
+    expect.objectContaining({ sessionId: "task-1", usageSessionId: "chat-1" }),
+  ])
+})
+
 describe("gateway-request-log CRUD", () => {
   it("appends and lists newest-first", async () => {
     await appendGatewayRequestLog(row("a", "2026-07-03T00:00:01Z"))

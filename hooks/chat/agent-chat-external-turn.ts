@@ -1548,9 +1548,10 @@ export async function runExternalAgentTurn(ctx: ExternalAgentTurnContext): Promi
     chatTurnPerformance.beginFinalPersistence(sessionId)
     await persistMessages(sessionId, finalMessages, externalFence)
     if (result.tokenUsage) {
-      // On a Cognia model the gateway booked every request it served, in this
-      // conversation's workspace; this row keeps the agent's own token count.
-      // On the agent's own models Cognia paid nothing (F02).
+      // On a Cognia model the gateway booked every request it served, under
+      // this conversation and its workspace, so the turn books nothing more;
+      // the message keeps the agent's own accounting. On the agent's own
+      // models Cognia paid nothing, and the row says so (F02).
       const usageProjectId = session?.projectId ?? executionContext?.projectId
       await recordExternalAgentUsage({
         sessionId,

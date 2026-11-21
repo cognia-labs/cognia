@@ -607,6 +607,12 @@ export interface GatewayRequestLogRow extends GatewayAccountScope {
   id: string
   /** Trusted gateway-derived conversation identity; older rows may omit it. */
   sessionId?: string | null
+  /**
+   * The Cognia conversation an external agent's gateway task ran this request
+   * for, stamped when the row is stored. Its usage rows are filed under that
+   * conversation, so the log links there instead of to `gateway:<sessionId>`.
+   */
+  conversationId?: string | null
   at: string
   route: string
   remoteIp: string

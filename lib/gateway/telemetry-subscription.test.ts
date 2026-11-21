@@ -3,6 +3,7 @@ import { forwardGatewayOutcome } from "./telemetry-forwarder"
 import { installGatewayTelemetrySubscription } from "./telemetry-subscription"
 import type { Transport } from "@/lib/tauri/transport-types"
 import { GATEWAY_REQUEST_LOG_EVENT, GATEWAY_REQUEST_OUTCOME_EVENT } from "@/types/gateway"
+import { registerGatewayTaskAttribution, resetGatewayTaskAttributions } from "./task-attribution"
 
 jest.mock("@/lib/db/gateway-request-log", () => ({
   appendGatewayRequestLog: jest.fn(async () => {}),
@@ -27,7 +28,26 @@ async function settle() {
   for (let tick = 0; tick < 5; tick++) await Promise.resolve()
 }
 
-beforeEach(() => jest.clearAllMocks())
+beforeEach(() => {
+  jest.clearAllMocks()
+  resetGatewayTaskAttributions()
+})
+
+it("stores a task's request with the conversation it ran for (F02)", () => {
+  const { transport, handlers } = source()
+  const stop = installGatewayTelemetrySubscription(transport, { acceptsEvent: () => true })
+  registerGatewayTaskAttribution("task-1", { chatSessionId: "chat-1" })
+  handlers.get(GATEWAY_REQUEST_LOG_EVENT)!({ ...event, id: "r1", sessionId: "task-1" })
+  handlers.get(GATEWAY_REQUEST_LOG_EVENT)!({ ...event, id: "r2", sessionId: "affinity" })
+  expect(appendGatewayRequestLog).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({ id: "r1", conversationId: "chat-1" })
+  )
+  expect(jest.mocked(appendGatewayRequestLog).mock.calls[1]![0]).not.toHaveProperty(
+    "conversationId"
+  )
+  stop()
+})
 
 it("delivers once per event when two desktop/runtime owners overlap", () => {
   const { transport, subscribe, handlers, stopped } = source()

@@ -80,7 +80,10 @@ function requestLogPredicate(filter: GatewayRequestLogFilter) {
 
 export interface GatewayRequestSessionGroup {
   sessionId: string | null
-  /** Same grouping key written by forwardGatewayOutcome into sessionUsage. */
+  /**
+   * Same grouping key forwardGatewayOutcome wrote into sessionUsage: the
+   * conversation an external agent's task ran for, else `gateway:<sessionId>`.
+   */
   usageSessionId: string | null
   rows: GatewayRequestLogRow[]
 }
@@ -97,6 +100,8 @@ export function groupGatewayRequestsBySession(
       group = { sessionId, usageSessionId: sessionId ? `gateway:${sessionId}` : null, rows: [] }
       groups.set(sessionId, group)
     }
+    // A task's requests are its conversation's spend and booked there (F02).
+    if (row.conversationId) group.usageSessionId = row.conversationId
     group.rows.push(row)
   }
   return [...groups.values()]

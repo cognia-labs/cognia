@@ -72,18 +72,15 @@ export async function upsertSessionUsage(row: SessionUsageRow): Promise<void> {
 }
 
 /**
- * Who paid for an external agent's turn, which decides what its row books:
+ * Who paid for an external agent's turn, which decides what is booked:
  *
  * - `cognia`: the agent ran on a Cognia model through the gateway, which
- *   books every request it served (`surface: "gateway"`, priced, in the
- *   conversation's workspace). This row keeps the agent's token accounting
- *   and books no money and no provider, or the spend would count twice.
+ *   books every request it served (`surface: "gateway"`, priced, filed under
+ *   the conversation and its workspace). The turn books no row of its own, or
+ *   its tokens would count twice; the message keeps the agent's accounting.
  * - `agent`: the agent ran on its own account or subscription. Cognia paid
  *   nothing, so the row is external spend (`imported`), like a scanned
  *   transcript: shown with external tools, never in a Cognia budget.
- *
- * Absent for a turn whose payer the caller settles itself (the Host's member
- * runs price it at the deployment's rate).
  */
 export type ExternalAgentUsagePayer = "cognia" | "agent"
 
@@ -97,18 +94,22 @@ export function externalAgentUsageRow(args: {
   providerId?: string
   /** Owning workspace, for per-workspace spend (ADR-0204). */
   projectId?: string
-  payer?: ExternalAgentUsagePayer
+  /**
+   * Spend the agent's own account paid (an `agent` payer): external, never in
+   * a Cognia budget. Absent for a turn Cognia paid and the caller prices
+   * itself (the Host's member runs, at the deployment's rate).
+   */
+  paidElsewhere?: boolean
   durationMs?: number
   at?: number
 }): SessionUsageRow {
   const usage = externalTokenUsageToUsageInfo(args.usage)
-  const tokensOnly = args.payer === "cognia"
-  const costKnown = tokensOnly || usage.totalCostUsd !== undefined
+  const costKnown = usage.totalCostUsd !== undefined
   return {
     sessionId: args.sessionId,
     messageId: args.messageId,
     model: args.model,
-    ...(args.providerId && !tokensOnly ? { providerId: args.providerId } : {}),
+    ...(args.providerId ? { providerId: args.providerId } : {}),
     ...(args.projectId ? { projectId: args.projectId } : {}),
     at: args.at ?? Date.now(),
     inputTokens: usage.inputTokens ?? 0,
@@ -116,23 +117,28 @@ export function externalAgentUsageRow(args: {
     cacheReadTokens: usage.cacheReadInputTokens ?? 0,
     cacheCreationTokens: usage.cacheCreationInputTokens ?? 0,
     reasoningTokens: usage.reasoningTokens,
-    costUsd: tokensOnly ? 0 : (usage.totalCostUsd ?? 0),
+    costUsd: usage.totalCostUsd ?? 0,
     costKnown,
-    // `derived` at zero: the ledger settled this row at nothing because the
-    // gateway's rows hold the money. `sdk` only when the agent reported one.
-    costSource: tokensOnly ? "derived" : costKnown ? "sdk" : "unknown",
+    costSource: costKnown ? "sdk" : "unknown",
     durationMs: args.durationMs ?? 0,
     surface: "chat",
     usageBasis: "provider-reported",
-    ...(args.payer === "agent" ? { imported: true } : {}),
+    ...(args.paidElsewhere ? { imported: true } : {}),
   }
 }
 
-/** Persist the same reported accounting attached to an external assistant turn. */
+/**
+ * Book an interactive external agent turn by who paid it (F02). A turn on a
+ * Cognia model books nothing here: the gateway's rows are its spend.
+ */
 export async function recordExternalAgentUsage(
-  args: Parameters<typeof externalAgentUsageRow>[0]
+  args: Omit<Parameters<typeof externalAgentUsageRow>[0], "paidElsewhere"> & {
+    payer: ExternalAgentUsagePayer
+  }
 ): Promise<void> {
-  await upsertSessionUsage(externalAgentUsageRow(args))
+  if (args.payer === "cognia") return
+  const { payer: _payer, ...row } = args
+  await upsertSessionUsage(externalAgentUsageRow({ ...row, paidElsewhere: true }))
 }
 
 /**

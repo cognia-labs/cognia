@@ -12,6 +12,7 @@ import {
   type GatewayRequestLogRow,
   type GatewayRequestOutcome,
 } from "@/types/gateway"
+import { gatewayTaskConversation } from "./task-attribution"
 import { forwardGatewayOutcome } from "./telemetry-forwarder"
 
 type EventTransport = Pick<Transport, "subscribe">
@@ -85,7 +86,10 @@ export function installGatewayTelemetrySubscription(
       stopLog = transport.subscribe<GatewayRequestLogRow>(GATEWAY_REQUEST_LOG_EVENT, (row) => {
         if (!row || typeof row !== "object" || Array.isArray(row)) return
         deliver(owners, row, () => {
-          void appendGatewayRequestLog(row).catch(() => {})
+          const conversationId = gatewayTaskConversation(row.sessionId)
+          void appendGatewayRequestLog(conversationId ? { ...row, conversationId } : row).catch(
+            () => {}
+          )
         })
       })
     } catch (error) {

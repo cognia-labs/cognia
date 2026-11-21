@@ -207,10 +207,17 @@ describe("forwardGatewayOutcome", () => {
       requestId: "b",
     })
     await settle()
-    const usages = (recordSurfaceUsage as jest.Mock).mock.calls.map(([args]) => args.usage)
-    expect(usages).toEqual([
-      expect.objectContaining({ projectId: "proj-1", providerId: "openai" }),
-      expect.objectContaining({ projectId: "proj-1", providerId: "openai" }),
+    const calls = (recordSurfaceUsage as jest.Mock).mock.calls.map(([args]) => args)
+    // Filed under the conversation: the only record of this spend.
+    expect(calls).toEqual([
+      expect.objectContaining({
+        sessionId: "chat-1",
+        usage: expect.objectContaining({ projectId: "proj-1", providerId: "openai" }),
+      }),
+      expect.objectContaining({
+        sessionId: "chat-1",
+        usage: expect.objectContaining({ projectId: "proj-1", providerId: "openai" }),
+      }),
     ])
   })
 
@@ -219,6 +226,7 @@ describe("forwardGatewayOutcome", () => {
     await settle()
     const [[args]] = (recordSurfaceUsage as jest.Mock).mock.calls
     expect(args.usage).not.toHaveProperty("projectId")
+    expect(args).not.toHaveProperty("sessionId")
   })
 
   it("drops the write when another account opened before it landed (F27)", async () => {
