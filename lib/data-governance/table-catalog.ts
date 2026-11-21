@@ -458,7 +458,6 @@ export const CORE_TABLE_NAMES = [
   "workflowReviews",
   "workflowRunEvents",
   "workflowRuns",
-  "workflowTriggers",
   "workflowVersions",
   "workflowViewportBookmarks",
   "workflowWaitEvents",

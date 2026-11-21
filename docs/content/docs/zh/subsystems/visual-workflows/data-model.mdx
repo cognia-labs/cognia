@@ -190,14 +190,13 @@ if (cycleNodes.size > 0) {
 
 ## Dexie 表
 
-13 张工作流表覆盖 v22 的原始图/运行存储、v148 的 immutable deployment control plane，以及 v156 的 durable waitpoint store。合并后的索引与兼容升级以 `lib/db/schema.ts` 为准。
+12 张工作流表覆盖 v22 的原始图/运行存储、v148 的 immutable deployment control plane，以及 v156 的 durable waitpoint store。合并后的索引与兼容升级以 `lib/db/schema.ts` 为准。
 
 | 表 | 版本 | 索引串 |
 | --- | --- | --- |
 | `workflows` | v22（v52 重新声明） | `&id, name, updatedAt, createdAt, isBuiltIn, isTemplate, *tags, schemaVersion[, folderId @v52]` |
 | `workflowRuns` | v22 | `&id, workflowId, status, startedAt, completedAt, [workflowId+startedAt], [workflowId+status]` |
 | `workflowRunEvents` | v22 | `&id, runId, [runId+ts], stepId, [runId+stepId], type` |
-| `workflowTriggers` | v22 | `&id, workflowId, kind, enabled, [workflowId+enabled], cron, nextFireAt` |
 | `workflowViewportBookmarks` | v35 | `&id, workflowId, [workflowId+createdAt]` |
 | `workflowProposalHistory` | v42 | `&id, workflowId, createdAt, [workflowId+createdAt]` |
 | `workflowFolders` | v52 | `&id, name, parentFolderId, [parentFolderId+name], updatedAt, createdAt` |
@@ -214,9 +213,11 @@ this.version(22).stores({
   workflows: "&id, name, updatedAt, createdAt, isBuiltIn, isTemplate, *tags, schemaVersion",
   workflowRuns: "&id, workflowId, status, startedAt, completedAt, [workflowId+startedAt], [workflowId+status]",
   workflowRunEvents: "&id, runId, [runId+ts], stepId, [runId+stepId], type",
-  workflowTriggers: "&id, workflowId, kind, enabled, [workflowId+enabled], cron, nextFireAt",
+  workflowTriggers: "&id, workflowId, kind, enabled, [workflowId+enabled], cron, nextFireAt", // v260 已删除
 })
 ```
+
+`workflowTriggers` 已在 v260 删除：触发器从已发布版本自身的节点读取（触发器索引、cron 守护进程与 Scheduler 列表），草稿修改不会改变实际触发的内容。
 
 IndexedDB 的注意事项塑造了这些索引：布尔值不可靠地可索引，因此 `isTemplate` 的过滤在内存中完成；`folderId` 使用 `"root"` 哨兵而非 `null`。
 

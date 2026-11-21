@@ -81,6 +81,11 @@ Four new Dexie tables added in `lib/db/schema.ts` v22:
 | `workflowRunEvents` | `id` | Durable per-step event log; live-queried by editor/UI  |
 | `workflowTriggers`  | `id` | Registered triggers (cron, webhook, inbound, chat-msg) |
 
+> **Amendment (v260).** `workflowTriggers` was dropped in Dexie v260 together with its
+> `WorkflowTriggerRow` type. Triggers are read from the published version's own nodes (the trigger
+> index, the cron daemon and the Scheduler list), and the table's last writer, the Scheduler
+> quick-add, now edits the draft graph.
+
 Indexes: `[workflowId+startedAt]` for the run timeline; `[runId+ts]` for in-order event playback;
 `[workflowId+enabled]` for the trigger-pane lookup.
 

@@ -491,7 +491,6 @@ export function ExposeTestGlobals(): null {
           const db = getDb()
           await db.workflows.clear()
           await db.workflowRuns.clear()
-          await db.workflowTriggers.clear()
           await db.workflowRunEvents.clear().catch(() => undefined)
           await db.characters.clear().catch(() => undefined)
           await db.teams.clear().catch(() => undefined)

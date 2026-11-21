@@ -46,7 +46,7 @@ describe("OriginSection", () => {
       <OriginSection
         item={item({
           kind: "workflow",
-          origin: { tableName: "workflowTriggers", deepLinkHref: "/workflows/editor?id=w1" },
+          origin: { deepLinkHref: "/workflows/editor?id=w1" },
         })}
       />
     )

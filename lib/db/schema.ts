@@ -186,12 +186,7 @@ import type { BrowserSubmissionRow } from "./browser-submissions-types"
 import type { SftpTransferRow } from "@/lib/sftp/transfer-types"
 import type { ThreadHandoffTicket } from "@cognia/agent-config-types/thread-handoff"
 import type { GithubIssueMirrorRow } from "./github-issue-mirror-types"
-import type {
-  WorkflowRow,
-  WorkflowRunRow,
-  WorkflowRunEventRow,
-  WorkflowTriggerRow,
-} from "@/types/workflow/visual"
+import type { WorkflowRow, WorkflowRunRow, WorkflowRunEventRow } from "@/types/workflow/visual"
 import type { WorkflowWaitEvent, WorkflowWaitpoint } from "@/types/workflow/waitpoint"
 import type {
   WorkflowHumanInputFileRow,
@@ -439,7 +434,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 259
+export const CURRENT_SCHEMA_VERSION = 260
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1117,6 +1112,10 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   // (`lib/db/plugin-data-snapshots.ts`, `lib/plugin/dexie/data-snapshots.ts`).
   pluginDataSnapshots: "&id, pluginId",
   pluginDataSnapshotRows: "[snapshotId+table+chunk], snapshotId",
+  // v260 drops `workflowTriggers`: triggers are read from the published
+  // version's own nodes (trigger index, cron daemon, Scheduler list), and the
+  // table's last writer, the Scheduler quick-add, now edits the draft graph.
+  workflowTriggers: null,
   // v259 — Squad delegations parked for an approval, their texts through the
   // PII gate, so a restart can still approve them
   // (`lib/db/squad-parked-delegations.ts`, `lib/squads/delegation-orchestrator.ts`).
@@ -1344,15 +1343,13 @@ export class CogniaDB extends Dexie {
   // v22 — Visual workflows subsystem (n8n-style). The `workflows` table holds
   // user-authored definitions; `workflowRuns` is one row per execution with
   // a frozen snapshot of the def at run start; `workflowRunEvents` is the
-  // durable per-step event log live-queried by the editor + Runs UI;
-  // `workflowTriggers` holds registered triggers (cron, webhook, inbound,
-  // chat-message, ...) that wake workflows. Run-state mirroring for crash
-  // recovery happens in a separate SQLite DB managed by Rust — Dexie is the
-  // source of truth for definitions and the event log.
+  // durable per-step event log live-queried by the editor + Runs UI.
+  // Run-state mirroring for crash recovery happens in a separate SQLite DB
+  // managed by Rust — Dexie is the source of truth for definitions and the
+  // event log.
   workflows!: Table<WorkflowRow, string>
   workflowRuns!: Table<WorkflowRunRow, string>
   workflowRunEvents!: Table<WorkflowRunEventRow, string>
-  workflowTriggers!: Table<WorkflowTriggerRow, string>
   // v148 — Immutable workflow publication control plane.
   workflowVersions!: Table<WorkflowVersion, string>
   workflowDeployments!: Table<WorkflowDeployment, string>

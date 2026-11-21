@@ -190,14 +190,13 @@ if (cycleNodes.size > 0) {
 
 ## Dexie tables
 
-Thirteen workflow tables span the original v22 graph/run storage through the v148 immutable deployment control plane and v156 durable waitpoint store. `lib/db/schema.ts` is authoritative for the merged index definitions and compatibility upgrades.
+Twelve workflow tables span the original v22 graph/run storage through the v148 immutable deployment control plane and v156 durable waitpoint store. `lib/db/schema.ts` is authoritative for the merged index definitions and compatibility upgrades.
 
 | Table | Version | Index string |
 | --- | --- | --- |
 | `workflows` | v22 (re-declared v52) | `&id, name, updatedAt, createdAt, isBuiltIn, isTemplate, *tags, schemaVersion[, folderId @v52]` |
 | `workflowRuns` | v22 | `&id, workflowId, status, startedAt, completedAt, [workflowId+startedAt], [workflowId+status]` |
 | `workflowRunEvents` | v22 | `&id, runId, [runId+ts], stepId, [runId+stepId], type` |
-| `workflowTriggers` | v22 | `&id, workflowId, kind, enabled, [workflowId+enabled], cron, nextFireAt` |
 | `workflowViewportBookmarks` | v35 | `&id, workflowId, [workflowId+createdAt]` |
 | `workflowProposalHistory` | v42 | `&id, workflowId, createdAt, [workflowId+createdAt]` |
 | `workflowFolders` | v52 | `&id, name, parentFolderId, [parentFolderId+name], updatedAt, createdAt` |
@@ -214,9 +213,11 @@ this.version(22).stores({
   workflows: "&id, name, updatedAt, createdAt, isBuiltIn, isTemplate, *tags, schemaVersion",
   workflowRuns: "&id, workflowId, status, startedAt, completedAt, [workflowId+startedAt], [workflowId+status]",
   workflowRunEvents: "&id, runId, [runId+ts], stepId, [runId+stepId], type",
-  workflowTriggers: "&id, workflowId, kind, enabled, [workflowId+enabled], cron, nextFireAt",
+  workflowTriggers: "&id, workflowId, kind, enabled, [workflowId+enabled], cron, nextFireAt", // dropped in v260
 })
 ```
+
+`workflowTriggers` was dropped in v260: triggers are read from the published version's own nodes (the trigger index, the cron daemon and the Scheduler list), so a draft edit never changes what fires.
 
 IndexedDB caveats shape these indexes: booleans are not reliably indexable, so `isTemplate` filtering is done in memory, and `folderId` uses the `"root"` sentinel rather than `null`.
 

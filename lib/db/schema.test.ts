@@ -36,6 +36,30 @@ import {
 } from "./schema"
 import type { OutboundJobRow } from "./connector-types"
 
+it("v260 drops the unused workflowTriggers store without touching the workflow tables", async () => {
+  expect(CURRENT_SCHEMA_VERSION).toBe(260)
+  const name = "cognia-workflow-triggers-v260-drop"
+  const previous = new Dexie(name)
+  previous.version(259).stores({
+    ...CURRENT_SCHEMA,
+    workflowTriggers: "&id, workflowId, kind, enabled, [workflowId+enabled], cron, nextFireAt",
+  })
+  await previous.open()
+  await previous.table("workflowTriggers").put({ id: "t1", workflowId: "w1", kind: "trigger.cron" })
+  await previous.table("workflows").put({ id: "w1", name: "kept", updatedAt: 1, createdAt: 1 })
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(260)
+    expect(current.tables.map((table) => table.name)).not.toContain("workflowTriggers")
+    expect(await current.workflows.get("w1")).toMatchObject({ name: "kept" })
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v259 adds an empty parked-delegation store without changing the stores before it", async () => {
   expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(259)
   const name = "cognia-squad-parked-delegations-v259-upgrade"

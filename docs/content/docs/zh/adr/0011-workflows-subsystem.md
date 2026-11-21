@@ -66,6 +66,8 @@ cognia-next 拥有丰富的运行时实体——角色（Characters）、智能�
 | `workflowRunEvents` | `id` | 耐久的逐步事件日志；由编辑器 / UI 响应式查询           |
 | `workflowTriggers`  | `id` | 已注册的触发器（cron、webhook、inbound、chat-msg）     |
 
+> **修订（v260）。** `workflowTriggers` 与其类型 `WorkflowTriggerRow` 已在 Dexie v260 删除。触发器从已发布版本自身的节点读取（触发器索引、cron 守护进程与 Scheduler 列表），这张表最后的写入方 Scheduler 快捷新增现在改的是草稿图。
+
 索引：`[workflowId+startedAt]` 用于运行时间线；`[runId+ts]` 用于按序事件回放；`[workflowId+enabled]` 用于触发器面板查找。
 
 ### 类型模型

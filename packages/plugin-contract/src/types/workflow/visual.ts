@@ -13,7 +13,6 @@
  *   • `workflows`         — visual workflow definitions (graph + settings)
  *   • `workflowRuns`      — one row per execution (status, frozen snapshot)
  *   • `workflowRunEvents` — durable per-step event log (live-queried by UI)
- *   • `workflowTriggers`  — registered triggers (cron, webhook, inbound, ...)
  *   • `workflowVersions` / `workflowDeployments` / `workflowInvocations`
  *                         — immutable production authority and admission ledger
  *   • `workflowWaitpoints` / `workflowWaitEvents`
@@ -1332,24 +1331,6 @@ export interface WorkflowRunEventRow {
   stepId?: string
   level?: RunEventLogLevel
   payload?: unknown
-}
-
-export interface WorkflowTriggerRow {
-  id: string
-  workflowId: string
-  kind: WorkflowNodeKind
-  enabled: boolean
-  /** Cron expression (only meaningful for `trigger.cron`). */
-  cron?: string
-  /** IANA timezone used for cron wall-clock evaluation; absent means host local. */
-  timezone?: string
-  /** Pre-computed next-fire timestamp (used by the editor preview). */
-  nextFireAt?: number
-  /** Webhook path or connector binding (kind-dependent). */
-  webhookPath?: string
-  binding?: WorkflowTriggerBinding
-  createdAt: number
-  updatedAt: number
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

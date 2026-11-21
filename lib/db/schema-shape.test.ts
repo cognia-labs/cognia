@@ -65,7 +65,14 @@ it("keeps dropped tables as null keys and out of the database", () => {
   // whose primary key changed, so encrypting the pet's talk history (which
   // needs a key that exists before the write) had to drop the `++id` store and
   // create `petConversationV2` beside it.
-  expect(dropped).toEqual(["pluginScheduledJobs", "syncCursors", "petConversation"])
+  // `workflowTriggers` joined them in v260: triggers are read from the
+  // published version, and nothing writes the table any more.
+  expect(dropped).toEqual([
+    "pluginScheduledJobs",
+    "workflowTriggers",
+    "syncCursors",
+    "petConversation",
+  ])
 
   const db = new CogniaDB("schema-shape-dropped")
   for (const name of dropped) expect(tableNames(db)).not.toContain(name)

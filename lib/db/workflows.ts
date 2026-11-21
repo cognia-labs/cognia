@@ -2,8 +2,8 @@
  * Visual workflow CRUD — mirrors `lib/db/characters.ts` shape so callers find
  * the same `list / get / create / update / delete / duplicate / seed` API.
  *
- * The runtime tables (`workflowRuns`, `workflowRunEvents`, `workflowTriggers`)
- * have their own modules to keep this file focused on definitions.
+ * The runtime tables (`workflowRuns`, `workflowRunEvents`) have their own
+ * modules to keep this file focused on definitions.
  */
 
 import Dexie from "dexie"

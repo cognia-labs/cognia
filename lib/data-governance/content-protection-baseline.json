@@ -393,7 +393,6 @@
   "workflowReviews": "metadata-only",
   "workflowRunEvents": "encrypted-content",
   "workflowRuns": "encrypted-content",
-  "workflowTriggers": "metadata-only",
   "workflowVersions": "encrypted-content",
   "workflowViewportBookmarks": "metadata-only",
   "workflowWaitEvents": "metadata-only",

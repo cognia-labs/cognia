@@ -77,7 +77,6 @@ flowchart TB
     Workflows[(workflows)]
     Runs[(workflowRuns<br/>includes frozen snapshot)]
     Events[(workflowRunEvents<br/>persistent event log)]
-    Triggers[(workflowTriggers)]
     Versions[(workflowVersions<br/>workflowDeployments<br/>workflowInvocations)]
     Waitpoints[(workflowWaitpoints<br/>workflowWaitEvents)]
   end
@@ -116,7 +115,7 @@ flowchart TB
   classDef ui fill:#312e81,stroke:#818cf8,color:#e0e7ff
   class Cron,Webhook,Mirror,Commands rust
   class Editor,Authority,Orchestrator,Registry,BuiltIns,Bridge,WebhookBridge ts
-  class Workflows,Runs,Events,Triggers,Versions,Waitpoints storage
+  class Workflows,Runs,Events,Versions,Waitpoints storage
   class Canvas,Library,Runs2,Settings ui
 ```
 
@@ -255,7 +254,6 @@ Every state transition appends a row to `workflowRunEvents` via `event-log.ts:Ru
 | `workflows`         | `id`        | —                        | Workflow definition (graph + settings + viewport)                                                                     |
 | `workflowRuns`      | `id`        | `[workflowId+startedAt]` | One row per execution; frozen snapshot supports inspection/debug, while formal retries use the immutable execution binding |
 | `workflowRunEvents` | `id`        | `[runId+ts]`             | Per-step event log; replayed in chronological order                                                                   |
-| `workflowTriggers`  | `id`        | `[workflowId+enabled]`   | Registered triggers (cron / webhook / inbound / chat-msg)                                                             |
 | `workflowVersions` | `id` | `[workflowId+sequence]` | Immutable published artifact |
 | `workflowDeployments` | `id` | `[workflowId+environment]` | Production pointer, revision, and active/disabled state |
 | `workflowInvocations` | `id` | deployment / version / status | Formal admission, caller, idempotency, dependency lock, and retry provenance |

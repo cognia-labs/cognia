@@ -51,7 +51,6 @@ flowchart TB
     Workflows[(workflows)]
     Runs[(workflowRuns<br/>含 frozen snapshot)]
     Events[(workflowRunEvents<br/>持久事件日志)]
-    Triggers[(workflowTriggers)]
     Versions[(workflowVersions<br/>workflowDeployments<br/>workflowInvocations)]
     Waitpoints[(workflowWaitpoints<br/>workflowWaitEvents)]
   end
@@ -90,7 +89,7 @@ flowchart TB
   classDef ui fill:#312e81,stroke:#818cf8,color:#e0e7ff
   class Cron,Webhook,Mirror,Commands rust
   class Editor,Authority,Orchestrator,Registry,BuiltIns,Bridge,WebhookBridge ts
-  class Workflows,Runs,Events,Triggers,Versions,Waitpoints storage
+  class Workflows,Runs,Events,Versions,Waitpoints storage
   class Canvas,Library,Runs2,Settings ui
 ```
 
@@ -229,7 +228,6 @@ stateDiagram-v2
 | `workflows`         | `id` | -                        | 工作流定义（图 + settings + viewport）                                        |
 | `workflowRuns`      | `id` | `[workflowId+startedAt]` | 每次执行一行；冻结 snapshot 用于查看/调试，正式重试使用 immutable execution binding |
 | `workflowRunEvents` | `id` | `[runId+ts]`             | 每步事件日志；按时间排序回放                                                  |
-| `workflowTriggers`  | `id` | `[workflowId+enabled]`   | 已注册触发器（cron / webhook / inbound / chat-msg）                           |
 | `workflowVersions` | `id` | `[workflowId+sequence]` | 不可变发布 artifact |
 | `workflowDeployments` | `id` | `[workflowId+environment]` | production pointer、revision 与 active/disabled 状态 |
 | `workflowInvocations` | `id` | deployment / version / status | 正式 admission、caller、idempotency、dependency lock 与 retry provenance |

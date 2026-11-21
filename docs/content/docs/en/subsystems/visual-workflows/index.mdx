@@ -70,7 +70,6 @@ flowchart TB
     Workflows[(workflows)]
     Runs[(workflowRuns<br/>frozen snapshot)]
     Events[(workflowRunEvents<br/>append-only log)]
-    Triggers[(workflowTriggers)]
     Aux[(versions · deployments · invocations<br/>waitpoints · waitEvents<br/>folders · fanout · bookmarks · proposals)]
   end
 
@@ -104,7 +103,7 @@ flowchart TB
   classDef ui fill:#312e81,stroke:#818cf8,color:#e0e7ff
   class Cron,Webhook,Mirror,Commands,Emitter rust
   class Editor,Orchestrator,Registry,BuiltIns,TriggerBridge,WebhookBridge,Resume ts
-  class Workflows,Runs,Events,Triggers,Aux storage
+  class Workflows,Runs,Events,Aux storage
   class Canvas,Library,Runs2 ui
 ```
 

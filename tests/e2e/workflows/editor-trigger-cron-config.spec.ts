@@ -1,7 +1,10 @@
 /**
- * E2E: configure a trigger.cron node and assert workflowTriggers gets a row
- * on save (web mode persists the trigger metadata; firing requires Tauri
- * scheduler).
+ * E2E: configure a trigger.cron node and assert the saved draft carries it.
+ *
+ * The draft graph is the only store a trigger lives in: the native cron
+ * daemon and the Scheduler list read the published version's own nodes, so
+ * there is no separate trigger table to check (firing requires the Tauri
+ * scheduler and a publish).
  */
 
 import { expect, test } from "@/tests/e2e/fixtures/test"
@@ -14,7 +17,7 @@ test.describe("workflow editor — trigger.cron config", () => {
     await resetCogniaDb(page)
   })
 
-  test("adding trigger.cron + saving creates a workflowTriggers row", async ({ page }) => {
+  test("adding trigger.cron + saving persists its expression in the draft", async ({ page }) => {
     const id = await seedAndOpenWorkflow(page, "manual-ai")
 
     // Drop a trigger.cron node onto the canvas via the sidebar click affordance.
@@ -24,9 +27,7 @@ test.describe("workflow editor — trigger.cron config", () => {
     // Open the inspector for the new node + configure the cron expression.
     await page.getByTestId("wf-node-trigger.cron").first().click()
     await expect(page.getByTestId("workflow-inspector")).toBeVisible()
-    // Inspector forms expose form fields by label/id; cron schema typically
-    // exposes a `schedule` or `expression` field. Be tolerant of either name.
-    const cronInput = page.locator("input[name='schedule'], input[name='expression']").first()
+    const cronInput = page.locator("#cron-expr")
     await expect(cronInput).toBeVisible()
     await cronInput.fill("*/5 * * * *")
 
@@ -34,11 +35,13 @@ test.describe("workflow editor — trigger.cron config", () => {
     await page.getByTestId("workflow-save").click()
     await expect(page.getByTestId("workflow-save")).toBeDisabled({ timeout: 10_000 })
 
-    // workflowTriggers should have a row pointing at this workflow.
-    const triggerCount = await page.evaluate(async (workflowId: string) => {
+    const crons = await page.evaluate(async (workflowId: string) => {
       const { getDb } = await import("@/lib/db/schema")
-      return getDb().workflowTriggers.where("workflowId").equals(workflowId).count()
+      const row = await getDb().workflows.get(workflowId)
+      return (row?.nodes ?? [])
+        .filter((node) => node.type === "trigger.cron")
+        .map((node) => (node.data.params as { cron?: string }).cron)
     }, id)
-    expect(triggerCount).toBeGreaterThanOrEqual(1)
+    expect(crons).toEqual(["*/5 * * * *"])
   })
 })
