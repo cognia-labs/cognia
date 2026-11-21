@@ -3,6 +3,9 @@
  */
 import type { PromptGroup, PromptVariableSpec } from "./types"
 
+/** A scope a user may override a plugin prompt at. */
+export type PluginPromptScope = "account" | "workspace"
+
 /** What a plugin declares for one prompt. */
 export interface PluginPromptDeclaration {
   /** Unique within the plugin. */
@@ -20,4 +23,12 @@ export interface PluginPromptDeclaration {
   maxChars?: number
   /** Where the entry is grouped; `agents` when omitted. */
   group?: PromptGroup
+  /**
+   * Where a user may override it, as a subset of what the host offers (the
+   * account and a workspace). Declare `["account"]` for a prompt you resolve
+   * without a `sessionId`: a workspace override is only applied for a chat's
+   * session, so without one it could never take effect. It can only remove
+   * scopes; naming one the host does not offer fails the registration.
+   */
+  scopes?: readonly PluginPromptScope[]
 }

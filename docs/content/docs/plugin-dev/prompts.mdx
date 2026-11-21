@@ -48,7 +48,9 @@ async function outline(ctx: PluginContext, topic: string, sessionId?: string) {
 - `resolve` returns `{ text, source }`: the user's published override for the
   chat's workspace (pass `sessionId`) or for their account, else your
   `defaultBody`. `{{name}}` placeholders are filled from `values`, each value
-  clipped to its `maxChars`.
+  clipped to its `maxChars`. Without a `sessionId` only the account override
+  applies, so declare `scopes: ["account"]` for a prompt you never resolve for a
+  chat (see below).
 
 You can only declare and resolve ids under your own namespace. Neither method
 needs a permission: the text goes nowhere until you send it through a gated API
@@ -69,11 +71,13 @@ else.
 | `contractVersion`   | Bump it when variables, fragments or the output contract change; older overrides stop applying.     |
 | `maxChars`          | Budget for a body, at most 32,000.                                                                  |
 | `group`             | Where the slot is listed; `agents` when omitted.                                                    |
+| `scopes`            | Where a user may override it: `["account", "workspace"]` when omitted. Narrow it to `["account"]` when you resolve without a `sessionId`. |
 
 The host assigns everything that carries authority: the slot is an ordinary
 template, overridable for the account or a workspace, used from the next call.
 A plugin cannot mark its prompt as protocol or approval-sensitive, and cannot
-widen where it applies.
+widen where it applies. `scopes` can only remove a scope; naming one the host
+does not offer fails the registration.
 
 ## Safety and fallback
 

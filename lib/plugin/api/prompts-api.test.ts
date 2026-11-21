@@ -97,6 +97,23 @@ describe("ctx.prompts", () => {
     })
   })
 
+  it("offers only the account scope for a prompt declared account-only", async () => {
+    const prompts = createPromptsAPI("cognia-repowiki")
+    prompts.register([{ ...OUTLINE, scopes: ["account"] }])
+    const id = pluginPromptId("cognia-repowiki", "outline")
+    expect(getPluginPromptEntry(id)!.def.scopes).toEqual(["account"])
+
+    // The Prompt Center has nowhere to put a workspace override for it.
+    await expect(
+      publish(id, { scope: "workspace", targetId: "ws-1" }, "Workspace: a report on {{topic}}.")
+    ).rejects.toThrow("cannot be overridden at the workspace scope")
+    await publish(id, { scope: "account", targetId: "" }, "Account: plan a report on {{topic}}.")
+    await expect(prompts.resolve("outline", { values: { topic: "AI" } })).resolves.toEqual({
+      text: "Account: plan a report on AI.",
+      source: "override",
+    })
+  })
+
   it("never resolves another plugin's prompt or an unregistered one", async () => {
     createPromptsAPI("deep-research").register([OUTLINE])
     const other = createPromptsAPI("other-plugin")

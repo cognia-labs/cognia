@@ -80,6 +80,50 @@ describe("pluginPromptDefinition", () => {
     expect(def.maxChars).toBe(PLUGIN_PROMPT_MAX_CHARS)
   })
 
+  // A prompt resolved without a session would offer a workspace override that
+  // never applies; the declaration removes that scope instead.
+  it("lets a declaration narrow the scopes the host offers", () => {
+    const base = { id: "x", title: "X", defaultBody: "Body." }
+    expect(pluginPromptDefinition("p", { ...base, scopes: ["account"] }, CONSUMER).scopes).toEqual([
+      "account",
+    ])
+    expect(
+      pluginPromptDefinition("p", { ...base, scopes: ["workspace", "account"] }, CONSUMER).scopes
+    ).toEqual(["account", "workspace"])
+    expect(pluginPromptDefinition("p", base, CONSUMER).scopes).toEqual(["account", "workspace"])
+  })
+
+  it.each([
+    ["no scope at all", [], undefined, "at least one scope"],
+    ["a repeated scope", ["account", "account"], undefined, "repeat a scope"],
+    ["an unknown scope", ["session"], undefined, 'unknown scope "session"'],
+    ["a scope the host does not offer", ["workspace"], ["account"], 'ask for "workspace"'],
+  ] as const)("refuses a declaration naming %s", (_label, scopes, offered, message) => {
+    expect(() =>
+      pluginPromptDefinition(
+        "p",
+        { id: "x", title: "X", defaultBody: "Body.", scopes: scopes as never },
+        CONSUMER,
+        offered ? { scopes: offered } : {}
+      )
+    ).toThrow(message)
+  })
+
+  it("registers none of a batch when one declaration widens its scopes", () => {
+    expect(() =>
+      registerPluginPrompts(
+        "p",
+        [
+          { id: "a", title: "A", defaultBody: "Body." },
+          { id: "b", title: "B", defaultBody: "Body.", scopes: ["workspace"] },
+        ],
+        CONSUMER,
+        { scopes: ["account"] }
+      )
+    ).toThrow('ask for "workspace"')
+    expect(getPluginPromptEntry(pluginPromptId("p", "a"))).toBeUndefined()
+  })
+
   it.each([
     ["an invalid id", { id: "a/b", title: "T", defaultBody: "Body." }, "invalid prompt id"],
     ["an empty title", { id: "a", title: " ", defaultBody: "Body." }, "needs a title"],

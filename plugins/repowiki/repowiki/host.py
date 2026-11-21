@@ -226,6 +226,9 @@ def prompt_declarations(labels: dict[str, str] | None = None) -> list[dict[str, 
             "defaultBody": prompt.default,
             "group": "knowledge",
             "maxChars": PROMPT_MAX_CHARS,
+            # Tool calls carry no chat session, so `resolve` can never name a
+            # workspace: a workspace override would never apply.
+            "scopes": ["account"],
             "outputContract": " ".join(contract),
         }
         if prompt.required_fragments:

@@ -99,6 +99,9 @@ Python):
     fragments, contract version and budget.
   - The host assigns scope, activation and risk, and refuses a default that
     fails its own contract.
+  - A declaration may narrow the scopes (`scopes: ["account"]`), never widen
+    them. A prompt the plugin resolves without a session declares the account
+    only, since a workspace override would never apply (amended 2026-11-21).
 - `resolve` returns the user's override for the session's workspace or the
   account, else the default. A plugin can only reach its own namespace.
 

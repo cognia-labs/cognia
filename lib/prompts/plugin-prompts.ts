@@ -13,7 +13,7 @@
  * fragments it parses against, a budget); the authority fields are assigned
  * here, never taken from the plugin: an ordinary replace-template entry,
  * overridable for the account or a workspace, used from the next call, on the
- * app host. An override outlives its plugin; while the plugin is gone the
+ * app host. A declaration may only narrow the scopes, never widen them. An override outlives its plugin; while the plugin is gone the
  * Prompt Center lists it as unavailable rather than dropping the user's text.
  *
  * This module stays a leaf (the definition helpers only), so the catalog can
@@ -22,8 +22,14 @@
 
 import { validatePromptBody } from "./template"
 import { definePrompt, type PromptDefinitionV1 } from "./types"
-import type { PluginPromptDeclaration } from "@cognia/plugin-contract/lib/prompts/plugin-prompts"
-export type { PluginPromptDeclaration } from "@cognia/plugin-contract/lib/prompts/plugin-prompts"
+import type {
+  PluginPromptDeclaration,
+  PluginPromptScope,
+} from "@cognia/plugin-contract/lib/prompts/plugin-prompts"
+export type {
+  PluginPromptDeclaration,
+  PluginPromptScope,
+} from "@cognia/plugin-contract/lib/prompts/plugin-prompts"
 
 export const PLUGIN_PROMPT_ID_PREFIX = "plugin:"
 
@@ -55,7 +61,34 @@ export function parsePluginPromptId(id: string): { pluginId: string; localId: st
 /** Host-assigned settings for a contribution kind. */
 export interface PluginPromptOptions {
   /** Defaults to the account and the workspace the consumer resolves in. */
-  scopes?: readonly ("account" | "workspace")[]
+  scopes?: readonly PluginPromptScope[]
+}
+
+const ALL_SCOPES: readonly PluginPromptScope[] = ["account", "workspace"]
+
+/**
+ * The scopes a slot offers: the host's, narrowed by the declaration. A
+ * declaration may drop scopes (a prompt resolved without a session, whose
+ * workspace override could never apply) but never add one, so it cannot
+ * reach further than the host allows. Throws on anything else.
+ */
+function slotScopes(
+  pluginId: string,
+  declaration: PluginPromptDeclaration,
+  offered: readonly PluginPromptScope[]
+): readonly PluginPromptScope[] {
+  const declared = declaration.scopes
+  if (declared === undefined) return offered
+  const fail = (why: string): never => {
+    throw new Error(`plugin ${pluginId}: prompt ${declaration.id} scopes ${why}`)
+  }
+  if (!Array.isArray(declared) || declared.length === 0) fail("must list at least one scope")
+  if (new Set(declared).size !== declared.length) fail("repeat a scope")
+  for (const scope of declared) {
+    if (!ALL_SCOPES.includes(scope)) fail(`name an unknown scope "${String(scope)}"`)
+    if (!offered.includes(scope)) fail(`ask for "${scope}", which this contribution does not offer`)
+  }
+  return offered.filter((scope) => declared.includes(scope))
 }
 
 export interface PluginPromptEntry {
@@ -97,7 +130,7 @@ export function pluginPromptDefinition(
     kind: "feature-template",
     group: declaration.group ?? "agents",
     operation: "replace-template",
-    scopes: options.scopes ?? ["account", "workspace"],
+    scopes: slotScopes(pluginId, declaration, options.scopes ?? ALL_SCOPES),
     activation: "next-operation",
     risk: "ordinary",
     hosts: ["app"],
@@ -126,7 +159,8 @@ export function pluginPromptDefinition(
  * Returns a disposer that removes exactly these entries. All declarations are
  * checked first, so an invalid one registers none. `scopes` is the host's
  * choice for the contribution kind (a consumer that resolves without a
- * workspace offers only the account scope); a plugin never picks it.
+ * workspace offers only the account scope); a declaration can narrow it to a
+ * subset, never add to it.
  */
 export function registerPluginPrompts(
   pluginId: string,

@@ -88,6 +88,14 @@ Choose a different approach that follows the rule, or ask the user before procee
 
 const REMIND = `Project rule ({{location}}): {{rule}}`
 
+/**
+ * Audits, conflict checks and rule derivation run outside any chat, so they
+ * resolve without a session and a workspace override could never apply. The
+ * block and reminder texts are resolved for the tool call's session and keep
+ * the workspace scope.
+ */
+const AUDIT_SCOPES: PluginPromptDeclaration["scopes"] = ["account"]
+
 export const GOVERNANCE_PROMPTS: readonly PluginPromptDeclaration[] = [
   {
     id: PROMPT_IDS.judge,
@@ -99,6 +107,7 @@ export const GOVERNANCE_PROMPTS: readonly PluginPromptDeclaration[] = [
       "The user message asks for one JSON object {findings:[…]}; keep the patterns, confidence levels and action names.",
     maxChars: 16_000,
     group: "developer",
+    scopes: AUDIT_SCOPES,
   },
   {
     id: PROMPT_IDS.conflicts,
@@ -108,6 +117,7 @@ export const GOVERNANCE_PROMPTS: readonly PluginPromptDeclaration[] = [
     outputContract:
       'The user message asks for {pairs:[{pair, verdict, newer?}]} JSON with verdict "agree" | "override" | "unrelated" | "conflict".',
     group: "developer",
+    scopes: AUDIT_SCOPES,
   },
   {
     id: PROMPT_IDS.derive,
@@ -118,6 +128,7 @@ export const GOVERNANCE_PROMPTS: readonly PluginPromptDeclaration[] = [
     outputContract:
       'The user message asks for {checks:[…]} JSON with kind "forbid" | "require-after" | "require-before" | "not-checkable".',
     group: "developer",
+    scopes: AUDIT_SCOPES,
   },
   {
     id: PROMPT_IDS.block,

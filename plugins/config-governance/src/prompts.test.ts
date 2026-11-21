@@ -14,6 +14,20 @@ describe("governance prompts", () => {
     }
   })
 
+  // Audits run outside any chat and resolve without a session, so a workspace
+  // override of their wording could never apply; the tool-call texts resolve
+  // for the call's session and keep it.
+  it("offers the workspace scope only where a session is resolved", () => {
+    const scopes = Object.fromEntries(
+      GOVERNANCE_PROMPTS.map((prompt) => [prompt.id, prompt.scopes])
+    )
+    expect(scopes[PROMPT_IDS.judge]).toEqual(["account"])
+    expect(scopes[PROMPT_IDS.conflicts]).toEqual(["account"])
+    expect(scopes[PROMPT_IDS.derive]).toEqual(["account"])
+    expect(scopes[PROMPT_IDS.block]).toBeUndefined()
+    expect(scopes[PROMPT_IDS.remind]).toBeUndefined()
+  })
+
   it("uses every declared variable in its template", () => {
     for (const prompt of GOVERNANCE_PROMPTS) {
       for (const variable of prompt.variables ?? [])

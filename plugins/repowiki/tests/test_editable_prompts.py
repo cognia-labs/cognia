@@ -158,6 +158,8 @@ def test_declarations_carry_the_shipped_wording_and_translated_titles():
     assert chat["defaultBody"] == EDITABLE_PROMPTS["chat"].default
     assert chat["group"] == "knowledge"
     assert chat["maxChars"] == PROMPT_MAX_CHARS
+    # Tool calls carry no session, so a workspace override could never apply.
+    assert all(entry["scopes"] == ["account"] for entry in declarations.values())
     assert "requiredFragments" not in chat
     # A missing translation keeps the English title rather than a raw key.
     assert declarations["overview"]["title"] == "Project overview"
