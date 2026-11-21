@@ -46,24 +46,86 @@ interface NamedRow {
   createdAt: number
 }
 
-/** `stem~<id8>.ext`, keeping a dotfile's leading dot in the stem. */
-export function disambiguatedName(name: string, sourceId: string): string {
-  const suffix = sourceId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, DISAMBIGUATION_ID_LENGTH) || "x"
+/** Prefixes that upload/video/asset IDs share before their unique entropy starts. */
+const KNOWN_ID_PREFIXES =
+  /^(?:cognia-upload:upl_|cognia-upload:|attachment-|video-vjob_|video-|asset-|upl_)/i
+
+function sanitizeIdChars(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9_-]/g, "")
+}
+
+function stripKnownIdPrefix(sourceId: string): string {
+  const stripped = sourceId.replace(KNOWN_ID_PREFIXES, "")
+  return sanitizeIdChars(stripped) ? stripped : sourceId
+}
+
+function withTildeSuffix(name: string, suffix: string): string {
   const dot = name.lastIndexOf(".")
   if (dot <= 0) return `${name}~${suffix}`
   return `${name.slice(0, dot)}~${suffix}${name.slice(dot)}`
 }
 
-/** Assign each row its addressable name within one mount. */
+function legacyDisambiguatedName(name: string, sourceId: string): string {
+  const suffix = sanitizeIdChars(sourceId).slice(0, DISAMBIGUATION_ID_LENGTH) || "x"
+  return withTildeSuffix(name, suffix)
+}
+
+/** `stem~<id8>.ext`, keeping a dotfile's leading dot in the stem. */
+export function disambiguatedName(name: string, sourceId: string): string {
+  const suffix =
+    sanitizeIdChars(stripKnownIdPrefix(sourceId)).slice(0, DISAMBIGUATION_ID_LENGTH) || "x"
+  return withTildeSuffix(name, suffix)
+}
+
+/** Assign each row its unique addressable name within one mount. */
 function assignNames<T extends NamedRow>(rows: readonly T[]): Map<T, string> {
   const counts = new Map<string, number>()
   for (const row of rows) counts.set(row.name, (counts.get(row.name) ?? 0) + 1)
-  return new Map(
-    rows.map((row) => [
-      row,
-      (counts.get(row.name) ?? 0) > 1 ? disambiguatedName(row.name, row.sourceId) : row.name,
-    ])
+
+  const used = new Set<string>()
+  const assigned = new Map<T, string>()
+  const colliding: T[] = []
+
+  for (const row of rows) {
+    if ((counts.get(row.name) ?? 0) === 1) {
+      used.add(row.name)
+      assigned.set(row, row.name)
+    } else {
+      colliding.push(row)
+    }
+  }
+
+  // Deterministic order so assigned suffixes do not depend on input array shuffle.
+  colliding.sort(
+    (left, right) => left.createdAt - right.createdAt || left.sourceId.localeCompare(right.sourceId)
   )
+
+  for (const row of colliding) {
+    const core =
+      sanitizeIdChars(stripKnownIdPrefix(row.sourceId)) || sanitizeIdChars(row.sourceId) || "x"
+    const maxLen = Math.min(Math.max(core.length, DISAMBIGUATION_ID_LENGTH), 36)
+    let candidate = withTildeSuffix(row.name, core.slice(0, DISAMBIGUATION_ID_LENGTH))
+    if (used.has(candidate) && core.length > DISAMBIGUATION_ID_LENGTH) {
+      for (let len = DISAMBIGUATION_ID_LENGTH + 4; len < maxLen && used.has(candidate); len += 4) {
+        candidate = withTildeSuffix(row.name, core.slice(0, len))
+      }
+      if (used.has(candidate)) {
+        candidate = withTildeSuffix(row.name, core.slice(0, maxLen))
+      }
+    }
+    if (used.has(candidate)) {
+      const baseSuffix = core.slice(0, maxLen)
+      let index = 2
+      while (used.has(candidate)) {
+        candidate = withTildeSuffix(row.name, `${baseSuffix}-${index}`)
+        index += 1
+      }
+    }
+    used.add(candidate)
+    assigned.set(row, candidate)
+  }
+
+  return assigned
 }
 
 export function projectUploadEntries(assets: readonly ListedSessionAsset[]): FileSpaceDexieEntry[] {
@@ -157,12 +219,35 @@ export function findDexieEntry(
   const cut = path.lastIndexOf("/")
   const name = path.slice(cut + 1)
   const prefix = `${path.slice(0, cut)}/`
+  const older = (
+    current: FileSpaceDexieEntry | null,
+    candidate: FileSpaceDexieEntry
+  ): FileSpaceDexieEntry => {
+    if (!current) return candidate
+    if (candidate.createdAt !== current.createdAt) {
+      return candidate.createdAt < current.createdAt ? candidate : current
+    }
+    return candidate.sourceId.localeCompare(current.sourceId) < 0 ? candidate : current
+  }
   let oldest: FileSpaceDexieEntry | null = null
   for (const entry of entries) {
     if (entry.name !== name || !entry.path.startsWith(prefix)) continue
-    if (!oldest || entry.createdAt < oldest.createdAt) oldest = entry
+    oldest = older(oldest, entry)
   }
-  return oldest
+  if (oldest) return oldest
+  // Backward compatibility: resolve links copied before prefix stripping or before
+  // another row forced wider disambiguation.
+  let legacyMatch: FileSpaceDexieEntry | null = null
+  for (const entry of entries) {
+    if (!entry.path.startsWith(prefix)) continue
+    if (
+      disambiguatedName(entry.name, entry.sourceId) === name ||
+      legacyDisambiguatedName(entry.name, entry.sourceId) === name
+    ) {
+      legacyMatch = older(legacyMatch, entry)
+    }
+  }
+  return legacyMatch
 }
 
 export interface FileSpaceDexieListing {

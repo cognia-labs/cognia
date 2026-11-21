@@ -64,15 +64,21 @@ export interface SftpTransferRow {
   /**
    * What a download has received, partial or complete.
    *
-   * Written when a transfer pauses, fails or finishes rather than on every
-   * chunk: a multi-gigabyte download would otherwise rewrite a growing buffer
-   * thousands of times, and being cheaper than starting again is the whole
-   * point of resuming.
+   * Written when a transfer pauses, fails, hits a periodic checkpoint or
+   * finishes rather than on every chunk: a multi-gigabyte download would
+   * otherwise rewrite a growing buffer thousands of times, and being cheaper
+   * than starting again is the whole point of resuming.
    *
    * A finished download keeps its bytes here until the user saves them. The row
    * is where the file is until then, so clearing it is losing the download.
    */
   received?: Uint8Array
+  /**
+   * SFTP mtime in unix seconds observed when `received` was captured, or null
+   * when the server reported none. Resuming checks this so a file replaced on
+   * the server while paused restarts cleanly instead of splicing two versions.
+   */
+  remoteModified?: number | null
 }
 
 /**

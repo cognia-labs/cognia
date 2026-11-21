@@ -115,6 +115,14 @@ describe("enqueue", () => {
         body: oversized,
       })
     ).rejects.toBeInstanceOf(SftpTransferTooLargeError)
+    await expect(
+      enqueueSftpDownload({
+        profileId: "production",
+        profileLabel: "Production",
+        remotePath: "/srv/huge.iso",
+        size: SFTP_MAX_QUEUED_BYTES + 1,
+      })
+    ).rejects.toBeInstanceOf(SftpTransferTooLargeError)
     expect(await getDb().sftpTransfers.count()).toBe(0)
   })
 })
@@ -186,10 +194,94 @@ describe("the pump", () => {
       remotePath: "/var/log/app.log",
       size: 4,
     })
-    await getDb().sftpTransfers.update(id, { status: "running" })
+    await getDb().sftpTransfers.update(id, { status: "running", transferred: 3 })
     const stop = startSftpTransferPump({ requiresApproval: true, pollIntervalMs: 50 })
     await drain(stop, async () => (await row(id))?.status === "paused")
-    expect(await row(id)).toMatchObject({ status: "paused" })
+    expect(await row(id)).toMatchObject({ status: "paused", transferred: 0 })
+  })
+
+  it("persists partial received bytes when an active download is paused, and resumes from them", async () => {
+    let releaseSecondChunk!: () => void
+    const secondChunkGate = new Promise<void>((resolve) => {
+      releaseSecondChunk = resolve
+    })
+    let firstAttempt = true
+    downloadSftpFile.mockImplementation(
+      async (
+        _profileId: string,
+        _path: string,
+        opts: {
+          signal?: AbortSignal
+          resumeFrom?: Uint8Array
+          expectedModified?: number | null
+          onDownloadState?: (s: {
+            materializeReceived: () => Uint8Array
+            transferred: number
+            total: number
+            modified: number | null
+            restarted: boolean
+          }) => void
+        }
+      ) => {
+        if (firstAttempt) {
+          firstAttempt = false
+          const partial = new Uint8Array([10, 20])
+          opts.onDownloadState?.({
+            materializeReceived: () => partial,
+            transferred: 2,
+            total: 4,
+            modified: 777,
+            restarted: false,
+          })
+          await secondChunkGate
+          if (opts.signal?.aborted) {
+            const err = new Error("the transfer was cancelled")
+            err.name = "SftpTransferAbortedError"
+            // Match mocked class instance check in transfer-queue.ts
+            const { SftpTransferAbortedError: Aborted } = jest.requireMock("./client")
+            throw new Aborted()
+          }
+          return new Blob([new Uint8Array([10, 20, 30, 40])])
+        }
+        expect(opts.resumeFrom).toEqual(new Uint8Array([10, 20]))
+        expect(opts.expectedModified).toBe(777)
+        const combined = new Uint8Array([10, 20, 30, 40])
+        opts.onDownloadState?.({
+          materializeReceived: () => combined,
+          transferred: 4,
+          total: 4,
+          modified: 777,
+          restarted: false,
+        })
+        return new Blob([combined])
+      }
+    )
+
+    const id = await enqueueSftpDownload({
+      profileId: "production",
+      profileLabel: "Production",
+      remotePath: "/var/log/app.log",
+      size: 4,
+    })
+    const stop = startSftpTransferPump({ requiresApproval: false, pollIntervalMs: 30 })
+    await drain(
+      () => {},
+      async () => downloadSftpFile.mock.calls.length === 1
+    )
+    const pausing = pauseSftpTransfer(id)
+    releaseSecondChunk()
+    await pausing
+
+    expect(await row(id)).toMatchObject({
+      status: "paused",
+      transferred: 2,
+      remoteModified: 777,
+    })
+    expect((await row(id))?.received).toEqual(new Uint8Array([10, 20]))
+
+    await resumeSftpTransfer(id)
+    await drain(stop, async () => (await row(id))?.status === "done")
+    expect((await row(id))?.received).toEqual(new Uint8Array([10, 20, 30, 40]))
   })
 
   it("keeps the machine's own words when a transfer fails", async () => {

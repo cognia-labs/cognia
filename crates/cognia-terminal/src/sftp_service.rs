@@ -475,11 +475,14 @@ pub async fn dispatch_sftp(
                 }),
             )
             .await?;
-            let size = entry
-                .get("entry")
+            let entry_obj = entry.get("entry");
+            let size = entry_obj
                 .and_then(|entry| entry.get("size"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            let modified = entry_obj
+                .and_then(|entry| entry.get("modified"))
+                .and_then(Value::as_u64);
             let transfer_id = mint_transfer(
                 device_id,
                 &profile_id,
@@ -492,6 +495,7 @@ pub async fn dispatch_sftp(
                 "transferId": transfer_id,
                 "size": size,
                 "chunkBytes": chunk_bytes,
+                "modified": modified,
             }))
         }
         "sftp_download_read_chunk" => {

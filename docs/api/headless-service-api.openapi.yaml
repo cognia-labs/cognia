@@ -176515,6 +176515,11 @@ paths:
                   chunkBytes:
                     type: integer
                     minimum: 1
+                  modified:
+                    type:
+                      - integer
+                      - "null"
+                    minimum: 0
                 additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.

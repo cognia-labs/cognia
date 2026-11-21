@@ -21668,6 +21668,10 @@
         "chunkBytes": {
           "type": "integer",
           "minimum": 1
+        },
+        "modified": {
+          "type": ["integer", "null"],
+          "minimum": 0
         }
       },
       "additionalProperties": false

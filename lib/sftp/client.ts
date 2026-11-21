@@ -30,6 +30,7 @@ import { isTauri, transport } from "@/lib/tauri"
 import { issueHostAdminLease } from "@/lib/tauri/admin-lease"
 import type { WorkspaceEntry } from "@/lib/files/types"
 import type { ProjectFileTreeDeps } from "@/components/editor/project/project-file-tree"
+import { SftpTransferTooLargeError } from "./transfer-types"
 
 /** Mirrors Rust `SftpEntry`. */
 export interface SftpEntry {
@@ -238,10 +239,22 @@ export interface SftpTransferProgress {
   total: number
 }
 
+export interface SftpDownloadSnapshot {
+  /** Materialize contiguous received bytes up to the latest completed chunk. */
+  materializeReceived: () => Uint8Array
+  transferred: number
+  total: number
+  modified: number | null
+  /** True when the remote file changed since `resumeFrom` and restarted at 0. */
+  restarted: boolean
+}
+
 export interface SftpTransferOptions {
   /** The approval from {@link requestSftpTransferApproval}. Null on the desktop. */
   adminLease?: string | null
   onProgress?: (progress: SftpTransferProgress) => void
+  /** Reports received byte state so a durable queue can persist on pause/failure/checkpoint. */
+  onDownloadState?: (snapshot: SftpDownloadSnapshot) => void
   /** Checked between chunks. Aborting stops the transfer at the next boundary. */
   signal?: AbortSignal
   /**
@@ -250,12 +263,19 @@ export interface SftpTransferOptions {
    * remembering what was already received.
    */
   resumeFrom?: Uint8Array
+  /** SFTP mtime (unix seconds) when `resumeFrom` was captured, if known. */
+  expectedModified?: number | null
+  /** Remote byte size when `resumeFrom` was captured, if known. */
+  expectedSize?: number
+  /** Maximum bytes the caller can buffer; rejects with {@link SftpTransferTooLargeError}. */
+  maxBytes?: number
 }
 
 interface DownloadHandle {
   transferId: string
   size: number
   chunkBytes: number
+  modified?: number | null
 }
 
 interface UploadHandle {
@@ -309,14 +329,55 @@ export async function downloadSftpFile(
     "sftp_download_open",
     withLease({ profileId, path }, options.adminLease)
   )
-  const chunks: Uint8Array[] = []
+  const remoteModified = typeof handle.modified === "number" ? handle.modified : null
+  let chunks: Uint8Array[] = []
   let offset = 0
+  let restarted = false
+
   if (options.resumeFrom?.length) {
-    chunks.push(options.resumeFrom)
-    offset = options.resumeFrom.length
+    const shrunk = handle.size < options.resumeFrom.length
+    const modifiedChanged =
+      options.expectedModified != null &&
+      remoteModified !== null &&
+      remoteModified !== options.expectedModified
+    const expectedShrunk =
+      options.expectedSize !== undefined &&
+      remoteModified === null &&
+      handle.size < options.expectedSize
+    if (shrunk || modifiedChanged || expectedShrunk) {
+      restarted = true
+    } else {
+      chunks.push(options.resumeFrom)
+      offset = options.resumeFrom.length
+    }
   }
+
+  const materializeReceived = (): Uint8Array => {
+    if (offset === 0 || chunks.length === 0) return new Uint8Array(0)
+    if (chunks.length === 1) return new Uint8Array(chunks[0]!)
+    const combined = new Uint8Array(offset)
+    let cursor = 0
+    for (const part of chunks) {
+      combined.set(part, cursor)
+      cursor += part.byteLength
+    }
+    chunks = [combined]
+    return new Uint8Array(combined)
+  }
+
   try {
-    options.onProgress?.({ transferred: offset, total: handle.size })
+    if (options.maxBytes !== undefined && handle.size > options.maxBytes) {
+      throw new SftpTransferTooLargeError(handle.size)
+    }
+    const totalAtOpen = Math.max(handle.size, offset)
+    options.onDownloadState?.({
+      materializeReceived,
+      transferred: offset,
+      total: totalAtOpen,
+      modified: remoteModified,
+      restarted,
+    })
+    options.onProgress?.({ transferred: offset, total: totalAtOpen })
     // Stops on the server's own end rather than on `offset < size`. The file
     // can be appended to or truncated while it is being read, and the server is
     // the only authority on where it stops.
@@ -330,7 +391,18 @@ export async function downloadSftpFile(
       if (bytes.length > 0) {
         chunks.push(bytes)
         offset += bytes.length
-        options.onProgress?.({ transferred: offset, total: Math.max(handle.size, offset) })
+        if (options.maxBytes !== undefined && offset > options.maxBytes) {
+          throw new SftpTransferTooLargeError(offset)
+        }
+        const total = Math.max(handle.size, offset)
+        options.onDownloadState?.({
+          materializeReceived,
+          transferred: offset,
+          total,
+          modified: remoteModified,
+          restarted: false,
+        })
+        options.onProgress?.({ transferred: offset, total })
       }
       if (chunk.eof || bytes.length === 0) break
     }

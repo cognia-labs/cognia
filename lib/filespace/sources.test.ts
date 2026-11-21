@@ -67,6 +67,14 @@ describe("naming", () => {
     expect(disambiguatedName("Makefile", "abcdefgh")).toBe("Makefile~abcdefgh")
     expect(disambiguatedName(".env", "abcdefgh")).toBe(".env~abcdefgh")
     expect(disambiguatedName("x", "!!!")).toBe("x~x")
+    expect(disambiguatedName("report.pdf", "asset-ab111111-1111-4111-8111-111111111111")).toBe(
+      "report~ab111111.pdf"
+    )
+    expect(disambiguatedName("report.pdf", "cognia-upload:upl_12345678-aaaa")).toBe(
+      "report~12345678.pdf"
+    )
+    expect(disambiguatedName("report.pdf", "attachment-99887766aabb")).toBe("report~99887766.pdf")
+    expect(disambiguatedName("clip.mp4", "video-vjob_m9z12345_rand")).toBe("clip~m9z12345.mp4")
   })
 })
 
@@ -92,6 +100,40 @@ describe("projectUploadEntries", () => {
       sourceAvailable: true,
       createdAt: 1,
     })
+  })
+
+  it("keeps prefixed IDs, colliding 8-char stems, and literal ~ filenames collision-free", () => {
+    const prefixed = projectUploadEntries([
+      asset({
+        assetId: "asset-ab111111-1111-4111-8111-111111111111",
+        filename: "report.pdf",
+        createdAt: 1,
+      }),
+      asset({
+        assetId: "asset-ab222222-2222-4222-8222-222222222222",
+        filename: "report.pdf",
+        createdAt: 2,
+      }),
+      asset({
+        assetId: "asset-ab111111-9999-4999-8999-999999999999",
+        filename: "report.pdf",
+        createdAt: 3,
+      }),
+    ])
+    expect(new Set(prefixed.map((entry) => entry.path)).size).toBe(prefixed.length)
+    for (const row of prefixed) {
+      expect(findDexieEntry(prefixed, row.path)?.sourceId).toBe(row.sourceId)
+    }
+
+    const withLiteralTilde = projectUploadEntries([
+      asset({ assetId: "abcdefgh-1", filename: "report.pdf", createdAt: 1 }),
+      asset({ assetId: "ijklmnop-2", filename: "report.pdf", createdAt: 2 }),
+      asset({ assetId: "ordinary-3", filename: "report~abcdefgh.pdf", createdAt: 3 }),
+    ])
+    expect(new Set(withLiteralTilde.map((entry) => entry.path)).size).toBe(withLiteralTilde.length)
+    for (const row of withLiteralTilde) {
+      expect(findDexieEntry(withLiteralTilde, row.path)?.sourceId).toBe(row.sourceId)
+    }
   })
 })
 
@@ -130,6 +172,24 @@ describe("findDexieEntry", () => {
 
   it("resolves a bare name that became ambiguous to the oldest row of that name", () => {
     expect(findDexieEntry(entries, p("/uploads/report.pdf"))?.sourceId).toBe("aaaaaaaa-1")
+  })
+
+  it("still resolves legacy pre-prefix-strip ~asset-ab links to the oldest matching row", () => {
+    const prefixed = projectUploadEntries([
+      asset({
+        assetId: "asset-ab111111-1111-4111-8111-111111111111",
+        filename: "report.pdf",
+        createdAt: 2,
+      }),
+      asset({
+        assetId: "asset-ab222222-2222-4222-8222-222222222222",
+        filename: "report.pdf",
+        createdAt: 5,
+      }),
+    ])
+    expect(findDexieEntry(prefixed, p("/uploads/report~asset-ab.pdf"))?.sourceId).toBe(
+      "asset-ab111111-1111-4111-8111-111111111111"
+    )
   })
 
   it("answers null for a name nobody has", () => {

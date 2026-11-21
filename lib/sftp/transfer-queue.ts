@@ -40,6 +40,7 @@ import {
   downloadSftpFile,
   uploadSftpFile,
   SftpTransferAbortedError,
+  type SftpDownloadSnapshot,
   type SftpTransferProgress,
 } from "./client"
 import {
@@ -57,6 +58,10 @@ export { isSftpTransferFinished, SFTP_MAX_QUEUED_BYTES, SftpTransferTooLargeErro
 /** How often progress reaches the database while a transfer runs. */
 const PROGRESS_WRITE_INTERVAL_MS = 500
 
+/** Coarse download byte checkpoints so a hard reload/crash keeps recent progress without per-chunk rewrites. */
+const DOWNLOAD_CHECKPOINT_BYTES = 4 * 1024 * 1024
+const DOWNLOAD_CHECKPOINT_INTERVAL_MS = 5_000
+
 /** How many transfers run at once. */
 const DEFAULT_CONCURRENCY = 2
 
@@ -68,8 +73,14 @@ interface ApprovalHolder {
   expiresAt: number
 }
 
+interface ActiveTransfer {
+  controller: AbortController
+  intent: "run" | "pause" | "cancel"
+  done: Promise<void>
+}
+
 const approval: ApprovalHolder = { token: null, expiresAt: 0 }
-const running = new Map<string, AbortController>()
+const running = new Map<string, ActiveTransfer>()
 
 function now(): number {
   return Date.now()
@@ -132,6 +143,9 @@ export interface EnqueueDownloadInput {
 }
 
 export async function enqueueSftpDownload(input: EnqueueDownloadInput): Promise<string> {
+  if (input.size > SFTP_MAX_QUEUED_BYTES) {
+    throw new SftpTransferTooLargeError(input.size)
+  }
   return insert({
     profileId: input.profileId,
     profileLabel: input.profileLabel,
@@ -187,10 +201,17 @@ async function patch(id: string, changes: Partial<SftpTransferRow>): Promise<voi
  *
  * An upload's partial file is deliberately left on the remote machine: removing
  * it would be a delete nobody asked for, and those bytes are what the resume
- * starts from.
+ * starts from. A download's received bytes are flushed to the row before this
+ * resolves so a subsequent resume starts from the saved offset.
  */
 export async function pauseSftpTransfer(id: string): Promise<void> {
-  running.get(id)?.abort()
+  const active = running.get(id)
+  if (active) {
+    if (active.intent === "run") active.intent = "pause"
+    active.controller.abort()
+    await active.done
+    return
+  }
   const row = await getDb().sftpTransfers.get(id)
   if (!row || isSftpTransferFinished(row.status)) return
   await patch(id, { status: "paused" })
@@ -203,11 +224,21 @@ export async function resumeSftpTransfer(id: string): Promise<void> {
 }
 
 export async function cancelSftpTransfer(id: string): Promise<void> {
-  running.get(id)?.abort()
+  const active = running.get(id)
+  if (active) {
+    active.intent = "cancel"
+    active.controller.abort()
+    await active.done
+  }
   // The received bytes go too. A cancelled transfer is a decision, and keeping
   // its partial payload would leave the largest thing in the row behind for a
   // resume that is never coming.
-  await patch(id, { status: "cancelled", received: undefined, payload: undefined })
+  await patch(id, {
+    status: "cancelled",
+    received: undefined,
+    payload: undefined,
+    remoteModified: undefined,
+  })
 }
 
 export async function retrySftpTransfer(id: string): Promise<void> {
@@ -221,6 +252,7 @@ export async function retrySftpTransfer(id: string): Promise<void> {
     // would carry the truncation forward, and the caller asked to try again.
     transferred: 0,
     received: undefined,
+    remoteModified: undefined,
   })
 }
 
@@ -253,78 +285,175 @@ function failureOf(error: unknown): { code: string; message: string } {
   return match ? { code: match[1], message: match[2] } : { code: "sftp_failed", message: text }
 }
 
-async function runOne(row: SftpTransferRow): Promise<void> {
+function runOne(row: SftpTransferRow): Promise<void> {
   const controller = new AbortController()
-  running.set(row.id, controller)
-  let lastWrite = 0
-  const onProgress = (progress: SftpTransferProgress) => {
-    const stamp = now()
-    if (stamp - lastWrite < PROGRESS_WRITE_INTERVAL_MS) return
-    lastWrite = stamp
-    void patch(row.id, { transferred: progress.transferred, size: progress.total })
+  const active: ActiveTransfer = {
+    controller,
+    intent: "run",
+    done: Promise.resolve(),
   }
-  try {
-    await patch(row.id, { status: "running", errorCode: null, errorMessage: null })
-    if (row.direction === "download") {
-      const blob = await downloadSftpFile(row.profileId, row.remotePath, {
-        adminLease: currentSftpTransferApproval(),
-        signal: controller.signal,
-        onProgress,
-        resumeFrom: row.received,
-      })
-      const received = new Uint8Array(await blob.arrayBuffer())
-      await patch(row.id, {
-        status: "done",
-        transferred: received.byteLength,
-        size: received.byteLength,
-        received,
-      })
-      return
-    }
-    if (!row.payload) {
-      // The bytes are gone, which is what a row restored from a database
-      // written by an older build looks like. Saying so beats retrying an
-      // upload of nothing.
-      await patch(row.id, {
-        status: "failed",
-        errorCode: "sftp_payload_missing",
-        errorMessage: "the file to upload is no longer held by this device",
-      })
-      return
-    }
-    const result = await uploadSftpFile(
-      row.profileId,
-      row.remotePath,
-      new Blob([new Uint8Array(row.payload)]),
-      {
-        adminLease: currentSftpTransferApproval(),
-        signal: controller.signal,
-        onProgress,
-      }
+
+  let writeChain = Promise.resolve()
+  const enqueuePatch = (changes: Partial<SftpTransferRow>): Promise<void> => {
+    writeChain = writeChain.then(
+      () => patch(row.id, changes),
+      () => patch(row.id, changes)
     )
-    await patch(row.id, {
-      status: result.complete ? "done" : "failed",
-      transferred: result.size,
-      errorCode: result.complete ? null : "sftp_incomplete",
-      errorMessage: result.complete
-        ? null
-        : `the machine holds ${result.size} of ${result.declaredSize} bytes`,
-    })
-  } catch (error) {
-    if (error instanceof SftpTransferAbortedError) {
-      // `pause` and `cancel` already wrote the status they meant. Overwriting
-      // it here would turn a cancellation into a pause on the way out.
+    return writeChain
+  }
+
+  let lastProgressWrite = 0
+  let lastCheckpointWrite = now()
+  let lastCheckpointBytes = row.received?.byteLength ?? 0
+  let latestTransferred = row.received?.byteLength ?? 0
+  let latestTotal = row.size
+  let latestModified: number | null | undefined = row.remoteModified
+  let latestMaterialize: (() => Uint8Array) | null = row.received
+    ? () => new Uint8Array(row.received!)
+    : null
+
+  const onProgress = (progress: SftpTransferProgress) => {
+    if (controller.signal.aborted || active.intent !== "run") return
+    const stamp = now()
+    if (stamp - lastProgressWrite < PROGRESS_WRITE_INTERVAL_MS) return
+    lastProgressWrite = stamp
+    void enqueuePatch({ transferred: progress.transferred, size: progress.total })
+  }
+
+  const onDownloadState = (snapshot: SftpDownloadSnapshot) => {
+    latestMaterialize = snapshot.materializeReceived
+    latestTransferred = snapshot.transferred
+    latestTotal = snapshot.total
+    latestModified = snapshot.modified
+    if (controller.signal.aborted || active.intent !== "run") return
+    const stamp = now()
+    if (snapshot.restarted) {
+      lastCheckpointBytes = snapshot.transferred
+      lastCheckpointWrite = stamp
+      void enqueuePatch({
+        received: snapshot.transferred > 0 ? snapshot.materializeReceived() : undefined,
+        transferred: snapshot.transferred,
+        size: snapshot.total,
+        remoteModified: snapshot.modified,
+      })
       return
     }
-    const failure = failureOf(error)
-    await patch(row.id, {
-      status: "failed",
-      errorCode: failure.code,
-      errorMessage: failure.message,
-    })
-  } finally {
-    running.delete(row.id)
+    if (
+      snapshot.transferred - lastCheckpointBytes >= DOWNLOAD_CHECKPOINT_BYTES &&
+      stamp - lastCheckpointWrite >= DOWNLOAD_CHECKPOINT_INTERVAL_MS
+    ) {
+      lastCheckpointBytes = snapshot.transferred
+      lastCheckpointWrite = stamp
+      void enqueuePatch({
+        received: snapshot.materializeReceived(),
+        transferred: snapshot.transferred,
+        size: snapshot.total,
+        remoteModified: snapshot.modified,
+      })
+    }
   }
+
+  const execute = async (): Promise<void> => {
+    try {
+      await enqueuePatch({ status: "running", errorCode: null, errorMessage: null })
+      if (row.direction === "download") {
+        const blob = await downloadSftpFile(row.profileId, row.remotePath, {
+          adminLease: currentSftpTransferApproval(),
+          signal: controller.signal,
+          onProgress,
+          onDownloadState,
+          resumeFrom: row.received,
+          expectedModified: row.remoteModified,
+          expectedSize: row.size,
+          maxBytes: SFTP_MAX_QUEUED_BYTES,
+        })
+        const received = new Uint8Array(await blob.arrayBuffer())
+        if (active.intent === "cancel") return
+        await enqueuePatch({
+          status: "done",
+          transferred: received.byteLength,
+          size: received.byteLength,
+          received,
+          ...(latestModified !== undefined ? { remoteModified: latestModified } : {}),
+        })
+        return
+      }
+      if (!row.payload) {
+        // The bytes are gone, which is what a row restored from a database
+        // written by an older build looks like. Saying so beats retrying an
+        // upload of nothing.
+        await enqueuePatch({
+          status: "failed",
+          errorCode: "sftp_payload_missing",
+          errorMessage: "the file to upload is no longer held by this device",
+        })
+        return
+      }
+      const result = await uploadSftpFile(
+        row.profileId,
+        row.remotePath,
+        new Blob([new Uint8Array(row.payload)]),
+        {
+          adminLease: currentSftpTransferApproval(),
+          signal: controller.signal,
+          onProgress,
+        }
+      )
+      if (active.intent === "cancel") return
+      await enqueuePatch({
+        status: result.complete ? "done" : "failed",
+        transferred: result.size,
+        errorCode: result.complete ? null : "sftp_incomplete",
+        errorMessage: result.complete
+          ? null
+          : `the machine holds ${result.size} of ${result.declaredSize} bytes`,
+      })
+    } catch (error) {
+      if (error instanceof SftpTransferAbortedError) {
+        if (active.intent === "cancel") {
+          await writeChain
+          return
+        }
+        if (row.direction === "download") {
+          const partial =
+            latestTransferred > 0 && latestMaterialize ? latestMaterialize() : undefined
+          await enqueuePatch({
+            status: "paused",
+            transferred: partial?.byteLength ?? 0,
+            size: latestTotal,
+            received: partial,
+            ...(latestModified !== undefined ? { remoteModified: latestModified } : {}),
+          })
+        } else {
+          await enqueuePatch({ status: "paused" })
+        }
+        return
+      }
+      const failure = failureOf(error)
+      const partial =
+        row.direction === "download" && latestTransferred > 0 && latestMaterialize
+          ? latestMaterialize()
+          : undefined
+      await enqueuePatch({
+        status: "failed",
+        errorCode: failure.code,
+        errorMessage: failure.message,
+        ...(row.direction === "download"
+          ? {
+              transferred: partial?.byteLength ?? 0,
+              received: partial,
+              ...(latestModified !== undefined ? { remoteModified: latestModified } : {}),
+            }
+          : {}),
+      })
+    } finally {
+      running.delete(row.id)
+    }
+  }
+
+  active.done = execute()
+  running.set(row.id, active)
+  return active.done
 }
 
 /**
@@ -382,12 +511,16 @@ export function startSftpTransferPump(options: SftpTransferPumpOptions = {}): ()
   }
 
   // A row left `running` by a process that is gone is not running. Parking it
-  // is the truthful state and lets the user restart it deliberately.
+  // is the truthful state and lets the user restart it deliberately. Align a
+  // download's displayed progress with the bytes actually persisted in `received`.
   const reconcile = async () => {
     const stale = await getDb().sftpTransfers.where("status").equals("running").toArray()
     for (const row of stale) {
       if (running.has(row.id)) continue
-      await patch(row.id, { status: "paused" })
+      await patch(row.id, {
+        status: "paused",
+        ...(row.direction === "download" ? { transferred: row.received?.byteLength ?? 0 } : {}),
+      })
     }
   }
 
@@ -401,7 +534,10 @@ export function startSftpTransferPump(options: SftpTransferPumpOptions = {}): ()
 
 /** Test seam: forget every in-memory handle without touching the database. */
 export function __resetSftpTransferRuntimeForTests(): void {
-  for (const controller of running.values()) controller.abort()
+  for (const active of running.values()) {
+    active.intent = "cancel"
+    active.controller.abort()
+  }
   running.clear()
   clearSftpTransferApproval()
 }

@@ -243,7 +243,8 @@ describe("downloadSftpFile", () => {
 
   it("resumes from bytes the caller already holds", async () => {
     call.mockImplementation(async (name: string, args: Record<string, unknown>) => {
-      if (name === "sftp_download_open") return { transferId: "t1", size: 3, chunkBytes: 2 }
+      if (name === "sftp_download_open")
+        return { transferId: "t1", size: 3, chunkBytes: 2, modified: 100 }
       if (name === "sftp_download_read_chunk") {
         expect(args.offset).toBe(2)
         return { data: base64([9]), eof: true }
@@ -252,8 +253,53 @@ describe("downloadSftpFile", () => {
     })
     const blob = await downloadSftpFile("production", "/srv/a", {
       resumeFrom: new Uint8Array([7, 8]),
+      expectedModified: 100,
     })
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([7, 8, 9]))
+  })
+
+  it("restarts from offset zero when the remote file changed mtime or shrank while paused", async () => {
+    const offsets: number[] = []
+    call.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "sftp_download_open")
+        return { transferId: "t1", size: 4, chunkBytes: 4, modified: 200 }
+      if (name === "sftp_download_read_chunk") {
+        offsets.push(args.offset as number)
+        return { data: base64([10, 20, 30, 40]), eof: true }
+      }
+      return {}
+    })
+    const snapshots: boolean[] = []
+    const blob = await downloadSftpFile("production", "/srv/a", {
+      resumeFrom: new Uint8Array([1, 2]),
+      expectedModified: 100,
+      onDownloadState: (s) => snapshots.push(s.restarted),
+    })
+    expect(offsets).toEqual([0])
+    expect(snapshots[0]).toBe(true)
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([10, 20, 30, 40]))
+  })
+
+  it("exposes partial bytes through onDownloadState before a mid-stream abort", async () => {
+    const controller = new AbortController()
+    let latest: Uint8Array | null = null
+    call.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "sftp_download_open") return { transferId: "t1", size: 4, chunkBytes: 2 }
+      if (name === "sftp_download_read_chunk" && args.offset === 0) {
+        controller.abort()
+        return { data: base64([5, 6]), eof: false }
+      }
+      return { data: "", eof: true }
+    })
+    await expect(
+      downloadSftpFile("production", "/srv/a", {
+        signal: controller.signal,
+        onDownloadState: (s) => {
+          latest = s.materializeReceived()
+        },
+      })
+    ).rejects.toBeInstanceOf(SftpTransferAbortedError)
+    expect(latest).toEqual(new Uint8Array([5, 6]))
   })
 
   it("closes the handle even when a chunk read fails", async () => {
