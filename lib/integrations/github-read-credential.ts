@@ -25,6 +25,7 @@ import {
   admitPersonalCredential,
   LOCAL_PERSON,
   type PersonalCredentialContext,
+  type PersonalCredentialDecision,
 } from "@/lib/execution/personal-credential"
 import { listAllIntegrationAccounts } from "@/lib/db/integrations"
 import { GITHUB_DOT_COM, type GithubHost } from "@/lib/github/host"
@@ -70,27 +71,16 @@ function rank(account: IntegrationAccount, owner: string): number {
   return 1
 }
 
-/**
- * The integration accounts that may read `repoFullName` on `host`, best first.
- * Exported for the co-located test and for callers that report *which*
- * account a read will use.
- */
-export async function githubReadAccountsFor(
+async function rankedAccountsOnHost(
   repoFullName: string,
-  host: GithubHost = GITHUB_DOT_COM,
-  deps: Pick<GithubReadCredentialDeps, "listAccounts" | "hostForSession"> = DEFAULT_DEPS,
-  credentialContext?: PersonalCredentialContext
+  host: GithubHost,
+  deps: Pick<GithubReadCredentialDeps, "listAccounts" | "hostForSession">
 ): Promise<IntegrationAccount[]> {
   const owner = repoFullName.split("/")[0]?.trim().toLowerCase() ?? ""
   const accounts = await deps.listAccounts().catch(() => [] as IntegrationAccount[])
-  const admission = await admitPersonalCredential(credentialContext, {
-    source: "github-user",
-    person: LOCAL_PERSON,
-  })
   const eligible: IntegrationAccount[] = []
   for (const account of accounts) {
     if (!GITHUB_PROVIDER_IDS.has(account.providerId)) continue
-    if (account.providerId === "github-pat" && !admission.ok) continue
     if (!account.enabled || account.health === "revoked") continue
     const accountHost = await deps.hostForSession(account.authSessionId).catch(() => undefined)
     // An account whose session cannot be read is not "github.com by default":
@@ -104,6 +94,26 @@ export async function githubReadAccountsFor(
     .map((account, index) => ({ account, index, rank: rank(account, owner) }))
     .sort((a, b) => a.rank - b.rank || a.index - b.index)
     .map((entry) => entry.account)
+}
+
+/**
+ * The integration accounts that may read `repoFullName` on `host`, best first.
+ * Exported for the co-located test and for callers that report *which*
+ * account a read will use.
+ */
+export async function githubReadAccountsFor(
+  repoFullName: string,
+  host: GithubHost = GITHUB_DOT_COM,
+  deps: Pick<GithubReadCredentialDeps, "listAccounts" | "hostForSession"> = DEFAULT_DEPS,
+  credentialContext?: PersonalCredentialContext
+): Promise<IntegrationAccount[]> {
+  const ranked = await rankedAccountsOnHost(repoFullName, host, deps)
+  if (!ranked.some((account) => account.providerId === "github-pat")) return ranked
+  const admission = await admitPersonalCredential(credentialContext, {
+    source: "github-user",
+    person: LOCAL_PERSON,
+  })
+  return admission.ok ? ranked : ranked.filter((account) => account.providerId !== "github-pat")
 }
 
 /**
@@ -140,18 +150,16 @@ export async function resolveGithubReadToken(
   deps: GithubReadCredentialDeps = DEFAULT_DEPS,
   credentialContext?: PersonalCredentialContext
 ): Promise<string | null> {
-  const accounts = await githubReadAccountsFor(repoFullName, host, deps, credentialContext)
+  const accounts = await rankedAccountsOnHost(repoFullName, host, deps)
+  let patAdmission: Promise<PersonalCredentialDecision> | undefined
   for (const account of accounts) {
-    if (
-      account.providerId === "github-pat" &&
-      !(
-        await admitPersonalCredential(credentialContext, {
-          source: "github-user",
-          person: LOCAL_PERSON,
-        })
-      ).ok
-    )
-      continue
+    if (account.providerId === "github-pat") {
+      patAdmission ??= admitPersonalCredential(credentialContext, {
+        source: "github-user",
+        person: LOCAL_PERSON,
+      })
+      if (!(await patAdmission).ok) continue
+    }
     const token = await deps.resolveToken(account, host).catch(() => null)
     if (token) return token
   }

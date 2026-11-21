@@ -27,6 +27,13 @@ declare global {
     __cogniaResetDb?: () => Promise<void>
     __cogniaTestGlobalsReady?: boolean
     __cogniaPluginRuntimeReady?: boolean
+    __cogniaAccountUnlocked?: boolean
+    __COGNIA_BOOT_DIAGNOSTICS__?: {
+      profile: "eager" | "main"
+      requested: string[]
+      ready: string[]
+      pending: string[]
+    }
   }
 }
 
@@ -38,11 +45,20 @@ export async function waitForTestGlobals(
   for (let recoveryAttempt = 0; recoveryAttempt <= 1; recoveryAttempt += 1) {
     const stateHandle = await page.waitForFunction(
       (needsAccountRuntime) => {
-        if (
-          window.__cogniaTestGlobalsReady &&
-          (!needsAccountRuntime || window.__cogniaPluginRuntimeReady === true)
-        ) {
-          return "ready"
+        if (window.__cogniaTestGlobalsReady) {
+          if (!needsAccountRuntime) return "ready"
+          const pluginReady = window.__cogniaPluginRuntimeReady === true
+          // Under `pnpm dev` (`bootProfile === "main"`), `/` only requests
+          // `core-chat` and never mounts `PluginRuntimeInitializer`, so account
+          // unlock + `core-chat` readiness is the complete account-runtime barrier.
+          const mainProfileWithoutPlugins =
+            window.__cogniaAccountUnlocked === true &&
+            window.__COGNIA_BOOT_DIAGNOSTICS__?.profile === "main" &&
+            !window.__COGNIA_BOOT_DIAGNOSTICS__.requested.includes("plugin-runtime") &&
+            window.__COGNIA_BOOT_DIAGNOSTICS__.ready.includes("core-chat")
+          if (pluginReady || mainProfileWithoutPlugins) {
+            return "ready"
+          }
         }
         if (document.querySelector('[data-testid="db-upgrade-blocked-dialog"]')) {
           return "blocked"
@@ -351,9 +367,15 @@ export async function ensureAppMounted(page: Page): Promise<void> {
         .waitFor({ state: "visible", timeout: 30_000 })
         .then(() => "create" as const),
       page
-        .waitForFunction(() => window.__cogniaPluginRuntimeReady === true, undefined, {
-          timeout: 30_000,
-        })
+        .waitForFunction(
+          () =>
+            window.__cogniaPluginRuntimeReady === true ||
+            (window.__cogniaAccountUnlocked === true &&
+              window.__COGNIA_BOOT_DIAGNOSTICS__?.profile === "main" &&
+              window.__COGNIA_BOOT_DIAGNOSTICS__.ready.includes("core-chat")),
+          undefined,
+          { timeout: 30_000 }
+        )
         .then(() => "ready" as const),
     ])
     if (startup === "ready") {

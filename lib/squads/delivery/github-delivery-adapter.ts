@@ -737,18 +737,10 @@ export async function prepareAndPublishGithubStack(
     )
   }
 
-  const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
-  const octokit = await resolveOctokit(first, undefined, {
-    executionRunId: agentTeamExecutionRunId(runId),
-  })
-  if (!octokit) throw new Error("GitHub delivery credentials are unavailable")
   const { createDeliveryGraphService } = await import("./delivery-graph")
-  const service = createDeliveryGraphService({
-    adapter: createGithubDeliveryAdapter({ octokit, repositories }),
-  })
   const graphId = existing?.id ?? `delivery:${runId}`
   if (!existing)
-    await service.create({
+    await createDeliveryGraphService({}).create({
       id: graphId,
       runId,
       repositories: stackBindings.map((binding) => ({
@@ -761,6 +753,10 @@ export async function prepareAndPublishGithubStack(
         layers: layersByBinding.get(binding.id) ?? [],
       })),
     })
+  // Plan and check run personal-sink taint BEFORE admitting a personal GitHub
+  // credential for delivery: admitting a PAT marks the run as having used
+  // `github-user`, which must not withhold the publish it was admitted for, nor
+  // touch PAT credentials while the publish is held awaiting approval.
   // The draft is kept either way, so a held publish is approved as checked.
   await planStackPublish({
     team,
@@ -771,6 +767,14 @@ export async function prepareAndPublishGithubStack(
       ...(hosts[binding.id] ? { host: hosts[binding.id] } : {}),
     })),
     options,
+  })
+  const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
+  const octokit = await resolveOctokit(first, undefined, {
+    executionRunId: agentTeamExecutionRunId(runId),
+  })
+  if (!octokit) throw new Error("GitHub delivery credentials are unavailable")
+  const service = createDeliveryGraphService({
+    adapter: createGithubDeliveryAdapter({ octokit, repositories }),
   })
   await service.publish(graphId)
   return graphId

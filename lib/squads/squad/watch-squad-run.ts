@@ -87,6 +87,7 @@ export function watchSquadRunSettlement(input: WatchSquadRunInput): () => void {
   }
 
   const interval = setInterval(() => void check(), input.pollIntervalMs ?? POLL_INTERVAL_MS)
+  interval.unref?.()
   // The run may already be over — a very short Squad run can settle before the
   // caller gets here.
   void check()

@@ -117,8 +117,8 @@ describe("stored definitions", () => {
       teammates: [],
       tasks: [],
       deleteTeamIds: ["team_a", "team_b"],
-      deleteTeammateIds: ["mate_a"],
-      deleteTaskIds: ["task_a"],
+      deleteTeammateIds: ["mate_a", "mate_a2", "mate_b"],
+      deleteTaskIds: ["task_a", "task_b"],
     })
   })
 
@@ -242,5 +242,52 @@ describe("stored definitions", () => {
     expect(stored.teams.map((t) => t.id)).toEqual(["team_b"])
     expect(stored.teammates.map((t) => t.id)).toEqual(["mate_b"])
     expect(stored.tasks.map((t) => t.id)).toEqual(["task_b"])
+  })
+
+  it("retries load and write across a transient DatabaseClosedError during plugin schema reopen", async () => {
+    const closedError = Object.assign(new Error("DatabaseClosedError Database has been closed"), {
+      name: "DatabaseClosedError",
+    })
+    let writeFailedOnce = false
+    const originalTransaction = getDb().transaction.bind(getDb())
+    const txSpy = jest
+      .spyOn(getDb(), "transaction")
+      .mockImplementation((...args: Parameters<typeof originalTransaction>) => {
+        if (!writeFailedOnce) {
+          writeFailedOnce = true
+          return Promise.reject(closedError) as never
+        }
+        return originalTransaction(...args)
+      })
+    try {
+      await writeAgentTeamDefinitions({
+        teams: [team()],
+        teammates: [teammate()],
+        tasks: [task()],
+        now: 99,
+      })
+    } finally {
+      txSpy.mockRestore()
+    }
+    expect(writeFailedOnce).toBe(true)
+
+    let readFailedOnce = false
+    const originalToArray = getDb().agentTeams.toArray.bind(getDb().agentTeams)
+    const readSpy = jest.spyOn(getDb().agentTeams, "toArray").mockImplementation(async () => {
+      if (!readFailedOnce) {
+        readFailedOnce = true
+        throw closedError
+      }
+      return originalToArray()
+    })
+    try {
+      const loaded = await loadAgentTeamDefinitions()
+      expect(loaded.teams.map((t) => t.id)).toEqual(["team_a"])
+      expect(loaded.teammates.map((t) => t.id)).toEqual(["mate_a"])
+      expect(loaded.tasks.map((t) => t.id)).toEqual(["task_a"])
+    } finally {
+      readSpy.mockRestore()
+    }
+    expect(readFailedOnce).toBe(true)
   })
 })

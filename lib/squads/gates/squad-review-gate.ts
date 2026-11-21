@@ -373,7 +373,7 @@ export async function openSquadReview(
             endSquadReviewSpan({ interruptId, outcome: "expired", source: "expiry" })
           }
         } else {
-          if (deadline === undefined)
+          if (deadline === undefined) {
             deadline = setTimeout(
               () => {
                 deadline = undefined
@@ -381,6 +381,8 @@ export async function openSquadReview(
               },
               Math.min(2_147_483_647, row.expiresAt - now)
             )
+            deadline.unref?.()
+          }
           // Keep the IM answer while another owner decides. The same CAS
           // retries after release, or reclaims only an abandoned heartbeat.
           if (delegateOutcome)
@@ -406,6 +408,7 @@ export async function openSquadReview(
     const poll = setInterval(() => {
       void reconcile().catch(() => undefined)
     }, pollIntervalMs)
+    poll.unref?.()
     unsubscribe = () => {
       clearInterval(poll)
       if (deadline !== undefined) clearTimeout(deadline)

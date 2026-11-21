@@ -59,6 +59,18 @@ describe("GitHub draft publication recovery", () => {
         headSha: "sha-a",
         status: "ci_pending",
       })
+      await db.agentTeamRuns.put({
+        id: "partial-run",
+        teamId: "team-1",
+        objective: "o",
+        status: "running",
+        priority: 0,
+        decisionVersion: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      } as never)
+      const { ensureAgentTeamExecutionRun } = await import("@/lib/execution/agent-team-bridge")
+      await ensureAgentTeamExecutionRun((await db.agentTeamRuns.get("partial-run"))!)
       const request = jest.fn(async (route: string) =>
         route.startsWith("GET")
           ? { status: 200, headers: {}, data: [] }
@@ -553,6 +565,29 @@ describe("outbound authorization of the stack publish (ADR-0239 phase 2)", () =>
     expect((await receipts())[0]).toMatchObject({
       request: { plan: { outcome: "park", enforced: false } },
     })
+  })
+
+  it("withholds a publish whose run carries undisclosed personal marks with zero GitHub writes", async () => {
+    const { team, github, pushHold, options } = await setup({
+      ...STACKED_DELIVERY_DEFAULTS,
+      consent: { by: "local-user", at: 1, repositoryPaths: ["/repo"] },
+    })
+    const resolveOctokit = jest.fn(options.resolveOctokit)
+    await getDb().executionRuns.update("execution:team:run-1", {
+      personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    })
+    await expect(
+      prepareAndPublishGithubStack(team, "run-1", {
+        ...options,
+        resolveOctokit,
+      })
+    ).rejects.toMatchObject({
+      code: "personal_sink_withheld",
+      reason: "audience-unproven",
+    })
+    expect(resolveOctokit).not.toHaveBeenCalled()
+    expect(github).not.toHaveBeenCalled()
+    expect(pushHold).not.toHaveBeenCalled()
   })
 })
 

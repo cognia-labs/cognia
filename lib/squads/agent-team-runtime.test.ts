@@ -16,6 +16,43 @@
 // native task-workspace crate. A fake keeps the durable dispatch path honest
 // (leases are opened and settled) without a Registry.
 const abortWorkspaceMock = jest.fn(async () => undefined)
+// `var` avoids TDZ when mocked modules run during top-level imports.
+// eslint-disable-next-line no-var
+var mockDesktopRuntimeForTest = false
+const resolveSendOptionsHook = jest.fn<Promise<Record<string, unknown>> | null, [unknown]>(
+  () => null
+)
+const runAndCaptureHook = jest.fn<
+  Promise<{ text: string }> | null,
+  [string, string, unknown, unknown]
+>(() => null)
+jest.mock("@/lib/platform/capabilities", () => {
+  const actual = jest.requireActual("@/lib/platform/capabilities")
+  return {
+    ...actual,
+    detectHostProfile: () => (mockDesktopRuntimeForTest ? "desktop" : actual.detectHostProfile()),
+  }
+})
+jest.mock("@/lib/claude/build-options", () => {
+  const actual = jest.requireActual("@/lib/claude/build-options")
+  return {
+    ...actual,
+    resolveSendOptions: (...args: [unknown]) => {
+      const overridden = resolveSendOptionsHook(...args)
+      return overridden ?? actual.resolveSendOptions(...args)
+    },
+  }
+})
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => {
+  const actual = jest.requireActual("@/lib/ai/agent/execution/run-and-capture")
+  return {
+    ...actual,
+    runAndCaptureAssistantReply: (...args: [string, string, unknown, unknown]) => {
+      const overridden = runAndCaptureHook(...args)
+      return overridden ?? actual.runAndCaptureAssistantReply(...args)
+    },
+  }
+})
 jest.mock("@/lib/git/commands", () => ({
   ...jest.requireActual("@/lib/git/commands"),
   gitStackSetParent: jest.fn(async () => undefined),
@@ -49,24 +86,116 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
     return jest.requireActual("@/lib/db/agent-team-runtime").listAgentTeamChildRuns(...args)
   },
 }))
-jest.mock("./workspace/registry-controller", () => ({
-  AgentTeamRegistryWorkspaceController: class FakeController {
-    constructor(public readonly options: { roots: unknown[]; deleteBranch?: unknown }) {}
-    async openDispatch(input: { taskId: string }) {
+import type { WorkspaceBundleTurnLease } from "@/lib/task-workspace/run-lease"
+import type { TaskRun } from "@/lib/task-workspace/types"
+import type {
+  AgentTeamRegistryWorkspaceController,
+  AgentTeamRegistryWorkspaceControllerOptions,
+  AgentTeamWorkspaceReconcileResult,
+  OpenAgentTeamWorkspaceDispatch,
+} from "./workspace/registry-controller"
+
+function buildTypedWorkspaceLeaseFixture(
+  options: AgentTeamRegistryWorkspaceControllerOptions,
+  input: OpenAgentTeamWorkspaceDispatch
+): WorkspaceBundleTurnLease {
+  const primary =
+    options.roots.find((root) => root.logicalRootId === input.repositoryId) ?? options.roots[0]!
+  const primaryAlias =
+    options.roots.length > 1
+      ? `/alias/${input.taskId}/${primary.logicalRootId}`
+      : `/alias/${input.taskId}`
+  const additionalAliases = options.roots
+    .filter((root) => root.logicalRootId !== primary.logicalRootId)
+    .map((root) => `/alias/${input.taskId}/${root.logicalRootId}`)
+  const makeTaskRun = (logicalRootId: string, executionRoot: string): TaskRun => ({
+    runId: `ws-${input.taskId}-${logicalRootId}`,
+    taskId: `task:team:${options.runId}`,
+    sessionId: options.runId,
+    parentRunId: null,
+    agentId: input.teammateId,
+    agentKind: "agent-team",
+    workspaceRoot:
+      options.roots.find((root) => root.logicalRootId === logicalRootId)?.sourceRoot ?? "/repo",
+    executionRoot,
+    isolationKind: "gitWorktree",
+    isolationRef: null,
+    workspaceId: `workspace-${logicalRootId}`,
+    base: options.base,
+    workspaceKey: input.workspaceKey ?? null,
+    executionRunId: options.runId,
+    traceId: input.traceId ?? null,
+    turnId: `turn-${input.taskId}`,
+    attemptId: "a1",
+    providerAttemptId: null,
+    surface: "team",
+    trackingPolicy: { generatedOutputRoots: [], autoDetect: true },
+    baselineRevision: 0,
+    state: "running",
+    createdAt: 1,
+    settledAt: null,
+  })
+  const primaryRun = makeTaskRun(primary.logicalRootId, primaryAlias)
+  return {
+    bundleTurnId: `bundle-turn-${input.taskId}`,
+    bundleId: `bundle-${options.runId}-${input.taskId}`,
+    run: primaryRun,
+    runs: options.roots.map((root) => {
+      const alias =
+        root.logicalRootId === primary.logicalRootId
+          ? primaryAlias
+          : `/alias/${input.taskId}/${root.logicalRootId}`
       return {
-        primaryAlias: `/alias/${input.taskId}`,
-        // A single-repository Squad has no other repositories to reach.
-        additionalAliases: [],
-        run: { runId: `ws-${input.taskId}` },
-        settle: async () => [],
-        abort: () => abortWorkspaceMock(),
+        workspaceId: `workspace-${root.logicalRootId}`,
+        logicalRootIds: [root.logicalRootId],
+        run:
+          root.logicalRootId === primary.logicalRootId
+            ? primaryRun
+            : makeTaskRun(root.logicalRootId, alias),
       }
+    }),
+    primaryAlias,
+    additionalAliases,
+    settle: async () => [],
+    abort: async () => {
+      await abortWorkspaceMock()
+      return []
+    },
+  } satisfies WorkspaceBundleTurnLease
+}
+
+type FakeControllerSurface = Pick<
+  AgentTeamRegistryWorkspaceController,
+  | "openDispatch"
+  | "recordDispatchResult"
+  | "getDispatchSourceRoot"
+  | "getDispatchExecutionRoot"
+  | "reconcile"
+>
+
+jest.mock("./workspace/registry-controller", () => ({
+  AgentTeamRegistryWorkspaceController: class FakeController implements FakeControllerSurface {
+    constructor(public readonly options: AgentTeamRegistryWorkspaceControllerOptions) {}
+    async openDispatch(input: OpenAgentTeamWorkspaceDispatch): Promise<WorkspaceBundleTurnLease> {
+      return buildTypedWorkspaceLeaseFixture(this.options, input)
     }
-    getDispatchExecutionRoot() {
+    recordDispatchResult(): void {}
+    getDispatchSourceRoot(taskId: string): string | undefined {
+      void taskId
+      return this.options.roots[0]?.sourceRoot
+    }
+    getDispatchExecutionRoot(): string | undefined {
       return undefined
     }
-    async reconcile() {
-      return { mode: "manual" }
+    async reconcile(options: {
+      mode: AgentTeamWorkspaceReconcileResult["mode"]
+    }): Promise<AgentTeamWorkspaceReconcileResult> {
+      return {
+        mode: options.mode,
+        branches: [],
+        handles: [],
+        summary: "reconciled",
+      }
     }
   },
 }))
@@ -133,6 +262,7 @@ import { createSquadRunRecords } from "./squad/squad-run-records"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   approveAndPublishGithubStack,
+  declineGithubStackPublish,
   prepareAndPublishGithubStack,
 } from "./delivery/github-delivery-adapter"
 import { runSquadLifecycle } from "./squad/squad-lifecycle-runner"
@@ -350,7 +480,9 @@ beforeEach(async () => {
     createdAt: 1,
   })
   __resetInflightForTesting()
-  __setSquadReviewTestHooksForTesting({ pollIntervalMs: 10 })
+  // Disable Dexie.liveQuery's 3000ms cache-TTL timer in Node tests so the
+  // polling hook drives review wakeups without leaving open timer handles.
+  __setSquadReviewTestHooksForTesting({ pollIntervalMs: 10, subscribe: () => () => {} })
   ;(executeAgent as jest.Mock).mockReset()
 })
 
@@ -378,7 +510,7 @@ describe("parseProposedPlan", () => {
 })
 
 describe("runTeamLifecycle (F-path synthesizer)", () => {
-  it.each(["success", "failure", "cancel", "cancel-race"] as const)(
+  it.each(["success", "failure", "cancel", "cancel-race", "refused"] as const)(
     "round 4: real Squad hold, approval/publish %s releases its settlement watcher",
     async (outcome) => {
       const runId = `held-publish-${outcome}`
@@ -504,6 +636,20 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
           subscribeDexie: false,
           pollIntervalMs: 5,
         })
+        if (outcome === "refused") {
+          const { repositoryTarget } = await import("@/lib/policy/action-review/outbound-targets")
+          await declineGithubStackPublish(team, runId, [repositoryTarget("acme/repo")!])
+          expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({
+            status: "needs_input",
+            recoveryReason: "delivery_refused",
+          })
+          expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+            status: "waiting",
+          })
+          expect(request.mock.calls.filter(([route]) => route.startsWith("POST"))).toHaveLength(0)
+          expect(settled).not.toHaveBeenCalled()
+          return
+        }
         if (outcome === "cancel") {
           await controlSquadRun({ runId }, "stop")
         } else if (outcome === "cancel-race") {
@@ -539,6 +685,9 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
           if (outcome === "failure") await expect(publish).rejects.toThrow("publish unavailable")
           else await expect(publish).resolves.toBe(`graph-${runId}`)
         }
+        if (outcome === "success" || outcome === "cancel-race") {
+          expect(request.mock.calls.filter(([route]) => route.startsWith("POST"))).toHaveLength(2)
+        }
         const status =
           outcome === "success" || outcome === "cancel-race"
             ? "completed"
@@ -558,6 +707,95 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
       }
     }
   )
+
+  it("refuses stack publish with 0 GitHub calls when the Squad run carries undisclosed personal marks", async () => {
+    const runId = "held-publish-tainted"
+    const team = {
+      ...baseTeam,
+      taskIds: ["publish-task"],
+      config: {
+        ...baseTeam.config,
+        workingDir: "/repo",
+        githubDeliveryPolicy: {
+          ...STACKED_DELIVERY_DEFAULTS,
+          consent: { by: "local-user" as const, at: 1, repositoryPaths: ["/repo"] },
+        },
+      },
+    }
+    const previousStore = useAgentTeamStore.getState()
+    useAgentTeamStore.setState({
+      teams: { [team.id]: team },
+      teammates: { [lead.id]: lead, w1: worker("w1") },
+      tasks: { "publish-task": task("publish-task") },
+    })
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await createSquadRunRecords({
+        runId,
+        teamId: team.id,
+        objective: "Publish",
+        origin: "interactive",
+        startedAt: Date.now(),
+        localAuthorization: LOCAL_PERSON_RUN,
+        executionConstraints: {
+          version: 1,
+          teamConfig: team.config,
+          origin: "interactive",
+          triggeredFrom: { source: "ui" },
+          requirePlanApprovalFloor: false,
+        },
+      })
+      await createDeliveryGraphService({}).create({
+        id: `graph-${runId}`,
+        runId,
+        repositories: [
+          {
+            repositoryId: "primary",
+            baseBranch: "main",
+            layers: [
+              { id: "tainted-a", branch: "a", title: "A" },
+              { id: "tainted-b", branch: "b", title: "B" },
+            ],
+          },
+        ],
+      })
+      const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+      await addPersonalMarksToRun({ executionRunId: `execution:team:${runId}` }, [
+        { person: { kind: "local-person" }, source: "lark-user", markedAt: 1 },
+      ])
+      const request = jest.fn()
+      const resolveOctokit = jest.fn(async () => ({ request }))
+      outboundSettings = {
+        agentPermissions: { outboundAuthorizationByCategory: { github: "enforce" } },
+      }
+      ;(executeAgent as jest.Mock).mockResolvedValue({ channel: "text", text: "done" })
+      const deps = buildDeps(team, [task("publish-task")], [lead, worker("w1")])
+      await runSquadLifecycle(
+        { teamId: team.id, runId },
+        {
+          runtimeDeps: {
+            runLeadPlanning: deps.runLeadPlanning,
+            notifierDeps: deps.notifierDeps,
+            resolveTeamRepo: async () => ({
+              fullName: "acme/repo",
+              defaultBranch: "main",
+              defaultBranchExists: true,
+            }),
+            resolvePrObserveOctokit: resolveOctokit,
+          },
+        }
+      )
+      expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({
+        status: "needs_input",
+        recoveryReason: "delivery_failed",
+      })
+      expect(resolveOctokit).not.toHaveBeenCalled()
+      expect(request).not.toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+      useAgentTeamStore.setState(previousStore, true)
+    }
+  })
   it.each(["hold", "failure"] as const)(
     "settles the real finally after publication %s without leaking its execution",
     async (mode) => {
@@ -903,6 +1141,68 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     const runSignal = (observed[0] as { options: { signal?: AbortSignal } }).options.signal
     expect(runSignal).toBeInstanceOf(AbortSignal)
     expect(runSignal!.aborted).toBe(false)
+  })
+
+  it("propagates multi-root additionalAliases from the typed workspace lease to the actual dispatch request", async () => {
+    mockDesktopRuntimeForTest = true
+    resolveSendOptionsHook.mockImplementation(async (rawCtx) => {
+      const ctx = rawCtx as { session: { workingDir?: string }; bundleRoots?: readonly string[] }
+      return {
+        cwd: ctx.session.workingDir,
+        additionalDirectories: ctx.bundleRoots ? [...ctx.bundleRoots] : [],
+      }
+    })
+    runAndCaptureHook.mockImplementation(async (_sessionId, _prompt, _options, opts) => {
+      ;(opts as { onExecutorStarted?: (p: Promise<void>) => void })?.onExecutorStarted?.(
+        Promise.resolve()
+      )
+      return { text: "multi-root done" }
+    })
+    try {
+      const multiRootTeam = {
+        ...baseTeam,
+        config: {
+          ...baseTeam.config,
+          repositories: [
+            { id: "primary", role: "primary", path: "/repo/app", writable: true },
+            { id: "shared", role: "reference", path: "/repo/shared", writable: true },
+          ],
+          workspaceIsolation: { enabled: true, baseRef: "main", reconcile: "manual" },
+        },
+      } as AgentTeam
+      const runId = "run_team_multi_root"
+      await createSquadRunRecords({
+        runId,
+        teamId: multiRootTeam.id,
+        objective: "Multi-root work",
+        origin: "interactive",
+        startedAt: Date.now(),
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      const result = await runTeamLifecycle("team-1", {
+        ...buildDeps(multiRootTeam, [task("t1")], [lead, worker("w1")]),
+        runId,
+      })
+      expect(result.status).toBe("completed")
+      expect(resolveSendOptionsHook).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bundleRoots: ["/alias/t1/shared"],
+        })
+      )
+      expect(runAndCaptureHook).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          cwd: "/alias/t1/primary",
+          additionalDirectories: ["/alias/t1/shared"],
+        }),
+        expect.any(Object)
+      )
+    } finally {
+      mockDesktopRuntimeForTest = false
+      resolveSendOptionsHook.mockReset().mockImplementation(() => null)
+      runAndCaptureHook.mockReset().mockImplementation(() => null)
+    }
   })
 
   it("omits triggeredBy for non-IM (UI/API) runs", async () => {

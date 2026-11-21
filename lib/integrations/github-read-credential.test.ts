@@ -1,7 +1,16 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+jest.mock("@/lib/execution/personal-credential", () => {
+  const actual = jest.requireActual("@/lib/execution/personal-credential")
+  return {
+    ...actual,
+    admitPersonalCredential: jest.fn(actual.admitPersonalCredential),
+  }
+})
 jest.mock("@/lib/db/integrations", () => ({ listAllIntegrationAccounts: jest.fn() }))
 jest.mock("@/lib/plugin/auth/auth-provider-registry", () => ({ getProvider: jest.fn() }))
 jest.mock("./github-auth", () => ({ githubHostForSession: jest.fn() }))
+
+import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 
 import { listAllIntegrationAccounts } from "@/lib/db/integrations"
 import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
@@ -245,4 +254,27 @@ it("refuses ambient PAT fallback but preserves App service tokens and explicit B
     host: GITHUB_DOT_COM,
     token: "pat",
   })
+})
+
+it("does not admit or taint personal credentials when an App installation token resolves first", async () => {
+  const admitMock = jest.mocked(admitPersonalCredential)
+  admitMock.mockClear()
+  const pat = account({ id: "personal", authSessionId: "s-pat" })
+  const ownerApp = account({
+    id: "owner-app",
+    authSessionId: "s-app",
+    providerId: "github-app",
+    label: "acme",
+  })
+  const d = deps(
+    [pat, ownerApp],
+    { "s-pat": GITHUB_DOT_COM, "s-app": GITHUB_DOT_COM },
+    { personal: "pat", "owner-app": "ghs_install" }
+  )
+  expect(
+    await resolveGithubReadToken("acme/repo", GITHUB_DOT_COM, d, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).toBe("ghs_install")
+  expect(admitMock).not.toHaveBeenCalled()
 })

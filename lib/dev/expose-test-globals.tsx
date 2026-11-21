@@ -44,6 +44,7 @@ declare global {
     }) => Promise<boolean>
     __consentListenerGate?: { held: boolean; release: () => void }
     __cogniaResetDb?: () => Promise<void>
+    __cogniaAccountUnlocked?: boolean
     __cogniaSeedWorkflow?: (kind: SeededWorkflowKind) => Promise<string>
     __cogniaSeedRawWorkflow?: (draft: unknown) => Promise<string>
     __cogniaDeleteWorkflow?: (workflowId: string) => Promise<void>
@@ -381,15 +382,51 @@ export function ExposeTestGlobals(): null {
           window.__cogniaE2EWebRtcReady = true
         }
 
-        // Plugin discovery can add dynamic Dexie tables. If its E2E initializer
-        // has started, do not import the broad fixture bridge (which opens the
-        // account DB at the current schema) until that upgrade has settled.
-        // Otherwise the two same-page connections can deadlock each other at
-        // adjacent versions and make the prescribed recovery Reload repeat.
-        while (window.__cogniaPluginRuntimeReady === false && !cancelled) {
+        // Plugin discovery can add dynamic Dexie tables. Wait for AccountStore
+        // to settle first, and if an unlocked account sits on a route that
+        // activates `plugin-runtime`, wait until `PluginRuntimeInitializer`
+        // finishes its dynamic schema upgrade before opening `getDb()` here.
+        // Otherwise two same-page connections can collide across versions N and
+        // N+1 and abort Squad hydration with `DatabaseClosedError`.
+        const [{ useAccountStore }, { isBootCapabilityRequested }, { capabilitiesForPathname }] =
+          await Promise.all([
+            import("@/stores/account/account-store"),
+            import("@/lib/boot/capabilities"),
+            import("@/lib/boot/route-capabilities"),
+          ])
+        const accountDeadline = Date.now() + 15_000
+        while (!cancelled && Date.now() < accountDeadline) {
+          const acct = useAccountStore.getState()
+          if (acct.loaded && !acct.loading) break
           await new Promise((resolve) => window.setTimeout(resolve, 25))
         }
         if (cancelled) return
+        window.__cogniaAccountUnlocked = Boolean(useAccountStore.getState().unlockedAccountId)
+        const unsubscribeAccountUnlocked = useAccountStore.subscribe((state) => {
+          window.__cogniaAccountUnlocked = Boolean(state.unlockedAccountId)
+        })
+        const routeCaps = capabilitiesForPathname(window.location.pathname)
+        const routeNeedsPluginRuntime =
+          isBootCapabilityRequested("plugin-runtime") ||
+          routeCaps.some((cap) => cap !== "core-chat")
+        if (useAccountStore.getState().unlockedAccountId && routeNeedsPluginRuntime) {
+          const pluginDeadline = Date.now() + 20_000
+          while (
+            window.__cogniaPluginRuntimeReady !== true &&
+            !cancelled &&
+            Date.now() < pluginDeadline
+          ) {
+            await new Promise((resolve) => window.setTimeout(resolve, 25))
+          }
+        } else {
+          while (window.__cogniaPluginRuntimeReady === false && !cancelled) {
+            await new Promise((resolve) => window.setTimeout(resolve, 25))
+          }
+        }
+        if (cancelled) {
+          unsubscribeAccountUnlocked()
+          return
+        }
 
         const [
           { __resetDbForTesting, getDb, whenSeeded, activateAccountDatabase },
@@ -454,40 +491,39 @@ export function ExposeTestGlobals(): null {
         const ACCOUNT_DB_PREFIX = "cognia-account-"
 
         window.__cogniaResetDb = async () => {
-          // The main Dexie db is account-scoped (`cognia-account-<id>`). Capture
-          // the active db BEFORE the reset so we can re-point at the same account
-          // afterwards: `__resetDbForTesting()` clears the active selection, so a
-          // bare `getDb()` would fall back to the LEGACY db and seed data would
-          // land where the (account-scoped) app never reads it.
-          const prevName = getDb().name
-          try {
-            await getDb().delete()
-          } catch {
-            // DatabaseClosedError is normal during repeated resets; the cache
-            // drop below recovers.
-          }
-          __resetDbForTesting()
-          if (prevName.startsWith(ACCOUNT_DB_PREFIX)) {
-            // prevName is the PHYSICAL database name — `cognia-account-<id>`,
-            // `…<id>-encrypted-v1`, or `…<id>-target-<targetId>-encrypted-v1` —
-            // but activateAccountDatabase takes the bare localAccountId and re-appends
-            // the encryption suffix itself. Passing the whole slug produced
-            // `…-encrypted-v1-encrypted-v1`, a different database whose content
-            // cipher was never unlocked, so the re-seed below intermittently
-            // threw "Account content cipher is locked" whenever the reset ran
-            // while the encrypted account db was the active one.
-            let slug = prevName.slice(ACCOUNT_DB_PREFIX.length)
-            if (slug.endsWith("-encrypted-v1")) {
-              slug = slug.slice(0, -"-encrypted-v1".length)
+          // The main Dexie db is account-scoped (`cognia-account-<id>`). When the
+          // active account DB is already open in this document, clear every table
+          // in-place instead of calling `indexedDB.deleteDatabase()`: deleting an
+          // open DB triggers IDB `onblocked` against live hydrators/bridges and
+          // discards dynamic plugin tables registered by `PluginRuntimeInitializer`.
+          const currentDb = getDb()
+          const prevName = currentDb.name
+          if (currentDb.isOpen() && prevName.startsWith(ACCOUNT_DB_PREFIX)) {
+            await Promise.all(currentDb.tables.map((table) => table.clear().catch(() => undefined)))
+            const { seedBuiltIns } = await import("@/lib/db/seed")
+            await seedBuiltIns().catch(() => undefined)
+          } else {
+            try {
+              await currentDb.delete()
+            } catch {
+              // DatabaseClosedError is normal during repeated resets; the cache
+              // drop below recovers.
             }
-            const targetIdx = slug.indexOf("-target-")
-            activateAccountDatabase(
-              targetIdx === -1 ? slug : slug.slice(0, targetIdx),
-              targetIdx === -1 ? undefined : slug.slice(targetIdx + "-target-".length)
-            )
+            __resetDbForTesting()
+            if (prevName.startsWith(ACCOUNT_DB_PREFIX)) {
+              let slug = prevName.slice(ACCOUNT_DB_PREFIX.length)
+              if (slug.endsWith("-encrypted-v1")) {
+                slug = slug.slice(0, -"-encrypted-v1".length)
+              }
+              const targetIdx = slug.indexOf("-target-")
+              activateAccountDatabase(
+                targetIdx === -1 ? slug : slug.slice(0, targetIdx),
+                targetIdx === -1 ? undefined : slug.slice(targetIdx + "-target-".length)
+              )
+            }
+            getDb()
+            await whenSeeded()
           }
-          getDb()
-          await whenSeeded()
           const db = getDb()
           await db.workflows.clear()
           await db.workflowRuns.clear()
@@ -496,6 +532,8 @@ export function ExposeTestGlobals(): null {
           await db.teams.clear().catch(() => undefined)
           await db.skills.clear().catch(() => undefined)
           await db.connectorDrafts.clear().catch(() => undefined)
+          const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
+          useAgentTeamStore.getState().resetStore?.()
           // Safe to wipe wholesale: the unlocked-account state the gate reads is
           // never stored here. The dedicated E2E browser artifact re-derives it
           // from the account registry (a separate DB, untouched by this reset)
@@ -775,20 +813,23 @@ export function ExposeTestGlobals(): null {
 
         window.__cogniaSeedSquad = async (draft) => {
           const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
-          const [{ useAccountStore }, { getSquadRuntimeState }] = await Promise.all([
-            import("@/stores/account/account-store"),
-            import("@/lib/squads/bootstrap"),
-          ])
+          const [{ useAccountStore }, { getSquadRuntimeState, runSquadBootstrap }] =
+            await Promise.all([
+              import("@/stores/account/account-store"),
+              import("@/lib/squads/bootstrap"),
+            ])
           // The bootstrap runs once the account is unlocked and the mirror is
           // written against the account database. Seeding before both would
           // put the row in memory only (or in the legacy database).
           const readyBy = Date.now() + 20_000
           while (Date.now() < readyBy) {
-            if (
-              useAccountStore.getState().unlockedAccountId &&
-              getSquadRuntimeState() === "ready"
-            ) {
+            const state = getSquadRuntimeState()
+            if (useAccountStore.getState().unlockedAccountId && state === "ready") {
               break
+            }
+            if (useAccountStore.getState().unlockedAccountId && state === "failed") {
+              await runSquadBootstrap().catch(() => undefined)
+              if (getSquadRuntimeState() === "ready") break
             }
             await new Promise((resolve) => setTimeout(resolve, 100))
           }
@@ -808,11 +849,14 @@ export function ExposeTestGlobals(): null {
           }
           // The mirror debounces store writes by 400 ms. A spec that navigates
           // right after seeding must find the row in Dexie, not only in memory.
-          const { getDb } = await import("@/lib/db/schema")
+          const { getDb, withDbReopenRetry } = await import("@/lib/db/schema")
           const deadline = Date.now() + 5_000
           let mirrored = false
           while (Date.now() < deadline) {
-            if (await getDb().agentTeams.get(team.id)) {
+            const found = await withDbReopenRetry(() => getDb().agentTeams.get(team.id)).catch(
+              () => undefined
+            )
+            if (found) {
               mirrored = true
               break
             }
@@ -1243,6 +1287,7 @@ export function ExposeTestGlobals(): null {
         delete window.__cogniaE2EWebRtcEvents
         window.__cogniaE2EWebRtcReady = false
         window.__cogniaTestGlobalsReady = false
+        delete window.__cogniaAccountUnlocked
       }
     }
   }, [])
