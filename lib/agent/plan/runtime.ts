@@ -49,6 +49,7 @@ import type {
   UpdatePlanInput,
 } from "@/types/agent/plan"
 import type { LlmClient } from "@/lib/twin/distill/llm"
+import type { RunStatus, WorkflowRunRow } from "@/types/workflow/visual"
 import {
   DEFAULT_PLAN_CONFIG,
   computePlanCounts,
@@ -97,6 +98,34 @@ import type { PlanTurnHookDeps } from "./turn-driver"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 import { resolvePlanStrategy, type PlanRunStrategy } from "./strategy"
 import type { SynthesizePlanResult } from "./synthesize-workflow"
+import {
+  bindSubWorkflowSteps,
+  type SubWorkflowBindingDeps,
+  type SubWorkflowBindingMode,
+} from "./sub-workflow-binding"
+
+/**
+ * The published-version resolver plan approval pins `sub_workflow` steps with
+ * (ADR-0045 amendment): the workflow module's own formal binding, so a plan
+ * admits the same artifact any other published caller would.
+ */
+const publishedSubWorkflowBinding: SubWorkflowBindingDeps = {
+  async resolve(workflowId) {
+    const { createPublishedWorkflowDependencyBinding, WorkflowAdmissionError } =
+      await import("@/lib/workflow/runtime/execution-authority")
+    try {
+      return { ok: true, binding: await createPublishedWorkflowDependencyBinding(workflowId) }
+    } catch (error) {
+      if (!(error instanceof WorkflowAdmissionError)) throw error
+      return {
+        ok: false,
+        reason:
+          error.code === "deployment-not-found" ? "not-published" : "dependencies-unavailable",
+        detail: error.message,
+      }
+    }
+  },
+}
 
 export interface PlanChatResumeFailure {
   prompt: string
@@ -111,6 +140,30 @@ export function readPlanChatResumeFailure(plan: AgentPlan): PlanChatResumeFailur
   if (typeof value.prompt !== "string" || !value.prompt.trim()) return null
   if (value.mode !== "default" && value.mode !== "acceptEdits" && value.mode !== "auto") return null
   return { prompt: value.prompt, mode: value.mode }
+}
+
+/** `AgentPlan.metadata` key holding the plan's standalone workflow exports. */
+export const PLAN_WORKFLOW_EXPORTS_KEY = "exportedWorkflows"
+
+/** One `/plan to-workflow` export: the workflow it created and when. */
+export interface PlanWorkflowExport {
+  workflowId: string
+  exportedAt: number
+}
+
+/** The workflows this plan was exported as, oldest first; malformed entries are dropped. */
+export function readWorkflowExports(plan: Pick<AgentPlan, "metadata">): PlanWorkflowExport[] {
+  const raw = plan.metadata?.[PLAN_WORKFLOW_EXPORTS_KEY]
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((entry): PlanWorkflowExport[] => {
+    if (!entry || typeof entry !== "object") return []
+    const value = entry as Record<string, unknown>
+    return typeof value.workflowId === "string" &&
+      value.workflowId &&
+      typeof value.exportedAt === "number"
+      ? [{ workflowId: value.workflowId, exportedAt: value.exportedAt }]
+      : []
+  })
 }
 
 /** Input to {@link PlanRuntime.failInSessionStep}. */
@@ -182,6 +235,8 @@ interface AbortRegistration {
 }
 
 class PlanRuntime {
+  constructor(private readonly subWorkflowBinding: SubWorkflowBindingDeps) {}
+
   /** Per-plan active driver / orchestrator abort controllers. */
   private aborters = new Map<string, AbortRegistration>()
   /**
@@ -204,6 +259,15 @@ class PlanRuntime {
     }
   }
 
+  /** Pin a plan's `sub_workflow` steps to published versions (see `./sub-workflow-binding`). */
+  private bindSubWorkflows(
+    steps: PlanStep[],
+    mode: SubWorkflowBindingMode,
+    previous: readonly PlanStep[] = []
+  ): Promise<PlanStep[]> {
+    return bindSubWorkflowSteps(steps, mode, this.subWorkflowBinding, previous)
+  }
+
   /** Abort any in-flight controller for a plan. */
   private fireAbort(planId: string): void {
     const reg = this.aborters.get(planId)
@@ -223,6 +287,15 @@ class PlanRuntime {
    * else `approved`.
    */
   async createPlan(input: CreatePlanInput): Promise<AgentPlan> {
+    const config = resolvePlanConfig(input.config)
+    const status: PlanStatus = config.requireApproval ? "awaiting_approval" : "approved"
+    // A plan that needs no approval is approved the moment it exists, so its
+    // sub-workflow steps are pinned now. Before the open plan is cancelled: a
+    // refusal must leave the session exactly as it was.
+    const materialized = materializeSteps(input.steps)
+    const steps =
+      status === "approved" ? await this.bindSubWorkflows(materialized, "approve") : materialized
+
     const existing = await getOpenPlanForSession(input.sessionId)
     if (existing) {
       this.fireAbort(existing.id)
@@ -239,10 +312,7 @@ class PlanRuntime {
       })
     }
 
-    const config = resolvePlanConfig(input.config)
-    const steps = materializeSteps(input.steps)
     const counts = computePlanCounts(steps)
-    const status: PlanStatus = config.requireApproval ? "awaiting_approval" : "approved"
     const executionMode = input.executionMode ?? "auto"
 
     const row = await createPlan({
@@ -290,7 +360,14 @@ class PlanRuntime {
     if (current.status === "executing" || current.status === "paused") return current
     if (isTerminalPlanStatus(current.status)) return current
 
-    const steps = patch.steps ?? current.steps
+    // An approved plan stays approved through an edit, so a step that now
+    // names a different workflow (or a new one) is pinned like the approval
+    // pinned the rest; untouched steps keep the version they were approved on.
+    const edited = patch.steps ?? current.steps
+    const steps =
+      current.status === "approved"
+        ? await this.bindSubWorkflows(edited, "edit", current.steps)
+        : edited
     const counts = computePlanCounts(steps)
     await updatePlan(planId, {
       title: patch.title ?? current.title,
@@ -321,6 +398,24 @@ class PlanRuntime {
     // Metadata-only: rotating generation here would invalidate an already
     // prepared in-session step and make its retry skip the original turn.
     await updatePlan(planId, { metadata })
+  }
+
+  /**
+   * Record that the plan was exported as a standalone workflow (WF-24). Only a
+   * link: the workflow never reads the plan back, so this is what lets the plan
+   * surface say where its copy went. Metadata-only, any status, newest last,
+   * one entry per workflow.
+   */
+  async recordWorkflowExport(planId: string, workflowId: string): Promise<void> {
+    const current = await getPlan(planId)
+    if (!current) return
+    const prior = readWorkflowExports(current).filter((entry) => entry.workflowId !== workflowId)
+    await updatePlan(planId, {
+      metadata: {
+        ...current.metadata,
+        [PLAN_WORKFLOW_EXPORTS_KEY]: [...prior, { workflowId, exportedAt: Date.now() }],
+      },
+    })
   }
 
   /**
@@ -444,7 +539,15 @@ class PlanRuntime {
     const current = await getPlan(planId)
     if (!current) return null
     if (current.status === "executing" || isTerminalPlanStatus(current.status)) return current
-    await updatePlan(planId, { status: "approved", generationId: crypto.randomUUID() })
+    // What the person approves is what runs: pin every sub-workflow step to the
+    // version published now. Throws `PlanApprovalBlockedError`, leaving the
+    // plan untouched, when one is not published.
+    const steps = await this.bindSubWorkflows(current.steps, "approve")
+    await updatePlan(planId, {
+      status: "approved",
+      generationId: crypto.randomUUID(),
+      ...(steps !== current.steps ? { steps } : {}),
+    })
     await appendPlanEvent({ planId, kind: "approved", payload: { kind: "approved" } })
     const updated = (await getPlan(planId)) ?? null
     void emitPlanStatus(updated)
@@ -904,10 +1007,9 @@ class PlanRuntime {
     const unregisterAbort = this.registerAbortController(planId, ac)
 
     const runId = `plan_run_${crypto.randomUUID()}`
-    const [{ synthesizePlanWorkflow }, { runWorkflow }, planRunCtx] = await Promise.all([
+    const [{ synthesizePlanWorkflow }, { runWorkflow }] = await Promise.all([
       import("./synthesize-workflow"),
       import("@/lib/workflow/runtime/orchestrator"),
-      import("./plan-run-context"),
     ])
 
     let synthResult: SynthesizePlanResult
@@ -920,24 +1022,7 @@ class PlanRuntime {
       throw err
     }
 
-    // Resolved once, not per step: a plan is one piece of work, and steps that
-    // cannot see each other's edits are not a plan.
-    const { resolvePlanExecutionRoot } = await import("./step-workspace")
-    const executionRoot = await resolvePlanExecutionRoot(executing).catch(() => undefined)
-
-    planRunCtx.registerPlanRunContext({
-      runId,
-      planId,
-      plan: executing,
-      ...(executing.characterId ? { characterId: executing.characterId } : {}),
-      ...(executionRoot ? { executionRoot: executionRoot.root } : {}),
-      writer: {
-        setStepStatus: async (stepId, status, patch) => {
-          await this.setStepStatus(planId, stepId, status, patch)
-        },
-      },
-    })
-
+    const unregisterContext = await this.registerOwnRunContext(runId, executing)
     try {
       const result = await runWorkflow({
         workflow: synthResult.workflow,
@@ -950,8 +1035,7 @@ class PlanRuntime {
         runId,
         signal: ac.signal,
       })
-      const status: PlanStatus = result.status === "succeeded" ? "completed" : "failed"
-      await this.finishPlanRun(planId, status, result.error?.message)
+      const status = await this.settleOwnRun(planId, result)
       // Step-failure auto-replan (ADR-0045 §4): when a client is supplied and
       // the refinement budget allows, repair the plan into a fresh
       // awaiting_approval draft (fire-and-forget; never auto-re-executes).
@@ -969,9 +1053,101 @@ class PlanRuntime {
       }
       return { status, output: result.output }
     } finally {
-      planRunCtx.unregisterPlanRunContext(runId)
+      unregisterContext()
       unregisterAbort()
     }
+  }
+
+  /**
+   * Continue this plan's own run after the process that drove it died. The
+   * workflow resume controller finds the unfinished `__plan__:` run and hands
+   * it back here (`lib/workflow/nodes/plans/run-recovery.ts`); the run then
+   * replays under its own id with the step context, the pause / cancel abort
+   * wiring and the terminal transition `runPlan` gives it, so the plan settles
+   * exactly as if its driver had lived.
+   *
+   * A plan that no longer expects the run (deleted, paused, cancelled or
+   * already settled while nobody drove it) gets no replay: the orphaned run is
+   * cancelled, so it stops being named on every boot.
+   */
+  async resumePlanRun(row: WorkflowRunRow): Promise<RunStatus> {
+    const { planIdOfPlanWorkflowId } = await import("./synthesize-workflow")
+    const planId = planIdOfPlanWorkflowId(row.workflowId)
+    const plan = planId ? await getPlan(planId) : undefined
+    if (!planId || !plan || plan.status !== "executing") {
+      const { cancelWorkflowRun } = await import("@/lib/workflow/runtime/cancel-run")
+      await cancelWorkflowRun(
+        row.id,
+        plan ? `plan ${plan.id} is ${plan.status}` : `the plan of run ${row.id} is gone`
+      )
+      return "cancelled"
+    }
+
+    const ac = new AbortController()
+    const unregisterAbort = this.registerAbortController(planId, ac)
+    const unregisterContext = await this.registerOwnRunContext(row.id, plan)
+    try {
+      const [{ runWorkflow }, { originalTriggerOf }] = await Promise.all([
+        import("@/lib/workflow/runtime/orchestrator"),
+        import("@/lib/workflow/runtime/resume-controller"),
+      ])
+      const result = await runWorkflow({
+        workflow: row.workflowSnapshot,
+        trigger: originalTriggerOf(row),
+        runId: row.id,
+        signal: ac.signal,
+      })
+      await this.settleOwnRun(planId, result)
+      return result.status
+    } finally {
+      unregisterContext()
+      unregisterAbort()
+    }
+  }
+
+  /**
+   * Register the context the plan's own run reads (`action.plan.step.dispatch`
+   * looks it up by run id). Returns its unregister.
+   */
+  private async registerOwnRunContext(runId: string, plan: AgentPlan): Promise<() => void> {
+    const [planRunCtx, { resolvePlanExecutionRoot }] = await Promise.all([
+      import("./plan-run-context"),
+      import("./step-workspace"),
+    ])
+    // Resolved once, not per step: a plan is one piece of work, and steps that
+    // cannot see each other's edits are not a plan.
+    const executionRoot = await resolvePlanExecutionRoot(plan).catch(() => undefined)
+    planRunCtx.registerPlanRunContext({
+      runId,
+      planId: plan.id,
+      plan,
+      ...(plan.characterId ? { characterId: plan.characterId } : {}),
+      ...(executionRoot ? { executionRoot: executionRoot.root } : {}),
+      writer: {
+        setStepStatus: async (stepId, status, patch) => {
+          await this.setStepStatus(plan.id, stepId, status, patch)
+        },
+      },
+    })
+    return () => planRunCtx.unregisterPlanRunContext(runId)
+  }
+
+  /**
+   * Settle a plan from its own run's result. A step whose sub-workflow run is
+   * waiting for a person is not a failed plan: it pauses on that step, and
+   * resuming re-checks the run. Anything else ends the plan.
+   */
+  private async settleOwnRun(
+    planId: string,
+    result: { status: RunStatus; error?: { message?: string } }
+  ): Promise<PlanStatus> {
+    if (result.status === "waiting") {
+      await this.parkPlanRun(planId, result.error?.message ?? "a step is waiting for input")
+      return "paused"
+    }
+    const status: PlanStatus = result.status === "succeeded" ? "completed" : "failed"
+    await this.finishPlanRun(planId, status, result.error?.message)
+    return status
   }
 
   /**
@@ -1142,6 +1318,30 @@ class PlanRuntime {
   }
 
   /**
+   * Pause an orchestrated run whose step is held outside the plan (a
+   * sub-workflow run that returned `waiting`). Live and resumable, never
+   * terminal and never auto-repaired: nothing failed, someone has to answer.
+   * A concurrent pause or cancel wins.
+   */
+  private async parkPlanRun(planId: string, reason: string): Promise<void> {
+    const current = await getPlan(planId)
+    if (!current || isTerminalPlanStatus(current.status) || current.status === "paused") return
+    disarmPlanStepWatch(planId)
+    await updatePlan(planId, {
+      status: "paused",
+      generationId: crypto.randomUUID(),
+      turnDispatch: undefined,
+    })
+    await appendPlanEvent({ planId, kind: "paused", payload: { kind: "paused" } })
+    await appendPlanEvent({
+      planId,
+      kind: "exit",
+      payload: { kind: "exit", status: "paused", reason },
+    })
+    void emitPlanStatus((await getPlan(planId)) ?? null)
+  }
+
+  /**
    * Transition a finished run to its terminal status + log the exit event.
    *
    * Public because the in-session driver owns the terminal transition for the
@@ -1205,13 +1405,19 @@ class PlanRuntime {
 let _instance: PlanRuntime | null = null
 
 export function getPlanRuntime(): PlanRuntime {
-  if (!_instance) _instance = new PlanRuntime()
+  if (!_instance) _instance = new PlanRuntime(publishedSubWorkflowBinding)
   return _instance
 }
 
-/** Test-only escape hatch — wipes registered AbortControllers + singleton state. */
-export function __resetPlanRuntimeForTesting(): void {
-  _instance = null
+/**
+ * Test-only escape hatch — wipes registered AbortControllers + singleton state.
+ * `subWorkflowBinding` replaces the published-version resolver for the next
+ * instance, so a test can approve a plan without a workflow deployment.
+ */
+export function __resetPlanRuntimeForTesting(
+  options: { subWorkflowBinding?: SubWorkflowBindingDeps } = {}
+): void {
+  _instance = options.subWorkflowBinding ? new PlanRuntime(options.subWorkflowBinding) : null
 }
 
 export type { PlanRuntime }

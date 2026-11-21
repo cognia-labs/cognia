@@ -15,6 +15,11 @@ export default defineHostModule({
   stage: "beta",
   acceptance: { realSmoke: "pending" },
   dependsOn: [],
-  // "Open as workflow" in the skill detail calls the sync.
+  // "Open as workflow" in the skill detail calls the sync; the editor page and
+  // the library run dialog read through `loadFreshWorkflow`.
   api: ["lib/playbooks/derived-workflow.ts"],
+  // The same fresh read for runners outside the UI (`/workflow`, the eval
+  // target), which reach it through the workflow module instead of importing
+  // this one (ADR-0254 §2).
+  provides: [{ port: "fresh-workflows", load: () => import("./fresh-workflows-port") }],
 })

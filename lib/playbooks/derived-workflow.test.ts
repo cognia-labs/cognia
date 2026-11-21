@@ -6,6 +6,7 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 
 import {
   MAX_PLAYBOOKS_PER_COMPILE,
+  loadFreshWorkflow,
   loadPlaybookSource,
   syncPlaybookWorkflow,
   type PlaybookWorkflowDeps,
@@ -154,6 +155,77 @@ describe("syncPlaybookWorkflow", () => {
     expect(await syncPlaybookWorkflow("p0", deps)).toEqual({
       status: "too-many-playbooks",
       limit: MAX_PLAYBOOKS_PER_COMPILE,
+    })
+  })
+})
+
+describe("loadFreshWorkflow", () => {
+  it("returns an ordinary workflow as stored without touching any playbook", async () => {
+    const { deps, rows } = harness({})
+    const plain = {
+      id: "wf_plain",
+      name: "Plain",
+      nodes: [],
+      edges: [],
+    } as unknown as VisualWorkflow
+    rows.set(plain.id, plain)
+    expect(await loadFreshWorkflow("wf_plain", deps)).toEqual({
+      status: "ready",
+      workflow: plain,
+      dormant: [],
+    })
+    expect(deps.putDerivedWorkflow).not.toHaveBeenCalled()
+  })
+
+  it("reports a missing row", async () => {
+    const { deps } = harness({})
+    expect(await loadFreshWorkflow("wf_ghost", deps)).toEqual({ status: "not-found" })
+  })
+
+  it("recompiles a derived row whose called playbook changed before handing it out", async () => {
+    const skills = {
+      outer: { name: "Outer", flow: "version: 1\nsteps:\n  - id: dig\n    uses: playbook:inner\n" },
+      inner: { name: "Inner", flow: FLOW },
+    }
+    const { deps, tick } = harness(skills)
+    await syncPlaybookWorkflow("outer", deps)
+    tick()
+    // The bookmark / library path: only the derived row's id is known.
+    skills.inner.flow = `${FLOW}  - id: tell\n    uses: notify\n    needs: [scan]\n`
+
+    const fresh = await loadFreshWorkflow(playbookWorkflowId("outer"), deps)
+    expect(fresh.status).toBe("ready")
+    if (fresh.status !== "ready") return
+    expect(fresh.workflow.nodes.map((n) => n.id)).toContain("pb_dig__tell")
+    expect(fresh.workflow.derivedFrom?.compiledAt).toBe(101)
+    expect(deps.putDerivedWorkflow).toHaveBeenCalledTimes(2)
+  })
+
+  it("passes the dormant steps on so a runner can refuse", async () => {
+    const { deps } = harness({
+      sweep: {
+        name: "Sweep",
+        flow: "version: 1\nsteps:\n  - id: s\n    uses: pattern:synthesize\n",
+      },
+    })
+    await syncPlaybookWorkflow("sweep", deps)
+    expect(await loadFreshWorkflow(playbookWorkflowId("sweep"), deps)).toMatchObject({
+      status: "ready",
+      dormant: [{ nodeId: "pb_s", reason: "pattern-core-pending" }],
+    })
+  })
+
+  it("keeps the stored copy but flags it when the source playbook is gone", async () => {
+    const skills: Record<string, FakeSkill> = { review: { name: "Review", flow: FLOW } }
+    const { deps } = harness(skills)
+    await syncPlaybookWorkflow("review", deps)
+    delete skills.review
+
+    const fresh = await loadFreshWorkflow(playbookWorkflowId("review"), deps)
+    expect(fresh).toMatchObject({
+      status: "source-unavailable",
+      problem: { status: "missing" },
+      workflow: { id: playbookWorkflowId("review") },
     })
   })
 })

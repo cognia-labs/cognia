@@ -67,12 +67,16 @@ export default defineHostModule({
     "lib/workflow/editor/workflow-editor-context.tsx",
     "lib/workflow/knowledge/access.ts",
     "lib/workflow/knowledge/artifacts.ts",
+    // A run outside the editor reads a draft through the `fresh-workflows`
+    // port, so a playbook-derived row is never run stale (ADR-0254 §2).
+    "lib/workflow/library/fresh-workflow.ts",
     "lib/workflow/library/lookup.ts",
     "lib/workflow/node-groups/materialize.ts",
     "lib/workflow/nodes/ai/ai-prompt-routed.ts",
     "lib/workflow/nodes/ai/pii-gate.ts",
     "lib/workflow/nodes/ai/schema-validate.ts",
     "lib/workflow/nodes/catalog.ts",
+    "lib/workflow/nodes/plans/run-recovery.ts",
     "lib/workflow/nodes/registry.ts",
     "lib/workflow/nodes/shared/executor-support.ts",
     "lib/workflow/nodes/teams/team-runtime-port.ts",
@@ -104,8 +108,16 @@ export default defineHostModule({
   // fails the deployment when no module provides it. A run's interactive page
   // opens through `interactive-page`; without it the run detail offers none.
   // Desktop events and finished runs reach the bots through `bot-dispatch`;
-  // without it there are no bots to tell.
-  requires: ["ocr", "knowledge-base-revisions?", "interactive-page?", "bot-dispatch?"],
+  // without it there are no bots to tell. A draft run outside the editor reads
+  // through `fresh-workflows`; without it a playbook-derived row cannot be
+  // checked against its playbook and is refused.
+  requires: [
+    "ocr",
+    "knowledge-base-revisions?",
+    "interactive-page?",
+    "bot-dispatch?",
+    "fresh-workflows?",
+  ],
   // The companion pull of the definitions a paired client mirrors, which
   // holds back a row the client's queued Host write has not landed for yet.
   syncHandlers: { tables: ["workflows"], load: () => import("./sync/sync-handlers") },

@@ -84,11 +84,13 @@ describe("renderPlanSystemSection", () => {
       step({ title: "done one", status: "completed", order: 0 }),
       step({ title: "now one", status: "in_progress", order: 1 }),
       step({ title: "later one", status: "pending", order: 2 }),
+      step({ title: "asks one", status: "waiting", order: 3 }),
     ]
     const out = renderPlanSystemSection(plan({ steps }))
     expect(out).toContain("[x] done one")
     expect(out).toContain("[~] now one")
     expect(out).toContain("[ ] later one")
+    expect(out).toContain("[?] asks one")
   })
 
   it("calls out the current step by id when set", () => {

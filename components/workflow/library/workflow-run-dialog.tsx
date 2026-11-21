@@ -24,6 +24,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { loadFreshWorkflow } from "@/lib/playbooks/derived-workflow"
 import { runWorkflow } from "@/lib/workflow/runtime/orchestrator"
 import { dispatchTrigger } from "@/lib/workflow/runtime/trigger-bridge"
 import type { TriggerEvent, WorkflowRow } from "@/types/workflow/visual"
@@ -47,6 +48,7 @@ export function parseRunPayload(text: string): { ok: true; value: unknown } | { 
 
 export function WorkflowRunDialog({ workflow, open, onOpenChange }: WorkflowRunDialogProps) {
   const t = useTranslations("workflows.card")
+  const tPlaybook = useTranslations("workflows.playbook")
   const [payloadText, setPayloadText] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -60,17 +62,35 @@ export function WorkflowRunDialog({ workflow, open, onOpenChange }: WorkflowRunD
     setError(null)
     setBusy(true)
     try {
+      // The library row may be a playbook-derived copy compiled from an older
+      // playbook: run what the playbook compiles to now (ADR-0254 §2).
+      const fresh = await loadFreshWorkflow(workflow.id)
+      if (fresh.status === "not-found") {
+        setError(t("runDialog.missing"))
+        return
+      }
+      if (fresh.status === "source-unavailable") {
+        setError(
+          tPlaybook("notRunnable", { skillId: fresh.workflow.derivedFrom?.skillId ?? workflow.id })
+        )
+        return
+      }
+      if (fresh.dormant.length > 0) {
+        setError(tPlaybook("dormantNotRunnable", { count: fresh.dormant.length }))
+        return
+      }
+      const current = fresh.workflow
       const trigger: TriggerEvent = {
-        workflowId: workflow.id,
+        workflowId: current.id,
         kind: "trigger.manual",
         payload: parsed.value,
         originAt: Date.now(),
       }
-      if (workflow.published?.deploymentId) {
+      if (current.published?.deploymentId) {
         await dispatchTrigger(trigger, { triggeredBy: { source: "desktop" } })
       } else {
         // Draft previews stay local; only immutable published artifacts are placeable.
-        void runWorkflow({ workflow, trigger, triggeredBy: { source: "desktop" } })
+        void runWorkflow({ workflow: current, trigger, triggeredBy: { source: "desktop" } })
       }
       toast.success(t("runStarted"))
       onOpenChange(false)

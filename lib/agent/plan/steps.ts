@@ -110,9 +110,21 @@ export function materializeSteps(inputs: CreatePlanStepInput[]): PlanStep[] {
 }
 
 /**
+ * The text a step's turn or approval asks with: its explicit prompt for the
+ * kinds that carry one, else its title and description.
+ */
+export function planStepPrompt(step: PlanStep): string {
+  if (step.params?.kind === "agent_turn" && step.params.prompt) return step.params.prompt
+  if (step.params?.kind === "approval_gate" && step.params.prompt) return step.params.prompt
+  if (step.params?.kind === "editor_review" && step.params.prompt) return step.params.prompt
+  return step.description ? `${step.title}\n\n${step.description}` : step.title
+}
+
+/**
  * Apply a status (and optional field patch) to one step, returning a new step
  * array plus the recomputed plan counts and current-step cursor. The cursor
- * points at the first `in_progress` step, else the next runnable step, else
+ * points at the first `in_progress` step, else the first `waiting` one (the
+ * step the paused plan is held on), else the next runnable step, else
  * undefined. Blocked steps remain unfinished but cannot become the cursor.
  */
 export function applyStepStatus(
@@ -126,7 +138,8 @@ export function applyStepStatus(
   const next = errorPolicy === undefined ? updated : reconcileBlockedSteps(updated, errorPolicy)
   const counts = computePlanCounts(next)
   const ordered = [...next].sort((a, b) => a.order - b.order)
-  const inProgress = ordered.find((s) => s.status === "in_progress")
+  const inProgress =
+    ordered.find((s) => s.status === "in_progress") ?? ordered.find((s) => s.status === "waiting")
   const nextOpen = nextRunnableStep(next)
   return {
     steps: next,

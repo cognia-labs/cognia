@@ -11,7 +11,7 @@ import type {
 import { registerNodeExecutor } from "../registry"
 import { getPlanRuntime } from "@/lib/agent/plan/runtime"
 import { buildPlanRepairClient } from "@/lib/agent/plan/repair-client"
-import type { PlanRunContext } from "@/lib/agent/plan/plan-run-context"
+import { planIdOfPlanWorkflowId } from "@/lib/agent/plan/synthesize-workflow"
 import { listAllPlans, listPlanEvents } from "@/lib/db/plans"
 import { notePlanCreatedByWorkflow } from "@/lib/workflow/runtime/plan-event-trigger"
 import { getSession } from "@/lib/db/sessions"
@@ -334,61 +334,23 @@ registerNodeExecutor({
 })
 
 // ── action.plan.step.dispatch ─────────────────────────────────────────────
-// Per ADR-0045 P2. Synthesizer-emitted node: one per PlanStep. Looks up the
-// per-run PlanRunContext (registered by `runPlan` before runWorkflow) and
-// delegates to `dispatchPlanStepNode`, which marks the step in_progress, runs
-// the kind-specific work (agent_turn / approval_gate / sub_workflow), and
-// writes the terminal status back. Retryable so the orchestrator re-runs
-// transient failures per the plan's error policy.
-/**
- * Build a `PlanRunContext` for a workflow the plan runtime is NOT driving.
- *
- * `/plan to-workflow` writes a durable, editable workflow whose body is
- * `action.plan.step.dispatch` nodes, and its own copy tells the user "the
- * workflow is now yours to edit and re-run". Pressing Run on it always failed
- * with `no PlanRunContext registered`, because only `runPlan` registered one.
- *
- * The context is five fields, so the standalone path rebuilds it from the
- * node's `planId` rather than duplicating the runtime: the same plan snapshot,
- * the same `resolvePlanExecutionRoot`, and the runtime's own `setStepStatus`
- * as the writer, so step statuses land in exactly one place either way.
- *
- * Registered for the run so sibling step nodes reuse it, and torn down when
- * the run's abort signal fires.
- */
-async function bootstrapPlanRunContext(
-  runId: string,
-  planId: string
-): Promise<PlanRunContext | undefined> {
-  const [{ getPlan }, planRunCtx, { resolvePlanExecutionRoot }] = await Promise.all([
-    import("@/lib/db/plans"),
-    import("@/lib/agent/plan/plan-run-context"),
-    import("@/lib/agent/plan/step-workspace"),
-  ])
-  // Re-check under await: two step nodes can reach this concurrently, and the
-  // first one to finish should win rather than both registering a context.
-  const existing = planRunCtx.getPlanRunContext(runId)
-  if (existing) return existing
+// Per ADR-0045 P2. Synthesizer-emitted node: one per PlanStep, inside the
+// plan's OWN run (`__plan__:<planId>:<nonce>`). Looks up the per-run
+// PlanRunContext (registered by `runPlan` before runWorkflow) and delegates to
+// `dispatchPlanStepNode`, which marks the step in_progress, runs the
+// kind-specific work and writes the terminal status back to the plan.
+// Retryable so the orchestrator re-runs transient failures per the plan's
+// error policy.
+//
+// It never runs anywhere else: a workflow that reads and writes a plan it
+// does not belong to would change with the plan, and every run of it would
+// share the plan's step state. `/plan to-workflow` therefore exports the
+// steps as ordinary nodes (`lib/agent/plan/workflow-conversion.ts`), and the
+// editor flags a hand-placed copy of this node (`synthesizerOnly`).
 
-  const plan = await getPlan(planId)
-  if (!plan) return undefined
-
-  const executionRoot = await resolvePlanExecutionRoot(plan).catch(() => undefined)
-  const runtime = getPlanRuntime()
-  const ctx: PlanRunContext = {
-    runId,
-    planId,
-    plan,
-    ...(plan.characterId ? { characterId: plan.characterId } : {}),
-    ...(executionRoot ? { executionRoot: executionRoot.root } : {}),
-    writer: {
-      setStepStatus: async (stepId, status, patch) => {
-        await runtime.setStepStatus(planId, stepId, status, patch)
-      },
-    },
-  }
-  planRunCtx.registerPlanRunContext(ctx)
-  return ctx
+/** Is this run the plan's own (`synthesizePlanWorkflow`'s `__plan__:<planId>:<nonce>`)? */
+function isOwnPlanRun(workflowId: string | undefined, planId: string): boolean {
+  return planIdOfPlanWorkflowId(workflowId) === planId
 }
 
 registerNodeExecutor({
@@ -400,15 +362,24 @@ registerNodeExecutor({
     if (!params.planId || !params.stepId) {
       throw nonRetryable("action.plan.step.dispatch requires 'planId' and 'stepId'")
     }
+    if (!isOwnPlanRun(ctx.workflowId, params.planId)) {
+      throw nonRetryable(
+        `action.plan.step.dispatch runs only inside plan ${params.planId}'s own run; ` +
+          "export the plan with /plan to-workflow for a workflow that runs on its own"
+      )
+    }
     const [{ getPlanRunContext }, { dispatchPlanStepNode }] = await Promise.all([
       import("@/lib/agent/plan/plan-run-context"),
       import("@/lib/agent/plan/step-dispatch"),
     ])
-    const runCtx =
-      getPlanRunContext(ctx.runId) ?? (await bootstrapPlanRunContext(ctx.runId, params.planId))
+    // Registered by the plan's driver before the run starts: `runPlan`, or
+    // `resumePlanRun` when a crashed run is continued. Without one nothing
+    // would settle the plan when the run ends, so the step does not run.
+    const runCtx = getPlanRunContext(ctx.runId)
     if (!runCtx) {
       throw nonRetryable(
-        `action.plan.step.dispatch: plan ${params.planId} not found, and no PlanRunContext is registered for runId=${ctx.runId}`
+        `action.plan.step.dispatch: no driver holds plan ${params.planId}'s run ${ctx.runId}; ` +
+          "run the plan again to continue it"
       )
     }
     return dispatchPlanStepNode(runCtx, params.stepId, ctx.signal)

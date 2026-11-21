@@ -16,6 +16,7 @@ import {
   reconcileBlockedSteps,
   materializeSteps,
   nextRunnableStep,
+  planStepPrompt,
   skipStepInDag,
 } from "./steps"
 
@@ -173,6 +174,15 @@ describe("applyStepStatus", () => {
   it("falls back to the first non-terminal step in order", () => {
     const r = applyStepStatus(base, base[0].id, "completed")
     expect(r.currentStepId).toBe(base[1].id)
+  })
+
+  // WF-12: a step whose sub-workflow run waits for a person is the step the
+  // paused plan is held on — not finished, so never skipped past.
+  it("points currentStepId at a waiting step when nothing is in progress", () => {
+    const r = applyStepStatus(base, base[1].id, "waiting", { result: "held" })
+    expect(r.currentStepId).toBe(base[1].id)
+    expect(r.completedSteps).toBe(0)
+    expect(isTerminalStepStatus("waiting")).toBe(false)
   })
 
   it("yields undefined currentStepId when all steps are terminal", () => {
@@ -432,5 +442,25 @@ describe("dependency failure blocking", () => {
       totalSteps: 2,
       currentStepId: undefined,
     })
+  })
+})
+
+describe("planStepPrompt", () => {
+  const base = materializeSteps([input({ title: "Ship it", description: "the release" })])[0]
+
+  it("uses an explicit prompt for the kinds that carry one", () => {
+    expect(planStepPrompt({ ...base, params: { kind: "agent_turn", prompt: "Do X" } })).toBe("Do X")
+    expect(
+      planStepPrompt({
+        ...base,
+        kind: "approval_gate",
+        params: { kind: "approval_gate", prompt: "OK?" },
+      })
+    ).toBe("OK?")
+  })
+
+  it("falls back to the title and description", () => {
+    expect(planStepPrompt(base)).toBe("Ship it\n\nthe release")
+    expect(planStepPrompt({ ...base, description: undefined })).toBe("Ship it")
   })
 })

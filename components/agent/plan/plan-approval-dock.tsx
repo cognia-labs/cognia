@@ -64,6 +64,10 @@ import { mobileTransition } from "@/lib/ui/motion"
 import { resolvePlanHtmlStyle } from "@/lib/agent/plan/plan-html"
 import { readChatHandoff } from "@/lib/agent/plan/chat-handoff"
 import { resolvePlanStrategy } from "@/lib/agent/plan/strategy"
+import {
+  PlanApprovalBlockedError,
+  planApprovalBlockedMessage,
+} from "@/lib/agent/plan/sub-workflow-binding"
 import { chatPlanStepHooks } from "@/lib/agent/plan/turn-driver"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import {
@@ -283,7 +287,13 @@ export function PlanApprovalDock({
       await onResume(continuation.prompt, mode)
       // Leave `pending` set — approvePlan flips the status so this dock unmounts.
     } catch (error) {
-      if (inSessionStep) {
+      if (error instanceof PlanApprovalBlockedError) {
+        // Approval refused before anything changed: a sub-workflow step's
+        // workflow is not published (WF-12). The plan stays where it was and
+        // the dock stays up; say which step and what to do.
+        const { key, values } = planApprovalBlockedMessage(error)
+        toast.error(t(`approvalBlocked.${key}`, values))
+      } else if (inSessionStep) {
         // The step is already `in_progress`: record why its turn never went
         // out, which halts the plan on it with the tracker's failure card.
         await getPlanRuntime()

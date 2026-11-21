@@ -1129,7 +1129,7 @@
       },
       "step": {
         "dispatch": {
-          "description": "Runs one step of an agent plan. Emitted by /plan to-workflow and by the plan runtime, one node per plan step.",
+          "description": "Runs one step of an agent plan inside that plan's own run. Emitted by the plan runtime, one node per plan step; /plan to-workflow exports ordinary nodes instead.",
           "label": "Dispatch plan step"
         }
       },

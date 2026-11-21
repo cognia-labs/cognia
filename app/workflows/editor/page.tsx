@@ -16,14 +16,26 @@ import RouteBody from "./route-body"
 
 import { Suspense, useEffect, useState } from "react"
 import { notFound, useRouter, useSearchParams } from "next/navigation"
+import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { PlaybookWorkflowOpener } from "@/components/workflow/editor/playbook-workflow-opener"
-import { getWorkflow } from "@/lib/db/workflows"
+import { useStableCallback } from "@/hooks/ui/use-stable-callback"
+import { loadFreshWorkflow } from "@/lib/playbooks/derived-workflow"
 import type { WorkflowRow } from "@/types/workflow/visual"
 
 function WorkflowEditorInner() {
   const router = useRouter()
+  const tPlaybook = useTranslations("workflows.playbook")
+  // Toasts read the latest translator without re-running the load effect.
+  const warnSourceUnavailable = useStableCallback((skillId: string) =>
+    toast.warning(tPlaybook("sourceUnavailable", { skillId }))
+  )
+  const reportLoadFailure = useStableCallback((error: unknown) =>
+    toast.error(
+      tPlaybook("loadFailed", { error: error instanceof Error ? error.message : String(error) })
+    )
+  )
   const searchParams = useSearchParams()
   const id = searchParams.get("id")
   const [workflow, setWorkflow] = useState<WorkflowRow | null | undefined>(undefined)
@@ -41,20 +53,27 @@ function WorkflowEditorInner() {
   useEffect(() => {
     if (!id) return
     let cancelled = false
-    getWorkflow(id)
-      .then((wf) => {
+    // A bookmark or library link to a playbook-derived workflow must open the
+    // graph its playbook compiles to today, not the copy stored when someone
+    // last went through "Open as workflow" (ADR-0254 §2).
+    loadFreshWorkflow(id)
+      .then((fresh) => {
         if (cancelled) return
-        setWorkflow(wf ?? null)
+        if (fresh.status === "not-found") return setWorkflow(null)
+        if (fresh.status === "source-unavailable") {
+          warnSourceUnavailable(fresh.workflow.derivedFrom?.skillId ?? fresh.workflow.id)
+        }
+        setWorkflow(fresh.workflow)
       })
       .catch((err) => {
         if (cancelled) return
-        toast.error(err instanceof Error ? err.message : "Failed to load workflow")
+        reportLoadFailure(err)
         setWorkflow(null)
       })
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, warnSourceUnavailable, reportLoadFailure])
 
   const playbookSkillId = searchParams.get("playbook")
   if (!id && playbookSkillId) {

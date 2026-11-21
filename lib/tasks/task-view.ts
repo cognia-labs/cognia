@@ -117,6 +117,9 @@ const PLAN_STEP_STATUS: Record<PlanStepStatus, TaskViewStatus> = {
   failed: "failed",
   skipped: "skipped",
   blocked: "blocked",
+  // Held by a person outside the plan (a sub-workflow waiting for input) while
+  // the plan is paused: started, not finished, not running.
+  waiting: "stopped",
 }
 
 export function planStepStatusToTask(status: PlanStepStatus): TaskViewStatus {

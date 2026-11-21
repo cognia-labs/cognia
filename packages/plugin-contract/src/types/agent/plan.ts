@@ -22,6 +22,8 @@
  * event payload, and a `isTerminal*` helper.
  */
 
+import type { WorkflowDependencyBinding } from "../workflow/deployment"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Step kind + params (kind-tagged union)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +37,8 @@
  *   teammate_dispatch → delegate to a teammate / subagent — reuses `dispatchTeammate`
  *   tool_call         → a specific plugin-registered tool invocation with fixed input
  *   mcp_tool_call     → a single MCP server tool invocation — reuses `lib/mcp/invoke`
- *   sub_workflow      → run a nested VisualWorkflow — reuses `runWorkflow`
+ *   sub_workflow      → admit the published workflow version the plan was approved
+ *                       against — formal `executeWorkflowVersion`, never the draft
  *   approval_gate     → human approval checkpoint — reuses `lib/runtime/approval-bus`
  */
 export type PlanStepKind =
@@ -53,7 +56,19 @@ export type PlanStepParams =
   | { kind: "teammate_dispatch"; teamId?: string; teammateId?: string; spawnPrompt?: string }
   | { kind: "tool_call"; toolName: string; input: Record<string, unknown> }
   | { kind: "mcp_tool_call"; serverId: string; toolName: string; input?: Record<string, unknown> }
-  | { kind: "sub_workflow"; workflowId: string; triggerPayload?: unknown }
+  | {
+      kind: "sub_workflow"
+      workflowId: string
+      triggerPayload?: unknown
+      /**
+       * The production deployment this step was approved against (ADR-0045
+       * amendment, 2026-11-20). Written when the plan is approved, or when it
+       * is created already approved; execution admits exactly this version and
+       * dependency lock, so editing or re-publishing the workflow after the
+       * approval never changes what runs. A step without one does not run.
+       */
+      binding?: WorkflowDependencyBinding
+    }
   | { kind: "approval_gate"; prompt?: string }
   /**
    * Show proposed contents beside a file in the Pro IDE's native diff view, then
@@ -93,9 +108,12 @@ export type PlanStepParams =
  *   failed      → exhausted retries (terminal)
  *   skipped     → bypassed by a refinement / branch (terminal)
  *   blocked     → an upstream dep failed and error policy is "stop"
+ *   waiting     → the step's work is held by a person outside the plan: its
+ *                 sub-workflow run returned `waiting` (needs input). Not
+ *                 terminal; the plan pauses, and resuming it re-checks the run
  */
 export type PlanStepStatus =
-  "pending" | "ready" | "in_progress" | "completed" | "failed" | "skipped" | "blocked"
+  "pending" | "ready" | "in_progress" | "completed" | "failed" | "skipped" | "blocked" | "waiting"
 
 export interface PlanStep {
   /** UUIDv4, stable across edits and re-renders. */

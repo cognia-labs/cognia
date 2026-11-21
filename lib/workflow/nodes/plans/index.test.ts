@@ -8,16 +8,17 @@ import { buildPlanRepairClient } from "@/lib/agent/plan/repair-client"
 import type { AgentPlan } from "@/types/agent/plan"
 import { getExecutor } from "../registry"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
-import { getPlanRunContext, unregisterPlanRunContext } from "@/lib/agent/plan/plan-run-context"
+import {
+  getPlanRunContext,
+  registerPlanRunContext,
+  unregisterPlanRunContext,
+} from "@/lib/agent/plan/plan-run-context"
 
 jest.mock("@/lib/agent/plan/repair-client", () => ({ buildPlanRepairClient: jest.fn() }))
 
 const dispatchPlanStepNode = jest.fn()
 jest.mock("@/lib/agent/plan/step-dispatch", () => ({
   dispatchPlanStepNode: (...args: unknown[]) => dispatchPlanStepNode(...args),
-}))
-jest.mock("@/lib/agent/plan/step-workspace", () => ({
-  resolvePlanExecutionRoot: jest.fn(async () => ({ root: "/tmp/plan" })),
 }))
 const mockBuildRendererLlmClient = jest.fn((_args: unknown) => null)
 jest.mock("@/lib/ai/renderer-llm-client", () => ({
@@ -76,13 +77,15 @@ describe("plan-nodes registration", () => {
 })
 
 /**
- * `/plan to-workflow` writes a durable workflow of `action.plan.step.dispatch`
- * nodes and tells the user it is theirs to edit and re-run. Pressing Run always
- * failed with `no PlanRunContext registered`, because only `runPlan` ever
- * registered one.
+ * The dispatch node belongs to its plan's own run (`__plan__:<planId>:…`) and
+ * runs on the context that run's driver registered (`runPlan`, or
+ * `resumePlanRun` for a crashed run). Without a driver nothing would settle
+ * the plan, so it refuses rather than run the step. Anywhere else (an
+ * exported or hand-placed node) it refuses too: a workflow must not read and
+ * write a plan it does not belong to (WF-24).
  */
-describe("action.plan.step.dispatch outside the plan runtime", () => {
-  const runId = "run_standalone"
+describe("action.plan.step.dispatch", () => {
+  const runId = "run_resumed"
 
   beforeEach(async () => {
     await getDb().delete()
@@ -94,16 +97,17 @@ describe("action.plan.step.dispatch outside the plan runtime", () => {
     unregisterPlanRunContext(runId)
   })
 
-  function run(params: Record<string, unknown>) {
+  function run(params: Record<string, unknown>, workflowId: string) {
     const executor = getExecutor("action.plan.step.dispatch" as never, 1)!
     return executor.execute({
       runId,
+      workflowId,
       params,
       signal: undefined,
     } as never)
   }
 
-  it("builds a run context from the node's planId and dispatches the step", async () => {
+  async function seedPlan() {
     await getDb().agentPlans.put({
       id: "plan_1",
       sessionId: "ses_1",
@@ -115,23 +119,51 @@ describe("action.plan.step.dispatch outside the plan runtime", () => {
       createdAt: 1,
       updatedAt: 1,
     } as never)
+  }
 
-    await run({ planId: "plan_1", stepId: "s1" })
+  it("dispatches the step on the context its plan's driver registered", async () => {
+    await seedPlan()
+    const plan = (await getDb().agentPlans.get("plan_1"))!
+    const writer = { setStepStatus: jest.fn(async () => undefined) }
+    registerPlanRunContext({ runId, planId: "plan_1", plan, writer })
+
+    await run({ planId: "plan_1", stepId: "s1" }, "__plan__:plan_1:abc12345")
 
     expect(dispatchPlanStepNode).toHaveBeenCalledTimes(1)
-    const ctx = dispatchPlanStepNode.mock.calls[0]![0] as { planId: string; executionRoot?: string }
+    const ctx = dispatchPlanStepNode.mock.calls[0]![0] as { planId: string; writer: unknown }
     expect(ctx.planId).toBe("plan_1")
-    expect(ctx.executionRoot).toBe("/tmp/plan")
-    // Registered for the run, so sibling step nodes reuse it.
-    expect(getPlanRunContext(runId)?.planId).toBe("plan_1")
+    expect(ctx.writer).toBe(writer)
   })
 
-  it("fails with the plan id in the message when the plan is gone", async () => {
-    await expect(run({ planId: "plan_missing", stepId: "s1" })).rejects.toThrow(/plan_missing/)
+  it("refuses to run a step of a plan run no driver holds, so the plan never goes unsettled", async () => {
+    await seedPlan()
+
+    await expect(
+      run({ planId: "plan_1", stepId: "s1" }, "__plan__:plan_1:abc12345")
+    ).rejects.toThrow(/no driver holds plan plan_1's run run_resumed/)
+    expect(dispatchPlanStepNode).not.toHaveBeenCalled()
+    // Nothing is rebuilt behind the driver's back.
+    expect(getPlanRunContext(runId)).toBeUndefined()
+  })
+
+  it("refuses to drive a plan from a workflow that is not that plan's own run", async () => {
+    await seedPlan()
+
+    await expect(run({ planId: "plan_1", stepId: "s1" }, "wf_exported")).rejects.toThrow(
+      /only inside plan plan_1's own run/
+    )
+    // Another plan's run id does not count either.
+    await expect(
+      run({ planId: "plan_1", stepId: "s1" }, "__plan__:plan_other:abc12345")
+    ).rejects.toThrow(/only inside/)
+    expect(dispatchPlanStepNode).not.toHaveBeenCalled()
+    expect(getPlanRunContext(runId)).toBeUndefined()
   })
 
   it("still requires both ids", async () => {
-    await expect(run({ planId: "plan_1" })).rejects.toThrow(/'planId' and 'stepId'/)
+    await expect(run({ planId: "plan_1" }, "__plan__:plan_1:abc12345")).rejects.toThrow(
+      /'planId' and 'stepId'/
+    )
   })
 })
 

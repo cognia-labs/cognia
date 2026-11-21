@@ -42,7 +42,8 @@ export interface PlaybookWorkflowDeps {
   now(): number
 }
 
-const defaultDeps: PlaybookWorkflowDeps = {
+/** The data-layer wiring every caller uses unless it scopes the reads itself. */
+export const defaultPlaybookWorkflowDeps: PlaybookWorkflowDeps = {
   getSkill,
   listResources: listRuntimeResources,
   getWorkflow,
@@ -59,7 +60,7 @@ export type PlaybookSourceResult =
 /** A skill as a playbook: its flow parsed, or why it is not one. */
 export async function loadPlaybookSource(
   skillId: string,
-  deps: Pick<PlaybookWorkflowDeps, "getSkill" | "listResources"> = defaultDeps
+  deps: Pick<PlaybookWorkflowDeps, "getSkill" | "listResources"> = defaultPlaybookWorkflowDeps
 ): Promise<PlaybookSourceResult> {
   const skill = await deps.getSkill(skillId)
   if (!skill) return { status: "missing" }
@@ -79,13 +80,15 @@ export async function loadPlaybookSource(
   }
 }
 
+interface PlaybookWorkflowReady {
+  workflow: VisualWorkflow
+  /** Steps shown but not runnable yet; offer no run while non-empty. */
+  dormant: PlaybookDormantNode[]
+}
+
 export type PlaybookWorkflowResult =
-  | {
-      status: "current" | "compiled"
-      workflow: VisualWorkflow
-      /** Steps shown but not runnable yet; offer no run while non-empty. */
-      dormant: PlaybookDormantNode[]
-    }
+  | ({ status: "current" } & PlaybookWorkflowReady)
+  | ({ status: "compiled" } & PlaybookWorkflowReady)
   | { status: "missing" }
   | { status: "not-a-playbook" }
   | { status: "invalid"; problems: PlaybookFlowProblem[] }
@@ -98,7 +101,7 @@ export type PlaybookWorkflowResult =
  */
 export async function syncPlaybookWorkflow(
   skillId: string,
-  deps: PlaybookWorkflowDeps = defaultDeps
+  deps: PlaybookWorkflowDeps = defaultPlaybookWorkflowDeps
 ): Promise<PlaybookWorkflowResult> {
   const root = await loadPlaybookSource(skillId, deps)
   if (root.status !== "ok") return root
@@ -123,6 +126,53 @@ export async function syncPlaybookWorkflow(
   }
   const workflow = await deps.putDerivedWorkflow(compiled.workflow)
   return { status: "compiled", workflow, dormant: compiled.dormant }
+}
+
+/** Why a playbook-derived row could not be brought up to date. */
+export type PlaybookSourceProblem = Exclude<
+  PlaybookWorkflowResult,
+  { status: "current" } | { status: "compiled" }
+>
+
+export type FreshWorkflowResult =
+  | {
+      status: "ready"
+      workflow: VisualWorkflow
+      /** Steps shown but not runnable yet; a runner must refuse while non-empty. */
+      dormant: PlaybookDormantNode[]
+    }
+  /**
+   * The row is derived from a playbook that no longer compiles (gone, no longer
+   * a playbook, invalid, too large). The stored copy is returned so an editor
+   * can still show it, read-only; it must not be run, because it no longer
+   * matches its source.
+   */
+  | { status: "source-unavailable"; workflow: VisualWorkflow; problem: PlaybookSourceProblem }
+  | { status: "not-found" }
+
+/**
+ * Read a workflow the way every opener and runner must (ADR-0254 §2).
+ *
+ * An ordinary row comes back as stored. A row derived from a playbook is
+ * re-synced from its source first, through the same content-hash check
+ * "Open as workflow" uses, so a library run, a bookmark or a `/workflow`
+ * command never reads a graph compiled from an older playbook or an older
+ * called playbook.
+ */
+export async function loadFreshWorkflow(
+  workflowId: string,
+  deps: PlaybookWorkflowDeps = defaultPlaybookWorkflowDeps
+): Promise<FreshWorkflowResult> {
+  const stored = await deps.getWorkflow(workflowId)
+  if (!stored) return { status: "not-found" }
+  if (stored.derivedFrom?.kind !== "playbook") {
+    return { status: "ready", workflow: stored, dormant: [] }
+  }
+  const synced = await syncPlaybookWorkflow(stored.derivedFrom.skillId, deps)
+  if (synced.status === "current" || synced.status === "compiled") {
+    return { status: "ready", workflow: synced.workflow, dormant: synced.dormant }
+  }
+  return { status: "source-unavailable", workflow: stored, problem: synced }
 }
 
 /**

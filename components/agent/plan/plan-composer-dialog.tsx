@@ -53,6 +53,10 @@ import { PlanEditValidationError, applyPlanComposerEdit } from "@/lib/agent/plan
 import { loadPlanConfigDefaults } from "@/lib/agent/plan/plan-settings"
 import { linearAgentTurnSteps } from "@/lib/agent/plan/steps"
 import { validatePlanStepParams } from "@/lib/agent/plan/step-params"
+import {
+  PlanApprovalBlockedError,
+  planApprovalBlockedMessage,
+} from "@/lib/agent/plan/sub-workflow-binding"
 import type { AgentPlan, CreatePlanStepInput, PlanStep, PlanStepKind } from "@/types/agent/plan"
 
 /** Max characters kept from a title / step line (matches the other producers). */
@@ -230,6 +234,7 @@ export function PlanComposerDialog({
   onSaved,
 }: PlanComposerDialogProps) {
   const t = useTranslations("plan.composer")
+  const tBlocked = useTranslations("plan.approvalBlocked")
   const editing = Boolean(editPlan)
   const [title, setTitle] = useState(() => editPlan?.title ?? "")
   const [stepsText, setStepsText] = useState(() =>
@@ -336,8 +341,17 @@ export function PlanComposerDialog({
       onCreated?.(plan.id)
       reset()
       onOpenChange(false)
-    } catch {
-      toast.error(t("createFailed"))
+    } catch (error) {
+      // A plan that needs no approval is approved when created, so its
+      // sub-workflow steps are pinned then; an unpublished one refuses it
+      // (WF-12). Edit mode only amends plans awaiting approval, which are
+      // pinned when approved, so a save never meets this.
+      if (error instanceof PlanApprovalBlockedError) {
+        const { key, values } = planApprovalBlockedMessage(error)
+        toast.error(tBlocked(key, values))
+      } else {
+        toast.error(t("createFailed"))
+      }
       setBusy(false)
       return
     }

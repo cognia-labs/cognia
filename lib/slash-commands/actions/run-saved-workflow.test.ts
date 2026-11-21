@@ -13,6 +13,13 @@ jest.mock("@/lib/db/workflows", () => ({
 jest.mock("@/lib/workflow/runtime/orchestrator", () => ({
   runWorkflow: (...a: unknown[]) => runWorkflow(...a),
 }))
+// The command reads through the workflow module's `fresh-workflows` reader
+// (the playbooks module provides the port), never the stored row directly.
+type Fresh = import("@/types/modules/ports/fresh-workflows").FreshWorkflowRead
+const readFreshWorkflow = jest.fn<Promise<Fresh>, [string]>()
+jest.mock("@/lib/workflow/library/fresh-workflow", () => ({
+  readFreshWorkflow: (id: string) => readFreshWorkflow(id),
+}))
 
 function wf(id: string, name: string, nodes = 1): WorkflowRow {
   return {
@@ -39,6 +46,12 @@ function makeCtx(args: string, chatStatus: SlashContext["chatStatus"] = "idle"):
 beforeEach(() => {
   listWorkflows.mockReset()
   runWorkflow.mockClear()
+  readFreshWorkflow.mockReset()
+  readFreshWorkflow.mockImplementation(async (id) => {
+    const rows = await listWorkflows()
+    const row = rows.find((candidate) => candidate.id === id)
+    return row ? { status: "ready", workflow: row, dormantSteps: 0 } : { status: "not-found" }
+  })
 })
 
 describe("matchWorkflows", () => {
@@ -91,6 +104,42 @@ describe("handleRunWorkflow", () => {
     expect(arg.triggeredBy.source).toBe("chat")
     const chip = (ctx.pushSystemMessage as jest.Mock).mock.calls[0][0]
     expect(chip).toMatchObject({ kind: "slash-result", commandId: "workflow" })
+  })
+
+  it("runs the recompiled graph of a playbook-derived workflow, not the stored copy", async () => {
+    const stored = wf("wf_playbook_review", "Review")
+    const recompiled = wf("wf_playbook_review", "Review", 3)
+    listWorkflows.mockResolvedValue([stored])
+    readFreshWorkflow.mockResolvedValue({ status: "ready", workflow: recompiled, dormantSteps: 0 })
+    await handleRunWorkflow(makeCtx("Review"))
+    expect(readFreshWorkflow).toHaveBeenCalledWith("wf_playbook_review")
+    expect((runWorkflow.mock.calls[0][0] as { workflow: WorkflowRow }).workflow).toBe(recompiled)
+  })
+
+  it("refuses a playbook-derived workflow whose playbook no longer compiles", async () => {
+    const stored = {
+      ...wf("wf_playbook_review", "Review"),
+      derivedFrom: { kind: "playbook", skillId: "review" },
+    } as WorkflowRow
+    listWorkflows.mockResolvedValue([stored])
+    readFreshWorkflow.mockResolvedValue({ status: "source-unavailable", workflow: stored })
+    const ctx = makeCtx("Review")
+    await handleRunWorkflow(ctx)
+    expect(runWorkflow).not.toHaveBeenCalled()
+    expect((ctx.pushSystemMessage as jest.Mock).mock.calls[0][0]).toContain("no longer compiles")
+  })
+
+  it("refuses while the playbook has steps this version cannot run", async () => {
+    listWorkflows.mockResolvedValue([wf("wf_playbook_sweep", "Sweep")])
+    readFreshWorkflow.mockResolvedValue({
+      status: "ready",
+      workflow: wf("wf_playbook_sweep", "Sweep"),
+      dormantSteps: 1,
+    })
+    const ctx = makeCtx("Sweep")
+    await handleRunWorkflow(ctx)
+    expect(runWorkflow).not.toHaveBeenCalled()
+    expect((ctx.pushSystemMessage as jest.Mock).mock.calls[0][0]).toContain("not runnable")
   })
 
   it("refuses while a turn is streaming", async () => {

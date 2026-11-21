@@ -16,6 +16,12 @@ jest.mock("@/lib/workflow/runtime/orchestrator", () => ({
   })),
 }))
 jest.mock("@/lib/db/agent-traces", () => ({ queryByTrace: jest.fn(async () => []) }))
+// The eval target reads drafts through the workflow module's fresh reader
+// (`fresh-workflows` port, provided by playbooks); spied, not replaced.
+jest.mock("@/lib/workflow/library/fresh-workflow", () => {
+  const actual = jest.requireActual("@/lib/workflow/library/fresh-workflow")
+  return { ...actual, readFreshWorkflow: jest.fn(actual.readFreshWorkflow) }
+})
 
 import { defaultWorkflowTargetDeps } from "./workflow-default-deps"
 import { getWorkflow } from "@/lib/db/workflows"
@@ -23,11 +29,13 @@ import { getWorkflowVersion } from "@/lib/db/workflow-deployments"
 import { runWorkflow } from "@/lib/workflow/runtime/orchestrator"
 import { queryByTrace } from "@/lib/db/agent-traces"
 import type { EvalPersistenceScope } from "@/lib/db/eval-lab"
+import { readFreshWorkflow } from "@/lib/workflow/library/fresh-workflow"
 
 const mockGetWorkflow = getWorkflow as jest.Mock
 const mockGetWorkflowVersion = getWorkflowVersion as jest.Mock
 const mockRunWorkflow = runWorkflow as jest.Mock
 const mockQueryByTrace = queryByTrace as jest.Mock
+const mockReadFresh = readFreshWorkflow as jest.Mock
 
 describe("defaultWorkflowTargetDeps.runWorkflow", () => {
   beforeEach(() => jest.clearAllMocks())
@@ -94,6 +102,33 @@ describe("defaultWorkflowTargetDeps.runWorkflow", () => {
     await expect(
       deps.runWorkflow({ workflowId: "nope", payload: {}, traceId: "tr" })
     ).rejects.toThrow(/not found/)
+  })
+
+  it("evaluates a playbook-derived draft as its playbook compiles now", async () => {
+    const recompiled = { id: "wf1", name: "Recompiled", nodes: [], edges: [] }
+    mockReadFresh.mockResolvedValueOnce({ status: "ready", workflow: recompiled, dormantSteps: 0 })
+    await defaultWorkflowTargetDeps().runWorkflow({ workflowId: "wf1", payload: {}, traceId: "t" })
+    expect(mockReadFresh).toHaveBeenCalledWith(
+      "wf1",
+      expect.objectContaining({
+        readWorkflow: expect.any(Function),
+        beforeWrite: expect.any(Function),
+      })
+    )
+    expect(mockRunWorkflow).toHaveBeenLastCalledWith(
+      expect.objectContaining({ workflow: recompiled })
+    )
+  })
+
+  it("refuses a playbook-derived draft whose playbook no longer compiles", async () => {
+    mockReadFresh.mockResolvedValueOnce({
+      status: "source-unavailable",
+      workflow: { id: "wf1", derivedFrom: { kind: "playbook", skillId: "review" } },
+    })
+    await expect(
+      defaultWorkflowTargetDeps().runWorkflow({ workflowId: "wf1", payload: {}, traceId: "t" })
+    ).rejects.toThrow(/no longer compiles/)
+    expect(mockRunWorkflow).not.toHaveBeenCalled()
   })
 
   it("loads an exact immutable workflow version when the eval target pins one", async () => {

@@ -134,6 +134,45 @@ export async function notifyPlanAwaitingApproval(plan: AgentPlan): Promise<void>
   }
 }
 
+/**
+ * An approval answered from outside the dock was refused: a `sub_workflow`
+ * step's workflow is not published (WF-12). Directed, because the plan is still
+ * waiting for the person who just tried to approve it, and in the UI's locale,
+ * because it tells them what to change. Replaces the awaiting-approval row's
+ * slot (same dedupe key) only for that row's lifetime: the plan is still
+ * awaiting approval, so approving again from the dock stays possible.
+ */
+export async function notifyPlanApprovalBlocked(
+  plan: AgentPlan,
+  error: import("./sub-workflow-binding").PlanApprovalBlockedError
+): Promise<void> {
+  try {
+    const [{ getRuntimeTranslator }, { planApprovalBlockedMessage }] = await Promise.all([
+      import("@/lib/i18n/runtime-translator"),
+      import("./sub-workflow-binding"),
+    ])
+    const t = await getRuntimeTranslator("plan.approvalBlocked")
+    const { key, values } = planApprovalBlockedMessage(error)
+    await centerNotify(
+      {
+        source: "session",
+        level: "error",
+        title: t("notificationTitle", { title: plan.title }),
+        body: t(key, values),
+        href: `/?session=${plan.sessionId}`,
+        dedupeKey: `plan-approval-blocked:${plan.id}:${error.stepId}`,
+        groupKey: plan.sessionId,
+        directed: true,
+        icon: "ListChecks",
+        sourceRef: { kind: "plan", id: plan.id },
+      },
+      plan
+    )
+  } catch {
+    // Center unavailable (headless / web) — the dock still shows the plan.
+  }
+}
+
 /** One-line headline per halt cause for the (English, runtime) notification copy. */
 const HALT_HEADLINE: Record<PlanStepHalt["cause"], string> = {
   dispatch_failed: "could not start",
@@ -224,7 +263,18 @@ export function installPlanNotificationActions(): () => void {
       await runtime.rejectPlan(planId)
       return
     }
-    const approved = await runtime.approvePlan(planId)
+    let approved: AgentPlan | null
+    try {
+      approved = await runtime.approvePlan(planId)
+    } catch (error) {
+      // The notification-center dispatcher only logs a throw, so a refused
+      // approval would vanish behind a button that did nothing (WF-12).
+      const { PlanApprovalBlockedError } = await import("./sub-workflow-binding")
+      if (!(error instanceof PlanApprovalBlockedError)) throw error
+      const plan = await runtime.getPlan(planId)
+      if (plan) await notifyPlanApprovalBlocked(plan, error)
+      return
+    }
     // Orchestrated plans can start headlessly from here; an in-session plan is
     // handed to the chat surface that owns its visible turns (same split as
     // the run-control `approve` command). Its first step is armed on the step

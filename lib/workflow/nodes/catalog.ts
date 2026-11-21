@@ -2656,13 +2656,14 @@ const ENTRIES: Partial<Record<WorkflowNodeKind, Omit<NodeCatalogEntry, "kind" | 
   // All `hidden`, so none reaches the palette: their executors need a run
   // context (`TeamRunContext` / `PlanRunContext`) that only the team or plan
   // lifecycle registers, and a hand-placed copy fails non-retryably. They are
-  // catalogued anyway because a synthesized graph IS openable in the editor
-  // (`/plan to-workflow` writes a durable one), and without an entry every
-  // node rendered as its raw kind string under a generic `Box`.
+  // catalogued anyway because a synthesized graph can reach the editor (a
+  // copied run snapshot, a hand-placed node the `synthesizerOnly` diagnostic
+  // flags), and without an entry every node rendered as its raw kind string
+  // under a generic `Box`.
   "action.plan.step.dispatch": {
     label: "Dispatch plan step",
     description:
-      "Runs one step of an agent plan. Emitted by `/plan to-workflow` and by the plan runtime, one node per plan step.",
+      "Runs one step of an agent plan inside that plan's own run. Emitted by the plan runtime, one node per plan step; `/plan to-workflow` exports ordinary nodes instead.",
     iconName: "ListChecks",
     keywords: ["plan", "step", "dispatch"],
     hidden: true,

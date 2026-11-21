@@ -8,16 +8,18 @@
  * writer.
  *
  * Implemented kinds: `agent_turn` (headless `executeAgent`), `approval_gate`
- * (`lib/runtime/approval-bus`), `sub_workflow` (nested `runWorkflow`),
+ * (`lib/runtime/approval-bus`), `sub_workflow` (formal admission of the
+ * published version the plan was approved against, `executeWorkflowVersion`),
  * `tool_call` (a single plugin-registered tool via `invokePluginTool`), and
  * `teammate_dispatch` (one teammate turn via the team subsystem's
  * `dispatchTeammate`, adapted through `createPlanTeammateRunContext`).
  */
 
-import type { StepExecutionResult, TriggerEvent } from "@/types/workflow/visual"
+import type { RunStatus, StepExecutionResult, WorkflowRunRow } from "@/types/workflow/visual"
 import type { PlanStep } from "@/types/agent/plan"
 import type { AgentTeammate } from "@/types/agent/agent-team"
 import type { PlanRunContext } from "./plan-run-context"
+import { planStepPrompt } from "./steps"
 import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 
@@ -38,15 +40,101 @@ function nonRetryable(message: string): Error {
 interface StepWorkResult {
   value: unknown
   summary: string
+  /**
+   * The work is held by a person outside the plan: a sub-workflow run that
+   * came back `waiting` (or is still running elsewhere). The step is marked
+   * `waiting` and the plan's run stops as `waiting`, never as a failure.
+   */
+  waiting?: true
+}
+
+/** What a `sub_workflow` step records about the child run it admitted. */
+export interface SubWorkflowStepOutput {
+  runId: string
+  workflowId: string
+  versionId: string
+  status: RunStatus
+  output?: unknown
+}
+
+/** Child run statuses that mean "not finished, someone else holds it". */
+const HELD_RUN_STATUSES: ReadonlySet<RunStatus> = new Set([
+  "pending",
+  "running",
+  "waiting",
+  "paused",
+])
+
+/** The error a held step throws so the orchestrator ends the run `waiting`. */
+function needsHuman(message: string): Error {
+  return Object.assign(new Error(message), {
+    name: "NeedsHumanError",
+    retryable: false,
+    needsHuman: true,
+  })
+}
+
+/** Turn an admitted child run's result into the step's work result. */
+function subWorkflowWork(
+  record: SubWorkflowStepOutput,
+  workflowName: string,
+  errorMessage?: string
+): StepWorkResult {
+  if (record.status === "succeeded") {
+    return {
+      value: record,
+      summary: `sub-workflow ${workflowName} completed (run ${record.runId})`,
+    }
+  }
+  if (HELD_RUN_STATUSES.has(record.status)) {
+    return {
+      value: record,
+      summary: `sub-workflow ${workflowName} run ${record.runId} is ${record.status === "waiting" ? "waiting for input" : record.status}; handle it, then resume the plan`,
+      waiting: true,
+    }
+  }
+  throw nonRetryable(
+    `sub_workflow run ${record.runId} ended with status "${record.status}"${errorMessage ? `: ${errorMessage}` : ""}`
+  )
+}
+
+/** Longest `replayedByRunId` chain a held step follows to its latest retry. */
+const MAX_REPLAY_HOPS = 16
+
+/**
+ * Where the child run a `waiting` step recorded has got to since. An operator
+ * answers a held run by retrying it from run history, which records the new
+ * run as `replayedByRunId`, so the chain is followed to its latest link.
+ * `undefined` when the recorded run is gone or ended without success: the
+ * step then dispatches afresh.
+ */
+async function settledSubWorkflowRun(
+  step: PlanStep
+): Promise<{ record: SubWorkflowStepOutput; run: WorkflowRunRow } | undefined> {
+  const recorded = step.output as Partial<SubWorkflowStepOutput> | undefined
+  if (typeof recorded?.runId !== "string") return undefined
+  const { getWorkflowRun } = await import("@/lib/db/workflows")
+  let run = await getWorkflowRun(recorded.runId)
+  for (let hop = 0; run?.replayedByRunId && hop < MAX_REPLAY_HOPS; hop += 1) {
+    const next = await getWorkflowRun(run.replayedByRunId)
+    if (!next) break
+    run = next
+  }
+  if (!run || (run.status !== "succeeded" && !HELD_RUN_STATUSES.has(run.status))) return undefined
+  return {
+    run,
+    record: {
+      runId: run.id,
+      workflowId: run.workflowId,
+      versionId: run.versionId ?? recorded.versionId ?? "",
+      status: run.status,
+      ...(run.status === "succeeded" ? { output: run.output } : {}),
+    },
+  }
 }
 
 /** Derive the turn/approval prompt text for a step. */
-function stepPrompt(step: PlanStep): string {
-  if (step.params?.kind === "agent_turn" && step.params.prompt) return step.params.prompt
-  if (step.params?.kind === "approval_gate" && step.params.prompt) return step.params.prompt
-  if (step.params?.kind === "editor_review" && step.params.prompt) return step.params.prompt
-  return step.description ? `${step.title}\n\n${step.description}` : step.title
-}
+const stepPrompt = planStepPrompt
 
 /**
  * Best-effort, cyclic-safe one-line summary of a tool result for the step's
@@ -233,23 +321,61 @@ async function runStepWork(
       if (step.params?.kind !== "sub_workflow" || !step.params.workflowId) {
         throw nonRetryable("sub_workflow step requires params.workflowId")
       }
-      const [{ getWorkflow }, { runWorkflow }] = await Promise.all([
-        import("@/lib/db/workflows"),
-        import("@/lib/workflow/runtime/orchestrator"),
-      ])
-      const sub = await getWorkflow(step.params.workflowId)
-      if (!sub) throw nonRetryable(`sub_workflow: workflow "${step.params.workflowId}" not found`)
-      const trigger: TriggerEvent = {
-        workflowId: sub.id,
-        kind: "trigger.manual",
-        payload: step.params.triggerPayload ?? {},
-        originAt: Date.now(),
+      // Approval pinned the version that runs (ADR-0045 amendment). Without a
+      // pin there is no approved version, so there is nothing this step may run.
+      const binding = step.params.binding
+      if (!binding || binding.workflowId !== step.params.workflowId) {
+        throw nonRetryable(
+          `sub_workflow step "${step.title}" is not pinned to a published version of workflow ${step.params.workflowId}; approve the plan again`
+        )
       }
-      const result = await runWorkflow({ workflow: sub, trigger, signal })
-      if (result.status !== "succeeded") {
-        throw new Error(`sub_workflow ended with status "${result.status}"`)
+      const { executeWorkflowVersion, WorkflowAdmissionError } =
+        await import("@/lib/workflow/runtime/execution-authority")
+      const planExecutionRunId = `execution:plan:${runCtx.planId}`
+      let execution: Awaited<ReturnType<typeof executeWorkflowVersion>>
+      try {
+        execution = await executeWorkflowVersion({
+          workflowId: binding.workflowId,
+          versionId: binding.versionId,
+          deploymentId: binding.deploymentId,
+          deploymentRevision: binding.deploymentRevision,
+          ...(binding.dependencyLock ? { dependencyLock: binding.dependencyLock } : {}),
+          entrypoint: "plan",
+          caller: `plan:${runCtx.planId}`,
+          // One admission per step per plan run: a crash-resumed run reuses its
+          // child, a resumed (new) plan run admits a fresh one.
+          idempotencyKey: `${runCtx.runId}:${step.id}`,
+          authorityParentRunId: planExecutionRunId,
+          lineage: {
+            rootRunId: runCtx.runId,
+            parentRunId: runCtx.runId,
+            parentStepId: step.id,
+            authorityParentRunId: planExecutionRunId,
+          },
+          triggerKind: "trigger.manual",
+          payload: step.params.triggerPayload ?? {},
+          signal,
+        })
+      } catch (error) {
+        if (error instanceof WorkflowAdmissionError) {
+          // The approved deployment was disabled, the input no longer fits its
+          // schema, … — the approval no longer describes something runnable.
+          throw nonRetryable(`sub_workflow: ${error.message}`)
+        }
+        throw error
       }
-      return { value: result.output, summary: `sub-workflow ${sub.name} completed` }
+      const result = execution.result
+      return subWorkflowWork(
+        {
+          runId: result.runId,
+          workflowId: binding.workflowId,
+          versionId: execution.version.id,
+          status: result.status,
+          ...(result.status === "succeeded" ? { output: result.output } : {}),
+        },
+        execution.version.name,
+        result.error?.message
+      )
     }
 
     case "tool_call": {
@@ -422,6 +548,31 @@ export async function dispatchPlanStepNode(
   if (!step) {
     throw nonRetryable(`action.plan.step.dispatch: step "${stepId}" not in plan "${runCtx.planId}"`)
   }
+  // A resumed plan run continues the plan, it does not redo it: finished work
+  // keeps its recorded output.
+  if (step.status === "completed") return { output: step.output }
+  if (step.status === "waiting") {
+    const settled = await settledSubWorkflowRun(step)
+    if (settled?.run.status === "succeeded") {
+      const completedAt = Date.now()
+      await runCtx.writer.setStepStatus(step.id, "completed", {
+        result: `sub-workflow run ${settled.record.runId} completed`,
+        output: settled.record,
+        completedAt,
+      })
+      return { output: settled.record }
+    }
+    if (settled) {
+      // Still held: keep the step waiting and stop this run the same way.
+      const message = `sub-workflow run ${settled.record.runId} is still ${settled.run.status}; handle it, then resume the plan`
+      await runCtx.writer.setStepStatus(step.id, "waiting", {
+        result: message,
+        output: settled.record,
+      })
+      throw needsHuman(message)
+    }
+    // The held run is gone or ended without success: dispatch afresh below.
+  }
 
   const [{ syncPlanExecutionRun }, { getSession }] = await Promise.all([
     import("@/lib/execution/agent-state-bridge"),
@@ -431,16 +582,9 @@ export async function dispatchPlanStepNode(
   const startedAt = Date.now()
   await runCtx.writer.setStepStatus(step.id, "in_progress", { startedAt })
 
+  let work: StepWorkResult
   try {
-    const work = await runStepWork(runCtx, step, signal)
-    const completedAt = Date.now()
-    await runCtx.writer.setStepStatus(step.id, "completed", {
-      result: work.summary.slice(0, 2000),
-      output: work.value,
-      completedAt,
-      actualDurationMs: completedAt - startedAt,
-    })
-    return { output: work.value }
+    work = await runStepWork(runCtx, step, signal)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     await runCtx.writer.setStepStatus(step.id, "failed", {
@@ -450,6 +594,23 @@ export async function dispatchPlanStepNode(
     })
     throw err
   }
+  if (work.waiting) {
+    // Held, not failed: the step keeps the child run it is waiting on, and the
+    // run ends `waiting`, which the plan runtime turns into a paused plan.
+    await runCtx.writer.setStepStatus(step.id, "waiting", {
+      result: work.summary.slice(0, 2000),
+      output: work.value,
+    })
+    throw needsHuman(work.summary)
+  }
+  const completedAt = Date.now()
+  await runCtx.writer.setStepStatus(step.id, "completed", {
+    result: work.summary.slice(0, 2000),
+    output: work.value,
+    completedAt,
+    actualDurationMs: completedAt - startedAt,
+  })
+  return { output: work.value }
 }
 
 /**

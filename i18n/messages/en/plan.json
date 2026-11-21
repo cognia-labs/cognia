@@ -140,7 +140,8 @@
     "statusInProgress": "In progress",
     "statusPending": "Pending",
     "statusReady": "Ready",
-    "statusSkipped": "Skipped"
+    "statusSkipped": "Skipped",
+    "statusWaiting": "Waiting for input"
   },
   "document": {
     "activity": "Activity",
@@ -209,5 +210,20 @@
     "resume": "Resume",
     "cancel": "Cancel plan",
     "actionFailed": "The plan could not continue."
+  },
+  "approvalBlocked": {
+    "notPublished": "Step \"{step}\" runs a workflow that is not published. Publish it, then approve the plan again.",
+    "dependenciesUnavailable": "Step \"{step}\" runs a workflow that cannot be admitted: a workflow it calls is not published, or the calls form a cycle. Fix that, then approve the plan again.",
+    "notificationTitle": "Plan not approved: {title}"
+  },
+  "export": {
+    "noPlan": "No open plan to export with `/plan to-workflow`. Create one first with `/plan` followed by an objective.",
+    "empty": "Plan \"{title}\" has no steps to export.",
+    "invalid": "Could not export the plan: {reason}",
+    "teammateStep": "Step \"{step}\" dispatches a teammate, which only runs inside the plan or its team; no workflow node does that on its own. Run the plan instead, or change the step to an agent turn before exporting.",
+    "toolOwnerUnknown": "Step \"{step}\" calls tool \"{tool}\", which no installed plugin registers. Install or enable that plugin, then export again.",
+    "stepIncomplete": "Step \"{step}\" is missing the settings it needs to run outside the plan. Complete the step, then export again.",
+    "saved": "🧩 Saved \"{title}\" as a workflow ({count, plural, one {# step} other {# steps}} and a manual trigger).",
+    "savedHint": "Open it from **Workflows** (id `{id}`), or wrap it in a plan with `/plan from-workflow {id}`. The workflow runs on its own: editing or deleting this plan does not change it."
   }
 }

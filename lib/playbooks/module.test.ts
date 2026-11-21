@@ -10,4 +10,10 @@ describe("playbooks module manifest", () => {
     expect(playbooksModule.dependsOn).toEqual([])
     expect(playbooksModule.api).toEqual(["lib/playbooks/derived-workflow.ts"])
   })
+
+  it("provides the fresh workflow read runners outside the UI use", async () => {
+    expect(playbooksModule.provides?.map((entry) => entry.port)).toEqual(["fresh-workflows"])
+    const loaded = (await playbooksModule.provides![0].load()) as { port?: { read?: unknown } }
+    expect(typeof loaded.port?.read).toBe("function")
+  })
 })

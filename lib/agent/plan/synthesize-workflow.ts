@@ -19,6 +19,21 @@ import type { AgentPlan, PlanStep } from "@/types/agent/plan"
 import { DEFAULT_RETRY_POLICY } from "@/types/workflow/visual"
 import type { VisualWorkflow, WorkflowEdge, WorkflowNode } from "@/types/workflow/visual"
 
+/** Prefix of every workflow id `synthesizePlanWorkflow` gives a plan's own run. */
+const PLAN_WORKFLOW_ID_PREFIX = "__plan__:"
+
+/**
+ * The plan a synthesized `__plan__:<planId>:<nonce>` workflow id belongs to,
+ * or `undefined` for any other id. The nonce never holds a colon (nanoid's
+ * alphabet), so the plan id is everything up to the last one.
+ */
+export function planIdOfPlanWorkflowId(workflowId: string | undefined): string | undefined {
+  if (!workflowId?.startsWith(PLAN_WORKFLOW_ID_PREFIX)) return undefined
+  const rest = workflowId.slice(PLAN_WORKFLOW_ID_PREFIX.length)
+  const cut = rest.lastIndexOf(":")
+  return cut > 0 && cut < rest.length - 1 ? rest.slice(0, cut) : undefined
+}
+
 export interface SynthesizePlanResult {
   workflow: VisualWorkflow
   nodeIdToStepId: Map<string, string>
@@ -117,7 +132,7 @@ export function synthesizePlanWorkflow(plan: AgentPlan): SynthesizePlanResult {
   }
 
   const now = Date.now()
-  const workflowId = `__plan__:${plan.id}:${nanoid(8)}`
+  const workflowId = `${PLAN_WORKFLOW_ID_PREFIX}${plan.id}:${nanoid(8)}`
   const maxConcurrency =
     plan.config.maxConcurrency && plan.config.maxConcurrency > 0 ? plan.config.maxConcurrency : 1
 

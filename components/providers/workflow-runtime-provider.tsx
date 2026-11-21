@@ -36,6 +36,7 @@ import {
 } from "@/lib/workflow/triggers/lifecycle"
 import { resumeInFlightRuns } from "@/lib/workflow/runtime/resume-controller"
 import { installTeamWorkflowNodeRuntime } from "@/lib/squads/workflow-nodes/install"
+import { installPlanRunRecovery } from "@/lib/workflow/nodes/plans/run-recovery"
 import { loggers } from "@cognia/logging"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { installHostDispatchRuntime } from "@/lib/placement/host-dispatch-runtime"
@@ -78,6 +79,8 @@ export function WorkflowRuntimeProvider({ children }: { children?: React.ReactNo
     // port, and this host is where the team implementations are installed
     // (ADR-0217). Before any trigger, deployment or resumed run can start.
     installTeamWorkflowNodeRuntime()
+    // A crashed plan run continues through its plan, which settles with it.
+    disposers.push(installPlanRunRecovery())
 
     try {
       const unregisterScheduleHandoff = registerScheduleHandoffDelivery()

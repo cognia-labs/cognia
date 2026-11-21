@@ -68,8 +68,13 @@ registerHeadlessRuntime({
     await pendingWorkflowCleanup?.()
     // Composition root for the brain: install the Agent Team's workflow node
     // implementations before any trigger or resumed run (ADR-0217).
-    const { installTeamWorkflowNodeRuntime } = await import("@/lib/squads/workflow-nodes/install")
+    const [{ installTeamWorkflowNodeRuntime }, { installPlanRunRecovery }] = await Promise.all([
+      import("@/lib/squads/workflow-nodes/install"),
+      import("@/lib/workflow/nodes/plans/run-recovery"),
+    ])
     installTeamWorkflowNodeRuntime()
+    // A crashed plan run continues through its plan, which settles with it.
+    const uninstallPlanRunRecovery = installPlanRunRecovery()
     const [
       { initTriggerSubscriptions, disposeTriggerSubscriptions },
       { initPetEventTrigger, disposePetEventTrigger },
@@ -114,6 +119,7 @@ registerHeadlessRuntime({
     }
     pendingWorkflowCleanup = stop
     try {
+      cleanups.push(uninstallPlanRunRecovery)
       cleanups.push(registerScheduleHandoffDelivery())
       cleanups.push(registerThreadHandoffDelivery())
       const hostDispatchRuntime = installHostDispatchRuntime({ accountId: ctx.localAccountId })

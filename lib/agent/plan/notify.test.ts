@@ -103,6 +103,7 @@ describe("notification center fan-out", () => {
   const startPlan = jest.fn()
   const runPlan = jest.fn()
   const buildPlanRepairClient = jest.fn()
+  const getPlan = jest.fn()
 
   beforeEach(() => {
     jest.resetModules()
@@ -114,7 +115,13 @@ describe("notification center fan-out", () => {
     startPlan.mockResolvedValue({ strategy: "in_session", status: "executing" })
     jest.doMock("@/lib/notifications/runtime", () => ({ notify }))
     jest.doMock("./runtime", () => ({
-      getPlanRuntime: () => ({ approvePlan, rejectPlan, startPlan, runPlan }),
+      getPlanRuntime: () => ({ approvePlan, rejectPlan, startPlan, runPlan, getPlan }),
+    }))
+    getPlan.mockResolvedValue(plan())
+    // `next-intl` is ESM; the blocked-approval row reads its copy through this.
+    jest.doMock("@/lib/i18n/runtime-translator", () => ({
+      getRuntimeTranslator: async (namespace?: string) => (key: string, values?: object) =>
+        `${namespace}.${key}${values ? ` ${JSON.stringify(values)}` : ""}`,
     }))
   })
 
@@ -211,6 +218,46 @@ describe("notification center fan-out", () => {
     const { notifyPlanAwaitingApproval, notifyPlanTerminal } = await import("./notify")
     await expect(notifyPlanAwaitingApproval(plan())).resolves.toBeUndefined()
     await expect(notifyPlanTerminal(plan(), "failed")).resolves.toBeUndefined()
+  })
+
+  // WF-12: the center dispatcher only logs a throw, so a refused approval
+  // must leave a row saying why, not a button that silently did nothing.
+  it("leaves a directed row naming the step when a notification approval is refused", async () => {
+    const registered: Record<string, (ctx: { args?: Record<string, unknown> }) => Promise<void>> =
+      {}
+    jest.doMock("@/lib/notifications/action-registry", () => ({
+      registerNotificationCommand: (id: string, fn: (typeof registered)[string]) => {
+        registered[id] = fn
+        return () => delete registered[id]
+      },
+    }))
+    const { PlanApprovalBlockedError } = await import("./sub-workflow-binding")
+    approvePlan.mockRejectedValueOnce(
+      new PlanApprovalBlockedError("not-published", "s2", "Publish notes", "wf_pub", "")
+    )
+    const { installPlanNotificationActions, PLAN_RESPOND_COMMAND } = await import("./notify")
+    const dispose = installPlanNotificationActions()
+
+    await expect(
+      registered[PLAN_RESPOND_COMMAND]({ args: { planId: "p1", decision: "approve" } })
+    ).resolves.toBeUndefined()
+    expect(startPlan).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0][0]).toMatchObject({
+      level: "error",
+      directed: true,
+      title: 'plan.approvalBlocked.notificationTitle {"title":"Ship v2"}',
+      body: 'plan.approvalBlocked.notPublished {"step":"Publish notes","workflow":"wf_pub"}',
+      dedupeKey: "plan-approval-blocked:p1:s2",
+      sourceRef: { kind: "plan", id: "p1" },
+    })
+
+    // Anything else still reaches the dispatcher's own error handling.
+    approvePlan.mockRejectedValueOnce(new Error("dexie down"))
+    await expect(
+      registered[PLAN_RESPOND_COMMAND]({ args: { planId: "p1", decision: "approve" } })
+    ).rejects.toThrow("dexie down")
+    dispose()
   })
 
   it("wires the Approve / Reject actions to the plan runtime", async () => {

@@ -40,6 +40,7 @@ const STEP_STATUS_LABEL_KEY: Record<PlanStepStatus, string> = {
   failed: "tracker.statusFailed",
   skipped: "tracker.statusSkipped",
   blocked: "tracker.statusBlocked",
+  waiting: "tracker.statusWaiting",
 }
 
 /** Per-preset row/list classes. `default` keeps the original look exactly. */

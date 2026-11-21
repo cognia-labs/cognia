@@ -14,5 +14,9 @@
   "detach": "Detach",
   "detached": "Detached into “{name}”.",
   "detachFailed": "Could not detach: {error}",
-  "readOnlySave": "This workflow is read-only. Detach it to save changes."
+  "readOnlySave": "This workflow is read-only. Detach it to save changes.",
+  "sourceUnavailable": "The playbook this workflow follows ({skillId}) can no longer be compiled, so this is the last compiled copy. It cannot run until the playbook is fixed.",
+  "notRunnable": "This workflow cannot run: the playbook it follows ({skillId}) can no longer be compiled.",
+  "dormantNotRunnable": "This workflow cannot run yet: {count, plural, one {# step} other {# steps}} of its playbook are not runnable in this version.",
+  "loadFailed": "Could not load this workflow: {error}"
 }

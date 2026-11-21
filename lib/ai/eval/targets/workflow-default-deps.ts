@@ -18,11 +18,13 @@ export function defaultWorkflowTargetDeps(scope?: EvalPersistenceScope): Workflo
         signal?.throwIfAborted()
       }
       assertActive()
-      const [{ getWorkflow }, { getWorkflowVersion }, { runWorkflow }] = await Promise.all([
-        import("@/lib/db/workflows"),
-        import("@/lib/db/workflow-deployments"),
-        import("@/lib/workflow/runtime/orchestrator"),
-      ])
+      const [{ getWorkflow }, { getWorkflowVersion }, { runWorkflow }, { readFreshWorkflow }] =
+        await Promise.all([
+          import("@/lib/db/workflows"),
+          import("@/lib/db/workflow-deployments"),
+          import("@/lib/workflow/runtime/orchestrator"),
+          import("@/lib/workflow/library/fresh-workflow"),
+        ])
       assertActive()
       const version = versionId
         ? await (scope ? scope.db.workflowVersions.get(versionId) : getWorkflowVersion(versionId))
@@ -33,11 +35,30 @@ export function defaultWorkflowTargetDeps(scope?: EvalPersistenceScope): Workflo
           `eval workflow target: version "${versionId}" does not belong to workflow "${workflowId}"`
         )
       }
-      const workflow =
-        version?.definition ??
-        (await (scope ? scope.db.workflows.get(workflowId) : getWorkflow(workflowId)))
-      assertActive()
-      if (!workflow) throw new Error(`eval workflow target: workflow "${workflowId}" not found`)
+      let workflow = version?.definition
+      if (!workflow) {
+        // A playbook-derived draft is evaluated as its playbook compiles now,
+        // the same freshness every other runner applies (ADR-0254 §2).
+        const fresh = await readFreshWorkflow(workflowId, {
+          readWorkflow: (id) => (scope ? scope.db.workflows.get(id) : getWorkflow(id)),
+          beforeWrite: assertActive,
+        })
+        assertActive()
+        if (fresh.status === "not-found") {
+          throw new Error(`eval workflow target: workflow "${workflowId}" not found`)
+        }
+        if (fresh.status === "source-unavailable") {
+          throw new Error(
+            `eval workflow target: workflow "${workflowId}" follows playbook "${fresh.workflow.derivedFrom?.skillId ?? workflowId}", which no longer compiles`
+          )
+        }
+        if (fresh.dormantSteps > 0) {
+          throw new Error(
+            `eval workflow target: workflow "${workflowId}" has ${fresh.dormantSteps} playbook step(s) this version cannot run`
+          )
+        }
+        workflow = fresh.workflow
+      }
       const result = await runWorkflow({
         workflow,
         trigger: {

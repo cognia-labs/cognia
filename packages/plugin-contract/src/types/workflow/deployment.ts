@@ -66,6 +66,9 @@ export type WorkflowEntrypoint =
   // entrypoint so run history can tell a Bot-driven run from a human one, and
   // so admission can scope a Bot differently from a person at a keyboard.
   | "bot"
+  // An approved agent plan's `sub_workflow` step, admitting the exact version
+  // the plan was approved against (ADR-0045).
+  | "plan"
 
 export interface WorkflowInvocation {
   id: string

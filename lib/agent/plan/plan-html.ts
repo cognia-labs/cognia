@@ -140,6 +140,7 @@ li.step.dragging { opacity: 0.5; }
 .dot[data-status="in_progress"] { background: var(--warn); border-color: var(--warn); }
 .dot[data-status="failed"], .dot[data-status="blocked"] { background: var(--danger); border-color: var(--danger); }
 .dot[data-status="skipped"] { background: var(--muted); border-color: var(--muted); }
+.dot[data-status="waiting"] { background: var(--warn); border-color: var(--warn); }
 li.step input { flex: 1; border: none; background: transparent; padding: 3px 4px; }
 li.step input:focus { background: var(--bg); border-radius: 4px; }
 button {

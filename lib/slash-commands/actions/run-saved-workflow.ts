@@ -3,7 +3,8 @@
  *
  * Unlike the editor-only Workflow Copilot commands (`actions/workflow.ts`),
  * this one is available everywhere. It resolves the workspace's workflows,
- * fires `runWorkflow` (a `trigger.manual` event, `triggeredBy.source: "chat"`)
+ * refreshes a playbook-derived match from its playbook (the `fresh-workflows`
+ * port), fires `runWorkflow` (a `trigger.manual` event, `triggeredBy.source: "chat"`)
  * fire-and-forget, and drops a result chip into the transcript. Live progress
  * is reported by the global `WorkflowRunToaster`.
  *
@@ -75,7 +76,27 @@ export async function handleRunWorkflow(ctx: SlashContext): Promise<void> {
     return
   }
 
-  const workflow = matches[0]
+  // A playbook-derived row runs what its playbook compiles to now, never the
+  // copy stored when it was last opened (ADR-0254 §2).
+  const { readFreshWorkflow } = await import("@/lib/workflow/library/fresh-workflow")
+  const fresh = await readFreshWorkflow(matches[0].id)
+  if (fresh.status === "not-found") {
+    ctx.pushSystemMessage(`Workflow \`${matches[0].name}\` no longer exists.`)
+    return
+  }
+  if (fresh.status === "source-unavailable") {
+    ctx.pushSystemMessage(
+      `Workflow \`${matches[0].name}\` can't run: the playbook it follows (\`${fresh.workflow.derivedFrom?.skillId ?? matches[0].id}\`) no longer compiles. Fix the playbook, or detach a copy in the editor.`
+    )
+    return
+  }
+  if (fresh.dormantSteps > 0) {
+    ctx.pushSystemMessage(
+      `Workflow \`${matches[0].name}\` can't run yet: ${fresh.dormantSteps} of its playbook's steps are not runnable in this version.`
+    )
+    return
+  }
+  const workflow = fresh.workflow
   const { runWorkflow } = await import("@/lib/workflow/runtime/orchestrator")
   const trigger: TriggerEvent = {
     workflowId: workflow.id,

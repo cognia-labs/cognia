@@ -91,6 +91,8 @@ describe("plan adapters", () => {
     expect(planStepStatusToTask("ready")).toBe("pending")
     expect(planStepStatusToTask("blocked")).toBe("blocked")
     expect(planStepStatusToTask("failed")).toBe("failed")
+    // Held for input outside the plan while the plan is paused (WF-12).
+    expect(planStepStatusToTask("waiting")).toBe("stopped")
   })
 
   it("orders steps and carries a failed step's error", () => {

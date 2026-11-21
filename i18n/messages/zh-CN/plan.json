@@ -140,7 +140,8 @@
     "statusInProgress": "进行中",
     "statusPending": "待处理",
     "statusReady": "就绪",
-    "statusSkipped": "已跳过"
+    "statusSkipped": "已跳过",
+    "statusWaiting": "等待输入"
   },
   "document": {
     "activity": "动态",
@@ -209,5 +210,20 @@
     "resume": "继续",
     "cancel": "取消计划",
     "actionFailed": "计划无法继续。"
+  },
+  "approvalBlocked": {
+    "notPublished": "步骤「{step}」运行的工作流尚未发布。请先发布，再批准该计划。",
+    "dependenciesUnavailable": "步骤「{step}」运行的工作流无法准入：它调用的某个工作流尚未发布，或调用之间形成了循环。修复后再批准该计划。",
+    "notificationTitle": "计划未获批准：{title}"
+  },
+  "export": {
+    "noPlan": "没有可用 `/plan to-workflow` 导出的进行中计划。请先用 `/plan` 加上目标创建一个计划。",
+    "empty": "计划「{title}」没有可导出的步骤。",
+    "invalid": "无法导出该计划：{reason}",
+    "teammateStep": "步骤「{step}」会派发给队友，只能在该计划或其团队内运行，没有工作流节点能单独完成。请直接运行计划，或在导出前把该步骤改为智能体回合。",
+    "toolOwnerUnknown": "步骤「{step}」调用的工具「{tool}」没有已安装的插件注册。请安装或启用该插件后再导出。",
+    "stepIncomplete": "步骤「{step}」缺少在计划之外运行所需的设置。请补全该步骤后再导出。",
+    "saved": "🧩 已将「{title}」保存为工作流（{count, plural, other {# 个步骤}}，另加一个手动触发器）。",
+    "savedHint": "可在**工作流**中打开（id `{id}`），或用 `/plan from-workflow {id}` 将其包装为计划。该工作流独立运行：编辑或删除此计划不会改变它。"
   }
 }

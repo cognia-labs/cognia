@@ -66,6 +66,13 @@ jest.mock("@/lib/squads/workflow-nodes/install", () => ({
   installTeamWorkflowNodeRuntime: () => installTeamWorkflowNodeRuntimeMock(),
 }))
 
+const uninstallPlanRunRecoveryMock = jest.fn()
+const installPlanRunRecoveryMock = jest.fn(() => uninstallPlanRunRecoveryMock)
+jest.mock("@/lib/workflow/nodes/plans/run-recovery", () => ({
+  __esModule: true,
+  installPlanRunRecovery: () => installPlanRunRecoveryMock(),
+}))
+
 jest.mock("@/lib/workflow/triggers/lifecycle", () => ({
   initPluginTriggerLifecycle: () => initPluginTriggerLifecycleMock(),
   disposePluginTriggerLifecycle: () => disposePluginTriggerLifecycleMock(),
@@ -194,6 +201,11 @@ describe("WorkflowRuntimeProvider", () => {
     expect(installTeamWorkflowNodeRuntimeMock.mock.invocationCallOrder[0]).toBeLessThan(
       resumeInFlightRunsMock.mock.invocationCallOrder[0]
     )
+    // So is the plan runtime's ownership of crashed plan runs, which it
+    // continues and settles itself.
+    expect(installPlanRunRecoveryMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resumeInFlightRunsMock.mock.invocationCallOrder[0]
+    )
     // Resume must run after the initial trigger sync so a replayed run sees a
     // fully wired runtime.
     expect(listWorkflowsMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -201,6 +213,7 @@ describe("WorkflowRuntimeProvider", () => {
     )
 
     unmount()
+    expect(uninstallPlanRunRecoveryMock).toHaveBeenCalled()
   })
 
   it("survives a failing resume without crashing children", async () => {

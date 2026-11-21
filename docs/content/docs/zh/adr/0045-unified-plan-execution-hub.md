@@ -41,7 +41,7 @@ export type PlanStepKind =
   | "agent_turn"        // an in-session turn by the main agent (visible, conversational)
   | "teammate_dispatch" // delegate to a teammate / subagent — reuses dispatchTeammate
   | "tool_call"         // a specific tool invocation with fixed input
-  | "sub_workflow"      // run a nested VisualWorkflow — reuses runWorkflow
+  | "sub_workflow"      // run a nested VisualWorkflow — reuses runWorkflow (amended 2026-11-20: the approved published version)
   | "approval_gate"     // human approval checkpoint — reuses lib/runtime/approval-bus
 
 export type PlanStepStatus =
@@ -124,7 +124,7 @@ export interface PlanRefinementRequest {
 agent_turn        → in-session turn (executeAgent / sidecar runAndCaptureAssistantReply)
 teammate_dispatch → dispatchTeammate(teamCtx, …)        (reuses ADR-0022 primitive)
 tool_call         → resolved tool invocation
-sub_workflow      → nested runWorkflow(params.workflowId)
+sub_workflow      → executeWorkflowVersion(params.binding)  (amended 2026-11-20; was nested runWorkflow)
 approval_gate     → waitForDecision(scope, id, signal)  (reuses approval-bus)
 ```
 
@@ -249,3 +249,20 @@ Plan persistence、approval、projection、execution 以及 plan/goal/team integ
 **未生效的配置项**（规则 7）：`PlanConfig.maxStepRetries`、`judgeDeviation` 和 `maxTokens` 带有 `@deprecated Inert` 文档说明，工作流表单不再提供 `judge_deviation` 触发器，若有计划执行器开始读取它们，`lib/agent/plan/inert-config.test.ts` 会失败。
 
 **原决策之后迁移的路径**：`sidecar/plan-tools/*` 和 `sidecar/builtin-tools/plan-tools.mjs` → `sidecar/src/tools/builtin/plan/`（工具名为 `create_plan` / `update_plan`，`CreatePlan` / `UpdatePlan` 别名已删除）；`lib/workflow/nodes/built-ins.ts` → `lib/workflow/nodes/built-ins/index.ts`；`docs/plans/2026-06-03-unified-plan-execution-hub.md` → `docs/plans/archive/`；`lib/agent/plan-mode-bridge.ts` 和任务 sheet 已删除；计划上下文注入位于 `lib/claude/build-options.ts` 中目标块旁边。
+
+## 已批准版本与独立导出修订（2026-11-20）
+
+工作流系统审查（`docs/evidence/2026-11-18-workflow-system-gap-audit.md` 中的 WF-12、WF-24）发现，计划与工作流之间两个方向的关联都与用户实际同意的内容不一致。
+
+**`sub_workflow` 步骤运行其计划获批时所对应的版本。** 该步骤过去只保存工作流 id，运行时对草稿行调用 `runWorkflow`，所以批准之后的编辑或重新发布无需任何人批准就会被执行。现在：
+
+- 批准时（`approvePlan`，或对无需审批的计划在 `createPlan` 时），每个 `sub_workflow` 步骤被固定到当前生效的生产部署，即 `params.binding: WorkflowDependencyBinding`（版本、部署、修订号、依赖锁），由工作流模块自己的 `createPublishedWorkflowDependencyBinding` 解析（`lib/agent/plan/sub-workflow-binding.ts`）。若某步骤的工作流未发布，或其调用的工作流无法准入，整个批准会以 `PlanApprovalBlockedError` 被拒绝，且不做任何改动。审批 dock、「编写计划」编辑器和通知按钮上的批准都会指出是哪个步骤（`plan.approvalBlocked.*`），都不会静默失败。
+- 编辑已批准的计划时，未改动的步骤保留原有固定版本，只有改为指向其他工作流的步骤会重新固定。
+- 执行时通过 `executeWorkflowVersion` 准入恰好该固定版本（入口 `plan`，幂等键 `<计划运行>:<步骤>`，血缘指向计划运行），与 `flow.subworkflow` 和 typed agent tool 走同一条正式路径。没有固定版本的步骤不会运行。
+- 子运行返回 `waiting`（或仍为 pending / running）不算失败：步骤变为 `waiting`（新增的 `PlanStepStatus`，显示为「等待输入」），计划的运行以 `waiting` 结束，计划暂停。继续时会重新检查记录的子运行，并沿 `replayedByRunId` 找到操作者发起的重试；已完成的步骤沿用记录的输出，不会再次运行。
+
+原决策 §1 中 `sub_workflow`「复用 runWorkflow」的描述作废；计划不再能调用未发布的工作流。
+
+**`/plan to-workflow` 导出的工作流可独立运行。** 过去导出的是只含 `planId` / `stepId` 的 `action.plan.step.dispatch` 节点，运行时会重新读取并回写源计划：编辑或删除计划会改变工作流，多次运行共享同一组步骤状态。现在 `planWorkflowDraft` 为每个步骤生成承担同样工作的普通节点，并携带步骤内容：`action.agent.turn`（提示词、角色）、`action.approval.request`（后继步骤只走其 `approved` 出口）、编辑器审阅导出为 `action.editor.showDiff`（失败时继续）再接一个携带提议内容的审批、`flow.subworkflow`、`action.plugin.invoke`（导出时解析工具所属插件）和 `action.mcp.invokeTool`。结果中不出现计划；计划只记录 `metadata.exportedWorkflows`（`lib/agent/plan/workflow-export.ts`）。
+
+`teammate_dispatch` 步骤会被拒绝导出，并指出该步骤：没有节点能在团队运行之外执行单个队友回合（`action.team.task.dispatch` 需要每次运行的团队上下文，`action.team.run` 以目标运行整个团队，`action.team.delegate` 把工作交给数字分身、后台或外部智能体，或另一个团队）。`action.plan.step.dispatch` 现在仅供计划使用：只在其所属计划的临时 `__plan__:<planId>:` 运行中执行，手动放置的副本会被 `synthesizerOnly` 诊断标记。

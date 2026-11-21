@@ -34714,6 +34714,11 @@
       },
       "title": "Review plan"
     },
+    "approvalBlocked": {
+      "dependenciesUnavailable": "Step \"{step}\" runs a workflow that cannot be admitted: a workflow it calls is not published, or the calls form a cycle. Fix that, then approve the plan again.",
+      "notPublished": "Step \"{step}\" runs a workflow that is not published. Publish it, then approve the plan again.",
+      "notificationTitle": "Plan not approved: {title}"
+    },
     "card": {
       "openInPanel": "Open in Tasks panel",
       "untitled": "Plan"
@@ -34801,6 +34806,16 @@
       "titleLabel": "Plan title",
       "toc": "Sections"
     },
+    "export": {
+      "empty": "Plan \"{title}\" has no steps to export.",
+      "invalid": "Could not export the plan: {reason}",
+      "noPlan": "No open plan to export with `/plan to-workflow`. Create one first with `/plan` followed by an objective.",
+      "saved": "🧩 Saved \"{title}\" as a workflow ({count, plural, one {# step} other {# steps}} and a manual trigger).",
+      "savedHint": "Open it from **Workflows** (id `{id}`), or wrap it in a plan with `/plan from-workflow {id}`. The workflow runs on its own: editing or deleting this plan does not change it.",
+      "stepIncomplete": "Step \"{step}\" is missing the settings it needs to run outside the plan. Complete the step, then export again.",
+      "teammateStep": "Step \"{step}\" dispatches a teammate, which only runs inside the plan or its team; no workflow node does that on its own. Run the plan instead, or change the step to an agent turn before exporting.",
+      "toolOwnerUnknown": "Step \"{step}\" calls tool \"{tool}\", which no installed plugin registers. Install or enable that plugin, then export again."
+    },
     "status": {
       "approved": "Approved",
       "awaiting_approval": "Awaiting approval",
@@ -34857,7 +34872,8 @@
       "statusInProgress": "In progress",
       "statusPending": "Pending",
       "statusReady": "Ready",
-      "statusSkipped": "Skipped"
+      "statusSkipped": "Skipped",
+      "statusWaiting": "Waiting for input"
     }
   },
   "plugins": {
@@ -67320,6 +67336,7 @@
         "cancel": "Cancel",
         "description": "Start this workflow now. Optionally pass a JSON payload as the trigger input.",
         "invalidJson": "Payload must be valid JSON.",
+        "missing": "This workflow no longer exists.",
         "payloadLabel": "Trigger payload (optional)",
         "payloadPlaceholder": "'{ \"key\": \"value\" }'",
         "runButton": "Run workflow",
@@ -72870,7 +72887,7 @@
           },
           "step": {
             "dispatch": {
-              "description": "Runs one step of an agent plan. Emitted by /plan to-workflow and by the plan runtime, one node per plan step.",
+              "description": "Runs one step of an agent plan inside that plan's own run. Emitted by the plan runtime, one node per plan step; /plan to-workflow exports ordinary nodes instead.",
               "label": "Dispatch plan step"
             }
           },
@@ -73849,14 +73866,18 @@
       "detach": "Detach",
       "detachFailed": "Could not detach: {error}",
       "detached": "Detached into “{name}”.",
+      "dormantNotRunnable": "This workflow cannot run yet: {count, plural, one {# step} other {# steps}} of its playbook are not runnable in this version.",
       "drafting": "{name} has no step list, so the Copilot is drafting a workflow from it. Review it before you save.",
       "failedTitle": "Could not open this skill as a workflow",
+      "loadFailed": "Could not load this workflow: {error}",
       "missingBody": "The skill {skillId} does not exist or was removed.",
       "missingTitle": "Skill not found",
+      "notRunnable": "This workflow cannot run: the playbook it follows ({skillId}) can no longer be compiled.",
       "opening": "Opening as a workflow…",
       "problemsBody": "Fix these problems in its references/flow.yaml, then open it again.",
       "problemsTitle": "This playbook cannot be opened as a workflow",
       "readOnlySave": "This workflow is read-only. Detach it to save changes.",
+      "sourceUnavailable": "The playbook this workflow follows ({skillId}) can no longer be compiled, so this is the last compiled copy. It cannot run until the playbook is fixed.",
       "tooManyBody": "It calls more than {limit} playbooks. Reduce the playbooks it calls, then open it again."
     },
     "runs": {

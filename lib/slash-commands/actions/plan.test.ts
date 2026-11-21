@@ -22,6 +22,54 @@ jest.mock("@/lib/db/workflows", () => ({
   listWorkflows: jest.fn(),
   createWorkflow: jest.fn(),
 }))
+// Which installed plugin registers a `tool_call` step's tool (export resolves it).
+jest.mock("@/lib/plugin/core/invoke-plugin-tool", () => ({
+  resolvePluginToolByName: jest.fn(),
+}))
+
+// `next-intl` ships ESM Jest does not transform. The `/plan to-workflow`
+// replies go through `getRuntimeTranslator("plan.export")`, replaced here by
+// one over the real `plan` bundle of the locale under test, so the cases prove
+// every key resolves in both locales.
+let mockLocale: "en" | "zh-CN" = "en"
+const mockMissing: string[] = []
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  getRuntimeTranslator: async (namespace?: string) => {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const bundle = (
+      mockLocale === "en"
+        ? require("@/i18n/messages/en/plan.json")
+        : require("@/i18n/messages/zh-CN/plan.json")
+    ) as Record<string, unknown>
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    const lookup = (key: string): unknown =>
+      `${namespace ? namespace.replace(/^plan\.?/, "") + "." : ""}${key}`
+        .split(".")
+        .filter(Boolean)
+        .reduce<unknown>(
+          (node, seg) =>
+            node && typeof node === "object" ? (node as Record<string, unknown>)[seg] : undefined,
+          bundle
+        )
+    return (key: string, values: Record<string, unknown> = {}) => {
+      const message = lookup(key)
+      if (typeof message !== "string") {
+        mockMissing.push(key)
+        return `${namespace}.${key}`
+      }
+      return message
+        .replace(
+          /\{(\w+), plural, (?:one \{([^{}]*)\} )?other \{([^{}]*)\}\}/g,
+          (_m, name: string, one: string | undefined, other: string) =>
+            (values[name] === 1 && one !== undefined ? one : other).replace(
+              "#",
+              String(values[name])
+            )
+        )
+        .replace(/\{(\w+)\}/g, (_m, name: string) => String(values[name]))
+    }
+  },
+}))
 
 import { getPlanRuntime } from "@/lib/agent/plan/runtime"
 import { loadPlanConfigDefaults } from "@/lib/agent/plan/plan-settings"
@@ -33,6 +81,7 @@ import { getSession } from "@/lib/db/sessions"
 import { useSettingsStore } from "@/stores/settings"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { createWorkflow, getWorkflow, listWorkflows } from "@/lib/db/workflows"
+import { resolvePluginToolByName } from "@/lib/plugin/core/invoke-plugin-tool"
 import { dispatchPlanSubcommand } from "./plan"
 import type { SlashContext } from "../builtin"
 import type { AgentPlan, CreatePlanInput } from "@/types/agent/plan"
@@ -55,6 +104,7 @@ const listPlansBySession = jest.fn()
 const getPlan = jest.fn()
 const cancelPlan = jest.fn()
 const rejectPlan = jest.fn()
+const recordWorkflowExport = jest.fn()
 const getOpenGoalForSession = jest.fn()
 
 /** The plan `createPlan` echoes back, shaped from whatever input it received. */
@@ -102,6 +152,10 @@ function ctx(over: Partial<SlashContext> = {}): SlashContext {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockLocale = "en"
+  mockMissing.length = 0
+  recordWorkflowExport.mockResolvedValue(undefined)
+  jest.mocked(resolvePluginToolByName).mockResolvedValue(undefined)
   createPlan.mockImplementation(async (input: CreatePlanInput) => planFrom(input))
   getOpenPlanForSession.mockResolvedValue(undefined)
   listPlansBySession.mockResolvedValue([])
@@ -117,6 +171,7 @@ beforeEach(() => {
     getPlan,
     cancelPlan,
     rejectPlan,
+    recordWorkflowExport,
   })
   getGoalRuntimeMock.mockReturnValue({ getOpenGoalForSession })
   loadPlanConfigDefaultsMock.mockResolvedValue(undefined)
@@ -634,32 +689,37 @@ describe("plan settings defaults", () => {
 // plan⇄workflow conversion. The ephemeral compile that `runPlan` performs is
 // never persisted; these two are.
 describe("plan ⇄ workflow conversion", () => {
-  it("saves the open plan as an editable workflow with a manual trigger", async () => {
-    getOpenPlanForSession.mockResolvedValue({
+  /** An open plan with the given steps, in order, each depending on the last. */
+  function openPlan(
+    steps: Array<Pick<AgentPlan["steps"][number], "id" | "title" | "kind" | "params">>
+  ): AgentPlan {
+    return {
       id: "p1",
       sessionId: "ses_1",
       title: "Ship v2",
       status: "awaiting_approval",
       config: {},
-      steps: [
+      steps: steps.map((step, i) => ({
+        ...step,
+        status: "pending",
+        order: i,
+        dependencies: i === 0 ? [] : [steps[i - 1].id],
+      })),
+    } as unknown as AgentPlan
+  }
+
+  it("saves the open plan as a standalone workflow and links it from the plan", async () => {
+    getOpenPlanForSession.mockResolvedValue(
+      openPlan([
         {
           id: "a",
           title: "one",
           kind: "agent_turn",
-          status: "pending",
-          order: 0,
-          dependencies: [],
+          params: { kind: "agent_turn", prompt: "Do one" },
         },
-        {
-          id: "b",
-          title: "two",
-          kind: "agent_turn",
-          status: "pending",
-          order: 1,
-          dependencies: ["a"],
-        },
-      ],
-    })
+        { id: "b", title: "two", kind: "agent_turn" },
+      ])
+    )
     createWorkflowMock.mockResolvedValue({ id: "wf_new", name: "Ship v2" })
 
     const res = await dispatchPlanSubcommand(ctx({ args: "to-workflow" }))
@@ -667,9 +727,89 @@ describe("plan ⇄ workflow conversion", () => {
     expect(createWorkflowMock).toHaveBeenCalledTimes(1)
     const draft = createWorkflowMock.mock.calls[0][0]
     expect(draft.name).toBe("Ship v2")
-    expect(draft.nodes[0].type).toBe("trigger.manual")
-    expect(draft.nodes).toHaveLength(3)
-    expect(res.system).toContain("wf_new")
+    expect(draft.nodes.map((n: { type: string }) => n.type)).toEqual([
+      "trigger.manual",
+      "action.agent.turn",
+      "action.agent.turn",
+    ])
+    // Standalone: the steps' content is in the nodes, nothing names the plan.
+    expect(draft.nodes[1].data.params.prompt).toBe("Do one")
+    expect(JSON.stringify(draft.nodes.slice(1))).not.toContain("planId")
+    expect(recordWorkflowExport).toHaveBeenCalledWith("p1", "wf_new")
+    expect(res.system).toContain('Saved "Ship v2" as a workflow (2 steps and a manual trigger)')
+    expect(res.system).toContain("`/plan from-workflow wf_new`")
+    expect(mockMissing).toEqual([])
+  })
+
+  it("names the tool's plugin on an exported tool call", async () => {
+    jest
+      .mocked(resolvePluginToolByName)
+      .mockImplementation(async (name) =>
+        name === "search_docs" ? { pluginId: "docs" } : undefined
+      )
+    getOpenPlanForSession.mockResolvedValue(
+      openPlan([
+        {
+          id: "a",
+          title: "search",
+          kind: "tool_call",
+          params: { kind: "tool_call", toolName: "search_docs", input: { q: "v2" } },
+        },
+      ])
+    )
+    createWorkflowMock.mockResolvedValue({ id: "wf_new" })
+
+    await dispatchPlanSubcommand(ctx({ args: "to-workflow" }))
+
+    const toolNode = createWorkflowMock.mock.calls[0][0].nodes[1]
+    expect(toolNode.type).toBe("action.plugin.invoke")
+    expect(toolNode.data.params).toEqual({
+      pluginId: "docs",
+      mode: "tool",
+      toolName: "search_docs",
+      args: { q: "v2" },
+    })
+  })
+
+  it("refuses a tool call no installed plugin registers, naming the step and tool", async () => {
+    getOpenPlanForSession.mockResolvedValue(
+      openPlan([
+        {
+          id: "a",
+          title: "search",
+          kind: "tool_call",
+          params: { kind: "tool_call", toolName: "search_docs", input: {} },
+        },
+      ])
+    )
+    const res = await dispatchPlanSubcommand(ctx({ args: "to-workflow" }))
+    expect(createWorkflowMock).not.toHaveBeenCalled()
+    expect(recordWorkflowExport).not.toHaveBeenCalled()
+    expect(res.system).toContain('Step "search" calls tool "search_docs"')
+    expect(mockMissing).toEqual([])
+  })
+
+  it.each([
+    ["en" as const, 'Step "ask the reviewer" dispatches a teammate'],
+    ["zh-CN" as const, "步骤「ask the reviewer」会派发给队友"],
+  ])("refuses a teammate step in %s without writing anything", async (locale, expected) => {
+    mockLocale = locale
+    getOpenPlanForSession.mockResolvedValue(
+      openPlan([
+        { id: "a", title: "draft", kind: "agent_turn" },
+        {
+          id: "b",
+          title: "ask the reviewer",
+          kind: "teammate_dispatch",
+          params: { kind: "teammate_dispatch", teammateId: "tm_1" },
+        },
+      ])
+    )
+    const res = await dispatchPlanSubcommand(ctx({ args: "to-workflow" }))
+    expect(createWorkflowMock).not.toHaveBeenCalled()
+    expect(recordWorkflowExport).not.toHaveBeenCalled()
+    expect(res.system).toContain(expected)
+    expect(mockMissing).toEqual([])
   })
 
   it("refuses to export when there is no open plan", async () => {
@@ -677,6 +817,15 @@ describe("plan ⇄ workflow conversion", () => {
     const res = await dispatchPlanSubcommand(ctx({ args: "to-workflow" }))
     expect(createWorkflowMock).not.toHaveBeenCalled()
     expect(res.system).toContain("No open plan to export")
+    expect(mockMissing).toEqual([])
+  })
+
+  it("says so in Chinese when the plan has nothing to export", async () => {
+    mockLocale = "zh-CN"
+    getOpenPlanForSession.mockResolvedValue(openPlan([]))
+    const res = await dispatchPlanSubcommand(ctx({ args: "to-workflow" }))
+    expect(createWorkflowMock).not.toHaveBeenCalled()
+    expect(res.system).toBe("计划「Ship v2」没有可导出的步骤。")
   })
 
   it("wraps a workflow found by id in an approval-gated plan", async () => {
@@ -685,6 +834,36 @@ describe("plan ⇄ workflow conversion", () => {
     const input = createPlan.mock.calls[0][0] as CreatePlanInput
     expect(input.steps.map((s) => s.kind)).toEqual(["approval_gate", "sub_workflow"])
     expect(input.metadata).toEqual({ workflowId: "wf_1" })
+  })
+
+  // WF-12: with approval off, creation pins the sub-workflow step at once; an
+  // unpublished workflow refuses the plan by step, in the UI's language.
+  it.each([
+    ["en" as const, 'Step "Nightly report" runs a workflow that is not published.'],
+    ["zh-CN" as const, "步骤「Nightly report」运行的工作流尚未发布。"],
+  ])(
+    "names the unpublished step when an auto-approved wrap is refused (%s)",
+    async (locale, expected) => {
+      mockLocale = locale
+      const { PlanApprovalBlockedError } = jest.requireActual(
+        "@/lib/agent/plan/sub-workflow-binding"
+      ) as typeof import("@/lib/agent/plan/sub-workflow-binding")
+      getWorkflowMock.mockResolvedValue({ id: "wf_1", name: "Nightly report" })
+      createPlan.mockRejectedValue(
+        new PlanApprovalBlockedError("not-published", "st1", "Nightly report", "wf_1", "")
+      )
+      const res = await dispatchPlanSubcommand(ctx({ args: "from-workflow wf_1" }))
+      expect(res.system).toContain(expected)
+      expect(mockMissing).toEqual([])
+    }
+  )
+
+  it("does not swallow other creation failures", async () => {
+    getWorkflowMock.mockResolvedValue({ id: "wf_1", name: "Nightly report" })
+    createPlan.mockRejectedValue(new Error("dexie down"))
+    await expect(dispatchPlanSubcommand(ctx({ args: "from-workflow wf_1" }))).rejects.toThrow(
+      "dexie down"
+    )
   })
 
   it("falls back to a name search and reports an ambiguous match", async () => {

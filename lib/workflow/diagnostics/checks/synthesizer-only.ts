@@ -9,10 +9,10 @@
  * a host bug rather than as "this node is not yours to place".
  *
  * The catalog's `hidden` flag keeps them out of the palette, so the normal way
- * to acquire one is to open a synthesized graph. That still happens:
- * `/plan to-workflow` writes a durable, editable workflow. This check is what
+ * to acquire one is to open or copy a synthesized graph. This check is what
  * tells the author, at edit time, which of those nodes their own Run button
- * cannot drive.
+ * cannot drive. (`/plan to-workflow` exports plan steps as ordinary nodes, so
+ * it never produces one.)
  */
 
 import type { VisualWorkflow, WorkflowNodeKind } from "@/types/workflow/visual"
@@ -20,11 +20,12 @@ import { makeDiagnostic } from "../diagnostic-id"
 import type { Diagnostic } from "../types"
 
 /**
- * Kind to the lifecycle that owns it. `action.plan.step.dispatch` is absent on
- * purpose: its executor bootstraps its own `PlanRunContext` from the node's
- * `planId`, so a converted plan workflow does run.
+ * Kind to the lifecycle that owns it. `action.plan.step.dispatch` runs only
+ * inside its plan's own run (`__plan__:<planId>:…`), which is never an
+ * editable workflow.
  */
 const REQUIRED_LIFECYCLE: Partial<Record<WorkflowNodeKind, "team" | "plan">> = {
+  "action.plan.step.dispatch": "plan",
   "action.team.task.dispatch": "team",
   "action.team.task.review": "team",
   "action.team.reconcile": "team",

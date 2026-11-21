@@ -45,6 +45,7 @@ import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentPlan, CreatePlanInput, CreatePlanStepInput } from "@/types/agent/plan"
 import { isRejectablePlanStatus } from "@/types/agent/plan"
 import { listPlanEvents } from "@/lib/db/plans"
+import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
 
 /** Max characters kept from a hand-authored plan title (steps clamp in `linearAgentTurnSteps`). */
 const MAX_PLAN_TITLE_LEN = 120
@@ -76,6 +77,27 @@ export async function dispatchPlanSubcommand(ctx: SlashContext): Promise<PlanCom
   const rest = space === -1 ? "" : trimmed.slice(space + 1).trim()
 
   if (!trimmed) return await commandStatus(ctx)
+  try {
+    return await dispatchHead(ctx, head, rest, trimmed)
+  } catch (error) {
+    // A plan that needs no approval is approved (and its sub-workflow steps
+    // pinned) the moment any of these subcommands creates it; an unpublished
+    // workflow refuses it, by step, instead of failing the command (WF-12).
+    const { PlanApprovalBlockedError, planApprovalBlockedMessage } =
+      await import("@/lib/agent/plan/sub-workflow-binding")
+    if (!(error instanceof PlanApprovalBlockedError)) throw error
+    const t = await getRuntimeTranslator("plan.approvalBlocked")
+    const { key, values } = planApprovalBlockedMessage(error)
+    return { system: t(key, values) }
+  }
+}
+
+async function dispatchHead(
+  ctx: SlashContext,
+  head: string,
+  rest: string,
+  trimmed: string
+): Promise<PlanCommandResult> {
   switch (head) {
     case "status":
       return await commandStatus(ctx)
@@ -363,29 +385,34 @@ async function commandToTeam(ctx: SlashContext): Promise<PlanCommandResult> {
  * layout, saved as a row the user can open, edit and re-run without the plan.
  */
 async function commandToWorkflow(ctx: SlashContext): Promise<PlanCommandResult> {
+  const t = await getRuntimeTranslator("plan.export")
   const plan = await getPlanRuntime().getOpenPlanForSession(ctx.activeSessionId!)
-  if (!plan)
-    return {
-      system:
-        "No open plan to export with `/plan to-workflow` — create one with `/plan <objective>`.",
-    }
-  if (plan.steps.length === 0) return { system: `Plan "${plan.title}" has no steps to export.` }
+  if (!plan) return { system: t("noPlan") }
+  if (plan.steps.length === 0) return { system: t("empty", { title: plan.title }) }
 
-  const { planWorkflowDraft } = await import("@/lib/agent/plan/workflow-conversion")
-  const { createWorkflow } = await import("@/lib/db/workflows")
-  let draft: ReturnType<typeof planWorkflowDraft>
+  const [{ exportPlanAsWorkflow }, { PlanExportError }] = await Promise.all([
+    import("@/lib/agent/plan/workflow-export"),
+    import("@/lib/agent/plan/workflow-conversion"),
+  ])
+  let exported: Awaited<ReturnType<typeof exportPlanAsWorkflow>>
   try {
-    draft = planWorkflowDraft(plan)
+    exported = await exportPlanAsWorkflow(plan)
   } catch (err) {
+    // A step with no standalone equivalent: name it, and say what to change.
+    if (err instanceof PlanExportError) {
+      const values = { step: err.step.title, tool: err.toolName ?? "" }
+      if (err.reason === "teammate-step") return { system: t("teammateStep", values) }
+      if (err.reason === "tool-owner-unknown") return { system: t("toolOwnerUnknown", values) }
+      return { system: t("stepIncomplete", values) }
+    }
     // Cycle / unknown dependency — the same validation the run path applies.
-    return { system: `Could not export the plan: ${(err as Error).message}` }
+    return { system: t("invalid", { reason: (err as Error).message }) }
   }
-  const workflow = await createWorkflow(draft)
   return {
     system: [
-      `🧩 Saved "${plan.title}" as a workflow (${plan.steps.length} step(s) + a manual trigger).`,
+      t("saved", { title: plan.title, count: exported.stepCount }),
       "",
-      `Open it from **Workflows** — id \`${workflow.id}\`, or wrap it in a plan with \`/plan from-workflow ${workflow.id}\`. The workflow is now yours to edit and re-run.`,
+      t("savedHint", { id: exported.workflowId }),
     ].join("\n"),
   }
 }

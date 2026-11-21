@@ -54,15 +54,29 @@ jest.mock("@/lib/runtime/approval-bus", () => ({
   waitForDecision: (...a: unknown[]) => waitForDecisionMock(...a),
 }))
 
-const getWorkflowMock = jest.fn()
+const getWorkflowRunMock = jest.fn()
 jest.mock("@/lib/db/workflows", () => ({
-  getWorkflow: (...a: unknown[]) => getWorkflowMock(...a),
+  getWorkflowRun: (...a: unknown[]) => getWorkflowRunMock(...a),
 }))
 
-const runWorkflowMock = jest.fn()
-jest.mock("@/lib/workflow/runtime/orchestrator", () => ({
-  runWorkflow: (...a: unknown[]) => runWorkflowMock(...a),
-}))
+// `sub_workflow` admits the pinned published version formally (WF-12): the
+// authority is the seam, the draft table and the orchestrator are never read.
+const executeWorkflowVersionMock = jest.fn()
+jest.mock("@/lib/workflow/runtime/execution-authority", () => {
+  class WorkflowAdmissionError extends Error {
+    constructor(
+      readonly code: string,
+      message: string
+    ) {
+      super(message)
+      this.name = "WorkflowAdmissionError"
+    }
+  }
+  return {
+    WorkflowAdmissionError,
+    executeWorkflowVersion: (...a: unknown[]) => executeWorkflowVersionMock(...a),
+  }
+})
 
 const resolvePluginToolByNameMock = jest.fn()
 const invokePluginToolMock = jest.fn()
@@ -124,11 +138,12 @@ function step(over: Partial<PlanStep> = {}): PlanStep {
     title: over.title ?? "do the thing",
     description: over.description,
     kind: over.kind ?? "agent_turn",
-    status: "pending",
+    status: over.status ?? "pending",
     order: 0,
     dependencies: [],
     params: over.params,
     attempts: over.attempts,
+    ...(over.output !== undefined ? { output: over.output } : {}),
   }
 }
 
@@ -176,8 +191,8 @@ function makeCtx(
 beforeEach(() => {
   executeAgentMock.mockReset()
   waitForDecisionMock.mockReset()
-  getWorkflowMock.mockReset()
-  runWorkflowMock.mockReset()
+  getWorkflowRunMock.mockReset()
+  executeWorkflowVersionMock.mockReset()
   resolvePluginToolByNameMock.mockReset()
   invokePluginToolMock.mockReset()
   dispatchTeammateMock.mockReset()
@@ -317,15 +332,80 @@ describe("dispatchPlanStepNode — approval_gate", () => {
 })
 
 describe("dispatchPlanStepNode — sub_workflow", () => {
-  it("runs the nested workflow and completes on success", async () => {
-    getWorkflowMock.mockResolvedValue({ id: "wf1", name: "Nested", nodes: [], edges: [] })
-    runWorkflowMock.mockResolvedValue({ runId: "x", status: "succeeded", output: { ok: 1 } })
+  const binding = {
+    workflowId: "wf1",
+    versionId: "wfv_1",
+    deploymentId: "dep_1",
+    deploymentRevision: 3,
+    dependencyLock: { workflows: {}, indexes: {} },
+  }
+  const pinned = (over: Partial<PlanStep> = {}) =>
+    step({
+      kind: "sub_workflow",
+      params: { kind: "sub_workflow", workflowId: "wf1", triggerPayload: { input: 1 }, binding },
+      ...over,
+    })
+  const admitted = (result: Record<string, unknown>) => ({
+    runId: result.runId,
+    version: { id: "wfv_1", name: "Nested" },
+    result,
+  })
+
+  it("admits exactly the version the plan was approved against", async () => {
+    executeWorkflowVersionMock.mockResolvedValue(
+      admitted({ runId: "run_c", status: "succeeded", output: { ok: 1 } })
+    )
+    const { ctx, calls } = makeCtx(pinned())
+    const res = await dispatchPlanStepNode(ctx, "s1", signal)
+
+    expect(executeWorkflowVersionMock).toHaveBeenCalledTimes(1)
+    expect(executeWorkflowVersionMock.mock.calls[0][0]).toMatchObject({
+      workflowId: "wf1",
+      versionId: "wfv_1",
+      deploymentId: "dep_1",
+      deploymentRevision: 3,
+      dependencyLock: binding.dependencyLock,
+      entrypoint: "plan",
+      caller: "plan:p1",
+      // One admission per step per plan run: a crash replay reuses the child.
+      idempotencyKey: "r1:s1",
+      authorityParentRunId: "execution:plan:p1",
+      lineage: { rootRunId: "r1", parentRunId: "r1", parentStepId: "s1" },
+      triggerKind: "trigger.manual",
+      payload: { input: 1 },
+    })
+    expect(res.output).toEqual({
+      runId: "run_c",
+      workflowId: "wf1",
+      versionId: "wfv_1",
+      status: "succeeded",
+      output: { ok: 1 },
+    })
+    expect(calls.map((c) => c.status)).toEqual(["in_progress", "completed"])
+  })
+
+  it("refuses a step the approval never pinned, without running anything", async () => {
     const { ctx, calls } = makeCtx(
       step({ kind: "sub_workflow", params: { kind: "sub_workflow", workflowId: "wf1" } })
     )
-    const res = await dispatchPlanStepNode(ctx, "s1", signal)
-    expect(res.output).toEqual({ ok: 1 })
-    expect(calls[1].status).toBe("completed")
+    await expect(dispatchPlanStepNode(ctx, "s1", signal)).rejects.toMatchObject({
+      retryable: false,
+      message: expect.stringContaining("not pinned to a published version"),
+    })
+    expect(executeWorkflowVersionMock).not.toHaveBeenCalled()
+    expect(calls.at(-1)?.status).toBe("failed")
+  })
+
+  it("refuses a pin that names another workflow", async () => {
+    const { ctx } = makeCtx(
+      pinned({
+        params: { kind: "sub_workflow", workflowId: "wf2", binding },
+      })
+    )
+    await expect(dispatchPlanStepNode(ctx, "s1", signal)).rejects.toMatchObject({
+      retryable: false,
+    })
+    expect(executeWorkflowVersionMock).not.toHaveBeenCalled()
   })
 
   it("fails when the workflow id is missing from params", async () => {
@@ -337,23 +417,103 @@ describe("dispatchPlanStepNode — sub_workflow", () => {
     })
   })
 
-  it("fails when the workflow is not found", async () => {
-    getWorkflowMock.mockResolvedValue(undefined)
-    const { ctx } = makeCtx(
-      step({ kind: "sub_workflow", params: { kind: "sub_workflow", workflowId: "ghost" } })
+  it("fails non-retryably when the approved deployment can no longer be admitted", async () => {
+    const { WorkflowAdmissionError } = jest.requireMock(
+      "@/lib/workflow/runtime/execution-authority"
+    ) as { WorkflowAdmissionError: new (code: string, message: string) => Error }
+    executeWorkflowVersionMock.mockRejectedValue(
+      new WorkflowAdmissionError("deployment-not-found", "approved deployment is no longer active")
     )
+    const { ctx } = makeCtx(pinned())
     await expect(dispatchPlanStepNode(ctx, "s1", signal)).rejects.toMatchObject({
       retryable: false,
+      message: expect.stringContaining("no longer active"),
     })
   })
 
-  it("fails (retryable) when the nested run did not succeed", async () => {
-    getWorkflowMock.mockResolvedValue({ id: "wf1", name: "Nested", nodes: [], edges: [] })
-    runWorkflowMock.mockResolvedValue({ runId: "x", status: "failed" })
-    const { ctx } = makeCtx(
-      step({ kind: "sub_workflow", params: { kind: "sub_workflow", workflowId: "wf1" } })
+  it("fails non-retryably when the child run did not succeed", async () => {
+    executeWorkflowVersionMock.mockResolvedValue(
+      admitted({ runId: "run_c", status: "failed", error: { message: "boom" } })
     )
-    await expect(dispatchPlanStepNode(ctx, "s1", signal)).rejects.toThrow(/status "failed"/)
+    const { ctx, calls } = makeCtx(pinned())
+    await expect(dispatchPlanStepNode(ctx, "s1", signal)).rejects.toMatchObject({
+      retryable: false,
+      message: expect.stringMatching(/run_c ended with status "failed": boom/),
+    })
+    expect(calls.at(-1)?.status).toBe("failed")
+  })
+
+  it.each(["waiting", "running", "pending"] as const)(
+    "marks the step waiting, not failed, when the child run is %s",
+    async (status) => {
+      executeWorkflowVersionMock.mockResolvedValue(admitted({ runId: "run_c", status }))
+      const { ctx, calls } = makeCtx(pinned())
+      await expect(dispatchPlanStepNode(ctx, "s1", signal)).rejects.toMatchObject({
+        needsHuman: true,
+        retryable: false,
+      })
+      const last = calls.at(-1)!
+      expect(last.status).toBe("waiting")
+      expect(last.patch?.output).toMatchObject({ runId: "run_c", status })
+      expect(calls.some((c) => c.status === "failed")).toBe(false)
+    }
+  )
+
+  it("completes a waiting step once its run (or the retry that replaced it) succeeded", async () => {
+    getWorkflowRunMock.mockImplementation(async (id: string) =>
+      id === "run_c"
+        ? { id: "run_c", workflowId: "wf1", status: "failed", replayedByRunId: "run_r" }
+        : { id: "run_r", workflowId: "wf1", versionId: "wfv_1", status: "succeeded", output: 7 }
+    )
+    const { ctx, calls } = makeCtx(
+      pinned({ status: "waiting", output: { runId: "run_c", versionId: "wfv_1" } })
+    )
+    const res = await dispatchPlanStepNode(ctx, "s1", signal)
+    expect(executeWorkflowVersionMock).not.toHaveBeenCalled()
+    expect(res.output).toEqual({
+      runId: "run_r",
+      workflowId: "wf1",
+      versionId: "wfv_1",
+      status: "succeeded",
+      output: 7,
+    })
+    expect(calls).toEqual([
+      expect.objectContaining({
+        status: "completed",
+        patch: expect.objectContaining({ output: res.output }),
+      }),
+    ])
+  })
+
+  it("keeps a waiting step waiting while its run is still held", async () => {
+    getWorkflowRunMock.mockResolvedValue({ id: "run_c", workflowId: "wf1", status: "waiting" })
+    const { ctx, calls } = makeCtx(pinned({ status: "waiting", output: { runId: "run_c" } }))
+    await expect(dispatchPlanStepNode(ctx, "s1", signal)).rejects.toMatchObject({
+      needsHuman: true,
+    })
+    expect(executeWorkflowVersionMock).not.toHaveBeenCalled()
+    expect(calls).toEqual([expect.objectContaining({ status: "waiting" })])
+  })
+
+  it("dispatches afresh when the held run is gone", async () => {
+    getWorkflowRunMock.mockResolvedValue(undefined)
+    executeWorkflowVersionMock.mockResolvedValue(
+      admitted({ runId: "run_n", status: "succeeded", output: 1 })
+    )
+    const { ctx, calls } = makeCtx(pinned({ status: "waiting", output: { runId: "run_c" } }))
+    await dispatchPlanStepNode(ctx, "s1", signal)
+    expect(executeWorkflowVersionMock).toHaveBeenCalledTimes(1)
+    expect(calls.map((c) => c.status)).toEqual(["in_progress", "completed"])
+  })
+})
+
+describe("dispatchPlanStepNode — a resumed plan run", () => {
+  it("keeps a completed step's recorded output instead of running it again", async () => {
+    const { ctx, calls } = makeCtx(step({ status: "completed", output: { done: true } }))
+    const res = await dispatchPlanStepNode(ctx, "s1", signal)
+    expect(res.output).toEqual({ done: true })
+    expect(executeAgentMock).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
   })
 })
 

@@ -15,7 +15,8 @@ jest.mock("next/navigation", () => ({
   notFound: () => mockNotFound(),
 }))
 jest.mock("@/hooks/ui/use-mobile", () => ({ useIsMobile: () => false }))
-jest.mock("@/lib/db/workflows", () => ({ getWorkflow: jest.fn() }))
+jest.mock("@/lib/playbooks/derived-workflow", () => ({ loadFreshWorkflow: jest.fn() }))
+jest.mock("sonner", () => ({ toast: { warning: jest.fn(), error: jest.fn() } }))
 jest.mock("@/components/workflow/editor/canvas", () => ({
   WorkflowEditorCanvas: ({ workflow }: { workflow: { id: string } }) => (
     <div data-testid="canvas">{workflow.id}</div>
@@ -30,7 +31,10 @@ jest.mock("@/components/mobile/workflow/editor/mobile-workflow-editor", () => ({
   MobileWorkflowEditor: () => <div data-testid="mobile-editor" />,
 }))
 
-import { getWorkflow } from "@/lib/db/workflows"
+import { toast } from "sonner"
+import { loadFreshWorkflow } from "@/lib/playbooks/derived-workflow"
+
+const getWorkflow = loadFreshWorkflow as jest.Mock
 
 // Catches the synchronous throw that `notFound()` performs during the
 // effect-triggered re-render, so the test can assert it fired without the
@@ -52,15 +56,40 @@ beforeEach(() => {
 
 test("renders the canvas for the workflow id from ?id=", async () => {
   mockGet.mockReturnValue("wf-123")
-  ;(getWorkflow as jest.Mock).mockResolvedValue({ id: "wf-123", name: "X" })
+  getWorkflow.mockResolvedValue({
+    status: "ready",
+    workflow: { id: "wf-123", name: "X" },
+    dormant: [],
+  })
   render(<WorkflowEditorPage />)
   await waitFor(() => expect(screen.getByTestId("canvas")).toHaveTextContent("wf-123"))
   expect(getWorkflow).toHaveBeenCalledWith("wf-123")
+  expect(toast.warning).not.toHaveBeenCalled()
+})
+
+test("opens the last compiled copy of a playbook workflow whose source is gone, with a warning", async () => {
+  mockGet.mockReturnValue("wf_playbook_x")
+  getWorkflow.mockResolvedValue({
+    status: "source-unavailable",
+    workflow: {
+      id: "wf_playbook_x",
+      name: "X",
+      derivedFrom: { kind: "playbook", skillId: "review" },
+    },
+    problem: { status: "missing" },
+  })
+  render(<WorkflowEditorPage />)
+  await waitFor(() => expect(screen.getByTestId("canvas")).toHaveTextContent("wf_playbook_x"))
+  expect(toast.warning).toHaveBeenCalledTimes(1)
+  // `workflows.playbook.sourceUnavailable`, naming the playbook it follows.
+  expect(toast.warning).toHaveBeenCalledWith(
+    expect.stringContaining("The playbook this workflow follows (review)")
+  )
 })
 
 test("calls notFound when the workflow does not exist", async () => {
   mockGet.mockReturnValue("missing")
-  ;(getWorkflow as jest.Mock).mockResolvedValue(undefined)
+  getWorkflow.mockResolvedValue({ status: "not-found" })
   render(
     <Boundary>
       <WorkflowEditorPage />

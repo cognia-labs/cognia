@@ -44,7 +44,7 @@ export type PlanStepKind =
   | "agent_turn"        // an in-session turn by the main agent (visible, conversational)
   | "teammate_dispatch" // delegate to a teammate / subagent — reuses dispatchTeammate
   | "tool_call"         // a specific tool invocation with fixed input
-  | "sub_workflow"      // run a nested VisualWorkflow — reuses runWorkflow
+  | "sub_workflow"      // run a nested VisualWorkflow — reuses runWorkflow (amended 2026-11-20: the approved published version)
   | "approval_gate"     // human approval checkpoint — reuses lib/runtime/approval-bus
 
 export type PlanStepStatus =
@@ -127,7 +127,7 @@ The per-step node executor (`action.plan.step.dispatch` in `lib/workflow/nodes/b
 agent_turn        → in-session turn (executeAgent / sidecar runAndCaptureAssistantReply)
 teammate_dispatch → dispatchTeammate(teamCtx, …)        (reuses ADR-0022 primitive)
 tool_call         → resolved tool invocation
-sub_workflow      → nested runWorkflow(params.workflowId)
+sub_workflow      → executeWorkflowVersion(params.binding)  (amended 2026-11-20; was nested runWorkflow)
 approval_gate     → waitForDecision(scope, id, signal)  (reuses approval-bus)
 ```
 
@@ -438,3 +438,62 @@ gone); `lib/workflow/nodes/built-ins.ts` → `lib/workflow/nodes/built-ins/index
 `docs/plans/2026-06-03-unified-plan-execution-hub.md` → `docs/plans/archive/`;
 `lib/agent/plan-mode-bridge.ts` and the tasks sheet are removed; the plan
 context injection sits in `lib/claude/build-options.ts` beside the goal block.
+
+## Approved-version and standalone-export amendment (2026-11-20)
+
+The workflow-system review (WF-12, WF-24 in
+`docs/evidence/2026-11-18-workflow-system-gap-audit.md`) found that both
+directions of the plan ⇄ workflow link contradicted what a person had agreed
+to.
+
+**A `sub_workflow` step runs the version its plan was approved against.** The
+step used to store only a workflow id and call `runWorkflow` on the draft row at
+run time, so an edit or a re-publication after the approval ran without anyone
+approving it. Now:
+
+- Approval (`approvePlan`, or `createPlan` for a plan that needs none) pins each
+  `sub_workflow` step to the active production deployment —
+  `params.binding: WorkflowDependencyBinding` (version, deployment, revision,
+  dependency lock), resolved by the workflow module's own
+  `createPublishedWorkflowDependencyBinding`
+  (`lib/agent/plan/sub-workflow-binding.ts`). A step whose workflow is not
+  published, or whose callees cannot be admitted, refuses the whole approval
+  with `PlanApprovalBlockedError` before anything changes. The dock, the
+  "Write a plan" composer and a notification-button approval all name the step
+  (`plan.approvalBlocked.*`); none of them fails silently.
+- Editing an approved plan keeps the pins of untouched steps and pins only a
+  step that now names another workflow.
+- Execution admits exactly the pin through `executeWorkflowVersion`
+  (entrypoint `plan`, idempotency key `<plan run>:<step>`, lineage to the plan
+  run), the same formal path as `flow.subworkflow` and the typed agent tool. A
+  step without a pin does not run.
+- A child run that comes back `waiting` (or still pending / running) is not a
+  failure: the step becomes `waiting` (new `PlanStepStatus`, shown as "Waiting
+  for input"), the plan's run ends `waiting` and the plan is paused. Resuming
+  re-checks the recorded child run, following `replayedByRunId` to the retry
+  an operator ran; completed steps keep their recorded output instead of
+  running again.
+
+ADR §1's "reuses runWorkflow" for `sub_workflow` is superseded; unpublished
+workflows can no longer be called from a plan.
+
+**`/plan to-workflow` exports a workflow that runs on its own.** The export used
+to emit `action.plan.step.dispatch` nodes holding only `planId` / `stepId`, which
+re-read and wrote back the source plan at run time: editing or deleting the
+plan changed the workflow, and every run shared one set of step states. Now
+`planWorkflowDraft` emits the ordinary node for each step, carrying the step's
+content — `action.agent.turn` (prompt, character), `action.approval.request`
+(dependents follow its `approved` handle), an editor review as
+`action.editor.showDiff` (continue on failure) then an approval carrying the
+proposal, `flow.subworkflow`, `action.plugin.invoke` (the tool's plugin is
+resolved at export) and `action.mcp.invokeTool`. Nothing in the result names
+the plan; the plan only records `metadata.exportedWorkflows`
+(`lib/agent/plan/workflow-export.ts`).
+
+A `teammate_dispatch` step is refused, naming the step: no node runs one
+teammate turn outside a team run (`action.team.task.dispatch` needs the per-run
+team context, `action.team.run` runs a whole team toward a goal,
+`action.team.delegate` hands off to a twin, a background or external agent, or
+another team). `action.plan.step.dispatch` is now plan-only: it runs inside its
+own plan's ephemeral `__plan__:<planId>:` run, and the `synthesizerOnly`
+diagnostic flags a hand-placed copy.

@@ -558,6 +558,25 @@ describe("PlanApprovalDock", () => {
     expect(onResume).not.toHaveBeenCalled()
   })
 
+  // WF-12: approval pins sub-workflow steps; an unpublished one refuses it
+  // before anything changes, and the dock must say so rather than go quiet.
+  it("toasts which step blocked the approval and does not resume", async () => {
+    const { PlanApprovalBlockedError } = jest.requireActual(
+      "@/lib/agent/plan/sub-workflow-binding"
+    ) as typeof import("@/lib/agent/plan/sub-workflow-binding")
+    mockPlan.mockReturnValue(plan())
+    approvePlan.mockRejectedValueOnce(
+      new PlanApprovalBlockedError("not-published", "s2", "Publish notes", "wf_pub", "")
+    )
+    const onResume = jest.fn()
+    render(<PlanApprovalDock sessionId="ses" onResume={onResume} />)
+    const btn = screen.getByTestId("plan-approval-approve-auto")
+    await userEvent.click(btn)
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("approvalBlocked.notPublished"))
+    await waitFor(() => expect(btn).not.toBeDisabled())
+    expect(onResume).not.toHaveBeenCalled()
+  })
+
   it("keep planning with feedback works without an onSendPlanFeedback channel", async () => {
     mockPlan.mockReturnValue(plan())
     render(<PlanApprovalDock sessionId="ses" onResume={jest.fn()} />)

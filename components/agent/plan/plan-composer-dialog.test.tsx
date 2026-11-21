@@ -14,8 +14,11 @@ import {
 import type { AgentPlan, CreatePlanInput } from "@/types/agent/plan"
 import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
 
+// Keys come back bare, except the shared `plan.approvalBlocked` messages, which
+// keep their namespace so a test can tell them from the composer's own.
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: (namespace?: string) => (key: string) =>
+    namespace === "plan.approvalBlocked" ? `approvalBlocked.${key}` : key,
 }))
 
 const toastError = jest.fn()
@@ -238,6 +241,27 @@ describe("PlanComposerDialog", () => {
     await user.click(screen.getByTestId("plan-composer-create"))
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("createFailed"))
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+    expect(screen.getByTestId("plan-composer-create")).toBeEnabled()
+  })
+
+  // WF-12: a plan that needs no approval is approved (and its sub-workflow
+  // steps pinned) when created; an unpublished workflow refuses it by name.
+  it("names the blocked step instead of the generic failure when creation is refused", async () => {
+    const { PlanApprovalBlockedError } = jest.requireActual(
+      "@/lib/agent/plan/sub-workflow-binding"
+    ) as typeof import("@/lib/agent/plan/sub-workflow-binding")
+    createPlan.mockRejectedValue(
+      new PlanApprovalBlockedError("not-published", "s2", "Publish notes", "wf_pub", "")
+    )
+    const user = userEvent.setup()
+    const { onOpenChange } = setup()
+    await user.type(screen.getByLabelText("titleLabel"), "T")
+    await user.type(screen.getByLabelText("stepsLabel"), "a")
+    await user.click(screen.getByTestId("plan-composer-create"))
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("approvalBlocked.notPublished"))
+    expect(toastError).not.toHaveBeenCalledWith("createFailed")
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
     expect(screen.getByTestId("plan-composer-create")).toBeEnabled()
   })

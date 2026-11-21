@@ -54,7 +54,9 @@ describe("checkSynthesizerOnly", () => {
     expect(checkSynthesizerOnly(wf(kinds))).toHaveLength(kinds.length)
   })
 
-  it("leaves plan step dispatch alone, because it bootstraps its own context", () => {
-    expect(checkSynthesizerOnly(wf(["action.plan.step.dispatch"]))).toEqual([])
+  it("flags a plan step dispatch node, which only runs inside its plan's own run", () => {
+    const found = checkSynthesizerOnly(wf(["action.plan.step.dispatch"]))
+    expect(found).toHaveLength(1)
+    expect(found[0]!.messageParams).toEqual({ lifecycle: "plan" })
   })
 })

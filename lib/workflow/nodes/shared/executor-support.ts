@@ -196,6 +196,7 @@ export const PLAN_STEP_STATUSES = new Set<PlanStepStatus>([
   "failed",
   "skipped",
   "blocked",
+  "waiting",
 ])
 
 export const PLAN_REFINEMENT_TYPES = new Set<PlanRefinementType>([

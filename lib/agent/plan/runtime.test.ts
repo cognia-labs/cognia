@@ -8,7 +8,11 @@ import {
   getPlanRuntime,
   resolvePlanConfig,
   readPlanChatResumeFailure,
+  readWorkflowExports,
 } from "./runtime"
+import { PlanApprovalBlockedError, type SubWorkflowBindingDeps } from "./sub-workflow-binding"
+import type { WorkflowDependencyBinding } from "@/types/workflow/deployment"
+import type { VisualWorkflow, WorkflowRunRow } from "@/types/workflow/visual"
 import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
 import { readChatHandoff } from "./chat-handoff"
 
@@ -496,6 +500,286 @@ describe("runPlan (orchestrated)", () => {
     ac.abort()
     const result = await rt.runPlan(plan.id, { signal: ac.signal })
     expect(result?.status).toBe("failed") // cancelled run → not succeeded → failed
+  })
+})
+
+// A plan run interrupted by a crash comes back through the workflow resume
+// controller, which hands the `__plan__:` run to `resumePlanRun`.
+describe("resumePlanRun (crash recovery)", () => {
+  async function executingPlan() {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput({ config: { requireApproval: false } }))
+    // A started run whose process died: the plan was left `executing`.
+    await getDb().agentPlans.update(plan.id, { status: "executing" })
+    return { rt, plan: (await rt.getPlan(plan.id))! }
+  }
+
+  function crashedRun(planId: string, over: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
+    const workflowId = `__plan__:${planId}:abc12345`
+    return {
+      id: "plan_run_crashed",
+      workflowId,
+      status: "running",
+      triggerKind: "trigger.manual",
+      triggerPayload: { planId },
+      triggerOriginAt: 1_700_000_000_000,
+      startedAt: 1_700_000_000_500,
+      workflowSnapshot: { id: workflowId, nodes: [], edges: [] } as unknown as VisualWorkflow,
+      ...over,
+    } as WorkflowRunRow
+  }
+
+  it("continues the run under its own id with its driver, then completes the plan", async () => {
+    const { rt, plan } = await executingPlan()
+    const { getPlanRunContext } = await import("./plan-run-context")
+    runWorkflowMock.mockImplementation(
+      async (input: { runId: string; trigger: { originAt: number }; signal: AbortSignal }) => {
+        // The step context and the abort wiring are back before any step runs.
+        const ctx = getPlanRunContext(input.runId)
+        await ctx?.writer.setStepStatus(plan.steps[0].id, "completed", { result: "done" })
+        expect(input.trigger.originAt).toBe(1_700_000_000_000)
+        expect(input.signal.aborted).toBe(false)
+        return { runId: input.runId, status: "succeeded", output: null }
+      }
+    )
+
+    await expect(rt.resumePlanRun(crashedRun(plan.id))).resolves.toBe("succeeded")
+
+    expect(runWorkflowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "plan_run_crashed" })
+    )
+    const settled = await rt.getPlan(plan.id)
+    expect(settled?.status).toBe("completed")
+    expect(settled?.steps[0]).toMatchObject({ status: "completed", result: "done" })
+    expect((await listPlanEvents(plan.id)).map((e) => e.kind)).toContain("exit")
+    expect(getPlanRunContext("plan_run_crashed")).toBeUndefined()
+  })
+
+  it("fails the plan when the continued run fails, and parks it when a step waits", async () => {
+    const failed = await executingPlan()
+    runWorkflowMock.mockResolvedValueOnce({
+      runId: "plan_run_crashed",
+      status: "failed",
+      error: { message: "step blew up" },
+    })
+    await failed.rt.resumePlanRun(crashedRun(failed.plan.id))
+    expect((await failed.rt.getPlan(failed.plan.id))?.status).toBe("failed")
+
+    await dbFixture.restore()
+    __resetPlanRuntimeForTesting()
+    const waiting = await executingPlan()
+    runWorkflowMock.mockResolvedValueOnce({
+      runId: "plan_run_crashed",
+      status: "waiting",
+      error: { message: "approve the release" },
+    })
+    await expect(waiting.rt.resumePlanRun(crashedRun(waiting.plan.id))).resolves.toBe("waiting")
+    expect((await waiting.rt.getPlan(waiting.plan.id))?.status).toBe("paused")
+  })
+
+  it("lets a pause during the continued run abort it", async () => {
+    const { rt, plan } = await executingPlan()
+    let seen: AbortSignal | undefined
+    runWorkflowMock.mockImplementation(async (input: { signal: AbortSignal }) => {
+      seen = input.signal
+      await rt.pausePlan(plan.id)
+      return { runId: "plan_run_crashed", status: "cancelled", output: null }
+    })
+    await rt.resumePlanRun(crashedRun(plan.id))
+    expect(seen?.aborted).toBe(true)
+    // The user's pause stands; the cancelled run does not overwrite it.
+    expect((await rt.getPlan(plan.id))?.status).toBe("paused")
+  })
+
+  it("cancels an orphaned run whose plan no longer expects it, without replaying", async () => {
+    const { rt, plan } = await executingPlan()
+    await rt.cancelPlan(plan.id)
+    await getDb().workflowRuns.put(crashedRun(plan.id))
+
+    await expect(rt.resumePlanRun(crashedRun(plan.id))).resolves.toBe("cancelled")
+    expect(runWorkflowMock).not.toHaveBeenCalled()
+    expect((await getDb().workflowRuns.get("plan_run_crashed"))?.status).toBe("cancelled")
+
+    await getDb().workflowRuns.put(crashedRun("plan_gone", { id: "plan_run_gone" }))
+    const gone = crashedRun("plan_gone", { id: "plan_run_gone" })
+    await expect(rt.resumePlanRun(gone)).resolves.toBe("cancelled")
+    expect((await getDb().workflowRuns.get("plan_run_gone"))?.status).toBe("cancelled")
+    expect(runWorkflowMock).not.toHaveBeenCalled()
+  })
+})
+
+// WF-12: a plan approval pins each sub_workflow step to the production
+// version published at that moment; execution admits exactly that pin.
+describe("sub-workflow pins", () => {
+  const pin = (workflowId: string, versionId: string): WorkflowDependencyBinding => ({
+    workflowId,
+    versionId,
+    deploymentId: `dep_${workflowId}`,
+    deploymentRevision: 1,
+    dependencyLock: { workflows: {}, indexes: {} },
+  })
+  /** A resolver over a fixed "published now" table; anything else is unpublished. */
+  function publishing(published: Record<string, string>): SubWorkflowBindingDeps & {
+    resolve: jest.Mock
+  } {
+    return {
+      resolve: jest.fn(async (workflowId: string) =>
+        published[workflowId]
+          ? { ok: true as const, binding: pin(workflowId, published[workflowId]) }
+          : { ok: false as const, reason: "not-published" as const, detail: "no deployment" }
+      ),
+    }
+  }
+  const subWorkflowInput = (over: Partial<CreatePlanInput> = {}) =>
+    createInput({
+      steps: [
+        { title: "think", kind: "agent_turn" },
+        {
+          title: "Publish notes",
+          kind: "sub_workflow",
+          params: { kind: "sub_workflow", workflowId: "wf_pub" },
+          dependsOn: [0],
+        },
+      ],
+      ...over,
+    })
+  const pinOf = (step: { params?: { kind: string } & Record<string, unknown> } | undefined) =>
+    step?.params?.kind === "sub_workflow"
+      ? (step.params.binding as WorkflowDependencyBinding | undefined)
+      : undefined
+
+  it("approval pins every sub-workflow step to what is published now", async () => {
+    const deps = publishing({ wf_pub: "wfv_1" })
+    __resetPlanRuntimeForTesting({ subWorkflowBinding: deps })
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(subWorkflowInput())
+    // Awaiting approval: nothing pinned yet, nobody has agreed to anything.
+    expect(pinOf(plan.steps[1])).toBeUndefined()
+    const approved = await rt.approvePlan(plan.id)
+    expect(approved?.status).toBe("approved")
+    expect(pinOf(approved?.steps[1])).toMatchObject({ workflowId: "wf_pub", versionId: "wfv_1" })
+    expect(deps.resolve).toHaveBeenCalledWith("wf_pub")
+  })
+
+  it("refuses approval of an unpublished step and leaves the plan as it was", async () => {
+    __resetPlanRuntimeForTesting({ subWorkflowBinding: publishing({}) })
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(subWorkflowInput())
+    await expect(rt.approvePlan(plan.id)).rejects.toBeInstanceOf(PlanApprovalBlockedError)
+    await expect(rt.approvePlan(plan.id)).rejects.toMatchObject({
+      reason: "not-published",
+      stepTitle: "Publish notes",
+      workflowId: "wf_pub",
+    })
+    const row = await rt.getPlan(plan.id)
+    expect(row?.status).toBe("awaiting_approval")
+    expect(row?.generationId).toBe(plan.generationId)
+    expect(pinOf(row?.steps[1])).toBeUndefined()
+    expect((await listPlanEvents(plan.id)).map((e) => e.kind)).not.toContain("approved")
+  })
+
+  it("pins a plan created already approved, and a refusal keeps the open plan open", async () => {
+    const deps = publishing({ wf_pub: "wfv_2" })
+    __resetPlanRuntimeForTesting({ subWorkflowBinding: deps })
+    const rt = getPlanRuntime()
+    const created = await rt.createPlan(subWorkflowInput({ config: { requireApproval: false } }))
+    expect(created.status).toBe("approved")
+    expect(pinOf(created.steps[1])?.versionId).toBe("wfv_2")
+
+    __resetPlanRuntimeForTesting({ subWorkflowBinding: publishing({}) })
+    const blocked = getPlanRuntime()
+    await expect(
+      blocked.createPlan(subWorkflowInput({ title: "Again", config: { requireApproval: false } }))
+    ).rejects.toBeInstanceOf(PlanApprovalBlockedError)
+    // The refusal happens before the one-open-plan rule cancels the old plan.
+    expect((await blocked.getOpenPlanForSession("ses_a"))?.id).toBe(created.id)
+  })
+
+  it("an edit to an approved plan keeps untouched pins and pins the changed step", async () => {
+    const deps = publishing({ wf_pub: "wfv_1", wf_other: "wfv_9" })
+    __resetPlanRuntimeForTesting({ subWorkflowBinding: deps })
+    const rt = getPlanRuntime()
+    const approved = await rt.approvePlan((await rt.createPlan(subWorkflowInput())).id)
+    // The workflow is re-published after the approval.
+    deps.resolve.mockImplementation(async (workflowId: string) => ({
+      ok: true as const,
+      binding: pin(workflowId, workflowId === "wf_pub" ? "wfv_LATER" : "wfv_9"),
+    }))
+    const steps = approved!.steps.map((step) =>
+      step.params?.kind === "sub_workflow"
+        ? // An editor that rebuilds params from its own fields drops the pin.
+          {
+            ...step,
+            title: "Publish release notes",
+            params: { kind: "sub_workflow" as const, workflowId: "wf_pub" },
+          }
+        : step
+    )
+    const edited = await rt.updatePlanDraft(approved!.id, {
+      steps: [
+        ...steps,
+        {
+          ...steps[1],
+          id: "new_step",
+          order: 2,
+          title: "Notify",
+          params: { kind: "sub_workflow", workflowId: "wf_other" },
+        },
+      ],
+    })
+    expect(pinOf(edited?.steps[1])?.versionId).toBe("wfv_1")
+    expect(pinOf(edited?.steps[2])?.versionId).toBe("wfv_9")
+  })
+
+  it("pauses the plan, not fails it, when a step's sub-workflow run is waiting", async () => {
+    __resetPlanRuntimeForTesting({ subWorkflowBinding: publishing({ wf_pub: "wfv_1" }) })
+    runWorkflowMock.mockResolvedValue({
+      runId: "x",
+      status: "waiting",
+      error: { message: "sub-workflow run run_c is waiting for input", code: "needs_human" },
+    })
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(subWorkflowInput({ config: { requireApproval: false } }))
+    const result = await rt.runPlan(plan.id)
+    expect(result?.status).toBe("paused")
+    const row = await rt.getPlan(plan.id)
+    expect(row?.status).toBe("paused")
+    const events = await listPlanEvents(plan.id)
+    expect(events.map((e) => e.kind)).toEqual(expect.arrayContaining(["paused", "exit"]))
+    expect(events.find((e) => e.kind === "exit")?.payload).toMatchObject({
+      status: "paused",
+      reason: "sub-workflow run run_c is waiting for input",
+    })
+    expect(emitSchedulerEventMock).not.toHaveBeenCalledWith(
+      "plan:completed",
+      expect.anything(),
+      expect.anything()
+    )
+  })
+})
+
+// WF-24: the plan keeps only a link to the workflow it was exported as.
+describe("recordWorkflowExport", () => {
+  it("links each exported workflow once, newest last, on any status", async () => {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput())
+    await rt.cancelPlan(plan.id)
+    await rt.recordWorkflowExport(plan.id, "wf_a")
+    await rt.recordWorkflowExport(plan.id, "wf_b")
+    await rt.recordWorkflowExport(plan.id, "wf_a")
+    const row = await rt.getPlan(plan.id)
+    expect(readWorkflowExports(row!).map((e) => e.workflowId)).toEqual(["wf_b", "wf_a"])
+    expect(row?.status).toBe("cancelled")
+  })
+
+  it("is a no-op for a missing plan and ignores malformed entries", async () => {
+    const rt = getPlanRuntime()
+    await expect(rt.recordWorkflowExport("ghost", "wf_a")).resolves.toBeUndefined()
+    expect(
+      readWorkflowExports({
+        metadata: { exportedWorkflows: [{ workflowId: "wf_a", exportedAt: 1 }, { nope: 1 }, "x"] },
+      })
+    ).toEqual([{ workflowId: "wf_a", exportedAt: 1 }])
   })
 })
 

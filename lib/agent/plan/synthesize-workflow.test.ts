@@ -1,6 +1,10 @@
 import type { AgentPlan, PlanStep } from "@/types/agent/plan"
 import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
-import { PlanSynthesizeError, synthesizePlanWorkflow } from "./synthesize-workflow"
+import {
+  PlanSynthesizeError,
+  planIdOfPlanWorkflowId,
+  synthesizePlanWorkflow,
+} from "./synthesize-workflow"
 
 function step(id: string, deps: string[] = [], over: Partial<PlanStep> = {}): PlanStep {
   return {
@@ -103,5 +107,23 @@ describe("synthesizePlanWorkflow", () => {
     } catch (e) {
       expect((e as PlanSynthesizeError).reason).toBe("cycle")
     }
+  })
+})
+
+describe("planIdOfPlanWorkflowId", () => {
+  it("reads back the plan id of a synthesized run, including one with colons", () => {
+    const { workflow } = synthesizePlanWorkflow(plan([step("a")], { id: "px" }))
+    expect(planIdOfPlanWorkflowId(workflow.id)).toBe("px")
+    const nested = synthesizePlanWorkflow(plan([step("a")], { id: "acct:p:1" })).workflow
+    expect(planIdOfPlanWorkflowId(nested.id)).toBe("acct:p:1")
+  })
+
+  it("names no plan for any other workflow id", () => {
+    expect(planIdOfPlanWorkflowId(undefined)).toBeUndefined()
+    expect(planIdOfPlanWorkflowId("wf_exported")).toBeUndefined()
+    expect(planIdOfPlanWorkflowId("__team__:t1:abc")).toBeUndefined()
+    expect(planIdOfPlanWorkflowId("__plan__:px")).toBeUndefined()
+    expect(planIdOfPlanWorkflowId("__plan__::abc")).toBeUndefined()
+    expect(planIdOfPlanWorkflowId("__plan__:px:")).toBeUndefined()
   })
 })

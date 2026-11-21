@@ -14,5 +14,9 @@
   "detach": "分离",
   "detached": "已分离为“{name}”。",
   "detachFailed": "分离失败：{error}",
-  "readOnlySave": "该工作流为只读。分离后才能保存修改。"
+  "readOnlySave": "该工作流为只读。分离后才能保存修改。",
+  "sourceUnavailable": "该工作流跟随的流程（{skillId}）已无法编译，当前显示的是上次编译的副本。修正流程之前无法运行。",
+  "notRunnable": "该工作流无法运行：它跟随的流程（{skillId}）已无法编译。",
+  "dormantNotRunnable": "该工作流暂时无法运行：其流程中有 {count, plural, other {# 个步骤}}在当前版本中尚不可运行。",
+  "loadFailed": "无法加载该工作流：{error}"
 }

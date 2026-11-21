@@ -34714,6 +34714,11 @@
       },
       "title": "审阅计划"
     },
+    "approvalBlocked": {
+      "dependenciesUnavailable": "步骤「{step}」运行的工作流无法准入：它调用的某个工作流尚未发布，或调用之间形成了循环。修复后再批准该计划。",
+      "notPublished": "步骤「{step}」运行的工作流尚未发布。请先发布，再批准该计划。",
+      "notificationTitle": "计划未获批准：{title}"
+    },
     "card": {
       "openInPanel": "在任务面板打开",
       "untitled": "计划"
@@ -34801,6 +34806,16 @@
       "titleLabel": "计划标题",
       "toc": "章节"
     },
+    "export": {
+      "empty": "计划「{title}」没有可导出的步骤。",
+      "invalid": "无法导出该计划：{reason}",
+      "noPlan": "没有可用 `/plan to-workflow` 导出的进行中计划。请先用 `/plan` 加上目标创建一个计划。",
+      "saved": "🧩 已将「{title}」保存为工作流（{count, plural, other {# 个步骤}}，另加一个手动触发器）。",
+      "savedHint": "可在**工作流**中打开（id `{id}`），或用 `/plan from-workflow {id}` 将其包装为计划。该工作流独立运行：编辑或删除此计划不会改变它。",
+      "stepIncomplete": "步骤「{step}」缺少在计划之外运行所需的设置。请补全该步骤后再导出。",
+      "teammateStep": "步骤「{step}」会派发给队友，只能在该计划或其团队内运行，没有工作流节点能单独完成。请直接运行计划，或在导出前把该步骤改为智能体回合。",
+      "toolOwnerUnknown": "步骤「{step}」调用的工具「{tool}」没有已安装的插件注册。请安装或启用该插件后再导出。"
+    },
     "status": {
       "approved": "已批准",
       "awaiting_approval": "待批准",
@@ -34857,7 +34872,8 @@
       "statusInProgress": "进行中",
       "statusPending": "待处理",
       "statusReady": "就绪",
-      "statusSkipped": "已跳过"
+      "statusSkipped": "已跳过",
+      "statusWaiting": "等待输入"
     }
   },
   "plugins": {
@@ -67320,6 +67336,7 @@
         "cancel": "取消",
         "description": "立即运行该工作流。可选择以 JSON 形式传入触发输入。",
         "invalidJson": "载荷必须是合法的 JSON。",
+        "missing": "该工作流已不存在。",
         "payloadLabel": "触发载荷（可选）",
         "payloadPlaceholder": "'{ \"key\": \"value\" }'",
         "runButton": "运行工作流",
@@ -72870,7 +72887,7 @@
           },
           "step": {
             "dispatch": {
-              "description": "执行一个 Agent 计划步骤。由 /plan to-workflow 与计划运行时产出，每步一个节点。",
+              "description": "在计划自身的运行中执行一个 Agent 计划步骤。由计划运行时产出，每步一个节点；/plan to-workflow 导出的是普通节点。",
               "label": "派发计划步骤"
             }
           },
@@ -73849,14 +73866,18 @@
       "detach": "分离",
       "detachFailed": "分离失败：{error}",
       "detached": "已分离为“{name}”。",
+      "dormantNotRunnable": "该工作流暂时无法运行：其流程中有 {count, plural, other {# 个步骤}}在当前版本中尚不可运行。",
       "drafting": "{name} 没有步骤清单，Copilot 正在根据它起草工作流。保存前请先检查。",
       "failedTitle": "无法将该 skill 以工作流打开",
+      "loadFailed": "无法加载该工作流：{error}",
       "missingBody": "skill {skillId} 不存在或已被删除。",
       "missingTitle": "未找到该 skill",
+      "notRunnable": "该工作流无法运行：它跟随的流程（{skillId}）已无法编译。",
       "opening": "正在以工作流打开…",
       "problemsBody": "请修正其 references/flow.yaml 中的以下问题，然后重新打开。",
       "problemsTitle": "该流程无法以工作流打开",
       "readOnlySave": "该工作流为只读。分离后才能保存修改。",
+      "sourceUnavailable": "该工作流跟随的流程（{skillId}）已无法编译，当前显示的是上次编译的副本。修正流程之前无法运行。",
       "tooManyBody": "它调用了超过 {limit} 个流程。请减少它调用的流程后重新打开。"
     },
     "runs": {

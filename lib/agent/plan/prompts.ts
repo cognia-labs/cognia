@@ -29,6 +29,8 @@ export const PLAN_SECTION_MARKER = "## Active Plan"
 const STATUS_GLYPH: Record<PlanStep["status"], string> = {
   completed: "[x]",
   in_progress: "[~]",
+  // A sub-workflow step whose child run waits for a person.
+  waiting: "[?]",
   failed: "[!]",
   blocked: "[!]",
   skipped: "[-]",

@@ -261,11 +261,16 @@ function stepEventType(status: PlanStepStatus): RunEventType {
       return "step.failed"
     case "skipped":
       return "step.skipped"
+    case "waiting":
+      return "step.progress"
   }
 }
 
 function runStepStatus(status: PlanStepStatus): RunStepStatus {
-  return status === "ready" ? "pending" : status
+  if (status === "ready") return "pending"
+  // A step held for input outside the plan is still the step in progress.
+  if (status === "waiting") return "in_progress"
+  return status
 }
 
 export async function syncGoalExecutionRun(

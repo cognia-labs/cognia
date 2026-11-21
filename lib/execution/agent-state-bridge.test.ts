@@ -357,6 +357,29 @@ describe("agent state execution bridge", () => {
     expect(await getDb().executionRunEvents.where("runId").equals(runId).count()).toBe(4)
   })
 
+  // WF-12: a step whose sub-workflow run waits for a person is still the step
+  // in progress of a paused plan, journaled as progress, never as finished.
+  it("journals a waiting Plan step as progress on an in-progress step", async () => {
+    const row = session()
+    const base = plan({ status: "paused" })
+    await syncPlanExecutionRun(
+      { ...base, steps: [base.steps[0], { ...base.steps[1], status: "waiting" }] },
+      row
+    )
+    const runId = agentStateExecutionRunId("plan", "plan-1")
+    const events = await getDb().executionRunEvents.where("runId").equals(runId).toArray()
+    const revised = events.find((event) => event.type === "plan.revised")
+    expect(JSON.stringify(revised)).toContain('"sourceStatus":"waiting","status":"in_progress"')
+    expect(
+      events.filter((event) => event.type === "step.progress").map((event) => event.sourceEventId)
+    ).toEqual([expect.stringContaining("plan-step-2:in_progress")])
+    expect(
+      events.some(
+        (event) => event.type === "step.completed" && JSON.stringify(event).includes("plan-step-2")
+      )
+    ).toBe(false)
+  })
+
   it.each(["completed", "failed", "cancelled"] as const)(
     "preserves a %s Plan journal when later source snapshots are replayed",
     async (status) => {

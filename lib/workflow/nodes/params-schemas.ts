@@ -515,6 +515,7 @@ const PlanStepStatus = z.enum([
   "failed",
   "skipped",
   "blocked",
+  "waiting",
 ])
 
 const PlanSource = z.enum([

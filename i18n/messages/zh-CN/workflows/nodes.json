@@ -1129,7 +1129,7 @@
       },
       "step": {
         "dispatch": {
-          "description": "执行一个 Agent 计划步骤。由 /plan to-workflow 与计划运行时产出，每步一个节点。",
+          "description": "在计划自身的运行中执行一个 Agent 计划步骤。由计划运行时产出，每步一个节点；/plan to-workflow 导出的是普通节点。",
           "label": "派发计划步骤"
         }
       },
