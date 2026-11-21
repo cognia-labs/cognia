@@ -165,7 +165,7 @@ import {
 import { AgentRunEventProducer } from "@/lib/execution/sources/agent-turn"
 import { sanitizeActivityLabel } from "@/lib/execution/run-activity"
 import { registerAgentRunController } from "@/lib/execution/control-handlers"
-import type { ConnectorLiveSteerCoordinator } from "./live-steer"
+import { registerConversationRunController, type ConnectorLiveSteerCoordinator } from "./live-steer"
 import { sessionExecutionRootPath } from "@/lib/workspace/session-root"
 import { resolveSessionWorkspace, sessionWorkspaceId } from "@/lib/workspace/session-workspace"
 import { isHeadlessHost } from "@/lib/platform/detect"
@@ -2736,18 +2736,109 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           // of letting it run to the 15-min timeout and write Dexie post-unmount.
           const adapterSignal = getRunningAdapter(event.adapterId)?.abortController.signal
           const runController = new AbortController()
-          const unregisterRunController = registerAgentRunController(executionRunId, runController)
+          const unregisterAgentController = registerAgentRunController(
+            executionRunId,
+            runController
+          )
+          const unregisterConversationController = registerConversationRunController(
+            event.conversationKey,
+            runController
+          )
+          const unregisterRunController = () => {
+            unregisterConversationController()
+            unregisterAgentController()
+          }
+          const initialAuthority = effectiveConfig.authority.effective
+          const initialTargetKey =
+            effectiveConfig.target.effective.kind === "direct"
+              ? `direct:${effectiveCharacterId ?? ""}`
+              : `${effectiveConfig.target.effective.kind}:${effectiveConfig.target.effective.id}`
+          const initialAllowComputerUse = override?.allowComputerUse === true
           // A message that arrives while a member speaks is the room's next turn,
-          // not a steer into one member's run.
-          const unregisterLiveSteer = member
-            ? undefined
-            : opts.liveSteerCoordinator?.activate({
-                conversationKey: event.conversationKey,
-                sessionId: session.id,
-                executionRunId,
-                provider: sendOptions.provider ?? "anthropic",
-                injectionProtection: sendOptions.contentSafety?.injectionProtection !== false,
-              })
+          // not a steer into one member's run. Drafted turns never accept live
+          // steering either (`requireAcceptance`).
+          const unregisterLiveSteer =
+            member || requireAcceptance
+              ? undefined
+              : opts.liveSteerCoordinator?.activate({
+                  conversationKey: event.conversationKey,
+                  sessionId: session.id,
+                  executionRunId,
+                  provider: sendOptions.provider ?? "anthropic",
+                  injectionProtection: sendOptions.contentSafety?.injectionProtection !== false,
+                  canSteer: async (inboundEvent) => {
+                    if (runController.signal.aborted) return false
+                    const [persistedAdapter, persistedOverride] = await Promise.all([
+                      getAdapterInstance(inboundEvent.adapterId).catch(() => undefined),
+                      getDb()
+                        .conversationOverrides.where("conversationKey")
+                        .equals(inboundEvent.conversationKey)
+                        .first()
+                        .catch(() => undefined),
+                    ])
+                    const currentAdapter = persistedAdapter ?? adapterRow
+                    if (currentAdapter.enabled === false) return false
+                    const currentOverride = persistedOverride ?? override
+                    const activeSession = await findActiveSessionForConversation(
+                      inboundEvent.conversationKey,
+                      currentOverride ?? undefined
+                    ).catch(() => undefined)
+                    if (activeSession && activeSession.id !== session.id) return false
+                    const currentSuppression = resolveInboxSuppression(
+                      currentAdapter,
+                      currentOverride
+                    )
+                    if (currentSuppression.muted) return false
+                    const currentQuiet = currentSuppression.quietHours
+                    if (
+                      currentQuiet &&
+                      isInQuietRange(
+                        Date.now(),
+                        currentQuiet.from,
+                        currentQuiet.to,
+                        currentQuiet.tz
+                      )
+                    ) {
+                      return false
+                    }
+                    const currentConfig = resolveImEffectiveConfig({
+                      adapter: currentAdapter,
+                      override: currentOverride ?? null,
+                      rule: matchDispatchRule(currentAdapter.dispatchRules, inboundEvent),
+                      system: { mode: resolved.mode, characterId: resolved.characterId },
+                      session: { model: session.model, providerOverride: session.providerOverride },
+                      scope: inboundEvent.channel.kind,
+                    })
+                    if (currentConfig.engagement.effective === "human") return false
+                    if (
+                      currentConfig.autonomy.effective !== "act" &&
+                      currentConfig.autonomy.effective !== "autopilot"
+                    ) {
+                      return false
+                    }
+                    if (currentConfig.behavior.activeRunDispatchMode.effective !== "steer") {
+                      return false
+                    }
+                    if (initialAllowComputerUse && currentOverride?.allowComputerUse !== true) {
+                      return false
+                    }
+                    if (
+                      initialAuthority !== undefined &&
+                      currentConfig.authority.effective !== initialAuthority
+                    ) {
+                      return false
+                    }
+                    const currentCharacterId = currentOverride?.characterDisabled
+                      ? undefined
+                      : (currentConfig.routing.characterId ?? resolved.characterId)
+                    const currentTargetKey =
+                      currentConfig.target.effective.kind === "direct"
+                        ? `direct:${currentCharacterId ?? ""}`
+                        : `${currentConfig.target.effective.kind}:${currentConfig.target.effective.id}`
+                    if (currentTargetKey !== initialTargetKey) return false
+                    return true
+                  },
+                })
           const captureSignal = adapterSignal
             ? AbortSignal.any([adapterSignal, runController.signal])
             : runController.signal
@@ -3286,6 +3377,62 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           }
           // ── The one place acceptance changes anything ──
           //
+          // Re-check fresh conversation mode/mute right before shipping: if the
+          // operator tightened this conversation to Silent/Muted while the turn
+          // was running, suppress outbound delivery; if tightened to Draft,
+          // hold the completed reply as a ConnectorDraft instead of sending.
+          const [latestPersistedAdapter, latestPersistedOverride] = await Promise.all([
+            getAdapterInstance(event.adapterId).catch(() => undefined),
+            getDb()
+              .conversationOverrides.where("conversationKey")
+              .equals(event.conversationKey)
+              .first()
+              .catch(() => undefined),
+          ])
+          const latestAdapterRow = latestPersistedAdapter ?? adapterRow
+          const latestOverrideRow = latestPersistedOverride ?? override
+          const latestSuppression = resolveInboxSuppression(latestAdapterRow, latestOverrideRow)
+          const latestEffectiveConfig = resolveImEffectiveConfig({
+            adapter: latestAdapterRow,
+            override: latestOverrideRow ?? null,
+            rule: ruleHit,
+            system: { mode: resolved.mode, characterId: resolved.characterId },
+            session: { model: session.model, providerOverride: session.providerOverride },
+            scope: event.channel.kind,
+          })
+          const postCaptureSuppressedReason =
+            latestEffectiveConfig.autonomy.effective === "observe" ||
+            latestEffectiveConfig.engagement.effective === "human"
+              ? "manual_mode_override"
+              : latestSuppression.muted
+                ? "muted"
+                : undefined
+          if (postCaptureSuppressedReason) {
+            if (!runController.signal.aborted) {
+              runController.abort("conversation_mode_tightened")
+            }
+            await appendAudit({
+              adapterId: event.adapterId,
+              kind: suppressedReasonToAuditKind(postCaptureSuppressedReason),
+              at: Date.now(),
+              conversationKey: event.conversationKey,
+              reason: postCaptureSuppressedReason,
+              fields: {
+                sourceMessageId: storedMsg.id,
+                ...(latestSuppression.mutedScope
+                  ? { mutedScope: latestSuppression.mutedScope }
+                  : {}),
+              },
+            })
+            return { kind: "halted" }
+          }
+          const tightenedToDraft =
+            !requireAcceptance && latestEffectiveConfig.autonomy.effective === "suggest"
+          if (tightenedToDraft && !runController.signal.aborted) {
+            runController.abort("conversation_mode_tightened_to_draft")
+          }
+          const effectiveRequireAcceptance = requireAcceptance || tightenedToDraft
+
           // Canonical member history survives an outbound privacy withhold.
           // Its readers still pass through the 2B history projection.
           if (member)
@@ -3294,7 +3441,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           // whether its product ships or waits for a human. That is why `draft`
           // stopped being a route: routing it separately meant deciding WHO runs
           // the turn from a flag about WHO signs off on it.
-          if (requireAcceptance) {
+          if (effectiveRequireAcceptance) {
             const draftSegments: MessageSegment[] = outboundSegments.length
               ? outboundSegments
               : [{ type: "text", text: deliveredText }]

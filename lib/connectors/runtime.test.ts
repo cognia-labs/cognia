@@ -6671,3 +6671,64 @@ describe("withConversationContext", () => {
     )
   })
 })
+
+describe("installRuntime — mid-run mode tightening enforcement (F1)", () => {
+  it("suppresses outbound delivery when tightened to Silent while capture is running", async () => {
+    const { abortConversationRunControllers } = await import("./live-steer")
+    const event = makeEvent({ messageId: "m_f1_silent" })
+    await seedAdapter(event.adapterId)
+    let observedAborted = false
+
+    installRuntime(getBus(), {
+      runAndCapture: async (_sessionId, _prompt, _opts, cap) => {
+        await upsertByConversationKey({
+          conversationKey: event.conversationKey,
+          sessionId: "sess_f1",
+          autonomy: "observe",
+          engagement: "human",
+          mode: "manual",
+        })
+        abortConversationRunControllers(event.conversationKey, "mode_silent")
+        observedAborted = cap?.signal?.aborted === true
+        return { text: "Should never leave host", messageId: "asst_f1_silent" }
+      },
+    })
+
+    await callHandler(event, "ai-run")
+    expect(observedAborted).toBe(true)
+    expect(await listPendingForConversation(event.conversationKey)).toHaveLength(0)
+    const audits = (await getDb().connectorAudit.toArray()).filter(
+      (a) => a.conversationKey === event.conversationKey
+    )
+    expect(audits.some((a) => a.kind === "inbound.deferred_manual_mode")).toBe(true)
+  })
+
+  it("holds the completed reply as a ConnectorDraft when tightened to Draft mid-run", async () => {
+    const event = makeEvent({ messageId: "m_f1_draft" })
+    await seedAdapter(event.adapterId)
+
+    installRuntime(getBus(), {
+      runAndCapture: async () => {
+        await upsertByConversationKey({
+          conversationKey: event.conversationKey,
+          sessionId: "sess_f1_draft",
+          autonomy: "suggest",
+          mode: "draft",
+        })
+        return { text: "Hold me for review", messageId: "asst_f1_draft" }
+      },
+    })
+
+    await callHandler(event, "ai-run")
+    expect(await listPendingForConversation(event.conversationKey)).toHaveLength(0)
+    const drafts = await getDb()
+      .connectorDrafts.where("conversationKey")
+      .equals(event.conversationKey)
+      .toArray()
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0]?.status).toBe("pending")
+    expect(drafts[0]?.segments).toEqual([
+      expect.objectContaining({ type: "markdown", md: "Hold me for review" }),
+    ])
+  })
+})

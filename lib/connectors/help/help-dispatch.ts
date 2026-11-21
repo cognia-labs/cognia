@@ -33,7 +33,10 @@ import { resolveInboundActivationPolicy } from "@/lib/connectors/conversation-ad
 import { normalizeQuickCommandList } from "@/lib/connectors/quick-commands"
 import { newIdempotencyKey } from "@/types/connectors/outbound"
 import { imModePresetFor } from "@/lib/connectors/composition/im-mode-presets"
-import { projectStoredMode } from "@/lib/connectors/composition/mode-projection"
+import { projectStoredMode, type ImTargetKind } from "@/lib/connectors/composition/mode-projection"
+import { matchDispatchRule } from "@/lib/connectors/dispatch-rules"
+import { resolveImEffectiveConfig } from "@/lib/connectors/effective-config"
+import { resolveInboxSuppression } from "@/lib/connectors/policy-resolve"
 import { readForResolution } from "@/lib/db/conversation-overrides"
 import { buildHelpSurface, type HelpSurfaceMode } from "./build-help-surface"
 
@@ -83,12 +86,27 @@ function resolveDisclosedBehaviour(
   return preset === "draft" || preset === "silent" ? preset : undefined
 }
 
+function resolveDisclosedTargetKind(
+  event: NormalizedInboundEvent,
+  row: AdapterInstanceRow,
+  override: ConversationOverrideRow | undefined
+): ImTargetKind {
+  return resolveImEffectiveConfig({
+    adapter: row,
+    override: override ?? null,
+    rule: matchDispatchRule(row.dispatchRules, event),
+    system: { mode: row.defaultMode ?? "auto" },
+    scope: event.channel.kind,
+  }).target.effective.kind
+}
+
 function buildSurfaceForRow(
   event: NormalizedInboundEvent,
   row: AdapterInstanceRow,
   override: ConversationOverrideRow | undefined,
   mode: HelpSurfaceMode,
-  behaviour: "draft" | "silent" | undefined
+  behaviour: "draft" | "silent" | undefined,
+  targetKind: ImTargetKind
 ) {
   // Unique per render: callbacks dedup on the action id (Lark bakes the
   // action id as the triggerId), so a stable surfaceId would let a button
@@ -112,6 +130,7 @@ function buildSurfaceForRow(
     // tell its members "@ me and I will reply".
     atStrategy: resolveInboundActivationPolicy(row, override),
     behaviour,
+    targetKind,
     skillFamilies: row.lastKnownSkillCapabilities,
     welcomeText: row.welcomeText,
   })
@@ -147,9 +166,10 @@ export async function maybeHandleHelpCommand(
     () => undefined
   )
   const behaviour = resolveDisclosedBehaviour(row, override)
+  const targetKind = resolveDisclosedTargetKind(event, row, override)
   // An explicit welcome preview is an on-demand notice. It never touches
   // first-contact dedup or changes whether a future first welcome is sent.
-  const { segment } = buildSurfaceForRow(event, row, override, mode, behaviour)
+  const { segment } = buildSurfaceForRow(event, row, override, mode, behaviour, targetKind)
   await enqueue({
     personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: event.adapterId,
@@ -189,6 +209,22 @@ export async function maybeSendWelcome(
   // Topics are continuations of work, not new bot onboarding destinations.
   if (parseConversationKey(event.conversationKey).threadId) return false
 
+  const override = await (deps.readOverride ?? readForResolution)(event.conversationKey).catch(
+    () => undefined
+  )
+  const behaviour = resolveDisclosedBehaviour(row, override)
+  // Proactive welcome cards must not speak into a conversation whose responder
+  // is silenced, muted, or turned off — and checking before `recordWelcome`
+  // preserves the one-shot welcome if the operator later switches the chat to
+  // an active responder mode.
+  if (
+    behaviour === "silent" ||
+    resolveInboxSuppression(row, override).muted ||
+    resolveInboundActivationPolicy(row, override) === "off"
+  ) {
+    return false
+  }
+
   const recordWelcome =
     deps.recordWelcome ??
     ((adapterId: string, conversationKey: string) =>
@@ -201,11 +237,8 @@ export async function maybeSendWelcome(
   const audit = deps.audit ?? appendAudit
   const at = (deps.now ?? Date.now)()
 
-  const override = await (deps.readOverride ?? readForResolution)(event.conversationKey).catch(
-    () => undefined
-  )
-  const behaviour = resolveDisclosedBehaviour(row, override)
-  const { segment } = buildSurfaceForRow(event, row, override, "welcome", behaviour)
+  const targetKind = resolveDisclosedTargetKind(event, row, override)
+  const { segment } = buildSurfaceForRow(event, row, override, "welcome", behaviour, targetKind)
   await enqueue({
     personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: event.adapterId,

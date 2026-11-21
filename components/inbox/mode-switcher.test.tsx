@@ -72,7 +72,7 @@ describe("ModeSwitcher", () => {
       <ModeSwitcher
         conversationKey="ck1"
         sessionId="s1"
-        selection="assistant"
+        selection="draft"
         targetKind="team"
         onSelectionChange={onSelectionChange}
       />
@@ -101,13 +101,13 @@ describe("ModeSwitcher", () => {
     expect(onSelectionChange).toHaveBeenCalledWith("delegate")
   })
 
-  // Switching back off `delegate` has to CLEAR the frozen background value, or
-  // the conversation keeps running in the background under a preset that says
-  // it answers inline. `undefined` here is an explicit clear, and the relay
-  // encodes it (see `encodeOverrideMutationClears`).
+  // Switching back off `delegate` after unbinding a target has to CLEAR the
+  // frozen background value, or the conversation keeps running in the
+  // background under a preset that says it answers inline. `undefined` here is
+  // an explicit clear, and the relay encodes it (see `encodeOverrideMutationClears`).
   it("clears a frozen engagement when leaving delegate", async () => {
     render(
-      <ModeSwitcher conversationKey="ck1" sessionId="s1" selection="delegate" targetKind="team" />
+      <ModeSwitcher conversationKey="ck1" sessionId="s1" selection="delegate" targetKind="direct" />
     )
 
     fireEvent.click(screen.getByTestId("mode-option-assistant"))
@@ -118,6 +118,38 @@ describe("ModeSwitcher", () => {
       expect(input.engagement).toBeUndefined()
       expect(input.autonomy).toBe("act")
     })
+  })
+
+  it("disables assistant when a team or workflow is bound and tailors draft copy by target (F4, F5)", async () => {
+    const { rerender } = render(
+      <ModeSwitcher conversationKey="ck1" sessionId="s1" selection="delegate" targetKind="team" />
+    )
+
+    const assistantOption = screen.getByTestId("mode-option-assistant")
+    expect(assistantOption).toBeDisabled()
+    expect(
+      screen.getByText(
+        "Bound team or workflow runs in background as Delegate; unbind it first to answer inline."
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("Generates a team plan and waits for confirmation before running.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(assistantOption)
+    await waitFor(() => expect(mockUpsert).not.toHaveBeenCalled())
+
+    rerender(
+      <ModeSwitcher
+        conversationKey="ck1"
+        sessionId="s1"
+        selection="delegate"
+        targetKind="workflow"
+      />
+    )
+    expect(
+      screen.getByText("Asks for confirmation before starting the bound workflow.")
+    ).toBeInTheDocument()
   })
 
   it("writes observe + human for silent", async () => {

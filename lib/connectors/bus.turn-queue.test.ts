@@ -809,4 +809,55 @@ describe("ConnectorBus turn queue — automated room turns (ADR-0177 batch 5)", 
     expect(handled).toEqual(["cognia-automated:d-forged"])
     expect((await getDb().connectorInboundJobs.get(job.id))?.status).toBe("completed")
   })
+
+  it.each([
+    [
+      "silent",
+      { autonomy: "observe" as const, engagement: "human" as const, mode: "manual" as const },
+      "manual-store",
+    ],
+    ["draft", { autonomy: "suggest" as const, mode: "draft" as const }, "draft-prepare"],
+  ])(
+    "does not live-steer or steer-replay follow-up messages after tightening to %s mid-run (F1)",
+    async (_label, patch, expectedDecision) => {
+      const adapterId = await seedAdapter()
+      await updateAdapterInstance(adapterId, { activeRunDispatchMode: "steer" })
+      const bus = getBus()
+      const gate = deferred()
+      const observed: Array<{ id: string; decision: string; intent: unknown }> = []
+
+      bus.routeHandler = async (event, decision) => {
+        observed.push({
+          id: event.messageId,
+          decision,
+          intent: event.channelData?.dispatchIntent,
+        })
+        if (event.messageId === "msg_run_1") await gate.promise
+      }
+      const liveSteer = jest.fn(async () => ({
+        activeRun: true,
+        accepted: true,
+        executionRunId: "execution:active",
+      }))
+      bus.liveSteerHandler = liveSteer
+
+      await bus.dispatchInboundFull(privateEvent(adapterId, "msg_run_1"))
+      await upsertByConversationKey({
+        conversationKey: `telegram:${adapterId}:chatA`,
+        sessionId: "sess_f1",
+        ...patch,
+      })
+
+      await bus.dispatchInboundFull(privateEvent(adapterId, "msg_after_tighten"))
+      expect(liveSteer).not.toHaveBeenCalled()
+
+      gate.resolve()
+      await bus.flushInboundTurns()
+
+      expect(observed).toEqual([
+        { id: "msg_run_1", decision: "ai-run", intent: undefined },
+        { id: "msg_after_tighten", decision: expectedDecision, intent: undefined },
+      ])
+    }
+  )
 })

@@ -24,6 +24,8 @@
  */
 
 import { migrateLegacyConversationListState } from "@/lib/connectors/session-bindings"
+import { abortConversationRunControllers } from "@/lib/connectors/live-steer"
+import { parseConversationKey } from "@/types/connectors/event"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import {
   addLabel,
@@ -463,12 +465,63 @@ async function reconcileListMutation(mutation: ConversationOverrideMutation): Pr
   await migrateLegacyConversationListState({ conversationKey, sessionId, overwrite: true })
 }
 
+function shouldAbortActiveConversationRuns(mutation: ConversationOverrideMutation): boolean {
+  if (mutation.kind === "setAssignee") {
+    return mutation.assignee?.kind === "human"
+  }
+  const patch =
+    mutation.kind === "upsert"
+      ? mutation.input
+      : mutation.kind === "patch" || mutation.kind === "configSection"
+        ? mutation.patch
+        : undefined
+  if (!patch) return false
+  return (
+    patch.mode === "manual" ||
+    patch.mode === "draft" ||
+    patch.autonomy === "observe" ||
+    patch.autonomy === "suggest" ||
+    patch.engagement === "human" ||
+    patch.muted === true ||
+    patch.inboundActivationPolicy === "off"
+  )
+}
+
 export async function applyConversationOverrideMutation(
   mutation: ConversationOverrideMutation,
   options: ApplyOverrideMutationOptions = {}
 ): Promise<ConversationOverrideRow | undefined> {
   mutation = normalizeListClears(mutation)
+  const conversationKey = conversationKeyOfMutation(mutation)
+  const patch = patchRecordOf(mutation) as OverridePatch | undefined
+  if (conversationKey && patch?.automationPaused === false) {
+    const { retainConversationAutomationsOnResume } = await import("../automation-control")
+    await retainConversationAutomationsOnResume(conversationKey).catch(() => undefined)
+  }
   const result = await applyOverrideMutation(mutation, options)
+  if (conversationKey && shouldAbortActiveConversationRuns(mutation)) {
+    abortConversationRunControllers(conversationKey, "conversation_override_tightened")
+  }
+  if (conversationKey && patch?.automationPaused === false) {
+    const { getBus } = await import("../bus")
+    await getBus()
+      .resumeAutomationFanOuts()
+      .catch(() => undefined)
+  }
+  if (conversationKey && typeof patch?.automationCancelledBefore === "number") {
+    const adapterId =
+      mutation.kind === "configSection"
+        ? mutation.adapterId
+        : parseConversationKey(conversationKey).adapterId
+    if (adapterId) {
+      const { cancelConversationAutomations } = await import("../automation-control")
+      await cancelConversationAutomations(
+        adapterId,
+        conversationKey,
+        patch.automationCancelledBefore
+      ).catch(() => undefined)
+    }
+  }
   await reconcileListMutation(mutation)
   return result
 }

@@ -74,6 +74,17 @@ interface ModeSwitcherProps {
   onSelectionChange?: (selection: ImModePresetId) => void
 }
 
+function presetHelpKey(
+  preset: ImModePresetId,
+  targetKind: ImTargetKind
+): "assistant" | "delegate" | "draft" | "draft_team" | "draft_workflow" | "silent" {
+  if (preset === "draft") {
+    if (targetKind === "team") return "draft_team"
+    if (targetKind === "workflow") return "draft_workflow"
+  }
+  return preset
+}
+
 export function ModeSwitcher({
   conversationKey,
   sessionId,
@@ -145,7 +156,9 @@ export function ModeSwitcher({
                 <span className="flex flex-col gap-0.5">
                   <span>{t(`presets.${preset}`)}</span>
                   <span className="text-xs text-muted-foreground">
-                    {reason ? t(`unavailable.${reason}`) : t(`presetHelp.${preset}`)}
+                    {reason
+                      ? t(`unavailable.${reason}`)
+                      : t(`presetHelp.${presetHelpKey(preset, targetKind)}`)}
                   </span>
                 </span>
               </DropdownMenuItem>

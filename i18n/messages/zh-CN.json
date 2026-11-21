@@ -23351,6 +23351,16 @@
         "conversation": "本会话覆盖了机器人设置：{strategy}"
       }
     },
+    "automations": {
+      "active": "订阅运行中",
+      "ariaActive": "Workflow 与 Bot 订阅：运行中",
+      "ariaPaused": "Workflow 与 Bot 订阅：已暂停",
+      "cancel": "取消排队中的自动化",
+      "pause": "暂停订阅",
+      "paused": "订阅已暂停",
+      "resume": "恢复订阅",
+      "scopeHint": "Workflow 与 Bot 订阅独立于「静默」回复模式运行。"
+    },
     "banner": {
       "outboundSaturated": {
         "count": "{count, plural, =1 {1 条消息被限流} other {# 条消息被限流}}",
@@ -23464,6 +23474,7 @@
       "approvals": "待审批",
       "assignee": "负责人",
       "atStrategy": "@ 提及",
+      "automations": "自动化",
       "computerUse": "Computer Use",
       "delegations": "运行中",
       "delivery": "最近回复",
@@ -23473,6 +23484,7 @@
       "model": "模型",
       "policy": "触发策略",
       "quietHours": "免打扰",
+      "runtime": "运行端",
       "sla": "回复时限",
       "status": "状态",
       "topicRuntime": "话题"
@@ -23929,7 +23941,9 @@
         "assistant": "在会话里直接回答，自行处理。",
         "delegate": "把工作放到后台执行并回报进度。",
         "draft": "写好回复，等你确认后再发。",
-        "silent": "只记录会话，由人来回答。"
+        "draft_team": "先生成团队执行方案，确认后再启动执行。",
+        "draft_workflow": "先请求确认，获批后再启动绑定的工作流。",
+        "silent": "只记录会话，由人来回答；已绑定的 Workflow/Bot 订阅仍独立运行（可在「更多 → 自动化」或 /automation 暂停）。"
       },
       "presets": {
         "assistant": "助理",
@@ -23939,6 +23953,7 @@
         "silent": "静默"
       },
       "unavailable": {
+        "assistant_inline_only": "绑定团队或工作流时固定走后台「委派」；如需在会话内直接回答，请先解绑。",
         "delegate_needs_target": "需要先绑定团队或工作流。"
       }
     },
@@ -24055,6 +24070,10 @@
       "queued": "已加入队列——宿主可达时会立即发送。",
       "sendFailed": "发送失败。请先配对宿主，或检查宿主是否可达。",
       "unavailable": "回复需要已配对的宿主。"
+    },
+    "runtimePlacement": {
+      "local": "在此设备运行（需保持开启）",
+      "remote": "运行于 {host}"
     },
     "sections": {
       "archived": "已归档",
@@ -32801,6 +32820,13 @@
     "remove": "移除 {name}",
     "saveFailed": "无法保存收件人名单：{reason}",
     "saved": "收件人名单已保存",
+    "shadow": {
+      "badge": "仅观察",
+      "browser": "浏览器提交强制授权尚未在「设置 → 安全」中开启。未列入站点当前仅记录到观察报告，暂不拦截。",
+      "github": "GitHub 写入强制授权尚未在「设置 → 安全」中开启。未列入仓库当前仅记录到观察报告，暂不暂存等待批准。",
+      "integration": "集成写入强制授权尚未在「设置 → 安全」中开启。未列入目标当前仅记录到观察报告，暂不暂存等待批准。",
+      "messaging": "消息收件人强制授权尚未在「设置 → 安全」中开启。未列入收件人当前仅记录到观察报告，暂不转为草稿或拦截。"
+    },
     "siteNote": "列入的站点会直接接受这个 Bot 在浏览器里的提交（表单、发帖），不再询问。页面放在地址里发出的数据不在检查范围内。",
     "siteOrigin": "将添加 {origin}，即该站点的所有页面。",
     "via": "经由 {account}"
@@ -49246,7 +49272,9 @@
         "presetHelp_assistant": "在会话里直接回答，自行处理。",
         "presetHelp_delegate": "把工作放到后台执行并回报进度。",
         "presetHelp_draft": "写好回复，等你确认后再发。",
-        "presetHelp_silent": "只记录会话，由人来回答。",
+        "presetHelp_draft_team": "先生成团队执行方案，确认后再启动执行。",
+        "presetHelp_draft_workflow": "先请求确认，获批后再启动绑定的工作流。",
+        "presetHelp_silent": "只记录会话，由人来回答；已绑定的 Workflow/Bot 订阅仍独立运行（可在收件箱「更多 → 自动化」或 /automation 暂停）。",
         "preset_assistant": "助理",
         "preset_custom": "自定义",
         "preset_delegate": "委派",
@@ -49264,6 +49292,7 @@
         "source_system-default": "系统默认值",
         "source_target-managed": "由执行目标管理",
         "title": "会话行为",
+        "unavailable_assistant_inline_only": "绑定团队或工作流时固定走后台「委派」；如需在会话内直接回答，请先解绑。",
         "unavailable_delegate_needs_target": "需要先绑定团队或工作流。"
       },
       "cannedResponses": {

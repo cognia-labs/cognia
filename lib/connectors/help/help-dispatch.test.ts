@@ -74,6 +74,16 @@ describe("maybeHandleHelpCommand — behaviour disclosure", () => {
     expect(text).toContain("等人确认")
   })
 
+  it("explains plan/launch confirmation when a draft conversation targets a team or workflow (F4)", async () => {
+    const teamDeps = deps({ autonomy: "suggest", squadId: "team-1" })
+    await maybeHandleHelpCommand(makeEvent({ plainText: "/help" }), makeRow(), teamDeps)
+    expect(cardText(teamDeps.enqueue)).toContain("团队执行方案")
+
+    const wfDeps = deps({ autonomy: "suggest", workflowId: "wf-1" })
+    await maybeHandleHelpCommand(makeEvent({ plainText: "/help" }), makeRow(), wfDeps)
+    expect(cardText(wfDeps.enqueue)).toContain("工作流")
+  })
+
   // A conversation that pinned only the legacy mirror MEANS that mode, so its
   // pin has to suppress the bot's axis defaults rather than mix with them.
   it("lets a conversation's legacy mode pin outrank the bot's axis default", async () => {
@@ -248,6 +258,22 @@ describe("maybeSendWelcome", () => {
     const seg = d.enqueue.mock.calls[0][0].request.segments[0]
     expect(seg.plainTextMirror).toContain("欢迎光临")
   })
+
+  it.each([
+    ["silent", { autonomy: "observe", engagement: "human" }],
+    ["muted", { muted: true }],
+    ["off", { inboundActivationPolicy: "off" }],
+  ])(
+    "suppresses proactive welcome in %s conversations without burning the dedup key (F3)",
+    async (_label, override) => {
+      const d = deps(override)
+      const recordWelcome = jest.fn().mockResolvedValue(true)
+      const sent = await maybeSendWelcome(makeEvent(), makeRow(), { ...d, recordWelcome })
+      expect(sent).toBe(false)
+      expect(recordWelcome).not.toHaveBeenCalled()
+      expect(d.enqueue).not.toHaveBeenCalled()
+    }
+  )
 })
 
 it("does not inject onboarding into a task topic", async () => {

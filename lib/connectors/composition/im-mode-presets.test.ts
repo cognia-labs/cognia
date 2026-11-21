@@ -83,9 +83,18 @@ describe("imModePresetUnavailableReason", () => {
   })
 
   it.each(["assistant", "draft", "silent"] as const)(
-    "never blocks %s — none of them needs a target",
+    "never blocks %s on a direct target",
     (preset: ImModePresetId) => {
       expect(imModePresetUnavailableReason(preset, "direct")).toBeNull()
+    }
+  )
+
+  it.each(["team", "workflow"] as const)(
+    "refuses assistant onto a %s because automatic runs execute in the background as delegate (F5)",
+    (targetKind) => {
+      expect(imModePresetUnavailableReason("assistant", targetKind)).toBe("assistant_inline_only")
+      expect(imModePresetUnavailableReason("draft", targetKind)).toBeNull()
+      expect(imModePresetUnavailableReason("silent", targetKind)).toBeNull()
     }
   )
 })

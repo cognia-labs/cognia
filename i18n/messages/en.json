@@ -23351,6 +23351,16 @@
         "conversation": "This conversation overrides the bot: {strategy}"
       }
     },
+    "automations": {
+      "active": "Subscriptions active",
+      "ariaActive": "Workflow and Bot subscriptions: active",
+      "ariaPaused": "Workflow and Bot subscriptions: paused",
+      "cancel": "Cancel queued automations",
+      "pause": "Pause subscriptions",
+      "paused": "Subscriptions paused",
+      "resume": "Resume subscriptions",
+      "scopeHint": "Workflow and Bot subscriptions run independently of Silent responder mode."
+    },
     "banner": {
       "outboundSaturated": {
         "count": "{count, plural, =1 {1 message capped} other {# messages capped}}",
@@ -23464,6 +23474,7 @@
       "approvals": "Approvals",
       "assignee": "Assignee",
       "atStrategy": "Mentions",
+      "automations": "Automations",
       "computerUse": "Computer Use",
       "delegations": "Running",
       "delivery": "Last reply",
@@ -23473,6 +23484,7 @@
       "model": "Model",
       "policy": "Trigger policy",
       "quietHours": "Quiet hours",
+      "runtime": "Host",
       "sla": "Reply due",
       "status": "Status",
       "topicRuntime": "Topic"
@@ -23929,7 +23941,9 @@
         "assistant": "Answers in the thread, acting on its own.",
         "delegate": "Runs the work in the background and reports back.",
         "draft": "Writes a reply and holds it for you to send.",
-        "silent": "Records the conversation. A person answers it."
+        "draft_team": "Generates a team plan and waits for confirmation before running.",
+        "draft_workflow": "Asks for confirmation before starting the bound workflow.",
+        "silent": "Records the conversation; a person answers it. Bound Workflow/Bot subscriptions run separately (More → Automations or /automation)."
       },
       "presets": {
         "assistant": "Assistant",
@@ -23939,6 +23953,7 @@
         "silent": "Silent"
       },
       "unavailable": {
+        "assistant_inline_only": "Bound team or workflow runs in background as Delegate; unbind it first to answer inline.",
         "delegate_needs_target": "Needs a team or workflow bound first."
       }
     },
@@ -24055,6 +24070,10 @@
       "queued": "Queued — it will send as soon as the host is reachable.",
       "sendFailed": "Couldn't send. Pair a host, or check that it's reachable.",
       "unavailable": "Replying needs a paired host."
+    },
+    "runtimePlacement": {
+      "local": "This device (while open)",
+      "remote": "Runs on {host}"
     },
     "sections": {
       "archived": "Archived",
@@ -32801,6 +32820,13 @@
     "remove": "Remove {name}",
     "saveFailed": "Could not save the recipient list: {reason}",
     "saved": "Recipient list saved",
+    "shadow": {
+      "badge": "Observe only",
+      "browser": "Browser submission enforcement is off in Settings → Security. Unlisted sites are recorded in the shadow report, not blocked yet.",
+      "github": "GitHub write enforcement is off in Settings → Security. Unlisted repositories are recorded in the shadow report, not held yet.",
+      "integration": "Integration write enforcement is off in Settings → Security. Unlisted targets are recorded in the shadow report, not held yet.",
+      "messaging": "Messaging recipient enforcement is off in Settings → Security. Unlisted recipients are recorded in the shadow report, not drafted or held yet."
+    },
     "siteNote": "A listed site takes this Bot's browser submissions (a form, a post) with nobody asking. Data a page sends in its address is not checked.",
     "siteOrigin": "Adds {origin}, every page of that site.",
     "via": "via {account}"
@@ -49246,7 +49272,9 @@
         "presetHelp_assistant": "Answers in the thread, acting on its own.",
         "presetHelp_delegate": "Runs the work in the background and reports back.",
         "presetHelp_draft": "Writes a reply and holds it for you to send.",
-        "presetHelp_silent": "Records the conversation; a person answers it.",
+        "presetHelp_draft_team": "Generates a team plan and waits for confirmation before running.",
+        "presetHelp_draft_workflow": "Asks for confirmation before starting the bound workflow.",
+        "presetHelp_silent": "Records the conversation; a person answers it. Bound Workflow/Bot subscriptions run separately (pause in Inbox → More → Automations or /automation).",
         "preset_assistant": "Assistant",
         "preset_custom": "Custom",
         "preset_delegate": "Delegate",
@@ -49264,6 +49292,7 @@
         "source_system-default": "System default",
         "source_target-managed": "Managed by target",
         "title": "Conversation behavior",
+        "unavailable_assistant_inline_only": "Bound team or workflow runs in background as Delegate; unbind it first to answer inline.",
         "unavailable_delegate_needs_target": "Needs a team or workflow bound first."
       },
       "cannedResponses": {

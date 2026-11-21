@@ -307,6 +307,18 @@ export function denyDelegateWithoutTarget(): string {
     "Bind one with /team <name> or /workflow <name> first."
   )
 }
+export function denyAssistantWithTarget(targetKind: "team" | "workflow"): string {
+  const nounZh = targetKind === "team" ? "团队" : "工作流"
+  const nounEn = targetKind === "team" ? "team" : "workflow"
+  const clearCmd = targetKind === "team" ? "/team off" : "/workflow off"
+  return (
+    `无法切换到「助理」：当前会话已绑定${nounZh}，自动执行固定走后台「委派」。 / ` +
+    `Cannot switch to assistant: this conversation has a ${nounEn} bound, ` +
+    "so automatic runs execute in the background as delegate.\n" +
+    `如需后台自动执行请用 /mode delegate；如需单角色直接回答请先发送 ${clearCmd}。 / ` +
+    `Use /mode delegate, or unbind first with ${clearCmd}.`
+  )
+}
 export function confirmApprovalMode(mode: string): string {
   return `已切换审批模式 / Approval mode set: ${mode}`
 }

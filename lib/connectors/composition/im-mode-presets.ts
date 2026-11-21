@@ -75,7 +75,7 @@ export function imModePresetFor(input: {
 }
 
 /** Why a preset cannot be chosen here, or `null` when it can. */
-export type ImModeUnavailableReason = "delegate_needs_target"
+export type ImModeUnavailableReason = "delegate_needs_target" | "assistant_inline_only"
 
 export function imModePresetUnavailableReason(
   preset: ImModePresetId,
@@ -84,6 +84,11 @@ export function imModePresetUnavailableReason(
   // See the module docblock: background has no carrier without a team or
   // workflow, so offering it would be offering a value nothing acts on.
   if (preset === "delegate" && targetKind === "direct") return "delegate_needs_target"
+  // Conversely, a bound team or workflow derives `engagement: "background"`,
+  // so writing `assistant` (`autonomy: "act", engagement: undefined`) resolves
+  // straight back to `delegate`. Refuse with the reason rather than pretending
+  // to switch while leaving the conversation in background delegation.
+  if (preset === "assistant" && targetKind !== "direct") return "assistant_inline_only"
   return null
 }
 

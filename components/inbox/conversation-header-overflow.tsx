@@ -85,6 +85,7 @@ export function hasOverflowAttention(
   if (row?.assignee) return true
   if ((row?.labelIds?.length ?? 0) > 0) return true
   if (row?.allowComputerUse === true) return true
+  if (row?.automationPaused === true) return true
   return false
 }
 

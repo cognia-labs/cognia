@@ -65,6 +65,7 @@ import {
   IM_MODE_PRESET_IDS,
   type ImModePresetId,
 } from "@/lib/connectors/composition/im-mode-presets"
+import { abortConversationRunControllers } from "@/lib/connectors/live-steer"
 import { parseControlCommand, isReadonlyCommand } from "./parse"
 import { handleGoalCommand } from "./goal"
 import { handleDelegateCommand } from "./delegate"
@@ -735,11 +736,18 @@ export async function maybeHandleControlCommand(
           system: { mode: resolved.mode, characterId: resolved.characterId },
           scope: event.channel.kind,
         }).target.effective.kind
-        if (imModePresetUnavailableReason(preset, targetKind) !== null) {
-          await replyFixed(R.denyDelegateWithoutTarget(), "denied", {
-            reason: "delegate_needs_target",
-            preset,
-          })
+        const unavailableReason = imModePresetUnavailableReason(preset, targetKind)
+        if (unavailableReason !== null) {
+          await replyFixed(
+            unavailableReason === "assistant_inline_only" && targetKind !== "direct"
+              ? R.denyAssistantWithTarget(targetKind)
+              : R.denyDelegateWithoutTarget(),
+            "denied",
+            {
+              reason: unavailableReason,
+              preset,
+            }
+          )
           return true
         }
         // Explicit mode edit: drop the assignment marker so a later unassign
@@ -752,6 +760,9 @@ export async function maybeHandleControlCommand(
           ...imModePresetPatch(preset),
           ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
         })
+        if (preset === "silent" || preset === "draft") {
+          abortConversationRunControllers(event.conversationKey, `conversation_mode_${preset}`)
+        }
         await replyFixed(R.confirmMode(preset), "applied")
         return true
       }

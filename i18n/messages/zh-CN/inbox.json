@@ -610,12 +610,29 @@
       "assistant": "在会话里直接回答，自行处理。",
       "delegate": "把工作放到后台执行并回报进度。",
       "draft": "写好回复，等你确认后再发。",
-      "silent": "只记录会话，由人来回答。"
+      "draft_team": "先生成团队执行方案，确认后再启动执行。",
+      "draft_workflow": "先请求确认，获批后再启动绑定的工作流。",
+      "silent": "只记录会话，由人来回答；已绑定的 Workflow/Bot 订阅仍独立运行（可在「更多 → 自动化」或 /automation 暂停）。"
     },
     "unavailable": {
-      "delegate_needs_target": "需要先绑定团队或工作流。"
+      "delegate_needs_target": "需要先绑定团队或工作流。",
+      "assistant_inline_only": "绑定团队或工作流时固定走后台「委派」；如需在会话内直接回答，请先解绑。"
     },
     "customHelp": "当前轴组合不对应任何命名模式。打开会话设置可以逐项调整。"
+  },
+  "automations": {
+    "active": "订阅运行中",
+    "paused": "订阅已暂停",
+    "ariaActive": "Workflow 与 Bot 订阅：运行中",
+    "ariaPaused": "Workflow 与 Bot 订阅：已暂停",
+    "scopeHint": "Workflow 与 Bot 订阅独立于「静默」回复模式运行。",
+    "pause": "暂停订阅",
+    "resume": "恢复订阅",
+    "cancel": "取消排队中的自动化"
+  },
+  "runtimePlacement": {
+    "local": "在此设备运行（需保持开启）",
+    "remote": "运行于 {host}"
   },
   "notices": {
     "collapse": "收起通知",
@@ -831,6 +848,7 @@
     "approvals": "待审批",
     "lastInbound": "最新消息",
     "delegations": "运行中",
+    "automations": "自动化",
     "model": "模型",
     "quietHours": "免打扰",
     "atStrategy": "@ 提及",
@@ -838,6 +856,7 @@
     "policy": "触发策略",
     "health": "适配器",
     "delivery": "最近回复",
+    "runtime": "运行端",
     "computerUse": "Computer Use"
   },
   "sections": {

@@ -76,6 +76,11 @@ export interface HelpSurfaceLabels {
    * answer is not "the bot replies". Keyed by the named preset.
    */
   behaviour: Record<"draft" | "silent", string>
+  /**
+   * Target-specific `draft` notes when a team or workflow is bound — what
+   * awaits human confirmation differs by target (reply vs plan vs launch).
+   */
+  draftByTarget?: Partial<Record<"team" | "workflow", string>>
   /** Per-strategy hint sentence. */
   atStrategy: Record<HelpAtStrategy, string>
   /** Mirror-only prefix for "send X to trigger" (text-only platforms). */
@@ -94,7 +99,12 @@ export const DEFAULT_HELP_SURFACE_LABELS: HelpSurfaceLabels = {
   behaviourHeading: "我会怎么处理",
   behaviour: {
     draft: "我会先把回复写好，等人确认后再发出来，所以你可能不会立刻收到答复。",
-    silent: "这个会话由人来回答，我只负责记录，不会自动回复。",
+    silent:
+      "这个会话由人来回答，我只负责记录，不会自动回复（独立绑定的工作流或 Bot 订阅如需暂停可发送 /automation pause）。",
+  },
+  draftByTarget: {
+    team: "我会先生成团队执行方案，等人确认后再启动执行，所以不会立刻开始。",
+    workflow: "我会先发送运行确认卡片，等人确认后再启动绑定的工作流，所以不会立刻执行。",
   },
   atStrategy: {
     always: "在任意消息下我都会回复。",
@@ -128,6 +138,8 @@ export interface BuildHelpSurfaceInput {
    * question the card was silently getting wrong.
    */
   behaviour?: "draft" | "silent"
+  /** Effective execution target kind, used to explain what `draft` holds for confirmation. */
+  targetKind?: "direct" | "team" | "workflow"
   /** Built-in skill families this channel exposes; omitted ⇒ no skills line. */
   skillFamilies?: readonly PlatformSkillCapability[]
   /** Operator-authored welcome intro (welcome mode only). */
@@ -164,6 +176,10 @@ export function buildHelpSurface(input: BuildHelpSurfaceInput): A2UISegmentConte
     ...input.labels,
     atStrategy: { ...DEFAULT_HELP_SURFACE_LABELS.atStrategy, ...input.labels?.atStrategy },
     behaviour: { ...DEFAULT_HELP_SURFACE_LABELS.behaviour, ...input.labels?.behaviour },
+    draftByTarget: {
+      ...DEFAULT_HELP_SURFACE_LABELS.draftByTarget,
+      ...input.labels?.draftByTarget,
+    },
   }
   const name = input.displayName || "Cognia"
   const title = input.mode === "welcome" ? substitute(labels.welcomeTitle, name) : labels.helpTitle
@@ -257,7 +273,12 @@ export function buildHelpSurface(input: BuildHelpSurfaceInput): A2UISegmentConte
   // mean being answered. `assistant` and `delegate` both answer, so a note
   // there would be noise.
   if (input.behaviour) {
-    const note = labels.behaviour[input.behaviour]
+    const note =
+      input.behaviour === "draft" &&
+      !input.labels?.behaviour?.draft &&
+      (input.targetKind === "team" || input.targetKind === "workflow")
+        ? (labels.draftByTarget?.[input.targetKind] ?? labels.behaviour.draft)
+        : labels.behaviour[input.behaviour]
     components.behaviourHeading = {
       component: "Text",
       text: labels.behaviourHeading,

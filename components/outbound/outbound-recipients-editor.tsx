@@ -16,6 +16,7 @@
  */
 
 import { useMemo, useState } from "react"
+import { useLiveQuery } from "dexie-react-hooks"
 import { useTranslations } from "next-intl"
 import { PlusIcon, XIcon } from "lucide-react"
 
@@ -24,6 +25,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { KnownConversation } from "@/hooks/outbound/use-known-conversations"
 import type { KnownRepository } from "@/hooks/outbound/use-known-repositories"
+import { getDb } from "@/lib/db/schema"
+import { getSettings } from "@/lib/db/settings"
 import { listsRecipient, recipientGrant } from "@/lib/policy/action-review/configured-grants"
 import {
   conversationTarget,
@@ -32,8 +35,11 @@ import {
   personTarget,
   repositoryOnHost,
   siteTarget,
+  type OutboundCategory,
   type OutboundTarget,
 } from "@/lib/policy/action-review/outbound-targets"
+import type { OutboundSettingsLike } from "@/lib/policy/action-review/plan-context"
+import { readOutboundAuthorizationMode } from "@/lib/policy/action-review/policy"
 import { cn } from "@/lib/utils"
 import type {
   OutboundRecipientGrant,
@@ -65,11 +71,26 @@ export interface OutboundRecipientsEditorProps {
   repositoryHost?: string
   /** A line shown under the kind picker while that kind is picked. */
   kindNotes?: Partial<Record<OutboundRecipientKind, string>>
+  /** Optional settings snapshot for authorization mode display; live-queried when omitted. */
+  settings?: OutboundSettingsLike
   disabled?: boolean
   testId?: string
 }
 
 type AddError = "invalid" | "duplicate" | "otherAccount"
+
+function categoryForRecipientKind(kind: OutboundRecipientKind): OutboundCategory {
+  switch (kind) {
+    case "repository":
+      return "github"
+    case "site":
+      return "browser"
+    case "conversation":
+    case "person":
+    case "mail":
+      return "messaging"
+  }
+}
 
 export function OutboundRecipientsEditor({
   value,
@@ -80,6 +101,7 @@ export function OutboundRecipientsEditor({
   knownRepositories = [],
   repositoryHost,
   kindNotes,
+  settings: providedSettings,
   disabled = false,
   testId = "outbound-recipients",
 }: OutboundRecipientsEditorProps) {
@@ -89,6 +111,18 @@ export function OutboundRecipientsEditor({
   const [error, setError] = useState<AddError | null>(null)
   const [saving, setSaving] = useState(false)
   const locked = disabled || saving
+  const liveSettings = useLiveQuery(async () => {
+    if (providedSettings !== undefined || typeof window === "undefined") return undefined
+    try {
+      const db = getDb()
+      return db.isOpen() ? await getSettings() : undefined
+    } catch {
+      return undefined
+    }
+  }, [providedSettings !== undefined])
+  const effectiveSettings = providedSettings !== undefined ? providedSettings : liveSettings
+  const activeCategory = categoryForRecipientKind(kind)
+  const authorizationMode = readOutboundAuthorizationMode(effectiveSettings, activeCategory)
 
   const titles = useMemo(
     () => new Map(knownConversations.map((known) => [known.target.recipient, known.title])),
@@ -153,6 +187,17 @@ export function OutboundRecipientsEditor({
 
   return (
     <div className="flex flex-col gap-3" data-testid={testId}>
+      {authorizationMode === "shadow" ? (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground"
+          data-testid={`${testId}-shadow-notice`}
+        >
+          <Badge variant="secondary" className="shrink-0 font-normal">
+            {t("shadow.badge")}
+          </Badge>
+          <span className="min-w-0 flex-1">{t(`shadow.${activeCategory}`)}</span>
+        </div>
+      ) : null}
       {value.length === 0 ? (
         <p className="text-xs text-muted-foreground" data-testid={`${testId}-empty`}>
           {t("empty")}

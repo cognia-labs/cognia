@@ -511,7 +511,9 @@
     "presetHelp_assistant": "Answers in the thread, acting on its own.",
     "presetHelp_delegate": "Runs the work in the background and reports back.",
     "presetHelp_draft": "Writes a reply and holds it for you to send.",
-    "presetHelp_silent": "Records the conversation; a person answers it.",
+    "presetHelp_draft_team": "Generates a team plan and waits for confirmation before running.",
+    "presetHelp_draft_workflow": "Asks for confirmation before starting the bound workflow.",
+    "presetHelp_silent": "Records the conversation; a person answers it. Bound Workflow/Bot subscriptions run separately (pause in Inbox → More → Automations or /automation).",
     "preset_assistant": "Assistant",
     "preset_custom": "Custom",
     "preset_delegate": "Delegate",
@@ -529,6 +531,7 @@
     "source_system-default": "System default",
     "source_target-managed": "Managed by target",
     "title": "Conversation behavior",
+    "unavailable_assistant_inline_only": "Bound team or workflow runs in background as Delegate; unbind it first to answer inline.",
     "unavailable_delegate_needs_target": "Needs a team or workflow bound first."
   },
   "cannedResponses": {

@@ -10,6 +10,9 @@ import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { TriggerPolicy } from "@/types/connectors/policy"
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => false) }))
+jest.mock("@/lib/connectors/inbox-writes", () => ({
+  mutateConversationOverride: jest.fn(),
+}))
 jest.mock("@tauri-apps/api/core", () => ({ invoke: jest.fn() }))
 // The shared manual mocks render overlay content unconditionally, so the
 // grouped controls are reachable without driving Radix.
@@ -190,6 +193,11 @@ describe("hasOverflowAttention", () => {
     expect(hasOverflowAttention(row({ allowComputerUse: true }), false)).toBe(true)
     expect(hasOverflowAttention(row({ allowComputerUse: false }), false)).toBe(false)
   })
+
+  it("flags paused Workflow/Bot automations (F3)", () => {
+    expect(hasOverflowAttention(row({ automationPaused: true }), false)).toBe(true)
+    expect(hasOverflowAttention(row({ automationPaused: false }), false)).toBe(false)
+  })
 })
 
 describe("ConversationHeaderOverflow", () => {
@@ -262,6 +270,7 @@ describe("ConversationHeaderOverflow", () => {
     expect(screen.queryByTestId("quiet-hours")).not.toBeInTheDocument()
     expect(screen.queryByTestId("at-strategy")).not.toBeInTheDocument()
     expect(screen.queryByTestId("topic-runtime")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("conversation-automation-chip")).not.toBeInTheDocument()
     expect(screen.queryByTestId("conversation-header-bindings")).not.toBeInTheDocument()
   })
 

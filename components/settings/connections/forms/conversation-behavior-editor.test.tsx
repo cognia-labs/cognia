@@ -120,7 +120,7 @@ describe("ConversationBehaviorEditor", () => {
       )
     })
 
-    it("enables delegate once a team carries it", async () => {
+    it("enables delegate and disables inline assistant once a team carries it (F5)", async () => {
       const user = userEvent.setup()
       render(
         <ConversationBehaviorEditor
@@ -135,6 +135,44 @@ describe("ConversationBehaviorEditor", () => {
       expect(screen.getByRole("option", { name: "preset_delegate" })).not.toHaveAttribute(
         "aria-disabled",
         "true"
+      )
+      expect(screen.getByRole("option", { name: /preset_assistant/ })).toHaveAttribute(
+        "aria-disabled",
+        "true"
+      )
+    })
+
+    it("renders target-specific draft descriptions for direct, team, and workflow targets (F4)", () => {
+      const { rerender } = render(
+        <ConversationBehaviorEditor
+          scope="adapter"
+          value={{ autonomy: "suggest", mode: "draft" }}
+          onChange={jest.fn()}
+          targetKind="direct"
+        />
+      )
+      expect(screen.getByTestId("behavior-preset-help")).toHaveTextContent("presetHelp_draft")
+
+      rerender(
+        <ConversationBehaviorEditor
+          scope="adapter"
+          value={{ autonomy: "suggest", mode: "draft" }}
+          onChange={jest.fn()}
+          targetKind="team"
+        />
+      )
+      expect(screen.getByTestId("behavior-preset-help")).toHaveTextContent("presetHelp_draft_team")
+
+      rerender(
+        <ConversationBehaviorEditor
+          scope="adapter"
+          value={{ autonomy: "suggest", mode: "draft" }}
+          onChange={jest.fn()}
+          targetKind="workflow"
+        />
+      )
+      expect(screen.getByTestId("behavior-preset-help")).toHaveTextContent(
+        "presetHelp_draft_workflow"
       )
     })
   })

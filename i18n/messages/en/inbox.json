@@ -610,12 +610,29 @@
       "assistant": "Answers in the thread, acting on its own.",
       "delegate": "Runs the work in the background and reports back.",
       "draft": "Writes a reply and holds it for you to send.",
-      "silent": "Records the conversation. A person answers it."
+      "draft_team": "Generates a team plan and waits for confirmation before running.",
+      "draft_workflow": "Asks for confirmation before starting the bound workflow.",
+      "silent": "Records the conversation; a person answers it. Bound Workflow/Bot subscriptions run separately (More → Automations or /automation)."
     },
     "unavailable": {
-      "delegate_needs_target": "Needs a team or workflow bound first."
+      "delegate_needs_target": "Needs a team or workflow bound first.",
+      "assistant_inline_only": "Bound team or workflow runs in background as Delegate; unbind it first to answer inline."
     },
     "customHelp": "These axes match no named mode. Open conversation settings to edit them."
+  },
+  "automations": {
+    "active": "Subscriptions active",
+    "paused": "Subscriptions paused",
+    "ariaActive": "Workflow and Bot subscriptions: active",
+    "ariaPaused": "Workflow and Bot subscriptions: paused",
+    "scopeHint": "Workflow and Bot subscriptions run independently of Silent responder mode.",
+    "pause": "Pause subscriptions",
+    "resume": "Resume subscriptions",
+    "cancel": "Cancel queued automations"
+  },
+  "runtimePlacement": {
+    "local": "This device (while open)",
+    "remote": "Runs on {host}"
   },
   "notices": {
     "collapse": "Hide notices",
@@ -831,6 +848,7 @@
     "approvals": "Approvals",
     "lastInbound": "Last message",
     "delegations": "Running",
+    "automations": "Automations",
     "model": "Model",
     "quietHours": "Quiet hours",
     "atStrategy": "Mentions",
@@ -838,6 +856,7 @@
     "policy": "Trigger policy",
     "health": "Adapter",
     "delivery": "Last reply",
+    "runtime": "Host",
     "computerUse": "Computer Use"
   },
   "sections": {

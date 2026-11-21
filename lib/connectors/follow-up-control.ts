@@ -48,6 +48,13 @@ export interface FollowUpControlDependencies {
   ): Promise<RunControlResult | { accepted: boolean; reason?: string }>
   consume(binding: ExecutionRunBinding, consumedAt: number): Promise<void>
   enqueue: typeof enqueueOutbound
+  /**
+   * Whether `steer` follow-up verbs may inject into an active run. `false`
+   * when the conversation was tightened to `silent` / `draft` / `store-only`,
+   * so `steer: ...` falls through to normal mode routing while `stop` and
+   * `status` remain operable.
+   */
+  allowSteer?: boolean
 }
 
 export class LarkFollowUpControlDispatchError extends Error {
@@ -202,6 +209,7 @@ export async function maybeHandleRunControlFollowUp(
     if (event.replyTo && event.replyTo.messageId !== followUp.platformMessageId) continue
     const matched = matchFollowUpItem(followUp.items, text)
     if (!matched) continue
+    if (matched.item.action === "steer" && deps.allowSteer === false) continue
     if (!candidates.some((candidate) => candidate.followUp.runId === followUp.runId)) {
       candidates.push({ binding, followUp, matched })
     }

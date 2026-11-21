@@ -20,11 +20,20 @@
  * The chips keep their own queries and writes; this module only arranges them.
  */
 
-import type { ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { mutateConversationOverride } from "@/lib/connectors/inbox-writes"
 import { effectiveStatus } from "@/lib/db/conversation-overrides"
-import type { ConversationOverrideRow } from "@/lib/db/connector-types"
+import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { TriggerPolicy } from "@/types/connectors/policy"
 import { LifecycleStatusChip } from "./lifecycle-status-chip"
 import { AssigneeChip } from "./assignee-chip"
@@ -101,6 +110,186 @@ interface ConversationScope {
   layout: ControlGroupLayout
 }
 
+/**
+ * Independent Workflow / Bot subscription controls for this conversation
+ * (`F3`). Responder mode (`Silent`) stops the main AI reply and proactive
+ * welcome, while bound Workflow/Bot observers have their own pause / resume /
+ * cancel fence (`automationPaused` / `automationCancelledBefore`).
+ */
+export function ConversationAutomationChip({
+  conversationKey,
+  sessionId,
+  adapterId: _adapterId,
+  paused,
+}: {
+  conversationKey: string
+  sessionId: string
+  adapterId?: string
+  paused: boolean
+}) {
+  const t = useTranslations("inbox.automations")
+  const [pending, setPending] = useState(false)
+
+  const handlePause = async () => {
+    if (pending || paused) return
+    setPending(true)
+    try {
+      await mutateConversationOverride({
+        kind: "patch",
+        conversationKey,
+        sessionId,
+        patch: { automationPaused: true },
+      })
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const handleResume = async () => {
+    if (pending || !paused) return
+    setPending(true)
+    try {
+      await mutateConversationOverride({
+        kind: "patch",
+        conversationKey,
+        sessionId,
+        patch: { automationPaused: false },
+      })
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const handleCancel = async () => {
+    if (pending) return
+    setPending(true)
+    try {
+      const cutoff = Date.now()
+      await mutateConversationOverride({
+        kind: "patch",
+        conversationKey,
+        sessionId,
+        patch: { automationCancelledBefore: cutoff },
+      })
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant={paused ? "secondary" : "outline"}
+          size="sm"
+          disabled={pending}
+          data-testid="conversation-automation-chip"
+          data-paused={String(paused)}
+          aria-label={paused ? t("ariaPaused") : t("ariaActive")}
+          className="h-6 px-2 text-xs"
+        >
+          {paused ? t("paused") : t("active")}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        <div className="px-2 py-1.5 text-xs text-muted-foreground">{t("scopeHint")}</div>
+        <DropdownMenuGroup>
+          {paused ? (
+            <DropdownMenuItem
+              onClick={() => void handleResume()}
+              data-testid="automation-action-resume"
+            >
+              {t("resume")}
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              onClick={() => void handlePause()}
+              data-testid="automation-action-pause"
+            >
+              {t("pause")}
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem
+            onClick={() => void handleCancel()}
+            data-testid="automation-action-cancel"
+          >
+            {t("cancel")}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * Surfaces where this conversation's adapter actually runs (`F9`): either on a
+ * paired always-on host (`owner.kind === "remote-host"`) or on this device only
+ * while the app stays open. Renders nothing when no row is loaded yet.
+ */
+export function AdapterRuntimePlacementBadge({
+  adapterId,
+  loadAdapter,
+}: {
+  adapterId: string
+  loadAdapter?: (id: string) => Promise<AdapterInstanceRow | undefined>
+}) {
+  const t = useTranslations("inbox.runtimePlacement")
+  const [resolved, setResolved] = useState<{
+    adapterId: string
+    placement: { kind: "remote"; host: string } | { kind: "local" } | null
+  } | null>(null)
+
+  useEffect(() => {
+    if (!adapterId) return
+    if (!loadAdapter && typeof indexedDB === "undefined") return
+    let cancelled = false
+    const read =
+      loadAdapter ??
+      ((id: string) =>
+        import("@/lib/db/adapter-instances")
+          .then((m) => m.getAdapterInstance(id))
+          .catch(() => undefined))
+    void read(adapterId)
+      .then((row) => {
+        if (cancelled) return
+        if (!row) {
+          setResolved({ adapterId, placement: null })
+          return
+        }
+        if (row.owner?.kind === "remote-host") {
+          setResolved({
+            adapterId,
+            placement: {
+              kind: "remote",
+              host: row.owner.hostLabel?.trim() || row.owner.hostId,
+            },
+          })
+        } else {
+          setResolved({ adapterId, placement: { kind: "local" } })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResolved({ adapterId, placement: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [adapterId, loadAdapter])
+
+  const placement = resolved?.adapterId === adapterId ? resolved.placement : null
+  if (!placement) return null
+  return (
+    <span
+      data-testid="adapter-runtime-placement"
+      data-placement={placement.kind}
+      className="inline-flex h-6 items-center rounded-md border border-border px-2 text-xs text-muted-foreground"
+    >
+      {placement.kind === "remote" ? t("remote", { host: placement.host }) : t("local")}
+    </span>
+  )
+}
+
 /** Lifecycle, ownership and response obligations. */
 export function ConversationStatusControls({
   conversationKey,
@@ -153,6 +342,16 @@ export function ConversationStatusControls({
       <ControlItem label={t("delegations")} layout={layout} testId="control-delegations">
         <ActiveDelegationsChip conversationKey={conversationKey} />
       </ControlItem>
+      {adapterId && (
+        <ControlItem label={t("automations")} layout={layout} testId="control-automations">
+          <ConversationAutomationChip
+            conversationKey={conversationKey}
+            sessionId={sessionId}
+            adapterId={adapterId}
+            paused={overrideRow?.automationPaused === true}
+          />
+        </ControlItem>
+      )}
     </>
   )
 }
@@ -231,6 +430,9 @@ export function ConversationHealthControls({
           liveQuery, and its retry button is not nested in another control. */}
       <ControlItem label={t("delivery")} layout={layout} testId="control-delivery">
         <OutboundStatusPill conversationKey={conversationKey} />
+      </ControlItem>
+      <ControlItem label={t("runtime")} layout={layout} testId="control-runtime">
+        <AdapterRuntimePlacementBadge adapterId={adapterId} />
       </ControlItem>
     </>
   )

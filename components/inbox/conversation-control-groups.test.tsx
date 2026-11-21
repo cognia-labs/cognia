@@ -2,7 +2,13 @@
  * @jest-environment jsdom
  */
 
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+
+const mockMutateOverride = jest.fn().mockResolvedValue({ route: "local" })
+jest.mock("@/lib/connectors/inbox-writes", () => ({
+  mutateConversationOverride: (...args: unknown[]) => mockMutateOverride(...args),
+}))
+jest.mock("@/components/ui/dropdown-menu")
 
 // Each chip is its own suite; here they are stubs that show what the group
 // handed them, and two of them render nothing (as SLA / approvals do when idle).
@@ -43,10 +49,12 @@ jest.mock("./computer-use-chip", () => ({
   ComputerUseChip: ({ active }: { active: boolean }) => <span>cu-chip:{String(active)}</span>,
 }))
 
-import type { ConversationOverrideRow } from "@/lib/db/connector-types"
+import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import {
+  AdapterRuntimePlacementBadge,
   ControlItem,
   ControlList,
+  ConversationAutomationChip,
   ConversationComputerUseControl,
   ConversationHealthControls,
   ConversationRoutingControls,
@@ -180,5 +188,101 @@ describe("ConversationComputerUseControl", () => {
       />
     )
     expect(screen.getByText("cu-chip:true")).toBeInTheDocument()
+  })
+})
+
+describe("ConversationAutomationChip & AdapterRuntimePlacementBadge (F3, F9)", () => {
+  beforeEach(() => {
+    mockMutateOverride.mockClear()
+  })
+
+  it("pauses, resumes, and cancels independent Workflow/Bot subscriptions (F3)", async () => {
+    const { rerender } = render(
+      <ConversationAutomationChip
+        conversationKey="lark:a1:oc"
+        sessionId="s1"
+        adapterId="a1"
+        paused={false}
+      />
+    )
+    expect(screen.getByTestId("conversation-automation-chip")).toHaveAttribute(
+      "data-paused",
+      "false"
+    )
+    fireEvent.click(screen.getByTestId("automation-action-pause"))
+    await waitFor(() =>
+      expect(mockMutateOverride).toHaveBeenCalledWith({
+        kind: "patch",
+        conversationKey: "lark:a1:oc",
+        sessionId: "s1",
+        patch: { automationPaused: true },
+      })
+    )
+
+    rerender(
+      <ConversationAutomationChip
+        conversationKey="lark:a1:oc"
+        sessionId="s1"
+        adapterId="a1"
+        paused
+      />
+    )
+    fireEvent.click(screen.getByTestId("automation-action-resume"))
+    await waitFor(() =>
+      expect(mockMutateOverride).toHaveBeenCalledWith({
+        kind: "patch",
+        conversationKey: "lark:a1:oc",
+        sessionId: "s1",
+        patch: { automationPaused: false },
+      })
+    )
+
+    fireEvent.click(screen.getByTestId("automation-action-cancel"))
+    await waitFor(() =>
+      expect(mockMutateOverride).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "patch",
+          conversationKey: "lark:a1:oc",
+          patch: { automationCancelledBefore: expect.any(Number) },
+        })
+      )
+    )
+  })
+
+  it("surfaces local vs paired-host adapter placement (F9)", async () => {
+    const { rerender } = render(
+      <AdapterRuntimePlacementBadge
+        adapterId="a1"
+        loadAdapter={async () => ({ id: "a1" }) as AdapterInstanceRow}
+      />
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("adapter-runtime-placement")).toHaveAttribute(
+        "data-placement",
+        "local"
+      )
+    )
+
+    rerender(
+      <AdapterRuntimePlacementBadge
+        adapterId="a2"
+        loadAdapter={async () =>
+          ({
+            id: "a2",
+            owner: {
+              kind: "remote-host",
+              hostId: "mini-1",
+              hostLabel: "Mac mini",
+              remoteItemId: "a2",
+              operationId: "op-1",
+              movedAt: 1,
+            },
+          }) as AdapterInstanceRow
+        }
+      />
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("adapter-runtime-placement")).toHaveTextContent("Mac mini")
+    )
   })
 })

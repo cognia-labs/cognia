@@ -1,5 +1,10 @@
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
-import { createConnectorLiveSteerCoordinator } from "./live-steer"
+import {
+  __resetConversationRunControllersForTesting,
+  abortConversationRunControllers,
+  createConnectorLiveSteerCoordinator,
+  registerConversationRunController,
+} from "./live-steer"
 
 function event(messageId = "m-steer"): NormalizedInboundEvent {
   return {
@@ -145,5 +150,49 @@ describe("connector live-steer coordinator", () => {
     expect(storeInbound).toHaveBeenCalledTimes(1)
     expect(admit).toHaveBeenCalledTimes(1)
     expect(steer).not.toHaveBeenCalled()
+  })
+
+  it("declines live steering before storeInbound when canSteer reports narrowed policy (F1)", async () => {
+    let allow = true
+    const storeInbound = jest.fn(async () => undefined)
+    const steer = jest.fn(async () => ({ accepted: true as const }))
+    const coordinator = createConnectorLiveSteerCoordinator({
+      storeInbound,
+      admit: async () => true,
+      steer,
+    })
+    coordinator.activate({
+      conversationKey: "lark:lark-1:chat-1",
+      sessionId: "session-1",
+      executionRunId: "run-1",
+      provider: "anthropic",
+      canSteer: async () => allow,
+    })
+
+    allow = false
+    await expect(coordinator.handle(event("m-tightened"))).resolves.toEqual({
+      activeRun: true,
+      accepted: false,
+      executionRunId: "run-1",
+    })
+    expect(storeInbound).not.toHaveBeenCalled()
+    expect(steer).not.toHaveBeenCalled()
+  })
+
+  it("aborts registered conversation run controllers on mode tightening and cleans up on unregister (F1)", () => {
+    __resetConversationRunControllersForTesting()
+    const c1 = new AbortController()
+    const c2 = new AbortController()
+    const unregister1 = registerConversationRunController("lark:a1:c1", c1)
+    const unregister2 = registerConversationRunController("lark:a1:c1", c2)
+
+    unregister1()
+    expect(abortConversationRunControllers("lark:a1:c1", "mode_silent")).toBe(1)
+    expect(c1.signal.aborted).toBe(false)
+    expect(c2.signal.aborted).toBe(true)
+    expect(c2.signal.reason).toBe("mode_silent")
+
+    unregister2()
+    expect(abortConversationRunControllers("lark:a1:c1")).toBe(0)
   })
 })

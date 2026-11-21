@@ -171,7 +171,9 @@ export function ConversationBehaviorEditor({
               inside the options — see the flat-text note above. */}
           {preset !== INHERIT && preset !== IM_MODE_CUSTOM && (
             <p className="text-xs text-muted-foreground" data-testid="behavior-preset-help">
-              {t(`presetHelp_${preset}`)}
+              {preset === "draft" && (targetKind === "team" || targetKind === "workflow")
+                ? t(`presetHelp_draft_${targetKind}`)
+                : t(`presetHelp_${preset}`)}
             </p>
           )}
           {source("mode")}

@@ -585,6 +585,36 @@ describe("maybeHandleControlCommand", () => {
     expect(h.enqueued[0].text).toContain("delegate")
   })
 
+  it("refuses /mode assistant when a team or workflow is bound (F5)", async () => {
+    const h = harness({ active: session("s1") })
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/mode assistant" }),
+      makeAdapter({ defaultTeamId: "team-1" }),
+      undefined,
+      RESOLVED,
+      h.deps
+    )
+    expect(h.patches).toHaveLength(0)
+    expect(h.audits[0]).toEqual(
+      expect.objectContaining({ kind: "command.denied", command: "mode" })
+    )
+    expect(h.enqueued[0].text).toContain("/team off")
+  })
+
+  it("aborts registered conversation run controllers when /mode tightens to silent or draft (F1)", async () => {
+    const { __resetConversationRunControllersForTesting, registerConversationRunController } =
+      await import("@/lib/connectors/live-steer")
+    __resetConversationRunControllersForTesting()
+    const controller = new AbortController()
+    const ev = makeEvent({ plainText: "/mode silent" })
+    const unregister = registerConversationRunController(ev.conversationKey, controller)
+    const h = harness({ active: session("s1") })
+
+    await maybeHandleControlCommand(ev, makeAdapter(), undefined, RESOLVED, h.deps)
+    expect(controller.signal.aborted).toBe(true)
+    unregister()
+  })
+
   // `/auth` reaches its handler (ADR-0243 phase 4); a platform without
   // per-person authorizations refuses with the reason (Lark: `auth.test.ts`).
   it("routes /auth to the sender's own authorization", async () => {

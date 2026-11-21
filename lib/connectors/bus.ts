@@ -1400,7 +1400,11 @@ export class ConnectorBus {
     // inbound pipeline.
     if (decision !== "drop" && !evalResult.blocked) {
       try {
-        if (await maybeHandleRunControlFollowUp(event, adapterRow)) {
+        if (
+          await maybeHandleRunControlFollowUp(event, adapterRow, {
+            allowSteer: decision === "ai-run",
+          })
+        ) {
           await appendAudit({
             adapterId: event.adapterId,
             kind: "inbound.received",
@@ -1741,7 +1745,14 @@ export class ConnectorBus {
       await markConnectorInboundJobHistoryOnly(inboundJobId, "pending_limit_exceeded")
       return false
     }
+    // Live-steer and steer-replay are valid ONLY when the conversation's
+    // current route decision is still `ai-run`. Tightening to Silent
+    // (`manual-store` / `store-only`) or Draft (`draft-prepare`) while an
+    // earlier run is in flight must never inject subsequent messages into that
+    // auto-acting run.
+    const steerAllowedForDecision = decision === "ai-run"
     const wantsLiveSteer =
+      steerAllowedForDecision &&
       queue.depth > 0 &&
       event.channelData?.activeRunDispatchMode === "steer" &&
       this.liveSteerHandler !== null
@@ -1777,7 +1788,11 @@ export class ConnectorBus {
         }
         await updateConnectorInboundJobPayload(inboundJobId, event, "steer")
       }
-    } else if (queue.depth > 0 && event.channelData?.activeRunDispatchMode === "steer") {
+    } else if (
+      steerAllowedForDecision &&
+      queue.depth > 0 &&
+      event.channelData?.activeRunDispatchMode === "steer"
+    ) {
       if (wantsLiveSteer && !liveSteerPayloadSafe) {
         await appendAudit({
           adapterId: event.adapterId,

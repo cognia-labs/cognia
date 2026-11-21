@@ -418,4 +418,38 @@ describe("steering through the follow-up lane", () => {
     expect(handled).toBe(true)
     expect(enqueue).toHaveBeenCalled()
   })
+
+  it("blocks steer follow-up verbs when allowSteer is false while keeping stop and status operable (F1)", async () => {
+    const execute = jest.fn(async () => ({ accepted: true }))
+    const enqueue = jest.fn(async () => undefined as unknown as OutboundJobRow)
+
+    await expect(
+      maybeHandleRunControlFollowUp(event("steer: sneak into active run"), adapter, {
+        now: () => 500,
+        listBindings: async () => [steerBinding],
+        getRun: async () => steerableRun,
+        execute,
+        consume: jest.fn(async () => undefined),
+        enqueue,
+        allowSteer: false,
+      })
+    ).resolves.toBe(false)
+    expect(execute).not.toHaveBeenCalled()
+
+    await expect(
+      maybeHandleRunControlFollowUp(event("Stop"), adapter, {
+        now: () => 500,
+        listBindings: async () => [steerBinding],
+        getRun: async () => steerableRun,
+        execute,
+        consume: jest.fn(async () => undefined),
+        enqueue,
+        allowSteer: false,
+      })
+    ).resolves.toBe(true)
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", action: "stop" }),
+      expect.anything()
+    )
+  })
 })

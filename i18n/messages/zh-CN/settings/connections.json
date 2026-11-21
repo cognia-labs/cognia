@@ -511,7 +511,9 @@
     "presetHelp_assistant": "在会话里直接回答，自行处理。",
     "presetHelp_delegate": "把工作放到后台执行并回报进度。",
     "presetHelp_draft": "写好回复，等你确认后再发。",
-    "presetHelp_silent": "只记录会话，由人来回答。",
+    "presetHelp_draft_team": "先生成团队执行方案，确认后再启动执行。",
+    "presetHelp_draft_workflow": "先请求确认，获批后再启动绑定的工作流。",
+    "presetHelp_silent": "只记录会话，由人来回答；已绑定的 Workflow/Bot 订阅仍独立运行（可在收件箱「更多 → 自动化」或 /automation 暂停）。",
     "preset_assistant": "助理",
     "preset_custom": "自定义",
     "preset_delegate": "委派",
@@ -529,6 +531,7 @@
     "source_system-default": "系统默认值",
     "source_target-managed": "由执行目标管理",
     "title": "会话行为",
+    "unavailable_assistant_inline_only": "绑定团队或工作流时固定走后台「委派」；如需在会话内直接回答，请先解绑。",
     "unavailable_delegate_needs_target": "需要先绑定团队或工作流。"
   },
   "cannedResponses": {

@@ -454,4 +454,30 @@ describe("shared session list preference writes", () => {
       expect(await db.sessions.get(SESSION)).not.toHaveProperty("archivedAt")
     }
   )
+
+  it("aborts in-flight conversation run controllers when an override tightens responder mode (F1)", async () => {
+    const { __resetConversationRunControllersForTesting, registerConversationRunController } =
+      await import("@/lib/connectors/live-steer")
+    __resetConversationRunControllersForTesting()
+    await seedRow()
+
+    const cKeep = new AbortController()
+    const unregisterKeep = registerConversationRunController(KEY, cKeep)
+    await applyConversationOverrideMutation({
+      kind: "addLabel",
+      conversationKey: KEY,
+      labelId: "vip",
+      sessionId: SESSION,
+    })
+    expect(cKeep.signal.aborted).toBe(false)
+
+    await applyConversationOverrideMutation({
+      kind: "patch",
+      conversationKey: KEY,
+      sessionId: SESSION,
+      patch: { autonomy: "observe", engagement: "human", mode: "manual" },
+    })
+    expect(cKeep.signal.aborted).toBe(true)
+    unregisterKeep()
+  })
 })

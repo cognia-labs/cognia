@@ -103,6 +103,19 @@ describe("buildHelpSurface", () => {
     expect((draft.components.behaviourBody as { text: string }).text).toBe(
       DEFAULT_HELP_SURFACE_LABELS.behaviour.draft
     )
+    const teamDraft = buildHelpSurface(
+      base({ atStrategy: "mention_each", behaviour: "draft", targetKind: "team" })
+    )
+    expect((teamDraft.components.behaviourBody as { text: string }).text).toBe(
+      DEFAULT_HELP_SURFACE_LABELS.draftByTarget?.team
+    )
+    const workflowDraft = buildHelpSurface(
+      base({ atStrategy: "mention_each", behaviour: "draft", targetKind: "workflow" })
+    )
+    expect((workflowDraft.components.behaviourBody as { text: string }).text).toBe(
+      DEFAULT_HELP_SURFACE_LABELS.draftByTarget?.workflow
+    )
+    expect(DEFAULT_HELP_SURFACE_LABELS.behaviour.silent).toContain("/automation")
     // `assistant` and `delegate` both answer, so a note there would be noise.
     const answering = buildHelpSurface(base({ atStrategy: "mention_each" }))
     expect(answering.components.behaviourBody).toBeUndefined()
