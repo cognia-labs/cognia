@@ -18,6 +18,13 @@
 import type { Page } from "@/lib/tauri/companion-paging"
 import { transport } from "@/lib/tauri"
 
+import {
+  callWithTerminalAdminLease,
+  openBoundSessionTarget,
+  type BoundSessionExecutionTarget,
+} from "./host-target"
+import type { SessionInfo } from "./types"
+
 /** One-shot command capture — mirrors Rust `terminal::exec::ExecResult`. */
 export interface RemoteExecResult {
   stdout: string
@@ -103,6 +110,40 @@ export async function completeTerminalPaths(options: {
 }
 
 /**
+ * Session-bound twin of {@link completeTerminalPaths}: routes path completion
+ * to the exact Host that owns `session` and refuses SSH/serial/extension tabs
+ * so local files never leak into remote shell completions (T08).
+ */
+export async function completeTerminalPathsForSession(
+  session: {
+    kind?: SessionInfo["kind"]
+    origin?: SessionInfo["origin"]
+    remoteHost?: SessionInfo["remoteHost"]
+  },
+  options: {
+    cwd: string
+    fragment: string
+    showHidden?: boolean
+    limit?: number
+  },
+  deps?: {
+    openTarget?: (s: typeof session) => Promise<BoundSessionExecutionTarget>
+  }
+): Promise<RemotePathCandidate[]> {
+  const bound = await (deps?.openTarget ?? openBoundSessionTarget)(session)
+  try {
+    return await bound.transport.call<RemotePathCandidate[]>("terminal_complete_paths", {
+      cwd: options.cwd,
+      fragment: options.fragment,
+      showHidden: options.showHidden,
+      limit: options.limit,
+    })
+  } finally {
+    bound.close()
+  }
+}
+
+/**
  * Host-side `$PATH` executable names matching `prefix`, for head-word
  * completion. The host keeps a 15-second scan cache, so repeated keystrokes
  * cost one directory walk, not one per character.
@@ -123,12 +164,84 @@ export async function listTerminalPathExecutables(options: {
 }
 
 /**
+ * Session-bound twin of {@link listTerminalPathExecutables}: scans executables
+ * on the exact Host that owns `session` (supporting mobile, paired web, and
+ * cross-host tabs) while refusing SSH/serial/extension tabs (T08).
+ */
+export async function listTerminalPathExecutablesForSession(
+  session: {
+    kind?: SessionInfo["kind"]
+    origin?: SessionInfo["origin"]
+    remoteHost?: SessionInfo["remoteHost"]
+  },
+  options: {
+    prefix: string
+    limit?: number
+  },
+  deps?: {
+    openTarget?: (s: typeof session) => Promise<BoundSessionExecutionTarget>
+  }
+): Promise<string[]> {
+  if (options.prefix.trim().length === 0) return []
+  const bound = await (deps?.openTarget ?? openBoundSessionTarget)(session)
+  try {
+    const page = await bound.transport.call<Page<string>>("terminal_list_path_executables", {
+      prefix: options.prefix,
+      pageSize: options.limit,
+    })
+    return page.items
+  } finally {
+    bound.close()
+  }
+}
+
+function assertValidPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`invalid port: ${port}`)
+  }
+}
+
+/**
  * Free a TCP port on the host by killing its listener(s). Returns the PIDs
  * that were signalled (possibly empty — nothing was listening).
  */
 export async function killTerminalPort(port: number): Promise<number[]> {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`invalid port: ${port}`)
-  }
+  assertValidPort(port)
   return transport.call<number[]>("terminal_kill_port", { port })
+}
+
+/**
+ * Free a TCP port on the exact Host that owns `session` (never routing an SSH
+ * or cross-host tab onto the local desktop), acquiring a device-bound
+ * `adminLease` when the target is remote (T03).
+ */
+export async function killTerminalPortForSession(
+  session: {
+    kind?: SessionInfo["kind"]
+    origin?: SessionInfo["origin"]
+    remoteHost?: SessionInfo["remoteHost"]
+  },
+  port: number,
+  deps?: {
+    openTarget?: (s: typeof session) => Promise<BoundSessionExecutionTarget>
+    callWithLease?: typeof callWithTerminalAdminLease
+  }
+): Promise<number[]> {
+  assertValidPort(port)
+  const bound = await (deps?.openTarget ?? openBoundSessionTarget)(session)
+  try {
+    if (bound.kind === "local") {
+      return await bound.transport.call<number[]>("terminal_kill_port", { port })
+    }
+    return await (deps?.callWithLease ?? callWithTerminalAdminLease)<number[]>(
+      "terminal_kill_port",
+      { port },
+      {
+        transport: bound.transport,
+        targetKey: bound.key,
+      }
+    )
+  } finally {
+    bound.close()
+  }
 }

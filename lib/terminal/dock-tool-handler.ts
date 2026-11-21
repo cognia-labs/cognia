@@ -158,6 +158,11 @@ async function runSpawn(input: RunTerminalDockActionInput): Promise<DockActionRe
   // being written. The session is registered to the agent via the
   // `agentSpawner` field so the dock's agent-only filter picks it up.
   const store = useTerminalStore.getState()
+  const enableShellIntegration =
+    (
+      useSettingsStore.getState().settings?.terminal as
+        { enableShellIntegration?: boolean } | undefined
+    )?.enableShellIntegration ?? true
   const result = await spawnFromDock({
     req: {
       rows: DEFAULT_SPAWN_ROWS,
@@ -165,7 +170,7 @@ async function runSpawn(input: RunTerminalDockActionInput): Promise<DockActionRe
       shell,
       cwd,
       projectId,
-      enableShellIntegration: true,
+      enableShellIntegration,
     },
     store,
     agentSpawner: chatSessionId,

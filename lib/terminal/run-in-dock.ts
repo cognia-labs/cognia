@@ -216,7 +216,13 @@ export async function runInTerminalDock(
     ? (projectState.projects.find((p) => p.id === activeProjectId) ?? null)
     : null
   const terminal = useSettingsStore.getState().settings?.terminal as
-    { defaultShell?: string; forceUtf8?: boolean; sandboxed?: boolean } | undefined
+    | {
+        defaultShell?: string
+        enableShellIntegration?: boolean
+        forceUtf8?: boolean
+        sandboxed?: boolean
+      }
+    | undefined
 
   // Resolve the shell + spawn options exactly like the dock's "+ New" button so
   // the interactive command runs in the user's configured shell — and, with no
@@ -242,7 +248,7 @@ export async function runInTerminalDock(
           ? { ...project?.terminalConfig?.env, ...options.env }
           : project?.terminalConfig?.env,
       projectId: activeProjectId ?? undefined,
-      enableShellIntegration: true,
+      enableShellIntegration: terminal?.enableShellIntegration ?? true,
       forceUtf8: terminal?.forceUtf8 ?? true,
       sandboxed: terminal?.sandboxed ?? false,
     },

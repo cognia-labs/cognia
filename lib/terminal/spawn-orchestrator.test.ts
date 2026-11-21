@@ -28,8 +28,46 @@ jest.mock("@/lib/tauri/transport-routing", () => ({
 }))
 jest.mock("./host-profiles", () => ({
   ...jest.requireActual("./host-profiles"),
+  acquireRemoteLaunchProfile: jest.fn(async (req: SpawnRequest) => ({
+    profileId: req.profileId ?? "__adhoc:test",
+    logicalProfileId: req.profileId,
+    release: jest.fn(),
+  })),
   ensureRemoteSpawnProfile: jest.fn(async (req: SpawnRequest) => req.profileId ?? "default"),
   hasTransientTerminalProfile: jest.fn(() => false),
+}))
+jest.mock("./host-target", () => ({
+  ...jest.requireActual("./host-target"),
+  captureActiveTerminalRemoteTarget: jest.fn(async () => ({
+    key: "endpoint:host-a",
+    endpoint: {
+      baseUrl: "https://host-a.local:27890",
+      deviceId: "dev-a",
+      devicePrivateKeyJwk: { kty: "EC" },
+      remoteHost: { id: "host-a", label: "Host A" },
+    },
+    remoteHost: { id: "host-a", label: "Host A" },
+    transport: { call: jest.fn() },
+    getWanChannel: jest.fn(() => null),
+    getWanClientId: jest.fn(() => undefined),
+    assertCurrent: jest.fn(async () => undefined),
+    release: jest.fn(),
+  })),
+  captureSessionRemoteTarget: jest.fn(async (remoteHost: { id: string | null; label: string }) => ({
+    key: `endpoint:${remoteHost.id ?? remoteHost.label}`,
+    endpoint: {
+      baseUrl: "https://host-a.local:27890",
+      deviceId: "dev-a",
+      devicePrivateKeyJwk: { kty: "EC" },
+      remoteHost,
+    },
+    remoteHost,
+    transport: { call: jest.fn() },
+    getWanChannel: jest.fn(() => null),
+    getWanClientId: jest.fn(() => undefined),
+    assertCurrent: jest.fn(async () => undefined),
+    release: jest.fn(),
+  })),
 }))
 
 // The persist path (`persistCommandHistory`) lazy-imports these three —
@@ -151,11 +189,25 @@ interface FakeStoreRow {
   projectId: string | null
   extensionId: string | null
   agentSpawner: string | null
+  agentSpawnerMessageId?: string | null
   kind?: SessionInfo["kind"]
+  origin?: SessionInfo["origin"]
+  remoteHost?: SessionInfo["remoteHost"]
+  profileId?: string
+  sandboxed?: boolean
+  launchSpec?: SpawnRequest
 }
 
 interface FakeStore {
-  registered: Array<{ info: SessionInfo; opts?: { title?: string; agentSpawner?: string } }>
+  registered: Array<{
+    info: SessionInfo
+    opts?: {
+      title?: string
+      agentSpawner?: string
+      agentSpawnerMessageId?: string
+      launchSpec?: SpawnRequest
+    }
+  }>
   removed: string[]
   statusUpdates: Array<[string, string]>
   exitUpdates: Array<[string, number | null]>
@@ -165,7 +217,12 @@ interface FakeStore {
   sessions: Record<string, FakeStoreRow>
   registerSession: (
     info: Partial<SessionInfo> & { id: string },
-    opts?: { title?: string; agentSpawner?: string }
+    opts?: {
+      title?: string
+      agentSpawner?: string
+      agentSpawnerMessageId?: string
+      launchSpec?: SpawnRequest
+    }
   ) => void
   removeSession: (id: string) => void
   setSessionStatus: (id: string, s: "idle" | "running" | "exited") => void
@@ -206,6 +263,13 @@ function makeFakeStore(): FakeStore {
         projectId: (info as SessionInfo).projectId ?? null,
         extensionId: (info as SessionInfo).extensionId ?? null,
         agentSpawner: opts?.agentSpawner ?? null,
+        agentSpawnerMessageId: opts?.agentSpawnerMessageId ?? null,
+        kind: (info as SessionInfo).kind,
+        origin: (info as SessionInfo).origin,
+        remoteHost: (info as SessionInfo).remoteHost,
+        profileId: (info as SessionInfo).profileId,
+        sandboxed: (info as SessionInfo).sandboxed ?? opts?.launchSpec?.sandboxed,
+        launchSpec: opts?.launchSpec,
       }
     },
     removeSession: (id) => {
@@ -276,30 +340,93 @@ beforeEach(() => {
 })
 
 describe("spawnFromDock", () => {
-  it("fails before remote spawn when a transient profile cannot be synchronized", async () => {
+  it("fails closed before remote spawn when profile synchronization is refused (T13)", async () => {
     const { selectTerminalTransportChain } = jest.requireMock("./pick-transport") as {
       selectTerminalTransportChain: jest.Mock
     }
-    const { ensureRemoteSpawnProfile, hasTransientTerminalProfile } = jest.requireMock(
-      "./host-profiles"
-    ) as { ensureRemoteSpawnProfile: jest.Mock; hasTransientTerminalProfile: jest.Mock }
+    const { acquireRemoteLaunchProfile } = jest.requireMock("./host-profiles") as {
+      acquireRemoteLaunchProfile: jest.Mock
+    }
     selectTerminalTransportChain.mockReturnValueOnce(["ws"])
-    ensureRemoteSpawnProfile.mockRejectedValueOnce(new Error("terminal.open capability denied"))
-    hasTransientTerminalProfile.mockReturnValueOnce(true)
-    const remote = jest.spyOn(RemoteTerminalSession, "spawn")
-    const store = makeFakeStore()
+    acquireRemoteLaunchProfile.mockRejectedValueOnce(
+      new Error("interactive_approval_required: approval lease is required")
+    )
+    const remote = jest.spyOn(RemoteTerminalSession, "spawnBound")
+    const store = { ...makeFakeStore(), setHostState: jest.fn() }
     try {
       await expect(
         spawnFromDock({
-          req: { ...baseReq, profileId: "cognia-agent-terminal-freebuff" },
+          req: { ...baseReq, shell: "/opt/homebrew/bin/fish", sandboxed: true },
           store,
           hooks: makeFakeHooks() as never,
         })
-      ).resolves.toEqual({ kind: "error", message: "terminal.open capability denied" })
+      ).resolves.toEqual({
+        kind: "error",
+        message: "interactive_approval_required: approval lease is required",
+      })
       expect(remote).not.toHaveBeenCalled()
       expect(store.registered).toEqual([])
+      expect(store.setHostState).toHaveBeenCalledWith(
+        "approval_required",
+        "interactive_approval_required: approval lease is required"
+      )
     } finally {
       remote.mockRestore()
+    }
+  })
+
+  it("shares a bound target and single requestId across WS -> WebRTC fallback (T14, T15)", async () => {
+    const { selectTerminalTransportChain } = jest.requireMock("./pick-transport") as {
+      selectTerminalTransportChain: jest.Mock
+    }
+    const { acquireRemoteLaunchProfile } = jest.requireMock("./host-profiles") as {
+      acquireRemoteLaunchProfile: jest.Mock
+    }
+    const releaseLease = jest.fn()
+    acquireRemoteLaunchProfile.mockResolvedValueOnce({
+      profileId: "__launch:prof-1:slot-1",
+      logicalProfileId: "prof-1",
+      release: releaseLease,
+    })
+    selectTerminalTransportChain.mockReturnValueOnce(["ws", "webrtc"])
+
+    const wanSession = makeFakeSession("remote-deduped", {
+      origin: "remote",
+      profileId: "prof-1",
+      remoteHost: { id: "host-a", label: "Host A" },
+    })
+    const spawnBound = jest
+      .spyOn(RemoteTerminalSession, "spawnBound")
+      .mockRejectedValueOnce(new Error("ws ack lost"))
+    const spawnWanBound = jest
+      .spyOn(RemoteTerminalSession, "spawnWanBound")
+      .mockResolvedValueOnce(wanSession as unknown as RemoteTerminalSession)
+
+    const store = makeFakeStore()
+    try {
+      const outcome = await spawnFromDock({
+        req: { ...baseReq, profileId: "prof-1" },
+        store,
+        hooks: makeFakeHooks() as never,
+      })
+      expect(outcome).toEqual({
+        kind: "spawned",
+        sessionId: "remote-deduped",
+        shell: "/bin/bash",
+      })
+      expect(acquireRemoteLaunchProfile).toHaveBeenCalledTimes(1)
+      expect(spawnBound).toHaveBeenCalledTimes(1)
+      expect(spawnWanBound).toHaveBeenCalledTimes(1)
+      const [, wsTarget, wsOpts] = spawnBound.mock.calls[0]!
+      const [, wanTarget, wanOpts] = spawnWanBound.mock.calls[0]!
+      expect(wsTarget).toBe(wanTarget)
+      expect(wsOpts?.requestId).toBeTruthy()
+      expect(wsOpts?.requestId).toBe(wanOpts?.requestId)
+      expect(wsOpts?.logicalProfileId).toBe("prof-1")
+      expect(releaseLease).toHaveBeenCalledTimes(1)
+    } finally {
+      spawnBound.mockRestore()
+      spawnWanBound.mockRestore()
     }
   })
 
@@ -1061,4 +1188,191 @@ describe("restartFromDock", () => {
       expect(spawn).not.toHaveBeenCalled()
     }
   )
+
+  it("refuses an extension pseudoterminal tab without killing it (T04)", async () => {
+    const hooks = makeFakeHooks()
+    const store = makeFakeStore()
+    const fake = makeFakeSession("ext-tab", { extensionId: "ext.pty", shell: "Custom PTY" })
+    await spawnFromDock({
+      req: { ...baseReq, extensionId: "ext.pty" },
+      store,
+      hooks: hooks as never,
+      spawn: async () => fake as never,
+    })
+    const spawn = jest.fn()
+    const out = await restartFromDock({
+      sessionId: "ext-tab",
+      store,
+      rows: 24,
+      cols: 80,
+      hooks: hooks as never,
+      spawn,
+    })
+    expect(out).toEqual({ kind: "error", message: `${RESTART_NOT_LOCAL_PTY}:extension` })
+    expect(fake.killed).toBe(0)
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it("preserves args, env, profileId, and sandbox flags across restart, and leaves old session alive on plugin veto or refused stop (T04)", async () => {
+    const hooks = makeFakeHooks()
+    const store = makeFakeStore()
+    const fakeA = makeFakeSession("s-cfg", { profileId: "prof-fish", sandboxed: true })
+    await spawnFromDock({
+      req: {
+        shell: "/opt/homebrew/bin/fish",
+        profileId: "prof-fish",
+        args: ["-l", "--no-config"],
+        env: { FOO: "bar" },
+        enableShellIntegration: false,
+        forceUtf8: false,
+        sandboxed: true,
+        sandboxNetwork: false,
+        rows: 24,
+        cols: 80,
+        projectId: "proj-a",
+      },
+      store,
+      hooks: hooks as never,
+      spawn: async () => fakeA as never,
+    })
+
+    hooks.willSpawnDecision = "deny"
+    await expect(
+      restartFromDock({
+        sessionId: "s-cfg",
+        store,
+        rows: 40,
+        cols: 120,
+        hooks: hooks as never,
+        spawn: async () => makeFakeSession("never") as never,
+      })
+    ).resolves.toEqual({ kind: "denied" })
+    expect(fakeA.killed).toBe(0)
+    expect(getLiveSession("s-cfg")).toBe(fakeA)
+    expect(store.sessions["s-cfg"]).toBeDefined()
+
+    hooks.willSpawnDecision = "allow"
+    fakeA.kill = jest.fn().mockRejectedValueOnce(new Error("not_controller: read-only viewer"))
+    await expect(
+      restartFromDock({
+        sessionId: "s-cfg",
+        store,
+        rows: 40,
+        cols: 120,
+        hooks: hooks as never,
+        spawn: async () => makeFakeSession("never") as never,
+      })
+    ).resolves.toEqual({ kind: "error", message: "not_controller: read-only viewer" })
+    expect(getLiveSession("s-cfg")).toBe(fakeA)
+    expect(store.sessions["s-cfg"]).toBeDefined()
+
+    fakeA.kill = async () => {
+      fakeA.killed += 1
+    }
+    let captured: SpawnRequest | null = null
+    const fakeB = makeFakeSession("s-cfg-2", { profileId: "prof-fish", sandboxed: true })
+    await expect(
+      restartFromDock({
+        sessionId: "s-cfg",
+        store,
+        rows: 40,
+        cols: 120,
+        hooks: hooks as never,
+        spawn: async (req) => {
+          captured = req
+          return fakeB as never
+        },
+      })
+    ).resolves.toEqual({ kind: "spawned", sessionId: "s-cfg-2", shell: "/bin/bash" })
+    expect(captured).toMatchObject({
+      shell: "/opt/homebrew/bin/fish",
+      profileId: "prof-fish",
+      args: ["-l", "--no-config"],
+      env: { FOO: "bar" },
+      enableShellIntegration: false,
+      forceUtf8: false,
+      sandboxed: true,
+      sandboxNetwork: false,
+      rows: 40,
+      cols: 120,
+    })
+  })
+
+  it("keeps the exited tab row when replacement spawn fails after stopping the old session (T04)", async () => {
+    const hooks = makeFakeHooks()
+    const store = makeFakeStore()
+    const fakeA = makeFakeSession("s-old")
+    await spawnFromDock({
+      req: baseReq,
+      store,
+      hooks: hooks as never,
+      spawn: async () => fakeA as never,
+    })
+
+    const out = await restartFromDock({
+      sessionId: "s-old",
+      store,
+      rows: 24,
+      cols: 80,
+      hooks: hooks as never,
+      spawn: async () => {
+        throw new Error("replacement pty failed")
+      },
+    })
+    expect(out).toEqual({ kind: "error", message: "replacement pty failed" })
+    expect(fakeA.killed).toBe(1)
+    expect(store.removed).toEqual([])
+    expect(store.sessions["s-old"]).toBeDefined()
+    expect(store.exitUpdates).toContainEqual(["s-old", null])
+  })
+
+  it("restarts a remote session on its captured Host rather than the currently selected Host (T04)", async () => {
+    mockHost.tauri = true
+    mockHost.remoteActive = false
+    const hooks = makeFakeHooks()
+    const store = makeFakeStore()
+    const fakeRemoteA = makeFakeSession("remote-old", {
+      origin: "remote",
+      remoteHost: { id: "host-a", label: "Host A" },
+    })
+    await spawnFromDock({
+      req: baseReq,
+      store,
+      hooks: hooks as never,
+      spawn: async () => fakeRemoteA as never,
+    })
+
+    const { captureSessionRemoteTarget } = jest.requireMock("./host-target") as {
+      captureSessionRemoteTarget: jest.Mock
+    }
+    const localSpawn = jest.spyOn(TerminalSession, "spawn")
+    const fakeRemoteB = makeFakeSession("remote-new", {
+      origin: "remote",
+      remoteHost: { id: "host-a", label: "Host A" },
+    })
+    const remoteSpawn = jest
+      .spyOn(RemoteTerminalSession, "spawnBound")
+      .mockResolvedValueOnce(fakeRemoteB as unknown as RemoteTerminalSession)
+
+    try {
+      const out = await restartFromDock({
+        sessionId: "remote-old",
+        store,
+        rows: 32,
+        cols: 110,
+        hooks: hooks as never,
+      })
+      expect(out).toEqual({ kind: "spawned", sessionId: "remote-new", shell: "/bin/bash" })
+      expect(captureSessionRemoteTarget).toHaveBeenCalledWith(
+        { id: "host-a", label: "Host A" },
+        expect.any(Object)
+      )
+      expect(localSpawn).not.toHaveBeenCalled()
+      expect(remoteSpawn).toHaveBeenCalledTimes(1)
+    } finally {
+      localSpawn.mockRestore()
+      remoteSpawn.mockRestore()
+      mockHost.tauri = false
+    }
+  })
 })

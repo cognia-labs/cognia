@@ -2,8 +2,11 @@ import { createPathCompletionProvider, requoteToken } from "./path-provider"
 import type { TerminalCompletionContext } from "./types"
 
 const completeTerminalPathsMock = jest.fn()
+const completeTerminalPathsForSessionMock = jest.fn()
 jest.mock("@/lib/terminal/remote-api", () => ({
   completeTerminalPaths: (options: unknown) => completeTerminalPathsMock(options),
+  completeTerminalPathsForSession: (session: unknown, options: unknown) =>
+    completeTerminalPathsForSessionMock(session, options),
 }))
 
 function ctx(
@@ -35,6 +38,7 @@ function setup(candidates: Array<{ name: string; isDir: boolean }> | (() => Prom
 describe("path completion provider", () => {
   beforeEach(() => {
     completeTerminalPathsMock.mockReset()
+    completeTerminalPathsForSessionMock.mockReset()
   })
 
   it("uses the active terminal transport off-desktop and returns nothing without a cwd", async () => {
@@ -153,6 +157,37 @@ describe("path completion provider", () => {
       return [{ name: "src", isDir: true }]
     })
     expect(await provider.getCompletions(ctx("cd s"), ac.signal)).toEqual([])
+  })
+
+  it("refuses local path scans on SSH tabs and routes remote sessions via session target (T08)", async () => {
+    completeTerminalPathsForSessionMock.mockResolvedValue([{ name: "app.ts", isDir: false }])
+    const provider = createPathCompletionProvider()
+
+    expect(
+      await provider.getCompletions(
+        ctx("cat a", { sessionKind: "ssh", sessionOrigin: "local" }),
+        signal
+      )
+    ).toEqual([])
+    expect(completeTerminalPathsForSessionMock).not.toHaveBeenCalled()
+
+    const out = await provider.getCompletions(
+      ctx("cat a", {
+        sessionKind: "localPty",
+        sessionOrigin: "remote",
+        remoteHost: { id: "host-a", label: "Host A" },
+      }),
+      signal
+    )
+    expect(completeTerminalPathsForSessionMock).toHaveBeenCalledWith(
+      {
+        kind: "localPty",
+        origin: "remote",
+        remoteHost: { id: "host-a", label: "Host A" },
+      },
+      expect.objectContaining({ cwd: "D:/repo", fragment: "a" })
+    )
+    expect(out[0]?.text).toBe("cat app.ts")
   })
 })
 

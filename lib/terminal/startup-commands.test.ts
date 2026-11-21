@@ -131,4 +131,22 @@ describe("startup-commands", () => {
     // No prompt listener should be active for a single command.
     expect(session.promptCbs).toHaveLength(0)
   })
+
+  it("waits properly between duplicate commands instead of matching indexOf (T16)", async () => {
+    const session = makeSession({ hasIntegration: true })
+    runStartupCommands(session, ["clear", "echo ready", "clear"])
+
+    await flushMicrotasks()
+    expect(session.written).toEqual(["clear\r"])
+
+    session.triggerPrompt()
+    await flushMicrotasks()
+    expect(session.written).toEqual(["clear\r", "echo ready\r"])
+
+    session.triggerPrompt()
+    await flushMicrotasks()
+    expect(session.written).toEqual(["clear\r", "echo ready\r", "clear\r"])
+    // Final duplicate command is the last element, so it must not register another wait.
+    expect(session.promptCbs).toHaveLength(0)
+  })
 })

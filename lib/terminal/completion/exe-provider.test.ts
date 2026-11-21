@@ -108,4 +108,34 @@ describe("exe completion provider", () => {
     const out = await provider.getCompletions(ctx("tool"), signal)
     expect(out.length).toBeLessThanOrEqual(8)
   })
+
+  it("skips local/host PATH scan on SSH tabs and binds remote sessions to their Host (T08)", async () => {
+    const listExecutables = jest.fn(async () => ["rg-remote"])
+    const provider = createExeCompletionProvider({ listExecutables })
+
+    const sshOut = await provider.getCompletions(
+      ctx("ech", { sessionKind: "ssh", sessionOrigin: "local" }),
+      signal
+    )
+    expect(listExecutables).not.toHaveBeenCalled()
+    expect(sshOut.map((s) => s.text)).toContain("echo")
+
+    const remoteOut = await provider.getCompletions(
+      ctx("rg", {
+        sessionKind: "localPty",
+        sessionOrigin: "remote",
+        remoteHost: { id: "host-a", label: "Host A" },
+      }),
+      signal
+    )
+    expect(listExecutables).toHaveBeenCalledWith(
+      {
+        kind: "localPty",
+        origin: "remote",
+        remoteHost: { id: "host-a", label: "Host A" },
+      },
+      { prefix: "rg", limit: 16 }
+    )
+    expect(remoteOut.map((s) => s.text)).toEqual(["rg-remote"])
+  })
 })

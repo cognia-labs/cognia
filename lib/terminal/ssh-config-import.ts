@@ -38,12 +38,14 @@ export interface ParsedForward {
 }
 
 export interface SshConfigHostEntry {
-  /** Literal aliases from the `Host` line. Patterns are reported, not kept. */
+  /** Literal aliases from the `Host` line(s). Patterns are reported, not kept. */
   aliases: string[]
   hostName?: string
   user?: string
   port?: number
   identityFile?: string
+  /** All `IdentityFile` values matched in OpenSSH order (first is imported). */
+  identityFiles?: string[]
   /** Raw `ProxyJump` value, resolved into hops by the planner. */
   proxyJump?: string
   localForwards: ParsedForward[]
@@ -58,6 +60,7 @@ export type SshConfigNoticeKind =
   | "include"
   | "proxyCommand"
   | "malformedForward"
+  | "malformedPort"
   | "missingHostName"
   | "unsupportedDirective"
 
@@ -175,10 +178,65 @@ function parseForward(value: string): ParsedForward | null {
   }
 }
 
+function globMatches(pattern: string, target: string): boolean {
+  let regex = "^"
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!
+    if (ch === "*") regex += ".*"
+    else if (ch === "?") regex += "."
+    else if ("\\^$.|+()[]{}".includes(ch)) regex += `\\${ch}`
+    else regex += ch
+  }
+  regex += "$"
+  return new RegExp(regex).test(target)
+}
+
+/**
+ * OpenSSH `Host` pattern-list evaluation: matches when at least one positive
+ * token matches `alias` and no `!negated` token matches `alias`.
+ */
+function matchesHostPatterns(alias: string, patterns: readonly string[]): boolean {
+  let matchedPositive = false
+  for (const token of patterns) {
+    if (token.startsWith("!")) {
+      const inner = token.slice(1)
+      if (inner && globMatches(inner, alias)) return false
+      continue
+    }
+    if (globMatches(token, alias)) matchedPositive = true
+  }
+  return matchedPositive
+}
+
+interface RawHostBlock {
+  patterns: string[]
+  literals: string[]
+  line: number
+  implicitGlobal?: boolean
+  hostName?: string
+  user?: string
+  port?: number
+  identityFiles: string[]
+  proxyJump?: string
+  proxyCommandLines: number[]
+  localForwards: ParsedForward[]
+  remoteForwards: ParsedForward[]
+}
+
 export function parseSshConfig(text: string): SshConfigDocument {
-  const entries: SshConfigHostEntry[] = []
   const notices: SshConfigNotice[] = []
-  let current: SshConfigHostEntry | null = null
+  const globalBlock: RawHostBlock = {
+    patterns: ["*"],
+    literals: [],
+    line: 1,
+    implicitGlobal: true,
+    identityFiles: [],
+    proxyCommandLines: [],
+    localForwards: [],
+    remoteForwards: [],
+  }
+  const blocks: RawHostBlock[] = [globalBlock]
+  let current: RawHostBlock | null = globalBlock
   // A `Match` block runs until the next `Host`/`Match`, and nothing inside it
   // can be attributed to a specific host — so its body is skipped wholesale
   // rather than leaking onto whichever alias happened to precede it.
@@ -199,22 +257,25 @@ export function parseSshConfig(text: string): SshConfigDocument {
 
     if (keyword === "host") {
       inMatch = false
-      const aliases = value.split(/\s+/).map(unquote).filter(Boolean)
-      const literals = aliases.filter((alias) => !isPattern(alias))
-      for (const pattern of aliases.filter(isPattern)) {
+      const tokens = value.split(/\s+/).map(unquote).filter(Boolean)
+      const literals = tokens.filter((alias) => !isPattern(alias))
+      for (const pattern of tokens.filter(isPattern)) {
         notices.push({ kind: "wildcardHost", line, subject: pattern })
       }
-      if (literals.length === 0) {
+      if (tokens.length === 0) {
         current = null
         return
       }
       current = {
-        aliases: literals,
+        patterns: tokens,
+        literals,
+        line,
+        identityFiles: [],
+        proxyCommandLines: [],
         localForwards: [],
         remoteForwards: [],
-        line,
       }
-      entries.push(current)
+      blocks.push(current)
       return
     }
 
@@ -224,36 +285,47 @@ export function parseSshConfig(text: string): SshConfigDocument {
     }
 
     if (inMatch || !current) {
-      // A directive outside any block is an OpenSSH global default, which has
-      // no single host to attach to.
-      if (!inMatch && !SUPPORTED.has(keyword) && !IGNORABLE.has(keyword)) {
-        notices.push({ kind: "unsupportedDirective", line, subject: keyword })
-      }
       return
     }
 
+    // OpenSSH uses first-match-wins even within a single block (`??=`).
     switch (keyword) {
-      case "hostname":
-        current.hostName = unquote(value)
-        return
-      case "user":
-        current.user = unquote(value)
-        return
-      case "port": {
-        const port = Number(unquote(value))
-        if (Number.isInteger(port) && port >= 1 && port <= 65_535) current.port = port
+      case "hostname": {
+        const parsed = unquote(value)
+        if (parsed) current.hostName ??= parsed
         return
       }
-      case "identityfile":
-        // OpenSSH tries each `IdentityFile` in order; this app holds one, so
-        // the first is kept and later ones are simply not represented.
-        current.identityFile ??= unquote(value)
+      case "user": {
+        const parsed = unquote(value)
+        if (parsed) current.user ??= parsed
         return
-      case "proxyjump":
-        current.proxyJump = unquote(value)
+      }
+      case "port": {
+        const rawPort = unquote(value)
+        const port = Number(rawPort)
+        if (Number.isInteger(port) && port >= 1 && port <= 65_535) {
+          current.port ??= port
+        } else {
+          notices.push({ kind: "malformedPort", line, subject: rawPort || value })
+        }
         return
+      }
+      case "identityfile": {
+        const keyPath = unquote(value)
+        if (keyPath) current.identityFiles.push(keyPath)
+        return
+      }
+      case "proxyjump": {
+        const parsed = unquote(value)
+        if (parsed) current.proxyJump ??= parsed
+        return
+      }
       case "proxycommand":
-        notices.push({ kind: "proxyCommand", line, subject: current.aliases[0] })
+        if (current.literals.length > 0) {
+          notices.push({ kind: "proxyCommand", line, subject: current.literals[0]! })
+        } else {
+          current.proxyCommandLines.push(line)
+        }
         return
       case "localforward":
       case "remoteforward": {
@@ -267,18 +339,68 @@ export function parseSshConfig(text: string): SshConfigDocument {
         return
       }
       default:
-        if (!IGNORABLE.has(keyword)) {
+        if (!SUPPORTED.has(keyword) && !IGNORABLE.has(keyword)) {
           notices.push({ kind: "unsupportedDirective", line, subject: keyword })
         }
     }
   })
 
+  // Materialize one entry per unique primary literal alias in file order, then
+  // evaluate every matching block (top-of-file globals, wildcards, duplicate
+  // literal blocks) using OpenSSH first-match-wins semantics (T09).
+  const entriesByPrimary = new Map<string, SshConfigHostEntry>()
+  for (const block of blocks) {
+    if (block.literals.length === 0) continue
+    const primary = block.literals[0]!
+    const existing = entriesByPrimary.get(primary)
+    if (existing) {
+      for (const alias of block.literals) {
+        if (!existing.aliases.includes(alias)) existing.aliases.push(alias)
+      }
+    } else {
+      entriesByPrimary.set(primary, {
+        aliases: [...block.literals],
+        identityFiles: [],
+        localForwards: [],
+        remoteForwards: [],
+        line: block.line,
+      })
+    }
+  }
+
+  const entries = [...entriesByPrimary.values()]
   for (const entry of entries) {
+    const primary = entry.aliases[0]!
+    const identityFiles: string[] = []
+    for (const block of blocks) {
+      if (!matchesHostPatterns(primary, block.patterns)) continue
+      if (block.hostName !== undefined) entry.hostName ??= block.hostName
+      if (block.user !== undefined) entry.user ??= block.user
+      if (block.port !== undefined) entry.port ??= block.port
+      if (block.proxyJump !== undefined) entry.proxyJump ??= block.proxyJump
+      for (const keyPath of block.identityFiles) {
+        if (!identityFiles.includes(keyPath)) identityFiles.push(keyPath)
+      }
+      entry.localForwards.push(...block.localForwards)
+      entry.remoteForwards.push(...block.remoteForwards)
+      for (const proxyLine of block.proxyCommandLines) {
+        const alreadyNoted = notices.some(
+          (n) => n.kind === "proxyCommand" && n.line === proxyLine && n.subject === primary
+        )
+        if (!alreadyNoted) {
+          notices.push({ kind: "proxyCommand", line: proxyLine, subject: primary })
+        }
+      }
+    }
+    entry.identityFiles = identityFiles
+    if (identityFiles.length > 0) {
+      entry.identityFile = identityFiles[0]
+    }
     // `Host foo` with no `HostName` means "connect to literally `foo`", which
     // only works if `foo` resolves. It usually does — that is the point of the
     // shorthand — so this is a note, not a rejection.
     if (!entry.hostName) {
-      notices.push({ kind: "missingHostName", line: entry.line, subject: entry.aliases[0] })
+      notices.push({ kind: "missingHostName", line: entry.line, subject: primary })
     }
   }
 
@@ -290,7 +412,11 @@ export function parseSshConfig(text: string): SshConfigDocument {
 // ---------------------------------------------------------------------------
 
 export type SshImportAdjustment =
-  "bindNarrowedToLoopback" | "remoteForwardDisabled" | "extraAliasesDropped"
+  | "bindNarrowedToLoopback"
+  | "remoteForwardDisabled"
+  | "extraAliasesDropped"
+  | "extraIdentityFilesDropped"
+  | "missingUsername"
 
 export type SshImportResolution = "create" | "overwrite" | "skip"
 
@@ -377,6 +503,8 @@ function adjustmentsFor(entry: SshConfigHostEntry): SshImportAdjustment[] {
   if (widened) adjustments.push("bindNarrowedToLoopback")
   if (entry.remoteForwards.length > 0) adjustments.push("remoteForwardDisabled")
   if (entry.aliases.length > 1) adjustments.push("extraAliasesDropped")
+  if ((entry.identityFiles?.length ?? 0) > 1) adjustments.push("extraIdentityFilesDropped")
+  if (!entry.user || entry.user.trim().length === 0) adjustments.push("missingUsername")
   return adjustments
 }
 

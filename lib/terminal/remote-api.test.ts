@@ -4,7 +4,12 @@ jest.mock("@/lib/tauri", () => ({
 
 import { transport } from "@/lib/tauri"
 
-import { completeTerminalPaths, execTerminalCommand, killTerminalPort } from "./remote-api"
+import {
+  completeTerminalPaths,
+  execTerminalCommand,
+  killTerminalPort,
+  killTerminalPortForSession,
+} from "./remote-api"
 
 const callMock = transport.call as jest.Mock
 
@@ -88,5 +93,41 @@ describe("terminal remote-api", () => {
     await expect(execTerminalCommand({ command: "true" })).rejects.toThrow(
       "remote control not allowed"
     )
+  })
+
+  it("killTerminalPortForSession refuses SSH tabs and binds remote tabs with an adminLease (T03)", async () => {
+    await expect(
+      killTerminalPortForSession({ kind: "ssh", origin: "local" }, 3000)
+    ).rejects.toThrow(/unsupported/i)
+
+    const close = jest.fn()
+    const remoteCall = jest.fn()
+    const callWithLease = jest.fn(async () => [4321])
+    await expect(
+      killTerminalPortForSession(
+        {
+          kind: "localPty",
+          origin: "remote",
+          remoteHost: { id: "host-a", label: "Host A" },
+        },
+        3000,
+        {
+          openTarget: async () => ({
+            kind: "remote",
+            key: "remote-host:host-a",
+            transport: { call: remoteCall },
+            close,
+          }),
+          callWithLease: callWithLease as never,
+        }
+      )
+    ).resolves.toEqual([4321])
+    expect(callMock).not.toHaveBeenCalled()
+    expect(callWithLease).toHaveBeenCalledWith(
+      "terminal_kill_port",
+      { port: 3000 },
+      expect.objectContaining({ targetKey: "remote-host:host-a" })
+    )
+    expect(close).toHaveBeenCalledTimes(1)
   })
 })

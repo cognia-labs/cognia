@@ -129,6 +129,73 @@ describe("SshTerminalSession", () => {
     expect(exit).toBeNull()
   })
 
+  it("refreshes integrationCapabilities, control state, and replay gaps from host events (T11)", async () => {
+    mockInvoke.mockResolvedValueOnce({
+      session: {
+        id: "remote-snap",
+        projectId: null,
+        extensionId: null,
+        origin: "local",
+        shell: "ssh deploy@host.example",
+        integrationCapabilities: {
+          osc633: true,
+          commandStatus: true,
+          cwdTracking: true,
+        },
+      },
+      hostKeyStatus: "verified",
+      hostKeyFingerprint: "SHA256:snap",
+    })
+    const session = await SshTerminalSession.connect(request)
+    const gaps: unknown[] = []
+    const controls: unknown[] = []
+    session.onReplayGap((gap) => gaps.push(gap))
+    session.onControlState((c) => controls.push(c))
+
+    channels[0]?.onmessage?.({
+      seq: 0,
+      event: {
+        kind: "session_snapshot",
+        session: {
+          ...session.info,
+          integrationCapabilities: {
+            osc633: false,
+            commandStatus: false,
+            cwdTracking: false,
+            degradedReason: "hook timed out after reconnect",
+          },
+        },
+      },
+    })
+    expect(session.info.integrationCapabilities).toEqual({
+      osc633: false,
+      commandStatus: false,
+      cwdTracking: false,
+      degradedReason: "hook timed out after reconnect",
+    })
+
+    channels[0]?.onmessage?.({
+      seq: 0,
+      event: {
+        kind: "replay_gap",
+        requested_after: 2,
+        first_available: 10,
+        last_available: 20,
+      },
+    })
+    expect(gaps).toEqual([{ requestedAfter: 2, firstAvailable: 10, lastAvailable: 20 }])
+
+    channels[0]?.onmessage?.({
+      seq: 0,
+      event: { kind: "controller_changed", controller: "phone-1" },
+    })
+    expect(controls.at(-1)).toEqual({
+      role: "viewer",
+      controllerId: "phone-1",
+      reason: "takeover",
+    })
+  })
+
   it("detaches and transitions local control ownership", async () => {
     mockInvoke.mockResolvedValueOnce({
       session: {

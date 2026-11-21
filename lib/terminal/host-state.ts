@@ -18,6 +18,7 @@ export type TerminalHostState =
    * plain "offline" and sends the user looking for a network fault.
    */
   | "remote_access_disabled"
+  | "approval_required"
 
 export function classifyTerminalHostError(error: unknown): Exclude<TerminalHostState, "online"> {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase()
@@ -34,7 +35,18 @@ export function classifyTerminalHostError(error: unknown): Exclude<TerminalHostS
   // also a 403, and reporting it as "not allowed to use remote terminals"
   // would point an owner device at a grant it already holds.
   if (message.includes("terminal_remote_access_disabled")) return "remote_access_disabled"
-  if (message.includes("unauthorized") || message.includes("permission_denied")) {
+  if (
+    message.includes("interactive_approval_required") ||
+    message.includes("remote_consent_required") ||
+    message.includes("approval lease is required")
+  ) {
+    return "approval_required"
+  }
+  if (
+    message.includes("unauthorized") ||
+    message.includes("permission_denied") ||
+    message.includes("missing_capability")
+  ) {
     return "unauthorized"
   }
   if (message.includes("resource_limit") || message.includes("queue_overflow")) {

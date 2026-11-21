@@ -22,19 +22,17 @@
  * cache is re-warmed on the first list/hello of every session, which the
  * reattach path performs at mount anyway.
  *
- * For the same reason the cache belongs to ONE host. A desktop can switch the
- * Host it drives (ADR-0082) without reloading; an answer recorded for Linux
- * host A must not be handed out once Windows host B — or the desktop's own
- * PTY — is selected. Every entry is stamped with {@link currentTerminalHostKey}
- * as it stood when the probe or list *started*, a read under a different key
- * is a miss, and an answer that arrives for a host no longer selected is
- * dropped rather than recorded against the new one.
+ * Every entry belongs to ONE host — both across desktop remote-host overlays
+ * (ADR-0082) and across paired mobile/browser target switches (T06). Entries
+ * are stamped with {@link currentTerminalHostKey} and optional `hostId` from
+ * the wire frame; a host switch or a restarted host with a new `hostId`
+ * invalidates stale protocol features instead of serving the previous host's.
  */
 
-import {
-  getActiveRemoteTransport,
-  subscribeActiveRemoteTransport,
-} from "@/lib/tauri/transport-routing"
+import { subscribeRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
+import { subscribeActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+
+import { currentTerminalTargetKey } from "./host-target"
 
 /** Mirrors Rust `HostPlatform` — same four values as `ShellPlatform`. */
 export type TerminalHostPlatform = "windows" | "macos" | "linux" | "other"
@@ -58,33 +56,22 @@ export interface TerminalHostCapabilities {
 type Listener = () => void
 
 /**
- * Which host the terminal transports reach right now.
- *
- * `"default"` is the host this shell talks to with no remote selected: the
- * desktop's local PTY, or the paired server of a phone or browser. A desktop
- * driving a remote Host gets one key per installed remote transport — the
- * routing holder installs a fresh transport for every switch, so the object's
- * identity is the switch, even back to a Host used before.
+ * Which host the terminal transports reach right now, across both desktop
+ * remote overlays and paired companion targets.
  */
-const remoteKeys = new WeakMap<object, string>()
-let nextRemoteKey = 1
-
 export function currentTerminalHostKey(): string {
-  const remote = getActiveRemoteTransport()
-  if (!remote) return "default"
-  let key = remoteKeys.get(remote)
-  if (!key) {
-    key = `remote:${nextRemoteKey++}`
-    remoteKeys.set(remote, key)
-  }
-  return key
+  return currentTerminalTargetKey()
 }
 
-let cached: { key: string; value: TerminalHostCapabilities } | null = null
+let cached: { key: string; hostId: string | null; value: TerminalHostCapabilities } | null = null
 const listeners = new Set<Listener>()
 let inFlight: { key: string; promise: Promise<TerminalHostCapabilities | null> } | null = null
 
 const PLATFORMS: ReadonlySet<string> = new Set(["windows", "macos", "linux", "other"])
+
+function notifyListeners(): void {
+  for (const listener of listeners) listener()
+}
 
 /**
  * Accept only a complete, usable answer.
@@ -124,30 +111,57 @@ export function parseHostCapabilities(value: unknown): TerminalHostCapabilities 
  *
  * `hostKey` is the {@link currentTerminalHostKey} the caller read before it
  * opened the connection the answer came over. An answer for a host that is no
- * longer selected is dropped. Omitted, the answer is taken to describe the
- * current host.
+ * longer selected is dropped. When `hostId` differs from the previously seen
+ * host under the same key (for example a re-pointed custom resolver or a
+ * restarted/upgraded server), any cached protocol feature list from the prior
+ * host instance is invalidated so `List` cannot leave stale `Hello` features.
  */
 export function recordHostCapabilities(
   value: unknown,
-  hostKey: string = currentTerminalHostKey()
+  hostKey: string = currentTerminalHostKey(),
+  hostId?: string | null
 ): void {
-  const parsed = parseHostCapabilities(value)
-  if (!parsed) return
+  const normalizedHostId = typeof hostId === "string" && hostId.trim() ? hostId : null
   if (hostKey !== currentTerminalHostKey()) return
-  const previous = cached?.key === hostKey ? cached.value : null
+
+  let featuresInvalidated = false
   if (
-    previous &&
-    previous.platform === parsed.platform &&
-    previous.defaultShell === parsed.defaultShell &&
-    previous.availableShells.length === parsed.availableShells.length &&
-    previous.availableShells.every(
-      (shell, index) => shell.path === parsed.availableShells[index].path
-    )
+    normalizedHostId &&
+    features?.key === hostKey &&
+    features.hostId !== null &&
+    features.hostId !== normalizedHostId
   ) {
+    features = null
+    featuresInvalidated = true
+  }
+
+  const parsed = parseHostCapabilities(value)
+  if (!parsed) {
+    if (featuresInvalidated) notifyListeners()
     return
   }
-  cached = { key: hostKey, value: parsed }
-  for (const listener of listeners) listener()
+
+  const previous = cached?.key === hostKey ? cached : null
+  const sameCapabilities =
+    previous !== null &&
+    previous.value.platform === parsed.platform &&
+    previous.value.defaultShell === parsed.defaultShell &&
+    (previous.value.homeDir ?? null) === (parsed.homeDir ?? null) &&
+    previous.value.availableShells.length === parsed.availableShells.length &&
+    previous.value.availableShells.every(
+      (shell, index) =>
+        shell.path === parsed.availableShells[index].path &&
+        shell.kind === parsed.availableShells[index].kind
+    )
+  const nextHostId = normalizedHostId ?? previous?.hostId ?? null
+  if (sameCapabilities && previous?.hostId === nextHostId) {
+    if (featuresInvalidated) notifyListeners()
+    return
+  }
+  cached = { key: hostKey, hostId: nextHostId, value: parsed }
+  if (!sameCapabilities || featuresInvalidated) {
+    notifyListeners()
+  }
 }
 
 /** The selected host's answer, or null when it has not introduced itself yet. */
@@ -155,34 +169,30 @@ export function getHostCapabilities(): TerminalHostCapabilities | null {
   return cached && cached.key === currentTerminalHostKey() ? cached.value : null
 }
 
+/** Last durable `hostId` observed for the currently selected host, if any. */
+export function getObservedTerminalHostId(): string | null {
+  const key = currentTerminalHostKey()
+  if (cached?.key === key && cached.hostId) return cached.hostId
+  if (features?.key === key && features.hostId) return features.hostId
+  return null
+}
+
 /**
- * Hear when the host answers — and when the selected host changes, since every
- * cached answer then stops applying and a reader must re-read (and re-probe).
+ * Hear when the host answers — and when the selected desktop remote host or
+ * paired runtime target changes, since every cached answer then stops applying.
  */
 export function subscribeHostCapabilities(listener: Listener): () => void {
   listeners.add(listener)
   const offRouting = subscribeActiveRemoteTransport(() => listener())
+  const offScope = subscribeRuntimeTargetContext(() => listener())
   return () => {
     listeners.delete(listener)
     offRouting()
+    offScope()
   }
 }
 
-/**
- * The cached answer, asking the host once when it is cold.
- *
- * Callers are on the spawn path, so this must never throw: a host that cannot
- * be reached returns `null` and the caller falls back to its own guess, which
- * is exactly the pre-existing behaviour.
- *
- * Concurrent callers share one probe — the dock's "+ New" and the shell picker
- * opening together must not each pay a socket ticket and a WebSocket.
- */
-export async function ensureHostCapabilities(): Promise<TerminalHostCapabilities | null> {
-  const key = currentTerminalHostKey()
-  const warm = getHostCapabilities()
-  if (warm) return warm
-  // A probe still running for the previous host answers for that host only.
+function runHostHelloProbe(key: string): Promise<TerminalHostCapabilities | null> {
   if (inFlight && inFlight.key === key) return inFlight.promise
   const entry: { key: string; promise: Promise<TerminalHostCapabilities | null> } = {
     key,
@@ -192,8 +202,6 @@ export async function ensureHostCapabilities(): Promise<TerminalHostCapabilities
     try {
       const { selectTerminalTransportChain } = await import("./pick-transport")
       const chain = selectTerminalTransportChain()
-      // The local PTY is the host; `shell-detect` is already right there, and
-      // opening a remote probe would be nonsense.
       if (chain.length === 0 || chain[0] === "tauri-channel") return null
       const { RemoteTerminalSession } = await import("./transport-ws")
       await RemoteTerminalSession.describeHost(key)
@@ -209,51 +217,67 @@ export async function ensureHostCapabilities(): Promise<TerminalHostCapabilities
 }
 
 /**
+ * The cached answer, asking the host once when it is cold.
+ *
+ * Callers are on the spawn path, so this must never throw: a host that cannot
+ * be reached returns `null` and the caller falls back to its own guess.
+ */
+export async function ensureHostCapabilities(): Promise<TerminalHostCapabilities | null> {
+  const key = currentTerminalHostKey()
+  const warm = getHostCapabilities()
+  if (warm) return warm
+  return runHostHelloProbe(key)
+}
+
+/**
  * Protocol features the host advertised in its hello ack.
  *
- * Rust holds the list in `crates/cognia-terminal/src/host_wire.rs:PROTOCOL_FEATURES`
- * and `protocol.rs` makes it load-bearing: a client rejects an unmapped frame
- * discriminant outright, so a newer host must not push a kind an older client
- * has never heard of. The negotiation channel has been on the wire since the
- * beginning and nothing in TypeScript read it, which meant "does this host
- * speak frames 24/25?" could only be answered by trying and failing.
- *
- * Only the hello ack carries this (Rust pins that with
- * `only_the_hello_ack_carries_the_host_description`), so it warms on the same
- * probe as the host description and shares its in-flight promise.
+ * Only the hello ack carries this (`only_the_hello_ack_carries_the_host_description`).
  */
-export type TerminalProtocolFeature = "pathInjection" | "flowControl" | "history" | "sshForwarding"
+export type TerminalProtocolFeature =
+  | "pathInjection"
+  | "flowControl"
+  | "history"
+  | "sshForwarding"
+  | "workspaceEnvBridge"
+  | "idempotentSpawn"
 
-let features: { key: string; value: readonly string[] } | null = null
+let features: { key: string; hostId: string | null; value: readonly string[] } | null = null
 
 /**
  * Record the ack's feature list.
- *
- * An unknown string is kept rather than dropped: the question callers ask is
- * "did the host name this feature", and a build that has not heard of a newer
- * feature name still answers that correctly for the ones it knows.
  */
 export function recordProtocolFeatures(
   value: unknown,
-  hostKey: string = currentTerminalHostKey()
+  hostKey: string = currentTerminalHostKey(),
+  hostId?: string | null
 ): void {
   if (!Array.isArray(value)) return
   if (hostKey !== currentTerminalHostKey()) return
+  const normalizedHostId = typeof hostId === "string" && hostId.trim() ? hostId : null
   const next = value.filter((entry): entry is string => typeof entry === "string")
-  const previous = features?.key === hostKey ? features.value : null
-  if (previous && previous.length === next.length && previous.every((f, i) => f === next[i])) {
+  const previous = features?.key === hostKey ? features : null
+  const nextHostId = normalizedHostId ?? previous?.hostId ?? null
+  if (
+    previous &&
+    previous.hostId === nextHostId &&
+    previous.value.length === next.length &&
+    previous.value.every((f, i) => f === next[i])
+  ) {
     return
   }
-  features = { key: hostKey, value: next }
-  for (const listener of listeners) listener()
+  const valueChanged =
+    !previous ||
+    previous.value.length !== next.length ||
+    !previous.value.every((f, i) => f === next[i])
+  features = { key: hostKey, hostId: nextHostId, value: next }
+  if (valueChanged) {
+    notifyListeners()
+  }
 }
 
 /**
  * What the host said it speaks, or `null` when no host has introduced itself.
- *
- * `null` is deliberately not the empty list. "The host has not said" and "the
- * host named nothing" lead to opposite decisions: the first should fall back to
- * trying, the second should not.
  */
 export function getProtocolFeatures(): readonly string[] | null {
   return features && features.key === currentTerminalHostKey() ? features.value : null
@@ -263,8 +287,7 @@ export function getProtocolFeatures(): readonly string[] | null {
  * Whether the host named `feature`.
  *
  * Unknown hosts answer `true`. A host that never introduced itself is the
- * local PTY or a probe that has not run yet, and refusing a capability the
- * host may well have would turn a missing probe into a missing feature.
+ * local PTY or a probe that has not run yet.
  */
 export function hostSupportsProtocolFeature(feature: TerminalProtocolFeature): boolean {
   const known = getProtocolFeatures()
@@ -272,11 +295,15 @@ export function hostSupportsProtocolFeature(feature: TerminalProtocolFeature): b
   return known.includes(feature)
 }
 
-/** The cached feature list, running the host probe once when it is cold. */
+/**
+ * The cached feature list, running the `Hello` probe when features are still
+ * unknown — even if `List` already warmed shell capabilities without `Hello`.
+ */
 export async function ensureProtocolFeatures(): Promise<readonly string[] | null> {
   const known = getProtocolFeatures()
   if (known) return known
-  await ensureHostCapabilities()
+  const key = currentTerminalHostKey()
+  await runHostHelloProbe(key)
   return getProtocolFeatures()
 }
 

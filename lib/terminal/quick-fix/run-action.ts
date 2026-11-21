@@ -24,8 +24,12 @@ export interface QuickFixEffects {
   write: (data: string) => void
   /** Open a URL through the OSC 8 allowlist. */
   openUrl: (url: string) => void
-  /** Free a TCP port on the host that owns it. */
-  killPort: (port: number) => Promise<unknown>
+  /** Free a TCP port on the host that owns it, returning signalled PIDs. */
+  killPort: (port: number) => Promise<number[]>
+  /** Invoked when `killPort` succeeded without finding any listener to stop. */
+  onPortNotFreed?: (port: number) => void
+  /** Surface quick-fix failures (approval required, SSH unsupported, etc.) without throwing. */
+  onError?: (error: unknown, action: QuickFixAction) => void
 }
 
 /**
@@ -46,14 +50,24 @@ export async function runQuickFixAction(
       case "open-url":
         effects.openUrl(action.url)
         return
-      case "kill-port":
-        await effects.killPort(action.port)
-        // Only after the port is actually free — re-running first would just
-        // reproduce the error the fix exists to clear.
+      case "kill-port": {
+        const killed = await effects.killPort(action.port)
+        if (!Array.isArray(killed) || killed.length === 0) {
+          effects.onPortNotFreed?.(action.port)
+          return
+        }
+        // Only after at least one listener on that host was signalled — an
+        // empty PID list means nothing was freed (or the busy port belongs to
+        // an unprivileged/other owner), so re-running would immediately fail again.
         effects.write(action.command + "\r")
         return
+      }
     }
-  } catch {
-    // Best-effort by design; see the note above.
+  } catch (error) {
+    try {
+      effects.onError?.(error, action)
+    } catch {
+      // Never let an error reporter throw back into the terminal overlay.
+    }
   }
 }

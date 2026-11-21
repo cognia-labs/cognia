@@ -6,9 +6,11 @@ jest.mock("./pick-transport", () => ({
 import {
   ADHOC_PROFILE_ID,
   __resetTerminalHostProfileSyncForTests,
+  acquireRemoteLaunchProfile,
   buildSynchronizedSshProfiles,
   buildSynchronizedTerminalProfiles,
   ensureRemoteSpawnProfile,
+  ensureTerminalHostProfilesSynced,
   hasTransientTerminalProfile,
   registerTransientTerminalProfile,
   removeTransientTerminalProfile,
@@ -406,5 +408,182 @@ describe("terminal host profile synchronization", () => {
     }
     expect(payload.profiles.map((entry) => entry.profileId)).toEqual(["build", ADHOC_PROFILE_ID])
     expect(payload.profiles.at(-1)?.request.shell).toBe("/bin/zsh")
+  })
+
+  it("gives concurrent ad-hoc launches distinct wire ids and preserves pending agent profiles (T02)", async () => {
+    mockChain = ["ws"]
+    const calls: Array<{
+      profiles: Array<{ profileId: string; request: { shell: string; cwd?: string } }>
+    }> = []
+    const call = jest.fn(async (_method: string, payload: unknown) => {
+      calls.push(payload as (typeof calls)[number])
+      await Promise.resolve()
+    })
+    const readSettings = jest.fn(async () => ({
+      terminal: { profiles: [{ id: "saved", name: "Saved", shell: "/bin/bash" }] },
+    }))
+    const resolveTarget = jest.fn(async () => "same-host-same-device")
+
+    registerTransientTerminalProfile({
+      profileId: "cognia-agent-terminal-claude",
+      shell: "claude",
+      args: ["--resume"],
+      rows: 24,
+      cols: 80,
+    })
+    await ensureRemoteSpawnProfile(
+      {
+        profileId: "cognia-agent-terminal-claude",
+        shell: "claude",
+        args: ["--resume"],
+        rows: 24,
+        cols: 80,
+      },
+      { call: call as never, readSettings, resolveTarget }
+    )
+
+    const [first, second] = await Promise.all([
+      acquireRemoteLaunchProfile(
+        { shell: "/bin/zsh", cwd: "/worktree-a", rows: 24, cols: 80 },
+        { call: call as never, readSettings, resolveTarget }
+      ),
+      acquireRemoteLaunchProfile(
+        { shell: "/usr/local/bin/fish", cwd: "/worktree-b", rows: 24, cols: 80 },
+        { call: call as never, readSettings, resolveTarget }
+      ),
+    ])
+
+    expect(first.profileId).not.toBe(second.profileId)
+    const latest = calls.at(-1)!.profiles
+    expect(latest.find((p) => p.profileId === "cognia-agent-terminal-claude")).toBeDefined()
+    expect(latest.find((p) => p.profileId === first.profileId)?.request).toMatchObject({
+      shell: "/bin/zsh",
+      cwd: "/worktree-a",
+    })
+    expect(latest.find((p) => p.profileId === second.profileId)?.request).toMatchObject({
+      shell: "/usr/local/bin/fish",
+      cwd: "/worktree-b",
+    })
+
+    // Ordinary settings sync while launches are still in flight also preserves them.
+    await syncTerminalHostProfiles(
+      [{ id: "saved", name: "Saved", shell: "/bin/bash" }],
+      { targetKey: "same-host-same-device" },
+      call as never
+    )
+    expect(calls.at(-1)!.profiles.map((p) => p.profileId)).toEqual(
+      expect.arrayContaining([
+        "saved",
+        "cognia-agent-terminal-claude",
+        first.profileId,
+        second.profileId,
+      ])
+    )
+
+    first.release()
+    second.release()
+  })
+
+  it("preserves per-launch cwd, projectId, and sandbox overrides on remote named profiles (T01)", async () => {
+    mockChain = ["ws"]
+    const call = jest.fn(async (_method: string, _payload: unknown) => undefined)
+    const lease = await acquireRemoteLaunchProfile(
+      {
+        profileId: "build",
+        shell: "/bin/zsh",
+        args: ["-l"],
+        cwd: "/worktrees/feature-branch",
+        projectId: "proj-worktree",
+        sandboxed: true,
+        rows: 30,
+        cols: 100,
+      },
+      {
+        call: call as never,
+        readSettings: async () => ({
+          terminal: {
+            profiles: [{ id: "build", name: "Build", shell: "/bin/zsh", cwd: "/default-root" }],
+          },
+        }),
+        resolveTarget: async () => "remote-host-a",
+      }
+    )
+
+    expect(lease.logicalProfileId).toBe("build")
+    expect(lease.profileId).toMatch(/^__launch:build:/)
+    const payload = call.mock.calls[0][1] as {
+      profiles: Array<{ profileId: string; request: Record<string, unknown> }>
+    }
+    const launchEntry = payload.profiles.find((p) => p.profileId === lease.profileId)
+    expect(launchEntry?.request).toMatchObject({
+      profileId: "build",
+      shell: "/bin/zsh",
+      cwd: "/worktrees/feature-branch",
+      projectId: "proj-worktree",
+      sandboxed: true,
+    })
+    lease.release()
+  })
+
+  it("acquires an interactive adminLease when synchronizing profiles to a remote target (T13)", async () => {
+    mockChain = ["ws"]
+    const targetCalls: Array<[string, unknown]> = []
+    const targetTransport = {
+      call: jest.fn(async (cmd: string, args?: Record<string, unknown>) => {
+        targetCalls.push([cmd, args])
+        if (cmd === "host_admin_lease_issue") {
+          return {
+            token: "lease-sync-1",
+            operations: ["terminal_host_sync_profiles"],
+            expiresAt: Date.now() + 60_000,
+          }
+        }
+        return { installed: 1 }
+      }),
+    }
+
+    await syncTerminalHostProfiles([{ id: "build", name: "Build", shell: "/bin/bash" }], {
+      interactive: true,
+      targetKey: "remote-host-lease-test",
+      targetTransport: targetTransport as never,
+    })
+
+    expect(targetCalls[0][0]).toBe("host_admin_lease_issue")
+    expect(targetCalls[1][0]).toBe("terminal_host_sync_profiles")
+    expect(targetCalls[1][1]).toMatchObject({
+      adminLease: "lease-sync-1",
+    })
+  })
+
+  it("does not cache local no-ops or failed syncs across host switches (T05)", async () => {
+    jest.doMock("@/stores/settings/settings-store", () => ({
+      useSettingsStore: {
+        getState: () => ({
+          loaded: true,
+          settings: {
+            terminal: { profiles: [{ id: "dev", name: "Dev", shell: "/bin/zsh" }] },
+          },
+        }),
+        subscribe: () => () => undefined,
+      },
+    }))
+    // Local no-op first
+    mockChain = ["tauri-channel"]
+    const call = jest.fn(async () => undefined)
+    await ensureTerminalHostProfilesSynced({ targetKey: "host-a", call: call as never })
+    expect(call).not.toHaveBeenCalled()
+
+    // Switch to remote Host A: must actually sync, and retry if first attempt fails
+    mockChain = ["ws"]
+    call.mockRejectedValueOnce(new Error("temporary network drop"))
+    await ensureTerminalHostProfilesSynced({ targetKey: "host-a", call: call as never })
+    expect(call).toHaveBeenCalledTimes(1)
+
+    await ensureTerminalHostProfilesSynced({ targetKey: "host-a", call: call as never })
+    expect(call).toHaveBeenCalledTimes(2)
+
+    // Switch to Host B: must sync again under the new targetKey
+    await ensureTerminalHostProfilesSynced({ targetKey: "host-b", call: call as never })
+    expect(call).toHaveBeenCalledTimes(3)
   })
 })

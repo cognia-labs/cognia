@@ -43,6 +43,12 @@ export interface TerminalCompletionContext {
   platform: "windows" | "macos" | "linux" | "other"
   /** Owning project id, or null — lets providers boost project-local data. */
   projectId?: string | null
+  /** Session transport kind (`localPty`, `ssh`, `serial`, `extension`) for target-bound scans (T08). */
+  sessionKind?: "localPty" | "ssh" | "serial" | "extension"
+  /** Whether the session process runs locally or on a remote Cognia Host (T08). */
+  sessionOrigin?: "local" | "remote"
+  /** Captured remote Host identity for cross-host session binding (T08). */
+  remoteHost?: { id: string | null; label: string } | null
 }
 
 /**

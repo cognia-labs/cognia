@@ -23,6 +23,7 @@ import {
   recordHostCapabilities,
   recordProtocolFeatures,
 } from "./host-capabilities"
+import type { BoundTerminalRemoteTarget } from "./host-target"
 import { toWebSocketBase } from "@/lib/network/ws-url"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
 import { isCapacitor } from "@/lib/tauri"
@@ -88,6 +89,10 @@ const defaultTerminalDataChannelResolver: TerminalDataChannelResolver = async ()
 
 let terminalDataChannelResolver = defaultTerminalDataChannelResolver
 const wanConnections = new WeakMap<RTCDataChannel, WanTerminalHostConnection>()
+
+export function getConfiguredCompanionEndpointResolver(): CompanionEndpointResolver {
+  return endpointResolver
+}
 
 export function configureCompanionEndpointResolver(resolver: CompanionEndpointResolver): void {
   endpointResolver = resolver
@@ -200,22 +205,91 @@ export class RemoteTerminalSession extends BaseTerminalSession {
     this.wireConnection(connection)
   }
 
-  static async spawn(req: SpawnRequest): Promise<RemoteTerminalSession> {
+  static async spawn(
+    req: SpawnRequest,
+    options?: { requestId?: string; logicalProfileId?: string }
+  ): Promise<RemoteTerminalSession> {
     const endpoint = await endpointResolver()
     if (!endpoint) {
       throw new TerminalSessionError("unpaired", "terminal host is not paired")
     }
     const connectionFactory = () => openLanConnection(endpoint)
     const remoteHost = endpointHost(endpoint)
-    const session = await RemoteTerminalSession.spawnWithConnection(req, connectionFactory)
-    session.info = { ...session.info, remoteHost }
+    const session = await RemoteTerminalSession.spawnWithConnection(req, connectionFactory, options)
+    session.info = {
+      ...session.info,
+      remoteHost,
+      ...(options?.logicalProfileId ? { profileId: options.logicalProfileId } : {}),
+    }
     return session
   }
 
-  static async spawnWan(req: SpawnRequest): Promise<RemoteTerminalSession> {
+  static async spawnBound(
+    req: SpawnRequest,
+    target: BoundTerminalRemoteTarget,
+    options?: { requestId?: string; logicalProfileId?: string }
+  ): Promise<RemoteTerminalSession> {
+    await target.assertCurrent()
+    const endpoint = target.endpoint
+    const connectionFactory = () => openLanConnection(endpoint)
+    const session = await RemoteTerminalSession.spawnWithConnection(req, connectionFactory, options)
+    session.info = {
+      ...session.info,
+      remoteHost: target.remoteHost,
+      ...(options?.logicalProfileId ? { profileId: options.logicalProfileId } : {}),
+    }
+    return session
+  }
+
+  static async spawnWan(
+    req: SpawnRequest,
+    options?: { requestId?: string; logicalProfileId?: string }
+  ): Promise<RemoteTerminalSession> {
     const target = await captureWanTarget()
-    const session = await RemoteTerminalSession.spawnWithConnection(req, target.connectionFactory)
-    session.info = { ...session.info, remoteHost: target.remoteHost }
+    const session = await RemoteTerminalSession.spawnWithConnection(
+      req,
+      target.connectionFactory,
+      options
+    )
+    session.info = {
+      ...session.info,
+      remoteHost: target.remoteHost,
+      ...(options?.logicalProfileId ? { profileId: options.logicalProfileId } : {}),
+    }
+    return session
+  }
+
+  static async spawnWanBound(
+    req: SpawnRequest,
+    target: BoundTerminalRemoteTarget,
+    options?: { requestId?: string; logicalProfileId?: string }
+  ): Promise<RemoteTerminalSession> {
+    await target.assertCurrent()
+    const initialChannel = target.getWanChannel()
+    if (!initialChannel) {
+      throw new TerminalSessionError("host_offline", "terminal WebRTC channel is unavailable")
+    }
+    let first = true
+    const connectionFactory: RemoteConnectionFactory = () => {
+      const channel = first ? initialChannel : target.getWanChannel()
+      first = false
+      if (!channel) {
+        return Promise.reject(
+          new TerminalSessionError("host_offline", "terminal WebRTC channel is unavailable")
+        )
+      }
+      return openBoundWanConnection({
+        channel,
+        clientId: target.getWanClientId(),
+        remoteHost: target.remoteHost,
+      })
+    }
+    const session = await RemoteTerminalSession.spawnWithConnection(req, connectionFactory, options)
+    session.info = {
+      ...session.info,
+      remoteHost: target.remoteHost,
+      ...(options?.logicalProfileId ? { profileId: options.logicalProfileId } : {}),
+    }
     return session
   }
 
@@ -262,15 +336,20 @@ export class RemoteTerminalSession extends BaseTerminalSession {
 
   private static async spawnWithConnection(
     req: SpawnRequest,
-    connectionFactory: RemoteConnectionFactory
+    connectionFactory: RemoteConnectionFactory,
+    options?: { requestId?: string; logicalProfileId?: string }
   ): Promise<RemoteTerminalSession> {
     const connection = await connectionFactory()
     const session = new RemoteTerminalSession(req, connection, connectionFactory)
     try {
       const response = await session.sendCommand(TerminalFrameKind.Spawn, EMPTY_SESSION_ID, {
         profileId: req.profileId ?? "default",
+        ...(options?.requestId ? { requestId: options.requestId } : {}),
       })
       session.info = decodeTerminalJson<SessionInfo>(response)
+      if (options?.logicalProfileId) {
+        session.info = { ...session.info, profileId: options.logicalProfileId }
+      }
       session.ownedControllerId = session.info.currentController ?? null
       session.dispatchControlState({
         role: "controller",
@@ -317,15 +396,19 @@ export class RemoteTerminalSession extends BaseTerminalSession {
     )
     try {
       const response = await session.sendCommand(TerminalFrameKind.Hello, EMPTY_SESSION_ID)
-      const ack = decodeTerminalJson<{ host?: unknown; protocolFeatures?: unknown }>(response)
+      const ack = decodeTerminalJson<{
+        hostId?: string
+        host?: unknown
+        protocolFeatures?: unknown
+      }>(response)
       // Stamped with the host the probe set out for: a switch while it was in
       // flight must not file this answer under the newly selected host.
-      recordHostCapabilities(ack.host, hostKey)
+      recordHostCapabilities(ack.host, hostKey, ack.hostId)
       // The hello ack is the only frame that carries the feature list (Rust
       // pins that), so this is the one place it can be learned. Reading it here
       // rather than at each call site means the probe the spawn path already
       // runs doubles as the protocol negotiation `protocol.rs` requires.
-      recordProtocolFeatures(ack.protocolFeatures, hostKey)
+      recordProtocolFeatures(ack.protocolFeatures, hostKey, ack.hostId)
     } finally {
       session.intentionalClose = true
       session.disposeConnectionListeners()
@@ -361,11 +444,15 @@ export class RemoteTerminalSession extends BaseTerminalSession {
     )
     try {
       const response = await session.sendCommand(TerminalFrameKind.List, EMPTY_SESSION_ID)
-      const snapshot = decodeTerminalJson<{ sessions: SessionInfo[]; host?: unknown }>(response)
+      const snapshot = decodeTerminalJson<{
+        hostId?: string
+        sessions: SessionInfo[]
+        host?: unknown
+      }>(response)
       // The snapshot describes the host it snapshots. Recording it here is what
       // makes the reattach-at-mount path double as the capability probe, so the
       // dock's first spawn already knows which shell the host has.
-      recordHostCapabilities(snapshot.host, hostKey)
+      recordHostCapabilities(snapshot.host, hostKey, snapshot.hostId)
       return snapshot.sessions
     } finally {
       session.intentionalClose = true
@@ -490,15 +577,12 @@ export class RemoteTerminalSession extends BaseTerminalSession {
 
   async kill(): Promise<void> {
     if (this.isExited) return
+    await this.sendCommand(TerminalFrameKind.Kill, this.info.id)
     this.intentionalClose = true
     this.cancelReconnect()
-    try {
-      await this.sendCommand(TerminalFrameKind.Kill, this.info.id)
-    } finally {
-      this.disposeConnectionListeners()
-      await this.closeOwnedConnection()
-      this.handleExit(null, false)
-    }
+    this.disposeConnectionListeners()
+    await this.closeOwnedConnection()
+    this.handleExit(null, false)
   }
 
   private wireConnection(connection: TerminalHostConnection): void {

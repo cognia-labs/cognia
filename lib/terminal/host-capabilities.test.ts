@@ -16,11 +16,16 @@ jest.mock("./transport-ws", () => ({
 }))
 
 import { __resetRoutingForTests, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 import type { Transport } from "@/lib/tauri/transport-types"
 import {
   __resetHostCapabilitiesForTests,
   currentTerminalHostKey,
   ensureHostCapabilities,
+  ensureProtocolFeatures,
   getHostCapabilities,
   parseHostCapabilities,
   recordHostCapabilities,
@@ -54,6 +59,7 @@ const WINDOWS_HOST = {
 
 beforeEach(() => {
   __resetRoutingForTests()
+  clearActiveRuntimeTargetContext()
   __resetHostCapabilitiesForTests()
   mockChain = []
   mockDescribeHost.mockReset()
@@ -324,5 +330,54 @@ describe("host switches", () => {
     off()
     setActiveRemoteTransport(null)
     expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it("isolates paired mobile/browser targets across switches and late probes (T06)", () => {
+    mockChain = ["ws"]
+    const listener = jest.fn()
+    const off = subscribeHostCapabilities(listener)
+
+    setActiveRuntimeTargetContext("acct_alpha1", "paired-host-a")
+    const keyA = currentTerminalHostKey()
+    recordHostCapabilities(HOST, keyA, "durable-a")
+    recordProtocolFeatures(["history", "flowControl"], keyA, "durable-a")
+    expect(getHostCapabilities()).toEqual(HOST)
+    expect(getProtocolFeatures()).toEqual(["history", "flowControl"])
+
+    // Switch paired target to Host B: Host A's shell and protocol features must not leak.
+    setActiveRuntimeTargetContext("acct_alpha1", "paired-host-b")
+    expect(getHostCapabilities()).toBeNull()
+    expect(getProtocolFeatures()).toBeNull()
+
+    // Late response arriving from Host A is dropped.
+    recordHostCapabilities(HOST, keyA, "durable-a")
+    recordProtocolFeatures(["sshForwarding"], keyA, "durable-a")
+    expect(getHostCapabilities()).toBeNull()
+    expect(getProtocolFeatures()).toBeNull()
+    off()
+  })
+
+  it("probes Hello for protocol features even when List already warmed shell capabilities, and invalidates features on hostId change (T06)", async () => {
+    mockChain = ["ws"]
+    setActiveRemoteTransport(remoteTransport())
+    const key = currentTerminalHostKey()
+
+    // Simulate `List` (`HostSnapshot`) warming shell capabilities without `protocolFeatures`.
+    recordHostCapabilities(HOST, key, "durable-1")
+    expect(getHostCapabilities()).toEqual(HOST)
+    expect(getProtocolFeatures()).toBeNull()
+
+    mockDescribeHost.mockImplementationOnce((async (probeKey: string) => {
+      recordHostCapabilities(HOST, probeKey, "durable-1")
+      recordProtocolFeatures(["history", "idempotentSpawn"], probeKey, "durable-1")
+    }) as never)
+
+    await expect(ensureProtocolFeatures()).resolves.toEqual(["history", "idempotentSpawn"])
+    expect(mockDescribeHost).toHaveBeenCalledTimes(1)
+
+    // Subsequent `List` from a restarted/replaced host instance (`durable-2`) clears stale features.
+    recordHostCapabilities(WINDOWS_HOST, key, "durable-2")
+    expect(getHostCapabilities()).toEqual(WINDOWS_HOST)
+    expect(getProtocolFeatures()).toBeNull()
   })
 })

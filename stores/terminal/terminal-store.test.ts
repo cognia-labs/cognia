@@ -1021,3 +1021,86 @@ describe("SSH session rows", () => {
     expect(row?.title).toBe("bash")
   })
 })
+
+describe("replaceSession and adoptReplacedSessionMeta (T04)", () => {
+  it("replaces a split-group anchor or member in-place while preserving appearance, order, and trust", () => {
+    const state = () => useTerminalStore.getState()
+    state().registerSession(baseInfo({ id: "a", profileId: "prof-zsh" }), {
+      launchSpec: {
+        shell: "/bin/zsh",
+        args: ["-l"],
+        rows: 24,
+        cols: 80,
+        sandboxed: true,
+      },
+    })
+    state().registerSession(baseInfo({ id: "b" }))
+    state().registerSession(baseInfo({ id: "c" }))
+    state().addPaneToGroup("a", "b", "col")
+    state().setTabOrder("proj-a", ["c", "a"])
+    state().renameSession("a", "Dev Server")
+    state().setTabAppearance("a", { color: "green", icon: "server" })
+    state().setAgentTrusted("a", true)
+
+    state().replaceSession("a", baseInfo({ id: "a-2", shell: "/bin/zsh" }), {
+      launchSpec: {
+        shell: "/bin/zsh",
+        args: ["-l"],
+        rows: 32,
+        cols: 120,
+        sandboxed: true,
+      },
+    })
+
+    expect(state().sessions["a"]).toBeUndefined()
+    expect(state().sessions["a-2"]).toMatchObject({
+      id: "a-2",
+      customTitle: "Dev Server",
+      tabColor: "green",
+      tabIcon: "server",
+      agentTrusted: true,
+      profileId: "prof-zsh",
+      sandboxed: true,
+    })
+    expect(state().panesForGroup("a-2")).toEqual(["a-2", "b"])
+    expect(state().splitDirection["a-2"]).toBe("col")
+    expect(
+      state()
+        .tabsForProject("proj-a")
+        .map((r) => r.id)
+    ).toEqual(["c", "a-2"])
+
+    // Now replace non-anchor member "b" in-place -> "b-2"
+    state().setFocusedPane("a-2", "b")
+    state().replaceSession("b", baseInfo({ id: "b-2" }))
+    expect(state().panesForGroup("a-2")).toEqual(["a-2", "b-2"])
+    expect(state().focusedPaneByAnchor["a-2"]).toBe("b-2")
+    expect(state().getActiveSession("proj-a")).toBe("a-2")
+  })
+
+  it("adopts replaced SSH session metadata onto a freshly connected session before closing the old one", () => {
+    const state = () => useTerminalStore.getState()
+    state().registerSession(baseInfo({ id: "ssh-old", kind: "ssh", profileId: "ssh-1" }))
+    state().registerSession(baseInfo({ id: "other" }))
+    state().setTabOrder("proj-a", ["ssh-old", "other"])
+    state().renameSession("ssh-old", "Prod Bastion")
+    state().setTabAppearance("ssh-old", { color: "orange", icon: "globe" })
+
+    // Connect registers ssh-new first, then adopts metadata before removing ssh-old.
+    state().registerSession(baseInfo({ id: "ssh-new", kind: "ssh", profileId: "ssh-1" }))
+    state().adoptReplacedSessionMeta("ssh-old", "ssh-new")
+    state().removeSession("ssh-old")
+
+    expect(state().sessions["ssh-new"]).toMatchObject({
+      customTitle: "Prod Bastion",
+      tabColor: "orange",
+      tabIcon: "globe",
+    })
+    expect(
+      state()
+        .tabsForProject("proj-a")
+        .map((r) => r.id)
+    ).toEqual(["ssh-new", "other"])
+    expect(state().getActiveSession("proj-a")).toBe("ssh-new")
+  })
+})

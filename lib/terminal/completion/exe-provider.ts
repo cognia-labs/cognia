@@ -10,6 +10,7 @@
 
 import { isPage } from "@/lib/tauri/companion-paging"
 import { isTauri } from "@/lib/tauri"
+import { listTerminalPathExecutablesForSession } from "@/lib/terminal/remote-api"
 import { shellBuiltins } from "./shell-builtins"
 import { tokenAtCursor } from "./tokenize"
 import type { TerminalCompletionProvider, TerminalCompletionSuggestion } from "./types"
@@ -21,12 +22,15 @@ export interface ExeProviderDeps {
   invoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>
   /** Platform gate — injected for tests. */
   isDesktop?: () => boolean
+  /** Session-bound executable scanner — injected for tests. */
+  listExecutables?: typeof listTerminalPathExecutablesForSession
 }
 
 /** Build the provider (deps injectable for tests). */
 export function createExeCompletionProvider(
   deps: ExeProviderDeps = {}
 ): TerminalCompletionProvider {
+  const hasLegacySeams = Boolean(deps.invoke || deps.isDesktop)
   const isDesktop = deps.isDesktop ?? isTauri
   const doInvoke =
     deps.invoke ??
@@ -34,6 +38,7 @@ export function createExeCompletionProvider(
       const { invoke } = await import("@tauri-apps/api/core")
       return invoke(cmd, args)
     })
+  const listExecutables = deps.listExecutables ?? listTerminalPathExecutablesForSession
 
   return {
     id: "builtin:exe",
@@ -54,15 +59,34 @@ export function createExeCompletionProvider(
       )
 
       let exes: string[] = []
-      if (isDesktop()) {
-        try {
-          const result = (await doInvoke("terminal_list_path_executables", {
-            prefix,
-            pageSize: MAX_EXE_SUGGESTIONS * 2,
-          })) as unknown
-          exes = isPage(result) ? (result.items as string[]) : []
-        } catch {
-          exes = []
+      const canScanSessionPath = !context.sessionKind || context.sessionKind === "localPty"
+      if (canScanSessionPath) {
+        if (deps.listExecutables || !hasLegacySeams) {
+          try {
+            exes = await listExecutables(
+              {
+                kind: context.sessionKind,
+                origin: context.sessionOrigin,
+                remoteHost: context.remoteHost,
+              },
+              {
+                prefix,
+                limit: MAX_EXE_SUGGESTIONS * 2,
+              }
+            )
+          } catch {
+            exes = []
+          }
+        } else if (isDesktop()) {
+          try {
+            const result = (await doInvoke("terminal_list_path_executables", {
+              prefix,
+              pageSize: MAX_EXE_SUGGESTIONS * 2,
+            })) as unknown
+            exes = isPage(result) ? (result.items as string[]) : []
+          } catch {
+            exes = []
+          }
         }
       }
       if (signal.aborted) return []

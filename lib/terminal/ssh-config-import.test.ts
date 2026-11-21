@@ -182,6 +182,71 @@ Host prod
       subject: "certificatefile",
     })
   })
+
+  it("applies OpenSSH first-match-wins across globals, wildcards, negated patterns, and duplicate blocks, and surfaces dropped keys and missing user (T09)", () => {
+    const imported = plan(`
+ServerAliveInterval 30
+
+Host *.corp !bastion.corp
+  User corp-user
+  Port 2202
+  IdentityFile ~/.ssh/id_corp
+
+Host app.corp
+  HostName 10.0.0.12
+  IdentityFile ~/.ssh/id_app
+
+Host app.corp
+  Port 9999
+  User ignored-second-user
+
+Host bastion.corp
+  HostName 10.0.0.1
+  Port invalid-port
+
+Host *.fallback
+  User fallback-user
+
+Host bastion.fallback
+  HostName 10.0.0.2
+
+Host nouser
+  HostName 10.0.0.99
+`)
+    // Duplicate `Host app.corp` blocks merge into one entry; `*.corp` matched
+    // earlier in the file so `User corp-user` and `Port 2202` win over later
+    // blocks, while `IdentityFile` keeps `~/.ssh/id_corp` and flags the second key.
+    const app = imported.entries.find((e) => e.name === "app.corp")!
+    expect(imported.entries.filter((e) => e.name === "app.corp")).toHaveLength(1)
+    expect(app).toMatchObject({
+      host: "10.0.0.12",
+      username: "corp-user",
+      port: 2202,
+      privateKeyPath: "~/.ssh/id_corp",
+    })
+    expect(app.adjustments).toContain("extraIdentityFilesDropped")
+    expect(app.adjustments).not.toContain("missingUsername")
+
+    // `!bastion.corp` excluded bastion from `*.corp`, so it did not inherit `corp-user`
+    // or `2202`, and reported its malformed Port line + missing username.
+    const bastion = imported.entries.find((e) => e.name === "bastion.corp")!
+    expect(bastion).toMatchObject({
+      host: "10.0.0.1",
+      username: "",
+      port: 22,
+    })
+    expect(bastion.adjustments).toContain("missingUsername")
+    expect(imported.notices).toContainEqual(
+      expect.objectContaining({ kind: "malformedPort", subject: "invalid-port" })
+    )
+
+    const fallbackHost = imported.entries.find((e) => e.name === "bastion.fallback")!
+    expect(fallbackHost.username).toBe("fallback-user")
+
+    // When a file has no User anywhere, `missingUsername` warns the user before import.
+    const noUserPlan = plan("Host bare\n  HostName 10.0.0.5\n")
+    expect(noUserPlan.entries[0]?.adjustments).toContain("missingUsername")
+  })
 })
 
 describe("planSshConfigImport", () => {

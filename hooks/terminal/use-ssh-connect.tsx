@@ -213,6 +213,7 @@ export function useSshConnect(options: UseSshConnectOptions = {}): UseSshConnect
 
       if (input.replacesSessionId) {
         const store = useTerminalStore.getState()
+        store.adoptReplacedSessionMeta?.(input.replacesSessionId, outcome.sessionId)
         await killFromDock(input.replacesSessionId, store).catch((error) => {
           console.warn("use-ssh-connect: closing the replaced session failed", error)
         })

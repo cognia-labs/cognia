@@ -31,8 +31,10 @@
 import { ensureHostCapabilities } from "@/lib/terminal/host-capabilities"
 import { ensureTerminalHostProfilesSynced } from "@/lib/terminal/host-profiles"
 import { findProfile, profileToSpawnFields, type TerminalProfile } from "@/lib/terminal/profiles"
+import { getLiveSession } from "@/lib/terminal/session-registry"
 import { resolveDefaultShell } from "@/lib/terminal/shell-detect"
 import { spawnFromDock, type SpawnOutcome } from "@/lib/terminal/spawn-orchestrator"
+import { attachProfileStartupCommands } from "@/lib/terminal/startup-commands"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
@@ -91,6 +93,7 @@ export interface SpawnDefaultTerminalOptions {
 
 interface TerminalSettings {
   defaultShell?: string
+  enableShellIntegration?: boolean
   forceUtf8?: boolean
   sandboxed?: boolean
   profiles?: TerminalProfile[]
@@ -120,6 +123,7 @@ export async function spawnDefaultTerminal(
   })
 
   const terminal = (useSettingsStore.getState().settings?.terminal ?? {}) as TerminalSettings
+  const enableShellIntegration = terminal.enableShellIntegration ?? true
   const forceUtf8 = terminal.forceUtf8 ?? true
   // ADR-0028 Phase 3 (P4.1) — opt-in sandboxed terminal. Off by default.
   const sandboxed = terminal.sandboxed ?? false
@@ -154,7 +158,7 @@ export async function spawnDefaultTerminal(
       } catch (error) {
         return { kind: "error", message: error instanceof Error ? error.message : String(error) }
       }
-      return spawnFromDock({
+      const outcome = await spawnFromDock({
         req: {
           ...fields,
           // A profile carries its own cwd, but the conversation's execution
@@ -166,12 +170,17 @@ export async function spawnDefaultTerminal(
           rows,
           cols,
           projectId: projectId ?? undefined,
-          enableShellIntegration: true,
+          enableShellIntegration,
           forceUtf8,
           sandboxed,
         },
         store: useTerminalStore.getState(),
       })
+      if (outcome.kind === "spawned" && profile?.startupCommands?.length) {
+        const live = getLiveSession(outcome.sessionId)
+        if (live) attachProfileStartupCommands(live, profile.startupCommands)
+      }
+      return outcome
     }
   }
 
@@ -216,7 +225,7 @@ export async function spawnDefaultTerminal(
       cwd,
       env: project?.terminalConfig?.env,
       projectId: projectId ?? undefined,
-      enableShellIntegration: true,
+      enableShellIntegration,
       forceUtf8,
       sandboxed,
     },

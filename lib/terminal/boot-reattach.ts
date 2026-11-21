@@ -69,7 +69,7 @@ async function run(): Promise<void> {
   // settings store, which must never be able to hold the reattach hostage.
   // The spawn path awaits the same shared promise, so a spawn still cannot
   // outrun it.
-  void ensureTerminalHostProfilesSynced()
+  void ensureTerminalHostProfilesSynced({ waitForSettingsLoad: true })
   try {
     const { rehydrateTerminals } = await import("./rehydrate")
     await rehydrateTerminals()

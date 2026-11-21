@@ -28,9 +28,15 @@ import type { SessionInfo } from "./types"
 import { selectTerminalTransportChain } from "./pick-transport"
 import { TerminalSession } from "./session"
 import { getLiveSession, registerLiveSession, unregisterLiveSession } from "./session-registry"
-import { RemoteTerminalSession } from "./transport-ws"
+import { getConfiguredCompanionEndpointResolver, RemoteTerminalSession } from "./transport-ws"
 import type { SpawnRequest } from "./types"
 import { classifyTerminalHostError, type TerminalHostState } from "./host-state"
+import {
+  captureActiveTerminalRemoteTarget,
+  captureSessionRemoteTarget,
+  isRemoteTerminalSessionRow,
+  type BoundTerminalRemoteTarget,
+} from "./host-target"
 
 export type SpawnOutcome =
   | { kind: "spawned"; sessionId: string; shell: string }
@@ -47,7 +53,22 @@ export interface TerminalStoreLike {
    */
   registerSession(
     info: SessionInfo,
-    opts?: { title?: string; agentSpawner?: string; agentSpawnerMessageId?: string }
+    opts?: {
+      title?: string
+      agentSpawner?: string
+      agentSpawnerMessageId?: string
+      launchSpec?: SpawnRequest
+    }
+  ): void
+  replaceSession?(
+    oldId: string,
+    info: SessionInfo,
+    opts?: {
+      title?: string
+      agentSpawner?: string
+      agentSpawnerMessageId?: string
+      launchSpec?: SpawnRequest
+    }
   ): void
   removeSession(id: string): void
   setSessionStatus(id: string, status: "idle" | "running" | "exited"): void
@@ -59,7 +80,7 @@ export interface TerminalStoreLike {
   setHostState?(state: TerminalHostState, message?: string | null): void
   /** Mark a background tab as having new output (activity badge). */
   markTabActivity?(id: string): void
-  /** Used by `restartFromDock` to read the previous row's shell/cwd for respawn. */
+  /** Used by `restartFromDock` to read the previous row's shell/cwd/host/spec for respawn. */
   sessions: Record<
     string,
     {
@@ -69,8 +90,14 @@ export interface TerminalStoreLike {
       projectId: string | null
       extensionId: string | null
       agentSpawner: string | null
+      agentSpawnerMessageId?: string | null
       /** Absent on rows persisted before the field existed: a local PTY. */
       kind?: SessionInfo["kind"]
+      origin?: SessionInfo["origin"]
+      remoteHost?: SessionInfo["remoteHost"]
+      profileId?: string
+      sandboxed?: boolean
+      launchSpec?: SpawnRequest
     }
   >
 }
@@ -118,30 +145,16 @@ export interface SpawnFromDockInput {
    * spawn fails rather than landing on another machine.
    */
   local?: boolean
-}
-
-/**
- * Resolve the active transport's spawn function. Tauri → in-process PTY
- * via `TerminalSession`; Capacitor → LAN-only WebSocket via
- * `RemoteTerminalSession`. Plain browser → null (caller should not
- * have invoked the orchestrator).
- */
-function pickSpawnChain(): Array<(req: SpawnRequest) => Promise<BaseTerminalSession>> {
-  const chain: Array<(req: SpawnRequest) => Promise<BaseTerminalSession>> = []
-  for (const transport of selectTerminalTransportChain()) {
-    switch (transport) {
-      case "tauri-channel":
-        chain.push(TerminalSession.spawn.bind(TerminalSession))
-        break
-      case "ws":
-        chain.push(withRemoteProfile(RemoteTerminalSession.spawn.bind(RemoteTerminalSession)))
-        break
-      case "webrtc":
-        chain.push(withRemoteProfile(RemoteTerminalSession.spawnWan.bind(RemoteTerminalSession)))
-        break
-    }
-  }
-  return chain
+  /**
+   * Pin a remote spawn to an already-captured Host target (used by
+   * `restartFromDock` so restarting a remote tab never drifts to a newly
+   * selected Host — T04, T14). Caller owns `.release()` when passed explicitly.
+   */
+  boundRemoteTarget?: BoundTerminalRemoteTarget
+  /** Replace an existing store row in-place on success (`restartFromDock`). */
+  replacesSessionId?: string
+  /** Skip `dispatchTerminalWillSpawn` when caller already ran the veto gate. */
+  skipWillSpawnHook?: boolean
 }
 
 /** This machine's PTY, and nothing else — for {@link SpawnFromDockInput.local}. */
@@ -150,41 +163,56 @@ function localSpawnChain(): Array<(req: SpawnRequest) => Promise<BaseTerminalSes
 }
 
 /**
- * Make a remote spawn actually spawn what was asked for.
- *
- * A remote Spawn frame carries a profile **id and nothing else** — the host's
- * `spawn_local` refuses non-local identities, so `shell`, `cwd` and `env` are
- * dropped in transit. That is deliberate (it stops a paired device smuggling an
- * environment into a host PTY down the streaming socket), but it also meant the
- * shell a user picked was silently replaced by whatever profile the host
- * happened to have — and on a headless host that was only its bootstrap
- * `default`, so every configured profile id came back "unknown terminal
- * profile".
- *
- * `ensureRemoteSpawnProfile` installs the request as a profile first, through
- * the `terminal.open`-gated sync RPC, and returns the id to name. The socket
- * keeps its narrow contract; the exposure moves to the channel that is
- * capability-checked and audited.
- *
- * Local spawns are untouched: they send the request itself.
+ * Build a bound remote spawn chain (`ws` -> `webrtc`) that:
+ *   1. Captures a single {@link BoundTerminalRemoteTarget} up front (T14),
+ *   2. Synchronizes the exact launch configuration once and fails closed when
+ *      refused instead of falling back to Host `default` (T13, T01, T02),
+ *   3. Shares a single `requestId` across WS -> WebRTC fallback so a lost WS
+ *      acknowledgement reattaches instead of spawning a second PTY (T15).
  */
-function withRemoteProfile(
-  spawn: (req: SpawnRequest) => Promise<BaseTerminalSession>
-): (req: SpawnRequest) => Promise<BaseTerminalSession> {
-  return async (req) => {
-    const { ensureRemoteSpawnProfile, hasTransientTerminalProfile } =
-      await import("./host-profiles")
-    let profileId = req.profileId
-    try {
-      profileId = await ensureRemoteSpawnProfile(req)
-    } catch (error) {
-      // A transient profile carries this exact executable/argv/workspace. A
-      // stale host profile is not a safe fallback when its sync was refused.
-      if (profileId && hasTransientTerminalProfile(profileId)) throw error
-      // A host that refuses the sync may still know the id the caller named;
-      // let the spawn try rather than failing before it has been attempted.
+async function prepareBoundRemoteSpawnChain(
+  req: SpawnRequest,
+  transports: ReadonlyArray<"ws" | "webrtc">,
+  providedTarget?: BoundTerminalRemoteTarget
+): Promise<{
+  chain: Array<(spawnReq: SpawnRequest) => Promise<BaseTerminalSession>>
+  effectiveReq: SpawnRequest
+  release: () => void
+}> {
+  const ownsTarget = !providedTarget
+  const target =
+    providedTarget ??
+    (await captureActiveTerminalRemoteTarget({
+      endpointResolver: getConfiguredCompanionEndpointResolver(),
+    }))
+  try {
+    const { acquireRemoteLaunchProfile } = await import("./host-profiles")
+    const lease = await acquireRemoteLaunchProfile(req, { target })
+    const requestId = crypto.randomUUID()
+    const effectiveReq: SpawnRequest = {
+      ...req,
+      profileId: lease.profileId,
     }
-    return spawn({ ...req, profileId })
+    const spawnOptions = {
+      requestId,
+      logicalProfileId: lease.logicalProfileId,
+    }
+    const chain = transports.map((leg) =>
+      leg === "ws"
+        ? (r: SpawnRequest) => RemoteTerminalSession.spawnBound(r, target, spawnOptions)
+        : (r: SpawnRequest) => RemoteTerminalSession.spawnWanBound(r, target, spawnOptions)
+    )
+    return {
+      chain,
+      effectiveReq,
+      release: () => {
+        lease.release()
+        if (ownsTarget) target.release()
+      },
+    }
+  } catch (error) {
+    if (ownsTarget) target.release()
+    throw error
   }
 }
 
@@ -235,35 +263,73 @@ function withTimeout<T>(
  */
 export async function spawnFromDock(input: SpawnFromDockInput): Promise<SpawnOutcome> {
   const hooks = input.hooks ?? getPluginEventHooks()
-  const spawnChain = input.spawn
+  const configuredTransports =
+    input.spawn || input.transportSpawns || input.local ? [] : selectTerminalTransportChain()
+  const usesBoundRemoteChain =
+    !input.spawn &&
+    !input.transportSpawns &&
+    !input.local &&
+    (Boolean(input.boundRemoteTarget) ||
+      configuredTransports.some((leg) => leg === "ws" || leg === "webrtc"))
+
+  const staticSpawnChain = input.spawn
     ? [input.spawn]
-    : (input.transportSpawns ?? (input.local ? localSpawnChain() : pickSpawnChain()))
-  if (spawnChain.length === 0) {
+    : (input.transportSpawns ??
+      (input.local
+        ? localSpawnChain()
+        : configuredTransports.includes("tauri-channel")
+          ? [TerminalSession.spawn.bind(TerminalSession)]
+          : []))
+
+  if (!usesBoundRemoteChain && staticSpawnChain.length === 0) {
     return {
       kind: "error",
       message: input.local ? "local terminal unavailable" : "terminal transport unavailable",
     }
   }
-  // The host-state badge describes the selected Host. A pinned local spawn
-  // failing while a remote Host is selected says nothing about that Host.
-  const reportsHostState = !input.local || !isRemoteHostActive()
+  // The host-state badge describes the selected Host. A pinned local spawn or a
+  // cross-host session restart says nothing about a different selected Host.
+  const reportsHostState = (!input.local || !isRemoteHostActive()) && !input.boundRemoteTarget
 
   // 1. Veto / mutate gate.
-  const { decision, req } = await hooks.dispatchTerminalWillSpawn(input.req)
-  if (decision === "deny") {
-    return { kind: "denied" }
+  let req = input.req
+  if (!input.skipWillSpawnHook) {
+    const veto = await hooks.dispatchTerminalWillSpawn(input.req)
+    if (veto.decision === "deny") {
+      return { kind: "denied" }
+    }
+    req = veto.req as SpawnRequest
   }
 
   // 2. Spawn. Bounded by a timeout so a wedged backend surfaces as an
   // error the dock can toast, never an indefinite silent hang.
   let session: BaseTerminalSession | null = null
   let lastError: unknown = new Error("terminal transport unavailable")
+  let releaseRemoteResources: (() => void) | null = null
   try {
+    let spawnChain = staticSpawnChain
+    let effectiveReq = req as SpawnRequest
+    if (usesBoundRemoteChain) {
+      const remoteLegs = input.boundRemoteTarget
+        ? (["ws", "webrtc"] as const)
+        : configuredTransports.filter(
+            (leg): leg is "ws" | "webrtc" => leg === "ws" || leg === "webrtc"
+          )
+      const prepared = await prepareBoundRemoteSpawnChain(
+        effectiveReq,
+        remoteLegs,
+        input.boundRemoteTarget
+      )
+      spawnChain = prepared.chain
+      effectiveReq = prepared.effectiveReq
+      releaseRemoteResources = prepared.release
+    }
+
     const attemptTimeout = Math.max(1, Math.floor(SPAWN_TIMEOUT_MS / spawnChain.length))
     for (const spawn of spawnChain) {
       try {
         session = await withTimeout(
-          spawn(req as SpawnRequest),
+          spawn(effectiveReq),
           attemptTimeout,
           "terminal spawn",
           (lateSession) => {
@@ -282,23 +348,29 @@ export async function spawnFromDock(input: SpawnFromDockInput): Promise<SpawnOut
     const message = err instanceof Error ? err.message : String(err)
     if (reportsHostState) input.store.setHostState?.(classifyTerminalHostError(err), message)
     return { kind: "error", message }
+  } finally {
+    releaseRemoteResources?.()
   }
 
-  // 3. Register.
+  // 3. Register (or replace in-place when restarting).
   registerLiveSession(session)
   if (reportsHostState) input.store.setHostState?.("online")
-  input.store.registerSession(
-    session.info,
-    input.agentSpawner || input.title
-      ? {
-          ...(input.title ? { title: input.title } : {}),
-          ...(input.agentSpawner ? { agentSpawner: input.agentSpawner } : {}),
-          ...(input.agentSpawnerMessageId
-            ? { agentSpawnerMessageId: input.agentSpawnerMessageId }
-            : {}),
-        }
-      : undefined
-  )
+  const registerOpts = {
+    ...(input.title ? { title: input.title } : {}),
+    ...(input.agentSpawner ? { agentSpawner: input.agentSpawner } : {}),
+    ...(input.agentSpawnerMessageId ? { agentSpawnerMessageId: input.agentSpawnerMessageId } : {}),
+    launchSpec: req as SpawnRequest,
+  }
+  if (input.replacesSessionId) {
+    if (input.store.replaceSession) {
+      input.store.replaceSession(input.replacesSessionId, session.info, registerOpts)
+    } else {
+      input.store.removeSession(input.replacesSessionId)
+      input.store.registerSession(session.info, registerOpts)
+    }
+  } else {
+    input.store.registerSession(session.info, registerOpts)
+  }
 
   // 4-5. Command capture + integration/exit → store wiring. Shared with
   // the reload-reattach path (`lib/terminal/rehydrate.ts`).
@@ -565,6 +637,7 @@ export async function restartFromDock(input: {
   spawn?: typeof TerminalSession.spawn
   hooks?: ReturnType<typeof getPluginEventHooks>
 }): Promise<SpawnOutcome> {
+  const hooks = input.hooks ?? getPluginEventHooks()
   const previous = input.store.sessions[input.sessionId]
   if (!previous) {
     return { kind: "error", message: `unknown session: ${input.sessionId}` }
@@ -573,22 +646,94 @@ export async function restartFromDock(input: {
   if (previous.kind && previous.kind !== "localPty") {
     return { kind: "error", message: `${RESTART_NOT_LOCAL_PTY}:${previous.kind}` }
   }
-  const respawnReq: SpawnRequest = {
-    shell: previous.shell,
+  // Extension pseudoterminals are driven by plugin callbacks, not a shell argv.
+  if (previous.extensionId) {
+    return { kind: "error", message: `${RESTART_NOT_LOCAL_PTY}:extension` }
+  }
+
+  const spec = previous.launchSpec
+  const baseRespawnReq: SpawnRequest = {
+    ...(spec ? { ...spec } : { shell: previous.shell, rows: input.rows, cols: input.cols }),
+    shell: spec?.shell ?? previous.shell,
+    profileId: spec?.profileId ?? previous.profileId,
     rows: input.rows,
     cols: input.cols,
-    cwd: previous.cwd ?? undefined,
-    projectId: previous.projectId ?? undefined,
-    extensionId: previous.extensionId ?? undefined,
+    cwd: previous.cwd ?? spec?.cwd ?? undefined,
+    projectId: previous.projectId ?? spec?.projectId ?? undefined,
+    extensionId: undefined,
+    sandboxed: spec?.sandboxed ?? previous.sandboxed,
   }
-  await killFromDock(input.sessionId, input.store, input.hooks)
-  return spawnFromDock({
-    req: respawnReq,
-    store: input.store,
-    spawn: input.spawn,
-    hooks: input.hooks,
-    agentSpawner: previous.agentSpawner ?? undefined,
-  })
+
+  // 1. Run plugin pre-spawn veto BEFORE stopping the existing session so a
+  // denied restart leaves the running session untouched (T04).
+  const veto = await hooks.dispatchTerminalWillSpawn(baseRespawnReq)
+  if (veto.decision === "deny") {
+    return { kind: "denied" }
+  }
+  const respawnReq = veto.req as SpawnRequest
+
+  // 2. Pin execution target to the session's original Host BEFORE stopping it
+  // so a global Host switch never moves a restart onto another machine (T04).
+  const isRemoteSession = isRemoteTerminalSessionRow(previous)
+  let boundRemoteTarget: BoundTerminalRemoteTarget | undefined
+  if (!input.spawn) {
+    if (isRemoteSession) {
+      try {
+        boundRemoteTarget = await captureSessionRemoteTarget(
+          previous.remoteHost ?? { id: null, label: "" },
+          { endpointResolver: getConfiguredCompanionEndpointResolver() }
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return { kind: "error", message }
+      }
+    } else if (!isTauri()) {
+      return { kind: "error", message: "local terminal unavailable" }
+    }
+  }
+
+  try {
+    // 3. Stop the old live session strictly without deleting the store row yet.
+    // If termination is refused (e.g. `not_controller` or `host_offline`), keep
+    // both the live handle and the tab intact.
+    const live = getLiveSession(input.sessionId)
+    if (live) {
+      if (!live.isExited && live.info.alive !== false) {
+        try {
+          await withTimeout(live.kill(), SPAWN_TIMEOUT_MS, "terminal stop", () => {})
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { kind: "error", message }
+        }
+        hooks.dispatchTerminalLifecycle({
+          kind: "killed",
+          sessionId: input.sessionId,
+          projectId: live.info.projectId,
+          extensionId: live.info.extensionId,
+        })
+        input.store.setSessionExit(input.sessionId, null)
+      }
+      unregisterLiveSession(input.sessionId)
+    }
+
+    // 4. Spawn replacement on the pinned target and swap the store row in-place.
+    // If replacement fails, the old row remains visible as exited (with its
+    // scrollback and launchSpec intact) so the user can retry.
+    return await spawnFromDock({
+      req: respawnReq,
+      store: input.store,
+      spawn: input.spawn,
+      hooks,
+      agentSpawner: previous.agentSpawner ?? undefined,
+      agentSpawnerMessageId: previous.agentSpawnerMessageId ?? undefined,
+      local: !input.spawn && !isRemoteSession ? true : undefined,
+      boundRemoteTarget,
+      replacesSessionId: input.sessionId,
+      skipWillSpawnHook: true,
+    })
+  } finally {
+    boundRemoteTarget?.release()
+  }
 }
 
 /**

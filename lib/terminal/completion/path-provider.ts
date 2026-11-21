@@ -14,10 +14,14 @@
  * with DEL bytes and writes the rebuilt token.
  */
 
-import { completeTerminalPaths } from "@/lib/terminal/remote-api"
+import { completeTerminalPaths, completeTerminalPathsForSession } from "@/lib/terminal/remote-api"
 import type { ShellKind } from "@/lib/terminal/shell-detect"
 import { shellUsesBackslashEscapes, tokenAtCursor } from "./tokenize"
-import type { TerminalCompletionProvider, TerminalCompletionSuggestion } from "./types"
+import type {
+  TerminalCompletionContext,
+  TerminalCompletionProvider,
+  TerminalCompletionSuggestion,
+} from "./types"
 
 const MAX_PATH_SUGGESTIONS = 8
 
@@ -82,12 +86,26 @@ export function requoteToken(value: string, shell: ShellKind, isDir: boolean): s
 export function createPathCompletionProvider(
   deps: PathProviderDeps = {}
 ): TerminalCompletionProvider {
-  const completePaths =
-    deps.completePaths ??
-    (deps.invoke
-      ? async (options: Parameters<typeof completeTerminalPaths>[0]) =>
-          (await deps.invoke!("terminal_complete_paths", options)) as PathCandidate[]
-      : completeTerminalPaths)
+  const queryPaths = async (
+    context: TerminalCompletionContext,
+    options: Parameters<typeof completeTerminalPaths>[0]
+  ): Promise<PathCandidate[]> => {
+    if (deps.completePaths) return deps.completePaths(options)
+    if (deps.invoke) {
+      return (await deps.invoke("terminal_complete_paths", options)) as PathCandidate[]
+    }
+    if (context.sessionOrigin !== undefined || context.remoteHost !== undefined) {
+      return completeTerminalPathsForSession(
+        {
+          kind: context.sessionKind,
+          origin: context.sessionOrigin,
+          remoteHost: context.remoteHost,
+        },
+        options
+      )
+    }
+    return completeTerminalPaths(options)
+  }
 
   return {
     id: "builtin:path",
@@ -95,6 +113,7 @@ export function createPathCompletionProvider(
     priority: 20,
     getCompletions: async (context, signal) => {
       if (!context.cwd) return []
+      if (context.sessionKind && context.sessionKind !== "localPty") return []
 
       const escapes = shellUsesBackslashEscapes(context.shell)
       const at = tokenAtCursor(context.input, context.cursor, { backslashEscapes: escapes })
@@ -112,7 +131,7 @@ export function createPathCompletionProvider(
 
       let candidates: PathCandidate[]
       try {
-        candidates = await completePaths({
+        candidates = await queryPaths(context, {
           cwd: context.cwd,
           fragment,
           showHidden: false,

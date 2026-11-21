@@ -10,6 +10,8 @@
  * dependencies.
  */
 
+import type { BaseTerminalSession } from "./base-session"
+
 /** Minimum delay between commands when no shell integration is present. */
 export const STARTUP_COMMAND_DELAY_MS = 250
 
@@ -45,11 +47,11 @@ export function runStartupCommands(
   let currentUnsub: (() => void) | null = null
 
   async function execute() {
-    for (const cmd of commands) {
+    for (let i = 0; i < commands.length; i++) {
       if (cancelled) break
-      session.write(cmd + "\r")
+      session.write(commands[i]! + "\r")
 
-      if (commands.indexOf(cmd) < commands.length - 1) {
+      if (i < commands.length - 1) {
         // Wait for prompt or timeout before the next command.
         await waitForReady()
       }
@@ -113,4 +115,43 @@ export function runStartupCommands(
       }
     },
   }
+}
+
+/**
+ * Wire a freshly spawned session to run its profile's `startupCommands`,
+ * gating between commands on OSC 633 `prompt_start` when available and
+ * cancelling automatically if the session exits early (T16).
+ */
+export function attachProfileStartupCommands(
+  session: BaseTerminalSession,
+  commands: readonly string[] | undefined
+): StartupCommandRunner | null {
+  if (!commands || commands.length === 0) return null
+  const hasOsc633 = session.info.integrationCapabilities
+    ? session.info.integrationCapabilities.osc633
+    : true
+  const runner = runStartupCommands(
+    {
+      write: (data) => {
+        void session.write(data)
+      },
+      onNextPrompt: hasOsc633
+        ? (cb) => {
+            const off = session.onIntegration((event) => {
+              if (event.kind === "prompt_start") {
+                off()
+                cb()
+              }
+            })
+            return off
+          }
+        : undefined,
+    },
+    commands
+  )
+  const offExit = session.onExit(() => {
+    runner.cancel()
+    offExit()
+  })
+  return runner
 }

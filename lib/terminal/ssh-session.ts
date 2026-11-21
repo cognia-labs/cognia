@@ -20,7 +20,7 @@ interface SeqEvent {
 }
 
 export class SshTerminalSession extends BaseTerminalSession {
-  readonly info: SessionInfo
+  info: SessionInfo
   readonly profileId: string
   readonly hostKeyStatus: HostKeyStatus
   readonly hostKeyFingerprint: string
@@ -41,6 +41,23 @@ export class SshTerminalSession extends BaseTerminalSession {
           break
         case "exit":
           this.handleExit(event.code ?? null)
+          break
+        case "replay_gap":
+          this.dispatchReplayGap({
+            requestedAfter: event.requested_after,
+            firstAvailable: event.first_available,
+            lastAvailable: event.last_available,
+          })
+          break
+        case "controller_changed":
+          this.dispatchControlState({
+            role: event.controller === "desktop" ? "controller" : "viewer",
+            controllerId: event.controller,
+            reason: event.controller === "desktop" ? undefined : "takeover",
+          })
+          break
+        case "session_snapshot":
+          this.applySessionSnapshot(event.session)
           break
       }
     }

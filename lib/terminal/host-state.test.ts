@@ -16,6 +16,14 @@ describe("terminal host state classification", () => {
       "terminal_remote_access_disabled: remote terminal access is disabled on this host",
       "remote_access_disabled",
     ],
+    [
+      "interactive_approval_required: a current device-bound approval lease is required",
+      "approval_required",
+    ],
+    [
+      "REMOTE_CONSENT_REQUIRED: this device needs approval on the host (code ABCD1234)",
+      "approval_required",
+    ],
   ] as const)("maps %s to %s", (message, expected) => {
     expect(classifyTerminalHostError(new Error(message))).toBe(expected)
   })

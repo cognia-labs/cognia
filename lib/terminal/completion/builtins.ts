@@ -55,6 +55,9 @@ export function buildAutocompleteContext(args: {
   input: string
   platform: ShellPlatform
   projectId?: string | null
+  sessionKind?: TerminalCompletionContext["sessionKind"]
+  sessionOrigin?: TerminalCompletionContext["sessionOrigin"]
+  remoteHost?: TerminalCompletionContext["remoteHost"]
 }): TerminalCompletionContext {
   return {
     sessionId: args.sessionId,
@@ -66,6 +69,9 @@ export function buildAutocompleteContext(args: {
     recentCommands: args.recentCommands,
     platform: args.platform,
     projectId: args.projectId ?? null,
+    sessionKind: args.sessionKind,
+    sessionOrigin: args.sessionOrigin,
+    remoteHost: args.remoteHost,
   }
 }
 

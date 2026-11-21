@@ -1,8 +1,10 @@
 /** @jest-environment jsdom */
 
-let mockIsCapacitor = true
-let mockHasWebCompanionTarget = false
-const mockCompanionStorageLoad = jest.fn(async () => COMPANION_ENDPOINT_FROM_STORAGE)
+/* eslint-disable no-var -- hoisted jest.mock factories run when transitive imports call pickTransport() at module load */
+var mockIsCapacitor = true
+var mockHasWebCompanionTarget = false
+var mockCompanionStorageLoad = jest.fn(async () => COMPANION_ENDPOINT_FROM_STORAGE)
+/* eslint-enable no-var */
 
 jest.mock("@/lib/tauri", () => ({
   isTauri: () => false,
@@ -792,5 +794,48 @@ describe("learning what the host is", () => {
     __setTerminalDataChannelResolverForTesting(async () => null)
     await expect(RemoteTerminalSession.describeHost()).resolves.toBeUndefined()
     expect(getHostCapabilities()).toBeNull()
+  })
+
+  it("sends requestId in Spawn frames and preserves logicalProfileId (T01, T15)", async () => {
+    const pending = RemoteTerminalSession.spawn(
+      { profileId: "__launch:build:123", shell: "/bin/zsh", rows: 24, cols: 80 },
+      { requestId: "req-uuid-1", logicalProfileId: "build" }
+    )
+    await flush()
+    latestSocket().fireOpen()
+    await flush()
+    const spawnFrame = decodeTerminalFrame(latestSocket().sent.at(-1)!)
+    expect(decodeTerminalJson(spawnFrame)).toEqual({
+      profileId: "__launch:build:123",
+      requestId: "req-uuid-1",
+    })
+    latestSocket().fireFrame(
+      TerminalFrameKind.SessionSnapshot,
+      { ...sessionInfo(), profileId: "__launch:build:123" },
+      spawnFrame.sequence
+    )
+    const session = await pending
+    expect(session.info.profileId).toBe("build")
+  })
+
+  it("keeps the attachment live when Kill is rejected by the host (T04)", async () => {
+    const session = await completeSpawn()
+    const exits: Array<number | null> = []
+    session.onExit((code) => exits.push(code))
+
+    const killPromise = session.kill()
+    await flush()
+    const killFrame = decodeTerminalFrame(latestSocket().sent.at(-1)!)
+    expect(killFrame.kind).toBe(TerminalFrameKind.Kill)
+    latestSocket().fireFrame(
+      TerminalFrameKind.Error,
+      { code: "not_controller", message: "viewer cannot terminate session" },
+      killFrame.sequence
+    )
+
+    await expect(killPromise).rejects.toThrow("viewer cannot terminate session")
+    expect(session.isExited).toBe(false)
+    expect(exits).toEqual([])
+    expect(latestSocket().close).not.toHaveBeenCalled()
   })
 })

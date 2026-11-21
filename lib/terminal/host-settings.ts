@@ -11,21 +11,16 @@
  * successful change so the card has something to render before the host
  * answers.
  *
- * The desktop drove them through the local `terminal_host_service` command,
- * which no remote client can reach — and the card's write was wrapped in
- * `isTauri()`, so on web every one of these switches wrote the mirror and
- * nothing else. The remote-access switch was the worst of them: it is the one
- * a user goes looking for when a browser terminal will not connect, and
- * flipping it did nothing at all.
- *
  * Two command names because they are two authorities: the local command also
  * owns `provision` and the login-service registration and stays local, while
- * `terminal_host_configure` is capability-gated on `host.admin` — which owner
- * devices hold and chat-only paired devices do not.
+ * `terminal_host_configure` is capability-gated on `host.admin` and requires an
+ * interactive approval lease (`adminLease`).
  */
 
 import { transport } from "@/lib/tauri"
+import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 
+import { callWithTerminalAdminLease } from "./host-target"
 import { selectTerminalTransportChain } from "./pick-transport"
 
 export interface TerminalHostSettingsWire {
@@ -53,6 +48,11 @@ function isLocalHost(): boolean {
   return selectTerminalTransportChain()[0] === "tauri-channel"
 }
 
+function defaultHostAdminCall(): typeof transport.call {
+  const remote = getActiveRemoteTransport()
+  return remote ? remote.call.bind(remote) : transport.call.bind(transport)
+}
+
 /** User-initiated recovery only. Never call from boot, polling or remote clients. */
 export async function authorizeTerminalHostCredentials(
   call: typeof transport.call = transport.call.bind(transport)
@@ -63,22 +63,19 @@ export async function authorizeTerminalHostCredentials(
 
 /**
  * The host's settings as it actually has them.
- *
- * Returns `null` when there is no host to ask (web standalone) or it cannot be
- * reached — callers fall back to the mirror rather than rendering nothing,
- * which is the pre-existing behaviour, but they must not present a fallback as
- * the host's answer.
  */
 export async function readTerminalHostSettings(
-  call: typeof transport.call = transport.call.bind(transport)
+  call?: typeof transport.call
 ): Promise<TerminalHostSettingsWire | null> {
   if (!terminalHostReachable()) return null
+  const rpcCall = call ?? defaultHostAdminCall()
   try {
     const status = isLocalHost()
-      ? await call<TerminalHostStatusWire>("terminal_host_service", {
+      ? await rpcCall<TerminalHostStatusWire>("terminal_host_service", {
           action: { kind: "status" },
         })
-      : await call<TerminalHostStatusWire>("terminal_host_status", {})
+      : // invoke-parity-exempt: companion-only RPC dispatched over remote transport
+        await rpcCall<TerminalHostStatusWire>("terminal_host_status", {})
     return status?.settings ?? null
   } catch {
     return null
@@ -92,14 +89,16 @@ export async function readTerminalHostSettings(
  */
 export async function writeTerminalHostSettings(
   settings: TerminalHostSettingsWire,
-  call: typeof transport.call = transport.call.bind(transport)
+  call?: typeof transport.call
 ): Promise<void> {
   if (!terminalHostReachable()) {
     throw new Error("no terminal host is reachable from this shell")
   }
   if (isLocalHost()) {
-    await call("terminal_host_service", { action: { kind: "configure", settings } })
+    const invoke = call ?? transport.call.bind(transport)
+    await invoke("terminal_host_service", { action: { kind: "configure", settings } })
     return
   }
-  await call("terminal_host_configure", { settings })
+  const target = call ? { call } : (getActiveRemoteTransport() ?? transport)
+  await callWithTerminalAdminLease("terminal_host_configure", { settings }, { transport: target })
 }

@@ -29,7 +29,7 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
-import type { SessionInfo } from "@/lib/terminal/types"
+import type { SessionInfo, SpawnRequest } from "@/lib/terminal/types"
 import { runTerminalDockGesture } from "@/lib/terminal/dock-gesture"
 import type { TerminalHostState } from "@/lib/terminal/host-state"
 import type { TabColorPreset, TabIconPreset } from "@/lib/terminal/tab-appearance"
@@ -88,6 +88,14 @@ export interface TerminalSessionRow {
    * reload needs it to rebuild the right session class.
    */
   profileId?: string
+  /** Whether the process runs inside the OS sandbox. */
+  sandboxed?: boolean
+  /**
+   * Original launch specification (shell, args, env, flags, sandbox) retained
+   * in memory so `restartFromDock` can recreate the session without losing
+   * per-launch configuration (T04).
+   */
+  launchSpec?: SpawnRequest
   origin: "local" | "remote"
   status: TerminalTabStatus
   exitCode: number | null
@@ -338,8 +346,33 @@ export interface TerminalStoreState {
 
   registerSession: (
     info: SessionInfo,
-    opts?: { title?: string; agentSpawner?: string; agentSpawnerMessageId?: string }
+    opts?: {
+      title?: string
+      agentSpawner?: string
+      agentSpawnerMessageId?: string
+      launchSpec?: SpawnRequest
+    }
   ) => void
+  /**
+   * Replace an existing session id in-place (Restart / SSH Reconnect), keeping
+   * custom title, tab colour/icon, agent trust, tab order, active pointer, and
+   * split-pane slot intact (T04).
+   */
+  replaceSession: (
+    oldId: string,
+    info: SessionInfo,
+    opts?: {
+      title?: string
+      agentSpawner?: string
+      agentSpawnerMessageId?: string
+      launchSpec?: SpawnRequest
+    }
+  ) => void
+  /**
+   * Transfer tab metadata, split-pane membership, and tab order from `oldId` to
+   * an already-registered `newId` before `oldId` is closed (used by SSH reconnect).
+   */
+  adoptReplacedSessionMeta: (oldId: string, newId: string) => void
   removeSession: (id: string) => void
   setSessionStatus: (id: string, status: TerminalTabStatus) => void
   setSessionExit: (id: string, exitCode: number | null) => void
@@ -682,6 +715,7 @@ export const useTerminalStore = create<TerminalStoreState>()(
       },
 
       registerSession: (info, opts = {}) => {
+        const launchSpec = opts.launchSpec ? { ...opts.launchSpec } : undefined
         const row: TerminalSessionRow = {
           id: info.id,
           hostId: info.hostId ?? null,
@@ -694,6 +728,8 @@ export const useTerminalStore = create<TerminalStoreState>()(
           shell: info.shell,
           kind: info.kind,
           profileId: info.profileId,
+          sandboxed: info.sandboxed ?? launchSpec?.sandboxed,
+          launchSpec,
           origin: info.origin,
           status: "idle",
           exitCode: null,
@@ -715,6 +751,167 @@ export const useTerminalStore = create<TerminalStoreState>()(
             [info.projectId ?? ""]: info.id,
           },
         }))
+      },
+
+      replaceSession: (oldId, info, opts = {}) => {
+        const existing = get().sessions[oldId]
+        if (!existing) {
+          get().registerSession(info, opts)
+          return
+        }
+        set((s) => {
+          const oldRow = s.sessions[oldId]
+          if (!oldRow) return s
+          const launchSpec = opts.launchSpec ? { ...opts.launchSpec } : oldRow.launchSpec
+          const nextRow: TerminalSessionRow = {
+            id: info.id,
+            hostId: info.hostId ?? null,
+            remoteHost: info.remoteHost,
+            controllerId: info.currentController ?? null,
+            projectId: info.projectId,
+            extensionId: info.extensionId,
+            title: opts.title ?? makeTitle(info),
+            customTitle: oldRow.customTitle,
+            shell: info.shell,
+            kind: info.kind,
+            profileId: info.profileId ?? oldRow.profileId,
+            sandboxed: info.sandboxed ?? launchSpec?.sandboxed ?? oldRow.sandboxed,
+            launchSpec,
+            origin: info.origin,
+            status: "idle",
+            exitCode: null,
+            cwd: null,
+            createdAt: oldRow.createdAt,
+            agentTrusted: oldRow.agentTrusted,
+            tabColor: oldRow.tabColor,
+            tabIcon: oldRow.tabIcon,
+            agentSpawner: opts.agentSpawner !== undefined ? opts.agentSpawner : oldRow.agentSpawner,
+            agentSpawnerMessageId:
+              opts.agentSpawnerMessageId !== undefined
+                ? opts.agentSpawnerMessageId
+                : oldRow.agentSpawnerMessageId,
+            promptBoundaries: [],
+            lastCommands: [],
+            historyOpen: oldRow.historyOpen,
+          }
+
+          const sessions = { ...s.sessions }
+          delete sessions[oldId]
+          sessions[info.id] = nextRow
+
+          const splitPanes: Record<string, string[]> = {}
+          for (const [anchor, members] of Object.entries(s.splitPanes)) {
+            const nextAnchor = anchor === oldId ? info.id : anchor
+            splitPanes[nextAnchor] = members.map((m) => (m === oldId ? info.id : m))
+          }
+
+          const splitDirection: Record<string, "row" | "col"> = {}
+          for (const [anchor, dir] of Object.entries(s.splitDirection)) {
+            splitDirection[anchor === oldId ? info.id : anchor] = dir
+          }
+
+          const focusedPaneByAnchor: Record<string, string> = {}
+          for (const [anchor, focused] of Object.entries(s.focusedPaneByAnchor)) {
+            focusedPaneByAnchor[anchor === oldId ? info.id : anchor] =
+              focused === oldId ? info.id : focused
+          }
+
+          const activeSessionIdByProject = { ...s.activeSessionIdByProject }
+          for (const [proj, active] of Object.entries(activeSessionIdByProject)) {
+            if (active === oldId) activeSessionIdByProject[proj] = info.id
+          }
+          const projectKey = info.projectId ?? ""
+          if (!isGroupMember(info.id, splitPanes) && !activeSessionIdByProject[projectKey]) {
+            activeSessionIdByProject[projectKey] = info.id
+          }
+
+          const tabOrder: Record<string, string[]> = {}
+          for (const [proj, ids] of Object.entries(s.tabOrder)) {
+            tabOrder[proj] = ids.map((entry) => (entry === oldId ? info.id : entry))
+          }
+
+          const outputThrottled = { ...s.outputThrottled }
+          delete outputThrottled[oldId]
+          const tabActivity = { ...s.tabActivity }
+          delete tabActivity[oldId]
+
+          return {
+            sessions,
+            splitPanes,
+            splitDirection,
+            focusedPaneByAnchor,
+            activeSessionIdByProject,
+            tabOrder,
+            outputThrottled,
+            tabActivity,
+          }
+        })
+      },
+
+      adoptReplacedSessionMeta: (oldId, newId) => {
+        if (oldId === newId) return
+        set((s) => {
+          const oldRow = s.sessions[oldId]
+          const newRow = s.sessions[newId]
+          if (!oldRow || !newRow) return s
+          const sessions = {
+            ...s.sessions,
+            [newId]: {
+              ...newRow,
+              customTitle: oldRow.customTitle,
+              tabColor: oldRow.tabColor,
+              tabIcon: oldRow.tabIcon,
+              agentTrusted: oldRow.agentTrusted,
+              createdAt: oldRow.createdAt,
+              historyOpen: oldRow.historyOpen,
+            },
+          }
+
+          const splitPanes: Record<string, string[]> = {}
+          for (const [anchor, members] of Object.entries(s.splitPanes)) {
+            const nextAnchor = anchor === oldId ? newId : anchor
+            splitPanes[nextAnchor] = members
+              .map((m) => (m === oldId ? newId : m))
+              .filter((m, idx, arr) => m !== nextAnchor && arr.indexOf(m) === idx)
+            if (splitPanes[nextAnchor].length === 0) delete splitPanes[nextAnchor]
+          }
+
+          const splitDirection: Record<string, "row" | "col"> = {}
+          for (const [anchor, dir] of Object.entries(s.splitDirection)) {
+            const nextAnchor = anchor === oldId ? newId : anchor
+            if (splitPanes[nextAnchor]) splitDirection[nextAnchor] = dir
+          }
+
+          const focusedPaneByAnchor: Record<string, string> = {}
+          for (const [anchor, focused] of Object.entries(s.focusedPaneByAnchor)) {
+            const nextAnchor = anchor === oldId ? newId : anchor
+            focusedPaneByAnchor[nextAnchor] = focused === oldId ? newId : focused
+          }
+
+          const activeSessionIdByProject = { ...s.activeSessionIdByProject }
+          const projectKey = newRow.projectId ?? ""
+          const groupAnchor = resolveAnchor(newId, splitPanes)
+          activeSessionIdByProject[projectKey] = groupAnchor
+
+          const tabOrder: Record<string, string[]> = {}
+          for (const [proj, ids] of Object.entries(s.tabOrder)) {
+            const remapped: string[] = []
+            for (const entry of ids) {
+              const candidate = entry === oldId ? newId : entry
+              if (!remapped.includes(candidate)) remapped.push(candidate)
+            }
+            tabOrder[proj] = remapped
+          }
+
+          return {
+            sessions,
+            splitPanes,
+            splitDirection,
+            focusedPaneByAnchor,
+            activeSessionIdByProject,
+            tabOrder,
+          }
+        })
       },
 
       removeSession: (id) => {

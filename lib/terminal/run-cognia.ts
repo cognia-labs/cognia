@@ -15,6 +15,8 @@
  * downloaded / dev / `~/.cargo/bin` locations into the child PATH).
  */
 
+import { useSettingsStore } from "@/stores/settings"
+
 import { spawnFromDock, type TerminalStoreLike } from "./spawn-orchestrator"
 import { getLiveSession } from "./session-registry"
 import { resolveDefaultShell } from "./shell-detect"
@@ -65,13 +67,19 @@ async function launchDockCommand(
   // Surface the dock so the spawned tab is visible while the command runs.
   input.store.setPanelOpen(true)
 
+  const enableShellIntegration =
+    (
+      useSettingsStore.getState().settings?.terminal as
+        { enableShellIntegration?: boolean } | undefined
+    )?.enableShellIntegration ?? true
+
   const outcome = await spawn({
     req: {
       shell,
       cwd: input.cwd,
       rows: 24,
       cols: 80,
-      enableShellIntegration: true,
+      enableShellIntegration,
     },
     store: input.store,
   })

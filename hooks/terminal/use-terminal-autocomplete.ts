@@ -23,6 +23,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { classifyCommand } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
+import { getHostCapabilities } from "@/lib/terminal/host-capabilities"
 import { detectPlatform } from "@/lib/terminal/shell-detect"
 import { AutocompleteController, type AutocompleteView } from "@/lib/terminal/completion/controller"
 import {
@@ -106,14 +107,21 @@ export function useTerminalAutocomplete(sessionId: string): UseTerminalAutocompl
       getContext: (input) => {
         const row = useTerminalStore.getState().sessions[sessionId]
         if (!row) return null
+        if (row.kind === "serial" || row.kind === "extension" || row.extensionId) return null
+        const isRemote =
+          row.origin === "remote" || (row.remoteHost !== undefined && row.remoteHost !== null)
+        const hostPlatform = isRemote ? getHostCapabilities()?.platform : undefined
         return buildAutocompleteContext({
           sessionId,
           shellPath: row.shell,
           cwd: row.cwd ?? null,
           recentCommands: (row.lastCommands ?? []).map((c) => c.cmd),
           input,
-          platform: detectPlatform(),
+          platform: hostPlatform ?? detectPlatform(),
           projectId: row.projectId ?? null,
+          sessionKind: row.kind,
+          sessionOrigin: row.origin,
+          remoteHost: row.remoteHost ?? null,
         })
       },
       // Registry fan-out plus the safety floor: a candidate whose resulting

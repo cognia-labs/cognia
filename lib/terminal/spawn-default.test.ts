@@ -238,10 +238,25 @@ describe("spawnDefaultTerminal", () => {
     expect(lastRequest().shell).toBe("/usr/bin/fish")
   })
 
-  it("passes forceUtf8 and sandboxed through from settings", async () => {
-    withSettings({ forceUtf8: false, sandboxed: true })
+  it("passes enableShellIntegration, forceUtf8, and sandboxed through from settings (T07)", async () => {
+    withSettings({ enableShellIntegration: false, forceUtf8: false, sandboxed: true })
     await spawnDefaultTerminal()
-    expect(lastRequest()).toMatchObject({ forceUtf8: false, sandboxed: true })
+    expect(lastRequest()).toMatchObject({
+      enableShellIntegration: false,
+      forceUtf8: false,
+      sandboxed: true,
+    })
+
+    withSettings({
+      enableShellIntegration: false,
+      defaultProfileId: "p1",
+      profiles: [{ id: "p1", name: "Zsh", shell: "/bin/zsh" }],
+    })
+    await spawnDefaultTerminal()
+    expect(lastRequest()).toMatchObject({
+      profileId: "p1",
+      enableShellIntegration: false,
+    })
   })
 
   it("honours an explicit null projectId for a project-less tab", async () => {

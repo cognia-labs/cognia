@@ -58,13 +58,29 @@ describe("runQuickFixAction", () => {
   })
 
   it("does not re-run the command when the port could not be freed", async () => {
-    const fx = effects()
+    const onError = jest.fn()
+    const fx = { ...effects(), onError }
     fx.killPort.mockRejectedValue(new Error("missing_capability"))
     await runQuickFixAction(
       { type: "kill-port", port: 3000, command: "pnpm dev" } as QuickFixAction,
       fx
     )
     expect(fx.write).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "missing_capability" }),
+      expect.objectContaining({ type: "kill-port", port: 3000 })
+    )
+  })
+
+  it("does not re-run the command when killPort signals zero PIDs (T03)", async () => {
+    const onPortNotFreed = jest.fn()
+    const fx = { ...effects(), killPort: jest.fn(async () => []), onPortNotFreed }
+    await runQuickFixAction(
+      { type: "kill-port", port: 3000, command: "pnpm dev" } as QuickFixAction,
+      fx
+    )
+    expect(fx.write).not.toHaveBeenCalled()
+    expect(onPortNotFreed).toHaveBeenCalledWith(3000)
   })
 
   // A failed quick fix must never take the terminal with it.

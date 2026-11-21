@@ -119,11 +119,27 @@ describe("writeTerminalHostSettings", () => {
     })
   })
 
-  it("configures through the host.admin RPC against a remote host", async () => {
+  it("configures through the host.admin RPC with an approval lease against a remote host", async () => {
     mockChain = ["webrtc"]
-    const call = jest.fn(async () => undefined)
+    const call = jest.fn(async (cmd: string) => {
+      if (cmd === "host_admin_lease_issue") {
+        return {
+          token: "lease-cfg",
+          operations: ["terminal_host_configure"],
+          expiresAt: Date.now() + 60_000,
+        }
+      }
+      return undefined
+    })
     await writeTerminalHostSettings(SETTINGS, call as never)
-    expect(call).toHaveBeenCalledWith("terminal_host_configure", { settings: SETTINGS })
+    expect(call).toHaveBeenCalledWith("host_admin_lease_issue", {
+      operations: ["terminal_host_configure"],
+      ttlSeconds: 120,
+    })
+    expect(call).toHaveBeenCalledWith("terminal_host_configure", {
+      settings: SETTINGS,
+      adminLease: "lease-cfg",
+    })
   })
 
   // Must throw, not resolve: the caller mirrors the change locally on success,
