@@ -156,6 +156,45 @@ describe("mutations persist (only after load)", () => {
     expect(row?.additionalDirs).toEqual(["/z"])
   })
 
+  it("updateProjectDurably resolves only once the row is written", async () => {
+    await useProjectStore.getState().load()
+    const p = useProjectStore.getState().createProject({ name: "Durable", rootDir: "/d" })
+    const saved = await useProjectStore
+      .getState()
+      .updateProjectDurably(p.id, { customInstructions: "Use pnpm." })
+    expect(saved.customInstructions).toBe("Use pnpm.")
+    expect((await getDb().projects.get(p.id))?.customInstructions).toBe("Use pnpm.")
+  })
+
+  // F13: a failed write used to be swallowed while the caller reported success.
+  it("updateProjectDurably rejects a failed write and puts the previous row back", async () => {
+    await useProjectStore.getState().load()
+    const p = useProjectStore.getState().createProject({ name: "Durable", rootDir: "/d" })
+    await waitForCondition(async () => expect(await getDb().projects.get(p.id)).toBeDefined())
+    const quota = Object.assign(new Error("quota"), { name: "QuotaExceededError" })
+    const put = jest.spyOn(getDb().projects, "put").mockRejectedValueOnce(quota)
+    try {
+      await expect(
+        useProjectStore.getState().updateProjectDurably(p.id, { customInstructions: "Lost?" })
+      ).rejects.toBe(quota)
+    } finally {
+      put.mockRestore()
+    }
+    const inMemory = useProjectStore.getState().projects.find((x) => x.id === p.id)
+    expect(inMemory?.customInstructions).toBeUndefined()
+    expect((await getDb().projects.get(p.id))?.customInstructions).toBeUndefined()
+  })
+
+  it("updateProjectDurably refuses an unknown workspace and an unhydrated store", async () => {
+    await expect(
+      useProjectStore.getState().updateProjectDurably("nope", { description: "x" })
+    ).rejects.toThrow("not loaded")
+    await useProjectStore.getState().load()
+    await expect(
+      useProjectStore.getState().updateProjectDurably("nope", { description: "x" })
+    ).rejects.toThrow("not found")
+  })
+
   it("deleteProject removes the persisted row and points the active pointer at Default", async () => {
     await useProjectStore.getState().load()
     const p = useProjectStore.getState().createProject({ name: "Delta" })

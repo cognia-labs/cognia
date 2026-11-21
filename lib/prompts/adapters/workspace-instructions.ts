@@ -66,7 +66,11 @@ export const workspaceInstructionsPromptAdapter: OwnerPromptAdapter = {
         `Workspace instructions are limited to ${WORKSPACE_INSTRUCTIONS_MAX_CHARS} characters.`
       )
     }
-    useProjectStore.getState().updateProject(id, { customInstructions: text.trim() || undefined })
-    return (await workspaceInstructionsPromptAdapter.read(key, ctx))!
+    // Saved means written: the editor reports success only once the row is on
+    // disk, and keeps the edit when the write fails.
+    const saved = await useProjectStore
+      .getState()
+      .updateProjectDurably(id, { customInstructions: text.trim() || undefined })
+    return { key, text: saved.customInstructions ?? "" }
   },
 }

@@ -91,6 +91,13 @@ interface ProjectState {
   createProject: (options: CreateProjectOptions) => Project
   updateProject: (id: string, updates: ProjectUpdates) => void
   /**
+   * `updateProject` for a caller that reports success: resolves once the row
+   * is written to the database and rejects when that write fails, putting the
+   * previous row back in memory (unless something changed it meanwhile).
+   * Rejects for an unknown id, or before `load()` has hydrated the store.
+   */
+  updateProjectDurably: (id: string, updates: ProjectUpdates) => Promise<Project>
+  /**
    * Remove a workspace. `"detach"` (the default) hands its contents to Default;
    * `"delete-data"` destroys them. Removing a workspace is not the same
    * decision as destroying the conversations that were in it, so the caller
@@ -135,6 +142,30 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   const persistActive = (id: string | null): void => {
     if (!get().loaded) return
     void persistActiveProjectId(id).catch(() => {})
+  }
+  // Merge `updates` into one row in memory and return the new row, or
+  // `undefined` for an unknown id. Persisting is the caller's business.
+  const applyUpdate = (id: string, updates: ProjectUpdates): Project | undefined => {
+    let updated: Project | undefined
+    set((state) => ({
+      projects: state.projects.map((p) => {
+        if (p.id !== id) return p
+        let merged = { ...p, ...updates, updatedAt: nowDate() }
+        if (updates.roots != null) {
+          merged = { ...merged, roots: normalizeRoots(updates.roots) }
+        } else if (updates.rootDir !== undefined || updates.additionalDirs !== undefined) {
+          // Legacy-shape update: rebuild roots from the (possibly partial) mirrors.
+          const rootDir = updates.rootDir !== undefined ? updates.rootDir : p.rootDir
+          const additionalDirs =
+            updates.additionalDirs !== undefined ? updates.additionalDirs : p.additionalDirs
+          merged = { ...merged, roots: rootsFromLegacy(rootDir, additionalDirs) }
+        }
+        const next = syncDerivedDirFields(merged)
+        updated = next
+        return next
+      }),
+    }))
+    return updated
   }
   // Archive, tags and knowledge edits are row updates like any other, so a
   // plugin watching `onProjectUpdate` has to hear about them too. Silent on an
@@ -249,29 +280,28 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     },
 
     updateProject: (id, updates) => {
-      let updated: Project | undefined
-      set((state) => ({
-        projects: state.projects.map((p) => {
-          if (p.id !== id) return p
-          let merged = { ...p, ...updates, updatedAt: nowDate() }
-          if (updates.roots != null) {
-            merged = { ...merged, roots: normalizeRoots(updates.roots) }
-          } else if (updates.rootDir !== undefined || updates.additionalDirs !== undefined) {
-            // Legacy-shape update: rebuild roots from the (possibly partial) mirrors.
-            const rootDir = updates.rootDir !== undefined ? updates.rootDir : p.rootDir
-            const additionalDirs =
-              updates.additionalDirs !== undefined ? updates.additionalDirs : p.additionalDirs
-            merged = { ...merged, roots: rootsFromLegacy(rootDir, additionalDirs) }
-          }
-          const next = syncDerivedDirFields(merged)
-          updated = next
-          return next
-        }),
-      }))
+      const updated = applyUpdate(id, updates)
       if (updated) {
         persist(id)
         void getPluginEventHooks().dispatchProjectUpdate(updated, updates as Partial<Project>)
       }
+    },
+
+    updateProjectDurably: async (id, updates) => {
+      if (!get().loaded) throw new Error("Workspaces are not loaded yet.")
+      const previous = get().projects.find((p) => p.id === id)
+      if (!previous) throw new Error(`Workspace ${id} not found`)
+      const updated = applyUpdate(id, updates)!
+      try {
+        await putProject(updated)
+      } catch (error) {
+        set((state) => ({
+          projects: state.projects.map((p) => (p === updated ? previous : p)),
+        }))
+        throw error
+      }
+      void getPluginEventHooks().dispatchProjectUpdate(updated, updates as Partial<Project>)
+      return updated
     },
 
     deleteProject: async (id, mode = "detach") => {

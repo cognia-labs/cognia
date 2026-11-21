@@ -1,5 +1,11 @@
 /** @jest-environment jsdom */
 
+const mockPutProject = jest.fn(async (_project: unknown) => {})
+jest.mock("@/lib/db/projects", () => ({
+  ...jest.requireActual("@/lib/db/projects"),
+  putProject: (project: unknown) => mockPutProject(project),
+}))
+
 import { WORKSPACE_INSTRUCTIONS_MAX_CHARS } from "@/lib/workspace/workspace-instructions"
 import { useProjectStore } from "@/stores/project/project-store"
 import { resourceKey } from "../resources"
@@ -10,11 +16,15 @@ const ctx = { workspace: { id: "ws-1", name: "Repo", roots: ["/repo"] } }
 
 function seed(customInstructions?: string) {
   useProjectStore.setState({
+    loaded: true,
     projects: [{ id: "ws-1", name: "Repo (store)", customInstructions, roots: ["/repo"] }],
   } as never)
 }
 
-beforeEach(() => seed())
+beforeEach(() => {
+  mockPutProject.mockReset().mockResolvedValue(undefined)
+  seed()
+})
 
 describe("workspaceInstructionsPromptAdapter", () => {
   it("lists nothing without a workspace and one entry with one", async () => {
@@ -43,6 +53,29 @@ describe("workspaceInstructionsPromptAdapter", () => {
     await adapter.save!(KEY, "   ", undefined, ctx)
     expect(useProjectStore.getState().projects[0].customInstructions).toBeUndefined()
     expect((await adapter.read(KEY, ctx))?.text).toBe("")
+  })
+
+  it("writes the row before reporting the save", async () => {
+    await adapter.save!(KEY, "Use pnpm.", undefined, ctx)
+    expect(mockPutProject).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ws-1", customInstructions: "Use pnpm." })
+    )
+  })
+
+  // F13: the save used to resolve with the new text while the write failed.
+  it("fails the save when the row cannot be written, keeping the stored text", async () => {
+    seed("Old.")
+    mockPutProject.mockRejectedValueOnce(
+      Object.assign(new Error("quota"), { name: "QuotaExceededError" })
+    )
+    await expect(adapter.save!(KEY, "New.", undefined, ctx)).rejects.toThrow("quota")
+    expect(useProjectStore.getState().projects[0].customInstructions).toBe("Old.")
+    expect((await adapter.read(KEY, ctx))?.text).toBe("Old.")
+  })
+
+  it("refuses a workspace known only from the context, which it cannot write", async () => {
+    useProjectStore.setState({ projects: [] } as never)
+    await expect(adapter.save!(KEY, "x", undefined, ctx)).rejects.toThrow("not found")
   })
 
   it("refuses text over the workspace limit and an unknown workspace", async () => {
