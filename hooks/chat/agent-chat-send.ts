@@ -2844,10 +2844,11 @@ export async function runChatSend(
   if (!hasNoToolSurface && executionContext?.location === "local") {
     sendOptions = { ...sendOptions, cwd: executionContext.projectRoot }
   }
-  // ADR-0130 hard cost ceiling. Evaluated BEFORE any durable acceptance so
-  // a refused overrun leaves no half-open run behind. Fails open on any
-  // infrastructure error — the user asked for a spending limit, not for
-  // their app to stop when Dexie hiccups.
+  // ADR-0130 cost ceiling. Evaluated BEFORE any durable acceptance so a
+  // refused overrun leaves no half-open run behind. A ceiling it cannot read
+  // asks the user rather than letting the turn through unchecked, and near a
+  // ceiling the turn holds its scopes until it settles, so the next turn is
+  // judged on what this one booked.
   //
   // The synchronous pre-check keeps the default install (no ceiling
   // configured) on exactly the code path it had before: no extra await, no
@@ -2863,6 +2864,7 @@ export async function runChatSend(
           ...(sendOptions.provider ? { providerId: sendOptions.provider } : {}),
           ...(session?.projectId ? { projectId: session.projectId } : {}),
           runId: executionRunId,
+          sessionId,
         })
       : null
   if (budgetDecision && !budgetDecision.allowed) {
@@ -3862,6 +3864,7 @@ export async function runChatSend(
           ...(sendOptions.provider ? { providerId: sendOptions.provider } : {}),
           ...(session?.projectId ? { projectId: session.projectId } : {}),
           runId: executionRunId,
+          sessionId,
         })
         if (!lateBudget.allowed) {
           explainedSendFailure = {

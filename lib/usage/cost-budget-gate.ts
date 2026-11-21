@@ -10,6 +10,21 @@
  * rollup, announces any newly-crossed threshold, and — at 100% — blocks until
  * a human approves exactly one more request.
  *
+ * ## What it can and cannot promise
+ *
+ * The spend it reads is BOOKED spend: a request still running has not been
+ * booked yet. Far from a ceiling that is harmless. Near one, two requests let
+ * in together could each fit and still overrun it together ($9 of $10 booked,
+ * two $2 requests: $13). So once a scope is past its warning level, a request
+ * that passes holds that scope until its turn settles, and the next request
+ * waits for it and re-reads the spend. It is still not a hard cap — a single
+ * request can cost more than the room left, which only a reservation can
+ * prevent (Router + Fusion holds the money before the call, ADR-0188).
+ *
+ * A configured ceiling whose spend or settings cannot be read asks a person
+ * (or, for work nobody waits on, counts as exhausted); it never lets the
+ * request through unchecked.
+ *
  * ## Why blocking, when the routing budget only warns
  *
  * `ProviderConstraint.dailyCostBudget` is advisory by design: it deprioritises
@@ -38,15 +53,28 @@ import {
   notifyCostBudgetThreshold,
   readCostBudgetSpend,
   requestCostBudgetOverride,
+  requestUncheckedBudgetApproval,
 } from "./cost-budget-runtime"
+import {
+  blockingCostBudgetHold,
+  releaseCostBudgetHolds,
+  resetCostBudgetHolds,
+  takeCostBudgetHold,
+  waitForCostBudgetHold,
+} from "./cost-budget-holds"
 
 export interface EnforceCostBudgetInput {
   /** Provider about to be charged. Scopes the per-provider ceilings. */
   providerId?: string
   /** Workspace the send belongs to. Scopes the per-project ceilings (ADR-0204). */
   projectId?: string
-  /** Run this send belongs to — labels the HITL gate. */
+  /**
+   * Run this send belongs to — labels the HITL gate, and owns the in-flight
+   * hold near a ceiling, released when that run's turn settles.
+   */
   runId?: string
+  /** Session the run belongs to: a session's turn settling releases its holds too. */
+  sessionId?: string
   signal?: AbortSignal
   /** Injected for tests; defaults to the persisted settings singleton. */
   loadSettings?: () => Promise<AppSettings | undefined>
@@ -66,9 +94,19 @@ const ALLOW_UNCONFIGURED: CostBudgetGateResult = { allowed: true, verdict: null,
 /** Highest level already announced per scope, per process. */
 const announced = new Map<string, CostBudgetLevel>()
 
-/** Test-only: forget which thresholds have been announced. */
+/** Test-only: forget which thresholds have been announced, and every hold. */
 export function __resetCostBudgetGateForTesting(): void {
   announced.clear()
+  resetCostBudgetHolds()
+}
+
+/** The hydrated settings' policy: what a failed settings read falls back to. */
+function hydratedPolicy(): CostBudgetPolicy {
+  try {
+    return useSettingsStore.getState().settings?.costBudget ?? {}
+  } catch {
+    return {}
+  }
 }
 
 /**
@@ -97,10 +135,10 @@ async function defaultLoadSettings(): Promise<AppSettings | undefined> {
 /**
  * Evaluate the budget for one prospective send.
  *
- * Fails OPEN on any infrastructure error. A budget that blocks work because
- * Dexie hiccuped is worse than one that misses a single overrun: the user did
- * not ask for their app to stop, they asked for it not to overspend, and the
- * next send re-evaluates against a rollup that includes this one.
+ * With no ceiling configured it allows without reading anything. With one
+ * configured and the settings or the spend unreadable, it asks a person to let
+ * this one request through unchecked: the user asked not to overspend, and a
+ * request nobody checked is the one that can.
  */
 export async function enforceCostBudget(
   input: EnforceCostBudgetInput = {}
@@ -110,52 +148,95 @@ export async function enforceCostBudget(
     const settings = await (input.loadSettings ?? defaultLoadSettings)()
     policy = settings?.costBudget ?? {}
   } catch {
-    return ALLOW_UNCONFIGURED
+    if (!hasAnyCostCeiling(hydratedPolicy())) return ALLOW_UNCONFIGURED
+    return allowUnchecked(input)
   }
   if (!hasAnyCostCeiling(policy)) return ALLOW_UNCONFIGURED
 
-  let verdicts: CostBudgetVerdict[]
-  try {
-    const spend = await readCostBudgetSpend(
-      input.now,
-      input.projectId && projectHasCostCeiling(policy, input.projectId) ? [input.projectId] : []
-    )
-    verdicts = evaluateCostBudget(policy, spend, input.providerId, input.projectId)
-  } catch {
-    return ALLOW_UNCONFIGURED
+  for (;;) {
+    let verdicts: CostBudgetVerdict[]
+    try {
+      const spend = await readCostBudgetSpend(
+        input.now,
+        input.projectId && projectHasCostCeiling(policy, input.projectId) ? [input.projectId] : []
+      )
+      verdicts = evaluateCostBudget(policy, spend, input.providerId, input.projectId)
+    } catch {
+      return allowUnchecked(input)
+    }
+
+    // Near a ceiling the booked spend misses whatever is still running: wait
+    // for the request holding the scope, then judge again on what it booked.
+    const near = verdicts.filter((verdict) => verdict.level !== "ok").map((v) => v.scopeKey)
+    const holder = near.length > 0 ? blockingCostBudgetHold(near, input.runId) : undefined
+    if (holder) {
+      try {
+        await waitForCostBudgetHold(holder, input.signal)
+      } catch {
+        return { allowed: false, verdict: worstCostBudgetVerdict(verdicts), blockedBy: [] }
+      }
+      continue
+    }
+    // Held from here, before any await, so a concurrent request waits for
+    // this one's approval and its spend instead of racing it.
+    if (near.length > 0 && input.runId) {
+      takeCostBudgetHold({
+        runId: input.runId,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        scopes: near,
+      })
+    }
+
+    await announceThresholds(verdicts, input.now)
+
+    const blocking = exceededScopes(verdicts)
+    const worst = worstCostBudgetVerdict(verdicts)
+    if (blocking.length === 0) return { allowed: true, verdict: worst, blockedBy: [] }
+
+    // Every blocking scope needs its own answer: approving the daily overrun
+    // does not authorise blowing through the monthly one.
+    for (const verdict of blocking) {
+      const decision = await requestCostBudgetOverride(verdict, {
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      })
+      if (!decision.approved) {
+        if (input.runId) releaseCostBudgetHolds({ runId: input.runId })
+        return { allowed: false, verdict: worst, blockedBy: blocking }
+      }
+    }
+    return { allowed: true, verdict: worst, blockedBy: [] }
   }
+}
 
-  await announceThresholds(verdicts, input.now)
-
-  const blocking = exceededScopes(verdicts)
-  const worst = worstCostBudgetVerdict(verdicts)
-  if (blocking.length === 0) return { allowed: true, verdict: worst, blockedBy: [] }
-
-  // Every blocking scope needs its own answer: approving the daily overrun does
-  // not authorise blowing through the monthly one.
-  for (const verdict of blocking) {
-    const decision = await requestCostBudgetOverride(verdict, {
-      ...(input.runId ? { runId: input.runId } : {}),
-      ...(input.signal ? { signal: input.signal } : {}),
-    })
-    if (!decision.approved) return { allowed: false, verdict: worst, blockedBy: blocking }
-  }
-  return { allowed: true, verdict: worst, blockedBy: [] }
+/** A ceiling is configured but could not be checked: one person-approved request. */
+async function allowUnchecked(input: EnforceCostBudgetInput): Promise<CostBudgetGateResult> {
+  const decision = await requestUncheckedBudgetApproval({
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+  })
+  return { allowed: decision.approved, verdict: null, blockedBy: [] }
 }
 
 /**
  * Whether a send now would exceed a ceiling, without asking anyone. For work
  * nobody is waiting on, such as a background job's wake (ADR-0249 §4): such
- * work is not started over budget, and no person is asked to approve it.
- * Fails open like {@link enforceCostBudget}.
+ * work is not started over budget, and no person is asked to approve it. A
+ * configured ceiling that cannot be read counts as exhausted, the same answer
+ * {@link enforceCostBudget} gets from a person who is not there.
  */
 export async function isCostBudgetExhausted(
   input: Pick<EnforceCostBudgetInput, "providerId" | "projectId" | "loadSettings" | "now"> = {}
 ): Promise<boolean> {
+  let policy: CostBudgetPolicy
   try {
     const settings = await (input.loadSettings ?? defaultLoadSettings)()
-    const policy = settings?.costBudget ?? {}
-    if (!hasAnyCostCeiling(policy)) return false
+    policy = settings?.costBudget ?? {}
+  } catch {
+    return hasAnyCostCeiling(hydratedPolicy())
+  }
+  if (!hasAnyCostCeiling(policy)) return false
+  try {
     const spend = await readCostBudgetSpend(
       input.now,
       input.projectId && projectHasCostCeiling(policy, input.projectId) ? [input.projectId] : []
@@ -165,7 +246,7 @@ export async function isCostBudgetExhausted(
       0
     )
   } catch {
-    return false
+    return true
   }
 }
 

@@ -60131,10 +60131,11 @@
     "usageCost": {
       "budget": {
         "addProvider": "添加提供商",
+        "bookedSpendNote": "这些上限只计算已入账的花费：仍在进行的请求结束后才计入。超过提醒线后，请求会逐个执行，每次都按上一次实际花费重新判断，但单次请求仍可能超出上限。如需在每次调用前预留额度的硬上限，请使用 Router + Fusion。",
         "criticalAtLabel": "严重阈值（%）",
         "dailyLabel": "每日上限（美元）",
         "dailyShort": "每日（美元）",
-        "description": "美元硬性上限。与「提供商」下的路由预算不同，达到上限会拦截下一次请求，直到你确认放行。",
+        "description": "按已入账花费计算的美元上限。与「提供商」下的路由预算不同，达到上限会拦截下一次请求，直到你确认放行。",
         "hardBlockHint": "达到 {warn}% 与 {critical}% 时提醒；达到 100% 时下一次请求会被拦截，需你确认后才放行一次。",
         "monthlyLabel": "每月上限（美元）",
         "monthlyShort": "每月（美元）",

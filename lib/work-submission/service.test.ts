@@ -647,6 +647,13 @@ describe("settleWorkSubmission", () => {
     expect(await listExecutionRunEvents("run-1")).toEqual([])
   })
 
+  it("frees the cost-budget scopes its run held near a ceiling (F08)", async () => {
+    const holds = await import("@/lib/usage/cost-budget-holds")
+    holds.takeCostBudgetHold({ runId: "run-1", scopes: ["day:*"] })
+    await settleWorkSubmission({ submissionId: "submission-1", outcome: "completed", now: NOW })
+    expect(holds.blockingCostBudgetHold(["day:*"], "run-next")).toBeUndefined()
+  })
+
   it("still seals the ledger when the run row is missing", async () => {
     await getDb().executionRuns.delete("run-1")
     expect(
@@ -668,6 +675,13 @@ describe("settleWorkSubmissionWithoutTranscript", () => {
       true
     )
     expect((await getWorkSubmission("submission-1"))?.terminalOutcome).toBe("cancelled")
+  })
+
+  it("frees the cost-budget scopes its run held near a ceiling (F08)", async () => {
+    const holds = await import("@/lib/usage/cost-budget-holds")
+    holds.takeCostBudgetHold({ runId: "run-1", scopes: ["day:*"] })
+    await settleWorkSubmissionWithoutTranscript("submission-1", "failed", NOW + 1)
+    expect(holds.blockingCostBudgetHold(["day:*"], "run-next")).toBeUndefined()
   })
 })
 

@@ -176,14 +176,48 @@ export async function notifyCostBudgetThreshold(
   )
 }
 
-/** Approval key for one blocked scope. */
-export function costBudgetApprovalKey(scopeKey: string): ApprovalKey {
-  return { scope: COST_BUDGET_APPROVAL_SCOPE, id: scopeKey }
+/**
+ * Approval key for one blocked request on one scope. Each request asks on its
+ * own key: approval resolves every waiter on a key, so a key shared by two
+ * runs let one "allow one more request" through twice.
+ */
+function costBudgetApprovalKey(scopeKey: string, requestId: string): ApprovalKey {
+  return { scope: COST_BUDGET_APPROVAL_SCOPE, id: `${scopeKey}#${requestId}` }
 }
 
 export interface CostBudgetOverrideResult {
   approved: boolean
   scopeKey: string
+}
+
+/** Scope key of the gate that asks to let a request through unchecked. */
+export const UNCHECKED_BUDGET_SCOPE_KEY = "unchecked"
+
+/** Open one request's gate and wait; a rejection and an abort both answer no. */
+async function askForBudgetGate(
+  scopeKey: string,
+  gate: { title: string; body: string },
+  options: { runId?: string; signal?: AbortSignal }
+): Promise<CostBudgetOverrideResult> {
+  const key = costBudgetApprovalKey(scopeKey, crypto.randomUUID())
+  const gates = usePendingGatesStore.getState()
+  gates.open({
+    key,
+    gateType: "budget",
+    title: gate.title,
+    body: gate.body,
+    runId: options.runId ?? scopeKey,
+    teamId: "",
+  })
+  try {
+    const decision = await waitForDecision(key, options.signal)
+    return { approved: decision.outcome === "approve", scopeKey }
+  } catch {
+    // Aborted (turn cancelled, page closed) — never read as approval.
+    return { approved: false, scopeKey }
+  } finally {
+    usePendingGatesStore.getState().close(key)
+  }
 }
 
 /**
@@ -196,23 +230,29 @@ export async function requestCostBudgetOverride(
   verdict: CostBudgetVerdict,
   options: { runId?: string; signal?: AbortSignal } = {}
 ): Promise<CostBudgetOverrideResult> {
-  const key = costBudgetApprovalKey(verdict.scopeKey)
-  const gates = usePendingGatesStore.getState()
-  gates.open({
-    key,
-    gateType: "budget",
-    title: `${scopeLabel(verdict)} exhausted`,
-    body: `${money(verdict.usedUsd)} of ${money(verdict.limitUsd)} used. Approve to allow one more request.`,
-    runId: options.runId ?? verdict.scopeKey,
-    teamId: "",
-  })
-  try {
-    const decision = await waitForDecision(key, options.signal)
-    return { approved: decision.outcome === "approve", scopeKey: verdict.scopeKey }
-  } catch {
-    // Aborted (turn cancelled, page closed) — never read as approval.
-    return { approved: false, scopeKey: verdict.scopeKey }
-  } finally {
-    usePendingGatesStore.getState().close(key)
-  }
+  return askForBudgetGate(
+    verdict.scopeKey,
+    {
+      title: `${scopeLabel(verdict)} exhausted`,
+      body: `${money(verdict.usedUsd)} of ${money(verdict.limitUsd)} used. Approve to allow one more request.`,
+    },
+    options
+  )
+}
+
+/**
+ * A ceiling is configured but its settings or spend could not be read: ask
+ * whether this one request may go out without being checked.
+ */
+export async function requestUncheckedBudgetApproval(
+  options: { runId?: string; signal?: AbortSignal } = {}
+): Promise<CostBudgetOverrideResult> {
+  return askForBudgetGate(
+    UNCHECKED_BUDGET_SCOPE_KEY,
+    {
+      title: "Budget could not be checked",
+      body: "A spending limit is set, but today's spend could not be read. Approve to allow this one request without checking it.",
+    },
+    options
+  )
 }

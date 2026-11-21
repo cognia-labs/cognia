@@ -32,6 +32,12 @@ describe("spending limits", () => {
     expect(screen.getByLabelText("Monthly limit (USD)")).toHaveValue(null)
   })
 
+  it("says the limits count booked spend and a hard cap needs Router + Fusion (F08)", () => {
+    render(<UsageCostSection />)
+    expect(screen.getByText(/count spend already booked/)).toHaveTextContent("Router + Fusion")
+    expect(screen.queryByText(/^Hard USD ceilings/)).not.toBeInTheDocument()
+  })
+
   it("shows the persisted ceilings", () => {
     storeState.settings = { id: "singleton", costBudget: { dailyUsd: 25, monthlyUsd: 400 } }
     render(<UsageCostSection />)

@@ -463,6 +463,16 @@ describe("settleChatTurn", () => {
     ).toBe(false)
   }, 30_000)
 
+  it("frees the session's cost-budget holds even when no durable turn is open (F08)", async () => {
+    const holds = await import("@/lib/usage/cost-budget-holds")
+    // An external-agent turn: no submission, only its session.
+    holds.takeCostBudgetHold({ runId: "run-external", sessionId: "session-x", scopes: ["day:*"] })
+    expect(await settleChatTurnForSession("session-x", { outcome: "completed" }, deps())).toBe(
+      false
+    )
+    expect(holds.blockingCostBudgetHold(["day:*"], "run-next")).toBeUndefined()
+  }, 30_000)
+
   it("reports a session-lookup failure rather than throwing into the event loop", async () => {
     const onError = jest.fn()
     const spy = jest.spyOn(getDb().workSubmissions, "orderBy").mockImplementation(() => {

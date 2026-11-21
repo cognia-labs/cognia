@@ -10,6 +10,8 @@ const requestOverrideMock = jest.fn<
   Promise<{ approved: boolean; scopeKey: string }>,
   [CostBudgetVerdict, unknown]
 >()
+const requestUncheckedMock = jest.fn<Promise<{ approved: boolean; scopeKey: string }>, [unknown]>()
+const mockHydratedSettings: { costBudget?: AppSettings["costBudget"] } = {}
 
 jest.mock("./cost-budget-runtime", () => ({
   readCostBudgetSpend: (now?: number, projectIds?: readonly string[]) =>
@@ -18,6 +20,11 @@ jest.mock("./cost-budget-runtime", () => ({
     notifyThresholdMock(verdict, now),
   requestCostBudgetOverride: (verdict: CostBudgetVerdict, options: unknown) =>
     requestOverrideMock(verdict, options),
+  requestUncheckedBudgetApproval: (options: unknown) => requestUncheckedMock(options),
+}))
+
+jest.mock("@/stores/settings", () => ({
+  useSettingsStore: { getState: () => ({ settings: mockHydratedSettings }) },
 }))
 
 import {
@@ -25,6 +32,7 @@ import {
   isCostBudgetExhausted,
   __resetCostBudgetGateForTesting,
 } from "./cost-budget-gate"
+import { COST_BUDGET_HOLD_TTL_MS, releaseCostBudgetHolds } from "./cost-budget-holds"
 
 function settings(costBudget?: AppSettings["costBudget"]): () => Promise<AppSettings> {
   return async () => ({ id: "singleton", ...(costBudget ? { costBudget } : {}) }) as AppSettings
@@ -35,7 +43,12 @@ beforeEach(() => {
   readSpendMock.mockReset().mockResolvedValue({ dayUsd: 0, monthUsd: 0 })
   notifyThresholdMock.mockReset().mockResolvedValue(undefined)
   requestOverrideMock.mockReset().mockResolvedValue({ approved: false, scopeKey: "day:*" })
+  requestUncheckedMock.mockReset().mockResolvedValue({ approved: false, scopeKey: "unchecked" })
+  delete mockHydratedSettings.costBudget
 })
+
+/** Let pending promise chains run without advancing time. */
+const flush = () => new Promise((resolve) => setImmediate(resolve))
 
 describe("enforceCostBudget — nothing configured", () => {
   it("allows without even reading the rollup", async () => {
@@ -163,24 +176,105 @@ describe("enforceCostBudget — at the ceiling", () => {
 })
 
 describe("enforceCostBudget — failure modes", () => {
-  it("fails open when settings cannot be read", async () => {
-    await expect(
-      enforceCostBudget({
-        loadSettings: async () => {
-          throw new Error("dexie is gone")
-        },
-      })
-    ).resolves.toMatchObject({ allowed: true })
+  const brokenSettings = async (): Promise<AppSettings> => {
+    throw new Error("dexie is gone")
+  }
+
+  it("allows when settings cannot be read and no ceiling is known", async () => {
+    await expect(enforceCostBudget({ loadSettings: brokenSettings })).resolves.toMatchObject({
+      allowed: true,
+    })
+    expect(requestUncheckedMock).not.toHaveBeenCalled()
   })
 
-  it("fails open when the rollup cannot be read", async () => {
+  it("asks a person when a known ceiling's settings cannot be read (F08)", async () => {
+    mockHydratedSettings.costBudget = { dailyUsd: 10 }
+    await expect(
+      enforceCostBudget({ loadSettings: brokenSettings, runId: "run-1" })
+    ).resolves.toMatchObject({ allowed: false })
+    expect(requestUncheckedMock).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }))
+    requestUncheckedMock.mockResolvedValue({ approved: true, scopeKey: "unchecked" })
+    await expect(enforceCostBudget({ loadSettings: brokenSettings })).resolves.toMatchObject({
+      allowed: true,
+    })
+  })
+
+  it("asks a person instead of letting an unread spend through (F08)", async () => {
     readSpendMock.mockRejectedValue(new Error("dexie is gone"))
-    // Blocking work because storage hiccuped is worse than missing one overrun:
-    // the next send re-evaluates against a rollup that includes this one.
     await expect(
       enforceCostBudget({ loadSettings: settings({ dailyUsd: 10 }) })
-    ).resolves.toMatchObject({ allowed: true })
+    ).resolves.toMatchObject({ allowed: false })
+    expect(requestUncheckedMock).toHaveBeenCalledTimes(1)
     expect(requestOverrideMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("enforceCostBudget — requests in flight near a ceiling (F08)", () => {
+  afterEach(() => jest.useRealTimers())
+
+  it("lets one request at a time past the warning level, judged on what the last booked", async () => {
+    const load = settings({ dailyUsd: 10 })
+    readSpendMock.mockResolvedValue({ dayUsd: 9, monthUsd: 9 })
+    await expect(
+      enforceCostBudget({ loadSettings: load, runId: "run-a", sessionId: "s-a" })
+    ).resolves.toMatchObject({ allowed: true })
+    let second: Awaited<ReturnType<typeof enforceCostBudget>> | undefined
+    void enforceCostBudget({ loadSettings: load, runId: "run-b" }).then((r) => (second = r))
+    await flush()
+    // The second request waits: run-a's spend is not booked yet.
+    expect(second).toBeUndefined()
+    // run-a books $2 and its turn settles; run-b is judged on $11.
+    readSpendMock.mockResolvedValue({ dayUsd: 11, monthUsd: 11 })
+    releaseCostBudgetHolds({ sessionId: "s-a" })
+    await flush()
+    await flush()
+    expect(second).toMatchObject({ allowed: false })
+    expect(requestOverrideMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("never holds a scope far from its ceiling", async () => {
+    readSpendMock.mockResolvedValue({ dayUsd: 1, monthUsd: 1 })
+    const load = settings({ dailyUsd: 10 })
+    await enforceCostBudget({ loadSettings: load, runId: "run-a" })
+    await expect(enforceCostBudget({ loadSettings: load, runId: "run-b" })).resolves.toMatchObject({
+      allowed: true,
+    })
+  })
+
+  it("frees the scope when the holder is declined, and stops waiting on abort", async () => {
+    readSpendMock.mockResolvedValue({ dayUsd: 12, monthUsd: 12 })
+    const load = settings({ dailyUsd: 10 })
+    // Declined: its hold goes with it, so the next request asks on its own.
+    await enforceCostBudget({ loadSettings: load, runId: "run-a" })
+    await enforceCostBudget({ loadSettings: load, runId: "run-b" })
+    expect(requestOverrideMock).toHaveBeenCalledTimes(2)
+
+    requestOverrideMock.mockResolvedValue({ approved: true, scopeKey: "day:*" })
+    await enforceCostBudget({ loadSettings: load, runId: "run-c" })
+    const controller = new AbortController()
+    const waiting = enforceCostBudget({
+      loadSettings: load,
+      runId: "run-d",
+      signal: controller.signal,
+    })
+    await flush()
+    controller.abort()
+    await expect(waiting).resolves.toMatchObject({ allowed: false })
+  })
+
+  it("stops serializing on a hold whose settle never arrives", async () => {
+    jest.useFakeTimers({ doNotFake: ["setImmediate"] })
+    readSpendMock.mockResolvedValue({ dayUsd: 9, monthUsd: 9 })
+    const load = settings({ dailyUsd: 10 })
+    await enforceCostBudget({ loadSettings: load, runId: "run-lost" })
+    let second: Awaited<ReturnType<typeof enforceCostBudget>> | undefined
+    void enforceCostBudget({ loadSettings: load, runId: "run-next" }).then((r) => (second = r))
+    await flush()
+    expect(second).toBeUndefined()
+    jest.advanceTimersByTime(COST_BUDGET_HOLD_TTL_MS)
+    await flush()
+    await flush()
+    expect(second).toMatchObject({ allowed: true })
   })
 })
 
@@ -223,15 +317,24 @@ describe("isCostBudgetExhausted", () => {
     expect(notifyThresholdMock).not.toHaveBeenCalled()
   })
 
-  it("is false under the ceiling, with nothing configured, and when the rollup fails", async () => {
+  it("is false under the ceiling and with nothing configured", async () => {
     readSpendMock.mockResolvedValue({ dayUsd: 2, monthUsd: 2 })
     await expect(isCostBudgetExhausted({ loadSettings: settings({ dailyUsd: 10 }) })).resolves.toBe(
       false
     )
     await expect(isCostBudgetExhausted({ loadSettings: settings() })).resolves.toBe(false)
+  })
+
+  it("counts a configured ceiling it cannot read as exhausted (F08)", async () => {
     readSpendMock.mockRejectedValue(new Error("dexie"))
     await expect(isCostBudgetExhausted({ loadSettings: settings({ dailyUsd: 10 }) })).resolves.toBe(
-      false
+      true
     )
+    const broken = async (): Promise<AppSettings> => {
+      throw new Error("dexie")
+    }
+    await expect(isCostBudgetExhausted({ loadSettings: broken })).resolves.toBe(false)
+    mockHydratedSettings.costBudget = { dailyUsd: 10 }
+    await expect(isCostBudgetExhausted({ loadSettings: broken })).resolves.toBe(true)
   })
 })

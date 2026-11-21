@@ -39,6 +39,7 @@ import {
   listWorkSubmissions,
 } from "@/lib/db/work-submissions"
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
+import { releaseCostBudgetHolds } from "@/lib/usage/cost-budget-holds"
 import type { WorkAttachmentRefV1, WorkItemRefV1 } from "@cognia/agent-config-types/work-submission"
 
 import {
@@ -309,6 +310,10 @@ export async function settleChatTurnForSession(
   input: Omit<SettleChatTurnInput, "runId">,
   deps: ChatAdapterDeps = {}
 ): Promise<boolean> {
+  // Every terminal of a session's turn lands here, with or without a durable
+  // submission (external-agent and legacy turns have none): the cost-budget
+  // scopes it held near a ceiling are free for the next request.
+  releaseCostBudgetHolds({ sessionId })
   if (!resolve(deps)) return false
   try {
     const [open] = await listWorkSubmissions({

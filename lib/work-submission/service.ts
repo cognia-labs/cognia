@@ -61,12 +61,15 @@ import {
   bindExecutionContextBundle,
   countOpenWorkSubmissions,
   findWorkSubmissionByIdempotencyKey,
+  getWorkSubmission,
   settleWorkSubmissionRow,
   WORK_SUBMISSION_PAYLOAD_TTL_MS,
   type ExecutionContextBundleRow,
   type WorkInputBatchRow,
   type WorkSubmissionRow,
 } from "@/lib/db/work-submissions"
+
+import { releaseCostBudgetHolds } from "@/lib/usage/cost-budget-holds"
 
 import { releaseSettledSubmissionAttachments } from "./attachment-release"
 import { sealWorkSubmissionPayload, type WorkSubmissionCryptoDeps } from "./crypto"
@@ -521,6 +524,7 @@ export async function settleWorkSubmission(
   // Captured inside the transaction, told after it: the issue trail is not
   // part of the settlement write and must never hold it open.
   let linkedIssue: { issueId: string; source: string } | null = null
+  let settledRunId: string | null = null
 
   const sealed = await withDbReopenRetry(() => {
     const db = getDb()
@@ -547,6 +551,7 @@ export async function settleWorkSubmission(
       async (): Promise<boolean> => {
         const row = await db.workSubmissions.get(input.submissionId)
         if (!row || row.dispatchState === "settled") return false
+        settledRunId = row.runId
         if (row.workItemKind === "issue" && row.workItemId) {
           linkedIssue = { issueId: row.workItemId, source: row.sourceKind }
         }
@@ -588,6 +593,8 @@ export async function settleWorkSubmission(
 
   // The staged uploads a member's turn held for a retry are dead weight now.
   if (sealed) await releaseSettledSubmissionAttachments(input.submissionId)
+  // So are the cost-budget scopes its run held near a ceiling.
+  if (sealed && settledRunId) releaseCostBudgetHolds({ runId: settledRunId })
   if (sealed && linkedIssue) {
     const { issueId, source } = linkedIssue
     void import("@/lib/issues/work-item-link")
@@ -623,6 +630,10 @@ export async function settleWorkSubmissionWithoutTranscript(
   errorCode?: string
 ): Promise<boolean> {
   const sealed = await settleWorkSubmissionRow(submissionId, outcome, now, errorCode)
-  if (sealed) await releaseSettledSubmissionAttachments(submissionId)
+  if (sealed) {
+    await releaseSettledSubmissionAttachments(submissionId)
+    const runId = (await getWorkSubmission(submissionId).catch(() => undefined))?.runId
+    if (runId) releaseCostBudgetHolds({ runId })
+  }
   return sealed
 }

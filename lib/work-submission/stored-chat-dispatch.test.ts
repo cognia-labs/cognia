@@ -191,7 +191,29 @@ describe("stored chat dispatch", () => {
           providerId: "openai",
           projectId: "project-1",
           runId: "run-1",
+          sessionId: "session-1",
         })
+        expect(mockSendPrompt).not.toHaveBeenCalled()
+      }, 30_000)
+
+      it("checks the ceiling on a plain replay too, which no run ever held (F24)", async () => {
+        const plain = { cwd: "/original/workspace", provider: "openai", model: "gpt-5" }
+        const row = await seedReplayableSubmission(plain)
+        const prepare = jest.fn()
+        const enforce = jest.fn().mockResolvedValue(blocked)
+
+        await expect(
+          createStoredChatDispatch({
+            loadKey,
+            prepareRouterFusionSend: prepare,
+            isCostBudgetConfigured: () => true,
+            enforceCostBudget: enforce as never,
+          })(row)
+        ).resolves.toEqual({ status: "failed", errorCode: "cost_budget_exceeded" })
+        expect(prepare).not.toHaveBeenCalled()
+        expect(enforce).toHaveBeenCalledWith(
+          expect.objectContaining({ providerId: "openai", runId: "run-1" })
+        )
         expect(mockSendPrompt).not.toHaveBeenCalled()
       }, 30_000)
 

@@ -23,13 +23,14 @@ import { approve, reject, __resetForTesting } from "@/lib/runtime/approval-bus"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 import { useProjectStore } from "@/stores/project/project-store"
 import {
-  costBudgetApprovalKey,
   localWindowStarts,
   monthStartDay,
   notifyCostBudgetThreshold,
   readCostBudgetSpend,
   readProjectSpend,
   requestCostBudgetOverride,
+  requestUncheckedBudgetApproval,
+  UNCHECKED_BUDGET_SCOPE_KEY,
   COST_BUDGET_APPROVAL_SCOPE,
 } from "./cost-budget-runtime"
 
@@ -177,24 +178,40 @@ describe("notifyCostBudgetThreshold", () => {
 })
 
 describe("requestCostBudgetOverride", () => {
+  const openGates = () => usePendingGatesStore.getState().gates
+
   it("opens a budget gate and resolves approved", async () => {
     const pending = requestCostBudgetOverride(verdict({ level: "exceeded" }), { runId: "run-1" })
-    const gate = usePendingGatesStore.getState().gates[0]
+    const gate = openGates()[0]
     expect(gate).toMatchObject({
       gateType: "budget",
-      key: { scope: COST_BUDGET_APPROVAL_SCOPE, id: "day:*" },
+      key: { scope: COST_BUDGET_APPROVAL_SCOPE, id: expect.stringMatching(/^day:\*#/) },
       runId: "run-1",
     })
-    approve(costBudgetApprovalKey("day:*"))
+    approve(gate.key)
     await expect(pending).resolves.toEqual({ approved: true, scopeKey: "day:*" })
     // The gate closes either way so the modal host does not keep it open.
-    expect(usePendingGatesStore.getState().gates).toHaveLength(0)
+    expect(openGates()).toHaveLength(0)
   })
 
   it("resolves not-approved on rejection", async () => {
     const pending = requestCostBudgetOverride(verdict({ level: "exceeded" }))
-    reject(costBudgetApprovalKey("day:*"), "too expensive")
+    reject(openGates()[0].key, "too expensive")
     await expect(pending).resolves.toEqual({ approved: false, scopeKey: "day:*" })
+  })
+
+  it("lets one approval through exactly one of two blocked requests (F22)", async () => {
+    const first = requestCostBudgetOverride(verdict({ level: "exceeded" }), { runId: "run-a" })
+    const second = requestCostBudgetOverride(verdict({ level: "exceeded" }), { runId: "run-b" })
+    const gates = openGates()
+    expect(gates.map((gate) => gate.runId)).toEqual(["run-a", "run-b"])
+    expect(gates[0].key).not.toEqual(gates[1].key)
+    expect(approve(gates[0].key)).toBe(1)
+    await expect(first).resolves.toEqual({ approved: true, scopeKey: "day:*" })
+    // The other request still waits on its own question.
+    expect(openGates().map((gate) => gate.runId)).toEqual(["run-b"])
+    reject(openGates()[0].key)
+    await expect(second).resolves.toEqual({ approved: false, scopeKey: "day:*" })
   })
 
   it("resolves not-approved when the caller aborts", async () => {
@@ -205,7 +222,21 @@ describe("requestCostBudgetOverride", () => {
     controller.abort()
     // A caller that gave up waiting must never be told the spend was authorised.
     await expect(pending).resolves.toEqual({ approved: false, scopeKey: "day:*" })
-    expect(usePendingGatesStore.getState().gates).toHaveLength(0)
+    expect(openGates()).toHaveLength(0)
+  })
+})
+
+describe("requestUncheckedBudgetApproval", () => {
+  it("asks to let one request through unchecked, and says no on rejection", async () => {
+    const pending = requestUncheckedBudgetApproval({ runId: "run-u" })
+    const gate = usePendingGatesStore.getState().gates[0]
+    expect(gate).toMatchObject({ gateType: "budget", runId: "run-u" })
+    expect(gate.title).toBe("Budget could not be checked")
+    reject(gate.key)
+    await expect(pending).resolves.toEqual({
+      approved: false,
+      scopeKey: UNCHECKED_BUDGET_SCOPE_KEY,
+    })
   })
 })
 

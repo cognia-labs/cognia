@@ -1,11 +1,12 @@
 {
   "budget": {
     "title": "Spending limits",
-    "description": "Hard USD ceilings. Unlike the routing budget under Providers, reaching one of these blocks the next request until you approve it.",
+    "description": "USD ceilings on booked spend. Unlike the routing budget under Providers, reaching one of these blocks the next request until you approve it.",
     "dailyLabel": "Daily limit (USD)",
     "monthlyLabel": "Monthly limit (USD)",
     "noLimit": "No limit",
     "hardBlockHint": "You are warned at {warn}% and {critical}%. At 100% the next request is held until you approve one more.",
+    "bookedSpendNote": "These limits count spend already booked: a request still running counts once it finishes. Past the warning level, requests run one at a time so each is judged on what the last one spent, but a single request can still go over. For a cap that sets money aside before every call, use Router + Fusion.",
     "perProviderTitle": "Per-provider limits",
     "perProviderDescription": "Cap one provider without lowering the ceiling for everything else. Providers you spent on this month are listed automatically.",
     "perProviderEmpty": "No per-provider limit yet. Add one to cap a single provider.",

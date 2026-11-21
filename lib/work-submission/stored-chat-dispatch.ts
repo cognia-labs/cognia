@@ -117,18 +117,20 @@ export function createStoredChatDispatch(
         return { status: "failed", errorCode: `router_fusion_refused:${fusionSend.code}` }
       }
       sendOptions = fusionSend.options
-      // D35: the accepted turn skipped the legacy cost ceiling because its run
-      // held the budget. A replay that goes out unledgered (Router + Fusion is
-      // off now, or faulted) has no run, so the ceiling applies again — the
-      // same late check the chat controller makes before dispatch.
-      if (!sendOptions.routerFusion && (deps.isCostBudgetConfigured ?? isCostBudgetConfigured)()) {
-        const budget = await (deps.enforceCostBudget ?? enforceCostBudget)({
-          ...(sendOptions.provider ? { providerId: sendOptions.provider } : {}),
-          ...(context.projectId ? { projectId: context.projectId } : {}),
-          runId: row.runId,
-        })
-        if (!budget.allowed) return { status: "failed", errorCode: "cost_budget_exceeded" }
-      }
+    }
+    // Any replay that goes out unledgered is checked against the ceiling now,
+    // when it spends: the spend has moved since the turn was accepted. D35: a
+    // turn that skipped the legacy ceiling because its run held the budget has
+    // no run left once Router + Fusion is off or faulted, so the ceiling
+    // applies to it too — the same late check the chat controller makes.
+    if (!sendOptions.routerFusion && (deps.isCostBudgetConfigured ?? isCostBudgetConfigured)()) {
+      const budget = await (deps.enforceCostBudget ?? enforceCostBudget)({
+        ...(sendOptions.provider ? { providerId: sendOptions.provider } : {}),
+        ...(context.projectId ? { projectId: context.projectId } : {}),
+        runId: row.runId,
+        sessionId: row.sessionId,
+      })
+      if (!budget.allowed) return { status: "failed", errorCode: "cost_budget_exceeded" }
     }
 
     try {

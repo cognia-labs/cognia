@@ -183,6 +183,7 @@ export function UsageCostSection() {
               critical: Math.round((budget.criticalAt ?? DEFAULT_CRITICAL_AT) * 100),
             })}
           </p>
+          <p className="text-xs text-muted-foreground">{t("budget.bookedSpendNote")}</p>
 
           <PerProviderBudgets budget={budget} onPatch={patchBudget} />
 
