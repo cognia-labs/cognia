@@ -1,18 +1,18 @@
 {
   "schema": 1,
-  "sha256": "e0fbfe49147e3c16f025d28e0ff4d2a8003b6aef40594647fdf3b1cb0715ba9a",
+  "sha256": "8a2f6779e2697d1d305af2e2cd03cce777bf3ab40e15fe4cb67c151894be5d20",
   "authoring": {
     "sdkVersion": "0.3.0",
     "uiVersion": "0.2.0",
     "contractVersion": "1.7.0",
     "catalogSha256": "a2b732c4d9397319b6d04988ff8c716031069430c40eafb32b1b80ce62dd1121",
     "sharedModulesSha256": "a3c8a3e45f427edca30f76d8aad17f3f13dfaea9b5b1ad0a9613a47eb2a22387",
-    "styleContractSha256": "ae53e5551a4009c0345459ed4cdf25d3a377c6d6ff270f1cd5ae416a9d3b0d2d",
+    "styleContractSha256": "34c9a158ecc5fe1ef65115fac5feb546fe0147b3743989e32765e9766c1d7657",
     "compilerContractSha256": "daaee8f417e049fc6a8cdb5b65914bf5c1662bf07017cee148efc3c1f214aaa0",
     "witSha256": "ccd3b60e5c3d6b6163698aa66f460be848e47e452d95124f77ccde92802d77b5",
-    "sdkSourceSha256": "687b492724cb852db0f3c7a2979ac87817e2b6b60316eef8ea2b4601ba6e990b",
+    "sdkSourceSha256": "d016a4b2aed18b41d85146af39c2fd6ce2567772a155adfdd929355f9810dce2",
     "uiSourceSha256": "f4d206e4e5369e12766797a930e91997c044822472445c8032f3732dbf7d8616",
-    "lockfileSha256": "841510991fb4bcc56f22cf4b4089c9ccd4104e5a85feecae850f85d140c1db32",
+    "lockfileSha256": "a08514ffae2095ba7ad02770eafd77fb89059b24148ed27d05da103b9cd77f28",
     "githubKitSourceSha256": "3526f249790a1364f0eaf99f6d5429d5329cf1095ca279068e7a2e6a0b15bf08",
     "sharedModules": [
       "react",
