@@ -2,7 +2,8 @@
   "tabs": {
     "draftCountOverflow": "99+",
     "drafts": "草稿",
-    "messages": "消息"
+    "messages": "消息",
+    "needsMe": "待办"
   },
   "tabsAria": "收件箱分区",
   "title": "收件箱",

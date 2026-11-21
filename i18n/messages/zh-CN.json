@@ -23970,6 +23970,50 @@
         "delegate_needs_target": "需要先绑定团队或工作流。"
       }
     },
+    "needsMe": {
+      "actionFailed": "操作失败，请刷新后重试。",
+      "actions": {
+        "acceptAndRun": "接受并执行",
+        "approve": "批准",
+        "deny": "拒绝",
+        "dismiss": "忽略",
+        "markResolved": "标为已解决",
+        "open": "打开",
+        "openConversation": "打开会话",
+        "openGoal": "查看目标",
+        "openTask": "查看任务",
+        "replyNow": "去回复"
+      },
+      "emptyDescription": "当前没有等待你决策或跟进的个人责任事项。",
+      "emptyTitle": "已全部处理完毕",
+      "filterAria": "筛选待处理事项",
+      "filters": {
+        "all": "全部",
+        "blocked_commitment": "受阻任务",
+        "hitl_approval": "待审批",
+        "outbound_draft": "草稿",
+        "radar_suggestion": "雷达建议",
+        "sla_overdue": "超时 SLA"
+      },
+      "kinds": {
+        "blocked_commitment": "受阻任务",
+        "hitl_approval": "待审批",
+        "outbound_draft": "外发草稿",
+        "radar_suggestion": "雷达建议",
+        "sla_overdue": "超时 SLA"
+      },
+      "loading": "正在加载待处理事项…",
+      "slaOverdueDetail": "回复时限已超时 {minutes} 分钟",
+      "subtitle": "汇总待审批请求、外发草稿、超时回复、受阻委托与雷达建议。",
+      "title": "待我处理",
+      "toasts": {
+        "approved": "已批准请求",
+        "denied": "已拒绝请求",
+        "dismissed": "已忽略该事项",
+        "radarAccepted": "已从雷达建议创建目标任务",
+        "resolved": "已标记会话为已解决"
+      }
+    },
     "notices": {
       "collapse": "收起通知",
       "expand": "展开通知",
@@ -24162,6 +24206,7 @@
         "status": "按状态分组"
       },
       "loadingAdapters": "正在加载适配器",
+      "needsMe": "待我处理",
       "noAdapters": "未配置适配器",
       "noAdaptersTitle": "尚无适配器",
       "platforms": "平台",
@@ -29826,7 +29871,8 @@
       "tabs": {
         "draftCountOverflow": "99+",
         "drafts": "草稿",
-        "messages": "消息"
+        "messages": "消息",
+        "needsMe": "待办"
       },
       "tabsAria": "收件箱分区",
       "title": "收件箱"

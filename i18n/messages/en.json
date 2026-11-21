@@ -23970,6 +23970,50 @@
         "delegate_needs_target": "Needs a team or workflow bound first."
       }
     },
+    "needsMe": {
+      "actionFailed": "Action failed. Please refresh and try again.",
+      "actions": {
+        "acceptAndRun": "Accept & run",
+        "approve": "Approve",
+        "deny": "Deny",
+        "dismiss": "Dismiss",
+        "markResolved": "Resolve",
+        "open": "Open",
+        "openConversation": "Open chat",
+        "openGoal": "Open goal",
+        "openTask": "Open task",
+        "replyNow": "Reply"
+      },
+      "emptyDescription": "Nothing is currently waiting on your decision or follow-up.",
+      "emptyTitle": "All caught up",
+      "filterAria": "Filter responsibility items",
+      "filters": {
+        "all": "All",
+        "blocked_commitment": "Blocked",
+        "hitl_approval": "Approvals",
+        "outbound_draft": "Drafts",
+        "radar_suggestion": "Radar",
+        "sla_overdue": "Overdue SLA"
+      },
+      "kinds": {
+        "blocked_commitment": "Blocked",
+        "hitl_approval": "Approval",
+        "outbound_draft": "Draft",
+        "radar_suggestion": "Radar",
+        "sla_overdue": "Overdue SLA"
+      },
+      "loading": "Loading items waiting on you…",
+      "slaOverdueDetail": "Response SLA overdue by {minutes} min",
+      "subtitle": "Pending approvals, drafts, overdue SLAs, blocked commitments, and Radar suggestions.",
+      "title": "Needs my attention",
+      "toasts": {
+        "approved": "Approval granted",
+        "denied": "Request denied",
+        "dismissed": "Item dismissed",
+        "radarAccepted": "Goal scheduled from Radar suggestion",
+        "resolved": "Conversation marked resolved"
+      }
+    },
     "notices": {
       "collapse": "Hide notices",
       "expand": "Show notices",
@@ -24162,6 +24206,7 @@
         "status": "Group by status"
       },
       "loadingAdapters": "Loading adapters",
+      "needsMe": "Needs me",
       "noAdapters": "No adapters configured",
       "noAdaptersTitle": "No adapters yet",
       "platforms": "Platforms",
@@ -29826,7 +29871,8 @@
       "tabs": {
         "draftCountOverflow": "99+",
         "drafts": "Drafts",
-        "messages": "Messages"
+        "messages": "Messages",
+        "needsMe": "Needs me"
       },
       "tabsAria": "Inbox sections",
       "title": "Inbox"

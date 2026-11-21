@@ -27,6 +27,7 @@ import { useLiveQuery } from "dexie-react-hooks"
 import {
   CircleIcon,
   ChevronRightIcon,
+  ClipboardCheckIcon,
   InboxIcon,
   FileTextIcon,
   LayersIcon,
@@ -52,6 +53,7 @@ import {
 } from "@/components/ui/sidebar"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePendingDrafts } from "@/hooks/connectors/use-pending-drafts"
+import { usePersonalResponsibilityCount } from "@/hooks/inbox/use-personal-responsibilities"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { getDb } from "@/lib/db/schema"
@@ -73,7 +75,7 @@ import { StateCard } from "./state/state-card"
 const RECENT_LIMIT = 8
 
 /** Which Inbox route is showing; drives the nav's active state. */
-export type InboxView = "all" | "by-adapter" | "by-platform" | "drafts"
+export type InboxView = "all" | "by-adapter" | "by-platform" | "drafts" | "needs-me"
 
 /**
  * Icons carry the grouping instead of text. At `INBOX_LAYOUT_BOUNDS.sidebarMin`
@@ -138,6 +140,7 @@ export function InboxSidebarContent({
   const tDraft = useTranslations("inbox.draftCenter")
   const tPlatform = useTranslations("inbox.platformBadge")
   const draftCount = usePendingDrafts().length
+  const needsMeCount = usePersonalResponsibilityCount()
   const platforms = useMemo(() => platformsOfAdapters(adapters ?? []), [adapters])
   const platformName = (kind: string) =>
     tPlatform.has(`names.${kind}`) ? tPlatform(`names.${kind}`) : kind
@@ -193,6 +196,26 @@ export function InboxSidebarContent({
                   <span>{t("allConversations")}</span>
                 </Link>
               </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={view === "needs-me"}
+                data-testid="inbox-needs-me-link"
+              >
+                <Link
+                  href="/inbox/needs-me"
+                  aria-current={view === "needs-me" ? "page" : undefined}
+                >
+                  <ClipboardCheckIcon />
+                  <span>{t("needsMe")}</span>
+                </Link>
+              </SidebarMenuButton>
+              {needsMeCount > 0 && (
+                <SidebarMenuBadge data-testid="inbox-needs-me-count">
+                  {needsMeCount}
+                </SidebarMenuBadge>
+              )}
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton

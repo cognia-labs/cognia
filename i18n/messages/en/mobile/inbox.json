@@ -2,7 +2,8 @@
   "tabs": {
     "draftCountOverflow": "99+",
     "drafts": "Drafts",
-    "messages": "Messages"
+    "messages": "Messages",
+    "needsMe": "Needs me"
   },
   "tabsAria": "Inbox sections",
   "title": "Inbox",

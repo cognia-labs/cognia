@@ -27,6 +27,7 @@ jest.mock("next-intl", () => ({
         tabsAria: "Inbox sections",
         "tabs.draftCountOverflow": "99+",
         "tabs.messages": "Messages",
+        "tabs.needsMe": "Needs me",
         "tabs.drafts": "Drafts",
         adapter: "Adapter",
         platform: "Platform",
@@ -98,6 +99,9 @@ jest.mock("@/components/mobile/connector/draft-approval-panel", () => ({
     if (mockDraftPanelError) throw mockDraftPanelError
     return <div data-testid="stub-draft-panel" />
   },
+}))
+jest.mock("@/components/inbox/needs-me-center", () => ({
+  NeedsMeCenter: () => <div data-testid="stub-needs-me-center" />,
 }))
 
 jest.mock("@/components/inbox/state/state-card", () => ({
@@ -178,6 +182,12 @@ describe("<MobileInboxBody />", () => {
     render(<MobileInboxBody />)
     const messagesTab = screen.getByTestId("mobile-inbox-tab-messages")
     await user.click(messagesTab)
+    await user.keyboard("{ArrowRight}")
+    expect(screen.getByTestId("stub-needs-me-center")).toBeInTheDocument()
+    expect(screen.getByTestId("mobile-inbox-tab-needs-me")).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
     await user.keyboard("{ArrowRight}")
     expect(screen.getByTestId("stub-draft-panel")).toBeInTheDocument()
     expect(screen.getByTestId("mobile-inbox-tab-drafts")).toHaveAttribute(
@@ -319,6 +329,11 @@ describe("<MobileInboxBody />", () => {
         "data-touch-selecting",
         "false"
       )
+    })
+
+    it("mounts NeedsMeCenter when opened on or switched to the needs-me tab (F10)", async () => {
+      render(<MobileInboxBody initialTab="needs-me" />)
+      expect(screen.getByTestId("stub-needs-me-center")).toBeInTheDocument()
     })
   })
 })

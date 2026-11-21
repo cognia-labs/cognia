@@ -41,6 +41,7 @@ import { CheckSquareIcon, XIcon } from "lucide-react"
 
 import { InboxErrorBoundary } from "@/components/inbox/inbox-error-boundary"
 import { InboxShell } from "@/components/inbox/inbox-shell"
+import { NeedsMeCenter } from "@/components/inbox/needs-me-center"
 import { DraftApprovalPanel } from "@/components/mobile/connector/draft-approval-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -72,7 +73,7 @@ export async function countPendingDraftsForBadge(): Promise<number> {
   }
 }
 
-export type MobileInboxTab = "messages" | "drafts"
+export type MobileInboxTab = "messages" | "needs-me" | "drafts"
 
 export interface MobileInboxBodyProps {
   initialTab?: MobileInboxTab
@@ -190,6 +191,13 @@ export function MobileInboxBody({
             {t("tabs.messages")}
           </TabsTrigger>
           <TabsTrigger
+            value="needs-me"
+            className="h-7 px-3 text-xs"
+            data-testid="mobile-inbox-tab-needs-me"
+          >
+            {t("tabs.needsMe")}
+          </TabsTrigger>
+          <TabsTrigger
             value="drafts"
             className="h-7 px-3 text-xs"
             data-testid="mobile-inbox-tab-drafts"
@@ -219,6 +227,11 @@ export function MobileInboxBody({
           onTouchSelectingChange={setSelecting}
           onSelectableChange={setSelectable}
         />
+      </TabsContent>
+      <TabsContent value="needs-me" className="min-h-0 overflow-hidden">
+        <InboxErrorBoundary>
+          <NeedsMeCenter />
+        </InboxErrorBoundary>
       </TabsContent>
       <TabsContent value="drafts" className="min-h-0 overflow-hidden">
         {/* Pane-level containment, matching the InboxShell panes: a failed

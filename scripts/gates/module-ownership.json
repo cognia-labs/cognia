@@ -1208,6 +1208,16 @@
       "why": "The `/inbox/drafts` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
     },
     {
+      "prefix": "app/inbox/needs-me/page.",
+      "owner": "shell",
+      "why": "The `/inbox/needs-me` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/needs-me/route-body.",
+      "owner": "shell",
+      "why": "The `/inbox/needs-me` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
       "prefix": "app/inbox/platform/page.",
       "owner": "shell",
       "why": "The `/inbox/platform` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."

@@ -15,6 +15,48 @@ export function radarSuggestions(report: RadarReport): RadarSuggestion[] {
   )
 }
 
+export interface PendingRadarSuggestionItem {
+  reportId: string
+  generatedAt: number
+  suggestionId: string
+  actionIndex: number
+  text: string
+  verdict: string
+}
+
+/**
+ * List undecided (`pending`) Radar action suggestions across recent reports,
+ * newest report first, for unified personal-responsibility surfaces (F10).
+ */
+export async function listPendingRadarSuggestions(
+  limit = 25
+): Promise<PendingRadarSuggestionItem[]> {
+  if (typeof indexedDB === "undefined") return []
+  try {
+    const reports = await getDb().radarReports.orderBy("generatedAt").reverse().limit(10).toArray()
+    const out: PendingRadarSuggestionItem[] = []
+    for (const report of reports) {
+      for (const suggestion of radarSuggestions(report)) {
+        if (suggestion.status !== "pending") continue
+        const text = report.actions[suggestion.actionIndex]?.trim()
+        if (!text) continue
+        out.push({
+          reportId: report.id,
+          generatedAt: report.generatedAt,
+          suggestionId: suggestion.id,
+          actionIndex: suggestion.actionIndex,
+          text,
+          verdict: report.verdict,
+        })
+        if (out.length >= limit) return out
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
 export async function decideRadarSuggestion(
   reportId: string,
   suggestionId: string,

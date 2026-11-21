@@ -43,9 +43,13 @@ const mockUseLiveQuery = _useLiveQuery as jest.Mock
 
 jest.mock("@/lib/db/schema", () => ({ getDb: jest.fn() }))
 
-// Drafts badge subscriber — isolate the sidebar from the draft queue.
+// Drafts & Needs-Me badge subscribers — isolate the sidebar from live queues.
+let mockNeedsMeCount = 0
 jest.mock("@/hooks/connectors/use-pending-drafts", () => ({
   usePendingDrafts: () => [],
+}))
+jest.mock("@/hooks/inbox/use-personal-responsibilities", () => ({
+  usePersonalResponsibilityCount: () => mockNeedsMeCount,
 }))
 
 jest.mock("next/link", () => ({
@@ -143,7 +147,7 @@ describe("InboxSidebar", () => {
       expect(screen.getByTestId("group-chip-status")).toBeInTheDocument()
       expect(screen.getByTestId("group-chip-adapter")).toBeInTheDocument()
       expect(screen.getByTestId("group-chip-platform")).toBeInTheDocument()
-      expect(screen.getByTestId("group-chip-chat")).toHaveAccessibleName("groupModes.chat")
+      expect(screen.getByTestId("group-chip-chat")).toHaveAccessibleName("Group by chat type")
     })
 
     it("marks the grouping in force", () => {
@@ -338,6 +342,19 @@ describe("InboxSidebar", () => {
           makeAdapter("c", "z", "slack"),
         ])
       ).toEqual(["slack", "lark"])
+    })
+
+    it("renders the top-pinned Needs Me destination and its pending count badge (F10)", () => {
+      mockNeedsMeCount = 4
+      try {
+        renderSidebar({ view: "needs-me" })
+        const link = screen.getByRole("link", { name: "Needs me" })
+        expect(link).toHaveAttribute("href", "/inbox/needs-me")
+        expect(link).toHaveAttribute("aria-current", "page")
+        expect(screen.getByTestId("inbox-needs-me-count")).toHaveTextContent("4")
+      } finally {
+        mockNeedsMeCount = 0
+      }
     })
   })
 })

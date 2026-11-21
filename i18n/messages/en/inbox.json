@@ -786,7 +786,52 @@
     },
     "platforms": "Platforms",
     "allConversations": "All conversations",
+    "needsMe": "Needs me",
     "loadingAdapters": "Loading adapters"
+  },
+  "needsMe": {
+    "title": "Needs my attention",
+    "subtitle": "Pending approvals, drafts, overdue SLAs, blocked commitments, and Radar suggestions.",
+    "loading": "Loading items waiting on you…",
+    "filterAria": "Filter responsibility items",
+    "emptyTitle": "All caught up",
+    "emptyDescription": "Nothing is currently waiting on your decision or follow-up.",
+    "slaOverdueDetail": "Response SLA overdue by {minutes} min",
+    "actionFailed": "Action failed. Please refresh and try again.",
+    "filters": {
+      "all": "All",
+      "hitl_approval": "Approvals",
+      "sla_overdue": "Overdue SLA",
+      "outbound_draft": "Drafts",
+      "blocked_commitment": "Blocked",
+      "radar_suggestion": "Radar"
+    },
+    "kinds": {
+      "hitl_approval": "Approval",
+      "sla_overdue": "Overdue SLA",
+      "outbound_draft": "Draft",
+      "blocked_commitment": "Blocked",
+      "radar_suggestion": "Radar"
+    },
+    "actions": {
+      "approve": "Approve",
+      "deny": "Deny",
+      "open": "Open",
+      "openConversation": "Open chat",
+      "replyNow": "Reply",
+      "markResolved": "Resolve",
+      "openGoal": "Open goal",
+      "openTask": "Open task",
+      "acceptAndRun": "Accept & run",
+      "dismiss": "Dismiss"
+    },
+    "toasts": {
+      "approved": "Approval granted",
+      "denied": "Request denied",
+      "resolved": "Conversation marked resolved",
+      "radarAccepted": "Goal scheduled from Radar suggestion",
+      "dismissed": "Item dismissed"
+    }
   },
   "sla": {
     "dueAria": "SLA: reply due in {time}",

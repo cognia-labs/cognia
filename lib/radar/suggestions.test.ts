@@ -2,7 +2,7 @@
 import "fake-indexeddb/auto"
 import { getDb } from "@/lib/db/schema"
 import { schedulerDb } from "@/lib/scheduler/scheduler-db"
-import { decideRadarSuggestion, radarSuggestions } from "./suggestions"
+import { decideRadarSuggestion, listPendingRadarSuggestions, radarSuggestions } from "./suggestions"
 import type { RadarReport } from "@/types/radar"
 
 const mockArm = jest.fn()
@@ -68,4 +68,21 @@ it("dismisses without execution and refuses an incompatible replay", async () =>
   )
   expect(await getDb().scheduledTasks.count()).toBe(0)
   expect(mockArm).not.toHaveBeenCalled()
+})
+
+it("lists only pending Radar suggestions newest-first and drops decided ones (F10)", async () => {
+  await getDb().radarReports.put({
+    ...report,
+    id: "r2",
+    generatedAt: 200,
+    verdict: "Fresh verdict",
+    actions: ["Follow up design doc", "Already dismissed"],
+    suggestions: [
+      { id: "r2:action:0", actionIndex: 0, status: "pending" },
+      { id: "r2:action:1", actionIndex: 1, status: "dismissed", decidedAt: 210 },
+    ],
+  })
+  const pending = await listPendingRadarSuggestions()
+  expect(pending.map((item) => item.suggestionId)).toEqual(["r2:action:0", "r:action:0"])
+  expect(pending[0]?.text).toBe("Follow up design doc")
 })
