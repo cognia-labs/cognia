@@ -14,6 +14,7 @@ import {
   retainRemoteTransport,
   setActiveRemoteEndpoint,
   setActiveRemoteTransport,
+  subscribeActiveRemoteEndpoint,
   subscribeActiveRemoteTransport,
 } from "./transport-routing"
 
@@ -463,6 +464,28 @@ describe("active-remote endpoint + isRemoteHostActive", () => {
     expect(getActiveRemoteEndpoint()).toEqual(endpoint)
     setActiveRemoteEndpoint(null)
     expect(getActiveRemoteEndpoint()).toBeNull()
+  })
+
+  it("notifies endpoint subscribers without firing transport subscribers", () => {
+    const endpointListener = jest.fn()
+    const transportListener = jest.fn()
+    const offEndpoint = subscribeActiveRemoteEndpoint(endpointListener)
+    const offTransport = subscribeActiveRemoteTransport(transportListener)
+    const endpoint = {
+      remoteHost: { id: "registry-a", label: "Build host" },
+      baseUrl: "https://box.example:27890",
+      deviceId: "device-1",
+      devicePrivateKeyJwk: { kty: "EC", crv: "P-256", d: "device-private" },
+      deviceKeyThumbprint: "device-thumbprint",
+      serverVersion: "1.0.0",
+    }
+    setActiveRemoteEndpoint(endpoint)
+    setActiveRemoteEndpoint(endpoint)
+    expect(endpointListener).toHaveBeenCalledTimes(1)
+    expect(endpointListener).toHaveBeenCalledWith(endpoint)
+    expect(transportListener).not.toHaveBeenCalled()
+    offEndpoint()
+    offTransport()
   })
 })
 

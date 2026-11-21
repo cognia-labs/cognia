@@ -10,6 +10,7 @@ import {
   computeSetupFingerprint,
   effectiveSetupReuse,
   latestSetupRecord,
+  normalizeExecutionRoot,
   recordAllowsReuse,
   setupOutputsPresent,
   setupSignature,
@@ -183,6 +184,22 @@ describe("canonicalJson / setupSignature", () => {
       setupSignature({ ...baseEnvironment, keyringReferences: [...two].reverse() })
     )
   })
+
+  it("changes when the execution hostKey changes", () => {
+    expect(setupSignature(baseEnvironment, "remote:host-a")).not.toBe(
+      setupSignature(baseEnvironment, "remote:host-b")
+    )
+    expect(setupSignature(baseEnvironment, "local")).not.toBe(setupSignature(baseEnvironment))
+  })
+})
+
+describe("normalizeExecutionRoot", () => {
+  it("normalizes trailing slashes, duplicate separators, dot segments, and drive case", () => {
+    expect(normalizeExecutionRoot("/repo/")).toBe("/repo")
+    expect(normalizeExecutionRoot("/repo/./sub//")).toBe("/repo/sub")
+    expect(normalizeExecutionRoot("c:\\Users\\dev\\repo\\")).toBe("C:/Users/dev/repo")
+    expect(normalizeExecutionRoot("  ")).toBe("")
+  })
 })
 
 describe("computeSetupFingerprint", () => {
@@ -279,21 +296,71 @@ describe("latestSetupRecord / recordAllowsReuse", () => {
     ...overrides,
   })
 
-  it("picks the latest finished record for the same root and scope", () => {
+  it("picks the latest finished record for the same normalized root and scope", () => {
     const latest = latestSetupRecord(
       {
         initializationHistory: [
           record({ completedAt: 10, fingerprint: "old" }),
           record({ completedAt: 30, executionRoot: "/other" }),
           record({ completedAt: 20, scope: "local" }),
-          record({ completedAt: 15, fingerprint: "new" }),
-          record({ status: "running", startedAt: 40, completedAt: undefined }),
+          record({ completedAt: 15, executionRoot: "/root/", fingerprint: "new" }),
         ],
       },
       "/root",
       "managedWorktree"
     )
     expect(latest?.fingerprint).toBe("new")
+  })
+
+  it("lets an unsettled running attempt supersede an older success (F2)", () => {
+    const latest = latestSetupRecord(
+      {
+        initializationHistory: [
+          record({ startedAt: 10, completedAt: 15, fingerprint: "fp", attemptId: "a1" }),
+          record({ status: "running", startedAt: 40, completedAt: undefined, attemptId: "a2" }),
+        ],
+      },
+      "/root",
+      "managedWorktree"
+    )
+    expect(latest?.status).toBe("running")
+    expect(recordAllowsReuse(latest, "fp")).toBe(false)
+  })
+
+  it("supersedes a running record once its matching attempt settles", () => {
+    const latest = latestSetupRecord(
+      {
+        initializationHistory: [
+          record({ status: "running", startedAt: 10, completedAt: undefined, attemptId: "a1" }),
+          record({
+            status: "succeeded",
+            startedAt: 10,
+            completedAt: 15,
+            fingerprint: "fp",
+            attemptId: "a1",
+          }),
+        ],
+      },
+      "/root",
+      "managedWorktree"
+    )
+    expect(latest?.status).toBe("succeeded")
+    expect(recordAllowsReuse(latest, "fp")).toBe(true)
+  })
+
+  it("isolates setup history by execution hostKey and fails closed on unattributed successes (F7)", () => {
+    const env = {
+      initializationHistory: [
+        record({ hostKey: "remote:host-a", completedAt: 20, fingerprint: "fp-a" }),
+        record({ hostKey: undefined, completedAt: 25, fingerprint: "fp-legacy" }),
+      ],
+    }
+    expect(latestSetupRecord(env, "/root", "managedWorktree", "remote:host-b")).toBeNull()
+    const hostA = latestSetupRecord(env, "/root", "managedWorktree", "remote:host-a")
+    expect(hostA?.fingerprint).toBe("fp-a")
+    expect(recordAllowsReuse(hostA, "fp-a", "remote:host-a")).toBe(true)
+    expect(recordAllowsReuse(hostA, "fp-a", "remote:host-b")).toBe(false)
+    expect(recordAllowsReuse(record({ hostKey: undefined }), "fp", "local")).toBe(false)
   })
 
   it("does not let an older success vouch past a later failure", () => {

@@ -411,3 +411,26 @@ describe("published workspace version response contracts", () => {
     expect(validate({ ...result, mtime_ms: result.mtimeMs })).toBe(false)
   })
 })
+
+describe("pinned callTransport override", () => {
+  it("routes readWorkspaceFile and statWorkspaceFile through an explicit transport", async () => {
+    const defaultSpy = jest.spyOn(transport, "call")
+    const pinnedCall = jest
+      .fn()
+      .mockResolvedValueOnce("pinned-content")
+      .mockResolvedValueOnce({ exists: true, is_dir: false, size: 14, mtime_ms: 9 })
+    const pinned = { call: pinnedCall }
+
+    await expect(readWorkspaceFile("/repo", "pnpm-lock.yaml", undefined, pinned)).resolves.toBe(
+      "pinned-content"
+    )
+    await expect(statWorkspaceFile("/repo", "pnpm-lock.yaml", pinned)).resolves.toEqual({
+      exists: true,
+      isDir: false,
+      size: 14,
+      mtimeMs: 9,
+    })
+    expect(pinnedCall).toHaveBeenCalledTimes(2)
+    expect(defaultSpy).not.toHaveBeenCalled()
+  })
+})

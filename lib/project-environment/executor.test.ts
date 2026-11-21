@@ -62,6 +62,17 @@ import {
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { BOOTSTRAP_SYSTEM_PROMPTS } from "./bootstrap-prompts"
+import {
+  __resetRoutingForTests,
+  setActiveRemoteEndpoint,
+  setActiveRemoteTransport,
+  type RemoteHostEndpoint,
+} from "@/lib/tauri/transport-routing"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
+import type { Transport } from "@/lib/tauri/transport-types"
 
 const environment: ProjectEnvironment = {
   id: "env-1",
@@ -77,6 +88,8 @@ const environment: ProjectEnvironment = {
 }
 
 beforeEach(() => {
+  __resetRoutingForTests()
+  clearActiveRuntimeTargetContext()
   ensureExecutionPortLease.mockReset().mockResolvedValue(null)
   tauri = true
   callMock.mockReset().mockResolvedValue({
@@ -246,7 +259,11 @@ describe("setup reuse", () => {
     return finished.fingerprint
   }
 
-  function storedWith(fingerprint: string, status = "succeeded"): ProjectEnvironment {
+  function storedWith(
+    fingerprint: string,
+    status = "succeeded",
+    hostKey: string | undefined = "local"
+  ): ProjectEnvironment {
     return {
       ...reusable,
       initializationHistory: [
@@ -254,6 +271,7 @@ describe("setup reuse", () => {
           status: status as "succeeded",
           scope: "managedWorktree",
           executionRoot: "/worktree",
+          ...(hostKey !== undefined ? { hostKey } : {}),
           startedAt: 1,
           completedAt: 2,
           exitCode: 0,
@@ -898,4 +916,310 @@ it("S2 never bypasses a producer egress denial before native setup", async () =>
   })
   expect(result).toMatchObject({ success: false, bypassed: false })
   expect(callMock).not.toHaveBeenCalled()
+})
+
+describe("audit regressions (F1, F2, F3, F5, F7)", () => {
+  const reusable: ProjectEnvironment = {
+    ...environment,
+    setupReuse: { enabled: true, inputs: ["pnpm-lock.yaml"], outputs: ["node_modules"] },
+  }
+
+  function endpoint(id: string): RemoteHostEndpoint {
+    return {
+      remoteHost: { id, label: id },
+      baseUrl: `https://${id}.example`,
+      deviceId: `dev-${id}`,
+      devicePrivateKeyJwk: { kty: "EC" },
+      deviceKeyThumbprint: `thumb-${id}`,
+      serverVersion: "4",
+    }
+  }
+
+  function remoteTransport(call: jest.Mock): Transport {
+    return {
+      call: call as unknown as Transport["call"],
+      subscribe: jest.fn(() => () => undefined),
+    }
+  }
+
+  it("F1: does not join an in-flight setup when a tracked input file changed mid-flight", async () => {
+    workspaceFiles = { "pnpm-lock.yaml": "lock-v1" }
+    workspacePaths = new Set(["node_modules"])
+    let finishFirst!: (value: unknown) => void
+    let enteredFirst!: () => void
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve
+    })
+    callMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirst = resolve
+          enteredFirst()
+        })
+    )
+
+    const req = {
+      environment: reusable,
+      executionRoot: "/repo-f1",
+      scope: "local" as const,
+      surface: "scheduled" as const,
+    }
+    const first = executeProjectEnvironment(req)
+    await firstEntered
+
+    // Input file changes while the first setup is running; second request arrives.
+    workspaceFiles["pnpm-lock.yaml"] = "lock-v2"
+    const second = executeProjectEnvironment(req)
+
+    finishFirst({ stdout: "v1", stderr: "", exit_code: 0, timed_out: false })
+    const [firstResult, secondResult] = await Promise.all([first, second])
+
+    expect(firstResult.success).toBe(true)
+    expect(secondResult.success).toBe(true)
+    expect(secondResult.joined).toBeUndefined()
+    expect(callMock).toHaveBeenCalledTimes(2)
+    // First run observed lockfile mutation mid-flight so it must not stamp a stale fingerprint.
+    const records = updateInitializationMock.mock.calls.map((call) => call[1])
+    const succeededRecords = records.filter((record) => record.status === "succeeded")
+    expect(succeededRecords[0]).not.toHaveProperty("fingerprint")
+    expect(succeededRecords[1].fingerprint).toEqual(expect.any(String))
+  })
+
+  it("F2: does not reuse an earlier success when a later running attempt never settled", async () => {
+    workspaceFiles = { "pnpm-lock.yaml": "lock-v1" }
+    workspacePaths = new Set(["node_modules"])
+    const req = {
+      environment: reusable,
+      executionRoot: "/repo-f2",
+      scope: "local" as const,
+      surface: "scheduled" as const,
+    }
+    await executeProjectEnvironment(req)
+    const succeeded = updateInitializationMock.mock.calls
+      .map((call) => call[1])
+      .find((record) => record.status === "succeeded")
+    expect(succeeded?.fingerprint).toEqual(expect.any(String))
+
+    getEnvironmentMock.mockResolvedValue({
+      ...reusable,
+      initializationHistory: [
+        succeeded,
+        {
+          status: "running",
+          scope: "local",
+          executionRoot: "/repo-f2",
+          hostKey: "local",
+          attemptId: "crashed-attempt",
+          startedAt: (succeeded.completedAt ?? succeeded.startedAt) + 100,
+        },
+      ],
+    })
+    callMock.mockClear()
+
+    const result = await executeProjectEnvironment(req)
+    expect(result.reused).toBeUndefined()
+    expect(callMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("F3: serializes concurrent setups targeting the same root across profiles, scopes, and path aliases", async () => {
+    let finishFirst!: (value: unknown) => void
+    let enteredFirst!: () => void
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve
+    })
+    callMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirst = resolve
+          enteredFirst()
+        })
+    )
+
+    const first = executeProjectEnvironment({
+      environment,
+      executionRoot: "/repo-f3",
+      scope: "local",
+      surface: "scheduled",
+    })
+    const second = executeProjectEnvironment({
+      environment: { ...environment, id: "env-2" },
+      executionRoot: "/repo-f3/",
+      scope: "managedWorktree",
+      surface: "scheduled",
+    })
+    await firstEntered
+    expect(callMock).toHaveBeenCalledTimes(1)
+
+    finishFirst({ stdout: "", stderr: "", exit_code: 0, timed_out: false })
+    const [r1, r2] = await Promise.all([first, second])
+    expect(r1.success).toBe(true)
+    expect(r2.success).toBe(true)
+    expect(r2.joined).toBeUndefined()
+    expect(callMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("F5: forwards AbortSignal cancellation with operationId, records cancelled without bypass, and exposes output flags", async () => {
+    const controller = new AbortController()
+    let releaseExec!: (value: unknown) => void
+    let sentOperationId: string | undefined
+    callMock.mockImplementation((name: string, args: Record<string, unknown>) => {
+      if (name === "project_environment_execute") {
+        sentOperationId = args.operationId as string | undefined
+        return new Promise((resolve) => {
+          releaseExec = resolve
+        })
+      }
+      if (name === "project_environment_cancel") {
+        releaseExec({
+          stdout: "partial",
+          stderr: "terminated",
+          exit_code: null,
+          timed_out: false,
+          cancelled: true,
+          stdout_truncated: true,
+          stderr_truncated: true,
+        })
+        return Promise.resolve({ cancelled: true, terminated: true })
+      }
+      return Promise.resolve({})
+    })
+
+    const running = executeProjectEnvironment({
+      environment,
+      executionRoot: "/repo-f5",
+      scope: "local",
+      surface: "interactive",
+      bypassOnFailure: true,
+      signal: controller.signal,
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sentOperationId).toEqual(expect.any(String))
+    controller.abort()
+
+    const result = await running
+    expect(callMock).toHaveBeenCalledWith("project_environment_cancel", {
+      operationId: sentOperationId,
+    })
+    expect(result).toMatchObject({
+      success: false,
+      bypassed: false,
+      cancelled: true,
+      stdout: "partial",
+      stderr: "terminated",
+      stdoutTruncated: true,
+      stderrTruncated: true,
+    })
+    expect(updateInitializationMock).toHaveBeenLastCalledWith(
+      environment.id,
+      expect.objectContaining({ status: "cancelled", hostKey: "local" }),
+      expect.any(Number)
+    )
+    expect(updateInitializationMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("fingerprint")
+  })
+
+  it("F5: cancels a queued setup immediately when aborted while waiting on another flight", async () => {
+    let finishFirst!: (value: unknown) => void
+    let enteredFirst!: () => void
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve
+    })
+    callMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirst = resolve
+          enteredFirst()
+        })
+    )
+
+    const first = executeProjectEnvironment({
+      environment,
+      executionRoot: "/repo-f5-queue",
+      scope: "local",
+      surface: "interactive",
+    })
+    await firstEntered
+
+    const controller = new AbortController()
+    const queued = executeProjectEnvironment({
+      environment,
+      executionRoot: "/repo-f5-queue",
+      scope: "local",
+      surface: "interactive",
+      signal: controller.signal,
+    })
+    controller.abort()
+
+    await expect(queued).resolves.toMatchObject({
+      success: false,
+      bypassed: false,
+      cancelled: true,
+    })
+
+    finishFirst({ stdout: "", stderr: "", exit_code: 0, timed_out: false })
+    await expect(first).resolves.toMatchObject({ success: true })
+  })
+
+  it("F7: does not reuse Host A setup history when executing on Host B at the same path", async () => {
+    workspaceFiles = { "pnpm-lock.yaml": "lock-v1" }
+    workspacePaths = new Set(["node_modules"])
+    const hostACall = jest.fn().mockResolvedValue({
+      stdout: "host-a",
+      stderr: "",
+      exit_code: 0,
+      timed_out: false,
+    })
+    const hostBCall = jest.fn().mockResolvedValue({
+      stdout: "host-b",
+      stderr: "",
+      exit_code: 0,
+      timed_out: false,
+    })
+
+    setActiveRemoteEndpoint(endpoint("host-a"))
+    setActiveRemoteTransport(remoteTransport(hostACall))
+    const req = {
+      environment: reusable,
+      executionRoot: "/shared/repo",
+      scope: "local" as const,
+      surface: "scheduled" as const,
+    }
+    await executeProjectEnvironment(req)
+    const hostASucceeded = updateInitializationMock.mock.calls
+      .map((call) => call[1])
+      .find((record) => record.status === "succeeded")
+    expect(hostASucceeded?.hostKey).toBe("remote:host-a")
+
+    getEnvironmentMock.mockResolvedValue({
+      ...reusable,
+      initializationHistory: [hostASucceeded],
+    })
+    setActiveRemoteEndpoint(endpoint("host-b"))
+    setActiveRemoteTransport(remoteTransport(hostBCall))
+
+    const hostBResult = await executeProjectEnvironment(req)
+    expect(hostBResult.reused).toBeUndefined()
+    expect(hostBCall).toHaveBeenCalledTimes(1)
+  })
+
+  it("F7: fails closed without bypassing when a paired client switches Hosts mid-flight", async () => {
+    setActiveRuntimeTargetContext("acct-01", "host-a", 1)
+    ensureExecutionPortLease.mockImplementationOnce(async () => {
+      setActiveRuntimeTargetContext("acct-01", "host-b", 2)
+      return null
+    })
+
+    const result = await executeProjectEnvironment({
+      environment,
+      executionRoot: "/paired-repo",
+      scope: "local",
+      surface: "interactive",
+      bypassOnFailure: true,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.bypassed).toBe(false)
+    expect(result.error).toMatch(/no longer the connected one/)
+    expect(callMock).not.toHaveBeenCalled()
+  })
 })

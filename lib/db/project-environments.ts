@@ -88,11 +88,27 @@ export async function updateProjectEnvironmentInitialization(
   return db.transaction("rw", db.projectEnvironments, async () => {
     const environment = await db.projectEnvironments.get(id)
     if (!environment) return false
-    const initializationHistory = lastInitialization
-      ? [...(environment.initializationHistory ?? []), structuredClone(lastInitialization)].slice(
-          -100
-        )
-      : (environment.initializationHistory ?? [])
+    const previous = environment.initializationHistory ?? []
+    let initializationHistory = previous
+    if (lastInitialization) {
+      const cloned = structuredClone(lastInitialization)
+      let matchIndex = -1
+      if (cloned.attemptId && cloned.status !== "running") {
+        for (let index = previous.length - 1; index >= 0; index -= 1) {
+          const entry = previous[index]
+          if (entry?.attemptId === cloned.attemptId && entry.status === "running") {
+            matchIndex = index
+            break
+          }
+        }
+      }
+      initializationHistory =
+        matchIndex >= 0
+          ? [...previous.slice(0, matchIndex), cloned, ...previous.slice(matchIndex + 1)].slice(
+              -100
+            )
+          : [...previous, cloned].slice(-100)
+    }
     return (
       (await db.projectEnvironments.update(id, {
         lastInitialization,

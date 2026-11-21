@@ -10,6 +10,7 @@
 // require the remote-control capability when issued from a paired device.
 
 import { transport } from "@/lib/tauri"
+import type { Transport } from "@/lib/tauri/transport-types"
 import { parseInvokeError } from "@/lib/tauri/command-error"
 import {
   fromRawWorkspaceEntry,
@@ -136,8 +137,12 @@ export async function walkWorkspace(
  * Metadata for a single workspace path. Returns `{ exists: false }` (never
  * throws) when the path is absent, so callers can probe before a create/rename.
  */
-export async function statWorkspaceFile(root: string, relPath: string): Promise<WorkspaceStat> {
-  const raw = await transport.call<RawWorkspaceStat>("fs_stat_workspace_file", {
+export async function statWorkspaceFile(
+  root: string,
+  relPath: string,
+  callTransport?: Pick<Transport, "call">
+): Promise<WorkspaceStat> {
+  const raw = await (callTransport ?? transport).call<RawWorkspaceStat>("fs_stat_workspace_file", {
     root,
     relPath,
   })
@@ -168,9 +173,14 @@ export async function searchWorkspaceContent(
 export async function readWorkspaceFile(
   root: string,
   relPath: string,
-  maxBytes?: number
+  maxBytes?: number,
+  callTransport?: Pick<Transport, "call">
 ): Promise<string> {
-  return transport.call<string>("fs_read_workspace_file", { root, relPath, maxBytes })
+  return (callTransport ?? transport).call<string>("fs_read_workspace_file", {
+    root,
+    relPath,
+    maxBytes,
+  })
 }
 
 export interface WorkspaceFileWriteResult {

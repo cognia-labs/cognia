@@ -41,6 +41,8 @@ let activeRemote: Transport | null = null
 
 type ActiveRemoteListener = (remote: Transport | null) => void
 const listeners = new Set<ActiveRemoteListener>()
+type ActiveRemoteEndpointListener = (endpoint: RemoteHostEndpoint | null) => void
+const endpointListeners = new Set<ActiveRemoteEndpointListener>()
 
 type DisposableTransport = Transport & {
   dispose?: () => void
@@ -144,12 +146,22 @@ export function isRemoteHostActive(): boolean {
  * remote-host store; read by the terminal endpoint resolver.
  */
 export function setActiveRemoteEndpoint(next: RemoteHostEndpoint | null): void {
+  if (activeRemoteEndpoint === next) return
   activeRemoteEndpoint = next
+  for (const listener of endpointListeners) listener(next)
 }
 
 /** The active remote host's WebSocket endpoint descriptor, or `null`. */
 export function getActiveRemoteEndpoint(): RemoteHostEndpoint | null {
   return activeRemoteEndpoint
+}
+
+/** Subscribe to active remote endpoint metadata updates without rebinding RPC streams. */
+export function subscribeActiveRemoteEndpoint(listener: ActiveRemoteEndpointListener): () => void {
+  endpointListeners.add(listener)
+  return () => {
+    endpointListeners.delete(listener)
+  }
 }
 
 /**
@@ -173,6 +185,7 @@ export function __resetRoutingForTests(): void {
   activeRemote = null
   activeRemoteEndpoint = null
   listeners.clear()
+  endpointListeners.clear()
   retainedRemotes.clear()
 }
 

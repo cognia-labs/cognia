@@ -37,10 +37,21 @@ export interface ProjectEnvironmentInitialization {
   /** Redacted diagnostic summary; command output and secrets are never stored here. */
   error?: string
   /**
+   * Stable identity of the execution Host this attempt ran on (`local`,
+   * `remote:<hostId>`, `paired:<accountId>:<targetId>`, …). Reuse matches only
+   * records created for the currently bound Host.
+   */
+  hostKey?: string
+  /**
+   * Unique id of this initialization attempt so its terminal update replaces
+   * its own `running` entry while an interrupted attempt stays visible.
+   */
+  attemptId?: string
+  /**
    * The setup fingerprint this run satisfied (see `ProjectEnvironmentSetupReuse`).
    * Written only on a successful run of an environment that opted into reuse;
-   * a later setup in the same root and scope with the same fingerprint may be
-   * skipped on the strength of it.
+   * a later setup in the same root, scope and Host with the same fingerprint
+   * may be skipped on the strength of it.
    */
   fingerprint?: string
   /**

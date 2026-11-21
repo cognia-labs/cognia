@@ -15,10 +15,31 @@ import type {
 import { BootstrapAgentValidationError } from "./bootstrap-agent"
 
 /** Bumped when the fingerprint's input shape changes, so old records stop matching. */
-const FINGERPRINT_VERSION = 1
+const FINGERPRINT_VERSION = 2
 
 /** Keeps a pathological list from turning every turn into a directory walk. */
 export const MAX_SETUP_REUSE_PATHS = 32
+
+/**
+ * Normalize an execution root string for in-process locking and history
+ * comparison so path aliases like `/repo` and `/repo/` or `C:\repo\` share the
+ * same directory identity (F3).
+ */
+export function normalizeExecutionRoot(raw: string): string {
+  const trimmed = raw.trim().replace(/\\/g, "/")
+  if (!trimmed) return ""
+  const drive = /^[A-Za-z]:/.exec(trimmed)?.[0]
+  const rest = drive ? trimmed.slice(drive.length) : trimmed
+  const absolute = rest.startsWith("/")
+  const segments: string[] = []
+  for (const part of rest.split("/")) {
+    if (!part || part === ".") continue
+    segments.push(part)
+  }
+  const joined = segments.join("/")
+  if (drive) return `${drive.toUpperCase()}${absolute ? "/" : ""}${joined}`
+  return absolute ? `/${joined}` : joined
+}
 
 export interface SetupReuseIo {
   /** Content of a root-relative file; rejects when missing or unreadable as text. */
@@ -124,19 +145,20 @@ function sortKeys(value: unknown): unknown {
 }
 
 /**
- * Everything about the environment definition a setup depends on, without any
- * file I/O. Two setup requests with the same signature would run the same
- * command in the same way, which is also the test for joining one that is
- * already in flight.
+ * Everything about the environment definition (and bound execution Host) a
+ * setup depends on, without any file I/O. Two setup requests with the same
+ * signature on the same Host would run the same command in the same way.
  */
 export function setupSignature(
   environment: Pick<
     ProjectEnvironment,
     "setupScript" | "variables" | "keyringReferences" | "policy" | "bootstrapAgent"
-  >
+  >,
+  hostKey?: string
 ): string {
   return canonicalJson({
     v: FINGERPRINT_VERSION,
+    hostKey: hostKey ?? null,
     setupScript: environment.setupScript,
     variables: environment.variables,
     keyringReferences: [...environment.keyringReferences]
@@ -185,29 +207,69 @@ export async function setupOutputsPresent(
 }
 
 /**
- * The record a reuse decision rests on: the most recent *finished* setup for
- * this root and scope. Only the latest counts. A failed run after a success may
- * have left the root half-installed, so an older success must not vouch for it.
+ * The record a reuse decision rests on: the most recent setup attempt for this
+ * root, scope and execution Host (F2, F7).
+ *
+ * Unfinished `running` attempts are NOT skipped: if a setup began after an
+ * earlier success and never settled (crash / reload / abrupt termination), it
+ * stays the latest record so the older success cannot vouch for a potentially
+ * half-mutated workspace. A `running` entry whose own attempt subsequently
+ * settled (same `attemptId`, or same `startedAt` with a finished record) is
+ * superseded by its terminal record.
  */
 export function latestSetupRecord(
   environment: Pick<ProjectEnvironment, "lastInitialization" | "initializationHistory">,
   executionRoot: string,
-  scope: ProjectEnvironmentInitialization["scope"]
+  scope: ProjectEnvironmentInitialization["scope"],
+  hostKey?: string
 ): ProjectEnvironmentInitialization | null {
-  const candidates = [
+  const normalizedRoot = normalizeExecutionRoot(executionRoot)
+  const matching = [
     ...(environment.initializationHistory ?? []),
     ...(environment.lastInitialization ? [environment.lastInitialization] : []),
-  ].filter(
-    (record) =>
-      record.executionRoot === executionRoot &&
-      record.scope === scope &&
-      record.status !== "running"
-  )
+  ].filter((record) => {
+    if (normalizeExecutionRoot(record.executionRoot) !== normalizedRoot || record.scope !== scope) {
+      return false
+    }
+    if (hostKey !== undefined) {
+      // A success must strictly match this Host; an unattributed `running`
+      // attempt for this root/scope still invalidates reuse fail-closed.
+      return (
+        record.hostKey === hostKey || (record.status === "running" && record.hostKey === undefined)
+      )
+    }
+    return record.hostKey === undefined
+  })
+
+  const settledAttemptIds = new Set<string>()
+  const settledStartTimes = new Set<number>()
+  for (const record of matching) {
+    if (record.status === "running") continue
+    if (record.attemptId) settledAttemptIds.add(record.attemptId)
+    else settledStartTimes.add(record.startedAt)
+  }
+
+  const candidates = matching.filter((record) => {
+    if (record.status !== "running") return true
+    if (record.attemptId && settledAttemptIds.has(record.attemptId)) return false
+    if (!record.attemptId && settledStartTimes.has(record.startedAt)) return false
+    return true
+  })
+
   let latest: ProjectEnvironmentInitialization | null = null
   for (const record of candidates) {
     const at = record.completedAt ?? record.startedAt
     const latestAt = latest ? (latest.completedAt ?? latest.startedAt) : -Infinity
-    if (at >= latestAt) latest = record
+    if (at > latestAt) {
+      latest = record
+    } else if (at === latestAt && latest) {
+      // At an identical timestamp, an unsettled `running` attempt supersedes an
+      // earlier finished attempt unless the finished record is the completion
+      // of that same start time (already filtered above).
+      if (record.status === "running" || latest.status !== "running") {
+        latest = record
+      }
+    }
   }
   return latest
 }
@@ -215,7 +277,10 @@ export function latestSetupRecord(
 /** Whether `record` vouches for skipping a setup whose fingerprint is `fingerprint`. */
 export function recordAllowsReuse(
   record: ProjectEnvironmentInitialization | null,
-  fingerprint: string
+  fingerprint: string,
+  hostKey?: string
 ): boolean {
-  return record?.status === "succeeded" && record.fingerprint === fingerprint
+  if (record?.status !== "succeeded" || record.fingerprint !== fingerprint) return false
+  if (hostKey !== undefined && record.hostKey !== hostKey) return false
+  return true
 }

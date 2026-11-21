@@ -98,6 +98,61 @@ describe("project environments persistence", () => {
     expect(await getProjectEnvironment("env-1")).toBeUndefined()
   })
 
+  it("settles matching running attempts in place while retaining interrupted running attempts", async () => {
+    await putProjectEnvironment(environment())
+    await updateProjectEnvironmentInitialization(
+      "env-1",
+      {
+        status: "running",
+        scope: "local",
+        executionRoot: "/repo",
+        hostKey: "remote:host-a",
+        attemptId: "attempt-1",
+        startedAt: 10,
+      },
+      10
+    )
+    await updateProjectEnvironmentInitialization(
+      "env-1",
+      {
+        status: "succeeded",
+        scope: "local",
+        executionRoot: "/repo",
+        hostKey: "remote:host-a",
+        attemptId: "attempt-1",
+        startedAt: 10,
+        completedAt: 12,
+        exitCode: 0,
+        fingerprint: "fp-1",
+      },
+      12
+    )
+    await updateProjectEnvironmentInitialization(
+      "env-1",
+      {
+        status: "running",
+        scope: "local",
+        executionRoot: "/repo",
+        hostKey: "remote:host-a",
+        attemptId: "attempt-crashed",
+        startedAt: 20,
+      },
+      20
+    )
+    const row = await getProjectEnvironment("env-1")
+    expect(row?.initializationHistory).toHaveLength(2)
+    expect(row?.initializationHistory?.[0]).toMatchObject({
+      attemptId: "attempt-1",
+      status: "succeeded",
+      hostKey: "remote:host-a",
+    })
+    expect(row?.initializationHistory?.[1]).toMatchObject({
+      attemptId: "attempt-crashed",
+      status: "running",
+      hostKey: "remote:host-a",
+    })
+  })
+
   it("creates immutable monotonically versioned environment snapshots", async () => {
     const first = await createProjectEnvironmentVersion(
       environment(),
