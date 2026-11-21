@@ -380,9 +380,10 @@ it("offers saved launch profiles behind the shell picker", async () => {
   await userEvent.click(await screen.findByTestId("terminal-shell-picker-profile-prof-1"))
 
   await waitFor(() => expect(mockSpawnFromDock).toHaveBeenCalled())
-  // Only the id travels: the host resolves shell, cwd and env from its own
-  // synchronized copy, the same contract a remote spawn frame has.
+  // Mobile profile launches forward resolved profile fields alongside `profileId`
+  // so `acquireRemoteLaunchProfile` syncs per-launch overrides (projectId,
+  // integration, utf8, sandboxed) without clobbering concurrent launches (T01, T07).
   const req = mockSpawnFromDock.mock.calls.at(-1)?.[0]
   expect(req?.req.profileId).toBe("prof-1")
-  expect(req?.req.shell).toBe("")
+  expect(req?.req.shell).toBe("/bin/bash")
 })

@@ -309,7 +309,24 @@ export function TerminalCard({ panel }: TerminalCardProps) {
   }, [])
 
   function update(patch: Partial<TerminalSettings>): void {
-    void save({ terminal: { ...terminal, ...patch } })
+    const next = { ...terminal, ...patch }
+    void save({ terminal: next })
+    if (
+      ("enableShellIntegration" in patch || "forceUtf8" in patch || "sandboxed" in patch) &&
+      hostReachable
+    ) {
+      void import("@/lib/terminal/host-profiles")
+        .then(({ syncTerminalHostProfiles }) =>
+          syncTerminalHostProfiles(next.profiles, {
+            enableShellIntegration: next.enableShellIntegration,
+            forceUtf8: next.forceUtf8,
+            sandboxed: next.sandboxed,
+            sshProfiles: next.sshHosts,
+            interactive: true,
+          })
+        )
+        .catch(() => toast.error(t("settings.terminal.profiles.syncError")))
+    }
   }
 
   /**

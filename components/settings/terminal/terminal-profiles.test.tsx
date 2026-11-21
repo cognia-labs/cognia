@@ -10,7 +10,10 @@ jest.mock("next-intl", () => ({
 
 const mockIsTauri = jest.fn(() => false)
 const mockSyncTerminalHostProfiles = jest.fn(async (..._args: unknown[]) => undefined)
-jest.mock("@/lib/tauri", () => ({ isTauri: () => mockIsTauri() }))
+jest.mock("@/lib/tauri", () => ({
+  isTauri: () => mockIsTauri(),
+  isCapacitor: () => false,
+}))
 jest.mock("@/lib/terminal/host-profiles", () => ({
   syncTerminalHostProfiles: (...args: unknown[]) => mockSyncTerminalHostProfiles(...args),
 }))
@@ -172,6 +175,26 @@ describe("TerminalProfiles", () => {
     })
     expect(settingsSave).toHaveBeenLastCalledWith({
       terminal: expect.objectContaining({ profiles: [], defaultProfileId: undefined }),
+    })
+  })
+
+  it("edits startupCommands as one-per-line text and persists the parsed list (T16)", async () => {
+    settingsState = {
+      terminal: { profiles: [{ id: "profile-1", name: "Dev", shell: "/bin/zsh" }] },
+    }
+    render(<TerminalProfiles />)
+    const startup = screen.getByTestId("terminal-profile-startup-profile-1") as HTMLTextAreaElement
+    await act(async () => {
+      fireEvent.change(startup, { target: { value: "source ~/.nvm/nvm.sh\nnvm use 20" } })
+    })
+    expect(settingsSave).toHaveBeenLastCalledWith({
+      terminal: expect.objectContaining({
+        profiles: [
+          expect.objectContaining({
+            startupCommands: ["source ~/.nvm/nvm.sh", "nvm use 20"],
+          }),
+        ],
+      }),
     })
   })
 })

@@ -143,6 +143,7 @@
     "mediaOption": "动画：{name}"
   },
   "bubbleAction": {
+    "openAttention": "立即查看",
     "openConsole": "打开{tab}"
   },
   "bubbles": {
@@ -230,6 +231,7 @@
       "title": "开启宠物聊天",
       "failed": "未能开启宠物聊天，请重试。"
     },
+    "handoffHeader": "来自宠物对话的上下文（{name}）：",
     "openFullChat": "打开完整对话",
     "petFallbackName": "宠物",
     "scrollToBottom": "滚动到最新宠物消息",
@@ -239,9 +241,12 @@
   "commands": {
     "clean": "给宠物清洁",
     "feed": "喂宠物",
+    "openPopup": "打开宠物快捷菜单",
     "pet": "抚摸宠物",
     "play": "和宠物玩耍",
+    "resetPosition": "重置桌宠位置",
     "sleep": "哄宠物睡觉",
+    "toggleClickThrough": "切换桌宠鼠标穿透",
     "toggleWindow": "切换桌宠",
     "treat": "给宠物吃零食",
     "unavailable": {
@@ -514,6 +519,16 @@
     "title": "道具"
   },
   "journal": {
+    "attention": {
+      "open": "前往处理",
+      "sources": {
+        "chat": "对话",
+        "fleet": "智能体",
+        "run": "运行任务",
+        "team": "团队"
+      },
+      "title": "待你处理的事项（{count}）"
+    },
     "dayTotals": "{count} 条 · +{xp} XP",
     "empty": "日记还是空的——照顾你的宠物，它的每一天都会记录在这里。",
     "kinds": {

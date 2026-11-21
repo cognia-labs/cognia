@@ -58,6 +58,10 @@ import {
   type ForwardedRef,
 } from "react"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
+
+import { HostConsentRequiredError } from "@/lib/tauri/admin-lease"
+import { getActiveRemoteEndpoint, isRemoteHostActive } from "@/lib/tauri/transport-routing"
 
 import type { IDecoration, ILink, ILinkProvider, IMarker } from "@xterm/xterm"
 // xterm.js ships its own stylesheet that positions the viewport, screen, and the
@@ -146,6 +150,8 @@ export interface TerminalInstanceHandle {
   focusKeyboard: () => void
   /** Explicitly dismiss the software keyboard. */
   hideKeyboard: () => void
+  /** Current measured terminal dimensions (`rows` × `cols`), or null before mount. */
+  getDimensions?: () => { rows: number; cols: number } | null
 }
 
 interface CommandMarkerEntry {
@@ -589,11 +595,48 @@ function TerminalInstanceImpl(
         if (s) void s.write(data)
       },
       openUrl: openExternalLink,
-      // Routed, not `invoke`d: the busy port belongs to whichever machine ran
-      // the command, and over ws/webrtc that is the host, not this one.
+      // Bound to the session's own Host (never the local desktop on an SSH or
+      // cross-host tab), with an interactive adminLease when remote (T03).
       killPort: async (port) => {
-        const { killTerminalPort } = await import("@/lib/terminal/remote-api")
-        return killTerminalPort(port)
+        const row = useTerminalStore.getState().sessions[sessionId]
+        const live = getLiveSession(sessionId)
+        const { killTerminalPortForSession } = await import("@/lib/terminal/remote-api")
+        return killTerminalPortForSession(
+          {
+            kind: row?.kind ?? live?.info.kind,
+            origin: row?.origin ?? live?.info.origin,
+            remoteHost: row?.remoteHost ?? live?.info.remoteHost,
+          },
+          port
+        )
+      },
+      onPortNotFreed: (port) => {
+        toast.info(t("quickFix.portNotListening", { port }))
+      },
+      onError: (error, failedAction) => {
+        if (failedAction.type !== "kill-port") return
+        const row = useTerminalStore.getState().sessions[sessionId]
+        const live = getLiveSession(sessionId)
+        const kind = row?.kind ?? live?.info.kind
+        if (kind === "ssh") {
+          toast.error(t("quickFix.freePortUnsupportedSsh", { port: failedAction.port }))
+          return
+        }
+        if (error instanceof HostConsentRequiredError && error.consentCode) {
+          toast.error(
+            t("quickFix.freePortApprovalRequired", {
+              port: failedAction.port,
+              code: error.consentCode,
+            })
+          )
+          return
+        }
+        toast.error(
+          t("quickFix.freePortFailed", {
+            port: failedAction.port,
+            message: error instanceof Error ? error.message : String(error),
+          })
+        )
       },
     })
 
@@ -641,6 +684,11 @@ function TerminalInstanceImpl(
         } catch {
           /* noop */
         }
+      },
+      getDimensions: () => {
+        const term = termRef.current
+        if (!term || typeof term.rows !== "number" || typeof term.cols !== "number") return null
+        return { rows: term.rows, cols: term.cols }
       },
       copySelection: async () => {
         const term = termRef.current
@@ -1322,6 +1370,31 @@ function TerminalInstanceImpl(
             },
             activate: () => {
               const session = useTerminalStore.getState().sessions[sessionId]
+              if (session?.kind && session.kind !== "localPty") {
+                toast.info(t("fileViewer.unsupportedSession"))
+                return
+              }
+              const sessionIsRemote =
+                session?.origin === "remote" ||
+                (session?.remoteHost !== undefined && session.remoteHost !== null)
+              const activeRemote = isRemoteHostActive()
+              const activeRemoteId = getActiveRemoteEndpoint()?.remoteHost?.id ?? null
+              const sessionRemoteId = session?.remoteHost?.id ?? null
+              if (
+                session &&
+                (sessionIsRemote !== activeRemote ||
+                  (sessionIsRemote &&
+                    sessionRemoteId !== null &&
+                    activeRemoteId !== null &&
+                    sessionRemoteId !== activeRemoteId))
+              ) {
+                toast.info(
+                  t("fileViewer.differentHost", {
+                    host: session.remoteHost?.label ?? t("host.thisDesktop"),
+                  })
+                )
+                return
+              }
               // `cwd` absolutizes a relative match and nothing more. It is not a
               // confinement boundary: the shell rewrites it on every `cd`, so a
               // root derived from it would widen to `/` the moment the user

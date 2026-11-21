@@ -270,6 +270,8 @@
       "adjustments": {
         "bindNarrowedToLoopback": "绑定了更宽地址的转发会被收窄到 127.0.0.1。",
         "extraAliasesDropped": "Host 行中只有第一个别名会成为配置。",
+        "extraIdentityFilesDropped": "此主机匹配了多个 IdentityFile 路径，仅导入第一个密钥路径。",
+        "missingUsername": "OpenSSH 配置中未设置 User，导入后请先补充用户名再连接。",
         "remoteForwardDisabled": "远程转发导入后默认关闭，需要时再手动启用。"
       },
       "badges": {
@@ -286,6 +288,7 @@
         "include": "未展开 Include「{subject}」。",
         "line": "第 {line} 行",
         "malformedForward": "无法解析「{subject}」。",
+        "malformedPort": "端口「{subject}」无效，已被忽略。",
         "matchBlock": "已跳过 Match 块「{subject}」。",
         "missingHostName": "「{subject}」没有 HostName，将直接以该名称连接。",
         "proxyCommand": "「{subject}」上的 ProxyCommand 在此没有对应能力，请改用跳板机设置。",

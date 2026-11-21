@@ -68,3 +68,22 @@ describe.each([
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ args: undefined }))
   })
 })
+
+describe("unattended execution placement notice (T10)", () => {
+  it("surfaces explicit local/remote placement notices when unattended is enabled", () => {
+    const {
+      getByTestId: getSys,
+      queryByTestId: querySys,
+      rerender,
+    } = render(<SystemTerminalConfig params={{ unattended: false }} onChange={jest.fn()} />)
+    expect(querySys("term-unattended-placement")).toBeNull()
+
+    rerender(<SystemTerminalConfig params={{ unattended: true }} onChange={jest.fn()} />)
+    expect(getSys("term-unattended-placement")).toBeInTheDocument()
+
+    const { getByTestId: getOpen } = render(
+      <TerminalSessionOpenConfig params={{ unattended: true }} onChange={jest.fn()} />
+    )
+    expect(getOpen("tsopen-unattended-placement")).toBeInTheDocument()
+  })
+})

@@ -289,11 +289,19 @@ export function TerminalDock({
   // The pane group reports which pane is focused; the search overlay,
   // history rail and command-jump keys all target that pane.
   const focusedHandleRef = useRef<TerminalInstanceHandle | null>(null)
+  const paneHandlesRef = useRef(new Map<string, TerminalInstanceHandle | null>())
   const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null)
   const onFocusedChange = useCallback(
     (sessionId: string, handle: TerminalInstanceHandle | null) => {
       focusedHandleRef.current = handle
       setFocusedSessionId(sessionId)
+    },
+    []
+  )
+  const onPaneHandleChange = useCallback(
+    (sessionId: string, handle: TerminalInstanceHandle | null) => {
+      if (handle) paneHandlesRef.current.set(sessionId, handle)
+      else paneHandlesRef.current.delete(sessionId)
     },
     []
   )
@@ -498,6 +506,11 @@ export function TerminalDock({
    */
   const handleRestart = useCallback(
     (id: string) => {
+      const dims = paneHandlesRef.current.get(id)?.getDimensions?.() ??
+        (id === focusedSessionId ? focusedHandleRef.current?.getDimensions?.() : null) ?? {
+          rows: 24,
+          cols: 80,
+        }
       const row = useTerminalStore.getState().sessions[id]
       if (row?.kind === "ssh") {
         if (!row.profileId) {
@@ -507,6 +520,8 @@ export function TerminalDock({
         void connectSsh({
           hostId: row.profileId,
           projectId: row.projectId ?? undefined,
+          rows: dims.rows,
+          cols: dims.cols,
           replacesSessionId: id,
         })
         return
@@ -514,8 +529,8 @@ export function TerminalDock({
       void restartFromDock({
         sessionId: id,
         store: useTerminalStore.getState(),
-        rows: 24,
-        cols: 80,
+        rows: dims.rows,
+        cols: dims.cols,
       }).then((outcome) => {
         if (outcome.kind === "error") {
           toast.error(
@@ -528,7 +543,20 @@ export function TerminalDock({
         }
       })
     },
-    [connectSsh, t]
+    [connectSsh, focusedSessionId, t]
+  )
+
+  const handleCloseBodyContextPane = useCallback(
+    (id: string) => {
+      const state = useTerminalStore.getState()
+      const anchor = state.groupAnchorOf(id)
+      if (state.panesForGroup(anchor).length > 1) {
+        handleClosePane(id)
+        return
+      }
+      requestCloseTab(anchor)
+    },
+    [handleClosePane, requestCloseTab]
   )
 
   const handleCloseOthers = useCallback(
@@ -945,15 +973,17 @@ export function TerminalDock({
                 instance area so right-click on the terminal also offers
                 tab-level actions. */}
             <TerminalTabContextMenu
-              row={activeRow}
-              recording={recordings.get(activeRow.id)?.status ?? null}
+              row={targetRow ?? activeRow}
+              recording={recordings.get((targetRow ?? activeRow).id)?.status ?? null}
               onStartRecording={recordingActions.start}
               onSaveRecording={handleSaveRecording}
               onDiscardRecording={recordingActions.discard}
               onRename={handleRename}
               onRestart={handleRestart}
-              onClose={requestCloseTab}
-              onCloseOthers={handleCloseOthers}
+              onClose={handleCloseBodyContextPane}
+              onCloseOthers={(id) =>
+                handleCloseOthers(useTerminalStore.getState().groupAnchorOf(id))
+              }
               onToggleAgentTrust={handleToggleTrust}
               onLocateInChat={handleLocateInChat}
               onChangeAppearance={handleChangeAppearance}
@@ -993,6 +1023,7 @@ export function TerminalDock({
                 <TerminalPaneGroup
                   anchorId={activeRow.id}
                   onFocusedChange={onFocusedChange}
+                  onPaneHandleChange={onPaneHandleChange}
                   onClosePane={handleClosePane}
                 />
               </div>

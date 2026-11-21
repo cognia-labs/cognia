@@ -144,9 +144,11 @@
   },
   "fileViewer": {
     "description": "只读源码预览",
+    "differentHost": "此路径属于 {host}。请切换到该主机后再打开其文件。",
     "error": "打开文件失败：{message}",
     "loading": "加载中…",
-    "title": "文件查看器"
+    "title": "文件查看器",
+    "unsupportedSession": "SSH 或设备会话中的文件链接无法直接在本地工作区查看器中打开，请改用通过 SFTP 浏览文件。"
   },
   "fold": {
     "collapse": "折叠输出",
@@ -212,6 +214,7 @@
       "remote_access_disabled": "主机已关闭远程终端访问。",
       "resource_limited": "终端主机已达到资源上限。",
       "unauthorized": "此设备没有远程终端权限。",
+      "approval_required": "启动远程终端需要在主机设备上批准。请在主机上确认后重试。",
       "unpaired": "请先配对此设备，再打开远程终端。",
       "credential_unavailable": "终端主机无法访问已保存的凭据，请在主机设备上授权访问。"
     },
@@ -235,6 +238,10 @@
   "quickFix": {
     "createPr": "创建 Pull Request",
     "freePort": "释放端口 {port}",
+    "freePortApprovalRequired": "请在主机上批准释放端口 {port}（授权码 {code}），然后再试。",
+    "freePortFailed": "无法释放端口 {port}：{message}",
+    "freePortUnsupportedSsh": "SSH 会话不支持自动释放端口，请直接在远程 Shell 中停止端口 {port} 上的进程。",
+    "portNotListening": "未发现当前用户在端口 {port} 上监听的进程。",
     "runCommand": "运行：{command}",
     "title": "快速修复",
     "trigger": "显示快速修复"

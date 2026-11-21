@@ -270,6 +270,8 @@
       "adjustments": {
         "bindNarrowedToLoopback": "A forward binding a wider address will be narrowed to 127.0.0.1.",
         "extraAliasesDropped": "Only the first alias on the Host line becomes a profile.",
+        "extraIdentityFilesDropped": "Multiple IdentityFile paths matched this host; only the first key path is imported.",
+        "missingUsername": "No User was set in OpenSSH config; fill in a username after importing before connecting.",
         "remoteForwardDisabled": "Remote forwards are imported switched off; turn one on when you want it."
       },
       "badges": {
@@ -286,6 +288,7 @@
         "include": "Include “{subject}” was not followed.",
         "line": "line {line}",
         "malformedForward": "Could not read “{subject}”.",
+        "malformedPort": "Port “{subject}” is invalid and was ignored.",
         "matchBlock": "Match block “{subject}” was skipped.",
         "missingHostName": "“{subject}” has no HostName, so it will connect to that name directly.",
         "proxyCommand": "ProxyCommand on “{subject}” has no equivalent here; set a jump host instead.",

@@ -159,6 +159,24 @@ describe("TerminalPaneGroup", () => {
     expect(onFocusedChange).toHaveBeenLastCalledWith("a", fakeHandle)
   })
 
+  it("focuses a split pane on right-click (contextmenu capture) so context actions target that pane (T04)", () => {
+    useTerminalStore.getState().registerSession(info("a"))
+    useTerminalStore.getState().registerSession(info("b"))
+    useTerminalStore.getState().addPaneToGroup("a", "b")
+    const onFocusedChange = jest.fn()
+    render(
+      <TerminalPaneGroup anchorId="a" onFocusedChange={onFocusedChange} onClosePane={jest.fn()} />
+    )
+    const paneA = screen
+      .getAllByTestId("terminal-pane")
+      .find((p) => p.getAttribute("data-session-id") === "a")!
+    act(() => {
+      fireEvent.contextMenu(paneA)
+    })
+    expect(useTerminalStore.getState().focusedPaneByAnchor["a"]).toBe("a")
+    expect(onFocusedChange).toHaveBeenLastCalledWith("a", fakeHandle)
+  })
+
   it("invokes onClosePane with the pane's session id", () => {
     useTerminalStore.getState().registerSession(info("a"))
     useTerminalStore.getState().registerSession(info("b"))

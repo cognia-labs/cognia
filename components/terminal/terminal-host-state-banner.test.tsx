@@ -41,6 +41,17 @@ it("offers retry for an offline host and settings for authorization failures", (
   rerender(<TerminalHostStateBanner onRetry={retry} onOpenSettings={openSettings} />)
   fireEvent.click(screen.getByRole("button"))
   expect(openSettings).toHaveBeenCalled()
+
+  // Once approved on the host device, retrying resolves `approval_required` (T13).
+  retry.mockClear()
+  act(() => useTerminalStore.getState().setHostState("approval_required"))
+  rerender(<TerminalHostStateBanner onRetry={retry} onOpenSettings={openSettings} />)
+  expect(screen.getByTestId("terminal-host-state-banner")).toHaveAttribute(
+    "data-state",
+    "approval_required"
+  )
+  fireEvent.click(screen.getByRole("button"))
+  expect(retry).toHaveBeenCalledTimes(1)
 })
 
 // A retry cannot turn a switch back on. Sending the user to settings is the

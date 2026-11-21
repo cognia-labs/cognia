@@ -2859,7 +2859,7 @@
       }
     },
     "shell": {
-      "hint": "Leave empty to inherit settings.terminal.defaultShell.",
+      "hint": "Leave empty to inherit settings.terminal.defaultShell. Note: paired remote unattended runs execute one-shot commands and reject custom shell overrides.",
       "label": "Shell (override)",
       "placeholder": "/bin/bash"
     },
@@ -3217,8 +3217,9 @@
       "label": "Shell (override)",
       "placeholder": "/bin/bash"
     },
+    "placementNotice": "Execution target: desktop unattended sessions always run on this machine (even if a remote Host is selected), and paired remote clients cannot open persistent unattended sessions.",
     "unattended": {
-      "hint": "Open a private headless shell instead of a visible dock tab. Each command run in it is screened by the safety classifier.",
+      "hint": "Open a private headless shell on this desktop instead of a visible dock tab (desktop app only — runs locally even when a remote Host is selected; paired remote hosts do not support persistent unattended sessions). Each command is screened by the safety classifier.",
       "label": "Unattended (headless)"
     }
   },
@@ -3270,8 +3271,9 @@
         "run": "Run anyway"
       }
     },
+    "placementNotice": "Execution target: desktop unattended sessions always run on this machine (even if a remote Host is selected), and paired remote clients cannot open persistent unattended sessions.",
     "unattended": {
-      "hint": "Run without a visible terminal tab or consent prompt. Requires the unattended-execution setting; every command is screened by the safety classifier.",
+      "hint": "Run without a visible terminal tab or consent prompt. Requires the unattended-execution setting; every command is screened by the safety classifier. On desktop, unattended steps always run on this machine even when a remote Host is active; paired remote shells support one-shot commands only (no custom shell or sandbox).",
       "label": "Unattended (headless)"
     }
   },

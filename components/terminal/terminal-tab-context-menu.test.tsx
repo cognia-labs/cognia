@@ -228,6 +228,12 @@ describe("TerminalTabContextMenu", () => {
       expect(screen.queryByTestId("terminal-tab-menu-restart")).toBeNull()
       expect(screen.getByTestId("terminal-tab-menu-close")).toBeInTheDocument()
     })
+
+    it("withholds Restart from an extension pseudoterminal tab (T04)", () => {
+      renderMenu({ row: row({ kind: "extension", extensionId: "ext.pty", shell: "Ext PTY" }) })
+      expect(screen.queryByTestId("terminal-tab-menu-restart")).toBeNull()
+      expect(screen.getByTestId("terminal-tab-menu-close")).toBeInTheDocument()
+    })
   })
 
   describe("recording", () => {

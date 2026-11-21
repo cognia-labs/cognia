@@ -204,6 +204,11 @@ export function TerminalSessionOpenConfig({ params, onChange }: ConfigProps) {
           />
         </Field>
       </div>
+      {unattended ? (
+        <p className="text-[11px] text-muted-foreground" data-testid="tsopen-unattended-placement">
+          {t("placementNotice")}
+        </p>
+      ) : null}
     </FieldGroup>
   )
 }

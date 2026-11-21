@@ -61,9 +61,14 @@ import { TerminalSearchOverlay } from "@/components/terminal/terminal-search-ove
 import { TerminalTabStrip } from "@/components/terminal/terminal-tab-strip"
 import { selectTerminalTransport } from "@/lib/terminal/pick-transport"
 import { useMediaQuery, useResizableLayout } from "@/hooks/ui"
-import type { TerminalProfile } from "@/lib/terminal/profiles"
+import {
+  findProfile,
+  profileToSpawnFields,
+  type TerminalProfile,
+} from "@/lib/terminal/profiles"
 import { getLiveSession } from "@/lib/terminal/session-registry"
 import { detachFromDock, spawnFromDock } from "@/lib/terminal/spawn-orchestrator"
+import { attachProfileStartupCommands } from "@/lib/terminal/startup-commands"
 import { TerminalShellPicker } from "@/components/terminal/terminal-shell-picker"
 import { selectSavedSshHosts } from "@/lib/terminal/saved-ssh-hosts"
 import { useSshConnect } from "@/hooks/terminal/use-ssh-connect"
@@ -97,6 +102,17 @@ export function MobileTerminalScreen() {
   )
   const settingsProfiles = useSettingsStore(
     (s) => (s.settings?.terminal as { profiles?: TerminalProfile[] } | undefined)?.profiles
+  )
+  const settingsEnableShellIntegration = useSettingsStore(
+    (s) =>
+      (s.settings?.terminal as { enableShellIntegration?: boolean } | undefined)
+        ?.enableShellIntegration ?? true
+  )
+  const settingsForceUtf8 = useSettingsStore(
+    (s) => (s.settings?.terminal as { forceUtf8?: boolean } | undefined)?.forceUtf8 ?? true
+  )
+  const settingsSandboxed = useSettingsStore(
+    (s) => (s.settings?.terminal as { sandboxed?: boolean } | undefined)?.sandboxed ?? false
   )
   const settingsFontSize = useSettingsStore(
     (s) => (s.settings?.terminal as { fontSize?: number } | undefined)?.fontSize
@@ -200,30 +216,55 @@ export function MobileTerminalScreen() {
         cwd,
         env,
         projectId: activeProjectId ?? undefined,
-        enableShellIntegration: true,
+        enableShellIntegration: settingsEnableShellIntegration,
+        forceUtf8: settingsForceUtf8,
+        sandboxed: settingsSandboxed,
       },
       store: useTerminalStore.getState(),
     })
     return outcome.kind === "spawned" ? outcome.sessionId : null
-  }, [project, activeProjectId, settingsShell])
+  }, [
+    project,
+    activeProjectId,
+    settingsShell,
+    settingsEnableShellIntegration,
+    settingsForceUtf8,
+    settingsSandboxed,
+  ])
 
   /**
-   * Launch a saved profile by id.
-   *
-   * The picker has listed profiles since it was written; the phone was the one
-   * caller that never passed them, so a profile the user configured on the
-   * desktop was invisible on the device most likely to want a one-tap launch.
-   * Only the id travels — the host resolves shell, cwd and env from its own
-   * synchronized copy, exactly as it does for a remote spawn frame.
+   * Launch a saved profile by id, forwarding its resolved fields and per-profile
+   * `startupCommands` (T01, T07, T16).
    */
   const handleNewProfile = useCallback(
     async (profileId: string): Promise<void> => {
-      await spawnFromDock({
-        req: { shell: "", rows: 28, cols: 80, profileId, projectId: activeProjectId ?? undefined },
+      const profile = findProfile(settingsProfiles, profileId)
+      const fields = profile ? profileToSpawnFields(profile) : null
+      const outcome = await spawnFromDock({
+        req: {
+          ...(fields ?? { shell: "" }),
+          rows: 28,
+          cols: 80,
+          profileId,
+          projectId: activeProjectId ?? undefined,
+          enableShellIntegration: settingsEnableShellIntegration,
+          forceUtf8: settingsForceUtf8,
+          sandboxed: settingsSandboxed,
+        },
         store: useTerminalStore.getState(),
       })
+      if (outcome.kind === "spawned" && profile?.startupCommands?.length) {
+        const live = getLiveSession(outcome.sessionId)
+        if (live) attachProfileStartupCommands(live, profile.startupCommands)
+      }
     },
-    [activeProjectId]
+    [
+      activeProjectId,
+      settingsProfiles,
+      settingsEnableShellIntegration,
+      settingsForceUtf8,
+      settingsSandboxed,
+    ]
   )
 
   /**

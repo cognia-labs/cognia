@@ -144,9 +144,11 @@
   },
   "fileViewer": {
     "description": "Read-only source file preview",
+    "differentHost": "This path belongs to {host}. Switch to that host to open its files.",
     "error": "Failed to open file: {message}",
     "loading": "Loading…",
-    "title": "File viewer"
+    "title": "File viewer",
+    "unsupportedSession": "File links in SSH or device sessions cannot be opened directly in the local workspace viewer. Use Browse files over SFTP instead."
   },
   "fold": {
     "collapse": "Fold output",
@@ -212,6 +214,7 @@
       "remote_access_disabled": "Remote terminal access is switched off on the host.",
       "resource_limited": "The terminal host has reached its resource limit.",
       "unauthorized": "This device is not allowed to use remote terminals.",
+      "approval_required": "Remote terminal launch requires approval on the host device. Approve the request on the host, then retry.",
       "unpaired": "Pair this device before opening a remote terminal.",
       "credential_unavailable": "The terminal host cannot access its saved credentials. Authorize access on the host device."
     },
@@ -235,6 +238,10 @@
   "quickFix": {
     "createPr": "Create pull request",
     "freePort": "Free port {port}",
+    "freePortApprovalRequired": "Approve port {port} cleanup on the host (code {code}), then try again.",
+    "freePortFailed": "Couldn't free port {port}: {message}",
+    "freePortUnsupportedSsh": "Automatic port cleanup isn't available inside SSH sessions. Stop port {port} directly in the remote shell.",
+    "portNotListening": "No process owned by this user was found listening on port {port}.",
     "runCommand": "Run: {command}",
     "title": "Quick fixes",
     "trigger": "Show quick fixes"

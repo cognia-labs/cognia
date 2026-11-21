@@ -128,7 +128,7 @@ export function TerminalTabContextMenu({
   const t = useTranslations("terminal.tab.menu")
   const hasEditGroup = !!(onCopy || onPaste || onSelectAll || onClear || onFind)
   const sshProfileId = row.kind === "ssh" && row.profileId ? row.profileId : null
-  const canRestart = row.kind !== "serial"
+  const canRestart = row.kind !== "serial" && row.kind !== "extension" && !row.extensionId
   // Set by the Rename item, acted on once the menu has closed (see above).
   const renamePickedRef = useRef(false)
   return (

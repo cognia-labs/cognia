@@ -1221,26 +1221,34 @@ export function TerminalUnattendedFields({
         </Field>
       </div>
       {unattended ? (
-        <Field
-          label={t("onAskVerdict.label")}
-          htmlFor={`${idPrefix}-askverdict`}
-          hint={t("onAskVerdict.hint")}
-          name="onAskVerdict"
-        >
-          <Select
-            value={onAskVerdict}
-            onValueChange={(v) => onChange(patchParam(params, "onAskVerdict", v))}
+        <>
+          <p
+            className="text-[11px] text-muted-foreground"
+            data-testid={`${idPrefix}-unattended-placement`}
           >
-            <SelectTrigger id={`${idPrefix}-askverdict`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="fail">{t("onAskVerdict.options.fail")}</SelectItem>
-              <SelectItem value="consent">{t("onAskVerdict.options.consent")}</SelectItem>
-              <SelectItem value="run">{t("onAskVerdict.options.run")}</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
+            {t("placementNotice")}
+          </p>
+          <Field
+            label={t("onAskVerdict.label")}
+            htmlFor={`${idPrefix}-askverdict`}
+            hint={t("onAskVerdict.hint")}
+            name="onAskVerdict"
+          >
+            <Select
+              value={onAskVerdict}
+              onValueChange={(v) => onChange(patchParam(params, "onAskVerdict", v))}
+            >
+              <SelectTrigger id={`${idPrefix}-askverdict`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fail">{t("onAskVerdict.options.fail")}</SelectItem>
+                <SelectItem value="consent">{t("onAskVerdict.options.consent")}</SelectItem>
+                <SelectItem value="run">{t("onAskVerdict.options.run")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+        </>
       ) : null}
     </>
   )

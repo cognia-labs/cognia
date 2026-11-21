@@ -24,13 +24,16 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   formatProfileArgs,
   formatProfileEnv,
+  formatStartupCommands,
   nextProfileId,
   parseProfileArgs,
   parseProfileEnv,
+  parseStartupCommands,
   type TerminalProfile,
 } from "@/lib/terminal/profiles"
 import { useSettingsStore } from "@/stores/settings"
 import { isTauri } from "@/lib/tauri"
+import { terminalAvailable } from "@/lib/terminal/pick-transport"
 import { syncTerminalHostProfiles } from "@/lib/terminal/host-profiles"
 
 /** In-flight textarea text per profile row, keyed `<profileId>:<field>`. */
@@ -65,7 +68,7 @@ export function TerminalProfiles() {
   function persist(patch: Partial<TerminalSettings>): void {
     const nextTerminal = { ...terminal, ...patch }
     void save({ terminal: nextTerminal })
-    if (patch.profiles && isTauri()) {
+    if (patch.profiles && (isTauri() || terminalAvailable())) {
       if (profileSyncTimer.current) clearTimeout(profileSyncTimer.current)
       profileSyncTimer.current = setTimeout(() => {
         profileSyncTimer.current = null
@@ -74,6 +77,7 @@ export function TerminalProfiles() {
           forceUtf8: nextTerminal.forceUtf8,
           sandboxed: nextTerminal.sandboxed,
           sshProfiles: nextTerminal.sshHosts,
+          interactive: true,
         }).catch(() => toast.error(t("settings.terminal.profiles.syncError")))
       }, 200)
     }
@@ -189,6 +193,31 @@ export function TerminalProfiles() {
                       data-testid={`terminal-profile-env-${profile.id}`}
                     />
                   </div>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px] text-muted-foreground">
+                    {t("settings.terminal.profiles.startupLabel")}
+                  </Label>
+                  <Textarea
+                    value={
+                      drafts[`${profile.id}:startup`] ??
+                      formatStartupCommands(profile.startupCommands)
+                    }
+                    placeholder={t("settings.terminal.profiles.startupPlaceholder")}
+                    rows={2}
+                    onChange={(e) => {
+                      setDrafts((d) => ({ ...d, [`${profile.id}:startup`]: e.target.value }))
+                      updateProfile(profile.id, {
+                        startupCommands: parseStartupCommands(e.target.value),
+                      })
+                    }}
+                    onBlur={() =>
+                      setDrafts((d) => ({ ...d, [`${profile.id}:startup`]: undefined }))
+                    }
+                    className="min-h-0 px-2 py-1 font-mono text-xs"
+                    aria-label={t("settings.terminal.profiles.startupLabel")}
+                    data-testid={`terminal-profile-startup-${profile.id}`}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Button

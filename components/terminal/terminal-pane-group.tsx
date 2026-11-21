@@ -41,6 +41,8 @@ export interface TerminalPaneGroupProps {
   anchorId: string
   /** Reports the focused pane + its imperative handle to the dock. */
   onFocusedChange: (sessionId: string, handle: TerminalInstanceHandle | null) => void
+  /** Optional mirror of every mounted pane handle so tab-level Restart can read real dimensions. */
+  onPaneHandleChange?: (sessionId: string, handle: TerminalInstanceHandle | null) => void
   /** Close a single pane (kills that session; the group survives). */
   onClosePane: (sessionId: string) => void
   className?: string
@@ -49,6 +51,7 @@ export interface TerminalPaneGroupProps {
 export function TerminalPaneGroup({
   anchorId,
   onFocusedChange,
+  onPaneHandleChange,
   onClosePane,
   className,
 }: TerminalPaneGroupProps) {
@@ -83,11 +86,12 @@ export function TerminalPaneGroup({
   const setHandle = useCallback(
     (id: string, handle: TerminalInstanceHandle | null) => {
       handlesRef.current.set(id, handle)
+      onPaneHandleChange?.(id, handle)
       // If the handle for the currently-focused pane just became available
       // (async xterm mount), re-report so the dock's ref is fresh.
       if (id === focused) onFocusedChange(focused, handle)
     },
-    [focused, onFocusedChange]
+    [focused, onFocusedChange, onPaneHandleChange]
   )
 
   if (panes.length === 1) {
@@ -173,6 +177,7 @@ function PaneBox({
       data-session-id={sessionId}
       data-focused={focused ? "true" : "false"}
       onMouseDownCapture={onFocus}
+      onContextMenuCapture={onFocus}
       onFocusCapture={onFocus}
     >
       <TerminalInstance ref={(h) => setHandle(sessionId, h)} sessionId={sessionId} />
