@@ -32,6 +32,12 @@
       "searchPlaceholder": "Search platforms…",
       "title": "Add a connector"
     },
+    "capabilityMatrix": {
+      "availableLabel": "Available",
+      "scopeHint": "Resolved for this bot as configured. Some capabilities are also limited to particular conversations, and a few depend on the individual message.",
+      "title": "What this bot can do",
+      "unavailableLabel": "Not available on this bot"
+    },
     "comingSoon": "Coming soon",
     "configure": "Configure",
     "configureAria": "Configure {name}",
@@ -111,11 +117,11 @@
       "rateBucketLabel": "Rate limit",
       "rateBucketNextRefill": "Next token in {seconds}s",
       "reason": {
+        "auth_failed": "Authentication failed — the platform rejected the credential; update or reconnect it",
         "credentials_missing": "Credentials missing — set App ID / App Secret",
         "credentials_unavailable": "Credentials unavailable — keyring access denied",
         "no_data": "No inbound data — connection idle or closed",
-        "transport_error": "Transport error — reconnecting",
-        "auth_failed": "Authentication failed — the platform rejected the credential; update or reconnect it"
+        "transport_error": "Transport error — reconnecting"
       },
       "reconnectNow": "Reconnect now",
       "reconnectQueued": "Reconnect queued.",
@@ -210,12 +216,6 @@
     },
     "transportLabels": {
       "dingtalkStream": "Stream Mode WSS"
-    },
-    "capabilityMatrix": {
-      "title": "What this bot can do",
-      "unavailableLabel": "Not available on this bot",
-      "availableLabel": "Available",
-      "scopeHint": "Resolved for this bot as configured. Some capabilities are also limited to particular conversations, and a few depend on the individual message."
     }
   },
   "aiBindingDefaults": {
@@ -254,16 +254,21 @@
   },
   "audit": {
     "adapterFilterLabel": "Adapters",
-    "kindFilterLabel": "Event types",
     "allAdapters": "All adapters",
     "allKinds": "All event types",
-    "selectedCount": "{count} selected",
-    "resetFilters": "Reset filters",
-    "contentProtectionBlocked": "Content protection blocked",
-    "safetyOnly": "Content protection only",
-    "safetySummary": "{count, plural, one {# protection event} other {# protection events}}",
     "collapseAria": "Collapse audit entry",
+    "columns": {
+      "adapter": "Adapter",
+      "details": "Details",
+      "event": "Event",
+      "time": "Time"
+    },
+    "contentProtectionBlocked": "Content protection blocked",
+    "detail": {
+      "conversationKey": "Conversation key"
+    },
     "empty": "No audit entries match the current filters.",
+    "entryCount": "{count, plural, one {# entry} other {# entries}}",
     "expandAria": "Expand audit entry",
     "exportCsv": "Download CSV",
     "exportJson": "Download JSON",
@@ -286,9 +291,9 @@
         "credentials_rotated": "Credentials rotated",
         "error": "Adapter error",
         "heartbeat": "Heartbeat",
+        "reauth_required": "Re-authentication required",
         "started": "Adapter started",
-        "stopped": "Adapter stopped",
-        "reauth_required": "Re-authentication required"
+        "stopped": "Adapter stopped"
       },
       "builtin_skill_denied": "Skill denied",
       "builtin_skill_failed": "Skill failed",
@@ -444,25 +449,20 @@
       "workflow_approval_failed": "Workflow approval failed",
       "workflow_fanout_failed": "Workflow fan-out failed"
     },
+    "kindFilterLabel": "Event types",
+    "limitNotice": "The view loads at most the latest {count} records for the selected time range.",
     "redactionNotice": "Audit logs are allowlist-redacted; tokens and message bodies never appear here.",
+    "resetFilters": "Reset filters",
+    "safetyOnly": "Content protection only",
+    "safetySummary": "{count, plural, one {# protection event} other {# protection events}}",
+    "selectedCount": "{count} selected",
     "timeRange": {
       "1h": "Last hour",
       "24h": "Last 24h",
       "7d": "Last 7d",
       "all": "All"
     },
-    "timeRangeLabel": "Time range",
-    "entryCount": "{count, plural, one {# entry} other {# entries}}",
-    "limitNotice": "The view loads at most the latest {count} records for the selected time range.",
-    "columns": {
-      "time": "Time",
-      "adapter": "Adapter",
-      "event": "Event",
-      "details": "Details"
-    },
-    "detail": {
-      "conversationKey": "Conversation key"
-    }
+    "timeRangeLabel": "Time range"
   },
   "behaviorEditor": {
     "a2ui": "Interactive cards",
@@ -635,6 +635,39 @@
     "toggleArchive": "Toggle archive",
     "togglePin": "Toggle pin"
   },
+  "credentialField": {
+    "awaitingConsent": "Waiting for approval on the host.",
+    "awaitingConsentWithCode": "Waiting for approval on the host — code {code}.",
+    "hideAria": "Hide value",
+    "loadingPlaceholder": "Loading…",
+    "retry": "Retry",
+    "revealAria": "Reveal value",
+    "statusError": "Could not read the saved value.",
+    "statusLoaded": "Saved — showing the stored value.",
+    "statusLoading": "Reading the saved value…",
+    "statusNew": "Nothing saved yet.",
+    "statusStored": "Saved on the host. It cannot be shown here; type a new value to replace it.",
+    "statusUnset": "Not set.",
+    "storedPlaceholder": "Saved — leave blank to keep it",
+    "unlock": "Unlock"
+  },
+  "delegatedAuthorizations": {
+    "authorizedAt": "Authorized {when}",
+    "empty": "Nobody has authorized this bot yet. A person sends /auth in a direct chat with it.",
+    "laneDelegatedHelp": "Each person's request uses the account they authorized themselves; someone who has not authorized gets a sign-in link.",
+    "laneFailed": "Could not save: {reason}",
+    "laneHostOnly": "Only this connector's Host can change this.",
+    "laneLabel": "Act as each requester",
+    "laneSaved": "Saved",
+    "laneServiceHelp": "Every turn uses the app's own access; nobody's personal account is used.",
+    "peopleLabel": "Authorized people",
+    "registryNote": "Personal access needs the principal registry turned on; with it off only you have personal access.",
+    "revoke": "Revoke",
+    "revokeAria": "Revoke {name}'s authorization",
+    "revokeFailed": "Could not revoke: {reason}",
+    "revoked": "Authorization revoked",
+    "title": "Personal authorizations"
+  },
   "description": "Configure messaging platform adapters (Telegram, Discord, Slack, …) and manage the outbound delivery queue.",
   "dingtalk": {
     "adapterCreated": "DingTalk connector added",
@@ -791,16 +824,6 @@
     "addButton": "Add label",
     "builtinBadge": "Built-in",
     "colorLabel": "Color",
-    "deleteAria": "Delete label {name}",
-    "description": "Reusable labels for organizing inbox conversations. Built-in labels can't be deleted.",
-    "empty": "No labels yet — add one above.",
-    "nameLabel": "Name",
-    "namePlaceholder": "e.g. follow-up",
-    "nameRequired": "Label name is required.",
-    "rowColorAria": "Color for {name}",
-    "rowNameAria": "Name for {name}",
-    "title": "Conversation labels",
-    "reorderAria": "Reorder {name}",
     "colors": {
       "0": "Red",
       "1": "Amber",
@@ -810,7 +833,17 @@
       "5": "Purple",
       "6": "Pink",
       "7": "Slate"
-    }
+    },
+    "deleteAria": "Delete label {name}",
+    "description": "Reusable labels for organizing inbox conversations. Built-in labels can't be deleted.",
+    "empty": "No labels yet — add one above.",
+    "nameLabel": "Name",
+    "namePlaceholder": "e.g. follow-up",
+    "nameRequired": "Label name is required.",
+    "reorderAria": "Reorder {name}",
+    "rowColorAria": "Color for {name}",
+    "rowNameAria": "Name for {name}",
+    "title": "Conversation labels"
   },
   "lark": {
     "adapterCreated": "Adapter created.",
@@ -879,11 +912,101 @@
       "title": "Mention strategy"
     },
     "authorizeButton": "Connect account",
+    "authorizeDocumentReadHelp": "Add read-only access to Docs, Wiki, Sheets and Base when you connect. Existing granted permissions are preserved.",
+    "authorizeDocumentReadLabel": "Read cloud documents",
     "authorizeNeedsAppId": "Save the App ID first — authorization needs it.",
     "authorizeNeedsRedirect": "Set a redirect URL first (or start the tunnel under Settings → Connections → Overview to derive one) — authorization needs it.",
     "authorizeNeedsSavedAdapter": "Save the adapter first; authorizing needs the saved credentials.",
     "authorizeOpened": "Authorization opened in your browser. Approve there, then return.",
     "cancel": "Cancel",
+    "cardPresentation": {
+      "density": "Spacing",
+      "description": "Customize progress cards and final replies.",
+      "desktopTextSize": "Desktop answer text size",
+      "headerIconKey": "Header image key",
+      "headerIconKeyPlaceholder": "Uploaded Feishu image key (img_…)",
+      "headerTags": "Header tags",
+      "headerTagsPlaceholder": "Up to 3 tags, separated by commas",
+      "help": "Warning and error colors remain visible. Process display changes apply to new runs; existing timelines finish in their original mode. Saving restarts this connection.",
+      "history": "Process panel",
+      "invalidColor": "Enter both light and dark process panel colors as six-digit hex values, or leave both empty.",
+      "invalidIcon": "Enter a valid uploaded Feishu image key starting with img_.",
+      "invalidTags": "Use at most 3 comma-separated tags, each no longer than 20 characters.",
+      "invalidTemplate": "Enter a template ID and fixed published version using letters, numbers, dots, underscores or hyphens.",
+      "mobileTextSize": "Mobile answer text size",
+      "options": {
+        "density": {
+          "comfortable": "Comfortable",
+          "compact": "Compact"
+        },
+        "desktopTextSize": {
+          "heading-2": "Extra large (20 px)",
+          "heading-3": "Larger (17–18 px)",
+          "heading-4": "Large (16 px)",
+          "normal": "Normal (14 px)",
+          "notation": "Small (12 px)"
+        },
+        "history": {
+          "auto": "Automatic",
+          "collapsed": "Initially collapsed",
+          "expanded": "Always expanded"
+        },
+        "mobileTextSize": {
+          "heading-2": "Extra large (20 px)",
+          "heading-3": "Larger (17–18 px)",
+          "heading-4": "Large (16 px)",
+          "normal": "Normal (14 px)",
+          "notation": "Small (12 px)"
+        },
+        "processMode": {
+          "auto": "Native timeline when available",
+          "card": "Process inside card"
+        },
+        "theme": {
+          "blue": "Blue",
+          "carmine": "Carmine",
+          "green": "Green",
+          "grey": "Grey",
+          "indigo": "Indigo",
+          "orange": "Orange",
+          "purple": "Purple",
+          "red": "Red",
+          "status": "Follow status",
+          "turquoise": "Turquoise",
+          "violet": "Violet",
+          "wathet": "Light blue",
+          "yellow": "Yellow"
+        },
+        "width": {
+          "compact": "Narrow",
+          "default": "Default",
+          "fill": "Fill available width"
+        }
+      },
+      "panelColorDark": "Process panel color in dark mode",
+      "panelColorDarkPlaceholder": "#99CCFF",
+      "panelColorLight": "Process panel color in light mode",
+      "panelColorLightPlaceholder": "#336699",
+      "processMode": "Process display",
+      "reset": "Reset card appearance",
+      "resultTemplateEnabled": "Use a template for successful replies",
+      "resultTemplateHelp": "Use a published new-version Feishu card template with a fixed version. Running, stopped and failed cards keep the built-in layout. Definite template rejections fall back to the built-in result card.",
+      "resultTemplateId": "Template ID",
+      "resultTemplateVariables": "Create these template variables: answer, status, title, quote, details_url (text), elapsed_ms (number). The answer variable must be used to show the reply. Built-in card appearance settings do not change your template layout.",
+      "resultTemplateVersion": "Published template version",
+      "section": "Card appearance",
+      "showArtifacts": "Show artifacts",
+      "showElapsed": "Show elapsed time",
+      "showFooter": "Show final reply footer",
+      "showProgress": "Show progress summary",
+      "showQuote": "Quote in final replies",
+      "subtitle": "Subtitle",
+      "subtitlePlaceholder": "Optional secondary heading",
+      "theme": "Header color",
+      "title": "Custom card title",
+      "titlePlaceholder": "Use the task title",
+      "width": "Card width"
+    },
     "connectedAccountLabel": "Connected account",
     "connectedAccountNone": "No account connected — the bot sends as itself.",
     "connectedAccountValue": "Connected as {name}",
@@ -893,6 +1016,7 @@
     "connectionFailedToast": "Could not validate app credentials.",
     "connectionSucceededLabel": "Credentials verified",
     "create": "Create",
+    "credentialTestHelp": "Validates App ID and App Secret only. Permissions, event delivery and card callbacks must be configured separately. Save to start the connection, then check its health and send a message from Feishu.",
     "displayNameLabel": "Display name",
     "displayNamePlaceholder": "My Lark Bot",
     "displayNameRequired": "Display name is required.",
@@ -940,14 +1064,14 @@
       "webBaseHelp": "Public https URL of the Cognia web app reachable from inside Lark clients. Chat Tab / menu links and SSO bounces are built on it; leave empty to keep external links disabled.",
       "webBaseLabel": "Web entry base URL",
       "webBasePlaceholder": "https://cognia.example.com",
-      "workbenchModeLabel": "Workbench access",
+      "workbenchHelp": "Set this URL as the Feishu app desktop and mobile homepage. Personal access requires the matching paired device; team access requires the linked team account. This setting does not grant permissions.",
       "workbenchMode": {
+        "both": "Personal and team",
         "disabled": "Disabled",
         "personal": "Personal",
-        "team": "Team",
-        "both": "Personal and team"
+        "team": "Team"
       },
-      "workbenchHelp": "Set this URL as the Feishu app desktop and mobile homepage. Personal access requires the matching paired device; team access requires the linked team account. This setting does not grant permissions.",
+      "workbenchModeLabel": "Workbench access",
       "workbenchSaveFailed": "Could not save the workbench mode. Please retry.",
       "workbenchUrlLabel": "App homepage URL"
     },
@@ -961,6 +1085,10 @@
       "help": "Maps tenant + app + open_id to a person. With the principal registry flag on, only bound people can run anything — everyone else is parked with a bind code. Being bound is permission to reach the agent, not membership of anything.",
       "principalDisable": "Disable",
       "principalEnable": "Enable",
+      "principalOwnerConfirmed": "Confirmed as you",
+      "principalOwnerConfirmedAria": "You approved this Feishu account as yourself",
+      "principalSelfBound": "Admitted as you",
+      "principalSelfBoundAria": "Admitted automatically because you confirmed this Feishu account as yourself",
       "principalStatus": {
         "active": "Active",
         "disabled": "Disabled",
@@ -972,17 +1100,13 @@
       "principalsLabel": "Bound principals",
       "requestApprove": "Approve",
       "requestApproveAria": "Approve bind request {code}",
-      "requestReject": "Reject",
-      "requestRejectAria": "Reject bind request {code}",
       "requestApproveAsMe": "This is me",
       "requestApproveAsMeAria": "Approve bind request {code} as yourself",
       "requestApproveAsMeHint": "Binds the sender to the person this profile is signed in as. After that, the same Feishu account reaches this profile's other bots in the tenant without another code.",
       "requestMatchesSignIn": "Matches your sign-in",
       "requestMatchesSignInAria": "This sender's Feishu account is the one you signed in with",
-      "principalSelfBound": "Admitted as you",
-      "principalSelfBoundAria": "Admitted automatically because you confirmed this Feishu account as yourself",
-      "principalOwnerConfirmed": "Confirmed as you",
-      "principalOwnerConfirmedAria": "You approved this Feishu account as yourself",
+      "requestReject": "Reject",
+      "requestRejectAria": "Reject bind request {code}",
       "requestsEmpty": "No pending bind requests.",
       "requestsLabel": "Pending bind requests",
       "seeded": "Registry seeded from existing contacts.",
@@ -1039,6 +1163,103 @@
     "selfBotOpenIdUnknown": "Not resolved yet",
     "sendAsUserHelp": "When on and an account is connected, replies are sent as you (user access token) instead of the bot. Falls back to the bot if the authorization expires.",
     "sendAsUserLabel": "Send replies as me",
+    "setupGuide": {
+      "app": {
+        "create": "Use an enterprise custom app in the Feishu developer console. You need app-management access and permission to request approval. Under Add app capability, enable Bot. A group custom-bot webhook is not an App ID / App Secret app.",
+        "credentials": "Copy App ID and App Secret from Credentials & Basic Info into this form. For both transports, also enter the Verification Token from Events & callbacks; enter Encrypt Key only if encryption is enabled there. Test credentials, then create or save the connection. Keep secrets private; never paste them into messages or permission lists.",
+        "host": "Run Cognia on a desktop, server deployment or paired host that stays online and can reach Feishu. Browser-only configuration needs a connected host to receive messages.",
+        "title": "1. Create the app and enable its bot"
+      },
+      "copied": "Permission names copied.",
+      "copyFailed": "Could not copy. Select and copy the permission names above.",
+      "copyScopes": "Copy selected permissions",
+      "credentialsUnverified": "Credentials not verified this session",
+      "credentialsVerified": "Credentials verified this session",
+      "delivery": {
+        "callback": "In Callback configuration separately subscribe to Card action trigger (for card buttons):",
+        "docs": "Card callback reference",
+        "event": "In Event configuration subscribe to Receive message:",
+        "longConsole": "While this app has a live connection, open Events & callbacks in Feishu. In both Event configuration and Callback configuration, select long connection and save. Feishu requires an online client to save this method; no public callback URL is needed.",
+        "longKeepRunning": "The long connection needs an online host after setup too. Other clients running the same app may receive its events instead; check for competing connections if delivery is intermittent.",
+        "longStart": "In Cognia select Long connection, create or save, and enable the connection. Keep the host running; check connection Health for startup errors.",
+        "menus": "For bot quick commands, create event-pushing menu entries in the Feishu Bot menu, subscribe to application.bot.menu_v6 in Event configuration, and map the same event_key under Quick commands in Cognia.",
+        "title": "3. Connect events and card callbacks",
+        "webhookConsole": "Reopen this saved connection and copy its generated webhook URL. In Feishu select delivery to a developer server and use that URL in both Event configuration and Callback configuration; complete URL verification.",
+        "webhookSecurity": "The URL must be reachable from Feishu. Keep Verification Token and Encrypt Key consistent with the console. If the public hostname changes, update and verify both request URLs.",
+        "webhookStart": "Select Webhook, copy Verification Token and any enabled Encrypt Key from Feishu into this form, then create or save and enable the connection. Keep the host and a public HTTPS endpoint running."
+      },
+      "description": "Configure the app, permissions, delivery and release, then verify the real conversation flow.",
+      "evidenceBoundary": "These checks do not confirm current runtime health, published permissions, event delivery or successful replies. Complete the steps below and verify in Feishu.",
+      "features": {
+        "allMessages": {
+          "help": "Adds im:message.group_msg, a sensitive permission. Admission rules still decide which received messages may run the Agent.",
+          "title": "Group follow-ups without @"
+        },
+        "appAvatars": {
+          "help": "Read application information for other bots in the same tenant. Select only if you need their avatars; unknown bot identities keep the fallback instead of showing this app's picture.",
+          "title": "Other app bot avatars"
+        },
+        "attachments": {
+          "help": "Adds im:resource for message attachments. Document, Drive and HR permissions are separate and are not needed just for chat files.",
+          "title": "Images and files"
+        },
+        "avatars": {
+          "help": "Read member profiles and chat pictures. Enable the listed permissions, then publish the app; contact data permissions must include the people whose avatars you want to show. Missing access keeps the initials fallback.",
+          "title": "People and conversation avatars"
+        },
+        "botMentions": {
+          "help": "Adds im:message.group_at_msg.include_bot:readonly. Also configure Cognia’s bot-sender admission rules.",
+          "title": "@mentions from other bots"
+        },
+        "botMessages": {
+          "help": "Adds im:message.group_msg.include_bot:read. Limit allowed bots and configure admission to avoid reply loops.",
+          "title": "Other bots’ group follow-ups without @"
+        },
+        "cards": {
+          "help": "Adds cardkit:card:write. Interactive buttons also need the card.action.trigger callback below.",
+          "title": "Streaming cards and run controls"
+        },
+        "history": {
+          "help": "Adds im:message:readonly and im:message.group_msg. Group history also requires access to all user group messages.",
+          "title": "Private and group history"
+        },
+        "menus": {
+          "help": "Adds chat read, chat-tab write and group-menu write permissions. Configure Entry surfaces, a reachable web entry and identity authorization. Bot quick-command menus use the separate event described in step 3.",
+          "title": "Managed group menus and chat tabs"
+        }
+      },
+      "identityKnown": "Bot identity recorded",
+      "identityUnknown": "Bot identity not recorded",
+      "openConfiguration": "Configuration and setup guide",
+      "openConsole": "Open Feishu developer console",
+      "openFailed": "Could not open the Feishu page. Open the developer console in your browser.",
+      "permissions": {
+        "apply": "Search for each copied permission in the console, add it, and complete any administrator approval. This is a plain-text list of permission names, not a JSON import. Publish a new app version after changes.",
+        "base": "Under Permission management, add these application-identity permissions for private messages, group @mentions and bot replies:",
+        "docs": "Message permission reference",
+        "oauth": "Send as me is separate: grant the user-identity scopes offline_access (refresh), im:message and im:message.send_as_user (sending), publish, and register the exact OAuth redirect URL shown in that section. Then connect or reauthorize your account. App permissions alone do not authorize a user account.",
+        "optional": "Optional features",
+        "selected": "Selected application permission names",
+        "selectionHelp": "Selections only prepare the permission list; they do not grant access or change your connection settings. Cards and attachments are preselected for everyday use.",
+        "title": "2. Grant permissions for the features you use"
+      },
+      "publish": {
+        "availability": "Set the app’s availability range to include the intended users. After approval, find and open the published bot in Feishu; a valid access token does not confirm this availability.",
+        "group": "Add the published bot to each intended group and allow it to speak. Re-publish after later permission, subscription or menu changes.",
+        "title": "4. Publish and make the bot available",
+        "version": "In Version management & release, create and publish a version containing the bot capability, permissions, events and callbacks. Complete administrator review if required; saving the console configuration alone is not publication."
+      },
+      "title": "Feishu setup guide",
+      "verify": {
+        "card": "Trigger a run with an interactive card and click a permitted control as the requester or an authorized operator. Confirm the action runs; seeing a card alone does not verify callbacks.",
+        "configure": "In Cognia bind the intended Agent and a usable model/provider, choose automatic replies if desired, and review Admission, allowlists, operators and quiet hours. Save changes and check connection Health.",
+        "mention": "Add the bot to a group and @mention it. Confirm one reply in the correct group or topic, with the correct bot identity.",
+        "optional": "Verify the optional features you selected: send an attachment or use a menu. Before enabling no-@ topic follow-ups, start Admission’s delivery probe and send an unmentioned message within 10 minutes. That first message is stored as history only, with no reply; use a subsequent message to verify replies. Test bot-to-bot traffic only when its permissions and admission rules are configured.",
+        "private": "Send a real private message from a user in the availability range. Confirm it appears in Cognia and the reply reaches that same Feishu conversation.",
+        "title": "5. Configure replies and verify in Feishu",
+        "troubleshoot": "No inbound message: inspect publication, subscriptions, availability, group membership and host health. Inbound but no reply: inspect Agent binding, admission and model errors. Card click fails: inspect callback subscription and actor authorization."
+      }
+    },
     "testButtonLabel": "Validate",
     "testConnectionAria": "Test credentials",
     "titleEdit": "Configure Lark Bot",
@@ -1052,25 +1273,25 @@
     "unknownApp": "unknown app",
     "unknownAppShort": "unknown",
     "verificationTokenHelp": "From Lark App > Event subscriptions > Verification Token.",
-    "verificationTokenLongConnectionHelp": "Only needed for webhook delivery. A long connection is authenticated by the App ID and secret.",
     "verificationTokenLabel": "Verification Token",
+    "verificationTokenLongConnectionHelp": "Only needed for webhook delivery. A long connection is authenticated by the App ID and secret.",
     "verificationTokenPlaceholder": "Verification token…",
     "verificationTokenRequired": "Verification Token is required.",
     "webSessions": {
-      "title": "Web sessions",
+      "actionFailed": "Action failed: {reason}",
       "description": "Feishu web sessions the companion has forwarded an entry intent for. The companion keeps sessions stateless, so this ledger is the only record of who holds one. Read-only — disable the principal above to cut someone off.",
       "empty": "No web session has been seen yet.",
-      "summary": "{live} live of {total} recorded",
-      "seenAt": "Last seen {at}",
-      "stateAria": "Session state",
-      "state": {
-        "live": "Live",
-        "expired": "Expired",
-        "revoked": "Revoked"
-      },
       "prune": "Prune old rows",
       "pruned": "Removed {count} expired row(s).",
-      "actionFailed": "Action failed: {reason}"
+      "seenAt": "Last seen {at}",
+      "state": {
+        "expired": "Expired",
+        "live": "Live",
+        "revoked": "Revoked"
+      },
+      "stateAria": "Session state",
+      "summary": "{live} live of {total} recorded",
+      "title": "Web sessions"
     },
     "webhookUrlCopied": "Callback URL copied.",
     "webhookUrlCopy": "Copy URL",
@@ -1116,195 +1337,7 @@
       "wechatOaNoProbe": "WeChat Official Account adapters don't expose an active identity probe — the AppID below was entered when the adapter was configured.",
       "wechatPersonalNoProbe": "Personal WeChat adapters don't expose an active identity probe.",
       "wecomNoProbe": "WeCom adapters don't expose an active identity probe — the credentials below were entered when the adapter was configured."
-    },
-    "cardPresentation": {
-      "section": "Card appearance",
-      "description": "Customize progress cards and final replies.",
-      "help": "Warning and error colors remain visible. Process display changes apply to new runs; existing timelines finish in their original mode. Saving restarts this connection.",
-      "theme": "Header color",
-      "density": "Spacing",
-      "width": "Card width",
-      "processMode": "Process display",
-      "history": "Process panel",
-      "title": "Custom card title",
-      "titlePlaceholder": "Use the task title",
-      "showElapsed": "Show elapsed time",
-      "showProgress": "Show progress summary",
-      "showArtifacts": "Show artifacts",
-      "showQuote": "Quote in final replies",
-      "showFooter": "Show final reply footer",
-      "reset": "Reset card appearance",
-      "options": {
-        "theme": {
-          "status": "Follow status",
-          "blue": "Blue",
-          "wathet": "Light blue",
-          "turquoise": "Turquoise",
-          "green": "Green",
-          "yellow": "Yellow",
-          "orange": "Orange",
-          "red": "Red",
-          "carmine": "Carmine",
-          "violet": "Violet",
-          "purple": "Purple",
-          "indigo": "Indigo",
-          "grey": "Grey"
-        },
-        "density": {
-          "comfortable": "Comfortable",
-          "compact": "Compact"
-        },
-        "width": {
-          "default": "Default",
-          "compact": "Narrow",
-          "fill": "Fill available width"
-        },
-        "processMode": {
-          "auto": "Native timeline when available",
-          "card": "Process inside card"
-        },
-        "history": {
-          "auto": "Automatic",
-          "expanded": "Always expanded",
-          "collapsed": "Initially collapsed"
-        },
-        "desktopTextSize": {
-          "normal": "Normal (14 px)",
-          "notation": "Small (12 px)",
-          "heading-4": "Large (16 px)",
-          "heading-3": "Larger (17–18 px)",
-          "heading-2": "Extra large (20 px)"
-        },
-        "mobileTextSize": {
-          "normal": "Normal (14 px)",
-          "notation": "Small (12 px)",
-          "heading-4": "Large (16 px)",
-          "heading-3": "Larger (17–18 px)",
-          "heading-2": "Extra large (20 px)"
-        }
-      },
-      "subtitle": "Subtitle",
-      "subtitlePlaceholder": "Optional secondary heading",
-      "headerIconKey": "Header image key",
-      "headerIconKeyPlaceholder": "Uploaded Feishu image key (img_…)",
-      "headerTags": "Header tags",
-      "headerTagsPlaceholder": "Up to 3 tags, separated by commas",
-      "desktopTextSize": "Desktop answer text size",
-      "mobileTextSize": "Mobile answer text size",
-      "resultTemplateEnabled": "Use a template for successful replies",
-      "resultTemplateHelp": "Use a published new-version Feishu card template with a fixed version. Running, stopped and failed cards keep the built-in layout. Definite template rejections fall back to the built-in result card.",
-      "resultTemplateId": "Template ID",
-      "resultTemplateVersion": "Published template version",
-      "resultTemplateVariables": "Create these template variables: answer, status, title, quote, details_url (text), elapsed_ms (number). The answer variable must be used to show the reply. Built-in card appearance settings do not change your template layout.",
-      "invalidIcon": "Enter a valid uploaded Feishu image key starting with img_.",
-      "invalidColor": "Enter both light and dark process panel colors as six-digit hex values, or leave both empty.",
-      "invalidTags": "Use at most 3 comma-separated tags, each no longer than 20 characters.",
-      "invalidTemplate": "Enter a template ID and fixed published version using letters, numbers, dots, underscores or hyphens.",
-      "panelColorLight": "Process panel color in light mode",
-      "panelColorDark": "Process panel color in dark mode",
-      "panelColorLightPlaceholder": "#336699",
-      "panelColorDarkPlaceholder": "#99CCFF"
-    },
-    "credentialTestHelp": "Validates App ID and App Secret only. Permissions, event delivery and card callbacks must be configured separately. Save to start the connection, then check its health and send a message from Feishu.",
-    "setupGuide": {
-      "title": "Feishu setup guide",
-      "description": "Configure the app, permissions, delivery and release, then verify the real conversation flow.",
-      "openConfiguration": "Configuration and setup guide",
-      "credentialsVerified": "Credentials verified this session",
-      "credentialsUnverified": "Credentials not verified this session",
-      "identityKnown": "Bot identity recorded",
-      "identityUnknown": "Bot identity not recorded",
-      "evidenceBoundary": "These checks do not confirm current runtime health, published permissions, event delivery or successful replies. Complete the steps below and verify in Feishu.",
-      "openConsole": "Open Feishu developer console",
-      "openFailed": "Could not open the Feishu page. Open the developer console in your browser.",
-      "copyScopes": "Copy selected permissions",
-      "copied": "Permission names copied.",
-      "copyFailed": "Could not copy. Select and copy the permission names above.",
-      "app": {
-        "title": "1. Create the app and enable its bot",
-        "create": "Use an enterprise custom app in the Feishu developer console. You need app-management access and permission to request approval. Under Add app capability, enable Bot. A group custom-bot webhook is not an App ID / App Secret app.",
-        "credentials": "Copy App ID and App Secret from Credentials & Basic Info into this form. For both transports, also enter the Verification Token from Events & callbacks; enter Encrypt Key only if encryption is enabled there. Test credentials, then create or save the connection. Keep secrets private; never paste them into messages or permission lists.",
-        "host": "Run Cognia on a desktop, server deployment or paired host that stays online and can reach Feishu. Browser-only configuration needs a connected host to receive messages."
-      },
-      "permissions": {
-        "title": "2. Grant permissions for the features you use",
-        "base": "Under Permission management, add these application-identity permissions for private messages, group @mentions and bot replies:",
-        "optional": "Optional features",
-        "selectionHelp": "Selections only prepare the permission list; they do not grant access or change your connection settings. Cards and attachments are preselected for everyday use.",
-        "selected": "Selected application permission names",
-        "docs": "Message permission reference",
-        "apply": "Search for each copied permission in the console, add it, and complete any administrator approval. This is a plain-text list of permission names, not a JSON import. Publish a new app version after changes.",
-        "oauth": "Send as me is separate: grant the user-identity scopes offline_access (refresh), im:message and im:message.send_as_user (sending), publish, and register the exact OAuth redirect URL shown in that section. Then connect or reauthorize your account. App permissions alone do not authorize a user account."
-      },
-      "features": {
-        "cards": {
-          "title": "Streaming cards and run controls",
-          "help": "Adds cardkit:card:write. Interactive buttons also need the card.action.trigger callback below."
-        },
-        "attachments": {
-          "title": "Images and files",
-          "help": "Adds im:resource for message attachments. Document, Drive and HR permissions are separate and are not needed just for chat files."
-        },
-        "history": {
-          "title": "Private and group history",
-          "help": "Adds im:message:readonly and im:message.group_msg. Group history also requires access to all user group messages."
-        },
-        "allMessages": {
-          "title": "Group follow-ups without @",
-          "help": "Adds im:message.group_msg, a sensitive permission. Admission rules still decide which received messages may run the Agent."
-        },
-        "botMentions": {
-          "title": "@mentions from other bots",
-          "help": "Adds im:message.group_at_msg.include_bot:readonly. Also configure Cognia’s bot-sender admission rules."
-        },
-        "botMessages": {
-          "title": "Other bots’ group follow-ups without @",
-          "help": "Adds im:message.group_msg.include_bot:read. Limit allowed bots and configure admission to avoid reply loops."
-        },
-        "menus": {
-          "title": "Managed group menus and chat tabs",
-          "help": "Adds chat read, chat-tab write and group-menu write permissions. Configure Entry surfaces, a reachable web entry and identity authorization. Bot quick-command menus use the separate event described in step 3."
-        },
-        "avatars": {
-          "title": "People and conversation avatars",
-          "help": "Read member profiles and chat pictures. Enable the listed permissions, then publish the app; contact data permissions must include the people whose avatars you want to show. Missing access keeps the initials fallback."
-        },
-        "appAvatars": {
-          "title": "Other app bot avatars",
-          "help": "Read application information for other bots in the same tenant. Select only if you need their avatars; unknown bot identities keep the fallback instead of showing this app's picture."
-        }
-      },
-      "delivery": {
-        "title": "3. Connect events and card callbacks",
-        "longStart": "In Cognia select Long connection, create or save, and enable the connection. Keep the host running; check connection Health for startup errors.",
-        "longConsole": "While this app has a live connection, open Events & callbacks in Feishu. In both Event configuration and Callback configuration, select long connection and save. Feishu requires an online client to save this method; no public callback URL is needed.",
-        "webhookStart": "Select Webhook, copy Verification Token and any enabled Encrypt Key from Feishu into this form, then create or save and enable the connection. Keep the host and a public HTTPS endpoint running.",
-        "webhookConsole": "Reopen this saved connection and copy its generated webhook URL. In Feishu select delivery to a developer server and use that URL in both Event configuration and Callback configuration; complete URL verification.",
-        "event": "In Event configuration subscribe to Receive message:",
-        "callback": "In Callback configuration separately subscribe to Card action trigger (for card buttons):",
-        "longKeepRunning": "The long connection needs an online host after setup too. Other clients running the same app may receive its events instead; check for competing connections if delivery is intermittent.",
-        "webhookSecurity": "The URL must be reachable from Feishu. Keep Verification Token and Encrypt Key consistent with the console. If the public hostname changes, update and verify both request URLs.",
-        "menus": "For bot quick commands, create event-pushing menu entries in the Feishu Bot menu, subscribe to application.bot.menu_v6 in Event configuration, and map the same event_key under Quick commands in Cognia.",
-        "docs": "Card callback reference"
-      },
-      "publish": {
-        "title": "4. Publish and make the bot available",
-        "version": "In Version management & release, create and publish a version containing the bot capability, permissions, events and callbacks. Complete administrator review if required; saving the console configuration alone is not publication.",
-        "availability": "Set the app’s availability range to include the intended users. After approval, find and open the published bot in Feishu; a valid access token does not confirm this availability.",
-        "group": "Add the published bot to each intended group and allow it to speak. Re-publish after later permission, subscription or menu changes."
-      },
-      "verify": {
-        "title": "5. Configure replies and verify in Feishu",
-        "configure": "In Cognia bind the intended Agent and a usable model/provider, choose automatic replies if desired, and review Admission, allowlists, operators and quiet hours. Save changes and check connection Health.",
-        "private": "Send a real private message from a user in the availability range. Confirm it appears in Cognia and the reply reaches that same Feishu conversation.",
-        "mention": "Add the bot to a group and @mention it. Confirm one reply in the correct group or topic, with the correct bot identity.",
-        "card": "Trigger a run with an interactive card and click a permitted control as the requester or an authorized operator. Confirm the action runs; seeing a card alone does not verify callbacks.",
-        "optional": "Verify the optional features you selected: send an attachment or use a menu. Before enabling no-@ topic follow-ups, start Admission’s delivery probe and send an unmentioned message within 10 minutes. That first message is stored as history only, with no reply; use a subsequent message to verify replies. Test bot-to-bot traffic only when its permissions and admission rules are configured.",
-        "troubleshoot": "No inbound message: inspect publication, subscriptions, availability, group membership and host health. Inbound but no reply: inspect Agent binding, admission and model errors. Card click fails: inspect callback subscription and actor authorization."
-      }
-    },
-    "authorizeDocumentReadHelp": "Add read-only access to Docs, Wiki, Sheets and Base when you connect. Existing granted permissions are preserved.",
-    "authorizeDocumentReadLabel": "Read cloud documents"
+    }
   },
   "matrix": {
     "accessTokenHelp": "Paste a bot access token, or sign in with a password below to fetch one.",
@@ -1349,45 +1382,45 @@
     "titleEdit": "Edit Matrix connector",
     "titleNew": "Add Matrix connector",
     "verification": {
-      "title": "Verify a Matrix device",
-      "description": "Compare the codes with the other device. Only confirm after checking the same user and device on both sides.",
-      "peerUser": "Peer Matrix user",
-      "peerDevice": "Peer device ID",
-      "peerPlaceholder": "@user:example.org",
-      "request": "Request verification",
-      "discover": "Find incoming requests",
       "acceptRequest": "Accept request from {device}",
-      "startSas": "Compare numbers",
-      "showQr": "Show QR code",
       "acceptSas": "Accept number comparison",
-      "compareSas": "Compare all three numbers with the other device.",
-      "sasCode": "Verification numbers",
-      "match": "The numbers match",
-      "mismatch": "The numbers do not match",
-      "qrImage": "Matrix verification QR code",
-      "uploadQr": "Scan a QR image",
       "camera": "Scan with camera",
+      "cameraFailed": "Camera access failed. You can upload a QR image instead.",
       "cameraPreview": "QR camera preview",
-      "stopCamera": "Stop camera",
-      "confirmScan": "Confirm the other device scanned this code",
-      "trusted": "Device verified.",
-      "proofComplete": "Verification completed. Refresh device keys to check cross-signing trust.",
       "cancel": "Cancel verification",
-      "newFlow": "Verify another device",
-      "unavailable": "Start this Matrix connector in the desktop app to verify devices.",
+      "compareSas": "Compare all three numbers with the other device.",
+      "confirmScan": "Confirm the other device scanned this code",
+      "description": "Compare the codes with the other device. Only confirm after checking the same user and device on both sides.",
+      "discover": "Find incoming requests",
       "failed": "Verification could not continue. Check the connector and retry.",
       "invalidQr": "Choose a valid Matrix verification QR image (PNG, JPEG or WebP, up to 8 MB and 2048 pixels).",
-      "cameraFailed": "Camera access failed. You can upload a QR image instead.",
-      "state": {
-        "requested": "Waiting for the other device",
-        "ready": "Choose a verification method",
-        "sas": "Comparing verification numbers",
-        "qr": "Waiting for the QR scan and confirmation",
-        "done": "Verification complete",
-        "cancelled": "Verification cancelled"
-      },
+      "match": "The numbers match",
+      "mismatch": "The numbers do not match",
+      "newFlow": "Verify another device",
+      "peerDevice": "Peer device ID",
+      "peerPlaceholder": "@user:example.org",
+      "peerUser": "Peer Matrix user",
+      "proofComplete": "Verification completed. Refresh device keys to check cross-signing trust.",
+      "qrImage": "Matrix verification QR code",
+      "refreshTrust": "Refresh device trust",
+      "request": "Request verification",
       "retry": "Retry verification action",
-      "refreshTrust": "Refresh device trust"
+      "sasCode": "Verification numbers",
+      "showQr": "Show QR code",
+      "startSas": "Compare numbers",
+      "state": {
+        "cancelled": "Verification cancelled",
+        "done": "Verification complete",
+        "qr": "Waiting for the QR scan and confirmation",
+        "ready": "Choose a verification method",
+        "requested": "Waiting for the other device",
+        "sas": "Comparing verification numbers"
+      },
+      "stopCamera": "Stop camera",
+      "title": "Verify a Matrix device",
+      "trusted": "Device verified.",
+      "unavailable": "Start this Matrix connector in the desktop app to verify devices.",
+      "uploadQr": "Scan a QR image"
     }
   },
   "onebot": {
@@ -1537,39 +1570,16 @@
     "statusUnknown": "Unknown"
   },
   "permissionsEditor": {
-    "hostCapabilitiesHelp": "Choose the Host features this bot may use. Conversation grants still apply where required.",
-    "safetyTest": {
-      "title": "Test protection locally",
-      "source": "Content source",
-      "user": "Bot message",
-      "external": "External content",
-      "sample": "Sample text",
-      "help": "Runs locally without calling a model or saving the sample. Up to 16,384 characters. Clear or collapse to remove it. Results use this form's settings; save to apply setting changes.",
-      "run": "Check sample",
-      "clear": "Clear sample",
-      "disabledNotice": "Known risks were detected, but protection is off in this form.",
-      "incomplete": "The inspection limit was reached. Enabled protection withholds content that cannot be fully inspected.",
-      "noFindings": "No known instruction attack was detected. This does not establish that the sample is safe.",
-      "otherFinding": "Content could not be safely inspected.",
-      "actions": {
-        "allow": "Would allow",
-        "block": "Would block",
-        "quarantine": "Would withhold external content"
-      },
-      "reasons": {
-        "instruction_override": "Overrides earlier or system instructions",
-        "system_prompt_extraction": "Requests hidden system instructions",
-        "credential_exfiltration": "Requests credentials be sent outside",
-        "forged_role_boundary": "Impersonates a system or developer message",
-        "safety_bypass": "Requests bypassing safety controls"
-      }
-    },
-    "injectionProtection": "Prompt-injection protection",
-    "injectionProtectionHelp": "Enabled by default. Checks bot requests and external model context for known instruction attacks. Privacy checks, tool permissions, and knowledge-source quarantine remain active when this is off.",
     "builtInSkills": "Built-in Skills ceiling",
     "cancel": "Cancel",
     "confirmImpact": "It can block skills and host capabilities across every conversation on this adapter.",
+    "confirmImpactTitle": "Save this permission ceiling?",
     "conversationGrantRequired": "The adapter can only cap this capability; each conversation must grant it explicitly.",
+    "groups": {
+      "attachments": "Media",
+      "capabilities": "Skills and Host features",
+      "safety": "Safety"
+    },
     "hitl": "Require HITL for write skills",
     "hitlHelp": "Conversation settings may override this default. Destructive skills always require approval.",
     "host": {
@@ -1579,25 +1589,107 @@
       "schedule_tools": "Schedule Tools"
     },
     "hostCapabilities": "Host Capabilities",
+    "hostCapabilitiesHelp": "Choose the Host features this bot may use. Conversation grants still apply where required.",
+    "hostCapabilityAll": "All Host features",
+    "hostCapabilityNone": "No Host features",
+    "injectionProtection": "Prompt-injection protection",
+    "injectionProtectionHelp": "Enabled by default. Checks bot requests and external model context for known instruction attacks. Privacy checks, tool permissions, and knowledge-source quarantine remain active when this is off.",
+    "intro": "Bot-wide limits that apply to every conversation on this adapter.",
     "mediaPolicy": "Attachments and the model",
     "mediaPolicyCloud": "Send raw attachments",
     "mediaPolicyHelp": "The bot-wide floor. A conversation can grant more than this, scoped to a provider and revocable; this setting cannot be scoped or expired.",
     "mediaPolicyLocal": "Local extraction only",
     "mediaPolicyWarning": "Every image, voice note and file this bot receives will be uploaded to its model provider, in every conversation.",
+    "safetyTest": {
+      "actions": {
+        "allow": "Would allow",
+        "block": "Would block",
+        "quarantine": "Would withhold external content"
+      },
+      "clear": "Clear sample",
+      "disabledNotice": "Known risks were detected, but protection is off in this form.",
+      "external": "External content",
+      "help": "Runs locally without calling a model or saving the sample. Up to 16,384 characters. Clear or collapse to remove it. Results use this form's settings; save to apply setting changes.",
+      "incomplete": "The inspection limit was reached. Enabled protection withholds content that cannot be fully inspected.",
+      "noFindings": "No known instruction attack was detected. This does not establish that the sample is safe.",
+      "otherFinding": "Content could not be safely inspected.",
+      "reasons": {
+        "credential_exfiltration": "Requests credentials be sent outside",
+        "forged_role_boundary": "Impersonates a system or developer message",
+        "instruction_override": "Overrides earlier or system instructions",
+        "safety_bypass": "Requests bypassing safety controls",
+        "system_prompt_extraction": "Requests hidden system instructions"
+      },
+      "run": "Check sample",
+      "sample": "Sample text",
+      "source": "Content source",
+      "title": "Test protection locally",
+      "user": "Bot message"
+    },
     "save": "Save",
     "skillHelp": "Comma-separated skill ids or wildcards. Leave blank to impose no additional adapter restriction; an explicit empty conversation allowlist still blocks all skills.",
     "skillPlaceholder": "lark.calendar.*, lark.task.list",
     "title": "Permissions",
-    "confirmImpactTitle": "Save this permission ceiling?",
-    "intro": "Bot-wide limits that apply to every conversation on this adapter.",
-    "groups": {
-      "capabilities": "Skills and Host features",
-      "attachments": "Media",
-      "safety": "Safety"
-    },
-    "hostCapabilityAll": "All Host features",
-    "hostCapabilityNone": "No Host features",
     "unsaved": "Unsaved changes"
+  },
+  "personalSources": {
+    "allowQueriesLabel": "Allow assistant queries",
+    "argsLabel": "Arguments",
+    "commandLabel": "Command",
+    "detectedVersion": "Detected CLI v{version}",
+    "docsLink": "Setup guide",
+    "hostRequiredNotice": "Personal data source setup and CLI/MCP verification require the desktop app or a paired runtime host.",
+    "larkSetupHint": "Lark Calendar and Tasks use the built-in lark-cli integration. Sign in on the host terminal, then click Verify:",
+    "openOutboundPolicy": "Outbound policy",
+    "outboundGovernanceHint": "External sends (send_email, send_mail, reply_email, forward_email, send_calendar_invite) are governed by Outbound Recipient Authorization.",
+    "probeAll": "Verify all",
+    "saveAndConnect": "Save & enable",
+    "secretLabel": "Keyring secret ({envKey})",
+    "secretPlaceholder": "Stored encrypted in OS keyring (optional if using browser auto-auth)",
+    "sources": {
+      "gmail": {
+        "description": "Search threads, inspect messages, and draft or send mail via stdio MCP.",
+        "title": "Gmail"
+      },
+      "google-calendar": {
+        "description": "Read upcoming agendas, check free/busy slots, and manage calendar events.",
+        "title": "Google Calendar"
+      },
+      "lark": {
+        "description": "Built-in Lark / Feishu calendar agenda, free/busy, and personal task list tools.",
+        "title": "Lark Calendar & Tasks"
+      },
+      "outlook": {
+        "description": "Read Microsoft 365 / Outlook mail, calendar events, and To-Do tasks via stdio MCP.",
+        "title": "Outlook / Microsoft 365"
+      }
+    },
+    "status": {
+      "desktop_required": "Host required",
+      "disabled": "Disabled",
+      "ready": "Ready",
+      "reauth_required": "Re-auth needed",
+      "unconfigured": "Not configured"
+    },
+    "subtitle": "Connect calendar, mail, and task sources for your personal assistant and Attention Radar.",
+    "title": "Personal data sources",
+    "toasts": {
+      "saveFailed": "Could not save personal source configuration.",
+      "saved": "{name} saved and enabled"
+    },
+    "verifyAction": "Verify"
+  },
+  "pluginConnector": {
+    "create": "Add connector",
+    "createTitle": "Add {name} connector",
+    "credentialsRequired": "Fill in: {fields}",
+    "editTitle": "Configure {name}",
+    "nameLabel": "Display name",
+    "nameRequired": "Give this connector a name.",
+    "providedBy": "Provided by the “{plugin}” plugin.",
+    "save": "Save",
+    "saved": "Connector saved",
+    "unregistered": "No enabled plugin provides the “{kind}” connector any more. Its settings are kept, but it cannot start until the plugin is enabled again."
   },
   "qqOfficial": {
     "adapterCreated": "QQ Official Bot added",
@@ -1614,6 +1706,8 @@
     "displayNameLabel": "Display name",
     "displayNamePlaceholder": "QQ bot",
     "displayNameRequired": "Display name is required",
+    "guildMarkdownHelp": "Requires QQ's Markdown invitation for this bot. Applies to channels and guild direct messages; leave off to send text alternatives. Group and C2C Markdown is always available.",
+    "guildMarkdownLabel": "Enable channel Markdown",
     "openCompanion": "Open tunnel settings",
     "openCompanionAria": "Open the tunnel controls in Connections → Overview",
     "openConsole": "Open QQ Bot console",
@@ -1623,8 +1717,6 @@
     "receiveGuildMessagesLabel": "Receive all channel messages",
     "receiveMessageAuditHelp": "Enable only after QQ grants MESSAGE_AUDIT. Gateway subscribes to channel audit results; Webhook also requires the matching console subscription. Accepted sends remain held until a definitive result.",
     "receiveMessageAuditLabel": "Receive message audit results",
-    "guildMarkdownLabel": "Enable channel Markdown",
-    "guildMarkdownHelp": "Requires QQ's Markdown invitation for this bot. Applies to channels and guild direct messages; leave off to send text alternatives. Group and C2C Markdown is always available.",
     "save": "Save",
     "sectionAdvanced": "Advanced",
     "sectionAdvancedDesc": "Quiet hours and mute.",
@@ -1703,22 +1795,6 @@
     "label": "Operator user ids",
     "placeholder": "ou_abc123, ou_def456",
     "title": "Run operators"
-  },
-  "credentialField": {
-    "awaitingConsent": "Waiting for approval on the host.",
-    "awaitingConsentWithCode": "Waiting for approval on the host — code {code}.",
-    "hideAria": "Hide value",
-    "loadingPlaceholder": "Loading…",
-    "retry": "Retry",
-    "revealAria": "Reveal value",
-    "statusError": "Could not read the saved value.",
-    "statusLoaded": "Saved — showing the stored value.",
-    "statusLoading": "Reading the saved value…",
-    "statusNew": "Nothing saved yet.",
-    "statusStored": "Saved on the host. It cannot be shown here; type a new value to replace it.",
-    "statusUnset": "Not set.",
-    "storedPlaceholder": "Saved — leave blank to keep it",
-    "unlock": "Unlock"
   },
   "sendTest": {
     "advancedDescription": "Direct transport probe. This bypasses quiet hours, FIFO, retry, rate limits, and the circuit breaker; use it only to isolate adapter or credential faults.",
@@ -1870,6 +1946,7 @@
     "outbound": "Outbound",
     "overrides": "Overrides",
     "overview": "Overview",
+    "sources": "Personal sources",
     "tunnel": "Tunnel"
   },
   "teamPicker": {
@@ -2188,36 +2265,36 @@
     "getQrButton": "Get login QR code",
     "loggedInHint": "Currently logged in. Re-scan only to switch account or recover an expired session.",
     "loginRequired": "Scan and confirm the QR code before saving.",
+    "pollFailed": "Could not check the WeChat login status. Request a new QR code and try again.",
     "qrAlt": "WeChat login QR code",
     "qrFailed": "Failed to obtain a login QR code.",
     "qrInstructions": "Open WeChat on your phone → Scan, then confirm the login.",
     "quietHoursIncomplete": "Quiet hours requires From, To, and Timezone.",
     "reLogin": "Re-scan QR code",
+    "redirectFailed": "The login server did not provide a redirect host. Request a new QR code.",
     "replyOnlyNote": "Reply-only: the bot can only reply to people who message it first. Scheduled / workflow proactive pushes are not delivered on this channel. Sessions expire and require re-scanning the QR code.",
     "save": "Save",
     "sectionAdvanced": "Advanced",
     "sectionAdvancedDesc": "Quiet hours and global mute for outbound replies.",
     "sectionLogin": "Login",
     "sectionLoginDesc": "Scan the QR code with the WeChat account you want the bot to run as.",
+    "statusAlreadyBound": "This WeChat account is already connected. No new credentials were issued.",
     "statusConfirmed": "Login confirmed.",
     "statusError": "Login failed.",
     "statusExpired": "QR code expired — request a new one.",
+    "statusLoading": "Preparing login QR…",
     "statusScaned": "Scanned — confirm on your phone…",
+    "statusVerifyBlocked": "Too many incorrect codes. Request a new QR code and try again later.",
+    "statusVerifyCode": "Enter the code shown in WeChat to continue.",
     "statusWaiting": "Waiting for scan…",
     "titleEdit": "Configure Personal WeChat (iLink)",
     "titleNew": "Add Personal WeChat (iLink)",
-    "statusLoading": "Preparing login QR…",
-    "statusVerifyCode": "Enter the code shown in WeChat to continue.",
-    "statusVerifyBlocked": "Too many incorrect codes. Request a new QR code and try again later.",
-    "statusAlreadyBound": "This WeChat account is already connected. No new credentials were issued.",
-    "verifyCodeLabel": "Pairing code",
-    "verifyCodeHint": "Enter the digits displayed on your phone in WeChat.",
-    "verifyCodeRetry": "The code did not match. Check your phone and try again.",
-    "verifyCodeSubmit": "Verify code",
-    "verifyCodeRequired": "Enter the numeric pairing code shown in WeChat.",
-    "redirectFailed": "The login server did not provide a redirect host. Request a new QR code.",
     "unknownLoginStatus": "The login server returned an unsupported status. Request a new QR code.",
-    "pollFailed": "Could not check the WeChat login status. Request a new QR code and try again."
+    "verifyCodeHint": "Enter the digits displayed on your phone in WeChat.",
+    "verifyCodeLabel": "Pairing code",
+    "verifyCodeRequired": "Enter the numeric pairing code shown in WeChat.",
+    "verifyCodeRetry": "The code did not match. Check your phone and try again.",
+    "verifyCodeSubmit": "Verify code"
   },
   "wecom": {
     "adapterCreated": "WeCom bot created. The long connection starts once enabled.",
@@ -2248,6 +2325,7 @@
     "sectionQuickCommands": "Quick commands",
     "sectionQuickCommandsDesc": "Buttons pushed on enter_chat as a template_card menu — each maps a trigger key to a prompt or slash command.",
     "testButtonLabel": "Test credentials",
+    "testConflictLiveConnection": "This bot already has its one WeCom connection open. Stop the bot before testing different credentials — WeCom allows only one connection per bot, and testing now would drop the live one.",
     "testCredentialScopeHelp": "Testing mints a short-lived access token from WeCom to verify the corp credentials.",
     "testCredentialsAria": "Test WeCom credentials",
     "testFailedLabel": "Credential test failed",
@@ -2259,36 +2337,6 @@
     "titleNew": "Add WeCom (企业微信) Bot",
     "welcomeHelp": "Sent when a user opens the bot chat (enter_chat). Leave blank to send no welcome.",
     "welcomeLabel": "Welcome message (optional)",
-    "welcomePlaceholder": "Hi! How can I help you today?",
-    "testConflictLiveConnection": "This bot already has its one WeCom connection open. Stop the bot before testing different credentials — WeCom allows only one connection per bot, and testing now would drop the live one."
-  },
-  "pluginConnector": {
-    "create": "Add connector",
-    "createTitle": "Add {name} connector",
-    "credentialsRequired": "Fill in: {fields}",
-    "editTitle": "Configure {name}",
-    "nameLabel": "Display name",
-    "nameRequired": "Give this connector a name.",
-    "providedBy": "Provided by the “{plugin}” plugin.",
-    "save": "Save",
-    "saved": "Connector saved",
-    "unregistered": "No enabled plugin provides the “{kind}” connector any more. Its settings are kept, but it cannot start until the plugin is enabled again."
-  },
-  "delegatedAuthorizations": {
-    "title": "Personal authorizations",
-    "laneLabel": "Act as each requester",
-    "laneDelegatedHelp": "Each person's request uses the account they authorized themselves; someone who has not authorized gets a sign-in link.",
-    "laneServiceHelp": "Every turn uses the app's own access; nobody's personal account is used.",
-    "laneHostOnly": "Only this connector's Host can change this.",
-    "laneSaved": "Saved",
-    "laneFailed": "Could not save: {reason}",
-    "peopleLabel": "Authorized people",
-    "empty": "Nobody has authorized this bot yet. A person sends /auth in a direct chat with it.",
-    "authorizedAt": "Authorized {when}",
-    "revoke": "Revoke",
-    "revokeAria": "Revoke {name}'s authorization",
-    "revoked": "Authorization revoked",
-    "revokeFailed": "Could not revoke: {reason}",
-    "registryNote": "Personal access needs the principal registry turned on; with it off only you have personal access."
+    "welcomePlaceholder": "Hi! How can I help you today?"
   }
 }

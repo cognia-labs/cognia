@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import Link from "next/link"
 import { useLiveQuery } from "dexie-react-hooks"
 import { useLocale, useTranslations } from "next-intl"
 import { Loader2Icon, SparklesIcon } from "lucide-react"
@@ -384,6 +385,20 @@ export function RadarPanel() {
                 />
               </Field>
             ) : null}
+            <Field orientation="responsive">
+              <FieldContent>
+                <FieldLabel>{t("settings.personalSourcesLabel")}</FieldLabel>
+                <FieldDescription>{t("settings.personalSourcesDesc")}</FieldDescription>
+              </FieldContent>
+              <Button asChild size="sm" variant="outline">
+                <Link
+                  href="/settings?section=connections&connectionsTab=sources"
+                  data-testid="radar-open-personal-sources"
+                >
+                  {t("settings.personalSourcesAction")}
+                </Link>
+              </Button>
+            </Field>
           </FieldGroup>
         </SettingsBlock>
       </SettingsStack>

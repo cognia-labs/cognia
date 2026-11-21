@@ -45,6 +45,10 @@ export const RISK_EXTERNAL_SEND_TOOL_IDS: ReadonlySet<string> = new Set([
   "connector_send",
   "send_message",
   "send_email",
+  "send_mail",
+  "reply_email",
+  "forward_email",
+  "send_calendar_invite",
   // Module-contributed tools declared outbound (ADR-0250 §14 amendment), such
   // as an agent publishing a conversation's files as a public link or handing
   // out network-drive access (`filespace_share`, `filespace_enable_webdav`,

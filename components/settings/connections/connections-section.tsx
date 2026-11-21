@@ -21,15 +21,17 @@ import { AuditTab } from "./tabs/audit-tab"
 import { ConversationsTab } from "./tabs/conversations-tab"
 import { CapabilityMatrixTab } from "./tabs/capability-matrix-tab"
 import { InboxAssetsTab } from "./tabs/inbox-assets-tab"
+import { PersonalSourcesTab } from "./tabs/personal-sources-tab"
 
 const CONNECTIONS_TAB_PARAM = "connectionsTab"
 
 export type ConnectionsTabId =
-  "overview" | "adapters" | "overrides" | "outbound" | "audit" | "capability" | "assets"
+  "overview" | "adapters" | "sources" | "overrides" | "outbound" | "audit" | "capability" | "assets"
 
 const TAB_IDS: ConnectionsTabId[] = [
   "overview",
   "adapters",
+  "sources",
   "overrides",
   "outbound",
   "audit",
@@ -96,6 +98,9 @@ export function ConnectionsSection() {
           <TabsTrigger value="adapters" className="shrink-0">
             {t("tabs.adapters")}
           </TabsTrigger>
+          <TabsTrigger value="sources" className="shrink-0">
+            {t("tabs.sources")}
+          </TabsTrigger>
           <TabsTrigger value="overrides" className="shrink-0">
             {t("tabs.overrides")}
           </TabsTrigger>
@@ -117,6 +122,9 @@ export function ConnectionsSection() {
         </TabsContent>
         <TabsContent value="adapters" className={fillBlock}>
           <AdaptersTab />
+        </TabsContent>
+        <TabsContent value="sources" className={scrollBlock}>
+          <PersonalSourcesTab hostAvailable={reach.available} />
         </TabsContent>
         <TabsContent value="overrides" className={scrollBlock}>
           <ConversationsTab />

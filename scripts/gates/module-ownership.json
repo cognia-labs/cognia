@@ -572,6 +572,8 @@
         "lib/integrations/github-auth.ts",
         "lib/integrations/github-read-credential.ts",
         "lib/integrations/outbound-hold.ts",
+        "lib/integrations/personal-sources/health-probe.ts",
+        "lib/integrations/personal-sources/presets.ts",
         "lib/integrations/registry.ts"
       ]
     },

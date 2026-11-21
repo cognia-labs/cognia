@@ -41882,6 +41882,9 @@
       "enabled": "Enable radar",
       "enabledDesc": "Auto-generate reports and nudge via the pet.",
       "intervalDays": "Min interval (days)",
+      "personalSourcesAction": "Configure sources",
+      "personalSourcesDesc": "Connect Lark, Gmail, Google Calendar, or Outlook so your assistant can inspect schedules, mail, and tasks.",
+      "personalSourcesLabel": "Personal data sources",
       "save": "Save",
       "saved": "Radar settings saved.",
       "scheduleAction": {
@@ -50469,6 +50472,53 @@
         "title": "Permissions",
         "unsaved": "Unsaved changes"
       },
+      "personalSources": {
+        "allowQueriesLabel": "Allow assistant queries",
+        "argsLabel": "Arguments",
+        "commandLabel": "Command",
+        "detectedVersion": "Detected CLI v{version}",
+        "docsLink": "Setup guide",
+        "hostRequiredNotice": "Personal data source setup and CLI/MCP verification require the desktop app or a paired runtime host.",
+        "larkSetupHint": "Lark Calendar and Tasks use the built-in lark-cli integration. Sign in on the host terminal, then click Verify:",
+        "openOutboundPolicy": "Outbound policy",
+        "outboundGovernanceHint": "External sends (send_email, send_mail, reply_email, forward_email, send_calendar_invite) are governed by Outbound Recipient Authorization.",
+        "probeAll": "Verify all",
+        "saveAndConnect": "Save & enable",
+        "secretLabel": "Keyring secret ({envKey})",
+        "secretPlaceholder": "Stored encrypted in OS keyring (optional if using browser auto-auth)",
+        "sources": {
+          "gmail": {
+            "description": "Search threads, inspect messages, and draft or send mail via stdio MCP.",
+            "title": "Gmail"
+          },
+          "google-calendar": {
+            "description": "Read upcoming agendas, check free/busy slots, and manage calendar events.",
+            "title": "Google Calendar"
+          },
+          "lark": {
+            "description": "Built-in Lark / Feishu calendar agenda, free/busy, and personal task list tools.",
+            "title": "Lark Calendar & Tasks"
+          },
+          "outlook": {
+            "description": "Read Microsoft 365 / Outlook mail, calendar events, and To-Do tasks via stdio MCP.",
+            "title": "Outlook / Microsoft 365"
+          }
+        },
+        "status": {
+          "desktop_required": "Host required",
+          "disabled": "Disabled",
+          "ready": "Ready",
+          "reauth_required": "Re-auth needed",
+          "unconfigured": "Not configured"
+        },
+        "subtitle": "Connect calendar, mail, and task sources for your personal assistant and Attention Radar.",
+        "title": "Personal data sources",
+        "toasts": {
+          "saveFailed": "Could not save personal source configuration.",
+          "saved": "{name} saved and enabled"
+        },
+        "verifyAction": "Verify"
+      },
       "pluginConnector": {
         "create": "Add connector",
         "createTitle": "Add {name} connector",
@@ -50736,6 +50786,7 @@
         "outbound": "Outbound",
         "overrides": "Overrides",
         "overview": "Overview",
+        "sources": "Personal sources",
         "tunnel": "Tunnel"
       },
       "teamPicker": {

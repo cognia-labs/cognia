@@ -173,6 +173,16 @@ describe("extractOutboundTargets", () => {
     expect(extractOutboundTargets("send_email", { subject: "s" })).toEqual([
       { kind: "unknown", channel: "tool:send_email", recipient: "*" },
     ])
+    expect(
+      extractOutboundTargets("send_mail", { recipients: ["ops@example.com"] }).map(
+        (t) => t.recipient
+      )
+    ).toEqual(["mail:ops@example.com"])
+    expect(
+      extractOutboundTargets("send_calendar_invite", {
+        attendees: ["Guest <guest@example.com>"],
+      }).map((t) => t.recipient)
+    ).toEqual(["mail:guest@example.com"])
   })
 
   it("treats published links as public", () => {

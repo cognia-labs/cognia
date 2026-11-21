@@ -31,6 +31,9 @@ jest.mock("./tabs/conversations-tab", () => ({
   ConversationsTab: () => <div>Conversations</div>,
 }))
 jest.mock("./tabs/inbox-assets-tab", () => ({ InboxAssetsTab: () => <div>Assets</div> }))
+jest.mock("./tabs/personal-sources-tab", () => ({
+  PersonalSourcesTab: () => <div data-testid="stub-personal-sources-tab">Personal sources</div>,
+}))
 
 import { ConnectionsSection } from "./connections-section"
 
@@ -70,11 +73,17 @@ describe("ConnectionsSection", () => {
   // Tunnel folded into Overview and the standalone Inbox summary was dropped in
   // favour of the /inbox route; both used to have their own tab here. The
   // count plus the two name assertions are what stop either from creeping back.
-  it("renders the seven operational tabs without duplicate Inbox or Tunnel tabs", () => {
+  it("renders the eight operational tabs including Personal sources without duplicate Inbox or Tunnel tabs", () => {
     render(<ConnectionsSection />)
-    expect(screen.getAllByRole("tab")).toHaveLength(7)
+    expect(screen.getAllByRole("tab")).toHaveLength(8)
     expect(screen.queryByRole("tab", { name: /^Tunnel$/i })).not.toBeInTheDocument()
     expect(screen.queryByRole("tab", { name: /^Inbox$/i })).not.toBeInTheDocument()
+  })
+
+  it("activates the Personal sources tab via ?connectionsTab=sources (F7)", () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams("connectionsTab=sources"))
+    render(<ConnectionsSection />)
+    expect(screen.getByTestId("stub-personal-sources-tab")).toBeInTheDocument()
   })
 
   it("maps the legacy tunnel deep link to Overview", () => {

@@ -104,7 +104,7 @@ const PUBLIC_TOOL_IDS: ReadonlySet<string> = new Set([
   "filespace_enable_webdav",
 ])
 
-const MAIL_FIELDS = ["to", "cc", "bcc"] as const
+const MAIL_FIELDS = ["to", "cc", "bcc", "recipients", "attendees"] as const
 
 function unknownTarget(tool: string): OutboundTarget {
   return { kind: "unknown", channel: `tool:${tool}`, recipient: "*" }
@@ -381,6 +381,10 @@ export function extractOutboundTargets(
       return dedupe(personTargets(stringList(args.memberIds) ?? [], adapterId, tool))
     }
     case "send_email":
+    case "send_mail":
+    case "reply_email":
+    case "forward_email":
+    case "send_calendar_invite":
       return dedupe(mailTargets(args, tool))
     case "team_post_to_chat":
     case "connectors_send_message":

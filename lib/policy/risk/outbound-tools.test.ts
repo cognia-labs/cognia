@@ -24,7 +24,11 @@ describe("outbound tool lists", () => {
       "deploy_site",
       "filespace_enable_webdav",
       "filespace_share",
+      "forward_email",
+      "reply_email",
+      "send_calendar_invite",
       "send_email",
+      "send_mail",
       "send_message",
     ])
   })

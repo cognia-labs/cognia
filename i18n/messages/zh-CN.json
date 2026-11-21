@@ -41882,6 +41882,9 @@
       "enabled": "启用雷达",
       "enabledDesc": "自动生成报告并通过桌宠提示。",
       "intervalDays": "最小间隔（天）",
+      "personalSourcesAction": "配置数据源",
+      "personalSourcesDesc": "接入飞书日历与任务、Gmail、Google Calendar 或 Outlook，让助理可读取日程、邮件与待办变化。",
+      "personalSourcesLabel": "个人数据源",
       "save": "保存",
       "saved": "已保存雷达设置。",
       "scheduleAction": {
@@ -50469,6 +50472,53 @@
         "title": "权限",
         "unsaved": "有未保存的更改"
       },
+      "personalSources": {
+        "allowQueriesLabel": "允许助理查询此数据源",
+        "argsLabel": "启动参数",
+        "commandLabel": "命令",
+        "detectedVersion": "已检测到 CLI v{version}",
+        "docsLink": "配置指南",
+        "hostRequiredNotice": "个人数据源配置及 CLI / MCP 连通性探测需要桌面端或已配对的常驻宿主。",
+        "larkSetupHint": "飞书日历与任务复用内置 lark-cli 工具链。请在宿主终端完成登录后点击「探测验证」：",
+        "openOutboundPolicy": "查看外发授权策略",
+        "outboundGovernanceHint": "对外写入工具（send_email、send_mail、reply_email、forward_email、send_calendar_invite）统一受「出站收件人授权」策略约束。",
+        "probeAll": "全部验证",
+        "saveAndConnect": "保存并启用",
+        "secretLabel": "系统钥匙串凭据（{envKey}）",
+        "secretPlaceholder": "加密保存在系统钥匙串（若使用浏览器自动授权可留空）",
+        "sources": {
+          "gmail": {
+            "description": "通过标准 stdio MCP 检索邮件线程、读取正文并在授权策略下发送邮件。",
+            "title": "Gmail"
+          },
+          "google-calendar": {
+            "description": "读取近期日程、忙闲状态并管理 Google 日历事件。",
+            "title": "Google Calendar"
+          },
+          "lark": {
+            "description": "内置飞书 / Lark 日历议程、忙闲查询与个人任务列表工具。",
+            "title": "飞书日历与任务"
+          },
+          "outlook": {
+            "description": "通过标准 stdio MCP 读取 Microsoft 365 / Outlook 邮件、日历与待办任务。",
+            "title": "Outlook / Microsoft 365"
+          }
+        },
+        "status": {
+          "desktop_required": "需桌面宿主",
+          "disabled": "已停用",
+          "ready": "已就绪",
+          "reauth_required": "需重新认证",
+          "unconfigured": "未配置"
+        },
+        "subtitle": "为个人助理与注意力雷达接入日历、邮件与个人待办数据源。",
+        "title": "个人数据源",
+        "toasts": {
+          "saveFailed": "保存个人数据源配置失败。",
+          "saved": "已保存并启用 {name}"
+        },
+        "verifyAction": "探测验证"
+      },
       "pluginConnector": {
         "create": "添加连接器",
         "createTitle": "添加 {name} 连接器",
@@ -50736,6 +50786,7 @@
         "outbound": "出站",
         "overrides": "覆盖配置",
         "overview": "概览",
+        "sources": "个人数据源",
         "tunnel": "隧道"
       },
       "teamPicker": {

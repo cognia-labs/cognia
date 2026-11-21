@@ -197,4 +197,10 @@ describe("RadarPanel", () => {
     }).format(past.generatedAt)
     expect(await screen.findByRole("option", { name: new RegExp(expected) })).toBeInTheDocument()
   })
+
+  it("links to the Personal data sources wizard in Settings -> Connections (F7)", async () => {
+    render(<RadarPanel />)
+    const link = await screen.findByTestId("radar-open-personal-sources")
+    expect(link).toHaveAttribute("href", "/settings?section=connections&connectionsTab=sources")
+  })
 })
