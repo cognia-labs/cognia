@@ -161,6 +161,32 @@ describe("pet-models CRUD", () => {
     expect((await getDb().petCharacterBindings.get("typed"))?.skin).toBeUndefined()
   })
 
+  it("preserves an active non-live2d skin when deleting a remembered Live2D model (F31)", async () => {
+    const row = await addPetModel(meta(), [file("a.json", "{}")])
+    await getDb().settings.put({
+      id: "singleton",
+      petSettings: {
+        enabled: true,
+        anchor: "bottom-right",
+        motion: "auto",
+        mutedBubbles: false,
+        size: 96,
+        skinId: "media",
+        activeMediaPackId: "media-pack-1",
+        activeLive2dModelId: row.id,
+      },
+    } as never)
+
+    await deletePetModel(row.id)
+
+    const storedSettings = await getDb().settings.get("singleton")
+    expect(storedSettings?.petSettings).toMatchObject({
+      skinId: "media",
+      activeMediaPackId: "media-pack-1",
+    })
+    expect(storedSettings?.petSettings?.activeLive2dModelId).toBeUndefined()
+  })
+
   it("deleting a missing model is a no-op", async () => {
     await expect(deletePetModel("nope")).resolves.toBeUndefined()
   })

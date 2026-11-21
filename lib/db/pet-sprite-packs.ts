@@ -71,7 +71,7 @@ export async function deletePetSpritePack(id: string): Promise<void> {
         updatedAt: Date.now(),
         petSettings: {
           ...settings.petSettings,
-          skinId: "svg",
+          skinId: settings.petSettings.skinId === "sprite-v2" ? "svg" : settings.petSettings.skinId,
           activeSpritePackId: undefined,
         },
       })

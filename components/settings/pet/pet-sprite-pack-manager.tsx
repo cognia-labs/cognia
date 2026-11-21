@@ -117,7 +117,12 @@ export function PetSpritePackManager({ settings, onPatch }: PetSpritePackManager
   async function remove(id: string) {
     await deletePetSpritePack(id)
     if (settings.activeSpritePackId === id) {
-      onPatch({ skinId: "svg", activeSpritePackId: undefined })
+      onPatch({
+        ...(settings.skinId === undefined || settings.skinId === "sprite-v2"
+          ? { skinId: "svg" as const }
+          : {}),
+        activeSpritePackId: undefined,
+      })
     }
   }
 

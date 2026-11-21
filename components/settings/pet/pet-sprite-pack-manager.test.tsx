@@ -147,6 +147,26 @@ describe("PetSpritePackManager", () => {
     expect(patch).toHaveBeenCalledWith({ skinId: "svg", activeSpritePackId: undefined })
   })
 
+  it("preserves an active media skin when deleting a remembered sprite pack (F31)", async () => {
+    const patch = jest.fn()
+    listPetSpritePacks.mockReturnValue([
+      { id: "momo", displayName: "Momo", description: "Clay fox" },
+    ])
+    deletePetSpritePack.mockResolvedValue(undefined)
+    render(
+      <PetSpritePackManager
+        settings={
+          { skinId: "media", activeSpritePackId: "momo", activeMediaPackId: "mp1" } as never
+        }
+        onPatch={patch}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "delete" }))
+    await waitFor(() => expect(deletePetSpritePack).toHaveBeenCalledWith("momo"))
+    expect(patch).toHaveBeenCalledWith({ activeSpritePackId: undefined })
+  })
+
   it("activates an installed inactive pack", () => {
     const patch = jest.fn()
     listPetSpritePacks.mockReturnValue([

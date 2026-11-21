@@ -10,6 +10,10 @@ jest.mock("./live2d/asset-bridge", () => ({
   requestMirroredLive2dAsset: jest.fn(),
   getMirroredLive2dRow: jest.fn(),
 }))
+jest.mock("./sprite-v2/asset-bridge", () => ({
+  isSpriteAssetMirror: jest.fn(() => false),
+  requestMirroredSpriteAsset: jest.fn(),
+}))
 
 import { getPetModel, getPetModelEntries } from "@/lib/db/pet-models"
 import { getPetSpritePack } from "@/lib/db/pet-sprite-packs"
@@ -20,11 +24,13 @@ import {
   requestMirroredLive2dAsset,
   getMirroredLive2dRow,
 } from "./live2d/asset-bridge"
+import { isSpriteAssetMirror, requestMirroredSpriteAsset } from "./sprite-v2/asset-bridge"
 
 beforeEach(() => {
   resetPetSkinRuntimeForTests()
   jest.clearAllMocks()
   jest.mocked(isLive2dAssetMirror).mockReturnValue(false)
+  jest.mocked(isSpriteAssetMirror).mockReturnValue(false)
 })
 
 it("reads overlay assets from the account projection and reuses blobs with fresh metadata", async () => {
@@ -101,4 +107,22 @@ it("loads each selected asset once per WebView until invalidated", async () => {
   await loadLive2dSkinAsset("m1")
   expect(getPetModel).toHaveBeenCalledTimes(3)
   expect(getPetModelEntries).toHaveBeenCalledTimes(2)
+})
+
+it("loads sprite packs from the secondary-window mirror without querying local storage (F28)", async () => {
+  jest.mocked(isSpriteAssetMirror).mockReturnValue(true)
+  const mirrored = {
+    id: "momo",
+    displayName: "Momo",
+    description: "",
+    spriteVersionNumber: 2 as const,
+    spritesheet: new Blob(["mirrored-atlas"]),
+    totalBytes: 14,
+    createdAt: 1,
+  }
+  jest.mocked(requestMirroredSpriteAsset).mockResolvedValue(mirrored)
+
+  expect(await loadSpriteSkinAsset("momo")).toBe(mirrored)
+  expect(requestMirroredSpriteAsset).toHaveBeenCalledWith("momo")
+  expect(getPetSpritePack).not.toHaveBeenCalled()
 })

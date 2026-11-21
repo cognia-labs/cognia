@@ -27,8 +27,10 @@ import {
 import type { PetConsoleTab } from "@/lib/pet/console-tabs"
 import { liveQuery } from "dexie"
 import { getPetModel } from "@/lib/db/pet-models"
+import { getPetSpritePack } from "@/lib/db/pet-sprite-packs"
 import { loadLive2dSkinAsset } from "@/lib/pet/skin-assets"
 import { startMainLive2dAssets } from "@/lib/pet/live2d/asset-bridge"
+import { startMainSpriteAssets } from "@/lib/pet/sprite-v2/asset-bridge"
 import { getWindowRole } from "@/lib/platform/window-role"
 import { startMainMediaAssets } from "@/lib/pet/media-packs/asset-bridge"
 
@@ -91,6 +93,25 @@ export function startMainPetBridge(deps: MainPetBridgeDeps = {}): () => void {
           },
         })
       : undefined
+  const spriteAssets =
+    getWindowRole() === "main"
+      ? startMainSpriteAssets({
+          selectedPack: () => {
+            const state = store.getState()
+            return state.profileSnapshot && state.appearanceSelection?.skinId === "sprite-v2"
+              ? state.appearanceSelection.packId
+              : undefined
+          },
+          readPack: getPetSpritePack,
+          watchRow: (id, next) => {
+            const subscription = liveQuery(() => getPetSpritePack(id)).subscribe({
+              next,
+              error: () => next(undefined),
+            })
+            return () => subscription.unsubscribe()
+          },
+        })
+      : undefined
   const assets =
     getWindowRole() === "main"
       ? startMainLive2dAssets({
@@ -126,6 +147,7 @@ export function startMainPetBridge(deps: MainPetBridgeDeps = {}): () => void {
   const unsub = store.subscribe((state, prev) => {
     assets?.sync()
     mediaAssets?.sync()
+    spriteAssets?.sync()
     if (state.profileSnapshot !== prev.profileSnapshot) {
       post(channel, { v: 1, t: "profile", snapshot: state.profileSnapshot })
     }
@@ -174,6 +196,7 @@ export function startMainPetBridge(deps: MainPetBridgeDeps = {}): () => void {
   return () => {
     assets?.dispose()
     mediaAssets?.dispose()
+    spriteAssets?.dispose()
     post(channel, { v: 1, t: "profile", snapshot: null })
     unsub()
     channel.onmessage = null

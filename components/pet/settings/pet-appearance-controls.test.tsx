@@ -117,4 +117,15 @@ describe("PetAppearanceControls", () => {
     expect(screen.getByRole("radio", { name: /v2|sprite/i })).toBeInTheDocument()
     expect(screen.getByTestId("pet-sprite-pack-manager")).toBeInTheDocument()
   })
+
+  it("reports SVG as the effective skin when media is selected without an active pack (F31)", () => {
+    render(
+      <PetAppearanceControls
+        pet={{ ...DEFAULT_PET_SETTINGS, skinId: "media", activeMediaPackId: undefined }}
+        patch={jest.fn()}
+      />
+    )
+    const status = screen.getByTestId("pet-effective-skin")
+    expect(status).toHaveTextContent(/effective skin:\s*vector mascot/i)
+  })
 })

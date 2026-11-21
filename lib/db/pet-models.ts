@@ -159,7 +159,7 @@ export async function deletePetModel(id: string): Promise<void> {
           updatedAt: Date.now(),
           petSettings: {
             ...settings.petSettings,
-            skinId: "svg",
+            skinId: settings.petSettings.skinId === "live2d" ? "svg" : settings.petSettings.skinId,
             activeLive2dModelId: undefined,
           },
         })

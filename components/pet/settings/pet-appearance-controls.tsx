@@ -38,7 +38,9 @@ export function PetAppearanceControls({ pet, patch }: PetControlsProps) {
         : "svg"
       : skinId === "sprite-v2" && !pet.activeSpritePackId
         ? "svg"
-        : skinId
+        : skinId === "media" && !pet.activeMediaPackId
+          ? "svg"
+          : skinId
 
   return (
     <FieldGroup>

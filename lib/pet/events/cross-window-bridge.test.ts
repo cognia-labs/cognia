@@ -11,8 +11,13 @@ import type { PetLookTarget, PetOneShot, PetSkinSelection, PetVisualState } from
 import { getWindowRole } from "@/lib/platform/window-role"
 import { startMainLive2dAssets } from "@/lib/pet/live2d/asset-bridge"
 import { startMainMediaAssets } from "@/lib/pet/media-packs/asset-bridge"
+import { startMainSpriteAssets } from "@/lib/pet/sprite-v2/asset-bridge"
 jest.mock("@/lib/pet/media-packs/asset-bridge", () => ({
   startMainMediaAssets: jest.fn(() => ({ sync: jest.fn(), dispose: jest.fn() })),
+}))
+jest.mock("@/lib/pet/sprite-v2/asset-bridge", () => ({
+  startMainSpriteAssets: jest.fn(() => ({ sync: jest.fn(), dispose: jest.fn() })),
+  isSpriteAssetMirror: () => false,
 }))
 
 jest.mock("@/lib/platform/window-role", () => ({ getWindowRole: jest.fn(() => "web") }))
@@ -438,6 +443,40 @@ describe("startMainPetBridge", () => {
     } finally {
       ;(globalThis as Record<string, unknown>).BroadcastChannel = real
     }
+  })
+
+  it("wires and tears down the sprite-v2 asset projection in the main window (F28)", () => {
+    const mockSync = jest.fn()
+    const mockDispose = jest.fn()
+    jest.mocked(getWindowRole).mockReturnValue("main")
+    jest.mocked(startMainSpriteAssets).mockReturnValueOnce({
+      sync: mockSync,
+      dispose: mockDispose,
+    })
+    const channel = new FakeChannel()
+    const store = makeStore()
+    const dispose = startMainPetBridge({ channel, store: store as never })
+    try {
+      expect(startMainSpriteAssets).toHaveBeenCalledTimes(1)
+      const callArg = jest.mocked(startMainSpriteAssets).mock.calls.at(-1)?.[0]
+      expect(callArg?.selectedPack()).toBeUndefined()
+      store.emit({
+        profileSnapshot: {
+          profile: {
+            ...createDefaultProfile("companion-mirror", 0),
+            mirroredBones: generateBones("acct"),
+          },
+          binding: null,
+        },
+        appearanceSelection: { skinId: "sprite-v2", packId: "momo" },
+      })
+      expect(callArg?.selectedPack()).toBe("momo")
+      expect(mockSync).toHaveBeenCalled()
+    } finally {
+      dispose()
+      jest.mocked(getWindowRole).mockReturnValue("web")
+    }
+    expect(mockDispose).toHaveBeenCalledTimes(1)
   })
 })
 

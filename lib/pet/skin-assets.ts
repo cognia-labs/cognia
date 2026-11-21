@@ -6,6 +6,7 @@ import {
   isLive2dAssetMirror,
   requestMirroredLive2dAsset,
 } from "./live2d/asset-bridge"
+import { isSpriteAssetMirror, requestMirroredSpriteAsset } from "./sprite-v2/asset-bridge"
 
 export interface Live2dSkinAsset {
   row: PetModelRow
@@ -34,6 +35,11 @@ export async function loadLive2dSkinAsset(modelId: string): Promise<Live2dSkinAs
 }
 
 export function loadSpriteSkinAsset(packId: string): Promise<PetSpritePackRow | undefined> {
+  if (isSpriteAssetMirror()) {
+    return getPetSkinRuntime().loadAsset(`sprite-v2:${packId}`, () =>
+      requestMirroredSpriteAsset(packId)
+    )
+  }
   return getPetSkinRuntime().loadAsset(`sprite-v2:${packId}`, () => getPetSpritePack(packId))
 }
 
