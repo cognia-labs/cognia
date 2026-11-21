@@ -13,8 +13,12 @@
  * Privacy: the command is **never** sent to the model if it carries PII /
  * secrets (`hasNoLeakingPii`). Failures, malformed output, and PII all resolve
  * to `null` so the caller falls back to the safe default (prompt the user).
- * Results are cached by command string with a short TTL to avoid re-judging a
- * command the agent runs repeatedly in a turn.
+ * A verdict counts as approval only when it satisfies the whole output
+ * contract: a "safe" answer without a valid risk band is no evidence at all and
+ * resolves to `null`, never to an assumed low risk. Results are cached with a
+ * short TTL to avoid re-judging a command the agent runs repeatedly in a turn;
+ * the key covers every input of the judge prompt (command, working directory,
+ * reply language), the instruction context and the active guidance revision.
  *
  * The judge's guidance is a narrow-only Prompt Center entry (ADR-0236, plan
  * R6): a customized judge runs beside the shipped one and the stricter verdict
@@ -85,9 +89,18 @@ export function invalidateJudgeContext(contextKey: string): void {
   contextEpochs.set(contextKey, (contextEpochs.get(contextKey) ?? 0) + 1)
 }
 
-function cacheKey(command: string, contextKey: string | undefined, promptKey: string): string {
-  if (!contextKey) return `${promptKey}::${command}`
-  return `${promptKey}|${contextKey}#${contextEpochs.get(contextKey) ?? 0}::${command}`
+function cacheKey(
+  command: string,
+  contextKey: string | undefined,
+  promptKey: string,
+  opts: Pick<JudgeOptions, "cwd" | "locale">
+): string {
+  // The working directory and the reply language are part of the prompt the
+  // model judged, so a verdict reached for one directory never answers for
+  // another. JSON keeps the parts unambiguous whatever characters they hold.
+  const inputs = JSON.stringify([opts.cwd ?? null, opts.locale ?? null, command])
+  if (!contextKey) return `${promptKey}::${inputs}`
+  return `${promptKey}|${contextKey}#${contextEpochs.get(contextKey) ?? 0}::${inputs}`
 }
 
 /** Test seam — clear the memoization cache and every context epoch. */
@@ -124,10 +137,26 @@ export const COMMAND_JUDGE_PROMPT = definePrompt({
 
 const RISK_RANK: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2 }
 
-function coerceRisk(value: unknown, safe: boolean): RiskLevel {
-  if (value === "low" || value === "medium" || value === "high") return value
-  // Unknown / missing: a safe verdict is low risk, an unsafe one is high.
-  return safe ? "low" : "high"
+function parseRisk(value: unknown): RiskLevel | null {
+  return value === "low" || value === "medium" || value === "high" ? value : null
+}
+
+/**
+ * Read the model's answer against the output contract. A missing or invalid
+ * risk band never stands in for "low": an unsafe answer keeps the strictest
+ * band, and a "safe" answer without a valid band is no verdict, so the caller
+ * asks the person.
+ */
+function parseJudgement(raw: {
+  safe?: unknown
+  risk?: unknown
+  reason?: unknown
+}): CommandJudgement | null {
+  if (typeof raw.safe !== "boolean") return null
+  const reason = typeof raw.reason === "string" ? raw.reason.slice(0, 160) : ""
+  const risk = parseRisk(raw.risk)
+  if (risk === null) return raw.safe ? null : { safe: false, risk: "high", reason }
+  return { safe: raw.safe, risk, reason }
 }
 
 /**
@@ -178,7 +207,8 @@ export async function judgeCommandSafety(
   const key = cacheKey(
     trimmed,
     opts.contextKey,
-    guidance.source.kind === "override" ? guidance.source.revisionId : "shipped"
+    guidance.source.kind === "override" ? guidance.source.revisionId : "shipped",
+    opts
   )
   const cached = cache.get(key)
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value
@@ -192,13 +222,7 @@ export async function judgeCommandSafety(
   const judge = async (system: string): Promise<CommandJudgement | null> => {
     try {
       const text = await client.complete(prompt, { system, temperature: 0, maxTokens: 80 })
-      const raw = extractJson<{ safe?: unknown; risk?: unknown; reason?: unknown }>(text)
-      if (typeof raw.safe !== "boolean") return null
-      return {
-        safe: raw.safe,
-        risk: coerceRisk(raw.risk, raw.safe),
-        reason: typeof raw.reason === "string" ? raw.reason.slice(0, 160) : "",
-      }
+      return parseJudgement(extractJson<{ safe?: unknown; risk?: unknown; reason?: unknown }>(text))
     } catch {
       return null
     }

@@ -19,7 +19,19 @@ export interface RunAutoModeArgs {
   settings: AppSettings | null | undefined
   /** Background model client (already built by the caller); null disables the model tier. */
   client: LlmClient | null
+  /**
+   * Directory the command starts in. Anchors the rules' workspace check and
+   * the classifier's `cd` tracking (both only ever tighten a verdict with it)
+   * and is shown to the model judge.
+   */
   cwd?: string
+  /**
+   * Resolve {@link cwd} lazily, only once the tool turns out to be a shell
+   * command under Auto-mode — the session's effective working directory needs
+   * a database read the other requests should not pay for. Ignored when `cwd`
+   * is given; a failure leaves the directory unknown, which fails closed.
+   */
+  resolveCwd?: () => Promise<string | null | undefined>
   locale?: string
   /** Plugin-contributed command rulesets (lower precedence than user rules). */
   pluginRules?: Ruleset[]
@@ -45,6 +57,7 @@ export async function runAutoModeForTool({
   settings,
   client,
   cwd,
+  resolveCwd,
   locale,
   pluginRules = [],
   contextKey,
@@ -67,12 +80,14 @@ export async function runAutoModeForTool({
   const rules: Ruleset[] = [...pluginRules]
   if (userRules && Object.keys(userRules).length > 0) rules.push({ Bash: userRules })
 
+  const startDir = cwd ?? ((await resolveCwd?.().catch(() => undefined)) || undefined)
+
   return evaluateAutoDecision({
     command,
     config,
     rules,
     client,
-    cwd,
+    cwd: startDir,
     locale,
     contextKey,
     promptContext,

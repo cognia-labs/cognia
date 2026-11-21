@@ -92,6 +92,7 @@ import { listMessages, persistMessages, type MessagePersistOptions } from "@/lib
 import { driveInSessionPlanAfterTurn } from "./plan-turn-settle"
 import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
 import { getSession, setSdkSessionId } from "@/lib/db/sessions"
+import { resolveEffectiveCwdForSession } from "@/lib/chat/session-effective-cwd"
 import {
   acknowledgeTranscriptRuntime,
   withTranscriptRuntimeLock,
@@ -323,6 +324,13 @@ export async function tryAutoModeDecision(
         client: judgeClient,
         locale: settings?.language,
         pluginRules: getPluginCommandRulesets(),
+        // Where the command starts: the session's effective working directory,
+        // the same chain the send path resolves (F20). Read only when the
+        // request is a shell command under Auto-mode.
+        resolveCwd: async () => {
+          const session = await getSession(evt.sessionId)
+          return session ? resolveEffectiveCwdForSession(session) : undefined
+        },
         // The judge cache is scoped to this session's instruction epoch — a
         // mid-turn steer bumps it, so a verdict reached under the instruction
         // the user just redirected away from is never reused.

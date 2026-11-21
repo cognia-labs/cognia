@@ -126,6 +126,44 @@ describe("judgeCommandSafety", () => {
     const out = await judgeCommandSafety(client, "weird")
     expect(out?.risk).toBe("high")
   })
+
+  // F01: "safe" without a valid risk band used to be read as low risk, which
+  // Auto-mode turns into an unattended allow.
+  it.each([
+    ['{"safe": true, "reason": "no risk"}', "missing"],
+    ['{"safe": true, "risk": null, "reason": "x"}', "null"],
+    ['{"safe": true, "risk": 0, "reason": "x"}', "a number"],
+    ['{"safe": true, "risk": {"level": "low"}, "reason": "x"}', "an object"],
+    ['{"safe": true, "risk": "LOW", "reason": "x"}', "an off-contract spelling"],
+    ['{"safe": true, "risk": "none", "reason": "x"}', "an unknown band"],
+  ])("gives no verdict for a safe answer whose risk is %s (%s)", async (response) => {
+    const out = await judgeCommandSafety(mockClient(response), "git push")
+    expect(out).toBeNull()
+  })
+
+  it("keeps a valid safe verdict whose reason is not a string, without a reason", async () => {
+    const client = mockClient('{"safe": true, "risk": "low", "reason": 42}')
+    expect(await judgeCommandSafety(client, "ls")).toEqual({ safe: true, risk: "low", reason: "" })
+  })
+
+  // F20: the working directory is part of the judged prompt.
+  it("tells the model the working directory and re-judges in another one", async () => {
+    const client = mockClient('{"safe": true, "risk": "low", "reason": "ok"}')
+    await judgeCommandSafety(client, "make clean", { cwd: "/probe/a", contextKey: "s1" })
+    await judgeCommandSafety(client, "make clean", { cwd: "/probe/a", contextKey: "s1" })
+    expect(client.complete).toHaveBeenCalledTimes(1)
+    await judgeCommandSafety(client, "make clean", { cwd: "/probe/b", contextKey: "s1" })
+    expect(client.complete).toHaveBeenCalledTimes(2)
+    expect(client.complete.mock.calls[0][0]).toContain("Working directory: /probe/a")
+    expect(client.complete.mock.calls[1][0]).toContain("Working directory: /probe/b")
+  })
+
+  it("does not answer one reply language from a verdict reached in another", async () => {
+    const client = mockClient('{"safe": true, "risk": "low", "reason": "ok"}')
+    await judgeCommandSafety(client, "make", { locale: "en" })
+    await judgeCommandSafety(client, "make", { locale: "zh-CN" })
+    expect(client.complete).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe("customized judge guidance is narrow-only (ADR-0236)", () => {
@@ -202,6 +240,19 @@ describe("customized judge guidance is narrow-only (ADR-0236)", () => {
   it("withholds approval when the customized judge gives no verdict", async () => {
     publish("por-broken")
     const client = splitClient('{"safe": true, "risk": "low", "reason": "ok"}', "not json")
+    expect(await judgeCommandSafety(client, "ls")).toEqual({
+      safe: false,
+      risk: "low",
+      reason: "ok",
+    })
+  })
+
+  it("withholds approval when the customized judge says safe without a risk band", async () => {
+    publish("por-no-risk")
+    const client = splitClient(
+      '{"safe": true, "risk": "low", "reason": "ok"}',
+      '{"safe": true, "reason": "fine"}'
+    )
     expect(await judgeCommandSafety(client, "ls")).toEqual({
       safe: false,
       risk: "low",

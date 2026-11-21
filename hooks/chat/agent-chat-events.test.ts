@@ -2024,6 +2024,26 @@ describe("renderer broker Auto-mode responder", () => {
       })
     }
   )
+
+  // F20: the request carries no directory, so the session's own is resolved.
+  it("hands Auto-mode the session's effective working directory", async () => {
+    const { runAutoModeForTool } =
+      await import("@/lib/ai/agent/execution/permissions/auto-mode-runner")
+    const { tryAutoModeDecision } = await import("./agent-chat-events")
+    jest
+      .mocked(runAutoModeForTool)
+      .mockResolvedValueOnce({ decision: "ask", source: "rule", reason: "fixture" } as never)
+    mockReadSession.mockResolvedValueOnce({ id: "chat", workingDir: "/repo/override" })
+    await tryAutoModeDecision(
+      { sessionId: "chat", requestId: "r", toolName: "Bash", input: { command: "pwd" } },
+      jest.fn(async () => {})
+    )
+    const args = jest.mocked(runAutoModeForTool).mock.calls.at(-1)?.[0]
+    await expect(args?.resolveCwd?.()).resolves.toBe("/repo/override")
+    expect(mockReadSession).toHaveBeenLastCalledWith("chat")
+    mockReadSession.mockResolvedValueOnce(undefined)
+    await expect(args?.resolveCwd?.()).resolves.toBeUndefined()
+  })
 })
 
 describe("Auto mode and per-call tools (ADR-0201)", () => {

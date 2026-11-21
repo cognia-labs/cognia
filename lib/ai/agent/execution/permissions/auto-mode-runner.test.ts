@@ -93,6 +93,67 @@ describe("runAutoModeForTool", () => {
     expect(out?.source).toBe("model")
   })
 
+  // F20: production passes the session's directory lazily; the classifier
+  // anchors `./` paths to it and the judge is told where the command runs.
+  it("resolves the start directory lazily and anchors the verdict to it", async () => {
+    const client = {
+      complete: jest.fn(async () => '{"safe":true,"risk":"low","reason":"ok"}'),
+    } as unknown as LlmClient & { complete: jest.Mock }
+    const resolveCwd = jest.fn(async () => "/")
+    const denied = await runAutoModeForTool({
+      toolName: "Bash",
+      input: { command: "rm -rf ./etc" },
+      settings: settings({ autoApprove: { enabled: true, mode: "rules+model" } }),
+      client,
+      resolveCwd,
+    })
+    // Relative to `/`, `./etc` is a critical path: denied without a model call.
+    expect(denied).toMatchObject({ decision: "deny", source: "rule" })
+    expect(client.complete).not.toHaveBeenCalled()
+
+    resolveCwd.mockResolvedValue("/work/project")
+    await runAutoModeForTool({
+      toolName: "Bash",
+      input: { command: "git push" },
+      settings: settings({ autoApprove: { enabled: true, mode: "rules+model" } }),
+      client,
+      resolveCwd,
+    })
+    expect(client.complete.mock.calls[0][0]).toContain("Working directory: /work/project")
+  })
+
+  it("never reads the directory for a request Auto-mode does not judge", async () => {
+    const resolveCwd = jest.fn(async () => "/work")
+    await runAutoModeForTool({
+      toolName: "Read",
+      input: { file_path: "/x" },
+      settings: settings({ autoApprove: { enabled: true, mode: "rules" } }),
+      client: null,
+      resolveCwd,
+    })
+    await runAutoModeForTool({
+      toolName: "Bash",
+      input: { command: "ls" },
+      settings: settings({ autoApprove: { enabled: false } }),
+      client: null,
+      resolveCwd,
+    })
+    expect(resolveCwd).not.toHaveBeenCalled()
+  })
+
+  it("treats a directory that cannot be read as unknown", async () => {
+    const out = await runAutoModeForTool({
+      toolName: "Bash",
+      input: { command: "ls" },
+      settings: settings({ autoApprove: { enabled: true, mode: "rules" } }),
+      client: null,
+      resolveCwd: async () => {
+        throw new Error("db closed")
+      },
+    })
+    expect(out?.decision).toBe("allow")
+  })
+
   it("threads contextKey into the judge cache — a mid-turn steer re-judges", async () => {
     const client = {
       complete: jest.fn(async () => '{"safe":true,"risk":"low","reason":"ok"}'),
