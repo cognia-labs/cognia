@@ -1,16 +1,131 @@
-use crate::shell::{ShellResult, shell_exec_with_env_timeout_cap};
+use crate::shell::{shell_exec_with_cancel, ShellResult};
 use cognia_exec_sandbox::types::{NetworkPolicy, SandboxCommand, SandboxPolicy};
-use serde::Deserialize;
+use once_cell::sync::Lazy;
+use parking_lot::Mutex as SyncMutex;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Weak,
+    },
     time::Duration,
 };
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 const DEFAULT_KEYRING_NAMESPACE: &str = "project-environment";
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 // Bootstrap may use up to one hour plus five seconds for cleanup.
 const MAX_TIMEOUT_SECS: u64 = 60 * 60 + 5;
+const CANCEL_WAIT_BUDGET: Duration = Duration::from_secs(3);
+
+/// Server-side acknowledgement for cancelling an in-flight setup/action (F5).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEnvironmentCancelOutcome {
+    /// True when the named operation was found and signalled to stop.
+    pub cancelled: bool,
+    /// True when the operation finished tearing down its process tree within
+    /// the cancellation wait budget.
+    pub terminated: bool,
+}
+
+#[derive(Clone)]
+struct ActiveOperation {
+    cancel: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+    done: Arc<Notify>,
+    finished: Arc<AtomicBool>,
+}
+
+static WORKSPACE_LOCKS: Lazy<SyncMutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
+    Lazy::new(|| SyncMutex::new(HashMap::new()));
+
+static ACTIVE_OPERATIONS: Lazy<SyncMutex<HashMap<String, ActiveOperation>>> =
+    Lazy::new(|| SyncMutex::new(HashMap::new()));
+
+fn canonical_workspace_key(workspace_root: &Path) -> PathBuf {
+    std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf())
+}
+
+fn workspace_mutex_for(workspace_root: &Path) -> Arc<AsyncMutex<()>> {
+    let key = canonical_workspace_key(workspace_root);
+    let mut table = WORKSPACE_LOCKS.lock();
+    table.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(existing) = table.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let created = Arc::new(AsyncMutex::new(()));
+    table.insert(key, Arc::downgrade(&created));
+    created
+}
+
+struct OperationGuard {
+    id: Option<String>,
+    op: ActiveOperation,
+}
+
+impl OperationGuard {
+    fn register(operation_id: Option<String>) -> Result<Self, String> {
+        let op = ActiveOperation {
+            cancel: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+            done: Arc::new(Notify::new()),
+            finished: Arc::new(AtomicBool::new(false)),
+        };
+        let normalized = operation_id
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        if let Some(id) = &normalized {
+            if id.len() > 128 {
+                return Err("project environment operationId is too long".into());
+            }
+            let mut table = ACTIVE_OPERATIONS.lock();
+            if table.contains_key(id) {
+                return Err(format!(
+                    "project environment operationId is already active: {id}"
+                ));
+            }
+            table.insert(id.clone(), op.clone());
+        }
+        Ok(Self { id: normalized, op })
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.op.cancel.load(Ordering::Acquire)
+    }
+
+    fn cancel_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.op.cancel)
+    }
+
+    fn cancel_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.op.notify)
+    }
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        if let Some(id) = &self.id {
+            ACTIVE_OPERATIONS.lock().remove(id);
+        }
+        self.op.finished.store(true, Ordering::Release);
+        self.op.done.notify_waiters();
+    }
+}
+
+fn cancelled_shell_result() -> ShellResult {
+    ShellResult {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+        timed_out: false,
+        cancelled: true,
+        stdout_truncated: false,
+        stderr_truncated: false,
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -333,6 +448,7 @@ async fn execute_on_host<F, R>(
     keyring_references: Vec<EnvironmentKeyringReference>,
     policy: Option<EnvironmentPolicy>,
     timeout_secs: Option<u64>,
+    operation_id: Option<String>,
     host: ExecutionHost,
     resolve_workspace_env: impl FnOnce(cognia_core::workspace_env::WorkspaceEnvQuery) -> R,
     run_sandbox: impl FnOnce(SandboxCommand, SandboxPolicy) -> F,
@@ -340,12 +456,38 @@ async fn execute_on_host<F, R>(
 where
     R: std::future::Future<Output = Result<Option<BTreeMap<String, String>>, String>>,
     F: std::future::Future<
-            Output = Result<
-                cognia_exec_sandbox::types::SandboxResult,
-                cognia_exec_sandbox::types::SandboxError,
-            >,
+        Output = Result<
+            cognia_exec_sandbox::types::SandboxResult,
+            cognia_exec_sandbox::types::SandboxError,
         >,
+    >,
 {
+    let op = OperationGuard::register(operation_id)?;
+    let workspace_root = PathBuf::from(&cwd);
+    // Serialize concurrent setup/action invocations targeting the same
+    // canonical workspace directory (across profiles, windows, paired clients,
+    // and symlink aliases) while letting a cancelled waiter exit immediately
+    // without acquiring the directory (F3, F5).
+    let workspace_mutex = workspace_mutex_for(&workspace_root);
+    let _workspace_guard = {
+        let cancel_notify = op.cancel_notify();
+        let cancelled_fut = cancel_notify.notified();
+        tokio::pin!(cancelled_fut);
+        if op.is_cancelled() {
+            return Ok(cancelled_shell_result());
+        }
+        tokio::select! {
+            biased;
+            () = &mut cancelled_fut => return Ok(cancelled_shell_result()),
+            guard = workspace_mutex.lock_owned() => {
+                if op.is_cancelled() {
+                    return Ok(cancelled_shell_result());
+                }
+                guard
+            }
+        }
+    };
+
     let staged_mise = match &script {
         EnvironmentScript::Mise { mise } => {
             if !Path::new(&cwd).is_dir() {
@@ -417,8 +559,10 @@ where
     {
         environment.extend(trusted);
     }
+    if op.is_cancelled() {
+        return Ok(cancelled_shell_result());
+    }
     let inherit_environment = staged_mise.is_none();
-    let workspace_root = PathBuf::from(&cwd);
     let cwd = if let Some(stage) = &staged_mise {
         let path = stage
             .path()
@@ -433,14 +577,16 @@ where
     };
     let effective = effective_policy(policy, host);
     let mut result = if !effective.require_sandbox {
+        let cancel_flag = op.cancel_flag();
         tokio::task::spawn_blocking(move || {
-            shell_exec_with_env_timeout_cap(
+            shell_exec_with_cancel(
                 script,
                 cwd,
                 timeout_secs,
                 environment,
                 MAX_TIMEOUT_SECS,
                 inherit_environment,
+                Some(cancel_flag),
             )
         })
         .await
@@ -473,24 +619,41 @@ where
             max_memory_mb: 2048,
             max_processes: cognia_exec_sandbox::policy::BASH_DEFAULT_MAX_PROCESSES,
         };
-        match run_sandbox(command, sandbox_policy).await {
-            Ok(result) => ShellResult {
-                stdout: result.stdout,
-                stderr: result.stderr,
-                exit_code: Some(result.exit_code),
-                timed_out: result.timed_out,
-                stdout_truncated: false,
-                stderr_truncated: false,
-            },
-            Err(cognia_exec_sandbox::types::SandboxError::Timeout { .. }) => ShellResult {
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: None,
-                timed_out: true,
-                stdout_truncated: false,
-                stderr_truncated: false,
-            },
-            Err(error) => return Err(error.to_string()),
+        let cancel_notify = op.cancel_notify();
+        let cancelled_fut = cancel_notify.notified();
+        tokio::pin!(cancelled_fut);
+        if op.is_cancelled() {
+            cancelled_shell_result()
+        } else {
+            let outcome = tokio::select! {
+                biased;
+                () = &mut cancelled_fut => None,
+                res = run_sandbox(command, sandbox_policy) => Some(res),
+            };
+            match outcome {
+                None => cancelled_shell_result(),
+                Some(Ok(result)) => ShellResult {
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    exit_code: Some(result.exit_code),
+                    timed_out: result.timed_out,
+                    cancelled: false,
+                    stdout_truncated: result.stdout_truncated,
+                    stderr_truncated: result.stderr_truncated,
+                },
+                Some(Err(cognia_exec_sandbox::types::SandboxError::Timeout { .. })) => {
+                    ShellResult {
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        exit_code: None,
+                        timed_out: true,
+                        cancelled: false,
+                        stdout_truncated: false,
+                        stderr_truncated: false,
+                    }
+                }
+                Some(Err(error)) => return Err(error.to_string()),
+            }
         }
     };
     result.stdout = redact(result.stdout, &secrets);
@@ -509,6 +672,7 @@ pub async fn project_environment_execute(
     keyring_references: Vec<EnvironmentKeyringReference>,
     policy: Option<EnvironmentPolicy>,
     timeout_secs: Option<u64>,
+    operation_id: Option<String>,
 ) -> Result<ShellResult, String> {
     execute_on_host(
         script,
@@ -517,6 +681,7 @@ pub async fn project_environment_execute(
         keyring_references,
         policy,
         timeout_secs,
+        operation_id,
         ExecutionHost::Local,
         cognia_core::workspace_env::resolve_workspace_env_async,
         cognia_exec_sandbox::run_confined,
@@ -531,6 +696,7 @@ pub async fn project_environment_execute_cloud(
     keyring_references: Vec<EnvironmentKeyringReference>,
     policy: Option<EnvironmentPolicy>,
     timeout_secs: Option<u64>,
+    operation_id: Option<String>,
 ) -> Result<ShellResult, String> {
     execute_on_host(
         script,
@@ -539,11 +705,59 @@ pub async fn project_environment_execute_cloud(
         keyring_references,
         policy,
         timeout_secs,
+        operation_id,
         ExecutionHost::Cloud,
         cognia_core::workspace_env::resolve_workspace_env_async,
         cognia_exec_sandbox::run_confined,
     )
     .await
+}
+
+/// Cancel an in-flight `project_environment_execute` operation by its
+/// client-assigned `operation_id`, waiting up to the cleanup budget for
+/// server-side process-tree teardown (F5).
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub async fn project_environment_cancel(
+    operation_id: String,
+) -> Result<ProjectEnvironmentCancelOutcome, String> {
+    let trimmed = operation_id.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 {
+        return Err("invalid project environment operationId".into());
+    }
+    let op = {
+        let table = ACTIVE_OPERATIONS.lock();
+        table.get(trimmed).cloned()
+    };
+    let Some(op) = op else {
+        return Ok(ProjectEnvironmentCancelOutcome {
+            cancelled: false,
+            terminated: false,
+        });
+    };
+    op.cancel.store(true, Ordering::Release);
+    op.notify.notify_waiters();
+    if op.finished.load(Ordering::Acquire) {
+        return Ok(ProjectEnvironmentCancelOutcome {
+            cancelled: true,
+            terminated: true,
+        });
+    }
+    let notified = op.done.notified();
+    tokio::pin!(notified);
+    if op.finished.load(Ordering::Acquire) {
+        return Ok(ProjectEnvironmentCancelOutcome {
+            cancelled: true,
+            terminated: true,
+        });
+    }
+    let terminated = tokio::time::timeout(CANCEL_WAIT_BUDGET, notified)
+        .await
+        .is_ok()
+        || op.finished.load(Ordering::Acquire);
+    Ok(ProjectEnvironmentCancelOutcome {
+        cancelled: true,
+        terminated,
+    })
 }
 
 #[cfg(test)]
@@ -578,6 +792,7 @@ mod tests {
             vec![],
             None,
             Some(5),
+            None,
             ExecutionHost::Cloud,
             |query| {
                 assert_eq!(query.cwd, workspace.path());
@@ -618,13 +833,11 @@ mod tests {
                 }
                 assert!(!command.env.contains_key("MISE_NODE_VERSION"));
                 assert!(!command.env.contains_key("PORT"));
-                assert!(
-                    command
-                        .argv
-                        .last()
-                        .unwrap()
-                        .contains("mise settings get safe")
-                );
+                assert!(command
+                    .argv
+                    .last()
+                    .unwrap()
+                    .contains("mise settings get safe"));
                 assert!(command.argv.last().unwrap().contains("mise install"));
                 assert!(matches!(
                     policy, SandboxPolicy::Bash { writable, .. }
@@ -669,14 +882,13 @@ mod tests {
     async fn plain_setup_receives_trusted_ports_and_refuses_resolution_errors() {
         let dir = tempfile::tempdir().unwrap();
         let result = execute_on_host(
-            script(
-                "printf '%s:%s:%s' \"$PORT\" \"$COGNIA_PORT\" \"$COGNIA_PORT_COUNT\"".into(),
-            ),
+            script("printf '%s:%s:%s' \"$PORT\" \"$COGNIA_PORT\" \"$COGNIA_PORT_COUNT\"".into()),
             dir.path().to_string_lossy().into(),
             BTreeMap::from([("PORT".into(), "3000".into())]),
             vec![],
             None,
             Some(5),
+            None,
             ExecutionHost::Local,
             |query| {
                 assert_eq!(query.cwd, dir.path());
@@ -711,6 +923,7 @@ mod tests {
                 vec![],
                 None,
                 Some(5),
+                None,
                 ExecutionHost::Local,
                 |_| async { Ok(None) },
                 cognia_exec_sandbox::run_confined,
@@ -739,6 +952,7 @@ mod tests {
             vec![],
             None,
             Some(5),
+            None,
             ExecutionHost::Local,
             |_| async { Err("port range exhausted".into()) },
             cognia_exec_sandbox::run_confined,
@@ -770,6 +984,7 @@ mod tests {
                 vec![],
                 None,
                 Some(5),
+                None,
                 ExecutionHost::Cloud,
                 |_| async { resolution },
                 |command, _policy| {
@@ -922,6 +1137,211 @@ mod tests {
         assert_eq!(
             resolve_keyring_ref("token"),
             (DEFAULT_KEYRING_NAMESPACE, "token")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn concurrent_executions_serialize_across_symlink_aliases_of_same_workspace() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let parent = tempfile::tempdir().unwrap();
+        let real_dir = parent.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let alias_dir = parent.path().join("alias");
+        std::os::unix::fs::symlink(&real_dir, &alias_dir).unwrap();
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+
+        let run_one = |dir: PathBuf, active: Arc<AtomicUsize>, max_active: Arc<AtomicUsize>| async move {
+            execute_on_host(
+                script("echo ok".into()),
+                dir.to_string_lossy().into(),
+                BTreeMap::new(),
+                vec![],
+                None,
+                Some(5),
+                None,
+                ExecutionHost::Cloud,
+                |_| async { Ok(None) },
+                move |_cmd, _policy| async move {
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(current, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(80)).await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(cognia_exec_sandbox::types::SandboxResult {
+                        network: Default::default(),
+                        exit_code: 0,
+                        stdout: "ok".into(),
+                        stderr: String::new(),
+                        duration: Duration::from_millis(80),
+                        timed_out: false,
+                        stdout_truncated: false,
+                        stderr_truncated: false,
+                    })
+                },
+            )
+            .await
+            .unwrap()
+        };
+
+        let (first, second) = tokio::join!(
+            run_one(real_dir, Arc::clone(&active), Arc::clone(&max_active)),
+            run_one(alias_dir, Arc::clone(&active), Arc::clone(&max_active))
+        );
+        assert_eq!(first.exit_code, Some(0));
+        assert_eq!(second.exit_code, Some(0));
+        assert_eq!(
+            max_active.load(Ordering::SeqCst),
+            1,
+            "same canonical workspace must never run two setups concurrently"
+        );
+    }
+
+    #[tokio::test]
+    async fn executions_in_distinct_workspaces_run_in_parallel() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+        let run_one = |dir: PathBuf,
+                       active: Arc<AtomicUsize>,
+                       max_active: Arc<AtomicUsize>,
+                       barrier: Arc<tokio::sync::Barrier>| async move {
+            execute_on_host(
+                script("echo ok".into()),
+                dir.to_string_lossy().into(),
+                BTreeMap::new(),
+                vec![],
+                None,
+                Some(5),
+                None,
+                ExecutionHost::Cloud,
+                |_| async { Ok(None) },
+                move |_cmd, _policy| async move {
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(current, Ordering::SeqCst);
+                    barrier.wait().await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(cognia_exec_sandbox::types::SandboxResult {
+                        network: Default::default(),
+                        exit_code: 0,
+                        stdout: "ok".into(),
+                        stderr: String::new(),
+                        duration: Duration::ZERO,
+                        timed_out: false,
+                        stdout_truncated: false,
+                        stderr_truncated: false,
+                    })
+                },
+            )
+            .await
+            .unwrap()
+        };
+
+        let _ = tokio::join!(
+            run_one(
+                first_dir.path().to_path_buf(),
+                Arc::clone(&active),
+                Arc::clone(&max_active),
+                Arc::clone(&barrier)
+            ),
+            run_one(
+                second_dir.path().to_path_buf(),
+                Arc::clone(&active),
+                Arc::clone(&max_active),
+                Arc::clone(&barrier)
+            )
+        );
+        assert_eq!(max_active.load(Ordering::SeqCst), 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_stops_queued_and_active_operations_and_reports_termination() {
+        let dir = tempfile::tempdir().unwrap();
+        let active_id = format!("op-active-{}", uuid::Uuid::new_v4());
+        let queued_id = format!("op-queued-{}", uuid::Uuid::new_v4());
+        let cwd: String = dir.path().to_string_lossy().into();
+
+        let active_cwd = cwd.clone();
+        let active_id_for_run = active_id.clone();
+        let active_task = tokio::spawn(async move {
+            execute_on_host(
+                script("echo running; sleep 30 & wait".into()),
+                active_cwd,
+                BTreeMap::new(),
+                vec![],
+                None,
+                Some(30),
+                Some(active_id_for_run),
+                ExecutionHost::Local,
+                |_| async { Ok(None) },
+                cognia_exec_sandbox::run_confined,
+            )
+            .await
+        });
+
+        // Wait until the first operation registers and holds the workspace lock.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let queued_cwd = cwd.clone();
+        let queued_id_for_run = queued_id.clone();
+        let queued_task = tokio::spawn(async move {
+            execute_on_host(
+                script("touch queued-should-not-run".into()),
+                queued_cwd,
+                BTreeMap::new(),
+                vec![],
+                None,
+                Some(30),
+                Some(queued_id_for_run),
+                ExecutionHost::Local,
+                |_| async { Ok(None) },
+                cognia_exec_sandbox::run_confined,
+            )
+            .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let queued_ack = project_environment_cancel(queued_id.clone()).await.unwrap();
+        assert_eq!(
+            queued_ack,
+            ProjectEnvironmentCancelOutcome {
+                cancelled: true,
+                terminated: true,
+            }
+        );
+        let queued_result = queued_task.await.unwrap().unwrap();
+        assert!(queued_result.cancelled);
+        assert!(!dir.path().join("queued-should-not-run").exists());
+
+        let active_ack = project_environment_cancel(active_id.clone()).await.unwrap();
+        assert_eq!(
+            active_ack,
+            ProjectEnvironmentCancelOutcome {
+                cancelled: true,
+                terminated: true,
+            }
+        );
+        let active_result = active_task.await.unwrap().unwrap();
+        assert!(active_result.cancelled);
+        assert!(!active_result.timed_out);
+        assert_eq!(active_result.exit_code, None);
+
+        // Cancelling an already-finished or unknown operation is a clean no-op.
+        let unknown_ack = project_environment_cancel(active_id).await.unwrap();
+        assert_eq!(
+            unknown_ack,
+            ProjectEnvironmentCancelOutcome {
+                cancelled: false,
+                terminated: false,
+            }
         );
     }
 }

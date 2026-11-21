@@ -20556,6 +20556,23 @@
       "outputSchema": "#/components/schemas/RpcResult"
     },
     {
+      "name": "project_environment_cancel",
+      "resource": "project.environment",
+      "verb": "cancel",
+      "arm": "project_environment_cancel",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "workspace.write",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "transports": ["http", "websocket", "webrtc"],
+      "pagination": "none",
+      "longRunning": false,
+      "inputSchema": "#/components/schemas/RpcArgs",
+      "outputSchema": "#/components/schemas/RpcResult"
+    },
+    {
       "name": "project_environment_execute",
       "resource": "project.environment",
       "verb": "exec",

@@ -1,8 +1,8 @@
 mod a2ui_bridge;
 mod account_auth;
-mod siwc;
 #[cfg(all(feature = "agent-debug", desktop))]
 mod agent_debug;
+mod siwc;
 // ADR-0067 Tier C — extracted to `crates/cognia-agent-state` (zero `crate::`
 // edges, no tauri). Re-aliased so `crate::agent_session_store::…` in
 // `companion_api` and the desktop's `configure_path` call resolve unchanged;
@@ -126,8 +126,7 @@ pub use cognia_agent_state::provider_profiles;
 pub use cognia_companion_rpc::project_environment;
 mod proxy_config;
 pub use cognia_net::proxy_config::{
-    apply_current as apply_current_proxy_config,
-    clear_inherited_proxy_environment,
+    apply_current as apply_current_proxy_config, clear_inherited_proxy_environment,
 };
 mod recorder_window;
 /// ADR-0102 §4 — diagnostics-first safe mode. Owns `RecoveryStateV1`, its
@@ -1162,6 +1161,7 @@ pub fn run() {
             settings::write_claude_local_settings,
             shell::shell_exec,
             project_environment::project_environment_execute,
+            project_environment::project_environment_cancel,
             companion_api::environment_commands::sandbox_preview_context,
             companion_api::environment_commands::sandbox_preview_create,
             companion_api::environment_commands::sandbox_preview_list,
@@ -2180,8 +2180,10 @@ mod tests {
     fn backup_stream_helper_is_registered_only_on_the_local_invoke_surface() {
         let source = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
         assert!(source.contains("commands::backup_stream_temporary_path,"));
-        assert!(!include_str!("../../crates/cognia-companion-rpc/src/rpc/filesystem.rs")
-            .contains("backup_stream_temporary_path"));
+        assert!(
+            !include_str!("../../crates/cognia-companion-rpc/src/rpc/filesystem.rs")
+                .contains("backup_stream_temporary_path")
+        );
     }
 
     #[test]

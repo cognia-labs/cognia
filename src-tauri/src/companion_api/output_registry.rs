@@ -720,6 +720,7 @@ mod tests {
         ("fs_read_workspace_file_versioned", OutputShape::Declared(RootType::Object)),
         ("fs_write_workspace_file", OutputShape::Declared(RootType::Object)),
         ("project_environment_execute", OutputShape::Opaque(RootType::Object)),
+        ("project_environment_cancel", OutputShape::Declared(RootType::Object)),
         ("task_workspace_status", OutputShape::Derived(DerivedOutput { rust_type: "crate::task_workspace::TaskWorkspaceStatus", schema: schema_of::<crate::task_workspace::TaskWorkspaceStatus> })),
         ("task_workspace_begin", OutputShape::Derived(DerivedOutput { rust_type: "cognia_task_workspace::TaskRun", schema: schema_of::<cognia_task_workspace::TaskRun> })),
         ("task_workspace_bundle_begin", OutputShape::Derived(DerivedOutput { rust_type: "cognia_task_workspace::TaskRun", schema: schema_of::<cognia_task_workspace::TaskRun> })),

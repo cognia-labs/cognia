@@ -2807,6 +2807,9 @@
     "preview_local_manifest": {
       "to": "plugin.local_manifest.preview"
     },
+    "project_environment_cancel": {
+      "to": "project.environment.cancel"
+    },
     "project_environment_execute": {
       "to": "project.environment.exec"
     },

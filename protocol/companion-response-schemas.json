@@ -20244,6 +20244,20 @@
     "plugin_workspace_repo_remove": {
       "type": "boolean"
     },
+    "project_environment_cancel": {
+      "type": "object",
+      "description": "Server-side cancellation acknowledgement for an in-flight project environment setup or action.",
+      "required": ["cancelled", "terminated"],
+      "properties": {
+        "cancelled": {
+          "type": "boolean"
+        },
+        "terminated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "project_environment_execute": {
       "$ref": "#/$defs/LegacyRecord"
     },

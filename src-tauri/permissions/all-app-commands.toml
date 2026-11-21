@@ -898,6 +898,7 @@ commands.allow = [
   "plugin_workspace_repo_remove",
   "power_screen_holds_set",
   "preview_local_manifest",
+  "project_environment_cancel",
   "project_environment_execute",
   "provider_diagnostics_clear_balance_token",
   "provider_diagnostics_migrate_balance_token",

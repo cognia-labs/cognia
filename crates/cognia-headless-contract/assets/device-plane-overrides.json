@@ -7947,7 +7947,12 @@
           "timeoutSecs": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 300
+            "maximum": 3605
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           },
           "adminLease": {
             "type": "string",

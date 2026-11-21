@@ -146,7 +146,9 @@ fn map_desktop_write_bridge_error(command: &str, detail: String) -> (StatusCode,
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(RpcError::new(
                 "workflow_run_rejected",
-                detail.trim_start_matches(WORKFLOW_RUN_REJECTED_SENTINEL).trim(),
+                detail
+                    .trim_start_matches(WORKFLOW_RUN_REJECTED_SENTINEL)
+                    .trim(),
             )),
         );
     }
@@ -968,6 +970,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "fs_read_workspace_file_versioned",
     "fs_write_workspace_file",
     "project_environment_execute",
+    "project_environment_cancel",
     // Task-scoped resource ledger. File bodies use bounded reads or verified
     // transfer handles; events carry only summaries.
     "task_workspace_status",
@@ -2123,6 +2126,7 @@ const CONTROL_COMMANDS: &[&str] = &[
     "task_workspace_prune",
     "task_workspace_record_tool_event",
     "project_environment_execute",
+    "project_environment_cancel",
     // File-tree browser writes — mutate the workspace, so remote-control gated.
     "fs_create_workspace_dir",
     "fs_delete_workspace_entry",
@@ -2724,7 +2728,11 @@ fn inject_caller_device_grants(
             })
             .and_then(|(tenant_id, store)| store.capability_snapshot(tenant_id, device_id).ok());
         if let Some(grants) = snapshot {
-            let grants = grants.unwrap_or_default().into_iter().map(Value::String).collect();
+            let grants = grants
+                .unwrap_or_default()
+                .into_iter()
+                .map(Value::String)
+                .collect();
             map.insert("callerDeviceGrants".to_string(), Value::Array(grants));
         }
     }

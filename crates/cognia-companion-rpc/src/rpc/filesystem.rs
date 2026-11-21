@@ -15,6 +15,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "fs_read_workspace_file_chunk",
     "fs_write_workspace_file",
     "project_environment_execute",
+    "project_environment_cancel",
     "task_workspace_status",
     "task_workspace_begin",
     "task_workspace_bundle_begin",
@@ -468,6 +469,7 @@ pub(super) async fn dispatch(
             let policy: Option<crate::project_environment::EnvironmentPolicy> =
                 optional(&args, "policy")?;
             let timeout_secs: Option<u64> = optional(&args, "timeoutSecs")?;
+            let operation_id: Option<String> = optional(&args, "operationId")?;
             crate::project_environment::project_environment_execute_cloud(
                 script,
                 cwd,
@@ -475,10 +477,18 @@ pub(super) async fn dispatch(
                 keyring_references,
                 policy,
                 timeout_secs,
+                operation_id,
             )
             .await
             .map_err(RpcError::internal)
             .and_then(to_json)
+        }
+        "project_environment_cancel" => {
+            let operation_id: String = required(&args, "operationId")?;
+            crate::project_environment::project_environment_cancel(operation_id)
+                .await
+                .map_err(RpcError::internal)
+                .and_then(to_json)
         }
         "task_workspace_status" => {
             to_json(cognia_task_workspace_host::host_surface::task_workspace_status())
@@ -572,11 +582,12 @@ pub(super) async fn dispatch(
                 optional(&args, "finalState")?;
             let executor_stop_unproven: Option<bool> = optional(&args, "executorStopUnproven")?;
             tokio::task::spawn_blocking(move || {
-                cognia_task_workspace_host::host_surface::service()?.settle_workspace_bundle_turn_with_stop_status(
-                    &bundle_turn_id,
-                    final_state.unwrap_or(cognia_task_workspace::RunState::Ready),
-                    executor_stop_unproven,
-                )
+                cognia_task_workspace_host::host_surface::service()?
+                    .settle_workspace_bundle_turn_with_stop_status(
+                        &bundle_turn_id,
+                        final_state.unwrap_or(cognia_task_workspace::RunState::Ready),
+                        executor_stop_unproven,
+                    )
             })
             .await
             .map_err(|error| RpcError::internal(error.to_string()))?

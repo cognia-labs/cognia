@@ -70997,6 +70997,53 @@
       "outputTyped": true
     },
     {
+      "name": "project_environment_cancel",
+      "category": "development",
+      "resource": "project-environments",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "workspace.write",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "project_environment_cancel (workspace.write)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "operationId"
+        ],
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "description": "Server-side cancellation acknowledgement for an in-flight project environment setup or action.",
+        "required": [
+          "cancelled",
+          "terminated"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "terminated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
       "name": "project_environment_execute",
       "category": "development",
       "resource": "project-environments",
@@ -71106,7 +71153,12 @@
           "timeoutSecs": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 300
+            "maximum": 3605
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           }
         },
         "additionalProperties": false
@@ -114496,5 +114548,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "a74a6082e39ce19e76654e2a3dda6b0174b6cf8a4560c225af3ff94c9accbfb4"
+  "catalogHash": "f6718c4608dbd06102c892d3ea353f5b958a385cde199e7c8b9cf4c3456b9e9a"
 }
