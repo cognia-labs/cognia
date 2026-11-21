@@ -54,7 +54,8 @@ export interface GovernanceHost {
   }
   listWorkspaces(): Promise<WorkspaceInfo[]>
   currentWorkspaceId(): string | null
-  resolvePrompt(id: string, values?: Record<string, string>): Promise<string>
+  /** `sessionId` applies the override of that chat's workspace, else the account's. */
+  resolvePrompt(id: string, values?: Record<string, string>, sessionId?: string): Promise<string>
   runEval(args: { datasetId: string; model: string; cwd?: string }): Promise<unknown>
   listEvalDatasets(): Promise<Array<{ id: string; name: string }>>
   config(): GovernanceConfig
@@ -526,10 +527,14 @@ export class GovernanceRuntime {
       normalizeToolCall(toolName, args)
     )
     if (!decision.blockedBy) return undefined
-    return this.host.resolvePrompt(PROMPT_IDS.block, {
-      rule: decision.blockedBy.check.rule.text.slice(0, 600),
-      location: ruleLocation(decision.blockedBy).slice(0, 200),
-    })
+    return this.host.resolvePrompt(
+      PROMPT_IDS.block,
+      {
+        rule: decision.blockedBy.check.rule.text.slice(0, 600),
+        location: ruleLocation(decision.blockedBy).slice(0, 200),
+      },
+      sessionId
+    )
   }
 
   /** `onPostToolUse`: the result with reminders appended, when any apply and the result is text. */
@@ -550,10 +555,14 @@ export class GovernanceRuntime {
     if (text === null) return undefined
     const reminders = await Promise.all(
       decision.reminders.map((rule) =>
-        this.host.resolvePrompt(PROMPT_IDS.remind, {
-          rule: rule.check.rule.text.slice(0, 600),
-          location: ruleLocation(rule).slice(0, 200),
-        })
+        this.host.resolvePrompt(
+          PROMPT_IDS.remind,
+          {
+            rule: rule.check.rule.text.slice(0, 600),
+            location: ruleLocation(rule).slice(0, 200),
+          },
+          sessionId
+        )
       )
     )
     return `${text}\n\n${reminders.join("\n")}`

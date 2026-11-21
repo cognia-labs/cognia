@@ -41,8 +41,13 @@ export function createGovernanceHost(ctx: PluginContext): GovernanceHost {
       }))
     },
     currentWorkspaceId: () => ctx.project.getCurrentProjectId(),
-    async resolvePrompt(id, values) {
-      return (await ctx.prompts.resolve(id, values ? { values } : {})).text
+    async resolvePrompt(id, values, sessionId) {
+      return (
+        await ctx.prompts.resolve(id, {
+          ...(values ? { values } : {}),
+          ...(sessionId ? { sessionId } : {}),
+        })
+      ).text
     },
     runEval: (args) => ctx.eval.runDataset({ targetKind: "chat", ...args }),
     async listEvalDatasets() {

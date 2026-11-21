@@ -111,8 +111,9 @@ function fixture(): Fixture {
     },
     listWorkspaces: async () => [{ id: "w", name: "Repo", roots: ["/r"] }],
     currentWorkspaceId: () => null,
-    resolvePrompt: async (promptId: string, values?: Record<string, string>) =>
-      values ? `${promptId}:${values.rule}@${values.location}` : `system:${promptId}`,
+    resolvePrompt: jest.fn(async (promptId: string, values?: Record<string, string>) =>
+      values ? `${promptId}:${values.rule}@${values.location}` : `system:${promptId}`
+    ),
     runEval,
     listEvalDatasets: async () => [{ id: "d", name: "Dataset" }],
     config: () => config,
@@ -403,6 +404,11 @@ describe("GovernanceRuntime enforcement", () => {
     expect(
       await runtime.postToolUse("bash", { command: "git push --force" }, { ok: true }, "ws-session")
     ).toBeUndefined()
+    // Both texts are resolved for the tool call's session, so the override of
+    // that chat's workspace applies.
+    const resolved = jest.mocked(host.resolvePrompt).mock.calls
+    expect(resolved).toContainEqual([PROMPT_IDS.block, expect.any(Object), "ws-session"])
+    expect(resolved).toContainEqual([PROMPT_IDS.remind, expect.any(Object), "ws-session"])
     await runtime.removeRule(rule.id)
     expect(await runtime.store.rules()).toEqual([])
   })

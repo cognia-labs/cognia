@@ -43,6 +43,11 @@ describe("createGovernanceHost", () => {
     expect(ctx.prompts.resolve).toHaveBeenCalledWith("x", { values: { rule: "r" } })
     await host.resolvePrompt("y")
     expect(ctx.prompts.resolve).toHaveBeenLastCalledWith("y", {})
+    await host.resolvePrompt("z", { rule: "r" }, "s-1")
+    expect(ctx.prompts.resolve).toHaveBeenLastCalledWith("z", {
+      values: { rule: "r" },
+      sessionId: "s-1",
+    })
     await host.runEval({ datasetId: "d", model: "m", cwd: "/main" })
     expect(ctx.eval.runDataset).toHaveBeenCalledWith({
       targetKind: "chat",
