@@ -1,4 +1,5 @@
 import { act, render, waitFor } from "@testing-library/react"
+import { notifyPetResetCompleted } from "@/lib/pet/console-request"
 
 const usePetEventBus = jest.fn()
 const ensurePetAccountId = jest.fn().mockResolvedValue("acct-1")
@@ -676,5 +677,16 @@ describe("PetMount — desktop surfaces and window lifecycle", () => {
     const updater = updatePetSettings.mock.calls[0][0] as Updater
     const latest = desktopSettings({ enabled: true, clickThrough: false }).petSettings
     expect(updater(latest)).toBe(latest)
+  })
+
+  it("re-seeds a fresh egg after resetPet completes while settings stay stable (F21)", async () => {
+    settingsValue = desktopSettings({ enabled: true, clickThrough: false })
+    render(<PetMount />)
+    await waitFor(() => expect(ensurePetProfile).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      notifyPetResetCompleted("cognia-claude")
+    })
+    await waitFor(() => expect(ensurePetProfile).toHaveBeenCalledTimes(2))
   })
 })

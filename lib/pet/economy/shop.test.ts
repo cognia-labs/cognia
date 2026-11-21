@@ -174,4 +174,41 @@ describe("consumeItem", () => {
     expect((await getPetInventoryItem("berry"))?.qty).toBe(1)
     expect(seen).toEqual([])
   })
+
+  it("spends only one item when two concurrent consumables share a care cooldown (F16)", async () => {
+    await seedProfile(50)
+    await purchaseItem("berry")
+    await purchaseItem("cookie")
+
+    const [first, second] = await Promise.all([
+      consumeItem("berry", { now: () => 5000 }),
+      consumeItem("cookie", { now: () => 5000 }),
+    ])
+    const results = [first, second]
+    expect(results.filter((r) => r.ok)).toHaveLength(1)
+    expect(results.filter((r) => !r.ok)).toEqual([
+      expect.objectContaining({ ok: false, error: "cooling-down" }),
+    ])
+
+    const remaining =
+      ((await getPetInventoryItem("berry"))?.qty ?? 0) +
+      ((await getPetInventoryItem("cookie"))?.qty ?? 0)
+    expect(remaining).toBe(1)
+    const fedRows = (await getDb().petActivityLog.toArray()).filter((r) => r.kind === "fed")
+    expect(fedRows).toHaveLength(1)
+  })
+
+  it("merges decor cosmetics without wiping existing palette or eyes", async () => {
+    await upsertPetProfile({
+      ...(await seedProfile(50)),
+      cosmetic: { palette: "sunset", eyes: "star" },
+    })
+    await purchaseItem("star-charm")
+    expect(await consumeItem("star-charm")).toEqual({ ok: true })
+    expect((await getPetProfile())?.cosmetic).toEqual({
+      palette: "sunset",
+      eyes: "star",
+      hat: "crown",
+    })
+  })
 })

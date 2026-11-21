@@ -45,8 +45,17 @@ export function PetMainRuntime({ settings, activeCharacterId }: PetMainRuntimePr
   // from secondary windows as well as from this window.
   useEffect(
     () => () => {
-      usePetStore.getState().setProfileSnapshot(null)
-      usePetStore.getState().setBubble(null)
+      usePetStore.setState({
+        profileSnapshot: null,
+        bubble: null,
+        visualState: "idle",
+        oneShotQueue: [],
+        lastGrewStats: [],
+        careAlert: null,
+        interactionRefusal: null,
+        appearanceSelection: null,
+        lookTarget: null,
+      })
     },
     []
   )

@@ -35,7 +35,7 @@ import {
 import { isTauri } from "@/lib/platform/detect"
 import { usePlatform } from "@/hooks/use-platform"
 import { startMainPetBridge } from "@/lib/pet/events/cross-window-bridge"
-import { onPetConsoleRequest } from "@/lib/pet/console-request"
+import { onPetConsoleRequest, onPetResetCompleted } from "@/lib/pet/console-request"
 import { petConsoleHref } from "@/lib/pet/console-tabs"
 import { startPetSettingsFollower, updatePetSettings } from "@/lib/pet/settings-sync"
 import { PetMainRuntime } from "./pet-main-runtime"
@@ -87,13 +87,20 @@ export function PetMount() {
   useEffect(() => {
     if (!petEnabled) return
     let cancelled = false
-    void (async () => {
+    const seedEgg = async () => {
       const accountId = await ensurePetAccountId(settings, save)
       if (cancelled) return
       await ensurePetProfile(accountId)
-    })()
+    }
+    void seedEgg()
+    // Re-seed a fresh egg after a normal reset even when settings stay stable
+    // and the route does not remount (F21).
+    const offReset = onPetResetCompleted(() => {
+      if (!cancelled) void seedEgg()
+    })
     return () => {
       cancelled = true
+      offReset()
     }
   }, [petEnabled, settings, save])
 

@@ -160,6 +160,40 @@ describe("pet_act on the real controller", () => {
     )
     expect(out).toEqual({ ok: false, refusal: { code: "unavailable", reason: "disabled" } })
   })
+
+  it("acknowledges only one concurrent feed even under a frozen host clock (F27)", async () => {
+    await upsertPetProfile(hatchedProfile())
+    const deps = hostDeps({ now: () => 50_000 })
+    const [a, b] = await Promise.all([
+      dispatchPetHostCommand("pet_act", { ...CALLER, action: "fed", idempotencyKey: "f1" }, deps),
+      dispatchPetHostCommand("pet_act", { ...CALLER, action: "fed", idempotencyKey: "f2" }, deps),
+    ])
+    const results = [a, b] as Array<{ ok: boolean; refusal?: { code: string } }>
+    expect(results.filter((r) => r.ok)).toEqual([
+      { ok: true, grantedXp: XP_AWARD.fed, grantedCoins: 2 },
+    ])
+    expect(results.filter((r) => !r.ok)).toEqual([
+      expect.objectContaining({
+        ok: false,
+        refusal: expect.objectContaining({ code: "cooling-down", kind: "fed" }),
+      }),
+    ])
+    expect((await listPetActivity()).filter((row) => row.kind === "fed")).toHaveLength(1)
+  })
+
+  it("attributes only the feed's own coins even when an unrelated reward lands concurrently (F27)", async () => {
+    await upsertPetProfile(hatchedProfile())
+    const deps = hostDeps({ now: () => 60_000 })
+    const feedPromise = dispatchPetHostCommand(
+      "pet_act",
+      { ...CALLER, action: "fed", idempotencyKey: "feed-only" },
+      deps
+    )
+    getPetEventBus().emit({ source: "goal", kind: "goalComplete", at: 60_000 })
+    const feedResult = await feedPromise
+    await whenPetEventsSettled()
+    expect(feedResult).toEqual({ ok: true, grantedXp: XP_AWARD.fed, grantedCoins: 2 })
+  })
 })
 
 describe("headless brain", () => {

@@ -23,6 +23,7 @@ import type { PetProfile } from "@/types/pet"
 import { emitPetEvent } from "@/lib/pet/events/pet-event-bus"
 import { getPetItem } from "@/lib/pet/economy/item-catalog"
 import { decrementPetInventory, getPetProfile } from "@/lib/db/pet"
+import { commitPetEvent, enqueuePetWork } from "@/lib/pet/runtime/pet-controller"
 import {
   INTERACTION_COOLDOWN_MS,
   normalizeInteractionGate,
@@ -137,6 +138,11 @@ export interface PetAccessDeps {
   decrementInventory?: (id: string, qty?: number) => Promise<boolean>
   /** Reads the durable profile for the advisory controller check. */
   getProfile?: () => Promise<PetProfile | undefined | null>
+  /**
+   * Commit atomically through `commitPetEvent` inside `enqueuePetWork` and
+   * return the exact committed XP/coin deltas (even for bare `user` calls).
+   */
+  commitDirectly?: boolean
 }
 
 /** Subject kinds whose ledger keys a plugin id must never land on. */
@@ -284,6 +290,108 @@ export async function requestPetInteraction(
   const limited = checkBurst(subjectKey, "pet:interact", deps)
   if (limited) return { ok: false, refusal: limited }
 
+  if (opts.itemId) {
+    const item = getPetItem(opts.itemId)
+    if (!item || !item.consumable) {
+      return { ok: false, refusal: { code: "unknown-item", itemId: opts.itemId } }
+    }
+    if (item.interactionKind !== kind) {
+      return {
+        ok: false,
+        refusal: {
+          code: "item-kind-mismatch",
+          itemId: opts.itemId,
+          kind,
+          itemKind: item.interactionKind,
+        },
+      }
+    }
+  }
+
+  const meta: Record<string, unknown> = {}
+  if (subject.kind === "plugin" && subject.id) meta.pluginId = subject.id
+  if (opts.itemId) meta.itemId = opts.itemId
+
+  // Production / real-storage path: run precheck, optional item decrement,
+  // progression commit, and budget debit atomically inside one serialized
+  // controller turn so concurrent automated/remote calls never over-debit
+  // allowance, drop spent items, or misattribute coins (F16, F17, F27).
+  const usesInjectedHarness = Boolean(deps.emit || deps.getProfile || deps.decrementInventory)
+  if (deps.commitDirectly || (!usesInjectedHarness && (subject.kind !== "user" || opts.itemId))) {
+    return enqueuePetWork(async (): Promise<PetAccessResult> => {
+      const now = (deps.now ?? Date.now)()
+      let explicitXp: number | undefined
+      let explicitCoins: number | undefined
+      if (subject.kind !== "user") {
+        const remaining = getRemainingPetBudget(subjectKey)
+        explicitXp = Math.min(XP_AWARD[kind] ?? 0, remaining.xp)
+        explicitCoins = Math.min(COIN_AWARD[kind] ?? 0, remaining.coins)
+      }
+
+      const outcome = await commitPetEvent(
+        {
+          source: subject.kind === "user" ? "user" : subject.kind === "agent" ? "system" : "plugin",
+          kind,
+          at: now,
+          ...(explicitXp !== undefined ? { xp: explicitXp } : {}),
+          ...(Object.keys(meta).length > 0 || explicitCoins !== undefined
+            ? {
+                meta: {
+                  ...meta,
+                  ...(explicitCoins !== undefined ? { coins: explicitCoins } : {}),
+                },
+              }
+            : {}),
+        },
+        {
+          consumeItemId: opts.itemId,
+          emitOnBus: true,
+          signalRefusal: subject.kind === "user" && !deps.commitDirectly,
+          alreadySerialized: true,
+        }
+      )
+
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case "cooldown":
+            return {
+              ok: false,
+              refusal: {
+                code: "cooling-down",
+                kind,
+                retryAfterMs:
+                  outcome.readyAtMs !== undefined ? Math.max(0, outcome.readyAtMs - now) : 0,
+              },
+            }
+          case "not-hatched":
+            return { ok: false, refusal: { code: "not-hatched" } }
+          case "item-not-owned":
+            return { ok: false, refusal: { code: "item-not-owned", itemId: opts.itemId! } }
+          case "uninitialized":
+          case "scope-invalidated":
+            return { ok: false, refusal: { code: "uninitialized" } }
+          case "storage-error":
+            throw outcome.error instanceof Error
+              ? outcome.error
+              : new Error(String(outcome.error ?? "pet interaction failed"))
+        }
+      }
+
+      if (subject.kind !== "user") {
+        consumePetBudget(subjectKey, {
+          xp: explicitXp ?? 0,
+          coins: explicitCoins ?? 0,
+        })
+        return { ok: true, grantedXp: explicitXp ?? 0, grantedCoins: explicitCoins ?? 0 }
+      }
+      return {
+        ok: true,
+        grantedXp: outcome.grantedXp,
+        grantedCoins: outcome.grantedCoins,
+      }
+    })
+  }
+
   // Not awaited for a bare `user` subject (exempt anyway): a hotkey's event
   // still reaches the bus in the same tick, the way the command registry
   // always did. A user spending an item waits, because a dropped event would
@@ -299,9 +407,6 @@ export async function requestPetInteraction(
   }
 
   const emit = deps.emit ?? emitPetEvent
-  const meta: Record<string, unknown> = {}
-  if (subject.kind === "plugin" && subject.id) meta.pluginId = subject.id
-  if (opts.itemId) meta.itemId = opts.itemId
 
   if (subject.kind === "user") {
     emit({
@@ -354,21 +459,70 @@ export async function requestPetReward(
   const limited = checkBurst(subjectKey, bucket, deps)
   if (limited) return { ok: false, refusal: limited }
 
+  const askXp = Math.min(MAX_XP_PER_REWARD, Math.max(0, Math.floor(opts.xp ?? 0)))
+  const askCoins = Math.min(MAX_COINS_PER_REWARD, Math.max(0, Math.floor(opts.coins ?? 0)))
+  const { itemId: _droppedItemId, ...rewardMeta } = sanitizeEventMeta(opts.meta)
+
+  const usesInjectedHarness = Boolean(deps.emit || deps.getProfile || deps.decrementInventory)
+  if (!usesInjectedHarness && subject.kind !== "user") {
+    return enqueuePetWork(async (): Promise<PetAccessResult> => {
+      const now = (deps.now ?? Date.now)()
+      const remaining = getRemainingPetBudget(subjectKey)
+      const grantedXp = Math.min(askXp, remaining.xp)
+      const grantedCoins = Math.min(askCoins, remaining.coins)
+      const meta: Record<string, unknown> = { ...rewardMeta, coins: grantedCoins }
+      if (subject.kind === "plugin" && subject.id) meta.pluginId = subject.id
+      const outcome = await commitPetEvent(
+        {
+          source: subject.kind === "agent" ? "system" : "plugin",
+          kind,
+          at: now,
+          xp: grantedXp,
+          meta,
+        },
+        { emitOnBus: true, signalRefusal: false, alreadySerialized: true }
+      )
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case "cooldown":
+            return {
+              ok: false,
+              refusal: {
+                code: "cooling-down",
+                kind,
+                retryAfterMs:
+                  outcome.readyAtMs !== undefined ? Math.max(0, outcome.readyAtMs - now) : 0,
+              },
+            }
+          case "not-hatched":
+            return { ok: false, refusal: { code: "not-hatched" } }
+          case "uninitialized":
+          case "scope-invalidated":
+          case "item-not-owned":
+            return { ok: false, refusal: { code: "uninitialized" } }
+          case "storage-error":
+            throw outcome.error instanceof Error
+              ? outcome.error
+              : new Error(String(outcome.error ?? "pet reward failed"))
+        }
+      }
+      consumePetBudget(subjectKey, { xp: grantedXp, coins: grantedCoins })
+      return { ok: true, grantedXp, grantedCoins }
+    })
+  }
+
   const notNow = await checkControllerWouldAccept(subject, kind, deps)
   if (notNow) return { ok: false, refusal: notNow }
 
-  const askXp = Math.min(MAX_XP_PER_REWARD, Math.max(0, Math.floor(opts.xp ?? 0)))
-  const askCoins = Math.min(MAX_COINS_PER_REWARD, Math.max(0, Math.floor(opts.coins ?? 0)))
   // A `user` subject is exempt from the daily ledger here for the same reason
   // it is exempt in `requestPetInteraction`, and because
   // `remainingPetAllowance` already reports an unbounded allowance for one.
   // Spending a ledger this side claims is infinite would make the two disagree.
   const { grantedXp, grantedCoins } =
     subject.kind === "user"
-      ? { grantedXp: askXp, grantedCoins: Math.max(0, Math.floor(opts.coins ?? 0)) }
+      ? { grantedXp: askXp, grantedCoins: askCoins }
       : consumePetBudget(subjectKey, { xp: askXp, coins: askCoins })
   const emit = deps.emit ?? emitPetEvent
-  const { itemId: _droppedItemId, ...rewardMeta } = sanitizeEventMeta(opts.meta)
   const meta: Record<string, unknown> = { ...rewardMeta, coins: grantedCoins }
   if (subject.kind === "plugin" && subject.id) meta.pluginId = subject.id
   emit({

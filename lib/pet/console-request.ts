@@ -37,3 +37,30 @@ export function onPetConsoleRequest(
   window.addEventListener(PET_CONSOLE_REQUEST_EVENT, listener)
   return () => window.removeEventListener(PET_CONSOLE_REQUEST_EVENT, listener)
 }
+
+type PetResetListener = (databaseName: string) => void
+const petResetCompletedListeners = new Set<PetResetListener>()
+
+/**
+ * Notify mounted pet runtimes (`PetMount`) that `resetPet()` finished wiping
+ * storage so they can immediately seed a fresh egg without remounting (F21).
+ * Kept in this zero-import leaf module so UI components don't pull Dexie/Tauri
+ * into their import graph.
+ */
+export function notifyPetResetCompleted(databaseName: string): void {
+  for (const listener of [...petResetCompletedListeners]) {
+    try {
+      listener(databaseName)
+    } catch {
+      // Never abort reset notification for other listeners.
+    }
+  }
+}
+
+/** Subscribe to completed `resetPet()` transitions. */
+export function onPetResetCompleted(listener: PetResetListener): () => void {
+  petResetCompletedListeners.add(listener)
+  return () => {
+    petResetCompletedListeners.delete(listener)
+  }
+}

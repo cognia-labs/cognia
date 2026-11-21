@@ -10,10 +10,9 @@
 // the item.
 
 import { getDb, withDbReopenRetry } from "@/lib/db/schema"
-import { decrementPetInventory, patchPetProfile } from "@/lib/db/pet"
+import { decrementPetInventory } from "@/lib/db/pet"
 import { normalizeCoins, type PetShopItem } from "@/types/pet"
-import { emitPetEvent } from "@/lib/pet/events/pet-event-bus"
-import { enqueuePetWork } from "@/lib/pet/runtime/pet-controller"
+import { commitPetEvent, enqueuePetWork } from "@/lib/pet/runtime/pet-controller"
 import { checkInteractionAccepted, type PetRefusal } from "@/lib/pet/access/gate"
 import { getPetItem } from "./item-catalog"
 
@@ -95,12 +94,11 @@ function refusalToConsumeResult(refusal: PetRefusal): ConsumeResult {
 }
 
 /**
- * Use an owned item. Consumables decrement and emit their interaction event
- * with `meta.itemId` (controller applies the item's restore + progression);
- * decor applies its cosmetic override to the profile without consuming.
- *
- * The precheck and the decrement share one `enqueuePetWork` turn, so no event
- * the controller is still processing can start the cooldown between them.
+ * Use an owned item. Consumables decrement inventory and apply their
+ * interaction effect + progression in ONE atomic controller transaction (F16,
+ * F18), so concurrent uses of different items sharing a care cooldown or a
+ * failed write can never lose an item. Decor merges its cosmetic override into
+ * the profile without consuming.
  */
 export async function consumeItem(itemId: string, deps: ConsumeDeps = {}): Promise<ConsumeResult> {
   const item = getPetItem(itemId)
@@ -108,24 +106,71 @@ export async function consumeItem(itemId: string, deps: ConsumeDeps = {}): Promi
 
   if (!item.consumable) {
     return enqueuePetWork(async () => {
-      const owned = await getDb().petInventory.get(itemId)
-      if (!owned) return { ok: false, error: "not-owned" as const }
-      if (item.cosmetic) await patchPetProfile({ cosmetic: item.cosmetic })
-      return { ok: true }
+      const db = getDb()
+      return db.transaction("rw", db.petProfile, db.petInventory, async () => {
+        const profile = await db.petProfile.get("global")
+        if (!profile) return { ok: false, error: "no-profile" as const }
+        if (!profile.soul) return { ok: false, error: "not-hatched" as const }
+        const owned = await db.petInventory.get(itemId)
+        if (!owned || owned.qty < 1) return { ok: false, error: "not-owned" as const }
+        if (item.cosmetic) {
+          await db.petProfile.put({
+            ...profile,
+            cosmetic: { ...profile.cosmetic, ...item.cosmetic },
+            updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+          })
+        }
+        return { ok: true }
+      })
     })
   }
 
-  const spent = await enqueuePetWork(async (): Promise<ConsumeResult> => {
-    if (item.interactionKind) {
-      const refusal = await checkInteractionAccepted(item.interactionKind, deps)
-      if (refusal) return refusalToConsumeResult(refusal)
-    }
-    const consumed = await decrementPetInventory(itemId)
-    return consumed ? { ok: true } : { ok: false, error: "not-owned" }
-  })
-  if (!spent.ok) return spent
-  if (item.interactionKind) {
-    emitPetEvent({ source: "user", kind: item.interactionKind, meta: { itemId } })
+  if (!item.interactionKind) {
+    return enqueuePetWork(async (): Promise<ConsumeResult> => {
+      const consumed = await decrementPetInventory(itemId)
+      return consumed ? { ok: true } : { ok: false, error: "not-owned" }
+    })
   }
-  return { ok: true }
+
+  const now = (deps.now ?? Date.now)()
+  // If a caller injected a custom `getProfile` (test double), honor its precheck first.
+  if (deps.getProfile) {
+    const refusal = await checkInteractionAccepted(item.interactionKind, deps)
+    if (refusal) return refusalToConsumeResult(refusal)
+  }
+
+  const outcome = await commitPetEvent(
+    {
+      source: "user",
+      kind: item.interactionKind,
+      at: now,
+      meta: { itemId },
+    },
+    {
+      consumeItemId: itemId,
+      emitOnBus: true,
+      signalRefusal: false,
+    }
+  )
+
+  if (outcome.ok) return { ok: true }
+  switch (outcome.reason) {
+    case "cooldown":
+      return {
+        ok: false,
+        error: "cooling-down",
+        retryAfterMs: outcome.readyAtMs !== undefined ? Math.max(0, outcome.readyAtMs - now) : 0,
+      }
+    case "not-hatched":
+      return { ok: false, error: "not-hatched" }
+    case "item-not-owned":
+      return { ok: false, error: "not-owned" }
+    case "uninitialized":
+    case "scope-invalidated":
+      return { ok: false, error: "no-profile" }
+    case "storage-error":
+      throw outcome.error instanceof Error
+        ? outcome.error
+        : new Error(String(outcome.error ?? "pet item consume failed"))
+  }
 }

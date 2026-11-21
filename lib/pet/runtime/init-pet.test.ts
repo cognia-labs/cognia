@@ -1,7 +1,7 @@
 import { ensurePetProfile, hatchPet } from "./init-pet"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
-import { getPetProfile, patchPetProfile } from "@/lib/db/pet"
+import { getPetProfile, patchPetProfile, resetPet } from "@/lib/db/pet"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 
 // Cold fake-indexeddb open of the full schema can exceed jest's 5s default
@@ -94,5 +94,36 @@ describe("hatchPet", () => {
 
   it("is a no-op when there is no profile", async () => {
     expect(await hatchPet(null)).toBeUndefined()
+  })
+
+  it("never installs an old egg's generated soul into a replacement egg after reset (F20)", async () => {
+    await ensurePetProfile("acct-1", 1000)
+    let release!: (text: string) => void
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => (markStarted = resolve))
+    const client = {
+      complete: () => {
+        markStarted()
+        return new Promise<string>((resolve) => (release = resolve))
+      },
+    } as unknown as LlmClient
+
+    const staleHatch = hatchPet(client, 2000)
+    await started
+
+    await resetPet()
+    const replacement = await ensurePetProfile("acct-1", 9000)
+    expect(replacement.soul).toBeNull()
+
+    release(JSON.stringify({ name: "OldGhost", personality: "stale" }))
+    expect(await staleHatch).toBeUndefined()
+
+    const after = await getPetProfile()
+    expect(after?.createdAt).toBe(replacement.createdAt)
+    expect(after?.soul).toBeNull()
+
+    // Replacement egg remains eligible for its own hatch.
+    const freshHatched = await hatchPet(null, 10000)
+    expect(freshHatched?.soul).not.toBeNull()
   })
 })

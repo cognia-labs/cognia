@@ -7,17 +7,11 @@
 // Bubbles are intentionally NOT handled here — the widget subscribes to the bus
 // separately for ephemeral bubble display (it needs the React i18n context).
 
-import type { PetEvent, PetEventKind } from "@/types/pet"
+import type { PetActivityRow, PetEvent, PetEventKind, PetProfile } from "@/types/pet"
 import { effectiveStats } from "@/types/pet"
-import {
-  appendPetActivity,
-  getPetActivityCounters,
-  getPetProfile,
-  listPetAchievements,
-  listPetActivity,
-  recordPetAchievement,
-  upsertPetProfile,
-} from "@/lib/db/pet"
+import { PET_ACTIVITY_CAP } from "@/lib/db/pet"
+import { getDb } from "@/lib/db/schema"
+import { recordTombstones } from "@/lib/db/tombstones"
 import { generateBones } from "@/lib/pet/bones/generate"
 import { reducePetVisualState, restingWithCare } from "@/lib/pet/state/reducer"
 import { applyPetEvent, INTERACTION_KINDS } from "@/lib/pet/runtime/apply-event"
@@ -27,9 +21,20 @@ import { CHAOS_BURST_COUNT } from "@/lib/pet/stats/growth-table"
 import { xpForEvent } from "@/lib/pet/xp/award-table"
 import { checkAchievements } from "@/lib/pet/achievements/check"
 import { getPetEventBus } from "@/lib/pet/events/pet-event-bus"
+import {
+  assertPetScopeCurrent,
+  capturePetScope,
+  enqueuePetWork,
+  isPetScopeCurrent,
+  onPetReset,
+  PetScopeInvalidatedError,
+  whenPetEventsSettled,
+} from "@/lib/pet/runtime/pet-scope"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { loggers } from "@cognia/logging"
+
+export { enqueuePetWork, whenPetEventsSettled }
 
 /**
  * Event kinds whose resting state should honor a persistent care condition.
@@ -52,59 +57,267 @@ const PASSIVE_KINDS = new Set<PetEventKind>([
 /** Lifecycle kinds the controller re-emits — never re-emit while handling one. */
 const LIFECYCLE_EMIT_KINDS = new Set<PetEventKind>(["levelUp", "evolved", "unwell", "streakDay"])
 
-/** Last processed event kind — drives the error→success "recovered" signal. */
+/** Last processed non-passive event kind — drives the error→success "recovered" signal. */
 let lastEventKind: PetEventKind | null = null
 
-async function process(event: PetEvent): Promise<void> {
-  let profile = await getPetProfile()
-  if (!profile) return // not initialized yet; init flow seeds the profile
+let nextOperationSeq = 0
 
+/**
+ * Events already committed atomically by `commitPetEvent` and then published on
+ * the bus for bubble/speech observers. `handlePetEvent` skips them so the
+ * controller never double-applies one committed operation.
+ */
+const committedBusEvents = new WeakSet<PetEvent>()
+
+onPetReset(() => {
+  lastEventKind = null
+})
+
+export type PetCommitFailureReason =
+  | "uninitialized"
+  | "not-hatched"
+  | "cooldown"
+  | "item-not-owned"
+  | "scope-invalidated"
+  | "storage-error"
+
+export type PetCommitOutcome =
+  | {
+      ok: true
+      opId: string
+      grantedXp: number
+      grantedCoins: number
+      profile: PetProfile
+    }
+  | {
+      ok: false
+      reason: PetCommitFailureReason
+      readyAtMs?: number
+      error?: unknown
+    }
+
+export interface CommitPetEventOptions {
+  /**
+   * Decrement this owned consumable item inside the exact same Dexie
+   * transaction as the profile and activity ledger update (F16/F18).
+   */
+  consumeItemId?: string
+  /**
+   * Publish the committed event onto `PetEventBus` (marked so `handlePetEvent`
+   * ignores it) so bubble/proactive hooks react normally.
+   */
+  emitOnBus?: boolean
+  /**
+   * When false, do not write an interaction-refusal bubble signal into
+   * `usePetStore` (used by remote/automated callers that report refusals directly).
+   */
+  signalRefusal?: boolean
+  /**
+   * When true, already running inside an outer `enqueuePetWork` turn; execute
+   * directly without nesting into `enqueuePetWork` (which would deadlock).
+   */
+  alreadySerialized?: boolean
+  /** Scope captured at call time so queued work is fenced by a later reset or account switch. */
+  scope?: ReturnType<typeof capturePetScope>
+}
+
+async function runCommittedEvent(
+  event: PetEvent,
+  opts: CommitPetEventOptions = {}
+): Promise<PetCommitOutcome> {
+  const originScope = opts.scope ?? capturePetScope()
+  if (!isPetScopeCurrent(originScope)) {
+    return { ok: false, reason: "scope-invalidated" }
+  }
   const now = event.at || Date.now()
+  const signalRefusal = opts.signalRefusal ?? true
 
-  // One-time streak backfill for profiles that predate the economy: derive the
-  // cached streak from the interaction ledger. Runs inside the serialized
-  // chain, so it can't race the read-modify-write below.
-  if (profile.streak === undefined) {
-    const ledger = await listPetActivity(2000)
-    profile = { ...profile, streak: computeStreakFromLedger(ledger, INTERACTION_KINDS) }
+  type TxResult =
+    | {
+        status: "refused"
+        reason: "uninitialized" | "not-hatched" | "cooldown" | "item-not-owned"
+        readyAtMs?: number
+      }
+    | {
+        status: "committed"
+        opId: string
+        persistProfile: PetProfile & { care: NonNullable<PetProfile["care"]> }
+        xp: number
+        coinsEarned: number
+        oneShots: ReturnType<typeof applyPetEvent>["oneShots"]
+        grewStats: ReturnType<typeof applyPetEvent>["grewStats"]
+        becameUnwell: boolean
+        recovered: boolean
+        leveledUpTo: number | null
+        evolvedTo: ReturnType<typeof applyPetEvent>["evolvedTo"]
+        streakAdvancedTo: number | null
+        newlyUnlocked: string[]
+      }
+
+  let txResult: TxResult
+  try {
+    const db = getDb()
+    txResult = await db.transaction(
+      "rw",
+      [db.petProfile, db.petActivityLog, db.petInventory, db.petAchievements, db.syncTombstones],
+      async (): Promise<TxResult> => {
+        assertPetScopeCurrent(originScope)
+        let profile = await db.petProfile.get("global")
+        if (!profile) return { status: "refused", reason: "uninitialized" }
+
+        // One-time streak backfill for profiles that predate the economy.
+        if (profile.streak === undefined) {
+          const ledger = await db.petActivityLog
+            .orderBy("ts")
+            .reverse()
+            .limit(PET_ACTIVITY_CAP)
+            .toArray()
+          profile = { ...profile, streak: computeStreakFromLedger(ledger, INTERACTION_KINDS) }
+        }
+
+        const gate = normalizeInteractionGate(profile.interactionGate)
+        const decision = canInteract({
+          nowMs: now,
+          kind: event.kind,
+          source: event.source,
+          state: gate,
+          hatched: profile.soul !== null,
+        })
+        if (!decision.ok) {
+          return {
+            status: "refused",
+            reason: decision.reason,
+            ...(decision.readyAtMs !== undefined ? { readyAtMs: decision.readyAtMs } : {}),
+          }
+        }
+
+        if (opts.consumeItemId) {
+          const inv = await db.petInventory.get(opts.consumeItemId)
+          if (!inv || inv.qty < 1) {
+            return { status: "refused", reason: "item-not-owned" }
+          }
+          if (inv.qty === 1) {
+            await db.petInventory.delete(opts.consumeItemId)
+            await recordTombstones("petInventory", [opts.consumeItemId], now)
+          } else {
+            await db.petInventory.put({ ...inv, qty: inv.qty - 1, updatedAt: now })
+          }
+        }
+
+        const recent = await db.petActivityLog
+          .orderBy("ts")
+          .reverse()
+          .limit(CHAOS_BURST_COUNT)
+          .toArray()
+        const recoveredFromError = event.kind === "success" && lastEventKind === "error"
+
+        const applied = applyPetEvent(profile, event, now, {
+          recentEventTs: recent.map((r) => r.ts),
+          recoveredFromError,
+        })
+
+        const withGate = { ...applied.profile, interactionGate: decision.nextState }
+        const persistProfile = applied.becameUnwell
+          ? { ...withGate, care: { ...withGate.care, notifiedAt: now } }
+          : withGate
+
+        assertPetScopeCurrent(originScope)
+        await db.petProfile.put(persistProfile)
+
+        const xp = xpForEvent(event.kind, event.xp)
+        if (xp > 0) {
+          await db.petActivityLog.add({
+            kind: event.kind,
+            source: event.source,
+            xp,
+            ts: now,
+          } as PetActivityRow)
+          const count = await db.petActivityLog.count()
+          if (count > PET_ACTIVITY_CAP) {
+            const overflow = count - PET_ACTIVITY_CAP
+            const oldest = await db.petActivityLog.orderBy("ts").limit(overflow).primaryKeys()
+            if (oldest.length > 0) await db.petActivityLog.bulkDelete(oldest as number[])
+          }
+        }
+
+        // Evaluate and persist achievements in the same atomic transaction so
+        // profile progression, activity counters, and unlocks never diverge (F18).
+        const bones = generateBones(persistProfile.accountFingerprint)
+        const allRows = await db.petActivityLog.toArray()
+        const counters: Record<string, number> = {}
+        for (const row of allRows) counters[row.kind] = (counters[row.kind] ?? 0) + 1
+        const unlocked = (await db.petAchievements.orderBy("unlockedAt").toArray()).map((a) => a.id)
+        const newly = checkAchievements(
+          {
+            profile: persistProfile,
+            bones,
+            activity: [],
+            counters,
+            effectiveStats: effectiveStats(bones.stats, persistProfile.statProgress),
+            care: persistProfile.care,
+          },
+          unlocked
+        )
+        const newlyUnlocked: string[] = []
+        for (const id of newly) {
+          const existing = await db.petAchievements.get(id)
+          if (!existing) {
+            await db.petAchievements.put({ id, unlockedAt: now })
+            newlyUnlocked.push(id)
+          }
+        }
+
+        nextOperationSeq += 1
+        const opId = `pet_op_${now}_${nextOperationSeq}`
+        return {
+          status: "committed",
+          opId,
+          persistProfile,
+          xp,
+          coinsEarned: applied.coinsEarned,
+          oneShots: applied.oneShots,
+          grewStats: applied.grewStats,
+          becameUnwell: applied.becameUnwell,
+          recovered: applied.recovered,
+          leveledUpTo: applied.leveledUpTo,
+          evolvedTo: applied.evolvedTo,
+          streakAdvancedTo: applied.streakAdvancedTo,
+          newlyUnlocked,
+        }
+      }
+    )
+  } catch (err) {
+    if (err instanceof PetScopeInvalidatedError) {
+      return { ok: false, reason: "scope-invalidated", error: err }
+    }
+    return { ok: false, reason: "storage-error", error: err }
   }
 
-  // The authoritative interaction cooldown. Every path into the pet lands
-  // here: the action panel, the tray and hotkey commands, the plugin API, the
-  // agent tools, and the overlay's body-tap arriving over the cross-window
-  // bridge. The last two reach this function without passing through any API,
-  // which is why the decision cannot live at a call site. This is also the
-  // only place that can hold the deadline durably, since the store it used to
-  // live in was per-window and reset on reload.
-  //
-  // A refusal persists nothing, awards nothing, writes no ledger row and fires
-  // no plugin hook. It leaves a signal for the bubble instead of failing mute.
-  const gate = normalizeInteractionGate(profile.interactionGate)
-  const decision = canInteract({
-    nowMs: now,
-    kind: event.kind,
-    source: event.source,
-    state: gate,
-    hatched: profile.soul !== null,
-  })
-  if (!decision.ok) {
-    usePetStore.getState().setInteractionRefusal({
-      kind: event.kind,
-      reason: decision.reason,
-      ...(decision.readyAtMs !== undefined ? { readyAtMs: decision.readyAtMs } : {}),
-      at: now,
-    })
-    return
+  if (!isPetScopeCurrent(originScope)) {
+    return { ok: false, reason: "scope-invalidated" }
   }
 
-  // Pure signals for the stat-growth step: a flurry of recent XP-bearing events
-  // (chaos) and an error→success recovery (debugging).
-  const recent = await listPetActivity(CHAOS_BURST_COUNT)
-  const recoveredFromError = event.kind === "success" && lastEventKind === "error"
-  lastEventKind = event.kind
+  if (txResult.status === "refused") {
+    if (signalRefusal && (txResult.reason === "cooldown" || txResult.reason === "not-hatched")) {
+      usePetStore.getState().setInteractionRefusal({
+        kind: event.kind,
+        reason: txResult.reason,
+        ...(txResult.readyAtMs !== undefined ? { readyAtMs: txResult.readyAtMs } : {}),
+        at: now,
+      })
+    }
+    return {
+      ok: false,
+      reason: txResult.reason,
+      ...(txResult.readyAtMs !== undefined ? { readyAtMs: txResult.readyAtMs } : {}),
+    }
+  }
 
   const {
-    profile: nextProfile,
+    opId,
+    persistProfile,
+    xp,
+    coinsEarned,
     oneShots,
     grewStats,
     becameUnwell,
@@ -112,28 +325,14 @@ async function process(event: PetEvent): Promise<void> {
     leveledUpTo,
     evolvedTo,
     streakAdvancedTo,
-  } = applyPetEvent(profile, event, now, {
-    recentEventTs: recent.map((r) => r.ts),
-    recoveredFromError,
-  })
+    newlyUnlocked,
+  } = txResult
 
-  // When the pet first becomes unwell, stamp the notify time durably so the
-  // care-alert hook fires at most once per episode.
-  const withGate = { ...nextProfile, interactionGate: decision.nextState }
-  const persistProfile = becameUnwell
-    ? { ...withGate, care: { ...withGate.care, notifiedAt: now } }
-    : withGate
-  await upsertPetProfile(persistProfile)
-
-  // Record meaningful events (XP-bearing) in the ledger for counters/图鉴.
-  const xp = xpForEvent(event.kind, event.xp)
-  if (xp > 0) {
-    await appendPetActivity({ kind: event.kind, source: event.source, xp, ts: now })
+  if (!PASSIVE_KINDS.has(event.kind)) {
+    lastEventKind = event.kind
   }
 
   // Plugin hooks — fire-and-forget so a slow plugin can never delay the pet.
-  // Interactions only (radar/passive kinds fire continuously); payloads carry
-  // NO event meta (talked events' meta.userText is PII).
   const hooks = getPluginEventHooks()
   if (INTERACTION_KINDS.has(event.kind)) {
     void hooks.dispatchPetInteract({ kind: event.kind, source: event.source, xp, at: now })
@@ -146,6 +345,9 @@ async function process(event: PetEvent): Promise<void> {
   }
   if (becameUnwell) {
     void hooks.dispatchPetUnwell({ condition: persistProfile.care.condition, at: now })
+  }
+  for (const id of newlyUnlocked) {
+    void hooks.dispatchPetAchievementUnlocked({ achievementId: id, at: now })
   }
 
   // Drive the renderer. Passive/idle events honor a persistent unwell condition;
@@ -162,32 +364,16 @@ async function process(event: PetEvent): Promise<void> {
   }
   if (recovered) store.enqueueOneShot("happy")
 
-  // Evaluate achievements against the fresh snapshot.
-  const bones = generateBones(persistProfile.accountFingerprint)
-  const counters = await getPetActivityCounters()
-  const unlocked = (await listPetAchievements()).map((a) => a.id)
-  const newly = checkAchievements(
-    {
-      profile: persistProfile,
-      bones,
-      activity: [],
-      counters,
-      effectiveStats: effectiveStats(bones.stats, persistProfile.statProgress),
-      care: persistProfile.care,
-    },
-    unlocked
-  )
-  for (const id of newly) {
-    await recordPetAchievement(id, now)
-    void hooks.dispatchPetAchievementUnlocked({ achievementId: id, at: now })
+  if (opts.emitOnBus) {
+    const announced: PetEvent = { ...event, at: now }
+    committedBusEvents.add(announced)
+    getPetEventBus().emit(announced)
   }
 
   // Announce unlocks on the bus so bubble/proactive subscribers can celebrate.
-  // Guarded against feedback: achievementUnlocked itself never unlocks anything
-  // new, awards no XP, and the serialized chain absorbs the re-entrant handling.
   if (event.kind !== "achievementUnlocked") {
     const bus = getPetEventBus()
-    for (const id of newly) {
+    for (const id of newlyUnlocked) {
       bus.emit({
         source: "system",
         kind: "achievementUnlocked",
@@ -197,12 +383,6 @@ async function process(event: PetEvent): Promise<void> {
     }
   }
 
-  // Announce lifecycle transitions so bus consumers (bubbles/proactive/the
-  // workflow pet-event trigger) see level-ups, evolutions, and the well →
-  // unwell edge as real events. Same feedback shape as achievementUnlocked:
-  // all three kinds award 0 XP, and a re-entrant handling can't re-fire its
-  // own transition (no level/stage delta, no fresh becameUnwell edge), so the
-  // serialized chain terminates naturally. Guarded anyway for hygiene.
   if (!LIFECYCLE_EMIT_KINDS.has(event.kind)) {
     const bus = getPetEventBus()
     if (leveledUpTo !== null) {
@@ -214,8 +394,6 @@ async function process(event: PetEvent): Promise<void> {
     if (becameUnwell) {
       bus.emit({ source: "system", kind: "unwell", at: now })
     }
-    // Streak ceremony: day 1 is just "you showed up" (no fanfare); day ≥ 2
-    // celebrates the run and surfaces the coin multiplier in the bubble.
     if (streakAdvancedTo !== null && streakAdvancedTo >= 2) {
       bus.emit({
         source: "system",
@@ -228,48 +406,45 @@ async function process(event: PetEvent): Promise<void> {
       })
     }
   }
+
+  return {
+    ok: true,
+    opId,
+    grantedXp: xp,
+    grantedCoins: coinsEarned,
+    profile: persistProfile,
+  }
 }
 
-let chain: Promise<void> = Promise.resolve()
+/**
+ * Commit one event atomically (profile + optional item spend + activity log +
+ * achievements) inside the serialized controller queue, returning the exact
+ * committed outcome (F16, F17, F18, F27).
+ */
+export function commitPetEvent(
+  event: PetEvent,
+  opts: CommitPetEventOptions = {}
+): Promise<PetCommitOutcome> {
+  const scope = opts.scope ?? capturePetScope()
+  if (opts.alreadySerialized) return runCommittedEvent(event, { ...opts, scope })
+  return enqueuePetWork(() => runCommittedEvent(event, { ...opts, scope }))
+}
 
 /**
- * Handle one event, serialized after any in-flight handling.
- *
- * The catch is load-bearing: an unhandled rejection would poison the chain and
- * every later event would be dropped. But it used to be empty, so a failed
- * profile write, a failed ledger append or a thrown reducer vanished without a
- * trace, and every caller was told the interaction had succeeded. The chain
- * still survives, the failure is no longer invisible.
+ * Handle one event from the bus, serialized after any in-flight handling.
+ * Storage failures are logged without poisoning the serialization chain.
  */
 export function handlePetEvent(event: PetEvent): Promise<void> {
-  chain = chain
-    .then(() => process(event))
-    .catch((err: unknown) => {
+  if (committedBusEvents.has(event)) return Promise.resolve()
+  const scope = capturePetScope()
+  return enqueuePetWork(async () => {
+    const outcome = await runCommittedEvent(event, { alreadySerialized: true, scope })
+    if (!outcome.ok && outcome.reason === "storage-error") {
       loggers.app.warn("pet event handling failed", {
         kind: event.kind,
         source: event.source,
-        error: err instanceof Error ? err.message : String(err),
+        error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error ?? ""),
       })
-    })
-  return chain
-}
-
-/**
- * Run profile-mutating work serialized after any in-flight event handling.
- * Every profile write OUTSIDE the event path (shop purchases, decor applies)
- * MUST go through this — the controller's read-modify-write `upsertPetProfile`
- * would otherwise silently overwrite a concurrent coin deduction.
- */
-export function enqueuePetWork<T>(fn: () => Promise<T>): Promise<T> {
-  const result = chain.then(() => fn())
-  chain = result.then(
-    () => {},
-    () => {}
-  )
-  return result
-}
-
-/** Test helper: drain the serialization chain. */
-export function whenPetEventsSettled(): Promise<void> {
-  return chain
+    }
+  })
 }

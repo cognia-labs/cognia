@@ -14,7 +14,14 @@ import type { PetProfile } from "@/types/pet"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { getPetProfile } from "@/lib/db/pet"
 import { emitPetEvent } from "@/lib/pet/events/pet-event-bus"
-import { hatchPet } from "./init-pet"
+import {
+  capturePetScope,
+  isPetScopeCurrent,
+  onActiveDatabaseChange,
+  onPetReset,
+  type PetScopeToken,
+} from "@/lib/pet/runtime/pet-scope"
+import { hatchPet, hatchPetDetailed } from "./init-pet"
 
 export type HatchPetOutcome =
   /** This call (or the run it joined) gave the egg its soul. */
@@ -32,7 +39,24 @@ export interface HatchPetDeps {
   emit?: typeof emitPetEvent
 }
 
-let inFlight: Promise<HatchPetOutcome> | null = null
+interface InFlightHatch {
+  key: string
+  scope: PetScopeToken
+  promise: Promise<HatchPetOutcome>
+}
+
+let inFlight: InFlightHatch | null = null
+
+function scopeKey(scope: PetScopeToken): string {
+  return `${scope.databaseName}#${scope.databaseEpoch}:${scope.petGeneration}`
+}
+
+onPetReset(() => {
+  inFlight = null
+})
+onActiveDatabaseChange(() => {
+  inFlight = null
+})
 
 function buildSoulClient(appSettings: AppSettings | null | undefined): LlmClient | null {
   return buildUtilityLlmClient({ session: null, appSettings, featureId: "pet-soul" })
@@ -40,40 +64,68 @@ function buildSoulClient(appSettings: AppSettings | null | undefined): LlmClient
 
 async function runHatch(
   appSettings: AppSettings | null | undefined,
-  deps: HatchPetDeps
+  deps: HatchPetDeps,
+  originScope: PetScopeToken
 ): Promise<HatchPetOutcome> {
   try {
     // Checked before a client is built, so an already-hatched pet (another
     // window won the race) costs neither a model call nor a second `hatched`.
     const current = await (deps.getProfile ?? getPetProfile)()
+    if (!isPetScopeCurrent(originScope)) return { status: "no-profile" }
     if (!current) return { status: "no-profile" }
     if (current.soul) return { status: "already-hatched", profile: current }
 
     const client = (deps.buildClient ?? buildSoulClient)(appSettings)
-    const profile = await (deps.hatch ?? hatchPet)(client)
-    if (!profile?.soul) return { status: "no-profile" }
-    ;(deps.emit ?? emitPetEvent)({ source: "system", kind: "hatched" })
-    return { status: "hatched", profile }
+    if (deps.hatch || typeof hatchPetDetailed !== "function") {
+      const profile = await (deps.hatch ?? hatchPet)(client)
+      if (!isPetScopeCurrent(originScope)) return { status: "no-profile" }
+      if (!profile?.soul) return { status: "no-profile" }
+      ;(deps.emit ?? emitPetEvent)({ source: "system", kind: "hatched" })
+      return { status: "hatched", profile }
+    }
+
+    const detail = await hatchPetDetailed(client)
+    if (!isPetScopeCurrent(originScope)) return { status: "no-profile" }
+    switch (detail.status) {
+      case "hatched":
+        ;(deps.emit ?? emitPetEvent)({ source: "system", kind: "hatched" })
+        return { status: "hatched", profile: detail.profile }
+      case "already-hatched":
+        return { status: "already-hatched", profile: detail.profile }
+      case "stale":
+      case "no-profile":
+        return { status: "no-profile" }
+    }
   } catch (error) {
     return { status: "failed", error }
   }
 }
 
 /**
- * Generate the pet's soul once, then announce `hatched` on the bus. Concurrent
- * callers receive the same promise; a finished run releases the slot so a
- * failed attempt can be retried.
+ * Generate the pet's soul once per account & pet generation, then announce
+ * `hatched` on the bus. Concurrent callers within the same generation receive
+ * the same promise; a reset or account switch starts a fresh generation so a
+ * replacement egg never joins or receives an older egg's soul (F20).
  */
 export function hatchPetOnce(
   appSettings: AppSettings | null | undefined,
   deps: HatchPetDeps = {}
 ): Promise<HatchPetOutcome> {
-  if (inFlight) return inFlight
-  const run = runHatch(appSettings, deps).finally(() => {
-    inFlight = null
+  const scope = capturePetScope()
+  const key = scopeKey(scope)
+  if (inFlight && inFlight.key === key && isPetScopeCurrent(inFlight.scope)) {
+    return inFlight.promise
+  }
+  const entry: InFlightHatch = {
+    key,
+    scope,
+    promise: Promise.resolve({ status: "no-profile" }),
+  }
+  entry.promise = runHatch(appSettings, deps, scope).finally(() => {
+    if (inFlight === entry) inFlight = null
   })
-  inFlight = run
-  return run
+  inFlight = entry
+  return entry.promise
 }
 
 /** Test helper: forget a run a test left in flight. */

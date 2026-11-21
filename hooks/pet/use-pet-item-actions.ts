@@ -14,11 +14,11 @@
 
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useOptionalPetConsoleActions } from "@/components/pet/console/pet-console-actions-context"
 import { createLocalPetItemOps, type PetTranslate } from "@/hooks/pet/pet-item-ops"
-import type { PetActionOutcome } from "@/lib/pet/console/outcome-messages"
+import { PET_ACTION_OK, type PetActionOutcome } from "@/lib/pet/console/outcome-messages"
 import { petItemTitle } from "@/lib/pet/plugin-display"
 import type { PetShopItem } from "@/types/pet"
 
@@ -40,15 +40,21 @@ export function usePetItemActions(): PetItemActions {
   const localOps = useMemo(() => createLocalPetItemOps(t, locale), [t, locale])
   const ops = consoleActions ?? localOps
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set())
+  const pendingRef = useRef<Set<string>>(new Set())
 
   const key = (kind: PetItemActionKind, itemId: string) => `${kind}:${itemId}`
-  const begin = (k: string) => setPending((prev) => new Set(prev).add(k))
-  const end = (k: string) =>
+  const begin = (k: string) => {
+    pendingRef.current.add(k)
+    setPending((prev) => new Set(prev).add(k))
+  }
+  const end = (k: string) => {
+    pendingRef.current.delete(k)
     setPending((prev) => {
       const next = new Set(prev)
       next.delete(k)
       return next
     })
+  }
 
   const track = async (
     kind: PetItemActionKind,
@@ -56,6 +62,7 @@ export function usePetItemActions(): PetItemActions {
     run: () => Promise<PetActionOutcome>
   ): Promise<PetActionOutcome> => {
     const k = key(kind, item.id)
+    if (pendingRef.current.has(k)) return PET_ACTION_OK
     begin(k)
     try {
       return await run()

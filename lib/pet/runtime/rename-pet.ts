@@ -6,6 +6,7 @@
 import { hasNoLeakingPii } from "@cognia/redact"
 import { getPetProfile, patchPetProfile } from "@/lib/db/pet"
 import { MAX_NAME } from "@/lib/pet/soul/generate-soul"
+import { assertPetScopeCurrent, capturePetScope, enqueuePetWork } from "@/lib/pet/runtime/pet-scope"
 import type { PetProfile } from "@/types/pet"
 
 export const MAX_PET_NAME = MAX_NAME
@@ -27,15 +28,26 @@ export function isValidPetName(raw: string): boolean {
 }
 
 /**
- * Persist a new display name for the pet. Returns the updated profile, or
+ * Persist a new display name for the pet. Serialized through `enqueuePetWork`
+ * so concurrent controller writes (XP, coins, cooldowns) are never overwritten
+ * by a stale read-modify-write snapshot (F26). Returns the updated profile, or
  * undefined when there is nothing to rename (no profile / no soul) or the name
  * is not valid ({@link isValidPetName}).
  */
-export async function renamePet(raw: string, now = Date.now()): Promise<PetProfile | undefined> {
+export async function renamePet(
+  raw: string,
+  now = Date.now(),
+  opts: { alreadySerialized?: boolean } = {}
+): Promise<PetProfile | undefined> {
   if (!isValidPetName(raw)) return undefined
   const name = sanitizePetName(raw)
-  const cur = await getPetProfile()
-  if (!cur?.soul) return undefined
-  if (cur.soul.name === name) return cur
-  return patchPetProfile({ soul: { ...cur.soul, name } }, now)
+  const scope = capturePetScope()
+  const run = async () => {
+    assertPetScopeCurrent(scope)
+    const cur = await getPetProfile()
+    if (!cur?.soul) return undefined
+    if (cur.soul.name === name) return cur
+    return patchPetProfile({ soul: { ...cur.soul, name } }, now, { scope })
+  }
+  return opts.alreadySerialized ? run() : enqueuePetWork(run)
 }

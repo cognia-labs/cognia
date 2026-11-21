@@ -48,6 +48,7 @@ import { claimConnectionNotice } from "@/lib/runtime/connection-notice-claim"
 import { usePetSettingsView } from "@/lib/pet/settings"
 import { useActiveLive2dModel } from "@/hooks/pet/use-active-live2d-model"
 import { useActiveSpritePack } from "@/hooks/pet/use-active-sprite-pack"
+import { resolveCharacterSkinSelection } from "@/lib/pet/binding/resolve-skin"
 import { PanelTransition } from "@/components/settings/common/panel-transition"
 import {
   SETTINGS_DETAIL_PANE_CLASS,
@@ -258,27 +259,40 @@ function PetConsoleBody({
   // the popup's stat-card avatar. A paired device skips it below: the skin
   // settings and assets it would read are this device's, not the desktop's.
   const pet = appSettings?.petSettings ?? DEFAULT_PET_SETTINGS
-  const { modelId, row: activeModel, coreReady } = useActiveLive2dModel(pet)
-  const { row: activeSpritePack } = useActiveSpritePack(pet)
+  const hasCharacterSkinOverride = Boolean(
+    petState.binding?.skin || petState.binding?.live2dModelId
+  )
+  const preferredSelection = hasCharacterSkinOverride
+    ? resolveCharacterSkinSelection(pet, petState.binding)
+    : undefined
+  const requestedEffectiveSkinId = preferredSelection ? preferredSelection.skinId : pet.skinId
+  const { modelId, row: activeModel, coreReady } = useActiveLive2dModel(pet, preferredSelection)
+  const { row: activeSpritePack } = useActiveSpritePack(pet, preferredSelection)
+  const mediaPackId = preferredSelection
+    ? preferredSelection.skinId === "media"
+      ? preferredSelection.packId
+      : undefined
+    : pet.activeMediaPackId
   const skinResolution = resolveEffectiveSkinSelection(
-    pet.skinId,
+    requestedEffectiveSkinId,
     {
       coreReady,
       hasActiveModel: Boolean(modelId),
       modelReady: activeModel?.compatibility?.status !== "invalid",
       hasActiveSpritePack: Boolean(activeSpritePack),
+      mediaPackId,
     },
-    { modelId, packId: activeSpritePack?.id, mediaPackId: pet.activeMediaPackId }
+    { modelId, packId: activeSpritePack?.id, mediaPackId }
   )
   const runtime = getPetSkinRuntime()
   useSyncExternalStore(runtime.subscribe, runtime.snapshotRevision, runtime.snapshotRevision)
   const assetKey =
-    pet.skinId === "live2d" && modelId
+    requestedEffectiveSkinId === "live2d" && modelId
       ? `live2d:${modelId}`
-      : pet.skinId === "sprite-v2" && activeSpritePack?.id
+      : requestedEffectiveSkinId === "sprite-v2" && activeSpritePack?.id
         ? `sprite-v2:${activeSpritePack.id}`
-        : pet.skinId === "media" && pet.activeMediaPackId
-          ? `media:${pet.activeMediaPackId}`
+        : requestedEffectiveSkinId === "media" && mediaPackId
+          ? `media:${mediaPackId}`
           : undefined
   const diagnostics: PetAssetDiagnostic[] = [
     ...skinResolution.diagnostics,

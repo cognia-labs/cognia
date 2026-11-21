@@ -18,9 +18,12 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
   }),
 }))
 
-import { handlePetEvent, whenPetEventsSettled } from "./pet-controller"
+import { commitPetEvent, handlePetEvent, whenPetEventsSettled } from "./pet-controller"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
-import { getPetProfile, listPetAchievements, upsertPetProfile } from "@/lib/db/pet"
+import { getPetProfile, listPetAchievements, resetPet, upsertPetProfile } from "@/lib/db/pet"
+import { renamePet } from "./rename-pet"
+import { requestPetInteraction, remainingPetAllowance } from "@/lib/pet/access/gate"
+import { PET_DAILY_XP_BUDGET, __resetPetBudgetForTesting } from "@/lib/pet/access/reward-budget"
 import { createDefaultProfile } from "@/lib/pet/defaults"
 import { __resetPetEventBusForTesting, getPetEventBus } from "@/lib/pet/events/pet-event-bus"
 import { usePetStore } from "@/stores/pet/pet-store"
@@ -535,5 +538,104 @@ describe("the interaction cooldown", () => {
     await handlePetEvent({ source: "user", kind: "fed", at: 1100 })
     await whenPetEventsSettled()
     expect(dispatchPetInteract).not.toHaveBeenCalled()
+  })
+})
+
+describe("atomicity, reset fencing, automation allowance, and concurrent rename (F17, F18, F19, F26)", () => {
+  async function seedHatched(coins = 100) {
+    await upsertPetProfile({
+      ...createDefaultProfile("acct-1", 0),
+      soul: { name: "Boba", personality: "x", hatchDate: "" },
+      stage: "baby",
+      coins,
+    })
+  }
+
+  it("charges daily automated allowance only for the single accepted concurrent care call (F17)", async () => {
+    __resetPetBudgetForTesting()
+    await seedHatched(100)
+    const accessDeps = {
+      platform: "tauri" as const,
+      role: "main" as const,
+      isEnabled: () => true,
+      rateLimiter: { check: () => {} },
+      now: () => 5000,
+    }
+    const [a, b] = await Promise.all([
+      requestPetInteraction({ kind: "agent" }, "fed", {}, accessDeps),
+      requestPetInteraction({ kind: "agent" }, "fed", {}, accessDeps),
+    ])
+    const results = [a, b]
+    expect(results.filter((r) => r.ok)).toEqual([
+      { ok: true, grantedXp: XP_AWARD.fed, grantedCoins: 2 },
+    ])
+    expect(results.filter((r) => !r.ok)).toEqual([
+      expect.objectContaining({
+        ok: false,
+        refusal: expect.objectContaining({ code: "cooling-down", kind: "fed" }),
+      }),
+    ])
+    expect((await getPetProfile())?.xp).toBe(XP_AWARD.fed)
+    expect(remainingPetAllowance({ kind: "agent" }).xp).toBe(PET_DAILY_XP_BUDGET - XP_AWARD.fed)
+  })
+
+  it("rolls back profile progression and inventory when activity ledger write fails (F18)", async () => {
+    await seedHatched(100)
+    await getDb().petInventory.put({ id: "berry", qty: 1, acquiredAt: 1, updatedAt: 1 })
+    const boom = jest
+      .spyOn(getDb().petActivityLog, "add")
+      .mockRejectedValueOnce(new Error("ledger full"))
+    try {
+      const outcome = await commitPetEvent(
+        { source: "user", kind: "fed", at: 5000, meta: { itemId: "berry" } },
+        { consumeItemId: "berry" }
+      )
+      expect(outcome).toMatchObject({ ok: false, reason: "storage-error" })
+    } finally {
+      boom.mockRestore()
+    }
+    const profile = await getPetProfile()
+    expect(profile?.xp).toBe(0)
+    expect(profile?.coins).toBe(100)
+    expect(profile?.interactionGate?.lastAtByKind?.fed).toBeUndefined()
+    expect((await getDb().petInventory.get("berry"))?.qty).toBe(1)
+    expect(await listPetActivity(10)).toEqual([])
+  })
+
+  it("prevents queued or in-flight controller writes from resurrecting a reset pet (F19)", async () => {
+    await seedHatched(100)
+    const { enqueuePetWork } = await import("./pet-controller")
+    let releaseBlocker!: () => void
+    let markBlockerActive!: () => void
+    const blockerActive = new Promise<void>((r) => (markBlockerActive = r))
+    const blocker = enqueuePetWork(async () => {
+      markBlockerActive()
+      await new Promise<void>((r) => (releaseBlocker = r))
+    })
+    await blockerActive
+
+    // Enqueue a care event BEFORE resetPet; resetPet must fence it out even
+    // though it was already queued behind the active controller turn.
+    const queuedEvent = handlePetEvent({ source: "user", kind: "fed", at: 6000 })
+    const resetting = resetPet()
+    releaseBlocker()
+
+    await Promise.all([blocker, queuedEvent, resetting])
+    await whenPetEventsSettled()
+    expect(await getPetProfile()).toBeUndefined()
+    expect(await listPetActivity(10)).toEqual([])
+  })
+
+  it("preserves concurrent XP and coins earned alongside renamePet (F26)", async () => {
+    await seedHatched(100)
+    await Promise.all([
+      renamePet("NewName", 7000),
+      handlePetEvent({ source: "user", kind: "fed", at: 7001 }),
+    ])
+    await whenPetEventsSettled()
+    const profile = await getPetProfile()
+    expect(profile?.soul?.name).toBe("NewName")
+    expect(profile?.xp).toBe(XP_AWARD.fed)
+    expect(profile?.coins).toBe(102)
   })
 })

@@ -146,7 +146,7 @@ export function buildPetManifestEntries(): ModuleToolEntry[] {
         properties: {
           kind: { type: "string", enum: [...REWARD_KINDS] },
           xp: { type: "integer", minimum: 0, maximum: 10 },
-          coins: { type: "integer", minimum: 0, maximum: 25 },
+          coins: { type: "integer", minimum: 0, maximum: 20 },
         },
       },
     },

@@ -12,6 +12,7 @@
 import type { PetActivityRow, PetProfile } from "@/types/pet"
 import { getPetProfile, listPetActivity, patchPetProfile } from "@/lib/db/pet"
 import { localDayKey } from "@/lib/pet/economy/streak"
+import { enqueuePetWork } from "@/lib/pet/runtime/pet-scope"
 import type { PetEmit } from "../pet-event-bus"
 
 /** Hourly — a birthday only needs day resolution; keep the reads negligible. */
@@ -67,7 +68,8 @@ export function createBirthdaySource(deps: BirthdayDeps = {}): (emit: PetEmit) =
   const getProfile = deps.getProfile ?? getPetProfile
   const listActivity = deps.listActivity ?? listPetActivity
   const markCelebrated =
-    deps.markCelebrated ?? ((day: string) => patchPetProfile({ lastBirthdayAwardDay: day }))
+    deps.markCelebrated ??
+    ((day: string) => enqueuePetWork(() => patchPetProfile({ lastBirthdayAwardDay: day })))
 
   return (emit) => {
     let disposed = false

@@ -184,6 +184,7 @@ interface Resolved {
   platform: Platform
   role: WindowRole | undefined
   accessDeps: Pick<PetAccessDeps, "rateLimiter" | "decrementInventory">
+  useDirectCommit: boolean
   ledger: PetIdempotencyLedger
   chatIntents: PetChatIntentStore
   getProfile: () => Promise<PetProfile | undefined>
@@ -217,11 +218,18 @@ function resolveDeps(deps: PetHostDispatchDeps): Resolved {
   const isControllerPresent = deps.isControllerPresent ?? isPetControllerPresent
   const ledger = deps.ledger ?? getPetIdempotencyLedger()
   const chatIntents = deps.chatIntents ?? getPetChatIntentStore(ledger)
+  const useDirectCommit =
+    !deps.requestInteraction &&
+    !deps.emit &&
+    !deps.getProfile &&
+    !deps.findActivity &&
+    !deps.accessDeps?.decrementInventory
   return {
     now,
     platform,
     role: deps.role,
     accessDeps: deps.accessDeps ?? {},
+    useDirectCommit,
     ledger,
     chatIntents,
     getProfile,
@@ -285,24 +293,35 @@ async function act(
   if (unavailable) return unavailable
   const { action, itemId } = request
 
-  // Read the profile behind any in-flight controller work, so `before` is the
-  // state this action's event will be applied on top of.
+  // Default production path: commit atomically inside the controller's own
+  // serialized queue so concurrent care requests cannot both succeed under a
+  // frozen clock and unrelated rewards cannot pollute `grantedCoins` (F16, F27).
+  if (d.useDirectCommit) {
+    const result = await d.requestInteraction({ kind: "user" }, action, itemId ? { itemId } : {}, {
+      ...d.accessDeps,
+      now: d.now,
+      platform: d.platform,
+      ...(d.role ? { role: d.role } : {}),
+      isEnabled: () => d.getPetSettings().enabled,
+      commitDirectly: true,
+    })
+    if (!result.ok) return refused(toRemoteRefusal(result.refusal))
+    return {
+      ok: true,
+      grantedXp: result.grantedXp,
+      grantedCoins: result.grantedCoins,
+    }
+  }
+
+  // Injected test-double fallback path.
   const before = await d.serialize(() => d.getProfile())
   if (!before) return refused({ code: "uninitialized" })
   if (!before.soul) return refused({ code: "not-hatched" })
-  // A `user` subject skips the gate's own precheck unless it spends an item,
-  // because on the desktop the controller's cooldown bubble answers it. A
-  // phone cannot see that bubble, so it is asked up front here.
   const notNow = await d.checkAccepted(action, { getProfile: d.getProfile, now: d.now })
   if (notNow) return refused(toRemoteRefusal(notNow))
 
-  // Stamp the event ourselves so the controller's outcome can be read back
-  // exactly: an accepted action writes this `at` into the cooldown gate and
-  // the activity ledger, and nothing else writes that pair.
   const stamp: { at: number | null } = { at: null }
   const result = await d.requestInteraction({ kind: "user" }, action, itemId ? { itemId } : {}, {
-    // The same host facts the availability check above answered from, so the
-    // gate cannot disagree with it.
     ...d.accessDeps,
     now: d.now,
     platform: d.platform,
@@ -325,8 +344,6 @@ async function act(
   if (INTERACTION_COOLDOWN_MS[action] !== undefined) {
     const gate = normalizeInteractionGate(after.interactionGate)
     if (gate.lastAtByKind[action] !== at) {
-      // The controller dropped it after all (another window's tap started the
-      // cooldown between the precheck and the event). Report what it did.
       if (!after.soul) return refused({ code: "not-hatched" })
       return refused({
         code: "cooling-down",
@@ -398,7 +415,10 @@ async function rename(
     const current = await d.getProfile()
     if (!current) return refused({ code: "uninitialized" })
     if (!current.soul) return refused({ code: "not-hatched" })
-    const renamed = await d.rename(request.name, d.now())
+    const renamed =
+      d.rename === renamePet
+        ? await renamePet(request.name, d.now(), { alreadySerialized: true })
+        : await d.rename(request.name, d.now())
     const name = renamed?.soul?.name
     return name ? ({ ok: true, name } as const) : refused({ code: "invalid-name" })
   })

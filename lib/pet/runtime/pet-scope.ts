@@ -13,6 +13,10 @@
 // can share one generation owner without circular imports.
 
 import { activeDatabaseEpoch, activeDatabaseName, onActiveDatabaseChange } from "@/lib/db/schema"
+import {
+  notifyPetResetCompleted as notifyResetCompletedSignal,
+  onPetResetCompleted,
+} from "@/lib/pet/console-request"
 
 export interface PetScopeToken {
   readonly databaseName: string
@@ -37,6 +41,32 @@ const conversationGenerations = new Map<string, number>()
 type ScopeListener = (databaseName: string) => void
 const petResetListeners = new Set<ScopeListener>()
 const conversationClearedListeners = new Set<ScopeListener>()
+
+let workChain: Promise<void> = Promise.resolve()
+
+/**
+ * Serialize all pet profile/economy/lifecycle writes through one promise chain.
+ * Lives in this leaf module so `lib/db/pet.ts` (`resetPet`), `pet-controller.ts`,
+ * `shop.ts`, `rename-pet.ts`, `init-pet.ts`, and `use-pet-proactive.ts` all share
+ * the exact same queue without circular imports.
+ */
+export function enqueuePetWork<T>(fn: () => Promise<T>): Promise<T> {
+  const result = workChain.then(() => fn())
+  workChain = result.then(
+    () => {},
+    () => {}
+  )
+  return result
+}
+
+/** Drain the serialization chain, including any re-entrant lifecycle events queued during settlement. */
+export async function whenPetEventsSettled(): Promise<void> {
+  let settled: Promise<void> | null = null
+  while (settled !== workChain) {
+    settled = workChain
+    await settled
+  }
+}
 
 function notify(listeners: Set<ScopeListener>, databaseName: string): void {
   for (const listener of [...listeners]) {
@@ -134,13 +164,21 @@ export function bumpPetGeneration(databaseName = activeDatabaseName()): number {
   return next
 }
 
-/** Subscribe to `resetPet` transitions (e.g. `PetMount` seeding a fresh egg). */
+/** Subscribe to `resetPet` start transitions (invalidates in-flight work immediately). */
 export function onPetReset(listener: ScopeListener): () => void {
   petResetListeners.add(listener)
   return () => {
     petResetListeners.delete(listener)
   }
 }
+
+/** Notify subscribers that `resetPet` finished wiping tables and a fresh egg may be seeded. */
+export function notifyPetResetCompleted(databaseName = activeDatabaseName()): void {
+  notifyResetCompletedSignal(databaseName)
+}
+
+/** Subscribe to completed `resetPet` operations (e.g. `PetMount` seeding a fresh egg). */
+export { onPetResetCompleted }
 
 /** Subscribe to pet conversation clear/reset transitions. */
 export function onPetConversationCleared(listener: ScopeListener): () => void {

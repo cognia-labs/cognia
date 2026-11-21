@@ -8,9 +8,18 @@
 // storage stays a faithful record of the last settled values.
 
 import type { Character } from "@cognia/agent-config-types"
-import { getDb } from "./schema"
+import { activeDatabaseName, getDb } from "./schema"
 import { publishSyncInvalidate } from "@/lib/sync/host-invalidate"
 import { recordTombstones } from "./tombstones"
+import {
+  assertPetScopeCurrent,
+  bumpPetGeneration,
+  capturePetScope,
+  enqueuePetWork,
+  notifyPetResetCompleted,
+  type PetScopeToken,
+} from "@/lib/pet/runtime/pet-scope"
+import { usePetStore } from "@/stores/pet/pet-store"
 import type {
   PetAchievementRecord,
   PetActivityRow,
@@ -36,33 +45,45 @@ export async function upsertPetProfile(profile: PetProfile): Promise<PetProfile>
   return profile
 }
 
-/** Shallow-merge a patch into the stored profile. Returns the merged row, or
- *  undefined if no profile exists yet. */
+/** Shallow-merge a patch into the stored profile inside a read-write transaction.
+ *  Returns the merged row, or undefined if no profile exists yet. */
 export async function patchPetProfile(
   patch: Partial<PetProfile>,
-  now = Date.now()
+  now = Date.now(),
+  opts: { scope?: PetScopeToken } = {}
 ): Promise<PetProfile | undefined> {
+  if (opts.scope) assertPetScopeCurrent(opts.scope)
   const db = getDb()
-  const cur = await db.petProfile.get(GLOBAL_ID)
-  if (!cur) return undefined
-  const next: PetProfile = {
-    ...cur,
-    ...patch,
-    id: GLOBAL_ID,
-    updatedAt: new Date(now).toISOString(),
-  }
-  await db.petProfile.put(next)
-  return next
+  return db.transaction("rw", db.petProfile, async () => {
+    if (opts.scope) assertPetScopeCurrent(opts.scope)
+    const cur = await db.petProfile.get(GLOBAL_ID)
+    if (!cur) return undefined
+    const next: PetProfile = {
+      ...cur,
+      ...patch,
+      id: GLOBAL_ID,
+      updatedAt: new Date(now).toISOString(),
+    }
+    await db.petProfile.put(next)
+    return next
+  })
 }
 
 // ── Activity ledger ──────────────────────────────────────────────────────────
 
-/** Append one ledger entry, then prune to the newest `PET_ACTIVITY_CAP` rows. */
+/** Append one ledger entry, then prune to the newest `PET_ACTIVITY_CAP` rows atomically. */
 export async function appendPetActivity(entry: Omit<PetActivityRow, "id">): Promise<number> {
   const db = getDb()
-  const id = (await db.petActivityLog.add(entry as PetActivityRow)) as number
-  await prunePetActivity()
-  return id
+  return db.transaction("rw", db.petActivityLog, async () => {
+    const id = (await db.petActivityLog.add(entry as PetActivityRow)) as number
+    const count = await db.petActivityLog.count()
+    if (count > PET_ACTIVITY_CAP) {
+      const overflow = count - PET_ACTIVITY_CAP
+      const oldest = await db.petActivityLog.orderBy("ts").limit(overflow).primaryKeys()
+      if (oldest.length > 0) await db.petActivityLog.bulkDelete(oldest as number[])
+    }
+    return id
+  })
 }
 
 /** Drop ledger rows beyond the cap (oldest first). Returns the number removed. */
@@ -125,10 +146,13 @@ export async function upsertPetBinding(binding: PetCharacterBinding): Promise<Pe
 }
 
 export async function deletePetBinding(characterId: string): Promise<void> {
-  await getDb().petCharacterBindings.delete(characterId)
-  // A paired phone mirrors bindings (companion sync); without the tombstone a
-  // removed binding would stay on the phone indefinitely.
-  await recordTombstones("petCharacterBindings", [characterId])
+  const db = getDb()
+  await db.transaction("rw", db.petCharacterBindings, db.syncTombstones, async () => {
+    await db.petCharacterBindings.delete(characterId)
+    // A paired phone mirrors bindings (companion sync); without the tombstone a
+    // removed binding would stay on the phone indefinitely.
+    await recordTombstones("petCharacterBindings", [characterId])
+  })
 }
 
 export async function listPetBindings(): Promise<PetCharacterBinding[]> {
@@ -165,10 +189,12 @@ export async function listPetAchievements(): Promise<PetAchievementRecord[]> {
 /** Record an unlock (idempotent — first write wins on the unlock time). */
 export async function recordPetAchievement(id: string, now = Date.now()): Promise<boolean> {
   const db = getDb()
-  const existing = await db.petAchievements.get(id)
-  if (existing) return false
-  await db.petAchievements.put({ id, unlockedAt: now })
-  return true
+  return db.transaction("rw", db.petAchievements, async () => {
+    const existing = await db.petAchievements.get(id)
+    if (existing) return false
+    await db.petAchievements.put({ id, unlockedAt: now })
+    return true
+  })
 }
 
 // ── Inventory (v94) ──────────────────────────────────────────────────────────
@@ -188,12 +214,14 @@ export async function addPetInventory(
   now = Date.now()
 ): Promise<PetInventoryRow> {
   const db = getDb()
-  const cur = await db.petInventory.get(id)
-  const next: PetInventoryRow = cur
-    ? { ...cur, qty: cur.qty + qty, updatedAt: now }
-    : { id, qty, acquiredAt: now, updatedAt: now }
-  await db.petInventory.put(next)
-  return next
+  return db.transaction("rw", db.petInventory, async () => {
+    const cur = await db.petInventory.get(id)
+    const next: PetInventoryRow = cur
+      ? { ...cur, qty: cur.qty + qty, updatedAt: now }
+      : { id, qty, acquiredAt: now, updatedAt: now }
+    await db.petInventory.put(next)
+    return next
+  })
 }
 
 /** Decrement `qty`; the row is deleted at 0. False when not owned in quantity. */
@@ -203,47 +231,91 @@ export async function decrementPetInventory(
   now = Date.now()
 ): Promise<boolean> {
   const db = getDb()
-  const cur = await db.petInventory.get(id)
-  if (!cur || cur.qty < qty) return false
-  if (cur.qty === qty) {
-    await db.petInventory.delete(id)
-    // Using the last one removes the row, which the mirror only learns from
-    // a tombstone; otherwise the phone keeps showing an item that is gone.
-    await recordTombstones("petInventory", [id], now)
-  } else {
-    await db.petInventory.put({ ...cur, qty: cur.qty - qty, updatedAt: now })
-  }
-  return true
+  return db.transaction("rw", db.petInventory, db.syncTombstones, async () => {
+    const cur = await db.petInventory.get(id)
+    if (!cur || cur.qty < qty) return false
+    if (cur.qty === qty) {
+      await db.petInventory.delete(id)
+      // Using the last one removes the row, which the mirror only learns from
+      // a tombstone; otherwise the phone keeps showing an item that is gone.
+      await recordTombstones("petInventory", [id], now)
+    } else {
+      await db.petInventory.put({ ...cur, qty: cur.qty - qty, updatedAt: now })
+    }
+    return true
+  })
 }
 
 // ── Reset ────────────────────────────────────────────────────────────────────
 
-/** Wipe all pet data (used by the settings "reset" action). */
+/**
+ * Wipe all pet data (used by the settings "reset" action).
+ *
+ * Bumps the pet & conversation generations BEFORE entering `enqueuePetWork` so
+ * any already-running controller write, hatch, or chat turn aborts before
+ * touching storage (F19, F20), then clears every pet table and records sync
+ * tombstones atomically inside one Dexie transaction before notifying mounted
+ * runtimes to seed a fresh egg (F21).
+ */
 export async function resetPet(): Promise<void> {
-  const db = getDb()
-  // Collected before the clear: `Table.clear()` fires no Dexie hooks, so
-  // neither the tombstones nor the sync invalidation below would happen on
-  // their own, and a paired phone would keep mirroring the old pet.
-  const [achievementIds, inventoryIds, bindingIds] = await Promise.all([
-    db.petAchievements.toCollection().primaryKeys(),
-    db.petInventory.toCollection().primaryKeys(),
-    db.petCharacterBindings.toCollection().primaryKeys(),
-  ])
-  await Promise.all([
-    db.petProfile.clear(),
-    db.petCharacterBindings.clear(),
-    db.petActivityLog.clear(),
-    db.petAchievements.clear(),
-    db.petConversationV2.clear(),
-    db.petInventory.clear(),
-  ])
-  const at = Date.now()
-  await Promise.all([
-    recordTombstones("petProfile", ["global"], at),
-    recordTombstones("petAchievements", achievementIds.map(String), at),
-    recordTombstones("petInventory", inventoryIds.map(String), at),
-    recordTombstones("petCharacterBindings", bindingIds.map(String), at),
-  ])
+  const dbName = activeDatabaseName()
+  bumpPetGeneration(dbName)
+  const resetScope = capturePetScope()
+
+  await enqueuePetWork(async () => {
+    assertPetScopeCurrent(resetScope)
+    const db = getDb()
+    await db.transaction(
+      "rw",
+      [
+        db.petProfile,
+        db.petCharacterBindings,
+        db.petActivityLog,
+        db.petAchievements,
+        db.petConversationV2,
+        db.petInventory,
+        db.syncTombstones,
+      ],
+      async () => {
+        assertPetScopeCurrent(resetScope)
+        // Collected before the clear: `Table.clear()` fires no Dexie hooks, so
+        // neither the tombstones nor the sync invalidation below would happen on
+        // their own, and a paired phone would keep mirroring the old pet.
+        const [achievementIds, inventoryIds, bindingIds] = await Promise.all([
+          db.petAchievements.toCollection().primaryKeys(),
+          db.petInventory.toCollection().primaryKeys(),
+          db.petCharacterBindings.toCollection().primaryKeys(),
+        ])
+        await Promise.all([
+          db.petProfile.clear(),
+          db.petCharacterBindings.clear(),
+          db.petActivityLog.clear(),
+          db.petAchievements.clear(),
+          db.petConversationV2.clear(),
+          db.petInventory.clear(),
+        ])
+        const at = Date.now()
+        await Promise.all([
+          recordTombstones("petProfile", ["global"], at),
+          recordTombstones("petAchievements", achievementIds.map(String), at),
+          recordTombstones("petInventory", inventoryIds.map(String), at),
+          recordTombstones("petCharacterBindings", bindingIds.map(String), at),
+        ])
+      }
+    )
+  })
+
+  // Clear transient runtime UI state from the old pet before re-seeding.
+  usePetStore.setState({
+    visualState: "idle",
+    oneShotQueue: [],
+    bubble: null,
+    lastGrewStats: [],
+    careAlert: null,
+    interactionRefusal: null,
+    profileSnapshot: null,
+  })
+
   // The activity log needs no tombstones: the phone drops its copy when the
   // profile tombstone (or a new profile generation) arrives.
   for (const table of [
@@ -255,4 +327,6 @@ export async function resetPet(): Promise<void> {
   ] as const) {
     publishSyncInvalidate(table)
   }
+
+  notifyPetResetCompleted(dbName)
 }

@@ -158,7 +158,13 @@ export function useLocalPetActions({
         )
       }
       try {
-        await renamePet(name)
+        const renamed = await renamePet(name)
+        if (!renamed?.soul?.name) {
+          return toastPetFailure(
+            petActionFailed("refused", { key: "outcomes.refusal.notHatched" }),
+            t
+          )
+        }
         return PET_ACTION_OK
       } catch {
         return toastPetFailure(petActionFailed("failed", { key: "console.renameFailed" }), t)
