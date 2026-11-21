@@ -189,6 +189,25 @@ describe("FusionLedgerStore (fake-indexeddb)", () => {
     expect(await db.fusionOutbox.where("kind").equals("usage_row").count()).toBe(1)
   })
 
+  it("reports what open and freshly sealed runs spent, for the tenant limit (F23)", async () => {
+    const { store } = harness()
+    const token = await running(store, "run-1")
+    const attemptId = await dispatch(store, "run-1", token, 300_000)
+    await store.settleCall(attemptId, {
+      status: "succeeded",
+      usage: usageCosting(100_000, 50_000),
+      semantics: SEMANTICS,
+      providerRequestId: "r",
+    })
+    await running(store, "run-idle")
+    // Open and spending: counted; open but spent nothing: not.
+    expect(await store.recentRunSpend(0, 0)).toEqual([{ runId: "run-1", spentMicrousd: 200_000 }])
+    await store.finalizeRun("run-1", token, { status: "succeeded" })
+    expect(await store.recentRunSpend(0, 0)).toHaveLength(1)
+    // Sealed before the window: its usage row is no longer money in flight.
+    expect(await store.recentRunSpend(0, Number.MAX_SAFE_INTEGER)).toEqual([])
+  })
+
   it("leaves a chat turn's usage row to the chat path", async () => {
     const { store, db } = harness()
     const token = await running(store, "run-1")

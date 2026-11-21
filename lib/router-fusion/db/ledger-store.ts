@@ -768,6 +768,28 @@ export class FusionLedgerStore {
   }
 
   /**
+   * What each run created since `createdSince` has spent, for every run still
+   * open and every run sealed since `sealedSince`: the runs whose spend may not
+   * be in the account's usage rows yet. A settled call gives its tenant hold
+   * back at once, while its usage row reaches the account database later (the
+   * outbox, or the chat's own row after it seals the run), so the tenant limit
+   * counts the difference itself (F23).
+   */
+  async recentRunSpend(
+    createdSince: number,
+    sealedSince: number
+  ): Promise<Array<{ runId: string; spentMicrousd: number }>> {
+    const runs = await this.db.fusionRuns.where("createdAt").aboveOrEqual(createdSince).toArray()
+    return runs
+      .filter(
+        (run) =>
+          run.budget.spentMicrousd > 0 &&
+          (!isTerminalRunStatus(run.status) || (run.terminalAt ?? 0) >= sealedSince)
+      )
+      .map((run) => ({ runId: run.runId, spentMicrousd: run.budget.spentMicrousd }))
+  }
+
+  /**
    * Take (or renew) the run lease. A live lease held by another owner refuses;
    * an expired one is taken over and the fencing token moves, so every write
    * the previous owner still has in flight is rejected (REC-02).

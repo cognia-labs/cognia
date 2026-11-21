@@ -4,7 +4,12 @@ jest.mock("@/lib/usage/cost-budget-runtime", () => ({
   }),
 }))
 
+const mockUnbooked = jest.fn(async () => 0)
+jest.mock("./unbooked-spend", () => ({ unbookedFusionSpendMicrousd: () => mockUnbooked() }))
+
 import { tenantLimitFor, tightestTenantLimit } from "./tenant-budget"
+
+beforeEach(() => mockUnbooked.mockReset().mockResolvedValue(0))
 
 const spend = async () => ({
   dayUsd: 4,
@@ -57,6 +62,19 @@ describe("tenantLimitFor", () => {
     await expect(
       tightestTenantLimit(budget, ["openai::gpt-5"], { projectId: "alpha", readSpend })
     ).resolves.toBe(0)
+  })
+
+  it("does not admit a run on money a settled run spent but has not booked yet (F23)", async () => {
+    // $1 day ceiling, nothing booked; the first run settled $1 a moment ago and
+    // its usage row is still on its way to the account database.
+    const nothingBooked = async () => ({ dayUsd: 0, monthUsd: 0 })
+    mockUnbooked.mockResolvedValue(1_000_000)
+    const limit = await tenantLimitFor({ dailyUsd: 1 }, "openai", { readSpend: nothingBooked })
+    expect(limit.remainingMicrousd).toBe(0)
+    // Without a ceiling it is not even read.
+    mockUnbooked.mockClear()
+    await tenantLimitFor(undefined, "openai", { readSpend: nothingBooked })
+    expect(mockUnbooked).not.toHaveBeenCalled()
   })
 
   it("never reports a negative remainder", async () => {

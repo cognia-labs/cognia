@@ -18,6 +18,8 @@ import {
 } from "@/lib/usage/cost-budget"
 import { readCostBudgetSpend } from "@/lib/usage/cost-budget-runtime"
 
+import { unbookedFusionSpendMicrousd } from "./unbooked-spend"
+
 export interface TenantLimitOptions {
   /**
    * The app project (workspace) the run spends for. Its own ceiling binds the
@@ -27,6 +29,8 @@ export interface TenantLimitOptions {
   projectId?: string | null
   /** Reads the spend, with the shares of `projectIds`; defaults to the durable rollup. */
   readSpend?: (projectIds: readonly string[]) => Promise<CostBudgetSpend>
+  /** Ledgered spend the rollup does not hold yet; defaults to {@link unbookedFusionSpendMicrousd}. */
+  unbookedMicrousd?: () => Promise<number>
 }
 
 export interface TenantLimit {
@@ -74,11 +78,14 @@ export async function tenantLimitFor(
       binding = verdict
     }
   }
+  // Money a settled call already spent but the rollup does not show yet is not
+  // free: it counts against every scope, as the tenant's holds do.
+  const unbooked = await (options.unbookedMicrousd ?? unbookedFusionSpendMicrousd)()
   return {
     // Floor: the tenant never gets a fraction of a microusd it does not have.
     // The epsilon only absorbs binary float noise ($1 − $0.90 = 0.0999…98),
     // which would otherwise take a whole microusd away.
-    remainingMicrousd: Math.max(0, Math.floor(remaining * 1_000_000 + 1e-6)),
+    remainingMicrousd: Math.max(0, Math.floor(remaining * 1_000_000 + 1e-6) - unbooked),
     binding,
   }
 }

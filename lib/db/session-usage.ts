@@ -619,6 +619,25 @@ export function isLocalSpend(row: Pick<SessionUsageRow, "imported">): boolean {
   return row.imported !== true
 }
 
+/**
+ * What the account has booked for each of `runIds`: the summed cost of the
+ * usage rows that name the run. A run with no row yet is absent.
+ */
+export async function bookedUsdByRun(runIds: readonly string[]): Promise<Map<string, number>> {
+  const booked = new Map<string, number>()
+  if (runIds.length === 0) return booked
+  const rows = await getDb()
+    .sessionUsage.where("runId")
+    .anyOf([...runIds])
+    .toArray()
+  for (const row of rows) {
+    if (!row.runId) continue
+    const cost = Number.isFinite(row.costUsd) && row.costUsd > 0 ? row.costUsd : 0
+    booked.set(row.runId, (booked.get(row.runId) ?? 0) + cost)
+  }
+  return booked
+}
+
 /** Read all rows for one session, oldest-first (matches the message order). */
 export async function listUsageForSession(sessionId: string): Promise<SessionUsageRow[]> {
   return getDb().sessionUsage.where("sessionId").equals(sessionId).sortBy("at")

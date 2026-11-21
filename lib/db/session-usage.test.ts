@@ -1,6 +1,7 @@
 // Coverage for the session-usage CRUD + aggregator layer.
 
 import {
+  bookedUsdByRun,
   listUsageForSession,
   pruneSessionUsageOlderThan,
   isLocalSpend,
@@ -55,6 +56,20 @@ function row(
     ...partial,
   }
 }
+
+describe("bookedUsdByRun", () => {
+  it("sums the booked cost of each run's rows, and leaves out runs with none", async () => {
+    await getDb().sessionUsage.bulkPut([
+      { messageId: "a", sessionId: "s", at: 1, runId: "run-1", costUsd: 0.25 },
+      { messageId: "b", sessionId: "s", at: 2, runId: "run-1", costUsd: 0.5 },
+      { messageId: "c", sessionId: "s", at: 3, runId: "run-2", costUsd: 0.1 },
+      { messageId: "d", sessionId: "s", at: 4, runId: "run-3", costUsd: 1 },
+    ] as SessionUsageRow[])
+    const booked = await bookedUsdByRun(["run-1", "run-2", "run-none"])
+    expect(Object.fromEntries(booked)).toEqual({ "run-1": 0.75, "run-2": 0.1 })
+    expect((await bookedUsdByRun([])).size).toBe(0)
+  })
+})
 
 describe("upsertSessionUsage", () => {
   it("writes a row and round-trips", async () => {
