@@ -2550,6 +2550,46 @@ export function activeDatabaseName(): string {
   return _activeDatabaseName ?? LEGACY_COGNIA_DB_NAME
 }
 
+export class DatabaseScopeChangedError extends Error {
+  readonly code = "database_scope_changed"
+  constructor(
+    readonly expectedDatabase: string,
+    readonly activeDatabase: string
+  ) {
+    super(`database scope changed from ${expectedDatabase} to ${activeDatabase}`)
+    this.name = "DatabaseScopeChangedError"
+  }
+}
+
+export interface DatabaseScopeSnapshot {
+  readonly databaseName: string
+  readonly databaseEpoch: number
+  isActive(): boolean
+  assertActive(): void
+}
+
+/**
+ * Pin an async operation to the database partition and activation epoch active
+ * when it began. Detects both switching to another account/runtime target and
+ * locking then re-unlocking the same account.
+ */
+export function captureDatabaseScope(): DatabaseScopeSnapshot {
+  const databaseName = activeDatabaseName()
+  const databaseEpoch = activeDatabaseEpoch()
+  const isActive = () =>
+    activeDatabaseName() === databaseName && activeDatabaseEpoch() === databaseEpoch
+  return {
+    databaseName,
+    databaseEpoch,
+    isActive,
+    assertActive() {
+      if (!isActive()) {
+        throw new DatabaseScopeChangedError(databaseName, activeDatabaseName())
+      }
+    },
+  }
+}
+
 export function clearAccountDatabaseSelection(): void {
   // Reset the scope namespace to the legacy db, but PRESERVE the account — a
   // db de-selection changes where rows live, not who owns them, so the last

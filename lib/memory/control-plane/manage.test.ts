@@ -752,3 +752,49 @@ it("keeps committed local feedback successful when its audit projection fails", 
     warn.mockRestore()
   }
 })
+
+describe("database and runtime-target scope fencing (F12)", () => {
+  it("refuses canonical delete when the active database target switches during vector cleanup", async () => {
+    const { activateAccountDatabase, clearAccountDatabaseSelection, DatabaseScopeChangedError } =
+      await import("@/lib/db/schema")
+    mockGet.mockResolvedValueOnce({
+      id: "shared-id",
+      text: "Target A",
+      version: 1,
+      vectorDocId: "v1",
+    })
+    mockSinkDelete.mockImplementationOnce(async () => {
+      activateAccountDatabase("acct_f12_test", "target-b")
+    })
+    try {
+      activateAccountDatabase("acct_f12_test", "target-a")
+      await expect(manageMemory({ kind: "delete", id: "shared-id" })).rejects.toBeInstanceOf(
+        DatabaseScopeChangedError
+      )
+      expect(mockDelete).not.toHaveBeenCalled()
+    } finally {
+      clearAccountDatabaseSelection()
+    }
+  })
+
+  it("skips post-commit vector receipt write when the active database target switches during vector upsert", async () => {
+    const { activateAccountDatabase, clearAccountDatabaseSelection } =
+      await import("@/lib/db/schema")
+    mockSinkUpsert.mockImplementationOnce(async () => {
+      activateAccountDatabase("acct_f12_update", "target-b")
+    })
+    try {
+      activateAccountDatabase("acct_f12_update", "target-a")
+      const result = await manageMemory({
+        kind: "update",
+        id: "m1",
+        patch: { text: "updated text" },
+      })
+      expect(result).toMatchObject({ ok: true, memoryId: "m1" })
+      // Canonical update ran once in target-a; post-upsert receipt write into target-b was skipped.
+      expect(mockUpdate).toHaveBeenCalledTimes(1)
+    } finally {
+      clearAccountDatabaseSelection()
+    }
+  })
+})

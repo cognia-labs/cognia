@@ -30,15 +30,29 @@ export interface CollectRadarOptions {
   now?: number
   /** Extra pre-normalized items (e.g. Phase 4 captured items). */
   extra?: RadarDataItem[]
+  /** Optional cancellation signal checked across async reads. */
+  signal?: AbortSignal
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  const err = new Error(
+    typeof signal.reason === "string" && signal.reason ? signal.reason : "Radar collection aborted"
+  )
+  err.name = "AbortError"
+  throw err
 }
 
 export async function collectRadarItems(opts: CollectRadarOptions = {}): Promise<RadarDataItem[]> {
+  throwIfAborted(opts.signal)
   const windowDays = opts.windowDays ?? 14
   const maxItems = opts.maxItems ?? 60
   const now = opts.now ?? Date.now()
   const cutoff = now - windowDays * DAY_MS
 
   const memories = await listMemories({ status: "active" })
+  throwIfAborted(opts.signal)
   const memItems: RadarDataItem[] = memories
     .filter((m) => m.updatedAt >= cutoff)
     .map((m) => ({
@@ -53,6 +67,7 @@ export async function collectRadarItems(opts: CollectRadarOptions = {}): Promise
   // Captured items (Phase 4) — the enrichment markdown/title carries the most
   // signal; fall back to the raw text/URL.
   const captures = await listCapturedItemsSince(cutoff)
+  throwIfAborted(opts.signal)
   const capItems: RadarDataItem[] = captures.map((c) => ({
     id: c.id,
     text: c.enrichment?.markdown || c.text || c.sourceUrl || "",

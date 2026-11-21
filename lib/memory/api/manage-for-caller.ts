@@ -31,6 +31,7 @@ import type {
   ManageMemoryResult,
   ManageMemoryCommitContext,
 } from "@/lib/memory/control-plane/manage"
+import { captureDatabaseScope } from "@/lib/db/schema"
 import { resolveMemoryCaller } from "./caller"
 import { MemoryPreWriteError } from "./store-memory"
 
@@ -104,13 +105,16 @@ export async function manageMemoryForCaller(
   command: ManageMemoryCommand,
   context: ManageMemoryForCallerContext
 ): Promise<ManageMemoryForCallerResult> {
+  const scope = captureDatabaseScope()
   const [{ getSettings }, { resolveMemoryConfig }, memDb, { manageMemory }] = await Promise.all([
     import("@/lib/db/settings"),
     import("@/types/memory/memory"),
     import("@/lib/db/memories"),
     import("@/lib/memory/control-plane/manage"),
   ])
+  scope.assertActive()
   const settings = await getSettings().catch(() => undefined)
+  scope.assertActive()
   const config = resolveMemoryConfig(settings?.memory)
   const caller = resolveMemoryCaller(context.caller, config)
   const namespaces = caller.namespaces
@@ -120,6 +124,7 @@ export async function manageMemoryForCaller(
   // only rows that exist can be outside the caller's namespaces.
   for (const rowId of touchedIds(command)) {
     const row = await memDb.getMemory(rowId)
+    scope.assertActive()
     if (row) touched.set(rowId, row)
     if (row && !memoryRowWithinNamespaces(row, namespaces)) {
       return { ok: false, reason: "unauthorized_namespace" }
@@ -148,18 +153,23 @@ export async function manageMemoryForCaller(
   if (!context.operationId) return runCommand(effective)
 
   const ledger = await import("@/lib/db/memory-operations")
+  scope.assertActive()
   const binding = {
     principalId: caller.principalId,
     operationId: context.operationId,
     requestHash: await ledger.memoryOperationRequestHash("manage", command),
     kind: "manage" as const,
   }
+  scope.assertActive()
   let reservation = await ledger.reserveMemoryOperation(binding)
+  scope.assertActive()
   if (reservation.state === "in_flight") {
     const settled = await ledger.awaitMemoryOperation(binding.principalId, binding.operationId)
+    scope.assertActive()
     reservation = settled
       ? { state: "replay", receipt: settled }
       : await ledger.reserveMemoryOperation(binding)
+    scope.assertActive()
   }
   if (reservation.state === "conflict") return { ok: false, reason: "idempotency_key_reused" }
   if (reservation.state === "replay") {
@@ -179,6 +189,7 @@ export async function manageMemoryForCaller(
 
   let receiptCommitted = false
   const writeReceipt = async (result: Extract<ManageMemoryResult, { ok: true }>) => {
+    scope.assertActive()
     await ledger.recordMemoryOperation({
       id: `${binding.principalId}:${binding.operationId}`,
       ...binding,
@@ -190,7 +201,9 @@ export async function manageMemoryForCaller(
   }
   const commit: ManageMemoryCommitContext["commit"] = async (apply) => {
     const { getDb } = await import("@/lib/db/schema")
+    scope.assertActive()
     const db = getDb()
+    scope.assertActive()
     const result = await db.transaction(
       "rw",
       [
@@ -203,6 +216,7 @@ export async function manageMemoryForCaller(
         db.syncTombstones,
       ],
       async () => {
+        scope.assertActive()
         const outcome = await apply()
         if (outcome.ok) await writeReceipt(outcome)
         return outcome
@@ -218,7 +232,8 @@ export async function manageMemoryForCaller(
   } catch (error) {
     // An atomic envelope rolled back, and the store core explicitly identifies
     // pre-write failures. Other multi-step failures keep their key fenced.
-    if (atomic || error instanceof MemoryPreWriteError)
+    // Never release into a different database if the active partition moved.
+    if (scope.isActive() && (atomic || error instanceof MemoryPreWriteError))
       await ledger.releaseMemoryOperation(
         binding.principalId,
         binding.operationId,
@@ -229,7 +244,7 @@ export async function manageMemoryForCaller(
   if (!result.ok) {
     // A refused command changed nothing, so its key must free up for a
     // corrected retry (the same rule `runMemoryMutation` applies).
-    if (result.reason !== "partial_failure")
+    if (result.reason !== "partial_failure" && scope.isActive())
       await ledger.releaseMemoryOperation(
         binding.principalId,
         binding.operationId,
@@ -247,6 +262,7 @@ export async function manageMemoryForCaller(
         return result
       } catch (error) {
         receiptError = error
+        if (!scope.isActive()) break
       }
     }
     throw new MemoryReceiptCommitError(receiptError)
@@ -259,7 +275,8 @@ export async function manageMemoryForCaller(
   ): Promise<ManageMemoryForCallerResult> {
     if (next.kind !== "clear" || !namespaces) {
       try {
-        return await (commit ? manageMemory(next, { commit }) : manageMemory(next))
+        scope.assertActive()
+        return await (commit ? manageMemory(next, { commit, scope }) : manageMemory(next))
       } catch (error) {
         // clear catches every per-row write failure as partial_failure. Its
         // only escaping failure is the initial list, before any delete.
@@ -278,15 +295,23 @@ export async function manageMemoryForCaller(
       .catch((error) => {
         throw new MemoryPreWriteError(error)
       })
+    scope.assertActive()
     const allowed = rows.filter((row) => memoryRowWithinNamespaces(row, namespaces))
     const allowedIds = new Set(allowed.map((row) => row.id))
     let clearedCount = 0
     const failedIds: string[] = []
     for (const row of allowed) {
+      scope.assertActive()
       if (row.revisionOf && allowedIds.has(row.revisionOf)) continue
-      const deleted = await manageMemory({ kind: "delete", id: row.id }).catch(() => undefined)
-      if (deleted?.ok) clearedCount += 1
-      else if (!deleted || deleted.reason !== "not_found") failedIds.push(row.id)
+      try {
+        scope.assertActive()
+        const deleted = await manageMemory({ kind: "delete", id: row.id })
+        if (deleted.ok) clearedCount += 1
+        else if (deleted.reason !== "not_found") failedIds.push(row.id)
+      } catch (error) {
+        if (!scope.isActive()) throw error
+        failedIds.push(row.id)
+      }
     }
     return failedIds.length
       ? { ok: false, reason: "partial_failure", clearedCount, failedIds }

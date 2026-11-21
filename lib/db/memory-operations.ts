@@ -159,7 +159,8 @@ export async function runMemoryMutation(
           existing,
           applied.patch.text,
           applied.revisionReason ?? "external-update",
-          now
+          now,
+          db
         )
         await db.memories.update(request.memoryId, {
           ...applied.patch,

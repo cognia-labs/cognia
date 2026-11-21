@@ -14,7 +14,7 @@
  * the empty state no longer flashes before a report that exists.
  */
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 import { useLocale, useTranslations } from "next-intl"
 import { Loader2Icon, SparklesIcon } from "lucide-react"
@@ -48,6 +48,7 @@ import { RadarSource, RadarSuggestions } from "./radar-suggestions"
 import { RadarReportSkeleton } from "./radar-report-skeleton"
 import { runRadarReport, NoRadarModelError } from "@/lib/radar/radar-runner"
 import { resolveRadarCron, syncRadarCronToScheduler } from "@/lib/radar/radar-cron-bridge"
+import { captureDatabaseScope, onActiveDatabaseChange } from "@/lib/db/schema"
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import {
   DEFAULT_RADAR_SETTINGS,
@@ -59,6 +60,13 @@ import {
 /** Radix `Select` reserves "" for "no value", so "latest" needs a real id. */
 const LATEST_REPORT = "__latest__"
 
+function isExpectedRadarCancellation(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true
+  const code = (err as { code?: string } | null)?.code
+  if (code === "radar_account_changed" || code === "database_scope_changed") return true
+  return (err as { name?: string } | null)?.name === "AbortError"
+}
+
 export function RadarPanel() {
   const t = useTranslations("radar")
   const locale = useLocale()
@@ -69,6 +77,8 @@ export function RadarPanel() {
   const [busy, setBusy] = useState(false)
   const [settings, setSettings] = useState<RadarSettings>(DEFAULT_RADAR_SETTINGS)
   const [saving, setSaving] = useState(false)
+  const runAbortRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
 
   const [reportId, setReportId] = useState("")
   const reports = useLiveQuery(() => listAllRadarReports(), [])
@@ -79,37 +89,74 @@ export function RadarPanel() {
   )
 
   useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const row = await getSettings()
-        if (!cancelled && row.attentionRadar) setSettings(row.attentionRadar)
-      } catch {
-        // Best-effort — keep defaults.
-      }
-    })()
+    mountedRef.current = true
+    let loadSeq = 0
+    const reloadSettings = () => {
+      const seq = ++loadSeq
+      const scope = captureDatabaseScope()
+      void (async () => {
+        try {
+          const row = await getSettings()
+          if (!mountedRef.current || seq !== loadSeq || !scope.isActive()) return
+          setSettings(row?.attentionRadar ?? DEFAULT_RADAR_SETTINGS)
+        } catch {
+          // Best-effort — keep defaults.
+        }
+      })()
+    }
+    reloadSettings()
+    const stopDbWatch = onActiveDatabaseChange(() => {
+      runAbortRef.current?.abort()
+      runAbortRef.current = null
+      setBusy(false)
+      setSaving(false)
+      setReportId("")
+      reloadSettings()
+    })
     return () => {
-      cancelled = true
+      mountedRef.current = false
+      loadSeq += 1
+      stopDbWatch()
+      runAbortRef.current?.abort()
+      runAbortRef.current = null
     }
   }, [])
 
   const onRun = useCallback(async () => {
+    runAbortRef.current?.abort()
+    const controller = new AbortController()
+    runAbortRef.current = controller
+    const scope = captureDatabaseScope()
     setBusy(true)
     try {
-      const r = await runRadarReport({ force: true })
+      const r = await runRadarReport({ force: true, signal: controller.signal })
+      if (!mountedRef.current || !scope.isActive() || controller.signal.aborted) return
       toast.success(r ? t("toast.generated") : t("toast.skipped"))
     } catch (err) {
+      if (
+        !mountedRef.current ||
+        !scope.isActive() ||
+        isExpectedRadarCancellation(err, controller.signal)
+      ) {
+        return
+      }
       if (err instanceof NoRadarModelError) toast.error(t("toast.noModel"))
       else
         toast.error(
           t("toast.failed", { message: err instanceof Error ? err.message : String(err) })
         )
     } finally {
-      setBusy(false)
+      if (runAbortRef.current === controller) {
+        runAbortRef.current = null
+      }
+      if (mountedRef.current && scope.isActive()) {
+        setBusy(false)
+      }
     }
   }, [t])
 
   const onSaveSettings = useCallback(async () => {
+    const scope = captureDatabaseScope()
     setSaving(true)
     try {
       if (
@@ -123,7 +170,9 @@ export function RadarPanel() {
         return
       }
       await saveSettings({ attentionRadar: settings })
-      const action = await syncRadarCronToScheduler(settings.schedule, settings.enabled)
+      if (!mountedRef.current || !scope.isActive()) return
+      const action = await syncRadarCronToScheduler(settings.schedule, settings.enabled, scope)
+      if (!mountedRef.current || !scope.isActive()) return
       if (action.action === "invalid") {
         toast.error(
           t("settings.scheduleInvalidCron", { expression: action.invalidExpression ?? "" })
@@ -136,9 +185,12 @@ export function RadarPanel() {
         toast.success(t("settings.saved"))
       }
     } catch (err) {
+      if (!mountedRef.current || !scope.isActive() || isExpectedRadarCancellation(err)) return
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
-      setSaving(false)
+      if (mountedRef.current && scope.isActive()) {
+        setSaving(false)
+      }
     }
   }, [settings, t])
 

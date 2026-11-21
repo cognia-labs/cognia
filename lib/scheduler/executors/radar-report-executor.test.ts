@@ -23,6 +23,7 @@ describe("executeRadarReportTask", () => {
     const r = await executeRadarReportTask(task, execution, signal)
     expect(r.success).toBe(true)
     expect(r.output).toEqual({ itemCount: 7, reportId: "r1" })
+    expect(mockRun).toHaveBeenCalledWith({ signal })
   })
 
   it("reports skipped when the runner returns null", async () => {
@@ -37,5 +38,13 @@ describe("executeRadarReportTask", () => {
     const r = await executeRadarReportTask(task, execution, signal)
     expect(r.success).toBe(false)
     expect(r.error).toMatch(/API key/i)
+  })
+
+  it("fails immediately without invoking runRadarReport when already aborted (F22)", async () => {
+    const controller = new AbortController()
+    controller.abort("cancelled")
+    const r = await executeRadarReportTask(task, execution, controller.signal)
+    expect(r.success).toBe(false)
+    expect(mockRun).not.toHaveBeenCalled()
   })
 })

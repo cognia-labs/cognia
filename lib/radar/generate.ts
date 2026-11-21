@@ -13,6 +13,7 @@ import type { RadarDataItem, RadarLlmOutput } from "@/types/radar"
 export interface GenerateRadarArgs {
   items: readonly RadarDataItem[]
   locale?: string
+  signal?: AbortSignal
 }
 
 /** Coerce arbitrary parsed JSON into a well-formed `RadarLlmOutput`. */
@@ -84,16 +85,52 @@ export function normalizeRadarOutput(raw: unknown, itemCount: number): RadarLlmO
  * are registered — wiring it up would mean a fourth hook rail, not a fire
  * site. A hook author sees this in the Hooks settings coverage list.
  */
+function abortReasonError(signal: AbortSignal): Error {
+  const reason = signal.reason
+  if (reason instanceof Error) return reason
+  const err = new Error(typeof reason === "string" && reason ? reason : "Radar generation aborted")
+  err.name = "AbortError"
+  return err
+}
+
+function raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortReasonError(signal))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReasonError(signal))
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort)
+        if (signal.aborted) reject(abortReasonError(signal))
+        else resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(error)
+      }
+    )
+  })
+}
+
 export async function generateRadarReport(
   client: LlmClient,
-  { items, locale }: GenerateRadarArgs
+  { items, locale, signal }: GenerateRadarArgs
 ): Promise<RadarLlmOutput> {
+  if (signal?.aborted) throw abortReasonError(signal)
   const prompt = buildRadarUserMessage(items, locale)
-  const raw = await client.complete(prompt, {
-    system: (await resolvePromptAsync(RADAR_SYSTEM_PROMPT)).text,
-    temperature: 0.4,
-    maxTokens: 2048,
-  })
+  const system = (await raceWithAbort(resolvePromptAsync(RADAR_SYSTEM_PROMPT), signal)).text
+  if (signal?.aborted) throw abortReasonError(signal)
+  const raw = await raceWithAbort(
+    client.complete(prompt, {
+      system,
+      temperature: 0.4,
+      maxTokens: 2048,
+      ...(signal ? { abortSignal: signal } : {}),
+    }),
+    signal
+  )
+  if (signal?.aborted) throw abortReasonError(signal)
   const parsed = extractJson<unknown>(raw)
   return normalizeRadarOutput(parsed, items.length)
 }

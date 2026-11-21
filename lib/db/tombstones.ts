@@ -43,7 +43,8 @@ export async function recordTombstones(
   table: SyncableTable,
   ids: readonly string[],
   at: number = Date.now(),
-  host?: { generation: number; sequence: number }
+  host?: { generation: number; sequence: number },
+  dbOverride?: ReturnType<typeof getDb>
 ): Promise<void> {
   if (ids.length === 0) return
   const rows: SyncTombstoneRow[] = ids.map((id) => ({
@@ -53,7 +54,7 @@ export async function recordTombstones(
     ...(host ? { hostGeneration: host.generation, hostSeq: host.sequence } : {}),
   }))
   try {
-    await getDb().syncTombstones.bulkPut(rows)
+    await (dbOverride ?? getDb()).syncTombstones.bulkPut(rows)
   } catch {
     // Swallowed — see jsdoc. A missing tombstone degrades to pre-v61
     // behaviour (deletion not mirrored), never a thrown error on delete.

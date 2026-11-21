@@ -5,7 +5,7 @@
  */
 
 import "fake-indexeddb/auto"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { RadarPanel } from "./radar-panel"
 import { getLatestRadarReport, listAllRadarReports } from "@/lib/db/radar-reports"
@@ -94,8 +94,47 @@ describe("RadarPanel", () => {
     mockRun.mockResolvedValue(report())
     render(<RadarPanel />)
     await userEvent.click(screen.getByRole("button", { name: /generate a new radar report/i }))
-    await waitFor(() => expect(mockRun).toHaveBeenCalledWith({ force: true }))
+    await waitFor(() =>
+      expect(mockRun).toHaveBeenCalledWith({
+        force: true,
+        signal: expect.any(AbortSignal),
+      })
+    )
     expect(toast.success).toHaveBeenCalled()
+  })
+
+  it("aborts an in-flight manual run and suppresses toasts when the active database switches (F11, F22)", async () => {
+    const { activateAccountDatabase, clearAccountDatabaseSelection } =
+      await import("@/lib/db/schema")
+    let capturedSignal: AbortSignal | undefined
+    let rejectRun!: (err: unknown) => void
+    mockRun.mockImplementationOnce(
+      ({ signal }: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          capturedSignal = signal
+          rejectRun = reject
+        })
+    )
+    try {
+      render(<RadarPanel />)
+      await userEvent.click(screen.getByRole("button", { name: /generate a new radar report/i }))
+      await waitFor(() => expect(capturedSignal).toBeDefined())
+      expect(capturedSignal?.aborted).toBe(false)
+      act(() => {
+        activateAccountDatabase("acct_panel_switch_b")
+      })
+      expect(capturedSignal?.aborted).toBe(true)
+      await act(async () => {
+        rejectRun(Object.assign(new Error("account changed"), { code: "radar_account_changed" }))
+        await Promise.resolve()
+      })
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(toast.success).not.toHaveBeenCalled()
+    } finally {
+      act(() => {
+        clearAccountDatabaseSelection()
+      })
+    }
   })
 
   it("surfaces the no-model error", async () => {

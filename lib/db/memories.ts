@@ -53,12 +53,15 @@ export async function preserveRevisionIfTextChanges(
   existing: Memory,
   nextText: string | undefined,
   reason: MemoryRevisionReason,
-  now: number
+  now: number,
+  dbOverride?: ReturnType<typeof getDb>
 ): Promise<Pick<Memory, "revisedAt" | "vectorTextHash"> | Record<string, never>> {
   if (nextText === undefined || nextText === existing.text) return {}
   // A snapshot is history; editing one would rewrite the past.
   if (isRevisionSnapshot(existing)) throw new Error("memory_revision_is_immutable")
-  await getDb().memories.add(buildRevisionSnapshot(existing, { id: newMemoryId(), now, reason }))
+  await (dbOverride ?? getDb()).memories.add(
+    buildRevisionSnapshot(existing, { id: newMemoryId(), now, reason })
+  )
   // Keep the explicit undefined: Dexie update deletes the key, and a put
   // spreading these fields over the old row must not retain its receipt.
   return { revisedAt: now, vectorTextHash: undefined }
@@ -275,7 +278,7 @@ export async function updateMemory(id: string, patch: MemoryUpdatePatch): Promis
     if (existing && !skipRevision) {
       Object.assign(
         next,
-        await preserveRevisionIfTextChanges(existing, rest.text, revisionReason ?? "edit", now)
+        await preserveRevisionIfTextChanges(existing, rest.text, revisionReason ?? "edit", now, db)
       )
     } else if (existing && rest.text !== undefined && rest.text !== existing.text) {
       // Mirrored edits skip history, but still invalidate the local vector.
@@ -323,7 +326,7 @@ export async function restoreMemoryRevision(
     if (revision.revisionOf !== memoryId) return { ok: false, reason: "not_a_revision" } as const
     if (revision.text === live.text) return { ok: false, reason: "unchanged" } as const
     const now = Date.now()
-    const preserved = await preserveRevisionIfTextChanges(live, revision.text, "restore", now)
+    const preserved = await preserveRevisionIfTextChanges(live, revision.text, "restore", now, db)
     const next: Partial<Memory> = {
       ...preserved,
       text: revision.text,
@@ -839,7 +842,9 @@ export async function hardDeleteMemories(ids: string[]): Promise<number> {
       await recordTombstones(
         "memories",
         rows.map((row) => row.id),
-        now
+        now,
+        undefined,
+        db
       )
       return owners.length
     }

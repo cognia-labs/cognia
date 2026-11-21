@@ -28,6 +28,7 @@ import type {
   MemoryType,
 } from "@/types/memory/memory"
 import { memoryRowWithinNamespaces, type TrustedMemoryCaller } from "@cognia/memory/types/caller"
+import { captureDatabaseScope, type DatabaseScopeSnapshot } from "@/lib/db/schema"
 import { localUserCaller, resolveMemoryCaller } from "./caller"
 import {
   consolidationCorroboratedId,
@@ -97,6 +98,8 @@ export interface StoreMemoryCoreInput {
    * acting as the account owner (slash command, /remember).
    */
   caller?: TrustedMemoryCaller
+  /** Originating database partition/epoch scope, captured at command entry. */
+  databaseScope?: DatabaseScopeSnapshot
 }
 
 export function clampImportance(value: number | undefined): number {
@@ -130,6 +133,8 @@ async function applyStoreMemory(
   input: StoreMemoryCoreInput,
   beforeWrite: () => void
 ): Promise<StoreMemoryCoreResult> {
+  const dbScope = input.databaseScope ?? captureDatabaseScope()
+  dbScope.assertActive()
   const rawText = input.text.trim()
   if (!rawText) throw new Error("memory store requires a non-empty 'text'")
   const scope = input.scope ?? "global"
@@ -155,6 +160,7 @@ async function applyStoreMemory(
     import("@/types/memory/memory"),
   ])
   const settings = await getSettings()
+  dbScope.assertActive()
   const config = resolveMemoryConfig(settings?.memory)
   const caller = resolveMemoryCaller(input.caller ?? localUserCaller(), config)
   // A bound caller constrains the write's namespace — request fields narrow
@@ -259,6 +265,7 @@ async function applyStoreMemory(
   const { buildAutoExtractionDeps } = await import("@/lib/memory/write/run-memory-extraction")
   const deps = await buildAutoExtractionDeps({ session: null, appSettings: settings }, config)
   const memDb = await import("@/lib/db/memories")
+  dbScope.assertActive()
   if (deps) {
     beforeWrite()
     const { applied } = await deps.consolidate({
@@ -311,7 +318,7 @@ async function applyStoreMemory(
       const id = consolidationOpMemoryId(op)
       return id ? [id] : []
     })
-    if (governedIds.length > 0) {
+    if (governedIds.length > 0 && dbScope.isActive()) {
       try {
         const governance = await import("@/lib/db/memory-governance")
         for (const id of governedIds) {
@@ -385,7 +392,7 @@ async function applyStoreMemory(
       const id = consolidationCorroboratedId(op)
       return id ? [id] : []
     })
-    if (corroboratedIds.length > 0) {
+    if (corroboratedIds.length > 0 && dbScope.isActive()) {
       const { recordMemoryCorroboration } =
         await import("@/lib/memory/lifecycle/record-memory-outcome")
       for (const id of corroboratedIds) {
@@ -418,6 +425,7 @@ async function applyStoreMemory(
   // Degraded path: no utility LLM client → direct insert (BM25-findable) +
   // best-effort vector upsert. The fact still lands; only dedupe is skipped.
   const { tryBuildMemoryVectorSink } = await import("@/lib/memory/runtime/build-deps")
+  dbScope.assertActive()
   beforeWrite()
   const row = await memDb.createMemory({
     scope,
@@ -471,12 +479,16 @@ async function applyStoreMemory(
   if (sink) {
     try {
       await sink.upsert(row.id, row.text)
-      await memDb.updateMemory(row.id, { vectorDocId: row.id })
+      if (dbScope.isActive()) {
+        await memDb.updateMemory(row.id, { vectorDocId: row.id })
+      }
     } catch {
       // BM25 recall still works without the vector, but the row is now missing
       // from the index. Report the drift so the reconcile threshold can fire.
-      const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
-      noteMemoryVectorFailure()
+      if (dbScope.isActive()) {
+        const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
+        if (dbScope.isActive()) noteMemoryVectorFailure()
+      }
     }
   }
   return {

@@ -6,10 +6,56 @@
 
 import Dexie from "dexie"
 import type { RadarReport } from "@/types/radar"
-import { getDb } from "./schema"
+import { activeDatabaseEpoch, activeDatabaseName, getDb } from "./schema"
 
-export async function saveRadarReport(report: RadarReport): Promise<void> {
-  await getDb().radarReports.put(report)
+export class RadarAccountChangedError extends Error {
+  readonly code = "radar_account_changed"
+  constructor(
+    readonly expectedDatabase: string,
+    readonly activeDatabase: string
+  ) {
+    super(`radar write for ${expectedDatabase} refused: ${activeDatabase} is active`)
+    this.name = "RadarAccountChangedError"
+  }
+}
+
+export interface RadarDatabaseGuard {
+  expectDatabase?: string
+  expectEpoch?: number
+}
+
+function assertRadarDatabase(db: { name: string }, guard?: RadarDatabaseGuard): void {
+  if (!guard) return
+  const currentName = db.name
+  if (guard.expectDatabase !== undefined && currentName !== guard.expectDatabase) {
+    throw new RadarAccountChangedError(guard.expectDatabase, currentName)
+  }
+  if (guard.expectEpoch !== undefined && activeDatabaseEpoch() !== guard.expectEpoch) {
+    throw new RadarAccountChangedError(guard.expectDatabase ?? currentName, activeDatabaseName())
+  }
+}
+
+function hasRetainedSuggestion(row: RadarReport): boolean {
+  if (row.suggestions !== undefined) {
+    return row.suggestions.some((suggestion) => suggestion.status !== "dismissed")
+  }
+  // Legacy reports without `suggestions` synthesize one `pending` suggestion per action.
+  return row.actions.length > 0
+}
+
+export async function saveRadarReport(
+  report: RadarReport,
+  guard?: RadarDatabaseGuard
+): Promise<void> {
+  if (guard) {
+    assertRadarDatabase({ name: activeDatabaseName() }, guard)
+  }
+  const db = getDb()
+  assertRadarDatabase(db, guard)
+  await db.transaction("rw", db.radarReports, async () => {
+    assertRadarDatabase(db, guard)
+    await db.radarReports.put(report)
+  })
 }
 
 export async function getRadarReport(id: string): Promise<RadarReport | undefined> {
@@ -17,9 +63,17 @@ export async function getRadarReport(id: string): Promise<RadarReport | undefine
 }
 
 /** Most-recent report for a scope, or undefined. */
-export async function getLatestRadarReport(scope = "self"): Promise<RadarReport | undefined> {
-  return getDb()
-    .radarReports.where("[scope+generatedAt]")
+export async function getLatestRadarReport(
+  scope = "self",
+  guard?: RadarDatabaseGuard
+): Promise<RadarReport | undefined> {
+  if (guard) {
+    assertRadarDatabase({ name: activeDatabaseName() }, guard)
+  }
+  const db = getDb()
+  assertRadarDatabase(db, guard)
+  return db.radarReports
+    .where("[scope+generatedAt]")
     .between([scope, Dexie.minKey], [scope, Dexie.maxKey])
     .last()
 }
@@ -39,14 +93,20 @@ export async function listAllRadarReports(): Promise<RadarReport[]> {
 }
 
 /** Trim to the newest `keep` reports (called after each write). */
-export async function pruneRadarReports(keep = 20): Promise<number> {
+export async function pruneRadarReports(keep = 20, guard?: RadarDatabaseGuard): Promise<number> {
+  if (guard) {
+    assertRadarDatabase({ name: activeDatabaseName() }, guard)
+  }
   const db = getDb()
-  const rows = await db.radarReports.orderBy("generatedAt").reverse().offset(keep).toArray()
-  // Decisions and accepted commitments remain reachable after newer reports.
-  const ids = rows
-    .filter((row) => !row.suggestions?.some((suggestion) => suggestion.status !== "dismissed"))
-    .map((row) => row.id)
-  if (ids.length === 0) return 0
-  await db.radarReports.bulkDelete(ids as string[])
-  return ids.length
+  assertRadarDatabase(db, guard)
+  return db.transaction("rw", db.radarReports, async () => {
+    assertRadarDatabase(db, guard)
+    const rows = await db.radarReports.orderBy("generatedAt").reverse().offset(keep).toArray()
+    // Decisions and accepted commitments remain reachable after newer reports,
+    // including legacy reports whose actions synthesize pending suggestions.
+    const ids = rows.filter((row) => !hasRetainedSuggestion(row)).map((row) => row.id)
+    if (ids.length === 0) return 0
+    await db.radarReports.bulkDelete(ids as string[])
+    return ids.length
+  })
 }

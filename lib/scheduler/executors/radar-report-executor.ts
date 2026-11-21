@@ -21,10 +21,13 @@ interface ExecutorResult {
 export async function executeRadarReportTask(
   task: ScheduledTask,
   execution: TaskExecution,
-  _signal: AbortSignal
+  signal: AbortSignal
 ): Promise<ExecutorResult> {
+  if (signal.aborted) {
+    return { success: false, error: "Radar report cancelled" }
+  }
   try {
-    const report = await runRadarReport()
+    const report = await runRadarReport({ signal })
     if (!report) {
       log.info("Scheduler radar-report skipped (guard)", {
         taskId: task.id,

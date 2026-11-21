@@ -61,6 +61,28 @@ describe("generateRadarReport", () => {
     expect(out.verdict).toBe("ok")
     expect(out.actions).toEqual(["do x"])
   })
+
+  it("forwards abortSignal to client.complete and rejects immediately on abort (F22)", async () => {
+    const controller = new AbortController()
+    let notifyEntered!: () => void
+    const entered = new Promise<void>((resolve) => {
+      notifyEntered = resolve
+    })
+    const client: LlmClient = {
+      complete: jest.fn(() => {
+        notifyEntered()
+        return new Promise<string>(() => {})
+      }),
+    }
+    const pending = generateRadarReport(client, { items, signal: controller.signal })
+    await entered
+    controller.abort("cancelled-by-scheduler")
+    await expect(pending).rejects.toThrow("cancelled-by-scheduler")
+    expect(client.complete).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ abortSignal: controller.signal })
+    )
+  })
 })
 
 describe("generateRadarReport (published prompt reaches the model, ADR-0236)", () => {

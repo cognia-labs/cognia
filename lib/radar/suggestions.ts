@@ -1,5 +1,5 @@
 /** Radar-specific decision lifecycle; execution stays in the existing scheduler. */
-import { getDb } from "@/lib/db/schema"
+import { captureDatabaseScope, getDb, type DatabaseScopeSnapshot } from "@/lib/db/schema"
 import { schedulerDb } from "@/lib/scheduler/scheduler-db"
 import { DEFAULT_EXECUTION_CONFIG, type ScheduledTask } from "@/types/scheduler"
 import type { RadarReport, RadarSuggestion } from "@/types/radar"
@@ -20,13 +20,21 @@ export async function decideRadarSuggestion(
   suggestionId: string,
   decision: "accepted" | "dismissed"
 ): Promise<RadarSuggestion> {
+  const scope = captureDatabaseScope()
+  const pinnedSchedulerDb =
+    typeof schedulerDb.pinned === "function" ? schedulerDb.pinned(scope.databaseName) : schedulerDb
+
   if (decision === "accepted") {
     const { assertTaskTypeSupportedOnHost } = await import("@/lib/scheduler/host-support")
+    scope.assertActive()
     const unsupported = assertTaskTypeSupportedOnHost("goal")
     if (unsupported) throw new Error(unsupported.error)
   }
+  scope.assertActive()
   const db = getDb()
+  scope.assertActive()
   const result = await db.transaction("rw", db.radarReports, db.scheduledTasks, async () => {
+    scope.assertActive()
     const report = await db.radarReports.get(reportId)
     if (!report) throw new Error("Radar report no longer exists")
     const suggestions = radarSuggestions(report)
@@ -74,7 +82,7 @@ export async function decideRadarSuggestion(
         updatedAt: now,
         nextRunAt: now,
       }
-      await schedulerDb.createTask(task)
+      await pinnedSchedulerDb.createTask(task)
       suggestion.taskId = taskId
     }
     suggestion.status = decision
@@ -82,16 +90,21 @@ export async function decideRadarSuggestion(
     await db.radarReports.update(reportId, { suggestions })
     return suggestion
   })
-  if (result.taskId) {
+  if (result.taskId && scope.isActive()) {
     try {
       const { getTaskScheduler } = await import("@/lib/scheduler/task-scheduler")
+      if (!scope.isActive()) return result
       // Arming is after commit; startup also discovers the persisted one-shot.
       // Replays never reset runCount or create another execution slot.
       const task = await getTaskScheduler().updateTask(result.taskId, {})
       if (!task) throw new Error("Radar task no longer exists")
-      await setDispatchError(reportId, suggestionId, undefined)
+      if (scope.isActive()) {
+        await setDispatchError(reportId, suggestionId, undefined, scope)
+      }
     } catch (error) {
-      await setDispatchError(reportId, suggestionId, String(error))
+      if (scope.isActive()) {
+        await setDispatchError(reportId, suggestionId, String(error), scope)
+      }
       throw error
     }
   }
@@ -101,10 +114,14 @@ export async function decideRadarSuggestion(
 async function setDispatchError(
   reportId: string,
   suggestionId: string,
-  error: string | undefined
+  error: string | undefined,
+  scope: DatabaseScopeSnapshot
 ): Promise<void> {
+  if (!scope.isActive()) return
   const db = getDb()
+  if (!scope.isActive()) return
   await db.transaction("rw", db.radarReports, async () => {
+    scope.assertActive()
     const report = await db.radarReports.get(reportId)
     if (!report?.suggestions) return
     const suggestions = report.suggestions.map((row) =>

@@ -15,6 +15,7 @@
  */
 
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
+import { captureDatabaseScope, DatabaseScopeChangedError } from "@/lib/db/schema"
 import { getRuntimeSnapshot, subscribeRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
 import { isRemoteHostActive, subscribeActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 import type { ManageMemoryCommand, ManageMemoryResult } from "./manage"
@@ -107,9 +108,24 @@ export async function runMemoryCommand(
   command: ManageMemoryCommand,
   options: RunMemoryCommandOptions = {}
 ): Promise<RoutedMemoryResult> {
+  const scope = captureDatabaseScope()
+  const initialRemote = isRemoteHostActive()
+  const initialTargetId = getRuntimeSnapshot().target?.id ?? null
+  const assertScopeUnchanged = () => {
+    scope.assertActive()
+    if (
+      options.authority === undefined &&
+      (isRemoteHostActive() !== initialRemote ||
+        (getRuntimeSnapshot().target?.id ?? null) !== initialTargetId)
+    ) {
+      throw new DatabaseScopeChangedError(scope.databaseName, "runtime-target-changed")
+    }
+  }
+
   const authority = options.authority ?? memoryWriteAuthority()
   if (authority === "local") {
     const { manageMemory } = await import("./manage")
+    assertScopeUnchanged()
     return manageMemory(command)
   }
 
@@ -121,13 +137,16 @@ export async function runMemoryCommand(
 
   const operationId = crypto.randomUUID()
   const { enqueue } = await import("@/lib/db/mobile-outbound-queue")
+  assertScopeUnchanged()
   await enqueue({
     command: "memory_mutate",
     payload: { command: gated, operationId },
     idempotencyKey: operationId,
     ...(options.label ? { label: options.label } : {}),
   })
+  assertScopeUnchanged()
   const { applyMirroredMemoryCommand } = await import("@/lib/memory/api/mirror-memory")
+  assertScopeUnchanged()
   await applyMirroredMemoryCommand(gated)
   return { ok: true, queued: true, ...(gate.redacted ? { piiRedacted: true } : {}) }
 }

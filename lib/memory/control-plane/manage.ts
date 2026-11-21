@@ -1,4 +1,6 @@
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
+import { registerPendingAccountWriteFlusher } from "@/lib/accounts/pending-write-flush"
+import { captureDatabaseScope, type DatabaseScopeSnapshot } from "@/lib/db/schema"
 import { getSettings } from "@/lib/db/settings"
 import {
   getMemory,
@@ -123,6 +125,8 @@ export type ManageMemoryResult =
 export interface ManageMemoryCommitContext {
   /** Host receipt envelope: Dexie-only work, canonical write + receipt commit together. */
   commit?: (apply: () => Promise<ManageMemoryResult>) => Promise<ManageMemoryResult>
+  /** Originating database partition/epoch scope, captured at command entry. */
+  scope?: DatabaseScopeSnapshot
 }
 
 /**
@@ -140,7 +144,28 @@ export async function manageMemory(
   command: ManageMemoryCommand,
   context: ManageMemoryCommitContext = {}
 ): Promise<ManageMemoryResult> {
-  const commit = context.commit ?? ((apply: () => Promise<ManageMemoryResult>) => apply())
+  const scope = context.scope ?? captureDatabaseScope()
+  scope.assertActive()
+  const noteVectorDrift = () => {
+    if (scope.isActive()) noteMemoryVectorFailure()
+  }
+  const baseCommit = context.commit ?? ((apply: () => Promise<ManageMemoryResult>) => apply())
+  const commit = async (apply: () => Promise<ManageMemoryResult>): Promise<ManageMemoryResult> => {
+    scope.assertActive()
+    let inFlight: Promise<ManageMemoryResult> | undefined
+    const unregister = registerPendingAccountWriteFlusher(async () => {
+      await inFlight
+    })
+    try {
+      inFlight = baseCommit(async () => {
+        scope.assertActive()
+        return apply()
+      })
+      return await inFlight
+    } finally {
+      unregister()
+    }
+  }
   if (command.kind === "create") {
     const result = await storeMemoryCore({
       text: command.text,
@@ -155,6 +180,7 @@ export async function manageMemory(
       pathPattern: command.pathPattern,
       provenance: "explicit",
       piiGate: "redact",
+      databaseScope: scope,
     })
     return result.ok
       ? { ok: true, memoryId: result.memoryId, piiRedacted: result.piiRedacted }
@@ -170,17 +196,20 @@ export async function manageMemory(
         ? { ...command.query, includeRevisions: true }
         : command.query
     )
+    scope.assertActive()
     const selectedIds = new Set(rows.map((row) => row.id))
     let clearedCount = 0
     const failedIds: string[] = []
     for (const row of rows) {
+      scope.assertActive()
       // The owner's delete also deletes its revision snapshots.
       if (row.revisionOf && selectedIds.has(row.revisionOf)) continue
       try {
-        const result = await manageMemory({ kind: "delete", id: row.id })
+        const result = await manageMemory({ kind: "delete", id: row.id }, { scope })
         if (result.ok) clearedCount += 1
         else if (result.reason !== "not_found") failedIds.push(row.id)
-      } catch {
+      } catch (error) {
+        if (!scope.isActive()) throw error
         failedIds.push(row.id)
       }
     }
@@ -191,11 +220,13 @@ export async function manageMemory(
 
   if (command.kind === "resolve-conflict") {
     const [keep, drop] = await Promise.all([getMemory(command.keepId), getMemory(command.dropId)])
+    scope.assertActive()
     // Revision snapshots are history and never a side of a live conflict.
     if (!keep || !drop || keep.revisionOf !== undefined || drop.revisionOf !== undefined) {
       return { ok: false, reason: "not_found" }
     }
     const settings = await getSettings().catch(() => undefined)
+    scope.assertActive()
     const config = resolveMemoryConfig(settings?.memory)
 
     let piiRedacted = false
@@ -207,6 +238,7 @@ export async function manageMemory(
       const redacted = redactText(raw).redacted
       if (!hasNoLeakingPii(redacted)) return { ok: false, reason: "pii_blocked" }
       piiRedacted = redacted !== raw
+      scope.assertActive()
       await updateMemory(command.keepId, {
         text: redacted,
         bumpVersion: true,
@@ -221,12 +253,18 @@ export async function manageMemory(
         if (sink) {
           const docId = keep.vectorDocId ?? keep.id
           await sink.upsert(docId, redacted)
-          await updateMemory(keep.id, { vectorDocId: docId, vectorTextHash: hashContent(redacted) })
+          if (scope.isActive()) {
+            await updateMemory(keep.id, {
+              vectorDocId: docId,
+              vectorTextHash: hashContent(redacted),
+            })
+          }
         }
       } catch {
         // Canonical update remains BM25-searchable.
-        noteMemoryVectorFailure()
+        noteVectorDrift()
       }
+      scope.assertActive()
       resolutionEvidence = await createMemoryEvidence({
         memoryId: command.keepId,
         kind: "manual",
@@ -234,19 +272,23 @@ export async function manageMemory(
         contaminationState: "clean",
         reviewed: true,
       })
+      scope.assertActive()
       await appendMemoryAuditEvent({
         action: "revised",
         memoryId: command.keepId,
         reason: "conflict_merge",
       })
+      scope.assertActive()
       const updated = await getMemory(command.keepId)
       if (!updated) throw new Error(`Resolved memory disappeared: ${command.keepId}`)
       result = updated
     } else {
+      scope.assertActive()
       await updateMemory(command.keepId, {
         reviewStatus: "verified",
         conflictWithIds: (keep.conflictWithIds ?? []).filter((id) => id !== command.dropId),
       })
+      scope.assertActive()
       await appendMemoryAuditEvent({
         action: "promoted",
         memoryId: command.keepId,
@@ -254,11 +296,13 @@ export async function manageMemory(
       })
     }
 
+    scope.assertActive()
     if (command.mode === "keep-both") {
       await updateMemory(command.dropId, {
         reviewStatus: "verified",
         conflictWithIds: (drop.conflictWithIds ?? []).filter((id) => id !== command.keepId),
       })
+      scope.assertActive()
       await appendMemoryAuditEvent({
         action: "promoted",
         memoryId: command.dropId,
@@ -272,14 +316,19 @@ export async function manageMemory(
           await sink?.delete([drop.vectorDocId])
         } catch {
           // Canonical invalidation is authoritative; vector cleanup is best-effort.
-          noteMemoryVectorFailure()
+          noteVectorDrift()
         }
       }
-      await appendMemoryAuditEvent({
-        action: "invalidated",
-        memoryId: command.dropId,
-        reason: "conflict_resolved",
-      })
+      if (scope.isActive()) {
+        await appendMemoryAuditEvent({
+          action: "invalidated",
+          memoryId: command.dropId,
+          reason: "conflict_resolved",
+        })
+      }
+    }
+    if (!scope.isActive()) {
+      return { ok: true, memoryId: command.keepId, ...(piiRedacted ? { piiRedacted } : {}) }
     }
     const resolvedAt = Date.now()
     const governanceInput = {
@@ -298,25 +347,28 @@ export async function manageMemory(
     try {
       await recordMemoryConflictGovernance(governanceInput)
     } catch (error) {
-      await reportGovernanceProjectionFailure(
-        {
-          producer: "memory-conflict",
-          operation: "resolve",
-          subjectRef: {
-            namespace: "cognia",
-            type: "memory-conflict",
-            id: [command.keepId, command.dropId].sort().join(":"),
+      if (scope.isActive()) {
+        await reportGovernanceProjectionFailure(
+          {
+            producer: "memory-conflict",
+            operation: "resolve",
+            subjectRef: {
+              namespace: "cognia",
+              type: "memory-conflict",
+              id: [command.keepId, command.dropId].sort().join(":"),
+            },
+            occurredAt: resolvedAt,
+            correlation: { requestId: governanceInput.commandId },
           },
-          occurredAt: resolvedAt,
-          correlation: { requestId: governanceInput.commandId },
-        },
-        error
-      )
+          error
+        )
+      }
     }
     return { ok: true, memoryId: command.keepId, ...(piiRedacted ? { piiRedacted } : {}) }
   }
 
   const existing = await getMemory(command.id)
+  scope.assertActive()
   if (!existing) return { ok: false, reason: "not_found" }
   // A revision snapshot is history: it can be deleted, never edited, pinned or
   // reviewed on its own. Restoring goes through its owner's id.
@@ -327,6 +379,7 @@ export async function manageMemory(
   if (command.kind === "pin") {
     return commit(async () => {
       await setMemoryPinned(command.id, command.pinned)
+      scope.assertActive()
       await appendMemoryAuditEvent({
         action: command.pinned ? "pinned" : "unpinned",
         memoryId: command.id,
@@ -339,6 +392,7 @@ export async function manageMemory(
   if (command.kind === "review") {
     return commit(async () => {
       await updateMemory(command.id, { reviewStatus: command.status })
+      scope.assertActive()
       await appendMemoryAuditEvent({
         action: command.status === "verified" ? "promoted" : "conflict",
         memoryId: command.id,
@@ -352,6 +406,7 @@ export async function manageMemory(
     return commit(async () => {
       const written = await recordRetrievalFeedback(command.id, command.verdict)
       if (!written) return { ok: false, reason: "not_found" }
+      scope.assertActive()
       const audit = () =>
         appendMemoryAuditEvent({
           action: "feedback",
@@ -375,6 +430,7 @@ export async function manageMemory(
   }
 
   const settings = await getSettings().catch(() => undefined)
+  scope.assertActive()
   const config = resolveMemoryConfig(settings?.memory)
   // Removing a row from recall and moving it between namespaces embed nothing,
   // so the learning switch must not strand the user's cleanup.
@@ -392,12 +448,14 @@ export async function manageMemory(
       // Deletion never embeds text; the learning switch must not disable cleanup.
       const sink = await tryBuildMemoryVectorSink({ ...config, enabled: true, temporary: false })
       await sink?.delete([existing.vectorDocId ?? existing.id])
-      if (!sink && existing.vectorDocId) noteMemoryVectorFailure()
+      if (!sink && existing.vectorDocId) noteVectorDrift()
     } catch {
       // Canonical deletion still proceeds; reconciliation removes stale vectors later.
-      noteMemoryVectorFailure()
+      noteVectorDrift()
     }
+    scope.assertActive()
     return commit(async () => {
+      scope.assertActive()
       await hardDeleteMemory(command.id)
       // The canonical transaction owns evidence/history/tombstones and audit.
       return { ok: true, memoryId: command.id }
@@ -411,6 +469,7 @@ export async function manageMemory(
       restored = await restoreMemoryRevision(command.id, command.revisionId)
       if (!restored.ok && restored.reason !== "unchanged") return { ok: false, reason: "not_found" }
       if (restored.ok) {
+        scope.assertActive()
         await createMemoryEvidence({
           memoryId: command.id,
           kind: "manual",
@@ -418,6 +477,7 @@ export async function manageMemory(
           contaminationState: "clean",
           reviewed: true,
         })
+        scope.assertActive()
         await appendMemoryAuditEvent({
           action: "revised",
           memoryId: command.id,
@@ -436,10 +496,12 @@ export async function manageMemory(
         if (sink) {
           const docId = existing.vectorDocId ?? existing.id
           await sink.upsert(docId, restored.memory.text)
-          await updateMemory(existing.id, {
-            vectorDocId: docId,
-            vectorTextHash: hashContent(restored.memory.text),
-          })
+          if (scope.isActive()) {
+            await updateMemory(existing.id, {
+              vectorDocId: docId,
+              vectorTextHash: hashContent(restored.memory.text),
+            })
+          }
         }
       } else if (existing.vectorDocId) {
         // Never embed it — and drop the vector of the text it replaced, which
@@ -448,7 +510,7 @@ export async function manageMemory(
       }
     } catch {
       // Canonical restore remains BM25-searchable.
-      noteMemoryVectorFailure()
+      noteVectorDrift()
     }
     return outcome
   }
@@ -460,8 +522,10 @@ export async function manageMemory(
       restored = await restoreArchivedMemory(command.id)
       if (!restored.ok && restored.reason !== "already_active")
         return { ok: false, reason: "not_found" }
-      if (restored.ok)
+      if (restored.ok) {
+        scope.assertActive()
         await appendMemoryAuditEvent({ action: "restored", memoryId: command.id, reason: "user" })
+      }
       return { ok: true, memoryId: command.id }
     })
     if (!outcome.ok || !restored?.ok) return outcome
@@ -474,14 +538,16 @@ export async function manageMemory(
         if (sink) {
           const docId = existing.vectorDocId ?? existing.id
           await sink.upsert(docId, restored.memory.text)
-          await updateMemory(existing.id, {
-            vectorDocId: docId,
-            vectorTextHash: hashContent(restored.memory.text),
-          })
+          if (scope.isActive()) {
+            await updateMemory(existing.id, {
+              vectorDocId: docId,
+              vectorTextHash: hashContent(restored.memory.text),
+            })
+          }
         }
       } catch {
         // Canonical restore remains BM25-searchable.
-        noteMemoryVectorFailure()
+        noteVectorDrift()
       }
     }
     return outcome
@@ -501,6 +567,7 @@ export async function manageMemory(
     return commit(async () => {
       const moved = await moveMemoryToNamespace(command.id, target)
       if (!moved) return { ok: false, reason: "not_found" }
+      scope.assertActive()
       await appendMemoryAuditEvent({
         action: "relocated",
         memoryId: command.id,
@@ -514,6 +581,7 @@ export async function manageMemory(
   if (command.kind === "invalidate") {
     const outcome = await commit(async () => {
       await invalidateMemory(command.id, command.supersededById)
+      scope.assertActive()
       await appendMemoryAuditEvent({
         action: "invalidated",
         memoryId: command.id,
@@ -525,10 +593,10 @@ export async function manageMemory(
       try {
         const sink = await tryBuildMemoryVectorSink({ ...config, enabled: true, temporary: false })
         await sink?.delete([existing.vectorDocId])
-        if (!sink) noteMemoryVectorFailure()
+        if (!sink) noteVectorDrift()
       } catch {
         // Canonical invalidation is authoritative; vector cleanup is best-effort.
-        noteMemoryVectorFailure()
+        noteVectorDrift()
       }
     }
     return outcome
@@ -548,6 +616,7 @@ export async function manageMemory(
       reviewStatus: "verified",
       contaminationState: "clean",
     })
+    scope.assertActive()
     await createMemoryEvidence({
       memoryId: command.id,
       kind: "manual",
@@ -555,6 +624,7 @@ export async function manageMemory(
       contaminationState: "clean",
       reviewed: true,
     })
+    scope.assertActive()
     await appendMemoryAuditEvent({ action: "revised", memoryId: command.id, reason: "user" })
     return {
       ok: true,
@@ -568,14 +638,16 @@ export async function manageMemory(
       if (sink) {
         const docId = existing.vectorDocId ?? existing.id
         await sink.upsert(docId, redactedText)
-        await updateMemory(existing.id, {
-          vectorDocId: docId,
-          vectorTextHash: hashContent(redactedText),
-        })
+        if (scope.isActive()) {
+          await updateMemory(existing.id, {
+            vectorDocId: docId,
+            vectorTextHash: hashContent(redactedText),
+          })
+        }
       }
     } catch {
       // Canonical update remains BM25-searchable.
-      noteMemoryVectorFailure()
+      noteVectorDrift()
     }
   }
   return outcome

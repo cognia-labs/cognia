@@ -177,4 +177,23 @@ describe("runMemoryCommand", () => {
     ).rejects.toThrow("no runtime target")
     expect(mockMirror).not.toHaveBeenCalled()
   })
+
+  it("refuses mirror mutation when the active database target changes during host queue write (F12)", async () => {
+    const { activateAccountDatabase, clearAccountDatabaseSelection, DatabaseScopeChangedError } =
+      await import("@/lib/db/schema")
+    pairWithHost()
+    mockEnqueue.mockImplementationOnce(async () => {
+      activateAccountDatabase("acct_routed_f12", "target-b")
+      return { id: "row" }
+    })
+    try {
+      activateAccountDatabase("acct_routed_f12", "target-a")
+      await expect(runMemoryCommand({ kind: "delete", id: "m1" })).rejects.toBeInstanceOf(
+        DatabaseScopeChangedError
+      )
+      expect(mockMirror).not.toHaveBeenCalled()
+    } finally {
+      clearAccountDatabaseSelection()
+    }
+  })
 })

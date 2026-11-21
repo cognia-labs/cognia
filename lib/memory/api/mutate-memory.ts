@@ -18,6 +18,7 @@
 
 import type { TrustedMemoryCaller } from "@cognia/memory/types/caller"
 import { memoryRowWithinNamespaces } from "@cognia/memory/types/caller"
+import { captureDatabaseScope } from "@/lib/db/schema"
 import { clampImportance } from "./store-memory"
 import { localUserCaller, resolveMemoryCaller } from "./caller"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
@@ -66,22 +67,28 @@ export async function updateExternalMemory(
     throw new Error("memory update requires at least one field to change")
   }
 
+  const scope = captureDatabaseScope()
   const [{ getSettings }, { resolveMemoryConfig }] = await Promise.all([
     import("@/lib/db/settings"),
     import("@/types/memory/memory"),
   ])
+  scope.assertActive()
   const settings = await getSettings()
+  scope.assertActive()
   const config = resolveMemoryConfig(settings?.memory)
   if (!config.enabled) return { ok: false, reason: "disabled" }
   if (config.temporary) return { ok: false, reason: "temporary" }
 
   if (text !== undefined) {
     const { hasNoLeakingPii } = await import("@cognia/redact")
+    scope.assertActive()
     if (!hasNoLeakingPii(text)) return { ok: false, reason: "pii_blocked" }
   }
 
   const memDb = await import("@/lib/db/memories")
+  scope.assertActive()
   const existing = await memDb.getMemory(id)
+  scope.assertActive()
   // A revision snapshot is history, not a memory: it cannot be edited or
   // forgotten on its own (deleting its owner removes it).
   if (!existing || existing.revisionOf !== undefined) return { ok: false, reason: "not_found" }
@@ -93,11 +100,13 @@ export async function updateExternalMemory(
 
   const { resolvePersistedAgentMemoryPolicy, scopeAllowedByAgentMemoryPolicy } =
     await import("@/lib/memory/agent-policy")
+  scope.assertActive()
   const policy = await resolvePersistedAgentMemoryPolicy({
     config,
     characterId: caller?.policyCharacterId ?? existing.agentId ?? existing.characterId,
     sessionId: caller?.sessionId,
   })
+  scope.assertActive()
   if (!policy.canUpdate) return { ok: false, reason: "policy_denied" }
   if (!scopeAllowedByAgentMemoryPolicy(policy, "update", existing.scope)) {
     return { ok: false, reason: "scope_denied" }
@@ -106,11 +115,26 @@ export async function updateExternalMemory(
   const principalId = caller?.principalId ?? "local-user"
   const { runMemoryMutation, memoryOperationRequestHash } =
     await import("@/lib/db/memory-operations")
+  scope.assertActive()
+  const requestHash = context.operationId
+    ? await memoryOperationRequestHash("update", {
+        id,
+        patch: {
+          ...patch,
+          text,
+          ...(patch.importance !== undefined
+            ? { importance: clampImportance(patch.importance) }
+            : {}),
+          ...(patch.tags ? { tags: patch.tags.map((t) => t.trim()).filter(Boolean) } : {}),
+        },
+      })
+    : undefined
+  scope.assertActive()
   const outcome = await runMemoryMutation({
     memoryId: id,
     seen: existing,
     expectedVersion: context.expectedVersion,
-    ...(context.operationId
+    ...(context.operationId && requestHash
       ? {
           operation: {
             principalId,
@@ -118,17 +142,7 @@ export async function updateExternalMemory(
             // Hash the EFFECTIVE request, not the raw payload — `" x"`/`"x"`
             // and `importance: 42`/`99` apply identically, so they are the
             // same operation, not an `idempotency_key_reused` false positive.
-            requestHash: await memoryOperationRequestHash("update", {
-              id,
-              patch: {
-                ...patch,
-                text,
-                ...(patch.importance !== undefined
-                  ? { importance: clampImportance(patch.importance) }
-                  : {}),
-                ...(patch.tags ? { tags: patch.tags.map((t) => t.trim()).filter(Boolean) } : {}),
-              },
-            }),
+            requestHash,
             kind: "update" as const,
           },
         }
@@ -184,16 +198,22 @@ export async function updateExternalMemory(
       const sink = await tryBuildMemoryVectorSink(config)
       if (sink) {
         await sink.upsert(existing.vectorDocId, text)
-        const { updateMemory } = await import("@/lib/db/memories")
-        await updateMemory(id, {
-          vectorDocId: existing.vectorDocId,
-          vectorTextHash: hashContent(text),
-        })
+        if (scope.isActive()) {
+          const { updateMemory } = await import("@/lib/db/memories")
+          if (scope.isActive()) {
+            await updateMemory(id, {
+              vectorDocId: existing.vectorDocId,
+              vectorTextHash: hashContent(text),
+            })
+          }
+        }
       }
     } catch {
       // ignore — keep the Dexie update
-      const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
-      noteMemoryVectorFailure()
+      if (scope.isActive()) {
+        const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
+        if (scope.isActive()) noteMemoryVectorFailure()
+      }
     }
   }
   return {
@@ -207,14 +227,19 @@ export async function forgetExternalMemory(
   id: string,
   context: ExternalMutationContext = {}
 ): Promise<MutateExternalMemoryResult> {
+  const scope = captureDatabaseScope()
   const [{ getSettings }, { resolveMemoryConfig }] = await Promise.all([
     import("@/lib/db/settings"),
     import("@/types/memory/memory"),
   ])
+  scope.assertActive()
   const settings = await getSettings()
+  scope.assertActive()
   const config = resolveMemoryConfig(settings?.memory)
   const memDb = await import("@/lib/db/memories")
+  scope.assertActive()
   const existing = await memDb.getMemory(id)
+  scope.assertActive()
   // A revision snapshot is history, not a memory: it cannot be edited or
   // forgotten on its own (deleting its owner removes it).
   if (!existing || existing.revisionOf !== undefined) return { ok: false, reason: "not_found" }
@@ -226,11 +251,13 @@ export async function forgetExternalMemory(
 
   const { resolvePersistedAgentMemoryPolicy, scopeAllowedByAgentMemoryPolicy } =
     await import("@/lib/memory/agent-policy")
+  scope.assertActive()
   const policy = await resolvePersistedAgentMemoryPolicy({
     config,
     characterId: caller?.policyCharacterId ?? existing.agentId ?? existing.characterId,
     sessionId: caller?.sessionId,
   })
+  scope.assertActive()
   if (!policy.canForget) return { ok: false, reason: "policy_denied" }
   if (!scopeAllowedByAgentMemoryPolicy(policy, "forget", existing.scope)) {
     return { ok: false, reason: "scope_denied" }
@@ -239,16 +266,21 @@ export async function forgetExternalMemory(
   const principalId = caller?.principalId ?? "local-user"
   const { runMemoryMutation, memoryOperationRequestHash } =
     await import("@/lib/db/memory-operations")
+  scope.assertActive()
+  const requestHash = context.operationId
+    ? await memoryOperationRequestHash("forget", { id })
+    : undefined
+  scope.assertActive()
   const outcome = await runMemoryMutation({
     memoryId: id,
     seen: existing,
     expectedVersion: context.expectedVersion,
-    ...(context.operationId
+    ...(context.operationId && requestHash
       ? {
           operation: {
             principalId,
             operationId: context.operationId,
-            requestHash: await memoryOperationRequestHash("forget", { id }),
+            requestHash,
             kind: "forget" as const,
           },
         }
@@ -278,14 +310,16 @@ export async function forgetExternalMemory(
       const { tryBuildMemoryVectorSink } = await import("@/lib/memory/runtime/build-deps")
       const sink = await tryBuildMemoryVectorSink({ ...config, enabled: true, temporary: false })
       if (sink) await sink.delete([existing.vectorDocId])
-      else {
+      else if (scope.isActive()) {
         const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
-        noteMemoryVectorFailure()
+        if (scope.isActive()) noteMemoryVectorFailure()
       }
     } catch {
       // Canonical invalidation is authoritative; vector cleanup is best-effort.
-      const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
-      noteMemoryVectorFailure()
+      if (scope.isActive()) {
+        const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
+        if (scope.isActive()) noteMemoryVectorFailure()
+      }
     }
   }
   return { ok: true, version: outcome.version }

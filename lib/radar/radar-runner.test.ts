@@ -13,11 +13,17 @@ jest.mock("./collect", () => ({
   collectRadarItems: jest.fn(),
 }))
 jest.mock("./generate", () => ({ generateRadarReport: jest.fn() }))
-jest.mock("@/lib/db/radar-reports", () => ({
-  getLatestRadarReport: jest.fn(),
-  saveRadarReport: jest.fn(),
-  pruneRadarReports: jest.fn(),
-}))
+jest.mock("@/lib/db/radar-reports", () => {
+  class RadarAccountChangedError extends Error {
+    readonly code = "radar_account_changed"
+  }
+  return {
+    getLatestRadarReport: jest.fn(),
+    saveRadarReport: jest.fn(),
+    pruneRadarReports: jest.fn(),
+    RadarAccountChangedError,
+  }
+})
 
 const mockGetSettings = getSettings as jest.Mock
 const mockBuildClient = buildUtilityLlmClient as jest.Mock
@@ -100,5 +106,47 @@ describe("runRadarReport", () => {
     mockCollect.mockResolvedValue(items(6))
     mockBuildClient.mockReturnValue(null)
     await expect(runRadarReport({ now: NOW })).rejects.toBeInstanceOf(NoRadarModelError)
+  })
+
+  it("aborts and refuses to persist into account B when active database switches mid-generation (F11)", async () => {
+    const { activateAccountDatabase, clearAccountDatabaseSelection } =
+      await import("@/lib/db/schema")
+    mockCollect.mockResolvedValue(items(6))
+    mockGenerate.mockImplementationOnce(async (_client, args) => {
+      activateAccountDatabase("acct_radar_switch_target_b")
+      expect(args.signal?.aborted).toBe(true)
+      return {
+        verdict: "from-a",
+        atAGlance: [],
+        infoDiet: "",
+        subconscious: "",
+        graveyard: [],
+        blindSpots: "",
+        actions: [],
+        topicCloud: [],
+      }
+    })
+    try {
+      await expect(runRadarReport({ now: NOW, force: true })).rejects.toThrow()
+      expect(mockSave).not.toHaveBeenCalled()
+      expect(mockPrune).not.toHaveBeenCalled()
+    } finally {
+      clearAccountDatabaseSelection()
+    }
+  })
+
+  it("cancels generation and skips persistence when AbortSignal aborts (F22)", async () => {
+    mockCollect.mockResolvedValue(items(6))
+    const controller = new AbortController()
+    mockGenerate.mockImplementationOnce(async (_client, args) => {
+      controller.abort("user-cancelled")
+      expect(args.signal?.aborted).toBe(true)
+      throw Object.assign(new Error("user-cancelled"), { name: "AbortError" })
+    })
+    await expect(
+      runRadarReport({ now: NOW, force: true, signal: controller.signal })
+    ).rejects.toThrow("user-cancelled")
+    expect(mockSave).not.toHaveBeenCalled()
+    expect(mockPrune).not.toHaveBeenCalled()
   })
 })

@@ -30,7 +30,7 @@ import {
   getMemory,
 } from "@/lib/db/memories"
 import { appendMemoryAuditEvent } from "@/lib/db/memory-governance"
-import { getDb } from "@/lib/db/schema"
+import { captureDatabaseScope, getDb, type DatabaseScopeSnapshot } from "@/lib/db/schema"
 import type { MemoryAuditAction } from "@/types/memory/governance"
 import type { ManageMemoryCommand } from "@/lib/memory/control-plane/manage"
 
@@ -48,13 +48,15 @@ export interface MirroredMemoryResult {
  * reconciles whatever the mirror got wrong.
  */
 export async function applyMirroredMemoryCommand(
-  command: ManageMemoryCommand
+  command: ManageMemoryCommand,
+  scope: DatabaseScopeSnapshot = captureDatabaseScope()
 ): Promise<MirroredMemoryResult> {
   try {
+    scope.assertActive()
     switch (command.kind) {
       case "pin":
         await setMemoryPinned(command.id, command.pinned)
-        await auditMirror(command.id, command.pinned ? "pinned" : "unpinned")
+        if (scope.isActive()) await auditMirror(command.id, command.pinned ? "pinned" : "unpinned")
         return { ok: true }
       case "update": {
         const text = command.patch.text?.trim()
@@ -67,33 +69,34 @@ export async function applyMirroredMemoryCommand(
           reviewStatus: "verified",
           contaminationState: "clean",
         })
-        await auditMirror(command.id, "revised")
+        if (scope.isActive()) await auditMirror(command.id, "revised")
         return { ok: true }
       }
       case "review":
         await updateMemory(command.id, { reviewStatus: command.status })
-        await auditMirror(command.id, command.status === "verified" ? "promoted" : "conflict")
+        if (scope.isActive())
+          await auditMirror(command.id, command.status === "verified" ? "promoted" : "conflict")
         return { ok: true }
       case "invalidate":
         await invalidateMemory(command.id, command.supersededById)
-        await auditMirror(command.id, "invalidated")
+        if (scope.isActive()) await auditMirror(command.id, "invalidated")
         return { ok: true }
       case "restore": {
         // No local revision: the host keeps the archive-interval snapshot.
         const restored = await restoreArchivedMemory(command.id, { skipRevision: true })
-        if (restored.ok) await auditMirror(command.id, "restored")
+        if (restored.ok && scope.isActive()) await auditMirror(command.id, "restored")
         return { ok: true }
       }
       case "relocate": {
         const moved = await moveMemoryToNamespace(command.id, command.target)
-        if (moved) await auditMirror(command.id, "relocated")
+        if (moved && scope.isActive()) await auditMirror(command.id, "relocated")
         return { ok: true }
       }
       case "delete":
-        await dropFromMirror([command.id])
+        await dropFromMirror([command.id], scope)
         return { ok: true }
       case "resolve-conflict":
-        await mirrorConflictResolution(command)
+        await mirrorConflictResolution(command, scope)
         return { ok: true }
       case "clear": {
         const rows = await listMemories(
@@ -101,7 +104,11 @@ export async function applyMirroredMemoryCommand(
             ? { ...command.query, includeRevisions: true }
             : command.query
         )
-        await dropFromMirror(rows.map((row) => row.id))
+        scope.assertActive()
+        await dropFromMirror(
+          rows.map((row) => row.id),
+          scope
+        )
         return { ok: true }
       }
       case "create":
@@ -115,9 +122,11 @@ export async function applyMirroredMemoryCommand(
 }
 
 async function mirrorConflictResolution(
-  command: Extract<ManageMemoryCommand, { kind: "resolve-conflict" }>
+  command: Extract<ManageMemoryCommand, { kind: "resolve-conflict" }>,
+  scope: DatabaseScopeSnapshot
 ): Promise<void> {
   const [keep, drop] = await Promise.all([getMemory(command.keepId), getMemory(command.dropId)])
+  scope.assertActive()
   if (!keep || !drop) return
   await updateMemory(command.keepId, {
     reviewStatus: "verified",
@@ -126,16 +135,18 @@ async function mirrorConflictResolution(
       ? { text: command.mergedText.trim(), bumpVersion: true, skipRevision: true }
       : {}),
   })
-  await auditMirror(command.keepId, command.mode === "merge" ? "revised" : "promoted")
+  if (scope.isActive())
+    await auditMirror(command.keepId, command.mode === "merge" ? "revised" : "promoted")
+  scope.assertActive()
   if (command.mode === "keep-both") {
     await updateMemory(command.dropId, {
       reviewStatus: "verified",
       conflictWithIds: (drop.conflictWithIds ?? []).filter((id) => id !== command.keepId),
     })
-    await auditMirror(command.dropId, "promoted")
+    if (scope.isActive()) await auditMirror(command.dropId, "promoted")
   } else {
     await invalidateMemory(command.dropId, command.keepId)
-    await auditMirror(command.dropId, "invalidated")
+    if (scope.isActive()) await auditMirror(command.dropId, "invalidated")
   }
 }
 
@@ -144,10 +155,13 @@ async function mirrorConflictResolution(
  * tombstone and no `deleted` audit: the host's delete produces both, and they
  * reach this device through the next pull.
  */
-async function dropFromMirror(ids: readonly string[]): Promise<void> {
+async function dropFromMirror(ids: readonly string[], scope: DatabaseScopeSnapshot): Promise<void> {
   if (ids.length === 0) return
+  scope.assertActive()
   const db = getDb()
+  scope.assertActive()
   await db.transaction("rw", db.memories, async () => {
+    scope.assertActive()
     const owners = new Set(ids)
     const snapshots = await db.memories
       .filter((row) => row.revisionOf !== undefined && owners.has(row.revisionOf))

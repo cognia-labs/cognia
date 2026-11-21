@@ -4,6 +4,7 @@
  * `lib/wiki/schedule/cron-bridge.ts`; `mode === "off"` deletes the row.
  */
 
+import { captureDatabaseScope, type DatabaseScopeSnapshot } from "@/lib/db/schema"
 import { schedulerDb } from "@/lib/scheduler/scheduler-db"
 import { getTaskScheduler } from "@/lib/scheduler/task-scheduler"
 import { saveManagedTask } from "@/lib/scheduler/managed-tasks"
@@ -82,12 +83,18 @@ export interface SyncRadarCronResult {
 
 export async function syncRadarCronToScheduler(
   schedule: RadarScheduleSettings | undefined,
-  enabled = true
+  enabled = true,
+  scope: DatabaseScopeSnapshot = captureDatabaseScope()
 ): Promise<SyncRadarCronResult> {
-  const existing = await schedulerDb.getTask(RADAR_REPORT_TASK_ID)
+  scope.assertActive()
+  const db =
+    typeof schedulerDb.pinned === "function" ? schedulerDb.pinned(scope.databaseName) : schedulerDb
+  const existing = await db.getTask(RADAR_REPORT_TASK_ID)
+  scope.assertActive()
 
   if (!enabled || !schedule || schedule.mode === "off") {
     if (existing) {
+      scope.assertActive()
       await getTaskScheduler().deleteTask(RADAR_REPORT_TASK_ID)
       return { action: "deleted" }
     }
@@ -106,6 +113,7 @@ export async function syncRadarCronToScheduler(
   if (cronExpression === null) return { action: "skipped" }
 
   const next = buildTask(cronExpression, schedule, existing)
+  scope.assertActive()
   if (existing) {
     await saveManagedTask(getTaskScheduler(), next, existing)
     return { action: "updated" }
