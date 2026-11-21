@@ -25,10 +25,15 @@ import { chatAsPet } from "@/lib/pet/bubbles/speak"
 import {
   formatHistoryLines,
   loadHistoryForPrompt,
-  recordTurn,
+  tryRecordTurn,
   type PetHistoryDeps,
 } from "@/lib/pet/llm/history"
-import { appendPetTurn, listRecentPetTurns } from "@/lib/db/pet-conversation"
+import { appendPetTurn, listRecentPetTurns, PET_CONVERSATION_CAP } from "@/lib/db/pet-conversation"
+import {
+  capturePetScope,
+  isPetConversationScopeCurrent,
+  PetScopeInvalidatedError,
+} from "@/lib/pet/runtime/pet-scope"
 import { recallAboutUser } from "@/lib/pet/llm/recall"
 import { EMOTION_TO_ONESHOT, parseEmotion } from "@/lib/pet/llm/emotion-tags"
 import { resolveMemoryConfig } from "@/types/memory/memory"
@@ -38,8 +43,19 @@ export type PetChatDegradeReason =
   "disabled" | "pii" | "rateLimited" | "noClient" | "empty" | "error"
 
 export type PetChatResult =
-  | { status: "ok"; reply: string; emotion?: PetOneShot }
-  | { status: "degraded"; reason: PetChatDegradeReason }
+  | {
+      status: "ok"
+      reply: string
+      emotion?: PetOneShot
+      /** Set to `false` when memory is off or best-effort persistence failed. */
+      persisted?: false
+    }
+  | {
+      status: "degraded"
+      reason: PetChatDegradeReason
+      /** True when the turn was fenced out by clear, reset, or account switch/lock. */
+      invalidated?: true
+    }
 
 export interface RespondAsPetInput {
   userText: string
@@ -112,11 +128,11 @@ export async function respondAsPet(
   const llmSpeak = input.appSettings?.petSettings?.llmSpeak
   const soul = input.profile?.soul
 
-  // Degradations that never reach the model.
+  // Degradations that never reach the model. Check PII and client availability
+  // before spending a shared speak-limiter slot.
   if (!userText || !llmSpeak?.enabled || !soul || !input.view) {
     return { status: "degraded", reason: "disabled" }
   }
-  if (!d.tryAcquire(input.at)) return { status: "degraded", reason: "rateLimited" }
   // Privacy gate: the text feeds BOTH the recall embedding (possibly cloud) and
   // the model prompt, so gate here BEFORE recall — mirrors `usePetSpeak`.
   if (!d.hasNoLeakingPii(userText)) return { status: "degraded", reason: "pii" }
@@ -128,23 +144,37 @@ export async function respondAsPet(
     featureId: "pet-chat",
   })
   if (!client) return { status: "degraded", reason: "noClient" }
+  if (!d.tryAcquire(input.at)) return { status: "degraded", reason: "rateLimited" }
 
+  const originScope = capturePetScope()
   const memoryOn = input.appSettings?.petSettings?.petMemory?.enabled !== false
   const view = input.view
 
   // Prompt layers, each degrading independently.
   const historyText = memoryOn ? formatHistoryLines(await loadHistoryForPrompt(d.history)) : ""
+  if (!isPetConversationScopeCurrent(originScope)) {
+    return { status: "degraded", reason: "empty", invalidated: true }
+  }
   const memDeps = await d.loadMemoryDeps(input.appSettings)
+  if (!isPetConversationScopeCurrent(originScope)) {
+    return { status: "degraded", reason: "empty", invalidated: true }
+  }
   const recallText = await d.recall(memDeps ?? undefined, {
     queryText: userText,
     recencyHalfLifeDays: resolveMemoryConfig(input.appSettings?.memory).decayHalfLifeDays,
   })
+  if (!isPetConversationScopeCurrent(originScope)) {
+    return { status: "degraded", reason: "empty", invalidated: true }
+  }
 
   let persona: string | undefined
   const charId = input.activeCharacterId ?? null
   if (charId) {
     const resolved = await d.resolveCharacterPersona(charId)
     if (resolved && d.hasNoLeakingPii(resolved)) persona = resolved
+  }
+  if (!isPetConversationScopeCurrent(originScope)) {
+    return { status: "degraded", reason: "empty", invalidated: true }
   }
 
   let raw: string | null
@@ -169,15 +199,47 @@ export async function respondAsPet(
     return { status: "degraded", reason: "error" }
   }
 
+  // Re-check account partition, reset generation, and clear generation after
+  // the slow model wait before persisting or returning a reply.
+  if (!isPetConversationScopeCurrent(originScope)) {
+    return { status: "degraded", reason: "empty", invalidated: true }
+  }
+
   const parsed = raw ? d.parseEmotion(raw) : null
   if (!parsed || !parsed.cleanText) return { status: "degraded", reason: "empty" }
 
+  let persisted = false
   if (memoryOn) {
-    await recordTurn(d.history, { userText, reply: parsed.cleanText, at: input.at })
+    const scopedHistory: PetHistoryDeps =
+      d.history === HISTORY_DEPS
+        ? {
+            listRecent: d.history.listRecent,
+            append: (row) => appendPetTurn(row, PET_CONVERSATION_CAP, { scope: originScope }),
+          }
+        : {
+            listRecent: d.history.listRecent,
+            append: async (row) => {
+              if (!isPetConversationScopeCurrent(originScope)) {
+                throw new PetScopeInvalidatedError("conversation-cleared")
+              }
+              return d.history.append(row)
+            },
+          }
+    persisted = await tryRecordTurn(scopedHistory, {
+      userText,
+      reply: parsed.cleanText,
+      at: input.at,
+    })
+    // If history was cleared, reset, or the account switched mid-transaction,
+    // treat the turn as invalidated rather than exposing it ephemerally.
+    if (!isPetConversationScopeCurrent(originScope)) {
+      return { status: "degraded", reason: "empty", invalidated: true }
+    }
   }
   return {
     status: "ok",
     reply: parsed.cleanText,
     emotion: parsed.emotion ? EMOTION_TO_ONESHOT[parsed.emotion] : undefined,
+    ...(persisted ? {} : { persisted: false as const }),
   }
 }

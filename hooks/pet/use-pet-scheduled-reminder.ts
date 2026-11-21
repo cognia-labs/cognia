@@ -30,6 +30,7 @@ import {
 } from "@/lib/notifications/functional-toast/scheduled-due"
 import { getPetEventBus } from "@/lib/pet/events/pet-event-bus"
 import { notifyScheduledDue } from "@/lib/pet/care/notify-scheduled-due"
+import { capturePetScope, isPetScopeCurrent } from "@/lib/pet/runtime/pet-scope"
 import {
   SCHEDULED_DUE_MUTE_COMMAND,
   SCHEDULER_OPEN_TASK_COMMAND,
@@ -81,13 +82,16 @@ export function usePetScheduledReminder(
 
   useEffect(() => {
     if (!enabled) return
+    let disposed = false
     const off = getPetEventBus().subscribe((event: PetEvent) => {
       if (event.kind !== "scheduledRunDue") return
       const taskId = typeof event.meta?.taskId === "string" ? event.meta.taskId : null
+      const originScope = capturePetScope()
 
       void (async () => {
         const resolveTask = depsRef.current.resolveTask ?? defaultResolveTask
         const task = taskId ? await resolveTask(taskId).catch(() => null) : null
+        if (disposed || !isPetScopeCurrent(originScope)) return
 
         // The task's own `dueReminder` flag mutes the reminder entirely — the
         // flourish and the record both belong to the reminder. Absent means on.
@@ -142,6 +146,9 @@ export function usePetScheduledReminder(
         })
       })()
     })
-    return () => off()
+    return () => {
+      disposed = true
+      off()
+    }
   }, [enabled, t])
 }

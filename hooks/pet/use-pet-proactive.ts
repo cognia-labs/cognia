@@ -19,7 +19,7 @@ import { useEffect, useRef } from "react"
 import { useLocale, useTranslations } from "next-intl"
 
 import { getPetEventBus } from "@/lib/pet/events/pet-event-bus"
-import { pickBubbleKey } from "@/lib/pet/bubbles/templates"
+import { pickBubbleKey, pickCustomBubble } from "@/lib/pet/bubbles/templates"
 import { speakAsPet } from "@/lib/pet/bubbles/speak"
 import { getSpeakLimiter } from "@/lib/pet/bubbles/speak-limiter"
 import { EMOTION_TO_ONESHOT, parseEmotion } from "@/lib/pet/llm/emotion-tags"
@@ -41,7 +41,9 @@ import {
 } from "@/lib/pet/llm/proactive/scheduler-state"
 import { resolveProactiveTuning } from "@/lib/pet/llm/proactive/tiers"
 import { getLastActivityAtMs, markActivity } from "@/lib/pet/llm/proactive/activity-signal"
-import { patchPetProfile } from "@/lib/db/pet"
+import { getPetProfile, patchPetProfile } from "@/lib/db/pet"
+import { enqueuePetWork } from "@/lib/pet/runtime/pet-controller"
+import { capturePetScope, isPetScopeCurrent } from "@/lib/pet/runtime/pet-scope"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { resolvePreferences } from "@/lib/notifications/preferences"
 import { isInQuietHours } from "@/lib/notifications/policy/quiet-hours"
@@ -75,13 +77,9 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef(false)
-  /** Lazily-built memory retriever deps, cached after the first utterance. */
-  const memoryDeps = useRef<ApplyMemoryContextDeps | null | undefined>(undefined)
-
-  const latest = useRef({ profile, view, appSettings, locale })
-  useEffect(() => {
-    latest.current = { profile, view, appSettings, locale }
-  })
+  const mountedRef = useRef(true)
+  /** Lazily-built memory retriever deps, keyed by resolved memory config. */
+  const memoryDeps = useRef<{ key: string; deps: ApplyMemoryContextDeps } | null>(null)
 
   const proactive = appSettings?.petSettings?.proactive
   const llmSpeakOn = Boolean(appSettings?.petSettings?.llmSpeak?.enabled)
@@ -89,6 +87,11 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
   const eventCommentsOn = proactiveOn && proactive?.eventComments !== false
   const idleChatterOn = proactiveOn && proactive?.idleChatter !== false
   const timeGreetingsOn = proactiveOn && proactive?.timeGreetings !== false
+
+  const latest = useRef({ profile, view, appSettings, locale, proactiveOn })
+  useEffect(() => {
+    latest.current = { profile, view, appSettings, locale, proactiveOn }
+  })
 
   // ── Claim ownership of milestone bubbles while event comments are on. ──────
   useEffect(() => {
@@ -108,6 +111,7 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
       const tier = current.appSettings?.petSettings?.proactive?.tier ?? "normal"
 
       const show = (text: string, origin: "template" | "llm", visibleMs: number) => {
+        if (!mountedRef.current || !latest.current.proactiveOn) return
         setBubble({ text, origin })
         if (timer.current) clearTimeout(timer.current)
         timer.current = setTimeout(() => setBubble(null), visibleMs)
@@ -118,14 +122,10 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
         return
       }
 
-      // Gate chain: counters/DND → global limiter → PII → client.
-      //
-      // Lifecycle hooks: NOT covered by settings.json lifecycle hooks (ADR-0040 scope
-      // decision). This path builds a renderer-side `LlmClient` and calls the
-      // provider directly, so it never reaches the sidecar where SDK-native hooks
-      // are registered — wiring it up would mean a fourth hook rail, not a fire
-      // site. A hook author sees this in the Hooks settings coverage list.
-
+      // Gate chain: counters/DND → in-flight → PII → client → global limiter.
+      // Check PII and client BEFORE spending a shared speak-limiter slot, and
+      // reserve `inFlight` BEFORE the first await (F30) so slow memory recall
+      // never admits overlapping generations.
       const prefs = resolvePreferences(current.appSettings?.notificationPreferences)
       const tz = resolveUserTimeZone(current.appSettings?.profile)
       const dndActive = isInQuietHours(now, prefs.quietHours, tz)
@@ -137,7 +137,7 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
         dndActive,
         tz,
       })
-      if (!gate.ok || inFlight.current || !getSpeakLimiter().tryAcquire(now)) {
+      if (!gate.ok || inFlight.current) {
         fallback?.()
         return
       }
@@ -155,27 +155,40 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
         fallback?.()
         return
       }
-
-      // Idle chatter may reference recalled user facts; events don't need them.
-      let recallText: string | undefined
-      if (decision.trigger === "idle") {
-        if (memoryDeps.current === undefined) {
-          // Dynamic import keeps the twin/vector stack out of the widget's
-          // module graph (same pattern as lib/claude/build-options.ts).
-          memoryDeps.current =
-            (await import("@/lib/memory/runtime/build-deps")
-              .then((m) => m.tryBuildMemoryDeps(resolveMemoryConfig(current.appSettings?.memory)))
-              .catch(() => null)) ?? null
-        }
-        recallText =
-          (await recallAboutUser(memoryDeps.current ?? undefined, {
-            queryText: decision.topicSeed,
-            recencyHalfLifeDays: resolveMemoryConfig(current.appSettings?.memory).decayHalfLifeDays,
-          })) || undefined
+      if (!getSpeakLimiter().tryAcquire(now)) {
+        fallback?.()
+        return
       }
+
+      const originScope = capturePetScope()
+      const isStillLive = () =>
+        mountedRef.current && latest.current.proactiveOn && isPetScopeCurrent(originScope)
 
       inFlight.current = true
       try {
+        // Idle chatter may reference recalled user facts; events don't need them.
+        let recallText: string | undefined
+        if (decision.trigger === "idle") {
+          const memoryConfig = resolveMemoryConfig(current.appSettings?.memory)
+          const memoryKey = JSON.stringify(memoryConfig)
+          if (!memoryDeps.current || memoryDeps.current.key !== memoryKey) {
+            // Dynamic import keeps the twin/vector stack out of the widget's
+            // module graph (same pattern as lib/claude/build-options.ts).
+            const built =
+              (await import("@/lib/memory/runtime/build-deps")
+                .then((m) => m.tryBuildMemoryDeps(memoryConfig))
+                .catch(() => null)) ?? null
+            if (built) memoryDeps.current = { key: memoryKey, deps: built }
+          }
+          if (!isStillLive()) return
+          recallText =
+            (await recallAboutUser(memoryDeps.current?.deps ?? undefined, {
+              queryText: decision.topicSeed,
+              recencyHalfLifeDays: memoryConfig.decayHalfLifeDays,
+            })) || undefined
+          if (!isStillLive()) return
+        }
+
         const raw = await speakAsPet(client, {
           soul,
           bones: current.view.effectiveBones,
@@ -190,6 +203,7 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
           emotionInstruction: true,
           locale: current.locale,
         })
+        if (!isStillLive()) return
         const parsed = raw ? parseEmotion(raw) : null
         if (!parsed || !parsed.cleanText) {
           fallback?.()
@@ -197,35 +211,63 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
         }
         show(parsed.cleanText, "llm", LLM_BUBBLE_MS)
         if (parsed.emotion) enqueueOneShot(EMOTION_TO_ONESHOT[parsed.emotion])
-        // Persist the advanced counters; skip-memory — recordTurn is never called.
-        await patchPetProfile({
-          proactiveState: applySpoke(state, now, {
-            tz,
-            greetedWindow: decision.greetingWindowKey,
-          }),
+        // Persist the advanced counters inside the controller's serialization
+        // queue against the freshest stored proactiveState (F26/F30); skip-memory
+        // — recordTurn is never called.
+        await enqueuePetWork(async () => {
+          if (!isPetScopeCurrent(originScope)) return
+          const freshProfile =
+            typeof getPetProfile === "function"
+              ? await getPetProfile().catch(() => undefined)
+              : undefined
+          const baseState = freshProfile
+            ? normalizeProactiveState(freshProfile.proactiveState)
+            : state
+          await patchPetProfile({
+            proactiveState: applySpoke(baseState, now, {
+              tz,
+              greetedWindow: decision.greetingWindowKey,
+            }),
+          })
         }).catch(() => undefined)
       } catch {
-        fallback?.()
+        if (isStillLive()) fallback?.()
       } finally {
         inFlight.current = false
       }
     }
   )
 
+  // Track user pet interactions for idle-chatter cadence even when event
+  // comments are disabled.
+  useEffect(() => {
+    if (!proactiveOn) return
+    const off = getPetEventBus().subscribe((event: PetEvent) => {
+      if (event.source === "user") markActivity(event.at)
+    })
+    return () => off()
+  }, [proactiveOn])
+
   // ── Event comments: bus subscription over the claimed kinds. ───────────────
   useEffect(() => {
     if (!eventCommentsOn) return
     const off = getPetEventBus().subscribe((event: PetEvent) => {
-      if (event.source === "user") markActivity(event.at)
       // A wiser pet comments on more of the (high-frequency) workflow runs.
       const decision = evaluateEventComment(event, {
         wisdom: latest.current.view?.effectiveStats.wisdom ?? 0,
       })
       if (!decision) return
       const fallback = () => {
-        const key = pickBubbleKey(event.kind, event.at)
+        if (!mountedRef.current || !latest.current.proactiveOn) return
+        const snark = latest.current.view?.effectiveStats.snark ?? 0
+        const key = pickBubbleKey(event.kind, event.at, { snark })
         if (!key) return // e.g. workflowRun has no template → silence
-        setBubble({ text: t(key), origin: "template" })
+        const custom = pickCustomBubble(
+          latest.current.appSettings?.petSettings?.customBubbles,
+          event.at
+        )
+        const days = typeof event.meta?.days === "number" ? event.meta.days : 0
+        setBubble({ text: custom ?? t(key, { days }), origin: "template" })
         if (timer.current) clearTimeout(timer.current)
         timer.current = setTimeout(() => setBubble(null), TEMPLATE_BUBBLE_MS)
       }
@@ -268,9 +310,11 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
     return () => clearInterval(interval)
   }, [idleChatterOn, timeGreetingsOn])
 
-  // Clear any pending bubble timer on unmount.
+  // Track mount lifetime and clear any pending bubble timer on unmount.
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (timer.current) clearTimeout(timer.current)
     }
   }, [])

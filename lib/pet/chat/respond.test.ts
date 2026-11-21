@@ -1,4 +1,13 @@
 import { respondAsPet, type PetChatDeps, type RespondAsPetInput } from "./respond"
+import {
+  __resetDbForTesting,
+  activateAccountDatabase,
+  clearAccountDatabaseSelection,
+} from "@/lib/db/schema"
+import {
+  __resetPetScopeForTesting,
+  bumpPetConversationGeneration,
+} from "@/lib/pet/runtime/pet-scope"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import type { PetProfile } from "@/types/pet"
 import type { PetView } from "@/lib/pet/runtime/pet-view"
@@ -149,5 +158,91 @@ describe("respondAsPet — success", () => {
     // Both the user text and the resolved persona are gated.
     expect(piiChecks).toContain("A terse night-owl.")
     expect(chat.mock.calls[0][1].persona).toBe("A terse night-owl.")
+  })
+
+  it("does not burn the speak limiter on PII or missing-client refusals", async () => {
+    const tryAcquire = jest.fn(() => true)
+    await respondAsPet(input(), okDeps({ hasNoLeakingPii: () => false, tryAcquire }))
+    await respondAsPet(input(), okDeps({ buildClient: () => null, tryAcquire }))
+    expect(tryAcquire).not.toHaveBeenCalled()
+  })
+
+  it("marks replies as persisted: false when pet memory is off or append fails (F1)", async () => {
+    const offRes = await respondAsPet(
+      input({ appSettings: settings({ petMemory: { enabled: false } }) }),
+      okDeps()
+    )
+    expect(offRes).toEqual({
+      status: "ok",
+      reply: "Sure!",
+      emotion: "happy",
+      persisted: false,
+    })
+
+    const failAppend = jest.fn().mockRejectedValue(new Error("quota"))
+    const failRes = await respondAsPet(
+      input({ appSettings: settings({ petMemory: { enabled: true } }) }),
+      okDeps({ history: { append: failAppend, listRecent: jest.fn().mockResolvedValue([]) } })
+    )
+    expect(failRes).toEqual({
+      status: "ok",
+      reply: "Sure!",
+      emotion: "happy",
+      persisted: false,
+    })
+  })
+
+  it("drops a late reply without persisting when cleared or switched mid-generation (F4, F15)", async () => {
+    __resetDbForTesting()
+    __resetPetScopeForTesting()
+
+    let releaseChat!: (value: string) => void
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => (markStarted = resolve))
+    const append = jest.fn().mockResolvedValue("pc_1")
+    const pendingClear = respondAsPet(
+      input({ appSettings: settings({ petMemory: { enabled: true } }) }),
+      okDeps({
+        chat: () => {
+          markStarted()
+          return new Promise<string>((resolve) => (releaseChat = resolve))
+        },
+        history: { append, listRecent: jest.fn().mockResolvedValue([]) },
+      })
+    )
+    await started
+    bumpPetConversationGeneration()
+    releaseChat("[happy] Late after clear")
+    await expect(pendingClear).resolves.toEqual({
+      status: "degraded",
+      reason: "empty",
+      invalidated: true,
+    })
+    expect(append).not.toHaveBeenCalled()
+
+    activateAccountDatabase("acct-a")
+    let releaseAccount!: (value: string) => void
+    let markAccountStarted!: () => void
+    const accountStarted = new Promise<void>((resolve) => (markAccountStarted = resolve))
+    const pendingSwitch = respondAsPet(
+      input({ appSettings: settings({ petMemory: { enabled: true } }) }),
+      okDeps({
+        chat: () => {
+          markAccountStarted()
+          return new Promise<string>((resolve) => (releaseAccount = resolve))
+        },
+        history: { append, listRecent: jest.fn().mockResolvedValue([]) },
+      })
+    )
+    await accountStarted
+    activateAccountDatabase("acct-b")
+    releaseAccount("[happy] Account A private text")
+    await expect(pendingSwitch).resolves.toEqual({
+      status: "degraded",
+      reason: "empty",
+      invalidated: true,
+    })
+    expect(append).not.toHaveBeenCalled()
+    clearAccountDatabaseSelection()
   })
 })

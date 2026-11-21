@@ -6,14 +6,38 @@ import {
   clearPetConversation,
   listRecentPetTurns,
 } from "./pet-conversation"
-import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
+import {
+  __resetDbForTesting,
+  activateAccountDatabase,
+  activeDatabaseName,
+  clearAccountDatabaseSelection,
+  getDb,
+  whenSeeded,
+} from "@/lib/db/schema"
+import {
+  AccountContentCipher,
+  activateAccountContentCipher,
+  lockAccountContentCipher,
+} from "@/lib/accounts/content-cipher"
+import {
+  __resetPetScopeForTesting,
+  capturePetScope,
+  PetScopeInvalidatedError,
+} from "@/lib/pet/runtime/pet-scope"
 
 beforeEach(async () => {
+  lockAccountContentCipher()
   await getDb().delete()
   __resetDbForTesting()
+  __resetPetScopeForTesting()
   getDb()
   await whenSeeded()
   await getDb().petConversationV2.clear()
+})
+
+afterEach(() => {
+  lockAccountContentCipher()
+  clearAccountDatabaseSelection()
 })
 
 describe("pet-conversation", () => {
@@ -70,5 +94,44 @@ describe("the minted primary key", () => {
     ])
     expect(new Set(ids).size).toBe(3)
     expect(await listRecentPetTurns(10)).toHaveLength(3)
+  })
+})
+
+describe("scope fences (F4, F15)", () => {
+  it("refuses a late turn captured before clearPetConversation (F4)", async () => {
+    const scope = capturePetScope()
+    await clearPetConversation()
+    await expect(
+      appendPetTurn({ at: 10, userText: "old", reply: "late" }, PET_CONVERSATION_CAP, { scope })
+    ).rejects.toThrow(PetScopeInvalidatedError)
+    expect(await listRecentPetTurns(10)).toEqual([])
+  })
+
+  it("refuses a late turn after an account switch or lock (F15)", async () => {
+    activateAccountDatabase("acct-a")
+    activateAccountContentCipher(
+      await AccountContentCipher.createForTesting("acct-a", activeDatabaseName())
+    )
+    const scopeA = capturePetScope()
+
+    activateAccountDatabase("acct-b")
+    activateAccountContentCipher(
+      await AccountContentCipher.createForTesting("acct-b", activeDatabaseName())
+    )
+    await expect(
+      appendPetTurn({ at: 10, userText: "secret-a", reply: "reply-a" }, PET_CONVERSATION_CAP, {
+        scope: scopeA,
+      })
+    ).rejects.toThrow(PetScopeInvalidatedError)
+    expect(await listRecentPetTurns(10)).toEqual([])
+
+    lockAccountContentCipher()
+    clearAccountDatabaseSelection()
+    await expect(
+      appendPetTurn({ at: 11, userText: "secret-a", reply: "reply-a" }, PET_CONVERSATION_CAP, {
+        scope: scopeA,
+      })
+    ).rejects.toThrow(PetScopeInvalidatedError)
+    expect(await listRecentPetTurns(10)).toEqual([])
   })
 })

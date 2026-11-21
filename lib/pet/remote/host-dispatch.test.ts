@@ -401,6 +401,51 @@ describe("pet chat", () => {
     })
     expect(await getDb().petConversationV2.count()).toBe(0)
   })
+
+  it("scrubs private reply receipts on clear without re-running the model on retry (F25)", async () => {
+    await upsertPetProfile(hatchedProfile())
+    const respond = jest.fn(async (): Promise<PetChatResult> => ({
+      status: "ok",
+      reply: "private-reply-marker",
+      emotion: "happy",
+    }))
+    const deps = hostDeps({ respond })
+    await expect(send(deps, "private-key")).resolves.toEqual({
+      ok: true,
+      status: "replied",
+      reply: "private-reply-marker",
+      emotion: "happy",
+    })
+    await expect(dispatchPetHostCommand("pet_chat_clear", CALLER, deps)).resolves.toEqual({
+      ok: true,
+    })
+    // Retry with the same key must neither return the cleared reply nor re-call the LLM.
+    await expect(send(deps, "private-key")).resolves.toEqual({
+      ok: true,
+      status: "degraded",
+      reason: "empty",
+    })
+    expect(respond).toHaveBeenCalledTimes(1)
+  })
+
+  it("joins a slow pending turn on retry and returns the settled reply (F5)", async () => {
+    await upsertPetProfile(hatchedProfile())
+    let resolveTurn!: (value: PetChatResult) => void
+    const respond = jest.fn(() => new Promise<PetChatResult>((resolve) => (resolveTurn = resolve)))
+    const deps = hostDeps({ respond, slowWorkWindowMs: 5 })
+
+    await expect(send(deps, "slow-key")).resolves.toEqual({ ok: true, status: "pending" })
+    resolveTurn({ status: "ok", reply: "finally here!", emotion: "love" })
+    await Promise.resolve()
+
+    await expect(send(deps, "slow-key")).resolves.toEqual({
+      ok: true,
+      status: "replied",
+      reply: "finally here!",
+      emotion: "love",
+    })
+    expect(respond).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("pet_get", () => {

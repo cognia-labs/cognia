@@ -144,7 +144,10 @@ impl CommandDescriptor {
             "sandbox.managed_desktop.result" | "connector.lark.auth"
         ) || matches!(
             self.arm.as_str(),
-            "connectors_matrix_crypto_backup" | "connectors_matrix_crypto_verification"
+            "connectors_matrix_crypto_backup"
+                | "connectors_matrix_crypto_verification"
+                | "pet_chat_send"
+                | "pet_soul_generate"
         )) && self.idempotency == CommandIdempotency::Required
         {
             CommandReceiptPolicy::HostSemantic
@@ -389,6 +392,19 @@ mod tests {
         let command = descriptor("connectors_matrix_crypto_verification").unwrap();
         assert_eq!(command.receipt_policy(), CommandReceiptPolicy::HostSemantic);
         assert_eq!(command.transports, vec![CommandTransport::Internal]);
+    }
+
+    #[test]
+    fn pet_chat_and_soul_generation_use_host_semantic_receipt_policy() {
+        for arm in ["pet_chat_send", "pet_soul_generate"] {
+            let command = descriptor(arm).unwrap();
+            assert_eq!(command.receipt_policy(), CommandReceiptPolicy::HostSemantic);
+            assert_eq!(command.idempotency, CommandIdempotency::Required);
+        }
+        assert_eq!(
+            descriptor("pet_act").unwrap().receipt_policy(),
+            CommandReceiptPolicy::Replay
+        );
     }
 
     #[test]

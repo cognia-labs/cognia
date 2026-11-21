@@ -42,11 +42,21 @@ import { computePetView } from "@/lib/pet/runtime/pet-view"
 import { respondAsPet, type PetChatResult } from "@/lib/pet/chat/respond"
 import { getPetBinding, getPetProfile } from "@/lib/db/pet"
 import { clearPetConversation } from "@/lib/db/pet-conversation"
-import { getDb } from "@/lib/db/schema"
+import { activeDatabaseEpoch, activeDatabaseName, getDb } from "@/lib/db/schema"
+import {
+  bumpPetConversationGeneration,
+  isPetConversationScopeCurrent,
+  type PetScopeToken,
+} from "@/lib/pet/runtime/pet-scope"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { petSettingsView } from "@/lib/pet/settings"
 import { PET_REMOTE_COMMANDS, isPetRemoteCommand } from "./commands"
-import { getPetIdempotencyLedger, type PetIdempotencyLedger } from "./idempotency"
+import {
+  getPetChatIntentStore,
+  getPetIdempotencyLedger,
+  type PetChatIntentStore,
+  type PetIdempotencyLedger,
+} from "./idempotency"
 import {
   buildPetRemoteSnapshot,
   readHostPetSettings,
@@ -94,6 +104,7 @@ export interface PetHostDispatchDeps {
   /** Extra access-gate collaborators (the burst limiter, in tests). */
   accessDeps?: Pick<PetAccessDeps, "rateLimiter" | "decrementInventory">
   ledger?: PetIdempotencyLedger
+  chatIntents?: PetChatIntentStore
   getProfile?: () => Promise<PetProfile | undefined>
   getPetSettings?: () => PetSettings
   getAppSettings?: () => AppSettings | null | undefined
@@ -174,6 +185,7 @@ interface Resolved {
   role: WindowRole | undefined
   accessDeps: Pick<PetAccessDeps, "rateLimiter" | "decrementInventory">
   ledger: PetIdempotencyLedger
+  chatIntents: PetChatIntentStore
   getProfile: () => Promise<PetProfile | undefined>
   getPetSettings: () => PetSettings
   getAppSettings: () => AppSettings | null | undefined
@@ -203,12 +215,15 @@ function resolveDeps(deps: PetHostDispatchDeps): Resolved {
   const getProfile = deps.getProfile ?? getPetProfile
   const getPetSettings = deps.getPetSettings ?? readHostPetSettings
   const isControllerPresent = deps.isControllerPresent ?? isPetControllerPresent
+  const ledger = deps.ledger ?? getPetIdempotencyLedger()
+  const chatIntents = deps.chatIntents ?? getPetChatIntentStore(ledger)
   return {
     now,
     platform,
     role: deps.role,
     accessDeps: deps.accessDeps ?? {},
-    ledger: deps.ledger ?? getPetIdempotencyLedger(),
+    ledger,
+    chatIntents,
     getProfile,
     getPetSettings,
     getAppSettings: deps.getAppSettings ?? readAppSettings,
@@ -406,9 +421,10 @@ async function hatch(d: Resolved): Promise<PetHatchResult> {
   }
 }
 
-async function chatSend(
+async function runChatTurn(
   d: Resolved,
-  request: ReturnType<typeof parsePetChatSendRequest>
+  request: ReturnType<typeof parsePetChatSendRequest>,
+  scope: PetScopeToken
 ): Promise<PetChatSendResult> {
   const unavailable = availabilityRefusal(d, false)
   if (unavailable) return unavailable
@@ -417,29 +433,26 @@ async function chatSend(
   const at = d.now()
   const activeCharacterId = await d.resolveActiveCharacterId()
   const binding = activeCharacterId ? await getPetBinding(activeCharacterId) : undefined
+  if (!isPetConversationScopeCurrent(scope)) {
+    return { ok: true, status: "degraded", reason: "empty" }
+  }
   // The host's own settings, view and history, behind `respondAsPet`'s PII
   // gate and speak limiter: a paired phone gets exactly the turn the desktop
   // console would have produced, and spends the same budget.
-  const turn = d
-    .respond({
-      userText: request.text,
-      view: computePetView(profile, binding ?? null, at),
-      profile,
-      appSettings: d.getAppSettings(),
-      locale: request.locale,
-      activeCharacterId,
-      at,
-    })
-    .then((result) => {
-      // The desktop pet reacts to the reply too, even one that arrives after
-      // the phone was answered `pending`.
-      if (result.status === "ok" && result.emotion) d.enqueueOneShot(result.emotion)
-      return result
-    })
-  const window = await withinWindow(turn, d.slowWorkWindowMs)
-  if (!window.settled) return { ok: true, status: "pending" }
-  const result = window.value
+  const result = await d.respond({
+    userText: request.text,
+    view: computePetView(profile, binding ?? null, at),
+    profile,
+    appSettings: d.getAppSettings(),
+    locale: request.locale,
+    activeCharacterId,
+    at,
+  })
+  if (!isPetConversationScopeCurrent(scope)) {
+    return { ok: true, status: "degraded", reason: "empty" }
+  }
   if (result.status === "ok") {
+    if (result.emotion) d.enqueueOneShot(result.emotion)
     return {
       ok: true,
       status: "replied",
@@ -468,8 +481,17 @@ async function chatList(
 
 async function chatClear(d: Resolved): Promise<PetChatClearResult> {
   if (d.platform === "headless") return refused({ code: "headless-host" })
+  const dbName = activeDatabaseName()
+  // Fence in-flight turns and scrub private reply receipts BEFORE awaiting DB
+  // clear, even when `clearChat` is overridden by a test double.
+  bumpPetConversationGeneration(dbName)
+  d.chatIntents.scrubDatabase(dbName)
   await d.clearChat()
   return { ok: true }
+}
+
+function scopedCallerKey(command: string, callerDeviceId: string): string {
+  return `${activeDatabaseName()}#${activeDatabaseEpoch()}:${command}:${callerDeviceId}`
 }
 
 /**
@@ -493,15 +515,30 @@ export async function dispatchPetHostCommand(
       return chatList(d, parsePetChatListRequest(payload))
     case PET_REMOTE_COMMANDS.act: {
       const request = parsePetActRequest(payload)
-      return d.ledger.run(callerDeviceId, parseIdempotencyKey(payload), () => act(d, request))
+      return d.ledger.run(
+        scopedCallerKey(command, callerDeviceId),
+        parseIdempotencyKey(payload),
+        () => act(d, request)
+      )
     }
     case PET_REMOTE_COMMANDS.itemPurchase: {
       const request = parsePetPurchaseRequest(payload)
-      return d.ledger.run(callerDeviceId, parseIdempotencyKey(payload), () => purchase(d, request))
+      return d.ledger.run(
+        scopedCallerKey(command, callerDeviceId),
+        parseIdempotencyKey(payload),
+        () => purchase(d, request)
+      )
     }
     case PET_REMOTE_COMMANDS.chatSend: {
       const request = parsePetChatSendRequest(payload)
-      return d.ledger.run(callerDeviceId, parseIdempotencyKey(payload), () => chatSend(d, request))
+      const idempotencyKey = parseIdempotencyKey(payload)
+      // Pre-check refusal before occupying a chat-intent slot so a headless
+      // brain or starting desktop does not leave an entry behind.
+      const unavailable = availabilityRefusal(d, false)
+      if (unavailable) return unavailable
+      return d.chatIntents.runChat(callerDeviceId, idempotencyKey, d.slowWorkWindowMs, (scope) =>
+        runChatTurn(d, request, scope)
+      )
     }
     case PET_REMOTE_COMMANDS.itemApply:
       return applyDecor(d, parsePetApplyRequest(payload))

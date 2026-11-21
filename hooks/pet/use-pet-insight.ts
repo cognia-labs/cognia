@@ -28,6 +28,7 @@ import { getRadarReport } from "@/lib/db/radar-reports"
 import { bubbleActionForKind } from "@/lib/pet/bubbles/action"
 import { sayAsPet } from "@/lib/pet/bubbles/say"
 import { getPetEventBus } from "@/lib/pet/events/pet-event-bus"
+import { capturePetScope, isPetScopeCurrent } from "@/lib/pet/runtime/pet-scope"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { loggers } from "@cognia/logging"
 
@@ -43,10 +44,12 @@ export function usePetInsight(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return
     let disposed = false
+    const fallbackTimers = new Set<ReturnType<typeof setTimeout>>()
     const off = getPetEventBus().subscribe((event) => {
       if (event.kind !== "radarReport") return
       const reportId = typeof event.meta?.reportId === "string" ? event.meta.reportId : null
       const action = bubbleActionForKind("radarReport")
+      const originScope = capturePetScope()
       void (async () => {
         let line = ""
         try {
@@ -57,7 +60,7 @@ export function usePetInsight(enabled: boolean): void {
             error: String(err),
           })
         }
-        if (disposed) return
+        if (disposed || !isPetScopeCurrent(originScope)) return
         const said = line
           ? sayAsPet(line, { origin: "system", action, durationMs: INSIGHT_BUBBLE_MS })
           : null
@@ -67,14 +70,18 @@ export function usePetInsight(enabled: boolean): void {
         const text = t(`insight.fallback.${Math.abs(Math.trunc(event.at)) % FALLBACK_VARIANTS}`)
         const store = usePetStore.getState()
         store.setBubble({ text, origin: "template", ...(action ? { action } : {}) })
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          fallbackTimers.delete(timer)
           // Only clear our own bubble; a newer one must not be cut short.
           if (usePetStore.getState().bubble?.text === text) usePetStore.getState().setBubble(null)
         }, INSIGHT_BUBBLE_MS)
+        fallbackTimers.add(timer)
       })()
     })
     return () => {
       disposed = true
+      for (const timer of fallbackTimers) clearTimeout(timer)
+      fallbackTimers.clear()
       off()
     }
   }, [enabled, t])

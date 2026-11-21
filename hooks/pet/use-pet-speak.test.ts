@@ -316,4 +316,27 @@ describe("usePetSpeak", () => {
     await emitTalk("hello")
     expect(usePetStore.getState().bubble).toBeNull()
   })
+
+  it("suppresses bubble, TTS, one-shot, and history write if unmounted mid-flight (F24)", async () => {
+    let resolveModel!: (value: string) => void
+    complete.mockImplementationOnce(() => new Promise<string>((r) => (resolveModel = r)))
+    const { unmount } = renderHook(() => usePetSpeak({ profile, view, enabled: true }))
+
+    await act(async () => {
+      emitPetEvent({ source: "user", kind: "talked", meta: { userText: "still there?" } })
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    unmount()
+
+    await act(async () => {
+      resolveModel("[love] Late reply after unmount")
+      await new Promise((r) => setTimeout(r, 0))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(usePetStore.getState().bubble).toBeNull()
+    expect(usePetStore.getState().oneShotQueue).toEqual([])
+    expect(speakPetText).not.toHaveBeenCalled()
+    expect(appendPetTurn).not.toHaveBeenCalled()
+  })
 })

@@ -23,6 +23,11 @@ jest.mock("@/lib/db/pet", () => ({
   patchPetProfile: (...a: unknown[]) => patchPetProfile(...a),
 }))
 
+const recallAboutUser = jest.fn().mockResolvedValue("")
+jest.mock("@/lib/pet/llm/recall", () => ({
+  recallAboutUser: (...a: unknown[]) => recallAboutUser(...a),
+}))
+
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
   tryBuildMemoryDeps: jest.fn().mockResolvedValue(undefined),
 }))
@@ -121,6 +126,7 @@ beforeEach(() => {
   complete.mockReset().mockResolvedValue("[happy] Woohoo, level up!")
   buildUtilityLlmClient.mockReset().mockReturnValue({ complete })
   patchPetProfile.mockReset().mockResolvedValue(undefined)
+  recallAboutUser.mockReset().mockResolvedValue("")
   setSettings()
 })
 
@@ -263,5 +269,42 @@ describe("usePetProactive — time greetings", () => {
     await tick()
     expect(usePetStore.getState().bubble).toBeNull()
     expect(complete).not.toHaveBeenCalled()
+  })
+})
+
+describe("usePetProactive — lifecycle and recall concurrency (F24, F30)", () => {
+  it("suppresses bubble and profile patch when unmounted while model is in flight (F24)", async () => {
+    let resolveModel!: (value: string) => void
+    complete.mockImplementationOnce(() => new Promise<string>((r) => (resolveModel = r)))
+    const { unmount } = mount()
+    await act(async () => {
+      emitPetEvent({ source: "system", kind: "levelUp", at: Date.now() })
+    })
+    await flush()
+    unmount()
+    await act(async () => {
+      resolveModel("[happy] Late proactive message")
+    })
+    await flush()
+    expect(usePetStore.getState().bubble).toBeNull()
+    expect(patchPetProfile).not.toHaveBeenCalled()
+  })
+
+  it("reserves in-flight ownership before awaited memory recall across ticks (F30)", async () => {
+    markActivity(Date.now() - 13 * 60_000)
+    let resolveRecall!: (value: string) => void
+    recallAboutUser.mockImplementationOnce(() => new Promise<string>((r) => (resolveRecall = r)))
+    mount()
+
+    // First minute tick blocks inside recall; second minute tick must not admit a second call.
+    await tick()
+    await tick()
+    expect(recallAboutUser).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveRecall("likes tea")
+    })
+    await flush()
+    expect(complete).toHaveBeenCalledTimes(1)
   })
 })

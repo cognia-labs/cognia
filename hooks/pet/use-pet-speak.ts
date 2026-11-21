@@ -35,6 +35,7 @@ import {
 import { recallAboutUser } from "@/lib/pet/llm/recall"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { appendPetTurn, listRecentPetTurns } from "@/lib/db/pet-conversation"
+import { capturePetScope, isPetConversationScopeCurrent } from "@/lib/pet/runtime/pet-scope"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { loadPort } from "@/lib/modules/ports"
@@ -98,8 +99,8 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
   const appSettings = usePetSettingsView((s) => s)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef(false)
-  /** Lazily-built memory retriever deps, cached after the first talk. */
-  const memoryDeps = useRef<ApplyMemoryContextDeps | null | undefined>(undefined)
+  /** Lazily-built memory retriever deps, keyed by resolved memory config. */
+  const memoryDeps = useRef<{ key: string; deps: ApplyMemoryContextDeps } | null>(null)
   /** Resolved persona prose per character id — avoids re-hitting Dexie every talk.
    *  Stores the RAW composed string (or null); the PII gate is re-applied at use
    *  time, so a cache hit never skips the privacy check. */
@@ -116,11 +117,13 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
 
   useEffect(() => {
     if (!enabled) return
+    let disposed = false
     const off = getPetEventBus().subscribe((event) => {
       if (event.source !== "user" || event.kind !== "talked") return
       const current = latest.current
 
       const show = (text: string, origin: PetBubble["origin"], visibleMs: number) => {
+        if (disposed) return
         setBubble({ text, origin })
         if (timer.current) clearTimeout(timer.current)
         timer.current = setTimeout(() => setBubble(null), visibleMs)
@@ -131,13 +134,14 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
       const llmSpeak = current.appSettings?.petSettings?.llmSpeak
 
       // Degradations that never reach the model: opt-out, bare talk (no text),
-      // missing/unhatched pet state, an in-flight call, or the limiter saying no.
+      // missing/unhatched pet state, an in-flight call, PII trip, missing client,
+      // or the limiter saying no. Gate PII + client BEFORE spending the limiter.
       const soul = current.profile?.soul
       if (!userText || !llmSpeak?.enabled || !soul || !current.view) {
         fallback()
         return
       }
-      if (inFlight.current || !getSpeakLimiter().tryAcquire(Date.now())) {
+      if (inFlight.current) {
         fallback()
         return
       }
@@ -162,7 +166,13 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
         fallback()
         return
       }
+      if (!getSpeakLimiter().tryAcquire(Date.now())) {
+        fallback()
+        return
+      }
 
+      const originScope = capturePetScope()
+      const isStillLive = () => !disposed && isPetConversationScopeCurrent(originScope)
       const memoryOn = current.appSettings?.petSettings?.petMemory?.enabled !== false
       const view = current.view
       const profileRow = current.profile
@@ -173,18 +183,24 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
         const historyText = memoryOn
           ? formatHistoryLines(await loadHistoryForPrompt(HISTORY_DEPS))
           : ""
-        if (memoryDeps.current === undefined) {
+        if (!isStillLive()) return null
+        const memoryConfig = resolveMemoryConfig(current.appSettings?.memory)
+        const memoryKey = JSON.stringify(memoryConfig)
+        if (!memoryDeps.current || memoryDeps.current.key !== memoryKey) {
           // Dynamic import keeps the twin/vector stack out of the widget's
           // module graph (same pattern as lib/claude/build-options.ts).
-          memoryDeps.current =
+          const built =
             (await import("@/lib/memory/runtime/build-deps")
-              .then((m) => m.tryBuildMemoryDeps(resolveMemoryConfig(current.appSettings?.memory)))
+              .then((m) => m.tryBuildMemoryDeps(memoryConfig))
               .catch(() => null)) ?? null
+          if (built) memoryDeps.current = { key: memoryKey, deps: built }
         }
-        const recallText = await recallAboutUser(memoryDeps.current ?? undefined, {
+        if (!isStillLive()) return null
+        const recallText = await recallAboutUser(memoryDeps.current?.deps ?? undefined, {
           queryText: userText,
-          recencyHalfLifeDays: resolveMemoryConfig(current.appSettings?.memory).decayHalfLifeDays,
+          recencyHalfLifeDays: memoryConfig.decayHalfLifeDays,
         })
+        if (!isStillLive()) return null
 
         // Persona layer: colour the voice with the bound character (+ its twin).
         // Resolved lazily and cached per character id; dynamic import keeps the
@@ -202,6 +218,7 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
                 .catch(() => null)) ?? null
             personaCache.current.set(charId, resolved)
           }
+          if (!isStillLive()) return null
           if (resolved && hasNoLeakingPii(resolved)) persona = resolved
         }
 
@@ -223,6 +240,10 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
         })
       })()
         .then(async (raw) => {
+          // Hook unmounted, speech disabled/muted, history cleared, pet reset,
+          // or account switched/locked while in flight: suppress bubble, TTS,
+          // one-shot, and history write completely.
+          if (!isStillLive()) return
           const parsed = raw ? parseEmotion(raw) : null
           if (!parsed || !parsed.cleanText) {
             fallback()
@@ -237,7 +258,7 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
             current.activeCharacterId ?? null,
             voiceCache.current
           ).catch(() => {})
-          if (memoryOn) {
+          if (memoryOn && isStillLive()) {
             await recordTurn(HISTORY_DEPS, {
               userText,
               reply: parsed.cleanText,
@@ -245,12 +266,15 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
             })
           }
         })
-        .catch(() => fallback())
+        .catch(() => {
+          if (isStillLive()) fallback()
+        })
         .finally(() => {
           inFlight.current = false
         })
     })
     return () => {
+      disposed = true
       off()
       if (timer.current) clearTimeout(timer.current)
     }

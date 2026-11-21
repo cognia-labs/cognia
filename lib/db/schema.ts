@@ -2485,6 +2485,41 @@ export async function withDbReopenRetry<T>(
   }
 }
 
+type ActiveDatabaseChangeListener = (nextName: string, prevName: string) => void
+
+let _activeDatabaseEpoch = 0
+const _activeDatabaseListeners = new Set<ActiveDatabaseChangeListener>()
+
+function notifyActiveDatabaseChange(nextName: string, prevName: string): void {
+  for (const listener of [..._activeDatabaseListeners]) {
+    try {
+      listener(nextName, prevName)
+    } catch {
+      // Listeners own their own cleanup; never abort an account switch or lock.
+    }
+  }
+}
+
+/**
+ * Subscribe to account database switches and locks. Fires synchronously after
+ * `_activeDatabaseName` changes and the previous Dexie handle has been closed.
+ */
+export function onActiveDatabaseChange(listener: ActiveDatabaseChangeListener): () => void {
+  _activeDatabaseListeners.add(listener)
+  return () => {
+    _activeDatabaseListeners.delete(listener)
+  }
+}
+
+/**
+ * Monotonic counter bumped on every account database switch or lock. Capturing
+ * `(activeDatabaseName(), activeDatabaseEpoch())` detects both switching to a
+ * different partition and locking then unlocking the same account.
+ */
+export function activeDatabaseEpoch(): number {
+  return _activeDatabaseEpoch
+}
+
 export function activateAccountDatabase(accountId: string, targetId?: string): void {
   const nextName = targetId
     ? encryptedRuntimeTargetDatabaseName(accountId, targetId)
@@ -2500,8 +2535,11 @@ export function activateAccountDatabase(accountId: string, targetId?: string): v
   // authority host is filled in by that full prime later.
   setNotificationNamespaceAccount(nextName, accountId)
   if (_activeDatabaseName === nextName && _db?.name === nextName) return
+  const prevName = activeDatabaseName()
   _activeDatabaseName = nextName
+  _activeDatabaseEpoch += 1
   closeCachedDb()
+  notifyActiveDatabaseChange(nextName, prevName)
 }
 
 /**
@@ -2521,8 +2559,11 @@ export function clearAccountDatabaseSelection(): void {
     getNotificationIdentity()?.accountId ?? "local"
   )
   if (_activeDatabaseName === null && _db?.name === LEGACY_COGNIA_DB_NAME) return
+  const prevName = activeDatabaseName()
   _activeDatabaseName = null
+  _activeDatabaseEpoch += 1
   closeCachedDb()
+  notifyActiveDatabaseChange(LEGACY_COGNIA_DB_NAME, prevName)
 }
 
 let _testDbRuntimeUsers = 0
@@ -2689,8 +2730,11 @@ export function whenSeeded(): Promise<void> {
 export function __resetDbForTesting(): void {
   if (_pageHideListening) window.removeEventListener("pagehide", closeDocumentConnections, true)
   _pageHideListening = false
+  const prevName = activeDatabaseName()
   _activeDatabaseName = null
+  _activeDatabaseEpoch += 1
   closeCachedDb()
+  notifyActiveDatabaseChange(LEGACY_COGNIA_DB_NAME, prevName)
   try {
     _yieldChannel?.close()
   } catch {

@@ -1402,6 +1402,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pet_chat_send_never_persists_private_reply_receipts_and_redispatches_retries() {
+        let descriptor = crate::command_manifest::descriptor("pet_chat_send").unwrap();
+        assert_eq!(
+            descriptor.receipt_policy(),
+            CommandReceiptPolicy::HostSemantic
+        );
+        let store = SecurityStore::in_memory().unwrap();
+        let mut request = execution_request("device", None);
+        request.command = "pet_chat_send".into();
+        request.idempotency_key = Some(Uuid::new_v4().to_string());
+
+        let first_reply = json!({
+            "ok": true,
+            "status": "replied",
+            "reply": "private-reply-marker-f25"
+        });
+        let first = execute_host_semantic_request(
+            &store,
+            &request,
+            "pet-chat-same-hash",
+            unix_time_secs(),
+            async { Ok(first_reply.clone()) },
+        )
+        .await
+        .unwrap();
+        let ExecutionOutcome::Completed {
+            result: first_actual,
+            operation_id: first_op,
+            replayed: first_replayed,
+            ..
+        } = first
+        else {
+            panic!("expected completed outcome");
+        };
+        assert_eq!(first_actual, first_reply);
+        assert!(first_op.is_none());
+        assert!(!first_replayed);
+
+        // Retrying the same key after host-side clear re-enters the host handler
+        // instead of replaying the cleared private reply from SecurityStore.
+        let cleared = json!({
+            "ok": true,
+            "status": "degraded",
+            "reason": "empty"
+        });
+        let retry = execute_host_semantic_request(
+            &store,
+            &request,
+            "pet-chat-same-hash",
+            unix_time_secs(),
+            async { Ok(cleared.clone()) },
+        )
+        .await
+        .unwrap();
+        let ExecutionOutcome::Completed {
+            result: retry_actual,
+            replayed: retry_replayed,
+            ..
+        } = retry
+        else {
+            panic!("expected completed outcome on retry");
+        };
+        assert_eq!(retry_actual, cleared);
+        assert!(!retry_replayed);
+
+        // Conflicting payload reuse under the same UUID key still fails with 409.
+        let conflict = execute_host_semantic_request(
+            &store,
+            &request,
+            "pet-chat-different-hash",
+            unix_time_secs(),
+            async { panic!("conflicting retry must not redispatch") },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
     async fn p6a_org_receipts_are_namespaced_by_verified_org_and_user() {
         let mut request = execution_request("device", None);
         request.idempotency_key = Some(Uuid::new_v4().to_string());

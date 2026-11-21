@@ -20,13 +20,23 @@ export interface RecordTurnInput {
   at: number
 }
 
-/** Persist one completed talk turn. Failures are swallowed — speak never breaks. */
-export async function recordTurn(deps: PetHistoryDeps, input: RecordTurnInput): Promise<void> {
+/** Persist one completed talk turn, reporting whether storage accepted it. */
+export async function tryRecordTurn(
+  deps: PetHistoryDeps,
+  input: RecordTurnInput
+): Promise<boolean> {
   try {
     await deps.append({ at: input.at, userText: input.userText, reply: input.reply })
+    return true
   } catch {
-    // History is best-effort; the bubble already rendered.
+    // History is best-effort; callers can retain the reply ephemerally.
+    return false
   }
+}
+
+/** Persist one completed talk turn. Failures are swallowed — speak never breaks. */
+export async function recordTurn(deps: PetHistoryDeps, input: RecordTurnInput): Promise<void> {
+  await tryRecordTurn(deps, input)
 }
 
 /** Newest turns in chronological order (newest last); [] on any failure. */
