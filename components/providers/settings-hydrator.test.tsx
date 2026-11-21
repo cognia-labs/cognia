@@ -34,6 +34,12 @@ jest.mock("@/stores/settings/follow-stored-settings", () => ({
 import { followStoredSettings } from "@/stores/settings/follow-stored-settings"
 
 let mockResolvedTheme: "light" | "dark" | undefined = "dark"
+const mockSetPricingSource = jest.fn((_source: () => unknown) => mockDisposePricing)
+const mockDisposePricing = jest.fn()
+jest.mock("@/lib/usage/usage-ledger", () => ({
+  setUsagePricingSettingsSource: (source: () => unknown) => mockSetPricingSource(source),
+}))
+
 jest.mock("next-themes", () => ({
   useTheme: () => ({ resolvedTheme: mockResolvedTheme }),
 }))
@@ -51,6 +57,16 @@ describe("SettingsHydrator", () => {
     await waitFor(() => {
       expect(useSettingsStore.getState().loaded).toBe(true)
     })
+  })
+
+  it("hands the usage ledger the user's own rates while mounted (F15)", async () => {
+    const { unmount } = render(<SettingsHydrator />)
+    expect(mockSetPricingSource).toHaveBeenCalledTimes(1)
+    const source = mockSetPricingSource.mock.calls[0][0]
+    await waitFor(() => expect(useSettingsStore.getState().loaded).toBe(true))
+    expect(source()).toBe(useSettingsStore.getState().settings)
+    unmount()
+    expect(mockDisposePricing).toHaveBeenCalled()
   })
 
   it("follows writes other than the store's for as long as it is mounted", async () => {

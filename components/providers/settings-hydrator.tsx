@@ -22,6 +22,7 @@ import {
   configureBehaviorTelemetrySettings,
   saveBehaviorTelemetrySettings,
 } from "@/lib/telemetry/events/settings"
+import { setUsagePricingSettingsSource } from "@/lib/usage/usage-ledger"
 
 /**
  * Mounts at the root layout and triggers `useSettingsStore.load()` exactly
@@ -63,6 +64,13 @@ export function SettingsHydrator(): null {
   // Writers other than this store (account sync, a paired Host pull or write,
   // another window) change the row too; follow them once loaded.
   useEffect(() => followStoredSettings(), [])
+
+  // The usage ledger prices a row it books with the user's own rates (custom
+  // and discovered model pricing), read from this store.
+  useEffect(
+    () => setUsagePricingSettingsSource(() => useSettingsStore.getState().settings ?? undefined),
+    []
+  )
 
   // AppSettings is the canonical account-scoped policy. Mirror it into the
   // renderer's synchronous runtime reader so settings sync, companion writes,

@@ -3,11 +3,10 @@
 // Fires once on app boot. Three jobs, in order:
 //
 //  1. Install the budget-mirror sink on the canonical usage ledger, so every
-//     committed turn snaps the in-memory mirror to the durable day total, and
-//     the user's own rates (custom and discovered model pricing), so a row the
-//     ledger prices is priced the way the rest of the app prices that model.
+//     committed turn snaps the in-memory mirror to the durable day total.
 //     This must happen BEFORE anything can send, which is why it runs
-//     synchronously in the effect body rather than after an await.
+//     synchronously in the effect body rather than after an await. (The
+//     user's own rates reach the ledger from `SettingsHydrator`.)
 //  2. Hydrate that mirror from `providerCostDaily` so the routing engine's
 //     dailyCostBudget check survives reloads.
 //  3. Reconcile the projection once per schema generation (ADR-0165).
@@ -22,10 +21,8 @@ import { getTodaysCostByProvider, localDayString } from "@/lib/db/provider-cost-
 import {
   rebuildProviderCostDaily,
   setBudgetMirrorSink,
-  setUsagePricingSettingsSource,
   USAGE_LEDGER_RECONCILE_MARKER,
 } from "@/lib/usage/usage-ledger"
-import { useSettingsStore } from "@/stores/settings"
 import { useProviderCostMirrorStore } from "@/stores/settings/provider-cost-mirror-store"
 
 const COST_RETENTION_DAYS = 90
@@ -77,9 +74,6 @@ export function ProviderCostMirrorInitializer() {
         .getState()
         .reconcileProvider(committed.providerId, committed.day, committed.providerTotalUsd)
     })
-    const disposePricing = setUsagePricingSettingsSource(
-      () => useSettingsStore.getState().settings ?? undefined
-    )
 
     void (async () => {
       const storage = safeLocalStorage()
@@ -103,7 +97,6 @@ export function ProviderCostMirrorInitializer() {
     })()
 
     return () => {
-      disposePricing()
       disposeSink()
     }
   }, [])
