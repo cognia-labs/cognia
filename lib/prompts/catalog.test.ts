@@ -9,13 +9,135 @@ import {
 } from "./catalog"
 import { validatePromptBody } from "./template"
 import type { PromptDefinitionV1 } from "./types"
+import { builtinAgents } from "@/lib/agent/builtin-catalog/catalog"
+import { BUILT_IN_MODE_PROMPTS, shippedModePrompt } from "@/lib/agent/modes/built-ins"
 import { EXECUTOR_FALLBACK_PROMPT } from "@/lib/agent/prompts/executor"
+import { MEMORY_CONSOLIDATE_PROMPT } from "@/lib/memory/write/run-memory-extraction"
 import { MODULE_PROMPTS } from "@/lib/modules/generated/prompts"
 import type { ModulePromptsEntry } from "@/lib/modules/manifest-types"
 import { prompts as petPrompts } from "@/lib/pet/prompts"
 import { RADAR_SYSTEM_PROMPT } from "@/lib/radar/prompts"
 
 const repoRoot = path.resolve(__dirname, "../..")
+
+const isDefinition = (value: unknown): value is PromptDefinitionV1 =>
+  typeof value === "object" && value !== null && "defaultBody" in value && "consumers" in value
+
+/**
+ * Names under which `value` (bound to `name`) holds `def`: `name` itself, a
+ * `name.key` path through plain objects, or `name` for a Map or array whose
+ * members are picked at run time.
+ */
+function handlesOf(value: unknown, def: PromptDefinitionV1, name: string, depth = 0): string[] {
+  if (value === def) return [name]
+  if (depth > 3 || value === null || typeof value !== "object" || isDefinition(value)) return []
+  if (value instanceof Map || Array.isArray(value)) {
+    const members = value instanceof Map ? [...value.values()] : value
+    return members.some((member) => handlesOf(member, def, name, depth + 1).length > 0)
+      ? [name]
+      : []
+  }
+  return Object.entries(value).flatMap(([key, member]) =>
+    handlesOf(member, def, /^[A-Za-z_$][\w$]*$/.test(key) ? `${name}.${key}` : name, depth + 1)
+  )
+}
+
+/** Source text without comments, imports, declarations and the `prompts` listing. */
+function withoutDeclarations(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1")
+    .replace(/^\s*import\s+(?:type\s+)?[\w$*\s{},]+\s+from\s*"[^"]+";?/gm, "")
+    .replace(/^export const prompts\b[\s\S]*?^\]/m, "")
+    .replace(/\b(?:export\s+)?(?:const|let|var|function)\s+[A-Za-z_$][\w$]*/g, "")
+}
+
+function usesHandle(source: string, handle: string): boolean {
+  const escaped = handle.replace(/[.$]/g, "\\$&")
+  if (new RegExp(`(?<![\\w$.])${escaped}(?![\\w$])`).test(source)) return true
+  // A whole collection consumed by computed key or spread binds its members.
+  const [collection, ...rest] = handle.split(".")
+  if (rest.length === 0) return false
+  const name = collection.replace(/\$/g, "\\$")
+  return new RegExp(`(?<![\\w$.])${name}\\s*\\[|\\.\\.\\.\\s*${name}(?![\\w$])`).test(source)
+}
+
+function moduleFile(specifier: string): string {
+  const base = path.join(repoRoot, specifier.replace(/^@\//, ""))
+  const file = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")].find(existsSync)
+  if (!file) throw new Error(`no source for ${specifier}`)
+  return file
+}
+
+function importedSpecifiers(file: string): string[] {
+  const source = readFileSync(file, "utf8")
+  return [...source.matchAll(/(?:from|import\()\s*"([^"]+)"/g)].flatMap(([, specifier]) => {
+    if (specifier.startsWith("@/")) return [specifier]
+    if (specifier.startsWith(".")) {
+      return [`@/${path.relative(repoRoot, path.resolve(path.dirname(file), specifier))}`]
+    }
+    return []
+  })
+}
+
+/**
+ * Every exported binding of the modules the catalog and each module's
+ * `prompts` contribution import, the files where definitions are declared.
+ */
+async function loadPromptHolders(): Promise<Array<[string, unknown]>> {
+  const registry = readFileSync(moduleFile("@/lib/modules/generated/prompts"), "utf8")
+  const contributions = [...registry.matchAll(/load: \(\) => import\("(@\/[^"]+)"\)/g)].map(
+    ([, specifier]) => specifier
+  )
+  expect(contributions).toHaveLength(MODULE_PROMPTS.length)
+  const roots = ["@/lib/prompts/catalog", ...contributions]
+  const specifiers = new Set(roots)
+  for (const root of roots) {
+    for (const specifier of importedSpecifiers(moduleFile(root))) specifiers.add(specifier)
+  }
+  const holders: Array<[string, unknown]> = []
+  for (const specifier of specifiers) {
+    const namespace = (await import(specifier)) as Record<string, unknown>
+    for (const [name, value] of Object.entries(namespace)) {
+      if (name !== "prompts" && name !== "default" && name !== "PROMPT_DEFINITIONS") {
+        holders.push([name, value])
+      }
+    }
+  }
+  return holders
+}
+
+/**
+ * Families a consumer picks through an accessor at run time instead of by
+ * name. `reaches` calls the accessor, so a pin that stops returning the slot
+ * fails; `use` is the call the consumer must still make.
+ */
+const ACCESSOR_BINDINGS: ReadonlyArray<{
+  consumer: string
+  use: RegExp
+  reaches: (def: PromptDefinitionV1) => boolean
+}> = [
+  {
+    consumer: "lib/claude/build-options.ts",
+    use: /\bshippedModePrompt\(/,
+    reaches: (def) => {
+      const modeId = [...BUILT_IN_MODE_PROMPTS].find(([, candidate]) => candidate === def)?.[0]
+      return modeId !== undefined && shippedModePrompt(modeId, def.defaultBody) === def
+    },
+  },
+  {
+    consumer: "lib/agent/builtin-catalog/catalog.ts",
+    use: /\bresolvePrompt\(entry\.identity\)/,
+    reaches: (def) => builtinAgents().some((entry) => entry.identity === def),
+  },
+  {
+    // The judge prompt every consolidating write path shares, resolved once
+    // in `run-memory-extraction.ts`.
+    consumer: "lib/memory/write/run-project-mining.ts",
+    use: /\bresolveConsolidateSystemPrompt\(/,
+    reaches: (def) => def === MEMORY_CONSOLIDATE_PROMPT,
+  },
+]
 
 describe("prompt catalog", () => {
   // Shipped definitions and every module's contribution: the contract checks
@@ -81,11 +203,88 @@ describe("prompt catalog", () => {
     }
   })
 
+  // A consumer that resolves some other slot proves nothing about this one.
+  // Each editable slot's every consumer must reach this definition: by its
+  // id, by a name whose value holds it (read from the modules the catalog
+  // and the module contributions load), or through a pinned accessor that is
+  // called here, so a consumer that drops the slot fails the test.
+  it("binds every editable slot to each of its consumers", async () => {
+    const holders = await loadPromptHolders()
+    const unbound: string[] = []
+    for (const def of defs) {
+      if (def.operation === "inspect-only") continue
+      const handles = holders.flatMap(([name, value]) => handlesOf(value, def, name))
+      for (const consumer of def.consumers) {
+        const raw = readFileSync(path.join(repoRoot, consumer), "utf8")
+        const source = withoutDeclarations(raw)
+        const bound =
+          raw.includes(`"${def.id}"`) ||
+          handles.some((handle) => usesHandle(source, handle)) ||
+          ACCESSOR_BINDINGS.some(
+            (binding) =>
+              binding.consumer === consumer && binding.use.test(source) && binding.reaches(def)
+          )
+        if (!bound) unbound.push(`${def.id} <- ${consumer}`)
+      }
+    }
+    expect(unbound).toEqual([])
+  })
+
+  it("pins accessor bindings that still reach their slots", () => {
+    for (const binding of ACCESSOR_BINDINGS) {
+      const reached = defs.filter((def) => binding.reaches(def))
+      expect({ consumer: binding.consumer, reached: reached.length > 0 }).toEqual({
+        consumer: binding.consumer,
+        reached: true,
+      })
+      for (const def of reached) expect(def.consumers).toContain(binding.consumer)
+    }
+  })
+
   it("gives every editable entry at least one scope and inspect-only entries none", () => {
     for (const def of defs) {
       if (def.operation === "inspect-only") expect(def.scopes).toEqual([])
       else expect(def.scopes.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe("slot binding guard", () => {
+  it("does not count a slot's import, declaration or listing as a use", () => {
+    const source = withoutDeclarations(
+      [
+        `import { A_PROMPT, B_PROMPT } from "./prompts"`,
+        `export const C_PROMPT = definePrompt({ id: "x.c" })`,
+        "export const prompts = [",
+        "  A_PROMPT,",
+        "  C_PROMPT,",
+        "]",
+        "// A_PROMPT is resolved elsewhere",
+        "export const text = resolvePrompt(B_PROMPT).text",
+      ].join("\n")
+    )
+    expect(usesHandle(source, "A_PROMPT")).toBe(false)
+    expect(usesHandle(source, "C_PROMPT")).toBe(false)
+    expect(usesHandle(source, "B_PROMPT")).toBe(true)
+  })
+
+  it("binds a collection member by its path, a computed key or a spread", () => {
+    expect(usesHandle("resolvePrompt(PROMPTS.bubble)", "PROMPTS.bubble")).toBe(true)
+    expect(usesHandle("resolvePrompt(PROMPTS.other)", "PROMPTS.bubble")).toBe(false)
+    expect(usesHandle("resolvePrompt(PROMPTS[key])", "PROMPTS.bubble")).toBe(true)
+    expect(usesHandle("const all = { ...PROMPTS }", "PROMPTS.bubble")).toBe(true)
+    expect(usesHandle("resolvePrompt(OTHER_PROMPTS.bubble)", "PROMPTS.bubble")).toBe(false)
+  })
+
+  it("finds the handles that hold a definition", () => {
+    const target = { ...RADAR_SYSTEM_PROMPT, id: "x.target" } as PromptDefinitionV1
+    expect(handlesOf(target, target, "TARGET")).toEqual(["TARGET"])
+    expect(handlesOf({ bubble: target, other: RADAR_SYSTEM_PROMPT }, target, "PET")).toEqual([
+      "PET.bubble",
+    ])
+    expect(handlesOf(new Map([["mode", target]]), target, "MODES")).toEqual(["MODES"])
+    expect(handlesOf([{ identity: target }], target, "ENTRIES")).toEqual(["ENTRIES"])
+    expect(handlesOf({ other: RADAR_SYSTEM_PROMPT }, target, "PET")).toEqual([])
   })
 })
 
