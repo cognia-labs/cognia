@@ -183,7 +183,7 @@ describe("resolveSendOptions memory injection", () => {
     await resolveSendOptions({
       character: baseCharacter,
       session: { id: "s1", projectId: "project-a" } as never,
-      targetAgentId: "agent-a",
+      targetAgentId: "workflow-designer",
       memoryBranch: "main",
       memoryPath: "src/memory",
       memoryDeps: deps({ loadCandidates }),
@@ -192,7 +192,7 @@ describe("resolveSendOptions memory injection", () => {
     expect(loadCandidates).toHaveBeenCalledWith({
       characterId: "char_1",
       projectId: "project-a",
-      agentId: "agent-a",
+      agentId: "workflow-designer",
       branch: "main",
       path: "src/memory",
     })

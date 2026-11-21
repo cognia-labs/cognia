@@ -9,8 +9,14 @@ import type { ResolvedAgentExecutionSpec } from "@cognia/agent-config-types/agen
 import { useGitStore } from "@/stores/git/git-store"
 import { primaryRootOf } from "@/lib/workspace/roots"
 import { pendingRecoveryPhase } from "@/lib/usage/compaction-metrics"
-import { buildChatMentionTargets, resolveTargetAgentId } from "@/lib/chat/mentions/agent-targets"
-import { discoverMarkdownAgentTargets } from "@/lib/chat/mentions/markdown-agent-targets"
+import {
+  buildSendTimeMentionCandidates,
+  resolveTargetAgentId,
+} from "@/lib/chat/mentions/agent-targets"
+import {
+  discoverMarkdownAgentTargets,
+  mergeChatMentionTargets,
+} from "@/lib/chat/mentions/markdown-agent-targets"
 import { useProjectStore } from "@/stores/project/project-store"
 import { resolveSessionWorkspace } from "@/lib/workspace/session-workspace"
 import { allRootPaths } from "@/lib/workspace/roots"
@@ -554,8 +560,12 @@ export async function buildSendOptions(
     const markdownTargets = await discoverMarkdownAgentTargets({
       cwd: session?.workingDir ?? undefined,
       roots: turnProject ? allRootPaths(turnProject) : [],
+      includeNonPicker: true,
     })
-    const mentionTargets = [...buildChatMentionTargets(), ...markdownTargets]
+    const mentionTargets = mergeChatMentionTargets(
+      buildSendTimeMentionCandidates(),
+      markdownTargets
+    )
     targetAgentId = resolveTargetAgentId(userMessage, mentionTargets) ?? undefined
   }
 

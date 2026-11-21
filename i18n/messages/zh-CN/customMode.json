@@ -86,6 +86,8 @@
   "outputFormat": "输出格式",
   "outputLabel": "输出：",
   "outputSettings": "输出",
+  "permissionInherit": "继承会话策略",
+  "permissionMode": "权限模式",
   "previewLabel": "实时预览：",
   "recommended": "推荐",
   "removeTag": "移除 {tag}",

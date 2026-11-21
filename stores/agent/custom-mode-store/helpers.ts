@@ -14,39 +14,58 @@ export function analyzeModeDescription(request: ModeGenerationRequest): Generate
   const { description, includeA2UI } = request
   const lowerDesc = description.toLowerCase()
 
-  // Pattern matching for common use cases
+  // Pattern matching for common use cases. Every tool ID here MUST come from
+  // `TOOL_CATEGORIES` (`ALL_AVAILABLE_TOOLS` in `./definitions`) so generated
+  // custom modes only request tools the sidecar/SDK actually registers.
   const patterns = {
     coding: {
       keywords: ["code", "programming", "developer", "coding", "代码", "编程", "开发"],
-      tools: ["calculator", "file_read", "file_write", "git_repo_inspect", "git_changes"],
+      tools: [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash",
+        "mcp__cognia-tools__git_repo_inspect",
+        "mcp__cognia-tools__git_changes",
+      ],
       icon: "Code2",
       category: "technical" as CustomModeCategory,
       outputFormat: "code" as const,
     },
     research: {
       keywords: ["research", "academic", "paper", "study", "研究", "学术", "论文"],
-      tools: ["academic_search", "academic_analysis", "web_search", "rag_search"],
+      tools: ["WebSearch", "WebFetch", "Read", "Write", "mcp__cognia-tools__content_search"],
       icon: "GraduationCap",
       category: "research" as CustomModeCategory,
       outputFormat: "markdown" as const,
     },
     writing: {
       keywords: ["write", "writing", "content", "article", "blog", "写作", "文章", "博客"],
-      tools: ["web_search", "rag_search"],
+      tools: ["WebSearch", "WebFetch", "Read", "Write"],
       icon: "PenTool",
       category: "creative" as CustomModeCategory,
       outputFormat: "markdown" as const,
     },
     data: {
       keywords: ["data", "analysis", "analytics", "chart", "report", "数据", "分析", "报表"],
-      tools: ["calculator", "rag_search"],
+      tools: [
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "Bash",
+        "mcp__cognia-tools__content_search",
+        "mcp__cognia-tools__file_info",
+      ],
       icon: "BarChart3",
       category: "technical" as CustomModeCategory,
       outputFormat: "markdown" as const,
     },
     design: {
       keywords: ["design", "ui", "web", "interface", "layout", "设计", "界面", "网页"],
-      tools: ["image_generate"],
+      tools: ["Read", "Write", "Edit", "WebSearch", "WebFetch"],
       icon: "Layout",
       category: "creative" as CustomModeCategory,
       outputFormat: "react" as const,
@@ -54,14 +73,14 @@ export function analyzeModeDescription(request: ModeGenerationRequest): Generate
     },
     presentation: {
       keywords: ["ppt", "presentation", "slide", "演示", "PPT", "幻灯片"],
-      tools: ["ppt_outline", "ppt_slide_content", "ppt_finalize", "ppt_export"],
+      tools: ["Read", "Write", "Edit", "WebSearch", "WebFetch"],
       icon: "Presentation",
       category: "productivity" as CustomModeCategory,
       outputFormat: "markdown" as const,
     },
     learning: {
       keywords: ["learn", "study", "education", "teach", "tutor", "学习", "教育", "辅导"],
-      tools: ["display_flashcard", "display_quiz", "rag_search", "web_search"],
+      tools: ["WebSearch", "WebFetch", "Read", "Write"],
       icon: "BookOpen",
       category: "education" as CustomModeCategory,
       outputFormat: "markdown" as const,
@@ -83,7 +102,7 @@ export function analyzeModeDescription(request: ModeGenerationRequest): Generate
   // Default if no pattern matched
   if (!matchedPattern) {
     matchedPattern = {
-      tools: ["web_search", "rag_search", "calculator"],
+      tools: ["WebSearch", "WebFetch", "Read"],
       icon: "Bot",
       category: "other" as CustomModeCategory,
       outputFormat: "text" as const,

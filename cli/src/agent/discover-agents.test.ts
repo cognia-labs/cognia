@@ -66,6 +66,24 @@ describe("discoverAgentFiles", () => {
     expect(files).toHaveLength(1)
     expect(files[0].content).toBe(AGENT_MD)
   })
+
+  it("lets project root win even when global file collides via frontmatter name (F07/T06)", async () => {
+    const projFile = path.join("/proj", ".cognia", "agents", "local-reviewer.md")
+    const homeFile = path.join("/home", ".cognia", "agents", "global-reviewer.md")
+    const projMd = `---\nname: reviewer\ndescription: project reviewer\nmodel: opus\n---\nProject prompt.`
+    const homeMd = `---\nname: reviewer\ndescription: global reviewer\nmodel: haiku\n---\nGlobal prompt.`
+    const files = await discoverAgentFiles(
+      ["/proj", "/home"],
+      fakeFs({ [projFile]: projMd, [homeFile]: homeMd })
+    )
+    const built = buildAgents(files)
+    expect(built).toHaveLength(1)
+    expect(built[0]).toMatchObject({
+      id: "reviewer",
+      description: "project reviewer",
+      def: expect.objectContaining({ model: "opus", prompt: "Project prompt." }),
+    })
+  })
 })
 
 describe("discoverAgentFiles (real node fs)", () => {

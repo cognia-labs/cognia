@@ -83,6 +83,130 @@ export const customModeFileSchema = z
 
 export type CustomModeFile = z.infer<typeof customModeFileSchema>
 
+const SUPPORTED_ENVELOPE_VERSIONS = new Set(["1.0", "1"])
+
+/** GUI-only metadata fields ignored (with diagnostics) when loading in the CLI. */
+const GUI_ONLY_MODE_KEYS = [
+  "id",
+  "type",
+  "isBuiltIn",
+  "createdAt",
+  "updatedAt",
+  "usageCount",
+  "lastUsedAt",
+  "isShared",
+  "sharedBy",
+  "source",
+  "pluginId",
+  "category",
+  "tags",
+  "previewEnabled",
+  "customConfig",
+  "a2uiEnabled",
+  "a2uiTemplate",
+  "mcpTools",
+] as const
+
+export interface ModeImportDiagnostic {
+  file: string
+  kind: "invalid" | "ignored_fields"
+  message: string
+  ignoredFields?: string[]
+}
+
+/**
+ * Parse either a flat CLI `.cognia/modes/*.json` payload OR a GUI-exported
+ * `{ version: "1.0", type: "custom-mode", mode: { ... } }` envelope into the
+ * canonical {@link CustomModeFile}, reporting any GUI-only fields ignored by
+ * the terminal runtime instead of silently dropping the entire file.
+ */
+export function parseInteroperableModeJson(
+  rawJson: string
+): { ok: true; file: CustomModeFile; ignoredFields: string[] } | { ok: false; error: string } {
+  let parsedJson: unknown
+  try {
+    parsedJson = JSON.parse(rawJson)
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Malformed JSON" }
+  }
+  if (!parsedJson || typeof parsedJson !== "object" || Array.isArray(parsedJson)) {
+    return { ok: false, error: "Expected a JSON object" }
+  }
+
+  const root = parsedJson as Record<string, unknown>
+  let candidate: Record<string, unknown> = root
+  const isGuiEnvelope = root.type === "custom-mode"
+  if (isGuiEnvelope) {
+    if (root.version !== undefined && !SUPPORTED_ENVELOPE_VERSIONS.has(String(root.version))) {
+      return {
+        ok: false,
+        error: `Unsupported custom-mode schema version "${String(root.version)}"`,
+      }
+    }
+    if (!root.mode || typeof root.mode !== "object" || Array.isArray(root.mode)) {
+      return { ok: false, error: "GUI custom-mode envelope is missing a valid `mode` object" }
+    }
+    candidate = root.mode as Record<string, unknown>
+  } else {
+    if (root.version !== undefined && !SUPPORTED_ENVELOPE_VERSIONS.has(String(root.version))) {
+      return { ok: false, error: `Unsupported mode schema version "${String(root.version)}"` }
+    }
+    // Flat files stay validated against strict `customModeFileSchema` unless
+    // they came from a GUI `CustomModeConfig` object (`type: "custom"` or `*Override`).
+    const looksLikeGuiRecord =
+      root.type === "custom" ||
+      "modelOverride" in root ||
+      "temperatureOverride" in root ||
+      "maxTokensOverride" in root ||
+      "isBuiltIn" in root
+    if (!looksLikeGuiRecord) {
+      const strict = customModeFileSchema.safeParse(root)
+      if (!strict.success) {
+        return { ok: false, error: strict.error.issues[0]?.message ?? "Invalid mode schema" }
+      }
+      return { ok: true, file: strict.data, ignoredFields: [] }
+    }
+  }
+
+  const ignoredFields: string[] = []
+  const mapped: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(candidate)) {
+    if (value === undefined) continue
+    if (key === "modelOverride") {
+      if (typeof value === "string" && value.trim()) mapped.model ??= value.trim()
+      continue
+    }
+    if (key === "temperatureOverride") {
+      if (typeof value === "number") mapped.temperature ??= value
+      continue
+    }
+    if (key === "maxTokensOverride") {
+      if (typeof value === "number") mapped.maxTokens ??= value
+      continue
+    }
+    if ((GUI_ONLY_MODE_KEYS as readonly string[]).includes(key)) {
+      if (
+        (key === "a2uiEnabled" && value === true) ||
+        key === "a2uiTemplate" ||
+        (key === "previewEnabled" && value === true) ||
+        (key === "mcpTools" && Array.isArray(value) && value.length > 0)
+      ) {
+        ignoredFields.push(key)
+      }
+      continue
+    }
+    // Empty strings on GUI exports (`systemPrompt: ""`, `description: ""`) normalize cleanly.
+    if (key === "model" && typeof value === "string" && !value.trim()) continue
+    mapped[key] = value
+  }
+
+  const validated = customModeFileSchema.safeParse(mapped)
+  if (!validated.success) {
+    return { ok: false, error: validated.error.issues[0]?.message ?? "Invalid mode schema" }
+  }
+  return { ok: true, file: validated.data, ignoredFields }
+}
+
 /**
  * Build a resolved {@link AgentModeConfig} from a validated custom-mode file.
  * The `model` / `temperature` / `maxTokens` map onto the `*Override` fields
@@ -110,15 +234,15 @@ export function customModeToConfig(id: string, file: CustomModeFile): AgentModeC
 }
 
 /**
- * Discover custom agent modes from each root's `.cognia/modes/*.json`. First
- * root wins on an id collision (project overrides global). Unreadable / invalid
- * files are skipped (best-effort — a bad mode file never breaks chat).
+ * Discover custom agent modes together with explicit diagnostics for invalid
+ * files or ignored GUI-only fields (`a2uiTemplate`, `previewEnabled`, `mcpTools`).
  */
-export async function discoverCustomAgentModes(
+export async function discoverCustomAgentModesWithDiagnostics(
   roots: string[],
   fs: ModeFs = defaultFs
-): Promise<AgentModeConfig[]> {
+): Promise<{ modes: AgentModeConfig[]; diagnostics: ModeImportDiagnostic[] }> {
   const byId = new Map<string, AgentModeConfig>()
+  const diagnostics: ModeImportDiagnostic[] = []
   for (const root of roots) {
     const dir = path.join(root, ".cognia", "modes")
     if (!(await fs.exists(dir))) continue
@@ -127,17 +251,47 @@ export async function discoverCustomAgentModes(
       if (!name.endsWith(".json")) continue
       const id = name.slice(0, -5)
       if (byId.has(id)) continue
+      const filePath = path.join(dir, name)
       try {
-        const parsed = customModeFileSchema.safeParse(
-          JSON.parse(await fs.readText(path.join(dir, name)))
-        )
-        if (parsed.success) byId.set(id, customModeToConfig(id, parsed.data))
-      } catch {
-        // Unreadable / malformed JSON — skip this file.
+        const raw = await fs.readText(filePath)
+        const parsed = parseInteroperableModeJson(raw)
+        if (!parsed.ok) {
+          diagnostics.push({ file: filePath, kind: "invalid", message: parsed.error })
+          continue
+        }
+        if (parsed.ignoredFields.length > 0) {
+          diagnostics.push({
+            file: filePath,
+            kind: "ignored_fields",
+            message: `Ignored GUI-only fields on CLI: ${parsed.ignoredFields.join(", ")}`,
+            ignoredFields: parsed.ignoredFields,
+          })
+        }
+        byId.set(id, customModeToConfig(id, parsed.file))
+      } catch (err) {
+        diagnostics.push({
+          file: filePath,
+          kind: "invalid",
+          message: err instanceof Error ? err.message : "Unreadable file",
+        })
       }
     }
   }
-  return [...byId.values()]
+  return { modes: [...byId.values()], diagnostics }
+}
+
+/**
+ * Discover custom agent modes from each root's `.cognia/modes/*.json`. First
+ * root wins on an id collision (project overrides global). Unreadable / invalid
+ * files are skipped (best-effort — a bad mode file never breaks chat); callers
+ * needing explicit warnings use {@link discoverCustomAgentModesWithDiagnostics}.
+ */
+export async function discoverCustomAgentModes(
+  roots: string[],
+  fs: ModeFs = defaultFs
+): Promise<AgentModeConfig[]> {
+  const { modes } = await discoverCustomAgentModesWithDiagnostics(roots, fs)
+  return modes
 }
 
 /**

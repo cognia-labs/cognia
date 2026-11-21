@@ -303,3 +303,64 @@ describe("usage tracking", () => {
     expect(after.usageCount).toBe((before ?? 0) + 1)
   })
 })
+
+describe("GUI ↔ CLI custom mode interoperability (F11)", () => {
+  beforeEach(() => {
+    reset()
+  })
+
+  it("preserves permissionMode and imports flat CLI .cognia/modes/*.json files", () => {
+    const imported = useCustomModeStore.getState().importMode(
+      JSON.stringify({
+        name: "CLI Reviewer",
+        description: "Strict read-only review",
+        systemPrompt: "Review diffs only.",
+        tools: ["Read", "Grep"],
+        permissionMode: "plan",
+        model: "claude-opus-4-8",
+        temperature: 0.2,
+        maxTokens: 4096,
+        outputFormat: "markdown",
+      })
+    )
+    expect(imported).not.toBeNull()
+    expect(imported).toMatchObject({
+      name: "CLI Reviewer",
+      permissionMode: "plan",
+      modelOverride: "claude-opus-4-8",
+      temperatureOverride: 0.2,
+      maxTokensOverride: 4096,
+      tools: ["Read", "Grep"],
+      outputFormat: "markdown",
+    })
+
+    const exported = JSON.parse(useCustomModeStore.getState().exportMode(imported!.id)!)
+    expect(exported).toMatchObject({
+      version: "1.0",
+      type: "custom-mode",
+      mode: expect.objectContaining({
+        name: "CLI Reviewer",
+        permissionMode: "plan",
+        model: "claude-opus-4-8",
+        modelOverride: "claude-opus-4-8",
+        temperature: 0.2,
+        maxTokens: 4096,
+      }),
+    })
+  })
+
+  it("rejects unknown schema versions and invalid permissionMode values", () => {
+    expect(
+      useCustomModeStore
+        .getState()
+        .importMode(
+          JSON.stringify({ version: "9.0", type: "custom-mode", mode: { name: "Future" } })
+        )
+    ).toBeNull()
+    expect(
+      useCustomModeStore
+        .getState()
+        .importMode(JSON.stringify({ name: "Bad", permissionMode: "root" }))
+    ).toBeNull()
+  })
+})

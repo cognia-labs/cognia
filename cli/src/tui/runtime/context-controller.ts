@@ -1,9 +1,15 @@
 /** Open a detailed snapshot, with a bounded optional live SDK breakdown. */
+import os from "node:os"
 import { getSessionContextUsage } from "@/lib/ai/agent/execution/sidecar-client"
 import type { SdkContextUsage } from "@cognia/agent-config-types"
 import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 import { buildContextReport, formatSdkContextBreakdown } from "../commands/context-report"
+import {
+  discoverCustomAgentModes,
+  resolveAgentMode,
+  type AgentModeConfig,
+} from "../../config/agent-mode"
 import type { ResolvedConfig } from "../../config/schema"
 import { createCliTranslator } from "../i18n"
 import { backendIdentity } from "./backend-identity"
@@ -20,6 +26,7 @@ export interface ContextReportDeps {
   /** The launched executable preset — what the per-backend model memory is keyed
    * by, so the report names the model this backend actually runs. */
   presetId?: string
+  activeMode?: AgentModeConfig | null
   /** SDK live-context fetch seam (tests); defaults to the IPC control round-trip. */
   /** Bound the optional live read so a missing backend cannot hold the report open. */
   timeoutMs?: number
@@ -29,7 +36,22 @@ export interface ContextReportDeps {
 export async function runContextReport(deps: ContextReportDeps): Promise<void> {
   if (deps.signal?.aborted) return
   const t = createCliTranslator(deps.config.locale, "cliUiContext")
-  const base = buildContextReport(deps.usage, deps.config, deps.contextWindow, deps.presetId)
+  const resolvedMode =
+    deps.activeMode !== undefined
+      ? deps.activeMode
+      : deps.config.agentMode
+        ? (resolveAgentMode(
+            deps.config.agentMode,
+            await discoverCustomAgentModes([deps.config.cwd, os.homedir()]).catch(() => [])
+          ) ?? null)
+        : null
+  const base = buildContextReport(
+    deps.usage,
+    deps.config,
+    deps.contextWindow,
+    deps.presetId,
+    resolvedMode
+  )
   const identity = backendIdentity(deps.config, deps.presetId)
   let sdk: SdkContextUsage | null = null
   let status = !deps.sessionId ? "noSession" : "unsupported"

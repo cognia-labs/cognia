@@ -7,6 +7,7 @@ import { contextTokens, formatTokens, hasCacheTelemetry } from "../format/usage"
 import { contextGauge } from "../format/status-bar"
 import { backendContextWindow, backendIdentity } from "../runtime/backend-identity"
 import { createCliTranslator, type CliLocale } from "../i18n"
+import { effectivePermissionMode, type AgentModeConfig } from "../../config/agent-mode"
 import type { ResolvedConfig } from "../../config/schema"
 
 const valid = (value: number | undefined): value is number =>
@@ -19,14 +20,28 @@ export function buildContextReport(
   usage: UsageInfo | undefined,
   config: ResolvedConfig,
   windowOverride?: number,
-  presetId?: string
+  presetId?: string,
+  activeMode?: AgentModeConfig | null
 ): string {
   const t = createCliTranslator(config.locale, "cliUiContext")
   const tokens = (value?: number) =>
     valid(value)
       ? t("report.tokens", { short: formatTokens(value), raw: value })
       : t("report.unknown")
-  const identity = backendIdentity(config, presetId)
+  const modeModelOverride =
+    activeMode && "modelOverride" in activeMode && typeof activeMode.modelOverride === "string"
+      ? activeMode.modelOverride
+      : undefined
+  const baseIdentity = backendIdentity(config, presetId)
+  const identity =
+    !baseIdentity.external && modeModelOverride
+      ? { ...baseIdentity, model: modeModelOverride }
+      : baseIdentity
+  const effectivePermission = effectivePermissionMode(
+    config.permissionMode,
+    activeMode ?? undefined,
+    config.permissionModeExplicit ?? config.permissionMode !== "default"
+  )
   const window =
     valid(usage?.contextWindow) && usage.contextWindow > 0
       ? usage.contextWindow
@@ -105,6 +120,10 @@ export function buildContextReport(
     t("report.configuration"),
     "",
     t("report.cwd", { path: literal(config.cwd) }),
+    t("report.effectivePolicy", {
+      mode: literal(activeMode?.id ?? config.agentMode ?? "default"),
+      permission: literal(effectivePermission),
+    }),
     t("report.builtinTools", {
       categories: configuredCategories.length,
       tools: configuredCategories.reduce((total, category) => total + category.tools.length, 0),

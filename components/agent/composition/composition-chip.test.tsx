@@ -36,6 +36,9 @@ jest.mock("./use-chat-executor", () => ({
 const useIsMobileMock = jest.fn().mockReturnValue(false)
 jest.mock("@/hooks/ui/use-mobile", () => ({ useIsMobile: () => useIsMobileMock() }))
 
+const useHostProfileMock = jest.fn().mockReturnValue("desktop")
+jest.mock("@/hooks/use-host-profile", () => ({ useHostProfile: () => useHostProfileMock() }))
+
 const messages = {
   agentComposition: compositionMessages,
   agentMode: agentModeMessages,
@@ -61,6 +64,7 @@ describe("CompositionChip", () => {
       useCustomModeStore.setState({ customModes: {} })
     })
     useIsMobileMock.mockReset().mockReturnValue(false)
+    useHostProfileMock.mockReset().mockReturnValue("desktop")
   })
 
   afterEach(() => {
@@ -170,6 +174,22 @@ describe("CompositionChip", () => {
     act(() => {
       useAgentRuntimeStore.setState({
         sessionCompositions: { s1: { presetId: "minimal", authority: "bypassPermissions" } },
+      })
+    })
+
+    renderChip({ sessionId: "s1" })
+
+    expect(screen.getByTestId("composition-chip-warning-dot")).toBeInTheDocument()
+    expect(screen.getByTestId("composition-chip")).toHaveAttribute("data-narrowed", "true")
+  })
+
+  it("narrows verified-fresh-agent on web-standalone instead of advertising it as runnable (F08/T06)", () => {
+    useHostProfileMock.mockReturnValue("web-standalone")
+    act(() => {
+      useAgentRuntimeStore.setState({
+        sessionCompositions: {
+          s1: { presetId: "standard", orchestration: "verified-fresh-agent" },
+        },
       })
     })
 
@@ -307,6 +327,7 @@ describe("CompositionChip — executor", () => {
 describe("CompositionChip shells", () => {
   beforeEach(() => {
     useIsMobileMock.mockReset().mockReturnValue(false)
+    useHostProfileMock.mockReset().mockReturnValue("desktop")
   })
 
   it("carries the overlay tier on the combined panel", async () => {

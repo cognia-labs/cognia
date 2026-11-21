@@ -207,6 +207,20 @@ describe("markdownAgentsToSdkMap", () => {
     expect(map.reviewer.description).toBe("Reviews code for bugs")
     expect(map.reviewer.prompt).toContain("code reviewer")
   })
+
+  it("excludes disabled, provider-pinned, and external-preset markdown agents (F07/T06)", () => {
+    const { agents } = buildMarkdownAgents([
+      { id: "active", content: VALID },
+      { id: "off", content: "---\ndescription: disabled\ndisabled: true\n---\nOff." },
+      { id: "pinned", content: "---\ndescription: pinned\nprovider: openai\n---\nPinned." },
+      {
+        id: "ext",
+        content: "---\ndescription: external\nexternalPresetId: codex-cli\n---\nExternal.",
+      },
+    ])
+    const map = markdownAgentsToSdkMap(agents)
+    expect(Object.keys(map)).toEqual(["active"])
+  })
 })
 
 describe("serializeMarkdownAgent", () => {

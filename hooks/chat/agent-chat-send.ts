@@ -2641,6 +2641,12 @@ export async function runChatSend(
   const turnOrchestration =
     turnComposition?.orchestration ?? compositionForSession(sessionId).orchestration
   if (turnOrchestration === "verified-fresh-agent") {
+    // Snapshot pre-reply message ids synchronously BEFORE the async import so
+    // a fast main reply that finishes before subscription installation is still
+    // detected as new and verified once.
+    const preTurnMessageIds = new Set(
+      (store.getState().sessions[sessionId]?.messages ?? []).map((message) => message.id)
+    )
     void import("@/lib/agent/composition/verified-fresh-agent")
       .then(({ armVerifiedFreshAgentFollowup }) =>
         armVerifiedFreshAgentFollowup({
@@ -2648,6 +2654,7 @@ export async function runChatSend(
           // Its contract: the user's request, without attachments.
           request: externalTurn.request,
           cwd: turnCwd,
+          knownMessageIds: preTurnMessageIds,
           ...(session?.projectId ? { projectId: session.projectId } : {}),
           ...(session?.title ? { mainSessionTitle: session.title } : {}),
         })

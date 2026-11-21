@@ -30,17 +30,73 @@ function humanizeId(id: string): string {
   )
 }
 
-/** Pure projection of parsed markdown agent files → mention targets. */
+/** Pure projection of parsed markdown agent files → picker mention targets. */
 export function markdownAgentTargets(files: MarkdownAgentFile[]): SubagentMentionTarget[] {
+  const { agents } = buildMarkdownAgents(files)
+  return Object.entries(agents)
+    .filter(([, def]) => !def.hidden && !def.disabled && !def.provider && !def.externalPresetId)
+    .map(([id, def]) => ({
+      id,
+      name: humanizeId(id),
+      description: def.description,
+      model: def.model,
+      // id is already kebab (no whitespace) and === the SDK agent-map key.
+      handle: id,
+    }))
+}
+
+/**
+ * Send-time projection of markdown agent files, including `hidden`, `disabled`,
+ * and runtime-pinned definitions so explicit `@handle` mentions either route
+ * (`hidden`) or fail closed with a named `TargetAgentUnavailableError` instead
+ * of silently falling back to ordinary chat.
+ */
+export function allMarkdownMentionCandidates(files: MarkdownAgentFile[]): SubagentMentionTarget[] {
   const { agents } = buildMarkdownAgents(files)
   return Object.entries(agents).map(([id, def]) => ({
     id,
     name: humanizeId(id),
     description: def.description,
     model: def.model,
-    // id is already kebab (no whitespace) and === the SDK agent-map key.
     handle: id,
   }))
+}
+
+/**
+ * Merge base subagent targets (built-in / plugin / template) with markdown
+ * targets using the SAME precedence `build-options.ts` applies at execution
+ * time: markdown agents win on `id` or `handle` collisions so picker display
+ * metadata (label, description, model) matches the definition that runs.
+ */
+export function mergeChatMentionTargets(
+  baseTargets: readonly SubagentMentionTarget[],
+  markdownTargets: readonly SubagentMentionTarget[]
+): SubagentMentionTarget[] {
+  if (markdownTargets.length === 0) return [...baseTargets]
+  const byMarkdownId = new Map(markdownTargets.map((t) => [t.id, t]))
+  const byMarkdownHandle = new Map(markdownTargets.map((t) => [t.handle.toLowerCase(), t]))
+  const consumedMarkdownIds = new Set<string>()
+  const merged: SubagentMentionTarget[] = []
+
+  for (const base of baseTargets) {
+    const replacement = byMarkdownId.get(base.id) ?? byMarkdownHandle.get(base.handle.toLowerCase())
+    if (replacement) {
+      if (!consumedMarkdownIds.has(replacement.id)) {
+        merged.push(replacement)
+        consumedMarkdownIds.add(replacement.id)
+      }
+      continue
+    }
+    merged.push(base)
+  }
+
+  for (const md of markdownTargets) {
+    if (!consumedMarkdownIds.has(md.id)) {
+      merged.push(md)
+      consumedMarkdownIds.add(md.id)
+    }
+  }
+  return merged
 }
 
 /**
@@ -51,6 +107,7 @@ export function markdownAgentTargets(files: MarkdownAgentFile[]): SubagentMentio
 export async function discoverMarkdownAgentTargets(input: {
   cwd?: string
   roots: string[]
+  includeNonPicker?: boolean
 }): Promise<SubagentMentionTarget[]> {
   try {
     const { loadProjectInstructions } = await import("@/lib/agents/instructions/load")
@@ -58,7 +115,9 @@ export async function discoverMarkdownAgentTargets(input: {
       cwd: input.cwd,
       roots: input.roots,
     })
-    return markdownAgentTargets(markdownAgentFiles)
+    return input.includeNonPicker
+      ? allMarkdownMentionCandidates(markdownAgentFiles)
+      : markdownAgentTargets(markdownAgentFiles)
   } catch {
     // Discovery is best-effort: a failure must never block a send or the picker.
     return []

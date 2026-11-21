@@ -337,3 +337,99 @@ export function resolveDispatchableSubagents(): Array<{ id: string; def: PluginS
 export function getDispatchableSubagentDef(id: string): PluginSubagentDef | undefined {
   return resolveDispatchableSubagents().find((x) => x.id === id)?.def
 }
+
+/**
+ * Enumerate ALL known subagent definitions (built-in + plugin + user templates),
+ * including `hidden`, `disabled`, and provider/external-pinned ones, with the
+ * exact display names `resolveDispatchableSubagents` uses. Used at send time so
+ * an explicit `@handle` either routes (`hidden`) or fails closed with a typed
+ * `TargetAgentUnavailableError` instead of silently running as normal chat.
+ */
+export function resolveKnownSubagentCandidates(): Array<{
+  id: string
+  def: {
+    name: string
+    description: string
+    model?: string
+    disabled?: boolean
+    hidden?: boolean
+    provider?: string
+    externalPresetId?: string
+  }
+}> {
+  const shadowedIds = new Set(
+    Object.values(useSubagentRuntimeStore.getState().templates)
+      .filter((tpl) => !tpl.isBuiltIn)
+      .map((tpl) => projectedTemplateId(tpl.name))
+  )
+  const out: Array<{
+    id: string
+    def: {
+      name: string
+      description: string
+      model?: string
+      disabled?: boolean
+      hidden?: boolean
+      provider?: string
+      externalPresetId?: string
+    }
+  }> = builtInDispatchableSubagents()
+    .filter((x) => !shadowedIds.has(x.id))
+    .map(({ id, def }) => ({
+      id,
+      def: {
+        name: def.name,
+        description: def.description,
+        model: def.model,
+        disabled: def.disabled,
+        hidden: def.hidden,
+        provider: def.provider,
+        externalPresetId: def.externalPresetId,
+      },
+    }))
+
+  for (const entry of listSubagentEntries()) {
+    const id = entry.pluginId ? `${entry.pluginId}:${entry.id}` : entry.id
+    out.push({
+      id,
+      def: {
+        name: entry.entry.name,
+        description: entry.entry.description,
+        model: entry.entry.model,
+        disabled: entry.entry.disabled,
+        hidden: entry.entry.hidden,
+        provider: entry.entry.provider,
+        externalPresetId: entry.entry.externalPresetId,
+      },
+    })
+  }
+
+  for (const tpl of Object.values(useSubagentRuntimeStore.getState().templates)) {
+    if (tpl.isBuiltIn) continue
+    const id = projectedTemplateId(tpl.name)
+    out.push({
+      id,
+      def: {
+        name: tpl.name,
+        description: tpl.description,
+        model: tpl.config?.model,
+        disabled: tpl.disabled,
+        hidden: tpl.hidden,
+        provider: tpl.config?.provider,
+        externalPresetId: tpl.config?.externalPresetId,
+      },
+    })
+  }
+  return out
+}
+
+/** Classify why a known projected subagent id is unavailable for native `@agent` routing. */
+export function inspectSubagentAvailability(
+  targetId: string
+): "eligible" | "disabled" | "runtime_incompatible" | "not_found" {
+  const match = resolveKnownSubagentCandidates().find((c) => c.id === targetId)
+  if (!match) return "not_found"
+  if (match.def.disabled) return "disabled"
+  if (match.def.provider || match.def.externalPresetId) return "runtime_incompatible"
+  return "eligible"
+}

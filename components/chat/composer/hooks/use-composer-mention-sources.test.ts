@@ -58,7 +58,7 @@ it("gives a direct chat the combined panel and routes on the session's provider"
   expect(result.current.entityContext).toEqual({ projectId: null, sessionId: "s1" })
 })
 
-it("adds markdown agents without letting them shadow a registered subagent", () => {
+it("lets project markdown agents override a colliding registered subagent so picker matches execution (F07)", () => {
   markdown = [
     { id: "reviewer", handle: "shadow" },
     { id: "writer", handle: "writer" },
@@ -71,7 +71,10 @@ it("adds markdown agents without letting them shadow a registered subagent", () 
     })
   )
 
-  expect(result.current.chatAgents).toEqual([...subagents, { id: "writer", handle: "writer" }])
+  expect(result.current.chatAgents).toEqual([
+    { id: "reviewer", handle: "shadow" },
+    { id: "writer", handle: "writer" },
+  ])
 })
 
 it("makes `@` mean a workflow node in the copilot and turns routing off", () => {

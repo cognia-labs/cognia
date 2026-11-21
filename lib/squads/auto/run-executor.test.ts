@@ -1,4 +1,8 @@
-import { runCouncilFromProposal, runEnsembleFromProposal } from "./run-executor"
+import {
+  runCouncilFromProposal,
+  runEnsembleFromProposal,
+  runSingleSendFromProposal,
+} from "./run-executor"
 import type { RunExecutorDeps } from "./run-executor"
 import type { AutoOrchestrationProposal } from "./types"
 import type { TeamRoutingAssessment } from "@/types/agent/agent-team"
@@ -81,5 +85,28 @@ describe("runEnsembleFromProposal", () => {
     const res = await runEnsembleFromProposal(proposal("t"), deps, { n: 2 })
     expect(res.ok).toBe(true)
     expect(deps.calls.every((c) => c.modelAlias === "only")).toBe(true)
+  })
+})
+
+describe("runSingleSendFromProposal (F10/T07)", () => {
+  it("dispatches a single model call on the primary alias without roster/team overhead", async () => {
+    const deps = fakeDeps(["fast", "balanced"])
+    const res = await runSingleSendFromProposal(proposal("Explain this stack trace"), deps)
+    expect(res).toEqual({ markdown: "answer(fast)", ok: true })
+    expect(deps.calls).toEqual([{ modelAlias: "fast", userPrompt: "Explain this stack trace" }])
+  })
+
+  it("falls back to the renderer LLM client when no routing aliases are configured", async () => {
+    const complete = jest.fn(async (prompt: string) => `direct(${prompt})`)
+    const deps = { ...fakeDeps([]), client: { complete } }
+    const res = await runSingleSendFromProposal(proposal("Summarize release"), deps)
+    expect(res).toEqual({ markdown: "direct(Summarize release)", ok: true })
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it("returns ok:false with an actionable message when neither alias nor client exists", async () => {
+    const res = await runSingleSendFromProposal(proposal("x"), fakeDeps([]))
+    expect(res.ok).toBe(false)
+    expect(res.markdown).toMatch(/No active model/i)
   })
 })

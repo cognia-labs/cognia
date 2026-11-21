@@ -218,10 +218,13 @@ describe("autoSelectMcpToolsForMode", () => {
   })
 })
 
+import { ALL_AVAILABLE_TOOLS } from "./definitions"
+
 describe("analyzeModeDescription (private but exported)", () => {
   it("matches the coding pattern when keywords are present", () => {
     const result = analyzeModeDescription({ description: "coding assistant for software" })
-    expect(result.suggestedTools).toContain("file_read")
+    expect(result.suggestedTools).toContain("Read")
+    expect(result.suggestedTools).toContain("Write")
     expect(result.confidence).toBeGreaterThan(0.5)
     expect(result.mode.outputFormat).toBe("code")
   })
@@ -230,9 +233,26 @@ describe("analyzeModeDescription (private but exported)", () => {
     const result = analyzeModeDescription({
       description: "academic research and paper analysis",
     })
-    expect(result.suggestedTools).toEqual(
-      expect.arrayContaining(["academic_search", "academic_analysis"])
-    )
+    expect(result.suggestedTools).toEqual(expect.arrayContaining(["WebSearch", "WebFetch"]))
+  })
+
+  it("never suggests dead pre-port v1 tool names across any pattern (F11)", () => {
+    const valid = new Set<string>(ALL_AVAILABLE_TOOLS as readonly string[])
+    for (const prompt of [
+      "coding developer",
+      "academic paper research",
+      "blog article writing",
+      "data analytics chart",
+      "ui web design",
+      "ppt slide presentation",
+      "tutor learn study",
+      "unmatched fallback prompt",
+    ]) {
+      const result = analyzeModeDescription({ description: prompt })
+      for (const tool of result.suggestedTools) {
+        expect(valid.has(tool)).toBe(true)
+      }
+    }
   })
 
   it("matches the design pattern and toggles preview", () => {

@@ -7,7 +7,11 @@
 import nodeFs from "node:fs/promises"
 import path from "node:path"
 
-import { buildMarkdownAgents, type MarkdownAgentFile } from "@/lib/agents/markdown-agents"
+import {
+  buildMarkdownAgents,
+  parseMarkdownAgent,
+  type MarkdownAgentFile,
+} from "@/lib/agents/markdown-agents"
 import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
 import { claudeCodeAdapter } from "@/lib/agents/subagent-importers/claude-code"
 import { codexCliAdapter } from "@/lib/agents/subagent-importers/codex-cli"
@@ -47,12 +51,14 @@ const defaultFs: AgentFs = {
 }
 
 /** Collect agent markdown files from each root's `.cognia/agents` dir. First
- * root wins on an id collision (project overrides global). */
+ * root wins on both filename stem and declared frontmatter `name` collisions
+ * (project overrides global). */
 export async function discoverAgentFiles(
   roots: string[],
   fs: AgentFs = defaultFs
 ): Promise<MarkdownAgentFile[]> {
-  const byId = new Map<string, MarkdownAgentFile>()
+  const byStem = new Map<string, MarkdownAgentFile>()
+  const seenDeclaredIds = new Set<string>()
   for (const root of roots) {
     const dir = path.join(root, ".cognia", "agents")
     if (!(await fs.exists(dir))) continue
@@ -60,15 +66,20 @@ export async function discoverAgentFiles(
     for (const name of names) {
       if (!name.endsWith(".md")) continue
       const id = name.slice(0, -3)
-      if (byId.has(id)) continue
+      if (byStem.has(id)) continue
       try {
-        byId.set(id, { id, content: await fs.readText(path.join(dir, name)) })
+        const content = await fs.readText(path.join(dir, name))
+        const parsed = parseMarkdownAgent(id, content)
+        const effectiveId = "def" in parsed ? parsed.id : id
+        if (seenDeclaredIds.has(effectiveId)) continue
+        seenDeclaredIds.add(effectiveId)
+        byStem.set(id, { id, content })
       } catch {
         // unreadable file — skip
       }
     }
   }
-  return [...byId.values()]
+  return [...byStem.values()]
 }
 
 export interface AgentSummary {
@@ -112,11 +123,14 @@ export function applySubagentModelOverrides(
   })
 }
 
-/** Parse discovered files into `{ id, name, description, def }` rows. */
+/** Parse discovered files into `{ id, name, description, def }` rows.
+ * Reverses root-priority order when feeding `buildMarkdownAgents` (whose
+ * contract is last-writer-wins) and restores discovery order afterwards. */
 export function buildAgents(files: MarkdownAgentFile[]): AgentSummary[] {
-  const { agents } = buildMarkdownAgents(files)
+  const { agents } = buildMarkdownAgents([...files].reverse())
   return (
     Object.entries(agents)
+      .reverse()
       // `disabled: true` (alias `disable`) frontmatter turns the agent fully off
       // — same semantics as the desktop resolver. `hidden` only affects pickers.
       .filter(([, def]) => !def.disabled)

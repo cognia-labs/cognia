@@ -636,6 +636,120 @@ describe("AutoComposeDialog — executor dispatch (council / ensemble)", () => {
       expect.objectContaining({ consensusSignal: { consensusNeeded: true } })
     )
   })
+
+  it("executes single-send directly on BOTH Quick create and Preview approve with 0 Squads materialized (F10/T07)", async () => {
+    const realPlan = (
+      jest.requireActual("@/lib/squads/auto/auto-orchestrate") as {
+        planAutoOrchestration: typeof planAutoOrchestration
+      }
+    ).planAutoOrchestration
+    let planLlmCalls = 0
+    const countingClient: LlmClient = {
+      complete: async (_prompt, options) => {
+        planLlmCalls += 1
+        if ((options?.system ?? "").includes("routing assessor")) {
+          return '{"recommendedPattern":"single_agent_recommended","confidence":0.91,"reason":"One pass suffices."}'
+        }
+        throw new Error("composeRoster/decomposeTasks must not run for single-send")
+      },
+    }
+    const runSingleSendExec = jest.fn(async () => ({ markdown: "SINGLE AGENT ANSWER", ok: true }))
+    const onComposed = jest.fn()
+    const onResult = jest.fn()
+
+    // 1. Quick create entry
+    const { unmount } = render(
+      <AutoComposeDialog
+        open
+        onOpenChange={jest.fn()}
+        onComposed={onComposed}
+        onResult={onResult}
+        plan={realPlan}
+        buildClient={() => countingClient}
+        getCatalog={getCatalog}
+        runSingleSendExec={runSingleSendExec}
+        loadAliases={async () => ["fast"]}
+        makeRunPrompt={async () => async () => ({ completion: "x", model: "m", provider: "p" })}
+      />
+    )
+    typeObjective("Explain the error log")
+    fireEvent.click(screen.getByTestId("auto-compose-quick"))
+    await waitFor(() => expect(screen.getByTestId("auto-compose-result")).toBeInTheDocument())
+    expect(planLlmCalls).toBe(1)
+    expect(runSingleSendExec).toHaveBeenCalledTimes(1)
+    expect(mockMaterialize).not.toHaveBeenCalled()
+    expect(onComposed).not.toHaveBeenCalled()
+    expect(onResult).toHaveBeenCalledWith("SINGLE AGENT ANSWER")
+    unmount()
+
+    // 2. Preview → Approve entry (plus manual switch to team pattern in a third check)
+    planLlmCalls = 0
+    runSingleSendExec.mockClear()
+    onResult.mockClear()
+    render(
+      <AutoComposeDialog
+        open
+        onOpenChange={jest.fn()}
+        onComposed={onComposed}
+        onResult={onResult}
+        plan={realPlan}
+        buildClient={() => countingClient}
+        getCatalog={getCatalog}
+        runSingleSendExec={runSingleSendExec}
+        loadAliases={async () => []}
+      />
+    )
+    const user = userEvent.setup()
+    fireEvent.click(screen.getByTestId("auto-compose-advanced-trigger"))
+    await user.click(screen.getByTestId("auto-compose-clarify-toggle"))
+    typeObjective("Summarize one function")
+    fireEvent.click(screen.getByTestId("auto-compose-submit"))
+    await waitFor(() => expect(screen.getByTestId("auto-compose-approve")).toBeInTheDocument())
+    expect(planLlmCalls).toBe(1)
+
+    fireEvent.click(screen.getByTestId("auto-compose-approve"))
+    await waitFor(() => expect(screen.getByTestId("auto-compose-result")).toBeInTheDocument())
+    expect(runSingleSendExec).toHaveBeenCalledTimes(1)
+    expect(mockMaterialize).not.toHaveBeenCalled()
+    expect(onComposed).not.toHaveBeenCalled()
+    expect(onResult).toHaveBeenCalledWith("SINGLE AGENT ANSWER")
+  })
+
+  it("recomputes executor and scaffolds a team when operator switches preview pattern from single-send to parallel_specialists (F10/T07)", async () => {
+    mockPlan.mockResolvedValue({
+      objective: "Investigate latency spike",
+      assessment: {
+        ...proposal.assessment,
+        recommendedPattern: "single_agent_recommended",
+      },
+      roster: [],
+      tasks: [],
+      executor: {
+        kind: "single-send",
+        fromPattern: "single_agent_recommended",
+        confidence: 0.85,
+        reason: "single",
+      },
+    })
+    const { onComposed } = setup()
+    const user = userEvent.setup()
+    fireEvent.click(screen.getByTestId("auto-compose-advanced-trigger"))
+    await user.click(screen.getByTestId("auto-compose-clarify-toggle"))
+    typeObjective("Investigate latency spike")
+    fireEvent.click(screen.getByTestId("auto-compose-submit"))
+    await waitFor(() => expect(screen.getByTestId("auto-compose-approve")).toBeInTheDocument())
+
+    fireEvent.change(screen.getAllByRole("combobox")[0], {
+      target: { value: "parallel_specialists" },
+    })
+    fireEvent.click(screen.getByTestId("auto-compose-approve"))
+    await waitFor(() => expect(mockMaterialize).toHaveBeenCalledTimes(1))
+    const materialized = mockMaterialize.mock.calls[0][0]
+    expect(materialized.executor?.kind).toBe("team-flat")
+    expect(materialized.roster.length).toBeGreaterThanOrEqual(2)
+    expect(materialized.tasks.length).toBeGreaterThanOrEqual(1)
+    expect(onComposed).toHaveBeenCalledWith("team-9")
+  })
 })
 
 describe("AutoComposeDialog — handoff executors", () => {

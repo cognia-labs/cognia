@@ -118,7 +118,7 @@ describe("planAutoOrchestration", () => {
       },
     }
     const proposal = await planAutoOrchestration({
-      objective: "do something useful",
+      objective: "Audit the authentication module across services",
       catalog: EMPTY_CAPABILITY_CATALOG,
       now: () => NOW,
       client: throwing,
@@ -176,15 +176,31 @@ describe("planAutoOrchestration", () => {
     expect(rosterPrompt).toContain("pattern=ultracode_orchestration")
   })
 
-  it("populates proposal.executor from the assessed pattern", async () => {
+  it("populates proposal.executor from the assessed pattern and skips roster/task LLM calls on single-send (F10/T07)", async () => {
+    const stagesCalled: string[] = []
+    const client: LlmClient = {
+      complete: async (_prompt, options) => {
+        const sys = options?.system ?? ""
+        if (sys.includes("routing assessor")) {
+          stagesCalled.push("assess")
+          return '{"recommendedPattern":"single_agent_recommended"}'
+        }
+        if (sys.includes("compose a small specialist team")) stagesCalled.push("roster")
+        if (sys.includes("decompose an objective")) stagesCalled.push("tasks")
+        return "{}"
+      },
+    }
     const proposal = await planAutoOrchestration({
       objective: "ship it",
       catalog: EMPTY_CAPABILITY_CATALOG,
       now: () => NOW,
-      client: stagedClient({ assess: '{"recommendedPattern":"single_agent_recommended"}' }),
+      client,
     })
     expect(proposal.executor?.kind).toBe("single-send")
     expect(proposal.executor?.fromPattern).toBe("single_agent_recommended")
+    expect(proposal.roster).toEqual([])
+    expect(proposal.tasks).toEqual([])
+    expect(stagesCalled).toEqual(["assess"])
   })
 
   it("forwards an explicit twinRoster to composeRoster and includes it on the proposal", async () => {

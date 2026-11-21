@@ -29,6 +29,7 @@
     "cacheMeaning": "缺失字段保持未知，明确上报的零予以保留。不同有效期的写入属于缓存写入的细分，不是额外占用；这些请求计数也不能独立叠加到实时上下文占用中。",
     "configuration": "## 会话配置",
     "cwd": "工作目录：{path}",
+    "effectivePolicy": "当前模式：{mode} · 生效权限：{permission}",
     "roots": "已配置的额外目录：{count}",
     "promptLength": "已配置的系统提示词长度：{count} 个字符（不展示内容）",
     "skillDirs": "已配置的额外 Skill 目录：{count}",

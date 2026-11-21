@@ -229,13 +229,15 @@ export function buildMarkdownAgents(files: MarkdownAgentFile[]): MarkdownAgentRe
 /**
  * Project markdown agents into the SDK `Record<string, Record<string,
  * unknown>>` shape consumed by `SendOptions.agents`, mirroring how
- * `subagents/index.ts` spreads its built-ins.
+ * `resolveAllSubagents` filters disabled and provider/external-pinned defs.
  */
 export function markdownAgentsToSdkMap(
   agents: Record<string, AgentDefinition>
 ): Record<string, AgentDefinition> {
   const out: Record<string, AgentDefinition> = {}
   for (const [id, def] of Object.entries(agents)) {
+    if (def.disabled) continue
+    if (def.provider || def.externalPresetId) continue
     out[id] = def
   }
   return out

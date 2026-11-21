@@ -33,6 +33,22 @@ import {
   isExternalAgentProviderId,
 } from "@/lib/ai/agent/external/session/session-models"
 import { resolveAppDefaultModel } from "@/lib/ai/app-default-model"
+
+export type TargetAgentUnavailableReason =
+  "disabled" | "runtime_incompatible" | "grant_restricted" | "not_found"
+
+export class TargetAgentUnavailableError extends Error {
+  readonly code = "target_agent_unavailable" as const
+  readonly targetAgentId: string
+  readonly reason: TargetAgentUnavailableReason
+
+  constructor(targetAgentId: string, reason: TargetAgentUnavailableReason) {
+    super(`Target agent "${targetAgentId}" is unavailable (${reason}).`)
+    this.name = "TargetAgentUnavailableError"
+    this.targetAgentId = targetAgentId
+    this.reason = reason
+  }
+}
 import { mergeRulesets } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { deterministicRulesetSort } from "@/lib/ai/agent/execution/permissions/ruleset-edit"
 import { detectHostProfile } from "@/lib/platform/capabilities"
@@ -4767,11 +4783,16 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // subagents so a project's `.cognia/agents/foo.md` wins on id collision. The
   // list is empty for workflow-editor sessions (discovery is skipped above), so
   // this branch is a no-op there.
+  let rawProjectMarkdownAgents: Record<
+    string,
+    import("@/lib/agent/builtin-catalog/agent-definition").AgentDefinition
+  > = {}
   if (projectMarkdownAgentFiles.length > 0 && !ctx.dispatchContext) {
     try {
       const { buildMarkdownAgents, markdownAgentsToSdkMap } =
         await import("@/lib/agents/markdown-agents")
       const { agents } = buildMarkdownAgents(projectMarkdownAgentFiles)
+      rawProjectMarkdownAgents = agents
       const sdkMap = markdownAgentsToSdkMap(agents)
       if (Object.keys(sdkMap).length > 0) {
         opts.agents = { ...(opts.agents ?? {}), ...sdkMap }
@@ -4781,6 +4802,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       console.warn("project markdown subagent registration failed:", err)
     }
   }
+
+  const wasTargetRegisteredBeforeGrant = Boolean(
+    ctx.targetAgentId && opts.agents?.[ctx.targetAgentId]
+  )
 
   // --- Capability-grant subagent restriction ------------------------------
   // A grant's `subagents.only` keeps just the named entries of the map every
@@ -4802,13 +4827,38 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
 
   // --- @agent single-turn routing ------------------------------------------
   // The user `@`-mentioned a subagent for this turn. Run the turn AS that agent
-  // (SDK-native `agent` field; ai-sdk applies a synthetic overlay) — but ONLY
-  // when the id is actually registered in `opts.agents` above. An unknown /
-  // stale id is silently dropped (the SDK errors on an undefined agent). This is
-  // the single membership gate that keeps the picked handle, the parsed id, and
-  // the registered agent map in agreement.
-  if (ctx.targetAgentId && opts.agents?.[ctx.targetAgentId]) {
-    opts.agent = ctx.targetAgentId
+  // (SDK-native `agent` field; ai-sdk applies a synthetic overlay) when the id
+  // is registered in `opts.agents`. If the explicit target is missing, disabled,
+  // runtime-pinned, or stripped by a capability grant, fail closed with a typed
+  // diagnostic instead of silently running as un-routed plain chat (F07).
+  if (ctx.targetAgentId) {
+    if (opts.agents?.[ctx.targetAgentId]) {
+      opts.agent = ctx.targetAgentId
+    } else if (!ctx.dispatchContext) {
+      let reason: TargetAgentUnavailableReason = wasTargetRegisteredBeforeGrant
+        ? "grant_restricted"
+        : "not_found"
+      if (reason === "not_found") {
+        const mdDef = rawProjectMarkdownAgents[ctx.targetAgentId]
+        if (mdDef?.disabled) {
+          reason = "disabled"
+        } else if (mdDef?.provider || mdDef?.externalPresetId) {
+          reason = "runtime_incompatible"
+        } else {
+          try {
+            const { inspectSubagentAvailability } =
+              await import("@/lib/agent/builtin-catalog/projection")
+            const inspected = inspectSubagentAvailability(ctx.targetAgentId)
+            if (inspected === "disabled" || inspected === "runtime_incompatible") {
+              reason = inspected
+            }
+          } catch {
+            // Keep conservative `not_found` reason if inspection fails.
+          }
+        }
+      }
+      throw new TargetAgentUnavailableError(ctx.targetAgentId, reason)
+    }
   }
 
   // --- Cache-friendly dynamic tail (experimental) ---------------------------

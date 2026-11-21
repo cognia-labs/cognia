@@ -7,6 +7,98 @@ import { initialState } from "../initial-state"
 import type { CustomModeState } from "../types"
 
 const customModeLogger = loggers.agent.child("custom-mode-store")
+const SUPPORTED_MODE_SCHEMA_VERSIONS = new Set(["1.0", "1"])
+const VALID_PERMISSION_MODES: ReadonlySet<string> = new Set([
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+])
+type AgentModePermission = NonNullable<CustomModeConfig["permissionMode"]>
+const VALID_OUTPUT_FORMATS: ReadonlySet<string> = new Set([
+  "text",
+  "code",
+  "html",
+  "react",
+  "markdown",
+])
+
+/**
+ * Normalize either a GUI `{ version, type: "custom-mode", mode }` envelope or a
+ * flat CLI `.cognia/modes/*.json` payload (`model` / `temperature` / `maxTokens`)
+ * into `Partial<CustomModeConfig>`. Rejects unknown envelope versions or missing
+ * `name` so incompatible records fail closed instead of silently misimporting.
+ */
+function normalizeImportedModeRecord(raw: unknown): Partial<CustomModeConfig> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Invalid custom mode payload: expected an object")
+  }
+  const obj = raw as Record<string, unknown>
+  let source: Record<string, unknown>
+  if ("type" in obj && obj.type === "custom-mode") {
+    if (obj.version !== undefined && !SUPPORTED_MODE_SCHEMA_VERSIONS.has(String(obj.version))) {
+      throw new Error(`Unsupported custom mode schema version: ${String(obj.version)}`)
+    }
+    if (!obj.mode || typeof obj.mode !== "object" || Array.isArray(obj.mode)) {
+      throw new Error("Invalid mode export format")
+    }
+    source = obj.mode as Record<string, unknown>
+  } else if ("type" in obj && obj.type !== "custom") {
+    throw new Error("Invalid mode export format")
+  } else {
+    if (obj.version !== undefined && !SUPPORTED_MODE_SCHEMA_VERSIONS.has(String(obj.version))) {
+      throw new Error(`Unsupported custom mode schema version: ${String(obj.version)}`)
+    }
+    source = obj
+  }
+
+  if (typeof source.name !== "string" || source.name.trim().length === 0) {
+    throw new Error("Invalid mode export format: name is required")
+  }
+  if (
+    source.permissionMode !== undefined &&
+    (typeof source.permissionMode !== "string" ||
+      !VALID_PERMISSION_MODES.has(source.permissionMode))
+  ) {
+    throw new Error(`Invalid permissionMode: ${String(source.permissionMode)}`)
+  }
+  if (
+    source.outputFormat !== undefined &&
+    (typeof source.outputFormat !== "string" || !VALID_OUTPUT_FORMATS.has(source.outputFormat))
+  ) {
+    throw new Error(`Invalid outputFormat: ${String(source.outputFormat)}`)
+  }
+
+  const modelOverride =
+    typeof source.modelOverride === "string" && source.modelOverride.trim()
+      ? source.modelOverride.trim()
+      : typeof source.model === "string" && source.model.trim()
+        ? source.model.trim()
+        : undefined
+  const temperatureOverride =
+    typeof source.temperatureOverride === "number"
+      ? source.temperatureOverride
+      : typeof source.temperature === "number"
+        ? source.temperature
+        : undefined
+  const maxTokensOverride =
+    typeof source.maxTokensOverride === "number"
+      ? source.maxTokensOverride
+      : typeof source.maxTokens === "number"
+        ? source.maxTokens
+        : undefined
+
+  return {
+    ...(source as Partial<CustomModeConfig>),
+    name: source.name.trim(),
+    ...(source.permissionMode
+      ? { permissionMode: source.permissionMode as AgentModePermission }
+      : {}),
+    ...(modelOverride !== undefined ? { modelOverride } : {}),
+    ...(temperatureOverride !== undefined ? { temperatureOverride } : {}),
+    ...(maxTokensOverride !== undefined ? { maxTokensOverride } : {}),
+  }
+}
 
 type CustomModeStoreSet = StoreApi<CustomModeState>["setState"]
 type CustomModeStoreGet = StoreApi<CustomModeState>["getState"]
@@ -34,6 +126,7 @@ export const createCustomModeActionsSlice = (
       icon: mode.icon || "Bot",
       systemPrompt: mode.systemPrompt || "",
       tools: mode.tools || [],
+      ...(mode.permissionMode !== undefined ? { permissionMode: mode.permissionMode } : {}),
       outputFormat: mode.outputFormat || "text",
       previewEnabled: mode.previewEnabled ?? false,
       customConfig: mode.customConfig || {},
@@ -216,6 +309,13 @@ export const createCustomModeActionsSlice = (
       type: "custom-mode",
       mode: {
         ...mode,
+        // Emit CLI-compatible flat aliases alongside GUI `*Override` fields so
+        // both desktop and CLI consumers read the exact same effective settings.
+        ...(mode.modelOverride ? { model: mode.modelOverride } : {}),
+        ...(mode.temperatureOverride !== undefined
+          ? { temperature: mode.temperatureOverride }
+          : {}),
+        ...(mode.maxTokensOverride !== undefined ? { maxTokens: mode.maxTokensOverride } : {}),
         // Reset usage stats for export
         usageCount: 0,
         lastUsedAt: undefined,
@@ -228,15 +328,13 @@ export const createCustomModeActionsSlice = (
   importMode: (json) => {
     try {
       const data = JSON.parse(json)
-      if (data.type !== "custom-mode" || !data.mode) {
-        throw new Error("Invalid mode export format")
-      }
+      const normalized = normalizeImportedModeRecord(data)
 
       const imported = get().createMode({
-        ...data.mode,
+        ...normalized,
         id: undefined, // Generate new ID
         isShared: true,
-        sharedBy: data.mode.name,
+        sharedBy: normalized.name,
       })
 
       return imported
@@ -249,6 +347,9 @@ export const createCustomModeActionsSlice = (
   exportAllModes: () => {
     const modes = Object.values(get().customModes).map((mode) => ({
       ...mode,
+      ...(mode.modelOverride ? { model: mode.modelOverride } : {}),
+      ...(mode.temperatureOverride !== undefined ? { temperature: mode.temperatureOverride } : {}),
+      ...(mode.maxTokensOverride !== undefined ? { maxTokens: mode.maxTokensOverride } : {}),
       usageCount: 0,
       lastUsedAt: undefined,
     }))
@@ -266,14 +367,31 @@ export const createCustomModeActionsSlice = (
   importModes: (json) => {
     try {
       const data = JSON.parse(json)
-      if (data.type !== "custom-modes-collection" || !Array.isArray(data.modes)) {
+      if (!data || typeof data !== "object") {
+        throw new Error("Invalid modes collection format")
+      }
+      if (
+        "version" in data &&
+        data.version !== undefined &&
+        !SUPPORTED_MODE_SCHEMA_VERSIONS.has(String(data.version))
+      ) {
+        throw new Error(`Unsupported custom modes collection version: ${String(data.version)}`)
+      }
+      const rawModes =
+        data.type === "custom-modes-collection" && Array.isArray(data.modes)
+          ? data.modes
+          : data.type === "custom-mode" && data.mode
+            ? [data.mode]
+            : null
+      if (!rawModes) {
         throw new Error("Invalid modes collection format")
       }
 
       let imported = 0
-      for (const mode of data.modes) {
+      for (const rawMode of rawModes) {
+        const normalized = normalizeImportedModeRecord(rawMode)
         get().createMode({
-          ...mode,
+          ...normalized,
           id: undefined,
           isShared: true,
         })

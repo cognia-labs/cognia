@@ -57,6 +57,7 @@ import {
   AutoOrchestrationPiiError,
   planAutoOrchestration,
 } from "@/lib/squads/auto/auto-orchestrate"
+import { chooseExecutor } from "@/lib/squads/auto/dispatch-executor"
 import { applyClarifications, clarifyObjective } from "@/lib/squads/auto/clarify-objective"
 import {
   addMember,
@@ -74,6 +75,7 @@ import { materializeBackgroundHandoff, materializeExternalHandoff } from "@/lib/
 import {
   runCouncilFromProposal,
   runEnsembleFromProposal,
+  runSingleSendFromProposal,
   type RunExecutorDeps,
 } from "@/lib/squads/auto/run-executor"
 import { defaultCouncilRunPrompt } from "@/lib/ai/council/run-council"
@@ -117,6 +119,7 @@ export interface AutoComposeDialogProps {
   getCatalog?: () => Promise<CapabilityCatalog>
   runCouncilExec?: typeof runCouncilFromProposal
   runEnsembleExec?: typeof runEnsembleFromProposal
+  runSingleSendExec?: typeof runSingleSendFromProposal
   /** Enabled routing aliases (defaults to the settings model-mappings). */
   loadAliases?: () => Promise<string[]>
   /** Routed prompt runner factory (defaults to the ADR-0043 engine). */
@@ -139,6 +142,7 @@ export function AutoComposeDialog({
   getCatalog = gatherCapabilityCatalog,
   runCouncilExec = runCouncilFromProposal,
   runEnsembleExec = runEnsembleFromProposal,
+  runSingleSendExec = runSingleSendFromProposal,
   loadAliases,
   makeRunPrompt,
 }: AutoComposeDialogProps) {
@@ -242,24 +246,37 @@ export function AutoComposeDialog({
     }
   }
 
-  /** Run a non-team (council/ensemble) executor in-dialog and show its report. */
+  /** Run a non-team (`single-send` / `council` / `ensemble`) executor in-dialog and show its report. */
   const runAnalysisExecutor = async (
     p: AutoOrchestrationProposal,
-    kind: "council" | "ensemble"
+    kind: "single-send" | "council" | "ensemble"
   ) => {
     setPhase("loading")
     try {
-      const runPrompt = makeRunPrompt
-        ? await makeRunPrompt()
-        : await defaultCouncilRunPrompt({
-            surface: "agentsWorkflows",
-            origin: "agent",
-            featureId: `agent-team-auto:${kind}`,
-            workspaceId: workspaceId ?? null,
-          })
-      const deps: RunExecutorDeps = { loadAliases: resolveAliases, runPrompt }
+      const client = resolveClient()
+      const aliases = await resolveAliases()
+      const needsRoutedPrompt = kind !== "single-send" || aliases.length > 0
+      const runPrompt = needsRoutedPrompt
+        ? makeRunPrompt
+          ? await makeRunPrompt()
+          : await defaultCouncilRunPrompt({
+              surface: "agentsWorkflows",
+              origin: "agent",
+              featureId: `agent-team-auto:${kind}`,
+              workspaceId: workspaceId ?? null,
+            })
+        : async () => ({ completion: "", model: "", provider: "" })
+      const deps: RunExecutorDeps = {
+        loadAliases: async () => aliases,
+        runPrompt,
+        client,
+      }
       const res =
-        kind === "council" ? await runCouncilExec(p, deps) : await runEnsembleExec(p, deps)
+        kind === "single-send"
+          ? await runSingleSendExec(p, deps)
+          : kind === "council"
+            ? await runCouncilExec(p, deps)
+            : await runEnsembleExec(p, deps)
       setResultMarkdown(res.markdown)
       setPhase("result")
       onResult?.(res.markdown)
@@ -394,7 +411,7 @@ export function AutoComposeDialog({
         consensusSignal,
       })
       const kind = next.executor?.kind
-      if (kind === "council" || kind === "ensemble") {
+      if (kind === "single-send" || kind === "council" || kind === "ensemble") {
         await runAnalysisExecutor(next, kind)
         return
       }
@@ -415,12 +432,10 @@ export function AutoComposeDialog({
   const handleApprove = async () => {
     if (!proposal) return
     const kind = proposal.executor?.kind
-    // Council / ensemble aren't teams — run them here and surface the report
-    // rather than materializing a team. Handoffs materialize AND queue/mark
-    // (background → one-shot scheduler run; external → awaiting bridge
-    // pickup). Everything else materializes as before (single-send lands as
-    // a 1-member team; team-* run from the workspace).
-    if (kind === "council" || kind === "ensemble") {
+    // Non-team executors (`single-send`, `council`, `ensemble`) run directly
+    // and surface the report without materializing a Squad. Handoffs materialize
+    // AND queue/mark; team-* patterns materialize for the Squad workspace.
+    if (kind === "single-send" || kind === "council" || kind === "ensemble") {
       await runAnalysisExecutor(proposal, kind)
       return
     }
@@ -502,14 +517,49 @@ export function AutoComposeDialog({
                 </Badge>
                 <Select
                   value={proposal.assessment.recommendedPattern}
-                  onValueChange={(v) =>
+                  onValueChange={(v) => {
+                    const nextAssessment = {
+                      ...proposal.assessment,
+                      recommendedPattern: v as TeamExecutionPattern,
+                    }
+                    const nextExecutor = chooseExecutor(nextAssessment, consensusSignal)
+                    const needsTeamScaffold =
+                      nextExecutor.kind !== "single-send" &&
+                      nextExecutor.kind !== "council" &&
+                      nextExecutor.kind !== "ensemble" &&
+                      proposal.roster.length === 0
                     updateProposal({
-                      assessment: {
-                        ...proposal.assessment,
-                        recommendedPattern: v as TeamExecutionPattern,
-                      },
+                      assessment: nextAssessment,
+                      executor: nextExecutor,
+                      ...(needsTeamScaffold
+                        ? {
+                            roster: [
+                              {
+                                name: "Lead",
+                                role: "lead",
+                                description: "Coordinates execution and synthesizes results",
+                              },
+                              {
+                                name: "Specialist",
+                                role: "teammate",
+                                description: "Executes assigned tasks",
+                              },
+                            ],
+                            tasks:
+                              proposal.tasks.length > 0
+                                ? proposal.tasks
+                                : [
+                                    {
+                                      title: proposal.objective.slice(0, 80) || "Execute objective",
+                                      description: proposal.objective,
+                                      assignedTo: 1,
+                                      dependencies: [],
+                                    },
+                                  ],
+                          }
+                        : {}),
                     })
-                  }
+                  }}
                 >
                   <SelectTrigger
                     size="sm"

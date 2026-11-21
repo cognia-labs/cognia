@@ -142,6 +142,27 @@ describe("buildContextReport", () => {
     expect(report).not.toContain("secret key")
     expect(report).not.toContain("cliUiContext.")
   })
+
+  it("surfaces the active custom mode's modelOverride and effective permissionMode (F11)", () => {
+    const customMode = {
+      id: "gui-auditor",
+      type: "custom" as const,
+      name: "GUI Auditor",
+      description: "Audits",
+      icon: "Shield",
+      permissionMode: "plan" as const,
+      modelOverride: "claude-sonnet-4-6",
+    }
+    const report = buildContextReport(
+      { inputTokens: 100 },
+      { ...config, agentMode: "gui-auditor", permissionMode: "acceptEdits" },
+      200000,
+      undefined,
+      customMode
+    )
+    expect(report).toContain("Model: claude-sonnet-4-6 · Backend: anthropic")
+    expect(report).toContain("Active mode: gui-auditor · Effective permission: plan")
+  })
 })
 
 describe("formatSdkContextBreakdown", () => {

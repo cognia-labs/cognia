@@ -80,6 +80,19 @@ export function chatOrchestrationUnavailableReason(
   return REASONS[policy] ?? "notImplemented"
 }
 
+/**
+ * Orchestrations runnable in chat on the given shell (`hostProfile`), suitable
+ * for passing to `resolveComposition({ supportedOrchestrations })` and
+ * `<CompositionPicker supportedOrchestrations={...} />`.
+ */
+export function supportedOrchestrationsForChat(
+  context: OrchestrationAvailabilityContext = {}
+): readonly AgentOrchestrationPolicy[] {
+  return CHAT_SUPPORTED_ORCHESTRATIONS.filter(
+    (policy) => chatOrchestrationUnavailableReason(policy, context) === null
+  )
+}
+
 /** Every policy, in declaration order. Supported ones first is NOT assumed. */
 export function allOrchestrations(): readonly AgentOrchestrationPolicy[] {
   return AGENT_ORCHESTRATION_POLICIES

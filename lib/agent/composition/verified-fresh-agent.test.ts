@@ -521,10 +521,67 @@ describe("armVerifiedFreshAgentFollowup", () => {
       )
     ).resolves.toEqual({ armed: false, reason: "noSession" })
   })
+
+  it("verifies once when a fast main reply already settled before subscription installation (F08/T06)", async () => {
+    // Main turn already wrote `a1` and flipped back to `idle` BEFORE arm ran,
+    // while `knownMessageIds` captured the pre-turn state (`["u0"]`).
+    const fake = fakeStore({
+      [MAIN_ID]: {
+        status: "idle",
+        errorDiagnostic: null,
+        messages: [text("u0", "user", "hi"), text("a1", "assistant", "fast answer")],
+      },
+    })
+    const deps = followupDeps(fake.store)
+    const armed = await armVerifiedFreshAgentFollowup(
+      {
+        sessionId: MAIN_ID,
+        request: "hi",
+        cwd: "/repo",
+        knownMessageIds: new Set(["u0"]),
+      },
+      deps
+    )
+    if (!armed.armed) throw new Error("expected the follow-up to arm")
+    await armed.settled
+
+    expect(deps.run).toHaveBeenCalledTimes(1)
+    expect(deps.run).toHaveBeenCalledWith(
+      expect.objectContaining({ request: "hi", reply: "fast answer" })
+    )
+  })
+
+  it("supersedes a prior pending watcher on the same session so duplicate arms run at most once (F08/T06)", async () => {
+    const fake = fakeStore({
+      [MAIN_ID]: {
+        status: "streaming",
+        errorDiagnostic: null,
+        messages: [text("u1", "user", "q")],
+      },
+    })
+    const deps = followupDeps(fake.store)
+    const first = await armVerifiedFreshAgentFollowup(
+      { sessionId: MAIN_ID, request: "q", cwd: null, knownMessageIds: new Set(["u1"]) },
+      deps
+    )
+    const second = await armVerifiedFreshAgentFollowup(
+      { sessionId: MAIN_ID, request: "q", cwd: null, knownMessageIds: new Set(["u1"]) },
+      deps
+    )
+    if (!first.armed || !second.armed) throw new Error("expected both calls to return armed")
+
+    fake
+      .state()
+      .replaceSessionMessages(MAIN_ID, [text("u1", "user", "q"), text("a1", "assistant", "done")])
+    fake.setStatus(MAIN_ID, "idle")
+    await Promise.all([first.settled, second.settled])
+
+    expect(deps.run).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("companion-shell dormancy (three axes)", () => {
-  it("is refused at the trigger with a named reason on every companion profile", async () => {
+  it("is refused at the trigger with a named reason on every companion / un-paired browser profile", async () => {
     for (const profile of VERIFICATION_DORMANT_PROFILES) {
       const fake = fakeStore({
         [MAIN_ID]: { status: "streaming", errorDiagnostic: null, messages: [] },
@@ -538,13 +595,18 @@ describe("companion-shell dormancy (three axes)", () => {
     }
   })
 
-  it("is available on the shells that own the sidecar", () => {
+  it("is available only on shells that own a local sidecar (desktop / headless), not web-standalone (F08/T06)", () => {
     expect(verificationAvailableOn("desktop")).toBe(true)
     expect(verificationAvailableOn("headless")).toBe(true)
-    expect(verificationAvailableOn("web-standalone")).toBe(true)
+    expect(verificationAvailableOn("web-standalone")).toBe(false)
   })
 
   it("is the same answer the picker gives", () => {
+    expect(
+      chatOrchestrationUnavailableReason("verified-fresh-agent", {
+        hostProfile: "web-standalone",
+      })
+    ).toBe("companionShell")
     expect(
       chatOrchestrationUnavailableReason("verified-fresh-agent", {
         hostProfile: "mobile-companion",

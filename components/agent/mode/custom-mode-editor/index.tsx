@@ -52,6 +52,14 @@ import {
   checkToolAvailability,
 } from "@/stores/agent/custom-mode-store"
 import { useSettingsStore } from "@/stores/settings/settings-store"
+
+const MODE_PERMISSION_OPTIONS: ReadonlyArray<NonNullable<CustomModeConfig["permissionMode"]>> = [
+  "default",
+  "plan",
+  "acceptEdits",
+  "bypassPermissions",
+]
+type ModePermissionValue = NonNullable<CustomModeConfig["permissionMode"]> | "inherit"
 import { AlertTriangle } from "lucide-react"
 
 import { TemplateSelector } from "./template-selector"
@@ -121,6 +129,9 @@ export function CustomModeEditor({ open, onOpenChange, mode, onSave }: CustomMod
   const [tagInput, setTagInput] = useState("")
 
   // Advanced settings
+  const [permissionMode, setPermissionMode] = useState<ModePermissionValue>(
+    mode?.permissionMode ?? "inherit"
+  )
   const [modelOverride, setModelOverride] = useState(mode?.modelOverride || "")
   const [temperatureOverride, setTemperatureOverride] = useState(mode?.temperatureOverride)
   const [maxTokensOverride, setMaxTokensOverride] = useState(mode?.maxTokensOverride)
@@ -151,6 +162,7 @@ export function CustomModeEditor({ open, onOpenChange, mode, onSave }: CustomMod
     setPreviewEnabled(mode?.previewEnabled || false)
     setCategory(mode?.category || "other")
     setTags(mode?.tags || [])
+    setPermissionMode(mode?.permissionMode ?? "inherit")
     setModelOverride(mode?.modelOverride || "")
     setTemperatureOverride(mode?.temperatureOverride)
     setMaxTokensOverride(mode?.maxTokensOverride)
@@ -221,6 +233,7 @@ export function CustomModeEditor({ open, onOpenChange, mode, onSave }: CustomMod
       previewEnabled,
       category,
       tags,
+      permissionMode: permissionMode === "inherit" ? undefined : permissionMode,
       modelOverride: modelOverride || undefined,
       temperatureOverride,
       maxTokensOverride,
@@ -482,6 +495,26 @@ export function CustomModeEditor({ open, onOpenChange, mode, onSave }: CustomMod
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
+                    <Label>{t("permissionMode")}</Label>
+                    <Select
+                      value={permissionMode}
+                      onValueChange={(v) => setPermissionMode(v as ModePermissionValue)}
+                    >
+                      <SelectTrigger data-testid="custom-mode-permission-select">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="inherit">{t("permissionInherit")}</SelectItem>
+                        {MODE_PERMISSION_OPTIONS.map((pm) => (
+                          <SelectItem key={pm} value={pm}>
+                            {pm}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
                     <Label>{t("modelOverride")}</Label>
                     <Input
                       value={modelOverride}
@@ -551,6 +584,18 @@ export function CustomModeEditor({ open, onOpenChange, mode, onSave }: CustomMod
                 <AgentHeader name={name || t("unnamedMode")} model={modelOverride || undefined} />
                 <AgentContent>
                   {description && <p className="text-sm text-muted-foreground">{description}</p>}
+                  <div
+                    className="flex flex-wrap gap-1.5 text-xs"
+                    data-testid="custom-mode-effective-summary"
+                  >
+                    <Badge variant="secondary" className="font-mono text-[10px]">
+                      {t("permissionMode")}:{" "}
+                      {permissionMode === "inherit" ? t("permissionInherit") : permissionMode}
+                    </Badge>
+                    <Badge variant="secondary" className="font-mono text-[10px]">
+                      {t("modelOverride")}: {modelOverride || t("default")}
+                    </Badge>
+                  </div>
                   <AgentInstructions label={t("systemPrompt")}>
                     {systemPrompt || t("systemPromptPlaceholder")}
                   </AgentInstructions>

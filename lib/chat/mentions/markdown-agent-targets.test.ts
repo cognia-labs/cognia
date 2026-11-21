@@ -3,7 +3,12 @@ jest.mock("@/lib/agents/instructions/load", () => ({
   loadProjectInstructions: (...a: unknown[]) => loadInstructionsMock(...a),
 }))
 
-import { markdownAgentTargets, discoverMarkdownAgentTargets } from "./markdown-agent-targets"
+import {
+  allMarkdownMentionCandidates,
+  discoverMarkdownAgentTargets,
+  markdownAgentTargets,
+  mergeChatMentionTargets,
+} from "./markdown-agent-targets"
 import { resolveTargetAgentId } from "./agent-targets"
 import type { MarkdownAgentFile } from "@/lib/agents/markdown-agents"
 
@@ -45,6 +50,78 @@ describe("markdownAgentTargets", () => {
       file("doc-writer", "---\ndescription: Writes docs\n---\nWrite docs."),
     ])
     expect(resolveTargetAgentId("please @doc-writer help", targets)).toBe("doc-writer")
+  })
+
+  it("omits hidden, disabled, and runtime-pinned files from picker targets while retaining send-time candidates (F07/T06)", () => {
+    const files = [
+      file("visible", "---\ndescription: Visible\n---\nBody."),
+      file("secret", "---\ndescription: Hidden\nhidden: true\n---\nBody."),
+      file("off", "---\ndescription: Disabled\ndisabled: true\n---\nBody."),
+      file("pinned", "---\ndescription: Pinned\nprovider: openai\n---\nBody."),
+    ]
+    expect(markdownAgentTargets(files).map((t) => t.id)).toEqual(["visible"])
+    expect(allMarkdownMentionCandidates(files).map((t) => t.id)).toEqual([
+      "visible",
+      "secret",
+      "off",
+      "pinned",
+    ])
+  })
+
+  it("mergeChatMentionTargets lets markdown agents override colliding base targets (F07/T06)", () => {
+    const merged = mergeChatMentionTargets(
+      [
+        {
+          id: "reviewer",
+          name: "Template Reviewer",
+          description: "from template",
+          model: "haiku",
+          handle: "reviewer",
+        },
+        {
+          id: "planner",
+          name: "Planner",
+          description: "plans",
+          handle: "planner",
+        },
+      ],
+      [
+        {
+          id: "reviewer",
+          name: "Reviewer",
+          description: "from project markdown",
+          model: "opus",
+          handle: "reviewer",
+        },
+        {
+          id: "doc-writer",
+          name: "Doc Writer",
+          description: "writes docs",
+          handle: "doc-writer",
+        },
+      ]
+    )
+    expect(merged).toEqual([
+      {
+        id: "reviewer",
+        name: "Reviewer",
+        description: "from project markdown",
+        model: "opus",
+        handle: "reviewer",
+      },
+      {
+        id: "planner",
+        name: "Planner",
+        description: "plans",
+        handle: "planner",
+      },
+      {
+        id: "doc-writer",
+        name: "Doc Writer",
+        description: "writes docs",
+        handle: "doc-writer",
+      },
+    ])
   })
 })
 

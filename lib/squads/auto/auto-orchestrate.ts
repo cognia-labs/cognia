@@ -129,6 +129,26 @@ export async function planAutoOrchestration(
   const assessment = input.preferredPattern
     ? { ...assessed, recommendedPattern: input.preferredPattern }
     : assessed
+
+  // Choose the concrete executor immediately after routing assessment so
+  // non-team executors (`single-send`, `council`, `ensemble`) skip roster
+  // composition and task DAG decomposition (0 extra LLM calls).
+  const executor = chooseExecutor(assessment, input.consensusSignal)
+  if (
+    executor.kind === "single-send" ||
+    executor.kind === "council" ||
+    executor.kind === "ensemble"
+  ) {
+    return {
+      objective,
+      assessment,
+      roster: [],
+      tasks: [],
+      executor,
+      ...(twinRoster.length > 0 ? { twinRoster } : {}),
+    }
+  }
+
   const roster = await composeRoster({
     objective,
     assessment,
@@ -147,10 +167,6 @@ export async function planAutoOrchestration(
     signal: input.signal,
     promptSnapshot,
   })
-
-  // Choose the concrete executor from the (possibly operator-overridden)
-  // assessment + consensus signal. Pure — no model call.
-  const executor = chooseExecutor(assessment, input.consensusSignal)
 
   return {
     objective,

@@ -865,3 +865,24 @@ describe("CustomModeEditor — unavailable tools warning", () => {
     expect(toolsTab.textContent).toContain("WebSearch")
   })
 })
+
+describe("CustomModeEditor — permissionMode & effective summary (F11)", () => {
+  it("renders effective permission/model summary and saves permissionMode", () => {
+    const onSave = jest.fn()
+    renderEditor({
+      mode: { ...SAMPLE_MODE, permissionMode: "plan", modelOverride: "claude-sonnet-4-6" },
+      onSave,
+    })
+    const summary = screen.getByTestId("custom-mode-effective-summary")
+    expect(summary.textContent).toContain("plan")
+    expect(summary.textContent).toContain("claude-sonnet-4-6")
+
+    fireEvent.click(screen.getByText("save"))
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permissionMode: "plan",
+        modelOverride: "claude-sonnet-4-6",
+      })
+    )
+  })
+})

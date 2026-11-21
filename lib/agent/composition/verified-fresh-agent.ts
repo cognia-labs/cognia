@@ -412,6 +412,13 @@ export interface ArmVerificationInput {
   cwd: string | null
   projectId?: string
   mainSessionTitle?: string
+  /**
+   * Message IDs present BEFORE the main turn began. Captured synchronously by
+   * `agent-chat-send.ts` prior to dynamic import / turn execution so a fast
+   * main reply that finishes before subscription installation is still
+   * recognized as new rather than skipped.
+   */
+  knownMessageIds?: ReadonlySet<string>
 }
 
 interface SessionSliceView {
@@ -448,11 +455,17 @@ export type ArmVerificationResult =
       reason: VerificationFollowupRefusal
     }
 
-/** Profiles that drive a remote host: the headless capture path is not wired there. */
+/**
+ * Profiles without local Host capture / sidecar ownership: un-paired browser
+ * (`web-standalone`) and companion shells cannot execute `runVerifiedFreshAgentTurn`.
+ */
 export const VERIFICATION_DORMANT_PROFILES: readonly HostProfile[] = [
+  "web-standalone",
   "mobile-companion",
   "cloud-companion",
 ]
+
+const activeSessionFollowups = new Map<string, () => void>()
 
 export function verificationAvailableOn(profile: HostProfile): boolean {
   return !VERIFICATION_DORMANT_PROFILES.includes(profile)
@@ -527,7 +540,17 @@ export async function armVerifiedFreshAgentFollowup(
   }
   const initial = d.store.getState().sessions[input.sessionId]
   if (!initial) return { armed: false, reason: "noSession" }
-  const knownIds = new Set(initial.messages.map((message) => message.id))
+  const knownIds = input.knownMessageIds
+    ? new Set(input.knownMessageIds)
+    : new Set(initial.messages.map((message) => message.id))
+
+  // Supersede any still-pending watcher on the same session so duplicate arm
+  // calls or rapid back-to-back turns never run two verifiers for one turn.
+  const priorCancel = activeSessionFollowups.get(input.sessionId)
+  if (priorCancel) {
+    activeSessionFollowups.delete(input.sessionId)
+    priorCancel()
+  }
 
   let resolveSettled: () => void = () => {}
   const settled = new Promise<void>((resolve) => {
@@ -535,6 +558,14 @@ export async function armVerifiedFreshAgentFollowup(
   })
   let done = false
   let unsubscribe: () => void = () => {}
+
+  const supersede = () => {
+    if (done) return
+    done = true
+    unsubscribe()
+    resolveSettled()
+  }
+  activeSessionFollowups.set(input.sessionId, supersede)
 
   const onSettled = async (slice: SessionSliceView) => {
     if (slice.errorDiagnostic) return
@@ -601,12 +632,18 @@ export async function armVerifiedFreshAgentFollowup(
     const slice = d.store.getState().sessions[input.sessionId]
     if (!slice) {
       done = true
+      if (activeSessionFollowups.get(input.sessionId) === supersede) {
+        activeSessionFollowups.delete(input.sessionId)
+      }
       unsubscribe()
       resolveSettled()
       return
     }
     if (!isSettled(slice.status)) return
     done = true
+    if (activeSessionFollowups.get(input.sessionId) === supersede) {
+      activeSessionFollowups.delete(input.sessionId)
+    }
     unsubscribe()
     void onSettled(slice)
       .catch((error) => console.warn("verified-fresh-agent follow-up failed", error))

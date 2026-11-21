@@ -19,6 +19,7 @@ import {
   type EnsembleSampleResult,
   type RunEnsembleDeps,
 } from "@/lib/ai/ensemble/run-ensemble"
+import type { LlmClient } from "@/lib/twin/distill/llm"
 import type { AutoOrchestrationProposal } from "./types"
 
 export interface RunExecutorDeps {
@@ -26,6 +27,8 @@ export interface RunExecutorDeps {
   loadAliases: () => Promise<string[]>
   /** Routed prompt runner (councillors, samples, synthesizer). */
   runPrompt: RunCouncilDeps["runPrompt"]
+  /** Direct renderer LLM client fallback for single-send when no routing aliases exist. */
+  client?: LlmClient | null
   log?: (level: "info" | "warn", message: string) => void
 }
 
@@ -33,6 +36,34 @@ export interface RunExecutorDeps {
 export interface ExecutorRunResult {
   markdown: string
   ok: boolean
+}
+
+/**
+ * Execute a `single-send` proposal directly as one single-agent turn without
+ * materializing a Squad or composing a roster/DAG. Uses the first configured
+ * routing alias when available, falling back to the active renderer LLM client.
+ */
+export async function runSingleSendFromProposal(
+  proposal: AutoOrchestrationProposal,
+  deps: RunExecutorDeps
+): Promise<ExecutorRunResult> {
+  const aliases = await deps.loadAliases()
+  if (aliases.length > 0) {
+    const out = await deps.runPrompt({
+      modelAlias: aliases[0],
+      userPrompt: proposal.objective,
+    })
+    return { markdown: out.completion, ok: true }
+  }
+  if (deps.client) {
+    const completion = await deps.client.complete(proposal.objective)
+    return { markdown: completion, ok: true }
+  }
+  return {
+    markdown:
+      "No active model available for single-agent execution. Configure a provider or routing alias in Settings.",
+    ok: false,
+  }
 }
 
 /**

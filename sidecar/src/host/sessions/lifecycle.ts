@@ -178,6 +178,12 @@ export function restartReason(existing: HostSession, options?: SendOptions) {
     runtimeFeaturePolicyKey(options) !== runtimeFeaturePolicyKey(existing.sendOptions ?? {})
   )
     return "runtime feature policy changed"
+  // A single-turn `@agent` target applies a prompt/tool/model overlay in the
+  // ai-sdk runtime loop; changing or clearing `options.agent` on a subsequent
+  // turn must respawn rather than keep the previous turn's agent identity.
+  if (options && (options.agent ?? undefined) !== (existing.sendOptions?.agent ?? undefined)) {
+    return "target agent changed"
+  }
   // A live loop keeps the tool surface its first send registered (ADR-0117).
   // A turn resolved to another presentation — the user switched modes, or the
   // Host can no longer sandbox Code — must not keep a `run_code` its

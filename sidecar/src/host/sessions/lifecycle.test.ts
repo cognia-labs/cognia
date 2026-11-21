@@ -378,6 +378,29 @@ test("restartReason: cwd change forces a restart", () => {
   assert.equal(restartReason(existing, { cwd: "/old" }), null, "same cwd keeps the session")
 })
 
+test("restartReason: changing or clearing @agent target forces a restart on multi-turn loops (F07/T06)", () => {
+  const withReviewer = {
+    multiTurn: true,
+    q: { active: false },
+    sendOptions: { provider: "openai", agent: "reviewer" },
+  }
+  assert.equal(
+    restartReason(withReviewer, { provider: "openai", agent: "reviewer" }),
+    null,
+    "same target agent reuses live loop"
+  )
+  assert.equal(
+    restartReason(withReviewer, { provider: "openai" }),
+    "target agent changed",
+    "clearing @agent respawns so previous agent overlay does not leak"
+  )
+  assert.equal(
+    restartReason(withReviewer, { provider: "openai", agent: "planner" }),
+    "target agent changed",
+    "switching @agent respawns"
+  )
+})
+
 // CM-04: a live loop keeps the surface its first send registered, so a turn
 // that resolved to another presentation must get a fresh loop.
 test("restartReason: a tool presentation change forces a restart", () => {

@@ -69,7 +69,8 @@ import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import { resolveComposition } from "@/lib/agent/composition/resolve-composition"
 import { presetDisplayName } from "@/lib/agent/composition/preset-label"
 import { STANDARD_PRESET, visiblePresets } from "@/lib/agent/composition/preset-catalog"
-import { CHAT_SUPPORTED_ORCHESTRATIONS } from "@/lib/agent/composition/chat-orchestrations"
+import { supportedOrchestrationsForChat } from "@/lib/agent/composition/chat-orchestrations"
+import { useHostProfile } from "@/hooks/use-host-profile"
 import { useChatExecutor } from "./use-chat-executor"
 import { ExecutorChoiceList, ExecutorMenuSection } from "./executor-choice"
 
@@ -101,6 +102,11 @@ export function CompositionChip({
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const presets = usePresetCatalog()
+  const hostProfile = useHostProfile()
+  const supportedOrchestrations = useMemo(
+    () => supportedOrchestrationsForChat({ hostProfile }),
+    [hostProfile]
+  )
   const { presentations: supportedToolPresentations, unavailableReason: codeUnavailableReason } =
     useCodeHostCapability()
   const developerMode = usePluginStore((s) => s.pluginSettings.developerModeEnabled)
@@ -126,11 +132,11 @@ export function CompositionChip({
         // Told, at last. Without this the resolver assumed every orchestration
         // was runnable here, so picking one that is not did nothing and said
         // nothing.
-        supportedOrchestrations: CHAT_SUPPORTED_ORCHESTRATIONS,
+        supportedOrchestrations,
         promptDigest: PLACEHOLDER_DIGEST,
         toolDigest: PLACEHOLDER_DIGEST,
       }),
-    [selection, presets, supportedToolPresentations]
+    [selection, presets, supportedToolPresentations, supportedOrchestrations]
   )
 
   const offered = useMemo(
@@ -283,7 +289,7 @@ export function CompositionChip({
               presetControl={false}
               supportedToolPresentations={supportedToolPresentations}
               toolPresentationUnavailableReason={codeUnavailableReason}
-              supportedOrchestrations={CHAT_SUPPORTED_ORCHESTRATIONS}
+              supportedOrchestrations={supportedOrchestrations}
             />
           </ResponsivePicker>
           <TooltipContent side="top">{t("advanced")}</TooltipContent>
@@ -332,7 +338,7 @@ export function CompositionChip({
           onAdvancedOpenChange={setAdvancedOpen}
           supportedToolPresentations={supportedToolPresentations}
           toolPresentationUnavailableReason={codeUnavailableReason}
-          supportedOrchestrations={CHAT_SUPPORTED_ORCHESTRATIONS}
+          supportedOrchestrations={supportedOrchestrations}
         />
       </ResponsivePicker>
       <TooltipContent side="top">

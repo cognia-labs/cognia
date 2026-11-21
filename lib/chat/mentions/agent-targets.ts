@@ -21,7 +21,10 @@
  * dependency the other did not.
  */
 
-import { resolveDispatchableSubagents } from "@/lib/agent/builtin-catalog/projection"
+import {
+  resolveDispatchableSubagents,
+  resolveKnownSubagentCandidates,
+} from "@/lib/agent/builtin-catalog/projection"
 import { slugify } from "@/lib/agents/agent-id"
 import { parseMentions } from "@/lib/ai/agent/team/chat-router"
 import type { MentionResolvers } from "@/lib/chat/mentions/resolve-mentions"
@@ -65,9 +68,32 @@ export interface SubagentMentionTarget {
  */
 export function buildChatMentionTargets(): SubagentMentionTarget[] {
   // `hidden` subagents stay dispatchable but never enter the @-mention picker
-  // (OpenCode semantics); `disabled` ones are already dropped by the resolver.
-  const entries = resolveDispatchableSubagents().filter(({ def }) => !def.hidden)
+  // (OpenCode semantics); `disabled` and provider/external-pinned ones are
+  // excluded from native single-turn @agent picker entries because single-turn
+  // @agent overlays run on the session's active runtime.
+  const entries = resolveDispatchableSubagents().filter(
+    ({ def }) => !def.hidden && !def.provider && !def.externalPresetId
+  )
 
+  return projectEntriesToTargets(entries)
+}
+
+/**
+ * Send-time candidate list: includes `hidden`, `disabled`, and runtime-pinned
+ * subagent definitions so an explicit `@handle` in chat routes `hidden` defs
+ * and fails closed (via `TargetAgentUnavailableError`) on `disabled` or
+ * incompatible defs rather than silently falling back to normal chat.
+ */
+export function buildSendTimeMentionCandidates(): SubagentMentionTarget[] {
+  return projectEntriesToTargets(resolveKnownSubagentCandidates())
+}
+
+function projectEntriesToTargets(
+  entries: ReadonlyArray<{
+    id: string
+    def: { name: string; description: string; model?: string }
+  }>
+): SubagentMentionTarget[] {
   // First pass: derive the preferred handle (slugified name) per target and
   // count collisions so the second pass can fall back to the full id.
   const handleCounts = new Map<string, number>()

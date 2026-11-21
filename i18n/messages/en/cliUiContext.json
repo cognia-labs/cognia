@@ -29,6 +29,7 @@
     "cacheMeaning": "Absent fields remain unknown; explicit zero is preserved. TTL writes are subdivisions of cache writes, not additional occupancy. These request counters are not independently additive to live context occupancy.",
     "configuration": "## Session configuration",
     "cwd": "Working directory: {path}",
+    "effectivePolicy": "Active mode: {mode} · Effective permission: {permission}",
     "roots": "Configured additional roots: {count}",
     "promptLength": "Configured system prompt length: {count} characters (content omitted)",
     "skillDirs": "Configured extra skill directories: {count}",

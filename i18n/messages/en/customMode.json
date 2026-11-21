@@ -86,6 +86,8 @@
   "outputFormat": "Output Format",
   "outputLabel": "Output:",
   "outputSettings": "Output",
+  "permissionInherit": "Inherit session policy",
+  "permissionMode": "Permission Mode",
   "previewLabel": "Preview:",
   "recommended": "Recommended",
   "removeTag": "Remove {tag}",

@@ -5,6 +5,8 @@ import path from "node:path"
 import {
   customModeToConfig,
   discoverCustomAgentModes,
+  discoverCustomAgentModesWithDiagnostics,
+  parseInteroperableModeJson,
   resolveAgentMode,
   listAgentModes,
   effectivePermissionMode,
@@ -199,4 +201,70 @@ it("lets Plan constrain defaulted editing autonomy", () => {
   const plan = resolveAgentMode("plan", [])
   expect(effectivePermissionMode("acceptEdits", plan, false)).toBe("plan")
   expect(effectivePermissionMode("default", plan, true)).toBe("plan")
+})
+
+describe("GUI ↔ CLI custom mode JSON interoperability (F11)", () => {
+  it("loads a GUI exportMode envelope in the CLI and surfaces ignored GUI-only fields", async () => {
+    const guiEnvelope = JSON.stringify({
+      version: "1.0",
+      type: "custom-mode",
+      mode: {
+        id: "custom-123",
+        type: "custom",
+        isBuiltIn: false,
+        name: "GUI Auditor",
+        description: "Audits security",
+        icon: "Shield",
+        systemPrompt: "Audit thoroughly.",
+        tools: ["Read", "Grep"],
+        permissionMode: "plan",
+        outputFormat: "markdown",
+        modelOverride: "claude-opus-4-8",
+        temperatureOverride: 0.1,
+        maxTokensOverride: 8192,
+        previewEnabled: true,
+        a2uiEnabled: true,
+        mcpTools: [{ serverId: "sec", toolName: "scan" }],
+        createdAt: "2026-11-20T00:00:00.000Z",
+        updatedAt: "2026-11-20T00:00:00.000Z",
+      },
+    })
+
+    const parsed = parseInteroperableModeJson(guiEnvelope)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error("expected ok")
+    expect(parsed.file).toMatchObject({
+      name: "GUI Auditor",
+      permissionMode: "plan",
+      model: "claude-opus-4-8",
+      temperature: 0.1,
+      maxTokens: 8192,
+      tools: ["Read", "Grep"],
+    })
+    expect(parsed.ignoredFields).toEqual(
+      expect.arrayContaining(["previewEnabled", "a2uiEnabled", "mcpTools"])
+    )
+
+    const fs = memFs({
+      "/proj/.cognia/modes/gui-auditor.json": guiEnvelope,
+      "/proj/.cognia/modes/future.json": JSON.stringify({
+        version: "2.0",
+        type: "custom-mode",
+        mode: { name: "Future" },
+      }),
+    })
+    const { modes, diagnostics } = await discoverCustomAgentModesWithDiagnostics(["/proj"], fs)
+    expect(modes.map((m) => m.id)).toEqual(["gui-auditor"])
+    expect((modes[0] as unknown as Record<string, unknown>).modelOverride).toBe("claude-opus-4-8")
+    expect(modes[0].permissionMode).toBe("plan")
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "ignored_fields", ignoredFields: parsed.ignoredFields }),
+        expect.objectContaining({
+          kind: "invalid",
+          message: expect.stringContaining('version "2.0"'),
+        }),
+      ])
+    )
+  })
 })

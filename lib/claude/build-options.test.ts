@@ -2740,12 +2740,86 @@ describe("resolveSendOptions — direct-chat subagents (opts.agents)", () => {
     }
   })
 
-  it("drops an unknown / stale targetAgentId (leaves opts.agent unset)", async () => {
-    const opts = await resolveSendOptions({
-      character: makeChar({ id: "c1" }),
+  it("fails closed with TargetAgentUnavailableError instead of silently falling back to normal chat when targetAgentId is stale, disabled, runtime-pinned, or grant-restricted (F07/T06)", async () => {
+    const { TargetAgentUnavailableError } = await import("./build-options")
+
+    // 1. Unknown / stale id → not_found
+    await expect(
+      resolveSendOptions({
+        character: makeChar({ id: "c1" }),
+        targetAgentId: "template:does-not-exist",
+      })
+    ).rejects.toMatchObject({
+      name: "TargetAgentUnavailableError",
       targetAgentId: "template:does-not-exist",
+      reason: "not_found",
     })
-    expect(opts.agent).toBeUndefined()
+
+    // 2. Disabled template → disabled
+    useSubagentRuntimeStore.getState().addTemplate({
+      id: "bo-disabled-1",
+      name: "Disabled Helper",
+      description: "off",
+      category: "general",
+      taskTemplate: "do {{x}}",
+      config: { systemPrompt: "Off." },
+      disabled: true,
+      isBuiltIn: false,
+    })
+    // 3. Provider-pinned template → runtime_incompatible
+    useSubagentRuntimeStore.getState().addTemplate({
+      id: "bo-pinned-1",
+      name: "Pinned Helper",
+      description: "pinned",
+      category: "general",
+      taskTemplate: "do {{x}}",
+      config: { systemPrompt: "Pinned.", provider: "openai" },
+      isBuiltIn: false,
+    })
+    // 4. Active template stripped by subagentIds grant → grant_restricted
+    useSubagentRuntimeStore.getState().addTemplate({
+      id: "bo-restricted-1",
+      name: "Restricted Helper",
+      description: "restricted",
+      category: "general",
+      taskTemplate: "do {{x}}",
+      config: { systemPrompt: "Restricted." },
+      isBuiltIn: false,
+    })
+
+    try {
+      await expect(
+        resolveSendOptions({
+          character: makeChar({ id: "c1" }),
+          targetAgentId: "template:disabled-helper",
+        })
+      ).rejects.toBeInstanceOf(TargetAgentUnavailableError)
+      await expect(
+        resolveSendOptions({
+          character: makeChar({ id: "c1" }),
+          targetAgentId: "template:disabled-helper",
+        })
+      ).rejects.toMatchObject({ reason: "disabled" })
+
+      await expect(
+        resolveSendOptions({
+          character: makeChar({ id: "c1" }),
+          targetAgentId: "template:pinned-helper",
+        })
+      ).rejects.toMatchObject({ reason: "runtime_incompatible" })
+
+      await expect(
+        resolveSendOptions({
+          character: makeChar({ id: "c1" }),
+          targetAgentId: "template:restricted-helper",
+          subagentIds: ["workflow-designer"],
+        })
+      ).rejects.toMatchObject({ reason: "grant_restricted" })
+    } finally {
+      useSubagentRuntimeStore.getState().deleteTemplate("bo-disabled-1")
+      useSubagentRuntimeStore.getState().deleteTemplate("bo-pinned-1")
+      useSubagentRuntimeStore.getState().deleteTemplate("bo-restricted-1")
+    }
   })
 
   it("suppresses SDK-native opts.agents for a nested dispatch run", async () => {
@@ -9751,14 +9825,24 @@ describe("resolveSendOptions — capability grants", () => {
     )
   })
 
-  it("keeps only the subagents a grant names and drops a routed turn to a filtered one", async () => {
-    const opts = await resolveSendOptions({
+  it("keeps only the subagents a grant names and refuses a routed turn to a filtered one (F07/T06)", async () => {
+    const allowed = await resolveSendOptions({
       character: makeChar({ id: "c1" }),
-      targetAgentId: "workflow-doc-writer",
       capabilityGrants: [grant({ subagents: { only: ["workflow-designer"] } })],
     })
-    expect(Object.keys(opts.agents ?? {})).toEqual(["workflow-designer"])
-    expect(opts.agent).toBeUndefined()
+    expect(Object.keys(allowed.agents ?? {})).toEqual(["workflow-designer"])
+
+    await expect(
+      resolveSendOptions({
+        character: makeChar({ id: "c1" }),
+        targetAgentId: "workflow-doc-writer",
+        capabilityGrants: [grant({ subagents: { only: ["workflow-designer"] } })],
+      })
+    ).rejects.toMatchObject({
+      name: "TargetAgentUnavailableError",
+      targetAgentId: "workflow-doc-writer",
+      reason: "grant_restricted",
+    })
   })
 
   it("removes the agent map when a grant leaves no subagent", async () => {

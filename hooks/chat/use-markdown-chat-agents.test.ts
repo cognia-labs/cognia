@@ -65,4 +65,18 @@ describe("useMarkdownChatAgents", () => {
     await waitFor(() => expect(discoverMock).toHaveBeenCalled())
     expect(discoverMock.mock.calls[0][0]).toMatchObject({ roots: ["/ws"] })
   })
+
+  it("prefers the session's own projectId over activeProjectId so picker and send match (F07/T06)", async () => {
+    useProjectStore.setState({
+      activeProjectId: "proj-active",
+      projects: [
+        { id: "proj-active", roots: [{ path: "/active-ws", primary: true }] },
+        { id: "proj-session", roots: [{ path: "/session-ws", primary: true }] },
+      ] as never,
+    })
+    discoverMock.mockResolvedValue([])
+    renderHook(() => useMarkdownChatAgents("/session-ws", true, "proj-session"))
+    await waitFor(() => expect(discoverMock).toHaveBeenCalled())
+    expect(discoverMock.mock.calls[0][0]).toMatchObject({ roots: ["/session-ws"] })
+  })
 })
