@@ -9,15 +9,13 @@
  *
  * A snapshot is tied to the database it was read from: after an account
  * switch `peekPromptOverrideSnapshot()` reports nothing until the new account's
- * overrides are loaded, so one account's text can never apply to another.
+ * overrides are loaded, a load in flight for the previous account is never
+ * shared with a caller of the new one, and a load that finishes after a switch
+ * is not handed out, so one account's text can never apply to another.
  */
 
 import { getDb } from "@/lib/db/schema"
-import {
-  getPromptOverrideRevisions,
-  listPromptOverrideBindings,
-  onPromptOverridesChanged,
-} from "@/lib/db/prompt-overrides"
+import { onPromptOverridesChanged, readActivePromptOverrides } from "@/lib/db/prompt-overrides"
 import type { PromptScope } from "./types"
 
 export interface ActivePromptOverride {
@@ -38,7 +36,11 @@ export interface PromptOverrideSnapshot {
 }
 
 let current: PromptOverrideSnapshot | null = null
-let inflight: Promise<PromptOverrideSnapshot> | null = null
+/** The load in flight, and the database it reads. */
+let inflight: { databaseName: string | null; promise: Promise<PromptOverrideSnapshot> } | null =
+  null
+/** Loads a caller retries before giving up while the account keeps switching under it. */
+const MAX_LOAD_ATTEMPTS = 3
 /** Bumped by every invalidation, so a load that started earlier cannot win. */
 let generation = 0
 const subscribers = new Set<() => void>()
@@ -71,12 +73,9 @@ export function buildPromptOverrideSnapshot(
 }
 
 async function readSnapshot(): Promise<PromptOverrideSnapshot> {
-  const databaseName = getDb().name
-  const bindings = (await listPromptOverrideBindings()).filter((row) => row.activeRevisionId)
-  const revisions = await getPromptOverrideRevisions(bindings.map((row) => row.activeRevisionId!))
+  const { databaseName, entries } = await readActivePromptOverrides()
   const rows: ActivePromptOverride[] = []
-  bindings.forEach((binding, index) => {
-    const revision = revisions[index]
+  entries.forEach(({ binding, revision }) => {
     // A pointer at a missing or non-published revision is skipped rather than
     // resolved to an empty body: an absent override means the shipped text.
     if (!revision || revision.kind !== "published") return
@@ -107,29 +106,68 @@ function ensureWriteSubscription(): void {
  */
 export function peekPromptOverrideSnapshot(): PromptOverrideSnapshot | null {
   if (!current) return null
-  return current.databaseName === activeDatabaseName() ? current : null
+  return isActivePromptOverrideSnapshot(current) ? current : null
 }
 
-/** Load (or reuse an in-flight load of) the active account's snapshot. */
-export async function loadPromptOverrideSnapshot(): Promise<PromptOverrideSnapshot> {
-  ensureWriteSubscription()
+/** Whether `snapshot` was read from the account database active now. */
+export function isActivePromptOverrideSnapshot(snapshot: PromptOverrideSnapshot): boolean {
+  return snapshot.databaseName === activeDatabaseName()
+}
+
+/** The load for `databaseName`: one in flight for it, the loaded snapshot, or a new read. */
+function loadFor(databaseName: string | null): Promise<PromptOverrideSnapshot> {
+  if (inflight && inflight.databaseName === databaseName) return inflight.promise
   const fresh = peekPromptOverrideSnapshot()
-  if (fresh && !inflight) return fresh
-  if (inflight) return inflight
+  if (fresh) return Promise.resolve(fresh)
   const started = generation
-  const load = readSnapshot()
+  const promise: Promise<PromptOverrideSnapshot> = readSnapshot()
     .then((snapshot) => {
-      if (started === generation) {
+      // Installed only while it is still the newest read of the database
+      // active now; a read that an invalidation or a switch overtook is not.
+      if (started === generation && isActivePromptOverrideSnapshot(snapshot)) {
         current = snapshot
         for (const subscriber of subscribers) subscriber()
       }
       return snapshot
     })
     .finally(() => {
-      if (inflight === load) inflight = null
+      if (inflight?.promise === promise) inflight = null
     })
-  inflight = load
-  return load
+  inflight = { databaseName, promise }
+  return promise
+}
+
+/** The active account changed under every attempt to load its snapshot. */
+export class PromptOverrideSnapshotUnavailableError extends Error {
+  readonly code = "prompt_snapshot_unavailable"
+  constructor() {
+    super("the account database changed while its prompt overrides were loading")
+    this.name = "PromptOverrideSnapshotUnavailableError"
+  }
+}
+
+/**
+ * Load (or reuse an in-flight load of) the active account's snapshot. What it
+ * resolves with was read from the database active when it resolves: a read
+ * that an account switch overtook is retried for the new account, never
+ * returned.
+ */
+export async function loadPromptOverrideSnapshot(): Promise<PromptOverrideSnapshot> {
+  ensureWriteSubscription()
+  for (let attempt = 0; attempt < MAX_LOAD_ATTEMPTS; attempt += 1) {
+    const databaseName = activeDatabaseName()
+    let snapshot: PromptOverrideSnapshot
+    try {
+      snapshot = await loadFor(databaseName)
+    } catch (error) {
+      // A switch closes the previous account's connection under its read:
+      // that read was cancelled, not failed, and the new account still loads.
+      if (activeDatabaseName() !== databaseName) continue
+      throw error
+    }
+    if (isActivePromptOverrideSnapshot(snapshot)) return snapshot
+  }
+  throw new PromptOverrideSnapshotUnavailableError()
 }
 
 /** Drop the cached snapshot; the next load reads the database again. */

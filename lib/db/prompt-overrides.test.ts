@@ -4,6 +4,7 @@
 
 import {
   PROMPT_REVISION_HISTORY_LIMIT,
+  PromptOverrideAccountChangedError,
   PromptOverrideConflictError,
   deletePromptOverrideBinding,
   discardPromptOverrideDraft,
@@ -15,6 +16,7 @@ import {
   listPromptOverrideRevisions,
   onPromptOverridesChanged,
   publishPromptOverride,
+  readActivePromptOverrides,
   resetPromptOverride,
   savePromptOverrideDraft,
 } from "./prompt-overrides"
@@ -122,6 +124,57 @@ describe("resetPromptOverride", () => {
     const history = await listPromptOverrideRevisions(reset.id)
     expect(history.map((row) => row.kind)).toEqual(["reset", "published"])
     expect(history[1].id).toBe(published.activeRevisionId)
+  })
+})
+
+describe("history order (F19)", () => {
+  it("lists writes made in one millisecond newest first, in the order they happened", async () => {
+    const published = await publishPromptOverride(write("live", 0, { now: 5_000 }))
+    const reset = await resetPromptOverride({ ...write("", 1, { now: 5_000 }) })
+    const draft = await savePromptOverrideDraft(write("next", 2, { now: 5_000 }))
+    const history = await listPromptOverrideRevisions(draft.id)
+    expect(history.map((row) => row.kind)).toEqual(["draft", "reset", "published"])
+    expect(history[2].id).toBe(published.activeRevisionId)
+    expect(history[1].parentId).toBe(published.activeRevisionId)
+    expect(new Set(history.map((row) => row.createdAt)).size).toBe(3)
+    expect(reset.rev).toBe(2)
+  })
+
+  it("orders a write after the previous one even when its clock is behind", async () => {
+    await publishPromptOverride(write("ahead", 0, { now: 9_000 }))
+    const behind = await publishPromptOverride(write("behind", 1, { now: 1_000 }))
+    const history = await listPromptOverrideRevisions(behind.id)
+    expect(history.map((row) => row.body)).toEqual(["behind", "ahead"])
+    expect(history[0].id).toBe(behind.activeRevisionId)
+  })
+})
+
+describe("account pinning (F17)", () => {
+  it("refuses a write pinned to another account database, writing nothing", async () => {
+    await expect(
+      publishPromptOverride(write("x", 0, { expectDatabase: "cognia-another-account" }))
+    ).rejects.toBeInstanceOf(PromptOverrideAccountChangedError)
+    expect(await listPromptOverrideBindings()).toEqual([])
+    expect(await getDb().promptOverrideRevisions.count()).toBe(0)
+    const binding = await publishPromptOverride(write("y", 0, { expectDatabase: getDb().name }))
+    await expect(
+      deletePromptOverrideBinding(binding.id, binding.rev, { expectDatabase: "cognia-other" })
+    ).rejects.toBeInstanceOf(PromptOverrideAccountChangedError)
+    expect(await listPromptOverrideBindings()).toHaveLength(1)
+  })
+})
+
+describe("readActivePromptOverrides", () => {
+  it("pairs each pointing binding with its revision from one database", async () => {
+    const published = await publishPromptOverride(write("live", 0))
+    await savePromptOverrideDraft(
+      write("draft only", 0, { promptId: "generation.title.work", mutationId: "d-only" })
+    )
+    const read = await readActivePromptOverrides()
+    expect(read.databaseName).toBe(getDb().name)
+    expect(read.entries).toHaveLength(1)
+    expect(read.entries[0].binding.id).toBe(published.id)
+    expect(read.entries[0].revision?.body).toBe("live")
   })
 })
 

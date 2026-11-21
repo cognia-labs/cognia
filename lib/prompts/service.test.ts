@@ -1,7 +1,17 @@
 /** @jest-environment jsdom */
 
 import { createDbTestFixture } from "@/lib/db/test-fixture"
-import { listPromptOverrideRevisions } from "@/lib/db/prompt-overrides"
+import {
+  PromptOverrideAccountChangedError,
+  listPromptOverrideRevisions,
+} from "@/lib/db/prompt-overrides"
+import { activateAccountDatabase, clearAccountDatabaseSelection, getDb } from "@/lib/db/schema"
+import { encryptedAccountDatabaseName } from "@/lib/accounts/account-db"
+import {
+  AccountContentCipher,
+  activateAccountContentCipher,
+  lockAccountContentCipher,
+} from "@/lib/accounts/content-cipher"
 import {
   PromptScopeError,
   PromptValidationError,
@@ -130,4 +140,85 @@ it("removes a binding entirely", async () => {
   await removePromptBinding(binding)
   expect(await listPromptSlots(def.id)).toEqual([])
   expect(resolvePrompt(def, { values: { topic: "x" } }).text).toBe("Shipped x")
+})
+
+it("lists a prompt's slots broadest scope first", async () => {
+  await publishPromptBody({
+    def,
+    target: { scope: "workspace", targetId: "ws-b" },
+    body: "B {{topic}}",
+    expectedRev: 0,
+  })
+  await publishPromptBody({ def, target: account, body: "A {{topic}}", expectedRev: 0 })
+  await publishPromptBody({
+    def,
+    target: { scope: "workspace", targetId: "ws-a" },
+    body: "W {{topic}}",
+    expectedRev: 0,
+  })
+  const slots = await listPromptSlots(def.id)
+  expect(slots.map((slot) => `${slot.binding?.scope}:${slot.binding?.targetId}`)).toEqual([
+    "account:",
+    "workspace:ws-a",
+    "workspace:ws-b",
+  ])
+  expect(slots.every((slot) => slot.database === getDb().name)).toBe(true)
+})
+
+describe("an account switch while a write is pending (F17)", () => {
+  const ACCOUNT_A = "acct_prompt_service_a"
+  const ACCOUNT_B = "acct_prompt_service_b"
+
+  async function cipherFor(accountId: string): Promise<AccountContentCipher> {
+    const key = new Uint8Array(32).fill(accountId === ACCOUNT_A ? 3 : 4)
+    return AccountContentCipher.fromRawKey(accountId, encryptedAccountDatabaseName(accountId), key)
+  }
+
+  function switchTo(accountId: string, cipher: AccountContentCipher): void {
+    activateAccountContentCipher(cipher)
+    activateAccountDatabase(accountId)
+  }
+
+  beforeEach(() => {
+    dbFixture.registerCleanup(async () => {
+      for (const accountId of [ACCOUNT_A, ACCOUNT_B]) {
+        switchTo(accountId, await cipherFor(accountId))
+        await getDb().delete()
+      }
+      lockAccountContentCipher()
+      clearAccountDatabaseSelection()
+      invalidatePromptOverrideSnapshot()
+    })
+  })
+
+  it("refuses a publish started for one account once another is active", async () => {
+    const [cipherA, cipherB] = await Promise.all([cipherFor(ACCOUNT_A), cipherFor(ACCOUNT_B)])
+    switchTo(ACCOUNT_A, cipherA)
+    const publishing = publishPromptBody({
+      def,
+      target: account,
+      body: "Mine {{topic}}",
+      expectedRev: 0,
+    })
+    // The publish is awaiting its shipped-body digest when the account switches.
+    switchTo(ACCOUNT_B, cipherB)
+    await expect(publishing).rejects.toBeInstanceOf(PromptOverrideAccountChangedError)
+    expect(await listPromptSlots(def.id)).toEqual([])
+    switchTo(ACCOUNT_A, await cipherFor(ACCOUNT_A))
+    expect(await listPromptSlots(def.id)).toEqual([])
+  })
+
+  it("refuses a write named for the database its slot was read from", async () => {
+    const [cipherA, cipherB] = await Promise.all([cipherFor(ACCOUNT_A), cipherFor(ACCOUNT_B)])
+    switchTo(ACCOUNT_A, cipherA)
+    const slot = await readPromptSlot(def.id, account)
+    switchTo(ACCOUNT_B, cipherB)
+    await expect(
+      savePromptDraft({ def, target: account, body: "x", expectedRev: 0, database: slot.database })
+    ).rejects.toBeInstanceOf(PromptOverrideAccountChangedError)
+    await expect(
+      resetPromptToInherited({ def, target: account, expectedRev: 0, database: slot.database })
+    ).rejects.toBeInstanceOf(PromptOverrideAccountChangedError)
+    expect(await listPromptSlots(def.id)).toEqual([])
+  })
 })

@@ -157,3 +157,41 @@ describe("resolvePromptAsync", () => {
     expect((await resolvePromptAsync(def, { snapshot: null })).body).toBe(def.defaultBody)
   })
 })
+
+describe("validity verdicts follow the definition object (F07)", () => {
+  it("re-checks an override when the definition is registered again with a stricter contract", () => {
+    const snapshot = snapshotOf(override("account", "", "Custom title prompt."))
+    expect(resolvePrompt(def, { snapshot }).source.kind).toBe("override")
+    // A plugin reload: same id and contract version, a new required fragment.
+    const reRegistered = { ...def, requiredFragments: ["{{locale}}"] }
+    expect(resolvePrompt(reRegistered, { snapshot }).source).toEqual({
+      kind: "default",
+      fallback: "invalid-body",
+      skippedRevisionId: "por_account_",
+    })
+    // The original object keeps its own verdict.
+    expect(resolvePrompt(def, { snapshot }).source.kind).toBe("override")
+  })
+})
+
+describe("recording a use (F05)", () => {
+  it("records a resolution as the slot's last use unless the caller says it is not one", () => {
+    const snapshot = snapshotOf(override("account", "", "Custom title prompt."))
+    resolvePrompt(def, { snapshot, record: false })
+    expect(lastPromptResolution(def.id)).toBeUndefined()
+    resolvePrompt(def, { snapshot })
+    expect(lastPromptResolution(def.id)?.source.kind).toBe("override")
+  })
+
+  it("keeps a preview from overwriting the record of the last real use", async () => {
+    resolvePrompt(def, { snapshot: snapshotOf(), context: { workspaceId: "ws-real" } })
+    await resolvePromptAsync(def, {
+      snapshot: snapshotOf(override("account", "", "Custom title prompt.")),
+      record: false,
+    })
+    expect(lastPromptResolution(def.id)).toMatchObject({
+      source: { kind: "default" },
+      context: { workspaceId: "ws-real" },
+    })
+  })
+})

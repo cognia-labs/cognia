@@ -8,9 +8,16 @@
  * new revision, so "published" in the editor means the next operation here
  * uses it. Drafts are saved unvalidated: unfinished work is allowed to be
  * unfinished, it just cannot be published.
+ *
+ * Every write is pinned to one account database: the one the caller read the
+ * slot from (`database`, which `readPromptSlot` reports), else the one active
+ * when the call starts. A switch while it awaits makes the storage layer refuse
+ * it (`PromptOverrideAccountChangedError`) rather than write the edit into the
+ * account that is active by then.
  */
 
 import { digestPrompt } from "@/lib/agent/composition/digest"
+import { activeDatabaseName } from "@/lib/db/schema"
 import {
   deletePromptOverrideBinding,
   discardPromptOverrideDraft,
@@ -27,7 +34,7 @@ import {
 } from "@/lib/db/prompt-overrides"
 import { invalidatePromptOverrideSnapshot, loadPromptOverrideSnapshot } from "./snapshot"
 import { validatePromptBody, type PromptValidationIssue } from "./template"
-import type { PromptDefinitionV1, PromptTargetRef } from "./types"
+import { PROMPT_SCOPE_SPECIFICITY, type PromptDefinitionV1, type PromptTargetRef } from "./types"
 
 export class PromptValidationError extends Error {
   readonly code = "prompt_validation_failed"
@@ -69,7 +76,17 @@ function mutationId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `mut_${Date.now().toString(36)}_${Math.random()}`
 }
 
-export interface PromptWriteRequest {
+/** Who a write is for: the account database the caller read the slot from. */
+interface PinnedRequest {
+  /** Defaults to the database active when the call starts. */
+  database?: string
+}
+
+function pinned(request: PinnedRequest): string {
+  return request.database ?? activeDatabaseName()
+}
+
+export interface PromptWriteRequest extends PinnedRequest {
   def: PromptDefinitionV1
   target: PromptTargetRef
   body: string
@@ -82,11 +99,13 @@ export interface PromptWriteRequest {
 export async function publishPromptBody(
   request: PromptWriteRequest
 ): Promise<PromptOverrideBindingRow> {
+  const expectDatabase = pinned(request)
   const { def, target, body } = request
   assertScope(def, target)
   const issues = validatePromptBody(def, body)
   if (issues.length > 0) throw new PromptValidationError(issues)
   const binding = await publishPromptOverride({
+    expectDatabase,
     promptId: def.id,
     target,
     body,
@@ -102,6 +121,7 @@ export async function publishPromptBody(
 export async function savePromptDraft(
   request: PromptWriteRequest
 ): Promise<PromptOverrideBindingRow> {
+  const expectDatabase = pinned(request)
   const { def, target, body } = request
   assertScope(def, target)
   if (body.length > def.maxChars) {
@@ -110,6 +130,7 @@ export async function savePromptDraft(
     ])
   }
   return savePromptOverrideDraft({
+    expectDatabase,
     promptId: def.id,
     target,
     body,
@@ -122,14 +143,18 @@ export async function savePromptDraft(
 }
 
 /** Return the slot to inheritance (the next less specific override, or the shipped body). */
-export async function resetPromptToInherited(request: {
-  def: PromptDefinitionV1
-  target: PromptTargetRef
-  expectedRev: number
-  origin?: PromptRevisionOrigin
-}): Promise<PromptOverrideBindingRow> {
+export async function resetPromptToInherited(
+  request: PinnedRequest & {
+    def: PromptDefinitionV1
+    target: PromptTargetRef
+    expectedRev: number
+    origin?: PromptRevisionOrigin
+  }
+): Promise<PromptOverrideBindingRow> {
+  const expectDatabase = pinned(request)
   assertScope(request.def, request.target)
   const binding = await resetPromptOverride({
+    expectDatabase,
     promptId: request.def.id,
     target: request.target,
     expectedRev: request.expectedRev,
@@ -141,12 +166,15 @@ export async function resetPromptToInherited(request: {
   return settle(binding)
 }
 
-export async function discardPromptDraft(request: {
-  def: PromptDefinitionV1
-  target: PromptTargetRef
-  expectedRev: number
-}): Promise<PromptOverrideBindingRow> {
+export async function discardPromptDraft(
+  request: PinnedRequest & {
+    def: PromptDefinitionV1
+    target: PromptTargetRef
+    expectedRev: number
+  }
+): Promise<PromptOverrideBindingRow> {
   return discardPromptOverrideDraft({
+    expectDatabase: pinned(request),
     promptId: request.def.id,
     target: request.target,
     expectedRev: request.expectedRev,
@@ -161,18 +189,21 @@ export async function discardPromptDraft(request: {
  * now, so restoring text written for an older contract is refused, not
  * silently activated.
  */
-export async function restorePromptRevision(request: {
-  def: PromptDefinitionV1
-  target: PromptTargetRef
-  revisionId: string
-  expectedRev: number
-}): Promise<PromptOverrideBindingRow> {
+export async function restorePromptRevision(
+  request: PinnedRequest & {
+    def: PromptDefinitionV1
+    target: PromptTargetRef
+    revisionId: string
+    expectedRev: number
+  }
+): Promise<PromptOverrideBindingRow> {
+  const database = pinned(request)
   const revision = await getPromptOverrideRevision(request.revisionId)
   if (!revision || revision.promptId !== request.def.id) {
     throw new Error(`revision ${request.revisionId} does not belong to ${request.def.id}`)
   }
   if (revision.kind === "reset") {
-    return resetPromptToInherited({ ...request, origin: "restore" })
+    return resetPromptToInherited({ ...request, database, origin: "restore" })
   }
   return publishPromptBody({
     def: request.def,
@@ -180,17 +211,23 @@ export async function restorePromptRevision(request: {
     body: revision.body,
     expectedRev: request.expectedRev,
     origin: "restore",
+    database,
   })
 }
 
 /** Remove a binding entirely (orphaned or unknown prompt ids). */
-export async function removePromptBinding(binding: PromptOverrideBindingRow): Promise<void> {
-  await deletePromptOverrideBinding(binding.id, binding.rev)
+export async function removePromptBinding(
+  binding: PromptOverrideBindingRow,
+  request: PinnedRequest = {}
+): Promise<void> {
+  await deletePromptOverrideBinding(binding.id, binding.rev, { expectDatabase: pinned(request) })
   invalidatePromptOverrideSnapshot()
   await loadPromptOverrideSnapshot()
 }
 
 export interface PromptSlotState {
+  /** The account database the slot was read from; a write made from it names this. */
+  database: string
   binding?: PromptOverrideBindingRow
   active?: PromptOverrideRevisionRow
   draft?: PromptOverrideRevisionRow
@@ -201,18 +238,23 @@ export async function readPromptSlot(
   promptId: string,
   target: PromptTargetRef
 ): Promise<PromptSlotState> {
+  const database = activeDatabaseName()
   const binding = await getPromptOverrideBinding(promptId, target)
-  if (!binding) return {}
+  if (!binding) return { database }
   const [active, draft] = await Promise.all([
     binding.activeRevisionId ? getPromptOverrideRevision(binding.activeRevisionId) : undefined,
     binding.draftRevisionId ? getPromptOverrideRevision(binding.draftRevisionId) : undefined,
   ])
-  return { binding, active, draft }
+  return { database, binding, active, draft }
 }
 
-/** Every slot of one prompt with its active revision, for the detail view. */
+/** Every slot of one prompt with its active revision, for the detail view, broadest scope first. */
 export async function listPromptSlots(promptId: string): Promise<PromptSlotState[]> {
-  const bindings = await listPromptOverrideBindingsFor(promptId)
+  const bindings = (await listPromptOverrideBindingsFor(promptId)).sort(
+    (a, b) =>
+      PROMPT_SCOPE_SPECIFICITY.indexOf(a.scope) - PROMPT_SCOPE_SPECIFICITY.indexOf(b.scope) ||
+      a.targetId.localeCompare(b.targetId)
+  )
   return Promise.all(bindings.map((binding) => readPromptSlot(promptId, binding)))
 }
 

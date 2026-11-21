@@ -20,6 +20,13 @@
  * Revisions hold static user-authored text only, never rendered prompts with
  * live task data. The tables are account-scoped content (encrypted at rest by
  * the account content middleware) and are not account-synced.
+ *
+ * A mutation may name the account database it was started for
+ * (`expectDatabase`); it is refused inside its transaction when another one is
+ * active by then, so an edit begun for one account never lands in another.
+ * Within a binding, revision `createdAt` values strictly increase in mutation
+ * order, so "newest first" is a total order even for writes in one
+ * millisecond.
  */
 
 import { getDb } from "./schema"
@@ -52,6 +59,30 @@ export class PromptOverrideConflictError extends Error {
 
 export function isPromptOverrideConflict(error: unknown): error is PromptOverrideConflictError {
   return error instanceof PromptOverrideConflictError
+}
+
+/** A write started for one account database reached another one. Nothing was written. */
+export class PromptOverrideAccountChangedError extends Error {
+  readonly code = "prompt_override_account_changed"
+  constructor(
+    readonly expectedDatabase: string,
+    readonly activeDatabase: string
+  ) {
+    super(`prompt override write for ${expectedDatabase} refused: ${activeDatabase} is active`)
+    this.name = "PromptOverrideAccountChangedError"
+  }
+}
+
+export function isPromptOverrideAccountChanged(
+  error: unknown
+): error is PromptOverrideAccountChangedError {
+  return error instanceof PromptOverrideAccountChangedError
+}
+
+function assertDatabase(db: { name: string }, expected: string | undefined): void {
+  if (expected !== undefined && db.name !== expected) {
+    throw new PromptOverrideAccountChangedError(expected, db.name)
+  }
 }
 
 type Listener = () => void
@@ -110,12 +141,43 @@ export async function getPromptOverrideRevision(
   return getDb().promptOverrideRevisions.get(id)
 }
 
+/** Newest first: `createdAt` strictly increases within a binding (see `runMutation`). */
+function newestFirst(a: PromptOverrideRevisionRow, b: PromptOverrideRevisionRow): number {
+  return b.createdAt - a.createdAt || b.id.localeCompare(a.id)
+}
+
 /** Every revision of a binding, newest first. */
 export async function listPromptOverrideRevisions(
   bindingId: string
 ): Promise<PromptOverrideRevisionRow[]> {
   const rows = await getDb().promptOverrideRevisions.where("bindingId").equals(bindingId).toArray()
-  return rows.sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id))
+  return rows.sort(newestFirst)
+}
+
+export interface ActivePromptOverrideRows {
+  /** The account database both tables were read from. */
+  databaseName: string
+  /** Each binding that points at a revision, with that revision (absent when missing). */
+  entries: Array<{ binding: PromptOverrideBindingRow; revision?: PromptOverrideRevisionRow }>
+}
+
+/**
+ * Every binding with an active pointer and the revision it points at, read in
+ * one transaction of one database: a commit or an account switch between the
+ * two reads cannot pair one state's bindings with another's revisions.
+ */
+export async function readActivePromptOverrides(): Promise<ActivePromptOverrideRows> {
+  const db = getDb()
+  return db.transaction("r", db.promptOverrides, db.promptOverrideRevisions, async () => {
+    const bindings = (await db.promptOverrides.toArray()).filter((row) => row.activeRevisionId)
+    const revisions = await db.promptOverrideRevisions.bulkGet(
+      bindings.map((row) => row.activeRevisionId!)
+    )
+    return {
+      databaseName: db.name,
+      entries: bindings.map((binding, index) => ({ binding, revision: revisions[index] })),
+    }
+  })
 }
 
 /** Revisions by id, for building the resolver snapshot in one read. */
@@ -133,6 +195,8 @@ interface MutationBase {
   mutationId: string
   origin: PromptRevisionOrigin
   now?: number
+  /** The account database the caller read under; refused when another is active at commit. */
+  expectDatabase?: string
 }
 
 export interface WriteBodyInput extends MutationBase {
@@ -150,12 +214,12 @@ async function runMutation(
 ): Promise<PromptOverrideBindingRow> {
   const db = getDb()
   const { scope, targetId } = normalizeTarget(input.target)
-  const now = input.now ?? Date.now()
   const result = await db.transaction(
     "rw",
     db.promptOverrides,
     db.promptOverrideRevisions,
     async () => {
+      assertDatabase(db, input.expectDatabase)
       const existing = await db.promptOverrides
         .where("[promptId+scope+targetId]")
         .equals([input.promptId, scope, targetId])
@@ -172,6 +236,10 @@ async function runMutation(
       if (currentRev !== input.expectedRev) {
         throw new PromptOverrideConflictError(input.expectedRev, currentRev)
       }
+      // Every mutation stamps the binding's `updatedAt`, so a clock at or
+      // behind it (two writes in one millisecond, another window's clock
+      // ahead of ours) still orders this revision after the previous one.
+      const now = Math.max(input.now ?? Date.now(), (existing?.updatedAt ?? -1) + 1)
       const binding: PromptOverrideBindingRow = existing ?? {
         id: newId("pob"),
         promptId: input.promptId,
@@ -205,9 +273,7 @@ async function pruneRevisions(binding: PromptOverrideBindingRow): Promise<void> 
   const rows = await db.promptOverrideRevisions.where("bindingId").equals(binding.id).toArray()
   const keep = new Set([binding.activeRevisionId, binding.draftRevisionId].filter(Boolean))
   const stale = rows.filter((row) => row.kind === "draft" && !keep.has(row.id)).map((row) => row.id)
-  const history = rows
-    .filter((row) => row.kind !== "draft" && !keep.has(row.id))
-    .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id))
+  const history = rows.filter((row) => row.kind !== "draft" && !keep.has(row.id)).sort(newestFirst)
   for (const row of history.slice(PROMPT_REVISION_HISTORY_LIMIT)) stale.push(row.id)
   if (stale.length > 0) await db.promptOverrideRevisions.bulkDelete(stale)
 }
@@ -301,10 +367,12 @@ export async function discardPromptOverrideDraft(
  */
 export async function deletePromptOverrideBinding(
   bindingId: string,
-  expectedRev: number
+  expectedRev: number,
+  opts: { expectDatabase?: string } = {}
 ): Promise<void> {
   const db = getDb()
   await db.transaction("rw", db.promptOverrides, db.promptOverrideRevisions, async () => {
+    assertDatabase(db, opts.expectDatabase)
     const binding = await db.promptOverrides.get(bindingId)
     if (!binding) return
     if (binding.rev !== expectedRev) {

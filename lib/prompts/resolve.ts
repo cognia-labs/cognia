@@ -23,6 +23,7 @@
 import { loggers } from "@cognia/logging"
 import { renderPromptTemplate, validatePromptBody } from "./template"
 import {
+  isActivePromptOverrideSnapshot,
   loadPromptOverrideSnapshot,
   peekPromptOverrideSnapshot,
   type ActivePromptOverride,
@@ -48,6 +49,12 @@ export interface ResolvePromptOptions {
   values?: Readonly<Record<string, string | undefined>>
   /** Snapshot to read; defaults to the active account's loaded snapshot. */
   snapshot?: PromptOverrideSnapshot | null
+  /**
+   * Whether this resolution is a use of the slot, recorded as its "last used"
+   * evidence. `false` for a read that sends nothing (a preview, an editor's
+   * inherited-text lookup), so looking at a prompt never reads as running it.
+   */
+  record?: boolean
 }
 
 export interface ResolvedPrompt {
@@ -89,16 +96,26 @@ export function selectPromptOverride(
   return undefined
 }
 
-/** Validity of an override body against the current definition, cached per revision. */
-const verdicts = new Map<string, PromptFallbackReason | null>()
-const MAX_VERDICTS = 500
+/**
+ * Validity of an override body against a definition, cached per revision and
+ * per definition object. A definition registered again (a plugin re-registers
+ * on reload, possibly with new fragments under the same contract version) is
+ * a new object, so its overrides are checked against the contract it states
+ * now rather than answered from the previous registration's verdict.
+ */
+let verdicts = new WeakMap<PromptDefinitionV1, Map<string, PromptFallbackReason | null>>()
+const MAX_VERDICTS_PER_DEFINITION = 500
 
 function overrideVerdict(
   def: PromptDefinitionV1,
   override: ActivePromptOverride
 ): PromptFallbackReason | null {
-  const key = `${def.id}\u0000${def.contractVersion}\u0000${override.revisionId}`
-  const cached = verdicts.get(key)
+  let byRevision = verdicts.get(def)
+  if (!byRevision) {
+    byRevision = new Map()
+    verdicts.set(def, byRevision)
+  }
+  const cached = byRevision.get(override.revisionId)
   if (cached !== undefined) return cached
   let verdict: PromptFallbackReason | null = null
   if (override.contractVersion !== def.contractVersion) {
@@ -108,8 +125,8 @@ function overrideVerdict(
     if (issues.some((issue) => issue.code === "pii")) verdict = "pii-blocked"
     else if (issues.length > 0) verdict = "invalid-body"
   }
-  if (verdicts.size >= MAX_VERDICTS) verdicts.clear()
-  verdicts.set(key, verdict)
+  if (byRevision.size >= MAX_VERDICTS_PER_DEFINITION) byRevision.clear()
+  byRevision.set(override.revisionId, verdict)
   // Signalled once per revision, not on every call that falls back.
   if (verdict) signal(def, verdict)
   return verdict
@@ -166,7 +183,9 @@ export function resolvePrompt(
   }
 
   const text = renderPromptTemplate(def, body, options.values)
-  recordPromptResolution({ promptId: def.id, source, context, at: Date.now() })
+  if (options.record !== false) {
+    recordPromptResolution({ promptId: def.id, source, context, at: Date.now() })
+  }
   return { text, body, source }
 }
 
@@ -182,10 +201,13 @@ export async function resolvePromptAsync(
   if (options.snapshot !== undefined) return resolvePrompt(def, options)
   let snapshot: PromptOverrideSnapshot | null = peekPromptOverrideSnapshot()
   if (!snapshot) snapshot = await loadPromptOverrideSnapshot().catch(() => null)
+  // Checked again where it is used: an account switch after the load settled
+  // must not apply the previous account's text to this call.
+  if (snapshot && !isActivePromptOverrideSnapshot(snapshot)) snapshot = null
   return resolvePrompt(def, { ...options, snapshot })
 }
 
 /** Test seam: forget cached override verdicts. */
 export function __resetPromptVerdictsForTests(): void {
-  verdicts.clear()
+  verdicts = new WeakMap()
 }

@@ -14,9 +14,10 @@ import {
   serializePromptProfile,
   type PromptProfileV1,
 } from "./profile"
+import { publishPromptOverride } from "@/lib/db/prompt-overrides"
 import { publishPromptBody, readPromptSlot, shippedBodyDigest } from "./service"
 import { invalidatePromptOverrideSnapshot } from "./snapshot"
-import { resolvePrompt } from "./resolve"
+import { resolvePrompt, resolvePromptAsync } from "./resolve"
 
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
@@ -178,5 +179,67 @@ describe("applyPromptProfileImport", () => {
     expect(result.applied).toBe(0)
     expect(result.conflicted).toHaveLength(1)
     expect(resolvePrompt(BRIEF_MODE_PROMPT).text).toBe("Typed meanwhile.")
+  })
+
+  // F02: a "replace" preview used to re-read the slot at apply time and
+  // publish over whatever someone else had published since.
+  it("never replaces text published after the preview it was reviewed in", async () => {
+    const first = await publishPromptBody({
+      def: BRIEF_MODE_PROMPT,
+      target: account,
+      body: "Reviewed.",
+      expectedRev: 0,
+    })
+    const preview = await previewPromptProfileImport(await profileWith([{ body: "From file." }]))
+    expect(preview[0]).toMatchObject({ status: "replace", baseRev: first.rev })
+    await publishPromptBody({
+      def: BRIEF_MODE_PROMPT,
+      target: account,
+      body: "Published meanwhile.",
+      expectedRev: first.rev,
+    })
+    const result = await applyPromptProfileImport(preview, new Set([0]))
+    expect(result).toEqual({ applied: 0, conflicted: [preview[0]] })
+    expect(resolvePrompt(BRIEF_MODE_PROMPT).text).toBe("Published meanwhile.")
+  })
+
+  // F16: the same text published under an older contract is skipped by the
+  // resolver, so importing it for the current contract is a real change.
+  it("re-publishes the same text when the slot holds it under an older contract", async () => {
+    await publishPromptOverride({
+      promptId: BRIEF_MODE_PROMPT.id,
+      target: account,
+      body: "Be terse.",
+      contractVersion: BRIEF_MODE_PROMPT.contractVersion - 1,
+      baseDigest: await shippedBodyDigest(BRIEF_MODE_PROMPT),
+      expectedRev: 0,
+      mutationId: "older-contract",
+      origin: "editor",
+    })
+    expect((await resolvePromptAsync(BRIEF_MODE_PROMPT)).source).toMatchObject({
+      kind: "default",
+      fallback: "contract-incompatible",
+    })
+    const preview = await previewPromptProfileImport(await profileWith([{ body: "Be terse." }]))
+    expect(preview[0].status).toBe("replace")
+    expect(await applyPromptProfileImport(preview, new Set([0]))).toEqual({
+      applied: 1,
+      conflicted: [],
+    })
+    expect(resolvePrompt(BRIEF_MODE_PROMPT)).toMatchObject({
+      text: "Be terse.",
+      source: { kind: "override" },
+    })
+  })
+
+  it("still reports the current contract's identical text as unchanged", async () => {
+    await publishPromptBody({
+      def: BRIEF_MODE_PROMPT,
+      target: account,
+      body: "Be terse.",
+      expectedRev: 0,
+    })
+    const preview = await previewPromptProfileImport(await profileWith([{ body: "Be terse." }]))
+    expect(preview[0].status).toBe("unchanged")
   })
 })

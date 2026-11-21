@@ -12,11 +12,15 @@
  */
 
 import { z } from "zod"
-import { listPromptOverrideBindings, getPromptOverrideRevisions } from "@/lib/db/prompt-overrides"
+import {
+  getPromptOverrideRevisions,
+  isPromptOverrideConflict,
+  listPromptOverrideBindings,
+} from "@/lib/db/prompt-overrides"
 import { getPromptDefinition, loadPromptCatalog } from "./catalog"
 import { publishPromptBody, readPromptSlot, shippedBodyDigest } from "./service"
 import { validatePromptBody, type PromptValidationIssue } from "./template"
-import type { PromptDefinitionV1, PromptScope, PromptTargetRef } from "./types"
+import type { PromptScope, PromptTargetRef } from "./types"
 
 export const PROMPT_PROFILE_KIND = "cognia.prompt-profile" as const
 export const PROMPT_PROFILE_SCHEMA_VERSION = 1 as const
@@ -118,9 +122,12 @@ export async function exportPromptProfile(
 export type PromptImportStatus =
   /** Applies as a new override. */
   | "new"
-  /** Replaces a different published override in the same slot. */
+  /**
+   * Replaces what the slot publishes: different text, or the same text under
+   * an older contract (which the resolver skips, so it publishes nothing now).
+   */
   | "replace"
-  /** The slot already publishes this exact text. */
+  /** The slot already publishes this exact text under the current contract. */
   | "unchanged"
   /** This build has no such prompt. */
   | "unknown-prompt"
@@ -139,6 +146,13 @@ export interface PromptImportPreviewEntry {
   status: PromptImportStatus
   /** The local slot the entry applies to, when it applies at all. */
   target?: PromptTargetRef
+  /**
+   * The slot's binding revision this status was judged against, and the
+   * account database it was read from. Apply publishes against exactly these,
+   * so anything written to the slot after the preview makes it a conflict.
+   */
+  baseRev?: number
+  database?: string
   /** The shipped default changed since the text was written; the user should review it. */
   upstreamChanged: boolean
   issues: PromptValidationIssue[]
@@ -191,10 +205,19 @@ export async function previewPromptProfileImport(
     const slot = await readPromptSlot(def.id, target)
     const status: PromptImportStatus = !slot.active
       ? "new"
-      : slot.active.kind === "published" && slot.active.body === entry.body
+      : slot.active.kind === "published" &&
+          slot.active.body === entry.body &&
+          slot.active.contractVersion === def.contractVersion
         ? "unchanged"
         : "replace"
-    preview.push({ ...base, status, target, upstreamChanged })
+    preview.push({
+      ...base,
+      status,
+      target,
+      upstreamChanged,
+      baseRev: slot.binding?.rev ?? 0,
+      database: slot.database,
+    })
   }
   return preview
 }
@@ -216,8 +239,10 @@ export interface PromptImportResult {
 
 /**
  * Publish the previewed entries the user selected. Each entry publishes on its
- * own (origin `import`), against the binding revision read now, so a slot
- * edited since the preview is reported as a conflict instead of overwritten.
+ * own (origin `import`) against the binding revision and account database its
+ * preview read, so a slot written since the preview (by anyone, to anything)
+ * is reported as a conflict for the user to review again instead of being
+ * overwritten, and an account switch since the preview refuses the import.
  */
 export async function applyPromptProfileImport(
   preview: readonly PromptImportPreviewEntry[],
@@ -228,23 +253,30 @@ export async function applyPromptProfileImport(
   const conflicted: PromptImportPreviewEntry[] = []
   for (const item of preview) {
     if (!selected.has(item.index) || !applicable(item.status) || !item.target) continue
-    const def = getPromptDefinition(item.entry.promptId) as PromptDefinitionV1
-    const slot = await readPromptSlot(def.id, item.target)
-    const stillAsPreviewed =
-      item.status === "new"
-        ? !slot.active
-        : Boolean(slot.active) && slot.active?.body !== item.entry.body
-    if (!stillAsPreviewed) {
+    if (item.baseRev === undefined || item.database === undefined) {
+      throw new Error(
+        `import preview entry ${item.index} carries no slot revision to apply against`
+      )
+    }
+    const def = getPromptDefinition(item.entry.promptId)
+    if (!def) {
       conflicted.push(item)
       continue
     }
-    await publishPromptBody({
-      def,
-      target: item.target,
-      body: item.entry.body,
-      expectedRev: slot.binding?.rev ?? 0,
-      origin: "import",
-    })
+    try {
+      await publishPromptBody({
+        def,
+        target: item.target,
+        body: item.entry.body,
+        expectedRev: item.baseRev,
+        origin: "import",
+        database: item.database,
+      })
+    } catch (error) {
+      if (!isPromptOverrideConflict(error)) throw error
+      conflicted.push(item)
+      continue
+    }
     applied += 1
   }
   return { applied, conflicted }
