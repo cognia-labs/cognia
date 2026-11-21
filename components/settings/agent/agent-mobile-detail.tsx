@@ -51,6 +51,7 @@ import { CodexAppServerStatusCard } from "./codex-app-server-status-card"
 import { OpencodeStatusCard } from "./opencode-status-card"
 import { PiAuthStatusCard } from "./pi-auth-status-card"
 import { KimiManagementCard } from "./kimi-management-card"
+import { OhMyPiStatusCard } from "./omp-status-card"
 import {
   buildDraftUpdate,
   draftFromAgent,
@@ -71,7 +72,7 @@ type Editor =
   | "sessions"
   | "retry"
   | "webSearch"
-type Diagnostic = "codex" | "opencode" | "pi" | "kimi"
+type Diagnostic = "codex" | "opencode" | "pi" | "kimi" | "oh-my-pi"
 
 const EDITOR_FIELDS: Partial<Record<Editor, readonly (keyof ConnectionDraft)[]>> = {
   name: ["name", "description"],
@@ -216,6 +217,7 @@ function MobileDetail({
     opencode: t("mobileDetailOpenCode"),
     pi: t("mobileDetailPiSignIn"),
     kimi: t("mobileDetailKimi"),
+    "oh-my-pi": t("mobileDetailOhMyPi"),
   }
   const fieldProps = { draft, onChange, errors }
   const editors: Record<Editor, ReactNode> = {
@@ -369,6 +371,7 @@ function MobileDetail({
     diagnostics.push("opencode")
   if (agent.protocol === "pi-rpc") diagnostics.push("pi")
   if (presetId === "kimi" && agent.protocol === "acp") diagnostics.push("kimi")
+  if (presetId === "oh-my-pi" && agent.protocol === "acp") diagnostics.push("oh-my-pi")
   const saved = draftFromAgent(agent)
 
   return (
@@ -527,6 +530,8 @@ function MobileDetail({
             <OpencodeStatusCard agentId={agent.id} connected={connected} />
           ) : diagnostic === "pi" ? (
             <PiAuthStatusCard agentId={agent.id} connected={connected} />
+          ) : diagnostic === "oh-my-pi" ? (
+            <OhMyPiStatusCard agentId={agent.id} connected={connected} />
           ) : (
             <KimiManagementCard agent={agent} />
           )}

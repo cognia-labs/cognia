@@ -90,6 +90,7 @@ import { CodexAppServerStatusCard } from "./codex-app-server-status-card"
 import { OpencodeStatusCard } from "./opencode-status-card"
 import { PiAuthStatusCard } from "./pi-auth-status-card"
 import { KimiManagementCard } from "./kimi-management-card"
+import { OhMyPiStatusCard } from "./omp-status-card"
 import { PERMISSION_MODE_LABEL_KEY, declaredWebSearchOf } from "./agent-editor-dialog"
 import {
   SettingsStack,
@@ -800,6 +801,9 @@ export function AgentInspector({
             )}
             {presetId === "kimi" && agent.protocol === "acp" && (
               <KimiManagementCard agent={agent} />
+            )}
+            {presetId === "oh-my-pi" && agent.protocol === "acp" && (
+              <OhMyPiStatusCard agentId={agent.id} connected={isConnected} />
             )}
           </SettingsStack>
         </TabsContent>

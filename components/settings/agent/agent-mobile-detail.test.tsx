@@ -42,6 +42,9 @@ jest.mock("./pi-auth-status-card", () => ({
 jest.mock("./kimi-management-card", () => ({
   KimiManagementCard: () => <div data-testid="kimi-diagnostic" />,
 }))
+jest.mock("./omp-status-card", () => ({
+  OhMyPiStatusCard: () => <div data-testid="omp-diagnostic" />,
+}))
 jest.mock("@/components/agent/external-agent/unsandboxed-consent-action", () => ({
   UnsandboxedConsentAction: () => <button data-testid="consent-action">Review permission</button>,
 }))
@@ -476,4 +479,19 @@ it("ships every narrow-detail label in both split catalogues", () => {
     expect(zhMessages.settings[key as keyof typeof zhMessages.settings]).toEqual(expect.any(String))
     expect(zhMessages.settings[key as keyof typeof zhMessages.settings]).not.toBe("")
   }
+})
+
+it("exposes the oh-my-pi readiness diagnostic drawer on mobile (#15)", async () => {
+  setup({
+    agent: {
+      ...agent,
+      id: "omp-1",
+      name: "oh-my-pi",
+      protocol: "acp",
+      process: { command: "omp", args: ["acp"], cwd: "/work" },
+      metadata: { preset: "oh-my-pi" },
+    },
+  })
+  await userEvent.click(screen.getByRole("button", { name: settings.mobileDetailOhMyPi }))
+  expect(screen.getByTestId("omp-diagnostic")).toBeInTheDocument()
 })

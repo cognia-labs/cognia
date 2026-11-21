@@ -61,6 +61,9 @@ jest.mock("./pi-auth-status-card", () => ({
 jest.mock("./kimi-management-card", () => ({
   KimiManagementCard: () => <div data-testid="kimi-management-card" />,
 }))
+jest.mock("./omp-status-card", () => ({
+  OhMyPiStatusCard: () => <div data-testid="omp-status-card" />,
+}))
 jest.mock("@/components/agent/external-agent/unsandboxed-consent-action", () => ({
   UnsandboxedConsentAction: () => null,
 }))
@@ -757,4 +760,19 @@ it("rejects a fractional retry value using shared draft validation", async () =>
     externalAgentMessages.settings.mobileDetailNonNegativeIntegerInvalid
   )
   expect(screen.getByTestId("unsaved-bar")).toBeInTheDocument()
+})
+
+it("mounts OhMyPiStatusCard in the Overview tab for oh-my-pi ACP agents (#15)", () => {
+  renderInspector({
+    agent: {
+      ...agent,
+      id: "omp-1",
+      name: "oh-my-pi",
+      protocol: "acp",
+      transport: "stdio",
+      process: { command: "omp", args: ["acp"], cwd: "/work" },
+      metadata: { preset: "oh-my-pi" },
+    },
+  })
+  expect(screen.getByTestId("omp-status-card")).toBeInTheDocument()
 })
