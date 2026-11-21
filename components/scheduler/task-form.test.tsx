@@ -442,6 +442,39 @@ describe("TaskForm", () => {
     })
   })
 
+  it("keeps a saved zero timeout, retry count and retry delay through edit and submit", async () => {
+    const onSubmit = jest.fn(
+      async (_input: import("@/types/scheduler").CreateScheduledTaskInput) => undefined
+    )
+    render(
+      <TaskForm
+        onSubmit={onSubmit}
+        onCancel={jest.fn()}
+        initialValues={{
+          name: "Never retry",
+          type: "chat",
+          trigger: { type: "cron", cronExpression: "0 9 * * *", timezone: "UTC" } as never,
+          config: { timeout: 0, maxRetries: 0, retryDelay: 0 } as never,
+        }}
+      />
+    )
+
+    const field = (label: string) =>
+      screen.getByText(label).parentElement!.querySelector("input") as HTMLInputElement
+    expect(field("maxRetries")).toHaveValue(0)
+    expect(field("retryDelayMs")).toHaveValue(0)
+    expect(field("timeoutMs")).toHaveValue(0)
+
+    fireEvent.click(screen.getByTestId("scheduler-task-submit"))
+    await screen.findByTestId("scheduler-task-form")
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ timeout: 0, maxRetries: 0, retryDelay: 0 }),
+      })
+    )
+  })
+
   it("seeds the overlap policy from legacy allowConcurrent and mirrors it on submit", async () => {
     const onSubmit = jest.fn(
       async (_input: import("@/types/scheduler").CreateScheduledTaskInput) => undefined

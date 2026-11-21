@@ -513,9 +513,11 @@ function createInitialState(
     notificationChannels: initialValues?.notification?.channels || ["toast"],
     notificationImConversationKey: initialValues?.notification?.imTarget?.conversationKey ?? "",
     notificationWebhookUrl: initialValues?.notification?.webhookUrl ?? "",
-    taskTimeout: initialValues?.config?.timeout || DEFAULT_EXECUTION_CONFIG.timeout,
-    maxRetries: initialValues?.config?.maxRetries || DEFAULT_EXECUTION_CONFIG.maxRetries,
-    retryDelay: initialValues?.config?.retryDelay || DEFAULT_EXECUTION_CONFIG.retryDelay,
+    // `??`, not `||`: zero is a real setting for all three (no timeout, never
+    // retry, retry at once), and opening a task must not quietly replace it.
+    taskTimeout: initialValues?.config?.timeout ?? DEFAULT_EXECUTION_CONFIG.timeout,
+    maxRetries: initialValues?.config?.maxRetries ?? DEFAULT_EXECUTION_CONFIG.maxRetries,
+    retryDelay: initialValues?.config?.retryDelay ?? DEFAULT_EXECUTION_CONFIG.retryDelay,
     maxRetryDelay:
       initialValues?.config?.maxRetryDelay ?? DEFAULT_EXECUTION_CONFIG.maxRetryDelay ?? 60_000,
     runMissedOnStartup:
@@ -826,9 +828,9 @@ export function TaskForm({
       notificationChannels: input.notification?.channels || ["toast"],
       notificationImConversationKey: input.notification?.imTarget?.conversationKey ?? "",
       notificationWebhookUrl: input.notification?.webhookUrl ?? "",
-      taskTimeout: input.config?.timeout || DEFAULT_EXECUTION_CONFIG.timeout,
-      maxRetries: input.config?.maxRetries || DEFAULT_EXECUTION_CONFIG.maxRetries,
-      retryDelay: input.config?.retryDelay || DEFAULT_EXECUTION_CONFIG.retryDelay,
+      taskTimeout: input.config?.timeout ?? DEFAULT_EXECUTION_CONFIG.timeout,
+      maxRetries: input.config?.maxRetries ?? DEFAULT_EXECUTION_CONFIG.maxRetries,
+      retryDelay: input.config?.retryDelay ?? DEFAULT_EXECUTION_CONFIG.retryDelay,
       maxRetryDelay:
         input.config?.maxRetryDelay ?? DEFAULT_EXECUTION_CONFIG.maxRetryDelay ?? 60_000,
       runMissedOnStartup:
