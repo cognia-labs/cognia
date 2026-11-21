@@ -2639,6 +2639,7 @@
     "vendors": {
       "claude-code": "Claude Code",
       "codex": "Codex",
+      "oh-my-pi": "oh-my-pi",
       "opencode": "OpenCode",
       "pi": "Pi"
     },
@@ -45365,6 +45366,7 @@
       "cursor": "Cursor",
       "gemini-cli": "Gemini CLI",
       "goose": "Goose",
+      "oh-my-pi": "oh-my-pi",
       "opencode": "OpenCode",
       "pi": "Pi",
       "qwen-code": "Qwen Code"

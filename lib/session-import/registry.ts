@@ -14,6 +14,7 @@ import { copilotCliSessionSource } from "./adapters/copilot-cli"
 import { geminiCliSessionSource } from "./adapters/gemini-cli"
 import { opencodeSessionSource } from "./adapters/opencode"
 import { piSessionSource } from "./adapters/pi"
+import { ohMyPiSessionSource } from "./adapters/oh-my-pi"
 import { qwenCodeSessionSource } from "./adapters/qwen-code"
 import { gooseSessionSource } from "./adapters/goose"
 import type { VendorRoots } from "@/lib/agent-roots"
@@ -29,6 +30,7 @@ const STATIC_SOURCES: AgentSessionSourceAdapter[] = [
   continueDevSessionSource,
   aiderSessionSource,
   piSessionSource,
+  ohMyPiSessionSource,
   cursorSessionSource,
   clineSessionSource,
   copilotCliSessionSource,

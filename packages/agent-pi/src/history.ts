@@ -657,6 +657,8 @@ function pathSep(path: string): string {
 export function detectPiSession(files: readonly HistoryPickedFile[]): HistoryDetectVerdict {
   if (files.some((file) => file.path.includes(`.pi${pathSep(file.path)}agent`))) return "match"
   const sniffed = files.some((file) => {
+    const normalized = file.path.replace(/\\/g, "/")
+    if (normalized.includes("/.omp/")) return false
     const first = file.content.split("\n").find((line) => line.trim())
     if (!first) return false
     try {

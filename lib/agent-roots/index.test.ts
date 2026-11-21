@@ -29,6 +29,8 @@ const DESKTOP_ROOTS: VendorRoots = {
   opencodeDataDir: "/xdg/data/opencode",
   piAgentDir: "/custom/pi-agent",
   piSessionDir: "/custom/pi-agent/sessions",
+  ompAgentDir: "/custom/omp-agent",
+  ompSessionDir: "/custom/omp-agent/sessions",
   geminiDir: "/custom/gemini",
   continueDir: "/custom/continue",
   cursorDir: "/custom/cursor",
@@ -52,6 +54,8 @@ describe("vendorRootsFromHome", () => {
       opencodePlatformDataDir: "/home/u/.local/share/opencode",
       piAgentDir: "/home/u/.pi/agent",
       piSessionDir: "/home/u/.pi/agent/sessions",
+      ompAgentDir: "/home/u/.omp/agent",
+      ompSessionDir: "/home/u/.omp/agent/sessions",
       // Home-relative on every OS: no relocation variable for either vendor is
       // confirmed upstream, so declaring one would be a promise this resolver
       // does not keep. Carrying the roots at all is what stops the two session
@@ -115,6 +119,23 @@ describe("vendorRootsFromEnv", () => {
     })
     expect(roots.opencodeConfigDir).toBe("/xdg/config/opencode")
     expect(roots.opencodeDataDir).toBe("/xdg/data/opencode")
+  })
+
+  it("honours PI_CONFIG_DIR and OMP_PROFILE/PI_PROFILE for OMP", () => {
+    const profiled = vendorRootsFromEnv("/home/u", {
+      PI_CONFIG_DIR: ".omp-custom",
+      OMP_PROFILE: "team",
+      PI_CODING_AGENT_DIR: "/ignored-for-profile",
+    })
+    expect(profiled.ompAgentDir).toBe("/home/u/.omp-custom/profiles/team/agent")
+    expect(profiled.ompSessionDir).toBe("/home/u/.omp-custom/profiles/team/agent/sessions")
+
+    const traversed = vendorRootsFromEnv("/home/u", {
+      PI_CONFIG_DIR: "../escape",
+      OMP_PROFILE: "../bad",
+    })
+    expect(traversed.ompAgentDir).toBe("/home/u/.omp/agent")
+    expect(traversed.ompSessionDir).toBe("/home/u/.omp/agent/sessions")
   })
 
   it("ignores blank overrides and trims trailing separators", () => {

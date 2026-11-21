@@ -443,6 +443,9 @@ export class NodeExternalAgentBackend {
             XDG_DATA_HOME: process.env.XDG_DATA_HOME,
             PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
             PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR,
+            PI_CONFIG_DIR: process.env.PI_CONFIG_DIR,
+            OMP_PROFILE: process.env.OMP_PROFILE,
+            PI_PROFILE: process.env.PI_PROFILE,
             APPDATA: process.env.APPDATA,
           },
           process.platform === "darwin"

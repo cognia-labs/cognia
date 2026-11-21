@@ -118,6 +118,11 @@ export function nodeVendorRoots(
       CODEX_HOME: env.CODEX_HOME,
       XDG_CONFIG_HOME: env.XDG_CONFIG_HOME,
       XDG_DATA_HOME: env.XDG_DATA_HOME,
+      PI_CODING_AGENT_DIR: env.PI_CODING_AGENT_DIR,
+      PI_CODING_AGENT_SESSION_DIR: env.PI_CODING_AGENT_SESSION_DIR,
+      PI_CONFIG_DIR: env.PI_CONFIG_DIR,
+      OMP_PROFILE: env.OMP_PROFILE,
+      PI_PROFILE: env.PI_PROFILE,
       APPDATA: env.APPDATA,
     },
     process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux"

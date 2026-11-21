@@ -14,7 +14,12 @@ async function defaultDeps(): Promise<ProbeVendorsDeps> {
     import("@/lib/file/file-operations"),
     import("@/lib/native/agent-config"),
   ])
-  return { roots: resolveVendorRoots, exists, readAgentConfig }
+  return {
+    roots: resolveVendorRoots,
+    exists,
+    readAgentConfig: async (vendor) =>
+      vendor === "oh-my-pi" ? { exists: false, path: null } : readAgentConfig(vendor),
+  }
 }
 
 export async function probeVendors(deps?: ProbeVendorsDeps): Promise<MigrationVendorProbe[]> {

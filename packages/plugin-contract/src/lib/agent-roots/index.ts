@@ -31,6 +31,13 @@ export interface VendorRoots {
   /** `$PI_CODING_AGENT_SESSION_DIR` or `<piAgentDir>/sessions`. */
   piSessionDir: string
   /**
+   * OMP's user-scope agent directory (`<home>/${PI_CONFIG_DIR:-.omp}/agent`,
+   * `<configRoot>/profiles/<profile>/agent`, or `$PI_CODING_AGENT_DIR`).
+   */
+  ompAgentDir?: string
+  /** `$PI_CODING_AGENT_SESSION_DIR` or `<ompAgentDir>/sessions`. */
+  ompSessionDir?: string
+  /**
    * `<home>/.gemini` — Gemini CLI's user-scope directory (session transcripts
    * live under `tmp/`).
    *

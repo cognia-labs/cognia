@@ -82,6 +82,12 @@ pub struct RootEnv {
     /// `settings.json` and so is resolved by the reader, not here — these
     /// roots are environment-only by design.
     pub pi_coding_agent_session_dir: Option<String>,
+    /// `$PI_CONFIG_DIR` — OMP's home-relative config directory name (default `.omp`).
+    pub pi_config_dir: Option<String>,
+    /// `$OMP_PROFILE` — OMP named profile under `<configRoot>/profiles/<profile>/agent`.
+    pub omp_profile: Option<String>,
+    /// `$PI_PROFILE` — fallback profile env var honoured by OMP.
+    pub pi_profile: Option<String>,
 }
 
 /// Absolute per-vendor root directories. An empty string means "not
@@ -106,6 +112,12 @@ pub struct VendorRoots {
     pub pi_agent_dir: String,
     /// `$PI_CODING_AGENT_SESSION_DIR` or `<pi_agent_dir>/sessions`.
     pub pi_session_dir: String,
+    /// OMP's user-scope agent directory (`<home>/${PI_CONFIG_DIR:-.omp}/agent`,
+    /// or `<configRoot>/profiles/<profile>/agent` when `$OMP_PROFILE`/`$PI_PROFILE`
+    /// is set, or `$PI_CODING_AGENT_DIR`).
+    pub omp_agent_dir: String,
+    /// `$PI_CODING_AGENT_SESSION_DIR` or `<omp_agent_dir>/sessions`.
+    pub omp_session_dir: String,
     /// `<home>/.gemini` — Gemini CLI's user-scope directory (its session
     /// transcripts live under `tmp/`).
     ///
@@ -136,6 +148,33 @@ fn env_path(value: Option<String>) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(trimmed))
+}
+
+fn safe_omp_config_dir(value: Option<String>) -> Option<String> {
+    let v = value?;
+    let trimmed = v.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('\0')
+        || trimmed.split(['/', '\\']).any(|seg| seg == "..")
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn safe_omp_profile(value: Option<String>) -> Option<String> {
+    let v = value?;
+    let trimmed = v.trim();
+    if trimmed.is_empty()
+        || trimmed == "default"
+        || trimmed.contains('\0')
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains("..")
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 fn to_string(path: Option<PathBuf>) -> String {
@@ -184,10 +223,33 @@ pub fn vendor_roots_from(
 
     // Pi: the env var replaces `<home>/.pi/agent` wholesale, and the session
     // tree hangs off whatever that resolves to unless separately overridden.
-    let pi_agent = env_path(env.pi_coding_agent_dir)
+    let pi_agent_override = env_path(env.pi_coding_agent_dir);
+    let pi_session_override = env_path(env.pi_coding_agent_session_dir);
+    let pi_agent = pi_agent_override
+        .clone()
         .or_else(|| home_dir.as_ref().map(|h| h.join(".pi").join("agent")));
-    let pi_session = env_path(env.pi_coding_agent_session_dir)
+    let pi_session = pi_session_override
+        .clone()
         .or_else(|| pi_agent.as_ref().map(|d| d.join("sessions")));
+
+    // OMP: `<home>/${PI_CONFIG_DIR:-.omp}`, with `$OMP_PROFILE`/`$PI_PROFILE`
+    // selecting `<configRoot>/profiles/<profile>/agent`, else `$PI_CODING_AGENT_DIR`,
+    // else `<configRoot>/agent`. Sessions live under `$PI_CODING_AGENT_SESSION_DIR`
+    // or `<omp_agent_dir>/sessions`.
+    let omp_config_name =
+        safe_omp_config_dir(env.pi_config_dir).unwrap_or_else(|| ".omp".to_string());
+    let omp_profile =
+        safe_omp_profile(env.omp_profile).or_else(|| safe_omp_profile(env.pi_profile));
+    let omp_config_root = home_dir.as_ref().map(|h| h.join(&omp_config_name));
+    let omp_agent = if let Some(profile) = omp_profile {
+        omp_config_root
+            .as_ref()
+            .map(|r| r.join("profiles").join(profile).join("agent"))
+    } else {
+        pi_agent_override.or_else(|| omp_config_root.as_ref().map(|r| r.join("agent")))
+    };
+    let omp_session =
+        pi_session_override.or_else(|| omp_agent.as_ref().map(|d| d.join("sessions")));
 
     let gemini = home_dir.as_ref().map(|h| h.join(".gemini"));
     let continue_dir = home_dir.as_ref().map(|h| h.join(".continue"));
@@ -201,6 +263,8 @@ pub fn vendor_roots_from(
         opencode_platform_data_dir: to_string(opencode_platform_data),
         pi_agent_dir: to_string(pi_agent),
         pi_session_dir: to_string(pi_session),
+        omp_agent_dir: to_string(omp_agent),
+        omp_session_dir: to_string(omp_session),
         gemini_dir: to_string(gemini),
         continue_dir: to_string(continue_dir),
         cursor_dir: to_string(cursor),
@@ -221,6 +285,9 @@ pub fn vendor_roots() -> VendorRoots {
             xdg_data_home: env_var("XDG_DATA_HOME"),
             pi_coding_agent_dir: env_var("PI_CODING_AGENT_DIR"),
             pi_coding_agent_session_dir: env_var("PI_CODING_AGENT_SESSION_DIR"),
+            pi_config_dir: env_var("PI_CONFIG_DIR"),
+            omp_profile: env_var("OMP_PROFILE"),
+            pi_profile: env_var("PI_PROFILE"),
         },
         home(),
         dirs::config_dir(),
@@ -562,6 +629,9 @@ mod tests {
             xdg_data_home: Some("\t".to_string()),
             pi_coding_agent_dir: Some("  ".to_string()),
             pi_coding_agent_session_dir: Some(String::new()),
+            pi_config_dir: Some("  ".to_string()),
+            omp_profile: Some("  ".to_string()),
+            pi_profile: Some("default".to_string()),
         });
         assert_eq!(got.claude_config_dir, "/h/.claude");
         assert_eq!(got.codex_home, "/h/.codex");
@@ -569,6 +639,31 @@ mod tests {
         assert_eq!(got.opencode_data_dir, "/h/.local/share/opencode");
         assert_eq!(got.pi_agent_dir, "/h/.pi/agent");
         assert_eq!(got.pi_session_dir, "/h/.pi/agent/sessions");
+        assert_eq!(got.omp_agent_dir, "/h/.omp/agent");
+        assert_eq!(got.omp_session_dir, "/h/.omp/agent/sessions");
+    }
+
+    #[test]
+    fn vendor_roots_honour_omp_config_dir_and_profile_overrides() {
+        let got = unix_roots(RootEnv {
+            pi_config_dir: Some(".omp-alt".to_string()),
+            omp_profile: Some("team".to_string()),
+            pi_coding_agent_dir: Some("/ignored-when-profile-set".to_string()),
+            ..RootEnv::default()
+        });
+        assert_eq!(got.omp_agent_dir, "/h/.omp-alt/profiles/team/agent");
+        assert_eq!(
+            got.omp_session_dir,
+            "/h/.omp-alt/profiles/team/agent/sessions"
+        );
+
+        let fallback = unix_roots(RootEnv {
+            pi_config_dir: Some("../escape".to_string()),
+            omp_profile: Some("../bad".to_string()),
+            ..RootEnv::default()
+        });
+        assert_eq!(fallback.omp_agent_dir, "/h/.omp/agent");
+        assert_eq!(fallback.omp_session_dir, "/h/.omp/agent/sessions");
     }
 
     #[test]

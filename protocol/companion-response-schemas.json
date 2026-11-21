@@ -17042,10 +17042,19 @@
         "piSessionDir": {
           "type": "string"
         },
+        "ompAgentDir": {
+          "type": "string"
+        },
+        "ompSessionDir": {
+          "type": "string"
+        },
         "geminiDir": {
           "type": "string"
         },
         "continueDir": {
+          "type": "string"
+        },
+        "cursorDir": {
           "type": "string"
         }
       },

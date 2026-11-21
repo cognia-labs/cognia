@@ -113,6 +113,28 @@ export function executableGenerationArtifact(
           .map((line) => JSON.stringify(line))
           .join("\n"),
       }
+    case "oh-my-pi":
+      return {
+        name: `${id}.jsonl`,
+        path: `/fixtures/.omp/agent/sessions/project/${id}.jsonl`,
+        content: [
+          { type: "title", title: `OMP ${fixture.generation} fixture` },
+          {
+            type: "session",
+            version: fixture.generation === "current" ? 3 : 2,
+            id,
+            cwd: "/fixture",
+          },
+          {
+            type: "message",
+            id: "u1",
+            parentId: null,
+            message: { role: "user", content: "fixture prompt" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+      }
     case "opencode":
       return {
         name: `${id}.json`,
@@ -335,5 +357,23 @@ export const SESSION_IMPORT_GENERATION_FIXTURES: readonly SessionImportGeneratio
     "https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/",
     ["json-export"],
     { id: "[session]", messages: [] }
+  ),
+  fixture(
+    "oh-my-pi",
+    "current",
+    "18.22.2",
+    "docs/evidence/2026-11-18-pi-oh-my-pi-support-audit.md",
+    ["jsonl-dag", "title", "fork", "branch", "tool-results", "native-resume"],
+    { type: "session", version: 3, id: "[session]", cwd: "/fixture" },
+    "2026-11-18"
+  ),
+  fixture(
+    "oh-my-pi",
+    "previous",
+    "18.6.1",
+    "packages/agent-omp/src/history.ts",
+    ["jsonl-dag", "title", "branch"],
+    { type: "session", version: 2, id: "[session]", cwd: "/fixture" },
+    "2026-10-06"
   ),
 ]

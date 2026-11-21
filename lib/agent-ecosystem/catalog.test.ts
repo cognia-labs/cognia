@@ -20,7 +20,6 @@ describe("lookups", () => {
     "mistral-vibe",
     "mimo-code",
     "hermes-agent",
-    "oh-my-pi",
     "muse",
     "amp",
     "zcode",
@@ -30,6 +29,20 @@ describe("lookups", () => {
       runtimeIds: [id],
       sessionSourceIds: [],
       migrationVendor: null,
+    })
+  })
+
+  it("links oh-my-pi ACP runtime to its session history source, vendor roots, and migration vendor (#19)", () => {
+    expect(findEcosystemByRuntimeId("oh-my-pi")?.id).toBe("oh-my-pi")
+    expect(findEcosystemBySessionSource("oh-my-pi")?.id).toBe("oh-my-pi")
+    expect(findEcosystemByMigrationVendor("oh-my-pi")?.id).toBe("oh-my-pi")
+    expect(findEcosystemById("oh-my-pi")).toMatchObject({
+      runtimeIds: ["oh-my-pi"],
+      sessionSourceIds: ["oh-my-pi"],
+      migrationVendor: "oh-my-pi",
+      vendorRootKeys: ["ompAgentDir", "ompSessionDir"],
+      configRootKey: "ompAgentDir",
+      probeRootKeys: ["ompAgentDir"],
     })
   })
 

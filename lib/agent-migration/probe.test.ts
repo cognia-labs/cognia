@@ -10,11 +10,14 @@ describe("probeVendors", () => {
         opencodeDataDir: "/opencode-data",
         piAgentDir: "/pi/agent",
         piSessionDir: "/pi/agent/sessions",
+        ompAgentDir: "/omp/agent",
+        ompSessionDir: "/omp/agent/sessions",
         geminiDir: "/gemini",
         continueDir: "/continue",
         cursorDir: "/cursor",
       }),
-      exists: async (path) => path === "/opencode-data" || path === "/pi/agent",
+      exists: async (path) =>
+        path === "/opencode-data" || path === "/pi/agent" || path === "/omp/agent",
       readAgentConfig: async (vendor) => ({
         exists: vendor === "codex",
         path: vendor === "codex" ? "/codex/config.toml" : null,
@@ -24,9 +27,10 @@ describe("probeVendors", () => {
       expect.objectContaining({ vendor: "claude-code", installed: false }),
       expect.objectContaining({ vendor: "codex", installed: true }),
       expect.objectContaining({ vendor: "opencode", installed: true }),
-      // Pi has no config file the probe can read, so the directory probe is
-      // the only signal that it is installed.
+      // Pi and oh-my-pi have no JSON/TOML config file the probe can read,
+      // so the directory probe signals that they are installed.
       expect.objectContaining({ vendor: "pi", installed: true }),
+      expect.objectContaining({ vendor: "oh-my-pi", installed: true }),
     ])
   })
 

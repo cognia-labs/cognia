@@ -38,7 +38,7 @@ function fakeSource(
 afterEach(() => __resetDynamicSessionSourcesForTesting())
 
 describe("session-source registry", () => {
-  it("ships all twelve first-party sources", () => {
+  it("ships all thirteen first-party sources", () => {
     const ids = getSessionSources().map((s) => s.id)
     expect(ids).toEqual([
       "claude-code",
@@ -48,6 +48,7 @@ describe("session-source registry", () => {
       "continue-dev",
       "aider",
       "pi",
+      "oh-my-pi",
       "cursor",
       "cline",
       "copilot-cli",

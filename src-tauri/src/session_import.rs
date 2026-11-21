@@ -48,6 +48,11 @@ fn history_read_roots(
     } else if let Some(root) = base(&roots.pi_agent_dir, ".pi/agent") {
         result.push(root.join("sessions"));
     }
+    if !roots.omp_session_dir.is_empty() {
+        result.push(PathBuf::from(&roots.omp_session_dir));
+    } else if let Some(root) = base(&roots.omp_agent_dir, ".omp/agent") {
+        result.push(root.join("sessions"));
+    }
     if let Some(home) = home {
         for relative in [
             ".cline/sessions",
@@ -209,6 +214,18 @@ mod tests {
             history_read_roots(None, &roots),
             [PathBuf::from("/custom/sessions")]
         );
+        let omp_roots = vendor_roots_from(
+            RootEnv {
+                omp_profile: Some("team".into()),
+                ..Default::default()
+            },
+            Some(PathBuf::from("/home/u")),
+            None,
+            None,
+            false,
+        );
+        assert!(history_read_roots(Some(Path::new("/home/u")), &omp_roots)
+            .contains(&PathBuf::from("/home/u/.omp/profiles/team/agent/sessions")));
     }
 
     #[test]

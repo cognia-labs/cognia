@@ -65,6 +65,15 @@ describe("artifactSupportFor", () => {
         commands: "supported",
         memory: "shared",
       },
+      "oh-my-pi": {
+        settings: "unsupported",
+        sessions: "supported",
+        skills: "supported",
+        subagents: "unsupported",
+        mcp: "unsupported",
+        commands: "unsupported",
+        memory: "shared",
+      },
     })
   })
 

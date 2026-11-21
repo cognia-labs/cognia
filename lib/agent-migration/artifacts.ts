@@ -133,14 +133,19 @@ async function discoverMemory(vendor: MigrationVendor, cwd?: string): Promise<un
 async function defaultPreviewDeps(): Promise<ArtifactPreviewDeps> {
   return {
     previewSettings: async (vendor) =>
-      (await import("@/lib/settings-import")).previewSettingsImport(vendor),
+      vendor === "oh-my-pi"
+        ? []
+        : (await import("@/lib/settings-import")).previewSettingsImport(vendor),
     previewCommands: async (vendor) =>
-      (await import("@/lib/commands-import")).previewCommandsImport(vendor),
+      vendor === "oh-my-pi"
+        ? { drafts: [], warnings: [] }
+        : (await import("@/lib/commands-import")).previewCommandsImport(vendor),
     previewSessions: async (vendor) => {
       const sessions = await import("@/lib/session-import")
       return sessions.listSessionsForSource(vendor, await sessions.resolveScanInput())
     },
     previewMcp: async (vendor, cwd) => {
+      if (vendor === "oh-my-pi") return { items: [], warnings: [] }
       const sync = await import("@/lib/mcp/agent-config-sync")
       const user = await sync.previewAgentImport(vendor === "pi" ? "pi-mcp-adapter" : vendor)
       const project =
@@ -163,10 +168,10 @@ async function defaultPreviewDeps(): Promise<ArtifactPreviewDeps> {
           return hostSkills.skillsScanCodex()
         case "opencode":
           return hostSkills.skillsScanOpencode()
-        case "pi": {
-          // Pi discovers skills from the agent-neutral `.agents/skills`
-          // convention rather than a Pi-specific directory, so it uses the
-          // generic scanner instead of a vendor command.
+        case "pi":
+        case "oh-my-pi": {
+          // Pi and oh-my-pi discover skills from the agent-neutral `.agents/skills`
+          // convention rather than a vendor-specific Tauri command.
           const [{ resolveHome }, { joinPath }] = await Promise.all([
             import("@/lib/memory/external/home"),
             import("@/lib/agents/instructions/paths"),
@@ -269,11 +274,13 @@ async function defaultApplyDeps(): Promise<ArtifactApplyDeps> {
       }
     },
     applyMcp: async (vendor, strategy) =>
-      normalizeMcpResult(
-        await (
-          await import("@/lib/mcp/agent-config-sync")
-        ).importFromAgent(vendor === "pi" ? "pi-mcp-adapter" : vendor, strategy)
-      ),
+      vendor === "oh-my-pi"
+        ? { imported: 0, skipped: 0, warnings: [] }
+        : normalizeMcpResult(
+            await (
+              await import("@/lib/mcp/agent-config-sync")
+            ).importFromAgent(vendor === "pi" ? "pi-mcp-adapter" : vendor, strategy)
+          ),
     applyProjectMcp: async (cwd, strategy) =>
       normalizeMcpResult(
         await (await import("@/lib/mcp/agent-config-sync")).importFromProjectMcp(cwd, strategy)

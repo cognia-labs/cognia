@@ -2390,10 +2390,19 @@
           "piSessionDir": {
             "type": "string"
           },
+          "ompAgentDir": {
+            "type": "string"
+          },
+          "ompSessionDir": {
+            "type": "string"
+          },
           "geminiDir": {
             "type": "string"
           },
           "continueDir": {
+            "type": "string"
+          },
+          "cursorDir": {
             "type": "string"
           }
         },
@@ -114487,5 +114496,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "462c53ebb0844379aa53c21817ca8ab4bee55fdf1670ebcf6551f87fa990adfe"
+  "catalogHash": "a74a6082e39ce19e76654e2a3dda6b0174b6cf8a4560c225af3ff94c9accbfb4"
 }

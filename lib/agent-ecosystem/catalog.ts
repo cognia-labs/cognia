@@ -54,7 +54,6 @@ export const AGENT_ECOSYSTEMS: readonly AgentEcosystemEntry[] = [
     "mistral-vibe",
     "mimo-code",
     "hermes-agent",
-    "oh-my-pi",
     "muse",
     "amp",
     "zcode",
@@ -70,6 +69,19 @@ export const AGENT_ECOSYSTEMS: readonly AgentEcosystemEntry[] = [
     subagentSourceId: null,
     memoryAgentId: null,
   })),
+  {
+    // Native ACP execution + OMP JSONL history import & migration registration (#19).
+    id: "oh-my-pi",
+    runtimeIds: ["oh-my-pi"],
+    sessionSourceIds: ["oh-my-pi"],
+    migrationVendor: "oh-my-pi",
+    vendorRootKeys: ["ompAgentDir", "ompSessionDir"],
+    configRootKey: "ompAgentDir",
+    probeRootKeys: ["ompAgentDir"],
+    pluginEcosystem: null,
+    subagentSourceId: null,
+    memoryAgentId: null,
+  },
   {
     id: "antigravity",
     runtimeIds: ["antigravity-acp"],

@@ -33,6 +33,8 @@ export const EMPTY_VENDOR_ROOTS: VendorRoots = {
   opencodePlatformDataDir: "",
   piAgentDir: "",
   piSessionDir: "",
+  ompAgentDir: "",
+  ompSessionDir: "",
   geminiDir: "",
   continueDir: "",
   cursorDir: "",
@@ -40,7 +42,7 @@ export const EMPTY_VENDOR_ROOTS: VendorRoots = {
 
 /** True when at least one vendor tree is locatable. */
 export function hasAnyVendorRoot(roots: VendorRoots): boolean {
-  return Object.values(roots).some((v) => v.length > 0)
+  return Object.values(roots).some((v) => typeof v === "string" && v.length > 0)
 }
 
 /**
@@ -54,6 +56,9 @@ export interface VendorRootEnv {
   XDG_DATA_HOME?: string
   PI_CODING_AGENT_DIR?: string
   PI_CODING_AGENT_SESSION_DIR?: string
+  PI_CONFIG_DIR?: string
+  OMP_PROFILE?: string
+  PI_PROFILE?: string
   /** Windows roaming app data; only consulted when `platform === "windows"`. */
   APPDATA?: string
 }
@@ -62,6 +67,19 @@ export interface VendorRootEnv {
 function envDir(value: string | undefined): string | null {
   const trimmed = value?.trim()
   return trimmed ? stripTrailingSep(trimmed) : null
+}
+
+function safeOmpSegment(value: string | undefined): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed || trimmed.includes("\0") || /(^|[\\/])\.\.([\\/]|$)/.test(trimmed)) return null
+  return trimmed
+}
+
+function safeOmpProfile(value: string | undefined): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed || trimmed === "default") return null
+  if (trimmed.includes("\0") || /[\\/]/.test(trimmed) || trimmed.includes("..")) return null
+  return trimmed
 }
 
 /**
@@ -96,9 +114,23 @@ export function vendorRootsFromEnv(
   // Pi is home-relative on every OS (no XDG/APPDATA convention), and the
   // session tree hangs off whatever the agent dir resolves to unless it is
   // separately overridden.
-  const piAgentDir = envDir(env.PI_CODING_AGENT_DIR) ?? (base ? joinPath(base, ".pi/agent") : "")
-  const piSessionDir =
-    envDir(env.PI_CODING_AGENT_SESSION_DIR) ?? (piAgentDir ? joinPath(piAgentDir, "sessions") : "")
+  const piOverride = envDir(env.PI_CODING_AGENT_DIR)
+  const piSessionOverride = envDir(env.PI_CODING_AGENT_SESSION_DIR)
+  const piAgentDir = piOverride ?? (base ? joinPath(base, ".pi/agent") : "")
+  const piSessionDir = piSessionOverride ?? (piAgentDir ? joinPath(piAgentDir, "sessions") : "")
+
+  // OMP resolves `<home>/${PI_CONFIG_DIR:-.omp}`, with `$OMP_PROFILE`/`$PI_PROFILE`
+  // selecting `<configRoot>/profiles/<profile>/agent`, else `$PI_CODING_AGENT_DIR`,
+  // else `<configRoot>/agent`.
+  const ompConfigName = safeOmpSegment(env.PI_CONFIG_DIR) ?? ".omp"
+  const ompProfile = safeOmpProfile(env.OMP_PROFILE) ?? safeOmpProfile(env.PI_PROFILE)
+  const ompConfigRoot = base ? joinPath(base, ompConfigName) : ""
+  const ompAgentDir = ompProfile
+    ? ompConfigRoot
+      ? joinPath(ompConfigRoot, `profiles/${ompProfile}/agent`)
+      : ""
+    : (piOverride ?? (ompConfigRoot ? joinPath(ompConfigRoot, "agent") : ""))
+  const ompSessionDir = piSessionOverride ?? (ompAgentDir ? joinPath(ompAgentDir, "sessions") : "")
 
   return {
     claudeConfigDir: envDir(env.CLAUDE_CONFIG_DIR) ?? (base ? joinPath(base, ".claude") : ""),
@@ -108,6 +140,8 @@ export function vendorRootsFromEnv(
     opencodePlatformDataDir: under(platformData, ".local/share/opencode"),
     piAgentDir,
     piSessionDir,
+    ompAgentDir,
+    ompSessionDir,
     // Home-relative on every OS; see the field docs for why no env override.
     geminiDir: base ? joinPath(base, ".gemini") : "",
     continueDir: base ? joinPath(base, ".continue") : "",
@@ -142,6 +176,8 @@ function asVendorRoots(value: unknown): VendorRoots | null {
     opencodeDataDir: read("opencodeDataDir"),
     piAgentDir: read("piAgentDir"),
     piSessionDir: read("piSessionDir"),
+    ompAgentDir: read("ompAgentDir"),
+    ompSessionDir: read("ompSessionDir"),
     geminiDir: read("geminiDir"),
     continueDir: read("continueDir"),
     cursorDir: read("cursorDir"),

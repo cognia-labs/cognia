@@ -56,6 +56,17 @@ const SUPPORT: Record<MigrationVendor, Record<MigrationArtifact, ArtifactSupport
     // Pi reads the same AGENTS.md / CLAUDE.md chain the other agents do.
     memory: "shared",
   },
+  "oh-my-pi": {
+    // OMP uses YAML (`config.yml`), which the native JSON/TOML settings adapter does not yet parse.
+    settings: "unsupported",
+    sessions: "supported",
+    skills: "supported",
+    subagents: "unsupported",
+    mcp: "unsupported",
+    commands: "unsupported",
+    // OMP reads the same AGENTS.md / CLAUDE.md chain.
+    memory: "shared",
+  },
 }
 
 export function artifactSupportFor(
