@@ -49,6 +49,8 @@ export interface UsePetRemoteSnapshotDeps {
   getClient?: () => PetRemoteClient
   subscribe?: PetTransportSubscribe
   now?: () => number
+  /** Active remote host identity; changing it drops stale snapshot state and re-fetches (F22). */
+  hostId?: string | null
 }
 
 /** Invalidations arrive per table, five tables per reset; one fetch answers them all. */
@@ -73,6 +75,7 @@ export function usePetRemoteSnapshot(
   const getClient = deps.getClient ?? livePetRemoteClient
   const subscribe = deps.subscribe ?? subscribeLivePetTransport
   const now = deps.now ?? systemNow
+  const hostId = deps.hostId
   const [data, setData] = useState<SnapshotData>({
     snapshot: undefined,
     fetchedAt: null,
@@ -82,6 +85,14 @@ export function usePetRemoteSnapshot(
   // not overwrite a newer one.
   const sequence = useRef(0)
   const mounted = useRef(true)
+  const prevHostId = useRef<string | null | undefined>(hostId)
+
+  useEffect(() => {
+    if (prevHostId.current === hostId) return
+    prevHostId.current = hostId
+    sequence.current += 1
+    setData({ snapshot: undefined, fetchedAt: null, error: null })
+  }, [hostId])
 
   // Fetching and applying are split so the effect below only ever sets state
   // from a promise callback, never synchronously in its own body.
@@ -158,7 +169,7 @@ export function usePetRemoteSnapshot(
       if (pending !== null) clearTimeout(pending)
       stopInvalidations()
     }
-  }, [enabled, load, apply, subscribe])
+  }, [enabled, hostId, load, apply, subscribe])
 
   return { ...data, refresh }
 }

@@ -44,6 +44,7 @@ import {
 import { usePet, type UsePetResult } from "@/hooks/pet/use-pet"
 import { useActiveCharacterId } from "@/hooks/pet/use-active-character-id"
 import { usePetConsoleMode } from "@/hooks/pet/use-pet-console-mode"
+import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import { claimConnectionNotice } from "@/lib/runtime/connection-notice-claim"
 import { usePetSettingsView } from "@/lib/pet/settings"
 import { useActiveLive2dModel } from "@/hooks/pet/use-active-live2d-model"
@@ -105,6 +106,7 @@ export interface PetConsoleProps {
 
 export function PetConsole({ initialTarget }: PetConsoleProps = {}) {
   const resolution = usePetConsoleMode()
+  const activeHostId = useRemoteHostStore((state) => state.activeHostId)
   // The console reads the pet the way the floating widget does: through the
   // open session's character binding. Without it the console showed the
   // global look while the widget beside it wore the character's, and the chat
@@ -119,12 +121,14 @@ export function PetConsole({ initialTarget }: PetConsoleProps = {}) {
     return <PetConsoleUnavailable reason={resolution.reason} />
   }
 
+  const providerKey =
+    resolution.mode === "remote" ? `remote:${activeHostId ?? ""}` : resolution.mode
+
   return (
-    // Keyed by mode: a device that pairs (or a desktop that starts driving a
-    // remote host) gets a fresh tree rather than one carrying the other
-    // mode's state.
+    // Keyed by mode and active remote host: switching hosts gets a fresh
+    // remote provider tree instead of retaining the previous host's transcript (F22).
     <PetConsoleActionsProvider
-      key={resolution.mode}
+      key={providerKey}
       mode={resolution.mode}
       pet={pet}
       activeCharacterId={activeCharacterId}

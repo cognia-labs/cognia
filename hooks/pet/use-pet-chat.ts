@@ -10,12 +10,18 @@
 
 "use client"
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLocale } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 
 import { listRecentPetTurns } from "@/lib/db/pet-conversation"
 import { respondAsPet, type PetChatDegradeReason } from "@/lib/pet/chat/respond"
+import {
+  capturePetScope,
+  isPetConversationScopeCurrent,
+  onActiveDatabaseChange,
+  onPetConversationCleared,
+} from "@/lib/pet/runtime/pet-scope"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { usePetSettingsView } from "@/lib/pet/settings"
 import type { PetConversationRow, PetProfile } from "@/types/pet"
@@ -50,17 +56,42 @@ export function usePetChat(
 ): UsePetChat {
   const locale = useLocale()
   const appSettings = usePetSettingsView((s) => s)
-  const turns = useLiveQuery(() => listRecentPetTurns(CHAT_TRANSCRIPT_LIMIT), [], [])
+  const persistedTurns = useLiveQuery(() => listRecentPetTurns(CHAT_TRANSCRIPT_LIMIT), [], [])
 
+  // Ephemeral turns keep successful replies visible when conversation memory is
+  // off or a best-effort history append fails (F1). Cleared on transcript clear,
+  // pet reset, account switch/lock, or page reload.
+  const [ephemeralTurns, setEphemeralTurns] = useState<PetConversationRow[]>([])
   const [pending, setPending] = useState<string | null>(null)
   const [degradeReason, setDegradeReason] = useState<PetChatDegradeReason | null>(null)
   const [inFlight, setInFlight] = useState(false)
   const inFlightRef = useRef(false)
+  const mountedRef = useRef(true)
+  const clearGenRef = useRef(0)
+  const ephemeralSeqRef = useRef(0)
 
   const respond = deps.respond ?? respondAsPet
   // Stable clock: the `?? (() => Date.now())` fallback would otherwise be a
   // fresh function every render, invalidating `send`'s memoization each time.
   const now = useMemo(() => deps.now ?? (() => Date.now()), [deps.now])
+
+  useEffect(() => {
+    mountedRef.current = true
+    const resetEphemeral = () => {
+      clearGenRef.current += 1
+      if (!mountedRef.current) return
+      setEphemeralTurns([])
+      setPending(null)
+      setDegradeReason(null)
+    }
+    const offClear = onPetConversationCleared(resetEphemeral)
+    const offDb = onActiveDatabaseChange(resetEphemeral)
+    return () => {
+      mountedRef.current = false
+      offClear()
+      offDb()
+    }
+  }, [])
 
   const send = useCallback(
     async (raw: string) => {
@@ -71,24 +102,62 @@ export function usePetChat(
       setDegradeReason(null)
       setPending(text)
 
-      const result = await respond(
-        { userText: text, view, profile, appSettings, locale, activeCharacterId, at: now() },
-        {}
-      )
+      const sentAt = now()
+      const startScope = capturePetScope()
+      const startClearGen = clearGenRef.current
+      try {
+        const result = await respond(
+          { userText: text, view, profile, appSettings, locale, activeCharacterId, at: sentAt },
+          {}
+        )
+        if (
+          !mountedRef.current ||
+          clearGenRef.current !== startClearGen ||
+          !isPetConversationScopeCurrent(startScope)
+        ) {
+          return
+        }
 
-      if (result.status === "ok") {
-        // The recorded turn now flows in through the live query.
-        setPending(null)
-        if (result.emotion) usePetStore.getState().enqueueOneShot(result.emotion)
-      } else {
-        // Keep `pending` visible so the failed message isn't lost.
-        setDegradeReason(result.reason)
+        if (result.status === "ok") {
+          setPending(null)
+          if (result.persisted === false) {
+            ephemeralSeqRef.current += 1
+            const row: PetConversationRow = {
+              id: `ephemeral:${sentAt}:${ephemeralSeqRef.current}`,
+              at: sentAt,
+              userText: text,
+              reply: result.reply,
+            }
+            setEphemeralTurns((prev) => [...prev, row].slice(-CHAT_TRANSCRIPT_LIMIT))
+          }
+          if (result.emotion) usePetStore.getState().enqueueOneShot(result.emotion)
+        } else if (result.invalidated) {
+          setPending(null)
+          setDegradeReason(null)
+        } else {
+          // Keep `pending` visible so the failed message isn't lost.
+          setDegradeReason(result.reason)
+        }
+      } catch {
+        if (mountedRef.current && clearGenRef.current === startClearGen) {
+          setDegradeReason("error")
+        }
+      } finally {
+        inFlightRef.current = false
+        if (mountedRef.current) setInFlight(false)
       }
-      inFlightRef.current = false
-      setInFlight(false)
     },
     [view, profile, appSettings, locale, activeCharacterId, respond, now]
   )
 
-  return { turns: turns ?? [], pending, degradeReason, inFlight, send }
+  const turns = useMemo(() => {
+    const persisted = persistedTurns ?? []
+    if (ephemeralTurns.length === 0) return persisted
+    if (persisted.length === 0) return ephemeralTurns
+    return [...persisted, ...ephemeralTurns]
+      .sort((a, b) => a.at - b.at)
+      .slice(-CHAT_TRANSCRIPT_LIMIT)
+  }, [persistedTurns, ephemeralTurns])
+
+  return { turns, pending, degradeReason, inFlight, send }
 }

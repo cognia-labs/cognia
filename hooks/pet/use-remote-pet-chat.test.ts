@@ -61,7 +61,11 @@ describe("useRemotePetChat", () => {
     await act(async () => {
       await result.current.send("  hi  ")
     })
-    expect(sendChat).toHaveBeenCalledWith("hi", "zh-CN")
+    expect(sendChat).toHaveBeenCalledWith(
+      "hi",
+      "zh-CN",
+      expect.objectContaining({ idempotencyKey: expect.any(String) })
+    )
     expect(result.current.pending).toBeNull()
     expect(result.current.inFlight).toBe(false)
     // The desktop's own row replaces the optimistic one.
@@ -168,5 +172,130 @@ describe("useRemotePetChat", () => {
       await result.current.refresh()
     })
     expect(listChat).not.toHaveBeenCalled()
+  })
+
+  it("keeps a successful remote reply visible across refresh when desktop memory is off (F1)", async () => {
+    sendChat.mockResolvedValue({ ok: true, status: "replied", reply: "ephemeral remote reply" })
+    listChat.mockResolvedValue({ items: [] })
+    const { result } = setup()
+
+    await act(async () => {
+      await result.current.send("hello")
+    })
+    await act(async () => {
+      await result.current.refresh()
+    })
+    expect(result.current.turns).toEqual([
+      expect.objectContaining({ userText: "hello", reply: "ephemeral remote reply" }),
+    ])
+  })
+
+  it("does not falsely settle a repeated pending message on an older row and settles via idempotencyKey (F5)", async () => {
+    jest.useFakeTimers()
+    try {
+      const older = turn("old-1", "hi", 95_000)
+      listChat.mockResolvedValue({ items: [older] })
+      sendChat
+        .mockResolvedValueOnce({ ok: true, status: "pending" })
+        .mockResolvedValueOnce({ ok: true, status: "pending" })
+        .mockResolvedValueOnce({ ok: true, status: "replied", reply: "fresh reply" })
+
+      const { result } = setup()
+      await act(async () => {
+        await result.current.refresh()
+      })
+      await act(async () => {
+        await result.current.send("hi")
+      })
+      expect(result.current.awaitingReply).toBe(true)
+
+      // Poll 1: still pending, listChat still returns only older identical text → must NOT settle.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1_000)
+      })
+      expect(result.current.awaitingReply).toBe(true)
+      expect(result.current.pending).toBe("hi")
+
+      // Poll 2: host settles with the same idempotencyKey (even if memory is off / clocks skewed).
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1_000)
+      })
+      expect(result.current.awaitingReply).toBe(false)
+      expect(result.current.pending).toBeNull()
+      expect(result.current.turns).toEqual([
+        older,
+        expect.objectContaining({ userText: "hi", reply: "fresh reply" }),
+      ])
+      expect(sendChat.mock.calls[0][2]).toEqual(sendChat.mock.calls[2][2])
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("surfaces a late degrade on pending poll instead of polling forever (F5)", async () => {
+    jest.useFakeTimers()
+    try {
+      sendChat
+        .mockResolvedValueOnce({ ok: true, status: "pending" })
+        .mockResolvedValueOnce({ ok: true, status: "degraded", reason: "error" })
+      const { result } = setup()
+      await act(async () => {
+        await result.current.send("slow fail")
+      })
+      expect(result.current.awaitingReply).toBe(true)
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1_000)
+      })
+      expect(result.current.awaitingReply).toBe(false)
+      expect(result.current.degradeReason).toBe("error")
+      expect(result.current.pending).toBe("slow fail")
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("prevents a delayed Host A transcript fetch from overwriting Host B (F22)", async () => {
+    let resolveHostA!: (page: PetChatListResult) => void
+    const clientA = {
+      listChat: jest.fn(() => new Promise<PetChatListResult>((r) => (resolveHostA = r))),
+      sendChat: jest.fn(),
+      clearChat: jest.fn(),
+    } as unknown as PetRemoteClient
+    const clientB = {
+      listChat: jest.fn().mockResolvedValue({ items: [turn("b1", "from B")] }),
+      sendChat: jest.fn(),
+      clearChat: jest.fn(),
+    } as unknown as PetRemoteClient
+
+    let activeClient = clientA
+    const { result, rerender } = renderHook(
+      ({ hostId }: { hostId: string }) =>
+        useRemotePetChat(
+          { enabled: true, locale: "en", hostId },
+          { getClient: () => activeClient, now: () => 100_000 }
+        ),
+      { initialProps: { hostId: "host-a" } }
+    )
+
+    let refreshA!: Promise<unknown>
+    act(() => {
+      refreshA = result.current.refresh()
+    })
+
+    // Switch to Host B and load its transcript.
+    activeClient = clientB
+    rerender({ hostId: "host-b" })
+    await act(async () => {
+      await result.current.refresh()
+    })
+    expect(result.current.turns).toEqual([turn("b1", "from B")])
+
+    // Delayed response from Host A arrives — must be ignored.
+    await act(async () => {
+      resolveHostA({ items: [turn("a1", "stale from A")] })
+      await refreshA
+    })
+    expect(result.current.turns).toEqual([turn("b1", "from B")])
   })
 })

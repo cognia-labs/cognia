@@ -46,6 +46,7 @@ import { livePetRemoteClient } from "@/lib/pet/remote/live-transport"
 import { PET_MIRROR_TABLES } from "@/lib/pet/remote/mirror"
 import type { PetChatLocale, PetRemoteRefused } from "@/lib/pet/remote/types"
 import { runSyncDown } from "@/lib/sync/companion-sync"
+import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import type { PetShopItem } from "@/types/pet"
 import { toastPetFailure, type PetTranslate } from "./pet-item-ops"
 
@@ -70,18 +71,22 @@ export function useRemotePetActions(deps: UseRemotePetActionsDeps = {}): PetCons
   const locale = useLocale()
   const getClient = deps.getClient ?? livePetRemoteClient
   const pullMirror = deps.pullMirror ?? pullPetMirror
+  const activeHostId = useRemoteHostStore((state) => state.activeHostId)
+  const hostId = deps.hostId !== undefined ? deps.hostId : activeHostId
   const runtime = useRuntimeSnapshot()
-  const snapshotState = usePetRemoteSnapshot(true, deps)
+  const snapshotState = usePetRemoteSnapshot(true, { ...deps, hostId })
   const { snapshot, fetchedAt, refresh } = snapshotState
   const cooldown = useRemoteActionCooldown(snapshot, fetchedAt, { now: deps.now })
-  const chatState = useRemotePetChat({ enabled: true, locale: toPetChatLocale(locale) }, deps)
+  const chatState = useRemotePetChat(
+    { enabled: true, locale: toPetChatLocale(locale), hostId },
+    deps
+  )
 
-  // A fresh mirror on arrival: the console paints from the pet tables, and a
-  // phone that has not synced since it was paired would otherwise wait for the
-  // next background pass.
+  // A fresh mirror on arrival and on remote host switch: the console paints
+  // from the pet tables, and switching hosts must re-pull the new host's copy.
   useEffect(() => {
     void pullMirror().catch(() => undefined)
-  }, [pullMirror])
+  }, [pullMirror, hostId])
 
   const refused = useCallback(
     (result: PetRemoteRefused): PetActionOutcome =>
