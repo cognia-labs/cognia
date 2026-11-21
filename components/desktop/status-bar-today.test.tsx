@@ -109,6 +109,24 @@ describe("StatusBarToday", () => {
     )
   })
 
+  it("counts only spend this install paid, never imported or scanned tools", () => {
+    rowsResult = [
+      row({ messageId: "a", costUsd: 0.25 }),
+      row({ messageId: "x1", surface: "imported", imported: true, costUsd: 4 }),
+      row({ messageId: "x2", surface: "imported", imported: true, sourceId: "codex", costUsd: 6 }),
+    ]
+    render(<StatusBarToday />)
+    const chip = screen.getByTestId("status-today")
+    expect(chip).toHaveTextContent("1.5K")
+    expect(chip).toHaveTextContent("$0.25")
+  })
+
+  it("renders nothing when today's only usage came from other tools", () => {
+    rowsResult = [row({ surface: "imported", imported: true, sourceId: "codex", costUsd: 6 })]
+    const { container } = render(<StatusBarToday />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
   it("leaves the cost out while nothing today was priced", () => {
     rowsResult = [row({ model: "local-model-without-pricing" })]
     render(<StatusBarToday />)

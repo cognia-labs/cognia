@@ -467,6 +467,89 @@ describe("SubscriptionUsageTab", () => {
     expect(screen.queryByTestId(/^mock-limits-/)).not.toBeInTheDocument()
   })
 
+  describe("external tools", () => {
+    it("leaves imported and scanned usage out until asked, like Glance and the budget", async () => {
+      const user = userEvent.setup()
+      setup({
+        sessionRows: [
+          usageRow({ messageId: "c1", model: "local-model", surface: "chat" }),
+          usageRow({
+            messageId: "x1",
+            model: "imported-model",
+            surface: "imported",
+            imported: true,
+          }),
+          usageRow({
+            messageId: "x2",
+            model: "scanned-model",
+            surface: "imported",
+            imported: true,
+            sourceId: "codex",
+          }),
+        ],
+      })
+      render(<SubscriptionUsageTab />)
+      const toggle = screen.getByTestId("usage-include-external")
+      expect(toggle).toHaveAttribute("aria-pressed", "false")
+      expect(screen.getByTestId("usage-model-row-local-model")).toBeInTheDocument()
+      expect(screen.queryByTestId("usage-model-row-imported-model")).not.toBeInTheDocument()
+      expect(screen.queryByTestId("usage-model-row-scanned-model")).not.toBeInTheDocument()
+      // The surface row only offers what the scope holds: no "Imported" chip.
+      expect(screen.queryByTestId("usage-surface-imported")).not.toBeInTheDocument()
+
+      await user.click(toggle)
+      expect(toggle).toHaveAttribute("aria-pressed", "true")
+      expect(screen.getByTestId("usage-model-row-imported-model")).toBeInTheDocument()
+      expect(screen.getByTestId("usage-model-row-scanned-model")).toBeInTheDocument()
+      expect(screen.getByTestId("usage-surface-imported")).toBeInTheDocument()
+    })
+
+    it("exports only the rows in scope", async () => {
+      const user = userEvent.setup()
+      setup({
+        sessionRows: [
+          usageRow({ messageId: "local-1", surface: "chat" }),
+          usageRow({ messageId: "ext-1", surface: "imported", imported: true }),
+        ],
+      })
+      render(<SubscriptionUsageTab />)
+      const readExport = async (): Promise<string> => {
+        await user.click(screen.getByTestId("usage-export-trigger"))
+        await user.click(await screen.findByTestId("usage-export-csv"))
+        const blob = downloadBlobMock.mock.calls.at(-1)![0] as Blob
+        // jsdom's Blob has no `text()`; FileReader is what it does implement.
+        return new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.onerror = () => reject(reader.error)
+          reader.readAsText(blob)
+        })
+      }
+      const scoped = await readExport()
+      expect(scoped).toContain("local-1")
+      expect(scoped).not.toContain("ext-1")
+
+      await user.click(screen.getByTestId("usage-include-external"))
+      expect(await readExport()).toContain("ext-1")
+    })
+
+    it("offers no toggle when nothing external was imported", () => {
+      setup({ sessionRows: [usageRow({ surface: "chat" })] })
+      render(<SubscriptionUsageTab />)
+      expect(screen.queryByTestId("usage-include-external")).not.toBeInTheDocument()
+    })
+
+    it("still opens the page when external usage is all there is", () => {
+      setup({
+        rows: [],
+        sessionRows: [usageRow({ surface: "imported", imported: true })],
+      })
+      render(<SubscriptionUsageTab />)
+      expect(screen.queryByTestId("usage-empty")).not.toBeInTheDocument()
+      expect(screen.getByTestId("usage-include-external")).toBeInTheDocument()
+    })
+  })
+
   it("hides the surface filter when only chat usage exists", () => {
     setup({ sessionRows: [usageRow({ surface: "chat" })] })
     render(<SubscriptionUsageTab />)

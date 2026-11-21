@@ -66,6 +66,25 @@ describe("useActivityStats", () => {
     expect(result.current.models).toEqual([])
   })
 
+  it("counts only spend this install paid, like the usage tab's default scope", () => {
+    mockLiveQuery.mockReturnValue([
+      row({ messageId: "local", costUsd: 0.01 }),
+      row({ messageId: "imported", surface: "imported", imported: true, costUsd: 5 }),
+      row({
+        messageId: "scanned",
+        surface: "imported",
+        imported: true,
+        sourceId: "codex",
+        model: "gpt",
+        costUsd: 7,
+      }),
+    ])
+    const { result } = renderHook(() => useActivityStats(30))
+    expect(result.current.stats.turns).toBe(1)
+    expect(result.current.stats.costUsd).toBeCloseTo(0.01)
+    expect(result.current.models.map((m) => m.model)).toEqual(["sonnet"])
+  })
+
   it("derives stats, daily buckets and per-model rows once loaded", () => {
     mockLiveQuery.mockReturnValue([
       row({ messageId: "a", at: at(19) }),

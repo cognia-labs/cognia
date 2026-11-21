@@ -37,6 +37,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useSubscriptionNow } from "@/lib/subscription/core/now-ticker"
+import { rowInScope, type UsageGlanceScope } from "@/lib/usage/usage-glance"
 import { useFormatter, useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
 import { useLiveQuery } from "dexie-react-hooks"
@@ -285,7 +286,21 @@ export function SubscriptionUsageTab() {
   const { rows: snapshotRows, latest, loading } = useAnthropicUsage(500)
 
   const liveSessionUsage = useLiveQuery(() => getDb().sessionUsage.toArray(), [])
-  const sessionRows = useMemo(() => liveSessionUsage ?? [], [liveSessionUsage])
+  const allSessionRows = useMemo(() => liveSessionUsage ?? [], [liveSessionUsage])
+  // Imported transcripts and scanned coding tools carry list-price estimates of
+  // spend this install never paid. They stay out of every figure below unless
+  // the user asks for them, the same `cognia` scope Glance and the budget use,
+  // so this page, the menu bar and the budget meter show one number.
+  const [includeExternal, setIncludeExternal] = useState(false)
+  const scope: UsageGlanceScope = includeExternal ? "all-tools" : "cognia"
+  const hasExternalRows = useMemo(
+    () => allSessionRows.some((row) => !rowInScope(row, "cognia")),
+    [allSessionRows]
+  )
+  const sessionRows = useMemo(
+    () => allSessionRows.filter((row) => rowInScope(row, scope)),
+    [allSessionRows, scope]
+  )
 
   const [range, setRange] = useState<RangeKey>("7d")
   const rangeDays = useMemo(() => RANGES.find((r) => r.key === range)?.days ?? 7, [range])
@@ -381,7 +396,7 @@ export function SubscriptionUsageTab() {
     return <p className="text-xs text-muted-foreground">{t("usage.loading")}</p>
   }
 
-  if (snapshotRows.length === 0 && sessionRows.length === 0) {
+  if (snapshotRows.length === 0 && allSessionRows.length === 0) {
     return (
       <div data-testid="usage-empty">
         <SettingsEmptyState title={t("usage.emptyTitle")} description={t("usage.emptyBody")} />
@@ -400,6 +415,8 @@ export function SubscriptionUsageTab() {
           surface={effectiveSurface}
           onSurface={setSurface}
           availableSurfaces={availableSurfaces}
+          includeExternal={hasExternalRows ? includeExternal : undefined}
+          onIncludeExternal={setIncludeExternal}
           exportRows={filteredSessionRows}
           onExpandAll={() => setAllSections(true)}
           onCollapseAll={() => setAllSections(false)}
@@ -592,6 +609,8 @@ function UsageToolbar({
   surface,
   onSurface,
   availableSurfaces,
+  includeExternal,
+  onIncludeExternal,
   exportRows,
   onExpandAll,
   onCollapseAll,
@@ -601,6 +620,9 @@ function UsageToolbar({
   surface: SurfaceFilter
   onSurface: (key: SurfaceFilter) => void
   availableSurfaces: readonly UsageSurface[]
+  /** Whether external tools are counted; absent when there are none to count. */
+  includeExternal?: boolean
+  onIncludeExternal: (include: boolean) => void
   exportRows: SessionUsageRow[]
   onExpandAll: () => void
   onCollapseAll: () => void
@@ -635,6 +657,18 @@ function UsageToolbar({
             </Button>
           ))}
         </div>
+        {includeExternal !== undefined && (
+          <Button
+            variant={includeExternal ? "default" : "outline"}
+            size="sm"
+            onClick={() => onIncludeExternal(!includeExternal)}
+            data-testid="usage-include-external"
+            aria-pressed={includeExternal}
+            title={t("scope.includeExternalHint")}
+          >
+            {t("scope.includeExternal")}
+          </Button>
+        )}
         {showSurface && (
           <div
             className="flex flex-wrap gap-1"

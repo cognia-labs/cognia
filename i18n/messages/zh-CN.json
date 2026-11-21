@@ -64100,6 +64100,10 @@
         "all": "全部时间",
         "label": "时间范围"
       },
+      "scope": {
+        "includeExternal": "含外部工具",
+        "includeExternalHint": "加入从其他编码工具会话中导入的用量。这些金额是按标价折算的估值，由 Cognia 之外的账户支付，不计入 Cognia 预算。"
+      },
       "shareCard": {
         "action": "分享卡片",
         "cardTitle": "Cognia 使用量档案",

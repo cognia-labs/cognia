@@ -777,6 +777,10 @@
       "all": "All time",
       "label": "Time range"
     },
+    "scope": {
+      "includeExternal": "Include external tools",
+      "includeExternalHint": "Add usage imported from other coding tools' transcripts. Those amounts are list-price estimates paid outside Cognia and never count toward its budget."
+    },
     "shareCard": {
       "action": "Share card",
       "cardTitle": "Cognia Usage Archive",

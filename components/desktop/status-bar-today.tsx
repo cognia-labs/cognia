@@ -27,6 +27,7 @@ import { getDb } from "@/lib/db/schema"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import { collectActivityStats } from "@/lib/usage/activity-stats"
 import { formatBucketCost, startOfLocalDay } from "@/lib/usage/session-analytics"
+import { rowInScope } from "@/lib/usage/usage-glance"
 import { useUIStore } from "@/stores/ui/ui-store"
 import { formatTokens } from "@/types/system/usage"
 
@@ -47,7 +48,16 @@ export function StatusBarToday() {
     []
   )
 
-  const stats = useMemo(() => collectActivityStats(rows ?? [], { now: nowMs }), [rows, nowMs])
+  // Spend this install paid: imported transcripts and scanned coding tools are
+  // list-price estimates of someone else's bill (the Glance `cognia` scope).
+  const stats = useMemo(
+    () =>
+      collectActivityStats(
+        (rows ?? []).filter((row) => rowInScope(row, "cognia")),
+        { now: nowMs }
+      ),
+    [rows, nowMs]
+  )
   const numberFormat = useMemo(() => new Intl.NumberFormat(locale), [locale])
 
   if (!rows || stats.turns === 0) return null

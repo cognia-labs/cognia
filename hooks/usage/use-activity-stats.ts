@@ -33,6 +33,7 @@ import {
   type ActivityStats,
 } from "@/lib/usage/activity-stats"
 import { usageModelLabels } from "@/lib/usage/model-labels"
+import { rowInScope } from "@/lib/usage/usage-glance"
 import { useSettingsStore } from "@/stores/settings"
 import type { DailyUsage } from "@/types/system/usage"
 
@@ -64,7 +65,12 @@ export function useActivityStats(rangeDays: number): UseActivityStats {
   const [now] = useState(() => Date.now())
 
   const live = useLiveQuery(() => getDb().sessionUsage.toArray(), [])
-  const rows: SessionUsageRow[] | undefined = live
+  // The usage tab's default scope: imported transcripts and scanned coding
+  // tools are estimates of spend paid outside this install.
+  const rows: SessionUsageRow[] | undefined = useMemo(
+    () => live?.filter((row) => rowInScope(row, "cognia")),
+    [live]
+  )
 
   const inRange = useMemo(() => filterByRange(rows ?? [], rangeDays, now), [rows, rangeDays, now])
 
