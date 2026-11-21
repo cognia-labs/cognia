@@ -71,7 +71,7 @@ export function PinnedSection({ workflows, pinnedIds, className }: PinnedSection
                   </span>
                 ) : null}
               </Link>
-              <TriggerButton workflowId={wf.id} workflowName={wf.name} className="w-full" />
+              <TriggerButton workflow={wf} className="w-full" />
             </Card>
           </motion.li>
         ))}

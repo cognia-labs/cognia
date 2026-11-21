@@ -3,7 +3,6 @@
  */
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { toast } from "sonner"
 
 import { WorkflowRowActionsSheet } from "./workflow-row-actions-sheet"
 import type { WorkflowRow } from "@/types/workflow/visual"
@@ -20,8 +19,6 @@ jest.mock("next-intl", () => ({
       graphSheetTitle: `Flow of ${name}`,
       graphViewerEmpty: "This workflow has no nodes yet.",
       delete: "Delete",
-      runQueued: `Triggered ${name} — queued for desktop.`,
-      runAlreadyQueued: `${name} is already queued.`,
       resume: "Resume schedule",
       pauseQueued: `Pausing schedule of ${name}.`,
       resumeQueued: `Resuming schedule of ${name}.`,
@@ -39,14 +36,12 @@ jest.mock("sonner", () => ({
 jest.mock("@/hooks/ui/use-back-dismiss", () => ({ useBackDismiss: jest.fn() }))
 
 const enqueueMock = jest.fn(async (..._a: unknown[]) => ({}))
-const enqueueUnlessQueuedMock = jest.fn(async (..._a: unknown[]) => ({
-  row: {},
-  alreadyQueued: false,
-}))
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({
   enqueue: (...a: unknown[]) => enqueueMock(...a),
-  enqueueUnlessQueued: (...a: unknown[]) => enqueueUnlessQueuedMock(...a),
 }))
+
+const runFromLibrary = jest.fn(async (_workflow: unknown) => null)
+jest.mock("./use-library-run", () => ({ useLibraryRun: () => runFromLibrary }))
 
 const saveMock = jest.fn(async (..._a: unknown[]) => undefined)
 jest.mock("@/stores/settings", () => ({
@@ -88,7 +83,7 @@ function makeWorkflow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
 
 beforeEach(() => {
   enqueueMock.mockClear()
-  enqueueUnlessQueuedMock.mockClear()
+  runFromLibrary.mockClear()
   saveMock.mockClear()
 })
 
@@ -139,9 +134,27 @@ describe("<WorkflowRowActionsSheet />", () => {
     expect(screen.queryByTestId("workflow-action-pause")).toBeNull()
   })
 
-  it("enqueues workflow_schedule_pause per active cron trigger", async () => {
+  it("hides the schedule action while the workflow is unpublished, since nothing runs", () => {
+    const workflow = makeWorkflow({
+      nodes: [
+        {
+          id: "n_cron",
+          type: "trigger.cron",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "Every day", params: { cron: "0 9 * * *" } },
+        },
+      ],
+      edges: [],
+    } as unknown as Partial<WorkflowRow>)
+    render(<WorkflowRowActionsSheet workflow={workflow} onOpenChange={jest.fn()} />)
+    expect(screen.queryByTestId("workflow-action-pause")).toBeNull()
+  })
+
+  it("enqueues workflow_schedule_pause per published cron trigger, naming the workflow", async () => {
     const user = userEvent.setup()
     const workflow = makeWorkflow({
+      published: { at: 1, toolName: "wf", versionId: "v1" },
       nodes: [
         {
           id: "n_cron",
@@ -162,22 +175,24 @@ describe("<WorkflowRowActionsSheet />", () => {
       expect(enqueueMock).toHaveBeenCalledWith(
         expect.objectContaining({
           command: "workflow_schedule_pause",
-          payload: { triggerId: "n_cron" },
+          payload: { workflowId: workflow.id, triggerId: "n_cron" },
         })
       )
     )
   })
 
-  it("offers Resume and enqueues workflow_schedule_resume when every cron trigger is disabled", async () => {
+  it("offers Resume and enqueues workflow_schedule_resume for the paused published triggers", async () => {
     const user = userEvent.setup()
     const workflow = makeWorkflow({
+      published: { at: 1, toolName: "wf", versionId: "v1" },
+      triggerPauses: { n_cron: 5 },
       nodes: [
         {
           id: "n_cron",
           type: "trigger.cron",
           typeVersion: 1,
           position: { x: 0, y: 0 },
-          data: { label: "Every day", params: { cron: "0 9 * * *" }, disabled: true },
+          data: { label: "Every day", params: { cron: "0 9 * * *" } },
         },
       ],
       edges: [],
@@ -191,41 +206,24 @@ describe("<WorkflowRowActionsSheet />", () => {
       expect(enqueueMock).toHaveBeenCalledWith(
         expect.objectContaining({
           command: "workflow_schedule_resume",
-          payload: { triggerId: "n_cron" },
+          payload: { workflowId: workflow.id, triggerId: "n_cron" },
         })
       )
     )
   })
 
-  it("enqueues workflow_trigger_manual on Run now, labelled for the queue sheet", async () => {
+  // Run now is the list's Run (`useLibraryRun`), which owns what is queued
+  // and what is said about it; the sheet closes once it has been asked.
+  it("runs the workflow through the library Run on Run now, then closes", async () => {
     const user = userEvent.setup()
-    render(<WorkflowRowActionsSheet workflow={makeWorkflow()} onOpenChange={jest.fn()} />)
+    const onOpenChange = jest.fn()
+    render(<WorkflowRowActionsSheet workflow={makeWorkflow()} onOpenChange={onOpenChange} />)
 
     await user.click(screen.getByTestId("workflow-action-run"))
 
     await waitFor(() =>
-      expect(enqueueUnlessQueuedMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          command: "workflow_trigger_manual",
-          payload: { workflowId: "wf-1" },
-          label: makeWorkflow().name,
-        })
-      )
+      expect(runFromLibrary).toHaveBeenCalledWith(expect.objectContaining({ id: "wf-1" }))
     )
-    expect(toast.success).toHaveBeenCalledWith(
-      `Triggered ${makeWorkflow().name} — queued for desktop.`
-    )
-  })
-
-  it("says a run is already queued instead of stacking another", async () => {
-    enqueueUnlessQueuedMock.mockResolvedValueOnce({ row: {}, alreadyQueued: true })
-    const user = userEvent.setup()
-    render(<WorkflowRowActionsSheet workflow={makeWorkflow()} onOpenChange={jest.fn()} />)
-
-    await user.click(screen.getByTestId("workflow-action-run"))
-
-    await waitFor(() =>
-      expect(toast.message).toHaveBeenCalledWith(`${makeWorkflow().name} is already queued.`)
-    )
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
   })
 })

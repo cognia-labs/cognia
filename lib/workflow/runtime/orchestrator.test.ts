@@ -2161,6 +2161,17 @@ describe("runWorkflow — risk gate", () => {
 })
 
 describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
+  // Only a formal run (admitted against a deployment) is a completion of the
+  // workflow; these runs carry the binding an admission would give them.
+  const formalBinding: WorkflowExecutionBinding = {
+    invocationId: "wfi_fanout",
+    versionId: "wfv_x_1",
+    deploymentId: "wfd_x",
+    deploymentRevision: 1,
+    entrypoint: "trigger",
+    caller: "trigger.manual",
+  }
+
   it("emits the persisted Bot provenance on completion", async () => {
     const botProvenance = {
       selfProduced: true,
@@ -2172,6 +2183,7 @@ describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
     const result = await runWorkflow({
       workflow,
       trigger,
+      executionBinding: formalBinding,
       securityContext: {
         botProvenance,
         piiEgressRequired: true,
@@ -2189,7 +2201,7 @@ describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
 
   it("announces a succeeded run with its final output and the run's trigger", async () => {
     const wf = buildWorkflow([setNode("n_a", "v")])
-    const r = await runWorkflow({ workflow: wf, trigger })
+    const r = await runWorkflow({ workflow: wf, trigger, executionBinding: formalBinding })
     expect(r.status).toBe("succeeded")
 
     await flushFanout()
@@ -2225,7 +2237,7 @@ describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
       },
     ])
 
-    const r = await runWorkflow({ workflow: wf, trigger })
+    const r = await runWorkflow({ workflow: wf, trigger, executionBinding: formalBinding })
     expect(r.status).toBe("failed")
 
     await flushFanout()
@@ -2241,7 +2253,7 @@ describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
     const wf = buildWorkflow([setNode("n_a", "v")])
     wf.edges = [{ id: "e_ghost", source: "n_a", target: "n_missing" }]
 
-    const r = await runWorkflow({ workflow: wf, trigger })
+    const r = await runWorkflow({ workflow: wf, trigger, executionBinding: formalBinding })
     expect(r.status).toBe("failed")
 
     await flushFanout()
@@ -2250,9 +2262,48 @@ describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
     )
   })
 
+  it("stays silent for a full draft preview, so it never starts published downstream workflows", async () => {
+    // The editor's full Preview/Test: the whole graph, pin data honoured, no
+    // deployment behind it. Downstream subscribers must not see a completion.
+    const wf = buildWorkflow([setNode("n_a", "v")])
+    const r = await runWorkflow({ workflow: wf, trigger, honorPinData: true })
+    expect(r.status).toBe("succeeded")
+
+    await flushFanout()
+    expect(mockEmitCompletionFanout).not.toHaveBeenCalled()
+  })
+
+  it("keeps announcing when a formal run is re-entered without its binding", async () => {
+    // A crash resume of a formal run inherits the binding from its row.
+    const wf = buildWorkflow([setNode("n_a", "v")])
+    const first = await runWorkflow({
+      workflow: wf,
+      trigger,
+      runId: "run_formal_reentry",
+      executionBinding: formalBinding,
+    })
+    expect(first.status).toBe("succeeded")
+    await getDb().workflowRuns.update("run_formal_reentry", { status: "running" })
+    mockEmitCompletionFanout.mockClear()
+
+    await runWorkflow({ workflow: wf, trigger, runId: "run_formal_reentry" })
+    await flushFanout()
+    expect(mockEmitCompletionFanout).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run_formal_reentry", status: "succeeded" })
+    )
+    expect((await getDb().workflowRuns.get("run_formal_reentry"))?.executionBinding).toEqual(
+      formalBinding
+    )
+  })
+
   it("stays silent for catch sub-runs (suppressCatch)", async () => {
     const wf = buildWorkflow([setNode("n_a", "v")])
-    const r = await runWorkflow({ workflow: wf, trigger, suppressCatch: true })
+    const r = await runWorkflow({
+      workflow: wf,
+      trigger,
+      suppressCatch: true,
+      executionBinding: formalBinding,
+    })
     expect(r.status).toBe("succeeded")
 
     await flushFanout()
@@ -2261,7 +2312,12 @@ describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
 
   it('stays silent for partial "run this step" runs (restrictToStepIds)', async () => {
     const wf = buildWorkflow([setNode("n_a", "v"), setNode("n_b", "w")])
-    const r = await runWorkflow({ workflow: wf, trigger, restrictToStepIds: ["n_a"] })
+    const r = await runWorkflow({
+      workflow: wf,
+      trigger,
+      restrictToStepIds: ["n_a"],
+      executionBinding: formalBinding,
+    })
     expect(r.status).toBe("succeeded")
 
     await flushFanout()
@@ -2486,5 +2542,242 @@ it("S2 persists canonical authority before the first executor can run", async ()
     id: `execution:workflow:${result.runId}`,
     status: "running",
     actingIdentity: { rootRunId: `execution:workflow:${result.runId}` },
+  })
+})
+
+// ── Resume replays the routes the original run chose (WF-02) ────────────────
+describe("runWorkflow — re-entry replays recorded routing", () => {
+  const triggerNode = (id = "n_start"): VisualWorkflow["nodes"][number] => ({
+    id,
+    type: "trigger.manual",
+    typeVersion: 1,
+    position: { x: 0, y: 0 },
+    data: { label: "start", params: {} },
+  })
+  /** A node that parks the run on a human the first time it runs. */
+  function humanGate(kind: string): () => number {
+    let calls = 0
+    registerNodeExecutor({
+      kind: kind as never,
+      typeVersion: 1,
+      execute: async () => {
+        if (++calls === 1)
+          throw Object.assign(new Error("needs a human"), {
+            name: "NeedsHumanError",
+            needsHuman: true,
+            retryable: false,
+          })
+        return { output: "released" }
+      },
+    })
+    return () => calls
+  }
+  const gateNode = (id: string, kind: string): VisualWorkflow["nodes"][number] => ({
+    id,
+    type: kind as never,
+    typeVersion: 1,
+    position: { x: 0, y: 0 },
+    data: { label: id, params: {} },
+  })
+  const completedSteps = async (runId: string) =>
+    (await listRunEvents(runId))
+      .filter((event) => event.type === "step_completed")
+      .map((event) => event.stepId)
+
+  it("does not execute the branch the original run excluded", async () => {
+    humanGate("action.test.branch-gate")
+    const workflow = buildWorkflow(
+      [
+        triggerNode(),
+        {
+          id: "n_branch",
+          type: "flow.branch",
+          typeVersion: 2,
+          position: { x: 0, y: 0 },
+          data: {
+            label: "branch",
+            params: {
+              conditions: {
+                combinator: "all",
+                conditions: [{ left: "{{ $trigger.payload.takeYes }}", operator: "truthy" }],
+              },
+            },
+          },
+        },
+        setNode("n_yes", "yes"),
+        gateNode("n_gate", "action.test.branch-gate"),
+        setNode("n_after", "after"),
+      ],
+      [
+        { id: "e1", source: "n_start", target: "n_branch" },
+        { id: "e2", source: "n_branch", target: "n_yes", sourceHandle: "true" },
+        { id: "e3", source: "n_branch", target: "n_gate", sourceHandle: "false" },
+        { id: "e4", source: "n_gate", target: "n_after" },
+      ]
+    )
+    workflow.settings.retryDefaults = { ...workflow.settings.retryDefaults, attempts: 1 }
+    const branchTrigger: TriggerEvent = { ...trigger, payload: { takeYes: false } }
+
+    const first = await runWorkflow({ workflow, trigger: branchTrigger, runId: "route-branch" })
+    expect(first.status).toBe("waiting")
+
+    const resumed = await runWorkflow({ workflow, trigger: branchTrigger, runId: "route-branch" })
+    expect(resumed.status).toBe("succeeded")
+    const completed = await completedSteps("route-branch")
+    expect(completed).toContain("n_after")
+    // The true branch was excluded before the crash and stays excluded.
+    expect(completed).not.toContain("n_yes")
+  })
+
+  it("replays an error-branch failure without re-executing it or taking the success path", async () => {
+    humanGate("action.test.error-gate")
+    let failures = 0
+    registerNodeExecutor({
+      kind: "action.test.always-fails" as never,
+      typeVersion: 1,
+      execute: async () => {
+        failures += 1
+        throw Object.assign(new Error("boom"), { retryable: false })
+      },
+    })
+    const workflow = buildWorkflow(
+      [
+        triggerNode(),
+        {
+          ...gateNode("n_fail", "action.test.always-fails"),
+          data: { label: "fail", params: {}, errorHandling: { onError: "errorBranch" } },
+        },
+        setNode("n_ok", "ok"),
+        gateNode("n_gate", "action.test.error-gate"),
+      ],
+      [
+        { id: "e1", source: "n_start", target: "n_fail" },
+        { id: "e2", source: "n_fail", target: "n_ok" },
+        { id: "e3", source: "n_fail", target: "n_gate", sourceHandle: "error" },
+      ]
+    )
+    workflow.settings.retryDefaults = { ...workflow.settings.retryDefaults, attempts: 1 }
+
+    expect((await runWorkflow({ workflow, trigger, runId: "route-error" })).status).toBe("waiting")
+    expect((await runWorkflow({ workflow, trigger, runId: "route-error" })).status).toBe(
+      "succeeded"
+    )
+    expect(failures).toBe(1)
+    const completed = await completedSteps("route-error")
+    expect(completed).toContain("n_gate")
+    expect(completed).not.toContain("n_ok")
+  })
+
+  it("keeps a workflow-level 'continue' failure from running again on re-entry", async () => {
+    humanGate("action.test.continue-gate")
+    let failures = 0
+    registerNodeExecutor({
+      kind: "action.test.continue-fails" as never,
+      typeVersion: 1,
+      execute: async () => {
+        failures += 1
+        throw Object.assign(new Error("boom"), { retryable: false })
+      },
+    })
+    const workflow = buildWorkflow(
+      [
+        triggerNode(),
+        gateNode("n_fail", "action.test.continue-fails"),
+        setNode("n_downstream", "never"),
+        gateNode("n_gate", "action.test.continue-gate"),
+      ],
+      [
+        { id: "e1", source: "n_start", target: "n_fail" },
+        { id: "e2", source: "n_fail", target: "n_downstream" },
+        { id: "e3", source: "n_start", target: "n_gate" },
+      ]
+    )
+    workflow.settings.errorPolicy = "continue"
+    workflow.settings.retryDefaults = { ...workflow.settings.retryDefaults, attempts: 1 }
+
+    expect((await runWorkflow({ workflow, trigger, runId: "route-halt" })).status).toBe("waiting")
+    expect((await runWorkflow({ workflow, trigger, runId: "route-halt" })).status).toBe("succeeded")
+    expect(failures).toBe(1)
+    expect(await completedSteps("route-halt")).not.toContain("n_downstream")
+  })
+
+  it("does not restart a race's losing branch after the join already proceeded", async () => {
+    humanGate("action.test.race-gate")
+    let slowStarts = 0
+    registerNodeExecutor({
+      kind: "data.raceslow" as never,
+      typeVersion: 1,
+      execute: async (ctx) => {
+        slowStarts += 1
+        await new Promise((_, reject) => {
+          ctx.signal.addEventListener(
+            "abort",
+            () => reject(ctx.signal.reason ?? new Error("aborted")),
+            { once: true }
+          )
+        })
+        return { output: "slow" }
+      },
+    })
+    const workflow = buildWorkflow(
+      [
+        triggerNode(),
+        setNode("n_fast", "fast"),
+        gateNode("n_slow", "data.raceslow"),
+        {
+          id: "n_join",
+          type: "flow.join",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "join", params: { joinPolicy: "race" } },
+        },
+        gateNode("n_gate", "action.test.race-gate"),
+      ],
+      [
+        { id: "e1", source: "n_start", target: "n_fast" },
+        { id: "e2", source: "n_start", target: "n_slow" },
+        { id: "e3", source: "n_fast", target: "n_join" },
+        { id: "e4", source: "n_slow", target: "n_join" },
+        { id: "e5", source: "n_join", target: "n_gate" },
+      ]
+    )
+    workflow.settings.maxConcurrency = 4
+    workflow.settings.retryDefaults = { ...workflow.settings.retryDefaults, attempts: 1 }
+
+    expect((await runWorkflow({ workflow, trigger, runId: "route-race" })).status).toBe("waiting")
+    expect(slowStarts).toBe(1)
+    expect((await runWorkflow({ workflow, trigger, runId: "route-race" })).status).toBe("succeeded")
+    // The join's winner is known from the log; the loser is not started again.
+    expect(slowStarts).toBe(1)
+  })
+
+  it("keeps a re-entered draft run inside the bounds it started with", async () => {
+    humanGate("action.test.scope-gate")
+    const workflow = buildWorkflow(
+      [triggerNode(), setNode("n_other", "other"), gateNode("n_target", "action.test.scope-gate")],
+      [
+        { id: "e1", source: "n_start", target: "n_other" },
+        { id: "e2", source: "n_start", target: "n_target" },
+      ]
+    )
+    workflow.settings.retryDefaults = { ...workflow.settings.retryDefaults, attempts: 1 }
+    const first = await runWorkflow({
+      workflow,
+      trigger,
+      runId: "scope-reentry",
+      restrictToStepIds: ["n_start", "n_target"],
+      honorPinData: true,
+    })
+    expect(first.status).toBe("waiting")
+    expect((await getDb().workflowRuns.get("scope-reentry"))?.draftScope).toEqual({
+      restrictToStepIds: ["n_start", "n_target"],
+      honorPinData: true,
+    })
+
+    // A crash resume passes no scope; the run must not grow into the whole graph.
+    expect((await runWorkflow({ workflow, trigger, runId: "scope-reentry" })).status).toBe(
+      "succeeded"
+    )
+    expect(await completedSteps("scope-reentry")).not.toContain("n_other")
   })
 })

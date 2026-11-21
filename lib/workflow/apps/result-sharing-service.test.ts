@@ -7,7 +7,10 @@ jest.mock("@/lib/share/client", () => ({
   createShareLink: jest.fn(),
   revokeShareLink: jest.fn(),
 }))
-jest.mock("./app-api-service", () => ({ getWorkflowAppRun: jest.fn() }))
+jest.mock("./app-api-service", () => ({
+  getWorkflowAppRun: jest.fn(),
+  judgeWorkflowAppRunDisclosure: jest.fn(),
+}))
 jest.mock("@/lib/execution/personal-sink", () => ({
   ...jest.requireActual("@/lib/execution/personal-sink"),
   assertPersonalSink: jest.fn(),
@@ -16,10 +19,10 @@ jest.mock("@/lib/execution/personal-sink", () => ({
 import { getSharedLinkByCode } from "@/lib/db/shared-links"
 import { resolvePublishedWorkflowApp } from "@/lib/db/workflow-apps"
 import { createShareLink, revokeShareLink } from "@/lib/share/client"
-import { getWorkflowAppRun } from "./app-api-service"
+import { getWorkflowAppRun, judgeWorkflowAppRunDisclosure } from "./app-api-service"
 import { createWorkflowResultShare, revokeWorkflowResultShare } from "./result-sharing-service"
 import { ShareNotConfiguredError } from "@/lib/share/client"
-import { assertPersonalSink } from "@/lib/execution/personal-sink"
+import { assertPersonalSink, PersonalSinkWithheldError } from "@/lib/execution/personal-sink"
 
 const actor = {
   authenticated: false,
@@ -163,4 +166,30 @@ it("normalizes share infrastructure failures without leaking configuration", asy
     code: "share_service_unavailable",
     message: "The result sharing service is unavailable",
   })
+})
+
+it("lets the Host that ran a placed run judge its public share, not the local sink (WF-13)", async () => {
+  jest.mocked(judgeWorkflowAppRunDisclosure).mockResolvedValue({ outcome: "allow" })
+  await expect(
+    createWorkflowResultShare({ accountId: "account-1", appSlug: "review", runId: "run-1", actor })
+  ).resolves.toMatchObject({ code: "share-1" })
+  expect(judgeWorkflowAppRunDisclosure).toHaveBeenCalledWith(
+    expect.objectContaining({
+      runId: "run-1",
+      actor,
+      label: "public workflow result",
+      payload: expect.stringContaining('"runId":"run-1"'),
+    })
+  )
+  expect(assertPersonalSink).not.toHaveBeenCalled()
+})
+
+it("withholds a placed run's result when its Host withholds it", async () => {
+  jest
+    .mocked(judgeWorkflowAppRunDisclosure)
+    .mockResolvedValue({ outcome: "withhold", reason: "disclosure-mismatch", persons: [] })
+  await expect(
+    createWorkflowResultShare({ accountId: "account-1", appSlug: "review", runId: "run-1", actor })
+  ).rejects.toBeInstanceOf(PersonalSinkWithheldError)
+  expect(createShareLink).not.toHaveBeenCalled()
 })

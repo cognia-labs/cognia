@@ -5,7 +5,8 @@
  * closed `SCHEDULED_ITEM_KINDS` tuple below, ADR-0079 §3):
  *
  *   1. App scheduler    — Dexie `tasks` table  (lib/scheduler/scheduler-db.ts)
- *   2. Workflow runtime — Dexie `workflowTriggers` + Rust cron_daemon
+ *   2. Workflow runtime — cron nodes of active deployments (+ draft-only ones,
+ *      awaiting publish) + Rust cron_daemon
  *   3. Backup scheduler — `appSettings.backupSchedule`
  *   4. Plugin scheduler — `type: "plugin"` rows in SchedulerDB `tasks`
  *   5. System scheduler — OS-level (Windows Task Scheduler / launchd / cron)

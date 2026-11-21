@@ -1,22 +1,23 @@
 import {
   createWorkflowSource,
+  deriveWorkflowSchedules,
   toUnifiedTrigger,
   WorkflowSourceWriteNotSupportedError,
+  type WorkflowScheduleEntry,
 } from "./workflow-source"
-import { WorkflowReadOnlyError } from "@/lib/workflow/definition/read-only"
-import type { VisualWorkflow, WorkflowTriggerRow } from "@/types/workflow/visual"
+import type { VisualWorkflow, WorkflowNode } from "@/types/workflow/visual"
 
-function makeRow(overrides: Partial<WorkflowTriggerRow> = {}): WorkflowTriggerRow {
+function cron(
+  id: string,
+  expression: string,
+  extra: Partial<WorkflowNode["data"]> = {}
+): WorkflowNode {
   return {
-    id: "trigger-1",
-    workflowId: "wf-1",
-    kind: "trigger.cron",
-    enabled: true,
-    cron: "0 9 * * *",
-    nextFireAt: 1_700_000_000_000,
-    createdAt: 1_600_000_000_000,
-    updatedAt: 1_600_000_000_000,
-    ...overrides,
+    id,
+    type: "trigger.cron",
+    typeVersion: 1,
+    position: { x: 0, y: 0 },
+    data: { label: id, params: { cron: expression, timezone: "UTC" }, ...extra },
   }
 }
 
@@ -25,198 +26,182 @@ function makeWorkflow(overrides: Partial<VisualWorkflow> = {}): VisualWorkflow {
     id: "wf-1",
     schemaVersion: 2,
     name: "Daily digest",
-    createdAt: 1_600_000_000_000,
-    updatedAt: 1_600_000_000_000,
-    nodes: [
-      {
-        id: "trigger-1",
-        type: "trigger.cron",
-        position: { x: 0, y: 0 },
-        data: { params: { cron: "0 9 * * *" } },
-      },
-    ],
+    createdAt: 1,
+    updatedAt: 1,
+    nodes: [cron("trigger-1", "0 9 * * *")],
     edges: [],
-    settings: { timezone: "UTC" },
+    settings: {} as VisualWorkflow["settings"],
     ...overrides,
-  } as VisualWorkflow
+  }
 }
 
+function entry(overrides: Partial<WorkflowScheduleEntry> = {}): WorkflowScheduleEntry {
+  return {
+    workflowId: "wf-1",
+    workflowName: "Daily digest",
+    triggerId: "trigger-1",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    published: true,
+    paused: false,
+    ...overrides,
+  }
+}
+
+describe("deriveWorkflowSchedules (WF-07)", () => {
+  it("lists every published cron trigger, however the workflow was published", () => {
+    const draft = makeWorkflow()
+    const deployed = new Map([["wf-1", makeWorkflow()]])
+    expect(deriveWorkflowSchedules([draft], deployed)).toEqual([entry()])
+  })
+
+  it("reports what the published version runs, not the draft's edited cron", () => {
+    const draft = makeWorkflow({ nodes: [cron("trigger-1", "*/5 * * * *")] })
+    const deployed = new Map([["wf-1", makeWorkflow()]])
+    expect(deriveWorkflowSchedules([draft], deployed)).toEqual([entry({ cron: "0 9 * * *" })])
+  })
+
+  it("lists a cron node that exists only in the draft as awaiting publish", () => {
+    const draft = makeWorkflow({
+      nodes: [cron("trigger-1", "0 9 * * *"), cron("new", "0 18 * * *")],
+    })
+    const deployed = new Map([["wf-1", makeWorkflow()]])
+    expect(deriveWorkflowSchedules([draft], deployed)).toEqual([
+      entry(),
+      entry({ triggerId: "new", cron: "0 18 * * *", published: false }),
+    ])
+    // A never-published workflow has only draft schedules.
+    expect(deriveWorkflowSchedules([draft], new Map()).every((e) => !e.published)).toBe(true)
+  })
+
+  it("takes the pause override from the draft row and skips disabled, template and built-in rows", () => {
+    const draft = makeWorkflow({ triggerPauses: { "trigger-1": 5 } })
+    const deployed = new Map([["wf-1", makeWorkflow()]])
+    expect(deriveWorkflowSchedules([draft], deployed)).toEqual([entry({ paused: true })])
+
+    const disabled = makeWorkflow({ nodes: [cron("trigger-1", "0 9 * * *", { disabled: true })] })
+    expect(deriveWorkflowSchedules([disabled], new Map([["wf-1", disabled]]))).toEqual([])
+    expect(
+      deriveWorkflowSchedules(
+        [makeWorkflow({ isTemplate: true })],
+        new Map([["wf-1", makeWorkflow()]])
+      )
+    ).toEqual([])
+  })
+})
+
 describe("toUnifiedTrigger", () => {
-  it("maps a cron trigger row", () => {
-    const u = toUnifiedTrigger(makeRow())
-    expect(u.unifiedId).toBe("workflow:trigger-1")
-    expect(u.kind).toBe("workflow")
-    expect(u.sourceId).toBe("trigger-1")
+  it("maps a published schedule with its next fire time", () => {
+    const now = Date.UTC(2026, 0, 1, 8, 0, 0)
+    const u = toUnifiedTrigger(entry(), now)
+    expect(u.unifiedId).toBe("workflow:wf-1:trigger-1")
+    expect(u.sourceId).toBe("wf-1:trigger-1")
     expect(u.status).toBe("active")
     expect(u.triggerSummary).toEqual({
       type: "cron",
       cron: "0 9 * * *",
       eventType: "trigger.cron",
+      timezone: "UTC",
     })
-    expect(u.nextRunAt).toBe(1_700_000_000_000)
-    expect(u.capabilities).toEqual({
-      runNow: true,
-      pause: true,
-      edit: false,
-      delete: false,
-    })
+    expect(u.nextRunAt).toBe(Date.UTC(2026, 0, 1, 9, 0, 0))
+    expect(u.capabilities).toEqual({ runNow: true, pause: true, edit: false, delete: false })
     expect(u.origin.deepLinkHref).toBe("/workflows/editor?id=wf-1")
   })
 
-  it("maps disabled rows to paused", () => {
-    expect(toUnifiedTrigger(makeRow({ enabled: false })).status).toBe("paused")
+  it("maps a paused schedule to paused with no next fire", () => {
+    const u = toUnifiedTrigger(entry({ paused: true }))
+    expect(u.status).toBe("paused")
+    expect(u.nextRunAt).toBeUndefined()
   })
 
-  it("maps webhook triggers to event type with webhook description", () => {
-    const u = toUnifiedTrigger(
-      makeRow({
-        kind: "trigger.webhook",
-        cron: undefined,
-        webhookPath: "/hook/foo",
-      })
-    )
-    expect(u.triggerSummary.type).toBe("event")
-    expect(u.name).toContain("webhook /hook/foo")
+  it("marks a draft-only schedule as awaiting publish, with nothing to run or pause", () => {
+    const u = toUnifiedTrigger(entry({ published: false }))
+    expect(u.status).toBe("disabled")
+    expect(u.descriptionKey).toBe("workflowTriggerAwaitingPublish")
+    expect(u.nextRunAt).toBeUndefined()
+    expect(u.capabilities.runNow).toBe(false)
+    expect(u.capabilities.pause).toBe(false)
   })
 })
 
 describe("createWorkflowSource", () => {
-  function makeStubs(
-    initial: WorkflowTriggerRow[] = [makeRow()],
-    workflowOverrides: Partial<VisualWorkflow> = {}
-  ) {
-    let triggers: WorkflowTriggerRow[] = [...initial]
-    let workflow = makeWorkflow(workflowOverrides)
-    const db = {
-      workflowTriggers: {
-        toArray: jest.fn(async () => triggers),
-        get: jest.fn(async (id: string) => triggers.find((t) => t.id === id)),
-        update: jest.fn(async (id: string, changes: Partial<WorkflowTriggerRow>) => {
-          triggers = triggers.map((t) => (t.id === id ? { ...t, ...changes } : t))
-          return 1
-        }),
-      },
-      workflows: {
-        get: jest.fn(async (id: string) => (id === workflow.id ? workflow : undefined)),
-        put: jest.fn(async (wf: VisualWorkflow) => {
-          workflow = wf
-          return wf.id
-        }),
-      },
-    }
-    const sync = jest.fn(async () => {})
+  function makeStubs(entries: WorkflowScheduleEntry[] = [entry()]) {
+    const list = jest.fn(async () => entries)
+    const setPaused = jest.fn(async () => ({ ok: true }))
     const run = jest.fn(async () => ({ status: "succeeded" }))
-    return { db, sync, run, getTriggers: () => triggers, getWorkflow: () => workflow }
+    return { list, setPaused, run }
   }
 
-  it("list() returns mapped triggers", async () => {
-    const { db, sync, run } = makeStubs()
-    const source = createWorkflowSource({ db, sync, run })
-    const items = await source.list()
-    expect(items).toHaveLength(1)
-    expect(items[0].unifiedId).toBe("workflow:trigger-1")
+  it("list() returns the derived schedules", async () => {
+    const stubs = makeStubs()
+    const items = await createWorkflowSource(stubs).list()
+    expect(items.map((item) => item.unifiedId)).toEqual(["workflow:wf-1:trigger-1"])
   })
 
   it("loads recent workflow runs through the source contract", async () => {
-    const { db, sync, run } = makeStubs()
     const listRuns = jest.fn(async () => [])
-    const source = createWorkflowSource({ db, sync, run, listRuns })
-
+    const source = createWorkflowSource({ ...makeStubs(), listRuns })
     await expect(source.listRuns?.(7)).resolves.toEqual([])
     expect(listRuns).toHaveBeenCalledWith(7)
   })
 
-  it("get() returns undefined for missing trigger", async () => {
-    const { db, sync, run } = makeStubs()
-    const source = createWorkflowSource({ db, sync, run })
-    expect(await source.get("missing")).toBeUndefined()
+  it("get() resolves by the composite source id and misses anything else", async () => {
+    const source = createWorkflowSource(makeStubs())
+    expect((await source.get("wf-1:trigger-1"))?.name).toBe("Daily digest · 0 9 * * *")
+    expect(await source.get("trigger-1")).toBeUndefined()
+    expect(await source.get("wf-1:missing")).toBeUndefined()
   })
 
-  it("create() rejects with the documented sentinel error", async () => {
-    const { db, sync, run } = makeStubs()
-    const source = createWorkflowSource({ db, sync, run })
+  it("create() and delete() reject with the documented sentinel error", async () => {
+    const source = createWorkflowSource(makeStubs())
     await expect((source.create as () => Promise<unknown>)()).rejects.toBeInstanceOf(
       WorkflowSourceWriteNotSupportedError
     )
-  })
-
-  it("delete() rejects with the documented sentinel error", async () => {
-    const { db, sync, run } = makeStubs()
-    const source = createWorkflowSource({ db, sync, run })
-    await expect(source.delete("trigger-1")).rejects.toBeInstanceOf(
+    await expect(source.delete("wf-1:trigger-1")).rejects.toBeInstanceOf(
       WorkflowSourceWriteNotSupportedError
     )
   })
 
-  it("pause flips enabled on the row, on the workflow node, and re-syncs Rust", async () => {
+  it("pause and resume set the runtime override, never the draft graph", async () => {
     const stubs = makeStubs()
-    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
-    await source.pause("trigger-1")
-    expect(stubs.db.workflowTriggers.update).toHaveBeenCalledWith(
-      "trigger-1",
-      expect.objectContaining({ enabled: false })
-    )
-    expect(stubs.getWorkflow().nodes[0].data.disabled).toBe(true)
-    expect(stubs.sync).toHaveBeenCalledTimes(1)
+    const source = createWorkflowSource(stubs)
+    await source.pause("wf-1:trigger-1")
+    await source.resume("wf-1:trigger-1")
+    expect(stubs.setPaused.mock.calls).toEqual([
+      ["wf-1", "trigger-1", true],
+      ["wf-1", "trigger-1", false],
+    ])
   })
 
-  it("resume flips enabled back to true", async () => {
-    const stubs = makeStubs([makeRow({ enabled: false })])
-    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
-    await source.resume("trigger-1")
-    expect(stubs.db.workflowTriggers.update).toHaveBeenCalledWith(
-      "trigger-1",
-      expect.objectContaining({ enabled: true })
-    )
-    expect(stubs.getWorkflow().nodes[0].data.disabled).toBe(false)
+  it("refuses to pause or run a schedule that is not published yet", async () => {
+    const stubs = makeStubs([entry({ published: false })])
+    const source = createWorkflowSource(stubs)
+    await expect(source.pause("wf-1:trigger-1")).rejects.toThrow(/not published yet/)
+    await expect(source.runNow("wf-1:trigger-1")).rejects.toThrow(/not published yet/)
+    expect(stubs.setPaused).not.toHaveBeenCalled()
+    expect(stubs.run).not.toHaveBeenCalled()
   })
 
-  it("update() patches both the row and the workflow node when cron changes", async () => {
+  it("refuses a cron edit, which belongs to the editor, and ignores an empty patch", async () => {
     const stubs = makeStubs()
-    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
-    await source.update("trigger-1", { cron: "*/5 * * * *" })
-    expect(stubs.db.workflowTriggers.update).toHaveBeenCalledWith(
-      "trigger-1",
-      expect.objectContaining({ cron: "*/5 * * * *" })
+    const source = createWorkflowSource(stubs)
+    await expect(source.update("wf-1:trigger-1", { cron: "*/5 * * * *" })).rejects.toBeInstanceOf(
+      WorkflowSourceWriteNotSupportedError
     )
-    expect(stubs.getWorkflow().nodes[0].data.params).toEqual({ cron: "*/5 * * * *" })
-  })
-
-  it("refuses to pause a trigger on a read-only workflow and writes nothing", async () => {
-    const stubs = makeStubs([makeRow()], { readOnly: true })
-    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
-    await expect(source.pause("trigger-1")).rejects.toBeInstanceOf(WorkflowReadOnlyError)
-    expect(stubs.db.workflowTriggers.update).not.toHaveBeenCalled()
-    expect(stubs.db.workflows.put).not.toHaveBeenCalled()
-    expect(stubs.sync).not.toHaveBeenCalled()
-  })
-
-  it("update() is a no-op when no recognized fields are provided", async () => {
-    const stubs = makeStubs()
-    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
-    await source.update("trigger-1", {})
-    expect(stubs.db.workflowTriggers.update).not.toHaveBeenCalled()
-    expect(stubs.sync).not.toHaveBeenCalled()
+    await source.update("wf-1:trigger-1", {})
+    expect(stubs.setPaused).not.toHaveBeenCalled()
   })
 
   it("runNow invokes the deployment authority adapter", async () => {
     const stubs = makeStubs()
-    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
-    await source.runNow("trigger-1")
-    expect(stubs.run).toHaveBeenCalledTimes(1)
-    expect(stubs.run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workflowId: "wf-1",
-        triggerId: "trigger-1",
-      })
-    )
+    await createWorkflowSource(stubs).runNow("wf-1:trigger-1")
+    expect(stubs.run).toHaveBeenCalledWith({ workflowId: "wf-1", triggerId: "trigger-1" })
   })
 
-  it("runNow rejects when the trigger row is missing, so the caller can say so", async () => {
+  it("runNow rejects when the schedule is missing, so the caller can say so", async () => {
     const stubs = makeStubs([])
-    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
-    await expect(source.runNow("missing")).rejects.toThrow(
-      "Workflow trigger missing was not found."
+    await expect(createWorkflowSource(stubs).runNow("wf-1:missing")).rejects.toThrow(
+      "Workflow trigger wf-1:missing was not found."
     )
     expect(stubs.run).not.toHaveBeenCalled()
   })

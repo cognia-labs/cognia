@@ -61,8 +61,15 @@ export async function assertWorkflowAppAdmissionQuota(input: {
 
   if (quota.dailyTokenBudget === undefined && quota.dailyCostBudgetUsd === undefined) return
   const dayStart = Math.floor(input.now / 86_400_000) * 86_400_000
-  const runIds = invocations.flatMap((invocation) =>
-    invocation.createdAt >= dayStart && invocation.runId ? [invocation.runId] : []
+  const today = invocations.filter((invocation) => invocation.createdAt >= dayStart)
+  // A run placed on another Host records its usage there; the serving Host
+  // keeps what that Host last reported on the invocation (ADR-0136), so the
+  // budget is counted once, here, whichever Host ran the work.
+  const placedUsage = today.flatMap((invocation) =>
+    invocation.placement?.usage ? [invocation.placement.usage] : []
+  )
+  const runIds = today.flatMap((invocation) =>
+    invocation.runId && !invocation.placement ? [invocation.runId] : []
   )
   const usage = runIds.length
     ? await getDb()
@@ -71,11 +78,16 @@ export async function assertWorkflowAppAdmissionQuota(input: {
         .toArray()
     : []
   if (quota.dailyTokenBudget !== undefined) {
-    const tokens = usage.reduce(
-      (total, row) =>
-        total + row.inputTokens + row.outputTokens + row.cacheCreationTokens + row.cacheReadTokens,
-      0
-    )
+    const tokens =
+      usage.reduce(
+        (total, row) =>
+          total +
+          row.inputTokens +
+          row.outputTokens +
+          row.cacheCreationTokens +
+          row.cacheReadTokens,
+        0
+      ) + placedUsage.reduce((total, placed) => total + placed.tokens, 0)
     if (tokens >= quota.dailyTokenBudget) {
       throw new WorkflowAppQuotaError(
         "token_budget_exhausted",
@@ -85,13 +97,18 @@ export async function assertWorkflowAppAdmissionQuota(input: {
     }
   }
   if (quota.dailyCostBudgetUsd !== undefined) {
-    if (usage.some((row) => row.costKnown === false)) {
+    if (
+      usage.some((row) => row.costKnown === false) ||
+      placedUsage.some((placed) => !placed.costKnown)
+    ) {
       throw new WorkflowAppQuotaError(
         "cost_budget_unknown",
         "The application cost budget cannot admit work while recorded cost is unknown"
       )
     }
-    const cost = usage.reduce((total, row) => total + row.costUsd, 0)
+    const cost =
+      usage.reduce((total, row) => total + row.costUsd, 0) +
+      placedUsage.reduce((total, placed) => total + placed.costUsd, 0)
     if (cost >= quota.dailyCostBudgetUsd) {
       throw new WorkflowAppQuotaError(
         "cost_budget_exhausted",

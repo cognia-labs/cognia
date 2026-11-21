@@ -34,7 +34,20 @@ jest.mock("@/lib/workflow/runtime/execution-authority", () => ({
   retryWorkflowRun: (...args: unknown[]) => retryWorkflowRunMock(...args),
 }))
 
+// The phone in the paired cases: the Host owns the run, and the step events
+// are read from it (`workflow_run_events_list`).
+let mockAuthority: "local" | "host" = "local"
+jest.mock("@/lib/workflow/remote/write-authority", () => ({
+  workflowWriteAuthority: () => mockAuthority,
+}))
+const hostCall = jest.fn(async (..._args: unknown[]): Promise<unknown> => null)
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  transport: { call: (...args: unknown[]) => hostCall(...args) },
+}))
+
 beforeEach(async () => {
+  mockAuthority = "local"
+  hostCall.mockReset()
   await getDb().delete()
   __resetDbForTesting()
   getDb()
@@ -77,6 +90,77 @@ function wrap() {
 }
 
 describe("RunDetail", () => {
+  // `get` of a missing row resolves `undefined`, which is also what the live
+  // query reports while loading: an unknown run used to stay on the skeleton.
+  it("says a run that does not exist was not found", async () => {
+    wrap()
+    expect(await screen.findByTestId("run-detail-not-found")).toBeInTheDocument()
+  })
+
+  it("reads a paired Host's step events, and keeps its re-runs to that Host", async () => {
+    mockAuthority = "host"
+    const run = {
+      id: "run1",
+      workflowId: "wf1",
+      status: "succeeded",
+      triggerKind: "trigger.manual",
+      triggerPayload: {},
+      startedAt: 100,
+      completedAt: 200,
+      workflowSnapshot: snapshot,
+      executionBinding: {
+        versionId: "version_1",
+        deploymentId: "deployment_1",
+        deploymentRevision: 1,
+        entrypoint: "desktop",
+        caller: "ui",
+      },
+    }
+    hostCall.mockResolvedValue({
+      run,
+      events: [
+        { id: "e1", runId: "run1", ts: 110, sequence: 1, type: "step_started", stepId: "n1" },
+        {
+          id: "e2",
+          runId: "run1",
+          ts: 150,
+          sequence: 2,
+          type: "step_completed",
+          stepId: "n1",
+          payload: { output: "ok" },
+        },
+      ],
+      nextSequence: 2,
+      terminal: true,
+    })
+
+    wrap()
+
+    // Nothing of this run is in the phone's own tables: the Host's row opens it.
+    expect(await screen.findByText("Usage workflow")).toBeInTheDocument()
+    expect(hostCall).toHaveBeenCalledWith("workflow_run_events_list", {
+      runId: "run1",
+      afterSequence: 0,
+      limit: 200,
+    })
+    for (const id of [
+      "run-detail-rerun-original",
+      "run-detail-rerun-current",
+      "run-detail-rerun-from-step",
+    ]) {
+      expect(screen.getByTestId(id)).toBeDisabled()
+    }
+    fireEvent.click(screen.getByTestId("run-detail-rerun-original"))
+    expect(retryWorkflowRunMock).not.toHaveBeenCalled()
+  })
+
+  it("says a run the paired Host does not have was not found", async () => {
+    mockAuthority = "host"
+    hostCall.mockResolvedValue({ run: null, events: [], nextSequence: 0, terminal: true })
+    wrap()
+    expect(await screen.findByTestId("run-detail-not-found")).toBeInTheDocument()
+  })
+
   it("shows the aggregated token + cost pill when steps reported usage", async () => {
     await getDb().workflowRuns.put({
       id: "run1",

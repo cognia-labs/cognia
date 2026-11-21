@@ -11,6 +11,7 @@ import { recordWorkflowStepUsage, swallowUsageWrite } from "@/lib/db/session-usa
 import { trackEvent } from "@/lib/telemetry/events/track-event"
 import { stepCostUsd } from "@/lib/workflow/runs/step-cost"
 import type { StepErrorDetail } from "./step-event-payload"
+import type { StepRouting } from "@/lib/durable/idempotency"
 import type {
   RunEventLogLevel,
   RunEventType,
@@ -229,6 +230,24 @@ export type StepEventMeta = Partial<StepIterationMeta> & {
   attempt?: number
 }
 
+/**
+ * What a resumed run needs to replay a completion faithfully, written in the
+ * SAME event as the output so a crash can never keep one without the other:
+ * the routing the step chose and the exact memo key it ran under.
+ */
+export interface StepCompletionReplay extends StepRouting {
+  cacheKey?: string
+}
+
+function replayFields(replay: StepCompletionReplay | undefined): StepCompletionReplay {
+  if (!replay) return {}
+  return {
+    ...(replay.decision !== undefined ? { decision: replay.decision } : {}),
+    ...(replay.route !== undefined ? { route: replay.route } : {}),
+    ...(replay.cacheKey !== undefined ? { cacheKey: replay.cacheKey } : {}),
+  }
+}
+
 /** What a `step_started` records besides the execution identity. */
 export interface StepStartDetail {
   /** The resolved inputs the executor received (redacted, bounded). */
@@ -287,8 +306,18 @@ export function createRunLogger(runId: string) {
     },
     stepStarted: (stepId: string, detail?: StepStartDetail, meta?: StepEventMeta) =>
       enqueueRunEvent({ runId, type: "step_started", stepId, payload: { ...detail, ...meta } }),
-    stepCompleted: (stepId: string, output: unknown, meta?: StepEventMeta) =>
-      enqueueRunEvent({ runId, type: "step_completed", stepId, payload: { output, ...meta } }),
+    stepCompleted: (
+      stepId: string,
+      output: unknown,
+      meta?: StepEventMeta,
+      replay?: StepCompletionReplay
+    ) =>
+      enqueueRunEvent({
+        runId,
+        type: "step_completed",
+        stepId,
+        payload: { output, ...replayFields(replay), ...meta },
+      }),
     stepFailed: (stepId: string, error: StepFailureDetail, meta?: StepEventMeta) =>
       enqueueRunEvent({
         runId,

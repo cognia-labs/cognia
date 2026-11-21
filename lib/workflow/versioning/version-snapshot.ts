@@ -39,6 +39,36 @@ function cloneSerializable<T>(value: T): T {
   return JSON.parse(canonicalize(value)) as T
 }
 
+/**
+ * The workflow a node CALLS when it runs, or `undefined` when it calls none.
+ *
+ * Only a call is a dependency: the child must be deployed when the parent is
+ * admitted, and the admission locks its exact version under the node id.
+ * Other references to a workflow are not calls — a `trigger.workflow.completed`
+ * names the workflow whose completions it listens to, an `eval.run` names what
+ * it evaluates — and treating them as dependencies let an unrelated
+ * unpublish block every formal run of the subscriber. A disabled node never
+ * runs, and an ensemble whose target is an agent turn calls no workflow.
+ */
+export function workflowCallTargetOf(node: VisualWorkflow["nodes"][number]): string | undefined {
+  if (node.data?.disabled === true) return undefined
+  const params = (node.data?.params ?? {}) as Record<string, unknown>
+  if (node.type === "flow.subworkflow") {
+    const workflowId = typeof params.workflowId === "string" ? params.workflowId.trim() : ""
+    return workflowId || undefined
+  }
+  if (node.type === "ai.ensemble") {
+    const target =
+      params.target && typeof params.target === "object"
+        ? (params.target as Record<string, unknown>)
+        : undefined
+    if (target?.kind !== "subworkflow") return undefined
+    const workflowId = typeof target.workflowId === "string" ? target.workflowId.trim() : ""
+    return workflowId || undefined
+  }
+  return undefined
+}
+
 export function deriveWorkflowDependencyManifest(
   workflow: VisualWorkflow
 ): WorkflowDependencyManifest {
@@ -50,14 +80,7 @@ export function deriveWorkflowDependencyManifest(
       kind: node.type,
       typeVersion: node.typeVersion,
     })
-    const params = (node.data?.params ?? {}) as Record<string, unknown>
-    const directWorkflowId = typeof params.workflowId === "string" ? params.workflowId.trim() : ""
-    const target =
-      params.target && typeof params.target === "object"
-        ? (params.target as Record<string, unknown>)
-        : undefined
-    const targetWorkflowId = typeof target?.workflowId === "string" ? target.workflowId.trim() : ""
-    const workflowId = directWorkflowId || targetWorkflowId
+    const workflowId = workflowCallTargetOf(node)
     if (workflowId) workflows.set(`${node.id}:${workflowId}`, { workflowId, nodeId: node.id })
   }
 
@@ -91,6 +114,9 @@ export function createWorkflowVersion(input: {
     interface: input.workflowInterface,
     published: undefined,
     pinData: undefined,
+    // Operator pause overrides are runtime state of the draft row, never part
+    // of an immutable artifact (WF-07, `lib/workflow/runtime/trigger-pauses.ts`).
+    triggerPauses: undefined,
   })
   const dependencyManifest = deriveWorkflowDependencyManifest(definition)
   const configDefinition: WorkflowConfigDefinition = {

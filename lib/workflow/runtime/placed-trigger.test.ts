@@ -22,7 +22,14 @@ import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import type { HostDispatchJobRow } from "@/types/placement/host-dispatch"
 import type { TriggerEvent } from "@/types/workflow/visual"
 import { executeDeployedWorkflow } from "./execution-authority"
-import { dispatchPlacedWorkflowTrigger, type PlacedTriggerDeps } from "./placed-trigger"
+import {
+  dispatchPlacedWorkflowTrigger,
+  listWorkflowExecutionHosts,
+  resolveWorkflowExecutionHost,
+  TRIGGER_HANDOFF_OPERATIONS,
+  type PlacedTriggerDeps,
+} from "./placed-trigger"
+import { WORKFLOW_APP_RUN_HANDOFF_OPERATIONS } from "./app-run-handoff"
 
 const event: TriggerEvent = {
   workflowId: "workflow-1",
@@ -171,8 +178,51 @@ describe("dispatchPlacedWorkflowTrigger", () => {
         }),
       })
     )
-    expect(onAdmitted).toHaveBeenCalledWith("dispatch-1")
+    expect(onAdmitted).toHaveBeenCalledWith({
+      kind: "handoff",
+      dispatchId: "dispatch-1",
+      targetRef: "cloud-a",
+    })
     expect(d.executeLocal).not.toHaveBeenCalled()
+  })
+
+  it("reports a local admission as a run receipt", async () => {
+    const onAdmitted = jest.fn()
+    const executeLocal = jest.fn(async (input: { onAdmitted?: (runId: string) => unknown }) => {
+      await input.onAdmitted?.("run-local")
+      return { runId: "run-local" }
+    })
+    const d = deps(resolved({ mode: "colocate" }), {
+      executeLocal: executeLocal as unknown as PlacedTriggerDeps["executeLocal"],
+    })
+    await dispatchPlacedWorkflowTrigger({ event, onAdmitted }, d)
+    expect(onAdmitted).toHaveBeenCalledWith({ kind: "run", runId: "run-local" })
+  })
+
+  it("admits a webhook awaiting a dynamic reply on the receiving Host even when pinned elsewhere (WF-09)", async () => {
+    const d = deps(resolved({ mode: "pinned", ref: "cloud-a" }), {
+      enqueueHandoff: jest.fn().mockResolvedValue(queueRow("cloud-a")),
+    })
+    const held: TriggerEvent = {
+      workflowId: "workflow-1",
+      kind: "trigger.webhook",
+      triggerId: "hook",
+      originAt: 1,
+      payload: { body: {}, correlationId: "whr_1", admissionId: "wha_1" },
+    }
+    await expect(dispatchPlacedWorkflowTrigger({ event: held }, d)).resolves.toEqual({
+      kind: "local",
+      runId: "run-local",
+    })
+    expect(d.enqueueHandoff).not.toHaveBeenCalled()
+
+    // Without a held reply the same webhook follows its pin as before.
+    await expect(
+      dispatchPlacedWorkflowTrigger(
+        { event: { ...held, payload: { body: {}, admissionId: "wha_2" } } },
+        d
+      )
+    ).resolves.toEqual({ kind: "remote", dispatchId: "dispatch-1", targetRef: "cloud-a" })
   })
 
   it("executes locally when a pinned stable Host identity names this Host", async () => {
@@ -509,5 +559,122 @@ describe("dispatchPlacedWorkflowTrigger", () => {
       runId: "run-local-after-malformed-probe",
     })
     expect(close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("resolveWorkflowExecutionHost (the shared Run Policy decision)", () => {
+  const input = {
+    workflowId: "workflow-1",
+    deploymentId: "deployment-1",
+    expectedVersionDigest: "wfv1:abc",
+    maxUnits: 1,
+  }
+
+  it("keeps colocate and a pin to this Host here without asking any Host", async () => {
+    const d = deps(resolved({ mode: "colocate" }), { localHostRef: () => "host_self" })
+    await expect(
+      resolveWorkflowExecutionHost({ ...input, constraint: { mode: "colocate" } }, d)
+    ).resolves.toEqual({ kind: "local" })
+    await expect(
+      resolveWorkflowExecutionHost(
+        { ...input, constraint: { mode: "pinned", ref: "host_self" } },
+        d
+      )
+    ).resolves.toEqual({ kind: "local" })
+    await expect(
+      resolveWorkflowExecutionHost({ ...input, constraint: { mode: "pinned", ref: "local" } }, d)
+    ).resolves.toEqual({ kind: "local" })
+    expect(d.listRemoteHosts).not.toHaveBeenCalled()
+  })
+
+  it("honours a pin elsewhere without a probe and lets auto pick the Host with capacity", async () => {
+    const probeRemote = jest.fn().mockResolvedValue({
+      compatible: true,
+      deploymentDigest: "wfv1:abc",
+      activeUnits: 0,
+      maxUnits: 4,
+    })
+    const d = deps(resolved({ mode: "auto" }), {
+      getLocalActiveUnits: jest.fn().mockResolvedValue(1),
+      listRemoteHosts: jest.fn().mockReturnValue([{ ref: "cloud-stable" }]),
+      probeRemote,
+    })
+    await expect(
+      resolveWorkflowExecutionHost(
+        { ...input, constraint: { mode: "pinned", ref: "cloud-stable" } },
+        d
+      )
+    ).resolves.toEqual({ kind: "remote", ref: "cloud-stable" })
+    expect(probeRemote).not.toHaveBeenCalled()
+    await expect(
+      resolveWorkflowExecutionHost({ ...input, constraint: { mode: "auto" } }, d)
+    ).resolves.toEqual({ kind: "remote", ref: "cloud-stable" })
+    expect(probeRemote).toHaveBeenCalledWith("cloud-stable", {
+      deploymentId: "deployment-1",
+      expectedVersionDigest: "wfv1:abc",
+    })
+    // A Host whose active version differs is never a candidate.
+    probeRemote.mockResolvedValue({
+      compatible: false,
+      deploymentDigest: "wfv1:old",
+      activeUnits: 0,
+      maxUnits: 4,
+    })
+    jest.mocked(d.getLocalActiveUnits).mockResolvedValue(0)
+    await expect(
+      resolveWorkflowExecutionHost({ ...input, constraint: { mode: "auto" } }, d)
+    ).resolves.toEqual({ kind: "local" })
+  })
+
+  it("lists only Hosts whose manifest answers every operation the caller needs", async () => {
+    useRemoteHostStore.setState({
+      activeHostId: null,
+      hosts: [
+        {
+          id: "cloud-row",
+          label: "Cloud",
+          credentialRef: "remote-host:cloud-row",
+          addedAt: 1,
+          connectionState: "ready",
+          config: { serverVersion: "1.0.0", baseUrl: "https://cloud.example", deviceId: "device" },
+          featureManifest: {
+            schemaVersion: 2,
+            hostBuildId: "build",
+            platform: "headless",
+            generatedAt: 1,
+            hostIdentity: { id: "cloud-stable", kind: "cloud" },
+            protocol: { min: 1, max: 2 },
+            operations: ["workflow_placement_probe", "workflow_handoff_create"].map((name) => ({
+              name,
+              feature: "workflow.execution",
+              featureVersion: 1,
+              healthy: true,
+            })),
+            deviceGrants: [],
+            features: {
+              "workflow.execution": {
+                version: 1,
+                operations: ["workflow_placement_probe", "workflow_handoff_create"],
+              },
+            },
+            limits: {
+              rpcJsonBodyBytes: 1,
+              skillMaxResources: 1,
+              skillMaxResourceBytes: 1,
+              skillUploadChunkBytes: 1,
+              mcpRequestBodyBytes: 1,
+              maxConcurrentProxyCalls: 1,
+            },
+          },
+        },
+      ],
+    } as never)
+    await expect(listWorkflowExecutionHosts(TRIGGER_HANDOFF_OPERATIONS)).resolves.toEqual([
+      { ref: "cloud-stable" },
+    ])
+    // It takes trigger handoffs but could not report on an App run: not a candidate for one.
+    await expect(listWorkflowExecutionHosts(WORKFLOW_APP_RUN_HANDOFF_OPERATIONS)).resolves.toEqual(
+      []
+    )
   })
 })

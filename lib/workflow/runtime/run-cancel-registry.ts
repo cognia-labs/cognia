@@ -46,6 +46,11 @@ export function requestCancelRun(runId: string, reason?: string): boolean {
   return true
 }
 
+/** Whether this runtime is currently driving the run. */
+export function isRunLive(runId: string): boolean {
+  return runControllers.has(runId)
+}
+
 /** Test/diagnostic helper — number of live registered runs. */
 export function liveRunCount(): number {
   return runControllers.size

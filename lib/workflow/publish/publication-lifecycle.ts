@@ -5,7 +5,7 @@ import { upsertSkillByCanonicalId, workflowSkillBody } from "@/lib/db/skills"
 import { recordTombstones } from "@/lib/db/tombstones"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { assertWorkflowWritable } from "@/lib/workflow/definition/read-only"
-import { validateWorkflow } from "@/lib/workflow/definition/validate"
+import { assertWorkflowPublishable } from "@/lib/workflow/publish/publish-validation"
 import {
   createWorkflowVersion,
   workflowDeploymentId,
@@ -173,20 +173,9 @@ export async function publishWorkflowLifecycle(
             // mint a second skill for the playbook skill it came from.
             assertWorkflowWritable(existing)
 
-            const validation = validateWorkflow(existing)
-            if (!validation.ok) {
-              throw new Error(
-                `publishWorkflow: workflow ${workflowId} is invalid: ${validation.errors.join("; ")}`
-              )
-            }
-            const legacyCodeNode = existing.nodes.find(
-              (node) => node.type === "data.code" && node.typeVersion === 1
-            )
-            if (legacyCodeNode) {
-              throw new Error(
-                `publishWorkflow: node ${legacyCodeNode.id} uses data.code@1; migrate it to the isolated data.code@2 executor before publishing`
-              )
-            }
+            // The saved row is what becomes the version, so the gate runs on
+            // it — never on an editor buffer the write may not have carried.
+            assertWorkflowPublishable(existing)
             const workflowInterface = derivePublishedInterface(existing)
             const toolName = toolNameForWorkflow(existing)
             const sequence = (versions.at(-1)?.sequence ?? 0) + 1
@@ -363,6 +352,10 @@ export async function rollbackWorkflowLifecycle(
       if (!deployment) {
         throw new Error(`rollbackWorkflow: production deployment for ${workflowId} not found`)
       }
+      // Rolling back makes the version active again: it passes the same gate a
+      // fresh publish does, so a version minted before a rule existed cannot
+      // slip back into production around it.
+      assertWorkflowPublishable(version.definition)
 
       const deploymentRevision = deployment.revision + 1
       const toolName = toolNameForWorkflow(version.definition)
@@ -436,6 +429,9 @@ export async function updateWorkflowWithPublication(
       schemaVersion: _ignoredSchemaVersion,
       interface: _ignoredInterface,
       published: _ignoredPublished,
+      // Pause overrides are set only through `trigger-pauses.ts`; an editor
+      // snapshot loaded before a pause must not resume it on save (WF-07).
+      triggerPauses: _ignoredTriggerPauses,
       // Only the compiler that owns a derived row sets these; an ordinary
       // edit can neither mark a row derived nor lift its read-only flag.
       derivedFrom: _ignoredDerivedFrom,

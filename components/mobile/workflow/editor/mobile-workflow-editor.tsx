@@ -53,6 +53,7 @@ import { MobileNodeSearchSheet } from "./mobile-node-search-sheet"
 import { MobileNodeInspectorDrawer } from "./mobile-node-inspector-drawer"
 import { MobileWorkflowCopilotSheet } from "./mobile-workflow-copilot-sheet"
 import { useTapConnect } from "./use-tap-connect"
+import { useMobilePreviewRun } from "./use-mobile-preview-run"
 
 function MobileEditorInner({ store }: { store: EditorStore }) {
   const t = useTranslations("mobile.workflow.editor")
@@ -74,6 +75,10 @@ function MobileEditorInner({ store }: { store: EditorStore }) {
   const [rf, setRf] = useState<WorkflowFlowInstance | null>(null)
   const canvasAreaRef = useRef<HTMLDivElement | null>(null)
   const tapConnect = useTapConnect(store)
+  // Run, "Run from here", "Run only this node" and the Inspector's Run step:
+  // all previews of the saved workflow, started here or on the paired Host.
+  // Blocking diagnostics open the Workbench, whose Problems tab lists them.
+  const previewRun = useMobilePreviewRun(store, { onBlocked: () => setWorkbenchOpen(true) })
   const selectedId = store((s) => s.selectedNodeIds[0] ?? null)
   const selectedEdgeId = store((s) => s.selectedEdgeIds[0] ?? null)
   const workflowId = store((s) => s.baseWorkflow.id)
@@ -237,6 +242,8 @@ function MobileEditorInner({ store }: { store: EditorStore }) {
         orientationStatus={orientationStatus}
         onToggleOrientationLock={() => setOrientationLocked((v) => !v)}
         onOpenWorkbench={() => setWorkbenchOpen(true)}
+        onRun={() => void previewRun.run({ mode: "full" })}
+        running={previewRun.running}
       />
       {derivedWorkflow.derivedFrom ? <DerivedWorkflowBanner workflow={derivedWorkflow} /> : null}
       <div ref={canvasAreaRef} className="relative min-h-0 flex-1">

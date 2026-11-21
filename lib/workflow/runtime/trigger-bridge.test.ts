@@ -9,6 +9,8 @@ jest.mock("./tauri-bridge", () => {
 })
 
 import { dispatchTrigger, installTriggerBridge, isTriggerEvent } from "./trigger-bridge"
+import { dispatchPlacedWorkflowTrigger } from "./placed-trigger"
+import { webhookAdmissionAck } from "./webhook-admission"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createWorkflow, listWorkflowRuns } from "@/lib/db/workflows"
@@ -411,6 +413,74 @@ describe("dispatchTrigger", () => {
     expect(runs[0].triggeredBySource).toBe("api")
   })
 
+  it("records an automatic trigger occurrence as source trigger, not ui (WF-22)", async () => {
+    const wf = await createWorkflow({
+      name: "cron origin",
+      nodes: [
+        {
+          id: "n_cron",
+          type: "trigger.cron",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "cron", params: { cron: "* * * * *" } },
+        },
+      ],
+      edges: [],
+    })
+    await publishWorkflow(wf.id, 1)
+    await dispatchTrigger({
+      workflowId: wf.id,
+      kind: "trigger.cron",
+      triggerId: "n_cron",
+      payload: {},
+      originAt: 5,
+    })
+    const [run] = await getDb().workflowRuns.toArray()
+    expect(run.triggeredBy).toEqual({ source: "trigger" })
+    expect(run.triggeredBySource).toBe("trigger")
+  })
+
+  it("fails a risky ungated node closed on an automatic trigger instead of waiting (WF-22)", async () => {
+    const wf = await createWorkflow({
+      name: "risky cron",
+      nodes: [
+        {
+          id: "n_cron",
+          type: "trigger.cron",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "cron", params: { cron: "* * * * *" } },
+        },
+        {
+          id: "n_send",
+          type: "action.connector.send",
+          typeVersion: 1,
+          position: { x: 200, y: 0 },
+          data: {
+            label: "send",
+            params: { adapterId: "lark", conversationKey: "c", content: "hi" },
+          },
+        },
+      ],
+      edges: [{ id: "e1", source: "n_cron", target: "n_send" }],
+    })
+    await getDb().workflows.update(wf.id, {
+      settings: { ...(await getDb().workflows.get(wf.id))!.settings, riskGating: true },
+    })
+    await publishWorkflow(wf.id, 1)
+    await dispatchTrigger({
+      workflowId: wf.id,
+      kind: "trigger.cron",
+      triggerId: "n_cron",
+      payload: {},
+      originAt: 6,
+    })
+    const [run] = await getDb().workflowRuns.toArray()
+    expect(run.status).toBe("failed")
+    expect(run.error?.message).toContain("source=trigger")
+    expect(await getDb().workflowWaitpoints.count()).toBe(0)
+  })
+
   it("preserves trigger binding and origin time on the run", async () => {
     const wf = await createWorkflow({
       name: "bound trigger",
@@ -482,5 +552,100 @@ describe("dispatchTrigger", () => {
     await expect(dispatchTrigger(trigger)).resolves.toBeUndefined()
     const runs = await getDb().workflowRuns.toArray()
     expect(runs).toEqual([])
+  })
+})
+
+describe("dispatchTrigger webhook admission receipts (WF-08)", () => {
+  async function publishedWebhookWorkflow() {
+    const wf = await createWorkflow({
+      name: "hook",
+      nodes: [
+        {
+          id: "n_hook",
+          type: "trigger.webhook",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "hook", params: { path: "hook" } },
+        },
+      ],
+      edges: [],
+    })
+    await publishWorkflow(wf.id, 1)
+    return wf
+  }
+
+  function hookEvent(
+    workflowId: string,
+    admissionId: string,
+    occurrenceKey?: string
+  ): TriggerEvent {
+    return {
+      workflowId,
+      kind: "trigger.webhook",
+      triggerId: "n_hook",
+      originAt: 10,
+      ...(occurrenceKey ? { occurrenceKey } : {}),
+      payload: { method: "POST", path: "hook", body: {}, admissionId },
+    }
+  }
+
+  function depsWith(respond: jest.Mock) {
+    return {
+      dispatchPlaced: dispatchPlacedWorkflowTrigger,
+      admissionAck: (event: TriggerEvent) => webhookAdmissionAck(event, respond),
+    }
+  }
+
+  it("acknowledges the reserved run id before the run finishes", async () => {
+    const wf = await publishedWebhookWorkflow()
+    const respond = jest.fn().mockResolvedValue(true)
+    await dispatchTrigger(hookEvent(wf.id, "wha_1"), undefined, depsWith(respond))
+    const [run] = await getDb().workflowRuns.toArray()
+    expect(respond).toHaveBeenCalledTimes(1)
+    expect(respond).toHaveBeenCalledWith("wha_1", {
+      status: 202,
+      body: "",
+      headers: { "x-cognia-run-id": run.id },
+    })
+  })
+
+  it("acknowledges a redelivery with the same delivery id with the same run", async () => {
+    const wf = await publishedWebhookWorkflow()
+    const respond = jest.fn().mockResolvedValue(true)
+    await dispatchTrigger(hookEvent(wf.id, "wha_1", "delivery-1"), undefined, depsWith(respond))
+    await dispatchTrigger(hookEvent(wf.id, "wha_2", "delivery-1"), undefined, depsWith(respond))
+    const runs = await getDb().workflowRuns.toArray()
+    expect(runs).toHaveLength(1)
+    expect(respond.mock.calls.map(([id, reply]) => [id, reply.headers["x-cognia-run-id"]])).toEqual(
+      [
+        ["wha_1", runs[0].id],
+        ["wha_2", runs[0].id],
+      ]
+    )
+  })
+
+  it("returns a refusal to the sender instead of a success when the workflow is not deployed", async () => {
+    const respond = jest.fn().mockResolvedValue(true)
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+    await dispatchTrigger(hookEvent("wf_missing", "wha_9"), undefined, depsWith(respond))
+    warn.mockRestore()
+    expect(respond).toHaveBeenCalledTimes(1)
+    const [id, reply] = respond.mock.calls[0]
+    expect(id).toBe("wha_9")
+    expect(reply.status).toBe(404)
+    expect(JSON.parse(reply.body).code).toBe("deployment-not-found")
+    expect(await getDb().workflowRuns.count()).toBe(0)
+  })
+
+  it("sends nothing for an event that did not come from a held webhook request", async () => {
+    const wf = await publishedWebhookWorkflow()
+    const respond = jest.fn().mockResolvedValue(true)
+    const event = hookEvent(wf.id, "wha_x")
+    await dispatchTrigger(
+      { ...event, payload: { method: "POST", path: "hook", body: {} } },
+      undefined,
+      depsWith(respond)
+    )
+    expect(respond).not.toHaveBeenCalled()
   })
 })

@@ -7,12 +7,6 @@ import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { createEditorStore, type EditorStore } from "@/lib/workflow/editor/store"
-import { listByStatus, listAll } from "@/lib/db/mobile-outbound-queue"
-import {
-  clearActiveRuntimeTargetContext,
-  setActiveRuntimeTargetContext,
-} from "@/lib/runtime/runtime-target-context"
-import { getDb } from "@/lib/db/schema"
 import type { VisualWorkflow } from "@/types/workflow/visual"
 
 const toastSuccess = jest.fn()
@@ -28,8 +22,6 @@ jest.mock("sonner", () => ({
   },
 }))
 
-jest.mock("@/lib/capacitor/haptics", () => ({ impact: jest.fn(async () => ({ kind: "ok" })) }))
-
 const persistEditorWorkflow = jest.fn(
   async (
     ..._a: unknown[]
@@ -37,9 +29,11 @@ const persistEditorWorkflow = jest.fn(
     issueCount: number
     publicationInvalidated: boolean
     triggerRegistration?: { ok: true } | { ok: false; error: string }
+    hostWrite?: boolean
   }> => ({
     issueCount: 0,
     publicationInvalidated: false,
+    hostWrite: false,
   })
 )
 jest.mock("@/lib/workflow/editor/persist-workflow", () => ({
@@ -90,11 +84,16 @@ function buildWorkflow(): VisualWorkflow {
   }
 }
 
-function renderTopbar(mode: "read" | "edit" = "read", orientationStatus?: "unavailable" | "pending") {
+function renderTopbar(
+  mode: "read" | "edit" = "read",
+  orientationStatus?: "unavailable" | "pending",
+  running = false
+) {
   const store: EditorStore = createEditorStore(buildWorkflow())
   const onToggleMode = jest.fn()
   const onOpenCopilot = jest.fn()
   const onOpenWorkbench = jest.fn()
+  const onRun = jest.fn()
   render(
     <MobileEditorTopbar
       store={store}
@@ -107,30 +106,20 @@ function renderTopbar(mode: "read" | "edit" = "read", orientationStatus?: "unava
       orientationStatus={orientationStatus}
       onToggleOrientationLock={jest.fn()}
       onToggleSelectMode={jest.fn()}
+      onRun={onRun}
+      running={running}
     />
   )
-  return { store, onToggleMode, onOpenCopilot, onOpenWorkbench }
+  return { store, onToggleMode, onOpenCopilot, onOpenWorkbench, onRun }
 }
 
-// Run hands the workflow to the paired desktop through the outbound queue, and
-// every job there is addressed to one account and one runtime target. `enqueue`
-// refuses to write a row it cannot address, so with no active scope the click
-// toasts a failure instead of queueing. A phone whose Run reaches a desktop is
-// paired by definition, so stand a scope up rather than mocking the queue.
-beforeEach(async () => {
+beforeEach(() => {
   toastSuccess.mockReset()
   toastError.mockReset()
   toastWarning.mockReset()
   toastMessage.mockReset()
   persistEditorWorkflow.mockClear()
   downloadWorkflowJson.mockClear()
-  setActiveRuntimeTargetContext("local_acct_a", "host-1")
-  const all = await listAll()
-  await Promise.all(all.map((r) => getDb().mobileOutboundQueue.delete(r.id)))
-})
-
-afterEach(() => {
-  clearActiveRuntimeTargetContext()
 })
 
 describe("<MobileEditorTopbar />", () => {
@@ -247,6 +236,8 @@ describe("<MobileEditorTopbar />", () => {
           orientationLocked={true}
           onToggleOrientationLock={jest.fn()}
           onToggleSelectMode={onToggleSelectMode}
+          onRun={jest.fn()}
+          running={false}
         />
       )
       await user.click(screen.getByTestId("mobile-editor-menu"))
@@ -317,53 +308,34 @@ describe("<MobileEditorTopbar />", () => {
     expect(toastSuccess).not.toHaveBeenCalled()
   })
 
-  it("enqueues a manual trigger for the paired desktop on Run", async () => {
+  it("says a paired phone's save is on its way to the desktop", async () => {
     const user = userEvent.setup()
-    renderTopbar()
-    await user.click(screen.getByTestId("mobile-editor-run"))
-    await waitFor(async () => {
-      expect(await listByStatus("pending")).toHaveLength(1)
+    const { store } = renderTopbar()
+    act(() => store.getState().setName("Edited"))
+    persistEditorWorkflow.mockResolvedValueOnce({
+      issueCount: 0,
+      publicationInvalidated: false,
+      hostWrite: true,
     })
-    const queue = await listByStatus("pending")
-    expect(queue[0].command).toBe("workflow_trigger_manual")
-    expect(queue[0].payload).toEqual({ workflowId: "wf_top" })
-    expect(toastSuccess).toHaveBeenCalledWith("runQueued")
-    // Clean store → Run should not persist.
+
+    await user.click(screen.getByTestId("mobile-editor-save"))
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("savedQueuedForHost"))
+  })
+
+  // The editor owns the run (use-mobile-preview-run.ts); the bar only asks.
+  it("asks the editor to run on Run, without saving or queueing anything itself", async () => {
+    const user = userEvent.setup()
+    const { store, onRun } = renderTopbar()
+    act(() => store.getState().setName("Edited"))
+    await user.click(screen.getByTestId("mobile-editor-run"))
+    expect(onRun).toHaveBeenCalledTimes(1)
     expect(persistEditorWorkflow).not.toHaveBeenCalled()
   })
 
-  it("does not queue a second run while the first is still waiting", async () => {
-    const user = userEvent.setup()
-    renderTopbar()
-    await user.click(screen.getByTestId("mobile-editor-run"))
-    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("runQueued"))
-    await waitFor(() => expect(screen.getByTestId("mobile-editor-run")).not.toBeDisabled())
-    await user.click(screen.getByTestId("mobile-editor-run"))
-    await waitFor(() => expect(toastMessage).toHaveBeenCalledWith("runAlreadyQueued"))
-    expect(await listByStatus("pending")).toHaveLength(1)
-  })
-
-  it("persists imported JSON before queueing Run", async () => {
-    const user = userEvent.setup()
-    const { store } = renderTopbar()
-    const imported = {
-      name: "Imported mobile graph",
-      nodes: buildWorkflow().nodes,
-      edges: [],
-    }
-
-    await user.upload(
-      screen.getByTestId("mobile-editor-import-input"),
-      new File([JSON.stringify(imported)], "workflow.json", { type: "application/json" })
-    )
-    await waitFor(() => expect(store.getState().dirty).toBe(true))
-
-    await user.click(screen.getByTestId("mobile-editor-run"))
-
-    await waitFor(() => expect(persistEditorWorkflow).toHaveBeenCalledWith(store))
-    expect(store.getState().baseWorkflow.id).toBe("wf_top")
-    expect(store.getState().baseWorkflow.name).toBe("Imported mobile graph")
-    expect(await listByStatus("pending")).toHaveLength(1)
+  it("disables Run while a run is starting", () => {
+    renderTopbar("read", undefined, true)
+    expect(screen.getByTestId("mobile-editor-run")).toBeDisabled()
   })
 
   it("exports JSON from the overflow menu", async () => {

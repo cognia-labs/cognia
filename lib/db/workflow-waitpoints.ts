@@ -120,7 +120,11 @@ async function consumeEarliestEvent(
     .where("[key+emittedAt]")
     .between([waitpoint.key, waitpoint.notBefore], [waitpoint.key, DexieMaxKey])
     .toArray()
-  const event = events.find((candidate) => eventMatches(waitpoint, candidate))
+  const event = events.find(
+    (candidate) =>
+      eventMatches(waitpoint, candidate) &&
+      !arrivesAfterDeadline(waitpoint, { outcome: "event", resolvedAt: candidate.emittedAt })
+  )
   if (!event) return undefined
   const now = Date.now()
   event.consumedByWaitpointId = waitpoint.id
@@ -196,7 +200,28 @@ export async function listPendingWorkflowWaitpoints(
   return [...rows.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
 }
 
-/** Transactional compare-and-set: only the first terminal decision wins. */
+/**
+ * A decision (a human answer, a matched event) that arrives after the
+ * waitpoint's deadline is too late: the wait has already timed out, whether or
+ * not a waiter was alive to write `timed_out` yet. Only the deadline itself
+ * (`timed_out`) and a cancellation may still settle such a row.
+ */
+export function arrivesAfterDeadline(
+  waitpoint: Pick<WorkflowWaitpoint, "expiresAt">,
+  resolution: Pick<WorkflowWaitpointResolution, "outcome" | "resolvedAt">
+): boolean {
+  return (
+    waitpoint.expiresAt !== undefined &&
+    resolution.outcome !== "timed_out" &&
+    resolution.outcome !== "cancelled" &&
+    resolution.resolvedAt > waitpoint.expiresAt
+  )
+}
+
+/**
+ * Transactional compare-and-set: only the first terminal decision wins, and
+ * a decision made after the deadline loses to the deadline (`expired`).
+ */
 export async function decideWorkflowWaitpoint(
   id: string,
   resolution: WorkflowWaitpointResolution
@@ -208,6 +233,9 @@ export async function decideWorkflowWaitpoint(
     await recordWorkflowWaitpointReceipt(nativeCurrent)
     notify(nativeCurrent)
     return { ok: false, reason: "already-decided" }
+  }
+  if (nativeCurrent && arrivesAfterDeadline(nativeCurrent, resolution)) {
+    return { ok: false, reason: "expired" }
   }
   if (nativeCurrent) {
     const nativeWon = await decideNativeWorkflowWaitpoint(id, resolution)
@@ -229,6 +257,7 @@ export async function decideWorkflowWaitpoint(
       if (current.status !== "pending") {
         return { ok: false, reason: "already-decided" }
       }
+      if (arrivesAfterDeadline(current, resolution)) return { ok: false, reason: "expired" }
       const waitpoint: WorkflowWaitpoint = {
         ...current,
         status: statusFor(resolution),
@@ -278,7 +307,11 @@ export async function emitWorkflowWaitEvent(event: WorkflowWaitEvent): Promise<W
       .equals([event.key, "pending"])
       .toArray()
     const waitpoint = candidates
-      .filter((candidate) => eventMatches(candidate, event))
+      .filter(
+        (candidate) =>
+          eventMatches(candidate, event) &&
+          !arrivesAfterDeadline(candidate, { outcome: "event", resolvedAt: event.emittedAt })
+      )
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0]
     if (!waitpoint) return
     const consumedAt = Date.now()

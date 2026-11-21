@@ -9,7 +9,8 @@ import "@/lib/workflow/nodes/built-ins"
 import { registerNodeExecutor } from "@/lib/workflow/nodes/registry"
 import { runLoopContainer } from "./loop-container"
 import { IdempotencyCache, iterationCacheKey } from "./idempotency"
-import { createRunLogger } from "./event-log"
+import { createRunLogger, listRunEvents } from "./event-log"
+import { RiskGateRejected } from "./risk-gate"
 import { NoopSecretResolver } from "./secret-resolver"
 import { ConcurrencyGate, __setGlobalRunGateForTesting } from "./run-concurrency-gate"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -92,6 +93,8 @@ async function run(
     traceId?: string
     lineage?: Parameters<typeof runLoopContainer>[0]["lineage"]
     securityContext?: Parameters<typeof runLoopContainer>[0]["securityContext"]
+    triggeredBy?: Parameters<typeof runLoopContainer>[0]["triggeredBy"]
+    approvedApprovalIds?: ReadonlySet<string>
   } = {}
 ) {
   const runId = opts.runId ?? "run_loop_test"
@@ -110,6 +113,8 @@ async function run(
     traceId: opts.traceId,
     lineage: opts.lineage,
     securityContext: opts.securityContext,
+    ...(opts.triggeredBy ? { triggeredBy: opts.triggeredBy } : {}),
+    approvedApprovalIds: opts.approvedApprovalIds ?? new Set(),
   })
 }
 
@@ -582,6 +587,7 @@ describe("edge cases", () => {
         retryPolicy: workflow.settings.retryDefaults,
         secretResolver: NoopSecretResolver,
         logger: createRunLogger("run_null"),
+        approvedApprovalIds: new Set(),
       })
     ).rejects.toThrow(/got null/)
   })
@@ -1116,5 +1122,89 @@ describe("nested loops", () => {
     const result = await run(workflow, loopNode, {})
     const out = result.output as { items: unknown[] }
     expect(out.items).toEqual([2, 2])
+  })
+})
+
+describe("per-iteration identity, gating and routing replay", () => {
+  it("gives every iteration's step its own execution key", async () => {
+    const keys: Array<string | undefined> = []
+    registerNodeExecutor({
+      kind: "data.keyprobe" as never,
+      typeVersion: 1,
+      execute: async (ctx) => {
+        keys.push(ctx.stepKey)
+        return { output: ctx.stepKey }
+      },
+    })
+    const { workflow, loopNode } = loopWorkflow({ mode: "times", times: 2 }, [
+      node("body", "data.keyprobe" as never, {}, "loop1"),
+    ])
+    await run(workflow, loopNode)
+    // An approval or checkpoint keyed on `stepKey ?? stepId` is per item.
+    expect(keys).toEqual([
+      iterationCacheKey("loop1", 0, "body"),
+      iterationCacheKey("loop1", 1, "body"),
+    ])
+  })
+
+  it("applies the risk gate to loop-body nodes, failing closed with nobody watching", async () => {
+    const { workflow, loopNode } = loopWorkflow({ mode: "times", times: 1 }, [
+      node("risky", "action.desktop.performAction", {}, "loop1"),
+    ])
+    workflow.settings.riskGating = true
+    await expect(
+      run(workflow, loopNode, { triggeredBy: { source: "trigger" } })
+    ).rejects.toBeInstanceOf(RiskGateRejected)
+  })
+
+  it("records a body error-branch failure with its route and replays it without re-running", async () => {
+    let failures = 0
+    registerNodeExecutor({
+      kind: "action.test.loop-fails" as never,
+      typeVersion: 1,
+      execute: async () => {
+        failures += 1
+        throw Object.assign(new Error("boom"), { retryable: false })
+      },
+    })
+    const fails = {
+      ...node("fails", "action.test.loop-fails" as never, {}, "loop1"),
+      data: { label: "fails", params: {}, errorHandling: { onError: "errorBranch" as const } },
+    }
+    const { workflow, loopNode } = loopWorkflow(
+      { mode: "times", times: 1 },
+      [
+        fails,
+        node("ok", "flow.set", { variable: "v", value: "ok" }, "loop1"),
+        node("handled", "flow.set", { variable: "v", value: "handled" }, "loop1"),
+      ],
+      [
+        { id: "e_ok", source: "fails", target: "ok" },
+        { id: "e_err", source: "fails", target: "handled", sourceHandle: "error" },
+      ]
+    )
+    const runId = "run_loop_route"
+    await run(workflow, loopNode, { runId })
+    expect(failures).toBe(1)
+    const recorded = (await listRunEvents(runId)).find(
+      (event) => event.type === "step_completed" && event.stepId === "fails"
+    )
+    expect(recorded?.payload).toMatchObject({
+      route: "error",
+      cacheKey: iterationCacheKey("loop1", 0, "fails"),
+    })
+
+    // Re-entry: only the body's own completions are known (the container did
+    // not finish). The failure is replayed with its route, not re-executed.
+    const cache = new IdempotencyCache()
+    cache.set(iterationCacheKey("loop1", 0, "fails"), { failed: true }, { route: "error" })
+    const replayRunId = "run_loop_route_replay"
+    await run(workflow, loopNode, { runId: replayRunId, cache })
+    expect(failures).toBe(1)
+    const replayed = (await listRunEvents(replayRunId))
+      .filter((event) => event.type === "step_completed")
+      .map((event) => event.stepId)
+    expect(replayed).toContain("handled")
+    expect(replayed).not.toContain("ok")
   })
 })

@@ -219,6 +219,34 @@ sketch:
   reason, and offers to open the target Host. Cancelling splits on admission:
   before `remoteRunId` exists the source owns the occurrence and can cancel;
   after, the run is the target's and cancelling here would strand it.
+- **A Workflow App's async HTTP run follows the Run Policy (placement
+  contract).** The serving Host stays the App's authority: in one local
+  transaction it authorizes the caller, counts the App quota (once, here),
+  reserves the idempotent invocation and freezes the release's locked version.
+  When the release version's `runOn` selects another Host
+  (`resolveWorkflowExecutionHost`, the same decision triggers use), that
+  transaction records the invocation with a `placement`
+  (`{ hostRef, dispatchId, state, remoteRunId?, … }`) instead of a local run,
+  and enqueues a `schedule-handoff` job of kind `workflow.app-run` whose
+  idempotency key is the invocation id. It carries the locked binding
+  (version, deployment, revision, dependency lock, expected digest), the App
+  caller marker and the run payload. The target admits exactly that version
+  (`workflow_app_handoff_create` → `executeWorkflowVersion`), with the App's
+  `http` entrypoint, the run id the serving Host already gave its caller, and
+  the caller `host:<callerDeviceId>` the RPC layer injects. It never reserves
+  the App quota again, and its refusals (version missing, digest mismatch,
+  deployment gone) come back typed and end the invocation; only its own run
+  capacity retries. Status, events, cancel and result-share verdicts go to
+  the target through `workflow_handoff_run_get` / `workflow_handoff_run_cancel`,
+  which answer only for runs that same caller handed over. The serving Host
+  writes the status, usage and terminal view back onto the invocation, so
+  concurrency, the daily token and cost budgets and result sharing stay true
+  there, and refreshes unsettled placed runs before it counts a quota. Before
+  the job lands the run reads as queued, never `run_not_found`. A run's
+  personal taint stays on the Host that ran it, so that Host judges a public
+  share of its result. A Host is chosen under `auto` only when its manifest
+  answers all four handoff operations. Synchronous App calls, MCP, chat and
+  batch rows stay colocated: each holds a caller open on this Host.
 
 ## Not done
 

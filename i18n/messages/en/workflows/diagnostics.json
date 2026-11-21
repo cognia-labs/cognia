@@ -28,6 +28,7 @@
   "runWithWarnings": "Running with {count} warning(s).",
   "savedWithWarnings": "Saved with {count} warning(s).",
   "unsupportedTypeVersion": "This node was authored for {kind} version {typeVersion}, which is no longer supported. Recreate it as a {kind} node (version {current}).",
+  "webhookReplyPinnedRemote": "This node replies to the webhook caller, and only the Host that received the request can do that, but Run on pins this workflow to another Host ({ref}). Set Run on to This Host or Auto, or remove this node.",
   "selfParent": "A node can't be its own container.",
   "synthesizerOnly": "This node is emitted by the {lifecycle, select, team {agent-team} plan {plan} other {}} synthesizer and needs that run's context. Run it through action.team.run (or action.plan.run) instead of this workflow's Run button.",
   "title": "Problems"

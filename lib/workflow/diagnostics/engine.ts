@@ -17,6 +17,7 @@ import { checkExpressionRefs } from "./checks/expression-refs"
 import { checkCredentials, checkKindAvailability } from "./checks/availability"
 import { checkDesktopOnly } from "./checks/desktop-only"
 import { checkSynthesizerOnly } from "./checks/synthesizer-only"
+import { checkWebhookReplyPlacement } from "./checks/webhook-reply-placement"
 import type { Diagnostic, DiagnosticCode, DiagnosticsInput, DiagnosticsResult } from "./types"
 
 /** Per-node Zod param validation → one diagnostic per failing field. */
@@ -91,6 +92,7 @@ export function runDiagnostics(input: DiagnosticsInput): DiagnosticsResult {
     ...(isKindAvailable ? checkKindAvailability(workflow, isKindAvailable) : []),
     ...checkDesktopOnly(workflow, isWeb),
     ...checkSynthesizerOnly(workflow),
+    ...checkWebhookReplyPlacement(workflow),
   ]
   return indexDiagnostics(all)
 }

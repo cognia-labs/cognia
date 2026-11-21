@@ -14,6 +14,7 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
 import { runSingleNode, ancestorsOf } from "./run-single-node"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { listRunEvents } from "./event-log"
+import { getDb } from "@/lib/db/schema"
 import type { VisualWorkflow } from "@/types/workflow/visual"
 
 const dbFixture = createDbTestFixture()
@@ -130,6 +131,22 @@ describe("runSingleNode", () => {
     const events = await listRunEvents(r.runId)
     const completed = events.find((e) => e.type === "step_completed" && e.stepId === "n_a")
     expect((completed?.payload as { output?: { value?: string } })?.output?.value).toBe("A")
+  })
+
+  it("runs under a caller-minted id and origin, announcing the row before it ends", async () => {
+    const persisted: string[] = []
+    const r = await runSingleNode({
+      workflow: chainWorkflow(),
+      nodeId: "n_b",
+      latestOutputs: { n_a: { value: "A1" } },
+      runId: "run_preminted",
+      triggeredBy: { source: "ui", deviceId: "dev_phone" },
+      onPersisted: (runId) => persisted.push(runId),
+    })
+    expect(r.runId).toBe("run_preminted")
+    expect(persisted).toEqual(["run_preminted"])
+    const row = await getDb().workflowRuns.get("run_preminted")
+    expect(row?.triggeredBy).toEqual({ source: "ui", deviceId: "dev_phone" })
   })
 
   it("prefers pinned ancestor data over latest-run outputs", async () => {

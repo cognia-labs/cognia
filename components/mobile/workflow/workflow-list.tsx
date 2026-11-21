@@ -14,7 +14,6 @@ import { EmptyState } from "@/components/mobile/empty-state"
 import { LongPress } from "@/components/interactions/long-press"
 import { PullToRefresh } from "@/components/interactions/pull-to-refresh"
 import { SwipeRow } from "@/components/interactions/swipe-row"
-import { enqueueUnlessQueued } from "@/lib/db/mobile-outbound-queue"
 import { listChildFolders, getFolderPath } from "@/lib/db/workflow-folders"
 import {
   getRecentlyFailedWorkflowIds,
@@ -40,6 +39,7 @@ import { PendingHumanInputCard } from "./pending-human-input-card"
 import { PinnedSection } from "./pinned-section"
 import { RecentRunsFeed } from "./recent-runs-feed"
 import { TriggerButton } from "./trigger-button"
+import { useLibraryRun } from "./use-library-run"
 import { usePendingWorkflowTriggers } from "./use-pending-triggers"
 import { WorkflowListToolbar } from "./workflow-list-toolbar"
 import { WorkflowRowActionsSheet } from "./workflow-row-actions-sheet"
@@ -65,6 +65,7 @@ const EMPTY_RUN_COUNTS: ReadonlyMap<string, number> = new Map<string, number>()
 export function WorkflowList({ className }: WorkflowListProps) {
   const t = useTranslations("mobile.workflow")
   const tLib = useTranslations("workflows.library")
+  const runFromLibrary = useLibraryRun()
 
   const currentFolderId = useWorkflowLibraryStore((s) => s.currentFolderId)
   const sort = useWorkflowLibraryStore((s) => s.sort)
@@ -259,27 +260,9 @@ export function WorkflowList({ className }: WorkflowListProps) {
                       {
                         id: "run",
                         label: t("swipe.run"),
-                        onSelect: () => {
-                          // One queued run per workflow: a second swipe while the
-                          // first is still waiting says so instead of stacking a
-                          // duplicate that would fire twice when the Host is back.
-                          void enqueueUnlessQueued({
-                            command: "workflow_trigger_manual",
-                            payload: { workflowId: wf.id },
-                            label: wf.name,
-                          }).then(
-                            ({ alreadyQueued }) =>
-                              alreadyQueued
-                                ? toast.message(t("swipe.runAlreadyQueued", { name: wf.name }))
-                                : toast.success(t("swipe.runQueued", { name: wf.name })),
-                            (error: unknown) =>
-                              toast.error(
-                                t("runFailed", {
-                                  message: error instanceof Error ? error.message : String(error),
-                                })
-                              )
-                          )
-                        },
+                        // Same Run as the row's button: queued to the paired
+                        // Host only when published, never stacked twice.
+                        onSelect: () => void runFromLibrary(wf),
                       },
                       {
                         id: "pin",
@@ -347,7 +330,7 @@ export function WorkflowList({ className }: WorkflowListProps) {
                             aria-hidden="true"
                           />
                         </Link>
-                        <TriggerButton workflowId={wf.id} workflowName={wf.name} />
+                        <TriggerButton workflow={wf} />
                       </div>
                     </LongPress>
                   </SwipeRow>

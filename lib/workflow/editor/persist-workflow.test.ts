@@ -10,6 +10,15 @@ const replaceWorkflow = jest.fn(async (workflow: VisualWorkflow) => ({
 jest.mock("@/lib/db/workflows", () => ({
   replaceWorkflow: (...a: unknown[]) => replaceWorkflow(a[0] as VisualWorkflow),
 }))
+let writeAuthority: "local" | "host" = "local"
+jest.mock("@/lib/workflow/remote/write-authority", () => ({
+  workflowWriteAuthority: () => writeAuthority,
+}))
+const queueWorkflowSaveOnHost = jest.fn(async (_workflow: VisualWorkflow, _label?: string) => ({}))
+jest.mock("@/lib/workflow/remote/host-writes", () => ({
+  queueWorkflowSaveOnHost: (...a: unknown[]) =>
+    queueWorkflowSaveOnHost(a[0] as VisualWorkflow, a[1] as string | undefined),
+}))
 
 import { persistEditorWorkflow } from "./persist-workflow"
 import { createEditorStore } from "./store"
@@ -43,6 +52,8 @@ function buildWorkflow(nodeType: string): VisualWorkflow {
 
 beforeEach(() => {
   replaceWorkflow.mockClear()
+  queueWorkflowSaveOnHost.mockClear()
+  writeAuthority = "local"
 })
 
 describe("persistEditorWorkflow", () => {
@@ -56,7 +67,69 @@ describe("persistEditorWorkflow", () => {
     expect(replaceWorkflow).toHaveBeenCalledTimes(1)
     expect(store.getState().dirty).toBe(false)
     expect(store.getState().baseWorkflow.updatedAt).toBe(99)
-    expect(result).toEqual({ issueCount: 0, publicationInvalidated: false })
+    expect(result).toEqual({
+      issueCount: 0,
+      publicationInvalidated: false,
+      editedDuringSave: false,
+      hostWrite: false,
+    })
+    // The desktop owns its workflows: nothing goes to a Host.
+    expect(queueWorkflowSaveOnHost).not.toHaveBeenCalled()
+  })
+
+  it("queues the saved definition to the paired Host that owns the workflow", async () => {
+    writeAuthority = "host"
+    const store = createEditorStore(buildWorkflow("trigger.manual"))
+    store.getState().setName("Edited on the phone")
+
+    const result = await persistEditorWorkflow(store)
+
+    expect(result.hostWrite).toBe(true)
+    expect(queueWorkflowSaveOnHost).toHaveBeenCalledTimes(1)
+    // The Host gets what the mirror stored, not what the editor holds later.
+    expect(queueWorkflowSaveOnHost.mock.calls[0][0]).toMatchObject({
+      id: "wf_persist",
+      name: "Edited on the phone",
+      updatedAt: 99,
+    })
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it("leaves the editor dirty when the Host write cannot be queued", async () => {
+    writeAuthority = "host"
+    queueWorkflowSaveOnHost.mockRejectedValueOnce(new Error("queue unavailable"))
+    const store = createEditorStore(buildWorkflow("trigger.manual"))
+    store.getState().setName("Edited on the phone")
+
+    await expect(persistEditorWorkflow(store)).rejects.toThrow("queue unavailable")
+    // Saved on the phone only is not saved: the user must be able to retry.
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it("keeps the editor dirty when the graph changes while the write is in flight", async () => {
+    const store = createEditorStore(buildWorkflow("trigger.manual"))
+    store.getState().setName("Snapshot captured")
+    replaceWorkflow.mockImplementationOnce(async (workflow: VisualWorkflow) => {
+      // The user keeps editing after the snapshot was taken.
+      store.getState().setName("Edit during save")
+      return { workflow: { ...workflow, updatedAt: 99 }, publicationInvalidated: false }
+    })
+
+    const result = await persistEditorWorkflow(store)
+
+    // The row holds the snapshot; the editor holds the later edit.
+    expect(replaceWorkflow.mock.calls[0][0].name).toBe("Snapshot captured")
+    expect(store.getState().toWorkflow().name).toBe("Edit during save")
+    expect(result.editedDuringSave).toBe(true)
+    expect(store.getState().dirty).toBe(true)
+    // Persisted metadata still syncs, so a later save is not refused as stale.
+    expect(store.getState().baseWorkflow.updatedAt).toBe(99)
+
+    // Saving again carries the later edit and clears the marker.
+    const second = await persistEditorWorkflow(store)
+    expect(replaceWorkflow.mock.calls[1][0].name).toBe("Edit during save")
+    expect(second.editedDuringSave).toBe(false)
+    expect(store.getState().dirty).toBe(false)
   })
 
   it("reports params errors from the persisted snapshot", async () => {

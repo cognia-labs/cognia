@@ -25,6 +25,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import type { EditorState, EditorStore } from "@/lib/workflow/editor/store"
+import { persistEditorWorkflow } from "@/lib/workflow/editor/persist-workflow"
 import { DEFAULT_MAX_CONCURRENCY } from "@/types/workflow/visual"
 import { Field, FieldGroup, FieldRow } from "../inspector/forms/shared"
 import { DurationField } from "../inspector/forms/shared/duration-field"
@@ -72,8 +73,10 @@ export function SettingsTab({ useStore }: { useStore: EditorStore }) {
     credentials,
     workflowId,
     published,
+    dirty,
     syncPublication,
     loadWorkflow,
+    requestProblemsPanel,
     setSettings,
     setVariables,
     setCredentials,
@@ -84,8 +87,10 @@ export function SettingsTab({ useStore }: { useStore: EditorStore }) {
       credentials: s.baseWorkflow.credentials,
       workflowId: s.baseWorkflow.id,
       published: s.baseWorkflow.published,
+      dirty: s.dirty,
       syncPublication: s.syncPublication,
       loadWorkflow: s.loadWorkflow,
+      requestProblemsPanel: s.requestProblemsPanel,
       setSettings: s.setSettings,
       setVariables: s.setVariables,
       setCredentials: s.setCredentials,
@@ -432,8 +437,11 @@ export function SettingsTab({ useStore }: { useStore: EditorStore }) {
           <WorkflowPublishSection
             workflowId={workflowId}
             published={published}
+            dirty={dirty}
+            saveDraft={() => persistEditorWorkflow(useStore)}
             onPublicationChange={syncPublication}
             onDraftRestored={(workflow) => loadWorkflow(workflow, { dirty: false })}
+            onPublishBlocked={requestProblemsPanel}
           />
         </section>
 

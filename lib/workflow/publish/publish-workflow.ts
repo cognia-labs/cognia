@@ -39,13 +39,26 @@ export async function publishWorkflow(
   metadata: { versionName?: string; releaseNotes?: string; createdBy?: string } = {}
 ): Promise<PublishResult> {
   const result = await publishWorkflowLifecycle(workflowId, at, metadata)
-  const { resolveWorkflowDeployment } = await import("@/lib/db/workflow-deployments")
-  const deployed = await resolveWorkflowDeployment(workflowId)
-  if (deployed) {
-    const { syncWorkflowTriggers } = await import("@/lib/workflow/runtime/webhook-bridge")
-    await syncWorkflowTriggers(deployed.workflow)
-  }
+  await projectDeployedTriggers(workflowId)
   return result
+}
+
+/**
+ * Register the now-active version's triggers, keeping the operator's pause
+ * overrides: a publish or a rollback must not silently resume a schedule the
+ * Scheduler paused (WF-07). A projection failure is recorded per trigger in
+ * the registration health and retried by the next boot reconcile; it never
+ * undoes the publication that already committed.
+ */
+async function projectDeployedTriggers(workflowId: string): Promise<void> {
+  const [{ getWorkflow }, { projectWorkflowTriggerRegistrations }] = await Promise.all([
+    import("@/lib/db/workflows"),
+    import("@/lib/workflow/runtime/reconcile-trigger-registrations"),
+  ])
+  const draft = await getWorkflow(workflowId)
+  if (!draft) return
+  const projection = await projectWorkflowTriggerRegistrations(draft)
+  if (projection && !projection.ok) throw new Error(projection.error)
 }
 
 /** Unpublish: clear the publication and drop the backing skill entry. */
@@ -66,11 +79,6 @@ export async function rollbackWorkflow(
   at: number
 ): Promise<PublishResult> {
   const result = await rollbackWorkflowLifecycle(workflowId, versionId, at)
-  const { resolveWorkflowDeployment } = await import("@/lib/db/workflow-deployments")
-  const deployed = await resolveWorkflowDeployment(workflowId)
-  if (deployed) {
-    const { syncWorkflowTriggers } = await import("@/lib/workflow/runtime/webhook-bridge")
-    await syncWorkflowTriggers(deployed.workflow)
-  }
+  await projectDeployedTriggers(workflowId)
   return result
 }

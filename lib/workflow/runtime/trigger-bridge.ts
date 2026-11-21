@@ -15,11 +15,19 @@ import { WorkflowAdmissionError } from "./execution-authority"
 import { dispatchPlacedWorkflowTrigger } from "./placed-trigger"
 import { deterministicTriggerIdempotencyKey } from "./trigger-idempotency"
 import { ackFileWatch, listenTriggerEvents } from "./tauri-bridge"
+import { webhookAdmissionAck } from "./webhook-admission"
 
 export type TriggerBridgeDisposer = () => void
 
+/** Origin of a run nobody started by hand: a trigger occurrence. */
+export const AUTOMATIC_TRIGGER_ORIGIN: WorkflowTriggeredFrom = Object.freeze({
+  source: "trigger",
+})
+
 export interface TriggerBridgeDeps {
   dispatchPlaced: typeof dispatchPlacedWorkflowTrigger
+  /** The webhook admission receipt channel; injected so tests avoid the native plane. */
+  admissionAck?: typeof webhookAdmissionAck
 }
 
 export interface TriggerBridgeInstallDeps {
@@ -73,7 +81,12 @@ export async function dispatchTrigger(
     /**
      * Run origin persisted onto `WorkflowRunRow.triggeredBy` (ADR-0060) —
      * lets companion-originated manual triggers record `source: "api"` +
-     * the caller `deviceId` instead of defaulting to `"ui"`.
+     * the caller `deviceId`, and the library Run button `"desktop"`.
+     * Absent means an automatic trigger occurrence, recorded as
+     * {@link AUTOMATIC_TRIGGER_ORIGIN}: before, it fell through to the
+     * orchestrator's `"ui"` default, so a cron or webhook run with a risky
+     * node waited for an interactive approval locally while the same
+     * occurrence forwarded to another Host failed closed as `"api"`.
      */
     triggeredBy?: WorkflowTriggeredFrom
   },
@@ -95,19 +108,33 @@ export async function dispatchTrigger(
     ...(typeof normalizedEvent.originAt === "number" ? { originAt: normalizedEvent.originAt } : {}),
     ...(normalizedEvent.occurrenceKey ? { occurrenceKey: normalizedEvent.occurrenceKey } : {}),
   })
+  // A webhook request is held by the router until admission is confirmed:
+  // its 2xx must name a durably reserved run (or handoff), and a refusal
+  // must reach the sender instead of a success it never earned (WF-08).
+  const ack = (deps.admissionAck ?? webhookAdmissionAck)(normalizedEvent)
   try {
-    await deps.dispatchPlaced({
+    const placed = await deps.dispatchPlaced({
       event: normalizedEvent,
-      triggeredBy: opts?.triggeredBy,
+      triggeredBy: opts?.triggeredBy ?? AUTOMATIC_TRIGGER_ORIGIN,
       idempotencyKey,
-      onAdmitted: () =>
+      onAdmitted: async (receipt) => {
         getPluginEventHooks().dispatchWorkflowTriggerFired(
           event.workflowId,
           event.kind,
           event.payload
-        ),
+        )
+        await ack?.admitted(receipt)
+      },
     })
+    // Every admission path reports through `onAdmitted`; this only covers a
+    // placement that returned without it, and is a no-op otherwise.
+    await ack?.admitted(
+      placed.kind === "local"
+        ? { kind: "run", runId: placed.runId }
+        : { kind: "handoff", dispatchId: placed.dispatchId, targetRef: placed.targetRef }
+    )
   } catch (error) {
+    await ack?.rejected(error)
     if (error instanceof WorkflowAdmissionError && error.code === "deployment-not-found") {
       console.warn(`workflow trigger bridge: workflow ${event.workflowId} not deployed; ignoring`)
       return

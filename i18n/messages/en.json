@@ -31320,6 +31320,11 @@
         "orientationPending": "Checking orientation lock…",
         "orientationUnavailable": "Orientation lock unavailable",
         "orientationUnlock": "Allow portrait",
+        "previewFailed": "Couldn't start the preview: {message}",
+        "previewHostPending": "Your desktop hasn't received the latest save yet. Try running again in a moment.",
+        "previewRefused": "Your desktop couldn't start this preview: {detail}",
+        "previewSaveRefused": "Your desktop didn't accept the latest save, so nothing ran: {detail}",
+        "previewStarted": "Preview started.",
         "publicationInvalidated": "Workflow saved and unpublished because its callable interface changed. Publish it again to expose the new contract.",
         "redo": "Redo",
         "run": "Run",
@@ -31328,6 +31333,7 @@
         "saveFailed": "Save failed.",
         "saved": "Saved.",
         "savedBadge": "Saved",
+        "savedQueuedForHost": "Saved — sending it to your desktop.",
         "savedWithIssues": "Saved — {count} node(s) need attention.",
         "selectMode": "Select multiple nodes",
         "snapOff": "Snap to grid: off",
@@ -31353,15 +31359,22 @@
         "waitingForOthersToast": "Response recorded; waiting for others."
       },
       "landscapeHint": "Rotate for full graph",
+      "libraryRun": {
+        "alreadyQueued": "{name} is already queued — it runs once when your desktop is back.",
+        "failed": "Couldn't start the run: {message}",
+        "handedOff": "{name} was sent to the Host that runs it.",
+        "notPublished": "{name} isn't published yet. Publish it to run it from here, or open it to run a preview.",
+        "openRun": "Open",
+        "queued": "{name} is queued — it runs when your desktop is reachable.",
+        "refused": "{name} didn't run: {detail}",
+        "started": "{name} is running."
+      },
       "noRuns": "No runs yet.",
       "pinned": "Pinned",
       "pinned_added": "Pinned.",
       "pinned_removed": "Unpinned.",
       "queuedBadge": "Queued",
-      "runAlreadyQueued": "Already queued — it runs once when the desktop is online again.",
       "runButton": "Run",
-      "runFailed": "Trigger failed: {message}",
-      "runQueued": "Queued — fires when the desktop is online again.",
       "runsBackAria": "Back to workflow",
       "runsHeader": "Recent runs",
       "sending": "Sending",
@@ -31374,8 +31387,6 @@
       "swipe": {
         "favorite": "Pin",
         "run": "Run",
-        "runAlreadyQueued": "{name} is already queued",
-        "runQueued": "Queued {name}",
         "unfavorite": "Unpin"
       },
       "title": "Workflows"
@@ -31392,8 +31403,6 @@
         "resume": "Resume schedule",
         "resumeQueued": "Resuming schedule of {name} — queued for desktop.",
         "run": "Run now",
-        "runAlreadyQueued": "{name} is already queued for the desktop — it runs once.",
-        "runQueued": "Triggered {name} — queued for desktop.",
         "title": "Workflow actions",
         "unpin": "Unpin",
         "unpinned": "Unpinned."
@@ -31405,12 +31414,6 @@
         "queueLabel": "Delete workflow {name}",
         "title": "Delete {name}?",
         "toast": "Deleted {name}."
-      },
-      "swipe": {
-        "favorite": "★",
-        "run": "Run",
-        "runQueued": "Triggered {name} — queued for desktop.",
-        "unfavorite": "Unpin"
       }
     },
     "workflowsSettings": {
@@ -44120,6 +44123,7 @@
     },
     "quickCreateWorkflowTrigger": "Create workflow trigger",
     "quickCreateWorkflowTriggerDescription": "Add a cron trigger to an existing workflow without leaving the scheduler.",
+    "quickCreateWorkflowTriggerPublishNote": "It starts running once the workflow is published.",
     "recentExecutions": "Recent Executions",
     "recentRuns": "Recent runs",
     "recoveryHint": "Use Run Now or Edit to recover from this state.",
@@ -44520,7 +44524,13 @@
     "workflowReadOnly": "This workflow is compiled from a playbook and is read-only. Detach it in the workflow editor to add a trigger.",
     "workflowScriptReadOnlyDescription": "Script content is managed by workflow trigger sync and is read-only in this form.",
     "workflowScriptReadOnlyTitle": "Workflow-managed task",
+    "workflowTriggerAddedAwaitingPublish": "Cron trigger added to {name}. Publish the workflow to start the schedule.",
+    "workflowTriggerAwaitingPublish": "Awaiting publish: saved in the draft, not in the running version",
     "workflowTriggerNotFound": "Workflow trigger not found.",
+    "workflowTriggerState": "State",
+    "workflowTriggerStateActive": "Active in the published version",
+    "workflowTriggerStateAwaitingPublish": "Draft only. Publish the workflow to start it",
+    "workflowTriggerStatePaused": "Paused",
     "workingDir": "Working Directory",
     "workspaceMove": {
       "cleared": "Schedule now belongs to every workspace.",
@@ -67065,6 +67075,8 @@
         "useTemplate": "Use"
       },
       "publish": {
+        "blockedByProblems": "Publishing is blocked by {count, plural, one {# problem} other {# problems}} in this workflow. Fix them in the Problems panel, then publish again.",
+        "changedWhileSaving": "The workflow changed while it was being saved, so nothing was published. Save again, then publish.",
         "current": "Current",
         "deleteBlocked": "Deletion blocked by: {reasons}",
         "deleteVersion": "Delete version",
@@ -67074,9 +67086,11 @@
         "export": "Export",
         "filter": "Filter versions",
         "filterPlaceholder": "Filter by name, notes, author, or ID",
-        "hint": "Publish this workflow as a typed callable unit — an agent tool, a typed sub-workflow target, and a skill. Save the workflow first. Declare its interface with the Manual trigger's input schema and an Output node.",
+        "hint": "Publish this workflow as a typed callable unit — an agent tool, a typed sub-workflow target, and a skill. Unsaved edits are saved first, and the saved workflow is what gets published. Declare its interface with the Manual trigger's input schema and an Output node.",
         "noVersions": "No versions match this filter.",
+        "notPublished": "Not published. Earlier versions stay available below.",
         "publish": "Publish",
+        "publishVersion": "Publish this version",
         "publishedAs": "Published as tool",
         "releaseNotes": "Release notes",
         "releaseNotesPlaceholder": "Describe behavior changes and review evidence",
@@ -67425,7 +67439,8 @@
       "selfParent": "A node can't be its own container.",
       "synthesizerOnly": "This node is emitted by the {lifecycle, select, team {agent-team} plan {plan} other {}} synthesizer and needs that run's context. Run it through action.team.run (or action.plan.run) instead of this workflow's Run button.",
       "title": "Problems",
-      "unsupportedTypeVersion": "This node was authored for {kind} version {typeVersion}, which is no longer supported. Recreate it as a {kind} node (version {current})."
+      "unsupportedTypeVersion": "This node was authored for {kind} version {typeVersion}, which is no longer supported. Recreate it as a {kind} node (version {current}).",
+      "webhookReplyPinnedRemote": "This node replies to the webhook caller, and only the Host that received the request can do that, but Run on pins this workflow to another Host ({ref}). Set Run on to This Host or Auto, or remove this node."
     },
     "edgeInspector": {
       "comment": "Comment",
@@ -73866,6 +73881,10 @@
         },
         "export": "Export",
         "formalRetryUnavailable": "This draft-era run has no immutable version and can only be replayed in local debug mode.",
+        "hostUnreachable": {
+          "description": "This run lives on your desktop, which isn't reachable right now. It loads once the connection is back.",
+          "title": "Can't reach your desktop"
+        },
         "lineage": {
           "children": "{count, plural, one {# child run} other {# child runs}}",
           "parent": "Parent run",
@@ -73893,6 +73912,7 @@
           "failedStep": "Continue from step",
           "originalVersion": "Run original version"
         },
+        "retryOnHostOnly": "Re-run this from the desktop that ran it.",
         "running": "Running…",
         "sparkline": {
           "title": "Duration trend"

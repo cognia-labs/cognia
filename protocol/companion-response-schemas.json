@@ -21305,6 +21305,131 @@
       },
       "additionalProperties": false
     },
+    "workflow_app_handoff_create": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/workflow/api/handoff-run-service.ts createWorkflowAppRunHandoff",
+      "required": ["outcome"],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": ["accepted", "refused"]
+        },
+        "runId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "refusal": {
+          "type": "object",
+          "required": ["code", "message", "retryable"],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflow_handoff_run_cancel": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/workflow/api/handoff-run-service.ts cancelHandoffRun",
+      "required": ["runId", "found", "cancelled", "mode"],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "found": {
+          "type": "boolean"
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflow_handoff_run_get": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/workflow/api/handoff-run-service.ts getHandoffRun",
+      "required": ["run"],
+      "properties": {
+        "run": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "x-cognia-opaque-reason": "A run view is owned by the workflow domain (WorkflowApiRunView) and versioned with it; this plane owns the handoff envelope around it, which is typed here."
+        },
+        "usage": {
+          "type": "object",
+          "required": ["tokens", "costUsd", "costKnown"],
+          "properties": {
+            "tokens": {
+              "type": "number",
+              "minimum": 0
+            },
+            "costUsd": {
+              "type": "number",
+              "minimum": 0
+            },
+            "costKnown": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "events": {
+          "type": "object",
+          "required": ["events", "terminal"],
+          "properties": {
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "x-cognia-opaque-reason": "A run event view is owned by the workflow domain (WorkflowApiEventView) and versioned with it; this plane owns the page envelope around it, which is typed here."
+              }
+            },
+            "terminal": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "disclosure": {
+          "type": "object",
+          "required": ["outcome"],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": ["allow", "withhold"]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "persons": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "x-cognia-opaque-reason": "A principal reference is owned by the identity plane (PrincipalRefV1) and versioned with it."
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "workflow_human_input_list": {
       "$ref": "#/$defs/WorkflowHumanInputList"
     },
@@ -21338,6 +21463,45 @@
       },
       "additionalProperties": false
     },
+    "workflow_preview_run": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/workflow/remote/host-commands.ts startWorkflowPreviewRun",
+      "required": ["runId"],
+      "properties": {
+        "runId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflow_run_events_list": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/workflow/remote/host-commands.ts listWorkflowRunEventsPage",
+      "required": ["run", "events", "nextSequence", "terminal"],
+      "properties": {
+        "run": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "x-cognia-opaque-reason": "The run row is owned by the workflow domain and versioned with it; this plane owns the page envelope around it, which is typed here."
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "x-cognia-opaque-reason": "A run event row is owned by the workflow domain and versioned with it; this plane owns the page envelope around it, which is typed here."
+          }
+        },
+        "nextSequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminal": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "workflow_run_list": {
       "$ref": "#/$defs/WorkflowRunList"
     },
@@ -21351,7 +21515,38 @@
       "$ref": "#/$defs/LegacyResult"
     },
     "workflow_trigger_manual": {
-      "$ref": "#/$defs/LegacyResult"
+      "x-cognia-wire-source": "lib/workflow/remote/host-commands.ts triggerPublishedWorkflowRun",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "runId"],
+          "properties": {
+            "status": {
+              "const": "admitted"
+            },
+            "runId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["status", "dispatchId", "targetRef"],
+          "properties": {
+            "status": {
+              "const": "handed_off"
+            },
+            "dispatchId": {
+              "type": "string"
+            },
+            "targetRef": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "workflow_update": {
       "$ref": "#/$defs/LegacyRecord"

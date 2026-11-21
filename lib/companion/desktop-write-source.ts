@@ -114,7 +114,7 @@ import { enqueueIngestJob, registerTwinSource } from "@/lib/twin/ingest"
 import { stageFile } from "@/lib/twin/ingest/stage"
 import { reviewTwinDraft } from "@/lib/twin/review-draft"
 import { removeTwin, removeTwinSource } from "@/lib/twin/lifecycle"
-import { dispatchTrigger, isTriggerEvent } from "@/lib/workflow/runtime/trigger-bridge"
+import { isTriggerEvent } from "@/lib/workflow/runtime/trigger-bridge"
 import { isCapabilityId } from "@/lib/platform/capabilities"
 import { recordDeviceCapabilities } from "@/lib/db/paired-devices"
 import {
@@ -125,7 +125,11 @@ import {
   type WorkflowDraft,
   type WorkflowPatch,
 } from "@/lib/db/workflows"
-import { createWorkflowSource } from "@/lib/scheduler/sources/workflow-source"
+import {
+  createWorkflowSource,
+  listWorkflowSchedules,
+} from "@/lib/scheduler/sources/workflow-source"
+import { workflowScheduleSourceId } from "@/lib/scheduler/sources/workflow-schedule-id"
 import { dispatchScheduledTaskRpc, isScheduledTaskRpc } from "@/lib/scheduler/scheduled-task-rpc"
 import { createTwin, type TwinInput } from "@/lib/db/twins"
 import {
@@ -628,8 +632,30 @@ export async function dispatchCommand(
       return workflowPlacementProbe(payload)
     case "workflow_handoff_create":
       return workflowHandoffCreate(payload)
+    // A Workflow App run another Host admitted and placed here, and that
+    // Host's reads and cancel of the runs it handed over (ADR-0136 placement).
+    case "workflow_app_handoff_create":
+      return workflowAppHandoffCreate(payload)
+    case "workflow_handoff_run_get":
+      return workflowHandoffRunGet(payload)
+    case "workflow_handoff_run_cancel":
+      return workflowHandoffRunCancel(payload)
     case "workflow_trigger_manual":
       return workflowTriggerManual(payload)
+    // A paired editor's Run / Run from here / Run only this node: a preview
+    // of THIS Host's saved draft, answered with its run id (WF-10, WF-15).
+    case "workflow_preview_run":
+      return workflowPreviewRun(payload)
+    // A paired run detail's step events, one page at a time (WF-23). They
+    // stay on this Host; companion sync never carries them.
+    case "workflow_run_events_list": {
+      const { listWorkflowRunEventsPage } = await import("@/lib/workflow/remote/host-commands")
+      return listWorkflowRunEventsPage({
+        runId: payload.runId,
+        afterSequence: payload.afterSequence,
+        limit: payload.limit,
+      })
+    }
     // Durable workflow approval gates (ADR-0061 P2). Host-split by design:
     // a Tauri host answers these natively from the Rust waitpoint mirror the
     // renderer writes through, so a paired device can decide while the WebView
@@ -2553,26 +2579,48 @@ async function connectorSend(payload: Record<string, unknown>): Promise<{ messag
   return { messageId: id }
 }
 
-/** Trigger a workflow run manually from the mobile shell. Routes through the
- *  same orchestrator path the desktop UI / cron daemon use. The trigger
- *  `kind` matches the canonical workflow-node identifier `"trigger.manual"`
- *  declared in `types/workflow/visual.ts:WorkflowNodeKind`. */
-async function workflowTriggerManual(payload: Record<string, unknown>): Promise<null> {
+/** Run the PUBLISHED workflow from a paired device (the library's Run).
+ *  A formal run through the placed admission path, answered on admission
+ *  with its run id, or with the handoff when placement chose another Host.
+ *  Refusals (not deployed, schema violation, capacity) are thrown as
+ *  `workflow_run_rejected`, so the device's queue gives up and says why;
+ *  this used to go through the trigger bridge, which treats an undeployed
+ *  event as "nothing to do", and the queue marked a run sent that never was. */
+async function workflowTriggerManual(payload: Record<string, unknown>): Promise<unknown> {
   const workflowId = payload.workflowId as string | undefined
   if (!workflowId) throw new Error("workflow_trigger_manual.workflowId is required")
   // `callerDeviceId` is injected by the Rust RPC layer from the verified
   // verified DPoP device context (ADR-0060) — never trusted from the raw client payload.
   const deviceId = payload.callerDeviceId as string | undefined
-  await dispatchTrigger(
-    {
-      workflowId,
-      kind: "trigger.manual",
-      payload: payload.input ?? null,
-      originAt: Date.now(),
-    },
-    { triggeredBy: { source: "api", ...(deviceId ? { deviceId } : {}) } }
-  )
-  return null
+  const { triggerPublishedWorkflowRun } = await import("@/lib/workflow/remote/host-commands")
+  return triggerPublishedWorkflowRun({
+    workflowId,
+    input: payload.input ?? null,
+    triggeredBy: { source: "api", ...(deviceId ? { deviceId } : {}) },
+  })
+}
+
+/** Start a draft preview of this Host's saved copy for a paired editor. The
+ *  device is watching (it answers the run's approvals from its pending list),
+ *  so the run is interactive: `ui`, stamped with the verified device. */
+async function workflowPreviewRun(payload: Record<string, unknown>): Promise<{ runId: string }> {
+  const workflowId = payload.workflowId
+  if (typeof workflowId !== "string" || !workflowId) {
+    throw new Error("workflow_preview_run.workflowId is required")
+  }
+  const mode = payload.mode
+  if (mode !== "full" && mode !== "from-step" && mode !== "single-step") {
+    throw new Error("workflow_preview_run.mode must be full, from-step or single-step")
+  }
+  const stepId = typeof payload.stepId === "string" && payload.stepId ? payload.stepId : undefined
+  const deviceId = callerDeviceIdFor("workflow_preview_run", payload)
+  const { startWorkflowPreviewRun } = await import("@/lib/workflow/remote/host-commands")
+  return startWorkflowPreviewRun({
+    workflowId,
+    mode,
+    ...(stepId ? { stepId } : {}),
+    triggeredBy: { source: "ui", deviceId },
+  })
 }
 
 async function workflowPlacementProbe(payload: Record<string, unknown>): Promise<unknown> {
@@ -2615,9 +2663,116 @@ async function workflowHandoffCreate(payload: Record<string, unknown>): Promise<
     scopes: ["workflow:run", "workflow:read"],
     idempotencyKey,
     trigger: payload.trigger,
-    triggeredBy: { source: "api", deviceId: callerDeviceId },
+    // A handoff is a placed trigger occurrence (entrypoint "trigger"), so it
+    // keeps the automatic origin it had on the Host that received it. Labeling
+    // it "api" made the risk gate fail closed here while the same occurrence
+    // run locally on the sender was gated as a "trigger" run.
+    triggeredBy: { source: "trigger", deviceId: callerDeviceId },
     input: payload.trigger.payload,
   })
+}
+
+/** Admit a Workflow App run another Host already admitted and placed here.
+ *  The caller is the RPC-injected `callerDeviceId` (never the payload's), and
+ *  only that Host may read or cancel the run afterwards. */
+async function workflowAppHandoffCreate(payload: Record<string, unknown>): Promise<unknown> {
+  const callerDeviceId = callerDeviceIdFor("workflow_app_handoff_create", payload)
+  const { callerDeviceId: _caller, ...request } = payload
+  const { isWorkflowAppRunHandoffBinding, isWorkflowAppRunHandoffRunPayload } =
+    await import("@/lib/workflow/runtime/app-run-handoff")
+  const idempotencyKey = request.idempotencyKey
+  const runId = request.runId
+  if (typeof idempotencyKey !== "string" || !idempotencyKey) {
+    throw new Error("workflow_app_handoff_create.idempotencyKey is required")
+  }
+  if (typeof runId !== "string" || !runId) {
+    throw new Error("workflow_app_handoff_create.runId is required")
+  }
+  if (!isWorkflowAppRunHandoffBinding(request)) {
+    throw new Error("workflow_app_handoff_create binding is invalid")
+  }
+  if (!isWorkflowAppRunHandoffRunPayload(request.payload)) {
+    throw new Error("workflow_app_handoff_create.payload is invalid")
+  }
+  if (
+    request.initiator !== undefined &&
+    (!request.initiator ||
+      typeof request.initiator !== "object" ||
+      Array.isArray(request.initiator))
+  ) {
+    throw new Error("workflow_app_handoff_create.initiator is invalid")
+  }
+  const { createWorkflowAppRunHandoff } = await import("@/lib/workflow/api/handoff-run-service")
+  return createWorkflowAppRunHandoff({
+    accountId: getActiveAccountId(),
+    callerDeviceId,
+    request: {
+      ...request,
+      idempotencyKey,
+      runId,
+      payload: request.payload,
+    } as import("@/lib/workflow/runtime/app-run-handoff").WorkflowAppHandoffCreateRequest,
+  })
+}
+
+/** A Host's read of a run it handed over: status, usage, and optionally an
+ *  event page and a disclosure verdict made where the run's taint lives. */
+async function workflowHandoffRunGet(payload: Record<string, unknown>): Promise<unknown> {
+  const callerDeviceId = callerDeviceIdFor("workflow_handoff_run_get", payload)
+  const runId = payload.runId
+  if (typeof runId !== "string" || !runId) {
+    throw new Error("workflow_handoff_run_get.runId is required")
+  }
+  const afterSequence = payload.afterSequence
+  if (
+    afterSequence !== undefined &&
+    (typeof afterSequence !== "number" || !Number.isSafeInteger(afterSequence) || afterSequence < 0)
+  ) {
+    throw new Error("workflow_handoff_run_get.afterSequence must be a non-negative integer")
+  }
+  const limit = payload.limit
+  if (
+    limit !== undefined &&
+    (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1)
+  ) {
+    throw new Error("workflow_handoff_run_get.limit must be a positive integer")
+  }
+  const disclosure = payload.disclosure as { payload?: unknown; label?: unknown } | undefined
+  if (
+    disclosure !== undefined &&
+    (typeof disclosure?.payload !== "string" || typeof disclosure.label !== "string")
+  ) {
+    throw new Error("workflow_handoff_run_get.disclosure must carry a payload and a label")
+  }
+  const { getHandoffRun } = await import("@/lib/workflow/api/handoff-run-service")
+  return getHandoffRun({
+    accountId: getActiveAccountId(),
+    callerDeviceId,
+    request: {
+      runId,
+      ...(afterSequence !== undefined ? { afterSequence } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(disclosure
+        ? {
+            disclosure: {
+              payload: disclosure.payload as string,
+              label: disclosure.label as string,
+            },
+          }
+        : {}),
+    },
+  })
+}
+
+/** A Host's cancel of a run it handed over. */
+async function workflowHandoffRunCancel(payload: Record<string, unknown>): Promise<unknown> {
+  const callerDeviceId = callerDeviceIdFor("workflow_handoff_run_cancel", payload)
+  const runId = payload.runId
+  if (typeof runId !== "string" || !runId) {
+    throw new Error("workflow_handoff_run_cancel.runId is required")
+  }
+  const { cancelHandoffRun } = await import("@/lib/workflow/api/handoff-run-service")
+  return cancelHandoffRun({ accountId: getActiveAccountId(), callerDeviceId, runId })
 }
 
 /** Read-only projection of the pending workflow-approval registry (ADR-0061). */
@@ -2935,24 +3090,39 @@ async function twinIngestSource(payload: Record<string, unknown>): Promise<{ job
 // Workflow CRUD (Wave 4.1)
 // ---------------------------------------------------------------------------
 
+/** Top-level `null` means "cleared": JSON cannot carry `undefined`, and an
+ *  absent key in a patch means "keep the Host's value" (see
+ *  `lib/workflow/remote/host-writes.ts`). */
+function withClearedFields<T extends object>(value: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, field] of Object.entries(value)) out[key] = field === null ? undefined : field
+  return out as T
+}
+
 async function workflowCreate(payload: Record<string, unknown>): Promise<{ workflow: unknown }> {
   const draft = payload.draft as WorkflowDraft | undefined
   if (!draft || typeof draft !== "object") {
     throw new Error("workflow_create.draft is required")
   }
-  const workflow = await createWorkflow(draft)
+  // A paired client created the row in its mirror under this id; the Host
+  // creates the same row, or every later save points at nothing.
+  const id = typeof payload.id === "string" && payload.id ? payload.id : undefined
+  const workflow = await createWorkflow(withClearedFields(draft), id ? { id } : {})
   return { workflow }
 }
 
-async function workflowUpdate(payload: Record<string, unknown>): Promise<null> {
+async function workflowUpdate(payload: Record<string, unknown>): Promise<{ workflow: unknown }> {
   const id = payload.id as string | undefined
   const patch = payload.patch as WorkflowPatch | undefined
   if (!id) throw new Error("workflow_update.id is required")
   if (!patch || typeof patch !== "object") {
     throw new Error("workflow_update.patch is required")
   }
-  await updateWorkflow(id, patch)
-  return null
+  const workflow = await updateWorkflow(id, withClearedFields(patch))
+  // A missing row used to answer `null` as success, so the device's queue
+  // marked the save delivered while the Host kept nothing.
+  if (!workflow) throw new Error(`workflow_update: workflow ${id} not found`)
+  return { workflow }
 }
 
 async function workflowDelete(payload: Record<string, unknown>): Promise<null> {
@@ -2985,15 +3155,33 @@ async function workflowScheduleSet(
   payload: Record<string, unknown>,
   enabled: boolean
 ): Promise<null> {
+  const command = `workflow_schedule_${enabled ? "resume" : "pause"}`
   const triggerId = payload.triggerId as string | undefined
-  if (!triggerId) {
-    throw new Error(`workflow_schedule_${enabled ? "resume" : "pause"}.triggerId is required`)
+  const workflowId = payload.workflowId as string | undefined
+  if (!triggerId) throw new Error(`${command}.triggerId is required`)
+  // A pause is an override on the PUBLISHED trigger (WF-07). A caller that
+  // sends only the node id is resolved against the published schedules, and
+  // refused when that is ambiguous (copied workflows keep their node ids).
+  const published = (await listWorkflowSchedules()).filter(
+    (entry) =>
+      entry.published &&
+      entry.triggerId === triggerId &&
+      (workflowId === undefined || entry.workflowId === workflowId)
+  )
+  if (published.length === 0) {
+    throw new Error(
+      `${command}: no published schedule ${triggerId} to ${enabled ? "resume" : "pause"}`
+    )
+  }
+  if (published.length > 1) {
+    throw new Error(`${command}: trigger ${triggerId} is ambiguous; send its workflowId`)
   }
   const source = createWorkflowSource()
+  const sourceId = workflowScheduleSourceId(published[0].workflowId, triggerId)
   if (enabled) {
-    await source.resume(triggerId)
+    await source.resume(sourceId)
   } else {
-    await source.pause(triggerId)
+    await source.pause(sourceId)
   }
   return null
 }

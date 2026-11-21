@@ -264,6 +264,9 @@ describe("host feature manifest", () => {
         operations: [
           "workflow_placement_probe",
           "workflow_handoff_create",
+          "workflow_app_handoff_create",
+          "workflow_handoff_run_get",
+          "workflow_handoff_run_cancel",
           "workflow_run_list",
           "workflow_cancel_run",
         ],
@@ -402,6 +405,15 @@ describe("host feature manifest", () => {
     expect(manifest.features["ocr.server"]?.operations).toContain("ocr_extract_native")
     expect(manifest.features["notifications.remote"]?.operations).not.toContain(
       "event:automation:consent-request"
+    )
+    // A headless Host publishes human-input frames like approvals, so it
+    // advertises them alongside.
+    expect(manifest.features["notifications.remote"]?.operations).toEqual(
+      expect.arrayContaining([
+        "event:workflow://approval-request",
+        "event:workflow://human-input-request",
+        "event:workflow://human-input-resolved",
+      ])
     )
     expect(manifest.features["workspace.files"]?.operations).toContain("fs_write_workspace_file")
     expect(manifest.features["workspace.files"]?.operations).toContain(

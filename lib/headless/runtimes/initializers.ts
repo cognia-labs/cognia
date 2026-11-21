@@ -139,7 +139,17 @@ registerHeadlessRuntime({
         )
       }
       try {
-        await resumeInFlightRuns()
+        // Dispatches the replays and returns; the runtime's start must not wait
+        // for a resumed run that may block on a human for hours.
+        const resumeStop = new AbortController()
+        cleanups.push(() => resumeStop.abort())
+        const { settled, ...summary } = await resumeInFlightRuns({ signal: resumeStop.signal })
+        if (summary.attempted > 0) {
+          ctx.log("info", `workflow resume: ${JSON.stringify(summary)}`)
+          void settled.then((outcome) =>
+            ctx.log("info", `workflow resume settled: ${JSON.stringify(outcome)}`)
+          )
+        }
       } catch (error) {
         ctx.log(
           "warn",

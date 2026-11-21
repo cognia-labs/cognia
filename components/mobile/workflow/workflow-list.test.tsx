@@ -7,8 +7,6 @@ import type { WorkflowRow } from "@/types/workflow/visual"
 import { ROOT_FOLDER_ID } from "@/types/workflow/folder"
 import { DEFAULT_WORKFLOW_FILTERS, useWorkflowLibraryStore } from "@/stores/workflow"
 
-import { enqueueUnlessQueued } from "@/lib/db/mobile-outbound-queue"
-import { toast } from "sonner"
 
 import { WorkflowList } from "./workflow-list"
 
@@ -54,8 +52,9 @@ jest.mock("@/lib/db/schema", () => ({
 }))
 
 jest.mock("@/lib/sync/companion-sync", () => ({ runSyncDown: jest.fn(async () => {}) }))
-jest.mock("@/lib/db/mobile-outbound-queue", () => ({
-  enqueueUnlessQueued: jest.fn(async () => ({ row: {}, alreadyQueued: false })),
+const runFromLibrary = jest.fn(async (_workflow: unknown) => null)
+jest.mock("./use-library-run", () => ({
+  useLibraryRun: () => runFromLibrary,
 }))
 jest.mock("sonner", () => ({
   toast: { success: jest.fn(), message: jest.fn(), error: jest.fn() },
@@ -121,8 +120,8 @@ jest.mock("@/stores/settings", () => ({
 }))
 
 jest.mock("./trigger-button", () => ({
-  TriggerButton: ({ workflowId }: { workflowId: string }) => (
-    <button type="button" data-testid={`trigger-${workflowId}`}>
+  TriggerButton: ({ workflow }: { workflow: { id: string } }) => (
+    <button type="button" data-testid={`trigger-${workflow.id}`}>
       Run
     </button>
   ),
@@ -299,24 +298,16 @@ describe("<WorkflowList />", () => {
     expect(badge).toHaveTextContent("queuedBadge")
   })
 
-  it("queues a swipe Run once, labelled, and says so when it is already queued", async () => {
-    const enqueueMock = jest.mocked(enqueueUnlessQueued)
-    enqueueMock.mockClear()
+  // The swipe is the row's Run, not a second copy of it: what it queues (and
+  // that an unpublished workflow is not queued) is `useLibraryRun`'s.
+  it("runs the swiped workflow through the library Run", async () => {
+    runFromLibrary.mockClear()
     pushQueries({ workflows: [wf("a", "Alpha")] })
     render(<WorkflowList />)
     fireEvent.click(screen.getByTestId("swipe-action-run"))
     await waitFor(() =>
-      expect(enqueueMock).toHaveBeenCalledWith({
-        command: "workflow_trigger_manual",
-        payload: { workflowId: "a" },
-        label: "Alpha",
-      })
+      expect(runFromLibrary).toHaveBeenCalledWith(expect.objectContaining({ id: "a", name: "Alpha" }))
     )
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("swipe.runQueued"))
-
-    enqueueMock.mockResolvedValueOnce({ row: {} as never, alreadyQueued: true })
-    fireEvent.click(screen.getByTestId("swipe-action-run"))
-    await waitFor(() => expect(toast.message).toHaveBeenCalledWith("swipe.runAlreadyQueued"))
   })
 
   it("prefers the Active badge over Sending when a run is already live", () => {

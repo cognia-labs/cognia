@@ -108,7 +108,7 @@ Tool/capability **存在感**是主要信号;关键词集是粗略的次级，�
 
 工作流程是一个DAG，每个节点都做着一项具体的事情，因此节点**类型是证据**——比名单或目标更强大。`action.desktop.performAction`不仅能接触机器;它执行修订绑定的UI突变。因此，`node-risk.ts`将类型直接映射到接口（`RISKY_NODE_KINDS`，详尽`Record`），只重复使用严重性表，因此节点的等级和名单的等级仍然含义相同。
 
-`risk-gate.ts`在编排器中的每一步之前运行，并且**不发明新的门禁**：它重用`action.approval.request`自己的机制（`registerPendingApproval` + a `step.long_running.checkpoint` + `subscribeWake`），因此自动门禁在崩溃后恢复，就像作者自设的批准节点一样，并且同样的待批准UI回答它。三条规则：当批准节点是传递祖先（`ancestorsOf`，重用自`run-single-node.ts`）时去重复处理;默认拒绝在无头触发器上;绝不要碰低风险节点。
+`risk-gate.ts`在编排器中的每一步之前运行，并且**不发明新的门禁**：它重用`action.approval.request`自己的机制（`registerPendingApproval` + a `step.long_running.checkpoint` + `subscribeWake`），因此自动门禁在崩溃后恢复，就像作者自设的批准节点一样，并且同样的待批准UI回答它。三条规则：只有上游批准节点（`gatingAncestorsOf`：图上的祖先，加上外层循环容器及其祖先）在本次执行范围内实际运行并获批准时才去重——被拒绝、超时或被跳过的批准不门控任何节点，循环内每次迭代单独询问（循环体自行应用门控，批准 ID 带有该迭代的 `stepKey`）；无人值守的运行（`im`、`api`、`schedule`、`bot` 以及自动触发来源 `trigger`）默认拒绝；绝不要碰低风险节点。截止时间过后仍以 waitpoint 行为准：按时保存的决定在延迟续跑时依然有效，截止后才到达的决定被拒绝（`expired`）。
 
 ### 分类判断
 

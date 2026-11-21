@@ -186,7 +186,7 @@
       "export": "Export",
       "filter": "Filter versions",
       "filterPlaceholder": "Filter by name, notes, author, or ID",
-      "hint": "Publish this workflow as a typed callable unit — an agent tool, a typed sub-workflow target, and a skill. Save the workflow first. Declare its interface with the Manual trigger's input schema and an Output node.",
+      "hint": "Publish this workflow as a typed callable unit — an agent tool, a typed sub-workflow target, and a skill. Unsaved edits are saved first, and the saved workflow is what gets published. Declare its interface with the Manual trigger's input schema and an Output node.",
       "publish": "Publish",
       "publishedAs": "Published as tool",
       "releaseNotes": "Release notes",
@@ -204,7 +204,11 @@
       "versionName": "Version name",
       "versionNamePlaceholder": "e.g. August production baseline",
       "noVersions": "No versions match this filter.",
-      "versionRow": "v{sequence} · {date}"
+      "versionRow": "v{sequence} · {date}",
+      "blockedByProblems": "Publishing is blocked by {count, plural, one {# problem} other {# problems}} in this workflow. Fix them in the Problems panel, then publish again.",
+      "changedWhileSaving": "The workflow changed while it was being saved, so nothing was published. Save again, then publish.",
+      "notPublished": "Not published. Earlier versions stay available below.",
+      "publishVersion": "Publish this version"
     },
     "retry": {
       "attempts": "Attempts",

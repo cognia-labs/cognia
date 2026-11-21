@@ -26,6 +26,7 @@ import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 
 import { registerNotificationCommand } from "@/lib/notifications/action-registry"
 import { emitCompanionEvent } from "./companion-run-events"
+import { workflowRunHref } from "@/lib/workflow/runs/run-href"
 import { respondToApproval, type ApprovalDecision, type PendingApproval } from "./approval-registry"
 
 export const APPROVAL_REQUEST_CHANNEL = "workflow://approval-request"
@@ -79,7 +80,7 @@ export async function notifyApprovalRequested(
         level: "warning",
         title: `Approval requested: ${entry.title}`,
         ...(entry.message ? { body: entry.message } : {}),
-        href: `/workflows/${entry.workflowId}/runs/${entry.runId}`,
+        href: workflowRunHref(entry.workflowId, entry.runId),
         dedupeKey: entry.approvalId,
         directed: true,
         sourceRef: { kind: "workflow-approval", id: entry.approvalId },

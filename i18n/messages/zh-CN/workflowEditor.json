@@ -186,7 +186,7 @@
       "export": "导出",
       "filter": "筛选版本",
       "filterPlaceholder": "按名称、说明、作者或 ID 筛选",
-      "hint": "把该工作流发布为类型化可调用单元——agent 工具、类型化子工作流目标、技能。请先保存工作流。用「手动触发」的输入结构与「输出」节点声明其接口。",
+      "hint": "把该工作流发布为类型化可调用单元——agent 工具、类型化子工作流目标、技能。未保存的改动会先保存，发布的是已保存的工作流。用「手动触发」的输入结构与「输出」节点声明其接口。",
       "publish": "发布",
       "publishedAs": "已发布为工具",
       "releaseNotes": "发布说明",
@@ -204,7 +204,11 @@
       "versionName": "版本名称",
       "versionNamePlaceholder": "例如：8 月生产基线",
       "noVersions": "没有符合筛选条件的版本。",
-      "versionRow": "v{sequence} · {date}"
+      "versionRow": "v{sequence} · {date}",
+      "blockedByProblems": "工作流中有 {count} 个问题阻止发布。请在「问题」面板中修复后再发布。",
+      "changedWhileSaving": "保存期间工作流又有改动，本次未发布。请再次保存后再发布。",
+      "notPublished": "未发布。以下仍可查看历史版本。",
+      "publishVersion": "发布此版本"
     },
     "retry": {
       "attempts": "次数",

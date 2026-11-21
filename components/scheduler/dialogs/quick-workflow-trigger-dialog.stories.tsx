@@ -7,10 +7,11 @@ import {
 } from "./quick-workflow-trigger-dialog"
 
 // `QuickWorkflowTriggerDialog` adds a `trigger.cron` node to an existing
-// workflow without opening the full editor. It reads the workflow list via
-// Dexie `useLiveQuery`, but accepts `db` / `syncFn` / `newNodeId` injection
-// hooks (used by tests) — so stories pass a deterministic in-memory `db` stub
-// and a spy `syncFn` instead of touching IndexedDB. Rendered `open`.
+// workflow's draft without opening the full editor. It reads the workflow list
+// via Dexie `useLiveQuery`, but accepts `db` / `saveDraft` / `newNodeId`
+// injection hooks (used by tests) — so stories pass a deterministic in-memory
+// `db` stub and a spy `saveDraft` instead of touching IndexedDB. Rendered
+// `open`.
 type DbStub = NonNullable<QuickWorkflowTriggerDialogProps["db"]>
 
 function makeDbStub(workflows: Array<{ id: string; name: string }>): DbStub {
@@ -18,10 +19,6 @@ function makeDbStub(workflows: Array<{ id: string; name: string }>): DbStub {
     workflows: {
       toArray: async () => workflows,
       get: async (id: string) => workflows.find((w) => w.id === id),
-      put: async () => undefined,
-    },
-    workflowTriggers: {
-      put: async () => undefined,
     },
   } as unknown as DbStub
 }
@@ -42,7 +39,7 @@ const meta = {
     open: true,
     onOpenChange: fn(),
     onCreated: fn(),
-    syncFn: fn(async () => {}),
+    saveDraft: fn(async () => undefined),
     newNodeId: () => "trigger_story_fixed",
   },
 } satisfies Meta<typeof QuickWorkflowTriggerDialog>

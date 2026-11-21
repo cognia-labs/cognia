@@ -1,34 +1,41 @@
 /**
- * Workflow-source adapter: surfaces every row in the `workflowTriggers`
- * Dexie table as a unified scheduled item.
+ * Workflow-source adapter: surfaces every workflow cron schedule as a unified
+ * scheduled item.
  *
- * Read parity is full. Mutations are scoped:
+ * The list is DERIVED, never a second store (WF-07):
  *
- *   - `pause` / `resume` — flip `enabled` on the row AND on the trigger node
- *     inside the parent workflow's snapshot (so the next workflow save
- *     doesn't revert the change). The Rust `cron_daemon` re-syncs via
- *     `syncWorkflowTriggers` after the write.
+ *   - every enabled `trigger.cron` node of each workflow's ACTIVE production
+ *     version — what the native cron daemon actually fires, whether the
+ *     workflow was published from the editor or scheduled from here;
+ *   - plus every enabled cron node that exists only in a workflow's draft,
+ *     listed as awaiting publish (it cannot fire until a publish ships it).
+ *
+ * It used to list the `workflowTriggers` table, which only the Scheduler's own
+ * quick-add ever wrote: a schedule published from the editor never showed up,
+ * and a quick-added one showed as active while admission refused it.
+ *
+ * Mutations:
+ *
+ *   - `pause` / `resume` — a runtime override on the published trigger
+ *     (`lib/workflow/runtime/trigger-pauses.ts`). It never edits the draft
+ *     graph or a version, and every projection (publish, rollback, boot
+ *     reconcile) keeps honouring it.
  *   - `runNow` — invoke the active deployment through `ExecutionAuthority`
  *     with a synthetic `manual` trigger payload.
  *   - `create` / `update` / `delete` — NOT supported at this layer. The
- *     canonical write path is the workflow editor; the UI deep-links to
- *     `/workflows/<id>` when the user wants to add or remove a trigger node.
- *
- * Capabilities reflect that scope so the UI hides the disabled actions
- * automatically.
+ *     canonical write path is the workflow editor (and the quick-add dialog
+ *     for a new draft cron node); the UI deep-links to the editor.
  */
 
 import Dexie from "dexie"
+import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { getDb } from "@/lib/db/schema"
-import { syncWorkflowTriggers } from "@/lib/workflow/runtime/webhook-bridge"
 import { executeDeployedWorkflow } from "@/lib/workflow/runtime/execution-authority"
-import { assertWorkflowWritable } from "@/lib/workflow/definition/read-only"
-import type {
-  VisualWorkflow,
-  WorkflowNode,
-  WorkflowRunRow,
-  WorkflowTriggerRow,
-} from "@/types/workflow/visual"
+import {
+  isWorkflowTriggerPaused,
+  setWorkflowTriggerPaused,
+} from "@/lib/workflow/runtime/trigger-pauses"
+import type { VisualWorkflow, WorkflowNode, WorkflowRunRow } from "@/types/workflow/visual"
 import {
   makeUnifiedId,
   type UnifiedScheduledItem,
@@ -39,7 +46,9 @@ import type {
   ScheduledItemSourceObserver,
   ScheduledItemSubscription,
 } from "./types"
+import { getNextCronTime } from "@/lib/scheduler/cron-parser"
 import { toUnifiedFromWorkflowRun } from "./run-mappers"
+import { parseWorkflowScheduleSourceId, workflowScheduleSourceId } from "./workflow-schedule-id"
 
 export class WorkflowSourceWriteNotSupportedError extends Error {
   constructor(action: string) {
@@ -50,16 +59,102 @@ export class WorkflowSourceWriteNotSupportedError extends Error {
   }
 }
 
-interface WorkflowSourceDb {
-  workflowTriggers: {
-    toArray(): Promise<WorkflowTriggerRow[]>
-    get(id: string): Promise<WorkflowTriggerRow | undefined>
-    update(id: string, changes: Partial<WorkflowTriggerRow>): Promise<number>
+/** One workflow cron schedule as the Scheduler shows it. */
+export interface WorkflowScheduleEntry {
+  workflowId: string
+  workflowName?: string
+  triggerId: string
+  cron: string
+  timezone?: string
+  /** In the active deployment's version (it fires), or only in the draft. */
+  published: boolean
+  /** Operator pause override on the published trigger. */
+  paused: boolean
+}
+
+function cronNodes(nodes: readonly WorkflowNode[]): WorkflowNode[] {
+  return nodes.filter((node) => node.type === "trigger.cron" && !node.data.disabled)
+}
+
+function cronParams(node: WorkflowNode): { cron: string; timezone?: string } {
+  const params = (node.data.params ?? {}) as { cron?: unknown; timezone?: unknown }
+  return {
+    cron: typeof params.cron === "string" ? params.cron.trim() : "",
+    ...(typeof params.timezone === "string" && params.timezone.trim()
+      ? { timezone: params.timezone.trim() }
+      : {}),
   }
-  workflows: {
-    get(id: string): Promise<VisualWorkflow | undefined>
-    put(workflow: VisualWorkflow): Promise<unknown>
+}
+
+/**
+ * Derive every schedule from the active deployments and the draft rows. Under
+ * `Dexie.liveQuery` this observes `workflowDeployments`, `workflowVersions`
+ * and `workflows`, so a publish, an unpublish, a rollback, a draft save or a
+ * pause all re-emit.
+ */
+export async function listWorkflowSchedules(): Promise<WorkflowScheduleEntry[]> {
+  const db = getDb()
+  const accountId = getActiveAccountId()
+  const [drafts, deployments] = await Promise.all([
+    db.workflows.toArray(),
+    db.workflowDeployments.where("status").equals("active").toArray(),
+  ])
+  const live = deployments.filter(
+    (deployment) => deployment.accountId === accountId && deployment.environment === "production"
+  )
+  const versions = await db.workflowVersions.bulkGet(live.map((deployment) => deployment.versionId))
+  const deployedDefinitions = new Map<string, VisualWorkflow>()
+  live.forEach((deployment, index) => {
+    const version = versions[index]
+    if (
+      version &&
+      version.workflowId === deployment.workflowId &&
+      version.accountId === accountId
+    ) {
+      deployedDefinitions.set(deployment.workflowId, version.definition)
+    }
+  })
+  return deriveWorkflowSchedules(drafts, deployedDefinitions)
+}
+
+/** The pure half of {@link listWorkflowSchedules}. */
+export function deriveWorkflowSchedules(
+  drafts: readonly VisualWorkflow[],
+  deployed: ReadonlyMap<string, VisualWorkflow>
+): WorkflowScheduleEntry[] {
+  const entries: WorkflowScheduleEntry[] = []
+  const draftsById = new Map(drafts.map((draft) => [draft.id, draft]))
+  const workflowIds = new Set([...draftsById.keys(), ...deployed.keys()])
+  for (const workflowId of [...workflowIds].sort()) {
+    const draft = draftsById.get(workflowId)
+    if (draft?.isTemplate || draft?.isBuiltIn) continue
+    const definition = deployed.get(workflowId)
+    const name = draft?.name ?? definition?.name
+    const publishedIds = new Set<string>()
+    for (const node of cronNodes(definition?.nodes ?? [])) {
+      publishedIds.add(node.id)
+      entries.push({
+        workflowId,
+        ...(name ? { workflowName: name } : {}),
+        triggerId: node.id,
+        ...cronParams(node),
+        published: true,
+        paused: isWorkflowTriggerPaused(draft, node.id),
+      })
+    }
+    for (const node of cronNodes(draft?.nodes ?? [])) {
+      if (publishedIds.has(node.id)) continue
+      entries.push({
+        workflowId,
+        ...(name ? { workflowName: name } : {}),
+        triggerId: node.id,
+        ...cronParams(node),
+        published: false,
+        paused: false,
+      })
+    }
   }
+  return entries
 }
 
 export interface WorkflowRunInput {
@@ -68,24 +163,28 @@ export interface WorkflowRunInput {
 }
 
 export interface WorkflowRawObservable {
-  subscribe(observer: { next(rows: WorkflowTriggerRow[]): void; error?(err: unknown): void }): {
+  subscribe(observer: { next(rows: WorkflowScheduleEntry[]): void; error?(err: unknown): void }): {
     unsubscribe(): void
   }
 }
 
 export interface WorkflowSourceDeps {
-  db?: WorkflowSourceDb
-  sync?: (workflow: VisualWorkflow) => Promise<void>
+  list?: () => Promise<WorkflowScheduleEntry[]>
+  setPaused?: (workflowId: string, triggerId: string, paused: boolean) => Promise<unknown>
   run?: (input: WorkflowRunInput) => Promise<unknown>
-  observe?: (querier: () => Promise<WorkflowTriggerRow[]>) => WorkflowRawObservable
+  observe?: (querier: () => Promise<WorkflowScheduleEntry[]>) => WorkflowRawObservable
   listRuns?: (limit: number) => Promise<WorkflowRunRow[]>
+  now?: () => number
 }
 
 export function createWorkflowSource(
   deps: WorkflowSourceDeps = {}
 ): ScheduledItemSource<never, Partial<{ enabled: boolean; cron: string }>> {
-  const db = deps.db ?? (getDb() as unknown as WorkflowSourceDb)
-  const sync = deps.sync ?? syncWorkflowTriggers
+  const list = deps.list ?? listWorkflowSchedules
+  const setPaused =
+    deps.setPaused ??
+    ((workflowId: string, triggerId: string, paused: boolean) =>
+      setWorkflowTriggerPaused(workflowId, triggerId, paused))
   const run =
     deps.run ??
     (async ({ workflowId, triggerId }) =>
@@ -103,36 +202,42 @@ export function createWorkflowSource(
   const listRuns =
     deps.listRuns ??
     ((limit: number) => getDb().workflowRuns.orderBy("startedAt").reverse().limit(limit).toArray())
+  const now = deps.now ?? Date.now
+  const toItem = (entry: WorkflowScheduleEntry) => toUnifiedTrigger(entry, now())
 
-  async function patchTriggerNode(
-    workflowId: string,
-    triggerId: string,
-    mutator: (node: WorkflowNode) => void
-  ): Promise<VisualWorkflow | undefined> {
-    const workflow = await db.workflows.get(workflowId)
-    if (!workflow) return undefined
-    const node = workflow.nodes.find((n) => n.id === triggerId)
-    if (!node) return workflow
-    mutator(node)
-    await db.workflows.put(workflow)
-    await sync(workflow)
-    return workflow
+  async function find(sourceId: string): Promise<WorkflowScheduleEntry | undefined> {
+    const key = parseWorkflowScheduleSourceId(sourceId)
+    if (!key) return undefined
+    return (await list()).find(
+      (entry) => entry.workflowId === key.workflowId && entry.triggerId === key.triggerId
+    )
+  }
+
+  /** A pause is an override on what runs: a draft-only schedule has nothing to pause. */
+  async function publishedOrThrow(sourceId: string): Promise<WorkflowScheduleEntry> {
+    const entry = await find(sourceId)
+    if (!entry) throw new Error(`Workflow trigger ${sourceId} was not found.`)
+    if (!entry.published) {
+      throw new Error(
+        `Workflow trigger ${sourceId} is not published yet; publish the workflow first.`
+      )
+    }
+    return entry
   }
 
   return {
     kind: "workflow",
 
     subscribe(observer: ScheduledItemSourceObserver): ScheduledItemSubscription {
-      const sub = observe(() => listTriggersWithNames(db)).subscribe({
-        next: (rows: WorkflowTriggerRow[]) => observer.next(rows.map(toUnifiedTrigger)),
+      const sub = observe(list).subscribe({
+        next: (rows: WorkflowScheduleEntry[]) => observer.next(rows.map(toItem)),
         error: (err: unknown) => observer.error?.(err),
       })
       return { unsubscribe: () => sub.unsubscribe() }
     },
 
     async list(): Promise<UnifiedScheduledItem[]> {
-      const rows = await listTriggersWithNames(db)
-      return rows.map(toUnifiedTrigger)
+      return (await list()).map(toItem)
     },
 
     async listRuns(limit) {
@@ -140,10 +245,8 @@ export function createWorkflowSource(
     },
 
     async get(sourceId: string): Promise<UnifiedScheduledItem | undefined> {
-      const row = await db.workflowTriggers.get(sourceId)
-      if (!row) return undefined
-      const workflow = await db.workflows.get(row.workflowId)
-      return toUnifiedTrigger({ ...row, workflowName: workflow?.name })
+      const entry = await find(sourceId)
+      return entry ? toItem(entry) : undefined
     },
 
     create(): Promise<UnifiedScheduledItem> {
@@ -151,28 +254,13 @@ export function createWorkflowSource(
     },
 
     async update(sourceId, input): Promise<void> {
-      const row = await db.workflowTriggers.get(sourceId)
-      if (!row) return
-      const changes: Partial<WorkflowTriggerRow> = {}
-      if (typeof input.enabled === "boolean") changes.enabled = input.enabled
-      if (typeof input.cron === "string") changes.cron = input.cron
-      if (Object.keys(changes).length === 0) return
-      // A workflow compiled from a playbook is read-only (ADR-0254). Refuse
-      // before the row write so a refused edit leaves row and node agreeing.
-      const workflow = await db.workflows.get(row.workflowId)
-      if (workflow) assertWorkflowWritable(workflow)
-      changes.updatedAt = Date.now()
-      await db.workflowTriggers.update(sourceId, changes)
-
-      // Keep the workflow node + Rust registry in sync.
-      await patchTriggerNode(row.workflowId, row.id, (node) => {
-        if (typeof input.enabled === "boolean") {
-          node.data.disabled = !input.enabled
-        }
-        if (typeof input.cron === "string") {
-          node.data.params = { ...(node.data.params ?? {}), cron: input.cron }
-        }
-      })
+      // The cron expression is part of the graph; editing it here would be a
+      // draft edit the running version never sees. Only the pause override
+      // is the Scheduler's to change.
+      if (typeof input.cron === "string") throw new WorkflowSourceWriteNotSupportedError("update")
+      if (typeof input.enabled !== "boolean") return
+      const entry = await publishedOrThrow(sourceId)
+      await setPaused(entry.workflowId, entry.triggerId, !input.enabled)
     },
 
     delete(): Promise<void> {
@@ -188,68 +276,53 @@ export function createWorkflowSource(
     },
 
     async runNow(sourceId: string): Promise<void> {
-      const row = await db.workflowTriggers.get(sourceId)
       // Returning quietly here read as "it ran" to every caller.
-      if (!row) throw new Error(`Workflow trigger ${sourceId} was not found.`)
-      await run({ workflowId: row.workflowId, triggerId: sourceId })
+      const entry = await publishedOrThrow(sourceId)
+      await run({ workflowId: entry.workflowId, triggerId: entry.triggerId })
     },
   }
 }
 
-/** A trigger row with its workflow's name resolved, so the list can say "Deploy" rather than an id. */
-export type WorkflowTriggerRowWithName = WorkflowTriggerRow & { workflowName?: string }
-
-/**
- * Every trigger with its workflow's name. One `workflows.get` per distinct
- * workflow; under `Dexie.liveQuery` both tables are tracked, so a renamed
- * workflow re-emits.
- */
-async function listTriggersWithNames(db: WorkflowSourceDb): Promise<WorkflowTriggerRowWithName[]> {
-  const rows = await db.workflowTriggers.toArray()
-  const ids = Array.from(new Set(rows.map((row) => row.workflowId)))
-  const names = new Map<string, string | undefined>()
-  await Promise.all(
-    ids.map(async (id) => {
-      const workflow = await db.workflows.get(id)
-      names.set(id, workflow?.name)
-    })
-  )
-  return rows.map((row) => ({ ...row, workflowName: names.get(row.workflowId) }))
-}
-
-export function toUnifiedTrigger(row: WorkflowTriggerRowWithName): UnifiedScheduledItem {
+export function toUnifiedTrigger(
+  entry: WorkflowScheduleEntry,
+  now: number = Date.now()
+): UnifiedScheduledItem {
+  const next =
+    entry.published && !entry.paused && entry.cron
+      ? getNextCronTime(entry.cron, new Date(now), entry.timezone)
+      : null
   return {
-    unifiedId: makeUnifiedId("workflow", row.id),
+    unifiedId: makeUnifiedId(
+      "workflow",
+      workflowScheduleSourceId(entry.workflowId, entry.triggerId)
+    ),
     kind: "workflow",
-    sourceId: row.id,
-    name: workflowTriggerName(row),
-    description: row.workflowName ? row.kind : undefined,
-    status: mapWorkflowStatus(row),
+    sourceId: workflowScheduleSourceId(entry.workflowId, entry.triggerId),
+    name: `${entry.workflowName ?? entry.workflowId} · ${entry.cron || "trigger.cron"}`,
+    ...(entry.published
+      ? { description: "trigger.cron" }
+      : { descriptionKey: "workflowTriggerAwaitingPublish" }),
+    status: mapWorkflowStatus(entry),
     triggerSummary: {
-      type: row.kind === "trigger.cron" ? "cron" : "event",
-      cron: row.cron,
-      eventType: row.kind,
-      timezone: row.timezone,
+      type: "cron",
+      cron: entry.cron,
+      eventType: "trigger.cron",
+      ...(entry.timezone ? { timezone: entry.timezone } : {}),
     },
-    nextRunAt: row.nextFireAt,
+    ...(next ? { nextRunAt: next.getTime() } : {}),
     origin: {
-      tableName: "workflowTriggers",
-      deepLinkHref: `/workflows/editor?id=${encodeURIComponent(row.workflowId)}`,
+      deepLinkHref: `/workflows/editor?id=${encodeURIComponent(entry.workflowId)}`,
     },
     capabilities: {
-      runNow: true,
-      pause: true,
+      runNow: entry.published,
+      pause: entry.published,
       edit: false, // edit happens in the workflow editor
       delete: false,
     },
   }
 }
 
-function workflowTriggerName(row: WorkflowTriggerRowWithName): string {
-  const head = row.cron ? row.cron : row.webhookPath ? `webhook ${row.webhookPath}` : row.kind
-  return `${row.workflowName ?? row.workflowId} · ${head}`
-}
-
-function mapWorkflowStatus(row: WorkflowTriggerRow): UnifiedItemStatus {
-  return row.enabled ? "active" : "paused"
+function mapWorkflowStatus(entry: WorkflowScheduleEntry): UnifiedItemStatus {
+  if (!entry.published) return "disabled"
+  return entry.paused ? "paused" : "active"
 }

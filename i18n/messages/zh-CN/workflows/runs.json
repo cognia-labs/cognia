@@ -20,6 +20,10 @@
     },
     "export": "导出",
     "formalRetryUnavailable": "该草稿时期的运行没有不可变版本，只能在本地调试模式重放。",
+    "hostUnreachable": {
+      "description": "此运行保存在桌面端，当前无法连接。连接恢复后会自动加载。",
+      "title": "无法连接桌面端"
+    },
     "lineage": {
       "children": "{count} 个子运行",
       "parent": "父运行",
@@ -47,6 +51,7 @@
       "failedStep": "从此步骤继续",
       "originalVersion": "运行原发布版本"
     },
+    "retryOnHostOnly": "请在运行它的桌面端上重新运行。",
     "running": "运行中…",
     "sparkline": {
       "title": "时长趋势"

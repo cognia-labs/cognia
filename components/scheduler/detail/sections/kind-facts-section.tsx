@@ -4,7 +4,7 @@
  * The facts only this kind knows (ADR-0179 §1).
  *
  * One `FactList` per kind, with the reads the old per-kind detail panels
- * did: a workflow trigger's row and its workflow, the backup schedule from
+ * did: a workflow schedule and its workflow, the backup schedule from
  * settings, a plugin job's payload, a connector digest's payload, the
  * outbound queue's breaker, an OS task's platform record. App tasks have no
  * kind facts of their own; everything about them is in the other sections.
@@ -30,6 +30,7 @@ import type { UnifiedScheduledItem } from "@/types/scheduler/unified"
 
 import { BackupScheduleDialog } from "../../backup-schedule-dialog"
 import { CONNECTOR_QUEUE_SOURCE_ID } from "@/lib/scheduler/sources/connector-source"
+import { parseWorkflowScheduleSourceId } from "@/lib/scheduler/sources/workflow-schedule-id"
 
 export interface KindFactsSectionProps {
   item: UnifiedScheduledItem
@@ -47,7 +48,7 @@ export function kindHasFacts(item: UnifiedScheduledItem): boolean {
 export function KindFactsSection(props: KindFactsSectionProps) {
   switch (props.item.kind) {
     case "workflow":
-      return <WorkflowFacts triggerId={props.item.sourceId} />
+      return <WorkflowFacts sourceId={props.item.sourceId} />
     case "backup":
       return <BackupFacts onScheduled={props.onBackupScheduled} />
     case "plugin":
@@ -65,26 +66,43 @@ export function KindFactsSection(props: KindFactsSectionProps) {
   }
 }
 
-function WorkflowFacts({ triggerId }: { triggerId: string }) {
+function WorkflowFacts({ sourceId }: { sourceId: string }) {
   const t = useTranslations("scheduler")
-  const trigger = useLiveQuery(() => getDb().workflowTriggers.get(triggerId), [triggerId])
-  const workflow = useLiveQuery(
-    async () => (trigger ? getDb().workflows.get(trigger.workflowId) : undefined),
-    [trigger?.workflowId]
-  )
-  if (!trigger) {
+  // `null` = looked and found nothing; `undefined` = still loading. The
+  // schedule is derived from the active deployment and the draft (WF-07), so
+  // it is read through the same function the Scheduler list uses.
+  const entry = useLiveQuery(async () => {
+    const key = parseWorkflowScheduleSourceId(sourceId)
+    if (!key) return null
+    const { listWorkflowSchedules } = await import("@/lib/scheduler/sources/workflow-source")
+    const found = (await listWorkflowSchedules()).find(
+      (candidate) =>
+        candidate.workflowId === key.workflowId && candidate.triggerId === key.triggerId
+    )
+    return found ?? null
+  }, [sourceId])
+  if (entry === undefined) return null
+  if (entry === null) {
     return <p className="text-xs text-muted-foreground">{t("workflowTriggerNotFound")}</p>
   }
+  const state = !entry.published
+    ? t("workflowTriggerStateAwaitingPublish")
+    : entry.paused
+      ? t("workflowTriggerStatePaused")
+      : t("workflowTriggerStateActive")
   return (
     <FactList>
-      <FactRow label={t("workflow")}>{workflow?.name ?? trigger.workflowId}</FactRow>
-      <FactRow label={t("triggerKind")}>{trigger.kind}</FactRow>
-      {trigger.webhookPath ? (
-        <FactRow label={t("webhookPath")} mono>
-          {trigger.webhookPath}
-        </FactRow>
-      ) : null}
-      <FactRow label={t("enabled")}>{trigger.enabled ? t("yes") : t("no")}</FactRow>
+      <FactRow label={t("workflow")}>{entry.workflowName ?? entry.workflowId}</FactRow>
+      <FactRow label={t("triggerKind")} mono>
+        {
+          /* i18n-exempt: the workflow node kind identifier, the same in every language */ "trigger.cron"
+        }
+      </FactRow>
+      <FactRow label={t("cronExpression")} mono>
+        {entry.cron}
+      </FactRow>
+      {entry.timezone ? <FactRow label={t("timezone")}>{entry.timezone}</FactRow> : null}
+      <FactRow label={t("workflowTriggerState")}>{state}</FactRow>
     </FactList>
   )
 }

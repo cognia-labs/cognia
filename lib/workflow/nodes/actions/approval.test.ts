@@ -26,6 +26,7 @@ import {
 import { _clearWakeBusForTest } from "@/lib/workflow/runtime/wake-bus"
 import type { StepExecutionContext } from "@/types/workflow/visual"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { createWorkflowWaitpoint, decideWorkflowWaitpoint } from "@/lib/db/workflow-waitpoints"
 
 function makeCtx(
   params: Record<string, unknown>,
@@ -175,5 +176,97 @@ describe("runApprovalRequest", () => {
     const result = await runApprovalRequest(makeCtx({ title: "Ship it?" }))
     expect(result.decision).toBe("rejected")
     expect(result.output).toMatchObject({ respondedBy: "timeout" })
+  })
+
+  it("keeps an approval stored before the deadline when re-entered after it", async () => {
+    // The approval was persisted 30 minutes into a 1 h wait, then the process
+    // died; the run is re-entered an hour after the deadline. The durable
+    // decision stands — it must not be rewritten into a timeout.
+    const requestedAt = Date.now() - 7_200_000
+    mockListRunEvents.mockResolvedValue([
+      {
+        runId: "run_apr",
+        stepId: "n_gate",
+        type: "step.long_running.checkpoint",
+        payload: { checkpointKey: APPROVAL_CHECKPOINT_KEY, state: { approvalId: id, requestedAt } },
+      },
+    ])
+    await createWorkflowWaitpoint({
+      id,
+      kind: "approval",
+      status: "pending",
+      runId: "run_apr",
+      workflowId: "wf_apr",
+      stepId: "n_gate",
+      key: "approval:run_apr:n_gate",
+      createdAt: requestedAt,
+      notBefore: requestedAt,
+      expiresAt: requestedAt + 3_600_000,
+      updatedAt: requestedAt,
+    })
+    expect(
+      (
+        await decideWorkflowWaitpoint(id, {
+          outcome: "approved",
+          respondedBy: "alice",
+          resolvedAt: requestedAt + 1_800_000,
+        })
+      ).ok
+    ).toBe(true)
+
+    const result = await runApprovalRequest(makeCtx({ title: "Ship it?" }))
+    expect(result.decision).toBe("approved")
+    expect(result.output).toMatchObject({ respondedBy: "alice" })
+  })
+
+  it("refuses an answer that arrives after the deadline", async () => {
+    const requestedAt = Date.now() - 7_200_000
+    await createWorkflowWaitpoint({
+      id,
+      kind: "approval",
+      status: "pending",
+      runId: "run_apr",
+      workflowId: "wf_apr",
+      stepId: "n_gate",
+      key: "approval:run_apr:n_gate",
+      createdAt: requestedAt,
+      notBefore: requestedAt,
+      expiresAt: requestedAt + 3_600_000,
+      updatedAt: requestedAt,
+    })
+    // No waiter is alive to write the timeout; the late answer still loses.
+    await expect(
+      respondToApproval(id, { decision: "approved", respondedBy: "late" })
+    ).resolves.toEqual({ ok: false, reason: "expired" })
+  })
+
+  it("asks again in every loop iteration instead of reusing the first answer", async () => {
+    const iterationCtx = (index: number) =>
+      ({
+        ...makeCtx({ title: "Ship item?" }),
+        stepKey: `loop#${index}#n_gate`,
+        iteration: { loopId: "loop", iterationIndex: index },
+      }) as StepExecutionContext
+    const firstId = approvalId("run_apr", "loop#0#n_gate")
+    const first = runApprovalRequest(iterationCtx(0))
+    for (let attempt = 0; attempt < 20 && !(await getPendingApproval(firstId)); attempt++) {
+      await flush()
+    }
+    await respondToApproval(firstId, { decision: "approved", respondedBy: "desktop" })
+    await expect(first).resolves.toMatchObject({ decision: "approved" })
+
+    const secondId = approvalId("run_apr", "loop#1#n_gate")
+    const second = runApprovalRequest(iterationCtx(1))
+    for (let attempt = 0; attempt < 20 && !(await getPendingApproval(secondId)); attempt++) {
+      await flush()
+    }
+    // The second item is pending on its own request, not resolved by the first.
+    expect(await getPendingApproval(secondId)).toBeDefined()
+    expect(mockNotifyRequested).toHaveBeenCalledTimes(2)
+    await respondToApproval(secondId, { decision: "rejected", respondedBy: "desktop" })
+    await expect(second).resolves.toMatchObject({
+      decision: "rejected",
+      output: expect.objectContaining({ approvalId: secondId }),
+    })
   })
 })

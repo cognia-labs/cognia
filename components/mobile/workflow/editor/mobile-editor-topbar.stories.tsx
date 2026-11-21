@@ -25,6 +25,8 @@ const meta = {
     orientationLocked: true,
     onToggleOrientationLock: fn(),
     onToggleSelectMode: fn(),
+    onRun: fn(),
+    running: false,
   },
   decorators: [
     (Story) => (

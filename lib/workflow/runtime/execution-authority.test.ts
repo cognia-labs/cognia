@@ -10,6 +10,7 @@ import {
   type TeamWorkflowNodes,
 } from "../nodes/teams/team-runtime-port"
 import {
+  invocationId,
   createWorkflowDependencyLockForVersion,
   createPublishedWorkflowDependencyBinding,
   executeDeployedWorkflow,
@@ -481,7 +482,7 @@ describe("ExecutionAuthority", () => {
             type: "action.team.run",
             typeVersion: 1,
             position: { x: 0, y: 0 },
-            data: { label: "Run", params: { teamId: team.id } },
+            data: { label: "Run", params: { teamId: team.id, goal: "Summarize" } },
           },
         ],
         edges: [],
@@ -544,7 +545,10 @@ describe("ExecutionAuthority", () => {
           type: "action.team.run",
           typeVersion: 1,
           position: { x: 0, y: 0 },
-          data: { label: "Run", params: { teamId: "{{ $trigger.payload.teamId }}" } },
+          data: {
+            label: "Run",
+            params: { teamId: "{{ $trigger.payload.teamId }}", goal: "Summarize" },
+          },
         },
       ],
       edges: [],
@@ -775,6 +779,105 @@ describe("ExecutionAuthority", () => {
     expect(recovered.result.status).toBe("succeeded")
     expect((await getDb().workflowInvocations.get(invocation.id))?.status).toBe("completed")
     expect((await getDb().workflowRuns.get(first.runId))?.status).toBe("succeeded")
+  })
+
+  it("keeps the producer's original trigger time when it recovers an orphaned admission", async () => {
+    const workflow = await createWorkflow({ name: "Recover origin", nodes: [], edges: [] })
+    await publishWorkflow(workflow.id, 10)
+    const request = {
+      workflowId: workflow.id,
+      entrypoint: "http" as const,
+      caller: "client:origin",
+      idempotencyKey: "request-origin",
+      triggerKind: "trigger.manual" as const,
+      triggerOriginAt: 1_234,
+      payload: { input: {} },
+    }
+    const first = await executeDeployedWorkflow(request)
+    await getDb().workflowRuns.update(first.runId, {
+      status: "pending",
+      completedAt: undefined,
+      lease: undefined,
+    })
+
+    await executeDeployedWorkflow(request)
+
+    // Recovery re-drives the same admission; the admission time is not the
+    // producer's time and must not replace it.
+    expect((await getDb().workflowRuns.get(first.runId))?.triggerOriginAt).toBe(1_234)
+  })
+
+  it("admits one trigger occurrence once, whichever Host forwarded it", async () => {
+    const workflow = await createWorkflow({ name: "Shared slot", nodes: [], edges: [] })
+    await publishWorkflow(workflow.id, 10)
+    const occurrence = {
+      workflowId: workflow.id,
+      entrypoint: "trigger" as const,
+      idempotencyKey: "cron:wf:slot-2026-11-20T09:00Z",
+      triggerKind: "trigger.manual" as const,
+      payload: {},
+    }
+    // The pinned Host's own daemon fires the slot…
+    const local = await executeDeployedWorkflow({ ...occurrence, caller: "trigger.cron" })
+    // …and another Host whose daemon fired the same slot forwards it.
+    const forwarded = await executeDeployedWorkflow({ ...occurrence, caller: "host:device-b" })
+
+    expect(forwarded.runId).toBe(local.runId)
+    expect(forwarded.reused).toBe(true)
+    expect(await getDb().workflowRuns.count()).toBe(1)
+  })
+
+  it("keeps idempotency keys of other entrypoints scoped to their caller", () => {
+    const base = {
+      accountId: "acct",
+      entrypoint: "http" as const,
+      deploymentId: "wfd",
+      idempotencyKey: "same-key",
+    }
+    expect(invocationId({ ...base, caller: "client:a" })).not.toBe(
+      invocationId({ ...base, caller: "client:b" })
+    )
+    expect(invocationId({ ...base, entrypoint: "trigger", caller: "trigger.cron" })).toBe(
+      invocationId({ ...base, entrypoint: "trigger", caller: "host:other" })
+    )
+  })
+
+  it("does not lock the workflow a completion trigger listens to", async () => {
+    const source = await createWorkflow({ name: "Source", nodes: [], edges: [] })
+    const subscriber = await createWorkflow({
+      name: "Subscriber",
+      nodes: [
+        {
+          id: "on-source",
+          type: "trigger.workflow.completed",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "on source", params: { workflowId: source.id } },
+        },
+        {
+          id: "manual",
+          type: "trigger.manual",
+          typeVersion: 1,
+          position: { x: 0, y: 100 },
+          data: { label: "manual", params: {} },
+        },
+      ],
+      edges: [],
+    })
+    // The source was never published (or was unpublished): it is an event
+    // source, not a dependency, so the subscriber's own entry still runs.
+    await publishWorkflow(subscriber.id, 10)
+
+    const execution = await executeDeployedWorkflow({
+      workflowId: subscriber.id,
+      entrypoint: "http",
+      caller: "client:manual",
+      triggerKind: "trigger.manual",
+      triggerId: "manual",
+      payload: {},
+    })
+    expect(execution.result.status).toBe("succeeded")
+    expect(execution.executionBinding.dependencyLock?.workflows).toEqual({})
   })
 
   it("keeps an idempotent retry bound to its original version after redeployment", async () => {

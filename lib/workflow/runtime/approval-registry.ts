@@ -94,7 +94,10 @@ export function subscribePendingApprovals(fn: () => void): () => void {
   })
 }
 
-export type RespondResult = { ok: true } | { ok: false; reason: "not-found" | "already-decided" }
+export type RespondResult =
+  | { ok: true }
+  /** `expired`: the answer came after the approval's deadline; the wait timed out. */
+  | { ok: false; reason: "not-found" | "already-decided" | "expired" }
 
 /** Transactional first-writer-wins decision; works even without a live waiter. */
 export async function respondToApproval(

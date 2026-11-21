@@ -22596,6 +22596,78 @@
       },
       "additionalProperties": false
     },
+    "workflow_app_handoff_create": {
+      "type": "object",
+      "required": [
+        "idempotencyKey",
+        "runId",
+        "workflowId",
+        "versionId",
+        "deploymentId",
+        "deploymentRevision",
+        "expectedVersionDigest",
+        "payload"
+      ],
+      "properties": {
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workflowId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "versionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deploymentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deploymentRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expectedVersionDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dependencyLock": {
+          "type": "object"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "input",
+            "appId",
+            "appReleaseId"
+          ],
+          "properties": {
+            "input": {},
+            "appId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "appReleaseId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "initiator": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
     "workflow_approval_list": {
       "type": "object",
       "additionalProperties": false
@@ -22638,6 +22710,11 @@
         "draft"
       ],
       "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^wf_[A-Za-z0-9_-]{1,96}$",
+          "description": "Create under the id a paired client already holds in its mirror."
+        },
         "draft": {
           "type": "object",
           "additionalProperties": true
@@ -22749,6 +22826,61 @@
       },
       "additionalProperties": false
     },
+    "workflow_handoff_run_cancel": {
+      "type": "object",
+      "required": [
+        "runId"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflow_handoff_run_get": {
+      "type": "object",
+      "required": [
+        "runId"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "afterSequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "disclosure": {
+          "type": "object",
+          "required": [
+            "payload",
+            "label"
+          ],
+          "properties": {
+            "payload": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "workflow_human_input_list": {
       "type": "object",
       "additionalProperties": false
@@ -22830,6 +22962,32 @@
       },
       "additionalProperties": false
     },
+    "workflow_preview_run": {
+      "type": "object",
+      "required": [
+        "workflowId",
+        "mode"
+      ],
+      "properties": {
+        "workflowId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "from-step",
+            "single-step"
+          ]
+        },
+        "stepId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
     "workflow_register_trigger": {
       "type": "object",
       "required": [
@@ -22848,6 +23006,29 @@
     "workflow_reload_in_flight_runs": {
       "type": "object",
       "properties": {},
+      "additionalProperties": false
+    },
+    "workflow_run_events_list": {
+      "type": "object",
+      "required": [
+        "runId"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "afterSequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      },
       "additionalProperties": false
     },
     "workflow_run_list": {
@@ -22878,6 +23059,9 @@
       "properties": {
         "triggerId": {
           "type": "string"
+        },
+        "workflowId": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -22889,6 +23073,9 @@
       ],
       "properties": {
         "triggerId": {
+          "type": "string"
+        },
+        "workflowId": {
           "type": "string"
         }
       },

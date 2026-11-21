@@ -74,7 +74,6 @@ import {
   syncLabels,
 } from "./handlers/issues"
 import { syncTwinProfile } from "./handlers/twin-profile"
-import { syncWorkflows } from "./handlers/workflows"
 import { syncWorkflowRuns } from "./handlers/workflow-runs"
 import {
   syncTemplateDefinitions,
@@ -244,7 +243,9 @@ const DEFAULT_HANDLERS: RegisteredHandler[] = [
   // Wave 4 / ADR-0026 — the workflow viewer, twin profile, plugin toggles and
   // connector policy: settings-shaped surfaces, served from Dexie when the
   // server is unreachable, and none of them on the first screen.
-  { table: "workflows", stage: "background", run: syncWorkflows },
+  // The workflow module's pull (`lib/workflow/sync/`): it holds back a row a
+  // paired client's queued edit has not reached the Host with yet.
+  { table: "workflows", stage: "background", run: moduleSyncPull("workflows") },
   { table: "twinProfile", stage: "background", run: syncTwinProfile },
   // The Twin registry, and the drafts awaiting review. Background because
   // `/discover` is a tab the user navigates to rather than lands on, and

@@ -84,8 +84,50 @@ export interface WorkflowInvocation {
   startStepId?: string
   seedRunId?: string
   operatedBy?: string
+  /**
+   * Present when this Host admitted the invocation (auth, quota, idempotency,
+   * release lock) but its Run Policy placed the run on another Host (ADR-0136
+   * placement contract). No local run row exists; `runId` is the id the
+   * target was asked to mint, and every read goes to the target.
+   */
+  placement?: WorkflowInvocationPlacement
   createdAt: number
   updatedAt: number
+}
+
+/** Where a placed invocation's run is, and what this Host last learned of it. */
+export interface WorkflowInvocationPlacement {
+  /** The Host the Run Policy selected (`openRemoteHostTarget` ref). */
+  hostRef: string
+  /** The durable host-dispatch job carrying the admission to that Host. */
+  dispatchId: string
+  /**
+   * - `dispatching`: the job has not been accepted by the target yet.
+   * - `accepted`: the target admitted the run (`remoteRunId`).
+   * - `settled`: the run reached a terminal status; `terminal` holds its view.
+   * - `refused`: the target refused, the job failed, or it was cancelled
+   *   before it landed; `refusal` says why and no remote run exists.
+   */
+  state: "dispatching" | "accepted" | "settled" | "refused"
+  /** The run id the target admitted; equals `runId` when it honoured the request. */
+  remoteRunId?: string
+  /** Last run status the target reported. */
+  remoteStatus?: import("./visual").RunStatus
+  /** When the target last answered for this run. */
+  observedAt?: number
+  /** Token and cost usage the target recorded, folded into the app's daily budget. */
+  usage?: { tokens: number; costUsd: number; costKnown: boolean }
+  /** Terminal run view, kept so a settled run reads without its Host. */
+  terminal?: {
+    status: import("./visual").RunStatus
+    startedAt: number
+    completedAt?: number
+    output?: unknown
+    error?: { message: string; nodeId?: string; code?: string }
+  }
+  refusal?: { code: string; message: string }
+  /** Set when a caller cancelled before the target accepted; a late acceptance is cancelled there. */
+  cancelRequestedAt?: number
 }
 
 export interface WorkflowDependencyBinding {

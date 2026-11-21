@@ -118,11 +118,14 @@ export async function createDifyWorkflowRun(input: {
     actor,
     input: { ...resolvedInputs, ...(resolvedFiles.length ? { files: resolvedFiles } : {}) },
     idempotencyKey: input.idempotencyKey,
+    // A streaming caller follows the run's events, which read through the
+    // run's Host; a blocking one waits here for the result.
+    responseMode: input.request.response_mode === "streaming" ? "async" : "blocking",
   })
   if (input.request.response_mode === "streaming") {
     return { workflow_run_id: admitted.runId, task_id: admitted.runId, stream: true as const }
   }
-  await admitted.completion
+  if (admitted.completion) await admitted.completion
   const run = await getWorkflowAppRun({
     accountId: input.accountId,
     appSlug: input.appSlug,

@@ -8,6 +8,8 @@ import {
   runStep,
   executeWorkflowEgress,
   stepExecutionMetaOf,
+  StepOutcomeUnknownError,
+  __setStopConfirmGraceMsForTesting,
   type RunStepInput,
 } from "./step-executor"
 import "@/lib/workflow/nodes/data/flow"
@@ -47,7 +49,10 @@ beforeEach(async () => {
   execSpy.mockClear()
   resetCircuitBreaker()
   __resetPluginCatalogForTesting()
+  // A timed-out attempt gets this long to stop before its outcome is unknown.
+  __setStopConfirmGraceMsForTesting(60)
 }, 15_000)
+afterAll(() => __setStopConfirmGraceMsForTesting(null))
 
 const node: WorkflowNode = {
   id: "n1",
@@ -581,6 +586,102 @@ describe("runtime parameter and timeout integrity", () => {
     expect(executorSignal?.aborted).toBe(true)
   })
 
+  it("never starts a retry while the timed-out attempt is still running", async () => {
+    let running = 0
+    let peak = 0
+    const execute = jest.fn(
+      async () =>
+        new Promise<{ output: unknown }>(() => {
+          // Ignores its abort signal and never settles: a side effect may
+          // still land, so it must not be run a second time alongside it.
+          running += 1
+          peak = Math.max(peak, running)
+        })
+    )
+    registerNodeExecutor({
+      kind: "data.code",
+      typeVersion: 98,
+      execute: execute as never,
+      timeoutMs: 20,
+    })
+    const slowNode: WorkflowNode = {
+      id: "n_stuck",
+      type: "data.code",
+      typeVersion: 98,
+      position: { x: 0, y: 0 },
+      data: { label: "stuck", params: { code: "return null" } },
+    }
+    const runId = "run_stuck"
+
+    const error = await runStep({
+      workflow: { ...makeWorkflow(), nodes: [slowNode] },
+      node: slowNode,
+      trigger,
+      upstream: {},
+      runId,
+      signal: new AbortController().signal,
+      cache: await IdempotencyCache.hydrate(runId),
+      retryPolicy: { attempts: 3, backoff: "fixed", baseMs: 0 },
+      secretResolver: NoopSecretResolver,
+      logger: createRunLogger(runId),
+    }).catch((err: unknown) => err)
+
+    expect(error).toBeInstanceOf(StepOutcomeUnknownError)
+    expect(error).toMatchObject({ code: "step_outcome_unknown", retryable: false })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(peak).toBe(1)
+  })
+
+  it("retries a timed-out attempt once it has actually stopped", async () => {
+    let running = 0
+    let peak = 0
+    const execute = jest.fn(async (ctx: { signal: AbortSignal }) => {
+      running += 1
+      peak = Math.max(peak, running)
+      try {
+        if (execute.mock.calls.length > 1) return { output: "second" }
+        // Honours the abort, but only a little after the deadline.
+        await new Promise<void>((resolve) =>
+          ctx.signal.addEventListener("abort", () => setTimeout(resolve, 10), { once: true })
+        )
+        throw new Error("stopped")
+      } finally {
+        running -= 1
+      }
+    })
+    registerNodeExecutor({
+      kind: "data.code",
+      typeVersion: 97,
+      execute: execute as never,
+      timeoutMs: 20,
+    })
+    const lateNode: WorkflowNode = {
+      id: "n_late",
+      type: "data.code",
+      typeVersion: 97,
+      position: { x: 0, y: 0 },
+      data: { label: "late", params: { code: "return null" } },
+    }
+    const runId = "run_late"
+
+    const result = await runStep({
+      workflow: { ...makeWorkflow(), nodes: [lateNode] },
+      node: lateNode,
+      trigger,
+      upstream: {},
+      runId,
+      signal: new AbortController().signal,
+      cache: await IdempotencyCache.hydrate(runId),
+      retryPolicy: { attempts: 2, backoff: "fixed", baseMs: 0 },
+      secretResolver: NoopSecretResolver,
+      logger: createRunLogger(runId),
+    })
+
+    expect(result.output).toBe("second")
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(peak).toBe(1)
+  })
+
   it("enforces a plugin node's registered JSON params schema at runtime", async () => {
     const kind = "demo.action.secure" as WorkflowNode["type"]
     const execute = jest.fn(async () => ({ output: "should not run" }))
@@ -968,5 +1069,67 @@ describe("step event evidence (resolved inputs, execution identity, error detail
     expect(payload.retryable).toBe(false)
     expect(payload.stepExecutionId).toBeTruthy()
     expect(stepExecutionMetaOf(caught)?.stepExecutionId).toBe(payload.stepExecutionId)
+  })
+})
+
+describe("runStep routing replay (resume)", () => {
+  const branchNode: WorkflowNode = {
+    id: "n_branch",
+    type: "flow.branch",
+    typeVersion: 2,
+    position: { x: 0, y: 0 },
+    data: {
+      label: "branch",
+      params: {
+        conditions: {
+          combinator: "all",
+          conditions: [{ left: "{{ $trigger.payload.yes }}", operator: "truthy" }],
+        },
+      },
+    },
+  }
+  const branchInput = async (runId: string, cache: IdempotencyCache): Promise<RunStepInput> => ({
+    workflow: { ...makeWorkflow(), nodes: [branchNode] },
+    node: branchNode,
+    trigger: { ...trigger, payload: { yes: false } },
+    upstream: {},
+    runId,
+    signal: new AbortController().signal,
+    cache,
+    retryPolicy: { attempts: 1, backoff: "fixed", baseMs: 0 },
+    secretResolver: NoopSecretResolver,
+    logger: createRunLogger(runId),
+  })
+
+  it("records a branch decision with its completion and replays it from the log", async () => {
+    registerNodeExecutor(branchExecutor)
+    const runId = "run_branch_replay"
+    const fresh = await runStep(await branchInput(runId, await IdempotencyCache.hydrate(runId)))
+    expect(fresh.fromCache).toBe(false)
+    expect(fresh.decision).toBe("false")
+
+    // A crashed run is re-entered: the cache comes back from the durable log.
+    const replayed = await runStep(await branchInput(runId, await IdempotencyCache.hydrate(runId)))
+    expect(replayed).toMatchObject({ fromCache: true, decision: "false" })
+  })
+
+  it("replays a handled failure's route from the cache", async () => {
+    const runId = "run_route_replay"
+    const cache = await IdempotencyCache.hydrate(runId)
+    cache.set("n1", { failed: true, error: "x" }, { route: "error" })
+    const replayed = await runStep({
+      workflow: makeWorkflow(),
+      node,
+      trigger,
+      upstream: {},
+      runId,
+      signal: new AbortController().signal,
+      cache,
+      retryPolicy: { attempts: 1, backoff: "fixed", baseMs: 0 },
+      secretResolver: NoopSecretResolver,
+      logger: createRunLogger(runId),
+    })
+    expect(replayed).toMatchObject({ fromCache: true, route: "error" })
+    expect(execSpy).not.toHaveBeenCalled()
   })
 })

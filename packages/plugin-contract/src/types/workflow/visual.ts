@@ -745,6 +745,16 @@ export interface VisualWorkflow {
   /** Set when the workflow has been published as a callable unit. */
   published?: WorkflowPublication
   /**
+   * Runtime pause overrides for this workflow's PUBLISHED triggers, keyed by
+   * trigger node id → epoch ms the pause was set. Not part of the graph: it
+   * is stripped from every version, kept across editor saves, written only
+   * through `lib/workflow/runtime/trigger-pauses.ts` (the Scheduler's and
+   * the phone's pause/resume), and honoured by every trigger sync — a paused
+   * cron or webhook stays registered disabled, so resuming needs no
+   * republish and a publish or boot reconcile cannot silently resume it.
+   */
+  triggerPauses?: Record<string, number>
+  /**
    * Set on a workflow compiled from another definition (ADR-0254 §2). The
    * source stays the definition: the row is regenerated whenever the source's
    * content hash changes, so it is stored {@link readOnly}. Duplicating it
@@ -1050,9 +1060,13 @@ export interface WorkflowTriggeredFrom {
    * toaster (`"ui"` — editor/run-list — keeps its own inline toasts).
    * `"schedule"` = a `workflow` scheduled task fired by the app scheduler
    * (`lib/scheduler/executors/workflow-executor.ts`); run history can then
-   * tell a timed run from a human-initiated one.
+   * tell a timed run from a human-initiated one. `"trigger"` = an automatic
+   * event trigger (native cron / webhook / file watch, a TS event
+   * subscription, a plugin trigger, or such an occurrence forwarded from
+   * another Host): nobody chose to start the run, so the risk gate treats it
+   * as headless (fail-closed) on every Host.
    */
-  source: "im" | "ui" | "api" | "chat" | "desktop" | "schedule" | "bot"
+  source: "im" | "ui" | "api" | "chat" | "desktop" | "schedule" | "bot" | "trigger"
   adapterId?: string
   conversationKey?: string
   sourceMessageId?: string
@@ -1185,6 +1199,13 @@ export interface WorkflowRunRow {
   /** Highest stepId successfully completed; resume picks up at the next one. */
   lastCompletedStepId?: string
   /**
+   * The bounds a DRAFT run was started with ("run from here", "run this step",
+   * pin data, seeded upstream outputs, a catch sub-run). Kept on the row so a
+   * crash resume replays the same bounded run instead of the whole graph.
+   * Formal runs keep theirs on the invocation and never carry this.
+   */
+  draftScope?: WorkflowRunDraftScope
+  /**
    * Small-model "work content" title summarising what this particular run did,
    * generated once on completion (see `lib/ai/generation/run-title-task.ts`).
    * Falls back to `workflowSnapshot.name` in the agent-runs view when absent.
@@ -1244,6 +1265,17 @@ export interface WorkflowRunRow {
   acknowledgedAt?: number
   replayedByRunId?: string
   replayCount?: number
+}
+
+/** See {@link WorkflowRunRow.draftScope}. */
+export interface WorkflowRunDraftScope {
+  startStepId?: string
+  restrictToStepIds?: string[]
+  honorPinData?: boolean
+  /** Upstream outputs the run was seeded with; they never re-execute. */
+  seedOutputs?: Record<string, unknown>
+  /** A catch sub-run: its own failure must not run catch handlers again. */
+  suppressCatch?: boolean
 }
 
 export interface WorkflowRunError {
@@ -1357,6 +1389,13 @@ export interface StepExecutionContext<TParams = Record<string, unknown>> {
   stepId: string
   /** Loop-container provenance for this concrete step execution. */
   iteration?: { loopId: string; iterationIndex: number }
+  /**
+   * Identity of this execution within the run when it differs from `stepId`:
+   * the full loop-iteration key (nested loops included). Anything a step keys
+   * per execution — an approval request, a checkpoint — must use
+   * `stepKey ?? stepId`, or every iteration would share one.
+   */
+  stepKey?: string
   /** Formal run provenance, including the pre-admission dependency lock. */
   executionBinding?: import("./deployment").WorkflowExecutionBinding
   /** Parent/retry provenance shared with nested node executors. */

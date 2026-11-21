@@ -58,7 +58,7 @@ describe("notifyApprovalRequested", () => {
         directed: true,
         dedupeKey: entry.approvalId,
         title: expect.stringContaining("Deploy?"),
-        href: "/workflows/wf_x/runs/run_x",
+        href: "/workflows/run?id=wf_x&runId=run_x",
         actions: [
           expect.objectContaining({
             command: APPROVAL_RESPOND_COMMAND,
@@ -131,7 +131,8 @@ describe("notifyApprovalResolved", () => {
 describe("installApprovalNotificationActions", () => {
   it("resolves the registry from a notification action click", async () => {
     const off = installApprovalNotificationActions()
-    await registerPendingApproval(entry)
+    // A decision is accepted only before the deadline, so the click lands in time.
+    await registerPendingApproval({ ...entry, timeoutAt: Date.now() + 60_000 })
     await dispatchNotificationCommand({
       notificationId: "n1",
       command: APPROVAL_RESPOND_COMMAND,

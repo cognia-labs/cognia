@@ -66,7 +66,13 @@
     "orientationPending": "正在检查屏幕方向锁定…",
     "orientationLock": "锁定横屏",
     "orientationUnlock": "允许竖屏",
+    "previewFailed": "无法启动预览：{message}",
+    "previewHostPending": "桌面端尚未收到最新保存，请稍后再运行。",
+    "previewRefused": "桌面端无法启动此预览：{detail}",
+    "previewSaveRefused": "桌面端未接受最新保存，因此没有运行：{detail}",
+    "previewStarted": "预览已开始。",
     "publicationInvalidated": "工作流已保存，但因可调用接口发生变化而自动下架。请重新发布以开放新契约。",
+    "savedQueuedForHost": "已保存，正在发送到桌面端。",
     "triggerRegistrationFailed": "工作流已保存，但触发器注册失败。启动时将重新尝试注册。",
     "redo": "重做",
     "run": "运行",
@@ -99,15 +105,22 @@
     "waitingForOthersToast": "答复已记录，正在等待其他人。"
   },
   "landscapeHint": "横屏阅读大图",
+  "libraryRun": {
+    "alreadyQueued": "{name} 已在队列中，桌面端恢复连接后只会运行一次。",
+    "failed": "无法启动运行：{message}",
+    "handedOff": "{name} 已交给负责运行它的 Host。",
+    "notPublished": "{name} 尚未发布。发布后才能在此运行，或打开它运行预览。",
+    "openRun": "打开",
+    "queued": "{name} 已加入队列，桌面端可连接时运行。",
+    "refused": "{name} 未运行：{detail}",
+    "started": "{name} 正在运行。"
+  },
   "noRuns": "暂无运行记录。",
   "pinned": "置顶",
   "pinned_added": "已置顶。",
   "pinned_removed": "已取消置顶。",
   "queuedBadge": "待发送",
-  "runAlreadyQueued": "已在队列中 — 桌面联线后只会运行一次。",
   "runButton": "运行",
-  "runFailed": "触发失败：{message}",
-  "runQueued": "已加入队列，桌面联线后将触发。",
   "runsBackAria": "返回工作流",
   "runsHeader": "最近运行",
   "sending": "发送中",
@@ -120,8 +133,6 @@
   "swipe": {
     "favorite": "置顶",
     "run": "运行",
-    "runAlreadyQueued": "{name} 已在队列中",
-    "runQueued": "已加入队列：{name}",
     "unfavorite": "取消置顶"
   },
   "title": "工作流"

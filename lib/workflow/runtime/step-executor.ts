@@ -90,8 +90,62 @@ export interface StepExecution {
   output: unknown
   /** Branch/switch decision; orchestrator uses to skip non-chosen edges. */
   decision?: string | string[]
+  /**
+   * Routing of a handled failure replayed from the cache (`"error"` = only the
+   * error edges, `"halt"` = no outgoing edge). Fresh executions never set it:
+   * a fresh failure throws, and its handler records the route itself.
+   */
+  route?: "error" | "halt"
   /** True iff this step came from the idempotency cache (no executor invoked). */
   fromCache: boolean
+}
+
+/**
+ * How long a timed-out attempt may take to honour its abort before the step
+ * counts as having an unknown outcome. Until the executor has actually
+ * stopped, starting the next attempt would run the same node twice at once.
+ */
+let stopConfirmGraceMs = 5_000
+
+/** Test-only: shorten the stop-confirmation grace period. */
+export function __setStopConfirmGraceMsForTesting(ms: number | null): void {
+  stopConfirmGraceMs = ms ?? 5_000
+}
+
+/**
+ * A timed-out attempt that would not stop. Its executor may still complete a
+ * side effect, so the step must not be retried automatically: the error is
+ * non-retryable and names the condition for the run history.
+ */
+export class StepOutcomeUnknownError extends Error {
+  readonly code = "step_outcome_unknown" as const
+  readonly retryable = false
+
+  constructor(node: WorkflowNode, cause: unknown, graceMs: number) {
+    super(
+      `Step ${node.id} (${node.type}) did not stop within ${graceMs}ms of its timeout, so its ` +
+        `outcome is unknown and it was not retried: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause }
+    )
+    this.name = "StepOutcomeUnknownError"
+  }
+}
+
+function settlesWithin(settled: Promise<void>, ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (value: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      signal.removeEventListener("abort", onAbort)
+      resolve(value)
+    }
+    const onAbort = () => finish(false)
+    const timer = setTimeout(() => finish(false), ms)
+    signal.addEventListener("abort", onAbort, { once: true })
+    void settled.then(() => finish(true))
+  })
 }
 
 export class InvalidNodeParamsError extends Error {
@@ -195,8 +249,18 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
   const cacheKey = input.cacheKey ?? node.id
 
   if (cache.has(cacheKey)) {
-    return { output: cache.get(cacheKey), fromCache: true }
+    const routing = cache.routing(cacheKey)
+    return {
+      output: cache.get(cacheKey),
+      ...(routing?.decision !== undefined ? { decision: routing.decision } : {}),
+      ...(routing?.route !== undefined ? { route: routing.route } : {}),
+      fromCache: true,
+    }
   }
+  // The memo key rides on the completion only when it is not the bare node id
+  // (loop bodies, nested loops), so hydration can rebuild exactly this key.
+  const stepKey = cache.keyFor(cacheKey)
+  const replayKey = stepKey !== node.id ? { cacheKey: stepKey } : {}
 
   // Pin-data short-circuit (editor manual runs only). The pinned value stands
   // in for the executor's output so downstream nodes + the data view see it,
@@ -210,7 +274,7 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     const meta: StepEventMeta = { ...input.iterationMeta, stepExecutionId: newStepExecutionId() }
     await logger.stepStarted(node.id, { pinned: true }, meta)
     cache.set(cacheKey, pinned)
-    await logger.stepCompleted(node.id, pinned, meta)
+    await logger.stepCompleted(node.id, pinned, meta, replayKey)
     return { output: pinned, fromCache: false }
   }
 
@@ -273,6 +337,7 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     runId,
     workflowId: input.workflow.id,
     stepId: node.id,
+    ...(stepKey !== node.id ? { stepKey } : {}),
     ...(input.iterationMeta ? { iteration: input.iterationMeta } : {}),
     ...(input.executionBinding ? { executionBinding: input.executionBinding } : {}),
     ...(input.lineage ? { lineage: input.lineage } : {}),
@@ -352,6 +417,10 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     ctx.reportUsage = (usage) =>
       void logger.stepUsage(node.id, { ...usage, stepExecutionId }, executionMeta)
     let executionSettled = false
+    let markSettled!: () => void
+    const attemptSettled = new Promise<void>((resolve) => {
+      markSettled = resolve
+    })
     try {
       const result = await runWithTimeout(
         reg.timeoutMs ?? input.workflow.settings.timeoutMs,
@@ -374,6 +443,7 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
               : await reg.execute(attemptContext)
           } finally {
             executionSettled = true
+            markSettled()
           }
         }
       )
@@ -391,14 +461,33 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
           await logger.log(l.level, l.message, l.payload, node.id, executionMeta)
         }
       }
-      cache.set(cacheKey, result.output)
+      cache.set(cacheKey, result.output, { decision: result.decision })
       if (breaker) recordCircuitSuccess(input.workflow.id, node.id)
-      await logger.stepCompleted(node.id, result.output, executionMeta)
+      // The decision is written WITH the output: a resume that replays this
+      // step must route exactly as this execution did.
+      await logger.stepCompleted(node.id, result.output, executionMeta, {
+        ...replayKey,
+        ...(result.decision !== undefined ? { decision: result.decision } : {}),
+      })
       return exec
     } catch (caught) {
       let err = caught
       sink.final()
       commentarySink.final()
+      // A timeout rejects as soon as the deadline passes, but an executor that
+      // ignores its abort signal is still running. Retrying now would overlap
+      // two executions of the same node, so a retry waits for this attempt to
+      // actually stop, and gives up retrying when it does not.
+      if (
+        !executionSettled &&
+        !signal.aborted &&
+        attempt < retryPolicy.attempts &&
+        reg.retryable !== false &&
+        isRetryableError(err)
+      ) {
+        executionSettled = await settlesWithin(attemptSettled, stopConfirmGraceMs, signal)
+        if (!executionSettled) err = new StepOutcomeUnknownError(node, err, stopConfirmGraceMs)
+      }
       if (node.type === "action.team.task.dispatch") {
         try {
           const { loadTeamWorkflowNodes } =

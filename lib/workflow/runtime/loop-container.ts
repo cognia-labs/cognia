@@ -42,16 +42,18 @@ import type {
   WorkflowRetryPolicy,
   WorkflowRunLineage,
   WorkflowRunSecurityContext,
+  WorkflowTriggeredFrom,
 } from "@/types/workflow/visual"
 import type { LoopItemError, LoopNodeParams } from "@/types/workflow/visual"
 import type { WorkflowExecutionBinding } from "@/types/workflow/deployment"
 import { resolveDeep, resolveExpression } from "./expression"
-import { IdempotencyCache, iterationCacheKey } from "./idempotency"
+import { IdempotencyCache, iterationCacheKey, type StepRouting } from "./idempotency"
 import type { RunLogger, StepEventMeta } from "./event-log"
 import { recordStepInputs } from "./step-event-payload"
 import type { SecretResolver } from "./secret-resolver"
 import { nanoid } from "nanoid"
-import { runStep } from "./step-executor"
+import { runStep, stepExecutionMetaOf } from "./step-executor"
+import { applyNodeRiskGate } from "./risk-gate"
 import { getGlobalRunGate } from "./run-concurrency-gate"
 import { buildErrorOutput, resolveNodeFailure } from "./node-failure"
 
@@ -87,6 +89,13 @@ export interface RunLoopContainerInput {
   /** Owning workspace, threaded to every body step. */
   projectId?: string
   executionBinding?: WorkflowExecutionBinding
+  /** Run origin; the risk gate fails body nodes closed when nobody is watching. */
+  triggeredBy?: WorkflowTriggeredFrom
+  /**
+   * Approval nodes approved in the scope enclosing this container (the run,
+   * plus outer iterations). Each iteration adds its own approvals on top.
+   */
+  approvedApprovalIds: ReadonlySet<string>
 }
 
 export interface LoopContainerExecution {
@@ -255,6 +264,8 @@ export async function runLoopContainer(
       if (onItemError === "fail") throw err
       // Abort is a run-level event, never an item failure — always propagate.
       if (signal.aborted) throw err
+      // Neither is a step waiting on a human: the run must wait, not skip it.
+      if (err instanceof Error && "needsHuman" in err && err.needsHuman === true) throw err
       errorsByIndex.set(index, {
         index,
         ...(item !== undefined ? { item } : {}),
@@ -399,7 +410,15 @@ export async function runLoopContainer(
     ...(errors.length > 0 ? { errors } : {}),
   }
   cache.set(loopId, output)
-  await logger.stepCompleted(loopId, output, containerExecution)
+  // A nested container runs under its outer iteration's prefix; record the
+  // full key so a resume finds this completion instead of re-running the loop.
+  const containerKey = cache.keyFor(loopId)
+  await logger.stepCompleted(
+    loopId,
+    output,
+    containerExecution,
+    containerKey !== loopId ? { cacheKey: containerKey } : undefined
+  )
   return { output, fromCache: false }
 }
 
@@ -438,6 +457,9 @@ async function runSubgraph(input: RunSubgraphInput): Promise<SubgraphResult> {
   const inflight = new Map<string, Promise<void>>()
   let loopSignal: "break" | "continue" | null = null
   let firstError: unknown
+  // Approvals this iteration's own body approved, on top of the enclosing
+  // scope's. Never shared across iterations: each item is approved on its own.
+  const approvedApprovals = new Set(input.approvedApprovalIds)
 
   const skipDownstream = (startId: string) => {
     const stack = [startId]
@@ -479,6 +501,7 @@ async function runSubgraph(input: RunSubgraphInput): Promise<SubgraphResult> {
           node: child,
           upstream: { ...input.upstream, ...outputs, ...input.extraUpstream },
           cache: new PrefixedCache(input.cache, `${loopId}#${iterationIndex}#`),
+          approvedApprovalIds: approvedApprovals,
         })
         outputs[child.id] = nested.output
         completed.add(child.id)
@@ -497,8 +520,35 @@ async function runSubgraph(input: RunSubgraphInput): Promise<SubgraphResult> {
     // Children can also reference the container's own upstream nodes.
     Object.assign(upstreamMap, { ...input.upstream, ...upstreamMap })
 
+    const memoKey = iterationCacheKey(loopId, iterationIndex, child.id)
+    /** Persist a handled failure WITH its route so a resume replays it as-is. */
+    const recordHandled = async (output: unknown, err: unknown, routing?: StepRouting) => {
+      outputs[child.id] = output
+      completed.add(child.id)
+      input.cache.set(memoKey, output, routing)
+      await input.logger.stepCompleted(
+        child.id,
+        output,
+        { ...stepExecutionMetaOf(err), loopId, iterationIndex },
+        { ...routing, cacheKey: input.cache.keyFor(memoKey) }
+      )
+    }
     const release = await gate.acquire(input.signal)
     try {
+      // The orchestrator's pre-step risk gate covers only the nodes it
+      // schedules itself, so the body applies it per iteration. A step that
+      // already completed (resume) is not asked again.
+      if (!input.cache.has(memoKey)) {
+        await applyNodeRiskGate({
+          workflow: input.workflow,
+          node: child,
+          runId: input.runId,
+          ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
+          approvedApprovalIds: approvedApprovals,
+          stepKey: input.cache.keyFor(memoKey),
+          signal: input.signal,
+        })
+      }
       const result = await runStep({
         workflow: input.workflow,
         node: child,
@@ -519,11 +569,21 @@ async function runSubgraph(input: RunSubgraphInput): Promise<SubgraphResult> {
         ...(input.executionBinding ? { executionBinding: input.executionBinding } : {}),
         extraUpstream: input.extraUpstream,
         staticData: input.staticData,
-        cacheKey: iterationCacheKey(loopId, iterationIndex, child.id),
+        cacheKey: memoKey,
         iterationMeta: { loopId, iterationIndex },
       })
       outputs[child.id] = result.output
       completed.add(child.id)
+      if (child.type === "action.approval.request" && isApproved(result.decision)) {
+        approvedApprovals.add(child.id)
+      }
+      // A replayed handled failure routes exactly as it did when it happened.
+      if (result.route !== undefined) {
+        for (const e of childEdges.filter((e) => e.source === child.id)) {
+          if (result.route === "halt" || !isErrorEdgeOf(e)) skipDownstream(e.target)
+        }
+        return
+      }
 
       // Accumulator semantics — flow.set children write into the shared
       // staticData so later iterations (and the while condition) see it.
@@ -554,29 +614,28 @@ async function runSubgraph(input: RunSubgraphInput): Promise<SubgraphResult> {
       // Per-node error handling mirrors the top-level orchestrator catch.
       // "errorBranch" routes within the body subgraph; "continue" /
       // "defaultValue" substitute an output and let body downstream run.
+      // A recovery gate owns the next execution: no fallback may turn an
+      // unresolved human decision into an item result.
+      if (err instanceof Error && "needsHuman" in err && err.needsHuman === true) {
+        if (!firstError) firstError = err
+        return
+      }
       const failure = resolveNodeFailure(child)
       if (failure.mode === "continue") {
-        outputs[child.id] = buildErrorOutput(err)
-        completed.add(child.id)
+        await recordHandled(buildErrorOutput(err), err)
         return
       }
       if (failure.mode === "defaultValue") {
-        outputs[child.id] = failure.defaultValue
-        completed.add(child.id)
+        await recordHandled(failure.defaultValue, err)
         return
       }
       if (failure.mode === "errorBranch") {
         const outgoing = childEdges.filter((e) => e.source === child.id)
-        const errorEdges = outgoing.filter(
-          (e) => e.sourceHandle === "error" || e.data?.kind === "error"
-        )
+        const errorEdges = outgoing.filter(isErrorEdgeOf)
         if (errorEdges.length > 0) {
-          outputs[child.id] = buildErrorOutput(err)
-          completed.add(child.id)
+          await recordHandled(buildErrorOutput(err), err, { route: "error" })
           for (const e of outgoing) {
-            if (!(e.sourceHandle === "error" || e.data?.kind === "error")) {
-              skipDownstream(e.target)
-            }
+            if (!isErrorEdgeOf(e)) skipDownstream(e.target)
           }
           return
         }
@@ -613,6 +672,14 @@ async function runSubgraph(input: RunSubgraphInput): Promise<SubgraphResult> {
   return { signal: loopSignal ?? "completed", outputs }
 }
 
+function isErrorEdgeOf(e: WorkflowEdge): boolean {
+  return e.sourceHandle === "error" || e.data?.kind === "error"
+}
+
+function isApproved(decision: string | string[] | undefined): boolean {
+  return Array.isArray(decision) ? decision.includes("approved") : decision === "approved"
+}
+
 /** `runStep` result decision passthrough (kept tiny for clarity). */
 function resultDecision(r: { decision?: StepExecutionResult["decision"] }) {
   return r.decision
@@ -636,8 +703,17 @@ class PrefixedCache extends IdempotencyCache {
   override get(key: string): unknown {
     return this.inner.get(this.prefix + key)
   }
-  override set(key: string, output: unknown): void {
-    this.inner.set(this.prefix + key, output)
+  override set(key: string, output: unknown, routing?: StepRouting): void {
+    this.inner.set(this.prefix + key, output, routing)
+  }
+  override routing(key: string): StepRouting | undefined {
+    return this.inner.routing(this.prefix + key)
+  }
+  override completionOrder(key: string): number | undefined {
+    return this.inner.completionOrder(this.prefix + key)
+  }
+  override keyFor(key: string): string {
+    return this.inner.keyFor(this.prefix + key)
   }
 }
 

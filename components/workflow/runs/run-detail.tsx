@@ -46,20 +46,43 @@ import { formatDurationMs, formatRunStartedAt } from "./format"
 import { aggregateRunUsage, formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
 import { formatTokens } from "@/types/system/usage"
 import { downloadRunExport } from "@/lib/workflow/runs/run-export"
+import { workflowWriteAuthority } from "@/lib/workflow/remote/write-authority"
 import { usePort } from "@/hooks/modules/use-port"
+import { useHostRunEvents } from "@/hooks/workflow/use-host-run-events"
 
 export function RunDetail({ workflowId, runId }: { workflowId: string; runId: string }) {
   const t = useTranslations("workflows.runs.detail")
   const router = useRouter()
-  const run = useLiveQuery(() => getDb().workflowRuns.get(runId), [runId])
-  const events = useLiveQuery(
-    async () =>
-      getDb()
-        .workflowRunEvents.where("[runId+ts]")
-        .between([runId, 0], [runId, Number.MAX_SAFE_INTEGER])
-        .toArray(),
+  // On a paired client the run belongs to the Host: its step events never
+  // reach this device's tables, so they are read from the Host page by page,
+  // and the Host's row stands in for a mirror that has not synced yet (WF-23).
+  const onHost = workflowWriteAuthority() === "host"
+  // `?? null` so a missing row reads as "not found". `useLiveQuery` is also
+  // `undefined` while loading, and `get` of a missing key resolves `undefined`
+  // too, which used to leave an unknown run on the skeleton forever.
+  const localRun = useLiveQuery(
+    async () => (await getDb().workflowRuns.get(runId)) ?? null,
     [runId]
   )
+  const localEvents = useLiveQuery(
+    async () =>
+      onHost
+        ? []
+        : getDb()
+            .workflowRunEvents.where("[runId+ts]")
+            .between([runId, 0], [runId, Number.MAX_SAFE_INTEGER])
+            .toArray(),
+    [runId, onHost]
+  )
+  const hostRun = useHostRunEvents(runId, onHost)
+  const run: WorkflowRunRow | null | undefined = onHost
+    ? (hostRun.run ?? (localRun || (hostRun.run === null ? null : undefined)))
+    : localRun
+  const events: WorkflowRunEventRow[] | undefined = onHost
+    ? hostRun.run === undefined && !localRun
+      ? undefined
+      : hostRun.events
+    : localEvents
 
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -80,21 +103,28 @@ export function RunDetail({ workflowId, runId }: { workflowId: string; runId: st
     }
   }
 
+  // The Host cannot be reached and this device holds no copy of the run.
+  const hostUnreachable = onHost && hostRun.error !== null && run === undefined && localRun === null
+
   // Loading state — both run row and events.
-  if (run === undefined || events === undefined) {
+  if (!hostUnreachable && (run === undefined || events === undefined)) {
     return <RunDetailSkeleton />
   }
 
-  if (run === null || run === undefined) {
+  if (hostUnreachable || !run || !events) {
     return (
-      <Empty className="mx-auto max-w-md py-20">
+      <Empty className="mx-auto max-w-md py-20" data-testid="run-detail-not-found">
         <EmptyHeader>
           <EmptyMedia>
             <SquareIcon className="size-8" aria-hidden="true" />
           </EmptyMedia>
         </EmptyHeader>
-        <EmptyTitle>{t("notFound.title")}</EmptyTitle>
-        <EmptyDescription>{t("notFound.description")}</EmptyDescription>
+        <EmptyTitle>
+          {hostUnreachable ? t("hostUnreachable.title") : t("notFound.title")}
+        </EmptyTitle>
+        <EmptyDescription>
+          {hostUnreachable ? t("hostUnreachable.description") : t("notFound.description")}
+        </EmptyDescription>
         <Button
           onClick={() => router.push(`/workflows/runs?id=${encodeURIComponent(workflowId)}`)}
           className="mt-2"
@@ -109,7 +139,8 @@ export function RunDetail({ workflowId, runId }: { workflowId: string; runId: st
     <RunDetailInner
       run={run}
       workflowId={workflowId}
-      events={events as WorkflowRunEventRow[]}
+      events={events}
+      onHost={onHost}
       selectedStepId={selectedStepId}
       setSelectedStepId={setSelectedStepId}
       busy={busy}
@@ -122,6 +153,7 @@ function RunDetailInner({
   run,
   workflowId,
   events,
+  onHost,
   selectedStepId,
   setSelectedStepId,
   busy,
@@ -130,6 +162,13 @@ function RunDetailInner({
   run: WorkflowRunRow
   workflowId: string
   events: WorkflowRunEventRow[]
+  /**
+   * The run is the paired Host's. A re-run is a new formal invocation, and
+   * this device has no Host command for one: `retryWorkflowRun` here would
+   * admit it against the phone's own tables. The re-run buttons stay
+   * visible and disabled, saying where to re-run it.
+   */
+  onHost: boolean
   selectedStepId: string | null
   setSelectedStepId: (id: string) => void
   busy: boolean
@@ -156,8 +195,14 @@ function RunDetailInner({
     [run.id]
   )
 
+  const retryUnavailableReason = onHost
+    ? t("retryOnHostOnly")
+    : !run.executionBinding
+      ? t("formalRetryUnavailable")
+      : undefined
+
   const handleRetry = async (mode: WorkflowRetryMode) => {
-    if (busy) return
+    if (busy || onHost) return
     setBusy(true)
     let toastId: string | number | undefined
     try {
@@ -247,13 +292,15 @@ function RunDetailInner({
           variant="outline"
           size="sm"
           onClick={() => void handleRetry("failed-step")}
-          disabled={busy || !selectedStepId || !run.executionBinding}
+          disabled={busy || onHost || !selectedStepId || !run.executionBinding}
           title={
-            !run.executionBinding
-              ? t("formalRetryUnavailable")
-              : selectedStepId
-                ? undefined
-                : t("rerunFromStepHint")
+            onHost
+              ? t("retryOnHostOnly")
+              : !run.executionBinding
+                ? t("formalRetryUnavailable")
+                : selectedStepId
+                  ? undefined
+                  : t("rerunFromStepHint")
           }
           data-testid="run-detail-rerun-from-step"
         >
@@ -264,8 +311,8 @@ function RunDetailInner({
           variant="outline"
           size="sm"
           onClick={() => void handleRetry("original-version")}
-          disabled={busy || !run.executionBinding}
-          title={!run.executionBinding ? t("formalRetryUnavailable") : undefined}
+          disabled={busy || onHost || !run.executionBinding}
+          title={retryUnavailableReason}
           data-testid="run-detail-rerun-original"
         >
           <RotateCcwIcon className="size-4 mr-1.5" />
@@ -275,8 +322,8 @@ function RunDetailInner({
           variant="outline"
           size="sm"
           onClick={() => void handleRetry("current-deployment")}
-          disabled={busy || !run.executionBinding}
-          title={!run.executionBinding ? t("formalRetryUnavailable") : undefined}
+          disabled={busy || onHost || !run.executionBinding}
+          title={retryUnavailableReason}
           data-testid="run-detail-rerun-current"
         >
           <RotateCcwIcon className="size-4 mr-1.5" />

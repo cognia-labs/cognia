@@ -1083,6 +1083,25 @@ describe("readDexieDelta", () => {
     expect(row).toMatchObject({ status: "running", startedAt: 30, workflowId: "wf-1" })
   })
 
+  it("keeps a draft run's resume scope and seeded step outputs on the executing Host", async () => {
+    const db = getDb()
+    await db.workflowRuns.bulkPut([
+      {
+        id: "r-draft",
+        workflowId: "wf-1",
+        status: "running",
+        startedAt: 30,
+        draftScope: { restrictToStepIds: ["a"], seedOutputs: { a: { secret: "step output" } } },
+      } as never,
+    ])
+
+    const delta = await readDexieDelta("workflowRuns", 10)
+    const row = delta.rows.find((candidate) => (candidate as { id: string }).id === "r-draft")
+
+    expect(row).toMatchObject({ status: "running", workflowId: "wf-1" })
+    expect(row).not.toHaveProperty("draftScope")
+  })
+
   it("returns canonical execution summaries without syncing private event rows", async () => {
     const db = getDb()
     await db.executionRuns.bulkPut([

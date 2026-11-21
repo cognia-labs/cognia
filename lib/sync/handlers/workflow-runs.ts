@@ -8,7 +8,8 @@ import { runSyncHandler } from "./base"
 /**
  * Pull workflow RUN history (creation + completion) from the desktop.
  *
- * Workflow *definitions* sync via `syncWorkflows`; this mirrors their runs so
+ * Workflow *definitions* sync via the workflow module's `syncWorkflows`
+ * (`lib/workflow/sync/workflows.ts`); this mirrors their runs so
  * the mobile library badges ("active"/"sending"), RecentRunsFeed,
  * MobileRunsList, and the home active-runs card reflect what actually ran —
  * including workflows the phone triggered, which previously vanished once

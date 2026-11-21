@@ -15,13 +15,15 @@
 //!     `register`. Paths are unique within the process; a second register
 //!     with the same trigger id is treated as an update.
 //!   * On match, the handler builds a `WebhookTriggerPayload`, emits the
-//!     `workflow:trigger` event, and returns the configured response (or a
-//!     204 No Content fallback).
-//!
-//! Phase 5a ships the router and the synchronous response path. The
-//! "hold the response open until io.webhook.respond runs" path piggybacks
-//! on this scaffolding once the orchestrator gains a reverse-channel hook
-//! (planned for the next slice).
+//!     `workflow:trigger` event, and HOLDS the request until the runtime
+//!     acknowledges admission (`admissionId`, see [`ADMISSION_TIMEOUT_MS`]).
+//!     A 2xx success therefore always names a durably reserved run (or a
+//!     durable handoff to another Host) in `x-cognia-run-id` /
+//!     `x-cognia-handoff-id`; a refusal reaches the sender as the runtime's
+//!     own 4xx/5xx; no acknowledgement in time is a 503 with `Retry-After`.
+//!   * A workflow with an `io.webhook.respond` node keeps the request open
+//!     a second time, after admission, for the dynamic reply
+//!     (`correlationId`), and falls back to the configured response.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
@@ -53,6 +55,19 @@ use crate::workflow::integration_spool::{
 };
 use crate::workflow::types::{TriggerBinding, TriggerEvent, WebhookTriggerPayload};
 
+/// How long a webhook request waits for the runtime to confirm (or refuse)
+/// admission before the sender is told to retry. Admission is a local Dexie
+/// transaction plus one IPC round trip; ten seconds covers a busy webview
+/// without approaching the ~30 s senders allow.
+const ADMISSION_TIMEOUT_MS: u64 = 10_000;
+
+/// `Retry-After` seconds when admission was not confirmed in time.
+const ADMISSION_RETRY_AFTER_SECONDS: &str = "5";
+
+/// Receipt headers the runtime's admission acknowledgement may carry. Only
+/// these are copied from the acknowledgement onto the sender's response.
+const RECEIPT_HEADERS: [&str; 2] = ["x-cognia-run-id", "x-cognia-handoff-id"];
+
 /// Fallback hold time for `await_response` webhooks when the entry doesn't
 /// specify one. Kept under the ~30 s most SaaS senders allow before they give
 /// up, so a workflow that never calls `io.webhook.respond` still returns the
@@ -81,8 +96,10 @@ struct PendingResponses {
 impl PendingResponses {
     /// Allocate a correlation id and register a waiter. Returns the id (handed
     /// to the workflow via the trigger payload) and the receiver to await.
-    fn register(&self) -> (String, oneshot::Receiver<DynamicResponse>) {
-        let id = format!("whr_{}", self.counter.fetch_add(1, Ordering::Relaxed));
+    /// `prefix` keeps the two holds apart: `whr` for a dynamic reply, `wha`
+    /// for the admission acknowledgement.
+    fn register(&self, prefix: &str) -> (String, oneshot::Receiver<DynamicResponse>) {
+        let id = format!("{prefix}_{}", self.counter.fetch_add(1, Ordering::Relaxed));
         let (tx, rx) = oneshot::channel();
         self.map.write().insert(id.clone(), tx);
         (id, rx)
@@ -310,20 +327,24 @@ impl WebhookRouter {
         }
         let mut entry = entry;
         entry.path = path.clone();
+        // A renamed path is the same trigger at a new address: drop every
+        // other path this trigger held, or the old URL keeps starting runs of
+        // the still-active version until the process restarts.
+        entries.retain(|existing_path, existing| {
+            existing_path == &path
+                || existing.workflow_id != entry.workflow_id
+                || existing.trigger_id != entry.trigger_id
+        });
         entries.insert(path.clone(), entry);
         Ok(self.bound_url_for_path(&path))
     }
 
-    /// Remove a trigger by id. Idempotent; missing ids return Ok(()).
+    /// Remove every path a trigger holds. Idempotent; missing ids are a no-op.
     pub fn unregister(&self, workflow_id: &str, trigger_id: &str) {
-        let mut entries = self.inner.entries.write();
-        let path = entries
-            .iter()
-            .find(|(_, e)| e.workflow_id == workflow_id && e.trigger_id == trigger_id)
-            .map(|(p, _)| p.clone());
-        if let Some(p) = path {
-            entries.remove(&p);
-        }
+        self.inner
+            .entries
+            .write()
+            .retain(|_, e| e.workflow_id != workflow_id || e.trigger_id != trigger_id);
     }
 
     /// Look up the URL for an already-registered trigger.
@@ -410,6 +431,7 @@ impl WebhookRouter {
             integration_spool: self.inner.integration_spool.clone(),
             pending: self.inner.pending.clone(),
             emitter: emitter as Arc<dyn TriggerEmitter>,
+            admission_timeout: Duration::from_millis(ADMISSION_TIMEOUT_MS),
         };
         let app = Router::new()
             .route("/webhook/{*path}", any(handle_webhook))
@@ -462,6 +484,8 @@ struct WebhookAppState {
     integration_spool: Arc<IntegrationSpool>,
     pending: Arc<PendingResponses>,
     emitter: Arc<dyn TriggerEmitter>,
+    /// Bound on the admission hold; [`ADMISSION_TIMEOUT_MS`] outside tests.
+    admission_timeout: Duration,
 }
 
 /// Strip leading `/`, lowercase, collapse multiple slashes.
@@ -801,27 +825,38 @@ async fn handle_webhook(
         body: body_value,
         body_was_json,
         correlation_id: None,
+        admission_id: None,
     };
+
+    // Every request waits for the runtime to confirm admission; register the
+    // hold before emitting so an acknowledgement can never outrun it.
+    let (admission_id, admission_rx) = state.pending.register("wha");
+    payload.admission_id = Some(admission_id.clone());
 
     // When the workflow has an `io.webhook.respond` node the TS bridge sets
     // `await_response`. Register a correlation id + waiter BEFORE emitting so
     // the workflow's respond node can resolve us by the time it runs, and
     // surface the id to the workflow via the trigger payload.
     let pending_rx = if entry.await_response {
-        let (correlation_id, rx) = state.pending.register();
+        let (correlation_id, rx) = state.pending.register("whr");
         payload.correlation_id = Some(correlation_id);
         Some(rx)
     } else {
         None
+    };
+    let holds = state.pending.clone();
+    let release_holds = |correlation_id: Option<&str>| {
+        holds.cancel(&admission_id);
+        if let Some(cid) = correlation_id {
+            holds.cancel(cid);
+        }
     };
 
     let payload_value = match serde_json::to_value(&payload) {
         Ok(v) => v,
         Err(err) => {
             log::warn!("workflow webhook payload serialize failed: {err}");
-            if let Some(cid) = payload.correlation_id.as_deref() {
-                state.pending.cancel(cid);
-            }
+            release_holds(payload.correlation_id.as_deref());
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 axum::Json(ErrorBody {
@@ -843,6 +878,32 @@ async fn handle_webhook(
     };
     state.emitter.emit(event);
 
+    // A success must name what was admitted. Until the runtime says so, the
+    // sender has no evidence anything durable exists.
+    let receipt = match tokio::time::timeout(state.admission_timeout, admission_rx).await {
+        Ok(Ok(ack)) if (200..300).contains(&ack.status) => receipt_headers(&ack.headers),
+        Ok(Ok(refusal)) => {
+            release_holds(payload.correlation_id.as_deref());
+            return dynamic_response(refusal);
+        }
+        _ => {
+            release_holds(payload.correlation_id.as_deref());
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::RETRY_AFTER,
+                HeaderValue::from_static(ADMISSION_RETRY_AFTER_SECONDS),
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                headers,
+                axum::Json(ErrorBody {
+                    error: "workflow admission was not confirmed",
+                }),
+            )
+                .into_response();
+        }
+    };
+
     // Hold the request open until `io.webhook.respond` resolves us or the
     // timeout elapses. On timeout we drop the waiter and fall through to the
     // static response so the caller never hangs indefinitely.
@@ -853,7 +914,7 @@ async fn handle_webhook(
             entry.response_timeout_ms
         };
         match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
-            Ok(Ok(resp)) => return dynamic_response(resp),
+            Ok(Ok(resp)) => return with_receipt(dynamic_response(resp), &receipt),
             _ => {
                 if let Some(cid) = payload.correlation_id.as_deref() {
                     state.pending.cancel(cid);
@@ -864,8 +925,68 @@ async fn handle_webhook(
     }
 
     let status = StatusCode::from_u16(entry.response_status).unwrap_or(StatusCode::OK);
-    let body = entry.response_body.unwrap_or_default();
-    (status, body).into_response()
+    let configured = entry.response_body.unwrap_or_default();
+    if configured.is_empty() && status_allows_body(status) {
+        // No authored body: the receipt itself is the body, so a sender that
+        // logs only bodies still records which run its delivery started.
+        return with_receipt(
+            (status, axum::Json(receipt_body(&receipt))).into_response(),
+            &receipt,
+        );
+    }
+    with_receipt((status, configured).into_response(), &receipt)
+}
+
+/// The receipt headers an admission acknowledgement carried, lower-cased.
+fn receipt_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let name = name.to_ascii_lowercase();
+            (RECEIPT_HEADERS.contains(&name.as_str()) && !value.is_empty())
+                .then(|| (name, value.clone()))
+        })
+        .collect()
+}
+
+/// `{"status":"accepted","runId":…}` / `…"handoffId":…` for an empty static body.
+fn receipt_body(receipt: &BTreeMap<String, String>) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    body.insert("status".into(), serde_json::Value::from("accepted"));
+    if let Some(run_id) = receipt.get("x-cognia-run-id") {
+        body.insert("runId".into(), serde_json::Value::from(run_id.as_str()));
+    }
+    if let Some(handoff_id) = receipt.get("x-cognia-handoff-id") {
+        body.insert(
+            "handoffId".into(),
+            serde_json::Value::from(handoff_id.as_str()),
+        );
+    }
+    serde_json::Value::Object(body)
+}
+
+/// Attach the receipt headers to an outgoing response; an author-supplied
+/// header of the same name wins.
+fn with_receipt(
+    mut response: axum::response::Response,
+    receipt: &BTreeMap<String, String>,
+) -> axum::response::Response {
+    for (name, value) in receipt {
+        if let (Ok(n), Ok(v)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            response.headers_mut().entry(n).or_insert(v);
+        }
+    }
+    response
+}
+
+/// Whether a response with this status may carry a body (RFC 9110 §6.4.1).
+fn status_allows_body(status: StatusCode) -> bool {
+    !(status.is_informational()
+        || status == StatusCode::NO_CONTENT
+        || status == StatusCode::NOT_MODIFIED)
 }
 
 /// Build an axum response from a workflow-supplied [`DynamicResponse`].
@@ -979,6 +1100,63 @@ mod tests {
         }
     }
 
+    /// What the runtime answers on the admission hold, standing in for
+    /// `dispatchTrigger`'s acknowledgement.
+    #[derive(Clone)]
+    enum AdmissionAnswer {
+        Run(&'static str),
+        Refuse(u16, &'static str),
+        Silent,
+    }
+
+    /// Emitter standing in for the runtime: records every event and answers
+    /// its admission hold the way `AdmissionAnswer` says.
+    struct AckingEmitter {
+        fired: Arc<parking_lot::Mutex<Vec<TriggerEvent>>>,
+        router: WebhookRouter,
+        answer: AdmissionAnswer,
+    }
+
+    impl TriggerEmitter for AckingEmitter {
+        fn emit(&self, event: TriggerEvent) {
+            let admission = event
+                .payload
+                .get("admissionId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            self.fired.lock().push(event);
+            let Some(admission) = admission else { return };
+            let reply = match &self.answer {
+                AdmissionAnswer::Run(run_id) => DynamicResponse {
+                    status: 202,
+                    body: String::new(),
+                    headers: BTreeMap::from([(
+                        "X-Cognia-Run-Id".to_string(),
+                        (*run_id).to_string(),
+                    )]),
+                },
+                AdmissionAnswer::Refuse(status, body) => DynamicResponse {
+                    status: *status,
+                    body: (*body).to_string(),
+                    headers: BTreeMap::from([(
+                        "content-type".to_string(),
+                        "application/json".to_string(),
+                    )]),
+                },
+                AdmissionAnswer::Silent => return,
+            };
+            assert!(self.router.respond(&admission, reply));
+        }
+    }
+
+    fn acking(router: &WebhookRouter, answer: AdmissionAnswer) -> Arc<AckingEmitter> {
+        Arc::new(AckingEmitter {
+            fired: Arc::default(),
+            router: router.clone(),
+            answer,
+        })
+    }
+
     #[test]
     fn upsert_new_path_is_accepted() {
         let r = WebhookRouter::new();
@@ -1006,6 +1184,46 @@ mod tests {
         r.upsert(a).unwrap();
         let err = r.upsert(b).unwrap_err();
         assert!(err.contains("already registered"));
+    }
+
+    #[test]
+    fn renaming_a_trigger_path_retires_the_old_path() {
+        let r = WebhookRouter::new();
+        r.upsert(entry("old")).unwrap();
+        let mut renamed = entry("old");
+        renamed.path = "new".into();
+        r.upsert(renamed).unwrap();
+        let entries = r.inner.entries.read();
+        assert!(entries.get("old").is_none());
+        assert_eq!(
+            entries.get("new").map(|e| e.trigger_id.as_str()),
+            Some("trg_old")
+        );
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn a_rename_never_retires_another_triggers_path() {
+        let r = WebhookRouter::new();
+        r.upsert(entry("kept")).unwrap();
+        let mut other = entry("other");
+        other.path = "elsewhere".into();
+        r.upsert(other).unwrap();
+        assert_eq!(r.entry_count(), 2);
+    }
+
+    #[test]
+    fn unregister_removes_every_path_of_the_trigger() {
+        let r = WebhookRouter::new();
+        r.upsert(entry("a")).unwrap();
+        // A stale second path for the same trigger (as a pre-fix rename left).
+        let mut stale = entry("a");
+        stale.path = "b".into();
+        r.inner.entries.write().insert("b".into(), stale);
+        r.upsert(entry("unrelated")).unwrap();
+        r.unregister("wf_a", "trg_a");
+        assert_eq!(r.entry_count(), 1);
+        assert!(r.inner.entries.read().contains_key("unrelated"));
     }
 
     #[test]
@@ -1066,7 +1284,7 @@ mod tests {
     async fn end_to_end_post_emits_a_trigger_event() {
         let router = WebhookRouter::new();
         router.upsert(entry("hello")).unwrap();
-        let recorder = Arc::new(RecordingEmitter::default());
+        let recorder = acking(&router, AdmissionAnswer::Run("run_1"));
         let bound = router.start(recorder.clone(), 0).await.unwrap();
 
         let url = format!("http://{bound}/webhook/hello");
@@ -1079,6 +1297,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(resp.headers().get("x-cognia-run-id").unwrap(), "run_1");
+        // No authored body: the receipt is the body.
+        assert_eq!(
+            resp.json::<serde_json::Value>().await.unwrap(),
+            serde_json::json!({ "status": "accepted", "runId": "run_1" })
+        );
 
         // Give the emitter a moment to record (axum spawns the handler).
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1097,7 +1321,7 @@ mod tests {
         let mut github = entry("github");
         github.delivery_id_header = Some("X-GitHub-Delivery".into());
         router.upsert(github).unwrap();
-        let recorder = Arc::new(RecordingEmitter::default());
+        let recorder = acking(&router, AdmissionAnswer::Run("run_1"));
         let bound = router.start(recorder.clone(), 0).await.unwrap();
         let client = http_client();
         let post = |path: &str, header: Option<(&str, String)>| {
@@ -1158,7 +1382,7 @@ mod tests {
         e.await_response = true;
         e.response_timeout_ms = 5_000;
         router.upsert(e).unwrap();
-        let recorder = Arc::new(RecordingEmitter::default());
+        let recorder = acking(&router, AdmissionAnswer::Run("run_1"));
         let bound = router.start(recorder.clone(), 0).await.unwrap();
 
         let url = format!("http://{bound}/webhook/dyn");
@@ -1194,6 +1418,7 @@ mod tests {
         let resp = post.await.unwrap();
         assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
         assert_eq!(resp.headers().get("x-custom").unwrap(), "yes");
+        assert_eq!(resp.headers().get("x-cognia-run-id").unwrap(), "run_1");
         assert_eq!(resp.text().await.unwrap(), r#"{"ok":true}"#);
         router.stop();
     }
@@ -1207,7 +1432,7 @@ mod tests {
         e.response_status = 202;
         e.response_body = Some("queued".into());
         router.upsert(e).unwrap();
-        let recorder = Arc::new(RecordingEmitter::default());
+        let recorder = acking(&router, AdmissionAnswer::Run("run_1"));
         let bound = router.start(recorder, 0).await.unwrap();
 
         let resp = http_client()
@@ -1217,8 +1442,130 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+        assert_eq!(resp.headers().get("x-cognia-run-id").unwrap(), "run_1");
         assert_eq!(resp.text().await.unwrap(), "queued");
         router.stop();
+    }
+
+    #[tokio::test]
+    async fn a_refused_admission_reaches_the_sender_instead_of_a_success() {
+        let router = WebhookRouter::new();
+        let mut e = entry("refused");
+        e.await_response = true;
+        router.upsert(e).unwrap();
+        let emitter = acking(
+            &router,
+            AdmissionAnswer::Refuse(
+                404,
+                r#"{"error":"not deployed","code":"deployment-not-found"}"#,
+            ),
+        );
+        let bound = router.start(emitter, 0).await.unwrap();
+
+        let resp = http_client()
+            .post(format!("http://{bound}/webhook/refused"))
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::NOT_FOUND);
+        assert!(resp.headers().get("x-cognia-run-id").is_none());
+        assert_eq!(
+            resp.json::<serde_json::Value>().await.unwrap()["code"],
+            "deployment-not-found"
+        );
+        // Both holds are gone: nothing is left waiting for this request.
+        assert!(router.inner.pending.map.read().is_empty());
+        router.stop();
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_admission_is_a_503_with_retry_after() {
+        let router = WebhookRouter::new();
+        router.upsert(entry("silent")).unwrap();
+        let emitter = acking(&router, AdmissionAnswer::Silent);
+        let app_state = Arc::new(WebhookAppState {
+            entries: router.inner.entries.clone(),
+            integration_entries: router.inner.integration_entries.clone(),
+            integration_spool: router.inner.integration_spool.clone(),
+            pending: router.inner.pending.clone(),
+            emitter,
+            admission_timeout: Duration::from_millis(50),
+        });
+        // Driven in-process with a short bound instead of the real ten seconds.
+        let response = handle_webhook(
+            State(app_state),
+            Path("silent".to_string()),
+            Query(BTreeMap::new()),
+            Method::POST,
+            HeaderMap::new(),
+            Bytes::from_static(b"{}"),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .unwrap(),
+            ADMISSION_RETRY_AFTER_SECONDS
+        );
+        assert!(router.inner.pending.map.read().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_authored_body_is_kept_and_a_bodiless_status_gets_only_the_header() {
+        let router = WebhookRouter::new();
+        let mut authored = entry("authored");
+        authored.response_body = Some("thanks".into());
+        router.upsert(authored).unwrap();
+        let mut empty = entry("empty");
+        empty.response_status = 204;
+        router.upsert(empty).unwrap();
+        let bound = router
+            .start(acking(&router, AdmissionAnswer::Run("run_9")), 0)
+            .await
+            .unwrap();
+        let client = http_client();
+
+        let resp = client
+            .post(format!("http://{bound}/webhook/authored"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.headers().get("x-cognia-run-id").unwrap(), "run_9");
+        assert_eq!(resp.text().await.unwrap(), "thanks");
+
+        let resp = client
+            .post(format!("http://{bound}/webhook/empty"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT);
+        assert_eq!(resp.headers().get("x-cognia-run-id").unwrap(), "run_9");
+        assert_eq!(resp.text().await.unwrap(), "");
+        router.stop();
+    }
+
+    #[test]
+    fn receipt_headers_copy_only_the_receipt() {
+        let ack = BTreeMap::from([
+            ("X-Cognia-Run-Id".to_string(), "run_1".to_string()),
+            ("x-cognia-handoff-id".to_string(), String::new()),
+            ("set-cookie".to_string(), "nope".to_string()),
+        ]);
+        assert_eq!(
+            receipt_headers(&ack),
+            BTreeMap::from([("x-cognia-run-id".to_string(), "run_1".to_string())])
+        );
+        assert_eq!(
+            receipt_body(&BTreeMap::from([(
+                "x-cognia-handoff-id".to_string(),
+                "hdq_1".to_string()
+            )])),
+            serde_json::json!({ "status": "accepted", "handoffId": "hdq_1" })
+        );
     }
 
     #[test]
@@ -1381,7 +1728,7 @@ mod tests {
         let mut e = entry("signed");
         e.hmac_secret = Some("shh".into());
         router.upsert(e).unwrap();
-        let recorder = Arc::new(RecordingEmitter::default());
+        let recorder = acking(&router, AdmissionAnswer::Run("run_1"));
         let bound = router.start(recorder.clone(), 0).await.unwrap();
 
         let body = "{\"a\":1}";

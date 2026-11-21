@@ -8,7 +8,10 @@ import {
   resolveWorkflowDeployment,
 } from "@/lib/db/workflow-deployments"
 import { validateAgainstJsonSchema } from "@/lib/workflow/nodes/ai/schema-validate"
-import { workflowVersionDigest } from "@/lib/workflow/versioning/version-snapshot"
+import {
+  deriveWorkflowDependencyManifest,
+  workflowVersionDigest,
+} from "@/lib/workflow/versioning/version-snapshot"
 import { knowledgeBaseRevisions } from "./knowledge-revisions"
 import type {
   WorkflowEntrypoint,
@@ -118,7 +121,20 @@ export interface ExecuteDeployedWorkflowResult {
 
 const activeInvocations = new Map<string, Promise<ExecuteDeployedWorkflowResult>>()
 
-function invocationId(input: {
+/**
+ * Durable invocation identity. An idempotent request maps to one invocation
+ * per caller: two callers that happen to send the same key must not share a
+ * run.
+ *
+ * The `trigger` entrypoint is the exception. Its key is derived from the
+ * occurrence itself (workflow, trigger node, scheduled slot or delivery id),
+ * never chosen by a caller, and the same occurrence can arrive through more
+ * than one door: the local daemon of the Host the run is pinned to, and a
+ * handoff forwarded by another Host whose daemon fired for the same slot. It
+ * is one occurrence, so the identity leaves the caller out and both doors
+ * resolve to the same invocation and run.
+ */
+export function invocationId(input: {
   accountId: string
   entrypoint: WorkflowEntrypoint
   deploymentId: string
@@ -126,7 +142,16 @@ function invocationId(input: {
   idempotencyKey?: string
 }): string {
   if (!input.idempotencyKey) return `wfi_${nanoid(16)}`
-  return `wfi_${workflowVersionDigest(input).slice("wfv1:".length)}`
+  const identity =
+    input.entrypoint === "trigger"
+      ? {
+          accountId: input.accountId,
+          entrypoint: input.entrypoint,
+          deploymentId: input.deploymentId,
+          idempotencyKey: input.idempotencyKey,
+        }
+      : input
+  return `wfi_${workflowVersionDigest(identity).slice("wfv1:".length)}`
 }
 
 function assertScope(scopes: readonly string[] | undefined): void {
@@ -157,7 +182,10 @@ export async function createWorkflowDependencyLockForVersion(
 ): Promise<WorkflowDependencyLock> {
   const workflows: WorkflowDependencyLock["workflows"] = {}
   const indexes: WorkflowDependencyLock["indexes"] = {}
-  for (const dependency of version.dependencyManifest.workflows) {
+  // Derived from the immutable definition rather than the stored manifest, so
+  // a version published while non-call references (a completion trigger's
+  // source workflow) were still recorded as dependencies locks only its calls.
+  for (const dependency of deriveWorkflowDependencyManifest(version.definition).workflows) {
     const resolved = await resolveWorkflowDeployment(
       dependency.workflowId,
       environment,
@@ -744,64 +772,7 @@ async function reuseInvocation(
     if (signal?.aborted) throw new Error("Workflow admission aborted")
     // No in-process driver owns this durable admission. This is the recovery
     // path after a process crash between admission and orchestrator startup.
-    const executionBinding: WorkflowExecutionBinding = {
-      invocationId: invocation.id,
-      versionId: invocation.versionId,
-      deploymentId: invocation.deploymentId,
-      deploymentRevision: invocation.deploymentRevision,
-      entrypoint: invocation.entrypoint,
-      caller: invocation.caller,
-      ...(invocation.idempotencyKey ? { idempotencyKey: invocation.idempotencyKey } : {}),
-      ...(invocation.dependencyLock ? { dependencyLock: invocation.dependencyLock } : {}),
-    }
-    const trigger: TriggerEvent = {
-      workflowId: version.workflowId,
-      kind: existingRun.triggerKind,
-      ...(existingRun.triggerId ? { triggerId: existingRun.triggerId } : {}),
-      ...(existingRun.triggerBinding ? { binding: existingRun.triggerBinding } : {}),
-      payload: existingRun.triggerPayload,
-      originAt: existingRun.startedAt,
-    }
-    const recovery = Promise.resolve().then(async () => {
-      if (
-        existingRun.triggerKind.startsWith("trigger.connector.") &&
-        existingRun.triggerBinding?.conversationKey
-      ) {
-        if (
-          !(await waitForTriggerConversation(
-            existingRun.triggerBinding,
-            existingRun.triggerOriginAt ?? existingRun.startedAt,
-            { signal, runId }
-          ))
-        ) {
-          const { cancelWorkflowRun } = await import("./cancel-run")
-          await cancelWorkflowRun(runId, "Conversation automation cancelled")
-          throw new Error("Conversation automation cancelled")
-        }
-      }
-      return driveInvocation({
-        invocation,
-        version,
-        workflow: version.definition,
-        trigger,
-        executionBinding,
-        triggeredBy: existingRun.triggeredBy,
-        traceId: existingRun.traceId,
-        lineage: existingRun.lineage,
-        securityContext: existingRun.securityContext,
-        signal,
-        startStepId: invocation.startStepId,
-        seedRunId: invocation.seedRunId,
-      })
-    })
-    activeInvocations.set(invocation.id, recovery)
-    try {
-      return { ...(await recovery), reused: true }
-    } finally {
-      if (activeInvocations.get(invocation.id) === recovery) {
-        activeInvocations.delete(invocation.id)
-      }
-    }
+    return { ...(await recoverAdmittedRun(invocation, version, existingRun, signal)), reused: true }
   }
   return {
     invocationId: invocation.id,
@@ -827,6 +798,110 @@ async function reuseInvocation(
         }
       : { runId, status: "pending" },
   }
+}
+
+/**
+ * Drive an admitted run that no live driver in this process owns, keeping
+ * everything it was admitted with: the trigger (kind, node, payload, binding
+ * and the producer's ORIGINAL timestamp), the immutable binding, lineage,
+ * origin and security context. The invocation settles through the same
+ * driver as a fresh admission, so it never stays `running` after its run
+ * ended.
+ */
+function recoverAdmittedRun(
+  invocation: WorkflowInvocation,
+  version: WorkflowVersion,
+  run: WorkflowRunRow,
+  signal?: AbortSignal
+): Promise<ExecuteDeployedWorkflowResult> {
+  const active = activeInvocations.get(invocation.id)
+  if (active) return active
+  const runId = run.id
+  const executionBinding: WorkflowExecutionBinding = run.executionBinding ?? {
+    invocationId: invocation.id,
+    versionId: invocation.versionId,
+    deploymentId: invocation.deploymentId,
+    deploymentRevision: invocation.deploymentRevision,
+    entrypoint: invocation.entrypoint,
+    caller: invocation.caller,
+    ...(invocation.idempotencyKey ? { idempotencyKey: invocation.idempotencyKey } : {}),
+    ...(invocation.dependencyLock ? { dependencyLock: invocation.dependencyLock } : {}),
+  }
+  const trigger: TriggerEvent = {
+    workflowId: version.workflowId,
+    kind: run.triggerKind,
+    ...(run.triggerId ? { triggerId: run.triggerId } : {}),
+    ...(run.triggerBinding ? { binding: run.triggerBinding } : {}),
+    payload: run.triggerPayload,
+    originAt: run.triggerOriginAt ?? run.startedAt,
+  }
+  const recovery = Promise.resolve().then(async () => {
+    // Only an admission that never started still owes the conversation gate;
+    // a run that was already executing passed it before the crash.
+    if (
+      run.status === "pending" &&
+      run.triggerKind.startsWith("trigger.connector.") &&
+      run.triggerBinding?.conversationKey
+    ) {
+      if (
+        !(await waitForTriggerConversation(
+          run.triggerBinding,
+          run.triggerOriginAt ?? run.startedAt,
+          { signal, runId }
+        ))
+      ) {
+        const { cancelWorkflowRun } = await import("./cancel-run")
+        await cancelWorkflowRun(runId, "Conversation automation cancelled")
+        throw new Error("Conversation automation cancelled")
+      }
+    }
+    return driveInvocation({
+      invocation,
+      version,
+      workflow: version.definition,
+      trigger,
+      executionBinding,
+      triggeredBy: run.triggeredBy,
+      traceId: run.traceId,
+      lineage: run.lineage,
+      securityContext: run.securityContext,
+      signal,
+      startStepId: invocation.startStepId,
+      seedRunId: invocation.seedRunId,
+    })
+  })
+  activeInvocations.set(invocation.id, recovery)
+  const release = () => {
+    if (activeInvocations.get(invocation.id) === recovery) activeInvocations.delete(invocation.id)
+  }
+  recovery.then(release, release)
+  return recovery
+}
+
+/**
+ * Continue a formally admitted run after the process that drove it is gone —
+ * the boot scan's entry for a `pending` admission or an interrupted `running`
+ * run. Returns `undefined` when the run has no invocation to continue (a
+ * draft run, or the ledger row is missing), so the caller can replay it as
+ * the plain run it is.
+ */
+export async function resumeAdmittedRun(
+  runId: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<ExecuteDeployedWorkflowResult | undefined> {
+  const run = await getDb().workflowRuns.get(runId)
+  const invocationId = run?.executionBinding?.invocationId
+  if (!run || !invocationId) return undefined
+  const invocation = await getDb().workflowInvocations.get(invocationId)
+  if (!invocation || invocation.runId !== runId) return undefined
+  const version = await getDb().workflowVersions.get(invocation.versionId)
+  if (!version) {
+    throw new WorkflowAdmissionError(
+      "invocation-version-missing",
+      `Workflow invocation ${invocation.id} references missing version ${invocation.versionId}`
+    )
+  }
+  return recoverAdmittedRun(invocation, version, run, options.signal)
 }
 
 export interface ExecuteWorkflowVersionInput extends Omit<

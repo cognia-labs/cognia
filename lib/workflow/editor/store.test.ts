@@ -192,6 +192,25 @@ describe("editor store — graph mutations", () => {
     expect(useStore.getState().dirty).toBe(false)
   })
 
+  it("counts dirtying edits and keeps dirty when one landed after the saved revision", () => {
+    const useStore = createEditorStore(emptyWorkflow())
+    expect(useStore.getState().editRevision).toBe(0)
+    useStore.getState().addNode("trigger.manual", { x: 0, y: 0 })
+    useStore.getState().setName("A")
+    const revision = useStore.getState().editRevision
+    expect(revision).toBe(2)
+    // Selection and other bookkeeping never count as edits.
+    useStore.getState().setSelectedNodes([])
+    expect(useStore.getState().editRevision).toBe(revision)
+
+    useStore.getState().setName("B") // lands while a save of `revision` is in flight
+    useStore.getState().markSaved(undefined, { revision })
+    expect(useStore.getState().dirty).toBe(true)
+
+    useStore.getState().markSaved(undefined, { revision: useStore.getState().editRevision })
+    expect(useStore.getState().dirty).toBe(false)
+  })
+
   it("supplies a sensible label by default", () => {
     const useStore = createEditorStore(emptyWorkflow())
     const id = useStore.getState().addNode("flow.branch", { x: 0, y: 0 })

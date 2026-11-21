@@ -700,11 +700,17 @@ export function buildLocalHostFeatureManifest({
       version: 1,
       operations: ["plugin_tool_exec", "tool_result_review", "protocol_adapter_exec"],
     }
+    // The App-run handoff and the handed-over run's reads ride with it: a
+    // serving Host places a Workflow App run only on a Host that can also
+    // report and cancel it (ADR-0136 placement contract).
     features["workflow.execution"] = {
       version: 1,
       operations: [
         "workflow_placement_probe",
         "workflow_handoff_create",
+        "workflow_app_handoff_create",
+        "workflow_handoff_run_get",
+        "workflow_handoff_run_cancel",
         "workflow_run_list",
         "workflow_cancel_run",
       ],
@@ -973,6 +979,8 @@ export function buildLocalHostFeatureManifest({
         ...(platform === "tauri" ? ["event:automation:consent-request"] : []),
         "event:workflow://approval-request",
         "event:workflow://approval-resolved",
+        "event:workflow://human-input-request",
+        "event:workflow://human-input-resolved",
         "event:workflow://step-execute",
         "event:ocr://download-progress",
       ],

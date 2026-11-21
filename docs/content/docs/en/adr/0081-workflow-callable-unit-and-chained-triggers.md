@@ -53,8 +53,14 @@ entry of `kind:"workflow"`. Two of these interfaces no longer matched the delive
    `{ workflowId, workflowName, runId, status, output?, error?, chainDepth }`.
 4. **Loop/storm guards.** Chain depth is capped at `MAX_WORKFLOW_CHAIN_DEPTH` (10),
    inherited through the trigger payload (`chainDepth`); a workflow can never trigger
-   itself, even via an unscoped subscription. Catch sub-runs (`suppressCatch`) and
-   partial editor runs (`startStepId` / `restrictToStepIds`) never announce.
+   itself, even via an unscoped subscription. Only a formal run (one admitted
+   against an immutable deployment, so it carries an `executionBinding`) announces
+   a completion: draft and editor runs, full previews included, never start
+   published downstream workflows or bots. Catch sub-runs (`suppressCatch`) and
+   partial runs (`startStepId` / `restrictToStepIds`) never announce either. A
+   subscription names the workflow it listens to; that is an event source, not a
+   dependency, so it is not locked at admission and unpublishing the source never
+   blocks the subscriber's own entries.
 5. **Event waits are real.** `flow.wait` event mode blocks on the in-process wake bus
    (`subscribeWake`) under a user-declared `eventKey` (or the run-scoped
    `runId:stepId` default) with an optional timeout; `wf_emit_workflow_event` is the

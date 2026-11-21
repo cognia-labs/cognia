@@ -12,19 +12,24 @@
  *
  * Three rules:
  *
- *  - **De-dup.** If an `action.approval.request` is a transitive ancestor of this
- *    node, a human already approved this path. Do not ask twice.
- *  - **Headless is fail-closed.** A cron/webhook/IM-triggered run has nobody to
- *    answer, so a risky ungated node fails the run naming its surfaces, rather
- *    than hanging on a modal no one will see. Same posture as the Team and /goal
- *    phases.
+ *  - **De-dup.** If an `action.approval.request` upstream of this node ran in
+ *    THIS execution scope and a human approved it, do not ask twice. Being an
+ *    ancestor in the graph is not enough: an approval that was rejected, timed
+ *    out or never ran (a skipped branch) approves nothing. Inside a loop the
+ *    scope is the run plus the enclosing iterations, so one iteration's
+ *    approval never covers the next.
+ *  - **Headless is fail-closed.** A run no human is watching — an automatic
+ *    trigger (cron, webhook, file, event subscriptions: source `"trigger"`),
+ *    IM, API, schedule or bot — has nobody to answer, so a risky ungated node
+ *    fails the run naming its surfaces, rather than hanging on a modal no one
+ *    will see. Same posture as the Team and /goal phases.
  *  - **Low-risk nodes never touch this path** — no checkpoint, no registry entry,
  *    no wall-clock cost.
  */
 
 import type { VisualWorkflow, WorkflowNode, WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import { listRunEvents, appendEvent } from "./event-log"
-import { findLatestCheckpoint } from "./long-step-runner"
+import { findApprovalCheckpoint } from "./long-step-runner"
 import {
   approvalId,
   registerPendingApproval,
@@ -67,6 +72,16 @@ export interface RiskGateInput {
   node: WorkflowNode
   runId: string
   triggeredBy?: WorkflowTriggeredFrom
+  /**
+   * `action.approval.request` node ids that executed and were approved in the
+   * scope this node runs in (the run, plus the enclosing loop iterations).
+   */
+  approvedApprovalIds: ReadonlySet<string>
+  /**
+   * Identity of this execution of the node: its id at top level, its full
+   * memo key inside a loop iteration, so each iteration asks on its own.
+   */
+  stepKey?: string
   signal?: AbortSignal
 }
 
@@ -93,10 +108,41 @@ export function isInteractiveRun(triggeredBy?: WorkflowTriggeredFrom): boolean {
   return INTERACTIVE_SOURCES.includes(triggeredBy.source)
 }
 
-/** Does an authored approval node already gate this path? */
-export function hasAncestorApproval(workflow: VisualWorkflow, nodeId: string): boolean {
-  const ancestors = ancestorsOf(workflow, nodeId)
-  return workflow.nodes.some((n) => ancestors.has(n.id) && n.type === "action.approval.request")
+/**
+ * Every node whose completion precedes `nodeId`: its graph ancestors and, for
+ * a loop-body node, each enclosing loop container and that container's own
+ * ancestors (an approval before the loop gates the whole loop).
+ */
+export function gatingAncestorsOf(workflow: VisualWorkflow, nodeId: string): Set<string> {
+  const byId = new Map(workflow.nodes.map((n) => [n.id, n] as const))
+  const result = ancestorsOf(workflow, nodeId)
+  let parentId = byId.get(nodeId)?.parentId
+  const seen = new Set<string>()
+  while (parentId !== undefined && !seen.has(parentId)) {
+    seen.add(parentId)
+    const parent = byId.get(parentId)
+    if (!parent) break
+    if (parent.type === "flow.loop") {
+      result.add(parent.id)
+      for (const id of ancestorsOf(workflow, parent.id)) result.add(id)
+    }
+    parentId = parent.parentId
+  }
+  return result
+}
+
+/** Did a human approve an authored approval node upstream of this one, in this scope? */
+export function hasApprovedAncestor(
+  workflow: VisualWorkflow,
+  nodeId: string,
+  approvedApprovalIds: ReadonlySet<string>
+): boolean {
+  if (approvedApprovalIds.size === 0) return false
+  const ancestors = gatingAncestorsOf(workflow, nodeId)
+  return workflow.nodes.some(
+    (n) =>
+      n.type === "action.approval.request" && ancestors.has(n.id) && approvedApprovalIds.has(n.id)
+  )
 }
 
 /**
@@ -110,7 +156,7 @@ export async function applyNodeRiskGate(input: RiskGateInput): Promise<void> {
 
   const assessment = classifyNodeRisk(node)
   if (assessment.tier === "low") return
-  if (hasAncestorApproval(workflow, node.id)) {
+  if (hasApprovedAncestor(workflow, node.id, input.approvedApprovalIds)) {
     return
   }
 
@@ -125,19 +171,16 @@ export async function applyNodeRiskGate(input: RiskGateInput): Promise<void> {
   }
 
   // ── Interactive: reuse the approval node's wait, verbatim ──
-  const id = approvalId(runId, node.id)
+  const id = approvalId(runId, input.stepKey ?? node.id)
 
   let requestedAt = Date.now()
   let fresh = true
   try {
     const events = await listRunEvents(runId)
-    const prior = findLatestCheckpoint(events, node.id)
-    if (prior && prior.checkpointKey === RISK_GATE_CHECKPOINT_KEY) {
-      const state = prior.state as { requestedAt?: number } | undefined
-      if (typeof state?.requestedAt === "number") {
-        requestedAt = state.requestedAt
-        fresh = false
-      }
+    const prior = findApprovalCheckpoint(events, node.id, RISK_GATE_CHECKPOINT_KEY, id)
+    if (prior) {
+      requestedAt = prior.requestedAt
+      fresh = false
     }
   } catch {
     // No readable event log (unit-level runs) — treat as fresh.
@@ -174,12 +217,10 @@ export async function applyNodeRiskGate(input: RiskGateInput): Promise<void> {
     await notifyApprovalRequested(entry)
   }
 
-  const remaining = timeoutAt - Date.now()
-  // An unanswered gate is a rejection, never a silent pass.
-  if (remaining <= 0) {
-    throw new RiskGateRejected(node.id, `Risk gate for ${node.id} expired unanswered`)
-  }
-
+  // The durable row decides, even past the deadline: a decision persisted in
+  // time stands after a late resume, and a still-pending row past its
+  // deadline is expired by the wait itself (an unanswered gate is a
+  // rejection, never a silent pass).
   const waitpoint = await waitForWorkflowWaitpoint(id, { signal, cancelOnAbort: true })
   if (waitpoint.status === "timed_out") {
     throw new RiskGateRejected(node.id, `Risk gate for ${node.id} timed out unanswered`)

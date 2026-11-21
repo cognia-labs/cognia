@@ -27,7 +27,7 @@ import {
   listWorkflowTemplateEntries,
 } from "@/lib/plugin/registries/workflow-template-registry"
 import { projectPluginWorkflowTemplate } from "@/lib/workflow/templates/project-plugin-workflow-template"
-import { createWorkflow } from "@/lib/db/workflows"
+import { createAuthoredWorkflow } from "@/lib/workflow/remote/host-writes"
 
 function usePluginCatalog(): readonly NodeCatalogEntry[] {
   return useSyncExternalStore(
@@ -54,7 +54,7 @@ export function PluginCapabilitiesSection() {
   const instantiateTemplate = async (entry: (typeof templates)[number]) => {
     try {
       const projected = projectPluginWorkflowTemplate(entry)
-      const row = await createWorkflow({
+      const row = await createAuthoredWorkflow({
         name: projected.name,
         description: projected.description,
         icon: projected.icon,

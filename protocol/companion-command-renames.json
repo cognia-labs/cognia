@@ -4217,6 +4217,9 @@
     "workflow_ack_completed": {
       "to": "workflow.ack_completed"
     },
+    "workflow_app_handoff_create": {
+      "to": "workflow.app_handoff.create"
+    },
     "workflow_approval_list": {
       "to": "workflow.approval.list"
     },
@@ -4238,6 +4241,12 @@
     "workflow_handoff_create": {
       "to": "workflow.handoff.create"
     },
+    "workflow_handoff_run_cancel": {
+      "to": "workflow.handoff_run.cancel"
+    },
+    "workflow_handoff_run_get": {
+      "to": "workflow.handoff_run.get"
+    },
     "workflow_human_input_list": {
       "to": "workflow.human_input.list"
     },
@@ -4250,11 +4259,17 @@
     "workflow_placement_probe": {
       "to": "workflow.placement.probe"
     },
+    "workflow_preview_run": {
+      "to": "workflow.run.preview"
+    },
     "workflow_register_trigger": {
       "to": "workflow.trigger.register"
     },
     "workflow_reload_in_flight_runs": {
       "to": "workflow.run.reload_in_flight"
+    },
+    "workflow_run_events_list": {
+      "to": "workflow.run.events.list"
     },
     "workflow_run_list": {
       "to": "workflow.run.list"

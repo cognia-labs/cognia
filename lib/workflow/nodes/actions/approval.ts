@@ -15,7 +15,7 @@
 
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
 import { listRunEvents, appendEvent } from "@/lib/workflow/runtime/event-log"
-import { findLatestCheckpoint } from "@/lib/workflow/runtime/long-step-runner"
+import { findApprovalCheckpoint } from "@/lib/workflow/runtime/long-step-runner"
 import {
   approvalId,
   registerPendingApproval,
@@ -56,20 +56,19 @@ export async function runApprovalRequest(ctx: StepExecutionContext): Promise<Ste
       : DEFAULT_TIMEOUT_MS
   const onTimeout = params.onTimeout === "fail" ? "fail" : "reject"
 
-  const id = approvalId(ctx.runId, ctx.stepId)
+  // One request per execution: inside a loop every iteration asks on its own,
+  // so one approval can never be replayed for the next item.
+  const id = approvalId(ctx.runId, ctx.stepKey ?? ctx.stepId)
 
   // Crash-resume detection: a prior checkpoint means we already notified.
   let requestedAt = Date.now()
   let fresh = true
   try {
     const events = await listRunEvents(ctx.runId)
-    const prior = findLatestCheckpoint(events, ctx.stepId)
-    if (prior && prior.checkpointKey === APPROVAL_CHECKPOINT_KEY) {
-      const state = prior.state as Partial<ApprovalCheckpointState> | undefined
-      if (state && typeof state.requestedAt === "number") {
-        requestedAt = state.requestedAt
-        fresh = false
-      }
+    const prior = findApprovalCheckpoint(events, ctx.stepId, APPROVAL_CHECKPOINT_KEY, id)
+    if (prior) {
+      requestedAt = prior.requestedAt
+      fresh = false
     }
   } catch {
     // No readable event log (unit-level runs) — treat as fresh.
@@ -116,9 +115,10 @@ export async function runApprovalRequest(ctx: StepExecutionContext): Promise<Ste
     ctx.log("info", `Approval ${id} re-armed after resume; original request preserved`)
   }
 
-  const remaining = timeoutAt - Date.now()
-  if (remaining <= 0) return timeoutOutcome()
-
+  // The durable row decides, even when this re-entry happens after the
+  // deadline: a decision persisted in time stands, and a row still pending
+  // past its deadline is expired by the wait itself (compare-and-set, so a
+  // decision racing the deadline is settled exactly once).
   const waitpoint = await waitForWorkflowWaitpoint(id, {
     signal: ctx.signal,
     cancelOnAbort: true,

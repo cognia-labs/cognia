@@ -248,6 +248,31 @@ export async function resumeLongStep(
  * Read the latest checkpoint payload for a step out of an event log slice.
  * Exported for tests + the resume-controller's introspection.
  */
+/**
+ * The checkpoint an approval wait (authored node or risk gate) recorded for
+ * ONE approval id. Loop iterations of the same step share the step id, so
+ * matching on it alone would let iteration 2 adopt iteration 1's request.
+ */
+export function findApprovalCheckpoint(
+  events: WorkflowRunEventRow[],
+  stepId: string,
+  checkpointKey: string,
+  approvalId: string
+): { requestedAt: number } | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const e = events[i]
+    if (e.stepId !== stepId || e.type !== "step.long_running.checkpoint") continue
+    const payload = e.payload as
+      | { checkpointKey?: string; state?: { approvalId?: unknown; requestedAt?: unknown } }
+      | undefined
+    if (payload?.checkpointKey !== checkpointKey) continue
+    if (payload.state?.approvalId !== approvalId) continue
+    if (typeof payload.state.requestedAt !== "number") continue
+    return { requestedAt: payload.state.requestedAt }
+  }
+  return null
+}
+
 export function findLatestCheckpoint(
   events: WorkflowRunEventRow[],
   stepId: string

@@ -55,6 +55,8 @@ const COMMAND_KINDS = [
   "conversation_overrides_update",
   // Workflow subsystem
   "workflow_trigger_manual",
+  "workflow_create",
+  "workflow_update",
   "workflow_delete",
   "workflow_schedule_pause",
   "workflow_schedule_resume",

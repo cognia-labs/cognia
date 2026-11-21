@@ -10,8 +10,6 @@
     "resume": "Resume schedule",
     "resumeQueued": "Resuming schedule of {name} — queued for desktop.",
     "run": "Run now",
-    "runAlreadyQueued": "{name} is already queued for the desktop — it runs once.",
-    "runQueued": "Triggered {name} — queued for desktop.",
     "title": "Workflow actions",
     "unpin": "Unpin",
     "unpinned": "Unpinned."
@@ -23,11 +21,5 @@
     "queueLabel": "Delete workflow {name}",
     "title": "Delete {name}?",
     "toast": "Deleted {name}."
-  },
-  "swipe": {
-    "favorite": "★",
-    "run": "Run",
-    "runQueued": "Triggered {name} — queued for desktop.",
-    "unfavorite": "Unpin"
   }
 }

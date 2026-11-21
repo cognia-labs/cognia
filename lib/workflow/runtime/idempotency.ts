@@ -13,16 +13,26 @@ import {
   StepMemoCache,
   iterationCacheKey,
   type DurableStepCompletion,
+  type StepRouting,
 } from "@/lib/durable/idempotency"
 
 import { listRunEvents } from "./event-log"
 
 export { iterationCacheKey }
-export type { DurableStepCompletion }
+export type { DurableStepCompletion, StepRouting }
+
+function isDecision(value: unknown): value is string | string[] {
+  return (
+    typeof value === "string" ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  )
+}
 
 /**
- * Project a workflow run's event log onto step completions. Only successful
- * completions carry an output worth replaying, so everything else is dropped.
+ * Project a workflow run's event log onto step completions. Only completions
+ * carry an output worth replaying, so everything else is dropped. Each one
+ * brings back the routing the step chose (`decision` / `route`) and the exact
+ * memo key it ran under, so a replay takes the same path the original run did.
  */
 export function stepCompletionsFromRunEvents(
   events: readonly WorkflowRunEventRow[]
@@ -31,12 +41,21 @@ export function stepCompletionsFromRunEvents(
   for (const event of events) {
     if (event.type !== "step_completed" || !event.stepId) continue
     const payload = event.payload as
-      { output?: unknown; loopId?: string; iterationIndex?: number } | undefined
+      | ({
+          output?: unknown
+          loopId?: string
+          iterationIndex?: number
+          cacheKey?: string
+        } & StepRouting)
+      | undefined
     completions.push({
       stepId: event.stepId,
       output: payload?.output,
       loopId: payload?.loopId,
       iterationIndex: payload?.iterationIndex,
+      ...(typeof payload?.cacheKey === "string" ? { cacheKey: payload.cacheKey } : {}),
+      ...(isDecision(payload?.decision) ? { decision: payload.decision } : {}),
+      ...(payload?.route === "error" || payload?.route === "halt" ? { route: payload.route } : {}),
     })
   }
   return completions

@@ -1,5 +1,11 @@
 import type { TaskExecution } from "@/types/scheduler"
-import { filterRunsByKind, taskExecutionKind, toUnifiedFromTaskExecution } from "./run-mappers"
+import type { WorkflowRunRow } from "@/types/workflow/visual"
+import {
+  filterRunsByKind,
+  taskExecutionKind,
+  toUnifiedFromTaskExecution,
+  toUnifiedFromWorkflowRun,
+} from "./run-mappers"
 
 const execution: TaskExecution = {
   id: "exec-1",
@@ -15,6 +21,25 @@ const execution: TaskExecution = {
 }
 
 describe("scheduler run mappers", () => {
+  it("files a cron run under the schedule item that fired it (WF-07)", () => {
+    const row = {
+      id: "run-1",
+      workflowId: "wf:1",
+      triggerKind: "trigger.cron",
+      triggerId: "trigger-1",
+      status: "completed",
+      startedAt: 1,
+      completedAt: 2,
+      workflowSnapshot: { name: "Digest" },
+    } as unknown as WorkflowRunRow
+    expect(toUnifiedFromWorkflowRun(row).itemUnifiedId).toBe("workflow:wf%3A1:trigger-1")
+    // Any other run has no schedule item; it stays filed under its workflow.
+    expect(
+      toUnifiedFromWorkflowRun({ ...row, triggerKind: "trigger.manual" } as WorkflowRunRow)
+        .itemUnifiedId
+    ).toBe("workflow:wf:1")
+  })
+
   it("classifies task executions by their owning source", () => {
     expect(taskExecutionKind("plugin")).toBe("plugin")
     expect(taskExecutionKind("connection:scheduled:digest")).toBe("connector")

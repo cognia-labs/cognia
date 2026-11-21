@@ -13,10 +13,14 @@ jest.mock("./quota-service", () => ({
   },
 }))
 jest.mock("./alert-service", () => ({ emitWorkflowAppQuotaAlert: jest.fn() }))
+jest.mock("./app-run-placement", () => ({
+  refreshPlacedWorkflowAppRuns: jest.fn(async () => undefined),
+}))
 
 import { executeDeployedWorkflow } from "@/lib/workflow/runtime/execution-authority"
 import { emitWorkflowAppQuotaAlert } from "./alert-service"
 import { assertWorkflowAppAdmissionQuota, WorkflowAppQuotaError } from "./quota-service"
+import { refreshPlacedWorkflowAppRuns } from "./app-run-placement"
 import type { ResolvedWorkflowAppRelease } from "@/types/workflow/app"
 import {
   authorizeWorkflowAppRequest,
@@ -238,5 +242,28 @@ describe("workflow app execution boundary", () => {
       release: resolved.release,
       error: quotaError,
     })
+  })
+
+  it("settles runs placed on other Hosts before a metered admission counts them (WF-13)", async () => {
+    const actor = { authenticated: true, subjectId: "alice", externalSubjectKey: "alice" }
+    await executePublishedWorkflowApp({ resolved, actor, input: {} })
+    // An unmetered release has nothing to count, so it asks no Host anything.
+    expect(refreshPlacedWorkflowAppRuns).not.toHaveBeenCalled()
+
+    const metered = {
+      ...resolved,
+      release: {
+        ...resolved.release,
+        snapshot: { ...resolved.release.snapshot, quota: { concurrentRuns: 2 } },
+      },
+    }
+    await executePublishedWorkflowApp({ resolved: metered, actor, input: {} })
+    expect(refreshPlacedWorkflowAppRuns).toHaveBeenCalledWith({
+      accountId: "account_1",
+      appId: "wfa_1",
+    })
+    expect((refreshPlacedWorkflowAppRuns as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      execute.mock.invocationCallOrder[1]
+    )
   })
 })

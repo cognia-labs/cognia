@@ -56,9 +56,12 @@ describe("createScheduleHandoffDelivery", () => {
         deploymentId: "deployment-1",
         expectedVersionDigest: "wfv1:abc",
         idempotencyKey: "workflow-trigger:workflow-1:123",
-      }),
-      { idempotencyKey: "workflow-trigger:workflow-1:123" }
+      })
     )
+    // The occurrence key rides in the payload only. As the transport
+    // Idempotency-Key the Host refuses it (not a UUID) on every transport, so
+    // every handoff retried until it dead-lettered.
+    expect(call.mock.calls[0]).toHaveLength(2)
     expect(close).toHaveBeenCalledTimes(1)
   })
 
@@ -198,21 +201,18 @@ describe("createScheduleHandoffDelivery: placed Workflow App runs (WF-13)", () =
   it("sends the locked binding keyed by the serving invocation and records the acceptance", async () => {
     const h = harness({ outcome: "accepted", runId: "run_placed", status: "pending" })
     await expect(h.delivery(appJob())).resolves.toBe("succeeded")
-    expect(h.call).toHaveBeenCalledWith(
-      "workflow_app_handoff_create",
-      {
-        workflowId: "wf_1",
-        versionId: "wfv_1",
-        deploymentId: "wfd_1",
-        deploymentRevision: 4,
-        expectedVersionDigest: "wfv1:abc",
-        dependencyLock: { workflows: {}, indexes: {} },
-        idempotencyKey: "wfi_serving",
-        runId: "run_placed",
-        payload: { input: { topic: "release" }, appId: "wfa_1", appReleaseId: "wfar_1" },
-        initiator: { authenticated: false, externalSubjectKey: "visitor" },
-      }
-    )
+    expect(h.call).toHaveBeenCalledWith("workflow_app_handoff_create", {
+      workflowId: "wf_1",
+      versionId: "wfv_1",
+      deploymentId: "wfd_1",
+      deploymentRevision: 4,
+      expectedVersionDigest: "wfv1:abc",
+      dependencyLock: { workflows: {}, indexes: {} },
+      idempotencyKey: "wfi_serving",
+      runId: "run_placed",
+      payload: { input: { topic: "release" }, appId: "wfa_1", appReleaseId: "wfar_1" },
+      initiator: { authenticated: false, externalSubjectKey: "visitor" },
+    })
     // The transport mints its own UUID key per attempt; exactly-once is the payload's.
     expect(h.call.mock.calls[0]).toHaveLength(2)
     // The App caller marker stays with the serving ledger.

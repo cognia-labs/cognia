@@ -11,7 +11,13 @@ import {
 } from "@/lib/db/workflows"
 import { createSkill } from "@/lib/db/skills"
 import { createResource } from "@/lib/db/skill-resources"
-import { publishWorkflow, unpublishWorkflow, workflowSkillCanonicalId } from "./publish-workflow"
+import {
+  publishWorkflow,
+  rollbackWorkflow,
+  unpublishWorkflow,
+  workflowSkillCanonicalId,
+} from "./publish-workflow"
+import { WorkflowPublishBlockedError } from "./publish-validation"
 import {
   deleteWorkflowWithPublication,
   reconcileWorkflowPublications,
@@ -388,6 +394,67 @@ describe("workflow publication lifecycle", () => {
       skillId: first.skillId,
       content: "keep me",
     })
+  })
+  it("refuses to activate a saved graph with parameter errors and mints nothing", async () => {
+    const workflow = await createWorkflow({
+      name: "Broken prompt",
+      nodes: [
+        ...nodesWithInputSchema({ type: "object" }),
+        {
+          id: "n_prompt",
+          type: "ai.prompt",
+          typeVersion: 2,
+          position: { x: 200, y: 0 },
+          // The editor reports `userPrompt` as required here.
+          data: { label: "prompt", params: {} },
+        },
+      ],
+      edges: [{ id: "e1", source: "n_start", target: "n_prompt" }],
+    })
+
+    const refusal = await publishWorkflow(workflow.id, 10).catch((error: unknown) => error)
+
+    expect(refusal).toBeInstanceOf(WorkflowPublishBlockedError)
+    expect((refusal as WorkflowPublishBlockedError).problems).toContainEqual(
+      expect.objectContaining({ code: "nodeParam", nodeId: "n_prompt", field: "userPrompt" })
+    )
+    expect(await getDb().workflowVersions.where("workflowId").equals(workflow.id).count()).toBe(0)
+    expect(await getDb().workflowDeployments.toArray()).toEqual([])
+    expect((await getWorkflow(workflow.id))?.published).toBeUndefined()
+  })
+
+  it("refuses a rollback to a version that would no longer pass the publish gate", async () => {
+    const workflow = await createWorkflow({
+      name: "Rollback gate",
+      nodes: nodesWithInputSchema({ type: "object" }),
+      edges: [],
+    })
+    const first = await publishWorkflow(workflow.id, 10)
+    await publishWorkflow(workflow.id, 20)
+    // A version minted before a rule existed: simulate it by corrupting v1.
+    const version = (await getDb().workflowVersions.get(first.versionId))!
+    await getDb().workflowVersions.put({
+      ...version,
+      definition: {
+        ...version.definition,
+        nodes: [
+          ...version.definition.nodes,
+          {
+            id: "n_prompt",
+            type: "ai.prompt",
+            typeVersion: 2,
+            position: { x: 200, y: 0 },
+            data: { label: "prompt", params: {} },
+          },
+        ],
+      },
+    })
+    const before = await getDb().workflowDeployments.toArray()
+
+    await expect(rollbackWorkflow(workflow.id, first.versionId, 30)).rejects.toBeInstanceOf(
+      WorkflowPublishBlockedError
+    )
+    expect(await getDb().workflowDeployments.toArray()).toEqual(before)
   })
 })
 

@@ -48,7 +48,8 @@ export interface WorkflowWaitEvent {
 
 export type WorkflowWaitpointDecisionResult =
   | { ok: true; waitpoint: WorkflowWaitpoint }
-  | { ok: false; reason: "not-found" | "already-decided" }
+  /** `expired`: the decision arrived after the waitpoint's deadline. */
+  | { ok: false; reason: "not-found" | "already-decided" | "expired" }
 
 export interface WorkflowWaitpointRepository {
   create(waitpoint: WorkflowWaitpoint): Promise<WorkflowWaitpoint>

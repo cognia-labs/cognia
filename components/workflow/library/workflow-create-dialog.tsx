@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
-import { createWorkflow } from "@/lib/db/workflows"
+import { createAuthoredWorkflow } from "@/lib/workflow/remote/host-writes"
 import { defaultTypeVersionFor } from "@/lib/workflow/editor/node-handles"
 
 export interface WorkflowCreateDialogProps {
@@ -42,7 +42,7 @@ export function WorkflowCreateDialog({
     if (busy) return
     setBusy(true)
     try {
-      const wf = await createWorkflow({
+      const wf = await createAuthoredWorkflow({
         name: name.trim() || t("namePlaceholder"),
         description: description.trim() || undefined,
         folderId: parentFolderId,

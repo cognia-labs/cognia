@@ -30,8 +30,8 @@ jest.mock("@/lib/db/schema", () => ({
 }))
 
 jest.mock("./trigger-button", () => ({
-  TriggerButton: ({ workflowId }: { workflowId: string }) => (
-    <button type="button" data-testid={`trigger-${workflowId}`}>
+  TriggerButton: ({ workflow }: { workflow: { id: string } }) => (
+    <button type="button" data-testid={`trigger-${workflow.id}`}>
       Run
     </button>
   ),

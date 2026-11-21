@@ -214,8 +214,12 @@ export async function defaultAiEnsembleDeps(ctx: StepExecutionContext): Promise<
     },
     runSubworkflow: async (input) => {
       const { executeDeployedWorkflow } = await import("@/lib/workflow/runtime/execution-authority")
+      // A formal parent locked this node's child version at admission; every
+      // sample runs that exact version, never whatever is deployed by now.
+      const lockedDependency = ctx.executionBinding?.dependencyLock?.workflows[ctx.stepId]
       const execution = await executeDeployedWorkflow({
         workflowId: input.workflowId,
+        ...(lockedDependency ? { lockedDependency } : {}),
         entrypoint: "subworkflow",
         caller: "ai.ensemble",
         triggerKind: "trigger.manual",

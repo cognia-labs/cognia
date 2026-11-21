@@ -2,6 +2,7 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 import {
   createWorkflowVersion,
   deriveWorkflowDependencyManifest,
+  workflowCallTargetOf,
   workflowVersionDigest,
 } from "./version-snapshot"
 
@@ -69,11 +70,43 @@ describe("workflow version snapshot", () => {
 
   it("extracts nested ensemble subworkflow dependencies", () => {
     const definition = workflow()
-    definition.nodes[0].data.params = {
-      target: { kind: "subworkflow", workflowId: "wf_ensemble_child" },
+    definition.nodes[0] = {
+      ...definition.nodes[0],
+      type: "ai.ensemble",
+      data: {
+        label: "ensemble",
+        params: { target: { kind: "subworkflow", workflowId: "wf_ensemble_child" } },
+      },
     }
     expect(deriveWorkflowDependencyManifest(definition).workflows).toEqual([
       { workflowId: "wf_ensemble_child", nodeId: "sub" },
+    ])
+  })
+
+  it("records only workflows a node calls, never the ones it merely names", () => {
+    const definition = workflow()
+    const at = (id: string, type: string, params: Record<string, unknown>, disabled = false) =>
+      ({
+        id,
+        type,
+        typeVersion: 1,
+        position: { x: 0, y: 0 },
+        data: { label: id, params, ...(disabled ? { disabled } : {}) },
+      }) as VisualWorkflow["nodes"][number]
+    definition.nodes = [
+      ...definition.nodes,
+      // The workflow whose completions this subscribes to is an event source.
+      at("on_done", "trigger.workflow.completed", { workflowId: "wf_source" }),
+      // An evaluation target is what gets measured, not a locked call.
+      at("eval", "eval.run", { targetKind: "workflow", workflowId: "wf_evaluated" }),
+      // An ensemble of agent turns calls no workflow, whatever it names.
+      at("agents", "ai.ensemble", { target: { kind: "agent.turn", workflowId: "wf_unused" } }),
+      // A disabled call never runs.
+      at("off", "flow.subworkflow", { workflowId: "wf_disabled" }, true),
+    ]
+    expect(workflowCallTargetOf(definition.nodes[1])).toBeUndefined()
+    expect(deriveWorkflowDependencyManifest(definition).workflows).toEqual([
+      { workflowId: "wf_child", nodeId: "sub" },
     ])
   })
 })

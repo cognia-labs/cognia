@@ -52,6 +52,10 @@ export const MOBILE_OUTBOUND_COMMANDS = [
   // Workflow subsystem (mobile trigger button + delete mirror + schedule
   // pause/resume from the row-actions sheet).
   "workflow_trigger_manual",
+  // A paired client's editor writes reach the Host that owns the definition
+  // (`lib/workflow/remote/host-writes.ts`), in order on `workflow:<id>`.
+  "workflow_create",
+  "workflow_update",
   "workflow_delete",
   "workflow_schedule_pause",
   "workflow_schedule_resume",

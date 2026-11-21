@@ -56,6 +56,7 @@ jest.mock("@/lib/workflow/versioning/version-workbench", () => ({
 }))
 
 import { WorkflowPublishSection } from "./workflow-publish-section"
+import { WorkflowPublishBlockedError } from "@/lib/workflow/publish/publish-validation"
 
 function wrap(ui: React.ReactElement) {
   return render(
@@ -285,5 +286,140 @@ describe("WorkflowPublishSection", () => {
     expect(await screen.findByTestId("version-details")).toHaveTextContent("Approved")
     fireEvent.click(screen.getByText("Restore to draft"))
     await waitFor(() => expect(onDraftRestored).toHaveBeenCalledWith(restored))
+  })
+  it("saves unsaved edits before publishing the saved graph", async () => {
+    const order: string[] = []
+    const saveDraft = jest.fn(async () => {
+      order.push("save")
+      return { editedDuringSave: false }
+    })
+    publishWorkflow.mockImplementation(async () => {
+      order.push("publish")
+      return { toolName: "wf_demo", workflowInterface: {}, created: true, skillId: "s1" }
+    })
+    wrap(
+      <WorkflowPublishSection
+        workflowId="wf1"
+        dirty
+        saveDraft={saveDraft}
+        onPublicationChange={() => undefined}
+      />
+    )
+    fireEvent.click(screen.getByTestId("workflow-publish-button"))
+    await waitFor(() => expect(order).toEqual(["save", "publish"]))
+  })
+
+  it("publishes nothing when the editor changed while the save was writing", async () => {
+    const saveDraft = jest.fn(async () => ({ editedDuringSave: true }))
+    wrap(
+      <WorkflowPublishSection
+        workflowId="wf1"
+        dirty
+        saveDraft={saveDraft}
+        onPublicationChange={() => undefined}
+      />
+    )
+    fireEvent.click(screen.getByTestId("workflow-publish-button"))
+    expect(
+      await screen.findByText(
+        "The workflow changed while it was being saved, so nothing was published. Save again, then publish."
+      )
+    ).toBeInTheDocument()
+    expect(publishWorkflow).not.toHaveBeenCalled()
+  })
+
+  it("does not save a clean editor before publishing", async () => {
+    const saveDraft = jest.fn(async () => ({ editedDuringSave: false }))
+    publishWorkflow.mockResolvedValue({
+      toolName: "wf_demo",
+      workflowInterface: {},
+      created: true,
+      skillId: "s1",
+    })
+    wrap(
+      <WorkflowPublishSection
+        workflowId="wf1"
+        saveDraft={saveDraft}
+        onPublicationChange={() => undefined}
+      />
+    )
+    fireEvent.click(screen.getByTestId("workflow-publish-button"))
+    await waitFor(() => expect(publishWorkflow).toHaveBeenCalled())
+    expect(saveDraft).not.toHaveBeenCalled()
+  })
+
+  it("explains a publish-gate refusal and asks the host to show the problems", async () => {
+    publishWorkflow.mockRejectedValue(
+      new WorkflowPublishBlockedError("wf1", [
+        { code: "nodeParam", nodeId: "n1", field: "userPrompt", message: "x" },
+        { code: "credentialMissing", nodeId: "n2", message: "y" },
+      ])
+    )
+    const onPublishBlocked = jest.fn()
+    wrap(
+      <WorkflowPublishSection
+        workflowId="wf1"
+        onPublicationChange={() => undefined}
+        onPublishBlocked={onPublishBlocked}
+      />
+    )
+    fireEvent.click(screen.getByTestId("workflow-publish-button"))
+    expect(
+      await screen.findByText(
+        "Publishing is blocked by 2 problems in this workflow. Fix them in the Problems panel, then publish again."
+      )
+    ).toBeInTheDocument()
+    expect(onPublishBlocked).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps version history, export and restore available after unpublishing", async () => {
+    // Unpublished: the deployment row is disabled but still names the last version.
+    getWorkflowDeployment.mockResolvedValue({
+      id: "deployment_1",
+      workflowId: "wf1",
+      versionId: "version_1",
+      revision: 5,
+      status: "disabled",
+    })
+    listWorkflowVersions.mockResolvedValue([
+      { id: "version_1", workflowId: "wf1", sequence: 1, createdAt: 1, versionName: "Baseline" },
+    ])
+    restoreWorkflowVersionToDraft.mockResolvedValue({ id: "wf1" })
+    exportWorkflowVersion.mockResolvedValue({ kind: "bundle" })
+    rollbackWorkflow.mockResolvedValue({
+      toolName: "wf_demo",
+      workflowInterface: {},
+      versionId: "version_1",
+      deploymentId: "deployment_1",
+      deploymentRevision: 6,
+    })
+    const createObjectURL = jest.fn(() => "blob:x")
+    const revokeObjectURL = jest.fn()
+    Object.assign(URL, { createObjectURL, revokeObjectURL })
+    const onDraftRestored = jest.fn()
+    wrap(
+      <WorkflowPublishSection
+        workflowId="wf1"
+        onPublicationChange={() => undefined}
+        onDraftRestored={onDraftRestored}
+      />
+    )
+
+    expect(await screen.findByTestId("workflow-version-history")).toBeInTheDocument()
+    expect(screen.getByTestId("workflow-not-published")).toBeInTheDocument()
+    expect(screen.getByText("Baseline")).toBeInTheDocument()
+    // A disabled deployment has no current version.
+    expect(screen.queryByText("Current")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText("Export"))
+    await waitFor(() => expect(exportWorkflowVersion).toHaveBeenCalledWith("wf1", "version_1"))
+    fireEvent.click(screen.getByText("Restore to draft"))
+    await waitFor(() => expect(onDraftRestored).toHaveBeenCalledWith({ id: "wf1" }))
+
+    // Putting it back into production is its own, explicitly named action.
+    fireEvent.click(screen.getByText("Publish this version"))
+    await waitFor(() =>
+      expect(rollbackWorkflow).toHaveBeenCalledWith("wf1", "version_1", expect.any(Number))
+    )
   })
 })

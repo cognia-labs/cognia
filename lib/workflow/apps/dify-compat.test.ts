@@ -69,6 +69,7 @@ describe("dify-1.16 compatibility profile", () => {
       expect.objectContaining({
         actor: { authenticated: false, externalSubjectKey: "dify:customer-7" },
         input: { topic: "release" },
+        responseMode: "blocking",
       })
     )
     expect(response).toMatchObject({
@@ -76,6 +77,19 @@ describe("dify-1.16 compatibility profile", () => {
       task_id: "run_1",
       data: { status: "succeeded", outputs: { result: "ok" }, elapsed_time: 0.25 },
     })
+  })
+
+  it("lets a streaming run follow the Run Policy, its events read through the run's Host (WF-13)", async () => {
+    admit.mockResolvedValueOnce({ runId: "run_placed", releaseId: "rel_1", placed: true } as never)
+    await expect(
+      createDifyWorkflowRun({
+        accountId: "account_1",
+        appSlug: "review",
+        idempotencyKey: "request-stream",
+        request: { inputs: {}, response_mode: "streaming", user: "customer-7" },
+      })
+    ).resolves.toEqual({ workflow_run_id: "run_placed", task_id: "run_placed", stream: true })
+    expect(admit).toHaveBeenLastCalledWith(expect.objectContaining({ responseMode: "async" }))
   })
 
   it("resolves app-owned Dify file mappings before workflow and Chatflow execution", async () => {

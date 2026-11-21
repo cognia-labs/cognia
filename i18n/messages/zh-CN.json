@@ -31320,6 +31320,11 @@
         "orientationPending": "正在检查屏幕方向锁定…",
         "orientationUnavailable": "此设备无法锁定屏幕方向",
         "orientationUnlock": "允许竖屏",
+        "previewFailed": "无法启动预览：{message}",
+        "previewHostPending": "桌面端尚未收到最新保存，请稍后再运行。",
+        "previewRefused": "桌面端无法启动此预览：{detail}",
+        "previewSaveRefused": "桌面端未接受最新保存，因此没有运行：{detail}",
+        "previewStarted": "预览已开始。",
         "publicationInvalidated": "工作流已保存，但因可调用接口发生变化而自动下架。请重新发布以开放新契约。",
         "redo": "重做",
         "run": "运行",
@@ -31328,6 +31333,7 @@
         "saveFailed": "保存失败。",
         "saved": "已保存。",
         "savedBadge": "已保存",
+        "savedQueuedForHost": "已保存，正在发送到桌面端。",
         "savedWithIssues": "已保存 — {count} 个节点需要处理。",
         "selectMode": "多选节点",
         "snapOff": "网格吸附：关",
@@ -31353,15 +31359,22 @@
         "waitingForOthersToast": "答复已记录，正在等待其他人。"
       },
       "landscapeHint": "横屏阅读大图",
+      "libraryRun": {
+        "alreadyQueued": "{name} 已在队列中，桌面端恢复连接后只会运行一次。",
+        "failed": "无法启动运行：{message}",
+        "handedOff": "{name} 已交给负责运行它的 Host。",
+        "notPublished": "{name} 尚未发布。发布后才能在此运行，或打开它运行预览。",
+        "openRun": "打开",
+        "queued": "{name} 已加入队列，桌面端可连接时运行。",
+        "refused": "{name} 未运行：{detail}",
+        "started": "{name} 正在运行。"
+      },
       "noRuns": "暂无运行记录。",
       "pinned": "置顶",
       "pinned_added": "已置顶。",
       "pinned_removed": "已取消置顶。",
       "queuedBadge": "待发送",
-      "runAlreadyQueued": "已在队列中 — 桌面联线后只会运行一次。",
       "runButton": "运行",
-      "runFailed": "触发失败：{message}",
-      "runQueued": "已加入队列，桌面联线后将触发。",
       "runsBackAria": "返回工作流",
       "runsHeader": "最近运行",
       "sending": "发送中",
@@ -31374,8 +31387,6 @@
       "swipe": {
         "favorite": "置顶",
         "run": "运行",
-        "runAlreadyQueued": "{name} 已在队列中",
-        "runQueued": "已加入队列：{name}",
         "unfavorite": "取消置顶"
       },
       "title": "工作流"
@@ -31392,8 +31403,6 @@
         "resume": "恢复计划",
         "resumeQueued": "正在恢复 {name} 的计划 — 已加入桌面端队列。",
         "run": "立即运行",
-        "runAlreadyQueued": "{name} 已在桌面端队列中 — 只会运行一次。",
-        "runQueued": "已触发 {name} — 已加入桌面端队列。",
         "title": "工作流操作",
         "unpin": "取消置顶",
         "unpinned": "已取消置顶。"
@@ -31405,12 +31414,6 @@
         "queueLabel": "删除工作流 {name}",
         "title": "删除 {name}？",
         "toast": "已删除 {name}。"
-      },
-      "swipe": {
-        "favorite": "★",
-        "run": "运行",
-        "runQueued": "已触发 {name} — 已加入桌面端队列。",
-        "unfavorite": "取消置顶"
       }
     },
     "workflowsSettings": {
@@ -44120,6 +44123,7 @@
     },
     "quickCreateWorkflowTrigger": "创建工作流触发器",
     "quickCreateWorkflowTriggerDescription": "无需打开工作流编辑器，直接为已有工作流添加 cron 触发器。",
+    "quickCreateWorkflowTriggerPublishNote": "发布该工作流后才会开始运行。",
     "recentExecutions": "最近执行记录",
     "recentRuns": "最近运行",
     "recoveryHint": "可使用“立即运行”或“编辑”进行恢复。",
@@ -44520,7 +44524,13 @@
     "workflowReadOnly": "该工作流由流程编译而来，为只读。请在工作流编辑器中分离出副本后再添加触发器。",
     "workflowScriptReadOnlyDescription": "脚本内容由工作流触发同步托管，当前表单内为只读。",
     "workflowScriptReadOnlyTitle": "工作流托管任务",
+    "workflowTriggerAddedAwaitingPublish": "已为 {name} 添加 cron 触发器。发布工作流后定时才会生效。",
+    "workflowTriggerAwaitingPublish": "待发布：仅保存在草稿中，尚未进入运行版本",
     "workflowTriggerNotFound": "未找到该工作流触发器。",
+    "workflowTriggerState": "状态",
+    "workflowTriggerStateActive": "已在发布版本中生效",
+    "workflowTriggerStateAwaitingPublish": "仅在草稿中，发布工作流后生效",
+    "workflowTriggerStatePaused": "已暂停",
     "workingDir": "工作目录",
     "workspaceMove": {
       "cleared": "该日程现在归属所有工作区。",
@@ -67065,6 +67075,8 @@
         "useTemplate": "使用"
       },
       "publish": {
+        "blockedByProblems": "工作流中有 {count} 个问题阻止发布。请在「问题」面板中修复后再发布。",
+        "changedWhileSaving": "保存期间工作流又有改动，本次未发布。请再次保存后再发布。",
         "current": "当前",
         "deleteBlocked": "无法删除，仍被以下对象引用：{reasons}",
         "deleteVersion": "删除版本",
@@ -67074,9 +67086,11 @@
         "export": "导出",
         "filter": "筛选版本",
         "filterPlaceholder": "按名称、说明、作者或 ID 筛选",
-        "hint": "把该工作流发布为类型化可调用单元——agent 工具、类型化子工作流目标、技能。请先保存工作流。用「手动触发」的输入结构与「输出」节点声明其接口。",
+        "hint": "把该工作流发布为类型化可调用单元——agent 工具、类型化子工作流目标、技能。未保存的改动会先保存，发布的是已保存的工作流。用「手动触发」的输入结构与「输出」节点声明其接口。",
         "noVersions": "没有符合筛选条件的版本。",
+        "notPublished": "未发布。以下仍可查看历史版本。",
         "publish": "发布",
+        "publishVersion": "发布此版本",
         "publishedAs": "已发布为工具",
         "releaseNotes": "发布说明",
         "releaseNotesPlaceholder": "说明行为变化和评审证据",
@@ -67425,7 +67439,8 @@
       "selfParent": "节点不能将自身作为容器。",
       "synthesizerOnly": "该节点由{lifecycle, select, team {agent-team} plan {计划} other {}}合成器产出，需要那次运行的上下文。请通过 action.team.run（或 action.plan.run）驱动，而不是本工作流的运行按钮。",
       "title": "问题",
-      "unsupportedTypeVersion": "该节点基于 {kind} 的版本 {typeVersion} 创建，此版本已不再支持。请重新创建为 {kind} 节点（版本 {current}）。"
+      "unsupportedTypeVersion": "该节点基于 {kind} 的版本 {typeVersion} 创建，此版本已不再支持。请重新创建为 {kind} 节点（版本 {current}）。",
+      "webhookReplyPinnedRemote": "该节点要回复 webhook 调用方，只有接收请求的 Host 才能做到，但“运行位置”把此工作流固定到了另一台 Host（{ref}）。请将“运行位置”设为“当前 Host”或“自动”，或删除该节点。"
     },
     "edgeInspector": {
       "comment": "备注",
@@ -73866,6 +73881,10 @@
         },
         "export": "导出",
         "formalRetryUnavailable": "该草稿时期的运行没有不可变版本，只能在本地调试模式重放。",
+        "hostUnreachable": {
+          "description": "此运行保存在桌面端，当前无法连接。连接恢复后会自动加载。",
+          "title": "无法连接桌面端"
+        },
         "lineage": {
           "children": "{count} 个子运行",
           "parent": "父运行",
@@ -73893,6 +73912,7 @@
           "failedStep": "从此步骤继续",
           "originalVersion": "运行原发布版本"
         },
+        "retryOnHostOnly": "请在运行它的桌面端上重新运行。",
         "running": "运行中…",
         "sparkline": {
           "title": "时长趋势"

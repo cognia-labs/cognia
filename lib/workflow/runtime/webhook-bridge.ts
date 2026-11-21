@@ -3,9 +3,11 @@
  * nodes from a workflow snapshot and registers / unregisters them with the
  * Rust side via `registerTrigger` / `unregisterTrigger`.
  *
- * Called from the canvas save path so the local webhook router knows about
- * every workflow as soon as the user saves. In web mode the underlying
- * `safeInvoke` calls all no-op gracefully.
+ * The snapshot is always a PUBLISHED version's definition: every caller goes
+ * through `projectWorkflowTriggerRegistrations`, which resolves the active
+ * deployment and passes the draft row's pause overrides. Registering a draft
+ * would arm a schedule admission then refuses (or runs the older version).
+ * In web mode the underlying `safeInvoke` calls all no-op gracefully.
  */
 
 import { recordTriggerRegistration } from "./trigger-registration-health"
@@ -16,6 +18,7 @@ import {
   unsyncPluginTriggerInstances,
 } from "@/lib/workflow/triggers/lifecycle"
 import { registerTrigger, unregisterTrigger, getWebhookUrl } from "./tauri-bridge"
+import { isLocalWorkflowHostRef } from "./local-host-ref"
 
 interface FileWatchParams {
   root?: string
@@ -88,6 +91,13 @@ function serializeTriggerOperation(workflowId: string, run: () => Promise<void>)
 
 interface TriggerSyncOptions {
   signal?: AbortSignal
+  /**
+   * Trigger ids the operator paused (`VisualWorkflow.triggerPauses` on the
+   * draft row). A paused cron or webhook is registered DISABLED — the cron
+   * does not fire, the webhook answers 503 — and a paused file watch is not
+   * armed, so resuming is one re-projection, never a republish.
+   */
+  pausedTriggerIds?: ReadonlySet<string>
 }
 
 /**
@@ -140,9 +150,17 @@ async function syncWorkflowTriggersNow(
     throw invalid[0].error
   }
 
+  const paused = options.pausedTriggerIds ?? new Set<string>()
   const previous = syncedTriggersByWorkflow.get(workflow.id) ?? new Map()
   syncedTriggersByWorkflow.set(workflow.id, previous)
-  const desired = new Map(triggers.map((node) => [node.id, node.type]))
+  // A watch that must not be armed here (paused, or pinned to another Host)
+  // is not desired at all: leaving it in the map kept a previously armed
+  // watch registered after the workflow was paused or re-pinned.
+  const armed = triggers.filter(
+    (node) =>
+      node.type !== "trigger.file.watch" || (!paused.has(node.id) && !watchesTheWrongDisk(workflow))
+  )
+  const desired = new Map(armed.map((node) => [node.id, node.type]))
   const staleIds = [...previous].flatMap(([triggerId, kind]) =>
     desired.get(triggerId) === kind ? [] : [triggerId]
   )
@@ -158,7 +176,9 @@ async function syncWorkflowTriggersNow(
   await settleTriggerOperations(
     triggers.map(async (node) => {
       try {
-        const registered = await syncOneTrigger(workflow.id, node, awaitResponse, workflow)
+        const registered = desired.has(node.id)
+          ? await syncOneTrigger(workflow.id, node, awaitResponse, !paused.has(node.id))
+          : false
         if (registered) previous.set(node.id, node.type)
         recordTriggerRegistration({
           workflowId: workflow.id,
@@ -215,25 +235,26 @@ function validateTriggerForSync(node: WorkflowNode): void {
  * one. A workflow pinned to a different Host would therefore watch the WRONG
  * disk and fire on churn that has nothing to do with its own run.
  *
- * Only `pinned` is refused. `colocate` and `auto` both mean "wherever this
- * runs", and this is where it is running.
+ * Only a pin to ANOTHER Host is refused: a pin to `"local"` or to this Host's
+ * own id is exactly where the watch belongs (WF-21). `colocate` and `auto`
+ * both mean "wherever this runs", and this is where it is running.
  */
 function watchesTheWrongDisk(workflow: VisualWorkflow): boolean {
   const runOn = workflow.settings?.runOn
-  return runOn?.mode === "pinned"
+  return runOn?.mode === "pinned" && !isLocalWorkflowHostRef(runOn.ref)
 }
 
 async function syncOneTrigger(
   workflowId: string,
   node: WorkflowNode,
   awaitResponse: boolean,
-  workflow: VisualWorkflow
+  enabled: boolean
 ): Promise<boolean> {
   const baseInput = {
     workflowId,
     triggerId: node.id,
     kind: node.type,
-    enabled: true,
+    enabled,
   }
   const params = (node.data.params ?? {}) as Record<string, unknown>
   switch (node.type) {
@@ -266,12 +287,8 @@ async function syncOneTrigger(
       return true
     }
     case "trigger.file.watch": {
-      if (watchesTheWrongDisk(workflow)) {
-        // The Host the run is pinned to installs its own watch from its own
-        // boot sync. Registering here would watch this machine's disk for a
-        // run that happens somewhere else.
-        return false
-      }
+      // Only reached for a watch this Host should arm (see `armed` above):
+      // the Host a run is pinned to installs its own from its own boot sync.
       const watchParams = params as FileWatchParams
       await registerTrigger({
         ...baseInput,

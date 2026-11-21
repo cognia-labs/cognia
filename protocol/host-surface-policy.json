@@ -398,10 +398,12 @@
     "video_analyze",
     "video_get_info",
     "video_trim",
+    "workflow_app_handoff_create",
     "workflow_approval_respond",
     "workflow_create",
     "workflow_handoff_create",
     "workflow_human_input_submit",
+    "workflow_preview_run",
     "workflow_register_trigger",
     "workflow_schedule_resume",
     "workflow_step_result",
@@ -991,6 +993,14 @@
       "reason": "Reads/persists/prunes workflow mirror state or answers an existing webhook HTTP response; execution resumes through separately gated commands (workflow/commands.rs)."
     },
     {
+      "arm": "workflow_handoff_run_cancel",
+      "reason": "Stops/releases existing work; no new process or resumed execution is requested."
+    },
+    {
+      "arm": "workflow_handoff_run_get",
+      "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
+    },
+    {
       "arm": "workflow_human_input_list",
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
     },
@@ -1005,6 +1015,10 @@
     {
       "arm": "workflow_reload_in_flight_runs",
       "reason": "Reads/persists/prunes workflow mirror state or answers an existing webhook HTTP response; execution resumes through separately gated commands (workflow/commands.rs)."
+    },
+    {
+      "arm": "workflow_run_events_list",
+      "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
     },
     {
       "arm": "workflow_run_list",

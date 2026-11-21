@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db/schema"
 import { getWorkflowConversation } from "@/lib/db/workflow-conversations"
 import { getWorkflowAppRelease } from "@/lib/db/workflow-apps"
 import { listWorkflowAppRunEvents } from "./app-api-service"
+import { WorkflowAppRunHostUnavailableError } from "./app-run-placement"
 import { authenticateWorkflowAppApiKey, WorkflowAppKeyError } from "./api-key-service"
 import {
   createDifyChatMessage,
@@ -321,6 +322,10 @@ function normalizeError(error: unknown): DifyBridgeResponse {
       ok: false,
       error: { code: error.code, status: error.status, message: error.message },
     }
+  }
+  // The run was placed on a Host that cannot answer right now: retryable.
+  if (error instanceof WorkflowAppRunHostUnavailableError) {
+    return { ok: false, error: { code: error.code, status: 503, message: error.message } }
   }
   return {
     ok: false,

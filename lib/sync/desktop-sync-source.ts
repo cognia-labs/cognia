@@ -722,12 +722,27 @@ function runActivityAt(run: WorkflowRunRow): number {
  * `ownerId` that names a process it cannot reach. `cancelRequestedAt` is the
  * same shape of mistake: it is a request addressed to the lease holder.
  *
- * Nothing downstream of the sync needs either — the mobile surfaces read status
- * and timing — so they are projected out rather than translated.
+ * `draftScope` is the executing Host's own resume record for a draft run, and
+ * its `seedOutputs` are step outputs — detail that, like the run's events,
+ * stays on the Host that executes it.
+ *
+ * Nothing downstream of the sync needs any of these — the mobile surfaces read
+ * status and timing — so they are projected out rather than translated.
  */
 function projectRunForSync(run: WorkflowRunRow): WorkflowRunRow {
-  if (run.lease === undefined && run.cancelRequestedAt === undefined) return run
-  const { lease: _lease, cancelRequestedAt: _cancelRequestedAt, ...remote } = run
+  if (
+    run.lease === undefined &&
+    run.cancelRequestedAt === undefined &&
+    run.draftScope === undefined
+  ) {
+    return run
+  }
+  const {
+    lease: _lease,
+    cancelRequestedAt: _cancelRequestedAt,
+    draftScope: _draftScope,
+    ...remote
+  } = run
   return remote as WorkflowRunRow
 }
 

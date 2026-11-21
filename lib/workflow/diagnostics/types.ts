@@ -39,6 +39,7 @@ export type DiagnosticCode =
   | "desktopOnlyInWeb"
   | "joinPolicyInLoop"
   | "synthesizerOnly"
+  | "webhookReplyPinnedRemote"
 
 export interface Diagnostic {
   /** Stable identity across recomputes — `diagId(code, {nodeId,edgeId,field})`. */

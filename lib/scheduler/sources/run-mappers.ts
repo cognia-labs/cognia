@@ -12,6 +12,7 @@ import type {
   UnifiedRunStatus,
 } from "@/types/scheduler/unified-runs"
 import type { WorkflowRunRow } from "@/types/workflow/visual"
+import { workflowScheduleSourceId } from "./workflow-schedule-id"
 
 /** A run is listed under its task's kind: the one ownership rule, not a copy of it. */
 export function taskExecutionKind(taskType: string): "app" | "plugin" | "connector" {
@@ -44,7 +45,14 @@ export function toUnifiedFromWorkflowRun(row: WorkflowRunRow): UnifiedExecutionR
   return {
     unifiedId: makeUnifiedId("workflow", row.id),
     kind: "workflow",
-    itemUnifiedId: makeUnifiedId("workflow", row.workflowId),
+    // A cron run belongs to the schedule that fired it (the Scheduler's item
+    // for that trigger); any other run to its workflow.
+    itemUnifiedId: makeUnifiedId(
+      "workflow",
+      row.triggerKind === "trigger.cron" && row.triggerId
+        ? workflowScheduleSourceId(row.workflowId, row.triggerId)
+        : row.workflowId
+    ),
     itemName: row.title ?? row.workflowSnapshot.name ?? row.workflowId,
     status: mapWorkflowStatus(row.status),
     startedAt: row.startedAt,

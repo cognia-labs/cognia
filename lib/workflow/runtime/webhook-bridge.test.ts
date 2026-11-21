@@ -393,6 +393,42 @@ describe("trigger.file.watch", () => {
     )
   })
 
+  it.each(["local", "host_self"])(
+    "watches this disk for a workflow pinned to this Host (%s) (WF-21)",
+    async (ref) => {
+      const previous = process.env.COGNIA_HOST_ID
+      process.env.COGNIA_HOST_ID = "host_self"
+      try {
+        const wf = workflow([node("t1", "trigger.file.watch", { root: "/Users/me/project" })])
+        await syncWorkflowTriggers({
+          ...wf,
+          settings: { ...wf.settings, runOn: { mode: "pinned", ref } },
+        })
+        expect(mockRegister).toHaveBeenCalledTimes(1)
+        expect(mockRegister).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "trigger.file.watch",
+            fileWatchRoot: "/Users/me/project",
+          })
+        )
+      } finally {
+        if (previous === undefined) delete process.env.COGNIA_HOST_ID
+        else process.env.COGNIA_HOST_ID = previous
+      }
+    }
+  )
+
+  it("unarms a watch that was registered before the workflow was re-pinned elsewhere", async () => {
+    const wf = workflow([node("t1", "trigger.file.watch", { root: "/Users/me/project" })])
+    await syncWorkflowTriggers(wf)
+    expect(mockRegister).toHaveBeenCalledTimes(1)
+    await syncWorkflowTriggers({
+      ...wf,
+      settings: { ...wf.settings, runOn: { mode: "pinned", ref: "host_other" } },
+    })
+    expect(mockUnregister).toHaveBeenCalledWith(wf.id, "t1")
+  })
+
   it("still watches for colocate and auto, which both mean wherever this runs", async () => {
     const wf = workflow([node("t1", "trigger.file.watch", { root: "/Users/me/project" })])
     await syncWorkflowTriggers({
@@ -490,4 +526,42 @@ it("removes a successfully registered sibling after a partial sync failure", asy
   } finally {
     mockRegister.mockReset().mockResolvedValue(undefined)
   }
+})
+
+describe("pause overrides (WF-07)", () => {
+  it("registers a paused cron and webhook disabled, and an unpaused one enabled", async () => {
+    const wf = workflow([
+      node("cron", "trigger.cron", { cron: "* * * * *" }),
+      node("hook", "trigger.webhook", { path: "h" }),
+      node("live", "trigger.cron", { cron: "0 * * * *" }),
+    ])
+    await syncWorkflowTriggers(wf, { pausedTriggerIds: new Set(["cron", "hook"]) })
+    const byId = new Map(
+      mockRegister.mock.calls.map(([input]) => [
+        (input as { triggerId: string }).triggerId,
+        input as { enabled: boolean },
+      ])
+    )
+    expect(byId.get("cron")?.enabled).toBe(false)
+    expect(byId.get("hook")?.enabled).toBe(false)
+    expect(byId.get("live")?.enabled).toBe(true)
+  })
+
+  it("resuming re-registers the same trigger enabled without a republish", async () => {
+    const wf = workflow([node("cron", "trigger.cron", { cron: "* * * * *" })])
+    await syncWorkflowTriggers(wf, { pausedTriggerIds: new Set(["cron"]) })
+    await syncWorkflowTriggers(wf, { pausedTriggerIds: new Set() })
+    expect(
+      mockRegister.mock.calls.map(([input]) => (input as { enabled: boolean }).enabled)
+    ).toEqual([false, true])
+  })
+
+  it("disarms a paused file watch instead of registering it", async () => {
+    const wf = workflow([node("w", "trigger.file.watch", { root: "/Users/me/project" })])
+    await syncWorkflowTriggers(wf)
+    mockRegister.mockClear()
+    await syncWorkflowTriggers(wf, { pausedTriggerIds: new Set(["w"]) })
+    expect(mockRegister).not.toHaveBeenCalled()
+    expect(mockUnregister).toHaveBeenCalledWith(wf.id, "w")
+  })
 })

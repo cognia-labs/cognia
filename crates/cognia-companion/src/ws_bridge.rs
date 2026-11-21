@@ -1512,6 +1512,12 @@ fn route_respond(state: &SharedState, command: &str, payload: Value) {
                 "workflow://approval-request",
                 "workflow://approval-resolved",
                 "workflow://approval-pending",
+                // A workflow waiting on a human-input form, and its end. The
+                // request rides the authenticated socket; the pending push
+                // carries ids only.
+                "workflow://human-input-request",
+                "workflow://human-input-resolved",
+                "workflow://human-input-pending",
                 // ADR-0224 A7: an unattended run parked on a person, and its
                 // answer. Ids, kind, class and a deep link only.
                 "run://approval-pending",
@@ -3153,6 +3159,9 @@ mod tests {
             "workflow://approval-request",
             "workflow://approval-resolved",
             "workflow://approval-pending",
+            "workflow://human-input-request",
+            "workflow://human-input-resolved",
+            "workflow://human-input-pending",
             "workflow://step-execute",
             "workflow://step-pending",
         ] {

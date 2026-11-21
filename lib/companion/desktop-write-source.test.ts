@@ -141,11 +141,15 @@ jest.mock("@/lib/rag/profile-dek-store", () => ({
   createProfileDekStore: () => ({ exportForPairing: mockExportForPairing }),
 }))
 
-// Stub workflow trigger bridge — the real one talks to the orchestrator
-// which runs the actual workflow. We want to assert the handler invokes
-// the bridge with the right shape, not execute a real workflow.
-jest.mock("@/lib/workflow/runtime/trigger-bridge", () => ({
-  dispatchTrigger: jest.fn().mockResolvedValue(undefined),
+// Stub the Host-side workflow run commands — the real ones admit and run a
+// workflow. We assert the arms hand them the right shape and pass their
+// answers (and refusals) through.
+jest.mock("@/lib/workflow/remote/host-commands", () => ({
+  triggerPublishedWorkflowRun: jest.fn().mockResolvedValue({ status: "admitted", runId: "run_1" }),
+  startWorkflowPreviewRun: jest.fn().mockResolvedValue({ runId: "run_preview" }),
+  listWorkflowRunEventsPage: jest
+    .fn()
+    .mockResolvedValue({ run: null, events: [], nextSequence: 0, terminal: true }),
 }))
 
 // Stub twin ingest — the real one creates a TwinJob row via Dexie. We
@@ -370,7 +374,11 @@ jest.mock("@/lib/memory/api/manage-for-caller", () => ({
   manageMemoryForCaller: (...args: unknown[]) => mockManageForCaller(...(args as [])),
 }))
 
-import { dispatchTrigger } from "@/lib/workflow/runtime/trigger-bridge"
+import {
+  listWorkflowRunEventsPage,
+  startWorkflowPreviewRun,
+  triggerPublishedWorkflowRun,
+} from "@/lib/workflow/remote/host-commands"
 import { enqueueIngestJob } from "@/lib/twin/ingest"
 import { getGoalRuntime } from "@/lib/goal/runtime"
 
@@ -1031,40 +1039,28 @@ describe("relayed inbox writes on a process that lost the connector runtime", ()
 })
 
 describe("dispatchCommand: workflow_trigger_manual", () => {
-  it("invokes the trigger bridge with kind=trigger.manual and an api origin", async () => {
-    await dispatchCommand("workflow_trigger_manual", { workflowId: "wf1" })
-    expect(dispatchTrigger).toHaveBeenCalledTimes(1)
-    expect(dispatchTrigger).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workflowId: "wf1",
-        kind: "trigger.manual",
-        originAt: expect.any(Number),
-      }),
-      { triggeredBy: { source: "api" } }
-    )
+  it("runs the published workflow with an api origin and answers with the admission", async () => {
+    await expect(
+      dispatchCommand("workflow_trigger_manual", { workflowId: "wf1" })
+    ).resolves.toEqual({ status: "admitted", runId: "run_1" })
+    expect(triggerPublishedWorkflowRun).toHaveBeenCalledWith({
+      workflowId: "wf1",
+      input: null,
+      triggeredBy: { source: "api" },
+    })
   })
 
-  it("threads the Rust-injected callerDeviceId into triggeredBy (ADR-0060)", async () => {
+  it("threads the Rust-injected callerDeviceId and the input payload (ADR-0060)", async () => {
     await dispatchCommand("workflow_trigger_manual", {
       workflowId: "wf1",
       callerDeviceId: "dev-42",
-    })
-    expect(dispatchTrigger).toHaveBeenCalledWith(expect.anything(), {
-      triggeredBy: { source: "api", deviceId: "dev-42" },
-    })
-  })
-
-  it("forwards an optional input payload", async () => {
-    await dispatchCommand("workflow_trigger_manual", {
-      workflowId: "wf1",
       input: { reason: "mobile" },
     })
-    expect(dispatchTrigger).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: { reason: "mobile" },
-      }),
-      expect.anything()
-    )
+    expect(triggerPublishedWorkflowRun).toHaveBeenCalledWith({
+      workflowId: "wf1",
+      input: { reason: "mobile" },
+      triggeredBy: { source: "api", deviceId: "dev-42" },
+    })
   })
 
   it("rejects without a workflowId", async () => {
@@ -1073,11 +1069,58 @@ describe("dispatchCommand: workflow_trigger_manual", () => {
     )
   })
 
-  it("surfaces the bridge's error", async () => {
-    ;(dispatchTrigger as jest.Mock).mockRejectedValueOnce(new Error("orchestrator boom"))
-    await expect(dispatchCommand("workflow_trigger_manual", { workflowId: "wf1" })).rejects.toThrow(
-      /orchestrator boom/
+  it("surfaces a refusal instead of answering success", async () => {
+    ;(triggerPublishedWorkflowRun as jest.Mock).mockRejectedValueOnce(
+      new Error("[WORKFLOW_RUN_REJECTED] deployment-not-found: not deployed")
     )
+    await expect(dispatchCommand("workflow_trigger_manual", { workflowId: "wf1" })).rejects.toThrow(
+      /deployment-not-found/
+    )
+  })
+})
+
+describe("dispatchCommand: workflow_preview_run", () => {
+  it("previews the Host's draft as the verified device, interactively", async () => {
+    await expect(
+      dispatchCommand("workflow_preview_run", {
+        workflowId: "wf1",
+        mode: "from-step",
+        stepId: "n_2",
+        callerDeviceId: "dev-42",
+      })
+    ).resolves.toEqual({ runId: "run_preview" })
+    expect(startWorkflowPreviewRun).toHaveBeenCalledWith({
+      workflowId: "wf1",
+      mode: "from-step",
+      stepId: "n_2",
+      triggeredBy: { source: "ui", deviceId: "dev-42" },
+    })
+  })
+
+  it("refuses a malformed request and a caller the RPC layer did not identify", async () => {
+    await expect(
+      dispatchCommand("workflow_preview_run", { mode: "full", callerDeviceId: "d" })
+    ).rejects.toThrow(/workflowId is required/)
+    await expect(
+      dispatchCommand("workflow_preview_run", {
+        workflowId: "wf1",
+        mode: "all",
+        callerDeviceId: "d",
+      })
+    ).rejects.toThrow(/mode must be/)
+    await expect(
+      dispatchCommand("workflow_preview_run", { workflowId: "wf1", mode: "full" })
+    ).rejects.toThrow(/callerDeviceId is required/)
+    expect(startWorkflowPreviewRun).not.toHaveBeenCalled()
+  })
+})
+
+describe("dispatchCommand: workflow_run_events_list", () => {
+  it("answers one page of the run's events from this Host", async () => {
+    await expect(
+      dispatchCommand("workflow_run_events_list", { runId: "run_1", afterSequence: 4 })
+    ).resolves.toEqual({ run: null, events: [], nextSequence: 0, terminal: true })
+    expect(listWorkflowRunEventsPage).toHaveBeenCalledWith({ runId: "run_1", afterSequence: 4 })
   })
 })
 

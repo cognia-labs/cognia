@@ -22,7 +22,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { getSkill } from "@/lib/db/skills"
-import { createWorkflow } from "@/lib/db/workflows"
+import { createAuthoredWorkflow } from "@/lib/workflow/remote/host-writes"
 import { syncPlaybookWorkflow, type PlaybookWorkflowResult } from "@/lib/playbooks/derived-workflow"
 import { queueCopilotRequest } from "@/lib/workflow/editor/copilot-handoff"
 import { buildSkillDraftPrompt } from "@/lib/workflow/editor/quick-action-prompts"
@@ -67,7 +67,7 @@ export function PlaybookWorkflowOpener({ skillId }: { skillId: string }) {
           case "not-a-playbook": {
             const skill = await getSkill(skillId)
             if (!skill) return settle({ kind: "missing" })
-            const draft = await createWorkflow({
+            const draft = await createAuthoredWorkflow({
               name: skill.name,
               ...(skill.description ? { description: skill.description } : {}),
             })

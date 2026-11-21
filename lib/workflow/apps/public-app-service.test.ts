@@ -67,7 +67,7 @@ import {
   resolveWorkflowAppRelease,
 } from "@/lib/db/workflow-apps"
 import { submitWorkflowFeedback } from "../quality/quality-service"
-import { admitWorkflowAppRun, getWorkflowAppRun } from "./app-api-service"
+import { admitWorkflowAppRun, getWorkflowAppRun, listWorkflowAppRunEvents } from "./app-api-service"
 import { sendChatflowMessage } from "./chatflow-service"
 import { dispatchPublicWorkflowAppBridgeCommand } from "./public-app-service"
 import {
@@ -281,8 +281,63 @@ it("runs the current immutable release through the shared app authority", async 
       appSlug: "review",
       actor,
       idempotencyKey: "idem_1",
+      // A held caller stays on this Host (ADR-0136): never placed elsewhere.
+      responseMode: "blocking",
     })
   )
+})
+
+it("lets an async run follow the Run Policy and answers it with the placed run id (WF-13)", async () => {
+  jest.mocked(admitWorkflowAppRun).mockResolvedValue({
+    runId: "run_placed",
+    releaseId: "rel_1",
+    placed: true,
+  } as never)
+  await expect(
+    dispatchPublicWorkflowAppBridgeCommand("workflow_app_run_create", {
+      accountId: "acct_a",
+      appSlug: "review",
+      actor,
+      idempotencyKey: "idem_async",
+      input: {},
+      responseMode: "streaming",
+    })
+  ).resolves.toEqual({
+    ok: true,
+    data: { runId: "run_placed", releaseId: "rel_1", status: "accepted" },
+  })
+  expect(admitWorkflowAppRun).toHaveBeenCalledWith(
+    expect.objectContaining({ responseMode: "async" })
+  )
+
+  // A blocking replay of that key reads the placed run's status instead of waiting here.
+  jest
+    .mocked(getWorkflowAppRun)
+    .mockResolvedValue({ runId: "run_placed", status: "running" } as never)
+  await expect(
+    dispatchPublicWorkflowAppBridgeCommand("workflow_app_run_create", {
+      accountId: "acct_a",
+      appSlug: "review",
+      actor,
+      idempotencyKey: "idem_async",
+      input: {},
+      responseMode: "blocking",
+    })
+  ).resolves.toMatchObject({ ok: true, data: { runId: "run_placed", status: "running" } })
+})
+
+it("answers 503 when a placed run's Host cannot be reached for its events", async () => {
+  const { WorkflowAppRunHostUnavailableError } = jest.requireActual("./app-run-placement")
+  jest.mocked(listWorkflowAppRunEvents).mockRejectedValue(new WorkflowAppRunHostUnavailableError())
+  await expect(
+    dispatchPublicWorkflowAppBridgeCommand("workflow_app_events_list", {
+      accountId: "acct_a",
+      appSlug: "review",
+      actor,
+      runId: "run_placed",
+      afterSequence: 0,
+    })
+  ).resolves.toMatchObject({ ok: false, error: { code: "run_host_unavailable", status: 503 } })
 })
 
 it("returns a stable 429 application error when atomic admission exhausts quota", async () => {

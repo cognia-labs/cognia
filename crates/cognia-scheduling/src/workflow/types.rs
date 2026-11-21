@@ -294,6 +294,14 @@ pub struct WebhookTriggerPayload {
     /// `workflow_webhook_respond` command. Absent for fire-and-forget hooks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
+    /// Correlation id of the admission hold. Every plain webhook request
+    /// carries one: the runtime acknowledges it through the same
+    /// `workflow_webhook_respond` reply channel once Execution Authority has
+    /// durably reserved the run (a 2xx naming it in `x-cognia-run-id` /
+    /// `x-cognia-handoff-id`), or refuses it (any other status, returned to
+    /// the sender verbatim). The router answers only after that.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_id: Option<String>,
 }
 
 #[cfg(test)]

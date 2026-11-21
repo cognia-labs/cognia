@@ -139,3 +139,89 @@ it("allows in-flight work to finish and rejects the next admission after daily u
     })
   ).rejects.toMatchObject({ code: "cost_budget_exhausted" })
 })
+
+it("counts the usage a placed run's Host reported, once, against the daily budgets (WF-13)", async () => {
+  const placed = {
+    accountId: "account_1",
+    entrypoint: "http" as const,
+    caller: "app:app_1:release:release_2:external:visitor",
+    deploymentId: "deployment_1",
+    deploymentRevision: 1,
+    versionId: "version_2",
+    status: "completed" as const,
+    createdAt: 9_000,
+    updatedAt: 9_000,
+  }
+  await getDb().workflowInvocations.bulkPut([
+    {
+      ...placed,
+      id: "placed_1",
+      runId: "run_placed_1",
+      placement: {
+        hostRef: "host_b",
+        dispatchId: "dispatch_1",
+        state: "settled",
+        usage: { tokens: 70, costUsd: 1.5, costKnown: true },
+      },
+    },
+    {
+      ...placed,
+      id: "placed_2",
+      runId: "run_placed_2",
+      placement: {
+        hostRef: "host_b",
+        dispatchId: "dispatch_2",
+        state: "settled",
+        usage: { tokens: 40, costUsd: 0.75, costKnown: true },
+      },
+    },
+  ])
+  // A local usage row under a placed run id would be a second count; it is ignored.
+  await getDb().sessionUsage.put({
+    messageId: "wf:run_placed_1:prompt",
+    sessionId: "wf:run_placed_1",
+    runId: "run_placed_1",
+    at: 9_500,
+    inputTokens: 1_000,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    costUsd: 100,
+    costKnown: true,
+    durationMs: 1,
+    surface: "workflow",
+  })
+
+  await expect(
+    assertWorkflowAppAdmissionQuota({
+      appId: "app_1",
+      accountId: "account_1",
+      release: release({ dailyTokenBudget: 110 }),
+      now: 10_000,
+    })
+  ).rejects.toMatchObject({ code: "token_budget_exhausted" })
+  await expect(
+    assertWorkflowAppAdmissionQuota({
+      appId: "app_1",
+      accountId: "account_1",
+      release: release({ dailyTokenBudget: 111, dailyCostBudgetUsd: 2.3 }),
+      now: 10_000,
+    })
+  ).resolves.toBeUndefined()
+  await getDb().workflowInvocations.update("placed_2", {
+    placement: {
+      hostRef: "host_b",
+      dispatchId: "dispatch_2",
+      state: "settled",
+      usage: { tokens: 40, costUsd: 0, costKnown: false },
+    },
+  })
+  await expect(
+    assertWorkflowAppAdmissionQuota({
+      appId: "app_1",
+      accountId: "account_1",
+      release: release({ dailyCostBudgetUsd: 100 }),
+      now: 10_000,
+    })
+  ).rejects.toMatchObject({ code: "cost_budget_unknown" })
+})

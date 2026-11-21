@@ -2,9 +2,16 @@
 
 /**
  * QuickWorkflowTriggerDialog — lightweight modal that adds a `trigger.cron`
- * node to an existing workflow without opening the full editor. Workflow
- * combobox + cron expression + timezone select, then `syncWorkflowTriggers`
- * pushes to Rust.
+ * node to an existing workflow's DRAFT without opening the full editor.
+ * Workflow combobox + cron expression + timezone select.
+ *
+ * What runs is the published version, so the new schedule starts only once
+ * the workflow is published; the dialog says so and the Scheduler lists the
+ * trigger as awaiting publish until then (WF-07). It used to register the
+ * draft natively, arming a cron that admission then refused (no such node in
+ * the active version) or ran against the older graph. Publishing from here
+ * is deliberately not offered: it would also ship every other unpublished
+ * edit in the draft.
  *
  * Out of scope: editing existing triggers (use the workflow editor for
  * anything more involved); non-cron trigger kinds.
@@ -13,6 +20,7 @@
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -33,9 +41,9 @@ import {
 } from "@/components/ui/select"
 import { TimezoneSelect } from "../timezone-select"
 import { getDb } from "@/lib/db/schema"
-import { syncWorkflowTriggers } from "@/lib/workflow/runtime/webhook-bridge"
+import { updateWorkflow } from "@/lib/db/workflows"
 import { isWorkflowReadOnly } from "@/lib/workflow/definition/read-only"
-import type { VisualWorkflow, WorkflowNode, WorkflowTriggerRow } from "@/types/workflow/visual"
+import type { VisualWorkflow, WorkflowNode } from "@/types/workflow/visual"
 
 // Cron presets that align with the scheduler's BackupScheduleDialog visual
 // pattern — copied (not extracted) per the plan; the two call sites diverge
@@ -54,8 +62,12 @@ export interface QuickWorkflowTriggerDialogProps {
   onCreated?: (workflowId: string, triggerId: string) => void
   /** Override for `getDb()` — tests inject a stub. */
   db?: ReturnType<typeof getDb>
-  /** Override for `syncWorkflowTriggers` — tests inject a spy. */
-  syncFn?: (workflow: VisualWorkflow) => Promise<void>
+  /**
+   * Save the draft's new node list. Defaults to `updateWorkflow`, the
+   * ordinary draft-edit path (read-only refusal, publication preserved,
+   * deployed-trigger projection). Tests and stories inject a spy.
+   */
+  saveDraft?: (workflowId: string, nodes: WorkflowNode[]) => Promise<unknown>
   /** Override for the unique id generator — tests inject a deterministic one. */
   newNodeId?: () => string
 }
@@ -69,24 +81,19 @@ export function selectableWorkflows(workflows: VisualWorkflow[]): VisualWorkflow
   return workflows.filter((wf) => !isWorkflowReadOnly(wf))
 }
 
-export function createCronTriggerRow(input: {
-  triggerId: string
-  workflowId: string
-  cron: string
-  timezone: string
-  now?: number
-}): WorkflowTriggerRow {
-  const now = input.now ?? Date.now()
-  return {
+/** The draft's node list with one new `trigger.cron` node appended. */
+export function withCronTriggerNode(
+  workflow: Pick<VisualWorkflow, "nodes">,
+  input: { triggerId: string; cron: string; timezone: string; label: string }
+): WorkflowNode[] {
+  const node: WorkflowNode = {
     id: input.triggerId,
-    workflowId: input.workflowId,
-    kind: "trigger.cron",
-    enabled: true,
-    cron: input.cron.trim(),
-    timezone: input.timezone,
-    createdAt: now,
-    updatedAt: now,
+    type: "trigger.cron",
+    typeVersion: 1,
+    position: { x: 100, y: 100 + workflow.nodes.length * 80 },
+    data: { label: input.label, params: { cron: input.cron.trim(), timezone: input.timezone } },
   }
+  return [...workflow.nodes, node]
 }
 
 export function QuickWorkflowTriggerDialog({
@@ -94,11 +101,13 @@ export function QuickWorkflowTriggerDialog({
   onOpenChange,
   onCreated,
   db,
-  syncFn,
+  saveDraft,
   newNodeId,
 }: QuickWorkflowTriggerDialogProps) {
   const t = useTranslations("scheduler")
-  const sync = syncFn ?? syncWorkflowTriggers
+  const save =
+    saveDraft ??
+    ((workflowId: string, nodes: WorkflowNode[]) => updateWorkflow(workflowId, { nodes }))
   const idGen =
     newNodeId ??
     (() => "trigger_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6))
@@ -161,25 +170,17 @@ export function QuickWorkflowTriggerDialog({
         return
       }
       const triggerId = idGen()
-      const newNode: WorkflowNode = {
-        id: triggerId,
-        type: "trigger.cron",
-        typeVersion: 1,
-        position: { x: 100, y: 100 + workflow.nodes.length * 80 },
-        data: {
+      await save(
+        workflowId,
+        withCronTriggerNode(workflow, {
+          triggerId,
+          cron,
+          timezone,
           label: t("cronTriggerLabel") || "Cron trigger",
-          params: { cron: cron.trim(), timezone },
-        },
-      }
-      const updated: VisualWorkflow = {
-        ...workflow,
-        nodes: [...workflow.nodes, newNode],
-      }
-      await realDb.workflows.put(updated)
-      await realDb.workflowTriggers.put(
-        createCronTriggerRow({ triggerId, workflowId, cron, timezone })
+        })
       )
-      await sync(updated)
+      // Saved to the draft only: say plainly that nothing fires until a publish.
+      toast.success(t("workflowTriggerAddedAwaitingPublish", { name: workflow.name }))
       onCreated?.(workflowId, triggerId)
       onOpenChange(false)
     } catch (err) {
@@ -196,7 +197,8 @@ export function QuickWorkflowTriggerDialog({
           <DialogTitle>{t("quickCreateWorkflowTrigger") || "Create workflow trigger"}</DialogTitle>
           <DialogDescription>
             {t("quickCreateWorkflowTriggerDescription") ||
-              "Add a cron trigger to an existing workflow without leaving the scheduler."}
+              "Add a cron trigger to an existing workflow without leaving the scheduler."}{" "}
+            {t("quickCreateWorkflowTriggerPublishNote")}
           </DialogDescription>
         </DialogHeader>
 

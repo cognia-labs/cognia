@@ -61,23 +61,37 @@ describe("KindFactsSection", () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it("resolves the workflow's name for a trigger", () => {
-    liveQueryResults["workflowTriggers"] = {
-      id: "t",
+  it("shows a published schedule with its workflow, cron and state", () => {
+    liveQueryResults["listWorkflowSchedules"] = {
       workflowId: "w1",
-      kind: "trigger.cron",
-      enabled: true,
-      webhookPath: "/hook",
+      workflowName: "Deploy",
+      triggerId: "t",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      published: true,
+      paused: true,
     }
-    liveQueryResults["workflows.get"] = { name: "Deploy" }
-    render(<KindFactsSection item={item("workflow", "t")} />)
+    render(<KindFactsSection item={item("workflow", "w1:t")} />)
     expect(screen.getByText("Deploy")).toBeInTheDocument()
-    expect(screen.getByText("/hook")).toBeInTheDocument()
-    expect(screen.getByText(/^yes$/i)).toBeInTheDocument()
+    expect(screen.getByText("0 9 * * *")).toBeInTheDocument()
+    expect(screen.getByText("Paused")).toBeInTheDocument()
+  })
+
+  it("says a draft-only schedule waits for a publish", () => {
+    liveQueryResults["listWorkflowSchedules"] = {
+      workflowId: "w1",
+      triggerId: "t",
+      cron: "0 9 * * *",
+      published: false,
+      paused: false,
+    }
+    render(<KindFactsSection item={item("workflow", "w1:t")} />)
+    expect(screen.getByText("Draft only. Publish the workflow to start it")).toBeInTheDocument()
   })
 
   it("says when the workflow trigger is gone", () => {
-    render(<KindFactsSection item={item("workflow", "t")} />)
+    liveQueryResults["listWorkflowSchedules"] = null
+    render(<KindFactsSection item={item("workflow", "w1:t")} />)
     expect(screen.getByText("Workflow trigger not found.")).toBeInTheDocument()
   })
 

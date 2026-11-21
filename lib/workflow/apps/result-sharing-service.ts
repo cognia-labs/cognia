@@ -10,8 +10,8 @@ import {
 import { sha256Hex } from "@/lib/share/hash"
 import type { ResolvedWorkflowAppRelease } from "@/types/workflow/app"
 import { authorizeWorkflowAppRequest, type WorkflowAppRequestActor } from "./app-execution"
-import { getWorkflowAppRun } from "./app-api-service"
-import { assertPersonalSink } from "@/lib/execution/personal-sink"
+import { getWorkflowAppRun, judgeWorkflowAppRunDisclosure } from "./app-api-service"
+import { assertPersonalSink, PersonalSinkWithheldError } from "@/lib/execution/personal-sink"
 import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 import { bindPersonalShareSnapshot } from "@/lib/share/personal-snapshot"
 
@@ -115,13 +115,28 @@ export async function createWorkflowResultShare(input: {
   }
   // getWorkflowAppRun has already checked the canonical invocation's owner.
   // The returned run id, not an unvalidated request/plugin field, is provenance.
-  const checkPersonal = () =>
-    assertPersonalSink(
+  const label = "public workflow result"
+  const checkPersonal = async () => {
+    // A run placed on another Host carries its personal taint there; that
+    // Host makes the verdict on this exact payload (ADR-0136 placement).
+    const remote = await judgeWorkflowAppRunDisclosure({
+      ...input,
+      runId: run.runId,
+      payload: payload.data,
+      label,
+    })
+    if (remote) {
+      if (remote.outcome !== "allow")
+        throw new PersonalSinkWithheldError(remote.persons, remote.reason)
+      return
+    }
+    await assertPersonalSink(
       { executionRunId: workflowExecutionRunId(run.runId) },
-      { kind: "unknown", label: "public workflow result" },
+      { kind: "unknown", label },
       payload.data,
       { kind: "public-share", workflowRunId: run.runId }
     )
+  }
   await checkPersonal()
   bindPersonalShareSnapshot(payload, checkPersonal)
   return throughShareService(() =>

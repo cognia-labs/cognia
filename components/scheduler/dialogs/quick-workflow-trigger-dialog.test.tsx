@@ -9,9 +9,10 @@
 
 jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => [] }))
 jest.mock("@/lib/db/schema", () => ({ getDb: () => ({}) }))
-jest.mock("@/lib/workflow/runtime/webhook-bridge", () => ({
-  syncWorkflowTriggers: jest.fn().mockResolvedValue(undefined),
+jest.mock("@/lib/db/workflows", () => ({
+  updateWorkflow: jest.fn().mockResolvedValue(undefined),
 }))
+jest.mock("sonner", () => ({ toast: { success: jest.fn() } }))
 jest.mock("../timezone-select", () => ({
   TimezoneSelect: () => null,
 }))
@@ -28,24 +29,28 @@ describe("QuickWorkflowTriggerDialog module", () => {
     expect(typeof mod.QuickWorkflowTriggerDialog).toBe("function")
   })
 
-  it("persists the selected timezone on the canonical workflow trigger row", () => {
-    expect(
-      mod.createCronTriggerRow({
-        triggerId: "trigger-1",
-        workflowId: "workflow-1",
-        cron: " 0 9 * * * ",
-        timezone: "Asia/Shanghai",
-        now: 123,
-      })
-    ).toEqual({
-      id: "trigger-1",
-      workflowId: "workflow-1",
-      kind: "trigger.cron",
-      enabled: true,
-      cron: "0 9 * * *",
+  it("appends one cron node with the selected timezone to the draft graph only", () => {
+    const existing = {
+      id: "n_manual",
+      type: "trigger.manual",
+      typeVersion: 1,
+      position: { x: 0, y: 0 },
+      data: { label: "manual", params: {} },
+    }
+    const nodes = mod.withCronTriggerNode({ nodes: [existing] } as unknown as VisualWorkflow, {
+      triggerId: "trigger-1",
+      cron: " 0 9 * * * ",
       timezone: "Asia/Shanghai",
-      createdAt: 123,
-      updatedAt: 123,
+      label: "Cron trigger",
+    })
+    expect(nodes).toHaveLength(2)
+    expect(nodes[0]).toBe(existing)
+    expect(nodes[1]).toEqual({
+      id: "trigger-1",
+      type: "trigger.cron",
+      typeVersion: 1,
+      position: { x: 100, y: 180 },
+      data: { label: "Cron trigger", params: { cron: "0 9 * * *", timezone: "Asia/Shanghai" } },
     })
   })
 

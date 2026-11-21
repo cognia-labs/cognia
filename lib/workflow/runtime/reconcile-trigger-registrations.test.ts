@@ -33,7 +33,10 @@ it("reconciles deployments, removes drafts, reports failures and continues to ot
   const log = jest.fn()
   const results = await reconcileWorkflowTriggerRegistrations({ log })
   expect(results.map((result) => result.ok)).toEqual([false, true, true])
-  expect(syncWorkflowTriggers).toHaveBeenCalledWith(rows[1], { signal: undefined })
+  expect(syncWorkflowTriggers).toHaveBeenCalledWith(rows[1], {
+    signal: undefined,
+    pausedTriggerIds: new Set(),
+  })
   expect(unsyncWorkflowTriggers).toHaveBeenCalledWith(rows[2])
   expect(getWorkflowTriggerHealth().registrations).toContainEqual(
     expect.objectContaining({
@@ -56,4 +59,22 @@ it("preserves cancellation before and after an asynchronous deployment lookup", 
   expect(await reconcileWorkflowTriggerRegistrations({ signal: controller.signal })).toEqual([])
   expect(syncWorkflowTriggers).not.toHaveBeenCalled()
   expect(unsyncWorkflowTriggers).not.toHaveBeenCalled()
+})
+
+it("registers the deployed version with the draft row's pause overrides (WF-07)", async () => {
+  const draft = {
+    id: "paused",
+    nodes: [{ id: "cron", type: "trigger.cron", data: {} }],
+    triggerPauses: { cron: 5 },
+  }
+  const deployedDefinition = { id: "paused", nodes: draft.nodes }
+  jest.mocked(listWorkflows).mockResolvedValue([draft] as never)
+  jest.mocked(resolveWorkflowDeployment).mockResolvedValue({
+    workflow: deployedDefinition,
+  } as never)
+  await reconcileWorkflowTriggerRegistrations()
+  expect(syncWorkflowTriggers).toHaveBeenCalledWith(deployedDefinition, {
+    signal: undefined,
+    pausedTriggerIds: new Set(["cron"]),
+  })
 })

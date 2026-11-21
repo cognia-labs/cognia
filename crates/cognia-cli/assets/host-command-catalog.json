@@ -112041,6 +112041,137 @@
       "outputTyped": true
     },
     {
+      "name": "workflow_app_handoff_create",
+      "category": "automation",
+      "resource": "workflow",
+      "target": "execution",
+      "operation": "write",
+      "capability": "workflow.run",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "workflow_app_handoff_create (workflow.run)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "idempotencyKey",
+          "runId",
+          "workflowId",
+          "versionId",
+          "deploymentId",
+          "deploymentRevision",
+          "expectedVersionDigest",
+          "payload"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "workflowId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "versionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deploymentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deploymentRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedVersionDigest": {
+            "type": "string",
+            "minLength": 1
+          },
+          "dependencyLock": {
+            "type": "object"
+          },
+          "payload": {
+            "type": "object",
+            "required": [
+              "input",
+              "appId",
+              "appReleaseId"
+            ],
+            "properties": {
+              "input": {},
+              "appId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "appReleaseId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "initiator": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "lib/workflow/api/handoff-run-service.ts createWorkflowAppRunHandoff",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "refused"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "refusal": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
       "name": "workflow_approval_list",
       "category": "automation",
       "resource": "workflow",
@@ -112249,6 +112380,11 @@
           "draft"
         ],
         "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^wf_[A-Za-z0-9_-]{1,96}$",
+            "description": "Create under the id a paired client already holds in its mirror."
+          },
           "draft": {
             "type": "object",
             "additionalProperties": {},
@@ -112536,6 +112672,207 @@
           }
         },
         "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "workflow_handoff_run_cancel",
+      "category": "automation",
+      "resource": "workflow",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "workflow.run",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "workflow_handoff_run_cancel (workflow.run)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "runId"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "lib/workflow/api/handoff-run-service.ts cancelHandoffRun",
+        "required": [
+          "runId",
+          "found",
+          "cancelled",
+          "mode"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "found": {
+            "type": "boolean"
+          },
+          "cancelled": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "workflow_handoff_run_get",
+      "category": "automation",
+      "resource": "workflow",
+      "target": "execution",
+      "operation": "read",
+      "capability": "workflow.run",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "workflow_handoff_run_get (workflow.run)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "runId"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "afterSequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "disclosure": {
+            "type": "object",
+            "required": [
+              "payload",
+              "label"
+            ],
+            "properties": {
+              "payload": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "lib/workflow/api/handoff-run-service.ts getHandoffRun",
+        "required": [
+          "run"
+        ],
+        "properties": {
+          "run": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "x-cognia-opaque-reason": "A run view is owned by the workflow domain (WorkflowApiRunView) and versioned with it; this plane owns the handoff envelope around it, which is typed here."
+          },
+          "usage": {
+            "type": "object",
+            "required": [
+              "tokens",
+              "costUsd",
+              "costKnown"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "costUsd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "costKnown": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "events": {
+            "type": "object",
+            "required": [
+              "events",
+              "terminal"
+            ],
+            "properties": {
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "x-cognia-opaque-reason": "A run event view is owned by the workflow domain (WorkflowApiEventView) and versioned with it; this plane owns the page envelope around it, which is typed here."
+                }
+              },
+              "terminal": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "disclosure": {
+            "type": "object",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "withhold"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "persons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "x-cognia-opaque-reason": "A principal reference is owned by the identity plane (PrincipalRefV1) and versioned with it."
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false,
+        "x-cognia-schema-owner": "workflow"
       },
       "outputTyped": true
     },
@@ -112947,6 +113284,61 @@
       "outputTyped": true
     },
     {
+      "name": "workflow_preview_run",
+      "category": "automation",
+      "resource": "workflow",
+      "target": "execution",
+      "operation": "write",
+      "capability": "workflow.run",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "workflow_preview_run (workflow.run)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "workflowId",
+          "mode"
+        ],
+        "properties": {
+          "workflowId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "from-step",
+              "single-step"
+            ]
+          },
+          "stepId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "lib/workflow/remote/host-commands.ts startWorkflowPreviewRun",
+        "required": [
+          "runId"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
       "name": "workflow_register_trigger",
       "category": "automation",
       "resource": "workflow",
@@ -113033,6 +113425,82 @@
       "outputTyped": true
     },
     {
+      "name": "workflow_run_events_list",
+      "category": "automation",
+      "resource": "workflow",
+      "target": "execution",
+      "operation": "read",
+      "capability": "workflow.run",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "workflow_run_events_list (workflow.run)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "runId"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "afterSequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "lib/workflow/remote/host-commands.ts listWorkflowRunEventsPage",
+        "required": [
+          "run",
+          "events",
+          "nextSequence",
+          "terminal"
+        ],
+        "properties": {
+          "run": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "x-cognia-opaque-reason": "The run row is owned by the workflow domain and versioned with it; this plane owns the page envelope around it, which is typed here."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "x-cognia-opaque-reason": "A run event row is owned by the workflow domain and versioned with it; this plane owns the page envelope around it, which is typed here."
+            }
+          },
+          "nextSequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "terminal": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "x-cognia-schema-owner": "workflow"
+      },
+      "outputTyped": true
+    },
+    {
       "name": "workflow_run_list",
       "category": "automation",
       "resource": "workflow",
@@ -113108,6 +113576,9 @@
         "properties": {
           "triggerId": {
             "type": "string"
+          },
+          "workflowId": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -113147,6 +113618,9 @@
         ],
         "properties": {
           "triggerId": {
+            "type": "string"
+          },
+          "workflowId": {
             "type": "string"
           }
         },
@@ -113252,16 +113726,45 @@
       },
       "outputSchemaSource": "contract",
       "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
-        ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
-        "x-cognia-schema-owner": "workflow"
+        "x-cognia-wire-source": "lib/workflow/remote/host-commands.ts triggerPublishedWorkflowRun",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status",
+              "runId"
+            ],
+            "properties": {
+              "status": {
+                "const": "admitted"
+              },
+              "runId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "status",
+              "dispatchId",
+              "targetRef"
+            ],
+            "properties": {
+              "status": {
+                "const": "handed_off"
+              },
+              "dispatchId": {
+                "type": "string"
+              },
+              "targetRef": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
       },
       "outputTyped": true
     },
@@ -113984,5 +114487,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "36747bab8d8cc0e1c69c026661b0105c58560c62269edac323821aea0b7d960a"
+  "catalogHash": "462c53ebb0844379aa53c21817ca8ab4bee55fdf1670ebcf6551f87fa990adfe"
 }

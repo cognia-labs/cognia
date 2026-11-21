@@ -1,9 +1,15 @@
-/** Shared projection entry point for database saves and both runtime roots. */
+/**
+ * Shared projection entry point for database saves, publish/rollback, the
+ * Scheduler's pause/resume and both runtime roots. What gets registered is the
+ * ACTIVE DEPLOYMENT's version; the draft row only contributes its runtime
+ * pause overrides (`triggerPauses`), never its graph.
+ */
 import type { VisualWorkflow } from "@/types/workflow/visual"
 import { listWorkflows } from "@/lib/db/workflows"
 import { resolveWorkflowDeployment } from "@/lib/db/workflow-deployments"
 import { syncWorkflowTriggers, unsyncWorkflowTriggers } from "./webhook-bridge"
 import { recordTriggerRegistration } from "./trigger-registration-health"
+import { pausedTriggerIdsOf } from "./trigger-pauses"
 
 export type WorkflowTriggerProjectionResult = { ok: true } | { ok: false; error: string }
 
@@ -12,6 +18,10 @@ interface ReconcileOptions {
   log?: (level: "info" | "warn", message: string) => void
 }
 
+/**
+ * @param workflow the workflow's current DRAFT row: its id selects the
+ *   deployment, its `triggerPauses` say which deployed triggers stay disabled.
+ */
 export async function projectWorkflowTriggerRegistrations(
   workflow: VisualWorkflow,
   options: ReconcileOptions = {}
@@ -22,8 +32,12 @@ export async function projectWorkflowTriggerRegistrations(
     const deployed = await resolveWorkflowDeployment(workflow.id)
     if (options.signal?.aborted) return
     deploymentResolved = true
-    if (deployed) await syncWorkflowTriggers(deployed.workflow, { signal: options.signal })
-    else await unsyncWorkflowTriggers(workflow)
+    if (deployed) {
+      await syncWorkflowTriggers(deployed.workflow, {
+        signal: options.signal,
+        pausedTriggerIds: pausedTriggerIdsOf(workflow),
+      })
+    } else await unsyncWorkflowTriggers(workflow)
     if (options.signal?.aborted) return
     return { ok: true }
   } catch (error) {

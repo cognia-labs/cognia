@@ -106,16 +106,18 @@ export function createScheduleHandoffDelivery(
     let target: Awaited<ReturnType<typeof openTarget>> | undefined
     try {
       target = await openTarget(job.targetRef)
-      const accepted = await target.transport.call<{ runId?: unknown }>(
-        "workflow_handoff_create",
-        {
-          deploymentId: job.payload.deploymentId,
-          expectedVersionDigest: job.payload.expectedVersionDigest,
-          idempotencyKey: job.idempotencyKey,
-          trigger: job.payload.trigger,
-        },
-        { idempotencyKey: job.idempotencyKey }
-      )
+      // Exactly-once is the payload's `idempotencyKey` (the trigger
+      // occurrence), which the target's admission ledger dedupes across
+      // callers. It is never the transport Idempotency-Key: the Host refuses
+      // any that is not a UUID (an occurrence key never is), and it would
+      // replay a first attempt's retryable refusal onto every retry. The
+      // transport mints one UUID per attempt.
+      const accepted = await target.transport.call<{ runId?: unknown }>("workflow_handoff_create", {
+        deploymentId: job.payload.deploymentId,
+        expectedVersionDigest: job.payload.expectedVersionDigest,
+        idempotencyKey: job.idempotencyKey,
+        trigger: job.payload.trigger,
+      })
       // The source keeps a pointer, never a mirror of the remote journal: one
       // run has one event log, and it lives on the Host that is executing it.
       const remoteRunId = typeof accepted?.runId === "string" ? accepted.runId : undefined

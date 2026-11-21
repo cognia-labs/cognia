@@ -13,6 +13,7 @@ import {
   listWorkflowAppRunEvents,
   WorkflowAppApiError,
 } from "./app-api-service"
+import { WorkflowAppRunHostUnavailableError } from "./app-run-placement"
 import { WorkflowAppAccessError } from "./app-execution"
 import { sendChatflowMessage, WorkflowChatflowError } from "./chatflow-service"
 import { submitWorkflowFeedback, WorkflowQualityError } from "../quality/quality-service"
@@ -381,16 +382,19 @@ async function dispatch(command: PublicWorkflowAppBridgeCommand, payload: Record
       return exportWorkflowBatchCsv(session.accountId, jobId)
     }
     case "workflow_app_run_create": {
+      const blocking = payload.responseMode !== "streaming"
       const admitted = await admitWorkflowAppRun({
         ...session,
         input: payload.input ?? {},
         idempotencyKey: requiredString(payload, "idempotencyKey"),
+        responseMode: blocking ? "blocking" : "async",
       })
-      const blocking = payload.responseMode !== "streaming"
       if (!blocking) {
         return { runId: admitted.runId, releaseId: admitted.releaseId, status: "accepted" }
       }
-      await admitted.completion
+      // A replayed key can name a run an earlier async request placed on
+      // another Host; its current status is the answer, read through it.
+      if (admitted.completion) await admitted.completion
       return getWorkflowAppRun({ ...session, runId: admitted.runId })
     }
     case "workflow_app_run_get":
@@ -512,6 +516,9 @@ function normalizeError(error: unknown): PublicWorkflowAppBridgeResponse {
               ? 413
               : 400
     return { ok: false, error: { code: error.code, status, message: error.message } }
+  }
+  if (error instanceof WorkflowAppRunHostUnavailableError) {
+    return { ok: false, error: { code: error.code, status: 503, message: error.message } }
   }
   if (error instanceof WorkflowAppApiError || error instanceof WorkflowChatflowError) {
     const status = error.code.endsWith("not_found") ? 404 : 400

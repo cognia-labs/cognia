@@ -202,9 +202,16 @@ tier still mean the same thing.
 gate**: it reuses `action.approval.request`'s own machinery
 (`registerPendingApproval` + a `step.long_running.checkpoint` + `subscribeWake`),
 so an auto-gate resumes after a crash exactly like an authored approval node and
-the same pending-approval UI answers it. Three rules: de-dup when an approval
-node is a transitive ancestor (`ancestorsOf`, reused from `run-single-node.ts`);
-fail closed on a headless trigger; never touch a low-risk node.
+the same pending-approval UI answers it. Three rules: de-dup only when an
+upstream approval node (`gatingAncestorsOf`: graph ancestors, plus the enclosing
+loop containers and their ancestors) ran in this execution scope and was
+approved — a rejected, timed-out or skipped approval gates nothing, and inside a
+loop each iteration asks on its own (the loop body applies the gate itself, and
+approval ids carry the iteration's `stepKey`); fail closed on a run nobody is
+watching (`im`, `api`, `schedule`, `bot`, and the automatic-trigger source
+`trigger`); never touch a low-risk node. The waitpoint row decides even after
+the deadline: an answer stored in time stands on a late resume, and an answer
+that arrives after the deadline is refused (`expired`).
 
 ### Taxonomy judgment calls
 

@@ -1,13 +1,14 @@
 import type { VisualWorkflow, WorkflowNode } from "@/types/workflow/visual"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
-import { decideWorkflowWaitpoint } from "@/lib/db/workflow-waitpoints"
+import { createWorkflowWaitpoint, decideWorkflowWaitpoint } from "@/lib/db/workflow-waitpoints"
 import { appendEvent } from "./event-log"
-import { listPendingApprovals, respondToApproval } from "./approval-registry"
+import { approvalId, listPendingApprovals, respondToApproval } from "./approval-registry"
 import {
   RISK_GATE_CHECKPOINT_KEY,
   RiskGateRejected,
   applyNodeRiskGate,
-  hasAncestorApproval,
+  gatingAncestorsOf,
+  hasApprovedAncestor,
   isInteractiveRun,
   isRiskGatingEnabled,
 } from "./risk-gate"
@@ -99,12 +100,12 @@ describe("isInteractiveRun", () => {
     expect(isInteractiveRun({ source } as never)).toBe(true)
   })
 
-  it.each(["im", "api"] as const)("%s is headless", (source) => {
+  it.each(["im", "api", "trigger"] as const)("%s is headless", (source) => {
     expect(isInteractiveRun({ source } as never)).toBe(false)
   })
 })
 
-describe("hasAncestorApproval", () => {
+describe("hasApprovedAncestor", () => {
   const wf = workflow({
     nodes: [
       node("a", "action.approval.request"),
@@ -118,12 +119,31 @@ describe("hasAncestorApproval", () => {
     ] as never,
   })
 
-  it("finds an approval node transitively upstream", () => {
-    expect(hasAncestorApproval(wf, "risky")).toBe(true)
+  it("trusts an approval node transitively upstream that this run approved", () => {
+    expect(hasApprovedAncestor(wf, "risky", new Set(["a"]))).toBe(true)
+  })
+
+  it("does not trust an upstream approval this run did not approve", () => {
+    // Rejected, timed out or never executed (a skipped branch): the graph says
+    // an approval is upstream, but nobody approved this execution.
+    expect(hasApprovedAncestor(wf, "risky", new Set())).toBe(false)
   })
 
   it("returns false for a node with no approval ancestor", () => {
-    expect(hasAncestorApproval(wf, "orphan")).toBe(false)
+    expect(hasApprovedAncestor(wf, "orphan", new Set(["a"]))).toBe(false)
+  })
+
+  it("counts an approval before a loop as gating the loop's body", () => {
+    const looped = workflow({
+      nodes: [
+        node("gate", "action.approval.request"),
+        node("loop", "flow.loop"),
+        { ...node("inner", "action.system.terminal"), parentId: "loop" } as WorkflowNode,
+      ],
+      edges: [{ id: "e1", source: "gate", target: "loop" }] as never,
+    })
+    expect(gatingAncestorsOf(looped, "inner")).toEqual(new Set(["loop", "gate"]))
+    expect(hasApprovedAncestor(looped, "inner", new Set(["gate"]))).toBe(true)
   })
 })
 
@@ -133,6 +153,7 @@ describe("applyNodeRiskGate", () => {
       workflow: workflow({ nodes: [node("n1", "flow.set")] }),
       node: node("n1", "flow.set"),
       runId: "r1",
+      approvedApprovalIds: new Set(),
     })
     await expect(listPendingApprovals()).resolves.toHaveLength(0)
     expect(notifyRequested).not.toHaveBeenCalled()
@@ -143,11 +164,12 @@ describe("applyNodeRiskGate", () => {
       workflow: workflow({ settings: { riskGating: false } } as never),
       node: node("n1", "action.desktop.performAction"),
       runId: "r1",
+      approvedApprovalIds: new Set(),
     })
     await expect(listPendingApprovals()).resolves.toHaveLength(0)
   })
 
-  it("does not double-gate a node already covered by an approval node", async () => {
+  it("does not double-gate a node already covered by an approval this run approved", async () => {
     const wf = workflow({
       nodes: [node("a", "action.approval.request"), node("n1", "action.desktop.performAction")],
       edges: [{ id: "e1", source: "a", target: "n1" }] as never,
@@ -156,8 +178,56 @@ describe("applyNodeRiskGate", () => {
       workflow: wf,
       node: node("n1", "action.desktop.performAction"),
       runId: "r1",
+      approvedApprovalIds: new Set(["a"]),
     })
     expect(notifyRequested).not.toHaveBeenCalled()
+  })
+
+  it("still gates when the upstream approval node was not approved in this run", async () => {
+    const wf = workflow({
+      nodes: [node("a", "action.approval.request"), node("n1", "action.desktop.performAction")],
+      edges: [{ id: "e1", source: "a", target: "n1", sourceHandle: "rejected" }] as never,
+    })
+    const gate = applyNodeRiskGate({
+      workflow: wf,
+      node: node("n1", "action.desktop.performAction"),
+      runId: "r1",
+      approvedApprovalIds: new Set(),
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    const pending = await listPendingApprovals()
+    expect(pending).toHaveLength(1)
+    await respondToApproval(pending[0].approvalId, { decision: "rejected", respondedBy: "alice" })
+    await expect(gate).rejects.toThrow(RiskGateRejected)
+  })
+
+  it("asks once per loop iteration, never reusing an earlier iteration's answer", async () => {
+    const first = applyNodeRiskGate({
+      workflow: workflow(),
+      node: node("n1", "action.desktop.performAction"),
+      runId: "r1",
+      approvedApprovalIds: new Set(),
+      stepKey: "loop#0#n1",
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    const [request0] = await listPendingApprovals()
+    expect(request0.approvalId).toBe(approvalId("r1", "loop#0#n1"))
+    await respondToApproval(request0.approvalId, { decision: "approved", respondedBy: "alice" })
+    await expect(first).resolves.toBeUndefined()
+
+    const second = applyNodeRiskGate({
+      workflow: workflow(),
+      node: node("n1", "action.desktop.performAction"),
+      runId: "r1",
+      approvedApprovalIds: new Set(),
+      stepKey: "loop#1#n1",
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    const pending = await listPendingApprovals()
+    expect(pending.map((p) => p.approvalId)).toEqual([approvalId("r1", "loop#1#n1")])
+    expect(notifyRequested).toHaveBeenCalledTimes(2)
+    await respondToApproval(pending[0].approvalId, { decision: "rejected", respondedBy: "alice" })
+    await expect(second).rejects.toThrow(/rejected by alice/)
   })
 
   it("fails closed on a headless run, naming the surfaces", async () => {
@@ -166,6 +236,7 @@ describe("applyNodeRiskGate", () => {
         workflow: workflow(),
         node: node("n1", "action.desktop.performAction"),
         runId: "r1",
+        approvedApprovalIds: new Set(),
         triggeredBy: { source: "im", adapterId: "a", conversationKey: "c" } as never,
       })
     ).rejects.toThrow(RiskGateRejected)
@@ -175,6 +246,7 @@ describe("applyNodeRiskGate", () => {
         workflow: workflow(),
         node: node("n1", "action.desktop.performAction"),
         runId: "r1",
+        approvedApprovalIds: new Set(),
         triggeredBy: { source: "im", adapterId: "a", conversationKey: "c" } as never,
       })
     ).rejects.toThrow(/computer-use/)
@@ -187,6 +259,7 @@ describe("applyNodeRiskGate", () => {
       workflow: workflow(),
       node: node("n1", "action.desktop.performAction"),
       runId: "r1",
+      approvedApprovalIds: new Set(),
     })
     await new Promise((r) => setTimeout(r, 20))
     const pending = await listPendingApprovals()
@@ -208,6 +281,7 @@ describe("applyNodeRiskGate", () => {
       workflow: workflow(),
       node: node("n1", "action.desktop.performAction"),
       runId: "r1",
+      approvedApprovalIds: new Set(),
     })
     await new Promise((r) => setTimeout(r, 20))
     const pending = await listPendingApprovals()
@@ -227,13 +301,14 @@ describe("applyNodeRiskGate", () => {
       type: "step.long_running.checkpoint",
       payload: {
         checkpointKey: RISK_GATE_CHECKPOINT_KEY,
-        state: { approvalId: "r1:n1", requestedAt: Date.now() },
+        state: { approvalId: approvalId("r1", "n1"), requestedAt: Date.now() },
       },
     })
     const p = applyNodeRiskGate({
       workflow: workflow(),
       node: node("n1", "action.desktop.performAction"),
       runId: "r1",
+      approvedApprovalIds: new Set(),
     })
     await new Promise((r) => setTimeout(r, 20))
     await expect(listPendingApprovals()).resolves.toHaveLength(1)
@@ -251,6 +326,7 @@ describe("applyNodeRiskGate", () => {
         workflow: workflow(),
         node: node("n1", "action.desktop.performAction"),
         runId: "r1",
+        approvedApprovalIds: new Set(),
       })
       await new Promise((r) => setTimeout(r, 20))
       const pending = await listPendingApprovals()
@@ -270,6 +346,7 @@ describe("applyNodeRiskGate", () => {
         workflow: workflow(),
         node: node("n1", "action.desktop.performAction"),
         runId: "r1",
+        approvedApprovalIds: new Set(),
       })
       await new Promise((r) => setTimeout(r, 20))
       const pending = await listPendingApprovals()
@@ -298,6 +375,7 @@ describe("applyNodeRiskGate", () => {
           workflow: workflow(),
           node: node("n1", "action.desktop.performAction"),
           runId: "r1",
+          approvedApprovalIds: new Set(),
         })
       ).rejects.toThrow(/timed out unanswered/)
       await expect(listPendingApprovals()).resolves.toHaveLength(0)
@@ -309,6 +387,7 @@ describe("applyNodeRiskGate", () => {
         workflow: workflow(),
         node: node("n1", "action.desktop.performAction"),
         runId: "r1",
+        approvedApprovalIds: new Set(),
         signal: controller.signal,
       })
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -319,14 +398,14 @@ describe("applyNodeRiskGate", () => {
     })
   })
 
-  it("rejects rather than passing when the original budget already expired", async () => {
+  it("rejects rather than passing when the original budget expired unanswered", async () => {
     await appendEvent({
       runId: "r1",
       stepId: "n1",
       type: "step.long_running.checkpoint",
       payload: {
         checkpointKey: RISK_GATE_CHECKPOINT_KEY,
-        state: { approvalId: "r1:n1", requestedAt: Date.now() - 7_200_000 },
+        state: { approvalId: approvalId("r1", "n1"), requestedAt: Date.now() - 7_200_000 },
       },
     })
     await expect(
@@ -334,7 +413,49 @@ describe("applyNodeRiskGate", () => {
         workflow: workflow(),
         node: node("n1", "action.desktop.performAction"),
         runId: "r1",
+        approvedApprovalIds: new Set(),
       })
-    ).rejects.toThrow(/expired unanswered/)
+    ).rejects.toThrow(/timed out unanswered/)
+  })
+
+  it("honours an approval persisted before the deadline when re-entered after it", async () => {
+    const id = approvalId("r1", "n1")
+    const requestedAt = Date.now() - 7_200_000
+    await appendEvent({
+      runId: "r1",
+      stepId: "n1",
+      type: "step.long_running.checkpoint",
+      payload: { checkpointKey: RISK_GATE_CHECKPOINT_KEY, state: { approvalId: id, requestedAt } },
+    })
+    // The process died after this approval was stored, 30 minutes before the
+    // 1 h deadline; the run is re-entered an hour after the deadline.
+    await createWorkflowWaitpoint({
+      id,
+      kind: "risk_gate",
+      status: "pending",
+      runId: "r1",
+      workflowId: "wf1",
+      stepId: "n1",
+      key: "approval:r1:n1",
+      createdAt: requestedAt,
+      notBefore: requestedAt,
+      expiresAt: requestedAt + 3_600_000,
+      updatedAt: requestedAt,
+    })
+    const decided = await decideWorkflowWaitpoint(id, {
+      outcome: "approved",
+      respondedBy: "alice",
+      resolvedAt: requestedAt + 1_800_000,
+    })
+    expect(decided.ok).toBe(true)
+
+    await expect(
+      applyNodeRiskGate({
+        workflow: workflow(),
+        node: node("n1", "action.desktop.performAction"),
+        runId: "r1",
+        approvedApprovalIds: new Set(),
+      })
+    ).resolves.toBeUndefined()
   })
 })

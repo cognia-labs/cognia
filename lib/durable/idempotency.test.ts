@@ -110,4 +110,46 @@ describe("StepMemoCache", () => {
 
     expect(cache.get("one")).toBe("retried")
   })
+
+  it("keeps the routing a step chose next to its output", () => {
+    const cache = new StepMemoCache().hydrateFrom([
+      { stepId: "branch", output: { ok: true }, decision: "false" },
+      { stepId: "failed", output: { error: "x" }, route: "error" },
+      { stepId: "plain", output: 1 },
+    ])
+
+    // A replayed branch must route the same way it did before the crash.
+    expect(cache.routing("branch")).toEqual({ decision: "false" })
+    expect(cache.routing("failed")).toEqual({ route: "error" })
+    expect(cache.routing("plain")).toBeUndefined()
+  })
+
+  it("hydrates under the recorded cache key when one is present", () => {
+    const cache = new StepMemoCache().hydrateFrom([
+      {
+        stepId: "child",
+        output: "nested",
+        loopId: "inner",
+        iterationIndex: 1,
+        cacheKey: "outer#0#inner#1#child",
+      },
+    ])
+
+    // A nested loop's body step ran under the outer iteration's prefix; the
+    // inner loop stamp alone would rebuild `inner#1#child` and miss.
+    expect(cache.get("outer#0#inner#1#child")).toBe("nested")
+    expect(cache.has(iterationCacheKey("inner", 1, "child"))).toBe(false)
+  })
+
+  it("records completion order so a resumed race can name its winner", () => {
+    const cache = new StepMemoCache().hydrateFrom([
+      { stepId: "slow", output: 1 },
+      { stepId: "fast", output: 2 },
+    ])
+    cache.set("late", 3)
+
+    expect(cache.completionOrder("slow")).toBeLessThan(cache.completionOrder("fast")!)
+    expect(cache.completionOrder("fast")).toBeLessThan(cache.completionOrder("late")!)
+    expect(cache.completionOrder("missing")).toBeUndefined()
+  })
 })

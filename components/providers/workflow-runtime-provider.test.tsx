@@ -116,11 +116,14 @@ describe("WorkflowRuntimeProvider", () => {
     expect(resolveWorkflowDeploymentMock).toHaveBeenCalledTimes(2)
     await waitFor(() => expect(syncWorkflowTriggersMock).toHaveBeenCalledTimes(2))
     expect(initPluginTriggerLifecycleMock).toHaveBeenCalledTimes(1)
+    // Nothing paused: every trigger of the published version is armed.
     expect(syncWorkflowTriggersMock).toHaveBeenCalledWith(expect.objectContaining({ id: "wf_a" }), {
       signal: expect.any(AbortSignal),
+      pausedTriggerIds: new Set(),
     })
     expect(syncWorkflowTriggersMock).toHaveBeenCalledWith(expect.objectContaining({ id: "wf_b" }), {
       signal: expect.any(AbortSignal),
+      pausedTriggerIds: new Set(),
     })
 
     unmount()
@@ -163,7 +166,7 @@ describe("WorkflowRuntimeProvider", () => {
     await waitFor(() => expect(syncWorkflowTriggersMock).toHaveBeenCalledTimes(1))
     expect(syncWorkflowTriggersMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: "wf_active" }),
-      { signal: expect.any(AbortSignal) }
+      { signal: expect.any(AbortSignal), pausedTriggerIds: new Set() }
     )
   })
 

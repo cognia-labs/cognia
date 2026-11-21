@@ -8,8 +8,9 @@
  *
  * Canvas navigation (find node, fit view) lives in the editor's floating map
  * controls instead, so the title keeps room on a phone.
- *   • Run — persists locally (if dirty) then enqueues a manual trigger to the
- *     paired desktop via the same outbound path as the mobile TriggerButton
+ *   • Run — a draft preview of what the user saved, owned by the editor
+ *     (`use-mobile-preview-run.ts`): on the paired Host's saved copy, or
+ *     locally on a standalone phone, opening the run it started
  *   • overflow: Save, Undo, Redo, Auto-layout, Fit view, Snap, Export, Import
  *
  * Save/Export/Import reuse the shared helpers (`persistEditorWorkflow`,
@@ -53,8 +54,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
-import { enqueueUnlessQueued } from "@/lib/db/mobile-outbound-queue"
-import { impact } from "@/lib/capacitor/haptics"
 import { autoLayout, applyAutoLayoutPositions } from "@/lib/workflow/editor/auto-layout"
 import { persistEditorWorkflow } from "@/lib/workflow/editor/persist-workflow"
 import type { MobileCanvasMode } from "./mobile-canvas"
@@ -86,6 +85,10 @@ export interface MobileEditorTopbarProps {
   onToggleOrientationLock: () => void
   /** Enter / leave marquee-select, a sub-mode of edit. */
   onToggleSelectMode: () => void
+  /** Start a full preview run of the saved workflow. */
+  onRun: () => void
+  /** A run is starting; Run is disabled until it has. */
+  running: boolean
 }
 
 export function MobileEditorTopbar({
@@ -99,9 +102,10 @@ export function MobileEditorTopbar({
   orientationStatus,
   onToggleOrientationLock,
   onToggleSelectMode,
+  onRun,
+  running,
 }: MobileEditorTopbarProps) {
   const t = useTranslations("mobile.workflow.editor")
-  const tRun = useTranslations("mobile.workflow")
   const tWorkbench = useTranslations("contextWorkbench")
 
   const { id, name, dirty, snapToGrid } = store(
@@ -114,7 +118,6 @@ export function MobileEditorTopbar({
   )
 
   const [saving, setSaving] = useState(false)
-  const [running, setRunning] = useState(false)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   const importInputRef = useRef<HTMLInputElement | null>(null)
@@ -135,14 +138,17 @@ export function MobileEditorTopbar({
     if (saving) return
     setSaving(true)
     try {
-      const { issueCount, publicationInvalidated, triggerRegistration } =
+      const { issueCount, publicationInvalidated, triggerRegistration, hostWrite } =
         await persistEditorWorkflow(store)
       if (triggerRegistration && !triggerRegistration.ok) {
         toast.error(t("triggerRegistrationFailed"))
       } else if (publicationInvalidated) {
         toast.warning(t("publicationInvalidated"))
+      } else if (issueCount > 0) {
+        toast.success(t("savedWithIssues", { count: issueCount }))
       } else {
-        toast.success(issueCount > 0 ? t("savedWithIssues", { count: issueCount }) : t("saved"))
+        // A paired phone's save is on its way to the Host that owns it.
+        toast.success(hostWrite ? t("savedQueuedForHost") : t("saved"))
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("saveFailed"))
@@ -150,29 +156,6 @@ export function MobileEditorTopbar({
       setSaving(false)
     }
   }, [saving, store, t])
-
-  const handleRun = useCallback(async () => {
-    if (running) return
-    setRunning(true)
-    try {
-      // Persist the latest edits first so the desktop runs what the user sees,
-      // then enqueue a manual trigger for the paired desktop to execute.
-      if (store.getState().dirty) await persistEditorWorkflow(store)
-      const { id, name: wfName } = store.getState().baseWorkflow
-      const { alreadyQueued } = await enqueueUnlessQueued({
-        command: "workflow_trigger_manual",
-        payload: { workflowId: id },
-        label: wfName,
-      })
-      void impact("light")
-      if (alreadyQueued) toast.message(tRun("runAlreadyQueued"))
-      else toast.success(tRun("runQueued"))
-    } catch (err) {
-      toast.error(tRun("runFailed", { message: err instanceof Error ? err.message : String(err) }))
-    } finally {
-      setRunning(false)
-    }
-  }, [running, store, tRun])
 
   const handleUndo = useCallback(() => store.temporal.getState().undo(), [store])
   const handleRedo = useCallback(() => store.temporal.getState().redo(), [store])
@@ -331,7 +314,7 @@ export function MobileEditorTopbar({
         type="button"
         size="icon"
         className={BAR_ICON_BUTTON}
-        onClick={handleRun}
+        onClick={onRun}
         disabled={running}
         aria-label={t("run")}
         data-testid="mobile-editor-run"

@@ -1,6 +1,6 @@
 import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 
-import { isTauri } from "@/lib/platform/detect"
+import { workflowRunHref } from "@/lib/workflow/runs/run-href"
 import type { WorkflowHumanInputRequest } from "@/types/workflow/human-input"
 import { emitCompanionEvent } from "./companion-run-events"
 
@@ -23,7 +23,6 @@ export interface HumanInputNotifyDeps {
     host: import("@/lib/notifications/notify").NotifyHostOptions
   ) => Promise<string>
   emit?: (event: string, payload: unknown) => Promise<void>
-  isTauriFn?: () => boolean
 }
 
 async function defaultNotify(
@@ -45,7 +44,9 @@ export async function notifyHumanInputRequested(
         level: "warning",
         title: request.title,
         ...(request.message ? { body: request.message } : {}),
-        href: `/workflows/${request.workflowId}/runs/${request.runId}?humanInput=${request.id}`,
+        // The run the request belongs to; paired devices answer it from their
+        // pending list, which the companion channels below keep current.
+        href: workflowRunHref(request.workflowId, request.runId),
         dedupeKey: request.id,
         directed: true,
         sourceRef: { kind: "workflow-human-input", id: request.id },
@@ -56,7 +57,9 @@ export async function notifyHumanInputRequested(
     console.warn("human input notify: notification center delivery failed", error)
   }
 
-  if (!(deps.isTauriFn ?? isTauri)()) return
+  // Host-neutral: the publisher is the desktop's Tauri emit or the headless
+  // brain's companion bridge, and a no-op where neither exists. Gating this on
+  // Tauri left a headless Host's paired devices without any live update.
   const emit = deps.emit ?? emitCompanionEvent
   try {
     await emit(HUMAN_INPUT_REQUEST_CHANNEL, request)
@@ -75,7 +78,6 @@ export async function notifyHumanInputResolved(
   status: "completed" | "timed_out" | "cancelled",
   deps: HumanInputNotifyDeps = {}
 ): Promise<void> {
-  if (!(deps.isTauriFn ?? isTauri)()) return
   try {
     await (deps.emit ?? emitCompanionEvent)(HUMAN_INPUT_RESOLVED_CHANNEL, {
       requestId: request.id,

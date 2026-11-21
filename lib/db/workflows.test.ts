@@ -196,6 +196,17 @@ describe("createWorkflow", () => {
     expect(wf.settings.errorPolicy).toBe("continue")
   })
 
+  it("creates under a caller-held id, and a replay of that create returns the same row", async () => {
+    const first = await createWorkflow({ name: "From phone" }, { id: "wf_phone_abc123" })
+    expect(first.id).toBe("wf_phone_abc123")
+    const replay = await createWorkflow({ name: "Replayed" }, { id: "wf_phone_abc123" })
+    expect(replay.name).toBe("From phone")
+    expect(await getDb().workflows.count()).toBe(1)
+    await expect(createWorkflow({ name: "x" }, { id: "../etc" })).rejects.toThrow(
+      /invalid workflow id/
+    )
+  })
+
   it("falls back to 'Untitled workflow' on empty name", async () => {
     const wf = await createWorkflow({ name: "   " })
     expect(wf.name).toBe("Untitled workflow")

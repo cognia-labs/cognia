@@ -12,7 +12,7 @@
 import { runWorkflow, type RunWorkflowResult } from "./orchestrator"
 import { getLatestRunOutputs } from "@/hooks/workflow/use-latest-run-outputs"
 import type { SecretResolver } from "./secret-resolver"
-import type { TriggerEvent, VisualWorkflow } from "@/types/workflow/visual"
+import type { TriggerEvent, VisualWorkflow, WorkflowTriggeredFrom } from "@/types/workflow/visual"
 
 export interface RunSingleNodeInput {
   workflow: VisualWorkflow
@@ -24,6 +24,12 @@ export interface RunSingleNodeInput {
    * event log via `getLatestRunOutputs`).
    */
   latestOutputs?: Record<string, unknown>
+  /** Pre-minted run id, so a caller can hand it back before the run ends. */
+  runId?: string
+  /** Who asked for the run (a paired phone's preview records its device). */
+  triggeredBy?: WorkflowTriggeredFrom
+  /** Called once the run row exists. */
+  onPersisted?: (runId: string) => void
 }
 
 /** All transitive ancestors of `nodeId` (excludes the node itself). */
@@ -82,5 +88,8 @@ export async function runSingleNode(input: RunSingleNodeInput): Promise<RunWorkf
     honorPinData: true,
     secretResolver: input.secretResolver,
     signal: input.signal,
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
+    ...(input.onPersisted ? { onPersisted: input.onPersisted } : {}),
   })
 }

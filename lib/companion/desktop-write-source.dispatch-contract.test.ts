@@ -23,16 +23,27 @@ jest.mock("@/lib/gateway/runtime-bridge", () => ({
 
 jest.mock("@/lib/db/workflows", () => ({
   createWorkflow: jest.fn(async (draft: Record<string, unknown>) => ({ id: "wf1", ...draft })),
-  updateWorkflow: jest.fn(async () => undefined),
+  updateWorkflow: jest.fn(async (id: string, patch: Record<string, unknown>) =>
+    id === "wf1" ? { id, ...patch } : undefined
+  ),
   deleteWorkflow: jest.fn(async () => undefined),
   listWorkflowRuns: jest.fn(async () => [{ id: "run1", workflowId: "wf1" }]),
 }))
-jest.mock("@/lib/scheduler/sources/workflow-source", () => ({
-  createWorkflowSource: jest.fn(() => ({
-    pause: jest.fn(async () => undefined),
-    resume: jest.fn(async () => undefined),
-  })),
-}))
+jest.mock("@/lib/scheduler/sources/workflow-source", () => {
+  const pause = jest.fn(async () => undefined)
+  const resume = jest.fn(async () => undefined)
+  return {
+    pause,
+    resume,
+    createWorkflowSource: jest.fn(() => ({ pause, resume })),
+    listWorkflowSchedules: jest.fn(async () => [
+      { workflowId: "wf1", triggerId: "t1", cron: "0 9 * * *", published: true, paused: false },
+      { workflowId: "wf2", triggerId: "t2", cron: "0 9 * * *", published: true, paused: false },
+      { workflowId: "wf3", triggerId: "t2", cron: "0 9 * * *", published: true, paused: false },
+      { workflowId: "wf4", triggerId: "draft", cron: "0 9 * * *", published: false, paused: false },
+    ]),
+  }
+})
 jest.mock("@/lib/db/twins", () => ({
   deleteTwin: jest.fn(async () => ({ sources: 2, chunks: 5 })),
 }))
@@ -244,9 +255,20 @@ describe("dispatchCommand: workflow CRUD", () => {
     const res = (await dispatchCommand("workflow_create", { draft: { name: "Demo" } })) as {
       workflow: { id: string; name: string }
     }
-    expect(workflows.createWorkflow).toHaveBeenCalledWith({ name: "Demo" })
+    expect(workflows.createWorkflow).toHaveBeenCalledWith({ name: "Demo" }, {})
     expect(res.workflow.id).toBe("wf1")
     expect(res.workflow.name).toBe("Demo")
+  })
+
+  it("workflow_create keeps the id a paired client minted, and reads null as cleared", async () => {
+    await dispatchCommand("workflow_create", {
+      id: "wf_phone_1",
+      draft: { name: "From phone", description: null },
+    })
+    expect(workflows.createWorkflow).toHaveBeenCalledWith(
+      { name: "From phone", description: undefined },
+      { id: "wf_phone_1" }
+    )
   })
 
   it("workflow_create rejects a missing draft", async () => {
@@ -254,9 +276,23 @@ describe("dispatchCommand: workflow CRUD", () => {
   })
 
   it("workflow_update patches by id", async () => {
-    const res = await dispatchCommand("workflow_update", { id: "wf1", patch: { name: "New" } })
-    expect(workflows.updateWorkflow).toHaveBeenCalledWith("wf1", { name: "New" })
-    expect(res).toBeNull()
+    const res = await dispatchCommand("workflow_update", {
+      id: "wf1",
+      patch: { name: "New", pinData: null },
+    })
+    // A field the editor cleared arrives as null and clears the Host's value.
+    expect(workflows.updateWorkflow).toHaveBeenCalledWith("wf1", {
+      name: "New",
+      pinData: undefined,
+    })
+    // An object, as the closed `LegacyRecord` output contract requires.
+    expect(res).toEqual({ workflow: { id: "wf1", name: "New", pinData: undefined } })
+  })
+
+  it("workflow_update refuses a workflow this Host does not have", async () => {
+    await expect(
+      dispatchCommand("workflow_update", { id: "wf_gone", patch: { name: "x" } })
+    ).rejects.toThrow(/workflow wf_gone not found/)
   })
 
   it("workflow_update requires id and patch", async () => {
@@ -357,10 +393,25 @@ describe("dispatchCommand: workflow CRUD", () => {
     expect(row?.status).toBe("cancelled")
   })
 
-  it("workflow_schedule_pause / resume drive the source", async () => {
+  it("workflow_schedule_pause / resume override the published schedule (WF-07)", async () => {
     await dispatchCommand("workflow_schedule_pause", { triggerId: "t1" })
-    await dispatchCommand("workflow_schedule_resume", { triggerId: "t1" })
-    expect(workflowSource.createWorkflowSource).toHaveBeenCalledTimes(2)
+    await dispatchCommand("workflow_schedule_resume", { workflowId: "wf2", triggerId: "t2" })
+    expect(workflowSource.pause).toHaveBeenCalledWith("wf1:t1")
+    expect(workflowSource.resume).toHaveBeenCalledWith("wf2:t2")
+  })
+
+  it("workflow_schedule_pause refuses a draft-only, unknown or ambiguous trigger", async () => {
+    workflowSource.pause.mockClear()
+    await expect(
+      dispatchCommand("workflow_schedule_pause", { triggerId: "draft" })
+    ).rejects.toThrow(/no published schedule draft/)
+    await expect(dispatchCommand("workflow_schedule_pause", { triggerId: "nope" })).rejects.toThrow(
+      /no published schedule nope/
+    )
+    await expect(dispatchCommand("workflow_schedule_pause", { triggerId: "t2" })).rejects.toThrow(
+      /ambiguous; send its workflowId/
+    )
+    expect(workflowSource.pause).not.toHaveBeenCalled()
   })
 })
 

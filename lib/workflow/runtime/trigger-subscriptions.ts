@@ -1,14 +1,20 @@
 /**
- * Trigger subscription cache — keeps an in-memory index of every workflow's
- * TS-hook trigger nodes so callers along the chat-send, inbound-bus,
- * terminal-command, and goal-completion paths can route to matching workflows
- * in a single map lookup instead of scanning Dexie on every event.
+ * Trigger subscription cache — keeps an in-memory index of every PUBLISHED
+ * workflow's TS-hook trigger nodes so callers along the chat-send,
+ * inbound-bus, terminal-command, and goal-completion paths can route to
+ * matching workflows in a single map lookup instead of scanning Dexie on every
+ * event.
  *
- * The cache is rebuilt from a Dexie `liveQuery` over the `workflows` table —
- * any save / delete in any tab is reflected in the cache within one tick.
- * `WorkflowRuntimeProvider` calls `initTriggerSubscriptions()` once on app
- * boot; `disposeTriggerSubscriptions()` unwinds the subscription on
- * unmount.
+ * The index is built from the ACTIVE production deployments of the current
+ * account and the immutable version each one points at — the same artifact
+ * `executeDeployedWorkflow` admits. It used to be built from the `workflows`
+ * draft rows, so saving a draft (without publishing) changed which events
+ * matched while admission still ran the published version: the old filter
+ * stopped firing and the new one started the old graph. A Dexie `liveQuery`
+ * over `workflowDeployments` + `workflowVersions` rebuilds the index on every
+ * publish, unpublish and rollback. `WorkflowRuntimeProvider` (and the brain's
+ * workflow runtime) call `initTriggerSubscriptions()` once on boot;
+ * `disposeTriggerSubscriptions()` unwinds the subscription.
  *
  * The cache is intentionally only used for triggers that ride existing TS
  * hooks. `trigger.cron` and webhook triggers go through the Rust router, so
@@ -16,8 +22,9 @@
  */
 
 import Dexie, { type Subscription } from "dexie"
+import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { getDb } from "@/lib/db/schema"
-import type { WorkflowNodeKind, WorkflowRow } from "@/types/workflow/visual"
+import type { VisualWorkflow, WorkflowNodeKind } from "@/types/workflow/visual"
 import { loggers } from "@cognia/logging"
 
 const log = loggers.scheduler
@@ -54,22 +61,62 @@ interface SubscriptionState {
 
 const state: SubscriptionState = { byKind: new Map() }
 
-function rebuildIndex(rows: WorkflowRow[]): void {
+/** One published definition the index is built from. */
+export interface DeployedTriggerDefinition {
+  workflowId: string
+  /** The immutable version's definition — what admission will execute. */
+  definition: Pick<VisualWorkflow, "nodes" | "isTemplate" | "isBuiltIn">
+}
+
+function rebuildIndex(rows: readonly DeployedTriggerDefinition[]): void {
   const next = new Map<WorkflowNodeKind, SubscribedTrigger[]>()
   for (const kind of INDEXED_KINDS) next.set(kind, [])
-  for (const wf of rows) {
-    if (wf.isTemplate || wf.isBuiltIn) continue
-    for (const node of wf.nodes) {
+  for (const { workflowId, definition } of rows) {
+    if (definition.isTemplate || definition.isBuiltIn) continue
+    for (const node of definition.nodes) {
       if (node.data.disabled || !INDEXED_KINDS.includes(node.type)) continue
       const params = (node.data?.params ?? {}) as Record<string, unknown>
       next.get(node.type)!.push({
-        workflowId: wf.id,
+        workflowId,
         nodeId: node.id,
         params,
       })
     }
   }
   state.byKind = next
+}
+
+/**
+ * Read every active production deployment of the active account together
+ * with the version it selects. A pointer whose version is missing or belongs
+ * to another workflow/account is skipped: admission would refuse it too.
+ * Reading both tables inside the liveQuery makes Dexie observe both, so a
+ * publish (new version + moved pointer), an unpublish (pointer disabled) or a
+ * rollback (pointer moved back) all re-emit.
+ */
+export async function readDeployedTriggerDefinitions(): Promise<DeployedTriggerDefinition[]> {
+  const db = getDb()
+  const accountId = getActiveAccountId()
+  const deployments = (await db.workflowDeployments.where("status").equals("active").toArray())
+    .filter(
+      (deployment) => deployment.accountId === accountId && deployment.environment === "production"
+    )
+    .sort((a, b) => a.workflowId.localeCompare(b.workflowId))
+  if (deployments.length === 0) return []
+  const versions = await db.workflowVersions.bulkGet(deployments.map((d) => d.versionId))
+  const rows: DeployedTriggerDefinition[] = []
+  deployments.forEach((deployment, index) => {
+    const version = versions[index]
+    if (
+      !version ||
+      version.workflowId !== deployment.workflowId ||
+      version.accountId !== deployment.accountId
+    ) {
+      return
+    }
+    rows.push({ workflowId: deployment.workflowId, definition: version.definition })
+  })
+  return rows
 }
 
 /**
@@ -88,7 +135,7 @@ export function initTriggerSubscriptions(): void {
     // named `liveQuery` binding would silently be `undefined`. The static is the
     // same function (`Dexie.liveQuery === liveQuery` under real ESM) and is
     // correct through either path.
-    const observable = Dexie.liveQuery(() => getDb().workflows.toArray())
+    const observable = Dexie.liveQuery(() => readDeployedTriggerDefinitions())
     state.subscription = observable.subscribe({
       next: (rows) => {
         rebuildIndex(rows)
@@ -420,9 +467,14 @@ function matches(entry: SubscribedTrigger, ctx: TriggerMatchContext): boolean {
   return true
 }
 
-/** Test-only — directly seed the cache without going through Dexie. */
-export function _seedTriggerSubscriptionsForTest(rows: WorkflowRow[]): void {
-  rebuildIndex(rows)
+/**
+ * Test-only — directly seed the cache without going through Dexie. Each
+ * workflow stands for its published definition (as if deployed as-is).
+ */
+export function _seedTriggerSubscriptionsForTest(
+  rows: ReadonlyArray<Pick<VisualWorkflow, "id" | "nodes" | "isTemplate" | "isBuiltIn">>
+): void {
+  rebuildIndex(rows.map((row) => ({ workflowId: row.id, definition: row })))
 }
 
 /** Test-only — peek at the current cache. */

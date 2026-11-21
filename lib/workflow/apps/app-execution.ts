@@ -89,6 +89,19 @@ export function authorizeWorkflowAppRequest(
   }
 }
 
+/** The invocation caller an app run is admitted under: app, release and request principal. */
+export function workflowAppCaller(
+  resolved: Pick<ResolvedWorkflowAppRelease, "app" | "release">,
+  authorization: { caller: string }
+): string {
+  return `app:${resolved.app.id}:release:${resolved.release.id}:${authorization.caller}`
+}
+
+/** Whether the release meters anything, so admission must count placed runs first. */
+export function workflowAppReleaseHasQuota(release: WorkflowAppRelease): boolean {
+  return Object.values(release.snapshot.quota).some((value) => value !== undefined)
+}
+
 export async function executePublishedWorkflowApp(input: {
   resolved: ResolvedWorkflowAppRelease
   actor: WorkflowAppRequestActor
@@ -100,11 +113,17 @@ export async function executePublishedWorkflowApp(input: {
 }): Promise<ExecuteDeployedWorkflowResult> {
   const authorization = authorizeWorkflowAppRequest(input.resolved.release, input.actor)
   const { app, release } = input.resolved
+  // Runs this Host admitted but placed on another Host count against the same
+  // quota; settle what their Hosts already finished before counting them.
+  if (workflowAppReleaseHasQuota(release)) {
+    const { refreshPlacedWorkflowAppRuns } = await import("./app-run-placement")
+    await refreshPlacedWorkflowAppRuns({ accountId: app.accountId, appId: app.id })
+  }
   try {
     return await executeDeployedWorkflow({
       workflowId: release.workflowId,
       entrypoint: input.entrypoint ?? "portal",
-      caller: `app:${app.id}:release:${release.id}:${authorization.caller}`,
+      caller: workflowAppCaller(input.resolved, authorization),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       authorizedScopes: ["workflow:run"],
       triggerKind: "trigger.manual",

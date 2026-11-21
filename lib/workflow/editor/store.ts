@@ -131,6 +131,13 @@ export interface EditorState extends EditorStateSnapshot {
   selectedNodeIds: string[]
   selectedEdgeIds: string[]
   dirty: boolean
+  /**
+   * Monotonic count of edits that marked the graph dirty. A save captures it
+   * with its snapshot and clears `dirty` only when no edit landed while the
+   * write was in flight (`markSaved`'s `revision`), so typing during a save
+   * never reads as saved.
+   */
+  editRevision: number
   savedAt: number | null
   /** Per-stepId live execution status, keyed by node id. */
   runStatusByStepId: Record<string, NodeRunStatus>
@@ -509,8 +516,12 @@ export interface EditorState extends EditorStateSnapshot {
   /**
    * Mark the editor as saved and optionally synchronize canonical persistence
    * metadata without replacing graph, selection, or undo history.
+   *
+   * `revision` is the `editRevision` the saved snapshot was taken at. When an
+   * edit has landed since, the editor holds content the write did not carry,
+   * so `dirty` stays set; only the persisted metadata is synchronized.
    */
-  markSaved: (workflow?: VisualWorkflow) => void
+  markSaved: (workflow?: VisualWorkflow, options?: { revision?: number }) => void
   /** Synchronize explicit publish/unpublish results without marking the graph dirty. */
   syncPublication: (published?: WorkflowPublication, workflowInterface?: WorkflowInterface) => void
   resetDirty: () => void
@@ -737,6 +748,27 @@ function dropEdits(creator: StateCreator<EditorState>): StateCreator<EditorState
   }
 }
 
+/**
+ * Store middleware that counts edits: every update that marks the graph dirty
+ * also bumps `editRevision`, so a save can tell whether the editor still holds
+ * exactly the snapshot it wrote. One choke point instead of a bump in each of
+ * the mutators that set `dirty: true`.
+ */
+function trackEditRevision(creator: StateCreator<EditorState>): StateCreator<EditorState> {
+  return (set, get, api) => {
+    const counted = ((partial: unknown, replace?: boolean) => {
+      const patch =
+        typeof partial === "function"
+          ? (partial as (state: EditorState) => Partial<EditorState>)(get())
+          : (partial as Partial<EditorState>)
+      const next =
+        patch?.dirty === true ? { ...patch, editRevision: get().editRevision + 1 } : patch
+      ;(set as (patch: Partial<EditorState>, replace?: boolean) => void)(next, replace)
+    }) as typeof set
+    return creator(counted, get, api)
+  }
+}
+
 export function createEditorStore(initial: VisualWorkflow): EditorStore {
   const converted = workflowToReactFlow(initial)
   // Pre-drag snapshot held across begin/commit. A factory-closure ref (not
@@ -769,9 +801,10 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
   let revalidateTimer: ReturnType<typeof setTimeout> | null = null
   // Seq source for `requestFieldFocus`.
   let fieldFocusSeq = 0
-  const guard = isWorkflowReadOnly(initial)
-    ? dropEdits
-    : (creator: StateCreator<EditorState>) => creator
+  // Edits are counted first, so a read-only view (which drops them) never
+  // advances the revision either.
+  const guard = (creator: StateCreator<EditorState>): StateCreator<EditorState> =>
+    isWorkflowReadOnly(initial) ? dropEdits(trackEditRevision(creator)) : trackEditRevision(creator)
   const useStore = create<EditorState>()(
     temporal(
       guard((set, get) => ({
@@ -782,6 +815,7 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
         selectedNodeIds: [],
         selectedEdgeIds: [],
         dirty: false,
+        editRevision: 0,
         savedAt: initial.updatedAt > 0 ? initial.updatedAt : null,
         runStatusByStepId: {},
         validationByStepId: validateAllNodes(converted.nodes),
@@ -1404,10 +1438,15 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
           return reactFlowToWorkflow(s.baseWorkflow, s.nodes, s.edges, s.viewport)
         },
 
-        markSaved: (workflow) => {
+        markSaved: (workflow, options) => {
           const temporalState = (useStore as EditorStore).temporal.getState()
           temporalState.pause()
           set((state) => ({
+            // An edit since the snapshot means the write did not carry what
+            // the editor now holds: keep the unsaved marker.
+            ...(options?.revision !== undefined && state.editRevision !== options.revision
+              ? {}
+              : { dirty: false }),
             baseWorkflow: workflow
               ? {
                   ...state.baseWorkflow,
@@ -1417,7 +1456,6 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
                   updatedAt: workflow.updatedAt,
                 }
               : state.baseWorkflow,
-            dirty: false,
             savedAt: workflow?.updatedAt ?? Date.now(),
           }))
           temporalState.resume()

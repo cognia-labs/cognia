@@ -857,6 +857,27 @@ pub static EVENT_CHANNELS: &[EventChannelSpec] = &[
         note: "approval pending wake-up; had a push trigger but no socket path",
     },
     EventChannelSpec {
+        pattern: "workflow://human-input-request",
+        audience: ChannelAudience::Any,
+        default_on: false,
+        tauri_forwarded: true,
+        note: "workflow human-input request (fields, title, message); rides the authenticated socket only, the pending-input card subscribes by name",
+    },
+    EventChannelSpec {
+        pattern: "workflow://human-input-resolved",
+        audience: ChannelAudience::Any,
+        default_on: false,
+        tauri_forwarded: true,
+        note: "human-input request completed, timed out or cancelled, so pending lists clear immediately",
+    },
+    EventChannelSpec {
+        pattern: "workflow://human-input-pending",
+        audience: ChannelAudience::Any,
+        default_on: false,
+        tauri_forwarded: true,
+        note: "human-input pending wake-up; ids only, a push trigger",
+    },
+    EventChannelSpec {
         pattern: "workflow://step-pending",
         audience: ChannelAudience::Any,
         default_on: false,
@@ -1340,6 +1361,31 @@ mod tests {
         assert!(sub.allows("browser://navigated"));
         // Adding must not disturb what was already there.
         assert!(sub.allows("claude://message"));
+    }
+
+    /// The mobile pending-input card subscribes to these by name. Before they
+    /// were catalogued, its subscribe frame was rejected as unknown and the
+    /// frames were never delivered, so the card only refreshed on remount.
+    #[test]
+    fn a_device_can_subscribe_to_workflow_human_input_frames() {
+        let mut sub = EventSubscription::defaults_for(ConnectionScope::Device);
+        let channels = [
+            "workflow://human-input-request",
+            "workflow://human-input-resolved",
+            "workflow://human-input-pending",
+        ];
+        for channel in channels {
+            assert!(!sub.allows(channel), "{channel} must stay opt-in");
+        }
+        let outcome = sub.apply(&request(SubscribeMode::Add, &channels));
+        assert!(outcome.rejected.is_empty(), "{:?}", outcome.rejected);
+        for channel in channels {
+            assert!(sub.allows(channel), "{channel} should be deliverable once requested");
+        }
+        let forwarded = tauri_forwarded_channels();
+        for channel in channels {
+            assert!(forwarded.contains(&channel), "{channel} must reach the socket from Tauri");
+        }
     }
 
     // ── scope enforcement ────────────────────────────────────────────────────

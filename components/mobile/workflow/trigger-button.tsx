@@ -3,56 +3,37 @@
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { PlayIcon } from "lucide-react"
-import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { enqueueUnlessQueued } from "@/lib/db/mobile-outbound-queue"
-import { impact } from "@/lib/capacitor/haptics"
+
+import { useLibraryRun, type LibraryRunTarget } from "./use-library-run"
 
 export interface TriggerButtonProps {
-  workflowId: string
-  workflowName: string
+  /** The synced library row; its `published` decides what Run can do. */
+  workflow: LibraryRunTarget
   /** Optional className applied to the button. */
   className?: string
-  /** Optional override for the queue label (defaults to the workflow name). */
-  queueLabel?: string
 }
 
 /**
- * Mobile workflow manual-trigger button (Wave 3.1).
+ * Mobile workflow Run button (Wave 3.1).
  *
- * Enqueues a `workflow_trigger_manual` outbound job (the runner dispatches
- * via `transport.call` once the desktop is reachable), unless a run of the
- * same workflow is already waiting — then it says so instead of queueing a
- * duplicate. Surfaces a toast with the i18n queued message and bumps a haptic.
+ * Runs the published workflow through `useLibraryRun`: queued to the paired
+ * Host, which answers with the run or a refusal, or run here on a standalone
+ * phone. A workflow that is not published is not queued, and a run already
+ * waiting for the Host is not joined by a second one.
  */
-export function TriggerButton({
-  workflowId,
-  workflowName,
-  className,
-  queueLabel,
-}: TriggerButtonProps) {
+export function TriggerButton({ workflow, className }: TriggerButtonProps) {
   const t = useTranslations("mobile.workflow")
+  const runFromLibrary = useLibraryRun()
   const [busy, setBusy] = useState(false)
 
   const onClick = async () => {
     if (busy) return
     setBusy(true)
     try {
-      const { alreadyQueued } = await enqueueUnlessQueued({
-        command: "workflow_trigger_manual",
-        payload: { workflowId },
-        label: queueLabel ?? workflowName,
-      })
-      void impact("light")
-      // A run still waiting for the Host is not joined by a second one: each
-      // tap used to queue another, and all of them fired on reconnect.
-      if (alreadyQueued) toast.message(t("runAlreadyQueued"))
-      else toast.success(t("runQueued"))
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      toast.error(t("runFailed", { message }))
+      await runFromLibrary(workflow)
     } finally {
       setBusy(false)
     }
@@ -67,7 +48,7 @@ export function TriggerButton({
       // Mobile touch target floor (iOS HIG 44px) — `min-h-11` wins over the
       // `size="sm"` height without changing the desktop visual weight.
       className={cn("min-h-11", className)}
-      data-testid={`workflow-trigger-${workflowId}`}
+      data-testid={`workflow-trigger-${workflow.id}`}
     >
       <PlayIcon className="size-3.5" aria-hidden="true" />
       <span className="ml-1">{t("runButton")}</span>

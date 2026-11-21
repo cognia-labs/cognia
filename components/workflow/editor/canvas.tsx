@@ -18,7 +18,8 @@ import { useShallow } from "zustand/react/shallow"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 import type { VisualWorkflow, WorkflowNodeKind } from "@/types/workflow/visual"
-import { createWorkflow, getWorkflow, regenerateNodeIds } from "@/lib/db/workflows"
+import { getWorkflow, regenerateNodeIds } from "@/lib/db/workflows"
+import { createAuthoredWorkflow } from "@/lib/workflow/remote/host-writes"
 import { reactFlowToWorkflow } from "@/lib/workflow/editor/react-flow-converter"
 import { planExtraction } from "@/lib/workflow/editor/extract-subworkflow"
 import { autoLayout, applyAutoLayoutPositions } from "@/lib/workflow/editor/auto-layout"
@@ -651,7 +652,7 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
     }
     child = regenerateNodeIds(child)
     try {
-      const childRow = await createWorkflow({
+      const childRow = await createAuthoredWorkflow({
         name: `${workflowName} (extracted)`,
         nodes: child.nodes,
         edges: child.edges,

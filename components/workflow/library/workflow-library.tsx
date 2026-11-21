@@ -20,7 +20,6 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { listChildFolders, getFolderPath } from "@/lib/db/workflow-folders"
 import {
-  createWorkflow,
   getLastRunStatuses,
   getRecentlyFailedWorkflowIds,
   getRunCounts,
@@ -28,6 +27,7 @@ import {
   moveWorkflowsToFolder,
 } from "@/lib/db/workflows"
 import { parseWorkflowsImport } from "@/lib/workflow/editor/workflow-json"
+import { createAuthoredWorkflow } from "@/lib/workflow/remote/host-writes"
 import { ROOT_FOLDER_ID } from "@/types/workflow/folder"
 import {
   countActiveFacetFilters,
@@ -166,7 +166,7 @@ export function WorkflowLibrary() {
         const text = await readFileText(file)
         const parsed = parseWorkflowsImport(text)
         for (const wf of parsed) {
-          await createWorkflow({
+          await createAuthoredWorkflow({
             ...wf,
             name: wf.name ?? "Imported workflow",
             folderId: currentFolderId,

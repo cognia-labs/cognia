@@ -31,13 +31,15 @@ describe("human-input-notify", () => {
     const notify = jest.fn(async () => "notification_1")
     const emit = jest.fn(async (_event: string, _payload: unknown) => undefined)
 
-    await notifyHumanInputRequested(request, { notify, emit, isTauriFn: () => true })
+    await notifyHumanInputRequested(request, { notify, emit })
 
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Review request",
         body: "Contains foreground-only detail",
         dedupeKey: "hir_1",
+        // The static run-detail route; `/workflows/<id>/runs/<runId>` is gone.
+        href: "/workflows/run?id=wf_1&runId=run_1",
       }),
       expect.objectContaining({ personalContext: expect.any(Object) })
     )
@@ -51,19 +53,30 @@ describe("human-input-notify", () => {
     expect(JSON.stringify(push?.[1])).not.toContain("foreground-only")
   })
 
-  it("does not fan out companion events outside Tauri", async () => {
-    const notify = jest.fn(async () => "notification_1")
-    const emit = jest.fn(async (_event: string, _payload: unknown) => undefined)
-
-    await notifyHumanInputRequested(request, { notify, emit, isTauriFn: () => false })
-
-    expect(notify).toHaveBeenCalledTimes(1)
-    expect(emit).not.toHaveBeenCalled()
+  it("fans out through the host-neutral publisher on a headless Host too", async () => {
+    // No Tauri globals in this environment: a headless brain must still reach
+    // its paired devices through the registered host-event publisher.
+    const { setHostEventPublisher } = await import("@/lib/companion/host-event-publisher")
+    const published: Array<[string, unknown]> = []
+    const restore = setHostEventPublisher(async (topic: string, event: unknown) => {
+      published.push([topic, event])
+    })
+    try {
+      await notifyHumanInputRequested(request, { notify: jest.fn(async () => "n") })
+      await notifyHumanInputResolved(request, "timed_out")
+    } finally {
+      restore()
+    }
+    expect(published.map(([topic]) => topic)).toEqual([
+      HUMAN_INPUT_REQUEST_CHANNEL,
+      HUMAN_INPUT_PENDING_PUSH_CHANNEL,
+      HUMAN_INPUT_RESOLVED_CHANNEL,
+    ])
   })
 
   it("emits a compact terminal update and treats transport failures as best effort", async () => {
     const emit = jest.fn(async (_event: string, _payload: unknown) => undefined)
-    await notifyHumanInputResolved(request, "completed", { emit, isTauriFn: () => true })
+    await notifyHumanInputResolved(request, "completed", { emit })
     expect(emit).toHaveBeenCalledWith(HUMAN_INPUT_RESOLVED_CHANNEL, {
       requestId: "hir_1",
       runId: "run_1",
@@ -72,8 +85,6 @@ describe("human-input-notify", () => {
     })
 
     emit.mockRejectedValueOnce(new Error("transport unavailable"))
-    await expect(
-      notifyHumanInputResolved(request, "cancelled", { emit, isTauriFn: () => true })
-    ).resolves.toBeUndefined()
+    await expect(notifyHumanInputResolved(request, "cancelled", { emit })).resolves.toBeUndefined()
   })
 })

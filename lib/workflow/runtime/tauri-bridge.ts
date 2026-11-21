@@ -56,7 +56,7 @@ function isTauri(): boolean {
  * transport would refuse them before the wire; answering `null` here is the
  * same refusal without the round trip.
  */
-function hasNativeWorkflowPlane(): boolean {
+export function hasNativeWorkflowPlane(): boolean {
   const profile = detectHostProfile()
   return profile === "desktop" || profile === "headless"
 }

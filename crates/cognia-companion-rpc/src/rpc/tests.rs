@@ -4835,6 +4835,36 @@ fn workflow_placement_commands_are_classified_and_handoff_identity_is_bound() {
 }
 
 #[test]
+fn workflow_app_handoff_commands_are_classified_and_bound_to_the_calling_host() {
+    for name in [
+        "workflow_app_handoff_create",
+        "workflow_handoff_run_get",
+        "workflow_handoff_run_cancel",
+    ] {
+        assert!(KNOWN_COMMANDS.contains(&name), "{name} must be known");
+        // The TS arms admit and answer as `host:<callerDeviceId>`; a spoofed
+        // id would let one Host read or cancel another Host's handed-over run.
+        assert!(
+            CALLER_DEVICE_ID_COMMANDS.contains(&name),
+            "{name} must bind the caller"
+        );
+        assert!(
+            !CONTROL_COMMANDS.contains(&name),
+            "{name} is scoped by ownership, not a control gate"
+        );
+        let bound = inject_caller_device_id(
+            name,
+            json!({ "callerDeviceId": "spoofed", "runId": "run_1" }),
+            "verified-host-device",
+        );
+        assert_eq!(bound["callerDeviceId"], json!("verified-host-device"));
+    }
+    assert!(READ_ONLY_COMMANDS.contains(&"workflow_handoff_run_get"));
+    assert!(!READ_ONLY_COMMANDS.contains(&"workflow_app_handoff_create"));
+    assert!(!READ_ONLY_COMMANDS.contains(&"workflow_handoff_run_cancel"));
+}
+
+#[test]
 fn workflow_approval_commands_are_classified() {
     assert!(KNOWN_COMMANDS.contains(&"workflow_approval_list"));
     assert!(KNOWN_COMMANDS.contains(&"workflow_approval_respond"));

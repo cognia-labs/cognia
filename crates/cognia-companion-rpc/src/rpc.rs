@@ -120,6 +120,8 @@ use crate::rpc_host::RpcHost;
 pub use cognia_companion::rpc_error::RpcError;
 
 const TWIN_DRAFT_REVIEW_CONFLICT_SENTINEL: &str = "[TWIN_DRAFT_REVIEW_CONFLICT]";
+/// Prefix `lib/workflow/remote/run-rejection.ts` puts on a refused workflow run.
+const WORKFLOW_RUN_REJECTED_SENTINEL: &str = "[WORKFLOW_RUN_REJECTED]";
 
 fn map_desktop_write_bridge_error(command: &str, detail: String) -> (StatusCode, Json<RpcError>) {
     if command == "twin_draft_review" && detail.starts_with(TWIN_DRAFT_REVIEW_CONFLICT_SENTINEL) {
@@ -130,6 +132,21 @@ fn map_desktop_write_bridge_error(command: &str, detail: String) -> (StatusCode,
                 detail
                     .trim_start_matches(TWIN_DRAFT_REVIEW_CONFLICT_SENTINEL)
                     .trim(),
+            )),
+        );
+    }
+    // A workflow run the Host refused to start (not deployed, invalid graph,
+    // unknown step): an answer, not an outage. 422 and not retryable, so a
+    // queued run that cannot happen is given up on with its reason instead
+    // of retried five times as a 500 (`lib/workflow/remote/run-rejection.ts`).
+    if matches!(command, "workflow_preview_run" | "workflow_trigger_manual")
+        && detail.starts_with(WORKFLOW_RUN_REJECTED_SENTINEL)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(RpcError::new(
+                "workflow_run_rejected",
+                detail.trim_start_matches(WORKFLOW_RUN_REJECTED_SENTINEL).trim(),
             )),
         );
     }
@@ -1226,8 +1243,17 @@ const KNOWN_COMMANDS: &[&str] = &[
     "workflow_update",
     "workflow_delete",
     "workflow_run_list",
+    // A paired editor's draft preview of the Host's saved copy, and a paired
+    // run detail's step events (events never ride companion sync).
+    "workflow_preview_run",
+    "workflow_run_events_list",
     "workflow_placement_probe",
     "workflow_handoff_create",
+    // A Workflow App run another Host admitted and placed here, and that
+    // Host's own reads/cancel of the runs it handed over (ADR-0136 placement).
+    "workflow_app_handoff_create",
+    "workflow_handoff_run_get",
+    "workflow_handoff_run_cancel",
     "workflow_cancel_run",
     "workflow_schedule_pause",
     "workflow_schedule_resume",
@@ -1778,7 +1804,9 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "plugin_js_status",
     // Workflow run listing + pending-approval projection.
     "workflow_run_list",
+    "workflow_run_events_list",
     "workflow_placement_probe",
+    "workflow_handoff_run_get",
     "workflow_approval_list",
     "workflow_human_input_list",
     "thread_handoff_preflight",
@@ -2563,7 +2591,14 @@ const CALLER_DEVICE_ID_COMMANDS: &[&str] = &[
     "browser_attachment_upload_commit",
     "browser_attachment_upload_abort",
     "workflow_trigger_manual",
+    // The preview run records the verified device that asked for it.
+    "workflow_preview_run",
     "workflow_handoff_create",
+    // The handed-over run is owned by the Host that handed it over: the TS
+    // arms admit it as `host:<callerDeviceId>` and answer only that caller.
+    "workflow_app_handoff_create",
+    "workflow_handoff_run_get",
+    "workflow_handoff_run_cancel",
     "device_capabilities_report",
     "workflow_approval_respond",
     "workflow_human_input_list",

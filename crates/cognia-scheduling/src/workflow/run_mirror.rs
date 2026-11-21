@@ -422,6 +422,11 @@ impl RunMirror {
     }
 
     /// Resolve a checkpoint with first-writer-wins compare-and-set semantics.
+    ///
+    /// A decision stamped after the waitpoint's deadline (`updated_at` is the
+    /// decision time) loses to the deadline: only `timed_out` and `cancelled`
+    /// may still settle an expired row. Otherwise a late answer written while
+    /// no waiter was alive would stand against a wait that already timed out.
     pub fn decide_waitpoint(&self, input: &WorkflowWaitpointDecisionInput) -> Result<bool> {
         if !matches!(
             input.status.as_str(),
@@ -436,6 +441,7 @@ impl RunMirror {
             UPDATE workflow_waitpoint
             SET status = ?2, resolution_json = ?3, updated_at = ?4
             WHERE id = ?1 AND status = 'pending'
+              AND (expires_at IS NULL OR ?2 IN ('timed_out', 'cancelled') OR ?4 <= expires_at)
             "#,
             params![input.id, input.status, resolution_json, input.updated_at],
         )?;
@@ -829,6 +835,51 @@ mod tests {
         let stored = mirror.get_waitpoint("wait_1").unwrap().unwrap();
         assert_eq!(stored.status, "resolved");
         assert_eq!(stored.resolution.unwrap()["decision"], "approve");
+    }
+
+    #[test]
+    fn waitpoint_decision_after_the_deadline_loses_to_the_deadline() {
+        let mirror = RunMirror::open_in_memory().unwrap();
+        mirror.create_waitpoint(&waitpoint()).unwrap();
+
+        // `waitpoint()` expires at 500: an answer stamped at 600 is too late.
+        let late = mirror
+            .decide_waitpoint(&WorkflowWaitpointDecisionInput {
+                id: "wait_1".into(),
+                status: "resolved".into(),
+                resolution: json!({"outcome": "approved", "resolvedAt": 600}),
+                updated_at: 600,
+            })
+            .unwrap();
+        assert!(!late);
+        assert_eq!(mirror.get_waitpoint("wait_1").unwrap().unwrap().status, "pending");
+
+        let expired = mirror
+            .decide_waitpoint(&WorkflowWaitpointDecisionInput {
+                id: "wait_1".into(),
+                status: "timed_out".into(),
+                resolution: json!({"outcome": "timed_out", "resolvedAt": 500}),
+                updated_at: 600,
+            })
+            .unwrap();
+        assert!(expired);
+        assert_eq!(mirror.get_waitpoint("wait_1").unwrap().unwrap().status, "timed_out");
+    }
+
+    #[test]
+    fn waitpoint_decision_on_the_deadline_still_counts() {
+        let mirror = RunMirror::open_in_memory().unwrap();
+        mirror.create_waitpoint(&waitpoint()).unwrap();
+
+        let on_time = mirror
+            .decide_waitpoint(&WorkflowWaitpointDecisionInput {
+                id: "wait_1".into(),
+                status: "resolved".into(),
+                resolution: json!({"outcome": "approved", "resolvedAt": 500}),
+                updated_at: 500,
+            })
+            .unwrap();
+        assert!(on_time);
     }
 
     #[test]

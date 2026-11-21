@@ -322,6 +322,71 @@ describe("workflow waitpoint persistence", () => {
     await expect(getDb().workflowWaitpoints.get("native_race")).resolves.toEqual(nativeWinner)
   })
 
+  it("refuses a human decision that arrives after the deadline, even with no waiter alive", async () => {
+    await createWorkflowWaitpoint(waitpoint({ id: "late", expiresAt: 5_000 }))
+
+    await expect(
+      decideWorkflowWaitpoint("late", {
+        outcome: "approved",
+        respondedBy: "device:late",
+        resolvedAt: 5_001,
+      })
+    ).resolves.toEqual({ ok: false, reason: "expired" })
+    // The deadline still settles it.
+    await expect(
+      decideWorkflowWaitpoint("late", {
+        outcome: "timed_out",
+        respondedBy: "timeout",
+        resolvedAt: 5_000,
+      })
+    ).resolves.toMatchObject({ ok: true })
+    await expect(getDb().workflowWaitpoints.get("late")).resolves.toMatchObject({
+      status: "timed_out",
+    })
+  })
+
+  it("accepts a decision made exactly at the deadline", async () => {
+    await createWorkflowWaitpoint(waitpoint({ id: "on_time", expiresAt: 5_000 }))
+    await expect(
+      decideWorkflowWaitpoint("on_time", {
+        outcome: "rejected",
+        respondedBy: "alice",
+        resolvedAt: 5_000,
+      })
+    ).resolves.toMatchObject({ ok: true })
+  })
+
+  it("refuses a late decision before asking the native mirror", async () => {
+    const pending = waitpoint({ id: "native_late", expiresAt: 5_000 })
+    jest.mocked(getNativeWorkflowWaitpoint).mockResolvedValueOnce(pending)
+    await expect(
+      decideWorkflowWaitpoint("native_late", {
+        outcome: "approved",
+        respondedBy: "device:late",
+        resolvedAt: 9_000,
+      })
+    ).resolves.toEqual({ ok: false, reason: "expired" })
+    expect(decideNativeWorkflowWaitpoint).not.toHaveBeenCalled()
+  })
+
+  it("does not let an event emitted after the deadline resolve the wait", async () => {
+    await createWorkflowWaitpoint(
+      waitpoint({ id: "wp_expired", kind: "event_wait", key: "deploy", expiresAt: 5_000 })
+    )
+    const stored = await emitWorkflowWaitEvent(
+      createWorkflowWaitEvent({
+        id: "too_late",
+        key: "deploy",
+        source: "connector",
+        emittedAt: 6_000,
+      })
+    )
+    expect(stored.consumedByWaitpointId).toBeUndefined()
+    await expect(getDb().workflowWaitpoints.get("wp_expired")).resolves.toMatchObject({
+      status: "pending",
+    })
+  })
+
   it("returns already-decided when the native mirror is already terminal", async () => {
     const terminal = waitpoint({
       id: "native_done",

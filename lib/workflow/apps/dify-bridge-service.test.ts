@@ -138,3 +138,16 @@ it("rejects malformed requests before calling compatibility services", async () 
   ).resolves.toMatchObject({ ok: false, error: { code: "invalid_param", status: 400 } })
   expect(listDifyConversations).not.toHaveBeenCalled()
 })
+
+it("answers 503, retryable, when a placed run's Host cannot be reached for its events (WF-13)", async () => {
+  const { WorkflowAppRunHostUnavailableError } = jest.requireActual("./app-run-placement")
+  jest.mocked(listWorkflowAppRunEvents).mockRejectedValue(new WorkflowAppRunHostUnavailableError())
+  await expect(
+    dispatchDifyBridgeCommand("dify_events_list", {
+      apiKey: "cog_app_secret",
+      runId: "run_placed",
+      user: "customer",
+      afterSequence: 0,
+    })
+  ).resolves.toMatchObject({ ok: false, error: { code: "run_host_unavailable", status: 503 } })
+})

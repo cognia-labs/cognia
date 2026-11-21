@@ -20,6 +20,10 @@
     },
     "export": "Export",
     "formalRetryUnavailable": "This draft-era run has no immutable version and can only be replayed in local debug mode.",
+    "hostUnreachable": {
+      "description": "This run lives on your desktop, which isn't reachable right now. It loads once the connection is back.",
+      "title": "Can't reach your desktop"
+    },
     "lineage": {
       "children": "{count, plural, one {# child run} other {# child runs}}",
       "parent": "Parent run",
@@ -47,6 +51,7 @@
       "failedStep": "Continue from step",
       "originalVersion": "Run original version"
     },
+    "retryOnHostOnly": "Re-run this from the desktop that ran it.",
     "running": "Running…",
     "sparkline": {
       "title": "Duration trend"

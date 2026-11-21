@@ -39,6 +39,7 @@ import { generateWorkflowRunTitle } from "@/lib/workflow/runtime/run-title"
 import type {
   VisualWorkflow,
   WorkflowEdge,
+  WorkflowRunDraftScope,
   WorkflowRunRow,
   WorkflowRunLineage,
   WorkflowRunSecurityContext,
@@ -155,18 +156,30 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   const logger = createRunLogger(runId)
   let completionBotProvenance = input.securityContext?.botProvenance
   let completionSecurityContext = input.securityContext
+  // The run's formal binding. A re-entered run (crash resume, pending
+  // recovery) keeps the binding its row was admitted with even when the
+  // caller passes none, so it can never silently degrade to a draft run.
+  let executionBinding = input.executionBinding
+  // The run's bounds. A re-entered draft run keeps the bounds it started with
+  // (see `WorkflowRunRow.draftScope`), so resuming "run this step" never turns
+  // into a run of the whole graph.
+  let scope: WorkflowRunDraftScope = draftScopeOf(input)
 
   // Chained triggers (ADR-0081): announce terminal states to any
-  // `trigger.workflow.completed` subscription. Fire-and-forget — a chained
-  // run must never block or fail THIS run. Suppressed for catch sub-runs
-  // (internal recovery, not a real completion) and for partial editor runs
-  // ("run from here" / "run this step"), whose outputs aren't the workflow's
-  // contract. Depth cap + self-trigger rejection live in the fanout module.
+  // `trigger.workflow.completed` subscription (and the bot dispatch port).
+  // Fire-and-forget — a chained run must never block or fail THIS run. Only a
+  // FORMAL run (one admitted against an immutable deployment) is a completion
+  // of the workflow: draft and editor runs — full previews included — must
+  // never start published downstream workflows. Catch sub-runs (internal
+  // recovery) and partial runs ("run from here" / "run this step") are
+  // suppressed too. Depth cap + self-trigger rejection live in the fanout
+  // module.
   const emitCompletionFanout = (
     status: "succeeded" | "failed",
     detail: { output?: unknown; error?: { message: string; nodeId?: string; code?: string } } = {}
   ): void => {
-    if (input.suppressCatch || input.restrictToStepIds || input.startStepId) return
+    if (!executionBinding) return
+    if (scope.suppressCatch || scope.restrictToStepIds || scope.startStepId) return
     void import("./workflow-completion-fanout")
       .then((m) =>
         m.emitWorkflowCompletedFanout({
@@ -209,12 +222,17 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   //   - A live lease held by another executor process means the run is
   //     already being driven — back off instead of double-executing.
   const existingRow = await getDb().workflowRuns.get(runId)
+  executionBinding = input.executionBinding ?? existingRow?.executionBinding
+  if (!executionBinding && isEmptyScope(scope) && existingRow?.draftScope) {
+    scope = existingRow.draftScope
+  }
+  const triggeredBy = input.triggeredBy ?? existingRow?.triggeredBy
   const traceId = input.traceId ?? existingRow?.traceId ?? generateTraceId()
   const lineage: WorkflowRunLineage = input.lineage ?? existingRow?.lineage ?? { rootRunId: runId }
   const securityContext: WorkflowRunSecurityContext = input.securityContext ??
     existingRow?.securityContext ?? {
       piiEgressRequired:
-        input.executionBinding !== undefined &&
+        executionBinding !== undefined &&
         (trigger.kind === "trigger.connector.inbound" ||
           trigger.kind === "trigger.connector.system"),
       sourceTriggerKind: trigger.kind,
@@ -234,8 +252,9 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   }
 
   // 2. Persist the WorkflowRunRow up front so the UI can render it as
-  // "running" immediately. We freeze the workflow snapshot here.
-  const startedAt = Date.now()
+  // "running" immediately. We freeze the workflow snapshot here. A re-entered
+  // run keeps the start time it was admitted with.
+  const startedAt = existingRow?.startedAt ?? Date.now()
   // Workspace isolation (Dexie v86): a run belongs to the active workspace at
   // trigger time. Shared workflow definitions, per-workspace run history.
   const activeProjectId = await resolveScopeProjectId()
@@ -243,14 +262,14 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   let runRow: WorkflowRunRow = {
     id: runId,
     workflowId: workflow.id,
-    ...(input.executionBinding
+    ...(executionBinding
       ? {
-          versionId: input.executionBinding.versionId,
-          deploymentId: input.executionBinding.deploymentId,
-          deploymentRevision: input.executionBinding.deploymentRevision,
-          executionBinding: input.executionBinding,
-          ...(input.executionBinding.dependencyLock
-            ? { dependencyLock: input.executionBinding.dependencyLock }
+          versionId: executionBinding.versionId,
+          deploymentId: executionBinding.deploymentId,
+          deploymentRevision: executionBinding.deploymentRevision,
+          executionBinding,
+          ...(executionBinding.dependencyLock
+            ? { dependencyLock: executionBinding.dependencyLock }
             : {}),
         }
       : {}),
@@ -266,11 +285,12 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     triggerOriginAt: trigger.originAt,
     startedAt,
     workflowSnapshot: validated as VisualWorkflow,
-    ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
+    ...(triggeredBy ? { triggeredBy } : {}),
+    ...(!executionBinding && !isEmptyScope(scope) ? { draftScope: scope } : {}),
     // Denormalised indexed column (Dexie v91) so the IM progress-runner can
     // query `.where("triggeredBySource").equals("im")` instead of scanning the
     // whole table. "ui" is the default origin for non-IM/non-API runs.
-    triggeredBySource: input.triggeredBy?.source ?? "ui",
+    triggeredBySource: triggeredBy?.source ?? "ui",
   }
   // Admission and insertion share one write transaction so parallel editor
   // tools cannot all observe the same free slot. Existing pending/resumed rows
@@ -409,8 +429,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // with side effects. Re-runs on resume by design (the resuming device must
   // also hold the caps).
   const preflightFailures = preflightCapabilities(validated, undefined, {
-    restrictToNodeIds: input.restrictToStepIds,
-    seededNodeIds: input.seedOutputs ? Object.keys(input.seedOutputs) : undefined,
+    restrictToNodeIds: scope.restrictToStepIds,
+    seededNodeIds: scope.seedOutputs ? Object.keys(scope.seedOutputs) : undefined,
     // ADR 0061 P3 — requirements satisfiable via a paired device pass here;
     // the mobile proxy executors own run-time reachability failures.
     remoteCapabilities: await remoteCapabilityUnion(),
@@ -468,8 +488,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   const cache = await IdempotencyCache.hydrate(runId)
   // Pre-seed reused upstream outputs (runSingleNode) so seeded nodes cache-hit
   // instead of re-executing.
-  if (input.seedOutputs) {
-    for (const [id, value] of Object.entries(input.seedOutputs)) {
+  if (scope.seedOutputs) {
+    for (const [id, value] of Object.entries(scope.seedOutputs)) {
       if (!cache.has(id)) cache.set(id, value)
     }
   }
@@ -599,14 +619,38 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // join can cancel ONLY the losing branches without touching siblings.
   const stepControllers = new Map<string, AbortController>()
 
+  // `action.approval.request` nodes this run executed and a human approved.
+  // The risk gate trusts an upstream approval only when it is in here.
+  const approvedApprovals = new Set<string>()
+
+  // A race join that already proceeded before a crash decided its losers back
+  // then. Replaying it must not start them again: skip every losing step that
+  // never completed BEFORE scheduling, instead of letting them run until the
+  // join's cached replay cancels them. The winner is the dependency whose
+  // completion was recorded first.
+  for (const stepId of order) {
+    if (joinPolicyOf(stepId) !== "race" || !cache.has(stepId)) continue
+    const deps = [...(stepDeps.get(stepId) ?? [])]
+    const winner = deps
+      .filter((dep) => cache.completionOrder(dep) !== undefined)
+      .sort((a, b) => cache.completionOrder(a)! - cache.completionOrder(b)!)[0]
+    if (!winner) continue
+    for (const loser of deps) {
+      if (loser === winner) continue
+      for (const id of losingBranchScope(topLevelForwardEdges, stepId, winner, loser)) {
+        if (!cache.has(id)) markSkipped(id)
+      }
+    }
+  }
+
   // If "Run from here" was requested, mark every node that is NOT the
   // start step OR a descendant of it as skipped before stepping. This
   // bounds the run to the subgraph rooted at startStepId without changing
   // the executor semantics (skipped steps emit `stepSkipped` events as
   // usual). We use a BFS over forward edges from the start node.
-  if (input.startStepId) {
-    if (!workflowGraph.nodeById.has(input.startStepId)) {
-      const message = `startStepId ${input.startStepId} not present in workflow`
+  if (scope.startStepId) {
+    if (!workflowGraph.nodeById.has(scope.startStepId)) {
+      const message = `startStepId ${scope.startStepId} not present in workflow`
       await logger.runFailed({ message })
       runRow = { ...runRow, status: "failed", completedAt: Date.now(), error: { message } }
       runRow = await commitOutcome(runRow)
@@ -618,8 +662,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
       await releaseRunResources(runId)
       return { runId, status: "failed", error: { message } }
     }
-    const reachable = new Set<string>([input.startStepId])
-    const queue: string[] = [input.startStepId]
+    const reachable = new Set<string>([scope.startStepId])
+    const queue: string[] = [scope.startStepId]
     while (queue.length > 0) {
       const cur = queue.shift()!
       for (const edge of workflowGraph.outgoingEdgesByNode.get(cur) ?? []) {
@@ -636,8 +680,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
 
   // "Run this step" — bound the run to an explicit allow-list (target node +
   // its ancestors). Everything else is skipped before stepping.
-  if (input.restrictToStepIds) {
-    const keep = new Set(input.restrictToStepIds)
+  if (scope.restrictToStepIds) {
+    const keep = new Set(scope.restrictToStepIds)
     for (const stepId of order) {
       if (!keep.has(stepId)) markSkipped(stepId)
     }
@@ -783,16 +827,25 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
         // immediately; a rejection (or any headless risky node) throws and lands
         // on the normal step-failure path, so the run fails with a real reason
         // instead of hanging.
-        await applyNodeRiskGate({
-          workflow: validated as VisualWorkflow,
-          node,
-          runId,
-          ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
-          signal: stepAc.signal,
-        })
+        // A step that already completed (resume) is replayed, never re-asked.
+        if (!cache.has(stepId)) {
+          await applyNodeRiskGate({
+            workflow: validated as VisualWorkflow,
+            node,
+            runId,
+            ...(triggeredBy ? { triggeredBy } : {}),
+            approvedApprovalIds: approvedApprovals,
+            signal: stepAc.signal,
+          })
+        }
         // Loop containers run their body subgraph through
         // the loop runtime; everything else goes through the plain step path.
-        const result: { output: unknown; decision?: string | string[]; fromCache: boolean } =
+        const result: {
+          output: unknown
+          decision?: string | string[]
+          route?: "error" | "halt"
+          fromCache: boolean
+        } =
           node.type === "flow.loop"
             ? await runLoopContainer({
                 workflow: validated as VisualWorkflow,
@@ -806,12 +859,14 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
                 retryPolicy,
                 secretResolver,
                 logger,
-                honorPinData: input.honorPinData,
+                honorPinData: scope.honorPinData,
                 traceId,
                 lineage,
                 securityContext,
                 ...(projectId ? { projectId } : {}),
-                ...(input.executionBinding ? { executionBinding: input.executionBinding } : {}),
+                ...(executionBinding ? { executionBinding } : {}),
+                ...(triggeredBy ? { triggeredBy } : {}),
+                approvedApprovalIds: approvedApprovals,
               })
             : await runStep({
                 workflow: validated as VisualWorkflow,
@@ -825,12 +880,12 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
                 retryPolicy,
                 secretResolver,
                 logger,
-                honorPinData: input.honorPinData,
+                honorPinData: scope.honorPinData,
                 traceId,
                 lineage,
                 securityContext,
                 ...(projectId ? { projectId } : {}),
-                ...(input.executionBinding ? { executionBinding: input.executionBinding } : {}),
+                ...(executionBinding ? { executionBinding } : {}),
               })
         stepOutputs.set(stepId, result.output)
         completed.add(stepId)
@@ -840,6 +895,21 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
         // P3: a race join cancels the losing branches the moment it proceeds.
         if (node.type === "flow.join" && joinPolicyOf(stepId) === "race") {
           cancelLosingBranches(stepId)
+        }
+        // An approval node only gates its descendants when THIS run approved
+        // it; a rejected, timed-out or never-executed approval gates nothing.
+        if (node.type === "action.approval.request" && isApprovedDecision(result.decision)) {
+          approvedApprovals.add(stepId)
+        }
+        // A replayed handled failure routes exactly as it did when it happened.
+        if (result.route === "error") {
+          for (const edge of workflowGraph.outgoingEdgesByNode.get(stepId) ?? []) {
+            if (!isErrorEdge(edge)) propagateSkip(workflowGraph, edge.target, skipped, markSkipped)
+          }
+        } else if (result.route === "halt") {
+          for (const edge of workflowGraph.outgoingEdgesByNode.get(stepId) ?? []) {
+            propagateSkip(workflowGraph, edge.target, skipped, markSkipped)
+          }
         }
         runRow = { ...runRow, lastCompletedStepId: stepId }
         await persistMirror({
@@ -880,6 +950,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
               propagateSkip(workflowGraph, edge.target, skipped, markSkipped)
             }
           }
+          // A replayed decision was already recorded when it was first made.
+          if (result.fromCache) return
           const chosenEdgeIds = outgoingEdges
             .filter((edge) => chosen.has(edge.sourceHandle ?? edge.label ?? "default"))
             .map((edge) => edge.id)
@@ -982,6 +1054,9 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           await logger.stepCompleted(stepId, output, failedExecution)
           return
         }
+        // Every handled failure below changes which edges the run follows, so
+        // its route is written WITH its completion: a resume replays the
+        // route instead of re-executing the failed step or both paths.
         if (nodeFailure.mode === "defaultValue") {
           stepOutputs.set(stepId, nodeFailure.defaultValue)
           cache.set(stepId, nodeFailure.defaultValue)
@@ -994,9 +1069,9 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           if (errorEdges.length > 0) {
             const output = buildErrorOutput(errorObj)
             stepOutputs.set(stepId, output)
-            cache.set(stepId, output)
+            cache.set(stepId, output, { route: "error" })
             completed.add(stepId)
-            await logger.stepCompleted(stepId, output, failedExecution)
+            await logger.stepCompleted(stepId, output, failedExecution, { route: "error" })
             for (const edge of outgoing) {
               if (!isErrorEdge(edge)) {
                 propagateSkip(workflowGraph, edge.target, skipped, markSkipped)
@@ -1014,8 +1089,11 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
         if (policy === "branch") {
           const errorEdges = outgoing.filter(isErrorEdge)
           if (errorEdges.length > 0) {
-            stepOutputs.set(stepId, { failed: true, error: errorObj.message })
+            const output = { failed: true, error: errorObj.message }
+            stepOutputs.set(stepId, output)
+            cache.set(stepId, output, { route: "error" })
             completed.add(stepId)
+            await logger.stepCompleted(stepId, output, failedExecution, { route: "error" })
             for (const edge of outgoing) {
               if (!isErrorEdge(edge)) {
                 propagateSkip(workflowGraph, edge.target, skipped, markSkipped)
@@ -1030,7 +1108,9 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
         // but keep independent branches running; the run finalizes normally
         // (the step_failed event in the log records the failure).
         if (policy === "continue") {
+          cache.set(stepId, undefined, { route: "halt" })
           completed.add(stepId)
+          await logger.stepCompleted(stepId, undefined, failedExecution, { route: "halt" })
           for (const edge of outgoing) {
             propagateSkip(workflowGraph, edge.target, skipped, markSkipped)
           }
@@ -1185,7 +1265,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     // Terminal-failure safety net (A1/A2). Skipped when this IS a catch sub-run
     // (`suppressCatch`) so a failing recovery path can't recurse. Best-effort:
     // a thrown handler must never mask the original failure or leak the run.
-    if (!input.suppressCatch) {
+    if (!scope.suppressCatch) {
       const onFailure = validated.settings.onFailure
       const runCatch = onFailure?.runCatchNodes !== false
       try {
@@ -1255,6 +1335,24 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
  */
 function isErrorEdge(edge: WorkflowEdge): boolean {
   return edge.sourceHandle === "error" || edge.data?.kind === "error"
+}
+
+function draftScopeOf(input: RunWorkflowInput): WorkflowRunDraftScope {
+  return {
+    ...(input.startStepId ? { startStepId: input.startStepId } : {}),
+    ...(input.restrictToStepIds ? { restrictToStepIds: [...input.restrictToStepIds] } : {}),
+    ...(input.honorPinData ? { honorPinData: true } : {}),
+    ...(input.seedOutputs ? { seedOutputs: input.seedOutputs } : {}),
+    ...(input.suppressCatch ? { suppressCatch: true } : {}),
+  }
+}
+
+function isEmptyScope(scope: WorkflowRunDraftScope): boolean {
+  return Object.keys(scope).length === 0
+}
+
+function isApprovedDecision(decision: string | string[] | undefined): boolean {
+  return Array.isArray(decision) ? decision.includes("approved") : decision === "approved"
 }
 
 /**

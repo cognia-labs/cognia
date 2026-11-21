@@ -365,6 +365,34 @@ describe("defaultAiEnsembleDeps", () => {
     })
   })
 
+  it("runSubworkflow runs the child version its formal parent locked at admission", async () => {
+    mockExecuteDeployedWorkflow.mockResolvedValue({
+      result: { status: "succeeded", output: { ok: true } },
+    })
+    const locked = {
+      workflowId: "w",
+      versionId: "wfv_w_2",
+      deploymentId: "wfd_w",
+      deploymentRevision: 2,
+    }
+    const ctx = {
+      ...makeCtx({}),
+      executionBinding: {
+        versionId: "wfv_parent_1",
+        deploymentId: "wfd_parent",
+        deploymentRevision: 1,
+        entrypoint: "trigger",
+        caller: "trigger.cron",
+        dependencyLock: { workflows: { n1: locked }, indexes: {} },
+      },
+    } as StepExecutionContext
+    const deps = await defaultAiEnsembleDeps(ctx)
+    await deps.runSubworkflow({ workflowId: "w", payload: {} })
+    expect(mockExecuteDeployedWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "w", lockedDependency: locked })
+    )
+  })
+
   it("runSubworkflow throws when the target is missing", async () => {
     mockExecuteDeployedWorkflow.mockRejectedValue(new Error("workflow w not found"))
     const deps = await defaultAiEnsembleDeps(makeCtx({}))

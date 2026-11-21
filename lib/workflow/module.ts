@@ -77,6 +77,10 @@ export default defineHostModule({
     "lib/workflow/nodes/shared/executor-support.ts",
     "lib/workflow/nodes/teams/team-runtime-port.ts",
     "lib/workflow/publish/publication-lifecycle.ts",
+    // The Host side of a paired client's runs and edits (companion arms) and
+    // the paired pull's hold on rows a queued edit has not reached yet.
+    "lib/workflow/remote/host-commands.ts",
+    "lib/workflow/remote/host-writes.ts",
     "lib/workflow/runs/step-breakdown.ts",
     "lib/workflow/runs/usage-aggregate.ts",
     "lib/workflow/runtime/cancel-run.ts",
@@ -102,6 +106,9 @@ export default defineHostModule({
   // Desktop events and finished runs reach the bots through `bot-dispatch`;
   // without it there are no bots to tell.
   requires: ["ocr", "knowledge-base-revisions?", "interactive-page?", "bot-dispatch?"],
+  // The companion pull of the definitions a paired client mirrors, which
+  // holds back a row the client's queued Host write has not landed for yet.
+  syncHandlers: { tables: ["workflows"], load: () => import("./sync/sync-handlers") },
   // The Workflow Copilot a conversation in the editor runs as, which the send
   // resolver asks for by the session kind.
   provides: [{ port: "workflow-editor-session", load: () => import("./ports/editor-session") }],

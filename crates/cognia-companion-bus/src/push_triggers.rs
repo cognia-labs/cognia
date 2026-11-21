@@ -196,6 +196,9 @@ pub const PUSH_TRIGGER_CHANNELS: &[&str] = &[
     // backgrounded devices. Ids only (transits APNs/FCM) — the phone
     // fetches the request text via `workflow_approval_list` on open.
     "workflow://approval-pending",
+    // A workflow is blocked on a human-input form; wake backgrounded devices.
+    // Ids only — the phone fetches the form via `workflow_human_input_list`.
+    "workflow://human-input-pending",
     // ADR-0061 P3 — a remote step is waiting on a device. Ids only; the
     // request params ride the WS frame the device receives on open.
     "workflow://step-pending",
@@ -544,6 +547,23 @@ mod tests {
         );
         m.insert("expiresAt".into(), serde_json::json!(1_700_000_000_000_u64));
         m
+    }
+
+    #[test]
+    fn human_input_pending_wakes_a_device_with_ids_only() {
+        assert!(PUSH_TRIGGER_CHANNELS.contains(&"workflow://human-input-pending"));
+        // The request and resolution carry the form; only the wake-up pushes.
+        assert!(!PUSH_TRIGGER_CHANNELS.contains(&"workflow://human-input-request"));
+        assert!(!PUSH_TRIGGER_CHANNELS.contains(&"workflow://human-input-resolved"));
+        let mut raw = serde_json::Map::new();
+        raw.insert("requestId".into(), serde_json::json!("hir_1"));
+        raw.insert("runId".into(), serde_json::json!("run_1"));
+        let data = push_data_for_channel("workflow://human-input-pending", &raw);
+        assert_eq!(data.get("requestId").and_then(|v| v.as_str()), Some("hir_1"));
+        assert_eq!(
+            push_body_for_channel("workflow://human-input-pending", &data),
+            "human-input-pending"
+        );
     }
 
     #[test]

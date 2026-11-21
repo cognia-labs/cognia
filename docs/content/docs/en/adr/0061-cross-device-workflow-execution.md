@@ -216,6 +216,24 @@ foundation.
     (TTL/3), released on every terminal path — a second executor backs off
     instead of double-executing, and a terminal-row guard stops resume
     replays from resurrecting soft-cancelled/finished runs.
+  - Boot resume (`resume-controller.ts`) continues the SAME run: the durable
+    `workflowRuns` row is the source of truth for its trigger (kind, node,
+    payload, binding, original `triggerOriginAt`), formal binding, origin and
+    draft bounds (`draftScope`); a formal run continues through its
+    invocation so the invocation settles with it. A Host that executes runs
+    also scans its own `pending`/`running` rows, which covers an admission
+    that crashed before its first mirror write. Replays are dispatched
+    concurrently and never block startup; a run whose lease another executor
+    still holds is re-checked when that lease expires. Step completions
+    record the route they chose (`decision`, handled-failure `route`, exact
+    memo `cacheKey`), so a replay never runs a branch the original excluded,
+    and a race join's losers are pre-skipped from the recorded winner.
+    A runtime that synthesizes runs owns their recovery through a
+    `RunRecoveryOwner`: Agent Team runs (`__team__:`) are left to the team's
+    coordinator, while plan runs (`__plan__:`) are handed back to the plan
+    runtime (`resumePlanRun`), which restores the step context and pause /
+    cancel wiring, continues the run under its id and settles the plan with
+    it. An orphaned plan run whose plan no longer expects it is cancelled.
   - Shared cancel ladder (`cancel-run.ts`) behind both remote surfaces:
     local abort → `cancelRequestedAt` lease signal (the owning executor's
     heartbeat aborts within one beat) → soft-cancel with companion

@@ -66,7 +66,13 @@
     "orientationPending": "Checking orientation lock…",
     "orientationLock": "Lock to landscape",
     "orientationUnlock": "Allow portrait",
+    "previewFailed": "Couldn't start the preview: {message}",
+    "previewHostPending": "Your desktop hasn't received the latest save yet. Try running again in a moment.",
+    "previewRefused": "Your desktop couldn't start this preview: {detail}",
+    "previewSaveRefused": "Your desktop didn't accept the latest save, so nothing ran: {detail}",
+    "previewStarted": "Preview started.",
     "publicationInvalidated": "Workflow saved and unpublished because its callable interface changed. Publish it again to expose the new contract.",
+    "savedQueuedForHost": "Saved — sending it to your desktop.",
     "triggerRegistrationFailed": "Workflow saved, but trigger registration failed. It will be retried at startup.",
     "redo": "Redo",
     "run": "Run",
@@ -99,15 +105,22 @@
     "waitingForOthersToast": "Response recorded; waiting for others."
   },
   "landscapeHint": "Rotate for full graph",
+  "libraryRun": {
+    "alreadyQueued": "{name} is already queued — it runs once when your desktop is back.",
+    "failed": "Couldn't start the run: {message}",
+    "handedOff": "{name} was sent to the Host that runs it.",
+    "notPublished": "{name} isn't published yet. Publish it to run it from here, or open it to run a preview.",
+    "openRun": "Open",
+    "queued": "{name} is queued — it runs when your desktop is reachable.",
+    "refused": "{name} didn't run: {detail}",
+    "started": "{name} is running."
+  },
   "noRuns": "No runs yet.",
   "pinned": "Pinned",
   "pinned_added": "Pinned.",
   "pinned_removed": "Unpinned.",
   "queuedBadge": "Queued",
-  "runAlreadyQueued": "Already queued — it runs once when the desktop is online again.",
   "runButton": "Run",
-  "runFailed": "Trigger failed: {message}",
-  "runQueued": "Queued — fires when the desktop is online again.",
   "runsBackAria": "Back to workflow",
   "runsHeader": "Recent runs",
   "sending": "Sending",
@@ -120,8 +133,6 @@
   "swipe": {
     "favorite": "Pin",
     "run": "Run",
-    "runAlreadyQueued": "{name} is already queued",
-    "runQueued": "Queued {name}",
     "unfavorite": "Unpin"
   },
   "title": "Workflows"

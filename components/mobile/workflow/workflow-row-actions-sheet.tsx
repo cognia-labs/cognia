@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { useBackDismiss } from "@/hooks/ui/use-back-dismiss"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { WorkflowGraphViewer, type WorkflowGraph } from "./workflow-graph-viewer"
-import { enqueue as enqueueOutbound, enqueueUnlessQueued } from "@/lib/db/mobile-outbound-queue"
+import { enqueue as enqueueOutbound } from "@/lib/db/mobile-outbound-queue"
 import { useSettingsStore } from "@/stores/settings"
 import type { WorkflowRow } from "@/types/workflow/visual"
 
@@ -31,6 +31,7 @@ function toViewerGraph(workflow: WorkflowRow): WorkflowGraph {
 }
 
 import { WorkflowDeleteConfirm } from "./workflow-delete-confirm"
+import { useLibraryRun } from "./use-library-run"
 
 export interface WorkflowRowActionsSheetProps {
   workflow: WorkflowRow | null
@@ -47,6 +48,7 @@ export interface WorkflowRowActionsSheetProps {
  */
 export function WorkflowRowActionsSheet({ workflow, onOpenChange }: WorkflowRowActionsSheetProps) {
   const t = useTranslations("mobile.workflowList.actions")
+  const runFromLibrary = useLibraryRun()
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [graphOpen, setGraphOpen] = useState(false)
   // Android hardware / browser back closes the sheet instead of navigating.
@@ -72,15 +74,9 @@ export function WorkflowRowActionsSheet({ workflow, onOpenChange }: WorkflowRowA
 
   async function handleRun() {
     if (!workflow) return
-    // One queued run per workflow — see `enqueueUnlessQueued`. A repeat tap
-    // while the first is still waiting for the Host is told so, not stacked.
-    const { alreadyQueued } = await enqueueUnlessQueued({
-      command: "workflow_trigger_manual",
-      payload: { workflowId: workflow.id },
-      label: workflow.name,
-    })
-    if (alreadyQueued) toast.message(t("runAlreadyQueued", { name: workflow.name }))
-    else toast.success(t("runQueued", { name: workflow.name }))
+    // The list's Run (`useLibraryRun`): queued to the paired Host only when
+    // published, never stacked twice, and it says which.
+    await runFromLibrary(workflow)
     onOpenChange(false)
   }
 
@@ -92,21 +88,24 @@ export function WorkflowRowActionsSheet({ workflow, onOpenChange }: WorkflowRowA
     onOpenChange(false)
   }
 
-  // Cron trigger nodes carried in the synced workflow snapshot. The desktop's
-  // scheduler mirrors `enabled` into `node.data.disabled` on every flip
-  // (see lib/scheduler/sources/workflow-source.ts), so the snapshot is the
-  // phone's source of truth for the paused/active state.
-  const cronTriggers = workflow.nodes.filter((n) => n.type === "trigger.cron")
-  const schedulePaused =
-    cronTriggers.length > 0 && cronTriggers.every((n) => n.data?.disabled === true)
+  // A pause is an override on the PUBLISHED schedule, kept on the synced row
+  // as `triggerPauses` (lib/workflow/runtime/trigger-pauses.ts) — never a
+  // `disabled` flag on the draft graph. An unpublished workflow has no
+  // schedule that runs, so there is nothing to pause.
+  const cronTriggers = workflow.published
+    ? workflow.nodes.filter((n) => n.type === "trigger.cron" && n.data?.disabled !== true)
+    : []
+  const pausedTriggerIds = Object.keys(workflow.triggerPauses ?? {})
+  const schedulePaused = cronTriggers.length > 0 && pausedTriggerIds.length > 0
 
   async function handleToggleSchedule() {
     if (!workflow) return
     const command = schedulePaused ? "workflow_schedule_resume" : "workflow_schedule_pause"
-    for (const node of cronTriggers) {
+    const triggerIds = schedulePaused ? pausedTriggerIds : cronTriggers.map((node) => node.id)
+    for (const triggerId of triggerIds) {
       await enqueueOutbound({
         command,
-        payload: { triggerId: node.id },
+        payload: { workflowId: workflow.id, triggerId },
         label: `${schedulePaused ? "Resume" : "Pause"} schedule · ${workflow.name}`,
       })
     }

@@ -63,6 +63,9 @@ pub(super) const COMMANDS: &[&str] = &[
     "workflow_trigger_manual",
     "workflow_placement_probe",
     "workflow_handoff_create",
+    "workflow_app_handoff_create",
+    "workflow_handoff_run_get",
+    "workflow_handoff_run_cancel",
     "twin_ingest_source",
     "bot_trigger_set_armed",
     "bot_installation_mutate",
@@ -150,6 +153,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "workflow_update",
     "workflow_delete",
     "workflow_run_list",
+    "workflow_preview_run",
+    "workflow_run_events_list",
     "workflow_cancel_run",
     "workflow_schedule_pause",
     "workflow_schedule_resume",
@@ -776,22 +781,26 @@ pub(super) async fn dispatch(
                 }),
                 updated_at: resolved_at,
             };
-            let (changed, exists) = {
+            let (changed, current) = {
                 let workflow = super::service_plane::workflow_state(host)?;
                 let changed = workflow.mirror.decide_waitpoint(&input);
-                let exists = workflow.mirror.get_waitpoint(&approval_id);
-                (changed, exists)
+                let current = workflow.mirror.get_waitpoint(&approval_id);
+                (changed, current)
             };
             let changed = changed.map_err(|error| RpcError::internal(error.to_string()))?;
-            let exists = exists
-                .map_err(|error| RpcError::internal(error.to_string()))?
-                .is_some();
+            let current = current.map_err(|error| RpcError::internal(error.to_string()))?;
             Ok(if changed {
                 json!({ "ok": true })
-            } else if exists {
-                json!({ "ok": false, "reason": "already-decided" })
             } else {
-                json!({ "ok": false, "reason": "not-found" })
+                match current {
+                    // Still pending after a refused decision: the answer came
+                    // after the deadline (the mirror's CAS refuses those).
+                    Some(row) if row.status == "pending" => {
+                        json!({ "ok": false, "reason": "expired" })
+                    }
+                    Some(_) => json!({ "ok": false, "reason": "already-decided" }),
+                    None => json!({ "ok": false, "reason": "not-found" }),
+                }
             })
         }
 
@@ -871,6 +880,12 @@ pub(super) async fn dispatch(
         | "workflow_human_input_submit"
         | "workflow_placement_probe"
         | "workflow_handoff_create"
+        // ADR-0136 placement: a Workflow App run another Host admitted, and
+        // that Host's reads/cancel of it. Explicit request schemas; caller id
+        // injected (the TS arms scope every run to it).
+        | "workflow_app_handoff_create"
+        | "workflow_handoff_run_get"
+        | "workflow_handoff_run_cancel"
         | "twin_ingest_source"
         // The Bot control plane. Sharing this arm is safe because all three
         // carry an EXPLICIT request schema in
@@ -1022,6 +1037,11 @@ pub(super) async fn dispatch(
         | "workflow_update"
         | "workflow_delete"
         | "workflow_run_list"
+        // A paired editor's draft preview of this Host's saved copy (WF-10,
+        // WF-15) and a paired run detail's step events, paged by the TS arm
+        // on `afterSequence` (WF-23; events never ride companion sync).
+        | "workflow_preview_run"
+        | "workflow_run_events_list"
         | "workflow_cancel_run"
         | "workflow_schedule_pause"
         | "workflow_schedule_resume"
@@ -1778,7 +1798,13 @@ mod tests {
 
     #[test]
     fn workflow_placement_commands_stay_in_the_desktop_write_dispatch_family() {
-        for name in ["workflow_placement_probe", "workflow_handoff_create"] {
+        for name in [
+            "workflow_placement_probe",
+            "workflow_handoff_create",
+            "workflow_app_handoff_create",
+            "workflow_handoff_run_get",
+            "workflow_handoff_run_cancel",
+        ] {
             assert!(
                 COMMANDS.contains(&name),
                 "{name} must reach the TS workflow authority"

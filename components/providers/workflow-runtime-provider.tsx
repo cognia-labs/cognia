@@ -217,9 +217,16 @@ export function WorkflowRuntimeProvider({ children }: { children?: React.ReactNo
       // dead code (zero callers), so durable runs never actually resumed.
       try {
         if (!cancelled) {
-          const summary = await resumeInFlightRuns()
+          // Returns once the replays are dispatched; a resumed run that waits
+          // on a human must not hold the rest of the runtime's startup.
+          const { settled, ...summary } = await resumeInFlightRuns({
+            signal: startupController.signal,
+          })
           if (summary.attempted > 0) {
-            log.info?.("workflow runtime: resumed in-flight runs", { ...summary })
+            log.info?.("workflow runtime: resuming in-flight runs", { ...summary })
+            void settled.then((outcome) =>
+              log.info?.("workflow runtime: resumed runs settled", { ...outcome })
+            )
           }
         }
       } catch (err) {

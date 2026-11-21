@@ -108,13 +108,33 @@ export type WorkflowDraft = Pick<VisualWorkflow, "name"> &
     >
   >
 
+/** The shape {@link createWorkflow} mints, which a client-chosen id must keep. */
+const WORKFLOW_ID_PATTERN = /^wf_[A-Za-z0-9_-]{1,96}$/
+
+export interface CreateWorkflowOptions extends WorkflowProjectionOptions {
+  /**
+   * Create under an id the caller already holds: a paired client creates the
+   * row in its mirror first and the Host must create the SAME row, or the
+   * client's editor and every save after it point at a workflow the Host does
+   * not have. A replay of the same create returns the existing row.
+   */
+  id?: string
+}
+
 export async function createWorkflow(
   draft: WorkflowDraft,
-  options: WorkflowProjectionOptions = {}
+  options: CreateWorkflowOptions = {}
 ): Promise<WorkflowRow> {
+  if (options.id !== undefined) {
+    if (!WORKFLOW_ID_PATTERN.test(options.id)) {
+      throw new Error(`createWorkflow: invalid workflow id ${JSON.stringify(options.id)}`)
+    }
+    const existing = await getDb().workflows.get(options.id)
+    if (existing) return existing
+  }
   const now = nowMs()
   const workflow: VisualWorkflow = {
-    id: newWorkflowId(),
+    id: options.id ?? newWorkflowId(),
     schemaVersion: 2,
     name: draft.name.trim() || "Untitled workflow",
     description: draft.description,
